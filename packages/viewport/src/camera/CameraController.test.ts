@@ -122,6 +122,44 @@ describe('CameraController external orbit lifecycle', () => {
     controller.dispose();
   });
 
+  it('keeps orbiting world-up after a projection switch mid-glide', () => {
+    const { controller } = createController(false);
+    const start = performance.now();
+    controller.startTween({
+      position: new THREE.Vector3(0, 0.015, -150),
+      target: new THREE.Vector3(0, 0, 0),
+      near: 0.1,
+      far: 4000
+    });
+    controller.stepTween(start + 260);
+    // Premise: the glide is mid-flight with a slerped, non-world up.
+    expect(controller.hasActiveTween).toBe(true);
+    expect(
+      controller.perspective.up.distanceTo(new THREE.Vector3(0, 0, 1))
+    ).toBeGreaterThan(0.01);
+
+    controller.applyProjection('orthographic');
+    controller.stepTween(start + 10_000);
+
+    const camera = controller.activeCamera;
+    expect(controller.hasActiveTween).toBe(false);
+    expect(camera.up.distanceTo(new THREE.Vector3(0, 0, 1))).toBeLessThan(
+      1e-12
+    );
+
+    // A purely horizontal orbit spins about the up axis the rebound controls
+    // captured, so the camera's height over the target must not change; a
+    // tilted snapshot would bleed it into Z.
+    const heightBefore = camera.position.z - controller.controls.target.z;
+    controller.beginOrbitDrag();
+    controller.orbitByPixels(40, 0);
+    controller.stepOrbit(performance.now());
+    controller.endOrbitDrag();
+    const heightAfter = camera.position.z - controller.controls.target.z;
+    expect(heightAfter).toBeCloseTo(heightBefore, 6);
+    controller.dispose();
+  });
+
   it('cancels an active external orbit and pending settle on dispose', () => {
     const { controller, requestRender, onViewChange } = createController(false);
     controller.beginOrbitDrag();
