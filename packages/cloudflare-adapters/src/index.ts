@@ -24,8 +24,10 @@ import {
   duplicateProjectName,
   MAX_CLOUD_PROJECT_DOCUMENT_BYTES,
   MAX_ARTIFACT_UPLOAD_PARTS,
+  MAX_THUMBNAIL_BYTES,
   MAX_PERSISTED_DOCUMENT_BYTES,
   MAX_PROJECT_REVISIONS,
+  THUMBNAIL_CONTENT_TYPE,
   nowIso,
   persistedDocumentBytes,
   projectOrganization,
@@ -1433,18 +1435,20 @@ export class D1R2PersistenceService implements PersistenceService {
   ): Promise<{
     objectKey: string;
     contentType: string;
+    kind: ArtifactRecord['kind'];
     metadata: Record<string, unknown>;
     metadataJson: string;
   }> {
     const upload = await this.env
       .DB!.prepare(
-        `SELECT project_id, object_key, content_type, metadata_json, expires_at FROM upload_sessions WHERE id = ?`
+        `SELECT project_id, object_key, content_type, kind, metadata_json, expires_at FROM upload_sessions WHERE id = ?`
       )
       .bind(uploadSessionId)
       .first<{
         project_id: string;
         object_key: string;
         content_type: string;
+        kind: ArtifactRecord['kind'];
         metadata_json: string;
         expires_at: string;
       }>();
@@ -1460,6 +1464,7 @@ export class D1R2PersistenceService implements PersistenceService {
     return {
       objectKey: upload.object_key,
       contentType: upload.content_type,
+      kind: upload.kind,
       metadata: JSON.parse(upload.metadata_json) as Record<string, unknown>,
       metadataJson: upload.metadata_json
     };
@@ -1476,6 +1481,11 @@ export class D1R2PersistenceService implements PersistenceService {
       );
     }
     const session = await this.requireUploadSession(userId, uploadSessionId);
+    if (session.kind === 'thumbnail') {
+      throw new ArtifactStorageError(
+        'Thumbnail artifacts must use single uploads.'
+      );
+    }
     const activeUploadId = session.metadata[MULTIPART_UPLOAD_METADATA_KEY];
     if (typeof activeUploadId === 'string') {
       return { uploadId: activeUploadId };
@@ -1665,6 +1675,15 @@ export class D1R2PersistenceService implements PersistenceService {
       createdAt: nowIso(),
       metadata: JSON.parse(upload.metadata_json) as ArtifactRecord['metadata']
     };
+    if (
+      artifact.kind === 'thumbnail' &&
+      (stored.size > MAX_THUMBNAIL_BYTES ||
+        artifact.contentType !== THUMBNAIL_CONTENT_TYPE)
+    ) {
+      throw new ArtifactStorageError(
+        'Thumbnail artifact is invalid or too large.'
+      );
+    }
 
     const supersededThumbnails =
       artifact.kind === 'thumbnail'

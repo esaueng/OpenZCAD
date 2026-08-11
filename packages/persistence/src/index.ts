@@ -7,6 +7,8 @@ import {
   MAX_PERSISTED_DOCUMENT_BYTES,
   MAX_PROJECT_REVISIONS,
   MAX_ARTIFACT_UPLOAD_PARTS,
+  MAX_THUMBNAIL_BYTES,
+  THUMBNAIL_CONTENT_TYPE,
   nowIso,
   persistedDocumentBytes,
   sanitizeFileName,
@@ -920,6 +922,11 @@ export class InMemoryPersistenceService implements PersistenceService {
       throw new ArtifactStorageError('Upload session was not found.');
     }
     await this.requireProjectEdit(userId, upload.projectId);
+    if (upload.kind === 'thumbnail') {
+      throw new ArtifactStorageError(
+        'Thumbnail artifacts must use single uploads.'
+      );
+    }
     const activeUploadId = this.activeMultipartUploads.get(uploadSessionId);
     if (activeUploadId) {
       return { uploadId: activeUploadId };
@@ -1034,6 +1041,15 @@ export class InMemoryPersistenceService implements PersistenceService {
       createdAt: nowIso(),
       metadata: upload.metadata
     };
+    if (
+      artifact.kind === 'thumbnail' &&
+      (body.byteLength > MAX_THUMBNAIL_BYTES ||
+        artifact.contentType !== THUMBNAIL_CONTENT_TYPE)
+    ) {
+      throw new ArtifactStorageError(
+        'Thumbnail artifact is invalid or too large.'
+      );
+    }
     if (artifact.kind === 'thumbnail') {
       for (const [artifactId, existing] of this.artifacts) {
         if (
