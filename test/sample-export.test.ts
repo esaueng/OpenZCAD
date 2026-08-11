@@ -1,4 +1,4 @@
-import { writeFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { CommandManager, commandFactories } from '@openzcad/command-system';
@@ -115,12 +115,17 @@ describe('walkthrough bracket sample', { timeout: 30_000 }, () => {
     const bracket = derived.bodyRepresentations[bracketBody]!;
     const curvedFaces = (bracket.topology?.faces ?? []).filter(
       (face) => face.geometry && face.geometry.surfaceType !== 'plane'
-    ).length;
-    expect(curvedFaces).toBeGreaterThan(0);
+    );
+    expect(bracket.faceCount).toBe(14);
+    expect(curvedFaces).toHaveLength(3);
+    expect(
+      curvedFaces.every((face) => face.geometry?.surfaceType === 'cylinder')
+    ).toBe(true);
     expect(bracket.consumed).toBe(false);
     expect(derived.exportableBodyIds).toEqual([bracketBody]);
 
-    // Plate 60x8x30 + boss above the plate - drilled hole through both.
+    // Plate 60x8x30 plus the centered boss outside its footprint, minus the
+    // coaxial drill through both.
     expect(bracket.volume).toBeGreaterThan(60 * 8 * 30);
     const text = await adapter.exportStep(manager.document, [bracketBody]);
     expect(text).toContain('MANIFOLD_SOLID_BREP');
@@ -130,8 +135,11 @@ describe('walkthrough bracket sample', { timeout: 30_000 }, () => {
     expect(reimported.valid).toBe(true);
     expect(reimported.volume).toBeCloseTo(bracket.volume, 3);
 
+    const samplePath = resolve('samples/parametric-bracket.step');
     if (process.env.OPENZCAD_WRITE_SAMPLES === '1') {
-      writeFileSync(resolve('samples/parametric-bracket.step'), text);
+      writeFileSync(samplePath, text);
+    } else {
+      expect(text).toBe(readFileSync(samplePath, 'utf8'));
     }
   });
 });
