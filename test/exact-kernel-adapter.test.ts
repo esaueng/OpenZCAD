@@ -2797,8 +2797,14 @@ describe('exact kernel adapter', { timeout: 30_000 }, () => {
     expect(hole?.geometry?.area).toBeCloseTo(Math.PI * 8 * 10, 4);
 
     manager.execute(
+      commandFactories.setParameter({
+        name: 'imported_hole_diameter',
+        expression: '8'
+      })
+    );
+    manager.execute(
       commandFactories.directEditBody({
-        name: 'Resize through hole',
+        name: 'Parameterize through hole',
         targetBodyId: importedBodyId,
         operation: {
           kind: 'resize-through-hole',
@@ -2806,8 +2812,23 @@ describe('exact kernel adapter', { timeout: 30_000 }, () => {
           sourceDiameter: 8,
           sourceAxisStart: hole!.geometry!.axisStart!,
           sourceAxisEnd: hole!.geometry!.axisEnd!,
-          diameter: 12
+          diameter: 'imported_hole_diameter',
+          parameterBinding: true
         }
+      })
+    );
+    const bound = await adapter.syncDocument(manager.document);
+    expect(bound.warnings).toEqual([]);
+    expect(
+      bound.bodyRepresentations[importedBodyId]?.topology?.faces.find(
+        (face) => face.geometry?.featureType === 'through-hole'
+      )?.geometry?.diameter
+    ).toBeCloseTo(8, 6);
+
+    manager.execute(
+      commandFactories.setParameter({
+        name: 'imported_hole_diameter',
+        expression: '12'
       })
     );
     const enlarged = await adapter.syncDocument(manager.document);
@@ -2889,7 +2910,7 @@ describe('exact kernel adapter', { timeout: 30_000 }, () => {
     ).toBeCloseTo(4, 6);
     expect(
       manager.document.commandLog.slice(-2).map((entry) => entry.kind)
-    ).toEqual(['feature.direct-edit', 'feature.direct-edit']);
+    ).toEqual(['parameter.set', 'feature.direct-edit']);
 
     manager.execute(
       commandFactories.directEditBody({

@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { CommandManager, commandFactories } from '@openzcad/command-system';
 import { createProjectDocument } from '@openzcad/document-core';
 import {
   toFeatureId,
@@ -101,6 +102,55 @@ describe('AI exact patch preflight', () => {
         warnings: ['Existing legacy warning']
       }))
     ).resolves.toBeTruthy();
+  });
+
+  it('requires verified parameterization recipes to preserve exact geometry', async () => {
+    const manager = new CommandManager(
+      createProjectDocument('AI', toUserId('user_ai'))
+    );
+    manager.execute(
+      commandFactories.addPrimitive({
+        name: 'Exact box',
+        primitiveKind: 'box',
+        dimensions: { width: 10, height: 20, depth: 30 }
+      })
+    );
+    const featureId = manager.document.featureOrder[0]!;
+    const base = manager.document;
+    base.derived = exactDerived(base);
+    const parameterize = {
+      proposalId: 'auto_parameterize_test',
+      summary: 'Bind the width without changing the box.',
+      assumptions: [],
+      preserveGeometry: true as const,
+      operations: [
+        {
+          kind: 'set_parameter' as const,
+          name: 'box_width',
+          expression: '10'
+        },
+        {
+          kind: 'set_feature_dimension' as const,
+          featureId,
+          field: 'width',
+          value: 'box_width'
+        }
+      ]
+    };
+
+    await expect(
+      preflightCadPatch(base, parameterize, async (candidate) =>
+        exactDerived(candidate)
+      )
+    ).resolves.toBeTruthy();
+    await expect(
+      preflightCadPatch(base, parameterize, async (candidate) => {
+        const changed = exactDerived(candidate);
+        const bodyId = candidate.bodyOrder[0]!;
+        changed.bodyRepresentations[bodyId]!.bbox.max.x = 10.01;
+        return changed;
+      })
+    ).rejects.toThrow(/changed the exact geometry/);
   });
 
   it('materializes a final same-proposal rim chamfer from exact topology', async () => {
