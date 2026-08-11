@@ -2507,15 +2507,12 @@ test('a refused boolean explains itself inside the panel that asked', async ({
   await page.getByRole('button', { name: 'Create project' }).click();
   const inspector = page.getByRole('region', { name: 'Feature inspector' });
 
-  // A box and a cylinder overlapping at the origin. The exact kernel cannot
-  // fuse the curved operand without dropping to facets, so this union is
-  // refused — the same two bodies subtract exactly, and an all-planar union is
-  // unaffected, which is what the message has to say.
+  // A box and a cylinder overlapping at the origin. The exact kernel refuses
+  // this union when its result is not a closed, consistently oriented solid.
   await page.getByRole('button', { name: /^Box \(B\)/ }).click();
   await inspector.getByRole('button', { name: /^Create/ }).click();
-  // Radius 14 is wider than the box is deep, which is the case whose facet
-  // census is the first thing the union has to report; the shipped default of
-  // 6 reports a dropped-operand tangency first instead.
+  // Radius 14 keeps this on the strict invalid-result path rather than the
+  // smaller default cylinder's dropped-operand tangency path.
   await page.getByRole('button', { name: /^Cylinder \(C\)/ }).click();
   await inspector.getByLabel('Radius', { exact: true }).fill('14');
   await inspector.getByRole('button', { name: /^Create/ }).click();
@@ -2528,12 +2525,15 @@ test('a refused boolean explains itself inside the panel that asked', async ({
   // The refusal is readable where the user is looking. Before this it reached
   // only the status bar, clipped mid-sentence, leaving Create looking inert.
   const refusal = inspector.getByRole('alert');
-  await expect(refusal).toContainText('faceted approximation');
-  // It states only what was measured. No single cause is asserted: measured
-  // on a box and a cylinder, repositioning clears this for a small round
-  // operand and clears nothing for one wider than the box it meets.
-  await expect(refusal).toContainText('will export that way');
-  await expect(refusal).toContainText('subtract instead');
+  await expect(refusal).toContainText(
+    'open, non-manifold, or inconsistently oriented result'
+  );
+  await expect(refusal).toContainText(
+    'Adjust the overlap or placement and try again.'
+  );
+  // The adapter only appends a move after applying it to these exact operands
+  // and validating the resulting union.
+  await expect(refusal).toContainText(/Moving Cylinder Body .+ clears it\./);
 
   // Refused means refused: history is untouched and the form stays open with
   // its picks intact, ready for another operation.
