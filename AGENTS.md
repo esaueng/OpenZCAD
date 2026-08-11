@@ -37,6 +37,12 @@ builds and serves the web app and is the slow gate (about five minutes in the
 pnpm test:parity-corpus
 ```
 
+As of 2026-08-11, `main` CI is red only in `pnpm test:e2e`: 113 tests pass,
+4 skip, and 2 cylinder-radius tests fail because a 404 is recorded as a console
+error. Lint, typecheck, coverage, web tests, build, parity, and the complete
+Apple Silicon workflow pass on that same commit. Recheck current CI before
+attributing an unchanged failure to a new patch.
+
 Changes touching the desktop workflow, either app, shared packages, the root
 manifest/lockfile, or `script/build_and_run.sh` also trigger the Apple Silicon
 workflow. Its package-specific checks are:
