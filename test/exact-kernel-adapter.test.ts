@@ -1213,7 +1213,7 @@ describe('exact kernel adapter', { timeout: 30_000 }, () => {
     });
   });
 
-  it('keeps a shallow cylinder and circular-extrude union closed', async () => {
+  it('refuses a shallow circular union instead of accepting a mesh fallback', async () => {
     const withCylinder = addPrimitiveFeature(
       createProjectDocument('Shallow circular union', toUserId('user_exact')),
       {
@@ -1247,21 +1247,15 @@ describe('exact kernel adapter', { timeout: 30_000 }, () => {
 
     const derived = await adapter.syncDocument(document);
     const resultId = document.bodyOrder.at(-1)!;
-    const body = derived.bodyRepresentations[resultId]!;
-    const closure = inspectTriangleMeshClosure(
-      body.mesh.vertices,
-      body.mesh.indices
+    expect(derived.bodyRepresentations[resultId]).toBeUndefined();
+    expect(derived.warnings).toContain(
+      'Feature "Shallow circular union": invalid input: cluster fuse degraded to mesh fallback'
     );
-
-    // A 1 µm overlap between two cylinders is the sliver case, and the kernel
-    // silently answers it with a faceted approximation: two exact cylindrical
-    // surfaces become 193 planar faces, and the volume lands ~0.08 % low.
-    // Closure, validity and volume all still pass — the face-count census is
-    // the only thing that sees it, which is why it exists. What is asserted is
-    // that the census and the faces agree, not that the kernel keeps faceting.
-    expectCensusConsistentWithFaces(derived, body);
-    expect(isClosedConsistentlyOrientedMesh(closure)).toBe(true);
-    expect(body.volume).toBeGreaterThan(0);
+    // The latest kernel fails before returning an approximate body. Because
+    // the feature never commits, both exact operands remain available rather
+    // than being marked consumed behind a missing result.
+    expect(derived.bodyRepresentations[cylinderId]?.consumed).toBe(false);
+    expect(derived.bodyRepresentations[extrudeId]?.consumed).toBe(false);
     // Runs in under a second locally but has tripped the 5 s default on slow
     // CI runners; give it the same headroom as the other kernel-heavy tests.
   }, 30_000);
@@ -2091,9 +2085,7 @@ describe('exact kernel adapter', { timeout: 30_000 }, () => {
     const { document: withSketch, sketchId } = addSketchFeature(withCylinder, {
       name: 'Bore sketch',
       planeRef: { type: 'canonical', plane: 'XY', offset: 0 },
-      objects: [
-        { objectKind: 'circle', radius: 6.083, centerX: 0, centerY: 0 }
-      ]
+      objects: [{ objectKind: 'circle', radius: 6.083, centerX: 0, centerY: 0 }]
     });
     const { document: withExtrude, bodyId: boreToolId } = extrudeSketch(
       withSketch,
@@ -3482,10 +3474,7 @@ describe('exact kernel adapter', { timeout: 30_000 }, () => {
     expect(overcut.bodyRepresentations[importedBodyId]?.faceCount).toBe(6);
   });
 
-  it('offsets a planar face on the dense sample bracket without unify breakage', async () => {
-    // Regression: on this 821-face import, unifySameDomain after the prism
-    // fuse produces a shape BRepCheck rejects; the offset must fall back to
-    // the seamed-but-valid boolean result instead of failing the feature.
+  it('offsets a planar face on the exact sample bracket', async () => {
     const step = readFileSync(
       resolve('samples/parametric-bracket.step'),
       'utf8'
@@ -3510,7 +3499,9 @@ describe('exact kernel adapter', { timeout: 30_000 }, () => {
     const target = body?.topology?.faces.find(
       (face) =>
         face.geometry?.surfaceType === 'plane' &&
-        Math.abs((face.geometry.area ?? 0) - 540) < 1
+        (face.geometry.normal?.x ?? 0) < -0.9 &&
+        Math.abs(face.geometry.center.x) < 1e-6 &&
+        Math.abs((face.geometry.area ?? 0) - 240) < 1e-6
     );
     expect(target).toBeTruthy();
 
@@ -3524,7 +3515,7 @@ describe('exact kernel adapter', { timeout: 30_000 }, () => {
           sourceSurfaceType: 'plane',
           sourceArea: target!.geometry!.area,
           sourceCenter: target!.geometry!.center,
-          sourceNormal: { x: 0, y: -1, z: 0 },
+          sourceNormal: target!.geometry!.normal!,
           offset: 3
         }
       })
@@ -3535,8 +3526,6 @@ describe('exact kernel adapter', { timeout: 30_000 }, () => {
       volumeBefore + 3 * target!.geometry!.area,
       3
     );
-    // 17 s has been observed on slow CI runners against the previous 15 s
-    // cap; the dense bracket legitimately takes that long to fuse twice.
   }, 60_000);
 
   it('builds selected-edge fillet and chamfer features', async () => {

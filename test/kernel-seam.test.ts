@@ -448,14 +448,10 @@ describe('kernel seam correctness', { timeout: 30_000 }, () => {
     );
   });
 
-  it('publishes a stable topology count for an imported tessellated body', async () => {
-    // The counts are the pin. Until Z5 this test also measured how many of
-    // those hashes an OpenCascade-built version of the same import shared
-    // (739 of 821 faces, 1,646 of 1,722 edges) — the migration cost of the Z3
-    // flip, which has now been paid and cannot be re-measured without the
-    // second kernel. What survives is the claim that matters going forward:
-    // this body's topology must not silently change size, because every
-    // stored pick on it is resolved against exactly these sets.
+  it('publishes a stable topology count for the imported bracket', async () => {
+    // The regenerated sample is an exact mixed-surface body. Its topology
+    // must not silently change size because stored picks resolve against
+    // exactly these face and edge sets.
     const { document, bodyId } = importStepBody(
       createProjectDocument('Bracket', user),
       {
@@ -471,15 +467,15 @@ describe('kernel seam correctness', { timeout: 30_000 }, () => {
     const onBrepKit = await adapter.syncDocument(document);
     const body = onBrepKit.bodyRepresentations[bodyId]!;
 
-    expect(body.topology!.faces).toHaveLength(821);
-    expect(body.topology!.edges).toHaveLength(1722);
+    expect(body.topology!.faces).toHaveLength(14);
+    expect(body.topology!.edges).toHaveLength(43);
     // Every published hash is distinct: a collision would make two different
     // picks resolve to the same geometry.
     expect(new Set(body.topology!.faces.map((face) => face.hash)).size).toBe(
-      821
+      14
     );
     expect(new Set(body.topology!.edges.map((edge) => edge.hash)).size).toBe(
-      1722
+      43
     );
   });
 

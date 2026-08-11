@@ -51,9 +51,9 @@ function buildBracket() {
   const bossBody = getLatestBodyId(manager.document)!;
   manager.execute(
     commandFactories.transformBody({
-      name: 'Raise boss',
+      name: 'Center boss',
       targetBodyId: bossBody,
-      translation: { x: 0, y: 't', z: 0 }
+      translation: { x: 'w / 2', y: 't / 2', z: 0 }
     })
   );
 
@@ -74,6 +74,13 @@ function buildBracket() {
     })
   );
   const drillBody = getLatestBodyId(manager.document)!;
+  manager.execute(
+    commandFactories.transformBody({
+      name: 'Center drill',
+      targetBodyId: drillBody,
+      translation: { x: 'w / 2', y: 't / 2', z: 0 }
+    })
+  );
 
   manager.execute(
     commandFactories.booleanBodies({
@@ -101,30 +108,15 @@ describe('walkthrough bracket sample', { timeout: 30_000 }, () => {
   it('builds a watertight parametric bracket and exports valid STEP', async () => {
     const { manager, bracketBody } = buildBracket();
     const derived = await adapter.syncDocument(manager.document);
-    // The face-count census exposes something this sample has always done
-    // silently: fusing the cylindrical boss onto the plate returns a faceted
-    // approximation. Six planar faces plus one cylinder become 69 planar
-    // faces and no curved ones, and the volume lands ~0.06 % low
-    // (23124.47 against an exact 23137.6). The boss visibly protrudes, so a
-    // correct union could not possibly have zero curved faces. Subtracting
-    // the drill from that already-faceted body facets the bore too.
-    //
-    // The committed samples/parametric-bracket.step is therefore faceted.
-    //
-    // What is asserted is the shape of the answer, not today's answer: every
-    // warning the sample produces must be a census warning, and the census
-    // must agree with the faces on the body. A kernel that stops faceting
-    // passes this; a kernel that starts emitting some other warning does not.
-    const FACET_CENSUS_MESSAGE =
-      /faceted approximation instead of exact surfaces|replaced every curved surface with planar faces|produced far more faces than its operands/;
-    expect(
-      derived.warnings.filter((warning) => !FACET_CENSUS_MESSAGE.test(warning))
-    ).toEqual([]);
+    // The centered boss and coaxial drill keep their analytic cylindrical
+    // surfaces through both booleans. This also pins the generated sample as
+    // an exact STEP artifact instead of the old 20k-line faceted fallback.
+    expect(derived.warnings).toEqual([]);
     const bracket = derived.bodyRepresentations[bracketBody]!;
     const curvedFaces = (bracket.topology?.faces ?? []).filter(
       (face) => face.geometry && face.geometry.surfaceType !== 'plane'
     ).length;
-    expect(curvedFaces === 0).toBe(derived.warnings.length > 0);
+    expect(curvedFaces).toBeGreaterThan(0);
     expect(bracket.consumed).toBe(false);
     expect(derived.exportableBodyIds).toEqual([bracketBody]);
 

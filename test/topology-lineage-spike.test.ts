@@ -20,7 +20,10 @@ import { describe, expect, it } from 'vitest';
 // override does NOT apply here — running this file against a candidate pin
 // needs the pin actually installed. Worth knowing before trusting a green
 // run as evidence about a pin you thought you had swapped in.
-import { BrepKernel } from '../packages/kernel-adapter/node_modules/brepkit-wasm/brepkit_wasm.js';
+import {
+  BrepKernel,
+  type FaceEvolutionPayloadV1
+} from '../packages/kernel-adapter/node_modules/brepkit-wasm/brepkit_wasm.js';
 
 interface BrepEvolution {
   solid: number;
@@ -149,7 +152,6 @@ function verifyCompleteBrepEvolution(
   ).toBe(true);
   expect(unresolved).toEqual({});
 
-
   expect(modifiedSources.every((handle) => sourceFaces.has(handle))).toBe(true);
   expect(
     payload.evolution.deleted.every((handle) => sourceFaces.has(handle))
@@ -171,6 +173,76 @@ function verifyCompleteBrepEvolution(
   expectSameSet([...modifiedResults, ...generatedResults], resultFaces);
 }
 
+function verifyCompleteFaceEvolution(
+  kernel: BrepKernel,
+  sourceSolid: number,
+  payload: FaceEvolutionPayloadV1
+) {
+  const sourceFaces = setOf(kernel.getSolidFaces(sourceSolid));
+  const resultFaces = setOf(kernel.getSolidFaces(payload.result.solid));
+  const modifiedSources = payload.evolution.modified.map(
+    (relation) => relation.source
+  );
+  const modifiedResults = payload.evolution.modified.flatMap(
+    (relation) => relation.results
+  );
+  const generatedResults = payload.evolution.generated.flatMap(
+    (relation) => relation.results
+  );
+  const unresolvedResults = payload.evolution.unresolvedResults.map(
+    (relation) => relation.result
+  );
+
+  expect(payload.schemaVersion).toBe(1);
+  expect(payload.source.solid).toBe(sourceSolid);
+  expectSameSet(payload.source.faces, sourceFaces);
+  expectSameSet(payload.result.faces, resultFaces);
+  expect(payload.evolution.provenance).toBe('construction');
+
+  expect(
+    payload.evolution.unresolvedResults.every(
+      ({ result, candidates }) =>
+        resultFaces.has(result) &&
+        candidates.every((candidate) => sourceFaces.has(candidate))
+    )
+  ).toBe(true);
+  expect(
+    payload.evolution.unresolvedSources.every((source) =>
+      sourceFaces.has(source)
+    )
+  ).toBe(true);
+  expect(payload.evolution.unresolvedResults).toEqual([]);
+  expect(payload.evolution.unresolvedSources).toEqual([]);
+
+  expect(
+    [...modifiedSources, ...payload.evolution.deleted].every((source) =>
+      sourceFaces.has(source)
+    )
+  ).toBe(true);
+  expect(
+    modifiedSources.every(
+      (source) => !payload.evolution.deleted.includes(source)
+    )
+  ).toBe(true);
+  expectSameSet(
+    [
+      ...modifiedSources,
+      ...payload.evolution.deleted,
+      ...payload.evolution.unresolvedSources
+    ],
+    sourceFaces
+  );
+  expect(
+    [...modifiedResults, ...generatedResults, ...unresolvedResults].every(
+      (result) => resultFaces.has(result)
+    )
+  ).toBe(true);
+  expectSameSet(
+    [...modifiedResults, ...generatedResults, ...unresolvedResults],
+    resultFaces
+  );
+}
+
 describe('topology-lineage kernel spike', () => {
   it('pins the declared history surface and its type gaps', () => {
     const brepDeclarations = readFileSync(
@@ -179,28 +251,29 @@ describe('topology-lineage kernel spike', () => {
       ),
       'utf8'
     );
-    const declaredEvolution =
-      /export interface EvolutionResult\s*{([^}]*)}/.exec(
-        brepDeclarations
-      )?.[1] ?? '';
-
-    expect(declaredEvolution).toContain('modified: number[]');
-    expect(declaredEvolution).not.toContain('deleted');
+    expect(brepDeclarations).toMatch(
+      /export interface FaceEvolutionPayloadV1\s*{[^}]*schemaVersion: number;[^}]*source: EvolutionShapeV1;[^}]*result: EvolutionShapeV1;[^}]*evolution: FaceEvolutionClaimsV1;/s
+    );
+    expect(brepDeclarations).toContain(
+      'export function decodeEvolutionPayload(json: string): FaceEvolutionPayloadV1;'
+    );
     for (const method of [
       'fuseWithEvolution',
       'cutWithEvolution',
-      'intersectWithEvolution',
-      'filletWithEvolution'
+      'intersectWithEvolution'
     ]) {
       expect(brepDeclarations).toMatch(
         new RegExp(`${method}\\([^;]+\\): any;`)
       );
     }
-    expect(
-      (BrepKernel.prototype as unknown as Record<string, unknown>)[
-        'chamferWithEvolution'
-      ]
-    ).toBeUndefined();
+    for (const method of ['filletWithEvolution', 'chamferWithEvolution']) {
+      expect(brepDeclarations).toMatch(
+        new RegExp(`${method}\\([^;]+\\): FaceEvolutionPayloadV1;`)
+      );
+      expect(
+        (BrepKernel.prototype as unknown as Record<string, unknown>)[method]
+      ).toBeTypeOf('function');
+    }
   });
 
   it('characterizes primitive, sweep, transform, boolean, fillet, and chamfer behavior in BrepKit', () => {
@@ -247,15 +320,13 @@ describe('topology-lineage kernel spike', () => {
       expect(kernel.getSolidFaces(productionUnion)).toHaveLength(6);
 
       const selectedEdge = Array.from(kernel.getSolidEdges(primitive))[0]!;
-      const fillet = parseBrepEvolution(
-        kernel.filletWithEvolution(
-          primitive,
-          Uint32Array.from([selectedEdge]),
-          1
-        )
+      const fillet = kernel.filletWithEvolution(
+        primitive,
+        Uint32Array.from([selectedEdge]),
+        1
       );
-      verifyCompleteBrepEvolution(kernel, [primitive], fillet);
-      expect(kernel.validateSolidRelaxed(fillet.solid)).toBe(0);
+      verifyCompleteFaceEvolution(kernel, primitive, fillet);
+      expect(kernel.validateSolidRelaxed(fillet.result.solid)).toBe(0);
       // The blend band is a new face, and the kernel names where it came from:
       // it arrives under GENERATED, listed against both faces the rounded edge
       // separated, because it was built between them and both are its origin.
@@ -284,9 +355,9 @@ describe('topology-lineage kernel spike', () => {
       // evolution record. `unresolved` being empty is enforced by
       // verifyCompleteBrepEvolution above — a refusal here is a defect, and is
       // how the regression that held the pin was found.
-      const bandFaces = Array.from(kernel.getSolidFaces(fillet.solid)).filter(
-        (face) => kernel.getSurfaceType(face) === 'cylinder'
-      );
+      const bandFaces = Array.from(
+        kernel.getSolidFaces(fillet.result.solid)
+      ).filter((face) => kernel.getSurfaceType(face) === 'cylinder');
       expect(bandFaces).toHaveLength(1);
       const band = bandFaces[0]!;
       const facesOnSelectedEdge = Array.from(
@@ -295,34 +366,38 @@ describe('topology-lineage kernel spike', () => {
         Array.from(kernel.getFaceEdges(face)).includes(selectedEdge)
       );
       expect(facesOnSelectedEdge).toHaveLength(2);
-      const bandSources = Object.entries(fillet.evolution.generated)
-        .filter(([, results]) => results.includes(band))
-        .map(([source]) => Number(source));
+      const bandSources = fillet.evolution.generated
+        .filter(({ results }) => results.includes(band))
+        .map(({ source }) => source);
       expectSameSet(bandSources, facesOnSelectedEdge);
       // The band is the only face the fillet adds, and it is not any input
       // face's continuation.
-      expectSameSet(Object.values(fillet.evolution.generated).flat(), [band]);
-      expect(Object.values(fillet.evolution.modified).flat()).not.toContain(
-        band
+      expectSameSet(
+        fillet.evolution.generated.flatMap(({ results }) => results),
+        [band]
       );
+      expect(
+        fillet.evolution.modified.flatMap(({ results }) => results)
+      ).not.toContain(band);
       // Which faces are modified is already settled above, against the box's
       // own face list. What is asserted here is that rounding one edge trims
       // those faces without splitting any: each arrives as exactly one face.
-      for (const results of Object.values(fillet.evolution.modified)) {
+      for (const { results } of fillet.evolution.modified) {
         expect(results).toHaveLength(1);
       }
       // No source face disappears when a single edge is rounded.
       expect(fillet.evolution.deleted).toEqual([]);
 
-      const chamfer = kernel.chamfer(
+      const chamfer = kernel.chamferWithEvolution(
         primitive,
         Uint32Array.from([selectedEdge]),
         1
       );
-      expect(kernel.validateSolidRelaxed(chamfer)).toBe(0);
-      expect(Array.from(kernel.getSolidFaces(chamfer)).length).toBeGreaterThan(
-        6
-      );
+      verifyCompleteFaceEvolution(kernel, primitive, chamfer);
+      expect(kernel.validateSolidRelaxed(chamfer.result.solid)).toBe(0);
+      expect(
+        Array.from(kernel.getSolidFaces(chamfer.result.solid)).length
+      ).toBeGreaterThan(6);
     } finally {
       kernel.free();
     }

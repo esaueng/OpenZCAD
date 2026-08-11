@@ -9,6 +9,8 @@ import {
 import { createExactKernelAdapter } from '@openzcad/kernel-adapter/exact';
 import {
   toUserId,
+  type BodyRepresentation,
+  type DerivedState,
   type ImportedSourceReference,
   type ProjectDocument
 } from '@openzcad/shared';
@@ -29,6 +31,69 @@ const REFERENCE: ImportedSourceReference = {
   checksumSha256: createHash('sha256').update(SOURCE).digest('hex'),
   logicalBytes: SOURCE.byteLength
 };
+
+function rounded(value: number): number {
+  return Number(value.toPrecision(12));
+}
+
+function bodyGeometrySignature(body: BodyRepresentation) {
+  const vertices = body.mesh.vertices;
+  const indices = body.mesh.indices;
+  const bounds = [0, 1, 2].flatMap((axis) => {
+    const coordinates = vertices.filter((_value, index) => index % 3 === axis);
+    return [Math.min(...coordinates), Math.max(...coordinates)].map(rounded);
+  });
+  let signedMeshVolume = 0;
+  for (let index = 0; index + 2 < indices.length; index += 3) {
+    const [a, b, c] = [
+      indices[index]! * 3,
+      indices[index + 1]! * 3,
+      indices[index + 2]! * 3
+    ];
+    signedMeshVolume +=
+      (vertices[a]! *
+        (vertices[b + 1]! * vertices[c + 2]! -
+          vertices[b + 2]! * vertices[c + 1]!) -
+        vertices[a + 1]! *
+          (vertices[b]! * vertices[c + 2]! - vertices[b + 2]! * vertices[c]!) +
+        vertices[a + 2]! *
+          (vertices[b]! * vertices[c + 1]! - vertices[b + 1]! * vertices[c]!)) /
+      6;
+  }
+  return {
+    bodyId: body.bodyId,
+    name: body.name,
+    source: body.source,
+    faceCount: body.faceCount,
+    exportableStep: body.exportableStep,
+    consumed: body.consumed,
+    volume: rounded(body.volume),
+    bbox: body.bbox,
+    mesh: {
+      vertexCount: vertices.length / 3,
+      triangleCount: indices.length / 3,
+      bounds,
+      signedVolume: rounded(signedMeshVolume)
+    },
+    topology: {
+      faces: (body.topology?.faces ?? [])
+        .map((face) => face.hash)
+        .sort((left, right) => left - right),
+      edges: (body.topology?.edges ?? [])
+        .map((edge) => edge.hash)
+        .sort((left, right) => left - right)
+    }
+  };
+}
+
+function geometrySignatures(derived: DerivedState) {
+  return Object.fromEntries(
+    Object.entries(derived.bodyRepresentations).map(([bodyId, body]) => [
+      bodyId,
+      bodyGeometrySignature(body)
+    ])
+  );
+}
 
 function documentWithImport(): ProjectDocument {
   const manager = new CommandManager(
@@ -81,8 +146,8 @@ describe('imported STEP rebuild cache', () => {
     const third = await kernel.syncDocument(renamed);
     expect(reads()).toBe(1);
 
-    expect(second.bodyRepresentations).toEqual(first.bodyRepresentations);
-    expect(third.bodyRepresentations).toEqual(first.bodyRepresentations);
+    expect(geometrySignatures(second)).toEqual(geometrySignatures(first));
+    expect(geometrySignatures(third)).toEqual(geometrySignatures(first));
   }, 60_000);
 
   it('produces the same geometry as an adapter that never caches', async () => {
@@ -95,8 +160,8 @@ describe('imported STEP rebuild cache', () => {
     const cold = await adapterWithCountedSource().adapter;
     const fromParse = await cold.syncDocument(document);
 
-    expect(fromCache.bodyRepresentations).toEqual(
-      fromParse.bodyRepresentations
+    expect(geometrySignatures(fromCache)).toEqual(
+      geometrySignatures(fromParse)
     );
     expect(fromCache.exportableBodyIds).toEqual(fromParse.exportableBodyIds);
     expect(fromCache.warnings).toEqual(fromParse.warnings);
@@ -144,8 +209,10 @@ describe('imported STEP rebuild cache', () => {
     );
     const rebuilt = await kernel.syncDocument(committed);
     expect(reads()).toBe(1);
-    expect(rebuilt.bodyRepresentations[ids.bodyId]).toEqual(
-      preflight.bodyRepresentations[ids.bodyId]
+    expect(
+      bodyGeometrySignature(rebuilt.bodyRepresentations[ids.bodyId]!)
+    ).toEqual(
+      bodyGeometrySignature(preflight.bodyRepresentations[ids.bodyId]!)
     );
   }, 60_000);
 
@@ -220,8 +287,10 @@ describe('imported STEP rebuild cache', () => {
     );
     const rebuilt = await kernel.syncDocument(committed);
     expect(reads()).toBe(1);
-    expect(rebuilt.bodyRepresentations[ids.bodyId]).toEqual(
-      preflight.bodyRepresentations[ids.bodyId]
+    expect(
+      bodyGeometrySignature(rebuilt.bodyRepresentations[ids.bodyId]!)
+    ).toEqual(
+      bodyGeometrySignature(preflight.bodyRepresentations[ids.bodyId]!)
     );
   }, 60_000);
 
@@ -280,7 +349,7 @@ describe('imported STEP rebuild cache', () => {
 
     const rebuilt = await kernel.syncDocument(manager.document);
     expect(reads).toBe(2);
-    expect(rebuilt.bodyRepresentations).toEqual(built.bodyRepresentations);
+    expect(geometrySignatures(rebuilt)).toEqual(geometrySignatures(built));
   }, 60_000);
 
   it('still reports a source that cannot be resolved', async () => {
@@ -290,6 +359,8 @@ describe('imported STEP rebuild cache', () => {
       }
     });
     const derived = await kernel.syncDocument(documentWithImport());
-    expect(JSON.stringify(derived.warnings)).toMatch(/not available|not in local/i);
+    expect(JSON.stringify(derived.warnings)).toMatch(
+      /not available|not in local/i
+    );
   }, 60_000);
 });

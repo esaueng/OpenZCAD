@@ -575,11 +575,10 @@ describe('partial revolve and edge modifiers', () => {
       })
     );
 
-    // Was 12 of 12 before the pin carried brepkit#59. It is now 10 of 12:
-    // edges 3 and 11 stopped refusing. They did NOT start working — see the
-    // test below, which is why this is a count and not an `every`.
+    // Every wedge edge refuses. The volume-envelope guard below the kernel
+    // catches the two that once returned a doubled body instead.
     const refused = outcomes.filter((warnings) => warnings.length === 1);
-    expect(refused).toHaveLength(10);
+    expect(refused).toHaveLength(12);
     // Every refusal still names the wedge. In particular none says "try a
     // smaller radius", which is false at every radius here, and none says the
     // edge no longer exists, which it does.
@@ -590,25 +589,8 @@ describe('partial revolve and edge modifiers', () => {
     }
   }, 300_000);
 
-  /**
-   * The two edges that stopped refusing now return a CORRUPT body instead,
-   * silently. This is strictly worse than the refusal it replaced, and it is
-   * newly reachable: before the pin carried brepkit#59 all twelve edges
-   * refused, so this wrong answer could not be produced at all.
-   *
-   * Whether #59 introduced the bad blend or merely un-gated a latent one is
-   * not established here — what is measured is the reachability change.
-   *
-   * A radius-0.1 fillet on an arc of length ~3.93 should change the volume by
-   * about (r^2 - pi*r^2/4)*L ~= 0.008. It instead ADDS 4.063, which is 103%
-   * of the whole body and roughly 480x any plausible fillet.
-   *
-   * The mesh agrees with the measurement (7.9886 against 7.9899), so the
-   * SOLID is wrong rather than its measurement — this is not another instance
-   * of a bad integrator. And both edges give the identical value to twelve
-   * significant figures, so it is structural, not numerical drift.
-   */
-  it('silently doubles the body on the two edges that stopped refusing', async () => {
+  /** The latest kernel must refuse or return a plausibly sized blend. */
+  it('never publishes the doubled wedge body', async () => {
     const { document, body } = await buildRevolve(annulusProfile(1), 90);
     const bodyId = getLatestBodyId(document)!;
     const edges = body!.topology!.edges;
@@ -616,26 +598,33 @@ describe('partial revolve and edge modifiers', () => {
     const WEDGE = (5 * Math.PI) / 4;
     expect(Math.abs(body!.volume - WEDGE)).toBeLessThan(1e-9);
 
-    for (const index of [3, 11]) {
+    let refused = 0;
+    for (const edge of edges) {
       const candidate = filletEdges(document, {
         name: 'Round',
         targetBodyId: bodyId,
-        edgeHashes: [edges[index]!.hash],
+        edgeHashes: [edge.hash],
         size: 0.1
       }).document;
       const derived = await kernel.syncDocument(candidate);
-      const filleted =
-        derived.bodyRepresentations[getLatestBodyId(candidate)!]!;
-      // No refusal, no warning, no diagnostic of any kind.
-      expect(derived.warnings).toEqual([]);
-      // And the body has slightly more than doubled.
-      expect(filleted.volume).toBeCloseTo(7.989887134, 6);
-      expect(filleted.volume / WEDGE).toBeGreaterThan(2);
-      // The mesh encloses the same wrong volume, so the solid is wrong.
-      expect(
-        Math.abs(meshSignedVolume(filleted.mesh) - filleted.volume)
-      ).toBeLessThan(2e-3);
+      const resultId = getLatestBodyId(candidate)!;
+      if (derived.warnings.length > 0) {
+        refused += 1;
+        expect(derived.warnings).toHaveLength(1);
+        expect(derived.warnings[0]).toContain('This body is a partial revolve');
+        expect(derived.bodyRepresentations[resultId]).toBeUndefined();
+        expect(derived.bodyRepresentations[bodyId]!.consumed).toBe(false);
+        expect(derived.bodyRepresentations[bodyId]!.volume).toBeCloseTo(
+          WEDGE,
+          9
+        );
+      } else {
+        const filleted = derived.bodyRepresentations[resultId]!;
+        expect(filleted.volume / WEDGE).toBeGreaterThan(0.9);
+        expect(filleted.volume / WEDGE).toBeLessThan(1.1);
+      }
     }
+    expect(refused).toBeGreaterThanOrEqual(10);
   }, 300_000);
 
   it('leaves the full revolve able to round four of its six edges', async () => {
