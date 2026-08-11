@@ -5934,6 +5934,9 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
       geometry.radius * 1e-6
     );
     if (Math.abs(radius - geometry.radius) <= radiusTolerance) {
+      if (operation.parameterBinding) {
+        return solid;
+      }
       throw new Error(
         'Through-hole diameter must differ from its current diameter.'
       );

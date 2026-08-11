@@ -169,6 +169,12 @@ export type DirectEditOperation =
       sourceAxisStart: Vector3;
       sourceAxisEnd: Vector3;
       diameter: ParamValue;
+      /**
+       * An auto-parameterization binding may deliberately start at the source
+       * diameter. The exact adapter keeps the source solid unchanged until the
+       * named parameter moves; ordinary resize gestures still reject no-ops.
+       */
+      parameterBinding?: true;
     }
   | {
       kind: 'remove-face-feature';

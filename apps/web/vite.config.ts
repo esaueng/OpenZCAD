@@ -46,14 +46,22 @@ const WORKSPACE_PACKAGES = [
   'persistence'
 ] as const;
 
-const workspaceAliases = Object.fromEntries(
-  WORKSPACE_PACKAGES.map((name) => [
-    `@openzcad/${name}`,
-    fileURLToPath(
-      new URL(`../../packages/${name}/src/index.ts`, import.meta.url)
+const workspaceAliases = {
+  '@openzcad/ai-contracts/auto-parameterize': fileURLToPath(
+    new URL(
+      '../../packages/ai-contracts/src/auto-parameterize.ts',
+      import.meta.url
     )
-  ])
-);
+  ),
+  ...Object.fromEntries(
+    WORKSPACE_PACKAGES.map((name) => [
+      `@openzcad/${name}`,
+      fileURLToPath(
+        new URL(`../../packages/${name}/src/index.ts`, import.meta.url)
+      )
+    ])
+  )
+};
 
 async function brepkitBuildInfo(): Promise<{
   version: string;
@@ -349,6 +357,16 @@ export default defineConfig(async ({ command, isPreview, mode }) => {
             }
             if (id.includes('/node_modules/lucide-react/')) {
               return 'icons';
+            }
+            // The document model is shared by the eager workspace, the lazy
+            // Assistant, and exact-preview modules. Give that deliberate
+            // first-paint dependency a stable name so it is not mistaken for
+            // an app-code `src-*` leak by the bundle gate.
+            if (
+              id.includes('/packages/shared/') ||
+              id.includes('/packages/document-core/')
+            ) {
+              return 'model';
             }
             // Sketch geometry, shared by the eager workspace and by lazily
             // loaded features. Without a name it becomes an anonymous `src-*`

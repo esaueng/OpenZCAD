@@ -31,6 +31,12 @@ import type {
   TopologySelection,
   Vector3
 } from '@openzcad/shared';
+import { isSketchDimensionField } from './sketch-dimensions';
+
+export {
+  isSketchDimensionField,
+  SKETCH_DIMENSION_FIELDS
+} from './sketch-dimensions';
 
 const TEXT_FONT_STYLES: readonly TextFontStyle[] = [
   'regular',
@@ -117,6 +123,13 @@ export type CadPatchOperation =
   | {
       kind: 'set_feature_dimension';
       featureId: FeatureId;
+      field: string;
+      value: ParamValue;
+    }
+  | {
+      kind: 'set_sketch_dimension';
+      sketchId: SketchId;
+      objectId: string;
       field: string;
       value: ParamValue;
     }
@@ -278,6 +291,8 @@ export interface CadPatchProposal {
   summary: string;
   assumptions: string[];
   operations: CadPatchOperation[];
+  /** Local verified recipes may require exact geometry to remain unchanged. */
+  preserveGeometry?: true;
 }
 
 /**
@@ -701,14 +716,18 @@ function compactFeatureData(document: ProjectDocument, data: unknown): unknown {
     if (!sketch) {
       return feature;
     }
+    const sketchObjects = sketch.objectIds.flatMap((objectId) => {
+      const object = document.nodes[objectId];
+      return object?.kind === 'sketch-object'
+        ? [{ objectId, data: object.data }]
+        : [];
+    });
     return {
       featureKind: feature.featureKind,
       sketchId: sketch.sketchId,
       planeRef: sketch.planeRef,
-      objects: sketch.objectIds.flatMap((objectId) => {
-        const object = document.nodes[objectId];
-        return object?.kind === 'sketch-object' ? [object.data] : [];
-      })
+      objectIds: sketchObjects.map(({ objectId }) => objectId),
+      objects: sketchObjects.map(({ data: objectData }) => objectData)
     };
   }
   return feature;
@@ -1415,6 +1434,7 @@ const directEditOperationSchema = {
 
 export const AI_CAD_OPERATION_CAPABILITIES = {
   set_feature_dimension: { enabled: true, reason: null },
+  set_sketch_dimension: { enabled: true, reason: null },
   add_transform: { enabled: true, reason: null },
   add_direct_edit: { enabled: true, reason: null },
   add_face_sketch: { enabled: true, reason: null },
@@ -1471,6 +1491,18 @@ export const CAD_PATCH_JSON_SCHEMA = {
               value: scalarSchema
             },
             required: ['kind', 'featureId', 'field', 'value']
+          },
+          {
+            type: 'object',
+            additionalProperties: false,
+            properties: {
+              kind: { type: 'string', const: 'set_sketch_dimension' },
+              sketchId: { type: 'string' },
+              objectId: { type: 'string' },
+              field: { type: 'string' },
+              value: scalarSchema
+            },
+            required: ['kind', 'sketchId', 'objectId', 'field', 'value']
           },
           {
             type: 'object',
@@ -2434,6 +2466,8 @@ export function parseCadPatchProposal(
   if (
     typeof candidate.proposalId !== 'string' ||
     typeof candidate.summary !== 'string' ||
+    (candidate.preserveGeometry !== undefined &&
+      candidate.preserveGeometry !== true) ||
     !Array.isArray(candidate.assumptions) ||
     !candidate.assumptions.every((item) => typeof item === 'string') ||
     !Array.isArray(candidate.operations) ||
@@ -2466,6 +2500,16 @@ export function parseCadPatchProposal(
             typeof operation.value !== 'number')
         ) {
           throw new Error('Invalid set_feature_dimension operation.');
+        }
+        break;
+      case 'set_sketch_dimension':
+        if (
+          typeof operation.sketchId !== 'string' ||
+          typeof operation.objectId !== 'string' ||
+          typeof operation.field !== 'string' ||
+          !isScalar(operation.value)
+        ) {
+          throw new Error('Invalid set_sketch_dimension operation.');
         }
         break;
       case 'add_primitive':
@@ -2917,6 +2961,38 @@ export function validateCadPatchProposalAgainstDigest(
 ): CadPatchProposal {
   for (const operation of proposal.operations) {
     switch (operation.kind) {
+      case 'set_sketch_dimension': {
+        const feature = digest.features.find((candidate) => {
+          const data = candidate.data as Record<string, unknown> | null;
+          return (
+            data?.featureKind === 'sketch' &&
+            data.sketchId === operation.sketchId
+          );
+        });
+        const data = feature?.data as Record<string, unknown> | undefined;
+        const objectIds = Array.isArray(data?.objectIds) ? data.objectIds : [];
+        const objects = Array.isArray(data?.objects) ? data.objects : [];
+        const index = objectIds.indexOf(operation.objectId);
+        const object =
+          index >= 0 && objects[index] && typeof objects[index] === 'object'
+            ? (objects[index] as Record<string, unknown>)
+            : null;
+        if (
+          !object ||
+          !['rectangle', 'circle', 'polygon', 'line', 'arc', 'text'].includes(
+            String(object.objectKind)
+          ) ||
+          !isSketchDimensionField(
+            object.objectKind as SketchObjectData['objectKind'],
+            operation.field
+          )
+        ) {
+          throw new Error(
+            `set_sketch_dimension contains a stale or unavailable field for object ${operation.objectId}. Refresh the proposal from the current document digest.`
+          );
+        }
+        break;
+      }
       case 'add_direct_edit': {
         const edit = operation.operation;
         const face = exactDigestFace(
@@ -3066,6 +3142,8 @@ export function describeCadPatchOperation(
       return `Set parameter ${operation.name} to ${operation.expression}`;
     case 'set_feature_dimension':
       return `Set ${operation.field} on ${operation.featureId} to ${String(operation.value)}`;
+    case 'set_sketch_dimension':
+      return `Set ${operation.field} on sketch object ${operation.objectId} to ${String(operation.value)}`;
     case 'add_primitive':
       return `Create ${operation.primitiveKind} ${operation.name}`;
     case 'delete_feature':

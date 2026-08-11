@@ -4,7 +4,10 @@
   "private": true,
   "license": "Apache-2.0",
   "type": "module",
-  "exports": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts",
+    "./auto-parameterize": "./src/auto-parameterize.ts"
+  },
   "dependencies": {
     "@openzcad/document-core": "workspace:*",
     "@openzcad/shared": "workspace:*"
