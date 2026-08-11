@@ -343,6 +343,11 @@ export class CameraController {
     if (this.mode === mode) {
       return;
     }
+    // The rebind below constructs fresh OrbitControls, which snapshot the
+    // camera's `up` once (see the constructor). Mid-glide that up is the
+    // slerped tween frame, not world up; cancel first so the snapshot — and
+    // every orbit after it — stays on the world axis.
+    this.cancelTween();
     this.mode = mode;
     if (mode === 'orthographic') {
       this.syncOrthographic(true);

@@ -3,6 +3,7 @@ import {
   addPrimitiveFeature,
   addSketchFeature,
   addSketchObjects,
+  booleanBodies,
   createCheckpoint,
   createProjectDocument,
   deleteSketchObject,
@@ -100,6 +101,40 @@ describe('document-core', () => {
 
     expect(document.bodyOrder).toHaveLength(2);
     expect(getLatestBodyId(document)).toBeTruthy();
+  });
+
+  it('rejects a boolean whose targets are not two distinct bodies', () => {
+    let document = createProjectDocument('Boolean Targets', user());
+    for (const name of ['A', 'B']) {
+      document = addPrimitiveFeature(document, {
+        name,
+        primitiveKind: 'box',
+        dimensions: { width: 10, height: 10, depth: 10 }
+      });
+    }
+    const [first, second] = document.bodyOrder;
+
+    expect(() =>
+      booleanBodies(document, {
+        name: 'Lonely',
+        operation: 'union',
+        targetBodyIds: [first!]
+      })
+    ).toThrow(/at least two target bodies/);
+    expect(() =>
+      booleanBodies(document, {
+        name: 'Twice',
+        operation: 'union',
+        targetBodyIds: [first!, first!]
+      })
+    ).toThrow(/same body twice/);
+
+    const merged = booleanBodies(document, {
+      name: 'Merged',
+      operation: 'union',
+      targetBodyIds: [first!, second!]
+    });
+    expect(merged.document.bodyOrder).toHaveLength(3);
   });
 
   it('migrates v3 sketch nodes to planeRef without touching other nodes', () => {
