@@ -12,7 +12,7 @@ import {
   importedStepLineageName,
   inspectTopologyWitness,
   topologyHashOfWitness,
-  topologyWitnessesEqual,
+  topologyWitnessesNearlyEqual,
   verifyTopologyEvolution,
   type TopologyKind,
   type TopologyLineageOperation,
@@ -471,7 +471,9 @@ export function propagateBrepKitRigidTransformLineage(
     const matches = results.filter(
       (candidate) =>
         candidate.kind === reference.kind &&
-        topologyWitnessesEqual(reference.kind, expected, candidate.witness)
+        // Near-equality, not exact: the expected witness carries quantized
+        // rotation noise. Uniqueness below keeps the band fail-closed.
+        topologyWitnessesNearlyEqual(reference.kind, expected, candidate.witness)
     );
     if (matches.length === 0) {
       output.diagnostics.push({
