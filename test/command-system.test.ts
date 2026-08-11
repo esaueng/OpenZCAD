@@ -17,7 +17,9 @@ import {
   type ExactKernelAdapter
 } from '@openzcad/kernel-adapter/exact';
 import {
+  toBodyId,
   toFeatureId,
+  toSketchId,
   toUserId,
   type FeatureNode,
   type ProjectDocument
@@ -552,6 +554,337 @@ describe('command-system', () => {
       )
     ).toThrow();
     expect(manager.document.commandLog).toHaveLength(0);
+  });
+
+  const featureOfKind = (
+    document: ProjectDocument,
+    featureKind: FeatureNode['featureKind']
+  ): FeatureNode =>
+    Object.values(document.nodes).find(
+      (node): node is FeatureNode =>
+        node.kind === 'feature' && node.featureKind === featureKind
+    )!;
+
+  const booleanUpdateFixture = () => {
+    const manager = new CommandManager(
+      createProjectDocument('Boolean Update', toUserId('user_test'))
+    );
+    for (const name of ['A', 'B', 'C']) {
+      manager.execute(
+        commandFactories.addPrimitive({
+          name,
+          primitiveKind: 'box',
+          dimensions: { width: 10, height: 10, depth: 10 }
+        })
+      );
+    }
+    const [first, second, third] = manager.document.bodyOrder;
+    manager.execute(
+      commandFactories.booleanBodies({
+        name: 'Merged',
+        operation: 'union',
+        targetBodyIds: [first!, second!]
+      })
+    );
+    return {
+      manager,
+      first: first!,
+      second: second!,
+      third: third!,
+      feature: featureOfKind(manager.document, 'boolean'),
+      resultBodyId: manager.document.bodyOrder.at(-1)!
+    };
+  };
+
+  it('rejects updating a boolean to fewer than two target bodies', () => {
+    const { manager, first, feature } = booleanUpdateFixture();
+    const before = structuredClone(manager.document);
+    expect(() =>
+      manager.execute(
+        commandFactories.updateFeature({
+          featureId: feature.featureId,
+          data: { featureKind: 'boolean', targetBodyIds: [first] }
+        })
+      )
+    ).toThrow(/at least two target bodies/);
+    expect(manager.document).toEqual(before);
+  });
+
+  it('rejects updating a boolean to duplicate target bodies', () => {
+    const { manager, first, feature } = booleanUpdateFixture();
+    expect(() =>
+      manager.execute(
+        commandFactories.updateFeature({
+          featureId: feature.featureId,
+          data: { featureKind: 'boolean', targetBodyIds: [first, first] }
+        })
+      )
+    ).toThrow(/same body twice/);
+  });
+
+  it('rejects updating a boolean to a nonexistent target body', () => {
+    const { manager, first, feature } = booleanUpdateFixture();
+    expect(() =>
+      manager.execute(
+        commandFactories.updateFeature({
+          featureId: feature.featureId,
+          data: {
+            featureKind: 'boolean',
+            targetBodyIds: [first, toBodyId('body_missing')]
+          }
+        })
+      )
+    ).toThrow(/Boolean target body body_missing not found/);
+  });
+
+  it('rejects updating a boolean to target its own result body', () => {
+    const { manager, first, feature, resultBodyId } = booleanUpdateFixture();
+    expect(() =>
+      manager.execute(
+        commandFactories.updateFeature({
+          featureId: feature.featureId,
+          data: {
+            featureKind: 'boolean',
+            targetBodyIds: [first, resultBodyId]
+          }
+        })
+      )
+    ).toThrow(/cannot target its own result body/);
+  });
+
+  it('accepts a boolean update that retargets to live distinct bodies', () => {
+    const { manager, first, third, feature } = booleanUpdateFixture();
+    manager.execute(
+      commandFactories.updateFeature({
+        featureId: feature.featureId,
+        data: { featureKind: 'boolean', targetBodyIds: [first, third] }
+      })
+    );
+    const updated = featureOfKind(manager.document, 'boolean');
+    expect(
+      updated.data.featureKind === 'boolean'
+        ? updated.data.targetBodyIds
+        : undefined
+    ).toEqual([first, third]);
+  });
+
+  it('rejects updating an extrude to target its own result body', () => {
+    const manager = new CommandManager(
+      createProjectDocument('Extrude Update', toUserId('user_test'))
+    );
+    manager.execute(
+      commandFactories.addPrimitive({
+        name: 'Base',
+        primitiveKind: 'box',
+        dimensions: { width: 30, height: 30, depth: 5 }
+      })
+    );
+    const baseBodyId = manager.document.bodyOrder[0]!;
+    manager.execute(
+      commandFactories.addSketch({
+        name: 'Profile',
+        plane: 'XY',
+        offset: 5,
+        object: {
+          objectKind: 'rectangle',
+          width: 10,
+          height: 10,
+          centerX: 0,
+          centerY: 0
+        }
+      })
+    );
+    manager.execute(
+      commandFactories.extrudeSketch({
+        name: 'Boss',
+        sketchId: getLatestSketchId(manager.document)!,
+        distance: 5,
+        operation: 'add',
+        targetBodyId: baseBodyId
+      })
+    );
+    const extrude = featureOfKind(manager.document, 'extrude');
+    expect(() =>
+      manager.execute(
+        commandFactories.updateFeature({
+          featureId: extrude.featureId,
+          data: { featureKind: 'extrude', targetBodyId: extrude.bodyId }
+        })
+      )
+    ).toThrow(/cannot target its own result body/);
+    // A same-target update of another field still passes.
+    manager.execute(
+      commandFactories.updateFeature({
+        featureId: extrude.featureId,
+        data: { featureKind: 'extrude', distance: 8 }
+      })
+    );
+    const updated = featureOfKind(manager.document, 'extrude');
+    expect(
+      updated.data.featureKind === 'extrude' ? updated.data.distance : undefined
+    ).toBe(8);
+  });
+
+  it('rejects updating a revolve to a nonexistent sketch', () => {
+    const manager = new CommandManager(
+      createProjectDocument('Revolve Update', toUserId('user_test'))
+    );
+    manager.execute(
+      commandFactories.addSketch({
+        name: 'Profile',
+        plane: 'XZ',
+        offset: 0,
+        object: {
+          objectKind: 'rectangle',
+          width: 10,
+          height: 10,
+          centerX: 10,
+          centerY: 0
+        }
+      })
+    );
+    manager.execute(
+      commandFactories.revolveSketch({
+        name: 'Ring',
+        sketchId: getLatestSketchId(manager.document)!,
+        axis: 'vertical'
+      })
+    );
+    const revolve = featureOfKind(manager.document, 'revolve');
+    expect(() =>
+      manager.execute(
+        commandFactories.updateFeature({
+          featureId: revolve.featureId,
+          data: {
+            featureKind: 'revolve',
+            sketchId: toSketchId('sketch_missing')
+          }
+        })
+      )
+    ).toThrow(/existing sketch/);
+    manager.execute(
+      commandFactories.updateFeature({
+        featureId: revolve.featureId,
+        data: { featureKind: 'revolve', angleDeg: 180 }
+      })
+    );
+    const updated = featureOfKind(manager.document, 'revolve');
+    expect(
+      updated.data.featureKind === 'revolve' ? updated.data.angleDeg : undefined
+    ).toBe(180);
+  });
+
+  it('rejects updating fillet, transform, and pattern features to a nonexistent body', () => {
+    const manager = new CommandManager(
+      createProjectDocument('Retarget Update', toUserId('user_test'))
+    );
+    manager.execute(
+      commandFactories.addPrimitive({
+        name: 'Box',
+        primitiveKind: 'box',
+        dimensions: { width: 10, height: 10, depth: 10 }
+      })
+    );
+    const bodyId = manager.document.bodyOrder[0]!;
+    manager.execute(
+      commandFactories.filletEdges({
+        name: 'Fillet',
+        targetBodyId: bodyId,
+        edgeHashes: [42],
+        edgeReferences: [edgeReference],
+        size: 1
+      })
+    );
+    manager.execute(
+      commandFactories.transformBody({
+        name: 'Move',
+        targetBodyId: bodyId,
+        translation: { x: 5, y: 0, z: 0 }
+      })
+    );
+    manager.execute(
+      commandFactories.patternBody({
+        name: 'Row',
+        targetBodyId: bodyId,
+        patternKind: 'linear',
+        count: 3,
+        axis: 'x',
+        spacing: 20,
+        angleDeg: 360
+      })
+    );
+    const fillet = featureOfKind(manager.document, 'fillet');
+    const transform = featureOfKind(manager.document, 'transform');
+    const pattern = featureOfKind(manager.document, 'pattern');
+
+    expect(() =>
+      manager.execute(
+        commandFactories.updateFeature({
+          featureId: fillet.featureId,
+          data: { featureKind: 'fillet', targetBodyId: toBodyId('body_missing') }
+        })
+      )
+    ).toThrow(/Target body body_missing not found/);
+    expect(() =>
+      manager.execute(
+        commandFactories.updateFeature({
+          featureId: transform.featureId,
+          data: {
+            featureKind: 'transform',
+            targetBodyId: toBodyId('body_missing')
+          }
+        })
+      )
+    ).toThrow(/Transform target body body_missing not found/);
+    expect(() =>
+      manager.execute(
+        commandFactories.updateFeature({
+          featureId: pattern.featureId,
+          data: {
+            featureKind: 'pattern',
+            targetBodyId: toBodyId('body_missing')
+          }
+        })
+      )
+    ).toThrow(/Target body body_missing not found/);
+
+    // Valid value edits on the same features still pass.
+    manager.execute(
+      commandFactories.updateFeature({
+        featureId: fillet.featureId,
+        data: { featureKind: 'fillet', radius: 2 }
+      })
+    );
+    manager.execute(
+      commandFactories.updateFeature({
+        featureId: transform.featureId,
+        data: {
+          featureKind: 'transform',
+          transform: {
+            translation: { x: 7, y: 0, z: 0 },
+            rotationDeg: { x: 0, y: 0, z: 0 }
+          }
+        }
+      })
+    );
+    manager.execute(
+      commandFactories.updateFeature({
+        featureId: pattern.featureId,
+        data: { featureKind: 'pattern', count: 5 }
+      })
+    );
+    const updatedFillet = featureOfKind(manager.document, 'fillet');
+    expect(
+      updatedFillet.data.featureKind === 'fillet'
+        ? updatedFillet.data.radius
+        : undefined
+    ).toBe(2);
+    const updatedPattern = featureOfKind(manager.document, 'pattern');
+    expect(
+      updatedPattern.data.featureKind === 'pattern'
+        ? updatedPattern.data.count
+        : undefined
+    ).toBe(5);
   });
 
   it('clears the redo stack when a new command is executed after undo', () => {

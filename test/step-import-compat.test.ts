@@ -184,6 +184,64 @@ describe('STEP plane-angle compatibility', () => {
     ]);
     expect(Object.keys(derived.bodyRepresentations)).toEqual([]);
   });
+
+  it('imports millimetre geometry at document scale in a non-mm document', async () => {
+    const source = addPrimitiveFeature(
+      createProjectDocument('Unit cube source', toUserId('user_step_units')),
+      {
+        name: 'Unit cube',
+        primitiveKind: 'box',
+        dimensions: { width: 10, height: 10, depth: 10 }
+      }
+    );
+    const step = await adapter.exportStep(source, [source.bodyOrder[0]!]);
+
+    // First into a millimetre document, which also primes the adapter's
+    // checksum cache with the kernel's millimetre-form solids.
+    const mmManager = new CommandManager(
+      createProjectDocument('MM import', toUserId('user_step_units'))
+    );
+    mmManager.execute(
+      commandFactories.importStep({
+        name: 'Imported mm cube',
+        artifactId: 'artifact_units_mm',
+        sourceName: 'unit-cube.step',
+        stepText: step
+      })
+    );
+    const mmDerived = await adapter.syncDocument(mmManager.document);
+    const mmBody = Object.values(mmDerived.bodyRepresentations)[0];
+    expect(mmDerived.warnings).toEqual([]);
+    expect(mmBody?.volume).toBeCloseTo(1000, 9);
+
+    // The same file in an inch document must land at 10 mm = 10/25.4 in per
+    // edge — through the cache-restore path, which must not leak the cached
+    // millimetre scale into a differently-united document.
+    const inchManager = new CommandManager(
+      createProjectDocument('Inch import', toUserId('user_step_units'), 'inch')
+    );
+    inchManager.execute(
+      commandFactories.importStep({
+        name: 'Imported inch cube',
+        artifactId: 'artifact_units_inch',
+        sourceName: 'unit-cube.step',
+        stepText: step
+      })
+    );
+    const inchDerived = await adapter.syncDocument(inchManager.document);
+    const inchBody = Object.values(inchDerived.bodyRepresentations)[0];
+    expect(inchDerived.warnings).toEqual([]);
+    expect(inchBody?.volume).toBeCloseTo(1000 / 25.4 ** 3, 9);
+
+    // Round trip: exporting the inch document multiplies by 25.4, so the
+    // physical size is preserved instead of inflating 25.4x.
+    const roundTrip = await adapter.exportStep(inchManager.document, [
+      inchManager.document.bodyOrder[0]!
+    ]);
+    const inspection = await adapter.inspectStep(roundTrip);
+    expect(inspection).toMatchObject({ solid: true, valid: true });
+    expect(inspection.volume).toBeCloseTo(1000, 3);
+  });
 });
 
 describe('STEP import validation diagnostics', () => {

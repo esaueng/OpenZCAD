@@ -10,6 +10,8 @@ export interface ParsedStl {
 
 const BINARY_STL_HEADER_BYTES = 84;
 const BINARY_STL_TRIANGLE_BYTES = 50;
+const ASCII_VERTEX_SOURCE =
+  'vertex\\s+([-+0-9.eE]+)\\s+([-+0-9.eE]+)\\s+([-+0-9.eE]+)';
 
 /** Guard against imports that would stall the browser tab. */
 export const MAX_IMPORT_TRIANGLES = 200_000;
@@ -39,11 +41,13 @@ function parseBinaryStl(buffer: ArrayBuffer, fileName: string): ParsedStl {
   for (let i = 0; i < triangleCount; i++) {
     offset += 12; // skip the stored facet normal; recomputed on export
     for (let v = 0; v < 3; v++) {
-      vertices.push(
-        view.getFloat32(offset, true),
-        view.getFloat32(offset + 4, true),
-        view.getFloat32(offset + 8, true)
-      );
+      const x = view.getFloat32(offset, true);
+      const y = view.getFloat32(offset + 4, true);
+      const z = view.getFloat32(offset + 8, true);
+      if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z)) {
+        throw new StlParseError('Binary STL contains a non-finite vertex.');
+      }
+      vertices.push(x, y, z);
       offset += 12;
     }
     offset += 2; // attribute byte count
@@ -67,8 +71,7 @@ function assertBinaryStlLength(
 }
 
 function parseAsciiStl(text: string, fileName: string): ParsedStl {
-  const vertexPattern =
-    /vertex\s+([-+0-9.eE]+)\s+([-+0-9.eE]+)\s+([-+0-9.eE]+)/g;
+  const vertexPattern = new RegExp(ASCII_VERTEX_SOURCE, 'g');
   const vertices: number[] = [];
   for (const match of text.matchAll(vertexPattern)) {
     const x = Number(match[1]);
@@ -78,12 +81,19 @@ function parseAsciiStl(text: string, fileName: string): ParsedStl {
       throw new StlParseError('ASCII STL contains a malformed vertex.');
     }
     vertices.push(x, y, z);
+    // Enforce the budget while accumulating so an oversized file is rejected
+    // before its vertices are all held in memory.
+    if (vertices.length > MAX_IMPORT_TRIANGLES * 9) {
+      assertTriangleBudget(Math.ceil(vertices.length / 9));
+    }
+  }
+  if (vertices.length === 0) {
+    throw new StlParseError('ASCII STL contains no facets.');
   }
   if (vertices.length % 9 !== 0) {
     throw new StlParseError('ASCII STL vertex count is not a multiple of three.');
   }
   const triangleCount = vertices.length / 9;
-  assertTriangleBudget(triangleCount);
   const indices: number[] = [];
   for (let i = 0; i < triangleCount; i++) {
     const base = i * 3;
@@ -112,7 +122,16 @@ export function parseStl(buffer: ArrayBuffer, fileName: string): ParsedStl {
   const bytes = new Uint8Array(buffer);
   const head = new TextDecoder().decode(bytes.subarray(0, Math.min(bytes.length, 512)));
   if (head.trimStart().toLowerCase().startsWith('solid')) {
-    return parseAsciiStl(new TextDecoder().decode(bytes), fileName);
+    const text = new TextDecoder().decode(bytes);
+    // A binary exporter's "solid" header carries no vertex statements; only
+    // commit to ASCII when the body has at least one, otherwise fall through
+    // to the tolerant binary branch.
+    if (
+      new RegExp(ASCII_VERTEX_SOURCE).test(text) ||
+      buffer.byteLength < BINARY_STL_HEADER_BYTES
+    ) {
+      return parseAsciiStl(text, fileName);
+    }
   }
 
   if (buffer.byteLength >= BINARY_STL_HEADER_BYTES) {
@@ -127,6 +146,13 @@ export interface StlExportMesh {
   name: string;
   vertices: number[];
   indices: number[];
+}
+
+export class StlWriteError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'StlWriteError';
+  }
 }
 
 function facetNormal(
@@ -161,10 +187,25 @@ export function writeAsciiStl(solidName: string, meshes: StlExportMesh[]): strin
   const safeName = solidName.replace(/\s+/g, '_').replace(/[^\w.-]/g, '') || 'openzcad';
   const lines: string[] = [`solid ${safeName}`];
   for (const mesh of meshes) {
+    const vertexCount = Math.floor(mesh.vertices.length / 3);
     for (let i = 0; i + 2 < mesh.indices.length; i += 3) {
       const a = mesh.indices[i]!;
       const b = mesh.indices[i + 1]!;
       const c = mesh.indices[i + 2]!;
+      for (const index of [a, b, c]) {
+        if (!Number.isInteger(index) || index < 0 || index >= vertexCount) {
+          throw new StlWriteError(
+            `Mesh "${mesh.name}" references vertex ${index}, but it has ${vertexCount} vertices.`
+          );
+        }
+        for (let axis = 0; axis < 3; axis++) {
+          if (!Number.isFinite(mesh.vertices[index * 3 + axis])) {
+            throw new StlWriteError(
+              `Mesh "${mesh.name}" vertex ${index} has a non-finite component.`
+            );
+          }
+        }
+      }
       const [nx, ny, nz] = facetNormal(mesh.vertices, a, b, c);
       lines.push(
         `  facet normal ${nx} ${ny} ${nz}`,
