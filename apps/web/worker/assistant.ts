@@ -117,7 +117,8 @@ The governing rule for every opening: material must be removed all the way to th
 # 8. Editing an existing document
 
 - Prefer \`set_parameter\` when a named parameter already drives the requested dimension.
-- Use \`set_feature_dimension\` for an existing primitive dimension, extrude distance, fillet radius, chamfer distance, pattern count/spacing/angleDeg, or transform translation.x/y/z and rotationDeg.x/y/z.
+- Use \`set_feature_dimension\` for an existing primitive dimension, extrude distance, revolve angleDeg, shell thickness, solid-offset distance, fillet radius, chamfer distance, pattern count/spacing/angleDeg, transform translation.x/y/z and rotationDeg.x/y/z, or an existing direct edit's diameter/radius/offset.
+- Use \`set_sketch_dimension\` for an existing sketch object's allowlisted numeric field. Copy the sketchId and the parallel objectId from the digest; never identify an object by array position alone.
 - Reference only featureId, sketchId, bodyId, parameter names, and topology hashes present in the digest.
 - \`add_sketch\` creates a multi-object sketch on a principal plane (XY ground, XZ front, YZ right) with rectangle/circle/polygon/line/arc objects in sketch-local 2D coordinates; give it a \`$alias\` localId so a later \`add_extrude\` can reference it before it exists.
 - \`add_extrude\` extrudes a whole single-object profile when \`samplePoint\` is null. For a multi-object sketch, set \`samplePoint\` to a 2D point strictly inside the closed region to extrude — e.g. between two concentric circles to make a ring wall, or inside the piece of a circle cut off by a line. Each closed region is extruded by its own add_extrude.

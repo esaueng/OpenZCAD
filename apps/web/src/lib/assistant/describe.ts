@@ -61,6 +61,8 @@ export function describeOperation(operation: CadPatchOperation): string {
       return `Set ${operation.name} = ${operation.expression}`;
     case 'set_feature_dimension':
       return `Set ${operation.field} = ${value(operation.value)} on ${operation.featureId}`;
+    case 'set_sketch_dimension':
+      return `Set ${operation.field} = ${value(operation.value)} on sketch object ${operation.objectId}`;
     case 'add_primitive':
       return `${operation.name} — ${operation.primitiveKind}, ${dimensionList(operation.dimensions)}`;
     case 'delete_feature':
@@ -86,6 +88,8 @@ export function describeOperation(operation: CadPatchOperation): string {
       ].filter(Boolean);
       return `${operation.name} — ${describeBodyRef(operation.targetBodyId)}: ${moves.length > 0 ? moves.join(', ') : 'no change'}`;
     }
+    case 'add_direct_edit':
+      return `${operation.name} — ${operation.operation.kind.replaceAll('-', ' ')} on ${describeBodyRef(operation.targetBodyId)}`;
     case 'add_edge_modifier':
       return `${operation.name} — ${operation.modifier} ${
         operation.edgeSelector === 'all-feature-edges'

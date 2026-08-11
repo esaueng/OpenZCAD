@@ -1111,6 +1111,41 @@
   color: var(--color-text);
 }
 
+.assistant-verified-action {
+  min-width: 0;
+  padding: 5px 7px;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--color-text-muted);
+  background: var(--color-surface-2);
+  border: var(--border-thin);
+  border-radius: var(--radius-sm);
+  font-size: var(--fs-mini);
+  text-align: left;
+}
+
+.assistant-verified-action > span:nth-child(2) {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.assistant-verified-action .assistant-suggestion-badge {
+  margin-left: auto;
+}
+
+.assistant-verified-action:hover:not(:disabled) {
+  color: var(--color-text);
+  background: var(--color-surface-hover);
+  border-color: var(--color-accent-border);
+}
+
+.assistant-verified-action:disabled {
+  opacity: 0.5;
+}
+
 .assistant-prompt {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr) auto;

@@ -153,11 +153,13 @@ Cloud settings, personal credentials, projects, artifacts, and collaboration req
 
 ## AI assistant (experimental)
 
-An optional side panel turns plain-language requests into reviewable document patches. It is experimental and entirely optional — the workspace is fully functional without it, and it stays dormant until a provider key is configured.
+An optional side panel turns plain-language requests into reviewable document patches. It is experimental and entirely optional — the workspace is fully functional without it. Provider-backed requests stay dormant until a provider key is configured; verified local recipes remain available without one.
 
 The dock collapses to a launcher in the bottom-right corner of the viewport, which gives its whole column back to the model; the conversation keeps running behind it, and the launcher counts any reply that lands while it is closed. Each project's thread — what was asked, what the assistant asked back, and which proposals were applied or rejected — is kept on the device and read back when the project reopens, so the scrollback is a record rather than a session.
 
 The assistant streams proposals through the OpenAI Responses API. It sees compact feature history, live exact-topology summaries, and the active selection, so "fillet all edges" resolves stable edge fingerprints without manual picking. Output is constrained to a strict CAD patch schema; you preview, apply, or reject, and apply is one normal undoable transaction. PDF and image drawings can be attached as references. The AI can only propose a small allowlisted command patch — it cannot directly mutate a document, viewport, or kernel.
+
+**Auto-parameterize model** is a provider-free verified recipe. It replaces independent literal native dimensions with named parameters, and can bind kernel-proven through-hole diameters on imported STEP bodies. Exact preview must prove that body geometry is unchanged before Apply is enabled; sketch line/arc coordinates and unrecognized imported features remain untouched rather than guessing design intent.
 
 OpenRouter is the default provider. For local development, export the key in the launching shell or set it in `apps/web/.dev.vars` (git-ignored):
 
@@ -186,7 +188,7 @@ Current assistant limitations and gates:
 
 - **Assistant usage is bounded before provider dispatch** — beta requests use an authenticated deployment-key allowlist, D1-backed global/account/opaque-IP request and token-weighted cost quotas, and expiring concurrency leases. Provider-side billing controls remain the final deployment spend cap.
 - Deterministic contracts are implemented for face-attached sketches, multi-profile extrudes, mirror, shell, solid offset, transforms, edge modifiers, patterns, and the existing validated direct-edit subset. The six newer operation families remain independently dark behind their `AI_PATCH_*_ENABLED` flags; topology-dependent proposals must repeat the exact digest witness and are rejected when stale.
-- Recognized imported-feature coordination remains disabled in `AI_CAD_OPERATION_CAPABILITIES`; proposals cannot import geometry or perform collaboration actions.
+- Provider-generated recognized imported-feature coordination remains disabled in `AI_CAD_OPERATION_CAPABILITIES`; the verified local auto-parameterization recipe is limited to kernel-proven through holes. Proposals cannot import geometry or perform collaboration actions.
 
 ## Known limitations
 

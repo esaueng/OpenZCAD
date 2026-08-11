@@ -65,6 +65,94 @@ function newExactWarnings(
   return derived.warnings.filter((warning) => !existing.has(warning));
 }
 
+function sortedStrings(values: readonly string[]): string[] {
+  return [...values].sort((left, right) => left.localeCompare(right));
+}
+
+function assertPreservedGeometry(
+  base: ProjectDocument['derived'],
+  candidate: ProjectDocument['derived']
+): void {
+  const baseIds = sortedStrings(Object.keys(base.bodyRepresentations));
+  const candidateIds = sortedStrings(
+    Object.keys(candidate.bodyRepresentations)
+  );
+  if (
+    baseIds.length !== candidateIds.length ||
+    baseIds.some((bodyId, index) => bodyId !== candidateIds[index])
+  ) {
+    throw new Error(
+      'Auto-parameterization changed the exact body inventory; nothing was applied.'
+    );
+  }
+  const baseExportable = sortedStrings(base.exportableBodyIds);
+  const candidateExportable = sortedStrings(candidate.exportableBodyIds);
+  if (
+    baseExportable.length !== candidateExportable.length ||
+    baseExportable.some(
+      (bodyId, index) => bodyId !== candidateExportable[index]
+    )
+  ) {
+    throw new Error(
+      'Auto-parameterization changed which bodies are exportable; nothing was applied.'
+    );
+  }
+
+  for (const bodyId of baseIds) {
+    const before = base.bodyRepresentations[bodyId as BodyId]!;
+    const after = candidate.bodyRepresentations[bodyId as BodyId]!;
+    const span = Math.max(
+      before.bbox.max.x - before.bbox.min.x,
+      before.bbox.max.y - before.bbox.min.y,
+      before.bbox.max.z - before.bbox.min.z,
+      1
+    );
+    const linearTolerance = span * 1e-9;
+    const volumeTolerance = Math.max(Math.abs(before.volume), 1) * 1e-9;
+    const close = (left: number, right: number, tolerance: number) =>
+      Math.abs(left - right) <= tolerance;
+    const bboxBefore = [
+      before.bbox.min.x,
+      before.bbox.min.y,
+      before.bbox.min.z,
+      before.bbox.max.x,
+      before.bbox.max.y,
+      before.bbox.max.z
+    ];
+    const bboxAfter = [
+      after.bbox.min.x,
+      after.bbox.min.y,
+      after.bbox.min.z,
+      after.bbox.max.x,
+      after.bbox.max.y,
+      after.bbox.max.z
+    ];
+    const meshChanged =
+      before.mesh.vertices.length !== after.mesh.vertices.length ||
+      before.mesh.indices.length !== after.mesh.indices.length ||
+      before.mesh.vertices.some(
+        (value, index) =>
+          !close(value, after.mesh.vertices[index]!, linearTolerance)
+      ) ||
+      before.mesh.indices.some(
+        (value, index) => value !== after.mesh.indices[index]
+      );
+    if (
+      before.consumed !== after.consumed ||
+      before.faceCount !== after.faceCount ||
+      !close(before.volume, after.volume, volumeTolerance) ||
+      bboxBefore.some(
+        (value, index) => !close(value, bboxAfter[index]!, linearTolerance)
+      ) ||
+      meshChanged
+    ) {
+      throw new Error(
+        `Auto-parameterization changed the exact geometry of ${before.name}; nothing was applied.`
+      );
+    }
+  }
+}
+
 type StagedEdgeModifier = Extract<
   CadPatchOperation,
   { kind: 'add_edge_modifier' }
@@ -237,6 +325,9 @@ export async function preflightCadPatch(
     throw new Error(
       `${missing.featureName} did not produce its expected exact result body.`
     );
+  }
+  if (proposal.preserveGeometry) {
+    assertPreservedGeometry(base.derived, derived);
   }
   return {
     commands,

@@ -6,6 +6,7 @@ import {
   type BodyId,
   type EntityId,
   type ParamValue,
+  type ParametricTransform3D,
   type ProjectDocument,
   type SerializedCommand,
   type SketchId,
@@ -79,6 +80,7 @@ import {
   type TransformInput
 } from '@openzcad/document-core';
 import {
+  isSketchDimensionField,
   isLocalBodyRef,
   normalizeLocalId,
   type CadPatchProposal
@@ -877,6 +879,13 @@ function assertOperationExpressions(
         operation.value
       );
       break;
+    case 'set_sketch_dimension':
+      assertEvaluableExpression(
+        scope,
+        `${operation.field} on ${operation.objectId}`,
+        operation.value
+      );
+      break;
     case 'add_primitive':
       for (const [field, value] of Object.entries(operation.dimensions)) {
         if (value !== null) {
@@ -1200,6 +1209,12 @@ export function commandsForCadPatch(
     };
   };
 
+  // Proposal conversion happens before the transaction runs. Keep the latest
+  // sketch-object payload here so two bindings on one object compose instead
+  // of the later command restoring fields from the original document.
+  const projectedSketchObjects = new Map<string, SketchObjectData>();
+  const projectedTransforms = new Map<string, ParametricTransform3D>();
+
   return proposal.operations.map((operation) => {
     switch (operation.kind) {
       case 'set_parameter':
@@ -1207,6 +1222,35 @@ export function commandsForCadPatch(
           name: operation.name,
           expression: operation.expression
         });
+      case 'set_sketch_dimension': {
+        const sketch = findSketch(document, operation.sketchId);
+        const objectId = toEntityId(operation.objectId);
+        const object = sketch?.objectIds.includes(objectId)
+          ? document.nodes[objectId]
+          : undefined;
+        if (!sketch || !object || object.kind !== 'sketch-object') {
+          throw new Error(
+            `Sketch object ${operation.objectId} is not available on ${operation.sketchId}.`
+          );
+        }
+        if (!isSketchDimensionField(object.data.objectKind, operation.field)) {
+          throw new Error(
+            `${object.data.objectKind} sketch object ${operation.objectId} does not expose an editable ${operation.field} dimension.`
+          );
+        }
+        const current =
+          projectedSketchObjects.get(operation.objectId) ?? object.data;
+        const data = {
+          ...current,
+          [operation.field]: operation.value
+        };
+        projectedSketchObjects.set(operation.objectId, data);
+        return commandFactories.updateSketchObject({
+          sketchId: sketch.sketchId,
+          objectId,
+          data
+        });
+      }
       case 'add_primitive': {
         const dimensions = Object.fromEntries(
           Object.entries(operation.dimensions).filter(
@@ -1527,6 +1571,33 @@ export function commandsForCadPatch(
           });
         }
         if (
+          feature.data.featureKind === 'revolve' &&
+          operation.field === 'angleDeg'
+        ) {
+          return commandFactories.updateFeature({
+            featureId: feature.featureId,
+            data: { angleDeg: operation.value }
+          });
+        }
+        if (
+          feature.data.featureKind === 'shell' &&
+          operation.field === 'thickness'
+        ) {
+          return commandFactories.updateFeature({
+            featureId: feature.featureId,
+            data: { thickness: operation.value }
+          });
+        }
+        if (
+          feature.data.featureKind === 'solid-offset' &&
+          operation.field === 'distance'
+        ) {
+          return commandFactories.updateFeature({
+            featureId: feature.featureId,
+            data: { distance: operation.value }
+          });
+        }
+        if (
           feature.data.featureKind === 'fillet' &&
           operation.field === 'radius'
         ) {
@@ -1559,16 +1630,36 @@ export function commandsForCadPatch(
             (group === 'translation' || group === 'rotationDeg') &&
             (axis === 'x' || axis === 'y' || axis === 'z')
           ) {
+            const current =
+              projectedTransforms.get(String(feature.featureId)) ??
+              feature.data.transform;
+            const transform = {
+              ...current,
+              [group]: {
+                ...current[group],
+                [axis]: operation.value
+              }
+            };
+            projectedTransforms.set(String(feature.featureId), transform);
+            return commandFactories.updateFeature({
+              featureId: feature.featureId,
+              data: { transform }
+            });
+          }
+        }
+        if (feature.data.featureKind === 'direct-edit') {
+          const edit = feature.data.operation;
+          const editable =
+            (edit.kind === 'resize-through-hole' &&
+              operation.field === 'diameter') ||
+            (edit.kind === 'resize-cylindrical-face' &&
+              operation.field === 'radius') ||
+            (edit.kind === 'offset-face' && operation.field === 'offset');
+          if (editable) {
             return commandFactories.updateFeature({
               featureId: feature.featureId,
               data: {
-                transform: {
-                  ...feature.data.transform,
-                  [group]: {
-                    ...feature.data.transform[group],
-                    [axis]: operation.value
-                  }
-                }
+                operation: { ...edit, [operation.field]: operation.value }
               }
             });
           }

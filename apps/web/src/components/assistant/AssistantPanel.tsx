@@ -241,6 +241,11 @@ export function AssistantPanel({
   });
   const [atBottom, setAtBottom] = useState(true);
   const [unread, setUnread] = useState(0);
+  const [autoParameterizeResult, setAutoParameterizeResult] = useState<{
+    document: ProjectDocument;
+    selection: CadSelectionContext;
+    proposal: CadPatchProposal | null;
+  } | null>(null);
   const applyingEntryRef = useRef<string | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const threadRef = useRef<HTMLDivElement | null>(null);
@@ -265,6 +270,11 @@ export function AssistantPanel({
   const thinking = conversation.status === 'thinking';
   const configured = status?.configured ?? false;
   const entries = conversation.entries;
+  const autoParameterizeProposal =
+    autoParameterizeResult?.document === doc &&
+    autoParameterizeResult.selection === selection
+      ? autoParameterizeResult.proposal
+      : null;
   const groups = useMemo(
     () => groupThreadByDay(entries, Date.now()),
     [entries]
@@ -274,9 +284,17 @@ export function AssistantPanel({
       assistantSuggestions({
         bodyCount: doc.bodyOrder.length,
         topologyKind: sharedTopologyKind(selection),
-        selectedBodyCount: selection.bodyIds.length
+        selectedBodyCount: selection.bodyIds.length,
+        autoParameterizeProposal
       }),
-    [doc.bodyOrder.length, selection]
+    [autoParameterizeProposal, doc.bodyOrder.length, selection]
+  );
+  const autoParameterizeSuggestion = useMemo(
+    () =>
+      suggestions.find(
+        (suggestion) => suggestion.id === 'verified-auto-parameterize'
+      ),
+    [suggestions]
   );
   const verifiedPrompt = useMemo(
     () =>
@@ -312,6 +330,35 @@ export function AssistantPanel({
   }, [collapsed, prompt]);
 
   useEffect(() => () => abortRef.current?.abort(), []);
+
+  useEffect(() => {
+    if (collapsed) {
+      return;
+    }
+    let active = true;
+    void import('@openzcad/ai-contracts/auto-parameterize')
+      .then(({ createAutoParameterizeProposal }) => {
+        if (active) {
+          setAutoParameterizeResult({
+            document: doc,
+            selection,
+            proposal: createAutoParameterizeProposal(doc, selection)
+          });
+        }
+      })
+      .catch(() => {
+        if (active) {
+          setAutoParameterizeResult({
+            document: doc,
+            selection,
+            proposal: null
+          });
+        }
+      });
+    return () => {
+      active = false;
+    };
+  }, [collapsed, doc, selection]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -1023,6 +1070,18 @@ export function AssistantPanel({
               </span>
             ))}
           </div>
+        )}
+        {entries.length > 0 && autoParameterizeSuggestion && (
+          <button
+            type="button"
+            className="assistant-verified-action"
+            disabled={thinking || applyingEntryId !== null}
+            onClick={() => applySuggestion(autoParameterizeSuggestion)}
+          >
+            <Sparkles size={12} aria-hidden="true" />
+            <span>{autoParameterizeSuggestion.label}</span>
+            <span className="assistant-suggestion-badge">Verified</span>
+          </button>
         )}
         <div className="assistant-prompt">
           <button

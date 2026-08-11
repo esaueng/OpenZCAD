@@ -60,6 +60,12 @@ export default defineConfig({
       '@openzcad/kernel-adapter/exact': fileURLToPath(
         new URL('./packages/kernel-adapter/src/exact.ts', import.meta.url)
       ),
+      '@openzcad/ai-contracts/auto-parameterize': fileURLToPath(
+        new URL(
+          './packages/ai-contracts/src/auto-parameterize.ts',
+          import.meta.url
+        )
+      ),
       ...workspaceAliases,
       'cloudflare:workers': fileURLToPath(
         new URL('./test/cloudflare-workers.mock.ts', import.meta.url)

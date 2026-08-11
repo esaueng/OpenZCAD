@@ -28,6 +28,9 @@
         "packages/kernel-adapter/src/exact.ts"
       ],
       "@openzcad/ai-contracts": ["packages/ai-contracts/src/index.ts"],
+      "@openzcad/ai-contracts/auto-parameterize": [
+        "packages/ai-contracts/src/auto-parameterize.ts"
+      ],
       "@openzcad/viewport": ["packages/viewport/src/index.ts"],
       "@openzcad/viewport/input-bindings": [
         "packages/viewport/src/input/bindings.ts"
