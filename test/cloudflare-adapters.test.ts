@@ -239,6 +239,74 @@ describe('cloudflare adapters', () => {
     expect(put).not.toHaveBeenCalled();
   });
 
+  it('keeps content-addressed assets when a save loses the version race', async () => {
+    const userId = toUserId('user_conflict_assets');
+    const manager = new CommandManager(
+      createProjectDocument('Conflict import', userId)
+    );
+    manager.execute(
+      commandFactories.importStep({
+        name: 'Bracket STEP',
+        artifactId: 'artifact_conflict_step',
+        sourceName: 'bracket.step',
+        stepText: 'ISO-10303-21;\nDATA;\nENDSEC;\nEND-ISO-10303-21;'
+      })
+    );
+    const document = manager.document;
+    const deleted: string[] = [];
+    const bucket = {
+      put: vi.fn(async (_key: string) => undefined),
+      get: vi.fn(),
+      head: vi.fn(async () => null),
+      delete: vi.fn(async (key: string) => {
+        deleted.push(key);
+      })
+    };
+    const prepare = vi.fn((query: string) => ({
+      bind: () => ({
+        first: async () => {
+          if (query.includes('owner_user_id')) {
+            return { owner_user_id: userId };
+          }
+          if (query.includes('SELECT document_version')) {
+            return { document_version: document.version };
+          }
+          return null;
+        },
+        run: async () => ({}),
+        all: async () => ({ results: [] })
+      })
+    }));
+    // The projects UPDATE (statement index 1) reports zero changed rows: a
+    // concurrent writer won the version fence after this write uploaded its
+    // objects.
+    const batch = vi.fn(async (statements: unknown[]) =>
+      statements.map((_, index) => ({
+        meta: { changes: index === 1 ? 0 : 1 }
+      }))
+    );
+    const service = new D1R2PersistenceService({
+      DB: { prepare, batch } as unknown as D1Database,
+      PROJECT_STORAGE: bucket as unknown as R2Bucket
+    });
+
+    await expect(
+      service.saveDocument(userId, {
+        projectId: document.projectId,
+        expectedVersion: document.version,
+        document
+      })
+    ).rejects.toMatchObject({ currentVersion: document.version });
+
+    const putKeys = bucket.put.mock.calls.map(([key]) => key);
+    expect(putKeys.some((key) => key.includes('/assets/'))).toBe(true);
+    // Asset objects are shared by content hash: the race winner may have just
+    // committed rows referencing the exact objects this loser uploaded, so
+    // only the losing document object may be deleted.
+    expect(deleted.filter((key) => key.includes('/assets/'))).toEqual([]);
+    expect(deleted.some((key) => key.includes('/documents/'))).toBe(true);
+  });
+
   it('skips a corrupt D1 project row without hiding valid projects', async () => {
     const document = createProjectDocument(
       'Valid D1 project',
