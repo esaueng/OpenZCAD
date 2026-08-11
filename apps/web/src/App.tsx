@@ -195,7 +195,6 @@ import { StartupScreen } from './components/StartupScreen';
 import { SettingsPage, type AuthConfigStatus } from './components/SettingsPage';
 import { buildDemoDocument, DEMO_DEFINITIONS } from './lib/demos';
 import type { DemoDefinition } from './lib/demos';
-import { AssistantPanel } from './components/assistant/AssistantPanel';
 import { ProjectSharingDialog } from './components/ProjectSharingDialog';
 import { createProjectSharingClient } from './lib/projectSharing';
 import {
@@ -332,6 +331,19 @@ const LazySketchEntityEditor = lazy(() =>
     default: module.SketchEntityEditor
   }))
 );
+const LazyAssistantPanel = lazy(() =>
+  import('./components/assistant/AssistantPanel').then((module) => ({
+    default: module.AssistantPanel
+  }))
+);
+
+function AssistantPanel(props: ComponentProps<typeof LazyAssistantPanel>) {
+  return (
+    <Suspense fallback={null}>
+      <LazyAssistantPanel {...props} />
+    </Suspense>
+  );
+}
 
 function ViewerShell(props: ComponentProps<typeof LazyViewerShell>) {
   return (
