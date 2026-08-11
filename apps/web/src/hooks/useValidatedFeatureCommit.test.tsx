@@ -18,13 +18,29 @@ import {
   VALIDATED_FEATURE_BUSY_STATUS,
   VALIDATED_FEATURE_REVALIDATING_STATUS,
   VALIDATED_FEATURE_SUPERSEDED_STATUS,
-  type ValidatedFeatureOutcome
+  type ValidatedFeatureOutcome,
+  type ValidatedFeatureReservation,
+  type ValidatedFeatureRunOptions
 } from './useValidatedFeatureCommit';
 import {
   createInFlightImportChecksums,
-  settleImportSource,
-  type InFlightImportChecksums
+  importSourceChecksums
 } from '../lib/importArchival';
+import {
+  deleteSourceBlobIfUnreferenced,
+  ensureLocalProjectStorage,
+  LOCAL_STORAGE_BLOCKED_MESSAGE,
+  putSourceBlobIfAbsent,
+  releaseSourceBlobClaim,
+  type LocalStorageReadiness
+} from '../lib/localProjectStore';
+import {
+  localStepImportSourceStore,
+  runStepImport,
+  type StepImportMarks,
+  type StepImportResult,
+  type StepImportSourceStore
+} from '../lib/stepImportRun';
 
 const TANGENT_BOSS_DIAGNOSTIC =
   'Union dropped geometry from operand "Boss Body": the result\'s maximum z is 8 mm, but the operand reaches 16 mm (8 mm missing). A cylindrical boss can trigger this kernel failure at exact tangency; move the operand slightly off tangency while keeping positive overlap, then try again.';
@@ -35,6 +51,10 @@ const TANGENT_BOSS_DIAGNOSTIC =
  * text a refused import has to reach the user with, unparaphrased.
  */
 const DANGLING_REFERENCE_PARSE_ERROR = 'parse error: entity #999999 not found';
+
+/** What the import says when the bytes have nowhere on this device to go. */
+const STORAGE_UNAVAILABLE_STATUS =
+  'STEP import over 12 MB needs browser storage, which is unavailable in this session.';
 
 function bodyRepresentation(
   bodyId: BodyId
@@ -508,6 +528,72 @@ describe('the validated commit lock', () => {
     expect(listFeaturesInOrder(manager.document)).toHaveLength(1);
   });
 
+  it('cannot unlock a run it does not hold, however often it is released', async () => {
+    // The import releases its reservation in a `finally`, after handing it to a
+    // run that has already released it. That second call is documented as
+    // harmless, and the whole `finally` depends on it being so — but "harmless"
+    // has to mean "does nothing", not "clears the lock". Clearing it would free
+    // whoever holds it NOW: an unrelated operation loses its exclusivity in the
+    // middle of validate-then-commit, and the next run interleaves with it.
+    const manager = new CommandManager(
+      createProjectDocument('Stale release', toUserId('user_stale_release'))
+    );
+    const gate = deferred<void>();
+    const running = importCommand('Running', 'artifact_local_running');
+    const third = importCommand('Third', 'artifact_local_third');
+    const onStatus = vi.fn();
+    const { result } = renderHook(() =>
+      useValidatedFeatureCommit(
+        host(
+          manager,
+          async () => {
+            await gate.promise;
+            return derivedWith(running.ids.bodyId, manager.document);
+          },
+          onStatus
+        )
+      )
+    );
+
+    let refused: ValidatedFeatureOutcome | undefined;
+    await act(async () => {
+      // A reservation taken and given up without running anything — an import
+      // that was turned away before it wrote a byte.
+      const stale = result.current.reserve();
+      expect(stale).not.toBeNull();
+      stale?.release();
+
+      const first = result.current.run(running.command, {
+        featureName: 'Running',
+        resultBodyId: running.ids.bodyId,
+        successMessage: 'running'
+      });
+      await flush();
+
+      // The turned-away import's `finally` fires, late, on a reservation whose
+      // lock somebody else now holds.
+      stale?.release();
+      stale?.release();
+
+      refused = await result.current.run(third.command, {
+        featureName: 'Third',
+        resultBodyId: third.ids.bodyId,
+        successMessage: 'third'
+      });
+      gate.settle();
+      await first;
+    });
+
+    expect(refused).toBe('busy');
+    expect(
+      listFeaturesInOrder(manager.document).map((feature) => feature.name)
+    ).toEqual(['Running']);
+    // And the lock really was let go once the run that owned it finished.
+    const afterwards = result.current.reserve();
+    expect(afterwards).not.toBeNull();
+    afterwards?.release();
+  });
+
   it('puts the busy refusal on the surface the user is looking at', async () => {
     // The status bar is one clipped line at the bottom of the window. A Create
     // form that is open and unchanged is what the user is actually watching,
@@ -864,8 +950,11 @@ describe('an unrelated edit while a run validates', () => {
     const manager = new CommandManager(
       createProjectDocument('Restless', toUserId('user_restless_edit'))
     );
-    const imported = importCommand('Frame', 'artifact_local_preflight');
-    const file = { checksum: 'sha256-frame', bytes: 'ISO-10303-21;' };
+    const file = {
+      name: 'Frame.step',
+      checksum: 'sha256-frame',
+      bytes: 'ISO-10303-21;'
+    };
     const gates = [deferred<void>(), deferred<void>()];
     let derives = 0;
     const commitDeriveds: (ProjectDocument['derived'] | null)[] = [];
@@ -874,16 +963,12 @@ describe('an unrelated edit while a run validates', () => {
       useValidatedFeatureCommit(
         importHost(
           manager,
-          async () => {
+          async (candidate: ProjectDocument) => {
             const pass = derives;
             derives += 1;
             await gates[pass]?.promise;
             return {
-              bodyRepresentations: {
-                [imported.ids.bodyId]: bodyRepresentation(imported.ids.bodyId)
-              },
-              exportableBodyIds: [imported.ids.bodyId],
-              warnings: [],
+              ...derivedFromCandidate(candidate),
               updatedAt: `rebuild-${pass}`
             };
           },
@@ -893,18 +978,18 @@ describe('an unrelated edit while a run validates', () => {
       )
     );
 
-    const session = importSession(manager, () => result.current.isRunning());
-    let outcome: ValidatedFeatureOutcome | undefined;
+    const statuses: string[] = [];
+    const session = importSession(
+      createDevice(),
+      manager,
+      () => result.current.reserve(),
+      (message) => statuses.push(message)
+    );
+    let outcome: StepImportResult | undefined;
     await act(async () => {
       const importing = importOnce(file, {
         ...session,
-        run: () =>
-          result.current.run(imported.command, {
-            featureName: 'Frame',
-            resultBodyId: imported.ids.bodyId,
-            revalidateOnDocumentMove: true,
-            successMessage: () => 'imported'
-          })
+        run: (command, options) => result.current.run(command, options)
       }).then((value) => {
         outcome = value;
       });
@@ -922,7 +1007,7 @@ describe('an unrelated edit while a run validates', () => {
     expect(derives).toBe(2);
     // Not `rejected`: the kernel never disagreed with this file, so the caller
     // must not undo the work it did on its behalf.
-    expect(outcome).toBe('superseded');
+    expect(outcome?.outcome).toBe('superseded');
     expect(commitDeriveds).toHaveLength(0);
     expect(
       listFeaturesInOrder(manager.document).map((feature) => feature.name)
@@ -932,8 +1017,16 @@ describe('an unrelated edit while a run validates', () => {
     );
     // The source survives, and is remembered as this tab's, so the retry it
     // invites is cheap and still cleans up after itself if the kernel refuses.
-    expect(session.blobs.get(file.checksum)).toBe(file.bytes);
-    expect(session.abandoned.has(file.checksum)).toBe(true);
+    expect(session.device.blobs.get(file.checksum)).toBe(file.bytes);
+    expect(session.marks.abandoned.has(file.checksum)).toBe(true);
+    // And the user is told which of the two it was. "Not imported" on its own
+    // reads as a verdict against the file, which would send them looking for a
+    // problem in a file that has none — and hide that the retry is cheap
+    // because the bytes are already stored.
+    expect(statuses.at(-1)).toBe(
+      'Frame.step was not imported: the model kept changing while it rebuilt. ' +
+        'Its source is still stored, so importing it again costs only the rebuild.'
+    );
   });
 
   it('still refuses a run that did not ask to be rebuilt', async () => {
@@ -995,82 +1088,824 @@ describe('an unrelated edit while a run validates', () => {
     );
   });
 });
-
-interface ImportSession {
+/**
+ * One device's import storage, shared by every tab on it.
+ *
+ * This is the thing the per-tab bookkeeping cannot see. A tab knows which of
+ * ITS imports are in flight and which document IT has open; the blob store
+ * underneath is common to all of them, so nothing a tab can consult on its own
+ * proves that bytes are free.
+ *
+ * Which is exactly why deletion is narrower than the store: only the tab that
+ * WROTE a key ever asks to delete it. See the ownership rule in
+ * `settleImportSource` — the trade is a leak, never a loss.
+ */
+interface SharedDevice {
   blobs: Map<string, string>;
-  inFlight: InFlightImportChecksums;
-  /** Checksums this tab wrote for an import that ended without a verdict. */
-  abandoned: Set<string>;
-  isRunning(): boolean;
-  document(): ProjectDocument;
-  onStatus?(message: string): void;
+  claims: Map<string, Set<string>>;
+  /** Every delete the store was ever asked for, whoever asked. */
+  deleteRequests: string[];
+}
+
+function createDevice(): SharedDevice {
+  return {
+    blobs: new Map<string, string>(),
+    claims: new Map<string, Set<string>>(),
+    deleteRequests: []
+  };
+}
+
+/** A file as the fake store keys it: the test names the checksum, not SHA-256. */
+interface ImportFile {
+  name: string;
+  checksum: string;
+  bytes: string;
 }
 
 /**
- * The import handler reduced to what decides the fate of its source blob, in
- * the handler's own order: refuse before writing anything if the commit lock
- * is held, write the bytes, mark them, read the file, validate, and discard
- * only what a verdict actually abandoned.
+ * The uploaded file. A real `File` in the app; here the bytes are a string and
+ * `size` is settable, so a test can put a file over a cap without building one.
  */
-async function importOnce(
-  file: { checksum: string; bytes: string },
-  deps: ImportSession & {
-    /** Stands in for reading and parsing the file, which is not instant. */
-    readFile?(): Promise<void>;
-    run(): Promise<ValidatedFeatureOutcome>;
-  }
-): Promise<ValidatedFeatureOutcome> {
-  await flush();
-  // Asked before the bytes are written: nothing sweeps unreferenced blobs.
-  if (deps.isRunning()) {
-    deps.onStatus?.(VALIDATED_FEATURE_BUSY_STATUS);
-    return 'busy';
-  }
-  const created = !deps.blobs.has(file.checksum);
-  deps.blobs.set(file.checksum, file.bytes);
-  deps.inFlight.acquire(file.checksum);
-  await deps.readFile?.();
-  let outcome: ValidatedFeatureOutcome;
-  try {
-    outcome = await deps.run();
-  } finally {
-    deps.inFlight.release(file.checksum);
-  }
-  await settleImportSource({
-    checksumSha256: file.checksum,
-    result:
-      outcome === 'committed'
-        ? 'committed'
-        : outcome === 'busy' || outcome === 'superseded'
-          ? 'no-verdict'
-          : 'refused',
-    createdByThisImport: created,
-    abandonedChecksums: deps.abandoned,
-    document: deps.document(),
-    inFlightChecksums: deps.inFlight,
-    deleteSourceBlob: async (checksum) => {
-      deps.blobs.delete(checksum);
+function uploadedFile(file: ImportFile, size = file.bytes.length): File {
+  return {
+    name: file.name,
+    size,
+    type: 'model/step',
+    text: () => Promise.resolve(file.bytes)
+  } as unknown as File;
+}
+
+/**
+ * The blob store, over the shared device.
+ *
+ * `deleteSourceBlob` deletes UNCONDITIONALLY, exactly as the real one does —
+ * the store is a dumb key-value store and the whole of the reference decision
+ * is `settleImportSource`'s. Every call is recorded, so a test can distinguish
+ * "the run decided not to delete" from "the run asked and the store said no",
+ * which the surviving bytes alone cannot.
+ */
+function deviceStore(
+  device: SharedDevice,
+  file: ImportFile,
+  options: {
+    /** Held open to park a run inside its own storage write. */
+    storing?: Promise<void>;
+    readiness?: LocalStorageReadiness;
+    /** Rejects the write, as a storage-denied session does. */
+    refuseWrite?: boolean;
+  } = {}
+): StepImportSourceStore {
+  return {
+    ensureLocalProjectStorage: async () => options.readiness ?? 'ready',
+    putSourceBlobIfAbsent: async (_source, claimOptions) => {
+      // Not instant: hashing and storing up to 250 MB is the whole window the
+      // commit lock has to be reserved across.
+      await options.storing;
+      if (options.refuseWrite) {
+        throw new Error('IndexedDB unavailable.');
+      }
+      const created = !device.blobs.has(file.checksum);
+      device.blobs.set(file.checksum, file.bytes);
+      if (claimOptions?.claimId) {
+        const claims = device.claims.get(file.checksum) ?? new Set<string>();
+        claims.add(claimOptions.claimId);
+        device.claims.set(file.checksum, claims);
+      }
+      return {
+        ref: {
+          marker: 'openzcad-source-ref',
+          version: 1,
+          hashAlgorithm: 'sha256',
+          checksumSha256: file.checksum,
+          logicalBytes: file.bytes.length
+        },
+        created
+      };
+    },
+    deleteSourceBlobIfUnreferenced: async ({ checksumSha256, claimId }) => {
+      device.deleteRequests.push(checksumSha256);
+      const claims = device.claims.get(checksumSha256) ?? new Set<string>();
+      if ([...claims].some((candidate) => candidate !== claimId)) {
+        return false;
+      }
+      claims.delete(claimId);
+      device.blobs.delete(checksumSha256);
+      return true;
+    },
+    releaseSourceBlobClaim: async (checksumSha256, claimId) => {
+      const claims = device.claims.get(checksumSha256);
+      claims?.delete(claimId);
+      if (claims?.size === 0) {
+        device.claims.delete(checksumSha256);
+      }
     }
+  };
+}
+
+/** One tab's own state: its marks, its notes, its lock, its open document. */
+interface ImportSession {
+  device: SharedDevice;
+  marks: StepImportMarks;
+  reserve(): ValidatedFeatureReservation | null;
+  document(): ProjectDocument;
+  onStatus?(message: string): void;
+  /**
+   * The inline sink — whichever feature form is open. Separate from the status
+   * bar because a refusal that reached only the status bar reads as the import
+   * having silently done nothing, and the two have been wrong independently.
+   */
+  onFeatureFormError?(message: string): void;
+}
+
+let importSequence = 0;
+
+/**
+ * Runs the REAL import orchestration against the fake device.
+ *
+ * Nothing here models the handler: `runStepImport` is the function `App.tsx`
+ * calls, and this supplies the same collaborators the app supplies. Dropping
+ * the lock release, or the ordering inside it, or the guard in front of the
+ * delete therefore changes what these tests observe — which was the defect,
+ * when this was a copy of the handler written out by hand.
+ */
+function importOnce(
+  file: ImportFile,
+  deps: ImportSession & {
+    run(
+      command: AnyCommand,
+      options: ValidatedFeatureRunOptions
+    ): Promise<ValidatedFeatureOutcome>;
+    /** Held open to park a run inside its own storage write. */
+    storing?: Promise<void>;
+    /** Held open to park a run inside its archive upload. */
+    archiving?: Promise<void>;
+    readiness?: LocalStorageReadiness;
+    refuseWrite?: boolean;
+    editDisabledReason?(): string | null;
+    fileSize?: number;
+    limits?: { maxSourceBytes?: number; maxEmbeddedBytes?: number };
+  }
+): Promise<StepImportResult> {
+  return runStepImport({
+    file: uploadedFile(file, deps.fileSize),
+    contentType: 'model/step',
+    store: deviceStore(deps.device, file, {
+      ...(deps.storing ? { storing: deps.storing } : {}),
+      ...(deps.readiness ? { readiness: deps.readiness } : {}),
+      ...(deps.refuseWrite ? { refuseWrite: true } : {})
+    }),
+    archive: async () => {
+      await deps.archiving;
+      return 'artifact_cloud_step';
+    },
+    validatedFeature: { reserve: deps.reserve, run: deps.run },
+    status: {
+      setStatus: (message) => deps.onStatus?.(message),
+      setFeatureFormError: (message) => deps.onFeatureFormError?.(message)
+    },
+    marks: deps.marks,
+    currentDocument: deps.document,
+    editDisabledReason: deps.editDisabledReason ?? (() => null),
+    newId: () => {
+      importSequence += 1;
+      return `id-${importSequence}`;
+    },
+    ...(deps.limits ? { limits: deps.limits } : {})
   });
-  return outcome;
 }
 
 function importSession(
+  device: SharedDevice,
   manager: CommandManager,
-  isRunning: () => boolean,
+  reserve: () => ValidatedFeatureReservation | null,
   onStatus?: (message: string) => void
 ): ImportSession {
   return {
-    blobs: new Map<string, string>(),
-    inFlight: createInFlightImportChecksums(),
-    abandoned: new Set<string>(),
-    isRunning,
+    device,
+    marks: {
+      inFlight: createInFlightImportChecksums(),
+      abandoned: new Set<string>()
+    },
+    reserve,
     document: () => manager.document,
     ...(onStatus ? { onStatus } : {})
   };
 }
 
+/**
+ * Every body the candidate declares, rebuilt successfully.
+ *
+ * The run mints its own feature and body ids, so a fake kernel cannot be told
+ * in advance which body to produce — it reads them off the candidate, exactly
+ * as the real one derives whatever the document asks for.
+ */
+function derivedFromCandidate(
+  candidate: ProjectDocument,
+  warnings: string[] = []
+): ProjectDocument['derived'] {
+  const bodyIds = Object.values(candidate.nodes)
+    .filter((node): node is Extract<typeof node, { kind: 'body' }> =>
+      Boolean(node && node.kind === 'body')
+    )
+    .map((node) => node.bodyId);
+  return {
+    bodyRepresentations: Object.fromEntries(
+      bodyIds.map((bodyId) => [bodyId, bodyRepresentation(bodyId)])
+    ),
+    exportableBodyIds: bodyIds,
+    warnings,
+    updatedAt: candidate.derived.updatedAt
+  };
+}
+
+/** One tab's host: its commit runs the command straight into its manager. */
+function tabHost(
+  manager: CommandManager,
+  derive: (candidate: ProjectDocument) => Promise<ProjectDocument['derived']>,
+  options: {
+    refuseCommit?: () => boolean;
+    onFailure?: () => void;
+    /** The status bar, which in the app is the same sink the run writes to. */
+    onStatus?: (message: string) => void;
+  } = {}
+) {
+  return {
+    manager: () => manager,
+    derive,
+    ...(options.onFailure ? { onFailure: options.onFailure } : {}),
+    commit: (
+      command: AnyCommand,
+      derived: ProjectDocument['derived'] | null
+    ) => {
+      if (options.refuseCommit?.()) {
+        return false;
+      }
+      manager.execute(command);
+      if (derived) {
+        manager.commitDerivedState(derived);
+      }
+      return true;
+    },
+    commitTransaction: () => true,
+    onBusy: vi.fn(),
+    onStatus: options.onStatus ?? vi.fn()
+  };
+}
+
+/** The kernel accepting whatever it is handed. */
+function acceptsEverything(gate?: Promise<void>) {
+  return async (candidate: ProjectDocument) => {
+    await gate;
+    return derivedFromCandidate(candidate);
+  };
+}
+
+/** The kernel refusing the file `f-hostile-dangling-reference` is drawn from. */
+function refusesFile(featureName: string) {
+  return async (candidate: ProjectDocument) =>
+    derivedFromCandidate(candidate, [
+      `Feature "${featureName}": ${DANGLING_REFERENCE_PARSE_ERROR}`
+    ]);
+}
+
+describe('the import orchestration, run rather than read', () => {
+  const file = {
+    name: 'Frame.step',
+    checksum: 'sha256-frame',
+    bytes: 'ISO-10303-21;'
+  };
+
+  function oneTab(device: SharedDevice) {
+    const manager = new CommandManager(
+      createProjectDocument('Import', toUserId('user_import_run'))
+    );
+    const statuses: string[] = [];
+    const push = (message: string) => statuses.push(message);
+    const { result } = renderHook(() =>
+      useValidatedFeatureCommit(
+        // One sink, as in the app: `onStatus` and the run's own `setStatus` are
+        // both the status bar, so the order they arrive in is what the user sees.
+        tabHost(manager, acceptsEverything(), { onStatus: push })
+      )
+    );
+    const session = importSession(
+      device,
+      manager,
+      () => result.current.reserve(),
+      push
+    );
+    return { manager, statuses, result, session };
+  }
+
+  it('keeps the bytes of the import it committed, and never asks otherwise', async () => {
+    // The bytes are on the device from before the kernel is consulted, and the
+    // feature that lands rebuilds from them. Asking to delete them at all would
+    // be the bug — the store deletes whatever it is handed — so the assertion is
+    // that no delete was ever requested, not merely that the bytes survived.
+    const device = createDevice();
+    const { session, result, manager } = oneTab(device);
+    let storedDuringRun: string | undefined;
+
+    await act(async () => {
+      await importOnce(file, {
+        ...session,
+        run: (command, options) => {
+          // Mid-run: the bytes are on the device and nothing has committed yet.
+          storedDuringRun = device.blobs.get(file.checksum);
+          return result.current.run(command, options);
+        }
+      });
+    });
+
+    expect(storedDuringRun).toBe(file.bytes);
+    expect(device.blobs.get(file.checksum)).toBe(file.bytes);
+    expect(device.deleteRequests).toEqual([]);
+    expect(
+      listFeaturesInOrder(manager.document).map((feature) => feature.name)
+    ).toEqual(['Frame']);
+  });
+
+  it('wires the app to the real device store, not to a lookalike', () => {
+    // The mutation class no behavioural test can reach: `App.tsx` is rendered by
+    // nothing, so a store member wired to the wrong function there leaves every
+    // suite green while a refused import leaks its bytes — or worse, deletes
+    // bytes it never wrote. There is no wiring in `App.tsx` to get wrong,
+    // because the store is defaulted; this pins that default to the real
+    // module's exports by identity.
+    expect(localStepImportSourceStore.ensureLocalProjectStorage).toBe(
+      ensureLocalProjectStorage
+    );
+    expect(localStepImportSourceStore.putSourceBlobIfAbsent).toBe(
+      putSourceBlobIfAbsent
+    );
+    expect(localStepImportSourceStore.deleteSourceBlobIfUnreferenced).toBe(
+      deleteSourceBlobIfUnreferenced
+    );
+    expect(localStepImportSourceStore.releaseSourceBlobClaim).toBe(
+      releaseSourceBlobClaim
+    );
+  });
+
+  it('leaves the commit lock free on every path that never reaches a run', async () => {
+    // The release in the handler's `finally`. A run releases the lock itself,
+    // so this only ever matters on the paths that never got to one — and those
+    // are the paths where losing it is worst, because nothing failed loudly.
+    // A stranded lock is not a failed import: it is every later boolean,
+    // fillet and primitive edit in the tab silently doing nothing.
+    const device = createDevice();
+    const { session, result } = oneTab(device);
+
+    await act(async () => {
+      // Storage refuses the write and the file is too large to embed, so the
+      // run returns from inside the `try` without ever calling `run`.
+      const declined = await importOnce(file, {
+        ...session,
+        refuseWrite: true,
+        fileSize: 40 * 1024 * 1024,
+        limits: { maxEmbeddedBytes: 12 * 1024 * 1024 },
+        run: () => {
+          throw new Error('the run must not be reached');
+        }
+      });
+      expect(declined.outcome).toBe('declined');
+    });
+
+    // The proof, and the only one that matters: the lock is free.
+    const afterwards = result.current.reserve();
+    expect(afterwards).not.toBeNull();
+    afterwards?.release();
+  });
+
+  it('settles the storage schema before it takes the lock, not after', async () => {
+    // Ordering, run rather than read out of the source. Opening the database is
+    // the browser's to schedule, and a commit lock held across it is a lock held
+    // for however long that takes — while a stranded commit lock is not one
+    // failed import but every validated operation in the tab silently doing
+    // nothing until it is reloaded.
+    const device = createDevice();
+    const { session, result } = oneTab(device);
+    const order: string[] = [];
+
+    await act(async () => {
+      await runStepImport({
+        file: uploadedFile(file),
+        contentType: 'model/step',
+        store: {
+          ...deviceStore(device, file),
+          ensureLocalProjectStorage: async () => {
+            order.push('storage');
+            return 'ready';
+          }
+        },
+        archive: async () => 'artifact_cloud_step',
+        validatedFeature: {
+          reserve: () => {
+            order.push('lock');
+            return result.current.reserve();
+          },
+          run: (command, options) => result.current.run(command, options)
+        },
+        status: {
+          setStatus: () => undefined,
+          setFeatureFormError: () => undefined
+        },
+        marks: session.marks,
+        currentDocument: session.document,
+        editDisabledReason: () => null,
+        newId: () => 'id-order'
+      });
+    });
+
+    expect(order).toEqual(['storage', 'lock']);
+  });
+
+  it('reclaims the bytes of an import that broke before the kernel saw it', async () => {
+    // Reading the file back fails — a revoked blob URL, a file the user moved
+    // or unplugged mid-import. The bytes were already written by then, and no
+    // verdict on them exists or ever will.
+    //
+    // These are as abandoned as a refusal's, and the distinction matters
+    // because the two look identical from outside: neither committed. Keeping
+    // them would be the quiet direction to be wrong in — the retry writes
+    // nothing, since content addressing lands it on this same key, and so it
+    // would find bytes it did not create and decline to clean them up forever.
+    const manager = new CommandManager(
+      createProjectDocument('Broken read', toUserId('user_broken_read'))
+    );
+    const device = createDevice();
+    const { result } = renderHook(() =>
+      useValidatedFeatureCommit(tabHost(manager, acceptsEverything()))
+    );
+    const session = importSession(device, manager, () =>
+      result.current.reserve()
+    );
+    const statuses: string[] = [];
+
+    let outcome: StepImportResult | undefined;
+    await act(async () => {
+      outcome = await runStepImport({
+        file: {
+          name: file.name,
+          size: file.bytes.length,
+          type: 'model/step',
+          text: () => Promise.reject(new Error('The file could not be read.'))
+        } as unknown as File,
+        contentType: 'model/step',
+        store: deviceStore(device, file),
+        archive: async () => 'artifact_cloud_step',
+        validatedFeature: {
+          reserve: session.reserve,
+          run: () => {
+            throw new Error('the kernel must never be reached');
+          }
+        },
+        status: {
+          setStatus: (message) => statuses.push(message),
+          setFeatureFormError: () => undefined
+        },
+        marks: session.marks,
+        currentDocument: session.document,
+        editDisabledReason: () => null,
+        newId: () => 'id-broken'
+      });
+    });
+
+    expect(outcome?.outcome).toBe('failed');
+    expect(statuses).toEqual(['The file could not be read.']);
+    // Written, then reclaimed — not merely never written.
+    expect(outcome?.sourceBlobCreated).toBe(true);
+    expect(outcome?.sourceDeleted).toBe(true);
+    expect(device.deleteRequests).toEqual([file.checksum]);
+    expect(device.blobs.has(file.checksum)).toBe(false);
+    // The lock is free again, or the tab is finished for every later operation.
+    const afterwards = result.current.reserve();
+    expect(afterwards).not.toBeNull();
+    afterwards?.release();
+  });
+
+  it('imports a small file with the source embedded when there is no storage', async () => {
+    // Private browsing, or storage denied. A file small enough to embed needs no
+    // blob store at all, which is how every import worked before
+    // content-addressed references — so this is not a reason to decline.
+    const device = createDevice();
+    const { session, result, manager, statuses } = oneTab(device);
+
+    let outcome: StepImportResult | undefined;
+    await act(async () => {
+      outcome = await importOnce(file, {
+        ...session,
+        readiness: 'unavailable',
+        run: (command, options) => result.current.run(command, options)
+      });
+    });
+
+    expect(outcome?.outcome).toBe('committed');
+    // Nothing was written to a store that could not be written to.
+    expect(device.blobs.size).toBe(0);
+    expect(statuses).not.toContain(STORAGE_UNAVAILABLE_STATUS);
+    // The feature landed carrying its own source text, as every import did
+    // before content-addressed references.
+    const [feature] = listFeaturesInOrder(manager.document);
+    expect(feature?.data.featureKind).toBe('imported-step');
+    expect(
+      feature?.data.featureKind === 'imported-step' && feature.data.stepText
+    ).toBe(file.bytes);
+  });
+
+  it('declines a file too large to embed when there is no storage', async () => {
+    // The other half of the same rule: past the embedding cap there is nowhere
+    // for the bytes to go, so the import stops — and it stops before the commit
+    // lock is ever taken, because nothing about it can succeed.
+    const device = createDevice();
+    const { session, statuses } = oneTab(device);
+
+    let outcome: StepImportResult | undefined;
+    await act(async () => {
+      outcome = await importOnce(file, {
+        ...session,
+        readiness: 'unavailable',
+        fileSize: 40 * 1024 * 1024,
+        limits: { maxEmbeddedBytes: 12 * 1024 * 1024 },
+        run: () => {
+          throw new Error('the run must not be reached');
+        }
+      });
+    });
+
+    expect(outcome?.outcome).toBe('declined');
+    expect(statuses).toEqual([STORAGE_UNAVAILABLE_STATUS]);
+    expect(device.blobs.size).toBe(0);
+  });
+
+  it('declines a blocked schema upgrade before taking the commit lock', async () => {
+    const device = createDevice();
+    const { session, statuses } = oneTab(device);
+    const reserve = vi.fn(session.reserve);
+
+    let outcome: StepImportResult | undefined;
+    await act(async () => {
+      outcome = await importOnce(file, {
+        ...session,
+        reserve,
+        readiness: 'blocked',
+        run: () => {
+          throw new Error('the run must not be reached');
+        }
+      });
+    });
+
+    expect(outcome?.outcome).toBe('declined');
+    expect(reserve).not.toHaveBeenCalled();
+    expect(statuses).toEqual([LOCAL_STORAGE_BLOCKED_MESSAGE]);
+    expect(device.blobs.size).toBe(0);
+  });
+
+  it('never writes bytes for a file over the reference-form cap', async () => {
+    const device = createDevice();
+    const { session, statuses } = oneTab(device);
+
+    let outcome: StepImportResult | undefined;
+    await act(async () => {
+      outcome = await importOnce(file, {
+        ...session,
+        fileSize: 260 * 1024 * 1024,
+        run: () => {
+          throw new Error('the run must not be reached');
+        }
+      });
+    });
+
+    expect(outcome?.outcome).toBe('declined');
+    expect(statuses).toEqual(['STEP import is limited to 250 MB.']);
+    expect(device.blobs.size).toBe(0);
+  });
+
+  it('takes its own in-flight mark down again when the run is over', async () => {
+    // The mark is what stops a concurrent import of the same file pruning
+    // these bytes. Left up, it also stops THIS tab's next refused import of the
+    // same file from ever cleaning up after itself — a leak that survives until
+    // the tab is closed, and one no single import can notice.
+    const device = createDevice();
+    const { session, result } = oneTab(device);
+    let markedDuringRun = false;
+
+    await act(async () => {
+      await importOnce(file, {
+        ...session,
+        run: (command, options) => {
+          markedDuringRun = session.marks.inFlight.has(file.checksum);
+          return result.current.run(command, options);
+        }
+      });
+    });
+
+    expect(markedDuringRun).toBe(true);
+    expect(session.marks.inFlight.has(file.checksum)).toBe(false);
+  });
+
+  it('says whether the source reached the account or only this device', async () => {
+    // Two different situations wearing one word. A source that never uploaded
+    // is a project only this machine can rebuild, and the File menu's retry is
+    // the way out of it — but only for someone who knows they are in it.
+    const device = createDevice();
+    const { session, result, statuses } = oneTab(device);
+
+    await act(async () => {
+      await importOnce(file, {
+        ...session,
+        run: (command, options) => result.current.run(command, options)
+      });
+    });
+    expect(statuses.at(-1)).toBe(
+      'Imported editable STEP solid from Frame.step: exact body rebuilt, source archived.'
+    );
+
+    const offline = oneTab(createDevice());
+    await act(async () => {
+      await runStepImport({
+        file: uploadedFile(file),
+        contentType: 'model/step',
+        store: deviceStore(offline.session.device, file),
+        archive: () =>
+          Promise.reject(new Error('Artifact upload is unavailable.')),
+        validatedFeature: {
+          reserve: offline.session.reserve,
+          run: (command, options) =>
+            offline.result.current.run(command, options)
+        },
+        status: {
+          setStatus: (message) => offline.statuses.push(message),
+          setFeatureFormError: () => undefined
+        },
+        marks: offline.session.marks,
+        currentDocument: offline.session.document,
+        editDisabledReason: () => null,
+        newId: () => 'id-offline'
+      });
+    });
+    expect(offline.statuses.at(-1)).toBe(
+      'Imported editable STEP solid from Frame.step: exact body rebuilt (cloud archive unavailable; source saved locally).'
+    );
+  });
+
+  it('spends no upload on an import the commit is no longer allowed to make', async () => {
+    // Edit permission can flip during a rebuild that takes minutes — View mode,
+    // or the project opened in a second tab. Archiving anyway transfers up to
+    // 250 MB and mints an artifact the commit is then refused, so nothing ever
+    // points at it.
+    const device = createDevice();
+    const manager = new CommandManager(
+      createProjectDocument('Import', toUserId('user_import_run'))
+    );
+    const { result } = renderHook(() =>
+      useValidatedFeatureCommit(tabHost(manager, acceptsEverything()))
+    );
+    const session = importSession(device, manager, () =>
+      result.current.reserve()
+    );
+    const archived = vi.fn(async () => 'artifact_cloud_step');
+
+    let outcome: StepImportResult | undefined;
+    await act(async () => {
+      outcome = await runStepImport({
+        file: uploadedFile(file),
+        contentType: 'model/step',
+        store: deviceStore(device, file),
+        archive: archived,
+        validatedFeature: {
+          reserve: session.reserve,
+          run: (command, options) => result.current.run(command, options)
+        },
+        status: {
+          setStatus: () => undefined,
+          setFeatureFormError: () => undefined
+        },
+        marks: session.marks,
+        currentDocument: session.document,
+        editDisabledReason: () => 'View mode is read-only',
+        newId: () => 'id-readonly'
+      });
+    });
+
+    expect(archived).not.toHaveBeenCalled();
+    expect(outcome?.outcome).toBe('rejected');
+    expect(listFeaturesInOrder(manager.document)).toHaveLength(0);
+  });
+
+  it('keeps a refusal out of whatever form happens to be open', async () => {
+    // The host's inline sink renders in the feature form the user is editing.
+    // An import has no form of its own, so routing its refusal there shows a
+    // STEP parse error as the refusal of an unrelated operation.
+    const device = createDevice();
+    const manager = new CommandManager(
+      createProjectDocument('Import', toUserId('user_import_run'))
+    );
+    const hostFailure = vi.fn();
+    const { result } = renderHook(() =>
+      useValidatedFeatureCommit(
+        tabHost(manager, refusesFile('Frame'), { onFailure: hostFailure })
+      )
+    );
+    const session = importSession(device, manager, () =>
+      result.current.reserve()
+    );
+
+    await act(async () => {
+      await importOnce(file, {
+        ...session,
+        run: (command, options) => result.current.run(command, options)
+      });
+    });
+
+    expect(hostFailure).not.toHaveBeenCalled();
+  });
+
+  it('does not turn a failed cleanup into a second verdict on the import', async () => {
+    // The cleanup runs after the import has already succeeded or failed on its
+    // own terms. Storage failing there leaves the bytes in place, which is the
+    // safe direction — an orphaned blob is a leak, a deleted one is the source
+    // of somebody's committed feature — and there is nothing the user could do
+    // about it. So it must not reject out of the handler and contradict the
+    // verdict already on screen.
+    const device = createDevice();
+    const manager = new CommandManager(
+      createProjectDocument('Import', toUserId('user_import_run'))
+    );
+    const { result } = renderHook(() =>
+      useValidatedFeatureCommit(tabHost(manager, refusesFile('Frame')))
+    );
+    const session = importSession(device, manager, () =>
+      result.current.reserve()
+    );
+
+    let outcome: StepImportResult | undefined;
+    await act(async () => {
+      outcome = await runStepImport({
+        file: uploadedFile(file),
+        contentType: 'model/step',
+        store: {
+          ...deviceStore(device, file),
+          deleteSourceBlobIfUnreferenced: () => {
+            throw new Error('IndexedDB unavailable.');
+          }
+        },
+        archive: async () => 'artifact_cloud_step',
+        validatedFeature: {
+          reserve: session.reserve,
+          run: (command, options) => result.current.run(command, options)
+        },
+        status: {
+          setStatus: () => undefined,
+          setFeatureFormError: () => undefined
+        },
+        marks: session.marks,
+        currentDocument: session.document,
+        editDisabledReason: () => null,
+        newId: () => 'id-cleanup-failed'
+      });
+    });
+
+    expect(outcome?.outcome).toBe('rejected');
+    expect(outcome?.sourceDeleted).toBe(false);
+    // Kept, not deleted: the failure leaves the device exactly as it was.
+    expect(device.blobs.get(file.checksum)).toBe(file.bytes);
+  });
+
+  it('reclaims the bytes of a file the kernel refused', async () => {
+    const device = createDevice();
+    const manager = new CommandManager(
+      createProjectDocument('Import', toUserId('user_import_run'))
+    );
+    const { result } = renderHook(() =>
+      useValidatedFeatureCommit(tabHost(manager, refusesFile('Frame')))
+    );
+    const session = importSession(device, manager, () =>
+      result.current.reserve()
+    );
+
+    let outcome: StepImportResult | undefined;
+    await act(async () => {
+      outcome = await importOnce(file, {
+        ...session,
+        run: (command, options) => result.current.run(command, options)
+      });
+    });
+
+    expect(outcome?.outcome).toBe('rejected');
+    expect(outcome?.sourceDeleted).toBe(true);
+    expect(device.blobs.size).toBe(0);
+    expect(device.deleteRequests).toEqual([file.checksum]);
+    expect(listFeaturesInOrder(manager.document)).toHaveLength(0);
+  });
+});
+
 describe('importing the same file twice at once', () => {
+  const file = {
+    name: 'Frame.step',
+    checksum: 'sha256-frame',
+    bytes: 'ISO-10303-21;'
+  };
+
   it('keeps the source blob the first import is still validating against', async () => {
     // Storage is content-addressed and device-global, so the second import
     // lands on the SAME key. It bounces off the commit lock without validating
@@ -1079,72 +1914,38 @@ describe('importing the same file twice at once', () => {
     const manager = new CommandManager(
       createProjectDocument('Twice', toUserId('user_double_import'))
     );
-    const file = { checksum: 'sha256-frame', bytes: 'ISO-10303-21;' };
+    const device = createDevice();
     const gate = deferred<void>();
-    const imported = importCommand('Frame', 'artifact_local_preflight');
-    const second = importCommand('Frame', 'artifact_local_second');
     const { result } = renderHook(() =>
-      useValidatedFeatureCommit({
-        manager: () => manager,
-        derive: async (candidate: ProjectDocument) => {
-          await gate.promise;
-          return {
-            bodyRepresentations: {
-              [imported.ids.bodyId]: bodyRepresentation(imported.ids.bodyId)
-            },
-            exportableBodyIds: [imported.ids.bodyId],
-            warnings: [],
-            updatedAt: candidate.derived.updatedAt
-          };
-        },
-        commit: (
-          command: AnyCommand,
-          derived: ProjectDocument['derived'] | null
-        ) => {
-          manager.execute(command);
-          if (derived) {
-            manager.commitDerivedState(derived);
-          }
-          return true;
-        },
-        commitTransaction: () => true,
-        onBusy: vi.fn(),
-        onStatus: vi.fn()
-      })
+      useValidatedFeatureCommit(
+        tabHost(manager, acceptsEverything(gate.promise))
+      )
     );
 
-    const session = importSession(manager, () => result.current.isRunning());
-    let firstOutcome: ValidatedFeatureOutcome | undefined;
-    let secondOutcome: ValidatedFeatureOutcome | undefined;
+    const session = importSession(device, manager, () =>
+      result.current.reserve()
+    );
+    let firstOutcome: StepImportResult | undefined;
+    let secondOutcome: StepImportResult | undefined;
     await act(async () => {
       const first = importOnce(file, {
         ...session,
-        run: () =>
-          result.current.run(imported.command, {
-            featureName: 'Frame',
-            resultBodyId: imported.ids.bodyId,
-            successMessage: () => 'imported'
-          })
+        run: (command, options) => result.current.run(command, options)
       }).then((outcome) => {
         firstOutcome = outcome;
       });
       secondOutcome = await importOnce(file, {
         ...session,
-        run: () =>
-          result.current.run(second.command, {
-            featureName: 'Frame',
-            resultBodyId: second.ids.bodyId,
-            successMessage: () => 'imported'
-          })
+        run: (command, options) => result.current.run(command, options)
       });
       gate.settle();
       await first;
     });
 
     // The bytes the committed feature rebuilds from are still there.
-    expect(session.blobs.get(file.checksum)).toBe(file.bytes);
-    expect(secondOutcome).toBe('busy');
-    expect(firstOutcome).toBe('committed');
+    expect(device.blobs.get(file.checksum)).toBe(file.bytes);
+    expect(secondOutcome?.outcome).toBe('declined');
+    expect(firstOutcome?.outcome).toBe('committed');
     expect(listFeaturesInOrder(manager.document)).toHaveLength(1);
   });
 
@@ -1156,179 +1957,236 @@ describe('importing the same file twice at once', () => {
     const manager = new CommandManager(
       createProjectDocument('Twice', toUserId('user_double_import'))
     );
-    const file = { checksum: 'sha256-frame', bytes: 'ISO-10303-21;' };
+    const device = createDevice();
     const upload = deferred<void>();
-    const imported = importCommand('Frame', 'artifact_local_preflight');
-    const second = importCommand('Refused', 'artifact_local_second');
+    let refuseSecond = false;
     const { result } = renderHook(() =>
-      useValidatedFeatureCommit({
-        manager: () => manager,
-        derive: async (candidate: ProjectDocument) => ({
-          bodyRepresentations: {
-            [imported.ids.bodyId]: bodyRepresentation(imported.ids.bodyId)
-          },
-          exportableBodyIds: [imported.ids.bodyId],
-          warnings: [`Feature "Refused": ${DANGLING_REFERENCE_PARSE_ERROR}`],
-          updatedAt: candidate.derived.updatedAt
-        }),
-        commit: (
-          command: AnyCommand,
-          derived: ProjectDocument['derived'] | null
-        ) => {
-          manager.execute(command);
-          if (derived) {
-            manager.commitDerivedState(derived);
-          }
-          return true;
-        },
-        commitTransaction: () => true,
-        onBusy: vi.fn(),
-        onStatus: vi.fn()
-      })
+      useValidatedFeatureCommit(
+        tabHost(manager, async (candidate: ProjectDocument) =>
+          derivedFromCandidate(
+            candidate,
+            refuseSecond
+              ? [`Feature "Frame": ${DANGLING_REFERENCE_PARSE_ERROR}`]
+              : []
+          )
+        )
+      )
     );
 
-    const session = importSession(manager, () => result.current.isRunning());
-    let firstOutcome: ValidatedFeatureOutcome | undefined;
-    let secondOutcome: ValidatedFeatureOutcome | undefined;
+    const session = importSession(device, manager, () =>
+      result.current.reserve()
+    );
+    let firstOutcome: StepImportResult | undefined;
+    let secondOutcome: StepImportResult | undefined;
     await act(async () => {
       const first = importOnce(file, {
         ...session,
-        run: () =>
-          result.current.run(imported.command, {
-            featureName: 'Frame',
-            resultBodyId: imported.ids.bodyId,
-            finalize: async () => {
-              await upload.promise;
-              return imported.command;
-            },
-            successMessage: () => 'imported'
-          })
+        archiving: upload.promise,
+        run: (command, options) => result.current.run(command, options)
       }).then((outcome) => {
         firstOutcome = outcome;
       });
       await flush();
+      refuseSecond = true;
       secondOutcome = await importOnce(file, {
         ...session,
-        run: () =>
-          result.current.run(second.command, {
-            featureName: 'Refused',
-            resultBodyId: second.ids.bodyId,
-            successMessage: () => 'imported'
-          })
+        run: (command, options) => result.current.run(command, options)
       });
+      refuseSecond = false;
       upload.settle();
       await first;
     });
 
-    expect(session.blobs.get(file.checksum)).toBe(file.bytes);
-    expect(secondOutcome).toBe('rejected');
-    expect(firstOutcome).toBe('committed');
-    expect(
-      listFeaturesInOrder(manager.document).map((feature) => feature.name)
-    ).toEqual(['Frame']);
+    expect(device.blobs.get(file.checksum)).toBe(file.bytes);
+    expect(secondOutcome?.outcome).toBe('rejected');
+    expect(secondOutcome?.sourceDeleted).toBe(false);
+    expect(firstOutcome?.outcome).toBe('committed');
+    expect(listFeaturesInOrder(manager.document)).toHaveLength(1);
   });
 
-  it('keeps the bytes a second import still holds while the first cleans up', async () => {
-    // The first import created the bytes and is refused after its upload, so
-    // it is the one entitled to delete them. A second import of the same file
-    // slipped in while the lock was released and is still reading its copy of
-    // the file — it has not reached the kernel yet, so nothing but the in-flight
-    // mark says those bytes are spoken for.
+  it('keeps the bytes a concurrent import committed against while the first cleans up', async () => {
+    // The first import created the bytes and is refused after its upload, so it
+    // is the one entitled to delete them. By then a second import of the same
+    // file has finished and released every mark it held — and content
+    // addressing means the feature it committed points at this very checksum.
     //
-    // The mark has to be a COUNT. As a set, both imports produce one entry, and
-    // the first import's own release erases it — after which the first import
-    // deletes the source the second is about to commit against, and the
-    // committed feature can never rebuild.
+    // What says the bytes must stay is the open document: the second import's
+    // committed feature names this very checksum, and the first import reads
+    // that before it decides.
     const manager = new CommandManager(
       createProjectDocument('Twice', toUserId('user_double_import'))
     );
-    const file = { checksum: 'sha256-frame', bytes: 'ISO-10303-21;' };
+    const device = createDevice();
     const upload = deferred<void>();
-    const secondRead = deferred<void>();
-    const imported = importCommand('Frame', 'artifact_local_preflight');
-    const second = importCommand('Frame again', 'artifact_local_second');
+    let refuseCommit = false;
     const { result } = renderHook(() =>
-      useValidatedFeatureCommit({
-        manager: () => manager,
-        derive: async (candidate: ProjectDocument) => ({
-          bodyRepresentations: {
-            [imported.ids.bodyId]: bodyRepresentation(imported.ids.bodyId),
-            [second.ids.bodyId]: bodyRepresentation(second.ids.bodyId)
-          },
-          exportableBodyIds: [imported.ids.bodyId, second.ids.bodyId],
-          warnings: [],
-          updatedAt: candidate.derived.updatedAt
-        }),
-        commit: (
-          command: AnyCommand,
-          derived: ProjectDocument['derived'] | null
-        ) => {
-          manager.execute(command);
-          if (derived) {
-            manager.commitDerivedState(derived);
-          }
-          return true;
-        },
-        commitTransaction: () => true,
-        onBusy: vi.fn(),
-        onStatus: vi.fn()
-      })
+      useValidatedFeatureCommit(
+        tabHost(manager, acceptsEverything(), {
+          refuseCommit: () => refuseCommit
+        })
+      )
     );
 
-    const session = importSession(manager, () => result.current.isRunning());
-    let firstOutcome: ValidatedFeatureOutcome | undefined;
-    let secondOutcome: ValidatedFeatureOutcome | undefined;
+    const session = importSession(device, manager, () =>
+      result.current.reserve()
+    );
+    let firstOutcome: StepImportResult | undefined;
+    let secondOutcome: StepImportResult | undefined;
     await act(async () => {
       const first = importOnce(file, {
         ...session,
-        run: () =>
-          result.current.run(imported.command, {
-            featureName: 'Frame',
-            resultBodyId: imported.ids.bodyId,
-            finalize: async () => {
-              await upload.promise;
-              // The project went read-only during the upload: accepted by the
-              // kernel, refused by the commit, so its bytes look abandoned.
-              throw new Error('Cannot import geometry: View mode is read-only.');
-            },
-            successMessage: () => 'imported'
-          })
+        archiving: upload.promise,
+        run: (command, options) => result.current.run(command, options)
       }).then((outcome) => {
         firstOutcome = outcome;
       });
       await flush();
-      // The lock is free while the first import uploads, so this one writes and
-      // marks its bytes, then sits in its own file read.
-      const secondImport = importOnce(file, {
+      // The lock is free while the first import uploads, so this one runs to
+      // completion inside that window: it writes its bytes, validates, commits,
+      // and lets go of every tab-local hold on the checksum.
+      secondOutcome = await importOnce(file, {
         ...session,
-        readFile: () => secondRead.promise,
-        run: () =>
-          result.current.run(second.command, {
-            featureName: 'Frame again',
-            resultBodyId: second.ids.bodyId,
-            successMessage: () => 'imported'
-          })
+        run: (command, options) => result.current.run(command, options)
+      });
+      expect(secondOutcome.outcome).toBe('committed');
+      expect(importSourceChecksums(manager.document).has(file.checksum)).toBe(
+        true
+      );
+
+      // The project went read-only during the upload: accepted by the kernel,
+      // refused by the commit, so the first import's bytes look abandoned.
+      refuseCommit = true;
+      upload.settle();
+      await first;
+    });
+
+    expect(firstOutcome?.outcome).toBe('rejected');
+    expect(firstOutcome?.sourceDeleted).toBe(false);
+    expect(device.blobs.get(file.checksum)).toBe(file.bytes);
+    // Not merely undeleted: never even asked for. The store deletes whatever it
+    // is handed, so a run that asked would have destroyed the committed
+    // feature's source and this assertion is the one that catches it.
+    expect(device.deleteRequests).toEqual([]);
+    expect(listFeaturesInOrder(manager.document)).toHaveLength(1);
+  });
+
+  it('keeps bytes a concurrent import is still holding, with nothing else to say so', async () => {
+    // The in-flight mark carrying the decision ALONE, which is the only way to
+    // know it is wired in at all.
+    //
+    // Every other guard is arranged to be silent here. The first import created
+    // the bytes, so ownership does not stop it. Neither import has committed,
+    // so the open document names nothing. The first import has already released
+    // its own mark by the time it decides. The one remaining fact is that a
+    // SECOND import is parked mid-run holding the same checksum — and content
+    // addressing means it is about to commit against these exact bytes.
+    const manager = new CommandManager(
+      createProjectDocument('Held', toUserId('user_held_import'))
+    );
+    const device = createDevice();
+    const firstUpload = deferred<void>();
+    const secondUpload = deferred<void>();
+    let refuseCommit = false;
+    const { result } = renderHook(() =>
+      useValidatedFeatureCommit(
+        tabHost(manager, acceptsEverything(), {
+          refuseCommit: () => refuseCommit
+        })
+      )
+    );
+    // ONE session, so both imports share this tab's marks — as they do in the
+    // app, where the marks live for the life of the window.
+    const session = importSession(device, manager, () =>
+      result.current.reserve()
+    );
+
+    let firstOutcome: StepImportResult | undefined;
+    let secondOutcome: StepImportResult | undefined;
+    await act(async () => {
+      const first = importOnce(file, {
+        ...session,
+        archiving: firstUpload.promise,
+        run: (command, options) => result.current.run(command, options)
+      }).then((outcome) => {
+        firstOutcome = outcome;
+      });
+      await flush();
+      // The lock is free while the first import uploads, so the second gets in
+      // and parks in its own upload, still holding its mark.
+      const second = importOnce(file, {
+        ...session,
+        archiving: secondUpload.promise,
+        run: (command, options) => result.current.run(command, options)
       }).then((outcome) => {
         secondOutcome = outcome;
       });
       await flush();
-      upload.settle();
+
+      // The first import comes back to a project it may no longer write to, so
+      // it is refused and reaches its cleanup while the second is still parked.
+      refuseCommit = true;
+      firstUpload.settle();
       await first;
 
-      // The first import has finished refusing and cleaning up while the
-      // second still holds the mark.
-      expect(firstOutcome).toBe('rejected');
-      expect(session.blobs.get(file.checksum)).toBe(file.bytes);
+      expect(firstOutcome?.outcome).toBe('rejected');
+      // Never asked. The store deletes whatever it is handed, so a run that
+      // asked would already have taken the second import's source with it.
+      expect(device.deleteRequests).toEqual([]);
+      expect(device.blobs.get(file.checksum)).toBe(file.bytes);
 
-      secondRead.settle();
-      await secondImport;
+      // And the second import lands on bytes that were still there for it.
+      refuseCommit = false;
+      secondUpload.settle();
+      await second;
     });
 
-    expect(secondOutcome).toBe('committed');
-    expect(session.blobs.get(file.checksum)).toBe(file.bytes);
-    expect(
-      listFeaturesInOrder(manager.document).map((feature) => feature.name)
-    ).toEqual(['Frame again']);
+    expect(secondOutcome?.outcome).toBe('committed');
+    expect(device.blobs.get(file.checksum)).toBe(file.bytes);
+    expect(importSourceChecksums(manager.document).has(file.checksum)).toBe(
+      true
+    );
+  });
+
+  it('keeps the bytes of a run the hook never judged', async () => {
+    // `run` reports `busy` for a tab with no open project, and it does so
+    // without ever consulting the kernel. Nothing was decided about this file,
+    // so its bytes are not garbage — the obvious next step is the same import
+    // again, and content addressing means a retry that found them deleted would
+    // have to transfer the whole file a second time.
+    //
+    // Treating this as a refusal is the destructive direction, and the outcome
+    // alone does not distinguish the two: both are "not committed".
+    const manager = new CommandManager(
+      createProjectDocument('No project', toUserId('user_no_project'))
+    );
+    const device = createDevice();
+    const { result } = renderHook(() =>
+      useValidatedFeatureCommit({
+        ...tabHost(manager, acceptsEverything()),
+        // Closed between the reservation and the run, which the hook answers
+        // with `busy` rather than a verdict.
+        manager: () => null
+      })
+    );
+    const session = importSession(device, manager, () =>
+      result.current.reserve()
+    );
+
+    let outcome: StepImportResult | undefined;
+    await act(async () => {
+      outcome = await importOnce(file, {
+        ...session,
+        run: (command, options) => result.current.run(command, options)
+      });
+    });
+
+    expect(outcome?.outcome).toBe('busy');
+    expect(outcome?.sourceDeleted).toBe(false);
+    expect(device.deleteRequests).toEqual([]);
+    expect(device.blobs.get(file.checksum)).toBe(file.bytes);
+    // And the tab keeps its licence, so a later run of its own can still
+    // reclaim them rather than leaking them forever.
+    expect(session.marks.abandoned.has(file.checksum)).toBe(true);
   });
 
   it('writes no source bytes for an import the commit lock turns away', async () => {
@@ -1340,96 +2198,426 @@ describe('importing the same file twice at once', () => {
     const manager = new CommandManager(
       createProjectDocument('Busy import', toUserId('user_busy_import'))
     );
+    const device = createDevice();
     const gate = deferred<void>();
-    const running = importCommand('Running', 'artifact_local_running');
-    const turnedAway = importCommand('Turned away', 'artifact_local_turned');
-    const retry = importCommand('Retry', 'artifact_local_retry');
+    let refuseRetry = false;
     const statuses: string[] = [];
     const { result } = renderHook(() =>
-      useValidatedFeatureCommit({
-        manager: () => manager,
-        derive: async (candidate: ProjectDocument) => {
+      useValidatedFeatureCommit(
+        tabHost(manager, async (candidate: ProjectDocument) => {
           await gate.promise;
-          return {
-            bodyRepresentations: {
-              [running.ids.bodyId]: bodyRepresentation(running.ids.bodyId)
-            },
-            exportableBodyIds: [running.ids.bodyId],
-            // The second file is the one the kernel cannot parse.
-            warnings: [`Feature "Retry": ${DANGLING_REFERENCE_PARSE_ERROR}`],
-            updatedAt: candidate.derived.updatedAt
-          };
-        },
-        commit: (
-          command: AnyCommand,
-          derived: ProjectDocument['derived'] | null
-        ) => {
-          manager.execute(command);
-          if (derived) {
-            manager.commitDerivedState(derived);
-          }
-          return true;
-        },
-        commitTransaction: () => true,
-        onBusy: vi.fn(),
-        onStatus: vi.fn()
-      })
+          return derivedFromCandidate(
+            candidate,
+            refuseRetry
+              ? [`Feature "Retry": ${DANGLING_REFERENCE_PARSE_ERROR}`]
+              : []
+          );
+        })
+      )
     );
 
-    const held = { checksum: 'sha256-running', bytes: 'ISO-10303-21; /* a */' };
+    const held = {
+      name: 'Running.step',
+      checksum: 'sha256-running',
+      bytes: 'ISO-10303-21; /* a */'
+    };
     const rejectedFile = {
+      name: 'Retry.step',
       checksum: 'sha256-second',
       bytes: 'ISO-10303-21; /* b */'
     };
     const session = importSession(
+      device,
       manager,
-      () => result.current.isRunning(),
+      () => result.current.reserve(),
       (message) => statuses.push(message)
     );
-    let turnedAwayOutcome: ValidatedFeatureOutcome | undefined;
-    let retryOutcome: ValidatedFeatureOutcome | undefined;
+    let turnedAwayOutcome: StepImportResult | undefined;
+    let retryOutcome: StepImportResult | undefined;
+    const inlineErrors: string[] = [];
     await act(async () => {
       const first = importOnce(held, {
         ...session,
-        run: () =>
-          result.current.run(running.command, {
-            featureName: 'Running',
-            resultBodyId: running.ids.bodyId,
-            successMessage: () => 'imported'
-          })
+        run: (command, options) => result.current.run(command, options)
       });
       turnedAwayOutcome = await importOnce(rejectedFile, {
         ...session,
-        run: () =>
-          result.current.run(turnedAway.command, {
-            featureName: 'Turned away',
-            resultBodyId: turnedAway.ids.bodyId,
-            successMessage: () => 'imported'
-          })
+        onFeatureFormError: (message) => inlineErrors.push(message),
+        run: (command, options) => result.current.run(command, options)
       });
       gate.settle();
       await first;
 
-      expect(turnedAwayOutcome).toBe('busy');
+      expect(turnedAwayOutcome.outcome).toBe('declined');
       expect(statuses).toEqual([VALIDATED_FEATURE_BUSY_STATUS]);
+      // BOTH surfaces. This refusal is decided by the run itself — the lock was
+      // never free, so the hook is never reached and its own busy reporting
+      // cannot cover this path. The status bar alone leaves the open feature
+      // form, which is what the user is actually looking at, saying nothing.
+      expect(inlineErrors).toEqual([VALIDATED_FEATURE_BUSY_STATUS]);
       // Nothing was written, so nothing is left to leak.
-      expect(session.blobs.has(rejectedFile.checksum)).toBe(false);
+      expect(device.blobs.has(rejectedFile.checksum)).toBe(false);
 
       // And the retry, once the lock is free, still owns what it writes: the
       // kernel refuses this file, and its bytes go with it.
+      refuseRetry = true;
       retryOutcome = await importOnce(rejectedFile, {
         ...session,
-        run: () =>
-          result.current.run(retry.command, {
-            featureName: 'Retry',
-            resultBodyId: retry.ids.bodyId,
-            successMessage: () => 'imported'
-          })
+        run: (command, options) => result.current.run(command, options)
       });
     });
 
-    expect(retryOutcome).toBe('rejected');
-    expect(session.blobs.has(rejectedFile.checksum)).toBe(false);
-    expect(session.blobs.get(held.checksum)).toBe(held.bytes);
+    expect(retryOutcome?.outcome).toBe('rejected');
+    expect(device.blobs.has(rejectedFile.checksum)).toBe(false);
+    expect(device.blobs.get(held.checksum)).toBe(held.bytes);
+  });
+
+  it('writes no source bytes while another import is still storing its own', async () => {
+    // The window a busy CHECK leaves open, and the reason the lock is reserved
+    // instead. Between asking whether the lock was free and the run that takes
+    // it, an import hashes and stores up to 250 MB and parses the header —
+    // seconds to minutes. A second import starting inside that window was told
+    // the lock was free, wrote its own bytes, and only then bounced off the run:
+    // exactly the orphan the check existed to prevent.
+    const manager = new CommandManager(
+      createProjectDocument('Storing', toUserId('user_storing_import'))
+    );
+    const device = createDevice();
+    const storing = deferred<void>();
+    const statuses: string[] = [];
+    const { result } = renderHook(() =>
+      useValidatedFeatureCommit(tabHost(manager, acceptsEverything()))
+    );
+
+    const held = {
+      name: 'Storing.step',
+      checksum: 'sha256-storing',
+      bytes: 'ISO-10303-21; /* a */'
+    };
+    const blocked = {
+      name: 'Blocked.step',
+      checksum: 'sha256-blocked',
+      bytes: 'ISO-10303-21; /* b */'
+    };
+    const session = importSession(
+      device,
+      manager,
+      () => result.current.reserve(),
+      (message) => statuses.push(message)
+    );
+    let blockedOutcome: StepImportResult | undefined;
+    await act(async () => {
+      // Reserved, and now sitting in its own storage write — the run has not
+      // started, so `isRunning()` would have said "free".
+      const storingImport = importOnce(held, {
+        ...session,
+        storing: storing.promise,
+        run: (command, options) => result.current.run(command, options)
+      });
+      await flush();
+
+      blockedOutcome = await importOnce(blocked, {
+        ...session,
+        run: (command, options) => result.current.run(command, options)
+      });
+
+      storing.settle();
+      await storingImport;
+    });
+
+    expect(blockedOutcome?.outcome).toBe('declined');
+    expect(statuses).toEqual([VALIDATED_FEATURE_BUSY_STATUS]);
+    expect(device.blobs.has(blocked.checksum)).toBe(false);
+    expect(device.blobs.get(held.checksum)).toBe(held.bytes);
+  });
+
+  it('leaves the commit lock free when storage cannot be opened', async () => {
+    // Opening the blob store is the browser's to schedule, and asked for under
+    // the commit lock it takes the lock with it for however long that costs. A
+    // stranded commit lock disables every validated operation in the tab until
+    // it is reloaded, so the question is asked FIRST — and when the answer ends
+    // the import, the lock is still there for the next thing that wants it.
+    const manager = new CommandManager(
+      createProjectDocument('No storage', toUserId('user_no_storage'))
+    );
+    const device = createDevice();
+    const statuses: string[] = [];
+    const { result } = renderHook(() =>
+      useValidatedFeatureCommit(tabHost(manager, acceptsEverything()))
+    );
+
+    const file = {
+      name: 'Denied.step',
+      checksum: 'sha256-denied',
+      bytes: 'ISO-10303-21; /* a */'
+    };
+    const session = importSession(
+      device,
+      manager,
+      () => result.current.reserve(),
+      (message) => statuses.push(message)
+    );
+    const reserved: Array<ValidatedFeatureReservation | null> = [];
+
+    let deniedOutcome: StepImportResult | undefined;
+    let laterOutcome: StepImportResult | undefined;
+    await act(async () => {
+      deniedOutcome = await importOnce(file, {
+        ...session,
+        readiness: 'unavailable',
+        // Too large to embed, so no storage really is the end of this import.
+        fileSize: 40 * 1024 * 1024,
+        limits: { maxEmbeddedBytes: 12 * 1024 * 1024 },
+        reserve: () => {
+          const reservation = result.current.reserve();
+          reserved.push(reservation);
+          return reservation;
+        },
+        run: (command, options) => result.current.run(command, options)
+      });
+
+      // The proof that nothing was stranded: a later operation still gets the
+      // lock. An open taken under it and left waiting would have parked this.
+      laterOutcome = await importOnce(
+        {
+          name: 'Later.step',
+          checksum: 'sha256-later',
+          bytes: 'ISO-10303-21; /* b */'
+        },
+        {
+          ...session,
+          run: (command, options) => result.current.run(command, options)
+        }
+      );
+    });
+
+    expect(deniedOutcome?.outcome).toBe('declined');
+    // The lock was never even asked for, so nothing could have been left
+    // holding it.
+    expect(reserved).toEqual([]);
+    expect(statuses).toEqual([STORAGE_UNAVAILABLE_STATUS]);
+    // Nor were any bytes written for an import that never started.
+    expect(device.blobs.has(file.checksum)).toBe(false);
+    expect(laterOutcome?.outcome).toBe('committed');
+  });
+});
+
+/**
+ * Two tabs, one device. Each has its own hook, its own in-flight marks, its own
+ * abandoned-bytes note and its own open project — and they share one blob
+ * store, because IndexedDB belongs to the origin and not to the window.
+ *
+ * That is the whole hazard: tab B is told `created: false` for bytes tab A is
+ * committing a feature against, its own open document says nothing about them,
+ * and every guard tab B can consult on its own says they are free.
+ *
+ * THE POSTURE, and what these tests pin. Only the tab that WROTE a key ever
+ * deletes it, only when it wrote it in this import (or in an earlier one of its
+ * own that reached no verdict), and only when its live document does not
+ * reference it. That is unreachable from any tab that did not write the key, so
+ * a refusal in one window cannot destroy bytes another window needs — however
+ * certain it is, and whether or not the other tab has saved anything yet.
+ *
+ * The price is a leak, and it is the deliberate side to be wrong on: bytes
+ * written by a tab that was closed mid-import are collected by nobody, up to
+ * 250 MB per orphaned import. A leaked blob costs disk; a wrongly deleted one
+ * costs somebody's model.
+ */
+describe('two tabs importing one file', () => {
+  const file = {
+    name: 'Bracket.step',
+    checksum: 'sha256-bracket',
+    bytes: 'ISO-10303-21; /* b */'
+  };
+
+  function twoTabs() {
+    const device = createDevice();
+    const managerA = new CommandManager(
+      createProjectDocument('Project A', toUserId('user_tab_a'))
+    );
+    const managerB = new CommandManager(
+      createProjectDocument('Project B', toUserId('user_tab_b'))
+    );
+    return { device, managerA, managerB };
+  }
+
+  it('keeps a second tab commit safe from the creating tab later refusing', async () => {
+    // The hole sourceBlobClaims exists to close. Tab A created the key but
+    // reached no verdict, so its tab-local abandoned note licenses a retry to
+    // clean it up. Tab B then commits the same file before autosave persists its
+    // document. Its device-wide claim is the only evidence visible to tab A.
+    const { device, managerA, managerB } = twoTabs();
+    const tabA = renderHook(() =>
+      useValidatedFeatureCommit(tabHost(managerA, acceptsEverything()))
+    );
+    const tabB = renderHook(() =>
+      useValidatedFeatureCommit(tabHost(managerB, acceptsEverything()))
+    );
+    const sessionA = importSession(device, managerA, () =>
+      tabA.result.current.reserve()
+    );
+    const sessionB = importSession(device, managerB, () =>
+      tabB.result.current.reserve()
+    );
+
+    let noVerdict: StepImportResult | undefined;
+    let committed: StepImportResult | undefined;
+    let refusedRetry: StepImportResult | undefined;
+    await act(async () => {
+      noVerdict = await importOnce(file, {
+        ...sessionA,
+        run: async () => 'superseded'
+      });
+      committed = await importOnce(file, {
+        ...sessionB,
+        run: async () => 'committed'
+      });
+      refusedRetry = await importOnce(file, {
+        ...sessionA,
+        run: async () => 'rejected'
+      });
+    });
+
+    expect(noVerdict?.outcome).toBe('superseded');
+    expect(sessionA.marks.abandoned.has(file.checksum)).toBe(true);
+    expect(committed?.outcome).toBe('committed');
+    expect(refusedRetry?.outcome).toBe('rejected');
+    expect(refusedRetry?.sourceDeleted).toBe(false);
+    // Tab A did ask, and the shared store refused because tab B's claim still
+    // bridges its commit to autosave. This distinguishes the new subsystem from
+    // the older created:false guard, which does not apply to tab A's retry.
+    expect(device.deleteRequests).toEqual([file.checksum]);
+    expect(device.blobs.get(file.checksum)).toBe(file.bytes);
+    expect(device.claims.get(file.checksum)?.size).toBe(1);
+  });
+
+  it('never deletes bytes it did not write, however free they look', async () => {
+    // The load-bearing test. Tab A imported this file and committed a feature
+    // against it. Tab B then imports the SAME file: content addressing lands it
+    // on the same key, so nothing is written, and the kernel refuses tab B's
+    // copy. Everything tab B can see says the bytes are unwanted — its own
+    // document does not name them, no import of its own is in flight, and
+    // project A is not open in this window.
+    //
+    // `created: false` is the entire defence, and it is enough.
+    const { device, managerA, managerB } = twoTabs();
+
+    const tabA = renderHook(() =>
+      useValidatedFeatureCommit(tabHost(managerA, acceptsEverything()))
+    );
+    const tabB = renderHook(() =>
+      useValidatedFeatureCommit(tabHost(managerB, refusesFile('Bracket')))
+    );
+    const sessionA = importSession(device, managerA, () =>
+      tabA.result.current.reserve()
+    );
+    const sessionB = importSession(device, managerB, () =>
+      tabB.result.current.reserve()
+    );
+
+    let outcomeA: StepImportResult | undefined;
+    let outcomeB: StepImportResult | undefined;
+    await act(async () => {
+      outcomeA = await importOnce(file, {
+        ...sessionA,
+        run: (command, options) => tabA.result.current.run(command, options)
+      });
+      outcomeB = await importOnce(file, {
+        ...sessionB,
+        run: (command, options) => tabB.result.current.run(command, options)
+      });
+    });
+
+    expect(outcomeA?.outcome).toBe('committed');
+    expect(outcomeB?.outcome).toBe('rejected');
+    expect(outcomeB?.sourceDeleted).toBe(false);
+    // Never asked, not merely refused: the store deletes whatever it is handed,
+    // so a run that asked would have taken the source of tab A's feature with
+    // it. Tab A has saved nothing — this is exactly the window in which no
+    // amount of reading the device would have said otherwise.
+    expect(device.deleteRequests).toEqual([]);
+    expect(device.blobs.get(file.checksum)).toBe(file.bytes);
+    expect(
+      listFeaturesInOrder(managerA.document).map((feature) => feature.name)
+    ).toEqual(['Bracket']);
+    // Nothing landed in the refusing tab's own project.
+    expect(listFeaturesInOrder(managerB.document)).toHaveLength(0);
+  });
+
+  it('leaves the licence with the tab that wrote the bytes, and nowhere else', async () => {
+    // The other direction of the same rule, and the reason the leak is a leak.
+    // Tab A wrote these bytes in an earlier run that reached no verdict, so tab
+    // A — and only tab A — still counts them as its own to clean up. Tab B's
+    // refused import of the same file finds a key it did not create and stops,
+    // and no amount of refusing lets it acquire the licence: `abandoned` is
+    // only ever added to below that guard.
+    const { device, managerA, managerB } = twoTabs();
+
+    const tabA = renderHook(() =>
+      useValidatedFeatureCommit(tabHost(managerA, refusesFile('Bracket')))
+    );
+    const tabB = renderHook(() =>
+      useValidatedFeatureCommit(tabHost(managerB, refusesFile('Bracket')))
+    );
+    const sessionA = importSession(device, managerA, () =>
+      tabA.result.current.reserve()
+    );
+    const sessionB = importSession(device, managerB, () =>
+      tabB.result.current.reserve()
+    );
+
+    device.blobs.set(file.checksum, file.bytes);
+    sessionA.marks.abandoned.add(file.checksum);
+
+    let outcomeB: StepImportResult | undefined;
+    let retryA: StepImportResult | undefined;
+    await act(async () => {
+      outcomeB = await importOnce(file, {
+        ...sessionB,
+        run: (command, options) => tabB.result.current.run(command, options)
+      });
+      retryA = await importOnce(file, {
+        ...sessionA,
+        run: (command, options) => tabA.result.current.run(command, options)
+      });
+    });
+
+    expect(outcomeB?.outcome).toBe('rejected');
+    expect(outcomeB?.sourceDeleted).toBe(false);
+    // Tab B's refusal did not hand it the licence either.
+    expect(sessionB.marks.abandoned.has(file.checksum)).toBe(false);
+    // Tab A's own retry is refused too, and its bytes go with it — otherwise a
+    // genuine kernel refusal would keep 250 MB on the device forever, since
+    // content addressing means the retry writes nothing.
+    expect(retryA?.outcome).toBe('rejected');
+    expect(retryA?.sourceDeleted).toBe(true);
+    expect(device.deleteRequests).toEqual([file.checksum]);
+    expect(device.blobs.has(file.checksum)).toBe(false);
+  });
+
+  it('still reclaims bytes no other tab ever wrote', async () => {
+    // The counterweight: a refusal must still be able to free its own 250 MB,
+    // or the rule above would have traded data loss for an unbounded leak.
+    // Nothing else on the device has ever seen this file.
+    const { device, managerB } = twoTabs();
+    const tabB = renderHook(() =>
+      useValidatedFeatureCommit(tabHost(managerB, refusesFile('Bracket')))
+    );
+    const sessionB = importSession(device, managerB, () =>
+      tabB.result.current.reserve()
+    );
+
+    let outcome: StepImportResult | undefined;
+    await act(async () => {
+      outcome = await importOnce(file, {
+        ...sessionB,
+        run: (command, options) => tabB.result.current.run(command, options)
+      });
+    });
+
+    expect(outcome?.outcome).toBe('rejected');
+    expect(outcome?.sourceDeleted).toBe(true);
+    expect(device.deleteRequests).toEqual([file.checksum]);
+    expect(device.blobs.has(file.checksum)).toBe(false);
   });
 });

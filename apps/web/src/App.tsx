@@ -41,7 +41,6 @@ import type {
   CadSelectionContext
 } from '@openzcad/ai-contracts';
 import {
-  createBodyFeatureIds,
   createProjectDocument,
   duplicateProjectDocument,
   findBodyNode,
@@ -69,7 +68,6 @@ import {
   resolveFaceAttachment,
   type FaceAttachmentCandidate
 } from '@openzcad/kernel-adapter/face-attachment';
-import { parseStepMetadata } from '@openzcad/io-step';
 import { parseStl } from '@openzcad/io-stl';
 import type {
   ArtifactKind,
@@ -115,7 +113,6 @@ import type {
   AuthConfigResponse,
   AuthSession,
   HealthResponse,
-  ImportedSourceReference,
   ProjectCollaborationCapabilitiesResponse
 } from '@openzcad/shared';
 import { toArtifactId, toUserId, UNIT_TO_MM } from '@openzcad/shared';
@@ -124,9 +121,16 @@ import { uploadArtifactBody } from './lib/artifactUpload';
 import {
   archiveLocalOnlyImportSources,
   createInFlightImportChecksums,
-  listLocalOnlyImportSources,
-  settleImportSource
+  listLocalOnlyImportSources
 } from './lib/importArchival';
+import {
+  LOCAL_AUTOSAVE_FAILED_STATUS,
+  reparkFailedAutosave
+} from './lib/localAutosaveFailure';
+import {
+  MAX_SOURCE_IMPORT_BYTES,
+  runStepImport
+} from './lib/stepImportRun';
 import { presentedWorkspaceSaveState } from './lib/workspaceSaveStatePresentation';
 import {
   cancelDesktopSignIn,
@@ -407,23 +411,25 @@ import {
   clearAllLastSyncedVersions,
   clearLastSyncedVersion,
   deleteLocalProject,
-  deleteSourceBlob,
+  isLocalStorageBlockedError,
   listLocalProjectOrganizations,
   listLocalProjects,
   loadLastSyncedVersion,
   loadLocalProject,
+  loadProjectMeasurements,
   loadProjectThumbnail,
   loadSourceBlob,
   purgeExpiredLocalProjects,
-  putSourceBlobIfAbsent,
   restoreDuplicateDerivedProjection,
   saveLastSyncedVersion,
   saveLocalProjectOrganization,
+  saveProjectMeasurements,
   saveProjectThumbnail,
   saveLocalProject
 } from './lib/localProjectStore';
 import {
   applyLocalProjectOrganizations,
+  cachedThumbnailSource,
   mergeProjectSummaries
 } from './lib/projectShelf';
 import { LivePreview } from './lib/livePreview';
@@ -432,11 +438,7 @@ import { describeSyncFailure, type SyncEntry } from './lib/syncRun';
 import { useGeometryWorker } from './hooks/useGeometryWorker';
 import { useProjectView } from './hooks/useProjectView';
 import { useDirectEditCommit } from './hooks/useDirectEditCommit';
-import {
-  useValidatedFeatureCommit,
-  VALIDATED_FEATURE_BUSY_STATUS,
-  type ValidatedFeatureOutcome
-} from './hooks/useValidatedFeatureCommit';
+import { useValidatedFeatureCommit } from './hooks/useValidatedFeatureCommit';
 import { affectedFeatureTargets } from './lib/affectedFeatureTargets';
 import { useCollaboration } from './lib/useCollaboration';
 import { preflightCadPatch } from './lib/aiPatchPreflight';
@@ -481,6 +483,7 @@ import type {
  * so naming the module here does not pull it back into the eager chunk.
  */
 import type * as MeasurementModule from './lib/measurements';
+import { buildMeasurementRecord } from './lib/measurementRecord';
 import {
   EMPTY_MEASURE_SESSION,
   edgeRunIsTotalable,
@@ -523,25 +526,6 @@ const DISABLED_COLLABORATION_ROLLOUT: ProjectCollaborationCapabilitiesResponse =
   };
 const projectSharingClient = createProjectSharingClient();
 const localUserId = toUserId('user_local_browser');
-/**
- * Fallback ceiling when the source blob store is unavailable (private
- * browsing, storage denied) and the STEP text must be embedded in the
- * document itself, as every import was before content-addressed references.
- */
-const MAX_EMBEDDED_STEP_BYTES = 12 * 1024 * 1024;
-/**
- * Reference-form ceiling. The kernel comfortably imports files this size
- * (measured: 283 MB peaks at 1.2 GB wasm memory, ~7 s — see
- * scripts/profile-step-import.mjs); the binding constraint is wasm32 address
- * space, which this leaves 40% headroom against.
- */
-const MAX_SOURCE_IMPORT_BYTES = 250 * 1024 * 1024;
-/**
- * How long the document must sit still before the shelf preview is re-rendered.
- * Long enough that dragging a dimension does not queue a WebGL render per
- * frame, short enough that leaving for the start screen finds a current tile.
- */
-const SHELF_THUMBNAIL_REFRESH_MS = 4000;
 const DISPLAY_MODE_ORDER: DisplayMode[] = [
   'shaded-edges',
   'shaded',
@@ -593,10 +577,21 @@ async function loadProjectSummaries(signedIn: boolean): Promise<{
    */
   cloudProjectIds: Set<string>;
 }> {
+  const unavailableAs =
+    <T,>(fallback: T) =>
+    (error: unknown): T => {
+      // A device with no IndexedDB is legitimately a device with no local
+      // projects. A blocked schema upgrade is temporary and actionable; calling
+      // it an empty shelf would tell the user their projects disappeared.
+      if (isLocalStorageBlockedError(error)) {
+        throw error;
+      }
+      return fallback;
+    };
   const [local, localOrganizations, remote] = await Promise.all([
-    listLocalProjects().catch(() => []),
+    listLocalProjects().catch(unavailableAs<ProjectSummary[]>([])),
     listLocalProjectOrganizations().catch(
-      () => new Map<string, ProjectOrganization>()
+      unavailableAs(new Map<string, ProjectOrganization>())
     ),
     signedIn ? api.listProjects().catch(() => null) : Promise.resolve(null)
   ]);
@@ -1011,65 +1006,27 @@ export function App() {
   const sessionRef = useRef(session);
   sessionRef.current = session;
   /**
-   * The shelf's preview source. This reads a small cached image and nothing
-   * else — deliberately not the project document. Loading documents here is
-   * what made the start screen unreachable for large imports: a part with a
-   * few-hundred-megabyte source had to be pulled into memory in full, per
-   * tile, just to draw a 360×200 card, which could take the tab and the
-   * machine down and leave the owner unable to open or delete their own work.
-   * A project this device has never opened simply shows the placeholder.
+   * The shelf's preview source. This reads a small device-cached or cloud
+   * image and nothing else — deliberately not the project document. Loading
+   * documents here made the start screen unreachable for large imports: a
+   * part with a few-hundred-megabyte source had to be pulled into memory in
+   * full, per tile, just to draw a 360×200 card, which could take the tab and
+   * the machine down and leave the owner unable to open or delete their work.
+   * A project with no published preview simply shows the placeholder.
    */
   const loadThumbnail = useCallback(
     async (project: ProjectSummary): Promise<string | null | undefined> => {
       const cached = await loadProjectThumbnail(project.projectId).catch(
         () => null
       );
-      return cached ? cached.source : undefined;
-    },
-    []
-  );
-  /**
-   * Fills the cache for a tile it could not answer for. The cache is only ever
-   * written while a project is open, so every project that predates it — which
-   * on an established shelf is all of them — would otherwise sit behind a
-   * placeholder until it happened to be opened again.
-   *
-   * Two limits keep the reason the cache exists intact. Only what this device
-   * already holds is read, never the network, so a shelf of parts stored only
-   * in the account stays exactly as cheap to draw as it is now. And the load
-   * runs inside the preview queue rather than alongside it, so the tiles on
-   * screen are filled one document at a time instead of all at once.
-   */
-  const backfillThumbnail = useCallback(
-    async (project: ProjectSummary): Promise<string | null | undefined> => {
-      const { queuePartThumbnail, renderThumbnailFrame } =
-        await import('./lib/partThumbnail');
-      return queuePartThumbnail(async () => {
-        const stored = await loadLocalProject(project.projectId).catch(
-          () => null
-        );
-        if (!stored) {
-          return undefined;
-        }
-        const bodies = Object.values(stored.derived.bodyRepresentations).filter(
-          (body) => !body.consumed
-        );
-        let source: string | null;
-        try {
-          source = renderThumbnailFrame(bodies);
-        } catch {
-          // A device that cannot give us a WebGL context is not going to on the
-          // next tile either. Leave the cache empty rather than recording a
-          // "no geometry" that says more about the browser than the part.
-          return undefined;
-        }
-        await saveProjectThumbnail(project.projectId, {
-          source,
-          version: stored.version,
-          updatedAt: stored.derived.updatedAt
-        }).catch(() => undefined);
-        return source;
-      });
+      const cachedSource = cachedThumbnailSource(cached, project);
+      if (cachedSource !== undefined || !project.thumbnailArtifactId) {
+        return cachedSource;
+      }
+      const { downloadCloudThumbnail } = await import('./lib/cloudThumbnail');
+      return downloadCloudThumbnail(project.thumbnailArtifactId).catch(
+        () => undefined
+      );
     },
     []
   );
@@ -1161,6 +1118,71 @@ export function App() {
    */
   const [accountProjectListReached, setAccountProjectListReached] =
     useState(false);
+  const thumbnailBackfillRuntimeRef = useRef({
+    cloudProjectIds,
+    syncOnce: geometry.syncOnce
+  });
+  thumbnailBackfillRuntimeRef.current = {
+    cloudProjectIds,
+    syncOnce: geometry.syncOnce
+  };
+  const thumbnailAccountUserId = session?.userId;
+  /**
+   * Fills old or cross-device cards without making the user open each part.
+   * The collapsed shelf mounts at most nine projects, and this queue holds one
+   * document, one exact rebuild, and one WebGL context at a time.
+   */
+  const backfillThumbnail = useCallback(
+    async (project: ProjectSummary): Promise<string | null | undefined> => {
+      const [thumbnail, backfill] = await Promise.all([
+        import('./lib/partThumbnail'),
+        import('./lib/projectThumbnailBackfill')
+      ]);
+      return thumbnail.queuePartThumbnail(async () => {
+        const runtime = thumbnailBackfillRuntimeRef.current;
+        const cloudBacked =
+          Boolean(thumbnailAccountUserId && accountProjectListReached) &&
+          runtime.cloudProjectIds.has(project.projectId);
+        const result = await backfill.backfillProjectThumbnail(project, {
+          loadCached: (projectId) =>
+            loadProjectThumbnail(projectId).catch(() => null),
+          loadLocalDocument: (projectId) =>
+            loadLocalProject(projectId).catch(() => null),
+          ...(cloudBacked
+            ? {
+                loadCloudDocument: (projectId: string) =>
+                  api.loadProject(projectId).catch(() => null),
+                rebuild: runtime.syncOnce,
+                publish: async (input: {
+                  projectId: ProjectDocument['projectId'];
+                  source: string;
+                  version: number;
+                  updatedAt: string;
+                }) => {
+                  const { uploadCloudThumbnail } = await import(
+                    './lib/cloudThumbnail'
+                  );
+                  return uploadCloudThumbnail(api, input);
+                }
+              }
+            : {}),
+          render: thumbnail.renderThumbnailFrame,
+          save: saveProjectThumbnail
+        });
+        if (result.artifactId) {
+          setProjects((current) =>
+            current.map((candidate) =>
+              candidate.projectId === project.projectId
+                ? { ...candidate, thumbnailArtifactId: result.artifactId }
+                : candidate
+            )
+          );
+        }
+        return result.source;
+      });
+    },
+    [accountProjectListReached, thumbnailAccountUserId]
+  );
   /**
    * A divergence against the account, as opposed to against a live room. Held
    * here rather than in the collaboration hook because it can happen with no
@@ -1323,10 +1345,11 @@ export function App() {
     onBusy: setBusy,
     onStatus: setStatus
   });
-  const {
-    run: executeValidatedFeature,
-    isRunning: validatedFeatureRunning
-  } = useValidatedFeatureCommit({
+  // Held whole rather than destructured, because the STEP import hands the
+  // reservation it took back to the run that adopts it: two callbacks pulled
+  // out separately could be wired from different hook instances, and a
+  // reservation the run does not recognise degrades in silence.
+  const validatedFeature = useValidatedFeatureCommit({
     manager: () => managerRef.current,
     derive: (document) => geometry.syncOnce(document),
     commit: (command, derived) => executeCommand(command, derived ?? undefined),
@@ -1336,6 +1359,7 @@ export function App() {
     onStatus: setStatus,
     onFailure: setFeatureFormError
   });
+  const executeValidatedFeature = validatedFeature.run;
   /**
    * Checksums of imports between their blob write and their commit decision.
    * Content addressing puts a re-import of the same file on the same key, so
@@ -2216,45 +2240,6 @@ export function App() {
     geometry.sync(doc);
   }, [doc]);
 
-  // Refreshes this device's cached shelf preview. Here rather than on the
-  // shelf because this is the one place the meshes are already in memory:
-  // rendering a tile must never be a reason to load a project document. The
-  // delay coalesces editing bursts, and a cache entry already at this version
-  // skips the render entirely, so ordinary modelling pays nothing.
-  useEffect(() => {
-    if (!doc || geometry.state.phase !== 'ready') {
-      return;
-    }
-    const { projectId, version } = doc;
-    const updatedAt = doc.derived.updatedAt;
-    const bodies = Object.values(doc.derived.bodyRepresentations).filter(
-      (body) => !body.consumed
-    );
-    let cancelled = false;
-    const timer = setTimeout(() => {
-      void (async () => {
-        const cached = await loadProjectThumbnail(projectId).catch(() => null);
-        if (cancelled || cached?.version === version) {
-          return;
-        }
-        const { renderPartThumbnail } = await import('./lib/partThumbnail');
-        const source = await renderPartThumbnail(bodies).catch(() => null);
-        if (cancelled) {
-          return;
-        }
-        await saveProjectThumbnail(projectId, {
-          source,
-          version,
-          updatedAt
-        }).catch(() => undefined);
-      })();
-    }, SHELF_THUMBNAIL_REFRESH_MS);
-    return () => {
-      cancelled = true;
-      clearTimeout(timer);
-    };
-  }, [doc, geometry.state.phase]);
-
   const features = useMemo<FeatureNode[]>(
     () => (doc ? listFeaturesInOrder(doc) : []),
     [doc]
@@ -2703,6 +2688,14 @@ export function App() {
   const [measurementUnit, setMeasurementUnit] = useState<UnitSystem>('mm');
   const [measurementPrecision, setMeasurementPrecision] = useState(2);
   const [radialDisplay, setRadialDisplay] = useState<RadialDisplay>('diameter');
+  /**
+   * The project whose stored list has been answered, including the answer
+   * "none". Until this matches the open project, writes stay disabled: an
+   * empty initial render must never outrun a slow read and erase the record it
+   * was still loading.
+   */
+  const [measurementHydratedProjectId, setMeasurementHydratedProjectId] =
+    useState<string | null>(null);
   const measurementDisplay = useMemo<MeasurementDisplayOptions>(
     () => ({
       unit: measurementUnit,
@@ -2713,14 +2706,82 @@ export function App() {
   );
 
   // A measurement session belongs to one open project, not the application.
+  //
+  // The list is cleared first and then restored from storage, so a project
+  // with no stored measurements lands empty rather than inheriting the last
+  // project's. The restore is deliberately not awaited before clearing: an
+  // in-flight read for the PREVIOUS project must not be able to land on this
+  // one, which the id check inside the effect prevents.
   useEffect(() => {
     setMeasurements([]);
     setActiveMeasurementId(null);
     clearMeasurementPicks();
-    if (doc) {
-      setMeasurementUnit(doc.units);
+    setMeasurementHydratedProjectId(null);
+    if (!doc) {
+      return;
     }
+    const projectId = doc.projectId;
+    setMeasurementUnit(doc.units);
+    setMeasurementPrecision(2);
+    setRadialDisplay('diameter');
+    let cancelled = false;
+    void loadProjectMeasurements(projectId)
+      .then((record) => {
+        if (cancelled) {
+          return;
+        }
+        if (record) {
+          setMeasurements(record.measurements);
+          setMeasurementUnit(record.display.unit);
+          setMeasurementPrecision(record.display.precision);
+          setRadialDisplay(record.display.radialDisplay);
+        }
+        setMeasurementHydratedProjectId(projectId);
+      })
+      .catch(() => {
+        // Leave writes disabled for this project. Besides unavailable storage,
+        // this includes a record from a newer build: writing the empty v1 list
+        // over fields this build refused to read would be the data loss the
+        // parser's forward-version guard exists to prevent.
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [doc?.projectId]);
+
+  /**
+   * Writes the measurement list back, debounced.
+   *
+   * Coalesced rather than written per pick because a Shift+Click run rewrites
+   * the list on every click, and an IndexedDB put per click would serialise
+   * the whole list each time for a result that is superseded a moment later.
+   */
+  useEffect(() => {
+    if (!doc || measurementHydratedProjectId !== doc.projectId) {
+      return;
+    }
+    const projectId = doc.projectId;
+    const timeout = window.setTimeout(() => {
+      void saveProjectMeasurements(
+        buildMeasurementRecord(
+          projectId,
+          measurements,
+          measurementDisplay,
+          new Date().toISOString()
+        )
+      ).catch(() => {
+        // Same as the read: a device that cannot store them still measures.
+      });
+    }, 400);
+    return () => {
+      window.clearTimeout(timeout);
+    };
+  }, [
+    doc?.projectId,
+    measurementHydratedProjectId,
+    measurements,
+    measurementDisplay
+  ]);
 
   /**
    * The measurement library, loaded on first entry to View mode.
@@ -3266,8 +3327,19 @@ export function App() {
         controller.schedule(pending);
       }
     } catch {
+      // The document goes back in the queue rather than on the floor. It was
+      // taken out of the ref above so a write that LANDS is not repeated, but a
+      // write that did not land leaves this closure holding the only copy of
+      // those edits — and simply returning loses them outright.
+      const repark = reparkFailedAutosave({
+        pending,
+        queued: pendingLocalSaveRef.current
+      });
+      if (repark) {
+        pendingLocalSaveRef.current = repark;
+      }
       setSaveState('offline');
-      setStatus('Local autosave failed. Export your model before closing.');
+      setStatus(LOCAL_AUTOSAVE_FAILED_STATUS);
     }
   }
 
@@ -5823,170 +5895,19 @@ export function App() {
       return;
     }
 
-    if (file.size > MAX_SOURCE_IMPORT_BYTES) {
-      setStatus('STEP import is limited to 250 MB.');
-      return;
-    }
-
-    // Asked BEFORE anything is written: a run that cannot proceed must not
-    // leave up to 250 MB of source bytes behind it. Nothing sweeps unreferenced
-    // blobs, so those bytes would be permanent — and their mere presence would
-    // then disarm the cleanup of every later refused import of the same file,
-    // which sees a key it did not create.
-    if (validatedFeatureRunning()) {
-      setStatus(VALIDATED_FEATURE_BUSY_STATUS);
-      setFeatureFormError(VALIDATED_FEATURE_BUSY_STATUS);
-      return;
-    }
-
-    // Content-addressed storage first: the document carries a checksum
-    // reference and the bytes live in the browser's blob store (and the
-    // artifact archive, once uploaded). Embedding the text in the document
-    // is the fallback for storage-denied contexts, at the old 12 MB cap.
-    let sourceRef: ImportedSourceReference | null = null;
-    // Only what this import created may be deleted again: the store is
-    // device-global, so the same key can already be backing another project.
-    // Bytes an earlier run of this tab wrote and abandoned count as this
-    // import's own — nothing else can be pointing at them.
-    let sourceBlobCreated = false;
-    let archived = false;
-    // `threw` is the import failing before it ever reached the kernel; its
-    // bytes are as abandoned as a refusal's.
-    let outcome: ValidatedFeatureOutcome | 'threw' = 'threw';
-    try {
-      try {
-        const stored = await putSourceBlobIfAbsent(file);
-        sourceRef = stored.ref;
-        sourceBlobCreated = stored.created;
-        // Marked in-flight in the same tick the bytes become reachable, so no
-        // window exists in which a concurrent import of the same file sees a
-        // blob it could prune.
-        inFlightImportChecksums.current.acquire(sourceRef.checksumSha256);
-      } catch {
-        if (file.size > MAX_EMBEDDED_STEP_BYTES) {
-          setStatus(
-            'STEP import over 12 MB needs browser storage, which is unavailable in this session.'
-          );
-          return;
-        }
-      }
-      const stepText = await file.text();
-      const metadata = parseStepMetadata(file.name, stepText);
-      const productName = metadata.products[0]?.trim();
-      const name = productName || file.name.replace(/\.(step|stp)$/i, '');
-      // Pre-assigned so the pre-flight can ask about THIS body, and reused
-      // verbatim by the finalized command: the candidate that was accepted and
-      // the command that lands must name the same feature and body, or the
-      // acceptance check proved nothing about what is in history.
-      const ids = createBodyFeatureIds();
-      const payload = {
-        name,
-        ids,
-        sourceName: file.name,
-        ...(sourceRef ? { stepSourceRef: sourceRef } : { stepText })
-      };
-      // The artifact id is geometry-inert: the worker resolves source bytes by
-      // checksum from the local blob store and reaches for the archive only as
-      // a fallback. So a candidate validated against a provisional local id
-      // rebuilds identically once the finalized id replaces it.
-      const localArtifactId = `artifact_local_${crypto.randomUUID()}`;
-      outcome = await executeValidatedFeature(
-        commandFactories.importStep({
-          ...payload,
-          artifactId: localArtifactId
-        }),
-        {
-          featureName: name,
-          resultBodyId: ids.bodyId,
-          validatingMessage: `Rebuilding ${file.name} with the exact geometry kernel…`,
-          // The workspace stays live while this rebuilds, and rebuilding a
-          // large assembly takes minutes: renaming a feature or nudging a body
-          // in that time must not destroy the import. The candidate is simply
-          // rebuilt against the moved document instead — an import appends a
-          // feature that reads nothing but its own source bytes, so the second
-          // pass can only reach the same verdict, and the parsed source is
-          // cached by checksum so it costs no re-parse.
-          revalidateOnDocumentMove: true,
-          // Archiving ahead of the rebuild spends a transfer of up to 250 MB
-          // on a file the kernel may be about to refuse, and leaves an
-          // artifact nothing references. Best-effort, as before: the source
-          // stays in the local blob store (or embedded) and rebuilds remain
-          // deterministic and offline either way.
-          finalize: async () => {
-            // Edit permission can flip during a rebuild that takes minutes
-            // (View mode, or the project opened in a second tab). Refusing
-            // here costs nothing and keeps the upload from producing an
-            // artifact the commit is then not allowed to reference. The
-            // window it leaves is the upload itself, which is why the local
-            // bytes survive an archive that outran its permission.
-            const blockedReason = editDisabledReasonRef.current;
-            if (blockedReason) {
-              throw new Error(`Cannot import geometry: ${blockedReason}.`);
-            }
-            let artifactId = localArtifactId;
-            try {
-              artifactId = await archiveArtifact({
-                fileName: file.name,
-                contentType,
-                kind: 'step-import',
-                body: file,
-                metadata: { source: 'direct-upload' }
-              });
-              archived = true;
-            } catch {
-              // Local-only, and listed in the File menu for a later retry.
-            }
-            return commandFactories.importStep({ ...payload, artifactId });
-          },
-          // Two separate facts: the source is stored, and the exact kernel
-          // rebuilt a body from it. Claiming the second before the rebuild ran
-          // is what left a success toast next to an empty viewport.
-          successMessage: () =>
-            `Imported editable STEP solid from ${file.name}: ` +
-            (archived
-              ? 'exact body rebuilt, source archived.'
-              : 'exact body rebuilt (cloud archive unavailable; source saved locally).'),
-          onFailure: () => {
-            // The kernel's verdict is already in the status bar. The host sink
-            // renders inline in whichever feature form is open, and an import
-            // has none of its own — routing it there would show a STEP parse
-            // error as the refusal of an unrelated operation.
-          }
-        }
-      );
-    } catch (error) {
-      setStatus(errorMessage(error, 'STEP import failed.'));
-    } finally {
-      if (sourceRef) {
-        inFlightImportChecksums.current.release(sourceRef.checksumSha256);
-      }
-    }
-    if (!sourceRef) {
-      return;
-    }
-    if (outcome === 'superseded') {
-      // The kernel never disagreed with the file; the user's own concurrent
-      // edits are why this stopped. Say so, and say what it costs to try again:
-      // the bytes are still stored, so the retry re-runs the rebuild and
-      // nothing else.
-      setStatus(
-        `${file.name} was not imported: the model kept changing while it rebuilt. ` +
-          'Its source is still stored, so importing it again costs only the rebuild.'
-      );
-    }
-    await settleImportSource({
-      checksumSha256: sourceRef.checksumSha256,
-      result:
-        outcome === 'committed'
-          ? 'committed'
-          : outcome === 'busy' || outcome === 'superseded'
-            ? 'no-verdict'
-            : 'refused',
-      createdByThisImport: sourceBlobCreated,
-      abandonedChecksums: abandonedImportChecksums.current,
-      document: managerRef.current?.document ?? null,
-      inFlightChecksums: inFlightImportChecksums.current,
-      deleteSourceBlob
+    await runStepImport({
+      file,
+      contentType,
+      archive: archiveArtifact,
+      validatedFeature,
+      status: { setStatus, setFeatureFormError },
+      marks: {
+        inFlight: inFlightImportChecksums.current,
+        abandoned: abandonedImportChecksums.current
+      },
+      currentDocument: () => managerRef.current?.document ?? null,
+      editDisabledReason: () => editDisabledReasonRef.current,
+      newId: () => crypto.randomUUID()
     });
   }
 
@@ -9343,6 +9264,38 @@ export function App() {
             projectId={doc.projectId}
             bodies={viewerBodies}
             measurementAnnotations={measurementAnnotations}
+            measurementCloudSync={[
+              doc.projectId,
+              deploymentHealth?.projectMeasurementSyncEnabled,
+              cloudProjectIds,
+              measurementHydratedProjectId,
+              measurements,
+              measurementDisplay,
+              setMeasurements,
+              setMeasurementUnit,
+              setMeasurementPrecision,
+              setRadialDisplay,
+              loadProjectMeasurements,
+              saveProjectMeasurements
+            ]}
+            projectThumbnailSync={
+              geometry.state.phase === 'ready'
+                ? [
+                    doc.projectId,
+                    doc.version,
+                    doc.derived.updatedAt,
+                    doc.derived.bodyRepresentations,
+                    Boolean(
+                      session &&
+                      cloudProjectIds.has(doc.projectId) &&
+                      !editDisabledReason
+                    ),
+                    api,
+                    loadProjectThumbnail,
+                    saveProjectThumbnail
+                  ]
+                : undefined
+            }
             sketches={
               // Region-based rendering (sketchViews) supersedes the legacy
               // single-profile overlays under direct manipulation.

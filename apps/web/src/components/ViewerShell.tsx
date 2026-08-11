@@ -27,20 +27,69 @@ import type {
 import { ViewerToolbar } from './ViewerToolbar';
 import { OrientationWidget } from './OrientationWidget';
 import type {
+  ArtifactId,
   BodyRepresentation,
+  ProjectId,
   SketchObjectData,
   TopologySelection
 } from '@openzcad/shared';
 import type { ViewportCameraState } from '../lib/workspaceSession';
-import type { MeasurementViewportAnnotation } from '../lib/measurements';
+import type {
+  Measurement,
+  MeasurementDisplayOptions,
+  MeasurementViewportAnnotation
+} from '../lib/measurements';
 import type { RegionPickData } from './viewer/regionOverlay';
 import { formatNumber } from '../lib/model';
+import {
+  MeasurementCloudSyncAgent,
+  type MeasurementCloudSyncAgentProps
+} from './MeasurementCloudSyncAgent';
+import { ProjectThumbnailSyncAgent } from './ProjectThumbnailSyncAgent';
+import type { ProjectThumbnailRecord } from '../lib/localProjectStore';
+import type { ThumbnailCloudTransport } from '../lib/cloudThumbnail';
+
+type MeasurementCloudSyncState = readonly [
+  projectId: string | undefined,
+  enabled: boolean | undefined,
+  cloudProjectIds: ReadonlySet<string>,
+  hydratedProjectId: string | null,
+  measurements: readonly Measurement[],
+  display: MeasurementDisplayOptions,
+  setMeasurements: MeasurementCloudSyncAgentProps['setMeasurements'],
+  setUnit: MeasurementCloudSyncAgentProps['setUnit'],
+  setPrecision: MeasurementCloudSyncAgentProps['setPrecision'],
+  setRadialDisplay: MeasurementCloudSyncAgentProps['setRadialDisplay'],
+  loadLocal: MeasurementCloudSyncAgentProps['loadLocal'],
+  saveLocal: MeasurementCloudSyncAgentProps['saveLocal']
+];
+
+type ProjectThumbnailSyncState = readonly [
+  projectId: ProjectId,
+  version: number,
+  updatedAt: string,
+  bodyRepresentations: Record<string, BodyRepresentation>,
+  publishToCloud: boolean,
+  transport: ThumbnailCloudTransport,
+  loadThumbnail: (projectId: string) => Promise<ProjectThumbnailRecord | null>,
+  saveThumbnail: (
+    projectId: string,
+    thumbnail: {
+      source: string | null;
+      artifactId?: ArtifactId;
+      version: number;
+      updatedAt: string;
+    }
+  ) => Promise<void>
+];
 
 interface ViewerShellProps {
   projectId: string;
   bodies: BodyRepresentation[];
   sketches: SketchOverlay[];
   measurementAnnotations: MeasurementViewportAnnotation[];
+  measurementCloudSync?: MeasurementCloudSyncState;
+  projectThumbnailSync?: ProjectThumbnailSyncState;
   selectedBodyIds: string[];
   selectedTopology: TopologySelection | null;
   selectedEdges: TopologySelection[];
@@ -148,6 +197,8 @@ export function ViewerShell({
   bodies,
   sketches,
   measurementAnnotations,
+  measurementCloudSync,
+  projectThumbnailSync,
   selectedBodyIds,
   selectedTopology,
   selectedEdges,
@@ -223,6 +274,12 @@ export function ViewerShell({
   const cylinderRadiusLabelSetterRef = useRef<
     ((radius: number | null) => void) | null
   >(null);
+  const cloudProjectId = measurementCloudSync?.[0];
+  const cloudEnabled =
+    cloudProjectId &&
+    measurementCloudSync[1] &&
+    measurementCloudSync[2].has(cloudProjectId) &&
+    measurementCloudSync[3] === cloudProjectId;
   cylinderRadiusLabelSetterRef.current = (radius) => {
     const label = selectionChipLabelRef.current;
     if (!label || !selectionChip) {
@@ -242,6 +299,31 @@ export function ViewerShell({
       className={`viewer-shell${viewMode ? ' view-mode' : ''}`}
       aria-label="3D viewport"
     >
+      {projectThumbnailSync ? (
+        <ProjectThumbnailSyncAgent
+          projectId={projectThumbnailSync[0]}
+          version={projectThumbnailSync[1]}
+          updatedAt={projectThumbnailSync[2]}
+          bodyRepresentations={projectThumbnailSync[3]}
+          publishToCloud={projectThumbnailSync[4]}
+          transport={projectThumbnailSync[5]}
+          loadThumbnail={projectThumbnailSync[6]}
+          saveThumbnail={projectThumbnailSync[7]}
+        />
+      ) : null}
+      {cloudEnabled ? (
+        <MeasurementCloudSyncAgent
+          projectId={cloudProjectId}
+          measurements={measurementCloudSync[4]}
+          display={measurementCloudSync[5]}
+          setMeasurements={measurementCloudSync[6]}
+          setUnit={measurementCloudSync[7]}
+          setPrecision={measurementCloudSync[8]}
+          setRadialDisplay={measurementCloudSync[9]}
+          loadLocal={measurementCloudSync[10]}
+          saveLocal={measurementCloudSync[11]}
+        />
+      ) : null}
       <ModelViewer
         key={projectId}
         bodies={bodies}

@@ -6,8 +6,8 @@ on:
     - cron: '17 13 * * *'
 
 permissions:
-  contents: write
-  pull-requests: write
+  contents: read
+  pull-requests: read
 
 concurrency:
   group: update-brepkit

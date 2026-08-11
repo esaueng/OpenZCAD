@@ -32,7 +32,14 @@ interface AccountErasureSchema {
   trigger_count: number;
 }
 
-/** Whether migration 0014 installed the erasure fence and every write guard. */
+interface ProjectMeasurementSchema {
+  table_ready: number;
+  columns_ready: number;
+  cascade_ready: number;
+  erasure_triggers: number;
+}
+
+/** Whether migrations through 0015 installed the erasure fence and write guards. */
 export async function isAccountErasureReady(
   db: D1Database | undefined
 ): Promise<boolean> {
@@ -53,7 +60,57 @@ export async function isAccountErasureReady(
           ) AS trigger_count`
       )
       .first<AccountErasureSchema>();
-    return schema?.table_ready === 1 && schema.trigger_count === 23;
+    return schema?.table_ready === 1 && schema.trigger_count === 25;
+  } catch {
+    return false;
+  }
+}
+
+/** Whether migration 0015 installed isolated, erasure-fenced measurement storage. */
+export async function isProjectMeasurementStorageReady(
+  db: D1Database | undefined
+): Promise<boolean> {
+  if (!db) {
+    return false;
+  }
+  try {
+    const schema = await db
+      .prepare(
+        `SELECT
+          EXISTS (
+            SELECT 1 FROM sqlite_schema
+            WHERE type = 'table' AND name = 'project_measurements'
+          ) AS table_ready,
+          (
+            SELECT COUNT(*) FROM pragma_table_info('project_measurements')
+            WHERE (name = 'project_id' AND upper(type) = 'TEXT' AND pk = 1)
+               OR (name = 'record_version' AND upper(type) = 'INTEGER' AND "notnull" = 1)
+               OR (name = 'revision' AND upper(type) = 'INTEGER' AND "notnull" = 1)
+               OR (name = 'payload_json' AND upper(type) = 'TEXT' AND "notnull" = 1)
+               OR (name = 'updated_at' AND upper(type) = 'TEXT' AND "notnull" = 1)
+          ) AS columns_ready,
+          EXISTS (
+            SELECT 1 FROM pragma_foreign_key_list('project_measurements')
+            WHERE "table" = 'projects'
+              AND "from" = 'project_id'
+              AND "to" = 'id'
+              AND upper(on_delete) = 'CASCADE'
+          ) AS cascade_ready,
+          (
+            SELECT COUNT(*) FROM sqlite_schema
+            WHERE type = 'trigger' AND name IN (
+              'block_erasing_measurement_insert',
+              'block_erasing_measurement_update'
+            )
+          ) AS erasure_triggers`
+      )
+      .first<ProjectMeasurementSchema>();
+    return (
+      schema?.table_ready === 1 &&
+      schema.columns_ready === 5 &&
+      schema.cascade_ready === 1 &&
+      schema.erasure_triggers === 2
+    );
   } catch {
     return false;
   }
