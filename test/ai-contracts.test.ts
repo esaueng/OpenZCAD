@@ -7,7 +7,8 @@ import {
   groundCadPatchProposalToSelection,
   parseAssistantReply,
   parseCadPatchProposal,
-  TEXT_FONT_FAMILY_IDS
+  TEXT_FONT_FAMILY_IDS,
+  validateCadPatchProposalAgainstDigest
 } from '@openzcad/ai-contracts';
 import { FONT_FAMILIES } from '@openzcad/geometry';
 import {
@@ -127,6 +128,7 @@ describe('AI patch contracts', () => {
       featureKind: 'sketch',
       sketchId: created.sketchId,
       planeRef: { type: 'canonical', plane: 'XZ', offset: 7 },
+      objectIds: [expect.any(String)],
       objects: [
         {
           objectKind: 'rectangle',
@@ -137,6 +139,61 @@ describe('AI patch contracts', () => {
         }
       ]
     });
+  });
+
+  it('binds sketch edits to an allowlisted field on the exact digest object', () => {
+    const created = addSketchFeature(
+      createProjectDocument('Digest sketch edit', toUserId('user_digest_edit')),
+      {
+        name: 'Profile',
+        plane: 'XY',
+        offset: 0,
+        object: {
+          objectKind: 'rectangle',
+          width: 12,
+          height: 8,
+          centerX: 0,
+          centerY: 0
+        }
+      }
+    );
+    const digest = createCadDocumentDigest(created.document);
+    const sketchData = digest.features.find(
+      (feature) => feature.featureKind === 'sketch'
+    )?.data as { objectIds?: string[] } | undefined;
+    const objectId = sketchData?.objectIds?.[0];
+    expect(objectId).toBeDefined();
+    const proposal = parseCadPatchProposal({
+      proposalId: 'proposal_sketch_dimension',
+      summary: 'Drive the rectangle width.',
+      assumptions: [],
+      operations: [
+        {
+          kind: 'set_sketch_dimension',
+          sketchId: created.sketchId,
+          objectId,
+          field: 'width',
+          value: 'profile_width'
+        }
+      ]
+    });
+
+    expect(
+      validateCadPatchProposalAgainstDigest(proposal, digest).operations[0]
+    ).toMatchObject({ kind: 'set_sketch_dimension', objectId, field: 'width' });
+    const sketchOperation = proposal.operations[0];
+    if (!sketchOperation || sketchOperation.kind !== 'set_sketch_dimension') {
+      throw new Error('expected a sketch-dimension operation');
+    }
+    expect(() =>
+      validateCadPatchProposalAgainstDigest(
+        {
+          ...proposal,
+          operations: [{ ...sketchOperation, field: 'radius' }]
+        },
+        digest
+      )
+    ).toThrow(/stale or unavailable field/);
   });
 
   it('offers the AI exactly the font families the geometry package bundles', () => {
