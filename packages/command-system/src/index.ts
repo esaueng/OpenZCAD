@@ -340,6 +340,79 @@ function validateModelingFeatureUpdate(
         profile: feature.data.profile,
         profiles: feature.data.profiles
       });
+      // The creation-time guard keys off `input.ids`, which an update never
+      // carries; the stored feature knows its own result body directly.
+      if (
+        feature.data.targetBodyId !== undefined &&
+        feature.data.targetBodyId === feature.bodyId
+      ) {
+        throw new Error('An extrusion cannot target its own result body.');
+      }
+      break;
+    case 'revolve':
+      if (!findSketch(preview, feature.data.sketchId)) {
+        throw new Error('Revolve requires an existing sketch.');
+      }
+      break;
+    case 'boolean': {
+      const targetBodyIds = feature.data.targetBodyIds;
+      if (targetBodyIds.length < 2) {
+        throw new Error('Boolean operations need at least two target bodies.');
+      }
+      if (new Set(targetBodyIds).size !== targetBodyIds.length) {
+        throw new Error('Boolean operations cannot target the same body twice.');
+      }
+      const known = new Set(preview.bodyOrder);
+      for (const bodyId of targetBodyIds) {
+        if (!known.has(bodyId)) {
+          throw new Error(`Boolean target body ${bodyId} not found.`);
+        }
+      }
+      if (
+        feature.bodyId !== undefined &&
+        targetBodyIds.includes(feature.bodyId)
+      ) {
+        throw new Error('A boolean cannot target its own result body.');
+      }
+      break;
+    }
+    case 'transform':
+      if (!preview.bodyOrder.includes(feature.data.targetBodyId)) {
+        throw new Error(
+          `Transform target body ${feature.data.targetBodyId} not found.`
+        );
+      }
+      break;
+    case 'direct-edit':
+      validateBodyTarget(preview, feature.data.targetBodyId);
+      validateDirectEditReference({
+        name: feature.name,
+        targetBodyId: feature.data.targetBodyId,
+        operation: feature.data.operation
+      });
+      break;
+    case 'fillet':
+      validateBodyTarget(preview, feature.data.targetBodyId);
+      validateEdgeReferences({
+        name: feature.name,
+        targetBodyId: feature.data.targetBodyId,
+        edgeHashes: feature.data.edgeHashes,
+        edgeReferences: feature.data.edgeReferences,
+        size: feature.data.radius
+      });
+      break;
+    case 'chamfer':
+      validateBodyTarget(preview, feature.data.targetBodyId);
+      validateEdgeReferences({
+        name: feature.name,
+        targetBodyId: feature.data.targetBodyId,
+        edgeHashes: feature.data.edgeHashes,
+        edgeReferences: feature.data.edgeReferences,
+        size: feature.data.distance
+      });
+      break;
+    case 'pattern':
+      validateBodyTarget(preview, feature.data.targetBodyId);
       break;
     case 'mirror':
       validateMirrorInput(preview, {
