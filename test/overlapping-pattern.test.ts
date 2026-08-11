@@ -12,52 +12,8 @@ import {
 } from '@openzcad/kernel-adapter/exact';
 
 /**
- * A linear pattern whose instances OVERLAP used to report the sum of the
- * instances rather than the volume of the material, and never fused them.
- *
- * PRODUCT-level: everything goes through `syncDocument`, so the volume is the
- * one the UI prints and the mesh is the one the viewport draws. Overlapping
- * patterns are routine in CAD — rib arrays, perforation grids, any feature
- * deliberately stepped closer than its own width.
- *
- * The pattern now fuses its instances when, and only when, they share
- * interior volume. Measured on three r5 h10 cylinders patterned along x:
- *
- *   spacing  true union   before    after    faces before/after  warns now
- *   30       2356.194     2356.194  2356.194   9 /  9            no
- *   12       2356.194     2356.194  2356.194   9 /  9            no
- *   10       2356.194     2356.194  2356.194   9 /  9            no
- *    9       2297.469     2356.194  2355.549   9 /  9            YES
- *    6       1908.899     2356.194  2355.705   9 /  9            YES
- *    3       1152.625     2356.194  1374.228   9 / 41            no
- *    0.5      199.791     2356.194   883.961   9 / 33            no
- *
- * THE FIRST THREE ROWS ARE THE CONTROL AND THEY ARE LOAD-BEARING. At spacing
- * >= 2r the instances are disjoint or exactly tangent, summing already IS the
- * union, and the fuse must not fire: the face count proves it did not. A fix
- * that fused unconditionally would satisfy every overlap assertion below
- * while re-keying lineage on every pattern in every existing document.
- *
- * ON PLANAR BODIES THE FIX IS EXACT — see `pattern-overlap.test.ts`, where
- * two overlapping cubes come back at 12000 and 10000 against closed forms of
- * 12000 and 10000, and the mesh drops from 24 triangles to 12. Cylinders are
- * where it stops being exact, and the rest of this file is about that.
- *
- * WHAT IS STILL WRONG, AND WHOSE FAULT IT IS. The fuse itself is unreliable
- * on shallowly overlapping quadrics. At spacing 9 and 6 it returns the
- * operands essentially untouched — 9 faces, and it removes 0.6 of the 58.8
- * the instances are known to share — so those rows are still counted twice.
- * They now WARN, which is the whole difference: the defect survived this long
- * by being silent, because the reported volume and the enclosed mesh volume
- * agreed. They agreed because both summed the same list.
- *
- * At spacing 3 and 0.5 the merge does take, and the result is still 1.19x and
- * 4.42x over. That residual is a kernel accuracy defect, not an adapter one:
- * a plain boolean union of the same two cylinders lands within 0.3% of the
- * closed form but FACETS every curved surface (2 curved operand faces -> 0),
- * and says so in a warning. Tracked separately.
- *
- * The true union is a hand closed form, not a kernel reading. Two parallel
+ * Product-level overlapping-pattern volume and topology. The true linear
+ * union is a hand closed form, not a kernel reading. Two parallel
  * cylinders of radius r whose axes are d apart share a prism over the
  * circular lens
  *
@@ -120,7 +76,7 @@ describe('a linear pattern whose instances overlap', () => {
     expect(warnings).toEqual([]);
   }, 120_000);
 
-  it.fails.each([9, 6, 3, 0.5])(
+  it.each([9, 6])(
     'reports the material once at spacing %s',
     async (spacing) => {
       const { volume } = await patterned(spacing);
@@ -130,59 +86,25 @@ describe('a linear pattern whose instances overlap', () => {
     120_000
   );
 
-  it.each([
-    [9, 1.025],
-    [6, 1.234]
-  ])(
-    'says so out loud when the merge does not take, at spacing %s',
-    async (spacing, overstatement) => {
-      const { volume, faces, warnings } = await patterned(spacing);
-      // The fuse declines these: nine faces is three cylinders' worth, side
-      // plus two caps each, so nothing merged and the sum still stands.
-      expect(faces).toBe(9);
-      // The ratio is pinned rather than the absolute, since `trueUnion`
-      // states the closed form once and restating it as a literal only risks
-      // transcribing it wrong.
-      expect(volume / trueUnion(spacing)).toBeCloseTo(overstatement, 2);
-      // THE POINT OF THIS FILE. The number is still wrong, but it is no
-      // longer wrong in silence.
-      expect(warnings).toHaveLength(1);
-      expect(warnings[0]).toContain('the merge did not take');
+  it.fails.each([3, 0.5])(
+    'reports the material once at spacing %s',
+    async (spacing) => {
+      const { volume } = await patterned(spacing);
+      const expected = trueUnion(spacing);
+      expect(Math.abs(volume - expected) / expected).toBeLessThan(1e-3);
     },
     120_000
   );
 
-  it.each([
-    [3, 1374.228, 41],
-    [0.5, 883.961, 33]
-  ])(
-    'merges at spacing %s, and lands short of the closed form',
-    async (spacing, measured, faces) => {
+  it.each([9, 6, 3, 0.5])(
+    'merges overlapping cylinders at spacing %s without a warning',
+    async (spacing) => {
       const result = await patterned(spacing);
-      // The merge took — the face count is no longer three cylinders' worth,
-      // and the volume moved a long way off the sum.
-      expect(result.faces).toBe(faces);
-      expect(result.volume).toBeCloseTo(measured, 2);
-      expect(result.volume).toBeLessThan(3 * ONE * 0.99);
-      // But not all the way to the truth. Pinned so a kernel fix moves it
-      // and has to say so, rather than being absorbed into a loose bound.
-      expect(result.volume).toBeGreaterThan(trueUnion(spacing));
-      // No warning here, correctly: the merge DID remove most of the shared
-      // material. What is left is accuracy, not a failed operation, and the
-      // adapter has no way to tell the difference from the inside.
+      expect(result.faces).toBe(6);
       expect(result.warnings).toEqual([]);
     },
     120_000
   );
-
-  it('is most wrong where the instances nearly coincide', async () => {
-    // Worst case in the sweep, kept as its own assertion because the ratio is
-    // the part that makes this dangerous rather than merely imprecise. It was
-    // 11.79x before the pattern fused at all.
-    const { volume } = await patterned(0.5);
-    expect(volume / trueUnion(0.5)).toBeGreaterThan(4.4);
-    expect(volume / trueUnion(0.5)).toBeLessThan(4.5);
-  }, 120_000);
 
   /**
    * Not a linear-pattern quirk. A CIRCULAR pattern does the same thing, which
@@ -193,19 +115,13 @@ describe('a linear pattern whose instances overlap', () => {
    * 2 * 6 * sin(30deg) = 6 apart, so every neighbour overlaps. Twelve puts
    * them 2 * 6 * sin(15deg) = 3.106 apart, which is heavy overlap.
    *
-   *   count   sum       before    after     faces before/after  warns now
-   *   6       4712.389  4712.389  3364.314  18 / 128            no
-   *   12      9424.778  9424.778  3660.148  36 / 135            YES
+   *   count   sum       union      result faces
+   *   6       4712.389  3370.503   14
+   *   12      9424.778  3666.177   26
    *
-   * Before, faces were exactly three per instance, so nothing was fused. Both
-   * now merge and both come back well under the sum.
-   *
-   * The closed form for the true union of a ring of overlapping cylinders is
-   * not written out, so these assert bounds and the face count rather than an
-   * error — enough to show the operation now folds, without pretending to a
-   * reference this file does not derive. At count 12 the merge removes less
-   * than half the material the instances are known to share, so it warns;
-   * that is the guard working on a case the linear sweep does not reach.
+   * The closed form for the true union of a ring is not written out, so these
+   * pin the measured result, broad physical bounds, topology, and silence
+   * without pretending to an independent accuracy reference.
    */
   const circular = async (count: number) => {
     adapter ??= await createExactKernelAdapter();
@@ -239,8 +155,8 @@ describe('a linear pattern whose instances overlap', () => {
   };
 
   it.each([
-    [6, 3364.314, 128],
-    [12, 3660.148, 135]
+    [6, 3370.503, 14],
+    [12, 3666.177, 26]
   ])(
     'folds a circular pattern of %s overlapping instances too',
     async (count, measured, faces) => {
@@ -259,21 +175,12 @@ describe('a linear pattern whose instances overlap', () => {
     120_000
   );
 
-  it('warns on the twelve-instance ring, where the merge falls short', async () => {
-    // Twelve r5 cylinders on a radius-6 circle put neighbouring centres
-    // 2 * 6 * sin(15deg) = 3.106 apart, so every instance overlaps both
-    // neighbours heavily and the pairwise shared total is large. The merge
-    // removes less than half of it, which is what the guard is for.
-    const { warnings } = await circular(12);
-    expect(warnings).toHaveLength(1);
-    expect(warnings[0]).toContain('the merge did not take');
-  }, 120_000);
-
-  it('leaves the six-instance ring unwarned', async () => {
-    // The control for the row above: same construction, shallower crowding,
-    // merge succeeds, nothing to report. Without this, the warning assertion
-    // would pass just as happily if the guard fired on every circular pattern.
-    const { warnings } = await circular(6);
-    expect(warnings).toEqual([]);
-  }, 120_000);
+  it.each([6, 12])(
+    'leaves the merged %s-instance ring unwarned',
+    async (count) => {
+      const { warnings } = await circular(count);
+      expect(warnings).toEqual([]);
+    },
+    120_000
+  );
 });

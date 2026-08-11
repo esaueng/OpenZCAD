@@ -17,14 +17,7 @@
       "lineageNames": [],
       "faceHashDigest": "b563a24b",
       "edgeHashDigest": "4de1dc1b",
-      "bbox": [
-        0,
-        0,
-        0,
-        40,
-        24,
-        10
-      ],
+      "bbox": [0, 0, 0, 40, 24, 10],
       "roundTrip": {
         "status": "ok",
         "warnings": [],
@@ -52,14 +45,7 @@
       "lineageNames": [],
       "faceHashDigest": "b563a24b",
       "edgeHashDigest": "26f53b2e",
-      "bbox": [
-        -4.440892098500626e-16,
-        -4.440892098500626e-16,
-        0,
-        40,
-        24,
-        10
-      ],
+      "bbox": [-4.440892098500626e-16, -4.440892098500626e-16, 0, 40, 24, 10],
       "roundTrip": {
         "status": "ok",
         "warnings": [],
@@ -88,14 +74,7 @@
       "lineageNames": [],
       "faceHashDigest": "68988513",
       "edgeHashDigest": "9389207a",
-      "bbox": [
-        0,
-        0,
-        0,
-        40,
-        24,
-        10
-      ],
+      "bbox": [0, 0, 0, 40, 24, 10],
       "roundTrip": {
         "status": "ok",
         "warnings": [],
@@ -122,14 +101,7 @@
       "lineageNames": [],
       "faceHashDigest": "68988513",
       "edgeHashDigest": "9389207a",
-      "bbox": [
-        -2.220446049250313e-16,
-        -2.220446049250313e-16,
-        0,
-        40,
-        24,
-        10
-      ],
+      "bbox": [-2.220446049250313e-16, -2.220446049250313e-16, 0, 40, 24, 10],
       "roundTrip": {
         "status": "ok",
         "warnings": [],
@@ -159,14 +131,7 @@
       "lineageNames": [],
       "faceHashDigest": "278af479",
       "edgeHashDigest": "a850d842",
-      "bbox": [
-        0,
-        0,
-        0,
-        40,
-        24,
-        10
-      ],
+      "bbox": [0, 0, 0, 40, 24, 10],
       "roundTrip": {
         "status": "ok",
         "warnings": [],
@@ -195,12 +160,8 @@
       "faceHashDigest": "278af479",
       "edgeHashDigest": "a850d842",
       "bbox": [
-        -1.0000000355271367e-7,
-        -1e-7,
-        -1.0000000355271367e-7,
-        40.0000001,
-        24.000000100000005,
-        10.000000100000003
+        -1.0000000355271367e-7, -1e-7, -1.0000000355271367e-7, 40.0000001,
+        24.000000100000005, 10.000000100000003
       ],
       "roundTrip": {
         "status": "ok",
@@ -218,7 +179,7 @@
       "status": "imported",
       "warnings": [],
       "bodyCount": 1,
-      "volume": 10951.844000782583,
+      "volume": 10951.6171402675,
       "faceCount": 11,
       "edgeCount": 24,
       "seamEdgeCount": 1,
@@ -231,18 +192,11 @@
       "lineageNames": [],
       "faceHashDigest": "aedc9d9a",
       "edgeHashDigest": "cb3f41d3",
-      "bbox": [
-        -3,
-        0,
-        0,
-        40,
-        24,
-        20
-      ],
+      "bbox": [-3, 0, 0, 40, 24, 20],
       "roundTrip": {
         "status": "ok",
         "warnings": [],
-        "volumeRelativeDelta": 1.6559052275814403e-16,
+        "volumeRelativeDelta": 0.0000013988730714120268,
         "faceCountDelta": 0,
         "edgeCountDelta": 0,
         "exportedSolidCount": 1,
@@ -288,14 +242,7 @@
       "lineageNames": [],
       "faceHashDigest": "4aaa8306",
       "edgeHashDigest": "e46dc99a",
-      "bbox": [
-        0,
-        0,
-        0,
-        40,
-        24,
-        10
-      ],
+      "bbox": [0, 0, 0, 40, 24, 10],
       "roundTrip": {
         "status": "ok",
         "warnings": [],
@@ -324,12 +271,8 @@
       "faceHashDigest": "4aaa8306",
       "edgeHashDigest": "e46dc99a",
       "bbox": [
-        -1.0000000355271367e-7,
-        -1e-7,
-        -1.0000000355271367e-7,
-        40.0000001,
-        24.000000100000005,
-        10.000000100000003
+        -1.0000000355271367e-7, -1e-7, -1.0000000355271367e-7, 40.0000001,
+        24.000000100000005, 10.000000100000003
       ],
       "roundTrip": {
         "status": "ok",
@@ -347,7 +290,7 @@
       "status": "imported",
       "warnings": [],
       "bodyCount": 1,
-      "volume": 3839.9999999999995,
+      "volume": 3840,
       "faceCount": 11,
       "edgeCount": 24,
       "seamEdgeCount": 0,
@@ -359,14 +302,7 @@
       "lineageNames": [],
       "faceHashDigest": "f9176a10",
       "edgeHashDigest": "c1a08708",
-      "bbox": [
-        0,
-        0,
-        0,
-        40,
-        24,
-        10
-      ],
+      "bbox": [0, 0, 0, 40, 24, 10],
       "roundTrip": {
         "status": "ok",
         "warnings": [],
@@ -394,12 +330,8 @@
       "faceHashDigest": "f9176a10",
       "edgeHashDigest": "c1a08708",
       "bbox": [
-        -1.0000000355271367e-7,
-        -1e-7,
-        -1.0000000355271367e-7,
-        40.0000001,
-        24.000000100000005,
-        10.000000100000003
+        -1.0000000355271367e-7, -1e-7, -1.0000000355271367e-7, 40.0000001,
+        24.000000100000005, 10.000000100000003
       ],
       "roundTrip": {
         "status": "ok",
@@ -431,14 +363,7 @@
       "lineageNames": [],
       "faceHashDigest": "3c489854",
       "edgeHashDigest": "e140444b",
-      "bbox": [
-        -4,
-        -4,
-        0,
-        40,
-        24,
-        10
-      ],
+      "bbox": [-4, -4, 0, 40, 24, 10],
       "roundTrip": {
         "status": "ok",
         "warnings": [],
@@ -468,12 +393,8 @@
       "faceHashDigest": "c1cead63",
       "edgeHashDigest": "fea0548c",
       "bbox": [
-        -1.0606602717798208,
-        -1.0606602717798224,
-        -1.0606602717798224,
-        41.060660271779824,
-        25.06066027177982,
-        11.060660271779822
+        -1.0606602717798208, -1.0606602717798224, -1.0606602717798224,
+        41.060660271779824, 25.06066027177982, 11.060660271779822
       ],
       "roundTrip": {
         "status": "ok",

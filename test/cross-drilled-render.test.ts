@@ -12,69 +12,11 @@ import {
 } from '@openzcad/kernel-adapter/exact';
 
 /**
- * What a cross-drilled shaft LOOKS like disagrees with what it MEASURES.
- *
- * A product-level pin: everything here goes through `syncDocument`, so the
- * mesh under test is the one the viewport draws and the volume is the one
- * the UI prints. The kernel's own numbers are deliberately not consulted --
- * the point is the divergence between the two things the user is given.
- *
- * Measured on an r=3 h=30 shaft with a bore laid across it at mid-height:
- *
- *   bore r | app prints | mesh encloses | boundary edges
- *   -------|------------|---------------|---------------
- *      3   |   704.263  |    847.724    |   0
- *      2   |   750.652  |    796.736    |   1542
- *      1   |   802.579  |    825.382    |   1154
- *
- * A REGRESSION PASSED THROUGH THESE NUMBERS AND IS NOW GONE, and the episode
- * is kept because it changed how this file asserts things.
- *
- * The pin bump carrying brepkit#64 added exactly 420 boundary edges to every
- * row (0 -> 420, 1542 -> 1962, 1154 -> 1574) while `app prints`, `mesh
- * encloses` and the face count stayed identical to the digit. brepkit#66
- * returned all three to the values above.
- *
- * What it was: #64 correctly moved a closed rim's polyline to start at the
- * edge's own seam vertex, but `compute_angular_range` kept anchoring the
- * analytic GRID at the surface frame's `u = 0`. Those two used to coincide by
- * accident — a primitive builds its rim circles and its lateral surface from
- * one frame — and after a boolean they do not. A cylindrical wall carrying
- * inner wires is the one shape that reconciles a grid against the shared
- * vertex pool by proximity, and on this body the two anchors sat 2.3077 deg
- * apart: 0.121 mm at r = 3, five orders of magnitude past the 1 um snap
- * tolerance. Nothing snapped, so the wall and its two END CAPS shared no rim
- * vertex and every rim segment on both sides became a boundary edge. The bore
- * was never involved.
- *
- * TWO THINGS THIS FILE PREVIOUSLY ASSERTED THAT WERE WRONG, corrected here
- * rather than quietly deleted:
- *
- *   1. That the r=3 row "degraded in kind — watertight before, leaking
- *      after". It did not. Closure on that body is DEFLECTION-DEPENDENT: at
- *      deflection >= 0.02 it is watertight both before #64 and after #66,
- *      and below that it carries bore-lobe residue in every case, #64
- *      included. It draws the same wrong shape either way.
- *   2. That the cause was #64's stated knock-on about golden meshes losing a
- *      near-duplicate vertex per rim. Unrelated — those are undrilled
- *      cylinders, whose walls take the structured band path and never reach
- *      the snap path at all.
- *
- * And the +420 was never the invariant, which is why the end-rim test below
- * asserts a property instead. See its comment.
- *
- * The undrilled shaft is 848.230 and the equal-radius answer is
- * 848.230 - 16r^3/3 = 704.230 by Steinmetz.
- *
- * So at equal radius the viewport shows a shaft with NO HOLE -- within
- * 0.06% of undrilled -- while the UI prints a volume that says there is
- * one, and the mesh is watertight, so nothing downstream objects. At
- * smaller radii the hole is drawn but the surface leaks.
- *
- * Boundary edges are counted after welding by POSITION, not index: this
- * kernel emits duplicate vertices at seams and an index-based count reports
- * those as holes. Welding changed nothing here (welded == raw at every
- * radius), so these are real openings.
+ * Product-level cross-drill fidelity: the UI measurement and viewport mesh
+ * both come through `syncDocument`, while the reference volumes below are
+ * independent perpendicular-cylinder intersection integrals. Boundary edges
+ * are counted after welding by position so duplicate seam vertices cannot be
+ * mistaken for holes.
  */
 describe('a cross-drilled shaft', () => {
   let adapter: ExactKernelAdapter;
@@ -172,51 +114,25 @@ describe('a cross-drilled shaft', () => {
     };
   };
 
-  const UNDRILLED = Math.PI * 9 * 30;
-  /** Steinmetz bicylinder of equal radii removes 16 r^3 / 3. */
-  const EQUAL_RADIUS_TRUE = UNDRILLED - (16 * 27) / 3;
+  const TRUE_VOLUMES = {
+    3: 704.2300164692424,
+    2: 777.293907481907,
+    1: 829.6460290446158
+  } as const;
 
-  it.fails('draws the hole it says it drilled, at equal radius', async () => {
-    const { reported, meshVolume } = await drill(3);
-    expect(
-      Math.abs(reported - EQUAL_RADIUS_TRUE) / EQUAL_RADIUS_TRUE
-    ).toBeLessThan(1e-3);
-    // The mesh should enclose what the body measures, not the raw stock.
-    expect(Math.abs(meshVolume - reported) / reported).toBeLessThan(0.02);
-  });
-
-  it('renders an equal-radius bore as undrilled stock, and closes over it', async () => {
-    const { reported, meshVolume, boundaryEdges, warnings } = await drill(3);
-    // The measurement knows about the bore.
-    expect(reported).toBeCloseTo(EQUAL_RADIUS_TRUE, 1);
-    // The mesh does not: it is the undrilled shaft to within 0.06%.
-    expect(Math.abs(meshVolume - UNDRILLED) / UNDRILLED).toBeLessThan(6e-4);
-    // And it is closed, so no watertightness check objects to the hole
-    // being absent. That is what makes this quiet rather than loud.
-    expect(boundaryEdges).toBe(0);
-    expect(warnings).toEqual([]);
-  });
-
-  it.fails.each([2, 1])(
-    'closes the surface around a bore of radius %s',
+  it.each([3, 2, 1] as const)(
+    'draws a closed bore of radius %s at the measured volume',
     async (boreRadius) => {
-      const { boundaryEdges } = await drill(boreRadius);
+      const { reported, boundaryEdges, meshVolume, warnings } =
+        await drill(boreRadius);
+      const expected = TRUE_VOLUMES[boreRadius];
+      expect(Math.abs(reported - expected) / expected).toBeLessThan(1e-3);
+      expect(Math.abs(meshVolume - reported) / reported).toBeLessThan(0.02);
       expect(boundaryEdges).toBe(0);
-    }
-  );
-
-  it.each([
-    [2, 1542],
-    [1, 1154]
-  ])(
-    'leaves a bore of radius %s drawn but leaking (%s boundary edges)',
-    async (boreRadius, expected) => {
-      const { boundaryEdges, meshVolume, warnings } = await drill(boreRadius);
-      expect(boundaryEdges).toBe(expected);
-      // Partially drilled: less than the stock, more than it should be.
-      expect(meshVolume).toBeLessThan(UNDRILLED);
+      expect(meshVolume).toBeGreaterThan(0);
       expect(warnings).toEqual([]);
-    }
+    },
+    120_000
   );
 
   /**
