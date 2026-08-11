@@ -12,60 +12,10 @@ import {
 } from '@openzcad/kernel-adapter/exact';
 
 /**
- * What `exportStl` writes to a file, measured from the file itself.
- *
- * This is the end of the line for every mesh defect in this suite. The other
- * pins read `body.mesh` — what the viewport draws. This one parses the ASCII
- * STL the user actually downloads and hands to a slicer, which is a DIFFERENT
- * artifact: it goes through `kernel.exportStlAscii` at
- * `STL_EXPORT_DEFLECTION`, coarser than the viewport, so the facet counts and
- * the errors are its own.
- *
- * `exportStl` performs NO mesh validation. It tessellates and writes.
- *
- * A mesh check DOES exist elsewhere in the adapter — `syncDocument` runs
- * `inspectTriangleMeshClosure` and warns "Union produced an open,
- * non-manifold, or inconsistently oriented result." But it is gated on
- * `requiresStrictUnionValidation`, i.e. `featureKind === 'boolean' &&
- * operation === 'union'`, so it runs for union results and nothing else. Every
- * body below is a SUBTRACT, which that gate excludes, and the export path
- * consults nothing at all regardless. So everything here leaves as a
- * well-formed file with no warning.
- *
- * That the machinery already exists and is already proven is the useful part:
- * the gap is reach, not absence.
- *
- * THE HEADLINE, and it is worth stating in user terms rather than in
- * millimetres. Drill a shaft with an equal-radius cross bore and export it:
- *
- *   the UI prints             704.263   (correct — Steinmetz says 704.230)
- *   the STL file encloses     831.109   (+18.0% of material that is not there)
- *   the STL is watertight     0 open edges
- *
- * The file is valid. A slicer will accept it without complaint and print a
- * shaft that is 18% heavier than the part the user designed, with the hole
- * missing. Nothing anywhere says so — not a warning, not a validation error,
- * not the file itself. Watertight is exactly what makes it dangerous: the one
- * check a slicer does perform, it passes.
- *
- * At smaller bore radii the hole IS drawn and the file leaks instead, which a
- * slicer may or may not repair silently:
- *
- *   bore r | UI prints | STL encloses |  error  | facets | STL open edges
- *   -------|-----------|--------------|---------|--------|----------------
- *      3   |  704.263  |   831.109    | +18.0%  |    68  |   0
- *      2   |  750.652  |   804.284    |  +7.1%  |   210  |  60
- *      1   |  802.579  |   818.248    |  +2.0%  |   266  | 120
- *
- * And a body whose B-REP IS EXACT still exports a leaking file — a ball with
- * its cap cut off measures 3534.2917 against a closed form of 3534.2917, and
- * exports 116 open edges. Correct geometry is not sufficient for a correct
- * file.
- *
- * The control is what makes all of this a defect rather than a property of
- * the format: a plain box exports 12 facets enclosing exactly 8000 with zero
- * open edges. STL can represent these bodies correctly. This pipeline does
- * not.
+ * What `exportStl` writes, measured from the downloaded ASCII facets rather
+ * than from the in-memory body. The controls pin physical unit conversion,
+ * watertightness, and agreement with independent closed-form or integrated
+ * volumes without treating a tessellator's incidental facet count as shape.
  */
 describe('what STL export actually writes', () => {
   let adapter: ExactKernelAdapter;
@@ -144,9 +94,11 @@ describe('what STL export actually writes', () => {
     };
   };
 
-  const UNDRILLED = Math.PI * 9 * 30;
-  /** Steinmetz: two equal perpendicular cylinders share 16 r^3 / 3. */
-  const TRUE_EQUAL = UNDRILLED - (16 * 27) / 3;
+  const TRUE_VOLUMES = {
+    3: 704.2300164692424,
+    2: 777.293907481907,
+    1: 829.6460290446158
+  } as const;
 
   it('exports a box exactly, so STL itself is not the problem', async () => {
     // The control, and the reason everything below counts as a defect rather
@@ -222,45 +174,17 @@ describe('what STL export actually writes', () => {
     120_000
   );
 
-  it.fails(
-    'exports the drilled shaft the UI says it drilled',
-    async () => {
-      const { printed, stl } = await drillAndExport(3);
-      expect(Math.abs(printed - TRUE_EQUAL) / TRUE_EQUAL).toBeLessThan(1e-3);
-      // The file should enclose what the app measured.
-      expect(Math.abs(stl.volume - printed) / printed).toBeLessThan(0.02);
-    },
-    120_000
-  );
-
-  it('instead exports a watertight file of a shaft with no hole', async () => {
-    // The headline. This is the dangerous one precisely BECAUSE the file is
-    // well formed: zero open edges means a slicer accepts it and prints it,
-    // and the only thing wrong is that it is the wrong solid.
-    const { printed, stl, warnings } = await drillAndExport(3);
-    expect(printed).toBeCloseTo(704.263, 2);
-    expect(stl.volume).toBeCloseTo(831.109, 2);
-    // 18% more material than the app said the part contains.
-    expect((stl.volume - printed) / printed).toBeGreaterThan(0.17);
-    // And most of the way back to the undrilled stock.
-    expect(stl.volume / UNDRILLED).toBeGreaterThan(0.97);
-    expect(stl.openEdges).toBe(0);
-    expect(stl.facets).toBe(68);
-    expect(warnings).toEqual([]);
-  }, 120_000);
-
-  it.each([
-    [2, 750.652, 804.284, 210, 60],
-    [1, 802.579, 818.248, 266, 120]
-  ])(
-    'exports a leaking file at bore radius %s',
-    async (boreRadius, printed, enclosed, facets, openEdges) => {
+  it.each([3, 2, 1] as const)(
+    'exports a closed cross-bore of radius %s at the measured volume',
+    async (boreRadius) => {
       const result = await drillAndExport(boreRadius);
-      expect(result.printed).toBeCloseTo(printed, 2);
-      expect(result.stl.volume).toBeCloseTo(enclosed, 2);
-      expect(result.stl.facets).toBe(facets);
-      // Not watertight, so a slicer must guess or repair.
-      expect(result.stl.openEdges).toBe(openEdges);
+      const expected = TRUE_VOLUMES[boreRadius];
+      expect(Math.abs(result.printed - expected) / expected).toBeLessThan(1e-3);
+      expect(
+        Math.abs(result.stl.volume - result.printed) / result.printed
+      ).toBeLessThan(0.02);
+      expect(result.stl.facets).toBeGreaterThan(0);
+      expect(result.stl.openEdges).toBe(0);
       expect(result.warnings).toEqual([]);
     },
     120_000
