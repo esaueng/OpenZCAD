@@ -725,6 +725,18 @@ export async function getAppSettings(
   };
 }
 
+/**
+ * Server-side authorization must not rely on the browser honoring the sharing
+ * preference. Keep this small helper beside settings parsing so missing and
+ * legacy rows receive the same default as the settings API.
+ */
+export async function isProjectSharingPreferenceEnabled(
+  userId: UserId,
+  env: CloudflareEnv
+): Promise<boolean> {
+  return (await readSettings(userId, env)).settings.collaboration.enabled;
+}
+
 export async function updateAppSettings(
   userId: UserId,
   request: UpdateAppSettingsRequest,

@@ -47,16 +47,33 @@ function thumbnailFor(
     }
   }
   const pending = loadThumbnail(project)
-    .then((source) =>
+    .then((source) => {
       // Only a cache miss reaches the backfill. A cached null is an answer —
       // the part is genuinely empty — and re-deriving it every visit would
       // undo the caching this store exists for.
-      source === undefined ? backfillThumbnail(project) : source
-    )
+      if (source === undefined) {
+        return backfillThumbnail(project);
+      }
+      // A device preview still needs publishing when the account has no
+      // artifact. Show it immediately while the same bounded queue fills the
+      // cross-device cache in the background.
+      if (source && !project.thumbnailArtifactId) {
+        void backfillThumbnail(project).catch(() => undefined);
+      }
+      return source;
+    })
     .catch(() => {
       thumbnailPromises.delete(cacheKey);
       return undefined;
     });
+  void pending.then((source) => {
+    // A miss before sign-in or before the account listing arrived must remain
+    // retryable when those inputs change. Successful images and real empty
+    // projects stay memoized.
+    if (source === undefined) {
+      thumbnailPromises.delete(cacheKey);
+    }
+  });
   thumbnailPromises.set(cacheKey, pending);
   return pending;
 }
@@ -86,7 +103,7 @@ export function PartThumbnail({
   loadThumbnail,
   backfillThumbnail
 }: PartThumbnailProps) {
-  const cacheKey = `${project.projectId}:${project.updatedAt}`;
+  const cacheKey = `${project.projectId}:${project.updatedAt}:${project.thumbnailArtifactId ?? ''}`;
   const [result, setResult] = useState<ThumbnailResult | null>(null);
 
   useEffect(() => {

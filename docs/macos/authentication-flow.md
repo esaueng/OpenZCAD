@@ -47,7 +47,7 @@ reports, frontend bundles, and GitHub Actions output.
   refresh reuse revocation, expiry, and an IP start-rate limit.
 - Existing authenticated HTTP routes accept the opaque desktop bearer without
   weakening the hosted cookie flow or adding cross-origin browser access.
-- The native proxy is pinned to `https://zcad.esau.app`; it validates every API
+- The native proxy is pinned to `https://zcad.app`; it validates every API
   path and system-browser handoff before making a request or opening a URL.
 
 ## Remaining release gates
