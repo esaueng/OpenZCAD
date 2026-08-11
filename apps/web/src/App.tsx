@@ -115,7 +115,7 @@ import type {
   HealthResponse,
   ProjectCollaborationCapabilitiesResponse
 } from '@openzcad/shared';
-import { toArtifactId, toUserId } from '@openzcad/shared';
+import { toArtifactId, toUserId, UNIT_TO_MM } from '@openzcad/shared';
 import { ApiError, api } from './lib/api';
 import { uploadArtifactBody } from './lib/artifactUpload';
 import {
@@ -127,7 +127,10 @@ import {
   LOCAL_AUTOSAVE_FAILED_STATUS,
   reparkFailedAutosave
 } from './lib/localAutosaveFailure';
-import { runStepImport } from './lib/stepImportRun';
+import {
+  MAX_SOURCE_IMPORT_BYTES,
+  runStepImport
+} from './lib/stepImportRun';
 import { presentedWorkspaceSaveState } from './lib/workspaceSaveStatePresentation';
 import {
   cancelDesktopSignIn,
@@ -1598,8 +1601,26 @@ export function App() {
         document: withoutDerivedProjection(document)
       });
       const restored = withLocalDerived(saved, document);
-      await saveLocalProject(restored);
       remoteVersionsRef.current.set(restored.projectId, restored.version);
+      const live = managerRef.current?.document;
+      if (
+        live &&
+        (live.projectId !== document.projectId ||
+          live.version !== document.version)
+      ) {
+        // The canonical document moved while the fenced write round-tripped.
+        // Adopting the server echo now would erase those edits; record the
+        // account version and let autosave carry the newer document up.
+        await saveLastSyncedVersion(restored.projectId, restored.version);
+        cloudProjectAutosaveRef.current?.adoptAccountVersion(
+          restored.projectId,
+          restored.version
+        );
+        setAccountConflict(null);
+        setStatus('Kept this device’s version; a recovery copy was saved.');
+        return;
+      }
+      await saveLocalProject(restored);
       await saveLastSyncedVersion(restored.projectId, restored.version);
       if (managerRef.current) {
         managerRef.current.document = restored;
@@ -4781,6 +4802,19 @@ export function App() {
     setCloudProjectIds((current) => new Set(current).add(merged.projectId));
     setProjects((current) => mergeProjectSummaries([summary], current));
     if (managerRef.current?.document.projectId === merged.projectId) {
+      if (managerRef.current.document.version !== local.version) {
+        // The open document moved past the device snapshot this
+        // reconciliation was computed from (an edit landed during the network
+        // round-trip, or the local read lagged the autosave debounce).
+        // Swapping now would revert those edits; keep the live document and
+        // let autosave push it against the recorded account version.
+        setCloudAvailable(true);
+        cloudProjectAutosaveRef.current?.adoptAccountVersion(
+          merged.projectId,
+          merged.version
+        );
+        return merged;
+      }
       managerRef.current.document = merged;
       setDoc(merged);
       setCloudAvailable(true);
@@ -5531,6 +5565,10 @@ export function App() {
       return;
     }
     setDoc(managerRef.current.undo());
+    // An assistant preview was preflighted against the document this rewind
+    // just replaced; keeping it would render geometry from a lineage that no
+    // longer exists.
+    setPreviewDoc(null);
     setExtrudePreview(null);
     setMoveCommitHold(null);
     setTool(null);
@@ -5543,6 +5581,7 @@ export function App() {
       return;
     }
     setDoc(managerRef.current.redo());
+    setPreviewDoc(null);
     setExtrudePreview(null);
     setMoveCommitHold(null);
     setTool(null);
@@ -5608,6 +5647,25 @@ export function App() {
         document: withoutDerivedProjection(doc)
       });
       remoteVersionsRef.current.set(saved.projectId, saved.version);
+      const live = managerRef.current?.document;
+      if (
+        live &&
+        (live.projectId !== doc.projectId || live.version !== doc.version)
+      ) {
+        // Edits landed while the revision round-tripped. The account holds
+        // the pre-edit snapshot this handler sent; adopting its echo would
+        // erase those edits from the canonical document while their undo
+        // entries survive. Record the account version so the next autosave
+        // fences correctly and let it carry the newer edits up.
+        await saveLastSyncedVersion(saved.projectId, saved.version);
+        setCloudAvailable(true);
+        cloudProjectAutosaveRef.current?.adoptAccountVersion(
+          saved.projectId,
+          saved.version
+        );
+        setStatus('Saved revision.');
+        return;
+      }
       const restored = withLocalDerived(saved, doc);
       await saveLocalProject(restored);
       await saveLastSyncedVersion(restored.projectId, restored.version);
@@ -5790,6 +5848,10 @@ export function App() {
     const lowerName = file.name.toLowerCase();
 
     if (lowerName.endsWith('.stl')) {
+      if (file.size > MAX_SOURCE_IMPORT_BYTES) {
+        setStatus('STL import is limited to 250 MB.');
+        return;
+      }
       let parsed;
       try {
         parsed = parseStl(await file.arrayBuffer(), file.name);
@@ -5797,6 +5859,15 @@ export function App() {
         setStatus(errorMessage(error, 'STL import failed.'));
         return;
       }
+      // STL carries no unit declaration; the interchange convention is
+      // millimetres, and exportStl multiplies by UNIT_TO_MM on the way out.
+      // Adopting the vertices at 1/UNIT_TO_MM keeps a non-mm document's
+      // round trip at the same physical size.
+      const meshScale = 1 / UNIT_TO_MM[doc.units];
+      const vertices =
+        meshScale === 1
+          ? parsed.vertices
+          : parsed.vertices.map((value) => value * meshScale);
 
       // Best-effort archive of the original upload; the mesh itself lives in
       // the document, so a storage failure must not block the import.
@@ -5821,7 +5892,7 @@ export function App() {
           artifactId,
           sourceName: parsed.name,
           triangleCount: parsed.triangleCount,
-          vertices: parsed.vertices,
+          vertices,
           indices: parsed.indices
         })
       );
