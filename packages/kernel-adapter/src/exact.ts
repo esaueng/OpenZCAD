@@ -1171,6 +1171,31 @@ function applyEdgeModifier(
     ) {
       return null;
     }
+
+    // A valid fillet changes material only inside a neighbourhood of its
+    // selected edges. A closed, in-bounds fallback can still be corrupt: the
+    // partial-revolve blender has returned an internally doubled solid with
+    // twice the source volume. Bound the possible change by a deliberately
+    // generous radius-2r tube plus one radius-2r ball per selected edge. This
+    // scales as volume, allows concave as well as convex blends, and rejects
+    // topology duplication that bounds and relaxed validation cannot see.
+    const neighbourhoodRadius = size * 2;
+    const selectedLength = selected.reduce(
+      (total, edge) => total + kernel.edgeLength(edge),
+      0
+    );
+    const volumeEnvelope =
+      Math.PI * neighbourhoodRadius ** 2 * selectedLength +
+      selected.length * ((4 / 3) * Math.PI * neighbourhoodRadius ** 3);
+    const targetVolume = kernel.volume(target, MEASUREMENT_DEFLECTION);
+    const modifiedVolume = kernel.volume(modified, MEASUREMENT_DEFLECTION);
+    const volumeTolerance = Math.max(1, Math.abs(targetVolume)) * 1e-6;
+    if (
+      Math.abs(modifiedVolume - targetVolume) >
+      volumeEnvelope + volumeTolerance
+    ) {
+      return null;
+    }
   }
   return modified;
 }
@@ -3943,6 +3968,42 @@ function fuseUniformSolid(kernel: BrepKernel, solids: number[]): number {
 }
 
 /**
+ * Bounds of one face's disposable display projection.
+ *
+ * BrepKit's numeric handles are entity-local: a face handle is not a solid
+ * handle, even when the two happen to share the same integer. Passing a face
+ * to `boundingBox` used to work accidentally while that integer also named a
+ * live solid. Tessellating the face is the supported face-level query, and
+ * its deflection matches the approximation allowance used by the caller.
+ */
+function tessellatedFaceBounds(kernel: BrepKernel, face: number): Float64Array {
+  const mesh = kernel.tessellateFace(face, MEASUREMENT_DEFLECTION);
+  try {
+    const bounds = new Float64Array([
+      Infinity,
+      Infinity,
+      Infinity,
+      -Infinity,
+      -Infinity,
+      -Infinity
+    ]);
+    for (let index = 0; index + 2 < mesh.positions.length; index += 3) {
+      for (let axis = 0; axis < 3; axis += 1) {
+        const coordinate = mesh.positions[index + axis]!;
+        bounds[axis] = Math.min(bounds[axis]!, coordinate);
+        bounds[axis + 3] = Math.max(bounds[axis + 3]!, coordinate);
+      }
+    }
+    if (!Array.from(bounds).every(Number.isFinite)) {
+      throw new Error('The exact kernel returned an empty face projection.');
+    }
+    return bounds;
+  } finally {
+    mesh.free();
+  }
+}
+
+/**
  * How much interior volume these solids share, summed over every pair.
  *
  * Zero means they can be summed safely. A positive figure means summing
@@ -5370,11 +5431,31 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
                   kernel.solidToSolidDistance(left, right)[0] ?? NaN,
                 (left, right) => {
                   try {
-                    return (
+                    if (
                       kernel.volume(
                         kernel.intersect(left, right),
                         MEASUREMENT_DEFLECTION
                       ) > 0
+                    ) {
+                      return true;
+                    }
+                  } catch {
+                    // Face contact has no shared volume, so fall through to
+                    // the kernel's same-domain contact query.
+                  }
+                  try {
+                    const contacts = JSON.parse(
+                      kernel.detectCoincidentFaces(left, right)
+                    ) as unknown;
+                    return (
+                      Array.isArray(contacts) &&
+                      contacts.some(
+                        (contact) =>
+                          typeof contact === 'object' &&
+                          contact !== null &&
+                          (contact as { aabbOverlap?: unknown }).aabbOverlap ===
+                            true
+                      )
                     );
                   } catch {
                     return false;
@@ -5392,7 +5473,7 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
                   const axes = ['x', 'y', 'z'] as const;
                   for (const face of kernel.getSolidFaces(operand.solid)) {
                     if (kernel.getSurfaceType(face) === 'plane') continue;
-                    const faceBounds = kernel.boundingBox(face);
+                    const faceBounds = tessellatedFaceBounds(kernel, face);
                     for (
                       let axisIndex = 0;
                       axisIndex < axes.length;

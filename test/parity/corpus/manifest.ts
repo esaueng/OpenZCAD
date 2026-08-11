@@ -78,8 +78,8 @@ export const CORPUS: CorpusEntry[] = [
     id: 'a-sample-parametric-bracket',
     category: 'a-exports',
     purpose:
-      'The shipped walkthrough sample: a fully tessellated boolean result, ' +
-      '821 planar faces. Stresses parser throughput, not surface variety.',
+      'The shipped walkthrough sample: an exact 14-face boolean result with ' +
+      'three analytic cylindrical faces. Stresses mixed-surface import.',
     path: 'samples/parametric-bracket.step',
     referenceSolidCount: 1
   },
@@ -173,7 +173,7 @@ export const CORPUS: CorpusEntry[] = [
     id: 'b-unit-degree-cone',
     category: 'b-units',
     purpose:
-      "The r10 h10 cone with its plane-angle unit redeclared as DEGREE and " +
+      'The r10 h10 cone with its plane-angle unit redeclared as DEGREE and ' +
       'the CONICAL_SURFACE half-angle written as 45. Byte-derived from ' +
       'a-export-cone, so it is provably the same cone in a different unit ' +
       'and must read the same volume. A kernel that ignores ' +
