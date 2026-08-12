@@ -8,6 +8,7 @@ import {
   type BatchedEdgeTarget
 } from '../render/edgeOverlay';
 import { findBodyId, forEachMesh } from '../pick/meshes';
+import { edgeRunFrom } from '../pick/edgeChain';
 import {
   EDGE_HOVER_COLOR,
   EDGE_HOVER_WIDTH,
@@ -18,6 +19,7 @@ import {
   idleEdgeColor
 } from '../pick/edges';
 import { VIEWPORT_RENDER_ORDER } from '../render/scene';
+import { createFaceHighlightGeometry } from './faceHighlightGeometry';
 
 const HOVER_EMISSIVE = 0x101d2c;
 const HOVER_FACE_COLOR = 0x8fc8ff;
@@ -82,11 +84,11 @@ export class SelectionManager {
   /** Single reusable preselection overlay for the face under the pointer. */
   readonly hoverFaceMesh: THREE.Mesh<
     THREE.BufferGeometry,
-    THREE.MeshBasicMaterial
+    THREE.MeshLambertMaterial
   >;
 
   /** Overlay materials easing toward their resting opacity. */
-  readonly fadeIns = new Set<THREE.MeshBasicMaterial>();
+  readonly fadeIns = new Set<THREE.Material>();
 
   hoveredBodyId: string | null = null;
   /** Legacy per-edge visual, retained while ModelViewer adopts edge batches. */
@@ -107,7 +109,7 @@ export class SelectionManager {
     // ACES would otherwise wash the blue out to gray on hot caps.
     this.hoverFaceMesh = new THREE.Mesh(
       new THREE.BufferGeometry(),
-      new THREE.MeshBasicMaterial({
+      new THREE.MeshLambertMaterial({
         color: HOVER_FACE_COLOR,
         toneMapped: false,
         transparent: true,
@@ -131,7 +133,10 @@ export class SelectionManager {
     );
   }
 
-  setEdgeHover(next: EdgeHoverTarget | null) {
+  setEdgeHover(
+    next: EdgeHoverTarget | null,
+    topologyIds: readonly string[] = []
+  ) {
     if (
       this.hoveredEdgeTarget === next ||
       (this.hoveredEdgeTarget &&
@@ -162,7 +167,7 @@ export class SelectionManager {
     this.hoveredEdgeTarget = next;
     this.hoveredEdge = next && !isBatchedEdgeTarget(next) ? next : null;
     if (next && isBatchedEdgeTarget(next)) {
-      next.batch.setHovered(next.owner);
+      next.batch.setHovered(next.owner, topologyIds);
     } else if (next && !(next.userData as EdgeVisualState).selected) {
       const material = next.material;
       material.color.setHex(EDGE_HOVER_COLOR);
@@ -199,21 +204,14 @@ export class SelectionManager {
       (candidate) => candidate.topologyId === selection.topologyId
     );
     const object = this.options.objectsByBodyId.get(selection.bodyId);
-    if (!body || !face || !object) {
+    if (!face || !object) {
       return;
     }
     const oldGeometry = this.hoverFaceMesh.geometry;
-    const geometry = new THREE.BufferGeometry();
-    geometry.setAttribute(
-      'position',
-      new THREE.Float32BufferAttribute(body.mesh.vertices, 3)
-    );
-    geometry.setIndex(
-      body.mesh.indices.slice(
-        face.triangleStart * 3,
-        (face.triangleStart + face.triangleCount) * 3
-      )
-    );
+    const geometry = createFaceHighlightGeometry(object, face);
+    if (!geometry) {
+      return;
+    }
     this.hoverFaceMesh.geometry = geometry;
     oldGeometry.dispose();
     object.add(this.hoverFaceMesh);
@@ -325,7 +323,24 @@ export class SelectionManager {
           (candidate.hit.object.userData as { visual?: Line2 }).visual ??
           null)
         : null;
-    this.setEdgeHover(hoveredEdge);
+    let hoveredTopologyIds: readonly string[] = [];
+    if (
+      hoveredEdge &&
+      isBatchedEdgeTarget(hoveredEdge) &&
+      !(
+        this.hoveredEdgeTarget &&
+        isSameEdgeTarget(this.hoveredEdgeTarget, hoveredEdge)
+      )
+    ) {
+      const topology = this.options
+        .bodies()
+        .find((body) => body.bodyId === hoveredEdge.owner.bodyId)?.topology;
+      if (topology) {
+        const run = edgeRunFrom(topology.edges, hoveredEdge.owner.topologyId);
+        hoveredTopologyIds = run.length > 1 ? run : [];
+      }
+    }
+    this.setEdgeHover(hoveredEdge, hoveredTopologyIds);
     this.setHoverFace(candidate?.selection ?? null);
     this.options.domElement.style.cursor = this.options.extrudeArmed()
       ? 'grab'
