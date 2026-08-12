@@ -254,9 +254,9 @@ import {
   fixedPlaneRefForLegacyAttachment
 } from './lib/faceSketchAttachment';
 import {
-  edgeLabel,
   edgeLengthMeasurement,
-  faceLabel
+  faceLabel,
+  topologySelectionLabel
 } from './lib/topologyLabels';
 import { resolveFace } from './lib/topologyResolution';
 import { objectPolylines } from './lib/objectPolyline';
@@ -2880,9 +2880,12 @@ export function App() {
       const hash = selectedEdges[0]?.hash ?? renderedSelectedTopology?.hash;
       const topologyId =
         selectedEdges[0]?.topologyId ?? renderedSelectedTopology?.topologyId;
-      const name = edgeLabel(body, hash, topologyId);
       const length = edgeLengthMeasurement(body, hash, topologyId);
-      const label = body ? `${body.name} · ${name}` : name;
+      const label = topologySelectionLabel(body, {
+        kind: 'edge',
+        hash,
+        topologyId
+      });
       const value =
         length && length.value > 0
           ? `${length.quality === 'sampled' ? '≈ ' : ''}${round(length.value)} ${units}`
@@ -2909,12 +2912,7 @@ export function App() {
           detail: value
         };
       }
-      const name = faceLabel(
-        body,
-        renderedSelectedTopology.hash,
-        renderedSelectedTopology.topologyId
-      );
-      const label = body ? `${body.name} · ${name}` : name;
+      const label = topologySelectionLabel(body, renderedSelectedTopology);
       // A cylinder is the other pick that carries a number of its own; every
       // other face kind has a name but nothing to measure yet.
       const cylinderDiameter =
@@ -10304,6 +10302,7 @@ export function App() {
             selectedTopology={renderedSelectedTopology}
             previewFaceHighlights={previewBlendFaces}
             selectedEdges={selectedEdges}
+            pickListEnabled={appSettings.experiments.directManipulation}
             settings={viewerSettings}
             fitSignal={fitSignal}
             viewRequest={viewRequest}
