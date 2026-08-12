@@ -1,7 +1,4 @@
 import * as THREE from 'three';
-import { Line2 } from 'three/examples/jsm/lines/Line2.js';
-import { LineGeometry } from 'three/examples/jsm/lines/LineGeometry.js';
-import { LineMaterial } from 'three/examples/jsm/lines/LineMaterial.js';
 import {
   CHIP_ANCHOR_LOCAL_DISTANCE,
   HANDLE_COLOR,
@@ -13,12 +10,54 @@ import {
   type DragRig,
   type HandleVec3
 } from './DragRig';
+import { createDimensionGraphic } from '../annotation/dimensionGraphic';
+import { ANALYTIC_GHOST_COLOR } from '../selection/analyticCylinderGhost';
 
-const ARROW_SHAFT_RADIUS = 0.035;
-const ARROW_HEAD_RADIUS = 0.11;
+const ARROW_SHAFT_RADIUS = 0.05;
+const ARROW_HEAD_RADIUS = 0.14;
 const ARROW_HEAD_LENGTH = 0.3;
+const ARROW_HALF_LENGTH = 0.75;
 const ARROW_HIT_RADIUS = 0.34;
 const GHOST_OPACITY = 0.28;
+export const HANDLE_WARNING_COLOR = 0xf59e0b;
+
+/**
+ * The shared drag-arrow affordance: a double-headed arrow centered on the
+ * pick point, saying "this adjusts in either direction".
+ */
+function doubleArrowParts(kind: string): THREE.Mesh[] {
+  const solid = handleMaterial();
+  const shaft = new THREE.Mesh(
+    new THREE.CylinderGeometry(
+      ARROW_SHAFT_RADIUS,
+      ARROW_SHAFT_RADIUS,
+      2 * (ARROW_HALF_LENGTH - ARROW_HEAD_LENGTH),
+      12
+    ),
+    solid
+  );
+  const headOut = new THREE.Mesh(
+    new THREE.ConeGeometry(ARROW_HEAD_RADIUS, ARROW_HEAD_LENGTH, 16),
+    solid
+  );
+  headOut.position.y = ARROW_HALF_LENGTH - ARROW_HEAD_LENGTH / 2;
+  const headIn = new THREE.Mesh(
+    new THREE.ConeGeometry(ARROW_HEAD_RADIUS, ARROW_HEAD_LENGTH, 16),
+    solid
+  );
+  headIn.rotation.z = Math.PI;
+  headIn.position.y = -(ARROW_HALF_LENGTH - ARROW_HEAD_LENGTH / 2);
+  const hit = createHitMesh(
+    new THREE.CylinderGeometry(
+      ARROW_HIT_RADIUS,
+      ARROW_HIT_RADIUS,
+      2 * ARROW_HALF_LENGTH + 0.3,
+      8
+    ),
+    kind
+  );
+  return [shaft, headOut, headIn, hit];
+}
 
 const EDGE_HANDLE_RADIUS = 0.16;
 const EDGE_HIT_RADIUS = 0.65;
@@ -75,14 +114,14 @@ export function edgeHandlePlacement(
 export interface OffsetFaceRigParams {
   origin: HandleVec3;
   direction: HandleVec3;
-  /** World-space triangles of the face, for the drag ghost (owned by rig). */
+  /** World-space triangles of the face, kept as the original-position reference. */
   ghostGeometry: THREE.BufferGeometry | null;
 }
 
 /**
  * An arrow anchored at the click point on a face, pointing along the face
  * normal, with a dashed leader back to the original position and a
- * translucent ghost of the face carried along during the drag.
+ * translucent ghost that marks the face's original position during the drag.
  */
 export function buildOffsetFaceHandle(params: OffsetFaceRigParams): DragRig {
   const kind = 'offset-face';
@@ -99,58 +138,20 @@ export function buildOffsetFaceHandle(params: OffsetFaceRigParams): DragRig {
     )
   );
 
-  const solid = handleMaterial();
-  const shaft = new THREE.Mesh(
-    new THREE.CylinderGeometry(
-      ARROW_SHAFT_RADIUS,
-      ARROW_SHAFT_RADIUS,
-      1 - ARROW_HEAD_LENGTH,
-      12
-    ),
-    solid
-  );
-  shaft.position.y = (1 - ARROW_HEAD_LENGTH) / 2;
-  const head = new THREE.Mesh(
-    new THREE.ConeGeometry(ARROW_HEAD_RADIUS, ARROW_HEAD_LENGTH, 16),
-    solid
-  );
-  head.position.y = 1 - ARROW_HEAD_LENGTH / 2;
-  const hit = createHitMesh(
-    new THREE.CylinderGeometry(ARROW_HIT_RADIUS, ARROW_HIT_RADIUS, 1.8, 8),
-    kind
-  );
-  hit.position.y = 0.7;
-  addHandleParts(group, [shaft, head, hit]);
+  const arrowParts = doubleArrowParts(kind);
+  addHandleParts(group, arrowParts);
 
   const worldGroup = new THREE.Group();
   worldGroup.name = `${kind}-handle-world`;
 
-  const leaderGeometry = new LineGeometry();
-  leaderGeometry.setPositions([
-    origin.x,
-    origin.y,
-    origin.z,
-    origin.x,
-    origin.y,
-    origin.z
-  ]);
-  const leader = new Line2(
-    leaderGeometry,
-    new LineMaterial({
-      color: HANDLE_COLOR,
-      linewidth: 1.5,
-      dashed: true,
-      dashSize: 2,
-      gapSize: 1.5,
-      transparent: true,
-      opacity: 0.85,
-      depthTest: false
-    })
-  );
-  leader.computeLineDistances();
-  leader.renderOrder = 29;
-  leader.visible = false;
-  worldGroup.add(leader);
+  const dimension = createDimensionGraphic({
+    color: HANDLE_COLOR,
+    linewidth: 1.5,
+    opacity: 0.85,
+    renderOrder: 29
+  });
+  dimension.object.visible = false;
+  worldGroup.add(dimension.object);
 
   let ghost: THREE.Mesh<THREE.BufferGeometry, THREE.MeshBasicMaterial> | null =
     null;
@@ -158,7 +159,7 @@ export function buildOffsetFaceHandle(params: OffsetFaceRigParams): DragRig {
     ghost = new THREE.Mesh(
       params.ghostGeometry,
       new THREE.MeshBasicMaterial({
-        color: HANDLE_COLOR,
+        color: ANALYTIC_GHOST_COLOR,
         transparent: true,
         opacity: GHOST_OPACITY,
         depthTest: false,
@@ -183,29 +184,30 @@ export function buildOffsetFaceHandle(params: OffsetFaceRigParams): DragRig {
       const tip = origin.clone().addScaledVector(direction, value);
       group.position.copy(tip);
       const engaged = Math.abs(value) > 1e-9;
-      leader.visible = engaged;
+      dimension.object.visible = engaged;
       if (engaged) {
-        leaderGeometry.setPositions([
-          origin.x,
-          origin.y,
-          origin.z,
-          tip.x,
-          tip.y,
-          tip.z
-        ]);
-        leader.computeLineDistances();
+        const scale = (group.userData.gizmoScale as number | undefined) ?? 1;
+        dimension.update(origin, tip, scale);
       }
       if (ghost) {
         ghost.visible = engaged;
-        ghost.position.set(
-          direction.x * value,
-          direction.y * value,
-          direction.z * value
-        );
       }
     },
     value() {
       return current;
+    },
+    setWarning(warning) {
+      const color = warning ? HANDLE_WARNING_COLOR : HANDLE_COLOR;
+      for (const part of arrowParts) {
+        if (
+          part.material instanceof THREE.MeshBasicMaterial &&
+          part.material.visible
+        ) {
+          part.material.color.setHex(color);
+        }
+      }
+      dimension.setColor(color);
+      group.userData.previewWarning = warning;
     },
     chipAnchor(gizmoScale: number) {
       // The chip rides just past the arrow head, which has already travelled
@@ -215,6 +217,7 @@ export function buildOffsetFaceHandle(params: OffsetFaceRigParams): DragRig {
       return origin.clone().addScaledVector(direction, reach);
     },
     dispose() {
+      dimension.dispose();
       disposeRigGroups(group, worldGroup);
     }
   };
@@ -254,59 +257,34 @@ export function buildCylinderRadiusHandle(
     )
   );
 
-  const solid = handleMaterial();
-  const shaft = new THREE.Mesh(
-    new THREE.CylinderGeometry(
-      ARROW_SHAFT_RADIUS,
-      ARROW_SHAFT_RADIUS,
-      1 - ARROW_HEAD_LENGTH,
-      12
-    ),
-    solid
-  );
-  shaft.position.y = (1 - ARROW_HEAD_LENGTH) / 2;
-  const head = new THREE.Mesh(
-    new THREE.ConeGeometry(ARROW_HEAD_RADIUS, ARROW_HEAD_LENGTH, 16),
-    solid
-  );
-  head.position.y = 1 - ARROW_HEAD_LENGTH / 2;
-  const hit = createHitMesh(
-    new THREE.CylinderGeometry(ARROW_HIT_RADIUS, ARROW_HIT_RADIUS, 1.8, 8),
-    kind
-  );
-  hit.position.y = 0.7;
-  addHandleParts(group, [shaft, head, hit]);
+  addHandleParts(group, doubleArrowParts(kind));
 
+  // The measurement graphic is a radius callout: a dashed line from the axis
+  // out to the handle on the wall, with a small arrowhead at each end. It is
+  // visible for the whole gesture — the line is what says "this drag edits a
+  // radius", not just where the delta went.
+  //
+  // Shared with the measurement tape rather than written twice. Witness lines
+  // are off here: a radius is measured from an axis that has no edge to stand
+  // a tick off, and drawing one would invent geometry.
   const worldGroup = new THREE.Group();
   worldGroup.name = `${kind}-handle-world`;
-  const leaderGeometry = new LineGeometry();
-  leaderGeometry.setPositions([
-    origin.x,
-    origin.y,
-    origin.z,
-    origin.x,
-    origin.y,
-    origin.z
-  ]);
-  const leader = new Line2(
-    leaderGeometry,
-    new LineMaterial({
-      color: HANDLE_COLOR,
-      linewidth: 1.5,
-      dashed: true,
-      dashSize: 2,
-      gapSize: 1.5,
-      transparent: true,
-      opacity: 0.85,
-      depthTest: false
-    })
-  );
-  leader.computeLineDistances();
-  leader.renderOrder = 29;
-  leader.visible = false;
-  worldGroup.add(leader);
+  const axisCenter = origin.clone().addScaledVector(direction, -originalRadius);
+  const dimension = createDimensionGraphic();
+  worldGroup.add(dimension.object);
 
   let currentRadius = originalRadius;
+  const updateGraphic = () => {
+    const radialDelta = currentRadius - originalRadius;
+    const tip = origin.clone().addScaledVector(direction, radialDelta);
+    group.position.copy(tip);
+    // Match the screen-space sizing of the handle, whose scale the viewer
+    // stamps on the group each frame.
+    const scale = (group.userData.gizmoScale as number | undefined) ?? 1;
+    dimension.update(axisCenter, tip, scale);
+  };
+  updateGraphic();
+
   return {
     kind,
     group,
@@ -315,36 +293,20 @@ export function buildCylinderRadiusHandle(
     direction,
     setValue(radius: number) {
       currentRadius = radius;
-      const radialDelta = radius - originalRadius;
-      const tip = origin.clone().addScaledVector(direction, radialDelta);
-      group.position.copy(tip);
-      leader.visible = Math.abs(radialDelta) > 1e-9;
-      if (leader.visible) {
-        leaderGeometry.setPositions([
-          origin.x,
-          origin.y,
-          origin.z,
-          tip.x,
-          tip.y,
-          tip.z
-        ]);
-        leader.computeLineDistances();
-      }
+      updateGraphic();
     },
     value() {
       return currentRadius;
     },
-    chipAnchor(gizmoScale: number) {
-      const radialDelta = currentRadius - originalRadius;
-      return origin
+    chipAnchor() {
+      // The chip rides the dimension line itself, partway between the axis
+      // and the wall, like a drawing's inline radius callout.
+      return axisCenter
         .clone()
-        .addScaledVector(
-          direction,
-          radialDelta +
-            CHIP_ANCHOR_LOCAL_DISTANCE * Math.max(gizmoScale, 0)
-        );
+        .addScaledVector(direction, currentRadius * 0.45);
     },
     dispose() {
+      dimension.dispose();
       disposeRigGroups(group, worldGroup);
     }
   };

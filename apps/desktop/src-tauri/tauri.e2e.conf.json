@@ -1,0 +1,15 @@
+{
+  "app": {
+    "security": {
+      "capabilities": [
+        "main-window",
+        {
+          "identifier": "e2e-webdriver",
+          "description": "Debug-only WKWebView automation permission.",
+          "windows": ["main"],
+          "permissions": ["wdio-webdriver:default"]
+        }
+      ]
+    }
+  }
+}

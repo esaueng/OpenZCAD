@@ -31,7 +31,18 @@ export interface AssistantAnswer {
   value: string;
 }
 
-export interface AssistantUserEntry {
+/**
+ * When a turn happened, in epoch milliseconds.
+ *
+ * The clock is the caller's, never `Date.now()` in here — the reducer stays
+ * pure so a restored thread replays identically. It is optional because a
+ * thread persisted before timestamps existed still has to load.
+ */
+export interface AssistantEntryTime {
+  at?: number;
+}
+
+export interface AssistantUserEntry extends AssistantEntryTime {
   kind: 'user';
   id: string;
   text: string;
@@ -40,7 +51,7 @@ export interface AssistantUserEntry {
   answers: AssistantAnswer[];
 }
 
-export interface AssistantQuestionsEntry {
+export interface AssistantQuestionsEntry extends AssistantEntryTime {
   kind: 'questions';
   id: string;
   preamble: string;
@@ -51,7 +62,7 @@ export interface AssistantQuestionsEntry {
   sent: boolean;
 }
 
-export interface AssistantProposalEntry {
+export interface AssistantProposalEntry extends AssistantEntryTime {
   kind: 'proposal';
   id: string;
   proposal: CadPatchProposal;
@@ -59,7 +70,7 @@ export interface AssistantProposalEntry {
   status: 'open' | 'applied' | 'rejected';
 }
 
-export interface AssistantMessageEntry {
+export interface AssistantMessageEntry extends AssistantEntryTime {
   kind: 'message';
   id: string;
   text: string;
@@ -90,13 +101,14 @@ export type AssistantAction =
       type: 'submit';
       id: string;
       text: string;
+      at?: number;
       attachments?: AssistantAttachmentPreview[];
       answers?: AssistantAnswer[];
       /** Question card these answers came from, so it can be marked sent. */
       answeredEntryId?: string;
     }
-  | { type: 'reply'; id: string; reply: AssistantReply }
-  | { type: 'fail'; id: string; message: string }
+  | { type: 'reply'; id: string; reply: AssistantReply; at?: number }
+  | { type: 'fail'; id: string; message: string; at?: number }
   | { type: 'cancel' }
   | {
       type: 'answer';
@@ -106,6 +118,8 @@ export type AssistantAction =
     }
   | { type: 'preview'; entryId: string | null }
   | { type: 'resolve-proposal'; entryId: string; status: 'applied' | 'rejected' }
+  /** Swap in a thread read back from storage, e.g. when a project opens. */
+  | { type: 'restore'; entries: readonly AssistantEntry[] }
   | { type: 'reset' };
 
 function withEntry(
@@ -113,6 +127,11 @@ function withEntry(
   entry: AssistantEntry
 ): AssistantEntry[] {
   return [...conversation.entries, entry];
+}
+
+/** Omits the key entirely when the caller passed no clock reading. */
+function stamp(at: number | undefined): AssistantEntryTime {
+  return typeof at === 'number' && Number.isFinite(at) && at > 0 ? { at } : {};
 }
 
 export function assistantReducer(
@@ -136,7 +155,8 @@ export function assistantReducer(
             id: action.id,
             text: action.text,
             attachments: action.attachments ?? [],
-            answers: action.answers ?? []
+            answers: action.answers ?? [],
+            ...stamp(action.at)
           }
         ],
         status: 'thinking'
@@ -151,7 +171,8 @@ export function assistantReducer(
             id: action.id,
             proposal: action.reply.proposal,
             readings: action.reply.readings,
-            status: 'open'
+            status: 'open',
+            ...stamp(action.at)
           }),
           status: 'idle'
         };
@@ -165,7 +186,8 @@ export function assistantReducer(
             preamble: action.reply.preamble,
             questions: action.reply.questions,
             answers: {},
-            sent: false
+            sent: false,
+            ...stamp(action.at)
           }),
           status: 'idle'
         };
@@ -176,7 +198,8 @@ export function assistantReducer(
           kind: 'message',
           id: action.id,
           text: action.reply.message,
-          tone: 'info'
+          tone: 'info',
+          ...stamp(action.at)
         }),
         status: 'idle'
       };
@@ -188,7 +211,8 @@ export function assistantReducer(
           kind: 'message',
           id: action.id,
           text: action.message,
-          tone: 'error'
+          tone: 'error',
+          ...stamp(action.at)
         }),
         status: 'idle'
       };
@@ -221,6 +245,15 @@ export function assistantReducer(
             ? { ...entry, status: action.status }
             : entry
         )
+      };
+    case 'restore':
+      // A restored thread is history, not a turn in flight: nothing is being
+      // streamed into it and no proposal it carries is the live viewport
+      // preview, whatever the panel was showing before the swap.
+      return {
+        entries: [...action.entries],
+        status: 'idle',
+        previewEntryId: null
       };
     case 'reset':
       return EMPTY_CONVERSATION;

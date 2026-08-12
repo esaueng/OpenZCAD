@@ -1,0 +1,229 @@
+name: Update BrepKit
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '17 13 * * *'
+
+permissions:
+  contents: read
+  pull-requests: read
+
+concurrency:
+  group: update-brepkit
+  cancel-in-progress: false
+
+jobs:
+  update:
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    steps:
+      - name: Check for an existing BrepKit update PR
+        id: existing-pr
+        env:
+          BASE_BRANCH: ${{ github.event.repository.default_branch }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          existing_url="$(
+            gh pr list \
+              --repo "$GITHUB_REPOSITORY" \
+              --state open \
+              --base "$BASE_BRANCH" \
+              --json headRefName,url \
+              --jq '[.[] | select(.headRefName | startswith("automation/brepkit-"))][0].url // empty'
+          )"
+
+          if [[ -n "$existing_url" ]]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "An update PR is already open: $existing_url" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Check out the default branch
+        if: steps.existing-pr.outputs.skip != 'true'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+
+      - name: Set up pnpm
+        if: steps.existing-pr.outputs.skip != 'true'
+        uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6
+        with:
+          version: 10.8.0
+
+      - name: Set up Node.js
+        if: steps.existing-pr.outputs.skip != 'true'
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Resolve the newest BrepKit commit
+        if: steps.existing-pr.outputs.skip != 'true'
+        id: update
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          extract_brepkit_sha() {
+            node --input-type=module <<'NODE'
+          import { readFileSync } from 'node:fs';
+
+          const lockfile = readFileSync('pnpm-lock.yaml', 'utf8');
+          const pattern = /https:\/\/codeload\.github\.com\/esaueng\/brepkit\/tar\.gz\/([0-9a-f]{40})#path:\/crates\/wasm\/pkg/g;
+          const shas = [...new Set([...lockfile.matchAll(pattern)].map((match) => match[1]))];
+
+          if (shas.length !== 1) {
+            console.error(`Expected one immutable BrepKit SHA in pnpm-lock.yaml, found ${shas.length}.`);
+            process.exit(1);
+          }
+
+          process.stdout.write(shas[0]);
+          NODE
+          }
+
+          old_sha="$(extract_brepkit_sha)"
+
+          pnpm update brepkit-wasm --filter @openzcad/kernel-adapter --lockfile-only
+
+          new_sha="$(extract_brepkit_sha)"
+          upstream_sha="$(gh api repos/esaueng/brepkit/commits/main --jq .sha)"
+
+          if [[ "$new_sha" != "$upstream_sha" ]]; then
+            echo "::error title=Stale BrepKit resolution::pnpm resolved $new_sha but esaueng/brepkit main is $upstream_sha. Refusing to open a PR."
+            exit 1
+          fi
+
+          if git diff --quiet --exit-code; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "BrepKit is already current at $new_sha; no branch or PR was created." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          unexpected_paths="$(git diff --name-only | grep -v '^pnpm-lock.yaml$' || true)"
+          if [[ -n "$unexpected_paths" ]]; then
+            echo "::error title=Unexpected updater diff::The targeted update changed files other than pnpm-lock.yaml: $unexpected_paths"
+            exit 1
+          fi
+
+          if [[ "$old_sha" == "$new_sha" ]]; then
+            echo "::error title=Unexpected lockfile diff::pnpm-lock.yaml changed without advancing the BrepKit SHA."
+            exit 1
+          fi
+
+          package_version="$(
+            gh api "repos/esaueng/brepkit/contents/crates/wasm/pkg/package.json?ref=$new_sha" --jq .content \
+              | base64 --decode \
+              | node --input-type=module -e '
+                  import { readFileSync } from "node:fs";
+                  const value = JSON.parse(readFileSync(0, "utf8")).version;
+                  if (typeof value !== "string" || !/^[0-9A-Za-z][0-9A-Za-z.+-]*$/.test(value)) process.exit(1);
+                  process.stdout.write(value);
+                '
+          )"
+
+          {
+            echo "changed=true"
+            echo "old_sha=$old_sha"
+            echo "new_sha=$new_sha"
+            echo "short_sha=${new_sha:0:7}"
+            echo "package_version=$package_version"
+          } >> "$GITHUB_OUTPUT"
+
+      # GITHUB_TOKEN-authored pull requests do not trigger ordinary
+      # pull_request workflows. Fail closed on an actual update until a
+      # repository-scoped GitHub App identity is configured for normal CI.
+      - name: Require CI-triggering GitHub App credentials
+        if: steps.existing-pr.outputs.skip != 'true' && steps.update.outputs.changed == 'true'
+        env:
+          APP_CLIENT_ID: ${{ vars.BREPKIT_UPDATER_APP_CLIENT_ID }}
+          APP_PRIVATE_KEY: ${{ secrets.BREPKIT_UPDATER_APP_PRIVATE_KEY }}
+        run: |
+          if [[ -z "$APP_CLIENT_ID" || -z "$APP_PRIVATE_KEY" ]]; then
+            echo "::error title=GitHub App required::Configure BREPKIT_UPDATER_APP_CLIENT_ID and BREPKIT_UPDATER_APP_PRIVATE_KEY for a repository-installed app with Contents and Pull requests write permission. The default GITHUB_TOKEN is intentionally not used to open a CI-suppressed PR."
+            exit 1
+          fi
+
+      - name: Create GitHub App token
+        if: steps.existing-pr.outputs.skip != 'true' && steps.update.outputs.changed == 'true'
+        id: app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ vars.BREPKIT_UPDATER_APP_CLIENT_ID }}
+          private-key: ${{ secrets.BREPKIT_UPDATER_APP_PRIVATE_KEY }}
+          permission-contents: write
+          permission-pull-requests: write
+
+      - name: Commit and push the update branch
+        if: steps.existing-pr.outputs.skip != 'true' && steps.update.outputs.changed == 'true'
+        id: publish
+        env:
+          APP_SLUG: ${{ steps.app-token.outputs.app-slug }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          NEW_SHA: ${{ steps.update.outputs.new_sha }}
+          SHORT_SHA: ${{ steps.update.outputs.short_sha }}
+        run: |
+          branch="automation/brepkit-$SHORT_SHA"
+          bot_login="${APP_SLUG}[bot]"
+          bot_id="$(gh api "users/$bot_login" --jq .id)"
+
+          if git ls-remote --exit-code --heads origin "$branch" >/dev/null 2>&1; then
+            echo "::error title=Update branch already exists::$branch already exists on origin; refusing to overwrite it."
+            exit 1
+          fi
+
+          gh auth setup-git
+          git config user.name "$bot_login"
+          git config user.email "$bot_id+$bot_login@users.noreply.github.com"
+          git switch -c "$branch"
+          git add -- pnpm-lock.yaml
+
+          if [[ "$(git diff --cached --name-only)" != 'pnpm-lock.yaml' ]]; then
+            echo "::error title=Unexpected staged files::Only pnpm-lock.yaml may be committed by this workflow."
+            exit 1
+          fi
+
+          git commit -m "chore(deps): update BrepKit to $SHORT_SHA"
+          git push --set-upstream origin "$branch"
+          echo "branch=$branch" >> "$GITHUB_OUTPUT"
+
+      - name: Open a draft pull request
+        if: steps.existing-pr.outputs.skip != 'true' && steps.update.outputs.changed == 'true'
+        env:
+          BASE_BRANCH: ${{ github.event.repository.default_branch }}
+          BRANCH: ${{ steps.publish.outputs.branch }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          OLD_SHA: ${{ steps.update.outputs.old_sha }}
+          NEW_SHA: ${{ steps.update.outputs.new_sha }}
+          SHORT_SHA: ${{ steps.update.outputs.short_sha }}
+          PACKAGE_VERSION: ${{ steps.update.outputs.package_version }}
+        run: |
+          body_file="$RUNNER_TEMP/brepkit-update-pr.md"
+          compare_url="https://github.com/esaueng/brepkit/compare/$OLD_SHA...$NEW_SHA"
+
+          {
+            echo '## Summary'
+            echo
+            echo "- update \`brepkit-wasm\` from \`$OLD_SHA\` to \`$NEW_SHA\`"
+            echo "- package version: \`$PACKAGE_VERSION\`"
+            echo "- compare: $compare_url"
+            echo
+            echo '## Reproducibility'
+            echo
+            echo 'The manifest tracks `main` only as the updater input. The committed `pnpm-lock.yaml` resolves it to the immutable new commit above, and normal installs continue to use `pnpm install --frozen-lockfile`.'
+            echo
+            echo '## Automation and verification'
+            echo
+            echo '- Detected by the daily/manual BrepKit updater using only the targeted lockfile-only pnpm update.'
+            echo '- Duplicate update PRs are prevented by the workflow concurrency group and the open `automation/brepkit-*` PR check.'
+            echo '- This GitHub App-authored PR triggers the repository pull-request CI, including lint, typecheck, coverage, web tests, parity corpus, build, Playwright, and the applicable macOS checks.'
+            echo '- No deployment, publication, merge, or auto-merge was performed.'
+          } > "$body_file"
+
+          gh pr create \
+            --repo "$GITHUB_REPOSITORY" \
+            --draft \
+            --base "$BASE_BRANCH" \
+            --head "$BRANCH" \
+            --title "chore(deps): update BrepKit to $SHORT_SHA" \
+            --body-file "$body_file"

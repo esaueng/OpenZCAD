@@ -8,6 +8,8 @@
  * from the async orchestration so each rejection has a test.
  */
 
+import { warningForFeature } from './featureValidation';
+
 export interface DirectEditVerdictInput {
   /** The feature label, as it appears in a derived warning's prefix. */
   label: string;
@@ -16,14 +18,6 @@ export interface DirectEditVerdictInput {
   bodyPresent: boolean;
   /** Whether the document changed while the rebuild was in flight. */
   documentMoved: boolean;
-}
-
-/** The warning prefix the kernel uses to attribute a failure to a feature. */
-function warningFor(label: string, warnings: readonly string[]): string | null {
-  const prefix = `Feature "${label}":`;
-  const match = warnings.find((warning) => warning.startsWith(prefix));
-  // The prefix is noise once the warning is attributed to this edit.
-  return match ? match.replace(/^Feature "[^"]+":\s*/, '') : null;
 }
 
 /**
@@ -37,7 +31,7 @@ function warningFor(label: string, warnings: readonly string[]): string | null {
 export function directEditRejection(
   input: DirectEditVerdictInput
 ): string | null {
-  const warning = warningFor(input.label, input.warnings);
+  const warning = warningForFeature(input.label, input.warnings);
   if (warning) {
     return warning;
   }

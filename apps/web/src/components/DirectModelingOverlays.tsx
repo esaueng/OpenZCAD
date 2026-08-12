@@ -6,6 +6,7 @@ import {
   Move3d,
   X
 } from 'lucide-react';
+import type { ExtrudeOperation } from '@openzcad/shared';
 
 interface ProfileQuickActionProps {
   profileName: string;
@@ -58,6 +59,9 @@ interface ExtrudeOverlayProps {
   availableProfileCount: number;
   distance: number;
   units: string;
+  operation: ExtrudeOperation | 'inferring';
+  operationDetail: string;
+  canConfirm: boolean;
   onDistanceChange(value: number): void;
   onClearProfiles(): void;
   onSelectAllProfiles(): void;
@@ -72,6 +76,9 @@ export function ExtrudeOverlay({
   availableProfileCount,
   distance,
   units,
+  operation,
+  operationDetail,
+  canConfirm,
   onDistanceChange,
   onClearProfiles,
   onSelectAllProfiles,
@@ -104,7 +111,7 @@ export function ExtrudeOverlay({
         aria-label="Extrude controls"
         onSubmit={(event) => {
           event.preventDefault();
-          if (Math.abs(distance) >= 0.1) {
+          if (canConfirm && Math.abs(distance) >= 0.1) {
             onConfirm();
           }
         }}
@@ -135,9 +142,13 @@ export function ExtrudeOverlay({
         </div>
         <label>
           <span>Operation</span>
-          <select aria-label="Extrude operation" value="new-body" disabled>
+          <select aria-label="Extrude operation" value={operation} disabled>
+            <option value="inferring">Inferring…</option>
             <option value="new-body">New Body</option>
+            <option value="add">Add</option>
+            <option value="cut">Cut</option>
           </select>
+          <small>{operationDetail}</small>
         </label>
         <label>
           <span>Distance</span>
@@ -177,7 +188,11 @@ export function ExtrudeOverlay({
           <button
             type="submit"
             className="primary"
-            disabled={!Number.isFinite(distance) || Math.abs(distance) < 0.1}
+            disabled={
+              !canConfirm ||
+              !Number.isFinite(distance) ||
+              Math.abs(distance) < 0.1
+            }
           >
             <Check size={15} aria-hidden="true" />
             Apply Extrude
@@ -202,6 +217,23 @@ interface MoveOverlayProps {
   onChange(values: MoveOverlayValues): void;
   onConfirm(): void;
   onCancel(): void;
+  /** Sketch moves translate only; the rotation grid and copy are hidden. */
+  hideRotation?: boolean;
+  /**
+   * The Move feature's name. Omitted for a sketch move, which commits as a
+   * sketch translation rather than a named feature, so there is nothing to
+   * call. Present for a body move: this overlay is now the only way to make
+   * one, so naming at creation has to live here (WF-07).
+   */
+  name?: string;
+  onName?(value: string): void;
+  /**
+   * Every body the move could target, so choosing one no longer means backing
+   * out to a second UI. Omitted when there is nothing to choose between.
+   */
+  targets?: readonly { bodyId: string; name: string }[];
+  targetBodyId?: string;
+  onTargetBody?(bodyId: string): void;
 }
 
 const MOVE_AXES = ['x', 'y', 'z'] as const;
@@ -213,7 +245,13 @@ export function MoveOverlay({
   snap,
   onChange,
   onConfirm,
-  onCancel
+  onCancel,
+  hideRotation,
+  name,
+  onName,
+  targets,
+  targetBodyId,
+  onTargetBody
 }: MoveOverlayProps) {
   const dirty =
     MOVE_AXES.some((axis) => values.translation[axis] !== 0) ||
@@ -239,7 +277,11 @@ export function MoveOverlay({
           <MousePointer2 size={17} aria-hidden="true" />
         </span>
         <span>
-          <strong>Drag an arrow to move, a ring to rotate</strong>
+          <strong>
+            {hideRotation
+              ? 'Drag an arrow to move the sketch'
+              : 'Drag an arrow to move, a ring to rotate'}
+          </strong>
           <small>
             Snaps to{' '}
             {snap ? `${snap.move} ${units} · ${snap.rotate}°` : 'whole steps'} —
@@ -267,7 +309,32 @@ export function MoveOverlay({
             <X size={15} aria-hidden="true" />
           </button>
         </div>
-        <p>{bodyName}</p>
+        {name !== undefined && onName ? (
+          <label className="field move-name">
+            <span>Name</span>
+            <input
+              value={name}
+              onChange={(event) => onName(event.target.value)}
+            />
+          </label>
+        ) : null}
+        {targets && targets.length > 1 && onTargetBody ? (
+          <label className="field move-target">
+            <span>Body</span>
+            <select
+              value={targetBodyId ?? ''}
+              onChange={(event) => onTargetBody(event.target.value)}
+            >
+              {targets.map((target) => (
+                <option key={target.bodyId} value={target.bodyId}>
+                  {target.name}
+                </option>
+              ))}
+            </select>
+          </label>
+        ) : (
+          <p>{bodyName}</p>
+        )}
         <div className="move-grid" role="group" aria-label="Translation">
           {MOVE_AXES.map((axis) => (
             <label key={`t-${axis}`}>
@@ -289,7 +356,12 @@ export function MoveOverlay({
             </label>
           ))}
         </div>
-        <div className="move-grid" role="group" aria-label="Rotation">
+        <div
+          className="move-grid"
+          role="group"
+          aria-label="Rotation"
+          hidden={hideRotation}
+        >
           {MOVE_AXES.map((axis) => (
             <label key={`r-${axis}`}>
               <span className={`move-axis move-axis-${axis}`}>

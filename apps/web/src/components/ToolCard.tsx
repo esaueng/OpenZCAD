@@ -69,8 +69,14 @@ export function ToolCard({ model, onAction, onClose }: ToolCardProps) {
               type="button"
               role="tab"
               aria-selected={action.active}
+              aria-label={
+                action.disabledReason
+                  ? `${action.label}: ${action.disabledReason}`
+                  : action.label
+              }
+              title={action.disabledReason}
               className={action.active ? 'active' : undefined}
-              disabled={model.phase === 'validating'}
+              disabled={!action.enabled || model.phase === 'validating'}
               onClick={() => onAction?.(action.id)}
             >
               {action.label}

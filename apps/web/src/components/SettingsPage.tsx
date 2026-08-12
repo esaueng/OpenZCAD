@@ -1,11 +1,20 @@
-import { MIDDLE_DRAG_LABELS } from '@openzcad/viewport';
-import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { MIDDLE_DRAG_LABELS } from '@openzcad/viewport/input-bindings';
+import {
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+  type UIEvent
+} from 'react';
 import {
   Accessibility,
   Bot,
   Box,
   ChevronLeft,
   CircleUserRound,
+  CloudOff,
   Database,
   Eye,
   FileCog,
@@ -17,38 +26,106 @@ import {
   LogOut,
   Mail,
   Monitor,
+  MousePointer2,
   RefreshCcw,
-  Save,
   Search,
   ShieldCheck,
   SlidersHorizontal,
   Sparkles,
   Trash2
 } from 'lucide-react';
-import type {
-  AppSettings,
-  AppSettingsResponse,
-  AuthConfigResponse,
-  AuthSession
+import {
+  CLOUD_AUTOSAVE_DELAY_BOUNDS,
+  type AccountDeletionScope,
+  type AccountStorageUsage,
+  type AppSettings,
+  type AppSettingsResponse,
+  type AuthConfigResponse,
+  type AuthSession,
+  type HealthResponse
 } from '@openzcad/shared';
+
+/**
+ * A typed number input still hands back NaN for an empty field, and the bounds
+ * are the store's rather than a suggestion — a delay outside them is normalized
+ * away on the way to the account, so it should never be reachable here.
+ */
+function clampAutosaveDelay(seconds: number): number {
+  if (!Number.isFinite(seconds)) {
+    return CLOUD_AUTOSAVE_DELAY_BOUNDS.default;
+  }
+  return Math.round(
+    Math.min(
+      Math.max(seconds, CLOUD_AUTOSAVE_DELAY_BOUNDS.min),
+      CLOUD_AUTOSAVE_DELAY_BOUNDS.max
+    )
+  );
+}
+import { api } from '../lib/api';
+import { isDesktopApp } from '../lib/desktopBridge';
+import {
+  KERNEL_BUILD,
+  kernelBuildDetail,
+  kernelBuildLabel
+} from '../lib/kernelBuild';
 import {
   visibleSettingsSections,
   type SettingsSectionId
 } from '../lib/settingsSections';
+import {
+  loadSettingsViewState,
+  updateSettingsViewState
+} from '../lib/settingsViewState';
+import {
+  KEYBOARD_CONTROL_GROUPS,
+  POINTER_CONTROL_GROUPS,
+  type ControlReferenceGroup
+} from '../lib/controlReference';
 import { BrandMark } from './BrandMark';
+import { CloudDataDeletionDialog } from './CloudDataDeletionDialog';
+
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) {
+    return `${bytes} B`;
+  }
+  const megabytes = bytes / (1024 * 1024);
+  return megabytes >= 1
+    ? `${megabytes.toFixed(1)} MB`
+    : `${Math.round(bytes / 1024)} KB`;
+}
+
+/**
+ * Names the ceiling even before anyone is near it. A limit discovered only at
+ * the moment a save is refused reads as a bug; a limit stated up front reads as
+ * a limit.
+ */
+function storageDescription(usage: AccountStorageUsage | null): string {
+  if (!usage) {
+    return 'Sign in to see what your account is storing.';
+  }
+  return `${usage.projectCount} project(s) · ${formatBytes(usage.documentBytes)} current, ${formatBytes(usage.revisionBytes)} across ${usage.revisionCount} saved revision(s). Each project may be up to ${formatBytes(usage.documentLimitBytes)} and keeps its last ${usage.maxRevisionsPerProject} revisions.`;
+}
 
 type SectionId = SettingsSectionId;
 
 interface SettingsPageProps {
   settings: AppSettings;
+  cloudFunctionsEnabled: boolean;
   accountState: AppSettingsResponse | null;
   authConfig: AuthConfigResponse | null;
   authConfigStatus: AuthConfigStatus;
+  health: HealthResponse | null;
   session: AuthSession | null;
   busy: boolean;
   message: string;
+  initialSection?: SectionId;
+  projectInvitationPending?: boolean;
+  projectInvitationError?: string | null;
+  desktopAuthorizationAttempt?: string | null;
+  desktopAuthorizationApproved?: boolean;
+  desktopAuthorizationCode?: string;
   onChange(settings: AppSettings): void;
-  onSave(): void;
+  onCloudFunctionsEnabledChange(enabled: boolean): void;
   onSaveCredential(token: string): void;
   onDeleteCredential(): void;
   onTestAssistant(): void;
@@ -58,9 +135,17 @@ interface SettingsPageProps {
   ): Promise<{ challengeId: string; expiresInSeconds: number }>;
   onVerifyLoginCode(challengeId: string, code: string): Promise<void>;
   onRefreshAuthConfig(): Promise<void>;
+  onStartDesktopLogin(): Promise<void>;
+  onDesktopAuthorizationCodeChange(code: string): void;
+  onApproveDesktopLogin(): Promise<void>;
   onLogout(): Promise<void>;
+  onDeleteCloudData(
+    scope: AccountDeletionScope,
+    confirmation: string
+  ): Promise<void>;
   onReset(): void;
   onApplyViewportDefaults(): void;
+  onDismissProjectInvitation(): void;
   onClose(): void;
 }
 
@@ -78,17 +163,6 @@ const SECTION_ICONS: Record<SectionId, ReactNode> = {
   privacy: <ShieldCheck size={15} aria-hidden="true" />,
   advanced: <Info size={15} aria-hidden="true" />
 };
-
-const SHORTCUTS: Array<[string, string]> = [
-  ['Ctrl/Cmd+,', 'Open settings'],
-  ['Ctrl/Cmd+K', 'Command palette'],
-  ['Ctrl/Cmd+S', 'Save revision'],
-  ['1 / 2 / 3 / 4', 'Front / top / right / isometric view'],
-  ['G', 'Toggle grid'],
-  ['W', 'Cycle display mode'],
-  ['P', 'Toggle projection'],
-  ['?', 'Open shortcut reference']
-];
 
 function Scope({ children }: { children: ReactNode }) {
   return <span className="settings-scope">{children}</span>;
@@ -122,10 +196,12 @@ function SettingRow({
 function Toggle({
   checked,
   label,
+  disabled = false,
   onChange
 }: {
   checked: boolean;
   label: string;
+  disabled?: boolean;
   onChange(checked: boolean): void;
 }) {
   return (
@@ -133,6 +209,7 @@ function Toggle({
       <input
         type="checkbox"
         checked={checked}
+        disabled={disabled}
         aria-label={label}
         onChange={(event) => onChange(event.target.checked)}
       />
@@ -144,14 +221,18 @@ function Toggle({
 function Section({
   title,
   intro,
+  wide = false,
   children
 }: {
   title: string;
   intro: string;
+  wide?: boolean;
   children: ReactNode;
 }) {
   return (
-    <section className="settings-section">
+    <section
+      className={`settings-section${wide ? ' settings-section-wide' : ''}`}
+    >
       <header>
         <h2>{title}</h2>
         <p>{intro}</p>
@@ -161,12 +242,74 @@ function Section({
   );
 }
 
+function ControlReferenceGroups({
+  groups
+}: {
+  groups: readonly ControlReferenceGroup[];
+}) {
+  return (
+    <div className="settings-control-groups">
+      {groups.map((group) => (
+        <section className="settings-control-group" key={group.id}>
+          <header>
+            <h4>{group.title}</h4>
+            <span>{group.items.length} controls</span>
+          </header>
+          <p>{group.description}</p>
+          <dl>
+            {group.items.map((item) => (
+              <div className="settings-control-row" key={item.id}>
+                <dt>
+                  <span className="settings-control-keys">
+                    {item.keys.map((key) => (
+                      <kbd key={key}>{key}</kbd>
+                    ))}
+                  </span>
+                </dt>
+                <dd>
+                  <strong>{item.action}</strong>
+                  <small>{item.detail}</small>
+                </dd>
+              </div>
+            ))}
+          </dl>
+        </section>
+      ))}
+    </div>
+  );
+}
+
+function ControlReferenceCollection({
+  icon,
+  title,
+  description,
+  groups
+}: {
+  icon: ReactNode;
+  title: string;
+  description: string;
+  groups: readonly ControlReferenceGroup[];
+}) {
+  return (
+    <section className="settings-control-collection">
+      <header>
+        <span className="settings-control-collection-icon">{icon}</span>
+        <span>
+          <h3>{title}</h3>
+          <p>{description}</p>
+        </span>
+      </header>
+      <ControlReferenceGroups groups={groups} />
+    </section>
+  );
+}
+
 function providerDefaults(provider: AppSettings['assistant']['provider']) {
   if (provider === 'openai') {
     return { model: 'gpt-5.6-sol', baseUrl: '' };
   }
   if (provider === 'openrouter') {
-    return { model: 'openai/gpt-5.6-terra', baseUrl: '' };
+    return { model: 'openai/gpt-5.6-sol', baseUrl: '' };
   }
   return { model: '', baseUrl: '' };
 }
@@ -333,27 +476,48 @@ function TurnstileWidget({
 
 export function SettingsPage({
   settings,
+  cloudFunctionsEnabled,
   accountState,
   authConfig,
   authConfigStatus,
+  health,
   session,
   busy,
   message,
+  initialSection,
+  projectInvitationPending = false,
+  projectInvitationError = null,
+  desktopAuthorizationAttempt = null,
+  desktopAuthorizationApproved = false,
+  desktopAuthorizationCode = '',
   onChange,
-  onSave,
+  onCloudFunctionsEnabledChange,
   onSaveCredential,
   onDeleteCredential,
   onTestAssistant,
   onRequestLoginCode,
   onVerifyLoginCode,
   onRefreshAuthConfig,
+  onStartDesktopLogin,
+  onDesktopAuthorizationCodeChange,
+  onApproveDesktopLogin,
   onLogout,
+  onDeleteCloudData,
   onReset,
   onApplyViewportDefaults,
+  onDismissProjectInvitation,
   onClose
 }: SettingsPageProps) {
-  const [active, setActive] = useState<SectionId>('general');
-  const [query, setQuery] = useState('');
+  const [initialViewState] = useState(loadSettingsViewState);
+  const [active, setActive] = useState<SectionId>(
+    initialSection ?? initialViewState.activeSection
+  );
+  const desktopApp = isDesktopApp();
+  // A caller-specified section is a task flow (currently desktop auth), so it
+  // must not be hidden by a search left over from ordinary Settings browsing.
+  const [query, setQuery] = useState(
+    initialSection === undefined ? initialViewState.query : ''
+  );
   const [token, setToken] = useState('');
   const [showToken, setShowToken] = useState(false);
   const [loginEmail, setLoginEmail] = useState('');
@@ -361,6 +525,48 @@ export function SettingsPage({
   const [loginChallengeId, setLoginChallengeId] = useState<string | null>(null);
   const [turnstileToken, setTurnstileToken] = useState('');
   const [turnstileReset, setTurnstileReset] = useState(0);
+  const [storageUsage, setStorageUsage] = useState<AccountStorageUsage | null>(
+    null
+  );
+  const [deletionScope, setDeletionScope] =
+    useState<AccountDeletionScope | null>(null);
+  const contentRef = useRef<HTMLElement>(null);
+  const scrollTopRef = useRef(
+    initialSection === undefined ? initialViewState.scrollTop : 0
+  );
+  const activeRef = useRef(active);
+  const queryRef = useRef(query);
+
+  activeRef.current = active;
+  queryRef.current = query;
+
+  const persistCurrentView = () =>
+    updateSettingsViewState({
+      activeSection: activeRef.current,
+      query: queryRef.current,
+      scrollTop: scrollTopRef.current
+    });
+
+  // Fetched only when the panel that shows it is open, and dropped on sign-out
+  // so one account's totals never linger in front of another.
+  useEffect(() => {
+    if (active !== 'files' || !session || !cloudFunctionsEnabled) {
+      setStorageUsage(null);
+      return;
+    }
+    let cancelled = false;
+    void api
+      .storageUsage()
+      .then((usage) => {
+        if (!cancelled) {
+          setStorageUsage(usage);
+        }
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [active, cloudFunctionsEnabled, session]);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -372,10 +578,50 @@ export function SettingsPage({
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [onClose]);
 
-  const assistantEnabled = settings.assistant.enabled;
+  useLayoutEffect(() => {
+    const content = contentRef.current;
+    if (!content) {
+      return;
+    }
+    const stored = loadSettingsViewState();
+    const scrollTop =
+      initialSection === undefined && stored.activeSection === active
+        ? stored.scrollTop
+        : 0;
+    const restoreScroll = () => {
+      content.scrollTop = scrollTop;
+      scrollTopRef.current = content.scrollTop;
+    };
+    restoreScroll();
+    // Font metrics can change the scroll range after the first layout. Keep the
+    // saved target intact and retry once that layout has settled instead of
+    // permanently accepting a temporarily clamped position.
+    void document.fonts?.ready.then(restoreScroll);
+    scrollTopRef.current = scrollTop;
+    updateSettingsViewState({
+      open: true,
+      activeSection: active,
+      query: queryRef.current,
+      scrollTop
+    });
+  }, [active, initialSection]);
+
+  useEffect(() => {
+    const onPageHide = () => persistCurrentView();
+    window.addEventListener('pagehide', onPageHide);
+    return () => {
+      window.removeEventListener('pagehide', onPageHide);
+      persistCurrentView();
+    };
+  }, []);
+
   const visibleSections = useMemo(
-    () => visibleSettingsSections({ assistantEnabled, query }),
-    [assistantEnabled, query]
+    () =>
+      visibleSettingsSections({
+        cloudFunctionsEnabled,
+        query
+      }),
+    [cloudFunctionsEnabled, query]
   );
 
   // A search that matches somewhere other than the open section should take the
@@ -385,12 +631,10 @@ export function SettingsPage({
     if (!first) {
       return;
     }
-    setActive((current) =>
-      visibleSections.some((section) => section.id === current)
-        ? current
-        : first.id
-    );
-  }, [visibleSections]);
+    if (!visibleSections.some((section) => section.id === active)) {
+      setActive(first.id);
+    }
+  }, [active, visibleSections]);
 
   useEffect(() => {
     if (session) {
@@ -402,6 +646,8 @@ export function SettingsPage({
 
   const patch = (next: Partial<AppSettings>) =>
     onChange({ ...settings, ...next });
+  const patchCollaboration = (next: Partial<AppSettings['collaboration']>) =>
+    patch({ collaboration: { ...settings.collaboration, ...next } });
   const patchAssistant = (next: Partial<AppSettings['assistant']>) =>
     patch({ assistant: { ...settings.assistant, ...next } });
 
@@ -422,23 +668,9 @@ export function SettingsPage({
         <span className="settings-save-message" aria-live="polite">
           {message}
         </span>
-        <button className="secondary" type="button" onClick={onClose}>
+        <button className="primary" type="button" onClick={onClose}>
           <ChevronLeft size={14} aria-hidden="true" />
           Back to workspace
-        </button>
-        <button
-          className="primary"
-          type="button"
-          disabled={busy || !session || !accountState}
-          onClick={onSave}
-          title={
-            session && accountState
-              ? 'Save preferences to your account'
-              : 'Sign in to save preferences to a cloud profile; device settings are already saved'
-          }
-        >
-          <Save size={14} aria-hidden="true" />
-          Save to account
         </button>
       </header>
 
@@ -450,7 +682,12 @@ export function SettingsPage({
               value={query}
               placeholder="Find a setting"
               aria-label="Find a setting"
-              onChange={(event) => setQuery(event.target.value)}
+              onChange={(event) => {
+                const nextQuery = event.target.value;
+                queryRef.current = nextQuery;
+                setQuery(nextQuery);
+                updateSettingsViewState({ query: nextQuery });
+              }}
             />
           </label>
           <nav>
@@ -479,17 +716,40 @@ export function SettingsPage({
             )}
           </nav>
           <div className="settings-nav-status">
-            <Database size={13} aria-hidden="true" />
+            {cloudFunctionsEnabled ? (
+              <Database size={13} aria-hidden="true" />
+            ) : (
+              <CloudOff size={13} aria-hidden="true" />
+            )}
             <span>
               <strong>
-                {session ? 'Cloud profile connected' : 'Device only'}
+                {/*
+                  Being signed in is not the same as being reachable. This read
+                  only `session` and so announced "Cloud profile connected"
+                  while the header of the same screen said the profile was
+                  unavailable — two claims about one thing, on screen together.
+                  Reachability decides first.
+                */}
+                {!cloudFunctionsEnabled
+                  ? 'Offline mode'
+                  : authConfigStatus === 'unavailable'
+                    ? 'Cloud unreachable'
+                    : session
+                      ? 'Cloud profile connected'
+                      : 'Device only'}
               </strong>
               <small>Local changes save immediately</small>
             </span>
           </div>
         </aside>
 
-        <main className="settings-content">
+        <main
+          className="settings-content"
+          ref={contentRef}
+          onScroll={(event: UIEvent<HTMLElement>) => {
+            scrollTopRef.current = event.currentTarget.scrollTop;
+          }}
+        >
           {active === 'general' && (
             <Section
               title="General"
@@ -552,21 +812,15 @@ export function SettingsPage({
                   }
                 />
               </SettingRow>
-              {/*
-                The assistant's master switch lives here rather than in the AI
-                section, because turning it off removes that whole section from
-                the nav — a toggle inside it would take itself away with it and
-                leave no way back.
-              */}
               <SettingRow
-                title="AI assistant"
-                description="When off, the assistant is removed from the workspace and its provider settings are hidden. The server also refuses assistant requests."
-                scope="All devices"
+                title="Cloud features"
+                description="When off, OpenZCAD blocks account, sync, collaboration, artifact archive, and AI requests. Local modeling, autosave, imports, and exports keep working."
+                scope="This device"
               >
                 <Toggle
-                  checked={settings.assistant.enabled}
-                  label="AI assistant"
-                  onChange={(enabled) => patchAssistant({ enabled })}
+                  checked={cloudFunctionsEnabled}
+                  label="Cloud features"
+                  onChange={onCloudFunctionsEnabledChange}
                 />
               </SettingRow>
             </Section>
@@ -760,19 +1014,67 @@ export function SettingsPage({
           {active === 'sketching' && (
             <Section
               title="Sketching & snapping"
-              intro="Snapping affects pointer input only. Stored dimensions remain exact document values."
+              intro="Grid placement, geometry snapping, and temporary inferencing are independent. Stored dimensions remain exact document values."
             >
               <SettingRow
-                title="Snap sketch input"
-                description="Quantize sketch points to the configured linear increment."
+                title="Show sketch grid"
+                description="Display an adaptive grid on the active sketch plane."
+                scope="This device"
+              >
+                <Toggle
+                  checked={settings.sketching.gridVisible}
+                  label="Show sketch grid"
+                  onChange={(gridVisible) =>
+                    patch({
+                      sketching: { ...settings.sketching, gridVisible }
+                    })
+                  }
+                />
+              </SettingRow>
+              <SettingRow
+                title="Snap to sketch grid"
+                description="Quantize sketch points to the configured linear increment. Geometry snaps still take priority."
                 scope="This device"
               >
                 <Toggle
                   checked={settings.sketching.snapEnabled}
-                  label="Snap sketch input"
+                  label="Snap to sketch grid"
                   onChange={(snapEnabled) =>
                     patch({
                       sketching: { ...settings.sketching, snapEnabled }
+                    })
+                  }
+                />
+              </SettingRow>
+              <SettingRow
+                title="Geometry snapping"
+                description="Snap to exact origins, endpoints, midpoints, centers, quadrants, and intersections."
+                scope="This device"
+              >
+                <Toggle
+                  checked={settings.sketching.geometrySnapEnabled}
+                  label="Geometry snapping"
+                  onChange={(geometrySnapEnabled) =>
+                    patch({
+                      sketching: {
+                        ...settings.sketching,
+                        geometrySnapEnabled
+                      }
+                    })
+                  }
+                />
+              </SettingRow>
+              <SettingRow
+                title="Automatic inferencing"
+                description="Offer horizontal and vertical alignment while drawing. Hold Shift to suppress it temporarily."
+                scope="This device"
+              >
+                <Toggle
+                  checked={settings.sketching.inferenceEnabled}
+                  label="Automatic inferencing"
+                  onChange={(inferenceEnabled) =>
+                    patch({
+                      sketching: { ...settings.sketching, inferenceEnabled }
                     })
                   }
                 />
@@ -806,6 +1108,35 @@ export function SettingsPage({
                     }
                   }}
                 />
+              </SettingRow>
+              <SettingRow
+                title="Snap tolerance"
+                description="Screen-space radius around exact sketch candidates."
+                scope="This device"
+              >
+                <div className="settings-unit-input">
+                  <input
+                    className="settings-number"
+                    type="number"
+                    min="4"
+                    max="24"
+                    step="1"
+                    value={settings.sketching.snapTolerancePx}
+                    aria-label="Sketch snap tolerance"
+                    onChange={(event) => {
+                      const value = event.currentTarget.valueAsNumber;
+                      if (Number.isFinite(value) && value >= 4 && value <= 24) {
+                        patch({
+                          sketching: {
+                            ...settings.sketching,
+                            snapTolerancePx: value
+                          }
+                        });
+                      }
+                    }}
+                  />
+                  <span>px</span>
+                </div>
               </SettingRow>
               <SettingRow
                 title="Angular snap"
@@ -870,11 +1201,75 @@ export function SettingsPage({
                 <span className="settings-state good">Active</span>
               </SettingRow>
               <SettingRow
+                title="Cloud autosave"
+                description="Copy a project your account holds to the account shortly after you stop editing. Turn it off to update your account only with Ctrl/Cmd+S."
+                scope="Account"
+              >
+                <Toggle
+                  label="Cloud autosave"
+                  checked={settings.files.cloudAutosave}
+                  disabled={!cloudFunctionsEnabled}
+                  onChange={(cloudAutosave) =>
+                    onChange({
+                      ...settings,
+                      files: { ...settings.files, cloudAutosave }
+                    })
+                  }
+                />
+              </SettingRow>
+              <SettingRow
+                title="Cloud autosave delay"
+                description="Quiet time before the copy is written. A continuous edit is still written at least once a minute."
+                scope="Account"
+              >
+                <input
+                  type="number"
+                  aria-label="Cloud autosave delay in seconds"
+                  disabled={
+                    !cloudFunctionsEnabled || !settings.files.cloudAutosave
+                  }
+                  min={CLOUD_AUTOSAVE_DELAY_BOUNDS.min}
+                  max={CLOUD_AUTOSAVE_DELAY_BOUNDS.max}
+                  step={1}
+                  value={settings.files.cloudAutosaveDelaySeconds}
+                  onChange={(event) =>
+                    onChange({
+                      ...settings,
+                      files: {
+                        ...settings.files,
+                        cloudAutosaveDelaySeconds: clampAutosaveDelay(
+                          event.target.valueAsNumber
+                        )
+                      }
+                    })
+                  }
+                />
+              </SettingRow>
+              <SettingRow
                 title="Cloud revisions"
-                description="Ctrl/Cmd+S creates an explicit owner-scoped checkpoint when the beta API is available."
+                description="Ctrl/Cmd+S creates an explicit owner-scoped checkpoint. Autosave does not add to this history."
                 scope="Current project"
               >
-                <span className="settings-state">Manual</span>
+                <span className="settings-state">
+                  {cloudFunctionsEnabled ? 'Manual' : 'Disabled'}
+                </span>
+              </SettingRow>
+              <SettingRow
+                title="Account storage"
+                description={
+                  cloudFunctionsEnabled
+                    ? storageDescription(storageUsage)
+                    : 'Account storage is not contacted while cloud features are disabled.'
+                }
+                scope="Account"
+              >
+                <span className="settings-state">
+                  {storageUsage
+                    ? formatBytes(
+                        storageUsage.documentBytes + storageUsage.revisionBytes
+                      )
+                    : '—'}
+                </span>
               </SettingRow>
               <SettingRow
                 title="STEP and STL exports"
@@ -886,11 +1281,22 @@ export function SettingsPage({
             </Section>
           )}
 
-          {active === 'assistant' && assistantEnabled && (
+          {active === 'assistant' && cloudFunctionsEnabled && (
             <Section
               title="AI Assistant"
-              intro="Choose a deployment-managed assistant or store an encrypted personal credential. Proposals remain previewable and explicitly applied. Turn the assistant off entirely under General."
+              intro="Choose a deployment-managed assistant or store an encrypted personal credential. Proposals remain previewable and explicitly applied."
             >
+              <SettingRow
+                title="AI assistant"
+                description="When off, the assistant is removed from the workspace and the server refuses assistant requests."
+                scope="All devices"
+              >
+                <Toggle
+                  checked={settings.assistant.enabled}
+                  label="AI assistant"
+                  onChange={(enabled) => patchAssistant({ enabled })}
+                />
+              </SettingRow>
               <SettingRow
                 title="Credential source"
                 description="Deployment credentials are managed by the operator; personal tokens are owner-scoped."
@@ -1195,31 +1601,117 @@ export function SettingsPage({
             </Section>
           )}
 
-          {active === 'account' && (
+          {active === 'account' && cloudFunctionsEnabled && (
             <Section
               title="Account & collaboration"
               intro="The CAD workspace stays local and usable without an account. Sign in only when you want a cloud profile."
             >
-              {session ? (
-                <SettingRow
-                  title={session.displayName}
-                  description={session.email ?? session.userId}
-                  scope={
-                    session.mode === 'email-code'
-                      ? 'Email profile'
-                      : 'Development'
-                  }
+              {projectInvitationPending ? (
+                <div
+                  className="settings-warning settings-sign-in-warning"
+                  role={projectInvitationError ? 'alert' : 'status'}
                 >
+                  <span>
+                    {projectInvitationError ??
+                      'Project invitation ready. Sign in with the email address that received the link and the project will open automatically.'}
+                    {projectInvitationError && session
+                      ? ' Sign out below to try a different email address.'
+                      : ''}
+                  </span>
                   <button
                     className="secondary"
                     type="button"
                     disabled={busy}
-                    onClick={() => void onLogout().catch(() => undefined)}
+                    onClick={onDismissProjectInvitation}
                   >
-                    <LogOut size={14} aria-hidden="true" />
-                    Sign out
+                    Not now
                   </button>
-                </SettingRow>
+                </div>
+              ) : null}
+              <SettingRow
+                title="Project sharing"
+                description="Allow invitations and live collaboration. Turning this off stops collaboration connections; cloud autosave remains separate."
+                scope="Account preference"
+              >
+                <Toggle
+                  checked={settings.collaboration.enabled}
+                  label="Project sharing"
+                  onChange={(enabled) => patchCollaboration({ enabled })}
+                />
+              </SettingRow>
+              {session ? (
+                <>
+                  <SettingRow
+                    title={session.displayName}
+                    description={session.email ?? session.userId}
+                    scope={
+                      session.mode === 'email-code'
+                        ? 'Email profile'
+                        : 'Development'
+                    }
+                  >
+                    <button
+                      className="secondary"
+                      type="button"
+                      disabled={busy}
+                      onClick={() => void onLogout().catch(() => undefined)}
+                    >
+                      <LogOut size={14} aria-hidden="true" />
+                      Sign out
+                    </button>
+                  </SettingRow>
+                  {desktopAuthorizationAttempt ? (
+                    <div
+                      className={
+                        desktopAuthorizationApproved
+                          ? 'settings-state good'
+                          : 'settings-warning settings-sign-in-warning'
+                      }
+                      role="status"
+                    >
+                      <span>
+                        {desktopAuthorizationApproved
+                          ? 'OpenZCAD for macOS is connected. You can return to the app.'
+                          : 'Enter the 8-character code shown in your OpenZCAD for macOS window before connecting this cloud profile.'}
+                      </span>
+                      {!desktopAuthorizationApproved ? (
+                        <>
+                          <label className="settings-field settings-field-inline">
+                            <span>Desktop code</span>
+                            <input
+                              type="text"
+                              value={desktopAuthorizationCode}
+                              inputMode="text"
+                              autoComplete="one-time-code"
+                              maxLength={11}
+                              placeholder="ABCD1234"
+                              onChange={(event) =>
+                                onDesktopAuthorizationCodeChange(
+                                  event.currentTarget.value.toUpperCase()
+                                )
+                              }
+                            />
+                          </label>
+                          <button
+                            className="primary"
+                            type="button"
+                            disabled={
+                              busy || desktopAuthorizationCode.trim().length < 8
+                            }
+                            onClick={() =>
+                              void onApproveDesktopLogin().catch(
+                                () => undefined
+                              )
+                            }
+                          >
+                            <LogIn size={14} aria-hidden="true" />
+                            Continue in OpenZCAD
+                          </button>
+                        </>
+                      ) : null}
+                    </div>
+                  ) : null}
+                </>
               ) : (
                 <>
                   <SettingRow
@@ -1253,6 +1745,37 @@ export function SettingsPage({
                         Retry
                       </button>
                     </div>
+                  ) : desktopApp ? (
+                    authConfig?.desktopAuthEnabled ? (
+                      <div className="settings-auth-form">
+                        <span>
+                          <strong>Sign in with your browser</strong>
+                          <small>
+                            Turnstile and the email code stay in your browser.
+                            macOS stores only the rotating refresh credential in
+                            Keychain.
+                          </small>
+                        </span>
+                        <div className="settings-auth-controls">
+                          <button
+                            className="primary"
+                            type="button"
+                            disabled={busy}
+                            onClick={() =>
+                              void onStartDesktopLogin().catch(() => undefined)
+                            }
+                          >
+                            <LogIn size={14} aria-hidden="true" />
+                            Continue in browser
+                          </button>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="settings-warning" role="status">
+                        Desktop sign-in is not ready on this beta Worker. Device
+                        settings and local CAD projects remain available.
+                      </div>
+                    )
                   ) : authConfig?.emailCodeEnabled &&
                     authConfig.turnstileSiteKey ? (
                     loginChallengeId ? (
@@ -1402,24 +1925,39 @@ export function SettingsPage({
 
           {active === 'shortcuts' && (
             <Section
-              title="Keyboard shortcuts"
-              intro="Current shortcuts remain fixed so CAD commands stay predictable across shared workstations."
+              title="Controls & shortcuts"
+              intro="A complete reference for keyboard commands, viewport navigation, selection, sketching, and direct modeling."
+              wide
             >
-              <div className="settings-shortcuts">
-                {SHORTCUTS.map(([shortcut, action]) => (
-                  <div key={shortcut}>
-                    <kbd>{shortcut}</kbd>
-                    <span>{action}</span>
-                  </div>
-                ))}
+              <div className="settings-controls-note">
+                <Keyboard size={18} aria-hidden="true" />
+                <span>
+                  <strong>Shortcuts are fixed and context-aware.</strong>
+                  <small>
+                    Workspace commands pause while you type or while Settings is
+                    open. Sketch mode reuses C and R for Circle and Rectangle.
+                  </small>
+                </span>
               </div>
+              <ControlReferenceCollection
+                icon={<Keyboard size={18} aria-hidden="true" />}
+                title="Keyboard"
+                description="Commands are grouped by the part of the workspace that owns them."
+                groups={KEYBOARD_CONTROL_GROUPS}
+              />
+              <ControlReferenceCollection
+                icon={<MousePointer2 size={18} aria-hidden="true" />}
+                title="Mouse & pointer"
+                description="Directional gestures matter: selection-box behavior changes with drag direction."
+                groups={POINTER_CONTROL_GROUPS}
+              />
             </Section>
           )}
 
           {active === 'privacy' && (
             <Section
               title="Privacy & data"
-              intro="Device preferences are separate from canonical project documents, exports, and collaboration messages."
+              intro="Review and permanently remove device or cloud data from one place. Local and cloud copies remain separate."
             >
               <SettingRow
                 title="Reset application settings"
@@ -1436,12 +1974,84 @@ export function SettingsPage({
                 </button>
               </SettingRow>
               <SettingRow
-                title="Project data"
-                description="Local projects remain in IndexedDB until a dedicated project deletion flow is used."
-                scope="Protected"
+                title="Local project data"
+                description="Local projects remain in IndexedDB. The cloud actions below never delete projects or settings from this device."
+                scope="This device"
               >
                 <ShieldCheck size={17} aria-hidden="true" />
               </SettingRow>
+              {session ? (
+                <>
+                  <SettingRow
+                    title="Delete all cloud projects"
+                    description="Permanently delete every cloud project you own, including revisions, imports, generated files, and collaboration state. Your cloud profile stays active."
+                    scope="Cloud only"
+                  >
+                    <button
+                      className="secondary danger"
+                      type="button"
+                      disabled={busy || health?.projectErasureReady !== true}
+                      onClick={() => setDeletionScope('projects')}
+                    >
+                      <Trash2 size={14} aria-hidden="true" />
+                      Delete projects
+                    </button>
+                  </SettingRow>
+                  <SettingRow
+                    title="Delete cloud profile"
+                    description="Delete your email profile, synchronized settings, personal AI credential, and all sessions. Owned projects remain under a minimal anonymous ownership record."
+                    scope="All devices"
+                  >
+                    <button
+                      className="secondary danger"
+                      type="button"
+                      disabled={busy || health?.accountErasureReady !== true}
+                      onClick={() => setDeletionScope('profile')}
+                    >
+                      <Trash2 size={14} aria-hidden="true" />
+                      Delete profile
+                    </button>
+                  </SettingRow>
+                  <div className="settings-cloud-delete-all">
+                    <SettingRow
+                      title="Delete all cloud data"
+                      description="Permanently delete your cloud profile and every project you own. Collaborators lose access immediately. This is the complete cloud-data deletion action."
+                      scope="Cannot undo"
+                    >
+                      <button
+                        className="secondary danger"
+                        type="button"
+                        disabled={busy || health?.projectErasureReady !== true}
+                        onClick={() => setDeletionScope('all')}
+                      >
+                        <Trash2 size={14} aria-hidden="true" />
+                        Delete all data
+                      </button>
+                    </SettingRow>
+                  </div>
+                  {health?.accountErasureReady !== true ? (
+                    <div className="settings-warning" role="status">
+                      Cloud data deletion is unavailable until migrations 0014
+                      and 0015 and their write-safety checks are ready. No data
+                      can be deleted from this screen yet.
+                    </div>
+                  ) : health?.projectErasureReady !== true ? (
+                    <div className="settings-warning" role="status">
+                      Cloud project deletion is unavailable until private object
+                      storage and collaboration cleanup pass their readiness
+                      checks. Profile-only deletion remains available.
+                    </div>
+                  ) : null}
+                </>
+              ) : (
+                <SettingRow
+                  title="Cloud data"
+                  description="Sign in before reviewing or deleting cloud profile and project data."
+                  scope="Signed out"
+                >
+                  <ShieldCheck size={17} aria-hidden="true" />
+                </SettingRow>
+              )}
             </Section>
           )}
 
@@ -1458,6 +2068,15 @@ export function SettingsPage({
                 <span className="settings-state good">Exact</span>
               </SettingRow>
               <SettingRow
+                title="Kernel version"
+                description="The pinned kernel build this app was compiled against. Quote it when reporting a geometry defect."
+                scope="Diagnostics"
+              >
+                <span className="mono" title={kernelBuildDetail(KERNEL_BUILD)}>
+                  {kernelBuildLabel(KERNEL_BUILD)}
+                </span>
+              </SettingRow>
+              <SettingRow
                 title="Document authority"
                 description="Canonical feature history is the source of truth; viewport meshes are disposable projections."
                 scope="Required"
@@ -1471,10 +2090,36 @@ export function SettingsPage({
               >
                 <span className="mono">v{settings.schemaVersion}</span>
               </SettingRow>
+              <SettingRow
+                title="Cloud project storage"
+                description="Migrations 0010 and 0011 plus private R2 project storage must be ready before personal device sync can be enabled."
+                scope="Diagnostics"
+              >
+                <span
+                  className={`settings-state ${health?.documentStorageAccountingReady === true && health.projectObjectStorageReady === true ? 'good' : 'warning'}`}
+                >
+                  {health === null
+                    ? 'Unavailable'
+                    : health.documentStorageAccountingReady === true &&
+                        health.projectObjectStorageReady === true
+                      ? 'Ready'
+                      : 'Not ready'}
+                </span>
+              </SettingRow>
             </Section>
           )}
         </main>
       </div>
+      {deletionScope ? (
+        <CloudDataDeletionDialog
+          scope={deletionScope}
+          onConfirm={async (scope, confirmation) => {
+            await onDeleteCloudData(scope, confirmation);
+            setDeletionScope(null);
+          }}
+          onClose={() => setDeletionScope(null)}
+        />
+      ) : null}
     </div>
   );
 }

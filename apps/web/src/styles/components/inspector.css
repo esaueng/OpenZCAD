@@ -143,6 +143,21 @@
   font-size: var(--fs-xs);
 }
 
+/*
+ * A refusal from the exact kernel, at the top of the panel that asked for it.
+ * These messages carry a cause and a remedy and are a couple of sentences
+ * long, so they wrap rather than clip — the status-bar copy is the one that
+ * truncates.
+ */
+.inspector-commit-error {
+  margin-bottom: var(--sp-3);
+  padding: var(--sp-2);
+  line-height: 1.45;
+  background: var(--color-error-dim, rgba(255, 116, 82, 0.12));
+  border: 1px solid var(--color-error);
+  border-radius: var(--radius-sm);
+}
+
 .field-pair {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -198,6 +213,12 @@
 }
 
 .expr-preview.error {
+  color: var(--color-error);
+}
+
+/* A form-level constraint the field itself cannot express, e.g. a revolve
+   angle that evaluates fine but falls outside (0, 360]. */
+.feature-form .muted.error {
   color: var(--color-error);
 }
 
@@ -279,6 +300,109 @@
   color: var(--color-text-subtle);
   font-family: var(--font-mono);
   font-size: var(--fs-mini);
+}
+
+/* ── Body appearance ─────────────────────────────────────── */
+
+.appearance-controls {
+  display: grid;
+  gap: 8px;
+  margin: 8px 0;
+}
+
+.appearance-field {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-3);
+  color: var(--color-text-muted);
+  font-size: var(--fs-sm);
+}
+
+.appearance-inputs {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.appearance-swatch {
+  width: 42px;
+  height: 26px;
+  padding: 0;
+  border: var(--border-thin);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+
+.appearance-swatch:hover {
+  border-color: var(--color-border-strong);
+}
+
+.appearance-swatch[aria-expanded='true'] {
+  border-color: var(--color-accent);
+  box-shadow: 0 0 0 2px var(--color-accent-dim);
+}
+
+.appearance-inputs input[type='range'] {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 130px;
+  height: 26px;
+  padding: 0;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+}
+
+.appearance-inputs input[type='range']::-webkit-slider-runnable-track {
+  height: 4px;
+  border-radius: 2px;
+  background: var(--color-border);
+}
+
+.appearance-inputs input[type='range']::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 13px;
+  height: 13px;
+  margin-top: -4.5px;
+  border-radius: 50%;
+  background: var(--color-text);
+  border: 2px solid var(--color-accent);
+}
+
+.appearance-inputs input[type='range']::-moz-range-track {
+  height: 4px;
+  border-radius: 2px;
+  background: var(--color-border);
+}
+
+.appearance-inputs input[type='range']::-moz-range-thumb {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--color-text);
+  border: 2px solid var(--color-accent);
+}
+
+.appearance-value {
+  min-width: 44px;
+  color: var(--color-text);
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  text-align: right;
+}
+
+.appearance-reset {
+  justify-self: start;
+  padding: 0;
+  color: var(--color-text-muted);
+  font-size: var(--fs-xs);
+}
+
+.appearance-reset:hover {
+  color: var(--color-accent-hi);
 }
 
 /* ── Key-value stats ─────────────────────────────────────── */

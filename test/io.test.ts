@@ -2,7 +2,13 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { parseStepMetadata } from '@openzcad/io-step';
-import { parseStl, StlParseError, writeAsciiStl } from '@openzcad/io-stl';
+import {
+  MAX_IMPORT_TRIANGLES,
+  parseStl,
+  StlParseError,
+  StlWriteError,
+  writeAsciiStl
+} from '@openzcad/io-stl';
 import { solidFromTriangles, solidVolume, validateSolid } from '@openzcad/geometry';
 
 describe('STL parsing', () => {
@@ -54,6 +60,45 @@ describe('STL parsing', () => {
     expect(parsed.vertices[0]).toBeCloseTo(1.5, 6);
   });
 
+  it('detects binary STL with a "solid" header even when trailing bytes break the exact size', () => {
+    const triangleCount = 3;
+    const buffer = new ArrayBuffer(84 + triangleCount * 50 + 1);
+    const bytes = new Uint8Array(buffer);
+    bytes.set(new TextEncoder().encode('solid binary-exporter'), 0);
+    bytes[buffer.byteLength - 1] = 0x0a; // trailing newline
+    const view = new DataView(buffer);
+    view.setUint32(80, triangleCount, true);
+    view.setFloat32(84 + 12, 1.5, true);
+
+    const parsed = parseStl(buffer, 'tricky-padded.stl');
+    expect(parsed.format).toBe('binary');
+    expect(parsed.triangleCount).toBe(triangleCount);
+    expect(parsed.vertices[0]).toBeCloseTo(1.5, 6);
+  });
+
+  it('rejects an ASCII STL with no facets', () => {
+    const buffer = new TextEncoder().encode('solid empty\nendsolid empty\n').buffer;
+    expect(() => parseStl(buffer, 'empty.stl')).toThrowError(StlParseError);
+    expect(() => parseStl(buffer, 'empty.stl')).toThrow(/no facets/);
+  });
+
+  it('rejects a binary STL containing a non-finite vertex', () => {
+    const triangleCount = 1;
+    const buffer = new ArrayBuffer(84 + triangleCount * 50);
+    const view = new DataView(buffer);
+    view.setUint32(80, triangleCount, true);
+    view.setFloat32(84 + 12, Number.NaN, true);
+
+    expect(() => parseStl(buffer, 'nan.stl')).toThrowError(StlParseError);
+    expect(() => parseStl(buffer, 'nan.stl')).toThrow(/non-finite/);
+  });
+
+  it('rejects an ASCII STL that exceeds the triangle budget', () => {
+    const text = `solid big\n${'vertex 0 0 0\n'.repeat((MAX_IMPORT_TRIANGLES + 1) * 3)}endsolid big\n`;
+    const buffer = new TextEncoder().encode(text).buffer;
+    expect(() => parseStl(buffer, 'big.stl')).toThrow(/browser import limit/);
+  });
+
   it('round-trips write -> parse -> solid', () => {
     // A tetrahedron written as STL, parsed back, and welded into a solid.
     const vertices = [
@@ -72,6 +117,22 @@ describe('STL parsing', () => {
     expect(solid.vertices).toHaveLength(4);
     expect(validateSolid(solid).closed).toBe(true);
     expect(Math.abs(solidVolume(solid))).toBeCloseTo(1 / 6, 6);
+  });
+
+  it('rejects writing a mesh whose indices are out of range', () => {
+    const mesh = { name: 'Bad', vertices: [0, 0, 0, 1, 0, 0, 0, 1, 0], indices: [0, 1, 3] };
+    expect(() => writeAsciiStl('bad', [mesh])).toThrowError(StlWriteError);
+    expect(() => writeAsciiStl('bad', [mesh])).toThrow(/references vertex 3/);
+  });
+
+  it('rejects writing a mesh with a non-finite vertex component', () => {
+    const mesh = {
+      name: 'Bad',
+      vertices: [0, 0, 0, 1, 0, Number.NaN, 0, 1, 0],
+      indices: [0, 1, 2]
+    };
+    expect(() => writeAsciiStl('bad', [mesh])).toThrowError(StlWriteError);
+    expect(() => writeAsciiStl('bad', [mesh])).toThrow(/non-finite/);
   });
 
   it('rejects files too small to be STL', () => {

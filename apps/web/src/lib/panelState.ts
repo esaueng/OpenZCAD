@@ -23,10 +23,45 @@ export const SIDEBAR_SECTION_IDS: readonly SidebarSectionId[] = [
   'diagnostics'
 ];
 
+/**
+ * Which workspace the top bar is showing.
+ *
+ * `build` is the modeling workspace — every panel, tool and gizmo. `view` is
+ * the reading workspace: the viewport, the orientation cube and a small bar of
+ * view controls, with the document locked against edits.
+ *
+ * Named `workspaceMode` rather than "viewer" because that word already means
+ * both the 3D viewport (`ViewerShell`) and the collaboration role in this
+ * codebase, and a third meaning would make either impossible to grep for.
+ */
+export type WorkspaceMode = 'view' | 'build';
+
 export interface PanelState {
   /** Section id to open/closed. Absent means open. */
   sidebarSections: Record<SidebarSectionId, boolean>;
   toolPaletteOpen: boolean;
+  /**
+   * Remembered per device for the same reason panel collapse is: someone who
+   * opens the app to read drawings should not have to strip the modeling UI
+   * again on every reload. Build to begin with — the mode has to be chosen.
+   */
+  workspaceMode: WorkspaceMode;
+  /**
+   * View mode's parts rail. Open to begin with — a model worth viewing usually
+   * has more than one body — and collapsible to nothing for someone who just
+   * wants the model on screen.
+   */
+  viewModeRailOpen: boolean;
+  /**
+   * The assistant dock, collapsed to its launcher. Remembered because it is a
+   * working habit — someone who models without it should not have to close it
+   * again on every reload — and because collapsing gives its column back to the
+   * viewport, which is a layout decision worth restoring.
+   *
+   * Collapsed to begin with: a new workspace opens on the model, not on a
+   * conversation nobody has started yet.
+   */
+  assistantCollapsed: boolean;
 }
 
 export const DEFAULT_PANEL_STATE: PanelState = {
@@ -37,13 +72,19 @@ export const DEFAULT_PANEL_STATE: PanelState = {
     revisions: true,
     diagnostics: true
   },
-  toolPaletteOpen: true
+  toolPaletteOpen: true,
+  workspaceMode: 'build',
+  viewModeRailOpen: true,
+  assistantCollapsed: true
 };
 
 function copyDefaults(): PanelState {
   return {
     sidebarSections: { ...DEFAULT_PANEL_STATE.sidebarSections },
-    toolPaletteOpen: DEFAULT_PANEL_STATE.toolPaletteOpen
+    toolPaletteOpen: DEFAULT_PANEL_STATE.toolPaletteOpen,
+    workspaceMode: DEFAULT_PANEL_STATE.workspaceMode,
+    viewModeRailOpen: DEFAULT_PANEL_STATE.viewModeRailOpen,
+    assistantCollapsed: DEFAULT_PANEL_STATE.assistantCollapsed
   };
 }
 
@@ -55,6 +96,15 @@ export function normalizePanelState(value: unknown): PanelState {
   const root = value as Record<string, unknown>;
   if (typeof root.toolPaletteOpen === 'boolean') {
     state.toolPaletteOpen = root.toolPaletteOpen;
+  }
+  if (typeof root.assistantCollapsed === 'boolean') {
+    state.assistantCollapsed = root.assistantCollapsed;
+  }
+  if (root.workspaceMode === 'view' || root.workspaceMode === 'build') {
+    state.workspaceMode = root.workspaceMode;
+  }
+  if (typeof root.viewModeRailOpen === 'boolean') {
+    state.viewModeRailOpen = root.viewModeRailOpen;
   }
   const sections = root.sidebarSections;
   if (sections && typeof sections === 'object' && !Array.isArray(sections)) {

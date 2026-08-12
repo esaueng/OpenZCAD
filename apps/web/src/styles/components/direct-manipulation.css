@@ -144,6 +144,12 @@
   background: var(--color-accent-dim);
 }
 
+.tool-card-submode button:disabled {
+  color: var(--color-text-dim);
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
 .tool-card-close {
   display: grid;
   place-items: center;
@@ -184,6 +190,74 @@
   background: rgba(14, 30, 48, 0.98);
 }
 
+.handle-value-chip[data-state='warning'] {
+  color: #fff4dc;
+  background: color-mix(in srgb, var(--color-warning) 18%, #08121e);
+  border-color: var(--color-warning);
+  box-shadow:
+    0 0 0 1px color-mix(in srgb, var(--color-warning) 35%, transparent),
+    0 8px 22px rgba(0, 0, 0, 0.35);
+}
+
+/* Dimension-line variant: a light pill centred on the radius callout line,
+   styled like a drawing annotation rather than a dark tooltip. */
+.handle-value-chip[data-variant='dimension'] {
+  color: #14202e;
+  background: rgba(250, 252, 255, 0.97);
+  border: 1.5px solid var(--color-accent-hi);
+  border-radius: 999px;
+  font-weight: 600;
+  transform: translate(4px, -50%);
+}
+
+.handle-value-chip[data-variant='dimension']:hover {
+  background: #ffffff;
+}
+
+.handle-value-chip[data-variant='dimension'] small {
+  font-size: 0.78em;
+  vertical-align: 0.08em;
+}
+
+.handle-dimension-prefix {
+  padding: 0;
+  color: inherit;
+  font: inherit;
+  font-weight: 800;
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+}
+
+.handle-dimension-prefix:hover,
+.handle-dimension-prefix:focus-visible {
+  color: var(--color-accent);
+  outline: none;
+}
+
+/* "Radius" name tag sitting flush against the dimension value pill. */
+.handle-label-chip {
+  position: absolute;
+  z-index: calc(var(--z-viewer-overlay) + 1);
+  padding: 4px 10px;
+  color: #14202e;
+  background: rgba(250, 252, 255, 0.97);
+  border: 1px solid rgba(20, 32, 46, 0.25);
+  border-radius: 999px;
+  box-shadow: 0 8px 22px rgba(0, 0, 0, 0.35);
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  white-space: nowrap;
+  transform: translate(calc(-100% - 4px), -50%);
+  cursor: pointer;
+  user-select: none;
+}
+
+.handle-label-chip:hover {
+  background: #ffffff;
+}
+
 /* Floating exact-value keypad anchored at the point of action. */
 .numeric-keypad {
   position: absolute;
@@ -200,6 +274,13 @@
   border: 1px solid var(--color-border-strong);
   border-radius: var(--radius-md);
   box-shadow: 0 18px 44px rgba(0, 0, 0, 0.5);
+}
+
+.numeric-keypad[data-state='warning'] {
+  border-color: var(--color-warning);
+  box-shadow:
+    0 0 0 1px color-mix(in srgb, var(--color-warning) 28%, transparent),
+    0 18px 44px rgba(0, 0, 0, 0.5);
 }
 
 .keypad-value-row {
@@ -236,6 +317,12 @@
   font-family: var(--font-mono);
   font-size: var(--fs-xs);
   text-align: right;
+}
+
+.keypad-warning {
+  color: var(--color-warning);
+  font-size: var(--fs-xs);
+  line-height: 1.35;
 }
 
 .keypad-units {
@@ -333,40 +420,184 @@
 .sketch-snap-marker {
   position: absolute;
   z-index: calc(var(--z-viewer-overlay) + 1);
-  width: 14px;
-  height: 14px;
-  border: 2px solid var(--color-success);
-  border-radius: 2px;
-  background: rgba(11, 15, 20, 0.55);
+  display: grid;
+  width: 18px;
+  height: 18px;
+  place-items: center;
+  color: var(--color-success);
+  font-family: var(--font-mono);
+  font-size: 16px;
+  font-weight: var(--fw-bold);
+  line-height: 1;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.85);
   transform: translate(-50%, -50%);
   pointer-events: none;
 }
 
-.sketch-snap-marker[data-kind='midpoint'] {
-  width: 0;
-  height: 0;
-  background: transparent;
-  border-top: 0;
-  border-right: 8px solid transparent;
-  border-bottom: 13px solid var(--color-success);
-  border-left: 8px solid transparent;
-  border-radius: 0;
+.sketch-snap-marker::after {
+  position: absolute;
+  top: 50%;
+  left: calc(100% + 4px);
+  padding: 2px 5px;
+  color: var(--color-text);
+  content: attr(data-label);
+  background: rgba(12, 17, 23, 0.9);
+  border: 1px solid rgba(125, 211, 252, 0.34);
+  border-radius: 3px;
+  font-family: var(--font-ui);
+  font-size: var(--fs-mini);
+  font-weight: var(--fw-regular);
+  line-height: 1.2;
+  text-shadow: none;
+  white-space: nowrap;
+  transform: translateY(-50%);
 }
 
-.sketch-snap-marker[data-kind='center'] {
-  border-radius: 999px;
+.sketch-snap-marker[data-kind='grid']::after {
+  display: none;
 }
 
-.sketch-snap-marker[data-kind='center']::after {
+/* Center discovery appears before the snap engages. HUD axes remain legible
+   over the adaptive grid while the matching WebGL guides stay plane-exact. */
+.sketch-center-target {
+  --sketch-center-guide: rgba(125, 211, 252, 0.88);
+  position: absolute;
+  z-index: calc(var(--z-viewer-overlay) + 1);
+  width: 28px;
+  height: 28px;
+  border: 1px solid rgba(125, 211, 252, 0.8);
+  border-radius: 50%;
+  box-shadow:
+    0 0 0 4px rgba(125, 211, 252, 0.1),
+    0 0 18px rgba(125, 211, 252, 0.34);
+  transform: translate(-50%, -50%);
+  animation: sketch-center-breathe 900ms ease-in-out infinite alternate;
+  pointer-events: none;
+}
+
+.sketch-center-axis {
   position: absolute;
   top: 50%;
   left: 50%;
-  width: 4px;
-  height: 4px;
-  content: '';
-  background: var(--color-success);
-  border-radius: 999px;
+  display: block;
+  opacity: 0.82;
+  filter: drop-shadow(0 0 3px rgba(125, 211, 252, 0.62));
+  pointer-events: none;
+}
+
+.sketch-center-axis.horizontal {
+  width: 200vmax;
+  height: 2px;
+  background: repeating-linear-gradient(
+    90deg,
+    var(--sketch-center-guide) 0 12px,
+    transparent 12px 20px
+  );
   transform: translate(-50%, -50%);
+  animation: sketch-center-flow-x 760ms linear infinite;
+}
+
+.sketch-center-axis.vertical {
+  width: 2px;
+  height: 200vmax;
+  background: repeating-linear-gradient(
+    180deg,
+    var(--sketch-center-guide) 0 12px,
+    transparent 12px 20px
+  );
+  transform: translate(-50%, -50%);
+  animation: sketch-center-flow-y 760ms linear infinite;
+}
+
+.sketch-center-target::before,
+.sketch-center-target::after {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  content: '';
+  background: #b9e7ff;
+  box-shadow: 0 0 6px rgba(125, 211, 252, 0.85);
+  transform: translate(-50%, -50%);
+}
+
+.sketch-center-target::before {
+  width: 38px;
+  height: 1px;
+}
+
+.sketch-center-target::after {
+  width: 1px;
+  height: 38px;
+}
+
+.sketch-center-target[data-engaged='true'] {
+  --sketch-center-guide: rgba(134, 239, 172, 0.94);
+  border-color: #86efac;
+  box-shadow:
+    0 0 0 5px rgba(74, 222, 128, 0.14),
+    0 0 22px rgba(74, 222, 128, 0.5);
+  animation-name: sketch-center-lock;
+  animation-duration: 440ms;
+}
+
+.sketch-center-target[data-engaged='true']::before,
+.sketch-center-target[data-engaged='true']::after {
+  background: #bbf7d0;
+  box-shadow: 0 0 7px rgba(74, 222, 128, 0.9);
+}
+
+@keyframes sketch-center-breathe {
+  from {
+    opacity: 0.64;
+    transform: translate(-50%, -50%) scale(0.88);
+  }
+  to {
+    opacity: 1;
+    transform: translate(-50%, -50%) scale(1.08);
+  }
+}
+
+@keyframes sketch-center-lock {
+  from {
+    opacity: 0.78;
+    transform: translate(-50%, -50%) scale(0.94);
+  }
+  to {
+    opacity: 1;
+    transform: translate(-50%, -50%) scale(1.12);
+  }
+}
+
+@keyframes sketch-center-flow-x {
+  to {
+    background-position-x: 20px;
+  }
+}
+
+@keyframes sketch-center-flow-y {
+  to {
+    background-position-y: 20px;
+  }
+}
+
+[data-reduced-motion='true'] .sketch-center-target,
+[data-reduced-motion='true'] .sketch-center-axis {
+  animation: none;
+}
+
+.sketch-grid-indicator {
+  position: absolute;
+  right: 14px;
+  bottom: 14px;
+  z-index: calc(var(--z-viewer-overlay) + 1);
+  padding: 4px 7px;
+  color: var(--color-text-subtle);
+  background: rgba(12, 17, 23, 0.82);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  font-family: var(--font-mono);
+  font-size: var(--fs-mini);
+  pointer-events: none;
 }
 
 /* Sketch drawing tools, floating under the tool card. */
@@ -384,6 +615,15 @@
   border-radius: var(--radius-md);
   box-shadow: 0 12px 30px rgba(0, 0, 0, 0.4);
   transform: translateX(-50%);
+}
+
+.sketch-rail-group-label {
+  padding: 0 4px 0 2px;
+  color: var(--color-text-subtle);
+  font-size: var(--fs-mini);
+  font-weight: var(--fw-medium);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
 }
 
 .sketch-rail button {
@@ -429,6 +669,174 @@
   color: var(--color-accent-hi);
 }
 
+.sketch-circle-tool {
+  position: relative;
+  display: flex;
+}
+
+.sketch-circle-tool > button:first-child {
+  border-radius: var(--radius-sm) 0 0 var(--radius-sm);
+}
+
+.sketch-circle-tool .sketch-circle-chevron {
+  min-width: 22px;
+  padding-inline: 3px;
+  border-left: 0;
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+}
+
+.sketch-circle-menu {
+  position: absolute;
+  top: calc(100% + 8px);
+  left: 0;
+  z-index: calc(var(--z-inspector-float) + 4);
+  display: grid;
+  width: 238px;
+  padding: 5px;
+  background: var(--color-surface-2);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-md);
+  box-shadow: 0 16px 36px rgba(0, 0, 0, 0.48);
+}
+
+.sketch-circle-menu button {
+  display: grid;
+  grid-template-columns: 20px minmax(0, 1fr);
+  gap: 8px;
+  padding: 7px 8px;
+  text-align: left;
+}
+
+.sketch-circle-menu button > span {
+  display: grid;
+  gap: 1px;
+}
+
+.sketch-circle-menu strong {
+  color: var(--color-text);
+  font-size: var(--fs-xs);
+  font-weight: var(--fw-medium);
+}
+
+.sketch-circle-menu small {
+  color: var(--color-text-subtle);
+  font-size: var(--fs-mini);
+}
+
+.sketch-palette {
+  position: absolute;
+  top: 124px;
+  right: 14px;
+  z-index: calc(var(--z-inspector-float) + 1);
+  width: 238px;
+  color: var(--color-text-muted);
+  background: color-mix(in srgb, var(--color-surface-2) 94%, transparent);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-md);
+  box-shadow: 0 14px 34px rgba(0, 0, 0, 0.4);
+  backdrop-filter: blur(12px);
+}
+
+.sketch-palette.collapsed {
+  width: auto;
+}
+
+.sketch-palette-header {
+  width: 100%;
+  min-height: 36px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 7px 9px;
+  color: var(--color-text);
+  font-size: var(--fs-xs);
+}
+
+.sketch-palette-header > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.sketch-palette-header svg:first-child {
+  color: var(--color-accent-hi);
+}
+
+.sketch-palette-content {
+  display: grid;
+  gap: 9px;
+  padding: 0 10px 10px;
+}
+
+.sketch-palette fieldset {
+  display: grid;
+  gap: 7px;
+  margin: 0;
+  padding: 9px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+}
+
+.sketch-palette legend {
+  padding: 0 5px;
+  color: var(--color-text-subtle);
+  font-size: var(--fs-mini);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.sketch-palette label {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--color-text-muted);
+  font-size: var(--fs-xs);
+}
+
+.sketch-palette input[type='checkbox'] {
+  accent-color: var(--color-accent);
+}
+
+.sketch-palette-number {
+  justify-content: space-between;
+  padding-top: 3px;
+  border-top: 1px solid var(--color-border);
+}
+
+.sketch-palette-number > span:last-child {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.sketch-palette-number input {
+  width: 72px;
+  min-width: 0;
+  padding: 3px 5px;
+  color: var(--color-text);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-sm);
+  font-family: var(--font-mono);
+  font-size: var(--fs-mini);
+}
+
+.sketch-palette-number small {
+  min-width: 20px;
+  color: var(--color-text-subtle);
+  font-size: var(--fs-mini);
+}
+
+.sketch-palette-help {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  color: var(--color-text-subtle);
+  font-size: var(--fs-mini);
+}
+
 @media (min-width: 761px) and (max-width: 1500px) {
   .sketch-rail button {
     gap: 4px;
@@ -436,6 +844,10 @@
   }
 
   .sketch-rail button kbd {
+    display: none;
+  }
+
+  .sketch-rail-group-label {
     display: none;
   }
 }
@@ -495,6 +907,64 @@
   font-size: var(--fs-mini);
 }
 
+/* Text sketch objects: the string, family and style live above the numeric
+   grid, because they are what the user came to change. */
+.text-object-fields .field input[type='text'],
+.text-object-fields .field select {
+  width: 100%;
+  min-width: 0;
+}
+
+/* The picker renders each option in the face it selects, so the option list
+   needs room to breathe more than the numeric inputs do. */
+.text-object-fields .field select {
+  font-size: var(--fs-sm);
+  padding: 4px 6px;
+}
+
+.text-style-toggles {
+  display: flex;
+  gap: 6px;
+}
+
+.text-style-toggles .toggle {
+  width: 30px;
+  height: 26px;
+  display: grid;
+  place-items: center;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm, 4px);
+  background: transparent;
+  color: var(--color-text-muted);
+  cursor: pointer;
+  font-size: var(--fs-sm);
+  line-height: 1;
+}
+
+.text-style-toggles .toggle:hover {
+  color: var(--color-text);
+  border-color: var(--color-border-strong, var(--color-border));
+}
+
+.text-style-toggles .toggle.active {
+  background: var(--color-accent-soft, var(--color-surface-raised));
+  border-color: var(--color-accent);
+  color: var(--color-accent);
+}
+
+.text-style-toggles .toggle:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 1px;
+}
+
+/* A style that fell back to a real face is information, not an error: the
+   registry ships no synthetic bold or italic, so this is the honest outcome. */
+.field-hint {
+  margin: 0 0 10px;
+  color: var(--color-text-dim);
+  font-size: var(--fs-mini);
+}
+
 @media (max-width: 760px) {
   .sketch-rail {
     max-width: calc(100% - 20px);
@@ -508,6 +978,15 @@
     left: 10px;
     width: auto;
     max-height: 44vh;
+    overflow-y: auto;
+  }
+
+  .sketch-palette {
+    top: auto;
+    right: 10px;
+    bottom: 54px;
+    width: min(238px, calc(100% - 20px));
+    max-height: 46vh;
     overflow-y: auto;
   }
 }
@@ -562,6 +1041,25 @@
 
 .sketch-plane-buttons button:hover {
   background: rgba(77, 163, 255, 0.22);
+}
+
+/*
+ * Mouse parity for the Escape that leaves plane picking. Muted so it reads as
+ * a way out rather than a fourth plane to choose.
+ */
+.sketch-plane-buttons .sketch-plane-dismiss {
+  margin-left: var(--sp-1);
+  padding: 5px 9px;
+  color: var(--color-text-muted);
+  font-size: var(--fs-sm);
+  line-height: 1;
+  background: transparent;
+  border-color: transparent;
+}
+
+.sketch-plane-buttons .sketch-plane-dismiss:hover {
+  color: var(--color-text);
+  background: var(--color-surface-raised, rgba(255, 255, 255, 0.08));
 }
 
 /* One-click return to the source sketch after a region extrude. */

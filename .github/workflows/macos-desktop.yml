@@ -1,0 +1,62 @@
+name: macOS desktop
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    paths:
+      - '.github/workflows/macos-desktop.yml'
+      - 'apps/desktop/**'
+      - 'apps/web/**'
+      - 'packages/**'
+      - 'script/build_and_run.sh'
+      - 'package.json'
+      - 'pnpm-lock.yaml'
+
+permissions:
+  contents: read
+
+jobs:
+  apple-silicon:
+    runs-on: blacksmith-6vcpu-macos-26
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6
+        with:
+          version: 10.8.0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 22
+          cache: pnpm
+      - name: Prepare Rust toolchain
+        run: |
+          rustup target add aarch64-apple-darwin
+          rustup component add clippy rustfmt
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm typecheck
+      - run: pnpm --filter @openzcad/web lint
+      - run: pnpm --filter @openzcad/web exec vitest run src/lib/desktopBridge.test.ts
+      - name: Check native host
+        working-directory: apps/desktop/src-tauri
+        run: |
+          cargo fmt --all -- --check
+          cargo clippy --locked --target aarch64-apple-darwin --all-targets --all-features -- -D warnings
+          cargo test --locked --target aarch64-apple-darwin --all-features
+      - name: Exercise the real WKWebView CAD workspace
+        run: pnpm --filter @openzcad/desktop test:e2e
+      - name: Build ad-hoc signed Apple Silicon DMG
+        run: pnpm build:desktop
+      - name: Inspect application architecture and signature
+        run: |
+          APP='apps/desktop/src-tauri/target/aarch64-apple-darwin/release/bundle/macos/OpenZCAD.app'
+          BIN="$APP/Contents/MacOS/openzcad-desktop"
+          ICON="$APP/Contents/Resources/icon.icns"
+          DMG=(apps/desktop/src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/OpenZCAD_*_aarch64.dmg)
+          test "$(lipo -archs "$BIN")" = 'arm64'
+          test "$(plutil -extract CFBundleIconFile raw "$APP/Contents/Info.plist")" = 'icon.icns'
+          cmp "$ICON" apps/desktop/src-tauri/icons/icon.icns
+          codesign --verify --deep --strict --verbose=2 "$APP"
+          codesign -d --entitlements - "$APP"
+          test "${#DMG[@]}" -eq 1
+          hdiutil verify "${DMG[0]}"

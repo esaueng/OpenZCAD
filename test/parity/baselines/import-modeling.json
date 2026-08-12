@@ -1,0 +1,410 @@
+{
+  "fillet-on-import": {
+    "brepkit": {
+      "status": "imported",
+      "warnings": [],
+      "bodyCount": 1,
+      "volume": 9522.60692840917,
+      "faceCount": 10,
+      "edgeCount": 24,
+      "seamEdgeCount": 0,
+      "surfaceTypes": {
+        "cylinder": 4,
+        "plane": 6
+      },
+      "witnessedFaces": 0,
+      "witnessedEdges": 0,
+      "lineageNames": [],
+      "faceHashDigest": "b563a24b",
+      "edgeHashDigest": "4de1dc1b",
+      "bbox": [0, 0, 0, 40, 24, 10],
+      "roundTrip": {
+        "status": "ok",
+        "warnings": [],
+        "volumeRelativeDelta": 0,
+        "faceCountDelta": 0,
+        "edgeCountDelta": 0,
+        "exportedSolidCount": 1,
+        "exportedVoids": false
+      }
+    },
+    "occt": {
+      "status": "imported",
+      "warnings": [],
+      "bodyCount": 1,
+      "volume": 9522.74333882308,
+      "faceCount": 10,
+      "edgeCount": 24,
+      "seamEdgeCount": 0,
+      "surfaceTypes": {
+        "plane": 6,
+        "cylinder": 4
+      },
+      "witnessedFaces": 0,
+      "witnessedEdges": 0,
+      "lineageNames": [],
+      "faceHashDigest": "b563a24b",
+      "edgeHashDigest": "26f53b2e",
+      "bbox": [-4.440892098500626e-16, -4.440892098500626e-16, 0, 40, 24, 10],
+      "roundTrip": {
+        "status": "ok",
+        "warnings": [],
+        "volumeRelativeDelta": 7.831626128295643e-15,
+        "faceCountDelta": 0,
+        "edgeCountDelta": 0,
+        "exportedSolidCount": 1,
+        "exportedVoids": false
+      }
+    }
+  },
+  "chamfer-on-import": {
+    "brepkit": {
+      "status": "imported",
+      "warnings": [],
+      "bodyCount": 1,
+      "volume": 9420,
+      "faceCount": 10,
+      "edgeCount": 24,
+      "seamEdgeCount": 0,
+      "surfaceTypes": {
+        "plane": 10
+      },
+      "witnessedFaces": 0,
+      "witnessedEdges": 0,
+      "lineageNames": [],
+      "faceHashDigest": "68988513",
+      "edgeHashDigest": "9389207a",
+      "bbox": [0, 0, 0, 40, 24, 10],
+      "roundTrip": {
+        "status": "ok",
+        "warnings": [],
+        "volumeRelativeDelta": 0,
+        "faceCountDelta": 0,
+        "edgeCountDelta": 0,
+        "exportedSolidCount": 1,
+        "exportedVoids": false
+      }
+    },
+    "occt": {
+      "status": "imported",
+      "warnings": [],
+      "bodyCount": 1,
+      "volume": 9420,
+      "faceCount": 10,
+      "edgeCount": 24,
+      "seamEdgeCount": 0,
+      "surfaceTypes": {
+        "plane": 10
+      },
+      "witnessedFaces": 0,
+      "witnessedEdges": 0,
+      "lineageNames": [],
+      "faceHashDigest": "68988513",
+      "edgeHashDigest": "9389207a",
+      "bbox": [-2.220446049250313e-16, -2.220446049250313e-16, 0, 40, 24, 10],
+      "roundTrip": {
+        "status": "ok",
+        "warnings": [],
+        "volumeRelativeDelta": 0,
+        "faceCountDelta": 0,
+        "edgeCountDelta": 0,
+        "exportedSolidCount": 1,
+        "exportedVoids": false
+      }
+    }
+  },
+  "boolean-with-import": {
+    "brepkit": {
+      "status": "imported",
+      "warnings": [],
+      "bodyCount": 1,
+      "volume": 8814.601836602553,
+      "faceCount": 7,
+      "edgeCount": 15,
+      "seamEdgeCount": 1,
+      "surfaceTypes": {
+        "plane": 6,
+        "cylinder": 1
+      },
+      "witnessedFaces": 0,
+      "witnessedEdges": 0,
+      "lineageNames": [],
+      "faceHashDigest": "278af479",
+      "edgeHashDigest": "a850d842",
+      "bbox": [0, 0, 0, 40, 24, 10],
+      "roundTrip": {
+        "status": "ok",
+        "warnings": [],
+        "volumeRelativeDelta": 0,
+        "faceCountDelta": 0,
+        "edgeCountDelta": 0,
+        "exportedSolidCount": 1,
+        "exportedVoids": false
+      }
+    },
+    "occt": {
+      "status": "imported",
+      "warnings": [],
+      "bodyCount": 1,
+      "volume": 8814.601836602551,
+      "faceCount": 7,
+      "edgeCount": 15,
+      "seamEdgeCount": 1,
+      "surfaceTypes": {
+        "plane": 6,
+        "cylinder": 1
+      },
+      "witnessedFaces": 0,
+      "witnessedEdges": 0,
+      "lineageNames": [],
+      "faceHashDigest": "278af479",
+      "edgeHashDigest": "a850d842",
+      "bbox": [
+        -1.0000000355271367e-7, -1e-7, -1.0000000355271367e-7, 40.0000001,
+        24.000000100000005, 10.000000100000003
+      ],
+      "roundTrip": {
+        "status": "ok",
+        "warnings": [],
+        "volumeRelativeDelta": 3.095413900590246e-15,
+        "faceCountDelta": 0,
+        "edgeCountDelta": 0,
+        "exportedSolidCount": 1,
+        "exportedVoids": false
+      }
+    }
+  },
+  "boss-crossing-a-wall": {
+    "brepkit": {
+      "status": "imported",
+      "warnings": [],
+      "bodyCount": 1,
+      "volume": 10951.6171402675,
+      "faceCount": 11,
+      "edgeCount": 24,
+      "seamEdgeCount": 1,
+      "surfaceTypes": {
+        "plane": 9,
+        "cylinder": 2
+      },
+      "witnessedFaces": 0,
+      "witnessedEdges": 0,
+      "lineageNames": [],
+      "faceHashDigest": "aedc9d9a",
+      "edgeHashDigest": "cb3f41d3",
+      "bbox": [-3, 0, 0, 40, 24, 20],
+      "roundTrip": {
+        "status": "ok",
+        "warnings": [],
+        "volumeRelativeDelta": 0.0000013988730714120268,
+        "faceCountDelta": 0,
+        "edgeCountDelta": 0,
+        "exportedSolidCount": 1,
+        "exportedVoids": false
+      }
+    },
+    "occt": {
+      "bodyCount": 0,
+      "volume": 0,
+      "faceCount": 0,
+      "edgeCount": 0,
+      "seamEdgeCount": 0,
+      "surfaceTypes": {},
+      "witnessedFaces": 0,
+      "witnessedEdges": 0,
+      "lineageNames": [],
+      "faceHashDigest": "empty",
+      "edgeHashDigest": "empty",
+      "bbox": null,
+      "status": "threw",
+      "warnings": [],
+      "error": "Face handle count 14 does not match tessellation groups 17.",
+      "roundTrip": {
+        "status": "skipped-no-body"
+      }
+    }
+  },
+  "pattern-boolean-with-import": {
+    "brepkit": {
+      "status": "imported",
+      "warnings": [],
+      "bodyCount": 1,
+      "volume": 9010.951377451913,
+      "faceCount": 9,
+      "edgeCount": 21,
+      "seamEdgeCount": 3,
+      "surfaceTypes": {
+        "plane": 6,
+        "cylinder": 3
+      },
+      "witnessedFaces": 0,
+      "witnessedEdges": 0,
+      "lineageNames": [],
+      "faceHashDigest": "4aaa8306",
+      "edgeHashDigest": "e46dc99a",
+      "bbox": [0, 0, 0, 40, 24, 10],
+      "roundTrip": {
+        "status": "ok",
+        "warnings": [],
+        "volumeRelativeDelta": 0,
+        "faceCountDelta": 0,
+        "edgeCountDelta": 0,
+        "exportedSolidCount": 1,
+        "exportedVoids": false
+      }
+    },
+    "occt": {
+      "status": "imported",
+      "warnings": [],
+      "bodyCount": 1,
+      "volume": 9010.951377451911,
+      "faceCount": 9,
+      "edgeCount": 21,
+      "seamEdgeCount": 3,
+      "surfaceTypes": {
+        "plane": 6,
+        "cylinder": 3
+      },
+      "witnessedFaces": 0,
+      "witnessedEdges": 0,
+      "lineageNames": [],
+      "faceHashDigest": "4aaa8306",
+      "edgeHashDigest": "e46dc99a",
+      "bbox": [
+        -1.0000000355271367e-7, -1e-7, -1.0000000355271367e-7, 40.0000001,
+        24.000000100000005, 10.000000100000003
+      ],
+      "roundTrip": {
+        "status": "ok",
+        "warnings": [],
+        "volumeRelativeDelta": 1.4130501088578256e-15,
+        "faceCountDelta": 0,
+        "edgeCountDelta": 0,
+        "exportedSolidCount": 1,
+        "exportedVoids": false
+      }
+    }
+  },
+  "shell-on-import": {
+    "brepkit": {
+      "status": "imported",
+      "warnings": [],
+      "bodyCount": 1,
+      "volume": 3840,
+      "faceCount": 11,
+      "edgeCount": 24,
+      "seamEdgeCount": 0,
+      "surfaceTypes": {
+        "plane": 11
+      },
+      "witnessedFaces": 0,
+      "witnessedEdges": 0,
+      "lineageNames": [],
+      "faceHashDigest": "f9176a10",
+      "edgeHashDigest": "c1a08708",
+      "bbox": [0, 0, 0, 40, 24, 10],
+      "roundTrip": {
+        "status": "ok",
+        "warnings": [],
+        "volumeRelativeDelta": 0,
+        "faceCountDelta": 0,
+        "edgeCountDelta": 0,
+        "exportedSolidCount": 1,
+        "exportedVoids": false
+      }
+    },
+    "occt": {
+      "status": "imported",
+      "warnings": [],
+      "bodyCount": 1,
+      "volume": 3840,
+      "faceCount": 11,
+      "edgeCount": 24,
+      "seamEdgeCount": 0,
+      "surfaceTypes": {
+        "plane": 11
+      },
+      "witnessedFaces": 0,
+      "witnessedEdges": 0,
+      "lineageNames": [],
+      "faceHashDigest": "f9176a10",
+      "edgeHashDigest": "c1a08708",
+      "bbox": [
+        -1.0000000355271367e-7, -1e-7, -1.0000000355271367e-7, 40.0000001,
+        24.000000100000005, 10.000000100000003
+      ],
+      "roundTrip": {
+        "status": "ok",
+        "warnings": [],
+        "volumeRelativeDelta": 0,
+        "faceCountDelta": 0,
+        "edgeCountDelta": 0,
+        "exportedSolidCount": 1,
+        "exportedVoids": false
+      }
+    }
+  },
+  "boolean-on-nurbs-import": {
+    "brepkit": {
+      "status": "imported",
+      "warnings": [],
+      "bodyCount": 1,
+      "volume": 9425.614677425621,
+      "faceCount": 10,
+      "edgeCount": 24,
+      "seamEdgeCount": 0,
+      "surfaceTypes": {
+        "plane": 6,
+        "bspline": 3,
+        "cylinder": 1
+      },
+      "witnessedFaces": 0,
+      "witnessedEdges": 0,
+      "lineageNames": [],
+      "faceHashDigest": "3c489854",
+      "edgeHashDigest": "e140444b",
+      "bbox": [-4, -4, 0, 40, 24, 10],
+      "roundTrip": {
+        "status": "ok",
+        "warnings": [],
+        "volumeRelativeDelta": 0,
+        "faceCountDelta": 0,
+        "edgeCountDelta": 0,
+        "exportedSolidCount": 1,
+        "exportedVoids": false
+      }
+    },
+    "occt": {
+      "status": "imported",
+      "warnings": [],
+      "bodyCount": 1,
+      "volume": 9546.002960523074,
+      "faceCount": 10,
+      "edgeCount": 24,
+      "seamEdgeCount": 0,
+      "surfaceTypes": {
+        "plane": 6,
+        "bspline": 3,
+        "cylinder": 1
+      },
+      "witnessedFaces": 0,
+      "witnessedEdges": 0,
+      "lineageNames": [],
+      "faceHashDigest": "c1cead63",
+      "edgeHashDigest": "fea0548c",
+      "bbox": [
+        -1.0606602717798208, -1.0606602717798224, -1.0606602717798224,
+        41.060660271779824, 25.06066027177982, 11.060660271779822
+      ],
+      "roundTrip": {
+        "status": "ok",
+        "warnings": [],
+        "volumeRelativeDelta": 1.1432990819727453e-15,
+        "faceCountDelta": 0,
+        "edgeCountDelta": 0,
+        "exportedSolidCount": 1,
+        "exportedVoids": false
+      }
+    }
+  }
+}
