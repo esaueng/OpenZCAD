@@ -226,6 +226,11 @@ const FACET_FALLBACK_REMEDY =
   'export that way. Repositioning the overlap sometimes clears it; otherwise keep the ' +
   'bodies separate, or subtract instead — the same operands still cut exactly.';
 
+interface FacetFallbackSignal {
+  lostCurvature: boolean;
+  exploded: boolean;
+}
+
 export interface FaceCensusSubject {
   getSolidFaces(solid: number): ArrayLike<number>;
   getSurfaceType(face: number): string;
@@ -248,6 +253,27 @@ export function censusOfSolids(
   return { faces, curvedFaces };
 }
 
+function facetFallbackSignal(
+  census: BooleanFaceCensus
+): FacetFallbackSignal | null {
+  const lostCurvature =
+    census.operands.curvedFaces > 0 && census.result.curvedFaces === 0;
+  const exploded =
+    census.result.faces >
+    census.operands.faces * FACET_FALLBACK_FACTOR + FACET_FALLBACK_SLACK;
+  return lostCurvature || exploded ? { lostCurvature, exploded } : null;
+}
+
+function faceCensusDetail(
+  census: BooleanFaceCensus,
+  inputLabel: 'operand' | 'source'
+): string {
+  return [
+    `${census.operands.faces} ${inputLabel} faces (${census.operands.curvedFaces} curved)`,
+    `${census.result.faces} result faces (${census.result.curvedFaces} curved)`
+  ].join(' became ');
+}
+
 /**
  * The signal that a boolean silently fell back to a faceted result.
  *
@@ -266,22 +292,15 @@ export function censusOfSolids(
 export function booleanFacetFallbackWarning(
   census: BooleanFaceCensus
 ): string | null {
-  const lostCurvature =
-    census.operands.curvedFaces > 0 && census.result.curvedFaces === 0;
-  const exploded =
-    census.result.faces >
-    census.operands.faces * FACET_FALLBACK_FACTOR + FACET_FALLBACK_SLACK;
-  if (!lostCurvature && !exploded) {
+  const signal = facetFallbackSignal(census);
+  if (!signal) {
     return null;
   }
-  const detail = [
-    `${census.operands.faces} operand faces (${census.operands.curvedFaces} curved)`,
-    `${census.result.faces} result faces (${census.result.curvedFaces} curved)`
-  ].join(' became ');
-  if (lostCurvature && exploded) {
+  const detail = faceCensusDetail(census, 'operand');
+  if (signal.lostCurvature && signal.exploded) {
     return `${FACET_FALLBACK_LEAD} instead of exact surfaces: ${detail}. ${FACET_FALLBACK_REMEDY}`;
   }
-  if (lostCurvature) {
+  if (signal.lostCurvature) {
     // Same fallback, caught by the curvature test alone because a smaller
     // round operand facets into too few faces to trip the count test. It
     // earns the same remedy: without one this reads as a property of the
@@ -291,6 +310,25 @@ export function booleanFacetFallbackWarning(
   return (
     `The boolean produced far more faces than its operands: ${detail}. ` +
     'This is usually a sliver or near-tangent contact being approximated.'
+  );
+}
+
+/**
+ * Reject a direct edit that silently replaced analytic faces with facets.
+ *
+ * Unlike a boolean feature, a direct edit cannot offer an alternate modeling
+ * operation without changing the user's intent. Its safe recovery is to keep
+ * the last exact body and surface the kernel refusal to the editor.
+ */
+export function directEditFacetFallbackWarning(
+  census: BooleanFaceCensus
+): string | null {
+  if (!facetFallbackSignal(census)) {
+    return null;
+  }
+  return (
+    'Offset face refused: the kernel returned a faceted approximation instead of exact surfaces: ' +
+    `${faceCensusDetail(census, 'source')}. The original body was left unchanged.`
   );
 }
 
