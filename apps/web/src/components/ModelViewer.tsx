@@ -47,6 +47,7 @@ import {
   computeNormalToFacePose,
   cylinderRadiusPreviewMatrix,
   createBodyEdgeOverlay,
+  createAnalyticCylinderGhost,
   createFaceHighlightGeometry,
   createAxesGizmo,
   createExtrudePreviewGeometry,
@@ -712,6 +713,13 @@ interface MoveDragState {
 const SELECTION_EMISSIVE = 0x173a5e;
 const SELECTED_FACE_COLOR = 0x4da3ff;
 const SELECTED_FACE_OPACITY = 0.5;
+const SELECTED_FACE_HIDDEN_OPACITY = 0.16;
+const E2E_CANVAS_HOOKS_ENABLED =
+  (
+    import.meta.env as unknown as {
+      VITE_E2E?: string;
+    }
+  ).VITE_E2E === '1';
 const SKETCH_COLOR = 0x4da3ff;
 const SKETCH_SELECTED_COLOR = 0x9ecbff;
 /**
@@ -950,12 +958,7 @@ export function ModelViewer({
       return;
     }
     const viewerHost = host;
-    const e2eCanvasHooksEnabled =
-      (
-        import.meta.env as unknown as {
-          VITE_E2E?: string;
-        }
-      ).VITE_E2E === '1';
+    const e2eCanvasHooksEnabled = E2E_CANVAS_HOOKS_ENABLED;
 
     mark('viewer.init:begin');
     let firstFrame = true;
@@ -1951,6 +1954,177 @@ export function ModelViewer({
         }
       );
     };
+    /** Exact bore/annulus selection plus a pixel known to lie on the far wall. */
+    const handleE2EVisualSelectionProbe = (event: Event) => {
+      if (!e2eCanvasHooksEnabled) {
+        return;
+      }
+      const detail = (
+        event as CustomEvent<{
+          surface?: 'bore' | 'annulus';
+          resolve?: (
+            value: { x: number; y: number; topologyId: string } | null
+          ) => void;
+        }>
+      ).detail;
+      if (!detail?.surface || !detail.resolve) {
+        return;
+      }
+      const boreCandidate = bodiesRef.current
+        .flatMap((body) =>
+          (body.topology?.faces ?? [])
+            .filter(
+              (face) =>
+                face.geometry?.featureType === 'through-hole' &&
+                face.geometry.radius !== undefined
+            )
+            .map((face) => ({ body, face }))
+        )
+        .sort(
+          (left, right) =>
+            (right.face.geometry?.radius ?? 0) -
+            (left.face.geometry?.radius ?? 0)
+        )[0];
+      const body = boreCandidate?.body;
+      const bore = boreCandidate?.face;
+      const boreGeometry = bore?.geometry;
+      if (
+        !body?.topology ||
+        !bore ||
+        !boreGeometry?.axisStart ||
+        !boreGeometry.axisEnd ||
+        boreGeometry.radius === undefined
+      ) {
+        detail.resolve(null);
+        return;
+      }
+      const adjacentPlaneHashes = new Set(
+        body.topology.edges
+          .filter((edge) => edge.adjacentFaceHashes?.includes(bore.hash))
+          .flatMap((edge) => edge.adjacentFaceHashes ?? [])
+          .filter((hash) => hash !== bore.hash)
+      );
+      const annulus = body.topology.faces.find(
+        (face) =>
+          adjacentPlaneHashes.has(face.hash) &&
+          face.geometry?.surfaceType === 'plane' &&
+          face.geometry.normal !== undefined
+      );
+      const target = detail.surface === 'bore' ? bore : annulus;
+      if (!target?.geometry) {
+        detail.resolve(null);
+        return;
+      }
+
+      const start = new THREE.Vector3(
+        boreGeometry.axisStart.x,
+        boreGeometry.axisStart.y,
+        boreGeometry.axisStart.z
+      );
+      const end = new THREE.Vector3(
+        boreGeometry.axisEnd.x,
+        boreGeometry.axisEnd.y,
+        boreGeometry.axisEnd.z
+      );
+      const axis = end.clone().sub(start).normalize();
+      const center = start.clone().lerp(end, 0.5);
+      const reference =
+        Math.abs(axis.z) < 0.9
+          ? new THREE.Vector3(0, 0, 1)
+          : new THREE.Vector3(1, 0, 0);
+      const radialU = new THREE.Vector3()
+        .crossVectors(axis, reference)
+        .normalize();
+      const radialV = new THREE.Vector3()
+        .crossVectors(axis, radialU)
+        .normalize();
+      const object = context.objectsByBodyId.get(body.bodyId);
+      let bodyMesh: THREE.Mesh | null = null;
+      if (object) {
+        forEachMesh(object, (mesh) => {
+          bodyMesh ??= mesh;
+        });
+      }
+      let farWall: THREE.Vector3 | null = null;
+      let largestDepthGap = -Infinity;
+      if (bodyMesh) {
+        for (let step = 0; step < 48; step += 1) {
+          const angle = (step / 48) * Math.PI * 2;
+          const candidate = center
+            .clone()
+            .addScaledVector(radialU, Math.cos(angle) * boreGeometry.radius)
+            .addScaledVector(radialV, Math.sin(angle) * boreGeometry.radius);
+          const ndc = candidate.clone().project(context.activeCamera);
+          context.raycaster.setFromCamera(
+            new THREE.Vector2(ndc.x, ndc.y),
+            context.activeCamera
+          );
+          const firstHit = context.raycaster.intersectObject(
+            bodyMesh,
+            false
+          )[0];
+          const firstFaceIndex = firstHit?.faceIndex;
+          const visibleFace = body.topology.faces.find(
+            (face) =>
+              firstFaceIndex !== undefined &&
+              firstFaceIndex !== null &&
+              firstFaceIndex >= face.triangleStart &&
+              firstFaceIndex < face.triangleStart + face.triangleCount
+          );
+          const depthGap = firstHit
+            ? context.raycaster.ray.origin.distanceTo(candidate) -
+              firstHit.distance
+            : -Infinity;
+          if (
+            visibleFace?.geometry?.surfaceType === 'cylinder' &&
+            (visibleFace.geometry.radius ?? 0) > boreGeometry.radius &&
+            depthGap > largestDepthGap
+          ) {
+            farWall = candidate;
+            largestDepthGap = depthGap;
+          }
+        }
+      }
+      if (!farWall) {
+        detail.resolve(null);
+        return;
+      }
+
+      const normal =
+        detail.surface === 'bore'
+          ? center.clone().sub(farWall).normalize()
+          : new THREE.Vector3(
+              target.geometry.normal!.x,
+              target.geometry.normal!.y,
+              target.geometry.normal!.z
+            );
+      const point = new THREE.Vector3(
+        target.geometry.center.x,
+        target.geometry.center.y,
+        target.geometry.center.z
+      );
+      onSelectTopologyRef.current(
+        {
+          bodyId: body.bodyId,
+          kind: 'face',
+          topologyId: target.topologyId,
+          hash: target.hash
+        },
+        false,
+        {
+          point: { x: point.x, y: point.y, z: point.z },
+          normal: { x: normal.x, y: normal.y, z: normal.z }
+        }
+      );
+
+      const ndc = farWall.project(context.activeCamera);
+      const rect = renderer.domElement.getBoundingClientRect();
+      detail.resolve({
+        x: ((ndc.x + 1) / 2) * rect.width,
+        y: ((1 - ndc.y) / 2) * rect.height,
+        topologyId: target.topologyId
+      });
+    };
     /**
      * Where on screen a pickable exact edge currently is.
      *
@@ -2275,10 +2449,14 @@ export function ModelViewer({
         }
       });
     };
-    if (e2eCanvasHooksEnabled) {
+    if (E2E_CANVAS_HOOKS_ENABLED) {
       renderer.domElement.addEventListener(
         'openzcad:e2e-select-cylinder',
         handleE2ECylinderSelection
+      );
+      renderer.domElement.addEventListener(
+        'openzcad:e2e-visual-selection-probe',
+        handleE2EVisualSelectionProbe
       );
       renderer.domElement.addEventListener(
         'openzcad:e2e-render-policy',
@@ -2653,7 +2831,7 @@ export function ModelViewer({
         chip.hidden = true;
         radiusLabelChip.hidden = true;
         keypadAnchorRef.current?.(null);
-        if (e2eCanvasHooksEnabled) {
+        if (E2E_CANVAS_HOOKS_ENABLED) {
           delete renderer.domElement.dataset.e2eHandleX;
           delete renderer.domElement.dataset.e2eHandleY;
           delete renderer.domElement.dataset.e2eHandleDx;
@@ -4835,6 +5013,10 @@ export function ModelViewer({
         handleE2ECylinderSelection
       );
       renderer.domElement.removeEventListener(
+        'openzcad:e2e-visual-selection-probe',
+        handleE2EVisualSelectionProbe
+      );
+      renderer.domElement.removeEventListener(
         'openzcad:e2e-render-policy',
         handleE2ERenderPolicy
       );
@@ -5014,6 +5196,8 @@ export function ModelViewer({
     }
 
     const bodiesChanged = context.renderedBodies !== bodies;
+    const xrayEnabled = sketchMode === null;
+    context.selection.setXrayEnabled(xrayEnabled);
     if (bodiesChanged) {
       // The exact worker result is authoritative. Forget the visual proxy
       // before its old Three object is disposed and replaced.
@@ -5026,6 +5210,9 @@ export function ModelViewer({
     }
     clearGroup(context.overlayGroup);
     context.dimensionLabels.clear();
+    if (E2E_CANVAS_HOOKS_ENABLED) {
+      delete context.renderer.domElement.dataset.e2eSelectedFace;
+    }
     const edgeResolution = context.fatLineResolution();
 
     for (const body of bodies) {
@@ -5069,6 +5256,7 @@ export function ModelViewer({
         context.edgeOverlaysByBodyId.set(body.bodyId, edgeOverlay);
       }
       edgeOverlay?.setSelected(selectedEdges);
+      edgeOverlay?.setXrayEnabled(xrayEnabled);
       if (bodiesChanged) {
         context.bodyGroup.add(object);
         context.objectsByBodyId.set(body.bodyId, object);
@@ -5084,12 +5272,22 @@ export function ModelViewer({
       edgeOverlay?.setSelectedFaceBoundary(selectedFace?.hash ?? null);
       if (selectedFace) {
         const geometry = createFaceHighlightGeometry(object, selectedFace);
-        if (!geometry) {
+        const hiddenGeometry = createFaceHighlightGeometry(
+          object,
+          selectedFace
+        );
+        if (!geometry || !hiddenGeometry) {
+          geometry?.dispose();
+          hiddenGeometry?.dispose();
           continue;
         }
         const selectionOverlay = new THREE.Group();
         selectionOverlay.name = 'body-selection-overlay';
         object.add(selectionOverlay);
+        if (E2E_CANVAS_HOOKS_ENABLED) {
+          context.renderer.domElement.dataset.e2eSelectedFace =
+            selectedFace.topologyId;
+        }
         const highlightMaterial = new THREE.MeshLambertMaterial({
           color: SELECTED_FACE_COLOR,
           toneMapped: false,
@@ -5102,10 +5300,40 @@ export function ModelViewer({
         });
         highlightMaterial.userData.targetOpacity = SELECTED_FACE_OPACITY;
         const highlight = new THREE.Mesh(geometry, highlightMaterial);
+        highlight.name = 'body-face-selected';
         highlight.renderOrder = VIEWPORT_RENDER_ORDER.SELECTED_GEOMETRY;
+        highlight.userData.selectionOverlay = true;
         highlight.raycast = () => undefined;
         selectionOverlay.add(highlight);
         context.fadeIns.add(highlightMaterial);
+
+        const hiddenMaterial = new THREE.MeshBasicMaterial({
+          color: SELECTED_FACE_COLOR,
+          toneMapped: false,
+          transparent: true,
+          opacity: SELECTED_FACE_HIDDEN_OPACITY,
+          side: THREE.DoubleSide,
+          depthWrite: false,
+          depthFunc: THREE.GreaterDepth
+        });
+        const hiddenHighlight = new THREE.Mesh(hiddenGeometry, hiddenMaterial);
+        hiddenHighlight.name = 'body-face-selected-hidden';
+        hiddenHighlight.visible = xrayEnabled;
+        hiddenHighlight.renderOrder =
+          VIEWPORT_RENDER_ORDER.SELECTED_GEOMETRY - 1;
+        hiddenHighlight.userData.selectionOverlay = true;
+        hiddenHighlight.raycast = () => undefined;
+        selectionOverlay.add(hiddenHighlight);
+
+        if (selectedFace.geometry) {
+          const analyticGhost = createAnalyticCylinderGhost(
+            selectedFace.geometry,
+            edgeResolution
+          );
+          if (analyticGhost) {
+            selectionOverlay.add(analyticGhost);
+          }
+        }
 
         if (editableBodyIds.includes(body.bodyId)) {
           const normal = normalForTriangle(body, selectedFace.triangleStart);
@@ -5348,6 +5576,7 @@ export function ModelViewer({
     selectedBodyIds,
     selectedEdges,
     selectedTopology,
+    sketchMode,
     units
   ]);
 
@@ -6023,6 +6252,9 @@ export function ModelViewer({
     const active = sketchMode !== null;
     context.bodyGroup.traverse((child) => {
       if (!(child instanceof THREE.Mesh)) {
+        return;
+      }
+      if (child.userData.selectionOverlay === true) {
         return;
       }
       const material = child.material as THREE.MeshStandardMaterial;
