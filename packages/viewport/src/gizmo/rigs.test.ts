@@ -148,6 +148,18 @@ describe('the offset-face rig', () => {
 });
 
 describe('the edge-radius rig', () => {
+  it('orients its radius ring in the supplied blend radial plane', () => {
+    const rig = buildEdgeRadiusHandle({
+      origin: { x: 1, y: 2, z: 3 },
+      direction: { x: 1, y: 0, z: 0 }
+    });
+    const ring = rig.group.children[1]!;
+    const normal = new THREE.Vector3(0, 0, 1).applyQuaternion(ring.quaternion);
+    expect(normal.x).toBeCloseTo(1, 12);
+    expect(normal.y).toBeCloseTo(0, 12);
+    expect(normal.z).toBeCloseTo(0, 12);
+    rig.dispose();
+  });
   it('records its value without moving the sphere off the edge', () => {
     const rig = buildEdgeRadiusHandle({
       origin: { x: 4, y: 0, z: 0 },

@@ -93,7 +93,9 @@ interface ViewerShellProps {
   projectThumbnailSync?: ProjectThumbnailSyncState;
   selectedBodyIds: string[];
   selectedTopology: TopologySelection | null;
+  previewFaceHighlights: TopologySelection[];
   selectedEdges: TopologySelection[];
+  pickListEnabled: boolean;
   settings: ViewerSettings;
   fitSignal: number;
   viewRequest: { view: ViewTarget; nonce: number } | null;
@@ -158,6 +160,7 @@ interface ViewerShellProps {
   edgeHandle: EdgeHandleTarget | null;
   onEdgeRadiusPreview(size: number): void;
   onEdgeCommit(size: number): void;
+  onEdgeCancel(): void;
   onOpenEdgeKeypad(currentSize: number): void;
   onDirectManipulationChange(dragging: boolean): void;
   sketchMode: SketchModeState | null;
@@ -210,7 +213,9 @@ export function ViewerShell({
   projectThumbnailSync,
   selectedBodyIds,
   selectedTopology,
+  previewFaceHighlights,
   selectedEdges,
+  pickListEnabled,
   settings,
   fitSignal,
   viewRequest,
@@ -258,6 +263,7 @@ export function ViewerShell({
   edgeHandle,
   onEdgeRadiusPreview,
   onEdgeCommit,
+  onEdgeCancel,
   onOpenEdgeKeypad,
   onDirectManipulationChange,
   sketchMode,
@@ -345,7 +351,9 @@ export function ViewerShell({
         measurementAnnotations={measurementAnnotations}
         selectedBodyIds={selectedBodyIds}
         selectedTopology={selectedTopology}
+        previewFaceHighlights={previewFaceHighlights}
         selectedEdges={selectedEdges}
+        pickListEnabled={pickListEnabled}
         settings={settings}
         fitSignal={fitSignal}
         viewRequest={viewRequest}
@@ -386,6 +394,7 @@ export function ViewerShell({
         edgeHandle={edgeHandle}
         onEdgeRadiusPreview={onEdgeRadiusPreview}
         onEdgeCommit={onEdgeCommit}
+        onEdgeCancel={onEdgeCancel}
         onOpenEdgeKeypad={onOpenEdgeKeypad}
         onDirectManipulationChange={onDirectManipulationChange}
         sketchMode={sketchMode}
