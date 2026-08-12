@@ -118,13 +118,13 @@ describe('ProjectSharingDialog', () => {
           {
             clientId: 'client_owner_one',
             userId: owner,
-            displayName: 'peter',
+            displayName: 'test-user',
             status: 'active'
           },
           {
             clientId: 'client_owner_two',
             userId: owner,
-            displayName: 'peter',
+            displayName: 'test-user',
             status: 'active'
           },
           {
@@ -139,7 +139,7 @@ describe('ProjectSharingDialog', () => {
       />
     );
 
-    expect(screen.getAllByText('peter (you)')).toHaveLength(2);
+    expect(screen.getAllByText('test-user (you)')).toHaveLength(2);
     expect(screen.getByText('alex')).toBeVisible();
     expect(screen.queryByText('alex (you)')).not.toBeInTheDocument();
   });

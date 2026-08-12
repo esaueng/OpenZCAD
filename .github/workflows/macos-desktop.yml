@@ -20,6 +20,7 @@ permissions:
 jobs:
   apple-silicon:
     runs-on: blacksmith-6vcpu-macos-26
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6
@@ -58,5 +59,13 @@ jobs:
           cmp "$ICON" apps/desktop/src-tauri/icons/icon.icns
           codesign --verify --deep --strict --verbose=2 "$APP"
           codesign -d --entitlements - "$APP"
+          if strings "$BIN" | grep -F "$HOME"; then
+            echo '::error title=Machine path in release::The desktop binary contains the runner home path.'
+            exit 1
+          fi
+          if strings "$BIN" | grep -F "$GITHUB_WORKSPACE"; then
+            echo '::error title=Workspace path in release::The desktop binary contains the checkout path.'
+            exit 1
+          fi
           test "${#DMG[@]}" -eq 1
           hdiutil verify "${DMG[0]}"

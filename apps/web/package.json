@@ -10,6 +10,7 @@
     "build": "vite build",
     "build:desktop": "vite build --mode desktop",
     "preview": "vite preview",
+    "predeploy:beta": "node ../../scripts/validate-deployment-config.mjs --config ../../wrangler.jsonc --target official",
     "deploy:beta": "wrangler d1 migrations apply openzcad-beta --remote --config ../../wrangler.jsonc && wrangler deploy --config ../../wrangler.jsonc",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",

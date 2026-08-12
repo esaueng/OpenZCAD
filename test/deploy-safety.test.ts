@@ -47,6 +47,23 @@ describe('beta deployment safety', () => {
     expect(packageJson('package.json').scripts?.['deploy:beta']).toBe(
       'pnpm --filter @openzcad/web deploy:beta'
     );
+    expect(
+      packageJson('apps/web/package.json').scripts?.['predeploy:beta']
+    ).toContain('--target official');
+  });
+
+  it('keeps self-hosting on an explicit local configuration', () => {
+    const scripts = packageJson('package.json').scripts;
+
+    expect(scripts?.['selfhost:check']).toContain(
+      '--config wrangler.selfhost.jsonc --target selfhost'
+    );
+    expect(scripts?.['deploy:selfhost']).toContain(
+      'wrangler d1 migrations apply DB --remote --config ../../wrangler.selfhost.jsonc'
+    );
+    expect(scripts?.['deploy:selfhost']).toContain(
+      'wrangler deploy --config ../../wrangler.selfhost.jsonc'
+    );
   });
 
   it('opens all collaboration capabilities to authenticated beta accounts', () => {
