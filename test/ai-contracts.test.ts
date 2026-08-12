@@ -913,6 +913,26 @@ describe('assistant reply contract', () => {
     ).toThrow(/Unsupported CAD patch operation/);
   });
 
+  it('rejects local-only parameter bindings in provider replies', () => {
+    expect(() =>
+      parseAssistantReply({
+        ...patchReply,
+        proposal: {
+          ...patchReply.proposal,
+          operations: [
+            {
+              kind: 'add_direct_edit',
+              operation: {
+                kind: 'resize-through-hole',
+                parameterBinding: true
+              }
+            }
+          ]
+        }
+      })
+    ).toThrow('Assistant replies cannot create local parameter bindings.');
+  });
+
   it('accepts a questions reply and keeps every question answerable', () => {
     const reply = parseAssistantReply({
       replyKind: 'questions',
