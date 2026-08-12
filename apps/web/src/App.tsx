@@ -2506,8 +2506,9 @@ export function App() {
     previewDoc?.derived.bodyRepresentations ?? representations;
   /**
    * Exact regeneration may assign a new topology ID to an edited face. Keep
-   * selection attached through operation-specific immutable geometry: the
-   * translated source plane for offsets, or the fixed axis for radii.
+   * selection attached through operation-specific immutable identity: exact
+   * fillet evolution lineage, the translated source plane for offsets, or the
+   * fixed axis for cylinder radii.
    */
   const renderedSelectedTopology = useMemo<TopologySelection | null>(() => {
     if (selectedTopology?.kind !== 'face') {
@@ -2526,11 +2527,9 @@ export function App() {
       ]?.topology?.faces.find(
         (face) => face.topologyId === selectedTopology.topologyId
       );
-      const regenerated = resolveFilletBlendFace(
-        faces,
-        interaction.target.filletFeatureId,
-        sourceFace?.geometry
-      );
+      const regenerated = sourceFace
+        ? resolveFilletBlendFace(faces, sourceFace)
+        : null;
       if (regenerated) {
         return {
           bodyId: selectedTopology.bodyId,
@@ -2540,6 +2539,7 @@ export function App() {
           ...(regenerated.reference ? { reference: regenerated.reference } : {})
         };
       }
+      return null;
     }
     const exact = faces.find(
       (face) =>
@@ -6764,7 +6764,11 @@ export function App() {
       const surface = geometry?.surfaceType;
       const filletFeature =
         faceTopology && geometry?.featureType === 'blend'
-          ? editableFilletFeature(doc, faceTopology)
+          ? editableFilletFeature(
+              doc,
+              faceTopology,
+              representations[selection.bodyId]?.topology?.faces ?? []
+            )
           : null;
       const filletRadialDirection =
         filletFeature && geometry
@@ -8305,13 +8309,10 @@ export function App() {
               committed?.derived.bodyRepresentations[
                 current.target.bodyId as BodyId
               ]?.topology?.faces;
-            const regenerated = faces
-              ? resolveFilletBlendFace(
-                  faces,
-                  feature.featureId,
-                  sourceFace?.geometry
-                )
-              : null;
+            const regenerated =
+              faces && sourceFace
+                ? resolveFilletBlendFace(faces, sourceFace)
+                : null;
             if (!regenerated?.geometry) {
               return;
             }
