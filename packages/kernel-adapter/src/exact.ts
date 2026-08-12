@@ -1,4 +1,4 @@
-import { BrepKernel } from 'brepkit-wasm';
+import { BrepKernel, type FaceEvolutionPayloadV1 } from 'brepkit-wasm';
 import {
   findSketch,
   getParameterScope,
@@ -60,6 +60,7 @@ import {
   booleanFacetFallbackWarning,
   censusOfSolids,
   countFaceConnectedComponents,
+  directEditFacetFallbackWarning,
   droppedUnionOperandWarning,
   inspectTriangleMeshClosure,
   isClosedConsistentlyOrientedMesh,
@@ -103,6 +104,7 @@ import {
 import {
   brepKitHashOnlyLineage,
   createBrepKitImportedStepLineage,
+  createBrepKitModifierEvolutionLineage,
   createBrepKitSemanticLineage,
   mergeBrepKitLineageStates,
   propagateBrepKitRigidTransformLineage,
@@ -385,6 +387,14 @@ function finiteVec3(value: unknown): Vec3 | null {
     return null;
   }
   return { x, y, z };
+}
+
+function positiveFinite(value: unknown): number | null {
+  return typeof value === 'number' &&
+    Number.isFinite(value) &&
+    value > GEOMETRY_EPSILON
+    ? value
+    : null;
 }
 
 function analyticSurfaceRecord(
@@ -845,6 +855,9 @@ function isBlendFace(kernel: BrepKernel, solid: number, face: number): boolean {
   if (surfaceType === 'bspline') {
     return true;
   }
+  if (surfaceType === 'torus') {
+    return true;
+  }
   if (surfaceType !== 'cylinder') {
     return false;
   }
@@ -858,14 +871,8 @@ function isBlendFace(kernel: BrepKernel, solid: number, face: number): boolean {
   const origin = finiteVec3(record.origin);
   const rawAxis = finiteVec3(record.axis);
   const axis = rawAxis ? normalized(rawAxis) : null;
-  const radius = record.radius;
-  if (
-    !origin ||
-    !axis ||
-    typeof radius !== 'number' ||
-    !Number.isFinite(radius) ||
-    radius <= GEOMETRY_EPSILON
-  ) {
+  const radius = positiveFinite(record.radius);
+  if (!origin || !axis || radius === null) {
     return false;
   }
   const bandEdges = new Set(kernel.getFaceEdges(face));
@@ -1115,14 +1122,26 @@ function applyEdgeModifier(
   featureKind: 'fillet' | 'chamfer',
   size: number,
   /** Receives the kernel's own refusal text, when it threw one. */
-  reportRefusal?: (message: string) => void
+  reportRefusal?: (message: string) => void,
+  /** Receives construction history only after the same result is accepted. */
+  reportEvolution?: (payload: FaceEvolutionPayloadV1) => void
 ): number | null {
   const targetBounds = kernel.boundingBox(target);
   const handles = Uint32Array.from(selected);
   let modified: number;
+  let evolution: FaceEvolutionPayloadV1 | undefined;
   if (featureKind === 'fillet') {
     try {
-      modified = kernel.fillet(target, handles, size);
+      if (reportEvolution) {
+        try {
+          evolution = kernel.filletWithEvolution(target, handles, size);
+          modified = evolution.result.solid;
+        } catch {
+          modified = kernel.fillet(target, handles, size);
+        }
+      } else {
+        modified = kernel.fillet(target, handles, size);
+      }
     } catch (error) {
       // Keep what the kernel said. It names the edges it could not blend, the
       // vertex the blend engines gave up on, and how many of the selection
@@ -1133,7 +1152,16 @@ function applyEdgeModifier(
     }
   } else {
     try {
-      modified = kernel.chamfer(target, handles, size);
+      if (reportEvolution) {
+        try {
+          evolution = kernel.chamferWithEvolution(target, handles, size);
+          modified = evolution.result.solid;
+        } catch {
+          modified = kernel.chamfer(target, handles, size);
+        }
+      } else {
+        modified = kernel.chamfer(target, handles, size);
+      }
     } catch (error) {
       reportRefusal?.(errorText(error));
       return null;
@@ -1196,6 +1224,9 @@ function applyEdgeModifier(
     ) {
       return null;
     }
+  }
+  if (evolution) {
+    reportEvolution?.(evolution);
   }
   return modified;
 }
@@ -3328,7 +3359,12 @@ function measureFaceGeometry(
     }
     return geometry;
   }
-  if (surfaceType !== 'cylinder' && surfaceType !== 'sphere') {
+  if (
+    surfaceType !== 'cylinder' &&
+    surfaceType !== 'sphere' &&
+    surfaceType !== 'torus' &&
+    surfaceType !== 'cone'
+  ) {
     return geometry;
   }
   let parameters: unknown;
@@ -3338,13 +3374,41 @@ function measureFaceGeometry(
     return geometry;
   }
   const record = (parameters ?? {}) as Record<string, unknown>;
-  const rawRadius = record.radius;
-  const radius =
-    typeof rawRadius === 'number' &&
-    Number.isFinite(rawRadius) &&
-    rawRadius > GEOMETRY_EPSILON
-      ? rawRadius
-      : null;
+  if (surfaceType === 'torus') {
+    const center = finiteVec3(record.center);
+    const rawAxis = finiteVec3(record.axis);
+    const axis = rawAxis ? normalized(rawAxis) : null;
+    const majorRadius = positiveFinite(
+      record.majorRadius ?? record.major_radius
+    );
+    const minorRadius = positiveFinite(
+      record.minorRadius ?? record.minor_radius
+    );
+    if (center && majorRadius !== null && minorRadius !== null) {
+      geometry.torusCenter = center;
+      geometry.majorRadius = majorRadius;
+      geometry.minorRadius = minorRadius;
+      if (axis) {
+        geometry.axis = axis;
+      }
+    }
+    return geometry;
+  }
+  if (surfaceType === 'cone') {
+    const apex = finiteVec3(record.apex);
+    const rawAxis = finiteVec3(record.axis);
+    const axis = rawAxis ? normalized(rawAxis) : null;
+    const halfAngle = positiveFinite(
+      record.halfAngle ?? record.half_angle ?? record.semiAngle
+    );
+    if (apex && axis && halfAngle !== null && halfAngle < Math.PI / 2) {
+      geometry.apex = apex;
+      geometry.axis = axis;
+      geometry.halfAngle = halfAngle;
+    }
+    return geometry;
+  }
+  const radius = positiveFinite(record.radius);
   if (surfaceType === 'sphere') {
     // The corner patch a vertex blend leaves behind is a sphere of the blend
     // radius. It has no axis, so the radius is all that carries over.
@@ -3563,8 +3627,22 @@ function measureOwnedFaceGeometry(
   face: number
 ): FaceGeometry | undefined {
   const geometry = measureFaceGeometry(kernel, face);
-  if (
-    geometry?.surfaceType === 'cylinder' &&
+  if (!geometry) {
+    return undefined;
+  }
+  if (isBlendFace(kernel, solid, face)) {
+    geometry.featureType = 'blend';
+    const blendRadius =
+      geometry.surfaceType === 'torus'
+        ? geometry.minorRadius
+        : geometry.surfaceType === 'cylinder'
+          ? geometry.radius
+          : undefined;
+    if (blendRadius !== undefined) {
+      geometry.blendRadius = blendRadius;
+    }
+  } else if (
+    geometry.surfaceType === 'cylinder' &&
     classifyThroughHoleFace(kernel, solid, face, geometry).status ===
       'through-hole'
   ) {
@@ -5714,6 +5792,8 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
               throw new Error('Edge modifier size must be greater than zero.');
             }
             let reportedRefusal: string | null = null;
+            let evolution: FaceEvolutionPayloadV1 | null = null;
+            const sourceCandidates = topologyCandidatesForSolid(kernel, target);
             const modified = applyEdgeModifier(
               kernel,
               target,
@@ -5722,6 +5802,9 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
               size,
               (message) => {
                 reportedRefusal = message;
+              },
+              (payload) => {
+                evolution = payload;
               }
             );
             if (modified === null) {
@@ -5737,22 +5820,49 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
                 )
               );
             }
+            const cylinderFallbackLineage = modifierChainRootsAtCylinder(
+              document,
+              feature.data.targetBodyId
+            )
+              ? rederiveCylinderModifierLineage(kernel, modified, feature)
+              : null;
+            const evolutionLineage = evolution
+              ? createBrepKitModifierEvolutionLineage({
+                  producingFeatureId: feature.featureId,
+                  operation: feature.data.featureKind,
+                  payload: evolution,
+                  sourceSolid: target,
+                  resultSolid: modified,
+                  sourceCandidates,
+                  resultCandidates: topologyCandidatesForSolid(
+                    kernel,
+                    modified
+                  ),
+                  sourceLineage: storedTarget.lineage,
+                  generatedBlendFaces: new Set(
+                    Array.from(kernel.getSolidFaces(modified)).filter((face) =>
+                      isBlendFace(kernel, modified, face)
+                    )
+                  )
+                })
+              : null;
+            const verifiedLineages = [
+              cylinderFallbackLineage,
+              evolutionLineage
+            ].filter((lineage): lineage is BrepKitLineageState => !!lineage);
+            const verifiedLineage = mergeBrepKitLineageStates(verifiedLineages);
             result.consumed.add(feature.data.targetBodyId);
             result.shapes.set(feature.bodyId, {
               solids: [modified],
               lineage:
-                (modifierChainRootsAtCylinder(
-                  document,
-                  feature.data.targetBodyId
-                )
-                  ? rederiveCylinderModifierLineage(kernel, modified, feature)
-                  : null) ??
-                brepKitHashOnlyLineage(
-                  feature.data.featureKind,
-                  feature.data.featureKind === 'fillet'
-                    ? 'The final production fillet, including analytic fallback results, has no reverified complete output relation.'
-                    : 'BrepKit chamfer does not expose a complete generated-face provenance channel.'
-                )
+                verifiedLineage.faceReferences.size > 0 ||
+                verifiedLineage.edgeReferences.size > 0 ||
+                verifiedLineage.diagnostics.length > 0
+                  ? verifiedLineage
+                  : brepKitHashOnlyLineage(
+                      feature.data.featureKind,
+                      'No generated face passed the construction-history, exact support-witness, and uniqueness checks.'
+                    )
             });
             inheritMeshOrigin(
               result,
@@ -6293,6 +6403,7 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
       // move is worth exactly `offset * area`, and the kernel gates the result
       // on that, so a tool that reached material it should not have is
       // rejected rather than returned.
+      const sourceCensus = censusOfSolids(kernel, [solid]);
       const output =
         tryExactAnalyticCylinderCapOffset(kernel, solid, face, offset) ??
         kernel.pushPullFace(solid, face, offset);
@@ -6300,6 +6411,15 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
         throw new Error(
           `Offsetting the face by ${offset} does not produce a valid solid.`
         );
+      }
+      // Closure and volume checks still accept BrepKit's triangulated fallback.
+      // Preserve the last exact body instead of committing/exporting its facets.
+      const facetFallback = directEditFacetFallbackWarning({
+        operands: sourceCensus,
+        result: censusOfSolids(kernel, [output])
+      });
+      if (facetFallback) {
+        throw new Error(facetFallback);
       }
       return { solids: [output] };
     }

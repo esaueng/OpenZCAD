@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   appendKeypadKey,
+  convertDimensionInput,
   evaluateKeypadInput,
   keypadClampPosition
 } from './keypad';
@@ -67,6 +68,32 @@ describe('evaluateKeypadInput', () => {
   it('rejects empty and invalid input', () => {
     expect(evaluateKeypadInput('', 'mm', 'mm', scope).ok).toBe(false);
     expect(evaluateKeypadInput('nope +', 'mm', 'mm', scope).ok).toBe(false);
+  });
+
+  it('normalizes diameter entry to the internal radius', () => {
+    expect(
+      evaluateKeypadInput('Ø17.4', 'mm', 'mm', scope, 'diameter')
+    ).toMatchObject({
+      ok: true,
+      value: 8.7,
+      displayValue: 17.4,
+      normalizedRaw: '8.7',
+      isExpression: false
+    });
+    expect(
+      evaluateKeypadInput('hole', 'mm', 'mm', { hole: 17.4 }, 'diameter')
+        .normalizedRaw
+    ).toBe('(hole) / 2');
+  });
+});
+
+describe('convertDimensionInput', () => {
+  it('switches notation without changing the represented radius', () => {
+    expect(convertDimensionInput('Ø17.4', 'diameter', 'radius')).toBe('8.7');
+    expect(convertDimensionInput('8.7', 'radius', 'diameter')).toBe('17.4');
+    expect(convertDimensionInput('hole', 'diameter', 'radius')).toBe(
+      '(hole) / 2'
+    );
   });
 });
 

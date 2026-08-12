@@ -6,16 +6,19 @@ import {
   transformBody
 } from '@openzcad/document-core';
 import { toUserId, type BodyId, type ProjectDocument } from '@openzcad/shared';
+import {
+  inspectTriangleMeshClosure,
+  isClosedConsistentlyOrientedMesh
+} from './boolean-result-validation';
 import { createExactKernelAdapter } from './exact';
 
 const user = toUserId('user_tangency');
 
 /**
  * A new box is corner-origin and a new cylinder is axis-origin, so creating
- * one of each puts the cylinder's axis exactly on the box's corner edge —
- * the one contact the fuse cannot resolve exactly. The refusal therefore has
- * to name the move that clears it, because the repair a user reaches for
- * first (slide it along X) keeps the axis in a face plane and fails again.
+ * one of each puts the cylinder's axis exactly on the box's corner edge.
+ * Historical kernels could not resolve that contact without faceting or
+ * opening the result; the current kernel preserves the exact cylinder wall.
  */
 function boxAndCylinder(move: { x: number; y: number; z: number } | null): {
   document: ProjectDocument;
@@ -47,56 +50,42 @@ function boxAndCylinder(move: { x: number; y: number; z: number } | null): {
   return { document: doc, boxId, cylId };
 }
 
-describe('union tangency suggestion', { timeout: 60_000 }, () => {
-  it('names a move that actually clears the tangency, and it works', async () => {
+describe('union corner-axis tangency', { timeout: 60_000 }, () => {
+  it('preserves exact topology when the corner-axis union succeeds', async () => {
     const adapter = await createExactKernelAdapter();
     try {
       const { document, boxId, cylId } = boxAndCylinder(null);
-      const attempted = booleanBodies(document, {
+      const united = booleanBodies(document, {
         name: 'Union',
         operation: 'union',
         targetBodyIds: [boxId, cylId]
       }).document;
-      const refused = await adapter.syncDocument(attempted);
-      const message = refused.warnings.join(' ');
-      // Kernels disagree on HOW a tangency the fuse cannot resolve fails —
-      // 8733eab dropped to facets, 061c1b2 returns a body that is not closed —
-      // and the user has the same problem either way. Assert that it is
-      // refused and that the refusal names a move, not which symptom the
-      // kernel happened to report.
-      expect(message).toMatch(
-        /faceted approximation|replaced every curved|open, non-manifold/
-      );
-
-      // The suggestion is concrete: a body and one or more signed axis moves.
-      // Newer kernels can require moving a corner-origin primitive to the
-      // other body's centre on several axes before the same union is exact.
-      const suggestion =
-        /Moving (.+?) ((?:[+-]?[\d.]+ mm in [XYZ](?:, )?)+) clears it\./.exec(
-          message
-        );
-      expect(suggestion, `no offset suggested in: ${message}`).not.toBeNull();
-      const [, movedName, moveText] = suggestion!;
-      expect(movedName).toBe('Cylinder Body');
-      const offsets = { x: 0, y: 0, z: 0 };
-      for (const match of moveText!.matchAll(/([+-]?[\d.]+) mm in ([XYZ])/g)) {
-        offsets[match[2]!.toLowerCase() as keyof typeof offsets] = Number(
-          match[1]
-        );
-      }
-      expect(Object.values(offsets).some((amount) => amount !== 0)).toBe(true);
-
-      // Apply exactly what it said and the same union must now succeed. A
-      // suggestion that does not work is worse than the general advice it
-      // replaces, so this is the assertion that matters.
-      const applied = boxAndCylinder(offsets);
-      const united = booleanBodies(applied.document, {
-        name: 'Union',
-        operation: 'union',
-        targetBodyIds: [applied.boxId, applied.cylId]
-      }).document;
       const derived = await adapter.syncDocument(united);
+      const resultId = united.bodyOrder.at(-1)!;
+      const body = derived.bodyRepresentations[resultId]!;
+
       expect(derived.warnings).toEqual([]);
+      expect(body.volume).toBeCloseTo(
+        30 * 18 * 24 + Math.PI * 6 ** 2 * (28 - 24 / 4),
+        5
+      );
+      expect(
+        body.topology?.faces.some(
+          (face) => face.geometry?.surfaceType === 'cylinder'
+        )
+      ).toBe(true);
+      expect(
+        isClosedConsistentlyOrientedMesh(
+          inspectTriangleMeshClosure(body.mesh.vertices, body.mesh.indices)
+        )
+      ).toBe(true);
+
+      const step = await adapter.exportStep(united, [resultId]);
+      expect(step).toContain('CYLINDRICAL_SURFACE');
+      await expect(adapter.inspectStep(step)).resolves.toMatchObject({
+        solid: true,
+        valid: true
+      });
     } finally {
       adapter.dispose();
     }

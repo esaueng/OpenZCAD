@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import type { Line2 } from 'three/examples/jsm/lines/Line2.js';
 import { describe, expect, it } from 'vitest';
 import {
   DIMENSION_ARROW_LENGTH,
@@ -98,6 +99,46 @@ describe('a dimension between two points', () => {
     const graphic = createDimensionGraphic();
     graphic.update(at(0, 0, 0), at(100, 0, 0), 1);
     expect(graphic.labelAnchor().x).toBeCloseTo(45, 6);
+    graphic.dispose();
+  });
+
+  it('shares one custom style across its line and arrowheads', () => {
+    const graphic = createDimensionGraphic({
+      color: 0x123456,
+      opacity: 0.7,
+      linewidth: 2,
+      depthTest: true
+    });
+    const line = graphic.object.children[0] as THREE.Object3D & {
+      material: {
+        color: THREE.Color;
+        opacity: number;
+        linewidth: number;
+        depthTest: boolean;
+      };
+    };
+    const head = meshes(graphic)[0]!;
+    expect(line.material.color.getHex()).toBe(0x123456);
+    expect(line.material.opacity).toBeCloseTo(0.7, 6);
+    expect(line.material.linewidth).toBe(2);
+    expect(line.material.depthTest).toBe(true);
+    expect((head.material as THREE.MeshBasicMaterial).color.getHex()).toBe(
+      0x123456
+    );
+    expect((head.material as THREE.MeshBasicMaterial).depthTest).toBe(true);
+    graphic.dispose();
+  });
+
+  it('recolors existing linework without replacing its geometry', () => {
+    const graphic = createDimensionGraphic({ color: 0x123456 });
+    const line = graphic.object.children[0] as Line2;
+    const geometry = line.geometry;
+    graphic.setColor(0xf59e0b);
+    expect(line.material.color.getHex()).toBe(0xf59e0b);
+    expect(
+      (meshes(graphic)[0]!.material as THREE.MeshBasicMaterial).color.getHex()
+    ).toBe(0xf59e0b);
+    expect(line.geometry).toBe(geometry);
     graphic.dispose();
   });
 

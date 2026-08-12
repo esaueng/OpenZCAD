@@ -48,6 +48,7 @@ import {
 import { ProjectThumbnailSyncAgent } from './ProjectThumbnailSyncAgent';
 import type { ProjectThumbnailRecord } from '../lib/localProjectStore';
 import type { ThumbnailCloudTransport } from '../lib/cloudThumbnail';
+import type { DimensionMode } from '../lib/keypad';
 
 type MeasurementCloudSyncState = readonly [
   projectId: string | undefined,
@@ -92,7 +93,9 @@ interface ViewerShellProps {
   projectThumbnailSync?: ProjectThumbnailSyncState;
   selectedBodyIds: string[];
   selectedTopology: TopologySelection | null;
+  previewFaceHighlights: TopologySelection[];
   selectedEdges: TopologySelection[];
+  pickListEnabled: boolean;
   settings: ViewerSettings;
   fitSignal: number;
   viewRequest: { view: ViewTarget; nonce: number } | null;
@@ -134,21 +137,30 @@ interface ViewerShellProps {
     detail?: PickDetail
   ): void;
   offsetHandle: OffsetHandleTarget | null;
-  onOffsetCommit(offset: number): void;
-  onOpenOffsetKeypad(currentOffset: number): void;
+  onOffsetPreview(offset: number): void;
+  onOffsetCommit(offset: number): boolean;
+  onOffsetCancel(): void;
+  offsetPreviewInvalid: boolean;
+  onOpenOffsetKeypad(currentOffset: number, totalBaseline?: number): void;
   keypadAnchorRef: MutableRefObject<
     ((point: { x: number; y: number } | null) => void) | null
   >;
   offsetSetterRef: MutableRefObject<((offset: number) => void) | null>;
   cylinderRadiusHandle: CylinderRadiusHandleTarget | null;
+  cylinderDimensionMode: DimensionMode;
+  onCylinderDimensionModeChange(mode: DimensionMode): void;
   onCylinderRadiusPreview(radius: number, exactGeometry: boolean): void;
   onCylinderRadiusCommit(radius: number): boolean;
   onCylinderRadiusCancel(): void;
-  onOpenCylinderRadiusKeypad(radius: number): void;
+  onOpenCylinderRadiusKeypad(
+    radius: number,
+    dimensionMode: DimensionMode
+  ): void;
   cancelDirectManipulationRef: MutableRefObject<(() => boolean) | null>;
   edgeHandle: EdgeHandleTarget | null;
   onEdgeRadiusPreview(size: number): void;
   onEdgeCommit(size: number): void;
+  onEdgeCancel(): void;
   onOpenEdgeKeypad(currentSize: number): void;
   onDirectManipulationChange(dragging: boolean): void;
   sketchMode: SketchModeState | null;
@@ -201,7 +213,9 @@ export function ViewerShell({
   projectThumbnailSync,
   selectedBodyIds,
   selectedTopology,
+  previewFaceHighlights,
   selectedEdges,
+  pickListEnabled,
   settings,
   fitSignal,
   viewRequest,
@@ -231,11 +245,16 @@ export function ViewerShell({
   selectionFilter,
   onBoxSelect,
   offsetHandle,
+  onOffsetPreview,
   onOffsetCommit,
+  onOffsetCancel,
+  offsetPreviewInvalid,
   onOpenOffsetKeypad,
   keypadAnchorRef,
   offsetSetterRef,
   cylinderRadiusHandle,
+  cylinderDimensionMode,
+  onCylinderDimensionModeChange,
   onCylinderRadiusPreview,
   onCylinderRadiusCommit,
   onCylinderRadiusCancel,
@@ -244,6 +263,7 @@ export function ViewerShell({
   edgeHandle,
   onEdgeRadiusPreview,
   onEdgeCommit,
+  onEdgeCancel,
   onOpenEdgeKeypad,
   onDirectManipulationChange,
   sketchMode,
@@ -331,7 +351,9 @@ export function ViewerShell({
         measurementAnnotations={measurementAnnotations}
         selectedBodyIds={selectedBodyIds}
         selectedTopology={selectedTopology}
+        previewFaceHighlights={previewFaceHighlights}
         selectedEdges={selectedEdges}
+        pickListEnabled={pickListEnabled}
         settings={settings}
         fitSignal={fitSignal}
         viewRequest={viewRequest}
@@ -353,11 +375,16 @@ export function ViewerShell({
         selectionFilter={selectionFilter}
         onBoxSelect={onBoxSelect}
         offsetHandle={offsetHandle}
+        onOffsetPreview={onOffsetPreview}
         onOffsetCommit={onOffsetCommit}
+        onOffsetCancel={onOffsetCancel}
+        offsetPreviewInvalid={offsetPreviewInvalid}
         onOpenOffsetKeypad={onOpenOffsetKeypad}
         keypadAnchorRef={keypadAnchorRef}
         offsetSetterRef={offsetSetterRef}
         cylinderRadiusHandle={cylinderRadiusHandle}
+        cylinderDimensionMode={cylinderDimensionMode}
+        onCylinderDimensionModeChange={onCylinderDimensionModeChange}
         cylinderRadiusLabelSetterRef={cylinderRadiusLabelSetterRef}
         onCylinderRadiusPreview={onCylinderRadiusPreview}
         onCylinderRadiusCommit={onCylinderRadiusCommit}
@@ -367,6 +394,7 @@ export function ViewerShell({
         edgeHandle={edgeHandle}
         onEdgeRadiusPreview={onEdgeRadiusPreview}
         onEdgeCommit={onEdgeCommit}
+        onEdgeCancel={onEdgeCancel}
         onOpenEdgeKeypad={onOpenEdgeKeypad}
         onDirectManipulationChange={onDirectManipulationChange}
         sketchMode={sketchMode}

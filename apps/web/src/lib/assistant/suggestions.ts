@@ -200,26 +200,28 @@ export function assistantSuggestions(
     : [];
   if (context.topologyKind === 'edge') {
     return [
-      ...autoParameterize,
       prompt('selected-edge-fillet', 'Fillet the selected edges by 2 mm'),
       prompt('selected-edge-chamfer', 'Chamfer the selected edges 1 mm'),
       prompt(
         'selected-edge-explain',
         'What would rounding these edges do to the part?'
-      )
+      ),
+      ...autoParameterize
     ];
   }
   if (context.topologyKind === 'face') {
     return [
-      ...autoParameterize,
       prompt('selected-face-hole', 'Cut a 6 mm hole through the selected face'),
       prompt('selected-face-offset', 'Offset the selected face out by 3 mm'),
-      prompt('selected-face-sketch', 'Sketch a 20 mm slot on the selected face')
+      prompt(
+        'selected-face-sketch',
+        'Sketch a 20 mm slot on the selected face'
+      ),
+      ...autoParameterize
     ];
   }
   if (context.selectedBodyCount > 0) {
     return [
-      ...autoParameterize,
       prompt(
         'selected-body-round',
         'Round every outside edge of the selection by 2 mm'
@@ -231,7 +233,8 @@ export function assistantSuggestions(
       prompt(
         'selected-body-parameter',
         'Add a parameter for the wall thickness and drive the selection from it'
-      )
+      ),
+      ...autoParameterize
     ];
   }
   if (context.bodyCount === 0) {
@@ -254,12 +257,12 @@ export function assistantSuggestions(
     ];
   }
   return [
-    ...autoParameterize,
     prompt('all-edges-round', 'Round every outside edge by 2 mm'),
     prompt('tallest-body-bore', 'Cut a 12 mm bore through the tallest body'),
     prompt(
       'feature-history-explain',
       'What is this model made of, feature by feature?'
-    )
+    ),
+    ...autoParameterize
   ];
 }

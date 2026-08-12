@@ -83,6 +83,21 @@ describe('interactionReducer', () => {
     expect(boss).toEqual(IDLE);
   });
 
+  it('arms producing-feature fillet edits before cylindrical resize', () => {
+    const state = interactionReducer(IDLE, {
+      type: 'select-face',
+      target: face({
+        surfaceType: 'cylindrical',
+        radius: 2,
+        blendRadius: 2,
+        filletFeatureId: 'feature_fillet' as FeatureId
+      })
+    });
+
+    expect(state).toMatchObject({ mode: 'face', op: 'edit-fillet' });
+    expect(toolCardFor(state)?.title).toBe('Edit Fillet');
+  });
+
   it('accumulates edges additively and toggles them off when re-picked', () => {
     let state = interactionReducer(IDLE, {
       type: 'select-edge',

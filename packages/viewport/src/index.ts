@@ -33,6 +33,9 @@ export * from './snap/measureSnaps';
 // Selection: hover/preselect state and its overlays.
 export * from './selection/SelectionManager';
 export * from './selection/boxSelect';
+export * from './selection/boundaryEdgesOfFace';
+export * from './selection/faceHighlightGeometry';
+export * from './selection/analyticCylinderGhost';
 
 // Gizmos: the shared drag-rig contract, the selection-first handles built
 // on it, and the move/rotate handle geometry, snapping, and focus.
@@ -50,6 +53,7 @@ export * from './input/RightClickGestureTracker';
 
 // Scene graph: disposal, labels, display modes, and preview geometry.
 export * from './scene/HudLayer';
+export * from './scene/TopologyPickList';
 export * from './scene/objects';
 
 // Labels: screen-space dimension label layout.

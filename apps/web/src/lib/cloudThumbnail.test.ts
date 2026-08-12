@@ -1,5 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
-import { toArtifactId, toProjectId } from '@openzcad/shared';
+import {
+  MAX_THUMBNAIL_BYTES,
+  toArtifactId,
+  toProjectId
+} from '@openzcad/shared';
 import { downloadCloudThumbnail, uploadCloudThumbnail } from './cloudThumbnail';
 
 describe('cloud thumbnails', () => {
@@ -21,6 +25,19 @@ describe('cloud thumbnails', () => {
           .mockResolvedValue(new Blob(['not an image'], { type: 'text/plain' }))
       )
     ).rejects.toThrow('not an image');
+  });
+
+  it('rejects an oversized image before converting it to a data URL', async () => {
+    await expect(
+      downloadCloudThumbnail(
+        'artifact_too_large',
+        vi.fn().mockResolvedValue(
+          new Blob([new Uint8Array(MAX_THUMBNAIL_BYTES + 1)], {
+            type: 'image/webp'
+          })
+        )
+      )
+    ).rejects.toThrow('too large');
   });
 
   it('uploads and finalizes one image artifact with document metadata', async () => {

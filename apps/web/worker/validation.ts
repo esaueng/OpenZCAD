@@ -2,6 +2,7 @@ import {
   MAX_ARTIFACT_UPLOAD_PARTS,
   MAX_CLOUD_PROJECT_DOCUMENT_BYTES,
   MAX_PROJECT_NAME_LENGTH,
+  THUMBNAIL_CONTENT_TYPE,
   persistedDocumentBytes,
   PROJECT_DOCUMENT_SCHEMA_VERSION,
   PROJECT_STATUSES,
@@ -332,6 +333,14 @@ export function parseCreateUploadSessionRequest(
   const record = asRecord(body, 'Request body');
   if (!ARTIFACT_KINDS.includes(record.kind as ArtifactKind)) {
     throw badRequest(`"kind" must be one of: ${ARTIFACT_KINDS.join(', ')}.`);
+  }
+  if (
+    record.kind === 'thumbnail' &&
+    record.contentType !== THUMBNAIL_CONTENT_TYPE
+  ) {
+    throw badRequest(
+      `Thumbnail contentType must be ${THUMBNAIL_CONTENT_TYPE}.`
+    );
   }
   const metadata =
     record.metadata === undefined
