@@ -2192,12 +2192,28 @@ export function parseAssistantReply(
 ): AssistantReply {
   const candidate = record(value);
   switch (candidate.replyKind) {
-    case 'patch':
+    case 'patch': {
+      const proposal = record(candidate.proposal);
+      if (Array.isArray(proposal.operations)) {
+        for (const rawOperation of proposal.operations) {
+          const operation = record(rawOperation);
+          if (operation.kind !== 'add_direct_edit') {
+            continue;
+          }
+          const edit = record(operation.operation);
+          if (Object.hasOwn(edit, 'parameterBinding')) {
+            throw new Error(
+              'Assistant replies cannot create local parameter bindings.'
+            );
+          }
+        }
+      }
       return {
         kind: 'patch',
         proposal: parseCadPatchProposal(candidate.proposal, digest),
         readings: parseAssistantReadings(candidate.readings)
       };
+    }
     case 'questions':
       return {
         kind: 'questions',
