@@ -1449,6 +1449,143 @@ test('applies an assistant-created sketch and same-proposal extrude', async ({
   expect(consoleErrors).toEqual([]);
 });
 
+test('resumes a clarified request from an OpenRouter Responses stream', async ({
+  page
+}) => {
+  await stubApi(page, { assistantEnabled: true });
+  const consoleErrors: string[] = [];
+  const assistantRequests: Array<Record<string, unknown>> = [];
+  page.on('console', (message) => {
+    if (message.type() === 'error') {
+      consoleErrors.push(message.text());
+    }
+  });
+  await page.route('**/api/assistant/status', (route) =>
+    route.fulfill({
+      json: {
+        configured: true,
+        provider: 'openrouter',
+        model: 'openai/gpt-5.6-sol',
+        reasoningEffort: 'high'
+      }
+    })
+  );
+  await page.route('**/api/assistant/proposals', (route) => {
+    assistantRequests.push(
+      route.request().postDataJSON() as Record<string, unknown>
+    );
+    const reply =
+      assistantRequests.length === 1
+        ? {
+            replyKind: 'questions',
+            proposal: null,
+            questions: [
+              {
+                id: 'import_strategy',
+                prompt: 'How should the imported body be parameterized?',
+                options: [
+                  {
+                    label: 'Rebuild exactly',
+                    value:
+                      'Rebuild the part parametrically while preserving its exact geometry, units, and placement.'
+                  }
+                ],
+                allowFreeText: false,
+                unit: null
+              }
+            ],
+            message: 'The imported body has no editable feature history.',
+            readings: null
+          }
+        : {
+            replyKind: 'patch',
+            proposal: {
+              proposalId: 'proposal_openrouter_resume_e2e',
+              summary: 'Rebuild the selected body parametrically.',
+              assumptions: [],
+              operations: [
+                {
+                  kind: 'add_primitive',
+                  name: 'Parametric Body',
+                  localId: null,
+                  primitiveKind: 'box',
+                  dimensions: {
+                    width: 10,
+                    height: 10,
+                    depth: 10,
+                    radius: null,
+                    bottomRadius: null,
+                    topRadius: null,
+                    majorRadius: null,
+                    minorRadius: null
+                  }
+                }
+              ]
+            },
+            questions: null,
+            message: null,
+            readings: null
+          };
+    const output = JSON.stringify(reply);
+    return route.fulfill({
+      status: 200,
+      contentType: 'text/event-stream',
+      body: `data: ${JSON.stringify({
+        type: 'response.content_part.delta',
+        delta: output.slice(0, 50)
+      })}\n\ndata: ${JSON.stringify({
+        type: 'response.content_part.delta',
+        delta: output.slice(50)
+      })}\n\ndata: ${JSON.stringify({
+        type: 'response.output_item.done',
+        item: {
+          status: 'completed',
+          content: [{ type: 'output_text', text: output }]
+        }
+      })}\n\ndata: ${JSON.stringify({
+        type: 'response.done',
+        response: { status: 'completed' }
+      })}\n\ndata: [DONE]\n\n`
+    });
+  });
+
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('Assistant Clarification');
+  await page.getByRole('button', { name: 'Create project' }).click();
+  await openAssistant(page);
+  await page
+    .getByLabel('CAD change request')
+    .fill('Parameterize the selected imported body');
+  await page.getByLabel('CAD change request').press('Enter');
+
+  const questions = page.locator('.assistant-card.questions');
+  await expect(questions).toContainText(
+    'The imported body has no editable feature history.'
+  );
+  await questions.getByRole('button', { name: 'Rebuild exactly' }).click();
+  await questions.getByRole('button', { name: 'Build it' }).click();
+
+  await expect(page.locator('.assistant-card.proposal.open')).toContainText(
+    'Rebuild the selected body parametrically.'
+  );
+  await expect(page.locator('.assistant-card.message.error')).toHaveCount(0);
+  expect(assistantRequests).toHaveLength(2);
+  expect(assistantRequests[1]?.prompt).toBe(
+    'Rebuild the part parametrically while preserving its exact geometry, units, and placement.'
+  );
+  expect(assistantRequests[1]?.history).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({
+        role: 'assistant',
+        text: expect.stringContaining(
+          'How should the imported body be parameterized?'
+        )
+      })
+    ])
+  );
+  expect(consoleErrors).toEqual([]);
+});
+
 test('shows a stable failure when the assistant completes with invalid structured output', async ({
   page
 }) => {
