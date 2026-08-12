@@ -740,8 +740,20 @@ export interface FaceGeometry {
   axisStart?: Vector3;
   axisEnd?: Vector3;
   axialLength?: number;
-  /** Set only when the kernel proves that both axial ends open outside. */
-  featureType?: 'through-hole';
+  /** Exact torus centre, distinct from the frozen vertex-mean `center`. */
+  torusCenter?: Vector3;
+  /** Unit axis direction for an exact cone or torus when published. */
+  axis?: Vector3;
+  /** Exact torus ring and tube radii. */
+  majorRadius?: number;
+  minorRadius?: number;
+  /** Exact cone apex and half-angle. */
+  apex?: Vector3;
+  halfAngle?: number;
+  /** Semantic surface role proven by the kernel adapter. */
+  featureType?: 'through-hole' | 'blend';
+  /** Rolling-ball radius for a recognized blend surface. */
+  blendRadius?: number;
   /** Dimension currently supported by a deterministic direct edit. */
   editableDimension?: 'diameter';
 }
@@ -1405,6 +1417,10 @@ export const ARTIFACT_UPLOAD_PART_BYTES = 16 * 1024 * 1024;
 export const MAX_ARTIFACT_PART_BYTES = 32 * 1024 * 1024;
 /** Ceiling on parts per upload (with 16 MiB parts: 1 GiB). */
 export const MAX_ARTIFACT_UPLOAD_PARTS = 64;
+/** Maximum encoded size of a shelf thumbnail that clients automatically load. */
+export const MAX_THUMBNAIL_BYTES = 512 * 1024;
+/** The thumbnail renderer publishes WebP; other image formats are not accepted. */
+export const THUMBNAIL_CONTENT_TYPE = 'image/webp';
 
 export interface CreateMultipartUploadResponse {
   uploadId: string;

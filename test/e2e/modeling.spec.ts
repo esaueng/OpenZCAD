@@ -100,7 +100,7 @@ test('resizes a cylinder wall concentrically with one undoable radius edit', asy
     name: 'Resize Cylinder Radius operation'
   });
   await expect(radiusOperation).toBeVisible();
-  await expect(page.getByTestId('live-cylinder-radius')).toHaveText('14 mm');
+  await expect(page.getByTestId('live-cylinder-radius')).toHaveText('Ø 28 mm');
   await expect(page.getByRole('region', { name: '3D viewport' })).toContainText(
     'Cylindrical face Ø28'
   );
@@ -140,9 +140,9 @@ test('resizes a cylinder wall concentrically with one undoable radius edit', asy
   await page.mouse.move(start.x, start.y);
   await page.mouse.down();
   await page.mouse.move(end.x, end.y, { steps: 8 });
-  await expect(page.getByTestId('live-cylinder-radius')).toHaveText('18 mm');
+  await expect(page.getByTestId('live-cylinder-radius')).toHaveText('Ø 36 mm');
   await expect(page.getByTestId('direct-manipulation-value')).toHaveText(
-    'R 18 mm'
+    'Ø 36 mm'
   );
   await expect(page.getByRole('region', { name: '3D viewport' })).toContainText(
     'Cylindrical face Ø36'
@@ -151,7 +151,7 @@ test('resizes a cylinder wall concentrically with one undoable radius edit', asy
   await page.mouse.up();
 
   await expect(page.getByRole('contentinfo')).toContainText(
-    'Adjusted cylinder radius to R 18 mm.'
+    'Adjusted cylinder diameter to Ø 36 mm.'
   );
   await expect(page.getByRole('button', { name: 'Undo' })).toBeEnabled();
   await expect(page.getByRole('button', { name: 'History 1' })).toBeVisible();
@@ -199,10 +199,10 @@ test('resizes a cylinder wall concentrically with one undoable radius edit', asy
     cancelStart.y + cancelHandle.dy * cancelHandle.pixelsPerUnit * 2,
     { steps: 6 }
   );
-  await expect(page.getByTestId('live-cylinder-radius')).toHaveText('20 mm');
+  await expect(page.getByTestId('live-cylinder-radius')).toHaveText('Ø 40 mm');
   await expect(radiusOperation).toContainText('Dragging');
   await page.keyboard.press('Escape');
-  await expect(page.getByTestId('live-cylinder-radius')).toHaveText('18 mm');
+  await expect(page.getByTestId('live-cylinder-radius')).toHaveText('Ø 36 mm');
   await expect(page.getByLabel('Radius', { exact: true })).toHaveValue('18');
   await expect(canvas).not.toHaveAttribute(
     'data-e2e-cylinder-proxy-radius',
@@ -638,17 +638,22 @@ test('keeps a source circle stable over its coincident extrude edge', async ({
       (edge) => edge.visible && edge.depthTest && !edge.depthWrite
     )
   ).toBe(true);
+  const overlayEdges = renderPolicy.bodyEdges.filter(
+    (edge) => edge.name !== 'body-edge'
+  );
   expect(
-    renderPolicy.bodyEdges
-      .filter((edge) => edge.name !== 'body-edge')
-      .every(
-        (edge) =>
-          !edge.visible &&
-          edge.depthTest &&
-          !edge.depthWrite &&
-          (edge.name === 'body-edge-hover' ||
-            edge.name === 'body-edge-selected')
-      )
+    overlayEdges.every(
+      (edge) =>
+        edge.depthTest &&
+        !edge.depthWrite &&
+        (edge.name === 'body-edge-hover' ||
+          edge.name === 'body-edge-hover-hidden' ||
+          edge.name === 'body-edge-selected' ||
+          edge.name === 'body-edge-selected-hidden' ||
+          edge.name === 'body-face-boundary-selected' ||
+          edge.name === 'body-face-boundary-selected-hidden')
+    ),
+    JSON.stringify(overlayEdges, null, 2)
   ).toBe(true);
   const sketchCurves = renderPolicy.sketchLines.filter(
     (line) => line.name === 'sketch-curve'
@@ -1027,10 +1032,10 @@ test('radius drag resizes an offset-and-filleted cylinder as one body', async ({
     start.y + handle.dy * handle.pixelsPerUnit * 4,
     { steps: 8 }
   );
-  await expect(page.getByTestId('live-cylinder-radius')).toHaveText('18 mm');
+  await expect(page.getByTestId('live-cylinder-radius')).toHaveText('Ø 36 mm');
   await page.mouse.up();
   await expect(page.getByRole('contentinfo')).toContainText(
-    'Adjusted cylinder radius to R 18 mm.'
+    'Adjusted cylinder diameter to Ø 36 mm.'
   );
 
   // Parametric, not stacked: the Cylinder feature carries the new radius, no
@@ -1178,7 +1183,9 @@ for (const modifier of [
     await expect(
       page.getByRole('region', { name: 'Resize Cylinder Radius operation' })
     ).toBeVisible();
-    await expect(page.getByTestId('live-cylinder-radius')).toHaveText('4.6 mm');
+    await expect(page.getByTestId('live-cylinder-radius')).toHaveText(
+      'Ø 9.2 mm'
+    );
     await expect(canvas).toHaveAttribute('data-e2e-handle-x', /.+/);
 
     const handle = await canvas.evaluate((element) => ({
@@ -1208,7 +1215,7 @@ for (const modifier of [
     try {
       await page.mouse.move(end.x, end.y, { steps: 8 });
       await expect(page.getByTestId('live-cylinder-radius')).toHaveText(
-        '6.4 mm'
+        'Ø 12.8 mm'
       );
       await expect(canvas).not.toHaveAttribute(
         'data-e2e-cylinder-proxy-radius',
@@ -1220,7 +1227,7 @@ for (const modifier of [
     }
 
     await expect(page.getByRole('contentinfo')).toContainText(
-      'Adjusted cylinder radius to R 6.4 mm.'
+      'Adjusted cylinder diameter to Ø 12.8 mm.'
     );
     await expect(page.locator('.feature-row')).toHaveCount(2);
     await expect(blend.getByTitle('Feature failed to build')).toHaveCount(0);
@@ -1446,6 +1453,143 @@ test('applies an assistant-created sketch and same-proposal extrude', async ({
   );
   await expectBodyCount(page, 1);
   await expect(page.getByRole('contentinfo')).toContainText('warnings0');
+  expect(consoleErrors).toEqual([]);
+});
+
+test('resumes a clarified request from an OpenRouter Responses stream', async ({
+  page
+}) => {
+  await stubApi(page, { assistantEnabled: true });
+  const consoleErrors: string[] = [];
+  const assistantRequests: Array<Record<string, unknown>> = [];
+  page.on('console', (message) => {
+    if (message.type() === 'error') {
+      consoleErrors.push(message.text());
+    }
+  });
+  await page.route('**/api/assistant/status', (route) =>
+    route.fulfill({
+      json: {
+        configured: true,
+        provider: 'openrouter',
+        model: 'openai/gpt-5.6-sol',
+        reasoningEffort: 'high'
+      }
+    })
+  );
+  await page.route('**/api/assistant/proposals', (route) => {
+    assistantRequests.push(
+      route.request().postDataJSON() as Record<string, unknown>
+    );
+    const reply =
+      assistantRequests.length === 1
+        ? {
+            replyKind: 'questions',
+            proposal: null,
+            questions: [
+              {
+                id: 'import_strategy',
+                prompt: 'How should the imported body be parameterized?',
+                options: [
+                  {
+                    label: 'Rebuild exactly',
+                    value:
+                      'Rebuild the part parametrically while preserving its exact geometry, units, and placement.'
+                  }
+                ],
+                allowFreeText: false,
+                unit: null
+              }
+            ],
+            message: 'The imported body has no editable feature history.',
+            readings: null
+          }
+        : {
+            replyKind: 'patch',
+            proposal: {
+              proposalId: 'proposal_openrouter_resume_e2e',
+              summary: 'Rebuild the selected body parametrically.',
+              assumptions: [],
+              operations: [
+                {
+                  kind: 'add_primitive',
+                  name: 'Parametric Body',
+                  localId: null,
+                  primitiveKind: 'box',
+                  dimensions: {
+                    width: 10,
+                    height: 10,
+                    depth: 10,
+                    radius: null,
+                    bottomRadius: null,
+                    topRadius: null,
+                    majorRadius: null,
+                    minorRadius: null
+                  }
+                }
+              ]
+            },
+            questions: null,
+            message: null,
+            readings: null
+          };
+    const output = JSON.stringify(reply);
+    return route.fulfill({
+      status: 200,
+      contentType: 'text/event-stream',
+      body: `data: ${JSON.stringify({
+        type: 'response.content_part.delta',
+        delta: output.slice(0, 50)
+      })}\n\ndata: ${JSON.stringify({
+        type: 'response.content_part.delta',
+        delta: output.slice(50)
+      })}\n\ndata: ${JSON.stringify({
+        type: 'response.output_item.done',
+        item: {
+          status: 'completed',
+          content: [{ type: 'output_text', text: output }]
+        }
+      })}\n\ndata: ${JSON.stringify({
+        type: 'response.done',
+        response: { status: 'completed' }
+      })}\n\ndata: [DONE]\n\n`
+    });
+  });
+
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('Assistant Clarification');
+  await page.getByRole('button', { name: 'Create project' }).click();
+  await openAssistant(page);
+  await page
+    .getByLabel('CAD change request')
+    .fill('Parameterize the selected imported body');
+  await page.getByLabel('CAD change request').press('Enter');
+
+  const questions = page.locator('.assistant-card.questions');
+  await expect(questions).toContainText(
+    'The imported body has no editable feature history.'
+  );
+  await questions.getByRole('button', { name: 'Rebuild exactly' }).click();
+  await questions.getByRole('button', { name: 'Build it' }).click();
+
+  await expect(page.locator('.assistant-card.proposal.open')).toContainText(
+    'Rebuild the selected body parametrically.'
+  );
+  await expect(page.locator('.assistant-card.message.error')).toHaveCount(0);
+  expect(assistantRequests).toHaveLength(2);
+  expect(assistantRequests[1]?.prompt).toBe(
+    'Rebuild the part parametrically while preserving its exact geometry, units, and placement.'
+  );
+  expect(assistantRequests[1]?.history).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({
+        role: 'assistant',
+        text: expect.stringContaining(
+          'How should the imported body be parameterized?'
+        )
+      })
+    ])
+  );
   expect(consoleErrors).toEqual([]);
 });
 
@@ -2507,18 +2651,19 @@ test('a refused boolean explains itself inside the panel that asked', async ({
   await page.getByRole('button', { name: 'Create project' }).click();
   const inspector = page.getByRole('region', { name: 'Feature inspector' });
 
-  // A box and a cylinder overlapping at the origin. The exact kernel cannot
-  // fuse the curved operand without dropping to facets, so this union is
-  // refused — the same two bodies subtract exactly, and an all-planar union is
-  // unaffected, which is what the message has to say.
+  // A box and the default cylinder, the cylinder slid until its axis lies in
+  // the box's y = 0 face plane. That tangency still fuses into a result the
+  // exact kernel cannot close, so the union is refused. (This union at the
+  // corner axis used to be the refusal here; the current kernel resolves that
+  // one exactly, cylinder wall and all.)
   await page.getByRole('button', { name: /^Box \(B\)/ }).click();
   await inspector.getByRole('button', { name: /^Create/ }).click();
-  // Radius 14 is wider than the box is deep, which is the case whose facet
-  // census is the first thing the union has to report; the shipped default of
-  // 6 reports a dropped-operand tangency first instead.
   await page.getByRole('button', { name: /^Cylinder \(C\)/ }).click();
-  await inspector.getByLabel('Radius', { exact: true }).fill('14');
   await inspector.getByRole('button', { name: /^Create/ }).click();
+  await page.getByRole('button', { name: /^Move \(M\)/ }).click();
+  const shift = page.getByRole('form', { name: 'Move controls' });
+  await shift.getByLabel('Move X in mm').fill('15');
+  await shift.getByRole('button', { name: /Apply move/ }).click();
 
   await page.getByRole('button', { name: /^Union \(U\)/ }).click();
   await inspector.locator('.pick-row', { hasText: 'Box Body' }).click();
@@ -2528,12 +2673,15 @@ test('a refused boolean explains itself inside the panel that asked', async ({
   // The refusal is readable where the user is looking. Before this it reached
   // only the status bar, clipped mid-sentence, leaving Create looking inert.
   const refusal = inspector.getByRole('alert');
-  await expect(refusal).toContainText('faceted approximation');
-  // It states only what was measured. No single cause is asserted: measured
-  // on a box and a cylinder, repositioning clears this for a small round
-  // operand and clears nothing for one wider than the box it meets.
-  await expect(refusal).toContainText('will export that way');
-  await expect(refusal).toContainText('subtract instead');
+  await expect(refusal).toContainText(
+    'open, non-manifold, or inconsistently oriented result'
+  );
+  await expect(refusal).toContainText(
+    'Adjust the overlap or placement and try again.'
+  );
+  // The adapter only appends a move after applying it to these exact operands
+  // and validating the resulting union.
+  await expect(refusal).toContainText(/Moving Cylinder Body .+ clears it\./);
 
   // Refused means refused: history is untouched and the form stays open with
   // its picks intact, ready for another operation.

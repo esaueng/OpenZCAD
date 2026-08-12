@@ -1,7 +1,4 @@
 import * as THREE from 'three';
-import { Line2 } from 'three/examples/jsm/lines/Line2.js';
-import { LineGeometry } from 'three/examples/jsm/lines/LineGeometry.js';
-import { LineMaterial } from 'three/examples/jsm/lines/LineMaterial.js';
 import {
   CHIP_ANCHOR_LOCAL_DISTANCE,
   HANDLE_COLOR,
@@ -14,6 +11,7 @@ import {
   type HandleVec3
 } from './DragRig';
 import { createDimensionGraphic } from '../annotation/dimensionGraphic';
+import { ANALYTIC_GHOST_COLOR } from '../selection/analyticCylinderGhost';
 
 const ARROW_SHAFT_RADIUS = 0.05;
 const ARROW_HEAD_RADIUS = 0.14;
@@ -21,6 +19,7 @@ const ARROW_HEAD_LENGTH = 0.3;
 const ARROW_HALF_LENGTH = 0.75;
 const ARROW_HIT_RADIUS = 0.34;
 const GHOST_OPACITY = 0.28;
+export const HANDLE_WARNING_COLOR = 0xf59e0b;
 
 /**
  * The shared drag-arrow affordance: a double-headed arrow centered on the
@@ -115,14 +114,14 @@ export function edgeHandlePlacement(
 export interface OffsetFaceRigParams {
   origin: HandleVec3;
   direction: HandleVec3;
-  /** World-space triangles of the face, for the drag ghost (owned by rig). */
+  /** World-space triangles of the face, kept as the original-position reference. */
   ghostGeometry: THREE.BufferGeometry | null;
 }
 
 /**
  * An arrow anchored at the click point on a face, pointing along the face
  * normal, with a dashed leader back to the original position and a
- * translucent ghost of the face carried along during the drag.
+ * translucent ghost that marks the face's original position during the drag.
  */
 export function buildOffsetFaceHandle(params: OffsetFaceRigParams): DragRig {
   const kind = 'offset-face';
@@ -139,37 +138,20 @@ export function buildOffsetFaceHandle(params: OffsetFaceRigParams): DragRig {
     )
   );
 
-  addHandleParts(group, doubleArrowParts(kind));
+  const arrowParts = doubleArrowParts(kind);
+  addHandleParts(group, arrowParts);
 
   const worldGroup = new THREE.Group();
   worldGroup.name = `${kind}-handle-world`;
 
-  const leaderGeometry = new LineGeometry();
-  leaderGeometry.setPositions([
-    origin.x,
-    origin.y,
-    origin.z,
-    origin.x,
-    origin.y,
-    origin.z
-  ]);
-  const leader = new Line2(
-    leaderGeometry,
-    new LineMaterial({
-      color: HANDLE_COLOR,
-      linewidth: 1.5,
-      dashed: true,
-      dashSize: 2,
-      gapSize: 1.5,
-      transparent: true,
-      opacity: 0.85,
-      depthTest: false
-    })
-  );
-  leader.computeLineDistances();
-  leader.renderOrder = 29;
-  leader.visible = false;
-  worldGroup.add(leader);
+  const dimension = createDimensionGraphic({
+    color: HANDLE_COLOR,
+    linewidth: 1.5,
+    opacity: 0.85,
+    renderOrder: 29
+  });
+  dimension.object.visible = false;
+  worldGroup.add(dimension.object);
 
   let ghost: THREE.Mesh<THREE.BufferGeometry, THREE.MeshBasicMaterial> | null =
     null;
@@ -177,7 +159,7 @@ export function buildOffsetFaceHandle(params: OffsetFaceRigParams): DragRig {
     ghost = new THREE.Mesh(
       params.ghostGeometry,
       new THREE.MeshBasicMaterial({
-        color: HANDLE_COLOR,
+        color: ANALYTIC_GHOST_COLOR,
         transparent: true,
         opacity: GHOST_OPACITY,
         depthTest: false,
@@ -202,29 +184,30 @@ export function buildOffsetFaceHandle(params: OffsetFaceRigParams): DragRig {
       const tip = origin.clone().addScaledVector(direction, value);
       group.position.copy(tip);
       const engaged = Math.abs(value) > 1e-9;
-      leader.visible = engaged;
+      dimension.object.visible = engaged;
       if (engaged) {
-        leaderGeometry.setPositions([
-          origin.x,
-          origin.y,
-          origin.z,
-          tip.x,
-          tip.y,
-          tip.z
-        ]);
-        leader.computeLineDistances();
+        const scale = (group.userData.gizmoScale as number | undefined) ?? 1;
+        dimension.update(origin, tip, scale);
       }
       if (ghost) {
         ghost.visible = engaged;
-        ghost.position.set(
-          direction.x * value,
-          direction.y * value,
-          direction.z * value
-        );
       }
     },
     value() {
       return current;
+    },
+    setWarning(warning) {
+      const color = warning ? HANDLE_WARNING_COLOR : HANDLE_COLOR;
+      for (const part of arrowParts) {
+        if (
+          part.material instanceof THREE.MeshBasicMaterial &&
+          part.material.visible
+        ) {
+          part.material.color.setHex(color);
+        }
+      }
+      dimension.setColor(color);
+      group.userData.previewWarning = warning;
     },
     chipAnchor(gizmoScale: number) {
       // The chip rides just past the arrow head, which has already travelled
@@ -234,6 +217,7 @@ export function buildOffsetFaceHandle(params: OffsetFaceRigParams): DragRig {
       return origin.clone().addScaledVector(direction, reach);
     },
     dispose() {
+      dimension.dispose();
       disposeRigGroups(group, worldGroup);
     }
   };
@@ -357,6 +341,7 @@ export function buildEdgeRadiusHandle(params: {
     new THREE.TorusGeometry(EDGE_HANDLE_RADIUS * 1.7, 0.02, 8, 32),
     handleMaterial(0.55)
   );
+  ring.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), direction);
   const hit = createHitMesh(
     new THREE.SphereGeometry(EDGE_HIT_RADIUS, 8, 6),
     kind

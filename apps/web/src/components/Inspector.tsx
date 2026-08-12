@@ -22,6 +22,7 @@ import type {
   SketchObjectData,
   TopologySelection
 } from '@openzcad/shared';
+import type { DimensionMode } from '../lib/keypad';
 import {
   BooleanForm,
   EdgeModifierForm,
@@ -164,7 +165,10 @@ interface InspectorProps extends InspectorCallbacks {
   /** Sketch to pre-select in extrude/revolve, e.g. the one picked in the tree. */
   preferredSketchId: SketchId | null;
   /** Active cylindrical-wall gesture, localized to the inspector subtree. */
-  cylinderRadiusEdit: { initialRadius: number } | null;
+  cylinderRadiusEdit: {
+    initialRadius: number;
+    dimensionMode: DimensionMode;
+  } | null;
   cylinderRadiusSetterRef: MutableRefObject<
     ((radius: number | null) => void) | null
   >;
@@ -478,6 +482,13 @@ function FaceDirectEdit({
     evaluatedDiameter > 1e-6 &&
     Math.abs(evaluatedDiameter - geometry.diameter) >
       Math.max(1e-6, geometry.diameter * 1e-6);
+  const canRemove =
+    geometry.featureType !== 'blend' ||
+    (body.topology?.faces ?? []).every(
+      (candidate) =>
+        candidate.topologyId === face?.topologyId ||
+        candidate.geometry?.surfaceType === 'plane'
+    );
   const surfaceLabel =
     geometry.featureType === 'through-hole'
       ? 'Through hole'
@@ -511,6 +522,15 @@ function FaceDirectEdit({
             </span>
           </>
         )}
+        {geometry.featureType === 'blend' &&
+          geometry.blendRadius !== undefined && (
+            <>
+              <b>fillet radius</b>
+              <span>
+                R {formatNumber(geometry.blendRadius)} {units}
+              </span>
+            </>
+          )}
       </div>
 
       {geometry.featureType === 'through-hole' &&
@@ -538,14 +558,16 @@ function FaceDirectEdit({
           </form>
         )}
 
-      <button
-        type="button"
-        className="secondary remove-face-feature"
-        onClick={() => onRemoveFaceFeature(selection, geometry)}
-      >
-        <Trash2 size={13} aria-hidden="true" />
-        Remove selected feature
-      </button>
+      {canRemove && (
+        <button
+          type="button"
+          className="secondary remove-face-feature"
+          onClick={() => onRemoveFaceFeature(selection, geometry)}
+        >
+          <Trash2 size={13} aria-hidden="true" />
+          Remove selected feature
+        </button>
+      )}
       <p className="muted direct-edit-note">
         STEP stores faces, not the original feature history. OpenZCAD only
         applies edits the exact kernel can validate; unsupported face
@@ -582,23 +604,24 @@ export function Inspector(props: InspectorProps) {
   const [liveCylinderRadius, setLiveCylinderRadius] = useState<number | null>(
     cylinderRadiusEdit?.initialRadius ?? null
   );
+  const initialCylinderRadius = cylinderRadiusEdit?.initialRadius ?? null;
   const selectedEdgeReferences = selectedEdges.flatMap((edge) =>
     edge.reference?.kind === 'edge' ? [edge.reference] : []
   );
 
   useEffect(() => {
-    if (!cylinderRadiusEdit) {
+    if (initialCylinderRadius === null) {
       setLiveCylinderRadius(null);
       cylinderRadiusSetterRef.current = null;
       return;
     }
-    setLiveCylinderRadius(cylinderRadiusEdit.initialRadius);
+    setLiveCylinderRadius(initialCylinderRadius);
     cylinderRadiusSetterRef.current = (radius) =>
-      setLiveCylinderRadius(radius ?? cylinderRadiusEdit.initialRadius);
+      setLiveCylinderRadius(radius ?? initialCylinderRadius);
     return () => {
       cylinderRadiusSetterRef.current = null;
     };
-  }, [cylinderRadiusEdit, cylinderRadiusSetterRef]);
+  }, [cylinderRadiusSetterRef, initialCylinderRadius]);
 
   /**
    * Hand an edit panel the keyboard without handing it a field.
@@ -1008,13 +1031,23 @@ export function Inspector(props: InspectorProps) {
         {cylinderRadiusEdit && liveCylinderRadius !== null && (
           <section
             className="direct-face-editor"
-            aria-label="Cylinder radius properties"
+            aria-label="Cylinder dimension properties"
           >
             <h3 className="section-title">Direct edit</h3>
             <div className="kv-grid">
-              <b>Radius</b>
+              <b>
+                {cylinderRadiusEdit.dimensionMode === 'diameter'
+                  ? 'Diameter'
+                  : 'Radius'}
+              </b>
               <span data-testid="live-cylinder-radius">
-                {formatNumber(liveCylinderRadius)} {units}
+                {cylinderRadiusEdit.dimensionMode === 'diameter' ? 'Ø ' : 'R '}
+                {formatNumber(
+                  cylinderRadiusEdit.dimensionMode === 'diameter'
+                    ? liveCylinderRadius * 2
+                    : liveCylinderRadius
+                )}{' '}
+                {units}
               </span>
             </div>
           </section>

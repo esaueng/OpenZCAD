@@ -67,21 +67,34 @@ function makeEdge(selected: boolean): Line2 {
   return edge;
 }
 
-function makeBatchedEdge() {
+function makeBatchedEdge(smoothContinuation = false) {
   const bodyId = toBodyId('body-batch');
+  const edges = [
+    {
+      topologyId: 'edge-batch',
+      hash: 42,
+      vertexIds: [1, 2] as [number, number],
+      points: [0, 0, 0, 1, 0, 0, 2, 0, 0]
+    },
+    ...(smoothContinuation
+      ? [
+          {
+            topologyId: 'edge-next',
+            hash: 43,
+            vertexIds: [2, 3] as [number, number],
+            points: [2, 0, 0, 3, 0, 0]
+          }
+        ]
+      : [])
+  ];
+  const topology = {
+    faces: [],
+    edges
+  };
   const overlay = createBodyEdgeOverlay(
     {
       bodyId,
-      topology: {
-        faces: [],
-        edges: [
-          {
-            topologyId: 'edge-batch',
-            hash: 42,
-            points: [0, 0, 0, 1, 0, 0, 2, 0, 0]
-          }
-        ]
-      }
+      topology
     },
     { width: 100, height: 100 }
   );
@@ -95,7 +108,7 @@ function makeBatchedEdge() {
     object: overlay.idleEdges,
     faceIndex: 0
   } as unknown as PickCandidate['hit'];
-  return { overlay, selection, hit };
+  return { bodyId, overlay, selection, hit, topology };
 }
 
 function candidate(partial: Partial<PickCandidate>): PickCandidate {
@@ -183,6 +196,19 @@ describe('edge hover styling', () => {
 
     manager.applyHover(null);
     expect(overlay.hoverEdges.visible).toBe(false);
+  });
+
+  it('computes a smooth run only when the edge candidate changes', () => {
+    const { manager, renders, setBodies } = makeManager();
+    const { bodyId, overlay, selection, hit, topology } = makeBatchedEdge(true);
+    setBodies([{ bodyId, topology } as unknown as BodyRepresentation]);
+
+    manager.applyHover(candidate({ kind: 'edge', selection, hit }));
+    expect(overlay.hoverEdges.geometry.instanceCount).toBe(3);
+
+    const afterFirstCandidate = renders();
+    manager.applyHover(candidate({ kind: 'edge', selection, hit }));
+    expect(renders()).toBe(afterFirstCandidate);
   });
 
   it('does not duplicate a selected edge with the batched hover overlay', () => {
@@ -273,6 +299,122 @@ describe('body emissive is reserved for whole-body picks', () => {
       } as Partial<PickCandidate>)
     );
     expect(mesh.material.emissive.getHex()).toBe(0);
+  });
+});
+
+describe('face hover overlay', () => {
+  it('uses shaded material and shares the body render buffers', () => {
+    const { manager, objectsByBodyId, setBodies } = makeManager();
+    const bodyId = toBodyId('body-face');
+    const sourceGeometry = new THREE.BufferGeometry();
+    const position = new THREE.Float32BufferAttribute(
+      [0, 0, 0, 1, 0, 0, 0, 1, 0],
+      3
+    );
+    const normal = new THREE.Float32BufferAttribute(
+      [0, 0, 1, 0, 0, 1, 0, 0, 1],
+      3
+    );
+    sourceGeometry.setAttribute('position', position);
+    sourceGeometry.setAttribute('normal', normal);
+    sourceGeometry.setIndex([0, 1, 2]);
+    const object = new THREE.Mesh(
+      sourceGeometry,
+      new THREE.MeshPhongMaterial()
+    );
+    objectsByBodyId.set(bodyId, object);
+    setBodies([
+      {
+        bodyId,
+        topology: {
+          faces: [
+            {
+              topologyId: 'face-a',
+              hash: 101,
+              triangleStart: 0,
+              triangleCount: 1
+            }
+          ],
+          edges: []
+        }
+      } as unknown as BodyRepresentation
+    ]);
+
+    manager.setHoverFace({
+      bodyId,
+      kind: 'face',
+      topologyId: 'face-a'
+    });
+
+    expect(manager.hoverFaceMesh.material).toBeInstanceOf(
+      THREE.MeshLambertMaterial
+    );
+    expect(manager.hoverFaceMesh.material.toneMapped).toBe(false);
+    expect(manager.hoverFaceMesh.geometry.getAttribute('position')).toBe(
+      position
+    );
+    expect(manager.hoverFaceMesh.geometry.getAttribute('normal')).toBe(normal);
+    expect(manager.hoverHiddenFaceMesh.geometry.getAttribute('position')).toBe(
+      position
+    );
+    expect(manager.hoverHiddenFaceMesh.geometry.getAttribute('normal')).toBe(
+      normal
+    );
+    expect(manager.hoverHiddenFaceMesh.material.depthFunc).toBe(
+      THREE.GreaterDepth
+    );
+    expect(manager.hoverHiddenFaceMesh.material.depthWrite).toBe(false);
+    expect(manager.hoverHiddenFaceMesh.material).toBeInstanceOf(
+      THREE.MeshBasicMaterial
+    );
+    expect(manager.hoverHiddenFaceMesh.material.opacity).toBe(0);
+
+    manager.step(1);
+    expect(manager.hoverHiddenFaceMesh.material.opacity).toBeGreaterThan(0);
+    expect(manager.hoverHiddenFaceMesh.material.opacity).toBeLessThan(
+      manager.hoverFaceMesh.material.opacity
+    );
+  });
+
+  it('suppresses the hidden hover pass while sketch solids are receded', () => {
+    const { manager, objectsByBodyId, setBodies } = makeManager();
+    const bodyId = toBodyId('body-face-sketch');
+    const sourceGeometry = new THREE.BufferGeometry();
+    sourceGeometry.setAttribute(
+      'position',
+      new THREE.Float32BufferAttribute([0, 0, 0, 1, 0, 0, 0, 1, 0], 3)
+    );
+    sourceGeometry.setAttribute(
+      'normal',
+      new THREE.Float32BufferAttribute([0, 0, 1, 0, 0, 1, 0, 0, 1], 3)
+    );
+    sourceGeometry.setIndex([0, 1, 2]);
+    objectsByBodyId.set(
+      bodyId,
+      new THREE.Mesh(sourceGeometry, new THREE.MeshPhongMaterial())
+    );
+    setBodies([
+      {
+        bodyId,
+        topology: {
+          faces: [
+            {
+              topologyId: 'face-a',
+              hash: 101,
+              triangleStart: 0,
+              triangleCount: 1
+            }
+          ],
+          edges: []
+        }
+      } as unknown as BodyRepresentation
+    ]);
+
+    manager.setXrayEnabled(false);
+    manager.setHoverFace({ bodyId, kind: 'face', topologyId: 'face-a' });
+
+    expect(manager.hoverFaceMesh.visible).toBe(true);
+    expect(manager.hoverHiddenFaceMesh.visible).toBe(false);
   });
 });
 

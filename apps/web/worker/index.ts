@@ -1,5 +1,6 @@
 import {
   ProjectCollaborationRoom,
+  ProjectObjectStorageError,
   createPersistenceService,
   isCloudflareFeatureEnabled,
   projectCollaborationRollout,
@@ -1411,6 +1412,22 @@ export default {
       }
       if (error instanceof ArtifactStorageError) {
         return json({ error: error.message }, 503);
+      }
+      if (error instanceof ProjectObjectStorageError) {
+        console.error(
+          'Project document storage unavailable.',
+          request.method,
+          pathname,
+          error
+        );
+        return json(
+          {
+            error:
+              'The account copy of this project is temporarily unavailable. Your work remains saved on this device.',
+            code: 'PROJECT_DOCUMENT_UNAVAILABLE'
+          },
+          503
+        );
       }
       if (
         error instanceof Error &&

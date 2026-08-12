@@ -1,4 +1,9 @@
-import type { ArtifactId, ProjectId } from '@openzcad/shared';
+import {
+  MAX_THUMBNAIL_BYTES,
+  THUMBNAIL_CONTENT_TYPE,
+  type ArtifactId,
+  type ProjectId
+} from '@openzcad/shared';
 
 export interface ThumbnailCloudTransport {
   createUploadSession(input: {
@@ -33,8 +38,11 @@ export async function thumbnailSourceBlob(source: string): Promise<Blob> {
 
 /** Converts downloaded private image bytes into a source `<img>` can render. */
 export function thumbnailBlobSource(blob: Blob): Promise<string> {
-  if (!blob.type.startsWith('image/')) {
+  if (blob.type !== THUMBNAIL_CONTENT_TYPE) {
     return Promise.reject(new Error('Thumbnail artifact is not an image.'));
+  }
+  if (blob.size > MAX_THUMBNAIL_BYTES) {
+    return Promise.reject(new Error('Thumbnail artifact is too large.'));
   }
   return new Promise((resolve, reject) => {
     const reader = new FileReader();

@@ -21,6 +21,7 @@ describe('presentedWorkspaceSaveState', () => {
       'syncing',
       'offline',
       'conflict',
+      'repair',
       'refused',
       'paused'
     ] as const) {
@@ -32,5 +33,14 @@ describe('presentedWorkspaceSaveState', () => {
     const presentation = WORKSPACE_SAVE_STATE_PRESENTATION['local-source'];
     expect(presentation.statusBarLabel).toBe('Local source only');
     expect(presentation.title).toMatch(/only on this device/i);
+  });
+
+  it('does not describe an unreadable account project as local-only', () => {
+    const presentation = WORKSPACE_SAVE_STATE_PRESENTATION.repair;
+    expect(presentation.topBarLabel).toBe('Repair needed');
+    expect(presentation.statusBarLabel).toBe('Account repair needed');
+    expect(presentation.title).toMatch(/account copy cannot be opened/i);
+    expect(presentation.title).toMatch(/saved on this device/i);
+    expect(presentation.title).toMatch(/restore it from this device/i);
   });
 });

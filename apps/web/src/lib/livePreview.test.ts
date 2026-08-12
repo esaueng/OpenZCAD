@@ -124,6 +124,56 @@ describe('failure and invalid input', () => {
     expect(published.map((doc) => doc?.value)).toEqual([2]);
   });
 
+  it('reports only a failure for the value that is still current', async () => {
+    const first = deferred();
+    const failures: { error: unknown; value: number }[] = [];
+    const preview = new LivePreview<Doc, string>({
+      build: (value) => ({ value }),
+      derive: (document) =>
+        document.value === 1
+          ? first.promise
+          : Promise.reject(new Error('current value is invalid')),
+      publish: () => undefined,
+      onFailure: (failure) => failures.push(failure)
+    });
+
+    preview.request(1);
+    preview.request(2);
+    first.reject(new Error('superseded value is invalid'));
+    await settle();
+
+    expect(failures).toHaveLength(1);
+    expect(failures[0]?.value).toBe(2);
+    expect(failures[0]?.error).toEqual(
+      new Error('current value is invalid')
+    );
+  });
+
+  it('reports a synchronous candidate-build failure without wedging', async () => {
+    const failures: { error: unknown; value: number }[] = [];
+    const built: number[] = [];
+    const preview = new LivePreview<Doc, string>({
+      build: (value) => {
+        built.push(value);
+        if (value === 1) {
+          throw new Error('candidate cannot be built');
+        }
+        return { value };
+      },
+      derive: () => Promise.resolve('derived'),
+      publish: () => undefined,
+      onFailure: (failure) => failures.push(failure)
+    });
+
+    preview.request(1);
+    await settle();
+    preview.request(2);
+    await settle();
+
+    expect(built).toEqual([1, 2]);
+    expect(failures.map((failure) => failure.value)).toEqual([1]);
+  });
+
   it('ignores non-positive values', async () => {
     const { preview, built } = makePreview({
       derive: () => Promise.resolve('derived')

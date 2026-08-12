@@ -95,7 +95,8 @@ export function readAssistantEvent(
   }
   const value = event as Record<string, unknown>;
   if (
-    value.type === 'response.output_text.delta' &&
+    (value.type === 'response.output_text.delta' ||
+      value.type === 'response.content_part.delta') &&
     typeof value.delta === 'string'
   ) {
     return { text: currentText + value.delta, done: false };
@@ -107,21 +108,53 @@ export function readAssistantEvent(
     return { text: value.text, done: false };
   }
   if (
+    value.type === 'response.output_item.done' &&
+    value.item &&
+    typeof value.item === 'object' &&
+    !Array.isArray(value.item)
+  ) {
+    const item = value.item as Record<string, unknown>;
+    const text = Array.isArray(item.content)
+      ? item.content
+          .flatMap((part) =>
+            part &&
+            typeof part === 'object' &&
+            !Array.isArray(part) &&
+            (part as Record<string, unknown>).type === 'output_text' &&
+            typeof (part as Record<string, unknown>).text === 'string'
+              ? [(part as Record<string, unknown>).text as string]
+              : []
+          )
+          .join('')
+      : '';
+    if (text) {
+      return { text, done: false };
+    }
+  }
+  const response =
+    value.response &&
+    typeof value.response === 'object' &&
+    !Array.isArray(value.response)
+      ? (value.response as Record<string, unknown>)
+      : undefined;
+  const responseDoneFailure =
+    value.type === 'response.done' &&
+    (response?.status === 'failed' || response?.status === 'incomplete');
+  if (
     value.type === 'response.failed' ||
     value.type === 'response.incomplete' ||
+    value.type === 'response.error' ||
+    responseDoneFailure ||
     value.type === 'error'
   ) {
-    const response =
-      value.response && typeof value.response === 'object'
-        ? (value.response as Record<string, unknown>)
-        : value;
+    const failure = response ?? value;
     // A truncated response arrives as a normal `response.incomplete` event, not
     // an upstream error, so name the cause instead of reporting it as a generic
     // failure the user cannot act on.
     const incompleteReason =
-      response.incomplete_details &&
-      typeof response.incomplete_details === 'object'
-        ? (response.incomplete_details as Record<string, unknown>).reason
+      failure.incomplete_details &&
+      typeof failure.incomplete_details === 'object'
+        ? (failure.incomplete_details as Record<string, unknown>).reason
         : undefined;
     if (incompleteReason === 'max_output_tokens') {
       throw new AssistantStreamError(
@@ -131,14 +164,19 @@ export function readAssistantEvent(
       );
     }
     throw new AssistantStreamError(
-      value.type === 'response.incomplete'
+      value.type === 'response.incomplete' || response?.status === 'incomplete'
         ? 'AI_OUTPUT_INCOMPLETE'
         : 'AI_PROVIDER_STREAM_ERROR',
       'The modeling assistant could not complete the proposal.',
       requestId
     );
   }
-  return { text: currentText, done: value.type === 'response.completed' };
+  return {
+    text: currentText,
+    done:
+      value.type === 'response.completed' ||
+      (value.type === 'response.done' && response?.status === 'completed')
+  };
 }
 
 export function parseAssistantEventData(

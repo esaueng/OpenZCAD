@@ -44,6 +44,7 @@ import {
   createProjectDocument,
   duplicateProjectDocument,
   findBodyNode,
+  findFeature,
   findSketch,
   getParameterScope,
   listFeaturesInOrder,
@@ -116,7 +117,7 @@ import type {
   ProjectCollaborationCapabilitiesResponse
 } from '@openzcad/shared';
 import { toArtifactId, toUserId, UNIT_TO_MM } from '@openzcad/shared';
-import { ApiError, api } from './lib/api';
+import { ApiError, api, isProjectDocumentUnavailableError } from './lib/api';
 import { uploadArtifactBody } from './lib/artifactUpload';
 import {
   archiveLocalOnlyImportSources,
@@ -224,8 +225,17 @@ import {
   primitiveCylinderHeightAncestor,
   primitiveCylinderRadiusAncestor
 } from './lib/interaction/cylinderPrimitiveAncestry';
+import { resolveOffsetPreviewFace } from './lib/interaction/offsetPreview';
+import {
+  blendRadialDirection,
+  canRemoveImportedBlendFace,
+  editableFilletFeature,
+  newBlendFaceSelections,
+  resolveFilletBlendFace
+} from './lib/interaction/filletFaceEdit';
 import { ToolCard } from './components/ToolCard';
 import { NumericKeypad, type KeypadRequest } from './components/NumericKeypad';
+import type { DimensionMode } from './lib/keypad';
 import {
   IDLE,
   escapeTarget,
@@ -244,9 +254,9 @@ import {
   fixedPlaneRefForLegacyAttachment
 } from './lib/faceSketchAttachment';
 import {
-  edgeLabel,
   edgeLengthMeasurement,
-  faceLabel
+  faceLabel,
+  topologySelectionLabel
 } from './lib/topologyLabels';
 import { resolveFace } from './lib/topologyResolution';
 import { objectPolylines } from './lib/objectPolyline';
@@ -451,7 +461,12 @@ import { useGeometryWorker } from './hooks/useGeometryWorker';
 import { useProjectView } from './hooks/useProjectView';
 import { useDirectEditCommit } from './hooks/useDirectEditCommit';
 import { useValidatedFeatureCommit } from './hooks/useValidatedFeatureCommit';
-import { affectedFeatureTargets } from './lib/affectedFeatureTargets';
+import {
+  affectedFeatureTargets,
+  type AffectedFeatureTarget
+} from './lib/affectedFeatureTargets';
+import { directEditRejection } from './lib/directEdit';
+import { validatedFeatureRejection } from './lib/featureValidation';
 import { useCollaboration } from './lib/useCollaboration';
 import { preflightCadPatch } from './lib/aiPatchPreflight';
 import {
@@ -548,6 +563,29 @@ type AdoptLocalProjectResult =
   | { state: 'adopted' | 'already-adopted' | 'missing' }
   | { state: 'conflict'; conflict: ProjectConflict };
 
+interface OffsetEditPlan {
+  command: AnyCommand;
+  bodyId: BodyId;
+  successMessage: string;
+  validationTargets?: AffectedFeatureTarget[];
+  preflightRejection?: string;
+}
+
+interface OffsetPreviewCandidate {
+  document: ProjectDocument;
+  offset: number;
+  bodyId: BodyId;
+  label: string;
+  baseProjectId: ProjectDocument['projectId'];
+  baseVersion: number;
+  validationTargets?: AffectedFeatureTarget[];
+}
+
+interface OffsetPreviewResult {
+  derived: ProjectDocument['derived'];
+  rejection: string | null;
+}
+
 function desktopAuthorizationAttemptFromLocation(): string | null {
   if (typeof globalThis.location === 'undefined' || isDesktopApp()) {
     return null;
@@ -571,6 +609,21 @@ function summarizeLocalDocument(
     revisionCount: document.checkpoints.length,
     ...(organization ? { organization } : {})
   };
+}
+
+interface AccountProjectLoadResult {
+  document: ProjectDocument | null;
+  error?: unknown;
+}
+
+async function loadAccountProjectResult(
+  projectId: string
+): Promise<AccountProjectLoadResult> {
+  try {
+    return { document: await api.loadProject(projectId) };
+  } catch (error) {
+    return { document: null, error };
+  }
 }
 
 /**
@@ -1071,6 +1124,20 @@ export function App() {
   interactionRef.current = interaction;
   /** Open exact-value entry (anchored keypad) for the armed handle. */
   const [keypad, setKeypad] = useState<KeypadRequest | null>(null);
+  const keypadRef = useRef(keypad);
+  keypadRef.current = keypad;
+  /** Latest pointer/entry value stays transient until an exact frame lands. */
+  const offsetPreviewValueRef = useRef<number | null>(null);
+  /** Signed offset represented by the currently published previewDoc. */
+  const [renderedOffsetPreview, setRenderedOffsetPreview] = useState<
+    number | null
+  >(null);
+  /** New exact blend faces, computed once when an edge-fillet preview lands. */
+  const [previewBlendFaces, setPreviewBlendFaces] = useState<
+    TopologySelection[]
+  >([]);
+  const [cylinderDimensionMode, setCylinderDimensionMode] =
+    useState<DimensionMode>('diameter');
   const keypadAnchorRef = useRef<
     ((point: { x: number; y: number } | null) => void) | null
   >(null);
@@ -1114,6 +1181,12 @@ export function App() {
     return ready;
   }
   const remoteVersionsRef = useRef(new Map<string, number>());
+  /**
+   * A project known to exist in the account whose document object could not be
+   * read. Keep it out of the autosave controller until an explicit retry loads
+   * the account copy, while IndexedDB continues to receive every edit.
+   */
+  const accountDocumentUnavailableProjectIdRef = useRef<string | null>(null);
   /**
    * Projects the account holds, as of the last listing that reached it. Kept
    * apart from `remoteVersionsRef`, which only knows about projects this
@@ -1250,6 +1323,102 @@ export function App() {
   ).current;
 
   /**
+   * Exact planar push/pull preview. The document wrapper carries validation
+   * context alongside the candidate, but only its rebuilt ProjectDocument is
+   * ever published into previewDoc; manager.document is never touched.
+   */
+  const offsetPreview = useRef(
+    new LivePreview<OffsetPreviewCandidate, OffsetPreviewResult>({
+      build: (offset) => {
+        const base = managerRef.current?.document;
+        const plan = base
+          ? buildOffsetEditPlan(offset, undefined, base)
+          : null;
+        return base && plan
+          ? {
+              document: plan.command.apply(base),
+              offset,
+              bodyId: plan.bodyId,
+              label: plan.command.label,
+              baseProjectId: base.projectId,
+              baseVersion: base.version,
+              ...(plan.validationTargets
+                ? { validationTargets: plan.validationTargets }
+                : {})
+            }
+          : null;
+      },
+      derive: async (candidate) => {
+        const derived = await geometry.syncOnce(candidate.document);
+        const live = managerRef.current;
+        const documentMoved =
+          !live ||
+          live.document.projectId !== candidate.baseProjectId ||
+          live.document.version !== candidate.baseVersion;
+        let rejection: string | null = null;
+        if (candidate.validationTargets) {
+          for (const target of candidate.validationTargets) {
+            rejection = validatedFeatureRejection({
+              featureName: target.featureName,
+              warnings: derived.warnings,
+              bodyPresent: Boolean(
+                derived.bodyRepresentations[target.resultBodyId]
+              ),
+              documentMoved
+            });
+            if (rejection) {
+              break;
+            }
+          }
+          if (
+            !rejection &&
+            candidate.validationTargets.length === 0 &&
+            documentMoved
+          ) {
+            rejection = 'The document changed while the preview was rebuilding.';
+          }
+        } else {
+          rejection = directEditRejection({
+            label: candidate.label,
+            warnings: derived.warnings,
+            bodyPresent: Boolean(derived.bodyRepresentations[candidate.bodyId]),
+            documentMoved
+          });
+        }
+        return { derived, rejection };
+      },
+      publish: (preview) => {
+        if (!preview) {
+          setPreviewDoc(null);
+          setRenderedOffsetPreview(null);
+          return;
+        }
+        if (preview.derived.rejection) {
+          reportOffsetPreviewFailure(
+            preview.derived.rejection,
+            preview.document.offset
+          );
+          return;
+        }
+        setPreviewDoc({
+          ...preview.document.document,
+          derived: preview.derived.derived
+        });
+        setRenderedOffsetPreview(preview.document.offset);
+        recoverOffsetPreviewInteraction();
+      },
+      onFailure: ({ error, value }) =>
+        reportOffsetPreviewFailure(
+          errorMessage(error, 'Exact offset preview failed.'),
+          value
+        ),
+      acceptValue: (offset) =>
+        Number.isFinite(offset) && Math.abs(offset) > 1e-9,
+      continueAfterSlow: false
+    })
+  ).current;
+
+  /**
    * Exact profile extrusion preview. LivePreview supplies newest-request wins
    * sequencing, so a slow worker response can never replace a newer distance
    * or profile selection.
@@ -1343,11 +1512,15 @@ export function App() {
       dispatchInteraction({ type: 'validation-start', value }),
     onValidationFailed: (message, value) => {
       cylinderRadiusPreview.clear();
+      offsetPreview.clear();
+      offsetPreviewValueRef.current = null;
       cylinderRadiusInspectorSetterRef.current?.(null);
       dispatchInteraction({ type: 'validation-failed', message, value });
     },
     onCommitted: (bodyId) => {
       cylinderRadiusPreview.clear();
+      offsetPreview.clear();
+      offsetPreviewValueRef.current = null;
       dispatchInteraction({ type: 'commit-complete' });
       setSelectedTopology(null);
       setSelectedEdges([]);
@@ -1739,7 +1912,13 @@ export function App() {
       api,
       onStatus(status) {
         setSaveState(status.state);
-        if (status.state === 'refused') {
+        if (status.state === 'repair' && status.projectId) {
+          accountDocumentUnavailableProjectIdRef.current = status.projectId;
+          setCloudAvailable(false);
+          setStatus(
+            'The account copy needs repair. Your work remains saved on this device; click Repair needed to retry.'
+          );
+        } else if (status.state === 'refused') {
           setStatus(
             errorMessage(
               status.error,
@@ -1760,6 +1939,7 @@ export function App() {
       },
       onSessionExpired() {
         remoteVersionsRef.current.clear();
+        accountDocumentUnavailableProjectIdRef.current = null;
         setCloudAvailable(false);
         endCloudSettingsSession();
       }
@@ -1802,6 +1982,7 @@ export function App() {
       !cloudFunctionsEnabled ||
       !projectId ||
       !session ||
+      accountDocumentUnavailableProjectIdRef.current === projectId ||
       accountVersion === undefined
     ) {
       controller.closeProject();
@@ -2039,7 +2220,7 @@ export function App() {
           : null;
         const [
           listed,
-          rememberedRemote,
+          rememberedRemoteResult,
           remoteSettings,
           collaborationCapabilities
         ] = await Promise.all([
@@ -2047,8 +2228,10 @@ export function App() {
             loadProjectSummaries(Boolean(activeSession))
           ),
           activeSession && startupProjectId
-            ? api.loadProject(startupProjectId).catch(() => null)
-            : Promise.resolve(null),
+            ? loadAccountProjectResult(startupProjectId)
+            : Promise.resolve<AccountProjectLoadResult>({
+                document: null
+              }),
           activeSession ? api.getSettings().catch(() => null) : null,
           activeSession
             ? api
@@ -2061,6 +2244,17 @@ export function App() {
         }
         setDeploymentHealth(health);
         const merged = listed.projects;
+        const rememberedRemote = rememberedRemoteResult.document;
+        const accountOwnsStartupProject = Boolean(
+          startupProjectId && listed.cloudProjectIds.has(startupProjectId)
+        );
+        const accountDocumentNeedsRepair = Boolean(
+          accountOwnsStartupProject &&
+          isProjectDocumentUnavailableError(rememberedRemoteResult.error)
+        );
+        const accountDocumentLoadFailed = Boolean(
+          accountOwnsStartupProject && rememberedRemoteResult.error
+        );
         const restoredOutcome = chooseProjectDocument(
           rememberedLocal,
           rememberedRemote,
@@ -2092,6 +2286,10 @@ export function App() {
           }
         }
         const canUseCloud = Boolean(activeSession && rememberedRemote);
+        accountDocumentUnavailableProjectIdRef.current =
+          accountDocumentNeedsRepair && startupProjectId
+            ? startupProjectId
+            : null;
         setCollaborationRollout(collaborationCapabilities);
         if (rememberedRemote) {
           remoteVersionsRef.current.set(
@@ -2141,7 +2339,11 @@ export function App() {
         }
         setSaveState(
           !canUseCloud
-            ? 'local'
+            ? accountDocumentNeedsRepair
+              ? 'repair'
+              : accountDocumentLoadFailed
+                ? 'offline'
+                : 'local'
             : restoredOutcome.choice === 'diverged'
               ? 'conflict'
               : restoredOutcome.choice === 'local'
@@ -2150,6 +2352,20 @@ export function App() {
         );
         if (startupProjectId && restoredDocument) {
           hydrateDocument(restoredDocument);
+          if (accountDocumentNeedsRepair) {
+            setSaveState('repair');
+            setStatus(
+              `Reopened ${restoredDocument.name}. The account copy needs repair; your work remains saved on this device.`
+            );
+            return;
+          }
+          if (accountDocumentLoadFailed) {
+            setSaveState('offline');
+            setStatus(
+              `Reopened ${restoredDocument.name}. The account copy is currently unreachable; your work remains saved on this device.`
+            );
+            return;
+          }
           if (restoredOutcome.choice === 'diverged') {
             setAccountConflict(
               conflictFromDocuments(
@@ -2226,7 +2442,7 @@ export function App() {
   }, [doc, cloudAvailable]);
 
   useEffect(() => {
-    if (!doc || !cloudAvailable) {
+    if (!doc || !session || !cloudProjectIds.has(doc.projectId)) {
       setArtifacts([]);
       return;
     }
@@ -2246,7 +2462,7 @@ export function App() {
     return () => {
       cancelled = true;
     };
-  }, [doc?.projectId, cloudAvailable]);
+  }, [cloudProjectIds, doc?.projectId, session]);
 
   useEffect(() => {
     geometry.sync(doc);
@@ -2280,9 +2496,10 @@ export function App() {
   const renderedRepresentations =
     previewDoc?.derived.bodyRepresentations ?? representations;
   /**
-   * Exact regeneration is allowed to assign a new topology ID to the resized
-   * wall. Keep the selected face attached to the preview by its fixed
-   * world-space axis; do not apply this fallback to unrelated edit types.
+   * Exact regeneration may assign a new topology ID to an edited face. Keep
+   * selection attached through operation-specific immutable identity: exact
+   * fillet evolution lineage, the translated source plane for offsets, or the
+   * fixed axis for cylinder radii.
    */
   const renderedSelectedTopology = useMemo<TopologySelection | null>(() => {
     if (selectedTopology?.kind !== 'face') {
@@ -2290,6 +2507,31 @@ export function App() {
     }
     const body = renderedRepresentations[selectedTopology.bodyId];
     const faces = body?.topology?.faces ?? [];
+    if (
+      interaction.mode === 'face' &&
+      interaction.op === 'edit-fillet' &&
+      interaction.target.bodyId === selectedTopology.bodyId &&
+      interaction.target.filletFeatureId
+    ) {
+      const sourceFace = representations[
+        selectedTopology.bodyId
+      ]?.topology?.faces.find(
+        (face) => face.topologyId === selectedTopology.topologyId
+      );
+      const regenerated = sourceFace
+        ? resolveFilletBlendFace(faces, sourceFace)
+        : null;
+      if (regenerated) {
+        return {
+          bodyId: selectedTopology.bodyId,
+          kind: 'face',
+          topologyId: regenerated.topologyId,
+          hash: regenerated.hash,
+          ...(regenerated.reference ? { reference: regenerated.reference } : {})
+        };
+      }
+      return null;
+    }
     const exact = faces.find(
       (face) =>
         face.topologyId === selectedTopology.topologyId ||
@@ -2303,6 +2545,46 @@ export function App() {
         topologyId: exact.topologyId,
         hash: exact.hash
       };
+    }
+    if (
+      interaction.mode === 'face' &&
+      interaction.op === 'offset-face' &&
+      interaction.target.bodyId === selectedTopology.bodyId &&
+      renderedOffsetPreview !== null
+    ) {
+      const regenerated = resolveOffsetPreviewFace(
+        faces,
+        {
+          point: {
+            x: interaction.target.point[0],
+            y: interaction.target.point[1],
+            z: interaction.target.point[2]
+          },
+          normal: {
+            x: interaction.target.normal[0],
+            y: interaction.target.normal[1],
+            z: interaction.target.normal[2]
+          },
+          ...(interaction.target.surfaceCenter
+            ? {
+                center: {
+                  x: interaction.target.surfaceCenter[0],
+                  y: interaction.target.surfaceCenter[1],
+                  z: interaction.target.surfaceCenter[2]
+                }
+              }
+            : {})
+        },
+        renderedOffsetPreview
+      );
+      if (regenerated) {
+        return {
+          bodyId: selectedTopology.bodyId,
+          kind: 'face',
+          topologyId: regenerated.topologyId,
+          hash: regenerated.hash
+        };
+      }
     }
     if (
       interaction.mode !== 'face' ||
@@ -2345,7 +2627,13 @@ export function App() {
           hash: regenerated.hash
         }
       : selectedTopology;
-  }, [interaction, renderedRepresentations, selectedTopology]);
+  }, [
+    interaction,
+    representations,
+    renderedOffsetPreview,
+    renderedRepresentations,
+    selectedTopology
+  ]);
   const normalToFaceTarget = useMemo(() => {
     const selection = renderedSelectedTopology;
     if (selection?.kind !== 'face' || !selection.topologyId) {
@@ -2592,9 +2880,12 @@ export function App() {
       const hash = selectedEdges[0]?.hash ?? renderedSelectedTopology?.hash;
       const topologyId =
         selectedEdges[0]?.topologyId ?? renderedSelectedTopology?.topologyId;
-      const name = edgeLabel(body, hash, topologyId);
       const length = edgeLengthMeasurement(body, hash, topologyId);
-      const label = body ? `${body.name} · ${name}` : name;
+      const label = topologySelectionLabel(body, {
+        kind: 'edge',
+        hash,
+        topologyId
+      });
       const value =
         length && length.value > 0
           ? `${length.quality === 'sampled' ? '≈ ' : ''}${round(length.value)} ${units}`
@@ -2621,12 +2912,7 @@ export function App() {
           detail: value
         };
       }
-      const name = faceLabel(
-        body,
-        renderedSelectedTopology.hash,
-        renderedSelectedTopology.topologyId
-      );
-      const label = body ? `${body.name} · ${name}` : name;
+      const label = topologySelectionLabel(body, renderedSelectedTopology);
       // A cylinder is the other pick that carries a number of its own; every
       // other face kind has a name but nothing to measure yet.
       const cylinderDiameter =
@@ -3324,6 +3610,12 @@ export function App() {
     }
     try {
       await saveLocalProject(pending);
+      if (
+        accountDocumentUnavailableProjectIdRef.current === pending.projectId
+      ) {
+        setSaveState('repair');
+        return;
+      }
       // The device write is the save; the account copy follows on its own
       // schedule. Handing the document over here rather than from the edit
       // effect means nothing is ever queued for the account that this device
@@ -4126,6 +4418,7 @@ export function App() {
     cloudSettingsAutosaveRef.current?.endSession();
     cloudSettingsSessionUserRef.current = null;
     remoteVersionsRef.current.clear();
+    accountDocumentUnavailableProjectIdRef.current = null;
     sessionRef.current = null;
     accountSettingsRef.current = null;
     setSession(null);
@@ -4538,6 +4831,7 @@ export function App() {
       await api.logout();
       const listed = await loadProjectSummaries(false);
       remoteVersionsRef.current.clear();
+      accountDocumentUnavailableProjectIdRef.current = null;
       cloudSettingsAutosaveRef.current?.endSession();
       cloudSettingsSessionUserRef.current = null;
       // The next sign-in on this device may be a different account. Awaited so
@@ -4798,6 +5092,9 @@ export function App() {
     // the baseline ahead of the device copy.
     await saveLocalProject(merged);
     await saveLastSyncedVersion(merged.projectId, merged.version);
+    if (accountDocumentUnavailableProjectIdRef.current === merged.projectId) {
+      accountDocumentUnavailableProjectIdRef.current = null;
+    }
     remoteVersionsRef.current.set(merged.projectId, merged.version);
     setCloudProjectIds((current) => new Set(current).add(merged.projectId));
     setProjects((current) => mergeProjectSummaries([summary], current));
@@ -5122,14 +5419,45 @@ export function App() {
     setBusy(true);
     try {
       await flushPendingLocalSave();
-      const [localDocument, remoteDocument, lastSyncedVersion] =
+      if (
+        accountDocumentUnavailableProjectIdRef.current !== null &&
+        accountDocumentUnavailableProjectIdRef.current !== projectId
+      ) {
+        accountDocumentUnavailableProjectIdRef.current = null;
+      }
+      const [localDocument, remoteResult, lastSyncedVersion] =
         await Promise.all([
           loadLocalProject(projectId),
           session
-            ? api.loadProject(projectId).catch(() => null)
-            : Promise.resolve(null),
+            ? loadAccountProjectResult(projectId)
+            : Promise.resolve<AccountProjectLoadResult>({
+                document: null
+              }),
           loadLastSyncedVersion(projectId)
         ]);
+      const remoteDocument = remoteResult.document;
+      if (remoteResult.error && localDocument) {
+        const needsRepair = isProjectDocumentUnavailableError(
+          remoteResult.error
+        );
+        accountDocumentUnavailableProjectIdRef.current = needsRepair
+          ? projectId
+          : null;
+        setCloudAvailable(false);
+        hydrateDocument(localDocument);
+        setSaveState(needsRepair ? 'repair' : 'offline');
+        setStatus(
+          needsRepair
+            ? `Opened ${localDocument.name}. The account copy needs repair; your work remains saved on this device.`
+            : `Opened ${localDocument.name}. The account copy is currently unreachable; your work remains saved on this device.`
+        );
+        return;
+      }
+      if (remoteResult.error && !localDocument) {
+        throw remoteResult.error instanceof Error
+          ? remoteResult.error
+          : new Error('The account project could not be loaded.');
+      }
       const outcome = chooseProjectDocument(
         localDocument,
         remoteDocument,
@@ -5137,6 +5465,12 @@ export function App() {
       );
       if (outcome.choice === 'none') {
         throw new Error('Project not found locally or in the beta API.');
+      }
+      if (
+        accountDocumentUnavailableProjectIdRef.current === projectId &&
+        remoteDocument
+      ) {
+        accountDocumentUnavailableProjectIdRef.current = null;
       }
       setCloudAvailable(Boolean(remoteDocument));
       if (remoteDocument) {
@@ -5610,11 +5944,172 @@ export function App() {
     void api
       .loadProject(projectId)
       .then((remote) => {
+        accountDocumentUnavailableProjectIdRef.current = null;
+        setCloudAvailable(true);
         setAccountConflict(
           conflictFromDocuments(localDocument, remote, 'account')
         );
       })
-      .catch(() => undefined);
+      .catch((error) => {
+        if (isProjectDocumentUnavailableError(error)) {
+          accountDocumentUnavailableProjectIdRef.current = projectId;
+          setCloudAvailable(false);
+          setSaveState('repair');
+          setStatus(
+            'The account copy needs repair. Your work remains saved on this device; click Repair needed to retry.'
+          );
+          return;
+        }
+        setStatus(
+          `${errorMessage(error, 'Could not load the account copy.')} Your work remains saved on this device.`
+        );
+      });
+  }
+
+  async function retryUnavailableAccountProject(
+    localDocument: ProjectDocument
+  ): Promise<void> {
+    setStatus('Checking the account copy…');
+    try {
+      const [remote, lastSyncedVersion] = await Promise.all([
+        api.loadProject(localDocument.projectId),
+        loadLastSyncedVersion(localDocument.projectId)
+      ]);
+      accountDocumentUnavailableProjectIdRef.current = null;
+      remoteVersionsRef.current.set(remote.projectId, remote.version);
+      setCloudProjectIds((current) => new Set(current).add(remote.projectId));
+      setCloudAvailable(true);
+      const outcome = chooseProjectDocument(
+        localDocument,
+        remote,
+        lastSyncedVersion
+      );
+      if (outcome.choice === 'diverged') {
+        setAccountConflict(
+          conflictFromDocuments(outcome.local, outcome.remote, 'account')
+        );
+        setSaveState('conflict');
+        setStatus(
+          `${localDocument.name} changed here and in your account. Nothing has been discarded — choose which to keep.`
+        );
+        return;
+      }
+      if (outcome.choice === 'remote') {
+        await acceptAccountDocument(outcome.document, localDocument);
+        setStatus('The account copy is available again.');
+        return;
+      }
+      if (outcome.choice === 'local') {
+        const controller = cloudProjectAutosaveRef.current;
+        controller?.adoptAccountVersion(remote.projectId, remote.version);
+        controller?.schedule(outcome.document);
+        setSaveState(controller ? 'syncing' : 'offline');
+        setStatus(
+          controller
+            ? 'The account copy is available again · updating it from this device…'
+            : 'The account copy is available again; save again to update it.'
+        );
+        return;
+      }
+      setSaveState('offline');
+    } catch (error) {
+      if (isProjectDocumentUnavailableError(error)) {
+        await restoreUnavailableAccountProject(localDocument);
+        return;
+      }
+      setSaveState('offline');
+      setStatus(
+        `${errorMessage(error, 'Could not check the account copy.')} Your work remains saved on this device.`
+      );
+    }
+  }
+
+  async function restoreUnavailableAccountProject(
+    localDocument: ProjectDocument
+  ): Promise<void> {
+    accountDocumentUnavailableProjectIdRef.current = localDocument.projectId;
+    setCloudAvailable(false);
+    setSaveState('repair');
+
+    let summary: ProjectSummary | undefined;
+    try {
+      summary = (await api.listProjects()).projects.find(
+        (project) => project.projectId === localDocument.projectId
+      );
+    } catch (error) {
+      if (error instanceof ApiError && error.status === 401) {
+        remoteVersionsRef.current.clear();
+        endCloudSettingsSession();
+      }
+      setStatus(
+        `${errorMessage(error, 'Could not verify the account record.')} Your work remains saved on this device.`
+      );
+      return;
+    }
+    if (summary?.documentVersion === undefined) {
+      setStatus(
+        'The account record could not be verified, so nothing was replaced. Your work remains saved on this device.'
+      );
+      return;
+    }
+    if (localDocument.version < summary.documentVersion) {
+      setStatus(
+        `The account record is newer than this device (version ${summary.documentVersion} vs ${localDocument.version}), so nothing was replaced. Your work remains saved on this device.`
+      );
+      return;
+    }
+    if (
+      !window.confirm(
+        `Restore ${localDocument.name} in your account from the copy saved on this device?\n\nThe unreadable current account copy will be replaced. Existing revisions are not changed.`
+      )
+    ) {
+      setStatus(
+        'Account restore canceled. Your work remains saved on this device.'
+      );
+      return;
+    }
+
+    setSaveState('saving');
+    setStatus('Restoring the account copy from this device…');
+    try {
+      const saved = await api.saveProjectDocument({
+        projectId: localDocument.projectId,
+        expectedVersion: summary.documentVersion,
+        document: withoutDerivedProjection(localDocument)
+      });
+      const restored = {
+        ...localDocument,
+        version: saved.version,
+        derived: {
+          ...localDocument.derived,
+          updatedAt: saved.updatedAt
+        }
+      };
+      await acceptAccountDocument(restored, localDocument, {
+        ...summary,
+        name: restored.name,
+        updatedAt: saved.updatedAt,
+        documentVersion: saved.version
+      });
+      setStatus('Restored the account copy from this device.');
+    } catch (error) {
+      if (error instanceof ApiError && error.status === 409) {
+        setSaveState('repair');
+        setStatus(
+          'The account record changed during restore, so nothing was overwritten. Retry after checking the other device.'
+        );
+        return;
+      }
+      if (error instanceof ApiError && error.status === 401) {
+        remoteVersionsRef.current.clear();
+        endCloudSettingsSession();
+      }
+      setCloudAvailable(false);
+      setSaveState('repair');
+      setStatus(
+        `${errorMessage(error, 'Could not restore the account copy.')} Your work remains saved on this device.`
+      );
+    }
   }
 
   async function handleSave() {
@@ -5624,6 +6119,10 @@ export function App() {
     try {
       setSaveState('saving');
       await saveLocalProject(doc);
+      if (accountDocumentUnavailableProjectIdRef.current === doc.projectId) {
+        await retryUnavailableAccountProject(doc);
+        return;
+      }
       if (!ensureCanEdit('save a shared revision')) {
         setSaveState('offline');
         return;
@@ -5690,6 +6189,15 @@ export function App() {
         // this is a divergence to resolve, not a connection to give up on.
         setSaveState('conflict');
         raiseAccountConflict(doc.projectId, doc, currentVersionOf(error));
+        return;
+      }
+      if (isProjectDocumentUnavailableError(error)) {
+        accountDocumentUnavailableProjectIdRef.current = doc.projectId;
+        setCloudAvailable(false);
+        setSaveState('repair');
+        setStatus(
+          'The account copy needs repair. Your work remains saved on this device; click Repair needed to retry.'
+        );
         return;
       }
       setCloudAvailable(false);
@@ -6245,6 +6753,25 @@ export function App() {
       );
       const geometry = faceTopology?.geometry;
       const surface = geometry?.surfaceType;
+      const filletFeature =
+        faceTopology && geometry?.featureType === 'blend'
+          ? editableFilletFeature(
+              doc,
+              faceTopology,
+              representations[selection.bodyId]?.topology?.faces ?? []
+            )
+          : null;
+      const filletRadialDirection =
+        filletFeature && geometry
+          ? blendRadialDirection(geometry, detail.point, detail.normal)
+          : null;
+      const removableImportedBlend =
+        !filletFeature && faceTopology
+          ? canRemoveImportedBlendFace(
+              representations[selection.bodyId]!,
+              faceTopology
+            )
+          : false;
       const radialFrame =
         surface === 'cylinder' &&
         geometry?.axisStart &&
@@ -6266,12 +6793,26 @@ export function App() {
           : {}),
         point: [detail.point.x, detail.point.y, detail.point.z],
         normal: [detail.normal.x, detail.normal.y, detail.normal.z],
+        ...(geometry?.center
+          ? {
+              surfaceCenter: [
+                geometry.center.x,
+                geometry.center.y,
+                geometry.center.z
+              ] as [number, number, number]
+            }
+          : {}),
         surfaceType:
           surface === 'plane'
             ? 'planar'
             : surface === 'cylinder'
               ? 'cylindrical'
               : 'other',
+        ...(geometry?.blendRadius !== undefined
+          ? { blendRadius: geometry.blendRadius }
+          : {}),
+        ...(filletFeature ? { filletFeatureId: filletFeature.featureId } : {}),
+        ...(removableImportedBlend ? { canRemoveFaceFeature: true } : {}),
         ...(radialFrame && geometry?.radius !== undefined
           ? {
               radius: geometry.radius,
@@ -6286,14 +6827,28 @@ export function App() {
                 geometry.axisEnd!.z
               ] as [number, number, number],
               axialLength: geometry.axialLength,
-              radialDirection: [
-                radialFrame.radialDirection.x,
-                radialFrame.radialDirection.y,
-                radialFrame.radialDirection.z
-              ] as [number, number, number],
+              radialDirection: filletRadialDirection
+                ? ([
+                    filletRadialDirection.x,
+                    filletRadialDirection.y,
+                    filletRadialDirection.z
+                  ] as [number, number, number])
+                : ([
+                    radialFrame.radialDirection.x,
+                    radialFrame.radialDirection.y,
+                    radialFrame.radialDirection.z
+                  ] as [number, number, number]),
               concavity: radialFrame.concavity
             }
-          : {})
+          : filletRadialDirection
+            ? {
+                radialDirection: [
+                  filletRadialDirection.x,
+                  filletRadialDirection.y,
+                  filletRadialDirection.z
+                ] as [number, number, number]
+              }
+            : {})
       };
       dispatchInteraction({ type: 'select-face', target });
     } else if (interaction.mode !== 'idle' && interaction.mode !== 'sketch') {
@@ -6478,24 +7033,37 @@ export function App() {
    * built once per selection instead of on every App render — rebuilding it
    * mid-hover would reset its screen-constant scale and drop pointer picks.
    */
-  // The keypad's lifetime mirrors the exact-entry phase. Escape, deselection,
-  // and commits all close it through the reducer.
+  // Exact entry remains mounted after a refused preview so its disabled Apply
+  // state and error stay actionable; Escape, deselection, and commits close it.
   useEffect(() => {
     const open =
       interaction.mode !== 'idle' &&
       interaction.mode !== 'sketch' &&
-      interaction.phase === 'exact-entry';
+      (interaction.phase === 'exact-entry' || interaction.phase === 'failed');
     if (!open) {
       setKeypad(null);
     }
   }, [interaction]);
 
-  // Leaving edges mode abandons any in-flight preview document.
+  // Leaving either edge creation or face-backed fillet editing abandons its
+  // in-flight exact preview document.
+  const edgePreviewInteraction =
+    interaction.mode === 'edges' ||
+    (interaction.mode === 'face' && interaction.op === 'edit-fillet');
   useEffect(() => {
-    if (interaction.mode !== 'edges') {
+    if (!edgePreviewInteraction) {
       edgePreview.clear();
     }
-  }, [interaction.mode]);
+  }, [edgePreviewInteraction]);
+
+  const offsetInteractionKey =
+    interaction.mode === 'face' && interaction.op === 'offset-face'
+      ? `${interaction.target.bodyId}:${interaction.target.topologyId}`
+      : null;
+  useEffect(() => {
+    offsetPreview.clear();
+    offsetPreviewValueRef.current = null;
+  }, [offsetInteractionKey, offsetPreview]);
 
   /**
    * The sketch plane basis is memoized on the session's plane reference
@@ -7152,6 +7720,35 @@ export function App() {
   /** Armed edge handle; memoized for the same rig-stability reason as faces. */
   const edgeHandleTarget = useMemo(() => {
     if (
+      interaction.mode === 'face' &&
+      interaction.op === 'edit-fillet' &&
+      interaction.phase !== 'validating' &&
+      interaction.target.blendRadius !== undefined &&
+      interaction.target.radialDirection
+    ) {
+      return {
+        bodyId: interaction.target.bodyId,
+        topologyId: interaction.target.topologyId,
+        op: 'fillet' as const,
+        edgeCount: 1,
+        initialValue: interaction.lastValue ?? interaction.target.blendRadius,
+        placement: {
+          origin: {
+            x: interaction.target.point[0],
+            y: interaction.target.point[1],
+            z: interaction.target.point[2]
+          },
+          direction: {
+            x: interaction.target.radialDirection[0],
+            y: interaction.target.radialDirection[1],
+            z: interaction.target.radialDirection[2]
+          }
+        },
+        label: 'Edit Fillet',
+        allowRemoval: true
+      };
+    }
+    if (
       interaction.mode !== 'edges' ||
       interaction.edges.length === 0 ||
       interaction.phase === 'validating'
@@ -7180,6 +7777,21 @@ export function App() {
     if (target.surfaceType !== 'planar') {
       return null;
     }
+    const primitive =
+      doc && target.hash !== undefined
+        ? primitiveCylinderHeightAncestor(
+            doc,
+            target.bodyId as BodyId,
+            target.reference,
+            target.hash
+          )
+        : null;
+    const totalBaseline =
+      primitive?.data.featureKind === 'primitive' &&
+      primitive.data.primitiveKind === 'cylinder' &&
+      typeof primitive.data.dimensions.height === 'number'
+        ? primitive.data.dimensions.height
+        : undefined;
     return {
       bodyId: target.bodyId,
       topologyId: target.topologyId,
@@ -7193,9 +7805,11 @@ export function App() {
         y: target.normal[1],
         z: target.normal[2]
       },
-      initialValue: interaction.lastValue ?? 0
+      initialValue:
+        offsetPreviewValueRef.current ?? interaction.lastValue ?? 0,
+      ...(totalBaseline === undefined ? {} : { totalBaseline })
     };
-  }, [interaction]);
+  }, [doc, interaction]);
 
   const cylinderRadiusHandleTarget = useMemo(() => {
     if (
@@ -7261,12 +7875,22 @@ export function App() {
     interaction.target.radius !== undefined
       ? interaction.target.radius
       : null;
+  const cylinderSelectionKey =
+    interaction.mode === 'face' && interaction.op === 'resize-cylinder-radius'
+      ? `${interaction.target.bodyId}:${interaction.target.topologyId}`
+      : null;
+  useEffect(() => {
+    setCylinderDimensionMode('diameter');
+  }, [cylinderSelectionKey]);
   const cylinderRadiusInspectorEdit = useMemo(
     () =>
       cylinderRadiusInspectorInitial === null
         ? null
-        : { initialRadius: cylinderRadiusInspectorInitial },
-    [cylinderRadiusInspectorInitial]
+        : {
+            initialRadius: cylinderRadiusInspectorInitial,
+            dimensionMode: cylinderDimensionMode
+          },
+    [cylinderDimensionMode, cylinderRadiusInspectorInitial]
   );
 
   function buildCylinderRadiusCommand(
@@ -7392,7 +8016,7 @@ export function App() {
     void executeValidatedDirectEdit(
       plan.command,
       current.target.bodyId as BodyId,
-      `Adjusted cylinder radius to R ${formatNumber(radius)} ${doc?.units ?? ''}.`,
+      `Adjusted cylinder ${cylinderDimensionMode === 'diameter' ? 'diameter' : 'radius'} to ${cylinderDimensionMode === 'diameter' ? 'Ø' : 'R'} ${formatNumber(cylinderDimensionMode === 'diameter' ? radius * 2 : radius)} ${doc?.units ?? ''}.`,
       radius,
       undefined,
       plan.sourceFeatureId
@@ -7413,20 +8037,71 @@ export function App() {
   const edgePreview = useRef(
     new LivePreview<ProjectDocument, ProjectDocument['derived']>({
       build: (size) => {
-        const command = buildEdgeModifierCommand(size);
         const base = managerRef.current?.document;
+        const command = base ? buildEdgeModifierCommand(size, base) : null;
         return command && base ? command.apply(base) : null;
       },
       derive: (document) => geometry.syncOnce(document),
-      publish: (preview) =>
-        setPreviewDoc(
-          preview ? { ...preview.document, derived: preview.derived } : null
-        )
+      publish: (preview) => {
+        if (!preview) {
+          setPreviewDoc(null);
+          setPreviewBlendFaces([]);
+          return;
+        }
+        setPreviewDoc({ ...preview.document, derived: preview.derived });
+        const current = interactionRef.current;
+        const base = managerRef.current?.document;
+        setPreviewBlendFaces(
+          current.mode === 'edges' && current.op === 'fillet' && base
+            ? newBlendFaceSelections(base, preview.derived)
+            : []
+        );
+      },
+      acceptValue: (size) => {
+        const current = interactionRef.current;
+        return (
+          Number.isFinite(size) &&
+          (current.mode === 'face' && current.op === 'edit-fillet'
+            ? size >= 0
+            : size > 0)
+        );
+      }
     })
   ).current;
 
-  function buildEdgeModifierCommand(size: ParamValue) {
+  function buildEdgeModifierCommand(
+    size: ParamValue,
+    baseDocument?: ProjectDocument
+  ): AnyCommand | null {
     const currentInteraction = interactionRef.current;
+    if (
+      currentInteraction.mode === 'face' &&
+      currentInteraction.op === 'edit-fillet' &&
+      currentInteraction.target.filletFeatureId
+    ) {
+      const base = baseDocument ?? managerRef.current?.document;
+      const feature = base
+        ? findFeature(base, currentInteraction.target.filletFeatureId)
+        : null;
+      if (feature?.data.featureKind !== 'fillet') {
+        return null;
+      }
+      const evaluated =
+        typeof size === 'number'
+          ? size
+          : base
+            ? evalParamValue(size, getParameterScope(base).scope)
+            : null;
+      return evaluated !== null && evaluated <= 1e-9
+        ? commandFactories.deleteFeature(
+            { featureId: feature.featureId },
+            `Remove ${feature.name}`
+          )
+        : commandFactories.updateFeature(
+            { featureId: feature.featureId, data: { radius: size } },
+            `Edit ${feature.name}`
+          );
+    }
     if (currentInteraction.mode !== 'edges') {
       return null;
     }
@@ -7462,13 +8137,22 @@ export function App() {
     if (!requireExactGeometryReady()) {
       return;
     }
+    if (interaction.mode === 'face' && interaction.op === 'edit-fillet') {
+      handleFilletFaceCommit(size, exact);
+      return;
+    }
     if (interaction.mode !== 'edges') {
       return;
     }
     edgePreview.clear();
     const rounded = Math.round(size * 1000) / 1000;
     const command = buildEdgeModifierCommand(exact ?? rounded);
-    if (!command || rounded <= 0) {
+    if (
+      !command ||
+      rounded <= 0 ||
+      !('targetBodyId' in command.payload) ||
+      !('edgeHashes' in command.payload)
+    ) {
       return;
     }
     const op = interaction.op;
@@ -7484,37 +8168,202 @@ export function App() {
 
   /** Edge chip tapped: exact entry for the blend radius/distance. */
   function handleOpenEdgeKeypad(currentSize: number) {
-    if (interaction.mode !== 'edges') {
+    if (
+      interaction.mode !== 'edges' &&
+      !(interaction.mode === 'face' && interaction.op === 'edit-fillet')
+    ) {
       return;
     }
     dispatchInteraction({ type: 'keypad-open' });
     setKeypad({
       kind: 'edge',
-      label: interaction.op === 'fillet' ? 'Radius' : 'Distance',
+      label:
+        interaction.mode === 'face' || interaction.op === 'fillet'
+          ? 'Radius'
+          : 'Distance',
       initial:
         currentSize > 0 ? String(Math.round(currentSize * 100) / 100) : '',
       unitKind: 'length'
     });
   }
 
+  function handleEdgeCancel() {
+    edgePreview.clear();
+  }
+
+  function filletRemovalTargets(
+    base: ProjectDocument,
+    feature: FeatureNode
+  ): AffectedFeatureTarget[] {
+    if (feature.data.featureKind !== 'fillet') {
+      return [];
+    }
+    const targetBodyId = feature.data.targetBodyId;
+    const source = listFeaturesInOrder(base).find(
+      (candidate) => candidate.bodyId === targetBodyId
+    );
+    return [
+      {
+        featureName: source?.name ?? feature.name,
+        resultBodyId: targetBodyId
+      },
+      ...affectedFeatureTargets(base, feature.featureId).slice(1)
+    ];
+  }
+
+  /** Existing blend-face edits update/delete the history feature, never B-Rep. */
+  function handleFilletFaceCommit(size: number, exact?: ParamValue) {
+    if (!requireExactGeometryReady()) {
+      return;
+    }
+    const current = interactionRef.current;
+    const base = managerRef.current?.document;
+    if (
+      !base ||
+      current.mode !== 'face' ||
+      current.op !== 'edit-fillet' ||
+      !current.target.filletFeatureId ||
+      size < 0
+    ) {
+      return;
+    }
+    const feature = findFeature(base, current.target.filletFeatureId);
+    if (feature?.data.featureKind !== 'fillet') {
+      setStatus('The producing Fillet feature no longer exists.');
+      dispatchInteraction({ type: 'clear' });
+      return;
+    }
+    const command = buildEdgeModifierCommand(exact ?? size, base);
+    if (!command) {
+      return;
+    }
+    edgePreview.clear();
+    const removing = size <= 1e-9;
+    const sourceFace = base.derived.bodyRepresentations[
+      current.target.bodyId as BodyId
+    ]?.topology?.faces.find(
+      (face) => face.topologyId === current.target.topologyId
+    );
+    const targetBodyId = removing
+      ? feature.data.targetBodyId
+      : (current.target.bodyId as BodyId);
+    const validationTargets = removing
+      ? filletRemovalTargets(base, feature)
+      : affectedFeatureTargets(base, feature.featureId);
+    void executeValidatedDirectEdit(
+      command,
+      targetBodyId,
+      removing
+        ? `Removed ${feature.name}.`
+        : `Set ${feature.name} radius to R ${formatNumber(size)} ${base.units}.`,
+      size,
+      removing
+        ? undefined
+        : () => {
+            const committed = managerRef.current?.document;
+            const faces =
+              committed?.derived.bodyRepresentations[
+                current.target.bodyId as BodyId
+              ]?.topology?.faces;
+            const regenerated =
+              faces && sourceFace
+                ? resolveFilletBlendFace(faces, sourceFace)
+                : null;
+            if (!regenerated?.geometry) {
+              return;
+            }
+            const radial = blendRadialDirection(
+              regenerated.geometry,
+              {
+                x: current.target.point[0],
+                y: current.target.point[1],
+                z: current.target.point[2]
+              },
+              current.target.radialDirection
+                ? {
+                    x: current.target.radialDirection[0],
+                    y: current.target.radialDirection[1],
+                    z: current.target.radialDirection[2]
+                  }
+                : {
+                    x: current.target.normal[0],
+                    y: current.target.normal[1],
+                    z: current.target.normal[2]
+                  }
+            );
+            const nextTarget: FaceTarget = {
+              ...current.target,
+              topologyId: regenerated.topologyId,
+              hash: regenerated.hash,
+              ...(regenerated.reference
+                ? { reference: regenerated.reference }
+                : {}),
+              blendRadius: size,
+              surfaceCenter: [
+                regenerated.geometry.center.x,
+                regenerated.geometry.center.y,
+                regenerated.geometry.center.z
+              ],
+              ...(radial
+                ? {
+                    radialDirection: [radial.x, radial.y, radial.z] as [
+                      number,
+                      number,
+                      number
+                    ]
+                  }
+                : {})
+            };
+            const selection: TopologySelection = {
+              bodyId: current.target.bodyId as BodyId,
+              kind: 'face',
+              topologyId: regenerated.topologyId,
+              hash: regenerated.hash,
+              ...(regenerated.reference
+                ? { reference: regenerated.reference }
+                : {})
+            };
+            setSelectedTopology(selection);
+            setSelectedBodyIds([current.target.bodyId as BodyId]);
+            setSelectedFeatureNodeId(feature.id);
+            dispatchInteraction({ type: 'select-face', target: nextTarget });
+          },
+      validationTargets
+    );
+  }
+
   /** Chip tapped: open the anchored keypad prefilled with the drag value. */
-  function handleOpenOffsetKeypad(currentOffset: number) {
+  function handleOpenOffsetKeypad(
+    currentOffset: number,
+    totalBaseline?: number
+  ) {
     if (interaction.mode !== 'face' && interaction.mode !== 'region') {
       return;
     }
     dispatchInteraction({ type: 'keypad-open' });
     setKeypad({
       kind: 'offset',
-      label: interaction.mode === 'region' ? 'Height' : 'Offset',
+      label:
+        totalBaseline === undefined
+          ? interaction.mode === 'region'
+            ? 'Height'
+            : 'Offset'
+          : 'Total',
       initial:
-        currentOffset !== 0
-          ? String(Math.round(currentOffset * 100) / 100)
+        totalBaseline !== undefined || currentOffset !== 0
+          ? String(
+              Math.round(((totalBaseline ?? 0) + currentOffset) * 100) / 100
+            )
           : '',
-      unitKind: 'length'
+      unitKind: 'length',
+      ...(totalBaseline === undefined ? {} : { totalBaseline })
     });
   }
 
-  function handleOpenCylinderRadiusKeypad(radius: number) {
+  function handleOpenCylinderRadiusKeypad(
+    radius: number,
+    dimensionMode: DimensionMode
+  ) {
     if (
       interaction.mode !== 'face' ||
       interaction.op !== 'resize-cylinder-radius'
@@ -7524,24 +8373,115 @@ export function App() {
     dispatchInteraction({ type: 'keypad-open' });
     setKeypad({
       kind: 'radius',
-      label: 'Radius',
-      initial: String(radius),
+      label: dimensionMode === 'diameter' ? 'Diameter' : 'Radius',
+      initial: String(dimensionMode === 'diameter' ? radius * 2 : radius),
       unitKind: 'length',
+      dimensionMode,
       baseline: interaction.target.radius
     });
+  }
+
+  function reportOffsetPreviewFailure(message: string, value: number) {
+    const current = interactionRef.current;
+    if (current.mode !== 'face' || current.op !== 'offset-face') {
+      return;
+    }
+    setPreviewDoc(null);
+    setRenderedOffsetPreview(null);
+    dispatchInteraction({ type: 'validation-failed', message, value });
+    setStatus(`Offset preview refused: ${message}`);
+  }
+
+  function recoverOffsetPreviewInteraction() {
+    const current = interactionRef.current;
+    if (
+      current.mode !== 'face' ||
+      current.op !== 'offset-face' ||
+      current.phase !== 'failed'
+    ) {
+      return;
+    }
+    dispatchInteraction({ type: 'recover' });
+    dispatchInteraction({
+      type: keypadRef.current?.kind === 'offset' ? 'keypad-open' : 'drag-engage'
+    });
+  }
+
+  function handleOffsetPreview(offset: number) {
+    const current = interactionRef.current;
+    if (
+      current.mode !== 'face' ||
+      current.op !== 'offset-face' ||
+      current.phase === 'validating'
+    ) {
+      return;
+    }
+    offsetPreviewValueRef.current = offset;
+    if (Math.abs(offset) <= 1e-9) {
+      offsetPreview.clear();
+      recoverOffsetPreviewInteraction();
+      return;
+    }
+    offsetPreview.request(offset);
+  }
+
+  function handleOffsetCancel() {
+    offsetPreview.clear();
+    offsetPreviewValueRef.current = null;
+    setRenderedOffsetPreview(null);
+    const current = interactionRef.current;
+    if (current.mode === 'face' && current.op === 'offset-face') {
+      // Re-selecting the same semantic target resets the existing lifecycle
+      // to armed, including a failed value, without adding a machine state.
+      dispatchInteraction({ type: 'select-face', target: current.target });
+    }
   }
 
   function handleSelectionAction(action: SelectionActionId) {
     if (
       (action === 'sketch-on-face' ||
         action === 'fillet' ||
-        action === 'chamfer') &&
+        action === 'chamfer' ||
+        action === 'remove-fillet' ||
+        action === 'remove-face-feature') &&
       !requireExactGeometryReady()
     ) {
       return;
     }
     if (action === 'sketch-on-face' && interaction.mode === 'face') {
       startSketchOnFace(interaction.target);
+      return;
+    }
+    if (
+      action === 'remove-fillet' &&
+      interaction.mode === 'face' &&
+      interaction.op === 'edit-fillet'
+    ) {
+      handleFilletFaceCommit(0);
+      return;
+    }
+    if (
+      action === 'remove-face-feature' &&
+      interaction.mode === 'face' &&
+      interaction.op === 'remove-face-feature'
+    ) {
+      const face = representations[
+        interaction.target.bodyId as BodyId
+      ]?.topology?.faces.find(
+        (candidate) => candidate.topologyId === interaction.target.topologyId
+      );
+      if (face?.geometry) {
+        handleRemoveFaceFeature(
+          {
+            bodyId: interaction.target.bodyId as BodyId,
+            kind: 'face',
+            topologyId: face.topologyId,
+            hash: face.hash,
+            ...(face.reference ? { reference: face.reference } : {})
+          },
+          face.geometry
+        );
+      }
       return;
     }
     if (
@@ -7567,13 +8507,14 @@ export function App() {
     faceHash: number,
     bodyId: BodyId,
     offset: number,
-    exact?: ParamValue
+    exact?: ParamValue,
+    baseDocument?: ProjectDocument
   ): {
     command: AnyCommand;
     sourceFeatureId: FeatureId;
     height: number;
   } | null {
-    const base = managerRef.current?.document;
+    const base = baseDocument ?? managerRef.current?.document;
     if (!base || Math.abs(offset) <= 1e-9) {
       return null;
     }
@@ -7619,26 +8560,28 @@ export function App() {
     };
   }
 
-  /**
-   * Face-offset commit as a validated direct edit. `exact` preserves a typed
-   * expression as the stored parametric value; plain drags store the number.
-   */
-  function handleOffsetCommit(offset: number, exact?: ParamValue) {
-    // The arrow rig is shared: in region mode its drag is an extrude height.
-    if (interaction.mode === 'region') {
-      handleRegionExtrudeCommit(offset, exact);
-      return;
+  function buildOffsetEditPlan(
+    offset: number,
+    exact?: ParamValue,
+    baseDocument?: ProjectDocument
+  ): OffsetEditPlan | null {
+    const current = interactionRef.current;
+    const base = baseDocument ?? managerRef.current?.document;
+    if (
+      !base ||
+      current.mode !== 'face' ||
+      current.op !== 'offset-face'
+    ) {
+      return null;
     }
-    if (interaction.mode !== 'face' || interaction.op !== 'offset-face') {
-      return;
-    }
-    if (!requireExactGeometryReady()) {
-      return;
-    }
-    const target = interaction.target;
+    const target = current.target;
     const bodyId = target.bodyId as BodyId;
-    const faceTopology = representations[bodyId]?.topology?.faces.find(
-      (face) => face.topologyId === target.topologyId
+    const faceTopology = base.derived.bodyRepresentations[
+      bodyId
+    ]?.topology?.faces.find(
+      (face) =>
+        face.topologyId === target.topologyId ||
+        (target.hash !== undefined && face.hash === target.hash)
     );
     const geometry = faceTopology?.geometry;
     if (
@@ -7646,37 +8589,35 @@ export function App() {
       geometry?.surfaceType !== 'plane' ||
       target.hash === undefined
     ) {
-      setStatus('Exact face measurements are unavailable for this offset.');
-      dispatchInteraction({ type: 'clear' });
-      return;
+      return null;
     }
     const heightPlan = buildCylinderHeightCommand(
       faceTopology,
       target.hash,
       bodyId,
       offset,
-      exact
+      exact,
+      base
     );
     if (heightPlan) {
-      if (heightPlan.height <= 0) {
-        setStatus('That distance would leave the cylinder with no height.');
-        return;
-      }
-      void executeValidatedDirectEdit(
-        heightPlan.command,
+      return {
+        command: heightPlan.command,
         bodyId,
-        `Cylinder height set to ${formatNumber(heightPlan.height)} ${doc?.units ?? ''}.`,
-        offset,
-        undefined,
-        affectedFeatureTargets(
-          managerRef.current!.document,
+        successMessage: `Cylinder height set to ${formatNumber(heightPlan.height)} ${base.units}.`,
+        validationTargets: affectedFeatureTargets(
+          base,
           heightPlan.sourceFeatureId
-        )
-      );
-      return;
+        ),
+        ...(heightPlan.height <= 0
+          ? {
+              preflightRejection:
+                'That distance would leave the cylinder with no height.'
+            }
+          : {})
+      };
     }
-    void executeValidatedDirectEdit(
-      commandFactories.directEditBody({
+    return {
+      command: commandFactories.directEditBody({
         name: 'Offset face',
         targetBodyId: bodyId,
         operation: {
@@ -7688,9 +8629,6 @@ export function App() {
           sourceSurfaceType: 'plane',
           sourceArea: geometry.area,
           sourceCenter: geometry.center,
-          // The drag was measured along the picked (outward-facing) normal,
-          // so it defines the offset's sign; the kernel only verifies that
-          // the face's plane still matches this orientation up to sign.
           sourceNormal: {
             x: target.normal[0],
             y: target.normal[1],
@@ -7700,9 +8638,52 @@ export function App() {
         }
       }),
       bodyId,
-      `Offset face by ${Math.round(offset * 100) / 100} ${doc?.units ?? ''}.`,
-      offset
+      successMessage: `Offset face by ${Math.round(offset * 100) / 100} ${base.units}.`
+    };
+  }
+
+  /**
+   * Face-offset commit as a validated direct edit. `exact` preserves a typed
+   * expression as the stored parametric value; plain drags store the number.
+   */
+  function handleOffsetCommit(offset: number, exact?: ParamValue): boolean {
+    // The arrow rig is shared: in region mode its drag is an extrude height.
+    if (interaction.mode === 'region') {
+      handleRegionExtrudeCommit(offset, exact);
+      return true;
+    }
+    const current = interactionRef.current;
+    if (current.mode !== 'face' || current.op !== 'offset-face') {
+      return false;
+    }
+    if (!requireExactGeometryReady()) {
+      return false;
+    }
+    if (current.phase === 'failed') {
+      setStatus(current.error ?? 'The current offset preview is invalid.');
+      return false;
+    }
+    const plan = buildOffsetEditPlan(offset, exact);
+    if (!plan) {
+      setStatus('Exact face measurements are unavailable for this offset.');
+      dispatchInteraction({ type: 'clear' });
+      return false;
+    }
+    if (plan.preflightRejection) {
+      reportOffsetPreviewFailure(plan.preflightRejection, offset);
+      return false;
+    }
+    offsetPreview.clear();
+    offsetPreviewValueRef.current = null;
+    void executeValidatedDirectEdit(
+      plan.command,
+      plan.bodyId,
+      plan.successMessage,
+      offset,
+      undefined,
+      plan.validationTargets
     );
+    return true;
   }
 
   function handleResizeThroughHole(
@@ -8457,7 +9438,12 @@ export function App() {
             const cancelledPointer =
               interaction.mode !== 'sketch' &&
               cancelDirectManipulationRef.current?.() === true;
-            if (cancelledPointer && interaction.mode === 'edges') {
+            if (
+              cancelledPointer &&
+              (interaction.mode === 'edges' ||
+                (interaction.mode === 'face' &&
+                  interaction.op === 'edit-fillet'))
+            ) {
               edgePreview.clear();
             }
             if (!cancelledPointer) {
@@ -9315,7 +10301,9 @@ export function App() {
             }
             selectedBodyIds={selectedBodyIds}
             selectedTopology={renderedSelectedTopology}
+            previewFaceHighlights={previewBlendFaces}
             selectedEdges={selectedEdges}
+            pickListEnabled={appSettings.experiments.directManipulation}
             settings={viewerSettings}
             fitSignal={fitSignal}
             viewRequest={viewRequest}
@@ -9348,11 +10336,20 @@ export function App() {
               );
             }}
             offsetHandle={viewMode ? null : offsetHandleTarget}
+            onOffsetPreview={handleOffsetPreview}
             onOffsetCommit={handleOffsetCommit}
+            onOffsetCancel={handleOffsetCancel}
+            offsetPreviewInvalid={
+              interaction.mode === 'face' &&
+              interaction.op === 'offset-face' &&
+              interaction.phase === 'failed'
+            }
             onOpenOffsetKeypad={handleOpenOffsetKeypad}
             keypadAnchorRef={keypadAnchorRef}
             offsetSetterRef={offsetSetterRef}
             cylinderRadiusHandle={viewMode ? null : cylinderRadiusHandleTarget}
+            cylinderDimensionMode={cylinderDimensionMode}
+            onCylinderDimensionModeChange={setCylinderDimensionMode}
             onCylinderRadiusPreview={handleCylinderRadiusPreview}
             onCylinderRadiusCommit={handleCylinderRadiusCommit}
             onCylinderRadiusCancel={handleCylinderRadiusCancel}
@@ -9361,6 +10358,7 @@ export function App() {
             edgeHandle={viewMode ? null : edgeHandleTarget}
             onEdgeRadiusPreview={(size) => edgePreview.request(size)}
             onEdgeCommit={handleEdgeCommit}
+            onEdgeCancel={handleEdgeCancel}
             onOpenEdgeKeypad={handleOpenEdgeKeypad}
             onDirectManipulationChange={(dragging) =>
               dispatchInteraction({
@@ -9572,14 +10570,29 @@ export function App() {
                       units={doc.units}
                       scope={parameterScope.scope}
                       anchorRef={keypadAnchorRef}
+                      onDimensionModeChange={setCylinderDimensionMode}
                       onPreview={(value) => {
                         offsetSetterRef.current?.(value);
                         if (keypad.kind === 'radius') {
                           handleCylinderRadiusPreview(value);
                         } else if (keypad.kind === 'edge') {
                           edgePreview.request(value);
+                        } else {
+                          handleOffsetPreview(value);
                         }
                       }}
+                      commitDisabled={
+                        keypad.kind === 'offset' &&
+                        interaction.mode === 'face' &&
+                        interaction.op === 'offset-face' &&
+                        interaction.phase === 'failed'
+                      }
+                      commitDisabledReason={
+                        interaction.mode !== 'idle' &&
+                        interaction.mode !== 'sketch'
+                          ? interaction.error
+                          : null
+                      }
                       onCommit={(value, raw) => {
                         setKeypad(null);
                         dispatchInteraction({ type: 'keypad-close' });
@@ -9607,7 +10620,9 @@ export function App() {
                         if (keypad.kind === 'radius') {
                           handleCylinderRadiusCancel();
                         } else if (keypad.kind === 'edge') {
-                          edgePreview.clear();
+                          handleEdgeCancel();
+                        } else {
+                          handleOffsetCancel();
                         }
                         dispatchInteraction({ type: 'keypad-close' });
                         setKeypad(null);
