@@ -1,7 +1,4 @@
 import * as THREE from 'three';
-import { Line2 } from 'three/examples/jsm/lines/Line2.js';
-import { LineGeometry } from 'three/examples/jsm/lines/LineGeometry.js';
-import { LineMaterial } from 'three/examples/jsm/lines/LineMaterial.js';
 import {
   CHIP_ANCHOR_LOCAL_DISTANCE,
   HANDLE_COLOR,
@@ -144,32 +141,14 @@ export function buildOffsetFaceHandle(params: OffsetFaceRigParams): DragRig {
   const worldGroup = new THREE.Group();
   worldGroup.name = `${kind}-handle-world`;
 
-  const leaderGeometry = new LineGeometry();
-  leaderGeometry.setPositions([
-    origin.x,
-    origin.y,
-    origin.z,
-    origin.x,
-    origin.y,
-    origin.z
-  ]);
-  const leader = new Line2(
-    leaderGeometry,
-    new LineMaterial({
-      color: HANDLE_COLOR,
-      linewidth: 1.5,
-      dashed: true,
-      dashSize: 2,
-      gapSize: 1.5,
-      transparent: true,
-      opacity: 0.85,
-      depthTest: false
-    })
-  );
-  leader.computeLineDistances();
-  leader.renderOrder = 29;
-  leader.visible = false;
-  worldGroup.add(leader);
+  const dimension = createDimensionGraphic({
+    color: HANDLE_COLOR,
+    linewidth: 1.5,
+    opacity: 0.85,
+    renderOrder: 29
+  });
+  dimension.object.visible = false;
+  worldGroup.add(dimension.object);
 
   let ghost: THREE.Mesh<THREE.BufferGeometry, THREE.MeshBasicMaterial> | null =
     null;
@@ -202,17 +181,10 @@ export function buildOffsetFaceHandle(params: OffsetFaceRigParams): DragRig {
       const tip = origin.clone().addScaledVector(direction, value);
       group.position.copy(tip);
       const engaged = Math.abs(value) > 1e-9;
-      leader.visible = engaged;
+      dimension.object.visible = engaged;
       if (engaged) {
-        leaderGeometry.setPositions([
-          origin.x,
-          origin.y,
-          origin.z,
-          tip.x,
-          tip.y,
-          tip.z
-        ]);
-        leader.computeLineDistances();
+        const scale = (group.userData.gizmoScale as number | undefined) ?? 1;
+        dimension.update(origin, tip, scale);
       }
       if (ghost) {
         ghost.visible = engaged;
@@ -234,6 +206,7 @@ export function buildOffsetFaceHandle(params: OffsetFaceRigParams): DragRig {
       return origin.clone().addScaledVector(direction, reach);
     },
     dispose() {
+      dimension.dispose();
       disposeRigGroups(group, worldGroup);
     }
   };
