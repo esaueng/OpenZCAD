@@ -64,7 +64,7 @@ export const WORKSPACE_SAVE_STATE_PRESENTATION: Record<
     topBarLabel: 'Repair needed',
     statusBarLabel: 'Account repair needed',
     title:
-      'The account copy cannot be opened. Your work remains saved on this device. Click to retry.'
+      'The account copy cannot be opened. Your work remains saved on this device. Click to restore it from this device.'
   },
   refused: {
     topBarLabel: 'Too large',
