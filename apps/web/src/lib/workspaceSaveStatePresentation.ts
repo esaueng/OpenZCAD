@@ -60,6 +60,12 @@ export const WORKSPACE_SAVE_STATE_PRESENTATION: Record<
     statusBarLabel: 'Conflict',
     title: 'This project changed elsewhere. Your work is safe on this device.'
   },
+  repair: {
+    topBarLabel: 'Repair needed',
+    statusBarLabel: 'Account repair needed',
+    title:
+      'The account copy cannot be opened. Your work remains saved on this device. Click to retry.'
+  },
   refused: {
     topBarLabel: 'Too large',
     statusBarLabel: 'Too large',

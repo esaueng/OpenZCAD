@@ -262,6 +262,7 @@ export function TopBar({
           {saveState === 'saving' || saveState === 'syncing' ? (
             <LoaderCircle className="spin" size={14} aria-hidden="true" />
           ) : saveState === 'conflict' ||
+            saveState === 'repair' ||
             saveState === 'refused' ||
             saveState === 'local-source' ? (
             <TriangleAlert size={14} aria-hidden="true" />
