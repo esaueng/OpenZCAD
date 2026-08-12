@@ -177,7 +177,7 @@ describe('fillet result lineage', { timeout: 60_000 }, () => {
     expect(after.bodyRepresentations[chain.bodyId]).toBeUndefined();
   });
 
-  it('keeps non-cylinder modifier results hash-only', async () => {
+  it('attributes only the generated blend on a non-cylinder modifier', async () => {
     const withBox = addPrimitiveFeature(
       createProjectDocument('Filleted box', user),
       {
@@ -204,8 +204,14 @@ describe('fillet result lineage', { timeout: 60_000 }, () => {
     expect(
       (body?.topology?.edges ?? []).every((candidate) => !candidate.reference)
     ).toBe(true);
-    expect(
-      (body?.topology?.faces ?? []).every((candidate) => !candidate.reference)
-    ).toBe(true);
+    const referencedFaces = (body?.topology?.faces ?? []).filter(
+      (candidate) => candidate.reference
+    );
+    expect(referencedFaces).toHaveLength(1);
+    expect(referencedFaces[0]?.geometry?.featureType).toBe('blend');
+    const filletFeature = listFeaturesInOrder(filleted.document).at(-1)!;
+    expect(referencedFaces[0]?.reference?.producingFeatureId).toBe(
+      filletFeature.featureId
+    );
   });
 });
