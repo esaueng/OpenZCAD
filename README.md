@@ -102,13 +102,13 @@ OZ_PERF=1 pnpm exec playwright test interaction-probe
 
 The exact adapter and BrepKit WASM load lazily inside the geometry worker on the first non-empty rebuild or export. OpenCascade is no longer part of the adapter at all, so neither its ~22 MB WASM nor any code that reaches it is emitted into the bundle. Canonical rebuild results use a worker-local LRU capped at 8 entries and 32 MiB, with at most 4 distinct loads in flight. Cache hits are structured-cloned and exports remain uncached caller-owned work. See [ADR-015](docs/adrs/ADR-015-bounded-exact-rebuild-cache.md) and the measured bundle inventory in [docs/performance-baseline.md](docs/performance-baseline.md).
 
-## Beta deployment
+## Deploying to Cloudflare
 
 Email sign-in uses Cloudflare Email Service and Turnstile. Before enabling a real beta login:
 
 - onboard the `zcad.esau.app` sending domain and keep the `EMAIL` binding restricted to `noreply@zcad.esau.app` for sign-in and project invitations;
 - create a managed Turnstile widget allowlisting `zcad.app`, `zcad.esau.app`, `localhost`, and `127.0.0.1`, then bind its site key as `TURNSTILE_SITE_KEY`;
-- deploy with `pnpm deploy:beta`, which applies the remote D1 migrations before publishing the Worker;
+- review and apply the remote D1 migrations before deploying with `pnpm deploy:beta`; the deploy command publishes the Worker but does not apply D1 migrations for you;
 - follow the [project cloud-sync release runbook](docs/runbooks/project-cloud-sync-release.md) for the migration gate and authenticated two-device canary;
 - set `AUTH_MODE=email-code`, `ENVIRONMENT=beta`, `AUTH_EMAIL_FROM=noreply@zcad.esau.app`, `PROJECT_INVITATION_EMAIL_FROM=noreply@zcad.esau.app`, and the canonical `PUBLIC_APP_ORIGIN=https://zcad.app` used for invitation links (the checked-in beta config also sets `PRODUCTION_GUARD`, which makes the worker refuse development auth outright);
 - provide secrets, generated with `openssl rand -base64 32` where appropriate and set via `wrangler secret put`, never committed: `AUTH_OTP_PEPPER`, `TURNSTILE_SECRET_KEY`, `SETTINGS_ENCRYPTION_KEY` (must stay stable across deploys), and `AI_IDENTITY_PEPPER`. The deployment preflight lists these required secret names without reading their values; verify the remote Worker secret list before deploying;
@@ -132,6 +132,55 @@ closed by default. `PROJECT_COLLABORATION_CANARY_EMAILS` remains available only
 as a scoped fallback if the global beta flags are closed again. Changing these
 flags or deploying them remains a separate rollout action, not part of a normal
 application build.
+
+## Self-hosting and operations
+
+OpenZCAD is self-hostable on Cloudflare Workers. The browser application still
+works offline without cloud services; the Worker adds accounts, cloud projects,
+artifact storage, collaboration, and optional server-side AI.
+
+1. Fork or clone the repository and install the supported Node.js and pnpm
+   versions from [Quick start](#quick-start).
+2. In a Cloudflare account you control, create a D1 database and private R2
+   bucket, then configure the Durable Object binding and migration defined in
+   the top-level [`wrangler.jsonc`](wrangler.jsonc). Copy that configuration and
+   adapt its resource names and IDs, sending domain, Turnstile site key, public
+   app origin, and authentication settings for your own deployment.
+3. Configure the required secrets with `wrangler secret put`; do not put them
+   in `wrangler.jsonc`, `.dev.vars`, source code, or CI logs. The required
+   values are listed in the deployment section above. AI provider credentials
+   are optional when users supply their own credentials.
+4. Review every pending migration, take a D1 recovery bookmark, then apply the
+   migrations to your database before publishing. Run `pnpm build`, then deploy
+   with `pnpm deploy:beta` (or an equivalent CI command using the top-level
+   Wrangler configuration). Do not deploy the development-only
+   `apps/web/wrangler.jsonc`.
+5. Follow the [cloud-sync release runbook](docs/runbooks/project-cloud-sync-release.md)
+   for the authenticated two-device canary. It covers the D1/R2 pointer check,
+   reload, conflict recovery, and any collaboration rollout.
+
+### Health check
+
+`GET /api/health` is public and returns JSON only; it is safe to poll without
+credentials and never returns configuration secrets. A healthy running service
+returns HTTP 200 with `status: "ok"`. For a cloud-enabled deployment, also
+require `documentStorageAccountingReady` and `projectObjectStorageReady` to be
+`true` before enabling project sync. The remaining readiness fields describe
+separately deployed capabilities (such as measurement sync and account
+erasure); a `false` value means that capability is not ready, not that the
+basic service endpoint is down.
+
+```bash
+curl --fail --silent --show-error https://your-openzcad-domain.example/api/health
+```
+
+Treat a non-200 response, invalid JSON, `status` other than `ok`, or a required
+readiness flag set to `false` as a failed rollout. Check the Worker bindings and
+the applied D1 schema first; do not mask a readiness failure by changing the
+reported status.
+
+The repository's scheduled `Production health` workflow checks the hosted beta
+with this same contract once per day and can also be run manually.
 
 ## API surface
 
