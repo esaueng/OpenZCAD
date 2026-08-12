@@ -197,7 +197,11 @@ import { StatusBar } from './components/StatusBar';
 import { StartScreen } from './components/StartScreen';
 import { StartupScreen } from './components/StartupScreen';
 import { SettingsPage, type AuthConfigStatus } from './components/SettingsPage';
-import { buildDemoDocument, DEMO_DEFINITIONS } from './lib/demos';
+import {
+  buildDemoDocument,
+  DEMO_DEFINITIONS,
+  VISUAL_SELECTION_ACCEPTANCE_DEMO
+} from './lib/demos';
 import type { DemoDefinition } from './lib/demos';
 import { ProjectSharingDialog } from './components/ProjectSharingDialog';
 import { createProjectSharingClient } from './lib/projectSharing';
@@ -537,6 +541,11 @@ import {
   savedPanelWidths,
   SIDEBAR_WIDTH_LIMITS
 } from './lib/panelWidths';
+
+const START_SCREEN_DEMOS =
+  (import.meta.env as unknown as { VITE_E2E?: string }).VITE_E2E === '1'
+    ? [...DEMO_DEFINITIONS, VISUAL_SELECTION_ACCEPTANCE_DEMO]
+    : DEMO_DEFINITIONS;
 
 /**
  * How often an open cloud project checks whether another device has moved it.
@@ -6811,6 +6820,10 @@ export function App() {
         ...(geometry?.blendRadius !== undefined
           ? { blendRadius: geometry.blendRadius }
           : {}),
+        ...(geometry?.featureType ? { featureType: geometry.featureType } : {}),
+        ...(geometry?.diameter !== undefined
+          ? { diameter: geometry.diameter }
+          : {}),
         ...(filletFeature ? { filletFeatureId: filletFeature.featureId } : {}),
         ...(removableImportedBlend ? { canRemoveFaceFeature: true } : {}),
         ...(radialFrame && geometry?.radius !== undefined
@@ -7914,6 +7927,37 @@ export function App() {
       !target.concavity
     ) {
       return null;
+    }
+
+    if (
+      target.featureType === 'through-hole' &&
+      target.diameter !== undefined
+    ) {
+      const diameter: ParamValue =
+        typeof radius === 'number' ? radius * 2 : `(${radius}) * 2`;
+      return {
+        command: commandFactories.directEditBody({
+          name: 'Resize Through Hole',
+          targetBodyId: target.bodyId as BodyId,
+          operation: {
+            kind: 'resize-through-hole',
+            faceHash: target.hash,
+            ...(target.reference ? { faceReference: target.reference } : {}),
+            sourceDiameter: target.diameter,
+            sourceAxisStart: {
+              x: target.axisStart[0],
+              y: target.axisStart[1],
+              z: target.axisStart[2]
+            },
+            sourceAxisEnd: {
+              x: target.axisEnd[0],
+              y: target.axisEnd[1],
+              z: target.axisEnd[2]
+            },
+            diameter
+          }
+        })
+      };
     }
 
     // Preserve the parametric source edit through any uninterrupted chain of
@@ -9655,7 +9699,7 @@ export function App() {
           projects={projects}
           status={status}
           busy={busy}
-          demos={DEMO_DEFINITIONS}
+          demos={START_SCREEN_DEMOS}
           defaultUnits={appSettings.general.defaultUnits}
           onCreate={(name, units) => void handleCreateProject(name, units)}
           onOpen={(projectId) => void handleOpenProject(projectId)}
