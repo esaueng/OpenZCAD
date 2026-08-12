@@ -21,6 +21,8 @@ export interface FaceTarget extends FaceCapabilityTarget {
   point: [number, number, number];
   /** Outward face normal at the click point. */
   normal: [number, number, number];
+  /** Frozen exact face center used to re-resolve planar preview topology. */
+  surfaceCenter?: [number, number, number];
   /** Fixed world-space axis snapshot for a cylindrical radius gesture. */
   axisStart?: [number, number, number];
   axisEnd?: [number, number, number];

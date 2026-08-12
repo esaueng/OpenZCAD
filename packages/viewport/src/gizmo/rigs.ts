@@ -11,6 +11,7 @@ import {
   type HandleVec3
 } from './DragRig';
 import { createDimensionGraphic } from '../annotation/dimensionGraphic';
+import { ANALYTIC_GHOST_COLOR } from '../selection/analyticCylinderGhost';
 
 const ARROW_SHAFT_RADIUS = 0.05;
 const ARROW_HEAD_RADIUS = 0.14;
@@ -18,6 +19,7 @@ const ARROW_HEAD_LENGTH = 0.3;
 const ARROW_HALF_LENGTH = 0.75;
 const ARROW_HIT_RADIUS = 0.34;
 const GHOST_OPACITY = 0.28;
+export const HANDLE_WARNING_COLOR = 0xf59e0b;
 
 /**
  * The shared drag-arrow affordance: a double-headed arrow centered on the
@@ -112,14 +114,14 @@ export function edgeHandlePlacement(
 export interface OffsetFaceRigParams {
   origin: HandleVec3;
   direction: HandleVec3;
-  /** World-space triangles of the face, for the drag ghost (owned by rig). */
+  /** World-space triangles of the face, kept as the original-position reference. */
   ghostGeometry: THREE.BufferGeometry | null;
 }
 
 /**
  * An arrow anchored at the click point on a face, pointing along the face
  * normal, with a dashed leader back to the original position and a
- * translucent ghost of the face carried along during the drag.
+ * translucent ghost that marks the face's original position during the drag.
  */
 export function buildOffsetFaceHandle(params: OffsetFaceRigParams): DragRig {
   const kind = 'offset-face';
@@ -136,7 +138,8 @@ export function buildOffsetFaceHandle(params: OffsetFaceRigParams): DragRig {
     )
   );
 
-  addHandleParts(group, doubleArrowParts(kind));
+  const arrowParts = doubleArrowParts(kind);
+  addHandleParts(group, arrowParts);
 
   const worldGroup = new THREE.Group();
   worldGroup.name = `${kind}-handle-world`;
@@ -156,7 +159,7 @@ export function buildOffsetFaceHandle(params: OffsetFaceRigParams): DragRig {
     ghost = new THREE.Mesh(
       params.ghostGeometry,
       new THREE.MeshBasicMaterial({
-        color: HANDLE_COLOR,
+        color: ANALYTIC_GHOST_COLOR,
         transparent: true,
         opacity: GHOST_OPACITY,
         depthTest: false,
@@ -188,15 +191,23 @@ export function buildOffsetFaceHandle(params: OffsetFaceRigParams): DragRig {
       }
       if (ghost) {
         ghost.visible = engaged;
-        ghost.position.set(
-          direction.x * value,
-          direction.y * value,
-          direction.z * value
-        );
       }
     },
     value() {
       return current;
+    },
+    setWarning(warning) {
+      const color = warning ? HANDLE_WARNING_COLOR : HANDLE_COLOR;
+      for (const part of arrowParts) {
+        if (
+          part.material instanceof THREE.MeshBasicMaterial &&
+          part.material.visible
+        ) {
+          part.material.color.setHex(color);
+        }
+      }
+      dimension.setColor(color);
+      group.userData.previewWarning = warning;
     },
     chipAnchor(gizmoScale: number) {
       // The chip rides just past the arrow head, which has already travelled

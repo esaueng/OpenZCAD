@@ -401,8 +401,14 @@ interface ModelViewerProps {
   onSelectEdgeChain(selections: TopologySelection[]): void;
   /** Armed face-offset handle (selection-first direct manipulation). */
   offsetHandle: OffsetHandleTarget | null;
+  /** Streamed signed offset; App coalesces exact rebuilds. */
+  onOffsetPreview(offset: number): void;
   /** Fired when an offset-handle drag releases with a non-zero offset. */
-  onOffsetCommit(offset: number): void;
+  onOffsetCommit(offset: number): boolean;
+  /** Clears exact preview geometry and restores the original reference. */
+  onOffsetCancel(): void;
+  /** Current exact preview or release validation refused this offset. */
+  offsetPreviewInvalid: boolean;
   /** Value chip tapped: open exact entry prefilled with the current offset. */
   onOpenOffsetKeypad(currentOffset: number, totalBaseline?: number): void;
   /** Imperative sink receiving the chip anchor in host pixels each frame. */
@@ -772,7 +778,10 @@ export function ModelViewer({
   selectionFilter,
   onBoxSelect,
   offsetHandle,
+  onOffsetPreview,
   onOffsetCommit,
+  onOffsetCancel,
+  offsetPreviewInvalid,
   onOpenOffsetKeypad,
   keypadAnchorRef,
   offsetSetterRef,
@@ -868,6 +877,12 @@ export function ModelViewer({
   onViewChangeRef.current = onViewChange;
   const onOffsetCommitRef = useRef(onOffsetCommit);
   onOffsetCommitRef.current = onOffsetCommit;
+  const onOffsetPreviewRef = useRef(onOffsetPreview);
+  onOffsetPreviewRef.current = onOffsetPreview;
+  const onOffsetCancelRef = useRef(onOffsetCancel);
+  onOffsetCancelRef.current = onOffsetCancel;
+  const offsetPreviewInvalidRef = useRef(offsetPreviewInvalid);
+  offsetPreviewInvalidRef.current = offsetPreviewInvalid;
   const onOpenOffsetKeypadRef = useRef(onOpenOffsetKeypad);
   onOpenOffsetKeypadRef.current = onOpenOffsetKeypad;
   const onCylinderRadiusPreviewRef = useRef(onCylinderRadiusPreview);
@@ -1388,6 +1403,7 @@ export function ModelViewer({
       directionY: number;
       pixelsPerUnit: number;
       initialOffset: number;
+      lastPreviewAt: number;
     } | null = null;
     /** Immutable radius-edit snapshot captured when the handle engages. */
     let cylinderRadiusDrag: {
@@ -1580,6 +1596,7 @@ export function ModelViewer({
         offsetDrag = null;
         offsetDragActiveRef.current = false;
         offsetRigRef.current?.setValue(initialOffset);
+        onOffsetCancelRef.current();
         cancelled = true;
       }
       if (edgeDrag) {
@@ -1895,6 +1912,7 @@ export function ModelViewer({
         event as CustomEvent<{
           bodyId?: string;
           surface?: 'wall' | 'cap' | 'top-cap';
+          select?: boolean;
           resolve?: (
             geometry: Pick<
               FaceGeometry,
@@ -1998,19 +2016,21 @@ export function ModelViewer({
         detail?.resolve?.(null);
         return;
       }
-      onSelectTopologyRef.current(
-        {
-          bodyId: body.bodyId,
-          kind: 'face',
-          topologyId: face.topologyId,
-          hash: face.hash
-        },
-        false,
-        {
-          point: { x: point.x, y: point.y, z: point.z },
-          normal: { x: normal.x, y: normal.y, z: normal.z }
-        }
-      );
+      if (detail?.select !== false) {
+        onSelectTopologyRef.current(
+          {
+            bodyId: body.bodyId,
+            kind: 'face',
+            topologyId: face.topologyId,
+            hash: face.hash
+          },
+          false,
+          {
+            point: { x: point.x, y: point.y, z: point.z },
+            normal: { x: normal.x, y: normal.y, z: normal.z }
+          }
+        );
+      }
       detail?.resolve?.({
         surfaceType: geometry.surfaceType,
         ...(geometry.featureType ? { featureType: geometry.featureType } : {}),
@@ -2899,6 +2919,9 @@ export function ModelViewer({
             totalBaseline === undefined
               ? `${value >= 0 ? '+' : ''}${value} ${unitsRef.current}`
               : `Total ${formatNumber(totalBaseline + rawValue)} ${unitsRef.current}`;
+          if (offsetPreviewInvalidRef.current) {
+            text = `⚠ ${text}`;
+          }
         }
       }
       if (!anchor) {
@@ -2974,6 +2997,34 @@ export function ModelViewer({
           );
         }
       } else if (e2eCanvasHooksEnabled && rig?.kind === 'offset-face') {
+        const scale =
+          (rig.group.userData.gizmoScale as number | undefined) ?? 1;
+        const hitCenter = rig.group.position
+          .clone()
+          .addScaledVector(rig.direction, 0.7 * scale);
+        const hitScreen = projectToScreen(
+          hitCenter,
+          context.activeCamera,
+          renderer.domElement.clientWidth,
+          renderer.domElement.clientHeight
+        );
+        const dragDirection = screenDirectionFor(
+          rig.group.position,
+          rig.direction
+        );
+        if (hitScreen) {
+          renderer.domElement.dataset.e2eHandleX = String(hitScreen.x);
+          renderer.domElement.dataset.e2eHandleY = String(hitScreen.y);
+          renderer.domElement.dataset.e2eHandleDx = String(
+            dragDirection.directionX
+          );
+          renderer.domElement.dataset.e2eHandleDy = String(
+            dragDirection.directionY
+          );
+          renderer.domElement.dataset.e2eHandlePixelsPerUnit = String(
+            dragDirection.pixelsPerUnit
+          );
+        }
         renderer.domElement.dataset.e2eOffsetDimensionVisible = String(
           rig.worldGroup.getObjectByName('dimension-graphic')?.visible === true
         );
@@ -3003,6 +3054,10 @@ export function ModelViewer({
       }
       chip.dataset.variant =
         rig?.kind === 'cylinder-radius' ? 'dimension' : 'default';
+      const offsetWarning =
+        rig?.kind === 'offset-face' && offsetPreviewInvalidRef.current;
+      chip.dataset.state = offsetWarning ? 'warning' : 'ready';
+      chip.setAttribute('aria-invalid', String(offsetWarning));
       hud.showAt(chip, screen.x, screen.y);
       if (rig?.kind === 'cylinder-radius') {
         radiusLabelChip.textContent =
@@ -3873,7 +3928,16 @@ export function ModelViewer({
           const value = event.shiftKey
             ? Math.round(raw * 100) / 100
             : Math.round(raw / snap) * snap;
-          rig.setValue(value);
+          if (Math.abs(value - rig.value()) > 1e-9) {
+            rig.setValue(value);
+            // Exact push/pull is bounded to the same cadence as edge blends;
+            // the app-side LivePreview still coalesces any overlap.
+            const now = performance.now();
+            if (now - offsetDrag.lastPreviewAt > 150) {
+              offsetDrag.lastPreviewAt = now;
+              onOffsetPreviewRef.current(value);
+            }
+          }
           renderer.domElement.style.cursor = 'grabbing';
           requestRender();
         }
@@ -4149,7 +4213,8 @@ export function ModelViewer({
             directionX: screen.directionX,
             directionY: screen.directionY,
             pixelsPerUnit: screen.pixelsPerUnit,
-            initialOffset: armedRig.value()
+            initialOffset: armedRig.value(),
+            lastPreviewAt: 0
           };
           offsetDragActiveRef.current = true;
           onDirectManipulationChangeRef.current(true);
@@ -4661,6 +4726,7 @@ export function ModelViewer({
         );
         if (moved < 4) {
           rig?.setValue(completed.initialOffset);
+          onOffsetCancelRef.current();
           selectAtPointer(event);
           return;
         }
@@ -4671,6 +4737,8 @@ export function ModelViewer({
           Math.abs(finalOffset) > 1e-9
         ) {
           onOffsetCommitRef.current(finalOffset);
+        } else {
+          onOffsetCancelRef.current();
         }
         return;
       }
@@ -4771,6 +4839,7 @@ export function ModelViewer({
         onDirectManipulationChangeRef.current(false);
         gestures.release(event);
         offsetRigRef.current?.setValue(initialOffset);
+        onOffsetCancelRef.current();
         requestRender();
       }
       if (moveDrag && event.pointerId === moveDrag.pointerId) {
@@ -5896,6 +5965,7 @@ export function ModelViewer({
       ghostGeometry
     });
     rig.setValue(offsetHandle.initialValue ?? 0);
+    rig.setWarning?.(offsetPreviewInvalidRef.current);
     // Fat-line materials need the viewport resolution for correct widths.
     const { width, height } = context.fatLineResolution();
     syncFatLineResolution(rig.worldGroup, width, height);
@@ -5912,6 +5982,11 @@ export function ModelViewer({
       }
     };
   }, [offsetHandle, bodies]);
+
+  useEffect(() => {
+    offsetRigRef.current?.setWarning?.(offsetPreviewInvalid);
+    contextRef.current?.requestRender();
+  }, [offsetPreviewInvalid]);
 
   // Edge-radius handle: built when edges arm fillet/chamfer, torn down on
   // deselect or commit. Never rebuilt mid-drag.
