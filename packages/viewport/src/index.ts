@@ -34,6 +34,7 @@ export * from './snap/measureSnaps';
 export * from './selection/SelectionManager';
 export * from './selection/boxSelect';
 export * from './selection/boundaryEdgesOfFace';
+export * from './selection/faceHighlightGeometry';
 
 // Gizmos: the shared drag-rig contract, the selection-first handles built
 // on it, and the move/rotate handle geometry, snapping, and focus.

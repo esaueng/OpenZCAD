@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import * as THREE from 'three';
 import {
   toBodyId,
   toFeatureId,
@@ -36,18 +37,27 @@ function makeOverlay() {
     {
       bodyId: BODY_ID,
       topology: {
-        faces: [],
+        faces: [
+          {
+            topologyId: 'face-a',
+            hash: 101,
+            triangleStart: 0,
+            triangleCount: 1
+          }
+        ],
         edges: [
           {
             topologyId: 'edge-a',
             hash: 11,
             reference: EDGE_REFERENCE,
+            adjacentFaceHashes: [101],
             points: [0, 0, 0, 1, 0, 0, 2, 0, 0]
           },
           {
             topologyId: 'edge-seam',
             hash: 12,
             displayRole: 'seam',
+            adjacentFaceHashes: [101],
             points: [0, 1, 0, 1, 1, 0]
           },
           {
@@ -165,6 +175,37 @@ describe('BodyEdgeOverlay', () => {
     expect(overlay.hoverEdges.visible).toBe(false);
   });
 
+  it('renders a smooth hover run in the same reusable batch', () => {
+    const overlay = makeOverlay();
+    const hoverGeometry = overlay.hoverEdges.geometry;
+
+    overlay.setHovered(overlay.ownerAtSegment(0), ['edge-a', 'edge-b']);
+
+    expect(overlay.hoverEdges.geometry).toBe(hoverGeometry);
+    expect(overlay.hoverEdges.geometry.instanceCount).toBe(3);
+  });
+
+  it('draws a brighter face-boundary tier without seams in shaded mode', () => {
+    const overlay = makeOverlay();
+
+    expect(overlay.setSelectedFaceBoundary(101)).toBe(true);
+    overlay.setDisplayMode('shaded');
+
+    expect(overlay.selectedFaceBoundaryEdges.visible).toBe(true);
+    expect(overlay.selectedFaceBoundaryEdges.geometry.instanceCount).toBe(2);
+    expect(
+      overlay.selectedFaceBoundaryEdges.material.linewidth
+    ).toBeGreaterThan(overlay.selectedEdges.material.linewidth);
+    const intersections: THREE.Intersection[] = [];
+    expect(
+      overlay.selectedFaceBoundaryEdges.raycast(
+        new THREE.Raycaster(),
+        intersections
+      )
+    ).toBeUndefined();
+    expect(intersections).toEqual([]);
+  });
+
   it('changes wireframe and hidden visuals without replacing materials', () => {
     const overlay = makeOverlay();
     const material = overlay.idleEdges.material;
@@ -197,7 +238,8 @@ describe('BodyEdgeOverlay', () => {
     for (const line of [
       overlay.idleEdges,
       overlay.hoverEdges,
-      overlay.selectedEdges
+      overlay.selectedEdges,
+      overlay.selectedFaceBoundaryEdges
     ]) {
       expect(line.material.resolution.x).toBe(1440);
       expect(line.material.resolution.y).toBe(900);
