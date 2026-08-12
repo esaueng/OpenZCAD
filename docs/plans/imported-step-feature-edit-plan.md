@@ -67,7 +67,6 @@ already exists; the gaps are one commit path and one kernel operation.
    lineage path as a fallback. Imported blends still intentionally have no native
    producing feature and remain read-only except for the existing all-planar removal
    path.
-   The e2e suite happens to build the one working shape.
 4. **Recognition is dead code.** Neither `recognizeImportedFeature` (app) nor the
    kernel's `recognizeFeatures` reaches any UI. Imported holes/pockets/counterbores show
    nothing beyond raw surface data.
