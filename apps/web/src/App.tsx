@@ -226,6 +226,7 @@ import {
 } from './lib/interaction/cylinderPrimitiveAncestry';
 import { ToolCard } from './components/ToolCard';
 import { NumericKeypad, type KeypadRequest } from './components/NumericKeypad';
+import type { DimensionMode } from './lib/keypad';
 import {
   IDLE,
   escapeTarget,
@@ -1071,6 +1072,8 @@ export function App() {
   interactionRef.current = interaction;
   /** Open exact-value entry (anchored keypad) for the armed handle. */
   const [keypad, setKeypad] = useState<KeypadRequest | null>(null);
+  const [cylinderDimensionMode, setCylinderDimensionMode] =
+    useState<DimensionMode>('diameter');
   const keypadAnchorRef = useRef<
     ((point: { x: number; y: number } | null) => void) | null
   >(null);
@@ -7180,6 +7183,21 @@ export function App() {
     if (target.surfaceType !== 'planar') {
       return null;
     }
+    const primitive =
+      doc && target.hash !== undefined
+        ? primitiveCylinderHeightAncestor(
+            doc,
+            target.bodyId as BodyId,
+            target.reference,
+            target.hash
+          )
+        : null;
+    const totalBaseline =
+      primitive?.data.featureKind === 'primitive' &&
+      primitive.data.primitiveKind === 'cylinder' &&
+      typeof primitive.data.dimensions.height === 'number'
+        ? primitive.data.dimensions.height
+        : undefined;
     return {
       bodyId: target.bodyId,
       topologyId: target.topologyId,
@@ -7193,9 +7211,10 @@ export function App() {
         y: target.normal[1],
         z: target.normal[2]
       },
-      initialValue: interaction.lastValue ?? 0
+      initialValue: interaction.lastValue ?? 0,
+      ...(totalBaseline === undefined ? {} : { totalBaseline })
     };
-  }, [interaction]);
+  }, [doc, interaction]);
 
   const cylinderRadiusHandleTarget = useMemo(() => {
     if (
@@ -7261,12 +7280,22 @@ export function App() {
     interaction.target.radius !== undefined
       ? interaction.target.radius
       : null;
+  const cylinderSelectionKey =
+    interaction.mode === 'face' && interaction.op === 'resize-cylinder-radius'
+      ? `${interaction.target.bodyId}:${interaction.target.topologyId}`
+      : null;
+  useEffect(() => {
+    setCylinderDimensionMode('diameter');
+  }, [cylinderSelectionKey]);
   const cylinderRadiusInspectorEdit = useMemo(
     () =>
       cylinderRadiusInspectorInitial === null
         ? null
-        : { initialRadius: cylinderRadiusInspectorInitial },
-    [cylinderRadiusInspectorInitial]
+        : {
+            initialRadius: cylinderRadiusInspectorInitial,
+            dimensionMode: cylinderDimensionMode
+          },
+    [cylinderDimensionMode, cylinderRadiusInspectorInitial]
   );
 
   function buildCylinderRadiusCommand(
@@ -7392,7 +7421,7 @@ export function App() {
     void executeValidatedDirectEdit(
       plan.command,
       current.target.bodyId as BodyId,
-      `Adjusted cylinder radius to R ${formatNumber(radius)} ${doc?.units ?? ''}.`,
+      `Adjusted cylinder ${cylinderDimensionMode === 'diameter' ? 'diameter' : 'radius'} to ${cylinderDimensionMode === 'diameter' ? 'Ø' : 'R'} ${formatNumber(cylinderDimensionMode === 'diameter' ? radius * 2 : radius)} ${doc?.units ?? ''}.`,
       radius,
       undefined,
       plan.sourceFeatureId
@@ -7498,23 +7527,37 @@ export function App() {
   }
 
   /** Chip tapped: open the anchored keypad prefilled with the drag value. */
-  function handleOpenOffsetKeypad(currentOffset: number) {
+  function handleOpenOffsetKeypad(
+    currentOffset: number,
+    totalBaseline?: number
+  ) {
     if (interaction.mode !== 'face' && interaction.mode !== 'region') {
       return;
     }
     dispatchInteraction({ type: 'keypad-open' });
     setKeypad({
       kind: 'offset',
-      label: interaction.mode === 'region' ? 'Height' : 'Offset',
+      label:
+        totalBaseline === undefined
+          ? interaction.mode === 'region'
+            ? 'Height'
+            : 'Offset'
+          : 'Total',
       initial:
-        currentOffset !== 0
-          ? String(Math.round(currentOffset * 100) / 100)
+        totalBaseline !== undefined || currentOffset !== 0
+          ? String(
+              Math.round(((totalBaseline ?? 0) + currentOffset) * 100) / 100
+            )
           : '',
-      unitKind: 'length'
+      unitKind: 'length',
+      ...(totalBaseline === undefined ? {} : { totalBaseline })
     });
   }
 
-  function handleOpenCylinderRadiusKeypad(radius: number) {
+  function handleOpenCylinderRadiusKeypad(
+    radius: number,
+    dimensionMode: DimensionMode
+  ) {
     if (
       interaction.mode !== 'face' ||
       interaction.op !== 'resize-cylinder-radius'
@@ -7524,9 +7567,10 @@ export function App() {
     dispatchInteraction({ type: 'keypad-open' });
     setKeypad({
       kind: 'radius',
-      label: 'Radius',
-      initial: String(radius),
+      label: dimensionMode === 'diameter' ? 'Diameter' : 'Radius',
+      initial: String(dimensionMode === 'diameter' ? radius * 2 : radius),
       unitKind: 'length',
+      dimensionMode,
       baseline: interaction.target.radius
     });
   }
@@ -9353,6 +9397,8 @@ export function App() {
             keypadAnchorRef={keypadAnchorRef}
             offsetSetterRef={offsetSetterRef}
             cylinderRadiusHandle={viewMode ? null : cylinderRadiusHandleTarget}
+            cylinderDimensionMode={cylinderDimensionMode}
+            onCylinderDimensionModeChange={setCylinderDimensionMode}
             onCylinderRadiusPreview={handleCylinderRadiusPreview}
             onCylinderRadiusCommit={handleCylinderRadiusCommit}
             onCylinderRadiusCancel={handleCylinderRadiusCancel}
@@ -9572,6 +9618,7 @@ export function App() {
                       units={doc.units}
                       scope={parameterScope.scope}
                       anchorRef={keypadAnchorRef}
+                      onDimensionModeChange={setCylinderDimensionMode}
                       onPreview={(value) => {
                         offsetSetterRef.current?.(value);
                         if (keypad.kind === 'radius') {

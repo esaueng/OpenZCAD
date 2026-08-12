@@ -210,6 +210,22 @@
   vertical-align: 0.08em;
 }
 
+.handle-dimension-prefix {
+  padding: 0;
+  color: inherit;
+  font: inherit;
+  font-weight: 800;
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+}
+
+.handle-dimension-prefix:hover,
+.handle-dimension-prefix:focus-visible {
+  color: var(--color-accent);
+  outline: none;
+}
+
 /* "Radius" name tag sitting flush against the dimension value pill. */
 .handle-label-chip {
   position: absolute;

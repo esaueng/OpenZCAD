@@ -49,6 +49,11 @@ const WITNESS_OVERSHOOT = 0.6;
 export interface DimensionGraphicOptions {
   /** Draw the short ticks that stand the dimension off the geometry. */
   witnessLines?: boolean;
+  /** Shared line/arrow color; defaults to drawing white. */
+  color?: THREE.ColorRepresentation;
+  linewidth?: number;
+  opacity?: number;
+  depthTest?: boolean;
   /** Render order for the line; arrowheads take this plus one. */
   renderOrder?: number;
 }
@@ -106,21 +111,34 @@ export function createDimensionGraphic(
   options: DimensionGraphicOptions = {}
 ): DimensionGraphic {
   const renderOrder = options.renderOrder ?? 29;
+  const color = options.color ?? DIMENSION_LINE_COLOR;
+  const opacity = options.opacity ?? 0.9;
+  const depthTest = options.depthTest ?? false;
   const object = new THREE.Group();
   object.name = 'dimension-graphic';
 
   const lineGeometry = new LineGeometry();
   lineGeometry.setPositions([0, 0, 0, 0, 0, 0]);
-  const line = new Line2(lineGeometry, createDimensionLineMaterial());
+  const line = new Line2(
+    lineGeometry,
+    createDimensionLineMaterial({
+      color,
+      ...(options.linewidth === undefined
+        ? {}
+        : { linewidth: options.linewidth }),
+      opacity,
+      depthTest
+    })
+  );
   line.computeLineDistances();
   line.renderOrder = renderOrder;
   object.add(line);
 
   const arrowMaterial = new THREE.MeshBasicMaterial({
-    color: DIMENSION_LINE_COLOR,
+    color,
     transparent: true,
-    opacity: 0.95,
-    depthTest: false
+    opacity: Math.min(opacity + 0.05, 1),
+    depthTest
   });
   // One cone geometry shared by both heads: they are the same shape, and the
   // second allocation would be freed by the same dispose anyway.
@@ -147,11 +165,11 @@ export function createDimensionGraphic(
       const witness = new Line2(
         geometry,
         new LineMaterial({
-          color: DIMENSION_LINE_COLOR,
+          color,
           linewidth: 1,
           transparent: true,
-          opacity: 0.55,
-          depthTest: false
+          opacity: opacity * 0.61,
+          depthTest
         })
       );
       witness.renderOrder = renderOrder;
