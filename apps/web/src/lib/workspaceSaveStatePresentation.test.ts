@@ -41,5 +41,6 @@ describe('presentedWorkspaceSaveState', () => {
     expect(presentation.statusBarLabel).toBe('Account repair needed');
     expect(presentation.title).toMatch(/account copy cannot be opened/i);
     expect(presentation.title).toMatch(/saved on this device/i);
+    expect(presentation.title).toMatch(/restore it from this device/i);
   });
 });

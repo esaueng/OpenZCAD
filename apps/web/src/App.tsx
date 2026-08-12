@@ -254,9 +254,9 @@ import {
   fixedPlaneRefForLegacyAttachment
 } from './lib/faceSketchAttachment';
 import {
-  edgeLabel,
   edgeLengthMeasurement,
-  faceLabel
+  faceLabel,
+  topologySelectionLabel
 } from './lib/topologyLabels';
 import { resolveFace } from './lib/topologyResolution';
 import { objectPolylines } from './lib/objectPolyline';
@@ -2497,8 +2497,9 @@ export function App() {
     previewDoc?.derived.bodyRepresentations ?? representations;
   /**
    * Exact regeneration may assign a new topology ID to an edited face. Keep
-   * selection attached through operation-specific immutable geometry: the
-   * translated source plane for offsets, or the fixed axis for radii.
+   * selection attached through operation-specific immutable identity: exact
+   * fillet evolution lineage, the translated source plane for offsets, or the
+   * fixed axis for cylinder radii.
    */
   const renderedSelectedTopology = useMemo<TopologySelection | null>(() => {
     if (selectedTopology?.kind !== 'face') {
@@ -2517,11 +2518,9 @@ export function App() {
       ]?.topology?.faces.find(
         (face) => face.topologyId === selectedTopology.topologyId
       );
-      const regenerated = resolveFilletBlendFace(
-        faces,
-        interaction.target.filletFeatureId,
-        sourceFace?.geometry
-      );
+      const regenerated = sourceFace
+        ? resolveFilletBlendFace(faces, sourceFace)
+        : null;
       if (regenerated) {
         return {
           bodyId: selectedTopology.bodyId,
@@ -2531,6 +2530,7 @@ export function App() {
           ...(regenerated.reference ? { reference: regenerated.reference } : {})
         };
       }
+      return null;
     }
     const exact = faces.find(
       (face) =>
@@ -2880,9 +2880,12 @@ export function App() {
       const hash = selectedEdges[0]?.hash ?? renderedSelectedTopology?.hash;
       const topologyId =
         selectedEdges[0]?.topologyId ?? renderedSelectedTopology?.topologyId;
-      const name = edgeLabel(body, hash, topologyId);
       const length = edgeLengthMeasurement(body, hash, topologyId);
-      const label = body ? `${body.name} · ${name}` : name;
+      const label = topologySelectionLabel(body, {
+        kind: 'edge',
+        hash,
+        topologyId
+      });
       const value =
         length && length.value > 0
           ? `${length.quality === 'sampled' ? '≈ ' : ''}${round(length.value)} ${units}`
@@ -2909,12 +2912,7 @@ export function App() {
           detail: value
         };
       }
-      const name = faceLabel(
-        body,
-        renderedSelectedTopology.hash,
-        renderedSelectedTopology.topologyId
-      );
-      const label = body ? `${body.name} · ${name}` : name;
+      const label = topologySelectionLabel(body, renderedSelectedTopology);
       // A cylinder is the other pick that carries a number of its own; every
       // other face kind has a name but nothing to measure yet.
       const cylinderDiameter =
@@ -6016,18 +6014,100 @@ export function App() {
       setSaveState('offline');
     } catch (error) {
       if (isProjectDocumentUnavailableError(error)) {
-        accountDocumentUnavailableProjectIdRef.current =
-          localDocument.projectId;
-        setCloudAvailable(false);
-        setSaveState('repair');
-        setStatus(
-          'The account copy still needs repair. Your work remains saved on this device.'
-        );
+        await restoreUnavailableAccountProject(localDocument);
         return;
       }
       setSaveState('offline');
       setStatus(
         `${errorMessage(error, 'Could not check the account copy.')} Your work remains saved on this device.`
+      );
+    }
+  }
+
+  async function restoreUnavailableAccountProject(
+    localDocument: ProjectDocument
+  ): Promise<void> {
+    accountDocumentUnavailableProjectIdRef.current = localDocument.projectId;
+    setCloudAvailable(false);
+    setSaveState('repair');
+
+    let summary: ProjectSummary | undefined;
+    try {
+      summary = (await api.listProjects()).projects.find(
+        (project) => project.projectId === localDocument.projectId
+      );
+    } catch (error) {
+      if (error instanceof ApiError && error.status === 401) {
+        remoteVersionsRef.current.clear();
+        endCloudSettingsSession();
+      }
+      setStatus(
+        `${errorMessage(error, 'Could not verify the account record.')} Your work remains saved on this device.`
+      );
+      return;
+    }
+    if (summary?.documentVersion === undefined) {
+      setStatus(
+        'The account record could not be verified, so nothing was replaced. Your work remains saved on this device.'
+      );
+      return;
+    }
+    if (localDocument.version < summary.documentVersion) {
+      setStatus(
+        `The account record is newer than this device (version ${summary.documentVersion} vs ${localDocument.version}), so nothing was replaced. Your work remains saved on this device.`
+      );
+      return;
+    }
+    if (
+      !window.confirm(
+        `Restore ${localDocument.name} in your account from the copy saved on this device?\n\nThe unreadable current account copy will be replaced. Existing revisions are not changed.`
+      )
+    ) {
+      setStatus(
+        'Account restore canceled. Your work remains saved on this device.'
+      );
+      return;
+    }
+
+    setSaveState('saving');
+    setStatus('Restoring the account copy from this device…');
+    try {
+      const saved = await api.saveProjectDocument({
+        projectId: localDocument.projectId,
+        expectedVersion: summary.documentVersion,
+        document: withoutDerivedProjection(localDocument)
+      });
+      const restored = {
+        ...localDocument,
+        version: saved.version,
+        derived: {
+          ...localDocument.derived,
+          updatedAt: saved.updatedAt
+        }
+      };
+      await acceptAccountDocument(restored, localDocument, {
+        ...summary,
+        name: restored.name,
+        updatedAt: saved.updatedAt,
+        documentVersion: saved.version
+      });
+      setStatus('Restored the account copy from this device.');
+    } catch (error) {
+      if (error instanceof ApiError && error.status === 409) {
+        setSaveState('repair');
+        setStatus(
+          'The account record changed during restore, so nothing was overwritten. Retry after checking the other device.'
+        );
+        return;
+      }
+      if (error instanceof ApiError && error.status === 401) {
+        remoteVersionsRef.current.clear();
+        endCloudSettingsSession();
+      }
+      setCloudAvailable(false);
+      setSaveState('repair');
+      setStatus(
+        `${errorMessage(error, 'Could not restore the account copy.')} Your work remains saved on this device.`
       );
     }
   }
@@ -6675,7 +6755,11 @@ export function App() {
       const surface = geometry?.surfaceType;
       const filletFeature =
         faceTopology && geometry?.featureType === 'blend'
-          ? editableFilletFeature(doc, faceTopology)
+          ? editableFilletFeature(
+              doc,
+              faceTopology,
+              representations[selection.bodyId]?.topology?.faces ?? []
+            )
           : null;
       const filletRadialDirection =
         filletFeature && geometry
@@ -8181,13 +8265,10 @@ export function App() {
               committed?.derived.bodyRepresentations[
                 current.target.bodyId as BodyId
               ]?.topology?.faces;
-            const regenerated = faces
-              ? resolveFilletBlendFace(
-                  faces,
-                  feature.featureId,
-                  sourceFace?.geometry
-                )
-              : null;
+            const regenerated =
+              faces && sourceFace
+                ? resolveFilletBlendFace(faces, sourceFace)
+                : null;
             if (!regenerated?.geometry) {
               return;
             }
@@ -10222,6 +10303,7 @@ export function App() {
             selectedTopology={renderedSelectedTopology}
             previewFaceHighlights={previewBlendFaces}
             selectedEdges={selectedEdges}
+            pickListEnabled={appSettings.experiments.directManipulation}
             settings={viewerSettings}
             fitSignal={fitSignal}
             viewRequest={viewRequest}

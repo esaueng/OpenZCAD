@@ -63,13 +63,8 @@ export type TopologyLineageOperation =
   | 'direct-edit';
 
 /**
- * `verified-evolution-only` used to sit here as a fourth arm. It is gone
- * because no code ever produced it and no code ever read it — it existed only
- * as this union member and the two table entries that claimed it, so it could
- * describe an operation as verified while every production path hash-onlied
- * the same operation, and nothing could contradict it. A status that cannot be
- * checked is not a weaker guarantee than the others; it is a claim with no
- * mechanism behind it. Reintroduce it when a consumer branches on it.
+ * `verified-evolution-only` is deliberately absent: capabilities describe
+ * lineage the production adapter actually publishes, not bridge potential.
  */
 export type TopologyLineageCapability =
   | { readonly status: 'semantic' }
@@ -121,32 +116,9 @@ const OPERATION_CAPABILITIES: Readonly<
       'Solid-offset lineage is bridge-gated until every offset and generated face has a complete output relation.'
   },
   /**
-   * These three read `hash-only` because that is what the adapter SHIPS, and
-   * the table's job is to describe the adapter rather than the roadmap.
-   *
-   * They previously read `derived` (pattern) and `verified-evolution-only`
-   * (boolean, fillet), which described an intended end state. The production
-   * rebuild has never agreed: `exact.ts` hash-onlies the boolean result
-   * because it may be face-unified after the kernel operation, hash-onlies
-   * fillet and chamfer together because the final result — analytic fallback
-   * included — carries no reverified complete output relation, and gives a
-   * pattern no lineage field at all.
-   *
-   * That gap was invisible in the ordinary way: `verified-evolution-only` was
-   * a status NO CODE EVER READ, so nothing could disagree with it. The one
-   * production caller of `verifyTopologyEvolution` — `brepkit-lineage.ts` —
-   * passes `operation: 'rigid-transform'` and nothing else, and the table is
-   * consulted only for `chamfer` and `direct-edit`. A capability table that
-   * no consumer checks will drift from the code silently and forever, so the
-   * only thing keeping it honest is that it says what is true today.
-   *
-   * The kernel side is NOT the blocker, and that is worth recording so this
-   * is not misread as waiting on brepkit: the pinned wasm already exports
-   * `cutWithEvolution`, `fuseWithEvolution` and `filletWithEvolution`. Their
-   * only caller in this repo is the characterization spike,
-   * `test/topology-lineage-spike.test.ts`. Wiring one class end to end —
-   * fillet is cheapest, since the export and the spike both exist — is what
-   * would let an entry here move, and it should move only then.
+   * Fillet is derived only for generated blend faces whose construction
+   * history, exact support witnesses, and one-to-one role all verify. The
+   * other operations below retain their shipped hash-only behavior.
    */
   pattern: {
     status: 'unsupported',
@@ -160,17 +132,12 @@ const OPERATION_CAPABILITIES: Readonly<
     reason:
       'The production boolean result may be face-unified after the kernel operation, so no unverified history payload is accepted.'
   },
-  fillet: {
-    status: 'unsupported',
-    fallback: 'hash-only',
-    reason:
-      'The final production fillet, including analytic fallback results, has no reverified complete output relation.'
-  },
+  fillet: { status: 'derived' },
   chamfer: {
     status: 'unsupported',
     fallback: 'hash-only',
     reason:
-      'Chamfer lineage is bridge-gated until generated-face provenance is complete.'
+      'Chamfer lineage remains hash-only because generated bevel faces are not blend faces.'
   },
   'direct-edit': {
     status: 'unsupported',
