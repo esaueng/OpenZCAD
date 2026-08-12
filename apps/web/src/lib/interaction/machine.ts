@@ -29,6 +29,9 @@ export interface FaceTarget extends FaceCapabilityTarget {
   axialLength?: number;
   radialDirection?: [number, number, number];
   concavity?: 'hole' | 'boss';
+  /** Semantic exact-surface role needed to choose the matching edit op. */
+  featureType?: 'through-hole' | 'blend';
+  diameter?: number;
 }
 
 export interface RegionTarget {

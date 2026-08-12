@@ -2144,15 +2144,46 @@ export function ModelViewer({
       const detail = (
         event as CustomEvent<{
           curve?: 'circle' | 'any';
-          resolve?: (selection: TopologySelection | null) => void;
+          role?: 'outer-circle';
+          select?: boolean;
+          resolve?: (
+            selection:
+              | (TopologySelection & {
+                  curveType?: string;
+                  circleRadius?: number;
+                  pointCount: number;
+                  closureGap: number;
+                  closed: boolean;
+                })
+              | null
+          ) => void;
         }>
       ).detail;
-      const body = bodiesRef.current.find((candidate) => !candidate.consumed);
-      const edge = body?.topology?.edges.find(
-        (candidate) =>
-          candidate.displayRole !== 'seam' &&
-          (detail?.curve !== 'circle' || candidate.curve?.type === 'CIRCLE')
-      );
+      const candidate = bodiesRef.current
+        .filter((body) => !body.consumed)
+        .flatMap((body) =>
+          (body.topology?.edges ?? [])
+            .filter(
+              (edge) =>
+                edge.displayRole !== 'seam' &&
+                (detail?.curve !== 'circle' || edge.curve?.type === 'CIRCLE')
+            )
+            .map((edge) => ({ body, edge }))
+        )
+        .sort((left, right) => {
+          if (detail?.role !== 'outer-circle') {
+            return 0;
+          }
+          const radiusOrder =
+            (right.edge.curve?.circle?.radius ?? -Infinity) -
+            (left.edge.curve?.circle?.radius ?? -Infinity);
+          return radiusOrder !== 0
+            ? radiusOrder
+            : (right.edge.curve?.circle?.center.z ?? -Infinity) -
+                (left.edge.curve?.circle?.center.z ?? -Infinity);
+        })[0];
+      const body = candidate?.body;
+      const edge = candidate?.edge;
       if (!body || !edge) {
         detail?.resolve?.(null);
         return;
@@ -2164,8 +2195,25 @@ export function ModelViewer({
         hash: edge.hash,
         ...(edge.reference ? { reference: edge.reference } : {})
       };
-      onSelectTopologyRef.current(selection, false);
-      detail?.resolve?.(selection);
+      if (detail?.select !== false) {
+        onSelectTopologyRef.current(selection, false);
+      }
+      const first = new THREE.Vector3().fromArray(edge.points, 0);
+      const last = new THREE.Vector3().fromArray(
+        edge.points,
+        Math.max(edge.points.length - 3, 0)
+      );
+      detail?.resolve?.({
+        ...selection,
+        ...(edge.curve?.type ? { curveType: edge.curve.type } : {}),
+        ...(edge.curve?.circle?.radius !== undefined
+          ? { circleRadius: edge.curve.circle.radius }
+          : {}),
+        pointCount: edge.points.length / 3,
+        closureGap: first.distanceTo(last),
+        closed:
+          edge.vertexIds?.[0] === edge.vertexIds?.[1] && edge.points.length >= 6
+      });
     };
     const handleE2EBlendSelection = (event: Event) => {
       if (!e2eCanvasHooksEnabled) {
@@ -2174,12 +2222,16 @@ export function ModelViewer({
       const detail = (
         event as CustomEvent<{
           select?: boolean;
+          blendRadius?: number;
           resolve?: (
             value: {
               topologyId: string;
               blendRadius: number;
               producingFeatureId?: string;
               lineageName?: string;
+              point: { x: number; y: number; z: number };
+              x?: number;
+              y?: number;
             } | null
           ) => void;
         }>
@@ -2191,7 +2243,10 @@ export function ModelViewer({
             .filter(
               (face) =>
                 face.geometry?.featureType === 'blend' &&
-                face.geometry.blendRadius !== undefined
+                face.geometry.blendRadius !== undefined &&
+                (detail?.blendRadius === undefined ||
+                  Math.abs(face.geometry.blendRadius - detail.blendRadius) <=
+                    1e-6)
             )
             .map((face) => ({ body, face }))
         )[0];
@@ -2201,19 +2256,56 @@ export function ModelViewer({
         detail?.resolve?.(null);
         return;
       }
-      const first = face.triangleStart * 3;
-      const vertexIndices = body.mesh.indices.slice(first, first + 3);
-      const points = vertexIndices.map((index) =>
-        new THREE.Vector3().fromArray(body.mesh.vertices, index * 3)
-      );
-      const normal = normalForTriangle(body, face.triangleStart);
-      if (points.length !== 3 || !normal) {
+      const rect = renderer.domElement.getBoundingClientRect();
+      let point: THREE.Vector3 | null = null;
+      let normal: THREE.Vector3 | null = null;
+      let screen: { x: number; y: number } | null = null;
+      for (let offset = 0; offset < face.triangleCount; offset += 1) {
+        const triangle = face.triangleStart + offset;
+        const first = triangle * 3;
+        const points = body.mesh.indices
+          .slice(first, first + 3)
+          .map((index) =>
+            new THREE.Vector3().fromArray(body.mesh.vertices, index * 3)
+          );
+        const candidateNormal = normalForTriangle(body, triangle);
+        if (points.length !== 3 || !candidateNormal) {
+          continue;
+        }
+        const candidatePoint = points
+          .reduce((sum, current) => sum.add(current), new THREE.Vector3())
+          .multiplyScalar(1 / 3);
+        const candidateScreen = projectToScreen(
+          candidatePoint,
+          context.activeCamera,
+          renderer.domElement.clientWidth,
+          renderer.domElement.clientHeight
+        );
+        if (!candidateScreen) {
+          continue;
+        }
+        const stack = picker.pickAll(
+          new MouseEvent('mousemove', {
+            clientX: rect.left + candidateScreen.x,
+            clientY: rect.top + candidateScreen.y
+          })
+        );
+        if (
+          !stack.some(
+            (entry) => entry.selection?.topologyId === face.topologyId
+          )
+        ) {
+          continue;
+        }
+        point = candidatePoint;
+        normal = candidateNormal;
+        screen = candidateScreen;
+        break;
+      }
+      if (!point || !normal) {
         detail?.resolve?.(null);
         return;
       }
-      const point = points
-        .reduce((sum, current) => sum.add(current), new THREE.Vector3())
-        .multiplyScalar(1 / 3);
       if (detail?.select !== false) {
         onSelectTopologyRef.current(
           {
@@ -2233,6 +2325,8 @@ export function ModelViewer({
       detail?.resolve?.({
         topologyId: face.topologyId,
         blendRadius: face.geometry.blendRadius,
+        point: { x: point.x, y: point.y, z: point.z },
+        ...(screen ? { x: screen.x, y: screen.y } : {}),
         ...(face.reference?.producingFeatureId
           ? {
               producingFeatureId: String(face.reference.producingFeatureId)
@@ -2243,16 +2337,39 @@ export function ModelViewer({
           : {})
       });
     };
-    /** Exact bore/annulus selection plus a pixel known to lie on the far wall. */
+    /** Exact boss/bore selection plus a pixel known to lie on the far wall. */
     const handleE2EVisualSelectionProbe = (event: Event) => {
       if (!e2eCanvasHooksEnabled) {
         return;
       }
       const detail = (
         event as CustomEvent<{
-          surface?: 'bore' | 'annulus';
+          surface?: 'bore' | 'annulus' | 'outer-wall';
+          interaction?: 'select' | 'hover' | 'inspect' | 'clear';
+          includePickList?: boolean;
           resolve?: (
-            value: { x: number; y: number; topologyId: string } | null
+            value: {
+              x: number;
+              y: number;
+              bodyId: string;
+              topologyId: string;
+              geometry: Pick<
+                FaceGeometry,
+                | 'surfaceType'
+                | 'featureType'
+                | 'radius'
+                | 'diameter'
+                | 'axisStart'
+                | 'axisEnd'
+              >;
+              pickList?: {
+                x: number;
+                y: number;
+                labels: string[];
+                topologyIds: string[];
+                kinds: ('face' | 'edge')[];
+              };
+            } | null
           ) => void;
         }>
       ).detail;
@@ -2287,6 +2404,7 @@ export function ModelViewer({
         detail.resolve(null);
         return;
       }
+      const boreRadius = boreGeometry.radius;
       const adjacentPlaneHashes = new Set(
         body.topology.edges
           .filter((edge) => edge.adjacentFaceHashes?.includes(bore.hash))
@@ -2299,12 +2417,6 @@ export function ModelViewer({
           face.geometry?.surfaceType === 'plane' &&
           face.geometry.normal !== undefined
       );
-      const target = detail.surface === 'bore' ? bore : annulus;
-      if (!target?.geometry) {
-        detail.resolve(null);
-        return;
-      }
-
       const start = new THREE.Vector3(
         boreGeometry.axisStart.x,
         boreGeometry.axisStart.y,
@@ -2317,6 +2429,49 @@ export function ModelViewer({
       );
       const axis = end.clone().sub(start).normalize();
       const center = start.clone().lerp(end, 0.5);
+      const outerWallCandidate = body.topology.faces
+        .filter((face) => {
+          const geometry = face.geometry;
+          if (
+            geometry?.surfaceType !== 'cylinder' ||
+            geometry.radius === undefined ||
+            geometry.radius <= boreRadius ||
+            !geometry.axisStart ||
+            !geometry.axisEnd
+          ) {
+            return false;
+          }
+          const outerStart = new THREE.Vector3(
+            geometry.axisStart.x,
+            geometry.axisStart.y,
+            geometry.axisStart.z
+          );
+          const outerEnd = new THREE.Vector3(
+            geometry.axisEnd.x,
+            geometry.axisEnd.y,
+            geometry.axisEnd.z
+          );
+          const outerAxis = outerEnd.clone().sub(outerStart).normalize();
+          const lineOffset = outerStart.clone().sub(start).cross(axis).length();
+          return (
+            Math.abs(outerAxis.dot(axis)) >= 1 - 1e-6 && lineOffset <= 1e-5
+          );
+        })
+        .sort(
+          (left, right) =>
+            (left.geometry?.radius ?? Infinity) -
+            (right.geometry?.radius ?? Infinity)
+        )[0];
+      const target =
+        detail.surface === 'bore'
+          ? bore
+          : detail.surface === 'annulus'
+            ? annulus
+            : outerWallCandidate;
+      if (!target?.geometry) {
+        detail.resolve(null);
+        return;
+      }
       const reference =
         Math.abs(axis.z) < 0.9
           ? new THREE.Vector3(0, 0, 1)
@@ -2341,8 +2496,8 @@ export function ModelViewer({
           const angle = (step / 48) * Math.PI * 2;
           const candidate = center
             .clone()
-            .addScaledVector(radialU, Math.cos(angle) * boreGeometry.radius)
-            .addScaledVector(radialV, Math.sin(angle) * boreGeometry.radius);
+            .addScaledVector(radialU, Math.cos(angle) * boreRadius)
+            .addScaledVector(radialV, Math.sin(angle) * boreRadius);
           const ndc = candidate.clone().project(context.activeCamera);
           context.raycaster.setFromCamera(
             new THREE.Vector2(ndc.x, ndc.y),
@@ -2366,7 +2521,7 @@ export function ModelViewer({
             : -Infinity;
           if (
             visibleFace?.geometry?.surfaceType === 'cylinder' &&
-            (visibleFace.geometry.radius ?? 0) > boreGeometry.radius &&
+            (visibleFace.geometry.radius ?? 0) > boreRadius &&
             depthGap > largestDepthGap
           ) {
             farWall = candidate;
@@ -2374,44 +2529,204 @@ export function ModelViewer({
           }
         }
       }
-      if (!farWall) {
+      const projectedCenter = center.clone().project(context.activeCamera);
+      const centerRayHitsBody = bodyMesh
+        ? (() => {
+            context.raycaster.setFromCamera(
+              new THREE.Vector2(projectedCenter.x, projectedCenter.y),
+              context.activeCamera
+            );
+            return (
+              context.raycaster.intersectObject(bodyMesh, false).length > 0
+            );
+          })()
+        : false;
+      const fallbackWall = center
+        .clone()
+        .addScaledVector(radialU, boreRadius * Math.cos(Math.PI / 4))
+        .addScaledVector(radialV, boreRadius * Math.sin(Math.PI / 4));
+      const probePoint = farWall ?? (centerRayHitsBody ? fallbackWall : null);
+      if (!probePoint) {
         detail.resolve(null);
         return;
       }
 
+      let pickList:
+        | {
+            x: number;
+            y: number;
+            labels: string[];
+            topologyIds: string[];
+            kinds: ('face' | 'edge')[];
+          }
+        | undefined;
+      if (detail.includePickList && annulus) {
+        const rect = renderer.domElement.getBoundingClientRect();
+        const boreAndAnnulus = new Set([bore.topologyId, annulus.topologyId]);
+        const projected = new THREE.Vector3();
+        search: for (const mouthCenter of [start, end]) {
+          for (let step = 0; step < 64; step += 1) {
+            const angle = (step / 64) * Math.PI * 2;
+            projected
+              .copy(mouthCenter)
+              .addScaledVector(radialU, Math.cos(angle) * boreRadius)
+              .addScaledVector(radialV, Math.sin(angle) * boreRadius)
+              .project(context.activeCamera);
+            const projectedX = rect.left + ((projected.x + 1) / 2) * rect.width;
+            const projectedY = rect.top + ((1 - projected.y) / 2) * rect.height;
+            for (let dx = -3; dx <= 3; dx += 1) {
+              for (let dy = -3; dy <= 3; dy += 1) {
+                const clientX = Math.round(projectedX + dx);
+                const clientY = Math.round(projectedY + dy);
+                if (
+                  clientX <= rect.left ||
+                  clientX >= rect.right ||
+                  clientY <= rect.top ||
+                  clientY >= rect.bottom ||
+                  document.elementFromPoint(clientX, clientY) !==
+                    renderer.domElement
+                ) {
+                  continue;
+                }
+                const stack = picker
+                  .pickAll(new MouseEvent('mousemove', { clientX, clientY }))
+                  .filter(
+                    (
+                      candidate
+                    ): candidate is PickCandidate & {
+                      kind: 'face' | 'edge';
+                      selection: TopologySelection;
+                    } =>
+                      (candidate.kind === 'face' ||
+                        candidate.kind === 'edge') &&
+                      candidate.selection !== null &&
+                      Boolean(candidate.selection.topologyId)
+                  );
+                const stackIds = new Set(
+                  stack.map((candidate) => candidate.selection.topologyId)
+                );
+                if (
+                  [...boreAndAnnulus].some(
+                    (topologyId) => !stackIds.has(topologyId)
+                  )
+                ) {
+                  continue;
+                }
+                const labels = stack.flatMap((candidate) => {
+                  const owner = bodiesRef.current.find(
+                    (entry) => entry.bodyId === candidate.selection.bodyId
+                  );
+                  return owner
+                    ? [topologySelectionLabel(owner, candidate.selection)]
+                    : [];
+                });
+                if (labels.length !== stack.length) {
+                  continue;
+                }
+                pickList = {
+                  x: clientX,
+                  y: clientY,
+                  labels,
+                  topologyIds: stack.map(
+                    (candidate) => candidate.selection.topologyId ?? ''
+                  ),
+                  kinds: stack.map((candidate) => candidate.kind)
+                };
+                break search;
+              }
+            }
+          }
+        }
+      }
+
+      const outerRadial = context.activeCamera.position
+        .clone()
+        .sub(center)
+        .addScaledVector(
+          axis,
+          -context.activeCamera.position.clone().sub(center).dot(axis)
+        )
+        .normalize();
+      const point =
+        detail.surface === 'bore'
+          ? probePoint.clone()
+          : detail.surface === 'outer-wall' &&
+              target.geometry.radius !== undefined
+            ? center
+                .clone()
+                .addScaledVector(outerRadial, target.geometry.radius)
+            : new THREE.Vector3(
+                target.geometry.center.x,
+                target.geometry.center.y,
+                target.geometry.center.z
+              );
       const normal =
         detail.surface === 'bore'
-          ? center.clone().sub(farWall).normalize()
-          : new THREE.Vector3(
-              target.geometry.normal!.x,
-              target.geometry.normal!.y,
-              target.geometry.normal!.z
-            );
-      const point = new THREE.Vector3(
-        target.geometry.center.x,
-        target.geometry.center.y,
-        target.geometry.center.z
-      );
-      onSelectTopologyRef.current(
-        {
-          bodyId: body.bodyId,
+          ? center.clone().sub(point).normalize()
+          : detail.surface === 'outer-wall'
+            ? outerRadial
+            : new THREE.Vector3(
+                target.geometry.normal!.x,
+                target.geometry.normal!.y,
+                target.geometry.normal!.z
+              );
+      const topologySelection: TopologySelection = {
+        bodyId: body.bodyId,
+        kind: 'face',
+        topologyId: target.topologyId,
+        hash: target.hash
+      };
+      if (detail.interaction === 'clear') {
+        applyHover(null);
+        delete renderer.domElement.dataset.e2eHoveredFace;
+        onSelectTopologyRef.current(null, false);
+      } else if (detail.interaction === 'hover') {
+        applyHover({
           kind: 'face',
-          topologyId: target.topologyId,
-          hash: target.hash
-        },
-        false,
-        {
+          distance: 0,
+          hit: {
+            distance: 0,
+            point,
+            object: bodyMesh ?? object ?? bodyGroup
+          },
+          selection: topologySelection,
+          faceNormal: normal
+        });
+        renderer.domElement.dataset.e2eHoveredFace = target.topologyId;
+      } else if (detail.interaction !== 'inspect') {
+        delete renderer.domElement.dataset.e2eHoveredFace;
+        onSelectTopologyRef.current(topologySelection, false, {
           point: { x: point.x, y: point.y, z: point.z },
           normal: { x: normal.x, y: normal.y, z: normal.z }
-        }
-      );
+        });
+      }
 
-      const ndc = farWall.project(context.activeCamera);
+      const ndc = probePoint.clone().project(context.activeCamera);
       const rect = renderer.domElement.getBoundingClientRect();
       detail.resolve({
         x: ((ndc.x + 1) / 2) * rect.width,
         y: ((1 - ndc.y) / 2) * rect.height,
-        topologyId: target.topologyId
+        bodyId: body.bodyId,
+        topologyId: target.topologyId,
+        ...(pickList ? { pickList } : {}),
+        geometry: {
+          surfaceType: target.geometry.surfaceType,
+          ...(target.geometry.featureType
+            ? { featureType: target.geometry.featureType }
+            : {}),
+          ...(target.geometry.radius !== undefined
+            ? { radius: target.geometry.radius }
+            : {}),
+          ...(target.geometry.diameter !== undefined
+            ? { diameter: target.geometry.diameter }
+            : {}),
+          ...(target.geometry.axisStart
+            ? { axisStart: target.geometry.axisStart }
+            : {}),
+          ...(target.geometry.axisEnd
+            ? { axisEnd: target.geometry.axisEnd }
+            : {})
+        }
       });
     };
     /**
@@ -2772,7 +3087,9 @@ export function ModelViewer({
           const stack = picker
             .pickAll(new MouseEvent('mousemove', { clientX, clientY }))
             .filter(
-              (candidate): candidate is PickCandidate & {
+              (
+                candidate
+              ): candidate is PickCandidate & {
                 kind: 'face' | 'edge';
                 selection: TopologySelection;
               } =>
@@ -3278,6 +3595,12 @@ export function ModelViewer({
           delete renderer.domElement.dataset.e2eHandleDy;
           delete renderer.domElement.dataset.e2eHandlePixelsPerUnit;
           delete renderer.domElement.dataset.e2eOffsetDimensionVisible;
+          delete renderer.domElement.dataset.e2eChipAnchorX;
+          delete renderer.domElement.dataset.e2eChipAnchorY;
+          delete renderer.domElement.dataset.e2eChipAnchorWorldX;
+          delete renderer.domElement.dataset.e2eChipAnchorWorldY;
+          delete renderer.domElement.dataset.e2eChipAnchorWorldZ;
+          delete renderer.domElement.dataset.e2eChipAnchorRig;
         }
         return;
       }
@@ -3291,6 +3614,14 @@ export function ModelViewer({
         chip.hidden = true;
         radiusLabelChip.hidden = true;
         keypadAnchorRef.current?.(null);
+        if (E2E_CANVAS_HOOKS_ENABLED) {
+          delete renderer.domElement.dataset.e2eChipAnchorX;
+          delete renderer.domElement.dataset.e2eChipAnchorY;
+          delete renderer.domElement.dataset.e2eChipAnchorWorldX;
+          delete renderer.domElement.dataset.e2eChipAnchorWorldY;
+          delete renderer.domElement.dataset.e2eChipAnchorWorldZ;
+          delete renderer.domElement.dataset.e2eChipAnchorRig;
+        }
         return;
       }
       if (rig?.kind === 'offset-face') {
@@ -3309,6 +3640,14 @@ export function ModelViewer({
             x: Math.min(screen.x, inspectorLeft - 72)
           };
         }
+      }
+      if (e2eCanvasHooksEnabled && rig) {
+        renderer.domElement.dataset.e2eChipAnchorX = String(screen.x);
+        renderer.domElement.dataset.e2eChipAnchorY = String(screen.y);
+        renderer.domElement.dataset.e2eChipAnchorWorldX = String(anchor.x);
+        renderer.domElement.dataset.e2eChipAnchorWorldY = String(anchor.y);
+        renderer.domElement.dataset.e2eChipAnchorWorldZ = String(anchor.z);
+        renderer.domElement.dataset.e2eChipAnchorRig = rig.kind;
       }
       if (e2eCanvasHooksEnabled && rig?.kind === 'cylinder-radius') {
         const scale =
@@ -5808,6 +6147,13 @@ export function ModelViewer({
     context.dimensionLabels.clear();
     if (E2E_CANVAS_HOOKS_ENABLED) {
       delete context.renderer.domElement.dataset.e2eSelectedFace;
+      if (selectedEdges.length > 0) {
+        context.renderer.domElement.dataset.e2eSelectedEdges = selectedEdges
+          .map((selection) => selection.topologyId ?? '')
+          .join(',');
+      } else {
+        delete context.renderer.domElement.dataset.e2eSelectedEdges;
+      }
       if (previewFaceHighlights.length > 0) {
         context.renderer.domElement.dataset.e2ePreviewBlendCount = String(
           previewFaceHighlights.length
