@@ -224,6 +224,13 @@ export const KEYBOARD_CONTROL_GROUPS = [
         detail: 'Steps through Any, Body, Face, Edge, and Sketch.'
       },
       {
+        id: 'select-other-list',
+        keys: ['Alt+↓'],
+        action: 'List stacked targets',
+        detail:
+          'Opens the ordered targets under the last viewport pointer without advancing click cycling.'
+      },
+      {
         id: 'delete-selection',
         keys: ['Delete', 'Backspace'],
         action: 'Delete the current selection',
@@ -409,8 +416,9 @@ export const POINTER_CONTROL_GROUPS = [
       {
         id: 'context-menu',
         keys: ['Right-click'],
-        action: 'Open the context menu',
-        detail: 'Shows actions for the topology under the pointer.'
+        action: 'Select other or open the context menu',
+        detail:
+          'Lists stacked topology under the pointer; a single target opens its actions.'
       },
       {
         id: 'drag-handle',
