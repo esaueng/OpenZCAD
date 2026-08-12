@@ -2,8 +2,10 @@ import type {
   BodyRepresentation,
   EdgeTopology,
   FaceTopology,
+  TopologySelection,
   Vector3
 } from '@openzcad/shared';
+import { GEOMETRY_LINEAR_TOLERANCE } from '@openzcad/geometry';
 import { formatNumber } from './model';
 import { resolveEdge, resolveFace } from './topologyResolution';
 
@@ -91,6 +93,14 @@ export function faceLabel(
   const { face, index } = match;
   const geometry = face.geometry;
   if (
+    geometry?.featureType === 'blend' &&
+    geometry.blendRadius !== undefined &&
+    Number.isFinite(geometry.blendRadius) &&
+    geometry.blendRadius > GEOMETRY_LINEAR_TOLERANCE
+  ) {
+    return `Blend face R${formatNumber(geometry.blendRadius)}`;
+  }
+  if (
     geometry?.featureType === 'through-hole' &&
     geometry.diameter !== undefined
   ) {
@@ -118,7 +128,34 @@ export function edgeLabel(
   topologyId?: string
 ): string {
   const match = findEdge(body, hash, topologyId);
+  const radius = match?.edge.curve?.circle?.radius;
+  if (
+    radius !== undefined &&
+    Number.isFinite(radius) &&
+    radius > GEOMETRY_LINEAR_TOLERANCE
+  ) {
+    return `Edge R${formatNumber(radius)}`;
+  }
   return match ? `Edge ${match.index + 1}` : 'Edge';
+}
+
+/**
+ * One complete pick name for the measurement tape, selection summaries, and
+ * select-other list. Keeping the body prefix here prevents those surfaces
+ * from growing subtly different naming vocabularies.
+ */
+export function topologySelectionLabel(
+  body: BodyRepresentation | undefined,
+  selection: Pick<TopologySelection, 'kind' | 'hash' | 'topologyId'>
+): string {
+  if (selection.kind === 'body') {
+    return body?.name ?? 'Body';
+  }
+  const entity =
+    selection.kind === 'edge'
+      ? edgeLabel(body, selection.hash, selection.topologyId)
+      : faceLabel(body, selection.hash, selection.topologyId);
+  return body ? `${body.name} · ${entity}` : entity;
 }
 
 /**

@@ -21,8 +21,9 @@
     "run_worker_first": ["/api/*"]
   },
   "vars": {
-    "ENVIRONMENT": "development",
-    "AUTH_MODE": "development",
+    "ENVIRONMENT": "beta",
+    "AUTH_MODE": "email-code",
+    "PRODUCTION_GUARD": "enabled",
     "DESKTOP_AUTH_ENABLED": "true",
     "AI_PROVIDER": "openrouter",
     "AI_MODEL": "openai/gpt-5.6-sol",
