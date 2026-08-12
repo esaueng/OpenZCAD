@@ -5,10 +5,12 @@ import type {
   FaceWitnessV1,
   FeatureId
 } from '@openzcad/shared';
+import type { FaceEvolutionPayloadV1 } from 'brepkit-wasm';
 import { describe, expect, it } from 'vitest';
 
 import {
   createBrepKitSemanticLineage,
+  createBrepKitModifierEvolutionLineage,
   decodeVerifiedBrepKitEvolution,
   propagateBrepKitRigidTransformLineage,
   transformBrepKitWitness,
@@ -17,6 +19,7 @@ import {
 import { topologyHashOfWitness } from './topology-lineage';
 
 const FEATURE_ID = 'feature_brepkit' as FeatureId;
+const FILLET_FEATURE_ID = 'feature_fillet' as FeatureId;
 
 const FACE: FaceWitnessV1 = {
   surfaceType: 'plane',
@@ -39,6 +42,29 @@ const EDGE: EdgeWitnessV1 = {
     [10, 0, 0]
   ],
   midpoint: [5, 0, 0]
+};
+
+const OPPOSITE_FACE: FaceWitnessV1 = {
+  ...FACE,
+  centroid: [5, 5, 10],
+  analytic: {
+    kind: 'plane',
+    normal: [0, 0, 1_000_000_000],
+    offset: 10
+  }
+};
+
+const BLEND_FACE: FaceWitnessV1 = {
+  surfaceType: 'cylinder',
+  perimeter: 24,
+  centroid: [5, 0, 5],
+  analytic: {
+    kind: 'cylinder',
+    axis: [0, 0, 1_000_000_000],
+    axisFoot: [5, 0, 0],
+    radius: 2
+  },
+  closure: { u: 'closed', v: 'open' }
 };
 
 const TRANSLATION = [
@@ -104,6 +130,100 @@ describe('BrepKit semantic lineage', () => {
     expect(
       state.diagnostics.every(({ code }) => code === 'ambiguous-semantic-role')
     ).toBe(true);
+  });
+});
+
+describe('BrepKit modifier evolution lineage', () => {
+  const payload = (generatedResults: number[]): FaceEvolutionPayloadV1 => ({
+    schemaVersion: 1,
+    source: { solid: 50, faces: [1, 2] },
+    result: { solid: 60, faces: [11, 12, ...generatedResults] },
+    evolution: {
+      provenance: 'construction',
+      modified: [
+        { source: 1, results: [11] },
+        { source: 2, results: [12] }
+      ],
+      generated: [
+        { source: 1, results: generatedResults },
+        { source: 2, results: generatedResults }
+      ],
+      deleted: [],
+      unresolvedResults: [],
+      unresolvedSources: []
+    }
+  });
+
+  const sourceLineage = createBrepKitSemanticLineage(FEATURE_ID, 'primitive', [
+    {
+      handle: 1,
+      kind: 'face',
+      lineageName: 'primitive.box.face.z-min',
+      witness: FACE
+    },
+    {
+      handle: 2,
+      kind: 'face',
+      lineageName: 'primitive.box.face.z-max',
+      witness: OPPOSITE_FACE
+    }
+  ]);
+
+  const input = (generatedResults: number[]) => ({
+    producingFeatureId: FILLET_FEATURE_ID,
+    operation: 'fillet' as const,
+    payload: payload(generatedResults),
+    sourceSolid: 50,
+    resultSolid: 60,
+    sourceCandidates: [
+      { handle: 1, kind: 'face' as const, witness: FACE },
+      { handle: 2, kind: 'face' as const, witness: OPPOSITE_FACE }
+    ],
+    resultCandidates: [
+      { handle: 11, kind: 'face' as const, witness: FACE },
+      { handle: 12, kind: 'face' as const, witness: OPPOSITE_FACE },
+      ...generatedResults.map((handle) => ({
+        handle,
+        kind: 'face' as const,
+        witness: BLEND_FACE
+      }))
+    ],
+    sourceLineage,
+    generatedBlendFaces: new Set(generatedResults)
+  });
+
+  it('attributes a unique generated band to the modifier feature', () => {
+    const result = createBrepKitModifierEvolutionLineage(input([13]));
+    const reference = result.faceReferences.get(13);
+    expect(reference?.producingFeatureId).toBe(FILLET_FEATURE_ID);
+    expect(reference?.lineageName).toContain(
+      'primitive.box.face.z-max|primitive.box.face.z-min'
+    );
+    expect(result.faceReferences.has(11)).toBe(false);
+    expect(result.faceReferences.has(12)).toBe(false);
+  });
+
+  it('rejects duplicate generated geometry instead of guessing a band', () => {
+    const result = createBrepKitModifierEvolutionLineage(input([13, 14]));
+    expect(result.faceReferences.has(13)).toBe(false);
+    expect(result.faceReferences.has(14)).toBe(false);
+    expect(result.diagnostics).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ code: 'ambiguous-semantic-role' })
+      ])
+    );
+  });
+
+  it('falls back cleanly when the payload does not name the production result', () => {
+    const mismatched = input([13]);
+    const result = createBrepKitModifierEvolutionLineage({
+      ...mismatched,
+      resultSolid: 61
+    });
+    expect(result.faceReferences.size).toBe(0);
+    expect(result.diagnostics).toEqual([
+      expect.objectContaining({ code: 'hash-only' })
+    ]);
   });
 });
 
