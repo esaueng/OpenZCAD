@@ -190,6 +190,15 @@
   background: rgba(14, 30, 48, 0.98);
 }
 
+.handle-value-chip[data-state='warning'] {
+  color: #fff4dc;
+  background: color-mix(in srgb, var(--color-warning) 18%, #08121e);
+  border-color: var(--color-warning);
+  box-shadow:
+    0 0 0 1px color-mix(in srgb, var(--color-warning) 35%, transparent),
+    0 8px 22px rgba(0, 0, 0, 0.35);
+}
+
 /* Dimension-line variant: a light pill centred on the radius callout line,
    styled like a drawing annotation rather than a dark tooltip. */
 .handle-value-chip[data-variant='dimension'] {
@@ -267,6 +276,13 @@
   box-shadow: 0 18px 44px rgba(0, 0, 0, 0.5);
 }
 
+.numeric-keypad[data-state='warning'] {
+  border-color: var(--color-warning);
+  box-shadow:
+    0 0 0 1px color-mix(in srgb, var(--color-warning) 28%, transparent),
+    0 18px 44px rgba(0, 0, 0, 0.5);
+}
+
 .keypad-value-row {
   display: flex;
   gap: 8px;
@@ -301,6 +317,12 @@
   font-family: var(--font-mono);
   font-size: var(--fs-xs);
   text-align: right;
+}
+
+.keypad-warning {
+  color: var(--color-warning);
+  font-size: var(--fs-xs);
+  line-height: 1.35;
 }
 
 .keypad-units {

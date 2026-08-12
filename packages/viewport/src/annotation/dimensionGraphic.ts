@@ -71,6 +71,8 @@ export interface DimensionGraphic {
    * arrowheads at their pre-zoom size.
    */
   update(start: THREE.Vector3, end: THREE.Vector3, pixelScale: number): void;
+  /** Changes linework and arrowheads in place without rebuilding geometry. */
+  setColor(color: THREE.ColorRepresentation): void;
   /** A point on the dimension line, for hanging the value label from. */
   labelAnchor(): THREE.Vector3;
   dispose(): void;
@@ -257,6 +259,13 @@ export function createDimensionGraphic(
       // than the midpoint: dead centre collides with the dimension line's own
       // dash pattern more often than not.
       anchor.copy(start).addScaledVector(axis, length * 0.45);
+    },
+    setColor(nextColor) {
+      line.material.color.set(nextColor);
+      arrowMaterial.color.set(nextColor);
+      for (const witness of witnesses) {
+        witness.material.color.set(nextColor);
+      }
     },
     labelAnchor() {
       return anchor.clone();
