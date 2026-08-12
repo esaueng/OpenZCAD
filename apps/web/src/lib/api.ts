@@ -71,6 +71,18 @@ export class ApiError extends Error {
   }
 }
 
+export const PROJECT_DOCUMENT_UNAVAILABLE_CODE = 'PROJECT_DOCUMENT_UNAVAILABLE';
+
+export function isProjectDocumentUnavailableError(
+  error: unknown
+): error is ApiError {
+  return (
+    error instanceof ApiError &&
+    error.status === 503 &&
+    error.code === PROJECT_DOCUMENT_UNAVAILABLE_CODE
+  );
+}
+
 async function requestJson<T>(
   input: RequestInfo,
   init?: RequestInit

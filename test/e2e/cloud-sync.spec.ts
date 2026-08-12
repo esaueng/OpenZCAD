@@ -25,6 +25,8 @@ class SharedCloudProjectApi {
   project: ProjectDocument | null = null;
   measurement: { revision: number; record: StoredMeasurementRecord } | null =
     null;
+  documentUnavailable = false;
+  projectLoadAttempts = 0;
 
   async install(page: Page): Promise<void> {
     const settings = structuredClone(DEFAULT_APP_SETTINGS);
@@ -201,6 +203,17 @@ class SharedCloudProjectApi {
         return route.fulfill({
           status: 404,
           json: { error: `Project ${projectId} not found.` }
+        });
+      }
+      this.projectLoadAttempts += 1;
+      if (this.documentUnavailable) {
+        return route.fulfill({
+          status: 503,
+          json: {
+            error:
+              'The account copy of this project is temporarily unavailable. Your work remains saved on this device.',
+            code: 'PROJECT_DOCUMENT_UNAVAILABLE'
+          }
         });
       }
       return route.fulfill({ json: this.project });
@@ -431,6 +444,56 @@ test('does not write to the account when a project is only reopened', async ({
   // adopted document would have been sent by now.
   await page.waitForTimeout(3000);
   expect(documentWrites).toBe(0);
+});
+
+test('keeps editing locally while the account document needs repair', async ({
+  page
+}) => {
+  const api = new SharedCloudProjectApi();
+  await api.install(page);
+
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('Repair Fixture');
+  await page.getByRole('button', { name: 'Create project' }).click();
+  await expect(page.getByRole('button', { name: 'Saved' })).toBeVisible({
+    timeout: 10_000
+  });
+
+  api.documentUnavailable = true;
+  await page.reload();
+  await expect(page.getByRole('button', { name: 'Repair needed' })).toBeVisible(
+    { timeout: 10_000 }
+  );
+  await expect(
+    page.getByRole('group', { name: 'Workspace status', exact: true })
+  ).toContainText('syncAccount repair needed');
+  await expect(
+    page.getByRole('button', { name: 'Rename project' })
+  ).toContainText('Repair Fixture');
+
+  await renameProject(page, 'Repair Fixture edited locally');
+  await expect
+    .poll(() => storedProjectNames(page), { timeout: 10_000 })
+    .toContain('Repair Fixture edited locally');
+  await expect(page.getByRole('button', { name: 'Repair needed' })).toBeVisible(
+    { timeout: 10_000 }
+  );
+
+  const attemptsBeforeRetry = api.projectLoadAttempts;
+  await page.getByRole('button', { name: 'Repair needed' }).click();
+  await expect(
+    page.getByRole('button', { name: 'Repair needed' })
+  ).toBeVisible();
+  expect(api.projectLoadAttempts).toBe(attemptsBeforeRetry + 1);
+
+  api.documentUnavailable = false;
+  await page.getByRole('button', { name: 'Repair needed' }).click();
+  await expect
+    .poll(() => api.project?.name, { timeout: 10_000 })
+    .toBe('Repair Fixture edited locally');
+  await expect(page.getByRole('button', { name: 'Saved' })).toBeVisible({
+    timeout: 10_000
+  });
 });
 
 test('syncs View measurements to a second device without changing the CAD document', async ({
