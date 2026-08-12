@@ -347,6 +347,7 @@
  * browser, and only the user can trigger the re-archive.
  */
 .save-state.is-conflict,
+.save-state.is-repair,
 .save-state.is-refused,
 .save-state.is-local-source {
   color: var(--color-warning);
