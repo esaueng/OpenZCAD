@@ -638,17 +638,19 @@ test('keeps a source circle stable over its coincident extrude edge', async ({
       (edge) => edge.visible && edge.depthTest && !edge.depthWrite
     )
   ).toBe(true);
+  const overlayEdges = renderPolicy.bodyEdges.filter(
+    (edge) => edge.name !== 'body-edge'
+  );
   expect(
-    renderPolicy.bodyEdges
-      .filter((edge) => edge.name !== 'body-edge')
-      .every(
-        (edge) =>
-          !edge.visible &&
-          edge.depthTest &&
-          !edge.depthWrite &&
-          (edge.name === 'body-edge-hover' ||
-            edge.name === 'body-edge-selected')
-      )
+    overlayEdges.every(
+      (edge) =>
+        edge.depthTest &&
+        !edge.depthWrite &&
+        (edge.name === 'body-edge-hover' ||
+          edge.name === 'body-edge-selected' ||
+          edge.name === 'body-face-boundary-selected')
+    ),
+    JSON.stringify(overlayEdges, null, 2)
   ).toBe(true);
   const sketchCurves = renderPolicy.sketchLines.filter(
     (line) => line.name === 'sketch-curve'
