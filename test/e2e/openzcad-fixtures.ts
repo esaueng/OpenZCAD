@@ -218,9 +218,54 @@ export async function stubApi(
   await page.route('**/api/exports', (route) =>
     route.fulfill({ status: 404, json: { error: 'stub' } })
   );
-  await page.route('**/api/uploads', (route) =>
-    route.fulfill({ status: 404, json: { error: 'stub' } })
+  // Long geometry specs outlive the delayed thumbnail publisher. Complete
+  // only that upload so its preview-server 404 cannot mask console failures;
+  // import and export archive uploads still exercise the unavailable path.
+  const thumbnailUploadSessionId = 'upload_thumbnail_e2e';
+  const thumbnailArtifactId = 'artifact_thumbnail_e2e';
+  await page.route('**/api/uploads', (route) => {
+    const payload = route.request().postDataJSON() as {
+      projectId: string;
+      fileName: string;
+      contentType: string;
+      kind: string;
+      metadata?: Record<string, string | number | boolean>;
+    };
+    if (payload.kind !== 'thumbnail') {
+      return route.fulfill({ status: 404, json: { error: 'stub' } });
+    }
+    return route.fulfill({
+      status: 201,
+      json: {
+        session: {
+          uploadSessionId: thumbnailUploadSessionId,
+          artifactId: thumbnailArtifactId,
+          projectId: payload.projectId,
+          objectKey: `${payload.projectId}/uploads/thumbnail.webp`,
+          uploadUrl: `/api/uploads/${thumbnailUploadSessionId}/content`,
+          expiresAt: '2099-01-01T00:00:00.000Z',
+          fileName: payload.fileName,
+          contentType: payload.contentType,
+          kind: payload.kind,
+          metadata: payload.metadata ?? {}
+        }
+      }
+    });
+  });
+  await page.route(
+    `**/api/uploads/${thumbnailUploadSessionId}/content`,
+    (route) => route.fulfill({ status: 204, body: '' })
   );
+  await page.route('**/api/artifacts/finalize', (route) => {
+    const payload = route.request().postDataJSON() as {
+      uploadSessionId?: string;
+      artifactId?: string;
+    };
+    return payload.uploadSessionId === thumbnailUploadSessionId &&
+      payload.artifactId === thumbnailArtifactId
+      ? route.fulfill({ json: { artifactId: thumbnailArtifactId } })
+      : route.fulfill({ status: 404, json: { error: 'stub' } });
+  });
 }
 
 export async function stubAnonymousApi(page: Page) {
