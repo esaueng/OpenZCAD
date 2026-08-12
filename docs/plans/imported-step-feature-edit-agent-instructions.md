@@ -25,9 +25,9 @@ gates, and the traps specific to these codebases.
 
 ## Execution order
 
-**A → K1 → K2 → B → C → E, with D floating any time after A.** Do not start a phase
-until the previous one's gate passes and its PR is merged. Phase A and Phase K1 may run
-in parallel (different repos, no shared seams). Phase C requires the Phase B pin bump to
+**K1 → K2 → B → C → E, with D floating independently.** Phase A is complete on
+OpenZCAD `main`. Do not start a phase until the previous one's gate passes and its PR is
+merged. Phase C requires the Phase B pin bump to
 be merged; feature-detect the new kernel bindings anyway so a stale kernel degrades to
 today's read-only behavior instead of crashing.
 
@@ -69,7 +69,9 @@ Common OpenZCAD gate: `pnpm lint`, `pnpm typecheck`, `npx vitest run`, `pnpm tes
 them in the PR description. Common brepkit gate: `cargo fmt --all -- --check`,
 `cargo clippy --all-targets --all-features -- -D warnings`, `cargo test` green.
 
-### Phase A — evolution-payload fillet attribution (OpenZCAD)
+### Phase A — evolution-payload fillet attribution (OpenZCAD, complete)
+- Landed through #305 and #307. Treat the current implementation and tests as the
+  baseline; do not repeat this phase.
 - Work in `packages/kernel-adapter/src/exact.ts` fillet/chamfer replay arm
   (`:5741-5822`) and the lineage modules (`brepkit-lineage.ts`, `topology-lineage.ts`).
   The wasm bindings `filletWithEvolution`/`chamferWithEvolution` already exist in the

@@ -1,6 +1,6 @@
 # Imported STEP Feature Editing Plan
 
-Status: planned, not started
+Status: in progress; Phase A and the initial read-only imported-blend UX are complete
 Repos involved: `esaueng/brepkit` (kernel operation) and `esaueng/OpenZCAD` (schema,
 adapter, UI). This is the first plan in this series that REQUIRES kernel PRs.
 Spec: importing a history-less STEP body must give the same select → see current value →
@@ -62,10 +62,11 @@ already exists; the gaps are one commit path and one kernel operation.
    be removed only when every other face on the body is planar. Re-filleting an existing
    blend is not a kernel concept at all (the band's G1 contact edges are filtered out of
    fillet selections by design).
-3. **In-app fillets are only select-editable on cylinder-rooted chains.** Fillet replay
-   publishes hash-only lineage; semantic `producingFeatureId` is re-derived only via
-   `modifierChainRootsAtCylinder` + `rederiveCylinderModifierLineage`
-   (`exact.ts:2471-2600`). A fillet on a box carries no reference → no edit affordance.
+3. **In-app fillet attribution is complete.** Phase A landed through #305 and #307:
+   fillet replay now consumes evolution payloads while retaining the cylinder-rooted
+   lineage path as a fallback. Imported blends still intentionally have no native
+   producing feature and remain read-only except for the existing all-planar removal
+   path.
    The e2e suite happens to build the one working shape.
 4. **Recognition is dead code.** Neither `recognizeImportedFeature` (app) nor the
    kernel's `recognizeFeatures` reaches any UI. Imported holes/pockets/counterbores show
@@ -177,7 +178,7 @@ tolerances.
 
 ## Phases
 
-### Phase A — In-app fillet attribution via evolution payloads (OpenZCAD only)
+### Phase A — In-app fillet attribution via evolution payloads (OpenZCAD only, complete)
 
 Implements D4. Independent of everything else; ship first.
 
