@@ -647,8 +647,11 @@ test('keeps a source circle stable over its coincident extrude edge', async ({
         edge.depthTest &&
         !edge.depthWrite &&
         (edge.name === 'body-edge-hover' ||
+          edge.name === 'body-edge-hover-hidden' ||
           edge.name === 'body-edge-selected' ||
-          edge.name === 'body-face-boundary-selected')
+          edge.name === 'body-edge-selected-hidden' ||
+          edge.name === 'body-face-boundary-selected' ||
+          edge.name === 'body-face-boundary-selected-hidden')
     ),
     JSON.stringify(overlayEdges, null, 2)
   ).toBe(true);
