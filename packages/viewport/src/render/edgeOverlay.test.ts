@@ -133,7 +133,15 @@ describe('BodyEdgeOverlay', () => {
       overlay.setSelected([selection('edge-a'), selection('edge-b')])
     ).toBe(true);
     expect(overlay.selectedEdges.geometry.instanceCount).toBe(3);
+    expect(overlay.selectedHiddenEdges.geometry.instanceCount).toBe(3);
     expect(overlay.selectedEdges.visible).toBe(true);
+    expect(overlay.selectedHiddenEdges.visible).toBe(true);
+    expect(overlay.selectedHiddenEdges.material.depthFunc).toBe(
+      THREE.GreaterDepth
+    );
+    expect(overlay.selectedHiddenEdges.material.opacity).toBeLessThan(
+      overlay.selectedEdges.material.opacity
+    );
     expect(overlay.idleEdges.geometry).toBe(idleGeometry);
     expect(overlay.idleEdges.material).toBe(idleMaterial);
     expect(overlay.selectedEdges.geometry).toBe(selectedGeometry);
@@ -163,11 +171,13 @@ describe('BodyEdgeOverlay', () => {
 
     overlay.setHovered(owner);
     expect(overlay.hoverEdges.visible).toBe(true);
+    expect(overlay.hoverHiddenEdges.visible).toBe(true);
     expect(overlay.hoverEdges.geometry.instanceCount).toBe(2);
     expect(overlay.hoverEdges.geometry).toBe(hoverGeometry);
 
     overlay.setSelected([selection('edge-a')]);
     expect(overlay.hoverEdges.visible).toBe(false);
+    expect(overlay.hoverHiddenEdges.visible).toBe(false);
 
     overlay.setSelected([]);
     expect(overlay.hoverEdges.visible).toBe(true);
@@ -192,6 +202,7 @@ describe('BodyEdgeOverlay', () => {
     overlay.setDisplayMode('shaded');
 
     expect(overlay.selectedFaceBoundaryEdges.visible).toBe(true);
+    expect(overlay.selectedFaceBoundaryHiddenEdges.visible).toBe(true);
     expect(overlay.selectedFaceBoundaryEdges.geometry.instanceCount).toBe(2);
     expect(
       overlay.selectedFaceBoundaryEdges.material.linewidth
@@ -231,6 +242,21 @@ describe('BodyEdgeOverlay', () => {
     expect(overlay.idleEdges.visible).toBe(true);
   });
 
+  it('suppresses only hidden passes for receded sketch solids', () => {
+    const overlay = makeOverlay();
+    overlay.setSelected([selection('edge-b')]);
+    overlay.setHovered(overlay.ownerAtSegment(0));
+    overlay.setSelectedFaceBoundary(101);
+
+    expect(overlay.setXrayEnabled(false)).toBe(true);
+    expect(overlay.selectedEdges.visible).toBe(true);
+    expect(overlay.hoverEdges.visible).toBe(true);
+    expect(overlay.selectedFaceBoundaryEdges.visible).toBe(true);
+    expect(overlay.selectedHiddenEdges.visible).toBe(false);
+    expect(overlay.hoverHiddenEdges.visible).toBe(false);
+    expect(overlay.selectedFaceBoundaryHiddenEdges.visible).toBe(false);
+  });
+
   it('updates every stable material resolution together', () => {
     const overlay = makeOverlay();
     overlay.setResolution({ width: 1440, height: 900 });
@@ -238,8 +264,11 @@ describe('BodyEdgeOverlay', () => {
     for (const line of [
       overlay.idleEdges,
       overlay.hoverEdges,
+      overlay.hoverHiddenEdges,
       overlay.selectedEdges,
-      overlay.selectedFaceBoundaryEdges
+      overlay.selectedHiddenEdges,
+      overlay.selectedFaceBoundaryEdges,
+      overlay.selectedFaceBoundaryHiddenEdges
     ]) {
       expect(line.material.resolution.x).toBe(1440);
       expect(line.material.resolution.y).toBe(900);

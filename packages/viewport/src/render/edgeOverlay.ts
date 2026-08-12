@@ -50,6 +50,7 @@ export interface BatchedEdgeTarget {
 const EMPTY_SEGMENT = [0, 0, 0, 0, 0, 0] as const;
 const FACE_BOUNDARY_SELECTED_COLOR = 0xc7ebff;
 const FACE_BOUNDARY_SELECTED_WIDTH = 6;
+const HIDDEN_EDGE_OPACITY = 0.34;
 
 function edgeKey(owner: Pick<EdgeSegmentOwner, 'bodyId' | 'topologyId'>) {
   return `${owner.bodyId}:${owner.topologyId}`;
@@ -111,8 +112,11 @@ function sameKeys(left: ReadonlySet<string>, right: ReadonlySet<string>) {
 export class BodyEdgeOverlay extends THREE.Group {
   readonly idleEdges: LineSegments2;
   readonly hoverEdges: LineSegments2;
+  readonly hoverHiddenEdges: LineSegments2;
   readonly selectedEdges: LineSegments2;
+  readonly selectedHiddenEdges: LineSegments2;
   readonly selectedFaceBoundaryEdges: LineSegments2;
+  readonly selectedFaceBoundaryHiddenEdges: LineSegments2;
   /** Seam-only fallback so an all-seam body still draws in wireframe. */
   readonly seamEdges: LineSegments2 | null;
   /** Raycast segment index to exact topology identity. */
@@ -125,6 +129,7 @@ export class BodyEdgeOverlay extends THREE.Group {
   private hoveredKeys = new Set<string>();
   private selectedFaceBoundaryKeys = new Set<string>();
   private displayMode: DisplayMode = 'shaded-edges';
+  private xrayEnabled = true;
 
   constructor(
     body: Pick<BodyRepresentation, 'bodyId' | 'topology'>,
@@ -200,6 +205,15 @@ export class BodyEdgeOverlay extends THREE.Group {
       Math.max(EMPTY_SEGMENT.length, idlePositions.length),
       resolution
     );
+    this.hoverHiddenEdges = this.createOverlay(
+      'body-edge-hover-hidden',
+      EDGE_HOVER_COLOR,
+      EDGE_HOVER_WIDTH,
+      VIEWPORT_RENDER_ORDER.HOVER_HIGHLIGHT - 1,
+      Math.max(EMPTY_SEGMENT.length, idlePositions.length),
+      resolution,
+      { depthFunc: THREE.GreaterDepth, opacity: HIDDEN_EDGE_OPACITY }
+    );
     this.selectedEdges = this.createOverlay(
       'body-edge-selected',
       EDGE_SELECTED_COLOR,
@@ -208,6 +222,15 @@ export class BodyEdgeOverlay extends THREE.Group {
       Math.max(EMPTY_SEGMENT.length, idlePositions.length),
       resolution
     );
+    this.selectedHiddenEdges = this.createOverlay(
+      'body-edge-selected-hidden',
+      EDGE_SELECTED_COLOR,
+      EDGE_SELECTED_WIDTH,
+      VIEWPORT_RENDER_ORDER.SELECTED_GEOMETRY - 1,
+      Math.max(EMPTY_SEGMENT.length, idlePositions.length),
+      resolution,
+      { depthFunc: THREE.GreaterDepth, opacity: HIDDEN_EDGE_OPACITY }
+    );
     this.selectedFaceBoundaryEdges = this.createOverlay(
       'body-face-boundary-selected',
       FACE_BOUNDARY_SELECTED_COLOR,
@@ -215,6 +238,15 @@ export class BodyEdgeOverlay extends THREE.Group {
       VIEWPORT_RENDER_ORDER.SELECTED_GEOMETRY,
       Math.max(EMPTY_SEGMENT.length, idlePositions.length),
       resolution
+    );
+    this.selectedFaceBoundaryHiddenEdges = this.createOverlay(
+      'body-face-boundary-selected-hidden',
+      FACE_BOUNDARY_SELECTED_COLOR,
+      FACE_BOUNDARY_SELECTED_WIDTH,
+      VIEWPORT_RENDER_ORDER.SELECTED_GEOMETRY - 1,
+      Math.max(EMPTY_SEGMENT.length, idlePositions.length),
+      resolution,
+      { depthFunc: THREE.GreaterDepth, opacity: HIDDEN_EDGE_OPACITY }
     );
     // Only built where it is the difference between a wireframe and an empty
     // patch of grid. It is display-only: not pickable, never selected, and
@@ -239,8 +271,11 @@ export class BodyEdgeOverlay extends THREE.Group {
     }
     this.add(
       this.idleEdges,
+      this.hoverHiddenEdges,
       this.hoverEdges,
+      this.selectedHiddenEdges,
       this.selectedEdges,
+      this.selectedFaceBoundaryHiddenEdges,
       this.selectedFaceBoundaryEdges
     );
   }
@@ -251,14 +286,18 @@ export class BodyEdgeOverlay extends THREE.Group {
     linewidth: number,
     renderOrder: number,
     positionCapacity: number,
-    resolution?: FatLineResolution
+    resolution?: FatLineResolution,
+    options: { depthFunc?: THREE.DepthModes; opacity?: number } = {}
   ) {
     const overlay = createFatLineSegments(new Array(positionCapacity).fill(0), {
       color,
       linewidth,
-      opacity: 1,
+      opacity: options.opacity ?? 1,
       resolution
     });
+    if (options.depthFunc !== undefined) {
+      overlay.material.depthFunc = options.depthFunc;
+    }
     overlay.name = name;
     overlay.visible = false;
     overlay.renderOrder = renderOrder;
@@ -296,6 +335,7 @@ export class BodyEdgeOverlay extends THREE.Group {
       .filter(([key]) => nextKeys.has(key))
       .flatMap(([, entry]) => entry.positions);
     replacePositions(this.selectedEdges, positions);
+    replacePositions(this.selectedHiddenEdges, positions);
     this.refreshHoveredPositions();
     this.refreshVisibility();
     return true;
@@ -343,6 +383,17 @@ export class BodyEdgeOverlay extends THREE.Group {
       .filter(([key]) => nextKeys.has(key))
       .flatMap(([, entry]) => entry.positions);
     replacePositions(this.selectedFaceBoundaryEdges, positions);
+    replacePositions(this.selectedFaceBoundaryHiddenEdges, positions);
+    this.refreshVisibility();
+    return true;
+  }
+
+  /** Avoid x-ray ambiguity while sketch mode intentionally recedes solids. */
+  setXrayEnabled(enabled: boolean) {
+    if (this.xrayEnabled === enabled) {
+      return false;
+    }
+    this.xrayEnabled = enabled;
     this.refreshVisibility();
     return true;
   }
@@ -353,8 +404,11 @@ export class BodyEdgeOverlay extends THREE.Group {
     for (const line of [
       this.idleEdges,
       this.hoverEdges,
+      this.hoverHiddenEdges,
       this.selectedEdges,
-      this.selectedFaceBoundaryEdges
+      this.selectedHiddenEdges,
+      this.selectedFaceBoundaryEdges,
+      this.selectedFaceBoundaryHiddenEdges
     ]) {
       line.userData.displayMode = mode;
     }
@@ -371,8 +425,11 @@ export class BodyEdgeOverlay extends THREE.Group {
     for (const line of [
       this.idleEdges,
       this.hoverEdges,
+      this.hoverHiddenEdges,
       this.selectedEdges,
+      this.selectedHiddenEdges,
       this.selectedFaceBoundaryEdges,
+      this.selectedFaceBoundaryHiddenEdges,
       ...(this.seamEdges ? [this.seamEdges] : [])
     ]) {
       line.material.resolution.set(
@@ -389,6 +446,7 @@ export class BodyEdgeOverlay extends THREE.Group {
       )
       .flatMap(([, entry]) => entry.positions);
     replacePositions(this.hoverEdges, positions);
+    replacePositions(this.hoverHiddenEdges, positions);
   }
 
   private refreshVisibility() {
@@ -400,10 +458,18 @@ export class BodyEdgeOverlay extends THREE.Group {
     }
     this.idleEdges.visible = showEdges && this.ownershipBySegment.length > 0;
     this.selectedEdges.visible = showEdges && this.selectedKeys.size > 0;
+    this.selectedHiddenEdges.visible =
+      this.xrayEnabled && showEdges && this.selectedKeys.size > 0;
     this.hoverEdges.visible =
       showEdges && this.hoverEdges.geometry.instanceCount > 0;
+    this.hoverHiddenEdges.visible =
+      this.xrayEnabled &&
+      showEdges &&
+      this.hoverHiddenEdges.geometry.instanceCount > 0;
     this.selectedFaceBoundaryEdges.visible =
       this.selectedFaceBoundaryKeys.size > 0;
+    this.selectedFaceBoundaryHiddenEdges.visible =
+      this.xrayEnabled && this.selectedFaceBoundaryKeys.size > 0;
   }
 }
 

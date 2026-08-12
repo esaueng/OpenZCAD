@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { Line2 } from 'three/examples/jsm/lines/Line2.js';
 import { LineGeometry } from 'three/examples/jsm/lines/LineGeometry.js';
 import { LineMaterial } from 'three/examples/jsm/lines/LineMaterial.js';
+import type { FatLineResolution } from '../render/scene';
 
 /**
  * A drawing's dimension, drawn in the scene.
@@ -70,19 +71,35 @@ export interface DimensionGraphic {
   dispose(): void;
 }
 
-function dimensionMaterial(): LineMaterial {
-  return new LineMaterial({
-    color: DIMENSION_LINE_COLOR,
-    linewidth: 1.5,
+export interface DimensionLineMaterialOptions {
+  color?: THREE.ColorRepresentation;
+  linewidth?: number;
+  opacity?: number;
+  depthTest?: boolean;
+  resolution?: FatLineResolution;
+}
+
+/** Shared dashed drawing line used by dimensions and analytic references. */
+export function createDimensionLineMaterial(
+  options: DimensionLineMaterialOptions = {}
+): LineMaterial {
+  const material = new LineMaterial({
+    color: options.color ?? DIMENSION_LINE_COLOR,
+    linewidth: options.linewidth ?? 1.5,
     dashed: true,
     dashSize: 2,
     gapSize: 1.5,
     transparent: true,
-    opacity: 0.9,
+    opacity: options.opacity ?? 0.9,
     // Dimensions read through the part, the way they do on paper. A dimension
     // hidden by the very geometry it measures is worse than no dimension.
-    depthTest: false
+    depthTest: options.depthTest ?? false
   });
+  material.resolution.set(
+    Math.max(options.resolution?.width ?? 1, 1),
+    Math.max(options.resolution?.height ?? 1, 1)
+  );
+  return material;
 }
 
 export function createDimensionGraphic(
@@ -94,7 +111,7 @@ export function createDimensionGraphic(
 
   const lineGeometry = new LineGeometry();
   lineGeometry.setPositions([0, 0, 0, 0, 0, 0]);
-  const line = new Line2(lineGeometry, dimensionMaterial());
+  const line = new Line2(lineGeometry, createDimensionLineMaterial());
   line.computeLineDistances();
   line.renderOrder = renderOrder;
   object.add(line);
