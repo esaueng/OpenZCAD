@@ -7,11 +7,13 @@ import type {
   QuantizedTopologyPoint,
   TopologyReferenceV5
 } from '@openzcad/shared';
+import type { FaceEvolutionPayloadV1 } from 'brepkit-wasm';
 import { GEOMETRY_LINEAR_TOLERANCE } from '@openzcad/geometry';
 import {
   importedStepLineageName,
   inspectTopologyWitness,
   topologyHashOfWitness,
+  topologyWitnessesEqual,
   topologyWitnessesNearlyEqual,
   verifyTopologyEvolution,
   type TopologyKind,
@@ -210,6 +212,209 @@ export function mergeBrepKitLineageStates(
     merged.diagnostics.push(...state.diagnostics);
   }
   return merged;
+}
+
+function sameHandleSet(
+  actual: readonly number[],
+  expected: ReadonlySet<number>
+): boolean {
+  return (
+    actual.length === expected.size &&
+    new Set(actual).size === actual.length &&
+    actual.every((handle) => expected.has(handle))
+  );
+}
+
+function referenceMatchesCandidate(
+  reference: FaceTopologyReferenceV5 | undefined,
+  candidate: BrepKitTopologyCandidate | undefined
+): reference is FaceTopologyReferenceV5 {
+  if (!reference || !candidate || candidate.kind !== 'face') {
+    return false;
+  }
+  const witness = candidate.witness as FaceWitnessV1;
+  return (
+    reference.currentHash === topologyHashOfWitness('face', witness) &&
+    topologyWitnessesEqual('face', reference.witness, witness)
+  );
+}
+
+function evolutionPayloadMatches(
+  payload: FaceEvolutionPayloadV1,
+  sourceSolid: number,
+  resultSolid: number,
+  sourceFaces: ReadonlySet<number>,
+  resultFaces: ReadonlySet<number>
+): boolean {
+  if (
+    payload.schemaVersion !== 1 ||
+    payload.source.solid !== sourceSolid ||
+    payload.result.solid !== resultSolid ||
+    payload.evolution.provenance !== 'construction' ||
+    payload.evolution.unresolvedSources.length !== 0 ||
+    payload.evolution.unresolvedResults.length !== 0 ||
+    !sameHandleSet(payload.source.faces, sourceFaces) ||
+    !sameHandleSet(payload.result.faces, resultFaces)
+  ) {
+    return false;
+  }
+
+  const modifiedSources = new Set<number>();
+  const modifiedResults = new Set<number>();
+  for (const relation of payload.evolution.modified) {
+    if (
+      modifiedSources.has(relation.source) ||
+      !sourceFaces.has(relation.source) ||
+      relation.results.length === 0 ||
+      new Set(relation.results).size !== relation.results.length ||
+      relation.results.some(
+        (handle) => !resultFaces.has(handle) || modifiedResults.has(handle)
+      )
+    ) {
+      return false;
+    }
+    modifiedSources.add(relation.source);
+    relation.results.forEach((handle) => modifiedResults.add(handle));
+  }
+
+  const deleted = new Set(payload.evolution.deleted);
+  if (
+    deleted.size !== payload.evolution.deleted.length ||
+    [...deleted].some(
+      (handle) => !sourceFaces.has(handle) || modifiedSources.has(handle)
+    ) ||
+    new Set([...modifiedSources, ...deleted]).size !== sourceFaces.size
+  ) {
+    return false;
+  }
+
+  const generatedResults = new Set<number>();
+  const generatedPairs = new Set<string>();
+  for (const relation of payload.evolution.generated) {
+    if (!sourceFaces.has(relation.source) || relation.results.length === 0) {
+      return false;
+    }
+    for (const handle of relation.results) {
+      const pair = `${relation.source}:${handle}`;
+      if (
+        !resultFaces.has(handle) ||
+        modifiedResults.has(handle) ||
+        generatedPairs.has(pair)
+      ) {
+        return false;
+      }
+      generatedPairs.add(pair);
+      generatedResults.add(handle);
+    }
+  }
+  return (
+    new Set([...modifiedResults, ...generatedResults]).size ===
+      resultFaces.size &&
+    [...resultFaces].every(
+      (handle) => modifiedResults.has(handle) || generatedResults.has(handle)
+    )
+  );
+}
+
+function supportIdentity(reference: FaceTopologyReferenceV5): string {
+  return reference.lineageName;
+}
+
+/**
+ * Convert construction-history claims into exact, handle-bound lineage.
+ * Generated blend faces are named by their two verified support identities;
+ * malformed, unresolved, or ambiguous evidence publishes no reference.
+ */
+export function createBrepKitModifierEvolutionLineage(input: {
+  readonly producingFeatureId: FeatureId;
+  readonly operation: 'fillet' | 'chamfer';
+  readonly payload: FaceEvolutionPayloadV1;
+  readonly sourceSolid: number;
+  readonly resultSolid: number;
+  readonly sourceCandidates: readonly BrepKitTopologyCandidate[];
+  readonly resultCandidates: readonly BrepKitTopologyCandidate[];
+  readonly sourceLineage: BrepKitLineageState | undefined;
+  readonly generatedBlendFaces: ReadonlySet<number>;
+}): BrepKitLineageState {
+  const sourceFaces = new Map(
+    input.sourceCandidates
+      .filter((candidate) => candidate.kind === 'face')
+      .map((candidate) => [candidate.handle, candidate] as const)
+  );
+  const resultFaces = new Map(
+    input.resultCandidates
+      .filter((candidate) => candidate.kind === 'face')
+      .map((candidate) => [candidate.handle, candidate] as const)
+  );
+  const payloadMatches = (() => {
+    try {
+      return evolutionPayloadMatches(
+        input.payload,
+        input.sourceSolid,
+        input.resultSolid,
+        new Set(sourceFaces.keys()),
+        new Set(resultFaces.keys())
+      );
+    } catch {
+      return false;
+    }
+  })();
+  if (
+    sourceFaces.size !==
+      input.sourceCandidates.filter((candidate) => candidate.kind === 'face')
+        .length ||
+    resultFaces.size !==
+      input.resultCandidates.filter((candidate) => candidate.kind === 'face')
+        .length ||
+    !payloadMatches
+  ) {
+    return brepKitHashOnlyLineage(
+      input.operation,
+      'The face-evolution payload did not match the exact production source and result domains.'
+    );
+  }
+
+  const generatedSources = new Map<number, Set<number>>();
+  for (const relation of input.payload.evolution.generated) {
+    for (const result of relation.results) {
+      const sources = generatedSources.get(result) ?? new Set<number>();
+      sources.add(relation.source);
+      generatedSources.set(result, sources);
+    }
+  }
+  const assignments: BrepKitSemanticAssignment[] = [];
+  for (const resultHandle of input.generatedBlendFaces) {
+    const resultCandidate = resultFaces.get(resultHandle);
+    const sources = [...(generatedSources.get(resultHandle) ?? [])];
+    if (!resultCandidate || sources.length !== 2) {
+      continue;
+    }
+    const references = sources.flatMap((handle) => {
+      const reference = input.sourceLineage?.faceReferences.get(handle);
+      return referenceMatchesCandidate(reference, sourceFaces.get(handle))
+        ? [reference]
+        : [];
+    });
+    const identities = references.map(supportIdentity).sort();
+    if (
+      identities.length !== 2 ||
+      new Set(identities).size !== 2 ||
+      new Set(references.map((reference) => reference.producingFeatureId))
+        .size !== 1
+    ) {
+      continue;
+    }
+    assignments.push({
+      ...resultCandidate,
+      lineageName: `modifier.${input.operation}.face.band-between.${identities.join('|')}`
+    });
+  }
+
+  return createBrepKitSemanticLineage(
+    input.producingFeatureId,
+    input.operation,
+    assignments
+  );
 }
 
 function matrixIsRigid(matrix: readonly number[]): boolean {

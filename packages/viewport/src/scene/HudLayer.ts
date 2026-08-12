@@ -70,6 +70,37 @@ export class HudLayer {
     return true;
   }
 
+  /**
+   * Positions an interactive popup near a pointer without letting it leave the
+   * viewport. Unlike pointer-following readouts, menus have their own width
+   * and height and must remain reachable at the right and bottom edges.
+   */
+  showAtPointerClamped(
+    element: HTMLElement,
+    event: { clientX: number; clientY: number },
+    offsetX = 0,
+    offsetY = 0,
+    padding = 8
+  ): boolean {
+    const local = this.toLocal(event.clientX, event.clientY);
+    if (!local) {
+      return false;
+    }
+    element.hidden = false;
+    const hostRect = this.host.getBoundingClientRect();
+    const elementRect = element.getBoundingClientRect();
+    const maxX = Math.max(padding, hostRect.width - elementRect.width - padding);
+    const maxY = Math.max(
+      padding,
+      hostRect.height - elementRect.height - padding
+    );
+    const x = Math.min(maxX, Math.max(padding, local.x + offsetX));
+    const y = Math.min(maxY, Math.max(padding, local.y + offsetY));
+    element.style.left = `${x}px`;
+    element.style.top = `${y}px`;
+    return true;
+  }
+
   /** Positions an overlay at host-local pixels and reveals it. */
   showAt(element: HTMLElement, x: number, y: number) {
     element.style.left = `${x}px`;

@@ -8,7 +8,10 @@ import type {
   UnitSystem,
   Vector3
 } from '@openzcad/shared';
-import { edgeLabel, edgeLengthMeasurement, faceLabel } from './topologyLabels';
+import {
+  edgeLengthMeasurement,
+  topologySelectionLabel
+} from './topologyLabels';
 import {
   resolveEdge,
   resolveFace,
@@ -411,7 +414,11 @@ export function measurementTargetFromSelection(
     if (!edge) {
       return null;
     }
-    const label = `${body.name} · ${edgeLabel(body, edge.hash, edge.topologyId)}`;
+    const label = topologySelectionLabel(body, {
+      kind: 'edge',
+      hash: edge.hash,
+      topologyId: edge.topologyId
+    });
     if (edge.curve?.circle) {
       return {
         ...base,
@@ -466,7 +473,11 @@ export function measurementTargetFromSelection(
     return null;
   }
   const geometry = face.geometry;
-  const label = `${body.name} · ${faceLabel(body, face.hash, face.topologyId)}`;
+  const label = topologySelectionLabel(body, {
+    kind: 'face',
+    hash: face.hash,
+    topologyId: face.topologyId
+  });
   if (
     geometry?.surfaceType === 'cylinder' &&
     geometry.axisStart &&
