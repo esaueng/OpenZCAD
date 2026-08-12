@@ -23,6 +23,12 @@ export interface LivePreviewOptions<TDocument, TDerived> {
    * together because a document without its derived geometry is not a
    * preview anyone can render. */
   publish(preview: { document: TDocument; derived: TDerived } | null): void;
+  /**
+   * Reports a current build/derive failure to interaction UI. Superseded
+   * failures are intentionally silent for the same reason superseded geometry
+   * is: neither describes the value the user is holding now.
+   */
+  onFailure?(failure: { error: unknown; value: number }): void;
   slowFrameMs?: number;
   /**
    * Keep consuming the latest coalesced value after a slow frame. Appropriate
@@ -80,7 +86,15 @@ export class LivePreview<TDocument, TDerived> {
       while (this.pending !== null) {
         const { value, token } = this.pending;
         this.pending = null;
-        const document = this.options.build(value);
+        let document: TDocument | null;
+        try {
+          document = this.options.build(value);
+        } catch (error) {
+          if (token === this.token && this.active) {
+            this.options.onFailure?.({ error, value });
+          }
+          continue;
+        }
         if (!document) {
           break;
         }
@@ -93,8 +107,12 @@ export class LivePreview<TDocument, TDerived> {
             continue;
           }
           this.options.publish({ document, derived });
-        } catch {
-          // An invalid value simply skips this frame.
+        } catch (error) {
+          // An invalid value skips this frame, but an interested interaction
+          // may still render why it failed and prevent that value committing.
+          if (token === this.token && this.active) {
+            this.options.onFailure?.({ error, value });
+          }
         }
         if (now() - started > slowFrameMs) {
           this.slow = true;
