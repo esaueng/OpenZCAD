@@ -47,6 +47,7 @@ import {
   computeNormalToFacePose,
   cylinderRadiusPreviewMatrix,
   createBodyEdgeOverlay,
+  createFaceHighlightGeometry,
   createAxesGizmo,
   createExtrudePreviewGeometry,
   createDimensionGraphic,
@@ -555,10 +556,10 @@ export interface SceneContext {
   /** Single reusable preselection overlay for the face under the pointer. */
   readonly hoverFaceMesh: THREE.Mesh<
     THREE.BufferGeometry,
-    THREE.MeshBasicMaterial
+    THREE.MeshLambertMaterial
   >;
   /** Selection overlays fading in toward their resting opacity. */
-  readonly fadeIns: Set<THREE.MeshBasicMaterial>;
+  readonly fadeIns: Set<THREE.Material>;
   /** Frame timing for the overlay eases; `update()` once per frame, then read. */
   timer: THREE.Timer;
 }
@@ -5068,6 +5069,10 @@ export function ModelViewer({
         context.edgeOverlaysByBodyId.set(body.bodyId, edgeOverlay);
       }
       edgeOverlay?.setSelected(selectedEdges);
+      if (bodiesChanged) {
+        context.bodyGroup.add(object);
+        context.objectsByBodyId.set(body.bodyId, object);
+      }
 
       const selectedFace =
         selectedTopology?.kind === 'face' &&
@@ -5076,23 +5081,16 @@ export function ModelViewer({
               (face) => face.topologyId === selectedTopology.topologyId
             )
           : undefined;
+      edgeOverlay?.setSelectedFaceBoundary(selectedFace?.hash ?? null);
       if (selectedFace) {
+        const geometry = createFaceHighlightGeometry(object, selectedFace);
+        if (!geometry) {
+          continue;
+        }
         const selectionOverlay = new THREE.Group();
         selectionOverlay.name = 'body-selection-overlay';
         object.add(selectionOverlay);
-        const geometry = new THREE.BufferGeometry();
-        geometry.setAttribute(
-          'position',
-          new THREE.Float32BufferAttribute(body.mesh.vertices, 3)
-        );
-        geometry.setIndex(
-          body.mesh.indices.slice(
-            selectedFace.triangleStart * 3,
-            (selectedFace.triangleStart + selectedFace.triangleCount) * 3
-          )
-        );
-        geometry.computeVertexNormals();
-        const highlightMaterial = new THREE.MeshBasicMaterial({
+        const highlightMaterial = new THREE.MeshLambertMaterial({
           color: SELECTED_FACE_COLOR,
           toneMapped: false,
           transparent: true,
@@ -5246,11 +5244,6 @@ export function ModelViewer({
             }
           }
         }
-      }
-
-      if (bodiesChanged) {
-        context.bodyGroup.add(object);
-        context.objectsByBodyId.set(body.bodyId, object);
       }
     }
 
