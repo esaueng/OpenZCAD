@@ -387,6 +387,14 @@ function finiteVec3(value: unknown): Vec3 | null {
   return { x, y, z };
 }
 
+function positiveFinite(value: unknown): number | null {
+  return typeof value === 'number' &&
+    Number.isFinite(value) &&
+    value > GEOMETRY_EPSILON
+    ? value
+    : null;
+}
+
 function analyticSurfaceRecord(
   kernel: BrepKernel,
   face: number
@@ -845,6 +853,9 @@ function isBlendFace(kernel: BrepKernel, solid: number, face: number): boolean {
   if (surfaceType === 'bspline') {
     return true;
   }
+  if (surfaceType === 'torus') {
+    return true;
+  }
   if (surfaceType !== 'cylinder') {
     return false;
   }
@@ -858,14 +869,8 @@ function isBlendFace(kernel: BrepKernel, solid: number, face: number): boolean {
   const origin = finiteVec3(record.origin);
   const rawAxis = finiteVec3(record.axis);
   const axis = rawAxis ? normalized(rawAxis) : null;
-  const radius = record.radius;
-  if (
-    !origin ||
-    !axis ||
-    typeof radius !== 'number' ||
-    !Number.isFinite(radius) ||
-    radius <= GEOMETRY_EPSILON
-  ) {
+  const radius = positiveFinite(record.radius);
+  if (!origin || !axis || radius === null) {
     return false;
   }
   const bandEdges = new Set(kernel.getFaceEdges(face));
@@ -3328,7 +3333,12 @@ function measureFaceGeometry(
     }
     return geometry;
   }
-  if (surfaceType !== 'cylinder' && surfaceType !== 'sphere') {
+  if (
+    surfaceType !== 'cylinder' &&
+    surfaceType !== 'sphere' &&
+    surfaceType !== 'torus' &&
+    surfaceType !== 'cone'
+  ) {
     return geometry;
   }
   let parameters: unknown;
@@ -3338,13 +3348,41 @@ function measureFaceGeometry(
     return geometry;
   }
   const record = (parameters ?? {}) as Record<string, unknown>;
-  const rawRadius = record.radius;
-  const radius =
-    typeof rawRadius === 'number' &&
-    Number.isFinite(rawRadius) &&
-    rawRadius > GEOMETRY_EPSILON
-      ? rawRadius
-      : null;
+  if (surfaceType === 'torus') {
+    const center = finiteVec3(record.center);
+    const rawAxis = finiteVec3(record.axis);
+    const axis = rawAxis ? normalized(rawAxis) : null;
+    const majorRadius = positiveFinite(
+      record.majorRadius ?? record.major_radius
+    );
+    const minorRadius = positiveFinite(
+      record.minorRadius ?? record.minor_radius
+    );
+    if (center && majorRadius !== null && minorRadius !== null) {
+      geometry.torusCenter = center;
+      geometry.majorRadius = majorRadius;
+      geometry.minorRadius = minorRadius;
+      if (axis) {
+        geometry.axis = axis;
+      }
+    }
+    return geometry;
+  }
+  if (surfaceType === 'cone') {
+    const apex = finiteVec3(record.apex);
+    const rawAxis = finiteVec3(record.axis);
+    const axis = rawAxis ? normalized(rawAxis) : null;
+    const halfAngle = positiveFinite(
+      record.halfAngle ?? record.half_angle ?? record.semiAngle
+    );
+    if (apex && axis && halfAngle !== null && halfAngle < Math.PI / 2) {
+      geometry.apex = apex;
+      geometry.axis = axis;
+      geometry.halfAngle = halfAngle;
+    }
+    return geometry;
+  }
+  const radius = positiveFinite(record.radius);
   if (surfaceType === 'sphere') {
     // The corner patch a vertex blend leaves behind is a sphere of the blend
     // radius. It has no axis, so the radius is all that carries over.
@@ -3563,8 +3601,22 @@ function measureOwnedFaceGeometry(
   face: number
 ): FaceGeometry | undefined {
   const geometry = measureFaceGeometry(kernel, face);
-  if (
-    geometry?.surfaceType === 'cylinder' &&
+  if (!geometry) {
+    return undefined;
+  }
+  if (isBlendFace(kernel, solid, face)) {
+    geometry.featureType = 'blend';
+    const blendRadius =
+      geometry.surfaceType === 'torus'
+        ? geometry.minorRadius
+        : geometry.surfaceType === 'cylinder'
+          ? geometry.radius
+          : undefined;
+    if (blendRadius !== undefined) {
+      geometry.blendRadius = blendRadius;
+    }
+  } else if (
+    geometry.surfaceType === 'cylinder' &&
     classifyThroughHoleFace(kernel, solid, face, geometry).status ===
       'through-hole'
   ) {
