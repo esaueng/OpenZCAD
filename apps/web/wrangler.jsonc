@@ -41,7 +41,8 @@
     {
       "binding": "DB",
       "database_name": "openzcad-dev",
-      // TODO(peter): create dev DB and replace this intentionally invalid ID.
+      // TODO: provision an isolated development D1 database before using
+      // remote persistence; this invalid ID prevents accidental beta access.
       "database_id": "00000000-0000-0000-0000-000000000000",
       "migrations_dir": "migrations"
     }

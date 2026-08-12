@@ -1,5 +1,8 @@
 {
   "$schema": "./node_modules/wrangler/config-schema.json",
+  // This file contains non-secret resource identifiers used by the official
+  // OpenZCAD deployment. They do not grant access to those resources.
+  // Self-hosters must use the separate configuration in docs/SELF_HOSTING.md.
   "name": "openzcad",
   "main": "./apps/web/worker/index.ts",
   "compatibility_date": "2026-04-12",
