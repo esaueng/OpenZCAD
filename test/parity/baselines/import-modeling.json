@@ -12,9 +12,14 @@
         "cylinder": 4,
         "plane": 6
       },
-      "witnessedFaces": 0,
+      "witnessedFaces": 4,
       "witnessedEdges": 0,
-      "lineageNames": [],
+      "lineageNames": [
+        "modifier.fillet.face.band-between.import.step.face.426c91a5|import.step.face.58bf7705",
+        "modifier.fillet.face.band-between.import.step.face.426c91a5|import.step.face.62e02c7d",
+        "modifier.fillet.face.band-between.import.step.face.58bf7705|import.step.face.ac22b2bd",
+        "modifier.fillet.face.band-between.import.step.face.62e02c7d|import.step.face.ac22b2bd"
+      ],
       "faceHashDigest": "b563a24b",
       "edgeHashDigest": "4de1dc1b",
       "bbox": [0, 0, 0, 40, 24, 10],
