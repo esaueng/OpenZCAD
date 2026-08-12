@@ -53,6 +53,10 @@ import { ExprInput } from './ExprInput';
 import { ColorPicker } from './ColorPicker';
 import { FieldAutoFocusProvider } from './forms/fieldAutoFocus';
 import type { BodyAppearancePreview } from './ModelViewer';
+import {
+  canRemoveImportedBlendFace,
+  importedBlendEditNotice
+} from '../lib/interaction/filletFaceEdit';
 
 export interface InspectorCallbacks {
   onLaunchTool(tool: ToolId): void;
@@ -484,16 +488,15 @@ function FaceDirectEdit({
       Math.max(1e-6, geometry.diameter * 1e-6);
   const canRemove =
     geometry.featureType !== 'blend' ||
-    (body.topology?.faces ?? []).every(
-      (candidate) =>
-        candidate.topologyId === face?.topologyId ||
-        candidate.geometry?.surfaceType === 'plane'
-    );
+    (face ? canRemoveImportedBlendFace(body, face) : false);
+  const editNotice = face ? importedBlendEditNotice(body, face) : null;
   const surfaceLabel =
-    geometry.featureType === 'through-hole'
-      ? 'Through hole'
-      : (SURFACE_LABELS[geometry.surfaceType] ??
-        `${geometry.surfaceType} face`);
+    geometry.featureType === 'blend'
+      ? 'Imported blend'
+      : geometry.featureType === 'through-hole'
+        ? 'Through hole'
+        : (SURFACE_LABELS[geometry.surfaceType] ??
+          `${geometry.surfaceType} face`);
 
   return (
     <section
@@ -569,9 +572,8 @@ function FaceDirectEdit({
         </button>
       )}
       <p className="muted direct-edit-note">
-        STEP stores faces, not the original feature history. OpenZCAD only
-        applies edits the exact kernel can validate; unsupported face
-        combinations remain unchanged.
+        {editNotice ??
+          'STEP stores faces, not the original feature history. OpenZCAD only applies edits the exact kernel can validate; unsupported face combinations remain unchanged.'}
       </p>
     </section>
   );
