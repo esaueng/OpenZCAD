@@ -24,6 +24,7 @@ import { createFaceHighlightGeometry } from './faceHighlightGeometry';
 const HOVER_EMISSIVE = 0x101d2c;
 const HOVER_FACE_COLOR = 0x8fc8ff;
 const HOVER_FACE_OPACITY = 0.3;
+const HOVER_FACE_HIDDEN_OPACITY = 0.1;
 
 /** Detected sketch regions: subtle at rest, stronger on hover and selection. */
 export const REGION_IDLE_OPACITY = 0.22;
@@ -86,6 +87,11 @@ export class SelectionManager {
     THREE.BufferGeometry,
     THREE.MeshLambertMaterial
   >;
+  /** Occluded fragments of the hovered face, sharing the body's buffers. */
+  readonly hoverHiddenFaceMesh: THREE.Mesh<
+    THREE.BufferGeometry,
+    THREE.MeshBasicMaterial
+  >;
 
   /** Overlay materials easing toward their resting opacity. */
   readonly fadeIns = new Set<THREE.Material>();
@@ -97,7 +103,9 @@ export class SelectionManager {
   private options: SelectionManagerOptions;
   private hoveredEdgeTarget: EdgeHoverTarget | null = null;
   private hoverFaceTarget = 0;
+  private hoverHiddenFaceTarget = 0;
   private hoverFaceKey: string | null = null;
+  private xrayEnabled = true;
   private hoveredRegionMesh: THREE.Mesh<
     THREE.BufferGeometry,
     THREE.MeshBasicMaterial
@@ -122,15 +130,51 @@ export class SelectionManager {
     );
     this.hoverFaceMesh.visible = false;
     this.hoverFaceMesh.renderOrder = VIEWPORT_RENDER_ORDER.HOVER_HIGHLIGHT;
+    this.hoverFaceMesh.userData.selectionOverlay = true;
     this.hoverFaceMesh.raycast = () => undefined;
+    this.hoverHiddenFaceMesh = new THREE.Mesh(
+      new THREE.BufferGeometry(),
+      new THREE.MeshBasicMaterial({
+        color: HOVER_FACE_COLOR,
+        toneMapped: false,
+        transparent: true,
+        opacity: 0,
+        side: THREE.DoubleSide,
+        depthWrite: false,
+        depthFunc: THREE.GreaterDepth
+      })
+    );
+    this.hoverHiddenFaceMesh.name = 'body-face-hover-hidden';
+    this.hoverHiddenFaceMesh.visible = false;
+    this.hoverHiddenFaceMesh.renderOrder =
+      VIEWPORT_RENDER_ORDER.HOVER_HIGHLIGHT - 1;
+    this.hoverHiddenFaceMesh.userData.selectionOverlay = true;
+    this.hoverHiddenFaceMesh.raycast = () => undefined;
   }
 
   /** True while any hover overlay is still easing toward its target. */
   get isSettling(): boolean {
     return (
       Math.abs(this.hoverFaceTarget - this.hoverFaceMesh.material.opacity) >=
-        FADE_EPSILON || this.fadeIns.size > 0
+        FADE_EPSILON ||
+      Math.abs(
+        this.hoverHiddenFaceTarget - this.hoverHiddenFaceMesh.material.opacity
+      ) >= FADE_EPSILON ||
+      this.fadeIns.size > 0
     );
+  }
+
+  /** Hidden passes are misleading through the intentionally receded sketch solid. */
+  setXrayEnabled(enabled: boolean) {
+    if (this.xrayEnabled === enabled) {
+      return;
+    }
+    this.xrayEnabled = enabled;
+    this.hoverHiddenFaceMesh.visible =
+      enabled &&
+      (this.hoverFaceKey !== null ||
+        this.hoverHiddenFaceMesh.material.opacity >= FADE_EPSILON);
+    this.options.requestRender();
   }
 
   setEdgeHover(
@@ -193,6 +237,7 @@ export class SelectionManager {
     }
     this.hoverFaceKey = key;
     this.hoverFaceTarget = 0;
+    this.hoverHiddenFaceTarget = 0;
     this.options.requestRender();
     if (!key || selection?.kind !== 'face') {
       return;
@@ -209,14 +254,23 @@ export class SelectionManager {
     }
     const oldGeometry = this.hoverFaceMesh.geometry;
     const geometry = createFaceHighlightGeometry(object, face);
-    if (!geometry) {
+    const oldHiddenGeometry = this.hoverHiddenFaceMesh.geometry;
+    const hiddenGeometry = createFaceHighlightGeometry(object, face);
+    if (!geometry || !hiddenGeometry) {
+      geometry?.dispose();
+      hiddenGeometry?.dispose();
       return;
     }
     this.hoverFaceMesh.geometry = geometry;
+    this.hoverHiddenFaceMesh.geometry = hiddenGeometry;
     oldGeometry.dispose();
+    oldHiddenGeometry.dispose();
     object.add(this.hoverFaceMesh);
+    object.add(this.hoverHiddenFaceMesh);
     this.hoverFaceMesh.visible = true;
+    this.hoverHiddenFaceMesh.visible = this.xrayEnabled;
     this.hoverFaceTarget = HOVER_FACE_OPACITY;
+    this.hoverHiddenFaceTarget = HOVER_FACE_HIDDEN_OPACITY;
     this.options.requestRender();
   }
 
@@ -385,6 +439,18 @@ export class SelectionManager {
     ) {
       this.hoverFaceMesh.visible = false;
     }
+    const hoverHiddenMaterial = this.hoverHiddenFaceMesh.material;
+    const hoverHiddenNext =
+      hoverHiddenMaterial.opacity +
+      (this.hoverHiddenFaceTarget - hoverHiddenMaterial.opacity) * ease;
+    hoverHiddenMaterial.opacity = hoverHiddenNext;
+    if (
+      this.hoverHiddenFaceTarget === 0 &&
+      hoverHiddenNext < FADE_EPSILON &&
+      this.hoverHiddenFaceMesh.visible
+    ) {
+      this.hoverHiddenFaceMesh.visible = false;
+    }
     for (const material of this.fadeIns) {
       const target =
         (material.userData.targetOpacity as number | undefined) ??
@@ -413,13 +479,17 @@ export class SelectionManager {
     this.hoveredEdge = null;
     this.hoverFaceKey = null;
     this.hoverFaceTarget = 0;
+    this.hoverHiddenFaceTarget = 0;
     this.hoverFaceMesh.visible = false;
+    this.hoverHiddenFaceMesh.visible = false;
     this.fadeIns.clear();
   }
 
   dispose() {
     this.hoverFaceMesh.geometry.dispose();
     this.hoverFaceMesh.material.dispose();
+    this.hoverHiddenFaceMesh.geometry.dispose();
+    this.hoverHiddenFaceMesh.material.dispose();
     this.fadeIns.clear();
   }
 }

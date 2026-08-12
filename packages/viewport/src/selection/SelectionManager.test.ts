@@ -354,6 +354,67 @@ describe('face hover overlay', () => {
       position
     );
     expect(manager.hoverFaceMesh.geometry.getAttribute('normal')).toBe(normal);
+    expect(manager.hoverHiddenFaceMesh.geometry.getAttribute('position')).toBe(
+      position
+    );
+    expect(manager.hoverHiddenFaceMesh.geometry.getAttribute('normal')).toBe(
+      normal
+    );
+    expect(manager.hoverHiddenFaceMesh.material.depthFunc).toBe(
+      THREE.GreaterDepth
+    );
+    expect(manager.hoverHiddenFaceMesh.material.depthWrite).toBe(false);
+    expect(manager.hoverHiddenFaceMesh.material).toBeInstanceOf(
+      THREE.MeshBasicMaterial
+    );
+    expect(manager.hoverHiddenFaceMesh.material.opacity).toBe(0);
+
+    manager.step(1);
+    expect(manager.hoverHiddenFaceMesh.material.opacity).toBeGreaterThan(0);
+    expect(manager.hoverHiddenFaceMesh.material.opacity).toBeLessThan(
+      manager.hoverFaceMesh.material.opacity
+    );
+  });
+
+  it('suppresses the hidden hover pass while sketch solids are receded', () => {
+    const { manager, objectsByBodyId, setBodies } = makeManager();
+    const bodyId = toBodyId('body-face-sketch');
+    const sourceGeometry = new THREE.BufferGeometry();
+    sourceGeometry.setAttribute(
+      'position',
+      new THREE.Float32BufferAttribute([0, 0, 0, 1, 0, 0, 0, 1, 0], 3)
+    );
+    sourceGeometry.setAttribute(
+      'normal',
+      new THREE.Float32BufferAttribute([0, 0, 1, 0, 0, 1, 0, 0, 1], 3)
+    );
+    sourceGeometry.setIndex([0, 1, 2]);
+    objectsByBodyId.set(
+      bodyId,
+      new THREE.Mesh(sourceGeometry, new THREE.MeshPhongMaterial())
+    );
+    setBodies([
+      {
+        bodyId,
+        topology: {
+          faces: [
+            {
+              topologyId: 'face-a',
+              hash: 101,
+              triangleStart: 0,
+              triangleCount: 1
+            }
+          ],
+          edges: []
+        }
+      } as unknown as BodyRepresentation
+    ]);
+
+    manager.setXrayEnabled(false);
+    manager.setHoverFace({ bodyId, kind: 'face', topologyId: 'face-a' });
+
+    expect(manager.hoverFaceMesh.visible).toBe(true);
+    expect(manager.hoverHiddenFaceMesh.visible).toBe(false);
   });
 });
 
