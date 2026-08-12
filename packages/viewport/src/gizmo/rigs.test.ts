@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import * as THREE from 'three';
 import { CHIP_ANCHOR_LOCAL_DISTANCE, type DragRig } from './DragRig';
 import {
+  HANDLE_WARNING_COLOR,
   buildCylinderRadiusHandle,
   buildEdgeRadiusHandle,
   buildOffsetFaceHandle,
@@ -93,6 +94,10 @@ describe('the offset-face rig', () => {
     // screen-constant arrow must never reach them.
     expect(rig.worldGroup.children.length).toBe(2);
     expect(rig.group.children).not.toContain(rig.worldGroup.children[0]);
+    const ghost = rig.worldGroup.children[1]!;
+    rig.setValue(4);
+    expect(ghost.visible).toBe(true);
+    expect(ghost.position).toMatchObject({ x: 0, y: 0, z: 0 });
   });
 
   it('uses the shared dashed dimension through the geometry while engaged', () => {
@@ -109,6 +114,36 @@ describe('the offset-face rig', () => {
     expect(dimension.visible).toBe(true);
     rig.setValue(0);
     expect(dimension.visible).toBe(false);
+  });
+
+  it('separates reference ghost styling from invalid-preview warning styling', () => {
+    const rig = buildOffsetFaceHandle({
+      origin: { x: 0, y: 0, z: 0 },
+      direction: { x: 0, y: 0, z: 1 },
+      ghostGeometry: new THREE.BufferGeometry()
+    });
+    const ghost = rig.worldGroup.children[1] as THREE.Mesh<
+      THREE.BufferGeometry,
+      THREE.MeshBasicMaterial
+    >;
+    const ghostColor = ghost.material.color.getHex();
+    rig.setWarning?.(true);
+    const visibleArrow = rig.group.children.find(
+      (child) =>
+        child instanceof THREE.Mesh &&
+        child.material instanceof THREE.MeshBasicMaterial &&
+        child.material.visible
+    ) as THREE.Mesh<THREE.BufferGeometry, THREE.MeshBasicMaterial>;
+    const dimensionLine = rig.worldGroup.children[0]!.children[0] as THREE.Object3D & {
+      material: { color: THREE.Color };
+    };
+    expect(visibleArrow.material.color.getHex()).toBe(HANDLE_WARNING_COLOR);
+    expect(dimensionLine.material.color.getHex()).toBe(HANDLE_WARNING_COLOR);
+    expect(ghost.material.color.getHex()).toBe(ghostColor);
+    expect(rig.group.userData.previewWarning).toBe(true);
+    rig.setWarning?.(false);
+    expect(rig.group.userData.previewWarning).toBe(false);
+    rig.dispose();
   });
 });
 
