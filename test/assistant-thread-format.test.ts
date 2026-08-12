@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import type { CadPatchProposal } from '@openzcad/ai-contracts';
 import {
   parseInlineSpans,
   parseRichText
@@ -219,4 +220,35 @@ describe('assistant openers', () => {
     );
     expect(suggestions.every((suggestion) => suggestion.proposal)).toBe(true);
   });
+
+  it.each([
+    { topologyKind: 'edge' as const, selectedBodyCount: 0 },
+    { topologyKind: 'face' as const, selectedBodyCount: 0 },
+    { topologyKind: null, selectedBodyCount: 1 },
+    { topologyKind: null, selectedBodyCount: 0 }
+  ])(
+    'puts verified auto-parameterization fourth for a non-parameterized model',
+    ({ topologyKind, selectedBodyCount }) => {
+      const autoParameterizeProposal: CadPatchProposal = {
+        proposalId: 'auto_parameterize_test',
+        summary: 'The model will be parameterized without changing its shape.',
+        assumptions: [],
+        operations: [],
+        preserveGeometry: true
+      };
+      const suggestions = assistantSuggestions({
+        bodyCount: 1,
+        topologyKind,
+        selectedBodyCount,
+        autoParameterizeProposal
+      });
+
+      expect(suggestions).toHaveLength(4);
+      expect(suggestions[3]).toMatchObject({
+        id: 'verified-auto-parameterize',
+        label: 'Auto-parameterize model',
+        proposal: autoParameterizeProposal
+      });
+    }
+  );
 });
