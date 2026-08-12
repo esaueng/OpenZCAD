@@ -10,15 +10,25 @@ import { commandPrompt, commandPromptText } from './prompt';
 
 function faceState(
   phase: OperationPhase,
-  op: 'offset-face' | 'resize-cylinder-radius' = 'offset-face',
+  op: Extract<InteractionState, { mode: 'face' }>['op'] = 'offset-face',
   error: string | null = null
 ): InteractionState {
   return {
     mode: 'face',
     op,
     target: {
-      surfaceType: op === 'resize-cylinder-radius' ? 'cylindrical' : 'planar',
+      surfaceType:
+        op === 'resize-cylinder-radius' || op === 'edit-fillet'
+          ? 'cylindrical'
+          : 'planar',
       ...(op === 'resize-cylinder-radius' ? { radius: 4 } : {}),
+      ...(op === 'edit-fillet'
+        ? {
+            blendRadius: 2,
+            filletFeatureId: 'feature-fillet' as never,
+            radialDirection: [1, 0, 0] as [number, number, number]
+          }
+        : {}),
       bodyId: 'body-1',
       topologyId: 'face-1',
       point: [0, 0, 0],
@@ -178,6 +188,12 @@ describe('the step describes the operation actually armed', () => {
     );
     expect(commandPrompt(edgeState('armed', 'chamfer', 3))?.step).toContain(
       'chamfer on 3 edges'
+    );
+  });
+
+  it('describes the armed fillet handle and its R0 removal path', () => {
+    expect(commandPrompt(faceState('armed', 'edit-fillet'))?.step).toBe(
+      'Drag the radial handle to edit the fillet, or type an exact radius · R0 removes it'
     );
   });
 
