@@ -476,6 +476,10 @@ test('restores an unreadable account document from the confirmed device copy', a
   await expect
     .poll(() => storedProjectNames(page), { timeout: 10_000 })
     .toContain('Repair Fixture edited locally');
+  // Outlast this fixture's 1 s cloud-autosave delay before baselining the
+  // retry count, so the rename's queued mirror has already been refused
+  // scheduling and the repair state is settled rather than mid-flight.
+  await page.waitForTimeout(3000);
   await expect(page.getByRole('button', { name: 'Repair needed' })).toBeVisible(
     { timeout: 10_000 }
   );
