@@ -1405,6 +1405,10 @@ export const ARTIFACT_UPLOAD_PART_BYTES = 16 * 1024 * 1024;
 export const MAX_ARTIFACT_PART_BYTES = 32 * 1024 * 1024;
 /** Ceiling on parts per upload (with 16 MiB parts: 1 GiB). */
 export const MAX_ARTIFACT_UPLOAD_PARTS = 64;
+/** Maximum encoded size of a shelf thumbnail that clients automatically load. */
+export const MAX_THUMBNAIL_BYTES = 512 * 1024;
+/** The thumbnail renderer publishes WebP; other image formats are not accepted. */
+export const THUMBNAIL_CONTENT_TYPE = 'image/webp';
 
 export interface CreateMultipartUploadResponse {
   uploadId: string;
