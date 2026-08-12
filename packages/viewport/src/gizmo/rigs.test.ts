@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import * as THREE from 'three';
 import { CHIP_ANCHOR_LOCAL_DISTANCE, type DragRig } from './DragRig';
 import {
+  HANDLE_WARNING_COLOR,
   buildCylinderRadiusHandle,
   buildEdgeRadiusHandle,
   buildOffsetFaceHandle,
@@ -37,10 +38,11 @@ describe('placement is pure', () => {
   });
 
   it('anchors an edge handle at the polyline midpoint, pointing outward', () => {
-    const placement = edgeHandlePlacement(
-      [0, 0, 0, 10, 0, 0, 20, 0, 0],
-      { x: 10, y: 0, z: -5 }
-    );
+    const placement = edgeHandlePlacement([0, 0, 0, 10, 0, 0, 20, 0, 0], {
+      x: 10,
+      y: 0,
+      z: -5
+    });
     expect(placement?.origin).toEqual({ x: 10, y: 0, z: 0 });
     expect(placement?.direction).toEqual({ x: 0, y: 0, z: 1 });
   });
@@ -50,10 +52,11 @@ describe('placement is pure', () => {
   });
 
   it('falls back to +Z when the edge sits on the body centre', () => {
-    const placement = edgeHandlePlacement(
-      [0, 0, 0, 1, 0, 0, 2, 0, 0],
-      { x: 1, y: 0, z: 0 }
-    );
+    const placement = edgeHandlePlacement([0, 0, 0, 1, 0, 0, 2, 0, 0], {
+      x: 1,
+      y: 0,
+      z: 0
+    });
     expect(placement?.direction).toEqual({ x: 0, y: 0, z: 1 });
   });
 });
@@ -91,16 +94,56 @@ describe('the offset-face rig', () => {
     // screen-constant arrow must never reach them.
     expect(rig.worldGroup.children.length).toBe(2);
     expect(rig.group.children).not.toContain(rig.worldGroup.children[0]);
+    const ghost = rig.worldGroup.children[1]!;
+    rig.setValue(4);
+    expect(ghost.visible).toBe(true);
+    expect(ghost.position).toMatchObject({ x: 0, y: 0, z: 0 });
   });
 
-  it('hides the leader until the drag actually engages', () => {
+  it('uses the shared dashed dimension through the geometry while engaged', () => {
     const rig = offsetRig();
-    const leader = rig.worldGroup.children[0]!;
-    expect(leader.visible).toBe(false);
+    const dimension = rig.worldGroup.children[0]!;
+    expect(dimension.name).toBe('dimension-graphic');
+    expect(dimension.children.map((child) => child.type)).toEqual([
+      'Line2',
+      'Mesh',
+      'Mesh'
+    ]);
+    expect(dimension.visible).toBe(false);
     rig.setValue(1);
-    expect(leader.visible).toBe(true);
+    expect(dimension.visible).toBe(true);
     rig.setValue(0);
-    expect(leader.visible).toBe(false);
+    expect(dimension.visible).toBe(false);
+  });
+
+  it('separates reference ghost styling from invalid-preview warning styling', () => {
+    const rig = buildOffsetFaceHandle({
+      origin: { x: 0, y: 0, z: 0 },
+      direction: { x: 0, y: 0, z: 1 },
+      ghostGeometry: new THREE.BufferGeometry()
+    });
+    const ghost = rig.worldGroup.children[1] as THREE.Mesh<
+      THREE.BufferGeometry,
+      THREE.MeshBasicMaterial
+    >;
+    const ghostColor = ghost.material.color.getHex();
+    rig.setWarning?.(true);
+    const visibleArrow = rig.group.children.find(
+      (child) =>
+        child instanceof THREE.Mesh &&
+        child.material instanceof THREE.MeshBasicMaterial &&
+        child.material.visible
+    ) as THREE.Mesh<THREE.BufferGeometry, THREE.MeshBasicMaterial>;
+    const dimensionLine = rig.worldGroup.children[0]!.children[0] as THREE.Object3D & {
+      material: { color: THREE.Color };
+    };
+    expect(visibleArrow.material.color.getHex()).toBe(HANDLE_WARNING_COLOR);
+    expect(dimensionLine.material.color.getHex()).toBe(HANDLE_WARNING_COLOR);
+    expect(ghost.material.color.getHex()).toBe(ghostColor);
+    expect(rig.group.userData.previewWarning).toBe(true);
+    rig.setWarning?.(false);
+    expect(rig.group.userData.previewWarning).toBe(false);
+    rig.dispose();
   });
 });
 
@@ -132,14 +175,37 @@ describe('the cylinder-radius rig', () => {
     expect(rig.origin).toMatchObject({ x: 14, y: 0, z: 8 });
   });
 
-  it('does not create a translated face ghost', () => {
+  it('carries a radius dimension line with two arrowheads, no face ghost', () => {
     const rig = buildCylinderRadiusHandle({
       origin: { x: 0, y: 5, z: 0 },
       direction: { x: 0, y: 1, z: 0 },
       originalRadius: 5
     });
+    // One nested graphic rather than three loose children: the renderer moved
+    // out so the measurement tape draws the same dimension rather than a
+    // second one that would drift from this.
     expect(rig.worldGroup.children).toHaveLength(1);
-    expect(rig.worldGroup.children[0]?.type).toBe('Line2');
+    const dimension = rig.worldGroup.children[0]!;
+    expect(dimension.name).toBe('dimension-graphic');
+    // Still a dashed line and two arrowheads, and still no face ghost.
+    expect(dimension.children.map((child) => child.type)).toEqual([
+      'Line2',
+      'Mesh',
+      'Mesh'
+    ]);
+  });
+
+  it('anchors the value chip on the dimension line inside the cylinder', () => {
+    const rig = buildCylinderRadiusHandle({
+      origin: { x: 14, y: 0, z: 8 },
+      direction: { x: 1, y: 0, z: 0 },
+      originalRadius: 14
+    });
+    // Axis centre is at x = 0; the chip rides partway back out to the wall.
+    const anchor = rig.chipAnchor(1);
+    expect(anchor.x).toBeCloseTo(14 * 0.45, 6);
+    expect(anchor.y).toBeCloseTo(0, 6);
+    expect(anchor.z).toBeCloseTo(8, 6);
   });
 });
 

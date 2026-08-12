@@ -1,0 +1,12 @@
+# Response headers for the static assets the Worker serves. Copied verbatim
+# into the build output, where Cloudflare reads it at deploy time; the file
+# itself is consumed by the asset pipeline and never served.
+#
+# Vite fingerprints everything it emits into /assets/, so those URLs are
+# immutable by construction: changed content means a changed filename. Every
+# other path keeps the platform default (max-age=0, must-revalidate) because
+# its URL is stable — index.html above all, since it names the hashed bundles
+# a client should be loading.
+
+/assets/*
+  Cache-Control: public, max-age=31536000, immutable

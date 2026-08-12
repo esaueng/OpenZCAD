@@ -1,23 +1,19 @@
 import { useEffect, useRef, type MutableRefObject } from 'react';
 import * as THREE from 'three';
-import { mark, timed } from '../lib/perf';
+import { mark, measure, timed } from '../lib/perf';
 import type { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { Line2 } from 'three/examples/jsm/lines/Line2.js';
 import { LineGeometry } from 'three/examples/jsm/lines/LineGeometry.js';
+import { LineSegments2 } from 'three/examples/jsm/lines/LineSegments2.js';
 import {
   CSS2DObject,
   CSS2DRenderer
 } from 'three/examples/jsm/renderers/CSS2DRenderer.js';
 import {
-  EDGE_IDLE_COLOR,
-  EDGE_IDLE_OPACITY,
-  EDGE_IDLE_WIDTH,
-  EDGE_SELECTED_COLOR,
-  EDGE_SELECTED_WIDTH,
   MOVE_AXIS_COLORS,
   MOVE_AXIS_VECTORS,
   RightClickGestureTracker,
-  VIEW_DIRECTIONS,
+  viewDirectionFor,
   applyDisplayMode,
   CameraController,
   buildCylinderRadiusHandle,
@@ -33,7 +29,7 @@ import {
   SNAP_RADIUS_PX,
   isBoxSelectDrag,
   rectFromDrag,
-  edgeRunFrom,
+  edgeRunSelections,
   edgeHandlePlacement,
   offsetHandlePlacement,
   GestureRouter,
@@ -48,12 +44,19 @@ import {
   closestAxisT,
   composeMoveTransform,
   computeFitPose,
+  computeNormalToFacePose,
+  cylinderRadiusPreviewMatrix,
+  createBodyEdgeOverlay,
+  createAnalyticCylinderGhost,
+  createFaceHighlightGeometry,
   createAxesGizmo,
   createExtrudePreviewGeometry,
+  createDimensionGraphic,
   createFatLine,
+  measureSnapEdges,
   createFatLineMaterial,
   createFatLineSegments,
-  createGradientBackground,
+  createGradientBackdrop,
   createObjectForBody,
   createShadowCatcher,
   createStudioEnvironment,
@@ -66,6 +69,7 @@ import {
   isSameMoveGizmoFocus,
   makeLabel,
   markExtrudeGizmo,
+  moveCalloutAnchor,
   moveEuler,
   moveGizmoHandleLabel,
   moveGizmoWorldScale,
@@ -76,6 +80,8 @@ import {
   sketchCentroid,
   snapTo,
   syncFatLineResolution,
+  updateAxesGizmo,
+  updateStudioGrid,
   tuneShadowFrustum,
   VIEWPORT_RENDER_ORDER,
   type AxisProjection,
@@ -83,6 +89,7 @@ import {
   type DirectEditAxis,
   type MoveAxis,
   type MoveGizmoFocus,
+  type MoveGizmoVisualData,
   type MoveHandleKind,
   type MovePreview,
   type DepthCycle,
@@ -93,16 +100,29 @@ import {
   type ProfilePickTarget,
   type SelectionFilter,
   type SnapCandidate,
+  alignTranslationToCenters,
+  centerAlignLabel,
+  type CenterAlignMatch,
+  type CenterAlignTarget,
   type SnapResolution,
   type ProjectionMode,
   type SketchOverlay,
-  type StandardView,
+  type ViewTarget,
+  type ViewerBodyMaterial,
   type ViewerSettings,
-  type FatLineResolution
+  type FatLineResolution,
+  type BodyEdgeOverlay,
+  type DimensionGraphic
 } from '@openzcad/viewport';
-import type { BodyRepresentation, TopologySelection } from '@openzcad/shared';
+import type {
+  BodyRepresentation,
+  FaceGeometry,
+  TopologySelection
+} from '@openzcad/shared';
 import { formatNumber } from '../lib/model';
+import type { DimensionMode } from '../lib/keypad';
 import type { ViewportCameraState } from '../lib/workspaceSession';
+import type { MeasurementViewportAnnotation } from '../lib/measurements';
 import {
   buildSketchModeRig,
   type SketchModeRig
@@ -124,18 +144,28 @@ import {
   arcObjectFromPoints,
   arcPreviewPoints,
   axisLockPoint,
+  circleObjectFromDiameter,
+  circleObjectFromThreePoints,
+  circlePreviewPoints,
+  centerInferenceSegments,
+  collectSketchSnapTargets,
   dimensionForInProgress,
   lineObjectFromPoints,
-  nearestSnapTarget,
+  nearestCenterGuideTarget,
+  pointAtDistanceAlongDirection,
+  resolveSketchSnap,
   screenRayToPlanePoint,
+  SKETCH_SNAP_GLYPHS,
+  SKETCH_SNAP_LABELS,
   sketchEntryPose,
   sketchObjectFromDrag,
   snapSketchPoint,
-  snapTargetsForObject,
+  textObjectFromPoint,
   type SketchPoint,
   type SnapTarget,
   type SnapTargetKind
 } from '../lib/sketch/session';
+import type { SketchCircleMode } from '../lib/interaction/machine';
 import type { PlaneBasis } from '@openzcad/geometry';
 import type { ParamValue, SketchObjectData } from '@openzcad/shared';
 import { evalParamValue } from '../lib/model';
@@ -155,6 +185,8 @@ export interface OffsetHandleTarget {
   normal: { x: number; y: number; z: number };
   /** Restored after a failed exact-kernel validation. */
   initialValue?: number;
+  /** Primitive height when this offset is really an overall-height edit. */
+  totalBaseline?: number;
 }
 
 /** An explicit cylindrical-wall radius handle with an immutable world axis. */
@@ -166,17 +198,32 @@ export interface CylinderRadiusHandleTarget {
   axisStart: { x: number; y: number; z: number };
   axisEnd: { x: number; y: number; z: number };
   originalRadius: number;
+  /** True when a radial scene transform exactly represents this body. */
+  smoothPreview: boolean;
+}
+
+interface CylinderRadiusProxyController {
+  /** Restore the authoritative projection after cancellation or validation failure. */
+  restore(): void;
+  /** Forget a proxy whose object is about to be replaced by exact geometry. */
+  discard(): void;
 }
 
 /** Active in-viewport sketch session, derived from the interaction machine. */
 export interface SketchModeState {
   basis: PlaneBasis;
-  tool: 'select' | 'line' | 'arc' | 'circle' | 'rectangle';
+  tool: 'select' | 'line' | 'arc' | 'circle' | 'rectangle' | 'text';
+  circleMode: SketchCircleMode;
   snapStep: number | null;
+  gridVisible: boolean;
+  geometrySnapEnabled: boolean;
+  inferenceEnabled: boolean;
+  snapTolerancePx: number;
   /** True while a line chain (or drag) is in flight; cleared by Escape. */
   drawing: boolean;
   /** Committed objects of the session's sketch, rendered in blue. */
   objects: { id: string; data: SketchObjectData }[];
+  profiles: { outer: SketchPoint[]; holes: SketchPoint[][] }[];
   selectedObjectId: string | null;
   parameterScope: Record<string, number>;
   /** Plane-local endpoints highlighted by Profile diagnostics on request. */
@@ -184,6 +231,37 @@ export interface SketchModeState {
 }
 
 /** Sketch curves + detected regions, rendered when direct manipulation is on. */
+/**
+ * In-plane bounding-box center of a sketch's curves, lifted to world space.
+ * This is where the move gizmo sits when a sketch is the target. Null when
+ * the sketch has nothing drawable yet (e.g. its font has not loaded).
+ */
+function sketchViewCenter(view: SketchViewData): THREE.Vector3 | null {
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  for (const curve of view.curves) {
+    for (const point of curve.points) {
+      minX = Math.min(minX, point.x);
+      minY = Math.min(minY, point.y);
+      maxX = Math.max(maxX, point.x);
+      maxY = Math.max(maxY, point.y);
+    }
+  }
+  if (!Number.isFinite(minX) || !Number.isFinite(minY)) {
+    return null;
+  }
+  const x = (minX + maxX) / 2;
+  const y = (minY + maxY) / 2;
+  const basis = view.basis;
+  return new THREE.Vector3(
+    basis.origin.x + basis.u.x * x + basis.v.x * y,
+    basis.origin.y + basis.u.y * x + basis.v.y * y,
+    basis.origin.z + basis.u.z * x + basis.v.z * y
+  );
+}
+
 export interface SketchViewData {
   sketchId: string;
   basis: PlaneBasis;
@@ -230,14 +308,37 @@ export interface EdgeHandleTarget {
   initialValue?: number;
 }
 
+export interface OrientationDragControls {
+  begin(): void;
+  move(deltaX: number, deltaY: number): void;
+  end(): void;
+}
+
 export interface ExtrudePreview {
   sketchId: string;
   distance: number;
 }
 
+/** Transient per-body display patch, applied without touching the document. */
+export interface BodyAppearancePreview {
+  bodyId: string;
+  color?: string;
+  opacity?: number;
+}
+
+/** Runtime-only request to centre and face one exact planar face head-on. */
+export interface NormalToFaceRequest {
+  bodyId: string;
+  topologyId: string;
+  /** Makes pressing Space again replay the camera action for the same face. */
+  nonce: number;
+}
+
 interface ModelViewerProps {
   bodies: BodyRepresentation[];
   sketches: SketchOverlay[];
+  /** Runtime-only View-mode measurements rendered above exact geometry. */
+  measurementAnnotations: MeasurementViewportAnnotation[];
   /** Bodies highlighted in the viewport, in pick order. */
   selectedBodyIds: string[];
   selectedTopology: TopologySelection | null;
@@ -246,13 +347,32 @@ interface ModelViewerProps {
   settings: ViewerSettings;
   /** Increment to re-fit the camera to the current geometry. */
   fitSignal: number;
-  /** Set to move the camera to a standard view; nonce forces re-runs. */
-  viewRequest: { view: StandardView; nonce: number } | null;
+  /** Set to move the camera to a view target; nonce forces re-runs. */
+  viewRequest: { view: ViewTarget; nonce: number } | null;
+  /** Set to centre and frame an exact planar face; nonce forces re-runs. */
+  normalToFaceRequest: NormalToFaceRequest | null;
+  /**
+   * Set to spin the view a quarter turn about the world up axis; direction is
+   * how the model appears to turn on screen. Nonce forces re-runs.
+   */
+  rotateRequest: { direction: 'cw' | 'ccw'; nonce: number } | null;
   units: string;
   /** Primitive box bodies whose planar faces can drive document dimensions. */
   editableBodyIds: string[];
   extrudePreview: ExtrudePreview | null;
   movePreview: MovePreview | null;
+  /**
+   * A committed Move whose rebuild is still in flight. The body stays posed
+   * at this transform (no gizmo) until new meshes arrive and the hold clears
+   * in the same commit.
+   */
+  moveCommitHold: MovePreview | null;
+  /**
+   * Drag-phase body appearance patch applied straight to the live material so
+   * slider drags stay at pointer rate. The committed value arrives through
+   * `bodies` on the next rebuild; null restores the committed look.
+   */
+  appearancePreview: BodyAppearancePreview | null;
   projection: ProjectionMode;
   /** Per-project camera pose restored before the first automatic fit. */
   initialView: ViewportCameraState | null;
@@ -260,6 +380,8 @@ interface ModelViewerProps {
   onViewChange(view: ViewportCameraState): void;
   /** Imperative sink for per-frame axis projections (no React re-render). */
   orientationRef: MutableRefObject<((axes: AxisProjection) => void) | null>;
+  /** Imperative bridge from the SVG view cube into the live camera rig. */
+  orientationDragRef: MutableRefObject<OrientationDragControls | null>;
   onSelectTopology(
     selection: TopologySelection | null,
     additive: boolean,
@@ -267,7 +389,7 @@ interface ModelViewerProps {
   ): void;
   /** What the pointer is allowed to select. */
   selectionFilter: SelectionFilter;
-  /** Bodies swept by a shift-drag rectangle; empty clears the selection. */
+  /** Bodies swept by a drag rectangle; empty clears the selection. */
   onBoxSelect(bodyIds: string[]): void;
   /**
    * A whole smooth run of edges at once, from double-clicking one of them.
@@ -279,10 +401,16 @@ interface ModelViewerProps {
   onSelectEdgeChain(selections: TopologySelection[]): void;
   /** Armed face-offset handle (selection-first direct manipulation). */
   offsetHandle: OffsetHandleTarget | null;
+  /** Streamed signed offset; App coalesces exact rebuilds. */
+  onOffsetPreview(offset: number): void;
   /** Fired when an offset-handle drag releases with a non-zero offset. */
-  onOffsetCommit(offset: number): void;
+  onOffsetCommit(offset: number): boolean;
+  /** Clears exact preview geometry and restores the original reference. */
+  onOffsetCancel(): void;
+  /** Current exact preview or release validation refused this offset. */
+  offsetPreviewInvalid: boolean;
   /** Value chip tapped: open exact entry prefilled with the current offset. */
-  onOpenOffsetKeypad(currentOffset: number): void;
+  onOpenOffsetKeypad(currentOffset: number, totalBaseline?: number): void;
   /** Imperative sink receiving the chip anchor in host pixels each frame. */
   keypadAnchorRef: MutableRefObject<
     ((point: { x: number; y: number } | null) => void) | null
@@ -291,14 +419,24 @@ interface ModelViewerProps {
   offsetSetterRef: MutableRefObject<((offset: number) => void) | null>;
   /** Dedicated cylindrical-wall handle; never reuses face translation. */
   cylinderRadiusHandle: CylinderRadiusHandleTarget | null;
-  /** Streamed absolute radius during a drag. */
-  onCylinderRadiusPreview(radius: number): void;
+  /** Whether the radial handle reads/accepts Ø or R; geometry remains radius. */
+  cylinderDimensionMode: DimensionMode;
+  onCylinderDimensionModeChange(mode: DimensionMode): void;
+  /** Imperative bridge to the React-owned selection readout. */
+  cylinderRadiusLabelSetterRef: MutableRefObject<
+    ((radius: number | null) => void) | null
+  >;
+  /** Streamed absolute radius; exact geometry is optional for safe proxies. */
+  onCylinderRadiusPreview(radius: number, exactGeometry: boolean): void;
   /** Fired once on release with the absolute radius. */
-  onCylinderRadiusCommit(radius: number): void;
+  onCylinderRadiusCommit(radius: number): boolean;
   /** Clears transient exact geometry without creating history. */
   onCylinderRadiusCancel(): void;
   /** Value chip tapped: open exact entry for the absolute radius. */
-  onOpenCylinderRadiusKeypad(radius: number): void;
+  onOpenCylinderRadiusKeypad(
+    radius: number,
+    dimensionMode: DimensionMode
+  ): void;
   /** Escape reaches the active imperative pointer session through this ref. */
   cancelDirectManipulationRef: MutableRefObject<(() => boolean) | null>;
   /** Armed edge fillet/chamfer handle (selection-first direct manipulation). */
@@ -323,6 +461,16 @@ interface ModelViewerProps {
     modifiers: { additive: boolean; toggle: boolean }
   ): void;
   onHoverRegion(region: RegionPickData | null): void;
+  /**
+   * What measuring the hovered target would report, for the preview chip.
+   * Null when measuring is off or the pick has nothing honest to say.
+   */
+  onMeasurePreview?:
+    | ((
+        selection: TopologySelection,
+        point: { x: number; y: number; z: number }
+      ) => string | null)
+    | null;
   /** Armed region-extrude handle; shares the arrow-rig drag machinery. */
   regionHandle: RegionHandleTarget | null;
   /** In-viewport sketch session; null when not sketching. */
@@ -390,11 +538,30 @@ export interface SceneContext {
     translation: MovePreview['translation'],
     rotationDeg: MovePreview['rotationDeg']
   ): void;
+  /** Returns selection callouts to the pose their bodies rest at. */
+  restSelectionCallouts(): void;
+  /**
+   * Marks the frozen shadow map dirty for exactly one frame. The map is
+   * camera-independent, so orbiting must never call this — that freeze is
+   * where most of the render win lives — but anything that moves a caster
+   * must, or its shadow stays where the caster used to be.
+   */
+  refreshShadowMap(): void;
   grid: THREE.Object3D;
   shadowCatcher: THREE.Object3D;
   keyLight: THREE.DirectionalLight;
   raycaster: THREE.Raycaster;
   objectsByBodyId: Map<string, THREE.Object3D>;
+  edgeOverlaysByBodyId: Map<string, BodyEdgeOverlay>;
+  /**
+   * The body projection currently installed in `bodyGroup`, used to skip the
+   * mesh rebuild on selection-only renders. It belongs to the context rather
+   * than the component because it describes what this scene holds: a context
+   * that is torn down and rebuilt (React Strict Mode's double mount, a dev
+   * hot update) starts empty and must rebuild even though the props never
+   * changed.
+   */
+  renderedBodies: readonly BodyRepresentation[] | null;
   hasFitCamera: boolean;
   /** Viewport size in CSS pixels, the unit fat-line widths are given in. */
   fatLineResolution(): FatLineResolution;
@@ -409,10 +576,10 @@ export interface SceneContext {
   /** Single reusable preselection overlay for the face under the pointer. */
   readonly hoverFaceMesh: THREE.Mesh<
     THREE.BufferGeometry,
-    THREE.MeshBasicMaterial
+    THREE.MeshLambertMaterial
   >;
   /** Selection overlays fading in toward their resting opacity. */
-  readonly fadeIns: Set<THREE.MeshBasicMaterial>;
+  readonly fadeIns: Set<THREE.Material>;
   /** Frame timing for the overlay eases; `update()` once per frame, then read. */
   timer: THREE.Timer;
 }
@@ -424,6 +591,52 @@ interface DimensionLabelBinding {
   modelCenter: THREE.Vector3;
   modelWorldSize: number;
   angleDeg?: number;
+}
+
+/**
+ * Keeps name callouts readable when their anchor sits at the viewport's
+ * edge. CSS2DRenderer centres each label on its projected point and rewrites
+ * the transform every frame, so the correction rides on the margins instead:
+ * the label's unmargined box is recovered from the current margin, and a new
+ * margin is computed from scratch — no feedback across frames. Dimension and
+ * drag-value callouts are excluded; they have their own placement scheme.
+ */
+function clampNameCallouts(container: HTMLElement) {
+  const labels = container.querySelectorAll<HTMLElement>(
+    '.selection-callout:not(.dimension-callout):not(.extrude-value-callout)'
+  );
+  if (labels.length === 0) {
+    return;
+  }
+  const bounds = container.getBoundingClientRect();
+  const pad = 4;
+  for (const label of labels) {
+    const currentLeft = parseFloat(label.style.marginLeft) || 0;
+    const currentTop = parseFloat(label.style.marginTop) || 0;
+    const rect = label.getBoundingClientRect();
+    const baseLeft = rect.left - currentLeft;
+    const baseRight = rect.right - currentLeft;
+    const baseTop = rect.top - currentTop;
+    const baseBottom = rect.bottom - currentTop;
+    let marginLeft = 0;
+    if (baseLeft < bounds.left + pad) {
+      marginLeft = bounds.left + pad - baseLeft;
+    } else if (baseRight > bounds.right - pad) {
+      marginLeft = bounds.right - pad - baseRight;
+    }
+    let marginTop = 0;
+    if (baseTop < bounds.top + pad) {
+      marginTop = bounds.top + pad - baseTop;
+    } else if (baseBottom > bounds.bottom - pad) {
+      marginTop = bounds.bottom - pad - baseBottom;
+    }
+    if (marginLeft !== currentLeft) {
+      label.style.marginLeft = marginLeft ? `${marginLeft}px` : '';
+    }
+    if (marginTop !== currentTop) {
+      label.style.marginTop = marginTop ? `${marginTop}px` : '';
+    }
+  }
 }
 
 function updateDimensionLabels(
@@ -510,6 +723,8 @@ interface MoveDragState {
   worldPerPixel: number;
   startTranslation: MovePreview['translation'];
   startRotation: MovePreview['rotationDeg'];
+  /** Moving thing's center with zero translation; snap math needs where it rests. */
+  restingCenter: THREE.Vector3;
   snapMove: number;
   snapRotate: number;
 }
@@ -517,6 +732,13 @@ interface MoveDragState {
 const SELECTION_EMISSIVE = 0x173a5e;
 const SELECTED_FACE_COLOR = 0x4da3ff;
 const SELECTED_FACE_OPACITY = 0.5;
+const SELECTED_FACE_HIDDEN_OPACITY = 0.16;
+const E2E_CANVAS_HOOKS_ENABLED =
+  (
+    import.meta.env as unknown as {
+      VITE_E2E?: string;
+    }
+  ).VITE_E2E === '1';
 const SKETCH_COLOR = 0x4da3ff;
 const SKETCH_SELECTED_COLOR = 0x9ecbff;
 /**
@@ -528,37 +750,45 @@ const SKETCH_CURVE_WIDTH = 1.4;
 const PREVIEW_EDGE_WIDTH = 1.4;
 const RIGHT_PAN_TARGET_EPSILON = 1e-9;
 
-interface EdgeVisualState {
-  selected: boolean;
-}
-
 export function ModelViewer({
   bodies,
   sketches,
+  measurementAnnotations,
   selectedBodyIds,
   selectedTopology,
   selectedEdges,
   settings,
   fitSignal,
   viewRequest,
+  normalToFaceRequest,
+  rotateRequest,
   units,
   editableBodyIds,
   extrudePreview,
   movePreview,
+  moveCommitHold,
+  appearancePreview,
   projection,
   initialView,
   onViewChange,
   orientationRef,
+  orientationDragRef,
   onSelectTopology,
   onSelectEdgeChain,
   selectionFilter,
   onBoxSelect,
   offsetHandle,
+  onOffsetPreview,
   onOffsetCommit,
+  onOffsetCancel,
+  offsetPreviewInvalid,
   onOpenOffsetKeypad,
   keypadAnchorRef,
   offsetSetterRef,
   cylinderRadiusHandle,
+  cylinderDimensionMode,
+  onCylinderDimensionModeChange,
+  cylinderRadiusLabelSetterRef,
   onCylinderRadiusPreview,
   onCylinderRadiusCommit,
   onCylinderRadiusCancel,
@@ -574,6 +804,7 @@ export function ModelViewer({
   profileSelectionMode,
   onSelectRegion,
   onHoverRegion,
+  onMeasurePreview,
   regionHandle,
   sketchMode,
   onSketchCommit,
@@ -607,6 +838,8 @@ export function ModelViewer({
   extrudePreviewRef.current = extrudePreview;
   const movePreviewRef = useRef(movePreview);
   movePreviewRef.current = movePreview;
+  const moveCommitHoldRef = useRef(moveCommitHold);
+  moveCommitHoldRef.current = moveCommitHold;
   const onMovePreviewChangeRef = useRef(onMovePreviewChange);
   onMovePreviewChangeRef.current = onMovePreviewChange;
   /** Base (untranslated) gizmo pivot: the target body's bbox center. */
@@ -619,6 +852,10 @@ export function ModelViewer({
   bodiesRef.current = bodies;
   const cylinderRadiusHandleRef = useRef(cylinderRadiusHandle);
   cylinderRadiusHandleRef.current = cylinderRadiusHandle;
+  const offsetHandleRef = useRef(offsetHandle);
+  offsetHandleRef.current = offsetHandle;
+  const cylinderDimensionModeRef = useRef(cylinderDimensionMode);
+  cylinderDimensionModeRef.current = cylinderDimensionMode;
   const onContextMenuRef = useRef(onContextMenu);
   onContextMenuRef.current = onContextMenu;
   const editableBodyIdsRef = useRef(new Set(editableBodyIds));
@@ -640,6 +877,12 @@ export function ModelViewer({
   onViewChangeRef.current = onViewChange;
   const onOffsetCommitRef = useRef(onOffsetCommit);
   onOffsetCommitRef.current = onOffsetCommit;
+  const onOffsetPreviewRef = useRef(onOffsetPreview);
+  onOffsetPreviewRef.current = onOffsetPreview;
+  const onOffsetCancelRef = useRef(onOffsetCancel);
+  onOffsetCancelRef.current = onOffsetCancel;
+  const offsetPreviewInvalidRef = useRef(offsetPreviewInvalid);
+  offsetPreviewInvalidRef.current = offsetPreviewInvalid;
   const onOpenOffsetKeypadRef = useRef(onOpenOffsetKeypad);
   onOpenOffsetKeypadRef.current = onOpenOffsetKeypad;
   const onCylinderRadiusPreviewRef = useRef(onCylinderRadiusPreview);
@@ -650,6 +893,10 @@ export function ModelViewer({
   onCylinderRadiusCancelRef.current = onCylinderRadiusCancel;
   const onOpenCylinderRadiusKeypadRef = useRef(onOpenCylinderRadiusKeypad);
   onOpenCylinderRadiusKeypadRef.current = onOpenCylinderRadiusKeypad;
+  const onCylinderDimensionModeChangeRef = useRef(
+    onCylinderDimensionModeChange
+  );
+  onCylinderDimensionModeChangeRef.current = onCylinderDimensionModeChange;
   const onEdgeRadiusPreviewRef = useRef(onEdgeRadiusPreview);
   onEdgeRadiusPreviewRef.current = onEdgeRadiusPreview;
   const onEdgeCommitRef = useRef(onEdgeCommit);
@@ -668,11 +915,29 @@ export function ModelViewer({
   onSelectRegionRef.current = onSelectRegion;
   const onHoverRegionRef = useRef(onHoverRegion);
   onHoverRegionRef.current = onHoverRegion;
+  const onMeasurePreviewRef = useRef(onMeasurePreview);
+  onMeasurePreviewRef.current = onMeasurePreview;
   const profileSelectionModeRef = useRef(profileSelectionMode);
   profileSelectionModeRef.current = profileSelectionMode;
   const profilePickTargetsRef = useRef<ProfilePickTarget[]>([]);
   /** Group holding region-detected sketch rendering (curves + fills). */
   const regionGroupRef = useRef<THREE.Group | null>(null);
+  /** Separate from direct-edit overlays so body rebuilds do not erase it. */
+  const measurementGroupRef = useRef<THREE.Group | null>(null);
+  /**
+   * Live dimension graphics with the world points they span.
+   *
+   * Held outside React because the animation loop resizes them every frame:
+   * their arrowheads and witness ticks are pixel-sized, and the world size of
+   * a pixel changes with a zoom that never touches the camera's orientation.
+   */
+  const measurementDimensionsRef = useRef<
+    {
+      graphic: DimensionGraphic;
+      start: THREE.Vector3;
+      end: THREE.Vector3;
+    }[]
+  >([]);
   const onSketchCommitRef = useRef(onSketchCommit);
   onSketchCommitRef.current = onSketchCommit;
   const onSketchDrawingChangeRef = useRef(onSketchDrawingChange);
@@ -686,6 +951,9 @@ export function ModelViewer({
     dragStart: SketchPoint | null;
     arcCenter: SketchPoint | null;
     arcStart: SketchPoint | null;
+    circleFirst: SketchPoint | null;
+    circleSecond: SketchPoint | null;
+    awaitingSecondPoint: boolean;
     pointerId: number | null;
     moved: boolean;
   }>({
@@ -693,6 +961,9 @@ export function ModelViewer({
     dragStart: null,
     arcCenter: null,
     arcStart: null,
+    circleFirst: null,
+    circleSecond: null,
+    awaitingSecondPoint: false,
     pointerId: null,
     moved: false
   });
@@ -700,6 +971,7 @@ export function ModelViewer({
   /** Entity-snap candidates from committed sketch objects + cursor marker. */
   const snapTargetsRef = useRef<SnapTarget[]>([]);
   const sketchSnapMarkerRef = useRef<HTMLDivElement | null>(null);
+  const sketchCenterTargetRef = useRef<HTMLDivElement | null>(null);
   /** Camera pose + projection to restore when leaving sketch mode. */
   const sketchReturnRef = useRef<{
     position: THREE.Vector3;
@@ -712,6 +984,8 @@ export function ModelViewer({
   /** Cylindrical radius has its own non-translating affordance and lifecycle. */
   const cylinderRadiusRigRef = useRef<DragRig | null>(null);
   const cylinderRadiusDragActiveRef = useRef(false);
+  const cylinderRadiusProxyControllerRef =
+    useRef<CylinderRadiusProxyController | null>(null);
   const offsetChipRef = useRef<HTMLDivElement | null>(null);
 
   // Scene, renderers, controls, and the render loop live for the component's
@@ -721,19 +995,18 @@ export function ModelViewer({
     if (!host) {
       return;
     }
-    const e2eCanvasHooksEnabled =
-      (
-        import.meta.env as unknown as {
-          VITE_E2E?: string;
-        }
-      ).VITE_E2E === '1';
+    const viewerHost = host;
+    const e2eCanvasHooksEnabled = E2E_CANVAS_HOOKS_ENABLED;
 
     mark('viewer.init:begin');
     let firstFrame = true;
     let lastPerfFrameAt: number | null = null;
     const scene = new THREE.Scene();
-    const gradientBackground = createGradientBackground();
-    scene.background = gradientBackground;
+    // Solid clear colour stays behind the clip-space gradient as a safe first
+    // frame/context-recovery fallback.
+    scene.background = new THREE.Color('#05070a');
+    const gradientBackdrop = createGradientBackdrop();
+    scene.add(gradientBackdrop);
 
     const renderer = timed(
       'viewer.renderer',
@@ -750,6 +1023,26 @@ export function ModelViewer({
     renderer.toneMappingExposure = 1.0;
     renderer.shadowMap.enabled = true;
     renderer.shadowMap.autoUpdate = false;
+    /**
+     * The single place that thaws the frozen shadow map, counting refreshes on
+     * the canvas so a test can assert both halves of the contract: orbiting
+     * must not refresh it, moving a body must. Declared here rather than
+     * beside its callers because the light rig calls it during setup, and a
+     * `let` read before its declaration is a dead-zone throw that takes the
+     * whole viewer down.
+     */
+    let shadowRefreshes = 0;
+    function refreshShadowMap() {
+      renderer.shadowMap.needsUpdate = true;
+      shadowRefreshes += 1;
+      renderer.domElement.dataset.e2eShadowRefreshes = String(shadowRefreshes);
+      // The freeze itself, not just the thaws: a refresh count alone cannot
+      // tell that three.js has gone back to updating the map every frame,
+      // which is the regression that would quietly undo the render win.
+      renderer.domElement.dataset.e2eShadowAutoUpdate = String(
+        renderer.shadowMap.autoUpdate
+      );
+    }
     // PCF is the soft one now: three r185 deprecated PCFSoftShadowMap and
     // silently substitutes this, warning on every renderer. Its sampler spreads
     // five Vogel-disk taps over `light.shadow.radius`, tuned in
@@ -791,6 +1084,12 @@ export function ModelViewer({
     });
     const camera = cameraRig.perspective;
     const orthographic = cameraRig.orthographic;
+    const orientationDragControls: OrientationDragControls = {
+      begin: () => cameraRig.beginOrbitDrag(),
+      move: (deltaX, deltaY) => cameraRig.orbitByPixels(deltaX, deltaY),
+      end: () => cameraRig.endOrbitDrag()
+    };
+    orientationDragRef.current = orientationDragControls;
 
     // Z-up sky plus cool floor bounce keeps undersides readable without
     // weakening the directional key that defines face orientation.
@@ -801,7 +1100,10 @@ export function ModelViewer({
     keyLight.position.set(90, -100, 140);
     keyLight.castShadow = true;
     tuneShadowFrustum(keyLight, 120);
-    renderer.shadowMap.needsUpdate = true;
+    // Through the helper like every other site, so the refresh count on the
+    // canvas starts from a known value rather than being absent until the
+    // first thaw.
+    refreshShadowMap();
     scene.add(keyLight);
     scene.add(keyLight.target);
     // Left, behind, slightly above — cool rim for edge separation.
@@ -816,7 +1118,11 @@ export function ModelViewer({
     const shadowCatcher = createShadowCatcher();
     scene.add(shadowCatcher);
 
-    const axes = createAxesGizmo(16, {
+    // Stretched per frame by updateAxesGizmo so each axis runs past the
+    // viewport edge — on screen they read as infinite. Fat lines keep a
+    // constant screen-space width, so the triad stays one crisp stroke at
+    // any zoom.
+    const axes = createAxesGizmo({
       width: renderer.domElement.clientWidth || 1,
       height: renderer.domElement.clientHeight || 1
     });
@@ -838,6 +1144,11 @@ export function ModelViewer({
     overlayGroup.name = 'overlays';
     scene.add(overlayGroup);
 
+    const measurementGroup = new THREE.Group();
+    measurementGroup.name = 'measurements';
+    scene.add(measurementGroup);
+    measurementGroupRef.current = measurementGroup;
+
     const gizmoGroup = new THREE.Group();
     gizmoGroup.name = 'direct-modeling-gizmo';
     scene.add(gizmoGroup);
@@ -849,6 +1160,7 @@ export function ModelViewer({
     // Raycasting and topology resolution. The active camera is read per call
     // because the projection toggle swaps it.
     const objectsByBodyId = new Map<string, THREE.Object3D>();
+    const edgeOverlaysByBodyId = new Map<string, BodyEdgeOverlay>();
 
     const selection = new SelectionManager({
       bodyGroup,
@@ -886,20 +1198,78 @@ export function ModelViewer({
             : 'default'
     });
 
+    /**
+     * Poses the named body's selection callout under the same rotate-then-
+     * translate the mesh just took. At most one callout carries a body id —
+     * the effect that builds them names only the primary selection.
+     */
+    function poseSelectionCallout(
+      bodyId: MovePreview['bodyId'],
+      rotationDeg: MovePreview['rotationDeg'],
+      final: { x: number; y: number; z: number }
+    ) {
+      for (const child of context.overlayGroup.children) {
+        const resting = child.userData.calloutRestingPosition as
+          THREE.Vector3 | undefined;
+        if (child.userData.calloutBodyId !== bodyId || !resting) {
+          continue;
+        }
+        const anchor = moveCalloutAnchor(resting, rotationDeg, final);
+        child.position.set(anchor.x, anchor.y, anchor.z);
+      }
+    }
+
+    /** Returns every selection callout to the pose its body rests at. */
+    function restSelectionCallouts() {
+      for (const child of context.overlayGroup.children) {
+        const resting = child.userData.calloutRestingPosition as
+          THREE.Vector3 | undefined;
+        if (resting) {
+          child.position.copy(resting);
+        }
+      }
+    }
+
     function applyMovePreview(
       translation: MovePreview['translation'],
       rotationDeg: MovePreview['rotationDeg']
     ) {
-      const preview = movePreviewRef.current;
+      const preview = movePreviewRef.current ?? moveCommitHoldRef.current;
       if (!preview) {
         return;
       }
       const center = moveCenterRef.current;
-      const object = context.objectsByBodyId.get(preview.bodyId);
-      if (object) {
-        const final = composeMoveTransform(center, translation, rotationDeg);
-        object.rotation.copy(moveEuler(rotationDeg));
-        object.position.set(final.x, final.y, final.z);
+      if (preview.target === 'sketch') {
+        // A sketch preview shifts its overlay children — curves, region
+        // fills, boundaries, markers — as a rigid translation. No rotation:
+        // the document cannot store one for most sketch object kinds.
+        const overlay = regionGroupRef.current;
+        if (overlay) {
+          for (const child of overlay.children) {
+            if (child.userData.sketchViewId === preview.bodyId) {
+              child.position.set(translation.x, translation.y, translation.z);
+            }
+          }
+        }
+      } else {
+        const object = context.objectsByBodyId.get(preview.bodyId);
+        if (object) {
+          const final = composeMoveTransform(center, translation, rotationDeg);
+          object.rotation.copy(moveEuler(rotationDeg));
+          object.position.set(final.x, final.y, final.z);
+          // The mesh rotates about its own origin and then translates, so the
+          // callout's anchor has to take the same two steps to stay over the
+          // body — adding the translation alone would drift it off under any
+          // rotation.
+          poseSelectionCallout(preview.bodyId, rotationDeg, final);
+          // The shadow map is frozen (`autoUpdate = false`) so camera-only
+          // frames reuse it — that is where most of the render win came from.
+          // A body moving under the light is one of the few things that
+          // genuinely invalidates it, and leaving it stale strands the body's
+          // shadow on the ground where the body used to be. Bounded to the
+          // drag: it re-freezes as soon as the preview ends.
+          refreshShadowMap();
+        }
       }
       moveGizmoGroup.position.set(
         center.x + translation.x,
@@ -910,6 +1280,7 @@ export function ModelViewer({
 
     let animationFrame: number | null = null;
     let pendingHoverEvent: PointerEvent | null = null;
+    let resizePending = false;
 
     function requestRender() {
       if (animationFrame === null) {
@@ -952,11 +1323,15 @@ export function ModelViewer({
       gizmoGroup,
       moveGizmoGroup,
       applyMovePreview,
+      restSelectionCallouts,
+      refreshShadowMap,
       grid,
       shadowCatcher,
       keyLight,
       raycaster: picker.raycaster,
       objectsByBodyId,
+      edgeOverlaysByBodyId,
+      renderedBodies: null,
       hasFitCamera: false,
       get hoveredBodyId() {
         return selection.hoveredBodyId;
@@ -987,13 +1362,10 @@ export function ModelViewer({
     }
 
     const observer = new ResizeObserver(() => {
-      cameraRig.handleResize();
-      renderer.setSize(host.clientWidth, host.clientHeight);
-      labelRenderer.setSize(host.clientWidth, host.clientHeight);
-      // Screen-space fat lines rasterize against the viewport size. Walking the
-      // scene covers body edges, sketches, previews and handle rigs alike, so
-      // no creation site has to remember to register its material.
-      syncFatLineResolution(scene, host.clientWidth, host.clientHeight);
+      // setSize clears the WebGL drawing buffer. Keep that clear in the same
+      // animation frame as the next scene draw so continuous panel resizing
+      // cannot present an empty buffer between two frames.
+      resizePending = true;
       requestRender();
     });
     observer.observe(host);
@@ -1002,12 +1374,14 @@ export function ModelViewer({
     /** Where "select other" has reached, for repeated clicks on one spot. */
     let depthCycle: DepthCycle | null = null;
     let rightPanStartTarget: THREE.Vector3 | null = null;
-    /** Shift-drag rubber band over empty space, for selecting several bodies. */
+    /** Unmodified drag rubber band for selecting several bodies. */
     let boxSelect: {
       pointerId: number;
       startX: number;
       startY: number;
     } | null = null;
+    /** Pointer whose Shift+left-drag is currently routed to camera orbit. */
+    let shiftOrbitPointerId: number | null = null;
     let faceDrag: FaceDragState | null = null;
     let extrudeDrag: ExtrudeDragState | null = null;
     let moveDrag: MoveDragState | null = null;
@@ -1018,6 +1392,8 @@ export function ModelViewer({
      * every edge of the model on every pointer move.
      */
     let moveSnaps: SnapCandidate[] = [];
+    /** Face centers of the other bodies, for center-alignment snapping. */
+    let moveCenterTargets: CenterAlignTarget[] = [];
     /** Screen-projected drag along the offset handle's normal. */
     let offsetDrag: {
       pointerId: number;
@@ -1027,6 +1403,7 @@ export function ModelViewer({
       directionY: number;
       pixelsPerUnit: number;
       initialOffset: number;
+      lastPreviewAt: number;
     } | null = null;
     /** Immutable radius-edit snapshot captured when the handle engages. */
     let cylinderRadiusDrag: {
@@ -1045,6 +1422,135 @@ export function ModelViewer({
       originalRadius: number;
       initialRadius: number;
     } | null = null;
+    /**
+     * Disposable visual-only projection for a standalone cylinder. Pointer
+     * events only replace `pendingRadius`; the render loop applies the newest
+     * value once per frame, so a fast drag cannot queue stale geometry work.
+     */
+    let cylinderRadiusProxy: {
+      object: THREE.Object3D;
+      originalMatrix: THREE.Matrix4;
+      originalMatrixAutoUpdate: boolean;
+      axisStart: THREE.Vector3;
+      axisEnd: THREE.Vector3;
+      originalRadius: number;
+      pendingRadius: number | null;
+      requestedAt: number;
+    } | null = null;
+
+    function updateCylinderRadiusLabels(radius: number | null) {
+      cylinderRadiusLabelSetterRef.current?.(radius);
+      if (radius === null) {
+        return;
+      }
+      const replacement = `$1${formatNumber(radius * 2)}`;
+      for (const label of labelRenderer.domElement.querySelectorAll<HTMLElement>(
+        '.selection-callout:not(.dimension-callout):not(.extrude-value-callout)'
+      )) {
+        label.textContent =
+          label.textContent?.replace(
+            /(Cylindrical face Ø)[^ ·]+/,
+            replacement
+          ) ?? null;
+      }
+    }
+
+    function restoreCylinderRadiusProxy() {
+      const proxy = cylinderRadiusProxy;
+      if (!proxy) {
+        cylinderRadiusLabelSetterRef.current?.(null);
+        delete renderer.domElement.dataset.e2eCylinderProxyRadius;
+        return;
+      }
+      proxy.object.matrix.copy(proxy.originalMatrix);
+      proxy.object.matrixAutoUpdate = proxy.originalMatrixAutoUpdate;
+      proxy.object.matrixWorldNeedsUpdate = true;
+      proxy.object.updateMatrixWorld(true);
+      updateCylinderRadiusLabels(proxy.originalRadius);
+      cylinderRadiusLabelSetterRef.current?.(null);
+      delete renderer.domElement.dataset.e2eCylinderProxyRadius;
+      cylinderRadiusProxy = null;
+      refreshShadowMap();
+      requestRender();
+    }
+
+    function discardCylinderRadiusProxy() {
+      cylinderRadiusProxy = null;
+      cylinderRadiusLabelSetterRef.current?.(null);
+      delete renderer.domElement.dataset.e2eCylinderProxyRadius;
+    }
+
+    function beginCylinderRadiusProxy(target: CylinderRadiusHandleTarget) {
+      restoreCylinderRadiusProxy();
+      if (!target.smoothPreview) {
+        return;
+      }
+      const object = context.objectsByBodyId.get(target.bodyId);
+      if (!object) {
+        return;
+      }
+      object.updateMatrix();
+      cylinderRadiusProxy = {
+        object,
+        originalMatrix: object.matrix.clone(),
+        originalMatrixAutoUpdate: object.matrixAutoUpdate,
+        axisStart: new THREE.Vector3(
+          target.axisStart.x,
+          target.axisStart.y,
+          target.axisStart.z
+        ),
+        axisEnd: new THREE.Vector3(
+          target.axisEnd.x,
+          target.axisEnd.y,
+          target.axisEnd.z
+        ),
+        originalRadius: target.originalRadius,
+        pendingRadius: null,
+        requestedAt: performance.now()
+      };
+    }
+
+    function queueCylinderRadiusProxy(radius: number): boolean {
+      if (!cylinderRadiusProxy) {
+        return false;
+      }
+      cylinderRadiusProxy.pendingRadius = radius;
+      cylinderRadiusProxy.requestedAt = performance.now();
+      updateCylinderRadiusLabels(radius);
+      requestRender();
+      return true;
+    }
+
+    function flushCylinderRadiusProxy(): {
+      radius: number;
+      requestedAt: number;
+    } | null {
+      const proxy = cylinderRadiusProxy;
+      const radius = proxy?.pendingRadius;
+      if (!proxy || radius == null) {
+        return null;
+      }
+      const previewMatrix = cylinderRadiusPreviewMatrix(
+        proxy.axisStart,
+        proxy.axisEnd,
+        radius / proxy.originalRadius
+      );
+      proxy.pendingRadius = null;
+      if (!previewMatrix) {
+        return null;
+      }
+      proxy.object.matrixAutoUpdate = false;
+      proxy.object.matrix.copy(previewMatrix).multiply(proxy.originalMatrix);
+      proxy.object.matrixWorldNeedsUpdate = true;
+      proxy.object.updateMatrixWorld(true);
+      renderer.domElement.dataset.e2eCylinderProxyRadius = String(radius);
+      return { radius, requestedAt: proxy.requestedAt };
+    }
+
+    cylinderRadiusProxyControllerRef.current = {
+      restore: restoreCylinderRadiusProxy,
+      discard: discardCylinderRadiusProxy
+    };
     /** Screen-projected drag growing the edge blend radius. */
     let edgeDrag: {
       pointerId: number;
@@ -1058,6 +1564,20 @@ export function ModelViewer({
     } | null = null;
     const hud = new HudLayer(host);
     const dragHud = hud.create('direct-edit-hud');
+    let activeSketchSnap: SnapTarget | null = null;
+    let sketchSnapCycle = 0;
+    let latestSketchPointerEvent: PointerEvent | null = null;
+    let latestSketchPoint: SketchPoint | null = null;
+    let sketchNumericRaw: string | null = null;
+    let sketchNumericKind:
+      'radius' | 'diameter' | 'length' | 'width' | 'height' = 'length';
+    /**
+     * The rectangle's other side while you type this one. A rectangle is the
+     * only shape here with two independent numbers, so Tab parks the value you
+     * finished and swaps which side you are editing; whichever side you never
+     * type keeps whatever the drag was showing.
+     */
+    let sketchNumericOther: string | null = null;
     cancelDirectManipulationRef.current = () => {
       let cancelled = false;
       if (cylinderRadiusDrag) {
@@ -1066,6 +1586,7 @@ export function ModelViewer({
         cylinderRadiusDrag = null;
         cylinderRadiusDragActiveRef.current = false;
         cylinderRadiusRigRef.current?.setValue(originalRadius);
+        restoreCylinderRadiusProxy();
         onCylinderRadiusCancelRef.current();
         cancelled = true;
       }
@@ -1075,6 +1596,7 @@ export function ModelViewer({
         offsetDrag = null;
         offsetDragActiveRef.current = false;
         offsetRigRef.current?.setValue(initialOffset);
+        onOffsetCancelRef.current();
         cancelled = true;
       }
       if (edgeDrag) {
@@ -1094,6 +1616,21 @@ export function ModelViewer({
       return cancelled;
     };
     const handleCapturedEscape = (event: KeyboardEvent) => {
+      if (handleSketchNumericKey(event)) {
+        return;
+      }
+      if (
+        event.key === 'Tab' &&
+        sketchModeRef.current &&
+        latestSketchPointerEvent
+      ) {
+        activeSketchSnap = null;
+        sketchSnapCycle += 1;
+        updateSketchInProgress(latestSketchPointerEvent);
+        event.preventDefault();
+        event.stopPropagation();
+        return;
+      }
       if (
         event.key === 'Escape' &&
         cancelDirectManipulationRef.current?.() === true
@@ -1124,6 +1661,55 @@ export function ModelViewer({
       hud.showAt(snapGlyph, resolved.screen.x, resolved.screen.y);
     }
 
+    /**
+     * The snap point a measuring pointer is asking for, or null.
+     *
+     * Scoped by `measureSnapEdges` before anything is projected. A move drag
+     * collects snaps body-wide, which it can afford because it does so once at
+     * drag start; this runs on every hover frame, and handing `resolveSnap` a
+     * whole imported assembly would be six figures of matrix work per frame.
+     */
+    function resolveMeasureSnap(
+      event: PointerEvent,
+      candidate: PickCandidate
+    ): SnapResolution | null {
+      const bodyId = candidate.selection?.bodyId;
+      const body = bodiesRef.current.find(
+        (entry) => entry.bodyId === bodyId && !entry.consumed
+      );
+      const edges = body?.topology?.edges;
+      if (!edges) {
+        return null;
+      }
+      const selection = candidate.selection;
+      const hoveredEdge =
+        selection?.kind === 'edge'
+          ? (edges.find((entry) => entry.hash === selection.hash) ?? null)
+          : null;
+      const scoped = measureSnapEdges(edges, {
+        edge: hoveredEdge,
+        faceHash: selection?.kind === 'face' ? (selection.hash ?? null) : null
+      });
+      if (scoped.length === 0) {
+        return null;
+      }
+      const local = hud.toLocal(event.clientX, event.clientY);
+      if (!local) {
+        return null;
+      }
+      return resolveSnap(
+        snapsFromEdges(scoped, { label: body?.name }),
+        local,
+        (point) =>
+          projectToScreen(
+            new THREE.Vector3(point.x, point.y, point.z),
+            context.activeCamera,
+            renderer.domElement.clientWidth,
+            renderer.domElement.clientHeight
+          )
+      );
+    }
+
     /** Snap candidates from every body except the one being moved. */
     function collectMoveSnaps(movingBodyId: string | null): SnapCandidate[] {
       return bodiesRef.current
@@ -1133,6 +1719,49 @@ export function ModelViewer({
             ? snapsFromEdges(body.topology.edges, { label: body.name })
             : []
         );
+    }
+
+    /**
+     * Centers to align the moving thing with: every face center of every
+     * other body. Point snapping answers "is the handle on that corner";
+     * these answer "is what I am moving centred on that face" — per axis,
+     * so latching one axis or both are the same rule.
+     */
+    function collectCenterAlignTargets(
+      movingBodyId: string | null
+    ): CenterAlignTarget[] {
+      return bodiesRef.current
+        .filter((body) => !body.consumed && body.bodyId !== movingBodyId)
+        .flatMap((body) =>
+          (body.topology?.faces ?? []).flatMap((face) =>
+            face.geometry?.center
+              ? [{ point: face.geometry.center, label: body.name }]
+              : []
+          )
+        );
+    }
+
+    /** Glyph + readout for a latched center alignment. */
+    function showCenterAlignGlyph(matches: CenterAlignMatch[]): void {
+      const target = matches[0]?.target;
+      if (!target) {
+        hud.hide(snapGlyph);
+        return;
+      }
+      const host = renderer.domElement;
+      const screen = projectToScreen(
+        new THREE.Vector3(target.point.x, target.point.y, target.point.z),
+        context.activeCamera,
+        host.clientWidth,
+        host.clientHeight
+      );
+      if (!screen) {
+        hud.hide(snapGlyph);
+        return;
+      }
+      snapGlyph.textContent = `◎ ${centerAlignLabel(matches)}`;
+      snapGlyph.dataset.kind = 'center';
+      hud.showAt(snapGlyph, screen.x, screen.y);
     }
 
     /**
@@ -1160,19 +1789,55 @@ export function ModelViewer({
       hud.showAt(selectionBand, rect.left, rect.top);
     }
 
+    function beginBoxSelect(event: PointerEvent) {
+      boxSelect = {
+        pointerId: event.pointerId,
+        startX: event.clientX,
+        startY: event.clientY
+      };
+      gestures.capture(event, 'crosshair');
+    }
+
     // Value chip for the offset handle: tracks the arrow tip every frame.
     // Tapping it opens exact numeric entry, per the drag-or-type contract.
+    /**
+     * The value a click would record, shown while the pointer is still over
+     * the target. Hidden from assistive technology: the dock's live region
+     * already announces what was measured, and narrating every hover would
+     * bury that under a stream of numbers nobody asked for.
+     */
+    const measurePreviewChip = hud.create('measure-preview-chip', {
+      ariaHidden: true
+    });
     const offsetChip = hud.create('handle-value-chip');
     offsetChip.dataset.testid = 'direct-manipulation-value';
+    const dimensionPrefix = document.createElement('button');
+    dimensionPrefix.type = 'button';
+    dimensionPrefix.className = 'handle-dimension-prefix';
+    const toggleCylinderDimensionMode = (event: Event) => {
+      event.stopPropagation();
+      const next =
+        cylinderDimensionModeRef.current === 'diameter' ? 'radius' : 'diameter';
+      cylinderDimensionModeRef.current = next;
+      onCylinderDimensionModeChangeRef.current(next);
+      requestRender();
+    };
+    dimensionPrefix.addEventListener('click', toggleCylinderDimensionMode);
     const handleChipClick = () => {
       const cylinderRig = cylinderRadiusRigRef.current;
       if (cylinderRig) {
-        onOpenCylinderRadiusKeypadRef.current(cylinderRig.value());
+        onOpenCylinderRadiusKeypadRef.current(
+          cylinderRig.value(),
+          cylinderDimensionModeRef.current
+        );
         return;
       }
       const offsetRig = offsetRigRef.current;
       if (offsetRig) {
-        onOpenOffsetKeypadRef.current(offsetRig.value());
+        onOpenOffsetKeypadRef.current(
+          offsetRig.value(),
+          offsetHandleRef.current?.totalBaseline
+        );
         return;
       }
       const edgeRig = edgeRigRef.current;
@@ -1183,15 +1848,38 @@ export function ModelViewer({
     offsetChip.addEventListener('click', handleChipClick);
     offsetChipRef.current = offsetChip;
 
+    // Companion "Radius" label pill for the cylinder dimension line, sitting
+    // just ahead of the value chip like a drawing callout's name tag. Tapping
+    // either pill opens the same exact-entry keypad.
+    const radiusLabelChip = hud.create('handle-label-chip');
+    radiusLabelChip.textContent = 'Diameter';
+    radiusLabelChip.addEventListener('click', handleChipClick);
+
     // Cursor-following dimension readout for in-viewport sketching.
     const sketchDimLabel = hud.create('sketch-dim-label');
     sketchDimLabelRef.current = sketchDimLabel;
+
+    const sketchGridIndicator = hud.create('sketch-grid-indicator', {
+      ariaHidden: true
+    });
 
     // Entity-snap glyph pinned to the cursor: endpoint □, midpoint △, center ◎.
     const sketchSnapMarker = hud.create('sketch-snap-marker', {
       ariaHidden: true
     });
     sketchSnapMarkerRef.current = sketchSnapMarker;
+
+    // Exact center beacon: appears before the snap engages so the cursor has
+    // a visible destination instead of asking users to discover it by chance.
+    const sketchCenterTarget = hud.create('sketch-center-target', {
+      ariaHidden: true
+    });
+    for (const axis of ['horizontal', 'vertical'] as const) {
+      const line = document.createElement('span');
+      line.className = `sketch-center-axis ${axis}`;
+      sketchCenterTarget.appendChild(line);
+    }
+    sketchCenterTargetRef.current = sketchCenterTarget;
 
     // Exact entry drives the same preview the drag does.
     offsetSetterRef.current = (value: number) => {
@@ -1223,7 +1911,19 @@ export function ModelViewer({
       const detail = (
         event as CustomEvent<{
           bodyId?: string;
-          surface?: 'wall' | 'cap';
+          surface?: 'wall' | 'cap' | 'top-cap';
+          select?: boolean;
+          resolve?: (
+            geometry: Pick<
+              FaceGeometry,
+              | 'radius'
+              | 'diameter'
+              | 'surfaceType'
+              | 'featureType'
+              | 'axisStart'
+              | 'axisEnd'
+            > | null
+          ) => void;
         }>
       ).detail;
       const body = bodiesRef.current.find(
@@ -1233,20 +1933,25 @@ export function ModelViewer({
       );
       const faces = body?.topology?.faces ?? [];
       const face =
-        detail?.surface === 'cap'
-          ? faces.find(
-              (candidate) =>
-                candidate.geometry?.surfaceType === 'plane' &&
-                candidate.geometry.normal !== undefined
+        detail?.surface === 'top-cap'
+          ? faces.find((candidate) =>
+              candidate.reference?.lineageName.endsWith('.face.cap.end')
             )
-          : faces.find(
-              (candidate) =>
-                candidate.geometry?.surfaceType === 'cylinder' &&
-                candidate.geometry.axisStart !== undefined &&
-                candidate.geometry.axisEnd !== undefined &&
-                candidate.geometry.radius !== undefined
-            );
+          : detail?.surface === 'cap'
+            ? faces.find(
+                (candidate) =>
+                  candidate.geometry?.surfaceType === 'plane' &&
+                  candidate.geometry.normal !== undefined
+              )
+            : faces.find(
+                (candidate) =>
+                  candidate.geometry?.surfaceType === 'cylinder' &&
+                  candidate.geometry.axisStart !== undefined &&
+                  candidate.geometry.axisEnd !== undefined &&
+                  candidate.geometry.radius !== undefined
+              );
       if (!body || !face?.geometry) {
+        detail?.resolve?.(null);
         return;
       }
       const geometry = face.geometry;
@@ -1308,14 +2013,190 @@ export function ModelViewer({
             : radial;
       }
       if (!normal) {
+        detail?.resolve?.(null);
         return;
       }
+      if (detail?.select !== false) {
+        onSelectTopologyRef.current(
+          {
+            bodyId: body.bodyId,
+            kind: 'face',
+            topologyId: face.topologyId,
+            hash: face.hash
+          },
+          false,
+          {
+            point: { x: point.x, y: point.y, z: point.z },
+            normal: { x: normal.x, y: normal.y, z: normal.z }
+          }
+        );
+      }
+      detail?.resolve?.({
+        surfaceType: geometry.surfaceType,
+        ...(geometry.featureType ? { featureType: geometry.featureType } : {}),
+        ...(geometry.radius !== undefined ? { radius: geometry.radius } : {}),
+        ...(geometry.diameter !== undefined
+          ? { diameter: geometry.diameter }
+          : {}),
+        ...(geometry.axisStart ? { axisStart: geometry.axisStart } : {}),
+        ...(geometry.axisEnd ? { axisEnd: geometry.axisEnd } : {})
+      });
+    };
+    /** Exact bore/annulus selection plus a pixel known to lie on the far wall. */
+    const handleE2EVisualSelectionProbe = (event: Event) => {
+      if (!e2eCanvasHooksEnabled) {
+        return;
+      }
+      const detail = (
+        event as CustomEvent<{
+          surface?: 'bore' | 'annulus';
+          resolve?: (
+            value: { x: number; y: number; topologyId: string } | null
+          ) => void;
+        }>
+      ).detail;
+      if (!detail?.surface || !detail.resolve) {
+        return;
+      }
+      const boreCandidate = bodiesRef.current
+        .flatMap((body) =>
+          (body.topology?.faces ?? [])
+            .filter(
+              (face) =>
+                face.geometry?.featureType === 'through-hole' &&
+                face.geometry.radius !== undefined
+            )
+            .map((face) => ({ body, face }))
+        )
+        .sort(
+          (left, right) =>
+            (right.face.geometry?.radius ?? 0) -
+            (left.face.geometry?.radius ?? 0)
+        )[0];
+      const body = boreCandidate?.body;
+      const bore = boreCandidate?.face;
+      const boreGeometry = bore?.geometry;
+      if (
+        !body?.topology ||
+        !bore ||
+        !boreGeometry?.axisStart ||
+        !boreGeometry.axisEnd ||
+        boreGeometry.radius === undefined
+      ) {
+        detail.resolve(null);
+        return;
+      }
+      const adjacentPlaneHashes = new Set(
+        body.topology.edges
+          .filter((edge) => edge.adjacentFaceHashes?.includes(bore.hash))
+          .flatMap((edge) => edge.adjacentFaceHashes ?? [])
+          .filter((hash) => hash !== bore.hash)
+      );
+      const annulus = body.topology.faces.find(
+        (face) =>
+          adjacentPlaneHashes.has(face.hash) &&
+          face.geometry?.surfaceType === 'plane' &&
+          face.geometry.normal !== undefined
+      );
+      const target = detail.surface === 'bore' ? bore : annulus;
+      if (!target?.geometry) {
+        detail.resolve(null);
+        return;
+      }
+
+      const start = new THREE.Vector3(
+        boreGeometry.axisStart.x,
+        boreGeometry.axisStart.y,
+        boreGeometry.axisStart.z
+      );
+      const end = new THREE.Vector3(
+        boreGeometry.axisEnd.x,
+        boreGeometry.axisEnd.y,
+        boreGeometry.axisEnd.z
+      );
+      const axis = end.clone().sub(start).normalize();
+      const center = start.clone().lerp(end, 0.5);
+      const reference =
+        Math.abs(axis.z) < 0.9
+          ? new THREE.Vector3(0, 0, 1)
+          : new THREE.Vector3(1, 0, 0);
+      const radialU = new THREE.Vector3()
+        .crossVectors(axis, reference)
+        .normalize();
+      const radialV = new THREE.Vector3()
+        .crossVectors(axis, radialU)
+        .normalize();
+      const object = context.objectsByBodyId.get(body.bodyId);
+      let bodyMesh: THREE.Mesh | null = null;
+      if (object) {
+        forEachMesh(object, (mesh) => {
+          bodyMesh ??= mesh;
+        });
+      }
+      let farWall: THREE.Vector3 | null = null;
+      let largestDepthGap = -Infinity;
+      if (bodyMesh) {
+        for (let step = 0; step < 48; step += 1) {
+          const angle = (step / 48) * Math.PI * 2;
+          const candidate = center
+            .clone()
+            .addScaledVector(radialU, Math.cos(angle) * boreGeometry.radius)
+            .addScaledVector(radialV, Math.sin(angle) * boreGeometry.radius);
+          const ndc = candidate.clone().project(context.activeCamera);
+          context.raycaster.setFromCamera(
+            new THREE.Vector2(ndc.x, ndc.y),
+            context.activeCamera
+          );
+          const firstHit = context.raycaster.intersectObject(
+            bodyMesh,
+            false
+          )[0];
+          const firstFaceIndex = firstHit?.faceIndex;
+          const visibleFace = body.topology.faces.find(
+            (face) =>
+              firstFaceIndex !== undefined &&
+              firstFaceIndex !== null &&
+              firstFaceIndex >= face.triangleStart &&
+              firstFaceIndex < face.triangleStart + face.triangleCount
+          );
+          const depthGap = firstHit
+            ? context.raycaster.ray.origin.distanceTo(candidate) -
+              firstHit.distance
+            : -Infinity;
+          if (
+            visibleFace?.geometry?.surfaceType === 'cylinder' &&
+            (visibleFace.geometry.radius ?? 0) > boreGeometry.radius &&
+            depthGap > largestDepthGap
+          ) {
+            farWall = candidate;
+            largestDepthGap = depthGap;
+          }
+        }
+      }
+      if (!farWall) {
+        detail.resolve(null);
+        return;
+      }
+
+      const normal =
+        detail.surface === 'bore'
+          ? center.clone().sub(farWall).normalize()
+          : new THREE.Vector3(
+              target.geometry.normal!.x,
+              target.geometry.normal!.y,
+              target.geometry.normal!.z
+            );
+      const point = new THREE.Vector3(
+        target.geometry.center.x,
+        target.geometry.center.y,
+        target.geometry.center.z
+      );
       onSelectTopologyRef.current(
         {
           bodyId: body.bodyId,
           kind: 'face',
-          topologyId: face.topologyId,
-          hash: face.hash
+          topologyId: target.topologyId,
+          hash: target.hash
         },
         false,
         {
@@ -1323,6 +2204,105 @@ export function ModelViewer({
           normal: { x: normal.x, y: normal.y, z: normal.z }
         }
       );
+
+      const ndc = farWall.project(context.activeCamera);
+      const rect = renderer.domElement.getBoundingClientRect();
+      detail.resolve({
+        x: ((ndc.x + 1) / 2) * rect.width,
+        y: ((1 - ndc.y) / 2) * rect.height,
+        topologyId: target.topologyId
+      });
+    };
+    /**
+     * Where on screen a pickable exact edge currently is.
+     *
+     * Browser regressions that click an edge have to aim at a line a couple of
+     * pixels wide, and scanning a lattice of screen points hoping to land on
+     * one is both slow and dependent on the fit pose. This projects the exact
+     * display polyline through the active camera and then confirms the
+     * candidate with the real PickService, so the reported point is one the
+     * application itself resolves to that edge. Occluded samples fail that
+     * confirmation, so only a visible edge is ever reported.
+     */
+    const handleE2ELocateEdge = (event: Event) => {
+      if (!e2eCanvasHooksEnabled) {
+        return;
+      }
+      const detail = (
+        event as CustomEvent<{
+          bodyId?: string;
+          resolve?: (
+            value: { x: number; y: number; topologyId: string } | null
+          ) => void;
+        }>
+      ).detail;
+      if (!detail?.resolve) {
+        return;
+      }
+      const body = bodiesRef.current.find(
+        (candidate) =>
+          !candidate.consumed &&
+          (!detail.bodyId || candidate.bodyId === detail.bodyId)
+      );
+      const edges = (body?.topology?.edges ?? []).filter(
+        (edge) => edge.displayRole !== 'seam'
+      );
+      const rect = renderer.domElement.getBoundingClientRect();
+      const sample = new THREE.Vector3();
+      for (const edge of edges) {
+        for (let index = 0; index + 5 < edge.points.length; index += 3) {
+          // Segment midpoints, not vertices: a vertex sits on two edges at
+          // once, so which one a click there takes is an arbitrary tie-break.
+          sample
+            .set(
+              (edge.points[index]! + edge.points[index + 3]!) / 2,
+              (edge.points[index + 1]! + edge.points[index + 4]!) / 2,
+              (edge.points[index + 2]! + edge.points[index + 5]!) / 2
+            )
+            .project(context.activeCamera);
+          // Client coordinates are integers, so round before confirming: the
+          // caller must click the exact point that was proven pickable.
+          const clientX = Math.round(
+            rect.left + ((sample.x + 1) / 2) * rect.width
+          );
+          const clientY = Math.round(
+            rect.top + ((1 - sample.y) / 2) * rect.height
+          );
+          if (
+            sample.z > 1 ||
+            clientX <= rect.left ||
+            clientX >= rect.right ||
+            clientY <= rect.top ||
+            clientY >= rect.bottom
+          ) {
+            continue;
+          }
+          // Selection chips, callouts, and the floating inspector are DOM
+          // overlays on top of the canvas. A point one of them covers is
+          // pickable in the scene but unreachable by a pointer, so it is not
+          // an answer to "where can this edge be clicked".
+          if (
+            document.elementFromPoint(clientX, clientY) !== renderer.domElement
+          ) {
+            continue;
+          }
+          const picked = picker.pick(
+            new MouseEvent('mousemove', { clientX, clientY })
+          );
+          if (
+            picked?.selection?.kind === 'edge' &&
+            picked.selection.topologyId === edge.topologyId
+          ) {
+            detail.resolve({
+              x: clientX,
+              y: clientY,
+              topologyId: edge.topologyId
+            });
+            return;
+          }
+        }
+      }
+      detail.resolve(null);
     };
     /**
      * Select a detected profile by stable index in browser regressions. The
@@ -1417,7 +2397,7 @@ export function ModelViewer({
           visible: boolean;
         }[] = [];
         root.traverse((child) => {
-          if (child instanceof Line2) {
+          if (child instanceof LineSegments2) {
             states.push({
               depthTest: child.material.depthTest,
               depthWrite: child.material.depthWrite,
@@ -1435,10 +2415,136 @@ export function ModelViewer({
         sketchLines: lineStates(regionGroup)
       });
     };
-    if (e2eCanvasHooksEnabled) {
+    /** Live camera state for bundled-WKWebView input smoke tests. */
+    const handleE2EInputState = (event: Event) => {
+      if (!e2eCanvasHooksEnabled) {
+        return;
+      }
+      const detail = (
+        event as CustomEvent<{
+          resolve?: (value: {
+            camera: ViewportCameraState;
+            controlsEnabled: boolean;
+            controlState: number | null;
+            mouseButtons: OrbitControls<THREE.Camera>['mouseButtons'];
+          }) => void;
+        }>
+      ).detail;
+      if (!detail?.resolve) {
+        return;
+      }
+      const controls = cameraRig.controls as OrbitControls<THREE.Camera> & {
+        state?: number;
+      };
+      detail.resolve({
+        camera: cameraRig.capture(),
+        controlsEnabled: controls.enabled,
+        controlState: controls.state ?? null,
+        mouseButtons: { ...controls.mouseButtons }
+      });
+    };
+    /** Force a high-DPI backing store when a hosted Mac exposes a 1x display. */
+    const handleE2EPixelRatio = (event: Event) => {
+      if (!e2eCanvasHooksEnabled) {
+        return;
+      }
+      const value = (event as CustomEvent<{ value?: number }>).detail?.value;
+      if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) {
+        return;
+      }
+      renderer.setPixelRatio(Math.min(value, 2));
+      requestRender();
+    };
+    /**
+     * Route a synthetic macOS pointer packet through OrbitControls itself.
+     * The embedded WebDriver's W3C action endpoint emits MouseEvents, so it
+     * cannot reach Three's PointerEvent-only control listener on WKWebView.
+     */
+    const handleE2EControlPointer = (event: Event) => {
+      if (!e2eCanvasHooksEnabled) {
+        return;
+      }
+      const detail = (
+        event as CustomEvent<{
+          type?: 'pointerdown' | 'pointermove' | 'pointerup';
+          init?: PointerEventInit;
+          resolve?: (value: {
+            camera: ViewportCameraState;
+            controlsEnabled: boolean;
+            controlState: number | null;
+            mouseButtons: OrbitControls<THREE.Camera>['mouseButtons'];
+            pointer: {
+              button: number;
+              clientX: number;
+              clientY: number;
+              shiftKey: boolean;
+            };
+          }) => void;
+        }>
+      ).detail;
+      if (!detail?.type || !detail.resolve) {
+        return;
+      }
+      const pointerEvent = new PointerEvent(detail.type, {
+        bubbles: true,
+        cancelable: true,
+        pointerType: 'mouse',
+        isPrimary: true,
+        ...detail.init
+      });
+      const controls = cameraRig.controls as OrbitControls<THREE.Camera> & {
+        _onMouseDown(event: PointerEvent): void;
+        _onMouseMove(event: PointerEvent): void;
+        _onPointerUp(event: PointerEvent): void;
+      };
+      if (detail.type === 'pointerdown') {
+        // Match the production viewport pointerdown path so a startup/fit
+        // tween cannot overwrite the synthetic gesture on fast cached builds.
+        cameraRig.cancelTween();
+        if (pointerEvent.shiftKey) {
+          cameraRig.setShiftOrbitActive(true);
+        }
+      }
+      if (detail.type === 'pointerdown') {
+        controls._onMouseDown(pointerEvent);
+      } else if (detail.type === 'pointermove') {
+        controls._onMouseMove(pointerEvent);
+      } else {
+        // No native pointer owns capture for this synthetic packet. Suppress
+        // only that release call so OrbitControls can run its normal end/state
+        // cleanup; the real canvas method is restored immediately afterward.
+        const releasePointerCapture = renderer.domElement.releasePointerCapture;
+        renderer.domElement.releasePointerCapture = () => undefined;
+        try {
+          controls._onPointerUp(pointerEvent);
+        } finally {
+          renderer.domElement.releasePointerCapture = releasePointerCapture;
+          cameraRig.setShiftOrbitActive(false);
+        }
+      }
+      detail.resolve({
+        camera: cameraRig.capture(),
+        controlsEnabled: controls.enabled,
+        controlState:
+          (controls as OrbitControls<THREE.Camera> & { state?: number })
+            .state ?? null,
+        mouseButtons: { ...controls.mouseButtons },
+        pointer: {
+          button: pointerEvent.button,
+          clientX: pointerEvent.clientX,
+          clientY: pointerEvent.clientY,
+          shiftKey: pointerEvent.shiftKey
+        }
+      });
+    };
+    if (E2E_CANVAS_HOOKS_ENABLED) {
       renderer.domElement.addEventListener(
         'openzcad:e2e-select-cylinder',
         handleE2ECylinderSelection
+      );
+      renderer.domElement.addEventListener(
+        'openzcad:e2e-visual-selection-probe',
+        handleE2EVisualSelectionProbe
       );
       renderer.domElement.addEventListener(
         'openzcad:e2e-render-policy',
@@ -1447,6 +2553,22 @@ export function ModelViewer({
       renderer.domElement.addEventListener(
         'openzcad:e2e-select-profile',
         handleE2EProfileSelection
+      );
+      renderer.domElement.addEventListener(
+        'openzcad:e2e-locate-edge',
+        handleE2ELocateEdge
+      );
+      renderer.domElement.addEventListener(
+        'openzcad:e2e-input-state',
+        handleE2EInputState
+      );
+      renderer.domElement.addEventListener(
+        'openzcad:e2e-pixel-ratio',
+        handleE2EPixelRatio
+      );
+      renderer.domElement.addEventListener(
+        'openzcad:e2e-control-pointer',
+        handleE2EControlPointer
       );
     }
 
@@ -1471,9 +2593,18 @@ export function ModelViewer({
         onSelectSketchProfileRef.current(result.sketchId);
         return;
       }
+      // Recompute from THIS click's candidate and coordinates. Reusing the last
+      // rAF-coalesced hover result can record a point from the previous pointer
+      // position when a move and click arrive before the next animation frame.
+      // Confined to measuring: a modelling pick still wants the point the
+      // pointer was actually on.
+      const snapped =
+        result && onMeasurePreviewRef.current
+          ? (resolveMeasureSnap(event, result)?.candidate.point ?? null)
+          : null;
       const detail: PickDetail | undefined = result
         ? {
-            point: {
+            point: snapped ?? {
               x: result.hit.point.x,
               y: result.hit.point.y,
               z: result.hit.point.z
@@ -1651,6 +2782,63 @@ export function ModelViewer({
       }
       clearMoveGizmoHover();
       applyHover(pick(event));
+      updateMeasurePreview(event);
+    }
+
+    /**
+     * Shows what the next click would measure, beside the pointer.
+     *
+     * The candidate comes from the same `pickAll` + depth cycle the click uses,
+     * so the preview cannot name one thing while the click takes another —
+     * but the returned cycle is DISCARDED rather than stored. `cycleDepthPick`
+     * treats a second call within a few pixels as a request for the next
+     * candidate down, so remembering it here would make hovering and then
+     * clicking the same spot select the second thing in the stack. Depth
+     * cycling belongs to clicks.
+     */
+    function updateMeasurePreview(event: PointerEvent) {
+      const preview = onMeasurePreviewRef.current;
+      if (!preview) {
+        hud.hide(measurePreviewChip);
+        hud.hide(snapGlyph);
+        return;
+      }
+      const stack = picker.pickAll(event);
+      const wouldPick = cycleDepthPick(
+        stack,
+        depthCycle,
+        event.clientX,
+        event.clientY
+      ).candidate;
+      const selection = wouldPick?.selection;
+      if (!selection) {
+        hud.hide(measurePreviewChip);
+        hud.hide(snapGlyph);
+        return;
+      }
+      const snapped = resolveMeasureSnap(event, wouldPick);
+      if (snapped) {
+        showSnapGlyph(snapped);
+      } else {
+        hud.hide(snapGlyph);
+      }
+      const label = preview(
+        selection,
+        // The snapped position when there is one, so the preview reports the
+        // number the click will actually record rather than the one under the
+        // raw cursor.
+        snapped?.candidate.point ?? {
+          x: wouldPick.hit.point.x,
+          y: wouldPick.hit.point.y,
+          z: wouldPick.hit.point.z
+        }
+      );
+      if (!label) {
+        hud.hide(measurePreviewChip);
+        return;
+      }
+      measurePreviewChip.textContent = label;
+      hud.showAtPointer(measurePreviewChip, event, 16, -28);
     }
 
     /**
@@ -1719,27 +2907,38 @@ export function ModelViewer({
         const rawValue = rig.value();
         const value = Math.round(rawValue * 100) / 100;
         if (rig.kind === 'cylinder-radius') {
-          text = `R ${formatNumber(rawValue)} ${unitsRef.current}`;
+          const mode = cylinderDimensionModeRef.current;
+          const displayValue = mode === 'diameter' ? rawValue * 2 : rawValue;
+          text = `${mode === 'diameter' ? 'Ø' : 'R'} ${formatNumber(displayValue)} ${unitsRef.current}`;
         } else if (rig.kind === 'edge-radius') {
           const prefix = edgeHandleOpRef.current === 'fillet' ? 'R' : 'C';
           text = `${prefix} ${value} ${unitsRef.current}`;
         } else {
-          text = `${value >= 0 ? '+' : ''}${value} ${unitsRef.current}`;
+          const totalBaseline = offsetHandleRef.current?.totalBaseline;
+          text =
+            totalBaseline === undefined
+              ? `${value >= 0 ? '+' : ''}${value} ${unitsRef.current}`
+              : `Total ${formatNumber(totalBaseline + rawValue)} ${unitsRef.current}`;
+          if (offsetPreviewInvalidRef.current) {
+            text = `⚠ ${text}`;
+          }
         }
       }
       if (!anchor) {
         chip.hidden = true;
+        radiusLabelChip.hidden = true;
         keypadAnchorRef.current?.(null);
-        if (e2eCanvasHooksEnabled) {
+        if (E2E_CANVAS_HOOKS_ENABLED) {
           delete renderer.domElement.dataset.e2eHandleX;
           delete renderer.domElement.dataset.e2eHandleY;
           delete renderer.domElement.dataset.e2eHandleDx;
           delete renderer.domElement.dataset.e2eHandleDy;
           delete renderer.domElement.dataset.e2eHandlePixelsPerUnit;
+          delete renderer.domElement.dataset.e2eOffsetDimensionVisible;
         }
         return;
       }
-      const screen = projectToScreen(
+      let screen = projectToScreen(
         anchor,
         context.activeCamera,
         renderer.domElement.clientWidth,
@@ -1747,8 +2946,26 @@ export function ModelViewer({
       );
       if (!screen) {
         chip.hidden = true;
+        radiusLabelChip.hidden = true;
         keypadAnchorRef.current?.(null);
         return;
+      }
+      if (rig?.kind === 'offset-face') {
+        const inspector = renderer.domElement
+          .closest('.viewer-area')
+          ?.querySelector<HTMLElement>('.inspector-float');
+        if (inspector) {
+          const hostRect = renderer.domElement.getBoundingClientRect();
+          const inspectorLeft =
+            inspector.getBoundingClientRect().left - hostRect.left;
+          // A top-cap anchor can project underneath the floating inspector on
+          // wide viewports. Keep the chip and the keypad anchor on the visible
+          // side of that boundary so exact entry remains reachable.
+          screen = {
+            ...screen,
+            x: Math.min(screen.x, inspectorLeft - 72)
+          };
+        }
       }
       if (e2eCanvasHooksEnabled && rig?.kind === 'cylinder-radius') {
         const scale =
@@ -1779,9 +2996,79 @@ export function ModelViewer({
             dragDirection.pixelsPerUnit
           );
         }
+      } else if (e2eCanvasHooksEnabled && rig?.kind === 'offset-face') {
+        const scale =
+          (rig.group.userData.gizmoScale as number | undefined) ?? 1;
+        const hitCenter = rig.group.position
+          .clone()
+          .addScaledVector(rig.direction, 0.7 * scale);
+        const hitScreen = projectToScreen(
+          hitCenter,
+          context.activeCamera,
+          renderer.domElement.clientWidth,
+          renderer.domElement.clientHeight
+        );
+        const dragDirection = screenDirectionFor(
+          rig.group.position,
+          rig.direction
+        );
+        if (hitScreen) {
+          renderer.domElement.dataset.e2eHandleX = String(hitScreen.x);
+          renderer.domElement.dataset.e2eHandleY = String(hitScreen.y);
+          renderer.domElement.dataset.e2eHandleDx = String(
+            dragDirection.directionX
+          );
+          renderer.domElement.dataset.e2eHandleDy = String(
+            dragDirection.directionY
+          );
+          renderer.domElement.dataset.e2eHandlePixelsPerUnit = String(
+            dragDirection.pixelsPerUnit
+          );
+        }
+        renderer.domElement.dataset.e2eOffsetDimensionVisible = String(
+          rig.worldGroup.getObjectByName('dimension-graphic')?.visible === true
+        );
       }
-      chip.textContent = text;
+      if (rig?.kind === 'cylinder-radius') {
+        // Drawing-annotation typography: the units render small after the
+        // number, so the chip reads "R 35ₘₘ" rather than uniform text.
+        const units = document.createElement('small');
+        units.textContent = unitsRef.current;
+        const mode = cylinderDimensionModeRef.current;
+        const displayValue =
+          mode === 'diameter' ? rig.value() * 2 : rig.value();
+        dimensionPrefix.textContent = mode === 'diameter' ? 'Ø' : 'R';
+        dimensionPrefix.setAttribute(
+          'aria-label',
+          mode === 'diameter'
+            ? 'Switch to radius entry'
+            : 'Switch to diameter entry'
+        );
+        chip.replaceChildren(
+          dimensionPrefix,
+          ` ${formatNumber(displayValue)}\u00a0`,
+          units
+        );
+      } else {
+        chip.textContent = text;
+      }
+      chip.dataset.variant =
+        rig?.kind === 'cylinder-radius' ? 'dimension' : 'default';
+      const offsetWarning =
+        rig?.kind === 'offset-face' && offsetPreviewInvalidRef.current;
+      chip.dataset.state = offsetWarning ? 'warning' : 'ready';
+      chip.setAttribute('aria-invalid', String(offsetWarning));
       hud.showAt(chip, screen.x, screen.y);
+      if (rig?.kind === 'cylinder-radius') {
+        radiusLabelChip.textContent =
+          cylinderDimensionModeRef.current === 'diameter'
+            ? 'Diameter'
+            : 'Radius';
+        // Same anchor; CSS shifts it to sit flush against the value pill.
+        hud.showAt(radiusLabelChip, screen.x, screen.y);
+      } else {
+        radiusLabelChip.hidden = true;
+      }
       keypadAnchorRef.current?.(screen);
     }
 
@@ -1834,17 +3121,45 @@ export function ModelViewer({
       if (!point) {
         return null;
       }
-      const target = nearestSnapTarget(
-        point,
-        snapTargetsRef.current,
-        10 * sketchWorldPerPixel(mode.basis.origin)
-      );
-      if (target) {
-        positionSketchSnapMarker(event, target.kind);
-        return { x: target.x, y: target.y };
+      latestSketchPointerEvent = event;
+      if (event.shiftKey) {
+        activeSketchSnap = null;
+        sketchSnapCycle = 0;
+        hideSketchSnapMarker();
+        latestSketchPoint = point;
+        return point;
       }
+      if (mode.geometrySnapEnabled) {
+        const resolved = resolveSketchSnap(
+          point,
+          snapTargetsRef.current,
+          mode.snapTolerancePx * sketchWorldPerPixel(mode.basis.origin),
+          {
+            lockedId: activeSketchSnap?.id,
+            cycle: sketchSnapCycle
+          }
+        );
+        if (resolved) {
+          activeSketchSnap = resolved.target;
+          positionSketchSnapMarker(event, resolved.target.kind);
+          latestSketchPoint = {
+            x: resolved.target.x,
+            y: resolved.target.y
+          };
+          return latestSketchPoint;
+        }
+      }
+      activeSketchSnap = null;
+      sketchSnapCycle = 0;
       hideSketchSnapMarker();
-      return mode.snapStep ? snapSketchPoint(point, mode.snapStep) : point;
+      if (mode.snapStep) {
+        const snapped = snapSketchPoint(point, mode.snapStep);
+        positionSketchSnapMarker(event, 'grid');
+        latestSketchPoint = snapped;
+        return snapped;
+      }
+      latestSketchPoint = point;
+      return point;
     }
 
     /** Approximate world units per CSS pixel at the sketch plane. */
@@ -1879,7 +3194,13 @@ export function ModelViewer({
       kind: SnapTargetKind
     ) {
       sketchSnapMarker.dataset.kind = kind;
-      sketchSnapMarker.title = kind;
+      if (kind === 'grid') {
+        delete sketchSnapMarker.dataset.label;
+      } else {
+        sketchSnapMarker.dataset.label = SKETCH_SNAP_LABELS[kind];
+      }
+      sketchSnapMarker.textContent = SKETCH_SNAP_GLYPHS[kind];
+      sketchSnapMarker.title = SKETCH_SNAP_LABELS[kind];
       hud.showAtPointer(sketchSnapMarker, event);
     }
 
@@ -1890,11 +3211,41 @@ export function ModelViewer({
       }
     }
 
+    function positionSketchCenterTarget(target: SnapTarget, engaged: boolean) {
+      const mode = sketchModeRef.current;
+      if (!mode) {
+        sketchCenterTarget.hidden = true;
+        return;
+      }
+      const basis = mode.basis;
+      const world = new THREE.Vector3(
+        basis.origin.x + basis.u.x * target.x + basis.v.x * target.y,
+        basis.origin.y + basis.u.y * target.x + basis.v.y * target.y,
+        basis.origin.z + basis.u.z * target.x + basis.v.z * target.y
+      );
+      const screen = projectToScreen(
+        world,
+        context.activeCamera,
+        renderer.domElement.clientWidth,
+        renderer.domElement.clientHeight
+      );
+      if (!screen) {
+        sketchCenterTarget.hidden = true;
+        return;
+      }
+      sketchCenterTarget.dataset.engaged = String(engaged);
+      hud.showAt(sketchCenterTarget, screen.x, screen.y);
+    }
+
     function positionSketchDimLabel(
       event: PointerEvent,
       text: string,
       appendUnits = true
     ) {
+      if (sketchNumericRaw !== null) {
+        renderSketchNumericHud(event);
+        return;
+      }
       sketchDimLabel.textContent = appendUnits
         ? `${text} ${unitsRef.current}`
         : text;
@@ -1908,6 +3259,239 @@ export function ModelViewer({
       }
     }
 
+    const SKETCH_NUMERIC_LABELS = {
+      radius: 'Radius',
+      diameter: 'Diameter',
+      length: 'Length',
+      width: 'Width',
+      height: 'Height'
+    } as const;
+
+    function renderSketchNumericHud(event: PointerEvent) {
+      const label = SKETCH_NUMERIC_LABELS[sketchNumericKind];
+      const units = unitsRef.current;
+      // A rectangle shows both sides at once, so it is clear which one Tab is
+      // about to take you to and what the other already holds.
+      const text =
+        sketchNumericKind === 'width' || sketchNumericKind === 'height'
+          ? (() => {
+              const other = sketchNumericKind === 'width' ? 'Height' : 'Width';
+              return `${label}: ${sketchNumericRaw || '…'} ${units} · ${other}: ${
+                sketchNumericOther || 'drag'
+              } · Tab · Enter`;
+            })()
+          : `${label}: ${sketchNumericRaw || '…'} ${units} · Enter`;
+      sketchDimLabel.textContent = text;
+      sketchDimLabel.dataset.editing = 'true';
+      hud.showAtPointer(sketchDimLabel, event, 16, -28);
+    }
+
+    function finishSketchNumericEntry() {
+      sketchNumericRaw = null;
+      sketchNumericOther = null;
+      sketchDimLabel.dataset.editing = 'false';
+      hideSketchDimLabel();
+    }
+
+    function commitSketchNumericEntry(): boolean {
+      const mode = sketchModeRef.current;
+      const gesture = sketchGestureRef.current;
+      const value = Number(sketchNumericRaw);
+      if (!mode || !Number.isFinite(value) || value <= 0) {
+        return false;
+      }
+      if (
+        mode.tool === 'circle' &&
+        mode.circleMode !== 'three-point' &&
+        gesture.dragStart
+      ) {
+        const radius = sketchNumericKind === 'diameter' ? value / 2 : value;
+        const circle: SketchObjectData | null =
+          mode.circleMode === 'center-radius'
+            ? {
+                objectKind: 'circle',
+                centerX: gesture.dragStart.x,
+                centerY: gesture.dragStart.y,
+                radius
+              }
+            : (() => {
+                const direction = latestSketchPoint ?? {
+                  x: gesture.dragStart.x + 1,
+                  y: gesture.dragStart.y
+                };
+                const diameter = radius * 2;
+                const second = pointAtDistanceAlongDirection(
+                  gesture.dragStart,
+                  direction,
+                  diameter
+                );
+                return {
+                  objectKind: 'circle',
+                  centerX: (gesture.dragStart.x + second.x) / 2,
+                  centerY: (gesture.dragStart.y + second.y) / 2,
+                  radius
+                };
+              })();
+        if (!circle) {
+          return false;
+        }
+        onSketchCommitRef.current(circle);
+        gesture.dragStart = null;
+        gesture.awaitingSecondPoint = false;
+        sketchRigRef.current?.setInProgress(null, false);
+        onSketchDrawingChangeRef.current(false);
+        finishSketchNumericEntry();
+        requestRender();
+        return true;
+      }
+      if (mode.tool === 'rectangle' && gesture.dragStart) {
+        // Whichever side was not typed keeps the size the drag is showing, so
+        // typing one number pins that side and leaves the other under the
+        // pointer rather than refusing the whole entry.
+        const live = latestSketchPoint ?? gesture.dragStart;
+        const typedOther = Number(sketchNumericOther);
+        const otherValue =
+          sketchNumericOther !== null &&
+          sketchNumericOther !== '' &&
+          Number.isFinite(typedOther) &&
+          typedOther > 0
+            ? typedOther
+            : null;
+        const width =
+          sketchNumericKind === 'width'
+            ? value
+            : (otherValue ?? Math.abs(live.x - gesture.dragStart.x));
+        const height =
+          sketchNumericKind === 'height'
+            ? value
+            : (otherValue ?? Math.abs(live.y - gesture.dragStart.y));
+        // Keep the corner the drag is heading toward: an exact 40x20 typed
+        // while dragging up and left must not flip to down and right.
+        const signX = live.x < gesture.dragStart.x ? -1 : 1;
+        const signY = live.y < gesture.dragStart.y ? -1 : 1;
+        const rectangle = sketchObjectFromDrag('rectangle', gesture.dragStart, {
+          x: gesture.dragStart.x + signX * width,
+          y: gesture.dragStart.y + signY * height
+        });
+        if (!rectangle) {
+          return false;
+        }
+        onSketchCommitRef.current(rectangle);
+        gesture.dragStart = null;
+        gesture.awaitingSecondPoint = false;
+        sketchRigRef.current?.setInProgress(null, false);
+        onSketchDrawingChangeRef.current(false);
+        finishSketchNumericEntry();
+        requestRender();
+        return true;
+      }
+      if (mode.tool === 'line' && gesture.chainAnchor) {
+        const end = pointAtDistanceAlongDirection(
+          gesture.chainAnchor,
+          latestSketchPoint ?? gesture.chainAnchor,
+          value
+        );
+        const line = lineObjectFromPoints(gesture.chainAnchor, end);
+        if (!line) {
+          return false;
+        }
+        onSketchCommitRef.current(line);
+        gesture.chainAnchor = end;
+        finishSketchNumericEntry();
+        requestRender();
+        return true;
+      }
+      return false;
+    }
+
+    function handleSketchNumericKey(event: KeyboardEvent): boolean {
+      const mode = sketchModeRef.current;
+      const gesture = sketchGestureRef.current;
+      const supported =
+        mode &&
+        ((mode.tool === 'circle' &&
+          mode.circleMode !== 'three-point' &&
+          gesture.dragStart !== null) ||
+          (mode.tool === 'rectangle' && gesture.dragStart !== null) ||
+          (mode.tool === 'line' && gesture.chainAnchor !== null));
+      if (!supported) {
+        return false;
+      }
+      if (event.key === 'Escape' && sketchNumericRaw !== null) {
+        finishSketchNumericEntry();
+        event.preventDefault();
+        event.stopPropagation();
+        return true;
+      }
+      if (event.key === 'Tab' && sketchNumericRaw !== null) {
+        if (mode.tool === 'circle') {
+          const numeric = Number(sketchNumericRaw);
+          sketchNumericKind =
+            sketchNumericKind === 'radius' ? 'diameter' : 'radius';
+          if (Number.isFinite(numeric)) {
+            sketchNumericRaw = String(
+              sketchNumericKind === 'diameter' ? numeric * 2 : numeric / 2
+            );
+          }
+          if (latestSketchPointerEvent) {
+            renderSketchNumericHud(latestSketchPointerEvent);
+          }
+        }
+        if (mode.tool === 'rectangle') {
+          // Park this side and edit the other. Tab is a swap, not a
+          // conversion: a rectangle's two sides are independent, unlike a
+          // circle's radius and diameter.
+          const parked = sketchNumericRaw;
+          sketchNumericRaw = sketchNumericOther ?? '';
+          sketchNumericOther = parked;
+          sketchNumericKind =
+            sketchNumericKind === 'width' ? 'height' : 'width';
+          if (latestSketchPointerEvent) {
+            renderSketchNumericHud(latestSketchPointerEvent);
+          }
+        }
+        event.preventDefault();
+        event.stopPropagation();
+        return true;
+      }
+      if (event.key === 'Enter' && sketchNumericRaw !== null) {
+        if (!commitSketchNumericEntry() && latestSketchPointerEvent) {
+          sketchDimLabel.textContent = 'Enter a positive exact value';
+          hud.showAtPointer(sketchDimLabel, latestSketchPointerEvent, 16, -28);
+        }
+        event.preventDefault();
+        event.stopPropagation();
+        return true;
+      }
+      if (event.key === 'Backspace' && sketchNumericRaw !== null) {
+        sketchNumericRaw = sketchNumericRaw.slice(0, -1);
+      } else if (/^[0-9.]$/.test(event.key)) {
+        if (sketchNumericRaw === null) {
+          sketchNumericKind =
+            mode.tool === 'circle'
+              ? mode.circleMode === 'two-point-diameter'
+                ? 'diameter'
+                : 'radius'
+              : mode.tool === 'rectangle'
+                ? 'width'
+                : 'length';
+          sketchNumericRaw = '';
+          sketchNumericOther = null;
+        }
+        if (event.key !== '.' || !sketchNumericRaw.includes('.')) {
+          sketchNumericRaw += event.key;
+        }
+      } else {
+        return false;
+      }
+      if (latestSketchPointerEvent) {
+        renderSketchNumericHud(latestSketchPointerEvent);
+      }
+      event.preventDefault();
+      event.stopPropagation();
+      return true;
+    }
+
     function updateSketchInProgress(event: PointerEvent) {
       const mode = sketchModeRef.current;
       const rig = sketchRigRef.current;
@@ -1919,24 +3503,79 @@ export function ModelViewer({
       if (!point) {
         return;
       }
+      rig.setInference(null);
+      sketchCenterTarget.hidden = true;
+      if (mode.tool !== 'select' && mode.inferenceEnabled && !event.shiftKey) {
+        const worldPerPixel = sketchWorldPerPixel(mode.basis.origin);
+        const discoveryRadiusPx = Math.max(mode.snapTolerancePx * 6, 48);
+        const centerTarget = nearestCenterGuideTarget(
+          point,
+          snapTargetsRef.current,
+          discoveryRadiusPx * worldPerPixel
+        );
+        if (centerTarget) {
+          const halfSpan =
+            worldPerPixel *
+            Math.max(
+              renderer.domElement.clientWidth,
+              renderer.domElement.clientHeight
+            ) *
+            0.65;
+          rig.setInference(centerInferenceSegments(centerTarget, halfSpan));
+          positionSketchCenterTarget(
+            centerTarget,
+            activeSketchSnap?.id === centerTarget.id
+          );
+        }
+      }
+      if (
+        mode.tool === 'circle' &&
+        mode.circleMode === 'three-point' &&
+        gesture.circleFirst
+      ) {
+        if (!gesture.circleSecond) {
+          rig.setInProgress([gesture.circleFirst, point], false);
+          positionSketchDimLabel(event, 'Point 2 of 3', false);
+        } else {
+          const circle = circleObjectFromThreePoints(
+            gesture.circleFirst,
+            gesture.circleSecond,
+            point
+          );
+          if (circle && circle.objectKind === 'circle') {
+            rig.setInProgress(circlePreviewPoints(circle), true);
+            positionSketchDimLabel(
+              event,
+              `R ${Math.round(Number(circle.radius) * 1000) / 1000} ${unitsRef.current} · ⌀ ${Math.round(Number(circle.radius) * 2000) / 1000} ${unitsRef.current}`,
+              false
+            );
+          } else {
+            rig.setInProgress(
+              [gesture.circleFirst, gesture.circleSecond, point],
+              false
+            );
+            positionSketchDimLabel(
+              event,
+              'Points cannot define a stable circle',
+              false
+            );
+          }
+        }
+        requestRender();
+        return;
+      }
       if (
         gesture.dragStart &&
         (mode.tool === 'circle' || mode.tool === 'rectangle')
       ) {
         if (mode.tool === 'circle') {
-          const radius = Math.hypot(
-            point.x - gesture.dragStart.x,
-            point.y - gesture.dragStart.y
-          );
-          const samples: SketchPoint[] = [];
-          for (let index = 0; index < 64; index += 1) {
-            const angle = (index / 64) * Math.PI * 2;
-            samples.push({
-              x: gesture.dragStart.x + Math.cos(angle) * radius,
-              y: gesture.dragStart.y + Math.sin(angle) * radius
-            });
+          const circle =
+            mode.circleMode === 'two-point-diameter'
+              ? circleObjectFromDiameter(gesture.dragStart, point)
+              : sketchObjectFromDrag('circle', gesture.dragStart, point);
+          if (circle && circle.objectKind === 'circle') {
+            rig.setInProgress(circlePreviewPoints(circle), true);
           }
-          rig.setInProgress(samples, true);
         } else {
           rig.setInProgress(
             [
@@ -1948,16 +3587,39 @@ export function ModelViewer({
             true
           );
         }
-        positionSketchDimLabel(
-          event,
-          dimensionForInProgress(mode.tool, gesture.dragStart, point)
-        );
+        if (mode.tool === 'circle') {
+          const distance = Math.hypot(
+            point.x - gesture.dragStart.x,
+            point.y - gesture.dragStart.y
+          );
+          const radius =
+            mode.circleMode === 'two-point-diameter' ? distance / 2 : distance;
+          positionSketchDimLabel(
+            event,
+            `R ${Math.round(radius * 1000) / 1000} ${unitsRef.current} · ⌀ ${Math.round(radius * 2000) / 1000} ${unitsRef.current}`,
+            false
+          );
+        } else {
+          positionSketchDimLabel(
+            event,
+            dimensionForInProgress(mode.tool, gesture.dragStart, point)
+          );
+        }
         requestRender();
         return;
       }
       if (mode.tool === 'line' && gesture.chainAnchor) {
-        const locked = axisLockPoint(gesture.chainAnchor, point);
+        const locked =
+          mode.inferenceEnabled && !event.shiftKey
+            ? axisLockPoint(gesture.chainAnchor, point)
+            : { point, lockedAxis: null };
         rig.setInProgress([gesture.chainAnchor, locked.point], false);
+        if (locked.lockedAxis) {
+          rig.setInference([[gesture.chainAnchor, locked.point]]);
+          if (!activeSketchSnap) {
+            positionSketchSnapMarker(event, locked.lockedAxis);
+          }
+        }
         positionSketchDimLabel(
           event,
           dimensionForInProgress('line', gesture.chainAnchor, locked.point)
@@ -2037,6 +3699,28 @@ export function ModelViewer({
               drag.snapMove,
               fine
             );
+            // Center alignment outranks the step grid on the driven axis: a
+            // face's center is a place someone meant, a grid line is not.
+            // Shift frees both together, as it already means.
+            const aligned = fine
+              ? null
+              : alignTranslationToCenters(
+                  drag.restingCenter,
+                  {
+                    ...translation,
+                    [drag.axis]:
+                      drag.startTranslation[drag.axis] + (t - drag.startT)
+                  },
+                  moveCenterTargets,
+                  [drag.axis],
+                  drag.worldPerPixel * SNAP_RADIUS_PX
+                );
+            if (aligned && aligned.matches.length > 0) {
+              translation[drag.axis] = aligned.translation[drag.axis];
+              showCenterAlignGlyph(aligned.matches);
+            } else {
+              hud.hide(snapGlyph);
+            }
           }
         } else if (drag.kind === 'ring') {
           const angle = ringAngleAt(
@@ -2097,7 +3781,6 @@ export function ModelViewer({
             translation.z = landed.z;
             showSnapGlyph(snapped);
           } else {
-            hud.hide(snapGlyph);
             translation.x = snapTo(
               drag.startTranslation.x + world.x,
               drag.snapMove,
@@ -2113,6 +3796,31 @@ export function ModelViewer({
               drag.snapMove,
               fine
             );
+            // No corner under the pointer: try lining centers up instead.
+            // Raw (pre-grid) deltas feed the test so the grid cannot round
+            // the drag out of the alignment window; each axis latches
+            // independently, so centering on one axis or both just falls out.
+            const aligned = fine
+              ? null
+              : alignTranslationToCenters(
+                  drag.restingCenter,
+                  {
+                    x: drag.startTranslation.x + world.x,
+                    y: drag.startTranslation.y + world.y,
+                    z: drag.startTranslation.z + world.z
+                  },
+                  moveCenterTargets,
+                  ['x', 'y', 'z'],
+                  drag.worldPerPixel * SNAP_RADIUS_PX
+                );
+            if (aligned && aligned.matches.length > 0) {
+              for (const match of aligned.matches) {
+                translation[match.axis] = aligned.translation[match.axis];
+              }
+              showCenterAlignGlyph(aligned.matches);
+            } else {
+              hud.hide(snapGlyph);
+            }
           }
         }
         context.applyMovePreview(translation, rotation);
@@ -2197,7 +3905,8 @@ export function ModelViewer({
           );
           if (value !== null && Math.abs(value - rig.value()) > 1e-9) {
             rig.setValue(value);
-            onCylinderRadiusPreviewRef.current(value);
+            const usedProxy = queueCylinderRadiusProxy(value);
+            onCylinderRadiusPreviewRef.current(value, !usedProxy);
             requestRender();
           }
           renderer.domElement.style.cursor = 'grabbing';
@@ -2219,7 +3928,16 @@ export function ModelViewer({
           const value = event.shiftKey
             ? Math.round(raw * 100) / 100
             : Math.round(raw / snap) * snap;
-          rig.setValue(value);
+          if (Math.abs(value - rig.value()) > 1e-9) {
+            rig.setValue(value);
+            // Exact push/pull is bounded to the same cadence as edge blends;
+            // the app-side LivePreview still coalesces any overlap.
+            const now = performance.now();
+            if (now - offsetDrag.lastPreviewAt > 150) {
+              offsetDrag.lastPreviewAt = now;
+              onOffsetPreviewRef.current(value);
+            }
+          }
           renderer.domElement.style.cursor = 'grabbing';
           requestRender();
         }
@@ -2272,29 +3990,46 @@ export function ModelViewer({
       pendingHoverEvent = event;
       requestRender();
     };
+    /**
+     * Orbit turns about the geometry under the cursor at gesture start, so a
+     * detail being pointed at stays put while the view swings around it.
+     * `pivotOn` keeps the camera still, so nothing shifts on screen; over
+     * empty space the current pivot is kept.
+     */
+    function pivotOrbitOnCursor(event: PointerEvent) {
+      const result = pick(event);
+      if (result) {
+        cameraRig.pivotOn(result.hit.point);
+      }
+    }
+
     const handlePointerDown = (event: PointerEvent) => {
       pendingHoverEvent = null;
       cameraRig.cancelTween();
       if (event.button === 2) {
         rightClickGesture.begin(event.pointerId, event.clientX, event.clientY);
+        if (event.ctrlKey || event.metaKey) {
+          pivotOrbitOnCursor(event);
+        }
         rightPanStartTarget = cameraRig.controls.target.clone();
+        return;
+      }
+      if (event.button === 1 && middleDragRef.current === 'orbit') {
+        pivotOrbitOnCursor(event);
         return;
       }
       if (event.button !== 0) {
         return;
       }
       gestures.begin(event);
-      // Shift-drag sweeps a rectangle over the model. It takes precedence over
-      // every handle below because no handle uses Shift, and a shift-click
-      // that never becomes a drag still falls through to additive selection
-      // on release.
+      // The viewport owns unmodified drag for box selection. Shift hands the
+      // same left-button gesture to OrbitControls, whose modifier swap is
+      // armed so it rotates rather than pans. A stationary Shift+click still
+      // falls through to additive selection on release.
       if (event.shiftKey && !sketchModeRef.current) {
-        boxSelect = {
-          pointerId: event.pointerId,
-          startX: event.clientX,
-          startY: event.clientY
-        };
-        gestures.capture(event, 'crosshair');
+        shiftOrbitPointerId = event.pointerId;
+        cameraRig.setShiftOrbitActive(true);
+        pivotOrbitOnCursor(event);
         return;
       }
       const moveHit = pickMoveGizmo(event);
@@ -2305,7 +4040,12 @@ export function ModelViewer({
           axis?: MoveAxis;
         };
         const axis = data.axis ?? 'x';
-        moveSnaps = collectMoveSnaps(activeMove.bodyId);
+        // A sketch is not a body, so every body contributes snap points and
+        // alignment centers when one is being moved.
+        const movingBodyId =
+          activeMove.target === 'sketch' ? null : activeMove.bodyId;
+        moveSnaps = collectMoveSnaps(movingBodyId);
+        moveCenterTargets = collectCenterAlignTargets(movingBodyId);
         const pivot = moveGizmoGroup.position.clone();
         const worldPerPixel = worldPerPixelAt(pivot);
         const gizmoScale =
@@ -2333,6 +4073,7 @@ export function ModelViewer({
           worldPerPixel,
           startTranslation: { ...activeMove.translation },
           startRotation: { ...activeMove.rotationDeg },
+          restingCenter: moveCenterRef.current.clone(),
           snapMove: chooseMoveSnapStep(worldPerPixel),
           snapRotate: chooseRotateSnapStep((ringRadiusPx * Math.PI) / 180)
         };
@@ -2344,6 +4085,7 @@ export function ModelViewer({
             drag.axisDirection
           );
           if (t === null) {
+            beginBoxSelect(event);
             return;
           }
           drag.startT = t;
@@ -2353,6 +4095,7 @@ export function ModelViewer({
           drag.ringV = basis.v;
           const angle = ringAngleAt(pivot, axis, basis.u, basis.v);
           if (angle === null) {
+            beginBoxSelect(event);
             return;
           }
           drag.startAngle = angle;
@@ -2370,14 +4113,27 @@ export function ModelViewer({
         const mode = sketchModeRef.current;
         const gesture = sketchGestureRef.current;
         const point = sketchPointAt(event);
-        if (point && (mode.tool === 'circle' || mode.tool === 'rectangle')) {
-          gesture.dragStart = point;
+        if (
+          point &&
+          (mode.tool === 'rectangle' ||
+            (mode.tool === 'circle' && mode.circleMode !== 'three-point'))
+        ) {
+          if (!gesture.dragStart) {
+            finishSketchNumericEntry();
+            gesture.dragStart = point;
+            gesture.awaitingSecondPoint = false;
+          }
           gesture.pointerId = event.pointerId;
           gesture.moved = false;
           gestures.capture(event, null);
           onSketchDrawingChangeRef.current(true);
           event.preventDefault();
-        } else if (point && (mode.tool === 'line' || mode.tool === 'arc')) {
+        } else if (
+          point &&
+          (mode.tool === 'line' ||
+            mode.tool === 'arc' ||
+            (mode.tool === 'circle' && mode.circleMode === 'three-point'))
+        ) {
           gesture.pointerId = event.pointerId;
           gesture.moved = false;
           event.preventDefault();
@@ -2429,6 +4185,7 @@ export function ModelViewer({
             originalRadius: cylinderTarget.originalRadius,
             initialRadius: armedCylinderRig.value()
           };
+          beginCylinderRadiusProxy(cylinderTarget);
           cylinderRadiusDragActiveRef.current = true;
           onDirectManipulationChangeRef.current(true);
           gestures.capture(event);
@@ -2456,7 +4213,8 @@ export function ModelViewer({
             directionX: screen.directionX,
             directionY: screen.directionY,
             pixelsPerUnit: screen.pixelsPerUnit,
-            initialOffset: armedRig.value()
+            initialOffset: armedRig.value(),
+            lastPreviewAt: 0
           };
           offsetDragActiveRef.current = true;
           onDirectManipulationChangeRef.current(true);
@@ -2562,6 +4320,7 @@ export function ModelViewer({
         offsetRigRef.current ||
         edgeRigRef.current
       ) {
+        beginBoxSelect(event);
         return;
       }
       const result = pick(event);
@@ -2570,10 +4329,12 @@ export function ModelViewer({
         result.selection?.kind !== 'face' ||
         !editableBodyIdsRef.current.has(result.selection.bodyId)
       ) {
+        beginBoxSelect(event);
         return;
       }
       const object = context.objectsByBodyId.get(result.selection.bodyId);
       if (!object) {
+        beginBoxSelect(event);
         return;
       }
       const direction = directEditDirectionFromNormal(result.faceNormal);
@@ -2582,6 +4343,7 @@ export function ModelViewer({
         .getSize(new THREE.Vector3());
       const initialValue = size[direction.axis];
       if (!Number.isFinite(initialValue) || initialValue <= 0) {
+        beginBoxSelect(event);
         return;
       }
 
@@ -2648,6 +4410,10 @@ export function ModelViewer({
       event.preventDefault();
     };
     const handlePointerUp = (event: PointerEvent) => {
+      if (event.pointerId === shiftOrbitPointerId) {
+        shiftOrbitPointerId = null;
+        cameraRig.setShiftOrbitActive(false);
+      }
       if (boxSelect && event.pointerId === boxSelect.pointerId) {
         const started = boxSelect;
         boxSelect = null;
@@ -2658,7 +4424,7 @@ export function ModelViewer({
         const rect =
           from && to ? rectFromDrag(from.x, from.y, to.x, to.y) : null;
         if (!rect || !isBoxSelectDrag(rect)) {
-          // A shift-click that never travelled is still a shift-click.
+          // A press that never travelled is still an ordinary selection click.
           selectAtPointer(event);
           return;
         }
@@ -2760,29 +4526,88 @@ export function ModelViewer({
         }
         if (gesture.dragStart) {
           gestures.release(event, null);
+          if (!moved && !gesture.awaitingSecondPoint) {
+            gesture.awaitingSecondPoint = true;
+            onSketchDrawingChangeRef.current(true);
+            requestRender();
+            return;
+          }
           if (point && (mode.tool === 'circle' || mode.tool === 'rectangle')) {
-            const object = sketchObjectFromDrag(
-              mode.tool,
-              gesture.dragStart,
-              point
-            );
+            const object =
+              mode.tool === 'circle' && mode.circleMode === 'two-point-diameter'
+                ? circleObjectFromDiameter(gesture.dragStart, point)
+                : sketchObjectFromDrag(mode.tool, gesture.dragStart, point);
             if (object) {
               onSketchCommitRef.current(object);
             }
           }
           gesture.dragStart = null;
+          gesture.awaitingSecondPoint = false;
           rig?.setInProgress(null, false);
-          hideSketchDimLabel();
+          finishSketchNumericEntry();
           onSketchDrawingChangeRef.current(false);
+          requestRender();
+          return;
+        }
+        if (
+          mode.tool === 'circle' &&
+          mode.circleMode === 'three-point' &&
+          point &&
+          !moved
+        ) {
+          if (!gesture.circleFirst) {
+            gesture.circleFirst = point;
+            onSketchDrawingChangeRef.current(true);
+          } else if (!gesture.circleSecond) {
+            if (
+              Math.hypot(
+                point.x - gesture.circleFirst.x,
+                point.y - gesture.circleFirst.y
+              ) >= 0.5
+            ) {
+              gesture.circleSecond = point;
+            }
+          } else {
+            const circle = circleObjectFromThreePoints(
+              gesture.circleFirst,
+              gesture.circleSecond,
+              point
+            );
+            if (circle) {
+              onSketchCommitRef.current(circle);
+              gesture.circleFirst = null;
+              gesture.circleSecond = null;
+              rig?.setInProgress(null, false);
+              hideSketchDimLabel();
+              onSketchDrawingChangeRef.current(false);
+            } else {
+              positionSketchDimLabel(
+                event,
+                'Points cannot define a stable circle',
+                false
+              );
+            }
+          }
+          requestRender();
+          return;
+        }
+        if (mode.tool === 'text' && point && !moved) {
+          // One click places the baseline origin; everything else about a text
+          // object is a parameter, so there is no drag and no second click.
+          onSketchCommitRef.current(textObjectFromPoint(point));
           requestRender();
           return;
         }
         if (mode.tool === 'line' && point && !moved) {
           if (!gesture.chainAnchor) {
+            finishSketchNumericEntry();
             gesture.chainAnchor = point;
             onSketchDrawingChangeRef.current(true);
           } else {
-            const locked = axisLockPoint(gesture.chainAnchor, point);
+            const locked =
+              mode.inferenceEnabled && !event.shiftKey
+                ? axisLockPoint(gesture.chainAnchor, point)
+                : { point, lockedAxis: null };
             const object = lineObjectFromPoints(
               gesture.chainAnchor,
               locked.point
@@ -2870,14 +4695,19 @@ export function ModelViewer({
         );
         if (moved < 4) {
           rig?.setValue(completed.originalRadius);
+          restoreCylinderRadiusProxy();
           onCylinderRadiusCancelRef.current();
           selectAtPointer(event);
           return;
         }
         depthCycle = null;
         if (rig && Math.abs(finalRadius - completed.originalRadius) > 1e-9) {
-          onCylinderRadiusCommitRef.current(finalRadius);
+          queueCylinderRadiusProxy(finalRadius);
+          if (!onCylinderRadiusCommitRef.current(finalRadius)) {
+            restoreCylinderRadiusProxy();
+          }
         } else {
+          restoreCylinderRadiusProxy();
           onCylinderRadiusCancelRef.current();
         }
         return;
@@ -2896,6 +4726,7 @@ export function ModelViewer({
         );
         if (moved < 4) {
           rig?.setValue(completed.initialOffset);
+          onOffsetCancelRef.current();
           selectAtPointer(event);
           return;
         }
@@ -2906,6 +4737,8 @@ export function ModelViewer({
           Math.abs(finalOffset) > 1e-9
         ) {
           onOffsetCommitRef.current(finalOffset);
+        } else {
+          onOffsetCancelRef.current();
         }
         return;
       }
@@ -2967,6 +4800,10 @@ export function ModelViewer({
     };
     const handlePointerCancel = (event: PointerEvent) => {
       pendingHoverEvent = null;
+      if (event.pointerId === shiftOrbitPointerId) {
+        shiftOrbitPointerId = null;
+        cameraRig.setShiftOrbitActive(false);
+      }
       if (boxSelect && event.pointerId === boxSelect.pointerId) {
         boxSelect = null;
         hud.hide(selectionBand);
@@ -2991,6 +4828,7 @@ export function ModelViewer({
         onDirectManipulationChangeRef.current(false);
         gestures.release(event);
         cylinderRadiusRigRef.current?.setValue(originalRadius);
+        restoreCylinderRadiusProxy();
         onCylinderRadiusCancelRef.current();
         requestRender();
       }
@@ -3001,6 +4839,7 @@ export function ModelViewer({
         onDirectManipulationChangeRef.current(false);
         gestures.release(event);
         offsetRigRef.current?.setValue(initialOffset);
+        onOffsetCancelRef.current();
         requestRender();
       }
       if (moveDrag && event.pointerId === moveDrag.pointerId) {
@@ -3025,11 +4864,15 @@ export function ModelViewer({
     };
     const handlePointerLeave = () => {
       pendingHoverEvent = null;
+      sketchRigRef.current?.setInference(null);
+      sketchCenterTarget.hidden = true;
       if (moveDrag) {
         return;
       }
       clearMoveGizmoHover();
       applyHover(null);
+      hud.hide(measurePreviewChip);
+      hud.hide(snapGlyph);
     };
     const handleDoubleClick = (event: MouseEvent) => {
       depthCycle = null;
@@ -3043,25 +4886,26 @@ export function ModelViewer({
         );
         const edges = body?.topology?.edges;
         if (edges) {
-          const chain = edgeRunFrom(edges, picked.selection.topologyId);
+          const chain = edgeRunSelections(
+            edges,
+            picked.selection.topologyId,
+            picked.selection.bodyId
+          );
           if (chain.length > 1) {
-            const byId = new Map(
-              edges.map((edgeTopology) => [
-                edgeTopology.topologyId,
-                edgeTopology
-              ])
-            );
-            onSelectEdgeChainRef.current(
-              chain.map((topologyId) => ({
-                bodyId: picked.selection!.bodyId,
-                kind: 'edge' as const,
-                topologyId,
-                hash: byId.get(topologyId)?.hash
-              }))
-            );
+            onSelectEdgeChainRef.current(chain);
             return;
           }
         }
+      }
+      // A face or isolated edge is still an address on its owning body.
+      // Promote that hit after the edge-run shortcut so double-clicking the
+      // solid selects the whole body without changing the active filter.
+      if (picked?.selection) {
+        onSelectTopologyRef.current(
+          { bodyId: picked.selection.bodyId, kind: 'body' },
+          event.shiftKey
+        );
+        return;
       }
       if (bodyGroup.children.length === 0) {
         return;
@@ -3079,6 +4923,11 @@ export function ModelViewer({
       // Suppress the native menu here; pointerup decides whether to open ours.
       event.preventDefault();
     };
+    // The canvas listener alone is not enough: HUD chips and the CSS2D label
+    // layer sit above the canvas, and a right-click landing on them surfaces
+    // the browser's own menu (Safari offers "Save Image As…" for the canvas
+    // beneath). The host wrapper sees the event whichever layer was hit.
+    host.addEventListener('contextmenu', handleContextMenu);
 
     const handleWheel = () => {
       cameraRig.cancelTween();
@@ -3110,6 +4959,18 @@ export function ModelViewer({
     const lastQuaternion = new THREE.Quaternion();
     function animate(now: number) {
       animationFrame = null;
+      if (resizePending) {
+        resizePending = false;
+        const width = viewerHost.clientWidth;
+        const height = viewerHost.clientHeight;
+        cameraRig.handleResize();
+        renderer.setSize(width, height);
+        labelRenderer.setSize(width, height);
+        // Screen-space fat lines rasterize against the viewport size. Walking
+        // the scene covers body edges, sketches, previews and handle rigs
+        // alike, so no creation site has to remember to register its material.
+        syncFatLineResolution(scene, width, height);
+      }
       // Camera glide first so controls and the ortho mirror see the result.
       const tweening = cameraRig.stepTween(now);
       const controlsChanged = cameraRig.stepOrbit(now);
@@ -3123,6 +4984,33 @@ export function ModelViewer({
       if (context.projection === 'orthographic' && !tweening) {
         camera.position.copy(orthographic.position);
         camera.quaternion.copy(orthographic.quaternion);
+      }
+
+      const activeSketchMode = sketchModeRef.current;
+      const activeSketchRig = sketchRigRef.current;
+      let inferenceAnimating = false;
+      if (activeSketchMode && activeSketchRig) {
+        const sketchOrigin = new THREE.Vector3(
+          activeSketchMode.basis.origin.x,
+          activeSketchMode.basis.origin.y,
+          activeSketchMode.basis.origin.z
+        );
+        const spacing = activeSketchRig.setGrid(
+          worldPerPixelAt(sketchOrigin),
+          activeSketchMode.gridVisible
+        );
+        if (activeSketchMode.gridVisible) {
+          sketchGridIndicator.textContent = `Grid ${formatNumber(spacing)} ${unitsRef.current} · adaptive`;
+          sketchGridIndicator.hidden = false;
+        } else {
+          sketchGridIndicator.hidden = true;
+        }
+        inferenceAnimating = activeSketchRig.advanceInference(
+          now,
+          reducedMotionRef.current === true
+        );
+      } else {
+        sketchGridIndicator.hidden = true;
       }
 
       // Preselection and selection overlays ease toward their targets.
@@ -3140,6 +5028,18 @@ export function ModelViewer({
           material.opacity = target;
           context.fadeIns.delete(material);
         }
+      }
+      // Dimensions are resized on every drawn frame, not behind a guard keyed
+      // on the camera's orientation: a wheel-zoom changes the world size of a
+      // pixel without rotating anything, and a rotation guard would leave the
+      // arrowheads frozen at their pre-zoom size. The loop is already
+      // on-demand, so this costs nothing on a still frame.
+      for (const entry of measurementDimensionsRef.current) {
+        entry.graphic.update(
+          entry.start,
+          entry.end,
+          moveGizmoWorldScale(worldPerPixelAt(entry.start)) * 0.55
+        );
       }
       if (moveGizmoGroup.children.length > 0) {
         const baseScale = Math.max(
@@ -3159,6 +5059,8 @@ export function ModelViewer({
           moveGizmoWorldScale(worldPerPixelAt(offsetRig.group.position)) * 0.55;
         offsetRig.group.scale.setScalar(rigScale);
         offsetRig.group.userData.gizmoScale = rigScale;
+        // Keep dimension arrowheads screen-sized across a pure wheel zoom.
+        offsetRig.setValue(offsetRig.value());
       }
       const cylinderRig = cylinderRadiusRigRef.current;
       if (cylinderRig) {
@@ -3167,6 +5069,9 @@ export function ModelViewer({
           0.55;
         cylinderRig.group.scale.setScalar(rigScale);
         cylinderRig.group.userData.gizmoScale = rigScale;
+        // Re-run the rig's layout so its dimension-line arrowheads track the
+        // freshly stamped screen-constant scale.
+        cylinderRig.setValue(cylinderRig.value());
       }
       const edgeRig = edgeRigRef.current;
       if (edgeRig) {
@@ -3175,7 +5080,10 @@ export function ModelViewer({
         edgeRig.group.scale.setScalar(rigScale);
         edgeRig.group.userData.gizmoScale = rigScale;
       }
+      const cylinderRadiusProxyFrame = flushCylinderRadiusProxy();
       updateOffsetChip();
+      updateStudioGrid(grid, context.activeCamera, cameraRig.controls.target);
+      updateAxesGizmo(axes, context.activeCamera);
       shadowCatcher.visible = shouldShowGroundShadow(
         context.activeCamera,
         showGridRef.current
@@ -3186,6 +5094,12 @@ export function ModelViewer({
         firstFrame = false;
         timed('viewer.firstFrame', () =>
           renderer.render(scene, context.activeCamera)
+        );
+        mark('viewer.firstFrame.ready');
+        measure(
+          'viewer.interactive',
+          'viewer.init:begin',
+          'viewer.firstFrame.ready'
         );
       } else {
         renderer.render(scene, context.activeCamera);
@@ -3207,16 +5121,27 @@ export function ModelViewer({
         renderer.domElement.clientHeight
       );
       labelRenderer.render(scene, context.activeCamera);
+      if (cylinderRadiusProxyFrame && import.meta.env.OZ_PERF === '1') {
+        mark('cylinder-radius.proxy-frame', {
+          latencyMs: Math.max(
+            performance.now() - cylinderRadiusProxyFrame.requestedAt,
+            0
+          ),
+          radius: cylinderRadiusProxyFrame.radius
+        });
+      }
+      clampNameCallouts(labelRenderer.domElement);
 
       // Push camera orientation to the view widget only when it changes.
-      if (!camera.quaternion.equals(lastQuaternion)) {
-        lastQuaternion.copy(camera.quaternion);
+      const orientationCamera = context.activeCamera;
+      if (!orientationCamera.quaternion.equals(lastQuaternion)) {
+        lastQuaternion.copy(orientationCamera.quaternion);
         const sink = orientationRef.current;
         if (sink) {
-          const inverse = camera.quaternion.clone().invert();
+          const inverse = orientationCamera.quaternion.clone().invert();
           const project = (axis: THREE.Vector3) => {
             const view = axis.clone().applyQuaternion(inverse);
-            return { x: view.x, y: -view.y };
+            return { x: view.x, y: -view.y, z: view.z };
           };
           sink({
             x: project(new THREE.Vector3(1, 0, 0)),
@@ -3230,6 +5155,7 @@ export function ModelViewer({
         tweening ||
         controlsChanged ||
         hoverAnimating ||
+        inferenceAnimating ||
         context.fadeIns.size > 0
       ) {
         requestRender();
@@ -3272,6 +5198,10 @@ export function ModelViewer({
         handleE2ECylinderSelection
       );
       renderer.domElement.removeEventListener(
+        'openzcad:e2e-visual-selection-probe',
+        handleE2EVisualSelectionProbe
+      );
+      renderer.domElement.removeEventListener(
         'openzcad:e2e-render-policy',
         handleE2ERenderPolicy
       );
@@ -3279,103 +5209,243 @@ export function ModelViewer({
         'openzcad:e2e-select-profile',
         handleE2EProfileSelection
       );
+      renderer.domElement.removeEventListener(
+        'openzcad:e2e-locate-edge',
+        handleE2ELocateEdge
+      );
+      renderer.domElement.removeEventListener(
+        'openzcad:e2e-input-state',
+        handleE2EInputState
+      );
+      renderer.domElement.removeEventListener(
+        'openzcad:e2e-pixel-ratio',
+        handleE2EPixelRatio
+      );
+      renderer.domElement.removeEventListener(
+        'openzcad:e2e-control-pointer',
+        handleE2EControlPointer
+      );
       document.removeEventListener('keydown', handleCapturedEscape, true);
       renderer.domElement.removeEventListener('dblclick', handleDoubleClick);
       renderer.domElement.removeEventListener('contextmenu', handleContextMenu);
+      host.removeEventListener('contextmenu', handleContextMenu);
       renderer.domElement.removeEventListener('wheel', handleWheel);
+      discardCylinderRadiusProxy();
       clearGroup(bodyGroup);
       clearGroup(sketchGroup);
       clearGroup(overlayGroup);
+      clearGroup(measurementGroup);
       clearGroup(gizmoGroup);
       clearGroup(moveGizmoGroup);
-      for (const disposable of [grid, shadowCatcher] as THREE.Mesh[]) {
+      for (const disposable of [
+        gradientBackdrop,
+        grid,
+        shadowCatcher
+      ] as THREE.Mesh[]) {
         disposable.geometry.dispose();
         (disposable.material as THREE.Material).dispose();
       }
       selection.dispose();
       environment.dispose();
-      gradientBackground.dispose();
       clearGroup(axes); // the triad is three fat lines now, not one helper
       cameraRig.dispose();
       renderer.dispose();
       host.removeChild(renderer.domElement);
       host.removeChild(labelRenderer.domElement);
       offsetChip.removeEventListener('click', handleChipClick);
+      dimensionPrefix.removeEventListener('click', toggleCylinderDimensionMode);
+      radiusLabelChip.removeEventListener('click', handleChipClick);
       hud.dispose();
+      // Dimension graphics own their own geometries and materials; clearing
+      // the group they sit in would orphan those on the GPU.
+      for (const entry of measurementDimensionsRef.current) {
+        entry.graphic.dispose();
+      }
+      measurementDimensionsRef.current = [];
       offsetChipRef.current = null;
       sketchDimLabelRef.current = null;
       sketchSnapMarkerRef.current = null;
+      sketchCenterTargetRef.current = null;
       offsetSetterRef.current = null;
       cancelDirectManipulationRef.current = null;
+      cylinderRadiusProxyControllerRef.current = null;
       moveGizmoHudRef.current = null;
+      if (orientationDragRef.current === orientationDragControls) {
+        orientationDragRef.current = null;
+      }
       contextRef.current = null;
     };
   }, []);
 
-  // Rebuild bodies + selection callout when derived geometry changes.
+  // Measurements are session-owned overlays. They use their own group so an
+  // exact body refresh cannot remove a pinned result between React commits.
+  useEffect(() => {
+    const context = contextRef.current;
+    const group = measurementGroupRef.current;
+    if (!context || !group) {
+      return;
+    }
+    for (const entry of measurementDimensionsRef.current) {
+      entry.graphic.dispose();
+    }
+    measurementDimensionsRef.current = [];
+    clearGroup(group);
+    const resolution = context.fatLineResolution();
+    for (const annotation of measurementAnnotations) {
+      const stale = annotation.status !== 'current';
+      const color = stale
+        ? 0xf59e0b
+        : annotation.selected
+          ? 0x9bd3ff
+          : 0x7cc0ff;
+      // A measured span is drawn as a drawing's dimension rather than as a
+      // bare line: witness ticks stand it off the geometry, and the arrowheads
+      // say which two points the number is between. Angle arms are not a span,
+      // so they keep the plain line — an arrowhead on the far end of an arm
+      // would claim the arm's length was the measurement.
+      if (annotation.graphic === 'span') {
+        for (const segment of annotation.segments) {
+          const dimension = createDimensionGraphic({ witnessLines: true });
+          const start = new THREE.Vector3(
+            segment.start.x,
+            segment.start.y,
+            segment.start.z
+          );
+          const end = new THREE.Vector3(
+            segment.end.x,
+            segment.end.y,
+            segment.end.z
+          );
+          dimension.object.renderOrder =
+            VIEWPORT_RENDER_ORDER.ACTIVE_SKETCH + 1;
+          dimension.object.traverse((child) => {
+            child.raycast = () => undefined;
+          });
+          group.add(dimension.object);
+          measurementDimensionsRef.current.push({
+            graphic: dimension,
+            start,
+            end
+          });
+        }
+      }
+      for (const segment of annotation.graphic === 'span'
+        ? []
+        : annotation.segments) {
+        const line = createFatLine(
+          [
+            new THREE.Vector3(
+              segment.start.x,
+              segment.start.y,
+              segment.start.z
+            ),
+            new THREE.Vector3(segment.end.x, segment.end.y, segment.end.z)
+          ],
+          {
+            color,
+            linewidth: annotation.selected ? 2.4 : 1.6,
+            opacity: stale ? 0.55 : 0.92,
+            depthTest: false,
+            resolution
+          }
+        );
+        line.name = 'measurement-witness';
+        line.raycast = () => undefined;
+        line.renderOrder = VIEWPORT_RENDER_ORDER.ACTIVE_SKETCH + 1;
+        group.add(line);
+      }
+      const label = makeLabel(
+        `selection-callout direct-edit-callout measurement-callout${
+          annotation.selected ? ' selected' : ''
+        }${stale ? ' stale' : ''}`,
+        annotation.label
+      );
+      label.name = 'measurement-label';
+      label.position.set(
+        annotation.anchor.x,
+        annotation.anchor.y,
+        annotation.anchor.z
+      );
+      label.element.setAttribute('role', 'status');
+      group.add(label);
+    }
+    context.requestRender();
+  }, [measurementAnnotations]);
+
+  // Body geometry is rebuilt only when the derived body projection changes.
+  // Selection-only renders reuse the installed meshes, materials, edge
+  // batches, and frozen shadow map while refreshing lightweight overlays.
   useEffect(() => {
     const context = contextRef.current;
     if (!context) {
       return;
     }
 
-    mark('viewer.bodies:begin');
-    clearGroup(context.bodyGroup);
+    const bodiesChanged = context.renderedBodies !== bodies;
+    const xrayEnabled = sketchMode === null;
+    context.selection.setXrayEnabled(xrayEnabled);
+    if (bodiesChanged) {
+      // The exact worker result is authoritative. Forget the visual proxy
+      // before its old Three object is disposed and replaced.
+      cylinderRadiusProxyControllerRef.current?.discard();
+      mark('viewer.bodies:begin');
+      clearGroup(context.bodyGroup);
+      context.selection.resetForRebuild();
+      context.objectsByBodyId.clear();
+      context.edgeOverlaysByBodyId.clear();
+    }
     clearGroup(context.overlayGroup);
     context.dimensionLabels.clear();
-    context.selection.resetForRebuild();
-    context.objectsByBodyId.clear();
+    if (E2E_CANVAS_HOOKS_ENABLED) {
+      delete context.renderer.domElement.dataset.e2eSelectedFace;
+    }
     const edgeResolution = context.fatLineResolution();
-    const selectedEdgeKeys = new Set(
-      selectedEdges.map((edge) => `${edge.bodyId}:${edge.topologyId ?? ''}`)
-    );
 
     for (const body of bodies) {
-      const object = createObjectForBody(body, edgeResolution);
-      object.userData.bodyId = body.bodyId;
+      const object = bodiesChanged
+        ? createObjectForBody(body, edgeResolution)
+        : context.objectsByBodyId.get(body.bodyId);
+      if (!object) {
+        continue;
+      }
+      if (bodiesChanged) {
+        object.userData.bodyId = body.bodyId;
+      }
+      const previousSelectionOverlay = object.getObjectByName(
+        'body-selection-overlay'
+      );
+      if (previousSelectionOverlay instanceof THREE.Group) {
+        const selectionGroup =
+          previousSelectionOverlay as unknown as THREE.Group;
+        clearGroup(selectionGroup);
+        object.remove(selectionGroup);
+      }
       const isSelected = selectedBodyIds.includes(body.bodyId);
 
       forEachMesh(object, (mesh) => {
         const baseEmissive = isSelected ? SELECTION_EMISSIVE : 0x000000;
         mesh.material.emissive.setHex(baseEmissive);
         mesh.userData.baseEmissive = baseEmissive;
-        mesh.userData.bodyId = body.bodyId;
-        mesh.userData.topology = body.topology;
-        mesh.castShadow = true;
-        mesh.receiveShadow = false;
+        if (bodiesChanged) {
+          mesh.userData.bodyId = body.bodyId;
+          mesh.userData.topology = body.topology;
+          mesh.castShadow = true;
+          mesh.receiveShadow = false;
+        }
       });
 
-      for (const edge of body.topology?.edges ?? []) {
-        if (edge.points.length < 6) {
-          continue;
-        }
-        const active = selectedEdgeKeys.has(
-          `${body.bodyId}:${edge.topologyId}`
-        );
-
-        // Visible fat line: WebGL ignores LineBasicMaterial linewidth, so
-        // edges render via Line2 with a real screen-space width.
-        const fatGeometry = new LineGeometry();
-        fatGeometry.setPositions(edge.points);
-        const fatMaterial = createFatLineMaterial({
-          color: active ? EDGE_SELECTED_COLOR : EDGE_IDLE_COLOR,
-          linewidth: active ? EDGE_SELECTED_WIDTH : EDGE_IDLE_WIDTH,
-          opacity: active ? 1 : EDGE_IDLE_OPACITY,
-          resolution: edgeResolution
-        });
-        const visual = new Line2(fatGeometry, fatMaterial);
-        visual.name = 'body-edge';
-        visual.computeLineDistances();
-        visual.userData.bodyId = body.bodyId;
-        visual.userData.topologyKind = 'edge';
-        visual.userData.topologyId = edge.topologyId;
-        visual.userData.topologyHash = edge.hash;
-        visual.userData.visual = visual;
-        (visual.userData as EdgeVisualState).selected = active;
-        visual.renderOrder = active
-          ? VIEWPORT_RENDER_ORDER.SELECTED_GEOMETRY
-          : VIEWPORT_RENDER_ORDER.BODY_EDGE;
-        object.add(visual);
+      let edgeOverlay = context.edgeOverlaysByBodyId.get(body.bodyId);
+      if (bodiesChanged) {
+        edgeOverlay = createBodyEdgeOverlay(body, edgeResolution);
+        edgeOverlay.setDisplayMode(displayModeRef.current);
+        object.add(edgeOverlay);
+        context.edgeOverlaysByBodyId.set(body.bodyId, edgeOverlay);
+      }
+      edgeOverlay?.setSelected(selectedEdges);
+      edgeOverlay?.setXrayEnabled(xrayEnabled);
+      if (bodiesChanged) {
+        context.bodyGroup.add(object);
+        context.objectsByBodyId.set(body.bodyId, object);
       }
 
       const selectedFace =
@@ -3385,20 +5455,26 @@ export function ModelViewer({
               (face) => face.topologyId === selectedTopology.topologyId
             )
           : undefined;
+      edgeOverlay?.setSelectedFaceBoundary(selectedFace?.hash ?? null);
       if (selectedFace) {
-        const geometry = new THREE.BufferGeometry();
-        geometry.setAttribute(
-          'position',
-          new THREE.Float32BufferAttribute(body.mesh.vertices, 3)
+        const geometry = createFaceHighlightGeometry(object, selectedFace);
+        const hiddenGeometry = createFaceHighlightGeometry(
+          object,
+          selectedFace
         );
-        geometry.setIndex(
-          body.mesh.indices.slice(
-            selectedFace.triangleStart * 3,
-            (selectedFace.triangleStart + selectedFace.triangleCount) * 3
-          )
-        );
-        geometry.computeVertexNormals();
-        const highlightMaterial = new THREE.MeshBasicMaterial({
+        if (!geometry || !hiddenGeometry) {
+          geometry?.dispose();
+          hiddenGeometry?.dispose();
+          continue;
+        }
+        const selectionOverlay = new THREE.Group();
+        selectionOverlay.name = 'body-selection-overlay';
+        object.add(selectionOverlay);
+        if (E2E_CANVAS_HOOKS_ENABLED) {
+          context.renderer.domElement.dataset.e2eSelectedFace =
+            selectedFace.topologyId;
+        }
+        const highlightMaterial = new THREE.MeshLambertMaterial({
           color: SELECTED_FACE_COLOR,
           toneMapped: false,
           transparent: true,
@@ -3410,10 +5486,40 @@ export function ModelViewer({
         });
         highlightMaterial.userData.targetOpacity = SELECTED_FACE_OPACITY;
         const highlight = new THREE.Mesh(geometry, highlightMaterial);
+        highlight.name = 'body-face-selected';
         highlight.renderOrder = VIEWPORT_RENDER_ORDER.SELECTED_GEOMETRY;
+        highlight.userData.selectionOverlay = true;
         highlight.raycast = () => undefined;
-        object.add(highlight);
+        selectionOverlay.add(highlight);
         context.fadeIns.add(highlightMaterial);
+
+        const hiddenMaterial = new THREE.MeshBasicMaterial({
+          color: SELECTED_FACE_COLOR,
+          toneMapped: false,
+          transparent: true,
+          opacity: SELECTED_FACE_HIDDEN_OPACITY,
+          side: THREE.DoubleSide,
+          depthWrite: false,
+          depthFunc: THREE.GreaterDepth
+        });
+        const hiddenHighlight = new THREE.Mesh(hiddenGeometry, hiddenMaterial);
+        hiddenHighlight.name = 'body-face-selected-hidden';
+        hiddenHighlight.visible = xrayEnabled;
+        hiddenHighlight.renderOrder =
+          VIEWPORT_RENDER_ORDER.SELECTED_GEOMETRY - 1;
+        hiddenHighlight.userData.selectionOverlay = true;
+        hiddenHighlight.raycast = () => undefined;
+        selectionOverlay.add(hiddenHighlight);
+
+        if (selectedFace.geometry) {
+          const analyticGhost = createAnalyticCylinderGhost(
+            selectedFace.geometry,
+            edgeResolution
+          );
+          if (analyticGhost) {
+            selectionOverlay.add(analyticGhost);
+          }
+        }
 
         if (editableBodyIds.includes(body.bodyId)) {
           const normal = normalForTriangle(body, selectedFace.triangleStart);
@@ -3553,37 +5659,39 @@ export function ModelViewer({
           }
         }
       }
-
-      context.bodyGroup.add(object);
-      context.objectsByBodyId.set(body.bodyId, object);
     }
 
-    applyDisplayMode(context.bodyGroup, displayModeRef.current);
+    if (bodiesChanged) {
+      applyDisplayMode(context.bodyGroup, displayModeRef.current);
+    }
 
     // Retune the key light's shadow frustum around the current model so the
     // grounding shadow stays crisp instead of being clipped or pixelated.
-    const sceneBox = new THREE.Box3();
-    for (const child of context.bodyGroup.children) {
-      sceneBox.expandByObject(child);
+    if (bodiesChanged) {
+      const sceneBox = new THREE.Box3();
+      for (const child of context.bodyGroup.children) {
+        sceneBox.expandByObject(child);
+      }
+      if (!sceneBox.isEmpty()) {
+        const sceneSize = sceneBox.getSize(new THREE.Vector3());
+        const sceneCenter = sceneBox.getCenter(new THREE.Vector3());
+        tuneShadowFrustum(
+          context.keyLight,
+          Math.max(sceneSize.x, sceneSize.y, sceneSize.z) / 2
+        );
+        context.keyLight.position.set(
+          sceneCenter.x + 90,
+          sceneCenter.y - 100,
+          sceneCenter.z + 140
+        );
+        context.keyLight.target.position.copy(sceneCenter);
+        context.keyLight.target.updateMatrixWorld();
+      }
+      // Bodies are the only dynamic shadow casters; camera and selection-only
+      // frames reuse this map until geometry or the light rig changes again.
+      context.refreshShadowMap();
+      context.renderedBodies = bodies;
     }
-    if (!sceneBox.isEmpty()) {
-      const sceneSize = sceneBox.getSize(new THREE.Vector3());
-      const sceneCenter = sceneBox.getCenter(new THREE.Vector3());
-      tuneShadowFrustum(
-        context.keyLight,
-        Math.max(sceneSize.x, sceneSize.y, sceneSize.z) / 2
-      );
-      context.keyLight.position.set(
-        sceneCenter.x + 90,
-        sceneCenter.y - 100,
-        sceneCenter.z + 140
-      );
-      context.keyLight.target.position.copy(sceneCenter);
-      context.keyLight.target.updateMatrixWorld();
-    }
-    // Bodies are the only dynamic shadow casters; camera-only frames reuse
-    // this map until geometry or the fitted key-light rig changes again.
-    context.renderer.shadowMap.needsUpdate = true;
 
     // Name callout on the primary (last picked) selected body.
     const primaryId = selectedBodyIds.at(-1);
@@ -3620,6 +5728,12 @@ export function ModelViewer({
             `${body.name}${suffix}${count}`
           );
           label.position.copy(top);
+          // The callout lives in the overlay group, not under the body, so a
+          // move preview would leave the name behind while its body slid out
+          // from under it. Record which body it names and where it rests, and
+          // `applyMovePreview` carries it along under the same transform.
+          label.userData.calloutBodyId = primaryId;
+          label.userData.calloutRestingPosition = top.clone();
           context.overlayGroup.add(label);
         }
       }
@@ -3639,13 +5753,16 @@ export function ModelViewer({
       onViewChangeRef.current(context.captureView());
     }
     context.requestRender();
-    performance.measure?.('oz:viewer.bodies', 'oz:viewer.bodies:begin');
+    if (bodiesChanged) {
+      performance.measure?.('oz:viewer.bodies', 'oz:viewer.bodies:begin');
+    }
   }, [
     bodies,
     editableBodyIds,
     selectedBodyIds,
     selectedEdges,
     selectedTopology,
+    sketchMode,
     units
   ]);
 
@@ -3664,24 +5781,68 @@ export function ModelViewer({
       if (moveGizmoHudRef.current) {
         moveGizmoHudRef.current.hidden = true;
       }
+      if (moveCommitHold) {
+        // Committed move, rebuild in flight: keep the (still old) mesh posed
+        // at the applied transform so it never flashes at the resting pose.
+        const held = bodies.find(
+          (candidate) => candidate.bodyId === moveCommitHold.bodyId
+        );
+        if (held) {
+          moveCenterRef.current.set(
+            (held.bbox.min.x + held.bbox.max.x) / 2,
+            (held.bbox.min.y + held.bbox.max.y) / 2,
+            (held.bbox.min.z + held.bbox.max.z) / 2
+          );
+          context.applyMovePreview(
+            moveCommitHold.translation,
+            moveCommitHold.rotationDeg
+          );
+        }
+        return;
+      }
       // Cancel without a document change must restore the resting pose.
       for (const object of context.objectsByBodyId.values()) {
         object.position.set(0, 0, 0);
         object.rotation.set(0, 0, 0);
       }
+      context.restSelectionCallouts();
+      // Nothing about the document changed, so no rebuild will refresh the
+      // shadow map — without this the shadow stays where the cancelled move
+      // had dragged it.
+      context.refreshShadowMap();
+      const overlay = regionGroupRef.current;
+      if (overlay) {
+        for (const child of overlay.children) {
+          if (child.userData.sketchViewId) {
+            child.position.set(0, 0, 0);
+          }
+        }
+      }
       return;
     }
-    const body = bodies.find(
-      (candidate) => candidate.bodyId === movePreview.bodyId
-    );
-    if (!body) {
-      return;
+    let center: THREE.Vector3;
+    if (movePreview.target === 'sketch') {
+      const view = sketchViews.find(
+        (candidate) => candidate.sketchId === movePreview.bodyId
+      );
+      const lifted = view ? sketchViewCenter(view) : null;
+      if (!lifted) {
+        return;
+      }
+      center = lifted;
+    } else {
+      const body = bodies.find(
+        (candidate) => candidate.bodyId === movePreview.bodyId
+      );
+      if (!body) {
+        return;
+      }
+      center = new THREE.Vector3(
+        (body.bbox.min.x + body.bbox.max.x) / 2,
+        (body.bbox.min.y + body.bbox.max.y) / 2,
+        (body.bbox.min.z + body.bbox.max.z) / 2
+      );
     }
-    const center = new THREE.Vector3(
-      (body.bbox.min.x + body.bbox.max.x) / 2,
-      (body.bbox.min.y + body.bbox.max.y) / 2,
-      (body.bbox.min.z + body.bbox.max.z) / 2
-    );
     moveCenterRef.current.copy(center);
     const projectedUnitSizePx = projectedWorldSizePx(
       context.activeCamera,
@@ -3695,6 +5856,14 @@ export function ModelViewer({
     context.moveGizmoGroup.userData.gizmoScale = scale;
 
     for (const part of buildMoveGizmoParts(scale)) {
+      // A sketch translates only — a rectangle has no angle to store — so the
+      // rotation rings are omitted rather than offered and ignored.
+      if (
+        movePreview.target === 'sketch' &&
+        (part.userData as MoveGizmoVisualData).kind === 'ring'
+      ) {
+        continue;
+      }
       context.moveGizmoGroup.add(part);
     }
 
@@ -3704,7 +5873,7 @@ export function ModelViewer({
       (context.moveGizmoGroup.userData.focus as MoveGizmoFocus | undefined) ??
         null
     );
-  }, [movePreview, bodies]);
+  }, [movePreview, moveCommitHold, bodies, sketchViews]);
 
   useEffect(() => {
     contextRef.current?.applyProjection(projection);
@@ -3732,6 +5901,9 @@ export function ModelViewer({
       context.requestRender();
       return;
     }
+    // A failed exact release returns the same edit target. Its old mesh is
+    // still installed, so restore the held proxy before re-arming the handle.
+    cylinderRadiusProxyControllerRef.current?.restore();
     const rig = buildCylinderRadiusHandle({
       origin: cylinderRadiusHandle.point,
       direction: cylinderRadiusHandle.radialDirection,
@@ -3793,6 +5965,7 @@ export function ModelViewer({
       ghostGeometry
     });
     rig.setValue(offsetHandle.initialValue ?? 0);
+    rig.setWarning?.(offsetPreviewInvalidRef.current);
     // Fat-line materials need the viewport resolution for correct widths.
     const { width, height } = context.fatLineResolution();
     syncFatLineResolution(rig.worldGroup, width, height);
@@ -3809,6 +5982,11 @@ export function ModelViewer({
       }
     };
   }, [offsetHandle, bodies]);
+
+  useEffect(() => {
+    offsetRigRef.current?.setWarning?.(offsetPreviewInvalid);
+    contextRef.current?.requestRender();
+  }, [offsetPreviewInvalid]);
 
   // Edge-radius handle: built when edges arm fillet/chamfer, torn down on
   // deselect or commit. Never rebuilt mid-drag.
@@ -3906,6 +6084,7 @@ export function ModelViewer({
           resolution: context.fatLineResolution()
         });
         line.name = 'sketch-curve';
+        line.userData.sketchViewId = view.sketchId;
         if (curve.construction) {
           line.material.dashed = true;
           line.material.dashSize = 1.4;
@@ -3955,6 +6134,7 @@ export function ModelViewer({
           boundary.visible = false;
           boundary.renderOrder = VIEWPORT_RENDER_ORDER.HOVER_HIGHLIGHT;
           boundary.raycast = () => undefined;
+          boundary.userData.sketchViewId = view.sketchId;
           group.add(boundary);
           return boundary;
         });
@@ -3984,6 +6164,8 @@ export function ModelViewer({
         group.add(mesh, marker);
         mesh.userData.regionBoundaries = boundaries;
         mesh.userData.regionMarker = marker;
+        mesh.userData.sketchViewId = view.sketchId;
+        marker.userData.sketchViewId = view.sketchId;
         profilePickTargetsRef.current.push({
           pick,
           object: mesh,
@@ -4126,6 +6308,9 @@ export function ModelViewer({
       dragStart: null,
       arcCenter: null,
       arcStart: null,
+      circleFirst: null,
+      circleSecond: null,
+      awaitingSecondPoint: false,
       pointerId: null,
       moved: false
     };
@@ -4174,6 +6359,10 @@ export function ModelViewer({
       if (marker) {
         marker.hidden = true;
       }
+      const centerTarget = sketchCenterTargetRef.current;
+      if (centerTarget) {
+        centerTarget.hidden = true;
+      }
       context.controls.enableRotate = true;
       const saved = sketchReturnRef.current;
       sketchReturnRef.current = null;
@@ -4190,6 +6379,61 @@ export function ModelViewer({
     };
   }, [sketchBasis]);
 
+  // Drag-phase appearance edits patch the live body material directly so
+  // slider drags stay at pointer rate; no document write, no kernel rebuild.
+  // The rebuild effect recreates materials from committed state, so this
+  // re-applies on top after every bodies change, and its cleanup restores the
+  // committed look when the preview clears or the drag ends without commit.
+  useEffect(() => {
+    const context = contextRef.current;
+    if (!context || !appearancePreview) {
+      return;
+    }
+    const object = context.objectsByBodyId.get(appearancePreview.bodyId);
+    if (!object) {
+      return;
+    }
+    const patched: {
+      material: ViewerBodyMaterial;
+      color: THREE.Color;
+      opacity: number;
+      transparent: boolean;
+      depthWrite: boolean;
+    }[] = [];
+    forEachMesh(object, (mesh) => {
+      const material = mesh.material;
+      patched.push({
+        material,
+        color: material.color.clone(),
+        opacity: material.opacity,
+        transparent: material.transparent,
+        depthWrite: material.depthWrite
+      });
+      if (appearancePreview.color !== undefined) {
+        material.color.set(appearancePreview.color);
+      }
+      if (appearancePreview.opacity !== undefined) {
+        const opacity = appearancePreview.opacity;
+        material.transparent = opacity < 1;
+        material.opacity = opacity;
+        material.depthWrite = opacity >= 1;
+      }
+    });
+    if (patched.length === 0) {
+      return;
+    }
+    context.requestRender();
+    return () => {
+      for (const entry of patched) {
+        entry.material.color.copy(entry.color);
+        entry.material.opacity = entry.opacity;
+        entry.material.transparent = entry.transparent;
+        entry.material.depthWrite = entry.depthWrite;
+      }
+      context.requestRender();
+    };
+  }, [appearancePreview, bodies]);
+
   // Solids recede while sketching so the plane reads as the work surface.
   // Re-applied after every body rebuild (each entity commit resyncs).
   useEffect(() => {
@@ -4200,6 +6444,9 @@ export function ModelViewer({
     const active = sketchMode !== null;
     context.bodyGroup.traverse((child) => {
       if (!(child instanceof THREE.Mesh)) {
+        return;
+      }
+      if (child.userData.selectionOverlay === true) {
         return;
       }
       const material = child.material as THREE.MeshStandardMaterial;
@@ -4235,14 +6482,18 @@ export function ModelViewer({
     const resolve = (value: unknown) =>
       evalParamValue(value as ParamValue, sketchMode.parameterScope) ?? 0;
     rig.setObjects(sketchMode.objects, sketchMode.selectedObjectId, resolve);
+    rig.setProfiles(sketchMode.profiles, true);
     rig.setDiagnostics(sketchMode.diagnosticPoints);
-    snapTargetsRef.current = sketchMode.objects.flatMap((object) => {
-      try {
-        return snapTargetsForObject(object.data, resolve);
-      } catch {
-        return [];
-      }
-    });
+    try {
+      snapTargetsRef.current = collectSketchSnapTargets(
+        sketchMode.objects,
+        resolve
+      );
+    } catch {
+      snapTargetsRef.current = [
+        { id: 'sketch-origin', x: 0, y: 0, kind: 'origin' }
+      ];
+    }
     context.requestRender();
   }, [sketchMode]);
 
@@ -4255,7 +6506,11 @@ export function ModelViewer({
       gesture.dragStart = null;
       gesture.arcCenter = null;
       gesture.arcStart = null;
+      gesture.circleFirst = null;
+      gesture.circleSecond = null;
+      gesture.awaitingSecondPoint = false;
       sketchRigRef.current?.setInProgress(null, false);
+      sketchRigRef.current?.setInference(null);
       const label = sketchDimLabelRef.current;
       if (label) {
         label.hidden = true;
@@ -4263,6 +6518,10 @@ export function ModelViewer({
       const marker = sketchSnapMarkerRef.current;
       if (marker) {
         marker.hidden = true;
+      }
+      const centerTarget = sketchCenterTargetRef.current;
+      if (centerTarget) {
+        centerTarget.hidden = true;
       }
       contextRef.current?.requestRender();
     }
@@ -4536,20 +6795,31 @@ export function ModelViewer({
         settings.showGrid
       );
       applyDisplayMode(context.bodyGroup, settings.displayMode);
+      for (const edgeOverlay of context.edgeOverlaysByBodyId.values()) {
+        edgeOverlay.setDisplayMode(settings.displayMode);
+      }
       context.requestRender();
     }
   }, [settings.showGrid, settings.displayMode]);
 
   useEffect(() => {
     const context = contextRef.current;
-    if (
-      !context ||
-      fitSignal === 0 ||
-      context.bodyGroup.children.length === 0
-    ) {
+    // Fit has to include the sketch layer, not just the solids. While a
+    // profile pick is open the app asks the user to click a shaded region it
+    // has not framed — the camera sits on the model, and a sketch drawn away
+    // from it can be off-screen entirely — so fitting to bodies alone answers
+    // the wrong question at the one moment fit is most needed.
+    if (!context || fitSignal === 0) {
       return;
     }
-    const pose = computeFitPose(context.camera, context.bodyGroup.children);
+    const fitTargets = [
+      ...context.bodyGroup.children,
+      ...(regionGroupRef.current?.children ?? [])
+    ].filter((child) => child.visible);
+    if (fitTargets.length === 0) {
+      return;
+    }
+    const pose = computeFitPose(context.camera, fitTargets);
     context.startCameraTween(pose, () => {
       if (context.projection === 'orthographic') {
         context.syncOrthographic(true);
@@ -4557,7 +6827,8 @@ export function ModelViewer({
     });
   }, [fitSignal]);
 
-  // Standard views keep the current zoom and glide the camera to the axis.
+  // View requests keep the current zoom and glide the camera to the axis —
+  // named standard views and the cube's corner diagonals alike.
   useEffect(() => {
     const context = contextRef.current;
     if (!context || !viewRequest) {
@@ -4565,7 +6836,7 @@ export function ModelViewer({
     }
     const { camera, controls } = context;
     const distance = Math.max(camera.position.distanceTo(controls.target), 1);
-    const direction = VIEW_DIRECTIONS[viewRequest.view];
+    const direction = viewDirectionFor(viewRequest.view);
     context.startCameraTween({
       position: controls.target.clone().addScaledVector(direction, distance),
       target: controls.target.clone(),
@@ -4573,6 +6844,88 @@ export function ModelViewer({
       far: camera.far
     });
   }, [viewRequest]);
+
+  // A normal-to-face request uses the exact surface centre/normal for the
+  // target and orientation, then the selected face's display triangles only
+  // for framing. Body vertices are already world-space projections.
+  useEffect(() => {
+    const context = contextRef.current;
+    if (!context || !normalToFaceRequest) {
+      return;
+    }
+    const body = bodies.find(
+      (candidate) => candidate.bodyId === normalToFaceRequest.bodyId
+    );
+    const face = body?.topology?.faces.find(
+      (candidate) => candidate.topologyId === normalToFaceRequest.topologyId
+    );
+    const geometry = face?.geometry;
+    if (
+      !body ||
+      !face ||
+      geometry?.surfaceType !== 'plane' ||
+      !geometry.normal
+    ) {
+      return;
+    }
+
+    const points: THREE.Vector3[] = [];
+    const firstIndex = face.triangleStart * 3;
+    const endIndex = (face.triangleStart + face.triangleCount) * 3;
+    for (let corner = firstIndex; corner < endIndex; corner += 1) {
+      const vertexIndex = body.mesh.indices[corner];
+      if (vertexIndex === undefined) {
+        return;
+      }
+      points.push(
+        new THREE.Vector3().fromArray(body.mesh.vertices, vertexIndex * 3)
+      );
+    }
+    const pose = computeNormalToFacePose(
+      context.camera,
+      points,
+      new THREE.Vector3(
+        geometry.center.x,
+        geometry.center.y,
+        geometry.center.z
+      ),
+      new THREE.Vector3(geometry.normal.x, geometry.normal.y, geometry.normal.z)
+    );
+    if (!pose) {
+      return;
+    }
+    context.startCameraTween(pose, () => {
+      if (context.projection === 'orthographic') {
+        context.syncOrthographic(true);
+      }
+    });
+  }, [bodies, normalToFaceRequest]);
+
+  // The view-cube arrows swing the camera a quarter turn around the world up
+  // axis. In a head-on top or bottom view the orbit offset is only the tiny
+  // nudge VIEW_DIRECTIONS keeps off the pole, so the same quarter turn reads
+  // as the drawing spinning in place — which is what the arrows should do
+  // there.
+  useEffect(() => {
+    const context = contextRef.current;
+    if (!context || !rotateRequest) {
+      return;
+    }
+    const { camera, controls } = context;
+    // `direction` names the way the model appears to turn on screen, so the
+    // camera swings the opposite way: model clockwise = camera counterclockwise.
+    const angle = rotateRequest.direction === 'cw' ? Math.PI / 2 : -Math.PI / 2;
+    const offset = camera.position
+      .clone()
+      .sub(controls.target)
+      .applyAxisAngle(new THREE.Vector3(0, 0, 1), angle);
+    context.startCameraTween({
+      position: controls.target.clone().add(offset),
+      target: controls.target.clone(),
+      near: camera.near,
+      far: camera.far
+    });
+  }, [rotateRequest]);
 
   return <div className="viewer-host" ref={hostRef} />;
 }

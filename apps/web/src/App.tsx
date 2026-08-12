@@ -1,11 +1,15 @@
 import {
+  lazy,
+  Suspense,
+  useCallback,
   useEffect,
   useLayoutEffect,
   useMemo,
   useReducer,
   useRef,
   useState,
-  type ChangeEvent
+  type ChangeEvent,
+  type ComponentProps
 } from 'react';
 import {
   Camera,
@@ -30,7 +34,6 @@ import {
 import {
   CommandManager,
   commandFactories,
-  commandsForCadPatch,
   type AnyCommand
 } from '@openzcad/command-system';
 import type {
@@ -39,13 +42,17 @@ import type {
 } from '@openzcad/ai-contracts';
 import {
   createProjectDocument,
+  duplicateProjectDocument,
+  findBodyNode,
   findSketch,
   getParameterScope,
   listFeaturesInOrder,
   listNodesByKind,
   listParameters,
   normalizeDocument,
-  resolveParamValue
+  resolveParamValue,
+  withoutDerivedProjection,
+  type ExtrudeInput
 } from '@openzcad/document-core';
 import {
   circleProfile,
@@ -54,13 +61,17 @@ import {
   frameForPlaneRef,
   polygonProfile,
   rectangleProfile,
+  type PlaneBasis,
   type Vec2
 } from '@openzcad/geometry';
-import { parseStepMetadata } from '@openzcad/io-step';
+import {
+  resolveFaceAttachment,
+  type FaceAttachmentCandidate
+} from '@openzcad/kernel-adapter/face-attachment';
 import { parseStl } from '@openzcad/io-stl';
-import { createKernelAdapter } from '@openzcad/kernel-adapter';
 import type {
   ArtifactKind,
+  AccountDeletionScope,
   ArtifactRecord,
   BodyId,
   BodyRepresentation,
@@ -68,8 +79,11 @@ import type {
   FeatureId,
   FeatureNode,
   FaceGeometry,
+  FaceTopology,
   ParamValue,
   ProjectDocument,
+  ProjectOrganization,
+  ProjectStatus,
   ProjectSummary,
   SketchId,
   SketchNode,
@@ -78,15 +92,78 @@ import type {
   TopologySelection,
   UnitSystem
 } from '@openzcad/shared';
+import {
+  applyOrganizationUpdate,
+  BODY_COLOR_METADATA_KEY,
+  BODY_OPACITY_METADATA_KEY,
+  compareProjectSummaries,
+  DEFAULT_PROJECT_ORGANIZATION,
+  duplicateProjectName,
+  FEATURE_ROLLBACK_SUPPRESSED_METADATA_KEY,
+  FEATURE_SUPPRESSED_METADATA_KEY,
+  isFeatureRollbackSuppressed,
+  isFeatureSuppressed,
+  projectOrganization,
+  toProjectId,
+  TRASH_RETENTION_DAYS
+} from '@openzcad/shared';
 import type {
   AppSettings,
   AppSettingsResponse,
   AuthConfigResponse,
-  AuthSession
+  AuthSession,
+  HealthResponse,
+  ProjectCollaborationCapabilitiesResponse
 } from '@openzcad/shared';
-import { toUserId } from '@openzcad/shared';
+import { toArtifactId, toUserId, UNIT_TO_MM } from '@openzcad/shared';
 import { ApiError, api } from './lib/api';
-import { timed } from './lib/perf';
+import { uploadArtifactBody } from './lib/artifactUpload';
+import {
+  archiveLocalOnlyImportSources,
+  createInFlightImportChecksums,
+  listLocalOnlyImportSources
+} from './lib/importArchival';
+import {
+  LOCAL_AUTOSAVE_FAILED_STATUS,
+  reparkFailedAutosave
+} from './lib/localAutosaveFailure';
+import {
+  MAX_SOURCE_IMPORT_BYTES,
+  runStepImport
+} from './lib/stepImportRun';
+import { presentedWorkspaceSaveState } from './lib/workspaceSaveStatePresentation';
+import {
+  cancelDesktopSignIn,
+  isDesktopApp,
+  listenForDesktopMenu,
+  openDesktopCadFile,
+  pollDesktopSignIn,
+  protectDesktopClose,
+  saveCadTextFile,
+  startDesktopSignIn,
+  type DesktopMenuCommand
+} from './lib/desktopBridge';
+import {
+  cloudFunctionsAreEnabled,
+  setCloudFunctionsEnabled
+} from './lib/cloudMode';
+import { CloudSettingsAutosave } from './lib/cloudSettingsAutosave';
+import {
+  CloudProjectAutosave,
+  currentVersionOf,
+  type WorkspaceSaveState
+} from './lib/cloudProjectAutosave';
+import {
+  decideProjectSync,
+  shouldPollForFreshness
+} from './lib/projectSyncDecision';
+import {
+  claimProjectOwnership,
+  type ProjectOwnershipClaim
+} from './lib/projectTabOwnership';
+
+import { mark, measure, timed, timedAsync } from './lib/perf';
+import { useModalFocus } from './lib/useModalFocus';
 import {
   PLANE_LABELS,
   downloadText,
@@ -95,6 +172,9 @@ import {
   formatNumber,
   inferContentType
 } from './lib/model';
+import { useDocumentFonts } from './lib/textFonts';
+import { createProjectDiagnosticBundle } from './lib/projectDiagnostics';
+import { KERNEL_BUILD } from './lib/kernelBuild';
 import {
   SHORTCUT_TO_TOOL,
   TOOL_GROUPS,
@@ -104,82 +184,298 @@ import {
   type ToolId
 } from './lib/tools';
 import { AppShell } from './components/AppShell';
+import { PanelResizer } from './components/PanelResizer';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { TopBar } from './components/TopBar';
 import { ToolBar } from './components/ToolBar';
+import { ViewModeRail } from './components/ViewModeRail';
 import { Sidebar } from './components/Sidebar';
-import { ViewerShell } from './components/ViewerShell';
 import { Inspector } from './components/Inspector';
+import { ModelingOperationsForm } from './components/forms/ModelingOperationsForm';
 import { StatusBar } from './components/StatusBar';
 import { StartScreen } from './components/StartScreen';
 import { StartupScreen } from './components/StartupScreen';
 import { SettingsPage, type AuthConfigStatus } from './components/SettingsPage';
 import { buildDemoDocument, DEMO_DEFINITIONS } from './lib/demos';
 import type { DemoDefinition } from './lib/demos';
-import { AssistantPanel } from './components/assistant/AssistantPanel';
+import { ProjectSharingDialog } from './components/ProjectSharingDialog';
+import { createProjectSharingClient } from './lib/projectSharing';
+import {
+  captureProjectInvitationLink,
+  clearPendingProjectInvitation
+} from './lib/projectInvitationLink';
+import { ProjectConflictDialog } from './components/ProjectConflictDialog';
 import {
   ExtrudeOverlay,
   MoveOverlay,
   ProfileQuickAction
 } from './components/DirectModelingOverlays';
-import { composeMoveTransform, SELECTION_FILTERS } from '@openzcad/viewport';
+import { composeMoveTransform } from '@openzcad/viewport/move-transform';
+import { SELECTION_FILTERS } from '@openzcad/viewport/types';
 import { effectiveSelectionFilter } from './lib/selectionFilter';
 import { commandPromptText } from './lib/interaction/prompt';
 import {
   cylinderRadialFrame,
   isValidCylinderRadius,
-  sameCylinderAxis
+  sameCylinderAxis,
+  supportsRadialCylinderPreview
 } from './lib/interaction/cylinderRadius';
+import {
+  primitiveCylinderHeightAncestor,
+  primitiveCylinderRadiusAncestor
+} from './lib/interaction/cylinderPrimitiveAncestry';
+import { resolveOffsetPreviewFace } from './lib/interaction/offsetPreview';
 import { ToolCard } from './components/ToolCard';
 import { NumericKeypad, type KeypadRequest } from './components/NumericKeypad';
+import type { DimensionMode } from './lib/keypad';
 import {
   IDLE,
+  escapeTarget,
   interactionReducer,
   toolCardFor,
   type FaceTarget
 } from './lib/interaction/machine';
 import { updateProfileSelection } from './lib/profileSelection';
+import {
+  isEntityWideProfileSource,
+  profileReferencesForSelection
+} from './lib/profileReferences';
 import type { SelectionActionId } from './lib/interaction/capabilities';
-import { frameFromFace } from './lib/sketch/session';
-import { edgeLabel, edgeLength, faceLabel } from './lib/topologyLabels';
-import { SketchToolRail } from './components/SketchToolRail';
-import { SketchEntityEditor } from './components/SketchEntityEditor';
-import { objectPolyline } from './components/viewer/sketchModeController';
+import {
+  faceSketchAttachment,
+  fixedPlaneRefForLegacyAttachment
+} from './lib/faceSketchAttachment';
+import {
+  edgeLabel,
+  edgeLengthMeasurement,
+  faceLabel
+} from './lib/topologyLabels';
+import { resolveFace } from './lib/topologyResolution';
+import { objectPolylines } from './lib/objectPolyline';
 import type { RegionPickData } from './components/viewer/regionOverlay';
 import {
   CommandPalette,
   type PaletteCommand
 } from './components/CommandPalette';
 import { ShortcutsOverlay } from './components/ShortcutsOverlay';
-import { DISPLAY_MODE_LABELS } from './components/ViewerToolbar';
+import { DISPLAY_MODE_LABELS } from './lib/displayMode';
 import { ContextMenu, type ContextMenuState } from './components/ContextMenu';
 import { MarkingMenu } from './components/MarkingMenu';
+import {
+  resolveExtrudeOperation,
+  type ResolvedExtrude
+} from './lib/extrudeInference';
 import type {
+  BodyAppearancePreview,
   ExtrudePreview,
-  FaceResizeCommit
+  FaceResizeCommit,
+  NormalToFaceRequest
 } from './components/ModelViewer';
 import type {
   SelectionFilter,
   AxisProjection,
   DisplayMode,
-  MovePreview,
-  MoveSnap,
   PickDetail,
   SketchOverlay,
-  StandardView
-} from '@openzcad/viewport';
+  ViewTarget
+} from '@openzcad/viewport/types';
+import type { MovePreview, MoveSnap } from '@openzcad/viewport';
+
+/**
+ * Space activates focused buttons and belongs in free-text fields. Numeric and
+ * expression controls do not require spaces, though, and feature inspectors
+ * can leave one focused after the user clicks a face in the viewport; let the
+ * face shortcut through in that specific case without touching its value.
+ */
+function focusedControlOwnsSpace(target: HTMLElement | null): boolean {
+  if (!target) {
+    return false;
+  }
+  if (target instanceof HTMLInputElement) {
+    return (
+      target.type !== 'number' &&
+      target.type !== 'range' &&
+      !target.closest('.expr-field')
+    );
+  }
+  if (
+    target.closest(
+      'button, a, [role="button"], [role="tab"], [contenteditable="true"]'
+    )
+  ) {
+    return true;
+  }
+  if (target.tagName === 'TEXTAREA' || target.tagName === 'SELECT') {
+    return true;
+  }
+  return false;
+}
+
+const LazyViewerShell = lazy(() =>
+  import('./components/ViewerShell').then((module) => ({
+    default: module.ViewerShell
+  }))
+);
+const LazyViewModeBar = lazy(() =>
+  import('./components/ViewModeBar').then((module) => ({
+    default: module.ViewModeBar
+  }))
+);
+const LazyMeasurementDock = lazy(() =>
+  import('./components/MeasurementDock').then((module) => ({
+    default: module.MeasurementDock
+  }))
+);
+const LazySketchToolRail = lazy(() =>
+  import('./components/SketchToolRail').then((module) => ({
+    default: module.SketchToolRail
+  }))
+);
+const LazySketchEntityEditor = lazy(() =>
+  import('./components/SketchEntityEditor').then((module) => ({
+    default: module.SketchEntityEditor
+  }))
+);
+const LazyAssistantPanel = lazy(() =>
+  import('./components/assistant/AssistantPanel').then((module) => ({
+    default: module.AssistantPanel
+  }))
+);
+
+function AssistantPanel(props: ComponentProps<typeof LazyAssistantPanel>) {
+  return (
+    <Suspense fallback={null}>
+      <LazyAssistantPanel {...props} />
+    </Suspense>
+  );
+}
+
+function ViewerShell(props: ComponentProps<typeof LazyViewerShell>) {
+  return (
+    <Suspense
+      fallback={
+        <div className="viewer" role="status" aria-live="polite">
+          Loading 3D viewport…
+        </div>
+      }
+    >
+      <LazyViewerShell {...props} />
+    </Suspense>
+  );
+}
+
+function ViewModeBar(props: ComponentProps<typeof LazyViewModeBar>) {
+  return (
+    <Suspense fallback={null}>
+      <LazyViewModeBar {...props} />
+    </Suspense>
+  );
+}
+
+function MeasurementDock(props: ComponentProps<typeof LazyMeasurementDock>) {
+  return (
+    <Suspense fallback={null}>
+      <LazyMeasurementDock {...props} />
+    </Suspense>
+  );
+}
+
+function SketchToolRail(props: ComponentProps<typeof LazySketchToolRail>) {
+  return (
+    <Suspense fallback={null}>
+      <LazySketchToolRail {...props} />
+    </Suspense>
+  );
+}
+
+function SketchEntityEditor(
+  props: ComponentProps<typeof LazySketchEntityEditor>
+) {
+  return (
+    <Suspense fallback={null}>
+      <LazySketchEntityEditor {...props} />
+    </Suspense>
+  );
+}
+
+function extrudeInferenceDescription(resolved: ResolvedExtrude | null): string {
+  if (!resolved) {
+    return 'Measuring positive-volume overlap in the exact kernel…';
+  }
+  const inference = resolved.inference;
+  switch (inference.reason) {
+    case 'enclosed':
+      return `Enclosed by ${inference.targetBodyName}; Cut is stored.`;
+    case 'partial-overlap':
+      return `Partially overlaps ${inference.targetBodyName}; Add is stored.`;
+    case 'multiple-overlap':
+      return 'Several bodies overlap; New Body avoids implicit consumption.';
+    case 'coincident':
+      return 'Coincident volume is ambiguous; New Body is stored.';
+    case 'exact-measurement-refused':
+      return 'Exact overlap was inconclusive; New Body is stored.';
+    case 'no-live-body':
+      return 'No live body can be targeted; New Body is stored.';
+    case 'no-overlap':
+      return 'No positive-volume overlap; New Body is stored.';
+  }
+}
 import {
+  chooseProjectDocument,
+  clearAllLastSyncedVersions,
+  clearLastSyncedVersion,
+  deleteLocalProject,
+  isLocalStorageBlockedError,
+  listLocalProjectOrganizations,
   listLocalProjects,
+  loadLastSyncedVersion,
   loadLocalProject,
-  selectProjectDocument,
+  loadProjectMeasurements,
+  loadProjectThumbnail,
+  loadSourceBlob,
+  purgeExpiredLocalProjects,
+  restoreDuplicateDerivedProjection,
+  saveLastSyncedVersion,
+  saveLocalProjectOrganization,
+  saveProjectMeasurements,
+  saveProjectThumbnail,
   saveLocalProject
 } from './lib/localProjectStore';
+import {
+  applyLocalProjectOrganizations,
+  cachedThumbnailSource,
+  mergeProjectSummaries
+} from './lib/projectShelf';
 import { LivePreview } from './lib/livePreview';
 import { errorMessage } from './lib/errors';
+import { describeSyncFailure, type SyncEntry } from './lib/syncRun';
 import { useGeometryWorker } from './hooks/useGeometryWorker';
 import { useProjectView } from './hooks/useProjectView';
 import { useDirectEditCommit } from './hooks/useDirectEditCommit';
+import { useValidatedFeatureCommit } from './hooks/useValidatedFeatureCommit';
+import {
+  affectedFeatureTargets,
+  type AffectedFeatureTarget
+} from './lib/affectedFeatureTargets';
+import { directEditRejection } from './lib/directEdit';
+import { validatedFeatureRejection } from './lib/featureValidation';
 import { useCollaboration } from './lib/useCollaboration';
+import { preflightCadPatch } from './lib/aiPatchPreflight';
+import {
+  clearUnresolvedConflict,
+  conflictFromDocuments,
+  readUnresolvedConflict,
+  resolveProjectConflict,
+  type ConflictResolution,
+  type ConflictResolutionHandlers,
+  type ProjectConflict
+} from './lib/conflictRecovery';
+import {
+  modelingFaceOptions,
+  modelingOperationDisabledReason,
+  type ModelingOperationKind,
+  type ModelingOperationSubmission
+} from './lib/modelingOperations';
 import {
   clearActiveProject,
   loadActiveProjectId,
@@ -192,40 +488,335 @@ import {
   saveLocalAppSettings,
   shouldAdoptAccountSettings
 } from './lib/appSettings';
+import type {
+  Measurement,
+  MeasurementDisplayOptions,
+  MeasurementMode,
+  MeasurementTarget,
+  MeasurementViewportAnnotation,
+  RadialDisplay
+} from './lib/measurements';
+/**
+ * The measurement module's shape, for the deferred handle below. A type-only
+ * namespace import is erased at build time exactly like the named ones above,
+ * so naming the module here does not pull it back into the eager chunk.
+ */
+import type * as MeasurementModule from './lib/measurements';
+import { buildMeasurementRecord } from './lib/measurementRecord';
+import {
+  EMPTY_MEASURE_SESSION,
+  edgeRunIsTotalable,
+  nextEdgeRun
+} from './lib/measureSession';
 import {
   loadPanelState,
   savePanelState,
   toggleSidebarSection,
   type PanelState,
-  type SidebarSectionId
+  type SidebarSectionId,
+  type WorkspaceMode
 } from './lib/panelState';
+import {
+  loadSettingsViewState,
+  updateSettingsViewState
+} from './lib/settingsViewState';
+import {
+  ASSISTANT_WIDTH_LIMITS,
+  clampAssistantWidth,
+  clampSidebarWidth,
+  maxAssistantWidth,
+  maxSidebarWidth,
+  savedPanelWidths,
+  SIDEBAR_WIDTH_LIMITS
+} from './lib/panelWidths';
 
-const kernel = createKernelAdapter();
+/**
+ * How often an open cloud project checks whether another device has moved it.
+ * Focus and reconnect cover the cases that matter most; the interval is the
+ * backstop for a tab left open and in front of somebody.
+ */
+const FRESHNESS_POLL_INTERVAL_MS = 60_000;
+const DISABLED_COLLABORATION_ROLLOUT: ProjectCollaborationCapabilitiesResponse =
+  {
+    sharingEnabled: false,
+    editLeasesEnforced: false,
+    personalSyncEnabled: false,
+    canary: false
+  };
+const projectSharingClient = createProjectSharingClient();
 const localUserId = toUserId('user_local_browser');
-const MAX_EMBEDDED_STEP_BYTES = 12 * 1024 * 1024;
 const DISPLAY_MODE_ORDER: DisplayMode[] = [
   'shaded-edges',
   'shaded',
   'wireframe'
 ];
 
-function mergeProjectSummaries(
-  local: ProjectSummary[],
-  remote: ProjectSummary[]
-): ProjectSummary[] {
-  const merged = new Map(local.map((project) => [project.projectId, project]));
-  for (const project of remote) {
-    const existing = merged.get(project.projectId);
-    if (!existing || project.updatedAt > existing.updatedAt) {
-      merged.set(project.projectId, project);
-    }
+type AdoptLocalProjectResult =
+  | { state: 'adopted' | 'already-adopted' | 'missing' }
+  | { state: 'conflict'; conflict: ProjectConflict };
+
+interface OffsetEditPlan {
+  command: AnyCommand;
+  bodyId: BodyId;
+  successMessage: string;
+  validationTargets?: AffectedFeatureTarget[];
+  preflightRejection?: string;
+}
+
+interface OffsetPreviewCandidate {
+  document: ProjectDocument;
+  offset: number;
+  bodyId: BodyId;
+  label: string;
+  baseProjectId: ProjectDocument['projectId'];
+  baseVersion: number;
+  validationTargets?: AffectedFeatureTarget[];
+}
+
+interface OffsetPreviewResult {
+  derived: ProjectDocument['derived'];
+  rejection: string | null;
+}
+
+function desktopAuthorizationAttemptFromLocation(): string | null {
+  if (typeof globalThis.location === 'undefined' || isDesktopApp()) {
+    return null;
   }
-  return [...merged.values()].sort((a, b) =>
-    b.updatedAt.localeCompare(a.updatedAt)
+  const attempt = new URLSearchParams(globalThis.location.search).get(
+    'desktopAuth'
+  );
+  return attempt && /^[A-Za-z0-9-]{16,64}$/.test(attempt) ? attempt : null;
+}
+
+/** Start-screen summary of a document held on this device. */
+function summarizeLocalDocument(
+  document: ProjectDocument,
+  organization?: ProjectOrganization
+): ProjectSummary {
+  return {
+    projectId: document.projectId,
+    name: document.name,
+    lastRevisionId: document.revisions.at(-1)?.revisionId,
+    updatedAt: document.derived.updatedAt,
+    revisionCount: document.checkpoints.length,
+    ...(organization ? { organization } : {})
+  };
+}
+
+/**
+ * Every project this device can reach. Device shelf state is reconciled before
+ * expired local copies are purged so a temporarily failed cloud mirror cannot
+ * resurrect a project after its local retention window closes.
+ */
+async function loadProjectSummaries(signedIn: boolean): Promise<{
+  projects: ProjectSummary[];
+  remoteReached: boolean;
+  /**
+   * Which of `projects` the account actually holds. Everything else exists on
+   * this device alone and can be adopted. Empty when the listing never reached
+   * the account, which is why callers must pair it with `remoteReached` rather
+   * than reading an absence as "local-only".
+   */
+  cloudProjectIds: Set<string>;
+}> {
+  const unavailableAs =
+    <T,>(fallback: T) =>
+    (error: unknown): T => {
+      // A device with no IndexedDB is legitimately a device with no local
+      // projects. A blocked schema upgrade is temporary and actionable; calling
+      // it an empty shelf would tell the user their projects disappeared.
+      if (isLocalStorageBlockedError(error)) {
+        throw error;
+      }
+      return fallback;
+    };
+  const [local, localOrganizations, remote] = await Promise.all([
+    listLocalProjects().catch(unavailableAs<ProjectSummary[]>([])),
+    listLocalProjectOrganizations().catch(
+      unavailableAs(new Map<string, ProjectOrganization>())
+    ),
+    signedIn ? api.listProjects().catch(() => null) : Promise.resolve(null)
+  ]);
+  const remoteProjects = remote?.projects ?? [];
+  const mirrorFailures = remote
+    ? await reconcileRemoteOrganizations(localOrganizations, remoteProjects)
+    : new Set<string>();
+  // While signed in but offline, defer irreversible local purging until the
+  // cloud copy can be reconciled. Otherwise a failed mirror could later make
+  // an active remote row reappear after the local tombstone was destroyed.
+  const purgedProjectIds =
+    !signedIn || remote
+      ? await purgeExpiredLocalProjects(Date.now(), mirrorFailures).catch(
+          () => []
+        )
+      : [];
+  const remoteIds = new Set(remoteProjects.map((project) => project.projectId));
+  const purged = new Set(purgedProjectIds);
+  const projects = applyLocalProjectOrganizations(
+    mergeProjectSummaries(local, remoteProjects),
+    localOrganizations
+  ).filter(
+    (project) =>
+      !purged.has(project.projectId) || remoteIds.has(project.projectId)
+  );
+  return {
+    projects,
+    remoteReached: Boolean(remote),
+    cloudProjectIds: remoteIds
+  };
+}
+
+function sameWritableOrganization(
+  left: ProjectOrganization,
+  right: ProjectOrganization
+): boolean {
+  return (
+    left.status === right.status &&
+    left.pinned === right.pinned &&
+    left.sortOrder === right.sortOrder
   );
 }
 
+/**
+ * Adopts account metadata only when this device has none. Once the device has
+ * organised a project, its copy stays authoritative and any failed account
+ * mirror is retried on the next successful listing.
+ */
+async function reconcileRemoteOrganizations(
+  local: ReadonlyMap<string, ProjectOrganization>,
+  remote: ProjectSummary[]
+): Promise<Set<string>> {
+  const mirrorFailures = new Set<string>();
+  await Promise.all(
+    remote.map(async (project) => {
+      const localOrganization = local.get(project.projectId);
+      if (!localOrganization) {
+        if (project.organization) {
+          await saveLocalProjectOrganization(
+            project.projectId,
+            project.organization
+          ).catch(() => undefined);
+        }
+        return;
+      }
+      if (
+        sameWritableOrganization(
+          localOrganization,
+          projectOrganization(project)
+        )
+      ) {
+        return;
+      }
+      try {
+        await api.updateProject({
+          projectId: toProjectId(project.projectId),
+          status: localOrganization.status,
+          pinned: localOrganization.pinned,
+          sortOrder: localOrganization.sortOrder
+        });
+      } catch {
+        mirrorFailures.add(project.projectId);
+      }
+    })
+  );
+  return mirrorFailures;
+}
+
+function localRecoveryCopy(
+  source: ProjectDocument,
+  label: 'Recovery' | 'Local copy'
+): ProjectDocument {
+  const copy = structuredClone(source);
+  const projectId = toProjectId(`proj_recovery_${crypto.randomUUID()}`);
+  const name = `${source.name} (${label})`;
+  copy.projectId = projectId;
+  copy.name = name;
+  copy.revisions = [];
+  copy.checkpoints = [];
+  copy.derived.updatedAt = new Date().toISOString();
+  const root = copy.nodes[copy.rootNodeId];
+  if (root?.kind === 'project') {
+    root.projectId = projectId;
+    root.name = name;
+    root.revisionId = null;
+  }
+  return copy;
+}
+
+function resolvedSketchPlaneBasis(
+  document: ProjectDocument,
+  planeRef: SketchPlaneRef,
+  resolveOffset: (value: ParamValue) => number,
+  sketchName: string
+): PlaneBasis {
+  if (planeRef.type !== 'face' || !planeRef.faceReference) {
+    return frameForPlaneRef(planeRef, resolveOffset);
+  }
+  const body = document.derived.bodyRepresentations[planeRef.bodyId];
+  const candidates: FaceAttachmentCandidate[] = (body?.topology?.faces ?? [])
+    .filter(
+      (face) => face.reference?.kind === 'face' && face.geometry !== undefined
+    )
+    .map((face) => {
+      const reference = face.reference!;
+      const geometry = face.geometry!;
+      return {
+        kind: 'face',
+        currentHash: face.hash,
+        witnessVersion: 1,
+        witness: reference.witness,
+        plane:
+          geometry.surfaceType.toLowerCase() === 'plane' && geometry.normal
+            ? { center: geometry.center, normal: geometry.normal }
+            : null,
+        lineage: {
+          source: 'derived',
+          identity: {
+            producingFeatureId: reference.producingFeatureId,
+            lineageName: reference.lineageName
+          }
+        }
+      };
+    });
+  const sourceFeature = listFeaturesInOrder(document).find(
+    (feature) =>
+      feature.featureId === planeRef.faceReference?.producingFeatureId
+  );
+  const frame = resolveFaceAttachment({
+    reference: planeRef.faceReference,
+    candidates,
+    snapshot: {
+      sourceArea: planeRef.sourceArea,
+      sourceCenter: planeRef.sourceCenter,
+      sourceNormal: planeRef.sourceNormal,
+      frame: planeRef.frame
+    },
+    sketchName,
+    sourceFeatureName:
+      sourceFeature?.name ?? String(planeRef.faceReference.producingFeatureId)
+  });
+  return {
+    origin: frame.origin,
+    u: frame.xAxis,
+    v: frame.yAxis,
+    normal: frame.zAxis
+  };
+}
+
 export function App() {
+  const [desktopAuthorizationAttempt] = useState(
+    desktopAuthorizationAttemptFromLocation
+  );
+  const [pendingInvitationToken, setPendingInvitationToken] = useState(
+    captureProjectInvitationLink
+  );
+  const [pendingInvitationError, setPendingInvitationError] = useState<
+    string | null
+  >(null);
+  const pendingInvitationAttemptRef = useRef<string | null>(null);
+  const acceptPendingInvitationRef = useRef<(token: string) => Promise<void>>(
+    async () => undefined
+  );
   /**
    * What was on this device at mount, read once. The account fetch resolves
    * long after the settings-persistence effect has already written to storage,
@@ -235,6 +826,14 @@ export function App() {
   const [appSettings, setAppSettings] = useState<AppSettings>(
     () => bootSettingsRef.current?.settings ?? defaultAppSettings()
   );
+  const appSettingsRef = useRef(appSettings);
+  appSettingsRef.current = appSettings;
+  const [cloudFunctionsEnabled, setCloudFunctionsEnabledState] = useState(
+    cloudFunctionsAreEnabled
+  );
+  const cloudFunctionsEnabledRef = useRef(cloudFunctionsEnabled);
+  cloudFunctionsEnabledRef.current = cloudFunctionsEnabled;
+  const bootCloudFunctionsEnabledRef = useRef(cloudFunctionsEnabled);
   /**
    * The account revision `appSettings` is in step with, or null once edited
    * here without being saved. Persisted with the settings so a reload can tell
@@ -247,27 +846,97 @@ export function App() {
   // lets the first render choose a stable restore surface instead of mounting
   // the launcher while IndexedDB and the optional cloud copy are still loading.
   const [startupProjectId] = useState<string | null>(() =>
-    appSettings.general.reopenLastProject ? loadActiveProjectId() : null
+    !pendingInvitationToken && appSettings.general.reopenLastProject
+      ? loadActiveProjectId()
+      : null
   );
   const [startupState, setStartupState] = useState<'restoring' | 'ready'>(() =>
     startupProjectId ? 'restoring' : 'ready'
   );
+  const shellMarkedRef = useRef(false);
+  useLayoutEffect(() => {
+    if (shellMarkedRef.current) {
+      return;
+    }
+    shellMarkedRef.current = true;
+    mark('app.mounted');
+    measure('startup.shell', 'bundle.evaluated', 'app.mounted');
+  }, []);
   const [accountSettings, setAccountSettings] =
     useState<AppSettingsResponse | null>(null);
+  const accountSettingsRef = useRef(accountSettings);
+  accountSettingsRef.current = accountSettings;
   const [authConfig, setAuthConfig] = useState<AuthConfigResponse | null>(null);
   const [authConfigStatus, setAuthConfigStatus] =
     useState<AuthConfigStatus>('loading');
-  const [assistantCollapsed, setAssistantCollapsed] = useState(false);
-  /** Bumped to move focus into the assistant prompt, like `viewRequest`. */
-  const [assistantFocusNonce, setAssistantFocusNonce] = useState(0);
   const [panelState, setPanelState] = useState<PanelState>(() =>
     loadPanelState()
   );
-  const [settingsOpen, setSettingsOpen] = useState(false);
+  // Collapsing the assistant is chrome layout, so it is remembered with the
+  // rest of it rather than reset on every reload.
+  const assistantCollapsed = panelState.assistantCollapsed;
+  const setAssistantCollapsed = useCallback((collapsed: boolean) => {
+    setPanelState((current) => ({ ...current, assistantCollapsed: collapsed }));
+  }, []);
+  const setWorkspaceMode = useCallback((mode: WorkspaceMode) => {
+    setPanelState((current) => ({ ...current, workspaceMode: mode }));
+  }, []);
+  const workspaceRef = useRef<HTMLElement | null>(null);
+  // Panel widths are capped against the window, so a narrower window has to
+  // recompute them. The stored preference is never rewritten by a resize: it is
+  // what the user asked for, and it applies again on a screen that can hold it.
+  const [windowWidth, setWindowWidth] = useState(() =>
+    typeof globalThis.innerWidth === 'number' ? globalThis.innerWidth : 0
+  );
+  useEffect(() => {
+    const onResize = () => setWindowWidth(globalThis.innerWidth);
+    onResize();
+    globalThis.addEventListener('resize', onResize);
+    return () => globalThis.removeEventListener('resize', onResize);
+  }, []);
+  const savedWidths = savedPanelWidths(appSettings);
+  const sidebarWidth = clampSidebarWidth(savedWidths.sidebar, windowWidth);
+  const assistantWidth = clampAssistantWidth(
+    savedWidths.assistant,
+    windowWidth
+  );
+  /**
+   * The width under the pointer, written straight to the grid. A drag emits one
+   * of these a frame; sending them through React would re-render the editor and
+   * the viewport with them, which is what makes a splitter feel heavy.
+   */
+  const previewPanelWidth = useCallback(
+    (variable: '--sidebar-w' | '--assistant-w', width: number) => {
+      workspaceRef.current?.style.setProperty(variable, `${width}px`);
+    },
+    []
+  );
+  const [settingsOpen, setSettingsOpen] = useState(
+    () =>
+      pendingInvitationToken !== null ||
+      desktopAuthorizationAttempt !== null ||
+      loadSettingsViewState().open
+  );
+  const settingsDialogRef = useRef<HTMLDivElement | null>(null);
+  useModalFocus(settingsDialogRef, {
+    enabled: settingsOpen,
+    autoFocus: true
+  });
+  const [sharingOpen, setSharingOpen] = useState(false);
   const [settingsBusy, setSettingsBusy] = useState(false);
   const [settingsMessage, setSettingsMessage] = useState(
-    'Changes save on this device immediately.'
+    pendingInvitationToken
+      ? 'Sign in to open the shared project automatically.'
+      : desktopAuthorizationAttempt
+        ? 'Sign in, then approve OpenZCAD for macOS.'
+        : 'Changes save on this device immediately.'
   );
+  const [desktopAuthorizationCode, setDesktopAuthorizationCode] = useState('');
+  const [desktopAuthorizationApproved, setDesktopAuthorizationApproved] =
+    useState(false);
+  const cloudSettingsAutosaveRef = useRef<CloudSettingsAutosave | null>(null);
+  const cloudProjectAutosaveRef = useRef<CloudProjectAutosave | null>(null);
+  const cloudSettingsSessionUserRef = useRef<string | null>(null);
   const [projects, setProjects] = useState<ProjectSummary[]>([]);
   const [artifacts, setArtifacts] = useState<ArtifactRecord[]>([]);
   // Named `doc` (not `document`) so the global DOM document is never shadowed.
@@ -295,11 +964,42 @@ export function App() {
   const [extrudePreview, setExtrudePreview] = useState<ExtrudePreview | null>(
     null
   );
+  const [resolvedExtrudePreview, setResolvedExtrudePreview] =
+    useState<ResolvedExtrude | null>(null);
   const extrudePreviewRef = useRef(extrudePreview);
   extrudePreviewRef.current = extrudePreview;
   const [movePreview, setMovePreview] = useState<MovePreview | null>(null);
+  /**
+   * Name for the Move feature the gizmo is about to create. The gizmo is now
+   * the only way to make one (WF-07), so the name it commits under has to be
+   * editable here rather than in the form this replaced.
+   */
+  const [moveName, setMoveName] = useState('Move');
+  /**
+   * A committed Move whose exact rebuild is still in flight. The viewer keeps
+   * the body posed at the applied transform until the recomputed meshes land,
+   * so the old geometry never flashes at its resting position.
+   */
+  const [moveCommitHold, setMoveCommitHold] = useState<MovePreview | null>(
+    null
+  );
+  /**
+   * Drag-phase body color/opacity patch rendered without a document write;
+   * committed through node metadata when the pointer releases.
+   */
+  const [bodyAppearancePreview, setBodyAppearancePreview] =
+    useState<BodyAppearancePreview | null>(null);
   const [moveSnap, setMoveSnap] = useState<MoveSnap | null>(null);
   const [tool, setTool] = useState<ToolId | null>(null);
+  const [modelingTargetBodyId, setModelingTargetBodyId] =
+    useState<BodyId | null>(null);
+  const modelingPreflightRef = useRef<{
+    signature: string;
+    command: AnyCommand;
+    resultBodyId: BodyId;
+    featureName: string;
+    baseVersion: number;
+  } | null>(null);
   const [sketchConstruction, setSketchConstruction] = useState(false);
   const [sketchDiagnosticPoints, setSketchDiagnosticPoints] = useState<
     { x: number; y: number }[]
@@ -309,8 +1009,16 @@ export function App() {
    * so that arming Fillet does not silently undo a filter set on purpose.
    */
   const selectionFilter = effectiveSelectionFilter(manualSelectionFilter, tool);
-  const [status, setStatus] = useState('Checking beta API...');
+  const [status, setStatus] = useState(
+    cloudFunctionsEnabled ? 'Checking beta API...' : 'Offline workspace'
+  );
   const [busy, setBusy] = useState(false);
+  /**
+   * The last refusal from an exact rebuild, shown inside the form that asked
+   * for it. Cleared whenever a panel opens or closes so a stale reason can
+   * never outlive the attempt that produced it.
+   */
+  const [featureFormError, setFeatureFormError] = useState<string | null>(null);
   const {
     projection,
     setProjection,
@@ -324,14 +1032,55 @@ export function App() {
     forget: forgetProjectView
   } = useProjectView(doc?.projectId ?? null);
   const [previewDoc, setPreviewDoc] = useState<ProjectDocument | null>(null);
-  const [saveState, setSaveState] = useState<'saved' | 'saving' | 'offline'>(
-    'saving'
+  const [saveState, setSaveState] = useState<WorkspaceSaveState>('saving');
+  const saveStateRef = useRef(saveState);
+  saveStateRef.current = saveState;
+  const desktopMenuHandlerRef = useRef<(command: DesktopMenuCommand) => void>(
+    () => undefined
   );
   const [cloudAvailable, setCloudAvailable] = useState(false);
+  const [deploymentHealth, setDeploymentHealth] =
+    useState<HealthResponse | null>(null);
+  const [collaborationRollout, setCollaborationRollout] = useState(
+    DISABLED_COLLABORATION_ROLLOUT
+  );
   const [session, setSession] = useState<AuthSession | null>(null);
+  const sessionRef = useRef(session);
+  sessionRef.current = session;
+  /**
+   * The shelf's preview source. This reads a small device-cached or cloud
+   * image and nothing else — deliberately not the project document. Loading
+   * documents here made the start screen unreachable for large imports: a
+   * part with a few-hundred-megabyte source had to be pulled into memory in
+   * full, per tile, just to draw a 360×200 card, which could take the tab and
+   * the machine down and leave the owner unable to open or delete their work.
+   * A project with no published preview simply shows the placeholder.
+   */
+  const loadThumbnail = useCallback(
+    async (project: ProjectSummary): Promise<string | null | undefined> => {
+      const cached = await loadProjectThumbnail(project.projectId).catch(
+        () => null
+      );
+      const cachedSource = cachedThumbnailSource(cached, project);
+      if (cachedSource !== undefined || !project.thumbnailArtifactId) {
+        return cachedSource;
+      }
+      const { downloadCloudThumbnail } = await import('./lib/cloudThumbnail');
+      return downloadCloudThumbnail(project.thumbnailArtifactId).catch(
+        () => undefined
+      );
+    },
+    []
+  );
   const [fitSignal, setFitSignal] = useState(0);
   const [viewRequest, setViewRequest] = useState<{
-    view: StandardView;
+    view: ViewTarget;
+    nonce: number;
+  } | null>(null);
+  const [normalToFaceRequest, setNormalToFaceRequest] =
+    useState<NormalToFaceRequest | null>(null);
+  const [rotateRequest, setRotateRequest] = useState<{
+    direction: 'cw' | 'ccw';
     nonce: number;
   } | null>(null);
   const [paletteOpen, setPaletteOpen] = useState(false);
@@ -352,6 +1101,16 @@ export function App() {
   interactionRef.current = interaction;
   /** Open exact-value entry (anchored keypad) for the armed handle. */
   const [keypad, setKeypad] = useState<KeypadRequest | null>(null);
+  const keypadRef = useRef(keypad);
+  keypadRef.current = keypad;
+  /** Latest pointer/entry value stays transient until an exact frame lands. */
+  const offsetPreviewValueRef = useRef<number | null>(null);
+  /** Signed offset represented by the currently published previewDoc. */
+  const [renderedOffsetPreview, setRenderedOffsetPreview] = useState<
+    number | null
+  >(null);
+  const [cylinderDimensionMode, setCylinderDimensionMode] =
+    useState<DimensionMode>('diameter');
   const keypadAnchorRef = useRef<
     ((point: { x: number; y: number } | null) => void) | null
   >(null);
@@ -371,30 +1130,258 @@ export function App() {
       const manager = managerRef.current;
       if (manager) {
         setDoc(manager.commitDerivedState(derived));
+        // Fresh meshes now reflect the document (worker results are dropped
+        // unless their version matches), so any held Move pose must release
+        // in this same batch — one render later would double-transform.
+        setMoveCommitHold(null);
+        applyEdgeReferenceRepairs(derived.referenceRepairs);
       }
     },
-    onError: setStatus
+    onError: (message) => {
+      // No rebuild is coming; render the stored geometry truthfully.
+      setMoveCommitHold(null);
+      setStatus(message);
+    }
   });
+  const exactGeometryReady = geometry.isReadyFor(doc);
+  function requireExactGeometryReady(): boolean {
+    const ready = geometry.isReadyFor(managerRef.current?.document ?? null);
+    if (!ready) {
+      setStatus(
+        'Exact geometry is still rebuilding. Topology actions are temporarily unavailable.'
+      );
+    }
+    return ready;
+  }
   const remoteVersionsRef = useRef(new Map<string, number>());
+  /**
+   * Projects the account holds, as of the last listing that reached it. Kept
+   * apart from `remoteVersionsRef`, which only knows about projects this
+   * session has opened or written: the shelf has to mark every local-only
+   * project, including ones never opened here.
+   */
+  const [cloudProjectIds, setCloudProjectIds] = useState<ReadonlySet<string>>(
+    new Set()
+  );
+  /**
+   * Whether the last account project listing actually reached the server.
+   * An empty successful list means every local project is device-only; a
+   * failed list means their cloud status is unknown and must not be relabelled.
+   */
+  const [accountProjectListReached, setAccountProjectListReached] =
+    useState(false);
+  const thumbnailBackfillRuntimeRef = useRef({
+    cloudProjectIds,
+    syncOnce: geometry.syncOnce
+  });
+  thumbnailBackfillRuntimeRef.current = {
+    cloudProjectIds,
+    syncOnce: geometry.syncOnce
+  };
+  const thumbnailAccountUserId = session?.userId;
+  /**
+   * Fills old or cross-device cards without making the user open each part.
+   * The collapsed shelf mounts at most nine projects, and this queue holds one
+   * document, one exact rebuild, and one WebGL context at a time.
+   */
+  const backfillThumbnail = useCallback(
+    async (project: ProjectSummary): Promise<string | null | undefined> => {
+      const [thumbnail, backfill] = await Promise.all([
+        import('./lib/partThumbnail'),
+        import('./lib/projectThumbnailBackfill')
+      ]);
+      return thumbnail.queuePartThumbnail(async () => {
+        const runtime = thumbnailBackfillRuntimeRef.current;
+        const cloudBacked =
+          Boolean(thumbnailAccountUserId && accountProjectListReached) &&
+          runtime.cloudProjectIds.has(project.projectId);
+        const result = await backfill.backfillProjectThumbnail(project, {
+          loadCached: (projectId) =>
+            loadProjectThumbnail(projectId).catch(() => null),
+          loadLocalDocument: (projectId) =>
+            loadLocalProject(projectId).catch(() => null),
+          ...(cloudBacked
+            ? {
+                loadCloudDocument: (projectId: string) =>
+                  api.loadProject(projectId).catch(() => null),
+                rebuild: runtime.syncOnce,
+                publish: async (input: {
+                  projectId: ProjectDocument['projectId'];
+                  source: string;
+                  version: number;
+                  updatedAt: string;
+                }) => {
+                  const { uploadCloudThumbnail } = await import(
+                    './lib/cloudThumbnail'
+                  );
+                  return uploadCloudThumbnail(api, input);
+                }
+              }
+            : {}),
+          render: thumbnail.renderThumbnailFrame,
+          save: saveProjectThumbnail
+        });
+        if (result.artifactId) {
+          setProjects((current) =>
+            current.map((candidate) =>
+              candidate.projectId === project.projectId
+                ? { ...candidate, thumbnailArtifactId: result.artifactId }
+                : candidate
+            )
+          );
+        }
+        return result.source;
+      });
+    },
+    [accountProjectListReached, thumbnailAccountUserId]
+  );
+  /**
+   * A divergence against the account, as opposed to against a live room. Held
+   * here rather than in the collaboration hook because it can happen with no
+   * room in the picture at all — which, with sharing off, is every time.
+   */
+  const [accountConflict, setAccountConflict] =
+    useState<ProjectConflict | null>(null);
+  /**
+   * The save-to-account run currently on screen, one entry per project in
+   * attempt order. Deliberately not cleared when the loop finishes: the
+   * failures and their reasons are the whole point, and they stay up until
+   * the user dismisses them or starts another run.
+   */
+  const [syncRun, setSyncRun] = useState<SyncEntry[] | null>(null);
   const viewNonceRef = useRef(0);
   const importInputRef = useRef<HTMLInputElement | null>(null);
   const pendingLocalSaveRef = useRef<ProjectDocument | null>(null);
   const localSaveTimeoutRef = useRef<number | null>(null);
+  // Reached from the page-hide listener, which is registered once and would
+  // otherwise hold the first render's closure.
+  const flushPendingLocalSaveRef = useRef<() => Promise<void>>(() =>
+    Promise.resolve()
+  );
+  /**
+   * Another tab is already editing this project, so this one must not write
+   * over its storage. Mirrored into a ref because the autosave path that has
+   * to check it is not a render.
+   */
+  const [projectOpenElsewhere, setProjectOpenElsewhere] = useState(false);
+  const projectOpenElsewhereRef = useRef(projectOpenElsewhere);
+  projectOpenElsewhereRef.current = projectOpenElsewhere;
+  /**
+   * Settles once this tab knows whether it owns the open project. Claiming is
+   * asynchronous and the autosave debounce is not, so without somewhere to wait
+   * the first write can land before the answer does — which is the overwrite
+   * the claim exists to prevent.
+   */
+  const projectOwnershipSettledRef = useRef<Promise<void> | null>(null);
   const cylinderRadiusPreview = useRef(
     new LivePreview<ProjectDocument, ProjectDocument['derived']>({
       build: (radius) => {
-        const command = buildCylinderRadiusCommand(radius);
+        const plan = buildCylinderRadiusCommand(radius);
         const base = managerRef.current?.document;
-        return command && base ? command.apply(base) : null;
+        return plan && base ? plan.command.apply(base) : null;
       },
       derive: (document) => geometry.syncOnce(document),
       publish: (preview) =>
         setPreviewDoc(
           preview ? { ...preview.document, derived: preview.derived } : null
         ),
-      acceptValue: (distance) =>
-        Number.isFinite(distance) && Math.abs(distance) >= 0.1,
       continueAfterSlow: true
+    })
+  ).current;
+
+  /**
+   * Exact planar push/pull preview. The document wrapper carries validation
+   * context alongside the candidate, but only its rebuilt ProjectDocument is
+   * ever published into previewDoc; manager.document is never touched.
+   */
+  const offsetPreview = useRef(
+    new LivePreview<OffsetPreviewCandidate, OffsetPreviewResult>({
+      build: (offset) => {
+        const base = managerRef.current?.document;
+        const plan = base
+          ? buildOffsetEditPlan(offset, undefined, base)
+          : null;
+        return base && plan
+          ? {
+              document: plan.command.apply(base),
+              offset,
+              bodyId: plan.bodyId,
+              label: plan.command.label,
+              baseProjectId: base.projectId,
+              baseVersion: base.version,
+              ...(plan.validationTargets
+                ? { validationTargets: plan.validationTargets }
+                : {})
+            }
+          : null;
+      },
+      derive: async (candidate) => {
+        const derived = await geometry.syncOnce(candidate.document);
+        const live = managerRef.current;
+        const documentMoved =
+          !live ||
+          live.document.projectId !== candidate.baseProjectId ||
+          live.document.version !== candidate.baseVersion;
+        let rejection: string | null = null;
+        if (candidate.validationTargets) {
+          for (const target of candidate.validationTargets) {
+            rejection = validatedFeatureRejection({
+              featureName: target.featureName,
+              warnings: derived.warnings,
+              bodyPresent: Boolean(
+                derived.bodyRepresentations[target.resultBodyId]
+              ),
+              documentMoved
+            });
+            if (rejection) {
+              break;
+            }
+          }
+          if (
+            !rejection &&
+            candidate.validationTargets.length === 0 &&
+            documentMoved
+          ) {
+            rejection = 'The document changed while the preview was rebuilding.';
+          }
+        } else {
+          rejection = directEditRejection({
+            label: candidate.label,
+            warnings: derived.warnings,
+            bodyPresent: Boolean(derived.bodyRepresentations[candidate.bodyId]),
+            documentMoved
+          });
+        }
+        return { derived, rejection };
+      },
+      publish: (preview) => {
+        if (!preview) {
+          setPreviewDoc(null);
+          setRenderedOffsetPreview(null);
+          return;
+        }
+        if (preview.derived.rejection) {
+          reportOffsetPreviewFailure(
+            preview.derived.rejection,
+            preview.document.offset
+          );
+          return;
+        }
+        setPreviewDoc({
+          ...preview.document.document,
+          derived: preview.derived.derived
+        });
+        setRenderedOffsetPreview(preview.document.offset);
+        recoverOffsetPreviewInteraction();
+      },
+      onFailure: ({ error, value }) =>
+        reportOffsetPreviewFailure(
+          errorMessage(error, 'Exact offset preview failed.'),
+          value
+        ),
+      acceptValue: (offset) =>
+        Number.isFinite(offset) && Math.abs(offset) > 1e-9,
+      continueAfterSlow: false
     })
   ).current;
 
@@ -404,7 +1391,10 @@ export function App() {
    * or profile selection.
    */
   const profileExtrudePreview = useRef(
-    new LivePreview<ProjectDocument, ProjectDocument['derived']>({
+    new LivePreview<
+      { base: ProjectDocument; input: ExtrudeInput },
+      ResolvedExtrude
+    >({
       build: (distance) => {
         const draft = extrudePreviewRef.current;
         const profiles = selectedProfilesRef.current;
@@ -418,33 +1408,52 @@ export function App() {
         ) {
           return null;
         }
-        return commandFactories
-          .extrudeSketch({
-            name: 'Extrude preview',
-            sketchId: draft.sketchId as SketchId,
-            distance,
-            profiles: profiles.map((profile) => ({
-              profileId: profile.profileId,
-              regionFingerprint: profile.regionFingerprint,
-              samplePoint: profile.samplePoint,
-              sourceArea: profile.area,
-              sourceEntityIds: profile.sourceEntityIds
-            }))
-          })
-          .apply(base);
+        const command = commandFactories.extrudeSketch({
+          name: 'Extrude preview',
+          sketchId: draft.sketchId as SketchId,
+          distance,
+          profiles: profiles.map((profile) => ({
+            profileId: profile.profileId,
+            regionFingerprint: profile.regionFingerprint,
+            samplePoint: profile.samplePoint,
+            sourceArea: profile.area,
+            sourceEntityIds: profile.sourceEntityIds
+          }))
+        });
+        return { base, input: command.payload };
       },
-      derive: (document) => geometry.syncOnce(document),
+      derive: ({ base, input }) =>
+        resolveExtrudeOperation({
+          base,
+          input,
+          derive: (document) => geometry.syncOnce(document)
+        }),
       publish: (preview) => {
         setPreviewDoc(
-          preview ? { ...preview.document, derived: preview.derived } : null
+          preview
+            ? {
+                ...preview.derived.document,
+                derived: preview.derived.derived
+              }
+            : null
         );
+        setResolvedExtrudePreview(preview?.derived ?? null);
         if (preview) {
           const count = selectedProfilesRef.current.length;
+          const inference = preview.derived.inference;
+          const operation =
+            inference.operation === 'new-body'
+              ? 'New Body'
+              : inference.operation === 'add'
+                ? `Add to ${inference.targetBodyName}`
+                : `Cut ${inference.targetBodyName}`;
           setStatus(
-            `${count} profile${count === 1 ? '' : 's'} selected · exact preview ready.`
+            `${count} profile${count === 1 ? '' : 's'} selected · exact preview ready · ${operation}.`
           );
         }
       },
+      acceptValue: (distance) =>
+        Number.isFinite(distance) && Math.abs(distance) >= 0.1,
       continueAfterSlow: true
     })
   ).current;
@@ -458,22 +1467,27 @@ export function App() {
       profileExtrudePreview.clear();
       return;
     }
+    setResolvedExtrudePreview(null);
     profileExtrudePreview.request(extrudePreview.distance);
   }, [extrudePreview, profileExtrudePreview, selectedProfiles]);
 
   const { run: executeValidatedDirectEdit } = useDirectEditCommit({
     manager: () => managerRef.current,
     derive: (document) => geometry.syncOnce(document),
-    commit: (command) => executeCommand(command),
+    commit: (command, derived) => executeCommand(command, derived),
     onValidationStart: (value) =>
       dispatchInteraction({ type: 'validation-start', value }),
     onValidationFailed: (message, value) => {
       cylinderRadiusPreview.clear();
+      offsetPreview.clear();
+      offsetPreviewValueRef.current = null;
       cylinderRadiusInspectorSetterRef.current?.(null);
       dispatchInteraction({ type: 'validation-failed', message, value });
     },
     onCommitted: (bodyId) => {
       cylinderRadiusPreview.clear();
+      offsetPreview.clear();
+      offsetPreviewValueRef.current = null;
       dispatchInteraction({ type: 'commit-complete' });
       setSelectedTopology(null);
       setSelectedEdges([]);
@@ -483,13 +1497,57 @@ export function App() {
     onBusy: setBusy,
     onStatus: setStatus
   });
+  // Held whole rather than destructured, because the STEP import hands the
+  // reservation it took back to the run that adopts it: two callbacks pulled
+  // out separately could be wired from different hook instances, and a
+  // reservation the run does not recognise degrades in silence.
+  const validatedFeature = useValidatedFeatureCommit({
+    manager: () => managerRef.current,
+    derive: (document) => geometry.syncOnce(document),
+    commit: (command, derived) => executeCommand(command, derived ?? undefined),
+    commitTransaction: (label, commands, derived) =>
+      executeTransaction(label, commands, derived ?? undefined),
+    onBusy: setBusy,
+    onStatus: setStatus,
+    onFailure: setFeatureFormError
+  });
+  const executeValidatedFeature = validatedFeature.run;
+  /**
+   * Checksums of imports between their blob write and their commit decision.
+   * Content addressing puts a re-import of the same file on the same key, so
+   * without this a second import's cleanup can delete the bytes the first one
+   * is still validating against.
+   */
+  const inFlightImportChecksums = useRef(createInFlightImportChecksums());
+  /**
+   * Checksums this tab wrote for an import that then ended without a verdict on
+   * the file — the document moved out from under it, or the commit lock had
+   * been taken by the time it asked. The bytes are deliberately kept: they are
+   * exactly what the retry needs, and content addressing makes that retry's
+   * write a no-op instead of another 250 MB.
+   *
+   * Remembering them is what keeps the retry's cleanup armed. Without it the
+   * retry finds the key already present, concludes it is not its to delete, and
+   * a genuine kernel refusal would then keep the whole source forever.
+   */
+  const abandonedImportChecksums = useRef(new Set<string>());
+
+  const projectSharingPreferenceEnabled = appSettings.collaboration.enabled;
+  const projectSharingEnabled =
+    projectSharingPreferenceEnabled && collaborationRollout.sharingEnabled;
+  const liveCollaborationEnabled =
+    projectSharingPreferenceEnabled &&
+    (collaborationRollout.sharingEnabled ||
+      collaborationRollout.personalSyncEnabled);
 
   const collaboration = useCollaboration({
+    enabled: cloudFunctionsEnabled,
     document: doc,
     // A signed-in user can still be editing a device-only project. Only attach
-    // account cookies to a collaboration room after this exact project has
-    // been resolved as a cloud-backed document.
-    session: cloudAvailable ? session : null,
+    // account credentials to a collaboration room after this exact project has
+    // been resolved as a cloud-backed document. Desktop exchanges its native
+    // bearer credential for a short-lived, one-use WebSocket ticket.
+    session: cloudAvailable && liveCollaborationEnabled ? session : null,
     onRemoteDocument(remoteDocument) {
       const current = managerRef.current?.document;
       if (
@@ -499,12 +1557,40 @@ export function App() {
       ) {
         return;
       }
+      // The room and the freshness poll are two routes to the same place, so
+      // they have to leave the same state behind: without re-baselining here,
+      // the next autosave would be fenced against a version this device has
+      // already moved past and would report a conflict that does not exist.
+      remoteVersionsRef.current.set(
+        remoteDocument.projectId,
+        remoteDocument.version
+      );
+      void (async () => {
+        try {
+          await saveLocalProject(remoteDocument);
+          await saveLastSyncedVersion(
+            remoteDocument.projectId,
+            remoteDocument.version
+          );
+        } catch {
+          setSaveState('offline');
+          setStatus(
+            'The incoming account update is open, but could not be saved on this device. Export it before closing.'
+          );
+        }
+      })();
+      cloudProjectAutosaveRef.current?.adoptAccountVersion(
+        remoteDocument.projectId,
+        remoteDocument.version
+      );
       hydrateDocument(remoteDocument, {
         restoreView: false,
         rememberProject: false
       });
       setStatus(
-        `Applied live revision ${remoteDocument.version} from a collaborator.`
+        projectSharingEnabled
+          ? `Applied live revision ${remoteDocument.version} from a collaborator.`
+          : `Applied revision ${remoteDocument.version} from another of your devices.`
       );
     },
     onConflict(remoteDocument) {
@@ -513,6 +1599,211 @@ export function App() {
       );
     }
   });
+
+  const activeCollaborationLease = Boolean(
+    collaboration.lease &&
+    collaboration.lease.projectId === doc?.projectId &&
+    collaboration.lease.expiresAt > Date.now()
+  );
+  const sharedProjectDisabled = Boolean(
+    !projectSharingPreferenceEnabled &&
+    doc &&
+    session &&
+    doc.ownerUserId !== session.userId
+  );
+  // A read-only share has no build workspace to offer, so the mode switch is
+  // pinned to View rather than presenting a Build mode that refuses every edit.
+  const buildModeDisabledReason =
+    !sharedProjectDisabled &&
+    cloudAvailable &&
+    session &&
+    projectSharingEnabled &&
+    (collaboration.role === 'viewer' || collaboration.status === 'read-only')
+      ? 'This shared project is read-only'
+      : null;
+  const viewMode =
+    panelState.workspaceMode === 'view' || buildModeDisabledReason !== null;
+  // View mode joins the same guard every other read-only condition uses, so a
+  // keyboard shortcut or a command that slips past the hidden UI is refused at
+  // the same choke point rather than needing its own check.
+  const editDisabledReason = projectOpenElsewhere
+    ? 'This project is open in another tab'
+    : viewMode
+      ? // "Switch to Build" is only advice worth giving to someone who can.
+        // A read-only share pins the mode to View, so telling a viewer to
+        // switch names a route they will find disabled — say why instead.
+        (buildModeDisabledReason ??
+        'View mode is read-only — switch to Build to edit')
+      : sharedProjectDisabled
+        ? 'Project sharing is disabled in Settings'
+        : !cloudAvailable || !session || !projectSharingEnabled
+          ? null
+          : collaboration.conflict
+            ? 'Resolve the collaboration conflict before editing'
+            : collaboration.role === 'viewer' ||
+                collaboration.status === 'read-only'
+              ? 'This shared project is read-only'
+              : collaboration.role === null
+                ? 'Waiting for project access'
+                : collaborationRollout.editLeasesEnforced &&
+                    !activeCollaborationLease
+                  ? collaboration.status === 'lease-denied'
+                    ? 'Another collaborator holds the edit lease'
+                    : 'Waiting for the project edit lease'
+                  : null;
+
+  // Read through a ref, because an async caller holds the closure of the
+  // render it started in: a STEP import that spends minutes rebuilding and
+  // archiving would otherwise check a permission that was current before View
+  // mode was entered or the project was opened in a second tab.
+  const editDisabledReasonRef = useRef(editDisabledReason);
+  editDisabledReasonRef.current = editDisabledReason;
+
+  function ensureCanEdit(action = 'edit this project'): boolean {
+    const reason = editDisabledReasonRef.current;
+    if (!reason) {
+      return true;
+    }
+    setStatus(`Cannot ${action}: ${reason}.`);
+    return false;
+  }
+
+  const conflictHandlers: ConflictResolutionHandlers = {
+    async writeRecoveryCopy(source) {
+      const copy = localRecoveryCopy(source, 'Recovery');
+      await saveLocalProject(copy);
+      setProjects((current) =>
+        mergeProjectSummaries(
+          [
+            {
+              projectId: copy.projectId,
+              name: copy.name,
+              updatedAt: copy.derived.updatedAt,
+              revisionCount: 0
+            }
+          ],
+          current
+        )
+      );
+    },
+    useRemoteVersion(remoteDocument) {
+      if (!collaboration.useRemoteVersion(remoteDocument.version)) {
+        throw new Error(
+          'The room version changed before recovery could complete.'
+        );
+      }
+      setStatus(
+        'Using the current room version; a local recovery copy was saved.'
+      );
+    },
+    async keepMyVersion({ expectedRemoteVersion }) {
+      await collaboration.keepLocalVersion(expectedRemoteVersion);
+      setStatus('Submitting the preserved local version to the room.');
+    },
+    saveLocalAsCopy() {
+      setStatus('Saved the divergent document as a local recovery project.');
+    }
+  };
+
+  /**
+   * The same three resolutions, for a conflict the account raised rather than a
+   * room. There is no lease and no live channel here: taking the account's copy
+   * is a local hydrate, and keeping this device's is an ordinary fenced write
+   * against the version the account reported.
+   */
+  const accountConflictHandlers: ConflictResolutionHandlers = {
+    writeRecoveryCopy: conflictHandlers.writeRecoveryCopy,
+    async useRemoteVersion(remoteDocument) {
+      await saveLocalProject(remoteDocument);
+      remoteVersionsRef.current.set(
+        remoteDocument.projectId,
+        remoteDocument.version
+      );
+      await saveLastSyncedVersion(
+        remoteDocument.projectId,
+        remoteDocument.version
+      );
+      cloudProjectAutosaveRef.current?.adoptAccountVersion(
+        remoteDocument.projectId,
+        remoteDocument.version
+      );
+      hydrateDocument(remoteDocument, { restoreView: false });
+      setAccountConflict(null);
+      setStatus(
+        'Using the version from your account; a local recovery copy was saved.'
+      );
+    },
+    async keepMyVersion({ document, expectedRemoteVersion }) {
+      const saved = await api.saveRevision({
+        projectId: document.projectId,
+        reason: 'Kept this device’s version',
+        expectedVersion: expectedRemoteVersion,
+        document: withoutDerivedProjection(document)
+      });
+      const restored = withLocalDerived(saved, document);
+      remoteVersionsRef.current.set(restored.projectId, restored.version);
+      const live = managerRef.current?.document;
+      if (
+        live &&
+        (live.projectId !== document.projectId ||
+          live.version !== document.version)
+      ) {
+        // The canonical document moved while the fenced write round-tripped.
+        // Adopting the server echo now would erase those edits; record the
+        // account version and let autosave carry the newer document up.
+        await saveLastSyncedVersion(restored.projectId, restored.version);
+        cloudProjectAutosaveRef.current?.adoptAccountVersion(
+          restored.projectId,
+          restored.version
+        );
+        setAccountConflict(null);
+        setStatus('Kept this device’s version; a recovery copy was saved.');
+        return;
+      }
+      await saveLocalProject(restored);
+      await saveLastSyncedVersion(restored.projectId, restored.version);
+      if (managerRef.current) {
+        managerRef.current.document = restored;
+      }
+      setDoc(restored);
+      cloudProjectAutosaveRef.current?.adoptAccountVersion(
+        restored.projectId,
+        restored.version
+      );
+      setAccountConflict(null);
+      setSaveState('synced');
+      setStatus('Kept this device’s version; a recovery copy was saved.');
+    },
+    saveLocalAsCopy() {
+      setStatus('Saved the divergent document as a local recovery project.');
+    }
+  };
+
+  async function resolveAccountConflict(resolution: ConflictResolution) {
+    if (!accountConflict) {
+      return;
+    }
+    setBusy(true);
+    try {
+      await resolveProjectConflict(
+        accountConflict,
+        resolution,
+        { role: collaboration.role, lease: null, leasesEnforced: false },
+        accountConflictHandlers
+      );
+      clearUnresolvedConflict(accountConflict.projectId);
+    } catch (error) {
+      setStatus(errorMessage(error, 'Could not resolve the conflict.'));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  useEffect(() => {
+    if (collaboration.conflict) {
+      setSharingOpen(true);
+    }
+  }, [collaboration.conflict]);
 
   useEffect(() => {
     savePanelState(panelState);
@@ -535,48 +1826,413 @@ export function App() {
   }, [appSettings]);
 
   useEffect(() => {
+    const controller = new CloudSettingsAutosave({
+      initialSettings: appSettingsRef.current,
+      initialSyncedRevision: syncedRevisionRef.current,
+      api,
+      onAccountSettings(response) {
+        accountSettingsRef.current = response;
+        setAccountSettings(response);
+      },
+      onLocalSettings(settings, syncedRevision) {
+        syncedRevisionRef.current = syncedRevision;
+        saveLocalAppSettings(settings, syncedRevision);
+      },
+      onStatus(status) {
+        switch (status.state) {
+          case 'pending':
+            setSettingsMessage(
+              'Saved on this device · saving to cloud profile…'
+            );
+            break;
+          case 'offline':
+            setSettingsMessage(
+              'Saved on this device · cloud sync paused until you are online.'
+            );
+            break;
+          case 'saved':
+            setSettingsMessage('Saved to this device and cloud profile.');
+            break;
+          case 'error':
+            setSettingsMessage(
+              errorMessage(
+                status.error,
+                'Cloud autosave failed · changes remain saved on this device.'
+              )
+            );
+            break;
+        }
+      }
+    });
+    cloudSettingsAutosaveRef.current = controller;
+    return () => {
+      controller.dispose();
+      if (cloudSettingsAutosaveRef.current === controller) {
+        cloudSettingsAutosaveRef.current = null;
+      }
+      cloudSettingsSessionUserRef.current = null;
+    };
+  }, []);
+
+  useEffect(() => {
+    const controller = new CloudProjectAutosave({
+      api,
+      onStatus(status) {
+        setSaveState(status.state);
+        if (status.state === 'refused') {
+          setStatus(
+            errorMessage(
+              status.error,
+              'This document is too large for the account. It stays saved on this device.'
+            )
+          );
+        }
+      },
+      onSynced({ projectId, version }) {
+        remoteVersionsRef.current.set(projectId, version);
+        // The durable baseline. Everything the conflict machinery decides is
+        // measured from here, so it has to be written on the acknowledgement
+        // rather than inferred later from versions alone.
+        void saveLastSyncedVersion(projectId, version);
+      },
+      onConflict({ projectId, localDocument, accountVersion }) {
+        raiseAccountConflict(projectId, localDocument, accountVersion);
+      },
+      onSessionExpired() {
+        remoteVersionsRef.current.clear();
+        setCloudAvailable(false);
+        endCloudSettingsSession();
+      }
+    });
+    cloudProjectAutosaveRef.current = controller;
+    return () => {
+      controller.dispose();
+      if (cloudProjectAutosaveRef.current === controller) {
+        cloudProjectAutosaveRef.current = null;
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    cloudProjectAutosaveRef.current?.configure({
+      enabled: cloudFunctionsEnabled && appSettings.files.cloudAutosave,
+      idleDelayMs: appSettings.files.cloudAutosaveDelaySeconds * 1000
+    });
+  }, [
+    appSettings.files.cloudAutosave,
+    appSettings.files.cloudAutosaveDelaySeconds,
+    cloudFunctionsEnabled
+  ]);
+
+  /**
+   * Points the autosave controller at whichever project is open, and only when
+   * the account actually holds it. A project the account has never seen is not
+   * a sync failure — it is something to adopt, which the start screen offers.
+   */
+  useEffect(() => {
+    const controller = cloudProjectAutosaveRef.current;
+    if (!controller) {
+      return;
+    }
+    const projectId = doc?.projectId;
+    const accountVersion = projectId
+      ? remoteVersionsRef.current.get(projectId)
+      : undefined;
+    if (
+      !cloudFunctionsEnabled ||
+      !projectId ||
+      !session ||
+      accountVersion === undefined
+    ) {
+      controller.closeProject();
+      return;
+    }
+    controller.openProject(projectId, accountVersion);
+  }, [cloudFunctionsEnabled, doc?.projectId, session]);
+
+  /**
+   * Exactly one tab writes a project's device storage.
+   *
+   * Autosave replaces the whole document under one key, so a second tab editing
+   * the same project does not merge with the first — it overwrites it, and
+   * whichever tab saved last wins with no record that the other's work existed.
+   * The tab that does not hold the project opens read-only instead, and takes
+   * over if the owner goes away.
+   */
+  useEffect(() => {
+    const projectId = doc?.projectId ?? null;
+    if (!projectId) {
+      projectOwnershipSettledRef.current = null;
+      setProjectOpenElsewhere(false);
+      return;
+    }
     let cancelled = false;
+    let claim: ProjectOwnershipClaim | null = null;
+    const settled = claimProjectOwnership(projectId, () => {
+      if (cancelled) {
+        return;
+      }
+      setProjectOpenElsewhere(false);
+      void adoptStoredProject(projectId);
+    }).then((result) => {
+      if (cancelled) {
+        result.release();
+        return;
+      }
+      claim = result;
+      setProjectOpenElsewhere(!result.owned);
+      if (!result.owned) {
+        // The project is on this device — the other tab is keeping it that
+        // way. Nothing here is unsaved, and nothing here may be saved.
+        setSaveState('local');
+      }
+    });
+    projectOwnershipSettledRef.current = settled;
+    return () => {
+      cancelled = true;
+      projectOwnershipSettledRef.current = null;
+      claim?.release();
+    };
+  }, [doc?.projectId]);
+
+  /**
+   * Last call before the tab goes away. `pagehide` is the only one of these
+   * that fires reliably on mobile, and `visibilitychange` is the only one that
+   * fires when a tab is merely backgrounded — which on a phone is usually the
+   * last thing that happens before it is discarded.
+   */
+  useEffect(() => {
+    const flush = () => {
+      // The device write comes first and the account drain is chained behind
+      // it: the controller only learns of an edit once the local save has
+      // stored it, so draining the account copy first would miss an edit still
+      // sitting in the 450 ms debounce and the tab would take it with it.
+      void flushPendingLocalSaveRef
+        .current()
+        .then(() => cloudProjectAutosaveRef.current?.flushPending());
+    };
+    const onVisibilityChange = () => {
+      if (globalThis.document.visibilityState === 'hidden') {
+        flush();
+      }
+    };
+    window.addEventListener('pagehide', flush);
+    globalThis.document.addEventListener(
+      'visibilitychange',
+      onVisibilityChange
+    );
+    return () => {
+      window.removeEventListener('pagehide', flush);
+      globalThis.document.removeEventListener(
+        'visibilitychange',
+        onVisibilityChange
+      );
+    };
+  }, []);
+
+  /**
+   * Asks the account whether the open project has moved elsewhere, and pulls it
+   * when this device has nothing of its own outstanding.
+   *
+   * A version comparison, not a document fetch — cheap enough to be the
+   * permanent answer rather than a placeholder for the live room. It narrows
+   * the window in which two devices diverge unnoticed; it does not close it,
+   * which is what the room is for.
+   */
+  useEffect(() => {
+    if (!cloudFunctionsEnabled || !doc?.projectId || !session) {
+      return;
+    }
+    let cancelled = false;
+
+    async function check() {
+      const controller = cloudProjectAutosaveRef.current;
+      const current = managerRef.current?.document;
+      if (cancelled || !controller || !current) {
+        return;
+      }
+      // Asked on every tick rather than once when the effect was set up. Both
+      // answers change without anything here changing with them: saving the
+      // open project to the account makes it worth polling, and resolving a
+      // conflict releases the controller that was holding it back.
+      if (
+        !shouldPollForFreshness({
+          projectId: current.projectId,
+          signedIn: Boolean(session),
+          accountHoldsProject: remoteVersionsRef.current.has(current.projectId),
+          awaitingResolution: controller.isHalted
+        })
+      ) {
+        return;
+      }
+      const summary = (
+        await api.listProjects().catch(() => null)
+      )?.projects.find((project) => project.projectId === current.projectId);
+      if (cancelled || summary?.documentVersion === undefined) {
+        return;
+      }
+      const action = decideProjectSync({
+        localVersion: current.version,
+        accountVersion: summary.documentVersion,
+        lastSyncedVersion: controller.syncedVersion,
+        hasUnsentChanges: controller.hasPendingChanges
+      });
+      if (action !== 'pull') {
+        // `push` is already the autosave controller's job, and `conflict` is
+        // raised by the write that gets fenced rather than guessed at here.
+        return;
+      }
+      const remote = await api.loadProject(current.projectId).catch(() => null);
+      const live = managerRef.current?.document;
+      // Anything the user did while the document was in flight makes it stale.
+      if (
+        cancelled ||
+        !remote ||
+        !live ||
+        live.projectId !== current.projectId ||
+        live.version !== current.version ||
+        controller.hasPendingChanges
+      ) {
+        return;
+      }
+      await saveLocalProject(remote);
+      await saveLastSyncedVersion(remote.projectId, remote.version);
+      remoteVersionsRef.current.set(remote.projectId, remote.version);
+      controller.adoptAccountVersion(remote.projectId, remote.version);
+      hydrateDocument(remote);
+      setStatus(`Updated to the version saved on another device.`);
+    }
+
+    const onFocus = () => void check();
+    const interval = window.setInterval(
+      () => void check(),
+      FRESHNESS_POLL_INTERVAL_MS
+    );
+    window.addEventListener('focus', onFocus);
+    window.addEventListener('online', onFocus);
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+      window.removeEventListener('focus', onFocus);
+      window.removeEventListener('online', onFocus);
+    };
+  }, [cloudFunctionsEnabled, doc?.projectId, session]);
+
+  useEffect(() => {
+    const controller = cloudSettingsAutosaveRef.current;
+    const userId = session?.userId ?? null;
+    if (!controller) {
+      return;
+    }
+    if (!cloudFunctionsEnabled || !userId || !accountSettings) {
+      if (cloudSettingsSessionUserRef.current !== null) {
+        controller.endSession();
+        cloudSettingsSessionUserRef.current = null;
+      }
+      return;
+    }
+    if (cloudSettingsSessionUserRef.current !== userId) {
+      if (cloudSettingsSessionUserRef.current !== null) {
+        controller.endSession();
+      }
+      controller.connectSession(userId, accountSettings);
+      cloudSettingsSessionUserRef.current = userId;
+      return;
+    }
+    controller.updateAccountSettings(accountSettings);
+  }, [accountSettings, cloudFunctionsEnabled, session]);
+
+  useEffect(() => {
+    let cancelled = false;
+    mark('startup.begin', { rememberedProject: Boolean(startupProjectId) });
     void (async () => {
       try {
-        const [local, health, rememberedLocal, currentAuth] = await Promise.all(
-          [
-            listLocalProjects().catch(() => []),
-            api.health().catch(() => null),
-            startupProjectId
-              ? loadLocalProject(startupProjectId).catch(() => null)
-              : Promise.resolve(null),
-            api
-              .authConfig()
-              .then((config) => ({
-                config,
-                status: 'ready' as const
-              }))
-              .catch(() => ({
+        const [health, rememberedLocal, currentAuth] = await Promise.all([
+          bootCloudFunctionsEnabledRef.current
+            ? api.health().catch(() => null)
+            : null,
+          startupProjectId
+            ? timedAsync('startup.localProject', () =>
+                loadLocalProject(startupProjectId).catch(() => null)
+              )
+            : Promise.resolve(null),
+          bootCloudFunctionsEnabledRef.current
+            ? api
+                .authConfig()
+                .then((config) => ({
+                  config,
+                  status: 'ready' as const
+                }))
+                .catch(() => ({
+                  config: null,
+                  status: 'unavailable' as const
+                }))
+            : {
                 config: null,
                 status: 'unavailable' as const
-              }))
-          ]
-        );
-        const activeSession = await api.session().catch(() => null);
-        const [remote, rememberedRemote, remoteSettings] = activeSession
-          ? await Promise.all([
-              api.listProjects().catch(() => null),
-              startupProjectId
-                ? api.loadProject(startupProjectId).catch(() => null)
-                : Promise.resolve(null),
-              api.getSettings().catch(() => null)
-            ])
-          : [null, null, null];
+              }
+        ]);
+        const activeSession = bootCloudFunctionsEnabledRef.current
+          ? await timedAsync('startup.session', () =>
+              api.session().catch(() => null)
+            )
+          : null;
+        const [
+          listed,
+          rememberedRemote,
+          remoteSettings,
+          collaborationCapabilities
+        ] = await Promise.all([
+          timedAsync('startup.projectList', () =>
+            loadProjectSummaries(Boolean(activeSession))
+          ),
+          activeSession && startupProjectId
+            ? api.loadProject(startupProjectId).catch(() => null)
+            : Promise.resolve(null),
+          activeSession ? api.getSettings().catch(() => null) : null,
+          activeSession
+            ? api
+                .collaborationCapabilities()
+                .catch(() => DISABLED_COLLABORATION_ROLLOUT)
+            : DISABLED_COLLABORATION_ROLLOUT
+        ]);
         if (cancelled) {
           return;
         }
-        const remoteProjects = remote?.projects ?? [];
-        const merged = mergeProjectSummaries(local, remoteProjects);
-        const restoredDocument = selectProjectDocument(
+        setDeploymentHealth(health);
+        const merged = listed.projects;
+        const restoredOutcome = chooseProjectDocument(
           rememberedLocal,
-          rememberedRemote
+          rememberedRemote,
+          startupProjectId
+            ? await loadLastSyncedVersion(startupProjectId)
+            : null
         );
+        let restoredDocument =
+          restoredOutcome.choice === 'none'
+            ? null
+            : restoredOutcome.choice === 'diverged'
+              ? restoredOutcome.local
+              : restoredOutcome.document;
+        if (
+          startupProjectId &&
+          restoredOutcome.choice === 'remote' &&
+          restoredDocument
+        ) {
+          restoredDocument = rememberedLocal
+            ? withLocalDerived(restoredDocument, rememberedLocal)
+            : restoredDocument;
+          await saveLocalProject(restoredDocument);
+          await saveLastSyncedVersion(
+            restoredDocument.projectId,
+            restoredDocument.version
+          );
+          if (cancelled) {
+            return;
+          }
+        }
         const canUseCloud = Boolean(activeSession && rememberedRemote);
+        setCollaborationRollout(collaborationCapabilities);
         if (rememberedRemote) {
           remoteVersionsRef.current.set(
             rememberedRemote.projectId,
@@ -584,11 +2240,15 @@ export function App() {
           );
         }
         setProjects(merged);
+        setCloudProjectIds(listed.cloudProjectIds);
+        setAccountProjectListReached(listed.remoteReached);
         setCloudAvailable(canUseCloud);
+        sessionRef.current = activeSession;
         setSession(activeSession);
         setAuthConfig(currentAuth.config);
         setAuthConfigStatus(currentAuth.status);
         if (remoteSettings) {
+          accountSettingsRef.current = remoteSettings;
           setAccountSettings(remoteSettings);
           // Adopting the account copy over an unsaved local change would revert
           // it silently — for the assistant switch, that reads as the switch
@@ -597,21 +2257,53 @@ export function App() {
             remoteSettings.synced &&
             shouldAdoptAccountSettings(bootSettingsRef.current)
           ) {
-            syncedRevisionRef.current = remoteSettings.revision;
+            appSettingsRef.current = remoteSettings.settings;
             setAppSettings(remoteSettings.settings);
-            saveLocalAppSettings(
-              remoteSettings.settings,
-              remoteSettings.revision
-            );
-          } else if (remoteSettings.synced) {
+            const controller = cloudSettingsAutosaveRef.current;
+            if (controller) {
+              controller.adoptSyncedSettings(
+                remoteSettings.settings,
+                remoteSettings
+              );
+            } else {
+              syncedRevisionRef.current = remoteSettings.revision;
+              saveLocalAppSettings(
+                remoteSettings.settings,
+                remoteSettings.revision
+              );
+            }
+          } else {
             setSettingsMessage(
-              'This device has settings that are not saved to your account yet.'
+              'This device has settings that are not saved to your account yet · saving to cloud profile…'
             );
+            cloudSettingsAutosaveRef.current?.schedule(appSettingsRef.current);
           }
         }
-        setSaveState(canUseCloud ? 'saved' : 'offline');
+        setSaveState(
+          !canUseCloud
+            ? 'local'
+            : restoredOutcome.choice === 'diverged'
+              ? 'conflict'
+              : restoredOutcome.choice === 'local'
+                ? 'syncing'
+                : 'synced'
+        );
         if (startupProjectId && restoredDocument) {
           hydrateDocument(restoredDocument);
+          if (restoredOutcome.choice === 'diverged') {
+            setAccountConflict(
+              conflictFromDocuments(
+                restoredOutcome.local,
+                restoredOutcome.remote,
+                'account'
+              )
+            );
+            setSaveState('conflict');
+            setStatus(
+              `${restoredDocument.name} changed here and in your account. Nothing has been discarded — choose which to keep.`
+            );
+            return;
+          }
           setStatus(`Reopened ${restoredDocument.name}.`);
           return;
         }
@@ -619,11 +2311,13 @@ export function App() {
           clearActiveProject();
         }
         setStatus(
-          activeSession && remote
-            ? `Cloud profile ready · ${merged.length} project(s)`
-            : health
-              ? `Local workspace · ${merged.length} local project(s)`
-              : `Offline workspace · ${merged.length} local project(s)`
+          !bootCloudFunctionsEnabledRef.current
+            ? `Offline mode · ${merged.length} local project(s)`
+            : activeSession && listed.remoteReached
+              ? `Cloud profile ready · ${merged.length} project(s)`
+              : health
+                ? `Local workspace · ${merged.length} local project(s)`
+                : `Offline workspace · ${merged.length} local project(s)`
         );
       } catch (error) {
         if (!cancelled) {
@@ -632,6 +2326,9 @@ export function App() {
         }
       } finally {
         if (!cancelled) {
+          mark('startup.ready');
+          measure('startup.restore', 'startup.begin', 'startup.ready');
+          measure('startup.total', 'bundle.evaluated', 'startup.ready');
           setStartupState('ready');
         }
       }
@@ -645,6 +2342,12 @@ export function App() {
 
   useEffect(() => {
     if (!doc) {
+      return;
+    }
+    if (projectOpenElsewhereRef.current) {
+      // Nothing here is on its way to storage, so the indicator must not claim
+      // it is. The tab that owns the project is the one keeping it current.
+      setSaveState('local');
       return;
     }
     setSaveState('saving');
@@ -694,18 +2397,32 @@ export function App() {
     [doc]
   );
   const parameters = useMemo(() => (doc ? listParameters(doc) : []), [doc]);
+  // Import sources that were never archived to the account. They gate the
+  // sync indicator: a doc that references them is not fully "Synced".
+  const localOnlySources = useMemo(
+    () => (doc ? listLocalOnlyImportSources(doc) : []),
+    [doc]
+  );
+  const presentedSaveState = presentedWorkspaceSaveState(
+    saveState,
+    localOnlySources.length
+  );
   const parameterScope = useMemo(
     () => (doc ? getParameterScope(doc) : { scope: {}, errors: [] }),
     [doc]
   );
 
+  // Text profiles resolve faces synchronously on this thread as well as in the
+  // worker, so the faces this document names have to be parsed here too.
+  const textFontsVersion = useDocumentFonts(doc ?? null);
+
   const representations = doc?.derived.bodyRepresentations ?? {};
   const renderedRepresentations =
     previewDoc?.derived.bodyRepresentations ?? representations;
   /**
-   * Exact regeneration is allowed to assign a new topology ID to the resized
-   * wall. Keep the selected face attached to the preview by its fixed
-   * world-space axis; do not apply this fallback to unrelated edit types.
+   * Exact regeneration may assign a new topology ID to an edited face. Keep
+   * selection attached through operation-specific immutable geometry: the
+   * translated source plane for offsets, or the fixed axis for radii.
    */
   const renderedSelectedTopology = useMemo<TopologySelection | null>(() => {
     if (selectedTopology?.kind !== 'face') {
@@ -726,6 +2443,46 @@ export function App() {
         topologyId: exact.topologyId,
         hash: exact.hash
       };
+    }
+    if (
+      interaction.mode === 'face' &&
+      interaction.op === 'offset-face' &&
+      interaction.target.bodyId === selectedTopology.bodyId &&
+      renderedOffsetPreview !== null
+    ) {
+      const regenerated = resolveOffsetPreviewFace(
+        faces,
+        {
+          point: {
+            x: interaction.target.point[0],
+            y: interaction.target.point[1],
+            z: interaction.target.point[2]
+          },
+          normal: {
+            x: interaction.target.normal[0],
+            y: interaction.target.normal[1],
+            z: interaction.target.normal[2]
+          },
+          ...(interaction.target.surfaceCenter
+            ? {
+                center: {
+                  x: interaction.target.surfaceCenter[0],
+                  y: interaction.target.surfaceCenter[1],
+                  z: interaction.target.surfaceCenter[2]
+                }
+              }
+            : {})
+        },
+        renderedOffsetPreview
+      );
+      if (regenerated) {
+        return {
+          bodyId: selectedTopology.bodyId,
+          kind: 'face',
+          topologyId: regenerated.topologyId,
+          hash: regenerated.hash
+        };
+      }
     }
     if (
       interaction.mode !== 'face' ||
@@ -768,7 +2525,49 @@ export function App() {
           hash: regenerated.hash
         }
       : selectedTopology;
-  }, [interaction, renderedRepresentations, selectedTopology]);
+  }, [
+    interaction,
+    renderedOffsetPreview,
+    renderedRepresentations,
+    selectedTopology
+  ]);
+  const normalToFaceTarget = useMemo(() => {
+    const selection = renderedSelectedTopology;
+    if (selection?.kind !== 'face' || !selection.topologyId) {
+      return null;
+    }
+    const body = renderedRepresentations[selection.bodyId];
+    const face = body?.topology?.faces.find(
+      (candidate) =>
+        candidate.topologyId === selection.topologyId ||
+        (selection.hash !== undefined && candidate.hash === selection.hash)
+    );
+    const geometry = face?.geometry;
+    if (
+      !body ||
+      !face ||
+      face.triangleCount <= 0 ||
+      geometry?.surfaceType !== 'plane' ||
+      !geometry.normal ||
+      ![
+        geometry.center.x,
+        geometry.center.y,
+        geometry.center.z,
+        geometry.normal.x,
+        geometry.normal.y,
+        geometry.normal.z
+      ].every(Number.isFinite) ||
+      Math.hypot(geometry.normal.x, geometry.normal.y, geometry.normal.z) <
+        1e-12
+    ) {
+      return null;
+    }
+    return {
+      bodyId: body.bodyId,
+      topologyId: face.topologyId,
+      label: faceLabel(body, face.hash, face.topologyId)
+    };
+  }, [renderedRepresentations, renderedSelectedTopology]);
   // Warnings must describe what is actually on screen. While a preview is up the
   // viewport shows previewDoc's bodies, so showing the live document's warnings
   // would hide exactly the problems the preview exists to reveal.
@@ -783,6 +2582,23 @@ export function App() {
           : []
       ).filter((body) => !body.consumed && !hiddenBodyIds.has(body.bodyId)),
     [doc, previewDoc, renderedRepresentations, hiddenBodyIds]
+  );
+
+  /**
+   * Every body the model ends up with, hidden ones included — `viewerBodies`
+   * drops those, and a parts list that loses a row when you hide it is a list
+   * you cannot unhide from. Consumed bodies stay out: they are boolean
+   * scaffolding, not parts.
+   */
+  const partBodies = useMemo<BodyRepresentation[]>(
+    () =>
+      (previewDoc
+        ? Object.values(renderedRepresentations)
+        : doc
+          ? Object.values(doc.derived.bodyRepresentations)
+          : []
+      ).filter((body) => !body.consumed),
+    [doc, previewDoc, renderedRepresentations]
   );
 
   const directEditableBodyIds = useMemo<string[]>(
@@ -913,8 +2729,14 @@ export function App() {
     return doc.derived.exportableBodyIds;
   }, [doc, selectedBody]);
 
-  // Bottom-center selection summary: what is picked plus a quick measurement.
-  const selectionChip = useMemo<{
+  /**
+   * What the current selection is, and the figure that goes with it.
+   *
+   * This stays a lightweight live readout. The measurement workbench records
+   * explicit pick events below rather than coupling its history to selection
+   * state effects.
+   */
+  const selectionSummary = useMemo<{
     label: string;
     detail?: string;
   } | null>(() => {
@@ -924,13 +2746,25 @@ export function App() {
     const units = doc.units;
     const round = (value: number) => Math.round(value * 100) / 100;
     if (selectedEdges.length > 1) {
+      let sampled = false;
       const total = selectedEdges.reduce((sum, edge) => {
         const body = renderedRepresentations[edge.bodyId];
-        return sum + (edgeLength(body, edge.hash, edge.topologyId) ?? 0);
+        const measured = edgeLengthMeasurement(
+          body,
+          edge.hash,
+          edge.topologyId
+        );
+        sampled = sampled || measured?.quality === 'sampled';
+        return sum + (measured?.value ?? 0);
       }, 0);
+      const label = `${selectedEdges.length} edges`;
+      const value =
+        total > 0
+          ? `${sampled ? '≈ ' : ''}${round(total)} ${units}`
+          : undefined;
       return {
-        label: `${selectedEdges.length} edges`,
-        detail: total > 0 ? `≈ ${round(total)} ${units}` : undefined
+        label,
+        detail: value
       };
     }
     if (
@@ -944,29 +2778,32 @@ export function App() {
       const topologyId =
         selectedEdges[0]?.topologyId ?? renderedSelectedTopology?.topologyId;
       const name = edgeLabel(body, hash, topologyId);
-      const length = edgeLength(body, hash, topologyId);
+      const length = edgeLengthMeasurement(body, hash, topologyId);
+      const label = body ? `${body.name} · ${name}` : name;
+      const value =
+        length && length.value > 0
+          ? `${length.quality === 'sampled' ? '≈ ' : ''}${round(length.value)} ${units}`
+          : undefined;
       return {
-        label: body ? `${body.name} · ${name}` : name,
-        detail:
-          length !== null && length > 0
-            ? `${round(length)} ${units}`
-            : undefined
+        label,
+        detail: value
       };
     }
     if (renderedSelectedTopology?.kind === 'face') {
       const body = renderedRepresentations[renderedSelectedTopology.bodyId];
-      const face = body?.topology?.faces.find(
-        (candidate) =>
-          candidate.topologyId === renderedSelectedTopology.topologyId
-      );
-      const geometry = face?.geometry;
+      // Through the shared fail-closed resolver rather than a local `find`, so
+      // the chip cannot print a confident figure for a pick the measurement
+      // tape is simultaneously refusing as ambiguous.
+      const resolved = resolveFace(body, renderedSelectedTopology);
+      const geometry = resolved.ok ? resolved.entry.geometry : undefined;
       if (
         geometry?.featureType === 'through-hole' &&
         geometry.diameter !== undefined
       ) {
+        const value = `Ø ${round(geometry.diameter)} ${units}`;
         return {
           label: 'Through hole',
-          detail: `Ø ${round(geometry.diameter)} ${units}`
+          detail: value
         };
       }
       const name = faceLabel(
@@ -974,8 +2811,19 @@ export function App() {
         renderedSelectedTopology.hash,
         renderedSelectedTopology.topologyId
       );
+      const label = body ? `${body.name} · ${name}` : name;
+      // A cylinder is the other pick that carries a number of its own; every
+      // other face kind has a name but nothing to measure yet.
+      const cylinderDiameter =
+        geometry?.surfaceType === 'cylinder' ? geometry.diameter : undefined;
       return {
-        label: body ? `${body.name} · ${name}` : name
+        label,
+        detail:
+          cylinderDiameter !== undefined
+            ? `Ø ${round(cylinderDiameter)} ${units}`
+            : geometry?.area !== undefined
+              ? `${round(geometry.area)} ${units}²`
+              : undefined
       };
     }
     if (selectedBodyIds.length > 1) {
@@ -992,9 +2840,10 @@ export function App() {
         y: round(body.bbox.max.y - body.bbox.min.y),
         z: round(body.bbox.max.z - body.bbox.min.z)
       };
+      const value = `${size.x} × ${size.y} × ${size.z} ${units}`;
       return {
         label: body.name,
-        detail: `${size.x} × ${size.y} × ${size.z} ${units}`
+        detail: value
       };
     }
     return null;
@@ -1006,6 +2855,470 @@ export function App() {
     selectedBodyIds,
     renderedRepresentations
   ]);
+
+  const selectionChip = useMemo(
+    () =>
+      selectionSummary
+        ? { label: selectionSummary.label, detail: selectionSummary.detail }
+        : null,
+    [selectionSummary]
+  );
+
+  /** View-only measurement session. None of this enters document/history. */
+  const [measuring, setMeasuring] = useState(false);
+  const [measurementMode, setMeasurementMode] =
+    useState<MeasurementMode>('smart');
+  const [measurementDraft, setMeasurementDraft] =
+    useState<MeasurementTarget | null>(null);
+  /**
+   * Edges accumulated by Shift+Click for a running total. Owned here rather
+   * than read from `selectedEdges`, which is what let measuring rewrite the
+   * workspace's selection; the rules live in `measureSession.ts`.
+   */
+  const [measurementEdgeRun, setMeasurementEdgeRun] = useState<
+    readonly TopologySelection[]
+  >(EMPTY_MEASURE_SESSION.edgeRun);
+  const [measurements, setMeasurements] = useState<Measurement[]>([]);
+  const [activeMeasurementId, setActiveMeasurementId] = useState<string | null>(
+    null
+  );
+  const [measurementUnit, setMeasurementUnit] = useState<UnitSystem>('mm');
+  const [measurementPrecision, setMeasurementPrecision] = useState(2);
+  const [radialDisplay, setRadialDisplay] = useState<RadialDisplay>('diameter');
+  /**
+   * The project whose stored list has been answered, including the answer
+   * "none". Until this matches the open project, writes stay disabled: an
+   * empty initial render must never outrun a slow read and erase the record it
+   * was still loading.
+   */
+  const [measurementHydratedProjectId, setMeasurementHydratedProjectId] =
+    useState<string | null>(null);
+  const measurementDisplay = useMemo<MeasurementDisplayOptions>(
+    () => ({
+      unit: measurementUnit,
+      precision: measurementPrecision,
+      radialDisplay
+    }),
+    [measurementPrecision, measurementUnit, radialDisplay]
+  );
+
+  // A measurement session belongs to one open project, not the application.
+  //
+  // The list is cleared first and then restored from storage, so a project
+  // with no stored measurements lands empty rather than inheriting the last
+  // project's. The restore is deliberately not awaited before clearing: an
+  // in-flight read for the PREVIOUS project must not be able to land on this
+  // one, which the id check inside the effect prevents.
+  useEffect(() => {
+    setMeasurements([]);
+    setActiveMeasurementId(null);
+    clearMeasurementPicks();
+    setMeasurementHydratedProjectId(null);
+    if (!doc) {
+      return;
+    }
+    const projectId = doc.projectId;
+    setMeasurementUnit(doc.units);
+    setMeasurementPrecision(2);
+    setRadialDisplay('diameter');
+    let cancelled = false;
+    void loadProjectMeasurements(projectId)
+      .then((record) => {
+        if (cancelled) {
+          return;
+        }
+        if (record) {
+          setMeasurements(record.measurements);
+          setMeasurementUnit(record.display.unit);
+          setMeasurementPrecision(record.display.precision);
+          setRadialDisplay(record.display.radialDisplay);
+        }
+        setMeasurementHydratedProjectId(projectId);
+      })
+      .catch(() => {
+        // Leave writes disabled for this project. Besides unavailable storage,
+        // this includes a record from a newer build: writing the empty v1 list
+        // over fields this build refused to read would be the data loss the
+        // parser's forward-version guard exists to prevent.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [doc?.projectId]);
+
+  /**
+   * Writes the measurement list back, debounced.
+   *
+   * Coalesced rather than written per pick because a Shift+Click run rewrites
+   * the list on every click, and an IndexedDB put per click would serialise
+   * the whole list each time for a result that is superseded a moment later.
+   */
+  useEffect(() => {
+    if (!doc || measurementHydratedProjectId !== doc.projectId) {
+      return;
+    }
+    const projectId = doc.projectId;
+    const timeout = window.setTimeout(() => {
+      void saveProjectMeasurements(
+        buildMeasurementRecord(
+          projectId,
+          measurements,
+          measurementDisplay,
+          new Date().toISOString()
+        )
+      ).catch(() => {
+        // Same as the read: a device that cannot store them still measures.
+      });
+    }, 400);
+    return () => {
+      window.clearTimeout(timeout);
+    };
+  }, [
+    doc?.projectId,
+    measurementHydratedProjectId,
+    measurements,
+    measurementDisplay
+  ]);
+
+  /**
+   * The measurement library, loaded on first entry to View mode.
+   *
+   * It is roughly nine kilobytes of derivation, formatting and export that
+   * only View mode can reach, and importing it at the top of this file put all
+   * of it in the eager entry chunk — which the bundle budget guards precisely
+   * because it is what every visitor downloads before anything renders. Types
+   * are erased at build time, so `import type` above costs nothing; only the
+   * runtime import is deferred.
+   *
+   * Every consumer below therefore has to tolerate `null` for the frame or two
+   * between entering View mode and the chunk arriving. That is a real state
+   * rather than a formality: a fast picker can click before it lands, and the
+   * pick is dropped rather than half-handled.
+   *
+   * This is the interim shape. The measure seam replaces it with a session
+   * that owns this state outright instead of App holding it at arm's length.
+   */
+  const [measurementApi, setMeasurementApi] = useState<
+    typeof MeasurementModule | null
+  >(null);
+
+  useEffect(() => {
+    if (!viewMode || measurementApi) {
+      return;
+    }
+    let cancelled = false;
+    void import('./lib/measurements').then((module) => {
+      if (!cancelled) {
+        setMeasurementApi(module);
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [viewMode, measurementApi]);
+
+  useEffect(() => {
+    if (!doc || !exactGeometryReady || !measurementApi) {
+      return;
+    }
+    setMeasurements((current) =>
+      measurementApi.refreshMeasurements(current, viewerBodies, doc.version)
+    );
+  }, [doc?.version, exactGeometryReady, viewerBodies, measurementApi]);
+
+  function recordMeasurement(measurement: Measurement) {
+    // Checked before the state update rather than inside it, so the refusal can
+    // be reported. The list is capped rather than self-trimming: dropping the
+    // oldest row to make room is data loss nobody was told about.
+    if (!measurementApi) {
+      return;
+    }
+    if (!measurementApi.canAppendMeasurement(measurements, measurement)) {
+      setStatus(measurementApi.MEASUREMENT_LIMIT_MESSAGE);
+      return;
+    }
+    setMeasurements((current) =>
+      measurementApi.appendMeasurement(current, measurement)
+    );
+    setActiveMeasurementId(measurement.id);
+    setMeasurementDraft(null);
+    setStatus(`${measurement.label} measured.`);
+  }
+
+  /**
+   * What measuring this pick WOULD report, without recording anything.
+   *
+   * A tool that only answers after you commit makes you record a row to find
+   * out whether you picked the right thing, then delete it. The preview runs
+   * the SAME derivation the click will run rather than a cheaper estimate that
+   * could disagree with the number that lands.
+   *
+   * Null when there is nothing honest to say, which includes an ambiguous
+   * pick: a hover is not the place to explain ADR-011, and a silent absence
+   * beats a confident wrong number.
+   */
+  function previewMeasurement(
+    selection: TopologySelection,
+    point?: { x: number; y: number; z: number }
+  ): string | null {
+    if (!doc || !viewMode || !measuring || !measurementApi) {
+      return null;
+    }
+    const body = renderedRepresentations[selection.bodyId];
+    if (!body) {
+      return null;
+    }
+    if (measurementMode === 'smart') {
+      const measurement = measurementApi.createSmartMeasurement(
+        body,
+        selection,
+        point,
+        doc.version,
+        doc.units
+      );
+      return measurement
+        ? measurementApi.formatMeasurement(measurement, measurementDisplay)
+            .value
+        : null;
+    }
+    const target = measurementApi.measurementTargetFromSelection(
+      body,
+      selection,
+      point,
+      measurementMode
+    );
+    if (!target?.point) {
+      return null;
+    }
+    // The first of two picks has nothing to measure against yet, so it names
+    // the target rather than guessing at a distance.
+    if (!measurementDraft) {
+      return target.label;
+    }
+    const measurement =
+      measurementMode === 'distance'
+        ? measurementApi.createDistanceMeasurement(
+            measurementDraft,
+            target,
+            doc.version,
+            doc.units
+          )
+        : measurementApi.createAngleMeasurement(
+            measurementDraft,
+            target,
+            doc.version,
+            doc.units
+          );
+    return measurement
+      ? measurementApi.formatMeasurement(measurement, measurementDisplay).value
+      : null;
+  }
+
+  /**
+   * Abandons whatever pick was in progress: the two-pick draft and the running
+   * edge total both. Not called after a measurement is recorded — a run has to
+   * survive that, or a fourth Shift+Click could not extend a total of three.
+   */
+  function clearMeasurementPicks() {
+    setMeasurementDraft(null);
+    setMeasurementEdgeRun(EMPTY_MEASURE_SESSION.edgeRun);
+  }
+
+  /**
+   * Measures a pick, and reports whether it consumed it.
+   *
+   * The return value is the point. This used to be called for its side effects
+   * and fall straight through into sketch entry, direct manipulation, and the
+   * selection update — so measuring an edge in View mode silently replaced
+   * whatever a modelling session had selected, and the two features quietly
+   * shared one piece of state.
+   */
+  function handleMeasurementPick(
+    selection: TopologySelection,
+    additive: boolean,
+    detail?: PickDetail
+  ): boolean {
+    if (!doc || !viewMode || !measuring) {
+      return false;
+    }
+    // One guard for the whole handler. Dropping a pick that lands before the
+    // measurement chunk arrives is better than servicing half of it, and the
+    // window is a frame or two on first entry to View mode only. It still
+    // counts as consumed: falling through to selection would be the very
+    // coupling this seam removes.
+    if (!measurementApi) {
+      setStatus('Measure is still loading. Try that pick again.');
+      return true;
+    }
+    const body = renderedRepresentations[selection.bodyId];
+    if (!body) {
+      setStatus(
+        'The selected body has no current exact projection to measure.'
+      );
+      return true;
+    }
+    const point = detail?.point;
+    if (measurementMode === 'smart') {
+      if (selection.kind === 'edge') {
+        // The run lives in the measure session rather than in `selectedEdges`,
+        // which is what let measuring rewrite the workspace's selection.
+        const run = nextEdgeRun(measurementEdgeRun, selection, additive);
+        setMeasurementEdgeRun(run);
+        if (edgeRunIsTotalable(run)) {
+          const total = measurementApi.createEdgeTotalMeasurement(
+            viewerBodies,
+            run,
+            doc.version,
+            doc.units
+          );
+          if (total) {
+            recordMeasurement(total);
+            return true;
+          }
+        }
+      }
+      const measurement = measurementApi.createSmartMeasurement(
+        body,
+        selection,
+        point,
+        doc.version,
+        doc.units
+      );
+      if (measurement) {
+        recordMeasurement(measurement);
+      } else {
+        setStatus(
+          measurementApi.measurementSelectionFailure(body, selection) ??
+            'That selection does not expose a trustworthy measurement.'
+        );
+      }
+      return true;
+    }
+    const target = measurementApi.measurementTargetFromSelection(
+      body,
+      selection,
+      point,
+      measurementMode
+    );
+    if (!target?.point) {
+      setStatus(
+        measurementApi.measurementSelectionFailure(body, selection) ??
+          (measurementMode === 'angle'
+            ? 'Angle needs a straight edge, circular axis, or measured face direction.'
+            : 'That selection does not expose a trustworthy measurement point.')
+      );
+      return true;
+    }
+    if (!measurementDraft) {
+      setMeasurementDraft(target);
+      setStatus(`${target.label} selected · pick the second target.`);
+      return true;
+    }
+    const measurement =
+      measurementMode === 'distance'
+        ? measurementApi.createDistanceMeasurement(
+            measurementDraft,
+            target,
+            doc.version,
+            doc.units
+          )
+        : measurementApi.createAngleMeasurement(
+            measurementDraft,
+            target,
+            doc.version,
+            doc.units
+          );
+    if (measurement) {
+      recordMeasurement(measurement);
+    } else {
+      setStatus(
+        measurementMode === 'angle'
+          ? 'Those targets do not provide two stable directions; the first target is still selected.'
+          : 'Those targets could not produce a stable distance; the first target is still selected.'
+      );
+    }
+    return true;
+  }
+
+  const measurementAnnotations = useMemo<
+    MeasurementViewportAnnotation[]
+  >(() => {
+    if (!measurementApi) {
+      return [];
+    }
+    const pinned = measurements.flatMap((measurement) => {
+      const annotation = measurementApi.measurementToViewportAnnotation(
+        measurement,
+        measurementDisplay,
+        measurement.id === activeMeasurementId
+      );
+      return annotation ? [annotation] : [];
+    });
+    return measurementDraft?.point
+      ? [
+          ...pinned,
+          {
+            id: 'measurement-draft',
+            label: `A · ${measurementDraft.semantic.replaceAll('-', ' ')}`,
+            selected: true,
+            status: 'current' as const,
+            // The first of two picks marks a point; there is no second point
+            // to span to until it lands.
+            graphic: 'anchor' as const,
+            anchor: measurementDraft.point,
+            segments: []
+          }
+        ]
+      : pinned;
+  }, [
+    activeMeasurementId,
+    measurementDisplay,
+    measurementDraft,
+    measurements,
+    measurementApi
+  ]);
+  const formattedMeasurements = useMemo(
+    () =>
+      measurementApi
+        ? Object.fromEntries(
+            measurements.map((measurement) => [
+              measurement.id,
+              measurementApi.formatMeasurement(measurement, measurementDisplay)
+            ])
+          )
+        : {},
+    [measurementDisplay, measurements, measurementApi]
+  );
+
+  async function copyMeasurements(measurement?: Measurement) {
+    const selected = measurement ? [measurement] : measurements;
+    if (selected.length === 0 || !measurementApi) {
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(
+        measurementApi.measurementsToText(selected, measurementDisplay)
+      );
+      setStatus(
+        `Copied ${selected.length} measurement${selected.length === 1 ? '' : 's'}.`
+      );
+    } catch {
+      setStatus('Could not reach the clipboard. Export CSV instead.');
+    }
+  }
+
+  function exportMeasurements() {
+    if (!doc || measurements.length === 0 || !measurementApi) {
+      return;
+    }
+    const fileName = `${exportFileStem(doc.name)}.measurements.csv`;
+    downloadText(
+      fileName,
+      `${measurementApi.measurementsToCsv(measurements, measurementDisplay)}\n`,
+      'text/csv'
+    );
+    setStatus(`Exported ${measurements.length} measurements to ${fileName}.`);
+  }
 
   // Sketch profiles lifted onto their 3D planes for the viewport overlay.
   const sketchOverlays = useMemo<SketchOverlay[]>(() => {
@@ -1023,6 +3336,11 @@ export function App() {
       const data = objectNode.data;
       if (data.objectKind === 'line' || data.objectKind === 'arc') {
         // Open curves have no fill; region overlays render them separately.
+        return [];
+      }
+      if (data.objectKind === 'text') {
+        // Text has no single closed profile — it is many regions with holes,
+        // and the region overlay renders it.
         return [];
       }
       const centerX = evalParamValue(data.centerX, scope);
@@ -1056,10 +3374,17 @@ export function App() {
       } catch {
         return [];
       }
-      const basis = frameForPlaneRef(
-        sketch.planeRef,
-        (value) => evalParamValue(value, scope) ?? 0
-      );
+      let basis: PlaneBasis;
+      try {
+        basis = resolvedSketchPlaneBasis(
+          doc,
+          sketch.planeRef,
+          (value) => evalParamValue(value, scope) ?? 0,
+          sketch.name
+        );
+      } catch {
+        return [];
+      }
       const points = profile.map((point) => ({
         x: basis.origin.x + basis.u.x * point.x + basis.v.x * point.y,
         y: basis.origin.y + basis.u.y * point.x + basis.v.y * point.y,
@@ -1091,8 +3416,10 @@ export function App() {
   );
 
   const availability: ToolAvailability = {
+    editDisabledReason,
     sketchCount: sketchOptions.length,
     liveBodyCount: viewerBodies.length,
+    exactGeometryReady,
     hasEdgeSelected: selectedEdges.length > 0
   };
 
@@ -1136,7 +3463,28 @@ export function App() {
     setSelectedSketchProfileId(null);
     setSelectedProfiles([]);
     setExtrudePreview(null);
+    setMoveCommitHold(null);
     setTool(null);
+  }
+
+  /**
+   * Picks up a project this tab had open read-only, once the tab that owned it
+   * has gone. A read-only tab has no edits of its own to weigh, so whatever is
+   * stored is unambiguously the version to continue from.
+   */
+  async function adoptStoredProject(projectId: string) {
+    const stored = await loadLocalProject(projectId).catch(() => null);
+    const current = managerRef.current?.document;
+    if (
+      !stored ||
+      !current ||
+      stored.projectId !== current.projectId ||
+      stored.version === current.version
+    ) {
+      return;
+    }
+    hydrateDocument(stored, { restoreView: false, rememberProject: false });
+    setStatus('Editing this project here now.');
   }
 
   async function flushPendingLocalSave() {
@@ -1146,29 +3494,110 @@ export function App() {
     }
     const pending = pendingLocalSaveRef.current;
     pendingLocalSaveRef.current = null;
+    // The debounce can come due before the claim has been answered. Writing on
+    // the strength of not having heard "no" yet is the overwrite this is here
+    // to prevent, so wait for the answer rather than assume it.
+    await projectOwnershipSettledRef.current;
+    if (projectOpenElsewhereRef.current) {
+      // Another tab owns this project's storage. Its copy is the one being
+      // kept up to date; writing here would land on top of it.
+      setSaveState('local');
+      return;
+    }
     if (!pending) {
       return;
     }
     try {
       await saveLocalProject(pending);
-      setSaveState(cloudAvailable ? 'saved' : 'offline');
+      // The device write is the save; the account copy follows on its own
+      // schedule. Handing the document over here rather than from the edit
+      // effect means nothing is ever queued for the account that this device
+      // has not already stored.
+      const controller = cloudProjectAutosaveRef.current;
+      if (!controller) {
+        setSaveState(cloudAvailable ? 'synced' : 'local');
+      } else if (controller.holdsDocument(pending)) {
+        // An adoption, not an edit: the account already has this exact
+        // version, so there is nothing to mirror back.
+        setSaveState('synced');
+      } else {
+        controller.schedule(pending);
+      }
     } catch {
+      // The document goes back in the queue rather than on the floor. It was
+      // taken out of the ref above so a write that LANDS is not repeated, but a
+      // write that did not land leaves this closure holding the only copy of
+      // those edits — and simply returning loses them outright.
+      const repark = reparkFailedAutosave({
+        pending,
+        queued: pendingLocalSaveRef.current
+      });
+      if (repark) {
+        pendingLocalSaveRef.current = repark;
+      }
       setSaveState('offline');
-      setStatus('Local autosave failed. Export your model before closing.');
+      setStatus(LOCAL_AUTOSAVE_FAILED_STATUS);
     }
   }
+
+  flushPendingLocalSaveRef.current = flushPendingLocalSave;
 
   function handleViewportChange(camera: ViewportCameraState) {
     reportCameraPose(doc?.projectId ?? null, camera);
   }
 
-  function executeCommand(command: AnyCommand): boolean {
-    if (!managerRef.current) {
+  /**
+   * Backfills kernel-proven v5 references onto legacy hash-only fillet and
+   * chamfer features. A closed-edge hash embeds its length, so the only
+   * moment a legacy feature can be upgraded is while its stored hashes still
+   * resolve — right after the clean rebuild that carried these repairs.
+   * Applied as a normalization: it persists and syncs like an edit without
+   * stealing an undo step from the user.
+   */
+  function applyEdgeReferenceRepairs(
+    repairs: ProjectDocument['derived']['referenceRepairs']
+  ): void {
+    const manager = managerRef.current;
+    if (!manager || !repairs?.length || editDisabledReason) {
+      return;
+    }
+    try {
+      for (const repair of repairs) {
+        manager.normalize(
+          commandFactories.updateFeature(
+            {
+              featureId: repair.featureId,
+              data: { edgeReferences: repair.edgeReferences }
+            },
+            'Repair edge references'
+          )
+        );
+      }
+      setDoc(manager.document);
+    } catch {
+      // A failed repair leaves the document exactly as it was; the legacy
+      // hash resolver keeps working at the current geometry.
+    }
+  }
+
+  function executeCommand(
+    command: AnyCommand,
+    derived?: ProjectDocument['derived']
+  ): boolean {
+    if (!managerRef.current || !ensureCanEdit('run this command')) {
       return false;
     }
     try {
       setPreviewDoc(null);
-      setDoc(managerRef.current.execute(command));
+      let next = managerRef.current.execute(command);
+      if (derived) {
+        // Validation already rebuilt this exact result; attaching it now
+        // renders the new geometry in the same batch instead of flashing the
+        // stale meshes until the broadcast rebuild echoes back.
+        next = managerRef.current.commitDerivedState(derived);
+        setMoveCommitHold(null);
+      }
+      setDoc(next);
       setStatus(command.label);
       return true;
     } catch (error) {
@@ -1177,13 +3606,26 @@ export function App() {
     }
   }
 
-  function executeTransaction(label: string, commands: AnyCommand[]): boolean {
-    if (!managerRef.current || commands.length === 0) {
+  function executeTransaction(
+    label: string,
+    commands: AnyCommand[],
+    derived?: ProjectDocument['derived']
+  ): boolean {
+    if (
+      !managerRef.current ||
+      commands.length === 0 ||
+      !ensureCanEdit('apply this edit')
+    ) {
       return false;
     }
     try {
       setPreviewDoc(null);
-      setDoc(managerRef.current.runTransaction(label, commands));
+      let next = managerRef.current.runTransaction(label, commands);
+      if (derived) {
+        next = managerRef.current.commitDerivedState(derived);
+        setMoveCommitHold(null);
+      }
+      setDoc(next);
       setStatus(label);
       return true;
     } catch (error) {
@@ -1192,18 +3634,24 @@ export function App() {
     }
   }
 
-  function createFeature(command: AnyCommand): void {
+  function finishFeatureCreation(): void {
+    // Back to an idle viewport so sequential adds stay one key away; the
+    // new feature is selectable from the history or the viewport.
+    setTool(null);
+    setSelectedFeatureNodeId(null);
+    setSelectedTopology(null);
+    setSelectedEdges([]);
+    setSelectedBodyIds([]);
+    setSelectedSketchProfileId(null);
+    setExtrudePreview(null);
+  }
+
+  function createFeature(command: AnyCommand): boolean {
     if (executeCommand(command)) {
-      // Back to an idle viewport so sequential adds stay one key away; the
-      // new feature is selectable from the history or the viewport.
-      setTool(null);
-      setSelectedFeatureNodeId(null);
-      setSelectedTopology(null);
-      setSelectedEdges([]);
-      setSelectedBodyIds([]);
-      setSelectedSketchProfileId(null);
-      setExtrudePreview(null);
+      finishFeatureCreation();
+      return true;
     }
+    return false;
   }
 
   const extrudeSketchReturnRef = useRef<{
@@ -1214,6 +3662,33 @@ export function App() {
     profiles: RegionPickData[];
     sketchId: SketchId | null;
   } | null>(null);
+
+  /**
+   * True for a sketch entity whose profiles must be referenced as a whole.
+   *
+   * Text is the case: the region count itself changes when the string does,
+   * so a geometry-identity reference to one glyph breaks on exactly the edit
+   * the feature is for. See `lib/profileReferences.ts`.
+   */
+  const entityWideProfileSource = useCallback(
+    (entityId: string): boolean => {
+      const node = doc?.nodes[entityId as EntityId];
+      return (
+        node?.kind === 'sketch-object' && isEntityWideProfileSource(node.data)
+      );
+    },
+    [doc]
+  );
+
+  function updateExtrudeDistance(distance: number) {
+    if (!Number.isFinite(distance)) {
+      return;
+    }
+    setResolvedExtrudePreview(null);
+    setExtrudePreview((current) =>
+      current ? { ...current, distance } : current
+    );
+  }
 
   function startExtrude(sketchId: SketchId) {
     if (tool !== 'extrude') {
@@ -1259,6 +3734,7 @@ export function App() {
     setSelectedBodyIds([]);
     setSelectedSketchProfileId(sketchId);
     setSelectedProfiles(initialProfiles);
+    setResolvedExtrudePreview(null);
     setExtrudePreview(
       initialProfiles.length > 0 ? { sketchId, distance: 24 } : null
     );
@@ -1275,7 +3751,7 @@ export function App() {
     requestView('iso');
     setStatus(
       initialProfiles.length > 0
-        ? `${initialProfiles.length} profile${initialProfiles.length === 1 ? '' : 's'} selected · exact preview ready.`
+        ? `${initialProfiles.length} profile${initialProfiles.length === 1 ? '' : 's'} selected · exact preview updating.`
         : `Select one or more closed profiles · ${available.length} valid profiles available.`
     );
   }
@@ -1283,30 +3759,44 @@ export function App() {
   async function confirmExtrude() {
     if (
       !extrudePreview ||
+      !resolvedExtrudePreview ||
       selectedProfiles.length === 0 ||
       Math.abs(extrudePreview.distance) < 0.1
     ) {
-      setStatus('Drag the extrusion arrow away from the sketch plane first.');
+      setStatus(
+        resolvedExtrudePreview
+          ? 'Drag the extrusion arrow away from the sketch plane first.'
+          : 'Wait for exact overlap inference to finish.'
+      );
       return;
     }
+    const manager = managerRef.current;
+    if (
+      !manager ||
+      manager.document.version !== resolvedExtrudePreview.baseVersion
+    ) {
+      setResolvedExtrudePreview(null);
+      profileExtrudePreview.request(extrudePreview.distance);
+      setStatus(
+        'The document changed; refreshing exact extrusion inference before applying.'
+      );
+      return;
+    }
+    const resolvedInput = resolvedExtrudePreview.command.payload;
     const command = commandFactories.extrudeSketch({
+      ...resolvedInput,
       name: `Extrude ${features.filter((feature) => feature.featureKind === 'extrude').length + 1}`,
-      sketchId: extrudePreview.sketchId as SketchId,
-      distance: extrudePreview.distance,
-      profiles: selectedProfiles.map((profile) => ({
-        profileId: profile.profileId,
-        regionFingerprint: profile.regionFingerprint,
-        samplePoint: profile.samplePoint,
-        sourceArea: profile.area,
-        sourceEntityIds: profile.sourceEntityIds
-      }))
+      profiles: profileReferencesForSelection(
+        selectedProfiles,
+        entityWideProfileSource
+      )
     });
     const createdBodyId = command.payload.ids!.bodyId;
     profileExtrudePreview.clear();
     const created = await executeValidatedDirectEdit(
       command,
       createdBodyId,
-      `Created extrusion ${extrudePreview.distance > 0 ? 'above' : 'below'} the sketch plane.`,
+      `Created ${resolvedExtrudePreview.inference.operation} extrusion ${extrudePreview.distance > 0 ? 'above' : 'below'} the sketch plane.`,
       extrudePreview.distance
     );
     if (!created) {
@@ -1317,6 +3807,7 @@ export function App() {
       -1
     );
     setExtrudePreview(null);
+    setResolvedExtrudePreview(null);
     setPreviewDoc(null);
     setSelectedProfiles([]);
     setSelectedSketchProfileId(null);
@@ -1328,12 +3819,59 @@ export function App() {
     setStatus(`Created ${createdFeature?.name ?? 'extrusion'}.`);
   }
 
+  async function createInferredExtrude(input: ExtrudeInput) {
+    const manager = managerRef.current;
+    if (!manager) {
+      return;
+    }
+    const base = manager.document;
+    setBusy(true);
+    setStatus('Inferring the extrusion operation with the exact kernel…');
+    let resolved: ResolvedExtrude;
+    try {
+      resolved = await resolveExtrudeOperation({
+        base,
+        input,
+        derive: (document) => geometry.syncOnce(document)
+      });
+    } catch (error) {
+      setStatus(errorMessage(error, 'Extrusion inference failed.'));
+      setBusy(false);
+      return;
+    }
+    setBusy(false);
+    if (
+      managerRef.current !== manager ||
+      manager.document.version !== base.version
+    ) {
+      setStatus('The document changed while extrusion inference was running.');
+      return;
+    }
+    const command = commandFactories.extrudeSketch({
+      ...resolved.command.payload,
+      name: input.name
+    });
+    const bodyId = command.payload.ids?.bodyId;
+    if (!bodyId) {
+      setStatus('Extrude could not reserve a result body.');
+      return;
+    }
+    await executeValidatedDirectEdit(
+      command,
+      bodyId,
+      `Created ${resolved.inference.operation} extrusion.`,
+      typeof input.distance === 'number' ? input.distance : 0,
+      finishFeatureCreation
+    );
+  }
+
   function launchTool(nextTool: ToolId) {
     const reason = toolDisabledReason(nextTool, availability);
     if (reason) {
       setStatus(`${TOOL_META[nextTool].label}: ${reason}.`);
       return;
     }
+    setFeatureFormError(null);
     // A toolbar command owns the next gesture. Preserve the body selection
     // that pre-fills Move/boolean forms, but disarm any selection-first face or
     // edge handle so two manipulators can never claim the same pointer.
@@ -1378,12 +3916,38 @@ export function App() {
       return;
     }
     if (nextTool === 'transform') {
-      // Prefer the gizmo flow when a target body is unambiguous; the classic
-      // form remains for multi-body documents with nothing selected.
+      // A selected sketch takes the gizmo too: translation-only, committed as
+      // a sketch translation rather than a Move feature, so every downstream
+      // extrude rebuilds in place.
+      if (selectedSketch) {
+        setExtrudePreview(null);
+        setMovePreview({
+          bodyId: selectedSketch.sketchId,
+          target: 'sketch',
+          translation: { x: 0, y: 0, z: 0 },
+          rotationDeg: { x: 0, y: 0, z: 0 }
+        });
+        setMoveSnap(null);
+        setTool('transform');
+        setStatus(
+          'Move sketch: drag the arrows — centers snap to faces of other bodies, Shift is free.'
+        );
+        return;
+      }
+      // WF-07 (resolved): Move used to be two UIs for one command, and which
+      // one you got was decided by document state rather than by what you
+      // asked for — the gizmo had a live preview, the form had a Name field
+      // and a body picker, and they committed through differently labelled
+      // buttons. The gizmo now carries both, so it is the only Move UI. With
+      // nothing selected in a multi-body document it opens on the first body
+      // and the picker changes it, which is what the form's picker was for.
+      // `.at(-1)`, not `[0]`: the retired form defaulted to the last live body
+      // — the one you most likely just made — and changing which body an
+      // unselected Move lands on would silently rewrite existing flows.
       const targetBodyId =
-        selectedBodyIds.at(-1) ??
-        (viewerBodies.length === 1 ? viewerBodies[0]!.bodyId : null);
+        selectedBodyIds.at(-1) ?? viewerBodies.at(-1)?.bodyId ?? null;
       if (targetBodyId) {
+        setMoveName('Move');
         setExtrudePreview(null);
         setSelectedBodyIds([targetBodyId]);
         setMovePreview({
@@ -1399,12 +3963,25 @@ export function App() {
         return;
       }
     }
+    if (
+      nextTool === 'mirror' ||
+      nextTool === 'shell' ||
+      nextTool === 'solid-offset'
+    ) {
+      setModelingTargetBodyId(
+        selectedTopology?.bodyId ??
+          selectedBodyIds.at(-1) ??
+          viewerBodies[0]?.bodyId ??
+          null
+      );
+    }
     // Selection is kept on purpose: booleans/move/fillet pre-fill from it.
     setExtrudePreview(null);
     setTool(nextTool);
   }
 
   function cancelPanel() {
+    setFeatureFormError(null);
     const sketchReturn =
       tool === 'extrude' || extrudePreview
         ? extrudeSketchReturnRef.current
@@ -1434,9 +4011,88 @@ export function App() {
     }
   }
 
+  /**
+   * Switches workspaces. Leaving Build tears down whatever gesture was in
+   * flight first: a sketch or an extrude preview whose panel is about to be
+   * unmounted would otherwise keep owning the pointer with nothing on screen
+   * to cancel it from.
+   */
+  function handleWorkspaceMode(mode: WorkspaceMode) {
+    if (mode === 'view') {
+      cancelDirectManipulationRef.current?.();
+      cylinderRadiusPreview.clear();
+      cylinderRadiusInspectorSetterRef.current?.(null);
+      edgePreview.clear();
+      setKeypad(null);
+      dispatchInteraction({ type: 'clear' });
+      cancelPanel();
+      setStatus('View mode · the model is read-only here.');
+    } else {
+      // The tape survives the trip — leaving to make an edit and coming back
+      // should not cost the figures you just took — but recording stops.
+      setMeasuring(false);
+      setStatus('Build mode · modeling tools are back.');
+    }
+    setWorkspaceMode(mode);
+  }
+
+  /**
+   * Commits a sketch drag: the world translation projects onto the sketch
+   * plane's axes, becoming an in-plane object translation plus — for a
+   * canonical-plane sketch — a plane-offset change. A face-attached sketch
+   * is bound to its surface, so any normal component of the drag is dropped
+   * and said out loud rather than silently discarded.
+   */
+  function confirmSketchMove(preview: MovePreview) {
+    if (!doc) {
+      return;
+    }
+    const view = sketchViews.find(
+      (candidate) => candidate.sketchId === preview.bodyId
+    );
+    const sketch = findSketch(doc, preview.bodyId as SketchId);
+    if (!view || !sketch) {
+      setMovePreview(null);
+      return;
+    }
+    const basis = view.basis;
+    const t = preview.translation;
+    const round = (value: number) => Math.round(value * 1000) / 1000;
+    const du = round(t.x * basis.u.x + t.y * basis.u.y + t.z * basis.u.z);
+    const dv = round(t.x * basis.v.x + t.y * basis.v.y + t.z * basis.v.z);
+    const rawDn =
+      t.x * basis.normal.x + t.y * basis.normal.y + t.z * basis.normal.z;
+    const canonical = sketch.planeRef.type === 'canonical';
+    const dn = canonical ? round(rawDn) : 0;
+    setMovePreview(null);
+    if (du === 0 && dv === 0 && dn === 0) {
+      setTool(null);
+      return;
+    }
+    if (
+      executeCommand(
+        commandFactories.translateSketch(
+          { sketchId: preview.bodyId as SketchId, du, dv, dn },
+          `Move ${sketch.name}`
+        )
+      )
+    ) {
+      setTool(null);
+      setStatus(
+        !canonical && Math.abs(rawDn) > 1e-6
+          ? `Moved ${sketch.name} in its plane · the out-of-plane part was dropped (a face sketch stays on its face).`
+          : `Moved ${sketch.name}.`
+      );
+    }
+  }
+
   function confirmMove() {
     const preview = movePreview;
     if (!preview || !doc) {
+      return;
+    }
+    if (preview.target === 'sketch') {
+      confirmSketchMove(preview);
       return;
     }
     const body = representations[preview.bodyId as BodyId];
@@ -1457,9 +4113,11 @@ export function App() {
     );
     const round = (value: number) => Math.round(value * 1000) / 1000;
     setMovePreview(null);
-    createFeature(
+    const created = createFeature(
       commandFactories.transformBody({
-        name: 'Move',
+        // Whatever the gizmo's Name field holds, falling back to the default
+        // rather than committing a feature with a blank name.
+        name: moveName.trim() || 'Move',
         targetBodyId: preview.bodyId as BodyId,
         translation: {
           x: round(translation.x),
@@ -1473,6 +4131,11 @@ export function App() {
         }
       })
     );
+    if (created) {
+      // Hold the gizmo pose on screen until the exact rebuild replaces the
+      // meshes; cleared by onDerived in the same batch as the new geometry.
+      setMoveCommitHold(preview);
+    }
   }
 
   function clearSelection() {
@@ -1494,8 +4157,25 @@ export function App() {
     }
   }
 
-  function requestView(view: StandardView) {
+  function requestView(view: ViewTarget) {
     setViewRequest({ view, nonce: ++viewNonceRef.current });
+  }
+
+  function requestNormalToSelectedFace() {
+    if (!normalToFaceTarget) {
+      setStatus('Normal view requires an exact planar face selection.');
+      return;
+    }
+    setNormalToFaceRequest({
+      bodyId: normalToFaceTarget.bodyId,
+      topologyId: normalToFaceTarget.topologyId,
+      nonce: ++viewNonceRef.current
+    });
+    setStatus(`${normalToFaceTarget.label}: viewing normal to face.`);
+  }
+
+  function requestRotate(direction: 'cw' | 'ccw') {
+    setRotateRequest({ direction, nonce: ++viewNonceRef.current });
   }
 
   function cycleDisplayMode() {
@@ -1527,58 +4207,261 @@ export function App() {
     });
   }
 
+  function previewBodyAppearance(preview: BodyAppearancePreview | null) {
+    setBodyAppearancePreview(preview);
+  }
+
+  function commitBodyAppearance(
+    bodyId: BodyId,
+    appearance: { color?: string; opacity?: number | null }
+  ) {
+    if (!doc) {
+      return;
+    }
+    const bodyNode = findBodyNode(doc, bodyId);
+    if (!bodyNode) {
+      return;
+    }
+    const metadata: Record<string, string | number | null> = {};
+    if (appearance.color !== undefined) {
+      metadata[BODY_COLOR_METADATA_KEY] = appearance.color;
+    }
+    if (appearance.opacity !== undefined) {
+      // null deletes the key, returning the body to fully opaque.
+      metadata[BODY_OPACITY_METADATA_KEY] = appearance.opacity;
+    }
+    if (Object.keys(metadata).length === 0) {
+      return;
+    }
+    // The drag-phase preview has already shown this value; clearing it before
+    // the commit lets the rebuild arrive as the new committed look.
+    setBodyAppearancePreview(null);
+    executeCommand(
+      commandFactories.setNodeMetadata(
+        { nodeId: bodyNode.id, metadata },
+        `Set ${bodyNode.name} appearance`
+      )
+    );
+  }
+
   function showAllBodies() {
     setHiddenBodyIds(new Set());
     setStatus('All bodies visible.');
   }
 
-  function handleAppSettingsChange(next: AppSettings) {
-    syncedRevisionRef.current = null;
-    setAppSettings(next);
-    setSettingsMessage(
-      accountSettings?.synced
-        ? 'Saved on this device · not yet saved to your account.'
-        : 'Saved on this device.'
+  /**
+   * Hides every part except one. Running it again on the part already alone on
+   * screen brings the rest back, so the same control both enters and leaves the
+   * isolated view rather than stranding someone with everything hidden.
+   */
+  function isolateBody(bodyId: string) {
+    const others = partBodies.filter((body) => body.bodyId !== bodyId);
+    const alreadyAlone = others.every((body) => hiddenBodyIds.has(body.bodyId));
+    if (alreadyAlone) {
+      showAllBodies();
+      return;
+    }
+    setHiddenBodyIds(new Set(others.map((body) => body.bodyId)));
+    const name = partBodies.find((body) => body.bodyId === bodyId)?.name;
+    setStatus(
+      `Showing ${name ?? 'one body'} only · ${others.length} hidden. Isolate again to show all.`
     );
   }
 
-  function focusAssistantPrompt() {
-    setAssistantFocusNonce((nonce) => nonce + 1);
+  function handleAppSettingsChange(next: AppSettings) {
+    appSettingsRef.current = next;
+    setAppSettings(next);
+    const controller = cloudSettingsAutosaveRef.current;
+    if (cloudFunctionsEnabledRef.current && controller) {
+      controller.schedule(next);
+    } else {
+      syncedRevisionRef.current = null;
+      saveLocalAppSettings(next, null);
+    }
+    if (
+      cloudFunctionsEnabledRef.current &&
+      sessionRef.current &&
+      accountSettingsRef.current
+    ) {
+      setSettingsMessage('Saved on this device · saving to cloud profile…');
+    } else {
+      setSettingsMessage('Saved on this device.');
+    }
   }
 
-  function openSettings() {
-    setSettingsOpen(true);
-    setPaletteOpen(false);
-    setSettingsMessage('Changes save on this device immediately.');
+  function handleCloudFunctionsEnabledChange(next: boolean) {
+    if (next === cloudFunctionsEnabledRef.current) {
+      return;
+    }
+    // Flip the transport gate before React can render another cloud consumer.
+    // This also aborts active browser API and assistant fetches when going off.
+    setCloudFunctionsEnabled(next);
+    cloudFunctionsEnabledRef.current = next;
+    setCloudFunctionsEnabledState(next);
+
+    if (next) {
+      setSettingsMessage('Cloud features enabled · reconnecting…');
+      setStatus('Cloud features enabled · reconnecting…');
+      void refreshCloudConnection();
+      return;
+    }
+
+    cloudProjectAutosaveRef.current?.configure({ enabled: false });
+    cloudProjectAutosaveRef.current?.closeProject();
+    cloudSettingsAutosaveRef.current?.endSession();
+    cloudSettingsSessionUserRef.current = null;
+    remoteVersionsRef.current.clear();
+    sessionRef.current = null;
+    accountSettingsRef.current = null;
+    setSession(null);
+    setAccountSettings(null);
+    setAuthConfig(null);
+    setAuthConfigStatus('unavailable');
+    setDeploymentHealth(null);
+    setCollaborationRollout(DISABLED_COLLABORATION_ROLLOUT);
+    setCloudAvailable(false);
+    setCloudProjectIds(new Set());
+    setAccountProjectListReached(false);
+    setArtifacts([]);
+    setSharingOpen(false);
+    setAccountConflict(null);
+    setSyncRun(null);
+    setSaveState('local');
+    setSettingsMessage(
+      'Offline mode active · cloud functions are disabled on this device.'
+    );
+    setStatus('Offline mode · work is saved on this device.');
+    void loadProjectSummaries(false)
+      .then((listed) => {
+        if (!cloudFunctionsEnabledRef.current) {
+          setProjects(listed.projects);
+        }
+      })
+      .catch(() => undefined);
+  }
+
+  /**
+   * Keeps a resized panel. It goes down the same road as every other
+   * preference: the device copy is written immediately, and a signed-in session
+   * syncs it to the account profile, so the width follows the person rather
+   * than the browser they set it in.
+   */
+  function commitPanelWidth(panel: 'sidebar' | 'assistant', width: number) {
+    const current = appSettingsRef.current;
+    const saved = savedPanelWidths(current);
+    if (saved[panel] === width) {
+      return;
+    }
+    handleAppSettingsChange({
+      ...current,
+      layout: {
+        sidebarWidth: panel === 'sidebar' ? width : saved.sidebar,
+        assistantWidth: panel === 'assistant' ? width : saved.assistant
+      }
+    });
+  }
+
+  function endCloudSettingsSession() {
+    if (cloudSettingsSessionUserRef.current !== null) {
+      cloudSettingsAutosaveRef.current?.endSession();
+      cloudSettingsSessionUserRef.current = null;
+    }
+    // The next session on this device may be a different account; it must not
+    // reconcile against this account's sync baselines.
+    void clearAllLastSyncedVersions().catch(() => {
+      setStatus(
+        'Could not clear this account’s sync baselines. Check which copy you keep if this project is opened again on this device.'
+      );
+    });
+    sessionRef.current = null;
+    accountSettingsRef.current = null;
+    setSession(null);
+    setAccountSettings(null);
+    setCollaborationRollout(DISABLED_COLLABORATION_ROLLOUT);
+  }
+
+  async function refreshCloudConnection() {
+    if (!cloudFunctionsEnabledRef.current) {
+      return;
+    }
     setAuthConfigStatus('loading');
-    void Promise.all([
+    void api
+      .health()
+      .then(setDeploymentHealth)
+      .catch(() => setDeploymentHealth(null));
+    const [nextAuth, activeSession] = await Promise.all([
       api
         .authConfig()
         .then((config) => ({ config, status: 'ready' as const }))
         .catch(() => ({ config: null, status: 'unavailable' as const })),
       api.session().catch(() => null)
-    ]).then(async ([nextAuth, activeSession]) => {
-      setAuthConfig(nextAuth.config);
-      setAuthConfigStatus(nextAuth.status);
-      setSession(activeSession);
-      if (!activeSession) {
-        setAccountSettings(null);
-        setSettingsMessage(
-          nextAuth.status === 'ready'
-            ? 'Device settings active · sign in for cloud sync.'
-            : 'Beta sign-in unavailable · device settings remain active.'
-        );
+    ]);
+    if (!cloudFunctionsEnabledRef.current) {
+      return;
+    }
+    setAuthConfig(nextAuth.config);
+    setAuthConfigStatus(nextAuth.status);
+    sessionRef.current = activeSession;
+    setSession(activeSession);
+    if (!activeSession) {
+      endCloudSettingsSession();
+      setSettingsMessage(
+        nextAuth.status === 'ready'
+          ? 'Device settings active · sign in for cloud sync.'
+          : 'Beta sign-in unavailable · device settings remain active.'
+      );
+      return;
+    }
+    setCollaborationRollout(DISABLED_COLLABORATION_ROLLOUT);
+    try {
+      const [remoteSettings, collaborationCapabilities] = await Promise.all([
+        api.getSettings(),
+        api
+          .collaborationCapabilities()
+          .catch(() => DISABLED_COLLABORATION_ROLLOUT)
+      ]);
+      if (!cloudFunctionsEnabledRef.current) {
         return;
       }
-      try {
-        setAccountSettings(await api.getSettings());
-        setSettingsMessage('Cloud profile connected.');
-      } catch {
+      accountSettingsRef.current = remoteSettings;
+      setAccountSettings(remoteSettings);
+      setCollaborationRollout(collaborationCapabilities);
+      const listed = await loadProjectSummaries(true);
+      if (!cloudFunctionsEnabledRef.current) {
+        return;
+      }
+      setProjects(listed.projects);
+      setCloudProjectIds(listed.cloudProjectIds);
+      setAccountProjectListReached(listed.remoteReached);
+      setSettingsMessage('Cloud profile connected.');
+      setStatus(`Cloud profile ready · ${listed.projects.length} project(s)`);
+    } catch {
+      if (cloudFunctionsEnabledRef.current) {
         setSettingsMessage(
           'Cloud profile unavailable · device settings remain active.'
         );
       }
-    });
+    }
+  }
+
+  function openSettings() {
+    updateSettingsViewState({ open: true });
+    setSettingsOpen(true);
+    setPaletteOpen(false);
+    if (!cloudFunctionsEnabledRef.current) {
+      setSettingsMessage(
+        'Offline mode active · cloud functions are disabled on this device.'
+      );
+      setAuthConfigStatus('unavailable');
+      return;
+    }
+    setSettingsMessage('Changes save on this device immediately.');
+    void refreshCloudConnection();
+  }
+
+  function closeSettings() {
+    updateSettingsViewState({ open: false });
+    setSettingsOpen(false);
   }
 
   async function handleRefreshAuthConfig() {
@@ -1602,41 +4485,32 @@ export function App() {
     }
   }
 
-  async function handleSaveAppSettings() {
-    if (!session || !accountSettings) {
-      setSettingsMessage('Account sync unavailable · device settings active.');
-      return;
-    }
-    setSettingsBusy(true);
-    setSettingsMessage('Saving account settings…');
-    try {
-      const response = await api.updateSettings({
-        settings: appSettings,
-        expectedRevision: accountSettings.revision
-      });
-      setAccountSettings(response);
-      syncedRevisionRef.current = response.revision;
-      saveLocalAppSettings(appSettings, response.revision);
-      setSettingsMessage('Saved to this device and account.');
-    } catch (error) {
-      setSettingsMessage(errorMessage(error, 'Account settings save failed.'));
-    } finally {
-      setSettingsBusy(false);
-    }
-  }
-
   async function syncSettingsBeforeAssistantAction() {
-    if (!session || !accountSettings) {
+    const controller = cloudSettingsAutosaveRef.current;
+    if (!sessionRef.current || !accountSettingsRef.current || !controller) {
       throw new Error('Account settings storage is unavailable.');
     }
-    const response = await api.updateSettings({
-      settings: appSettings,
-      expectedRevision: accountSettings.revision
-    });
-    setAccountSettings(response);
-    syncedRevisionRef.current = response.revision;
-    saveLocalAppSettings(appSettings, response.revision);
-    return response;
+    if (
+      !controller.hasPendingChanges &&
+      controller.syncedRevision === accountSettingsRef.current.revision
+    ) {
+      return accountSettingsRef.current;
+    }
+    if (!controller.hasPendingChanges) {
+      controller.schedule(appSettingsRef.current, 0);
+    }
+    const response = await controller.flushPending();
+    const currentAccount = accountSettingsRef.current;
+    if (
+      !currentAccount ||
+      controller.hasPendingChanges ||
+      controller.syncedRevision !== currentAccount.revision
+    ) {
+      throw new Error(
+        'Cloud settings could not be saved. Your device copy is still safe.'
+      );
+    }
+    return response ?? currentAccount;
   }
 
   async function handleSaveAssistantCredential(token: string) {
@@ -1707,6 +4581,63 @@ export function App() {
     }
   }
 
+  async function activateCloudSession(activeSession: AuthSession) {
+    const [remoteSettings, listed, collaborationCapabilities] =
+      await Promise.all([
+        api.getSettings(),
+        loadProjectSummaries(true),
+        api
+          .collaborationCapabilities()
+          .catch(() => DISABLED_COLLABORATION_ROLLOUT)
+      ]);
+    sessionRef.current = activeSession;
+    setSession(activeSession);
+    accountSettingsRef.current = remoteSettings;
+    setAccountSettings(remoteSettings);
+    setCollaborationRollout(collaborationCapabilities);
+    if (
+      remoteSettings.synced &&
+      shouldAdoptAccountSettings({
+        settings: appSettingsRef.current,
+        syncedRevision: syncedRevisionRef.current
+      })
+    ) {
+      appSettingsRef.current = remoteSettings.settings;
+      setAppSettings(remoteSettings.settings);
+      cloudSettingsAutosaveRef.current?.adoptSyncedSettings(
+        remoteSettings.settings,
+        remoteSettings
+      );
+    } else {
+      cloudSettingsAutosaveRef.current?.schedule(appSettingsRef.current, 0);
+    }
+    setProjects(listed.projects);
+    setCloudProjectIds(listed.cloudProjectIds);
+    setAccountProjectListReached(listed.remoteReached);
+    const activeProjectIsCloud = Boolean(
+      doc && remoteVersionsRef.current.has(doc.projectId)
+    );
+    setCloudAvailable(activeProjectIsCloud);
+    if (doc) {
+      setSaveState(activeProjectIsCloud ? 'synced' : 'local');
+    }
+    // Signing in does not upload anything on its own. Projects made while
+    // signed out are still the user's to keep on one device if they want, so
+    // the count is an offer the start screen makes, not an action taken here.
+    const localOnly = listed.remoteReached
+      ? listed.projects.filter(
+          (project) => !listed.cloudProjectIds.has(project.projectId)
+        ).length
+      : 0;
+    setSettingsMessage(
+      !listed.remoteReached
+        ? `Signed in as ${activeSession.email ?? activeSession.displayName} · cloud projects are temporarily unavailable.`
+        : localOnly === 0
+          ? `Signed in as ${activeSession.email ?? activeSession.displayName}.`
+          : `Signed in as ${activeSession.email ?? activeSession.displayName} · ${localOnly} project(s) on this device only.`
+    );
+  }
+
   async function handleVerifyLoginCode(challengeId: string, code: string) {
     setSettingsBusy(true);
     setSettingsMessage('Verifying sign-in code…');
@@ -1715,30 +4646,65 @@ export function App() {
         challengeId,
         code
       });
-      const [remoteSettings, localProjects, remoteProjects] = await Promise.all(
-        [
-          api.getSettings(),
-          listLocalProjects().catch(() => []),
-          api.listProjects().catch(() => ({ projects: [] }))
-        ]
-      );
-      setSession(activeSession);
-      setAccountSettings(remoteSettings);
-      setProjects(
-        mergeProjectSummaries(localProjects, remoteProjects.projects)
-      );
-      const activeProjectIsCloud = Boolean(
-        doc && remoteVersionsRef.current.has(doc.projectId)
-      );
-      setCloudAvailable(activeProjectIsCloud);
-      if (doc) {
-        setSaveState(activeProjectIsCloud ? 'saved' : 'offline');
-      }
-      setSettingsMessage(
-        `Signed in as ${activeSession.email ?? activeSession.displayName}.`
-      );
+      await activateCloudSession(activeSession);
     } catch (error) {
       setSettingsMessage(errorMessage(error, 'Sign-in failed.'));
+      throw error;
+    } finally {
+      setSettingsBusy(false);
+    }
+  }
+
+  async function handleStartDesktopLogin() {
+    setSettingsBusy(true);
+    setSettingsMessage('Opening secure sign-in in your browser…');
+    let authorized = false;
+    try {
+      const started = await startDesktopSignIn();
+      const deadline = Date.now() + started.expiresInSeconds * 1_000;
+      setSettingsMessage(
+        `Finish the email sign-in in your browser, then enter desktop code ${started.userCode}. OpenZCAD will reconnect automatically.`
+      );
+      while (Date.now() < deadline) {
+        await new Promise((resolve) => globalThis.setTimeout(resolve, 1_000));
+        const result = await pollDesktopSignIn();
+        if (result.status === 'authorized' && result.session) {
+          await activateCloudSession(result.session as AuthSession);
+          authorized = true;
+          return;
+        }
+      }
+      throw new Error('The desktop sign-in attempt expired. Start again.');
+    } catch (error) {
+      setSettingsMessage(errorMessage(error, 'Desktop sign-in failed.'));
+      throw error;
+    } finally {
+      if (!authorized) {
+        await cancelDesktopSignIn().catch(() => undefined);
+      }
+      setSettingsBusy(false);
+    }
+  }
+
+  async function handleApproveDesktopLogin() {
+    if (!desktopAuthorizationAttempt) {
+      throw new Error('The desktop sign-in attempt is missing.');
+    }
+    setSettingsBusy(true);
+    setSettingsMessage('Connecting OpenZCAD for macOS…');
+    try {
+      await api.approveDesktopLogin(
+        desktopAuthorizationAttempt,
+        desktopAuthorizationCode
+      );
+      setDesktopAuthorizationApproved(true);
+      setSettingsMessage(
+        'OpenZCAD for macOS is connected. You can return to the app.'
+      );
+    } catch (error) {
+      setSettingsMessage(
+        errorMessage(error, 'Could not connect OpenZCAD for macOS.')
+      );
       throw error;
     } finally {
       setSettingsBusy(false);
@@ -1749,17 +4715,130 @@ export function App() {
     setSettingsBusy(true);
     setSettingsMessage('Signing out…');
     try {
+      // Both queues drain before the session goes away, or their contents
+      // become unsendable the moment the cookie does.
+      await cloudProjectAutosaveRef.current?.flushPending();
+      cloudProjectAutosaveRef.current?.closeProject();
+      await cloudSettingsAutosaveRef.current?.flushPending();
       await api.logout();
-      const localProjects = await listLocalProjects().catch(() => []);
+      const listed = await loadProjectSummaries(false);
       remoteVersionsRef.current.clear();
+      cloudSettingsAutosaveRef.current?.endSession();
+      cloudSettingsSessionUserRef.current = null;
+      // The next sign-in on this device may be a different account. Awaited so
+      // it cannot be cut short by whatever navigation follows sign-out, and a
+      // failure is reported rather than left for a later reconciliation to
+      // resolve against a baseline belonging to the account that just left.
+      let baselinesCleared = true;
+      try {
+        await clearAllLastSyncedVersions();
+      } catch {
+        baselinesCleared = false;
+      }
+      sessionRef.current = null;
       setSession(null);
+      accountSettingsRef.current = null;
       setAccountSettings(null);
+      setCollaborationRollout(DISABLED_COLLABORATION_ROLLOUT);
       setCloudAvailable(false);
-      setProjects(localProjects);
-      setSaveState('offline');
-      setSettingsMessage('Signed out · device settings remain active.');
+      setProjects(listed.projects);
+      // Nothing is in "the account" once there is no account in session, so the
+      // shelf must stop claiming otherwise.
+      setCloudProjectIds(new Set());
+      setAccountProjectListReached(false);
+      setSaveState('local');
+      pendingInvitationAttemptRef.current = null;
+      setPendingInvitationError(null);
+      setSettingsMessage(
+        !baselinesCleared
+          ? 'Signed out · this account’s sync baselines could not be cleared, so check which copy you keep if one of its projects is opened again here.'
+          : pendingInvitationToken
+            ? 'Signed out · sign in with the email address that received the project invitation.'
+            : 'Signed out · device settings remain active.'
+      );
     } catch (error) {
       setSettingsMessage(errorMessage(error, 'Sign-out failed.'));
+      throw error;
+    } finally {
+      setSettingsBusy(false);
+    }
+  }
+
+  async function handleDeleteCloudData(
+    scope: AccountDeletionScope,
+    confirmation: string
+  ) {
+    setSettingsBusy(true);
+    setSettingsMessage(
+      scope === 'projects'
+        ? 'Permanently deleting cloud projects…'
+        : scope === 'profile'
+          ? 'Permanently deleting cloud profile…'
+          : 'Permanently deleting all cloud data…'
+    );
+    try {
+      const projectController = cloudProjectAutosaveRef.current;
+      if (scope === 'profile') {
+        await projectController?.flushPending();
+        projectController?.closeProject();
+      } else {
+        // The device copy is already authoritative and safe. Discard a queued
+        // cloud mirror before erasure instead of recreating data the user just
+        // confirmed they want gone, then wait for any request already in flight.
+        projectController?.closeProject();
+        await projectController?.whenIdle();
+      }
+      await cloudSettingsAutosaveRef.current?.flushPending();
+
+      const deleted = await api.deleteAccountData(scope, confirmation);
+      if (deleted.signedOut) {
+        projectController?.closeProject();
+        const listed = await loadProjectSummaries(false);
+        remoteVersionsRef.current.clear();
+        // The successful response invalidated the browser cookie (and the
+        // desktop proxy drops its Keychain credential). Mirror that immediately
+        // in React so no signed-in UI or account state survives the deletion.
+        endCloudSettingsSession();
+        setCloudAvailable(false);
+        setProjects(listed.projects);
+        setCloudProjectIds(new Set());
+        setAccountProjectListReached(false);
+        setSaveState('local');
+        setSettingsMessage(
+          scope === 'all'
+            ? 'All cloud data deleted permanently · local data remains on this device.'
+            : 'Cloud profile deleted permanently · cloud projects and local data remain.'
+        );
+        return;
+      }
+
+      await Promise.all(
+        deleted.deletedProjectIds.map(async (projectId) => {
+          remoteVersionsRef.current.delete(projectId);
+          await clearLastSyncedVersion(projectId).catch(() => undefined);
+        })
+      );
+      const listed = await loadProjectSummaries(true);
+      setProjects(listed.projects);
+      setCloudProjectIds(listed.cloudProjectIds);
+      setAccountProjectListReached(listed.remoteReached);
+      const currentProjectId = doc?.projectId;
+      const currentIsCloud = Boolean(
+        currentProjectId && listed.cloudProjectIds.has(currentProjectId)
+      );
+      setCloudAvailable(currentIsCloud);
+      setSaveState(currentIsCloud ? 'synced' : 'local');
+      const currentVersion = currentProjectId
+        ? remoteVersionsRef.current.get(currentProjectId)
+        : undefined;
+      if (currentProjectId && currentVersion !== undefined) {
+        projectController?.openProject(currentProjectId, currentVersion);
+      }
+      setSettingsMessage(
+        `${deleted.deletedProjectIds.length} cloud project(s) deleted permanently · local copies remain.`
+      );
+    } catch (error) {
+      setSettingsMessage(errorMessage(error, 'Cloud data deletion failed.'));
       throw error;
     } finally {
       setSettingsBusy(false);
@@ -1778,10 +4857,12 @@ export function App() {
     const defaults = defaultAppSettings();
     // A reset is a local edit like any other: it must survive the next boot
     // rather than being undone by the account copy.
-    syncedRevisionRef.current = null;
-    setAppSettings(defaults);
-    saveLocalAppSettings(defaults, null);
-    setSettingsMessage('Application settings reset on this device.');
+    handleAppSettingsChange(defaults);
+    setSettingsMessage(
+      sessionRef.current && accountSettingsRef.current
+        ? 'Application settings reset · saving to cloud profile…'
+        : 'Application settings reset on this device.'
+    );
   }
 
   function applyViewportDefaults() {
@@ -1795,6 +4876,7 @@ export function App() {
   }
 
   async function handleCreateProject(name: string, units: UnitSystem) {
+    setAssistantCollapsed(true);
     setBusy(true);
     try {
       await flushPendingLocalSave();
@@ -1803,25 +4885,28 @@ export function App() {
         await saveLocalProject(localDocument);
         hydrateDocument(localDocument);
         setProjects((current) => [
-          {
-            projectId: localDocument.projectId,
-            name: localDocument.name,
-            updatedAt: localDocument.derived.updatedAt,
-            revisionCount: localDocument.checkpoints.length
-          },
+          summarizeLocalDocument(localDocument),
           ...current
         ]);
         setCloudAvailable(false);
-        setSaveState('offline');
+        setSaveState('local');
         setStatus(`Created ${localDocument.name} locally.`);
         return;
       }
       const response = await api.createProject({ name, units });
+      await saveLocalProject(response.document);
       remoteVersionsRef.current.set(
         response.document.projectId,
         response.document.version
       );
+      await saveLastSyncedVersion(
+        response.document.projectId,
+        response.document.version
+      );
       setCloudAvailable(true);
+      setCloudProjectIds((current) =>
+        new Set(current).add(response.document.projectId)
+      );
       hydrateDocument(response.document);
       setProjects((current) => [response.project, ...current]);
       setStatus(`Created ${response.project.name}.`);
@@ -1841,8 +4926,7 @@ export function App() {
       const sessionExpired = error instanceof ApiError && error.status === 401;
       if (sessionExpired) {
         remoteVersionsRef.current.clear();
-        setSession(null);
-        setAccountSettings(null);
+        endCloudSettingsSession();
       }
       const localDocument = createProjectDocument(
         name,
@@ -1852,17 +4936,329 @@ export function App() {
       await saveLocalProject(localDocument);
       hydrateDocument(localDocument);
       setProjects((current) => [
-        {
-          projectId: localDocument.projectId,
-          name: localDocument.name,
-          updatedAt: localDocument.derived.updatedAt,
-          revisionCount: localDocument.checkpoints.length
-        },
+        summarizeLocalDocument(localDocument),
         ...current
       ]);
       setCloudAvailable(false);
-      setSaveState('offline');
-      setStatus(`${errorMessage(error, 'Cloud unavailable')} Working locally.`);
+      setSaveState('local');
+      setStatus(
+        `${errorMessage(error, 'Cloud unavailable')} Working locally · save it to your account later.`
+      );
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  /**
+   * The account's copy of a just-adopted project, wearing this device's derived
+   * geometry. Adoption changes ownership and appends a checkpoint but leaves
+   * canonical history and `version` alone, so the meshes the device already has
+   * still describe the document — and reusing them keeps the viewport from
+   * blanking while an identical rebuild runs.
+   */
+  function withLocalDerived(
+    remote: ProjectDocument,
+    local: ProjectDocument
+  ): ProjectDocument {
+    return {
+      ...remote,
+      derived: {
+        ...remote.derived,
+        bodyRepresentations: local.derived.bodyRepresentations,
+        exportableBodyIds: local.derived.exportableBodyIds
+      }
+    };
+  }
+
+  /** Stores a document that the account has acknowledged on every local path. */
+  async function acceptAccountDocument(
+    remote: ProjectDocument,
+    local: ProjectDocument,
+    summary: ProjectSummary = summarizeLocalDocument(remote)
+  ): Promise<ProjectDocument> {
+    const merged = withLocalDerived(remote, local);
+    // The baseline is only valid after the corresponding account document is
+    // durable locally. Keep this order so a partial IndexedDB failure can only
+    // lose the baseline (which forces conservative reconciliation), never put
+    // the baseline ahead of the device copy.
+    await saveLocalProject(merged);
+    await saveLastSyncedVersion(merged.projectId, merged.version);
+    remoteVersionsRef.current.set(merged.projectId, merged.version);
+    setCloudProjectIds((current) => new Set(current).add(merged.projectId));
+    setProjects((current) => mergeProjectSummaries([summary], current));
+    if (managerRef.current?.document.projectId === merged.projectId) {
+      if (managerRef.current.document.version !== local.version) {
+        // The open document moved past the device snapshot this
+        // reconciliation was computed from (an edit landed during the network
+        // round-trip, or the local read lagged the autosave debounce).
+        // Swapping now would revert those edits; keep the live document and
+        // let autosave push it against the recorded account version.
+        setCloudAvailable(true);
+        cloudProjectAutosaveRef.current?.adoptAccountVersion(
+          merged.projectId,
+          merged.version
+        );
+        return merged;
+      }
+      managerRef.current.document = merged;
+      setDoc(merged);
+      setCloudAvailable(true);
+      setSaveState('synced');
+      cloudProjectAutosaveRef.current?.adoptAccountVersion(
+        merged.projectId,
+        merged.version
+      );
+    }
+    return merged;
+  }
+
+  /**
+   * Gives one device-local project an account record, keeping its id so the
+   * device's own copy and shelf state stay pointed at the same project.
+   *
+   * Returns whether anything changed rather than reporting status itself: the
+   * bulk path has to summarize many of these, and one line per project would
+   * bury the result.
+   */
+  async function adoptLocalProject(
+    projectId: string
+  ): Promise<AdoptLocalProjectResult> {
+    const local = await loadLocalProject(projectId);
+    if (!local) {
+      return { state: 'missing' };
+    }
+    try {
+      const response = await api.adoptProject(local);
+      await acceptAccountDocument(response.document, local, response.project);
+      return { state: 'adopted' };
+    } catch (error) {
+      if (error instanceof ApiError && error.code === 'ALREADY_ADOPTED') {
+        // A lost adoption response and a genuinely pre-existing account copy
+        // produce the same 409. Fetch the actual document and reconcile it;
+        // merely painting the cloud badge here would claim agreement without
+        // ever comparing the work.
+        const [remote, lastSyncedVersion] = await Promise.all([
+          api.loadProject(projectId),
+          loadLastSyncedVersion(projectId)
+        ]);
+        remoteVersionsRef.current.set(projectId, remote.version);
+        setCloudProjectIds((current) => new Set(current).add(projectId));
+        const outcome = chooseProjectDocument(local, remote, lastSyncedVersion);
+        if (outcome.choice === 'diverged') {
+          return {
+            state: 'conflict',
+            conflict: conflictFromDocuments(
+              outcome.local,
+              outcome.remote,
+              'account'
+            )
+          };
+        }
+        if (outcome.choice === 'remote') {
+          await acceptAccountDocument(outcome.document, local);
+          return { state: 'already-adopted' };
+        }
+        if (outcome.choice === 'local') {
+          // The baseline proves only this device moved. Complete the interrupted
+          // sync with a fenced document write rather than asking the user to
+          // resolve a conflict that does not exist.
+          const candidate = {
+            ...outcome.document,
+            ownerUserId: remote.ownerUserId
+          };
+          const saved = await api.saveProjectDocument({
+            projectId: candidate.projectId,
+            expectedVersion: remote.version,
+            document: withoutDerivedProjection(candidate)
+          });
+          await acceptAccountDocument(
+            {
+              ...candidate,
+              version: saved.version,
+              derived: {
+                ...candidate.derived,
+                updatedAt: saved.updatedAt
+              }
+            },
+            local
+          );
+          return { state: 'already-adopted' };
+        }
+        return { state: 'missing' };
+      }
+      throw error;
+    }
+  }
+
+  async function handleSaveToAccount(project: ProjectSummary) {
+    if (!session) {
+      setStatus('Sign in to save this project to your account.');
+      return;
+    }
+    setBusy(true);
+    try {
+      await flushPendingLocalSave();
+      const outcome = await adoptLocalProject(project.projectId);
+      if (outcome.state === 'conflict') {
+        hydrateDocument(outcome.conflict.localDocument);
+        setAccountConflict(outcome.conflict);
+        setCloudAvailable(true);
+        setSaveState('conflict');
+        setStatus(
+          `${project.name} changed here and in your account. Nothing has been discarded — choose which to keep.`
+        );
+        return;
+      }
+      setStatus(
+        outcome.state === 'adopted'
+          ? `Saved ${project.name} to your account.`
+          : outcome.state === 'already-adopted'
+            ? `${project.name} was already in your account.`
+            : `${project.name} has no copy on this device to save.`
+      );
+    } catch (error) {
+      setStatus(
+        errorMessage(error, `Could not save ${project.name} to your account.`)
+      );
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function patchSyncEntry(projectId: string, patch: Partial<SyncEntry>) {
+    setSyncRun((current) =>
+      current
+        ? current.map((entry) =>
+            entry.projectId === projectId ? { ...entry, ...patch } : entry
+          )
+        : current
+    );
+  }
+
+  /**
+   * Runs one project's adoption and records the outcome on its sync entry.
+   * Returns whether the attempt should stop the run: an expired session fails
+   * every later project identically, so retrying N more times is just noise.
+   */
+  async function syncOneToAccount(candidate: {
+    projectId: string;
+    name: string;
+  }): Promise<{ adopted: boolean; failed: boolean; halt: boolean }> {
+    patchSyncEntry(candidate.projectId, {
+      state: 'syncing',
+      detail: undefined
+    });
+    try {
+      const outcome = await adoptLocalProject(candidate.projectId);
+      if (outcome.state === 'missing') {
+        patchSyncEntry(candidate.projectId, {
+          state: 'failed',
+          detail: 'No copy of this project exists on this device.'
+        });
+        return { adopted: false, failed: true, halt: false };
+      }
+      if (outcome.state === 'conflict') {
+        patchSyncEntry(candidate.projectId, {
+          state: 'failed',
+          detail:
+            'Changed on this device and in your account. Open it to choose which to keep.'
+        });
+        return { adopted: false, failed: true, halt: false };
+      }
+      patchSyncEntry(candidate.projectId, {
+        state: 'synced',
+        detail:
+          outcome.state === 'already-adopted'
+            ? 'Was already in your account.'
+            : undefined
+      });
+      return {
+        adopted: outcome.state === 'adopted',
+        failed: false,
+        halt: false
+      };
+    } catch (error) {
+      const { detail, auth } = describeSyncFailure(error);
+      patchSyncEntry(candidate.projectId, { state: 'failed', detail });
+      if (auth) {
+        remoteVersionsRef.current.clear();
+        endCloudSettingsSession();
+      }
+      return { adopted: false, failed: true, halt: auth };
+    }
+  }
+
+  /**
+   * Uploads every project this device holds alone. Failures are recorded
+   * rather than thrown: one document the account refuses — too large, say —
+   * must not strand the rest. Progress is published per project through
+   * `syncRun` so the shelf can show each upload as it happens and keep the
+   * failures, with reasons, on screen afterwards.
+   */
+  async function handleSaveAllToAccount(candidates: ProjectSummary[]) {
+    if (!session || candidates.length === 0) {
+      return;
+    }
+    setBusy(true);
+    setStatus(`Saving ${candidates.length} project(s) to your account…`);
+    setSyncRun(
+      candidates.map((candidate) => ({
+        projectId: candidate.projectId,
+        name: candidate.name,
+        state: 'pending'
+      }))
+    );
+    try {
+      await flushPendingLocalSave();
+      let saved = 0;
+      let failed = 0;
+      let halted = false;
+      for (const candidate of candidates) {
+        if (halted) {
+          failed += 1;
+          patchSyncEntry(candidate.projectId, {
+            state: 'failed',
+            detail: 'Not attempted — sign in again first.'
+          });
+          continue;
+        }
+        const result = await syncOneToAccount(candidate);
+        if (result.adopted) {
+          saved += 1;
+        }
+        if (result.failed) {
+          failed += 1;
+        }
+        halted = result.halt;
+      }
+      // The names and reasons live in the sync panel; repeating them here
+      // would overflow the status line with the very names that failed.
+      setStatus(
+        failed === 0
+          ? `Saved ${saved} project(s) to your account.`
+          : `Saved ${saved} project(s) · ${failed} could not be saved. See the list above for why.`
+      );
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  /** Re-attempts a single failed entry from the sync panel. */
+  async function handleRetrySync(projectId: string) {
+    if (!session) {
+      setStatus('Sign in to retry saving this project.');
+      return;
+    }
+    const entry = syncRun?.find(
+      (candidate) => candidate.projectId === projectId
+    );
+    if (!entry) {
+      return;
+    }
+    setBusy(true);
+    try {
+      await flushPendingLocalSave();
+      await syncOneToAccount(entry);
     } finally {
       setBusy(false);
     }
@@ -1894,12 +5290,7 @@ export function App() {
       hydrateDocument(document);
       setCloudAvailable(false);
       setProjects((current) => [
-        {
-          projectId: document.projectId,
-          name: document.name,
-          updatedAt: document.derived.updatedAt,
-          revisionCount: document.checkpoints.length
-        },
+        summarizeLocalDocument(document),
         ...current.filter((project) => project.projectId !== document.projectId)
       ]);
       setStatus(
@@ -1916,14 +5307,20 @@ export function App() {
     setBusy(true);
     try {
       await flushPendingLocalSave();
-      const [localDocument, remoteDocument] = await Promise.all([
-        loadLocalProject(projectId),
-        session
-          ? api.loadProject(projectId).catch(() => null)
-          : Promise.resolve(null)
-      ]);
-      const loaded = selectProjectDocument(localDocument, remoteDocument);
-      if (!loaded) {
+      const [localDocument, remoteDocument, lastSyncedVersion] =
+        await Promise.all([
+          loadLocalProject(projectId),
+          session
+            ? api.loadProject(projectId).catch(() => null)
+            : Promise.resolve(null),
+          loadLastSyncedVersion(projectId)
+        ]);
+      const outcome = chooseProjectDocument(
+        localDocument,
+        remoteDocument,
+        lastSyncedVersion
+      );
+      if (outcome.choice === 'none') {
         throw new Error('Project not found locally or in the beta API.');
       }
       setCloudAvailable(Boolean(remoteDocument));
@@ -1933,11 +5330,33 @@ export function App() {
           remoteDocument.version
         );
       }
-      hydrateDocument(loaded);
+      if (outcome.choice === 'diverged') {
+        // Both copies moved since this device last agreed with the account.
+        // Open the local one — it is the work in front of the user — and ask
+        // rather than discarding either side.
+        hydrateDocument(outcome.local);
+        setAccountConflict(
+          conflictFromDocuments(outcome.local, outcome.remote, 'account')
+        );
+        setSaveState('conflict');
+        setStatus(
+          `${outcome.local.name} changed here and in your account. Nothing has been discarded — choose which to keep.`
+        );
+        return;
+      }
+      const openedDocument =
+        outcome.choice === 'remote' && localDocument
+          ? withLocalDerived(outcome.document, localDocument)
+          : outcome.document;
+      hydrateDocument(openedDocument);
+      if (outcome.choice === 'remote') {
+        await saveLocalProject(openedDocument);
+        await saveLastSyncedVersion(projectId, openedDocument.version);
+      }
       setStatus(
-        loaded === localDocument && remoteDocument
-          ? `Opened newer local edits for ${loaded.name}.`
-          : `Opened ${loaded.name}.`
+        outcome.choice === 'local' && remoteDocument
+          ? `Opened newer local edits for ${openedDocument.name}.`
+          : `Opened ${openedDocument.name}.`
       );
     } catch (error) {
       setStatus(errorMessage(error, 'Failed to open project.'));
@@ -1946,8 +5365,83 @@ export function App() {
     }
   }
 
+  async function handleAcceptProjectInvitation(token: string) {
+    if (!session || !projectSharingEnabled) {
+      throw new Error('Project sharing is not enabled for this account.');
+    }
+    setBusy(true);
+    setStatus('Accepting project invitation…');
+    try {
+      const accepted = await projectSharingClient.acceptInvitation(token);
+      const listed = await loadProjectSummaries(true);
+      setProjects(listed.projects);
+      setCloudProjectIds(listed.cloudProjectIds);
+      setAccountProjectListReached(listed.remoteReached);
+      setStatus(`Invitation accepted with ${accepted.role} access.`);
+      await handleOpenProject(accepted.projectId);
+    } catch (error) {
+      setStatus(errorMessage(error, 'Could not accept the invitation.'));
+      throw error;
+    } finally {
+      setBusy(false);
+    }
+  }
+  acceptPendingInvitationRef.current = handleAcceptProjectInvitation;
+
+  useEffect(() => {
+    if (
+      startupState !== 'ready' ||
+      !pendingInvitationToken ||
+      !session ||
+      !collaborationRollout.sharingEnabled
+    ) {
+      return;
+    }
+    const attempt = `${session.userId}:${pendingInvitationToken}`;
+    if (pendingInvitationAttemptRef.current === attempt) {
+      return;
+    }
+    pendingInvitationAttemptRef.current = attempt;
+    setPendingInvitationError(null);
+    setSettingsMessage('Opening the shared project…');
+    void acceptPendingInvitationRef
+      .current(pendingInvitationToken)
+      .then(() => {
+        clearPendingProjectInvitation();
+        setPendingInvitationToken(null);
+        setPendingInvitationError(null);
+        updateSettingsViewState({ open: false });
+        setSettingsOpen(false);
+      })
+      .catch(() => {
+        setPendingInvitationError(
+          'This invitation could not be accepted. It may be expired, revoked, or intended for a different email address.'
+        );
+        setSettingsMessage('The project invitation needs attention.');
+        updateSettingsViewState({
+          open: true,
+          activeSection: 'account'
+        });
+        setSettingsOpen(true);
+      });
+  }, [
+    collaborationRollout.sharingEnabled,
+    pendingInvitationToken,
+    session,
+    startupState
+  ]);
+
+  function dismissProjectInvitation() {
+    clearPendingProjectInvitation();
+    pendingInvitationAttemptRef.current = null;
+    setPendingInvitationToken(null);
+    setPendingInvitationError(null);
+    closeSettings();
+  }
+
   async function handleGoHome() {
     await flushPendingLocalSave();
+    await cloudProjectAutosaveRef.current?.flushPending();
     clearActiveProject();
     forgetProjectView();
     managerRef.current = null;
@@ -1962,39 +5456,350 @@ export function App() {
     setExtrudePreview(null);
     setTool(null);
     try {
-      const [local, remote] = await Promise.all([
-        listLocalProjects(),
-        session ? api.listProjects().catch(() => null) : Promise.resolve(null)
-      ]);
-      const merged = mergeProjectSummaries(local, remote?.projects ?? []);
-      setProjects(merged);
-      setCloudAvailable(Boolean(remote));
-      setStatus(`${merged.length} project(s) available.`);
+      const listed = await loadProjectSummaries(Boolean(session));
+      setProjects(listed.projects);
+      setCloudProjectIds(listed.cloudProjectIds);
+      setAccountProjectListReached(listed.remoteReached);
+      setCloudAvailable(listed.remoteReached);
+      setStatus(
+        session && !listed.remoteReached
+          ? `Cloud projects are temporarily unavailable · ${listed.projects.length} project(s) remain on this device.`
+          : `${listed.projects.length} project(s) available.`
+      );
     } catch (error) {
       setStatus(errorMessage(error, 'Failed to refresh projects.'));
     }
   }
 
+  /**
+   * Records shelf state in both stores. The device copy is written first and
+   * is the one the UI trusts, so organising a part keeps working with the
+   * cloud unreachable or the project local-only; the account write is a
+   * best-effort mirror for the owner's other devices.
+   */
+  async function persistOrganization(
+    projectId: string,
+    organization: ProjectOrganization
+  ): Promise<void> {
+    // The device copy is authoritative. Do not claim success unless it is
+    // durable locally; a failed account mirror is retried during discovery.
+    await saveLocalProjectOrganization(projectId, organization);
+    setProjects((current) =>
+      current
+        .map((project) =>
+          project.projectId === projectId
+            ? { ...project, organization }
+            : project
+        )
+        .sort(compareProjectSummaries)
+    );
+    if (!session) {
+      return;
+    }
+    await api
+      .updateProject({
+        projectId: toProjectId(projectId),
+        status: organization.status,
+        pinned: organization.pinned,
+        sortOrder: organization.sortOrder
+      })
+      .catch(() => undefined);
+  }
+
+  async function handleMoveProjectToShelf(
+    project: ProjectSummary,
+    status: ProjectStatus
+  ) {
+    try {
+      const organization = applyOrganizationUpdate(
+        projectOrganization(project),
+        { status }
+      );
+      await persistOrganization(project.projectId, organization);
+      setStatus(
+        status === 'deleted'
+          ? `Moved ${project.name} to the trash · restorable for ${TRASH_RETENTION_DAYS} days.`
+          : status === 'archived'
+            ? `Archived ${project.name}.`
+            : `Restored ${project.name}.`
+      );
+    } catch (error) {
+      setStatus(errorMessage(error, `Could not move ${project.name}.`));
+    }
+  }
+
+  async function handleTogglePin(project: ProjectSummary) {
+    try {
+      const current = projectOrganization(project);
+      await persistOrganization(
+        project.projectId,
+        applyOrganizationUpdate(current, { pinned: !current.pinned })
+      );
+      setStatus(
+        current.pinned ? `Unpinned ${project.name}.` : `Pinned ${project.name}.`
+      );
+    } catch (error) {
+      setStatus(errorMessage(error, `Could not update ${project.name}.`));
+    }
+  }
+
+  async function handleReorderProjects(projectIds: string[]) {
+    const positions = new Map(projectIds.map((id, index) => [id, index]));
+    const organizations = new Map(
+      projects
+        .filter((project) => positions.has(project.projectId))
+        .map((project) => [
+          project.projectId,
+          {
+            ...projectOrganization(project),
+            sortOrder: positions.get(project.projectId)!
+          }
+        ])
+    );
+    try {
+      await Promise.all(
+        [...organizations].map(([projectId, organization]) =>
+          saveLocalProjectOrganization(projectId, organization)
+        )
+      );
+      setProjects((current) =>
+        current
+          .map((project) => {
+            const organization = organizations.get(project.projectId);
+            return organization ? { ...project, organization } : project;
+          })
+          .sort(compareProjectSummaries)
+      );
+      if (session) {
+        await api
+          .reorderProjects({ projectIds: projectIds.map(toProjectId) })
+          .catch(() => undefined);
+      }
+    } catch (error) {
+      setStatus(errorMessage(error, 'Could not reorder the projects.'));
+    }
+  }
+
+  async function handleDuplicateProject(project: ProjectSummary) {
+    setBusy(true);
+    try {
+      await flushPendingLocalSave();
+      if (session) {
+        try {
+          const response = await api.duplicateProject(project.projectId);
+          const localSource = await loadLocalProject(project.projectId).catch(
+            () => null
+          );
+          let localCopy = restoreDuplicateDerivedProjection(
+            response.document,
+            localSource
+          );
+          if (localCopy === response.document) {
+            // This device may not have the exact source revision cached. The
+            // kernel stays in the browser, so rebuild the copy here rather
+            // than asking cloud persistence to store a derived projection.
+            const derived = await geometry
+              .syncOnce(response.document)
+              .catch(() => null);
+            if (derived) {
+              localCopy = { ...response.document, derived };
+            }
+          }
+          // Kept on the device too, so the copy opens offline exactly like the
+          // original it was made from.
+          await saveLocalProject(localCopy).catch(() => undefined);
+          if (response.project.organization) {
+            await saveLocalProjectOrganization(
+              response.project.projectId,
+              response.project.organization
+            ).catch(() => undefined);
+          }
+          setProjects((current) =>
+            [...current, response.project].sort(compareProjectSummaries)
+          );
+          setStatus(`Duplicated ${project.name} as ${response.project.name}.`);
+          return;
+        } catch (error) {
+          // A project the account has never seen is not a failure — it just
+          // means the device holding it has to make the copy.
+          const missing =
+            error instanceof ApiError &&
+            (error.status === 404 || error.status === 401);
+          if (!missing) {
+            throw error;
+          }
+        }
+      }
+      const source = await loadLocalProject(project.projectId);
+      if (!source) {
+        throw new Error('The project could not be read from this device.');
+      }
+      const copy = duplicateProjectDocument(
+        source,
+        duplicateProjectName(
+          source.name,
+          projects.map((summary) => summary.name)
+        ),
+        session?.userId ?? localUserId
+      );
+      const organization: ProjectOrganization = {
+        ...DEFAULT_PROJECT_ORGANIZATION,
+        sortOrder: projectOrganization(project).sortOrder
+      };
+      await saveLocalProject(copy);
+      await saveLocalProjectOrganization(copy.projectId, organization).catch(
+        () => undefined
+      );
+      setProjects((current) =>
+        [...current, summarizeLocalDocument(copy, organization)].sort(
+          compareProjectSummaries
+        )
+      );
+      setStatus(`Duplicated ${project.name} as ${copy.name}.`);
+    } catch (error) {
+      setStatus(errorMessage(error, 'Could not duplicate the project.'));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  /** Destroys projects in both stores. There is no undo past this point. */
+  async function destroyProjects(targets: ProjectSummary[]): Promise<void> {
+    const outcomes = await Promise.all(
+      targets.map(async (project) => {
+        let failure: unknown;
+        try {
+          await deleteLocalProject(project.projectId);
+        } catch (error) {
+          failure = error;
+        }
+        if (session) {
+          try {
+            await api.deleteProject(project.projectId);
+          } catch (error) {
+            // A signed-in user can still have local-only projects. Missing from
+            // the account is therefore success, but every other failure must be
+            // visible and retryable.
+            if (!(error instanceof ApiError && error.status === 404)) {
+              failure ??= error;
+            }
+          }
+        }
+        return { projectId: project.projectId, failure };
+      })
+    );
+    const destroyed = new Set(
+      outcomes
+        .filter((outcome) => outcome.failure === undefined)
+        .map((outcome) => outcome.projectId)
+    );
+    setProjects((current) =>
+      current.filter((project) => !destroyed.has(project.projectId))
+    );
+    const failed = outcomes.find((outcome) => outcome.failure !== undefined);
+    if (failed) {
+      throw failed.failure;
+    }
+  }
+
+  async function handleDeleteProjectForever(project: ProjectSummary) {
+    if (
+      appSettings.general.confirmDestructiveActions &&
+      !window.confirm(
+        `Permanently delete “${project.name}”? This cannot be undone.`
+      )
+    ) {
+      return;
+    }
+    setBusy(true);
+    try {
+      await destroyProjects([project]);
+      setStatus(`Deleted ${project.name} permanently.`);
+    } catch (error) {
+      setStatus(errorMessage(error, 'Could not delete the project.'));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleEmptyTrash(trashed: ProjectSummary[]) {
+    if (trashed.length === 0) {
+      return;
+    }
+    if (
+      appSettings.general.confirmDestructiveActions &&
+      !window.confirm(
+        `Permanently delete ${trashed.length} project(s) in the trash? This cannot be undone.`
+      )
+    ) {
+      return;
+    }
+    setBusy(true);
+    try {
+      await destroyProjects(trashed);
+      setStatus(`Emptied the trash · ${trashed.length} project(s) deleted.`);
+    } catch (error) {
+      setStatus(errorMessage(error, 'Could not empty the trash.'));
+    } finally {
+      setBusy(false);
+    }
+  }
+
   function handleUndo() {
-    if (!managerRef.current) {
+    if (!managerRef.current || !ensureCanEdit('undo')) {
       return;
     }
     setDoc(managerRef.current.undo());
+    // An assistant preview was preflighted against the document this rewind
+    // just replaced; keeping it would render geometry from a lineage that no
+    // longer exists.
+    setPreviewDoc(null);
     setExtrudePreview(null);
+    setMoveCommitHold(null);
     setTool(null);
     clearSelection();
     setStatus('Undo');
   }
 
   function handleRedo() {
-    if (!managerRef.current) {
+    if (!managerRef.current || !ensureCanEdit('redo')) {
       return;
     }
     setDoc(managerRef.current.redo());
+    setPreviewDoc(null);
     setExtrudePreview(null);
+    setMoveCommitHold(null);
     setTool(null);
     clearSelection();
     setStatus('Redo');
+  }
+
+  /**
+   * Turns a refused write into a choice between two real documents rather than
+   * two version numbers.
+   *
+   * Autosave and an explicit save can both lose the version fence, and losing
+   * it is not the same as losing the connection: the account answered, and it
+   * answered that it holds something this device has not seen.
+   */
+  function raiseAccountConflict(
+    projectId: string,
+    localDocument: ProjectDocument,
+    accountVersion: number | null
+  ) {
+    setStatus(
+      accountVersion === null
+        ? 'This project changed elsewhere. Your work is saved on this device.'
+        : `This project changed elsewhere (account version ${accountVersion}). Your work is saved on this device.`
+    );
+    void api
+      .loadProject(projectId)
+      .then((remote) => {
+        setAccountConflict(
+          conflictFromDocuments(localDocument, remote, 'account')
+        );
+      })
+      .catch(() => undefined);
   }
 
   async function handleSave() {
@@ -2004,79 +5809,155 @@ export function App() {
     try {
       setSaveState('saving');
       await saveLocalProject(doc);
+      if (!ensureCanEdit('save a shared revision')) {
+        setSaveState('offline');
+        return;
+      }
       const expectedVersion = remoteVersionsRef.current.get(doc.projectId);
       if (!session || expectedVersion === undefined) {
         setCloudAvailable(false);
-        setSaveState('offline');
-        setStatus('Saved locally.');
+        setSaveState('local');
+        setStatus('Saved on this device.');
         return;
       }
+      // A queued autosave writing the same document behind this one would race
+      // the checkpoint for the version fence, and the loser reports a conflict
+      // that does not exist. Drain it first; a manual save is worth the wait.
+      await cloudProjectAutosaveRef.current?.flushPending();
       const saved = await api.saveRevision({
         projectId: doc.projectId,
         reason: 'Manual save',
-        expectedVersion,
-        document: doc
+        expectedVersion:
+          cloudProjectAutosaveRef.current?.syncedVersion ?? expectedVersion,
+        document: withoutDerivedProjection(doc)
       });
       remoteVersionsRef.current.set(saved.projectId, saved.version);
-      if (managerRef.current) {
-        managerRef.current.document = saved;
+      const live = managerRef.current?.document;
+      if (
+        live &&
+        (live.projectId !== doc.projectId || live.version !== doc.version)
+      ) {
+        // Edits landed while the revision round-tripped. The account holds
+        // the pre-edit snapshot this handler sent; adopting its echo would
+        // erase those edits from the canonical document while their undo
+        // entries survive. Record the account version so the next autosave
+        // fences correctly and let it carry the newer edits up.
+        await saveLastSyncedVersion(saved.projectId, saved.version);
+        setCloudAvailable(true);
+        cloudProjectAutosaveRef.current?.adoptAccountVersion(
+          saved.projectId,
+          saved.version
+        );
+        setStatus('Saved revision.');
+        return;
       }
-      setDoc(saved);
+      const restored = withLocalDerived(saved, doc);
+      await saveLocalProject(restored);
+      await saveLastSyncedVersion(restored.projectId, restored.version);
+      if (managerRef.current) {
+        managerRef.current.document = restored;
+      }
+      setDoc(restored);
       setCloudAvailable(true);
-      setSaveState('saved');
+      setSaveState('synced');
+      cloudProjectAutosaveRef.current?.adoptAccountVersion(
+        restored.projectId,
+        restored.version
+      );
       setStatus('Saved revision.');
     } catch (error) {
       if (error instanceof ApiError && error.status === 401) {
         remoteVersionsRef.current.clear();
-        setSession(null);
-        setAccountSettings(null);
+        endCloudSettingsSession();
+      }
+      if (error instanceof ApiError && error.status === 409) {
+        // The account is plainly reachable — it is what refused the write — so
+        // this is a divergence to resolve, not a connection to give up on.
+        setSaveState('conflict');
+        raiseAccountConflict(doc.projectId, doc, currentVersionOf(error));
+        return;
       }
       setCloudAvailable(false);
       setSaveState('offline');
-      setStatus(`${errorMessage(error, 'Cloud save failed')} Saved locally.`);
+      setStatus(
+        `${errorMessage(error, 'Cloud save failed')} Saved on this device.`
+      );
     }
   }
 
-  function handlePreviewPatch(proposal: CadPatchProposal | null): boolean {
-    if (!proposal || !doc) {
+  const aiPreviewEpochRef = useRef(0);
+
+  async function handlePreviewPatch(
+    proposal: CadPatchProposal | null
+  ): Promise<boolean> {
+    const epoch = ++aiPreviewEpochRef.current;
+    if (!proposal) {
       setPreviewDoc(null);
       setStatus('Preview cleared.');
       return true;
     }
+    const current = managerRef.current?.document;
+    if (!current) {
+      return false;
+    }
     try {
-      const previewManager = new CommandManager(doc);
-      const preview = previewManager.runTransaction(
-        'Preview AI patch',
-        commandsForCadPatch(doc, proposal)
+      setStatus('Validating AI preview with the exact geometry kernel…');
+      const preflight = await preflightCadPatch(
+        current,
+        proposal,
+        (candidate) => geometry.syncOnce(candidate)
       );
-      // The compat kernel shares the exact kernel's primitive frame, so
-      // placement is faithful, but it cannot build every feature kind. Say so
-      // when it had to skip something rather than showing a quietly partial
-      // model.
-      const derived = kernel.syncDocument(preview);
-      setPreviewDoc({ ...preview, derived });
-      setStatus(
-        derived.warnings.length > 0
-          ? `Previewing proposed patch · ${derived.warnings.length} warning(s) · exact rebuild occurs after apply.`
-          : 'Previewing proposed patch · exact rebuild occurs after apply.'
-      );
+      const live = managerRef.current?.document;
+      if (
+        epoch !== aiPreviewEpochRef.current ||
+        !live ||
+        live.projectId !== current.projectId ||
+        live.version !== current.version
+      ) {
+        return false;
+      }
+      setPreviewDoc(preflight.candidate);
+      setStatus('Previewing exact proposed geometry.');
       return true;
     } catch (error) {
+      if (epoch !== aiPreviewEpochRef.current) {
+        return false;
+      }
       setPreviewDoc(null);
       setStatus(errorMessage(error, 'Patch preview failed.'));
       return false;
     }
   }
 
-  function handleApplyPatch(proposal: CadPatchProposal): boolean {
-    if (!doc) {
+  async function handleApplyPatch(
+    proposal: CadPatchProposal
+  ): Promise<boolean> {
+    if (!ensureCanEdit('apply this AI proposal')) {
       return false;
     }
+    const current = managerRef.current?.document;
+    if (!current) {
+      return false;
+    }
+    setBusy(true);
     try {
-      const applied = executeTransaction(
-        'Apply AI patch',
-        commandsForCadPatch(doc, proposal)
+      setStatus('Validating AI patch with the exact geometry kernel…');
+      const preflight = await preflightCadPatch(
+        current,
+        proposal,
+        (candidate) => geometry.syncOnce(candidate)
       );
+      const live = managerRef.current?.document;
+      if (
+        !live ||
+        live.projectId !== current.projectId ||
+        live.version !== current.version
+      ) {
+        throw new Error(
+          'The document changed during exact AI preflight. Review the refreshed proposal before applying it.'
+        );
+      }
+      const applied = executeTransaction('Apply AI patch', preflight.commands);
       if (applied) {
         // Topology ids belong to the pre-patch body. A fillet, boolean, or
         // pattern may consume that body and rebuild different edges/faces, so
@@ -2088,6 +5969,8 @@ export function App() {
     } catch (error) {
       setStatus(errorMessage(error, 'Patch could not be applied.'));
       return false;
+    } finally {
+      setBusy(false);
     }
   }
 
@@ -2101,6 +5984,11 @@ export function App() {
     if (!doc) {
       throw new Error('No project is open.');
     }
+    if (!ensureCanEdit('upload a project artifact')) {
+      throw new Error(
+        editDisabledReasonRef.current ?? 'Project editing is unavailable.'
+      );
+    }
     const { session: upload } = await api.createUploadSession({
       projectId: doc.projectId,
       fileName: input.fileName,
@@ -2111,7 +5999,13 @@ export function App() {
     if (!upload.uploadUrl) {
       throw new Error('Artifact upload is unavailable.');
     }
-    await api.uploadArtifact(upload.uploadUrl, input.body);
+    // Chunked above the part size, single PUT below; retries each part and
+    // aborts the multipart state if the upload cannot finish.
+    await uploadArtifactBody(
+      api,
+      { uploadSessionId: upload.uploadSessionId, uploadUrl: upload.uploadUrl },
+      input.body
+    );
     await api.finalizeArtifact({
       projectId: doc.projectId,
       uploadSessionId: upload.uploadSessionId,
@@ -2132,13 +6026,17 @@ export function App() {
   }
 
   async function handleImportFile(file: File) {
-    if (!managerRef.current || !doc) {
+    if (!managerRef.current || !doc || !ensureCanEdit('import geometry')) {
       return;
     }
     const contentType = file.type || inferContentType(file.name);
     const lowerName = file.name.toLowerCase();
 
     if (lowerName.endsWith('.stl')) {
+      if (file.size > MAX_SOURCE_IMPORT_BYTES) {
+        setStatus('STL import is limited to 250 MB.');
+        return;
+      }
       let parsed;
       try {
         parsed = parseStl(await file.arrayBuffer(), file.name);
@@ -2146,6 +6044,15 @@ export function App() {
         setStatus(errorMessage(error, 'STL import failed.'));
         return;
       }
+      // STL carries no unit declaration; the interchange convention is
+      // millimetres, and exportStl multiplies by UNIT_TO_MM on the way out.
+      // Adopting the vertices at 1/UNIT_TO_MM keeps a non-mm document's
+      // round trip at the same physical size.
+      const meshScale = 1 / UNIT_TO_MM[doc.units];
+      const vertices =
+        meshScale === 1
+          ? parsed.vertices
+          : parsed.vertices.map((value) => value * meshScale);
 
       // Best-effort archive of the original upload; the mesh itself lives in
       // the document, so a storage failure must not block the import.
@@ -2170,7 +6077,7 @@ export function App() {
           artifactId,
           sourceName: parsed.name,
           triangleCount: parsed.triangleCount,
-          vertices: parsed.vertices,
+          vertices,
           indices: parsed.indices
         })
       );
@@ -2185,51 +6092,66 @@ export function App() {
       return;
     }
 
-    if (file.size > MAX_EMBEDDED_STEP_BYTES) {
-      setStatus(
-        'STEP import is limited to 12 MB while source B-reps are stored in the offline document.'
-      );
+    await runStepImport({
+      file,
+      contentType,
+      archive: archiveArtifact,
+      validatedFeature,
+      status: { setStatus, setFeatureFormError },
+      marks: {
+        inFlight: inFlightImportChecksums.current,
+        abandoned: abandonedImportChecksums.current
+      },
+      currentDocument: () => managerRef.current?.document ?? null,
+      editDisabledReason: () => editDisabledReasonRef.current,
+      newId: () => crypto.randomUUID()
+    });
+  }
+
+  /**
+   * Uploads import sources that exist only in this browser (their archival
+   * failed at import time) and points the owning features at the finalized
+   * artifacts. Runs on the user's explicit request from the File menu; a
+   * partial failure leaves the remaining features local-only and retryable.
+   */
+  async function handleArchiveLocalSources() {
+    if (
+      !doc ||
+      localOnlySources.length === 0 ||
+      !ensureCanEdit('archive import sources')
+    ) {
       return;
     }
-
-    try {
-      const stepText = await file.text();
-      const metadata = parseStepMetadata(file.name, stepText);
-      const productName = metadata.products[0]?.trim();
-      let artifactId = `artifact_local_${crypto.randomUUID()}`;
-      let archived = false;
-      try {
-        artifactId = await archiveArtifact({
-          fileName: file.name,
-          contentType,
-          kind: 'step-import',
-          body: file,
-          metadata: { source: 'direct-upload' }
-        });
-        archived = true;
-      } catch {
-        // The STEP source remains embedded for deterministic offline rebuilds.
-      }
-
-      const imported = executeCommand(
-        commandFactories.importStep({
-          name: productName || file.name.replace(/\.(step|stp)$/i, ''),
-          artifactId,
-          sourceName: file.name,
-          stepText
-        })
-      );
-      if (imported) {
-        setStatus(
-          `Imported editable STEP solid from ${file.name}` +
-            (archived
-              ? '.'
-              : ' (cloud archive unavailable; source saved locally).')
-        );
-      }
-    } catch (error) {
-      setStatus(errorMessage(error, 'STEP import failed.'));
+    setStatus(`Archiving ${localOnlySources.length} local import source(s)…`);
+    const result = await archiveLocalOnlyImportSources({
+      document: doc,
+      loadSourceBytes: loadSourceBlob,
+      archive: (input) => archiveArtifact(input),
+      applyArtifactId: (featureId, artifactId) =>
+        executeCommand(
+          commandFactories.updateFeature(
+            { featureId, data: { artifactId: toArtifactId(artifactId) } },
+            'Archive import source'
+          )
+        )
+    });
+    const notes: string[] = [];
+    if (result.archived.length > 0) {
+      notes.push(`archived ${result.archived.join(', ')}`);
     }
+    if (result.missing.length > 0) {
+      notes.push(
+        `source bytes for ${result.missing.join(', ')} are not on this device`
+      );
+    }
+    if (result.failed.length > 0) {
+      notes.push(`upload failed for ${result.failed.join(', ')} — try again`);
+    }
+    setStatus(
+      notes.length > 0
+        ? `Archive local sources: ${notes.join('; ')}.`
+        : 'No local import sources needed archiving.'
+    );
   }
 
   async function handleExport(format: 'step' | 'stl') {
@@ -2243,7 +6165,11 @@ export function App() {
       const result = await geometry.exportModel(format, doc, exportBodyIds);
       const fileName = `${stem}.${format}`;
       const contentType = format === 'step' ? 'model/step' : 'model/stl';
-      downloadText(fileName, result.text);
+      const saved = await saveCadTextFile(fileName, format, result.text);
+      if (!saved) {
+        setStatus(`${format.toUpperCase()} export cancelled.`);
+        return;
+      }
       let archived = false;
       try {
         await archiveArtifact({
@@ -2276,6 +6202,83 @@ export function App() {
       setStatus(errorMessage(error, `${format.toUpperCase()} export failed.`));
     }
   }
+
+  function handleExportDiagnostics() {
+    if (!doc) {
+      setStatus('Open a project before exporting diagnostics.');
+      return;
+    }
+    try {
+      const bundle = createProjectDiagnosticBundle(doc, {
+        brepkitVersion: KERNEL_BUILD.packageVersion,
+        brepkitCommit: KERNEL_BUILD.sourceCommit
+      });
+      const fileName = `${exportFileStem(doc.name)}.openzcad-diagnostic.json`;
+      downloadText(
+        fileName,
+        `${JSON.stringify(bundle, null, 2)}\n`,
+        'application/json'
+      );
+      setStatus(`Exported sanitized diagnostics to ${fileName}.`);
+    } catch (error) {
+      setStatus(errorMessage(error, 'Diagnostic export failed.'));
+    }
+  }
+
+  desktopMenuHandlerRef.current = (command) => {
+    switch (command) {
+      case 'open-model':
+        void openDesktopCadFile()
+          .then((file) => (file ? handleImportFile(file) : undefined))
+          .catch((error) => {
+            setStatus(errorMessage(error, 'Could not open the CAD model.'));
+          });
+        break;
+      case 'save-project':
+        void handleSave();
+        break;
+      case 'export-step':
+        void handleExport('step');
+        break;
+      case 'export-stl':
+        void handleExport('stl');
+        break;
+      case 'undo':
+        handleUndo();
+        break;
+      case 'redo':
+        handleRedo();
+        break;
+      case 'settings':
+        openSettings();
+        break;
+    }
+  };
+
+  useEffect(() => {
+    let disposed = false;
+    const cleanups: Array<() => void> = [];
+    const register = async () => {
+      const next = await Promise.all([
+        listenForDesktopMenu((command) => {
+          desktopMenuHandlerRef.current(command);
+        }),
+        protectDesktopClose(() => saveStateRef.current === 'saving')
+      ]);
+      if (disposed) {
+        next.forEach((cleanup) => cleanup());
+      } else {
+        cleanups.push(...next);
+      }
+    };
+    void register().catch((error) => {
+      console.error('Desktop integration setup failed.', error);
+    });
+    return () => {
+      disposed = true;
+      cleanups.forEach((cleanup) => cleanup());
+    };
+  }, []);
 
   function featureNodeIdForBody(bodyId: BodyId): string | null {
     if (!doc) {
@@ -2324,40 +6327,29 @@ export function App() {
     const faceTopology = representations[
       target.bodyId as BodyId
     ]?.topology?.faces.find((face) => face.topologyId === target.topologyId);
-    const geometry = faceTopology?.geometry;
-    if (geometry?.surfaceType !== 'plane' || target.hash === undefined) {
-      setStatus('Pick a planar face to sketch on, or choose a plane.');
+    const attachment = faceSketchAttachment({
+      bodyId: target.bodyId as BodyId,
+      pickedHash: target.hash,
+      face: faceTopology
+    });
+    if (!attachment.ok) {
+      setStatus(attachment.reason);
       return false;
     }
     dispatchInteraction({
       type: 'enter-sketch',
-      plane: {
-        type: 'face',
-        bodyId: target.bodyId as BodyId,
-        faceHash: target.hash,
-        sourceArea: geometry.area,
-        sourceCenter: geometry.center,
-        sourceNormal: geometry.normal ?? {
-          x: target.normal[0],
-          y: target.normal[1],
-          z: target.normal[2]
-        },
-        frame: frameFromFace(
-          geometry.center,
-          geometry.normal ?? {
-            x: target.normal[0],
-            y: target.normal[1],
-            z: target.normal[2]
-          }
-        )
-      }
+      plane: attachment.planeRef
     });
     setSelectedFeatureNodeId(null);
     setSelectedTopology(null);
     setSelectedEdges([]);
     setSelectedBodyIds([]);
     setTool(null);
-    setStatus('Sketching on the selected face. Esc exits.');
+    // Not "Esc exits": a sketch opens with the Line tool armed, so the first
+    // Escape returns to selection and only the second leaves. The live hint
+    // beside this message already names the rung you are actually on, and two
+    // contradictory promises on one status bar is worse than one honest one.
+    setStatus('Sketching on the selected face · Finish Sketch when done.');
     return true;
   }
 
@@ -2380,6 +6372,18 @@ export function App() {
       }
       return;
     }
+    if (selection.kind !== 'body' && !exactGeometryReady) {
+      setStatus(
+        'Exact geometry is still rebuilding. Topology actions are temporarily unavailable.'
+      );
+      return;
+    }
+    // Measuring owns the pick outright. Without this return the same click
+    // went on to arm a sketch, arm a drag handle, and replace the selection —
+    // so an inspection pass rewrote the state a modelling session was holding.
+    if (handleMeasurementPick(selection, additive, detail)) {
+      return;
+    }
     // Sketch entry: with the Sketch tool armed, a planar face click starts a
     // face-attached sketch instead of arming the offset handle.
     if (
@@ -2399,13 +6403,15 @@ export function App() {
           bodyId: selection.bodyId,
           topologyId: selection.topologyId,
           hash: selection.hash,
+          ...(faceTopology?.reference
+            ? { reference: faceTopology.reference }
+            : {}),
           point: [detail.point.x, detail.point.y, detail.point.z],
           normal: [detail.normal.x, detail.normal.y, detail.normal.z],
           surfaceType: 'planar'
         };
-        if (startSketchOnFace(target)) {
-          return;
-        }
+        startSketchOnFace(target);
+        return;
       }
       setStatus('Pick a planar face to sketch on, or choose a plane.');
       return;
@@ -2440,8 +6446,20 @@ export function App() {
         bodyId: selection.bodyId,
         topologyId: selection.topologyId,
         hash: selection.hash,
+        ...(faceTopology?.reference
+          ? { reference: faceTopology.reference }
+          : {}),
         point: [detail.point.x, detail.point.y, detail.point.z],
         normal: [detail.normal.x, detail.normal.y, detail.normal.z],
+        ...(geometry?.center
+          ? {
+              surfaceCenter: [
+                geometry.center.x,
+                geometry.center.y,
+                geometry.center.z
+              ] as [number, number, number]
+            }
+          : {}),
         surfaceType:
           surface === 'plane'
             ? 'planar'
@@ -2538,14 +6556,15 @@ export function App() {
   }
 
   function handleSelectAllEdges(body: BodyRepresentation) {
-    const edges = (body.topology?.edges ?? []).map(
-      (edge): TopologySelection => ({
+    const edges = (body.topology?.edges ?? [])
+      .filter((edge) => edge.displayRole !== 'seam')
+      .map((edge): TopologySelection => ({
         bodyId: body.bodyId,
         kind: 'edge',
         topologyId: edge.topologyId,
-        hash: edge.hash
-      })
-    );
+        hash: edge.hash,
+        reference: edge.reference
+      }));
     setSelectedEdges(edges);
     setSelectedBodyIds([body.bodyId]);
     setSelectedTopology(edges.at(-1) ?? { bodyId: body.bodyId, kind: 'body' });
@@ -2588,16 +6607,31 @@ export function App() {
   }
 
   /**
-   * Bodies swept by a shift-drag rectangle.
+   * Bodies swept by an unmodified drag rectangle.
    *
-   * Replaces the selection rather than adding to it, even though the gesture
-   * is on Shift: the rectangle is the statement of what the user wants, and
-   * accumulating across sweeps would make a second attempt at aiming
-   * impossible to distinguish from a deliberate addition.
+   * Replaces the selection rather than adding to it: the rectangle is the
+   * statement of what the user wants, and accumulating across sweeps would
+   * make a second attempt at aiming impossible to distinguish from a
+   * deliberate addition.
    */
   function handleBoxSelectFromViewer(bodyIds: string[]) {
     if (!doc) {
       return;
+    }
+    // A move in flight owns the drag. The gizmo answers within about 15 px of
+    // its arrow, so a grab that slips a little further lands on empty space
+    // and used to arrive here as an empty box selection — which cleared the
+    // selection out from under the Move panel, leaving the panel and the
+    // gizmo on screen still naming a body that was no longer selected. The
+    // near miss should cost nothing, not the selection.
+    if (movePreview && bodyIds.length === 0) {
+      return;
+    }
+    // A sweep that does pick something is a change of intent, so the move goes
+    // rather than staying armed on a body the user has just selected away from.
+    if (movePreview) {
+      setMovePreview(null);
+      setTool(null);
     }
     // A box selection replaces the active topology selection. Any direct-
     // manipulation target belongs to that old face or edge, so retaining it
@@ -2638,13 +6672,13 @@ export function App() {
    * built once per selection instead of on every App render — rebuilding it
    * mid-hover would reset its screen-constant scale and drop pointer picks.
    */
-  // The keypad's lifetime mirrors the exact-entry phase. Escape, deselection,
-  // and commits all close it through the reducer.
+  // Exact entry remains mounted after a refused preview so its disabled Apply
+  // state and error stay actionable; Escape, deselection, and commits close it.
   useEffect(() => {
     const open =
       interaction.mode !== 'idle' &&
       interaction.mode !== 'sketch' &&
-      interaction.phase === 'exact-entry';
+      (interaction.phase === 'exact-entry' || interaction.phase === 'failed');
     if (!open) {
       setKeypad(null);
     }
@@ -2657,6 +6691,15 @@ export function App() {
     }
   }, [interaction.mode]);
 
+  const offsetInteractionKey =
+    interaction.mode === 'face' && interaction.op === 'offset-face'
+      ? `${interaction.target.bodyId}:${interaction.target.topologyId}`
+      : null;
+  useEffect(() => {
+    offsetPreview.clear();
+    offsetPreviewValueRef.current = null;
+  }, [offsetInteractionKey, offsetPreview]);
+
   /**
    * The sketch plane basis is memoized on the session's plane reference
    * alone: it must keep its identity across entity commits, or the viewport
@@ -2665,19 +6708,34 @@ export function App() {
    */
   const sketchSessionPlane =
     interaction.mode === 'sketch' ? interaction.session.plane : null;
+  const sketchSessionName =
+    interaction.mode === 'sketch' && interaction.session.sketchId && doc
+      ? (listNodesByKind(doc, 'sketch').find(
+          (candidate) => candidate.sketchId === interaction.session.sketchId
+        )?.name ?? 'Sketch')
+      : 'New sketch';
   const parameterScopeRef = useRef(parameterScope);
   parameterScopeRef.current = parameterScope;
-  const sketchBasis = useMemo(
-    () =>
-      sketchSessionPlane
-        ? frameForPlaneRef(
-            sketchSessionPlane,
-            (value) =>
-              evalParamValue(value, parameterScopeRef.current.scope) ?? 0
-          )
-        : null,
-    [sketchSessionPlane]
-  );
+  const sketchDocumentRef = useRef(doc);
+  sketchDocumentRef.current = doc;
+  const sketchSessionNameRef = useRef(sketchSessionName);
+  sketchSessionNameRef.current = sketchSessionName;
+  const sketchBasis = useMemo(() => {
+    const sessionDocument = sketchDocumentRef.current;
+    if (!sketchSessionPlane || !sessionDocument) {
+      return null;
+    }
+    try {
+      return resolvedSketchPlaneBasis(
+        sessionDocument,
+        sketchSessionPlane,
+        (value) => evalParamValue(value, parameterScopeRef.current.scope) ?? 0,
+        sketchSessionNameRef.current
+      );
+    } catch {
+      return null;
+    }
+  }, [sketchSessionPlane]);
 
   /** Active in-viewport sketch session for the viewport. */
   const sketchModeState = useMemo(() => {
@@ -2697,14 +6755,34 @@ export function App() {
           ? [{ id: objectId, data: node.data }]
           : [];
       }) ?? [];
+    const resolve = (value: unknown): number =>
+      evalParamValue(value as ParamValue, parameterScope.scope) ?? 0;
+    let profiles: {
+      outer: { x: number; y: number }[];
+      holes: { x: number; y: number }[][];
+    }[] = [];
+    try {
+      profiles = computeSketchRegions(objects, resolve).map((profile) => ({
+        outer: profile.outer.polyline,
+        holes: profile.holes.map((hole) => hole.polyline)
+      }));
+    } catch {
+      // An unresolved parameter must not make the sketch session disappear.
+    }
     return {
       basis: sketchBasis,
       tool: session.tool,
+      circleMode: session.circleMode,
       snapStep: appSettings.sketching.snapEnabled
         ? appSettings.sketching.linearSnap
         : null,
+      gridVisible: appSettings.sketching.gridVisible,
+      geometrySnapEnabled: appSettings.sketching.geometrySnapEnabled,
+      inferenceEnabled: appSettings.sketching.inferenceEnabled,
+      snapTolerancePx: appSettings.sketching.snapTolerancePx,
       drawing: session.drawing,
       objects,
+      profiles,
       selectedObjectId: session.selectedObjectId,
       parameterScope: parameterScope.scope,
       diagnosticPoints: sketchDiagnosticPoints
@@ -2741,6 +6819,29 @@ export function App() {
       ...object,
       ...(sketchConstruction ? { construction: true } : {})
     };
+    /**
+     * A placed text object says "Text" in a default face — useless until it is
+     * edited, and the editor is where every one of its parameters lives. So
+     * placing one selects it and hands over to Select, the way a drawing app
+     * drops you into the caret.
+     *
+     * This has to run for the first object of a brand-new sketch as well as
+     * for later ones. Start a sketch, press T, click — that is the common
+     * path, and it is the one that goes through `addSketch`.
+     */
+    const selectIfText = (sketchId: SketchId) => {
+      if (committedObject.objectKind !== 'text') {
+        return;
+      }
+      const objectId = managerRef.current
+        ? findSketch(managerRef.current.document, sketchId)?.objectIds.at(-1)
+        : undefined;
+      if (objectId) {
+        dispatchInteraction({ type: 'sketch-tool', tool: 'select' });
+        dispatchInteraction({ type: 'sketch-select-object', objectId });
+      }
+    };
+
     if (!session.sketchId) {
       const name = `Sketch ${String(sketchOptions.length + 1).padStart(2, '0')}`;
       if (
@@ -2757,19 +6858,24 @@ export function App() {
       const sketchId = managerRef.current?.document.sketchOrder.at(-1);
       if (sketchId) {
         dispatchInteraction({ type: 'sketch-created', sketchId });
+        selectIfText(sketchId);
       }
       setStatus(`${name} started.`);
       return;
     }
-    executeCommand(
-      commandFactories.addSketchObjects(
-        {
-          sketchId: session.sketchId as SketchId,
-          objects: [committedObject]
-        },
-        `Add ${committedObject.objectKind}`
+    if (
+      executeCommand(
+        commandFactories.addSketchObjects(
+          {
+            sketchId: session.sketchId as SketchId,
+            objects: [committedObject]
+          },
+          `Add ${committedObject.objectKind}`
+        )
       )
-    );
+    ) {
+      selectIfText(session.sketchId as SketchId);
+    }
   }
 
   function showProfileDiagnostics() {
@@ -2912,20 +7018,27 @@ export function App() {
       if (objects.length === 0) {
         return [];
       }
-      const basis = frameForPlaneRef(sketch.planeRef, resolve);
+      let basis: PlaneBasis;
+      try {
+        basis = resolvedSketchPlaneBasis(
+          doc,
+          sketch.planeRef,
+          resolve,
+          sketch.name
+        );
+      } catch {
+        return [];
+      }
       const curves = active
         ? []
         : objects.flatMap((object) => {
             try {
-              const polyline = objectPolyline(object.data, resolve);
-              return polyline
-                ? [
-                    {
-                      ...polyline,
-                      construction: object.data.construction === true
-                    }
-                  ]
-                : [];
+              // A text object draws one run per glyph region plus one per
+              // counter, so this is many runs from one object.
+              return objectPolylines(object.data, resolve).map((polyline) => ({
+                ...polyline,
+                construction: object.data.construction === true
+              }));
             } catch {
               return [];
             }
@@ -2977,7 +7090,11 @@ export function App() {
     parameterScope,
     interaction,
     selectedSketch,
-    selectedSketchProfileId
+    selectedSketchProfileId,
+    // Text outlines resolve from already-parsed faces, so a face arriving
+    // after this memo last ran has to re-run it or the glyph stays a
+    // diagnostic until something unrelated invalidates the memo.
+    textFontsVersion
   ]);
 
   useEffect(() => {
@@ -3062,6 +7179,7 @@ export function App() {
       return;
     }
     setSelectedProfiles(availableExtrudeProfiles);
+    setResolvedExtrudePreview(null);
     setExtrudePreview((current) => ({
       sketchId: extrudeSketchId,
       distance: current?.distance ?? 24
@@ -3100,6 +7218,7 @@ export function App() {
       modifiers
     );
     setSelectedProfiles(nextProfiles);
+    setResolvedExtrudePreview(null);
     setSelectedSketchProfileId(region.sketchId as SketchId);
     setSelectedFeatureNodeId(null);
     setSelectedTopology(null);
@@ -3144,7 +7263,8 @@ export function App() {
         sketchId: region.sketchId,
         regionFingerprint: region.regionFingerprint,
         samplePoint: region.samplePoint,
-        area: region.area
+        area: region.area,
+        sourceEntityIds: region.sourceEntityIds
       }
     });
     setStatus(
@@ -3204,7 +7324,11 @@ export function App() {
                 min: target.samplePoint,
                 max: target.samplePoint
               },
-              sourceEntityIds: [],
+              // The target's source entities, not [] — over a text region this
+              // is what lets profileReferencesForSelection store the
+              // entity-wide reference, so a drag-extruded label still rebuilds
+              // after its string is edited.
+              sourceEntityIds: target.sourceEntityIds,
               area: target.area
             }
           ];
@@ -3212,17 +7336,7 @@ export function App() {
       name: 'Extrude',
       sketchId: target.sketchId as SketchId,
       distance: exact ?? rounded,
-      profiles: profiles.map((profile) => ({
-        ...(profile.profileId.startsWith('legacy_')
-          ? {}
-          : { profileId: profile.profileId }),
-        regionFingerprint: profile.regionFingerprint,
-        samplePoint: profile.samplePoint,
-        sourceArea: profile.area,
-        ...(profile.sourceEntityIds.length > 0
-          ? { sourceEntityIds: profile.sourceEntityIds }
-          : {})
-      }))
+      profiles: profileReferencesForSelection(profiles, entityWideProfileSource)
     });
     const resultBodyId =
       command.payload.ids?.bodyId ?? (target.sketchId as unknown as BodyId);
@@ -3269,6 +7383,21 @@ export function App() {
     if (target.surfaceType !== 'planar') {
       return null;
     }
+    const primitive =
+      doc && target.hash !== undefined
+        ? primitiveCylinderHeightAncestor(
+            doc,
+            target.bodyId as BodyId,
+            target.reference,
+            target.hash
+          )
+        : null;
+    const totalBaseline =
+      primitive?.data.featureKind === 'primitive' &&
+      primitive.data.primitiveKind === 'cylinder' &&
+      typeof primitive.data.dimensions.height === 'number'
+        ? primitive.data.dimensions.height
+        : undefined;
     return {
       bodyId: target.bodyId,
       topologyId: target.topologyId,
@@ -3282,9 +7411,11 @@ export function App() {
         y: target.normal[1],
         z: target.normal[2]
       },
-      initialValue: interaction.lastValue ?? 0
+      initialValue:
+        offsetPreviewValueRef.current ?? interaction.lastValue ?? 0,
+      ...(totalBaseline === undefined ? {} : { totalBaseline })
     };
-  }, [interaction]);
+  }, [doc, interaction]);
 
   const cylinderRadiusHandleTarget = useMemo(() => {
     if (
@@ -3326,24 +7457,51 @@ export function App() {
         y: target.axisEnd[1],
         z: target.axisEnd[2]
       },
-      originalRadius: target.radius
+      originalRadius: target.radius,
+      smoothPreview:
+        target.concavity === 'boss' &&
+        supportsRadialCylinderPreview(
+          representations[target.bodyId as BodyId],
+          {
+            x: target.axisStart[0],
+            y: target.axisStart[1],
+            z: target.axisStart[2]
+          },
+          {
+            x: target.axisEnd[0],
+            y: target.axisEnd[1],
+            z: target.axisEnd[2]
+          }
+        )
     };
-  }, [interaction]);
+  }, [interaction, representations]);
   const cylinderRadiusInspectorInitial =
     interaction.mode === 'face' &&
     interaction.op === 'resize-cylinder-radius' &&
     interaction.target.radius !== undefined
       ? interaction.target.radius
       : null;
+  const cylinderSelectionKey =
+    interaction.mode === 'face' && interaction.op === 'resize-cylinder-radius'
+      ? `${interaction.target.bodyId}:${interaction.target.topologyId}`
+      : null;
+  useEffect(() => {
+    setCylinderDimensionMode('diameter');
+  }, [cylinderSelectionKey]);
   const cylinderRadiusInspectorEdit = useMemo(
     () =>
       cylinderRadiusInspectorInitial === null
         ? null
-        : { initialRadius: cylinderRadiusInspectorInitial },
-    [cylinderRadiusInspectorInitial]
+        : {
+            initialRadius: cylinderRadiusInspectorInitial,
+            dimensionMode: cylinderDimensionMode
+          },
+    [cylinderDimensionMode, cylinderRadiusInspectorInitial]
   );
 
-  function buildCylinderRadiusCommand(radius: ParamValue): AnyCommand | null {
+  function buildCylinderRadiusCommand(
+    radius: ParamValue
+  ): { command: AnyCommand; sourceFeatureId?: FeatureId } | null {
     const current = interactionRef.current;
     const base = managerRef.current?.document;
     if (
@@ -3364,70 +7522,59 @@ export function App() {
       return null;
     }
 
-    // Keep native primitive cylinders parametric whenever no earlier
-    // topology-level edit depends on their old radius. Transform features keep
-    // BodyId stable, so editing the primitive still works after move/rotate.
-    const ordered = listFeaturesInOrder(base);
-    const bodyNode = listNodesByKind(base, 'body').find(
-      (body) => body.bodyId === (target.bodyId as BodyId)
+    // Preserve the parametric source edit through any uninterrupted chain of
+    // fillet/chamfer result bodies. Their stored lineage regenerates the exact
+    // downstream B-reps; arbitrary result features and direct edits remain on
+    // the strict generic cylindrical-face path.
+    const primitive = primitiveCylinderRadiusAncestor(
+      base,
+      target.bodyId as BodyId
     );
-    const primitive = bodyNode
-      ? ordered.find((feature) => feature.featureId === bodyNode.featureId)
-      : undefined;
-    const primitiveIndex = primitive ? ordered.indexOf(primitive) : -1;
-    const hasDependentDirectEdit =
-      primitiveIndex >= 0 &&
-      ordered
-        .slice(primitiveIndex + 1)
-        .some(
-          (feature) =>
-            feature.data.featureKind === 'direct-edit' &&
-            feature.data.targetBodyId === target.bodyId
-        );
-    if (
-      primitive?.data.featureKind === 'primitive' &&
-      primitive.data.primitiveKind === 'cylinder' &&
-      typeof primitive.data.dimensions.radius === 'number' &&
-      !hasDependentDirectEdit
-    ) {
-      return commandFactories.updateFeature(
-        {
-          featureId: primitive.featureId,
-          data: {
-            dimensions: {
-              ...primitive.data.dimensions,
-              radius
+    if (primitive?.data.featureKind === 'primitive') {
+      return {
+        command: commandFactories.updateFeature(
+          {
+            featureId: primitive.featureId,
+            data: {
+              dimensions: {
+                ...primitive.data.dimensions,
+                radius
+              }
             }
-          }
-        },
-        'Resize Cylinder Radius'
-      );
+          },
+          'Resize Cylinder Radius'
+        ),
+        sourceFeatureId: primitive.featureId
+      };
     }
 
-    return commandFactories.directEditBody({
-      name: 'Resize Cylinder Radius',
-      targetBodyId: target.bodyId as BodyId,
-      operation: {
-        kind: 'resize-cylindrical-face',
-        faceHash: target.hash,
-        sourceRadius: target.radius,
-        sourceAxisStart: {
-          x: target.axisStart[0],
-          y: target.axisStart[1],
-          z: target.axisStart[2]
-        },
-        sourceAxisEnd: {
-          x: target.axisEnd[0],
-          y: target.axisEnd[1],
-          z: target.axisEnd[2]
-        },
-        concavity: target.concavity,
-        radius
-      }
-    });
+    return {
+      command: commandFactories.directEditBody({
+        name: 'Resize Cylinder Radius',
+        targetBodyId: target.bodyId as BodyId,
+        operation: {
+          kind: 'resize-cylindrical-face',
+          faceHash: target.hash,
+          ...(target.reference ? { faceReference: target.reference } : {}),
+          sourceRadius: target.radius,
+          sourceAxisStart: {
+            x: target.axisStart[0],
+            y: target.axisStart[1],
+            z: target.axisStart[2]
+          },
+          sourceAxisEnd: {
+            x: target.axisEnd[0],
+            y: target.axisEnd[1],
+            z: target.axisEnd[2]
+          },
+          concavity: target.concavity,
+          radius
+        }
+      })
+    };
   }
 
-  function handleCylinderRadiusPreview(radius: number) {
+  function handleCylinderRadiusPreview(radius: number, exactGeometry = true) {
     const current = interactionRef.current;
     if (
       current.mode !== 'face' ||
@@ -3438,7 +7585,14 @@ export function App() {
       return;
     }
     cylinderRadiusInspectorSetterRef.current?.(radius);
-    cylinderRadiusPreview.request(radius);
+    if (exactGeometry) {
+      cylinderRadiusPreview.request(radius);
+    } else {
+      // A simple standalone cylinder is projected with a disposable viewport
+      // transform during drag. Drop any older worker result so it cannot flash
+      // over that proxy; release still validates one exact kernel rebuild.
+      cylinderRadiusPreview.clear();
+    }
   }
 
   function handleCylinderRadiusCancel() {
@@ -3447,27 +7601,38 @@ export function App() {
   }
 
   function handleCylinderRadiusCommit(radius: number, exact?: ParamValue) {
+    if (!requireExactGeometryReady()) {
+      return false;
+    }
     const current = interactionRef.current;
     if (current.mode !== 'face' || current.op !== 'resize-cylinder-radius') {
-      return;
+      return false;
     }
     const sourceRadius = current.target.radius;
-    const command = buildCylinderRadiusCommand(exact ?? radius);
+    const plan = buildCylinderRadiusCommand(exact ?? radius);
     if (
       sourceRadius === undefined ||
       !isValidCylinderRadius(radius, sourceRadius) ||
-      !command
+      !plan
     ) {
       cylinderRadiusInspectorSetterRef.current?.(null);
       setStatus('Radius is too small to form valid geometry at this scale.');
-      return;
+      return false;
     }
     void executeValidatedDirectEdit(
-      command,
+      plan.command,
       current.target.bodyId as BodyId,
-      `Adjusted cylinder radius to R ${formatNumber(radius)} ${doc?.units ?? ''}.`,
-      radius
+      `Adjusted cylinder ${cylinderDimensionMode === 'diameter' ? 'diameter' : 'radius'} to ${cylinderDimensionMode === 'diameter' ? 'Ø' : 'R'} ${formatNumber(cylinderDimensionMode === 'diameter' ? radius * 2 : radius)} ${doc?.units ?? ''}.`,
+      radius,
+      undefined,
+      plan.sourceFeatureId
+        ? affectedFeatureTargets(
+            managerRef.current!.document,
+            plan.sourceFeatureId
+          )
+        : undefined
     );
+    return true;
   }
 
   /**
@@ -3500,6 +7665,9 @@ export function App() {
     const edgeHashes = edges
       .map((edge) => edge.hash)
       .filter((hash): hash is number => hash !== undefined);
+    const edgeReferences = edges.flatMap((edge) =>
+      edge.reference?.kind === 'edge' ? [edge.reference] : []
+    );
     if (!bodyId || edgeHashes.length === 0) {
       return null;
     }
@@ -3508,6 +7676,10 @@ export function App() {
         currentInteraction.op === 'fillet' ? 'Fillet edges' : 'Chamfer edges',
       targetBodyId: bodyId,
       edgeHashes,
+      ...(edges.length === edgeHashes.length &&
+      edgeReferences.length === edges.length
+        ? { edgeReferences }
+        : {}),
       size
     };
     return currentInteraction.op === 'fillet'
@@ -3517,6 +7689,9 @@ export function App() {
 
   /** Edge-radius drag released (or exact entry): commit fillet/chamfer. */
   function handleEdgeCommit(size: number, exact?: ParamValue) {
+    if (!requireExactGeometryReady()) {
+      return;
+    }
     if (interaction.mode !== 'edges') {
       return;
     }
@@ -3553,23 +7728,37 @@ export function App() {
   }
 
   /** Chip tapped: open the anchored keypad prefilled with the drag value. */
-  function handleOpenOffsetKeypad(currentOffset: number) {
+  function handleOpenOffsetKeypad(
+    currentOffset: number,
+    totalBaseline?: number
+  ) {
     if (interaction.mode !== 'face' && interaction.mode !== 'region') {
       return;
     }
     dispatchInteraction({ type: 'keypad-open' });
     setKeypad({
       kind: 'offset',
-      label: interaction.mode === 'region' ? 'Height' : 'Offset',
+      label:
+        totalBaseline === undefined
+          ? interaction.mode === 'region'
+            ? 'Height'
+            : 'Offset'
+          : 'Total',
       initial:
-        currentOffset !== 0
-          ? String(Math.round(currentOffset * 100) / 100)
+        totalBaseline !== undefined || currentOffset !== 0
+          ? String(
+              Math.round(((totalBaseline ?? 0) + currentOffset) * 100) / 100
+            )
           : '',
-      unitKind: 'length'
+      unitKind: 'length',
+      ...(totalBaseline === undefined ? {} : { totalBaseline })
     });
   }
 
-  function handleOpenCylinderRadiusKeypad(radius: number) {
+  function handleOpenCylinderRadiusKeypad(
+    radius: number,
+    dimensionMode: DimensionMode
+  ) {
     if (
       interaction.mode !== 'face' ||
       interaction.op !== 'resize-cylinder-radius'
@@ -3579,14 +7768,79 @@ export function App() {
     dispatchInteraction({ type: 'keypad-open' });
     setKeypad({
       kind: 'radius',
-      label: 'Radius',
-      initial: String(radius),
+      label: dimensionMode === 'diameter' ? 'Diameter' : 'Radius',
+      initial: String(dimensionMode === 'diameter' ? radius * 2 : radius),
       unitKind: 'length',
+      dimensionMode,
       baseline: interaction.target.radius
     });
   }
 
+  function reportOffsetPreviewFailure(message: string, value: number) {
+    const current = interactionRef.current;
+    if (current.mode !== 'face' || current.op !== 'offset-face') {
+      return;
+    }
+    setPreviewDoc(null);
+    setRenderedOffsetPreview(null);
+    dispatchInteraction({ type: 'validation-failed', message, value });
+    setStatus(`Offset preview refused: ${message}`);
+  }
+
+  function recoverOffsetPreviewInteraction() {
+    const current = interactionRef.current;
+    if (
+      current.mode !== 'face' ||
+      current.op !== 'offset-face' ||
+      current.phase !== 'failed'
+    ) {
+      return;
+    }
+    dispatchInteraction({ type: 'recover' });
+    dispatchInteraction({
+      type: keypadRef.current?.kind === 'offset' ? 'keypad-open' : 'drag-engage'
+    });
+  }
+
+  function handleOffsetPreview(offset: number) {
+    const current = interactionRef.current;
+    if (
+      current.mode !== 'face' ||
+      current.op !== 'offset-face' ||
+      current.phase === 'validating'
+    ) {
+      return;
+    }
+    offsetPreviewValueRef.current = offset;
+    if (Math.abs(offset) <= 1e-9) {
+      offsetPreview.clear();
+      recoverOffsetPreviewInteraction();
+      return;
+    }
+    offsetPreview.request(offset);
+  }
+
+  function handleOffsetCancel() {
+    offsetPreview.clear();
+    offsetPreviewValueRef.current = null;
+    setRenderedOffsetPreview(null);
+    const current = interactionRef.current;
+    if (current.mode === 'face' && current.op === 'offset-face') {
+      // Re-selecting the same semantic target resets the existing lifecycle
+      // to armed, including a failed value, without adding a machine state.
+      dispatchInteraction({ type: 'select-face', target: current.target });
+    }
+  }
+
   function handleSelectionAction(action: SelectionActionId) {
+    if (
+      (action === 'sketch-on-face' ||
+        action === 'fillet' ||
+        action === 'chamfer') &&
+      !requireExactGeometryReady()
+    ) {
+      return;
+    }
     if (action === 'sketch-on-face' && interaction.mode === 'face') {
       startSketchOnFace(interaction.target);
       return;
@@ -3601,22 +7855,94 @@ export function App() {
   }
 
   /**
-   * Face-offset commit as a validated direct edit. `exact` preserves a typed
-   * expression as the stored parametric value; plain drags store the number.
+   * A cap drag on a cylinder means "make it this tall", not "push this disc".
+   * Once the rim is filleted the blend belongs to the edge, so offsetting the
+   * flat remainder alone leaves a step where the part should simply have
+   * grown. Retarget the drag onto the primitive's height whenever the picked
+   * face is provably its top cap; the wall stretches and the fillet
+   * regenerates at the new rim, which is what keeping the modifier in history
+   * is for. Anything unproven stays on the generic offset.
    */
-  function handleOffsetCommit(offset: number, exact?: ParamValue) {
-    // The arrow rig is shared: in region mode its drag is an extrude height.
-    if (interaction.mode === 'region') {
-      handleRegionExtrudeCommit(offset, exact);
-      return;
+  function buildCylinderHeightCommand(
+    face: FaceTopology,
+    faceHash: number,
+    bodyId: BodyId,
+    offset: number,
+    exact?: ParamValue,
+    baseDocument?: ProjectDocument
+  ): {
+    command: AnyCommand;
+    sourceFeatureId: FeatureId;
+    height: number;
+  } | null {
+    const base = baseDocument ?? managerRef.current?.document;
+    if (!base || Math.abs(offset) <= 1e-9) {
+      return null;
     }
-    if (interaction.mode !== 'face' || interaction.op !== 'offset-face') {
-      return;
+    const primitive = primitiveCylinderHeightAncestor(
+      base,
+      bodyId,
+      face.reference,
+      faceHash
+    );
+    const dimensions =
+      primitive?.data.featureKind === 'primitive'
+        ? primitive.data.dimensions
+        : null;
+    // The ancestry only resolves against a numeric height; narrowing here
+    // keeps that guarantee visible instead of casting it away.
+    if (!primitive || !dimensions || typeof dimensions.height !== 'number') {
+      return null;
     }
-    const target = interaction.target;
+    // The drag was measured along the cap's outward normal, which is the
+    // primitive's own axis direction whatever rigid placement it sits under,
+    // so the gesture is a signed delta on the stored height. `offset` is the
+    // evaluated distance even when `exact` is a typed expression; composing
+    // keeps that expression live in the document.
+    const height = dimensions.height + offset;
+    return {
+      command: commandFactories.updateFeature(
+        {
+          featureId: primitive.featureId,
+          data: {
+            dimensions: {
+              ...dimensions,
+              height:
+                typeof exact === 'string'
+                  ? `${dimensions.height} + (${exact})`
+                  : Math.round(height * 1000) / 1000
+            }
+          }
+        },
+        'Resize Cylinder Height'
+      ),
+      sourceFeatureId: primitive.featureId,
+      height
+    };
+  }
+
+  function buildOffsetEditPlan(
+    offset: number,
+    exact?: ParamValue,
+    baseDocument?: ProjectDocument
+  ): OffsetEditPlan | null {
+    const current = interactionRef.current;
+    const base = baseDocument ?? managerRef.current?.document;
+    if (
+      !base ||
+      current.mode !== 'face' ||
+      current.op !== 'offset-face'
+    ) {
+      return null;
+    }
+    const target = current.target;
     const bodyId = target.bodyId as BodyId;
-    const faceTopology = representations[bodyId]?.topology?.faces.find(
-      (face) => face.topologyId === target.topologyId
+    const faceTopology = base.derived.bodyRepresentations[
+      bodyId
+    ]?.topology?.faces.find(
+      (face) =>
+        face.topologyId === target.topologyId ||
+        (target.hash !== undefined && face.hash === target.hash)
     );
     const geometry = faceTopology?.geometry;
     if (
@@ -3624,23 +7950,46 @@ export function App() {
       geometry?.surfaceType !== 'plane' ||
       target.hash === undefined
     ) {
-      setStatus('Exact face measurements are unavailable for this offset.');
-      dispatchInteraction({ type: 'clear' });
-      return;
+      return null;
     }
-    void executeValidatedDirectEdit(
-      commandFactories.directEditBody({
+    const heightPlan = buildCylinderHeightCommand(
+      faceTopology,
+      target.hash,
+      bodyId,
+      offset,
+      exact,
+      base
+    );
+    if (heightPlan) {
+      return {
+        command: heightPlan.command,
+        bodyId,
+        successMessage: `Cylinder height set to ${formatNumber(heightPlan.height)} ${base.units}.`,
+        validationTargets: affectedFeatureTargets(
+          base,
+          heightPlan.sourceFeatureId
+        ),
+        ...(heightPlan.height <= 0
+          ? {
+              preflightRejection:
+                'That distance would leave the cylinder with no height.'
+            }
+          : {})
+      };
+    }
+    return {
+      command: commandFactories.directEditBody({
         name: 'Offset face',
         targetBodyId: bodyId,
         operation: {
           kind: 'offset-face',
           faceHash: target.hash,
+          ...(faceTopology.reference
+            ? { faceReference: faceTopology.reference }
+            : {}),
           sourceSurfaceType: 'plane',
           sourceArea: geometry.area,
           sourceCenter: geometry.center,
-          // The drag was measured along the picked (outward-facing) normal,
-          // so it defines the offset's sign; the kernel only verifies that
-          // the face's plane still matches this orientation up to sign.
           sourceNormal: {
             x: target.normal[0],
             y: target.normal[1],
@@ -3650,9 +7999,52 @@ export function App() {
         }
       }),
       bodyId,
-      `Offset face by ${Math.round(offset * 100) / 100} ${doc?.units ?? ''}.`,
-      offset
+      successMessage: `Offset face by ${Math.round(offset * 100) / 100} ${base.units}.`
+    };
+  }
+
+  /**
+   * Face-offset commit as a validated direct edit. `exact` preserves a typed
+   * expression as the stored parametric value; plain drags store the number.
+   */
+  function handleOffsetCommit(offset: number, exact?: ParamValue): boolean {
+    // The arrow rig is shared: in region mode its drag is an extrude height.
+    if (interaction.mode === 'region') {
+      handleRegionExtrudeCommit(offset, exact);
+      return true;
+    }
+    const current = interactionRef.current;
+    if (current.mode !== 'face' || current.op !== 'offset-face') {
+      return false;
+    }
+    if (!requireExactGeometryReady()) {
+      return false;
+    }
+    if (current.phase === 'failed') {
+      setStatus(current.error ?? 'The current offset preview is invalid.');
+      return false;
+    }
+    const plan = buildOffsetEditPlan(offset, exact);
+    if (!plan) {
+      setStatus('Exact face measurements are unavailable for this offset.');
+      dispatchInteraction({ type: 'clear' });
+      return false;
+    }
+    if (plan.preflightRejection) {
+      reportOffsetPreviewFailure(plan.preflightRejection, offset);
+      return false;
+    }
+    offsetPreview.clear();
+    offsetPreviewValueRef.current = null;
+    void executeValidatedDirectEdit(
+      plan.command,
+      plan.bodyId,
+      plan.successMessage,
+      offset,
+      undefined,
+      plan.validationTargets
     );
+    return true;
   }
 
   function handleResizeThroughHole(
@@ -3660,6 +8052,9 @@ export function App() {
     geometry: FaceGeometry,
     diameter: ParamValue
   ) {
+    if (!requireExactGeometryReady()) {
+      return;
+    }
     if (
       geometry.diameter === undefined ||
       !geometry.axisStart ||
@@ -3676,6 +8071,9 @@ export function App() {
         operation: {
           kind: 'resize-through-hole',
           faceHash: selection.hash ?? -1,
+          ...(selection.reference?.kind === 'face'
+            ? { faceReference: selection.reference }
+            : {}),
           sourceDiameter: geometry.diameter,
           sourceAxisStart: geometry.axisStart,
           sourceAxisEnd: geometry.axisEnd,
@@ -3692,6 +8090,9 @@ export function App() {
     selection: TopologySelection,
     geometry: FaceGeometry
   ) {
+    if (!requireExactGeometryReady()) {
+      return;
+    }
     const label = 'Remove imported feature';
     void executeValidatedDirectEdit(
       commandFactories.directEditBody({
@@ -3700,6 +8101,9 @@ export function App() {
         operation: {
           kind: 'remove-face-feature',
           faceHash: selection.hash ?? -1,
+          ...(selection.reference?.kind === 'face'
+            ? { faceReference: selection.reference }
+            : {}),
           sourceSurfaceType: geometry.surfaceType,
           sourceArea: geometry.area,
           sourceCenter: geometry.center,
@@ -3714,6 +8118,9 @@ export function App() {
   }
 
   function handleResizePrimitiveFace(commit: FaceResizeCommit) {
+    if (!requireExactGeometryReady()) {
+      return;
+    }
     if (!doc) {
       return;
     }
@@ -3779,7 +8186,22 @@ export function App() {
       const view = sketchViews.find(
         (candidate) => candidate.sketchId === extrudeData.sketchId
       );
-      const highlighted = references.flatMap((reference) => {
+      // Mirrors resolveRegionProfiles: an `all: true` reference covers every
+      // region its entities bound, so it can legitimately light up many
+      // regions — or, after a text edit, a different number than last time.
+      const perReference = references.map((reference) => {
+        if (reference.all === true) {
+          const referenced = new Set(reference.sourceEntityIds);
+          return (
+            view?.regions.filter(
+              (candidate) =>
+                candidate.sourceEntityIds.length > 0 &&
+                candidate.sourceEntityIds.every((entityId) =>
+                  referenced.has(entityId)
+                )
+            ) ?? []
+          );
+        }
         const sourceMatches = reference.sourceEntityIds
           ? (view?.regions.filter(
               (candidate) =>
@@ -3799,23 +8221,20 @@ export function App() {
                 Math.max(reference.sourceArea * 0.01, 1e-9)
           ) ??
           (sourceMatches.length === 1 ? sourceMatches[0] : undefined);
-        return region
-          ? [
-              {
-                sketchId: extrudeData.sketchId,
-                profileId: region.profileId,
-                regionFingerprint: region.regionFingerprint,
-                samplePoint: region.samplePoint,
-                centroid: region.centroid,
-                boundingBox: region.boundingBox,
-                sourceEntityIds: region.sourceEntityIds,
-                area: region.area
-              }
-            ]
-          : [];
+        return region ? [region] : [];
       });
+      const highlighted = perReference.flat().map((region) => ({
+        sketchId: extrudeData.sketchId,
+        profileId: region.profileId,
+        regionFingerprint: region.regionFingerprint,
+        samplePoint: region.samplePoint,
+        centroid: region.centroid,
+        boundingBox: region.boundingBox,
+        sourceEntityIds: region.sourceEntityIds,
+        area: region.area
+      }));
       setSelectedProfiles(highlighted);
-      if (references.length > 0 && highlighted.length !== references.length) {
+      if (perReference.some((regions) => regions.length === 0)) {
         setStatus(
           'Broken profile reference — edit the source sketch or reselect the extrusion profiles.'
         );
@@ -3866,6 +8285,60 @@ export function App() {
     }
   }
 
+  function handleToggleFeatureSuppression(feature: FeatureNode) {
+    const resume = isFeatureSuppressed(feature);
+    executeCommand(
+      commandFactories.setNodeMetadata(
+        {
+          nodeId: feature.id,
+          metadata: resume
+            ? {
+                [FEATURE_SUPPRESSED_METADATA_KEY]: null,
+                [FEATURE_ROLLBACK_SUPPRESSED_METADATA_KEY]: null
+              }
+            : { [FEATURE_SUPPRESSED_METADATA_KEY]: true }
+        },
+        resume ? `Resume ${feature.name}` : `Suppress ${feature.name}`
+      )
+    );
+  }
+
+  function handleRollbackAfterFeature(featureId: FeatureId, name: string) {
+    const markerIndex = features.findIndex(
+      (feature) => feature.featureId === featureId
+    );
+    if (markerIndex < 0) {
+      setStatus('The rollback feature is no longer in this document.');
+      return;
+    }
+    const commands = features.flatMap((feature, index) => {
+      const rollbackSuppressed = index > markerIndex;
+      if (isFeatureRollbackSuppressed(feature) === rollbackSuppressed) {
+        return [];
+      }
+      return [
+        commandFactories.setNodeMetadata(
+          {
+            nodeId: feature.id,
+            metadata: {
+              [FEATURE_ROLLBACK_SUPPRESSED_METADATA_KEY]: rollbackSuppressed
+                ? true
+                : null
+            }
+          },
+          rollbackSuppressed
+            ? `Roll back ${feature.name}`
+            : `Resume ${feature.name}`
+        )
+      ];
+    });
+    if (commands.length === 0) {
+      setStatus(`History is already rolled back after ${name}.`);
+      return;
+    }
+    executeTransaction(`Roll back after ${name}`, commands);
+  }
+
   function openContextMenu(
     x: number,
     y: number,
@@ -3891,7 +8364,10 @@ export function App() {
     if (!doc) {
       return;
     }
-    if (!selection) {
+    // View mode gets the viewport menu whatever was clicked: the selection
+    // menu is entirely modeling actions, and an empty one would be worse than
+    // the viewport controls someone reading a model actually wants.
+    if (!selection || viewMode) {
       openContextMenu(
         x,
         y,
@@ -4087,6 +8563,12 @@ export function App() {
     }
   }, [appSettings.assistant.enabled]);
 
+  useEffect(() => {
+    if (!projectSharingPreferenceEnabled) {
+      setSharingOpen(false);
+    }
+  }, [projectSharingPreferenceEnabled]);
+
   /**
    * Whether the workspace still owns the keyboard. A surface layered over it
    * takes the keys with it: Settings sits on top of a live document, so
@@ -4094,7 +8576,7 @@ export function App() {
    * edit a model the user cannot see. The palette and the shortcut overlay are
    * not listed — they are handled inside the map, which they need to reach.
    */
-  const workspaceInputEnabled = !settingsOpen;
+  const workspaceInputEnabled = !settingsOpen && !sharingOpen;
 
   // Workspace keyboard map (ignored while typing in a field). The ref must be
   // refreshed before paint: a keydown arriving between a commit and a passive
@@ -4111,6 +8593,16 @@ export function App() {
       if (meta && event.key === ',') {
         event.preventDefault();
         openSettings();
+        return;
+      }
+
+      if (meta && event.shiftKey && event.key.toLowerCase() === 'm') {
+        event.preventDefault();
+        if (viewMode && buildModeDisabledReason) {
+          setStatus(`Build mode unavailable: ${buildModeDisabledReason}.`);
+        } else {
+          handleWorkspaceMode(viewMode ? 'build' : 'view');
+        }
         return;
       }
 
@@ -4139,18 +8631,40 @@ export function App() {
       }
 
       if (tool === 'sketch') {
-        // The focused sketch workspace owns drawing shortcuts and Escape.
+        // `tool` is only 'sketch' while the plane prompt is up: choosing a
+        // plane clears it and hands the keys to the sketch session, which is
+        // matched by `interaction.mode` below. Drawing shortcuts stay reserved
+        // here so a stray letter cannot launch a primitive over the prompt,
+        // but Escape has to keep working — the prompt has no other way out,
+        // and the workspace promises Escape is always a way back.
+        if (event.key === 'Escape') {
+          event.preventDefault();
+          cancelPanel();
+          setStatus('Sketch canceled · no plane was chosen.');
+        }
         return;
       }
       if (tool === 'extrude') {
         if (event.key === 'Escape') {
           event.preventDefault();
           cancelPanel();
-        } else if (event.key === 'Enter' && !typing) {
+          return;
+        }
+        if (event.key === 'Enter' && !typing) {
           event.preventDefault();
           void confirmExtrude();
+          return;
         }
-        return;
+        // Everything else used to stop here, which took the view keys with it.
+        // Profile picking asks the user to click a region it has not framed —
+        // the camera returns to the solid, and the profiles can be off-screen
+        // entirely — so F, the standard views, the grid and the display mode
+        // are exactly what someone reaches for, and exactly what did nothing.
+        // Only the letters that would launch another tool mid-pick stay
+        // reserved.
+        if (SHORTCUT_TO_TOOL[event.key.toLowerCase()]) {
+          return;
+        }
       }
       if (movePreview) {
         if (event.key === 'Escape') {
@@ -4165,6 +8679,14 @@ export function App() {
         }
       }
 
+      const historyKey =
+        meta &&
+        (event.key.toLowerCase() === 'z' || event.key.toLowerCase() === 'y');
+      if (historyKey && viewMode) {
+        event.preventDefault();
+        ensureCanEdit('undo or redo');
+        return;
+      }
       if (meta && event.key.toLowerCase() === 'z') {
         event.preventDefault();
         if (event.shiftKey) {
@@ -4182,6 +8704,27 @@ export function App() {
       if (meta && event.key.toLowerCase() === 's') {
         event.preventDefault();
         void handleSave();
+        return;
+      }
+
+      const normalViewSpace =
+        (event.code === 'Space' || event.key === ' ') &&
+        !event.repeat &&
+        !meta &&
+        !event.altKey &&
+        !event.shiftKey;
+      const stableFaceSelection =
+        renderedSelectedTopology?.kind === 'face' &&
+        (interaction.mode === 'idle' ||
+          (interaction.mode === 'face' && interaction.phase === 'armed'));
+      if (
+        normalViewSpace &&
+        tool === null &&
+        stableFaceSelection &&
+        !focusedControlOwnsSpace(target)
+      ) {
+        event.preventDefault();
+        requestNormalToSelectedFace();
         return;
       }
 
@@ -4214,7 +8757,9 @@ export function App() {
                   ? ('circle' as const)
                   : event.key.toLowerCase() === 'r'
                     ? ('rectangle' as const)
-                    : null;
+                    : event.key.toLowerCase() === 't'
+                      ? ('text' as const)
+                      : null;
         if (sketchTool) {
           event.preventDefault();
           dispatchInteraction({ type: 'sketch-tool', tool: sketchTool });
@@ -4223,6 +8768,21 @@ export function App() {
       }
       switch (event.key) {
         case 'Escape':
+          if (viewMode && measuring) {
+            event.preventDefault();
+            if (measurementDraft) {
+              clearMeasurementPicks();
+              setStatus(
+                `${measurementMode} measurement canceled · pick the first target.`
+              );
+            } else {
+              setMeasuring(false);
+              setStatus(
+                'Measure off · pinned results remain in this View session.'
+              );
+            }
+            return;
+          }
           if (interaction.mode !== 'idle') {
             event.preventDefault();
             if (
@@ -4243,7 +8803,15 @@ export function App() {
               edgePreview.clear();
             }
             if (!cancelledPointer) {
+              // Read the rung before climbing it. Escape out of a sketch left
+              // the "Sketching on ..." message standing over a workspace the
+              // sketch had already been left — only Finish Sketch said
+              // anything. Both dispatch the same exit, so both can say so.
+              const leftSketch = escapeTarget(interaction) === 'exit-sketch';
               dispatchInteraction({ type: 'escape' });
+              if (leftSketch) {
+                setStatus('Sketch closed · sketch edits preserved.');
+              }
             }
           } else if (tool || selectedFeatureNodeId) {
             cancelPanel();
@@ -4253,6 +8821,19 @@ export function App() {
           return;
         case 'Delete':
         case 'Backspace':
+          if (viewMode) {
+            if (activeMeasurementId) {
+              event.preventDefault();
+              setMeasurements((current) =>
+                current.filter(
+                  (measurement) => measurement.id !== activeMeasurementId
+                )
+              );
+              setActiveMeasurementId(null);
+              setStatus('Measurement removed.');
+            }
+            return;
+          }
           if (selectedFeature) {
             event.preventDefault();
             handleDeleteFeature(
@@ -4284,6 +8865,18 @@ export function App() {
       }
 
       const key = event.key.toLowerCase();
+      if (key === 'm' && viewMode) {
+        event.preventDefault();
+        const next = !measuring;
+        setMeasuring(next);
+        clearMeasurementPicks();
+        setStatus(
+          next
+            ? 'Measure ready · Smart inspects one pick; Distance and Angle use two.'
+            : 'Measure off · pinned results stay available in this View session.'
+        );
+        return;
+      }
       if (key === 'f') {
         setFitSignal((value) => value + 1);
         return;
@@ -4314,6 +8907,11 @@ export function App() {
         return;
       }
       const shortcutTool = SHORTCUT_TO_TOOL[key];
+      if (shortcutTool && viewMode) {
+        event.preventDefault();
+        ensureCanEdit(`use ${TOOL_META[shortcutTool].label}`);
+        return;
+      }
       if (shortcutTool) {
         // Without this the same keystroke would type into the form field
         // that the tool dialog autofocuses.
@@ -4334,6 +8932,21 @@ export function App() {
     return () => window.removeEventListener('keydown', listener);
   }, []);
 
+  /**
+   * Projects carrying an unresolved divergence marker. Recomputed from the
+   * shelf rather than tracked in state: the markers outlive the session that
+   * wrote them, so reading them is the only way the shelf can be right after a
+   * reload.
+   *
+   * Keep it above the restore-screen return so every rendered shelf reads the
+   * marker written by the latest reconciliation attempt.
+   */
+  const conflictedProjectIds = new Set(
+    projects
+      .map((project) => project.projectId)
+      .filter((projectId) => readUnresolvedConflict(projectId) !== null)
+  );
+
   if (startupState === 'restoring') {
     return <StartupScreen />;
   }
@@ -4343,31 +8956,50 @@ export function App() {
   // it the assistant's conversation and any request still streaming.
   const settingsOverlay = settingsOpen ? (
     <div
+      ref={settingsDialogRef}
       className="settings-overlay"
       role="dialog"
       aria-modal="true"
       aria-label="Settings"
+      tabIndex={-1}
     >
       <SettingsPage
         settings={appSettings}
+        cloudFunctionsEnabled={cloudFunctionsEnabled}
         accountState={accountSettings}
         authConfig={authConfig}
         authConfigStatus={authConfigStatus}
+        health={deploymentHealth}
         session={session}
         busy={settingsBusy}
         message={settingsMessage}
+        initialSection={
+          pendingInvitationToken || desktopAuthorizationAttempt
+            ? 'account'
+            : undefined
+        }
+        projectInvitationPending={pendingInvitationToken !== null}
+        projectInvitationError={pendingInvitationError}
+        desktopAuthorizationAttempt={desktopAuthorizationAttempt}
+        desktopAuthorizationApproved={desktopAuthorizationApproved}
+        desktopAuthorizationCode={desktopAuthorizationCode}
+        onDesktopAuthorizationCodeChange={setDesktopAuthorizationCode}
         onChange={handleAppSettingsChange}
-        onSave={() => void handleSaveAppSettings()}
+        onCloudFunctionsEnabledChange={handleCloudFunctionsEnabledChange}
         onSaveCredential={(token) => void handleSaveAssistantCredential(token)}
         onDeleteCredential={() => void handleDeleteAssistantCredential()}
         onTestAssistant={() => void handleTestAssistantConnection()}
         onRequestLoginCode={handleRequestLoginCode}
         onVerifyLoginCode={handleVerifyLoginCode}
         onRefreshAuthConfig={handleRefreshAuthConfig}
+        onStartDesktopLogin={handleStartDesktopLogin}
+        onApproveDesktopLogin={handleApproveDesktopLogin}
         onLogout={handleLogout}
+        onDeleteCloudData={handleDeleteCloudData}
         onReset={handleResetAppSettings}
         onApplyViewportDefaults={applyViewportDefaults}
-        onClose={() => setSettingsOpen(false)}
+        onDismissProjectInvitation={dismissProjectInvitation}
+        onClose={closeSettings}
       />
     </div>
   ) : null;
@@ -4385,60 +9017,134 @@ export function App() {
           onOpen={(projectId) => void handleOpenProject(projectId)}
           onOpenDemo={(definition) => void handleOpenDemo(definition)}
           onOpenSettings={openSettings}
+          onDuplicate={(project) => void handleDuplicateProject(project)}
+          cloudProjectIds={cloudProjectIds}
+          accountProjectListReached={accountProjectListReached}
+          conflictedProjectIds={conflictedProjectIds}
+          signedIn={Boolean(session)}
+          onSaveToAccount={(project) => void handleSaveToAccount(project)}
+          onSaveAllToAccount={(candidates) =>
+            void handleSaveAllToAccount(candidates)
+          }
+          syncRun={syncRun}
+          onRetrySync={(projectId) => void handleRetrySync(projectId)}
+          onDismissSyncRun={() => setSyncRun(null)}
+          onMoveToShelf={(project, shelf) =>
+            void handleMoveProjectToShelf(project, shelf)
+          }
+          onTogglePin={(project) => void handleTogglePin(project)}
+          onReorder={(projectIds) => void handleReorderProjects(projectIds)}
+          onDeleteForever={(project) =>
+            void handleDeleteProjectForever(project)
+          }
+          onEmptyTrash={(trashed) => void handleEmptyTrash(trashed)}
+          loadThumbnail={loadThumbnail}
+          backfillThumbnail={backfillThumbnail}
         />
         {settingsOverlay}
       </>
     );
   }
 
+  const geometryPhaseLabel: Record<typeof geometry.state.phase, string> = {
+    starting: 'Starting geometry worker',
+    'loading-brepkit': 'Loading exact BrepKit kernel',
+    rebuilding: 'Rebuilding exact geometry',
+    ready: 'Exact geometry ready',
+    failed: 'Exact geometry failed'
+  };
+  const staleProjectionLabel =
+    Object.keys(representations).length > 0
+      ? 'showing the last valid projection as stale'
+      : 'no exact projection is available yet';
+  const visibleStatus = exactGeometryReady
+    ? status
+    : `${
+        geometry.state.phase === 'ready'
+          ? 'Waiting for exact geometry for this revision'
+          : geometry.state.phase === 'failed' && geometry.state.error
+            ? `Exact geometry failed: ${geometry.state.error}`
+            : geometryPhaseLabel[geometry.state.phase]
+      } · ${staleProjectionLabel}`;
   const tone: 'ready' | 'warning' | 'running' =
-    /fail|error|invalid|unable|denied/i.test(status) ? 'warning' : 'ready';
+    geometry.state.phase === 'failed'
+      ? 'warning'
+      : !exactGeometryReady
+        ? 'running'
+        : /fail|error|invalid|unable|denied/i.test(status)
+          ? 'warning'
+          : 'ready';
 
   // An operation in flight outranks the tool hint: it knows which rung of
   // the Escape ladder you are on, which is the one thing a generic
   // "Esc cancels" can never tell you.
-  const hint =
-    commandPromptText(
-      interaction,
-      tool !== null || selectedFeatureNodeId !== null
-    ) ??
-    (tool === 'sketch'
-      ? 'Drag to draw · R rectangle · C circle · P polygon · Enter finishes'
-      : tool === 'extrude'
-        ? extrudePreview
-          ? 'Drag the arrow across the plane · Enter creates · Esc cancels'
-          : 'Click a shaded closed profile · Esc cancels'
-        : tool === 'fillet' || tool === 'chamfer'
-          ? selectedEdges.length > 0
-            ? `${selectedEdges.length} edge${selectedEdges.length === 1 ? '' : 's'} selected · Shift+Click adjusts · Enter creates`
-            : 'Click edges with Shift or choose Select all edges · Esc cancels'
-          : tool
-            ? 'Enter creates · Esc cancels'
-            : selectedBodyIds.length >= 2
-              ? `${selectedBodyIds.length} bodies picked — U union · X subtract · I intersect`
-              : selectedTopology?.kind === 'edge'
-                ? 'Edge selected — Fillet or Chamfer from the toolbar'
-                : selectedFeature
-                  ? 'Edit in the panel · Del deletes · Esc closes'
-                  : viewerBodies.length > 0
-                    ? 'Click a body, face, or edge · Shift+Click adds to selection'
-                    : 'Ctrl+K commands · ? shortcuts');
+  // View mode writes its own hints rather than filtering the build chain below.
+  // Selecting a cylinder still arms the radius interaction even with its handle
+  // disarmed, and "drag the radial handle" is a promise View mode cannot keep.
+  const viewModeHint = measuring
+    ? measurementDraft
+      ? `${measurementDraft.label} selected · pick the second target · Esc cancels`
+      : measurementMode === 'smart'
+        ? 'Smart measure · pick geometry · Shift+Click totals edges · M exits'
+        : measurementMode === 'distance'
+          ? 'Distance · pick the first target · centers resolve automatically'
+          : 'Angle · pick a straight edge or measured face direction'
+    : selectedTopology?.kind === 'face'
+      ? 'Face selected — Space faces it head-on'
+      : viewerBodies.length > 0
+        ? 'Click a body, face, or edge · Measure records what you pick'
+        : 'Ctrl+K commands · ? shortcuts';
+  const hint = viewMode
+    ? viewModeHint
+    : (commandPromptText(
+        interaction,
+        tool !== null || selectedFeatureNodeId !== null
+      ) ??
+      (tool === 'sketch'
+        ? 'Drag to draw · R rectangle · C circle · P polygon · Enter finishes'
+        : tool === 'extrude'
+          ? extrudePreview
+            ? 'Drag the arrow across the plane · Enter creates · Esc cancels'
+            : 'Click a shaded closed profile · Esc cancels'
+          : tool === 'fillet' || tool === 'chamfer'
+            ? selectedEdges.length > 0
+              ? `${selectedEdges.length} edge${selectedEdges.length === 1 ? '' : 's'} selected · Shift+Click adjusts · Enter creates`
+              : 'Click edges with Shift or choose Select all edges · Esc cancels'
+            : tool
+              ? 'Enter creates · Esc cancels'
+              : selectedBodyIds.length >= 2
+                ? `${selectedBodyIds.length} bodies picked — U union · X subtract · I intersect`
+                : selectedTopology?.kind === 'face'
+                  ? 'Face selected — Space faces it head-on'
+                  : selectedTopology?.kind === 'edge'
+                    ? // Neither tool has a shortcut, so the rail is the only
+                      // route: name it the way the rail names itself.
+                      'Edge selected — Fillet or Chamfer in Feature tools'
+                    : selectedFeature
+                      ? 'Edit in the panel · Del deletes · Esc closes'
+                      : viewerBodies.length > 0
+                        ? 'Click a body, face, or edge · Shift+Click adds to selection'
+                        : 'Ctrl+K commands · ? shortcuts'));
 
   const paletteCommands: PaletteCommand[] = [
-    ...TOOL_GROUPS.flatMap((group) =>
-      group.tools.map((toolId): PaletteCommand => {
-        const meta = TOOL_META[toolId];
-        return {
-          id: `tool-${toolId}`,
-          label: meta.label,
-          group: group.label,
-          shortcut: meta.shortcut,
-          icon: meta.icon,
-          disabledReason: toolDisabledReason(toolId, availability),
-          run: () => launchTool(toolId)
-        };
-      })
-    ),
+    // Modeling tools leave the palette entirely in View mode rather than
+    // appearing greyed out: a list of things you cannot do is not a menu.
+    ...(viewMode
+      ? []
+      : TOOL_GROUPS.flatMap((group) =>
+          group.tools.map((toolId): PaletteCommand => {
+            const meta = TOOL_META[toolId];
+            return {
+              id: `tool-${toolId}`,
+              label: meta.label,
+              group: group.label,
+              shortcut: meta.shortcut,
+              icon: meta.icon,
+              disabledReason: toolDisabledReason(toolId, availability),
+              run: () => launchTool(toolId)
+            };
+          })
+        )),
     {
       id: 'view-front',
       label: 'Front view',
@@ -4478,6 +9184,20 @@ export function App() {
       shortcut: 'F',
       icon: <Maximize2 size={16} aria-hidden="true" />,
       run: () => setFitSignal((value) => value + 1)
+    },
+    {
+      id: 'view-normal-to-face',
+      label: 'Normal to selected face',
+      group: 'View',
+      shortcut: 'Space',
+      icon: <Monitor size={16} aria-hidden="true" />,
+      disabledReason:
+        renderedSelectedTopology?.kind !== 'face'
+          ? 'Select a planar face first'
+          : normalToFaceTarget
+            ? null
+            : 'The selected face is not an exact plane',
+      run: requestNormalToSelectedFace
     },
     {
       id: 'view-grid',
@@ -4554,6 +9274,19 @@ export function App() {
       run: () => void handleGoHome()
     },
     {
+      id: 'workspace-mode',
+      label: viewMode ? 'Switch to Build mode' : 'Switch to View mode',
+      group: 'General',
+      shortcut: 'Ctrl+Shift+M',
+      icon: viewMode ? (
+        <PenLine size={16} aria-hidden="true" />
+      ) : (
+        <Eye size={16} aria-hidden="true" />
+      ),
+      disabledReason: viewMode ? buildModeDisabledReason : null,
+      run: () => handleWorkspaceMode(viewMode ? 'build' : 'view')
+    },
+    {
       id: 'app-settings',
       label: 'Open settings',
       group: 'General',
@@ -4572,7 +9305,8 @@ export function App() {
   // rail's mount effect. A direct-manipulation mode only hides it — the panel
   // owns the conversation and the in-flight request, so unmounting to enter a
   // sketch would throw both away.
-  const assistantAvailable = appSettings.assistant.enabled;
+  const assistantAvailable =
+    cloudFunctionsEnabled && appSettings.assistant.enabled && !viewMode;
   const assistantHidden = directMode;
   const baseToolCard = toolCardFor(interaction);
   const editingSketchName =
@@ -4586,16 +9320,162 @@ export function App() {
       ? { ...baseToolCard, title: `Editing Sketch: ${editingSketchName}` }
       : baseToolCard;
   const inspectorActive =
-    !directMode && (tool !== null || selectedFeature !== null);
+    !viewMode && !directMode && (tool !== null || selectedFeature !== null);
+  const modelingOperation: ModelingOperationKind | null =
+    tool === 'mirror' || tool === 'shell' || tool === 'solid-offset'
+      ? tool
+      : null;
+  const modelingTargetBody = modelingTargetBodyId
+    ? representations[modelingTargetBodyId]
+    : undefined;
+  const modelingFaces = modelingFaceOptions(modelingTargetBody?.topology);
+  const modelingUnsupportedReason = modelingOperation
+    ? (editDisabledReason ??
+      modelingOperationDisabledReason(modelingOperation, {
+        exactState: exactGeometryReady
+          ? 'ready'
+          : geometry.state.phase === 'failed'
+            ? 'failed'
+            : 'pending',
+        exactFailureReason: geometry.state.error,
+        hasTargetBody: Boolean(modelingTargetBody),
+        openingFaceCount: modelingFaces.length
+      }))
+    : null;
+
+  function commandForModelingSubmission(
+    submission: ModelingOperationSubmission
+  ): AnyCommand {
+    switch (submission.operation) {
+      case 'mirror':
+        return commandFactories.mirrorBody(submission.input);
+      case 'shell':
+        return commandFactories.shellBody(submission.input);
+      case 'solid-offset':
+        return commandFactories.offsetSolidBody(submission.input);
+    }
+  }
+
+  async function preflightModelingSubmission(
+    submission: ModelingOperationSubmission
+  ): Promise<{ status: 'ready' } | { status: 'refused'; reason: string }> {
+    const manager = managerRef.current;
+    if (!manager || !ensureCanEdit('preflight this modeling operation')) {
+      return {
+        status: 'refused',
+        reason: editDisabledReason ?? 'Project editing is unavailable.'
+      };
+    }
+    const current = manager.document;
+    const signature = JSON.stringify(submission);
+    try {
+      const command = commandForModelingSubmission(submission);
+      command.validate(current);
+      const candidate = command.apply(current);
+      const derived = await geometry.syncOnce(candidate);
+      const existingWarnings = new Set(current.derived.warnings);
+      const warning = derived.warnings.find(
+        (candidateWarning) => !existingWarnings.has(candidateWarning)
+      );
+      if (warning) {
+        throw new Error(warning);
+      }
+      const ids = (
+        command.payload as unknown as {
+          ids?: { bodyId?: BodyId };
+        }
+      ).ids;
+      const resultBodyId = ids?.bodyId;
+      if (!resultBodyId || !derived.bodyRepresentations[resultBodyId]) {
+        throw new Error(
+          `${submission.input.name} did not produce its expected exact result body.`
+        );
+      }
+      if (
+        managerRef.current !== manager ||
+        manager.document.projectId !== current.projectId ||
+        manager.document.version !== current.version
+      ) {
+        throw new Error(
+          'The document changed during exact preflight. Recheck the operation.'
+        );
+      }
+      modelingPreflightRef.current = {
+        signature,
+        command,
+        resultBodyId,
+        featureName: submission.input.name,
+        baseVersion: current.version
+      };
+      return { status: 'ready' };
+    } catch (error) {
+      modelingPreflightRef.current = null;
+      return {
+        status: 'refused',
+        reason: errorMessage(error, 'Exact preflight failed.')
+      };
+    }
+  }
+
+  function submitModelingOperation(submission: ModelingOperationSubmission) {
+    const approved = modelingPreflightRef.current;
+    const manager = managerRef.current;
+    if (
+      !approved ||
+      !manager ||
+      approved.signature !== JSON.stringify(submission) ||
+      approved.baseVersion !== manager.document.version
+    ) {
+      setStatus(
+        'The modeling preflight is stale. Check the exact result again.'
+      );
+      return;
+    }
+    void executeValidatedFeature(approved.command, {
+      featureName: approved.featureName,
+      resultBodyId: approved.resultBodyId,
+      successMessage: approved.command.label,
+      onSuccess: finishFeatureCreation
+    });
+  }
 
   return (
     <AppShell
+      workspaceRef={workspaceRef}
+      sidebarWidth={sidebarWidth}
+      assistantWidth={assistantWidth}
+      sidebarResizer={
+        <PanelResizer
+          label="Resize the sidebar"
+          edge="left"
+          width={sidebarWidth}
+          min={SIDEBAR_WIDTH_LIMITS.min}
+          max={maxSidebarWidth(windowWidth)}
+          onPreview={(width) => previewPanelWidth('--sidebar-w', width)}
+          onCommit={(width) => commitPanelWidth('sidebar', width)}
+          onReset={() =>
+            commitPanelWidth('sidebar', SIDEBAR_WIDTH_LIMITS.default)
+          }
+        />
+      }
+      assistantResizer={
+        <PanelResizer
+          label="Resize the assistant"
+          edge="right"
+          width={assistantWidth}
+          min={ASSISTANT_WIDTH_LIMITS.min}
+          max={maxAssistantWidth(windowWidth)}
+          onPreview={(width) => previewPanelWidth('--assistant-w', width)}
+          onCommit={(width) => commitPanelWidth('assistant', width)}
+          onReset={() =>
+            commitPanelWidth('assistant', ASSISTANT_WIDTH_LIMITS.default)
+          }
+        />
+      }
       topBar={
         <TopBar
           projectName={doc.name}
           units={doc.units}
-          canUndo={managerRef.current?.canUndo ?? false}
-          canRedo={managerRef.current?.canRedo ?? false}
           canExport={exportBodyIds.length > 0}
           exportScope={
             selectedBody &&
@@ -4604,27 +9484,69 @@ export function App() {
               ? selectedBody.name
               : null
           }
-          saveState={saveState}
+          saveState={presentedSaveState}
+          localOnlySourceCount={localOnlySources.length}
           artifacts={artifacts}
           session={session}
+          accountState={
+            session
+              ? 'signed-in'
+              : authConfigStatus === 'loading'
+                ? 'checking'
+                : authConfigStatus === 'ready'
+                  ? 'signed-out'
+                  : 'unavailable'
+          }
           collaborationStatus={collaboration.status}
           collaboratorCount={collaboration.members.length}
-          onUndo={handleUndo}
-          onRedo={handleRedo}
+          projectSharingEnabled={
+            cloudFunctionsEnabled && projectSharingPreferenceEnabled
+          }
+          workspaceMode={viewMode ? 'view' : 'build'}
+          buildModeDisabledReason={buildModeDisabledReason}
+          onWorkspaceMode={handleWorkspaceMode}
           onSave={() => void handleSave()}
           onImportFile={(file) => void handleImportFile(file)}
           onExport={(format) => void handleExport(format)}
+          onArchiveLocalSources={() => void handleArchiveLocalSources()}
+          onExportDiagnostics={handleExportDiagnostics}
           onRenameProject={(name) =>
             executeCommand(
               commandFactories.renameNode({ nodeId: doc.rootNodeId, name })
             )
           }
           onGoHome={() => void handleGoHome()}
+          onOpenSharing={() => setSharingOpen(true)}
           onOpenSettings={openSettings}
         />
       }
       toolBar={
-        tool === 'sketch' ? (
+        viewMode ? (
+          <ViewModeBar
+            settings={viewerSettings}
+            projection={projection}
+            measuring={measuring}
+            onMeasure={(next) => {
+              setMeasuring(next);
+              clearMeasurementPicks();
+              setStatus(
+                next
+                  ? 'Measure ready · Smart inspects one pick; Distance and Angle use two.'
+                  : 'Measure off · pinned results stay available in this View session.'
+              );
+            }}
+            onFit={() => setFitSignal((value) => value + 1)}
+            onToggleGrid={() =>
+              setViewerSettings((current) => ({
+                ...current,
+                showGrid: !current.showGrid
+              }))
+            }
+            onView={requestView}
+            onCycleDisplayMode={cycleDisplayMode}
+            onToggleProjection={toggleProjection}
+          />
+        ) : tool === 'sketch' ? (
           <div className="direct-mode-strip">
             <PenLine size={16} aria-hidden="true" />
             <strong>Editing Sketch: {editingSketchName}</strong>
@@ -4654,32 +9576,38 @@ export function App() {
         )
       }
       sidebar={
-        <Sidebar
-          parameters={parameters}
-          parameterValues={parameterScope.scope}
-          features={features}
-          representations={representations}
-          selectedFeatureNodeId={selectedFeatureNodeId}
-          hiddenBodyIds={hiddenBodyIds}
-          warnings={warnings}
-          checkpoints={doc?.checkpoints ?? []}
-          onSelectFeature={handleSelectFeatureFromTree}
-          onSelectBody={handleSelectBodyFromTree}
-          selectedBodyIds={selectedBodyIds}
-          onToggleBodyVisibility={toggleBodyVisibility}
-          onFeatureContextMenu={handleFeatureContextMenu}
-          onSetParameter={(name, expression) =>
-            executeCommand(commandFactories.setParameter({ name, expression }))
-          }
-          onDeleteParameter={(name) =>
-            executeCommand(commandFactories.deleteParameter({ name }))
-          }
-          onDeleteFeature={handleDeleteFeature}
-          panelState={panelState}
-          onToggleSection={(id: SidebarSectionId) =>
-            setPanelState((current) => toggleSidebarSection(current, id))
-          }
-        />
+        viewMode ? null : (
+          <Sidebar
+            parameters={parameters}
+            parameterValues={parameterScope.scope}
+            features={features}
+            representations={representations}
+            selectedFeatureNodeId={selectedFeatureNodeId}
+            hiddenBodyIds={hiddenBodyIds}
+            warnings={warnings}
+            checkpoints={doc?.checkpoints ?? []}
+            onSelectFeature={handleSelectFeatureFromTree}
+            onSelectBody={handleSelectBodyFromTree}
+            selectedBodyIds={selectedBodyIds}
+            onToggleBodyVisibility={toggleBodyVisibility}
+            onFeatureContextMenu={handleFeatureContextMenu}
+            onToggleFeatureSuppression={handleToggleFeatureSuppression}
+            onRollbackAfterFeature={handleRollbackAfterFeature}
+            onSetParameter={(name, expression) =>
+              executeCommand(
+                commandFactories.setParameter({ name, expression })
+              )
+            }
+            onDeleteParameter={(name) =>
+              executeCommand(commandFactories.deleteParameter({ name }))
+            }
+            onDeleteFeature={handleDeleteFeature}
+            panelState={panelState}
+            onToggleSection={(id: SidebarSectionId) =>
+              setPanelState((current) => toggleSidebarSection(current, id))
+            }
+          />
+        )
       }
       viewer={
         <ErrorBoundary
@@ -4689,6 +9617,39 @@ export function App() {
           <ViewerShell
             projectId={doc.projectId}
             bodies={viewerBodies}
+            measurementAnnotations={measurementAnnotations}
+            measurementCloudSync={[
+              doc.projectId,
+              deploymentHealth?.projectMeasurementSyncEnabled,
+              cloudProjectIds,
+              measurementHydratedProjectId,
+              measurements,
+              measurementDisplay,
+              setMeasurements,
+              setMeasurementUnit,
+              setMeasurementPrecision,
+              setRadialDisplay,
+              loadProjectMeasurements,
+              saveProjectMeasurements
+            ]}
+            projectThumbnailSync={
+              geometry.state.phase === 'ready'
+                ? [
+                    doc.projectId,
+                    doc.version,
+                    doc.derived.updatedAt,
+                    doc.derived.bodyRepresentations,
+                    Boolean(
+                      session &&
+                      cloudProjectIds.has(doc.projectId) &&
+                      !editDisabledReason
+                    ),
+                    api,
+                    loadProjectThumbnail,
+                    saveProjectThumbnail
+                  ]
+                : undefined
+            }
             sketches={
               // Region-based rendering (sketchViews) supersedes the legacy
               // single-profile overlays under direct manipulation.
@@ -4700,22 +9661,26 @@ export function App() {
             settings={viewerSettings}
             fitSignal={fitSignal}
             viewRequest={viewRequest}
+            normalToFaceRequest={normalToFaceRequest}
+            rotateRequest={rotateRequest}
             units={doc.units}
-            editableBodyIds={directEditableBodyIds}
+            // Every drag handle below is disarmed by passing nothing to arm:
+            // the viewer only builds a manipulator when it is given a target,
+            // so view mode keeps orbit, pan and picking while no gesture can
+            // reach the document.
+            editableBodyIds={viewMode ? [] : directEditableBodyIds}
             extrudePreview={extrudePreview}
             movePreview={movePreview}
+            moveCommitHold={moveCommitHold}
+            appearancePreview={bodyAppearancePreview}
             hideViewerToolbar={false}
+            viewMode={viewMode}
             selectionChip={selectionChip}
             onClearSelection={clearSelection}
-            onStartPrimitive={launchTool}
-            onAskAssistant={
-              assistantAvailable
-                ? () => {
-                    setAssistantCollapsed(false);
-                    focusAssistantPrompt();
-                  }
-                : null
-            }
+            canUndo={!viewMode && (managerRef.current?.canUndo ?? false)}
+            canRedo={!viewMode && (managerRef.current?.canRedo ?? false)}
+            onUndo={handleUndo}
+            onRedo={handleRedo}
             initialView={initialView}
             onViewChange={handleViewportChange}
             onMovePreviewChange={(translation, rotationDeg, snap) => {
@@ -4724,18 +9689,27 @@ export function App() {
                 current ? { ...current, translation, rotationDeg } : current
               );
             }}
-            offsetHandle={offsetHandleTarget}
+            offsetHandle={viewMode ? null : offsetHandleTarget}
+            onOffsetPreview={handleOffsetPreview}
             onOffsetCommit={handleOffsetCommit}
+            onOffsetCancel={handleOffsetCancel}
+            offsetPreviewInvalid={
+              interaction.mode === 'face' &&
+              interaction.op === 'offset-face' &&
+              interaction.phase === 'failed'
+            }
             onOpenOffsetKeypad={handleOpenOffsetKeypad}
             keypadAnchorRef={keypadAnchorRef}
             offsetSetterRef={offsetSetterRef}
-            cylinderRadiusHandle={cylinderRadiusHandleTarget}
+            cylinderRadiusHandle={viewMode ? null : cylinderRadiusHandleTarget}
+            cylinderDimensionMode={cylinderDimensionMode}
+            onCylinderDimensionModeChange={setCylinderDimensionMode}
             onCylinderRadiusPreview={handleCylinderRadiusPreview}
             onCylinderRadiusCommit={handleCylinderRadiusCommit}
             onCylinderRadiusCancel={handleCylinderRadiusCancel}
             onOpenCylinderRadiusKeypad={handleOpenCylinderRadiusKeypad}
             cancelDirectManipulationRef={cancelDirectManipulationRef}
-            edgeHandle={edgeHandleTarget}
+            edgeHandle={viewMode ? null : edgeHandleTarget}
             onEdgeRadiusPreview={(size) => edgePreview.request(size)}
             onEdgeCommit={handleEdgeCommit}
             onOpenEdgeKeypad={handleOpenEdgeKeypad}
@@ -4744,7 +9718,7 @@ export function App() {
                 type: dragging ? 'drag-engage' : 'drag-release'
               })
             }
-            sketchMode={sketchModeState}
+            sketchMode={viewMode ? null : sketchModeState}
             onSketchCommit={handleSketchCommit}
             onSketchDrawingChange={(drawing) =>
               dispatchInteraction({ type: 'sketch-drawing', drawing })
@@ -4759,9 +9733,109 @@ export function App() {
             profileSelectionMode={tool === 'extrude'}
             onSelectRegion={handleSelectRegion}
             onHoverRegion={handleHoverRegion}
-            regionHandle={regionHandleTarget}
+            onMeasurePreview={viewMode && measuring ? previewMeasurement : null}
+            regionHandle={viewMode ? null : regionHandleTarget}
             modeOverlay={
-              contextualToolCard ? (
+              viewMode ? (
+                <>
+                  <ViewModeRail
+                    bodies={partBodies}
+                    hiddenBodyIds={hiddenBodyIds}
+                    selectedBodyIds={selectedBodyIds}
+                    open={panelState.viewModeRailOpen}
+                    onOpenChange={(viewModeRailOpen) =>
+                      setPanelState((current) => ({
+                        ...current,
+                        viewModeRailOpen
+                      }))
+                    }
+                    onSelectBody={handleSelectBodyFromTree}
+                    onToggleVisibility={toggleBodyVisibility}
+                    onIsolate={isolateBody}
+                    onShowAll={showAllBodies}
+                  />
+                  {(measuring || measurements.length > 0) && (
+                    <MeasurementDock
+                      measurements={measurements}
+                      formattedMeasurements={formattedMeasurements}
+                      enabled={measuring}
+                      activeMeasurementId={activeMeasurementId}
+                      mode={measurementMode}
+                      draftTargetLabel={measurementDraft?.label ?? null}
+                      display={measurementDisplay}
+                      onMode={(mode) => {
+                        setMeasuring(true);
+                        setMeasurementMode(mode);
+                        clearMeasurementPicks();
+                        setStatus(
+                          mode === 'smart'
+                            ? 'Smart measure · pick an edge, face, hole, or body.'
+                            : mode === 'distance'
+                              ? 'Distance · pick the first target.'
+                              : 'Angle · pick the first straight edge or measured face direction.'
+                        );
+                      }}
+                      onUnit={setMeasurementUnit}
+                      onPrecision={setMeasurementPrecision}
+                      onRadialDisplay={setRadialDisplay}
+                      onSelect={setActiveMeasurementId}
+                      onToggleVisibility={(id) =>
+                        setMeasurements((current) =>
+                          current.map((measurement) =>
+                            measurement.id === id
+                              ? {
+                                  ...measurement,
+                                  visible: !measurement.visible
+                                }
+                              : measurement
+                          )
+                        )
+                      }
+                      onRename={(id, label, note) =>
+                        setMeasurements((current) =>
+                          current.map((measurement) =>
+                            measurement.id === id
+                              ? {
+                                  ...measurement,
+                                  label,
+                                  note: note || undefined,
+                                  renamed: true
+                                }
+                              : measurement
+                          )
+                        )
+                      }
+                      onDelete={(id) => {
+                        setMeasurements((current) =>
+                          current.filter((measurement) => measurement.id !== id)
+                        );
+                        setActiveMeasurementId((current) =>
+                          current === id ? null : current
+                        );
+                        setStatus('Measurement removed.');
+                      }}
+                      onClear={() => {
+                        if (
+                          appSettings.general.confirmDestructiveActions &&
+                          !window.confirm(
+                            'Clear every measurement in this View session?'
+                          )
+                        ) {
+                          return;
+                        }
+                        setMeasurements([]);
+                        setActiveMeasurementId(null);
+                        clearMeasurementPicks();
+                        setStatus('Measurement list cleared.');
+                      }}
+                      onCopy={(measurement) =>
+                        void copyMeasurements(measurement)
+                      }
+                      onExport={exportMeasurements}
+                    />
+                  )}
+                </>
+              ) : contextualToolCard ? (
                 <>
                   <ToolCard
                     model={contextualToolCard}
@@ -4788,14 +9862,28 @@ export function App() {
                   {interaction.mode === 'sketch' && (
                     <SketchToolRail
                       tool={interaction.session.tool}
+                      circleMode={interaction.session.circleMode}
                       construction={sketchConstruction}
+                      settings={appSettings.sketching}
+                      units={doc.units}
+                      paletteVisible={selectedSketchEntity === null}
                       onTool={(sketchTool) =>
                         dispatchInteraction({
                           type: 'sketch-tool',
                           tool: sketchTool
                         })
                       }
+                      onCircleMode={(mode) =>
+                        dispatchInteraction({
+                          type: 'sketch-circle-mode',
+                          mode
+                        })
+                      }
                       onConstruction={setSketchConstruction}
+                      onSettings={(sketching) => {
+                        const current = appSettingsRef.current;
+                        handleAppSettingsChange({ ...current, sketching });
+                      }}
                       onDiagnostics={showProfileDiagnostics}
                       onExtrude={() => {
                         if (interaction.session.sketchId) {
@@ -4835,14 +9923,29 @@ export function App() {
                       units={doc.units}
                       scope={parameterScope.scope}
                       anchorRef={keypadAnchorRef}
+                      onDimensionModeChange={setCylinderDimensionMode}
                       onPreview={(value) => {
                         offsetSetterRef.current?.(value);
                         if (keypad.kind === 'radius') {
                           handleCylinderRadiusPreview(value);
                         } else if (keypad.kind === 'edge') {
                           edgePreview.request(value);
+                        } else {
+                          handleOffsetPreview(value);
                         }
                       }}
+                      commitDisabled={
+                        keypad.kind === 'offset' &&
+                        interaction.mode === 'face' &&
+                        interaction.op === 'offset-face' &&
+                        interaction.phase === 'failed'
+                      }
+                      commitDisabledReason={
+                        interaction.mode !== 'idle' &&
+                        interaction.mode !== 'sketch'
+                          ? interaction.error
+                          : null
+                      }
                       onCommit={(value, raw) => {
                         setKeypad(null);
                         dispatchInteraction({ type: 'keypad-close' });
@@ -4871,6 +9974,8 @@ export function App() {
                           handleCylinderRadiusCancel();
                         } else if (keypad.kind === 'edge') {
                           edgePreview.clear();
+                        } else {
+                          handleOffsetCancel();
                         }
                         dispatchInteraction({ type: 'keypad-close' });
                         setKeypad(null);
@@ -4896,6 +10001,12 @@ export function App() {
                         plane: sketch.planeRef,
                         sketchId: sketch.sketchId
                       });
+                      // Every other way into a sketch says so; this one left
+                      // whatever the last message was standing over a
+                      // workspace that had just changed underneath it.
+                      setStatus(
+                        `Editing ${sketch.name} · Finish Sketch when done.`
+                      );
                     }
                   }}
                 >
@@ -4905,9 +10016,46 @@ export function App() {
               ) : movePreview ? (
                 <MoveOverlay
                   bodyName={
-                    representations[movePreview.bodyId as BodyId]?.name ??
-                    'Selected body'
+                    movePreview.target === 'sketch'
+                      ? (findSketch(doc, movePreview.bodyId as SketchId)
+                          ?.name ?? 'Selected sketch')
+                      : (representations[movePreview.bodyId as BodyId]?.name ??
+                        'Selected body')
                   }
+                  hideRotation={movePreview.target === 'sketch'}
+                  // A sketch move commits as a sketch translation, not a named
+                  // feature, so it gets neither a name nor a body picker.
+                  name={movePreview.target === 'sketch' ? undefined : moveName}
+                  onName={
+                    movePreview.target === 'sketch' ? undefined : setMoveName
+                  }
+                  targets={
+                    movePreview.target === 'sketch'
+                      ? undefined
+                      : viewerBodies.map((body) => ({
+                          bodyId: body.bodyId,
+                          name:
+                            representations[body.bodyId]?.name ?? body.bodyId
+                        }))
+                  }
+                  targetBodyId={movePreview.bodyId}
+                  onTargetBody={(bodyId) => {
+                    setSelectedBodyIds([bodyId as BodyId]);
+                    setMoveSnap(null);
+                    setMovePreview((current) =>
+                      current
+                        ? {
+                            ...current,
+                            bodyId,
+                            // Values are relative to the body's own centre, so
+                            // carrying them to a different body would apply a
+                            // move nobody asked for.
+                            translation: { x: 0, y: 0, z: 0 },
+                            rotationDeg: { x: 0, y: 0, z: 0 }
+                          }
+                        : current
+                    );
+                  }}
                   values={{
                     translation: movePreview.translation,
                     rotationDeg: movePreview.rotationDeg
@@ -4949,13 +10097,32 @@ export function App() {
                           });
                           setTool(null);
                           setStatus(
-                            `Sketching on the ${plane} plane. Esc exits.`
+                            // Keep the plane id here rather than PLANE_LABELS:
+                            // the e2e test that pins the label-to-plane
+                            // mapping reads this line precisely because it is
+                            // derived from the id, so a rename that only edits
+                            // strings cannot keep it green. Only the "Esc
+                            // exits" claim goes — the armed Line tool makes it
+                            // untrue on the first press.
+                            `Sketching on the ${plane} plane · Finish Sketch when done.`
                           );
                         }}
                       >
                         {PLANE_LABELS[plane]}
                       </button>
                     ))}
+                    <button
+                      type="button"
+                      className="sketch-plane-dismiss"
+                      aria-label="Cancel sketch"
+                      title="Cancel sketch (Esc)"
+                      onClick={() => {
+                        cancelPanel();
+                        setStatus('Sketch canceled · no plane was chosen.');
+                      }}
+                    >
+                      ×
+                    </button>
                   </span>
                 </div>
               ) : extrudePreview && selectedSketchProfileName ? (
@@ -4965,12 +10132,17 @@ export function App() {
                   availableProfileCount={availableExtrudeProfiles.length}
                   distance={extrudePreview.distance}
                   units={doc.units}
-                  onDistanceChange={(distance) =>
-                    Number.isFinite(distance) &&
-                    setExtrudePreview((current) =>
-                      current ? { ...current, distance } : current
-                    )
+                  operation={
+                    resolvedExtrudePreview?.inference.operation ?? 'inferring'
                   }
+                  operationDetail={extrudeInferenceDescription(
+                    resolvedExtrudePreview
+                  )}
+                  canConfirm={
+                    resolvedExtrudePreview !== null &&
+                    resolvedExtrudePreview.baseVersion === doc.version
+                  }
+                  onDistanceChange={updateExtrudeDistance}
                   onClearProfiles={clearExtrudeProfiles}
                   onSelectAllProfiles={selectAllValidExtrudeProfiles}
                   onBackToSketch={
@@ -5011,11 +10183,7 @@ export function App() {
             onBoxSelect={handleBoxSelectFromViewer}
             onSelectSketchProfile={handleSelectSketchProfile}
             onResizePrimitiveFace={handleResizePrimitiveFace}
-            onExtrudeDistanceChange={(distance) =>
-              setExtrudePreview((current) =>
-                current ? { ...current, distance } : current
-              )
-            }
+            onExtrudeDistanceChange={updateExtrudeDistance}
             onContextMenu={handleViewportContextMenu}
             onToggleGrid={() =>
               setViewerSettings((current) => ({
@@ -5025,6 +10193,7 @@ export function App() {
             }
             onFit={() => setFitSignal((value) => value + 1)}
             onView={requestView}
+            onRotateView={requestRotate}
             onCycleDisplayMode={cycleDisplayMode}
             onToggleProjection={toggleProjection}
           />
@@ -5036,152 +10205,296 @@ export function App() {
             label="Inspector"
             resetKey={`${doc.projectId}:${doc.version}`}
           >
-            <Inspector
-              tool={tool}
-              selectedFeature={selectedFeature}
-              selectedSketch={selectedSketch}
-              selectedSketchObject={selectedSketchObject}
-              selectedBody={selectedBody}
-              selectedTopology={renderedSelectedTopology}
-              selectedEdges={selectedEdges}
-              edgeModifierBody={edgeModifierBody}
-              scope={parameterScope.scope}
-              sketches={sketchOptions}
-              bodies={bodyOptions}
-              units={doc.units}
-              selectedBodyIds={selectedBodyIds}
-              preferredSketchId={selectedSketch?.sketchId ?? null}
-              cylinderRadiusEdit={cylinderRadiusInspectorEdit}
-              cylinderRadiusSetterRef={cylinderRadiusInspectorSetterRef}
-              onLaunchTool={launchTool}
-              onCancel={cancelPanel}
-              onSelectAllEdges={handleSelectAllEdges}
-              onClearSelectedEdges={handleClearSelectedEdges}
-              onCreatePrimitive={(kind, name, dimensions) =>
-                createFeature(
-                  commandFactories.addPrimitive({
-                    name,
-                    primitiveKind: kind,
-                    dimensions
-                  })
-                )
-              }
-              onCreateSketch={(value) =>
-                createFeature(commandFactories.addSketch(value))
-              }
-              onCreateExtrude={(value) =>
-                createFeature(commandFactories.extrudeSketch(value))
-              }
-              onCreateRevolve={(value) =>
-                createFeature(commandFactories.revolveSketch(value))
-              }
-              onCreateBoolean={(value) =>
-                createFeature(commandFactories.booleanBodies(value))
-              }
-              onCreateTransform={(value) =>
-                createFeature(
-                  commandFactories.transformBody({
-                    name: value.name,
-                    targetBodyId: value.targetBodyId,
-                    translation: value.translation,
-                    rotationDeg: value.rotationDeg
-                  })
-                )
-              }
-              onCreateEdgeModifier={(kind, value) =>
-                createFeature(
-                  kind === 'fillet'
-                    ? commandFactories.filletEdges(value)
-                    : commandFactories.chamferEdges(value)
-                )
-              }
-              onCreatePattern={(value) =>
-                createFeature(commandFactories.patternBody(value))
-              }
-              onApplyPrimitive={(feature, name, dimensions) =>
-                executeCommand(
-                  commandFactories.updateFeature(
+            {modelingOperation ? (
+              <ModelingOperationsForm
+                key={modelingOperation}
+                operation={modelingOperation}
+                scope={parameterScope.scope}
+                bodies={bodyOptions}
+                faceOptions={modelingFaces}
+                initialTarget={modelingTargetBodyId ?? undefined}
+                unsupportedReason={modelingUnsupportedReason ?? undefined}
+                onPreflight={preflightModelingSubmission}
+                onSubmit={submitModelingOperation}
+                onCancel={cancelPanel}
+                onTargetBodyChange={(bodyId) => {
+                  modelingPreflightRef.current = null;
+                  setModelingTargetBodyId(bodyId);
+                  setSelectedBodyIds([bodyId]);
+                  setSelectedTopology(null);
+                }}
+                onOpeningFaceSelectionChange={(hashes) => {
+                  const selectedHash = hashes.at(-1);
+                  const face = modelingTargetBody?.topology?.faces.find(
+                    (candidate) => candidate.hash === selectedHash
+                  );
+                  setSelectedTopology(
+                    selectedHash !== undefined && face && modelingTargetBodyId
+                      ? {
+                          kind: 'face',
+                          bodyId: modelingTargetBodyId,
+                          topologyId: face.topologyId,
+                          hash: face.hash,
+                          reference: face.reference
+                        }
+                      : null
+                  );
+                }}
+                onRequestOpeningFaceSelection={() => {
+                  setManualSelectionFilter('face');
+                  setStatus(
+                    'Shell: pick an exact opening face, then select it in the face list.'
+                  );
+                }}
+              />
+            ) : (
+              <Inspector
+                tool={tool}
+                commitError={featureFormError}
+                selectedFeature={selectedFeature}
+                selectedSketch={selectedSketch}
+                selectedSketchObject={selectedSketchObject}
+                selectedBody={selectedBody}
+                selectedTopology={renderedSelectedTopology}
+                selectedEdges={selectedEdges}
+                edgeModifierBody={edgeModifierBody}
+                scope={parameterScope.scope}
+                sketches={sketchOptions}
+                bodies={bodyOptions}
+                units={doc.units}
+                selectedBodyIds={selectedBodyIds}
+                preferredSketchId={selectedSketch?.sketchId ?? null}
+                cylinderRadiusEdit={cylinderRadiusInspectorEdit}
+                cylinderRadiusSetterRef={cylinderRadiusInspectorSetterRef}
+                onLaunchTool={launchTool}
+                onPreviewBodyAppearance={previewBodyAppearance}
+                onCommitBodyAppearance={commitBodyAppearance}
+                onCancel={cancelPanel}
+                onSelectAllEdges={handleSelectAllEdges}
+                onClearSelectedEdges={handleClearSelectedEdges}
+                onCreatePrimitive={(kind, name, dimensions) =>
+                  createFeature(
+                    commandFactories.addPrimitive({
+                      name,
+                      primitiveKind: kind,
+                      dimensions
+                    })
+                  )
+                }
+                onCreateSketch={(value) =>
+                  createFeature(commandFactories.addSketch(value))
+                }
+                onCreateExtrude={(value) => void createInferredExtrude(value)}
+                onCreateRevolve={(value) =>
+                  createFeature(commandFactories.revolveSketch(value))
+                }
+                onCreateBoolean={(value) => {
+                  const command = commandFactories.booleanBodies(value);
+                  if (value.operation !== 'union') {
+                    createFeature(command);
+                    return;
+                  }
+                  const resultBodyId = command.payload.ids?.bodyId;
+                  if (!resultBodyId) {
+                    setStatus('Union could not reserve a result body.');
+                    return;
+                  }
+                  void executeValidatedFeature(command, {
+                    featureName: value.name,
+                    resultBodyId,
+                    successMessage: command.label,
+                    onSuccess: finishFeatureCreation
+                  });
+                }}
+                onCreateTransform={(value) =>
+                  createFeature(
+                    commandFactories.transformBody({
+                      name: value.name,
+                      targetBodyId: value.targetBodyId,
+                      translation: value.translation,
+                      rotationDeg: value.rotationDeg
+                    })
+                  )
+                }
+                onCreateEdgeModifier={(kind, value) =>
+                  createFeature(
+                    kind === 'fillet'
+                      ? commandFactories.filletEdges(value)
+                      : commandFactories.chamferEdges(value)
+                  )
+                }
+                onCreatePattern={(value) =>
+                  createFeature(commandFactories.patternBody(value))
+                }
+                onApplyPrimitive={(feature, name, dimensions) => {
+                  const command = commandFactories.updateFeature(
                     {
                       featureId: feature.featureId,
                       name,
                       data: { dimensions }
                     },
                     `Edit ${name}`
-                  )
-                )
-              }
-              onApplySketch={(feature, value) => {
-                if (feature.data.featureKind !== 'sketch' || !selectedSketch) {
-                  return;
-                }
-                const commands: AnyCommand[] = [
-                  commandFactories.updateSketch(
-                    {
-                      sketchId: feature.data.sketchId,
-                      plane: value.plane,
-                      offset: value.offset,
-                      object: value.object
-                    },
-                    `Edit ${value.name}`
-                  )
-                ];
-                if (value.name !== feature.name) {
-                  commands.push(
-                    commandFactories.renameNode({
-                      nodeId: feature.id,
-                      name: value.name
-                    }),
-                    commandFactories.renameNode({
-                      nodeId: selectedSketch.id,
-                      name: value.name
-                    })
                   );
-                }
-                executeTransaction(`Edit ${value.name}`, commands);
-              }}
-              onApplyExtrude={(feature, value) => {
-                if (
-                  feature.data.featureKind !== 'extrude' ||
-                  value.sketchId !== feature.data.sketchId
-                ) {
-                  setStatus(
-                    'Changing an Extrude source sketch requires profile reselection.'
+                  if (!doc || !feature.bodyId) {
+                    executeCommand(command);
+                    return;
+                  }
+                  void executeValidatedFeature(command, {
+                    featureName: name,
+                    resultBodyId: feature.bodyId,
+                    targets: affectedFeatureTargets(doc, feature.featureId).map(
+                      (target, index) =>
+                        index === 0 ? { ...target, featureName: name } : target
+                    ),
+                    successMessage: command.label
+                  });
+                }}
+                onApplySketch={(feature, value) => {
+                  if (
+                    feature.data.featureKind !== 'sketch' ||
+                    !selectedSketch
+                  ) {
+                    return;
+                  }
+                  const commands: AnyCommand[] = [
+                    commandFactories.updateSketch(
+                      {
+                        sketchId: feature.data.sketchId,
+                        plane: value.plane,
+                        offset: value.offset,
+                        object: value.object
+                      },
+                      `Edit ${value.name}`
+                    )
+                  ];
+                  if (value.name !== feature.name) {
+                    commands.push(
+                      commandFactories.renameNode({
+                        nodeId: feature.id,
+                        name: value.name
+                      }),
+                      commandFactories.renameNode({
+                        nodeId: selectedSketch.id,
+                        name: value.name
+                      })
+                    );
+                  }
+                  executeTransaction(`Edit ${value.name}`, commands);
+                }}
+                onConvertSketchToFixedPlane={(sketch) => {
+                  const planeRef = fixedPlaneRefForLegacyAttachment(
+                    sketch.planeRef
                   );
-                  return;
+                  if (!planeRef) {
+                    setStatus(
+                      `${sketch.name} is not a legacy face attachment.`
+                    );
+                    return;
+                  }
+                  executeCommand(
+                    commandFactories.updateSketch(
+                      { sketchId: sketch.sketchId, planeRef },
+                      `Convert ${sketch.name} to fixed plane`
+                    )
+                  );
+                }}
+                onApplyTextSketch={(feature, value) => {
+                  if (
+                    feature.data.featureKind !== 'sketch' ||
+                    !selectedSketch ||
+                    !selectedSketch.objectIds[0]
+                  ) {
+                    return;
+                  }
+                  // updateSketchObject, not updateSketch: the object changes
+                  // and the plane must not — a face-attached text sketch has
+                  // to stay on its face.
+                  const commands: AnyCommand[] = [
+                    commandFactories.updateSketchObject(
+                      {
+                        sketchId: feature.data.sketchId,
+                        objectId: selectedSketch.objectIds[0],
+                        data: value.data
+                      },
+                      `Edit ${value.name}`
+                    )
+                  ];
+                  if (value.name !== feature.name) {
+                    commands.push(
+                      commandFactories.renameNode({
+                        nodeId: feature.id,
+                        name: value.name
+                      }),
+                      commandFactories.renameNode({
+                        nodeId: selectedSketch.id,
+                        name: value.name
+                      })
+                    );
+                  }
+                  executeTransaction(`Edit ${value.name}`, commands);
+                }}
+                onEditSketchInViewport={(feature) => {
+                  if (feature.data.featureKind !== 'sketch' || !doc) {
+                    return;
+                  }
+                  const sketch = findSketch(doc, feature.data.sketchId);
+                  if (sketch) {
+                    dispatchInteraction({
+                      type: 'enter-sketch',
+                      plane: sketch.planeRef,
+                      sketchId: sketch.sketchId
+                    });
+                    // Same reason as the revert pill: entering a sketch from
+                    // the tree changes what every key does, so it should say
+                    // so rather than leaving the previous message in place.
+                    setStatus(
+                      `Editing ${sketch.name} · Finish Sketch when done.`
+                    );
+                  }
+                }}
+                onApplyExtrude={(feature, value) => {
+                  if (
+                    feature.data.featureKind !== 'extrude' ||
+                    value.sketchId !== feature.data.sketchId
+                  ) {
+                    setStatus(
+                      'Changing an Extrude source sketch requires profile reselection.'
+                    );
+                    return;
+                  }
+                  executeCommand(
+                    commandFactories.updateFeature(
+                      {
+                        featureId: feature.featureId,
+                        name: value.name,
+                        data: {
+                          ...feature.data,
+                          distance: value.distance
+                        }
+                      },
+                      `Edit ${value.name}`
+                    )
+                  );
+                }}
+                onApplyRevolve={(feature, value) =>
+                  executeCommand(
+                    commandFactories.updateFeature(
+                      {
+                        featureId: feature.featureId,
+                        name: value.name,
+                        data: {
+                          featureKind: 'revolve',
+                          sketchId: value.sketchId,
+                          axis: value.axis,
+                          angleDeg: value.angleDeg
+                        }
+                      },
+                      `Edit ${value.name}`
+                    )
+                  )
                 }
-                executeCommand(
-                  commandFactories.updateFeature(
-                    {
-                      featureId: feature.featureId,
-                      name: value.name,
-                      data: {
-                        ...feature.data,
-                        distance: value.distance
-                      }
-                    },
-                    `Edit ${value.name}`
-                  )
-                );
-              }}
-              onApplyRevolve={(feature, value) =>
-                executeCommand(
-                  commandFactories.updateFeature(
-                    {
-                      featureId: feature.featureId,
-                      name: value.name,
-                      data: {
-                        featureKind: 'revolve',
-                        sketchId: value.sketchId,
-                        axis: value.axis
-                      }
-                    },
-                    `Edit ${value.name}`
-                  )
-                )
-              }
-              onApplyBoolean={(feature, value) =>
-                executeCommand(
-                  commandFactories.updateFeature(
+                onApplyBoolean={(feature, value) => {
+                  const command = commandFactories.updateFeature(
                     {
                       featureId: feature.featureId,
                       name: value.name,
@@ -5192,79 +10505,98 @@ export function App() {
                       }
                     },
                     `Edit ${value.name}`
-                  )
-                )
-              }
-              onApplyTransform={(feature, value) =>
-                executeCommand(
-                  commandFactories.updateFeature(
-                    {
-                      featureId: feature.featureId,
-                      name: value.name,
-                      data: {
-                        featureKind: 'transform',
-                        targetBodyId: value.targetBodyId,
-                        transform: {
-                          translation: value.translation,
-                          rotationDeg: value.rotationDeg
+                  );
+                  if (value.operation !== 'union') {
+                    executeCommand(command);
+                    return;
+                  }
+                  if (!feature.bodyId) {
+                    setStatus('Boolean feature has no result body.');
+                    return;
+                  }
+                  void executeValidatedFeature(command, {
+                    featureName: value.name,
+                    resultBodyId: feature.bodyId,
+                    successMessage: command.label
+                  });
+                }}
+                onApplyTransform={(feature, value) =>
+                  executeCommand(
+                    commandFactories.updateFeature(
+                      {
+                        featureId: feature.featureId,
+                        name: value.name,
+                        data: {
+                          featureKind: 'transform',
+                          targetBodyId: value.targetBodyId,
+                          transform: {
+                            translation: value.translation,
+                            rotationDeg: value.rotationDeg
+                          }
                         }
-                      }
-                    },
-                    `Edit ${value.name}`
+                      },
+                      `Edit ${value.name}`
+                    )
                   )
-                )
-              }
-              onApplyEdgeModifier={(feature, kind, value) =>
-                executeCommand(
-                  commandFactories.updateFeature(
-                    {
-                      featureId: feature.featureId,
-                      name: value.name,
-                      data:
-                        kind === 'fillet'
-                          ? {
-                              featureKind: 'fillet',
-                              targetBodyId: value.targetBodyId,
-                              edgeHashes: value.edgeHashes,
-                              radius: value.size
-                            }
-                          : {
-                              featureKind: 'chamfer',
-                              targetBodyId: value.targetBodyId,
-                              edgeHashes: value.edgeHashes,
-                              distance: value.size
-                            }
-                    },
-                    `Edit ${value.name}`
+                }
+                onApplyEdgeModifier={(feature, kind, value) =>
+                  executeCommand(
+                    commandFactories.updateFeature(
+                      {
+                        featureId: feature.featureId,
+                        name: value.name,
+                        data:
+                          kind === 'fillet'
+                            ? {
+                                featureKind: 'fillet',
+                                targetBodyId: value.targetBodyId,
+                                edgeHashes: value.edgeHashes,
+                                ...(value.edgeReferences
+                                  ? { edgeReferences: value.edgeReferences }
+                                  : {}),
+                                radius: value.size
+                              }
+                            : {
+                                featureKind: 'chamfer',
+                                targetBodyId: value.targetBodyId,
+                                edgeHashes: value.edgeHashes,
+                                ...(value.edgeReferences
+                                  ? { edgeReferences: value.edgeReferences }
+                                  : {}),
+                                distance: value.size
+                              }
+                      },
+                      `Edit ${value.name}`
+                    )
                   )
-                )
-              }
-              onApplyPattern={(feature, value) =>
-                executeCommand(
-                  commandFactories.updateFeature(
-                    {
-                      featureId: feature.featureId,
-                      name: value.name,
-                      data: {
-                        featureKind: 'pattern',
-                        targetBodyId: value.targetBodyId,
-                        patternKind: value.patternKind,
-                        count: value.count,
-                        axis: value.axis,
-                        spacing: value.spacing,
-                        angleDeg: value.angleDeg
-                      }
-                    },
-                    `Edit ${value.name}`
+                }
+                onApplyPattern={(feature, value) =>
+                  executeCommand(
+                    commandFactories.updateFeature(
+                      {
+                        featureId: feature.featureId,
+                        name: value.name,
+                        data: {
+                          featureKind: 'pattern',
+                          targetBodyId: value.targetBodyId,
+                          patternKind: value.patternKind,
+                          count: value.count,
+                          axis: value.axis,
+                          spacing: value.spacing,
+                          angleDeg: value.angleDeg
+                        }
+                      },
+                      `Edit ${value.name}`
+                    )
                   )
-                )
-              }
-              onResizeThroughHole={handleResizeThroughHole}
-              onRemoveFaceFeature={handleRemoveFaceFeature}
-              onDeleteFeature={(feature) =>
-                handleDeleteFeature(feature.featureId, feature.name)
-              }
-            />
+                }
+                onResizeThroughHole={handleResizeThroughHole}
+                onRemoveFaceFeature={handleRemoveFaceFeature}
+                onDeleteFeature={(feature) =>
+                  handleDeleteFeature(feature.featureId, feature.name)
+                }
+              />
+            )}
           </ErrorBoundary>
         ) : null
       }
@@ -5278,16 +10610,16 @@ export function App() {
               onPreview={handlePreviewPatch}
               collapsed={assistantCollapsed}
               onCollapsedChange={setAssistantCollapsed}
-              focusNonce={assistantFocusNonce}
               hidden={assistantHidden}
             />
           </ErrorBoundary>
         ) : null
       }
       assistantHidden={assistantHidden}
+      assistantCollapsed={assistantCollapsed}
       statusBar={
         <StatusBar
-          status={status}
+          status={visibleStatus}
           tone={tone}
           hint={hint}
           projectName={doc.name}
@@ -5295,6 +10627,7 @@ export function App() {
           featureCount={features.length}
           warningCount={warnings.length}
           documentVersion={doc.version}
+          saveState={presentedSaveState}
           units={doc.units}
           selectionFilter={selectionFilter}
           selectionFilterIsAutomatic={manualSelectionFilter === null}
@@ -5341,6 +10674,35 @@ export function App() {
                 onClose={() => setContextMenu(null)}
               />
             ))}
+          {sharingOpen &&
+            cloudFunctionsEnabled &&
+            projectSharingPreferenceEnabled &&
+            doc && (
+              <ProjectSharingDialog
+                projectId={doc.projectId}
+                role={collaboration.role}
+                collaborationStatus={collaboration.status}
+                lease={collaboration.lease}
+                liveMembers={collaboration.members}
+                currentUserId={session?.userId}
+                conflict={collaboration.conflict}
+                conflictHandlers={conflictHandlers}
+                editorInvitationsEnabled={
+                  collaborationRollout.editLeasesEnforced
+                }
+                onClose={() => setSharingOpen(false)}
+              />
+            )}
+          {accountConflict && (
+            <ProjectConflictDialog
+              conflict={accountConflict}
+              busy={busy}
+              onResolve={(resolution) =>
+                void resolveAccountConflict(resolution)
+              }
+              onClose={() => setAccountConflict(null)}
+            />
+          )}
           {settingsOverlay}
         </>
       }

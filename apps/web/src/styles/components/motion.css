@@ -13,16 +13,19 @@
 .icon-button,
 .topbar-action,
 .palette-item,
-.rail-row,
-.rail-views button,
+.rail-button,
+.rail-views-panel button,
 .feature-row-main,
 .body-row-main,
 .param-add button,
-.start-project-list button,
+.start-tile-project,
+.start-expand,
 .callout-value,
 .context-menu-item,
 .assistant-card-actions button,
 .row-delete,
+.row-suppression,
+.row-rollback,
 .row-visibility,
 .selection-chip-clear,
 .save-state {
@@ -39,7 +42,7 @@
 .secondary:active:not(:disabled),
 .icon-button:active:not(:disabled),
 .palette-item:active:not(:disabled),
-.rail-views button:active:not(:disabled),
+.rail-views-panel button:active:not(:disabled),
 .context-menu-item:active:not(:disabled),
 .assistant-card-actions button:active:not(:disabled) {
   transform: translateY(1px);
@@ -75,6 +78,8 @@ textarea {
 }
 
 .row-delete,
+.row-suppression,
+.row-rollback,
 .row-visibility {
   transition:
     opacity var(--dur-fast) var(--ease-out),
@@ -131,10 +136,20 @@ textarea {
   }
 }
 
-/* Viewport callouts and chips arrive with a short rise. Dimension pills are
-   excluded: their transform carries the projected rotation/scale. */
+/* Viewport callouts fade in rather than rise. A CSS animation outranks inline
+   style, and every one of these is positioned by CSS2DRenderer writing
+   `transform: translate(-50%,-50%) translate(Xpx,Ypx)` inline — so a keyframe
+   that touches `transform` throws the placement away for the animation's whole
+   duration. Measured in the browser: an element whose inline transform reads
+   `translate(-50%,-50%) translate(400px,300px)` computes to
+   `matrix(1,0,0,1,0,4)` while oz-rise runs, then snaps to its real position at
+   (376,288) when it ends. That is a 200ms flash at the container's origin for
+   a callout that appears once — and permanent for the extrude value pill,
+   which is rebuilt on every pointer move and so restarts the animation every
+   frame it is dragged (FB-04). Fading changes only opacity, which nothing
+   else owns. Dimension pills stay out entirely, as before. */
 .selection-callout:not(.dimension-callout) {
-  animation: oz-rise var(--dur-base) var(--ease-out);
+  animation: oz-fade var(--dur-base) var(--ease-out);
 }
 
 .selection-chip {
@@ -142,10 +157,6 @@ textarea {
 }
 
 .inspector-float > * {
-  animation: oz-rise var(--dur-base) var(--ease-out);
-}
-
-.viewer-notice > div {
   animation: oz-rise var(--dur-base) var(--ease-out);
 }
 
@@ -158,9 +169,14 @@ textarea {
   transform-origin: top left;
 }
 
-/* Start screen project/demo rows lift slightly toward the pointer. */
-.start-project-list button:not(:disabled):hover {
-  transform: translateX(2px);
+/* Start screen part tiles lift slightly toward the pointer. */
+.start-tile-project:not(:disabled):hover {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 18px rgba(0, 0, 0, 0.3);
+}
+
+.start-tile-project:not(:disabled):active {
+  transform: translateY(0);
 }
 
 /* Status bar flashes subtly when the status text changes (class toggle
@@ -177,4 +193,3 @@ textarea {
 .status-pulse {
   animation: oz-status-pulse 600ms var(--ease-out);
 }
-

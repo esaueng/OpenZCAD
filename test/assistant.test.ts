@@ -12,6 +12,7 @@ import {
 } from '../apps/web/worker/assistant';
 import { parseAssistantProposalRequest } from '../apps/web/worker/validation';
 import {
+  INVALID_STRUCTURED_OUTPUT_MESSAGE,
   parseAssistantEventData,
   readAssistantEvent,
   streamAssistantReply
@@ -47,9 +48,44 @@ describe('assistant integration', () => {
       first.text
     );
     expect(second.text).toBe('{"summary":"Wider"}');
+    expect(
+      readAssistantEvent(
+        { type: 'response.output_text.done', text: second.text },
+        second.text
+      ).done
+    ).toBe(false);
+    expect(
+      readAssistantEvent({ type: 'response.completed' }, second.text).done
+    ).toBe(true);
   });
 
-  it('ignores malformed SSE frames and rejects truncated streams', async () => {
+  it('accepts OpenRouter Responses output and terminal events', () => {
+    const delta = readAssistantEvent(
+      { type: 'response.content_part.delta', delta: '{"replyKind":' },
+      ''
+    );
+    const output = '{"replyKind":"message","message":"Finished"}';
+    const item = readAssistantEvent(
+      {
+        type: 'response.output_item.done',
+        item: {
+          status: 'completed',
+          content: [{ type: 'output_text', text: output }]
+        }
+      },
+      delta.text
+    );
+
+    expect(item.text).toBe(output);
+    expect(
+      readAssistantEvent(
+        { type: 'response.done', response: { status: 'completed' } },
+        item.text
+      ).done
+    ).toBe(true);
+  });
+
+  it('rejects malformed SSE frames as a protocol failure', async () => {
     expect(parseAssistantEventData('{not-json')).toBeNull();
     vi.stubGlobal(
       'fetch',
@@ -64,7 +100,10 @@ describe('assistant integration', () => {
 
     await expect(
       streamAssistantReply({ prompt: input.prompt, digest: input.digest })
-    ).rejects.toThrow('stream ended before the proposal was complete');
+    ).rejects.toMatchObject({
+      code: 'AI_STREAM_PROTOCOL',
+      message: 'The modeling assistant returned an invalid stream event.'
+    });
   });
 
   it('reports a mid-stream provider disconnect', async () => {
@@ -92,6 +131,121 @@ describe('assistant integration', () => {
     await expect(
       streamAssistantReply({ prompt: input.prompt, digest: input.digest })
     ).rejects.toThrow('connection ended before the proposal was complete');
+  });
+
+  it('reports completed non-JSON output without exposing JSON.parse errors', async () => {
+    const requestId = '019fcf75-2cc4-7832-befc-50ae06c9e985';
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(
+        async () =>
+          new Response(
+            `data: ${JSON.stringify({
+              type: 'response.output_text.done',
+              text: 'I could not produce the requested model.'
+            })}\n\ndata: ${JSON.stringify({ type: 'response.completed' })}\n\n`,
+            {
+              headers: {
+                'content-type': 'text/event-stream',
+                'x-openzcad-request-id': requestId
+              }
+            }
+          )
+      )
+    );
+
+    await expect(
+      streamAssistantReply({ prompt: input.prompt, digest: input.digest })
+    ).rejects.toMatchObject({
+      code: 'AI_INVALID_JSON',
+      requestId,
+      message: `${INVALID_STRUCTURED_OUTPUT_MESSAGE} Reference: ${requestId}.`
+    });
+  });
+
+  it('classifies valid JSON that violates the assistant reply contract', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(
+        async () =>
+          new Response(
+            `data: ${JSON.stringify({
+              type: 'response.output_text.done',
+              text: JSON.stringify({ replyKind: 'message', message: '' })
+            })}\n\ndata: ${JSON.stringify({ type: 'response.completed' })}\n\n`,
+            { headers: { 'content-type': 'text/event-stream' } }
+          )
+      )
+    );
+
+    await expect(
+      streamAssistantReply({ prompt: input.prompt, digest: input.digest })
+    ).rejects.toMatchObject({
+      code: 'AI_INVALID_REPLY',
+      message: INVALID_STRUCTURED_OUTPUT_MESSAGE
+    });
+  });
+
+  it('requires response.completed after final output text', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(
+        async () =>
+          new Response(
+            `data: ${JSON.stringify({
+              type: 'response.output_text.done',
+              text: JSON.stringify({
+                replyKind: 'message',
+                message: 'Finished'
+              })
+            })}\n\n`,
+            { headers: { 'content-type': 'text/event-stream' } }
+          )
+      )
+    );
+
+    await expect(
+      streamAssistantReply({ prompt: input.prompt, digest: input.digest })
+    ).rejects.toMatchObject({ code: 'AI_STREAM_TRUNCATED' });
+  });
+
+  it('accepts an OpenRouter response.done stream', async () => {
+    const output = JSON.stringify({
+      replyKind: 'message',
+      proposal: null,
+      questions: null,
+      message: 'Finished',
+      readings: null
+    });
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(
+        async () =>
+          new Response(
+            `data: ${JSON.stringify({
+              type: 'response.content_part.delta',
+              delta: output.slice(0, 20)
+            })}\n\ndata: ${JSON.stringify({
+              type: 'response.content_part.delta',
+              delta: output.slice(20)
+            })}\n\ndata: ${JSON.stringify({
+              type: 'response.output_item.done',
+              item: {
+                status: 'completed',
+                content: [{ type: 'output_text', text: output }]
+              }
+            })}\n\ndata: ${JSON.stringify({
+              type: 'response.done',
+              response: { status: 'completed' }
+            })}\n\ndata: [DONE]\n\n`,
+            { headers: { 'content-type': 'text/event-stream' } }
+          )
+      )
+    );
+
+    await expect(
+      streamAssistantReply({ prompt: input.prompt, digest: input.digest })
+    ).resolves.toEqual({ kind: 'message', message: 'Finished' });
   });
 
   it('bounds conversation history and rejects unusable attachments', () => {
@@ -245,15 +399,14 @@ describe('assistant integration', () => {
         ]
       },
       {
+        AI_PROVIDER: 'responses-compatible',
         AI_API_KEY: 'key',
         AI_BASE_URL: 'https://models.example.test/v1/responses'
       },
       'user_drawing'
     );
 
-    const request = JSON.parse(
-      fetchMock.mock.calls[0]![1]?.body as string
-    ) as {
+    const request = JSON.parse(fetchMock.mock.calls[0]![1]?.body as string) as {
       instructions: string;
       input: Array<{ role: string; content: unknown }>;
     };
@@ -275,7 +428,9 @@ describe('assistant integration', () => {
     };
     expect(current.role).toBe('user');
     expect(current.content[0]).toMatchObject({ type: 'input_text' });
-    expect(String(current.content[0]!.text)).toContain('Make the bracket wider');
+    expect(String(current.content[0]!.text)).toContain(
+      'Make the bracket wider'
+    );
     expect(current.content[1]).toEqual({
       type: 'input_image',
       image_url: 'data:image/png;base64,QUJD',
@@ -301,14 +456,16 @@ describe('assistant integration', () => {
     await streamAssistantProposal(
       input,
       {
+        AI_PROVIDER: 'responses-compatible',
         AI_API_KEY: 'key',
         AI_BASE_URL: 'https://models.example.test/v1/responses'
       },
       'user_text'
     );
-    const request = JSON.parse(
-      fetchMock.mock.calls[0]![1]?.body as string
-    ) as { instructions: string; input: unknown[] };
+    const request = JSON.parse(fetchMock.mock.calls[0]![1]?.body as string) as {
+      instructions: string;
+      input: unknown[];
+    };
     expect(request.instructions).not.toContain('Reading the attached drawing');
     // The reply protocol itself is always present.
     expect(request.instructions).toContain('Choose one of three replies');
@@ -343,6 +500,7 @@ describe('assistant integration', () => {
     );
     expect(response.headers.get('content-type')).toContain('text/event-stream');
     const [, init] = fetchMock.mock.calls[0]!;
+    expect(init?.redirect).toBe('manual');
     expect(typeof init?.body).toBe('string');
     const request = JSON.parse(init?.body as string) as Record<string, unknown>;
     expect(request).toMatchObject({
@@ -355,6 +513,7 @@ describe('assistant integration', () => {
         format: { type: 'json_schema', name: 'openzcad_reply', strict: true }
       }
     });
+    expect(request.provider).toBeUndefined();
   });
 
   it('uses one owner-scoped runtime configuration without leaking it into app defaults', async () => {
@@ -407,6 +566,7 @@ describe('assistant integration', () => {
     await streamAssistantProposal(
       input,
       {
+        AI_PROVIDER: 'responses-compatible',
         AI_API_KEY: 'key',
         AI_BASE_URL: 'https://models.example.test/v1/responses'
       },
@@ -427,9 +587,7 @@ describe('assistant integration', () => {
     expect(budgeted.instructions).toContain(
       "A primitive cylinder's raw B-rep also has a smooth periodic seam"
     );
-    expect(budgeted.instructions).toContain(
-      'do not ask them to select edges'
-    );
+    expect(budgeted.instructions).toContain('do not ask them to select edges');
     expect(budgeted.instructions).toContain(
       'ONE LIVE BODY for each physical part'
     );
@@ -444,6 +602,10 @@ describe('assistant integration', () => {
     expect(budgeted.instructions).toContain(
       "A CYLINDER's and a CONE's vertical size is `height`"
     );
+    expect(budgeted.instructions).toContain(
+      'newer operations are enabled for this deployment: none'
+    );
+    expect(budgeted.instructions).toContain('`add_shell`');
 
     const overridden = vi.fn(
       async (_input: RequestInfo | URL, _init?: RequestInit) =>
@@ -455,6 +617,7 @@ describe('assistant integration', () => {
     await streamAssistantProposal(
       input,
       {
+        AI_PROVIDER: 'responses-compatible',
         AI_API_KEY: 'key',
         AI_BASE_URL: 'https://models.example.test/v1/responses',
         AI_MAX_OUTPUT_TOKENS: '4096'
@@ -468,6 +631,110 @@ describe('assistant integration', () => {
         }
       ).max_output_tokens
     ).toBe(4096);
+  });
+
+  it('exposes each new AI operation to the model only behind its dark flag', async () => {
+    const fetchMock = vi.fn(
+      async (_input: RequestInfo | URL, _init?: RequestInit) =>
+        new Response('data: {"type":"response.completed"}\n\n', {
+          headers: { 'content-type': 'text/event-stream' }
+        })
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    await streamAssistantProposal(
+      input,
+      {
+        AI_PROVIDER: 'responses-compatible',
+        AI_API_KEY: 'key',
+        AI_BASE_URL: 'https://models.example.test/v1/responses',
+        AI_PATCH_FACE_SKETCH_ENABLED: 'true',
+        AI_PATCH_MIRROR_ENABLED: '1'
+      },
+      'user_test'
+    );
+    const request = JSON.parse(fetchMock.mock.calls[0]![1]?.body as string) as {
+      instructions: string;
+      text: { format: { schema: unknown } };
+    };
+    const enabledLine = request.instructions
+      .split('\n')
+      .find((line) => line.includes('enabled for this deployment'))!;
+    expect(enabledLine).toContain('`add_face_sketch`');
+    expect(enabledLine).toContain('`add_mirror`');
+    expect(enabledLine).not.toContain('`add_shell`');
+    expect(request.instructions).toContain('Currently disabled:');
+    expect(request.instructions).toContain('`add_shell`');
+    const schema = JSON.stringify(request.text.format.schema);
+    expect(schema).toContain('"const":"add_face_sketch"');
+    expect(schema).toContain('"const":"add_mirror"');
+    expect(schema).toContain('"const":"add_transform"');
+    expect(schema).not.toContain('"const":"add_direct_edit"');
+    expect(schema).not.toContain('"const":"add_shell"');
+    expect(schema).not.toContain('"const":"add_solid_offset"');
+  });
+
+  it('prunes a rollout-flagged operation FIELD without withdrawing the operation', async () => {
+    const requestFor = async (env: Record<string, string>) => {
+      const fetchMock = vi.fn(
+        async (_input: RequestInfo | URL, _init?: RequestInit) =>
+          new Response('data: {"type":"response.completed"}\n\n', {
+            headers: { 'content-type': 'text/event-stream' }
+          })
+      );
+      vi.stubGlobal('fetch', fetchMock);
+      await streamAssistantProposal(
+        input,
+        {
+          AI_PROVIDER: 'responses-compatible',
+          AI_API_KEY: 'key',
+          AI_BASE_URL: 'https://models.example.test/v1/responses',
+          ...env
+        },
+        'user_test'
+      );
+      return JSON.parse(fetchMock.mock.calls[0]![1]?.body as string) as {
+        instructions: string;
+        text: { format: { schema: unknown } };
+      };
+    };
+    const revolveBranch = (schema: unknown) => {
+      const found: Record<string, unknown>[] = [];
+      const visit = (value: unknown): void => {
+        if (!value || typeof value !== 'object') {
+          return;
+        }
+        const candidate = value as Record<string, unknown>;
+        const properties = candidate.properties as
+          Record<string, { const?: unknown }> | undefined;
+        if (properties?.kind?.const === 'add_revolve') {
+          found.push(candidate);
+        }
+        Object.values(candidate).forEach((child) =>
+          Array.isArray(child) ? child.forEach(visit) : visit(child)
+        );
+      };
+      visit(schema);
+      expect(found).toHaveLength(1);
+      return found[0]!;
+    };
+
+    const off = await requestFor({});
+    const offBranch = revolveBranch(off.text.format.schema);
+    // The operation itself is never withdrawn — only the field.
+    expect(Object.keys(offBranch.properties as object)).not.toContain(
+      'angleDeg'
+    );
+    expect(offBranch.required).not.toContain('angleDeg');
+    expect(offBranch.required).toContain('axis');
+    expect(off.instructions).toContain('Disabled: `add_revolve.angleDeg`');
+
+    const on = await requestFor({ AI_PATCH_PARTIAL_REVOLVE_ENABLED: 'yes' });
+    const onBranch = revolveBranch(on.text.format.schema);
+    expect(Object.keys(onBranch.properties as object)).toContain('angleDeg');
+    // Strict structured output rejects a property missing from `required`.
+    expect(onBranch.required).toContain('angleDeg');
+    expect(on.instructions).toContain('Enabled: `add_revolve.angleDeg`');
   });
 
   it('falls back to the default output budget for unusable overrides', () => {
@@ -499,6 +766,7 @@ describe('assistant integration', () => {
     vi.spyOn(console, 'error').mockImplementation(() => undefined);
 
     const response = await streamAssistantProposal(input, {
+      AI_PROVIDER: 'responses-compatible',
       AI_API_KEY: 'key',
       AI_BASE_URL: 'https://models.example.test/v1/responses'
     });
@@ -511,7 +779,7 @@ describe('assistant integration', () => {
 
   it('uses one centralized frontier-model default', () => {
     expect(DEFAULT_AI_PROVIDER).toBe('openrouter');
-    expect(DEFAULT_OPENROUTER_MODEL).toBe('openai/gpt-5.6-terra');
+    expect(DEFAULT_OPENROUTER_MODEL).toBe('openai/gpt-5.6-sol');
     expect(DEFAULT_AI_MODEL).toBe('gpt-5.6-sol');
   });
 
@@ -525,7 +793,7 @@ describe('assistant integration', () => {
     ).toEqual({
       configured: true,
       provider: 'openrouter',
-      model: 'openai/gpt-5.6-terra',
+      model: 'openai/gpt-5.6-sol',
       reasoningEffort: 'high'
     });
   });
@@ -533,7 +801,7 @@ describe('assistant integration', () => {
   it('reports configuration state without returning the API key', () => {
     const status = getAssistantStatus({
       ENVIRONMENT: 'beta',
-      AI_API_KEY: 'never-return-this',
+      OPENROUTER_API_KEY: 'never-return-this',
       AI_MODEL: 'configured-model'
     });
     expect(status).toEqual({
@@ -545,7 +813,25 @@ describe('assistant integration', () => {
     expect(JSON.stringify(status)).not.toContain('never-return-this');
   });
 
-  it('uses an OpenRouter key, endpoint, headers, and balanced model default', async () => {
+  it('fails closed instead of sending a generic key to OpenRouter', async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+    const env = {
+      AI_PROVIDER: 'openrouter' as const,
+      AI_API_KEY: 'legacy-openai-key'
+    };
+
+    expect(getAssistantStatus(env)).toMatchObject({ configured: false });
+    const response = await streamAssistantProposal(input, env, 'user_test');
+
+    expect(response.status).toBe(503);
+    await expect(response.json()).resolves.toMatchObject({
+      code: 'AI_NOT_CONFIGURED'
+    });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('uses an OpenRouter key, endpoint, headers, and frontier model default', async () => {
     const fetchMock = vi.fn(
       async (_input: RequestInfo | URL, _init?: RequestInit) =>
         new Response('data: {"type":"response.completed"}\n\n', {
@@ -579,17 +865,192 @@ describe('assistant integration', () => {
     expect(headers.get('http-referer')).toBe('https://beta.openzcad.example');
     const request = JSON.parse(init?.body as string) as {
       model: string;
+      provider: { require_parameters: boolean };
       reasoning: { effort: string };
       stream: boolean;
     };
     expect(request).toMatchObject({
-      model: 'openai/gpt-5.6-terra',
+      model: 'openai/gpt-5.6-sol',
+      provider: { require_parameters: true },
       reasoning: { effort: 'high' },
       stream: true
     });
   });
 
-  it('does not log upstream provider details', async () => {
+  it('retries an unavailable strict OpenRouter route without weakening local validation', async () => {
+    let attempt = 0;
+    const fetchMock = vi.fn(
+      async (_input: RequestInfo | URL, _init?: RequestInit) => {
+        attempt += 1;
+        if (attempt === 1) {
+          return Response.json(
+            {
+              error: {
+                code: 404,
+                message:
+                  'No allowed providers are available for the selected model'
+              }
+            },
+            { status: 404 }
+          );
+        }
+        return new Response('data: {"type":"response.completed"}\n\n', {
+          headers: { 'content-type': 'text/event-stream' }
+        });
+      }
+    );
+    vi.stubGlobal('fetch', fetchMock);
+    const consoleWarn = vi
+      .spyOn(console, 'warn')
+      .mockImplementation(() => undefined);
+
+    const response = await streamAssistantProposal(input, {}, 'user_personal', {
+      provider: 'openrouter',
+      apiKey: 'personal-key',
+      model: 'openai/gpt-5.6-sol',
+      reasoningEffort: 'high',
+      maxOutputTokens: 32_000,
+      timeoutMs: 120_000,
+      customInstructions: ''
+    });
+
+    expect(response.status).toBe(200);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    const [strictUrl, strictInit] = fetchMock.mock.calls[0]!;
+    const [fallbackUrl, fallbackInit] = fetchMock.mock.calls[1]!;
+    expect(strictUrl).toBe('https://openrouter.ai/api/v1/responses');
+    expect(fallbackUrl).toBe(strictUrl);
+    const strictRequest = JSON.parse(strictInit?.body as string) as Record<
+      string,
+      unknown
+    >;
+    const fallbackRequest = JSON.parse(fallbackInit?.body as string) as Record<
+      string,
+      unknown
+    >;
+    expect(strictRequest.provider).toEqual({ require_parameters: true });
+    expect(fallbackRequest.provider).toBeUndefined();
+    expect(fallbackRequest).toMatchObject({
+      model: 'openai/gpt-5.6-sol',
+      safety_identifier: 'user_personal',
+      text: {
+        format: {
+          type: 'json_schema',
+          name: 'openzcad_reply',
+          strict: true
+        }
+      }
+    });
+    expect(consoleWarn).toHaveBeenCalledWith(
+      'AI Responses strict route unavailable; retrying:',
+      expect.objectContaining({
+        provider: 'openrouter',
+        model: 'openai/gpt-5.6-sol',
+        status: 404
+      })
+    );
+    expect(JSON.stringify(consoleWarn.mock.calls)).not.toContain(
+      'personal-key'
+    );
+  });
+
+  it('logs only bounded metadata for invalid streamed output', async () => {
+    const output = 'not-json';
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(
+        async () =>
+          new Response(
+            `data: ${JSON.stringify({
+              type: 'response.output_text.done',
+              response_id: 'resp_safe_123',
+              text: output
+            })}\n\ndata: ${JSON.stringify({
+              type: 'response.completed',
+              response: { id: 'resp_safe_123' }
+            })}\n\n`,
+            { headers: { 'content-type': 'text/event-stream' } }
+          )
+      )
+    );
+    const consoleError = vi
+      .spyOn(console, 'error')
+      .mockImplementation(() => undefined);
+
+    const response = await streamAssistantProposal(input, {
+      AI_PROVIDER: 'openrouter',
+      OPENROUTER_API_KEY: 'secret-key'
+    });
+    const requestId = response.headers.get('x-openzcad-request-id');
+    await response.text();
+
+    expect(requestId).toMatch(/^[0-9a-f-]{36}$/);
+    expect(consoleError).toHaveBeenCalledWith(
+      'AI Responses stream failed:',
+      expect.objectContaining({
+        requestId,
+        provider: 'openrouter',
+        model: 'openai/gpt-5.6-sol',
+        upstreamResponseId: 'resp_safe_123',
+        classification: 'invalid_json',
+        terminalEvent: 'response.completed',
+        outputBytes: output.length,
+        outputSha256:
+          '0c21a879c732a67910d80988df4919d794f6a070aab610ef865032a28046b021',
+        outputHashComplete: true
+      })
+    );
+    const logged = JSON.stringify(consoleError.mock.calls);
+    expect(logged).not.toContain(output);
+    expect(logged).not.toContain('secret-key');
+    expect(logged).not.toContain(input.prompt);
+  });
+
+  it('recognizes a valid OpenRouter stream in Worker diagnostics', async () => {
+    const output = JSON.stringify({
+      replyKind: 'message',
+      proposal: null,
+      questions: null,
+      message: 'Finished',
+      readings: null
+    });
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(
+        async () =>
+          new Response(
+            `data: ${JSON.stringify({
+              type: 'response.content_part.delta',
+              delta: output
+            })}\n\ndata: ${JSON.stringify({
+              type: 'response.output_item.done',
+              item: {
+                status: 'completed',
+                content: [{ type: 'output_text', text: output }]
+              }
+            })}\n\ndata: ${JSON.stringify({
+              type: 'response.done',
+              response: { id: 'resp_openrouter_123', status: 'completed' }
+            })}\n\ndata: [DONE]\n\n`,
+            { headers: { 'content-type': 'text/event-stream' } }
+          )
+      )
+    );
+    const consoleError = vi
+      .spyOn(console, 'error')
+      .mockImplementation(() => undefined);
+    consoleError.mockClear();
+
+    const response = await streamAssistantProposal(input, {
+      AI_PROVIDER: 'openrouter',
+      OPENROUTER_API_KEY: 'secret-key'
+    });
+    await response.text();
+
+    expect(consoleError).not.toHaveBeenCalled();
+  });
+
+  it('does not log raw upstream provider details', async () => {
     const longMessage = `Invalid response schema: ${'x'.repeat(600)}`;
     vi.stubGlobal(
       'fetch',
@@ -626,14 +1087,21 @@ describe('assistant integration', () => {
     });
 
     expect(response.status).toBe(502);
+    const requestId = response.headers.get('x-openzcad-request-id');
+    expect(requestId).toMatch(/^[0-9a-f-]{36}$/);
     await expect(response.json()).resolves.toEqual({
       error: 'The modeling assistant could not generate a patch.',
       code: 'AI_UPSTREAM_ERROR'
     });
-    expect(consoleError).toHaveBeenCalledWith('AI Responses provider failed:', {
-      provider: 'openrouter',
-      status: 400
-    });
+    expect(consoleError).toHaveBeenCalledWith(
+      'AI Responses provider failed:',
+      expect.objectContaining({
+        requestId,
+        provider: 'openrouter',
+        model: 'openai/gpt-5.6-sol',
+        status: 400
+      })
+    );
     const logged = JSON.stringify(consoleError.mock.calls);
     expect(logged).not.toContain('secret-key');
     expect(logged).not.toContain(longMessage);

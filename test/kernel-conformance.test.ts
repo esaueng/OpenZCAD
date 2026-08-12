@@ -11,7 +11,6 @@ import {
   transformBody,
   type PrimitiveInput
 } from '@openzcad/document-core';
-import { createKernelAdapter } from '@openzcad/kernel-adapter';
 import {
   createExactKernelAdapter,
   type ExactKernelAdapter
@@ -19,14 +18,17 @@ import {
 import { toUserId, type ProjectDocument } from '@openzcad/shared';
 
 /**
- * The AI preview renders with the compat polyhedral kernel on the main thread
- * while Apply rebuilds with the exact BrepKit kernel in a worker. If the two
- * disagree about where a primitive sits or which way it points, every preview
- * lies about the model the user is agreeing to.
+ * Kernel conventions, pinned absolutely.
  *
- * These cases pin the compat kernel to BrepKit's conventions. The compat kernel
- * approximates curves with facets, so radial sizes and volumes are compared with
- * a tolerance; placement and orientation must agree closely.
+ * BrepKit is the only kernel, so "where does a primitive sit and which way does
+ * it point" can no longer be checked by agreeing with a second kernel — it has
+ * to be asserted outright. Every case below states the analytic volume and the
+ * exact placement the document model promises, so a kernel upgrade that quietly
+ * re-centres a box, spins a cylinder onto another axis, or changes Euler order
+ * fails here instead of in a user's model.
+ *
+ * These are exact-kernel numbers: analytic surfaces, so volumes match closed
+ * form rather than a faceting tolerance.
  */
 function primitive(
   name: string,
@@ -41,12 +43,17 @@ function primitive(
 
 interface Measured {
   volume: number;
-  bbox: { min: { x: number; y: number; z: number }; max: { x: number; y: number; z: number } };
+  faceCount: number;
+  bbox: {
+    min: { x: number; y: number; z: number };
+    max: { x: number; y: number; z: number };
+  };
 }
 
-describe('compat kernel conforms to the exact kernel', () => {
+// Real-kernel suite: see the note in exact-kernel-adapter.test.ts — WASM
+// startup alone can exceed the 5 s default under pool contention.
+describe('exact kernel conventions', { timeout: 30_000 }, () => {
   let exact: ExactKernelAdapter;
-  const compat = createKernelAdapter();
 
   beforeAll(async () => {
     exact = await createExactKernelAdapter();
@@ -56,88 +63,74 @@ describe('compat kernel conforms to the exact kernel', () => {
     exact.dispose();
   });
 
-  async function measure(
-    document: ProjectDocument
-  ): Promise<{ compat: Measured; exact: Measured }> {
+  async function measure(document: ProjectDocument): Promise<Measured> {
     const bodyId = getLatestBodyId(document)!;
-    const fromCompat = compat.syncDocument(document);
-    const fromExact = await exact.syncDocument(document);
-    return {
-      compat: fromCompat.bodyRepresentations[bodyId]!,
-      exact: fromExact.bodyRepresentations[bodyId]!
-    };
+    const derived = await exact.syncDocument(document);
+    expect(derived.warnings).toEqual([]);
+    return derived.bodyRepresentations[bodyId]!;
   }
 
-  function expectAgreement(
-    result: { compat: Measured; exact: Measured },
-    { volumeTolerance = 0.02, placeTolerance = 0.02 } = {}
-  ) {
-    const { compat: a, exact: b } = result;
-    // Faceting always under-fills a curved solid, so compare proportionally.
-    expect(Math.abs(a.volume - b.volume) / b.volume).toBeLessThan(
-      volumeTolerance
-    );
-    for (const axis of ['x', 'y', 'z'] as const) {
-      const span = Math.max(
-        b.bbox.max[axis] - b.bbox.min[axis],
-        1
-      );
-      expect(Math.abs(a.bbox.min[axis] - b.bbox.min[axis]) / span).toBeLessThan(
-        placeTolerance
-      );
-      expect(Math.abs(a.bbox.max[axis] - b.bbox.max[axis]) / span).toBeLessThan(
-        placeTolerance
-      );
-    }
+  function expectBounds(
+    measured: Measured,
+    min: [number, number, number],
+    max: [number, number, number],
+    precision = 6
+  ): void {
+    const axes = ['x', 'y', 'z'] as const;
+    axes.forEach((axis, index) => {
+      expect(measured.bbox.min[axis]).toBeCloseTo(min[index]!, precision);
+      expect(measured.bbox.max[axis]).toBeCloseTo(max[index]!, precision);
+    });
   }
 
-  it('places a box at the same corner', async () => {
-    const result = await measure(
+  it('puts a box corner on the origin, not its centre', async () => {
+    const measured = await measure(
       primitive('Box', 'box', { width: 10, height: 20, depth: 30 })
     );
-    expectAgreement(result, { volumeTolerance: 1e-9, placeTolerance: 1e-6 });
-    // Both kernels must put the box's corner on the origin, not its centre.
-    expect(result.compat.bbox.min.x).toBeCloseTo(0, 6);
-    expect(result.compat.bbox.max.z).toBeCloseTo(30, 6);
+    expect(measured.volume).toBeCloseTo(6000, 9);
+    expect(measured.faceCount).toBe(6);
+    expectBounds(measured, [0, 0, 0], [10, 20, 30]);
   });
 
-  it('points a cylinder down the same axis', async () => {
-    const result = await measure(
+  it('points a cylinder down +Z from a base on z=0', async () => {
+    const measured = await measure(
       primitive('Cylinder', 'cylinder', { radius: 5, height: 12 })
     );
-    expectAgreement(result);
-    // Base on z=0 with the axis along +Z — the compat kernel used to run its
-    // cylinders along Y, so a preview showed them turned 90 degrees.
-    expect(result.compat.bbox.min.z).toBeCloseTo(0, 6);
-    expect(result.compat.bbox.max.z).toBeCloseTo(12, 6);
+    // Analytic, not faceted: pi * r^2 * h exactly.
+    expect(measured.volume).toBeCloseTo(Math.PI * 25 * 12, 9);
+    // Side, top, bottom — one analytic cylindrical face, not 48 facets.
+    expect(measured.faceCount).toBe(3);
+    expectBounds(measured, [-5, -5, 0], [5, 5, 12]);
   });
 
-  it('points a cone down the same axis', async () => {
-    expectAgreement(
-      await measure(
-        primitive('Cone', 'cone', { bottomRadius: 6, topRadius: 3, height: 9 })
-      )
+  it('points a cone down +Z and keeps the frustum volume analytic', async () => {
+    const measured = await measure(
+      primitive('Cone', 'cone', { bottomRadius: 6, topRadius: 3, height: 9 })
     );
+    const analytic = ((Math.PI * 9) / 3) * (36 + 6 * 3 + 9);
+    expect(measured.volume).toBeCloseTo(analytic, 9);
+    expect(measured.faceCount).toBe(3);
+    expectBounds(measured, [-6, -6, 0], [6, 6, 9]);
   });
 
-  it('centres a sphere the same way', async () => {
-    expectAgreement(await measure(primitive('Sphere', 'sphere', { radius: 7 })), {
-      // A 32x16 facet sphere is visibly under-filled against an exact one.
-      volumeTolerance: 0.06
-    });
+  it('centres a sphere on the origin', async () => {
+    const measured = await measure(
+      primitive('Sphere', 'sphere', { radius: 7 })
+    );
+    expect(measured.volume).toBeCloseTo((4 / 3) * Math.PI * 343, 9);
+    expectBounds(measured, [-7, -7, -7], [7, 7, 7]);
   });
 
-  it('orients a torus the same way', async () => {
-    const result = await measure(
+  it('lays a torus ring in XY with its tube along Z', async () => {
+    const measured = await measure(
       primitive('Torus', 'torus', { majorRadius: 10, minorRadius: 2 })
     );
-    expectAgreement(result, { volumeTolerance: 0.06 });
-    // Ring in XY, tube along Z: the thin axis is Z.
-    expect(result.compat.bbox.max.z).toBeCloseTo(2, 6);
-    expect(result.compat.bbox.max.x).toBeCloseTo(12, 1);
+    expect(measured.volume).toBeCloseTo(2 * Math.PI * Math.PI * 10 * 4, 9);
+    // Thin axis is Z; the ring reaches majorRadius + minorRadius in X and Y.
+    expectBounds(measured, [-12, -12, -2], [12, 12, 2]);
   });
 
-  it('agrees on a rotation about a single axis', async () => {
+  it('rotates about the world origin, not the body centre', async () => {
     let document = primitive('Box', 'box', {
       width: 10,
       height: 20,
@@ -149,13 +142,13 @@ describe('compat kernel conforms to the exact kernel', () => {
       translation: { x: 0, y: 0, z: 0 },
       rotationDeg: { x: 0, y: 0, z: 90 }
     }).document;
-    expectAgreement(await measure(document), {
-      volumeTolerance: 1e-6,
-      placeTolerance: 1e-6
-    });
+    const measured = await measure(document);
+    expect(measured.volume).toBeCloseTo(6000, 6);
+    // The box spans x 0..10 and y 0..20; Rz(90) sweeps it onto -X.
+    expectBounds(measured, [-20, 0, 0], [0, 10, 30]);
   });
 
-  it('agrees on a rotation about several axes at once', async () => {
+  it('applies multi-axis rotations in X, then Y, then Z order', async () => {
     let document = primitive('Box', 'box', {
       width: 10,
       height: 20,
@@ -167,14 +160,22 @@ describe('compat kernel conforms to the exact kernel', () => {
       translation: { x: 5, y: -3, z: 2 },
       rotationDeg: { x: 30, y: 40, z: 50 }
     }).document;
-    expectAgreement(await measure(document), {
-      volumeTolerance: 1e-6,
-      placeTolerance: 1e-6
-    });
+    const measured = await measure(document);
+    expect(measured.volume).toBeCloseTo(6000, 6);
+    // Pinned from the ZYX composition; an XYZ order lands elsewhere entirely.
+    expectBounds(
+      measured,
+      [-4.136519851713, -3, -4.427876096865],
+      [32.149330470906, 22.076901471913, 29.562862876258],
+      6
+    );
   });
 
-  it('agrees on an extruded sketch', async () => {
-    let document = createProjectDocument('Extrude', toUserId('user_conformance'));
+  it('extrudes a centred sketch rectangle along the plane normal', async () => {
+    let document = createProjectDocument(
+      'Extrude',
+      toUserId('user_conformance')
+    );
     document = addSketchFeature(document, {
       name: 'Profile',
       plane: 'XY',
@@ -192,13 +193,12 @@ describe('compat kernel conforms to the exact kernel', () => {
       sketchId: getLatestSketchId(document)!,
       distance: 12
     }).document;
-    expectAgreement(await measure(document), {
-      volumeTolerance: 1e-6,
-      placeTolerance: 1e-6
-    });
+    const measured = await measure(document);
+    expect(measured.volume).toBeCloseTo(32 * 18 * 12, 6);
+    expectBounds(measured, [-16, -9, 0], [16, 9, 12]);
   });
 
-  it('agrees on a circular sketch extruded below its plane', async () => {
+  it('extrudes a circle below its offset plane for a negative distance', async () => {
     let document = createProjectDocument(
       'Negative circle extrude',
       toUserId('user_conformance')
@@ -219,14 +219,17 @@ describe('compat kernel conforms to the exact kernel', () => {
       sketchId: getLatestSketchId(document)!,
       distance: -12
     }).document;
-    expectAgreement(await measure(document), {
-      volumeTolerance: 0.03,
-      placeTolerance: 0.03
-    });
+    const measured = await measure(document);
+    expect(measured.volume).toBeCloseTo(Math.PI * 36 * 12, 9);
+    // Plane at z=4, extruded -12: the solid spans z -8..4, centred on (3, -2).
+    expectBounds(measured, [-3, -8, -8], [9, 4, 4]);
   });
 
-  it('agrees on a revolved sketch', async () => {
-    let document = createProjectDocument('Revolve', toUserId('user_conformance'));
+  it('revolves an offset rectangle into an annular ring', async () => {
+    let document = createProjectDocument(
+      'Revolve',
+      toUserId('user_conformance')
+    );
     document = addSketchFeature(document, {
       name: 'Profile',
       plane: 'XZ',
@@ -244,10 +247,13 @@ describe('compat kernel conforms to the exact kernel', () => {
       sketchId: getLatestSketchId(document)!,
       axis: 'vertical'
     }).document;
-    expectAgreement(await measure(document));
+    const measured = await measure(document);
+    // Annulus between r=8 and r=12, 6 tall.
+    expect(measured.volume).toBeCloseTo(Math.PI * (144 - 64) * 6, 9);
+    expectBounds(measured, [-12, -12, -3], [12, 12, 3]);
   });
 
-  it('agrees on a hollow box built by subtraction', async () => {
+  it('subtracts a positioned cavity without changing the outer envelope', async () => {
     let document = primitive('Outer', 'box', {
       width: 40,
       height: 30,
@@ -271,9 +277,10 @@ describe('compat kernel conforms to the exact kernel', () => {
       operation: 'subtract',
       targetBodyIds: [outer, cavity]
     }).document;
-    expectAgreement(await measure(document), {
-      volumeTolerance: 1e-6,
-      placeTolerance: 1e-6
-    });
+    const measured = await measure(document);
+    expect(measured.volume).toBeCloseTo(40 * 30 * 20 - 36 * 26 * 18, 6);
+    // Six outer faces plus the five cavity walls: the cavity is open on +Z.
+    expect(measured.faceCount).toBe(11);
+    expectBounds(measured, [0, 0, 0], [40, 30, 20]);
   });
 });

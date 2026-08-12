@@ -2,36 +2,10 @@ import { describe, expect, it } from 'vitest';
 import {
   clampMenuOrigin,
   MARKING_DEAD_ZONE_PX,
-  RADIAL_SLOTS,
   sectorForVector,
   sectorPosition,
-  splitRadial
+  slotPositionClearOfHub
 } from './markingMenu';
-
-const items = (count: number) =>
-  Array.from({ length: count }, (_, index) => `item-${index}`);
-
-describe('what fits on the ring', () => {
-  it('keeps a full ring on the ring', () => {
-    const split = splitRadial(items(RADIAL_SLOTS));
-    expect(split.radial).toHaveLength(RADIAL_SLOTS);
-    expect(split.overflow).toEqual([]);
-  });
-
-  it('never leaves a single item alone in the overflow', () => {
-    // A list holding one row, next to a ring that gave up nothing for it, is
-    // the worst of both.
-    const split = splitRadial(items(RADIAL_SLOTS + 1));
-    expect(split.overflow.length).toBeGreaterThan(1);
-  });
-
-  it('loses no items to the split', () => {
-    for (const count of [0, 1, 5, 8, 9, 12]) {
-      const split = splitRadial(items(count));
-      expect([...split.radial, ...split.overflow]).toEqual(items(count));
-    }
-  });
-});
 
 describe('aiming at a sector', () => {
   const far = MARKING_DEAD_ZONE_PX * 3;
@@ -54,13 +28,25 @@ describe('aiming at a sector', () => {
   it('resolves an aim between two sectors to one of them', () => {
     // Landing on a boundary must pick a side; picking neither would read as
     // a dead spot in the ring.
-    const between = sectorForVector(far * Math.cos(-1.1781), far * Math.sin(-1.1781), 8);
+    const between = sectorForVector(
+      far * Math.cos(-1.1781),
+      far * Math.sin(-1.1781),
+      8
+    );
     expect([0, 1]).toContain(between);
   });
 
   it('ignores the wobble between pressing and releasing', () => {
     expect(sectorForVector(3, -4, 8)).toBeNull();
     expect(sectorForVector(0, 0, 8)).toBeNull();
+  });
+
+  it('picks nothing while the pointer is still on the hub', () => {
+    // The hub is drawn at the dead zone's radius, so anything it covers has
+    // to be a release that chose nothing — otherwise the readout would name
+    // an action the menu was not going to run.
+    expect(sectorForVector(0, -(MARKING_DEAD_ZONE_PX - 1), 8)).toBeNull();
+    expect(sectorForVector(0, -(MARKING_DEAD_ZONE_PX + 1), 8)).toBe(0);
   });
 
   it('adapts to a ring that is not full', () => {
@@ -108,5 +94,35 @@ describe('keeping the ring on screen', () => {
 
   it('centres itself when the window is too small for the ring', () => {
     expect(clampMenuOrigin(90, 40, 200, 100, 140)).toEqual({ x: 100, y: 50 });
+  });
+});
+
+describe('clearing slots off the hub pill', () => {
+  it('leaves a slot outside the band alone', () => {
+    const at = { x: 0, y: -96 };
+    expect(slotPositionClearOfHub(at, 42)).toEqual(at);
+  });
+
+  it('lifts both horizontal slots above the band, mirroring each other', () => {
+    const east = slotPositionClearOfHub({ x: 96, y: 0 }, 42);
+    const west = slotPositionClearOfHub({ x: -96, y: 1.2e-16 }, 42);
+    expect(east).toEqual({ x: 96, y: -42 });
+    expect(west).toEqual({ x: -96, y: -42 });
+  });
+
+  it('settles a leaning slot on the side it was leaning toward', () => {
+    expect(slotPositionClearOfHub({ x: 90, y: 30 }, 42)).toEqual({
+      x: 90,
+      y: 42
+    });
+    expect(slotPositionClearOfHub({ x: -90, y: -30 }, 42)).toEqual({
+      x: -90,
+      y: -42
+    });
+  });
+
+  it('keeps x untouched, so the ring width never grows', () => {
+    const cleared = slotPositionClearOfHub({ x: 96, y: 10 }, 42);
+    expect(cleared.x).toBe(96);
   });
 });

@@ -1,19 +1,24 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { coerceParamValue } from '@openzcad/document-core';
-import type {
-  AxisId,
-  BodyId,
-  BooleanOperation,
-  ParamValue,
-  PatternKind,
-  PlaneId,
-  PrimitiveKind,
-  RevolveAxis,
-  SketchId,
-  SketchObjectData,
-  SketchObjectKind
+import {
+  FULL_REVOLVE_ANGLE_DEG,
+  type AxisId,
+  type BodyId,
+  type BooleanOperation,
+  type EdgeTopologyReferenceV5,
+  type ExtrudeOperation,
+  type ParamValue,
+  type PatternKind,
+  type PlaneId,
+  type PrimitiveKind,
+  type RevolveAxis,
+  type SketchId,
+  type SketchObjectData,
+  type SketchObjectKind
 } from '@openzcad/shared';
 import { ExprInput } from '../ExprInput';
+import { useFieldAutoFocus } from './fieldAutoFocus';
+import { TextObjectFields, type TextAttributes } from '../TextObjectFields';
 import {
   PLANE_LABELS,
   REVOLVE_AXIS_LABELS,
@@ -67,7 +72,10 @@ function FormShell({
           onCancel();
         }
         // Enter submits from any field, including selects.
-        if (event.key === 'Enter' && !(event.target instanceof HTMLButtonElement)) {
+        if (
+          event.key === 'Enter' &&
+          !(event.target instanceof HTMLButtonElement)
+        ) {
           event.preventDefault();
           if (canSubmit) {
             onSubmit();
@@ -81,9 +89,21 @@ function FormShell({
       </label>
       {children}
       <div className="form-actions">
-        <button type="submit" className="primary" disabled={!canSubmit} title="Enter">
+        <button
+          type="submit"
+          className="primary"
+          disabled={!canSubmit}
+          title="Enter"
+        >
           {submitLabel}
-          <kbd className="kbd-inline">↵</kbd>
+          {/*
+            Decoration, not part of the name. Without this the button announced
+            itself as "Create ↵"; the hint stays visible and `title` already
+            carries it for anyone reading the tooltip.
+          */}
+          <kbd className="kbd-inline" aria-hidden="true">
+            ↵
+          </kbd>
         </button>
         {onCancel && (
           <button type="button" className="secondary" onClick={onCancel}>
@@ -103,28 +123,50 @@ function fieldsValid(scope: Record<string, number>, values: string[]): boolean {
 // Primitive
 // ---------------------------------------------------------------------------
 
+/**
+ * Starting sizes for a new primitive.
+ *
+ * The box is the part; everything round is a feature you add to it, and the
+ * defaults have to be able to say that. A round primitive is therefore sized
+ * to fit inside the box's smallest footprint dimension (18) with clearance on
+ * both sides, which is also the condition its booleans need: measured against
+ * this box, a cylinder unions exactly up to radius 8 and facets from 9, where
+ * its diameter reaches the box's depth and goes tangent to both faces. The
+ * old radius 14 was a diameter of 28 against a depth of 18, so the first union
+ * a new user attempted could not succeed at ANY position — the two shapes were
+ * simply the wrong sizes for each other.
+ *
+ * Heights run past the box's 24 so a new solid protrudes rather than hiding
+ * inside it: a boolean between two bodies you cannot both see is not a first
+ * thing to meet.
+ */
 const PRIMITIVE_FIELDS: Record<
   PrimitiveKind,
   { key: string; label: string; initial: string }[]
 > = {
+  // Labelled by what the dimension IS, not by the document key that carries
+  // it. The keys are OCCT's makeBox(dx, dy, dz), so `depth` lands on Z — and Z
+  // is up here, which made "Depth (Z)" the upright size and "Height (Y)" a
+  // horizontal one, while the cylinder next door called its vertical extent
+  // Height. Keys are untouched; only the human contract changes.
   box: [
     { key: 'width', label: 'Width (X)', initial: '30' },
-    { key: 'height', label: 'Height (Y)', initial: '18' },
-    { key: 'depth', label: 'Depth (Z)', initial: '24' }
+    { key: 'height', label: 'Depth (Y)', initial: '18' },
+    { key: 'depth', label: 'Height (Z)', initial: '24' }
   ],
   cylinder: [
-    { key: 'radius', label: 'Radius', initial: '14' },
+    { key: 'radius', label: 'Radius', initial: '6' },
     { key: 'height', label: 'Height', initial: '28' }
   ],
-  sphere: [{ key: 'radius', label: 'Radius', initial: '16' }],
+  sphere: [{ key: 'radius', label: 'Radius', initial: '6' }],
   cone: [
-    { key: 'bottomRadius', label: 'Bottom radius', initial: '16' },
-    { key: 'topRadius', label: 'Top radius', initial: '6' },
-    { key: 'height', label: 'Height', initial: '24' }
+    { key: 'bottomRadius', label: 'Bottom radius', initial: '6' },
+    { key: 'topRadius', label: 'Top radius', initial: '2' },
+    { key: 'height', label: 'Height', initial: '28' }
   ],
   torus: [
-    { key: 'majorRadius', label: 'Ring radius', initial: '24' },
-    { key: 'minorRadius', label: 'Tube radius', initial: '6' }
+    { key: 'majorRadius', label: 'Ring radius', initial: '6' },
+    { key: 'minorRadius', label: 'Tube radius', initial: '2' }
   ]
 };
 
@@ -167,7 +209,11 @@ export function PrimitiveForm({
     name.trim().length > 0 && fieldsValid(scope, Object.values(values));
 
   useEffect(() => {
-    if (kind !== 'cylinder' || liveRadius === undefined || liveRadius === null) {
+    if (
+      kind !== 'cylinder' ||
+      liveRadius === undefined ||
+      liveRadius === null
+    ) {
       return;
     }
     const text = String(Math.round(liveRadius * 1000) / 1000);
@@ -230,17 +276,148 @@ interface SketchFormProps {
   onCancel?: () => void;
 }
 
-/** The form only offers closed one-object profiles; open curves (line/arc) are drawn in the viewport sketch mode. */
+/**
+ * The form only offers closed one-object profiles. Open curves (line/arc) are
+ * drawn in the viewport sketch mode, and text is placed with the text tool.
+ */
 type ClosedShapeKind = Extract<
   SketchObjectKind,
   'rectangle' | 'circle' | 'polygon'
 >;
+
+const CLOSED_SHAPE_KINDS: readonly ClosedShapeKind[] = [
+  'rectangle',
+  'circle',
+  'polygon'
+];
+
+function isClosedShape(
+  data: SketchObjectData
+): data is Extract<SketchObjectData, { objectKind: ClosedShapeKind }> {
+  return CLOSED_SHAPE_KINDS.includes(data.objectKind as ClosedShapeKind);
+}
 
 const SHAPE_LABELS: Record<ClosedShapeKind, string> = {
   rectangle: 'Rectangle',
   circle: 'Circle',
   polygon: 'Polygon'
 };
+
+export interface TextSketchFormValue {
+  name: string;
+  data: Extract<SketchObjectData, { objectKind: 'text' }>;
+}
+
+interface TextSketchFormProps {
+  scope: Record<string, number>;
+  initial: {
+    name: string;
+    object: Extract<SketchObjectData, { objectKind: 'text' }>;
+  };
+  onSubmit(value: TextSketchFormValue): void;
+  onCancel?: () => void;
+  /** Opens the sketch in the viewport for spatial edits. */
+  onEditInViewport?: () => void;
+}
+
+/**
+ * The edit form for a sketch whose object is text.
+ *
+ * `SketchForm` below only understands closed one-object profiles, and its
+ * fallback for anything else was a rectangle — so selecting a finished text
+ * sketch in the history presented it as "Rectangle 32×18", and Apply would
+ * have replaced the text with that rectangle and re-planed a face-attached
+ * sketch onto a canonical plane. This form owns the text case instead: the
+ * same fields as the in-sketch entity editor, applied through
+ * `updateSketchObject`, which never touches the sketch's plane.
+ */
+export function TextSketchForm({
+  scope,
+  initial,
+  onSubmit,
+  onCancel,
+  onEditInViewport
+}: TextSketchFormProps) {
+  const [name, setName] = useState(initial.name);
+  const [text, setText] = useState<TextAttributes>({
+    text: initial.object.text,
+    fontFamily: initial.object.fontFamily,
+    fontStyle: initial.object.fontStyle
+  });
+  const [values, setValues] = useState<Record<string, string>>(() => ({
+    size: paramValueText(initial.object.size),
+    rotation: paramValueText(initial.object.rotation ?? 0),
+    x: paramValueText(initial.object.x),
+    y: paramValueText(initial.object.y)
+  }));
+  const canSubmit =
+    name.trim().length > 0 &&
+    text.text.length > 0 &&
+    fieldsValid(scope, Object.values(values));
+
+  const setValue = (key: string) => (value: string) =>
+    setValues((current) => ({ ...current, [key]: value }));
+
+  return (
+    <FormShell
+      name={name}
+      onName={setName}
+      submitLabel="Apply"
+      canSubmit={canSubmit}
+      onSubmit={() =>
+        onSubmit({
+          name,
+          data: {
+            // Spread first so fields this form does not own — alignment,
+            // construction — survive the edit.
+            ...initial.object,
+            ...text,
+            size: coerceParamValue(values.size ?? ''),
+            rotation: coerceParamValue(values.rotation ?? '0'),
+            x: coerceParamValue(values.x ?? '0'),
+            y: coerceParamValue(values.y ?? '0')
+          }
+        })
+      }
+      {...(onCancel ? { onCancel } : {})}
+    >
+      <TextObjectFields value={text} onChange={setText} />
+      <div className="field-pair">
+        <ExprInput
+          label="Size"
+          value={values.size ?? ''}
+          scope={scope}
+          onChange={setValue('size')}
+        />
+        <ExprInput
+          label="Rotation"
+          value={values.rotation ?? ''}
+          scope={scope}
+          onChange={setValue('rotation')}
+        />
+      </div>
+      <div className="field-pair">
+        <ExprInput
+          label="X"
+          value={values.x ?? ''}
+          scope={scope}
+          onChange={setValue('x')}
+        />
+        <ExprInput
+          label="Y"
+          value={values.y ?? ''}
+          scope={scope}
+          onChange={setValue('y')}
+        />
+      </div>
+      {onEditInViewport && (
+        <button type="button" className="secondary" onClick={onEditInViewport}>
+          Edit sketch in viewport
+        </button>
+      )}
+    </FormShell>
+  );
+}
 
 export function SketchForm({
   scope,
@@ -253,11 +430,7 @@ export function SketchForm({
   const [plane, setPlane] = useState<PlaneId>(initial?.plane ?? 'XZ');
   const [offset, setOffset] = useState(paramValueText(initial?.offset ?? 0));
   const initialObject =
-    initial &&
-    initial.object.objectKind !== 'line' &&
-    initial.object.objectKind !== 'arc'
-      ? initial.object
-      : undefined;
+    initial && isClosedShape(initial.object) ? initial.object : undefined;
   const [shape, setShape] = useState<ClosedShapeKind>(
     initialObject?.objectKind ?? 'rectangle'
   );
@@ -441,13 +614,19 @@ interface SketchPickerProps {
   autoFocus?: boolean;
 }
 
-function SketchPicker({ sketches, value, onChange, autoFocus }: SketchPickerProps) {
+function SketchPicker({
+  sketches,
+  value,
+  onChange,
+  autoFocus
+}: SketchPickerProps) {
+  const mayAutoFocus = useFieldAutoFocus(autoFocus);
   return (
     <label className="field">
       <span>Sketch</span>
       <select
         value={value}
-        autoFocus={autoFocus}
+        autoFocus={mayAutoFocus}
         onChange={(event) => onChange(event.target.value as SketchId)}
       >
         {sketches.length === 0 && <option value="">No sketches yet</option>}
@@ -464,7 +643,12 @@ function SketchPicker({ sketches, value, onChange, autoFocus }: SketchPickerProp
 interface ExtrudeFormProps {
   scope: Record<string, number>;
   sketches: SketchOption[];
-  initial?: { name: string; sketchId: SketchId; distance: ParamValue };
+  initial?: {
+    name: string;
+    sketchId: SketchId;
+    distance: ParamValue;
+    operation?: ExtrudeOperation;
+  };
   /** Pre-selected sketch for new features, e.g. the one picked in the tree. */
   initialSketchId?: SketchId;
   submitLabel: string;
@@ -492,8 +676,22 @@ export function ExtrudeForm({
   const [distance, setDistance] = useState(
     paramValueText(initial?.distance ?? 24)
   );
+  // A zero-distance extrude builds nothing, and the kernel says so only after
+  // the edit has committed and taken the body with it — the panel showed no
+  // error, Apply stayed enabled, and the solid simply vanished, leaving a
+  // sidebar diagnostic as the only account of it. Caught here instead, the
+  // same way RevolveForm catches an out-of-range angle. Expressions are
+  // covered too, since the preview evaluates against the parameter scope.
+  const distancePreview = previewExpression(distance, scope);
+  const distanceIsZero =
+    distancePreview.ok &&
+    distancePreview.value !== undefined &&
+    distancePreview.value === 0;
   const canSubmit =
-    name.trim().length > 0 && sketchId !== '' && fieldsValid(scope, [distance]);
+    name.trim().length > 0 &&
+    sketchId !== '' &&
+    fieldsValid(scope, [distance]) &&
+    !distanceIsZero;
 
   return (
     <FormShell
@@ -515,6 +713,19 @@ export function ExtrudeForm({
         value={sketchId}
         onChange={setSketchId}
       />
+      <label className="field">
+        <span>Operation</span>
+        <select
+          aria-label="Stored extrude operation"
+          value={initial ? (initial.operation ?? 'new-body') : 'automatic'}
+          disabled
+        >
+          <option value="automatic">Automatic from exact overlap</option>
+          <option value="new-body">New Body</option>
+          <option value="add">Add</option>
+          <option value="cut">Cut</option>
+        </select>
+      </label>
       <ExprInput
         label="Distance"
         value={distance}
@@ -522,8 +733,14 @@ export function ExtrudeForm({
         autoFocus
         onChange={setDistance}
       />
+      {distanceIsZero && (
+        <p className="muted error">
+          Distance cannot be zero — a zero-distance extrude builds no solid.
+        </p>
+      )}
       <p className="muted">
-        Negative distances extrude below the sketch plane.
+        Negative distances extrude below the sketch plane. The operation is
+        resolved when the feature is created and is not re-inferred by edits.
       </p>
     </FormShell>
   );
@@ -532,7 +749,12 @@ export function ExtrudeForm({
 interface RevolveFormProps {
   scope: Record<string, number>;
   sketches: SketchOption[];
-  initial?: { name: string; sketchId: SketchId; axis: RevolveAxis };
+  initial?: {
+    name: string;
+    sketchId: SketchId;
+    axis: RevolveAxis;
+    angleDeg?: ParamValue;
+  };
   /** Pre-selected sketch for new features, e.g. the one picked in the tree. */
   initialSketchId?: SketchId;
   submitLabel: string;
@@ -540,6 +762,7 @@ interface RevolveFormProps {
     name: string;
     sketchId: SketchId;
     axis: RevolveAxis;
+    angleDeg: ParamValue;
   }): void;
   onCancel?: () => void;
 }
@@ -553,13 +776,31 @@ export function RevolveForm({
   onSubmit,
   onCancel
 }: RevolveFormProps) {
-  void scope;
   const [name, setName] = useState(initial?.name ?? 'Revolve');
   const [sketchId, setSketchId] = useState<SketchId | ''>(
     initial?.sketchId ?? initialSketchId ?? sketches.at(-1)?.sketchId ?? ''
   );
   const [axis, setAxis] = useState<RevolveAxis>(initial?.axis ?? 'vertical');
-  const canSubmit = name.trim().length > 0 && sketchId !== '';
+  const [angleDeg, setAngleDeg] = useState(
+    paramValueText(initial?.angleDeg ?? FULL_REVOLVE_ANGLE_DEG)
+  );
+  const anglePreview = previewExpression(angleDeg, scope);
+  const angleInRange =
+    anglePreview.ok &&
+    anglePreview.value !== undefined &&
+    anglePreview.value > 0 &&
+    anglePreview.value <= FULL_REVOLVE_ANGLE_DEG;
+  const canSubmit =
+    name.trim().length > 0 &&
+    sketchId !== '' &&
+    fieldsValid(scope, [angleDeg]) &&
+    angleInRange;
+  // Kept in sync with the kernel's own gate: a partial revolve is a
+  // hash-only body and none of its edges can be filleted or chamfered.
+  const isPartial =
+    anglePreview.ok &&
+    anglePreview.value !== undefined &&
+    anglePreview.value < FULL_REVOLVE_ANGLE_DEG;
 
   return (
     <FormShell
@@ -568,7 +809,12 @@ export function RevolveForm({
       submitLabel={submitLabel}
       canSubmit={canSubmit}
       onSubmit={() =>
-        onSubmit({ name: name.trim(), sketchId: sketchId as SketchId, axis })
+        onSubmit({
+          name: name.trim(),
+          sketchId: sketchId as SketchId,
+          axis,
+          angleDeg: coerceParamValue(angleDeg)
+        })
       }
       onCancel={onCancel}
     >
@@ -591,10 +837,28 @@ export function RevolveForm({
           ))}
         </select>
       </label>
+      <ExprInput
+        label="Angle (deg)"
+        value={angleDeg}
+        scope={scope}
+        onChange={setAngleDeg}
+      />
       <p className="muted">
-        Sweeps the profile a full turn. Offset the profile center so it clears
-        the axis.
+        Sweeps the profile through the angle, greater than 0 and up to 360.
+        Offset the profile center so it clears the axis.
       </p>
+      {isPartial && (
+        <p className="muted">
+          A partial revolve keeps hash-only face and edge references rather than
+          named ones, and its edges cannot be filleted or chamfered. Round the
+          full revolve first if the result needs blends.
+        </p>
+      )}
+      {!angleInRange && anglePreview.ok && (
+        <p className="muted error">
+          Angle must be greater than 0 and at most 360 degrees.
+        </p>
+      )}
     </FormShell>
   );
 }
@@ -663,6 +927,23 @@ export function BooleanForm({
   }
 
   const canSubmit = name.trim().length > 0 && selected.length >= 2;
+  const operationAutoFocus = useFieldAutoFocus(true);
+
+  /**
+   * Keep an untouched name honest about what the feature does.
+   *
+   * Switching Union to Subtract left the name reading "Union", so the history
+   * row, the body and the panel heading all claimed an operation the feature
+   * did not perform. Only a name the user has not written is re-derived —
+   * comparing against the CURRENT operation's label is what distinguishes
+   * "still the default" from "deliberately called Union".
+   */
+  function changeOperation(next: BooleanOperation) {
+    setName((current) =>
+      current === OPERATION_LABELS[operation] ? OPERATION_LABELS[next] : current
+    );
+    setOperation(next);
+  }
 
   return (
     <FormShell
@@ -679,9 +960,12 @@ export function BooleanForm({
         <span>Operation</span>
         <select
           value={operation}
-          autoFocus
+          // A select is the worst field to hand the keyboard to unasked: a
+          // stray letter jumps to a matching option, so the operation changes
+          // silently rather than producing a visible bad value.
+          autoFocus={operationAutoFocus}
           onChange={(event) =>
-            setOperation(event.target.value as BooleanOperation)
+            changeOperation(event.target.value as BooleanOperation)
           }
         >
           {(Object.keys(OPERATION_LABELS) as BooleanOperation[]).map((id) => (
@@ -718,6 +1002,11 @@ export function BooleanForm({
       </div>
       {operation === 'subtract' && (
         <p className="muted">Bodies 2+ are subtracted from body 1.</p>
+      )}
+      {operation === 'union' && (
+        <p className="muted">
+          Union joins solids that touch or overlap. It does not fill empty gaps.
+        </p>
       )}
       <p className="muted">
         Input bodies are consumed; deleting the boolean restores them.
@@ -869,6 +1158,7 @@ export interface EdgeModifierFormValue {
   name: string;
   targetBodyId: BodyId;
   edgeHashes: number[];
+  edgeReferences?: EdgeTopologyReferenceV5[];
   size: ParamValue;
 }
 
@@ -877,6 +1167,7 @@ interface EdgeModifierFormProps {
   scope: Record<string, number>;
   targetBodyId: BodyId | null;
   edgeHashes: number[];
+  edgeReferences?: EdgeTopologyReferenceV5[];
   availableEdgeCount?: number;
   onSelectAllEdges?: () => void;
   onClearEdges?: () => void;
@@ -891,6 +1182,7 @@ export function EdgeModifierForm({
   scope,
   targetBodyId,
   edgeHashes,
+  edgeReferences,
   availableEdgeCount,
   onSelectAllEdges,
   onClearEdges,
@@ -920,6 +1212,7 @@ export function EdgeModifierForm({
           name: name.trim(),
           targetBodyId: targetBodyId!,
           edgeHashes,
+          ...(edgeReferences ? { edgeReferences } : {}),
           size: coerceParamValue(size)
         })
       }
@@ -930,7 +1223,11 @@ export function EdgeModifierForm({
           ? `${edgeHashes.length} exact edge${edgeHashes.length === 1 ? '' : 's'} selected`
           : targetBodyId
             ? 'Select edges in the viewport or select every edge below.'
-            : 'Select a body or edge in the viewport first.'}
+            : // Not "select a body or edge": arming this tool narrows picking
+              // to edges, so a click on a body face resolves to nothing — and
+              // a click that resolves to nothing clears the selection. Name
+              // the routes that work rather than the one the tool forbids.
+              'Click an edge in the viewport, or pick the body in the model tree.'}
       </div>
       {targetBodyId &&
         availableEdgeCount &&

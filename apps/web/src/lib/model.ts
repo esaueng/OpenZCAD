@@ -17,6 +17,8 @@ export function paramValueText(value: ParamValue | undefined): string {
 export interface EvalPreview {
   ok: boolean;
   text: string;
+  /** The evaluated number, present exactly when `ok`. */
+  value?: number;
 }
 
 /** Live evaluation preview for expression inputs ("= 42" or the error). */
@@ -29,9 +31,11 @@ export function previewExpression(
     return { ok: false, text: 'required' };
   }
   try {
+    const value = evaluateExpression(trimmed, scope);
     return {
       ok: true,
-      text: `= ${formatNumber(evaluateExpression(trimmed, scope))}`
+      text: `= ${formatNumber(value)}`,
+      value
     };
   } catch (error) {
     return {
@@ -75,6 +79,9 @@ export const FEATURE_KIND_LABELS: Record<FeatureKind, string> = {
   revolve: 'Revolve',
   boolean: 'Boolean',
   transform: 'Move / Rotate',
+  mirror: 'Mirror',
+  shell: 'Shell',
+  'solid-offset': 'Solid offset',
   fillet: 'Fillet',
   chamfer: 'Chamfer',
   pattern: 'Pattern',
@@ -83,9 +90,21 @@ export const FEATURE_KIND_LABELS: Record<FeatureKind, string> = {
   'imported-mesh': 'Imported mesh'
 };
 
+/**
+ * Sketch plane names, in the Z-up terms the rest of the app already uses.
+ *
+ * These were Y-up and had never been swapped when the app became Z-up, so they
+ * named the wrong planes: measured by extruding the same rectangle on each,
+ * "Ground (XZ)" built an upright wall and "Front (XY)" built a slab lying on
+ * the grid. The app already contradicted them — its Front view looks down -Y
+ * and its face labels call the +Z face "Top face" — so the fix is to say what
+ * the standard views and face names have been saying all along. PLANE_BASES
+ * gives XY the +Z normal (horizontal, hence Top) and XZ the +Y normal
+ * (vertical, hence Front).
+ */
 export const PLANE_LABELS: Record<PlaneId, string> = {
-  XZ: 'Ground (XZ)',
-  XY: 'Front (XY)',
+  XZ: 'Front (XZ)',
+  XY: 'Top (XY)',
   YZ: 'Right (YZ)'
 };
 
@@ -105,8 +124,12 @@ export function inferContentType(fileName: string): string {
   return 'application/octet-stream';
 }
 
-export function downloadText(name: string, value: string): void {
-  const blob = new Blob([value], { type: 'text/plain' });
+export function downloadText(
+  name: string,
+  value: string,
+  contentType = 'text/plain'
+): void {
+  const blob = new Blob([value], { type: contentType });
   const url = URL.createObjectURL(blob);
   const link = document.createElement('a');
   link.href = url;

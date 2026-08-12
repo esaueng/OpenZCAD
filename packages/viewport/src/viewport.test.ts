@@ -9,10 +9,13 @@ import {
   chooseMoveSnapStep,
   chooseRotateSnapStep,
   composeMoveTransform,
+  moveCalloutAnchor,
   configureEdgeRaycasting,
+  computeNormalToFacePose,
   createExtrudePreviewGeometry,
   dimensionLabelLayout,
   directEditDirectionFromNormal,
+  EDGE_IDLE_WIDTH,
   isViewerMesh,
   moveGizmoHandleLabel,
   moveGizmoWorldScale,
@@ -22,8 +25,11 @@ import {
   MIN_TWEEN_MS,
   orbitPivotForPoint,
   tweenDurationFor,
+  tweenOrientationFor,
   projectToScreen,
   RightClickGestureTracker,
+  cameraUpForDirection,
+  viewDirectionFor,
   VIEW_DIRECTIONS
 } from './index';
 
@@ -170,11 +176,40 @@ describe('model viewer mesh classification', () => {
     const raycaster = new THREE.Raycaster();
     configureEdgeRaycasting(raycaster);
 
-    raycaster.setFromCamera(new THREE.Vector2(0, (2.9 * 2) / 1000), camera);
+    // Line2 answers within (linewidth + threshold) / 2 CSS px, so this 2 px
+    // line has a 5 px pick radius. The radius is the point of the test: at the
+    // original threshold it was 3 px here and 2.7 px for a real idle edge,
+    // which is inside the jitter of an ordinary click — edges read as
+    // unpickable by hand even though picking worked.
+    raycaster.setFromCamera(new THREE.Vector2(0, (4.9 * 2) / 1000), camera);
     expect(raycaster.intersectObject(edge)).toHaveLength(1);
 
-    raycaster.setFromCamera(new THREE.Vector2(0, (3.1 * 2) / 1000), camera);
+    raycaster.setFromCamera(new THREE.Vector2(0, (5.1 * 2) / 1000), camera);
     expect(raycaster.intersectObject(edge)).toHaveLength(0);
+  });
+
+  it('keeps the idle edge pick radius wide enough to hit by hand', () => {
+    const geometry = new LineGeometry();
+    geometry.setPositions([-1, 0, 0, 1, 0, 0]);
+    const material = new LineMaterial({ linewidth: EDGE_IDLE_WIDTH });
+    material.resolution.set(1000, 1000);
+    const edge = new Line2(geometry, material);
+    edge.computeLineDistances();
+    edge.updateMatrixWorld(true);
+
+    const camera = new THREE.PerspectiveCamera(50, 1, 0.1, 100);
+    camera.position.set(0, 0, 10);
+    camera.lookAt(0, 0, 0);
+    camera.updateProjectionMatrix();
+    camera.updateMatrixWorld(true);
+    const raycaster = new THREE.Raycaster();
+    configureEdgeRaycasting(raycaster);
+
+    // A pointer 4 px off an edge as it renders must still take it. Measured in
+    // the browser, the shipped bands were 3–5 px wide end to end at the old
+    // threshold, which is what made edge selection feel impossible by hand.
+    raycaster.setFromCamera(new THREE.Vector2(0, (4 * 2) / 1000), camera);
+    expect(raycaster.intersectObject(edge)).toHaveLength(1);
   });
 
   it('does not prioritize an edge hidden meaningfully behind a face', () => {
@@ -293,6 +328,67 @@ describe('move gizmo focus', () => {
   });
 });
 
+describe('moveCalloutAnchor', () => {
+  it('is a plain offset when there is no rotation', () => {
+    expect(
+      moveCalloutAnchor(
+        { x: 2, y: 3, z: 40 },
+        { x: 0, y: 0, z: 0 },
+        { x: 5, y: -1, z: 0 }
+      )
+    ).toEqual({ x: 7, y: 2, z: 40 });
+  });
+
+  it('rotates the anchor before translating it', () => {
+    // A label 40 above the origin, turned a quarter turn about Y: the anchor
+    // swings onto +X and off Z entirely. Adding the translation alone would
+    // leave it at z = 40, which is the bug this pins.
+    const anchor = moveCalloutAnchor(
+      { x: 0, y: 0, z: 40 },
+      { x: 0, y: 90, z: 0 },
+      { x: 0, y: 0, z: 0 }
+    );
+    expect(anchor.x).toBeCloseTo(40, 6);
+    expect(anchor.y).toBeCloseTo(0, 6);
+    expect(anchor.z).toBeCloseTo(0, 6);
+  });
+
+  it('tracks a body rotated about its own centre', () => {
+    // The case the viewer actually runs: the callout rests directly above the
+    // centre of the bounding box, and the body turns about that centre. The
+    // anchor must land the same distance from the centre, on the far side.
+    const centre = { x: 10, y: 0, z: 5 };
+    const resting = { x: centre.x, y: centre.y, z: centre.z + 12 };
+    const rotationDeg = { x: 0, y: 180, z: 0 };
+    const final = composeMoveTransform(
+      centre,
+      { x: 0, y: 0, z: 0 },
+      rotationDeg
+    );
+    const anchor = moveCalloutAnchor(resting, rotationDeg, final);
+    expect(anchor.x).toBeCloseTo(centre.x, 6);
+    expect(anchor.y).toBeCloseTo(centre.y, 6);
+    // Turned upside down about the centre, 12 above becomes 12 below.
+    expect(anchor.z).toBeCloseTo(centre.z - 12, 6);
+  });
+
+  it('agrees with the transform three.js applies to the mesh', () => {
+    // The mesh is posed with object.rotation = moveEuler(...) and
+    // object.position = final. If this helper ever diverges from that, the
+    // label drifts off the body it names.
+    const rotationDeg = { x: 20, y: -35, z: 50 };
+    const final = { x: 3, y: -7, z: 2 };
+    const resting = { x: 4, y: 11, z: 26 };
+    const expected = new THREE.Vector3(resting.x, resting.y, resting.z)
+      .applyEuler(moveEuler(rotationDeg))
+      .add(new THREE.Vector3(final.x, final.y, final.z));
+    const anchor = moveCalloutAnchor(resting, rotationDeg, final);
+    expect(anchor.x).toBeCloseTo(expected.x, 6);
+    expect(anchor.y).toBeCloseTo(expected.y, 6);
+    expect(anchor.z).toBeCloseTo(expected.z, 6);
+  });
+});
+
 describe('composeMoveTransform', () => {
   it('is the identity translation when there is no rotation', () => {
     const result = composeMoveTransform(
@@ -385,6 +481,136 @@ describe('standard views are posed for a Z-up world', () => {
     expect(Math.abs(VIEW_DIRECTIONS.top.dot(normal))).toBeGreaterThan(0.99);
     expect(Math.abs(VIEW_DIRECTIONS.front.dot(normal))).toBeLessThan(0.01);
   });
+
+  it('agrees on screen-up between top and bottom, so bottom is not rolled', () => {
+    // The original bottom nudge mirrored top's, which arrived at the bottom
+    // view 180° rolled: its face label read upside down.
+    expect(screenBasis(VIEW_DIRECTIONS.top).up.y).toBeCloseTo(1, 3);
+    expect(screenBasis(VIEW_DIRECTIONS.bottom).up.y).toBeCloseTo(1, 3);
+  });
+
+  it('derives camera up as world up projected off the view direction', () => {
+    const front = cameraUpForDirection(VIEW_DIRECTIONS.front);
+    expect(front.z).toBeCloseTo(1, 6);
+    // The derivation must agree with what OrbitControls' lookAt settles on,
+    // or a glide's final frame would roll when the controls take over.
+    for (const direction of Object.values(VIEW_DIRECTIONS)) {
+      const derived = cameraUpForDirection(direction);
+      const settled = screenBasis(direction).up;
+      expect(derived.dot(settled)).toBeGreaterThan(0.999);
+    }
+  });
+
+  it('falls back to +Y screen-up at the exact poles, where both agree', () => {
+    const top = cameraUpForDirection(new THREE.Vector3(0, 0, 1));
+    const bottom = cameraUpForDirection(new THREE.Vector3(0, 0, -1));
+    expect(top.y).toBeCloseTo(1, 6);
+    expect(bottom.y).toBeCloseTo(1, 6);
+  });
+
+  it('builds glide orientations that look along the view with derived roll', () => {
+    for (const direction of Object.values(VIEW_DIRECTIONS)) {
+      const orientation = tweenOrientationFor(direction);
+      const viewAxis = new THREE.Vector3(0, 0, 1).applyQuaternion(orientation);
+      const up = new THREE.Vector3(0, 1, 0).applyQuaternion(orientation);
+      expect(viewAxis.dot(direction)).toBeCloseTo(1, 6);
+      expect(up.dot(cameraUpForDirection(direction))).toBeCloseTo(1, 6);
+    }
+  });
+
+  it('keeps the camera on its orbit through a flip to the opposite face', () => {
+    // A straight position lerp between front and back passes through the
+    // model at the midpoint; the slerped orientation keeps the radius.
+    const halfway = tweenOrientationFor(VIEW_DIRECTIONS.front)
+      .clone()
+      .slerp(tweenOrientationFor(VIEW_DIRECTIONS.back), 0.5);
+    const offset = new THREE.Vector3(0, 0, 1).applyQuaternion(halfway);
+    expect(offset.length()).toBeCloseTo(1, 6);
+    expect(Math.abs(offset.y)).toBeLessThan(0.01);
+  });
+
+  it('resolves view targets: named views by table, corners by diagonal', () => {
+    const front = viewDirectionFor('front');
+    expect(front.y).toBeCloseTo(-1, 6);
+    // The table entry is cloned, not handed out to be mutated.
+    front.set(9, 9, 9);
+    expect(VIEW_DIRECTIONS.front.y).toBeCloseTo(-1, 6);
+    const corner = viewDirectionFor({ corner: [1, -1, 1] });
+    const unit = 1 / Math.sqrt(3);
+    expect(corner.x).toBeCloseTo(unit, 6);
+    expect(corner.y).toBeCloseTo(-unit, 6);
+    expect(corner.z).toBeCloseTo(unit, 6);
+  });
+});
+
+describe('normal-to-face camera framing', () => {
+  it('centres a planar face, follows its outward normal, and fits a portrait viewport', () => {
+    const camera = new THREE.PerspectiveCamera(45, 0.55, 0.1, 4000);
+    const center = new THREE.Vector3(4, -3, 7);
+    const points = [
+      new THREE.Vector3(-16, -13, 7),
+      new THREE.Vector3(24, -13, 7),
+      new THREE.Vector3(24, 7, 7),
+      new THREE.Vector3(-16, 7, 7)
+    ];
+    const normal = new THREE.Vector3(0, 0, 1);
+    const pose = computeNormalToFacePose(camera, points, center, normal);
+
+    expect(pose).not.toBeNull();
+    expect(pose!.target.distanceTo(center)).toBeLessThan(1e-9);
+    const direction = pose!.position.clone().sub(pose!.target).normalize();
+    expect(direction.dot(normal)).toBeGreaterThan(0.999999);
+    // The same tiny pole nudge as the named top view keeps the next orbit
+    // deterministic while remaining visually normal to the face.
+    expect(direction.y).toBeLessThan(0);
+
+    camera.position.copy(pose!.position);
+    camera.quaternion.copy(tweenOrientationFor(direction));
+    camera.updateMatrixWorld(true);
+    camera.updateProjectionMatrix();
+    for (const point of points) {
+      const projected = point.clone().project(camera);
+      expect(Math.abs(projected.x)).toBeLessThan(0.9);
+      expect(Math.abs(projected.y)).toBeLessThan(0.9);
+    }
+  });
+
+  it('frames an arbitrarily oriented planar face without axis guessing', () => {
+    const camera = new THREE.PerspectiveCamera(50, 1.6, 0.1, 1000);
+    const center = new THREE.Vector3(12, 8, -5);
+    const points = [
+      new THREE.Vector3(12, -12, -15),
+      new THREE.Vector3(12, 28, -15),
+      new THREE.Vector3(12, 28, 5),
+      new THREE.Vector3(12, -12, 5)
+    ];
+    const normal = new THREE.Vector3(2, 0, 0);
+    const pose = computeNormalToFacePose(camera, points, center, normal);
+
+    expect(pose).not.toBeNull();
+    const direction = pose!.position.clone().sub(center).normalize();
+    expect(direction.x).toBeCloseTo(1, 9);
+    expect(direction.y).toBeCloseTo(0, 9);
+    expect(direction.z).toBeCloseTo(0, 9);
+    expect(pose!.near).toBeGreaterThan(0);
+    expect(pose!.far).toBeGreaterThan(pose!.near);
+  });
+
+  it('fails closed for missing points or a degenerate normal', () => {
+    const camera = new THREE.PerspectiveCamera(45, 1, 0.1, 1000);
+    const center = new THREE.Vector3();
+    expect(
+      computeNormalToFacePose(camera, [], center, new THREE.Vector3(0, 0, 1))
+    ).toBeNull();
+    expect(
+      computeNormalToFacePose(
+        camera,
+        [new THREE.Vector3(1, 0, 0)],
+        center,
+        new THREE.Vector3()
+      )
+    ).toBeNull();
+  });
 });
 
 describe('the move gizmo is built to be picked and focused', () => {
@@ -468,13 +694,23 @@ describe('projecting a world anchor to the screen', () => {
   }
 
   it('puts a point on the view axis at the centre of the viewport', () => {
-    const screen = projectToScreen(new THREE.Vector3(0, 0, 0), camera(), 800, 600);
+    const screen = projectToScreen(
+      new THREE.Vector3(0, 0, 0),
+      camera(),
+      800,
+      600
+    );
     expect(screen?.x).toBeCloseTo(400, 6);
     expect(screen?.y).toBeCloseTo(300, 6);
   });
 
   it('grows y downward, matching CSS rather than clip space', () => {
-    const above = projectToScreen(new THREE.Vector3(0, 1, 0), camera(), 800, 600);
+    const above = projectToScreen(
+      new THREE.Vector3(0, 1, 0),
+      camera(),
+      800,
+      600
+    );
     expect(above!.y).toBeLessThan(300);
   });
 
@@ -516,11 +752,15 @@ describe('the orbit pivot follows what was picked', () => {
   it('declines a point behind the camera', () => {
     // Clicking through to something behind the viewer would put the pivot
     // at the camera's back and invert the orbit.
-    expect(orbitPivotForPoint(at(0, 0, 10), at(0, 0, -1), at(0, 0, 20))).toBeNull();
+    expect(
+      orbitPivotForPoint(at(0, 0, 10), at(0, 0, -1), at(0, 0, 20))
+    ).toBeNull();
   });
 
   it('declines a point on the camera plane, where there is no depth', () => {
-    expect(orbitPivotForPoint(at(0, 0, 10), at(0, 0, -1), at(5, 5, 10))).toBeNull();
+    expect(
+      orbitPivotForPoint(at(0, 0, 10), at(0, 0, -1), at(5, 5, 10))
+    ).toBeNull();
   });
 });
 
@@ -548,7 +788,12 @@ describe('glide duration follows how far the camera travels', () => {
 
   it('is scale-invariant: the same relative move takes the same time', () => {
     // A bracket and a building should feel identical to fly around.
-    const small = tweenDurationFor(v(0, 0, 10), v(6, 0, 10), v(0, 0, 0), v(0, 0, 0));
+    const small = tweenDurationFor(
+      v(0, 0, 10),
+      v(6, 0, 10),
+      v(0, 0, 0),
+      v(0, 0, 0)
+    );
     const large = tweenDurationFor(
       v(0, 0, 10_000),
       v(6_000, 0, 10_000),

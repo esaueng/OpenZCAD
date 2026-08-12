@@ -4,6 +4,8 @@ import {
   Box,
   ChevronDown,
   ChevronRight,
+  CirclePause,
+  CirclePlay,
   Combine,
   Cone,
   Cylinder,
@@ -11,6 +13,7 @@ import {
   EyeOff,
   FileBox,
   Globe,
+  History,
   Layers,
   Move3d,
   PenLine,
@@ -19,6 +22,10 @@ import {
   Torus,
   Trash2
 } from 'lucide-react';
+import {
+  isFeatureRollbackSuppressed,
+  isFeatureSuppressed
+} from '@openzcad/shared';
 import type {
   BodyRepresentation,
   FeatureId,
@@ -271,6 +278,8 @@ interface SidebarProps {
   onSelectBody(bodyId: string, additive: boolean): void;
   onToggleBodyVisibility(bodyId: string): void;
   onFeatureContextMenu(event: React.MouseEvent, feature: FeatureNode): void;
+  onToggleFeatureSuppression(feature: FeatureNode): void;
+  onRollbackAfterFeature(featureId: FeatureId, name: string): void;
   onSetParameter(name: string, expression: string): void;
   onDeleteParameter(name: string): void;
   onDeleteFeature(featureId: FeatureId, name: string): void;
@@ -313,6 +322,8 @@ export function Sidebar({
   onSelectBody,
   onToggleBodyVisibility,
   onFeatureContextMenu,
+  onToggleFeatureSuppression,
+  onRollbackAfterFeature,
   onSetParameter,
   onDeleteParameter,
   onDeleteFeature,
@@ -337,6 +348,14 @@ export function Sidebar({
       bodies.push(body);
     }
   }
+  const rollbackMarkerIndex = features.findIndex(
+    (feature, index) =>
+      index < features.length - 1 &&
+      !isFeatureRollbackSuppressed(feature) &&
+      features
+        .slice(index + 1)
+        .every((candidate) => isFeatureRollbackSuppressed(candidate))
+  );
   return (
     <aside className="sidebar" aria-label="Model browser">
       <div className="sidebar-label">Model</div>
@@ -438,10 +457,16 @@ export function Sidebar({
         <div className="feature-list">
           {features.length === 0 && (
             <p className="muted sidebar-hint">
-              No features yet. Pick a tool from the toolbar above.
+              {/* Names the rail, and deliberately does not say where it is:
+                  it sits right of this panel on a wide screen, but under
+                  620px the workspace stacks into one column (responsive.css)
+                  and the rail lands below instead. "Above" was wrong at every
+                  width; a direction would be wrong at one of them. */}
+              No features yet. Pick a tool from the Feature tools rail.
             </p>
           )}
-          {features.map((feature) => {
+          {features.map((feature, index) => {
+            const suppressed = isFeatureSuppressed(feature);
             const body = feature.bodyId
               ? representations[feature.bodyId]
               : undefined;
@@ -450,13 +475,14 @@ export function Sidebar({
               ? hiddenBodyIds.has(feature.bodyId)
               : false;
             const failed =
+              !suppressed &&
               feature.bodyId !== undefined &&
               feature.featureKind !== 'sketch' &&
               body === undefined;
             return (
               <div
                 key={feature.id}
-                className={`feature-row ${selectedFeatureNodeId === feature.id ? 'selected' : ''} ${consumed ? 'consumed' : ''} ${hidden ? 'hidden-body' : ''}`}
+                className={`feature-row ${selectedFeatureNodeId === feature.id ? 'selected' : ''} ${consumed ? 'consumed' : ''} ${hidden ? 'hidden-body' : ''} ${suppressed ? 'suppressed' : ''} ${rollbackMarkerIndex === index ? 'rollback-marker' : ''}`}
                 onContextMenu={(event) => {
                   event.preventDefault();
                   onFeatureContextMenu(event, feature);
@@ -466,7 +492,10 @@ export function Sidebar({
                   type="button"
                   className="feature-row-main"
                   onClick={() => onSelectFeature(feature.id)}
-                  title={`${FEATURE_KIND_LABELS[feature.featureKind]} — click to edit`}
+                  // Every row used to announce the same generic kind label, so
+                  // a history read aloud was a list of identical items. The
+                  // feature's own name comes first, as on screen.
+                  title={`${feature.name} — ${FEATURE_KIND_LABELS[feature.featureKind]}, click to edit`}
                 >
                   <span className="feature-icon">{featureIcon(feature)}</span>
                   <span className="feature-name">{feature.name}</span>
@@ -479,6 +508,43 @@ export function Sidebar({
                     </span>
                   )}
                   {consumed && <small className="feature-flag">consumed</small>}
+                  {suppressed && (
+                    <small className="feature-flag">suppressed</small>
+                  )}
+                </button>
+                <button
+                  type="button"
+                  className={`row-suppression ${suppressed ? 'is-suppressed' : ''}`}
+                  title={
+                    suppressed
+                      ? `Resume ${feature.name}`
+                      : `Suppress ${feature.name}`
+                  }
+                  aria-label={
+                    suppressed
+                      ? `Resume ${feature.name}`
+                      : `Suppress ${feature.name}`
+                  }
+                  aria-pressed={suppressed}
+                  onClick={() => onToggleFeatureSuppression(feature)}
+                >
+                  {suppressed ? (
+                    <CirclePlay size={12} aria-hidden="true" />
+                  ) : (
+                    <CirclePause size={12} aria-hidden="true" />
+                  )}
+                </button>
+                <button
+                  type="button"
+                  className={`row-rollback ${rollbackMarkerIndex === index ? 'is-active' : ''}`}
+                  title={`Roll back history after ${feature.name}`}
+                  aria-label={`Roll back history after ${feature.name}`}
+                  aria-pressed={rollbackMarkerIndex === index}
+                  onClick={() =>
+                    onRollbackAfterFeature(feature.featureId, feature.name)
+                  }
+                >
+                  <History size={12} aria-hidden="true" />
                 </button>
                 {feature.bodyId && body && !consumed && (
                   <button

@@ -26,7 +26,8 @@ function upgradeRequest(projectId: string): Request {
     headers: {
       upgrade: 'websocket',
       'x-openzcad-user-id': 'user_room',
-      'x-openzcad-display-name': 'Room user'
+      'x-openzcad-display-name': 'Room user',
+      'x-openzcad-project-role': 'owner'
     }
   });
 }
@@ -38,6 +39,26 @@ async function openSocket(
   const response = await room.fetch(upgradeRequest(projectId));
   expect(response.status).toBe(101);
   return globals.serverSockets.at(-1)!;
+}
+
+async function issueSocketTicket(
+  room: ProjectCollaborationRoom,
+  projectId: string
+): Promise<{ ticket: string; expiresAt: number }> {
+  const response = await room.fetch(
+    new Request(`https://room.test/?projectId=${projectId}`, {
+      method: 'PUT',
+      headers: {
+        'x-openzcad-internal-ticket-request': 'v1',
+        'x-openzcad-user-id': 'user_room',
+        'x-openzcad-display-name': 'Room user',
+        'x-openzcad-project-role': 'owner'
+      }
+    })
+  );
+  expect(response.status).toBe(200);
+  expect(response.headers.get('cache-control')).toBe('no-store');
+  return response.json() as Promise<{ ticket: string; expiresAt: number }>;
 }
 
 function hello(document: ProjectDocument | null, clientId = 'client_ws') {
@@ -70,6 +91,139 @@ function deeplyNestedDocumentFrame(depth: number, clientId = 'client_ws') {
 }
 
 describe('collaboration room socket handling', () => {
+  it('closes sockets and deletes every stored value during internal erasure', async () => {
+    const { context, values } = createRoomContext();
+    const base = createProjectDocument('Erased room', toUserId('user_room'));
+    const room = new ProjectCollaborationRoom(context, {
+      ENVIRONMENT: 'development',
+      AUTH_MODE: 'development'
+    });
+    const socket = await openSocket(room, base.projectId);
+    await socket.receive(hello(base));
+    expect(values.size).toBeGreaterThan(0);
+
+    const erased = await room.fetch(
+      new Request(`https://room.test/?projectId=${base.projectId}`, {
+        method: 'DELETE',
+        headers: { 'x-openzcad-internal-project-erasure': 'v1' }
+      })
+    );
+
+    expect(erased.status).toBe(204);
+    expect(values.size).toBe(0);
+    expect(socket.closed).toEqual({
+      code: 4001,
+      reason: 'Cloud project was permanently deleted.'
+    });
+    expect((await room.fetch(upgradeRequest(base.projectId))).status).toBe(410);
+  });
+
+  it('fails hosted room access closed outside the account canary', async () => {
+    const { context } = createRoomContext();
+    const base = createProjectDocument('Canary room', toUserId('user_room'));
+    const roomEnv = {
+      ENVIRONMENT: 'beta' as const,
+      PRODUCTION_GUARD: 'enabled',
+      PROJECT_COLLABORATION_CANARY_EMAILS: 'allowed@example.com'
+    };
+    const room = new ProjectCollaborationRoom(context, roomEnv);
+    const request = (email: string) =>
+      new Request(`https://room.test/?projectId=${base.projectId}`, {
+        headers: {
+          upgrade: 'websocket',
+          'x-openzcad-user-id': 'user_room',
+          'x-openzcad-display-name': 'Room user',
+          'x-openzcad-user-email': email,
+          'x-openzcad-project-role': 'owner'
+        }
+      });
+
+    expect((await room.fetch(request('blocked@example.com'))).status).toBe(403);
+    expect((await room.fetch(request('ALLOWED@example.com'))).status).toBe(101);
+
+    const socket = globals.serverSockets.at(-1)!;
+    await socket.receive(hello(null));
+    roomEnv.PROJECT_COLLABORATION_CANARY_EMAILS = '';
+    await socket.receive(
+      JSON.stringify({
+        type: 'presence',
+        clientId: 'client_ws',
+        status: 'active'
+      })
+    );
+    expect(socket.closed).toEqual({
+      code: 1008,
+      reason: 'Collaboration access is disabled.'
+    });
+  });
+
+  it('stores only a hash and consumes a native socket ticket once', async () => {
+    const { context, values } = createRoomContext();
+    const base = createProjectDocument('Ticket room', toUserId('user_room'));
+    const room = new ProjectCollaborationRoom(context, {
+      ENVIRONMENT: 'development',
+      AUTH_MODE: 'development'
+    });
+    const issued = await issueSocketTicket(room, base.projectId);
+
+    expect(issued.ticket).toMatch(/^[A-Za-z0-9_-]{43}$/);
+    expect(issued.expiresAt).toBeGreaterThan(Date.now());
+    expect(JSON.stringify(values.get('room:socket-tickets'))).not.toContain(
+      issued.ticket
+    );
+
+    // Recreate the object to prove pending tickets survive normal DO eviction.
+    const restored = new ProjectCollaborationRoom(context, {
+      ENVIRONMENT: 'development',
+      AUTH_MODE: 'development'
+    });
+    const upgrade = () =>
+      restored.fetch(
+        new Request(
+          `https://room.test/?projectId=${base.projectId}&ticket=${issued.ticket}`,
+          { headers: { upgrade: 'websocket' } }
+        )
+      );
+    expect((await upgrade()).status).toBe(101);
+    expect((await upgrade()).status).toBe(401);
+    expect(values.has('room:socket-tickets')).toBe(false);
+  });
+
+  it('rejects expired and forged native socket tickets before opening a socket', async () => {
+    const { context, values } = createRoomContext();
+    const base = createProjectDocument('Expired ticket', toUserId('user_room'));
+    const room = new ProjectCollaborationRoom(context, {
+      ENVIRONMENT: 'development',
+      AUTH_MODE: 'development'
+    });
+    const issued = await issueSocketTicket(room, base.projectId);
+    const pending = structuredClone(
+      values.get('room:socket-tickets') as Record<string, { expiresAt: number }>
+    );
+    for (const claim of Object.values(pending)) {
+      claim.expiresAt = Date.now() - 1;
+    }
+    values.set('room:socket-tickets', pending);
+    const socketsBefore = globals.serverSockets.length;
+
+    const expired = await room.fetch(
+      new Request(
+        `https://room.test/?projectId=${base.projectId}&ticket=${issued.ticket}`,
+        { headers: { upgrade: 'websocket' } }
+      )
+    );
+    const forged = await room.fetch(
+      new Request(
+        `https://room.test/?projectId=${base.projectId}&ticket=${'f'.repeat(43)}`,
+        { headers: { upgrade: 'websocket' } }
+      )
+    );
+
+    expect(expired.status).toBe(401);
+    expect(forged.status).toBe(401);
+    expect(globals.serverSockets).toHaveLength(socketsBefore);
+  });
+
   it('serves room state over an accepted socket', async () => {
     const { context } = createRoomContext();
     const base = createProjectDocument('Socket Room', toUserId('user_room'));

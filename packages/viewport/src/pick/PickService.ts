@@ -1,6 +1,11 @@
 import * as THREE from 'three';
-import type { BodyTopology, TopologySelection } from '@openzcad/shared';
+import type {
+  BodyTopology,
+  EdgeTopologyReferenceV5,
+  TopologySelection
+} from '@openzcad/shared';
 import type { RegionPickData, SelectionFilter } from '../types';
+import { batchedEdgeTarget } from '../render/edgeOverlay';
 import { configureEdgeRaycasting, prioritizeVisibleEdgeHit } from './edges';
 import { findBodyId } from './meshes';
 
@@ -72,6 +77,7 @@ interface TopologyUserData {
   topologyKind?: 'edge';
   topologyId?: string;
   topologyHash?: number;
+  topologyReference?: EdgeTopologyReferenceV5;
   topology?: BodyTopology;
 }
 
@@ -305,7 +311,19 @@ export class PickService {
   private bodyIntersections(): THREE.Intersection<THREE.Object3D>[] {
     return this.raycaster
       .intersectObjects(this.options.bodyGroup.children, true)
-      .filter((hit) => hit.object.visible);
+      .filter((hit) => {
+        let object: THREE.Object3D | null = hit.object;
+        while (object) {
+          if (!object.visible) {
+            return false;
+          }
+          if (object === this.options.bodyGroup) {
+            break;
+          }
+          object = object.parent;
+        }
+        return true;
+      });
   }
 
   private sketchCandidate(): PickCandidate | null {
@@ -335,6 +353,23 @@ export class PickService {
     if (!bodyId) {
       return null;
     }
+    const batchTarget = batchedEdgeTarget(hit.object, hit.faceIndex);
+    if (batchTarget) {
+      return {
+        kind: 'edge',
+        distance: hit.distance,
+        hit,
+        selection: {
+          bodyId: batchTarget.owner.bodyId,
+          kind: 'edge',
+          topologyId: batchTarget.owner.topologyId,
+          hash: batchTarget.owner.hash,
+          ...(batchTarget.owner.reference
+            ? { reference: batchTarget.owner.reference }
+            : {})
+        }
+      };
+    }
     if (data.topologyKind === 'edge' && data.topologyId) {
       return {
         kind: 'edge',
@@ -344,7 +379,10 @@ export class PickService {
           bodyId: bodyId as TopologySelection['bodyId'],
           kind: 'edge',
           topologyId: data.topologyId,
-          hash: data.topologyHash
+          hash: data.topologyHash,
+          ...(data.topologyReference
+            ? { reference: data.topologyReference }
+            : {})
         }
       };
     }
@@ -366,7 +404,8 @@ export class PickService {
           bodyId: bodyId as TopologySelection['bodyId'],
           kind: 'face',
           topologyId: face.topologyId,
-          hash: face.hash
+          hash: face.hash,
+          ...(face.reference ? { reference: face.reference } : {})
         },
         faceNormal: hit.face?.normal
           .clone()

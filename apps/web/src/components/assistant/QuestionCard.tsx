@@ -1,10 +1,11 @@
 import { useState } from 'react';
-import { CircleHelp, CornerDownLeft } from 'lucide-react';
+import { Check, CircleHelp, Pencil } from 'lucide-react';
 import {
   allQuestionsAnswered,
   collectedAnswers,
   type AssistantQuestionsEntry
 } from '../../lib/assistant/conversation';
+import { RichText } from './RichText';
 
 interface QuestionCardProps {
   entry: AssistantQuestionsEntry;
@@ -17,8 +18,11 @@ interface QuestionCardProps {
  * The assistant's questions for one turn.
  *
  * Chips carry the model's own suggested values so the common case is a single
- * tap, with a text field for anything it did not anticipate. A card that has
- * been sent stays on screen as a record of what was asked and answered.
+ * tap, with a text field for anything it did not anticipate. Answering is the
+ * one place the conversation is genuinely two-way, so the card tracks how far
+ * through it the user is and says what sending will do — including what the
+ * assistant will decide on its own if some are left blank. A card that has been
+ * sent stays on screen as a record of what was asked and answered.
  */
 export function QuestionCard({
   entry,
@@ -28,6 +32,7 @@ export function QuestionCard({
 }: QuestionCardProps) {
   const [drafts, setDrafts] = useState<Record<string, string>>({});
   const answered = collectedAnswers(entry).length;
+  const total = entry.questions.length;
   const complete = allQuestionsAnswered(entry);
 
   function commitDraft(questionId: string) {
@@ -44,26 +49,57 @@ export function QuestionCard({
       <span className="assistant-card-label">
         <CircleHelp size={13} aria-hidden="true" />
         {entry.sent ? 'Asked' : 'Needs an answer'}
+        {!entry.sent && (
+          <span className="assistant-progress-pill">
+            {answered} of {total}
+          </span>
+        )}
       </span>
+      {!entry.sent && (
+        <span
+          className="assistant-progress-track"
+          role="progressbar"
+          aria-valuemin={0}
+          aria-valuemax={total}
+          aria-valuenow={answered}
+          aria-label="Questions answered"
+        >
+          <span
+            className="assistant-progress-fill"
+            style={{ width: `${total > 0 ? (answered / total) * 100 : 0}%` }}
+          />
+        </span>
+      )}
       {entry.preamble && (
-        <p className="assistant-card-copy">{entry.preamble}</p>
+        <RichText text={entry.preamble} className="assistant-card-copy" />
       )}
       <ol className="assistant-questions">
         {entry.questions.map((question) => {
           const chosen = entry.answers[question.id];
           return (
-            <li key={question.id}>
-              <p className="assistant-question-prompt">{question.prompt}</p>
+            <li
+              key={question.id}
+              className={chosen ? 'answered' : 'unanswered'}
+            >
+              <p className="assistant-question-prompt">
+                {question.prompt}
+                {question.unit && (
+                  <span className="assistant-question-unit">
+                    {question.unit}
+                  </span>
+                )}
+              </p>
               {chosen ? (
                 <p className="assistant-answer">
-                  <CornerDownLeft size={12} aria-hidden="true" />
-                  {chosen}
+                  <Check size={12} aria-hidden="true" />
+                  <span className="assistant-answer-value">{chosen}</span>
                   {!entry.sent && (
                     <button
                       type="button"
                       className="assistant-link"
                       onClick={() => onAnswer(question.id, '')}
                     >
+                      <Pencil size={10} aria-hidden="true" />
                       change
                     </button>
                   )}
@@ -132,10 +168,13 @@ export function QuestionCard({
                 : 'Send what you have; the assistant will choose the rest'
             }
           >
-            {complete
-              ? 'Build it'
-              : `Send ${answered} of ${entry.questions.length}`}
+            {complete ? 'Build it' : `Send ${answered} of ${total}`}
           </button>
+          {!complete && answered > 0 && (
+            <span className="assistant-action-hint">
+              the rest gets a sensible default
+            </span>
+          )}
         </div>
       )}
     </div>

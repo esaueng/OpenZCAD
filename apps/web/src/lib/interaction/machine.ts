@@ -21,6 +21,8 @@ export interface FaceTarget extends FaceCapabilityTarget {
   point: [number, number, number];
   /** Outward face normal at the click point. */
   normal: [number, number, number];
+  /** Frozen exact face center used to re-resolve planar preview topology. */
+  surfaceCenter?: [number, number, number];
   /** Fixed world-space axis snapshot for a cylindrical radius gesture. */
   axisStart?: [number, number, number];
   axisEnd?: [number, number, number];
@@ -34,15 +36,28 @@ export interface RegionTarget {
   regionFingerprint: number;
   samplePoint: { x: number; y: number };
   area: number;
+  /**
+   * Entities whose curves bound this region. Carried so the drag-to-extrude
+   * path can store an entity-wide reference for text regions — a fingerprint
+   * reference to a glyph breaks the moment the string is edited, which is
+   * exactly the edit text exists to support.
+   */
+  sourceEntityIds: string[];
 }
 
-export type SketchToolId = 'select' | 'line' | 'arc' | 'circle' | 'rectangle';
+export type SketchToolId =
+  'select' | 'line' | 'arc' | 'circle' | 'rectangle' | 'text';
+
+/** Construction method used by the shared Circle tool. */
+export type SketchCircleMode =
+  'center-radius' | 'two-point-diameter' | 'three-point';
 
 export interface SketchSessionState {
   /** Null until the first entity commit creates the sketch node. */
   sketchId: string | null;
   plane: SketchPlaneRef;
   tool: SketchToolId;
+  circleMode: SketchCircleMode;
   /** True while a drawing gesture (drag or line/arc chain) is in flight. */
   drawing: boolean;
   /** Stable document id of the entity selected for editing. */
@@ -93,6 +108,7 @@ export type InteractionEvent =
   | { type: 'recover' }
   | { type: 'enter-sketch'; plane: SketchPlaneRef; sketchId?: string }
   | { type: 'sketch-tool'; tool: SketchToolId }
+  | { type: 'sketch-circle-mode'; mode: SketchCircleMode }
   | { type: 'sketch-created'; sketchId: string }
   | { type: 'sketch-drawing'; drawing: boolean }
   | { type: 'sketch-select-object'; objectId: string | null }
@@ -287,6 +303,21 @@ export function interactionReducer(
           sketchId: event.sketchId ?? null,
           plane: event.plane,
           tool: 'line',
+          circleMode: 'center-radius',
+          drawing: false,
+          selectedObjectId: null
+        }
+      };
+    case 'sketch-circle-mode':
+      if (state.mode !== 'sketch') {
+        return state;
+      }
+      return {
+        ...state,
+        session: {
+          ...state.session,
+          tool: 'circle',
+          circleMode: event.mode,
           drawing: false,
           selectedObjectId: null
         }
@@ -382,6 +413,8 @@ export interface ToolCardAction {
   id: SelectionActionId;
   label: string;
   active: boolean;
+  enabled: boolean;
+  disabledReason?: string;
 }
 
 export interface ToolCardModel {
@@ -391,6 +424,16 @@ export interface ToolCardModel {
   hint: string;
   phase?: OperationPhase;
   error?: string;
+}
+
+/**
+ * A stale stored selection fails at EVERY value, so "try again" advice would
+ * send the user in circles; the error text carries its own repair guidance.
+ */
+export function isStaleSelectionError(
+  error: string | null | undefined
+): boolean {
+  return /no longer exists/.test(error ?? '');
 }
 
 function lifecycleHint(
@@ -406,7 +449,9 @@ function lifecycleHint(
   if (state.phase === 'failed') {
     return {
       phase: state.phase,
-      hint: 'Adjust the value and try again.',
+      hint: isStaleSelectionError(state.error)
+        ? 'Esc closes the tool.'
+        : 'Adjust the value and try again.',
       error: state.error ?? 'The exact operation was rejected.'
     };
   }
@@ -425,6 +470,10 @@ export function toolCardFor(state: InteractionState): ToolCardModel | null {
       const actions = capabilities.map((capability) => ({
         id: capability.action,
         label: capability.label,
+        enabled: capability.enabled,
+        ...(capability.disabledReason
+          ? { disabledReason: capability.disabledReason }
+          : {}),
         active:
           (state.op === 'offset-face' && capability.action === 'offset-face') ||
           (state.op === 'resize-cylinder-radius' &&
@@ -446,7 +495,7 @@ export function toolCardFor(state: InteractionState): ToolCardModel | null {
             ...(actions.length > 1 ? { actions } : {}),
             ...lifecycleHint(
               state,
-              'Drag the arrow to offset the face, or tap the value to type.'
+              'Drag the arrow to offset the face, or tap the value to type · Space faces it head-on.'
             )
           };
     }
@@ -460,6 +509,10 @@ export function toolCardFor(state: InteractionState): ToolCardModel | null {
       }).map((capability) => ({
         id: capability.action,
         label: capability.label,
+        enabled: capability.enabled,
+        ...(capability.disabledReason
+          ? { disabledReason: capability.disabledReason }
+          : {}),
         active: capability.action === state.op
       }));
       return {
@@ -487,7 +540,13 @@ export function toolCardFor(state: InteractionState): ToolCardModel | null {
         hint:
           state.session.tool === 'select'
             ? 'Select an entity to edit its exact values.'
-            : 'Draw with Line, Arc, Circle, or Rectangle. Esc ends a chain.'
+            : state.session.tool === 'circle'
+              ? state.session.circleMode === 'center-radius'
+                ? 'Place a center, then set the radius. Hold Shift for free placement.'
+                : state.session.circleMode === 'two-point-diameter'
+                  ? 'Place opposite diameter endpoints. Tab cycles overlapping snaps.'
+                  : 'Place three circumference points. Collinear input is rejected.'
+              : 'Draw with exact geometry snaps. Esc ends a chain.'
       };
   }
 }

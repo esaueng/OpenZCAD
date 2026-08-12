@@ -1,32 +1,41 @@
-import { Box, Camera, Eye, Grid3x3, Maximize2 } from 'lucide-react';
+import { useEffect, useId, useRef, useState } from 'react';
+import { Camera, Grid3x3, Maximize2, Redo2, Undo2 } from 'lucide-react';
 import { VIEW_LABELS } from '@openzcad/viewport';
 import type {
-  DisplayMode,
   ProjectionMode,
   StandardView,
   ViewerSettings
 } from '@openzcad/viewport';
+import { AxisTriadIcon, DisplayModeIcon } from './ViewerRailIcons';
+import { DISPLAY_MODE_LABELS } from '../lib/displayMode';
 
-const VIEWS: { id: StandardView; label: string; shortcut: string }[] = [
-  { id: 'front', label: 'F', shortcut: '1' },
-  { id: 'top', label: 'T', shortcut: '2' },
-  { id: 'right', label: 'R', shortcut: '3' },
-  { id: 'iso', label: 'Iso', shortcut: '4' }
+/**
+ * Every standard view, in reading order down the flyout. Back, left and
+ * bottom were previously reachable only by orbiting the cube; only the four
+ * with a shortcut ever had a button of their own.
+ */
+const VIEWS: { id: StandardView; shortcut?: string }[] = [
+  { id: 'front', shortcut: '1' },
+  { id: 'back' },
+  { id: 'left' },
+  { id: 'right', shortcut: '3' },
+  { id: 'top', shortcut: '2' },
+  { id: 'bottom' },
+  { id: 'iso', shortcut: '4' }
 ];
 
-const VIEW_TITLES: Record<StandardView, string> = Object.fromEntries(
-  Object.entries(VIEW_LABELS).map(([view, label]) => [view, `${label} view`])
-) as Record<StandardView, string>;
-
-export const DISPLAY_MODE_LABELS: Record<DisplayMode, string> = {
-  'shaded-edges': 'Shaded + edges',
-  shaded: 'Shaded',
-  wireframe: 'Wireframe'
-};
+function viewTitle(view: { id: StandardView; shortcut?: string }): string {
+  const label = `${VIEW_LABELS[view.id]} view`;
+  return view.shortcut ? `${label} (${view.shortcut})` : label;
+}
 
 interface ViewerToolbarProps {
   settings: ViewerSettings;
   projection: ProjectionMode;
+  canUndo: boolean;
+  canRedo: boolean;
+  onUndo(): void;
+  onRedo(): void;
   onToggleGrid(): void;
   onFit(): void;
   onView(view: StandardView): void;
@@ -35,86 +44,162 @@ interface ViewerToolbarProps {
 }
 
 /**
- * Right-hand utility rail under the orientation widget: standard views, fit,
- * grid, projection, and display mode. Labels sit beside the controls so the
- * rail reads at a glance without crowding the top of the viewport.
+ * Right-hand utility rail, centred against the viewport edge: fit, grid,
+ * projection, and display mode as icons, with the standard views behind a
+ * flyout. Navigation stays with the orientation cube above — the rail keeps
+ * viewport state — so the two no longer duplicate each other, and the icons
+ * carry their own state rather than needing a label beside each row.
  */
 export function ViewerToolbar({
   settings,
   projection,
+  canUndo,
+  canRedo,
+  onUndo,
+  onRedo,
   onToggleGrid,
   onFit,
   onView,
   onCycleDisplayMode,
   onToggleProjection
 }: ViewerToolbarProps) {
+  const [viewsOpen, setViewsOpen] = useState(false);
+  const anchorRef = useRef<HTMLDivElement | null>(null);
+  const triggerRef = useRef<HTMLButtonElement | null>(null);
+  const panelId = useId();
+  const displayModeLabel = DISPLAY_MODE_LABELS[settings.displayMode];
+
+  // Close on an outside pointer or Escape; Escape hands focus back to the
+  // control that opened the flyout, so the rail stays keyboard-navigable.
+  useEffect(() => {
+    if (!viewsOpen) {
+      return;
+    }
+    function onPointerDown(event: PointerEvent) {
+      if (!anchorRef.current?.contains(event.target as Node)) {
+        setViewsOpen(false);
+      }
+    }
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.key === 'Escape') {
+        event.stopPropagation();
+        setViewsOpen(false);
+        triggerRef.current?.focus();
+      }
+    }
+    window.addEventListener('pointerdown', onPointerDown);
+    window.addEventListener('keydown', onKeyDown, true);
+    return () => {
+      window.removeEventListener('pointerdown', onPointerDown);
+      window.removeEventListener('keydown', onKeyDown, true);
+    };
+  }, [viewsOpen]);
+
+  function selectView(view: StandardView) {
+    onView(view);
+    setViewsOpen(false);
+  }
+
   return (
-    <div className="viewer-rail" role="toolbar" aria-label="Viewer controls">
-      <div className="rail-views" role="group" aria-label="Standard views">
-        {VIEWS.map((view) => (
-          <button
-            key={view.id}
-            type="button"
-            onClick={() => onView(view.id)}
-            title={`${VIEW_TITLES[view.id]} (${view.shortcut})`}
-            aria-label={`${VIEW_TITLES[view.id]} (${view.shortcut})`}
-          >
-            {view.label}
-          </button>
-        ))}
-      </div>
+    <div className="viewer-rail" role="toolbar" aria-label="Quick actions">
       <button
         type="button"
-        className="rail-row"
+        className="rail-button"
+        onClick={onUndo}
+        title="Undo (Ctrl+Z)"
+        aria-label="Undo"
+        disabled={!canUndo}
+      >
+        <Undo2 size={15} aria-hidden="true" />
+      </button>
+      <button
+        type="button"
+        className="rail-button"
+        onClick={onRedo}
+        title="Redo (Ctrl+Shift+Z)"
+        aria-label="Redo"
+        disabled={!canRedo}
+      >
+        <Redo2 size={15} aria-hidden="true" />
+      </button>
+      <span className="rail-divider" aria-hidden="true" />
+      <button
+        type="button"
+        className="rail-button"
         onClick={onFit}
         title="Fit view (F) — double-click the viewport also fits"
+        aria-label="Fit view (F)"
       >
-        <span className="rail-label">Fit</span>
-        <i className="rail-icon">
-          <Maximize2 size={13} aria-hidden="true" />
-        </i>
+        <Maximize2 size={15} aria-hidden="true" />
       </button>
       <button
         type="button"
-        className={`rail-row ${settings.showGrid ? 'active' : ''}`}
+        className={`rail-button ${settings.showGrid ? 'active' : ''}`}
         onClick={onToggleGrid}
         title="Toggle grid (G)"
+        aria-label="Toggle grid (G)"
         aria-pressed={settings.showGrid}
       >
-        <span className="rail-label">Grid</span>
-        <i className="rail-icon">
-          <Grid3x3 size={13} aria-hidden="true" />
-        </i>
+        <Grid3x3 size={15} aria-hidden="true" />
       </button>
       <button
         type="button"
-        className={`rail-row ${projection === 'orthographic' ? 'active' : ''}`}
+        className={`rail-button ${projection === 'orthographic' ? 'active' : ''}`}
         onClick={onToggleProjection}
         title={`Projection (P) — now: ${projection}`}
+        aria-label={`Orthographic projection (P) — now: ${projection}`}
         aria-pressed={projection === 'orthographic'}
       >
-        <span className="rail-label">Ortho</span>
-        <i className="rail-icon">
-          <Camera size={13} aria-hidden="true" />
-        </i>
+        <Camera size={15} aria-hidden="true" />
       </button>
       <button
         type="button"
-        className="rail-row"
+        className="rail-button"
         onClick={onCycleDisplayMode}
-        title={`Display mode (W) — now: ${DISPLAY_MODE_LABELS[settings.displayMode]}`}
+        title={`Display mode (W) — now: ${displayModeLabel}`}
+        aria-label={`Display mode (W) — now: ${displayModeLabel}`}
       >
-        <span className="rail-label rail-label-wide">
-          {DISPLAY_MODE_LABELS[settings.displayMode]}
-        </span>
-        <i className="rail-icon">
-          {settings.displayMode === 'wireframe' ? (
-            <Box size={13} aria-hidden="true" />
-          ) : (
-            <Eye size={13} aria-hidden="true" />
-          )}
-        </i>
+        <DisplayModeIcon mode={settings.displayMode} />
       </button>
+      <span className="rail-divider" aria-hidden="true" />
+      <div className="rail-views-anchor" ref={anchorRef}>
+        <button
+          type="button"
+          ref={triggerRef}
+          className={`rail-button ${viewsOpen ? 'open' : ''}`}
+          onClick={() => setViewsOpen((open) => !open)}
+          title="Standard views"
+          aria-label="Standard views"
+          aria-haspopup="true"
+          aria-expanded={viewsOpen}
+          aria-controls={viewsOpen ? panelId : undefined}
+        >
+          <AxisTriadIcon />
+        </button>
+        {viewsOpen && (
+          <div
+            className="rail-views-panel"
+            id={panelId}
+            role="group"
+            aria-label="Standard views"
+          >
+            {VIEWS.map((view) => (
+              <button
+                key={view.id}
+                type="button"
+                className={view.id === 'iso' ? 'rail-view-wide' : undefined}
+                onClick={() => selectView(view.id)}
+                title={viewTitle(view)}
+                // The visible text is just the view name; the accessible name
+                // keeps the "<View> view (n)" wording used everywhere else.
+                aria-label={viewTitle(view)}
+              >
+                {VIEW_LABELS[view.id]}
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
     </div>
   );
 }

@@ -17,8 +17,7 @@ function faceState(
     mode: 'face',
     op,
     target: {
-      surfaceType:
-        op === 'resize-cylinder-radius' ? 'cylindrical' : 'planar',
+      surfaceType: op === 'resize-cylinder-radius' ? 'cylindrical' : 'planar',
       ...(op === 'resize-cylinder-radius' ? { radius: 4 } : {}),
       bodyId: 'body-1',
       topologyId: 'face-1',
@@ -57,6 +56,7 @@ function regionState(phase: OperationPhase): InteractionState {
       sketchId: 'sketch-1',
       regionFingerprint: 1,
       samplePoint: { x: 0, y: 0 },
+      sourceEntityIds: [],
       area: 10
     },
     phase,
@@ -76,6 +76,7 @@ function sketchState(
       sketchId: 'sketch-1',
       plane: { kind: 'canonical', plane: 'xy' } as never,
       tool,
+      circleMode: 'center-radius',
       drawing,
       selectedObjectId
     }
@@ -181,7 +182,11 @@ describe('the step describes the operation actually armed', () => {
   });
 
   it('surfaces the kernel own words when a value is refused', () => {
-    const refused = faceState('failed', 'offset-face', 'Offset removes the face.');
+    const refused = faceState(
+      'failed',
+      'offset-face',
+      'Offset removes the face.'
+    );
     expect(commandPrompt(refused)?.step).toContain('Offset removes the face.');
   });
 
@@ -199,7 +204,7 @@ describe('the step describes the operation actually armed', () => {
 
   it('reads as one line for the status bar', () => {
     expect(commandPromptText(faceState('armed'))).toBe(
-      'Drag the arrow to push or pull the face, or type an exact distance · Esc clears the selection'
+      'Drag the arrow to push or pull the face, or type an exact distance · Space faces it head-on · Esc clears the selection'
     );
   });
 });

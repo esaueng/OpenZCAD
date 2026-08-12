@@ -10,6 +10,7 @@ import type {
   BodyTopology,
   MeshGeometry
 } from '@openzcad/shared';
+import { VIEW_DIRECTIONS } from '../camera/views';
 
 const CAD_CREASE_ANGLE = THREE.MathUtils.degToRad(30);
 const DOT_EPSILON = 1e-10;
@@ -348,10 +349,17 @@ export function syncFatLineResolution(
  * across tessellation triangles.
  */
 export function createBodyMaterial(body: BodyRepresentation) {
+  const opacity = body.opacity ?? 1;
+  const translucent = opacity < 1;
   return new THREE.MeshPhongMaterial({
     color: body.color,
     shininess: 38,
     specular: '#667487',
+    transparent: translucent,
+    opacity,
+    // Translucent walls must not write depth or back faces and interior
+    // features hidden behind them would be culled instead of showing through.
+    depthWrite: !translucent,
     // Push only the disposable face rasterization back by the smallest
     // practical depth-buffer bias. GL line materials ignore polygonOffset;
     // keeping the bias on the faces lets depth-tested edge/sketch overlays sit
@@ -374,9 +382,9 @@ export function createBodyMaterial(body: BodyRepresentation) {
  * The overlay is a fallback only. Bodies that carry B-rep topology get their
  * edges from the exact curves instead (the viewer draws one fat line per
  * topology edge), and drawing both put two lines along nearly — but not
- * exactly — the same path. Bodies from the compat kernel, which the AI preview
- * uses, have no topology at all, so tessellated feature edges remain their
- * only outline.
+ * exactly — the same path. A body that arrives without topology, such as one
+ * restored from a persisted mesh, has no exact curves to draw, so tessellated
+ * feature edges remain its only outline.
  */
 export function createObjectForBody(
   body: BodyRepresentation,
@@ -437,43 +445,108 @@ export function createStudioHemisphereLight(): THREE.HemisphereLight {
   return light;
 }
 
-/** Vertical engineering-studio gradient: graphite above, near-black below. */
-export function createGradientBackground(): THREE.Texture {
-  const canvas = document.createElement('canvas');
-  canvas.width = 4;
-  canvas.height = 512;
-  const ctx = canvas.getContext('2d')!;
-  const gradient = ctx.createLinearGradient(0, 0, 0, canvas.height);
-  gradient.addColorStop(0, '#131922');
-  gradient.addColorStop(0.45, '#0b0f15');
-  gradient.addColorStop(1, '#05070a');
-  ctx.fillStyle = gradient;
-  ctx.fillRect(0, 0, canvas.width, canvas.height);
-  const texture = new THREE.CanvasTexture(canvas);
-  texture.colorSpace = THREE.SRGBColorSpace;
-  return texture;
+/**
+ * Vertical engineering-studio gradient: graphite above, near-black below.
+ *
+ * A CanvasTexture quantises these near-black stops before WebGL sees them.
+ * Screen capture then exaggerates the broad flat bands into rectangular codec
+ * blocks. Owning the backdrop material lets Three apply its fragment-level
+ * dithering after output colour conversion, where it can actually break up
+ * those bands without changing the intended gradient.
+ */
+export function createGradientBackdrop(): THREE.Mesh {
+  const geometry = new THREE.PlaneGeometry(2, 2);
+  const material = new THREE.ShaderMaterial({
+    depthTest: false,
+    depthWrite: false,
+    dithering: true,
+    fog: false,
+    toneMapped: false,
+    uniforms: {
+      topColor: { value: new THREE.Color('#131922') },
+      middleColor: { value: new THREE.Color('#0b0f15') },
+      bottomColor: { value: new THREE.Color('#05070a') },
+      middleStop: { value: 0.45 }
+    },
+    vertexShader: /* glsl */ `
+      varying vec2 viewportUv;
+
+      void main() {
+        viewportUv = uv;
+        gl_Position = vec4(position.xy, 1.0, 1.0);
+      }
+    `,
+    fragmentShader: /* glsl */ `
+      #include <common>
+      #include <dithering_pars_fragment>
+
+      varying vec2 viewportUv;
+      uniform vec3 topColor;
+      uniform vec3 middleColor;
+      uniform vec3 bottomColor;
+      uniform float middleStop;
+
+      void main() {
+        float distanceFromTop = 1.0 - viewportUv.y;
+        float topMix = clamp(distanceFromTop / middleStop, 0.0, 1.0);
+        float bottomMix = clamp(
+          (distanceFromTop - middleStop) / (1.0 - middleStop),
+          0.0,
+          1.0
+        );
+        vec3 color = distanceFromTop <= middleStop
+          ? mix(topColor, middleColor, topMix)
+          : mix(middleColor, bottomColor, bottomMix);
+        gl_FragColor = vec4(color, 1.0);
+        #include <colorspace_fragment>
+        #include <dithering_fragment>
+      }
+    `
+  });
+  const mesh = new THREE.Mesh(geometry, material);
+  mesh.name = 'gradient-backdrop';
+  mesh.renderOrder = -1;
+  mesh.frustumCulled = false;
+  mesh.raycast = () => undefined;
+  return mesh;
 }
 
 /**
- * Construction-plane grid drawn in a fragment shader: anti-aliased minor and
- * major lines with a radial falloff, so the floor reads as an infinite
- * engineering plane instead of a hard-edged helper cage. Lies in the Z-up XY
- * plane, a whisker below z=0 to avoid z-fighting with grounded bottom faces.
+ * Roughly how many minor grid cells span the viewport's height at any zoom.
+ * The adaptive grid picks the power-of-ten step closest to this density, so
+ * zooming in always reveals a finer subdivision instead of magnifying a fixed
+ * 10mm lattice into a handful of giant cells.
+ */
+const GRID_CELLS_PER_VIEW = 60;
+
+/**
+ * Construction-plane grid drawn in a fragment shader: anti-aliased lines with
+ * a radial falloff, so the floor reads as an infinite engineering plane
+ * instead of a hard-edged helper cage. Lies in the Z-up XY plane, a whisker
+ * below z=0 to avoid z-fighting with grounded bottom faces.
+ *
+ * The lattice is zoom-adaptive. `updateStudioGrid` must run each frame: it
+ * recentres the quad under the orbit target, scales it to the fade radius, and
+ * feeds the shader a power-of-ten step derived from the visible extent. Four
+ * nested decades render at once with weights chosen so a decade rollover is
+ * seamless — the tier a line leaves and the tier it joins meet at the same
+ * alpha, and line colour is a function of that alpha alone. Derivative-based
+ * filtering keeps every resolved line crisp, then removes a tier before its
+ * cells collapse into sub-pixel moire in a receding perspective view.
  */
 export function createStudioGrid(): THREE.Mesh {
-  const geometry = new THREE.PlaneGeometry(640, 640);
+  const geometry = new THREE.PlaneGeometry(2, 2);
   const material = new THREE.ShaderMaterial({
     transparent: true,
     depthWrite: false,
     side: THREE.DoubleSide,
     uniforms: {
-      minorStep: { value: 10 },
-      majorStep: { value: 50 },
-      minorColor: { value: new THREE.Color('#3d5073') },
-      majorColor: { value: new THREE.Color('#5c78ac') },
-      axisXColor: { value: new THREE.Color('#6d4757') },
-      axisYColor: { value: new THREE.Color('#456352') },
-      fadeRadius: { value: 300 }
+      minorStep: { value: 1 },
+      levelFract: { value: 0 },
+      minorColor: { value: new THREE.Color('#64789c') },
+      majorColor: { value: new THREE.Color('#8b9dc0') },
+      fadeRadius: { value: 300 },
+      fadeCenter: { value: new THREE.Vector2(0, 0) }
     },
     vertexShader: /* glsl */ `
       varying vec2 worldXY;
@@ -486,34 +559,57 @@ export function createStudioGrid(): THREE.Mesh {
     fragmentShader: /* glsl */ `
       varying vec2 worldXY;
       uniform float minorStep;
-      uniform float majorStep;
+      uniform float levelFract;
       uniform vec3 minorColor;
       uniform vec3 majorColor;
-      uniform vec3 axisXColor;
-      uniform vec3 axisYColor;
       uniform float fadeRadius;
+      uniform vec2 fadeCenter;
 
       float gridLine(vec2 p, float step) {
         vec2 coord = p / step;
-        vec2 grid = abs(fract(coord - 0.5) - 0.5) / fwidth(coord);
-        return 1.0 - min(min(grid.x, grid.y), 1.0);
+        vec2 footprint = max(fwidth(coord), vec2(1e-6));
+        vec2 distanceToLine = abs(fract(coord - 0.5) - 0.5);
+        vec2 coverage = 1.0 - smoothstep(
+          vec2(0.0),
+          footprint,
+          distanceToLine
+        );
+        // footprint is grid cells per pixel. Fade from four pixels per cell
+        // to the two-pixel Nyquist limit; coarser decades remain visible.
+        // Filter X and Y independently because one direction foreshortens
+        // sooner than the other in an oblique perspective view.
+        vec2 resolved = 1.0 - smoothstep(
+          vec2(0.25),
+          vec2(0.5),
+          footprint
+        );
+        return max(coverage.x * resolved.x, coverage.y * resolved.y);
       }
 
       void main() {
-        float minor = gridLine(worldXY, minorStep) * 0.6;
-        float major = gridLine(worldXY, majorStep);
-        // Axis lines: X line runs along X at y=0, Y line along Y at x=0.
-        float axisX = 1.0 - min(abs(worldXY.y) / (fwidth(worldXY.y) * 1.2 + 0.4), 1.0);
-        float axisY = 1.0 - min(abs(worldXY.x) / (fwidth(worldXY.x) * 1.2 + 0.4), 1.0);
-        float fade = 1.0 - smoothstep(fadeRadius * 0.55, fadeRadius, length(worldXY));
-        vec3 color = minorColor;
-        float alpha = minor * 0.7;
-        color = mix(color, majorColor, major);
-        alpha = max(alpha, major);
-        color = mix(color, axisXColor, axisX);
-        alpha = max(alpha, axisX);
-        color = mix(color, axisYColor, axisY);
-        alpha = max(alpha, axisY);
+        float f = levelFract;
+        // Four decades with cross-faded weights. At f=1 each tier's weight
+        // equals the next-finer tier's weight at f=0, so the step change when
+        // the floor increments never moves a line's alpha. Coarser lines
+        // always coincide with finer ones, so max() keeps them additive-free.
+        float g0 = gridLine(worldXY, minorStep) * (0.30 * (1.0 - f));
+        float g1 = gridLine(worldXY, minorStep * 10.0) * mix(0.48, 0.30, f);
+        float g2 = gridLine(worldXY, minorStep * 100.0) * mix(0.68, 0.48, f);
+        float g3 = gridLine(worldXY, minorStep * 1000.0) * 0.68;
+        float lineA = max(max(g0, g1), max(g2, g3));
+        float fade = 1.0 - smoothstep(
+          fadeRadius * 0.45,
+          fadeRadius,
+          distance(worldXY, fadeCenter)
+        );
+        // Colour follows line strength, which is continuous across rollovers,
+        // so hue never pops when a decade demotes from major to minor.
+        // No in-plane axis strokes here: the fat-line axis gizmo draws the
+        // world axes, and the grid rendering over it — transparent meshes
+        // sort nearer than the distant line midpoints — would tint and
+        // stipple those lines wherever the two coincide.
+        vec3 color = mix(minorColor, majorColor, smoothstep(0.30, 0.68, lineA));
+        float alpha = lineA;
         if (alpha * fade < 0.004) discard;
         gl_FragColor = vec4(color, alpha * fade);
       }
@@ -522,9 +618,57 @@ export function createStudioGrid(): THREE.Mesh {
   const mesh = new THREE.Mesh(geometry, material);
   mesh.rotation.x = 0; // PlaneGeometry is already XY; grid lives at z≈0.
   mesh.position.z = -0.02;
+  mesh.scale.set(300, 300, 1);
   mesh.name = 'studio-grid';
   mesh.raycast = () => undefined;
+  // The quad is repositioned and rescaled per frame; a stale bounding sphere
+  // must never cull it out from under the camera.
+  mesh.frustumCulled = false;
   return mesh;
+}
+
+/**
+ * Per-frame drive for the adaptive grid: follows the orbit target so the
+ * plane never runs out under a pan, and rescales the lattice step with the
+ * visible extent so zooming keeps a constant on-screen cell density.
+ */
+export function updateStudioGrid(
+  grid: THREE.Mesh,
+  camera: THREE.Camera,
+  target: THREE.Vector3
+) {
+  let viewExtent: number;
+  if (camera instanceof THREE.OrthographicCamera) {
+    viewExtent = (camera.top - camera.bottom) / Math.max(camera.zoom, 1e-9);
+  } else if (camera instanceof THREE.PerspectiveCamera) {
+    const distance = Math.max(camera.position.distanceTo(target), 1e-6);
+    viewExtent =
+      2 * distance * Math.tan(THREE.MathUtils.degToRad(camera.fov / 2));
+  } else {
+    return;
+  }
+  const level = Math.log10(
+    Math.max(viewExtent, 1e-9) / GRID_CELLS_PER_VIEW
+  );
+  const levelFloor = Math.floor(level);
+  const fadeRadius = viewExtent * 2.5;
+  const material = grid.material as THREE.ShaderMaterial;
+  material.uniforms.minorStep!.value = Math.pow(10, levelFloor);
+  material.uniforms.levelFract!.value = level - levelFloor;
+  material.uniforms.fadeRadius!.value = fadeRadius;
+  (material.uniforms.fadeCenter!.value as THREE.Vector2).set(
+    target.x,
+    target.y
+  );
+  // The z offset shrinks with the view so a deep zoom never reveals a visible
+  // gap between the plane and geometry grounded at z=0, while an overview
+  // keeps enough separation to avoid z-fighting with grounded bottom faces.
+  grid.position.set(
+    target.x,
+    target.y,
+    -THREE.MathUtils.clamp(viewExtent * 2e-4, 1e-5, 0.02)
+  );
+  grid.scale.set(fadeRadius, fadeRadius, 1);
 }
 
 /**
@@ -533,29 +677,75 @@ export function createStudioGrid(): THREE.Mesh {
  * other viewport polyline is. Picking stays off — the triad is decoration, and
  * Line2 raycasts against a screen-space radius that would make it an easy
  * accidental hit where the thin native lines were practically unhittable.
+ *
+ * Each axis is a unit segment that `updateAxesGizmo` stretches per frame, so
+ * on screen every axis runs past the viewport edge and reads as infinite. The
+ * length is dynamic rather than a huge constant because LineMaterial's
+ * near-plane trimming visibly corrupts a segment whose far endpoint sits deep
+ * behind the camera — an axis pointing toward the camera would dim to nothing
+ * — while endpoints kept in front of the camera plane render exactly.
  */
-export function createAxesGizmo(
-  size: number,
-  resolution?: FatLineResolution
-): THREE.Group {
+export function createAxesGizmo(resolution?: FatLineResolution): THREE.Group {
   const group = new THREE.Group();
   group.name = 'axes';
+  // Slightly softened primaries: bold enough to anchor the frame on the dark
+  // studio background without going neon the way pure #f00/#0f0/#00f do.
   const axes = [
-    { direction: new THREE.Vector3(size, 0, 0), color: '#ff0000' },
-    { direction: new THREE.Vector3(0, size, 0), color: '#00ff00' },
-    { direction: new THREE.Vector3(0, 0, size), color: '#0000ff' }
+    { direction: new THREE.Vector3(1, 0, 0), color: '#ee4444' },
+    { direction: new THREE.Vector3(0, 1, 0), color: '#3fbf5f' },
+    { direction: new THREE.Vector3(0, 0, 1), color: '#4477ff' }
   ];
   for (const axis of axes) {
     const line = createFatLine([new THREE.Vector3(), axis.direction], {
       color: axis.color,
-      linewidth: 1.6,
-      opacity: 0.55,
+      linewidth: 1.8,
+      opacity: 0.9,
       resolution
     });
     line.raycast = () => undefined;
+    // Draw after the grid plane. Distance sorting puts these quads at their
+    // distant midpoints — behind everything — and lets the grid's translucent
+    // fragments wash over them.
+    line.renderOrder = 1;
+    line.frustumCulled = false;
+    line.userData.axisDirection = axis.direction.clone();
     group.add(line);
   }
   return group;
+}
+
+/** Axis length when nothing constrains it: far past any usable zoom. */
+const AXIS_EXTENT_MAX = 100000;
+
+/**
+ * Per-frame drive for the axis triad. Axes that recede from the camera get
+ * the full extent; an axis pointing toward the camera is clamped to a hair in
+ * front of the camera plane, where its endpoint already projects far outside
+ * the viewport — visually still infinite, numerically still exact.
+ */
+export function updateAxesGizmo(group: THREE.Group, camera: THREE.Camera) {
+  const forward = camera.getWorldDirection(new THREE.Vector3());
+  const originDepth = forward.dot(
+    new THREE.Vector3().sub(camera.getWorldPosition(new THREE.Vector3()))
+  );
+  for (const child of group.children) {
+    const direction = child.userData.axisDirection as
+      | THREE.Vector3
+      | undefined;
+    if (!direction) {
+      continue;
+    }
+    const towardCamera = direction.dot(forward);
+    let extent = AXIS_EXTENT_MAX;
+    if (towardCamera < -1e-6 && originDepth > 0) {
+      // 0.65, not ~1: an endpoint approaching the camera plane projects to
+      // extreme clip coordinates, and the screen-space quad Line2 builds from
+      // them degenerates. At 65% of the way there the endpoint still lands
+      // far outside any viewport, so the axis reads as infinite regardless.
+      extent = Math.min(extent, (originDepth * 0.65) / -towardCamera);
+    }
+    child.scale.setScalar(Math.max(extent, 1e-3));
+  }
 }
 
 /** Invisible floor that only receives soft shadows, grounding the model. */
@@ -638,7 +828,7 @@ export function computeFitPose(
   }
   if (box.isEmpty()) {
     return {
-      position: new THREE.Vector3(80, -80, 80),
+      position: VIEW_DIRECTIONS.iso.clone().multiplyScalar(140),
       target: new THREE.Vector3(0, 0, 0),
       near: 0.1,
       far: 2000
@@ -649,8 +839,9 @@ export function computeFitPose(
   const maxDim = Math.max(size.x, size.y, size.z) || 1;
   const halfFov = THREE.MathUtils.degToRad(camera.fov / 2);
   const distance = (maxDim / 2 / Math.tan(halfFov)) * 2.1;
-  // Right, front, above — matching the historical fit direction.
-  const direction = new THREE.Vector3(1, -1, 0.9).normalize();
+  // Fit always lands on the home orientation: the same iso direction the
+  // default camera pose and the ISO view preset use.
+  const direction = VIEW_DIRECTIONS.iso.clone();
   return {
     position: center.clone().addScaledVector(direction, distance),
     target: center,

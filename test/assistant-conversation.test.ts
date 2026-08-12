@@ -254,6 +254,49 @@ describe('assistant conversation', () => {
     expect(run([{ type: 'reset' }], thinking)).toEqual(EMPTY_CONVERSATION);
   });
 
+  it('stamps a turn with the clock the caller passed, and only then', () => {
+    const stamped = run([
+      { type: 'submit', id: 'u1', text: 'Make a bracket', at: 1_700_000_000_000 }
+    ]);
+    expect(stamped.entries[0]).toMatchObject({ at: 1_700_000_000_000 });
+    // A turn from a build that had no timestamps must still be a valid turn.
+    expect(run([{ type: 'submit', id: 'u1', text: 'x' }]).entries[0]).not.toHaveProperty(
+      'at'
+    );
+  });
+
+  it('swaps in a stored thread without inheriting a live turn', () => {
+    const thinking = run([
+      { type: 'submit', id: 'u1', text: 'Make a bracket' },
+      { type: 'reply', id: 'a1', reply: patchReply },
+      { type: 'preview', entryId: 'a1' },
+      { type: 'submit', id: 'u2', text: 'and fillet it' }
+    ]);
+    expect(thinking.status).toBe('thinking');
+
+    const restored = run(
+      [
+        {
+          type: 'restore',
+          entries: [
+            {
+              kind: 'message',
+              id: 'm1',
+              text: 'From another project.',
+              tone: 'info'
+            }
+          ]
+        }
+      ],
+      thinking
+    );
+    expect(restored.entries).toHaveLength(1);
+    expect(restored.status).toBe('idle');
+    // Nothing restored is the viewport preview: that belonged to the document
+    // the panel just left.
+    expect(restored.previewEntryId).toBeNull();
+  });
+
   it('returns only the most recent still-open proposal', () => {
     const two = run([
       { type: 'submit', id: 'u1', text: 'a' },
