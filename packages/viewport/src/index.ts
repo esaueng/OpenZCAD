@@ -53,6 +53,7 @@ export * from './input/RightClickGestureTracker';
 
 // Scene graph: disposal, labels, display modes, and preview geometry.
 export * from './scene/HudLayer';
+export * from './scene/TopologyPickList';
 export * from './scene/objects';
 
 // Labels: screen-space dimension label layout.

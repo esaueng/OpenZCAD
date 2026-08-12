@@ -348,6 +348,88 @@
   pointer-events: none;
 }
 
+/* Ordered select-other stack. Kept in the lazy imperative viewer chunk so a
+   pointer moving between rows can pre-highlight topology without a React
+   render or a second picking path. */
+.topology-pick-list {
+  position: absolute;
+  z-index: calc(var(--z-viewer-overlay) + 4);
+  width: min(278px, calc(100% - 16px));
+  max-height: min(340px, calc(100% - 16px));
+  padding: 5px;
+  overflow-y: auto;
+  color: var(--color-text);
+  background: rgba(7, 16, 27, 0.97);
+  border: 1px solid var(--color-accent-border);
+  border-radius: var(--radius-md);
+  box-shadow: 0 14px 38px rgba(0, 0, 0, 0.46);
+  backdrop-filter: blur(10px);
+  pointer-events: auto;
+}
+
+.topology-pick-list-title {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 3px 7px 6px;
+  color: var(--color-text-subtle);
+  font-size: var(--fs-mini);
+  font-weight: var(--fw-semibold);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.topology-pick-list-title span {
+  color: var(--color-text-dim);
+  font-weight: var(--fw-normal);
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.topology-pick-list-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  min-height: 31px;
+  padding: 5px 8px;
+  color: var(--color-text);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  font-size: var(--fs-xs);
+  text-align: left;
+  cursor: pointer;
+}
+
+.topology-pick-list-row > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.topology-pick-list-row small {
+  color: var(--color-text-dim);
+  font-family: var(--font-mono);
+  font-size: var(--fs-mini);
+  text-transform: uppercase;
+}
+
+.topology-pick-list-row:hover,
+.topology-pick-list-row:focus-visible {
+  color: #f5faff;
+  background: rgba(77, 163, 255, 0.18);
+  border-color: rgba(124, 192, 255, 0.52);
+  outline: none;
+}
+
+.topology-pick-list-row:hover small,
+.topology-pick-list-row:focus-visible small {
+  color: var(--color-accent-hi);
+}
+
 .move-gizmo-hud {
   --gizmo-axis-color: #e8f3ff;
 
