@@ -60,6 +60,7 @@ import {
   booleanFacetFallbackWarning,
   censusOfSolids,
   countFaceConnectedComponents,
+  directEditFacetFallbackWarning,
   droppedUnionOperandWarning,
   inspectTriangleMeshClosure,
   isClosedConsistentlyOrientedMesh,
@@ -6345,6 +6346,7 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
       // move is worth exactly `offset * area`, and the kernel gates the result
       // on that, so a tool that reached material it should not have is
       // rejected rather than returned.
+      const sourceCensus = censusOfSolids(kernel, [solid]);
       const output =
         tryExactAnalyticCylinderCapOffset(kernel, solid, face, offset) ??
         kernel.pushPullFace(solid, face, offset);
@@ -6352,6 +6354,15 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
         throw new Error(
           `Offsetting the face by ${offset} does not produce a valid solid.`
         );
+      }
+      // Closure and volume checks still accept BrepKit's triangulated fallback.
+      // Preserve the last exact body instead of committing/exporting its facets.
+      const facetFallback = directEditFacetFallbackWarning({
+        operands: sourceCensus,
+        result: censusOfSolids(kernel, [output])
+      });
+      if (facetFallback) {
+        throw new Error(facetFallback);
       }
       return { solids: [output] };
     }

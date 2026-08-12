@@ -1923,6 +1923,98 @@ describe('exact kernel adapter', { timeout: 30_000 }, () => {
     });
   });
 
+  it('leaves a bored body exact when face offset falls back to facets', async () => {
+    const withOuter = addPrimitiveFeature(
+      createProjectDocument('Blind bore offset', toUserId('user_exact')),
+      {
+        name: 'Outer cylinder',
+        primitiveKind: 'cylinder',
+        dimensions: { radius: 20, height: 50 }
+      }
+    );
+    const outerId = withOuter.bodyOrder.at(-1)!;
+    const withDrill = addPrimitiveFeature(withOuter, {
+      name: 'Blind bore tool',
+      primitiveKind: 'cylinder',
+      dimensions: { radius: 10, height: 30 }
+    });
+    const drillId = withDrill.bodyOrder.at(-1)!;
+    const positioned = transformBody(withDrill, {
+      name: 'Seat bore above its floor',
+      targetBodyId: drillId,
+      translation: { x: 0, y: 0, z: 20 },
+      rotationDeg: { x: 0, y: 0, z: 0 }
+    }).document;
+    const manager = new CommandManager(positioned);
+    const bored = manager.execute(
+      commandFactories.booleanBodies({
+        name: 'Blind bored cylinder',
+        operation: 'subtract',
+        targetBodyIds: [outerId, drillId]
+      })
+    );
+    const bodyId = bored.bodyOrder.at(-1)!;
+    const before = await adapter.syncDocument(bored);
+    expect(before.warnings).toEqual([]);
+    const exactBody = before.bodyRepresentations[bodyId]!;
+    const curvedFaces = exactBody.topology!.faces.filter(
+      (face) => face.geometry?.surfaceType !== 'plane'
+    );
+    expect(exactBody.faceCount).toBe(5);
+    expect(curvedFaces).toHaveLength(2);
+    const boreFloor = exactBody.topology!.faces.find(
+      (face) =>
+        face.geometry?.surfaceType === 'plane' &&
+        Math.abs((face.geometry.center.z ?? 0) - 20) < 1e-5
+    );
+    expect(boreFloor).toBeTruthy();
+
+    const edited = directEditBody(bored, {
+      name: 'Deepen blind bore',
+      targetBodyId: bodyId,
+      operation: {
+        kind: 'offset-face',
+        faceHash: boreFloor!.hash,
+        sourceSurfaceType: 'plane',
+        sourceArea: boreFloor!.geometry!.area,
+        sourceCenter: boreFloor!.geometry!.center,
+        sourceNormal: boreFloor!.geometry!.normal!,
+        offset: -5
+      }
+    }).document;
+
+    // Fault injection pins the reported kernel failure: a valid result that
+    // silently replaces both cylinders with planar faces.
+    const pushPull = vi
+      .spyOn(BrepKernel.prototype, 'pushPullFace')
+      .mockImplementation(function (
+        this: BrepKernel,
+        _solid: number,
+        _face: number,
+        _distance: number
+      ) {
+        return this.makeBox(40, 40, 50);
+      });
+    let after: DerivedState;
+    try {
+      after = await adapter.syncDocument(edited);
+    } finally {
+      pushPull.mockRestore();
+    }
+
+    expect(after.warnings).toContain(
+      'Feature "Deepen blind bore": Offset face refused: the kernel returned a faceted approximation instead of exact surfaces: 5 source faces (2 curved) became 6 result faces (0 curved). The original body was left unchanged.'
+    );
+    const preservedBody = after.bodyRepresentations[bodyId]!;
+    expect(preservedBody.volume).toBeCloseTo(exactBody.volume, 6);
+    expect(preservedBody.faceCount).toBe(5);
+    expect(
+      preservedBody.topology!.faces.filter(
+        (face) => face.geometry?.surfaceType !== 'plane'
+      )
+    ).toHaveLength(2);
+  });
+
   it('fails closed when the offset face fingerprint no longer resolves', async () => {
     const base = addPrimitiveFeature(
       createProjectDocument('Stale face', toUserId('user_exact')),
