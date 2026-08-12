@@ -164,6 +164,8 @@ export type PinOwner =
   | 'K0.5'
   /** Import validation + lineage/witness parity. */
   | 'K0.6'
+  /** Imported STEP feature editing, evolution-payload attribution. */
+  | 'Phase A'
   /**
    * BrepKit's `volume()` integrates a tessellation at
    * `MEASUREMENT_DEFLECTION` (0.08); OCCT's `getVolume` is exact BRepGProp.
@@ -730,6 +732,32 @@ export const KERNEL_DELTAS: KernelDeltaPin[] = [
       'e-analytic-fillet-plate (9522.6069284092), the OCCT-authored file of ' +
       'the same nominal shape, so the blend and the import agree on the ' +
       'geometry and only the integrator is short.'
+  },
+  {
+    subject: 'fillet-on-import',
+    metric: 'witnessedFaces',
+    brepkit: 4,
+    occt: 0,
+    owner: 'Phase A',
+    note:
+      'The pinned BrepKit binding exposes construction-history attribution ' +
+      'for the four generated corner bands. The OCCT adapter has no matching ' +
+      'generated-face relation, so it remains fail-closed and hash-only.'
+  },
+  {
+    subject: 'fillet-on-import',
+    metric: 'lineageNames',
+    brepkit:
+      'modifier.fillet.face.band-between.import.step.face.426c91a5|import.step.face.58bf7705,' +
+      'modifier.fillet.face.band-between.import.step.face.426c91a5|import.step.face.62e02c7d,' +
+      'modifier.fillet.face.band-between.import.step.face.58bf7705|import.step.face.ac22b2bd,' +
+      'modifier.fillet.face.band-between.import.step.face.62e02c7d|import.step.face.ac22b2bd',
+    occt: 'none',
+    owner: 'Phase A',
+    note:
+      'Each BrepKit band is named by its unique pair of exact imported-face ' +
+      'support identities. OCCT publishes no generated-face evidence, so it ' +
+      'cannot safely assign the same semantic names.'
   },
   {
     subject: 'fillet-on-import',
