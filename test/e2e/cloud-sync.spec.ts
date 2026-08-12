@@ -485,23 +485,26 @@ test('restores an unreadable account document from the confirmed device copy', a
   );
 
   const attemptsBeforeRetry = api.projectLoadAttempts;
-  let restorePrompt = '';
-  page.once('dialog', async (dialog) => {
-    restorePrompt = dialog.message();
+  const restorePrompt = page.waitForEvent('dialog').then(async (dialog) => {
+    const message = dialog.message();
     await dialog.dismiss();
+    return message;
   });
   await page.getByRole('button', { name: 'Repair needed' }).click();
   await expect(
     page.getByRole('button', { name: 'Repair needed' })
   ).toBeVisible();
   expect(api.projectLoadAttempts).toBe(attemptsBeforeRetry + 1);
-  expect(restorePrompt).toContain(
+  expect(await restorePrompt).toContain(
     'Restore Repair Fixture edited locally in your account'
   );
   expect(api.project?.name).toBe('Repair Fixture');
 
-  page.once('dialog', (dialog) => dialog.accept());
+  const acceptRestore = page
+    .waitForEvent('dialog')
+    .then((dialog) => dialog.accept());
   await page.getByRole('button', { name: 'Repair needed' }).click();
+  await acceptRestore;
   await expect
     .poll(() => api.project?.name, { timeout: 10_000 })
     .toBe('Repair Fixture edited locally');
