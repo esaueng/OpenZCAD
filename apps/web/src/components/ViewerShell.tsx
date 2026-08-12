@@ -135,7 +135,10 @@ interface ViewerShellProps {
     detail?: PickDetail
   ): void;
   offsetHandle: OffsetHandleTarget | null;
-  onOffsetCommit(offset: number): void;
+  onOffsetPreview(offset: number): void;
+  onOffsetCommit(offset: number): boolean;
+  onOffsetCancel(): void;
+  offsetPreviewInvalid: boolean;
   onOpenOffsetKeypad(currentOffset: number, totalBaseline?: number): void;
   keypadAnchorRef: MutableRefObject<
     ((point: { x: number; y: number } | null) => void) | null
@@ -237,7 +240,10 @@ export function ViewerShell({
   selectionFilter,
   onBoxSelect,
   offsetHandle,
+  onOffsetPreview,
   onOffsetCommit,
+  onOffsetCancel,
+  offsetPreviewInvalid,
   onOpenOffsetKeypad,
   keypadAnchorRef,
   offsetSetterRef,
@@ -361,7 +367,10 @@ export function ViewerShell({
         selectionFilter={selectionFilter}
         onBoxSelect={onBoxSelect}
         offsetHandle={offsetHandle}
+        onOffsetPreview={onOffsetPreview}
         onOffsetCommit={onOffsetCommit}
+        onOffsetCancel={onOffsetCancel}
+        offsetPreviewInvalid={offsetPreviewInvalid}
         onOpenOffsetKeypad={onOpenOffsetKeypad}
         keypadAnchorRef={keypadAnchorRef}
         offsetSetterRef={offsetSetterRef}

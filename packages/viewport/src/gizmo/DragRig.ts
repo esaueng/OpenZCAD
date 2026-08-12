@@ -30,6 +30,8 @@ export interface DragRig {
   /** Drives the preview; also called by exact numeric entry. */
   setValue(value: number): void;
   value(): number;
+  /** Optional invalid-preview treatment for rigs that can rebuild exactly. */
+  setWarning?(warning: boolean): void;
   /** World point the value chip should track, given the rig's frame scale. */
   chipAnchor(gizmoScale: number): THREE.Vector3;
   dispose(): void;

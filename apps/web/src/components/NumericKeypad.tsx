@@ -51,6 +51,9 @@ interface NumericKeypadProps {
   onPreview(value: number): void;
   /** Commit: evaluated value in document units, plus the raw text. */
   onCommit(value: number, raw: string): void;
+  /** Exact preview refused the current value; entry stays editable. */
+  commitDisabled?: boolean;
+  commitDisabledReason?: string | null;
   onDimensionModeChange?(mode: DimensionMode): void;
   onCancel(): void;
 }
@@ -75,6 +78,8 @@ export function NumericKeypad({
   anchorRef,
   onPreview,
   onCommit,
+  commitDisabled = false,
+  commitDisabledReason,
   onDimensionModeChange,
   onCancel
 }: NumericKeypadProps) {
@@ -168,6 +173,7 @@ export function NumericKeypad({
 
   const commit = () => {
     if (
+      !commitDisabled &&
       evaluation.ok &&
       normalizedValue !== undefined &&
       normalizedRaw !== undefined
@@ -190,6 +196,7 @@ export function NumericKeypad({
     <div
       ref={rootRef}
       className="numeric-keypad"
+      data-state={commitDisabled ? 'warning' : 'ready'}
       role="dialog"
       aria-label={`${label} value`}
       // The viewport must never see keypad gestures as picks or orbits.
@@ -212,6 +219,7 @@ export function NumericKeypad({
           ref={inputRef}
           className="keypad-value"
           value={value}
+          aria-invalid={commitDisabled || !evaluation.ok}
           spellCheck={false}
           onChange={(event) => previewIfValid(event.target.value)}
         />
@@ -223,6 +231,11 @@ export function NumericKeypad({
             : (evaluation.error ?? 'invalid')}
         </div>
       )}
+      {commitDisabled && commitDisabledReason ? (
+        <div className="keypad-warning" role="alert">
+          {commitDisabledReason}
+        </div>
+      ) : null}
       {dimensionMode && (
         <div
           className="keypad-units"
@@ -297,7 +310,7 @@ export function NumericKeypad({
           type="button"
           className="keypad-commit"
           aria-label={`Apply ${label.toLowerCase()}`}
-          disabled={!evaluation.ok}
+          disabled={!evaluation.ok || commitDisabled}
           onClick={commit}
         >
           <Check size={16} aria-hidden="true" />
