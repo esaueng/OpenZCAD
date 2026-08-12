@@ -18,6 +18,9 @@ import {
   blendRadialDirection,
   canRemoveImportedBlendFace,
   editableFilletFeature,
+  importedBlendEditNotice,
+  IMPORTED_BLEND_READ_ONLY_NOTICE,
+  IMPORTED_BLEND_REMOVABLE_NOTICE,
   newBlendFaceSelections,
   resolveFilletBlendFace
 } from './filletFaceEdit';
@@ -227,5 +230,45 @@ describe('fillet face editing', () => {
     expect(canRemoveImportedBlendFace(body, selected)).toBe(true);
     body.topology!.faces.push(blendFace('other-blend'));
     expect(canRemoveImportedBlendFace(body, selected)).toBe(false);
+  });
+
+  it('explains the validated imported removal path without claiming history', () => {
+    const selected = blendFace('selected');
+    const plane = {
+      ...blendFace('plane'),
+      geometry: {
+        surfaceType: 'plane',
+        area: 10,
+        center: point(0, 0, 0)
+      }
+    };
+    const body = {
+      source: 'imported-step',
+      topology: { faces: [selected, plane], edges: [], vertices: [] }
+    } as unknown as BodyRepresentation;
+
+    expect(importedBlendEditNotice(body, selected)).toBe(
+      IMPORTED_BLEND_REMOVABLE_NOTICE
+    );
+    expect(importedBlendEditNotice(body, selected)).toMatch(/Undo restores/i);
+  });
+
+  it('fails closed with a recovery path when imported removal is unproven', () => {
+    const selected = blendFace('selected');
+    const body = {
+      source: 'imported-step',
+      topology: {
+        faces: [selected, blendFace('other-blend')],
+        edges: [],
+        vertices: []
+      }
+    } as unknown as BodyRepresentation;
+
+    expect(importedBlendEditNotice(body, selected)).toBe(
+      IMPORTED_BLEND_READ_ONLY_NOTICE
+    );
+    expect(importedBlendEditNotice(body, selected)).toMatch(
+      /recreate the detail as a native Fillet/i
+    );
   });
 });
