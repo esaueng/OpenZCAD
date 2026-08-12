@@ -74,6 +74,7 @@ test('creates, re-edits twice, and removes a selected history fillet', async ({
     topologyId: string;
     blendRadius: number;
     producingFeatureId?: string;
+    lineageName?: string;
   };
   const readBlend = (select = false) =>
     canvas.evaluate(
@@ -93,6 +94,8 @@ test('creates, re-edits twice, and removes a selected history fillet', async ({
     })
     .toBeCloseTo(1, 6);
   expect((await readBlend())?.producingFeatureId).toBeTruthy();
+  const selectedLineage = (await readBlend())?.lineageName;
+  expect(selectedLineage).toMatch(/^modifier\.fillet\.face\.band-between\./);
   expect(await readBlend(true)).not.toBeNull();
 
   const editFillet = page.getByRole('region', {
@@ -110,6 +113,7 @@ test('creates, re-edits twice, and removes a selected history fillet', async ({
       timeout: 30_000
     })
     .toBeCloseTo(2, 6);
+  expect((await readBlend())?.lineageName).toBe(selectedLineage);
   await expect(canvas).toHaveAttribute('data-e2e-selected-face', /.+/);
   await expect(page.getByRole('button', { name: 'History 2' })).toBeVisible();
   await keypad.getByRole('button', { name: 'Apply radius' }).click();

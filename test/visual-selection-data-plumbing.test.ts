@@ -69,8 +69,15 @@ describe('visual-selection face geometry payload', { timeout: 60_000 }, () => {
     expect(blend?.geometry?.blendRadius).toBeCloseTo(2, 12);
     const filletFeature = listFeaturesInOrder(result.document).at(-1)!;
     expect(blend?.reference?.producingFeatureId).toBe(filletFeature.featureId);
+    expect(blend?.reference?.lineageName).toMatch(
+      /^modifier\.fillet\.face\.band-between\./
+    );
     const editable = blend
-      ? editableFilletFeature(result.document, blend)
+      ? editableFilletFeature(
+          result.document,
+          blend,
+          body.topology?.faces ?? []
+        )
       : null;
     expect(editable?.featureId).toBe(filletFeature.featureId);
     expect(
