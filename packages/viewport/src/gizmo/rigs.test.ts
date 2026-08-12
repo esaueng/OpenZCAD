@@ -95,14 +95,20 @@ describe('the offset-face rig', () => {
     expect(rig.group.children).not.toContain(rig.worldGroup.children[0]);
   });
 
-  it('hides the leader until the drag actually engages', () => {
+  it('uses the shared dashed dimension through the geometry while engaged', () => {
     const rig = offsetRig();
-    const leader = rig.worldGroup.children[0]!;
-    expect(leader.visible).toBe(false);
+    const dimension = rig.worldGroup.children[0]!;
+    expect(dimension.name).toBe('dimension-graphic');
+    expect(dimension.children.map((child) => child.type)).toEqual([
+      'Line2',
+      'Mesh',
+      'Mesh'
+    ]);
+    expect(dimension.visible).toBe(false);
     rig.setValue(1);
-    expect(leader.visible).toBe(true);
+    expect(dimension.visible).toBe(true);
     rig.setValue(0);
-    expect(leader.visible).toBe(false);
+    expect(dimension.visible).toBe(false);
   });
 });
 
