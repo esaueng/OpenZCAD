@@ -2204,6 +2204,74 @@ describe('worker api routes', () => {
     });
   });
 
+  it('reports an unreadable account document without exposing storage internals', async () => {
+    const projectId = 'project_missing_object';
+    const prepare = vi.fn((query: string) => {
+      const statement = {
+        bind() {
+          return statement;
+        },
+        async first() {
+          if (query.includes('idx_project_document_objects_project_state')) {
+            return READY_PROJECT_OBJECT_STORAGE_SCHEMA;
+          }
+          if (query.includes('user_id AS owner_user_id')) {
+            return { owner_user_id: 'user_beta_dev' };
+          }
+          if (query.includes('SELECT document_json, document_object_id')) {
+            return {
+              document_json: '{}',
+              document_object_id: 'project_object_missing'
+            };
+          }
+          if (query.includes('FROM project_document_objects')) {
+            return {
+              object_key: `project-storage/${projectId}/documents/missing.json.gz`,
+              checksum_sha256: '0'.repeat(64),
+              logical_bytes: 128,
+              content_encoding: 'gzip'
+            };
+          }
+          return null;
+        }
+      };
+      return statement;
+    });
+    const storageError = vi
+      .spyOn(console, 'error')
+      .mockImplementation(() => undefined);
+
+    try {
+      const response = await worker.fetch(
+        new Request(`https://example.com/api/projects/${projectId}`),
+        {
+          ...env,
+          DB: { prepare } as unknown as D1Database,
+          PROJECT_STORAGE: {
+            put: vi.fn(),
+            get: vi.fn(async () => null),
+            delete: vi.fn()
+          } as unknown as R2Bucket
+        }
+      );
+
+      expect(response.status).toBe(503);
+      expect(await response.json()).toEqual({
+        error:
+          'The account copy of this project is temporarily unavailable. Your work remains saved on this device.',
+        code: 'PROJECT_DOCUMENT_UNAVAILABLE'
+      });
+      expect(storageError).toHaveBeenCalledWith(
+        'Project document storage unavailable.',
+        'GET',
+        `/api/projects/${projectId}`,
+        expect.objectContaining({ name: 'ProjectObjectStorageError' })
+      );
+    } finally {
+      storageError.mockRestore();
+    }
+  });
+
   it('keeps sharing routes closed while personal sync is on', async () => {
     const created = await createProject('Still Private');
     const response = await worker.fetch(

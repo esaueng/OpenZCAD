@@ -10,6 +10,11 @@ import {
   type ExactKernelAdapter
 } from '@openzcad/kernel-adapter/exact';
 import { toUserId, type BodyRepresentation } from '@openzcad/shared';
+import { editableFilletFeature } from '../apps/web/src/lib/interaction/filletFaceEdit';
+import {
+  preferredCapability,
+  selectionCapabilities
+} from '../apps/web/src/lib/interaction/capabilities';
 
 describe('visual-selection face geometry payload', { timeout: 60_000 }, () => {
   let adapter: ExactKernelAdapter;
@@ -62,6 +67,33 @@ describe('visual-selection face geometry payload', { timeout: 60_000 }, () => {
 
     expect(blend?.geometry?.radius).toBeCloseTo(2, 12);
     expect(blend?.geometry?.blendRadius).toBeCloseTo(2, 12);
+    const filletFeature = listFeaturesInOrder(result.document).at(-1)!;
+    expect(blend?.reference?.producingFeatureId).toBe(filletFeature.featureId);
+    expect(blend?.reference?.lineageName).toMatch(
+      /^modifier\.fillet\.face\.band-between\./
+    );
+    const editable = blend
+      ? editableFilletFeature(
+          result.document,
+          blend,
+          body.topology?.faces ?? []
+        )
+      : null;
+    expect(editable?.featureId).toBe(filletFeature.featureId);
+    expect(
+      preferredCapability(
+        selectionCapabilities({
+          kind: 'face',
+          target: {
+            surfaceType: 'cylindrical',
+            hash: blend?.hash,
+            radius: blend?.geometry?.radius,
+            blendRadius: blend?.geometry?.blendRadius,
+            filletFeatureId: editable?.featureId
+          }
+        })
+      )?.action
+    ).toBe('edit-fillet');
   });
 
   it('publishes a rim fillet as a torus blend with its minor radius', async () => {

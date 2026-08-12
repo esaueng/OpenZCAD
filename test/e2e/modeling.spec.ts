@@ -2651,15 +2651,19 @@ test('a refused boolean explains itself inside the panel that asked', async ({
   await page.getByRole('button', { name: 'Create project' }).click();
   const inspector = page.getByRole('region', { name: 'Feature inspector' });
 
-  // A box and a cylinder overlapping at the origin. The exact kernel refuses
-  // this union when its result is not a closed, consistently oriented solid.
+  // A box and the default cylinder, the cylinder slid until its axis lies in
+  // the box's y = 0 face plane. That tangency still fuses into a result the
+  // exact kernel cannot close, so the union is refused. (This union at the
+  // corner axis used to be the refusal here; the current kernel resolves that
+  // one exactly, cylinder wall and all.)
   await page.getByRole('button', { name: /^Box \(B\)/ }).click();
   await inspector.getByRole('button', { name: /^Create/ }).click();
-  // Radius 14 keeps this on the strict invalid-result path rather than the
-  // smaller default cylinder's dropped-operand tangency path.
   await page.getByRole('button', { name: /^Cylinder \(C\)/ }).click();
-  await inspector.getByLabel('Radius', { exact: true }).fill('14');
   await inspector.getByRole('button', { name: /^Create/ }).click();
+  await page.getByRole('button', { name: /^Move \(M\)/ }).click();
+  const shift = page.getByRole('form', { name: 'Move controls' });
+  await shift.getByLabel('Move X in mm').fill('15');
+  await shift.getByRole('button', { name: /Apply move/ }).click();
 
   await page.getByRole('button', { name: /^Union \(U\)/ }).click();
   await inspector.locator('.pick-row', { hasText: 'Box Body' }).click();
