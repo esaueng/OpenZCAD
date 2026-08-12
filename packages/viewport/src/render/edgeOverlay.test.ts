@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import * as THREE from 'three';
 import {
   toBodyId,
   toFeatureId,
@@ -36,18 +37,27 @@ function makeOverlay() {
     {
       bodyId: BODY_ID,
       topology: {
-        faces: [],
+        faces: [
+          {
+            topologyId: 'face-a',
+            hash: 101,
+            triangleStart: 0,
+            triangleCount: 1
+          }
+        ],
         edges: [
           {
             topologyId: 'edge-a',
             hash: 11,
             reference: EDGE_REFERENCE,
+            adjacentFaceHashes: [101],
             points: [0, 0, 0, 1, 0, 0, 2, 0, 0]
           },
           {
             topologyId: 'edge-seam',
             hash: 12,
             displayRole: 'seam',
+            adjacentFaceHashes: [101],
             points: [0, 1, 0, 1, 1, 0]
           },
           {
@@ -123,7 +133,15 @@ describe('BodyEdgeOverlay', () => {
       overlay.setSelected([selection('edge-a'), selection('edge-b')])
     ).toBe(true);
     expect(overlay.selectedEdges.geometry.instanceCount).toBe(3);
+    expect(overlay.selectedHiddenEdges.geometry.instanceCount).toBe(3);
     expect(overlay.selectedEdges.visible).toBe(true);
+    expect(overlay.selectedHiddenEdges.visible).toBe(true);
+    expect(overlay.selectedHiddenEdges.material.depthFunc).toBe(
+      THREE.GreaterDepth
+    );
+    expect(overlay.selectedHiddenEdges.material.opacity).toBeLessThan(
+      overlay.selectedEdges.material.opacity
+    );
     expect(overlay.idleEdges.geometry).toBe(idleGeometry);
     expect(overlay.idleEdges.material).toBe(idleMaterial);
     expect(overlay.selectedEdges.geometry).toBe(selectedGeometry);
@@ -153,16 +171,50 @@ describe('BodyEdgeOverlay', () => {
 
     overlay.setHovered(owner);
     expect(overlay.hoverEdges.visible).toBe(true);
+    expect(overlay.hoverHiddenEdges.visible).toBe(true);
     expect(overlay.hoverEdges.geometry.instanceCount).toBe(2);
     expect(overlay.hoverEdges.geometry).toBe(hoverGeometry);
 
     overlay.setSelected([selection('edge-a')]);
     expect(overlay.hoverEdges.visible).toBe(false);
+    expect(overlay.hoverHiddenEdges.visible).toBe(false);
 
     overlay.setSelected([]);
     expect(overlay.hoverEdges.visible).toBe(true);
     overlay.setHovered(null);
     expect(overlay.hoverEdges.visible).toBe(false);
+  });
+
+  it('renders a smooth hover run in the same reusable batch', () => {
+    const overlay = makeOverlay();
+    const hoverGeometry = overlay.hoverEdges.geometry;
+
+    overlay.setHovered(overlay.ownerAtSegment(0), ['edge-a', 'edge-b']);
+
+    expect(overlay.hoverEdges.geometry).toBe(hoverGeometry);
+    expect(overlay.hoverEdges.geometry.instanceCount).toBe(3);
+  });
+
+  it('draws a brighter face-boundary tier without seams in shaded mode', () => {
+    const overlay = makeOverlay();
+
+    expect(overlay.setSelectedFaceBoundary(101)).toBe(true);
+    overlay.setDisplayMode('shaded');
+
+    expect(overlay.selectedFaceBoundaryEdges.visible).toBe(true);
+    expect(overlay.selectedFaceBoundaryHiddenEdges.visible).toBe(true);
+    expect(overlay.selectedFaceBoundaryEdges.geometry.instanceCount).toBe(2);
+    expect(
+      overlay.selectedFaceBoundaryEdges.material.linewidth
+    ).toBeGreaterThan(overlay.selectedEdges.material.linewidth);
+    const intersections: THREE.Intersection[] = [];
+    expect(
+      overlay.selectedFaceBoundaryEdges.raycast(
+        new THREE.Raycaster(),
+        intersections
+      )
+    ).toBeUndefined();
+    expect(intersections).toEqual([]);
   });
 
   it('changes wireframe and hidden visuals without replacing materials', () => {
@@ -190,6 +242,21 @@ describe('BodyEdgeOverlay', () => {
     expect(overlay.idleEdges.visible).toBe(true);
   });
 
+  it('suppresses only hidden passes for receded sketch solids', () => {
+    const overlay = makeOverlay();
+    overlay.setSelected([selection('edge-b')]);
+    overlay.setHovered(overlay.ownerAtSegment(0));
+    overlay.setSelectedFaceBoundary(101);
+
+    expect(overlay.setXrayEnabled(false)).toBe(true);
+    expect(overlay.selectedEdges.visible).toBe(true);
+    expect(overlay.hoverEdges.visible).toBe(true);
+    expect(overlay.selectedFaceBoundaryEdges.visible).toBe(true);
+    expect(overlay.selectedHiddenEdges.visible).toBe(false);
+    expect(overlay.hoverHiddenEdges.visible).toBe(false);
+    expect(overlay.selectedFaceBoundaryHiddenEdges.visible).toBe(false);
+  });
+
   it('updates every stable material resolution together', () => {
     const overlay = makeOverlay();
     overlay.setResolution({ width: 1440, height: 900 });
@@ -197,7 +264,11 @@ describe('BodyEdgeOverlay', () => {
     for (const line of [
       overlay.idleEdges,
       overlay.hoverEdges,
-      overlay.selectedEdges
+      overlay.hoverHiddenEdges,
+      overlay.selectedEdges,
+      overlay.selectedHiddenEdges,
+      overlay.selectedFaceBoundaryEdges,
+      overlay.selectedFaceBoundaryHiddenEdges
     ]) {
       expect(line.material.resolution.x).toBe(1440);
       expect(line.material.resolution.y).toBe(900);

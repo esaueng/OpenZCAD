@@ -268,6 +268,15 @@ describe('cloudflare adapters', () => {
           if (query.includes('owner_user_id')) {
             return { owner_user_id: userId };
           }
+          if (query.includes('AS current_document_object_id')) {
+            return {
+              current_document_object_id: null,
+              current_document_version: document.version,
+              object_state: 'pending',
+              project_references: 0,
+              revision_references: 0
+            };
+          }
           if (query.includes('SELECT document_version')) {
             return { document_version: document.version };
           }
@@ -305,6 +314,234 @@ describe('cloudflare adapters', () => {
     // only the losing document object may be deleted.
     expect(deleted.filter((key) => key.includes('/assets/'))).toEqual([]);
     expect(deleted.some((key) => key.includes('/documents/'))).toBe(true);
+  });
+
+  it.each(['continuous save', 'manual revision', 'project creation'] as const)(
+    'keeps an R2 document when D1 commits a %s before its response fails',
+    async (operation) => {
+      const userId = toUserId(
+        `user_ambiguous_${operation.replaceAll(' ', '_')}`
+      );
+      const original = createProjectDocument('Ambiguous commit', userId);
+      const bodies = new Map<string, ArrayBuffer>();
+      const bucket = {
+        put: vi.fn(async (key: string, body: ArrayBuffer) => {
+          bodies.set(key, body.slice(0));
+        }),
+        get: vi.fn(async (key: string) => {
+          const body = bodies.get(key);
+          return body
+            ? {
+                arrayBuffer: async () => body.slice(0)
+              }
+            : null;
+        }),
+        head: vi.fn(async () => null),
+        delete: vi.fn(async (key: string) => {
+          bodies.delete(key);
+        })
+      };
+      let project: {
+        id: string;
+        userId: string;
+        objectId: string;
+        version: number;
+      } | null =
+        operation === 'project creation'
+          ? null
+          : {
+              id: original.projectId,
+              userId,
+              objectId: 'project_object_previous',
+              version: original.version
+            };
+      let object: {
+        id: string;
+        projectId: string;
+        objectKey: string;
+        checksumSha256: string;
+        logicalBytes: number;
+        contentEncoding: string;
+        state: string;
+      } | null = null;
+
+      const prepare = vi.fn((query: string) => {
+        let values: unknown[] = [];
+        const statement = {
+          query,
+          get values() {
+            return values;
+          },
+          bind(...next: unknown[]) {
+            values = next;
+            return statement;
+          },
+          async first() {
+            if (query.includes('user_id AS owner_user_id')) {
+              return project ? { owner_user_id: project.userId } : null;
+            }
+            if (query.includes('AS current_document_object_id')) {
+              return {
+                current_document_object_id: project?.objectId ?? null,
+                current_document_version: project?.version ?? null,
+                object_state:
+                  object && project?.objectId === object.id
+                    ? object.state
+                    : null,
+                project_references:
+                  object && project?.objectId === object.id ? 1 : 0,
+                revision_references: 0
+              };
+            }
+            if (
+              query.includes('FROM project_document_objects') &&
+              query.includes("state = 'committed'")
+            ) {
+              return object
+                ? {
+                    object_key: object.objectKey,
+                    checksum_sha256: object.checksumSha256,
+                    logical_bytes: object.logicalBytes,
+                    content_encoding: object.contentEncoding
+                  }
+                : null;
+            }
+            if (query.includes('SELECT document_version')) {
+              return project ? { document_version: project.version } : null;
+            }
+            if (query.includes('project_storage_assets')) {
+              return null;
+            }
+            return null;
+          },
+          async run() {
+            return { meta: { changes: 0 } };
+          },
+          async all() {
+            return { results: [] };
+          }
+        };
+        return statement;
+      });
+
+      const batch = vi.fn(
+        async (
+          statements: Array<{ query: string; values: readonly unknown[] }>
+        ) => {
+          for (const statement of statements) {
+            if (
+              statement.query.includes('INSERT INTO project_document_objects')
+            ) {
+              object = {
+                id: String(statement.values[0]),
+                projectId: String(statement.values[1]),
+                objectKey: String(statement.values[2]),
+                checksumSha256: String(statement.values[3]),
+                logicalBytes: Number(statement.values[4]),
+                contentEncoding: String(statement.values[6]),
+                state: 'committed'
+              };
+            } else if (statement.query.includes('UPDATE projects')) {
+              project = {
+                id: String(statement.values[8]),
+                userId: String(statement.values[9]),
+                objectId: String(statement.values[1]),
+                version: Number(statement.values[2])
+              };
+            } else if (statement.query.includes('INSERT INTO projects')) {
+              project = {
+                id: String(statement.values[0]),
+                userId: String(statement.values[1]),
+                objectId: String(statement.values[4]),
+                version: Number(statement.values[5])
+              };
+            }
+          }
+          throw new Error('D1 response lost after commit');
+        }
+      );
+      const service = new D1R2PersistenceService({
+        DB: { prepare, batch } as unknown as D1Database,
+        PROJECT_STORAGE: bucket as unknown as R2Bucket
+      });
+
+      if (operation === 'continuous save') {
+        await expect(
+          service.saveDocument(userId, {
+            projectId: original.projectId,
+            expectedVersion: original.version,
+            document: original
+          })
+        ).resolves.toMatchObject({
+          projectId: original.projectId,
+          version: original.version
+        });
+      } else if (operation === 'manual revision') {
+        await expect(
+          service.saveRevision(userId, {
+            projectId: original.projectId,
+            expectedVersion: original.version,
+            reason: 'Manual save',
+            document: original
+          })
+        ).resolves.toMatchObject({ projectId: original.projectId });
+      } else {
+        await expect(
+          service.createProject(userId, { name: 'Ambiguous creation' })
+        ).resolves.toMatchObject({
+          project: { name: 'Ambiguous creation' }
+        });
+      }
+
+      expect(bucket.delete).not.toHaveBeenCalled();
+      expect(object).not.toBeNull();
+      expect(bodies.has(object!.objectKey)).toBe(true);
+    }
+  );
+
+  it('retains an uploaded document when the D1 outcome cannot be verified', async () => {
+    const userId = toUserId('user_unknown_save_outcome');
+    const document = createProjectDocument('Unknown save outcome', userId);
+    const bucket = {
+      put: vi.fn(async () => undefined),
+      get: vi.fn(),
+      delete: vi.fn()
+    };
+    const prepare = vi.fn((query: string) => ({
+      bind: () => ({
+        first: async () => {
+          if (query.includes('user_id AS owner_user_id')) {
+            return { owner_user_id: userId };
+          }
+          if (query.includes('AS current_document_object_id')) {
+            throw new Error('D1 verification unavailable');
+          }
+          if (query.includes('SELECT document_version')) {
+            return { document_version: document.version };
+          }
+          return null;
+        }
+      })
+    }));
+    const service = new D1R2PersistenceService({
+      DB: {
+        prepare,
+        batch: vi.fn(async () => {
+          throw new Error('D1 response lost');
+        })
+      } as unknown as D1Database,
+      PROJECT_STORAGE: bucket as unknown as R2Bucket
+    });
+
+    await expect(
+      service.saveDocument(userId, {
+        projectId: document.projectId,
+        expectedVersion: document.version,
+        document
+      })
+    ).rejects.toMatchObject({ name: 'ProjectObjectStorageError' });
+    expect(bucket.put).toHaveBeenCalled();
+    expect(bucket.delete).not.toHaveBeenCalled();
   });
 
   it('skips a corrupt D1 project row without hiding valid projects', async () => {

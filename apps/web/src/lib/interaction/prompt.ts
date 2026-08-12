@@ -50,9 +50,16 @@ const SKETCH_TOOL_STEPS: Record<string, string> = {
 /** The armed step for an operation, before any drag has begun. */
 function armedStep(state: InteractionState): string {
   if (state.mode === 'face') {
-    return state.op === 'resize-cylinder-radius'
-      ? 'Drag the radial handle to adjust the radius, or type an exact radius'
-      : 'Drag the arrow to push or pull the face, or type an exact distance · Space faces it head-on';
+    switch (state.op) {
+      case 'resize-cylinder-radius':
+        return 'Drag the radial handle to adjust the radius, or type an exact radius';
+      case 'edit-fillet':
+        return 'Drag the radial handle to edit the fillet, or type an exact radius · R0 removes it';
+      case 'remove-face-feature':
+        return 'Remove this proven imported blend, or pick another face';
+      case 'offset-face':
+        return 'Drag the arrow to push or pull the face, or type an exact distance · Space faces it head-on';
+    }
   }
   if (state.mode === 'edges') {
     const count = state.edges.length;

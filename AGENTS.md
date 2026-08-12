@@ -1,60 +1,92 @@
-# OpenZCAD Agent Notes
+# OpenZCAD Agent Guide
 
-## Environment
-- Default branch is `main`.
-- Do not create production deploy targets or production domain config.
-- Use `wrangler.jsonc` and non-production Cloudflare resources.
-- Never use `git stash` from a linked worktree. `refs/stash` lives in the
-  common git dir and is shared by every worktree of this repo, so a `stash
-  pop` in one worktree can take work stashed in another. Commit to the
-  worktree's own branch instead — a throwaway commit is always recoverable,
-  a popped stash from a sibling worktree is not.
-- When bumping the `brepkit-wasm` pin, read the refresh commit's **message**
-  for the sha it was BUILT from. Never infer it from the commit's position in
-  history. The refresh job builds from its triggering commit and then rebases,
-  so when two PRs merge close together the second refresh dies on a conflict in
-  the generated package and main is left carrying a binary that is neither the
-  newest nor the oldest thing beneath it. This has nearly shipped the wrong
-  kernel twice, in opposite directions: once the stale refresh was *older* in
-  history, once it was *newer* and sat directly on top of the fix it did not
-  contain. If the refresh you need is missing, check
-  `Release & Publish` for a failed "Refresh committed WASM package" job and
-  re-run it by dispatching `publish.yml` on main with `sync_package=true`,
-  which rebuilds from HEAD. Do not push to brepkit `main` to work around it.
-- After bumping the pin, run BOTH `npx vitest run` and
-  `pnpm test:parity-corpus`. The corpus alone is not the gate —
-  `test/topology-lineage-spike.test.ts` has caught a bad pin the corpus could
-  not see.
-- `git log @{u}..` **errors** rather than reporting "nothing unpushed" when a
-  branch has no remote-tracking ref, which is the normal state for a lane
-  worktree. Before reclaiming any worktree's `target/`, compare its `HEAD`
-  against `git ls-remote origin <branch>` instead; an error is not evidence
-  that work is safely pushed.
-- **Run at most ONE brepkit lane at a time.** `df` reports the underlying
-  device (252G) but this container has a fixed per-session allowance of
-  roughly 38G, so "Avail" collapses while "Used" still looks small. A single
-  debug build of the brepkit workspace reaches **20-24G** in `target/debug`
-  (`deps` alone is ~20G), so two concurrent lanes cannot both finish — they
-  race to fill the allowance and then both fail with "No space left on
-  device". Two lanes were run concurrently on 2026-08-02 and hit 683M free.
-- When space runs short, reclaim in this order, cheapest and safest first:
-  1. `target/debug/incremental` in an active lane (~2G, pure cache);
-  2. worktrees whose branches are MERGED — verify `HEAD` equals
-     `git ls-remote origin <branch>` and the tree is clean, then
-     `git worktree remove --force` and `git worktree prune`;
-  3. `target/debug/deps` in an active lane — only as a last resort, since it
-     forces a full rebuild.
-  Never delete a lane's commits, and never touch a worktree whose branch has
-  not been pushed. **Get unpushed work pushed before reclaiming anything** —
-  a work-in-progress commit is recoverable, a lost worktree is not.
+## Project
 
-## Engineering Rules
-- Browser document/history model is the source of truth.
-- Geometry kernel runs in browser workers only.
-- Worker handles orchestration, metadata, storage coordination, and collaboration scaffolding.
-- Keep package boundaries strict. Do not let viewport state leak into document or kernel packages.
+OpenZCAD is a browser-first parametric CAD application with replayable feature
+history, exact solid modeling, local persistence, and optional cloud services.
+This pnpm monorepo contains the React/Three.js/Cloudflare web application, a
+Tauri macOS host, and shared TypeScript packages for its CAD model and runtime.
 
-## Delivery
-- Commit on `main` with descriptive messages.
-- Push to `main` when a remote exists.
-- Final status reports must separate working features, stubs, risks, and next milestones.
+## Required verification
+
+Run commands from the repository root. A cold clone first needs:
+
+```bash
+pnpm install --frozen-lockfile
+```
+
+That install needs network access because `pnpm-lock.yaml` pins a GitHub-hosted
+`brepkit-wasm` tarball. CI's `validate` job then runs these gates in order:
+
+```bash
+pnpm lint
+pnpm typecheck
+pnpm test:coverage
+pnpm test:web
+pnpm build
+pnpm exec playwright install --with-deps chromium
+pnpm test:e2e
+```
+
+The Playwright install downloads Chromium and may install system packages; do
+not run it where network or system changes are unavailable. `pnpm test:e2e`
+builds and serves the web app and is the slow gate (about five minutes in the
+2026-08-11 Linux CI run). The separate geometry parity job runs:
+
+```bash
+pnpm test:parity-corpus
+```
+
+As of 2026-08-11, `main` CI is red only in `pnpm test:e2e`: 113 tests pass,
+4 skip, and 2 cylinder-radius tests fail because a 404 is recorded as a console
+error. Lint, typecheck, coverage, web tests, build, parity, and the complete
+Apple Silicon workflow pass on that same commit. Recheck current CI before
+attributing an unchanged failure to a new patch.
+
+Changes touching the desktop workflow, either app, shared packages, the root
+manifest/lockfile, or `script/build_and_run.sh` also trigger the Apple Silicon
+workflow. Its package-specific checks are:
+
+```bash
+pnpm --filter @openzcad/web lint
+pnpm --filter @openzcad/web exec vitest run src/lib/desktopBridge.test.ts
+(
+  cd apps/desktop/src-tauri
+  cargo fmt --all -- --check
+  cargo clippy --locked --target aarch64-apple-darwin --all-targets --all-features -- -D warnings
+  cargo test --locked --target aarch64-apple-darwin --all-features
+)
+pnpm --filter @openzcad/desktop test:e2e
+pnpm build:desktop
+```
+
+Those native checks require macOS, the Apple Silicon Rust target, and the Tauri
+toolchain. CI additionally inspects the generated app and DMG architecture,
+icon, signature, and disk-image validity; the authoritative commands are inline
+in `.github/workflows/macos-desktop.yml`.
+
+## Test and build gotchas
+
+- Root Vitest and web Vitest are separate projects. `pnpm test:coverage`
+  covers `test/**/*.test.ts` and package-owned `*.test.ts`; it does not cover
+  `apps/web`'s happy-dom suites, so `pnpm test:web` is independently required.
+- Parity files intentionally use `test/parity/**/*.spec.ts`. Renaming one to
+  `*.test.ts` silently moves it into the root pool instead of the serial parity
+  job configured by `test/parity/vitest.corpus.config.ts`.
+- The top-level `pnpm build` is more than a Vite build: it also runs
+  `scripts/report-bundle-sizes.mjs --check`. Do not substitute the filtered web
+  build when validating a change.
+- `pnpm deploy:beta` is not a validation command. It applies remote D1
+  migrations before deploying the Worker and therefore needs credentials and
+  explicit deployment authorization.
+- `packages/kernel-adapter/package.json` follows the BrepKit branch, but frozen
+  installs use the one immutable commit in `pnpm-lock.yaml`. The scheduled
+  `.github/workflows/update-brepkit.yml` updater permits only a lockfile diff;
+  do not hand-edit the resolved SHA. Any kernel update still needs the full CI
+  matrix, especially `pnpm test:parity-corpus` and Playwright.
+
+## Enforced boundaries
+
+TypeScript strictness is enforced by `pnpm typecheck`, and ESLint enforces the
+rules in `eslint.config.mjs`. There is currently no dependency-boundary lint
+rule: package-direction claims are design intent, not an automated CI gate.
