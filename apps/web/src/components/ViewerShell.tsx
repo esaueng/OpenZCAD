@@ -48,6 +48,7 @@ import {
 import { ProjectThumbnailSyncAgent } from './ProjectThumbnailSyncAgent';
 import type { ProjectThumbnailRecord } from '../lib/localProjectStore';
 import type { ThumbnailCloudTransport } from '../lib/cloudThumbnail';
+import type { DimensionMode } from '../lib/keypad';
 
 type MeasurementCloudSyncState = readonly [
   projectId: string | undefined,
@@ -135,16 +136,21 @@ interface ViewerShellProps {
   ): void;
   offsetHandle: OffsetHandleTarget | null;
   onOffsetCommit(offset: number): void;
-  onOpenOffsetKeypad(currentOffset: number): void;
+  onOpenOffsetKeypad(currentOffset: number, totalBaseline?: number): void;
   keypadAnchorRef: MutableRefObject<
     ((point: { x: number; y: number } | null) => void) | null
   >;
   offsetSetterRef: MutableRefObject<((offset: number) => void) | null>;
   cylinderRadiusHandle: CylinderRadiusHandleTarget | null;
+  cylinderDimensionMode: DimensionMode;
+  onCylinderDimensionModeChange(mode: DimensionMode): void;
   onCylinderRadiusPreview(radius: number, exactGeometry: boolean): void;
   onCylinderRadiusCommit(radius: number): boolean;
   onCylinderRadiusCancel(): void;
-  onOpenCylinderRadiusKeypad(radius: number): void;
+  onOpenCylinderRadiusKeypad(
+    radius: number,
+    dimensionMode: DimensionMode
+  ): void;
   cancelDirectManipulationRef: MutableRefObject<(() => boolean) | null>;
   edgeHandle: EdgeHandleTarget | null;
   onEdgeRadiusPreview(size: number): void;
@@ -236,6 +242,8 @@ export function ViewerShell({
   keypadAnchorRef,
   offsetSetterRef,
   cylinderRadiusHandle,
+  cylinderDimensionMode,
+  onCylinderDimensionModeChange,
   onCylinderRadiusPreview,
   onCylinderRadiusCommit,
   onCylinderRadiusCancel,
@@ -358,6 +366,8 @@ export function ViewerShell({
         keypadAnchorRef={keypadAnchorRef}
         offsetSetterRef={offsetSetterRef}
         cylinderRadiusHandle={cylinderRadiusHandle}
+        cylinderDimensionMode={cylinderDimensionMode}
+        onCylinderDimensionModeChange={onCylinderDimensionModeChange}
         cylinderRadiusLabelSetterRef={cylinderRadiusLabelSetterRef}
         onCylinderRadiusPreview={onCylinderRadiusPreview}
         onCylinderRadiusCommit={onCylinderRadiusCommit}
