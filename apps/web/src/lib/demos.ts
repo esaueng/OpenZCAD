@@ -67,6 +67,15 @@ export const DEMO_DEFINITIONS: DemoDefinition[] = [
   }
 ];
 
+/** E2E-only seeded part with every analytic surface used by visual acceptance. */
+export const VISUAL_SELECTION_ACCEPTANCE_DEMO: DemoDefinition = {
+  key: 'visual-selection-acceptance',
+  projectId: toProjectId('proj_e2e_visual_selection_acceptance'),
+  name: 'Demo · Visual Selection Reference',
+  tagline: 'Boss with through-bore and a finished rim',
+  revisions: ['A — Boss blank', 'B — Through-bore', 'C — Lower rim fillet']
+};
+
 export type ExactSyncFn = (
   document: ProjectDocument
 ) => Promise<DerivedState>;
@@ -370,6 +379,102 @@ async function buildBracket(
 }
 
 // ---------------------------------------------------------------------------
+// E2E reference — boss + through-bore + one finished and one sharp rim
+// ---------------------------------------------------------------------------
+
+async function buildVisualSelectionAcceptance(
+  definition: DemoDefinition,
+  ownerUserId: UserId,
+  syncExact: ExactSyncFn
+): Promise<ProjectDocument> {
+  const builder = new DemoBuilder(definition.name, ownerUserId);
+
+  builder.stage('Define parameters', 'Parameters', [
+    ...params({ boss_r: 15, bore_r: 10, boss_h: 10, fillet_r: 2 })
+  ]);
+
+  const boss = createBodyFeatureIds();
+  builder.stage('Rev A — Boss blank', 'Rev A — Boss blank', [
+    commandFactories.addPrimitive({
+      name: 'Boss',
+      primitiveKind: 'cylinder',
+      dimensions: { radius: 'boss_r', height: 'boss_h' },
+      ids: boss
+    })
+  ]);
+
+  const bore = createBodyFeatureIds();
+  const boredBoss = createBodyFeatureIds();
+  builder.stage('Rev B — Through-bore', 'Rev B — Through-bore', [
+    commandFactories.addPrimitive({
+      name: 'Bore tool',
+      primitiveKind: 'cylinder',
+      dimensions: { radius: 'bore_r', height: 'boss_h + 4' },
+      ids: bore
+    }),
+    commandFactories.transformBody({
+      name: 'Pass bore through boss',
+      targetBodyId: bore.bodyId,
+      translation: { x: 0, y: 0, z: -2 }
+    }),
+    commandFactories.booleanBodies({
+      name: 'Bored boss',
+      operation: 'subtract',
+      targetBodyIds: [boss.bodyId, bore.bodyId],
+      ids: boredBoss
+    })
+  ]);
+
+  const revBDerived = await syncExact(builder.document);
+  const outerRims = (
+    revBDerived.bodyRepresentations[boredBoss.bodyId]?.topology?.edges ?? []
+  )
+    .filter(
+      (edge) =>
+        edge.displayRole !== 'seam' &&
+        edge.curve?.type === 'CIRCLE' &&
+        near(edge.curve.circle?.radius ?? 0, 15, 1e-6)
+    )
+    .sort(
+      (left, right) =>
+        (left.curve?.circle?.center.z ?? 0) -
+        (right.curve?.circle?.center.z ?? 0)
+    );
+  const lowerOuterRim = requireHashes(
+    outerRims.slice(0, 1).map((edge) => edge.hash),
+    'lower outer boss rim',
+    { count: 1 }
+  );
+
+  const fillet = createBodyFeatureIds();
+  builder.stage('Rev C — Lower rim fillet', 'Rev C — Lower rim fillet', [
+    commandFactories.filletEdges({
+      name: 'Lower rim fillet',
+      targetBodyId: boredBoss.bodyId,
+      edgeHashes: lowerOuterRim,
+      ...(outerRims[0]?.reference
+        ? { edgeReferences: [outerRims[0].reference] }
+        : {}),
+      size: 'fillet_r',
+      ids: fillet
+    }),
+    commandFactories.renameNode({
+      nodeId: fillet.bodyNodeId,
+      name: 'Visual Selection Reference'
+    }),
+    commandFactories.setNodeMetadata(
+      {
+        nodeId: fillet.bodyNodeId,
+        metadata: { color: '#e1a948' }
+      },
+      'Reference part gold finish'
+    )
+  ]);
+
+  return builder.finish(await syncExact(builder.document));
+}
+
+// ---------------------------------------------------------------------------
 // Demo 2 — Pipe Flange (revolve + circular pattern)
 // ---------------------------------------------------------------------------
 
@@ -657,7 +762,8 @@ const DEMO_BUILDERS: Record<
 > = {
   bracket: buildBracket,
   flange: buildFlange,
-  heatsink: buildHeatSink
+  heatsink: buildHeatSink,
+  'visual-selection-acceptance': buildVisualSelectionAcceptance
 };
 
 /**
