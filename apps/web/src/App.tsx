@@ -44,6 +44,7 @@ import {
   createProjectDocument,
   duplicateProjectDocument,
   findBodyNode,
+  findFeature,
   findSketch,
   getParameterScope,
   listFeaturesInOrder,
@@ -225,6 +226,13 @@ import {
   primitiveCylinderRadiusAncestor
 } from './lib/interaction/cylinderPrimitiveAncestry';
 import { resolveOffsetPreviewFace } from './lib/interaction/offsetPreview';
+import {
+  blendRadialDirection,
+  canRemoveImportedBlendFace,
+  editableFilletFeature,
+  newBlendFaceSelections,
+  resolveFilletBlendFace
+} from './lib/interaction/filletFaceEdit';
 import { ToolCard } from './components/ToolCard';
 import { NumericKeypad, type KeypadRequest } from './components/NumericKeypad';
 import type { DimensionMode } from './lib/keypad';
@@ -1109,6 +1117,10 @@ export function App() {
   const [renderedOffsetPreview, setRenderedOffsetPreview] = useState<
     number | null
   >(null);
+  /** New exact blend faces, computed once when an edge-fillet preview lands. */
+  const [previewBlendFaces, setPreviewBlendFaces] = useState<
+    TopologySelection[]
+  >([]);
   const [cylinderDimensionMode, setCylinderDimensionMode] =
     useState<DimensionMode>('diameter');
   const keypadAnchorRef = useRef<
@@ -2430,6 +2442,32 @@ export function App() {
     }
     const body = renderedRepresentations[selectedTopology.bodyId];
     const faces = body?.topology?.faces ?? [];
+    if (
+      interaction.mode === 'face' &&
+      interaction.op === 'edit-fillet' &&
+      interaction.target.bodyId === selectedTopology.bodyId &&
+      interaction.target.filletFeatureId
+    ) {
+      const sourceFace = representations[
+        selectedTopology.bodyId
+      ]?.topology?.faces.find(
+        (face) => face.topologyId === selectedTopology.topologyId
+      );
+      const regenerated = resolveFilletBlendFace(
+        faces,
+        interaction.target.filletFeatureId,
+        sourceFace?.geometry
+      );
+      if (regenerated) {
+        return {
+          bodyId: selectedTopology.bodyId,
+          kind: 'face',
+          topologyId: regenerated.topologyId,
+          hash: regenerated.hash,
+          ...(regenerated.reference ? { reference: regenerated.reference } : {})
+        };
+      }
+    }
     const exact = faces.find(
       (face) =>
         face.topologyId === selectedTopology.topologyId ||
@@ -2527,6 +2565,7 @@ export function App() {
       : selectedTopology;
   }, [
     interaction,
+    representations,
     renderedOffsetPreview,
     renderedRepresentations,
     selectedTopology
@@ -6430,6 +6469,21 @@ export function App() {
       );
       const geometry = faceTopology?.geometry;
       const surface = geometry?.surfaceType;
+      const filletFeature =
+        faceTopology && geometry?.featureType === 'blend'
+          ? editableFilletFeature(doc, faceTopology)
+          : null;
+      const filletRadialDirection =
+        filletFeature && geometry
+          ? blendRadialDirection(geometry, detail.point, detail.normal)
+          : null;
+      const removableImportedBlend =
+        !filletFeature && faceTopology
+          ? canRemoveImportedBlendFace(
+              representations[selection.bodyId]!,
+              faceTopology
+            )
+          : false;
       const radialFrame =
         surface === 'cylinder' &&
         geometry?.axisStart &&
@@ -6466,6 +6520,11 @@ export function App() {
             : surface === 'cylinder'
               ? 'cylindrical'
               : 'other',
+        ...(geometry?.blendRadius !== undefined
+          ? { blendRadius: geometry.blendRadius }
+          : {}),
+        ...(filletFeature ? { filletFeatureId: filletFeature.featureId } : {}),
+        ...(removableImportedBlend ? { canRemoveFaceFeature: true } : {}),
         ...(radialFrame && geometry?.radius !== undefined
           ? {
               radius: geometry.radius,
@@ -6480,14 +6539,28 @@ export function App() {
                 geometry.axisEnd!.z
               ] as [number, number, number],
               axialLength: geometry.axialLength,
-              radialDirection: [
-                radialFrame.radialDirection.x,
-                radialFrame.radialDirection.y,
-                radialFrame.radialDirection.z
-              ] as [number, number, number],
+              radialDirection: filletRadialDirection
+                ? ([
+                    filletRadialDirection.x,
+                    filletRadialDirection.y,
+                    filletRadialDirection.z
+                  ] as [number, number, number])
+                : ([
+                    radialFrame.radialDirection.x,
+                    radialFrame.radialDirection.y,
+                    radialFrame.radialDirection.z
+                  ] as [number, number, number]),
               concavity: radialFrame.concavity
             }
-          : {})
+          : filletRadialDirection
+            ? {
+                radialDirection: [
+                  filletRadialDirection.x,
+                  filletRadialDirection.y,
+                  filletRadialDirection.z
+                ] as [number, number, number]
+              }
+            : {})
       };
       dispatchInteraction({ type: 'select-face', target });
     } else if (interaction.mode !== 'idle' && interaction.mode !== 'sketch') {
@@ -6684,12 +6757,16 @@ export function App() {
     }
   }, [interaction]);
 
-  // Leaving edges mode abandons any in-flight preview document.
+  // Leaving either edge creation or face-backed fillet editing abandons its
+  // in-flight exact preview document.
+  const edgePreviewInteraction =
+    interaction.mode === 'edges' ||
+    (interaction.mode === 'face' && interaction.op === 'edit-fillet');
   useEffect(() => {
-    if (interaction.mode !== 'edges') {
+    if (!edgePreviewInteraction) {
       edgePreview.clear();
     }
-  }, [interaction.mode]);
+  }, [edgePreviewInteraction]);
 
   const offsetInteractionKey =
     interaction.mode === 'face' && interaction.op === 'offset-face'
@@ -7355,6 +7432,35 @@ export function App() {
   /** Armed edge handle; memoized for the same rig-stability reason as faces. */
   const edgeHandleTarget = useMemo(() => {
     if (
+      interaction.mode === 'face' &&
+      interaction.op === 'edit-fillet' &&
+      interaction.phase !== 'validating' &&
+      interaction.target.blendRadius !== undefined &&
+      interaction.target.radialDirection
+    ) {
+      return {
+        bodyId: interaction.target.bodyId,
+        topologyId: interaction.target.topologyId,
+        op: 'fillet' as const,
+        edgeCount: 1,
+        initialValue: interaction.lastValue ?? interaction.target.blendRadius,
+        placement: {
+          origin: {
+            x: interaction.target.point[0],
+            y: interaction.target.point[1],
+            z: interaction.target.point[2]
+          },
+          direction: {
+            x: interaction.target.radialDirection[0],
+            y: interaction.target.radialDirection[1],
+            z: interaction.target.radialDirection[2]
+          }
+        },
+        label: 'Edit Fillet',
+        allowRemoval: true
+      };
+    }
+    if (
       interaction.mode !== 'edges' ||
       interaction.edges.length === 0 ||
       interaction.phase === 'validating'
@@ -7643,20 +7749,71 @@ export function App() {
   const edgePreview = useRef(
     new LivePreview<ProjectDocument, ProjectDocument['derived']>({
       build: (size) => {
-        const command = buildEdgeModifierCommand(size);
         const base = managerRef.current?.document;
+        const command = base ? buildEdgeModifierCommand(size, base) : null;
         return command && base ? command.apply(base) : null;
       },
       derive: (document) => geometry.syncOnce(document),
-      publish: (preview) =>
-        setPreviewDoc(
-          preview ? { ...preview.document, derived: preview.derived } : null
-        )
+      publish: (preview) => {
+        if (!preview) {
+          setPreviewDoc(null);
+          setPreviewBlendFaces([]);
+          return;
+        }
+        setPreviewDoc({ ...preview.document, derived: preview.derived });
+        const current = interactionRef.current;
+        const base = managerRef.current?.document;
+        setPreviewBlendFaces(
+          current.mode === 'edges' && current.op === 'fillet' && base
+            ? newBlendFaceSelections(base, preview.derived)
+            : []
+        );
+      },
+      acceptValue: (size) => {
+        const current = interactionRef.current;
+        return (
+          Number.isFinite(size) &&
+          (current.mode === 'face' && current.op === 'edit-fillet'
+            ? size >= 0
+            : size > 0)
+        );
+      }
     })
   ).current;
 
-  function buildEdgeModifierCommand(size: ParamValue) {
+  function buildEdgeModifierCommand(
+    size: ParamValue,
+    baseDocument?: ProjectDocument
+  ): AnyCommand | null {
     const currentInteraction = interactionRef.current;
+    if (
+      currentInteraction.mode === 'face' &&
+      currentInteraction.op === 'edit-fillet' &&
+      currentInteraction.target.filletFeatureId
+    ) {
+      const base = baseDocument ?? managerRef.current?.document;
+      const feature = base
+        ? findFeature(base, currentInteraction.target.filletFeatureId)
+        : null;
+      if (feature?.data.featureKind !== 'fillet') {
+        return null;
+      }
+      const evaluated =
+        typeof size === 'number'
+          ? size
+          : base
+            ? evalParamValue(size, getParameterScope(base).scope)
+            : null;
+      return evaluated !== null && evaluated <= 1e-9
+        ? commandFactories.deleteFeature(
+            { featureId: feature.featureId },
+            `Remove ${feature.name}`
+          )
+        : commandFactories.updateFeature(
+            { featureId: feature.featureId, data: { radius: size } },
+            `Edit ${feature.name}`
+          );
+    }
     if (currentInteraction.mode !== 'edges') {
       return null;
     }
@@ -7692,13 +7849,22 @@ export function App() {
     if (!requireExactGeometryReady()) {
       return;
     }
+    if (interaction.mode === 'face' && interaction.op === 'edit-fillet') {
+      handleFilletFaceCommit(size, exact);
+      return;
+    }
     if (interaction.mode !== 'edges') {
       return;
     }
     edgePreview.clear();
     const rounded = Math.round(size * 1000) / 1000;
     const command = buildEdgeModifierCommand(exact ?? rounded);
-    if (!command || rounded <= 0) {
+    if (
+      !command ||
+      rounded <= 0 ||
+      !('targetBodyId' in command.payload) ||
+      !('edgeHashes' in command.payload)
+    ) {
       return;
     }
     const op = interaction.op;
@@ -7714,17 +7880,171 @@ export function App() {
 
   /** Edge chip tapped: exact entry for the blend radius/distance. */
   function handleOpenEdgeKeypad(currentSize: number) {
-    if (interaction.mode !== 'edges') {
+    if (
+      interaction.mode !== 'edges' &&
+      !(interaction.mode === 'face' && interaction.op === 'edit-fillet')
+    ) {
       return;
     }
     dispatchInteraction({ type: 'keypad-open' });
     setKeypad({
       kind: 'edge',
-      label: interaction.op === 'fillet' ? 'Radius' : 'Distance',
+      label:
+        interaction.mode === 'face' || interaction.op === 'fillet'
+          ? 'Radius'
+          : 'Distance',
       initial:
         currentSize > 0 ? String(Math.round(currentSize * 100) / 100) : '',
       unitKind: 'length'
     });
+  }
+
+  function handleEdgeCancel() {
+    edgePreview.clear();
+  }
+
+  function filletRemovalTargets(
+    base: ProjectDocument,
+    feature: FeatureNode
+  ): AffectedFeatureTarget[] {
+    if (feature.data.featureKind !== 'fillet') {
+      return [];
+    }
+    const targetBodyId = feature.data.targetBodyId;
+    const source = listFeaturesInOrder(base).find(
+      (candidate) => candidate.bodyId === targetBodyId
+    );
+    return [
+      {
+        featureName: source?.name ?? feature.name,
+        resultBodyId: targetBodyId
+      },
+      ...affectedFeatureTargets(base, feature.featureId).slice(1)
+    ];
+  }
+
+  /** Existing blend-face edits update/delete the history feature, never B-Rep. */
+  function handleFilletFaceCommit(size: number, exact?: ParamValue) {
+    if (!requireExactGeometryReady()) {
+      return;
+    }
+    const current = interactionRef.current;
+    const base = managerRef.current?.document;
+    if (
+      !base ||
+      current.mode !== 'face' ||
+      current.op !== 'edit-fillet' ||
+      !current.target.filletFeatureId ||
+      size < 0
+    ) {
+      return;
+    }
+    const feature = findFeature(base, current.target.filletFeatureId);
+    if (feature?.data.featureKind !== 'fillet') {
+      setStatus('The producing Fillet feature no longer exists.');
+      dispatchInteraction({ type: 'clear' });
+      return;
+    }
+    const command = buildEdgeModifierCommand(exact ?? size, base);
+    if (!command) {
+      return;
+    }
+    edgePreview.clear();
+    const removing = size <= 1e-9;
+    const sourceFace = base.derived.bodyRepresentations[
+      current.target.bodyId as BodyId
+    ]?.topology?.faces.find(
+      (face) => face.topologyId === current.target.topologyId
+    );
+    const targetBodyId = removing
+      ? feature.data.targetBodyId
+      : (current.target.bodyId as BodyId);
+    const validationTargets = removing
+      ? filletRemovalTargets(base, feature)
+      : affectedFeatureTargets(base, feature.featureId);
+    void executeValidatedDirectEdit(
+      command,
+      targetBodyId,
+      removing
+        ? `Removed ${feature.name}.`
+        : `Set ${feature.name} radius to R ${formatNumber(size)} ${base.units}.`,
+      size,
+      removing
+        ? undefined
+        : () => {
+            const committed = managerRef.current?.document;
+            const faces =
+              committed?.derived.bodyRepresentations[
+                current.target.bodyId as BodyId
+              ]?.topology?.faces;
+            const regenerated = faces
+              ? resolveFilletBlendFace(
+                  faces,
+                  feature.featureId,
+                  sourceFace?.geometry
+                )
+              : null;
+            if (!regenerated?.geometry) {
+              return;
+            }
+            const radial = blendRadialDirection(
+              regenerated.geometry,
+              {
+                x: current.target.point[0],
+                y: current.target.point[1],
+                z: current.target.point[2]
+              },
+              current.target.radialDirection
+                ? {
+                    x: current.target.radialDirection[0],
+                    y: current.target.radialDirection[1],
+                    z: current.target.radialDirection[2]
+                  }
+                : {
+                    x: current.target.normal[0],
+                    y: current.target.normal[1],
+                    z: current.target.normal[2]
+                  }
+            );
+            const nextTarget: FaceTarget = {
+              ...current.target,
+              topologyId: regenerated.topologyId,
+              hash: regenerated.hash,
+              ...(regenerated.reference
+                ? { reference: regenerated.reference }
+                : {}),
+              blendRadius: size,
+              surfaceCenter: [
+                regenerated.geometry.center.x,
+                regenerated.geometry.center.y,
+                regenerated.geometry.center.z
+              ],
+              ...(radial
+                ? {
+                    radialDirection: [radial.x, radial.y, radial.z] as [
+                      number,
+                      number,
+                      number
+                    ]
+                  }
+                : {})
+            };
+            const selection: TopologySelection = {
+              bodyId: current.target.bodyId as BodyId,
+              kind: 'face',
+              topologyId: regenerated.topologyId,
+              hash: regenerated.hash,
+              ...(regenerated.reference
+                ? { reference: regenerated.reference }
+                : {})
+            };
+            setSelectedTopology(selection);
+            setSelectedBodyIds([current.target.bodyId as BodyId]);
+            setSelectedFeatureNodeId(feature.id);
+            dispatchInteraction({ type: 'select-face', target: nextTarget });
+          },
+      validationTargets
+    );
   }
 
   /** Chip tapped: open the anchored keypad prefilled with the drag value. */
@@ -7836,13 +8156,47 @@ export function App() {
     if (
       (action === 'sketch-on-face' ||
         action === 'fillet' ||
-        action === 'chamfer') &&
+        action === 'chamfer' ||
+        action === 'remove-fillet' ||
+        action === 'remove-face-feature') &&
       !requireExactGeometryReady()
     ) {
       return;
     }
     if (action === 'sketch-on-face' && interaction.mode === 'face') {
       startSketchOnFace(interaction.target);
+      return;
+    }
+    if (
+      action === 'remove-fillet' &&
+      interaction.mode === 'face' &&
+      interaction.op === 'edit-fillet'
+    ) {
+      handleFilletFaceCommit(0);
+      return;
+    }
+    if (
+      action === 'remove-face-feature' &&
+      interaction.mode === 'face' &&
+      interaction.op === 'remove-face-feature'
+    ) {
+      const face = representations[
+        interaction.target.bodyId as BodyId
+      ]?.topology?.faces.find(
+        (candidate) => candidate.topologyId === interaction.target.topologyId
+      );
+      if (face?.geometry) {
+        handleRemoveFaceFeature(
+          {
+            bodyId: interaction.target.bodyId as BodyId,
+            kind: 'face',
+            topologyId: face.topologyId,
+            hash: face.hash,
+            ...(face.reference ? { reference: face.reference } : {})
+          },
+          face.geometry
+        );
+      }
       return;
     }
     if (
@@ -8799,7 +9153,12 @@ export function App() {
             const cancelledPointer =
               interaction.mode !== 'sketch' &&
               cancelDirectManipulationRef.current?.() === true;
-            if (cancelledPointer && interaction.mode === 'edges') {
+            if (
+              cancelledPointer &&
+              (interaction.mode === 'edges' ||
+                (interaction.mode === 'face' &&
+                  interaction.op === 'edit-fillet'))
+            ) {
               edgePreview.clear();
             }
             if (!cancelledPointer) {
@@ -9657,6 +10016,7 @@ export function App() {
             }
             selectedBodyIds={selectedBodyIds}
             selectedTopology={renderedSelectedTopology}
+            previewFaceHighlights={previewBlendFaces}
             selectedEdges={selectedEdges}
             settings={viewerSettings}
             fitSignal={fitSignal}
@@ -9712,6 +10072,7 @@ export function App() {
             edgeHandle={viewMode ? null : edgeHandleTarget}
             onEdgeRadiusPreview={(size) => edgePreview.request(size)}
             onEdgeCommit={handleEdgeCommit}
+            onEdgeCancel={handleEdgeCancel}
             onOpenEdgeKeypad={handleOpenEdgeKeypad}
             onDirectManipulationChange={(dragging) =>
               dispatchInteraction({
@@ -9973,7 +10334,7 @@ export function App() {
                         if (keypad.kind === 'radius') {
                           handleCylinderRadiusCancel();
                         } else if (keypad.kind === 'edge') {
-                          edgePreview.clear();
+                          handleEdgeCancel();
                         } else {
                           handleOffsetCancel();
                         }
