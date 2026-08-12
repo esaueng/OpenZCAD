@@ -24,12 +24,15 @@ import {
 
 const point = (x: number, y: number, z: number) => ({ x, y, z });
 const featureId = toFeatureId('feature_fillet');
+const evolutionLineage =
+  'modifier.fillet.face.band-between.primitive.box.face.x-max|primitive.box.face.z-max';
 
 function blendFace(
   topologyId: string,
   center = point(0, 0, 0),
   hash = topologyId.length,
-  surfaceType = 'cylinder'
+  surfaceType = 'cylinder',
+  lineageName = evolutionLineage
 ): FaceTopology {
   return {
     topologyId,
@@ -39,7 +42,7 @@ function blendFace(
     reference: {
       kind: 'face',
       producingFeatureId: featureId,
-      lineageName: `fillet.${topologyId}`,
+      lineageName,
       currentHash: hash,
       witnessVersion: 1,
       witness: {
@@ -88,11 +91,50 @@ describe('fillet face editing', () => {
       }
     });
     const face = blendFace('blend');
-    expect(editableFilletFeature(result.document, face)?.featureId).toBe(
-      featureId
-    );
+    expect(
+      editableFilletFeature(result.document, face, [face])?.featureId
+    ).toBe(featureId);
     face.geometry!.featureType = undefined;
-    expect(editableFilletFeature(result.document, face)).toBeNull();
+    expect(editableFilletFeature(result.document, face, [face])).toBeNull();
+  });
+
+  it('rejects fallback and duplicate lineage instead of arming an edit', () => {
+    const base = addPrimitiveFeature(
+      createProjectDocument('Fillet lineage', toUserId('user_fillet_lineage')),
+      {
+        name: 'Box',
+        primitiveKind: 'box',
+        dimensions: { width: 10, height: 10, depth: 10 }
+      }
+    );
+    const result = filletEdges(base, {
+      name: 'Corner fillet',
+      targetBodyId: base.bodyOrder[0]!,
+      edgeHashes: [1],
+      size: 2,
+      ids: {
+        featureId,
+        featureNodeId: toEntityId('node_feature_fillet_lineage'),
+        bodyId: toBodyId('body_fillet_lineage'),
+        bodyNodeId: toEntityId('node_body_fillet_lineage')
+      }
+    });
+    const fallback = blendFace(
+      'fallback',
+      point(0, 0, 0),
+      1,
+      'torus',
+      'modifier.cylinder.face.blend.start'
+    );
+    expect(
+      editableFilletFeature(result.document, fallback, [fallback])
+    ).toBeNull();
+
+    const selected = blendFace('selected', point(-5, 0, 0), 2);
+    const duplicate = blendFace('duplicate', point(50, 0, 0), 3);
+    expect(
+      editableFilletFeature(result.document, selected, [selected, duplicate])
+    ).toBeNull();
   });
 
   it('derives cylinder and torus minor-radius directions analytically', () => {
@@ -120,22 +162,24 @@ describe('fillet face editing', () => {
     );
   });
 
-  it('reselects by producing feature and blend carrier without using hash', () => {
+  it('reselects only by exact evolution identity without using hash or geometry', () => {
     const source = blendFace('source', point(0, 0, 10), 101);
-    const moved = blendFace('moved', point(0, 0, 11), 999);
-    const other = blendFace('other', point(0, 0, -10), 888);
-    expect(
-      resolveFilletBlendFace([other, moved], featureId, source.geometry)
-    ).toBe(moved);
+    const moved = blendFace('moved', point(500, 0, -200), 999);
+    const other = blendFace(
+      'other',
+      point(0, 0, 11),
+      888,
+      'cylinder',
+      `${evolutionLineage}.other`
+    );
+    expect(resolveFilletBlendFace([other, moved], source)).toBe(moved);
   });
 
-  it('fails closed when one feature leaves indistinguishable blend faces', () => {
+  it('fails closed when one evolution identity appears on multiple faces', () => {
     const source = blendFace('source', point(0, 0, 0), 101);
     const left = blendFace('left', point(-1, 0, 0), 202);
-    const right = blendFace('right', point(1, 0, 0), 303);
-    expect(
-      resolveFilletBlendFace([left, right], featureId, source.geometry)
-    ).toBeNull();
+    const farAway = blendFace('far-away', point(100, 0, 0), 303);
+    expect(resolveFilletBlendFace([left, farAway], source)).toBeNull();
   });
 
   it('diffs only genuinely new preview blend hashes across all bodies', () => {

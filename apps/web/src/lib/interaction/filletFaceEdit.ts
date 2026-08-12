@@ -4,12 +4,13 @@ import type {
   BodyRepresentation,
   FaceGeometry,
   FaceTopology,
-  FeatureId,
   FeatureNode,
   ProjectDocument,
   TopologySelection,
   Vector3
 } from '@openzcad/shared';
+
+const FILLET_FACE_LINEAGE_PREFIX = 'modifier.fillet.face.band-between.';
 
 function length(vector: Vector3): number {
   return Math.hypot(vector.x, vector.y, vector.z);
@@ -50,14 +51,29 @@ function dot(left: Vector3, right: Vector3): number {
   return left.x * right.x + left.y * right.y + left.z * right.z;
 }
 
-function distance(left: Vector3, right: Vector3): number {
-  return length(subtract(left, right));
+function hasFilletFaceEvolutionLineage(face: FaceTopology): boolean {
+  const reference = face.reference;
+  return Boolean(
+    reference &&
+    reference.lineageName.startsWith(FILLET_FACE_LINEAGE_PREFIX) &&
+    reference.lineageName.length > FILLET_FACE_LINEAGE_PREFIX.length
+  );
 }
 
-/** A blend is editable only when exact lineage names a live Fillet feature. */
+function hasSameLineage(left: FaceTopology, right: FaceTopology): boolean {
+  return Boolean(
+    left.reference &&
+    right.reference &&
+    left.reference.producingFeatureId === right.reference.producingFeatureId &&
+    left.reference.lineageName === right.reference.lineageName
+  );
+}
+
+/** A blend is editable only when one evolution identity names a live Fillet. */
 export function editableFilletFeature(
   document: ProjectDocument,
-  face: FaceTopology
+  face: FaceTopology,
+  faces: readonly FaceTopology[]
 ): FeatureNode | null {
   const producingFeatureId = face.reference?.producingFeatureId;
   if (
@@ -65,7 +81,9 @@ export function editableFilletFeature(
     face.geometry.blendRadius === undefined ||
     !Number.isFinite(face.geometry.blendRadius) ||
     face.geometry.blendRadius <= 0 ||
-    !producingFeatureId
+    !producingFeatureId ||
+    !hasFilletFaceEvolutionLineage(face) ||
+    faces.filter((candidate) => hasSameLineage(candidate, face)).length !== 1
   ) {
     return null;
   }
@@ -141,52 +159,26 @@ export function blendRadialDirection(
 }
 
 /**
- * Re-resolves a changed fillet face without consulting its unstable hash.
- * Producing feature plus blend classification is mandatory; the frozen
- * analytic carrier/centre only disambiguates multiple faces from one feature.
+ * Re-resolves a changed fillet face by its exact evolution identity. Hashes,
+ * carrier type, and geometric proximity are deliberately not fallbacks: a
+ * missing or duplicate identity leaves the edit unarmed.
  */
 export function resolveFilletBlendFace(
   faces: readonly FaceTopology[],
-  producingFeatureId: FeatureId,
-  sourceGeometry: FaceGeometry | undefined
+  source: FaceTopology
 ): FaceTopology | null {
-  const produced = faces.filter(
+  if (!hasFilletFaceEvolutionLineage(source)) {
+    return null;
+  }
+  const matches = faces.filter(
     (face) =>
       face.geometry?.featureType === 'blend' &&
-      face.reference?.producingFeatureId === producingFeatureId
+      face.geometry.blendRadius !== undefined &&
+      Number.isFinite(face.geometry.blendRadius) &&
+      face.geometry.blendRadius > 0 &&
+      hasSameLineage(face, source)
   );
-  if (produced.length === 0) {
-    return null;
-  }
-  const sameCarrier = sourceGeometry
-    ? produced.filter(
-        (face) => face.geometry?.surfaceType === sourceGeometry.surfaceType
-      )
-    : produced;
-  const candidates = sameCarrier.length > 0 ? sameCarrier : produced;
-  if (candidates.length === 1 || !sourceGeometry) {
-    return candidates.length === 1 ? candidates[0]! : null;
-  }
-  const ranked = candidates
-    .map((face) => ({
-      face,
-      score:
-        distance(face.geometry!.center, sourceGeometry.center) +
-        (face.geometry?.torusCenter && sourceGeometry.torusCenter
-          ? distance(face.geometry.torusCenter, sourceGeometry.torusCenter)
-          : 0)
-    }))
-    .sort((left, right) => left.score - right.score);
-  const closest = ranked[0];
-  if (!closest) {
-    return null;
-  }
-  const scale = Math.max(1, length(sourceGeometry.center), closest.score);
-  const next = ranked[1];
-  return next &&
-    Math.abs(next.score - closest.score) <= geometryTolerance(scale) * 8
-    ? null
-    : closest.face;
+  return matches.length === 1 ? matches[0]! : null;
 }
 
 /** Computes creation-only cyan faces once, when an exact preview publishes. */
