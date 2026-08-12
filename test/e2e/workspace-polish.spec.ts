@@ -267,6 +267,8 @@ test('snaps sketch drawing to existing endpoints', async ({ page }) => {
   await expect(
     page.getByRole('region', { name: 'Sketch operation' })
   ).toBeVisible();
+  // Screen-space clicks must wait until the head-on entry tween settles.
+  await page.waitForTimeout(800);
 
   const canvas = page.locator('.viewer-host canvas');
   const bounds = await canvas.boundingBox();
