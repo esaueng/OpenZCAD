@@ -20,7 +20,7 @@ const APPROVED_LAZY_ASSETS = [
   },
   {
     pattern: /^assets\/brepkit_wasm_bg-.*\.wasm$/,
-    maxBytes: 6_400 * 1024,
+    maxBytes: 6_656 * 1024,
     reason: 'Exact geometry kernel, loaded only for non-empty geometry'
   }
 ];

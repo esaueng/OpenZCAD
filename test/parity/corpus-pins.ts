@@ -780,14 +780,16 @@ export const KERNEL_DELTAS: KernelDeltaPin[] = [
   {
     subject: 'boolean-on-nurbs-import',
     metric: 'volume',
-    brepkit: 9425.614677425621,
+    brepkit: 9425.426555957836,
     occt: 9546.002960523074,
     owner: 'OCCT-defect',
     note:
       'The K0.5 scenario, and OpenCascade is the kernel that gets it wrong. ' +
       'An r4 bore is cut through a corner whose band arrived as a B-spline. ' +
       'The closed-form answer is 9416.3938 mm3; BrepKit reads +0.098%, OCCT ' +
-      'reads +1.38%. OCCT returns MORE volume after a SUBTRACT than its own ' +
+      'reads +1.38%. BrepKit moved slightly closer to the closed form with ' +
+      'the latest kernel, from +0.098% to +0.096%. OCCT returns MORE volume ' +
+      'after a SUBTRACT than its own ' +
       'import of the same body (9500.0), which is not a tolerance question. ' +
       'Both produce 10 exact faces with no mesh fallback, so the K0.5 ' +
       'acceptance criterion "flip from mesh-fallback to exact" is already ' +
@@ -835,7 +837,7 @@ export const REFERENCE_DEVIATIONS: ReferenceDeviationPin[] = [
       40 * 24 * 10 +
       Math.PI * 36 * 20 -
       (Math.PI * 36 - (36 * Math.acos(0.5) - 3 * Math.sqrt(27))) * 10,
-    reported: 10951.6171402675,
+    reported: 10951.56548068038,
     owner: 'K0.5',
     note:
       'THE SOLID IS EXACT; THE MEASUREMENT IS NEARLY SO. This pin has now ' +
@@ -851,8 +853,8 @@ export const REFERENCE_DEVIATIONS: ReferenceDeviationPin[] = [
       'since then; only the app-facing route was not. ' +
       'brepkit#64 then fixed that route, moving it from ' +
       '10984.864189375206 (+0.299% over) to 10951.844000782583 ' +
-      '(-0.00215% under). Version 3.2.22 now reads 10951.6171402675 ' +
-      '(-0.00423% under): a larger residual, but the same inscribed-mesh ' +
+      '(-0.00215% under). Version 3.2.22 now reads 10951.56548068038 ' +
+      '(-0.00470% under): a larger residual, but the same inscribed-mesh ' +
       'signature rather than the old folded-surface overcount. ' +
       'The old error ADDED material, because `tessellate_solid` sampled a ' +
       "closed circular rim from the curve's intrinsic parameter origin " +
@@ -886,7 +888,7 @@ export const REFERENCE_DEVIATIONS: ReferenceDeviationPin[] = [
       'fix — that route has its own open defect, reading a quadric sector ' +
       'wider than pi as its own complement (4.3% light). ' +
       'Retire this pin when the app-facing volume reaches the closed form ' +
-      '(the corpus bar is 1e-6; the current -4.23e-5 is 42x above it), not ' +
+      '(the corpus bar is 1e-6; the current -4.70e-5 is 47x above it), not ' +
       'before. Exact tangency is separate and still falls back at 0.02%.'
   },
   {
