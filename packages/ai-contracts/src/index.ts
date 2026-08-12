@@ -14,6 +14,7 @@ import type {
   BodyTopology,
   BooleanOperation,
   DirectEditOperation,
+  FaceGeometry,
   FaceTopologyReferenceV5,
   FeatureId,
   PatternKind,
@@ -330,7 +331,7 @@ export interface CadDigestFaceSnapshot {
   axisStart?: Vector3;
   axisEnd?: Vector3;
   axialLength?: number;
-  featureType?: 'through-hole';
+  featureType?: FaceGeometry['featureType'];
 }
 
 export interface CadDigestBodyTopology {
@@ -365,7 +366,7 @@ export interface CadDigestBodyTopology {
     axisStart?: Vector3;
     axisEnd?: Vector3;
     axialLength?: number;
-    featureType?: 'through-hole';
+    featureType?: FaceGeometry['featureType'];
   }>;
   edges: Array<{
     topologyId: string;

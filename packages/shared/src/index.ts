@@ -740,8 +740,20 @@ export interface FaceGeometry {
   axisStart?: Vector3;
   axisEnd?: Vector3;
   axialLength?: number;
-  /** Set only when the kernel proves that both axial ends open outside. */
-  featureType?: 'through-hole';
+  /** Exact torus centre, distinct from the frozen vertex-mean `center`. */
+  torusCenter?: Vector3;
+  /** Unit axis direction for an exact cone or torus when published. */
+  axis?: Vector3;
+  /** Exact torus ring and tube radii. */
+  majorRadius?: number;
+  minorRadius?: number;
+  /** Exact cone apex and half-angle. */
+  apex?: Vector3;
+  halfAngle?: number;
+  /** Semantic surface role proven by the kernel adapter. */
+  featureType?: 'through-hole' | 'blend';
+  /** Rolling-ball radius for a recognized blend surface. */
+  blendRadius?: number;
   /** Dimension currently supported by a deterministic direct edit. */
   editableDimension?: 'diameter';
 }
