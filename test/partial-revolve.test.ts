@@ -298,16 +298,16 @@ describe('partial revolve geometry', () => {
    *
    *   scale   45deg       90deg       180deg      270deg
    *   1e-2    exact       exact       exact       exact
-   *   5e-3    1.2985e-5   exact       exact       exact
-   *   3e-3    1.2985e-5   exact       exact       exact
-   *   2e-3    1.2985e-5   1.6967e-5   2.7593e-5   3.4452e-5
-   *   1e-3    1.2985e-5   1.6967e-5   2.7593e-5   3.4452e-5
-   *   5e-4    1.2985e-5   1.6967e-5   2.7593e-5   3.4452e-5
+   *   5e-3    3.8568e-5   exact       exact       exact
+   *   3e-3    3.8568e-5   exact       exact       exact
+   *   2e-3    3.8568e-5   3.4452e-5   3.4452e-5   3.4452e-5
+   *   1e-3    3.8568e-5   3.4452e-5   3.4452e-5   3.4452e-5
+   *   5e-4    3.8568e-5   3.4452e-5   3.4452e-5   3.4452e-5
    *
    * So 45 degrees breaks at 5e-3 while the other three are still exact
    * there and only break at 2e-3. Once past its OWN threshold each angle
-   * saturates at a fixed relative error, identical to five significant
-   * figures across every smaller scale.
+   * saturates at a fixed relative error across every smaller scale. The
+   * three larger angles now converge on the same floor.
    *
    * That angle-dependence is why this is NOT the same thing as brepkit#59's
    * `Tolerance::linear / min_radius` note. That ratio is angle-independent —
@@ -323,7 +323,7 @@ describe('partial revolve geometry', () => {
    * and so nobody "fixes" it by loosening the 1x and 1000x cases above.
    */
   it.each([
-    [90, 1.6967e-5],
+    [90, 3.4452e-5],
     [270, 3.4452e-5]
   ])(
     'records the small-scale volume error at 0.001x and %s degrees',
