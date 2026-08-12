@@ -25,7 +25,7 @@ authorization selects E1-E7 while retaining the one-expansion-per-branch gate.
 The following facts were checked in the current checkout before this document
 was added:
 
-- The active workspace is `/Users/userzero/codex/OpenZCAD`, not the path named
+- The active workspace is the repository root, not the path named
   in the source brief.
 - `docs/ui-overhaul-plan-2.md` is not present.
 - `apps/web/src/components/FeatureTimeline.tsx` is not present. E2 must locate

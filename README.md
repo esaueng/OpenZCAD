@@ -80,10 +80,17 @@ pnpm test:web         # web app tests
 pnpm test:e2e         # Playwright end-to-end suite
 pnpm test:coverage    # unit tests with coverage
 pnpm build            # production web/worker bundle
-pnpm deploy:beta      # beta-only Cloudflare deployment
+pnpm deploy:beta      # official deployment; maintainers only
 ```
 
 Local development uses `AUTH_MODE=development` and the isolated `user_beta_dev` identity. Never deploy `apps/web/wrangler.jsonc`: it is a development-only config and deliberately binds a placeholder dev database ID so it cannot write to beta data (create a real dev D1 and replace the ID for local use). The worker refuses to start if development authentication is combined with a guarded or non-development environment. When R2/Durable Object bindings are absent, the affected routes return a clean `FEATURE_DISABLED` 501 before touching persistence.
+
+The checked-in root `wrangler.jsonc` is the canonical configuration for the
+official deployment. Its D1 ID, bucket name, Worker name, public site key, and
+domains are non-secret identifiers; they do not grant access. To deploy an
+independent instance, use the separate example and instructions in
+[Self-hosting OpenZCAD](docs/SELF_HOSTING.md). Never copy the official resource
+identifiers into a self-hosting configuration.
 
 ### Performance
 
@@ -104,7 +111,7 @@ Email sign-in uses Cloudflare Email Service and Turnstile. Before enabling a rea
 - deploy with `pnpm deploy:beta`, which applies the remote D1 migrations before publishing the Worker;
 - follow the [project cloud-sync release runbook](docs/runbooks/project-cloud-sync-release.md) for the migration gate and authenticated two-device canary;
 - set `AUTH_MODE=email-code`, `ENVIRONMENT=beta`, `AUTH_EMAIL_FROM=noreply@zcad.esau.app`, `PROJECT_INVITATION_EMAIL_FROM=noreply@zcad.esau.app`, and the canonical `PUBLIC_APP_ORIGIN=https://zcad.app` used for invitation links (the checked-in beta config also sets `PRODUCTION_GUARD`, which makes the worker refuse development auth outright);
-- provide secrets, generated with `openssl rand -base64 32` where appropriate and set via `wrangler secret put`, never committed: `AUTH_OTP_PEPPER`, `TURNSTILE_SECRET_KEY`, `SETTINGS_ENCRYPTION_KEY` (must stay stable across deploys), and `AI_IDENTITY_PEPPER`. These four are declared in `wrangler.jsonc`, so Wrangler rejects an incomplete deployment;
+- provide secrets, generated with `openssl rand -base64 32` where appropriate and set via `wrangler secret put`, never committed: `AUTH_OTP_PEPPER`, `TURNSTILE_SECRET_KEY`, `SETTINGS_ENCRYPTION_KEY` (must stay stable across deploys), and `AI_IDENTITY_PEPPER`. The deployment preflight lists these required secret names without reading their values; verify the remote Worker secret list before deploying;
 - funding AI from the deployment's own provider key is opt-in and needs two more secrets, the provider key itself and `AI_DEPLOYMENT_ALLOWED_EMAILS`. Neither is required to deploy: with the allowlist unset the worker offers no deployment-funded AI, and users supply their own tokens instead.
 
 Login codes are single-use, expire after ten minutes, and sit behind per-email and per-IP rate limits. Sessions use a `Secure`, `HttpOnly`, `SameSite=Lax` host cookie; only a SHA-256 hash of the opaque token is stored. Turnstile responses must carry the `email-code` action, and every non-development verification pins the response hostname to the request hostname. `AUTH_LEGACY_OWNER_EMAIL` maps historical `user_beta_dev` projects to their owner's verified email without rewriting documents.

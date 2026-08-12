@@ -1,0 +1,81 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  // Copy this file to wrangler.selfhost.jsonc and replace every placeholder.
+  // The local file is gitignored and must point only to resources you own.
+  "account_id": "<YOUR_ACCOUNT_ID>",
+  "name": "<YOUR_WORKER_NAME>",
+  "main": "./apps/web/worker/index.ts",
+  "compatibility_date": "2026-04-12",
+  "compatibility_flags": ["nodejs_compat"],
+  "preview_urls": false,
+  "observability": {
+    "enabled": true,
+    "head_sampling_rate": 1
+  },
+  "triggers": {
+    "crons": ["17 * * * *"]
+  },
+  "assets": {
+    "directory": "./apps/web/dist",
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application",
+    "run_worker_first": ["/api/*"]
+  },
+  "vars": {
+    "ENVIRONMENT": "beta",
+    "AUTH_MODE": "email-code",
+    "PRODUCTION_GUARD": "enabled",
+    "AUTH_EMAIL_FROM": "<YOUR_AUTH_EMAIL_FROM>",
+    "PROJECT_INVITATION_EMAIL_FROM": "<YOUR_AUTH_EMAIL_FROM>",
+    "PUBLIC_APP_ORIGIN": "<YOUR_PUBLIC_APP_ORIGIN>",
+    "AUTH_SESSION_DAYS": "30",
+    "DESKTOP_AUTH_ENABLED": "false",
+    "TURNSTILE_SITE_KEY": "<YOUR_TURNSTILE_SITE_KEY>",
+    "AI_PROVIDER": "openai",
+    "AI_MODEL": "gpt-5.6-sol",
+    "AI_REASONING_EFFORT": "high",
+    "PROJECT_SHARING_ENABLED": "true",
+    "PROJECT_EDIT_LEASES_ENFORCED": "true",
+    "PROJECT_PERSONAL_SYNC_ENABLED": "true",
+    "AI_GLOBAL_DAILY_REQUEST_LIMIT": "100",
+    "AI_GLOBAL_DAILY_COST_LIMIT_UNITS": "400"
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "<YOUR_D1_DATABASE_NAME>",
+      "database_id": "<YOUR_D1_DATABASE_ID>",
+      "migrations_dir": "apps/web/migrations"
+    }
+  ],
+  "r2_buckets": [
+    {
+      "binding": "ARTIFACTS",
+      "bucket_name": "<YOUR_R2_BUCKET_NAME>"
+    }
+  ],
+  "send_email": [
+    {
+      "name": "EMAIL",
+      "allowed_sender_addresses": ["<YOUR_AUTH_EMAIL_FROM>"]
+    }
+  ],
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "PROJECT_ROOM",
+        "class_name": "ProjectCollaborationRoom"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": ["ProjectCollaborationRoom"]
+    }
+  ],
+  "routes": [
+    // Optional after the custom domain is active in your account:
+    // { "pattern": "<YOUR_DOMAIN>", "custom_domain": true }
+  ]
+}

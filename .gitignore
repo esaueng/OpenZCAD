@@ -12,6 +12,7 @@ coverage
 .turbo
 .wrangler
 wrangler.json
+wrangler.selfhost.jsonc
 worker-configuration.d.ts
 .DS_Store
 playwright-report
