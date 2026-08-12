@@ -1094,27 +1094,56 @@ export class D1R2PersistenceService implements PersistenceService {
         ),
         ...assetStatements
       ];
-      let results: Array<{ meta?: { changes?: number } }>;
+      let results: Array<{ meta?: { changes?: number } }> | null = null;
       try {
         results = await this.env.DB.batch(statements);
       } catch (error) {
-        await this.discardProjectStorageWrite(write);
-        throw error;
+        const resolution = await this.reconcileProjectStorageWrite(
+          request.projectId,
+          access.ownerUserId,
+          write
+        );
+        if (resolution.state !== 'committed') {
+          if (resolution.state === 'unknown') {
+            throw new ProjectObjectStorageError(
+              'Cloud project save outcome could not be verified.'
+            );
+          }
+          if (resolution.state === 'superseded') {
+            if (resolution.currentVersion === null) {
+              throw new ProjectNotFoundError(request.projectId);
+            }
+            throw new RevisionConflictError(
+              request.projectId,
+              resolution.currentVersion
+            );
+          }
+          throw error;
+        }
       }
-      const projectUpdate = results[1];
-      if (projectUpdate?.meta?.changes !== 1) {
-        await this.discardProjectStorageWrite(write);
-        const current = await this.env.DB.prepare(
-          `SELECT document_version FROM projects WHERE id = ? AND user_id = ?`
-        )
-          .bind(request.projectId, access.ownerUserId)
-          .first<{ document_version: number }>();
-        if (!current) {
+      const projectUpdate = results?.[1];
+      if (results && projectUpdate?.meta?.changes !== 1) {
+        const resolution = await this.reconcileProjectStorageWrite(
+          request.projectId,
+          access.ownerUserId,
+          write
+        );
+        if (resolution.state === 'committed') {
+          await this.pruneRevisions(request.projectId);
+          await this.pruneUnreferencedProjectObjects(request.projectId);
+          return document;
+        }
+        if (resolution.state === 'unknown') {
+          throw new ProjectObjectStorageError(
+            'Cloud project save outcome could not be verified.'
+          );
+        }
+        if (resolution.currentVersion === null) {
           throw new ProjectNotFoundError(request.projectId);
         }
         throw new RevisionConflictError(
           request.projectId,
-          current.document_version
+          resolution.currentVersion
         );
       }
       await this.pruneRevisions(request.projectId);
@@ -1291,27 +1320,59 @@ export class D1R2PersistenceService implements PersistenceService {
         ).bind(write.objectId, request.projectId, write.objectId),
         ...assetStatements
       ];
-      let results: Array<{ meta?: { changes?: number } }>;
+      let results: Array<{ meta?: { changes?: number } }> | null = null;
       try {
         results = await this.env.DB.batch(statements);
       } catch (error) {
-        await this.discardProjectStorageWrite(write);
-        throw error;
+        const resolution = await this.reconcileProjectStorageWrite(
+          request.projectId,
+          access.ownerUserId,
+          write
+        );
+        if (resolution.state !== 'committed') {
+          if (resolution.state === 'unknown') {
+            throw new ProjectObjectStorageError(
+              'Cloud project save outcome could not be verified.'
+            );
+          }
+          if (resolution.state === 'superseded') {
+            if (resolution.currentVersion === null) {
+              throw new ProjectNotFoundError(request.projectId);
+            }
+            throw new RevisionConflictError(
+              request.projectId,
+              resolution.currentVersion
+            );
+          }
+          throw error;
+        }
       }
-      const projectUpdate = results[1];
-      if (projectUpdate?.meta?.changes !== 1) {
-        await this.discardProjectStorageWrite(write);
-        const current = await this.env.DB.prepare(
-          `SELECT document_version FROM projects WHERE id = ? AND user_id = ?`
-        )
-          .bind(request.projectId, access.ownerUserId)
-          .first<{ document_version: number }>();
-        if (!current) {
+      const projectUpdate = results?.[1];
+      if (results && projectUpdate?.meta?.changes !== 1) {
+        const resolution = await this.reconcileProjectStorageWrite(
+          request.projectId,
+          access.ownerUserId,
+          write
+        );
+        if (resolution.state === 'committed') {
+          await this.pruneUnreferencedProjectObjects(request.projectId);
+          return {
+            projectId: request.projectId,
+            version: normalized.version,
+            updatedAt
+          };
+        }
+        if (resolution.state === 'unknown') {
+          throw new ProjectObjectStorageError(
+            'Cloud project save outcome could not be verified.'
+          );
+        }
+        if (resolution.currentVersion === null) {
           throw new ProjectNotFoundError(request.projectId);
         }
         throw new RevisionConflictError(
           request.projectId,
-          current.document_version
+          resolution.currentVersion
         );
       }
       await this.pruneUnreferencedProjectObjects(request.projectId);
@@ -2018,28 +2079,89 @@ export class D1R2PersistenceService implements PersistenceService {
     return normalizeDocument(hydrated);
   }
 
-  private async discardProjectStorageWrite(
+  /**
+   * Resolves a D1 response whose outcome cannot be trusted from the response
+   * alone. The database pointer is authoritative: an R2 object is removed only
+   * after D1 proves that neither a project nor a revision references it.
+   */
+  private async reconcileProjectStorageWrite(
+    projectId: string,
+    ownerUserId: UserId,
     write: ProjectStorageWrite
-  ): Promise<void> {
-    const bucket = this.projectStorageBucket();
-    if (bucket) {
-      // Asset objects are content-addressed, so a concurrent write that won
-      // the version race may have just committed rows referencing the very
-      // objects this losing write uploaded. Deleting them here would corrupt
-      // the winner's committed document. Only the losing document object is
-      // ours alone to remove; an unreferenced asset is re-adopted by the next
-      // retry through the head-check in putProjectStorageObjects.
-      await Promise.allSettled([bucket.delete(write.objectKey)]);
-    }
+  ): Promise<ProjectStorageWriteResolution> {
     try {
+      const row = await this.env
+        .DB!.prepare(
+          `SELECT
+             (SELECT document_object_id FROM projects
+              WHERE id = ? AND user_id = ?) AS current_document_object_id,
+             (SELECT document_version FROM projects
+              WHERE id = ? AND user_id = ?) AS current_document_version,
+             (SELECT state FROM project_document_objects
+              WHERE id = ? AND project_id = ?) AS object_state,
+             (SELECT COUNT(*) FROM projects
+              WHERE document_object_id = ?) AS project_references,
+             (SELECT COUNT(*) FROM revisions
+              WHERE document_object_id = ?) AS revision_references`
+        )
+        .bind(
+          projectId,
+          ownerUserId,
+          projectId,
+          ownerUserId,
+          write.objectId,
+          projectId,
+          write.objectId,
+          write.objectId
+        )
+        .first<ProjectStorageWriteResolutionRow>();
+      if (!row) {
+        return { state: 'unknown' };
+      }
+
+      if (row.current_document_object_id === write.objectId) {
+        if (row.object_state !== 'committed') {
+          return { state: 'unknown' };
+        }
+        try {
+          await this.loadProjectObject(projectId, write.objectId);
+          return { state: 'committed' };
+        } catch {
+          return { state: 'unknown' };
+        }
+      }
+
+      const currentVersion = row.current_document_version ?? null;
+      if (row.project_references > 0 || row.revision_references > 0) {
+        return { state: 'superseded', currentVersion };
+      }
+
+      // Delete metadata first. If that acknowledgement is lost, retain the R2
+      // object: an orphan is harmless and can be pruned later; deleting a
+      // possibly committed object is irrecoverable.
       await this.env
         .DB!.prepare(
-          `DELETE FROM project_document_objects WHERE id = ? AND state = 'pending'`
+          `DELETE FROM project_document_objects
+           WHERE id = ?
+             AND NOT EXISTS (
+               SELECT 1 FROM projects WHERE document_object_id = ?
+             )
+             AND NOT EXISTS (
+               SELECT 1 FROM revisions WHERE document_object_id = ?
+             )`
         )
-        .bind(write.objectId)
+        .bind(write.objectId, write.objectId, write.objectId)
         .run();
+
+      const bucket = this.projectStorageBucket();
+      if (bucket) {
+        // Assets are content-addressed and may already be shared by a winner.
+        // The random document object is the only object unique to this write.
+        await Promise.allSettled([bucket.delete(write.objectKey)]);
+      }
+      return { state: 'uncommitted', currentVersion };
     } catch {
-      // The D1 batch may have rolled back before the pending row was visible.
+      return { state: 'unknown' };
     }
   }
 
@@ -2121,8 +2243,19 @@ export class D1R2PersistenceService implements PersistenceService {
           ...this.projectAssetStatements(document.projectId, write)
         ]);
       } catch (error) {
-        await this.discardProjectStorageWrite(write);
-        throw error;
+        const resolution = await this.reconcileProjectStorageWrite(
+          document.projectId,
+          userId,
+          write
+        );
+        if (resolution.state !== 'committed') {
+          if (resolution.state === 'unknown') {
+            throw new ProjectObjectStorageError(
+              'Cloud project save outcome could not be verified.'
+            );
+          }
+          throw error;
+        }
       }
       return {
         projectId: document.projectId,
@@ -2449,6 +2582,20 @@ interface ProjectStorageWrite {
   prepared: PreparedProjectStorageSnapshot;
   missingAssets: ProjectStorageAssetObject[];
 }
+
+interface ProjectStorageWriteResolutionRow {
+  current_document_object_id: string | null;
+  current_document_version: number | null;
+  object_state: 'pending' | 'committed' | null;
+  project_references: number;
+  revision_references: number;
+}
+
+type ProjectStorageWriteResolution =
+  | { state: 'committed' }
+  | { state: 'uncommitted'; currentVersion: number | null }
+  | { state: 'superseded'; currentVersion: number | null }
+  | { state: 'unknown' };
 
 function organizationFromRow(row: ProjectRow): ProjectOrganization {
   const status = PROJECT_STATUSES.includes(row.status as ProjectStatus)
