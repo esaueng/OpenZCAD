@@ -53,6 +53,10 @@ import { ExprInput } from './ExprInput';
 import { ColorPicker } from './ColorPicker';
 import { FieldAutoFocusProvider } from './forms/fieldAutoFocus';
 import type { BodyAppearancePreview } from './ModelViewer';
+import {
+  canRemoveImportedBlendFace,
+  importedBlendEditNotice
+} from '../lib/interaction/filletFaceEdit';
 
 export interface InspectorCallbacks {
   onLaunchTool(tool: ToolId): void;
@@ -482,11 +486,17 @@ function FaceDirectEdit({
     evaluatedDiameter > 1e-6 &&
     Math.abs(evaluatedDiameter - geometry.diameter) >
       Math.max(1e-6, geometry.diameter * 1e-6);
+  const canRemove =
+    geometry.featureType !== 'blend' ||
+    (face ? canRemoveImportedBlendFace(body, face) : false);
+  const editNotice = face ? importedBlendEditNotice(body, face) : null;
   const surfaceLabel =
-    geometry.featureType === 'through-hole'
-      ? 'Through hole'
-      : (SURFACE_LABELS[geometry.surfaceType] ??
-        `${geometry.surfaceType} face`);
+    geometry.featureType === 'blend'
+      ? 'Imported blend'
+      : geometry.featureType === 'through-hole'
+        ? 'Through hole'
+        : (SURFACE_LABELS[geometry.surfaceType] ??
+          `${geometry.surfaceType} face`);
 
   return (
     <section
@@ -515,6 +525,15 @@ function FaceDirectEdit({
             </span>
           </>
         )}
+        {geometry.featureType === 'blend' &&
+          geometry.blendRadius !== undefined && (
+            <>
+              <b>fillet radius</b>
+              <span>
+                R {formatNumber(geometry.blendRadius)} {units}
+              </span>
+            </>
+          )}
       </div>
 
       {geometry.featureType === 'through-hole' &&
@@ -542,18 +561,19 @@ function FaceDirectEdit({
           </form>
         )}
 
-      <button
-        type="button"
-        className="secondary remove-face-feature"
-        onClick={() => onRemoveFaceFeature(selection, geometry)}
-      >
-        <Trash2 size={13} aria-hidden="true" />
-        Remove selected feature
-      </button>
+      {canRemove && (
+        <button
+          type="button"
+          className="secondary remove-face-feature"
+          onClick={() => onRemoveFaceFeature(selection, geometry)}
+        >
+          <Trash2 size={13} aria-hidden="true" />
+          Remove selected feature
+        </button>
+      )}
       <p className="muted direct-edit-note">
-        STEP stores faces, not the original feature history. OpenZCAD only
-        applies edits the exact kernel can validate; unsupported face
-        combinations remain unchanged.
+        {editNotice ??
+          'STEP stores faces, not the original feature history. OpenZCAD only applies edits the exact kernel can validate; unsupported face combinations remain unchanged.'}
       </p>
     </section>
   );
