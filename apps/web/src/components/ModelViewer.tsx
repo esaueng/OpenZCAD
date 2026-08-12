@@ -2179,6 +2179,7 @@ export function ModelViewer({
               topologyId: string;
               blendRadius: number;
               producingFeatureId?: string;
+              lineageName?: string;
             } | null
           ) => void;
         }>
@@ -2236,6 +2237,9 @@ export function ModelViewer({
           ? {
               producingFeatureId: String(face.reference.producingFeatureId)
             }
+          : {}),
+        ...(face.reference?.lineageName
+          ? { lineageName: face.reference.lineageName }
           : {})
       });
     };
