@@ -14,6 +14,12 @@ function makeHost(rect = { left: 40, top: 10, width: 800, height: 600 }) {
     attributes: Record<string, string>;
     setAttribute(name: string, value: string): void;
     getAttribute(name: string): string | null;
+    getBoundingClientRect(): {
+      left: number;
+      top: number;
+      width: number;
+      height: number;
+    };
     remove(): void;
   }
   const host = {
@@ -34,6 +40,9 @@ function makeHost(rect = { left: 40, top: 10, width: 800, height: 600 }) {
         },
         getAttribute(name) {
           return element.attributes[name] ?? null;
+        },
+        getBoundingClientRect() {
+          return { left: 0, top: 0, width: 160, height: 120 };
         },
         remove() {
           const index = children.indexOf(element);
@@ -119,6 +128,25 @@ describe('positioning against the host', () => {
 
     expect(layer.showAtPointer(label, { clientX: 10, clientY: 10 })).toBe(false);
     expect(label.hidden).toBe(true);
+    restore();
+  });
+
+  it('keeps an interactive popup inside the host at its lower-right edge', () => {
+    const { host, restore } = makeHost();
+    const layer = new HudLayer(host);
+    const popup = layer.create('topology-pick-list');
+
+    expect(
+      layer.showAtPointerClamped(
+        popup,
+        { clientX: 830, clientY: 590 },
+        12,
+        12
+      )
+    ).toBe(true);
+    expect(popup.style.left).toBe('632px');
+    expect(popup.style.top).toBe('472px');
+    expect(popup.hidden).toBe(false);
     restore();
   });
 
