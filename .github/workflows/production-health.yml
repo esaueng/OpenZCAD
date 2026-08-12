@@ -1,0 +1,27 @@
+name: Production health
+
+on:
+  schedule:
+    - cron: '17 6 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  health:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check hosted beta readiness
+        shell: bash
+        run: |
+          response="$(curl --fail --silent --show-error --location --retry 2 --max-time 20 https://zcad.app/api/health)"
+          printf '%s\n' "$response"
+          # Measurement sync and erasure are separately deployed capabilities.
+          # The baseline cloud service requires only the storage readiness gates.
+          jq -e '
+            .status == "ok" and
+            .environment == "beta" and
+            .documentStorageAccountingReady == true and
+            .projectObjectStorageReady == true
+          ' <<<"$response" >/dev/null
