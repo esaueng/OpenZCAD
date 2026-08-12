@@ -101,6 +101,33 @@ describe('a dimension between two points', () => {
     graphic.dispose();
   });
 
+  it('shares one custom style across its line and arrowheads', () => {
+    const graphic = createDimensionGraphic({
+      color: 0x123456,
+      opacity: 0.7,
+      linewidth: 2,
+      depthTest: true
+    });
+    const line = graphic.object.children[0] as THREE.Object3D & {
+      material: {
+        color: THREE.Color;
+        opacity: number;
+        linewidth: number;
+        depthTest: boolean;
+      };
+    };
+    const head = meshes(graphic)[0]!;
+    expect(line.material.color.getHex()).toBe(0x123456);
+    expect(line.material.opacity).toBeCloseTo(0.7, 6);
+    expect(line.material.linewidth).toBe(2);
+    expect(line.material.depthTest).toBe(true);
+    expect((head.material as THREE.MeshBasicMaterial).color.getHex()).toBe(
+      0x123456
+    );
+    expect((head.material as THREE.MeshBasicMaterial).depthTest).toBe(true);
+    graphic.dispose();
+  });
+
   it('allocates no new geometry across repeated updates', () => {
     // This runs per frame for every visible measurement. Rebuilding geometry
     // each time is how a measurement tape turns into a frame-rate problem.

@@ -114,8 +114,13 @@ import {
   type BodyEdgeOverlay,
   type DimensionGraphic
 } from '@openzcad/viewport';
-import type { BodyRepresentation, TopologySelection } from '@openzcad/shared';
+import type {
+  BodyRepresentation,
+  FaceGeometry,
+  TopologySelection
+} from '@openzcad/shared';
 import { formatNumber } from '../lib/model';
+import type { DimensionMode } from '../lib/keypad';
 import type { ViewportCameraState } from '../lib/workspaceSession';
 import type { MeasurementViewportAnnotation } from '../lib/measurements';
 import {
@@ -180,6 +185,8 @@ export interface OffsetHandleTarget {
   normal: { x: number; y: number; z: number };
   /** Restored after a failed exact-kernel validation. */
   initialValue?: number;
+  /** Primitive height when this offset is really an overall-height edit. */
+  totalBaseline?: number;
 }
 
 /** An explicit cylindrical-wall radius handle with an immutable world axis. */
@@ -397,7 +404,7 @@ interface ModelViewerProps {
   /** Fired when an offset-handle drag releases with a non-zero offset. */
   onOffsetCommit(offset: number): void;
   /** Value chip tapped: open exact entry prefilled with the current offset. */
-  onOpenOffsetKeypad(currentOffset: number): void;
+  onOpenOffsetKeypad(currentOffset: number, totalBaseline?: number): void;
   /** Imperative sink receiving the chip anchor in host pixels each frame. */
   keypadAnchorRef: MutableRefObject<
     ((point: { x: number; y: number } | null) => void) | null
@@ -406,6 +413,9 @@ interface ModelViewerProps {
   offsetSetterRef: MutableRefObject<((offset: number) => void) | null>;
   /** Dedicated cylindrical-wall handle; never reuses face translation. */
   cylinderRadiusHandle: CylinderRadiusHandleTarget | null;
+  /** Whether the radial handle reads/accepts Ø or R; geometry remains radius. */
+  cylinderDimensionMode: DimensionMode;
+  onCylinderDimensionModeChange(mode: DimensionMode): void;
   /** Imperative bridge to the React-owned selection readout. */
   cylinderRadiusLabelSetterRef: MutableRefObject<
     ((radius: number | null) => void) | null
@@ -417,7 +427,10 @@ interface ModelViewerProps {
   /** Clears transient exact geometry without creating history. */
   onCylinderRadiusCancel(): void;
   /** Value chip tapped: open exact entry for the absolute radius. */
-  onOpenCylinderRadiusKeypad(radius: number): void;
+  onOpenCylinderRadiusKeypad(
+    radius: number,
+    dimensionMode: DimensionMode
+  ): void;
   /** Escape reaches the active imperative pointer session through this ref. */
   cancelDirectManipulationRef: MutableRefObject<(() => boolean) | null>;
   /** Armed edge fillet/chamfer handle (selection-first direct manipulation). */
@@ -764,6 +777,8 @@ export function ModelViewer({
   keypadAnchorRef,
   offsetSetterRef,
   cylinderRadiusHandle,
+  cylinderDimensionMode,
+  onCylinderDimensionModeChange,
   cylinderRadiusLabelSetterRef,
   onCylinderRadiusPreview,
   onCylinderRadiusCommit,
@@ -828,6 +843,10 @@ export function ModelViewer({
   bodiesRef.current = bodies;
   const cylinderRadiusHandleRef = useRef(cylinderRadiusHandle);
   cylinderRadiusHandleRef.current = cylinderRadiusHandle;
+  const offsetHandleRef = useRef(offsetHandle);
+  offsetHandleRef.current = offsetHandle;
+  const cylinderDimensionModeRef = useRef(cylinderDimensionMode);
+  cylinderDimensionModeRef.current = cylinderDimensionMode;
   const onContextMenuRef = useRef(onContextMenu);
   onContextMenuRef.current = onContextMenu;
   const editableBodyIdsRef = useRef(new Set(editableBodyIds));
@@ -859,6 +878,10 @@ export function ModelViewer({
   onCylinderRadiusCancelRef.current = onCylinderRadiusCancel;
   const onOpenCylinderRadiusKeypadRef = useRef(onOpenCylinderRadiusKeypad);
   onOpenCylinderRadiusKeypadRef.current = onOpenCylinderRadiusKeypad;
+  const onCylinderDimensionModeChangeRef = useRef(
+    onCylinderDimensionModeChange
+  );
+  onCylinderDimensionModeChangeRef.current = onCylinderDimensionModeChange;
   const onEdgeRadiusPreviewRef = useRef(onEdgeRadiusPreview);
   onEdgeRadiusPreviewRef.current = onEdgeRadiusPreview;
   const onEdgeCommitRef = useRef(onEdgeCommit);
@@ -1771,15 +1794,33 @@ export function ModelViewer({
     });
     const offsetChip = hud.create('handle-value-chip');
     offsetChip.dataset.testid = 'direct-manipulation-value';
+    const dimensionPrefix = document.createElement('button');
+    dimensionPrefix.type = 'button';
+    dimensionPrefix.className = 'handle-dimension-prefix';
+    const toggleCylinderDimensionMode = (event: Event) => {
+      event.stopPropagation();
+      const next =
+        cylinderDimensionModeRef.current === 'diameter' ? 'radius' : 'diameter';
+      cylinderDimensionModeRef.current = next;
+      onCylinderDimensionModeChangeRef.current(next);
+      requestRender();
+    };
+    dimensionPrefix.addEventListener('click', toggleCylinderDimensionMode);
     const handleChipClick = () => {
       const cylinderRig = cylinderRadiusRigRef.current;
       if (cylinderRig) {
-        onOpenCylinderRadiusKeypadRef.current(cylinderRig.value());
+        onOpenCylinderRadiusKeypadRef.current(
+          cylinderRig.value(),
+          cylinderDimensionModeRef.current
+        );
         return;
       }
       const offsetRig = offsetRigRef.current;
       if (offsetRig) {
-        onOpenOffsetKeypadRef.current(offsetRig.value());
+        onOpenOffsetKeypadRef.current(
+          offsetRig.value(),
+          offsetHandleRef.current?.totalBaseline
+        );
         return;
       }
       const edgeRig = edgeRigRef.current;
@@ -1794,7 +1835,7 @@ export function ModelViewer({
     // just ahead of the value chip like a drawing callout's name tag. Tapping
     // either pill opens the same exact-entry keypad.
     const radiusLabelChip = hud.create('handle-label-chip');
-    radiusLabelChip.textContent = 'Radius';
+    radiusLabelChip.textContent = 'Diameter';
     radiusLabelChip.addEventListener('click', handleChipClick);
 
     // Cursor-following dimension readout for in-viewport sketching.
@@ -1853,7 +1894,18 @@ export function ModelViewer({
       const detail = (
         event as CustomEvent<{
           bodyId?: string;
-          surface?: 'wall' | 'cap';
+          surface?: 'wall' | 'cap' | 'top-cap';
+          resolve?: (
+            geometry: Pick<
+              FaceGeometry,
+              | 'radius'
+              | 'diameter'
+              | 'surfaceType'
+              | 'featureType'
+              | 'axisStart'
+              | 'axisEnd'
+            > | null
+          ) => void;
         }>
       ).detail;
       const body = bodiesRef.current.find(
@@ -1863,20 +1915,25 @@ export function ModelViewer({
       );
       const faces = body?.topology?.faces ?? [];
       const face =
-        detail?.surface === 'cap'
-          ? faces.find(
-              (candidate) =>
-                candidate.geometry?.surfaceType === 'plane' &&
-                candidate.geometry.normal !== undefined
+        detail?.surface === 'top-cap'
+          ? faces.find((candidate) =>
+              candidate.reference?.lineageName.endsWith('.face.cap.end')
             )
-          : faces.find(
-              (candidate) =>
-                candidate.geometry?.surfaceType === 'cylinder' &&
-                candidate.geometry.axisStart !== undefined &&
-                candidate.geometry.axisEnd !== undefined &&
-                candidate.geometry.radius !== undefined
-            );
+          : detail?.surface === 'cap'
+            ? faces.find(
+                (candidate) =>
+                  candidate.geometry?.surfaceType === 'plane' &&
+                  candidate.geometry.normal !== undefined
+              )
+            : faces.find(
+                (candidate) =>
+                  candidate.geometry?.surfaceType === 'cylinder' &&
+                  candidate.geometry.axisStart !== undefined &&
+                  candidate.geometry.axisEnd !== undefined &&
+                  candidate.geometry.radius !== undefined
+              );
       if (!body || !face?.geometry) {
+        detail?.resolve?.(null);
         return;
       }
       const geometry = face.geometry;
@@ -1938,6 +1995,7 @@ export function ModelViewer({
             : radial;
       }
       if (!normal) {
+        detail?.resolve?.(null);
         return;
       }
       onSelectTopologyRef.current(
@@ -1953,6 +2011,16 @@ export function ModelViewer({
           normal: { x: normal.x, y: normal.y, z: normal.z }
         }
       );
+      detail?.resolve?.({
+        surfaceType: geometry.surfaceType,
+        ...(geometry.featureType ? { featureType: geometry.featureType } : {}),
+        ...(geometry.radius !== undefined ? { radius: geometry.radius } : {}),
+        ...(geometry.diameter !== undefined
+          ? { diameter: geometry.diameter }
+          : {}),
+        ...(geometry.axisStart ? { axisStart: geometry.axisStart } : {}),
+        ...(geometry.axisEnd ? { axisEnd: geometry.axisEnd } : {})
+      });
     };
     /** Exact bore/annulus selection plus a pixel known to lie on the far wall. */
     const handleE2EVisualSelectionProbe = (event: Event) => {
@@ -2819,12 +2887,18 @@ export function ModelViewer({
         const rawValue = rig.value();
         const value = Math.round(rawValue * 100) / 100;
         if (rig.kind === 'cylinder-radius') {
-          text = `R ${formatNumber(rawValue)} ${unitsRef.current}`;
+          const mode = cylinderDimensionModeRef.current;
+          const displayValue = mode === 'diameter' ? rawValue * 2 : rawValue;
+          text = `${mode === 'diameter' ? 'Ø' : 'R'} ${formatNumber(displayValue)} ${unitsRef.current}`;
         } else if (rig.kind === 'edge-radius') {
           const prefix = edgeHandleOpRef.current === 'fillet' ? 'R' : 'C';
           text = `${prefix} ${value} ${unitsRef.current}`;
         } else {
-          text = `${value >= 0 ? '+' : ''}${value} ${unitsRef.current}`;
+          const totalBaseline = offsetHandleRef.current?.totalBaseline;
+          text =
+            totalBaseline === undefined
+              ? `${value >= 0 ? '+' : ''}${value} ${unitsRef.current}`
+              : `Total ${formatNumber(totalBaseline + rawValue)} ${unitsRef.current}`;
         }
       }
       if (!anchor) {
@@ -2837,10 +2911,11 @@ export function ModelViewer({
           delete renderer.domElement.dataset.e2eHandleDx;
           delete renderer.domElement.dataset.e2eHandleDy;
           delete renderer.domElement.dataset.e2eHandlePixelsPerUnit;
+          delete renderer.domElement.dataset.e2eOffsetDimensionVisible;
         }
         return;
       }
-      const screen = projectToScreen(
+      let screen = projectToScreen(
         anchor,
         context.activeCamera,
         renderer.domElement.clientWidth,
@@ -2851,6 +2926,23 @@ export function ModelViewer({
         radiusLabelChip.hidden = true;
         keypadAnchorRef.current?.(null);
         return;
+      }
+      if (rig?.kind === 'offset-face') {
+        const inspector = renderer.domElement
+          .closest('.viewer-area')
+          ?.querySelector<HTMLElement>('.inspector-float');
+        if (inspector) {
+          const hostRect = renderer.domElement.getBoundingClientRect();
+          const inspectorLeft =
+            inspector.getBoundingClientRect().left - hostRect.left;
+          // A top-cap anchor can project underneath the floating inspector on
+          // wide viewports. Keep the chip and the keypad anchor on the visible
+          // side of that boundary so exact entry remains reachable.
+          screen = {
+            ...screen,
+            x: Math.min(screen.x, inspectorLeft - 72)
+          };
+        }
       }
       if (e2eCanvasHooksEnabled && rig?.kind === 'cylinder-radius') {
         const scale =
@@ -2881,13 +2973,31 @@ export function ModelViewer({
             dragDirection.pixelsPerUnit
           );
         }
+      } else if (e2eCanvasHooksEnabled && rig?.kind === 'offset-face') {
+        renderer.domElement.dataset.e2eOffsetDimensionVisible = String(
+          rig.worldGroup.getObjectByName('dimension-graphic')?.visible === true
+        );
       }
       if (rig?.kind === 'cylinder-radius') {
         // Drawing-annotation typography: the units render small after the
         // number, so the chip reads "R 35ₘₘ" rather than uniform text.
         const units = document.createElement('small');
         units.textContent = unitsRef.current;
-        chip.replaceChildren(`R ${formatNumber(rig.value())}\u00a0`, units);
+        const mode = cylinderDimensionModeRef.current;
+        const displayValue =
+          mode === 'diameter' ? rig.value() * 2 : rig.value();
+        dimensionPrefix.textContent = mode === 'diameter' ? 'Ø' : 'R';
+        dimensionPrefix.setAttribute(
+          'aria-label',
+          mode === 'diameter'
+            ? 'Switch to radius entry'
+            : 'Switch to diameter entry'
+        );
+        chip.replaceChildren(
+          dimensionPrefix,
+          ` ${formatNumber(displayValue)}\u00a0`,
+          units
+        );
       } else {
         chip.textContent = text;
       }
@@ -2895,6 +3005,10 @@ export function ModelViewer({
         rig?.kind === 'cylinder-radius' ? 'dimension' : 'default';
       hud.showAt(chip, screen.x, screen.y);
       if (rig?.kind === 'cylinder-radius') {
+        radiusLabelChip.textContent =
+          cylinderDimensionModeRef.current === 'diameter'
+            ? 'Diameter'
+            : 'Radius';
         // Same anchor; CSS shifts it to sit flush against the value pill.
         hud.showAt(radiusLabelChip, screen.x, screen.y);
       } else {
@@ -4876,6 +4990,8 @@ export function ModelViewer({
           moveGizmoWorldScale(worldPerPixelAt(offsetRig.group.position)) * 0.55;
         offsetRig.group.scale.setScalar(rigScale);
         offsetRig.group.userData.gizmoScale = rigScale;
+        // Keep dimension arrowheads screen-sized across a pure wheel zoom.
+        offsetRig.setValue(offsetRig.value());
       }
       const cylinderRig = cylinderRadiusRigRef.current;
       if (cylinderRig) {
@@ -5068,6 +5184,7 @@ export function ModelViewer({
       host.removeChild(renderer.domElement);
       host.removeChild(labelRenderer.domElement);
       offsetChip.removeEventListener('click', handleChipClick);
+      dimensionPrefix.removeEventListener('click', toggleCylinderDimensionMode);
       radiusLabelChip.removeEventListener('click', handleChipClick);
       hud.dispose();
       // Dimension graphics own their own geometries and materials; clearing
