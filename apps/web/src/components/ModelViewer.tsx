@@ -306,6 +306,14 @@ export interface EdgeHandleTarget {
   edgeCount: number;
   /** Restored after a failed exact-kernel validation. */
   initialValue?: number;
+  /** Face-backed fillet edits already have an exact pick/radial frame. */
+  placement?: {
+    origin: { x: number; y: number; z: number };
+    direction: { x: number; y: number; z: number };
+  };
+  label?: string;
+  /** R0 means delete the producing Fillet feature. */
+  allowRemoval?: boolean;
 }
 
 export interface OrientationDragControls {
@@ -342,6 +350,8 @@ interface ModelViewerProps {
   /** Bodies highlighted in the viewport, in pick order. */
   selectedBodyIds: string[];
   selectedTopology: TopologySelection | null;
+  /** Exact blend faces created only in the currently published preview. */
+  previewFaceHighlights: TopologySelection[];
   /** Exact edges highlighted for a single edge-modifier operation. */
   selectedEdges: TopologySelection[];
   settings: ViewerSettings;
@@ -445,6 +455,8 @@ interface ModelViewerProps {
   onEdgeRadiusPreview(size: number): void;
   /** Fired when the radius drag releases (or exact entry commits). */
   onEdgeCommit(size: number): void;
+  /** Restores the base document after a canceled/no-op edge-radius gesture. */
+  onEdgeCancel(): void;
   /** Edge value chip tapped: open exact entry for the radius/distance. */
   onOpenEdgeKeypad(currentSize: number): void;
   /** Semantic lifecycle signal for direct-manipulation drags. */
@@ -756,6 +768,7 @@ export function ModelViewer({
   measurementAnnotations,
   selectedBodyIds,
   selectedTopology,
+  previewFaceHighlights,
   selectedEdges,
   settings,
   fitSignal,
@@ -797,6 +810,7 @@ export function ModelViewer({
   edgeHandle,
   onEdgeRadiusPreview,
   onEdgeCommit,
+  onEdgeCancel,
   onOpenEdgeKeypad,
   onDirectManipulationChange,
   sketchViews,
@@ -854,6 +868,8 @@ export function ModelViewer({
   cylinderRadiusHandleRef.current = cylinderRadiusHandle;
   const offsetHandleRef = useRef(offsetHandle);
   offsetHandleRef.current = offsetHandle;
+  const edgeHandleRef = useRef(edgeHandle);
+  edgeHandleRef.current = edgeHandle;
   const cylinderDimensionModeRef = useRef(cylinderDimensionMode);
   cylinderDimensionModeRef.current = cylinderDimensionMode;
   const onContextMenuRef = useRef(onContextMenu);
@@ -901,6 +917,8 @@ export function ModelViewer({
   onEdgeRadiusPreviewRef.current = onEdgeRadiusPreview;
   const onEdgeCommitRef = useRef(onEdgeCommit);
   onEdgeCommitRef.current = onEdgeCommit;
+  const onEdgeCancelRef = useRef(onEdgeCancel);
+  onEdgeCancelRef.current = onEdgeCancel;
   const onOpenEdgeKeypadRef = useRef(onOpenEdgeKeypad);
   onOpenEdgeKeypadRef.current = onOpenEdgeKeypad;
   const onDirectManipulationChangeRef = useRef(onDirectManipulationChange);
@@ -1605,6 +1623,7 @@ export function ModelViewer({
         edgeDrag = null;
         edgeDragActiveRef.current = false;
         edgeRigRef.current?.setValue(initialValue);
+        onEdgeCancelRef.current();
         cancelled = true;
       }
       if (cancelled) {
@@ -2040,6 +2059,108 @@ export function ModelViewer({
           : {}),
         ...(geometry.axisStart ? { axisStart: geometry.axisStart } : {}),
         ...(geometry.axisEnd ? { axisEnd: geometry.axisEnd } : {})
+      });
+    };
+    const handleE2EEdgeSelection = (event: Event) => {
+      if (!e2eCanvasHooksEnabled) {
+        return;
+      }
+      const detail = (
+        event as CustomEvent<{
+          curve?: 'circle' | 'any';
+          resolve?: (selection: TopologySelection | null) => void;
+        }>
+      ).detail;
+      const body = bodiesRef.current.find((candidate) => !candidate.consumed);
+      const edge = body?.topology?.edges.find(
+        (candidate) =>
+          candidate.displayRole !== 'seam' &&
+          (detail?.curve !== 'circle' || candidate.curve?.type === 'CIRCLE')
+      );
+      if (!body || !edge) {
+        detail?.resolve?.(null);
+        return;
+      }
+      const selection: TopologySelection = {
+        bodyId: body.bodyId,
+        kind: 'edge',
+        topologyId: edge.topologyId,
+        hash: edge.hash,
+        ...(edge.reference ? { reference: edge.reference } : {})
+      };
+      onSelectTopologyRef.current(selection, false);
+      detail?.resolve?.(selection);
+    };
+    const handleE2EBlendSelection = (event: Event) => {
+      if (!e2eCanvasHooksEnabled) {
+        return;
+      }
+      const detail = (
+        event as CustomEvent<{
+          select?: boolean;
+          resolve?: (
+            value: {
+              topologyId: string;
+              blendRadius: number;
+              producingFeatureId?: string;
+            } | null
+          ) => void;
+        }>
+      ).detail;
+      const candidate = bodiesRef.current
+        .filter((body) => !body.consumed)
+        .flatMap((body) =>
+          (body.topology?.faces ?? [])
+            .filter(
+              (face) =>
+                face.geometry?.featureType === 'blend' &&
+                face.geometry.blendRadius !== undefined
+            )
+            .map((face) => ({ body, face }))
+        )[0];
+      const body = candidate?.body;
+      const face = candidate?.face;
+      if (!body || !face?.geometry || face.geometry.blendRadius === undefined) {
+        detail?.resolve?.(null);
+        return;
+      }
+      const first = face.triangleStart * 3;
+      const vertexIndices = body.mesh.indices.slice(first, first + 3);
+      const points = vertexIndices.map((index) =>
+        new THREE.Vector3().fromArray(body.mesh.vertices, index * 3)
+      );
+      const normal = normalForTriangle(body, face.triangleStart);
+      if (points.length !== 3 || !normal) {
+        detail?.resolve?.(null);
+        return;
+      }
+      const point = points
+        .reduce((sum, current) => sum.add(current), new THREE.Vector3())
+        .multiplyScalar(1 / 3);
+      if (detail?.select !== false) {
+        onSelectTopologyRef.current(
+          {
+            bodyId: body.bodyId,
+            kind: 'face',
+            topologyId: face.topologyId,
+            hash: face.hash,
+            ...(face.reference ? { reference: face.reference } : {})
+          },
+          false,
+          {
+            point: { x: point.x, y: point.y, z: point.z },
+            normal: { x: normal.x, y: normal.y, z: normal.z }
+          }
+        );
+      }
+      detail?.resolve?.({
+        topologyId: face.topologyId,
+        blendRadius: face.geometry.blendRadius,
+        ...(face.reference?.producingFeatureId
+          ? {
+              producingFeatureId: String(face.reference.producingFeatureId)
+            }
+          : {})
       });
     };
     /** Exact bore/annulus selection plus a pixel known to lie on the far wall. */
@@ -2543,6 +2664,14 @@ export function ModelViewer({
         handleE2ECylinderSelection
       );
       renderer.domElement.addEventListener(
+        'openzcad:e2e-select-edge',
+        handleE2EEdgeSelection
+      );
+      renderer.domElement.addEventListener(
+        'openzcad:e2e-select-blend',
+        handleE2EBlendSelection
+      );
+      renderer.domElement.addEventListener(
         'openzcad:e2e-visual-selection-probe',
         handleE2EVisualSelectionProbe
       );
@@ -2912,7 +3041,8 @@ export function ModelViewer({
           text = `${mode === 'diameter' ? 'Ø' : 'R'} ${formatNumber(displayValue)} ${unitsRef.current}`;
         } else if (rig.kind === 'edge-radius') {
           const prefix = edgeHandleOpRef.current === 'fillet' ? 'R' : 'C';
-          text = `${prefix} ${value} ${unitsRef.current}`;
+          const label = edgeHandleRef.current?.label;
+          text = `${label ? `${label} · ` : ''}${prefix} ${value} ${unitsRef.current}`;
         } else {
           const totalBaseline = offsetHandleRef.current?.totalBaseline;
           text =
@@ -3861,7 +3991,10 @@ export function ModelViewer({
             // Kernel previews are expensive; stream at a bounded cadence and
             // let App coalesce.
             const now = performance.now();
-            if (now - edgeDrag.lastPreviewAt > 150 && value > 0) {
+            if (
+              now - edgeDrag.lastPreviewAt > 150 &&
+              (value > 0 || edgeHandleRef.current?.allowRemoval)
+            ) {
               edgeDrag.lastPreviewAt = now;
               onEdgeRadiusPreviewRef.current(value);
             }
@@ -4665,16 +4798,19 @@ export function ModelViewer({
         );
         if (moved < 4) {
           rig?.setValue(completed.initialValue);
+          onEdgeCancelRef.current();
           selectAtPointer(event);
           return;
         }
         depthCycle = null;
         if (
           rig &&
-          finalValue > 1e-9 &&
+          (finalValue > 1e-9 || edgeHandleRef.current?.allowRemoval) &&
           Math.abs(finalValue - completed.initialValue) > 1e-9
         ) {
           onEdgeCommitRef.current(finalValue);
+        } else {
+          onEdgeCancelRef.current();
         }
         return;
       }
@@ -4816,6 +4952,7 @@ export function ModelViewer({
         onDirectManipulationChangeRef.current(false);
         gestures.release(event);
         edgeRigRef.current?.setValue(initialValue);
+        onEdgeCancelRef.current();
         requestRender();
       }
       if (
@@ -5198,6 +5335,14 @@ export function ModelViewer({
         handleE2ECylinderSelection
       );
       renderer.domElement.removeEventListener(
+        'openzcad:e2e-select-edge',
+        handleE2EEdgeSelection
+      );
+      renderer.domElement.removeEventListener(
+        'openzcad:e2e-select-blend',
+        handleE2EBlendSelection
+      );
+      renderer.domElement.removeEventListener(
         'openzcad:e2e-visual-selection-probe',
         handleE2EVisualSelectionProbe
       );
@@ -5398,6 +5543,13 @@ export function ModelViewer({
     context.dimensionLabels.clear();
     if (E2E_CANVAS_HOOKS_ENABLED) {
       delete context.renderer.domElement.dataset.e2eSelectedFace;
+      if (previewFaceHighlights.length > 0) {
+        context.renderer.domElement.dataset.e2ePreviewBlendCount = String(
+          previewFaceHighlights.length
+        );
+      } else {
+        delete context.renderer.domElement.dataset.e2ePreviewBlendCount;
+      }
     }
     const edgeResolution = context.fatLineResolution();
 
@@ -5419,6 +5571,14 @@ export function ModelViewer({
           previousSelectionOverlay as unknown as THREE.Group;
         clearGroup(selectionGroup);
         object.remove(selectionGroup);
+      }
+      const previousPreviewOverlay = object.getObjectByName(
+        'body-preview-face-overlay'
+      );
+      if (previousPreviewOverlay instanceof THREE.Group) {
+        const previewGroup = previousPreviewOverlay as unknown as THREE.Group;
+        clearGroup(previewGroup);
+        object.remove(previewGroup);
       }
       const isSelected = selectedBodyIds.includes(body.bodyId);
 
@@ -5659,6 +5819,40 @@ export function ModelViewer({
           }
         }
       }
+      const previewFaces = previewFaceHighlights.flatMap((selection) =>
+        selection.bodyId === body.bodyId
+          ? (body.topology?.faces ?? []).filter(
+              (face) => face.topologyId === selection.topologyId
+            )
+          : []
+      );
+      if (previewFaces.length > 0) {
+        const previewOverlay = new THREE.Group();
+        previewOverlay.name = 'body-preview-face-overlay';
+        for (const face of previewFaces) {
+          const geometry = createFaceHighlightGeometry(object, face);
+          if (!geometry) {
+            continue;
+          }
+          const material = new THREE.MeshLambertMaterial({
+            color: SELECTED_FACE_COLOR,
+            toneMapped: false,
+            transparent: true,
+            opacity: SELECTED_FACE_OPACITY,
+            side: THREE.DoubleSide,
+            depthWrite: false,
+            polygonOffset: true,
+            polygonOffsetFactor: -3
+          });
+          const highlight = new THREE.Mesh(geometry, material);
+          highlight.name = 'body-face-preview-created';
+          highlight.renderOrder = VIEWPORT_RENDER_ORDER.SELECTED_GEOMETRY;
+          highlight.userData.selectionOverlay = true;
+          highlight.raycast = () => undefined;
+          previewOverlay.add(highlight);
+        }
+        object.add(previewOverlay);
+      }
     }
 
     if (bodiesChanged) {
@@ -5762,6 +5956,7 @@ export function ModelViewer({
     selectedBodyIds,
     selectedEdges,
     selectedTopology,
+    previewFaceHighlights,
     sketchMode,
     units
   ]);
@@ -6002,21 +6197,24 @@ export function ModelViewer({
       context.requestRender();
       return;
     }
-    const body = bodies.find(
-      (candidate) => candidate.bodyId === edgeHandle.bodyId
-    );
-    const edge = body?.topology?.edges.find(
-      (candidate) => candidate.topologyId === edgeHandle.topologyId
-    );
-    if (!body || !edge) {
-      return;
+    let placement = edgeHandle.placement ?? null;
+    if (!placement) {
+      const body = bodies.find(
+        (candidate) => candidate.bodyId === edgeHandle.bodyId
+      );
+      const edge = body?.topology?.edges.find(
+        (candidate) => candidate.topologyId === edgeHandle.topologyId
+      );
+      if (!body || !edge) {
+        return;
+      }
+      const center = {
+        x: (body.bbox.min.x + body.bbox.max.x) / 2,
+        y: (body.bbox.min.y + body.bbox.max.y) / 2,
+        z: (body.bbox.min.z + body.bbox.max.z) / 2
+      };
+      placement = edgeHandlePlacement(edge.points, center);
     }
-    const center = {
-      x: (body.bbox.min.x + body.bbox.max.x) / 2,
-      y: (body.bbox.min.y + body.bbox.max.y) / 2,
-      z: (body.bbox.min.z + body.bbox.max.z) / 2
-    };
-    const placement = edgeHandlePlacement(edge.points, center);
     if (!placement) {
       return;
     }

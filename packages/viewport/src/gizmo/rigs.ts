@@ -341,6 +341,7 @@ export function buildEdgeRadiusHandle(params: {
     new THREE.TorusGeometry(EDGE_HANDLE_RADIUS * 1.7, 0.02, 8, 32),
     handleMaterial(0.55)
   );
+  ring.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), direction);
   const hit = createHitMesh(
     new THREE.SphereGeometry(EDGE_HIT_RADIUS, 8, 6),
     kind

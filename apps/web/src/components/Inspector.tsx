@@ -482,6 +482,13 @@ function FaceDirectEdit({
     evaluatedDiameter > 1e-6 &&
     Math.abs(evaluatedDiameter - geometry.diameter) >
       Math.max(1e-6, geometry.diameter * 1e-6);
+  const canRemove =
+    geometry.featureType !== 'blend' ||
+    (body.topology?.faces ?? []).every(
+      (candidate) =>
+        candidate.topologyId === face?.topologyId ||
+        candidate.geometry?.surfaceType === 'plane'
+    );
   const surfaceLabel =
     geometry.featureType === 'through-hole'
       ? 'Through hole'
@@ -515,6 +522,15 @@ function FaceDirectEdit({
             </span>
           </>
         )}
+        {geometry.featureType === 'blend' &&
+          geometry.blendRadius !== undefined && (
+            <>
+              <b>fillet radius</b>
+              <span>
+                R {formatNumber(geometry.blendRadius)} {units}
+              </span>
+            </>
+          )}
       </div>
 
       {geometry.featureType === 'through-hole' &&
@@ -542,14 +558,16 @@ function FaceDirectEdit({
           </form>
         )}
 
-      <button
-        type="button"
-        className="secondary remove-face-feature"
-        onClick={() => onRemoveFaceFeature(selection, geometry)}
-      >
-        <Trash2 size={13} aria-hidden="true" />
-        Remove selected feature
-      </button>
+      {canRemove && (
+        <button
+          type="button"
+          className="secondary remove-face-feature"
+          onClick={() => onRemoveFaceFeature(selection, geometry)}
+        >
+          <Trash2 size={13} aria-hidden="true" />
+          Remove selected feature
+        </button>
+      )}
       <p className="muted direct-edit-note">
         STEP stores faces, not the original feature history. OpenZCAD only
         applies edits the exact kernel can validate; unsupported face
