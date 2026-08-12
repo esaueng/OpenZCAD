@@ -12,6 +12,7 @@ import { describe, expect, it } from 'vitest';
 import {
   booleanFacetFallbackWarning,
   censusOfSolids,
+  directEditFacetFallbackWarning,
   type FaceCensusSubject
 } from './boolean-result-validation';
 
@@ -127,5 +128,36 @@ describe('booleanFacetFallbackWarning', () => {
         result: { faces: 81, curvedFaces: 0 }
       })
     ).not.toBeNull();
+  });
+});
+
+describe('directEditFacetFallbackWarning', () => {
+  it('accepts an offset that preserves analytic faces without exploding', () => {
+    expect(
+      directEditFacetFallbackWarning({
+        operands: { faces: 8, curvedFaces: 2 },
+        result: { faces: 10, curvedFaces: 2 }
+      })
+    ).toBeNull();
+  });
+
+  it('rejects an offset that replaces the source curvature with planes', () => {
+    expect(
+      directEditFacetFallbackWarning({
+        operands: { faces: 5, curvedFaces: 2 },
+        result: { faces: 96, curvedFaces: 0 }
+      })
+    ).toBe(
+      'Offset face refused: the kernel returned a faceted approximation instead of exact surfaces: 5 source faces (2 curved) became 96 result faces (0 curved). The original body was left unchanged.'
+    );
+  });
+
+  it('rejects an explosive offset even if some curvature survives', () => {
+    expect(
+      directEditFacetFallbackWarning({
+        operands: { faces: 5, curvedFaces: 2 },
+        result: { faces: 64, curvedFaces: 1 }
+      })
+    ).toContain('faceted approximation instead of exact surfaces');
   });
 });
