@@ -224,6 +224,7 @@ import {
   primitiveCylinderHeightAncestor,
   primitiveCylinderRadiusAncestor
 } from './lib/interaction/cylinderPrimitiveAncestry';
+import { resolveOffsetPreviewFace } from './lib/interaction/offsetPreview';
 import { ToolCard } from './components/ToolCard';
 import { NumericKeypad, type KeypadRequest } from './components/NumericKeypad';
 import type { DimensionMode } from './lib/keypad';
@@ -452,7 +453,12 @@ import { useGeometryWorker } from './hooks/useGeometryWorker';
 import { useProjectView } from './hooks/useProjectView';
 import { useDirectEditCommit } from './hooks/useDirectEditCommit';
 import { useValidatedFeatureCommit } from './hooks/useValidatedFeatureCommit';
-import { affectedFeatureTargets } from './lib/affectedFeatureTargets';
+import {
+  affectedFeatureTargets,
+  type AffectedFeatureTarget
+} from './lib/affectedFeatureTargets';
+import { directEditRejection } from './lib/directEdit';
+import { validatedFeatureRejection } from './lib/featureValidation';
 import { useCollaboration } from './lib/useCollaboration';
 import { preflightCadPatch } from './lib/aiPatchPreflight';
 import {
@@ -548,6 +554,29 @@ const DISPLAY_MODE_ORDER: DisplayMode[] = [
 type AdoptLocalProjectResult =
   | { state: 'adopted' | 'already-adopted' | 'missing' }
   | { state: 'conflict'; conflict: ProjectConflict };
+
+interface OffsetEditPlan {
+  command: AnyCommand;
+  bodyId: BodyId;
+  successMessage: string;
+  validationTargets?: AffectedFeatureTarget[];
+  preflightRejection?: string;
+}
+
+interface OffsetPreviewCandidate {
+  document: ProjectDocument;
+  offset: number;
+  bodyId: BodyId;
+  label: string;
+  baseProjectId: ProjectDocument['projectId'];
+  baseVersion: number;
+  validationTargets?: AffectedFeatureTarget[];
+}
+
+interface OffsetPreviewResult {
+  derived: ProjectDocument['derived'];
+  rejection: string | null;
+}
 
 function desktopAuthorizationAttemptFromLocation(): string | null {
   if (typeof globalThis.location === 'undefined' || isDesktopApp()) {
@@ -1072,6 +1101,14 @@ export function App() {
   interactionRef.current = interaction;
   /** Open exact-value entry (anchored keypad) for the armed handle. */
   const [keypad, setKeypad] = useState<KeypadRequest | null>(null);
+  const keypadRef = useRef(keypad);
+  keypadRef.current = keypad;
+  /** Latest pointer/entry value stays transient until an exact frame lands. */
+  const offsetPreviewValueRef = useRef<number | null>(null);
+  /** Signed offset represented by the currently published previewDoc. */
+  const [renderedOffsetPreview, setRenderedOffsetPreview] = useState<
+    number | null
+  >(null);
   const [cylinderDimensionMode, setCylinderDimensionMode] =
     useState<DimensionMode>('diameter');
   const keypadAnchorRef = useRef<
@@ -1253,6 +1290,102 @@ export function App() {
   ).current;
 
   /**
+   * Exact planar push/pull preview. The document wrapper carries validation
+   * context alongside the candidate, but only its rebuilt ProjectDocument is
+   * ever published into previewDoc; manager.document is never touched.
+   */
+  const offsetPreview = useRef(
+    new LivePreview<OffsetPreviewCandidate, OffsetPreviewResult>({
+      build: (offset) => {
+        const base = managerRef.current?.document;
+        const plan = base
+          ? buildOffsetEditPlan(offset, undefined, base)
+          : null;
+        return base && plan
+          ? {
+              document: plan.command.apply(base),
+              offset,
+              bodyId: plan.bodyId,
+              label: plan.command.label,
+              baseProjectId: base.projectId,
+              baseVersion: base.version,
+              ...(plan.validationTargets
+                ? { validationTargets: plan.validationTargets }
+                : {})
+            }
+          : null;
+      },
+      derive: async (candidate) => {
+        const derived = await geometry.syncOnce(candidate.document);
+        const live = managerRef.current;
+        const documentMoved =
+          !live ||
+          live.document.projectId !== candidate.baseProjectId ||
+          live.document.version !== candidate.baseVersion;
+        let rejection: string | null = null;
+        if (candidate.validationTargets) {
+          for (const target of candidate.validationTargets) {
+            rejection = validatedFeatureRejection({
+              featureName: target.featureName,
+              warnings: derived.warnings,
+              bodyPresent: Boolean(
+                derived.bodyRepresentations[target.resultBodyId]
+              ),
+              documentMoved
+            });
+            if (rejection) {
+              break;
+            }
+          }
+          if (
+            !rejection &&
+            candidate.validationTargets.length === 0 &&
+            documentMoved
+          ) {
+            rejection = 'The document changed while the preview was rebuilding.';
+          }
+        } else {
+          rejection = directEditRejection({
+            label: candidate.label,
+            warnings: derived.warnings,
+            bodyPresent: Boolean(derived.bodyRepresentations[candidate.bodyId]),
+            documentMoved
+          });
+        }
+        return { derived, rejection };
+      },
+      publish: (preview) => {
+        if (!preview) {
+          setPreviewDoc(null);
+          setRenderedOffsetPreview(null);
+          return;
+        }
+        if (preview.derived.rejection) {
+          reportOffsetPreviewFailure(
+            preview.derived.rejection,
+            preview.document.offset
+          );
+          return;
+        }
+        setPreviewDoc({
+          ...preview.document.document,
+          derived: preview.derived.derived
+        });
+        setRenderedOffsetPreview(preview.document.offset);
+        recoverOffsetPreviewInteraction();
+      },
+      onFailure: ({ error, value }) =>
+        reportOffsetPreviewFailure(
+          errorMessage(error, 'Exact offset preview failed.'),
+          value
+        ),
+      acceptValue: (offset) =>
+        Number.isFinite(offset) && Math.abs(offset) > 1e-9,
+      continueAfterSlow: false
+    })
+  ).current;
+
+  /**
    * Exact profile extrusion preview. LivePreview supplies newest-request wins
    * sequencing, so a slow worker response can never replace a newer distance
    * or profile selection.
@@ -1346,11 +1479,15 @@ export function App() {
       dispatchInteraction({ type: 'validation-start', value }),
     onValidationFailed: (message, value) => {
       cylinderRadiusPreview.clear();
+      offsetPreview.clear();
+      offsetPreviewValueRef.current = null;
       cylinderRadiusInspectorSetterRef.current?.(null);
       dispatchInteraction({ type: 'validation-failed', message, value });
     },
     onCommitted: (bodyId) => {
       cylinderRadiusPreview.clear();
+      offsetPreview.clear();
+      offsetPreviewValueRef.current = null;
       dispatchInteraction({ type: 'commit-complete' });
       setSelectedTopology(null);
       setSelectedEdges([]);
@@ -2283,9 +2420,9 @@ export function App() {
   const renderedRepresentations =
     previewDoc?.derived.bodyRepresentations ?? representations;
   /**
-   * Exact regeneration is allowed to assign a new topology ID to the resized
-   * wall. Keep the selected face attached to the preview by its fixed
-   * world-space axis; do not apply this fallback to unrelated edit types.
+   * Exact regeneration may assign a new topology ID to an edited face. Keep
+   * selection attached through operation-specific immutable geometry: the
+   * translated source plane for offsets, or the fixed axis for radii.
    */
   const renderedSelectedTopology = useMemo<TopologySelection | null>(() => {
     if (selectedTopology?.kind !== 'face') {
@@ -2306,6 +2443,46 @@ export function App() {
         topologyId: exact.topologyId,
         hash: exact.hash
       };
+    }
+    if (
+      interaction.mode === 'face' &&
+      interaction.op === 'offset-face' &&
+      interaction.target.bodyId === selectedTopology.bodyId &&
+      renderedOffsetPreview !== null
+    ) {
+      const regenerated = resolveOffsetPreviewFace(
+        faces,
+        {
+          point: {
+            x: interaction.target.point[0],
+            y: interaction.target.point[1],
+            z: interaction.target.point[2]
+          },
+          normal: {
+            x: interaction.target.normal[0],
+            y: interaction.target.normal[1],
+            z: interaction.target.normal[2]
+          },
+          ...(interaction.target.surfaceCenter
+            ? {
+                center: {
+                  x: interaction.target.surfaceCenter[0],
+                  y: interaction.target.surfaceCenter[1],
+                  z: interaction.target.surfaceCenter[2]
+                }
+              }
+            : {})
+        },
+        renderedOffsetPreview
+      );
+      if (regenerated) {
+        return {
+          bodyId: selectedTopology.bodyId,
+          kind: 'face',
+          topologyId: regenerated.topologyId,
+          hash: regenerated.hash
+        };
+      }
     }
     if (
       interaction.mode !== 'face' ||
@@ -2348,7 +2525,12 @@ export function App() {
           hash: regenerated.hash
         }
       : selectedTopology;
-  }, [interaction, renderedRepresentations, selectedTopology]);
+  }, [
+    interaction,
+    renderedOffsetPreview,
+    renderedRepresentations,
+    selectedTopology
+  ]);
   const normalToFaceTarget = useMemo(() => {
     const selection = renderedSelectedTopology;
     if (selection?.kind !== 'face' || !selection.topologyId) {
@@ -6269,6 +6451,15 @@ export function App() {
           : {}),
         point: [detail.point.x, detail.point.y, detail.point.z],
         normal: [detail.normal.x, detail.normal.y, detail.normal.z],
+        ...(geometry?.center
+          ? {
+              surfaceCenter: [
+                geometry.center.x,
+                geometry.center.y,
+                geometry.center.z
+              ] as [number, number, number]
+            }
+          : {}),
         surfaceType:
           surface === 'plane'
             ? 'planar'
@@ -6481,13 +6672,13 @@ export function App() {
    * built once per selection instead of on every App render — rebuilding it
    * mid-hover would reset its screen-constant scale and drop pointer picks.
    */
-  // The keypad's lifetime mirrors the exact-entry phase. Escape, deselection,
-  // and commits all close it through the reducer.
+  // Exact entry remains mounted after a refused preview so its disabled Apply
+  // state and error stay actionable; Escape, deselection, and commits close it.
   useEffect(() => {
     const open =
       interaction.mode !== 'idle' &&
       interaction.mode !== 'sketch' &&
-      interaction.phase === 'exact-entry';
+      (interaction.phase === 'exact-entry' || interaction.phase === 'failed');
     if (!open) {
       setKeypad(null);
     }
@@ -6499,6 +6690,15 @@ export function App() {
       edgePreview.clear();
     }
   }, [interaction.mode]);
+
+  const offsetInteractionKey =
+    interaction.mode === 'face' && interaction.op === 'offset-face'
+      ? `${interaction.target.bodyId}:${interaction.target.topologyId}`
+      : null;
+  useEffect(() => {
+    offsetPreview.clear();
+    offsetPreviewValueRef.current = null;
+  }, [offsetInteractionKey, offsetPreview]);
 
   /**
    * The sketch plane basis is memoized on the session's plane reference
@@ -7211,7 +7411,8 @@ export function App() {
         y: target.normal[1],
         z: target.normal[2]
       },
-      initialValue: interaction.lastValue ?? 0,
+      initialValue:
+        offsetPreviewValueRef.current ?? interaction.lastValue ?? 0,
       ...(totalBaseline === undefined ? {} : { totalBaseline })
     };
   }, [doc, interaction]);
@@ -7575,6 +7776,62 @@ export function App() {
     });
   }
 
+  function reportOffsetPreviewFailure(message: string, value: number) {
+    const current = interactionRef.current;
+    if (current.mode !== 'face' || current.op !== 'offset-face') {
+      return;
+    }
+    setPreviewDoc(null);
+    setRenderedOffsetPreview(null);
+    dispatchInteraction({ type: 'validation-failed', message, value });
+    setStatus(`Offset preview refused: ${message}`);
+  }
+
+  function recoverOffsetPreviewInteraction() {
+    const current = interactionRef.current;
+    if (
+      current.mode !== 'face' ||
+      current.op !== 'offset-face' ||
+      current.phase !== 'failed'
+    ) {
+      return;
+    }
+    dispatchInteraction({ type: 'recover' });
+    dispatchInteraction({
+      type: keypadRef.current?.kind === 'offset' ? 'keypad-open' : 'drag-engage'
+    });
+  }
+
+  function handleOffsetPreview(offset: number) {
+    const current = interactionRef.current;
+    if (
+      current.mode !== 'face' ||
+      current.op !== 'offset-face' ||
+      current.phase === 'validating'
+    ) {
+      return;
+    }
+    offsetPreviewValueRef.current = offset;
+    if (Math.abs(offset) <= 1e-9) {
+      offsetPreview.clear();
+      recoverOffsetPreviewInteraction();
+      return;
+    }
+    offsetPreview.request(offset);
+  }
+
+  function handleOffsetCancel() {
+    offsetPreview.clear();
+    offsetPreviewValueRef.current = null;
+    setRenderedOffsetPreview(null);
+    const current = interactionRef.current;
+    if (current.mode === 'face' && current.op === 'offset-face') {
+      // Re-selecting the same semantic target resets the existing lifecycle
+      // to armed, including a failed value, without adding a machine state.
+      dispatchInteraction({ type: 'select-face', target: current.target });
+    }
+  }
+
   function handleSelectionAction(action: SelectionActionId) {
     if (
       (action === 'sketch-on-face' ||
@@ -7611,13 +7868,14 @@ export function App() {
     faceHash: number,
     bodyId: BodyId,
     offset: number,
-    exact?: ParamValue
+    exact?: ParamValue,
+    baseDocument?: ProjectDocument
   ): {
     command: AnyCommand;
     sourceFeatureId: FeatureId;
     height: number;
   } | null {
-    const base = managerRef.current?.document;
+    const base = baseDocument ?? managerRef.current?.document;
     if (!base || Math.abs(offset) <= 1e-9) {
       return null;
     }
@@ -7663,26 +7921,28 @@ export function App() {
     };
   }
 
-  /**
-   * Face-offset commit as a validated direct edit. `exact` preserves a typed
-   * expression as the stored parametric value; plain drags store the number.
-   */
-  function handleOffsetCommit(offset: number, exact?: ParamValue) {
-    // The arrow rig is shared: in region mode its drag is an extrude height.
-    if (interaction.mode === 'region') {
-      handleRegionExtrudeCommit(offset, exact);
-      return;
+  function buildOffsetEditPlan(
+    offset: number,
+    exact?: ParamValue,
+    baseDocument?: ProjectDocument
+  ): OffsetEditPlan | null {
+    const current = interactionRef.current;
+    const base = baseDocument ?? managerRef.current?.document;
+    if (
+      !base ||
+      current.mode !== 'face' ||
+      current.op !== 'offset-face'
+    ) {
+      return null;
     }
-    if (interaction.mode !== 'face' || interaction.op !== 'offset-face') {
-      return;
-    }
-    if (!requireExactGeometryReady()) {
-      return;
-    }
-    const target = interaction.target;
+    const target = current.target;
     const bodyId = target.bodyId as BodyId;
-    const faceTopology = representations[bodyId]?.topology?.faces.find(
-      (face) => face.topologyId === target.topologyId
+    const faceTopology = base.derived.bodyRepresentations[
+      bodyId
+    ]?.topology?.faces.find(
+      (face) =>
+        face.topologyId === target.topologyId ||
+        (target.hash !== undefined && face.hash === target.hash)
     );
     const geometry = faceTopology?.geometry;
     if (
@@ -7690,37 +7950,35 @@ export function App() {
       geometry?.surfaceType !== 'plane' ||
       target.hash === undefined
     ) {
-      setStatus('Exact face measurements are unavailable for this offset.');
-      dispatchInteraction({ type: 'clear' });
-      return;
+      return null;
     }
     const heightPlan = buildCylinderHeightCommand(
       faceTopology,
       target.hash,
       bodyId,
       offset,
-      exact
+      exact,
+      base
     );
     if (heightPlan) {
-      if (heightPlan.height <= 0) {
-        setStatus('That distance would leave the cylinder with no height.');
-        return;
-      }
-      void executeValidatedDirectEdit(
-        heightPlan.command,
+      return {
+        command: heightPlan.command,
         bodyId,
-        `Cylinder height set to ${formatNumber(heightPlan.height)} ${doc?.units ?? ''}.`,
-        offset,
-        undefined,
-        affectedFeatureTargets(
-          managerRef.current!.document,
+        successMessage: `Cylinder height set to ${formatNumber(heightPlan.height)} ${base.units}.`,
+        validationTargets: affectedFeatureTargets(
+          base,
           heightPlan.sourceFeatureId
-        )
-      );
-      return;
+        ),
+        ...(heightPlan.height <= 0
+          ? {
+              preflightRejection:
+                'That distance would leave the cylinder with no height.'
+            }
+          : {})
+      };
     }
-    void executeValidatedDirectEdit(
-      commandFactories.directEditBody({
+    return {
+      command: commandFactories.directEditBody({
         name: 'Offset face',
         targetBodyId: bodyId,
         operation: {
@@ -7732,9 +7990,6 @@ export function App() {
           sourceSurfaceType: 'plane',
           sourceArea: geometry.area,
           sourceCenter: geometry.center,
-          // The drag was measured along the picked (outward-facing) normal,
-          // so it defines the offset's sign; the kernel only verifies that
-          // the face's plane still matches this orientation up to sign.
           sourceNormal: {
             x: target.normal[0],
             y: target.normal[1],
@@ -7744,9 +7999,52 @@ export function App() {
         }
       }),
       bodyId,
-      `Offset face by ${Math.round(offset * 100) / 100} ${doc?.units ?? ''}.`,
-      offset
+      successMessage: `Offset face by ${Math.round(offset * 100) / 100} ${base.units}.`
+    };
+  }
+
+  /**
+   * Face-offset commit as a validated direct edit. `exact` preserves a typed
+   * expression as the stored parametric value; plain drags store the number.
+   */
+  function handleOffsetCommit(offset: number, exact?: ParamValue): boolean {
+    // The arrow rig is shared: in region mode its drag is an extrude height.
+    if (interaction.mode === 'region') {
+      handleRegionExtrudeCommit(offset, exact);
+      return true;
+    }
+    const current = interactionRef.current;
+    if (current.mode !== 'face' || current.op !== 'offset-face') {
+      return false;
+    }
+    if (!requireExactGeometryReady()) {
+      return false;
+    }
+    if (current.phase === 'failed') {
+      setStatus(current.error ?? 'The current offset preview is invalid.');
+      return false;
+    }
+    const plan = buildOffsetEditPlan(offset, exact);
+    if (!plan) {
+      setStatus('Exact face measurements are unavailable for this offset.');
+      dispatchInteraction({ type: 'clear' });
+      return false;
+    }
+    if (plan.preflightRejection) {
+      reportOffsetPreviewFailure(plan.preflightRejection, offset);
+      return false;
+    }
+    offsetPreview.clear();
+    offsetPreviewValueRef.current = null;
+    void executeValidatedDirectEdit(
+      plan.command,
+      plan.bodyId,
+      plan.successMessage,
+      offset,
+      undefined,
+      plan.validationTargets
     );
+    return true;
   }
 
   function handleResizeThroughHole(
@@ -9392,7 +9690,14 @@ export function App() {
               );
             }}
             offsetHandle={viewMode ? null : offsetHandleTarget}
+            onOffsetPreview={handleOffsetPreview}
             onOffsetCommit={handleOffsetCommit}
+            onOffsetCancel={handleOffsetCancel}
+            offsetPreviewInvalid={
+              interaction.mode === 'face' &&
+              interaction.op === 'offset-face' &&
+              interaction.phase === 'failed'
+            }
             onOpenOffsetKeypad={handleOpenOffsetKeypad}
             keypadAnchorRef={keypadAnchorRef}
             offsetSetterRef={offsetSetterRef}
@@ -9625,8 +9930,22 @@ export function App() {
                           handleCylinderRadiusPreview(value);
                         } else if (keypad.kind === 'edge') {
                           edgePreview.request(value);
+                        } else {
+                          handleOffsetPreview(value);
                         }
                       }}
+                      commitDisabled={
+                        keypad.kind === 'offset' &&
+                        interaction.mode === 'face' &&
+                        interaction.op === 'offset-face' &&
+                        interaction.phase === 'failed'
+                      }
+                      commitDisabledReason={
+                        interaction.mode !== 'idle' &&
+                        interaction.mode !== 'sketch'
+                          ? interaction.error
+                          : null
+                      }
                       onCommit={(value, raw) => {
                         setKeypad(null);
                         dispatchInteraction({ type: 'keypad-close' });
@@ -9655,6 +9974,8 @@ export function App() {
                           handleCylinderRadiusCancel();
                         } else if (keypad.kind === 'edge') {
                           edgePreview.clear();
+                        } else {
+                          handleOffsetCancel();
                         }
                         dispatchInteraction({ type: 'keypad-close' });
                         setKeypad(null);
