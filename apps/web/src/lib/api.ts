@@ -1,24 +1,42 @@
 import type {
+  AccountStorageUsage,
+  AccountDeletionPreview,
+  AccountDeletionScope,
   AppSettingsResponse,
   AuthConfigResponse,
   AuthSession,
   ArtifactMetadataResponse,
+  CompleteMultipartUploadRequest,
+  CreateMultipartUploadResponse,
   CreateProjectRequest,
   CreateProjectResponse,
   CreateUploadSessionRequest,
   CreateUploadSessionResponse,
+  UploadedArtifactPart,
+  DeleteAccountDataResponse,
+  DuplicateProjectResponse,
   FinalizeArtifactRequest,
   HealthResponse,
   ListProjectsResponse,
+  ProjectCollaborationCapabilitiesResponse,
   ProjectDocument,
   ListArtifactsResponse,
+  PurgeProjectsResponse,
+  ReorderProjectsRequest,
+  ReorderProjectsResponse,
   SaveAssistantCredentialRequest,
+  SaveProjectDocumentRequest,
+  SaveProjectDocumentResponse,
   SaveRevisionRequest,
   StartEmailLoginRequest,
   StartEmailLoginResponse,
   UpdateAppSettingsRequest,
+  UpdateProjectRequest,
+  UpdateProjectResponse,
   VerifyEmailLoginRequest
 } from '@openzcad/shared';
+import { withoutDerivedProjection } from '@openzcad/document-core';
+import { desktopFetch } from './desktopBridge';
 
 /**
  * An API call that reached the server and came back refused. Callers need the
@@ -28,7 +46,20 @@ import type {
 export class ApiError extends Error {
   constructor(
     readonly status: number,
-    message: string
+    message: string,
+    /**
+     * The machine-readable `code` the API sends alongside a refusal, when it
+     * sends one. Statuses are too coarse for the sync paths: a 409 can mean
+     * "already in your account" or "someone else edited this", and those want
+     * opposite responses from the client.
+     */
+    readonly code?: string,
+    /**
+     * The rest of the refusal body. A fenced write reports the version the
+     * account actually holds, and a size refusal reports the ceiling; both let
+     * the client explain itself without a second round trip.
+     */
+    readonly details?: Record<string, unknown>
   ) {
     super(message);
     this.name = 'ApiError';
@@ -44,7 +75,7 @@ async function requestJson<T>(
   input: RequestInfo,
   init?: RequestInit
 ): Promise<T> {
-  const response = await fetch(input, {
+  const response = await desktopFetch(input, {
     ...init,
     credentials: 'same-origin',
     headers: {
@@ -56,17 +87,25 @@ async function requestJson<T>(
   if (!response.ok) {
     const text = await response.text();
     let message = text;
+    let code: string | undefined;
+    let details: Record<string, unknown> | undefined;
     try {
-      const payload = JSON.parse(text) as { error?: unknown };
+      const payload = JSON.parse(text) as Record<string, unknown>;
       if (typeof payload.error === 'string') {
         message = payload.error;
       }
+      if (typeof payload.code === 'string') {
+        code = payload.code;
+      }
+      details = payload;
     } catch {
       // Plain-text responses remain useful as-is.
     }
     throw new ApiError(
       response.status,
-      message || `${response.status} ${response.statusText}`
+      message || `${response.status} ${response.statusText}`,
+      code,
+      details
     );
   }
 
@@ -77,6 +116,10 @@ export const api = {
   health: () => requestJson<HealthResponse>('/api/health'),
   authConfig: () => requestJson<AuthConfigResponse>('/api/auth/config'),
   session: () => requestJson<AuthSession>('/api/session'),
+  collaborationCapabilities: () =>
+    requestJson<ProjectCollaborationCapabilitiesResponse>(
+      '/api/collaboration/config'
+    ),
   startEmailLogin: (payload: StartEmailLoginRequest) =>
     requestJson<StartEmailLoginResponse>('/api/auth/email/start', {
       method: 'POST',
@@ -86,6 +129,11 @@ export const api = {
     requestJson<AuthSession>('/api/auth/email/verify', {
       method: 'POST',
       body: JSON.stringify(payload)
+    }),
+  approveDesktopLogin: (attemptId: string, userCode: string) =>
+    requestJson<{ ok: true }>('/api/auth/desktop/approve', {
+      method: 'POST',
+      body: JSON.stringify({ attemptId, userCode })
     }),
   logout: () =>
     requestJson<{ ok: true }>('/api/auth/logout', {
@@ -112,19 +160,90 @@ export const api = {
       '/api/settings/assistant/test',
       { method: 'POST', body: '{}' }
     ),
+  storageUsage: () => requestJson<AccountStorageUsage>('/api/account/storage'),
+  accountDeletionPreview: (scope: AccountDeletionScope) =>
+    requestJson<AccountDeletionPreview>(
+      `/api/account/deletion-preview?scope=${encodeURIComponent(scope)}`
+    ),
+  deleteAccountData: (scope: AccountDeletionScope, confirmation: string) =>
+    requestJson<DeleteAccountDataResponse>('/api/account/delete-data', {
+      method: 'POST',
+      body: JSON.stringify({ scope, confirmation })
+    }),
   listProjects: () => requestJson<ListProjectsResponse>('/api/projects'),
   createProject: (payload: CreateProjectRequest) =>
     requestJson<CreateProjectResponse>('/api/projects', {
       method: 'POST',
       body: JSON.stringify(payload)
     }),
+  /**
+   * Gives an existing device-local project an account record, keeping its id.
+   * The derived projection is dropped on the way out: it is rebuilt from
+   * canonical history on load, and for a dense import it is most of the bytes.
+   */
+  adoptProject: (document: ProjectDocument) =>
+    requestJson<CreateProjectResponse>('/api/projects', {
+      method: 'POST',
+      body: JSON.stringify({
+        name: document.name,
+        document: withoutDerivedProjection(document)
+      })
+    }),
   loadProject: (projectId: string) =>
     requestJson<ProjectDocument>(`/api/projects/${projectId}`),
+  duplicateProject: (projectId: string, name?: string) =>
+    requestJson<DuplicateProjectResponse>(
+      `/api/projects/${projectId}/duplicate`,
+      {
+        method: 'POST',
+        body: JSON.stringify(name === undefined ? {} : { name })
+      }
+    ),
+  updateProject: (payload: UpdateProjectRequest) =>
+    requestJson<UpdateProjectResponse>(`/api/projects/${payload.projectId}`, {
+      method: 'PATCH',
+      body: JSON.stringify(payload)
+    }),
+  reorderProjects: (payload: ReorderProjectsRequest) =>
+    requestJson<ReorderProjectsResponse>('/api/projects/reorder', {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    }),
+  /** Irreversible. Use `updateProject` with status 'deleted' for the bin. */
+  deleteProject: async (projectId: string) => {
+    const response = await desktopFetch(`/api/projects/${projectId}`, {
+      method: 'DELETE',
+      credentials: 'same-origin'
+    });
+    if (!response.ok) {
+      throw new ApiError(
+        response.status,
+        (await response.text()) || `Delete failed (${response.status}).`
+      );
+    }
+  },
+  purgeExpiredProjects: () =>
+    requestJson<PurgeProjectsResponse>('/api/projects/purge', {
+      method: 'POST',
+      body: '{}'
+    }),
   saveRevision: (payload: SaveRevisionRequest) =>
     requestJson<ProjectDocument>(
       `/api/projects/${payload.projectId}/revisions`,
       {
         method: 'POST',
+        body: JSON.stringify(payload)
+      }
+    ),
+  /**
+   * The continuous-sync write. Same fencing as `saveRevision`, no history
+   * entry, and only an acknowledgement comes back.
+   */
+  saveProjectDocument: (payload: SaveProjectDocumentRequest) =>
+    requestJson<SaveProjectDocumentResponse>(
+      `/api/projects/${payload.projectId}/document`,
+      {
+        method: 'PUT',
         body: JSON.stringify(payload)
       }
     ),
@@ -134,7 +253,7 @@ export const api = {
       body: JSON.stringify(payload)
     }),
   uploadArtifact: async (uploadUrl: string, body: Blob) => {
-    const response = await fetch(uploadUrl, {
+    const response = await desktopFetch(uploadUrl, {
       method: 'PUT',
       headers: { 'content-type': body.type || 'application/octet-stream' },
       body
@@ -142,6 +261,64 @@ export const api = {
     if (!response.ok) {
       throw new Error(
         (await response.text()) || `Upload failed (${response.status}).`
+      );
+    }
+  },
+  createMultipartUpload: (uploadSessionId: string) =>
+    requestJson<CreateMultipartUploadResponse>(
+      `/api/uploads/${uploadSessionId}/multipart`,
+      { method: 'POST' }
+    ),
+  uploadArtifactPart: async (
+    uploadSessionId: string,
+    uploadId: string,
+    partNumber: number,
+    body: Blob
+  ): Promise<UploadedArtifactPart> => {
+    const response = await desktopFetch(
+      `/api/uploads/${uploadSessionId}/parts/${partNumber}?uploadId=${encodeURIComponent(uploadId)}`,
+      {
+        method: 'PUT',
+        headers: { 'content-type': 'application/octet-stream' },
+        body
+      }
+    );
+    if (!response.ok) {
+      throw new Error(
+        (await response.text()) ||
+          `Upload part ${partNumber} failed (${response.status}).`
+      );
+    }
+    return (await response.json()) as UploadedArtifactPart;
+  },
+  completeMultipartUpload: async (
+    uploadSessionId: string,
+    payload: CompleteMultipartUploadRequest
+  ) => {
+    const response = await desktopFetch(
+      `/api/uploads/${uploadSessionId}/multipart/complete`,
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(payload)
+      }
+    );
+    if (!response.ok) {
+      throw new Error(
+        (await response.text()) ||
+          `Completing the upload failed (${response.status}).`
+      );
+    }
+  },
+  abortMultipartUpload: async (uploadSessionId: string, uploadId: string) => {
+    const response = await desktopFetch(
+      `/api/uploads/${uploadSessionId}/multipart?uploadId=${encodeURIComponent(uploadId)}`,
+      { method: 'DELETE' }
+    );
+    if (!response.ok) {
+      throw new Error(
+        (await response.text()) ||
+          `Aborting the upload failed (${response.status}).`
       );
     }
   },
@@ -153,7 +330,5 @@ export const api = {
   listArtifacts: (projectId: string) =>
     requestJson<ListArtifactsResponse>(`/api/projects/${projectId}/artifacts`),
   getArtifactMetadata: (artifactId: string) =>
-    requestJson<ArtifactMetadataResponse>(`/api/artifacts/${artifactId}`),
-  artifactDownloadUrl: (artifactId: string) =>
-    `/api/artifacts/${artifactId}/download`
+    requestJson<ArtifactMetadataResponse>(`/api/artifacts/${artifactId}`)
 };

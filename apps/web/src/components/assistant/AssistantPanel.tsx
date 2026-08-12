@@ -1,24 +1,31 @@
 import {
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useReducer,
   useRef,
   useState,
   type ChangeEvent,
-  type DragEvent
+  type DragEvent,
+  type ReactNode
 } from 'react';
 import {
+  ArrowDown,
   ArrowUp,
+  ImageIcon,
   Paperclip,
   PanelRightClose,
+  RotateCcw,
   Sparkles,
+  Square,
   Trash2,
   X
 } from 'lucide-react';
 import {
   createCadDocumentDigest,
   MAX_ASSISTANT_ATTACHMENTS,
+  parseCadPatchProposal,
   type CadPatchProposal,
   type CadSelectionContext
 } from '@openzcad/ai-contracts';
@@ -35,8 +42,28 @@ import {
   EMPTY_CONVERSATION,
   historyForRequest,
   type AssistantAttachmentPreview,
+  type AssistantEntry,
   type AssistantQuestionsEntry
 } from '../../lib/assistant/conversation';
+import {
+  clearAssistantThread,
+  loadAssistantThread,
+  saveAssistantThread
+} from '../../lib/assistant/history';
+import {
+  formatEntryTime,
+  groupThreadByDay,
+  summarizeThread
+} from '../../lib/assistant/timeline';
+import {
+  describeProgress,
+  readAssistantProgress,
+  type AssistantProgress
+} from '../../lib/assistant/progress';
+import {
+  assistantSuggestions,
+  type AssistantSuggestion
+} from '../../lib/assistant/suggestions';
 import {
   ACCEPTED_ATTACHMENT_TYPES,
   attachmentDataUrl,
@@ -45,18 +72,18 @@ import {
 } from '../../lib/assistant/attachments';
 import { QuestionCard } from './QuestionCard';
 import { ProposalCard } from './ProposalCard';
+import { RichText } from './RichText';
+import { AssistantLauncher } from './AssistantLauncher';
 
 interface AssistantPanelProps {
   document: ProjectDocument;
   selection: CadSelectionContext;
   /** Returns false when the patch could not be applied, so the panel can say so. */
-  onApply(proposal: CadPatchProposal): boolean;
+  onApply(proposal: CadPatchProposal): Promise<boolean>;
   /** Returns false when the patch could not be previewed. */
-  onPreview(proposal: CadPatchProposal | null): boolean;
+  onPreview(proposal: CadPatchProposal | null): Promise<boolean>;
   collapsed: boolean;
   onCollapsedChange(collapsed: boolean): void;
-  /** Bumped by the workspace to move focus into the prompt. */
-  focusNonce: number;
   /**
    * Takes the dock off screen without unmounting it. The conversation and the
    * in-flight request live here, so a direct-manipulation mode hides the panel
@@ -91,12 +118,86 @@ function selectionSummaryOf(selection: CadSelectionContext): string | null {
   return null;
 }
 
+function sharedTopologyKind(
+  selection: CadSelectionContext
+): 'body' | 'face' | 'edge' | null {
+  const kind = selection.topologies[0]?.kind ?? null;
+  if (!kind) {
+    return null;
+  }
+  return selection.topologies.every((topology) => topology.kind === kind)
+    ? kind
+    : null;
+}
+
+type TurnRole = 'user' | 'assistant';
+
+/** Who a turn came from, for grouping consecutive ones under one heading. */
+function roleOf(entry: AssistantEntry): TurnRole {
+  return entry.kind === 'user' ? 'user' : 'assistant';
+}
+
+/**
+ * A turn, with its role and time, wrapped so every row reads the same way.
+ *
+ * Two turns in a row from the same speaker are one block: the second drops the
+ * "Assistant" heading and squares the corner facing the first, which is what
+ * keeps a long back-and-forth from reading as a stack of unrelated boxes. The
+ * time only shows on hover — it matters when auditing a decision, never while
+ * reading the sentence.
+ */
+function Turn({
+  role,
+  label,
+  at,
+  continues,
+  children
+}: {
+  role: TurnRole;
+  label?: string;
+  at: number | undefined;
+  continues: boolean;
+  children: ReactNode;
+}) {
+  const time = formatEntryTime(at);
+  return (
+    <article
+      className={`assistant-turn ${role}${continues ? ' continues' : ''}`}
+      // A continued turn drops the heading that would have carried its time, so
+      // the time stays reachable here rather than disappearing.
+      {...(continues && time
+        ? { title: label ? `${label} · ${time}` : time }
+        : {})}
+    >
+      {!continues && (
+        <header className="assistant-turn-meta">
+          {role === 'assistant' && (
+            <span className="assistant-turn-mark" aria-hidden="true">
+              <Sparkles size={11} />
+            </span>
+          )}
+          {label && <span className="assistant-turn-who">{label}</span>}
+          {time && (
+            <time className="assistant-turn-time" dateTime={String(at)}>
+              {time}
+            </time>
+          )}
+        </header>
+      )}
+      <div className="assistant-turn-body">{children}</div>
+    </article>
+  );
+}
+
 /**
  * The assistant as a conversation rather than a single-shot command.
  *
- * It has to hold a thread, a question the assistant asked, thumbnails of an
- * attached drawing, and a proposal detailed enough to audit — none of which fit
- * in the one ellipsized line the old bottom rail gave it.
+ * It holds a thread that outlives the session, a question the assistant asked,
+ * thumbnails of an attached drawing, and a proposal detailed enough to audit.
+ * Two rules shape the rest: the thread belongs to the project, so it is read
+ * back from storage when one opens and written on every turn, and closing the
+ * dock is a display decision only — the conversation and any request still in
+ * flight keep running behind the launcher.
  */
 export function AssistantPanel({
   document: doc,
@@ -105,9 +206,9 @@ export function AssistantPanel({
   onPreview,
   collapsed,
   onCollapsedChange,
-  focusNonce,
   hidden = false
 }: AssistantPanelProps) {
+  const projectId = doc.projectId;
   const [conversation, dispatch] = useReducer(
     assistantReducer,
     EMPTY_CONVERSATION
@@ -133,10 +234,34 @@ export function AssistantPanel({
   const [status, setStatus] = useState<AssistantStatus | null>(null);
   const [statusError, setStatusError] = useState<string | null>(null);
   const [dragging, setDragging] = useState(false);
+  const [applyingEntryId, setApplyingEntryId] = useState<string | null>(null);
+  const [progress, setProgress] = useState<AssistantProgress>({
+    stage: 'reading',
+    text: ''
+  });
+  const [atBottom, setAtBottom] = useState(true);
+  const [unread, setUnread] = useState(0);
+  const [autoParameterizeResult, setAutoParameterizeResult] = useState<{
+    document: ProjectDocument;
+    selection: CadSelectionContext;
+    proposal: CadPatchProposal | null;
+  } | null>(null);
+  const applyingEntryRef = useRef<string | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const threadRef = useRef<HTMLDivElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const promptRef = useRef<HTMLTextAreaElement | null>(null);
+  /**
+   * Which project the conversation on screen belongs to.
+   *
+   * State rather than a ref because it has to change in the same commit as the
+   * entries do: on the render where the project changed, the thread is still
+   * the previous document's, and saving then would file one project's
+   * conversation under another's id.
+   */
+  const [threadProjectId, setThreadProjectId] = useState<string | null>(null);
+  // How much of the thread the user has actually seen, for the badge.
+  const seenCountRef = useRef(0);
 
   const selectionSummary = useMemo(
     () => selectionSummaryOf(selection),
@@ -144,8 +269,96 @@ export function AssistantPanel({
   );
   const thinking = conversation.status === 'thinking';
   const configured = status?.configured ?? false;
+  const entries = conversation.entries;
+  const autoParameterizeProposal =
+    autoParameterizeResult?.document === doc &&
+    autoParameterizeResult.selection === selection
+      ? autoParameterizeResult.proposal
+      : null;
+  const groups = useMemo(
+    () => groupThreadByDay(entries, Date.now()),
+    [entries]
+  );
+  const suggestions = useMemo(
+    () =>
+      assistantSuggestions({
+        bodyCount: doc.bodyOrder.length,
+        topologyKind: sharedTopologyKind(selection),
+        selectedBodyCount: selection.bodyIds.length,
+        autoParameterizeProposal
+      }),
+    [autoParameterizeProposal, doc.bodyOrder.length, selection]
+  );
+  const autoParameterizeSuggestion = useMemo(
+    () =>
+      suggestions.find(
+        (suggestion) => suggestion.id === 'verified-auto-parameterize'
+      ),
+    [suggestions]
+  );
+  const verifiedPrompt = useMemo(
+    () =>
+      pending.length === 0
+        ? suggestions.find(
+            (suggestion) =>
+              suggestion.proposal && suggestion.label === prompt.trim()
+          )
+        : undefined,
+    [pending.length, prompt, suggestions]
+  );
+  /** The last thing the user asked, which is what "try again" repeats. */
+  const lastAsk = useMemo(() => {
+    for (let index = entries.length - 1; index >= 0; index -= 1) {
+      const entry = entries[index];
+      if (entry?.kind === 'user') {
+        return entry;
+      }
+    }
+    return null;
+  }, [entries]);
+
+  // Let the composer grow with the request while keeping enough of the thread
+  // visible to preserve conversational context. Resetting to `auto` first also
+  // lets it shrink again when text is removed or a prompt is sent.
+  useLayoutEffect(() => {
+    const textarea = promptRef.current;
+    if (!textarea) {
+      return;
+    }
+    textarea.style.height = 'auto';
+    textarea.style.height = `${textarea.scrollHeight}px`;
+  }, [collapsed, prompt]);
 
   useEffect(() => () => abortRef.current?.abort(), []);
+
+  useEffect(() => {
+    if (collapsed) {
+      return;
+    }
+    let active = true;
+    void import('@openzcad/ai-contracts/auto-parameterize')
+      .then(({ createAutoParameterizeProposal }) => {
+        if (active) {
+          setAutoParameterizeResult({
+            document: doc,
+            selection,
+            proposal: createAutoParameterizeProposal(doc, selection)
+          });
+        }
+      })
+      .catch(() => {
+        if (active) {
+          setAutoParameterizeResult({
+            document: doc,
+            selection,
+            proposal: null
+          });
+        }
+      });
+    return () => {
+      active = false;
+    };
+  }, [collapsed, doc, selection]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -172,20 +385,95 @@ export function AssistantPanel({
     return () => controller.abort();
   }, []);
 
+  // Opening a project brings its conversation with it. A turn in flight belongs
+  // to the document that asked for it, so switching projects cancels it rather
+  // than letting the reply land in someone else's thread.
   useEffect(() => {
-    if (focusNonce > 0 && !collapsed) {
-      promptRef.current?.focus();
-    }
-  }, [collapsed, focusNonce]);
+    abortRef.current?.abort();
+    abortRef.current = null;
+    const restored = loadAssistantThread(projectId);
+    dispatch({ type: 'restore', entries: restored });
+    setThreadProjectId(projectId);
+    // Scrollback that was already there is not news, however the dock is.
+    seenCountRef.current = restored.length;
+    setNotice(null);
+    setUnread(0);
+  }, [projectId]);
 
-  // Keep the newest turn in view; a reply that lands off-screen reads as nothing
-  // having happened.
+  // Every turn is written straight back: a browser tab is closed without
+  // ceremony, and a thread that only survives a clean exit is not a record.
   useEffect(() => {
+    if (threadProjectId !== projectId) {
+      return;
+    }
+    saveAssistantThread(projectId, entries, Date.now());
+  }, [entries, projectId, threadProjectId]);
+
+  // Replies that land behind a closed dock are what the launcher's badge is
+  // counting; opening it is the acknowledgement.
+  useEffect(() => {
+    if (threadProjectId !== projectId) {
+      // Mid project switch: the entries on screen are the old document's.
+      return;
+    }
+    if (!collapsed || entries.length < seenCountRef.current) {
+      // Either the user is looking at the thread, or it was replaced wholesale
+      // by a project switch or a clear — neither leaves anything unread.
+      seenCountRef.current = entries.length;
+      setUnread(0);
+      return;
+    }
+    const arrived = entries
+      .slice(seenCountRef.current)
+      .filter((entry) => entry.kind !== 'user').length;
+    seenCountRef.current = entries.length;
+    if (arrived > 0) {
+      setUnread((count) => count + arrived);
+    }
+  }, [collapsed, entries, projectId, threadProjectId]);
+
+  /**
+   * `'instant'`, not `'auto'`, for the pinning path.
+   *
+   * The thread sets `scroll-behavior: smooth` for the jump button, and `'auto'`
+   * defers to exactly that — so pinning animated, and the scroll events its own
+   * intermediate frames fired read as "the user scrolled away", which switched
+   * pinning off and stranded the thread mid-conversation.
+   */
+  const scrollToLatest = useCallback((behavior: ScrollBehavior = 'smooth') => {
     const thread = threadRef.current;
     if (thread) {
-      thread.scrollTop = thread.scrollHeight;
+      thread.scrollTo({ top: thread.scrollHeight, behavior });
     }
-  }, [conversation.entries, conversation.status]);
+  }, []);
+
+  // Keep the newest turn in view — but only when the user is already reading the
+  // end of the thread. Yanking someone out of scrollback to show a reply is how
+  // a long conversation becomes unusable, so a jump button is offered instead.
+  useLayoutEffect(() => {
+    if (collapsed || hidden) {
+      return;
+    }
+    if (atBottom) {
+      scrollToLatest('instant');
+    }
+  }, [
+    atBottom,
+    collapsed,
+    hidden,
+    entries,
+    conversation.status,
+    progress.text,
+    scrollToLatest
+  ]);
+
+  // Reopening the dock lands at the newest turn, which is where the composer is.
+  useLayoutEffect(() => {
+    if (!collapsed && !hidden) {
+      scrollToLatest('instant');
+      setAtBottom(true);
+    }
+  }, [collapsed, hidden, scrollToLatest]);
 
   const send = useCallback(
     async (
@@ -198,19 +486,50 @@ export function AssistantPanel({
       const controller = new AbortController();
       abortRef.current = controller;
       setNotice(null);
+      setProgress({ stage: 'reading', text: '' });
       // Drop any live preview: it belongs to a proposal this turn supersedes.
-      onPreview(null);
+      void onPreview(null);
       dispatch({ type: 'preview', entryId: null });
       dispatch({
         type: 'submit',
         id: nextEntryId('user'),
         text,
+        at: Date.now(),
         attachments,
         ...(answers ? { answers } : {}),
         ...(answeredEntryId ? { answeredEntryId } : {})
       });
 
       try {
+        const verifiedSuggestion =
+          attachments.length === 0
+            ? suggestions.find(
+                (suggestion) => suggestion.proposal && suggestion.label === text
+              )
+            : undefined;
+        if (verifiedSuggestion?.proposal) {
+          const proposal = parseCadPatchProposal(
+            structuredClone(verifiedSuggestion.proposal)
+          );
+          if (!(await onPreview(proposal))) {
+            throw new Error(
+              'This verified recipe did not pass exact geometry preflight. Nothing was changed; see the activity log for the exact feature failure.'
+            );
+          }
+          const entryId = nextEntryId('reply');
+          dispatch({
+            type: 'reply',
+            id: entryId,
+            reply: {
+              kind: 'patch',
+              proposal,
+              readings: []
+            },
+            at: Date.now()
+          });
+          dispatch({ type: 'preview', entryId });
+          return;
+        }
         // One immutable snapshot per turn: if the selection or document changes
         // while the provider is thinking, this turn still means what it meant
         // when it was sent.
@@ -226,9 +545,28 @@ export function AssistantPanel({
               label: attachment.label
             }))
           },
-          { signal: controller.signal }
+          {
+            signal: controller.signal,
+            // The reply is one JSON object, so until it closes the only honest
+            // progress is the fields already on the wire.
+            onDelta: (partial) => setProgress(readAssistantProgress(partial))
+          }
         );
-        dispatch({ type: 'reply', id: nextEntryId('reply'), reply });
+        if (reply.kind === 'patch' && !(await onPreview(reply.proposal))) {
+          throw new Error(
+            'The proposed change did not pass exact geometry preflight. Nothing was changed; see the activity log for the exact feature failure.'
+          );
+        }
+        const entryId = nextEntryId('reply');
+        dispatch({
+          type: 'reply',
+          id: entryId,
+          reply,
+          at: Date.now()
+        });
+        if (reply.kind === 'patch') {
+          dispatch({ type: 'preview', entryId });
+        }
       } catch (error) {
         if (controller.signal.aborted) {
           dispatch({ type: 'cancel' });
@@ -237,6 +575,7 @@ export function AssistantPanel({
         dispatch({
           type: 'fail',
           id: nextEntryId('error'),
+          at: Date.now(),
           message:
             error instanceof Error
               ? error.message
@@ -244,12 +583,22 @@ export function AssistantPanel({
         });
       }
     },
-    [conversation, doc, onPreview, selection]
+    [conversation, doc, onPreview, selection, suggestions]
   );
 
   function submitPrompt() {
     const text = prompt.trim();
-    if ((!text && pending.length === 0) || thinking || !configured) {
+    const verified = Boolean(
+      pending.length === 0 &&
+      suggestions.some(
+        (suggestion) => suggestion.proposal && suggestion.label === text
+      )
+    );
+    if (
+      (!text && pending.length === 0) ||
+      thinking ||
+      (!configured && !verified)
+    ) {
       return;
     }
     const attachments = pending;
@@ -271,6 +620,27 @@ export function AssistantPanel({
       ? answers.map((answer) => answer.value).join('; ')
       : `${answers.map((answer) => answer.value).join('; ')} — choose sensible defaults for anything I did not answer.`;
     void send(text, [], answers, entry.id);
+  }
+
+  function applySuggestion(suggestion: AssistantSuggestion) {
+    // Offered, not sent: the opener is a starting point to edit, and a click
+    // that fires a request the user has not read yet is a trap.
+    setPrompt(suggestion.label);
+    promptRef.current?.focus();
+  }
+
+  function stopThinking() {
+    abortRef.current?.abort();
+    abortRef.current = null;
+  }
+
+  function clearThread() {
+    stopThinking();
+    void onPreview(null);
+    dispatch({ type: 'reset' });
+    clearAssistantThread(projectId);
+    setNotice(null);
+    setUnread(0);
   }
 
   async function addFiles(files: readonly File[]) {
@@ -314,13 +684,13 @@ export function AssistantPanel({
     }
   }
 
-  function previewProposal(entryId: string, proposal: CadPatchProposal) {
+  async function previewProposal(entryId: string, proposal: CadPatchProposal) {
     if (conversation.previewEntryId === entryId) {
-      onPreview(null);
+      await onPreview(null);
       dispatch({ type: 'preview', entryId: null });
       return;
     }
-    if (!onPreview(proposal)) {
+    if (!(await onPreview(proposal))) {
       setNotice(
         'That patch could not be previewed. See the status bar for details.'
       );
@@ -329,36 +699,197 @@ export function AssistantPanel({
     dispatch({ type: 'preview', entryId });
   }
 
-  function applyProposal(entryId: string, proposal: CadPatchProposal) {
-    onPreview(null);
+  async function applyProposal(entryId: string, proposal: CadPatchProposal) {
+    if (applyingEntryRef.current) {
+      return;
+    }
+    applyingEntryRef.current = entryId;
+    setApplyingEntryId(entryId);
+    void onPreview(null);
     dispatch({ type: 'preview', entryId: null });
     // A patch can still fail here — an expression that will not evaluate, or a
     // body an earlier operation consumed. Leave the card open when it does
     // rather than reporting a success that did not happen.
-    if (!onApply(proposal)) {
+    try {
+      if (!(await onApply(proposal))) {
+        setNotice(
+          'That patch could not be applied. See the status bar for details.'
+        );
+        return;
+      }
+      dispatch({ type: 'resolve-proposal', entryId, status: 'applied' });
+      setNotice(null);
+    } catch {
       setNotice(
         'That patch could not be applied. See the status bar for details.'
       );
-      return;
+    } finally {
+      applyingEntryRef.current = null;
+      setApplyingEntryId(null);
     }
-    dispatch({ type: 'resolve-proposal', entryId, status: 'applied' });
-    setNotice(null);
+  }
+
+  function renderEntry(entry: AssistantEntry, continues: boolean) {
+    if (entry.kind === 'user') {
+      return (
+        <Turn role="user" at={entry.at} continues={continues} key={entry.id}>
+          <div className="assistant-bubble">
+            {entry.answers.length > 0 ? (
+              <dl className="assistant-answer-list">
+                {entry.answers.map((answer) => (
+                  <div key={answer.questionId}>
+                    <dt>{answer.prompt}</dt>
+                    <dd>{answer.value}</dd>
+                  </div>
+                ))}
+              </dl>
+            ) : (
+              <p>{entry.text}</p>
+            )}
+            {entry.attachments.length > 0 && (
+              <div className="assistant-thumbs">
+                {entry.attachments.map((attachment) =>
+                  attachment.dataBase64 ? (
+                    <img
+                      key={attachment.id}
+                      src={attachmentDataUrl(attachment)}
+                      alt={attachment.label}
+                      title={attachment.label}
+                    />
+                  ) : (
+                    // The bytes aged out of storage; the fact of the drawing
+                    // is still part of the record.
+                    <span
+                      className="assistant-thumb-gone"
+                      key={attachment.id}
+                      title={`${attachment.label} — no longer stored`}
+                    >
+                      <ImageIcon size={13} aria-hidden="true" />
+                      {attachment.label}
+                    </span>
+                  )
+                )}
+              </div>
+            )}
+          </div>
+        </Turn>
+      );
+    }
+    if (entry.kind === 'questions') {
+      return (
+        <Turn
+          role="assistant"
+          label="Assistant"
+          at={entry.at}
+          continues={continues}
+          key={entry.id}
+        >
+          <QuestionCard
+            entry={entry}
+            busy={thinking}
+            onAnswer={(questionId, value) =>
+              dispatch({
+                type: 'answer',
+                entryId: entry.id,
+                questionId,
+                value
+              })
+            }
+            onSend={() => sendAnswers(entry)}
+          />
+        </Turn>
+      );
+    }
+    if (entry.kind === 'proposal') {
+      return (
+        <Turn
+          role="assistant"
+          label="Assistant"
+          at={entry.at}
+          continues={continues}
+          key={entry.id}
+        >
+          <ProposalCard
+            entry={entry}
+            busy={thinking || applyingEntryId !== null}
+            applying={applyingEntryId === entry.id}
+            previewing={conversation.previewEntryId === entry.id}
+            onPreview={() => {
+              void previewProposal(entry.id, entry.proposal);
+            }}
+            onApply={() => {
+              void applyProposal(entry.id, entry.proposal);
+            }}
+            onReject={() => {
+              if (conversation.previewEntryId === entry.id) {
+                void onPreview(null);
+              }
+              dispatch({
+                type: 'resolve-proposal',
+                entryId: entry.id,
+                status: 'rejected'
+              });
+            }}
+          />
+        </Turn>
+      );
+    }
+    return (
+      <Turn
+        role="assistant"
+        label={entry.tone === 'error' ? 'Failed' : 'Assistant'}
+        at={entry.at}
+        continues={continues}
+        key={entry.id}
+      >
+        <div className={`assistant-card message ${entry.tone}`}>
+          <RichText text={entry.text} className="assistant-card-copy" />
+          {entry.tone === 'error' && lastAsk && (
+            <div className="assistant-card-actions">
+              <button
+                type="button"
+                disabled={thinking}
+                title={`Send "${lastAsk.text}" again`}
+                onClick={() =>
+                  void send(
+                    lastAsk.text,
+                    // A drawing whose bytes aged out of storage cannot be
+                    // resent; the words can.
+                    lastAsk.attachments.filter(
+                      (attachment) => attachment.dataBase64
+                    )
+                  )
+                }
+              >
+                <RotateCcw size={12} aria-hidden="true" />
+                Try again
+              </button>
+            </div>
+          )}
+        </div>
+      </Turn>
+    );
   }
 
   if (collapsed) {
     return (
-      <button
-        type="button"
-        className={`assistant-launcher${hidden ? ' assistant-off-screen' : ''}`}
-        onClick={() => onCollapsedChange(false)}
-        title="Open the modeling assistant"
-        aria-hidden={hidden || undefined}
-      >
-        <Sparkles size={15} aria-hidden="true" />
-        <span>Assistant</span>
-      </button>
+      <AssistantLauncher
+        unread={unread}
+        thinking={thinking}
+        preview={summarizeThread(entries)}
+        hidden={hidden}
+        onOpen={() => onCollapsedChange(false)}
+      />
     );
   }
+
+  const turnCount = entries.filter((entry) => entry.kind === 'user').length;
+  const modelLabel = status?.configured
+    ? `${status.model.slice(status.model.lastIndexOf('/') + 1)} · ${status.reasoningEffort}`
+    : 'Unavailable';
+  const modelDescription = status?.configured
+    ? `${status.model} · ${status.reasoningEffort} reasoning`
+    : 'Assistant unavailable';
 
   return (
     <section
@@ -375,20 +906,29 @@ export function AssistantPanel({
       onDrop={handleDrop}
     >
       <header className="assistant-header">
-        <Sparkles size={14} aria-hidden="true" />
-        <span className="assistant-title">Assistant</span>
-        {conversation.entries.length > 0 && (
+        <div className="assistant-heading">
+          <span className="assistant-title">AI Assistant</span>
+          <span
+            className="assistant-model"
+            title={modelDescription}
+            aria-label={modelDescription}
+          >
+            {modelLabel}
+          </span>
+        </div>
+        {turnCount > 0 && (
+          <span className="assistant-turn-count">
+            {turnCount} {turnCount === 1 ? 'ask' : 'asks'}
+          </span>
+        )}
+        {entries.length > 0 && (
           <button
             type="button"
             className="assistant-icon-button"
-            title="Clear this conversation"
-            aria-label="Clear this conversation"
-            onClick={() => {
-              abortRef.current?.abort();
-              onPreview(null);
-              dispatch({ type: 'reset' });
-              setNotice(null);
-            }}
+            title="Clear this project's conversation"
+            aria-label="Clear this project's conversation"
+            disabled={applyingEntryId !== null}
+            onClick={clearThread}
           >
             <Trash2 size={13} aria-hidden="true" />
           </button>
@@ -396,18 +936,29 @@ export function AssistantPanel({
         <button
           type="button"
           className="assistant-icon-button"
-          title="Hide the assistant"
-          aria-label="Hide the assistant"
+          title="Collapse the assistant"
+          aria-label="Collapse the assistant"
           onClick={() => onCollapsedChange(true)}
         >
           <PanelRightClose size={14} aria-hidden="true" />
         </button>
       </header>
 
-      <div className="assistant-thread" ref={threadRef}>
-        {conversation.entries.length === 0 && (
+      <div
+        className="assistant-thread"
+        ref={threadRef}
+        onScroll={(event) => {
+          const thread = event.currentTarget;
+          const distance =
+            thread.scrollHeight - thread.scrollTop - thread.clientHeight;
+          // A card that grows after it renders (a reading table, a thumbnail)
+          // must not read as the user having scrolled away.
+          setAtBottom(distance < 48);
+        }}
+      >
+        {entries.length === 0 && (
           <div className="assistant-empty">
-            <p>
+            <p className="assistant-empty-lead">
               Describe the part you want, or attach a drawing and let the
               assistant read it.
             </p>
@@ -415,101 +966,73 @@ export function AssistantPanel({
               It asks before guessing a dimension it cannot infer, and every
               change is previewed and applied by you.
             </p>
+            <ul className="assistant-suggestions">
+              {suggestions.map((suggestion) => (
+                <li key={suggestion.id}>
+                  <button
+                    type="button"
+                    className="assistant-suggestion"
+                    disabled={!configured && !suggestion.proposal}
+                    onClick={() => applySuggestion(suggestion)}
+                  >
+                    <span>{suggestion.label}</span>
+                    {suggestion.proposal && (
+                      <span className="assistant-suggestion-badge">
+                        Verified
+                      </span>
+                    )}
+                  </button>
+                </li>
+              ))}
+            </ul>
           </div>
         )}
 
-        {conversation.entries.map((entry) => {
-          if (entry.kind === 'user') {
-            return (
-              <div className="assistant-turn user" key={entry.id}>
-                {entry.answers.length > 0 ? (
-                  <dl className="assistant-answer-list">
-                    {entry.answers.map((answer) => (
-                      <div key={answer.questionId}>
-                        <dt>{answer.prompt}</dt>
-                        <dd>{answer.value}</dd>
-                      </div>
-                    ))}
-                  </dl>
-                ) : (
-                  <p>{entry.text}</p>
-                )}
-                {entry.attachments.length > 0 && (
-                  <div className="assistant-thumbs">
-                    {entry.attachments.map((attachment) => (
-                      <img
-                        key={attachment.id}
-                        src={attachmentDataUrl(attachment)}
-                        alt={attachment.label}
-                        title={attachment.label}
-                      />
-                    ))}
-                  </div>
-                )}
-              </div>
-            );
-          }
-          if (entry.kind === 'questions') {
-            return (
-              <QuestionCard
-                key={entry.id}
-                entry={entry}
-                busy={thinking}
-                onAnswer={(questionId, value) =>
-                  dispatch({
-                    type: 'answer',
-                    entryId: entry.id,
-                    questionId,
-                    value
-                  })
-                }
-                onSend={() => sendAnswers(entry)}
-              />
-            );
-          }
-          if (entry.kind === 'proposal') {
-            return (
-              <ProposalCard
-                key={entry.id}
-                entry={entry}
-                busy={thinking}
-                previewing={conversation.previewEntryId === entry.id}
-                onPreview={() => previewProposal(entry.id, entry.proposal)}
-                onApply={() => applyProposal(entry.id, entry.proposal)}
-                onReject={() => {
-                  if (conversation.previewEntryId === entry.id) {
-                    onPreview(null);
-                  }
-                  dispatch({
-                    type: 'resolve-proposal',
-                    entryId: entry.id,
-                    status: 'rejected'
-                  });
-                }}
-              />
-            );
-          }
-          return (
-            <div
-              className={`assistant-card message ${entry.tone}`}
-              key={entry.id}
-            >
-              <span className="assistant-card-label">
-                {entry.tone === 'error' ? 'Failed' : 'Assistant'}
-              </span>
-              <p className="assistant-card-copy">{entry.text}</p>
+        {groups.map((group) => (
+          <div className="assistant-day" key={group.key}>
+            <div className="assistant-day-rule">
+              <span>{group.label}</span>
             </div>
-          );
-        })}
+            {group.entries.map((entry, index) =>
+              renderEntry(
+                entry,
+                // A run of turns from one speaker reads as one block.
+                index > 0 && roleOf(entry) === roleOf(group.entries[index - 1]!)
+              )
+            )}
+          </div>
+        ))}
 
         {thinking && (
-          <p className="assistant-thinking" aria-live="polite">
-            {selectionSummary
-              ? `Reasoning over ${selectionSummary} and the feature history…`
-              : 'Reasoning over the feature history…'}
-          </p>
+          <div className="assistant-turn assistant-working" aria-live="polite">
+            <span className="assistant-typing" aria-hidden="true">
+              <i />
+              <i />
+              <i />
+            </span>
+            <span className="assistant-working-copy">
+              {describeProgress(progress, selectionSummary)}
+              {progress.text && (
+                <em className="assistant-working-text">{progress.text}</em>
+              )}
+            </span>
+          </div>
         )}
       </div>
+
+      {!atBottom && entries.length > 0 && (
+        <button
+          type="button"
+          className="assistant-jump"
+          onClick={() => {
+            scrollToLatest();
+            setAtBottom(true);
+          }}
+        >
+          <ArrowDown size={12} aria-hidden="true" />
+          Jump to latest
+        </button>
+      )}
 
       <footer className="assistant-composer">
         {notice && (
@@ -548,6 +1071,18 @@ export function AssistantPanel({
             ))}
           </div>
         )}
+        {entries.length > 0 && autoParameterizeSuggestion && (
+          <button
+            type="button"
+            className="assistant-verified-action"
+            disabled={thinking || applyingEntryId !== null}
+            onClick={() => applySuggestion(autoParameterizeSuggestion)}
+          >
+            <Sparkles size={12} aria-hidden="true" />
+            <span>{autoParameterizeSuggestion.label}</span>
+            <span className="assistant-suggestion-badge">Verified</span>
+          </button>
+        )}
         <div className="assistant-prompt">
           <button
             type="button"
@@ -562,14 +1097,14 @@ export function AssistantPanel({
           <textarea
             ref={promptRef}
             value={prompt}
-            rows={1}
+            rows={3}
             placeholder={
               selectionSummary
                 ? `Ask about ${selectionSummary}…`
                 : 'Describe a part, or attach a drawing…'
             }
             aria-label="CAD change request"
-            disabled={!configured}
+            disabled={!configured && !verifiedPrompt}
             onChange={(event) => setPrompt(event.target.value)}
             onPaste={(event) => {
               const files = Array.from(event.clipboardData?.files ?? []);
@@ -585,27 +1120,39 @@ export function AssistantPanel({
               }
             }}
           />
-          <button
-            type="button"
-            className="assistant-submit"
-            disabled={
-              thinking ||
-              !configured ||
-              (!prompt.trim() && pending.length === 0)
-            }
-            onClick={submitPrompt}
-            aria-label="Send to the assistant"
-            title="Send (Enter)"
-          >
-            <ArrowUp size={15} aria-hidden="true" />
-          </button>
+          {thinking ? (
+            <button
+              type="button"
+              className="assistant-submit stop"
+              onClick={stopThinking}
+              aria-label="Stop the assistant"
+              title="Stop"
+            >
+              <Square size={11} aria-hidden="true" />
+            </button>
+          ) : (
+            <button
+              type="button"
+              className="assistant-submit"
+              disabled={
+                (!configured && !verifiedPrompt) ||
+                (!prompt.trim() && pending.length === 0)
+              }
+              onClick={submitPrompt}
+              aria-label="Send to the assistant"
+              title="Send (Enter)"
+            >
+              <ArrowUp size={15} aria-hidden="true" />
+            </button>
+          )}
         </div>
-        <p className="assistant-foot">
-          {status?.configured
-            ? `${status.model} · ${status.reasoningEffort} reasoning`
-            : 'Assistant unavailable'}
-          {pending.length > 0 && ' · drawings are sent to your AI provider'}
-        </p>
+        {(verifiedPrompt || pending.length > 0) && (
+          <p className="assistant-foot">
+            {verifiedPrompt
+              ? 'Verified exact recipe · no AI provider request'
+              : 'Drawings are sent to your AI provider'}
+          </p>
+        )}
         <input
           ref={fileInputRef}
           type="file"

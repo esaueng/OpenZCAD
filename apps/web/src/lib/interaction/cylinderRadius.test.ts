@@ -8,8 +8,48 @@ import {
   radiusFromRadialDelta,
   radiusToDiameter,
   sameCylinderAxis,
-  signedRadialDelta
+  signedRadialDelta,
+  supportsRadialCylinderPreview
 } from './cylinderRadius';
+import type { BodyRepresentation, FaceTopology } from '@openzcad/shared';
+
+function bodyWithFaces(faces: FaceTopology[]): BodyRepresentation {
+  return {
+    bodyId: 'body-1' as BodyRepresentation['bodyId'],
+    name: 'Cylinder Body',
+    source: 'primitive',
+    mesh: { kind: 'mesh', vertices: [], indices: [] },
+    faceCount: faces.length,
+    color: '#ffffff',
+    exportableStep: true,
+    consumed: false,
+    volume: 1,
+    bbox: {
+      min: { x: -1, y: -1, z: 0 },
+      max: { x: 1, y: 1, z: 2 }
+    },
+    topology: { faces, edges: [] }
+  };
+}
+
+function face(
+  topologyId: string,
+  surfaceType: string,
+  geometry: Partial<NonNullable<FaceTopology['geometry']>> = {}
+): FaceTopology {
+  return {
+    topologyId,
+    hash: topologyId.length,
+    triangleStart: 0,
+    triangleCount: 1,
+    geometry: {
+      surfaceType,
+      area: 1,
+      center: { x: 0, y: 0, z: 0 },
+      ...geometry
+    }
+  };
+}
 
 describe('cylinder radius drag math', () => {
   it('uses signed radial movement without imposing fixed radius bounds', () => {
@@ -111,6 +151,47 @@ describe('cylinder radius drag math', () => {
         end,
         { x: start.x + 0.01, y: start.y, z: start.z },
         { x: end.x + 0.01, y: end.y, z: end.z }
+      )
+    ).toBe(false);
+  });
+
+  it('allows a radial viewport transform only for a simple analytic cylinder', () => {
+    const axisStart = { x: 3, y: -4, z: 5 };
+    const axisEnd = { x: 3, y: -4, z: 15 };
+    const simple = bodyWithFaces([
+      face('wall', 'cylinder', { axisStart, axisEnd, radius: 4 }),
+      face('bottom', 'plane', { normal: { x: 0, y: 0, z: -1 } }),
+      face('top', 'plane', { normal: { x: 0, y: 0, z: 1 } })
+    ]);
+
+    expect(supportsRadialCylinderPreview(simple, axisStart, axisEnd)).toBe(
+      true
+    );
+    expect(
+      supportsRadialCylinderPreview(
+        bodyWithFaces([...simple.topology!.faces, face('fillet', 'torus')]),
+        axisStart,
+        axisEnd
+      )
+    ).toBe(false);
+    expect(
+      supportsRadialCylinderPreview(
+        simple,
+        { x: axisStart.x + 0.01, y: axisStart.y, z: axisStart.z },
+        { x: axisEnd.x + 0.01, y: axisEnd.y, z: axisEnd.z }
+      )
+    ).toBe(false);
+    expect(
+      supportsRadialCylinderPreview(
+        bodyWithFaces([
+          simple.topology!.faces[0]!,
+          face('oblique-bottom', 'plane', {
+            normal: { x: 0.2, y: 0, z: 0.98 }
+          }),
+          simple.topology!.faces[2]!
+        ]),
+        axisStart,
+        axisEnd
       )
     ).toBe(false);
   });

@@ -1,5 +1,9 @@
 import { toUserId, type AuthSession } from '@openzcad/shared';
-import type { CloudflareEnv } from '@openzcad/cloudflare-adapters';
+import {
+  isCloudflareFeatureEnabled,
+  type CloudflareEnv
+} from '@openzcad/cloudflare-adapters';
+import { isDesktopAuthReady } from './readiness';
 
 const DEVELOPMENT_USER_ID = 'user_beta_dev';
 const SESSION_COOKIE_NAME = '__Host-openzcad_session';
@@ -10,6 +14,11 @@ const LOGIN_EMAIL_RATE_LIMIT = 3;
 const LOGIN_IP_RATE_LIMIT = 10;
 const DEFAULT_SESSION_DAYS = 30;
 const TURNSTILE_ACTION = 'email-code';
+const DESKTOP_CLIENT_ID = 'openzcad-macos';
+const DESKTOP_AUTH_ATTEMPT_TTL_SECONDS = 10 * 60;
+const DESKTOP_AUTH_USER_CODE_LENGTH = 8;
+const DESKTOP_ACCESS_TOKEN_TTL_SECONDS = 15 * 60;
+const DESKTOP_AUTH_IP_RATE_LIMIT = 20;
 const encoder = new TextEncoder();
 
 type AuthenticationFailure = 'missing' | 'invalid' | 'configuration';
@@ -50,6 +59,34 @@ interface SessionRow {
   expires_at: number;
 }
 
+interface DesktopAuthAttemptRow {
+  id: string;
+  state_hash: string;
+  code_challenge: string;
+  client_id: string;
+  user_id: string | null;
+  email: string | null;
+  expires_at: number;
+  approved_at: number | null;
+  exchanged_at: number | null;
+}
+
+interface DesktopTokenRow extends SessionRow {
+  session_id: string;
+  client_id: string;
+  revoked_at: number | null;
+  rotated_at?: number | null;
+}
+
+export interface DesktopAuthTokenResponse {
+  status: 'authorized';
+  session: AuthSession;
+  accessToken: string;
+  accessExpiresAt: number;
+  refreshToken: string;
+  refreshExpiresAt: number;
+}
+
 interface TurnstileResponse {
   success?: boolean;
   hostname?: string;
@@ -83,6 +120,18 @@ async function sha256(value: string): Promise<string> {
   );
 }
 
+async function sha256Base64Url(value: string): Promise<string> {
+  return bytesToBase64Url(
+    new Uint8Array(await crypto.subtle.digest('SHA-256', encoder.encode(value)))
+  );
+}
+
+function randomToken(byteLength = 32): string {
+  const bytes = new Uint8Array(byteLength);
+  crypto.getRandomValues(bytes);
+  return bytesToBase64Url(bytes);
+}
+
 async function hmac(value: string, secret: string): Promise<string> {
   const key = await crypto.subtle.importKey(
     'raw',
@@ -94,6 +143,14 @@ async function hmac(value: string, secret: string): Promise<string> {
   return bytesToHex(
     await crypto.subtle.sign('HMAC', key, encoder.encode(value))
   );
+}
+
+/** Opaque D1 rate-limit bucket corresponding to one sign-in email. */
+export async function authEmailRateLimitBucket(
+  email: string,
+  pepper: string
+): Promise<string> {
+  return `email:${await hmac(`email:${email.trim().toLowerCase()}`, pepper)}`;
 }
 
 function constantTimeEqual(left: string, right: string): boolean {
@@ -160,6 +217,15 @@ async function hashedUserId(
   return toUserId(`${prefix}_${suffix}`);
 }
 
+async function hmacUserId(
+  prefix: 'user_anon',
+  identity: string,
+  secret: string
+): Promise<AuthSession['userId']> {
+  const digest = await hmac(identity, secret);
+  return toUserId(`${prefix}_${digest.slice(0, 24)}`);
+}
+
 function readCookie(request: Request, name: string): string | null {
   const header = request.headers.get('cookie');
   if (!header) {
@@ -204,6 +270,13 @@ function emailAuthConfigured(env: CloudflareEnv): boolean {
   );
 }
 
+function desktopAuthFlagEnabled(env: CloudflareEnv): boolean {
+  return (
+    emailAuthConfigured(env) &&
+    isCloudflareFeatureEnabled(env, 'DESKTOP_AUTH_ENABLED')
+  );
+}
+
 export function getAuthConfig(env: CloudflareEnv): {
   mode: 'development' | 'email-code' | 'unconfigured';
   emailCodeEnabled: boolean;
@@ -220,6 +293,31 @@ export function getAuthConfig(env: CloudflareEnv): {
       ? { turnstileSiteKey: env.TURNSTILE_SITE_KEY.trim() }
       : {})
   };
+}
+
+export async function getDesktopAuthConfig(
+  env: CloudflareEnv
+): Promise<ReturnType<typeof getAuthConfig> & { desktopAuthEnabled: boolean }> {
+  return {
+    ...getAuthConfig(env),
+    desktopAuthEnabled:
+      desktopAuthFlagEnabled(env) && (await isDesktopAuthReady(env.DB))
+  };
+}
+
+async function requireDesktopAuth(env: CloudflareEnv): Promise<D1Database> {
+  if (
+    !desktopAuthFlagEnabled(env) ||
+    !env.DB ||
+    !(await isDesktopAuthReady(env.DB))
+  ) {
+    throw new AuthFlowError(
+      503,
+      'DESKTOP_AUTH_UNAVAILABLE',
+      'Desktop sign-in is not configured.'
+    );
+  }
+  return env.DB;
 }
 
 function requireEmailAuth(env: CloudflareEnv): asserts env is CloudflareEnv & {
@@ -294,7 +392,7 @@ async function verifyTurnstile(
     !response.ok ||
     result.success !== true ||
     result.action !== TURNSTILE_ACTION ||
-    (env.ENVIRONMENT === 'beta' && result.hostname !== expectedHostname)
+    (env.ENVIRONMENT !== 'development' && result.hostname !== expectedHostname)
   ) {
     throw new AuthFlowError(
       400,
@@ -427,17 +525,12 @@ export async function startEmailLogin(
   const connectingIp =
     request.headers.get('cf-connecting-ip')?.trim() || 'unknown';
   const [emailBucket, ipBucket] = await Promise.all([
-    hmac(`email:${email}`, env.AUTH_OTP_PEPPER),
+    authEmailRateLimitBucket(email, env.AUTH_OTP_PEPPER),
     hmac(`ip:${connectingIp}`, env.AUTH_OTP_PEPPER)
   ]);
   await cleanExpiredAuthRows(env.DB, timestamp);
   await Promise.all([
-    consumeRateLimit(
-      env.DB,
-      `email:${emailBucket}`,
-      LOGIN_EMAIL_RATE_LIMIT,
-      timestamp
-    ),
+    consumeRateLimit(env.DB, emailBucket, LOGIN_EMAIL_RATE_LIMIT, timestamp),
     consumeRateLimit(env.DB, `ip:${ipBucket}`, LOGIN_IP_RATE_LIMIT, timestamp)
   ]);
 
@@ -630,6 +723,552 @@ export async function verifyEmailLogin(
   };
 }
 
+function parseDesktopClientId(value: unknown): typeof DESKTOP_CLIENT_ID {
+  if (value !== DESKTOP_CLIENT_ID) {
+    throw new AuthFlowError(
+      400,
+      'DESKTOP_AUTH_CLIENT_INVALID',
+      'The desktop client is not supported.'
+    );
+  }
+  return value;
+}
+
+function parseBase64Url(
+  value: unknown,
+  label: string,
+  minimum: number,
+  maximum = minimum
+): string {
+  if (
+    typeof value !== 'string' ||
+    value.length < minimum ||
+    value.length > maximum ||
+    !/^[A-Za-z0-9_-]+$/.test(value)
+  ) {
+    throw new AuthFlowError(
+      400,
+      'DESKTOP_AUTH_INVALID',
+      `The desktop ${label} is invalid.`
+    );
+  }
+  return value;
+}
+
+function parseDesktopAttemptId(value: unknown): string {
+  if (
+    typeof value !== 'string' ||
+    value.length < 16 ||
+    value.length > 64 ||
+    !/^[A-Za-z0-9-]+$/.test(value)
+  ) {
+    throw new AuthFlowError(
+      400,
+      'DESKTOP_AUTH_INVALID',
+      'The desktop sign-in attempt is invalid.'
+    );
+  }
+  return value;
+}
+
+function normalizeDesktopUserCode(value: unknown): string {
+  if (typeof value !== 'string') {
+    throw new AuthFlowError(
+      400,
+      'DESKTOP_AUTH_INVALID_CODE',
+      'Enter the code shown in OpenZCAD for macOS.'
+    );
+  }
+  const normalized = value.replace(/[\s-]/g, '').toUpperCase();
+  if (!/^[A-Z0-9]{8}$/.test(normalized)) {
+    throw new AuthFlowError(
+      400,
+      'DESKTOP_AUTH_INVALID_CODE',
+      'Enter the 8-character code shown in OpenZCAD for macOS.'
+    );
+  }
+  return normalized;
+}
+
+function desktopUserCode(): string {
+  const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+  const bytes = new Uint8Array(DESKTOP_AUTH_USER_CODE_LENGTH);
+  crypto.getRandomValues(bytes);
+  let code = '';
+  for (const byte of bytes) {
+    code += alphabet[byte % alphabet.length];
+  }
+  return code;
+}
+
+function desktopSession(row: { user_id: string; email: string }): AuthSession {
+  return {
+    userId: toUserId(row.user_id),
+    displayName: row.email.split('@')[0] || row.email,
+    email: row.email,
+    mode: 'email-code'
+  };
+}
+
+async function cleanExpiredDesktopAuthRows(
+  db: D1Database,
+  timestamp: number
+): Promise<void> {
+  await db.batch([
+    db
+      .prepare(
+        `DELETE FROM desktop_auth_attempts
+         WHERE id IN (
+           SELECT id FROM desktop_auth_attempts
+           WHERE expires_at < ?
+           LIMIT 100
+         )`
+      )
+      .bind(timestamp),
+    db
+      .prepare(
+        `DELETE FROM desktop_access_tokens
+         WHERE token_hash IN (
+           SELECT token_hash FROM desktop_access_tokens
+           WHERE expires_at < ?
+           LIMIT 100
+         )`
+      )
+      .bind(timestamp),
+    db
+      .prepare(
+        `DELETE FROM desktop_refresh_tokens
+         WHERE token_hash IN (
+           SELECT token_hash FROM desktop_refresh_tokens
+           WHERE expires_at < ?
+           LIMIT 100
+         )`
+      )
+      .bind(timestamp)
+  ]);
+}
+
+export async function startDesktopAuthorization(
+  request: Request,
+  input: {
+    clientId: unknown;
+    state: unknown;
+    codeChallenge: unknown;
+  },
+  env: CloudflareEnv
+): Promise<{
+  attemptId: string;
+  browserUrl: string;
+  expiresInSeconds: number;
+  userCode: string;
+}> {
+  const db = await requireDesktopAuth(env);
+  const clientId = parseDesktopClientId(input.clientId);
+  const state = parseBase64Url(input.state, 'state', 43);
+  const codeChallenge = parseBase64Url(
+    input.codeChallenge,
+    'PKCE challenge',
+    43
+  );
+  const timestamp = nowSeconds();
+  const connectingIp =
+    request.headers.get('cf-connecting-ip')?.trim() || 'unknown';
+  const ipBucket = await hmac(
+    `desktop-ip:${connectingIp}`,
+    env.AUTH_OTP_PEPPER!
+  );
+  await cleanExpiredAuthRows(db, timestamp);
+  await consumeRateLimit(
+    db,
+    `desktop-ip:${ipBucket}`,
+    DESKTOP_AUTH_IP_RATE_LIMIT,
+    timestamp
+  );
+  await cleanExpiredDesktopAuthRows(db, timestamp);
+  const attemptId = crypto.randomUUID();
+  const userCode = desktopUserCode();
+  await db
+    .prepare(
+      `INSERT INTO desktop_auth_attempts
+         (id, state_hash, code_challenge, client_id, user_id, user_code_hash,
+          created_at, expires_at, approved_at, exchanged_at)
+       VALUES (?, ?, ?, ?, NULL, ?, ?, ?, NULL, NULL)`
+    )
+    .bind(
+      attemptId,
+      await sha256(state),
+      codeChallenge,
+      clientId,
+      await sha256(userCode),
+      timestamp,
+      timestamp + DESKTOP_AUTH_ATTEMPT_TTL_SECONDS
+    )
+    .run();
+
+  const browserUrl = new URL('/', request.url);
+  browserUrl.searchParams.set('desktopAuth', attemptId);
+  return {
+    attemptId,
+    browserUrl: browserUrl.toString(),
+    expiresInSeconds: DESKTOP_AUTH_ATTEMPT_TTL_SECONDS,
+    userCode
+  };
+}
+
+export async function approveDesktopAuthorization(
+  input: { attemptId: unknown; userCode: unknown },
+  session: AuthSession,
+  env: CloudflareEnv
+): Promise<{ ok: true }> {
+  const db = await requireDesktopAuth(env);
+  const attemptId = parseDesktopAttemptId(input.attemptId);
+  const userCode = normalizeDesktopUserCode(input.userCode);
+  const timestamp = nowSeconds();
+  const result = await db
+    .prepare(
+      `UPDATE desktop_auth_attempts
+       SET user_id = ?, approved_at = ?
+       WHERE id = ?
+         AND user_code_hash = ?
+         AND expires_at >= ?
+         AND exchanged_at IS NULL
+         AND (user_id IS NULL OR user_id = ?)`
+    )
+    .bind(
+      session.userId,
+      timestamp,
+      attemptId,
+      await sha256(userCode),
+      timestamp,
+      session.userId
+    )
+    .run();
+  if (result.meta?.changes !== 1) {
+    throw new AuthFlowError(
+      400,
+      'DESKTOP_AUTH_INVALID',
+      'The desktop sign-in attempt is invalid or expired.'
+    );
+  }
+  return { ok: true };
+}
+
+function issueDesktopTokens(
+  row: { user_id: string; email: string },
+  env: CloudflareEnv,
+  timestamp: number
+): DesktopAuthTokenResponse & { sessionId: string } {
+  const maxAgeSeconds = configuredSessionDays(env) * 24 * 60 * 60;
+  return {
+    status: 'authorized',
+    session: desktopSession(row),
+    sessionId: crypto.randomUUID(),
+    accessToken: randomToken(),
+    accessExpiresAt: timestamp + DESKTOP_ACCESS_TOKEN_TTL_SECONDS,
+    refreshToken: randomToken(),
+    refreshExpiresAt: timestamp + maxAgeSeconds
+  };
+}
+
+export async function exchangeDesktopAuthorization(
+  input: {
+    attemptId: unknown;
+    clientId: unknown;
+    state: unknown;
+    verifier: unknown;
+  },
+  env: CloudflareEnv
+): Promise<{ status: 'pending' } | DesktopAuthTokenResponse> {
+  const db = await requireDesktopAuth(env);
+  const attemptId = parseDesktopAttemptId(input.attemptId);
+  const clientId = parseDesktopClientId(input.clientId);
+  const state = parseBase64Url(input.state, 'state', 43);
+  const verifier = parseBase64Url(input.verifier, 'PKCE verifier', 43, 128);
+  const timestamp = nowSeconds();
+  const row = await db
+    .prepare(
+      `SELECT a.id, a.state_hash, a.code_challenge, a.client_id, a.user_id,
+              u.email, a.expires_at, a.approved_at, a.exchanged_at
+       FROM desktop_auth_attempts a
+       LEFT JOIN users u ON u.id = a.user_id
+       WHERE a.id = ?`
+    )
+    .bind(attemptId)
+    .first<DesktopAuthAttemptRow>();
+  if (
+    !row ||
+    row.client_id !== clientId ||
+    !constantTimeEqual(row.state_hash, await sha256(state)) ||
+    !constantTimeEqual(row.code_challenge, await sha256Base64Url(verifier))
+  ) {
+    throw new AuthFlowError(
+      400,
+      'DESKTOP_AUTH_INVALID',
+      'The desktop sign-in attempt is invalid.'
+    );
+  }
+  if (row.expires_at < timestamp) {
+    throw new AuthFlowError(
+      410,
+      'DESKTOP_AUTH_EXPIRED',
+      'The desktop sign-in attempt expired. Start again.'
+    );
+  }
+  if (!row.approved_at || !row.user_id || !row.email) {
+    return { status: 'pending' };
+  }
+  if (row.exchanged_at !== null) {
+    throw new AuthFlowError(
+      400,
+      'DESKTOP_AUTH_CONSUMED',
+      'The desktop sign-in attempt was already used.'
+    );
+  }
+
+  const issued = issueDesktopTokens(
+    { user_id: row.user_id, email: row.email },
+    env,
+    timestamp
+  );
+  const accessHash = await sha256(issued.accessToken);
+  const refreshHash = await sha256(issued.refreshToken);
+  const results = await db.batch([
+    db
+      .prepare(
+        `UPDATE desktop_auth_attempts
+         SET exchanged_at = ?
+         WHERE id = ? AND exchanged_at IS NULL AND approved_at IS NOT NULL`
+      )
+      .bind(timestamp, attemptId),
+    db
+      .prepare(
+        `INSERT INTO desktop_access_tokens
+           (token_hash, session_id, user_id, client_id,
+            created_at, expires_at, revoked_at)
+         VALUES (?, ?, ?, ?, ?, ?, NULL)`
+      )
+      .bind(
+        accessHash,
+        issued.sessionId,
+        row.user_id,
+        clientId,
+        timestamp,
+        issued.accessExpiresAt
+      ),
+    db
+      .prepare(
+        `INSERT INTO desktop_refresh_tokens
+           (token_hash, session_id, user_id, client_id,
+            created_at, expires_at, rotated_at, revoked_at)
+         VALUES (?, ?, ?, ?, ?, ?, NULL, NULL)`
+      )
+      .bind(
+        refreshHash,
+        issued.sessionId,
+        row.user_id,
+        clientId,
+        timestamp,
+        issued.refreshExpiresAt
+      )
+  ]);
+  if (results[0]?.meta?.changes !== 1) {
+    throw new AuthFlowError(
+      400,
+      'DESKTOP_AUTH_CONSUMED',
+      'The desktop sign-in attempt was already used.'
+    );
+  }
+  const { sessionId: _, ...response } = issued;
+  return response;
+}
+
+async function revokeDesktopSession(
+  db: D1Database,
+  sessionId: string,
+  timestamp: number
+): Promise<void> {
+  await db.batch([
+    db
+      .prepare(
+        `UPDATE desktop_access_tokens
+         SET revoked_at = COALESCE(revoked_at, ?)
+         WHERE session_id = ?`
+      )
+      .bind(timestamp, sessionId),
+    db
+      .prepare(
+        `UPDATE desktop_refresh_tokens
+         SET revoked_at = COALESCE(revoked_at, ?)
+         WHERE session_id = ?`
+      )
+      .bind(timestamp, sessionId)
+  ]);
+}
+
+export async function refreshDesktopAuthorization(
+  input: { clientId: unknown; refreshToken: unknown },
+  env: CloudflareEnv
+): Promise<DesktopAuthTokenResponse> {
+  const db = await requireDesktopAuth(env);
+  const clientId = parseDesktopClientId(input.clientId);
+  const refreshToken = parseBase64Url(
+    input.refreshToken,
+    'refresh credential',
+    43
+  );
+  const timestamp = nowSeconds();
+  const tokenHash = await sha256(refreshToken);
+  const row = await db
+    .prepare(
+      `SELECT t.session_id, t.user_id, t.client_id, t.expires_at,
+              t.revoked_at, t.rotated_at, u.email
+       FROM desktop_refresh_tokens t
+       INNER JOIN users u ON u.id = t.user_id
+       WHERE t.token_hash = ?`
+    )
+    .bind(tokenHash)
+    .first<DesktopTokenRow>();
+  if (
+    !row ||
+    !row.email ||
+    row.client_id !== clientId ||
+    row.expires_at < timestamp ||
+    row.revoked_at !== null ||
+    row.rotated_at !== null
+  ) {
+    if (row?.session_id) {
+      await revokeDesktopSession(db, row.session_id, timestamp);
+    }
+    throw new AuthenticationError(
+      'Your desktop session expired. Sign in again.',
+      'invalid'
+    );
+  }
+
+  const issued = issueDesktopTokens(
+    { user_id: row.user_id, email: row.email },
+    env,
+    timestamp
+  );
+  issued.sessionId = row.session_id;
+  const results = await db.batch([
+    db
+      .prepare(
+        `UPDATE desktop_refresh_tokens
+         SET rotated_at = ?, revoked_at = ?
+         WHERE token_hash = ? AND rotated_at IS NULL AND revoked_at IS NULL`
+      )
+      .bind(timestamp, timestamp, tokenHash),
+    db
+      .prepare(
+        `INSERT INTO desktop_access_tokens
+           (token_hash, session_id, user_id, client_id,
+            created_at, expires_at, revoked_at)
+         VALUES (?, ?, ?, ?, ?, ?, NULL)`
+      )
+      .bind(
+        await sha256(issued.accessToken),
+        row.session_id,
+        row.user_id,
+        clientId,
+        timestamp,
+        issued.accessExpiresAt
+      ),
+    db
+      .prepare(
+        `INSERT INTO desktop_refresh_tokens
+           (token_hash, session_id, user_id, client_id,
+            created_at, expires_at, rotated_at, revoked_at)
+         VALUES (?, ?, ?, ?, ?, ?, NULL, NULL)`
+      )
+      .bind(
+        await sha256(issued.refreshToken),
+        row.session_id,
+        row.user_id,
+        clientId,
+        timestamp,
+        issued.refreshExpiresAt
+      )
+  ]);
+  if (results[0]?.meta?.changes !== 1) {
+    await revokeDesktopSession(db, row.session_id, timestamp);
+    throw new AuthenticationError(
+      'Your desktop session expired. Sign in again.',
+      'invalid'
+    );
+  }
+  const { sessionId: _, ...response } = issued;
+  return response;
+}
+
+function readBearerToken(request: Request): string | null {
+  const authorization = request.headers.get('authorization');
+  if (!authorization) {
+    return null;
+  }
+  const match = /^Bearer ([A-Za-z0-9_-]{43})$/.exec(authorization);
+  return match?.[1] ?? null;
+}
+
+async function authenticateDesktopBearer(
+  token: string,
+  env: CloudflareEnv
+): Promise<AuthSession> {
+  const db = await requireDesktopAuth(env);
+  const tokenHash = await sha256(token);
+  const timestamp = nowSeconds();
+  const row = await db
+    .prepare(
+      `SELECT t.session_id, t.user_id, t.client_id, t.expires_at,
+              t.revoked_at, u.email
+       FROM desktop_access_tokens t
+       INNER JOIN users u ON u.id = t.user_id
+       WHERE t.token_hash = ?`
+    )
+    .bind(tokenHash)
+    .first<DesktopTokenRow>();
+  if (
+    !row ||
+    !row.email ||
+    row.client_id !== DESKTOP_CLIENT_ID ||
+    row.expires_at < timestamp ||
+    row.revoked_at !== null
+  ) {
+    if (row && row.expires_at < timestamp) {
+      await db
+        .prepare(`DELETE FROM desktop_access_tokens WHERE token_hash = ?`)
+        .bind(tokenHash)
+        .run();
+    }
+    throw new AuthenticationError(
+      'Your desktop session expired. Sign in again.',
+      'invalid'
+    );
+  }
+  return desktopSession({ user_id: row.user_id, email: row.email });
+}
+
+export async function destroyDesktopAuthorization(
+  request: Request,
+  env: CloudflareEnv
+): Promise<void> {
+  const token = readBearerToken(request);
+  if (!token) {
+    throw new AuthenticationError();
+  }
+  const db = await requireDesktopAuth(env);
+  const row = await db
+    .prepare(
+      `SELECT session_id FROM desktop_access_tokens WHERE token_hash = ?`
+    )
+    .bind(await sha256(token))
+    .first<{ session_id: string }>();
+  if (!row) {
+    throw new AuthenticationError();
+  }
+  await revokeDesktopSession(db, row.session_id, nowSeconds());
+}
+
 export async function destroyEmailSession(
   request: Request,
   env: CloudflareEnv
@@ -672,6 +1311,10 @@ export async function authenticateRequest(
       'configuration'
     );
   }
+  const bearerToken = readBearerToken(request);
+  if (bearerToken) {
+    return authenticateDesktopBearer(bearerToken, env);
+  }
   const token = readCookie(request, SESSION_COOKIE_NAME);
   if (!token) {
     throw new AuthenticationError();
@@ -708,22 +1351,59 @@ export async function authenticateRequest(
 /**
  * The modeling assistant remains available to local-first users. Signed-in
  * users retain their personal provider selection; public users receive a
- * one-way, IP-derived identifier so D1 and providers never receive the raw
- * address as the user identifier.
+ * secret-keyed, IP-derived identifier so D1 and providers never receive the
+ * raw address as the user identifier.
  */
-export async function identifyAssistantRequest(
+export interface AssistantRequestIdentity {
+  userId: AuthSession['userId'];
+  email?: string;
+}
+
+export async function identifyAssistantIdentity(
   request: Request,
   env: CloudflareEnv
-): Promise<AuthSession['userId']> {
+): Promise<AssistantRequestIdentity> {
   if (env.AUTH_MODE !== 'email-code') {
-    return (await authenticateRequest(request, env)).userId;
+    const session = await authenticateRequest(request, env);
+    return {
+      userId: session.userId,
+      ...(session.email ? { email: session.email } : {})
+    };
   }
-  if (readCookie(request, SESSION_COOKIE_NAME)) {
-    return (await authenticateRequest(request, env)).userId;
+  if (
+    readCookie(request, SESSION_COOKIE_NAME) ||
+    readBearerToken(request) !== null
+  ) {
+    const session = await authenticateRequest(request, env);
+    return {
+      userId: session.userId,
+      ...(session.email ? { email: session.email } : {})
+    };
   }
   const connectingIp = request.headers.get('cf-connecting-ip')?.trim();
   if (!connectingIp) {
     throw new AuthenticationError();
   }
-  return hashedUserId('user_anon', connectingIp);
+  const pepper = env.AI_IDENTITY_PEPPER?.trim();
+  if (!pepper) {
+    throw new AuthFlowError(
+      503,
+      'AI_IDENTITY_UNAVAILABLE',
+      'The modeling assistant identity service is unavailable.'
+    );
+  }
+  return {
+    userId: await hmacUserId(
+      'user_anon',
+      `openzcad-ai-user-v1:${connectingIp}`,
+      pepper
+    )
+  };
+}
+
+export async function identifyAssistantRequest(
+  request: Request,
+  env: CloudflareEnv
+): Promise<AuthSession['userId']> {
+  return (await identifyAssistantIdentity(request, env)).userId;
 }

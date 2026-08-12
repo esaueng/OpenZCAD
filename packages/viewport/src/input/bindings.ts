@@ -28,13 +28,24 @@ export interface PointerBindings {
 }
 
 /**
- * Left orbits and right pans throughout: left is also the selection button,
- * and right already distinguishes a stationary click from a pan drag. Only
- * the middle button is genuinely free, and a laptop user without one must
- * never be stranded — which is why no option removes orbit from the left.
+ * OrbitControls retains orbit on left and pan on right. The viewport captures
+ * an unmodified left drag for selection before OrbitControls sees it, then
+ * temporarily flips the underlying left action for Shift+drag below. Only the
+ * middle button is genuinely user-configurable.
  */
 export function pointerBindingsFor(middle: MiddleDragAction): PointerBindings {
   return { left: 'orbit', middle, right: 'pan' };
+}
+
+/**
+ * OrbitControls swaps rotate and pan whenever Shift is held. Arming pan on the
+ * left button before a Shift+drag therefore makes that gesture rotate, while
+ * the viewport's capture-phase router keeps an unmodified drag for selection.
+ */
+export function shiftOrbitBindingsFor(
+  middle: MiddleDragAction
+): PointerBindings {
+  return { ...pointerBindingsFor(middle), left: 'pan' };
 }
 
 export const MIDDLE_DRAG_LABELS: Record<MiddleDragAction, string> = {

@@ -3,13 +3,20 @@ import type { BodyId, ProjectDocument } from '@openzcad/shared';
 import type { AnyCommand, CommandManager } from '@openzcad/command-system';
 import { directEditRejection } from '../lib/directEdit';
 import { errorMessage } from '../lib/errors';
+import { validatedFeatureRejection } from '../lib/featureValidation';
+import type { ValidatedFeatureTarget } from './useValidatedFeatureCommit';
 
 export interface DirectEditCommitOptions {
   manager(): CommandManager | null;
   /** Rebuilds a candidate document against the exact kernel. */
   derive(document: ProjectDocument): Promise<ProjectDocument['derived']>;
-  /** Applies the command for real. False means it was refused. */
-  commit(command: AnyCommand): boolean;
+  /**
+   * Applies the command for real. False means it was refused. `derived` is
+   * the exact rebuild the validation already produced for this command;
+   * attaching it at commit time renders the new geometry immediately instead
+   * of flashing the stale meshes until the broadcast rebuild echoes back.
+   */
+  commit(command: AnyCommand, derived: ProjectDocument['derived']): boolean;
   onValidationStart(value: number): void;
   onValidationFailed(message: string, value: number): void;
   /** The edit landed; the target body is the new selection. */
@@ -28,7 +35,8 @@ export interface DirectEditCommit {
     targetBodyId: BodyId,
     successMessage: string,
     submittedValue?: number,
-    onSuccess?: () => void
+    onSuccess?: () => void,
+    validationTargets?: readonly ValidatedFeatureTarget[]
   ): Promise<boolean>;
 }
 
@@ -58,7 +66,8 @@ export function useDirectEditCommit(
       targetBodyId,
       successMessage,
       submittedValue = 0,
-      onSuccess
+      onSuccess,
+      validationTargets
     ) {
       const host = optionsRef.current;
       const manager = host.manager();
@@ -75,19 +84,40 @@ export function useDirectEditCommit(
         const preview = command.apply(current);
         const derived = await host.derive(preview);
         const live = host.manager();
-        const rejection = directEditRejection({
-          label: command.label,
-          warnings: derived.warnings,
-          bodyPresent: Boolean(derived.bodyRepresentations[targetBodyId]),
-          documentMoved:
-            live !== manager ||
-            manager.document.projectId !== current.projectId ||
-            manager.document.version !== current.version
-        });
+        const documentMoved =
+          live !== manager ||
+          manager.document.projectId !== current.projectId ||
+          manager.document.version !== current.version;
+        let rejection: string | null = null;
+        if (validationTargets) {
+          for (const target of validationTargets) {
+            rejection = validatedFeatureRejection({
+              featureName: target.featureName,
+              warnings: derived.warnings,
+              bodyPresent: Boolean(
+                derived.bodyRepresentations[target.resultBodyId]
+              ),
+              documentMoved
+            });
+            if (rejection) {
+              break;
+            }
+          }
+          if (!rejection && validationTargets.length === 0 && documentMoved) {
+            rejection = 'The document changed while the edit was validating.';
+          }
+        } else {
+          rejection = directEditRejection({
+            label: command.label,
+            warnings: derived.warnings,
+            bodyPresent: Boolean(derived.bodyRepresentations[targetBodyId]),
+            documentMoved
+          });
+        }
         if (rejection) {
           throw new Error(rejection);
         }
-        if (!host.commit(command)) {
+        if (!host.commit(command, derived)) {
           throw new Error('The validated edit could not be committed.');
         }
         host.onCommitted(targetBodyId);

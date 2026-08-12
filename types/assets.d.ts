@@ -10,7 +10,11 @@ declare module '*.mjs?url' {
 }
 
 interface ImportMetaEnv {
+  readonly VITE_E2E?: string;
   readonly OZ_PERF?: string;
+  readonly OZ_BUILD_COMMIT: string;
+  readonly OZ_BREPKIT_VERSION: string;
+  readonly OZ_BREPKIT_COMMIT: string;
 }
 
 interface ImportMeta {

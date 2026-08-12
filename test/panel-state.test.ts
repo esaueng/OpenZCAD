@@ -74,6 +74,51 @@ describe('workspace panel state', () => {
     expect(normalizePanelState([1, 2])).toEqual(defaultPanelState());
   });
 
+  it('remembers the assistant dock across reloads', () => {
+    // Collapsed to begin with — a new workspace opens on the model — but the
+    // choice is a layout habit, so opening it has to survive a reload.
+    expect(defaultPanelState().assistantCollapsed).toBe(true);
+    expect(
+      savePanelState({ ...defaultPanelState(), assistantCollapsed: false })
+    ).toBe(true);
+    expect(loadPanelState().assistantCollapsed).toBe(false);
+    expect(
+      normalizePanelState({ assistantCollapsed: 'yes' }).assistantCollapsed
+    ).toBe(true);
+  });
+
+  it('remembers the workspace mode across reloads', () => {
+    // Build to begin with: View has to be chosen, never arrived at by default.
+    expect(defaultPanelState().workspaceMode).toBe('build');
+    expect(
+      savePanelState({ ...defaultPanelState(), workspaceMode: 'view' })
+    ).toBe(true);
+    expect(loadPanelState().workspaceMode).toBe('view');
+  });
+
+  it('falls back to Build on an unrecognised workspace mode', () => {
+    // A stored value from a future build must not strip the modeling UI.
+    expect(normalizePanelState({ workspaceMode: 'review' }).workspaceMode).toBe(
+      'build'
+    );
+    expect(normalizePanelState({ workspaceMode: 7 }).workspaceMode).toBe(
+      'build'
+    );
+  });
+
+  it('remembers the parts rail across reloads', () => {
+    // Open to begin with; collapsing it is what leaves a single-body model the
+    // bare viewport, and that choice is a habit worth restoring.
+    expect(defaultPanelState().viewModeRailOpen).toBe(true);
+    expect(
+      savePanelState({ ...defaultPanelState(), viewModeRailOpen: false })
+    ).toBe(true);
+    expect(loadPanelState().viewModeRailOpen).toBe(false);
+    expect(
+      normalizePanelState({ viewModeRailOpen: 'no' }).viewModeRailOpen
+    ).toBe(true);
+  });
+
   it('ignores unknown sections and wrong types', () => {
     const normalized = normalizePanelState({
       toolPaletteOpen: 'yes',

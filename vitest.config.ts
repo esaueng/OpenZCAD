@@ -35,6 +35,10 @@ const brepkitOverlay = process.env.BREPKIT_WASM_PKG
 export default defineConfig({
   test: {
     environment: 'node',
+    // Exact-kernel suites instantiate large OCCT/BrepKit WASM modules. Keep
+    // file-level parallelism bounded so CI does not turn kernel startup into
+    // unrelated five-second test timeouts under CPU and memory contention.
+    maxWorkers: 4,
     // Package-owned tests live beside their source so they resolve that
     // package's own dependencies (`three` is not a root dependency).
     include: ['test/**/*.test.ts', 'packages/*/src/**/*.test.ts'],
@@ -55,6 +59,12 @@ export default defineConfig({
       ...brepkitOverlay,
       '@openzcad/kernel-adapter/exact': fileURLToPath(
         new URL('./packages/kernel-adapter/src/exact.ts', import.meta.url)
+      ),
+      '@openzcad/ai-contracts/auto-parameterize': fileURLToPath(
+        new URL(
+          './packages/ai-contracts/src/auto-parameterize.ts',
+          import.meta.url
+        )
       ),
       ...workspaceAliases,
       'cloudflare:workers': fileURLToPath(

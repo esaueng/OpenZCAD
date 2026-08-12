@@ -30,6 +30,8 @@ export interface DragRig {
   /** Drives the preview; also called by exact numeric entry. */
   setValue(value: number): void;
   value(): number;
+  /** Optional invalid-preview treatment for rigs that can rebuild exactly. */
+  setWarning?(warning: boolean): void;
   /** World point the value chip should track, given the rig's frame scale. */
   chipAnchor(gizmoScale: number): THREE.Vector3;
   dispose(): void;
@@ -41,7 +43,7 @@ export interface HandleVec3 {
   z: number;
 }
 
-export const HANDLE_COLOR = 0x4da3ff;
+export const HANDLE_COLOR = 0xff8a2b;
 
 /** Handles draw over the model so the target is never buried in geometry. */
 export const HANDLE_RENDER_ORDER = 30;
@@ -53,7 +55,7 @@ export function toVector3(value: HandleVec3): THREE.Vector3 {
   return new THREE.Vector3(value.x, value.y, value.z);
 }
 
-/** The opaque blue every handle shares. */
+/** The opaque orange every handle shares. */
 export function handleMaterial(opacity = 0.95): THREE.MeshBasicMaterial {
   return new THREE.MeshBasicMaterial({
     color: HANDLE_COLOR,

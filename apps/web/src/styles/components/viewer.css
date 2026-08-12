@@ -23,7 +23,15 @@
   inset: 0;
 }
 
-/* Right-hand utility stack: orientation widget on top, labeled rail below. */
+/* HudLayer owns imperative canvas overlays whose class styles may select a
+   layout display mode. The hidden state always wins so transient markers and
+   labels cannot survive after their interaction mode exits. */
+[data-viewport-hud][hidden] {
+  display: none !important;
+}
+
+/* Top-right orientation widget. The utility rail used to stack beneath it;
+   it now sits centred against the right edge as `.viewer-rail`. */
 .viewer-rail-stack {
   position: absolute;
   top: 10px;
@@ -39,47 +47,74 @@
   position: static;
 }
 
+/* Utility rail: viewport state as icons, centred on the right edge so it
+   clears the orientation widget instead of stacking under it. */
 .viewer-rail {
+  position: absolute;
+  top: 50%;
+  right: 10px;
+  transform: translateY(-50%);
+  z-index: var(--z-viewer-overlay);
   display: flex;
   flex-direction: column;
-  align-items: stretch;
   gap: 2px;
-  padding: 5px;
+  padding: 4px;
   background: var(--color-surface);
   border: var(--border-thin);
   border-radius: var(--radius-md);
 }
 
-.rail-views {
-  display: flex;
-  gap: 2px;
-  justify-content: flex-end;
-  margin-bottom: 2px;
-}
-
-.rail-views button {
-  min-width: 26px;
-  min-height: 22px;
-  padding: 0 5px;
+.rail-button {
+  width: 26px;
+  height: 26px;
+  display: grid;
+  place-items: center;
   color: var(--color-text-muted);
   border: 1px solid transparent;
   border-radius: var(--radius-sm);
-  font-family: var(--font-mono);
-  font-size: var(--fs-mini);
 }
 
-.rail-views button:hover {
+.rail-button:hover:not(:disabled),
+.rail-button.open {
   color: var(--color-text);
   background: var(--color-surface-2);
 }
 
-.rail-row {
-  min-height: 26px;
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  gap: 7px;
-  padding: 2px 6px;
+.rail-button.active {
+  color: var(--color-accent);
+  background: var(--color-accent-dim);
+  border-color: var(--color-accent-border);
+}
+
+.rail-divider {
+  height: 1px;
+  margin: 3px 2px;
+  background: var(--color-border);
+}
+
+.rail-views-anchor {
+  position: relative;
+}
+
+/* Opens to the left of the rail and grows upward, so it never covers the
+   rail itself and stays clear of the status bar. */
+.rail-views-panel {
+  position: absolute;
+  right: calc(100% + 7px);
+  bottom: -4px;
+  display: grid;
+  grid-template-columns: repeat(2, 66px);
+  gap: 2px;
+  padding: 4px;
+  background: var(--color-surface);
+  border: var(--border-thin);
+  border-radius: var(--radius-md);
+  box-shadow: 0 8px 22px rgba(0, 0, 0, 0.45);
+}
+
+.rail-views-panel button {
+  min-height: 22px;
+  padding: 0 6px;
   color: var(--color-text-muted);
   border: 1px solid transparent;
   border-radius: var(--radius-sm);
@@ -87,27 +122,13 @@
   white-space: nowrap;
 }
 
-.rail-row:hover {
+.rail-views-panel button:hover {
   color: var(--color-text);
   background: var(--color-surface-2);
 }
 
-.rail-row.active {
-  color: var(--color-accent);
-  background: var(--color-accent-dim);
-  border-color: var(--color-accent-border);
-}
-
-.rail-icon {
-  display: inline-grid;
-  place-items: center;
-  font-style: normal;
-}
-
-.rail-label {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
+.rail-view-wide {
+  grid-column: 1 / -1;
 }
 
 .selection-callout {
@@ -145,6 +166,31 @@
     scale(var(--dimension-label-scale, 1));
   transform-origin: center center;
   will-change: transform;
+}
+
+.selection-callout.measurement-callout {
+  padding: 4px 8px;
+  color: rgba(225, 242, 255, 0.96);
+  background: rgba(9, 24, 40, 0.82);
+  border-color: rgba(124, 192, 255, 0.58);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.28);
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  font-variant-numeric: tabular-nums;
+  pointer-events: none;
+}
+
+.selection-callout.measurement-callout.selected {
+  color: white;
+  border-color: rgba(155, 211, 255, 0.9);
+  box-shadow:
+    0 0 0 1px rgba(155, 211, 255, 0.32),
+    0 5px 16px rgba(0, 0, 0, 0.32);
+}
+
+.selection-callout.measurement-callout.stale {
+  color: #f7c76f;
+  border-color: rgba(245, 158, 11, 0.58);
 }
 
 /* Editable dimension pill: drag the face, or click the value to type. */
@@ -231,87 +277,6 @@
   background: var(--color-surface-hover);
 }
 
-/* Viewport HUD: ghost stat chips bottom-left (the rail covers view/display
-   state top-right), plus the drafting-frame corner marks. */
-.vp-hud {
-  position: absolute;
-  z-index: var(--z-viewer-overlay);
-  display: flex;
-  gap: 6px;
-  align-items: center;
-  pointer-events: none;
-}
-
-.vp-hud-bl {
-  bottom: 10px;
-  left: 10px;
-}
-
-.vp-chip {
-  display: inline-flex;
-  align-items: center;
-  min-height: 16px;
-  padding: 1px 6px;
-  color: var(--color-text-muted);
-  background: rgba(17, 24, 33, 0.82);
-  border: var(--border-thin);
-  border-radius: var(--radius-sm);
-  font-family: var(--font-mono);
-  font-size: var(--fs-mini);
-  line-height: 1.4;
-  text-transform: uppercase;
-  white-space: nowrap;
-}
-
-.vp-chip-sel {
-  color: var(--color-accent);
-  background: var(--color-accent-dim);
-  border-color: var(--color-accent-border);
-}
-
-.viewport-frame {
-  position: absolute;
-  inset: 10px;
-  pointer-events: none;
-  z-index: 1;
-}
-
-.frame-corner {
-  position: absolute;
-  width: 18px;
-  height: 18px;
-  border: 0 solid var(--color-border-strong);
-  opacity: 0.55;
-}
-
-.frame-corner.tl {
-  top: 0;
-  left: 0;
-  border-top-width: 1px;
-  border-left-width: 1px;
-}
-
-.frame-corner.tr {
-  top: 0;
-  right: 0;
-  border-top-width: 1px;
-  border-right-width: 1px;
-}
-
-.frame-corner.bl {
-  bottom: 0;
-  left: 0;
-  border-bottom-width: 1px;
-  border-left-width: 1px;
-}
-
-.frame-corner.br {
-  bottom: 0;
-  right: 0;
-  border-bottom-width: 1px;
-  border-right-width: 1px;
-}
-
 /* Snap glyph: a marker on the point a drag locked onto, with the kind named
    beside it. The name is the part that matters — a marker says something
    happened, the word says the position is exact rather than merely close. */
@@ -350,7 +315,7 @@
   border-radius: 999px;
 }
 
-/* Shift-drag rubber band. Solid for window select, dashed for crossing —
+/* Drag-selection rubber band. Solid for window select, dashed for crossing —
    the same shorthand mechanical CAD has used for decades, so the rule in
    force is readable while the drag is still happening. */
 .selection-band {
@@ -425,77 +390,3 @@
     0 0 18px color-mix(in srgb, var(--gizmo-axis-color) 65%, transparent),
     0 10px 28px rgba(0, 0, 0, 0.5);
 }
-
-.viewer-notice {
-  position: absolute;
-  inset: 0;
-  z-index: var(--z-viewer-overlay);
-  display: grid;
-  place-items: center;
-  pointer-events: none;
-}
-
-.viewer-notice > div {
-  width: 320px;
-  display: grid;
-  gap: 6px;
-  padding: 14px 16px;
-  color: var(--color-text);
-  background: rgba(17, 24, 33, 0.92);
-  border: 1px solid var(--color-accent-border);
-  border-radius: var(--radius-md);
-  text-align: center;
-}
-
-.viewer-notice small {
-  color: var(--color-text-muted);
-  line-height: 1.45;
-}
-
-.viewer-notice-keys {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 4px;
-  margin-top: 2px;
-}
-
-/* The card is the one moment the user is certainly looking here, so its
-   actions have to be clickable even though the notice itself is not. */
-.viewer-notice-actions {
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: center;
-  gap: 4px;
-  margin: 4px 0 2px;
-  pointer-events: auto;
-}
-
-.viewer-notice-actions button {
-  min-height: 28px;
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  padding: 0 9px;
-  color: var(--color-text);
-  background: var(--color-surface-2);
-  border: 1px solid var(--color-border-strong);
-  border-radius: var(--radius-sm);
-  font-size: var(--fs-xs);
-}
-
-.viewer-notice-actions button:hover {
-  background: var(--color-surface-hover);
-  border-color: var(--color-accent-border);
-}
-
-.viewer-notice-actions .viewer-notice-assistant {
-  color: var(--color-accent);
-  background: var(--color-accent-dim);
-  border-color: var(--color-accent-border);
-}
-
-.viewer-notice-actions kbd {
-  color: var(--color-text-subtle);
-}
-

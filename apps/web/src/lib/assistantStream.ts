@@ -6,10 +6,57 @@ import {
   type AssistantReply,
   type CadDocumentDigest
 } from '@openzcad/ai-contracts';
+import { desktopFetch } from './desktopBridge';
 
 interface AssistantStreamOptions {
   signal?: AbortSignal;
   onDelta?(text: string): void;
+}
+
+export type AssistantStreamErrorCode =
+  | 'AI_EMPTY_REPLY'
+  | 'AI_INVALID_JSON'
+  | 'AI_INVALID_REPLY'
+  | 'AI_OUTPUT_INCOMPLETE'
+  | 'AI_PROVIDER_STREAM_ERROR'
+  | 'AI_STREAM_CONNECTION'
+  | 'AI_STREAM_PROTOCOL'
+  | 'AI_STREAM_TRUNCATED';
+
+export const INVALID_STRUCTURED_OUTPUT_MESSAGE =
+  'The provider returned invalid structured output.';
+
+function safeRequestId(response: Response): string | undefined {
+  const value = response.headers.get('x-openzcad-request-id')?.trim();
+  return value &&
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+      value
+    )
+    ? value
+    : undefined;
+}
+
+function messageWithReference(
+  message: string,
+  requestId: string | undefined
+): string {
+  return requestId ? `${message} Reference: ${requestId}.` : message;
+}
+
+export class AssistantStreamError extends Error {
+  readonly code: AssistantStreamErrorCode;
+  readonly requestId?: string;
+
+  constructor(
+    code: AssistantStreamErrorCode,
+    message: string,
+    requestId?: string
+  ) {
+    super(messageWithReference(message, requestId));
+    this.name = 'AssistantStreamError';
+    this.code = code;
+    this.requestId = requestId;
+  }
 }
 
 export interface AssistantTurnRequest {
@@ -31,7 +78,7 @@ export interface AssistantStatus {
 export async function loadAssistantStatus(
   signal?: AbortSignal
 ): Promise<AssistantStatus> {
-  const response = await fetch('/api/assistant/status', { signal });
+  const response = await desktopFetch('/api/assistant/status', { signal });
   if (!response.ok) {
     throw new Error(`Assistant status check failed (${response.status}).`);
   }
@@ -40,14 +87,16 @@ export async function loadAssistantStatus(
 
 export function readAssistantEvent(
   event: unknown,
-  currentText: string
+  currentText: string,
+  requestId?: string
 ): { text: string; done: boolean } {
   if (!event || typeof event !== 'object') {
     return { text: currentText, done: false };
   }
   const value = event as Record<string, unknown>;
   if (
-    value.type === 'response.output_text.delta' &&
+    (value.type === 'response.output_text.delta' ||
+      value.type === 'response.content_part.delta') &&
     typeof value.delta === 'string'
   ) {
     return { text: currentText + value.delta, done: false };
@@ -56,43 +105,78 @@ export function readAssistantEvent(
     value.type === 'response.output_text.done' &&
     typeof value.text === 'string'
   ) {
-    return { text: value.text, done: true };
+    return { text: value.text, done: false };
   }
+  if (
+    value.type === 'response.output_item.done' &&
+    value.item &&
+    typeof value.item === 'object' &&
+    !Array.isArray(value.item)
+  ) {
+    const item = value.item as Record<string, unknown>;
+    const text = Array.isArray(item.content)
+      ? item.content
+          .flatMap((part) =>
+            part &&
+            typeof part === 'object' &&
+            !Array.isArray(part) &&
+            (part as Record<string, unknown>).type === 'output_text' &&
+            typeof (part as Record<string, unknown>).text === 'string'
+              ? [(part as Record<string, unknown>).text as string]
+              : []
+          )
+          .join('')
+      : '';
+    if (text) {
+      return { text, done: false };
+    }
+  }
+  const response =
+    value.response &&
+    typeof value.response === 'object' &&
+    !Array.isArray(value.response)
+      ? (value.response as Record<string, unknown>)
+      : undefined;
+  const responseDoneFailure =
+    value.type === 'response.done' &&
+    (response?.status === 'failed' || response?.status === 'incomplete');
   if (
     value.type === 'response.failed' ||
     value.type === 'response.incomplete' ||
+    value.type === 'response.error' ||
+    responseDoneFailure ||
     value.type === 'error'
   ) {
-    const response =
-      value.response && typeof value.response === 'object'
-        ? (value.response as Record<string, unknown>)
-        : value;
-    const detail =
-      response.error && typeof response.error === 'object'
-        ? (response.error as Record<string, unknown>).message
-        : undefined;
+    const failure = response ?? value;
     // A truncated response arrives as a normal `response.incomplete` event, not
     // an upstream error, so name the cause instead of reporting it as a generic
     // failure the user cannot act on.
     const incompleteReason =
-      response.incomplete_details &&
-      typeof response.incomplete_details === 'object'
-        ? (response.incomplete_details as Record<string, unknown>).reason
+      failure.incomplete_details &&
+      typeof failure.incomplete_details === 'object'
+        ? (failure.incomplete_details as Record<string, unknown>).reason
         : undefined;
     if (incompleteReason === 'max_output_tokens') {
-      throw new Error(
-        'The modeling assistant ran out of output budget before finishing the patch. Try a simpler request, or raise AI_MAX_OUTPUT_TOKENS.'
+      throw new AssistantStreamError(
+        'AI_OUTPUT_INCOMPLETE',
+        'The modeling assistant ran out of output budget before finishing the patch. Try a simpler request, or raise AI_MAX_OUTPUT_TOKENS.',
+        requestId
       );
     }
-    throw new Error(
-      typeof detail === 'string'
-        ? detail
-        : typeof incompleteReason === 'string'
-          ? `The modeling assistant could not complete the proposal (${incompleteReason}).`
-          : 'The modeling assistant could not complete the proposal.'
+    throw new AssistantStreamError(
+      value.type === 'response.incomplete' || response?.status === 'incomplete'
+        ? 'AI_OUTPUT_INCOMPLETE'
+        : 'AI_PROVIDER_STREAM_ERROR',
+      'The modeling assistant could not complete the proposal.',
+      requestId
     );
   }
-  return { text: currentText, done: value.type === 'response.completed' };
+  return {
+    text: currentText,
+    done:
+      value.type === 'response.completed' ||
+      (value.type === 'response.done' && response?.status === 'completed')
+  };
 }
 
 export function parseAssistantEventData(
@@ -109,7 +193,7 @@ export async function streamAssistantReply(
   request: AssistantTurnRequest,
   options: AssistantStreamOptions = {}
 ): Promise<AssistantReply> {
-  const response = await fetch('/api/assistant/proposals', {
+  const response = await desktopFetch('/api/assistant/proposals', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({
@@ -120,12 +204,16 @@ export async function streamAssistantReply(
     }),
     signal: options.signal
   });
+  const requestId = safeRequestId(response);
   if (!response.ok || !response.body) {
     const error = (await response.json().catch(() => null)) as {
       error?: string;
     } | null;
     throw new Error(
-      error?.error ?? `Assistant request failed (${response.status}).`
+      messageWithReference(
+        error?.error ?? `Assistant request failed (${response.status}).`,
+        requestId
+      )
     );
   }
 
@@ -146,45 +234,78 @@ export async function streamAssistantReply(
     }
     const parsed = parseAssistantEventData(data);
     if (parsed === null) {
-      return;
+      throw new AssistantStreamError(
+        'AI_STREAM_PROTOCOL',
+        'The modeling assistant returned an invalid stream event.',
+        requestId
+      );
     }
-    const next = readAssistantEvent(parsed.event, output);
+    const next = readAssistantEvent(parsed.event, output, requestId);
     output = next.text;
     completed ||= next.done;
     options.onDelta?.(output);
   };
 
-  try {
-    while (true) {
-      const { value, done } = await reader.read();
-      buffer += decoder.decode(value, { stream: !done });
-      const blocks = buffer.split(/\r?\n\r?\n/);
-      buffer = blocks.pop() ?? '';
-      for (const block of blocks) {
-        consumeBlock(block);
-      }
-      if (done) {
-        if (buffer.trim()) {
-          consumeBlock(buffer);
-        }
-        break;
-      }
+  while (true) {
+    let result: ReadableStreamReadResult<Uint8Array>;
+    try {
+      result = await reader.read();
+    } catch {
+      throw new AssistantStreamError(
+        'AI_STREAM_CONNECTION',
+        'The modeling assistant connection ended before the proposal was complete.',
+        requestId
+      );
     }
-  } catch {
-    throw new Error(
-      'The modeling assistant connection ended before the proposal was complete.'
-    );
+    const { value, done } = result;
+    buffer += decoder.decode(value, { stream: !done });
+    const blocks = buffer.split(/\r?\n\r?\n/);
+    buffer = blocks.pop() ?? '';
+    for (const block of blocks) {
+      consumeBlock(block);
+    }
+    if (done) {
+      if (buffer.trim()) {
+        consumeBlock(buffer);
+      }
+      break;
+    }
   }
 
   if (!completed) {
-    throw new Error(
-      'The modeling assistant stream ended before the proposal was complete.'
+    throw new AssistantStreamError(
+      'AI_STREAM_TRUNCATED',
+      'The modeling assistant stream ended before the proposal was complete.',
+      requestId
     );
   }
   if (!output.trim()) {
-    throw new Error('The modeling assistant returned an empty proposal.');
+    throw new AssistantStreamError(
+      'AI_EMPTY_REPLY',
+      'The modeling assistant returned an empty proposal.',
+      requestId
+    );
   }
-  const reply = parseAssistantReply(JSON.parse(output));
+  let decoded: unknown;
+  try {
+    decoded = JSON.parse(output) as unknown;
+  } catch {
+    throw new AssistantStreamError(
+      'AI_INVALID_JSON',
+      INVALID_STRUCTURED_OUTPUT_MESSAGE,
+      requestId
+    );
+  }
+  let reply: AssistantReply;
+  try {
+    reply = parseAssistantReply(decoded);
+  } catch {
+    throw new AssistantStreamError(
+      'AI_INVALID_REPLY',
+      INVALID_STRUCTURED_OUTPUT_MESSAGE,
+      requestId
+    );
+  }
   // Grounding replaces the model's guesses at which entities words like
   // "these edges" mean with the actual UI selection, so it applies to the one
   // branch that names entities.

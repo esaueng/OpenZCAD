@@ -5,6 +5,15 @@
 Accepted. Amends ADR-008 (which allowed traversal ordinals as topology
 references) and the persistence half of ADR-010.
 
+**Amended 2026-08-01 (Z3).** The kernel reroute described in Context below no
+longer happens: BrepKit builds every document, imported STEP included, and a
+STEP feature does not switch kernels. The decision is unchanged and its value
+is not diminished — kernel-neutral fingerprints are exactly what let documents
+saved before the flip keep resolving after it, and what lets the parity corpus
+and `test/kernel-seam.test.ts` still hold BrepKit and OpenCascade to the same
+identities while OCCT survives as a reference. The Context section is left as
+written, because it is the record of why this was decided.
+
 ## Context
 
 OpenZCAD builds every document on one of two exact kernels: BrepKit normally,
