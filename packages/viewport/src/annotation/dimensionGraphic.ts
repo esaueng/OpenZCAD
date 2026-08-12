@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { Line2 } from 'three/examples/jsm/lines/Line2.js';
 import { LineGeometry } from 'three/examples/jsm/lines/LineGeometry.js';
 import { LineMaterial } from 'three/examples/jsm/lines/LineMaterial.js';
+import type { FatLineResolution } from '../render/scene';
 
 /**
  * A drawing's dimension, drawn in the scene.
@@ -48,6 +49,11 @@ const WITNESS_OVERSHOOT = 0.6;
 export interface DimensionGraphicOptions {
   /** Draw the short ticks that stand the dimension off the geometry. */
   witnessLines?: boolean;
+  /** Shared line/arrow color; defaults to drawing white. */
+  color?: THREE.ColorRepresentation;
+  linewidth?: number;
+  opacity?: number;
+  depthTest?: boolean;
   /** Render order for the line; arrowheads take this plus one. */
   renderOrder?: number;
 }
@@ -65,45 +71,76 @@ export interface DimensionGraphic {
    * arrowheads at their pre-zoom size.
    */
   update(start: THREE.Vector3, end: THREE.Vector3, pixelScale: number): void;
+  /** Changes linework and arrowheads in place without rebuilding geometry. */
+  setColor(color: THREE.ColorRepresentation): void;
   /** A point on the dimension line, for hanging the value label from. */
   labelAnchor(): THREE.Vector3;
   dispose(): void;
 }
 
-function dimensionMaterial(): LineMaterial {
-  return new LineMaterial({
-    color: DIMENSION_LINE_COLOR,
-    linewidth: 1.5,
+export interface DimensionLineMaterialOptions {
+  color?: THREE.ColorRepresentation;
+  linewidth?: number;
+  opacity?: number;
+  depthTest?: boolean;
+  resolution?: FatLineResolution;
+}
+
+/** Shared dashed drawing line used by dimensions and analytic references. */
+export function createDimensionLineMaterial(
+  options: DimensionLineMaterialOptions = {}
+): LineMaterial {
+  const material = new LineMaterial({
+    color: options.color ?? DIMENSION_LINE_COLOR,
+    linewidth: options.linewidth ?? 1.5,
     dashed: true,
     dashSize: 2,
     gapSize: 1.5,
     transparent: true,
-    opacity: 0.9,
+    opacity: options.opacity ?? 0.9,
     // Dimensions read through the part, the way they do on paper. A dimension
     // hidden by the very geometry it measures is worse than no dimension.
-    depthTest: false
+    depthTest: options.depthTest ?? false
   });
+  material.resolution.set(
+    Math.max(options.resolution?.width ?? 1, 1),
+    Math.max(options.resolution?.height ?? 1, 1)
+  );
+  return material;
 }
 
 export function createDimensionGraphic(
   options: DimensionGraphicOptions = {}
 ): DimensionGraphic {
   const renderOrder = options.renderOrder ?? 29;
+  const color = options.color ?? DIMENSION_LINE_COLOR;
+  const opacity = options.opacity ?? 0.9;
+  const depthTest = options.depthTest ?? false;
   const object = new THREE.Group();
   object.name = 'dimension-graphic';
 
   const lineGeometry = new LineGeometry();
   lineGeometry.setPositions([0, 0, 0, 0, 0, 0]);
-  const line = new Line2(lineGeometry, dimensionMaterial());
+  const line = new Line2(
+    lineGeometry,
+    createDimensionLineMaterial({
+      color,
+      ...(options.linewidth === undefined
+        ? {}
+        : { linewidth: options.linewidth }),
+      opacity,
+      depthTest
+    })
+  );
   line.computeLineDistances();
   line.renderOrder = renderOrder;
   object.add(line);
 
   const arrowMaterial = new THREE.MeshBasicMaterial({
-    color: DIMENSION_LINE_COLOR,
+    color,
     transparent: true,
-    opacity: 0.95,
-    depthTest: false
+    opacity: Math.min(opacity + 0.05, 1),
+    depthTest
   });
   // One cone geometry shared by both heads: they are the same shape, and the
   // second allocation would be freed by the same dispose anyway.
@@ -130,11 +167,11 @@ export function createDimensionGraphic(
       const witness = new Line2(
         geometry,
         new LineMaterial({
-          color: DIMENSION_LINE_COLOR,
+          color,
           linewidth: 1,
           transparent: true,
-          opacity: 0.55,
-          depthTest: false
+          opacity: opacity * 0.61,
+          depthTest
         })
       );
       witness.renderOrder = renderOrder;
@@ -222,6 +259,13 @@ export function createDimensionGraphic(
       // than the midpoint: dead centre collides with the dimension line's own
       // dash pattern more often than not.
       anchor.copy(start).addScaledVector(axis, length * 0.45);
+    },
+    setColor(nextColor) {
+      line.material.color.set(nextColor);
+      arrowMaterial.color.set(nextColor);
+      for (const witness of witnesses) {
+        witness.material.color.set(nextColor);
+      }
     },
     labelAnchor() {
       return anchor.clone();

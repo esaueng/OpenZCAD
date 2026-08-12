@@ -21,6 +21,8 @@ export interface FaceTarget extends FaceCapabilityTarget {
   point: [number, number, number];
   /** Outward face normal at the click point. */
   normal: [number, number, number];
+  /** Frozen exact face center used to re-resolve planar preview topology. */
+  surfaceCenter?: [number, number, number];
   /** Fixed world-space axis snapshot for a cylindrical radius gesture. */
   axisStart?: [number, number, number];
   axisEnd?: [number, number, number];
@@ -78,7 +80,11 @@ export type InteractionState =
   | ({
       mode: 'face';
       target: FaceTarget;
-      op: 'offset-face' | 'resize-cylinder-radius';
+      op:
+        | 'offset-face'
+        | 'resize-cylinder-radius'
+        | 'edit-fillet'
+        | 'remove-face-feature';
     } & OperationLifecycle)
   | ({
       mode: 'edges';
@@ -192,7 +198,11 @@ export function interactionReducer(
         op:
           preferred.action === 'resize-radial-face'
             ? 'resize-cylinder-radius'
-            : 'offset-face',
+            : preferred.action === 'edit-fillet'
+              ? 'edit-fillet'
+              : preferred.action === 'remove-face-feature'
+                ? 'remove-face-feature'
+                : 'offset-face',
         ...ARMED
       };
     }
@@ -475,27 +485,50 @@ export function toolCardFor(state: InteractionState): ToolCardModel | null {
         active:
           (state.op === 'offset-face' && capability.action === 'offset-face') ||
           (state.op === 'resize-cylinder-radius' &&
-            capability.action === 'resize-radial-face')
+            capability.action === 'resize-radial-face') ||
+          (state.op === 'edit-fillet' && capability.action === 'edit-fillet') ||
+          (state.op === 'remove-face-feature' &&
+            capability.action === 'remove-face-feature')
       }));
-      return state.op === 'resize-cylinder-radius'
+      return state.op === 'edit-fillet'
         ? {
-            icon: 'resize-cylinder-radius',
-            title: 'Resize Cylinder Radius',
-            ...(actions.length > 1 ? { actions } : {}),
+            icon: 'fillet',
+            title: 'Edit Fillet',
+            actions,
             ...lifecycleHint(
               state,
-              'Drag the radial handle or tap the value to set the radius.'
+              'Drag the radial handle or tap R to edit · set R0 to remove.'
             )
           }
-        : {
-            icon: 'offset-face',
-            title: 'Offset Face',
-            ...(actions.length > 1 ? { actions } : {}),
-            ...lifecycleHint(
-              state,
-              'Drag the arrow to offset the face, or tap the value to type · Space faces it head-on.'
-            )
-          };
+        : state.op === 'remove-face-feature'
+          ? {
+              icon: 'fillet',
+              title: 'Blend Face',
+              actions,
+              ...lifecycleHint(
+                state,
+                `R${state.target.blendRadius ?? '?'} is read-only; this imported blend can be removed.`
+              )
+            }
+          : state.op === 'resize-cylinder-radius'
+            ? {
+                icon: 'resize-cylinder-radius',
+                title: 'Resize Cylinder Radius',
+                ...(actions.length > 1 ? { actions } : {}),
+                ...lifecycleHint(
+                  state,
+                  'Drag the radial handle or tap the value to set the radius.'
+                )
+              }
+            : {
+                icon: 'offset-face',
+                title: 'Offset Face',
+                ...(actions.length > 1 ? { actions } : {}),
+                ...lifecycleHint(
+                  state,
+                  'Drag the arrow to offset the face, or tap the value to type · Space faces it head-on.'
+                )
+              };
     }
     case 'edges': {
       const actions = selectionCapabilities({
