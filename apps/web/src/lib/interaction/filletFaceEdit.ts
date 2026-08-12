@@ -110,6 +110,29 @@ export function canRemoveImportedBlendFace(
   );
 }
 
+export const IMPORTED_BLEND_REMOVABLE_NOTICE =
+  'STEP stores topology, not native Fillet history, so this radius is read-only. Use Remove selected feature for a validated direct edit, then recreate the detail as a native Fillet; Undo restores the imported body.';
+
+export const IMPORTED_BLEND_READ_ONLY_NOTICE =
+  'This radius is read-only because STEP stores topology, not native Fillet history. The exact kernel has not proved a safe edit path for this face; recreate the detail as a native Fillet to make its radius editable.';
+
+/** Actionable copy for an imported blend without inventing feature history. */
+export function importedBlendEditNotice(
+  body: BodyRepresentation,
+  face: FaceTopology
+): string | null {
+  if (
+    body.source !== 'imported-step' ||
+    face.geometry?.featureType !== 'blend' ||
+    face.geometry.blendRadius === undefined
+  ) {
+    return null;
+  }
+  return canRemoveImportedBlendFace(body, face)
+    ? IMPORTED_BLEND_REMOVABLE_NOTICE
+    : IMPORTED_BLEND_READ_ONLY_NOTICE;
+}
+
 /** Exact analytic radial direction for the on-face fillet handle. */
 export function blendRadialDirection(
   geometry: FaceGeometry,
