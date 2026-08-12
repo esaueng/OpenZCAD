@@ -22,6 +22,7 @@ import type {
   SketchObjectData,
   TopologySelection
 } from '@openzcad/shared';
+import type { DimensionMode } from '../lib/keypad';
 import {
   BooleanForm,
   EdgeModifierForm,
@@ -164,7 +165,10 @@ interface InspectorProps extends InspectorCallbacks {
   /** Sketch to pre-select in extrude/revolve, e.g. the one picked in the tree. */
   preferredSketchId: SketchId | null;
   /** Active cylindrical-wall gesture, localized to the inspector subtree. */
-  cylinderRadiusEdit: { initialRadius: number } | null;
+  cylinderRadiusEdit: {
+    initialRadius: number;
+    dimensionMode: DimensionMode;
+  } | null;
   cylinderRadiusSetterRef: MutableRefObject<
     ((radius: number | null) => void) | null
   >;
@@ -582,23 +586,24 @@ export function Inspector(props: InspectorProps) {
   const [liveCylinderRadius, setLiveCylinderRadius] = useState<number | null>(
     cylinderRadiusEdit?.initialRadius ?? null
   );
+  const initialCylinderRadius = cylinderRadiusEdit?.initialRadius ?? null;
   const selectedEdgeReferences = selectedEdges.flatMap((edge) =>
     edge.reference?.kind === 'edge' ? [edge.reference] : []
   );
 
   useEffect(() => {
-    if (!cylinderRadiusEdit) {
+    if (initialCylinderRadius === null) {
       setLiveCylinderRadius(null);
       cylinderRadiusSetterRef.current = null;
       return;
     }
-    setLiveCylinderRadius(cylinderRadiusEdit.initialRadius);
+    setLiveCylinderRadius(initialCylinderRadius);
     cylinderRadiusSetterRef.current = (radius) =>
-      setLiveCylinderRadius(radius ?? cylinderRadiusEdit.initialRadius);
+      setLiveCylinderRadius(radius ?? initialCylinderRadius);
     return () => {
       cylinderRadiusSetterRef.current = null;
     };
-  }, [cylinderRadiusEdit, cylinderRadiusSetterRef]);
+  }, [cylinderRadiusSetterRef, initialCylinderRadius]);
 
   /**
    * Hand an edit panel the keyboard without handing it a field.
@@ -1008,13 +1013,23 @@ export function Inspector(props: InspectorProps) {
         {cylinderRadiusEdit && liveCylinderRadius !== null && (
           <section
             className="direct-face-editor"
-            aria-label="Cylinder radius properties"
+            aria-label="Cylinder dimension properties"
           >
             <h3 className="section-title">Direct edit</h3>
             <div className="kv-grid">
-              <b>Radius</b>
+              <b>
+                {cylinderRadiusEdit.dimensionMode === 'diameter'
+                  ? 'Diameter'
+                  : 'Radius'}
+              </b>
               <span data-testid="live-cylinder-radius">
-                {formatNumber(liveCylinderRadius)} {units}
+                {cylinderRadiusEdit.dimensionMode === 'diameter' ? 'Ø ' : 'R '}
+                {formatNumber(
+                  cylinderRadiusEdit.dimensionMode === 'diameter'
+                    ? liveCylinderRadius * 2
+                    : liveCylinderRadius
+                )}{' '}
+                {units}
               </span>
             </div>
           </section>

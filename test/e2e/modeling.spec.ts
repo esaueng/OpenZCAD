@@ -100,7 +100,7 @@ test('resizes a cylinder wall concentrically with one undoable radius edit', asy
     name: 'Resize Cylinder Radius operation'
   });
   await expect(radiusOperation).toBeVisible();
-  await expect(page.getByTestId('live-cylinder-radius')).toHaveText('14 mm');
+  await expect(page.getByTestId('live-cylinder-radius')).toHaveText('Ø 28 mm');
   await expect(page.getByRole('region', { name: '3D viewport' })).toContainText(
     'Cylindrical face Ø28'
   );
@@ -140,9 +140,9 @@ test('resizes a cylinder wall concentrically with one undoable radius edit', asy
   await page.mouse.move(start.x, start.y);
   await page.mouse.down();
   await page.mouse.move(end.x, end.y, { steps: 8 });
-  await expect(page.getByTestId('live-cylinder-radius')).toHaveText('18 mm');
+  await expect(page.getByTestId('live-cylinder-radius')).toHaveText('Ø 36 mm');
   await expect(page.getByTestId('direct-manipulation-value')).toHaveText(
-    'R 18 mm'
+    'Ø 36 mm'
   );
   await expect(page.getByRole('region', { name: '3D viewport' })).toContainText(
     'Cylindrical face Ø36'
@@ -151,7 +151,7 @@ test('resizes a cylinder wall concentrically with one undoable radius edit', asy
   await page.mouse.up();
 
   await expect(page.getByRole('contentinfo')).toContainText(
-    'Adjusted cylinder radius to R 18 mm.'
+    'Adjusted cylinder diameter to Ø 36 mm.'
   );
   await expect(page.getByRole('button', { name: 'Undo' })).toBeEnabled();
   await expect(page.getByRole('button', { name: 'History 1' })).toBeVisible();
@@ -199,10 +199,10 @@ test('resizes a cylinder wall concentrically with one undoable radius edit', asy
     cancelStart.y + cancelHandle.dy * cancelHandle.pixelsPerUnit * 2,
     { steps: 6 }
   );
-  await expect(page.getByTestId('live-cylinder-radius')).toHaveText('20 mm');
+  await expect(page.getByTestId('live-cylinder-radius')).toHaveText('Ø 40 mm');
   await expect(radiusOperation).toContainText('Dragging');
   await page.keyboard.press('Escape');
-  await expect(page.getByTestId('live-cylinder-radius')).toHaveText('18 mm');
+  await expect(page.getByTestId('live-cylinder-radius')).toHaveText('Ø 36 mm');
   await expect(page.getByLabel('Radius', { exact: true })).toHaveValue('18');
   await expect(canvas).not.toHaveAttribute(
     'data-e2e-cylinder-proxy-radius',
@@ -1032,10 +1032,10 @@ test('radius drag resizes an offset-and-filleted cylinder as one body', async ({
     start.y + handle.dy * handle.pixelsPerUnit * 4,
     { steps: 8 }
   );
-  await expect(page.getByTestId('live-cylinder-radius')).toHaveText('18 mm');
+  await expect(page.getByTestId('live-cylinder-radius')).toHaveText('Ø 36 mm');
   await page.mouse.up();
   await expect(page.getByRole('contentinfo')).toContainText(
-    'Adjusted cylinder radius to R 18 mm.'
+    'Adjusted cylinder diameter to Ø 36 mm.'
   );
 
   // Parametric, not stacked: the Cylinder feature carries the new radius, no
@@ -1183,7 +1183,9 @@ for (const modifier of [
     await expect(
       page.getByRole('region', { name: 'Resize Cylinder Radius operation' })
     ).toBeVisible();
-    await expect(page.getByTestId('live-cylinder-radius')).toHaveText('4.6 mm');
+    await expect(page.getByTestId('live-cylinder-radius')).toHaveText(
+      'Ø 9.2 mm'
+    );
     await expect(canvas).toHaveAttribute('data-e2e-handle-x', /.+/);
 
     const handle = await canvas.evaluate((element) => ({
@@ -1213,7 +1215,7 @@ for (const modifier of [
     try {
       await page.mouse.move(end.x, end.y, { steps: 8 });
       await expect(page.getByTestId('live-cylinder-radius')).toHaveText(
-        '6.4 mm'
+        'Ø 12.8 mm'
       );
       await expect(canvas).not.toHaveAttribute(
         'data-e2e-cylinder-proxy-radius',
@@ -1225,7 +1227,7 @@ for (const modifier of [
     }
 
     await expect(page.getByRole('contentinfo')).toContainText(
-      'Adjusted cylinder radius to R 6.4 mm.'
+      'Adjusted cylinder diameter to Ø 12.8 mm.'
     );
     await expect(page.locator('.feature-row')).toHaveCount(2);
     await expect(blend.getByTitle('Feature failed to build')).toHaveCount(0);
