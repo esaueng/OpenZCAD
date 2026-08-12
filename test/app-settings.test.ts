@@ -299,7 +299,7 @@ describe('application settings', () => {
   it('encrypts personal credentials with owner-bound authenticated data', async () => {
     const owner = toUserId('user_settings_owner');
     const intruder = toUserId('user_settings_intruder');
-    const token = 'sk-personal-never-return-this';
+    const token = 'test-api-key-placeholder';
     const secret = encryptionSecret();
     const encrypted = await encryptAssistantCredential(token, owner, secret);
 
