@@ -68,6 +68,51 @@ describe('selectionCapabilities', () => {
     ).toEqual([]);
   });
 
+  it('prefers a producing fillet over generic cylinder resize', () => {
+    const capabilities = selectionCapabilities({
+      kind: 'face',
+      target: {
+        surfaceType: 'cylindrical',
+        hash: 2,
+        radius: 2,
+        blendRadius: 2,
+        filletFeatureId: 'feature_fillet' as FeatureId
+      }
+    });
+    expect(capabilities.map((capability) => capability.action)).toEqual([
+      'edit-fillet',
+      'remove-fillet'
+    ]);
+    expect(preferredCapability(capabilities)?.action).toBe('edit-fillet');
+  });
+
+  it('does not treat an unbacked cylindrical blend as a generic radius edit', () => {
+    expect(
+      selectionCapabilities({
+        kind: 'face',
+        target: {
+          surfaceType: 'cylindrical',
+          hash: 2,
+          radius: 2,
+          blendRadius: 2
+        }
+      })
+    ).toEqual([]);
+  });
+
+  it('offers only a proven imported blend removal', () => {
+    expect(
+      selectionCapabilities({
+        kind: 'face',
+        target: {
+          surfaceType: 'other',
+          blendRadius: 1,
+          canRemoveFaceFeature: true
+        }
+      }).map((capability) => capability.action)
+    ).toEqual(['remove-face-feature']);
+  });
+
   it('keeps a planar cap on the face-offset intent', () => {
     const capability = preferredCapability(
       selectionCapabilities({
