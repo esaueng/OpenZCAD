@@ -4,7 +4,8 @@ import {
   edgeLabel,
   edgeLength,
   edgeLengthMeasurement,
-  faceLabel
+  faceLabel,
+  topologySelectionLabel
 } from './topologyLabels';
 
 function makeBody(): BodyRepresentation {
@@ -90,6 +91,18 @@ describe('faceLabel', () => {
     expect(faceLabel(body, 3)).toBe('Through hole Ø8');
   });
 
+  it('names recognized blends by their rolling-ball radius', () => {
+    const blend = makeBody();
+    blend.topology!.faces[3]!.geometry = {
+      surfaceType: 'torus',
+      area: 12,
+      center: { x: 5, y: 5, z: 5 },
+      featureType: 'blend',
+      blendRadius: 1.25
+    };
+    expect(faceLabel(blend, 4)).toBe('Blend face R1.25');
+  });
+
   it('falls back to a stable ordinal and never leaks the fingerprint', () => {
     expect(faceLabel(body, 4)).toBe('Face 4');
     expect(faceLabel(undefined, 99)).toBe('Face');
@@ -110,6 +123,19 @@ describe('edgeLabel / edgeLength', () => {
     expect(edgeLabel(undefined, 11)).toBe('Edge');
   });
 
+  it('names exact circular edges by radius', () => {
+    const circular = makeBody();
+    circular.topology!.edges[0]!.curve = {
+      type: 'CIRCLE',
+      circle: {
+        center: { x: 0, y: 0, z: 0 },
+        axis: { x: 0, y: 0, z: 1 },
+        radius: 4
+      }
+    };
+    expect(edgeLabel(circular, 11)).toBe('Edge R4');
+  });
+
   it('measures the sampled polyline length', () => {
     expect(edgeLength(body, 11)).toBeCloseTo(7);
     expect(edgeLength(body, 12)).toBe(0);
@@ -127,5 +153,20 @@ describe('edgeLabel / edgeLength', () => {
       value: 6.999_999_999,
       quality: 'exact-kernel'
     });
+  });
+});
+
+describe('topologySelectionLabel', () => {
+  const body = makeBody();
+
+  it('shares the body-qualified vocabulary used by measurement targets', () => {
+    expect(
+      topologySelectionLabel(body, {
+        kind: 'face',
+        hash: 3,
+        topologyId: 'face:3'
+      })
+    ).toBe('Box · Through hole Ø8');
+    expect(topologySelectionLabel(body, { kind: 'body' })).toBe('Box');
   });
 });

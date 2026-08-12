@@ -95,6 +95,7 @@ interface ViewerShellProps {
   selectedTopology: TopologySelection | null;
   previewFaceHighlights: TopologySelection[];
   selectedEdges: TopologySelection[];
+  pickListEnabled: boolean;
   settings: ViewerSettings;
   fitSignal: number;
   viewRequest: { view: ViewTarget; nonce: number } | null;
@@ -214,6 +215,7 @@ export function ViewerShell({
   selectedTopology,
   previewFaceHighlights,
   selectedEdges,
+  pickListEnabled,
   settings,
   fitSignal,
   viewRequest,
@@ -351,6 +353,7 @@ export function ViewerShell({
         selectedTopology={selectedTopology}
         previewFaceHighlights={previewFaceHighlights}
         selectedEdges={selectedEdges}
+        pickListEnabled={pickListEnabled}
         settings={settings}
         fitSignal={fitSignal}
         viewRequest={viewRequest}
