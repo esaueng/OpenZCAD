@@ -1,4 +1,4 @@
-import { BrepKernel } from 'brepkit-wasm';
+import { BrepKernel, type FaceEvolutionPayloadV1 } from 'brepkit-wasm';
 import {
   findSketch,
   getParameterScope,
@@ -104,6 +104,7 @@ import {
 import {
   brepKitHashOnlyLineage,
   createBrepKitImportedStepLineage,
+  createBrepKitModifierEvolutionLineage,
   createBrepKitSemanticLineage,
   mergeBrepKitLineageStates,
   propagateBrepKitRigidTransformLineage,
@@ -1121,14 +1122,26 @@ function applyEdgeModifier(
   featureKind: 'fillet' | 'chamfer',
   size: number,
   /** Receives the kernel's own refusal text, when it threw one. */
-  reportRefusal?: (message: string) => void
+  reportRefusal?: (message: string) => void,
+  /** Receives construction history only after the same result is accepted. */
+  reportEvolution?: (payload: FaceEvolutionPayloadV1) => void
 ): number | null {
   const targetBounds = kernel.boundingBox(target);
   const handles = Uint32Array.from(selected);
   let modified: number;
+  let evolution: FaceEvolutionPayloadV1 | undefined;
   if (featureKind === 'fillet') {
     try {
-      modified = kernel.fillet(target, handles, size);
+      if (reportEvolution) {
+        try {
+          evolution = kernel.filletWithEvolution(target, handles, size);
+          modified = evolution.result.solid;
+        } catch {
+          modified = kernel.fillet(target, handles, size);
+        }
+      } else {
+        modified = kernel.fillet(target, handles, size);
+      }
     } catch (error) {
       // Keep what the kernel said. It names the edges it could not blend, the
       // vertex the blend engines gave up on, and how many of the selection
@@ -1139,7 +1152,16 @@ function applyEdgeModifier(
     }
   } else {
     try {
-      modified = kernel.chamfer(target, handles, size);
+      if (reportEvolution) {
+        try {
+          evolution = kernel.chamferWithEvolution(target, handles, size);
+          modified = evolution.result.solid;
+        } catch {
+          modified = kernel.chamfer(target, handles, size);
+        }
+      } else {
+        modified = kernel.chamfer(target, handles, size);
+      }
     } catch (error) {
       reportRefusal?.(errorText(error));
       return null;
@@ -1202,6 +1224,9 @@ function applyEdgeModifier(
     ) {
       return null;
     }
+  }
+  if (evolution) {
+    reportEvolution?.(evolution);
   }
   return modified;
 }
@@ -5767,6 +5792,8 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
               throw new Error('Edge modifier size must be greater than zero.');
             }
             let reportedRefusal: string | null = null;
+            let evolution: FaceEvolutionPayloadV1 | null = null;
+            const sourceCandidates = topologyCandidatesForSolid(kernel, target);
             const modified = applyEdgeModifier(
               kernel,
               target,
@@ -5775,6 +5802,9 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
               size,
               (message) => {
                 reportedRefusal = message;
+              },
+              (payload) => {
+                evolution = payload;
               }
             );
             if (modified === null) {
@@ -5790,22 +5820,49 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
                 )
               );
             }
+            const cylinderFallbackLineage = modifierChainRootsAtCylinder(
+              document,
+              feature.data.targetBodyId
+            )
+              ? rederiveCylinderModifierLineage(kernel, modified, feature)
+              : null;
+            const evolutionLineage = evolution
+              ? createBrepKitModifierEvolutionLineage({
+                  producingFeatureId: feature.featureId,
+                  operation: feature.data.featureKind,
+                  payload: evolution,
+                  sourceSolid: target,
+                  resultSolid: modified,
+                  sourceCandidates,
+                  resultCandidates: topologyCandidatesForSolid(
+                    kernel,
+                    modified
+                  ),
+                  sourceLineage: storedTarget.lineage,
+                  generatedBlendFaces: new Set(
+                    Array.from(kernel.getSolidFaces(modified)).filter((face) =>
+                      isBlendFace(kernel, modified, face)
+                    )
+                  )
+                })
+              : null;
+            const verifiedLineages = [
+              cylinderFallbackLineage,
+              evolutionLineage
+            ].filter((lineage): lineage is BrepKitLineageState => !!lineage);
+            const verifiedLineage = mergeBrepKitLineageStates(verifiedLineages);
             result.consumed.add(feature.data.targetBodyId);
             result.shapes.set(feature.bodyId, {
               solids: [modified],
               lineage:
-                (modifierChainRootsAtCylinder(
-                  document,
-                  feature.data.targetBodyId
-                )
-                  ? rederiveCylinderModifierLineage(kernel, modified, feature)
-                  : null) ??
-                brepKitHashOnlyLineage(
-                  feature.data.featureKind,
-                  feature.data.featureKind === 'fillet'
-                    ? 'The final production fillet, including analytic fallback results, has no reverified complete output relation.'
-                    : 'BrepKit chamfer does not expose a complete generated-face provenance channel.'
-                )
+                verifiedLineage.faceReferences.size > 0 ||
+                verifiedLineage.edgeReferences.size > 0 ||
+                verifiedLineage.diagnostics.length > 0
+                  ? verifiedLineage
+                  : brepKitHashOnlyLineage(
+                      feature.data.featureKind,
+                      'No generated face passed the construction-history, exact support-witness, and uniqueness checks.'
+                    )
             });
             inheritMeshOrigin(
               result,
