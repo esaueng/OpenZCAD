@@ -3,7 +3,12 @@ import { parseAssistantReply } from '@openzcad/ai-contracts';
 const MAX_CAPTURED_OUTPUT_BYTES = 8 * 1024 * 1024;
 
 type TerminalEvent =
-  'response.completed' | 'response.failed' | 'response.incomplete' | 'error';
+  | 'response.completed'
+  | 'response.done'
+  | 'response.error'
+  | 'response.failed'
+  | 'response.incomplete'
+  | 'error';
 
 type FailureClassification =
   | 'connection_error'
@@ -30,6 +35,7 @@ interface DiagnosticState {
   output: string;
   outputBytes: number;
   terminalEvent?: TerminalEvent;
+  terminalStatus?: string;
   upstreamResponseId?: string;
 }
 
@@ -79,7 +85,8 @@ function consumeEvent(state: DiagnosticState, event: unknown): void {
   const value = event as Record<string, unknown>;
   state.upstreamResponseId ??= eventResponseId(value);
   if (
-    value.type === 'response.output_text.delta' &&
+    (value.type === 'response.output_text.delta' ||
+      value.type === 'response.content_part.delta') &&
     typeof value.delta === 'string'
   ) {
     appendOutput(state, value.delta);
@@ -93,12 +100,47 @@ function consumeEvent(state: DiagnosticState, event: unknown): void {
     return;
   }
   if (
+    value.type === 'response.output_item.done' &&
+    value.item &&
+    typeof value.item === 'object' &&
+    !Array.isArray(value.item)
+  ) {
+    const item = value.item as Record<string, unknown>;
+    const text = Array.isArray(item.content)
+      ? item.content
+          .flatMap((part) =>
+            part &&
+            typeof part === 'object' &&
+            !Array.isArray(part) &&
+            (part as Record<string, unknown>).type === 'output_text' &&
+            typeof (part as Record<string, unknown>).text === 'string'
+              ? [(part as Record<string, unknown>).text as string]
+              : []
+          )
+          .join('')
+      : '';
+    if (text) {
+      replaceOutput(state, text);
+    }
+    return;
+  }
+  if (
     value.type === 'response.completed' ||
+    value.type === 'response.done' ||
+    value.type === 'response.error' ||
     value.type === 'response.failed' ||
     value.type === 'response.incomplete' ||
     value.type === 'error'
   ) {
     state.terminalEvent = value.type;
+    const response =
+      value.response &&
+      typeof value.response === 'object' &&
+      !Array.isArray(value.response)
+        ? (value.response as Record<string, unknown>)
+        : undefined;
+    state.terminalStatus =
+      typeof response?.status === 'string' ? response.status : undefined;
   }
 }
 
@@ -141,10 +183,31 @@ function classifyFailure(state: DiagnosticState): FailureClassification | null {
   if (state.terminalEvent === 'response.incomplete') {
     return 'provider_incomplete';
   }
-  if (state.terminalEvent === 'error') {
+  if (
+    state.terminalEvent === 'response.error' ||
+    state.terminalEvent === 'error'
+  ) {
     return 'stream_error';
   }
-  if (state.terminalEvent !== 'response.completed') {
+  if (
+    state.terminalEvent === 'response.done' &&
+    state.terminalStatus === 'failed'
+  ) {
+    return 'provider_failed';
+  }
+  if (
+    state.terminalEvent === 'response.done' &&
+    state.terminalStatus === 'incomplete'
+  ) {
+    return 'provider_incomplete';
+  }
+  if (
+    state.terminalEvent !== 'response.completed' &&
+    !(
+      state.terminalEvent === 'response.done' &&
+      state.terminalStatus === 'completed'
+    )
+  ) {
     return 'truncated_stream';
   }
   if (state.outputBytes === 0) {
@@ -189,6 +252,7 @@ async function logFailure(
     upstreamResponseId: state.upstreamResponseId ?? null,
     classification,
     terminalEvent: state.terminalEvent ?? null,
+    terminalStatus: state.terminalStatus ?? null,
     outputBytes: state.outputBytes,
     outputSha256,
     outputHashComplete: state.captureComplete

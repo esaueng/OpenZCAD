@@ -59,6 +59,32 @@ describe('assistant integration', () => {
     ).toBe(true);
   });
 
+  it('accepts OpenRouter Responses output and terminal events', () => {
+    const delta = readAssistantEvent(
+      { type: 'response.content_part.delta', delta: '{"replyKind":' },
+      ''
+    );
+    const output = '{"replyKind":"message","message":"Finished"}';
+    const item = readAssistantEvent(
+      {
+        type: 'response.output_item.done',
+        item: {
+          status: 'completed',
+          content: [{ type: 'output_text', text: output }]
+        }
+      },
+      delta.text
+    );
+
+    expect(item.text).toBe(output);
+    expect(
+      readAssistantEvent(
+        { type: 'response.done', response: { status: 'completed' } },
+        item.text
+      ).done
+    ).toBe(true);
+  });
+
   it('rejects malformed SSE frames as a protocol failure', async () => {
     expect(parseAssistantEventData('{not-json')).toBeNull();
     vi.stubGlobal(
@@ -181,6 +207,45 @@ describe('assistant integration', () => {
     await expect(
       streamAssistantReply({ prompt: input.prompt, digest: input.digest })
     ).rejects.toMatchObject({ code: 'AI_STREAM_TRUNCATED' });
+  });
+
+  it('accepts an OpenRouter response.done stream', async () => {
+    const output = JSON.stringify({
+      replyKind: 'message',
+      proposal: null,
+      questions: null,
+      message: 'Finished',
+      readings: null
+    });
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(
+        async () =>
+          new Response(
+            `data: ${JSON.stringify({
+              type: 'response.content_part.delta',
+              delta: output.slice(0, 20)
+            })}\n\ndata: ${JSON.stringify({
+              type: 'response.content_part.delta',
+              delta: output.slice(20)
+            })}\n\ndata: ${JSON.stringify({
+              type: 'response.output_item.done',
+              item: {
+                status: 'completed',
+                content: [{ type: 'output_text', text: output }]
+              }
+            })}\n\ndata: ${JSON.stringify({
+              type: 'response.done',
+              response: { status: 'completed' }
+            })}\n\ndata: [DONE]\n\n`,
+            { headers: { 'content-type': 'text/event-stream' } }
+          )
+      )
+    );
+
+    await expect(
+      streamAssistantReply({ prompt: input.prompt, digest: input.digest })
+    ).resolves.toEqual({ kind: 'message', message: 'Finished' });
   });
 
   it('bounds conversation history and rejects unusable attachments', () => {
@@ -939,6 +1004,50 @@ describe('assistant integration', () => {
     expect(logged).not.toContain(output);
     expect(logged).not.toContain('secret-key');
     expect(logged).not.toContain(input.prompt);
+  });
+
+  it('recognizes a valid OpenRouter stream in Worker diagnostics', async () => {
+    const output = JSON.stringify({
+      replyKind: 'message',
+      proposal: null,
+      questions: null,
+      message: 'Finished',
+      readings: null
+    });
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(
+        async () =>
+          new Response(
+            `data: ${JSON.stringify({
+              type: 'response.content_part.delta',
+              delta: output
+            })}\n\ndata: ${JSON.stringify({
+              type: 'response.output_item.done',
+              item: {
+                status: 'completed',
+                content: [{ type: 'output_text', text: output }]
+              }
+            })}\n\ndata: ${JSON.stringify({
+              type: 'response.done',
+              response: { id: 'resp_openrouter_123', status: 'completed' }
+            })}\n\ndata: [DONE]\n\n`,
+            { headers: { 'content-type': 'text/event-stream' } }
+          )
+      )
+    );
+    const consoleError = vi
+      .spyOn(console, 'error')
+      .mockImplementation(() => undefined);
+    consoleError.mockClear();
+
+    const response = await streamAssistantProposal(input, {
+      AI_PROVIDER: 'openrouter',
+      OPENROUTER_API_KEY: 'secret-key'
+    });
+    await response.text();
+
+    expect(consoleError).not.toHaveBeenCalled();
   });
 
   it('does not log raw upstream provider details', async () => {
