@@ -3,7 +3,7 @@ import type {
   SaveProjectDocumentResponse
 } from '@openzcad/shared';
 import { withoutDerivedProjection } from '@openzcad/document-core';
-import { ApiError } from './api';
+import { ApiError, isProjectDocumentUnavailableError } from './api';
 
 /**
  * How long editing has to pause before the account is written. Much longer than
@@ -36,8 +36,9 @@ export const PROJECT_AUTOSAVE_IDLE_RETRY_MS = 60_000;
  * `local` is not a failure — it is a project the account does not have, which
  * is an ordinary state for a device that has never been signed in. The three
  * unhappy states are kept apart because the user's next move differs: `offline`
- * resolves itself, `conflict` needs a decision, and `refused` will never
- * succeed no matter how long anyone waits.
+ * resolves itself, `conflict` needs a decision, `repair` needs the account
+ * copy restored, and `refused` will never succeed no matter how long anyone
+ * waits.
  */
 export type CloudProjectSyncState =
   | 'local'
@@ -45,6 +46,7 @@ export type CloudProjectSyncState =
   | 'synced'
   | 'offline'
   | 'conflict'
+  | 'repair'
   | 'refused'
   /** Cloud autosave is switched off; only an explicit save writes now. */
   | 'paused';
@@ -58,9 +60,7 @@ export type CloudProjectSyncState =
  * plain "Synced" would be a lie.
  */
 export type WorkspaceSaveState =
-  | CloudProjectSyncState
-  | 'saving'
-  | 'local-source';
+  CloudProjectSyncState | 'saving' | 'local-source';
 
 export interface CloudProjectAutosaveStatus {
   state: CloudProjectSyncState;
@@ -179,7 +179,7 @@ export class CloudProjectAutosave {
    * divergence or an oversize document. Cleared only by `openProject` or
    * `adoptAccountVersion`, both of which re-establish a baseline.
    */
-  #halted: 'conflict' | 'refused' | null = null;
+  #halted: 'conflict' | 'repair' | 'refused' | null = null;
   #disposed = false;
   readonly #unsubscribeConnectivity: () => void;
 
@@ -470,6 +470,17 @@ export class CloudProjectAutosave {
         localDocument: next.document,
         accountVersion: accountVersion ?? this.#project?.version ?? 0
       });
+      return { state: 'halted' };
+    }
+
+    // The account record exists but its document object cannot be read. A
+    // retrying write would either loop on the same storage fault or race an
+    // operator repair, so preserve the queued device copy and wait for an
+    // explicit retry after the account copy is available again.
+    if (isProjectDocumentUnavailableError(error)) {
+      this.#requeue(next);
+      this.#halted = 'repair';
+      this.#emit('repair', error);
       return { state: 'halted' };
     }
 

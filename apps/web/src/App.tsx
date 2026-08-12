@@ -116,7 +116,7 @@ import type {
   ProjectCollaborationCapabilitiesResponse
 } from '@openzcad/shared';
 import { toArtifactId, toUserId, UNIT_TO_MM } from '@openzcad/shared';
-import { ApiError, api } from './lib/api';
+import { ApiError, api, isProjectDocumentUnavailableError } from './lib/api';
 import { uploadArtifactBody } from './lib/artifactUpload';
 import {
   archiveLocalOnlyImportSources,
@@ -601,6 +601,21 @@ function summarizeLocalDocument(
     revisionCount: document.checkpoints.length,
     ...(organization ? { organization } : {})
   };
+}
+
+interface AccountProjectLoadResult {
+  document: ProjectDocument | null;
+  error?: unknown;
+}
+
+async function loadAccountProjectResult(
+  projectId: string
+): Promise<AccountProjectLoadResult> {
+  try {
+    return { document: await api.loadProject(projectId) };
+  } catch (error) {
+    return { document: null, error };
+  }
 }
 
 /**
@@ -1154,6 +1169,12 @@ export function App() {
     return ready;
   }
   const remoteVersionsRef = useRef(new Map<string, number>());
+  /**
+   * A project known to exist in the account whose document object could not be
+   * read. Keep it out of the autosave controller until an explicit retry loads
+   * the account copy, while IndexedDB continues to receive every edit.
+   */
+  const accountDocumentUnavailableProjectIdRef = useRef<string | null>(null);
   /**
    * Projects the account holds, as of the last listing that reached it. Kept
    * apart from `remoteVersionsRef`, which only knows about projects this
@@ -1879,7 +1900,13 @@ export function App() {
       api,
       onStatus(status) {
         setSaveState(status.state);
-        if (status.state === 'refused') {
+        if (status.state === 'repair' && status.projectId) {
+          accountDocumentUnavailableProjectIdRef.current = status.projectId;
+          setCloudAvailable(false);
+          setStatus(
+            'The account copy needs repair. Your work remains saved on this device; click Repair needed to retry.'
+          );
+        } else if (status.state === 'refused') {
           setStatus(
             errorMessage(
               status.error,
@@ -1900,6 +1927,7 @@ export function App() {
       },
       onSessionExpired() {
         remoteVersionsRef.current.clear();
+        accountDocumentUnavailableProjectIdRef.current = null;
         setCloudAvailable(false);
         endCloudSettingsSession();
       }
@@ -1942,6 +1970,7 @@ export function App() {
       !cloudFunctionsEnabled ||
       !projectId ||
       !session ||
+      accountDocumentUnavailableProjectIdRef.current === projectId ||
       accountVersion === undefined
     ) {
       controller.closeProject();
@@ -2179,7 +2208,7 @@ export function App() {
           : null;
         const [
           listed,
-          rememberedRemote,
+          rememberedRemoteResult,
           remoteSettings,
           collaborationCapabilities
         ] = await Promise.all([
@@ -2187,8 +2216,10 @@ export function App() {
             loadProjectSummaries(Boolean(activeSession))
           ),
           activeSession && startupProjectId
-            ? api.loadProject(startupProjectId).catch(() => null)
-            : Promise.resolve(null),
+            ? loadAccountProjectResult(startupProjectId)
+            : Promise.resolve<AccountProjectLoadResult>({
+                document: null
+              }),
           activeSession ? api.getSettings().catch(() => null) : null,
           activeSession
             ? api
@@ -2201,6 +2232,17 @@ export function App() {
         }
         setDeploymentHealth(health);
         const merged = listed.projects;
+        const rememberedRemote = rememberedRemoteResult.document;
+        const accountOwnsStartupProject = Boolean(
+          startupProjectId && listed.cloudProjectIds.has(startupProjectId)
+        );
+        const accountDocumentNeedsRepair = Boolean(
+          accountOwnsStartupProject &&
+          isProjectDocumentUnavailableError(rememberedRemoteResult.error)
+        );
+        const accountDocumentLoadFailed = Boolean(
+          accountOwnsStartupProject && rememberedRemoteResult.error
+        );
         const restoredOutcome = chooseProjectDocument(
           rememberedLocal,
           rememberedRemote,
@@ -2232,6 +2274,10 @@ export function App() {
           }
         }
         const canUseCloud = Boolean(activeSession && rememberedRemote);
+        accountDocumentUnavailableProjectIdRef.current =
+          accountDocumentNeedsRepair && startupProjectId
+            ? startupProjectId
+            : null;
         setCollaborationRollout(collaborationCapabilities);
         if (rememberedRemote) {
           remoteVersionsRef.current.set(
@@ -2281,7 +2327,11 @@ export function App() {
         }
         setSaveState(
           !canUseCloud
-            ? 'local'
+            ? accountDocumentNeedsRepair
+              ? 'repair'
+              : accountDocumentLoadFailed
+                ? 'offline'
+                : 'local'
             : restoredOutcome.choice === 'diverged'
               ? 'conflict'
               : restoredOutcome.choice === 'local'
@@ -2290,6 +2340,20 @@ export function App() {
         );
         if (startupProjectId && restoredDocument) {
           hydrateDocument(restoredDocument);
+          if (accountDocumentNeedsRepair) {
+            setSaveState('repair');
+            setStatus(
+              `Reopened ${restoredDocument.name}. The account copy needs repair; your work remains saved on this device.`
+            );
+            return;
+          }
+          if (accountDocumentLoadFailed) {
+            setSaveState('offline');
+            setStatus(
+              `Reopened ${restoredDocument.name}. The account copy is currently unreachable; your work remains saved on this device.`
+            );
+            return;
+          }
           if (restoredOutcome.choice === 'diverged') {
             setAccountConflict(
               conflictFromDocuments(
@@ -2366,7 +2430,7 @@ export function App() {
   }, [doc, cloudAvailable]);
 
   useEffect(() => {
-    if (!doc || !cloudAvailable) {
+    if (!doc || !session || !cloudProjectIds.has(doc.projectId)) {
       setArtifacts([]);
       return;
     }
@@ -2386,7 +2450,7 @@ export function App() {
     return () => {
       cancelled = true;
     };
-  }, [doc?.projectId, cloudAvailable]);
+  }, [cloudProjectIds, doc?.projectId, session]);
 
   useEffect(() => {
     geometry.sync(doc);
@@ -3509,6 +3573,12 @@ export function App() {
     }
     try {
       await saveLocalProject(pending);
+      if (
+        accountDocumentUnavailableProjectIdRef.current === pending.projectId
+      ) {
+        setSaveState('repair');
+        return;
+      }
       // The device write is the save; the account copy follows on its own
       // schedule. Handing the document over here rather than from the edit
       // effect means nothing is ever queued for the account that this device
@@ -4311,6 +4381,7 @@ export function App() {
     cloudSettingsAutosaveRef.current?.endSession();
     cloudSettingsSessionUserRef.current = null;
     remoteVersionsRef.current.clear();
+    accountDocumentUnavailableProjectIdRef.current = null;
     sessionRef.current = null;
     accountSettingsRef.current = null;
     setSession(null);
@@ -4723,6 +4794,7 @@ export function App() {
       await api.logout();
       const listed = await loadProjectSummaries(false);
       remoteVersionsRef.current.clear();
+      accountDocumentUnavailableProjectIdRef.current = null;
       cloudSettingsAutosaveRef.current?.endSession();
       cloudSettingsSessionUserRef.current = null;
       // The next sign-in on this device may be a different account. Awaited so
@@ -4983,6 +5055,9 @@ export function App() {
     // the baseline ahead of the device copy.
     await saveLocalProject(merged);
     await saveLastSyncedVersion(merged.projectId, merged.version);
+    if (accountDocumentUnavailableProjectIdRef.current === merged.projectId) {
+      accountDocumentUnavailableProjectIdRef.current = null;
+    }
     remoteVersionsRef.current.set(merged.projectId, merged.version);
     setCloudProjectIds((current) => new Set(current).add(merged.projectId));
     setProjects((current) => mergeProjectSummaries([summary], current));
@@ -5307,14 +5382,45 @@ export function App() {
     setBusy(true);
     try {
       await flushPendingLocalSave();
-      const [localDocument, remoteDocument, lastSyncedVersion] =
+      if (
+        accountDocumentUnavailableProjectIdRef.current !== null &&
+        accountDocumentUnavailableProjectIdRef.current !== projectId
+      ) {
+        accountDocumentUnavailableProjectIdRef.current = null;
+      }
+      const [localDocument, remoteResult, lastSyncedVersion] =
         await Promise.all([
           loadLocalProject(projectId),
           session
-            ? api.loadProject(projectId).catch(() => null)
-            : Promise.resolve(null),
+            ? loadAccountProjectResult(projectId)
+            : Promise.resolve<AccountProjectLoadResult>({
+                document: null
+              }),
           loadLastSyncedVersion(projectId)
         ]);
+      const remoteDocument = remoteResult.document;
+      if (remoteResult.error && localDocument) {
+        const needsRepair = isProjectDocumentUnavailableError(
+          remoteResult.error
+        );
+        accountDocumentUnavailableProjectIdRef.current = needsRepair
+          ? projectId
+          : null;
+        setCloudAvailable(false);
+        hydrateDocument(localDocument);
+        setSaveState(needsRepair ? 'repair' : 'offline');
+        setStatus(
+          needsRepair
+            ? `Opened ${localDocument.name}. The account copy needs repair; your work remains saved on this device.`
+            : `Opened ${localDocument.name}. The account copy is currently unreachable; your work remains saved on this device.`
+        );
+        return;
+      }
+      if (remoteResult.error && !localDocument) {
+        throw remoteResult.error instanceof Error
+          ? remoteResult.error
+          : new Error('The account project could not be loaded.');
+      }
       const outcome = chooseProjectDocument(
         localDocument,
         remoteDocument,
@@ -5322,6 +5428,12 @@ export function App() {
       );
       if (outcome.choice === 'none') {
         throw new Error('Project not found locally or in the beta API.');
+      }
+      if (
+        accountDocumentUnavailableProjectIdRef.current === projectId &&
+        remoteDocument
+      ) {
+        accountDocumentUnavailableProjectIdRef.current = null;
       }
       setCloudAvailable(Boolean(remoteDocument));
       if (remoteDocument) {
@@ -5795,11 +5907,90 @@ export function App() {
     void api
       .loadProject(projectId)
       .then((remote) => {
+        accountDocumentUnavailableProjectIdRef.current = null;
+        setCloudAvailable(true);
         setAccountConflict(
           conflictFromDocuments(localDocument, remote, 'account')
         );
       })
-      .catch(() => undefined);
+      .catch((error) => {
+        if (isProjectDocumentUnavailableError(error)) {
+          accountDocumentUnavailableProjectIdRef.current = projectId;
+          setCloudAvailable(false);
+          setSaveState('repair');
+          setStatus(
+            'The account copy needs repair. Your work remains saved on this device; click Repair needed to retry.'
+          );
+          return;
+        }
+        setStatus(
+          `${errorMessage(error, 'Could not load the account copy.')} Your work remains saved on this device.`
+        );
+      });
+  }
+
+  async function retryUnavailableAccountProject(
+    localDocument: ProjectDocument
+  ): Promise<void> {
+    setStatus('Checking the account copy…');
+    try {
+      const [remote, lastSyncedVersion] = await Promise.all([
+        api.loadProject(localDocument.projectId),
+        loadLastSyncedVersion(localDocument.projectId)
+      ]);
+      accountDocumentUnavailableProjectIdRef.current = null;
+      remoteVersionsRef.current.set(remote.projectId, remote.version);
+      setCloudProjectIds((current) => new Set(current).add(remote.projectId));
+      setCloudAvailable(true);
+      const outcome = chooseProjectDocument(
+        localDocument,
+        remote,
+        lastSyncedVersion
+      );
+      if (outcome.choice === 'diverged') {
+        setAccountConflict(
+          conflictFromDocuments(outcome.local, outcome.remote, 'account')
+        );
+        setSaveState('conflict');
+        setStatus(
+          `${localDocument.name} changed here and in your account. Nothing has been discarded — choose which to keep.`
+        );
+        return;
+      }
+      if (outcome.choice === 'remote') {
+        await acceptAccountDocument(outcome.document, localDocument);
+        setStatus('The account copy is available again.');
+        return;
+      }
+      if (outcome.choice === 'local') {
+        const controller = cloudProjectAutosaveRef.current;
+        controller?.adoptAccountVersion(remote.projectId, remote.version);
+        controller?.schedule(outcome.document);
+        setSaveState(controller ? 'syncing' : 'offline');
+        setStatus(
+          controller
+            ? 'The account copy is available again · updating it from this device…'
+            : 'The account copy is available again; save again to update it.'
+        );
+        return;
+      }
+      setSaveState('offline');
+    } catch (error) {
+      if (isProjectDocumentUnavailableError(error)) {
+        accountDocumentUnavailableProjectIdRef.current =
+          localDocument.projectId;
+        setCloudAvailable(false);
+        setSaveState('repair');
+        setStatus(
+          'The account copy still needs repair. Your work remains saved on this device.'
+        );
+        return;
+      }
+      setSaveState('offline');
+      setStatus(
+        `${errorMessage(error, 'Could not check the account copy.')} Your work remains saved on this device.`
+      );
+    }
   }
 
   async function handleSave() {
@@ -5809,6 +6000,10 @@ export function App() {
     try {
       setSaveState('saving');
       await saveLocalProject(doc);
+      if (accountDocumentUnavailableProjectIdRef.current === doc.projectId) {
+        await retryUnavailableAccountProject(doc);
+        return;
+      }
       if (!ensureCanEdit('save a shared revision')) {
         setSaveState('offline');
         return;
@@ -5875,6 +6070,15 @@ export function App() {
         // this is a divergence to resolve, not a connection to give up on.
         setSaveState('conflict');
         raiseAccountConflict(doc.projectId, doc, currentVersionOf(error));
+        return;
+      }
+      if (isProjectDocumentUnavailableError(error)) {
+        accountDocumentUnavailableProjectIdRef.current = doc.projectId;
+        setCloudAvailable(false);
+        setSaveState('repair');
+        setStatus(
+          'The account copy needs repair. Your work remains saved on this device; click Repair needed to retry.'
+        );
         return;
       }
       setCloudAvailable(false);
