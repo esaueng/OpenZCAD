@@ -34,6 +34,7 @@ import {
   offsetHandlePlacement,
   GestureRouter,
   HudLayer,
+  TopologyPickList,
   PickService,
   SelectionManager,
   applyMoveGizmoFocus,
@@ -169,7 +170,11 @@ import type { SketchCircleMode } from '../lib/interaction/machine';
 import type { PlaneBasis } from '@openzcad/geometry';
 import type { ParamValue, SketchObjectData } from '@openzcad/shared';
 import { evalParamValue } from '../lib/model';
-import { edgeLabel, faceLabel } from '../lib/topologyLabels';
+import {
+  edgeLabel,
+  faceLabel,
+  topologySelectionLabel
+} from '../lib/topologyLabels';
 
 export interface FaceResizeCommit {
   bodyId: TopologySelection['bodyId'];
@@ -306,6 +311,14 @@ export interface EdgeHandleTarget {
   edgeCount: number;
   /** Restored after a failed exact-kernel validation. */
   initialValue?: number;
+  /** Face-backed fillet edits already have an exact pick/radial frame. */
+  placement?: {
+    origin: { x: number; y: number; z: number };
+    direction: { x: number; y: number; z: number };
+  };
+  label?: string;
+  /** R0 means delete the producing Fillet feature. */
+  allowRemoval?: boolean;
 }
 
 export interface OrientationDragControls {
@@ -342,8 +355,12 @@ interface ModelViewerProps {
   /** Bodies highlighted in the viewport, in pick order. */
   selectedBodyIds: string[];
   selectedTopology: TopologySelection | null;
+  /** Exact blend faces created only in the currently published preview. */
+  previewFaceHighlights: TopologySelection[];
   /** Exact edges highlighted for a single edge-modifier operation. */
   selectedEdges: TopologySelection[];
+  /** Select-other popup follows the direct-manipulation experiment gate. */
+  pickListEnabled: boolean;
   settings: ViewerSettings;
   /** Increment to re-fit the camera to the current geometry. */
   fitSignal: number;
@@ -445,6 +462,8 @@ interface ModelViewerProps {
   onEdgeRadiusPreview(size: number): void;
   /** Fired when the radius drag releases (or exact entry commits). */
   onEdgeCommit(size: number): void;
+  /** Restores the base document after a canceled/no-op edge-radius gesture. */
+  onEdgeCancel(): void;
   /** Edge value chip tapped: open exact entry for the radius/distance. */
   onOpenEdgeKeypad(currentSize: number): void;
   /** Semantic lifecycle signal for direct-manipulation drags. */
@@ -750,13 +769,23 @@ const SKETCH_CURVE_WIDTH = 1.4;
 const PREVIEW_EDGE_WIDTH = 1.4;
 const RIGHT_PAN_TARGET_EPSILON = 1e-9;
 
+function isTextEntryTarget(target: EventTarget | null): boolean {
+  return (
+    target instanceof HTMLElement &&
+    (target.isContentEditable ||
+      target.matches('input, textarea, select, [role="textbox"]'))
+  );
+}
+
 export function ModelViewer({
   bodies,
   sketches,
   measurementAnnotations,
   selectedBodyIds,
   selectedTopology,
+  previewFaceHighlights,
   selectedEdges,
+  pickListEnabled,
   settings,
   fitSignal,
   viewRequest,
@@ -797,6 +826,7 @@ export function ModelViewer({
   edgeHandle,
   onEdgeRadiusPreview,
   onEdgeCommit,
+  onEdgeCancel,
   onOpenEdgeKeypad,
   onDirectManipulationChange,
   sketchViews,
@@ -818,6 +848,7 @@ export function ModelViewer({
 }: ModelViewerProps) {
   const hostRef = useRef<HTMLDivElement | null>(null);
   const contextRef = useRef<SceneContext | null>(null);
+  const topologyPickListRef = useRef<TopologyPickList | null>(null);
   const onSelectTopologyRef = useRef(onSelectTopology);
   onSelectTopologyRef.current = onSelectTopology;
   const onSelectEdgeChainRef = useRef(onSelectEdgeChain);
@@ -826,6 +857,8 @@ export function ModelViewer({
   // not dispose the drag rigs mid-gesture.
   const selectionFilterRef = useRef(selectionFilter);
   selectionFilterRef.current = selectionFilter;
+  const pickListEnabledRef = useRef(pickListEnabled);
+  pickListEnabledRef.current = pickListEnabled;
   const onBoxSelectRef = useRef(onBoxSelect);
   onBoxSelectRef.current = onBoxSelect;
   const onResizePrimitiveFaceRef = useRef(onResizePrimitiveFace);
@@ -854,6 +887,8 @@ export function ModelViewer({
   cylinderRadiusHandleRef.current = cylinderRadiusHandle;
   const offsetHandleRef = useRef(offsetHandle);
   offsetHandleRef.current = offsetHandle;
+  const edgeHandleRef = useRef(edgeHandle);
+  edgeHandleRef.current = edgeHandle;
   const cylinderDimensionModeRef = useRef(cylinderDimensionMode);
   cylinderDimensionModeRef.current = cylinderDimensionMode;
   const onContextMenuRef = useRef(onContextMenu);
@@ -901,6 +936,8 @@ export function ModelViewer({
   onEdgeRadiusPreviewRef.current = onEdgeRadiusPreview;
   const onEdgeCommitRef = useRef(onEdgeCommit);
   onEdgeCommitRef.current = onEdgeCommit;
+  const onEdgeCancelRef = useRef(onEdgeCancel);
+  onEdgeCancelRef.current = onEdgeCancel;
   const onOpenEdgeKeypadRef = useRef(onOpenEdgeKeypad);
   onOpenEdgeKeypadRef.current = onOpenEdgeKeypad;
   const onDirectManipulationChangeRef = useRef(onDirectManipulationChange);
@@ -1373,6 +1410,8 @@ export function ModelViewer({
     const rightClickGesture = new RightClickGestureTracker();
     /** Where "select other" has reached, for repeated clicks on one spot. */
     let depthCycle: DepthCycle | null = null;
+    /** Last canvas pointer, used by the Alt+Down keyboard trigger. */
+    let lastPickListPointer: PointerEvent | null = null;
     let rightPanStartTarget: THREE.Vector3 | null = null;
     /** Unmodified drag rubber band for selecting several bodies. */
     let boxSelect: {
@@ -1564,6 +1603,34 @@ export function ModelViewer({
     } | null = null;
     const hud = new HudLayer(host);
     const dragHud = hud.create('direct-edit-hud');
+    const topologyPickList = new TopologyPickList({
+      hud,
+      onHover(candidate) {
+        applyHover(candidate);
+        if (!e2eCanvasHooksEnabled) {
+          return;
+        }
+        const topologyId = candidate?.selection?.topologyId;
+        if (topologyId) {
+          renderer.domElement.dataset.e2ePickListHover = topologyId;
+        } else {
+          delete renderer.domElement.dataset.e2ePickListHover;
+        }
+      },
+      onSelect(candidate) {
+        const pickedSelection = candidate.selection;
+        if (!pickedSelection) {
+          return;
+        }
+        cameraRig.pivotOn(candidate.hit.point);
+        onSelectTopologyRef.current(
+          pickedSelection,
+          false,
+          pickDetail(candidate)
+        );
+      }
+    });
+    topologyPickListRef.current = topologyPickList;
     let activeSketchSnap: SnapTarget | null = null;
     let sketchSnapCycle = 0;
     let latestSketchPointerEvent: PointerEvent | null = null;
@@ -1605,6 +1672,7 @@ export function ModelViewer({
         edgeDrag = null;
         edgeDragActiveRef.current = false;
         edgeRigRef.current?.setValue(initialValue);
+        onEdgeCancelRef.current();
         cancelled = true;
       }
       if (cancelled) {
@@ -1616,6 +1684,33 @@ export function ModelViewer({
       return cancelled;
     };
     const handleCapturedEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape' && topologyPickList.visible) {
+        topologyPickList.hide();
+        event.preventDefault();
+        event.stopPropagation();
+        return;
+      }
+      if (
+        event.altKey &&
+        event.key === 'ArrowDown' &&
+        !event.ctrlKey &&
+        !event.metaKey &&
+        !sketchModeRef.current &&
+        !isTextEntryTarget(event.target)
+      ) {
+        const rect = renderer.domElement.getBoundingClientRect();
+        const pointer =
+          lastPickListPointer ??
+          new PointerEvent('pointermove', {
+            clientX: rect.left + rect.width / 2,
+            clientY: rect.top + rect.height / 2
+          });
+        if (showTopologyPickList(pointer, false, true)) {
+          event.preventDefault();
+          event.stopPropagation();
+          return;
+        }
+      }
       if (handleSketchNumericKey(event)) {
         return;
       }
@@ -2040,6 +2135,112 @@ export function ModelViewer({
           : {}),
         ...(geometry.axisStart ? { axisStart: geometry.axisStart } : {}),
         ...(geometry.axisEnd ? { axisEnd: geometry.axisEnd } : {})
+      });
+    };
+    const handleE2EEdgeSelection = (event: Event) => {
+      if (!e2eCanvasHooksEnabled) {
+        return;
+      }
+      const detail = (
+        event as CustomEvent<{
+          curve?: 'circle' | 'any';
+          resolve?: (selection: TopologySelection | null) => void;
+        }>
+      ).detail;
+      const body = bodiesRef.current.find((candidate) => !candidate.consumed);
+      const edge = body?.topology?.edges.find(
+        (candidate) =>
+          candidate.displayRole !== 'seam' &&
+          (detail?.curve !== 'circle' || candidate.curve?.type === 'CIRCLE')
+      );
+      if (!body || !edge) {
+        detail?.resolve?.(null);
+        return;
+      }
+      const selection: TopologySelection = {
+        bodyId: body.bodyId,
+        kind: 'edge',
+        topologyId: edge.topologyId,
+        hash: edge.hash,
+        ...(edge.reference ? { reference: edge.reference } : {})
+      };
+      onSelectTopologyRef.current(selection, false);
+      detail?.resolve?.(selection);
+    };
+    const handleE2EBlendSelection = (event: Event) => {
+      if (!e2eCanvasHooksEnabled) {
+        return;
+      }
+      const detail = (
+        event as CustomEvent<{
+          select?: boolean;
+          resolve?: (
+            value: {
+              topologyId: string;
+              blendRadius: number;
+              producingFeatureId?: string;
+              lineageName?: string;
+            } | null
+          ) => void;
+        }>
+      ).detail;
+      const candidate = bodiesRef.current
+        .filter((body) => !body.consumed)
+        .flatMap((body) =>
+          (body.topology?.faces ?? [])
+            .filter(
+              (face) =>
+                face.geometry?.featureType === 'blend' &&
+                face.geometry.blendRadius !== undefined
+            )
+            .map((face) => ({ body, face }))
+        )[0];
+      const body = candidate?.body;
+      const face = candidate?.face;
+      if (!body || !face?.geometry || face.geometry.blendRadius === undefined) {
+        detail?.resolve?.(null);
+        return;
+      }
+      const first = face.triangleStart * 3;
+      const vertexIndices = body.mesh.indices.slice(first, first + 3);
+      const points = vertexIndices.map((index) =>
+        new THREE.Vector3().fromArray(body.mesh.vertices, index * 3)
+      );
+      const normal = normalForTriangle(body, face.triangleStart);
+      if (points.length !== 3 || !normal) {
+        detail?.resolve?.(null);
+        return;
+      }
+      const point = points
+        .reduce((sum, current) => sum.add(current), new THREE.Vector3())
+        .multiplyScalar(1 / 3);
+      if (detail?.select !== false) {
+        onSelectTopologyRef.current(
+          {
+            bodyId: body.bodyId,
+            kind: 'face',
+            topologyId: face.topologyId,
+            hash: face.hash,
+            ...(face.reference ? { reference: face.reference } : {})
+          },
+          false,
+          {
+            point: { x: point.x, y: point.y, z: point.z },
+            normal: { x: normal.x, y: normal.y, z: normal.z }
+          }
+        );
+      }
+      detail?.resolve?.({
+        topologyId: face.topologyId,
+        blendRadius: face.geometry.blendRadius,
+        ...(face.reference?.producingFeatureId
+          ? {
+              producingFeatureId: String(face.reference.producingFeatureId)
+            }
+          : {}),
+        ...(face.reference?.lineageName
+          ? { lineageName: face.reference.lineageName }
+          : {})
       });
     };
     /** Exact bore/annulus selection plus a pixel known to lie on the far wall. */
@@ -2537,10 +2738,88 @@ export function ModelViewer({
         }
       });
     };
+    /** Locate a real canvas point with two or more deduplicated topology hits. */
+    const handleE2ELocatePickStack = (event: Event) => {
+      if (!e2eCanvasHooksEnabled) {
+        return;
+      }
+      const detail = (
+        event as CustomEvent<{
+          resolve?: (
+            value: {
+              x: number;
+              y: number;
+              labels: string[];
+              topologyIds: string[];
+              kinds: ('face' | 'edge')[];
+            } | null
+          ) => void;
+        }>
+      ).detail;
+      if (!detail?.resolve) {
+        return;
+      }
+      const rect = renderer.domElement.getBoundingClientRect();
+      for (let row = 2; row <= 10; row += 1) {
+        for (let column = 2; column <= 14; column += 1) {
+          const clientX = Math.round(rect.left + (rect.width * column) / 16);
+          const clientY = Math.round(rect.top + (rect.height * row) / 12);
+          if (
+            document.elementFromPoint(clientX, clientY) !== renderer.domElement
+          ) {
+            continue;
+          }
+          const stack = picker
+            .pickAll(new MouseEvent('mousemove', { clientX, clientY }))
+            .filter(
+              (candidate): candidate is PickCandidate & {
+                kind: 'face' | 'edge';
+                selection: TopologySelection;
+              } =>
+                (candidate.kind === 'face' || candidate.kind === 'edge') &&
+                candidate.selection !== null &&
+                Boolean(candidate.selection.topologyId)
+            );
+          if (stack.length < 2) {
+            continue;
+          }
+          const labels = stack.flatMap((candidate) => {
+            const body = bodiesRef.current.find(
+              (entry) => entry.bodyId === candidate.selection.bodyId
+            );
+            return body
+              ? [topologySelectionLabel(body, candidate.selection)]
+              : [];
+          });
+          if (labels.length !== stack.length) {
+            continue;
+          }
+          detail.resolve({
+            x: clientX,
+            y: clientY,
+            labels,
+            topologyIds: stack.map(
+              (candidate) => candidate.selection.topologyId ?? ''
+            ),
+            kinds: stack.map((candidate) => candidate.kind)
+          });
+          return;
+        }
+      }
+      detail.resolve(null);
+    };
     if (E2E_CANVAS_HOOKS_ENABLED) {
       renderer.domElement.addEventListener(
         'openzcad:e2e-select-cylinder',
         handleE2ECylinderSelection
+      );
+      renderer.domElement.addEventListener(
+        'openzcad:e2e-select-edge',
+        handleE2EEdgeSelection
+      );
+      renderer.domElement.addEventListener(
+        'openzcad:e2e-select-blend',
+        handleE2EBlendSelection
       );
       renderer.domElement.addEventListener(
         'openzcad:e2e-visual-selection-probe',
@@ -2569,6 +2848,10 @@ export function ModelViewer({
       renderer.domElement.addEventListener(
         'openzcad:e2e-control-pointer',
         handleE2EControlPointer
+      );
+      renderer.domElement.addEventListener(
+        'openzcad:e2e-locate-pick-stack',
+        handleE2ELocatePickStack
       );
     }
 
@@ -2772,6 +3055,65 @@ export function ModelViewer({
       }
     }
 
+    function pickDetail(candidate: PickCandidate): PickDetail {
+      return {
+        point: {
+          x: candidate.hit.point.x,
+          y: candidate.hit.point.y,
+          z: candidate.hit.point.z
+        },
+        normal: candidate.faceNormal
+          ? {
+              x: candidate.faceNormal.x,
+              y: candidate.faceNormal.y,
+              z: candidate.faceNormal.z
+            }
+          : undefined
+      };
+    }
+
+    /**
+     * Opens from PickService's ordered stack without consulting or replacing
+     * depthCycle. Repeated clicks therefore resume exactly where the last
+     * canvas click left them.
+     */
+    function showTopologyPickList(
+      event: PointerEvent | MouseEvent,
+      requireDisambiguation: boolean,
+      focusFirst = false
+    ): boolean {
+      if (!pickListEnabledRef.current) {
+        return false;
+      }
+      const entries = picker.pickAll(event).flatMap((candidate) => {
+        const pickedSelection = candidate.selection;
+        if (!pickedSelection) {
+          return [];
+        }
+        const body = bodiesRef.current.find(
+          (entry) => entry.bodyId === pickedSelection.bodyId && !entry.consumed
+        );
+        if (!body) {
+          return [];
+        }
+        return [
+          {
+            candidate,
+            label: topologySelectionLabel(body, pickedSelection)
+          }
+        ];
+      });
+      if (
+        entries.length === 0 ||
+        (requireDisambiguation && entries.length < 2)
+      ) {
+        return false;
+      }
+      hud.hide(measurePreviewChip);
+      hud.hide(snapGlyph);
+      return topologyPickList.show(entries, event, focusFirst);
+    }
+
     function applyHoverAt(event: PointerEvent) {
       const moveFocus = moveGizmoFocusFromHit(pickMoveGizmo(event));
       if (movePreviewRef.current && moveFocus) {
@@ -2912,7 +3254,8 @@ export function ModelViewer({
           text = `${mode === 'diameter' ? 'Ø' : 'R'} ${formatNumber(displayValue)} ${unitsRef.current}`;
         } else if (rig.kind === 'edge-radius') {
           const prefix = edgeHandleOpRef.current === 'fillet' ? 'R' : 'C';
-          text = `${prefix} ${value} ${unitsRef.current}`;
+          const label = edgeHandleRef.current?.label;
+          text = `${label ? `${label} · ` : ''}${prefix} ${value} ${unitsRef.current}`;
         } else {
           const totalBaseline = offsetHandleRef.current?.totalBaseline;
           text =
@@ -3662,6 +4005,7 @@ export function ModelViewer({
     }
 
     const handlePointerMove = (event: PointerEvent) => {
+      lastPickListPointer = event;
       if (event.buttons !== 0) {
         pendingHoverEvent = null;
       }
@@ -3861,7 +4205,10 @@ export function ModelViewer({
             // Kernel previews are expensive; stream at a bounded cadence and
             // let App coalesce.
             const now = performance.now();
-            if (now - edgeDrag.lastPreviewAt > 150 && value > 0) {
+            if (
+              now - edgeDrag.lastPreviewAt > 150 &&
+              (value > 0 || edgeHandleRef.current?.allowRemoval)
+            ) {
               edgeDrag.lastPreviewAt = now;
               onEdgeRadiusPreviewRef.current(value);
             }
@@ -4004,6 +4351,10 @@ export function ModelViewer({
     }
 
     const handlePointerDown = (event: PointerEvent) => {
+      lastPickListPointer = event;
+      if (!topologyPickList.contains(event.target)) {
+        topologyPickList.hide();
+      }
       pendingHoverEvent = null;
       cameraRig.cancelTween();
       if (event.button === 2) {
@@ -4467,6 +4818,9 @@ export function ModelViewer({
         if (
           rightClickGesture.end(event.pointerId, event.clientX, event.clientY)
         ) {
+          if (!event.shiftKey && showTopologyPickList(event, true, true)) {
+            return;
+          }
           onContextMenuRef.current(
             event.clientX,
             event.clientY,
@@ -4665,16 +5019,19 @@ export function ModelViewer({
         );
         if (moved < 4) {
           rig?.setValue(completed.initialValue);
+          onEdgeCancelRef.current();
           selectAtPointer(event);
           return;
         }
         depthCycle = null;
         if (
           rig &&
-          finalValue > 1e-9 &&
+          (finalValue > 1e-9 || edgeHandleRef.current?.allowRemoval) &&
           Math.abs(finalValue - completed.initialValue) > 1e-9
         ) {
           onEdgeCommitRef.current(finalValue);
+        } else {
+          onEdgeCancelRef.current();
         }
         return;
       }
@@ -4816,6 +5173,7 @@ export function ModelViewer({
         onDirectManipulationChangeRef.current(false);
         gestures.release(event);
         edgeRigRef.current?.setValue(initialValue);
+        onEdgeCancelRef.current();
         requestRender();
       }
       if (
@@ -4874,6 +5232,16 @@ export function ModelViewer({
       hud.hide(measurePreviewChip);
       hud.hide(snapGlyph);
     };
+    const handleDocumentPointerDown = (event: PointerEvent) => {
+      if (
+        topologyPickList.visible &&
+        !topologyPickList.contains(event.target) &&
+        event.target !== renderer.domElement
+      ) {
+        topologyPickList.hide();
+      }
+    };
+    document.addEventListener('pointerdown', handleDocumentPointerDown, true);
     const handleDoubleClick = (event: MouseEvent) => {
       depthCycle = null;
       // Double-clicking an edge takes the whole smooth run it belongs to.
@@ -4922,6 +5290,18 @@ export function ModelViewer({
       // Browsers may dispatch this before the right-button gesture finishes.
       // Suppress the native menu here; pointerup decides whether to open ours.
       event.preventDefault();
+      const pointerType = (event as PointerEvent).pointerType;
+      // Touch and pen long-presses arrive as contextmenu PointerEvents rather
+      // than a secondary-button pointerup. Use that native gesture without
+      // changing the mouse right-click path above.
+      if (
+        pointerType &&
+        pointerType !== 'mouse' &&
+        !sketchModeRef.current &&
+        showTopologyPickList(event, true, true)
+      ) {
+        event.stopPropagation();
+      }
     };
     // The canvas listener alone is not enough: HUD chips and the CSS2D label
     // layer sit above the canvas, and a right-click landing on them surfaces
@@ -5198,6 +5578,14 @@ export function ModelViewer({
         handleE2ECylinderSelection
       );
       renderer.domElement.removeEventListener(
+        'openzcad:e2e-select-edge',
+        handleE2EEdgeSelection
+      );
+      renderer.domElement.removeEventListener(
+        'openzcad:e2e-select-blend',
+        handleE2EBlendSelection
+      );
+      renderer.domElement.removeEventListener(
         'openzcad:e2e-visual-selection-probe',
         handleE2EVisualSelectionProbe
       );
@@ -5225,7 +5613,16 @@ export function ModelViewer({
         'openzcad:e2e-control-pointer',
         handleE2EControlPointer
       );
+      renderer.domElement.removeEventListener(
+        'openzcad:e2e-locate-pick-stack',
+        handleE2ELocatePickStack
+      );
       document.removeEventListener('keydown', handleCapturedEscape, true);
+      document.removeEventListener(
+        'pointerdown',
+        handleDocumentPointerDown,
+        true
+      );
       renderer.domElement.removeEventListener('dblclick', handleDoubleClick);
       renderer.domElement.removeEventListener('contextmenu', handleContextMenu);
       host.removeEventListener('contextmenu', handleContextMenu);
@@ -5256,6 +5653,7 @@ export function ModelViewer({
       dimensionPrefix.removeEventListener('click', toggleCylinderDimensionMode);
       radiusLabelChip.removeEventListener('click', handleChipClick);
       hud.dispose();
+      topologyPickListRef.current = null;
       // Dimension graphics own their own geometries and materials; clearing
       // the group they sit in would orphan those on the GPU.
       for (const entry of measurementDimensionsRef.current) {
@@ -5276,6 +5674,18 @@ export function ModelViewer({
       contextRef.current = null;
     };
   }, []);
+
+  // A stack belongs to one rendered topology/filter snapshot. Close it when
+  // either changes instead of leaving rows that point at retired geometry.
+  useEffect(() => {
+    topologyPickListRef.current?.hide();
+  }, [
+    bodies,
+    pickListEnabled,
+    selectedEdges,
+    selectedTopology,
+    selectionFilter
+  ]);
 
   // Measurements are session-owned overlays. They use their own group so an
   // exact body refresh cannot remove a pinned result between React commits.
@@ -5398,6 +5808,13 @@ export function ModelViewer({
     context.dimensionLabels.clear();
     if (E2E_CANVAS_HOOKS_ENABLED) {
       delete context.renderer.domElement.dataset.e2eSelectedFace;
+      if (previewFaceHighlights.length > 0) {
+        context.renderer.domElement.dataset.e2ePreviewBlendCount = String(
+          previewFaceHighlights.length
+        );
+      } else {
+        delete context.renderer.domElement.dataset.e2ePreviewBlendCount;
+      }
     }
     const edgeResolution = context.fatLineResolution();
 
@@ -5419,6 +5836,14 @@ export function ModelViewer({
           previousSelectionOverlay as unknown as THREE.Group;
         clearGroup(selectionGroup);
         object.remove(selectionGroup);
+      }
+      const previousPreviewOverlay = object.getObjectByName(
+        'body-preview-face-overlay'
+      );
+      if (previousPreviewOverlay instanceof THREE.Group) {
+        const previewGroup = previousPreviewOverlay as unknown as THREE.Group;
+        clearGroup(previewGroup);
+        object.remove(previewGroup);
       }
       const isSelected = selectedBodyIds.includes(body.bodyId);
 
@@ -5659,6 +6084,40 @@ export function ModelViewer({
           }
         }
       }
+      const previewFaces = previewFaceHighlights.flatMap((selection) =>
+        selection.bodyId === body.bodyId
+          ? (body.topology?.faces ?? []).filter(
+              (face) => face.topologyId === selection.topologyId
+            )
+          : []
+      );
+      if (previewFaces.length > 0) {
+        const previewOverlay = new THREE.Group();
+        previewOverlay.name = 'body-preview-face-overlay';
+        for (const face of previewFaces) {
+          const geometry = createFaceHighlightGeometry(object, face);
+          if (!geometry) {
+            continue;
+          }
+          const material = new THREE.MeshLambertMaterial({
+            color: SELECTED_FACE_COLOR,
+            toneMapped: false,
+            transparent: true,
+            opacity: SELECTED_FACE_OPACITY,
+            side: THREE.DoubleSide,
+            depthWrite: false,
+            polygonOffset: true,
+            polygonOffsetFactor: -3
+          });
+          const highlight = new THREE.Mesh(geometry, material);
+          highlight.name = 'body-face-preview-created';
+          highlight.renderOrder = VIEWPORT_RENDER_ORDER.SELECTED_GEOMETRY;
+          highlight.userData.selectionOverlay = true;
+          highlight.raycast = () => undefined;
+          previewOverlay.add(highlight);
+        }
+        object.add(previewOverlay);
+      }
     }
 
     if (bodiesChanged) {
@@ -5762,6 +6221,7 @@ export function ModelViewer({
     selectedBodyIds,
     selectedEdges,
     selectedTopology,
+    previewFaceHighlights,
     sketchMode,
     units
   ]);
@@ -6002,21 +6462,24 @@ export function ModelViewer({
       context.requestRender();
       return;
     }
-    const body = bodies.find(
-      (candidate) => candidate.bodyId === edgeHandle.bodyId
-    );
-    const edge = body?.topology?.edges.find(
-      (candidate) => candidate.topologyId === edgeHandle.topologyId
-    );
-    if (!body || !edge) {
-      return;
+    let placement = edgeHandle.placement ?? null;
+    if (!placement) {
+      const body = bodies.find(
+        (candidate) => candidate.bodyId === edgeHandle.bodyId
+      );
+      const edge = body?.topology?.edges.find(
+        (candidate) => candidate.topologyId === edgeHandle.topologyId
+      );
+      if (!body || !edge) {
+        return;
+      }
+      const center = {
+        x: (body.bbox.min.x + body.bbox.max.x) / 2,
+        y: (body.bbox.min.y + body.bbox.max.y) / 2,
+        z: (body.bbox.min.z + body.bbox.max.z) / 2
+      };
+      placement = edgeHandlePlacement(edge.points, center);
     }
-    const center = {
-      x: (body.bbox.min.x + body.bbox.max.x) / 2,
-      y: (body.bbox.min.y + body.bbox.max.y) / 2,
-      z: (body.bbox.min.z + body.bbox.max.z) / 2
-    };
-    const placement = edgeHandlePlacement(edge.points, center);
     if (!placement) {
       return;
     }

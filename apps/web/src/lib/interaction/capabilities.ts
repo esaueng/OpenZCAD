@@ -6,12 +6,15 @@
  * instead of re-implementing topology checks independently.
  */
 
-import type { FaceTopologyReferenceV5 } from '@openzcad/shared';
+import type { FaceTopologyReferenceV5, FeatureId } from '@openzcad/shared';
 import { UNSTABLE_FACE_SKETCH_REASON } from '../faceSketchAttachment';
 
 export type SelectionActionId =
   | 'offset-face'
   | 'resize-radial-face'
+  | 'edit-fillet'
+  | 'remove-fillet'
+  | 'remove-face-feature'
   | 'sketch-on-face'
   | 'fillet'
   | 'chamfer'
@@ -36,6 +39,11 @@ export interface FaceCapabilityTarget {
   /** Persistent exact identity when the current kernel projection proves it. */
   reference?: FaceTopologyReferenceV5;
   radius?: number;
+  blendRadius?: number;
+  /** Present only after lineage resolves to a live Fillet feature. */
+  filletFeatureId?: FeatureId;
+  /** Imported defeature is exposed only when its planar gate is proven. */
+  canRemoveFaceFeature?: boolean;
 }
 
 export type CapabilitySelection =
@@ -85,6 +93,34 @@ export function selectionCapabilities(
   switch (selection.kind) {
     case 'face': {
       const { target } = selection;
+      if (
+        target.filletFeatureId &&
+        target.blendRadius !== undefined &&
+        Number.isFinite(target.blendRadius) &&
+        target.blendRadius > 0
+      ) {
+        return [
+          enabled('edit-fillet', 'Edit Fillet', 'radius', 'exact-worker', true),
+          enabled('remove-fillet', 'Remove Fillet', undefined, 'exact-worker')
+        ];
+      }
+      if (target.canRemoveFaceFeature) {
+        return [
+          enabled(
+            'remove-face-feature',
+            'Remove Blend',
+            undefined,
+            'exact-worker',
+            true
+          )
+        ];
+      }
+      // Blend classification alone is not authority to mutate a face. Only a
+      // live producing Fillet feature or the proven imported removal path may
+      // expose an action.
+      if (target.blendRadius !== undefined) {
+        return [];
+      }
       if (target.surfaceType === 'planar' && target.hash !== undefined) {
         const sketchCapability =
           target.reference?.currentHash === target.hash

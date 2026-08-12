@@ -355,6 +355,33 @@ describe('cloud project autosave — refusals', () => {
     controller.dispose();
   });
 
+  it('halts on an unreadable account document instead of retrying writes', async () => {
+    let attempts = 0;
+    const { controller, statuses } = harness({
+      respond: () => {
+        attempts += 1;
+        return Promise.reject(
+          new ApiError(
+            503,
+            'The account copy is unavailable.',
+            'PROJECT_DOCUMENT_UNAVAILABLE'
+          )
+        );
+      }
+    });
+    const document = documentAt(2);
+    controller.openProject(document.projectId, 2);
+    controller.schedule(documentAt(3, document));
+    await vi.advanceTimersByTimeAsync(PROJECT_AUTOSAVE_IDLE_MS * 20);
+    await controller.whenIdle();
+
+    expect(attempts).toBe(1);
+    expect(lastState(statuses)).toBe('repair');
+    expect(controller.hasPendingChanges).toBe(true);
+    expect(controller.isHalted).toBe(true);
+    controller.dispose();
+  });
+
   it('resumes once a resolution re-establishes a baseline', async () => {
     let failNext = true;
     const { controller, saves } = harness({
