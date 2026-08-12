@@ -1,9 +1,10 @@
 # Public repository cutover checklist
 
-Publishing the existing private repository in place does not remove historical
-objects already held by GitHub. Use a fresh public repository boundary so
-former author identities and deleted machine-local paths are not carried into
-the public object database.
+Publishing the existing private repository in place preserves issues, pull
+requests, releases, tags, Actions configuration, and production integrations.
+Prefer that path when the final full-history secret scan is clean. Author and
+committer attribution is public Git metadata and is not, by itself, a reason to
+discard project history.
 
 ## Prepare the release snapshot
 
@@ -14,10 +15,11 @@ the public object database.
   from an earlier audit.
 - Confirm `THIRD-PARTY-NOTICES.md`, all D1 migrations, and the current
   `wrangler.jsonc` are present in that snapshot.
-- Export only the audited tree into a new repository with a new root commit.
-  Do not push historical branches, tags, pull-request refs, notes, stashes, or
-  backup refs.
-- Keep the current private repository as the access-controlled history archive.
+- Review every unmerged branch and delete or retain it intentionally before
+  publication. A clean default branch does not make branch-only history safe.
+- If a confirmed credential or private-data object is found, pause publication
+  and choose between a coordinated history rewrite and a fresh public
+  repository. Rotate the affected credential before either option.
 
 ## Configure GitHub before visibility changes
 
@@ -26,13 +28,16 @@ the public object database.
 - Review GitHub Actions fork-approval policy. The workflow uses read-only
   repository permissions and does not expose deployment secrets to fork pull
   requests.
-- Disable unused features and verify no release assets, wiki pages, environment
-  secrets, or branch refs were copied unintentionally.
+- Disable unused features and verify release assets, wiki content, Pages,
+  packages, Actions artifacts, repository variables/secrets, environments,
+  deploy keys, webhooks, and branch refs intentionally belong in public view.
+- Re-check the fork pull-request approval policy after visibility changes; that
+  setting is unavailable while the repository is private.
 
 ## Configure the beta separately
 
-- Apply every D1 migration, including `0007_ai_global_budget.sql`, before
-  deploying Worker code that depends on it.
+- Apply every tracked D1 migration before deploying Worker code that depends on
+  it.
 - Provision stable Worker secrets: authentication peppers, Turnstile secret,
   settings encryption key, and `AI_IDENTITY_PEPPER`. These four are the ones a
   deploy refuses to publish without.
