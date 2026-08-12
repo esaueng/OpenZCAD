@@ -1,0 +1,43 @@
+[package]
+name = "openzcad-desktop"
+version = "0.1.0"
+description = "OpenZCAD desktop shell"
+authors = ["OpenZCAD contributors"]
+edition = "2021"
+rust-version = "1.77.2"
+license = "Apache-2.0"
+
+[lib]
+name = "openzcad_desktop_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[features]
+default = []
+webdriver = ["dep:tauri-plugin-wdio-webdriver"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+base64 = "0.22.1"
+getrandom = "0.3.4"
+reqwest = { version = "0.12.15", default-features = false, features = ["json", "rustls-tls-webpki-roots", "stream", "system-proxy"] }
+rfd = "0.15"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10.9"
+tauri = { version = "2", features = [] }
+tauri-plugin-window-state = "2"
+tokio = { version = "1", features = ["sync"] }
+# The embedded HTTP automation server must never ship in a release build.
+tauri-plugin-wdio-webdriver = { version = "1", optional = true }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+security-framework = "2.11.1"
+
+[profile.release]
+panic = "abort"
+codegen-units = 1
+lto = true
+opt-level = "s"
+strip = true

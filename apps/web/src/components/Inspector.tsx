@@ -1,11 +1,13 @@
 import {
   useEffect,
+  useRef,
   useState,
   type MutableRefObject,
   type ReactNode
 } from 'react';
 import { Trash2, X } from 'lucide-react';
 import { coerceParamValue } from '@openzcad/document-core';
+import { FEATURE_COLORS, featureColor } from '@openzcad/shared';
 import type {
   BodyId,
   BodyRepresentation,
@@ -20,6 +22,7 @@ import type {
   SketchObjectData,
   TopologySelection
 } from '@openzcad/shared';
+import type { DimensionMode } from '../lib/keypad';
 import {
   BooleanForm,
   EdgeModifierForm,
@@ -28,11 +31,13 @@ import {
   PrimitiveForm,
   RevolveForm,
   SketchForm,
+  TextSketchForm,
   TransformForm,
   type BodyOption,
   type EdgeModifierFormValue,
   type PatternFormValue,
   type SketchFormValue,
+  type TextSketchFormValue,
   type SketchOption,
   type TransformFormValue
 } from './forms/FeatureForms';
@@ -45,10 +50,15 @@ import {
 } from '../lib/model';
 import { edgeLabel, faceLabel } from '../lib/topologyLabels';
 import { ExprInput } from './ExprInput';
+import { ColorPicker } from './ColorPicker';
+import { FieldAutoFocusProvider } from './forms/fieldAutoFocus';
+import type { BodyAppearancePreview } from './ModelViewer';
 
 export interface InspectorCallbacks {
   onLaunchTool(tool: ToolId): void;
   onCancel(): void;
+  /** Verbatim reason the last exact rebuild refused this form's operation. */
+  commitError?: string | null;
   onCreatePrimitive(
     kind: PrimitiveKind,
     name: string,
@@ -64,6 +74,7 @@ export interface InspectorCallbacks {
     name: string;
     sketchId: SketchId;
     axis: RevolveAxis;
+    angleDeg: ParamValue;
   }): void;
   onCreateBoolean(value: {
     name: string;
@@ -84,13 +95,22 @@ export interface InspectorCallbacks {
     dimensions: Record<string, ParamValue>
   ): void;
   onApplySketch(feature: FeatureNode, value: SketchFormValue): void;
+  onConvertSketchToFixedPlane(sketch: SketchNode): void;
+  onApplyTextSketch(feature: FeatureNode, value: TextSketchFormValue): void;
+  /** Re-enters viewport sketch mode for the feature's sketch. */
+  onEditSketchInViewport(feature: FeatureNode): void;
   onApplyExtrude(
     feature: FeatureNode,
     value: { name: string; sketchId: SketchId; distance: ParamValue }
   ): void;
   onApplyRevolve(
     feature: FeatureNode,
-    value: { name: string; sketchId: SketchId; axis: RevolveAxis }
+    value: {
+      name: string;
+      sketchId: SketchId;
+      axis: RevolveAxis;
+      angleDeg: ParamValue;
+    }
   ): void;
   onApplyBoolean(
     feature: FeatureNode,
@@ -117,6 +137,13 @@ export interface InspectorCallbacks {
     geometry: FaceGeometry
   ): void;
   onDeleteFeature(feature: FeatureNode): void;
+  /** Drag-phase body appearance patch; null restores the committed look. */
+  onPreviewBodyAppearance(preview: BodyAppearancePreview | null): void;
+  /** Commits body appearance through node metadata; null opacity resets. */
+  onCommitBodyAppearance(
+    bodyId: BodyId,
+    appearance: { color?: string; opacity?: number | null }
+  ): void;
 }
 
 interface InspectorProps extends InspectorCallbacks {
@@ -138,10 +165,61 @@ interface InspectorProps extends InspectorCallbacks {
   /** Sketch to pre-select in extrude/revolve, e.g. the one picked in the tree. */
   preferredSketchId: SketchId | null;
   /** Active cylindrical-wall gesture, localized to the inspector subtree. */
-  cylinderRadiusEdit: { initialRadius: number } | null;
+  cylinderRadiusEdit: {
+    initialRadius: number;
+    dimensionMode: DimensionMode;
+  } | null;
   cylinderRadiusSetterRef: MutableRefObject<
     ((radius: number | null) => void) | null
   >;
+}
+
+function SketchAttachmentSummary({
+  sketch,
+  onConvert
+}: {
+  sketch: SketchNode;
+  onConvert(sketch: SketchNode): void;
+}) {
+  if (sketch.planeRef.type === 'canonical') {
+    return null;
+  }
+  const legacyFaceAttachment =
+    sketch.planeRef.type === 'face' && !sketch.planeRef.faceReference;
+  const attachmentLabel =
+    sketch.planeRef.type === 'frame'
+      ? 'Fixed plane'
+      : legacyFaceAttachment
+        ? 'Legacy stored face frame'
+        : 'Associative face';
+  return (
+    <div className="sketch-attachment">
+      <div className="kv-grid">
+        <b>attachment</b>
+        <span>{attachmentLabel}</span>
+      </div>
+      <p className="muted">
+        Geometry for this sketch is edited in viewport sketch mode.
+      </p>
+      {legacyFaceAttachment ? (
+        <>
+          <p className="muted error">
+            This legacy sketch uses its stored migration frame and does not
+            follow later changes to the source face.
+          </p>
+          <div className="form-actions">
+            <button
+              type="button"
+              className="secondary"
+              onClick={() => onConvert(sketch)}
+            >
+              Convert to fixed plane
+            </button>
+          </div>
+        </>
+      ) : null}
+    </div>
+  );
 }
 
 function BodyStats({
@@ -173,6 +251,181 @@ function BodyStats({
         <span>{body.faceCount}</span>
         <b>status</b>
         <span>{body.consumed ? 'consumed by boolean' : 'live'}</span>
+      </div>
+    </>
+  );
+}
+
+/** Preset swatches: the feature palette, deduped, in the picker's grid. */
+const BODY_COLOR_PRESETS = [...new Set(Object.values(FEATURE_COLORS))];
+
+/**
+ * Per-body display color and opacity. Edits stream to the viewport as a
+ * material-level preview on every change and commit through node metadata on
+ * release/blur, so a picker drag never waits on a kernel rebuild.
+ */
+function BodyAppearance({
+  body,
+  onPreview,
+  onCommit
+}: {
+  body: BodyRepresentation;
+  onPreview: InspectorCallbacks['onPreviewBodyAppearance'];
+  onCommit: (appearance: { color?: string; opacity?: number | null }) => void;
+}) {
+  const defaultColor = featureColor(body.source);
+  const [draftColor, setDraftColor] = useState(body.color);
+  const [draftOpacity, setDraftOpacity] = useState(body.opacity ?? 1);
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const committedRef = useRef({
+    color: body.color,
+    opacity: body.opacity ?? 1
+  });
+  const controlsRef = useRef<HTMLDivElement | null>(null);
+
+  // Resync drafts when the committed representation changes: another body
+  // selected, an undo, or this commit's rebuild landing.
+  useEffect(() => {
+    const committed = { color: body.color, opacity: body.opacity ?? 1 };
+    committedRef.current = committed;
+    setDraftColor(committed.color);
+    setDraftOpacity(committed.opacity);
+  }, [body.bodyId, body.color, body.opacity]);
+
+  function commitDraft(overrideColor?: string) {
+    onPreview(null);
+    const committed = committedRef.current;
+    const color = overrideColor ?? draftColor;
+    const patch: { color?: string; opacity?: number | null } = {};
+    if (color.toLowerCase() !== committed.color.toLowerCase()) {
+      patch.color = color;
+    }
+    if (draftOpacity !== committed.opacity) {
+      patch.opacity = draftOpacity >= 1 ? null : draftOpacity;
+    }
+    if (patch.color === undefined && patch.opacity === undefined) {
+      return;
+    }
+    committedRef.current = {
+      color: patch.color ?? committed.color,
+      opacity: draftOpacity
+    };
+    onCommit(patch);
+  }
+
+  const commitDraftRef = useRef(commitDraft);
+  commitDraftRef.current = commitDraft;
+
+  // Clicking outside or pressing Escape closes the picker and commits the
+  // last previewed value (a no-op when the picker already committed it).
+  useEffect(() => {
+    if (!pickerOpen) {
+      return;
+    }
+    const onPointerDown = (event: PointerEvent) => {
+      if (
+        controlsRef.current &&
+        event.target instanceof Node &&
+        !controlsRef.current.contains(event.target)
+      ) {
+        setPickerOpen(false);
+        commitDraftRef.current();
+      }
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setPickerOpen(false);
+        commitDraftRef.current();
+      }
+    };
+    document.addEventListener('pointerdown', onPointerDown);
+    document.addEventListener('keydown', onKeyDown);
+    return () => {
+      document.removeEventListener('pointerdown', onPointerDown);
+      document.removeEventListener('keydown', onKeyDown);
+    };
+  }, [pickerOpen]);
+
+  const isDefault =
+    draftColor.toLowerCase() === defaultColor.toLowerCase() &&
+    draftOpacity >= 1;
+
+  return (
+    <>
+      <h3 className="section-title">Appearance</h3>
+      <div className="appearance-controls" ref={controlsRef}>
+        <div className="appearance-field">
+          <span>Color</span>
+          <span className="appearance-inputs">
+            <button
+              type="button"
+              className="appearance-swatch"
+              aria-label="Pick body color"
+              aria-expanded={pickerOpen}
+              style={{ background: draftColor }}
+              onClick={() => {
+                if (pickerOpen) {
+                  commitDraft();
+                }
+                setPickerOpen((open) => !open);
+              }}
+            />
+            <span className="appearance-value">{draftColor}</span>
+          </span>
+        </div>
+        {pickerOpen && (
+          <ColorPicker
+            color={draftColor}
+            presets={BODY_COLOR_PRESETS}
+            onChange={(color) => {
+              setDraftColor(color);
+              onPreview({ bodyId: body.bodyId, color });
+            }}
+            onCommit={(color) => {
+              setDraftColor(color);
+              commitDraft(color);
+            }}
+          />
+        )}
+        <label className="appearance-field">
+          <span>Opacity</span>
+          <span className="appearance-inputs">
+            <input
+              type="range"
+              aria-label="Body opacity"
+              min={0.05}
+              max={1}
+              step={0.05}
+              value={draftOpacity}
+              onChange={(event) => {
+                const opacity = Number(event.target.value);
+                setDraftOpacity(opacity);
+                onPreview({ bodyId: body.bodyId, opacity });
+              }}
+              onPointerUp={() => commitDraft()}
+              onKeyUp={() => commitDraft()}
+              onBlur={() => commitDraft()}
+            />
+            <span className="appearance-value">
+              {Math.round(draftOpacity * 100)}%
+            </span>
+          </span>
+        </label>
+        {!isDefault && (
+          <button
+            type="button"
+            className="appearance-reset"
+            onClick={() => {
+              onPreview(null);
+              committedRef.current = { color: defaultColor, opacity: 1 };
+              setDraftColor(defaultColor);
+              setDraftOpacity(1);
+              onCommit({ color: defaultColor, opacity: null });
+            }}
+          >
+            Reset to feature default
+          </button>
+        )}
       </div>
     </>
   );
@@ -333,20 +586,49 @@ export function Inspector(props: InspectorProps) {
   const [liveCylinderRadius, setLiveCylinderRadius] = useState<number | null>(
     cylinderRadiusEdit?.initialRadius ?? null
   );
+  const initialCylinderRadius = cylinderRadiusEdit?.initialRadius ?? null;
+  const selectedEdgeReferences = selectedEdges.flatMap((edge) =>
+    edge.reference?.kind === 'edge' ? [edge.reference] : []
+  );
 
   useEffect(() => {
-    if (!cylinderRadiusEdit) {
+    if (initialCylinderRadius === null) {
       setLiveCylinderRadius(null);
       cylinderRadiusSetterRef.current = null;
       return;
     }
-    setLiveCylinderRadius(cylinderRadiusEdit.initialRadius);
+    setLiveCylinderRadius(initialCylinderRadius);
     cylinderRadiusSetterRef.current = (radius) =>
-      setLiveCylinderRadius(radius ?? cylinderRadiusEdit.initialRadius);
+      setLiveCylinderRadius(radius ?? initialCylinderRadius);
     return () => {
       cylinderRadiusSetterRef.current = null;
     };
-  }, [cylinderRadiusEdit, cylinderRadiusSetterRef]);
+  }, [cylinderRadiusSetterRef, initialCylinderRadius]);
+
+  /**
+   * Hand an edit panel the keyboard without handing it a field.
+   *
+   * Create dialogs are left alone: a child field autofocuses there, and moving
+   * focus to the section afterwards would take it straight back off again.
+   */
+  const panelRef = useRef<HTMLElement | null>(null);
+  const editPanelKey =
+    tool === null
+      ? (selectedFeature?.featureId ??
+        selectedBody?.bodyId ??
+        (selectedTopology ? 'topology' : null))
+      : null;
+  useEffect(() => {
+    if (editPanelKey === null) {
+      return;
+    }
+    const panel = panelRef.current;
+    // Never pull focus out of something the user is already using — a viewport
+    // pick can re-render this panel while a field is being typed into.
+    if (panel && !panel.contains(document.activeElement)) {
+      panel.focus({ preventScroll: true });
+    }
+  }, [editPanelKey]);
 
   let eyebrow = '';
   let title = '';
@@ -420,18 +702,10 @@ export function Inspector(props: InspectorProps) {
           onCancel={props.onCancel}
         />
       );
-    } else if (tool === 'transform') {
-      body = (
-        <TransformForm
-          key="create-transform"
-          scope={scope}
-          bodies={bodies}
-          initialTarget={selectedBodyIds.at(-1)}
-          submitLabel="Create"
-          onSubmit={props.onCreateTransform}
-          onCancel={props.onCancel}
-        />
-      );
+      // No create branch for 'transform': the move gizmo is the only way to
+      // make a Move now that it carries the Name field and body picker this
+      // form existed for (WF-07). Editing an existing Move still uses
+      // TransformForm, below.
     } else if (tool === 'fillet' || tool === 'chamfer') {
       body = (
         <EdgeModifierForm
@@ -442,7 +716,17 @@ export function Inspector(props: InspectorProps) {
           edgeHashes={selectedEdges.flatMap((edge) =>
             edge.hash === undefined ? [] : [edge.hash]
           )}
-          availableEdgeCount={edgeModifierBody?.topology?.edges.length}
+          edgeReferences={
+            selectedEdges.length > 0 &&
+            selectedEdgeReferences.length === selectedEdges.length
+              ? selectedEdgeReferences
+              : undefined
+          }
+          availableEdgeCount={
+            edgeModifierBody?.topology?.edges.filter(
+              (edge) => edge.displayRole !== 'seam'
+            ).length
+          }
           onSelectAllEdges={
             edgeModifierBody
               ? () => props.onSelectAllEdges(edgeModifierBody)
@@ -489,9 +773,7 @@ export function Inspector(props: InspectorProps) {
           initialName={selectedFeature.name}
           initialDimensions={data.dimensions}
           liveRadius={
-            data.primitiveKind === 'cylinder'
-              ? liveCylinderRadius
-              : undefined
+            data.primitiveKind === 'cylinder' ? liveCylinderRadius : undefined
           }
           submitLabel="Apply"
           onSubmit={(name, dimensions) =>
@@ -503,7 +785,39 @@ export function Inspector(props: InspectorProps) {
     } else if (
       data.featureKind === 'sketch' &&
       selectedSketch &&
-      selectedSketchObject
+      selectedSketchObject &&
+      selectedSketchObject.objectKind === 'text'
+    ) {
+      // Text sketches get their own form: the closed-shape form below would
+      // present them as a rectangle, and applying it would replace the text.
+      form = (
+        <>
+          <TextSketchForm
+            key={editKey}
+            scope={scope}
+            initial={{
+              name: selectedFeature.name,
+              object: selectedSketchObject
+            }}
+            onSubmit={(value) =>
+              props.onApplyTextSketch(selectedFeature, value)
+            }
+            onCancel={props.onCancel}
+            onEditInViewport={() =>
+              props.onEditSketchInViewport(selectedFeature)
+            }
+          />
+          <SketchAttachmentSummary
+            sketch={selectedSketch}
+            onConvert={props.onConvertSketchToFixedPlane}
+          />
+        </>
+      );
+    } else if (
+      data.featureKind === 'sketch' &&
+      selectedSketch &&
+      selectedSketchObject &&
+      selectedSketch.planeRef.type === 'canonical'
     ) {
       form = (
         <SketchForm
@@ -511,21 +825,24 @@ export function Inspector(props: InspectorProps) {
           scope={scope}
           initial={{
             name: selectedFeature.name,
-            // The legacy form only understands canonical planes; frame/face
-            // sketches are edited in the viewport sketch mode instead.
-            plane:
-              selectedSketch.planeRef.type === 'canonical'
-                ? selectedSketch.planeRef.plane
-                : 'XY',
-            offset:
-              selectedSketch.planeRef.type === 'canonical'
-                ? selectedSketch.planeRef.offset
-                : 0,
+            plane: selectedSketch.planeRef.plane,
+            offset: selectedSketch.planeRef.offset,
             object: selectedSketchObject
           }}
           submitLabel="Apply"
           onSubmit={(value) => props.onApplySketch(selectedFeature, value)}
           onCancel={props.onCancel}
+        />
+      );
+    } else if (
+      data.featureKind === 'sketch' &&
+      selectedSketch &&
+      selectedSketch.planeRef.type !== 'canonical'
+    ) {
+      form = (
+        <SketchAttachmentSummary
+          sketch={selectedSketch}
+          onConvert={props.onConvertSketchToFixedPlane}
         />
       );
     } else if (data.featureKind === 'extrude') {
@@ -537,7 +854,8 @@ export function Inspector(props: InspectorProps) {
           initial={{
             name: selectedFeature.name,
             sketchId: data.sketchId,
-            distance: data.distance
+            distance: data.distance,
+            operation: data.operation
           }}
           submitLabel="Apply"
           onSubmit={(value) => props.onApplyExtrude(selectedFeature, value)}
@@ -553,7 +871,8 @@ export function Inspector(props: InspectorProps) {
           initial={{
             name: selectedFeature.name,
             sketchId: data.sketchId,
-            axis: data.axis
+            axis: data.axis,
+            angleDeg: data.angleDeg
           }}
           submitLabel="Apply"
           onSubmit={(value) => props.onApplyRevolve(selectedFeature, value)}
@@ -603,6 +922,7 @@ export function Inspector(props: InspectorProps) {
           scope={scope}
           targetBodyId={data.targetBodyId}
           edgeHashes={data.edgeHashes}
+          edgeReferences={data.edgeReferences}
           initial={{
             name: selectedFeature.name,
             size: data.featureKind === 'fillet' ? data.radius : data.distance
@@ -693,20 +1013,34 @@ export function Inspector(props: InspectorProps) {
         {cylinderRadiusEdit && liveCylinderRadius !== null && (
           <section
             className="direct-face-editor"
-            aria-label="Cylinder radius properties"
+            aria-label="Cylinder dimension properties"
           >
             <h3 className="section-title">Direct edit</h3>
             <div className="kv-grid">
-              <b>Radius</b>
+              <b>
+                {cylinderRadiusEdit.dimensionMode === 'diameter'
+                  ? 'Diameter'
+                  : 'Radius'}
+              </b>
               <span data-testid="live-cylinder-radius">
-                {formatNumber(liveCylinderRadius)} {units}
+                {cylinderRadiusEdit.dimensionMode === 'diameter' ? 'Ø ' : 'R '}
+                {formatNumber(
+                  cylinderRadiusEdit.dimensionMode === 'diameter'
+                    ? liveCylinderRadius * 2
+                    : liveCylinderRadius
+                )}{' '}
+                {units}
               </span>
             </div>
           </section>
         )}
         {selectedTopology?.kind === 'edge' && (
           <>
-            <h3 className="section-title">Selected edge</h3>
+            <h3 className="section-title">
+              {selectedEdges.length > 1
+                ? `${selectedEdges.length} selected edges`
+                : 'Selected edge'}
+            </h3>
             <div className="tool-grid">
               {(['fillet', 'chamfer'] as const).map((edgeTool) => (
                 <button
@@ -735,6 +1069,15 @@ export function Inspector(props: InspectorProps) {
               onRemoveFaceFeature={props.onRemoveFaceFeature}
             />
           )}
+        {selectedBody && !selectedBody.consumed && (
+          <BodyAppearance
+            body={selectedBody}
+            onPreview={props.onPreviewBodyAppearance}
+            onCommit={(appearance) =>
+              props.onCommitBodyAppearance(selectedBody.bodyId, appearance)
+            }
+          />
+        )}
         {selectedBody && <BodyStats body={selectedBody} units={units} />}
         {selectedTopology?.kind !== 'body' && selectedTopology && (
           <div className="topology-selection">
@@ -776,7 +1119,23 @@ export function Inspector(props: InspectorProps) {
   }
 
   return (
-    <section className="inspector" aria-label="Feature inspector">
+    <section
+      className="inspector"
+      aria-label="Feature inspector"
+      ref={panelRef}
+      // An edit panel no longer holds the keyboard through a focused field, so
+      // it holds it here instead. A section is not an input, so the workspace
+      // still counts this as "not typing" and B/M/W keep working — but Escape
+      // now reaches the panel that the status bar says it closes, and one Tab
+      // still steps into the first field.
+      tabIndex={-1}
+      onKeyDown={(event) => {
+        if (event.key === 'Escape') {
+          event.stopPropagation();
+          props.onCancel();
+        }
+      }}
+    >
       <div className="panel-header">
         <div className="panel-title-row">
           <h2>{title}</h2>
@@ -792,7 +1151,25 @@ export function Inspector(props: InspectorProps) {
           </button>
         </div>
       </div>
-      <div className="panel-body">{body}</div>
+      {/*
+        A create dialog is here because a tool was invoked, so it may take the
+        keyboard; an edit panel is here because something was selected, and
+        must not — the workspace's single-letter shortcuts belong to the user
+        until they ask for a field.
+      */}
+      <FieldAutoFocusProvider allowed={tool !== null}>
+        <div className="panel-body">
+          {props.commitError && (
+            // A refused exact rebuild leaves this panel open and otherwise
+            // unchanged, so without the reason here the click reads as having
+            // done nothing at all. Rendered in full: the status bar clips it.
+            <p className="field-error inspector-commit-error" role="alert">
+              {props.commitError}
+            </p>
+          )}
+          {body}
+        </div>
+      </FieldAutoFocusProvider>
     </section>
   );
 }

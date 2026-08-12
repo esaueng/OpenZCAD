@@ -4,14 +4,18 @@ import {
   type AssistantHistoryTurn,
   type CadDocumentDigest
 } from '@openzcad/ai-contracts';
-import type { CloudflareEnv } from '@openzcad/cloudflare-adapters';
+import {
+  isCloudflareFeatureEnabled,
+  type CloudflareEnv
+} from '@openzcad/cloudflare-adapters';
 import type {
   AssistantProvider,
   AssistantReasoningEffort
 } from '@openzcad/shared';
+import { observeAssistantResponse } from './assistantStreamDiagnostics';
 
 export const DEFAULT_AI_MODEL = 'gpt-5.6-sol';
-export const DEFAULT_OPENROUTER_MODEL = 'openai/gpt-5.6-terra';
+export const DEFAULT_OPENROUTER_MODEL = 'openai/gpt-5.6-sol';
 export const DEFAULT_AI_REASONING_EFFORT = 'high';
 export const DEFAULT_AI_MAX_OUTPUT_TOKENS = 32_000;
 export const DEFAULT_AI_TIMEOUT_MS = 90_000;
@@ -51,7 +55,7 @@ When earlier turns are present, they are the conversation so far: any question y
 
 Work out, before writing any operation:
 1. The parts. First decide whether the request truly requires more than one independently manufactured, moving, or removable piece. If not, plan ONE LIVE BODY for each physical part and default to one finished physical part. Construction solids are features, not parts.
-2. The features. Which cavities, openings, rims, or holes does each part need? (Fillets and chamfers are the exception: they can only be applied to a body that already exists in the digest, never to one you create in this proposal — see section 8.)
+2. The features. Which cavities, openings, rims, or holes does each part need? Fillets and chamfers on existing bodies use exact edge hashes from the digest. A body created earlier in this proposal may be finished only by a final edge modifier with a supported semantic selector — see section 8.
 3. The relationships. What mates with what, in which direction does it assemble, and what must therefore share a dimension?
 4. The numbers. Overall size, wall thickness, clearances, and offsets — each expressed against the document units in the digest.
 5. The parameters. Every number a user might reasonably want to edit becomes a named parameter, and dependent geometry references it by expression rather than repeating a literal.
@@ -79,7 +83,7 @@ Rules: declare an alias before referencing it; each alias is unique within the p
 
 # 5. Hollowing, openings, and holes
 
-There is NO shell, offset, or thickness operation. Hollow parts are made by subtracting an inner solid from an outer one — this is the normal, expected technique, not a workaround.
+Use \`add_shell\` or \`add_solid_offset\` only when the rollout-capability block appended to these instructions explicitly enables that operation. Otherwise hollow parts are made by subtracting an inner solid from an outer one.
 
 To hollow a box with wall thickness \`wall\` and floor \`floor_t\`, leaving the top open:
 - cavity size = (width - 2*wall, height - 2*wall, depth - floor_t)
@@ -113,17 +117,19 @@ The governing rule for every opening: material must be removed all the way to th
 # 8. Editing an existing document
 
 - Prefer \`set_parameter\` when a named parameter already drives the requested dimension.
-- Use \`set_feature_dimension\` for an existing primitive dimension, extrude distance, fillet radius, chamfer distance, pattern count/spacing/angleDeg, or transform translation.x/y/z and rotationDeg.x/y/z.
+- Use \`set_feature_dimension\` for an existing primitive dimension, extrude distance, revolve angleDeg, shell thickness, solid-offset distance, fillet radius, chamfer distance, pattern count/spacing/angleDeg, transform translation.x/y/z and rotationDeg.x/y/z, or an existing direct edit's diameter/radius/offset.
+- Use \`set_sketch_dimension\` for an existing sketch object's allowlisted numeric field. Copy the sketchId and the parallel objectId from the digest; never identify an object by array position alone.
 - Reference only featureId, sketchId, bodyId, parameter names, and topology hashes present in the digest.
 - \`add_sketch\` creates a multi-object sketch on a principal plane (XY ground, XZ front, YZ right) with rectangle/circle/polygon/line/arc objects in sketch-local 2D coordinates; give it a \`$alias\` localId so a later \`add_extrude\` can reference it before it exists.
 - \`add_extrude\` extrudes a whole single-object profile when \`samplePoint\` is null. For a multi-object sketch, set \`samplePoint\` to a 2D point strictly inside the closed region to extrude — e.g. between two concentric circles to make a ring wall, or inside the piece of a circle cut off by a line. Each closed region is extruded by its own add_extrude.
 - The digest's \`bodies\` list reports each built body's liveness and placement. Never target a body marked \`consumed: true\` — a boolean, fillet, chamfer, or pattern already absorbed it, and it is no longer part of the model. Use each body's \`bbox\` to know where it actually sits rather than re-deriving it from the feature history.
 - A live body's \`topology\` is the authoritative exact geometry currently available to the viewport without sending its mesh. \`faces\` report analytic surface measurements; \`edges\` report the stable numeric \`hash\`, whether the sampled exact curve is closed, its length, center, bounds, \`modelingRole\`, and \`modifierCandidate\`. Use those spatial facts to understand terms such as top, bottom, outer, and rim. A primitive cylinder's raw B-rep also has a smooth periodic seam, but its two \`modifierCandidate: true\` edges are the closed circular rims at the minimum and maximum Z bounds.
 - When the user asks for all/every/each edge of a body, do not ask them to select edges. Resolve the named body, the one selected body, or the sole live body; require \`edgeInventoryComplete: true\`; then emit one \`add_edge_modifier\` containing every hash whose \`modifierCandidate\` is true. Never include an edge marked \`modelingRole: "seam"\`: it is a smooth surface parameterization seam, not a user-visible edge to fillet. If the inventory is incomplete, no modifier candidates exist, or more than one body remains ambiguous, ask the user to narrow the target instead of returning a partial operation.
+- A body created earlier in this proposal may be filleted or chamfered only as the FINAL operation. Reference its \`$localId\`, leave \`edgeHashes\` empty, and set \`edgeSelector\` to \`"all-feature-edges"\` for every physical feature edge or \`"circular-rims"\` for all closed circular rims. The application exact-rebuilds the prefix, resolves the selector to V5 lineage references, and validates the final transaction atomically. For every other edge modifier set \`edgeSelector\` to null.
 - The digest's \`selection\` is the authoritative snapshot of what was picked when the user submitted the request. \`featureIds\`, \`bodyIds\`, and \`topologies\` preserve pick order; the last item is the primary selection. Words such as "selected", "this", "these", "those", and "them" refer to that snapshot, not to a feature you infer from proximity or naming.
 - When the user requests a fillet or chamfer on selected edges, emit one \`add_edge_modifier\` targeting their shared \`bodyId\` and copy every selected edge's numeric \`hash\` into \`edgeHashes\` in selection order. Do not drop all but the last edge. Never guess an edge that is not selected.
 - When the user names selected bodies for a boolean, copy \`selection.bodyIds\` in order because the first body is the base. When the user names a selected feature for an edit, use its selected \`featureId\` rather than choosing another feature with a similar name.
-- A selected face identifies both that exact face and its owning body. Face-specific modeling operations are not currently available; do not invent an edge hash from a selected face.
+- A selected face identifies both that exact face and its owning body. For an enabled face-specific operation, copy its complete schema-v5 \`reference\` and unrounded \`snapshot\` verbatim from the digest; never invent a topology hash, infer an unselected face, or substitute a nearby face.
 - For subtract and intersect the first entry of \`targetBodyIds\` is the target; the rest are tools.
 - Do not delete unrelated features or silently substitute a different operation.
 
@@ -273,7 +279,7 @@ function apiKeyFor(env: CloudflareEnv, provider: string) {
       ? env.OPENROUTER_API_KEY?.trim()
       : env.OPENAI_API_KEY?.trim();
   return provider === 'openrouter'
-    ? providerKey || genericKey || undefined
+    ? providerKey || undefined
     : genericKey || providerKey || undefined;
 }
 
@@ -337,17 +343,143 @@ function upstreamUrlForRuntime(
   return runtime?.baseUrl ?? upstreamUrlFor(env, provider);
 }
 
+const ROLLOUT_OPERATION_FLAGS = [
+  ['add_direct_edit', 'AI_PATCH_DIRECT_EDIT_ENABLED'],
+  ['add_face_sketch', 'AI_PATCH_FACE_SKETCH_ENABLED'],
+  ['add_multi_profile_extrude', 'AI_PATCH_MULTI_PROFILE_EXTRUDE_ENABLED'],
+  ['add_mirror', 'AI_PATCH_MIRROR_ENABLED'],
+  ['add_shell', 'AI_PATCH_SHELL_ENABLED'],
+  ['add_solid_offset', 'AI_PATCH_SOLID_OFFSET_ENABLED']
+] as const;
+
+/**
+ * Rollout flags on a single PROPERTY of an operation that is already
+ * available. Partial revolve is not a new operation kind — `add_revolve` has
+ * shipped for a long time and only grew an optional `angleDeg` — so pruning
+ * the whole branch would withdraw a working capability. The property is
+ * pruned instead, from both `properties` and `required`.
+ */
+const ROLLOUT_OPERATION_PROPERTY_FLAGS = [
+  ['add_revolve', 'angleDeg', 'AI_PATCH_PARTIAL_REVOLVE_ENABLED']
+] as const;
+
+function rolloutCapabilityInstructions(env: CloudflareEnv): string {
+  const enabled = ROLLOUT_OPERATION_FLAGS.filter(([, flag]) =>
+    isCloudflareFeatureEnabled(env, flag)
+  ).map(([operation]) => operation);
+  const disabled = ROLLOUT_OPERATION_FLAGS.filter(
+    ([, flag]) => !isCloudflareFeatureEnabled(env, flag)
+  ).map(([operation]) => operation);
+  const enabledProperties = ROLLOUT_OPERATION_PROPERTY_FLAGS.filter(
+    ([, , flag]) => isCloudflareFeatureEnabled(env, flag)
+  ).map(([operation, property]) => `${operation}.${property}`);
+  const disabledProperties = ROLLOUT_OPERATION_PROPERTY_FLAGS.filter(
+    ([, , flag]) => !isCloudflareFeatureEnabled(env, flag)
+  ).map(([operation, property]) => `${operation}.${property}`);
+  return `# Rollout-controlled modeling operations
+
+The base operations described above remain available. The following newer operations are enabled for this deployment: ${enabled.length > 0 ? enabled.map((operation) => `\`${operation}\``).join(', ') : 'none'}.
+
+Never emit a rollout-controlled operation unless it appears in that enabled list. Currently disabled: ${disabled.map((operation) => `\`${operation}\``).join(', ')}.
+
+When enabled:
+- \`add_direct_edit\` copies the selected exact face reference and its complete unrounded source snapshot.
+- \`add_face_sketch\` copies one referenced planar face and its deterministic \`attachmentFrame\`; never choose a face the user did not select or name.
+- \`add_multi_profile_extrude\` uses distinct digest-backed sample points from one existing sketch.
+- \`add_mirror\` creates a separate reflected body and keeps its source.
+- \`add_shell\` requires one or more explicitly referenced opening faces.
+- \`add_solid_offset\` uses a positive outward distance and may still be refused by exact kernel topology limits.
+
+Rollout-controlled operation fields (the operations themselves stay available either way). Enabled: ${enabledProperties.length > 0 ? enabledProperties.map((field) => `\`${field}\``).join(', ') : 'none'}. Disabled: ${disabledProperties.length > 0 ? disabledProperties.map((field) => `\`${field}\``).join(', ') : 'none'}.
+
+- \`add_revolve.angleDeg\` sweeps a partial turn, in degrees, greater than 0 and at most 360. Send null, or leave it out where the schema allows, for a full turn. A partial revolve keeps hash-only topology references and the kernel cannot fillet or chamfer its edges, so do not follow one with an edge modifier on the same body.
+
+Copy every face reference, face snapshot, attachment frame, sketch id, body id, and selected profile point verbatim from the current digest. Topology-dependent operations may target only existing live bodies, never same-proposal body aliases. Recognized imported-feature edits remain disabled until their exact diagnostics and command path mature.`;
+}
+
+type MutableJsonSchema = Record<string, unknown>;
+
+function schemaRecord(value: unknown): MutableJsonSchema | undefined {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
+    ? (value as MutableJsonSchema)
+    : undefined;
+}
+
+/**
+ * Strict structured output is the enforcement boundary for rollout flags.
+ * Prompt instructions help the model choose well, but pruning disabled
+ * branches prevents a compliant provider from producing them at all.
+ */
+function assistantReplySchemaFor(env: CloudflareEnv): unknown {
+  const schema = structuredClone(
+    ASSISTANT_REPLY_JSON_SCHEMA
+  ) as unknown as MutableJsonSchema;
+  const properties = schemaRecord(schema.properties);
+  const proposal = schemaRecord(properties?.proposal);
+  const proposalChoices = Array.isArray(proposal?.anyOf) ? proposal.anyOf : [];
+  const patchSchema = proposalChoices.map(schemaRecord).find((choice) => {
+    const patchProperties = schemaRecord(choice?.properties);
+    return schemaRecord(patchProperties?.operations) !== undefined;
+  });
+  const patchProperties = schemaRecord(patchSchema?.properties);
+  const operations = schemaRecord(patchProperties?.operations);
+  const items = schemaRecord(operations?.items);
+  const operationChoices = Array.isArray(items?.anyOf) ? items.anyOf : [];
+  const rolloutFlags = new Map<
+    string,
+    (typeof ROLLOUT_OPERATION_FLAGS)[number][1]
+  >(ROLLOUT_OPERATION_FLAGS);
+
+  items!.anyOf = operationChoices.filter((choice) => {
+    const operation = schemaRecord(choice);
+    const operationProperties = schemaRecord(operation?.properties);
+    const kind = schemaRecord(operationProperties?.kind)?.const;
+    const flag = typeof kind === 'string' ? rolloutFlags.get(kind) : undefined;
+    return flag === undefined || isCloudflareFeatureEnabled(env, flag);
+  });
+
+  // Same enforcement one level down, for a flag that gates a field rather
+  // than a whole operation. `required` must lose the property too: strict
+  // structured output rejects a schema whose `required` names something
+  // `properties` does not declare.
+  for (const [
+    kind,
+    property,
+    propertyFlag
+  ] of ROLLOUT_OPERATION_PROPERTY_FLAGS) {
+    if (isCloudflareFeatureEnabled(env, propertyFlag)) {
+      continue;
+    }
+    for (const choice of items!.anyOf as unknown[]) {
+      const operationProperties = schemaRecord(
+        schemaRecord(choice)?.properties
+      );
+      if (schemaRecord(operationProperties?.kind)?.const !== kind) {
+        continue;
+      }
+      delete operationProperties![property];
+      const operation = schemaRecord(choice)!;
+      if (Array.isArray(operation.required)) {
+        operation.required = operation.required.filter(
+          (name) => name !== property
+        );
+      }
+    }
+  }
+  return schema;
+}
+
 function requestInstructions(
+  env: CloudflareEnv,
   runtime: AssistantRuntimeConfig | undefined,
   hasAttachments = false
 ) {
   const custom = runtime?.customInstructions.trim();
-  const base = hasAttachments
+  const baseInstructions = hasAttachments
     ? `${CAD_ASSISTANT_INSTRUCTIONS}\n\n${DRAWING_INSTRUCTIONS}`
     : CAD_ASSISTANT_INSTRUCTIONS;
-  return custom
-    ? `${base}\n\n# User modeling preferences\n${custom}`
-    : base;
+  const base = `${baseInstructions}\n\n${rolloutCapabilityInstructions(env)}`;
+  return custom ? `${base}\n\n# User modeling preferences\n${custom}` : base;
 }
 
 /**
@@ -404,10 +536,18 @@ export function getAssistantStatus(env: CloudflareEnv): AssistantStatus {
   };
 }
 
-function jsonError(error: string, code: string, status: number): Response {
+function jsonError(
+  error: string,
+  code: string,
+  status: number,
+  requestId?: string
+): Response {
   return new Response(JSON.stringify({ error, code }), {
     status,
-    headers: { 'content-type': 'application/json' }
+    headers: {
+      'content-type': 'application/json',
+      ...(requestId ? { 'x-openzcad-request-id': requestId } : {})
+    }
   });
 }
 
@@ -418,12 +558,15 @@ export async function streamAssistantProposal(
   runtime?: AssistantRuntimeConfig
 ): Promise<Response> {
   const provider = runtime?.provider ?? providerFor(env);
+  const model = runtime?.model ?? modelFor(env, provider);
+  const requestId = crypto.randomUUID();
   const apiKey = runtime?.apiKey ?? apiKeyFor(env, provider);
   if (!apiKey) {
     return jsonError(
       'AI is not configured for this environment.',
       'AI_NOT_CONFIGURED',
-      503
+      503,
+      requestId
     );
   }
 
@@ -432,7 +575,8 @@ export async function streamAssistantProposal(
     return jsonError(
       'AI_BASE_URL is required for a Responses-compatible provider.',
       'AI_PROVIDER_NOT_CONFIGURED',
-      503
+      503,
+      requestId
     );
   }
 
@@ -447,15 +591,16 @@ export async function streamAssistantProposal(
     }
   }
 
-  let upstream: Response;
-  try {
-    upstream = await fetch(upstreamUrl, {
+  const requestUpstream = (requireOpenRouterParameters: boolean) =>
+    fetch(upstreamUrl, {
       method: 'POST',
+      redirect: 'manual',
       headers,
       signal: AbortSignal.timeout(runtime?.timeoutMs ?? timeoutFor(env)),
       body: JSON.stringify({
-        model: runtime?.model ?? modelFor(env, provider),
+        model,
         instructions: requestInstructions(
+          env,
           runtime,
           (input.attachments?.length ?? 0) > 0
         ),
@@ -470,21 +615,46 @@ export async function streamAssistantProposal(
             type: 'json_schema',
             name: 'openzcad_reply',
             strict: true,
-            schema: ASSISTANT_REPLY_JSON_SCHEMA
+            schema: assistantReplySchemaFor(env)
           }
         },
         max_output_tokens: runtime?.maxOutputTokens ?? maxOutputTokensFor(env),
         store: false,
         stream: true,
+        // Prefer a route that explicitly advertises structured output. The
+        // Responses API can still return 404 when account/provider routing
+        // filters leave no such route, even for a model that supports it. The
+        // caller retries that one pre-generation failure without this routing
+        // constraint; the strict schema and local contract parser still guard
+        // the returned proposal.
+        ...(provider === 'openrouter' && requireOpenRouterParameters
+          ? { provider: { require_parameters: true } }
+          : {}),
         ...(safetyIdentifier ? { safety_identifier: safetyIdentifier } : {})
       })
     });
+
+  let upstream: Response;
+  try {
+    upstream = await requestUpstream(true);
+    if (provider === 'openrouter' && upstream.status === 404) {
+      await upstream.body?.cancel();
+      console.warn('AI Responses strict route unavailable; retrying:', {
+        requestId,
+        provider,
+        model,
+        status: upstream.status
+      });
+      upstream = await requestUpstream(false);
+    }
   } catch (error) {
     const timedOut =
       error instanceof DOMException &&
       (error.name === 'TimeoutError' || error.name === 'AbortError');
     console.error('AI Responses provider request failed:', {
+      requestId,
       provider,
+      model,
       reason: timedOut ? 'timeout' : 'network'
     });
     return jsonError(
@@ -492,31 +662,39 @@ export async function streamAssistantProposal(
         ? 'The modeling assistant timed out before producing a patch.'
         : 'The modeling assistant could not reach its provider.',
       timedOut ? 'AI_UPSTREAM_TIMEOUT' : 'AI_UPSTREAM_UNAVAILABLE',
-      timedOut ? 504 : 502
+      timedOut ? 504 : 502,
+      requestId
     );
   }
 
   if (!upstream.ok || !upstream.body) {
     await upstream.body?.cancel();
     console.error('AI Responses provider failed:', {
+      requestId,
       provider,
+      model,
       status: upstream.status
     });
     return jsonError(
       'The modeling assistant could not generate a patch.',
       'AI_UPSTREAM_ERROR',
-      502
+      502,
+      requestId
     );
   }
 
-  return new Response(upstream.body, {
-    status: 200,
-    headers: {
-      'content-type': 'text/event-stream; charset=utf-8',
-      'cache-control': 'no-cache, no-transform',
-      'x-content-type-options': 'nosniff'
+  return new Response(
+    observeAssistantResponse(upstream.body, { requestId, provider, model }),
+    {
+      status: 200,
+      headers: {
+        'content-type': 'text/event-stream; charset=utf-8',
+        'cache-control': 'no-cache, no-transform',
+        'x-content-type-options': 'nosniff',
+        'x-openzcad-request-id': requestId
+      }
     }
-  });
+  );
 }
 
 export async function testAssistantConnection(
@@ -534,6 +712,7 @@ export async function testAssistantConnection(
   try {
     response = await fetch(upstreamUrl, {
       method: 'POST',
+      redirect: 'manual',
       headers: {
         authorization: `Bearer ${runtime.apiKey}`,
         'content-type': 'application/json',

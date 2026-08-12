@@ -40,14 +40,22 @@ export function CommandPalette({ commands, onClose }: CommandPaletteProps) {
   const [activeIndex, setActiveIndex] = useState(0);
   const listRef = useRef<HTMLDivElement | null>(null);
   const dialogRef = useRef<HTMLDivElement | null>(null);
+  const searchRef = useRef<HTMLInputElement | null>(null);
 
-  // The input carries autoFocus, so the hook only traps and restores focus.
-  useModalFocus(dialogRef);
+  // The hook moves focus after capturing the opener. React's `autoFocus`
+  // happens before effects and would otherwise make the input restore itself
+  // after it has already unmounted.
+  useModalFocus(dialogRef, { autoFocus: true, initialFocusRef: searchRef });
 
-  const visible = useMemo(() => commands.filter((command) => matches(command, query)), [
-    commands,
-    query
-  ]);
+  const visible = useMemo(
+    () => commands.filter((command) => matches(command, query)),
+    [commands, query]
+  );
+  // View mode hands the palette no modeling commands, so the examples have to
+  // follow — a hint naming tools the list does not contain reads as a bug.
+  const examples = commands.some((command) => command.id.startsWith('tool-'))
+    ? 'box, extrude, front view, export'
+    : 'front view, fit, export';
   const clampedIndex = Math.min(activeIndex, Math.max(visible.length - 1, 0));
 
   useEffect(() => {
@@ -55,7 +63,8 @@ export function CommandPalette({ commands, onClose }: CommandPaletteProps) {
   }, [query]);
 
   useEffect(() => {
-    const row = listRef.current?.children[clampedIndex] as HTMLElement | undefined;
+    const row = listRef.current?.children[clampedIndex] as
+      HTMLElement | undefined;
     row?.scrollIntoView({ block: 'nearest' });
   }, [clampedIndex]);
 
@@ -86,9 +95,9 @@ export function CommandPalette({ commands, onClose }: CommandPaletteProps) {
         <div className="palette-input-row">
           <Search size={14} aria-hidden="true" />
           <input
-            autoFocus
+            ref={searchRef}
             value={query}
-            placeholder="Type a command… (box, extrude, front view, export)"
+            placeholder={`Type a command… (${examples})`}
             spellCheck={false}
             aria-label="Search commands"
             aria-controls={LIST_ID}
@@ -99,7 +108,9 @@ export function CommandPalette({ commands, onClose }: CommandPaletteProps) {
             onKeyDown={(event) => {
               if (event.key === 'ArrowDown') {
                 event.preventDefault();
-                setActiveIndex((index) => Math.min(index + 1, visible.length - 1));
+                setActiveIndex((index) =>
+                  Math.min(index + 1, visible.length - 1)
+                );
               } else if (event.key === 'ArrowUp') {
                 event.preventDefault();
                 setActiveIndex((index) => Math.max(index - 1, 0));
@@ -114,7 +125,9 @@ export function CommandPalette({ commands, onClose }: CommandPaletteProps) {
           />
         </div>
         <div className="palette-list" id={LIST_ID} role="listbox" ref={listRef}>
-          {visible.length === 0 && <p className="palette-empty">No matching command.</p>}
+          {visible.length === 0 && (
+            <p className="palette-empty">No matching command.</p>
+          )}
           {visible.map((command, index) => (
             <button
               key={command.id}
@@ -136,7 +149,9 @@ export function CommandPalette({ commands, onClose }: CommandPaletteProps) {
               <span className="palette-icon">{command.icon}</span>
               <span className="palette-label">{command.label}</span>
               {command.disabledReason ? (
-                <small className="palette-reason">{command.disabledReason}</small>
+                <small className="palette-reason">
+                  {command.disabledReason}
+                </small>
               ) : (
                 <small className="palette-group">{command.group}</small>
               )}

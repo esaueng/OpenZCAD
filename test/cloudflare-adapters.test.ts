@@ -1,11 +1,19 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
   createPersistenceService,
+  CLOUDFLARE_BOOLEAN_FLAGS,
   D1R2PersistenceService,
+  isCloudflareFeatureEnabled,
+  projectCollaborationRollout,
   ProjectCollaborationRoom,
   resolveCollaborationDocument
 } from '@openzcad/cloudflare-adapters';
-import { toUserId } from '@openzcad/shared';
+import {
+  toArtifactId,
+  toProjectId,
+  toUploadSessionId,
+  toUserId
+} from '@openzcad/shared';
 import {
   addPrimitiveFeature,
   createProjectDocument
@@ -30,13 +38,106 @@ function roomRequest(
     headers: {
       'content-type': 'application/json',
       'x-openzcad-user-id': 'user_room',
-      'x-openzcad-display-name': 'Room user'
+      'x-openzcad-display-name': 'Room user',
+      'x-openzcad-project-role': 'owner'
     },
     body: JSON.stringify(body)
   });
 }
 
 describe('cloudflare adapters', () => {
+  it('keeps typed feature flags off unless explicitly enabled', () => {
+    expect(CLOUDFLARE_BOOLEAN_FLAGS).toEqual([
+      'DESKTOP_AUTH_ENABLED',
+      'PROJECT_SHARING_ENABLED',
+      'PROJECT_EDIT_LEASES_ENFORCED',
+      'PROJECT_PERSONAL_SYNC_ENABLED',
+      'AI_PATCH_DIRECT_EDIT_ENABLED',
+      'AI_PATCH_FACE_SKETCH_ENABLED',
+      'AI_PATCH_MULTI_PROFILE_EXTRUDE_ENABLED',
+      'AI_PATCH_MIRROR_ENABLED',
+      'AI_PATCH_SHELL_ENABLED',
+      'AI_PATCH_SOLID_OFFSET_ENABLED',
+      'AI_PATCH_PARTIAL_REVOLVE_ENABLED'
+    ]);
+    expect(isCloudflareFeatureEnabled({}, 'PROJECT_SHARING_ENABLED')).toBe(
+      false
+    );
+    expect(
+      isCloudflareFeatureEnabled(
+        { PROJECT_SHARING_ENABLED: 'definitely' },
+        'PROJECT_SHARING_ENABLED'
+      )
+    ).toBe(false);
+    for (const value of ['1', 'true', 'TRUE', ' yes ', 'on']) {
+      expect(
+        isCloudflareFeatureEnabled(
+          { PROJECT_SHARING_ENABLED: value },
+          'PROJECT_SHARING_ENABLED'
+        )
+      ).toBe(true);
+    }
+    for (const value of ['', '0', 'false', 'no', 'off']) {
+      expect(
+        isCloudflareFeatureEnabled(
+          { PROJECT_SHARING_ENABLED: value },
+          'PROJECT_SHARING_ENABLED'
+        )
+      ).toBe(false);
+    }
+  });
+
+  it('resolves collaboration canaries by normalized authenticated email', () => {
+    const canaryEnv = {
+      PROJECT_SHARING_ENABLED: 'false',
+      PROJECT_EDIT_LEASES_ENFORCED: 'false',
+      PROJECT_PERSONAL_SYNC_ENABLED: 'false',
+      PROJECT_COLLABORATION_CANARY_EMAILS:
+        ' owner@example.com, Second@Example.com '
+    };
+
+    expect(projectCollaborationRollout(canaryEnv, 'OWNER@example.com')).toEqual(
+      {
+        sharingEnabled: true,
+        editLeasesEnforced: true,
+        personalSyncEnabled: true,
+        canary: true
+      }
+    );
+    expect(projectCollaborationRollout(canaryEnv, 'other@example.com')).toEqual(
+      {
+        sharingEnabled: false,
+        editLeasesEnforced: false,
+        personalSyncEnabled: false,
+        canary: false
+      }
+    );
+    expect(
+      projectCollaborationRollout(
+        { PROJECT_EDIT_LEASES_ENFORCED: 'true' },
+        'other@example.com'
+      ).editLeasesEnforced
+    ).toBe(true);
+  });
+
+  it('opens collaboration globally without requiring an email allowlist', () => {
+    expect(
+      projectCollaborationRollout(
+        {
+          PROJECT_SHARING_ENABLED: 'true',
+          PROJECT_EDIT_LEASES_ENFORCED: 'true',
+          PROJECT_PERSONAL_SYNC_ENABLED: 'true'
+        },
+        'anyone@example.com'
+      )
+    ).toEqual({
+      sharingEnabled: true,
+      editLeasesEnforced: true,
+      personalSyncEnabled: true,
+      canary: false
+    });
+  });
+
   it('falls back to in-memory persistence when D1 is absent', async () => {
     const service = createPersistenceService({ ENVIRONMENT: 'beta' });
     const created = await service.createProject(toUserId('user_test'), {
@@ -50,6 +151,160 @@ describe('cloudflare adapters', () => {
         (project) => project.projectId === created.project.projectId
       )
     ).toBe(true);
+  });
+
+  it("requires an owner's sharing preference for member project access", async () => {
+    const prepare = vi.fn((query: string) => ({
+      bind: vi.fn(() => ({
+        first: vi.fn(async () => {
+          expect(query).toContain('LEFT JOIN user_settings owner_settings');
+          expect(query).toContain("'$.collaboration.enabled'");
+          return null;
+        })
+      }))
+    }));
+    const service = new D1R2PersistenceService({
+      DB: { prepare } as unknown as D1Database,
+      PROJECT_SHARING_ENABLED: 'true'
+    });
+
+    await expect(
+      service.requireProjectRead(
+        toUserId('user_member'),
+        'project_disabled_by_owner'
+      )
+    ).rejects.toMatchObject({ name: 'ProjectNotFoundError' });
+  });
+
+  it("requires an owner's sharing preference when accepting invitations", async () => {
+    const batch = vi.fn();
+    const prepare = vi.fn((query: string) => ({
+      bind: vi.fn(() => ({
+        first: vi.fn(async () => {
+          expect(query).toContain('LEFT JOIN user_settings owner_settings');
+          expect(query).toContain("'$.collaboration.enabled'");
+          return null;
+        })
+      }))
+    }));
+    const service = new D1R2PersistenceService({
+      DB: { prepare, batch } as unknown as D1Database,
+      PROJECT_SHARING_ENABLED: 'true'
+    });
+
+    await expect(
+      service.acceptProjectInvitation(
+        toUserId('user_invitee'),
+        'invitee@example.com',
+        'token-hash',
+        1_800_000_000
+      )
+    ).rejects.toMatchObject({ code: 'INVITATION_NOT_FOUND' });
+    expect(batch).not.toHaveBeenCalled();
+  });
+
+  it('rejects stale R2 saves before writing project objects', async () => {
+    const userId = toUserId('user_stale_save');
+    const document = createProjectDocument('Stale save', userId);
+    const put = vi.fn();
+    const prepare = vi.fn((query: string) => ({
+      bind: () => ({
+        first: async () => {
+          if (query.includes('user_id AS owner_user_id')) {
+            return { owner_user_id: userId };
+          }
+          if (query.includes('SELECT document_version')) {
+            return { document_version: document.version + 1 };
+          }
+          return null;
+        }
+      })
+    }));
+    const service = new D1R2PersistenceService({
+      DB: { prepare } as unknown as D1Database,
+      PROJECT_STORAGE: {
+        put,
+        get: vi.fn(),
+        delete: vi.fn()
+      } as unknown as R2Bucket
+    });
+
+    await expect(
+      service.saveDocument(userId, {
+        projectId: document.projectId,
+        expectedVersion: document.version,
+        document
+      })
+    ).rejects.toMatchObject({ currentVersion: document.version + 1 });
+    expect(put).not.toHaveBeenCalled();
+  });
+
+  it('keeps content-addressed assets when a save loses the version race', async () => {
+    const userId = toUserId('user_conflict_assets');
+    const manager = new CommandManager(
+      createProjectDocument('Conflict import', userId)
+    );
+    manager.execute(
+      commandFactories.importStep({
+        name: 'Bracket STEP',
+        artifactId: 'artifact_conflict_step',
+        sourceName: 'bracket.step',
+        stepText: 'ISO-10303-21;\nDATA;\nENDSEC;\nEND-ISO-10303-21;'
+      })
+    );
+    const document = manager.document;
+    const deleted: string[] = [];
+    const bucket = {
+      put: vi.fn(async (_key: string) => undefined),
+      get: vi.fn(),
+      head: vi.fn(async () => null),
+      delete: vi.fn(async (key: string) => {
+        deleted.push(key);
+      })
+    };
+    const prepare = vi.fn((query: string) => ({
+      bind: () => ({
+        first: async () => {
+          if (query.includes('owner_user_id')) {
+            return { owner_user_id: userId };
+          }
+          if (query.includes('SELECT document_version')) {
+            return { document_version: document.version };
+          }
+          return null;
+        },
+        run: async () => ({}),
+        all: async () => ({ results: [] })
+      })
+    }));
+    // The projects UPDATE (statement index 1) reports zero changed rows: a
+    // concurrent writer won the version fence after this write uploaded its
+    // objects.
+    const batch = vi.fn(async (statements: unknown[]) =>
+      statements.map((_, index) => ({
+        meta: { changes: index === 1 ? 0 : 1 }
+      }))
+    );
+    const service = new D1R2PersistenceService({
+      DB: { prepare, batch } as unknown as D1Database,
+      PROJECT_STORAGE: bucket as unknown as R2Bucket
+    });
+
+    await expect(
+      service.saveDocument(userId, {
+        projectId: document.projectId,
+        expectedVersion: document.version,
+        document
+      })
+    ).rejects.toMatchObject({ currentVersion: document.version });
+
+    const putKeys = bucket.put.mock.calls.map(([key]) => key);
+    expect(putKeys.some((key) => key.includes('/assets/'))).toBe(true);
+    // Asset objects are shared by content hash: the race winner may have just
+    // committed rows referencing the exact objects this loser uploaded, so
+    // only the losing document object may be deleted.
+    expect(deleted.filter((key) => key.includes('/assets/'))).toEqual([]);
+    expect(deleted.some((key) => key.includes('/documents/'))).toBe(true);
   });
 
   it('skips a corrupt D1 project row without hiding valid projects', async () => {
@@ -92,6 +347,294 @@ describe('cloudflare adapters', () => {
     expect(consoleError).toHaveBeenCalledWith('Skipping corrupt project row.');
     expect(JSON.stringify(consoleError.mock.calls)).not.toContain(
       'project_poisoned'
+    );
+  });
+
+  it('reads shelf state out of the D1 project row', async () => {
+    const document = createProjectDocument('Shelved', toUserId('user_test'));
+    const all = vi.fn(async () => ({
+      results: [
+        {
+          id: document.projectId,
+          name: document.name,
+          updated_at: document.derived.updatedAt,
+          document_json: JSON.stringify(document),
+          status: 'deleted',
+          pinned: 1,
+          sort_order: 4,
+          deleted_at: '2026-01-01T00:00:00.000Z',
+          archived_at: null,
+          thumbnail_artifact_id: 'artifact_thumbnail'
+        }
+      ]
+    }));
+    const prepare = vi.fn((_query: string) => ({ bind: () => ({ all }) }));
+    const service = new D1R2PersistenceService({
+      DB: { prepare } as unknown as D1Database,
+      PROJECT_SHARING_ENABLED: 'true'
+    });
+
+    const listed = await service.listProjects(toUserId('user_test'));
+    expect(listed.projects[0]?.organization).toEqual({
+      status: 'deleted',
+      pinned: true,
+      sortOrder: 4,
+      deletedAt: '2026-01-01T00:00:00.000Z'
+    });
+    expect(listed.projects[0]?.thumbnailArtifactId).toBe('artifact_thumbnail');
+    // Pinned-first, then manual order: the ordering has to come from SQL,
+    // because the list is not re-sorted after it is read.
+    expect(prepare.mock.calls[0]?.[0]).toContain(
+      'ORDER BY p.pinned DESC, p.sort_order ASC, p.updated_at DESC'
+    );
+    expect(prepare.mock.calls[0]?.[0]).toContain('project_members');
+  });
+
+  it('replaces a finalized D1 thumbnail and deletes its superseded object', async () => {
+    const owner = toUserId('user_thumbnail_owner');
+    const projectId = toProjectId('project_thumbnail');
+    const artifactId = toArtifactId('artifact_thumbnail_new');
+    const uploadSessionId = toUploadSessionId('upload_thumbnail_new');
+    const queries: string[] = [];
+    const batch = vi.fn(async () => []);
+    const prepare = vi.fn((query: string) => ({
+      bind: (..._values: unknown[]) => {
+        queries.push(query);
+        return {
+          first: async () => {
+            if (query.includes('SELECT user_id AS owner_user_id')) {
+              return { owner_user_id: owner };
+            }
+            if (query.includes('SELECT artifact_id, object_key')) {
+              return {
+                artifact_id: artifactId,
+                object_key: 'project_thumbnail/uploads/new.webp',
+                project_id: projectId,
+                file_name: 'thumbnail.webp',
+                content_type: 'image/webp',
+                kind: 'thumbnail',
+                metadata_json: '{}',
+                expires_at: '2099-01-01T00:00:00.000Z'
+              };
+            }
+            return null;
+          },
+          all: async () => ({
+            results: query.includes('SELECT object_key FROM artifacts')
+              ? [{ object_key: 'project_thumbnail/uploads/old.webp' }]
+              : []
+          })
+        };
+      }
+    }));
+    const deleteObject = vi.fn().mockResolvedValue(undefined);
+    const service = new D1R2PersistenceService({
+      DB: { prepare, batch } as unknown as D1Database,
+      ARTIFACTS: {
+        head: vi.fn().mockResolvedValue({ size: 123 }),
+        delete: deleteObject
+      } as unknown as R2Bucket
+    });
+
+    await expect(
+      service.finalizeArtifact(owner, {
+        projectId,
+        uploadSessionId,
+        artifactId
+      })
+    ).resolves.toMatchObject({ artifactId, kind: 'thumbnail', bytes: 123 });
+    expect(queries).toContainEqual(
+      expect.stringContaining(
+        "DELETE FROM artifacts WHERE project_id = ? AND kind = 'thumbnail'"
+      )
+    );
+    expect(batch).toHaveBeenCalledTimes(1);
+    expect(deleteObject).toHaveBeenCalledWith(
+      'project_thumbnail/uploads/old.webp'
+    );
+  });
+
+  it('duplicates from D1 without requiring disabled sharing schema', async () => {
+    const userId = toUserId('user_duplicate_owner');
+    const source = createProjectDocument('Bracket', userId);
+    const queries: string[] = [];
+    const run = vi.fn(async () => ({ success: true }));
+    const prepare = vi.fn((query: string) => {
+      queries.push(query);
+      if (query.includes('project_members')) {
+        throw new Error('no such table: project_members');
+      }
+      return {
+        bind: (..._bindings: unknown[]) => ({
+          all: async () => {
+            if (query.includes('SELECT name FROM projects')) {
+              return { results: [{ name: source.name }] };
+            }
+            return {
+              results: [
+                {
+                  id: source.projectId,
+                  name: source.name,
+                  updated_at: source.derived.updatedAt,
+                  document_json: JSON.stringify(source),
+                  status: 'active',
+                  pinned: 0,
+                  sort_order: 7,
+                  deleted_at: null,
+                  archived_at: null
+                }
+              ]
+            };
+          },
+          first: async () => {
+            if (query.includes('SELECT user_id AS owner_user_id')) {
+              return { owner_user_id: userId };
+            }
+            if (
+              query.includes(
+                'SELECT document_json, document_object_id FROM projects'
+              )
+            ) {
+              return {
+                document_json: JSON.stringify(source),
+                document_object_id: null
+              };
+            }
+            if (query.includes('SELECT sort_order FROM projects')) {
+              return { sort_order: 7 };
+            }
+            return null;
+          },
+          run
+        })
+      };
+    });
+    const service = new D1R2PersistenceService({
+      DB: { prepare } as unknown as D1Database,
+      PROJECT_SHARING_ENABLED: 'false'
+    });
+
+    await expect(service.listProjects(userId)).resolves.toMatchObject({
+      projects: [{ projectId: source.projectId, name: 'Bracket' }]
+    });
+    const copy = await service.duplicateProject(userId, {
+      projectId: source.projectId
+    });
+
+    expect(copy.project.projectId).not.toBe(source.projectId);
+    expect(copy.project.name).toBe('Bracket (copy)');
+    expect(copy.document.ownerUserId).toBe(userId);
+    expect(queries).not.toContainEqual(
+      expect.stringContaining('project_members')
+    );
+    expect(run).toHaveBeenCalledTimes(1);
+  });
+
+  it('destroys a purged project together with everything hanging off it', async () => {
+    const statements: string[] = [];
+    const all = vi.fn(async () => ({ results: [{ id: 'proj_expired' }] }));
+    const batch = vi.fn(async () => []);
+    const prepare = vi.fn((query: string) => {
+      statements.push(query);
+      return { bind: () => ({ all, query }) };
+    });
+    const service = new D1R2PersistenceService({
+      DB: { prepare, batch } as unknown as D1Database
+    });
+
+    expect(await service.purgeExpiredProjects(toUserId('user_test'))).toEqual([
+      'proj_expired'
+    ]);
+    expect(statements[0]).toContain("status = 'deleted'");
+    const destroyed = statements.slice(1).join('\n');
+    for (const table of [
+      'project_access_events',
+      'project_invitations',
+      'project_members',
+      'upload_sessions',
+      'artifacts',
+      'revisions',
+      'projects'
+    ]) {
+      expect(destroyed).toContain(`DELETE FROM ${table}`);
+    }
+    expect(batch).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps project rows retryable when R2 deletion fails', async () => {
+    const batch = vi.fn(async () => []);
+    const deleteObject = vi.fn(async () => {
+      throw new Error('R2 unavailable');
+    });
+    const prepare = vi.fn((query: string) => ({
+      bind: () => ({
+        all: async () => ({
+          results: query.includes('SELECT object_key')
+            ? [{ object_key: 'proj_expired/source.step' }]
+            : [{ id: 'proj_expired' }]
+        })
+      })
+    }));
+    const service = new D1R2PersistenceService({
+      DB: { prepare, batch } as unknown as D1Database,
+      ARTIFACTS: { delete: deleteObject } as unknown as R2Bucket
+    });
+
+    await expect(
+      service.purgeExpiredProjects(toUserId('user_test'))
+    ).rejects.toThrow('R2 unavailable');
+    expect(batch).not.toHaveBeenCalled();
+  });
+
+  it('keeps failed expired-upload deletions tracked for the next sweep', async () => {
+    const prepared: Array<{ query: string; bindings: unknown[] }> = [];
+    let deletedStatements: Array<{ query: string; bindings: unknown[] }> = [];
+    const batch = vi.fn(async (statements: D1PreparedStatement[]) => {
+      deletedStatements = statements as unknown as typeof deletedStatements;
+      return [];
+    });
+    const prepare = vi.fn((query: string) => ({
+      bind: (...bindings: unknown[]) => {
+        const statement = {
+          query,
+          bindings,
+          all: async () => ({
+            results: query.includes('SELECT id, object_key')
+              ? [
+                  { id: 'upload_deleted', object_key: 'project/uploads/a' },
+                  { id: 'upload_retry', object_key: 'project/uploads/b' }
+                ]
+              : []
+          })
+        };
+        prepared.push(statement);
+        return statement;
+      }
+    }));
+    const deleteObject = vi.fn(async (key: string) => {
+      if (key.endsWith('/b')) {
+        throw new Error('R2 temporarily unavailable');
+      }
+    });
+    const service = new D1R2PersistenceService({
+      DB: { prepare, batch } as unknown as D1Database,
+      ARTIFACTS: { delete: deleteObject } as unknown as R2Bucket
+    });
+
+    await expect(service.purgeExpiredUploadSessions()).resolves.toBe(1);
+
+    expect(deleteObject).toHaveBeenCalledTimes(2);
+    expect(batch).toHaveBeenCalledTimes(1);
+    expect(deletedStatements).toHaveLength(1);
+    expect(deletedStatements[0]).toMatchObject({
+      query: 'DELETE FROM upload_sessions WHERE id = ?',
+      bindings: ['upload_deleted']
+    });
+    expect(prepared).not.toContainEqual(
+      expect.objectContaining({
+        query: 'DELETE FROM upload_sessions WHERE id = ?',
+        bindings: ['upload_retry']
+      })
     );
   });
 
@@ -200,9 +743,7 @@ describe('cloudflare adapters', () => {
 
     // Both clients join on the shared base first; this is what puts the common
     // ancestor into room history so a three-way merge is possible at all.
-    expect(
-      (await room.fetch(submit('client_a', base, null))).status
-    ).toBe(200);
+    expect((await room.fetch(submit('client_a', base, null))).status).toBe(200);
 
     // A lands first and is stored verbatim, so it needs no document echoed back.
     const ackA = (await (
@@ -273,16 +814,14 @@ describe('cloudflare adapters', () => {
     expect(total).toBeGreaterThan(DURABLE_VALUE_LIMIT_BYTES);
     // ...yet no individual key is anywhere near the per-value ceiling.
     for (const [key, bytes] of sizes) {
-      expect(
-        bytes,
-        `${key} is ${bytes} bytes`
-      ).toBeLessThan(DURABLE_VALUE_LIMIT_BYTES);
+      expect(bytes, `${key} is ${bytes} bytes`).toBeLessThan(
+        DURABLE_VALUE_LIMIT_BYTES
+      );
     }
     expect(values.has('room:latest')).toBe(true);
     expect(
-      Array.from(values.keys()).filter((key) =>
-        key.startsWith('room:history:')
-      ).length
+      Array.from(values.keys()).filter((key) => key.startsWith('room:history:'))
+        .length
     ).toBeGreaterThan(0);
   });
 
@@ -328,9 +867,9 @@ describe('cloudflare adapters', () => {
 
     // The rejection has to happen before any mutation, or the room serves a
     // document that storage never took and reverts on the next eviction.
-    expect(
-      (values.get('room:latest') as ProjectDocument).version
-    ).toBe(accepted.version);
+    expect((values.get('room:latest') as ProjectDocument).version).toBe(
+      accepted.version
+    );
     const restored = new ProjectCollaborationRoom(context, {});
     const state = await restored.fetch(
       roomRequest(accepted, {
@@ -357,6 +896,65 @@ describe('cloudflare adapters', () => {
       })
     );
     expect(response.status).toBe(413);
+    await expect(response.json()).resolves.toMatchObject({
+      type: 'error',
+      code: 'document-too-large'
+    });
+  });
+
+  it.each([
+    ['without content-length', undefined],
+    ['with an underreported content-length', '1']
+  ])('counts streamed snapshot bytes %s', async (_label, contentLength) => {
+    const { context } = createRoomContext();
+    const base = createProjectDocument(
+      'Stream Flood Room',
+      toUserId('user_room')
+    );
+    const room = new ProjectCollaborationRoom(context, {});
+    const chunk = new TextEncoder().encode('😀'.repeat(250_000));
+    let pulls = 0;
+    let cancelled = false;
+    const body = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        pulls += 1;
+        if (pulls > 3) {
+          controller.close();
+          return;
+        }
+        controller.enqueue(chunk);
+      },
+      cancel() {
+        cancelled = true;
+      }
+    });
+    const headers: Record<string, string> = {
+      'content-type': 'application/json',
+      'x-openzcad-user-id': 'user_room',
+      'x-openzcad-display-name': 'Room user',
+      'x-openzcad-project-role': 'owner'
+    };
+    if (contentLength !== undefined) {
+      headers['content-length'] = contentLength;
+    }
+    const request = new Request(
+      `https://room.test/?projectId=${base.projectId}`,
+      {
+        method: 'POST',
+        headers,
+        body,
+        duplex: 'half'
+      } as RequestInit & { duplex: 'half' }
+    );
+    expect(request.headers.get('content-length')).toBe(contentLength ?? null);
+
+    const response = await room.fetch(request);
+
+    expect(response.status).toBe(413);
+    // The stream queues one chunk ahead, but cancellation prevents the final
+    // pull that request.text() would need in order to reach EOF.
+    expect(pulls).toBe(3);
+    expect(cancelled).toBe(true);
     await expect(response.json()).resolves.toMatchObject({
       type: 'error',
       code: 'document-too-large'

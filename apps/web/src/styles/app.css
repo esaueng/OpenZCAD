@@ -17,6 +17,7 @@
 @import './components/sketch-mode.css';
 @import './components/assistant.css';
 @import './components/inspector.css';
+@import './components/color-picker.css';
 @import './components/status-bar.css';
 @import './components/start-screen.css';
 @import './components/modals.css';
@@ -27,3 +28,5 @@
 @import './components/revisions.css';
 @import './components/settings.css';
 @import './components/direct-manipulation.css';
+/* Last: View mode subtracts from the layouts every file above establishes. */
+@import './components/view-mode.css';

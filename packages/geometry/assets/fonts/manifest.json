@@ -1,0 +1,202 @@
+{
+  "licenses": {
+    "inter": "OFL-1.1",
+    "open-sans": "OFL-1.1",
+    "lora": "OFL-1.1",
+    "roboto-slab": "Apache-2.0",
+    "jetbrains-mono": "OFL-1.1",
+    "oswald": "OFL-1.1",
+    "pacifico": "OFL-1.1"
+  },
+  "faces": [
+    {
+      "family": "Inter",
+      "style": "regular",
+      "file": "inter-regular.ttf",
+      "bytes": 324820,
+      "unitsPerEm": 2048,
+      "licenseUrl": "https://openfontlicense.org",
+      "sourceUrl": "https://fonts.gstatic.com/s/inter/v20/UcCO3FwrK3iLTeHuS_nVMrMxCp50SjIw2boKoduKmMEVuLyfMZg.ttf"
+    },
+    {
+      "family": "Inter",
+      "style": "bold",
+      "file": "inter-bold.ttf",
+      "bytes": 326468,
+      "unitsPerEm": 2048,
+      "licenseUrl": "https://openfontlicense.org",
+      "sourceUrl": "https://fonts.gstatic.com/s/inter/v20/UcCO3FwrK3iLTeHuS_nVMrMxCp50SjIw2boKoduKmMEVuFuYMZg.ttf"
+    },
+    {
+      "family": "Inter",
+      "style": "italic",
+      "file": "inter-italic.ttf",
+      "bytes": 328252,
+      "unitsPerEm": 2048,
+      "licenseUrl": "https://openfontlicense.org",
+      "sourceUrl": "https://fonts.gstatic.com/s/inter/v20/UcCM3FwrK3iLTcvneQg7Ca725JhhKnNqk4j1ebLhAm8SrXTc2dthjQ.ttf"
+    },
+    {
+      "family": "Inter",
+      "style": "boldItalic",
+      "file": "inter-bolditalic.ttf",
+      "bytes": 330132,
+      "unitsPerEm": 2048,
+      "licenseUrl": "https://openfontlicense.org",
+      "sourceUrl": "https://fonts.gstatic.com/s/inter/v20/UcCM3FwrK3iLTcvneQg7Ca725JhhKnNqk4j1ebLhAm8SrXTcPtxhjQ.ttf"
+    },
+    {
+      "family": "Open Sans",
+      "style": "regular",
+      "file": "open-sans-regular.ttf",
+      "bytes": 122116,
+      "unitsPerEm": 2048,
+      "licenseUrl": "http://scripts.sil.org/OFL",
+      "sourceUrl": "https://fonts.gstatic.com/s/opensans/v44/memSYaGs126MiZpBA-UvWbX2vVnXBbObj2OVZyOOSr4dVJWUgsjZ0C4n.ttf"
+    },
+    {
+      "family": "Open Sans",
+      "style": "bold",
+      "file": "open-sans-bold.ttf",
+      "bytes": 122132,
+      "unitsPerEm": 2048,
+      "licenseUrl": "http://scripts.sil.org/OFL",
+      "sourceUrl": "https://fonts.gstatic.com/s/opensans/v44/memSYaGs126MiZpBA-UvWbX2vVnXBbObj2OVZyOOSr4dVJWUgsg-1y4n.ttf"
+    },
+    {
+      "family": "Open Sans",
+      "style": "italic",
+      "file": "open-sans-italic.ttf",
+      "bytes": 127392,
+      "unitsPerEm": 2048,
+      "licenseUrl": "http://scripts.sil.org/OFL",
+      "sourceUrl": "https://fonts.gstatic.com/s/opensans/v44/memQYaGs126MiZpBA-UFUIcVXSCEkx2cmqvXlWq8tWZ0Pw86hd0Rk8ZkaVc.ttf"
+    },
+    {
+      "family": "Open Sans",
+      "style": "boldItalic",
+      "file": "open-sans-bolditalic.ttf",
+      "bytes": 127156,
+      "unitsPerEm": 2048,
+      "licenseUrl": "http://scripts.sil.org/OFL",
+      "sourceUrl": "https://fonts.gstatic.com/s/opensans/v44/memQYaGs126MiZpBA-UFUIcVXSCEkx2cmqvXlWq8tWZ0Pw86hd0RkyFjaVc.ttf"
+    },
+    {
+      "family": "Lora",
+      "style": "regular",
+      "file": "lora-regular.ttf",
+      "bytes": 132188,
+      "unitsPerEm": 1000,
+      "licenseUrl": "https://scripts.sil.org/OFL",
+      "sourceUrl": "https://fonts.gstatic.com/s/lora/v37/0QI6MX1D_JOuGQbT0gvTJPa787weuyJG.ttf"
+    },
+    {
+      "family": "Lora",
+      "style": "bold",
+      "file": "lora-bold.ttf",
+      "bytes": 132124,
+      "unitsPerEm": 1000,
+      "licenseUrl": "https://scripts.sil.org/OFL",
+      "sourceUrl": "https://fonts.gstatic.com/s/lora/v37/0QI6MX1D_JOuGQbT0gvTJPa787z5vCJG.ttf"
+    },
+    {
+      "family": "Lora",
+      "style": "italic",
+      "file": "lora-italic.ttf",
+      "bytes": 137328,
+      "unitsPerEm": 1000,
+      "licenseUrl": "https://scripts.sil.org/OFL",
+      "sourceUrl": "https://fonts.gstatic.com/s/lora/v37/0QI8MX1D_JOuMw_hLdO6T2wV9KnW-MoFkqg.ttf"
+    },
+    {
+      "family": "Lora",
+      "style": "boldItalic",
+      "file": "lora-bolditalic.ttf",
+      "bytes": 138352,
+      "unitsPerEm": 1000,
+      "licenseUrl": "https://scripts.sil.org/OFL",
+      "sourceUrl": "https://fonts.gstatic.com/s/lora/v37/0QI8MX1D_JOuMw_hLdO6T2wV9KnW-C0Ckqg.ttf"
+    },
+    {
+      "family": "Roboto Slab",
+      "style": "regular",
+      "file": "roboto-slab-regular.ttf",
+      "bytes": 101564,
+      "unitsPerEm": 2048,
+      "licenseUrl": "http://www.apache.org/licenses/LICENSE-2.0",
+      "sourceUrl": "https://fonts.gstatic.com/s/robotoslab/v36/BngbUXZYTXPIvIBgJJSb6s3BzlRRfKOFbvjojISWaA.ttf"
+    },
+    {
+      "family": "Roboto Slab",
+      "style": "bold",
+      "file": "roboto-slab-bold.ttf",
+      "bytes": 102236,
+      "unitsPerEm": 2048,
+      "licenseUrl": "http://www.apache.org/licenses/LICENSE-2.0",
+      "sourceUrl": "https://fonts.gstatic.com/s/robotoslab/v36/BngbUXZYTXPIvIBgJJSb6s3BzlRRfKOFbvjoa4OWaA.ttf"
+    },
+    {
+      "family": "JetBrains Mono",
+      "style": "regular",
+      "file": "jetbrains-mono-regular.ttf",
+      "bytes": 112172,
+      "unitsPerEm": 1000,
+      "licenseUrl": "https://scripts.sil.org/OFL",
+      "sourceUrl": "https://fonts.gstatic.com/s/jetbrainsmono/v24/tDbY2o-flEEny0FZhsfKu5WU4zr3E_BX0PnT8RD8yKxjPQ.ttf"
+    },
+    {
+      "family": "JetBrains Mono",
+      "style": "bold",
+      "file": "jetbrains-mono-bold.ttf",
+      "bytes": 112092,
+      "unitsPerEm": 1000,
+      "licenseUrl": "https://scripts.sil.org/OFL",
+      "sourceUrl": "https://fonts.gstatic.com/s/jetbrainsmono/v24/tDbY2o-flEEny0FZhsfKu5WU4zr3E_BX0PnT8RD8L6tjPQ.ttf"
+    },
+    {
+      "family": "JetBrains Mono",
+      "style": "italic",
+      "file": "jetbrains-mono-italic.ttf",
+      "bytes": 114960,
+      "unitsPerEm": 1000,
+      "licenseUrl": "https://scripts.sil.org/OFL",
+      "sourceUrl": "https://fonts.gstatic.com/s/jetbrainsmono/v24/tDba2o-flEEny0FZhsfKu5WU4xD-IQ-PuZJJXxfpAO-LflOQ.ttf"
+    },
+    {
+      "family": "JetBrains Mono",
+      "style": "boldItalic",
+      "file": "jetbrains-mono-bolditalic.ttf",
+      "bytes": 114956,
+      "unitsPerEm": 1000,
+      "licenseUrl": "https://scripts.sil.org/OFL",
+      "sourceUrl": "https://fonts.gstatic.com/s/jetbrainsmono/v24/tDba2o-flEEny0FZhsfKu5WU4xD-IQ-PuZJJXxfpAO9seVOQ.ttf"
+    },
+    {
+      "family": "Oswald",
+      "style": "regular",
+      "file": "oswald-regular.ttf",
+      "bytes": 86068,
+      "unitsPerEm": 1000,
+      "licenseUrl": "https://scripts.sil.org/OFL",
+      "sourceUrl": "https://fonts.gstatic.com/s/oswald/v57/TK3_WkUHHAIjg75cFRf3bXL8LICs1_FvgUE.ttf"
+    },
+    {
+      "family": "Oswald",
+      "style": "bold",
+      "file": "oswald-bold.ttf",
+      "bytes": 86416,
+      "unitsPerEm": 1000,
+      "licenseUrl": "https://scripts.sil.org/OFL",
+      "sourceUrl": "https://fonts.gstatic.com/s/oswald/v57/TK3_WkUHHAIjg75cFRf3bXL8LICs1xZogUE.ttf"
+    },
+    {
+      "family": "Pacifico",
+      "style": "regular",
+      "file": "pacifico-regular.ttf",
+      "bytes": 251232,
+      "unitsPerEm": 1000,
+      "licenseUrl": "http://scripts.sil.org/OFL",
+      "sourceUrl": "https://fonts.gstatic.com/s/pacifico/v23/FwZY7-Qmy14u9lezJ96A.ttf"
+    }
+  ]
+}

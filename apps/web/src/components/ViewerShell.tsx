@@ -1,11 +1,13 @@
-import type { MutableRefObject } from 'react';
-import { Box, Cylinder, Globe, Sparkles } from 'lucide-react';
+import { useRef, type MutableRefObject, type ReactNode } from 'react';
 import {
   ModelViewer,
+  type BodyAppearancePreview,
   type ExtrudePreview,
   type FaceResizeCommit,
   type CylinderRadiusHandleTarget,
   type EdgeHandleTarget,
+  type OrientationDragControls,
+  type NormalToFaceRequest,
   type RegionHandleTarget,
   type SketchModeState,
   type SketchViewData,
@@ -19,43 +21,107 @@ import type {
   ProjectionMode,
   SelectionFilter,
   SketchOverlay,
-  StandardView,
-  ViewerSettings
+  ViewerSettings,
+  ViewTarget
 } from '@openzcad/viewport';
-import type { ReactNode } from 'react';
 import { ViewerToolbar } from './ViewerToolbar';
 import { OrientationWidget } from './OrientationWidget';
 import type {
+  ArtifactId,
   BodyRepresentation,
+  ProjectId,
   SketchObjectData,
   TopologySelection
 } from '@openzcad/shared';
 import type { ViewportCameraState } from '../lib/workspaceSession';
+import type {
+  Measurement,
+  MeasurementDisplayOptions,
+  MeasurementViewportAnnotation
+} from '../lib/measurements';
 import type { RegionPickData } from './viewer/regionOverlay';
+import { formatNumber } from '../lib/model';
+import {
+  MeasurementCloudSyncAgent,
+  type MeasurementCloudSyncAgentProps
+} from './MeasurementCloudSyncAgent';
+import { ProjectThumbnailSyncAgent } from './ProjectThumbnailSyncAgent';
+import type { ProjectThumbnailRecord } from '../lib/localProjectStore';
+import type { ThumbnailCloudTransport } from '../lib/cloudThumbnail';
+import type { DimensionMode } from '../lib/keypad';
+
+type MeasurementCloudSyncState = readonly [
+  projectId: string | undefined,
+  enabled: boolean | undefined,
+  cloudProjectIds: ReadonlySet<string>,
+  hydratedProjectId: string | null,
+  measurements: readonly Measurement[],
+  display: MeasurementDisplayOptions,
+  setMeasurements: MeasurementCloudSyncAgentProps['setMeasurements'],
+  setUnit: MeasurementCloudSyncAgentProps['setUnit'],
+  setPrecision: MeasurementCloudSyncAgentProps['setPrecision'],
+  setRadialDisplay: MeasurementCloudSyncAgentProps['setRadialDisplay'],
+  loadLocal: MeasurementCloudSyncAgentProps['loadLocal'],
+  saveLocal: MeasurementCloudSyncAgentProps['saveLocal']
+];
+
+type ProjectThumbnailSyncState = readonly [
+  projectId: ProjectId,
+  version: number,
+  updatedAt: string,
+  bodyRepresentations: Record<string, BodyRepresentation>,
+  publishToCloud: boolean,
+  transport: ThumbnailCloudTransport,
+  loadThumbnail: (projectId: string) => Promise<ProjectThumbnailRecord | null>,
+  saveThumbnail: (
+    projectId: string,
+    thumbnail: {
+      source: string | null;
+      artifactId?: ArtifactId;
+      version: number;
+      updatedAt: string;
+    }
+  ) => Promise<void>
+];
 
 interface ViewerShellProps {
   projectId: string;
   bodies: BodyRepresentation[];
   sketches: SketchOverlay[];
+  measurementAnnotations: MeasurementViewportAnnotation[];
+  measurementCloudSync?: MeasurementCloudSyncState;
+  projectThumbnailSync?: ProjectThumbnailSyncState;
   selectedBodyIds: string[];
   selectedTopology: TopologySelection | null;
   selectedEdges: TopologySelection[];
   settings: ViewerSettings;
   fitSignal: number;
-  viewRequest: { view: StandardView; nonce: number } | null;
+  viewRequest: { view: ViewTarget; nonce: number } | null;
+  normalToFaceRequest: NormalToFaceRequest | null;
+  rotateRequest: { direction: 'cw' | 'ccw'; nonce: number } | null;
   units: string;
   editableBodyIds: string[];
   extrudePreview: ExtrudePreview | null;
   movePreview: MovePreview | null;
+  /** Committed Move awaiting its rebuild; forwarded to the viewer's pose hold. */
+  moveCommitHold: MovePreview | null;
+  /** Drag-phase body appearance patch; forwarded to the viewer's material. */
+  appearancePreview: BodyAppearancePreview | null;
   modeOverlay?: ReactNode;
   hideViewerToolbar?: boolean;
+  /**
+   * View mode drops the utility rail — its controls move to the floating view
+   * bar, and undo/redo have nothing to act on — but keeps the orientation cube,
+   * which is navigation rather than editing.
+   */
+  viewMode?: boolean;
   /** Bottom-center summary of the current selection, with a measurement. */
   selectionChip: { label: string; detail?: string } | null;
   onClearSelection(): void;
-  /** Starts a primitive from the empty-state card. */
-  onStartPrimitive(tool: 'box' | 'cylinder' | 'sphere'): void;
-  /** Focuses the assistant prompt; null when the assistant is turned off. */
-  onAskAssistant: (() => void) | null;
+  canUndo: boolean;
+  canRedo: boolean;
+  onUndo(): void;
+  onRedo(): void;
   projection: ProjectionMode;
   initialView: ViewportCameraState | null;
   onViewChange(view: ViewportCameraState): void;
@@ -69,17 +135,25 @@ interface ViewerShellProps {
     detail?: PickDetail
   ): void;
   offsetHandle: OffsetHandleTarget | null;
-  onOffsetCommit(offset: number): void;
-  onOpenOffsetKeypad(currentOffset: number): void;
+  onOffsetPreview(offset: number): void;
+  onOffsetCommit(offset: number): boolean;
+  onOffsetCancel(): void;
+  offsetPreviewInvalid: boolean;
+  onOpenOffsetKeypad(currentOffset: number, totalBaseline?: number): void;
   keypadAnchorRef: MutableRefObject<
     ((point: { x: number; y: number } | null) => void) | null
   >;
   offsetSetterRef: MutableRefObject<((offset: number) => void) | null>;
   cylinderRadiusHandle: CylinderRadiusHandleTarget | null;
-  onCylinderRadiusPreview(radius: number): void;
-  onCylinderRadiusCommit(radius: number): void;
+  cylinderDimensionMode: DimensionMode;
+  onCylinderDimensionModeChange(mode: DimensionMode): void;
+  onCylinderRadiusPreview(radius: number, exactGeometry: boolean): void;
+  onCylinderRadiusCommit(radius: number): boolean;
   onCylinderRadiusCancel(): void;
-  onOpenCylinderRadiusKeypad(radius: number): void;
+  onOpenCylinderRadiusKeypad(
+    radius: number,
+    dimensionMode: DimensionMode
+  ): void;
   cancelDirectManipulationRef: MutableRefObject<(() => boolean) | null>;
   edgeHandle: EdgeHandleTarget | null;
   onEdgeRadiusPreview(size: number): void;
@@ -98,6 +172,13 @@ interface ViewerShellProps {
     modifiers: { additive: boolean; toggle: boolean }
   ): void;
   onHoverRegion(region: RegionPickData | null): void;
+  /** What measuring the hovered target would report; null when measure is off. */
+  onMeasurePreview?:
+    | ((
+        selection: TopologySelection,
+        point: { x: number; y: number; z: number }
+      ) => string | null)
+    | null;
   regionHandle: RegionHandleTarget | null;
   onSelectSketchProfile(sketchId: string): void;
   onResizePrimitiveFace(commit: FaceResizeCommit): void;
@@ -114,7 +195,8 @@ interface ViewerShellProps {
   ): void;
   onToggleGrid(): void;
   onFit(): void;
-  onView(view: StandardView): void;
+  onView(view: ViewTarget): void;
+  onRotateView(direction: 'cw' | 'ccw'): void;
   onCycleDisplayMode(): void;
   onToggleProjection(): void;
 }
@@ -123,22 +205,32 @@ export function ViewerShell({
   projectId,
   bodies,
   sketches,
+  measurementAnnotations,
+  measurementCloudSync,
+  projectThumbnailSync,
   selectedBodyIds,
   selectedTopology,
   selectedEdges,
   settings,
   fitSignal,
   viewRequest,
+  normalToFaceRequest,
+  rotateRequest,
   units,
   editableBodyIds,
   extrudePreview,
   movePreview,
+  moveCommitHold,
+  appearancePreview,
   modeOverlay,
   hideViewerToolbar = false,
+  viewMode = false,
   selectionChip,
-  onStartPrimitive,
-  onAskAssistant,
   onClearSelection,
+  canUndo,
+  canRedo,
+  onUndo,
+  onRedo,
   projection,
   initialView,
   onViewChange,
@@ -148,11 +240,16 @@ export function ViewerShell({
   selectionFilter,
   onBoxSelect,
   offsetHandle,
+  onOffsetPreview,
   onOffsetCommit,
+  onOffsetCancel,
+  offsetPreviewInvalid,
   onOpenOffsetKeypad,
   keypadAnchorRef,
   offsetSetterRef,
   cylinderRadiusHandle,
+  cylinderDimensionMode,
+  onCylinderDimensionModeChange,
   onCylinderRadiusPreview,
   onCylinderRadiusCommit,
   onCylinderRadiusCancel,
@@ -172,6 +269,7 @@ export function ViewerShell({
   profileSelectionMode,
   onSelectRegion,
   onHoverRegion,
+  onMeasurePreview,
   regionHandle,
   onSelectSketchProfile,
   onResizePrimitiveFace,
@@ -181,39 +279,105 @@ export function ViewerShell({
   onToggleGrid,
   onFit,
   onView,
+  onRotateView,
   onCycleDisplayMode,
   onToggleProjection
 }: ViewerShellProps) {
+  const orientationDragRef = useRef<OrientationDragControls | null>(null);
+  const selectionChipLabelRef = useRef<HTMLSpanElement | null>(null);
+  const cylinderRadiusLabelSetterRef = useRef<
+    ((radius: number | null) => void) | null
+  >(null);
+  const cloudProjectId = measurementCloudSync?.[0];
+  const cloudEnabled =
+    cloudProjectId &&
+    measurementCloudSync[1] &&
+    measurementCloudSync[2].has(cloudProjectId) &&
+    measurementCloudSync[3] === cloudProjectId;
+  cylinderRadiusLabelSetterRef.current = (radius) => {
+    const label = selectionChipLabelRef.current;
+    if (!label || !selectionChip) {
+      return;
+    }
+    label.textContent =
+      radius === null
+        ? selectionChip.label
+        : selectionChip.label.replace(
+            /(Cylindrical face Ø)[^ ·]+/,
+            `$1${formatNumber(radius * 2)}`
+          );
+  };
+
   return (
-    <section className="viewer-shell" aria-label="3D viewport">
+    <section
+      className={`viewer-shell${viewMode ? ' view-mode' : ''}`}
+      aria-label="3D viewport"
+    >
+      {projectThumbnailSync ? (
+        <ProjectThumbnailSyncAgent
+          projectId={projectThumbnailSync[0]}
+          version={projectThumbnailSync[1]}
+          updatedAt={projectThumbnailSync[2]}
+          bodyRepresentations={projectThumbnailSync[3]}
+          publishToCloud={projectThumbnailSync[4]}
+          transport={projectThumbnailSync[5]}
+          loadThumbnail={projectThumbnailSync[6]}
+          saveThumbnail={projectThumbnailSync[7]}
+        />
+      ) : null}
+      {cloudEnabled ? (
+        <MeasurementCloudSyncAgent
+          projectId={cloudProjectId}
+          measurements={measurementCloudSync[4]}
+          display={measurementCloudSync[5]}
+          setMeasurements={measurementCloudSync[6]}
+          setUnit={measurementCloudSync[7]}
+          setPrecision={measurementCloudSync[8]}
+          setRadialDisplay={measurementCloudSync[9]}
+          loadLocal={measurementCloudSync[10]}
+          saveLocal={measurementCloudSync[11]}
+        />
+      ) : null}
       <ModelViewer
         key={projectId}
         bodies={bodies}
         sketches={sketches}
+        measurementAnnotations={measurementAnnotations}
         selectedBodyIds={selectedBodyIds}
         selectedTopology={selectedTopology}
         selectedEdges={selectedEdges}
         settings={settings}
         fitSignal={fitSignal}
         viewRequest={viewRequest}
+        normalToFaceRequest={normalToFaceRequest}
+        rotateRequest={rotateRequest}
         units={units}
         editableBodyIds={editableBodyIds}
         extrudePreview={extrudePreview}
         movePreview={movePreview}
+        moveCommitHold={moveCommitHold}
+        appearancePreview={appearancePreview}
         projection={projection}
         initialView={initialView}
         onViewChange={onViewChange}
         orientationRef={orientationRef}
+        orientationDragRef={orientationDragRef}
         onSelectTopology={onSelectTopology}
         onSelectEdgeChain={onSelectEdgeChain}
         selectionFilter={selectionFilter}
         onBoxSelect={onBoxSelect}
         offsetHandle={offsetHandle}
+        onOffsetPreview={onOffsetPreview}
         onOffsetCommit={onOffsetCommit}
+        onOffsetCancel={onOffsetCancel}
+        offsetPreviewInvalid={offsetPreviewInvalid}
         onOpenOffsetKeypad={onOpenOffsetKeypad}
         keypadAnchorRef={keypadAnchorRef}
         offsetSetterRef={offsetSetterRef}
         cylinderRadiusHandle={cylinderRadiusHandle}
+        cylinderDimensionMode={cylinderDimensionMode}
+        onCylinderDimensionModeChange={onCylinderDimensionModeChange}
+        cylinderRadiusLabelSetterRef={cylinderRadiusLabelSetterRef}
         onCylinderRadiusPreview={onCylinderRadiusPreview}
         onCylinderRadiusCommit={onCylinderRadiusCommit}
         onCylinderRadiusCancel={onCylinderRadiusCancel}
@@ -233,6 +397,7 @@ export function ViewerShell({
         profileSelectionMode={profileSelectionMode}
         onSelectRegion={onSelectRegion}
         onHoverRegion={onHoverRegion}
+        onMeasurePreview={onMeasurePreview}
         regionHandle={regionHandle}
         onSelectSketchProfile={onSelectSketchProfile}
         onResizePrimitiveFace={onResizePrimitiveFace}
@@ -241,68 +406,41 @@ export function ViewerShell({
         onContextMenu={onContextMenu}
       />
       {!hideViewerToolbar && (
-        <div className="viewer-rail-stack">
-          <OrientationWidget
-            orientationRef={orientationRef}
-            onSelectView={onView}
-          />
-          <ViewerToolbar
-            settings={settings}
-            projection={projection}
-            onToggleGrid={onToggleGrid}
-            onFit={onFit}
-            onView={onView}
-            onCycleDisplayMode={onCycleDisplayMode}
-            onToggleProjection={onToggleProjection}
-          />
-        </div>
-      )}
-      {bodies.length === 0 && sketches.length === 0 && (
-        <div className="viewer-notice">
-          <div>
-            <strong>No geometry yet</strong>
-            {/*
-              Restating the palette hint wastes the one moment the user is
-              definitely looking here, so the card starts the work instead.
-            */}
-            <small>Start with a solid, or describe the part you want.</small>
-            <div className="viewer-notice-actions">
-              <button type="button" onClick={() => onStartPrimitive('box')}>
-                <Box size={14} aria-hidden="true" />
-                Box <kbd>B</kbd>
-              </button>
-              <button
-                type="button"
-                onClick={() => onStartPrimitive('cylinder')}
-              >
-                <Cylinder size={14} aria-hidden="true" />
-                Cylinder <kbd>C</kbd>
-              </button>
-              <button type="button" onClick={() => onStartPrimitive('sphere')}>
-                <Globe size={14} aria-hidden="true" />
-                Sphere
-              </button>
-              {onAskAssistant && (
-                <button
-                  type="button"
-                  className="viewer-notice-assistant"
-                  onClick={onAskAssistant}
-                >
-                  <Sparkles size={14} aria-hidden="true" />
-                  Describe a part
-                </button>
-              )}
-            </div>
-            <small className="viewer-notice-keys">
-              <kbd>S</kbd> sketch · <kbd>Ctrl</kbd>+<kbd>K</kbd> all commands ·{' '}
-              <kbd>?</kbd> shortcuts
-            </small>
+        <>
+          <div className="viewer-rail-stack">
+            <OrientationWidget
+              orientationRef={orientationRef}
+              onSelectView={onView}
+              onRotateView={onRotateView}
+              onDragStart={() => orientationDragRef.current?.begin()}
+              onDrag={(deltaX, deltaY) =>
+                orientationDragRef.current?.move(deltaX, deltaY)
+              }
+              onDragEnd={() => orientationDragRef.current?.end()}
+            />
           </div>
-        </div>
+          {!viewMode && (
+            <ViewerToolbar
+              settings={settings}
+              projection={projection}
+              canUndo={canUndo}
+              canRedo={canRedo}
+              onUndo={onUndo}
+              onRedo={onRedo}
+              onToggleGrid={onToggleGrid}
+              onFit={onFit}
+              onView={onView}
+              onCycleDisplayMode={onCycleDisplayMode}
+              onToggleProjection={onToggleProjection}
+            />
+          )}
+        </>
       )}
       {selectionChip && (
         <div className="selection-chip" role="status">
-          <span className="selection-chip-label">{selectionChip.label}</span>
+          <span ref={selectionChipLabelRef} className="selection-chip-label">
+            {selectionChip.label}
+          </span>
           {selectionChip.detail && (
             <span className="selection-chip-detail">
               {selectionChip.detail}
@@ -320,23 +458,6 @@ export function ViewerShell({
         </div>
       )}
       {modeOverlay}
-      <div className="viewport-frame" aria-hidden="true">
-        <div className="frame-corner tl" />
-        <div className="frame-corner tr" />
-        <div className="frame-corner bl" />
-        <div className="frame-corner br" />
-      </div>
-      <div className="vp-hud vp-hud-bl" aria-hidden="true">
-        <span className="vp-chip">{units}</span>
-        <span className="vp-chip">
-          {bodies.length} {bodies.length === 1 ? 'body' : 'bodies'}
-        </span>
-        {sketches.length > 0 && (
-          <span className="vp-chip">
-            {sketches.length} {sketches.length === 1 ? 'sketch' : 'sketches'}
-          </span>
-        )}
-      </div>
     </section>
   );
 }

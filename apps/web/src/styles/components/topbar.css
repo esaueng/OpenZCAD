@@ -52,7 +52,15 @@
   background: var(--color-border);
 }
 
+/*
+  Sized to its content rather than greedy, so the mode switch after it can take
+  the middle of the bar instead of being pushed against the actions. The cap
+  stops a long project name from claiming that middle back; narrow screens hand
+  the growth back in responsive.css, where there is no middle left to hold.
+*/
 .breadcrumb {
+  flex: 0 1 auto;
+  max-width: 40%;
   min-width: 0;
   display: inline-flex;
   align-items: center;
@@ -114,11 +122,17 @@
   color: var(--color-text-subtle);
 }
 
-.topbar-tools {
-  display: inline-flex;
+.topbar-actions {
+  flex: 0 0 auto;
+  display: grid;
+  grid-template-columns: repeat(4, max-content) 28px;
   align-items: center;
-  gap: var(--sp-1);
+  gap: var(--sp-2);
   margin-left: auto;
+}
+
+.topbar-actions > * {
+  min-width: 0;
 }
 
 .icon-button {
@@ -167,6 +181,14 @@
   align-items: center;
   gap: 6px;
   list-style: none;
+}
+
+.file-menu > summary {
+  width: auto;
+  min-height: 26px;
+  gap: 5px;
+  padding: 3px 8px;
+  font-size: var(--fs-xs);
 }
 
 .artifact-menu > summary::-webkit-details-marker,
@@ -287,41 +309,79 @@
 }
 
 .save-state {
+  width: 100%;
   display: inline-flex;
   align-items: center;
   gap: 6px;
   min-height: 30px;
   padding: 0 9px;
   color: var(--color-text-muted);
-  border: 1px solid transparent;
+  background: var(--color-surface-2);
+  border: var(--border-thin);
   border-radius: var(--radius-md);
   font-family: var(--font-mono);
   font-size: var(--fs-xs);
+  justify-content: flex-start;
 }
 
-.save-state:hover {
+.save-state:hover:not(:disabled),
+.save-state:focus-visible,
+.collaboration-state:hover:not(:disabled),
+.collaboration-state:focus-visible {
   color: var(--color-text);
   background: var(--color-surface-hover);
+  border-color: var(--color-border-strong);
+  outline: none;
 }
 
-.session-user {
-  max-width: 150px;
-  overflow: hidden;
+.save-state:active:not(:disabled),
+.collaboration-state:active:not(:disabled) {
+  transform: translateY(1px);
+}
+
+/*
+ * Only the states that need a decision are coloured. The rest — including
+ * "saved on this device only" — are ordinary outcomes, and tinting them would
+ * suggest work is at risk when it is sitting safely in IndexedDB.
+ * `local-source` is a decision state: an import source exists only in this
+ * browser, and only the user can trigger the re-archive.
+ */
+.save-state.is-conflict,
+.save-state.is-refused,
+.save-state.is-local-source {
+  color: var(--color-warning);
+  border-color: currentcolor;
+}
+
+.account-state,
+.collaboration-state {
+  width: 100%;
+  min-height: 30px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 0 8px;
   color: var(--color-text-subtle);
   font-family: var(--font-mono);
   font-size: var(--fs-mini);
-  text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .collaboration-state {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  color: var(--color-text-subtle);
-  font-family: var(--font-mono);
-  font-size: var(--fs-mini);
+  background: var(--color-surface-2);
+  border: var(--border-thin);
+  border-radius: var(--radius-md);
+  cursor: pointer;
   text-transform: capitalize;
+}
+
+.collaboration-state:disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+
+.account-state.is-signed-in {
+  color: var(--color-success);
 }
 
 .collaboration-state.live {
@@ -343,4 +403,3 @@
     transform: rotate(360deg);
   }
 }
-

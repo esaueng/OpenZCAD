@@ -9,42 +9,118 @@
   top: 10px;
   right: 10px;
   z-index: var(--z-viewer-overlay);
-  border-radius: 999px;
+  display: flex;
+  align-items: flex-start;
+  gap: 2px;
   pointer-events: none;
 }
 
-.orientation-bg {
-  fill: rgba(17, 24, 33, 0.72);
-  stroke: var(--color-border);
-  stroke-width: 1;
+/* The transparent SVG stays click-through; visible faces own click and drag. */
+.orientation-cube {
+  pointer-events: none;
+  touch-action: none;
+  user-select: none;
 }
 
-/* The widget stays click-through so a drag started near it still orbits;
-   only the view targets themselves take the pointer. */
-.orientation-hit,
-.orientation-home {
+.cube-face,
+.cube-corner,
+.cube-corner-hit {
   pointer-events: auto;
-  cursor: pointer;
+  touch-action: none;
+  cursor: grab;
+  /* Dark seams between the opaque facets draw the cube's edges and bevels. */
+  stroke: #10151c;
+  stroke-width: 2.5;
+  stroke-linejoin: round;
+  transition: fill var(--dur-fast) ease;
+}
+
+.cube-corner {
+  /* Corner facets are small; a thinner seam keeps them from closing up. */
+  stroke-width: 1.8;
+}
+
+/* The half of the target that reaches past the drawn facet: the same corner
+   cut deeper, never painted. It sits over the faces it overhangs and wins the
+   click there, which is the point — near a corner you are aiming for the
+   isometric view. Both halves share one handler on the parent group, so the
+   target is their union and can never be smaller than what is drawn. */
+.cube-corner-hit {
   fill: transparent;
   stroke: transparent;
-  stroke-width: 1;
-  transition:
-    fill var(--motion-fast, 120ms) ease,
-    stroke var(--motion-fast, 120ms) ease;
+  /* `all` rather than the SVG default: hit-testing must not depend on the
+     facet being painted, since this one deliberately is not. */
+  pointer-events: all;
 }
 
-.orientation-hit:hover,
-.orientation-home:hover {
-  fill: var(--color-accent-dim);
-  stroke: var(--color-accent-border);
+.orientation-cube:active .cube-face,
+.orientation-cube:active .cube-corner,
+.orientation-cube:active .cube-corner-hit {
+  cursor: grabbing;
 }
 
-.orientation-hit:focus-visible,
-.orientation-home:focus-visible {
+/* A CSS rule outranks the presentation attribute the frame loop writes. */
+.cube-face:hover,
+.cube-corner-target:hover .cube-corner {
+  fill: #37527a;
+}
+
+/* Clicking a facet leaves it focused; never let the browser draw its native
+   focus ring around the cube. Keyboard focus keeps the accent stroke below. */
+.cube-face:focus,
+.cube-corner-hit:focus {
   outline: none;
-  fill: var(--color-accent-dim);
+}
+
+.cube-face:focus-visible,
+.cube-corner-target:has(.cube-corner-hit:focus-visible) .cube-corner {
   stroke: var(--color-accent);
   stroke-width: 1.5;
+}
+
+/* The triad is annotation: it must never steal a facet's click. */
+.orientation-triad {
+  pointer-events: none;
+}
+
+.cube-face-label {
+  fill: var(--color-text);
+  font-size: 9px;
+  font-weight: var(--fw-medium);
+  letter-spacing: 0.02em;
+  text-anchor: middle;
+  dominant-baseline: central;
+  pointer-events: none;
+  user-select: none;
+}
+
+.orientation-axis-label {
+  font-size: 10px;
+  font-weight: var(--fw-medium);
+  text-anchor: middle;
+  user-select: none;
+}
+
+.orientation-roll {
+  pointer-events: auto;
+  width: 26px;
+  height: 26px;
+  margin-top: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  color: var(--color-text);
+  background: rgba(17, 24, 33, 0.72);
+  border: var(--border-thin);
+  transition:
+    background var(--dur-fast) ease,
+    border-color var(--dur-fast) ease;
+}
+
+.orientation-roll:hover {
+  background: var(--color-surface-hover);
+  border-color: var(--color-border-strong);
 }
 
 .context-menu {
@@ -105,10 +181,11 @@
 }
 
 /* ── Marking menu ──
-   Laid out around the point that summoned it, so the sectors are already
+   Laid out around the point that summoned it, so the slots are already
    where the hand will flick. The container has no box of its own: the
-   sectors are the menu, and a panel drawn behind them would fight the
-   model they are meant to be acting on. ── */
+   ring is the menu, and a panel drawn behind it would fight the model it
+   is meant to be acting on. Names live in the hub rather than beside each
+   slot, so what covers the model is one readout instead of eight. ── */
 
 .marking-menu {
   position: fixed;
@@ -125,85 +202,156 @@
   pointer-events: auto;
 }
 
-/* Marks the dead zone, so it is visible that a small wobble picks nothing. */
+/* Invisible copies of every pill the hub could show, so the ring can be
+   laid out against the widest one without guessing at text metrics. */
+.marking-menu-measure {
+  visibility: hidden;
+}
+
+/* The readout is a pill that hugs whatever it is naming: a fixed disc has
+   to choose between clipping long labels and hanging them over bare
+   geometry, and a pill never has to. */
 .marking-menu-hub {
   position: absolute;
   transform: translate(-50%, -50%);
-  border: 1px dashed var(--color-border-strong);
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 240px;
+  padding: 5px 14px 5px 8px;
+  border: 1px solid var(--color-border-strong);
   border-radius: 999px;
+  background: rgba(11, 15, 20, 0.94);
+  color: var(--color-text);
+  white-space: nowrap;
+  line-height: var(--lh-tight);
   pointer-events: none;
 }
 
-.marking-menu-sector {
+/* At rest there is no icon to lead with, so the padding evens out. */
+.marking-menu-hub:not(.armed) {
+  padding: 5px 14px;
+}
+
+/* The aimed slot's icon, echoed at the centre of the flick. */
+.marking-menu-hub-icon {
+  display: inline-grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  flex: none;
+  border-radius: 999px;
+  background: var(--color-accent-dim);
+  color: var(--color-accent);
+  font-size: var(--fs-mini);
+}
+
+.marking-menu-hub.armed.danger .marking-menu-hub-icon {
+  background: rgba(239, 68, 68, 0.12);
+  color: var(--color-error);
+}
+
+/* Naming what a release would run is the hub's whole job, so it says so as
+   soon as there is something to name. */
+.marking-menu-hub.armed {
+  border-color: var(--color-accent);
+}
+
+.marking-menu-hub.armed.danger {
+  border-color: var(--color-error);
+  color: var(--color-error);
+}
+
+.marking-menu-rest {
+  font-family: var(--font-mono);
+  font-size: var(--fs-mini);
+  letter-spacing: var(--ls-eyebrow);
+  text-transform: uppercase;
+  color: var(--color-text-subtle);
+}
+
+/* An extreme label still has a ceiling (the pill's max-width); it ends in
+   an ellipsis rather than pushing the shortcut out of the pill. */
+.marking-menu-read {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: var(--fs-xs);
+}
+
+.marking-menu-hub small {
+  font-family: var(--font-mono);
+  font-size: var(--fs-mini);
+  color: var(--color-text-subtle);
+}
+
+.marking-menu-hub.armed.danger small {
+  color: inherit;
+}
+
+.marking-menu-slot {
   position: absolute;
+  width: 38px;
+  height: 38px;
   transform: translate(-50%, -50%);
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  white-space: nowrap;
-  padding: 4px 9px;
+  display: grid;
+  place-items: center;
   color: var(--color-text-muted);
   background: var(--color-surface);
   border: 1px solid var(--color-border-strong);
-  border-radius: var(--radius-md);
+  border-radius: 999px;
   box-shadow: 0 6px 20px rgba(0, 0, 0, 0.45);
   font-size: var(--fs-sm);
+  transition:
+    transform 120ms ease,
+    background 120ms ease,
+    border-color 120ms ease,
+    color 120ms ease;
 }
 
-.marking-menu-sector:hover:not(:disabled),
-.marking-menu-sector.aimed:not(:disabled) {
+.marking-menu-slot:hover:not(:disabled),
+.marking-menu-slot.aimed:not(:disabled) {
   color: var(--color-text);
   border-color: var(--color-accent);
   background: var(--color-surface-hover);
 }
 
-/* The aimed sector is what a release would take, so it reads as committed
+/* The aimed slot is what a release would take, so it reads as committed
    rather than merely hovered. */
-.marking-menu-sector.aimed:not(:disabled) {
+.marking-menu-slot.aimed:not(:disabled) {
   box-shadow: 0 0 0 2px var(--color-accent);
+  transform: translate(-50%, -50%) scale(1.12);
 }
 
-.marking-menu-sector:disabled {
+/* The disc stays opaque when disabled: fading the whole button lets the
+   model bleed through, and over a pale body the slot reads as a smudge of
+   whatever colour happens to be behind it. Only the icon dims. */
+.marking-menu-slot:disabled {
+  /* Overrides the global button:disabled fade, which would let the model
+     bleed through the disc. */
+  opacity: 1;
+  color: var(--color-text-subtle);
+  border-color: var(--color-border);
+  box-shadow: none;
+}
+
+.marking-menu-slot:disabled .marking-menu-icon {
   opacity: 0.45;
 }
 
-.marking-menu-sector.danger {
+/* Destructive at rest as well as under the pointer: with no label beside it,
+   the colour is the only warning the slot carries until it is aimed at. */
+.marking-menu-slot.danger {
   color: var(--color-error);
 }
 
-.marking-menu-overflow {
-  position: absolute;
-  left: 0;
-  top: 104px;
-  transform: translateX(-50%);
-  min-width: 176px;
-  padding: 4px;
-  background: var(--color-surface);
-  border: 1px solid var(--color-border-strong);
-  border-radius: var(--radius-md);
-  box-shadow: 0 10px 32px rgba(0, 0, 0, 0.5);
-}
-
-.marking-menu-more {
-  width: 100%;
-  min-height: 26px;
-  display: flex;
-  align-items: center;
-  gap: 9px;
-  padding: 3px 8px;
-  color: var(--color-text-muted);
-  border-radius: var(--radius-sm);
-  text-align: left;
-  font-size: var(--fs-sm);
-}
-
-.marking-menu-more:hover:not(:disabled) {
-  color: var(--color-text);
-  background: var(--color-surface-hover);
-}
-
-.marking-menu-more.danger {
+.marking-menu-slot.danger:hover:not(:disabled),
+.marking-menu-slot.danger.aimed:not(:disabled) {
   color: var(--color-error);
+  border-color: var(--color-error);
+}
+
+.marking-menu-slot.danger.aimed:not(:disabled) {
+  box-shadow: 0 0 0 2px var(--color-error);
 }
 
 .marking-menu-icon {
@@ -252,6 +400,19 @@
   width: 316px;
 }
 
+/* Name and body picker: the two things the retired Move form carried that the
+   gizmo did not (WF-07). They sit above the axis grids, matching the order the
+   feature forms use — identity first, then values. */
+.move-name,
+.move-target {
+  margin-bottom: 10px;
+}
+
+.move-name input,
+.move-target select {
+  width: 100%;
+}
+
 .move-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -291,4 +452,3 @@
 .move-axis-z {
   color: var(--color-handle-z);
 }
-
