@@ -29,6 +29,13 @@ export interface LivePreviewOptions<TDocument, TDerived> {
    * is: neither describes the value the user is holding now.
    */
   onFailure?(failure: { error: unknown; value: number }): void;
+  /**
+   * Fired once when a gesture's rebuilds turn out too slow to keep previewing.
+   * The geometry stops following the handle at that point, so whoever is
+   * showing the value gets a chance to say so rather than leaving it looking
+   * stuck.
+   */
+  onDegrade?(): void;
   slowFrameMs?: number;
   /**
    * Keep consuming the latest coalesced value after a slow frame. Appropriate
@@ -115,6 +122,9 @@ export class LivePreview<TDocument, TDerived> {
           }
         }
         if (now() - started > slowFrameMs) {
+          if (!this.slow) {
+            this.options.onDegrade?.();
+          }
           this.slow = true;
           if (!this.options.continueAfterSlow) {
             break;

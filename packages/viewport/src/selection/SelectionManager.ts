@@ -104,6 +104,8 @@ export class SelectionManager {
   private hoverFaceTarget = 0;
   private hoverHiddenFaceTarget = 0;
   private hoverFaceKey: string | null = null;
+  /** Last cursor written, so an unchanged one is not rewritten per frame. */
+  private lastCursor: string | null = null;
   private xrayEnabled = true;
   private hoveredRegionMesh: THREE.Mesh<
     THREE.BufferGeometry,
@@ -395,13 +397,20 @@ export class SelectionManager {
     }
     this.setEdgeHover(hoveredEdge, hoveredTopologyIds);
     this.setHoverFace(candidate?.selection ?? null);
-    this.options.domElement.style.cursor = this.options.extrudeArmed()
+    const cursor = this.options.extrudeArmed()
       ? 'grab'
       : canDragFace
         ? 'grab'
         : bodyId || candidate?.sketchId || candidate?.region
           ? 'pointer'
           : '';
+    // Writing the same cursor every hover frame makes sweeping across a dense
+    // edge set flicker between shapes, because each frame's pick can land on
+    // a different side of a boundary. Only a real change is worth a write.
+    if (cursor !== this.lastCursor) {
+      this.lastCursor = cursor;
+      this.options.domElement.style.cursor = cursor;
+    }
     const emissiveBodyId =
       candidate?.selection?.kind === 'body' ? bodyId : null;
     if (this.hoveredBodyId === emissiveBodyId) {
