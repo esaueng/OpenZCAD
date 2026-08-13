@@ -317,16 +317,23 @@ against ~500 ms under SwiftShader, and the worst frame in the whole drag is
 software-rasteriser artifact, exactly as the startup finding warned it might
 be, and no scene-rebuild work is justified by it.
 
-Two things this run does say are real:
+**The move drag row is input-paced, not half rate.** It reads 16.7 ms p50
+against orbit's 8.3 ms, which looks like a drag costing twice a frame. It is
+not: that scenario sleeps 10 ms between synthetic moves, and with the sleep
+removed and nothing else changed the same drag reports **8.3 ms p50 / 8.9 ms
+p95** — identical to orbit. It renders 62 frames for 60 pointer moves, one per
+move, so the harness sets the interval. This is the same trap the
+`frameIntervalMs` note below describes, and it survived one round of
+investigation here (a per-frame shadow-map refresh was suspected and measured
+out: disabling it moved p50 not at all).
 
-- The display runs at 120 Hz and most interaction meets it — orbit sits at
-  8.3 ms p50 with a 8.9 ms p95, which is a frame budget met with room to
-  spare.
-- **A move drag does not**: 16.7 ms p50 is exactly half rate, with a 91.7 ms
-  worst frame, while an orbit on the same model holds 8.3 ms. The drag's
-  per-application work is the difference — it resolves snap candidates over
-  every edge and face centre of the other bodies — and that is a real target
-  rather than an artifact.
+So the honest reading of the table is that **every measured gesture meets the
+frame budget on target hardware**, and no frame-pacing work is justified by
+these numbers. What remains of the felt jank is not throughput: it is the
+feedback and motion behaviour catalogued in the audit — highlights that pop
+instead of easing, selection that never fades out, gizmos that appear with no
+transition or hover affordance, no trackpad pan — plus whatever gesture-start
+latency costs, which these scenarios do not measure.
 
 Treat this table as the acceptance baseline for interaction feel. The
 SwiftShader numbers remain useful for draw calls, triangles, React commits,
