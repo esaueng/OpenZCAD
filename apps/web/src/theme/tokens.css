@@ -85,8 +85,11 @@
   --assistant-w: 360px;
 
   /* ── Motion ───────────────────────────────────────────── */
+  /* Mirrored by packages/viewport/src/motion.ts, which the scene eases at:
+     a highlight in the viewport and a panel beside it settle together. */
   --dur-fast: 100ms;
   --dur-base: 200ms;
+  --dur-slow: 350ms;
   --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
 
   /* ── Z-index scale ────────────────────────────────────── */

@@ -7,6 +7,7 @@
  */
 
 export * from './types';
+export * from './motion';
 
 // Rendering: meshes, materials, lighting, grid, and camera fitting.
 export * from './render/scene';
