@@ -26,7 +26,8 @@ Branch `claude/3d-modeling-interface-refinement-e7b650`.
 | 3.5 chip/keypad transitions | **done** — colour and elevation over `--dur-fast`, `transform` excluded |
 | 3.2 hover dwell/cursor hysteresis | **not started** — the strobe across dense topology |
 | 3.3 face hover cross-fade | **not started** — `setHoverFace` still teleports the film between faces |
-| 3.4 gizmo entrance/exit + hover affordance | **not started** — needs a per-frame step on the rigs and hover raycasting against them; the largest remaining item in the phase |
+| 3.4 gizmo entrance + hover affordance | **done** — shared rig presence controller; offset rig adopts it |
+| 3.4 gizmo exit, and the other two rigs | **not started** — exit needs deferred disposal past the React effect cleanup that currently disposes rigs immediately; cylinder and edge rigs adopt the controller the same way the offset rig does |
 | 3.5 "kernel is behind" affordance | **not started** — including a visible state for the 400 ms degrade |
 | Phases 2, 4, 5 | **not started** |
 
