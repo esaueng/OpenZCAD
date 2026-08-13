@@ -20,7 +20,15 @@ Branch `claude/3d-modeling-interface-refinement-e7b650`.
 | 1.2 cylinder-radius Inspector throttle | **not started** |
 | 1.3 rAF-coalesce drag handlers | **done** — `0a0a5d5`, 120 events → 1 apply |
 | 1.4 in-place preview geometry | **dropped** — the real-GPU measurement came back; the stall does not exist there (preview drag p95 25 ms). See the box in 1.4 |
-| Phases 2–5 | **not started** |
+| 3.1 motion vocabulary | **done** — `packages/viewport/src/motion.ts` + `--dur-slow` |
+| 3.2 edge hover easing | **done** — width and opacity ramp together |
+| 3.3 selection symmetry | **done** — fade-out on deselect, x-ray and preview halves rise with their twins |
+| 3.5 chip/keypad transitions | **done** — colour and elevation over `--dur-fast`, `transform` excluded |
+| 3.2 hover dwell/cursor hysteresis | **not started** — the strobe across dense topology |
+| 3.3 face hover cross-fade | **not started** — `setHoverFace` still teleports the film between faces |
+| 3.4 gizmo entrance/exit + hover affordance | **not started** — needs a per-frame step on the rigs and hover raycasting against them; the largest remaining item in the phase |
+| 3.5 "kernel is behind" affordance | **not started** — including a visible state for the 400 ms degrade |
+| Phases 2, 4, 5 | **not started** |
 
 Full E2E suite after 1.3: 127 passed, 8 skipped, 0 failures.
 
