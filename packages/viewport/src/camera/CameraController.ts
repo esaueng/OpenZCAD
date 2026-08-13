@@ -13,6 +13,7 @@ import {
   type MiddleDragAction
 } from '../input/bindings';
 import type { ProjectionMode } from '../types';
+import { wheelIntent, type PointerNavigationMode } from '../input/wheelGesture';
 import {
   initialZoomDynamics,
   stepZoomDynamics,
@@ -94,6 +95,8 @@ export interface CameraControllerOptions {
   zoomToCursor(): boolean;
   /** What a middle-button drag does. Read per call, like the others. */
   middleDrag(): MiddleDragAction;
+  /** How to read a wheel event: auto-detect, or force one device's meaning. */
+  pointerNavigation?(): PointerNavigationMode;
 }
 
 /**
@@ -164,7 +167,7 @@ export class CameraController {
     this.options.domElement.addEventListener(
       'wheel',
       this.applyDynamicZoomSpeed,
-      true
+      { capture: true, passive: false }
     );
   }
 
@@ -174,6 +177,34 @@ export class CameraController {
    * while a lone deliberate notch keeps its stock fine step.
    */
   private applyDynamicZoomSpeed = (event: WheelEvent) => {
+    const intent = wheelIntent(
+      {
+        deltaX: event.deltaX,
+        deltaY: event.deltaY,
+        deltaMode: event.deltaMode,
+        ctrlKey: event.ctrlKey
+      },
+      this.options.pointerNavigation?.() ?? 'auto'
+    );
+    if (intent === 'pan') {
+      // Take the event away from OrbitControls entirely: its wheel handler
+      // only ever dollies, so leaving it to run would zoom as well as pan.
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      // Suppressing the event also suppresses the viewport's own wheel
+      // listener, which is what normally ends a glide when the user takes
+      // over. A pan is the user taking over.
+      this.cancelTween();
+      // Content follows the fingers, the way a document does: a swipe that
+      // scrolls a page down moves the model down.
+      this.orbit.pan(-event.deltaX, -event.deltaY);
+      this.orbit.update();
+      // Debounced rather than written per event — a pan is hundreds of wheel
+      // events, and the durable pose only has to match the last one.
+      this.scheduleSettledViewChange();
+      this.options.requestRender();
+      return;
+    }
     const { state, speed } = stepZoomDynamics(
       this.zoomDynamics,
       performance.now(),
@@ -721,7 +752,7 @@ export class CameraController {
     this.options.domElement.removeEventListener(
       'wheel',
       this.applyDynamicZoomSpeed,
-      true
+      { capture: true }
     );
     this.gestureActive = false;
     this.externalOrbitActive = false;

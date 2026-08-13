@@ -31,7 +31,9 @@ Branch `claude/3d-modeling-interface-refinement-e7b650`.
 | 3.4 cylinder and edge rigs | **done** — both adopt the shared controller |
 | 3.4 gizmo exit | **not started** — needs deferred disposal past the React effect cleanup that disposes rigs immediately |
 | 3.5 "kernel is behind" affordance | **done** — `LivePreview` announces the degrade once and the chip reads `paused` |
-| Phases 2, 4, 5 | **not started** |
+| 4 trackpad two-finger pan + pinch zoom | **done** — `wheelGesture.ts` classifier, `auto`/`mouse`/`trackpad` supported by the controller |
+| 4 navigation preference in Settings | **not started** — the controller reads a mode, but nothing sets it yet, so misclassification has no escape hatch |
+| Phases 2, 5 | **not started** |
 
 Full E2E suite after 1.3: 127 passed, 8 skipped, 0 failures.
 
