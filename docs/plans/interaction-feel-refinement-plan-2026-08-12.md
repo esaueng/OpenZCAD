@@ -19,7 +19,7 @@ Branch `claude/3d-modeling-interface-refinement-e7b650`.
 | 1.2 extrude drag | **not started** — see note below |
 | 1.2 cylinder-radius Inspector throttle | **not started** |
 | 1.3 rAF-coalesce drag handlers | **done** — `0a0a5d5`, 120 events → 1 apply |
-| 1.4 in-place preview geometry | **not started** — the largest remaining item |
+| 1.4 in-place preview geometry | **blocked on a real-GPU measurement** — discovery disproved its premise; see the box in 1.4 |
 | Phases 2–5 | **not started** |
 
 Full E2E suite after 1.3: 127 passed, 8 skipped, 0 failures.
@@ -168,7 +168,49 @@ passes); probe drag scenarios show one drag-work execution per frame
 
 ### 1.4 In-place preview geometry for the dragged body
 
-The big one. Design decision (discovery first, half a day boxed):
+> **Discovery done 2026-08-13, and it contradicts the premise below. Do not
+> implement this item from the audit's reasoning; read this box first.**
+>
+> The audit blamed the preview drag's ~500 ms p95 frame on the scene being
+> torn down and rebuilt per published preview. That teardown is real, but it
+> is not what costs the time. Measured on the Heat Sink offset drag
+> (M5, headless SwiftShader), everything on the main thread is small:
+>
+> | Path | Cost across the whole drag |
+> | --- | ---: |
+> | Scene rebuild (`oz:viewer.bodies`) | 8 ms total, 2.9 ms max, 4 rebuilds |
+> | `LivePreview.build()` (document clone + command) | 8 ms total, 1 ms max |
+> | `postMessage` serialization | 3 ms total |
+> | `publish()` (setState) | 0 ms |
+> | Dimension labels + CSS2D render + callout clamp | 35 ms total across 131 frames |
+> | `renderer.render` | 319 ms across 131 frames, 38 ms max |
+> | Worker round trip (post → arrival) | 74–211 ms, of which 60–138 ms is kernel compute |
+>
+> Against that, the drag contains **six long tasks of 500–693 ms**. A move
+> drag, which runs no kernel preview, contains **one of 71 ms** — so the
+> stalls belong to the preview round trip, but not to any instrumented step
+> of it. Shader programs stay at 16, so it is not program churn either.
+>
+> That signature — main-thread time attributable to no JavaScript — is the
+> one `docs/performance-baseline.md` already documents for startup, where a
+> CPU profile put ~909 ms in V8's `(program)` bucket (GPU/driver work,
+> rasterisation, shader compilation) and where the same cost measured ~900 ms
+> headless against ~40 ms headed on a real GPU with a warm cache.
+>
+> **So the next step for 1.4 is not code, it is a measurement on real
+> hardware**: run the preview-drag probe headed on the target GPU and see
+> whether the stall exists there at all. If it does not, the audit's item 1
+> is a SwiftShader artifact, this phase drops to whatever the real numbers
+> justify, and the extrude drag's per-move `setState` (which 1.2 could not
+> fix without it) becomes the actual reason to do the work. If it does, take
+> a Chrome DevTools CPU+GPU trace of one stalled frame before choosing
+> between the designs below — the buffer uploads implied by disposing and
+> recreating every body's geometry and fat-line batches per publish are the
+> leading remaining suspect, and that would still point at reuse.
+>
+> None of this changes 1.1–1.3, which were measured end to end and stand.
+
+Design decision, once the measurement above justifies it:
 
 - **Chosen direction (a): per-body reuse by content key.** The worker's
   preview document arrives fully structured-cloned, so object identity is

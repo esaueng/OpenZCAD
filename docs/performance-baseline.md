@@ -268,6 +268,33 @@ render per move instead of two — and the p50 interval rose from 25 ms to
 43 ms saying so. Use `frames` for invalidation volume, `reactCommits` for
 component-tree traffic, and p95/max for genuine stalls.
 
+#### What the preview drag's 500 ms frames are not (2026-08-13)
+
+The preview-drag scenario's p95 was read as the scene teardown that happens on
+every published preview. Instrumenting each step of that path on the Heat Sink
+offset drag rules that out, and rules out everything else on the main thread:
+
+| Path | Cost across the whole drag |
+| --- | ---: |
+| Scene rebuild (`oz:viewer.bodies`) | 8 ms total, 2.9 ms max, over 4 rebuilds |
+| `LivePreview.build()` | 8 ms total, 1 ms max |
+| `postMessage` serialization | 3 ms total |
+| `publish()` | 0 ms |
+| Dimension labels, CSS2D render, callout clamp | 35 ms total over 131 frames |
+| `renderer.render` | 319 ms over 131 frames, 38 ms max |
+| Worker round trip | 74–211 ms, of which 60–138 ms is kernel compute |
+
+The same drag contains six long tasks of 500–693 ms. A move drag, which runs
+no kernel preview, contains one of 71 ms — so the stalls do belong to the
+preview round trip, but to no instrumented step of it, and `renderer.info`
+shows shader programs steady at 16, so it is not program churn.
+
+Main-thread time attributable to no JavaScript is the signature already
+recorded above for startup, where a CPU profile put ~909 ms in V8's
+`(program)` bucket and where the same work cost ~900 ms headless against
+~40 ms headed on a real GPU. **Re-measure this one headed on target hardware
+before optimising it**, exactly as the startup finding says.
+
 **A third harness note, for drag coalescing.** Neither the scenarios above nor
 any CDP-driven drag can show whether drag work is coalesced: each
 `page.mouse.move` round-trips and yields, so the browser paints between
