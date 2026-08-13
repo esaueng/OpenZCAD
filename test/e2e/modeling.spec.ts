@@ -2827,9 +2827,7 @@ test('the panel refuses a zero extrude and keeps a boolean name honest', async (
   // must not swallow it.
   await distance.fill('-8');
   await expect(inspector.getByText('Distance cannot be zero')).toHaveCount(0);
-  await expect(
-    inspector.getByRole('button', { name: /^Apply/ })
-  ).toBeEnabled();
+  await expect(inspector.getByRole('button', { name: /^Apply/ })).toBeEnabled();
 });
 
 test('each sketch plane label names the plane it actually opens', async ({
@@ -3010,4 +3008,128 @@ test('types an exact rectangle while drawing it', async ({ page }) => {
   }
   expect(Number(triple[1])).toBeCloseTo(40, 1);
   expect(Number(triple[2])).toBeCloseTo(20, 1);
+});
+
+test('dragging the move gizmo streams live values and commits what was dragged', async ({
+  page
+}) => {
+  await stubApi(page);
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('Move Drag Stream');
+  await page.getByRole('button', { name: 'Create project' }).click();
+
+  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
+  await page
+    .getByRole('region', { name: 'Feature inspector' })
+    .getByRole('button', { name: /^Create/ })
+    .click();
+  await expect(page.getByRole('button', { name: /^Fillet/ })).toBeEnabled();
+
+  const canvas = page.locator('.viewer-host canvas');
+  const bounds = (await canvas.boundingBox())!;
+
+  // Where the body sits before anything moves it. Captured on a settled model:
+  // while a move preview is live the mesh is offset from the topology the hook
+  // projects, so a pick there cannot be confirmed.
+  const locateEdge = () =>
+    canvas.evaluate(
+      (element) =>
+        new Promise<{ x: number; y: number } | null>((resolve) => {
+          element.dispatchEvent(
+            new CustomEvent('openzcad:e2e-locate-edge', { detail: { resolve } })
+          );
+        })
+    );
+  let before: { x: number; y: number } | null = null;
+  await expect
+    .poll(
+      async () => {
+        before = await locateEdge();
+        return before !== null;
+      },
+      { message: 'the box should expose a pickable edge before the move' }
+    )
+    .toBe(true);
+
+  await page.keyboard.press('m');
+  const overlay = page.getByRole('form', { name: 'Move controls' });
+  await expect(overlay).toBeVisible();
+
+  // The gizmo has no published screen position, but the viewport switches the
+  // canvas cursor to `grab` over a handle. Sweep outward from the body's
+  // centre until the viewport says a handle is under the pointer, so the drag
+  // below starts on a real one instead of a guessed pixel.
+  const grabPoint = await (async () => {
+    for (let radius = 0; radius <= 140; radius += 10) {
+      const directions: readonly (readonly [number, number])[] = [
+        [1, 0],
+        [0.87, -0.5],
+        [0.5, -0.87],
+        [0, -1],
+        [-0.87, -0.5],
+        [-1, 0]
+      ];
+      for (const [dx, dy] of directions) {
+        const point = {
+          x: bounds.x + bounds.width / 2 + dx * radius,
+          y: bounds.y + bounds.height / 2 + dy * radius
+        };
+        await page.mouse.move(point.x, point.y);
+        const cursor = await canvas.evaluate((element) => element.style.cursor);
+        if (cursor === 'grab') {
+          return point;
+        }
+      }
+    }
+    throw new Error('No move-gizmo handle found under any probed point.');
+  })();
+
+  await page.mouse.move(grabPoint.x, grabPoint.y);
+  await page.mouse.down();
+  for (let step = 1; step <= 12; step += 1) {
+    await page.mouse.move(grabPoint.x + step * 4, grabPoint.y);
+    await page.waitForTimeout(12);
+  }
+
+  // Mid-drag: the panel's fields track the gesture even though the workspace
+  // has not re-rendered. Before the live channel existed this only worked
+  // because every pointer move committed React state.
+  const draggedValues = async () =>
+    Promise.all(
+      ['Move X in mm', 'Move Y in mm', 'Move Z in mm'].map(async (label) =>
+        Number(await overlay.getByLabel(label).inputValue())
+      )
+    );
+  await expect
+    .poll(async () => (await draggedValues()).some((value) => value !== 0), {
+      message: 'the move panel should show the drag while it is happening'
+    })
+    .toBe(true);
+  const liveValues = await draggedValues();
+
+  await page.mouse.up();
+  await page.waitForTimeout(150);
+
+  // Releasing hands the same numbers to the workspace: what the panel showed
+  // mid-drag is what a commit applies.
+  expect(await draggedValues()).toEqual(liveValues);
+
+  await overlay.getByRole('button', { name: /Apply move/ }).click();
+  await expect(page.locator('.feature-row', { hasText: 'Move' })).toHaveCount(
+    1
+  );
+  await expect(page.getByRole('contentinfo')).toContainText('warnings0');
+
+  // The committed feature has to carry the dragged distance, not the zero the
+  // panel started from: a Move feature is created either way, so the body
+  // moving on screen is what separates a real commit from an empty one.
+  await expect
+    .poll(
+      async () => {
+        const after = await locateEdge();
+        return after ? Math.abs(after.x - before!.x) : 0;
+      },
+      { message: 'the committed move should displace the body on screen' }
+    )
+    .toBeGreaterThan(5);
 });
