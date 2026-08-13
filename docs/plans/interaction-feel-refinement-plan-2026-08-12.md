@@ -36,7 +36,10 @@ Branch `claude/3d-modeling-interface-refinement-e7b650`.
 | 2.3 window-resize coalescing | **done** — one render per frame instead of one per event |
 | 2.1 defer the workspace-session write | **attempted and reverted** — see below |
 | 2.2 precompute move snap candidates | **not started** |
-| Phase 5 | **not started** |
+| 5.2 cache the canvas rect for picking | **done** — one layout read per event, not per raycast |
+| 5.3 callout layout thrash | **done** — all rects read before any margin is written |
+| 5.1 BVH / prefilter for picking | **not started** — needs a dependency decision, and the headed numbers do not currently justify it |
+| 5.4–5.6 sketch geometry reuse, DPR listener, snap allocation | **not started** |
 
 **2.1, and why it is not in.** The cost is real and now measured: pressing to
 orbit performs **3 synchronous session writes** on the press frame, each a
