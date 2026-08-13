@@ -25,6 +25,22 @@ export function mark(name: string, detail?: unknown): void {
   }
 }
 
+/**
+ * Counts React commits so a probe can tell whether a gesture is driving the
+ * component tree. The interesting number is commits *during* a drag: the
+ * viewport owns per-frame values imperatively, so a well-behaved drag commits
+ * on its lifecycle edges and nowhere in between.
+ *
+ * Only wired up in `OZ_PERF` builds — see `main.tsx`.
+ */
+export function countReactCommit(): void {
+  if (typeof window === 'undefined') {
+    return;
+  }
+  const scope = window as typeof window & { __ozReactCommits?: number };
+  scope.__ozReactCommits = (scope.__ozReactCommits ?? 0) + 1;
+}
+
 /** Measures between two named OpenZCAD marks without affecting app behavior. */
 export function measure(name: string, start: string, end?: string): void {
   if (!supported) {

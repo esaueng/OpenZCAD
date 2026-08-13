@@ -214,6 +214,61 @@ describes Playwright's pacing. Recorded here because the p95 of 182 ms is
 misleading enough to have already sent one investigation looking for a stall
 that does not exist.
 
+### Wave 4 gesture coverage and the phantom edge batches (2026-08-12)
+
+Two things landed here: a rendering regression fix, and three probe scenarios
+that measure the gestures the original probe never touched.
+
+**The regression.** `BodyEdgeOverlay` allocates its hover, selection, and
+face-boundary batches at full idle capacity so later updates never
+reallocate, but the geometry reported that capacity as live instances.
+`refreshVisibility` reads `instanceCount` for the hover tiers, so installing
+a body — which applies the display mode — drew every body's entire edge set
+twice as zero-length segments until the first edge hover, and every scene
+rebuild brought them back. Bisected to the visual-selection phases: PR #293
+added ~1,968 triangles and PR #295 ~1,969 more.
+
+| Metric | `d8561c7` (pre-vsel) | `ef77d45` (regressed) | Fixed |
+| --- | ---: | ---: | ---: |
+| Frame time p50 | 16.7 ms | 24.9 ms | 16.7 ms |
+| Mean draw calls | 11.58 | 13.9 | 12.32 |
+| Mean triangles | 2,801 | 6,530 | 2,595 |
+
+**New scenarios.** `hover sweep`, `move drag`, and `preview drag` join the
+orbit/pan probe and the cylinder proxy. Each reports `reactCommits`
+alongside frame times: `App` increments a counter in a dependency-free
+effect under `OZ_PERF`, so a probe can see whether a gesture is driving the
+component tree. The viewport owns per-frame values imperatively, so a
+refined gesture should commit on its lifecycle edges and nowhere in between.
+
+Baseline on the M5 SwiftShader environment, 2026-08-12, after the fix above:
+
+| Scenario | Frame p50 | Frame p95 | React commits | Note |
+| --- | ---: | ---: | ---: | --- |
+| Orbit + pan | 16.7 ms | 25.0 ms | — | camera only |
+| Hover sweep (121 moves) | 16.7 ms | 25.0 ms | **0** | fully imperative |
+| Move drag (60 moves) | 25.0 ms | 33.4 ms | **61** | one commit per pointer move |
+| Preview drag (50 moves) | 25.0 ms | 508.4 ms | 10 | scene teardown per publish |
+
+The last two rows are the measurement this wave existed to get. Hover is the
+reference for what the interaction stack does when it behaves: 121 pointer
+moves, zero React commits. A move drag commits once per pointer move because
+`setMoveSnap`/`setMovePreview` run per event in a tree with no memoized
+components. The preview drag's 508 ms p95 is a rebuild of the whole scene on
+each published preview — the body list changes identity, so meshes, edge
+batches, hover state, and the shadow map are all torn down mid-gesture.
+
+Two harness notes, both of which produced a probe that measured nothing:
+
+- The offset handle's value chip is a DOM overlay anchored on top of the
+  handle, so a synthetic press at the published handle point hit-tests to the
+  chip and never reaches the canvas. The probe now walks along the drag axis
+  for the nearest point that hit-tests to the canvas, which is where a person
+  aims anyway.
+- Scaling a drag by the handle's published pixels-per-unit walks the pointer
+  off the canvas and silently ends the drag. Drag distances are bounded in
+  pixels instead.
+
 ### P-02 — "cold project creation exceeds 1 s"
 
 Real, but it is not project creation. Across five runs, cold creation was
