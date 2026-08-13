@@ -189,12 +189,22 @@ describe('edge hover styling', () => {
     const { overlay, selection, hit } = makeBatchedEdge();
     const hoverGeometry = overlay.hoverEdges.geometry;
 
+    // The hover tier ramps rather than snapping on, so it is the render
+    // loop's step — not applyHover — that brings it to full presence.
+    const settle = () => {
+      for (let frame = 0; frame < 60 && overlay.step(16); frame += 1) {
+        // step until the ramp reports nothing left to move
+      }
+    };
+
     manager.applyHover(candidate({ kind: 'edge', selection, hit }));
+    settle();
     expect(overlay.hoverEdges.visible).toBe(true);
     expect(overlay.hoverEdges.geometry.instanceCount).toBe(2);
     expect(overlay.hoverEdges.geometry).toBe(hoverGeometry);
 
     manager.applyHover(null);
+    settle();
     expect(overlay.hoverEdges.visible).toBe(false);
   });
 
