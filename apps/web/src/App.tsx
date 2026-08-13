@@ -160,7 +160,13 @@ import {
   type ProjectOwnershipClaim
 } from './lib/projectTabOwnership';
 
-import { mark, measure, timed, timedAsync } from './lib/perf';
+import {
+  countReactCommit,
+  mark,
+  measure,
+  timed,
+  timedAsync
+} from './lib/perf';
 import { useModalFocus } from './lib/useModalFocus';
 import {
   PLANE_LABELS,
@@ -837,6 +843,15 @@ function resolvedSketchPlaneBasis(
 }
 
 export function App() {
+  // Counts this component's commits for the interaction probes. Deliberately
+  // dependency-free so it runs after every commit, and deliberately inside
+  // App rather than around it: a wrapper never re-renders when App's own
+  // state changes, which is exactly the traffic worth counting.
+  useEffect(() => {
+    if (import.meta.env.OZ_PERF === '1') {
+      countReactCommit();
+    }
+  });
   const [desktopAuthorizationAttempt] = useState(
     desktopAuthorizationAttemptFromLocation
   );
