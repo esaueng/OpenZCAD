@@ -298,6 +298,12 @@ export class BodyEdgeOverlay extends THREE.Group {
     if (options.depthFunc !== undefined) {
       overlay.material.depthFunc = options.depthFunc;
     }
+    // The buffer is allocated at full capacity so later updates never
+    // reallocate, but an overlay starts empty. Without this the batch reports
+    // its whole capacity as live instances, and `refreshVisibility` — which
+    // reads `instanceCount` for the hover tiers — draws a body's entire edge
+    // set as degenerate zero-length segments until the first hover.
+    overlay.geometry.instanceCount = 0;
     overlay.name = name;
     overlay.visible = false;
     overlay.renderOrder = renderOrder;

@@ -214,6 +214,153 @@ describes Playwright's pacing. Recorded here because the p95 of 182 ms is
 misleading enough to have already sent one investigation looking for a stall
 that does not exist.
 
+### Wave 4 gesture coverage and the phantom edge batches (2026-08-12)
+
+Two things landed here: a rendering regression fix, and three probe scenarios
+that measure the gestures the original probe never touched.
+
+**The regression.** `BodyEdgeOverlay` allocates its hover, selection, and
+face-boundary batches at full idle capacity so later updates never
+reallocate, but the geometry reported that capacity as live instances.
+`refreshVisibility` reads `instanceCount` for the hover tiers, so installing
+a body — which applies the display mode — drew every body's entire edge set
+twice as zero-length segments until the first edge hover, and every scene
+rebuild brought them back. Bisected to the visual-selection phases: PR #293
+added ~1,968 triangles and PR #295 ~1,969 more.
+
+| Metric | `d8561c7` (pre-vsel) | `ef77d45` (regressed) | Fixed |
+| --- | ---: | ---: | ---: |
+| Frame time p50 | 16.7 ms | 24.9 ms | 16.7 ms |
+| Mean draw calls | 11.58 | 13.9 | 12.32 |
+| Mean triangles | 2,801 | 6,530 | 2,595 |
+
+**New scenarios.** `hover sweep`, `move drag`, and `preview drag` join the
+orbit/pan probe and the cylinder proxy. Each reports `reactCommits`
+alongside frame times: `App` increments a counter in a dependency-free
+effect under `OZ_PERF`, so a probe can see whether a gesture is driving the
+component tree. The viewport owns per-frame values imperatively, so a
+refined gesture should commit on its lifecycle edges and nowhere in between.
+
+Baseline on the M5 SwiftShader environment, 2026-08-12, after the fix above:
+
+| Scenario | Frame p50 | Frame p95 | React commits | Note |
+| --- | ---: | ---: | ---: | --- |
+| Orbit + pan | 16.7 ms | 25.0 ms | — | camera only |
+| Hover sweep (121 moves) | 16.7 ms | 25.0 ms | **0** | fully imperative |
+| Move drag (60 moves) | 25.0 ms | 33.4 ms | **61** | one commit per pointer move |
+| Preview drag (50 moves) | 25.0 ms | 508.4 ms | 10 | scene teardown per publish |
+
+The last two rows are the measurement this wave existed to get. Hover is the
+reference for what the interaction stack does when it behaves: 121 pointer
+moves, zero React commits. A move drag commits once per pointer move because
+`setMoveSnap`/`setMovePreview` run per event in a tree with no memoized
+components. The preview drag's 508 ms p95 is a rebuild of the whole scene on
+each published preview — the body list changes identity, so meshes, edge
+batches, hover state, and the shadow map are all torn down mid-gesture.
+
+**Read `frames` before reading `frameTimeMs` in these scenarios.** The mark
+records the interval since the previous rendered frame, and the viewport
+renders on demand. Removing a redundant invalidation therefore *raises*
+`frameTimeMs` while lowering the work done, because the loop simply idles
+longer between frames. Memoizing the viewport's array props (below) took the
+move drag from 121 rendered frames to 61 for the same 60 pointer moves — one
+render per move instead of two — and the p50 interval rose from 25 ms to
+43 ms saying so. Use `frames` for invalidation volume, `reactCommits` for
+component-tree traffic, and p95/max for genuine stalls.
+
+#### What the preview drag's 500 ms frames are not (2026-08-13)
+
+The preview-drag scenario's p95 was read as the scene teardown that happens on
+every published preview. Instrumenting each step of that path on the Heat Sink
+offset drag rules that out, and rules out everything else on the main thread:
+
+| Path | Cost across the whole drag |
+| --- | ---: |
+| Scene rebuild (`oz:viewer.bodies`) | 8 ms total, 2.9 ms max, over 4 rebuilds |
+| `LivePreview.build()` | 8 ms total, 1 ms max |
+| `postMessage` serialization | 3 ms total |
+| `publish()` | 0 ms |
+| Dimension labels, CSS2D render, callout clamp | 35 ms total over 131 frames |
+| `renderer.render` | 319 ms over 131 frames, 38 ms max |
+| Worker round trip | 74–211 ms, of which 60–138 ms is kernel compute |
+
+The same drag contains six long tasks of 500–693 ms. A move drag, which runs
+no kernel preview, contains one of 71 ms — so the stalls do belong to the
+preview round trip, but to no instrumented step of it, and `renderer.info`
+shows shader programs steady at 16, so it is not program churn.
+
+Main-thread time attributable to no JavaScript is the signature already
+recorded above for startup, where a CPU profile put ~909 ms in V8's
+`(program)` bucket and where the same work cost ~900 ms headless against
+~40 ms headed on a real GPU. **Re-measure this one headed on target hardware
+before optimising it**, exactly as the startup finding says.
+
+#### The same probes on the target GPU (2026-08-13)
+
+Answering the question the section above ends on. Identical build and probes,
+run headed on the same machine so the renderer is ANGLE Metal on the Apple M5
+Pro rather than SwiftShader:
+
+| Scenario | Frame p50 | Frame p95 | Frame max | React commits |
+| --- | ---: | ---: | ---: | ---: |
+| Orbit + pan | 8.3 ms | 8.9 ms | 16.8 ms | — |
+| Hover sweep (121 moves) | 8.4 ms | 16.7 ms | 17.6 ms | 0 |
+| Move drag (60 moves) | 16.7 ms | 17.6 ms | 91.7 ms | 2 |
+| Preview drag (50 moves) | 8.4 ms | 25.1 ms | 33.5 ms | 6 |
+
+Cylinder-radius input-to-frame stays at 0.9 ms p50, and the coalescing probe
+still collapses 120 synthetic moves into 2 applications.
+
+**The preview drag's half-second frames do not exist here**: p95 is 25 ms
+against ~500 ms under SwiftShader, and the worst frame in the whole drag is
+33 ms. That closes the question this document raised — the stall was a
+software-rasteriser artifact, exactly as the startup finding warned it might
+be, and no scene-rebuild work is justified by it.
+
+**The move drag row is input-paced, not half rate.** It reads 16.7 ms p50
+against orbit's 8.3 ms, which looks like a drag costing twice a frame. It is
+not: that scenario sleeps 10 ms between synthetic moves, and with the sleep
+removed and nothing else changed the same drag reports **8.3 ms p50 / 8.9 ms
+p95** — identical to orbit. It renders 62 frames for 60 pointer moves, one per
+move, so the harness sets the interval. This is the same trap the
+`frameIntervalMs` note below describes, and it survived one round of
+investigation here (a per-frame shadow-map refresh was suspected and measured
+out: disabling it moved p50 not at all).
+
+So the honest reading of the table is that **every measured gesture meets the
+frame budget on target hardware**, and no frame-pacing work is justified by
+these numbers. What remains of the felt jank is not throughput: it is the
+feedback and motion behaviour catalogued in the audit — highlights that pop
+instead of easing, selection that never fades out, gizmos that appear with no
+transition or hover affordance, no trackpad pan — plus whatever gesture-start
+latency costs, which these scenarios do not measure.
+
+Treat this table as the acceptance baseline for interaction feel. The
+SwiftShader numbers remain useful for draw calls, triangles, React commits,
+and drag applications, which are hardware-independent; they are not evidence
+about smoothness.
+
+**A third harness note, for drag coalescing.** Neither the scenarios above nor
+any CDP-driven drag can show whether drag work is coalesced: each
+`page.mouse.move` round-trips and yields, so the browser paints between
+events and the drag runs once per move whatever the code does. The
+`drag coalescing probe` dispatches its burst of `pointermove` events
+synchronously from page script instead, carrying the real gesture's pointer
+id, so the whole burst lands before a frame can run. It reports 120 pointer
+events collapsing to 1 application of the drag path, and 120 applications
+when the coalescing is removed.
+
+Two harness notes, both of which produced a probe that measured nothing:
+
+- The offset handle's value chip is a DOM overlay anchored on top of the
+  handle, so a synthetic press at the published handle point hit-tests to the
+  chip and never reaches the canvas. The probe now walks along the drag axis
+  for the nearest point that hit-tests to the canvas, which is where a person
+  aims anyway.
+- Scaling a drag by the handle's published pixels-per-unit walks the pointer
+  off the canvas and silently ends the drag. Drag distances are bounded in
+  pixels instead.
+
 ### P-02 — "cold project creation exceeds 1 s"
 
 Real, but it is not project creation. Across five runs, cold creation was

@@ -160,7 +160,7 @@ import {
   type ProjectOwnershipClaim
 } from './lib/projectTabOwnership';
 
-import { mark, measure, timed, timedAsync } from './lib/perf';
+import { countReactCommit, mark, measure, timed, timedAsync } from './lib/perf';
 import { useModalFocus } from './lib/useModalFocus';
 import {
   PLANE_LABELS,
@@ -836,7 +836,23 @@ function resolvedSketchPlaneBasis(
   };
 }
 
+/**
+ * Stable empties for viewport props. An inline `[]` is a new array every
+ * render, and the viewport treats a new array as new content to install.
+ */
+const EMPTY_SKETCH_OVERLAYS: SketchOverlay[] = [];
+const EMPTY_BODY_IDS: string[] = [];
+
 export function App() {
+  // Counts this component's commits for the interaction probes. Deliberately
+  // dependency-free so it runs after every commit, and deliberately inside
+  // App rather than around it: a wrapper never re-renders when App's own
+  // state changes, which is exactly the traffic worth counting.
+  useEffect(() => {
+    if (import.meta.env.OZ_PERF === '1') {
+      countReactCommit();
+    }
+  });
   const [desktopAuthorizationAttempt] = useState(
     desktopAuthorizationAttemptFromLocation
   );
@@ -1153,6 +1169,18 @@ export function App() {
   >(null);
   /** Lets keypad typing drive the viewport's offset-handle preview. */
   const offsetSetterRef = useRef<((offset: number) => void) | null>(null);
+  /**
+   * Live move-drag values, published by the viewport straight to the panel
+   * that shows them. Workspace state learns the result when the drag settles.
+   */
+  const moveValuesSetterRef = useRef<
+    | ((
+        translation: MovePreview['translation'],
+        rotationDeg: MovePreview['rotationDeg'],
+        snap: MoveSnap
+      ) => void)
+    | null
+  >(null);
   /** Localized inspector update; avoids rerendering the whole workspace per move. */
   const cylinderRadiusInspectorSetterRef = useRef<
     ((radius: number | null) => void) | null
@@ -3521,6 +3549,28 @@ export function App() {
     });
   }, [doc, parameterScope, selectedSketch, selectedSketchProfileId]);
 
+  // The viewport installs and tears down real scene objects when these props
+  // change identity, so each one is memoized rather than built inline: a fresh
+  // `[]` or `.map()` on every render re-arms the sketch overlay, region state,
+  // and extrude-preview effects — during a drag, once per pointer event.
+  const viewerSketches = useMemo(
+    () =>
+      // Region-based rendering (sketchViews) supersedes the legacy
+      // single-profile overlays under direct manipulation.
+      appSettings.experiments.directManipulation
+        ? EMPTY_SKETCH_OVERLAYS
+        : sketchOverlays,
+    [appSettings.experiments.directManipulation, sketchOverlays]
+  );
+  const viewerEditableBodyIds = useMemo(
+    () => (viewMode ? EMPTY_BODY_IDS : directEditableBodyIds),
+    [viewMode, directEditableBodyIds]
+  );
+  const viewerSelectedProfileIds = useMemo(
+    () => selectedProfiles.map((profile) => profile.profileId),
+    [selectedProfiles]
+  );
+
   const selectedSketchProfileName = useMemo(
     () =>
       selectedSketchProfileId
@@ -4209,6 +4259,24 @@ export function App() {
       );
     }
   }
+
+  /**
+   * A settled move drag, not a live one: the viewport streams the in-progress
+   * values straight to the panel, and calls this once when the gesture ends.
+   */
+  const handleMovePreviewChange = useCallback(
+    (
+      translation: MovePreview['translation'],
+      rotationDeg: MovePreview['rotationDeg'],
+      snap: MoveSnap
+    ) => {
+      setMoveSnap(snap);
+      setMovePreview((current) =>
+        current ? { ...current, translation, rotationDeg } : current
+      );
+    },
+    []
+  );
 
   function confirmMove() {
     const preview = movePreview;
@@ -10549,11 +10617,7 @@ export function App() {
                   ]
                 : undefined
             }
-            sketches={
-              // Region-based rendering (sketchViews) supersedes the legacy
-              // single-profile overlays under direct manipulation.
-              appSettings.experiments.directManipulation ? [] : sketchOverlays
-            }
+            sketches={viewerSketches}
             selectedBodyIds={selectedBodyIds}
             selectedTopology={renderedSelectedTopology}
             previewFaceHighlights={previewBlendFaces}
@@ -10569,7 +10633,7 @@ export function App() {
             // the viewer only builds a manipulator when it is given a target,
             // so view mode keeps orbit, pan and picking while no gesture can
             // reach the document.
-            editableBodyIds={viewMode ? [] : directEditableBodyIds}
+            editableBodyIds={viewerEditableBodyIds}
             extrudePreview={extrudePreview}
             movePreview={movePreview}
             moveCommitHold={moveCommitHold}
@@ -10584,12 +10648,8 @@ export function App() {
             onRedo={handleRedo}
             initialView={initialView}
             onViewChange={handleViewportChange}
-            onMovePreviewChange={(translation, rotationDeg, snap) => {
-              setMoveSnap(snap);
-              setMovePreview((current) =>
-                current ? { ...current, translation, rotationDeg } : current
-              );
-            }}
+            onMovePreviewChange={handleMovePreviewChange}
+            moveValuesSetterRef={moveValuesSetterRef}
             offsetHandle={viewMode ? null : offsetHandleTarget}
             onOffsetPreview={handleOffsetPreview}
             onOffsetCommit={handleOffsetCommit}
@@ -10629,9 +10689,7 @@ export function App() {
               dispatchInteraction({ type: 'sketch-select-object', objectId })
             }
             sketchViews={sketchViews}
-            selectedProfileIds={selectedProfiles.map(
-              (profile) => profile.profileId
-            )}
+            selectedProfileIds={viewerSelectedProfileIds}
             profileSelectionMode={tool === 'extrude'}
             onSelectRegion={handleSelectRegion}
             onHoverRegion={handleHoverRegion}
@@ -10977,6 +11035,7 @@ export function App() {
                   }
                   onConfirm={confirmMove}
                   onCancel={cancelPanel}
+                  liveValuesRef={moveValuesSetterRef}
                 />
               ) : tool === 'sketch' ? (
                 <div className="sketch-plane-prompt" role="status">
