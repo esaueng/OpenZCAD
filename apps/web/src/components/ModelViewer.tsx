@@ -1352,6 +1352,14 @@ export function ModelViewer({
      * snap scans and HUD layout several times per painted frame.
      */
     let pendingDragEvent: PointerEvent | null = null;
+    /**
+     * Whether a drag move has already been applied since the last frame. The
+     * first move after a frame runs immediately so a single move is never a
+     * frame late; anything arriving before the frame that follows it is
+     * collapsed into that frame. A burst therefore costs two applications
+     * instead of one per event, and an unhurried hand sees no added latency.
+     */
+    let dragAppliedThisFrame = false;
     let resizePending = false;
 
     function requestRender() {
@@ -4767,11 +4775,16 @@ export function ModelViewer({
         if (dragKind === 'handle') {
           // preventDefault has to happen while the event is being dispatched,
           // so it cannot wait for the frame that consumes the position. The
-          // calls inside the handle branches are no-ops by then, and are kept
-          // only because those branches also run synchronously on release.
+          // calls inside the handle branches are no-ops when the work is
+          // deferred, and are kept because it often is not.
           event.preventDefault();
         }
-        pendingDragEvent = event;
+        if (dragAppliedThisFrame) {
+          pendingDragEvent = event;
+        } else {
+          dragAppliedThisFrame = true;
+          applyPointerMove(event);
+        }
         requestRender();
         return;
       }
@@ -5813,6 +5826,7 @@ export function ModelViewer({
       const controlsChanged = cameraRig.stepOrbit(now);
       const dragEvent = pendingDragEvent;
       pendingDragEvent = null;
+      dragAppliedThisFrame = false;
       if (dragEvent) {
         applyPointerMove(dragEvent);
       }
