@@ -113,7 +113,8 @@ import {
   type ViewerSettings,
   type FatLineResolution,
   type BodyEdgeOverlay,
-  type DimensionGraphic
+  type DimensionGraphic,
+  easeToward
 } from '@openzcad/viewport';
 import type {
   BodyRepresentation,
@@ -779,6 +780,12 @@ const SELECTION_EMISSIVE = 0x173a5e;
 const SELECTED_FACE_COLOR = 0x4da3ff;
 const SELECTED_FACE_OPACITY = 0.5;
 const SELECTED_FACE_HIDDEN_OPACITY = 0.16;
+/**
+ * Opacity an overlay fades to when it registers for the fade without naming a
+ * target. Mirrors the viewport's own default so both fade paths agree.
+ */
+const DEFAULT_OVERLAY_FADE_TARGET = 0.34;
+
 const E2E_CANVAS_HOOKS_ENABLED =
   (
     import.meta.env as unknown as {
@@ -5873,15 +5880,22 @@ export function ModelViewer({
       // Timer separates advancing time from reading it, so update once here.
       context.timer.update(now);
       const dt = Math.min(context.timer.getDelta(), 0.05);
-      const ease = 1 - Math.exp(-dt * 16);
+
       selection.step(dt);
+      // Edge highlight tiers ease on the overlays themselves, so each body
+      // steps its own; any still moving keeps the loop awake below.
+      let edgesAnimating = false;
+      for (const overlay of context.edgeOverlaysByBodyId.values()) {
+        if (overlay.step(dt * 1000)) {
+          edgesAnimating = true;
+        }
+      }
       for (const material of context.fadeIns) {
         const target =
-          (material.userData.targetOpacity as number | undefined) ?? 0.34;
-        const next = material.opacity + (target - material.opacity) * ease;
-        material.opacity = next;
-        if (Math.abs(target - next) < 0.004) {
-          material.opacity = target;
+          (material.userData.targetOpacity as number | undefined) ??
+          DEFAULT_OVERLAY_FADE_TARGET;
+        material.opacity = easeToward(material.opacity, target, dt * 1000);
+        if (material.opacity === target) {
           context.fadeIns.delete(material);
         }
       }
@@ -6011,6 +6025,7 @@ export function ModelViewer({
         tweening ||
         controlsChanged ||
         hoverAnimating ||
+        edgesAnimating ||
         inferenceAnimating ||
         context.fadeIns.size > 0
       ) {
