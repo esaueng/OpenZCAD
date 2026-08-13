@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import {
   toBodyId,
+  toEntityId,
   toFeatureId,
+  toSketchId,
   type BodyTopology,
   type FaceTopologyReferenceV5
 } from '@openzcad/shared';
@@ -164,5 +166,135 @@ describe('modeling operation form contracts', () => {
         hasTargetBody: true
       })
     ).toBeNull();
+  });
+
+  it('preserves ordered loft sections and parametric helical inputs', () => {
+    const profiles = ['lower', 'upper'].map((name, index) => ({
+      id: name,
+      label: name,
+      section: {
+        sketchId: toSketchId(`sketch_${name}`),
+        profile: {
+          profileId: `profile_${name}`,
+          regionFingerprint: index + 1,
+          samplePoint: { x: 0, y: 0 },
+          sourceArea: 10 + index
+        }
+      }
+    }));
+    expect(
+      buildModelingOperationSubmission(
+        {
+          operation: 'loft',
+          value: {
+            name: ' Loft ',
+            sectionIds: ['upper', 'lower'],
+            mode: 'smooth'
+          }
+        },
+        [],
+        profiles
+      )
+    ).toEqual({
+      operation: 'loft',
+      input: {
+        name: 'Loft',
+        sections: [profiles[1]!.section, profiles[0]!.section],
+        mode: 'smooth'
+      }
+    });
+    expect(
+      buildModelingOperationSubmission(
+        {
+          operation: 'helical-sweep',
+          value: {
+            name: 'Helix',
+            profileId: 'lower',
+            axisOrigin: { x: '0', y: '0', z: 'base' },
+            axisDirection: { x: '0', y: '0', z: '1' },
+            radius: 'coil_radius',
+            pitch: '-5',
+            turns: '3'
+          }
+        },
+        [],
+        profiles
+      )
+    ).toMatchObject({
+      operation: 'helical-sweep',
+      input: {
+        axisOrigin: { x: 0, y: 0, z: 'base' },
+        radius: 'coil_radius',
+        pitch: -5,
+        turns: 3
+      }
+    });
+  });
+
+  it('builds sweep paths and face modifiers with persistent references', () => {
+    const profile = {
+      id: 'profile',
+      label: 'Profile',
+      section: {
+        sketchId: toSketchId('sketch_profile'),
+        profile: {
+          profileId: 'profile_1',
+          regionFingerprint: 1,
+          samplePoint: { x: 0, y: 0 },
+          sourceArea: 4
+        }
+      }
+    };
+    const path = {
+      id: 'path',
+      label: 'Path',
+      path: {
+        sketchId: toSketchId('sketch_path'),
+        entityIds: [toEntityId('entity_path')]
+      }
+    };
+    expect(
+      buildModelingOperationSubmission(
+        {
+          operation: 'sweep',
+          value: {
+            name: 'Sweep',
+            profileId: 'profile',
+            pathId: 'path',
+            mode: 'standard'
+          }
+        },
+        [],
+        [profile],
+        [path]
+      )
+    ).toEqual({
+      operation: 'sweep',
+      input: {
+        name: 'Sweep',
+        profile: profile.section,
+        path: path.path,
+        mode: 'standard'
+      }
+    });
+    expect(
+      buildModelingOperationSubmission(
+        {
+          operation: 'draft',
+          value: {
+            name: 'Draft',
+            targetBodyId: bodyId,
+            faceHashes: [42],
+            pullDirection: { x: '0', y: '0', z: '1' },
+            neutralPoint: { x: '0', y: '0', z: '0' },
+            angleDeg: '3'
+          }
+        },
+        modelingFaceOptions(topology)
+      )
+    ).toMatchObject({
+      operation: 'draft',
+      input: { faceHashes: [42], faceReferences: [reference], angleDeg: 3 }
+    });
   });
 });
