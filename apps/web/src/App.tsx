@@ -160,13 +160,7 @@ import {
   type ProjectOwnershipClaim
 } from './lib/projectTabOwnership';
 
-import {
-  countReactCommit,
-  mark,
-  measure,
-  timed,
-  timedAsync
-} from './lib/perf';
+import { countReactCommit, mark, measure, timed, timedAsync } from './lib/perf';
 import { useModalFocus } from './lib/useModalFocus';
 import {
   PLANE_LABELS,
@@ -841,6 +835,13 @@ function resolvedSketchPlaneBasis(
     normal: frame.zAxis
   };
 }
+
+/**
+ * Stable empties for viewport props. An inline `[]` is a new array every
+ * render, and the viewport treats a new array as new content to install.
+ */
+const EMPTY_SKETCH_OVERLAYS: SketchOverlay[] = [];
+const EMPTY_BODY_IDS: string[] = [];
 
 export function App() {
   // Counts this component's commits for the interaction probes. Deliberately
@@ -3535,6 +3536,28 @@ export function App() {
       ];
     });
   }, [doc, parameterScope, selectedSketch, selectedSketchProfileId]);
+
+  // The viewport installs and tears down real scene objects when these props
+  // change identity, so each one is memoized rather than built inline: a fresh
+  // `[]` or `.map()` on every render re-arms the sketch overlay, region state,
+  // and extrude-preview effects — during a drag, once per pointer event.
+  const viewerSketches = useMemo(
+    () =>
+      // Region-based rendering (sketchViews) supersedes the legacy
+      // single-profile overlays under direct manipulation.
+      appSettings.experiments.directManipulation
+        ? EMPTY_SKETCH_OVERLAYS
+        : sketchOverlays,
+    [appSettings.experiments.directManipulation, sketchOverlays]
+  );
+  const viewerEditableBodyIds = useMemo(
+    () => (viewMode ? EMPTY_BODY_IDS : directEditableBodyIds),
+    [viewMode, directEditableBodyIds]
+  );
+  const viewerSelectedProfileIds = useMemo(
+    () => selectedProfiles.map((profile) => profile.profileId),
+    [selectedProfiles]
+  );
 
   const selectedSketchProfileName = useMemo(
     () =>
@@ -10564,11 +10587,7 @@ export function App() {
                   ]
                 : undefined
             }
-            sketches={
-              // Region-based rendering (sketchViews) supersedes the legacy
-              // single-profile overlays under direct manipulation.
-              appSettings.experiments.directManipulation ? [] : sketchOverlays
-            }
+            sketches={viewerSketches}
             selectedBodyIds={selectedBodyIds}
             selectedTopology={renderedSelectedTopology}
             previewFaceHighlights={previewBlendFaces}
@@ -10584,7 +10603,7 @@ export function App() {
             // the viewer only builds a manipulator when it is given a target,
             // so view mode keeps orbit, pan and picking while no gesture can
             // reach the document.
-            editableBodyIds={viewMode ? [] : directEditableBodyIds}
+            editableBodyIds={viewerEditableBodyIds}
             extrudePreview={extrudePreview}
             movePreview={movePreview}
             moveCommitHold={moveCommitHold}
@@ -10644,9 +10663,7 @@ export function App() {
               dispatchInteraction({ type: 'sketch-select-object', objectId })
             }
             sketchViews={sketchViews}
-            selectedProfileIds={selectedProfiles.map(
-              (profile) => profile.profileId
-            )}
+            selectedProfileIds={viewerSelectedProfileIds}
             profileSelectionMode={tool === 'extrude'}
             onSelectRegion={handleSelectRegion}
             onHoverRegion={handleHoverRegion}
