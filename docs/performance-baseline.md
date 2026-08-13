@@ -258,6 +258,16 @@ components. The preview drag's 508 ms p95 is a rebuild of the whole scene on
 each published preview — the body list changes identity, so meshes, edge
 batches, hover state, and the shadow map are all torn down mid-gesture.
 
+**Read `frames` before reading `frameTimeMs` in these scenarios.** The mark
+records the interval since the previous rendered frame, and the viewport
+renders on demand. Removing a redundant invalidation therefore *raises*
+`frameTimeMs` while lowering the work done, because the loop simply idles
+longer between frames. Memoizing the viewport's array props (below) took the
+move drag from 121 rendered frames to 61 for the same 60 pointer moves — one
+render per move instead of two — and the p50 interval rose from 25 ms to
+43 ms saying so. Use `frames` for invalidation volume, `reactCommits` for
+component-tree traffic, and p95/max for genuine stalls.
+
 Two harness notes, both of which produced a probe that measured nothing:
 
 - The offset handle's value chip is a DOM overlay anchored on top of the
