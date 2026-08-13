@@ -101,8 +101,14 @@ type RequiredFaceReference<T extends DirectEditOperation> = Omit<
   faceReference: FaceTopologyReferenceV5;
 };
 
-export type CadDirectEditOperation = DirectEditOperation extends infer Operation
-  ? Operation extends DirectEditOperation
+type AssistantDirectEditOperation = Exclude<
+  DirectEditOperation,
+  { kind: 'resize-blend' }
+>;
+
+export type CadDirectEditOperation =
+  AssistantDirectEditOperation extends infer Operation
+  ? Operation extends AssistantDirectEditOperation
     ? RequiredFaceReference<Operation>
     : never
   : never;

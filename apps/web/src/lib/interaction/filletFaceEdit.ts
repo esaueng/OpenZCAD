@@ -51,6 +51,19 @@ function dot(left: Vector3, right: Vector3): number {
   return left.x * right.x + left.y * right.y + left.z * right.z;
 }
 
+function distanceToAxis(
+  point: Vector3,
+  axisPoint: Vector3,
+  axisDirection: Vector3
+): number {
+  const axis = normalized(axisDirection);
+  if (!axis) {
+    return Infinity;
+  }
+  const offset = subtract(point, axisPoint);
+  return length(subtract(point, addScaled(axisPoint, axis, dot(offset, axis))));
+}
+
 function hasFilletFaceEvolutionLineage(face: FaceTopology): boolean {
   const reference = face.reference;
   return Boolean(
@@ -116,6 +129,104 @@ export const IMPORTED_BLEND_REMOVABLE_NOTICE =
 export const IMPORTED_BLEND_READ_ONLY_NOTICE =
   'This radius is read-only because STEP stores topology, not native Fillet history. The exact kernel has not proved a safe edit path for this face; recreate the detail as a native Fillet to make its radius editable.';
 
+export const IMPORTED_BLEND_EDITABLE_NOTICE =
+  'This analytic STEP blend can be resized by the exact kernel. The edit is stored as replayable history; unsupported band geometry is refused without changing the body.';
+
+export interface ImportedBlendSnapshot {
+  surfaceClass: 'torus' | 'cylinder';
+  radius: number;
+  center: Vector3;
+  axis: Vector3;
+}
+
+/** Exact carrier data required by the replayable imported-blend edit. */
+export function importedBlendSnapshot(
+  face: FaceTopology
+): ImportedBlendSnapshot | null {
+  const geometry = face.geometry;
+  if (
+    geometry?.featureType !== 'blend' ||
+    geometry.blendRadius === undefined ||
+    !Number.isFinite(geometry.blendRadius) ||
+    geometry.blendRadius <= 0
+  ) {
+    return null;
+  }
+  if (
+    geometry.surfaceType === 'torus' &&
+    geometry.torusCenter &&
+    geometry.axis
+  ) {
+    return {
+      surfaceClass: 'torus',
+      radius: geometry.blendRadius,
+      center: geometry.torusCenter,
+      axis: geometry.axis
+    };
+  }
+  if (
+    geometry.surfaceType === 'cylinder' &&
+    geometry.axisStart &&
+    geometry.axisEnd
+  ) {
+    const axis = normalized(subtract(geometry.axisEnd, geometry.axisStart));
+    if (!axis) {
+      return null;
+    }
+    return {
+      surfaceClass: 'cylinder',
+      radius: geometry.blendRadius,
+      center: addScaled(
+        geometry.axisStart,
+        subtract(geometry.axisEnd, geometry.axisStart),
+        0.5
+      ),
+      axis
+    };
+  }
+  return null;
+}
+
+/** Re-select a resized imported band by analytic carrier identity, never hash. */
+export function resolveImportedBlendFace(
+  faces: readonly FaceTopology[],
+  source: FaceTopology,
+  directEditFeatureId?: string
+): FaceTopology | null {
+  if (directEditFeatureId) {
+    const lineageMatches = faces.filter(
+      (face) =>
+        face.geometry?.featureType === 'blend' &&
+        face.geometry.blendRadius !== undefined &&
+        face.reference?.lineageName === 'direct-edit.resize-blend.band' &&
+        (String(face.reference.producingFeatureId) === directEditFeatureId ||
+          source.reference?.lineageName === 'direct-edit.resize-blend.band')
+    );
+    if (lineageMatches.length === 1) {
+      return lineageMatches[0]!;
+    }
+  }
+  const snapshot = importedBlendSnapshot(source);
+  if (!snapshot) {
+    return null;
+  }
+  const tolerance = Math.max(snapshot.radius * 1e-5, 1e-6);
+  const matches = faces.filter((face) => {
+    const candidate = importedBlendSnapshot(face);
+    return (
+      candidate?.surfaceClass === snapshot.surfaceClass &&
+      (snapshot.surfaceClass === 'torus'
+        ? length(subtract(candidate.center, snapshot.center)) <= tolerance
+        : distanceToAxis(candidate.center, snapshot.center, snapshot.axis) <=
+            tolerance &&
+          distanceToAxis(snapshot.center, candidate.center, candidate.axis) <=
+            tolerance) &&
+      Math.abs(dot(candidate.axis, snapshot.axis)) >= 1 - 1e-6
+    );
+  });
+  return matches.length === 1 ? matches[0]! : null;
+}
+
 /** Actionable copy for an imported blend without inventing feature history. */
 export function importedBlendEditNotice(
   body: BodyRepresentation,
@@ -127,6 +238,9 @@ export function importedBlendEditNotice(
     face.geometry.blendRadius === undefined
   ) {
     return null;
+  }
+  if (importedBlendSnapshot(face)) {
+    return IMPORTED_BLEND_EDITABLE_NOTICE;
   }
   return canRemoveImportedBlendFace(body, face)
     ? IMPORTED_BLEND_REMOVABLE_NOTICE

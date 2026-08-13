@@ -100,6 +100,23 @@ describe('selectionCapabilities', () => {
     ).toEqual([]);
   });
 
+  it('offers exact resize and removal for an analytic imported blend', () => {
+    const capabilities = selectionCapabilities({
+      kind: 'face',
+      target: {
+        surfaceType: 'other',
+        hash: 2,
+        blendRadius: 2,
+        canResizeImportedBlend: true
+      }
+    });
+    expect(capabilities.map((capability) => capability.action)).toEqual([
+      'edit-fillet',
+      'remove-fillet'
+    ]);
+    expect(preferredCapability(capabilities)?.action).toBe('edit-fillet');
+  });
+
   it('offers only a proven imported blend removal', () => {
     expect(
       selectionCapabilities({

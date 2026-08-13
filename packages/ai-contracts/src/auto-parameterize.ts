@@ -184,6 +184,18 @@ function featureScopeForBodies(
       case 'revolve':
         neededSketches.add(data.sketchId);
         break;
+      case 'loft':
+        data.sections.forEach((section) =>
+          neededSketches.add(section.sketchId)
+        );
+        break;
+      case 'sweep':
+        neededSketches.add(data.profile.sketchId);
+        neededSketches.add(data.path.sketchId);
+        break;
+      case 'helical-sweep':
+        neededSketches.add(data.profile.sketchId);
+        break;
       case 'boolean':
         data.targetBodyIds.forEach((bodyId) => neededBodies.add(bodyId));
         break;
@@ -191,6 +203,8 @@ function featureScopeForBodies(
       case 'mirror':
       case 'shell':
       case 'solid-offset':
+      case 'draft':
+      case 'thicken':
       case 'fillet':
       case 'chamfer':
       case 'pattern':
@@ -364,6 +378,15 @@ function nativeCandidates(
       case 'solid-offset':
         add(featureCandidate(feature, 'distance', data.distance));
         break;
+      case 'helical-sweep':
+      case 'draft':
+      case 'thicken':
+      case 'loft':
+      case 'sweep':
+        // Manual commands and exact preflight ship first. These feature
+        // dimensions are intentionally not proposed until CadPatch can apply
+        // each one through the same validated update path.
+        break;
       case 'fillet':
         add(featureCandidate(feature, 'radius', data.radius));
         break;
@@ -380,6 +403,8 @@ function nativeCandidates(
           add(featureCandidate(feature, 'diameter', data.operation.diameter));
         } else if (data.operation.kind === 'resize-cylindrical-face') {
           add(featureCandidate(feature, 'radius', data.operation.radius));
+        } else if (data.operation.kind === 'resize-blend') {
+          add(featureCandidate(feature, 'newRadius', data.operation.newRadius));
         } else if (data.operation.kind === 'offset-face') {
           add(featureCandidate(feature, 'offset', data.operation.offset));
         }
