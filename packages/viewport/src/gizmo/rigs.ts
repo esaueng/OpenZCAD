@@ -23,9 +23,6 @@ const GHOST_OPACITY = 0.28;
 export const HANDLE_WARNING_COLOR = 0xf59e0b;
 /** The handle under the pointer, so "grabbable" is visible before pressing. */
 const HANDLE_HOT_COLOR = 0xffc178;
-/** How small a rig starts before settling to full size. */
-const ENTRANCE_SCALE = 0.86;
-
 /**
  * The eased presence and hover state every drag rig shares.
  *
@@ -34,9 +31,10 @@ const ENTRANCE_SCALE = 0.86;
  * be grabbed until it was already being dragged. Both are ramps now, stepped
  * by the render loop.
  *
- * Scale is reported rather than applied: the viewport rescales every rig each
- * frame to keep it screen-constant, so the entrance has to ride that instead
- * of fighting it.
+ * The entrance is opacity only. Scaling a rig in would also scale its hit
+ * mesh, so the handle's grab target would be smaller than it looks for the
+ * length of the animation — a press landing just outside it would do nothing,
+ * or worse, select the face behind it.
  */
 function createRigPresence(roots: readonly THREE.Object3D[]) {
   const materials = new Map<THREE.Material, number>();
@@ -77,10 +75,6 @@ function createRigPresence(roots: readonly THREE.Object3D[]) {
     },
     hotness(): number {
       return hot;
-    },
-    /** Multiplier the viewport folds into its screen-constant scale. */
-    entranceScale(): number {
-      return ENTRANCE_SCALE + (1 - ENTRANCE_SCALE) * presence;
     },
     /** Re-reads base opacities after a material's own opacity changed. */
     rebase(material: THREE.Material, opacity: number) {
@@ -281,9 +275,6 @@ export function buildOffsetFaceHandle(params: OffsetFaceRigParams): DragRig {
     setHot(hot: boolean) {
       presence.setHot(hot);
     },
-    entranceScale() {
-      return presence.entranceScale();
-    },
     setValue(value: number) {
       current = value;
       const tip = origin.clone().addScaledVector(direction, value);
@@ -354,7 +345,8 @@ export function buildCylinderRadiusHandle(
     )
   );
 
-  addHandleParts(group, doubleArrowParts(kind));
+  const cylinderArrowParts = doubleArrowParts(kind);
+  addHandleParts(group, cylinderArrowParts);
 
   // The measurement graphic is a radius callout: a dashed line from the axis
   // out to the handle on the wall, with a small arrowhead at each end. It is
@@ -371,6 +363,22 @@ export function buildCylinderRadiusHandle(
   worldGroup.add(dimension.object);
 
   let currentRadius = originalRadius;
+  const presence = createRigPresence([group, worldGroup]);
+  const paintParts = () => {
+    const color = new THREE.Color(HANDLE_COLOR).lerp(
+      new THREE.Color(HANDLE_HOT_COLOR),
+      presence.hotness()
+    );
+    for (const part of cylinderArrowParts) {
+      if (
+        part.material instanceof THREE.MeshBasicMaterial &&
+        part.material.visible
+      ) {
+        part.material.color.copy(color);
+      }
+    }
+  };
+
   const updateGraphic = () => {
     const radialDelta = currentRadius - originalRadius;
     const tip = origin.clone().addScaledVector(direction, radialDelta);
@@ -388,6 +396,16 @@ export function buildCylinderRadiusHandle(
     worldGroup,
     origin,
     direction,
+    step(dtMs: number) {
+      if (!presence.step(dtMs)) {
+        return false;
+      }
+      paintParts();
+      return true;
+    },
+    setHot(hot: boolean) {
+      presence.setHot(hot);
+    },
     setValue(radius: number) {
       currentRadius = radius;
       updateGraphic();
@@ -445,6 +463,22 @@ export function buildEdgeRadiusHandle(params: {
   );
   addHandleParts(group, [sphere, ring, hit]);
 
+  const presence = createRigPresence([group, worldGroup]);
+  const paintParts = () => {
+    const color = new THREE.Color(HANDLE_COLOR).lerp(
+      new THREE.Color(HANDLE_HOT_COLOR),
+      presence.hotness()
+    );
+    for (const part of [sphere, ring]) {
+      if (
+        part.material instanceof THREE.MeshBasicMaterial &&
+        part.material.visible
+      ) {
+        part.material.color.copy(color);
+      }
+    }
+  };
+
   let current = 0;
 
   return {
@@ -453,6 +487,16 @@ export function buildEdgeRadiusHandle(params: {
     worldGroup,
     origin,
     direction,
+    step(dtMs: number) {
+      if (!presence.step(dtMs)) {
+        return false;
+      }
+      paintParts();
+      return true;
+    },
+    setHot(hot: boolean) {
+      presence.setHot(hot);
+    },
     setValue(value: number) {
       current = value;
     },

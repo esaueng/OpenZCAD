@@ -427,6 +427,12 @@ interface ModelViewerProps {
   onOffsetCancel(): void;
   /** Current exact preview or release validation refused this offset. */
   offsetPreviewInvalid: boolean;
+  /**
+   * The live preview gave up on this gesture: the handle still moves, the
+   * geometry no longer follows. Shown on the value chip so frozen geometry
+   * reads as a decision rather than a hang.
+   */
+  previewDeferred: boolean;
   /** Value chip tapped: open exact entry prefilled with the current offset. */
   onOpenOffsetKeypad(currentOffset: number, totalBaseline?: number): void;
   /** Imperative sink receiving the chip anchor in host pixels each frame. */
@@ -901,6 +907,7 @@ export function ModelViewer({
   onOffsetCommit,
   onOffsetCancel,
   offsetPreviewInvalid,
+  previewDeferred,
   onOpenOffsetKeypad,
   keypadAnchorRef,
   offsetSetterRef,
@@ -1009,6 +1016,8 @@ export function ModelViewer({
   onOffsetCancelRef.current = onOffsetCancel;
   const offsetPreviewInvalidRef = useRef(offsetPreviewInvalid);
   offsetPreviewInvalidRef.current = offsetPreviewInvalid;
+  const previewDeferredRef = useRef(previewDeferred);
+  previewDeferredRef.current = previewDeferred;
   const onOpenOffsetKeypadRef = useRef(onOpenOffsetKeypad);
   onOpenOffsetKeypadRef.current = onOpenOffsetKeypad;
   const onCylinderRadiusPreviewRef = useRef(onCylinderRadiusPreview);
@@ -3900,7 +3909,16 @@ export function ModelViewer({
         rig?.kind === 'cylinder-radius' ? 'dimension' : 'default';
       const offsetWarning =
         rig?.kind === 'offset-face' && offsetPreviewInvalidRef.current;
-      chip.dataset.state = offsetWarning ? 'warning' : 'ready';
+      // A refused value outranks a deferred one: both are true while a slow
+      // gesture drifts out of range, and the refusal is the actionable half.
+      chip.dataset.state = offsetWarning
+        ? 'warning'
+        : previewDeferredRef.current
+          ? 'deferred'
+          : 'ready';
+      chip.title = previewDeferredRef.current
+        ? 'Preview paused — the shape updates when you release.'
+        : '';
       chip.setAttribute('aria-invalid', String(offsetWarning));
       hud.showAt(chip, screen.x, screen.y);
       if (rig?.kind === 'cylinder-radius') {
@@ -6026,12 +6044,7 @@ export function ModelViewer({
         if (offsetRig.step?.(dt * 1000)) {
           rigsAnimating = true;
         }
-        // The entrance rides the screen-constant scale rather than replacing
-        // it; `gizmoScale` stays the logical size so chip and dimension
-        // layout do not animate along with the arrow.
-        offsetRig.group.scale.setScalar(
-          rigScale * (offsetRig.entranceScale?.() ?? 1)
-        );
+        offsetRig.group.scale.setScalar(rigScale);
         offsetRig.group.userData.gizmoScale = rigScale;
         // Keep dimension arrowheads screen-sized across a pure wheel zoom.
         offsetRig.setValue(offsetRig.value());
@@ -6041,6 +6054,9 @@ export function ModelViewer({
         const rigScale =
           moveGizmoWorldScale(worldPerPixelAt(cylinderRig.group.position)) *
           0.55;
+        if (cylinderRig.step?.(dt * 1000)) {
+          rigsAnimating = true;
+        }
         cylinderRig.group.scale.setScalar(rigScale);
         cylinderRig.group.userData.gizmoScale = rigScale;
         // Re-run the rig's layout so its dimension-line arrowheads track the
@@ -6051,6 +6067,9 @@ export function ModelViewer({
       if (edgeRig) {
         const rigScale =
           moveGizmoWorldScale(worldPerPixelAt(edgeRig.group.position)) * 0.4;
+        if (edgeRig.step?.(dt * 1000)) {
+          rigsAnimating = true;
+        }
         edgeRig.group.scale.setScalar(rigScale);
         edgeRig.group.userData.gizmoScale = rigScale;
       }
