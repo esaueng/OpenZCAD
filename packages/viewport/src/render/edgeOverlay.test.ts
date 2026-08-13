@@ -77,6 +77,16 @@ function makeOverlay() {
   );
 }
 
+/**
+ * Runs the hover ramp to rest. Hover is eased now, so a batch is not visible
+ * on the frame the pointer arrives — the render loop steps it.
+ */
+function settle(overlay: ReturnType<typeof makeOverlay>) {
+  for (let frame = 0; frame < 60 && overlay.step(16); frame += 1) {
+    // stepping until it reports nothing left to move
+  }
+}
+
 function selection(topologyId: string): TopologySelection {
   return { bodyId: BODY_ID, kind: 'edge', topologyId };
 }
@@ -198,6 +208,7 @@ describe('BodyEdgeOverlay', () => {
     const owner = overlay.ownerAtSegment(0)!;
 
     overlay.setHovered(owner);
+    settle(overlay);
     expect(overlay.hoverEdges.visible).toBe(true);
     expect(overlay.hoverHiddenEdges.visible).toBe(true);
     expect(overlay.hoverEdges.geometry.instanceCount).toBe(2);
@@ -208,8 +219,10 @@ describe('BodyEdgeOverlay', () => {
     expect(overlay.hoverHiddenEdges.visible).toBe(false);
 
     overlay.setSelected([]);
+    settle(overlay);
     expect(overlay.hoverEdges.visible).toBe(true);
     overlay.setHovered(null);
+    settle(overlay);
     expect(overlay.hoverEdges.visible).toBe(false);
   });
 
@@ -250,6 +263,7 @@ describe('BodyEdgeOverlay', () => {
     const material = overlay.idleEdges.material;
     overlay.setSelected([selection('edge-b')]);
     overlay.setHovered(overlay.ownerAtSegment(0));
+    settle(overlay);
 
     overlay.setDisplayMode('wireframe');
     expect(overlay.idleEdges.material).toBe(material);
@@ -274,6 +288,7 @@ describe('BodyEdgeOverlay', () => {
     const overlay = makeOverlay();
     overlay.setSelected([selection('edge-b')]);
     overlay.setHovered(overlay.ownerAtSegment(0));
+    settle(overlay);
     overlay.setSelectedFaceBoundary(101);
 
     expect(overlay.setXrayEnabled(false)).toBe(true);
