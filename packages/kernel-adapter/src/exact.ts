@@ -44,6 +44,7 @@ import {
   type FaceGeometry,
   type FaceTopologyReferenceV5,
   type FaceWitnessV1,
+  type FeatureId,
   type FeatureNode,
   type ImportedSourceReference,
   type ProjectDocument,
@@ -52,6 +53,8 @@ import {
   type ParamValue,
   type SketchNode,
   type SketchObjectData,
+  type SketchPathReference,
+  type SketchSectionReference,
   type TopologyLineageDiagnostic
 } from '@openzcad/shared';
 import { displayTessellationForExtents } from './display-tessellation';
@@ -250,6 +253,36 @@ function resolveRevolveAngleDeg(
     );
   }
   return resolved;
+}
+
+function resolveParametricPoint(
+  value: { x: ParamValue; y: ParamValue; z: ParamValue },
+  scope: Record<string, number>,
+  label: string
+): Vec3 {
+  return {
+    x: resolveParamValue(value.x, scope, `${label} X`),
+    y: resolveParamValue(value.y, scope, `${label} Y`),
+    z: resolveParamValue(value.z, scope, `${label} Z`)
+  };
+}
+
+function validateGeneratedSolid(
+  kernel: BrepKernel,
+  solid: number,
+  label: string
+): number {
+  if (!Number.isSafeInteger(solid) || solid < 0) {
+    throw new Error(`${label} did not return a solid handle.`);
+  }
+  if (kernel.validateSolid(solid) !== 0) {
+    throw new Error(`${label} did not produce a valid closed solid.`);
+  }
+  const volume = kernel.volume(solid, MEASUREMENT_DEFLECTION);
+  if (!Number.isFinite(volume) || volume <= 0) {
+    throw new Error(`${label} did not produce a finite positive volume.`);
+  }
+  return solid;
 }
 
 interface ExactShape {
@@ -3050,14 +3083,15 @@ function faceHandlesByFingerprint(
   return result;
 }
 
-function resolveShellOpeningFaces(
+function resolveFeatureFaces(
   kernel: BrepKernel,
   shape: ExactShape,
   hashes: readonly number[],
-  references: readonly FaceTopologyReferenceV5[] | undefined
+  references: readonly FaceTopologyReferenceV5[] | undefined,
+  label: string
 ): number[] {
   if (shape.solids.length !== 1) {
-    throw new Error('Shell requires a body containing exactly one solid.');
+    throw new Error(`${label} requires a body containing exactly one solid.`);
   }
   const solid = shape.solids[0]!;
   const handles = Array.from(kernel.getSolidFaces(solid));
@@ -3092,10 +3126,10 @@ function resolveShellOpeningFaces(
     if (reference) {
       const resolution = resolveTopologyReference(reference, candidates);
       if (resolution.status === 'failed') {
-        throw new Error(`Shell opening face is stale: ${resolution.message}`);
+        throw new Error(`${label} face is stale: ${resolution.message}`);
       }
       if (typeof resolution.candidate.value !== 'number') {
-        throw new Error('Shell opening face resolved without a kernel handle.');
+        throw new Error(`${label} face resolved without a kernel handle.`);
       }
       return resolution.candidate.value;
     }
@@ -3109,7 +3143,7 @@ function resolveShellOpeningFaces(
     return matches[0]!;
   });
   if (new Set(resolved).size !== resolved.length) {
-    throw new Error('Shell opening faces do not resolve to a unique set.');
+    throw new Error(`${label} faces do not resolve to a unique set.`);
   }
   return resolved;
 }
@@ -3650,6 +3684,51 @@ function measureOwnedFaceGeometry(
     geometry.editableDimension = 'diameter';
   }
   return geometry;
+}
+
+interface BlendCarrierSnapshot {
+  surfaceClass: 'torus' | 'cylinder';
+  radius: number;
+  center: Vec3;
+  axis: Vec3;
+}
+
+/** Exact analytic identity used to authorize and re-check a blend edit. */
+function blendCarrierSnapshot(
+  geometry: FaceGeometry | undefined
+): BlendCarrierSnapshot | null {
+  if (geometry?.featureType !== 'blend' || geometry.blendRadius === undefined) {
+    return null;
+  }
+  if (
+    geometry.surfaceType === 'torus' &&
+    geometry.torusCenter &&
+    geometry.axis
+  ) {
+    return {
+      surfaceClass: 'torus',
+      radius: geometry.blendRadius,
+      center: geometry.torusCenter,
+      axis: geometry.axis
+    };
+  }
+  if (
+    geometry.surfaceType === 'cylinder' &&
+    geometry.axisStart &&
+    geometry.axisEnd
+  ) {
+    const axis = normalized(subtract(geometry.axisEnd, geometry.axisStart));
+    if (!axis) {
+      return null;
+    }
+    return {
+      surfaceClass: 'cylinder',
+      radius: geometry.blendRadius,
+      center: scale(add(geometry.axisStart, geometry.axisEnd), 0.5),
+      axis
+    };
+  }
+  return null;
 }
 
 /**
@@ -4849,6 +4928,281 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
     };
   }
 
+  private sectionFace(
+    kernel: BrepKernel,
+    document: ProjectDocument,
+    section: SketchSectionReference,
+    scope: Record<string, number>,
+    sketchBases: ReadonlyMap<SketchId, PlaneBasis>,
+    warn: (message: string) => void,
+    label: string
+  ): number {
+    const sketch = findSketch(document, section.sketchId);
+    if (!sketch) {
+      throw new Error(`${label} sketch no longer exists.`);
+    }
+    const basis = sketchBases.get(sketch.sketchId);
+    if (!basis) {
+      throw new Error(
+        `${label} sketch plane did not resolve at its history position.`
+      );
+    }
+    const profiles = resolveRegionProfiles(
+      document,
+      sketch,
+      { profile: section.profile },
+      scope
+    );
+    if (profiles.length !== 1) {
+      throw new Error(`${label} must resolve to exactly one closed profile.`);
+    }
+    return this.makeRegionFace(kernel, profiles[0]!, basis, warn);
+  }
+
+  private buildLoft(
+    kernel: BrepKernel,
+    document: ProjectDocument,
+    feature: FeatureNode,
+    scope: Record<string, number>,
+    sketchBases: ReadonlyMap<SketchId, PlaneBasis>,
+    warn: (message: string) => void
+  ): ExactShape {
+    if (feature.data.featureKind !== 'loft') {
+      throw new Error('Expected a loft feature.');
+    }
+    if (feature.data.sections.length < 2) {
+      throw new Error('Loft requires at least two profile sections.');
+    }
+    const faces = feature.data.sections.map((section, index) =>
+      this.sectionFace(
+        kernel,
+        document,
+        section,
+        scope,
+        sketchBases,
+        warn,
+        `Loft section ${index + 1}`
+      )
+    );
+    const solid =
+      feature.data.mode === 'smooth'
+        ? kernel.loftSmooth(Uint32Array.from(faces))
+        : kernel.loft(Uint32Array.from(faces));
+    return {
+      solids: [validateGeneratedSolid(kernel, solid, 'Loft')],
+      lineage: brepKitHashOnlyLineage(
+        'sweep',
+        'Loft section topology has no verified output evolution relation.'
+      )
+    };
+  }
+
+  private sweepPathEdges(
+    kernel: BrepKernel,
+    document: ProjectDocument,
+    path: SketchPathReference,
+    scope: Record<string, number>,
+    sketchBases: ReadonlyMap<SketchId, PlaneBasis>
+  ): number[] {
+    const sketch = findSketch(document, path.sketchId);
+    if (!sketch) {
+      throw new Error('Sweep path sketch no longer exists.');
+    }
+    const basis = sketchBases.get(sketch.sketchId);
+    if (!basis) {
+      throw new Error(
+        'Sweep path sketch plane did not resolve at its history position.'
+      );
+    }
+    const available = new Set(sketch.objectIds);
+    if (
+      path.entityIds.length === 0 ||
+      path.entityIds.some((entityId) => !available.has(entityId))
+    ) {
+      throw new Error('Sweep path contains a missing sketch entity.');
+    }
+    return path.entityIds.flatMap((entityId) => {
+      const node = document.nodes[entityId];
+      if (node?.kind !== 'sketch-object') {
+        throw new Error('Sweep path entity is not a sketch object.');
+      }
+      const data = node.data;
+      if (data.objectKind === 'line') {
+        const start = BrepKitKernelAdapter.planePoint3(basis, {
+          x: resolveParamValue(data.x1, scope, 'path start X'),
+          y: resolveParamValue(data.y1, scope, 'path start Y')
+        });
+        const end = BrepKitKernelAdapter.planePoint3(basis, {
+          x: resolveParamValue(data.x2, scope, 'path end X'),
+          y: resolveParamValue(data.y2, scope, 'path end Y')
+        });
+        return [
+          kernel.makeLineEdge(start.x, start.y, start.z, end.x, end.y, end.z)
+        ];
+      }
+      if (data.objectKind !== 'arc') {
+        throw new Error('Sweep paths currently support line and arc entities.');
+      }
+      const center2 = {
+        x: resolveParamValue(data.centerX, scope, 'path center X'),
+        y: resolveParamValue(data.centerY, scope, 'path center Y')
+      };
+      const radius = resolveParamValue(data.radius, scope, 'path radius');
+      const start =
+        (resolveParamValue(data.startAngleDeg, scope, 'path start angle') *
+          Math.PI) /
+        180;
+      const end =
+        (resolveParamValue(data.endAngleDeg, scope, 'path end angle') *
+          Math.PI) /
+        180;
+      const wrap = Math.PI * 2;
+      const sweep = (((end - start) % wrap) + wrap) % wrap;
+      if (sweep <= GEOMETRY_EPSILON) {
+        throw new Error('Sweep path arc must have a non-zero sweep.');
+      }
+      const center = BrepKitKernelAdapter.planePoint3(basis, center2);
+      const pieces = Math.max(1, Math.ceil(sweep / (Math.PI / 2)));
+      return Array.from({ length: pieces }, (_, index) => {
+        const angleA = start + (sweep * index) / pieces;
+        const angleB = start + (sweep * (index + 1)) / pieces;
+        const pointA = BrepKitKernelAdapter.planePoint3(basis, {
+          x: center2.x + Math.cos(angleA) * radius,
+          y: center2.y + Math.sin(angleA) * radius
+        });
+        const pointB = BrepKitKernelAdapter.planePoint3(basis, {
+          x: center2.x + Math.cos(angleB) * radius,
+          y: center2.y + Math.sin(angleB) * radius
+        });
+        return kernel.makeCircleArc3d(
+          pointA.x,
+          pointA.y,
+          pointA.z,
+          pointB.x,
+          pointB.y,
+          pointB.z,
+          center.x,
+          center.y,
+          center.z,
+          basis.normal.x,
+          basis.normal.y,
+          basis.normal.z
+        );
+      });
+    });
+  }
+
+  private buildProfileSweep(
+    kernel: BrepKernel,
+    document: ProjectDocument,
+    feature: FeatureNode,
+    scope: Record<string, number>,
+    sketchBases: ReadonlyMap<SketchId, PlaneBasis>,
+    warn: (message: string) => void
+  ): ExactShape {
+    if (feature.data.featureKind !== 'sweep') {
+      throw new Error('Expected a sweep feature.');
+    }
+    const face = this.sectionFace(
+      kernel,
+      document,
+      feature.data.profile,
+      scope,
+      sketchBases,
+      warn,
+      'Sweep profile'
+    );
+    const edges = this.sweepPathEdges(
+      kernel,
+      document,
+      feature.data.path,
+      scope,
+      sketchBases
+    );
+    const solid =
+      edges.length === 1
+        ? kernel.sweepWithOptions(
+            face,
+            edges[0]!,
+            'rmf',
+            new Float64Array(),
+            feature.data.mode === 'smooth' ? 64 : 24,
+            'smooth'
+          )
+        : kernel.sweepAlongEdges(face, Uint32Array.from(edges));
+    return {
+      solids: [validateGeneratedSolid(kernel, solid, 'Sweep')],
+      lineage: brepKitHashOnlyLineage(
+        'sweep',
+        'Profile sweep topology has no verified output evolution relation.'
+      )
+    };
+  }
+
+  private buildHelicalSweep(
+    kernel: BrepKernel,
+    document: ProjectDocument,
+    feature: FeatureNode,
+    scope: Record<string, number>,
+    sketchBases: ReadonlyMap<SketchId, PlaneBasis>,
+    warn: (message: string) => void
+  ): ExactShape {
+    if (feature.data.featureKind !== 'helical-sweep') {
+      throw new Error('Expected a helical sweep feature.');
+    }
+    const face = this.sectionFace(
+      kernel,
+      document,
+      feature.data.profile,
+      scope,
+      sketchBases,
+      warn,
+      'Helical sweep profile'
+    );
+    const origin = resolveParametricPoint(
+      feature.data.axisOrigin,
+      scope,
+      'helical axis origin'
+    );
+    const direction = normalized(
+      resolveParametricPoint(
+        feature.data.axisDirection,
+        scope,
+        'helical axis direction'
+      )
+    );
+    if (!direction) {
+      throw new Error('Helical sweep axis direction must be non-zero.');
+    }
+    const radius = resolveParamValue(feature.data.radius, scope, 'radius');
+    const pitch = resolveParamValue(feature.data.pitch, scope, 'pitch');
+    const turns = resolveParamValue(feature.data.turns, scope, 'turns');
+    if (!(radius > 0) || pitch === 0 || !(turns > 0)) {
+      throw new Error(
+        'Helical sweep requires a positive radius and turns, and a non-zero pitch.'
+      );
+    }
+    const solid = kernel.helicalSweep(
+      face,
+      origin.x,
+      origin.y,
+      origin.z,
+      direction.x,
+      direction.y,
+      direction.z,
+      radius,
+      pitch,
+      turns
+    );
+    return {
+      solids: [validateGeneratedSolid(kernel, solid, 'Helical sweep')],
+      lineage: brepKitHashOnlyLineage(
+        'sweep',
+        'Helical sweep topology has no verified output evolution relation.'
+      )
+    };
+  }
+
   private buildSweep(
     kernel: BrepKernel,
     document: ProjectDocument,
@@ -5038,13 +5392,14 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
               kernel,
               target,
               feature.data.operation,
-              scope
+              scope,
+              feature.featureId
             );
             const targetBodyId = feature.data.targetBodyId;
             const producer = listFeaturesInOrder(document).find(
               (candidate) => candidate.bodyId === targetBodyId
             );
-            edited.lineage =
+            edited.lineage ??=
               rederivePrimitiveDirectEditLineage(kernel, edited, producer) ??
               brepKitHashOnlyLineage(
                 'direct-edit',
@@ -5305,6 +5660,60 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
               }
             }
             break;
+          case 'loft':
+            if (feature.bodyId) {
+              result.shapes.set(
+                feature.bodyId,
+                this.buildLoft(
+                  kernel,
+                  document,
+                  feature,
+                  scope,
+                  result.sketchBases,
+                  (message) =>
+                    result.warnings.push(
+                      `Feature "${feature.name}": ${message}`
+                    )
+                )
+              );
+            }
+            break;
+          case 'sweep':
+            if (feature.bodyId) {
+              result.shapes.set(
+                feature.bodyId,
+                this.buildProfileSweep(
+                  kernel,
+                  document,
+                  feature,
+                  scope,
+                  result.sketchBases,
+                  (message) =>
+                    result.warnings.push(
+                      `Feature "${feature.name}": ${message}`
+                    )
+                )
+              );
+            }
+            break;
+          case 'helical-sweep':
+            if (feature.bodyId) {
+              result.shapes.set(
+                feature.bodyId,
+                this.buildHelicalSweep(
+                  kernel,
+                  document,
+                  feature,
+                  scope,
+                  result.sketchBases,
+                  (message) =>
+                    result.warnings.push(
+                      `Feature "${feature.name}": ${message}`
+                    )
+                )
+              );
+            }
+            break;
           case 'transform': {
             const target = result.shapes.get(feature.data.targetBodyId);
             if (!target) {
@@ -5383,11 +5792,12 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
             if (!target) {
               throw new Error('Shell target is unavailable.');
             }
-            const openingFaces = resolveShellOpeningFaces(
+            const openingFaces = resolveFeatureFaces(
               kernel,
               target,
               feature.data.openingFaceHashes,
-              feature.data.openingFaceReferences
+              feature.data.openingFaceReferences,
+              'Shell opening'
             );
             const thickness = resolveParamValue(
               feature.data.thickness,
@@ -5437,6 +5847,99 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
               lineage: brepKitHashOnlyLineage(
                 'solid-offset',
                 'The pinned bridge does not expose a complete offset topology relation.'
+              )
+            });
+            inheritMeshOrigin(
+              result,
+              feature.data.targetBodyId,
+              feature.bodyId
+            );
+            break;
+          }
+          case 'draft': {
+            if (!feature.bodyId) {
+              throw new Error('Draft has no result body.');
+            }
+            const target = result.shapes.get(feature.data.targetBodyId);
+            if (!target) {
+              throw new Error('Draft target is unavailable.');
+            }
+            const faces = resolveFeatureFaces(
+              kernel,
+              target,
+              feature.data.faceHashes,
+              feature.data.faceReferences,
+              'Draft'
+            );
+            const pullDirection = resolveParametricPoint(
+              feature.data.pullDirection,
+              scope,
+              'draft pull direction'
+            );
+            const neutralPoint = resolveParametricPoint(
+              feature.data.neutralPoint,
+              scope,
+              'draft neutral point'
+            );
+            const angleDegrees = resolveParamValue(
+              feature.data.angleDeg,
+              scope,
+              'draft angle'
+            );
+            const solid = createBrepKitModelingOperations(kernel).draft({
+              targetSolid: target.solids[0]!,
+              faces,
+              pullDirection,
+              neutralPoint,
+              angleDegrees
+            });
+            result.consumed.add(feature.data.targetBodyId);
+            result.shapes.set(feature.bodyId, {
+              solids: [solid],
+              lineage: brepKitHashOnlyLineage(
+                'draft',
+                'Draft topology has no verified output evolution relation.'
+              )
+            });
+            inheritMeshOrigin(
+              result,
+              feature.data.targetBodyId,
+              feature.bodyId
+            );
+            break;
+          }
+          case 'thicken': {
+            if (!feature.bodyId) {
+              throw new Error('Thicken has no result body.');
+            }
+            const target = result.shapes.get(feature.data.targetBodyId);
+            if (!target) {
+              throw new Error('Thicken source body is unavailable.');
+            }
+            const [face] = resolveFeatureFaces(
+              kernel,
+              target,
+              [feature.data.faceHash],
+              feature.data.faceReference
+                ? [feature.data.faceReference]
+                : undefined,
+              'Thicken'
+            );
+            const thickness = resolveParamValue(
+              feature.data.thickness,
+              scope,
+              'thicken distance'
+            );
+            const solid = createBrepKitModelingOperations(kernel).thicken({
+              sourceSolid: target.solids[0]!,
+              face: face!,
+              thickness
+            });
+            result.shapes.set(feature.bodyId, {
+              solids: [solid],
+              lineage: brepKitHashOnlyLineage(
+                'thicken',
+                'Thicken topology has no verified output evolution relation.'
               )
             });
             inheritMeshOrigin(
@@ -6340,7 +6843,8 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
     kernel: BrepKernel,
     target: ExactShape,
     operation: DirectEditOperation,
-    scope: Record<string, number>
+    scope: Record<string, number>,
+    producingFeatureId?: FeatureId
   ): ExactShape {
     const solid = collapseShape(kernel, target);
     const { face, viaLineage } = this.resolveDirectEditFace(
@@ -6422,6 +6926,105 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
         throw new Error(facetFallback);
       }
       return { solids: [output] };
+    }
+
+    if (operation.kind === 'resize-blend') {
+      const snapshot = blendCarrierSnapshot(
+        measureOwnedFaceGeometry(kernel, solid, face)
+      );
+      if (!snapshot || snapshot.surfaceClass !== operation.surfaceClass) {
+        throw new Error(
+          `The selected face is no longer an analytic ${operation.surfaceClass} blend.`
+        );
+      }
+      const radiusTolerance = Math.max(operation.recordedRadius * 1e-5, 1e-9);
+      if (
+        Math.abs(snapshot.radius - operation.recordedRadius) > radiusTolerance
+      ) {
+        throw new Error(
+          'The selected blend no longer matches its recorded radius.'
+        );
+      }
+      const carrierTolerance = Math.max(operation.recordedRadius * 1e-5, 1e-6);
+      if (
+        length(subtract(snapshot.center, operation.recordedCenter)) >
+        carrierTolerance
+      ) {
+        throw new Error(
+          'The selected blend no longer matches its recorded carrier center.'
+        );
+      }
+      const recordedAxis = normalized(operation.recordedAxis);
+      if (
+        !recordedAxis ||
+        Math.abs(dot(snapshot.axis, recordedAxis)) < 1 - 1e-6
+      ) {
+        throw new Error(
+          'The selected blend no longer matches its recorded carrier axis.'
+        );
+      }
+      const newRadius = resolveParamValue(
+        operation.newRadius,
+        scope,
+        'blend radius'
+      );
+      if (!Number.isFinite(newRadius) || newRadius < 0) {
+        throw new Error('Blend radius must be zero or greater.');
+      }
+      if (Math.abs(newRadius - snapshot.radius) <= radiusTolerance) {
+        throw new Error('Blend radius must differ from its current radius.');
+      }
+      const output = kernel.resizeBlend(
+        solid,
+        face,
+        operation.recordedRadius,
+        newRadius
+      );
+      if (kernel.validateSolid(output) !== 0) {
+        throw new Error(
+          `Resizing the blend to radius ${newRadius} does not produce a valid solid.`
+        );
+      }
+      let lineage: BrepKitLineageState | undefined;
+      if (newRadius > GEOMETRY_EPSILON) {
+        const candidates = topologyCandidatesForSolid(kernel, output);
+        const matching = candidates.filter((candidate) => {
+          if (candidate.kind !== 'face') {
+            return false;
+          }
+          const rebuilt = measureFaceGeometry(kernel, candidate.handle);
+          const rebuiltRadius =
+            rebuilt?.surfaceType === 'torus'
+              ? rebuilt.minorRadius
+              : rebuilt?.surfaceType === 'cylinder'
+                ? rebuilt.radius
+                : undefined;
+          return (
+            rebuilt?.surfaceType === operation.surfaceClass &&
+            rebuiltRadius !== undefined &&
+            Math.abs(rebuiltRadius - newRadius) <=
+              Math.max(newRadius * 1e-5, 1e-9)
+          );
+        });
+        if (matching.length === 0) {
+          throw new Error(
+            `The kernel returned no analytic blend at radius ${newRadius}.`
+          );
+        }
+        if (matching.length === 1 && producingFeatureId) {
+          lineage = createBrepKitSemanticLineage(
+            producingFeatureId,
+            'direct-edit',
+            [
+              {
+                ...matching[0]!,
+                lineageName: 'direct-edit.resize-blend.band'
+              }
+            ]
+          );
+        }
+      }
+      return { solids: [output], ...(lineage ? { lineage } : {}) };
     }
 
     // resize-cylindrical-face

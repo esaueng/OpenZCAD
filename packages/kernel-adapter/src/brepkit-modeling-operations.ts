@@ -26,6 +26,20 @@ export interface BrepKitSolidOffsetInput {
   readonly distance: number;
 }
 
+export interface BrepKitDraftInput {
+  readonly targetSolid: number;
+  readonly faces: readonly number[];
+  readonly pullDirection: BrepKitModelingPoint;
+  readonly neutralPoint: BrepKitModelingPoint;
+  readonly angleDegrees: number;
+}
+
+export interface BrepKitThickenInput {
+  readonly sourceSolid: number;
+  readonly face: number;
+  readonly thickness: number;
+}
+
 /** The pinned BrepKit calls and read-only gates used by these helpers. */
 export interface BrepKitModelingKernel {
   mirror(
@@ -39,6 +53,18 @@ export interface BrepKitModelingKernel {
   ): number;
   shell(solid: number, thickness: number, openFaces: Uint32Array): number;
   offsetSolidV2(solid: number, distance: number): number;
+  draft(
+    solid: number,
+    faces: Uint32Array,
+    pullX: number,
+    pullY: number,
+    pullZ: number,
+    neutralX: number,
+    neutralY: number,
+    neutralZ: number,
+    angleDegrees: number
+  ): number;
+  thicken(face: number, thickness: number): number;
   boundingBox(solid: number): Float64Array;
   getSolidFaces(solid: number): Uint32Array;
   getSolidShells(solid: number): Uint32Array;
@@ -50,6 +76,8 @@ export interface BrepKitModelingOperations {
   mirror(input: BrepKitMirrorInput): number;
   shell(input: BrepKitShellInput): number;
   offsetSolid(input: BrepKitSolidOffsetInput): number;
+  draft(input: BrepKitDraftInput): number;
+  thicken(input: BrepKitThickenInput): number;
 }
 
 interface SolidSnapshot {
@@ -361,6 +389,78 @@ function offsetSolid(
   );
 }
 
+function draftSolid(
+  kernel: BrepKitModelingKernel,
+  input: BrepKitDraftInput
+): number {
+  finitePoint(input.pullDirection, 'Draft pull direction');
+  finitePoint(input.neutralPoint, 'Draft neutral point');
+  const length = Math.hypot(
+    input.pullDirection.x,
+    input.pullDirection.y,
+    input.pullDirection.z
+  );
+  if (!Number.isFinite(length) || length <= NORMAL_TOLERANCE) {
+    throw new Error('Draft pull direction must be finite and non-zero.');
+  }
+  if (
+    input.faces.length === 0 ||
+    input.faces.some((face) => !validHandle(face)) ||
+    new Set(input.faces).size !== input.faces.length
+  ) {
+    throw new Error('Draft faces must be a non-empty unique handle set.');
+  }
+  const source = inspectSolid(kernel, input.targetSolid, 'Target solid');
+  const sourceFaces = new Set(source.faces);
+  if (input.faces.some((face) => !sourceFaces.has(face))) {
+    throw new Error('Draft face does not belong to the target solid.');
+  }
+  if (!Number.isFinite(input.angleDegrees) || input.angleDegrees === 0) {
+    throw new Error('Draft angle must be finite and non-zero.');
+  }
+  return runOperation(
+    kernel,
+    'draft',
+    input.targetSolid,
+    () =>
+      kernel.draft(
+        input.targetSolid,
+        Uint32Array.from(input.faces),
+        input.pullDirection.x / length,
+        input.pullDirection.y / length,
+        input.pullDirection.z / length,
+        input.neutralPoint.x,
+        input.neutralPoint.y,
+        input.neutralPoint.z,
+        input.angleDegrees
+      ),
+    () => {}
+  );
+}
+
+function thickenFace(
+  kernel: BrepKitModelingKernel,
+  input: BrepKitThickenInput
+): number {
+  const source = inspectSolid(kernel, input.sourceSolid, 'Source solid');
+  if (!validHandle(input.face) || !source.faces.includes(input.face)) {
+    throw new Error('Thicken face must belong to the source solid.');
+  }
+  if (
+    !Number.isFinite(input.thickness) ||
+    Math.abs(input.thickness) <= source.linearTolerance
+  ) {
+    throw new Error('Thicken distance must be finite and non-zero.');
+  }
+  return runOperation(
+    kernel,
+    'thicken',
+    input.sourceSolid,
+    () => kernel.thicken(input.face, input.thickness),
+    () => {}
+  );
+}
+
 /**
  * Creates the narrow, side-effect-free operation surface consumed by the
  * exact adapter. Document/history integration and original+copy semantics stay
@@ -372,6 +472,8 @@ export function createBrepKitModelingOperations(
   return {
     mirror: (input) => mirrorSolid(kernel, input),
     shell: (input) => shellSolid(kernel, input),
-    offsetSolid: (input) => offsetSolid(kernel, input)
+    offsetSolid: (input) => offsetSolid(kernel, input),
+    draft: (input) => draftSolid(kernel, input),
+    thicken: (input) => thickenFace(kernel, input)
   };
 }

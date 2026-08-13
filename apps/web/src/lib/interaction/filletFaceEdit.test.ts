@@ -18,11 +18,13 @@ import {
   blendRadialDirection,
   canRemoveImportedBlendFace,
   editableFilletFeature,
+  importedBlendSnapshot,
   importedBlendEditNotice,
+  IMPORTED_BLEND_EDITABLE_NOTICE,
   IMPORTED_BLEND_READ_ONLY_NOTICE,
-  IMPORTED_BLEND_REMOVABLE_NOTICE,
   newBlendFaceSelections,
-  resolveFilletBlendFace
+  resolveFilletBlendFace,
+  resolveImportedBlendFace
 } from './filletFaceEdit';
 
 const point = (x: number, y: number, z: number) => ({ x, y, z });
@@ -66,12 +68,41 @@ function blendFace(
       area: 10,
       center,
       featureType: 'blend',
-      blendRadius: 2
+      blendRadius: 2,
+      ...(surfaceType === 'cylinder'
+        ? {
+            radius: 2,
+            axisStart: point(0, 0, -5),
+            axisEnd: point(0, 0, 5)
+          }
+        : {})
     }
   };
 }
 
 describe('fillet face editing', () => {
+  it('captures and re-resolves an imported analytic blend without using its hash', () => {
+    const source = blendFace('source', point(0, 0, 0), 10);
+    const resized = {
+      ...blendFace('resized', point(0, 0, 0), 99),
+      geometry: {
+        ...blendFace('resized').geometry!,
+        blendRadius: 3,
+        radius: 3
+      }
+    };
+    expect(importedBlendSnapshot(source)).toMatchObject({
+      surfaceClass: 'cylinder',
+      radius: 2,
+      center: point(0, 0, 0),
+      axis: point(0, 0, 1)
+    });
+    expect(resolveImportedBlendFace([resized], source)?.hash).toBe(99);
+    expect(
+      resolveImportedBlendFace([resized, { ...resized, hash: 100 }], source)
+    ).toBeNull();
+  });
+
   it('arms only a blend whose lineage resolves to a fillet feature', () => {
     const base = addPrimitiveFeature(
       createProjectDocument('Fillet edit', toUserId('user_fillet_edit')),
@@ -248,13 +279,19 @@ describe('fillet face editing', () => {
     } as unknown as BodyRepresentation;
 
     expect(importedBlendEditNotice(body, selected)).toBe(
-      IMPORTED_BLEND_REMOVABLE_NOTICE
+      IMPORTED_BLEND_EDITABLE_NOTICE
     );
-    expect(importedBlendEditNotice(body, selected)).toMatch(/Undo restores/i);
+    expect(importedBlendEditNotice(body, selected)).toMatch(/exact kernel/i);
   });
 
   it('fails closed with a recovery path when imported removal is unproven', () => {
-    const selected = blendFace('selected');
+    const analytic = blendFace('selected');
+    const {
+      axisStart: _axisStart,
+      axisEnd: _axisEnd,
+      ...nonAnalytic
+    } = analytic.geometry!;
+    const selected = { ...analytic, geometry: nonAnalytic };
     const body = {
       source: 'imported-step',
       topology: {
