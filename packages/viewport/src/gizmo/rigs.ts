@@ -12,6 +12,7 @@ import {
 } from './DragRig';
 import { createDimensionGraphic } from '../annotation/dimensionGraphic';
 import { ANALYTIC_GHOST_COLOR } from '../selection/analyticCylinderGhost';
+import { easeToward, hasSettled } from '../motion';
 
 const ARROW_SHAFT_RADIUS = 0.05;
 const ARROW_HEAD_RADIUS = 0.14;
@@ -20,6 +21,73 @@ const ARROW_HALF_LENGTH = 0.75;
 const ARROW_HIT_RADIUS = 0.34;
 const GHOST_OPACITY = 0.28;
 export const HANDLE_WARNING_COLOR = 0xf59e0b;
+/** The handle under the pointer, so "grabbable" is visible before pressing. */
+const HANDLE_HOT_COLOR = 0xffc178;
+/** How small a rig starts before settling to full size. */
+const ENTRANCE_SCALE = 0.86;
+
+/**
+ * The eased presence and hover state every drag rig shares.
+ *
+ * A rig used to appear at full strength on the frame it armed, and looked
+ * identical whether or not the pointer was over it — so nothing said it could
+ * be grabbed until it was already being dragged. Both are ramps now, stepped
+ * by the render loop.
+ *
+ * Scale is reported rather than applied: the viewport rescales every rig each
+ * frame to keep it screen-constant, so the entrance has to ride that instead
+ * of fighting it.
+ */
+function createRigPresence(roots: readonly THREE.Object3D[]) {
+  const materials = new Map<THREE.Material, number>();
+  for (const root of roots) {
+    root.traverse((child) => {
+      const material = (child as THREE.Mesh).material;
+      if (material && !Array.isArray(material)) {
+        if (!materials.has(material)) {
+          material.transparent = true;
+          materials.set(material, material.opacity);
+        }
+      }
+    });
+  }
+  let presence = 0;
+  let hot = 0;
+  let hotTarget = 0;
+  const apply = () => {
+    for (const [material, baseOpacity] of materials) {
+      material.opacity = baseOpacity * presence;
+    }
+  };
+  apply();
+  return {
+    /** Advances both ramps. True while either is still moving. */
+    step(dtMs: number): boolean {
+      const moving = !hasSettled(presence, 1) || !hasSettled(hot, hotTarget);
+      if (!moving) {
+        return false;
+      }
+      presence = easeToward(presence, 1, dtMs);
+      hot = easeToward(hot, hotTarget, dtMs);
+      apply();
+      return true;
+    },
+    setHot(next: boolean) {
+      hotTarget = next ? 1 : 0;
+    },
+    hotness(): number {
+      return hot;
+    },
+    /** Multiplier the viewport folds into its screen-constant scale. */
+    entranceScale(): number {
+      return ENTRANCE_SCALE + (1 - ENTRANCE_SCALE) * presence;
+    },
+    /** Re-reads base opacities after a material's own opacity changed. */
+    rebase(material: THREE.Material, opacity: number) {
+      materials.set(material, opacity);
+    }
+  };
+}
 
 /**
  * The shared drag-arrow affordance: a double-headed arrow centered on the
@@ -172,6 +240,30 @@ export function buildOffsetFaceHandle(params: OffsetFaceRigParams): DragRig {
   }
 
   let current = 0;
+  let warned = false;
+  const presence = createRigPresence([group, worldGroup]);
+
+  /**
+   * Warning wins over hover: a value the kernel will refuse must not be
+   * softened into looking merely interactive.
+   */
+  const paintArrows = () => {
+    const color = warned
+      ? new THREE.Color(HANDLE_WARNING_COLOR)
+      : new THREE.Color(HANDLE_COLOR).lerp(
+          new THREE.Color(HANDLE_HOT_COLOR),
+          presence.hotness()
+        );
+    for (const part of arrowParts) {
+      if (
+        part.material instanceof THREE.MeshBasicMaterial &&
+        part.material.visible
+      ) {
+        part.material.color.copy(color);
+      }
+    }
+    return color;
+  };
 
   return {
     kind,
@@ -179,6 +271,19 @@ export function buildOffsetFaceHandle(params: OffsetFaceRigParams): DragRig {
     worldGroup,
     origin,
     direction,
+    step(dtMs: number) {
+      if (!presence.step(dtMs)) {
+        return false;
+      }
+      paintArrows();
+      return true;
+    },
+    setHot(hot: boolean) {
+      presence.setHot(hot);
+    },
+    entranceScale() {
+      return presence.entranceScale();
+    },
     setValue(value: number) {
       current = value;
       const tip = origin.clone().addScaledVector(direction, value);
@@ -197,16 +302,8 @@ export function buildOffsetFaceHandle(params: OffsetFaceRigParams): DragRig {
       return current;
     },
     setWarning(warning) {
-      const color = warning ? HANDLE_WARNING_COLOR : HANDLE_COLOR;
-      for (const part of arrowParts) {
-        if (
-          part.material instanceof THREE.MeshBasicMaterial &&
-          part.material.visible
-        ) {
-          part.material.color.setHex(color);
-        }
-      }
-      dimension.setColor(color);
+      warned = warning;
+      dimension.setColor(paintArrows().getHex());
       group.userData.previewWarning = warning;
     },
     chipAnchor(gizmoScale: number) {
