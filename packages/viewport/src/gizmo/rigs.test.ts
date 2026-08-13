@@ -300,9 +300,10 @@ describe('offset rig entrance and hover', () => {
   it('arrives rather than appearing at full strength', () => {
     const rig = offsetRig();
 
-    // On the frame it is built the rig is invisible and undersized; the
-    // render loop's steps are what bring it in.
-    expect(rig.entranceScale!()).toBeLessThan(1);
+    // On the frame it is built the rig is invisible; the render loop's steps
+    // are what bring it in. Its scale is untouched on purpose — scaling would
+    // shrink the hit mesh with it and make the handle briefly unpressable.
+    expect(rig.group.scale.x).toBe(1);
     let opacity = 0;
     rig.group.traverse((child) => {
       const material = (child as THREE.Mesh).material;
@@ -313,7 +314,15 @@ describe('offset rig entrance and hover', () => {
     expect(opacity).toBe(0);
 
     settle(rig);
-    expect(rig.entranceScale!()).toBeCloseTo(1, 5);
+    let settled = 0;
+    rig.group.traverse((child) => {
+      const material = (child as THREE.Mesh).material;
+      if (material && !Array.isArray(material)) {
+        settled = Math.max(settled, material.opacity);
+      }
+    });
+    expect(settled).toBeGreaterThan(0.5);
+    expect(rig.group.scale.x).toBe(1);
     expect(rig.step?.(16)).toBe(false);
   });
 

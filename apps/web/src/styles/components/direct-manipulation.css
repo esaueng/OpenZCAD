@@ -199,6 +199,18 @@
   background: rgba(14, 30, 48, 0.98);
 }
 
+/* The kernel stopped keeping up: the number is still live, the shape is not. */
+.handle-value-chip[data-state='deferred'] {
+  color: #dbe7f5;
+  border-color: color-mix(in srgb, var(--color-accent-border) 60%, #3d4a5c);
+  background: rgba(12, 20, 30, 0.96);
+}
+
+.handle-value-chip[data-state='deferred']::after {
+  content: ' · paused';
+  opacity: 0.7;
+}
+
 .handle-value-chip[data-state='warning'] {
   color: #fff4dc;
   background: color-mix(in srgb, var(--color-warning) 18%, #08121e);

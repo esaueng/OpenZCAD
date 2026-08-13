@@ -141,6 +141,7 @@ interface ViewerShellProps {
   onOffsetCommit(offset: number): boolean;
   onOffsetCancel(): void;
   offsetPreviewInvalid: boolean;
+  previewDeferred: boolean;
   onOpenOffsetKeypad(currentOffset: number, totalBaseline?: number): void;
   keypadAnchorRef: MutableRefObject<
     ((point: { x: number; y: number } | null) => void) | null
@@ -257,6 +258,7 @@ export function ViewerShell({
   onOffsetCommit,
   onOffsetCancel,
   offsetPreviewInvalid,
+  previewDeferred,
   onOpenOffsetKeypad,
   keypadAnchorRef,
   offsetSetterRef,
@@ -388,6 +390,7 @@ export function ViewerShell({
         onOffsetCommit={onOffsetCommit}
         onOffsetCancel={onOffsetCancel}
         offsetPreviewInvalid={offsetPreviewInvalid}
+        previewDeferred={previewDeferred}
         onOpenOffsetKeypad={onOpenOffsetKeypad}
         keypadAnchorRef={keypadAnchorRef}
         offsetSetterRef={offsetSetterRef}

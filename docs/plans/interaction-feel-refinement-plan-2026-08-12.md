@@ -24,11 +24,13 @@ Branch `claude/3d-modeling-interface-refinement-e7b650`.
 | 3.2 edge hover easing | **done** — width and opacity ramp together |
 | 3.3 selection symmetry | **done** — fade-out on deselect, x-ray and preview halves rise with their twins |
 | 3.5 chip/keypad transitions | **done** — colour and elevation over `--dur-fast`, `transform` excluded |
-| 3.2 hover dwell/cursor hysteresis | **not started** — the strobe across dense topology |
-| 3.3 face hover cross-fade | **not started** — `setHoverFace` still teleports the film between faces |
+| 3.2 cursor hysteresis | **done** — the cursor is only written when it changes |
+| 3.2 hover dwell | **not started** — a dwell before re-committing preselection is still open; the cursor no longer strobes, the highlight can |
+| 3.3 face hover cross-fade | **not started** — `setHoverFace` still teleports the film between faces; needs a second mesh slot in `SelectionManager` |
 | 3.4 gizmo entrance + hover affordance | **done** — shared rig presence controller; offset rig adopts it |
-| 3.4 gizmo exit, and the other two rigs | **not started** — exit needs deferred disposal past the React effect cleanup that currently disposes rigs immediately; cylinder and edge rigs adopt the controller the same way the offset rig does |
-| 3.5 "kernel is behind" affordance | **not started** — including a visible state for the 400 ms degrade |
+| 3.4 cylinder and edge rigs | **done** — both adopt the shared controller |
+| 3.4 gizmo exit | **not started** — needs deferred disposal past the React effect cleanup that disposes rigs immediately |
+| 3.5 "kernel is behind" affordance | **done** — `LivePreview` announces the degrade once and the chip reads `paused` |
 | Phases 2, 4, 5 | **not started** |
 
 Full E2E suite after 1.3: 127 passed, 8 skipped, 0 failures.
