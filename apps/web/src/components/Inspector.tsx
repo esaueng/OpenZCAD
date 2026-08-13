@@ -984,9 +984,11 @@ export function Inspector(props: InspectorProps) {
               ? 'resize through hole'
               : data.operation.kind === 'resize-cylindrical-face'
                 ? 'resize cylinder radius'
-                : data.operation.kind === 'offset-face'
-                  ? 'offset face'
-                  : 'remove face feature'}
+                : data.operation.kind === 'resize-blend'
+                  ? 'resize imported blend'
+                  : data.operation.kind === 'offset-face'
+                    ? 'offset face'
+                    : 'remove face feature'}
           </span>
           <b>source face</b>
           <span>
@@ -1004,6 +1006,12 @@ export function Inspector(props: InspectorProps) {
             <>
               <b>radius</b>
               <span>{String(data.operation.radius)}</span>
+            </>
+          )}
+          {data.operation.kind === 'resize-blend' && (
+            <>
+              <b>radius</b>
+              <span>{String(data.operation.newRadius)}</span>
             </>
           )}
         </div>

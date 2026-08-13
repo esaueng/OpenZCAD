@@ -42,6 +42,8 @@ export interface FaceCapabilityTarget {
   blendRadius?: number;
   /** Present only after lineage resolves to a live Fillet feature. */
   filletFeatureId?: FeatureId;
+  /** Analytic imported blend with the exact resize kernel available. */
+  canResizeImportedBlend?: boolean;
   /** Imported defeature is exposed only when its planar gate is proven. */
   canRemoveFaceFeature?: boolean;
 }
@@ -94,7 +96,7 @@ export function selectionCapabilities(
     case 'face': {
       const { target } = selection;
       if (
-        target.filletFeatureId &&
+        (target.filletFeatureId || target.canResizeImportedBlend) &&
         target.blendRadius !== undefined &&
         Number.isFinite(target.blendRadius) &&
         target.blendRadius > 0
