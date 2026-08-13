@@ -268,6 +268,16 @@ render per move instead of two — and the p50 interval rose from 25 ms to
 43 ms saying so. Use `frames` for invalidation volume, `reactCommits` for
 component-tree traffic, and p95/max for genuine stalls.
 
+**A third harness note, for drag coalescing.** Neither the scenarios above nor
+any CDP-driven drag can show whether drag work is coalesced: each
+`page.mouse.move` round-trips and yields, so the browser paints between
+events and the drag runs once per move whatever the code does. The
+`drag coalescing probe` dispatches its burst of `pointermove` events
+synchronously from page script instead, carrying the real gesture's pointer
+id, so the whole burst lands before a frame can run. It reports 120 pointer
+events collapsing to 1 application of the drag path, and 120 applications
+when the coalescing is removed.
+
 Two harness notes, both of which produced a probe that measured nothing:
 
 - The offset handle's value chip is a DOM overlay anchored on top of the
