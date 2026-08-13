@@ -19,7 +19,7 @@ Branch `claude/3d-modeling-interface-refinement-e7b650`.
 | 1.2 extrude drag | **not started** — see note below |
 | 1.2 cylinder-radius Inspector throttle | **not started** |
 | 1.3 rAF-coalesce drag handlers | **done** — `0a0a5d5`, 120 events → 1 apply |
-| 1.4 in-place preview geometry | **blocked on a real-GPU measurement** — discovery disproved its premise; see the box in 1.4 |
+| 1.4 in-place preview geometry | **dropped** — the real-GPU measurement came back; the stall does not exist there (preview drag p95 25 ms). See the box in 1.4 |
 | Phases 2–5 | **not started** |
 
 Full E2E suite after 1.3: 127 passed, 8 skipped, 0 failures.
@@ -168,8 +168,19 @@ passes); probe drag scenarios show one drag-work execution per frame
 
 ### 1.4 In-place preview geometry for the dragged body
 
-> **Discovery done 2026-08-13, and it contradicts the premise below. Do not
-> implement this item from the audit's reasoning; read this box first.**
+> **Resolved 2026-08-13 by measurement: this item is dropped. Do not
+> implement it.** The headed run on the target GPU (Apple M5 Pro, ANGLE
+> Metal) puts the preview drag at 8.4 ms p50 / 25.1 ms p95, worst frame
+> 33.5 ms — against ~500 ms p95 under SwiftShader. There is no stall to fix.
+> The reasoning that got here is kept below because it is the argument for
+> why nothing was built.
+>
+> What survives from this phase is a different, real target the same run
+> exposed: a **move drag holds 16.7 ms p50 on a 120 Hz display while an orbit
+> on the same model holds 8.3 ms** — half rate, worst frame 91.7 ms. The
+> suspect is the per-application snap resolution over every edge and face
+> centre of the other bodies, which is what phase 2.2 already proposes to
+> precompute. Phase 2 therefore inherits this phase's remaining value.
 >
 > The audit blamed the preview drag's ~500 ms p95 frame on the scene being
 > torn down and rebuilt per published preview. That teardown is real, but it
