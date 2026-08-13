@@ -786,6 +786,62 @@ const SELECTED_FACE_HIDDEN_OPACITY = 0.16;
  */
 const DEFAULT_OVERLAY_FADE_TARGET = 0.34;
 
+/**
+ * Starts a deselected highlight fading instead of deleting it outright.
+ *
+ * The overlay is renamed first: the rebuild finds selection overlays by name,
+ * and a fading one must not be mistaken for the current selection's. Its
+ * materials are handed to the same fade the entrance uses, aimed at zero.
+ */
+function retireOverlay(
+  context: SceneContext,
+  retiring: { group: THREE.Group; parent: THREE.Object3D }[],
+  group: THREE.Group
+) {
+  const parent = group.parent;
+  if (!parent) {
+    return;
+  }
+  group.name = `${group.name}-retiring`;
+  let hasMaterial = false;
+  group.traverse((child) => {
+    const material = (child as THREE.Mesh).material;
+    if (material && !Array.isArray(material)) {
+      material.userData.targetOpacity = 0;
+      context.fadeIns.add(material);
+      hasMaterial = true;
+    }
+  });
+  if (!hasMaterial) {
+    clearGroup(group);
+    parent.remove(group);
+    return;
+  }
+  retiring.push({ group, parent });
+  context.requestRender();
+}
+
+/** Disposes retired overlays once their fade has reached zero. */
+function disposeSettledOverlays(
+  retiring: { group: THREE.Group; parent: THREE.Object3D }[]
+) {
+  for (let index = retiring.length - 1; index >= 0; index -= 1) {
+    const entry = retiring[index]!;
+    let faded = true;
+    entry.group.traverse((child) => {
+      const material = (child as THREE.Mesh).material;
+      if (material && !Array.isArray(material) && material.opacity > 0) {
+        faded = false;
+      }
+    });
+    if (faded) {
+      clearGroup(entry.group);
+      entry.parent.remove(entry.group);
+      retiring.splice(index, 1);
+    }
+  }
+}
+
 const E2E_CANVAS_HOOKS_ENABLED =
   (
     import.meta.env as unknown as {
@@ -1003,6 +1059,14 @@ export function ModelViewer({
    * their arrowheads and witness ticks are pixel-sized, and the world size of
    * a pixel changes with a zoom that never touches the camera's orientation.
    */
+  /**
+   * Selection overlays that have been deselected and are fading out. They are
+   * detached from the naming scheme first so a rebuild cannot find and reuse
+   * them, then disposed once their materials reach zero.
+   */
+  const retiringOverlaysRef = useRef<
+    { group: THREE.Group; parent: THREE.Object3D }[]
+  >([]);
   const measurementDimensionsRef = useRef<
     {
       graphic: DimensionGraphic;
@@ -5890,6 +5954,7 @@ export function ModelViewer({
           edgesAnimating = true;
         }
       }
+      disposeSettledOverlays(retiringOverlaysRef.current);
       for (const material of context.fadeIns) {
         const target =
           (material.userData.targetOpacity as number | undefined) ??
@@ -6026,6 +6091,7 @@ export function ModelViewer({
         controlsChanged ||
         hoverAnimating ||
         edgesAnimating ||
+        retiringOverlaysRef.current.length > 0 ||
         inferenceAnimating ||
         context.fadeIns.size > 0
       ) {
@@ -6332,8 +6398,14 @@ export function ModelViewer({
       if (previousSelectionOverlay instanceof THREE.Group) {
         const selectionGroup =
           previousSelectionOverlay as unknown as THREE.Group;
-        clearGroup(selectionGroup);
-        object.remove(selectionGroup);
+        if (bodiesChanged) {
+          // The body itself is being replaced, so there is nothing for the
+          // old highlight to fade against.
+          clearGroup(selectionGroup);
+          object.remove(selectionGroup);
+        } else {
+          retireOverlay(context, retiringOverlaysRef.current, selectionGroup);
+        }
       }
       const previousPreviewOverlay = object.getObjectByName(
         'body-preview-face-overlay'
@@ -6420,11 +6492,16 @@ export function ModelViewer({
           color: SELECTED_FACE_COLOR,
           toneMapped: false,
           transparent: true,
-          opacity: SELECTED_FACE_HIDDEN_OPACITY,
+          // Rises with its visible twin rather than arriving whole: the two
+          // halves are one highlight, and staggering them reads as a flicker
+          // behind the solid.
+          opacity: 0,
           side: THREE.DoubleSide,
           depthWrite: false,
           depthFunc: THREE.GreaterDepth
         });
+        hiddenMaterial.userData.targetOpacity = SELECTED_FACE_HIDDEN_OPACITY;
+        context.fadeIns.add(hiddenMaterial);
         const hiddenHighlight = new THREE.Mesh(hiddenGeometry, hiddenMaterial);
         hiddenHighlight.name = 'body-face-selected-hidden';
         hiddenHighlight.visible = xrayEnabled;
@@ -6601,12 +6678,16 @@ export function ModelViewer({
             color: SELECTED_FACE_COLOR,
             toneMapped: false,
             transparent: true,
-            opacity: SELECTED_FACE_OPACITY,
+            // Same rise as a committed selection: which code path built the
+            // highlight should not be visible in how it arrives.
+            opacity: 0,
             side: THREE.DoubleSide,
             depthWrite: false,
             polygonOffset: true,
             polygonOffsetFactor: -3
           });
+          material.userData.targetOpacity = SELECTED_FACE_OPACITY;
+          context.fadeIns.add(material);
           const highlight = new THREE.Mesh(geometry, material);
           highlight.name = 'body-face-preview-created';
           highlight.renderOrder = VIEWPORT_RENDER_ORDER.SELECTED_GEOMETRY;
