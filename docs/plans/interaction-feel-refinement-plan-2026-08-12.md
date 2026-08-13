@@ -18,9 +18,11 @@ Branch `claude/3d-modeling-interface-refinement-e7b650`.
 | 1.2 move drag off workspace state | **done** — `1034669`, 61 → 2 React commits |
 | 1.2 extrude drag | **not started** — see note below |
 | 1.2 cylinder-radius Inspector throttle | **not started** |
-| 1.3 rAF-coalesce drag handlers | **not started** |
+| 1.3 rAF-coalesce drag handlers | **done** — `0a0a5d5`, 120 events → 1 apply |
 | 1.4 in-place preview geometry | **not started** — the largest remaining item |
 | Phases 2–5 | **not started** |
+
+Full E2E suite after 1.3: 127 passed, 8 skipped, 0 failures.
 
 **Note on the extrude drag.** It does not take the same fix as the move drag.
 A move drag already updated the scene imperatively through
