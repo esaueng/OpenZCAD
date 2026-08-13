@@ -32,6 +32,11 @@ export interface FaceTarget extends FaceCapabilityTarget {
   /** Semantic exact-surface role needed to choose the matching edit op. */
   featureType?: 'through-hole' | 'blend';
   diameter?: number;
+  /** Latest replayable edit that owns an imported blend band. */
+  directEditFeatureId?: string;
+  blendSurfaceClass?: 'torus' | 'cylinder';
+  blendCenter?: [number, number, number];
+  blendAxis?: [number, number, number];
 }
 
 export interface RegionTarget {

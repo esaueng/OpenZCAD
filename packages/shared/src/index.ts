@@ -12,7 +12,7 @@ export type RevisionId = Brand<string, 'RevisionId'>;
 export type UploadSessionId = Brand<string, 'UploadSessionId'>;
 export type AssetId = Brand<string, 'AssetId'>;
 
-export const PROJECT_DOCUMENT_SCHEMA_VERSION = 7 as const;
+export const PROJECT_DOCUMENT_SCHEMA_VERSION = 8 as const;
 export type ProjectDocumentSchemaVersion =
   typeof PROJECT_DOCUMENT_SCHEMA_VERSION;
 
@@ -24,11 +24,16 @@ export type FeatureKind =
   | 'sketch'
   | 'extrude'
   | 'revolve'
+  | 'loft'
+  | 'sweep'
+  | 'helical-sweep'
   | 'boolean'
   | 'transform'
   | 'mirror'
   | 'shell'
   | 'solid-offset'
+  | 'draft'
+  | 'thicken'
   | 'fillet'
   | 'chamfer'
   | 'pattern'
@@ -209,6 +214,20 @@ export type DirectEditOperation =
       /** Whether the wall faces material inward (hole) or outward (boss). */
       concavity: 'hole' | 'boss';
       radius: ParamValue;
+    }
+  | {
+      kind: 'resize-blend';
+      faceHash: number;
+      faceReference?: FaceTopologyReferenceV5;
+      /** Exact analytic carrier recorded when the edit was authored. */
+      surfaceClass: 'torus' | 'cylinder';
+      recordedRadius: number;
+      /** Torus centre or a point on the cylinder axis. */
+      recordedCenter: Vector3;
+      /** Unoriented unit carrier axis. */
+      recordedAxis: Vector3;
+      /** Zero removes the analytic blend band and restores its sharp edge. */
+      newRadius: ParamValue;
     };
 
 export interface BaseNode {
@@ -445,6 +464,18 @@ export interface SketchEntityProfileReference {
 export type SketchProfileReference =
   SketchRegionProfileReference | SketchEntityProfileReference;
 
+/** One persisted closed profile together with the sketch plane that owns it. */
+export interface SketchSectionReference {
+  sketchId: SketchId;
+  profile: SketchProfileReference;
+}
+
+/** Ordered authored sketch entities used as an exact sweep path. */
+export interface SketchPathReference {
+  sketchId: SketchId;
+  entityIds: EntityId[];
+}
+
 export type FeatureData =
   | {
       featureKind: 'primitive';
@@ -495,6 +526,27 @@ export type FeatureData =
       angleDeg?: ParamValue;
     }
   | {
+      featureKind: 'loft';
+      /** User-authored section order; at least two are required. */
+      sections: SketchSectionReference[];
+      mode: 'ruled' | 'smooth';
+    }
+  | {
+      featureKind: 'sweep';
+      profile: SketchSectionReference;
+      path: SketchPathReference;
+      mode: 'standard' | 'smooth';
+    }
+  | {
+      featureKind: 'helical-sweep';
+      profile: SketchSectionReference;
+      axisOrigin: ParametricVector3;
+      axisDirection: ParametricVector3;
+      radius: ParamValue;
+      pitch: ParamValue;
+      turns: ParamValue;
+    }
+  | {
       featureKind: 'boolean';
       operation: BooleanOperation;
       targetBodyIds: BodyId[];
@@ -523,6 +575,22 @@ export type FeatureData =
       targetBodyId: BodyId;
       /** Positive values offset every face outward. */
       distance: ParamValue;
+    }
+  | {
+      featureKind: 'draft';
+      targetBodyId: BodyId;
+      faceHashes: number[];
+      faceReferences?: FaceTopologyReferenceV5[];
+      pullDirection: ParametricVector3;
+      neutralPoint: ParametricVector3;
+      angleDeg: ParamValue;
+    }
+  | {
+      featureKind: 'thicken';
+      targetBodyId: BodyId;
+      faceHash: number;
+      faceReference?: FaceTopologyReferenceV5;
+      thickness: ParamValue;
     }
   | {
       featureKind: 'fillet';
@@ -1984,11 +2052,16 @@ export const FEATURE_COLORS: Record<FeatureKind, string> = {
   sketch: DEFAULT_BODY_COLOR,
   extrude: '#4bb7a7',
   revolve: '#5fb3e8',
+  loft: '#22c55e',
+  sweep: '#16a34a',
+  'helical-sweep': '#65a30d',
   boolean: '#ff7452',
   transform: '#8b80f9',
   mirror: '#a78bfa',
   shell: '#14b8a6',
   'solid-offset': '#06b6d4',
+  draft: '#0d9488',
+  thicken: '#0891b2',
   fillet: '#f59e0b',
   chamfer: '#fb7185',
   pattern: '#38bdf8',

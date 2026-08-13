@@ -67,6 +67,19 @@ export function affectedFeatureTargets(
       case 'revolve':
         affected = affectedSketches.has(data.sketchId);
         break;
+      case 'loft':
+        affected = data.sections.some((section) =>
+          affectedSketches.has(section.sketchId)
+        );
+        break;
+      case 'sweep':
+        affected =
+          affectedSketches.has(data.profile.sketchId) ||
+          affectedSketches.has(data.path.sketchId);
+        break;
+      case 'helical-sweep':
+        affected = affectedSketches.has(data.profile.sketchId);
+        break;
       case 'boolean':
         affected = data.targetBodyIds.some((bodyId) =>
           affectedBodies.has(bodyId)
@@ -76,6 +89,8 @@ export function affectedFeatureTargets(
       case 'mirror':
       case 'shell':
       case 'solid-offset':
+      case 'draft':
+      case 'thicken':
       case 'fillet':
       case 'chamfer':
       case 'pattern':

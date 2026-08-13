@@ -100,7 +100,13 @@ function semanticReference(
  */
 export function createBrepKitSemanticLineage(
   producingFeatureId: FeatureId,
-  operation: 'primitive' | 'sweep' | 'imported-step' | 'fillet' | 'chamfer',
+  operation:
+    | 'primitive'
+    | 'sweep'
+    | 'imported-step'
+    | 'fillet'
+    | 'chamfer'
+    | 'direct-edit',
   assignments: readonly BrepKitSemanticAssignment[]
 ): BrepKitLineageState {
   const state = emptyLineageState();
@@ -678,7 +684,11 @@ export function propagateBrepKitRigidTransformLineage(
         candidate.kind === reference.kind &&
         // Near-equality, not exact: the expected witness carries quantized
         // rotation noise. Uniqueness below keeps the band fail-closed.
-        topologyWitnessesNearlyEqual(reference.kind, expected, candidate.witness)
+        topologyWitnessesNearlyEqual(
+          reference.kind,
+          expected,
+          candidate.witness
+        )
     );
     if (matches.length === 0) {
       output.diagnostics.push({
