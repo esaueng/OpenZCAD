@@ -938,10 +938,28 @@ export function App() {
     typeof globalThis.innerWidth === 'number' ? globalThis.innerWidth : 0
   );
   useEffect(() => {
-    const onResize = () => setWindowWidth(globalThis.innerWidth);
-    onResize();
+    // Coalesced to one render per frame: dragging a window edge emits resize
+    // events faster than the editor can usefully re-render, and every one of
+    // them re-renders the whole tree on top of the canvas resize the viewport
+    // is already doing.
+    let frame: number | null = null;
+    const onResize = () => {
+      if (frame !== null) {
+        return;
+      }
+      frame = globalThis.requestAnimationFrame(() => {
+        frame = null;
+        setWindowWidth(globalThis.innerWidth);
+      });
+    };
+    setWindowWidth(globalThis.innerWidth);
     globalThis.addEventListener('resize', onResize);
-    return () => globalThis.removeEventListener('resize', onResize);
+    return () => {
+      if (frame !== null) {
+        globalThis.cancelAnimationFrame(frame);
+      }
+      globalThis.removeEventListener('resize', onResize);
+    };
   }, []);
   const savedWidths = savedPanelWidths(appSettings);
   const sidebarWidth = clampSidebarWidth(savedWidths.sidebar, windowWidth);

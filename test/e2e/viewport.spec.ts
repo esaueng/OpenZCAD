@@ -2032,3 +2032,4 @@ test('two fingers pan while a wheel notch still zooms', async ({ page }) => {
     })
     .toBeGreaterThan(0.5);
 });
+
