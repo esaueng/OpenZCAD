@@ -94,14 +94,31 @@ export class PickService {
   private options: PickServiceOptions;
   private pointer = new THREE.Vector2();
 
+  /** Event the cached rect was measured for; see `setRayFromEvent`. */
+  private rectEvent: PointerEvent | MouseEvent | null = null;
+  private rect: DOMRect | null = null;
+
   constructor(options: PickServiceOptions) {
     this.options = options;
     configureEdgeRaycasting(this.raycaster);
   }
 
-  /** Points the shared raycaster at an event's position. */
+  /**
+   * Points the shared raycaster at an event's position.
+   *
+   * The canvas rect is cached because reading it forces the browser to settle
+   * layout, and a single hover frame aims the ray several times — once for
+   * the gizmo, once for the pick, again for a measure preview. The cache is
+   * per event: within one event the canvas cannot have moved, and across
+   * events it can (a panel drag, a scroll, a window resize), so nothing has
+   * to remember to invalidate it.
+   */
   setRayFromEvent(event: PointerEvent | MouseEvent) {
-    const rect = this.options.domElement.getBoundingClientRect();
+    if (event !== this.rectEvent) {
+      this.rectEvent = event;
+      this.rect = this.options.domElement.getBoundingClientRect();
+    }
+    const rect = this.rect ?? this.options.domElement.getBoundingClientRect();
     this.pointer.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
     this.pointer.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
     this.raycaster.setFromCamera(this.pointer, this.options.camera());
