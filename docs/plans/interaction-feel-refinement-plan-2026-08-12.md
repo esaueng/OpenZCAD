@@ -33,7 +33,27 @@ Branch `claude/3d-modeling-interface-refinement-e7b650`.
 | 3.5 "kernel is behind" affordance | **done** — `LivePreview` announces the degrade once and the chip reads `paused` |
 | 4 trackpad two-finger pan + pinch zoom | **done** — `wheelGesture.ts` classifier, `auto`/`mouse`/`trackpad` supported by the controller |
 | 4 navigation preference in Settings | **not started** — the controller reads a mode, but nothing sets it yet, so misclassification has no escape hatch |
-| Phases 2, 5 | **not started** |
+| 2.3 window-resize coalescing | **done** — one render per frame instead of one per event |
+| 2.1 defer the workspace-session write | **attempted and reverted** — see below |
+| 2.2 precompute move snap candidates | **not started** |
+| Phase 5 | **not started** |
+
+**2.1, and why it is not in.** The cost is real and now measured: pressing to
+orbit performs **3 synchronous session writes** on the press frame, each a
+read-parse-validate-serialise-write of the whole record, because re-pivoting
+on the picked point reports a pose from inside `pointerdown`. Deferring that
+write is a two-line change and it works — but it moves when the persisted
+pose becomes readable, and three existing camera specs read the stored pose
+immediately after moving the camera (`viewport.spec.ts` 134, 367, 597). A
+250 ms delay broke them; deferring to the next task fixed them but made the
+property unobservable from Playwright, since a CDP round trip crosses task
+boundaries anyway.
+
+So the deferral needs to be driven by the gesture rather than by a clock:
+persist on the settle path the `CameraController` already has
+(`scheduleSettledViewChange`), and let the mid-gesture reports update memory
+only. That is a change to the controller's contract with its `onViewChange`
+sink, not a hook-level tweak, which is why it was not folded in here.
 
 Full E2E suite after 1.3: 127 passed, 8 skipped, 0 failures.
 
