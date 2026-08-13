@@ -1154,6 +1154,11 @@ export function App() {
   keypadRef.current = keypad;
   /** Latest pointer/entry value stays transient until an exact frame lands. */
   const offsetPreviewValueRef = useRef<number | null>(null);
+  /**
+   * True once a gesture's rebuilds became too slow to keep previewing. The
+   * handle keeps moving; the geometry does not, and the value chip says so.
+   */
+  const [previewDeferred, setPreviewDeferred] = useState(false);
   /** Signed offset represented by the currently published previewDoc. */
   const [renderedOffsetPreview, setRenderedOffsetPreview] = useState<
     number | null
@@ -1450,7 +1455,8 @@ export function App() {
         ),
       acceptValue: (offset) =>
         Number.isFinite(offset) && Math.abs(offset) > 1e-9,
-      continueAfterSlow: false
+      continueAfterSlow: false,
+      onDegrade: () => setPreviewDeferred(true)
     })
   ).current;
 
@@ -1549,6 +1555,7 @@ export function App() {
     onValidationFailed: (message, value) => {
       cylinderRadiusPreview.clear();
       offsetPreview.clear();
+      setPreviewDeferred(false);
       offsetPreviewValueRef.current = null;
       cylinderRadiusInspectorSetterRef.current?.(null);
       dispatchInteraction({ type: 'validation-failed', message, value });
@@ -1556,6 +1563,7 @@ export function App() {
     onCommitted: (bodyId) => {
       cylinderRadiusPreview.clear();
       offsetPreview.clear();
+      setPreviewDeferred(false);
       offsetPreviewValueRef.current = null;
       dispatchInteraction({ type: 'commit-complete' });
       setSelectedTopology(null);
@@ -10659,6 +10667,7 @@ export function App() {
               interaction.op === 'offset-face' &&
               interaction.phase === 'failed'
             }
+            previewDeferred={previewDeferred}
             onOpenOffsetKeypad={handleOpenOffsetKeypad}
             keypadAnchorRef={keypadAnchorRef}
             offsetSetterRef={offsetSetterRef}

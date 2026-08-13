@@ -42,11 +42,6 @@ export interface DragRig {
   step?(dtMs: number): boolean;
   /** Marks the rig as the thing under the pointer, before any press. */
   setHot?(hot: boolean): void;
-  /**
-   * Entrance multiplier the viewport folds into its screen-constant scale.
-   * Reported rather than applied, because the rig does not own its scale.
-   */
-  entranceScale?(): number;
   dispose(): void;
 }
 
