@@ -6,6 +6,7 @@ import {
   Move3d,
   X
 } from 'lucide-react';
+import { useEffect, useState, type MutableRefObject } from 'react';
 import type { ExtrudeOperation } from '@openzcad/shared';
 
 interface ProfileQuickActionProps {
@@ -234,15 +235,29 @@ interface MoveOverlayProps {
   targets?: readonly { bodyId: string; name: string }[];
   targetBodyId?: string;
   onTargetBody?(bodyId: string): void;
+  /**
+   * Where this panel publishes a sink for live drag values. The viewport
+   * writes the numbers a gesture is producing straight into it, so dragging
+   * the gizmo updates these fields without a workspace render. `values` stays
+   * authoritative for everything else — typing, switching body, committing.
+   */
+  liveValuesRef?: MutableRefObject<
+    | ((
+        translation: MoveOverlayValues['translation'],
+        rotationDeg: MoveOverlayValues['rotationDeg'],
+        snap: { move: number; rotate: number }
+      ) => void)
+    | null
+  >;
 }
 
 const MOVE_AXES = ['x', 'y', 'z'] as const;
 
 export function MoveOverlay({
   bodyName,
-  values,
+  values: committedValues,
   units,
-  snap,
+  snap: committedSnap,
   onChange,
   onConfirm,
   onCancel,
@@ -251,8 +266,32 @@ export function MoveOverlay({
   onName,
   targets,
   targetBodyId,
-  onTargetBody
+  onTargetBody,
+  liveValuesRef
 }: MoveOverlayProps) {
+  // Mirrors `values` except while a drag is streaming, when it runs ahead of
+  // workspace state. Keyed off the props so a typed value, a body switch, or a
+  // settled drag all re-seed it.
+  const [live, setLive] = useState<{
+    values: MoveOverlayValues;
+    snap: { move: number; rotate: number } | null;
+  }>({ values: committedValues, snap: committedSnap });
+  useEffect(() => {
+    setLive({ values: committedValues, snap: committedSnap });
+  }, [committedValues, committedSnap]);
+  useEffect(() => {
+    if (!liveValuesRef) {
+      return;
+    }
+    liveValuesRef.current = (translation, rotationDeg, nextSnap) => {
+      setLive({ values: { translation, rotationDeg }, snap: nextSnap });
+    };
+    return () => {
+      liveValuesRef.current = null;
+    };
+  }, [liveValuesRef]);
+  const values = live.values;
+  const snap = live.snap;
   const dirty =
     MOVE_AXES.some((axis) => values.translation[axis] !== 0) ||
     MOVE_AXES.some((axis) => values.rotationDeg[axis] !== 0);
