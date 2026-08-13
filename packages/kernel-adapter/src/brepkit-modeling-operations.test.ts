@@ -146,6 +146,8 @@ describe('BrepKit modeling operations', () => {
       mirror: () => wrong,
       shell: kernel.shell.bind(kernel),
       offsetSolidV2: kernel.offsetSolidV2.bind(kernel),
+      draft: kernel.draft.bind(kernel),
+      thicken: kernel.thicken.bind(kernel),
       boundingBox: kernel.boundingBox.bind(kernel),
       getSolidFaces: kernel.getSolidFaces.bind(kernel),
       getSolidShells: kernel.getSolidShells.bind(kernel),

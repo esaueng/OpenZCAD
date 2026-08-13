@@ -56,6 +56,8 @@ export type TopologyLineageOperation =
   | 'mirror'
   | 'shell'
   | 'solid-offset'
+  | 'draft'
+  | 'thicken'
   | 'pattern'
   | 'boolean'
   | 'fillet'
@@ -114,6 +116,17 @@ const OPERATION_CAPABILITIES: Readonly<
     fallback: 'hash-only',
     reason:
       'Solid-offset lineage is bridge-gated until every offset and generated face has a complete output relation.'
+  },
+  draft: {
+    status: 'unsupported',
+    fallback: 'hash-only',
+    reason: 'BrepKit does not expose a verified draft face evolution relation.'
+  },
+  thicken: {
+    status: 'unsupported',
+    fallback: 'hash-only',
+    reason:
+      'BrepKit does not expose a verified thicken face evolution relation.'
   },
   /**
    * Fillet is derived only for generated blend faces whose construction

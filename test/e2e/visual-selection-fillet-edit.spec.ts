@@ -1,5 +1,11 @@
-import { fileURLToPath } from 'node:url';
 import type { Locator } from '@playwright/test';
+import {
+  addPrimitiveFeature,
+  createProjectDocument,
+  filletEdges
+} from '@openzcad/document-core';
+import { createExactKernelAdapter } from '@openzcad/kernel-adapter/exact';
+import { toUserId } from '@openzcad/shared';
 import { expect, test, stubApi } from './openzcad-fixtures';
 
 type BlendResult = {
@@ -24,6 +30,37 @@ function readBlend(
       }),
     select
   );
+}
+
+async function editableImportedBlendStep(): Promise<string> {
+  const adapter = await createExactKernelAdapter();
+  try {
+    const source = addPrimitiveFeature(
+      createProjectDocument('Imported blend fixture', toUserId('e2e')),
+      {
+        name: 'Blend block',
+        primitiveKind: 'box',
+        dimensions: { width: 20, height: 20, depth: 20 }
+      }
+    );
+    const sourceBodyId = source.bodyOrder[0]!;
+    const derived = await adapter.syncDocument(source);
+    const edgeHash = derived.bodyRepresentations[
+      sourceBodyId
+    ]?.topology?.edges.find((edge) => edge.displayRole !== 'seam')?.hash;
+    if (edgeHash === undefined) {
+      throw new Error('Generated blend fixture has no editable edge.');
+    }
+    const filleted = filletEdges(source, {
+      name: 'Source fillet',
+      targetBodyId: sourceBodyId,
+      edgeHashes: [edgeHash],
+      size: 3
+    }).document;
+    return adapter.exportStep(filleted, [filleted.bodyOrder.at(-1)!]);
+  } finally {
+    adapter.dispose();
+  }
 }
 
 test('creates, re-edits twice, and removes a selected history fillet', async ({
@@ -263,7 +300,7 @@ test('previews and reverses a box fillet backed by verified evolution lineage', 
   expect(consoleErrors).toEqual([]);
 });
 
-test('keeps history-less imported blends read-only with an actionable reason', async ({
+test('resizes an imported analytic blend twice without reselection', async ({
   page
 }) => {
   test.setTimeout(120_000);
@@ -278,16 +315,11 @@ test('keeps history-less imported blends read-only with an actionable reason', a
   await page.goto('/');
   await page.getByLabel('Project name').fill('Imported Blend Boundary');
   await page.getByRole('button', { name: 'Create project' }).click();
-  await page
-    .getByLabel('Import STEP or STL…')
-    .setInputFiles(
-      fileURLToPath(
-        new URL(
-          '../parity/corpus/e-analytic-fillet-plate.step',
-          import.meta.url
-        )
-      )
-    );
+  await page.getByLabel('Import STEP or STL…').setInputFiles({
+    name: 'brepkit-fillet.step',
+    mimeType: 'model/step',
+    buffer: Buffer.from(await editableImportedBlendStep())
+  });
 
   // PRODUCT names vary by exporter; this fixture still produces exactly one
   // imported history feature, which is the invariant this flow needs.
@@ -297,6 +329,7 @@ test('keeps history-less imported blends read-only with an actionable reason', a
     0
   );
   const canvas = page.locator('.viewer-host canvas');
+  const status = page.getByRole('contentinfo');
   await expect(canvas).toBeVisible({ timeout: 120_000 });
   await expect
     .poll(async () => (await readBlend(canvas))?.blendRadius ?? null, {
@@ -315,18 +348,46 @@ test('keeps history-less imported blends read-only with an actionable reason', a
   await expect(selected).toContainText('fillet radius');
   await expect(selected).toContainText('R 3 mm');
   await expect(selected).toContainText(
-    'This radius is read-only because STEP stores topology, not native Fillet history.'
-  );
-  await expect(selected).toContainText(
-    'recreate the detail as a native Fillet to make its radius editable.'
+    'This analytic STEP blend can be resized by the exact kernel.'
   );
   await expect(
     selected.getByRole('button', { name: 'Remove selected feature' })
-  ).toHaveCount(0);
-  await expect(
-    page.getByRole('region', { name: 'Edit Fillet operation' })
-  ).toHaveCount(0);
-  await expect(page.getByRole('button', { name: 'History 1' })).toBeVisible();
+  ).toBeVisible();
+  const editFillet = page.getByRole('region', {
+    name: 'Edit Fillet operation'
+  });
+  await expect(editFillet).toBeVisible();
+  const chip = page.getByTestId('direct-manipulation-value');
+  await expect(chip).toHaveText('Edit Fillet · R 3 mm');
+
+  await chip.click();
+  let keypad = page.getByRole('dialog', { name: 'Radius value' });
+  await keypad.getByRole('textbox').fill('2');
+  await expect
+    .poll(async () => (await readBlend(canvas))?.blendRadius ?? null, {
+      timeout: 30_000
+    })
+    .toBeCloseTo(2, 6);
+  await keypad.getByRole('button', { name: 'Apply radius' }).click();
+  await expect(status).toContainText('Set imported blend radius to R 2 mm.');
+  await expect(editFillet).toBeVisible();
+  await expect(chip).toHaveText('Edit Fillet · R 2 mm');
+
+  // The analytic carrier identity, not the changed face hash, keeps the same
+  // band armed for a second edit.
+  await chip.click();
+  keypad = page.getByRole('dialog', { name: 'Radius value' });
+  await keypad.getByRole('textbox').fill('1.5');
+  await keypad.getByRole('button', { name: 'Apply radius' }).click();
+  await expect(status).toContainText('Set imported blend radius to R 1.5 mm.');
+  await expect
+    .poll(async () => (await readBlend(canvas))?.blendRadius ?? null, {
+      timeout: 30_000
+    })
+    .toBeCloseTo(1.5, 6);
+  await expect(editFillet).toBeVisible();
+  await expect(chip).toHaveText('Edit Fillet · R 1.5 mm');
+  await expect(page.getByRole('button', { name: 'History 3' })).toBeVisible();
   expect(consoleErrors.filter((message) => !message.includes('404'))).toEqual(
     []
   );

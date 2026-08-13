@@ -29,6 +29,9 @@ export type ToolId =
   | 'sketch'
   | 'extrude'
   | 'revolve'
+  | 'loft'
+  | 'sweep'
+  | 'helical-sweep'
   | 'union'
   | 'subtract'
   | 'intersect'
@@ -36,6 +39,8 @@ export type ToolId =
   | 'mirror'
   | 'shell'
   | 'solid-offset'
+  | 'draft'
+  | 'thicken'
   | 'fillet'
   | 'chamfer'
   | 'linear-pattern'
@@ -117,6 +122,24 @@ export const TOOL_META: Record<ToolId, ToolMeta> = {
     shortcut: 'R',
     hint: 'Spin a sketch around an axis'
   },
+  loft: {
+    label: 'Loft',
+    icon: icon(<Layers size={16} aria-hidden="true" />),
+    group: 'sketch',
+    hint: 'Blend through two or more closed sketch profiles'
+  },
+  sweep: {
+    label: 'Sweep',
+    icon: icon(<Spline size={16} aria-hidden="true" />),
+    group: 'sketch',
+    hint: 'Carry a closed profile along a sketch path'
+  },
+  'helical-sweep': {
+    label: 'Helical sweep',
+    icon: icon(<RotateCw size={16} aria-hidden="true" />),
+    group: 'sketch',
+    hint: 'Carry a closed profile around a parametric helix'
+  },
   union: {
     label: 'Union',
     icon: icon(<Combine size={16} aria-hidden="true" />),
@@ -163,6 +186,18 @@ export const TOOL_META: Record<ToolId, ToolMeta> = {
     group: 'finish',
     hint: 'Offset every face outward with sharp joins'
   },
+  draft: {
+    label: 'Draft',
+    icon: icon(<TriangleRight size={16} aria-hidden="true" />),
+    group: 'finish',
+    hint: 'Taper selected faces along a pull direction'
+  },
+  thicken: {
+    label: 'Thicken',
+    icon: icon(<PanelTopOpen size={16} aria-hidden="true" />),
+    group: 'finish',
+    hint: 'Turn one exact face into a solid wall'
+  },
   fillet: {
     label: 'Fillet',
     icon: icon(<Spline size={16} aria-hidden="true" />),
@@ -192,7 +227,11 @@ export const TOOL_META: Record<ToolId, ToolMeta> = {
 export const TOOL_GROUPS: { id: ToolGroup; label: string; tools: ToolId[] }[] =
   [
     { id: 'solid', label: 'Solids', tools: PRIMITIVE_TOOLS },
-    { id: 'sketch', label: 'Sketch', tools: ['sketch', 'extrude', 'revolve'] },
+    {
+      id: 'sketch',
+      label: 'Sketch',
+      tools: ['sketch', 'extrude', 'revolve', 'loft', 'sweep', 'helical-sweep']
+    },
     {
       id: 'modify',
       label: 'Modify',
@@ -204,6 +243,8 @@ export const TOOL_GROUPS: { id: ToolGroup; label: string; tools: ToolId[] }[] =
       tools: [
         'shell',
         'solid-offset',
+        'draft',
+        'thicken',
         'fillet',
         'chamfer',
         'linear-pattern',
@@ -235,13 +276,26 @@ export function toolDisabledReason(
     return 'Waiting for exact geometry';
   }
   if (
-    (tool === 'mirror' || tool === 'shell' || tool === 'solid-offset') &&
+    (tool === 'mirror' ||
+      tool === 'shell' ||
+      tool === 'solid-offset' ||
+      tool === 'draft' ||
+      tool === 'thicken') &&
     !avail.exactGeometryReady
   ) {
     return 'Waiting for exact geometry';
   }
   if ((tool === 'extrude' || tool === 'revolve') && avail.sketchCount === 0) {
     return 'Create a sketch first';
+  }
+  if (tool === 'loft' && avail.sketchCount < 2) {
+    return 'Create at least two closed sketch profiles';
+  }
+  if (
+    (tool === 'sweep' || tool === 'helical-sweep') &&
+    avail.sketchCount === 0
+  ) {
+    return 'Create a closed sketch profile first';
   }
   if (
     (tool === 'union' || tool === 'subtract' || tool === 'intersect') &&
@@ -257,7 +311,11 @@ export function toolDisabledReason(
     return 'Needs a body or a sketch';
   }
   if (
-    (tool === 'mirror' || tool === 'shell' || tool === 'solid-offset') &&
+    (tool === 'mirror' ||
+      tool === 'shell' ||
+      tool === 'solid-offset' ||
+      tool === 'draft' ||
+      tool === 'thicken') &&
     avail.liveBodyCount < 1
   ) {
     return 'Needs a body';
