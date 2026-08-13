@@ -20,6 +20,7 @@ import {
 } from '../pick/edges';
 import { VIEWPORT_RENDER_ORDER } from '../render/scene';
 import { createFaceHighlightGeometry } from './faceHighlightGeometry';
+import { easeToward, SETTLE_EPSILON } from '../motion';
 
 const HOVER_EMISSIVE = 0x101d2c;
 const HOVER_FACE_COLOR = 0x8fc8ff;
@@ -34,8 +35,6 @@ export const REGION_SELECTED_OPACITY = 0.52;
 
 /** Opacity a fading overlay settles on when it declares no target. */
 const DEFAULT_FADE_TARGET = 0.34;
-/** Below this delta a fade has visually arrived and stops being stepped. */
-const FADE_EPSILON = 0.004;
 
 /** Whether an edge is part of the committed selection, not just hovered. */
 export interface EdgeVisualState {
@@ -156,10 +155,10 @@ export class SelectionManager {
   get isSettling(): boolean {
     return (
       Math.abs(this.hoverFaceTarget - this.hoverFaceMesh.material.opacity) >=
-        FADE_EPSILON ||
+        SETTLE_EPSILON ||
       Math.abs(
         this.hoverHiddenFaceTarget - this.hoverHiddenFaceMesh.material.opacity
-      ) >= FADE_EPSILON ||
+      ) >= SETTLE_EPSILON ||
       this.fadeIns.size > 0
     );
   }
@@ -173,7 +172,7 @@ export class SelectionManager {
     this.hoverHiddenFaceMesh.visible =
       enabled &&
       (this.hoverFaceKey !== null ||
-        this.hoverHiddenFaceMesh.material.opacity >= FADE_EPSILON);
+        this.hoverHiddenFaceMesh.material.opacity >= SETTLE_EPSILON);
     this.options.requestRender();
   }
 
@@ -426,27 +425,29 @@ export class SelectionManager {
    * by the caller's render clock.
    */
   step(dt: number) {
-    const ease = 1 - Math.exp(-dt * 16);
+    const dtMs = dt * 1000;
     const hoverMaterial = this.hoverFaceMesh.material;
-    const hoverNext =
-      hoverMaterial.opacity +
-      (this.hoverFaceTarget - hoverMaterial.opacity) * ease;
-    hoverMaterial.opacity = hoverNext;
+    hoverMaterial.opacity = easeToward(
+      hoverMaterial.opacity,
+      this.hoverFaceTarget,
+      dtMs
+    );
     if (
       this.hoverFaceTarget === 0 &&
-      hoverNext < FADE_EPSILON &&
+      hoverMaterial.opacity < SETTLE_EPSILON &&
       this.hoverFaceMesh.visible
     ) {
       this.hoverFaceMesh.visible = false;
     }
     const hoverHiddenMaterial = this.hoverHiddenFaceMesh.material;
-    const hoverHiddenNext =
-      hoverHiddenMaterial.opacity +
-      (this.hoverHiddenFaceTarget - hoverHiddenMaterial.opacity) * ease;
-    hoverHiddenMaterial.opacity = hoverHiddenNext;
+    hoverHiddenMaterial.opacity = easeToward(
+      hoverHiddenMaterial.opacity,
+      this.hoverHiddenFaceTarget,
+      dtMs
+    );
     if (
       this.hoverHiddenFaceTarget === 0 &&
-      hoverHiddenNext < FADE_EPSILON &&
+      hoverHiddenMaterial.opacity < SETTLE_EPSILON &&
       this.hoverHiddenFaceMesh.visible
     ) {
       this.hoverHiddenFaceMesh.visible = false;
@@ -455,10 +456,8 @@ export class SelectionManager {
       const target =
         (material.userData.targetOpacity as number | undefined) ??
         DEFAULT_FADE_TARGET;
-      const next = material.opacity + (target - material.opacity) * ease;
-      material.opacity = next;
-      if (Math.abs(target - next) < FADE_EPSILON) {
-        material.opacity = target;
+      material.opacity = easeToward(material.opacity, target, dtMs);
+      if (material.opacity === target) {
         this.fadeIns.delete(material);
       }
     }
