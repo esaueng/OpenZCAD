@@ -44,6 +44,7 @@ import {
   inspectTriangleMeshClosure,
   isClosedConsistentlyOrientedMesh
 } from '../packages/kernel-adapter/src/boolean-result-validation';
+import { resolveImportedBlendFace } from '../apps/web/src/lib/interaction/filletFaceEdit';
 
 const NORMAL_PROJECTED_RADIUS_PX = 240;
 
@@ -3565,6 +3566,115 @@ describe('exact kernel adapter', { timeout: 30_000 }, () => {
     );
     expect(overcut.bodyRepresentations[importedBodyId]?.faceCount).toBe(6);
   });
+
+  it('resizes an imported analytic blend as replayable exact history', async () => {
+    const sourceDocument = addPrimitiveFeature(
+      createProjectDocument('Blend source', toUserId('user_exact')),
+      {
+        name: 'Blend block',
+        primitiveKind: 'box',
+        dimensions: { width: 20, height: 20, depth: 20 }
+      }
+    );
+    const sourceDerived = await adapter.syncDocument(sourceDocument);
+    const sourceBodyId = sourceDocument.bodyOrder[0]!;
+    const edgeHash = sourceDerived.bodyRepresentations[
+      sourceBodyId
+    ]?.topology?.edges.find((edge) => edge.displayRole !== 'seam')?.hash;
+    expect(edgeHash).toBeTypeOf('number');
+    const filleted = filletEdges(sourceDocument, {
+      name: 'Source fillet',
+      targetBodyId: sourceBodyId,
+      edgeHashes: [edgeHash!],
+      size: 3
+    }).document;
+    const filletedBodyId = filleted.bodyOrder.at(-1)!;
+    const stepText = await adapter.exportStep(filleted, [filletedBodyId]);
+    const manager = new CommandManager(
+      createProjectDocument('Imported blend', toUserId('user_exact'))
+    );
+    manager.execute(
+      commandFactories.importStep({
+        name: 'Analytic fillet plate',
+        artifactId: 'artifact_imported_blend',
+        sourceName: 'brepkit-fillet.step',
+        stepText
+      })
+    );
+    const bodyId = manager.document.bodyOrder[0]!;
+    const imported = await adapter.syncDocument(manager.document);
+    const source = imported.bodyRepresentations[bodyId]?.topology?.faces.find(
+      (face) => Math.abs((face.geometry?.blendRadius ?? 0) - 3) < 1e-6
+    );
+    expect(source).toBeTruthy();
+    const geometry = source!.geometry!;
+    const center =
+      geometry.surfaceType === 'torus'
+        ? geometry.torusCenter
+        : geometry.axisStart && geometry.axisEnd
+          ? {
+              x: (geometry.axisStart.x + geometry.axisEnd.x) / 2,
+              y: (geometry.axisStart.y + geometry.axisEnd.y) / 2,
+              z: (geometry.axisStart.z + geometry.axisEnd.z) / 2
+            }
+          : undefined;
+    const axis =
+      geometry.surfaceType === 'torus'
+        ? geometry.axis
+        : geometry.axisStart && geometry.axisEnd
+          ? {
+              x: geometry.axisEnd.x - geometry.axisStart.x,
+              y: geometry.axisEnd.y - geometry.axisStart.y,
+              z: geometry.axisEnd.z - geometry.axisStart.z
+            }
+          : undefined;
+    expect(
+      geometry.surfaceType === 'torus' || geometry.surfaceType === 'cylinder'
+    ).toBe(true);
+    expect(center).toBeTruthy();
+    expect(axis).toBeTruthy();
+
+    manager.execute(
+      commandFactories.directEditBody({
+        name: 'Resize imported blend',
+        targetBodyId: bodyId,
+        operation: {
+          kind: 'resize-blend',
+          faceHash: source!.hash,
+          ...(source!.reference ? { faceReference: source!.reference } : {}),
+          surfaceClass: geometry.surfaceType as 'torus' | 'cylinder',
+          recordedRadius: geometry.blendRadius!,
+          recordedCenter: center!,
+          recordedAxis: axis!,
+          newRadius: 2
+        }
+      })
+    );
+
+    const first = await adapter.syncDocument(manager.document);
+    const second = await adapter.syncDocument(manager.document);
+    expect(first.warnings).toEqual([]);
+    expect(second.warnings).toEqual([]);
+    const firstBody = first.bodyRepresentations[bodyId];
+    const secondBody = second.bodyRepresentations[bodyId];
+    const editFeature = listFeaturesInOrder(manager.document).at(-1)!;
+    const resizedFace = resolveImportedBlendFace(
+      firstBody?.topology?.faces ?? [],
+      source!,
+      String(editFeature.featureId)
+    );
+    expect(resizedFace?.geometry?.blendRadius).toBeCloseTo(2, 8);
+    expect(resizedFace?.reference?.producingFeatureId).toBe(
+      editFeature.featureId
+    );
+    expect(
+      firstBody?.topology?.faces.some(
+        (face) => Math.abs((face.geometry?.blendRadius ?? 0) - 2) < 1e-6
+      )
+    ).toBe(true);
+    expect(secondBody?.faceCount).toBe(firstBody?.faceCount);
+    expect(secondBody?.volume).toBeCloseTo(firstBody!.volume, 8);
+  }, 60_000);
 
   it('offsets a planar face on the exact sample bracket', async () => {
     const step = readFileSync(

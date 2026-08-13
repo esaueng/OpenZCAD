@@ -1,17 +1,32 @@
 import {
   coerceParamValue,
+  type DraftInput,
+  type HelicalSweepInput,
+  type LoftInput,
   type MirrorInput,
   type ShellInput,
-  type SolidOffsetInput
+  type SolidOffsetInput,
+  type SweepInput,
+  type ThickenInput
 } from '@openzcad/document-core';
 import type {
   BodyId,
   BodyTopology,
-  FaceTopologyReferenceV5
+  FaceTopologyReferenceV5,
+  SketchPathReference,
+  SketchSectionReference
 } from '@openzcad/shared';
 import { evalParamValue, previewExpression } from './model';
 
-export type ModelingOperationKind = 'mirror' | 'shell' | 'solid-offset';
+export type ModelingOperationKind =
+  | 'mirror'
+  | 'shell'
+  | 'solid-offset'
+  | 'loft'
+  | 'sweep'
+  | 'helical-sweep'
+  | 'draft'
+  | 'thicken';
 
 export type ExactPreflightState =
   | { status: 'idle' }
@@ -21,6 +36,18 @@ export type ExactPreflightState =
 
 export type ExactPreflightResult =
   { status: 'ready' } | { status: 'refused'; reason: string };
+
+export interface ModelingProfileOption {
+  id: string;
+  label: string;
+  section: SketchSectionReference;
+}
+
+export interface ModelingPathOption {
+  id: string;
+  label: string;
+  path: SketchPathReference;
+}
 
 export interface MirrorFormState {
   name: string;
@@ -42,15 +69,64 @@ export interface SolidOffsetFormState {
   distance: string;
 }
 
+export interface LoftFormState {
+  name: string;
+  sectionIds: string[];
+  mode: 'ruled' | 'smooth';
+}
+
+export interface SweepFormState {
+  name: string;
+  profileId: string;
+  pathId: string;
+  mode: 'standard' | 'smooth';
+}
+
+export interface HelicalSweepFormState {
+  name: string;
+  profileId: string;
+  axisOrigin: { x: string; y: string; z: string };
+  axisDirection: { x: string; y: string; z: string };
+  radius: string;
+  pitch: string;
+  turns: string;
+}
+
+export interface DraftFormState {
+  name: string;
+  targetBodyId: BodyId | '';
+  faceHashes: number[];
+  pullDirection: { x: string; y: string; z: string };
+  neutralPoint: { x: string; y: string; z: string };
+  angleDeg: string;
+}
+
+export interface ThickenFormState {
+  name: string;
+  targetBodyId: BodyId | '';
+  faceHash: number | null;
+  thickness: string;
+}
+
 export type ModelingOperationFormState =
   | { operation: 'mirror'; value: MirrorFormState }
   | { operation: 'shell'; value: ShellFormState }
-  | { operation: 'solid-offset'; value: SolidOffsetFormState };
+  | { operation: 'solid-offset'; value: SolidOffsetFormState }
+  | { operation: 'loft'; value: LoftFormState }
+  | { operation: 'sweep'; value: SweepFormState }
+  | { operation: 'helical-sweep'; value: HelicalSweepFormState }
+  | { operation: 'draft'; value: DraftFormState }
+  | { operation: 'thicken'; value: ThickenFormState };
 
 export type ModelingOperationSubmission =
   | { operation: 'mirror'; input: MirrorInput }
   | { operation: 'shell'; input: ShellInput }
-  | { operation: 'solid-offset'; input: SolidOffsetInput };
+  | { operation: 'solid-offset'; input: SolidOffsetInput }
+  | { operation: 'loft'; input: LoftInput }
+  | { operation: 'sweep'; input: SweepInput }
+  | { operation: 'helical-sweep'; input: HelicalSweepInput }
+  | { operation: 'draft'; input: DraftInput }
+  | { operation: 'thicken'; input: ThickenInput };
 
 export interface ModelingFaceOption {
   hash: number;
@@ -60,20 +136,13 @@ export interface ModelingFaceOption {
   reference?: FaceTopologyReferenceV5;
 }
 
-/**
- * There is one exact kernel, so nothing here branches on which one built the
- * body. Solid offset used to carry a `kernel`/`offsetTopology` pair whose only
- * job was to refuse curved, non-convex, or unproven topology on OpenCascade,
- * whose sharp offset was limited to proven convex planar bodies. Z3 routed
- * every document through BrepKit and the field went constant; Z5 deleted the
- * kernel and the refusal with it. A future capability gate belongs on a
- * measured property of the BODY, not on the name of the kernel.
- */
 export interface ModelingOperationCapability {
   exactState: 'ready' | 'pending' | 'failed';
   exactFailureReason?: string;
   hasTargetBody: boolean;
   openingFaceCount?: number;
+  profileCount?: number;
+  pathCount?: number;
 }
 
 function titleCase(value: string): string {
@@ -82,21 +151,8 @@ function titleCase(value: string): string {
     : `${value[0]!.toUpperCase()}${value.slice(1)}`;
 }
 
-/**
- * Lineage names worth showing a user are the SEMANTIC ones. A box face is
- * called `primitive.box.face.x.min` because the command said so, and "box ·
- * face · x · min" reads as what it is.
- *
- * Imported topology is named `import.step.face.<fingerprint>` (K0.6): an
- * import has no feature contract, so the fingerprint IS the name. Spelling
- * that out would print the hash twice in a label that already ends in
- * `· #hash`, so it is deliberately not a readable identity and the caller
- * falls back to the position, exactly as it did before imports were named.
- */
 function readableLineageName(value: string): string | null {
-  if (value.startsWith('import.step.')) {
-    return null;
-  }
+  if (value.startsWith('import.step.')) return null;
   return value
     .replace(/^(?:primitive|sweep)\./, '')
     .split('.')
@@ -134,6 +190,22 @@ export function modelingOperationDisabledReason(
   operation: ModelingOperationKind,
   capability: ModelingOperationCapability
 ): string | null {
+  const profileOperation =
+    operation === 'loft' ||
+    operation === 'sweep' ||
+    operation === 'helical-sweep';
+  if (profileOperation) {
+    if (operation === 'loft' && (capability.profileCount ?? 0) < 2) {
+      return 'Create at least two closed sketch profiles';
+    }
+    if ((capability.profileCount ?? 0) < 1) {
+      return 'Create a closed sketch profile';
+    }
+    if (operation === 'sweep' && (capability.pathCount ?? 0) < 1) {
+      return 'Create a line or arc path sketch';
+    }
+    return null;
+  }
   if (capability.exactState === 'pending') {
     return 'Waiting for exact geometry';
   }
@@ -156,123 +228,302 @@ function allExpressionsValid(
   return values.every((value) => previewExpression(value, scope).ok);
 }
 
+function resolvedExpression(
+  scope: Record<string, number>,
+  value: string
+): number | null {
+  return evalParamValue(coerceParamValue(value), scope);
+}
+
 function positiveExpression(
   scope: Record<string, number>,
   value: string
 ): boolean {
-  const paramValue = coerceParamValue(value);
-  const resolved = evalParamValue(paramValue, scope);
+  const resolved = resolvedExpression(scope, value);
   return resolved !== null && resolved > 0;
+}
+
+function nonZeroExpression(
+  scope: Record<string, number>,
+  value: string
+): boolean {
+  const resolved = resolvedExpression(scope, value);
+  return resolved !== null && resolved !== 0;
+}
+
+function nonZeroVector(
+  scope: Record<string, number>,
+  value: { x: string; y: string; z: string }
+): boolean {
+  const resolved = Object.values(value).map((component) =>
+    resolvedExpression(scope, component)
+  );
+  return (
+    resolved.every((component) => component !== null) &&
+    Math.hypot(...resolved) > 1e-12
+  );
 }
 
 export function modelingFormValidationReason(
   state: ModelingOperationFormState,
   scope: Record<string, number>
 ): string | null {
-  const { value } = state;
-  if (value.name.trim().length === 0) {
-    return 'Name is required.';
-  }
-  if (value.targetBodyId === '') {
-    return 'Select a target body.';
-  }
-  if (state.operation === 'mirror') {
-    const expressions = [
-      ...Object.values(state.value.origin),
-      ...Object.values(state.value.normal)
-    ];
-    if (!allExpressionsValid(scope, expressions)) {
-      return 'Mirror plane fields must be valid expressions.';
+  if (state.value.name.trim().length === 0) return 'Name is required.';
+  switch (state.operation) {
+    case 'loft':
+      return state.value.sectionIds.length >= 2 &&
+        new Set(state.value.sectionIds).size === state.value.sectionIds.length
+        ? null
+        : 'Choose at least two unique profile sections.';
+    case 'sweep':
+      return state.value.profileId && state.value.pathId
+        ? null
+        : 'Choose a profile and a path.';
+    case 'helical-sweep': {
+      const expressions = [
+        ...Object.values(state.value.axisOrigin),
+        ...Object.values(state.value.axisDirection),
+        state.value.radius,
+        state.value.pitch,
+        state.value.turns
+      ];
+      if (!state.value.profileId) return 'Choose a profile.';
+      if (!allExpressionsValid(scope, expressions)) {
+        return 'Helical sweep fields must be valid expressions.';
+      }
+      if (!nonZeroVector(scope, state.value.axisDirection)) {
+        return 'Helical axis direction must be non-zero.';
+      }
+      return positiveExpression(scope, state.value.radius) &&
+        nonZeroExpression(scope, state.value.pitch) &&
+        positiveExpression(scope, state.value.turns)
+        ? null
+        : 'Radius and turns must be positive; pitch must be non-zero.';
     }
-    const normal = Object.values(state.value.normal).map((component) =>
-      evalParamValue(coerceParamValue(component), scope)
-    );
-    if (
-      normal.some((component) => component === null) ||
-      Math.hypot(...(normal as number[])) <= 1e-12
-    ) {
-      return 'Mirror plane normal must be non-zero.';
+    case 'mirror': {
+      if (state.value.targetBodyId === '') return 'Select a target body.';
+      const expressions = [
+        ...Object.values(state.value.origin),
+        ...Object.values(state.value.normal)
+      ];
+      if (!allExpressionsValid(scope, expressions)) {
+        return 'Mirror plane fields must be valid expressions.';
+      }
+      return nonZeroVector(scope, state.value.normal)
+        ? null
+        : 'Mirror plane normal must be non-zero.';
     }
-    return null;
+    case 'shell':
+      if (state.value.targetBodyId === '') return 'Select a target body.';
+      if (!positiveExpression(scope, state.value.thickness)) {
+        return 'Shell thickness must resolve to a positive value.';
+      }
+      return state.value.openingFaceHashes.length > 0 &&
+        new Set(state.value.openingFaceHashes).size ===
+          state.value.openingFaceHashes.length
+        ? null
+        : 'Select at least one unique opening face.';
+    case 'solid-offset':
+      if (state.value.targetBodyId === '') return 'Select a target body.';
+      return positiveExpression(scope, state.value.distance)
+        ? null
+        : 'Solid offset distance must resolve to a positive value.';
+    case 'draft': {
+      if (state.value.targetBodyId === '') return 'Select a target body.';
+      if (state.value.faceHashes.length === 0) {
+        return 'Select at least one draft face.';
+      }
+      const expressions = [
+        ...Object.values(state.value.pullDirection),
+        ...Object.values(state.value.neutralPoint),
+        state.value.angleDeg
+      ];
+      if (!allExpressionsValid(scope, expressions)) {
+        return 'Draft fields must be valid expressions.';
+      }
+      if (!nonZeroVector(scope, state.value.pullDirection)) {
+        return 'Draft pull direction must be non-zero.';
+      }
+      return nonZeroExpression(scope, state.value.angleDeg)
+        ? null
+        : 'Draft angle must be non-zero.';
+    }
+    case 'thicken':
+      if (state.value.targetBodyId === '') return 'Select a target body.';
+      if (state.value.faceHash === null) return 'Select one face to thicken.';
+      return nonZeroExpression(scope, state.value.thickness)
+        ? null
+        : 'Thicken distance must be non-zero.';
   }
-  if (state.operation === 'shell') {
-    if (!positiveExpression(scope, state.value.thickness)) {
-      return 'Shell thickness must resolve to a positive value.';
+}
+
+function requireProfile(
+  id: string,
+  profiles: readonly ModelingProfileOption[]
+): SketchSectionReference {
+  const option = profiles.find((candidate) => candidate.id === id);
+  if (!option) throw new Error('Selected profile is no longer available.');
+  return option.section;
+}
+
+function requirePath(
+  id: string,
+  paths: readonly ModelingPathOption[]
+): SketchPathReference {
+  const option = paths.find((candidate) => candidate.id === id);
+  if (!option) throw new Error('Selected path is no longer available.');
+  return option.path;
+}
+
+function requireFaces(
+  hashes: readonly number[],
+  options: readonly ModelingFaceOption[]
+): ModelingFaceOption[] {
+  return hashes.map((hash) => {
+    const matches = options.filter((face) => face.hash === hash);
+    if (matches.length !== 1) {
+      throw new Error(`Face hash ${hash} did not resolve uniquely.`);
     }
-    if (
-      state.value.openingFaceHashes.length === 0 ||
-      new Set(state.value.openingFaceHashes).size !==
-        state.value.openingFaceHashes.length
-    ) {
-      return 'Select at least one unique opening face.';
-    }
-    return null;
-  }
-  return positiveExpression(scope, state.value.distance)
-    ? null
-    : 'Solid offset distance must resolve to a positive value.';
+    return matches[0]!;
+  });
 }
 
 export function buildModelingOperationSubmission(
   state: ModelingOperationFormState,
-  faceOptions: readonly ModelingFaceOption[] = []
+  faceOptions: readonly ModelingFaceOption[] = [],
+  profileOptions: readonly ModelingProfileOption[] = [],
+  pathOptions: readonly ModelingPathOption[] = []
 ): ModelingOperationSubmission {
-  const targetBodyId = state.value.targetBodyId;
-  if (targetBodyId === '') {
-    throw new Error('A target body is required.');
+  const name = state.value.name.trim();
+  if (state.operation === 'loft') {
+    return {
+      operation: 'loft',
+      input: {
+        name,
+        sections: state.value.sectionIds.map((id) =>
+          requireProfile(id, profileOptions)
+        ),
+        mode: state.value.mode
+      }
+    };
   }
+  if (state.operation === 'sweep') {
+    return {
+      operation: 'sweep',
+      input: {
+        name,
+        profile: requireProfile(state.value.profileId, profileOptions),
+        path: requirePath(state.value.pathId, pathOptions),
+        mode: state.value.mode
+      }
+    };
+  }
+  if (state.operation === 'helical-sweep') {
+    return {
+      operation: 'helical-sweep',
+      input: {
+        name,
+        profile: requireProfile(state.value.profileId, profileOptions),
+        axisOrigin: {
+          x: coerceParamValue(state.value.axisOrigin.x),
+          y: coerceParamValue(state.value.axisOrigin.y),
+          z: coerceParamValue(state.value.axisOrigin.z)
+        },
+        axisDirection: {
+          x: coerceParamValue(state.value.axisDirection.x),
+          y: coerceParamValue(state.value.axisDirection.y),
+          z: coerceParamValue(state.value.axisDirection.z)
+        },
+        radius: coerceParamValue(state.value.radius),
+        pitch: coerceParamValue(state.value.pitch),
+        turns: coerceParamValue(state.value.turns)
+      }
+    };
+  }
+  const targetBodyId = state.value.targetBodyId;
+  if (targetBodyId === '') throw new Error('A target body is required.');
   if (state.operation === 'mirror') {
-    const { value } = state;
     return {
       operation: 'mirror',
       input: {
-        name: value.name.trim(),
+        name,
         targetBodyId,
         plane: {
           origin: {
-            x: coerceParamValue(value.origin.x),
-            y: coerceParamValue(value.origin.y),
-            z: coerceParamValue(value.origin.z)
+            x: coerceParamValue(state.value.origin.x),
+            y: coerceParamValue(state.value.origin.y),
+            z: coerceParamValue(state.value.origin.z)
           },
           normal: {
-            x: coerceParamValue(value.normal.x),
-            y: coerceParamValue(value.normal.y),
-            z: coerceParamValue(value.normal.z)
+            x: coerceParamValue(state.value.normal.x),
+            y: coerceParamValue(state.value.normal.y),
+            z: coerceParamValue(state.value.normal.z)
           }
         }
       }
     };
   }
   if (state.operation === 'shell') {
-    const { value } = state;
-    const selected = value.openingFaceHashes.map((hash) => {
-      const matches = faceOptions.filter((face) => face.hash === hash);
-      if (matches.length !== 1) {
-        throw new Error(`Opening face hash ${hash} did not resolve uniquely.`);
-      }
-      return matches[0]!;
-    });
+    const selected = requireFaces(state.value.openingFaceHashes, faceOptions);
     const references = selected.every((face) => face.reference)
       ? selected.map((face) => face.reference!)
       : undefined;
     return {
       operation: 'shell',
       input: {
-        name: value.name.trim(),
+        name,
         targetBodyId,
         openingFaceHashes: selected.map((face) => face.hash),
         ...(references ? { openingFaceReferences: references } : {}),
-        thickness: coerceParamValue(value.thickness)
+        thickness: coerceParamValue(state.value.thickness)
       }
     };
   }
-  const { value } = state;
+  if (state.operation === 'solid-offset') {
+    return {
+      operation: 'solid-offset',
+      input: {
+        name,
+        targetBodyId,
+        distance: coerceParamValue(state.value.distance)
+      }
+    };
+  }
+  if (state.operation === 'draft') {
+    const selected = requireFaces(state.value.faceHashes, faceOptions);
+    const references = selected.every((face) => face.reference)
+      ? selected.map((face) => face.reference!)
+      : undefined;
+    return {
+      operation: 'draft',
+      input: {
+        name,
+        targetBodyId,
+        faceHashes: selected.map((face) => face.hash),
+        ...(references ? { faceReferences: references } : {}),
+        pullDirection: {
+          x: coerceParamValue(state.value.pullDirection.x),
+          y: coerceParamValue(state.value.pullDirection.y),
+          z: coerceParamValue(state.value.pullDirection.z)
+        },
+        neutralPoint: {
+          x: coerceParamValue(state.value.neutralPoint.x),
+          y: coerceParamValue(state.value.neutralPoint.y),
+          z: coerceParamValue(state.value.neutralPoint.z)
+        },
+        angleDeg: coerceParamValue(state.value.angleDeg)
+      }
+    };
+  }
+  const [selected] = requireFaces([state.value.faceHash!], faceOptions);
   return {
-    operation: 'solid-offset',
+    operation: 'thicken',
     input: {
-      name: value.name.trim(),
+      name,
       targetBodyId,
-      distance: coerceParamValue(value.distance)
+      faceHash: selected!.hash,
+      ...(selected!.reference ? { faceReference: selected!.reference } : {}),
+      thickness: coerceParamValue(state.value.thickness)
     }
   };
 }

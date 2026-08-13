@@ -63,7 +63,10 @@ import {
 } from '@openzcad/shared';
 import { displayTessellationForExtents } from '../../../packages/kernel-adapter/src/display-tessellation';
 import { importedMeshStl } from '../../../packages/kernel-adapter/src/imported-mesh';
-import { connectedRegionGroups, resolveRegionProfiles } from '../../../packages/kernel-adapter/src/region-profile';
+import {
+  connectedRegionGroups,
+  resolveRegionProfiles
+} from '../../../packages/kernel-adapter/src/region-profile';
 import {
   bezierProfileEdgesEnabled,
   flattenBezierCurve,
@@ -814,6 +817,10 @@ function applyDirectEdit(
     });
   } else if (operation.kind === 'offset-face') {
     output = offsetPlanarFace(kernel, owner, face, operation, scope);
+  } else if (operation.kind === 'resize-blend') {
+    throw new Error(
+      'OCCT parity reference does not implement imported blend resizing.'
+    );
   } else {
     const geometry = faceGeometry(kernel, owner, face);
     if (geometry.surfaceType !== operation.sourceSurfaceType) {
@@ -1170,10 +1177,7 @@ export class OcctStepKernelAdapter {
    * so the resulting edges carry the same ADR-011 fingerprints on both
    * kernels.
    */
-  private makeRegionFace(
-    region: SketchRegion,
-    basis: PlaneBasis
-  ): ShapeHandle {
+  private makeRegionFace(region: SketchRegion, basis: PlaneBasis): ShapeHandle {
     const exactBeziers = bezierProfileEdgesEnabled();
     const wireFor = (loop: SketchRegion['outer']): ShapeHandle => {
       const edges: ShapeHandle[] = [];

@@ -30,9 +30,11 @@ import {
   createSketchFeatureIds,
   deleteFeature,
   directEditBody,
+  draftBody,
   deleteParameter,
   evaluateExpression,
   extrudeSketch,
+  helicalSweepProfile,
   filletEdges,
   findFeature,
   findSketch,
@@ -41,6 +43,7 @@ import {
   importMeshBody,
   importStepBody,
   mirrorBody,
+  loftSections,
   offsetSolidBody,
   patternBody,
   renameNode,
@@ -49,19 +52,24 @@ import {
   setNodeMetadata,
   setParameter,
   shellBody,
+  sweepProfile,
+  thickenFace,
   transformBody,
   updateFeature,
   updateSketch,
   translateSketch,
   type BooleanInput,
   type DirectEditInput,
+  type DraftInput,
   type ExtrudeInput,
+  type HelicalSweepInput,
   type EdgeModifierInput,
   type FeatureDeleteInput,
   type FeatureUpdateInput,
   type ImportedMeshInput,
   type ImportedStepInput,
   type MirrorInput,
+  type LoftInput,
   type NodeMetadataInput,
   type NodeRenameInput,
   type ParameterDeleteInput,
@@ -77,6 +85,8 @@ import {
   type SketchUpdateInput,
   type ShellInput,
   type SolidOffsetInput,
+  type SweepInput,
+  type ThickenInput,
   type TransformInput
 } from '@openzcad/document-core';
 import {
@@ -102,11 +112,16 @@ export type CommandKind =
   | 'sketch.object.delete'
   | 'feature.extrude'
   | 'feature.revolve'
+  | 'feature.loft'
+  | 'feature.sweep'
+  | 'feature.helical-sweep'
   | 'feature.boolean'
   | 'feature.transform'
   | 'feature.mirror'
   | 'feature.shell'
   | 'feature.solid-offset'
+  | 'feature.draft'
+  | 'feature.thicken'
   | 'feature.direct-edit'
   | 'feature.fillet'
   | 'feature.chamfer'
@@ -146,11 +161,16 @@ export type AnyCommand =
   | CommandDefinition<SketchObjectDeleteInput>
   | CommandDefinition<ExtrudeInput>
   | CommandDefinition<RevolveInput>
+  | CommandDefinition<LoftInput>
+  | CommandDefinition<SweepInput>
+  | CommandDefinition<HelicalSweepInput>
   | CommandDefinition<BooleanInput>
   | CommandDefinition<TransformInput>
   | CommandDefinition<MirrorInput>
   | CommandDefinition<ShellInput>
   | CommandDefinition<SolidOffsetInput>
+  | CommandDefinition<DraftInput>
+  | CommandDefinition<ThickenInput>
   | CommandDefinition<DirectEditInput>
   | CommandDefinition<EdgeModifierInput>
   | CommandDefinition<PatternInput>
@@ -356,13 +376,40 @@ function validateModelingFeatureUpdate(
         throw new Error('Revolve requires an existing sketch.');
       }
       break;
+    case 'loft':
+      if (feature.data.sections.length < 2) {
+        throw new Error('Loft requires at least two profile sections.');
+      }
+      for (const section of feature.data.sections) {
+        if (!findSketch(preview, section.sketchId)) {
+          throw new Error(`Loft sketch ${section.sketchId} not found.`);
+        }
+      }
+      break;
+    case 'sweep': {
+      if (!findSketch(preview, feature.data.profile.sketchId)) {
+        throw new Error('Sweep profile sketch not found.');
+      }
+      const pathSketch = findSketch(preview, feature.data.path.sketchId);
+      if (!pathSketch || feature.data.path.entityIds.length === 0) {
+        throw new Error('Sweep path sketch is unavailable or empty.');
+      }
+      break;
+    }
+    case 'helical-sweep':
+      if (!findSketch(preview, feature.data.profile.sketchId)) {
+        throw new Error('Helical sweep profile sketch not found.');
+      }
+      break;
     case 'boolean': {
       const targetBodyIds = feature.data.targetBodyIds;
       if (targetBodyIds.length < 2) {
         throw new Error('Boolean operations need at least two target bodies.');
       }
       if (new Set(targetBodyIds).size !== targetBodyIds.length) {
-        throw new Error('Boolean operations cannot target the same body twice.');
+        throw new Error(
+          'Boolean operations cannot target the same body twice.'
+        );
       }
       const known = new Set(preview.bodyOrder);
       for (const bodyId of targetBodyIds) {
@@ -439,6 +486,15 @@ function validateModelingFeatureUpdate(
         'Solid offset distance',
         feature.data.distance
       );
+      break;
+    case 'draft':
+      validateBodyTarget(preview, feature.data.targetBodyId);
+      if (feature.data.faceHashes.length === 0) {
+        throw new Error('Draft requires at least one face.');
+      }
+      break;
+    case 'thicken':
+      validateBodyTarget(preview, feature.data.targetBodyId);
       break;
   }
 }
@@ -593,6 +649,66 @@ export const commandFactories = {
       }
     );
   },
+  loftSections(payload: LoftInput): CommandDefinition<LoftInput> {
+    const withIds = { ...payload, ids: payload.ids ?? createBodyFeatureIds() };
+    return makeCommand(
+      'feature.loft',
+      'Loft profiles',
+      withIds,
+      (document) => loftSections(document, withIds).document,
+      (document) => {
+        if (payload.sections.length < 2) {
+          throw new Error('Loft requires at least two profile sections.');
+        }
+        for (const section of payload.sections) {
+          if (!findSketch(document, section.sketchId)) {
+            throw new Error(`Loft sketch ${section.sketchId} not found.`);
+          }
+        }
+      }
+    );
+  },
+  sweepProfile(payload: SweepInput): CommandDefinition<SweepInput> {
+    const withIds = { ...payload, ids: payload.ids ?? createBodyFeatureIds() };
+    return makeCommand(
+      'feature.sweep',
+      'Sweep profile',
+      withIds,
+      (document) => sweepProfile(document, withIds).document,
+      (document) => {
+        if (!findSketch(document, payload.profile.sketchId)) {
+          throw new Error('Sweep profile sketch not found.');
+        }
+        const pathSketch = findSketch(document, payload.path.sketchId);
+        if (!pathSketch) {
+          throw new Error('Sweep path sketch not found.');
+        }
+        if (payload.path.entityIds.length === 0) {
+          throw new Error('Sweep requires at least one path entity.');
+        }
+        const available = new Set(pathSketch.objectIds);
+        if (payload.path.entityIds.some((id) => !available.has(id))) {
+          throw new Error('Sweep path references a missing sketch entity.');
+        }
+      }
+    );
+  },
+  helicalSweepProfile(
+    payload: HelicalSweepInput
+  ): CommandDefinition<HelicalSweepInput> {
+    const withIds = { ...payload, ids: payload.ids ?? createBodyFeatureIds() };
+    return makeCommand(
+      'feature.helical-sweep',
+      'Helical sweep profile',
+      withIds,
+      (document) => helicalSweepProfile(document, withIds).document,
+      (document) => {
+        if (!findSketch(document, payload.profile.sketchId)) {
+          throw new Error('Helical sweep profile sketch not found.');
+        }
+      }
+    );
+  },
   booleanBodies(payload: BooleanInput): CommandDefinition<BooleanInput> {
     const withIds = { ...payload, ids: payload.ids ?? createBodyFeatureIds() };
     return makeCommand(
@@ -663,6 +779,31 @@ export const commandFactories = {
           payload.distance
         );
       }
+    );
+  },
+  draftBody(payload: DraftInput): CommandDefinition<DraftInput> {
+    const withIds = { ...payload, ids: payload.ids ?? createBodyFeatureIds() };
+    return makeCommand(
+      'feature.draft',
+      'Draft faces',
+      withIds,
+      (document) => draftBody(document, withIds).document,
+      (document) => {
+        validateBodyTarget(document, payload.targetBodyId);
+        if (payload.faceHashes.length === 0) {
+          throw new Error('Draft requires at least one face.');
+        }
+      }
+    );
+  },
+  thickenFace(payload: ThickenInput): CommandDefinition<ThickenInput> {
+    const withIds = { ...payload, ids: payload.ids ?? createBodyFeatureIds() };
+    return makeCommand(
+      'feature.thicken',
+      'Thicken face',
+      withIds,
+      (document) => thickenFace(document, withIds).document,
+      (document) => validateBodyTarget(document, payload.targetBodyId)
     );
   },
   directEditBody(payload: DirectEditInput): CommandDefinition<DirectEditInput> {
@@ -1727,6 +1868,7 @@ export function commandsForCadPatch(
               operation.field === 'diameter') ||
             (edit.kind === 'resize-cylindrical-face' &&
               operation.field === 'radius') ||
+            (edit.kind === 'resize-blend' && operation.field === 'newRadius') ||
             (edit.kind === 'offset-face' && operation.field === 'offset');
           if (editable) {
             return commandFactories.updateFeature({
@@ -1937,6 +2079,18 @@ export function replayCommands(
       case 'feature.revolve':
         next = revolveSketch(next, command.payload as RevolveInput).document;
         break;
+      case 'feature.loft':
+        next = loftSections(next, command.payload as LoftInput).document;
+        break;
+      case 'feature.sweep':
+        next = sweepProfile(next, command.payload as SweepInput).document;
+        break;
+      case 'feature.helical-sweep':
+        next = helicalSweepProfile(
+          next,
+          command.payload as HelicalSweepInput
+        ).document;
+        break;
       case 'feature.boolean':
         next = booleanBodies(next, command.payload as BooleanInput).document;
         break;
@@ -1954,6 +2108,12 @@ export function replayCommands(
           next,
           command.payload as SolidOffsetInput
         ).document;
+        break;
+      case 'feature.draft':
+        next = draftBody(next, command.payload as DraftInput).document;
+        break;
+      case 'feature.thicken':
+        next = thickenFace(next, command.payload as ThickenInput).document;
         break;
       case 'feature.direct-edit':
         next = directEditBody(

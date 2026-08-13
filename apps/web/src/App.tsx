@@ -128,10 +128,7 @@ import {
   LOCAL_AUTOSAVE_FAILED_STATUS,
   reparkFailedAutosave
 } from './lib/localAutosaveFailure';
-import {
-  MAX_SOURCE_IMPORT_BYTES,
-  runStepImport
-} from './lib/stepImportRun';
+import { MAX_SOURCE_IMPORT_BYTES, runStepImport } from './lib/stepImportRun';
 import { presentedWorkspaceSaveState } from './lib/workspaceSaveStatePresentation';
 import {
   cancelDesktopSignIn,
@@ -234,8 +231,10 @@ import {
   blendRadialDirection,
   canRemoveImportedBlendFace,
   editableFilletFeature,
+  importedBlendSnapshot,
   newBlendFaceSelections,
-  resolveFilletBlendFace
+  resolveFilletBlendFace,
+  resolveImportedBlendFace
 } from './lib/interaction/filletFaceEdit';
 import { ToolCard } from './components/ToolCard';
 import { NumericKeypad, type KeypadRequest } from './components/NumericKeypad';
@@ -486,7 +485,9 @@ import {
   modelingFaceOptions,
   modelingOperationDisabledReason,
   type ModelingOperationKind,
-  type ModelingOperationSubmission
+  type ModelingOperationSubmission,
+  type ModelingPathOption,
+  type ModelingProfileOption
 } from './lib/modelingOperations';
 import {
   clearActiveProject,
@@ -1253,9 +1254,8 @@ export function App() {
                   version: number;
                   updatedAt: string;
                 }) => {
-                  const { uploadCloudThumbnail } = await import(
-                    './lib/cloudThumbnail'
-                  );
+                  const { uploadCloudThumbnail } =
+                    await import('./lib/cloudThumbnail');
                   return uploadCloudThumbnail(api, input);
                 }
               }
@@ -1340,9 +1340,7 @@ export function App() {
     new LivePreview<OffsetPreviewCandidate, OffsetPreviewResult>({
       build: (offset) => {
         const base = managerRef.current?.document;
-        const plan = base
-          ? buildOffsetEditPlan(offset, undefined, base)
-          : null;
+        const plan = base ? buildOffsetEditPlan(offset, undefined, base) : null;
         return base && plan
           ? {
               document: plan.command.apply(base),
@@ -1384,7 +1382,8 @@ export function App() {
             candidate.validationTargets.length === 0 &&
             documentMoved
           ) {
-            rejection = 'The document changed while the preview was rebuilding.';
+            rejection =
+              'The document changed while the preview was rebuilding.';
           }
         } else {
           rejection = directEditRejection({
@@ -2520,7 +2519,8 @@ export function App() {
       interaction.mode === 'face' &&
       interaction.op === 'edit-fillet' &&
       interaction.target.bodyId === selectedTopology.bodyId &&
-      interaction.target.filletFeatureId
+      (interaction.target.filletFeatureId ||
+        interaction.target.canResizeImportedBlend)
     ) {
       const sourceFace = representations[
         selectedTopology.bodyId
@@ -2528,7 +2528,13 @@ export function App() {
         (face) => face.topologyId === selectedTopology.topologyId
       );
       const regenerated = sourceFace
-        ? resolveFilletBlendFace(faces, sourceFace)
+        ? interaction.target.filletFeatureId
+          ? resolveFilletBlendFace(faces, sourceFace)
+          : resolveImportedBlendFace(
+              faces,
+              sourceFace,
+              interaction.target.directEditFeatureId
+            )
         : null;
       if (regenerated) {
         return {
@@ -4082,7 +4088,9 @@ export function App() {
     if (
       nextTool === 'mirror' ||
       nextTool === 'shell' ||
-      nextTool === 'solid-offset'
+      nextTool === 'solid-offset' ||
+      nextTool === 'draft' ||
+      nextTool === 'thicken'
     ) {
       setModelingTargetBodyId(
         selectedTopology?.bodyId ??
@@ -6770,8 +6778,17 @@ export function App() {
               representations[selection.bodyId]?.topology?.faces ?? []
             )
           : null;
+      const sourceFeature = features.find(
+        (feature) => feature.bodyId === selection.bodyId
+      );
+      const importedBlend =
+        !filletFeature &&
+        sourceFeature?.data.featureKind === 'imported-step' &&
+        faceTopology
+          ? importedBlendSnapshot(faceTopology)
+          : null;
       const filletRadialDirection =
-        filletFeature && geometry
+        (filletFeature || importedBlend) && geometry
           ? blendRadialDirection(geometry, detail.point, detail.normal)
           : null;
       const removableImportedBlend =
@@ -6825,6 +6842,30 @@ export function App() {
           ? { diameter: geometry.diameter }
           : {}),
         ...(filletFeature ? { filletFeatureId: filletFeature.featureId } : {}),
+        ...(importedBlend
+          ? {
+              canResizeImportedBlend: true,
+              blendSurfaceClass: importedBlend.surfaceClass,
+              blendCenter: [
+                importedBlend.center.x,
+                importedBlend.center.y,
+                importedBlend.center.z
+              ] as [number, number, number],
+              blendAxis: [
+                importedBlend.axis.x,
+                importedBlend.axis.y,
+                importedBlend.axis.z
+              ] as [number, number, number],
+              ...(faceTopology?.reference?.lineageName ===
+              'direct-edit.resize-blend.band'
+                ? {
+                    directEditFeatureId: String(
+                      faceTopology.reference.producingFeatureId
+                    )
+                  }
+                : {})
+            }
+          : {}),
         ...(removableImportedBlend ? { canRemoveFaceFeature: true } : {}),
         ...(radialFrame && geometry?.radius !== undefined
           ? {
@@ -7818,8 +7859,7 @@ export function App() {
         y: target.normal[1],
         z: target.normal[2]
       },
-      initialValue:
-        offsetPreviewValueRef.current ?? interaction.lastValue ?? 0,
+      initialValue: offsetPreviewValueRef.current ?? interaction.lastValue ?? 0,
       ...(totalBaseline === undefined ? {} : { totalBaseline })
     };
   }, [doc, interaction]);
@@ -8146,6 +8186,44 @@ export function App() {
             `Edit ${feature.name}`
           );
     }
+    if (
+      currentInteraction.mode === 'face' &&
+      currentInteraction.op === 'edit-fillet' &&
+      currentInteraction.target.canResizeImportedBlend
+    ) {
+      const target = currentInteraction.target;
+      if (
+        target.hash === undefined ||
+        target.blendRadius === undefined ||
+        !target.blendSurfaceClass ||
+        !target.blendCenter ||
+        !target.blendAxis
+      ) {
+        return null;
+      }
+      return commandFactories.directEditBody({
+        name: 'Resize Imported Blend',
+        targetBodyId: target.bodyId as BodyId,
+        operation: {
+          kind: 'resize-blend',
+          faceHash: target.hash,
+          ...(target.reference ? { faceReference: target.reference } : {}),
+          surfaceClass: target.blendSurfaceClass,
+          recordedRadius: target.blendRadius,
+          recordedCenter: {
+            x: target.blendCenter[0],
+            y: target.blendCenter[1],
+            z: target.blendCenter[2]
+          },
+          recordedAxis: {
+            x: target.blendAxis[0],
+            y: target.blendAxis[1],
+            z: target.blendAxis[2]
+          },
+          newRadius: size
+        }
+      });
+    }
     if (currentInteraction.mode !== 'edges') {
       return null;
     }
@@ -8255,7 +8333,7 @@ export function App() {
     ];
   }
 
-  /** Existing blend-face edits update/delete the history feature, never B-Rep. */
+  /** Commit a native history fillet or an exact imported-band direct edit. */
   function handleFilletFaceCommit(size: number, exact?: ParamValue) {
     if (!requireExactGeometryReady()) {
       return;
@@ -8266,15 +8344,23 @@ export function App() {
       !base ||
       current.mode !== 'face' ||
       current.op !== 'edit-fillet' ||
-      !current.target.filletFeatureId ||
       size < 0
     ) {
       return;
     }
-    const feature = findFeature(base, current.target.filletFeatureId);
-    if (feature?.data.featureKind !== 'fillet') {
+    const feature = current.target.filletFeatureId
+      ? findFeature(base, current.target.filletFeatureId)
+      : null;
+    const imported = current.target.canResizeImportedBlend === true;
+    if (
+      current.target.filletFeatureId &&
+      feature?.data.featureKind !== 'fillet'
+    ) {
       setStatus('The producing Fillet feature no longer exists.');
       dispatchInteraction({ type: 'clear' });
+      return;
+    }
+    if (!imported && feature?.data.featureKind !== 'fillet') {
       return;
     }
     const command = buildEdgeModifierCommand(exact ?? size, base);
@@ -8288,18 +8374,32 @@ export function App() {
     ]?.topology?.faces.find(
       (face) => face.topologyId === current.target.topologyId
     );
+    const committedDirectEditFeatureId =
+      imported &&
+      'ids' in command.payload &&
+      command.payload.ids &&
+      'featureId' in command.payload.ids
+        ? String(command.payload.ids.featureId)
+        : undefined;
     const targetBodyId = removing
-      ? feature.data.targetBodyId
+      ? feature?.data.featureKind === 'fillet'
+        ? feature.data.targetBodyId
+        : (current.target.bodyId as BodyId)
       : (current.target.bodyId as BodyId);
-    const validationTargets = removing
-      ? filletRemovalTargets(base, feature)
-      : affectedFeatureTargets(base, feature.featureId);
+    const validationTargets =
+      feature?.data.featureKind === 'fillet'
+        ? removing
+          ? filletRemovalTargets(base, feature)
+          : affectedFeatureTargets(base, feature.featureId)
+        : undefined;
     void executeValidatedDirectEdit(
       command,
       targetBodyId,
       removing
-        ? `Removed ${feature.name}.`
-        : `Set ${feature.name} radius to R ${formatNumber(size)} ${base.units}.`,
+        ? feature
+          ? `Removed ${feature.name}.`
+          : 'Removed imported blend.'
+        : `Set ${feature?.name ?? 'imported blend'} radius to R ${formatNumber(size)} ${base.units}.`,
       size,
       removing
         ? undefined
@@ -8311,11 +8411,18 @@ export function App() {
               ]?.topology?.faces;
             const regenerated =
               faces && sourceFace
-                ? resolveFilletBlendFace(faces, sourceFace)
+                ? feature
+                  ? resolveFilletBlendFace(faces, sourceFace)
+                  : resolveImportedBlendFace(
+                      faces,
+                      sourceFace,
+                      committedDirectEditFeatureId
+                    )
                 : null;
             if (!regenerated?.geometry) {
               return;
             }
+            const importedSnapshot = importedBlendSnapshot(regenerated);
             const radial = blendRadialDirection(
               regenerated.geometry,
               {
@@ -8335,8 +8442,10 @@ export function App() {
                     z: current.target.normal[2]
                   }
             );
+            const { reference: _staleReference, ...stableTarget } =
+              current.target;
             const nextTarget: FaceTarget = {
-              ...current.target,
+              ...stableTarget,
               topologyId: regenerated.topologyId,
               hash: regenerated.hash,
               ...(regenerated.reference
@@ -8348,6 +8457,25 @@ export function App() {
                 regenerated.geometry.center.y,
                 regenerated.geometry.center.z
               ],
+              ...(importedSnapshot
+                ? {
+                    canResizeImportedBlend: true,
+                    blendSurfaceClass: importedSnapshot.surfaceClass,
+                    blendCenter: [
+                      importedSnapshot.center.x,
+                      importedSnapshot.center.y,
+                      importedSnapshot.center.z
+                    ] as [number, number, number],
+                    blendAxis: [
+                      importedSnapshot.axis.x,
+                      importedSnapshot.axis.y,
+                      importedSnapshot.axis.z
+                    ] as [number, number, number],
+                    ...(committedDirectEditFeatureId
+                      ? { directEditFeatureId: committedDirectEditFeatureId }
+                      : {})
+                  }
+                : {}),
               ...(radial
                 ? {
                     radialDirection: [radial.x, radial.y, radial.z] as [
@@ -8369,7 +8497,18 @@ export function App() {
             };
             setSelectedTopology(selection);
             setSelectedBodyIds([current.target.bodyId as BodyId]);
-            setSelectedFeatureNodeId(feature.id);
+            const committedFeature = committed
+              ? [...listFeaturesInOrder(committed)]
+                  .reverse()
+                  .find(
+                    (candidate) =>
+                      candidate.data.featureKind === 'direct-edit' &&
+                      candidate.data.targetBodyId === current.target.bodyId
+                  )
+              : null;
+            setSelectedFeatureNodeId(
+              feature?.id ?? committedFeature?.id ?? null
+            );
             dispatchInteraction({ type: 'select-face', target: nextTarget });
           },
       validationTargets
@@ -8611,11 +8750,7 @@ export function App() {
   ): OffsetEditPlan | null {
     const current = interactionRef.current;
     const base = baseDocument ?? managerRef.current?.document;
-    if (
-      !base ||
-      current.mode !== 'face' ||
-      current.op !== 'offset-face'
-    ) {
+    if (!base || current.mode !== 'face' || current.op !== 'offset-face') {
       return null;
     }
     const target = current.target;
@@ -10010,13 +10145,77 @@ export function App() {
   const inspectorActive =
     !viewMode && !directMode && (tool !== null || selectedFeature !== null);
   const modelingOperation: ModelingOperationKind | null =
-    tool === 'mirror' || tool === 'shell' || tool === 'solid-offset'
+    tool === 'mirror' ||
+    tool === 'shell' ||
+    tool === 'solid-offset' ||
+    tool === 'loft' ||
+    tool === 'sweep' ||
+    tool === 'helical-sweep' ||
+    tool === 'draft' ||
+    tool === 'thicken'
       ? tool
       : null;
+  const modelingProfileOptions: ModelingProfileOption[] = sketchViews.flatMap(
+    (view) =>
+      view.regions.flatMap((region, index) => {
+        const sketchName =
+          sketchOptions.find((option) => option.sketchId === view.sketchId)
+            ?.name ?? 'Sketch';
+        const pick: RegionPickData = {
+          sketchId: view.sketchId,
+          profileId: region.profileId,
+          regionFingerprint: region.regionFingerprint,
+          samplePoint: region.samplePoint,
+          centroid: region.centroid,
+          boundingBox: region.boundingBox,
+          sourceEntityIds: region.sourceEntityIds,
+          area: region.area
+        };
+        const [profile] = profileReferencesForSelection(
+          [pick],
+          entityWideProfileSource
+        );
+        return !profile || profile.all === true
+          ? []
+          : [
+              {
+                id: `${view.sketchId}:${region.profileId}`,
+                label: `${sketchName} · Profile ${index + 1}`,
+                section: { sketchId: view.sketchId, profile }
+              }
+            ];
+      })
+  );
+  const modelingPathOptions: ModelingPathOption[] = doc
+    ? sketchOptions.flatMap((option) => {
+        const sketch = findSketch(doc, option.sketchId);
+        if (!sketch) return [];
+        const entityIds = sketch.objectIds.filter((entityId) => {
+          const node = doc.nodes[entityId];
+          return (
+            node?.kind === 'sketch-object' &&
+            (node.data.objectKind === 'line' || node.data.objectKind === 'arc')
+          );
+        });
+        return entityIds.length === 0
+          ? []
+          : [
+              {
+                id: option.sketchId,
+                label: `${option.name} · ${entityIds.length} path ${entityIds.length === 1 ? 'entity' : 'entities'}`,
+                path: { sketchId: option.sketchId, entityIds }
+              }
+            ];
+      })
+    : [];
   const modelingTargetBody = modelingTargetBodyId
     ? representations[modelingTargetBodyId]
     : undefined;
   const modelingFaces = modelingFaceOptions(modelingTargetBody?.topology);
+  const modelingOperationFaces =
+    modelingOperation === 'draft'
+      ? modelingFaces.filter((face) => face.surfaceType === 'plane')
+      : modelingFaces;
   const modelingUnsupportedReason = modelingOperation
     ? (editDisabledReason ??
       modelingOperationDisabledReason(modelingOperation, {
@@ -10027,7 +10226,9 @@ export function App() {
             : 'pending',
         exactFailureReason: geometry.state.error,
         hasTargetBody: Boolean(modelingTargetBody),
-        openingFaceCount: modelingFaces.length
+        openingFaceCount: modelingOperationFaces.length,
+        profileCount: modelingProfileOptions.length,
+        pathCount: modelingPathOptions.length
       }))
     : null;
 
@@ -10041,6 +10242,16 @@ export function App() {
         return commandFactories.shellBody(submission.input);
       case 'solid-offset':
         return commandFactories.offsetSolidBody(submission.input);
+      case 'loft':
+        return commandFactories.loftSections(submission.input);
+      case 'sweep':
+        return commandFactories.sweepProfile(submission.input);
+      case 'helical-sweep':
+        return commandFactories.helicalSweepProfile(submission.input);
+      case 'draft':
+        return commandFactories.draftBody(submission.input);
+      case 'thicken':
+        return commandFactories.thickenFace(submission.input);
     }
   }
 
@@ -10902,7 +11113,9 @@ export function App() {
                 operation={modelingOperation}
                 scope={parameterScope.scope}
                 bodies={bodyOptions}
-                faceOptions={modelingFaces}
+                faceOptions={modelingOperationFaces}
+                profileOptions={modelingProfileOptions}
+                pathOptions={modelingPathOptions}
                 initialTarget={modelingTargetBodyId ?? undefined}
                 unsupportedReason={modelingUnsupportedReason ?? undefined}
                 onPreflight={preflightModelingSubmission}
@@ -10934,7 +11147,7 @@ export function App() {
                 onRequestOpeningFaceSelection={() => {
                   setManualSelectionFilter('face');
                   setStatus(
-                    'Shell: pick an exact opening face, then select it in the face list.'
+                    `${TOOL_META[modelingOperation].label}: pick an exact face, then select it in the face list.`
                   );
                 }}
               />

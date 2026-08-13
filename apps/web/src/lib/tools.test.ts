@@ -35,8 +35,14 @@ describe('finish tool selection order', () => {
     ).toBe('Waiting for exact geometry');
   });
 
-  it('gates mirror, shell, and solid offset on one exact live body', () => {
-    for (const tool of ['mirror', 'shell', 'solid-offset'] as const) {
+  it('gates exact body modifiers on one exact live body', () => {
+    for (const tool of [
+      'mirror',
+      'shell',
+      'solid-offset',
+      'draft',
+      'thicken'
+    ] as const) {
       expect(
         toolDisabledReason(tool, {
           sketchCount: 0,
@@ -62,5 +68,24 @@ describe('finish tool selection order', () => {
         })
       ).toBeNull();
     }
+  });
+
+  it('gates profile tools on authored sketch profiles', () => {
+    expect(
+      toolDisabledReason('loft', {
+        sketchCount: 1,
+        liveBodyCount: 0,
+        exactGeometryReady: true,
+        hasEdgeSelected: false
+      })
+    ).toBe('Create at least two closed sketch profiles');
+    expect(
+      toolDisabledReason('sweep', {
+        sketchCount: 1,
+        liveBodyCount: 0,
+        exactGeometryReady: true,
+        hasEdgeSelected: false
+      })
+    ).toBeNull();
   });
 });
