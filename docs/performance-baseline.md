@@ -295,6 +295,44 @@ recorded above for startup, where a CPU profile put ~909 ms in V8's
 ~40 ms headed on a real GPU. **Re-measure this one headed on target hardware
 before optimising it**, exactly as the startup finding says.
 
+#### The same probes on the target GPU (2026-08-13)
+
+Answering the question the section above ends on. Identical build and probes,
+run headed on the same machine so the renderer is ANGLE Metal on the Apple M5
+Pro rather than SwiftShader:
+
+| Scenario | Frame p50 | Frame p95 | Frame max | React commits |
+| --- | ---: | ---: | ---: | ---: |
+| Orbit + pan | 8.3 ms | 8.9 ms | 16.8 ms | — |
+| Hover sweep (121 moves) | 8.4 ms | 16.7 ms | 17.6 ms | 0 |
+| Move drag (60 moves) | 16.7 ms | 17.6 ms | 91.7 ms | 2 |
+| Preview drag (50 moves) | 8.4 ms | 25.1 ms | 33.5 ms | 6 |
+
+Cylinder-radius input-to-frame stays at 0.9 ms p50, and the coalescing probe
+still collapses 120 synthetic moves into 2 applications.
+
+**The preview drag's half-second frames do not exist here**: p95 is 25 ms
+against ~500 ms under SwiftShader, and the worst frame in the whole drag is
+33 ms. That closes the question this document raised — the stall was a
+software-rasteriser artifact, exactly as the startup finding warned it might
+be, and no scene-rebuild work is justified by it.
+
+Two things this run does say are real:
+
+- The display runs at 120 Hz and most interaction meets it — orbit sits at
+  8.3 ms p50 with a 8.9 ms p95, which is a frame budget met with room to
+  spare.
+- **A move drag does not**: 16.7 ms p50 is exactly half rate, with a 91.7 ms
+  worst frame, while an orbit on the same model holds 8.3 ms. The drag's
+  per-application work is the difference — it resolves snap candidates over
+  every edge and face centre of the other bodies — and that is a real target
+  rather than an artifact.
+
+Treat this table as the acceptance baseline for interaction feel. The
+SwiftShader numbers remain useful for draw calls, triangles, React commits,
+and drag applications, which are hardware-independent; they are not evidence
+about smoothness.
+
 **A third harness note, for drag coalescing.** Neither the scenarios above nor
 any CDP-driven drag can show whether drag work is coalesced: each
 `page.mouse.move` round-trips and yields, so the browser paints between
