@@ -1345,6 +1345,13 @@ export function ModelViewer({
 
     let animationFrame: number | null = null;
     let pendingHoverEvent: PointerEvent | null = null;
+    /**
+     * Newest pointer event of an in-flight drag, applied once per frame.
+     * A drag only ever needs the latest position — it is absolute, not
+     * path-integrated — so processing every raw event just does the same
+     * snap scans and HUD layout several times per painted frame.
+     */
+    let pendingDragEvent: PointerEvent | null = null;
     let resizePending = false;
 
     function requestRender() {
@@ -4389,10 +4396,10 @@ export function ModelViewer({
       }
     }
 
-    const handlePointerMove = (event: PointerEvent) => {
-      lastPickListPointer = event;
-      if (event.buttons !== 0) {
-        pendingHoverEvent = null;
+    const applyPointerMove = (event: PointerEvent) => {
+      if (import.meta.env.OZ_PERF === '1') {
+        const scope = window as typeof window & { __ozDragApplies?: number };
+        scope.__ozDragApplies = (scope.__ozDragApplies ?? 0) + 1;
       }
       if (boxSelect && event.pointerId === boxSelect.pointerId) {
         drawSelectionBand(boxSelect.startX, boxSelect.startY, event);
@@ -4408,7 +4415,6 @@ export function ModelViewer({
           }
         }
       }
-      rightClickGesture.move(event.pointerId, event.clientX, event.clientY);
       if (moveDrag && event.pointerId === moveDrag.pointerId) {
         event.preventDefault();
         const drag = moveDrag;
@@ -4726,6 +4732,52 @@ export function ModelViewer({
       pendingHoverEvent = event;
       requestRender();
     };
+
+    /**
+     * Which drag owns this pointer, if any. `band` is the selection rubber
+     * band, which is the one drag that never suppressed the browser's default
+     * handling; the rest always have.
+     */
+    function pointerDragKind(event: PointerEvent): 'band' | 'handle' | null {
+      const pointerId = event.pointerId;
+      if (boxSelect !== null && boxSelect.pointerId === pointerId) {
+        return 'band';
+      }
+      return (moveDrag !== null && moveDrag.pointerId === pointerId) ||
+        (offsetDrag !== null && offsetDrag.pointerId === pointerId) ||
+        (cylinderRadiusDrag !== null &&
+          cylinderRadiusDrag.pointerId === pointerId) ||
+        (extrudeDrag !== null && extrudeDrag.pointerId === pointerId) ||
+        (faceDrag !== null && faceDrag.pointerId === pointerId)
+        ? 'handle'
+        : null;
+    }
+
+    const handlePointerMove = (event: PointerEvent) => {
+      lastPickListPointer = event;
+      // Threshold tracking sees every event on purpose: it decides whether a
+      // right-drag was a click, and sampling that at frame rate can miss the
+      // moment the pointer crossed the threshold and came back.
+      rightClickGesture.move(event.pointerId, event.clientX, event.clientY);
+      if (event.buttons !== 0) {
+        pendingHoverEvent = null;
+      }
+      const dragKind = pointerDragKind(event);
+      if (dragKind) {
+        if (dragKind === 'handle') {
+          // preventDefault has to happen while the event is being dispatched,
+          // so it cannot wait for the frame that consumes the position. The
+          // calls inside the handle branches are no-ops by then, and are kept
+          // only because those branches also run synchronously on release.
+          event.preventDefault();
+        }
+        pendingDragEvent = event;
+        requestRender();
+        return;
+      }
+      applyPointerMove(event);
+    };
+
     /**
      * Orbit turns about the geometry under the cursor at gesture start, so a
      * detail being pointed at stays put while the view swings around it.
@@ -5151,6 +5203,14 @@ export function ModelViewer({
       event.preventDefault();
     };
     const handlePointerUp = (event: PointerEvent) => {
+      // The last pointer position may still be waiting for a frame. Apply it
+      // before the release is handled, or the drag settles on the
+      // second-to-last position and that is what gets committed.
+      if (pendingDragEvent && pendingDragEvent.pointerId === event.pointerId) {
+        const finalMove = pendingDragEvent;
+        pendingDragEvent = null;
+        applyPointerMove(finalMove);
+      }
       if (event.pointerId === shiftOrbitPointerId) {
         shiftOrbitPointerId = null;
         cameraRig.setShiftOrbitActive(false);
@@ -5548,6 +5608,11 @@ export function ModelViewer({
     };
     const handlePointerCancel = (event: PointerEvent) => {
       pendingHoverEvent = null;
+      // A cancelled gesture discards its pending position rather than
+      // applying it: the drag is being abandoned, not completed.
+      if (pendingDragEvent && pendingDragEvent.pointerId === event.pointerId) {
+        pendingDragEvent = null;
+      }
       if (event.pointerId === shiftOrbitPointerId) {
         shiftOrbitPointerId = null;
         cameraRig.setShiftOrbitActive(false);
@@ -5746,6 +5811,11 @@ export function ModelViewer({
       // Camera glide first so controls and the ortho mirror see the result.
       const tweening = cameraRig.stepTween(now);
       const controlsChanged = cameraRig.stepOrbit(now);
+      const dragEvent = pendingDragEvent;
+      pendingDragEvent = null;
+      if (dragEvent) {
+        applyPointerMove(dragEvent);
+      }
       const hoverEvent = pendingHoverEvent;
       pendingHoverEvent = null;
       if (hoverEvent) {

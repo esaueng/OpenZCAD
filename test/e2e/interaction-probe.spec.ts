@@ -111,10 +111,26 @@ async function reactCommits(page: Page): Promise<number> {
 async function beginWindow(page: Page): Promise<number> {
   return page.evaluate(() => {
     performance.clearMarks('oz:viewer.frame');
-    (window as typeof window & { __ozReactCommits?: number }).__ozReactCommits =
-      0;
+    const scope = window as typeof window & {
+      __ozReactCommits?: number;
+      __ozDragApplies?: number;
+    };
+    scope.__ozReactCommits = 0;
+    scope.__ozDragApplies = 0;
     return performance.now();
   });
+}
+
+/**
+ * How many times the viewport ran its pointer-move work. A coalesced drag
+ * runs it once per painted frame rather than once per raw pointer event.
+ */
+async function dragApplies(page: Page): Promise<number> {
+  return page.evaluate(
+    () =>
+      (window as typeof window & { __ozDragApplies?: number })
+        .__ozDragApplies ?? 0
+  );
 }
 
 function reportFrames(
@@ -466,9 +482,15 @@ test('move drag probe', async ({ page }) => {
 
   const frames = await frameSamples(page, startedAt);
   const commits = await reactCommits(page);
+  const applies = await dragApplies(page);
   reportFrames(
     'MOVE_DRAG_PERF',
-    { demo: 'Heat Sink', pointerMoves: 60, reactCommits: commits },
+    {
+      demo: 'Heat Sink',
+      pointerMoves: 60,
+      reactCommits: commits,
+      dragApplies: applies
+    },
     frames
   );
   expect(frames.length).toBeGreaterThan(5);
@@ -558,10 +580,111 @@ test('preview drag probe', async ({ page }) => {
 
   const frames = await frameSamples(page, startedAt);
   const commits = await reactCommits(page);
+  const applies = await dragApplies(page);
   reportFrames(
     'PREVIEW_DRAG_PERF',
-    { demo: 'Heat Sink', pointerMoves: 50, reactCommits: commits },
+    {
+      demo: 'Heat Sink',
+      pointerMoves: 50,
+      reactCommits: commits,
+      dragApplies: applies
+    },
     frames
   );
   expect(frames.length).toBeGreaterThan(5);
+});
+
+/**
+ * A burst of pointer moves inside a single task, standing in for a high-rate
+ * mouse. Driving this through the harness proves nothing: each CDP mouse move
+ * round-trips and yields, so the browser paints between events and the drag
+ * would run once per move no matter what the code does. Dispatched
+ * synchronously, the whole burst lands before any frame can run, which is the
+ * situation coalescing exists for — the drag's work includes a snap scan over
+ * every edge and face centre of the other bodies.
+ */
+test('drag coalescing probe', async ({ page }) => {
+  const { canvas, bounds } = await openHeatSink(page);
+
+  await page.mouse.click(
+    bounds.x + bounds.width * 0.52,
+    bounds.y + bounds.height * 0.5
+  );
+  await page.waitForTimeout(300);
+  const moveButton = page.getByRole('button', { name: /^Move/ });
+  if (!(await moveButton.isEnabled().catch(() => false))) {
+    test.skip(true, 'Move tool is unavailable for the demo selection.');
+  }
+  await moveButton.click();
+  await page.waitForTimeout(400);
+
+  // The synthetic moves have to carry the real gesture's pointer id, or the
+  // drag branches ignore them.
+  await canvas.evaluate((element) => {
+    const scope = window as typeof window & { __ozProbePointerId?: number };
+    element.addEventListener(
+      'pointerdown',
+      (event) => {
+        scope.__ozProbePointerId = (event as PointerEvent).pointerId;
+      },
+      { once: true, capture: true }
+    );
+  });
+
+  const center = {
+    x: bounds.x + bounds.width * 0.52,
+    y: bounds.y + bounds.height * 0.5
+  };
+  await page.mouse.move(center.x, center.y);
+  await page.mouse.down();
+  await page.waitForTimeout(100);
+
+  const startedAt = await beginWindow(page);
+  const moves = 120;
+  await canvas.evaluate(
+    (element, { moves, center }) => {
+      const scope = window as typeof window & { __ozProbePointerId?: number };
+      const pointerId = scope.__ozProbePointerId ?? 1;
+      for (let index = 1; index <= moves; index += 1) {
+        element.dispatchEvent(
+          new PointerEvent('pointermove', {
+            pointerId,
+            pointerType: 'mouse',
+            buttons: 1,
+            clientX: center.x + index * 0.5,
+            clientY: center.y,
+            bubbles: true,
+            cancelable: true
+          })
+        );
+      }
+    },
+    { moves, center }
+  );
+
+  // Let the frame that consumes the burst run before counting it.
+  await page.waitForTimeout(80);
+  const applies = await dragApplies(page);
+  await page.mouse.up();
+  await page.keyboard.press('Escape');
+  await page.waitForTimeout(200);
+
+  const frames = await frameSamples(page, startedAt);
+  const commits = await reactCommits(page);
+  console.log(
+    'DRAG_COALESCING_PERF ' +
+      JSON.stringify(
+        {
+          pointerMoves: moves,
+          dragApplies: applies,
+          reactCommits: commits,
+          renderedFrames: frames.length
+        },
+        null,
+        2
+      )
+  );
+  // A whole burst inside one task collapses to the single frame that follows
+  // it. Without coalescing this equals the pointer event count.
+  expect(applies).toBeLessThanOrEqual(2);
 });
