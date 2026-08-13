@@ -654,10 +654,16 @@ function clampNameCallouts(container: HTMLElement) {
   }
   const bounds = container.getBoundingClientRect();
   const pad = 4;
-  for (const label of labels) {
-    const currentLeft = parseFloat(label.style.marginLeft) || 0;
-    const currentTop = parseFloat(label.style.marginTop) || 0;
-    const rect = label.getBoundingClientRect();
+  // Every rect is read before any margin is written. Interleaving them made
+  // each write invalidate layout for the next read, so a frame with N
+  // callouts forced N reflows instead of one.
+  const measured = [...labels].map((label) => ({
+    label,
+    currentLeft: parseFloat(label.style.marginLeft) || 0,
+    currentTop: parseFloat(label.style.marginTop) || 0,
+    rect: label.getBoundingClientRect()
+  }));
+  for (const { label, currentLeft, currentTop, rect } of measured) {
     const baseLeft = rect.left - currentLeft;
     const baseRight = rect.right - currentLeft;
     const baseTop = rect.top - currentTop;
