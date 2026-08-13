@@ -146,6 +146,14 @@ interface ViewerShellProps {
     ((point: { x: number; y: number } | null) => void) | null
   >;
   offsetSetterRef: MutableRefObject<((offset: number) => void) | null>;
+  moveValuesSetterRef: MutableRefObject<
+    | ((
+        translation: MovePreview['translation'],
+        rotationDeg: MovePreview['rotationDeg'],
+        snap: MoveSnap
+      ) => void)
+    | null
+  >;
   cylinderRadiusHandle: CylinderRadiusHandleTarget | null;
   cylinderDimensionMode: DimensionMode;
   onCylinderDimensionModeChange(mode: DimensionMode): void;
@@ -252,6 +260,7 @@ export function ViewerShell({
   onOpenOffsetKeypad,
   keypadAnchorRef,
   offsetSetterRef,
+  moveValuesSetterRef,
   cylinderRadiusHandle,
   cylinderDimensionMode,
   onCylinderDimensionModeChange,
@@ -382,6 +391,7 @@ export function ViewerShell({
         onOpenOffsetKeypad={onOpenOffsetKeypad}
         keypadAnchorRef={keypadAnchorRef}
         offsetSetterRef={offsetSetterRef}
+        moveValuesSetterRef={moveValuesSetterRef}
         cylinderRadiusHandle={cylinderRadiusHandle}
         cylinderDimensionMode={cylinderDimensionMode}
         onCylinderDimensionModeChange={onCylinderDimensionModeChange}
