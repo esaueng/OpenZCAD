@@ -5,6 +5,36 @@ reference its inventory). Goal: make modeling interaction feel like
 mainstream CAD — no hitches on gesture start, geometry that tracks the hand,
 transitions instead of pops, and instrumentation that keeps it that way.
 
+## Status (2026-08-13)
+
+Branch `claude/3d-modeling-interface-refinement-e7b650`.
+
+| Item | State |
+| --- | --- |
+| 0.1 phantom hover batches | **done** — `27f3483`, frame p50 24.9 → 16.7 ms |
+| 0.2 probe scenarios + commit counter | **done** — `ba36034` |
+| 0.3 baseline captured | **done** — `docs/performance-baseline.md` Wave 4 |
+| 1.1 memoize viewport array props | **done** — `17b7364`, move drag 121 → 61 rendered frames |
+| 1.2 move drag off workspace state | **done** — `1034669`, 61 → 2 React commits |
+| 1.2 extrude drag | **not started** — see note below |
+| 1.2 cylinder-radius Inspector throttle | **not started** |
+| 1.3 rAF-coalesce drag handlers | **not started** |
+| 1.4 in-place preview geometry | **not started** — the largest remaining item |
+| Phases 2–5 | **not started** |
+
+**Note on the extrude drag.** It does not take the same fix as the move drag.
+A move drag already updated the scene imperatively through
+`applyMovePreview`, so the state write was pure display and could be replaced
+by a sink. The extrude ghost is built *from* `extrudePreview.distance` in
+workspace state, so removing the per-move write means giving the viewport an
+imperative extrude preview first. That belongs with 1.4, not ahead of it.
+
+**Known flake, not a regression.** `visual-selection-live-preview.spec.ts:3`
+fails under full-suite load and passes in isolation. Verified against the same
+commit with these changes stashed: the suite fails there too (that run also
+lost `viewport.spec.ts:367`). Attribute a failure in either only after a
+stashed comparison run.
+
 ## Ground rules
 
 - One phase = one PR series on its own branch; every PR carries before/after
