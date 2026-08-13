@@ -1169,6 +1169,18 @@ export function App() {
   >(null);
   /** Lets keypad typing drive the viewport's offset-handle preview. */
   const offsetSetterRef = useRef<((offset: number) => void) | null>(null);
+  /**
+   * Live move-drag values, published by the viewport straight to the panel
+   * that shows them. Workspace state learns the result when the drag settles.
+   */
+  const moveValuesSetterRef = useRef<
+    | ((
+        translation: MovePreview['translation'],
+        rotationDeg: MovePreview['rotationDeg'],
+        snap: MoveSnap
+      ) => void)
+    | null
+  >(null);
   /** Localized inspector update; avoids rerendering the whole workspace per move. */
   const cylinderRadiusInspectorSetterRef = useRef<
     ((radius: number | null) => void) | null
@@ -4247,6 +4259,24 @@ export function App() {
       );
     }
   }
+
+  /**
+   * A settled move drag, not a live one: the viewport streams the in-progress
+   * values straight to the panel, and calls this once when the gesture ends.
+   */
+  const handleMovePreviewChange = useCallback(
+    (
+      translation: MovePreview['translation'],
+      rotationDeg: MovePreview['rotationDeg'],
+      snap: MoveSnap
+    ) => {
+      setMoveSnap(snap);
+      setMovePreview((current) =>
+        current ? { ...current, translation, rotationDeg } : current
+      );
+    },
+    []
+  );
 
   function confirmMove() {
     const preview = movePreview;
@@ -10618,12 +10648,8 @@ export function App() {
             onRedo={handleRedo}
             initialView={initialView}
             onViewChange={handleViewportChange}
-            onMovePreviewChange={(translation, rotationDeg, snap) => {
-              setMoveSnap(snap);
-              setMovePreview((current) =>
-                current ? { ...current, translation, rotationDeg } : current
-              );
-            }}
+            onMovePreviewChange={handleMovePreviewChange}
+            moveValuesSetterRef={moveValuesSetterRef}
             offsetHandle={viewMode ? null : offsetHandleTarget}
             onOffsetPreview={handleOffsetPreview}
             onOffsetCommit={handleOffsetCommit}
@@ -11009,6 +11035,7 @@ export function App() {
                   }
                   onConfirm={confirmMove}
                   onCancel={cancelPanel}
+                  liveValuesRef={moveValuesSetterRef}
                 />
               ) : tool === 'sketch' ? (
                 <div className="sketch-plane-prompt" role="status">
