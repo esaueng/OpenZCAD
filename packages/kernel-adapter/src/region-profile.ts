@@ -8,12 +8,17 @@ import {
   type SketchRegion
 } from '@openzcad/geometry';
 import type {
-  FeatureNode,
   ProjectDocument,
   SketchEntityProfileReference,
   SketchNode,
-  SketchObjectNode
+  SketchObjectNode,
+  SketchProfileReference
 } from '@openzcad/shared';
+
+export interface ProfileReferenceData {
+  profile?: SketchProfileReference;
+  profiles?: SketchProfileReference[];
+}
 
 /**
  * Every profile bounded solely by the referenced entities.
@@ -81,7 +86,7 @@ function resolveEntityProfiles(
 export function resolveRegionProfiles(
   document: ProjectDocument,
   sketch: SketchNode,
-  data: Extract<FeatureNode['data'], { featureKind: 'extrude' }>,
+  data: ProfileReferenceData,
   scope: Record<string, number>,
   options?: SketchProfileAnalysisOptions
 ): SketchRegion[] {
@@ -179,7 +184,7 @@ export function resolveRegionProfiles(
 export function resolveRegionProfile(
   document: ProjectDocument,
   sketch: SketchNode,
-  data: Extract<FeatureNode['data'], { featureKind: 'extrude' }>,
+  data: ProfileReferenceData,
   scope: Record<string, number>,
   options?: SketchProfileAnalysisOptions
 ): SketchRegion {

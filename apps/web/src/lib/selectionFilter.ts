@@ -22,11 +22,16 @@ const FILTER_BY_TOOL: Partial<Record<ToolId, SelectionFilter>> = {
   mirror: 'body',
   shell: 'face',
   'solid-offset': 'body',
+  draft: 'face',
+  thicken: 'face',
   'linear-pattern': 'body',
   'circular-pattern': 'body',
   sketch: 'face',
   extrude: 'sketch',
-  revolve: 'sketch'
+  revolve: 'sketch',
+  loft: 'sketch',
+  sweep: 'sketch',
+  'helical-sweep': 'sketch'
 };
 
 export function inferredSelectionFilter(tool: ToolId | null): SelectionFilter {

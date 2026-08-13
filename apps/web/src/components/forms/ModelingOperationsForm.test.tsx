@@ -1,6 +1,6 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
-import { toBodyId } from '@openzcad/shared';
+import { toBodyId, toSketchId } from '@openzcad/shared';
 import type { BodyOption } from './FeatureForms';
 import { ModelingOperationsForm } from './ModelingOperationsForm';
 import type {
@@ -114,5 +114,46 @@ describe('Modeling operations form', () => {
       screen.getByRole('button', { name: 'Recheck exact result' })
     ).toBeDisabled();
     expect(onPreflight).not.toHaveBeenCalled();
+  });
+
+  it('preflights ordered loft profiles through the shared exact gate', async () => {
+    const profiles = ['Lower', 'Upper'].map((label, index) => ({
+      id: label.toLowerCase(),
+      label,
+      section: {
+        sketchId: toSketchId(`sketch_${index}`),
+        profile: {
+          profileId: `profile_${index}`,
+          regionFingerprint: index + 1,
+          samplePoint: { x: 0, y: 0 },
+          sourceArea: 10 + index
+        }
+      }
+    }));
+    const onPreflight = vi.fn(async () => ({ status: 'ready' as const }));
+    render(
+      <ModelingOperationsForm
+        operation="loft"
+        scope={{}}
+        bodies={[]}
+        profileOptions={profiles}
+        onPreflight={onPreflight}
+        onSubmit={() => undefined}
+      />
+    );
+
+    fireEvent.change(screen.getByLabelText('Surface mode'), {
+      target: { value: 'smooth' }
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Check exact result' }));
+    await waitFor(() => expect(onPreflight).toHaveBeenCalledTimes(1));
+    expect(onPreflight).toHaveBeenCalledWith({
+      operation: 'loft',
+      input: {
+        name: 'Loft',
+        sections: [profiles[0]!.section, profiles[1]!.section],
+        mode: 'smooth'
+      }
+    });
   });
 });

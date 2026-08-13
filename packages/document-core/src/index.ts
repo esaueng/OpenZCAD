@@ -44,6 +44,8 @@ import {
   type SketchObjectNode,
   type SketchPlaneRef,
   type SketchProfileReference,
+  type SketchSectionReference,
+  type SketchPathReference,
   type UnitSystem,
   type UserId
 } from '@openzcad/shared';
@@ -217,6 +219,32 @@ export interface RevolveInput {
   ids?: BodyFeatureIds;
 }
 
+export interface LoftInput {
+  name: string;
+  sections: SketchSectionReference[];
+  mode: 'ruled' | 'smooth';
+  ids?: BodyFeatureIds;
+}
+
+export interface SweepInput {
+  name: string;
+  profile: SketchSectionReference;
+  path: SketchPathReference;
+  mode: 'standard' | 'smooth';
+  ids?: BodyFeatureIds;
+}
+
+export interface HelicalSweepInput {
+  name: string;
+  profile: SketchSectionReference;
+  axisOrigin: ParametricVector3;
+  axisDirection: ParametricVector3;
+  radius: ParamValue;
+  pitch: ParamValue;
+  turns: ParamValue;
+  ids?: BodyFeatureIds;
+}
+
 export interface BooleanInput {
   name: string;
   operation: BooleanOperation;
@@ -252,6 +280,26 @@ export interface SolidOffsetInput {
   name: string;
   targetBodyId: BodyId;
   distance: ParamValue;
+  ids?: BodyFeatureIds;
+}
+
+export interface DraftInput {
+  name: string;
+  targetBodyId: BodyId;
+  faceHashes: number[];
+  faceReferences?: FaceTopologyReferenceV5[];
+  pullDirection: ParametricVector3;
+  neutralPoint: ParametricVector3;
+  angleDeg: ParamValue;
+  ids?: BodyFeatureIds;
+}
+
+export interface ThickenInput {
+  name: string;
+  targetBodyId: BodyId;
+  faceHash: number;
+  faceReference?: FaceTopologyReferenceV5;
+  thickness: ParamValue;
   ids?: BodyFeatureIds;
 }
 
@@ -457,8 +505,9 @@ export function normalizeDocument(document: ProjectDocument): ProjectDocument {
       }
     } satisfies SketchNode;
   }
-  // Schema v4 -> v5 topology references, v5 -> v6 modeling feature kinds, and
-  // v6 -> v7 text sketch objects plus entity-wide profile references are all
+  // Schema v4 -> v5 topology references, v5 -> v6 modeling feature kinds,
+  // v6 -> v7 text sketch objects plus entity-wide profile references, and
+  // v7 -> v8 advanced modeling feature kinds are all
   // additive. Existing hashes and exact source geometry remain the fail-closed
   // fallback until a feature writes a lineage reference; a v6 document has no
   // text objects and no `all: true` reference, so nothing needs rewriting.
@@ -1061,6 +1110,62 @@ export function revolveSketch(
   return { document: next, bodyId };
 }
 
+export function loftSections(
+  document: ProjectDocument,
+  input: LoftInput
+): { document: ProjectDocument; bodyId: BodyId } {
+  return addBodyResultFeature(
+    document,
+    input.name,
+    'loft',
+    {
+      featureKind: 'loft',
+      sections: deepClone(input.sections),
+      mode: input.mode
+    },
+    input.ids
+  );
+}
+
+export function sweepProfile(
+  document: ProjectDocument,
+  input: SweepInput
+): { document: ProjectDocument; bodyId: BodyId } {
+  return addBodyResultFeature(
+    document,
+    input.name,
+    'sweep',
+    {
+      featureKind: 'sweep',
+      profile: deepClone(input.profile),
+      path: deepClone(input.path),
+      mode: input.mode
+    },
+    input.ids
+  );
+}
+
+export function helicalSweepProfile(
+  document: ProjectDocument,
+  input: HelicalSweepInput
+): { document: ProjectDocument; bodyId: BodyId } {
+  return addBodyResultFeature(
+    document,
+    input.name,
+    'helical-sweep',
+    {
+      featureKind: 'helical-sweep',
+      profile: deepClone(input.profile),
+      axisOrigin: deepClone(input.axisOrigin),
+      axisDirection: deepClone(input.axisDirection),
+      radius: input.radius,
+      pitch: input.pitch,
+      turns: input.turns
+    },
+    input.ids
+  );
+}
+
 export function booleanBodies(
   document: ProjectDocument,
   input: BooleanInput
@@ -1180,12 +1285,32 @@ function addBodyResultFeature(
   document: ProjectDocument,
   name: string,
   featureKind:
-    'fillet' | 'chamfer' | 'pattern' | 'mirror' | 'shell' | 'solid-offset',
+    | 'fillet'
+    | 'chamfer'
+    | 'pattern'
+    | 'mirror'
+    | 'shell'
+    | 'solid-offset'
+    | 'loft'
+    | 'sweep'
+    | 'helical-sweep'
+    | 'draft'
+    | 'thicken',
   data: Extract<
     FeatureData,
     {
       featureKind:
-        'fillet' | 'chamfer' | 'pattern' | 'mirror' | 'shell' | 'solid-offset';
+        | 'fillet'
+        | 'chamfer'
+        | 'pattern'
+        | 'mirror'
+        | 'shell'
+        | 'solid-offset'
+        | 'loft'
+        | 'sweep'
+        | 'helical-sweep'
+        | 'draft'
+        | 'thicken';
     }
   >,
   ids?: BodyFeatureIds
@@ -1275,6 +1400,50 @@ export function offsetSolidBody(
       featureKind: 'solid-offset',
       targetBodyId: input.targetBodyId,
       distance: input.distance
+    },
+    input.ids
+  );
+}
+
+export function draftBody(
+  document: ProjectDocument,
+  input: DraftInput
+): { document: ProjectDocument; bodyId: BodyId } {
+  return addBodyResultFeature(
+    document,
+    input.name,
+    'draft',
+    {
+      featureKind: 'draft',
+      targetBodyId: input.targetBodyId,
+      faceHashes: [...new Set(input.faceHashes)],
+      ...(input.faceReferences
+        ? { faceReferences: deepClone(input.faceReferences) }
+        : {}),
+      pullDirection: deepClone(input.pullDirection),
+      neutralPoint: deepClone(input.neutralPoint),
+      angleDeg: input.angleDeg
+    },
+    input.ids
+  );
+}
+
+export function thickenFace(
+  document: ProjectDocument,
+  input: ThickenInput
+): { document: ProjectDocument; bodyId: BodyId } {
+  return addBodyResultFeature(
+    document,
+    input.name,
+    'thicken',
+    {
+      featureKind: 'thicken',
+      targetBodyId: input.targetBodyId,
+      faceHash: input.faceHash,
+      ...(input.faceReference
+        ? { faceReference: deepClone(input.faceReference) }
+        : {}),
+      thickness: input.thickness
     },
     input.ids
   );
