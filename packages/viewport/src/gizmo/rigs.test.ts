@@ -134,7 +134,8 @@ describe('the offset-face rig', () => {
         child.material instanceof THREE.MeshBasicMaterial &&
         child.material.visible
     ) as THREE.Mesh<THREE.BufferGeometry, THREE.MeshBasicMaterial>;
-    const dimensionLine = rig.worldGroup.children[0]!.children[0] as THREE.Object3D & {
+    const dimensionLine = rig.worldGroup.children[0]!
+      .children[0] as THREE.Object3D & {
       material: { color: THREE.Color };
     };
     expect(visibleArrow.material.color.getHex()).toBe(HANDLE_WARNING_COLOR);
@@ -273,4 +274,72 @@ describe('every rig honours the shared contract', () => {
       expect(rig.worldGroup.parent).toBeNull();
     });
   }
+});
+
+describe('offset rig entrance and hover', () => {
+  const settle = (rig: DragRig) => {
+    for (let frame = 0; frame < 120 && rig.step?.(16); frame += 1) {
+      // step until the rig reports nothing left to move
+    }
+  };
+  const arrowColor = (rig: DragRig) => {
+    let hex = -1;
+    rig.group.traverse((child) => {
+      const material = (child as THREE.Mesh).material;
+      if (
+        hex === -1 &&
+        material instanceof THREE.MeshBasicMaterial &&
+        material.visible
+      ) {
+        hex = material.color.getHex();
+      }
+    });
+    return hex;
+  };
+
+  it('arrives rather than appearing at full strength', () => {
+    const rig = offsetRig();
+
+    // On the frame it is built the rig is invisible and undersized; the
+    // render loop's steps are what bring it in.
+    expect(rig.entranceScale!()).toBeLessThan(1);
+    let opacity = 0;
+    rig.group.traverse((child) => {
+      const material = (child as THREE.Mesh).material;
+      if (material && !Array.isArray(material)) {
+        opacity = Math.max(opacity, material.opacity);
+      }
+    });
+    expect(opacity).toBe(0);
+
+    settle(rig);
+    expect(rig.entranceScale!()).toBeCloseTo(1, 5);
+    expect(rig.step?.(16)).toBe(false);
+  });
+
+  it('warms under the pointer and cools when it leaves', () => {
+    const rig = offsetRig();
+    settle(rig);
+    const resting = arrowColor(rig);
+
+    rig.setHot!(true);
+    settle(rig);
+    const hot = arrowColor(rig);
+    expect(hot).not.toBe(resting);
+
+    rig.setHot!(false);
+    settle(rig);
+    expect(arrowColor(rig)).toBe(resting);
+  });
+
+  it('keeps a refused value looking refused while hovered', () => {
+    const rig = offsetRig();
+    settle(rig);
+
+    rig.setWarning!(true);
+    rig.setHot!(true);
+    settle(rig);
+    // Hover must not soften a value the kernel will reject.
+    expect(arrowColor(rig)).toBe(HANDLE_WARNING_COLOR);
+  });
 });

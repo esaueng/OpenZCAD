@@ -34,6 +34,19 @@ export interface DragRig {
   setWarning?(warning: boolean): void;
   /** World point the value chip should track, given the rig's frame scale. */
   chipAnchor(gizmoScale: number): THREE.Vector3;
+  /**
+   * Advances the rig's own eased state — its entrance, and whether the
+   * pointer is over it. Returns true while something is still moving, so the
+   * render loop knows to keep drawing. Rigs without eased state omit it.
+   */
+  step?(dtMs: number): boolean;
+  /** Marks the rig as the thing under the pointer, before any press. */
+  setHot?(hot: boolean): void;
+  /**
+   * Entrance multiplier the viewport folds into its screen-constant scale.
+   * Reported rather than applied, because the rig does not own its scale.
+   */
+  entranceScale?(): number;
   dispose(): void;
 }
 

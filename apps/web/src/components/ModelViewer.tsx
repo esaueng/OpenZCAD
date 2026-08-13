@@ -3563,6 +3563,28 @@ export function ModelViewer({
       return topologyPickList.show(entries, event, focusFirst);
     }
 
+    /**
+     * Tells an armed drag rig whether the pointer is over its handle, so it
+     * can say it is grabbable before anyone presses. Uses the same hit target
+     * the press itself uses, or the two would disagree about where the handle
+     * is.
+     */
+    function updateRigHover(event: PointerEvent): boolean {
+      const rig =
+        offsetRigRef.current ??
+        cylinderRadiusRigRef.current ??
+        edgeRigRef.current;
+      if (!rig?.setHot) {
+        return false;
+      }
+      setRayFromEvent(event);
+      const hot = context.raycaster
+        .intersectObjects(rig.group.children, true)
+        .some((hit) => hit.object.userData.directHandle === true);
+      rig.setHot(hot);
+      return hot;
+    }
+
     function applyHoverAt(event: PointerEvent) {
       const moveFocus = moveGizmoFocusFromHit(pickMoveGizmo(event));
       if (movePreviewRef.current && moveFocus) {
@@ -3572,6 +3594,14 @@ export function ModelViewer({
         return;
       }
       clearMoveGizmoHover();
+      if (updateRigHover(event)) {
+        // The handle owns the pointer: highlighting whatever face lies behind
+        // it would say the click will select, when it will drag.
+        renderer.domElement.style.cursor = 'grab';
+        applyHover(null);
+        updateMeasurePreview(event);
+        return;
+      }
       applyHover(pick(event));
       updateMeasurePreview(event);
     }
@@ -5987,12 +6017,21 @@ export function ModelViewer({
         moveGizmoGroup.scale.setScalar(gizmoScale / baseScale);
         moveGizmoGroup.userData.gizmoScale = gizmoScale;
       }
+      let rigsAnimating = false;
       const offsetRig = offsetRigRef.current;
       if (offsetRig) {
         // Screen-constant arrow, ~0.55× the move gizmo's reach.
         const rigScale =
           moveGizmoWorldScale(worldPerPixelAt(offsetRig.group.position)) * 0.55;
-        offsetRig.group.scale.setScalar(rigScale);
+        if (offsetRig.step?.(dt * 1000)) {
+          rigsAnimating = true;
+        }
+        // The entrance rides the screen-constant scale rather than replacing
+        // it; `gizmoScale` stays the logical size so chip and dimension
+        // layout do not animate along with the arrow.
+        offsetRig.group.scale.setScalar(
+          rigScale * (offsetRig.entranceScale?.() ?? 1)
+        );
         offsetRig.group.userData.gizmoScale = rigScale;
         // Keep dimension arrowheads screen-sized across a pure wheel zoom.
         offsetRig.setValue(offsetRig.value());
@@ -6091,6 +6130,7 @@ export function ModelViewer({
         controlsChanged ||
         hoverAnimating ||
         edgesAnimating ||
+        rigsAnimating ||
         retiringOverlaysRef.current.length > 0 ||
         inferenceAnimating ||
         context.fadeIns.size > 0
