@@ -175,12 +175,13 @@ passes); probe drag scenarios show one drag-work execution per frame
 > The reasoning that got here is kept below because it is the argument for
 > why nothing was built.
 >
-> What survives from this phase is a different, real target the same run
-> exposed: a **move drag holds 16.7 ms p50 on a 120 Hz display while an orbit
-> on the same model holds 8.3 ms** — half rate, worst frame 91.7 ms. The
-> suspect is the per-application snap resolution over every edge and face
-> centre of the other bodies, which is what phase 2.2 already proposes to
-> precompute. Phase 2 therefore inherits this phase's remaining value.
+> A first reading of that run also claimed the move drag ran at half rate
+> (16.7 ms p50 against orbit's 8.3 ms). That was wrong: the scenario sleeps
+> 10 ms between synthetic moves, and removing only the sleep gives 8.3 ms
+> p50 — the harness was setting the interval. Every measured gesture meets
+> the frame budget on target hardware, so **no frame-pacing work is left to
+> justify in phase 1 or 2 on these numbers**, and phase 3 (feedback and
+> motion) is where the felt jank now points.
 >
 > The audit blamed the preview drag's ~500 ms p95 frame on the scene being
 > torn down and rebuilt per published preview. That teardown is real, but it
