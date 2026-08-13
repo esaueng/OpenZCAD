@@ -503,12 +503,30 @@ interface ModelViewerProps {
   onSelectSketchProfile(sketchId: string): void;
   onResizePrimitiveFace(commit: FaceResizeCommit): void;
   onExtrudeDistanceChange(distance: number): void;
-  /** Fired while a move-gizmo handle drags; values are already snapped. */
+  /**
+   * Fired when a move-gizmo drag settles; values are already snapped. Not
+   * fired per pointer move — the live stream goes through
+   * `moveValuesSetterRef` so a drag does not re-render the workspace.
+   */
   onMovePreviewChange(
     translation: MovePreview['translation'],
     rotationDeg: MovePreview['rotationDeg'],
     snap: MoveSnap
   ): void;
+  /**
+   * Live sink for the values a move drag is producing, owned by the panel
+   * that displays them. The scene is already updated imperatively by
+   * `applyMovePreview`; this is the same arrangement for the numeric fields,
+   * and it is why a drag can run without React work.
+   */
+  moveValuesSetterRef?: MutableRefObject<
+    | ((
+        translation: MovePreview['translation'],
+        rotationDeg: MovePreview['rotationDeg'],
+        snap: MoveSnap
+      ) => void)
+    | null
+  >;
   /** Stationary right-click; right-drag stays a pan. */
   onContextMenu(
     x: number,
@@ -746,6 +764,15 @@ interface MoveDragState {
   restingCenter: THREE.Vector3;
   snapMove: number;
   snapRotate: number;
+  /**
+   * Newest values this drag produced. The workspace is told once, when the
+   * drag settles, so the value it commits is this rather than whatever the
+   * last render happened to see.
+   */
+  pendingValues: {
+    translation: MovePreview['translation'];
+    rotation: MovePreview['rotationDeg'];
+  } | null;
 }
 
 const SELECTION_EMISSIVE = 0x173a5e;
@@ -844,6 +871,7 @@ export function ModelViewer({
   onResizePrimitiveFace,
   onExtrudeDistanceChange,
   onMovePreviewChange,
+  moveValuesSetterRef,
   onContextMenu
 }: ModelViewerProps) {
   const hostRef = useRef<HTMLDivElement | null>(null);
@@ -1424,6 +1452,24 @@ export function ModelViewer({
     let faceDrag: FaceDragState | null = null;
     let extrudeDrag: ExtrudeDragState | null = null;
     let moveDrag: MoveDragState | null = null;
+
+    /**
+     * Hands the workspace the values a settled drag produced. During the drag
+     * the panel is driven directly through `moveValuesSetterRef`, so this is
+     * the one place the move becomes React state — and it must run on every
+     * way a drag can end, or the committed value is the one from before it.
+     */
+    function publishMoveDragResult(drag: MoveDragState) {
+      const values = drag.pendingValues;
+      if (!values) {
+        return;
+      }
+      onMovePreviewChangeRef.current(values.translation, values.rotation, {
+        move: drag.snapMove,
+        rotate: drag.snapRotate
+      });
+    }
+
     /**
      * Snap candidates for the body being moved, gathered once when the drag
      * starts. Only other bodies contribute — a body cannot be positioned
@@ -4507,7 +4553,11 @@ export function ModelViewer({
           }
         }
         context.applyMovePreview(translation, rotation);
-        onMovePreviewChangeRef.current(translation, rotation, {
+        // Live values go straight to the panel that shows them. Routing them
+        // through workspace state instead would re-render the editor on every
+        // pointer event for numbers the scene has already drawn.
+        drag.pendingValues = { translation, rotation };
+        moveValuesSetterRef?.current?.(translation, rotation, {
           move: drag.snapMove,
           rotate: drag.snapRotate
         });
@@ -4765,7 +4815,8 @@ export function ModelViewer({
           startRotation: { ...activeMove.rotationDeg },
           restingCenter: moveCenterRef.current.clone(),
           snapMove: chooseMoveSnapStep(worldPerPixel),
-          snapRotate: chooseRotateSnapStep((ringRadiusPx * Math.PI) / 180)
+          snapRotate: chooseRotateSnapStep((ringRadiusPx * Math.PI) / 180),
+          pendingValues: null
         };
         setRayFromEvent(event);
         if (data.kind === 'axis') {
@@ -5169,6 +5220,7 @@ export function ModelViewer({
         return;
       }
       if (moveDrag && event.pointerId === moveDrag.pointerId) {
+        publishMoveDragResult(moveDrag);
         moveDrag = null;
         moveSnaps = [];
         hud.hide(snapGlyph);
@@ -5540,6 +5592,7 @@ export function ModelViewer({
         requestRender();
       }
       if (moveDrag && event.pointerId === moveDrag.pointerId) {
+        publishMoveDragResult(moveDrag);
         moveDrag = null;
         moveSnaps = [];
         hud.hide(snapGlyph);
