@@ -164,6 +164,34 @@ describe('BodyEdgeOverlay', () => {
     expect(overlay.selectedEdges.visible).toBe(false);
   });
 
+  it('keeps every reusable batch empty until something needs it', () => {
+    const overlay = makeOverlay();
+    const reusable = [
+      overlay.hoverEdges,
+      overlay.hoverHiddenEdges,
+      overlay.selectedEdges,
+      overlay.selectedHiddenEdges,
+      overlay.selectedFaceBoundaryEdges,
+      overlay.selectedFaceBoundaryHiddenEdges
+    ];
+
+    for (const line of reusable) {
+      expect(line.geometry.instanceCount).toBe(0);
+    }
+    // Installing a body applies the display mode, which recomputes visibility
+    // from those counts. A capacity-sized count here drew the body's whole
+    // edge set as zero-length segments on every body in the scene.
+    overlay.setDisplayMode('shaded-edges');
+    for (const line of reusable) {
+      expect(line.visible).toBe(false);
+    }
+    expect(
+      overlay.children
+        .filter((child) => child.visible)
+        .map((child) => child.name)
+    ).toEqual(['body-edge']);
+  });
+
   it('uses one reusable hover batch and suppresses it for selected edges', () => {
     const overlay = makeOverlay();
     const hoverGeometry = overlay.hoverEdges.geometry;
