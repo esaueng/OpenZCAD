@@ -16,6 +16,7 @@ import {
   EDGE_WIREFRAME_COLOR
 } from '../pick/edges';
 import { shouldRenderTopologyEdge } from '../scene/objects';
+import { easeToward, hasSettled } from '../motion';
 import { boundaryEdgesOfFace } from '../selection/boundaryEdgesOfFace';
 import type { DisplayMode } from '../types';
 import {
@@ -128,6 +129,16 @@ export class BodyEdgeOverlay extends THREE.Group {
   private selectedKeys = new Set<string>();
   private hoveredKeys = new Set<string>();
   private selectedFaceBoundaryKeys = new Set<string>();
+  /**
+   * Eased 0..1 presence of the hover tier. The batch swaps between edges
+   * instantly — pointing at a new edge should feel immediate — but appearing
+   * and disappearing ramps, because a 1.4 px slate line becoming a 4 px pale
+   * one in a single frame is the loudest pop in the viewport.
+   */
+  private hoverPresence = 0;
+  private hoverPresenceTarget = 0;
+  /** Positions to drop once the hover tier has finished fading out. */
+  private hoverClearPending = false;
   private displayMode: DisplayMode = 'shaded-edges';
   private xrayEnabled = true;
 
@@ -269,6 +280,7 @@ export class BodyEdgeOverlay extends THREE.Group {
       this.seamEdges.raycast = () => undefined;
       this.add(this.seamEdges);
     }
+    this.applyHoverPresence();
     this.add(
       this.idleEdges,
       this.hoverHiddenEdges,
@@ -365,9 +377,58 @@ export class BodyEdgeOverlay extends THREE.Group {
       return false;
     }
     this.hoveredKeys = nextKeys;
-    this.refreshHoveredPositions();
+    this.hoverPresenceTarget = nextKeys.size > 0 ? 1 : 0;
+    if (nextKeys.size > 0) {
+      // Moving to another edge keeps whatever presence is already on screen
+      // and re-points the batch, so a sweep along a row of edges reads as one
+      // highlight travelling rather than a stutter of fades.
+      this.hoverClearPending = false;
+      this.refreshHoveredPositions();
+    } else {
+      // Hold the geometry until the fade finishes; dropping it now would make
+      // the ramp invisible.
+      this.hoverClearPending = true;
+    }
+    this.applyHoverPresence();
     this.refreshVisibility();
     return true;
+  }
+
+  /**
+   * Advances the eased tiers by one frame. Returns true while something is
+   * still moving, so the render loop knows to keep drawing.
+   */
+  step(dtMs: number): boolean {
+    if (hasSettled(this.hoverPresence, this.hoverPresenceTarget)) {
+      return false;
+    }
+    this.hoverPresence = easeToward(
+      this.hoverPresence,
+      this.hoverPresenceTarget,
+      dtMs
+    );
+    if (this.hoverPresence === 0 && this.hoverClearPending) {
+      this.hoverClearPending = false;
+      this.refreshHoveredPositions();
+    }
+    this.applyHoverPresence();
+    this.refreshVisibility();
+    return true;
+  }
+
+  /**
+   * Width and opacity both ride the ramp: fading alone leaves a full-width
+   * ghost, and growing alone reads as the line thickening rather than
+   * lighting up.
+   */
+  private applyHoverPresence() {
+    const presence = this.hoverPresence;
+    const width =
+      EDGE_IDLE_WIDTH + (EDGE_HOVER_WIDTH - EDGE_IDLE_WIDTH) * presence;
+    this.hoverEdges.material.opacity = presence;
+    this.hoverEdges.material.linewidth = width;
+    this.hoverHiddenEdges.material.opacity = presence * HIDDEN_EDGE_OPACITY;
+    this.hoverHiddenEdges.material.linewidth = width;
   }
 
   /** Highlights only physical edges that bound the selected exact face. */
@@ -446,11 +507,13 @@ export class BodyEdgeOverlay extends THREE.Group {
   }
 
   private refreshHoveredPositions() {
-    const positions = [...this.entriesByKey]
-      .filter(
-        ([key]) => this.hoveredKeys.has(key) && !this.selectedKeys.has(key)
-      )
-      .flatMap(([, entry]) => entry.positions);
+    const positions = this.hoverClearPending
+      ? []
+      : [...this.entriesByKey]
+          .filter(
+            ([key]) => this.hoveredKeys.has(key) && !this.selectedKeys.has(key)
+          )
+          .flatMap(([, entry]) => entry.positions);
     replacePositions(this.hoverEdges, positions);
     replacePositions(this.hoverHiddenEdges, positions);
   }
@@ -466,11 +529,14 @@ export class BodyEdgeOverlay extends THREE.Group {
     this.selectedEdges.visible = showEdges && this.selectedKeys.size > 0;
     this.selectedHiddenEdges.visible =
       this.xrayEnabled && showEdges && this.selectedKeys.size > 0;
-    this.hoverEdges.visible =
-      showEdges && this.hoverEdges.geometry.instanceCount > 0;
+    const hoverVisible =
+      showEdges &&
+      this.hoverEdges.geometry.instanceCount > 0 &&
+      this.hoverPresence > 0;
+    this.hoverEdges.visible = hoverVisible;
     this.hoverHiddenEdges.visible =
       this.xrayEnabled &&
-      showEdges &&
+      hoverVisible &&
       this.hoverHiddenEdges.geometry.instanceCount > 0;
     this.selectedFaceBoundaryEdges.visible =
       this.selectedFaceBoundaryKeys.size > 0;
