@@ -854,6 +854,13 @@ function disposeSettledOverlays(
   }
 }
 
+/**
+ * Scratch vector for the snap projectors. They run once per candidate — every
+ * edge endpoint and face centre of every other body — on each frame of a move
+ * drag, and each call used to allocate.
+ */
+const SNAP_PROJECT_SCRATCH = new THREE.Vector3();
+
 const E2E_CANVAS_HOOKS_ENABLED =
   (
     import.meta.env as unknown as {
@@ -1168,7 +1175,28 @@ export function ModelViewer({
         })
     );
     renderer.setSize(host.clientWidth, host.clientHeight);
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    const applyPixelRatio = () =>
+      renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    applyPixelRatio();
+    // Device pixel ratio is read once at construction, so dragging the window
+    // to a display with a different ratio left the backing store at the old
+    // one — permanently soft, or oversampled, with nothing to prompt a
+    // resize. The media query re-arms itself because its own match changes.
+    let pixelRatioQuery: MediaQueryList | null = null;
+    const watchPixelRatio = () => {
+      pixelRatioQuery?.removeEventListener('change', onPixelRatioChange);
+      pixelRatioQuery = window.matchMedia(
+        `(resolution: ${window.devicePixelRatio}dppx)`
+      );
+      pixelRatioQuery.addEventListener('change', onPixelRatioChange);
+    };
+    function onPixelRatioChange() {
+      applyPixelRatio();
+      resizePending = true;
+      requestRender();
+      watchPixelRatio();
+    }
+    watchPixelRatio();
     renderer.outputColorSpace = THREE.SRGBColorSpace;
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
     renderer.toneMappingExposure = 1.0;
@@ -1944,7 +1972,7 @@ export function ModelViewer({
         local,
         (point) =>
           projectToScreen(
-            new THREE.Vector3(point.x, point.y, point.z),
+            SNAP_PROJECT_SCRATCH.set(point.x, point.y, point.z),
             context.activeCamera,
             renderer.domElement.clientWidth,
             renderer.domElement.clientHeight
@@ -4629,7 +4657,7 @@ export function ModelViewer({
                   pointer,
                   (point) =>
                     projectToScreen(
-                      new THREE.Vector3(point.x, point.y, point.z),
+                      SNAP_PROJECT_SCRATCH.set(point.x, point.y, point.z),
                       context.activeCamera,
                       host.clientWidth,
                       host.clientHeight
@@ -6170,6 +6198,7 @@ export function ModelViewer({
       if (animationFrame !== null) {
         window.cancelAnimationFrame(animationFrame);
       }
+      pixelRatioQuery?.removeEventListener('change', onPixelRatioChange);
       observer.disconnect();
       renderer.domElement.removeEventListener(
         'pointermove',
