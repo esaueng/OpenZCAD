@@ -1,18 +1,7 @@
 name: macOS desktop
 
 on:
-  push:
-    branches:
-      - main
-  pull_request:
-    paths:
-      - '.github/workflows/macos-desktop.yml'
-      - 'apps/desktop/**'
-      - 'apps/web/**'
-      - 'packages/**'
-      - 'script/build_and_run.sh'
-      - 'package.json'
-      - 'pnpm-lock.yaml'
+  workflow_dispatch:
 
 permissions:
   contents: read

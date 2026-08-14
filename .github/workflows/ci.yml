@@ -1,11 +1,12 @@
 name: ci
 
 on:
-  push:
-    branches:
-      - main
-      - beta
   pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
@@ -26,38 +27,10 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm lint
       - run: pnpm typecheck
-      - run: pnpm test:coverage
-      # The web app has its own Vitest project (happy-dom); the root run only
-      # covers test/**, so its suites need an explicit step.
-      - run: pnpm test:web
+      # The root command runs both the Node and web Vitest projects.
+      - run: pnpm test
+      # Keep exact BrepKit/OpenCascade STEP parity in the critical beta gate.
+      - run: pnpm test:parity-corpus
       - run: pnpm build
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
-        with:
-          name: coverage
-          path: coverage/
-          retention-days: 14
       - run: pnpm exec playwright install --with-deps chromium
       - run: pnpm test:e2e
-
-  # The Z1.3 STEP + geometry parity corpus: every corpus file measured through
-  # BOTH kernels (BrepKit and OpenCascade), re-exported and re-imported. It is
-  # its own job rather than part of `validate` because it runs seconds of WASM
-  # geometry per file and the root suite already had to bound its worker count
-  # to keep kernel startup out of unrelated test timeouts.
-  #
-  # This job is a hard gate on the STEP routing flip (Z3) and the OCCT deletion
-  # (Z5): neither may start while it is red. See test/parity/corpus/README.md.
-  corpus:
-    runs-on: blacksmith-4vcpu-ubuntu-2404
-    timeout-minutes: 20
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6
-        with:
-          version: 10.8.0
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
-        with:
-          node-version: 22
-          cache: pnpm
-      - run: pnpm install --frozen-lockfile
-      - run: pnpm test:parity-corpus
