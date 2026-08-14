@@ -1,4 +1,5 @@
 import { GEOMETRY_LINEAR_TOLERANCE } from './tolerance';
+import { boundedPolygonSides } from './regions';
 import type { ParamValue, SketchPlaneRef } from '@openzcad/shared';
 
 export {
@@ -10,6 +11,8 @@ export {
 export {
   computeSketchProfileAnalysis,
   computeSketchRegions,
+  boundedArcSweepDegrees,
+  boundedPolygonSides,
   mergeAdjacentProfiles,
   profileBoundarySignatures,
   profileContainsPoint,
@@ -264,7 +267,7 @@ export function polygonProfile(
   centerY = 0
 ): Vec2[] {
   requirePositive(radius, 'Polygon radius');
-  const n = clampSegments(sides, 3, 64);
+  const n = boundedPolygonSides(sides);
   const points: Vec2[] = [];
   for (let i = 0; i < n; i++) {
     // Start at the top so flats sit symmetric about the vertical axis.

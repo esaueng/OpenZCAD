@@ -75,7 +75,9 @@ export function QuestionCard({
       )}
       <ol className="assistant-questions">
         {entry.questions.map((question) => {
-          const chosen = entry.answers[question.id];
+          const chosen = Object.hasOwn(entry.answers, question.id)
+            ? entry.answers[question.id]
+            : undefined;
           return (
             <li
               key={question.id}

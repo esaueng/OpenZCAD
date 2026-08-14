@@ -57,14 +57,16 @@ function inferenceBody(
 function isMeasuredZeroOverlap(
   derived: DerivedState,
   featureName: string,
-  target: ExtrudeInferenceBody
+  target: ExtrudeInferenceBody,
+  baselineWarnings: readonly string[]
 ): boolean {
   const expected =
     `Feature "${featureName}": Stored add extrusion no longer overlaps ` +
     `${target.name}; operation was not re-inferred.`;
   return (
     derived.bodyRepresentations[target.bodyId]?.consumed === false &&
-    derived.warnings.includes(expected)
+    derived.warnings.filter((warning) => warning === expected).length >
+      baselineWarnings.filter((warning) => warning === expected).length
   );
 }
 
@@ -118,7 +120,14 @@ export async function resolveExtrudeOperation(
         // common-volume measurement is zero. For inference that is a valid
         // measurement, not a kernel refusal: record the disjoint union volume
         // so a bounding-box-only decoy cannot veto another unambiguous target.
-        if (isMeasuredZeroOverlap(derived, command.payload.name, target)) {
+        if (
+          isMeasuredZeroOverlap(
+            derived,
+            command.payload.name,
+            target,
+            newBodyDerived.warnings
+          )
+        ) {
           measurements.push({
             target,
             unionVolume: target.volume + extrusion.volume

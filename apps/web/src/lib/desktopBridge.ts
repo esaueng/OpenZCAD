@@ -131,12 +131,16 @@ export async function desktopFetch(
   }
   const headers = new Headers(init.headers);
   const { invoke } = await import('@tauri-apps/api/core');
+  const body = await requestBodyBytes(init.body);
+  if (signal.aborted) {
+    throw new DOMException('The operation was aborted.', 'AbortError');
+  }
   const result = await invoke<NativeApiResponse>('desktop_api_request', {
     request: {
       method: init.method ?? 'GET',
       path: apiPath(input),
       contentType: headers.get('content-type') ?? undefined,
-      body: await requestBodyBytes(init.body)
+      body
     }
   });
   assertCloudFunctionsEnabled();

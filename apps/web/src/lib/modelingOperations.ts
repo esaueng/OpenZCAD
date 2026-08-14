@@ -9,12 +9,13 @@ import {
   type SweepInput,
   type ThickenInput
 } from '@openzcad/document-core';
-import type {
-  BodyId,
-  BodyTopology,
-  FaceTopologyReferenceV5,
-  SketchPathReference,
-  SketchSectionReference
+import {
+  MAX_HELICAL_SWEEP_TURNS,
+  type BodyId,
+  type BodyTopology,
+  type FaceTopologyReferenceV5,
+  type SketchPathReference,
+  type SketchSectionReference
 } from '@openzcad/shared';
 import { evalParamValue, previewExpression } from './model';
 
@@ -296,9 +297,11 @@ export function modelingFormValidationReason(
       }
       return positiveExpression(scope, state.value.radius) &&
         nonZeroExpression(scope, state.value.pitch) &&
-        positiveExpression(scope, state.value.turns)
+        positiveExpression(scope, state.value.turns) &&
+        (resolvedExpression(scope, state.value.turns) ?? Infinity) <=
+          MAX_HELICAL_SWEEP_TURNS
         ? null
-        : 'Radius and turns must be positive; pitch must be non-zero.';
+        : `Radius and turns must be positive, turns must not exceed ${MAX_HELICAL_SWEEP_TURNS}, and pitch must be non-zero.`;
     }
     case 'mirror': {
       if (state.value.targetBodyId === '') return 'Select a target body.';

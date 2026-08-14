@@ -710,7 +710,7 @@ export function restoreDuplicateDerivedProjection(
   duplicate: ProjectDocument,
   localSource: ProjectDocument | null
 ): ProjectDocument {
-  const copiedFromRevisionId = duplicate.revisions.at(-1)?.revisionId;
+  const copiedFromRevisionId = duplicate.revisions.at(-2)?.revisionId;
   const localRevisionId = localSource?.revisions.at(-1)?.revisionId;
   if (
     !localSource ||
@@ -1193,6 +1193,24 @@ export function projectMatchesInterruptedAdoption(
     ...remote,
     checkpoints: remote.checkpoints.slice(0, -1)
   });
+}
+
+/** Reuses derived geometry only when it describes the same canonical model. */
+export function withMatchingLocalDerived(
+  remote: ProjectDocument,
+  local: ProjectDocument
+): ProjectDocument {
+  if (!projectMatchesInterruptedAdoption(local, remote)) {
+    return remote;
+  }
+  return {
+    ...remote,
+    derived: {
+      ...remote.derived,
+      bodyRepresentations: local.derived.bodyRepresentations,
+      exportableBodyIds: local.derived.exportableBodyIds
+    }
+  };
 }
 
 export function chooseProjectDocument(

@@ -24,6 +24,8 @@ interface CandidatePair {
   distance?: number;
 }
 
+export const MAX_UNION_CONNECTIVITY_PAIRS = 50_000;
+
 function axisGap(
   leftMin: number,
   leftMax: number,
@@ -107,6 +109,12 @@ export function analyzeUnionConnectivity<T>(
       contactTolerance: contactTolerance(solids)
     };
   }
+  const pairCount = (solids.length * (solids.length - 1)) / 2;
+  if (pairCount > MAX_UNION_CONNECTIVITY_PAIRS) {
+    throw new Error(
+      `Union connectivity requires ${pairCount} pair checks; the limit is ${MAX_UNION_CONNECTIVITY_PAIRS}.`
+    );
+  }
 
   const tolerance = contactTolerance(solids);
   const parent = solids.map((_, index) => index);
@@ -172,10 +180,8 @@ export function analyzeUnionConnectivity<T>(
     }
     if (
       distanceFor(pair) <= tolerance ||
-      exactOverlap?.(
-        solids[pair.left]!.solid,
-        solids[pair.right]!.solid
-      ) === true
+      exactOverlap?.(solids[pair.left]!.solid, solids[pair.right]!.solid) ===
+        true
     ) {
       union(pair.left, pair.right);
     }
