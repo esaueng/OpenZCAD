@@ -25,6 +25,12 @@ const MIDDLE_DRAGS: AppSettings['viewport']['middleDrag'][] = [
   'zoom'
 ];
 
+const POINTER_NAVIGATIONS: AppSettings['viewport']['pointerNavigation'][] = [
+  'auto',
+  'mouse',
+  'trackpad'
+];
+
 const DISPLAY_MODES: AppSettings['viewport']['displayMode'][] = [
   'shaded-edges',
   'shaded',
@@ -183,6 +189,11 @@ export function normalizeAppSettings(value: unknown): AppSettings {
         viewport.middleDrag,
         MIDDLE_DRAGS,
         defaults.viewport.middleDrag
+      ),
+      pointerNavigation: member(
+        viewport.pointerNavigation,
+        POINTER_NAVIGATIONS,
+        defaults.viewport.pointerNavigation
       )
     },
     sketching: {
