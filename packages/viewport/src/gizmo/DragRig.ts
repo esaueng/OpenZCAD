@@ -42,6 +42,12 @@ export interface DragRig {
   step?(dtMs: number): boolean;
   /** Marks the rig as the thing under the pointer, before any press. */
   setHot?(hot: boolean): void;
+  /**
+   * Starts the rig leaving. Disarming disposes immediately without this; with
+   * it the caller keeps stepping the rig until `isGone()`, then disposes.
+   */
+  beginExit?(): void;
+  isGone?(): boolean;
   dispose(): void;
 }
 
