@@ -35,8 +35,10 @@ export interface ProjectView {
   setHiddenBodyIds: Dispatch<SetStateAction<ReadonlySet<string>>>;
   /** Applies a project's remembered view, falling back to the defaults. */
   restore(projectId: string, defaults: ProjectViewDefaults): void;
-  /** The viewport reported a new pose; persist it against this project. */
+  /** The viewport reported a live pose; keep it immediately available. */
   onCameraChange(projectId: string | null, camera: ViewportCameraState): void;
+  /** The viewport pose settled; persist the final pose against this project. */
+  onCameraSettled(projectId: string | null, camera: ViewportCameraState): void;
   /** Closing a project: drop the remembered pose so the next one refits. */
   forget(): void;
 }
@@ -85,8 +87,9 @@ export function useProjectView(projectId: string | null): ProjectView {
     });
   }
 
-  // Persist when the surrounding view settings change. The camera itself is
-  // saved as it moves, through `onCameraChange`.
+  // Persist when the surrounding view settings change. Gesture-time camera
+  // changes only refresh `cameraRef`; their final pose is saved through
+  // `onCameraSettled` once the controller reports that motion has stopped.
   useEffect(() => {
     const camera = cameraRef.current;
     if (!projectId || !camera) {
@@ -128,7 +131,10 @@ export function useProjectView(projectId: string | null): ProjectView {
       });
       setHiddenBodyIds(new Set(saved?.hiddenBodyIds ?? []));
     },
-    onCameraChange(id, camera) {
+    onCameraChange(_id, camera) {
+      cameraRef.current = camera;
+    },
+    onCameraSettled(id, camera) {
       cameraRef.current = camera;
       if (id) {
         persist(id, camera);

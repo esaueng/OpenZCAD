@@ -1095,7 +1095,8 @@ export function App() {
     hiddenBodyIds,
     setHiddenBodyIds,
     restore: restoreProjectView,
-    onCameraChange: reportCameraPose,
+    onCameraChange: updateCameraPose,
+    onCameraSettled: persistCameraPose,
     forget: forgetProjectView
   } = useProjectView(doc?.projectId ?? null);
   const [previewDoc, setPreviewDoc] = useState<ProjectDocument | null>(null);
@@ -3743,7 +3744,11 @@ export function App() {
   flushPendingLocalSaveRef.current = flushPendingLocalSave;
 
   function handleViewportChange(camera: ViewportCameraState) {
-    reportCameraPose(doc?.projectId ?? null, camera);
+    updateCameraPose(doc?.projectId ?? null, camera);
+  }
+
+  function handleViewportSettled(camera: ViewportCameraState) {
+    persistCameraPose(doc?.projectId ?? null, camera);
   }
 
   /**
@@ -10676,6 +10681,7 @@ export function App() {
             onRedo={handleRedo}
             initialView={initialView}
             onViewChange={handleViewportChange}
+            onViewSettled={handleViewportSettled}
             onMovePreviewChange={handleMovePreviewChange}
             moveValuesSetterRef={moveValuesSetterRef}
             offsetHandle={viewMode ? null : offsetHandleTarget}

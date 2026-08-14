@@ -25,16 +25,18 @@ function fakeElement(width: number, height: number): HTMLElement {
 function createController(reducedMotion = true) {
   const requestRender = vi.fn();
   const onViewChange = vi.fn();
+  const onViewSettled = vi.fn();
   const controller = new CameraController({
     host: fakeElement(800, 600),
     domElement: fakeElement(800, 600),
     requestRender,
     onViewChange,
+    onViewSettled,
     reducedMotion: () => reducedMotion,
     zoomToCursor: () => true,
     middleDrag: () => 'pan'
   });
-  return { controller, requestRender, onViewChange };
+  return { controller, requestRender, onViewChange, onViewSettled };
 }
 
 beforeEach(() => {
@@ -105,20 +107,79 @@ describe('CameraController external orbit lifecycle', () => {
   );
 
   it('does not run a stale damping settle in the middle of a new drag', () => {
-    const { controller, onViewChange } = createController(false);
+    const { controller, onViewSettled } = createController(false);
     controller.beginOrbitDrag();
     controller.orbitByPixels(20, 10);
     controller.endOrbitDrag();
 
     controller.beginOrbitDrag();
     controller.orbitByPixels(-8, 4);
-    const changesWhileActive = onViewChange.mock.calls.length;
+    const settlesWhileActive = onViewSettled.mock.calls.length;
     vi.advanceTimersByTime(120);
-    expect(onViewChange).toHaveBeenCalledTimes(changesWhileActive);
+    expect(onViewSettled).toHaveBeenCalledTimes(settlesWhileActive);
 
     controller.endOrbitDrag();
     vi.advanceTimersByTime(120);
-    expect(onViewChange.mock.calls.length).toBeGreaterThan(changesWhileActive);
+    expect(onViewSettled.mock.calls.length).toBeGreaterThan(settlesWhileActive);
+    controller.dispose();
+  });
+
+  it('publishes a gesture pose immediately but persists only its settled frame', () => {
+    const { controller, onViewChange, onViewSettled } = createController(false);
+    controller.beginOrbitDrag();
+    controller.orbitByPixels(24, -12);
+
+    expect(onViewChange).toHaveBeenCalled();
+    expect(onViewChange).toHaveBeenLastCalledWith(controller.capture());
+    expect(onViewSettled).not.toHaveBeenCalled();
+
+    // A fixed-delay writer would fire here even though the pointer is held.
+    vi.advanceTimersByTime(120);
+    expect(onViewSettled).not.toHaveBeenCalled();
+
+    controller.endOrbitDrag();
+    vi.advanceTimersByTime(120);
+
+    expect(onViewSettled).toHaveBeenCalledTimes(1);
+    expect(onViewSettled).toHaveBeenLastCalledWith(controller.capture());
+    controller.dispose();
+  });
+
+  it('keeps a re-pivot live during a hold and persists it after release', () => {
+    const { controller, onViewChange, onViewSettled } = createController();
+    controller.beginOrbitDrag();
+    controller.pivotOn(new THREE.Vector3(12, -4, 5));
+    const held = controller.capture();
+
+    expect(onViewChange).toHaveBeenLastCalledWith(held);
+    expect(onViewSettled).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(120);
+    expect(onViewSettled).not.toHaveBeenCalled();
+
+    controller.endOrbitDrag();
+    vi.advanceTimersByTime(120);
+    expect(onViewSettled).toHaveBeenCalledTimes(1);
+    expect(onViewSettled).toHaveBeenLastCalledWith(controller.capture());
+    controller.dispose();
+  });
+
+  it('does not persist an intermediate programmatic glide pose', () => {
+    const { controller, onViewSettled } = createController(false);
+    const start = performance.now();
+    controller.startTween({
+      position: new THREE.Vector3(0, 0, 150),
+      target: new THREE.Vector3(5, 2, 1),
+      near: 0.1,
+      far: 4000
+    });
+    controller.stepTween(start + 200);
+    vi.advanceTimersByTime(120);
+    expect(onViewSettled).not.toHaveBeenCalled();
+
+    controller.stepTween(start + 10_000);
+    vi.advanceTimersByTime(120);
+    expect(onViewSettled).toHaveBeenCalledTimes(1);
+    expect(onViewSettled).toHaveBeenLastCalledWith(controller.capture());
     controller.dispose();
   });
 
@@ -161,11 +222,13 @@ describe('CameraController external orbit lifecycle', () => {
   });
 
   it('cancels an active external orbit and pending settle on dispose', () => {
-    const { controller, requestRender, onViewChange } = createController(false);
+    const { controller, requestRender, onViewChange, onViewSettled } =
+      createController(false);
     controller.beginOrbitDrag();
     controller.orbitByPixels(12, -6);
     const rendersAtDispose = requestRender.mock.calls.length;
     const changesAtDispose = onViewChange.mock.calls.length;
+    const settlesAtDispose = onViewSettled.mock.calls.length;
 
     expect(() => controller.dispose()).not.toThrow();
     vi.runOnlyPendingTimers();
@@ -175,6 +238,7 @@ describe('CameraController external orbit lifecycle', () => {
     expect(controller.stepOrbit(performance.now() + 1_000)).toBe(false);
     expect(requestRender).toHaveBeenCalledTimes(rendersAtDispose);
     expect(onViewChange).toHaveBeenCalledTimes(changesAtDispose);
+    expect(onViewSettled).toHaveBeenCalledTimes(settlesAtDispose);
     expect(() => controller.dispose()).not.toThrow();
   });
 });

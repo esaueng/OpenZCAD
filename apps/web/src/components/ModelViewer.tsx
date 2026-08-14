@@ -394,8 +394,10 @@ interface ModelViewerProps {
   projection: ProjectionMode;
   /** Per-project camera pose restored before the first automatic fit. */
   initialView: ViewportCameraState | null;
-  /** Durable camera pose emitted after navigation or programmatic view changes. */
+  /** Live camera pose emitted synchronously as navigation changes it. */
   onViewChange(view: ViewportCameraState): void;
+  /** Final camera pose emitted after navigation or a camera glide settles. */
+  onViewSettled(view: ViewportCameraState): void;
   /** Imperative sink for per-frame axis projections (no React re-render). */
   orientationRef: MutableRefObject<((axes: AxisProjection) => void) | null>;
   /** Imperative bridge from the SVG view cube into the live camera rig. */
@@ -941,6 +943,7 @@ export function ModelViewer({
   projection,
   initialView,
   onViewChange,
+  onViewSettled,
   orientationRef,
   orientationDragRef,
   onSelectTopology,
@@ -1055,6 +1058,8 @@ export function ModelViewer({
   const initialViewRef = useRef(initialView);
   const onViewChangeRef = useRef(onViewChange);
   onViewChangeRef.current = onViewChange;
+  const onViewSettledRef = useRef(onViewSettled);
+  onViewSettledRef.current = onViewSettled;
   const onOffsetCommitRef = useRef(onOffsetCommit);
   onOffsetCommitRef.current = onOffsetCommit;
   const onOffsetPreviewRef = useRef(onOffsetPreview);
@@ -1291,6 +1296,7 @@ export function ModelViewer({
       domElement: renderer.domElement,
       requestRender: () => requestRender(),
       onViewChange: (view) => onViewChangeRef.current(view),
+      onViewSettled: (view) => onViewSettledRef.current(view),
       reducedMotion: () => reducedMotionRef.current === true,
       // Defaults on: zooming toward the pointer is what every modern CAD
       // tool does, and a saved view from before the preference existed
@@ -6983,7 +6989,9 @@ export function ModelViewer({
       }
       context.controls.update();
       context.hasFitCamera = true;
-      onViewChangeRef.current(context.captureView());
+      const view = context.captureView();
+      onViewChangeRef.current(view);
+      onViewSettledRef.current(view);
     }
     context.requestRender();
     if (bodiesChanged) {
@@ -7867,7 +7875,9 @@ export function ModelViewer({
       );
       context.controls.update();
       context.hasFitCamera = true;
-      onViewChangeRef.current(context.captureView());
+      const view = context.captureView();
+      onViewChangeRef.current(view);
+      onViewSettledRef.current(view);
     }
     context.requestRender();
   }, [bodies.length, sketches, sketchViews]);

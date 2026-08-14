@@ -84,8 +84,10 @@ export interface CameraControllerOptions {
   domElement: HTMLElement;
   /** Invalidates the viewport so the render loop draws another frame. */
   requestRender(): void;
-  /** Durable pose sink, already debounced past OrbitControls' damping tail. */
+  /** Immediate in-memory pose sink, including gesture-time camera changes. */
   onViewChange(state: ViewportCameraState): void;
+  /** Durable pose sink, called only after a camera gesture or glide settles. */
+  onViewSettled(state: ViewportCameraState): void;
   /** Read per call: the preference can change without rebuilding the scene. */
   reducedMotion(): boolean;
   /**
@@ -116,7 +118,7 @@ export class CameraController {
   private active: THREE.Camera;
   private tween: CameraTween | null = null;
   private settleTimeout: number | null = null;
-  private deferredTimeout: number | null = null;
+  private flushingSettle = false;
   private orbitGlideEndsAt: number | null = null;
   private gestureActive = false;
   private externalOrbitActive = false;
@@ -266,6 +268,21 @@ export class CameraController {
     this.options.onViewChange(this.capture());
   };
 
+  private emitSettledViewChange = () => {
+    const state = this.capture();
+    // Keep the in-memory pose exactly aligned with the durable final frame.
+    this.options.onViewChange(state);
+    this.options.onViewSettled(state);
+  };
+
+  /** Keeps the live pose current while parking durability on the settle path. */
+  private handleOrbitChange = () => {
+    this.emitViewChange();
+    if (!this.flushingSettle) {
+      this.scheduleSettledViewChange();
+    }
+  };
+
   /** Restores tight tracking; a grab mid-glide folds the residue into it. */
   private beginGesture = () => {
     this.gestureActive = true;
@@ -293,36 +310,16 @@ export class CameraController {
       this.orbit.enableDamping = true;
       this.orbit.dampingFactor = DRAG_DAMPING;
       this.emitViewChange();
+      this.scheduleSettledViewChange();
       return;
     }
     this.orbit.dampingFactor = GLIDE_DAMPING;
     this.orbitGlideEndsAt = performance.now() + ORBIT_GLIDE_MAX_MS;
     this.options.requestRender();
-    // Persist the release-time pose right away — the glide only refines it,
-    // and its sub-pixel tail can outlive the user's patience (or their tab).
-    // The settled emit still records the final frame afterwards.
+    // The live pose is readable at release, while durable persistence remains
+    // parked until the damping tail reaches this controller's settle path.
     this.emitViewChange();
     this.scheduleSettledViewChange();
-  };
-
-  /**
-   * Reports a pose change that happened during a gesture, off the frame that
-   * produced it. Unlike the settled emit this is not gated on the gesture
-   * ending, because the change it carries — a re-pivot — happens at the
-   * start of one and would otherwise wait for a release that may be seconds
-   * away, or never come if the tab closes first.
-   */
-  private scheduleDeferredViewChange = () => {
-    if (this.deferredTimeout !== null) {
-      return;
-    }
-    this.deferredTimeout = window.setTimeout(() => {
-      this.deferredTimeout = null;
-      if (this.disposed) {
-        return;
-      }
-      this.emitViewChange();
-    }, VIEW_SETTLE_MS);
   };
 
   private scheduleSettledViewChange = () => {
@@ -332,7 +329,7 @@ export class CameraController {
     }
     this.settleTimeout = window.setTimeout(() => {
       this.settleTimeout = null;
-      if (this.gestureActive || this.disposed) {
+      if (this.gestureActive || this.tween || this.disposed) {
         return;
       }
       this.orbitGlideEndsAt = null;
@@ -341,11 +338,16 @@ export class CameraController {
       // mid-gesture it lands as a jump in whatever comes next — a pan
       // bleeding into an orbit. Flush it here, where it is invisible, so the
       // next gesture starts from rest.
-      this.orbit.enableDamping = false;
-      this.orbit.update();
-      this.orbit.enableDamping = true;
-      this.orbit.dampingFactor = DRAG_DAMPING;
-      this.emitViewChange();
+      this.flushingSettle = true;
+      try {
+        this.orbit.enableDamping = false;
+        this.orbit.update();
+        this.orbit.enableDamping = true;
+        this.orbit.dampingFactor = DRAG_DAMPING;
+      } finally {
+        this.flushingSettle = false;
+      }
+      this.emitSettledViewChange();
     }, VIEW_SETTLE_MS);
   };
 
@@ -357,7 +359,7 @@ export class CameraController {
     this.applyPointerBindings(orbit);
     orbit.addEventListener('start', this.beginGesture);
     orbit.addEventListener('end', this.settleDamping);
-    orbit.addEventListener('change', this.scheduleSettledViewChange);
+    orbit.addEventListener('change', this.handleOrbitChange);
     return orbit;
   }
 
@@ -365,7 +367,7 @@ export class CameraController {
     const target = this.orbit.target.clone();
     this.orbit.removeEventListener('start', this.beginGesture);
     this.orbit.removeEventListener('end', this.settleDamping);
-    this.orbit.removeEventListener('change', this.scheduleSettledViewChange);
+    this.orbit.removeEventListener('change', this.handleOrbitChange);
     this.orbit.dispose();
     this.orbit = this.createOrbit(nextCamera);
     this.orbit.target.copy(target);
@@ -423,6 +425,7 @@ export class CameraController {
     this.rebindControls(this.active);
     this.orbit.update();
     this.emitViewChange();
+    this.scheduleSettledViewChange();
     this.options.requestRender();
   }
 
@@ -450,6 +453,7 @@ export class CameraController {
       }
       onComplete?.();
       this.emitViewChange();
+      this.scheduleSettledViewChange();
       this.options.requestRender();
       return;
     }
@@ -577,6 +581,7 @@ export class CameraController {
       this.orbit.enableDamping = true;
       this.orbit.dampingFactor = DRAG_DAMPING;
       this.emitViewChange();
+      this.scheduleSettledViewChange();
       return changed;
     }
     const changed = this.updateOrbitForFrame();
@@ -601,17 +606,11 @@ export class CameraController {
     }
     this.orbit.target.copy(pivot);
     this.orbit.update();
-    // The target is part of the durable pose, and OrbitControls only emits a
-    // change when the *camera* moves — which re-pivoting deliberately avoids.
-    // Report it, or a reload restores a stale pivot.
-    //
-    // Deferred rather than immediate: this runs from pointerdown, and the
-    // sink writes the whole workspace session synchronously, so reporting
-    // here put a read-parse-validate-serialise-write on the frame the gesture
-    // began. It cannot go through `scheduleSettledViewChange`, which declines
-    // to fire while a gesture is running — a press-and-hold pivot would then
-    // never be reported at all.
-    this.scheduleDeferredViewChange();
+    // OrbitControls only emits a change when the camera moves, which this
+    // deliberately avoids. Publish the pivot to memory now; a press-and-hold
+    // remains storage-free and its release re-arms this settle path.
+    this.emitViewChange();
+    this.scheduleSettledViewChange();
   }
 
   /**
@@ -704,6 +703,7 @@ export class CameraController {
       this.perspective.updateProjectionMatrix();
       tween.onComplete?.();
       this.emitViewChange();
+      this.scheduleSettledViewChange();
     }
     return true;
   }
@@ -746,6 +746,7 @@ export class CameraController {
     this.orthographic.updateProjectionMatrix();
     this.orbit.update();
     this.emitViewChange();
+    this.scheduleSettledViewChange();
   }
 
   /**
@@ -789,13 +790,9 @@ export class CameraController {
       window.clearTimeout(this.settleTimeout);
       this.settleTimeout = null;
     }
-    if (this.deferredTimeout !== null) {
-      window.clearTimeout(this.deferredTimeout);
-      this.deferredTimeout = null;
-    }
     this.orbit.removeEventListener('start', this.beginGesture);
     this.orbit.removeEventListener('end', this.settleDamping);
-    this.orbit.removeEventListener('change', this.scheduleSettledViewChange);
+    this.orbit.removeEventListener('change', this.handleOrbitChange);
     this.orbit.dispose();
   }
 }
