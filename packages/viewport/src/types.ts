@@ -71,6 +71,8 @@ export interface ViewerSettings {
   zoomToCursor?: boolean;
   /** Runtime-only navigation preference; omitted by older saved views. */
   middleDrag?: 'pan' | 'orbit' | 'zoom';
+  /** Runtime-only navigation preference; omitted by older saved views. */
+  pointerNavigation?: 'auto' | 'mouse' | 'trackpad';
 }
 
 /**

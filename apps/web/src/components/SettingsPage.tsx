@@ -1,4 +1,7 @@
-import { MIDDLE_DRAG_LABELS } from '@openzcad/viewport/input-bindings';
+import {
+  MIDDLE_DRAG_LABELS,
+  POINTER_NAVIGATION_LABELS
+} from '@openzcad/viewport/input-bindings';
 import {
   useEffect,
   useLayoutEffect,
@@ -971,6 +974,31 @@ export function SettingsPage({
                   {(['pan', 'orbit', 'zoom'] as const).map((action) => (
                     <option key={action} value={action}>
                       {MIDDLE_DRAG_LABELS[action]}
+                    </option>
+                  ))}
+                </select>
+              </SettingRow>
+              <SettingRow
+                title="Scroll wheel"
+                description="Two fingers on a trackpad pan and a pinch zooms; a wheel notch zooms. Detection reads each scroll on its own — set it explicitly if your device is read wrongly."
+                scope="Navigation"
+              >
+                <select
+                  aria-label="Scroll wheel"
+                  value={settings.viewport.pointerNavigation}
+                  onChange={(event) =>
+                    patch({
+                      viewport: {
+                        ...settings.viewport,
+                        pointerNavigation: event.target
+                          .value as AppSettings['viewport']['pointerNavigation']
+                      }
+                    })
+                  }
+                >
+                  {(['auto', 'mouse', 'trackpad'] as const).map((mode) => (
+                    <option key={mode} value={mode}>
+                      {POINTER_NAVIGATION_LABELS[mode]}
                     </option>
                   ))}
                 </select>

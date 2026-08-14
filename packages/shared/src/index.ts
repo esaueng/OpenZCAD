@@ -1591,6 +1591,11 @@ export type AppDensity = 'compact' | 'comfortable';
 export type SettingsProjectionMode = 'perspective' | 'orthographic';
 export type SettingsDisplayMode = 'shaded-edges' | 'shaded' | 'wireframe';
 export type SettingsMiddleDrag = 'pan' | 'orbit' | 'zoom';
+/**
+ * How to read a wheel event. `auto` classifies each one; the other two force
+ * a device's meaning for hardware the classification reads wrongly.
+ */
+export type SettingsPointerNavigation = 'auto' | 'mouse' | 'trackpad';
 export type AssistantProvider =
   'openrouter' | 'openai' | 'responses-compatible';
 export type AssistantCredentialSource = 'deployment' | 'personal';
@@ -1633,6 +1638,8 @@ export interface AppSettings {
     zoomToCursor: boolean;
     /** What a middle-button drag does: pan, orbit, or zoom. */
     middleDrag: SettingsMiddleDrag;
+    /** Whether wheel input is auto-classified or forced to one device. */
+    pointerNavigation: SettingsPointerNavigation;
   };
   sketching: {
     /** Sketch-plane grid visibility is independent from grid snapping. */
@@ -1733,7 +1740,8 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
     showGrid: true,
     displayMode: 'shaded-edges',
     zoomToCursor: true,
-    middleDrag: 'pan'
+    middleDrag: 'pan',
+    pointerNavigation: 'auto'
   },
   sketching: {
     gridVisible: true,
