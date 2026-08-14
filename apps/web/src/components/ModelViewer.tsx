@@ -1050,6 +1050,8 @@ export function ModelViewer({
   zoomToCursorRef.current = settings.zoomToCursor;
   const middleDragRef = useRef(settings.middleDrag);
   middleDragRef.current = settings.middleDrag;
+  const pointerNavigationRef = useRef(settings.pointerNavigation);
+  pointerNavigationRef.current = settings.pointerNavigation;
   const initialViewRef = useRef(initialView);
   const onViewChangeRef = useRef(onViewChange);
   onViewChangeRef.current = onViewChange;
@@ -1296,7 +1298,8 @@ export function ModelViewer({
       zoomToCursor: () => zoomToCursorRef.current !== false,
       // Panning is what every other CAD tool puts on the middle drag; the
       // OrbitControls default of zoom is the odd one out.
-      middleDrag: () => middleDragRef.current ?? 'pan'
+      middleDrag: () => middleDragRef.current ?? 'pan',
+      pointerNavigation: () => pointerNavigationRef.current ?? 'auto'
     });
     const camera = cameraRig.perspective;
     const orthographic = cameraRig.orthographic;
@@ -7053,7 +7056,10 @@ export function ModelViewer({
   // them, so a live toggle has to push the new value onto the instance.
   useEffect(() => {
     contextRef.current?.refreshNavigation();
-  }, [settings.zoomToCursor, settings.middleDrag]);
+    // pointerNavigation is read per wheel event rather than cached on the
+    // controls, so it needs no refresh — it is listed to keep the set of
+    // navigation preferences in one place.
+  }, [settings.zoomToCursor, settings.middleDrag, settings.pointerNavigation]);
 
   // Cylindrical wall radius: the handle moves radially while exact preview
   // geometry rebuilds concentrically around the immutable axis snapshot.

@@ -53,3 +53,13 @@ export const MIDDLE_DRAG_LABELS: Record<MiddleDragAction, string> = {
   orbit: 'Orbit',
   zoom: 'Zoom'
 };
+
+/** Named for what the user has in their hand, not for the classifier. */
+export const POINTER_NAVIGATION_LABELS: Record<
+  'auto' | 'mouse' | 'trackpad',
+  string
+> = {
+  auto: 'Detect automatically',
+  mouse: 'Mouse wheel',
+  trackpad: 'Trackpad'
+};
