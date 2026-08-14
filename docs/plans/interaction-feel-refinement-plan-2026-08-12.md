@@ -34,7 +34,7 @@ Branch `claude/3d-modeling-interface-refinement-e7b650`.
 | 4 trackpad two-finger pan + pinch zoom | **done** — `wheelGesture.ts` classifier, `auto`/`mouse`/`trackpad` supported by the controller |
 | 4 navigation preference in Settings | **done** — Viewport › Scroll wheel: detect / mouse / trackpad |
 | 2.3 window-resize coalescing | **done** — one render per frame instead of one per event |
-| 2.1 defer the workspace-session write | **attempted and reverted** — see below |
+| 2.1 defer the workspace-session write | **done** — the pivot report is deferred off the press frame |
 | 2.2 precompute move snap candidates | **not started** |
 | 5.2 cache the canvas rect for picking | **done** — one layout read per event, not per raycast |
 | 5.3 callout layout thrash | **done** — all rects read before any margin is written |
@@ -44,7 +44,17 @@ Branch `claude/3d-modeling-interface-refinement-e7b650`.
 | 5.4 sketch geometry reuse | **not started** — needs a capacity-buffer rewrite of the preview `LineGeometry`; real per-move allocation, no measured symptom |
 | Close-out: `docs/interaction-design.md` | **done** |
 
-**2.1, and why it is not in.** The cost is real and now measured: pressing to
+**2.1, as landed.** The fix is in `CameraController.pivotOn`, not in the
+storage hook: the pose report that ran from `pointerdown` now goes through a
+deferred emit. It cannot use `scheduleSettledViewChange`, which declines to
+fire while a gesture is running — a press-and-hold pivot would then never be
+reported at all, which is exactly how the first attempt failed. Releasing
+still reports immediately, so a finished gesture never waits on the timer.
+
+The history below is kept because it explains why the obvious version does
+not work.
+
+**The earlier attempt, and why it was reverted.** The cost is real and now measured: pressing to
 orbit performs **3 synchronous session writes** on the press frame, each a
 read-parse-validate-serialise-write of the whole record, because re-pivoting
 on the picked point reports a pose from inside `pointerdown`. Deferring that
