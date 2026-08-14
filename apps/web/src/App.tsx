@@ -1916,7 +1916,8 @@ export function App() {
       ...current,
       reducedMotion: appSettings.appearance.reducedMotion,
       zoomToCursor: appSettings.viewport.zoomToCursor,
-      middleDrag: appSettings.viewport.middleDrag
+      middleDrag: appSettings.viewport.middleDrag,
+      pointerNavigation: appSettings.viewport.pointerNavigation
     }));
   }, [appSettings]);
 
@@ -3638,7 +3639,8 @@ export function App() {
         displayMode: appSettings.viewport.displayMode,
         reducedMotion: appSettings.appearance.reducedMotion,
         zoomToCursor: appSettings.viewport.zoomToCursor,
-        middleDrag: appSettings.viewport.middleDrag
+        middleDrag: appSettings.viewport.middleDrag,
+        pointerNavigation: appSettings.viewport.pointerNavigation
       });
     }
     if (rememberProject) {
