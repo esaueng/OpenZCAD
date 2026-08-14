@@ -323,9 +323,9 @@ test('turns project sharing off without disabling cloud saves', async ({
     page.getByRole('form', { name: 'Join a shared project' })
   ).toHaveCount(0);
   await expect(page.getByLabel('Invitation token')).toHaveCount(0);
-  await expect(
-    page.getByRole('button', { name: 'Join project' })
-  ).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Join project' })).toHaveCount(
+    0
+  );
   await page.getByLabel('Project name').fill('Private Local Part');
   await page.getByRole('button', { name: 'Create project' }).click();
   await expect(
@@ -700,4 +700,72 @@ test('collapsing the assistant frees its column and keeps the thread', async ({
   await expect(page.locator('.assistant-card.proposal')).toContainText(
     'Add a 10 mm cube.'
   );
+});
+
+test('forcing mouse navigation makes a trackpad-style scroll zoom again', async ({
+  page
+}) => {
+  await stubApi(page);
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('Wheel Preference Part');
+  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
+  await page
+    .getByRole('region', { name: 'Feature inspector' })
+    .getByRole('button', { name: /^Create/ })
+    .click();
+  await expect(
+    page.locator('.feature-row-main', { hasText: 'Box' })
+  ).toBeVisible();
+
+  const canvas = page.locator('.viewer-host canvas');
+  await expect(canvas).toBeVisible({ timeout: 120_000 });
+  const pose = async () =>
+    page.evaluate(() => {
+      const raw = localStorage.getItem('openzcad-workspace-session:v1');
+      const views = raw
+        ? (
+            JSON.parse(raw) as {
+              views?: Record<
+                string,
+                { camera: { position: number[]; target: number[] } }
+              >;
+            }
+          ).views
+        : undefined;
+      const first = views ? Object.values(views)[0] : undefined;
+      return first ? first.camera : null;
+    });
+  const distance = (camera: { position: number[]; target: number[] }) =>
+    Math.hypot(
+      camera.position[0]! - camera.target[0]!,
+      camera.position[1]! - camera.target[1]!,
+      camera.position[2]! - camera.target[2]!
+    );
+
+  await canvas.dispatchEvent('wheel', { deltaY: 120, deltaMode: 0 });
+  await expect.poll(async () => (await pose()) !== null).toBe(true);
+
+  // That fine two-axis deltas pan under the default classification is covered
+  // in the viewport suite. What matters here is that the preference overrides
+  // it — the escape hatch for hardware the classification reads wrongly.
+  await page.getByRole('button', { name: 'Open settings' }).click();
+  await page.getByRole('button', { name: 'Viewport', exact: true }).click();
+  await page.getByLabel('Scroll wheel').selectOption('mouse');
+  await page
+    .getByRole('button', { name: /Back to workspace|Close settings/ })
+    .first()
+    .click();
+  await expect(canvas).toBeVisible();
+
+  const beforeForced = (await pose())!;
+  for (let step = 0; step < 8; step += 1) {
+    await canvas.dispatchEvent('wheel', { deltaX: 5, deltaY: 4, deltaMode: 0 });
+  }
+  await expect
+    .poll(async () => {
+      const now = await pose();
+      return now ? Math.abs(distance(now) - distance(beforeForced)) : 0;
+    })
+    .toBeGreaterThan(0.01);
 });

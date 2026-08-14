@@ -60,6 +60,7 @@ export const SETTINGS_SECTIONS: readonly SettingsSectionMeta[] = [
       'Show construction grid',
       'Zoom toward the pointer',
       'Middle-button drag',
+      'Scroll wheel',
       'Display mode'
     ]
   },

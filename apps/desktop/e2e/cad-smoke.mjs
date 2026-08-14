@@ -339,10 +339,7 @@ try {
       })
       .map(function (item) { return item.textContent; })
       .join('');`;
-  const statusText = await execute(
-    sessionId,
-    documentStatusScript
-  );
+  const statusText = await execute(sessionId, documentStatusScript);
   assert.match(statusText, /Exact B-rep/);
   assert.match(statusText, /warnings\s*0/i);
   assert.match(
@@ -351,7 +348,8 @@ try {
   );
 
   const nativeDisplay = await readDisplayState(sessionId);
-  const nativeBackingScale = nativeDisplay.backingWidth / nativeDisplay.cssWidth;
+  const nativeBackingScale =
+    nativeDisplay.backingWidth / nativeDisplay.cssWidth;
   const expectedNativeScale = Math.min(nativeDisplay.devicePixelRatio, 2);
   assert.ok(
     Math.abs(nativeBackingScale - expectedNativeScale) < 0.02,
@@ -556,20 +554,54 @@ try {
     0.01
   );
 
-  const distanceBeforeZoom = vectorDistance(afterPan.position, afterPan.target);
+  // Fine pixel deltas are a two-finger swipe, and pan. This used to zoom;
+  // wheel intent is classified now, so the same event moves the framing and
+  // leaves the distance to it alone.
+  const distanceBeforePan = vectorDistance(afterPan.position, afterPan.target);
+  for (let step = 0; step < 8; step += 1) {
+    await dispatchControlWheel(sessionId, {
+      clientX: gestureStart.x,
+      clientY: gestureStart.y,
+      deltaX: 4,
+      deltaY: -12
+    });
+    await delay(16);
+  }
+  const afterWheelPan = await waitForCameraChange(
+    sessionId,
+    'Pixel-delta trackpad pan',
+    afterPan,
+    (before, after) => vectorDistance(before.target, after.target),
+    0.01
+  );
+  assert.ok(
+    Math.abs(
+      vectorDistance(afterWheelPan.position, afterWheelPan.target) -
+        distanceBeforePan
+    ) < 0.01,
+    'A two-finger swipe changed how far the camera sits from the model.'
+  );
+
+  // A pinch still zooms. Browsers report one as a wheel with ctrlKey set,
+  // whether or not the key is down, on every platform including WKWebView.
+  const distanceBeforeZoom = vectorDistance(
+    afterWheelPan.position,
+    afterWheelPan.target
+  );
   for (let step = 0; step < 8; step += 1) {
     await dispatchControlWheel(sessionId, {
       clientX: gestureStart.x,
       clientY: gestureStart.y,
       deltaX: 0,
-      deltaY: -12
+      deltaY: -12,
+      ctrlKey: true
     });
     await delay(16);
   }
   const afterZoom = await waitForCameraChange(
     sessionId,
-    'Pixel-delta trackpad zoom',
-    afterPan,
+    'Pinch zoom',
+    afterWheelPan,
     (before, after) =>
       Math.abs(
         vectorDistance(before.position, before.target) -
@@ -579,7 +611,7 @@ try {
   );
   assert.ok(
     vectorDistance(afterZoom.position, afterZoom.target) < distanceBeforeZoom,
-    'Negative trackpad deltas did not zoom the camera toward the model.'
+    'A negative-delta pinch did not zoom the camera toward the model.'
   );
 
   const edge = await locatePickableEdge(sessionId);
@@ -694,10 +726,7 @@ try {
     `return document.body.innerText.includes('1 body selected');`
   );
 
-  const statusAfterInputs = await execute(
-    sessionId,
-    documentStatusScript
-  );
+  const statusAfterInputs = await execute(sessionId, documentStatusScript);
   assert.equal(
     statusAfterInputs,
     statusText,
