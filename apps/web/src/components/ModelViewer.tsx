@@ -617,7 +617,7 @@ export interface SceneContext {
   readonly selection: SelectionManager;
   readonly hoveredBodyId: string | null;
   readonly hoveredEdge: Line2 | null;
-  /** Single reusable preselection overlay for the face under the pointer. */
+  /** Visible film from the active one of SelectionManager's two hover slots. */
   readonly hoverFaceMesh: THREE.Mesh<
     THREE.BufferGeometry,
     THREE.MeshLambertMaterial
@@ -3340,6 +3340,54 @@ export function ModelViewer({
       }
       detail.resolve(null);
     };
+    /** Read the hover films that are still attached to rendered bodies. */
+    const handleE2EHoverFaceState = (event: Event) => {
+      if (!e2eCanvasHooksEnabled) {
+        return;
+      }
+      const detail = (
+        event as CustomEvent<{
+          resolve?: (value: {
+            settling: boolean;
+            slots: {
+              slot: number;
+              topologyKey: string;
+              visible: boolean;
+              opacity: number;
+              triangleCount: number;
+            }[];
+          }) => void;
+        }>
+      ).detail;
+      if (!detail?.resolve) {
+        return;
+      }
+      const slots: {
+        slot: number;
+        topologyKey: string;
+        visible: boolean;
+        opacity: number;
+        triangleCount: number;
+      }[] = [];
+      bodyGroup.traverse((child) => {
+        if (
+          !(child instanceof THREE.Mesh) ||
+          child.userData.hoverFaceLayer !== 'visible'
+        ) {
+          return;
+        }
+        const geometry = child.geometry as THREE.BufferGeometry;
+        slots.push({
+          slot: Number(child.userData.hoverFaceSlot),
+          topologyKey: String(child.userData.hoverFaceKey ?? ''),
+          visible: child.visible,
+          opacity: (child.material as THREE.Material).opacity,
+          triangleCount: (geometry.index?.count ?? 0) / 3
+        });
+      });
+      slots.sort((left, right) => left.slot - right.slot);
+      detail.resolve({ settling: selection.isSettling, slots });
+    };
     if (E2E_CANVAS_HOOKS_ENABLED) {
       renderer.domElement.addEventListener(
         'openzcad:e2e-select-cylinder',
@@ -3384,6 +3432,10 @@ export function ModelViewer({
       renderer.domElement.addEventListener(
         'openzcad:e2e-locate-pick-stack',
         handleE2ELocatePickStack
+      );
+      renderer.domElement.addEventListener(
+        'openzcad:e2e-hover-face-state',
+        handleE2EHoverFaceState
       );
     }
 
@@ -6308,6 +6360,10 @@ export function ModelViewer({
         'openzcad:e2e-locate-pick-stack',
         handleE2ELocatePickStack
       );
+      renderer.domElement.removeEventListener(
+        'openzcad:e2e-hover-face-state',
+        handleE2EHoverFaceState
+      );
       document.removeEventListener('keydown', handleCapturedEscape, true);
       document.removeEventListener(
         'pointerdown',
@@ -6319,6 +6375,10 @@ export function ModelViewer({
       host.removeEventListener('contextmenu', handleContextMenu);
       renderer.domElement.removeEventListener('wheel', handleWheel);
       discardCylinderRadiusProxy();
+      // Hover slots are children of body objects, but their buffers and
+      // materials belong to SelectionManager. Detach them before the body
+      // tree is disposed so ownership is not crossed or disposed twice.
+      selection.dispose();
       clearGroup(bodyGroup);
       clearGroup(sketchGroup);
       clearGroup(overlayGroup);
@@ -6333,7 +6393,6 @@ export function ModelViewer({
         disposable.geometry.dispose();
         (disposable.material as THREE.Material).dispose();
       }
-      selection.dispose();
       environment.dispose();
       clearGroup(axes); // the triad is three fat lines now, not one helper
       cameraRig.dispose();
@@ -6490,8 +6549,10 @@ export function ModelViewer({
       // before its old Three object is disposed and replaced.
       cylinderRadiusProxyControllerRef.current?.discard();
       mark('viewer.bodies:begin');
-      clearGroup(context.bodyGroup);
+      // The manager owns hover-slot geometry even while the slots are
+      // parented under bodies, so it must detach them before body disposal.
       context.selection.resetForRebuild();
+      clearGroup(context.bodyGroup);
       context.objectsByBodyId.clear();
       context.edgeOverlaysByBodyId.clear();
     }
