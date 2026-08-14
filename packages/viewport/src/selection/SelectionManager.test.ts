@@ -539,3 +539,93 @@ describe('rebuild reset', () => {
     expect(manager.hoverFaceMesh.visible).toBe(false);
   });
 });
+
+describe('face hover cross-fade', () => {
+  function twoFaceBody() {
+    const { manager, objectsByBodyId, setBodies } = makeManager();
+    const bodyId = toBodyId('body-two-face');
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute(
+      'position',
+      new THREE.Float32BufferAttribute(
+        [0, 0, 0, 1, 0, 0, 0, 1, 0, 1, 1, 0, 2, 0, 0, 2, 1, 0],
+        3
+      )
+    );
+    geometry.setAttribute(
+      'normal',
+      new THREE.Float32BufferAttribute(
+        [0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1],
+        3
+      )
+    );
+    geometry.setIndex([0, 1, 2, 3, 4, 5]);
+    objectsByBodyId.set(
+      bodyId,
+      new THREE.Mesh(geometry, new THREE.MeshPhongMaterial())
+    );
+    setBodies([
+      {
+        bodyId,
+        topology: {
+          faces: [
+            {
+              topologyId: 'face-a',
+              hash: 1,
+              triangleStart: 0,
+              triangleCount: 1
+            },
+            {
+              topologyId: 'face-b',
+              hash: 2,
+              triangleStart: 1,
+              triangleCount: 1
+            }
+          ],
+          edges: []
+        }
+      } as unknown as BodyRepresentation
+    ]);
+    return { manager, bodyId };
+  }
+
+  const settle = (manager: SelectionManager) => {
+    for (let frame = 0; frame < 120 && manager.isSettling; frame += 1) {
+      manager.step(0.016);
+    }
+  };
+
+  it('overlaps the face being left with the one being entered', () => {
+    const { manager, bodyId } = twoFaceBody();
+
+    manager.setHoverFace({ bodyId, kind: 'face', topologyId: 'face-a' });
+    settle(manager);
+    const settledOpacity = manager.hoverFaceMesh.material.opacity;
+    expect(settledOpacity).toBeGreaterThan(0);
+
+    // Moving to the neighbouring face: the new film starts from nothing and
+    // the old one is still on screen, which is what makes it a cross-fade
+    // rather than the geometry teleporting under a steady opacity.
+    manager.setHoverFace({ bodyId, kind: 'face', topologyId: 'face-b' });
+    expect(manager.hoverFaceMesh.material.opacity).toBe(0);
+    expect(manager.isSettling).toBe(true);
+
+    manager.step(0.016);
+    const outgoing = manager.hoverFaceMesh.parent?.children.find(
+      (child) => child.name === 'body-face-hover-out'
+    ) as THREE.Mesh<THREE.BufferGeometry, THREE.MeshLambertMaterial>;
+    expect(outgoing).toBeDefined();
+    expect(outgoing.visible).toBe(true);
+    expect(outgoing.material.opacity).toBeGreaterThan(0);
+    expect(manager.hoverFaceMesh.material.opacity).toBeGreaterThan(0);
+
+    // And the outgoing film lets go once it has gone.
+    settle(manager);
+    expect(outgoing.visible).toBe(false);
+    expect(outgoing.parent).toBeNull();
+    expect(manager.hoverFaceMesh.material.opacity).toBeCloseTo(
+      settledOpacity,
+      5
+    );
+  });
+});
