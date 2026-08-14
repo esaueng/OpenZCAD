@@ -8,6 +8,7 @@
 
 export * from './types';
 export * from './motion';
+export * from './input/wheelGesture';
 
 // Rendering: meshes, materials, lighting, grid, and camera fitting.
 export * from './render/scene';

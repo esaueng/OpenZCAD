@@ -938,10 +938,28 @@ export function App() {
     typeof globalThis.innerWidth === 'number' ? globalThis.innerWidth : 0
   );
   useEffect(() => {
-    const onResize = () => setWindowWidth(globalThis.innerWidth);
-    onResize();
+    // Coalesced to one render per frame: dragging a window edge emits resize
+    // events faster than the editor can usefully re-render, and every one of
+    // them re-renders the whole tree on top of the canvas resize the viewport
+    // is already doing.
+    let frame: number | null = null;
+    const onResize = () => {
+      if (frame !== null) {
+        return;
+      }
+      frame = globalThis.requestAnimationFrame(() => {
+        frame = null;
+        setWindowWidth(globalThis.innerWidth);
+      });
+    };
+    setWindowWidth(globalThis.innerWidth);
     globalThis.addEventListener('resize', onResize);
-    return () => globalThis.removeEventListener('resize', onResize);
+    return () => {
+      if (frame !== null) {
+        globalThis.cancelAnimationFrame(frame);
+      }
+      globalThis.removeEventListener('resize', onResize);
+    };
   }, []);
   const savedWidths = savedPanelWidths(appSettings);
   const sidebarWidth = clampSidebarWidth(savedWidths.sidebar, windowWidth);
@@ -1155,6 +1173,11 @@ export function App() {
   keypadRef.current = keypad;
   /** Latest pointer/entry value stays transient until an exact frame lands. */
   const offsetPreviewValueRef = useRef<number | null>(null);
+  /**
+   * True once a gesture's rebuilds became too slow to keep previewing. The
+   * handle keeps moving; the geometry does not, and the value chip says so.
+   */
+  const [previewDeferred, setPreviewDeferred] = useState(false);
   /** Signed offset represented by the currently published previewDoc. */
   const [renderedOffsetPreview, setRenderedOffsetPreview] = useState<
     number | null
@@ -1451,7 +1474,8 @@ export function App() {
         ),
       acceptValue: (offset) =>
         Number.isFinite(offset) && Math.abs(offset) > 1e-9,
-      continueAfterSlow: false
+      continueAfterSlow: false,
+      onDegrade: () => setPreviewDeferred(true)
     })
   ).current;
 
@@ -1550,6 +1574,7 @@ export function App() {
     onValidationFailed: (message, value) => {
       cylinderRadiusPreview.clear();
       offsetPreview.clear();
+      setPreviewDeferred(false);
       offsetPreviewValueRef.current = null;
       cylinderRadiusInspectorSetterRef.current?.(null);
       dispatchInteraction({ type: 'validation-failed', message, value });
@@ -1557,6 +1582,7 @@ export function App() {
     onCommitted: (bodyId) => {
       cylinderRadiusPreview.clear();
       offsetPreview.clear();
+      setPreviewDeferred(false);
       offsetPreviewValueRef.current = null;
       dispatchInteraction({ type: 'commit-complete' });
       setSelectedTopology(null);
@@ -1891,7 +1917,8 @@ export function App() {
       ...current,
       reducedMotion: appSettings.appearance.reducedMotion,
       zoomToCursor: appSettings.viewport.zoomToCursor,
-      middleDrag: appSettings.viewport.middleDrag
+      middleDrag: appSettings.viewport.middleDrag,
+      pointerNavigation: appSettings.viewport.pointerNavigation
     }));
   }, [appSettings]);
 
@@ -3613,7 +3640,8 @@ export function App() {
         displayMode: appSettings.viewport.displayMode,
         reducedMotion: appSettings.appearance.reducedMotion,
         zoomToCursor: appSettings.viewport.zoomToCursor,
-        middleDrag: appSettings.viewport.middleDrag
+        middleDrag: appSettings.viewport.middleDrag,
+        pointerNavigation: appSettings.viewport.pointerNavigation
       });
     }
     if (rememberProject) {
@@ -10665,6 +10693,7 @@ export function App() {
               interaction.op === 'offset-face' &&
               interaction.phase === 'failed'
             }
+            previewDeferred={previewDeferred}
             onOpenOffsetKeypad={handleOpenOffsetKeypad}
             keypadAnchorRef={keypadAnchorRef}
             offsetSetterRef={offsetSetterRef}

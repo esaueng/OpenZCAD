@@ -429,6 +429,12 @@ interface ModelViewerProps {
   onOffsetCancel(): void;
   /** Current exact preview or release validation refused this offset. */
   offsetPreviewInvalid: boolean;
+  /**
+   * The live preview gave up on this gesture: the handle still moves, the
+   * geometry no longer follows. Shown on the value chip so frozen geometry
+   * reads as a decision rather than a hang.
+   */
+  previewDeferred: boolean;
   /** Value chip tapped: open exact entry prefilled with the current offset. */
   onOpenOffsetKeypad(currentOffset: number, totalBaseline?: number): void;
   /** Imperative sink receiving the chip anchor in host pixels each frame. */
@@ -650,10 +656,16 @@ function clampNameCallouts(container: HTMLElement) {
   }
   const bounds = container.getBoundingClientRect();
   const pad = 4;
-  for (const label of labels) {
-    const currentLeft = parseFloat(label.style.marginLeft) || 0;
-    const currentTop = parseFloat(label.style.marginTop) || 0;
-    const rect = label.getBoundingClientRect();
+  // Every rect is read before any margin is written. Interleaving them made
+  // each write invalidate layout for the next read, so a frame with N
+  // callouts forced N reflows instead of one.
+  const measured = [...labels].map((label) => ({
+    label,
+    currentLeft: parseFloat(label.style.marginLeft) || 0,
+    currentTop: parseFloat(label.style.marginTop) || 0,
+    rect: label.getBoundingClientRect()
+  }));
+  for (const { label, currentLeft, currentTop, rect } of measured) {
     const baseLeft = rect.left - currentLeft;
     const baseRight = rect.right - currentLeft;
     const baseTop = rect.top - currentTop;
@@ -788,6 +800,101 @@ const SELECTED_FACE_HIDDEN_OPACITY = 0.16;
  */
 const DEFAULT_OVERLAY_FADE_TARGET = 0.34;
 
+/**
+ * Starts a deselected highlight fading instead of deleting it outright.
+ *
+ * The overlay is renamed first: the rebuild finds selection overlays by name,
+ * and a fading one must not be mistaken for the current selection's. Its
+ * materials are handed to the same fade the entrance uses, aimed at zero.
+ */
+function retireOverlay(
+  context: SceneContext,
+  retiring: { group: THREE.Group; parent: THREE.Object3D }[],
+  group: THREE.Group
+) {
+  const parent = group.parent;
+  if (!parent) {
+    return;
+  }
+  group.name = `${group.name}-retiring`;
+  let hasMaterial = false;
+  group.traverse((child) => {
+    const material = (child as THREE.Mesh).material;
+    if (material && !Array.isArray(material)) {
+      material.userData.targetOpacity = 0;
+      context.fadeIns.add(material);
+      hasMaterial = true;
+    }
+  });
+  if (!hasMaterial) {
+    clearGroup(group);
+    parent.remove(group);
+    return;
+  }
+  retiring.push({ group, parent });
+  context.requestRender();
+}
+
+/** Disposes retired overlays once their fade has reached zero. */
+function disposeSettledOverlays(
+  retiring: { group: THREE.Group; parent: THREE.Object3D }[]
+) {
+  for (let index = retiring.length - 1; index >= 0; index -= 1) {
+    const entry = retiring[index]!;
+    let faded = true;
+    entry.group.traverse((child) => {
+      const material = (child as THREE.Mesh).material;
+      if (material && !Array.isArray(material) && material.opacity > 0) {
+        faded = false;
+      }
+    });
+    if (faded) {
+      clearGroup(entry.group);
+      entry.parent.remove(entry.group);
+      retiring.splice(index, 1);
+    }
+  }
+}
+
+/**
+ * Scratch vector for the snap projectors. They run once per candidate — every
+ * edge endpoint and face centre of every other body — on each frame of a move
+ * drag, and each call used to allocate.
+ */
+const SNAP_PROJECT_SCRATCH = new THREE.Vector3();
+
+/**
+ * Disarms a rig by fading it out rather than deleting it mid-frame.
+ *
+ * Rigs whose gesture is still running, or which cannot ease, are disposed as
+ * before — a rig being torn down because its body was replaced has nothing
+ * left to fade against.
+ */
+function retireRig(rig: DragRig, retiring: DragRig[]): void {
+  if (!rig.beginExit || !rig.isGone) {
+    rig.dispose();
+    return;
+  }
+  rig.beginExit();
+  retiring.push(rig);
+}
+
+/** Disposes faded-out rigs, and reports whether any are still leaving. */
+function stepRetiringRigs(retiring: DragRig[], dtMs: number): boolean {
+  let animating = false;
+  for (let index = retiring.length - 1; index >= 0; index -= 1) {
+    const rig = retiring[index]!;
+    rig.step?.(dtMs);
+    if (rig.isGone?.()) {
+      rig.dispose();
+      retiring.splice(index, 1);
+    } else {
+      animating = true;
+    }
+  }
+  return animating;
+}
+
 const E2E_CANVAS_HOOKS_ENABLED =
   (
     import.meta.env as unknown as {
@@ -848,6 +955,7 @@ export function ModelViewer({
   onOffsetCommit,
   onOffsetCancel,
   offsetPreviewInvalid,
+  previewDeferred,
   onOpenOffsetKeypad,
   keypadAnchorRef,
   offsetSetterRef,
@@ -945,6 +1053,8 @@ export function ModelViewer({
   zoomToCursorRef.current = settings.zoomToCursor;
   const middleDragRef = useRef(settings.middleDrag);
   middleDragRef.current = settings.middleDrag;
+  const pointerNavigationRef = useRef(settings.pointerNavigation);
+  pointerNavigationRef.current = settings.pointerNavigation;
   const initialViewRef = useRef(initialView);
   const onViewChangeRef = useRef(onViewChange);
   onViewChangeRef.current = onViewChange;
@@ -958,6 +1068,8 @@ export function ModelViewer({
   onOffsetCancelRef.current = onOffsetCancel;
   const offsetPreviewInvalidRef = useRef(offsetPreviewInvalid);
   offsetPreviewInvalidRef.current = offsetPreviewInvalid;
+  const previewDeferredRef = useRef(previewDeferred);
+  previewDeferredRef.current = previewDeferred;
   const onOpenOffsetKeypadRef = useRef(onOpenOffsetKeypad);
   onOpenOffsetKeypadRef.current = onOpenOffsetKeypad;
   const onCylinderRadiusPreviewRef = useRef(onCylinderRadiusPreview);
@@ -1008,6 +1120,19 @@ export function ModelViewer({
    * their arrowheads and witness ticks are pixel-sized, and the world size of
    * a pixel changes with a zoom that never touches the camera's orientation.
    */
+  /**
+   * Selection overlays that have been deselected and are fading out. They are
+   * detached from the naming scheme first so a rebuild cannot find and reuse
+   * them, then disposed once their materials reach zero.
+   */
+  const retiringOverlaysRef = useRef<
+    { group: THREE.Group; parent: THREE.Object3D }[]
+  >([]);
+  /**
+   * Rigs that have been disarmed and are fading out. They stay in the scene,
+   * and stay stepped, until they report themselves gone.
+   */
+  const retiringRigsRef = useRef<DragRig[]>([]);
   const measurementDimensionsRef = useRef<
     {
       graphic: DimensionGraphic;
@@ -1094,7 +1219,28 @@ export function ModelViewer({
         })
     );
     renderer.setSize(host.clientWidth, host.clientHeight);
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    const applyPixelRatio = () =>
+      renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    applyPixelRatio();
+    // Device pixel ratio is read once at construction, so dragging the window
+    // to a display with a different ratio left the backing store at the old
+    // one — permanently soft, or oversampled, with nothing to prompt a
+    // resize. The media query re-arms itself because its own match changes.
+    let pixelRatioQuery: MediaQueryList | null = null;
+    const watchPixelRatio = () => {
+      pixelRatioQuery?.removeEventListener('change', onPixelRatioChange);
+      pixelRatioQuery = window.matchMedia(
+        `(resolution: ${window.devicePixelRatio}dppx)`
+      );
+      pixelRatioQuery.addEventListener('change', onPixelRatioChange);
+    };
+    function onPixelRatioChange() {
+      applyPixelRatio();
+      resizePending = true;
+      requestRender();
+      watchPixelRatio();
+    }
+    watchPixelRatio();
     renderer.outputColorSpace = THREE.SRGBColorSpace;
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
     renderer.toneMappingExposure = 1.0;
@@ -1158,7 +1304,8 @@ export function ModelViewer({
       zoomToCursor: () => zoomToCursorRef.current !== false,
       // Panning is what every other CAD tool puts on the middle drag; the
       // OrbitControls default of zoom is the odd one out.
-      middleDrag: () => middleDragRef.current ?? 'pan'
+      middleDrag: () => middleDragRef.current ?? 'pan',
+      pointerNavigation: () => pointerNavigationRef.current ?? 'auto'
     });
     const camera = cameraRig.perspective;
     const orthographic = cameraRig.orthographic;
@@ -1871,7 +2018,7 @@ export function ModelViewer({
         local,
         (point) =>
           projectToScreen(
-            new THREE.Vector3(point.x, point.y, point.z),
+            SNAP_PROJECT_SCRATCH.set(point.x, point.y, point.z),
             context.activeCamera,
             renderer.domElement.clientWidth,
             renderer.domElement.clientHeight
@@ -3505,6 +3652,28 @@ export function ModelViewer({
       return topologyPickList.show(entries, event, focusFirst);
     }
 
+    /**
+     * Tells an armed drag rig whether the pointer is over its handle, so it
+     * can say it is grabbable before anyone presses. Uses the same hit target
+     * the press itself uses, or the two would disagree about where the handle
+     * is.
+     */
+    function updateRigHover(event: PointerEvent): boolean {
+      const rig =
+        offsetRigRef.current ??
+        cylinderRadiusRigRef.current ??
+        edgeRigRef.current;
+      if (!rig?.setHot) {
+        return false;
+      }
+      setRayFromEvent(event);
+      const hot = context.raycaster
+        .intersectObjects(rig.group.children, true)
+        .some((hit) => hit.object.userData.directHandle === true);
+      rig.setHot(hot);
+      return hot;
+    }
+
     function applyHoverAt(event: PointerEvent) {
       const moveFocus = moveGizmoFocusFromHit(pickMoveGizmo(event));
       if (movePreviewRef.current && moveFocus) {
@@ -3514,6 +3683,14 @@ export function ModelViewer({
         return;
       }
       clearMoveGizmoHover();
+      if (updateRigHover(event)) {
+        // The handle owns the pointer: highlighting whatever face lies behind
+        // it would say the click will select, when it will drag.
+        renderer.domElement.style.cursor = 'grab';
+        applyHover(null);
+        updateMeasurePreview(event);
+        return;
+      }
       applyHover(pick(event));
       updateMeasurePreview(event);
     }
@@ -3812,7 +3989,16 @@ export function ModelViewer({
         rig?.kind === 'cylinder-radius' ? 'dimension' : 'default';
       const offsetWarning =
         rig?.kind === 'offset-face' && offsetPreviewInvalidRef.current;
-      chip.dataset.state = offsetWarning ? 'warning' : 'ready';
+      // A refused value outranks a deferred one: both are true while a slow
+      // gesture drifts out of range, and the refusal is the actionable half.
+      chip.dataset.state = offsetWarning
+        ? 'warning'
+        : previewDeferredRef.current
+          ? 'deferred'
+          : 'ready';
+      chip.title = previewDeferredRef.current
+        ? 'Preview paused — the shape updates when you release.'
+        : '';
       chip.setAttribute('aria-invalid', String(offsetWarning));
       hud.showAt(chip, screen.x, screen.y);
       if (rig?.kind === 'cylinder-radius') {
@@ -4517,7 +4703,7 @@ export function ModelViewer({
                   pointer,
                   (point) =>
                     projectToScreen(
-                      new THREE.Vector3(point.x, point.y, point.z),
+                      SNAP_PROJECT_SCRATCH.set(point.x, point.y, point.z),
                       context.activeCamera,
                       host.clientWidth,
                       host.clientHeight
@@ -5896,6 +6082,7 @@ export function ModelViewer({
           edgesAnimating = true;
         }
       }
+      disposeSettledOverlays(retiringOverlaysRef.current);
       for (const material of context.fadeIns) {
         const target =
           (material.userData.targetOpacity as number | undefined) ??
@@ -5928,11 +6115,15 @@ export function ModelViewer({
         moveGizmoGroup.scale.setScalar(gizmoScale / baseScale);
         moveGizmoGroup.userData.gizmoScale = gizmoScale;
       }
+      let rigsAnimating = stepRetiringRigs(retiringRigsRef.current, dt * 1000);
       const offsetRig = offsetRigRef.current;
       if (offsetRig) {
         // Screen-constant arrow, ~0.55× the move gizmo's reach.
         const rigScale =
           moveGizmoWorldScale(worldPerPixelAt(offsetRig.group.position)) * 0.55;
+        if (offsetRig.step?.(dt * 1000)) {
+          rigsAnimating = true;
+        }
         offsetRig.group.scale.setScalar(rigScale);
         offsetRig.group.userData.gizmoScale = rigScale;
         // Keep dimension arrowheads screen-sized across a pure wheel zoom.
@@ -5943,6 +6134,9 @@ export function ModelViewer({
         const rigScale =
           moveGizmoWorldScale(worldPerPixelAt(cylinderRig.group.position)) *
           0.55;
+        if (cylinderRig.step?.(dt * 1000)) {
+          rigsAnimating = true;
+        }
         cylinderRig.group.scale.setScalar(rigScale);
         cylinderRig.group.userData.gizmoScale = rigScale;
         // Re-run the rig's layout so its dimension-line arrowheads track the
@@ -5953,6 +6147,9 @@ export function ModelViewer({
       if (edgeRig) {
         const rigScale =
           moveGizmoWorldScale(worldPerPixelAt(edgeRig.group.position)) * 0.4;
+        if (edgeRig.step?.(dt * 1000)) {
+          rigsAnimating = true;
+        }
         edgeRig.group.scale.setScalar(rigScale);
         edgeRig.group.userData.gizmoScale = rigScale;
       }
@@ -6032,6 +6229,8 @@ export function ModelViewer({
         controlsChanged ||
         hoverAnimating ||
         edgesAnimating ||
+        rigsAnimating ||
+        retiringOverlaysRef.current.length > 0 ||
         inferenceAnimating ||
         context.fadeIns.size > 0
       ) {
@@ -6045,6 +6244,7 @@ export function ModelViewer({
       if (animationFrame !== null) {
         window.cancelAnimationFrame(animationFrame);
       }
+      pixelRatioQuery?.removeEventListener('change', onPixelRatioChange);
       observer.disconnect();
       renderer.domElement.removeEventListener(
         'pointermove',
@@ -6338,8 +6538,14 @@ export function ModelViewer({
       if (previousSelectionOverlay instanceof THREE.Group) {
         const selectionGroup =
           previousSelectionOverlay as unknown as THREE.Group;
-        clearGroup(selectionGroup);
-        object.remove(selectionGroup);
+        if (bodiesChanged) {
+          // The body itself is being replaced, so there is nothing for the
+          // old highlight to fade against.
+          clearGroup(selectionGroup);
+          object.remove(selectionGroup);
+        } else {
+          retireOverlay(context, retiringOverlaysRef.current, selectionGroup);
+        }
       }
       const previousPreviewOverlay = object.getObjectByName(
         'body-preview-face-overlay'
@@ -6426,11 +6632,16 @@ export function ModelViewer({
           color: SELECTED_FACE_COLOR,
           toneMapped: false,
           transparent: true,
-          opacity: SELECTED_FACE_HIDDEN_OPACITY,
+          // Rises with its visible twin rather than arriving whole: the two
+          // halves are one highlight, and staggering them reads as a flicker
+          // behind the solid.
+          opacity: 0,
           side: THREE.DoubleSide,
           depthWrite: false,
           depthFunc: THREE.GreaterDepth
         });
+        hiddenMaterial.userData.targetOpacity = SELECTED_FACE_HIDDEN_OPACITY;
+        context.fadeIns.add(hiddenMaterial);
         const hiddenHighlight = new THREE.Mesh(hiddenGeometry, hiddenMaterial);
         hiddenHighlight.name = 'body-face-selected-hidden';
         hiddenHighlight.visible = xrayEnabled;
@@ -6607,12 +6818,16 @@ export function ModelViewer({
             color: SELECTED_FACE_COLOR,
             toneMapped: false,
             transparent: true,
-            opacity: SELECTED_FACE_OPACITY,
+            // Same rise as a committed selection: which code path built the
+            // highlight should not be visible in how it arrives.
+            opacity: 0,
             side: THREE.DoubleSide,
             depthWrite: false,
             polygonOffset: true,
             polygonOffsetFactor: -3
           });
+          material.userData.targetOpacity = SELECTED_FACE_OPACITY;
+          context.fadeIns.add(material);
           const highlight = new THREE.Mesh(geometry, material);
           highlight.name = 'body-face-preview-created';
           highlight.renderOrder = VIEWPORT_RENDER_ORDER.SELECTED_GEOMETRY;
@@ -6849,7 +7064,10 @@ export function ModelViewer({
   // them, so a live toggle has to push the new value onto the instance.
   useEffect(() => {
     contextRef.current?.refreshNavigation();
-  }, [settings.zoomToCursor, settings.middleDrag]);
+    // pointerNavigation is read per wheel event rather than cached on the
+    // controls, so it needs no refresh — it is listed to keep the set of
+    // navigation preferences in one place.
+  }, [settings.zoomToCursor, settings.middleDrag, settings.pointerNavigation]);
 
   // Cylindrical wall radius: the handle moves radially while exact preview
   // geometry rebuilds concentrically around the immutable axis snapshot.
@@ -6858,7 +7076,9 @@ export function ModelViewer({
     if (!context || cylinderRadiusDragActiveRef.current) {
       return;
     }
-    cylinderRadiusRigRef.current?.dispose();
+    if (cylinderRadiusRigRef.current) {
+      retireRig(cylinderRadiusRigRef.current, retiringRigsRef.current);
+    }
     cylinderRadiusRigRef.current = null;
     if (offsetChipRef.current) {
       offsetChipRef.current.hidden = true;
@@ -6881,7 +7101,7 @@ export function ModelViewer({
     context.requestRender();
     return () => {
       if (!cylinderRadiusDragActiveRef.current) {
-        rig.dispose();
+        retireRig(rig, retiringRigsRef.current);
         if (cylinderRadiusRigRef.current === rig) {
           cylinderRadiusRigRef.current = null;
         }
@@ -6896,7 +7116,9 @@ export function ModelViewer({
     if (!context || offsetDragActiveRef.current) {
       return;
     }
-    offsetRigRef.current?.dispose();
+    if (offsetRigRef.current) {
+      retireRig(offsetRigRef.current, retiringRigsRef.current);
+    }
     offsetRigRef.current = null;
     if (offsetChipRef.current) {
       offsetChipRef.current.hidden = true;
@@ -6941,7 +7163,7 @@ export function ModelViewer({
     context.requestRender();
     return () => {
       if (!offsetDragActiveRef.current) {
-        rig.dispose();
+        retireRig(rig, retiringRigsRef.current);
         if (offsetRigRef.current === rig) {
           offsetRigRef.current = null;
         }
@@ -6962,7 +7184,9 @@ export function ModelViewer({
     if (!context || edgeDragActiveRef.current) {
       return;
     }
-    edgeRigRef.current?.dispose();
+    if (edgeRigRef.current) {
+      retireRig(edgeRigRef.current, retiringRigsRef.current);
+    }
     edgeRigRef.current = null;
     if (!edgeHandle) {
       context.requestRender();
@@ -6996,7 +7220,7 @@ export function ModelViewer({
     context.requestRender();
     return () => {
       if (!edgeDragActiveRef.current) {
-        rig.dispose();
+        retireRig(rig, retiringRigsRef.current);
         if (edgeRigRef.current === rig) {
           edgeRigRef.current = null;
         }

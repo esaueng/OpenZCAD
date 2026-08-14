@@ -1585,7 +1585,9 @@ test('a shortcut still fires when a panel opened because you selected something'
   // halves at once: the shortcut fired, and the letter did not land in the
   // field. Autofocus made the second half worse than it sounds — focus selects
   // the value, so the first letter REPLACED the dimension rather than appending.
-  const displayButton = page.getByRole('button', { name: /^Display mode \(W\)/ });
+  const displayButton = page.getByRole('button', {
+    name: /^Display mode \(W\)/
+  });
   const before = await displayButton.getAttribute('aria-label');
   await page.keyboard.press('w');
   await expect(displayButton).not.toHaveAttribute('aria-label', before ?? '');
@@ -1593,9 +1595,7 @@ test('a shortcut still fires when a panel opened because you selected something'
 
   // And a tool shortcut still launches its tool.
   await page.keyboard.press('m');
-  await expect(
-    page.getByRole('form', { name: 'Move controls' })
-  ).toBeVisible();
+  await expect(page.getByRole('form', { name: 'Move controls' })).toBeVisible();
 });
 
 test('view keys still work while a profile pick is waiting for a click', async ({
@@ -1636,7 +1636,9 @@ test('view keys still work while a profile pick is waiting for a click', async (
     'valid profiles available'
   );
 
-  const displayButton = page.getByRole('button', { name: /^Display mode \(W\)/ });
+  const displayButton = page.getByRole('button', {
+    name: /^Display mode \(W\)/
+  });
   const displayBefore = await displayButton.getAttribute('aria-label');
   await page.keyboard.press('w');
   await expect(displayButton).not.toHaveAttribute(
@@ -1647,7 +1649,10 @@ test('view keys still work while a profile pick is waiting for a click', async (
   const gridButton = page.getByRole('button', { name: /^Toggle grid/ });
   const gridBefore = await gridButton.getAttribute('aria-pressed');
   await page.keyboard.press('g');
-  await expect(gridButton).not.toHaveAttribute('aria-pressed', gridBefore ?? '');
+  await expect(gridButton).not.toHaveAttribute(
+    'aria-pressed',
+    gridBefore ?? ''
+  );
 
   // …and the pick is still live, not cancelled by the navigation. The status
   // message itself is now the display-mode one, which is the point; the mode's
@@ -1782,7 +1787,10 @@ test('the sketch status does not promise an exit Escape will not make', async ({
   await page.getByRole('button', { name: 'Top (XY)' }).click();
   // Exact: the status message now names this control, so the activity-log
   // button that echoes the status matches a loose "Finish Sketch" too.
-  const finish = page.getByRole('button', { name: 'Finish Sketch', exact: true });
+  const finish = page.getByRole('button', {
+    name: 'Finish Sketch',
+    exact: true
+  });
   await expect(finish).toBeVisible();
 
   const status = page.getByRole('contentinfo');
@@ -2072,4 +2080,162 @@ test('the frozen shadow map thaws for a moving body but not for the camera', asy
   await page.keyboard.press('Escape');
   await expect(move).toBeHidden();
   await expect.poll(refreshes).toBeGreaterThan(moved);
+});
+
+test('two fingers pan while a wheel notch still zooms', async ({ page }) => {
+  await stubApi(page);
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('Trackpad Part');
+  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
+  await page
+    .getByRole('region', { name: 'Feature inspector' })
+    .getByRole('button', { name: /^Create/ })
+    .click();
+  await expect(
+    page.locator('.feature-row-main', { hasText: 'Box' })
+  ).toBeVisible();
+
+  const canvas = page.locator('.viewer-host canvas');
+  await expect(canvas).toBeVisible({ timeout: 120_000 });
+  const bounds = (await canvas.boundingBox())!;
+  const centre = {
+    x: bounds.x + bounds.width / 2,
+    y: bounds.y + bounds.height / 2
+  };
+  await page.mouse.move(centre.x, centre.y);
+
+  const pose = async () =>
+    page.evaluate(() => {
+      const raw = localStorage.getItem('openzcad-workspace-session:v1');
+      const views = raw
+        ? (
+            JSON.parse(raw) as {
+              views?: Record<
+                string,
+                { camera: { position: number[]; target: number[] } }
+              >;
+            }
+          ).views
+        : undefined;
+      const first = views ? Object.values(views)[0] : undefined;
+      return first ? first.camera : null;
+    });
+  const distance = (camera: { position: number[]; target: number[] }) =>
+    Math.hypot(
+      camera.position[0]! - camera.target[0]!,
+      camera.position[1]! - camera.target[1]!,
+      camera.position[2]! - camera.target[2]!
+    );
+
+  // Nothing is persisted until the camera first moves, so establish a stored
+  // pose before comparing against one.
+  await canvas.dispatchEvent('wheel', { deltaY: 120, deltaMode: 0 });
+  await expect.poll(async () => (await pose()) !== null).toBe(true);
+
+  // Fine, two-axis deltas are a trackpad swipe: the framing moves, the
+  // distance to it does not.
+  const beforePan = await pose();
+  expect(beforePan).not.toBeNull();
+  for (let step = 0; step < 12; step += 1) {
+    await canvas.dispatchEvent('wheel', {
+      deltaX: 6,
+      deltaY: 4,
+      deltaMode: 0
+    });
+  }
+  await expect
+    .poll(async () => {
+      const now = await pose();
+      return now
+        ? Math.hypot(
+            now.target[0]! - beforePan!.target[0]!,
+            now.target[1]! - beforePan!.target[1]!,
+            now.target[2]! - beforePan!.target[2]!
+          )
+        : 0;
+    })
+    .toBeGreaterThan(0.5);
+  const afterPan = (await pose())!;
+  expect(distance(afterPan)).toBeCloseTo(distance(beforePan!), 3);
+
+  // A notch is still a zoom: the distance changes.
+  for (let step = 0; step < 3; step += 1) {
+    await canvas.dispatchEvent('wheel', { deltaY: 120, deltaMode: 0 });
+  }
+  await expect
+    .poll(async () => {
+      const now = await pose();
+      return now ? Math.abs(distance(now) - distance(afterPan)) : 0;
+    })
+    .toBeGreaterThan(0.5);
+});
+
+test('pressing to orbit writes no storage on the press frame', async ({
+  page
+}) => {
+  await stubApi(page);
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('Gesture Latency Part');
+  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
+  await page
+    .getByRole('region', { name: 'Feature inspector' })
+    .getByRole('button', { name: /^Create/ })
+    .click();
+  await expect(
+    page.locator('.feature-row-main', { hasText: 'Box' })
+  ).toBeVisible();
+
+  const canvas = page.locator('.viewer-host canvas');
+  await expect(canvas).toBeVisible({ timeout: 120_000 });
+  const bounds = (await canvas.boundingBox())!;
+
+  // Let any settle scheduled by the camera fit above land first, or its write
+  // arrives during the press and is counted against it.
+  await page.waitForTimeout(400);
+
+  // Counted rather than timed: the cost was a synchronous
+  // read-parse-validate-serialise-write of the whole session record, run from
+  // pointerdown because pressing re-pivots the orbit onto the picked point.
+  await page.evaluate(() => {
+    const scope = window as typeof window & { __ozWrites?: number };
+    scope.__ozWrites = 0;
+    const setItem = Storage.prototype.setItem;
+    Storage.prototype.setItem = function patched(key: string, value: string) {
+      if (key.startsWith('openzcad-workspace-session')) {
+        scope.__ozWrites = (scope.__ozWrites ?? 0) + 1;
+      }
+      return setItem.call(this, key, value);
+    };
+  });
+
+  const centre = {
+    x: bounds.x + bounds.width / 2,
+    y: bounds.y + bounds.height / 2
+  };
+  await page.mouse.move(centre.x, centre.y);
+  await page.keyboard.down('Shift');
+  await page.mouse.down();
+  const onPress = await page.evaluate(
+    () => (window as typeof window & { __ozWrites?: number }).__ozWrites ?? 0
+  );
+  for (let step = 1; step <= 10; step += 1) {
+    await page.mouse.move(centre.x + step * 4, centre.y + step * 2);
+  }
+  await page.mouse.up();
+  await page.keyboard.up('Shift');
+
+  expect(onPress).toBe(0);
+
+  // The pose still persists — releasing reports it at once, so nothing waits
+  // on a debounce to save a finished gesture.
+  await expect
+    .poll(async () =>
+      page.evaluate(
+        () =>
+          (window as typeof window & { __ozWrites?: number }).__ozWrites ?? 0
+      )
+    )
+    .toBeGreaterThan(0);
 });
