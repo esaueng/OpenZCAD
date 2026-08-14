@@ -26,10 +26,10 @@ Branch `claude/3d-modeling-interface-refinement-e7b650`.
 | 3.5 chip/keypad transitions | **done** — colour and elevation over `--dur-fast`, `transform` excluded |
 | 3.2 cursor hysteresis | **done** — the cursor is only written when it changes |
 | 3.2 hover dwell | **not started** — a dwell before re-committing preselection is still open; the cursor no longer strobes, the highlight can |
-| 3.3 face hover cross-fade | **not started** — `setHoverFace` still teleports the film between faces; needs a second mesh slot in `SelectionManager` |
+| 3.3 face hover cross-fade | **done** — an outgoing pair carries the leaving face at its current opacity |
 | 3.4 gizmo entrance + hover affordance | **done** — shared rig presence controller; offset rig adopts it |
 | 3.4 cylinder and edge rigs | **done** — both adopt the shared controller |
-| 3.4 gizmo exit | **not started** — needs deferred disposal past the React effect cleanup that disposes rigs immediately |
+| 3.4 gizmo exit | **done** — disarmed rigs fade out and are disposed once gone |
 | 3.5 "kernel is behind" affordance | **done** — `LivePreview` announces the degrade once and the chip reads `paused` |
 | 4 trackpad two-finger pan + pinch zoom | **done** — `wheelGesture.ts` classifier, `auto`/`mouse`/`trackpad` supported by the controller |
 | 4 navigation preference in Settings | **not started** — the controller reads a mode, but nothing sets it yet, so misclassification has no escape hatch |

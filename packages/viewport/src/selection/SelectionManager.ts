@@ -106,6 +106,22 @@ export class SelectionManager {
   private hoverFaceKey: string | null = null;
   /** Last cursor written, so an unchanged one is not rewritten per frame. */
   private lastCursor: string | null = null;
+  /**
+   * The face the pointer just left, fading out under the one it moved to.
+   *
+   * Without it, moving between faces swapped the film's geometry while its
+   * opacity stayed put, so the highlight teleported. These carry the old
+   * shape at the opacity it had, and are the only meshes here that ever fade
+   * down on their own.
+   */
+  private readonly hoverFaceMeshOut: THREE.Mesh<
+    THREE.BufferGeometry,
+    THREE.MeshLambertMaterial
+  >;
+  private readonly hoverHiddenFaceMeshOut: THREE.Mesh<
+    THREE.BufferGeometry,
+    THREE.MeshBasicMaterial
+  >;
   private xrayEnabled = true;
   private hoveredRegionMesh: THREE.Mesh<
     THREE.BufferGeometry,
@@ -131,6 +147,7 @@ export class SelectionManager {
     );
     this.hoverFaceMesh.visible = false;
     this.hoverFaceMesh.renderOrder = VIEWPORT_RENDER_ORDER.HOVER_HIGHLIGHT;
+    this.hoverFaceMesh.name = 'body-face-hover';
     this.hoverFaceMesh.userData.selectionOverlay = true;
     this.hoverFaceMesh.raycast = () => undefined;
     this.hoverHiddenFaceMesh = new THREE.Mesh(
@@ -151,6 +168,48 @@ export class SelectionManager {
       VIEWPORT_RENDER_ORDER.HOVER_HIGHLIGHT - 1;
     this.hoverHiddenFaceMesh.userData.selectionOverlay = true;
     this.hoverHiddenFaceMesh.raycast = () => undefined;
+
+    // Cloned so the pair cannot drift apart visually; the clone shares
+    // nothing mutable, since `clone()` copies the material reference and we
+    // replace it with the mesh's own.
+    this.hoverFaceMeshOut = this.hoverFaceMesh.clone();
+    this.hoverFaceMeshOut.material = this.hoverFaceMesh.material.clone();
+    this.hoverFaceMeshOut.name = 'body-face-hover-out';
+    this.hoverFaceMeshOut.raycast = () => undefined;
+    this.hoverHiddenFaceMeshOut = this.hoverHiddenFaceMesh.clone();
+    this.hoverHiddenFaceMeshOut.material =
+      this.hoverHiddenFaceMesh.material.clone();
+    this.hoverHiddenFaceMeshOut.name = 'body-face-hover-hidden-out';
+    this.hoverHiddenFaceMeshOut.raycast = () => undefined;
+  }
+
+  /**
+   * Hands the film the pointer is leaving to the outgoing pair, at the
+   * opacity it currently has, so it can fade from there while the next face
+   * rises. The geometry moves rather than being copied: the incoming mesh is
+   * about to be given a fresh one, and whoever holds the old one disposes it.
+   */
+  private retireHoverFace() {
+    if (!this.hoverFaceMesh.visible) {
+      return;
+    }
+    const parent = this.hoverFaceMesh.parent;
+    if (!parent) {
+      return;
+    }
+    for (const [from, to] of [
+      [this.hoverFaceMesh, this.hoverFaceMeshOut],
+      [this.hoverHiddenFaceMesh, this.hoverHiddenFaceMeshOut]
+    ] as const) {
+      to.geometry.dispose();
+      to.geometry = from.geometry;
+      to.material.opacity = from.material.opacity;
+      to.visible = from.visible;
+      parent.add(to);
+      // The incoming mesh keeps its identity — it is exposed on the scene
+      // context — so it gets an empty geometry rather than being swapped.
+      from.geometry = new THREE.BufferGeometry();
+    }
   }
 
   /** True while any hover overlay is still easing toward its target. */
@@ -161,6 +220,8 @@ export class SelectionManager {
       Math.abs(
         this.hoverHiddenFaceTarget - this.hoverHiddenFaceMesh.material.opacity
       ) >= SETTLE_EPSILON ||
+      this.hoverFaceMeshOut.visible ||
+      this.hoverHiddenFaceMeshOut.visible ||
       this.fadeIns.size > 0
     );
   }
@@ -237,6 +298,13 @@ export class SelectionManager {
       return;
     }
     this.hoverFaceKey = key;
+    // Whatever is on screen starts leaving, whether or not something replaces
+    // it — a hover that ends and a hover that moves are the same fade.
+    this.retireHoverFace();
+    this.hoverFaceMesh.visible = false;
+    this.hoverHiddenFaceMesh.visible = false;
+    this.hoverFaceMesh.material.opacity = 0;
+    this.hoverHiddenFaceMesh.material.opacity = 0;
     this.hoverFaceTarget = 0;
     this.hoverHiddenFaceTarget = 0;
     this.options.requestRender();
@@ -264,6 +332,8 @@ export class SelectionManager {
     }
     this.hoverFaceMesh.geometry = geometry;
     this.hoverHiddenFaceMesh.geometry = hiddenGeometry;
+    // Safe to drop: retiring already moved the visible geometry to the
+    // outgoing pair and left these empty.
     oldGeometry.dispose();
     oldHiddenGeometry.dispose();
     object.add(this.hoverFaceMesh);
@@ -461,6 +531,18 @@ export class SelectionManager {
     ) {
       this.hoverHiddenFaceMesh.visible = false;
     }
+    for (const mesh of [this.hoverFaceMeshOut, this.hoverHiddenFaceMeshOut]) {
+      if (!mesh.visible) {
+        continue;
+      }
+      mesh.material.opacity = easeToward(mesh.material.opacity, 0, dtMs);
+      if (mesh.material.opacity < SETTLE_EPSILON) {
+        mesh.visible = false;
+        mesh.removeFromParent();
+        mesh.geometry.dispose();
+        mesh.geometry = new THREE.BufferGeometry();
+      }
+    }
     for (const material of this.fadeIns) {
       const target =
         (material.userData.targetOpacity as number | undefined) ??
@@ -490,6 +572,14 @@ export class SelectionManager {
     this.hoverHiddenFaceTarget = 0;
     this.hoverFaceMesh.visible = false;
     this.hoverHiddenFaceMesh.visible = false;
+    // A fading film points at geometry belonging to bodies about to be
+    // disposed; it cannot outlive them.
+    for (const mesh of [this.hoverFaceMeshOut, this.hoverHiddenFaceMeshOut]) {
+      mesh.visible = false;
+      mesh.removeFromParent();
+      mesh.geometry.dispose();
+      mesh.geometry = new THREE.BufferGeometry();
+    }
     this.fadeIns.clear();
   }
 

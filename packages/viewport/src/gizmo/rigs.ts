@@ -50,6 +50,7 @@ function createRigPresence(roots: readonly THREE.Object3D[]) {
     });
   }
   let presence = 0;
+  let presenceTarget = 1;
   let hot = 0;
   let hotTarget = 0;
   const apply = () => {
@@ -61,14 +62,24 @@ function createRigPresence(roots: readonly THREE.Object3D[]) {
   return {
     /** Advances both ramps. True while either is still moving. */
     step(dtMs: number): boolean {
-      const moving = !hasSettled(presence, 1) || !hasSettled(hot, hotTarget);
+      const moving =
+        !hasSettled(presence, presenceTarget) || !hasSettled(hot, hotTarget);
       if (!moving) {
         return false;
       }
-      presence = easeToward(presence, 1, dtMs);
+      presence = easeToward(presence, presenceTarget, dtMs);
       hot = easeToward(hot, hotTarget, dtMs);
       apply();
       return true;
+    },
+    /** Starts the rig leaving; it stops being hot on the way out. */
+    beginExit() {
+      presenceTarget = 0;
+      hotTarget = 0;
+    },
+    /** True once an exiting rig has finished leaving and can be disposed. */
+    isGone(): boolean {
+      return presenceTarget === 0 && hasSettled(presence, 0);
     },
     setHot(next: boolean) {
       hotTarget = next ? 1 : 0;
@@ -275,6 +286,12 @@ export function buildOffsetFaceHandle(params: OffsetFaceRigParams): DragRig {
     setHot(hot: boolean) {
       presence.setHot(hot);
     },
+    beginExit() {
+      presence.beginExit();
+    },
+    isGone() {
+      return presence.isGone();
+    },
     setValue(value: number) {
       current = value;
       const tip = origin.clone().addScaledVector(direction, value);
@@ -406,6 +423,12 @@ export function buildCylinderRadiusHandle(
     setHot(hot: boolean) {
       presence.setHot(hot);
     },
+    beginExit() {
+      presence.beginExit();
+    },
+    isGone() {
+      return presence.isGone();
+    },
     setValue(radius: number) {
       currentRadius = radius;
       updateGraphic();
@@ -496,6 +519,12 @@ export function buildEdgeRadiusHandle(params: {
     },
     setHot(hot: boolean) {
       presence.setHot(hot);
+    },
+    beginExit() {
+      presence.beginExit();
+    },
+    isGone() {
+      return presence.isGone();
     },
     setValue(value: number) {
       current = value;
