@@ -422,21 +422,32 @@ test('the orientation widget snaps to a view the rail cannot reach', async ({
       const first = views ? Object.values(views)[0] : undefined;
       return first ? first.camera : null;
     });
-  const cameraPosition = async () => (await cameraPose())?.position ?? null;
+  // The durable pose trails the camera by the glide's damping tail plus the
+  // settle window, so a fixed wait races the write. Poll for the pose each
+  // snap is expected to reach instead.
+  const pollCameraPose = async (
+    reached: (camera: { position: number[]; target: number[] }) => boolean
+  ) => {
+    let matched: { position: number[]; target: number[] } | null = null;
+    await expect
+      .poll(async () => {
+        const pose = await cameraPose();
+        matched = pose;
+        return pose ? reached(pose) : false;
+      })
+      .toBe(true);
+    return matched!;
+  };
 
   // Bottom has no toolbar shortcut. The cube reaches it in two clicks:
   // face the top, then click the now head-on face to flip to the far side.
   await widget.getByRole('button', { name: 'Top view' }).click();
-  await page.waitForTimeout(900);
-  const top = await cameraPosition();
-  expect(top).not.toBeNull();
-  expect(top![2]!).toBeGreaterThan(0);
+  const top = await pollCameraPose((camera) => camera.position[2]! > 0);
+  expect(top.position[2]!).toBeGreaterThan(0);
 
   await widget.getByRole('button', { name: 'Bottom view' }).click();
-  await page.waitForTimeout(900);
-  const bottom = await cameraPosition();
   // Looking up at the part puts the camera below it.
-  expect(bottom![2]!).toBeLessThan(0);
+  await pollCameraPose((camera) => camera.position[2]! < 0);
 
   // Left works the same way from the right face, after resetting to iso so
   // the right face is visible again.
@@ -445,9 +456,7 @@ test('the orientation widget snaps to a view the rail cannot reach', async ({
   await widget.getByRole('button', { name: 'Right view' }).click();
   await page.waitForTimeout(900);
   await widget.getByRole('button', { name: 'Left view' }).click();
-  await page.waitForTimeout(900);
-  const left = await cameraPosition();
-  expect(left![0]!).toBeLessThan(0);
+  await pollCameraPose((camera) => camera.position[0]! < 0);
 
   // Ordinary pointer wobble below the 4 px drag threshold remains one face
   // activation. This boundary is easy to regress when capture cleanup changes.
@@ -485,10 +494,18 @@ test('the orientation widget snaps to a view the rail cannot reach', async ({
         ).__ozOrientationWobbleClicks
     )
   ).toBe(1);
-  const right = await cameraPose();
-  expect(right).not.toBeNull();
-  const rightOffset = right!.position.map(
-    (coordinate, axis) => coordinate - right!.target[axis]!
+  const right = await pollCameraPose((camera) => {
+    const offset = camera.position.map(
+      (coordinate, axis) => coordinate - camera.target[axis]!
+    );
+    return (
+      offset[0]! > 1 &&
+      Math.abs(offset[1]!) < 0.1 &&
+      Math.abs(offset[2]!) < 0.1
+    );
+  });
+  const rightOffset = right.position.map(
+    (coordinate, axis) => coordinate - right.target[axis]!
   );
   expect(rightOffset[0]!).toBeGreaterThan(1);
   expect(Math.abs(rightOffset[1]!)).toBeLessThan(0.1);
@@ -497,15 +514,15 @@ test('the orientation widget snaps to a view the rail cannot reach', async ({
   // The rotate arrows swing the camera a quarter turn about the world up
   // axis: from iso (x > 0, y < 0), a clockwise model turn lands at y > 0.
   await selectRailView(page, /^Isometric view/);
-  await page.waitForTimeout(900);
-  const iso = await cameraPosition();
-  expect(iso![0]!).toBeGreaterThan(0);
-  expect(iso![1]!).toBeLessThan(0);
+  const iso = await pollCameraPose(
+    (camera) => camera.position[0]! > 0 && camera.position[1]! < 0
+  );
+  expect(iso.position[0]!).toBeGreaterThan(0);
+  expect(iso.position[1]!).toBeLessThan(0);
   await widget.getByRole('button', { name: 'Rotate view clockwise' }).click();
-  await page.waitForTimeout(900);
-  const rotated = await cameraPosition();
-  expect(rotated![0]!).toBeGreaterThan(0);
-  expect(rotated![1]!).toBeGreaterThan(0);
+  await pollCameraPose(
+    (camera) => camera.position[0]! > 0 && camera.position[1]! > 0
+  );
 
   // Dragging a visible cube face continuously orbits the camera. Releasing
   // must suppress the face's click, or the camera would then glide to the
@@ -523,18 +540,16 @@ test('the orientation widget snaps to a view the rail cannot reach', async ({
   await page.mouse.down();
   await page.mouse.move(dragStart.x - 42, dragStart.y + 24, { steps: 5 });
   await page.mouse.up();
-  await page.waitForTimeout(900);
-  const afterDrag = await cameraPose();
-  expect(afterDrag).not.toBeNull();
-  expect(
-    Math.hypot(
-      afterDrag!.position[0]! - beforeDrag!.position[0]!,
-      afterDrag!.position[1]! - beforeDrag!.position[1]!,
-      afterDrag!.position[2]! - beforeDrag!.position[2]!
-    )
-  ).toBeGreaterThan(1);
-  const afterOffset = afterDrag!.position.map(
-    (coordinate, axis) => coordinate - afterDrag!.target[axis]!
+  const afterDrag = await pollCameraPose(
+    (camera) =>
+      Math.hypot(
+        camera.position[0]! - beforeDrag!.position[0]!,
+        camera.position[1]! - beforeDrag!.position[1]!,
+        camera.position[2]! - beforeDrag!.position[2]!
+      ) > 1
+  );
+  const afterOffset = afterDrag.position.map(
+    (coordinate, axis) => coordinate - afterDrag.target[axis]!
   );
   // A stray Right-view click would leave only the X offset significant.
   expect(Math.abs(afterOffset[1]!)).toBeGreaterThan(1);
@@ -2132,6 +2147,10 @@ test('two fingers pan while a wheel notch still zooms', async ({ page }) => {
   // pose before comparing against one.
   await canvas.dispatchEvent('wheel', { deltaY: 120, deltaMode: 0 });
   await expect.poll(async () => (await pose()) !== null).toBe(true);
+  // The zoom notch glides out on damping before its settled pose is stored;
+  // the worst-case durable write trails the release by just under a second,
+  // so wait out that horizon before taking the pan baseline.
+  await page.waitForTimeout(1000);
 
   // Fine, two-axis deltas are a trackpad swipe: the framing moves, the
   // distance to it does not.
@@ -2156,6 +2175,9 @@ test('two fingers pan while a wheel notch still zooms', async ({ page }) => {
         : 0;
     })
     .toBeGreaterThan(0.5);
+  // Panning preserves the orbit radius at every step, but the stored pose
+  // lags the gesture; let the swipe's own settled write land before reading.
+  await page.waitForTimeout(1000);
   const afterPan = (await pose())!;
   expect(distance(afterPan)).toBeCloseTo(distance(beforePan!), 3);
 
