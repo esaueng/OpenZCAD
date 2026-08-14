@@ -861,6 +861,38 @@ function disposeSettledOverlays(
  */
 const SNAP_PROJECT_SCRATCH = new THREE.Vector3();
 
+/**
+ * Disarms a rig by fading it out rather than deleting it mid-frame.
+ *
+ * Rigs whose gesture is still running, or which cannot ease, are disposed as
+ * before — a rig being torn down because its body was replaced has nothing
+ * left to fade against.
+ */
+function retireRig(rig: DragRig, retiring: DragRig[]): void {
+  if (!rig.beginExit || !rig.isGone) {
+    rig.dispose();
+    return;
+  }
+  rig.beginExit();
+  retiring.push(rig);
+}
+
+/** Disposes faded-out rigs, and reports whether any are still leaving. */
+function stepRetiringRigs(retiring: DragRig[], dtMs: number): boolean {
+  let animating = false;
+  for (let index = retiring.length - 1; index >= 0; index -= 1) {
+    const rig = retiring[index]!;
+    rig.step?.(dtMs);
+    if (rig.isGone?.()) {
+      rig.dispose();
+      retiring.splice(index, 1);
+    } else {
+      animating = true;
+    }
+  }
+  return animating;
+}
+
 const E2E_CANVAS_HOOKS_ENABLED =
   (
     import.meta.env as unknown as {
@@ -1089,6 +1121,11 @@ export function ModelViewer({
   const retiringOverlaysRef = useRef<
     { group: THREE.Group; parent: THREE.Object3D }[]
   >([]);
+  /**
+   * Rigs that have been disarmed and are fading out. They stay in the scene,
+   * and stay stepped, until they report themselves gone.
+   */
+  const retiringRigsRef = useRef<DragRig[]>([]);
   const measurementDimensionsRef = useRef<
     {
       graphic: DimensionGraphic;
@@ -6069,7 +6106,7 @@ export function ModelViewer({
         moveGizmoGroup.scale.setScalar(gizmoScale / baseScale);
         moveGizmoGroup.userData.gizmoScale = gizmoScale;
       }
-      let rigsAnimating = false;
+      let rigsAnimating = stepRetiringRigs(retiringRigsRef.current, dt * 1000);
       const offsetRig = offsetRigRef.current;
       if (offsetRig) {
         // Screen-constant arrow, ~0.55× the move gizmo's reach.
@@ -7025,7 +7062,9 @@ export function ModelViewer({
     if (!context || cylinderRadiusDragActiveRef.current) {
       return;
     }
-    cylinderRadiusRigRef.current?.dispose();
+    if (cylinderRadiusRigRef.current) {
+      retireRig(cylinderRadiusRigRef.current, retiringRigsRef.current);
+    }
     cylinderRadiusRigRef.current = null;
     if (offsetChipRef.current) {
       offsetChipRef.current.hidden = true;
@@ -7048,7 +7087,7 @@ export function ModelViewer({
     context.requestRender();
     return () => {
       if (!cylinderRadiusDragActiveRef.current) {
-        rig.dispose();
+        retireRig(rig, retiringRigsRef.current);
         if (cylinderRadiusRigRef.current === rig) {
           cylinderRadiusRigRef.current = null;
         }
@@ -7063,7 +7102,9 @@ export function ModelViewer({
     if (!context || offsetDragActiveRef.current) {
       return;
     }
-    offsetRigRef.current?.dispose();
+    if (offsetRigRef.current) {
+      retireRig(offsetRigRef.current, retiringRigsRef.current);
+    }
     offsetRigRef.current = null;
     if (offsetChipRef.current) {
       offsetChipRef.current.hidden = true;
@@ -7108,7 +7149,7 @@ export function ModelViewer({
     context.requestRender();
     return () => {
       if (!offsetDragActiveRef.current) {
-        rig.dispose();
+        retireRig(rig, retiringRigsRef.current);
         if (offsetRigRef.current === rig) {
           offsetRigRef.current = null;
         }
@@ -7129,7 +7170,9 @@ export function ModelViewer({
     if (!context || edgeDragActiveRef.current) {
       return;
     }
-    edgeRigRef.current?.dispose();
+    if (edgeRigRef.current) {
+      retireRig(edgeRigRef.current, retiringRigsRef.current);
+    }
     edgeRigRef.current = null;
     if (!edgeHandle) {
       context.requestRender();
@@ -7163,7 +7206,7 @@ export function ModelViewer({
     context.requestRender();
     return () => {
       if (!edgeDragActiveRef.current) {
-        rig.dispose();
+        retireRig(rig, retiringRigsRef.current);
         if (edgeRigRef.current === rig) {
           edgeRigRef.current = null;
         }
