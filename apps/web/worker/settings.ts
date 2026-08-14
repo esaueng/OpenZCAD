@@ -37,6 +37,7 @@ const DENSITIES = ['compact', 'comfortable'] as const;
 const PROJECTIONS = ['perspective', 'orthographic'] as const;
 const DISPLAY_MODES = ['shaded-edges', 'shaded', 'wireframe'] as const;
 const MIDDLE_DRAGS = ['pan', 'orbit', 'zoom'] as const;
+const POINTER_NAVIGATIONS = ['auto', 'mouse', 'trackpad'] as const;
 const PROVIDERS = ['openrouter', 'openai', 'responses-compatible'] as const;
 const CREDENTIAL_SOURCES = ['deployment', 'personal'] as const;
 const REASONING_EFFORTS = [
@@ -325,7 +326,15 @@ export function parseUpdateAppSettingsRequest(
           typeof viewport.zoomToCursor === 'boolean'
             ? viewport.zoomToCursor
             : true,
-        middleDrag: optionalMember(viewport, 'middleDrag', MIDDLE_DRAGS, 'pan')
+        middleDrag: optionalMember(viewport, 'middleDrag', MIDDLE_DRAGS, 'pan'),
+        // Optional, like middleDrag: a client that predates this setting
+        // must still be able to save its settings.
+        pointerNavigation: optionalMember(
+          viewport,
+          'pointerNavigation',
+          POINTER_NAVIGATIONS,
+          'auto'
+        )
       },
       sketching: {
         gridVisible:

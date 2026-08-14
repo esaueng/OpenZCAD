@@ -144,9 +144,7 @@ describe('failure and invalid input', () => {
 
     expect(failures).toHaveLength(1);
     expect(failures[0]?.value).toBe(2);
-    expect(failures[0]?.error).toEqual(
-      new Error('current value is invalid')
-    );
+    expect(failures[0]?.error).toEqual(new Error('current value is invalid'));
   });
 
   it('reports a synchronous candidate-build failure without wedging', async () => {
@@ -310,5 +308,57 @@ describe('slow rebuilds degrade for the rest of the gesture', () => {
     expect(preview.degraded).toBe(true);
     expect(built).toEqual([17, 18]);
     expect(published.map((document) => document?.value)).toEqual([18]);
+  });
+});
+
+describe('degrading', () => {
+  it('announces the moment it stops previewing, once', async () => {
+    const degrades: number[] = [];
+    let clock = 0;
+    const preview = new LivePreview<Doc, string>({
+      build: (value) => ({ value }),
+      // Every rebuild takes longer than the budget below.
+      derive: () => {
+        clock += 500;
+        return Promise.resolve('derived');
+      },
+      publish: () => undefined,
+      now: () => clock,
+      slowFrameMs: 400,
+      continueAfterSlow: true,
+      onDegrade: () => degrades.push(clock)
+    });
+
+    preview.request(1);
+    await settle();
+    preview.request(2);
+    await settle();
+
+    // The handle keeps moving and the previewer keeps accepting values, but
+    // the consumer is told exactly once that geometry stopped following.
+    expect(preview.degraded).toBe(true);
+    expect(degrades).toHaveLength(1);
+  });
+
+  it('says nothing while rebuilds keep up', async () => {
+    const degrades: number[] = [];
+    let clock = 0;
+    const preview = new LivePreview<Doc, string>({
+      build: (value) => ({ value }),
+      derive: () => {
+        clock += 10;
+        return Promise.resolve('derived');
+      },
+      publish: () => undefined,
+      now: () => clock,
+      slowFrameMs: 400,
+      onDegrade: () => degrades.push(clock)
+    });
+
+    preview.request(1);
+    await settle();
+
+    expect(preview.degraded).toBe(false);
+    expect(degrades).toEqual([]);
   });
 });

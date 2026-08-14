@@ -20,7 +20,56 @@ Branch `claude/3d-modeling-interface-refinement-e7b650`.
 | 1.2 cylinder-radius Inspector throttle | **not started** |
 | 1.3 rAF-coalesce drag handlers | **done** — `0a0a5d5`, 120 events → 1 apply |
 | 1.4 in-place preview geometry | **dropped** — the real-GPU measurement came back; the stall does not exist there (preview drag p95 25 ms). See the box in 1.4 |
-| Phases 2–5 | **not started** |
+| 3.1 motion vocabulary | **done** — `packages/viewport/src/motion.ts` + `--dur-slow` |
+| 3.2 edge hover easing | **done** — width and opacity ramp together |
+| 3.3 selection symmetry | **done** — fade-out on deselect, x-ray and preview halves rise with their twins |
+| 3.5 chip/keypad transitions | **done** — colour and elevation over `--dur-fast`, `transform` excluded |
+| 3.2 cursor hysteresis | **done** — the cursor is only written when it changes |
+| 3.2 hover dwell | **not started** — a dwell before re-committing preselection is still open; the cursor no longer strobes, the highlight can |
+| 3.3 face hover cross-fade | **done** — an outgoing pair carries the leaving face at its current opacity |
+| 3.4 gizmo entrance + hover affordance | **done** — shared rig presence controller; offset rig adopts it |
+| 3.4 cylinder and edge rigs | **done** — both adopt the shared controller |
+| 3.4 gizmo exit | **done** — disarmed rigs fade out and are disposed once gone |
+| 3.5 "kernel is behind" affordance | **done** — `LivePreview` announces the degrade once and the chip reads `paused` |
+| 4 trackpad two-finger pan + pinch zoom | **done** — `wheelGesture.ts` classifier, `auto`/`mouse`/`trackpad` supported by the controller |
+| 4 navigation preference in Settings | **done** — Viewport › Scroll wheel: detect / mouse / trackpad |
+| 2.3 window-resize coalescing | **done** — one render per frame instead of one per event |
+| 2.1 defer the workspace-session write | **done** — the pivot report is deferred off the press frame |
+| 2.2 precompute move snap candidates | **not started** |
+| 5.2 cache the canvas rect for picking | **done** — one layout read per event, not per raycast |
+| 5.3 callout layout thrash | **done** — all rects read before any margin is written |
+| 5.1 BVH / prefilter for picking | **not started** — needs a dependency decision, and the headed numbers do not currently justify it |
+| 5.5 DPR listener | **done** — the canvas follows the display it is dragged to |
+| 5.6 snap-scan allocation | **done** — one scratch vector instead of one per candidate |
+| 5.4 sketch geometry reuse | **not started** — needs a capacity-buffer rewrite of the preview `LineGeometry`; real per-move allocation, no measured symptom |
+| Close-out: `docs/interaction-design.md` | **done** |
+
+**2.1, as landed.** The fix is in `CameraController.pivotOn`, not in the
+storage hook: the pose report that ran from `pointerdown` now goes through a
+deferred emit. It cannot use `scheduleSettledViewChange`, which declines to
+fire while a gesture is running — a press-and-hold pivot would then never be
+reported at all, which is exactly how the first attempt failed. Releasing
+still reports immediately, so a finished gesture never waits on the timer.
+
+The history below is kept because it explains why the obvious version does
+not work.
+
+**The earlier attempt, and why it was reverted.** The cost is real and now measured: pressing to
+orbit performs **3 synchronous session writes** on the press frame, each a
+read-parse-validate-serialise-write of the whole record, because re-pivoting
+on the picked point reports a pose from inside `pointerdown`. Deferring that
+write is a two-line change and it works — but it moves when the persisted
+pose becomes readable, and three existing camera specs read the stored pose
+immediately after moving the camera (`viewport.spec.ts` 134, 367, 597). A
+250 ms delay broke them; deferring to the next task fixed them but made the
+property unobservable from Playwright, since a CDP round trip crosses task
+boundaries anyway.
+
+So the deferral needs to be driven by the gesture rather than by a clock:
+persist on the settle path the `CameraController` already has
+(`scheduleSettledViewChange`), and let the mid-gesture reports update memory
+only. That is a change to the controller's contract with its `onViewChange`
+sink, not a hook-level tweak, which is why it was not folded in here.
 
 Full E2E suite after 1.3: 127 passed, 8 skipped, 0 failures.
 

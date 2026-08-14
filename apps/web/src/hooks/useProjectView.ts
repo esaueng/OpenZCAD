@@ -1,4 +1,10 @@
-import { useEffect, useRef, useState, type Dispatch, type SetStateAction } from 'react';
+import {
+  useEffect,
+  useRef,
+  useState,
+  type Dispatch,
+  type SetStateAction
+} from 'react';
 import type {
   DisplayMode,
   ProjectionMode,
@@ -15,6 +21,7 @@ export interface ProjectViewDefaults {
   reducedMotion: boolean;
   zoomToCursor: boolean;
   middleDrag: 'pan' | 'orbit' | 'zoom';
+  pointerNavigation: 'auto' | 'mouse' | 'trackpad';
 }
 
 export interface ProjectView {
@@ -116,7 +123,8 @@ export function useProjectView(projectId: string | null): ProjectView {
         ...saved?.settings,
         reducedMotion: defaults.reducedMotion,
         zoomToCursor: defaults.zoomToCursor,
-        middleDrag: defaults.middleDrag
+        middleDrag: defaults.middleDrag,
+        pointerNavigation: defaults.pointerNavigation
       });
       setHiddenBodyIds(new Set(saved?.hiddenBodyIds ?? []));
     },
