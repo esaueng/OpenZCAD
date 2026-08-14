@@ -90,3 +90,20 @@ in `.github/workflows/macos-desktop.yml`.
 TypeScript strictness is enforced by `pnpm typecheck`, and ESLint enforces the
 rules in `eslint.config.mjs`. There is currently no dependency-boundary lint
 rule: package-direction claims are design intent, not an automated CI gate.
+
+**No status check is required to merge.** The org is on GitHub Free and this
+repo is private, so branch protection and rulesets are unavailable — GitHub
+reports every open PR as mergeable regardless of CI. Two consequences:
+
+- **Never `gh pr merge --auto` here.** With nothing required, "merge when
+  checks pass" silently means "merge now"; it has already merged a PR while
+  `apple-silicon` was still running.
+- **Read `gh pr checks` and see `validate` and `apple-silicon` pass before
+  merging.** `validate` is the slow one at roughly seven minutes.
+
+`apple-silicon` is the only check that exercises the desktop shell, and
+`apps/desktop/e2e/cad-smoke.mjs` drives the real WKWebView workspace —
+camera, wheel, selection. Neither Vitest nor Playwright can see that surface,
+so a viewport or input change can pass every local suite and still break the
+desktop app there. Expect that job to have an opinion about anything touching
+navigation.
