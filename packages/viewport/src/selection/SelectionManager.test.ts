@@ -541,91 +541,184 @@ describe('rebuild reset', () => {
 });
 
 describe('face hover cross-fade', () => {
-  function twoFaceBody() {
+  function threeFaceBody() {
     const { manager, objectsByBodyId, setBodies } = makeManager();
-    const bodyId = toBodyId('body-two-face');
+    const bodyId = toBodyId('body-three-face');
     const geometry = new THREE.BufferGeometry();
     geometry.setAttribute(
       'position',
       new THREE.Float32BufferAttribute(
-        [0, 0, 0, 1, 0, 0, 0, 1, 0, 1, 1, 0, 2, 0, 0, 2, 1, 0],
+        [
+          0, 0, 0, 1, 0, 0, 0, 1, 0, 1, 0, 0, 2, 0, 0, 1, 1, 0, 2, 0, 0, 3, 0,
+          0, 2, 1, 0
+        ],
         3
       )
     );
     geometry.setAttribute(
       'normal',
       new THREE.Float32BufferAttribute(
-        [0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1],
+        [
+          0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0,
+          1, 0, 0, 1
+        ],
         3
       )
     );
-    geometry.setIndex([0, 1, 2, 3, 4, 5]);
-    objectsByBodyId.set(
-      bodyId,
-      new THREE.Mesh(geometry, new THREE.MeshPhongMaterial())
-    );
+    geometry.setIndex([0, 1, 2, 3, 4, 5, 6, 7, 8]);
+    const object = new THREE.Mesh(geometry, new THREE.MeshPhongMaterial());
+    objectsByBodyId.set(bodyId, object);
     setBodies([
       {
         bodyId,
         topology: {
-          faces: [
-            {
-              topologyId: 'face-a',
-              hash: 1,
-              triangleStart: 0,
+          faces: ['face-a', 'face-b', 'face-c'].map(
+            (topologyId, triangleStart) => ({
+              topologyId,
+              hash: triangleStart + 1,
+              triangleStart,
               triangleCount: 1
-            },
-            {
-              topologyId: 'face-b',
-              hash: 2,
-              triangleStart: 1,
-              triangleCount: 1
-            }
-          ],
+            })
+          ),
           edges: []
         }
       } as unknown as BodyRepresentation
     ]);
-    return { manager, bodyId };
+    return { manager, bodyId, object };
   }
 
   const settle = (manager: SelectionManager) => {
     for (let frame = 0; frame < 120 && manager.isSettling; frame += 1) {
       manager.step(0.016);
     }
+    expect(manager.isSettling).toBe(false);
   };
 
-  it('overlaps the face being left with the one being entered', () => {
-    const { manager, bodyId } = twoFaceBody();
+  const attachedFaceSlots = (object: THREE.Object3D) =>
+    object.children.filter(
+      (
+        child
+      ): child is THREE.Mesh<THREE.BufferGeometry, THREE.MeshLambertMaterial> =>
+        child instanceof THREE.Mesh &&
+        child.userData.hoverFaceLayer === 'visible'
+    );
+
+  const hoverFaceKey = (mesh: THREE.Object3D) =>
+    String(mesh.userData.hoverFaceKey ?? '');
+
+  it('keeps the old and new faces visible together, then releases the old slot', () => {
+    const { manager, bodyId, object } = threeFaceBody();
 
     manager.setHoverFace({ bodyId, kind: 'face', topologyId: 'face-a' });
     settle(manager);
-    const settledOpacity = manager.hoverFaceMesh.material.opacity;
-    expect(settledOpacity).toBeGreaterThan(0);
+    const oldMesh = manager.hoverFaceMesh;
+    const oldGeometry = oldMesh.geometry;
+    let oldGeometryDisposed = false;
+    oldGeometry.addEventListener('dispose', () => {
+      oldGeometryDisposed = true;
+    });
 
-    // Moving to the neighbouring face: the new film starts from nothing and
-    // the old one is still on screen, which is what makes it a cross-fade
-    // rather than the geometry teleporting under a steady opacity.
     manager.setHoverFace({ bodyId, kind: 'face', topologyId: 'face-b' });
-    expect(manager.hoverFaceMesh.material.opacity).toBe(0);
+    expect(manager.hoverFaceMesh).not.toBe(oldMesh);
     expect(manager.isSettling).toBe(true);
 
     manager.step(0.016);
-    const outgoing = manager.hoverFaceMesh.parent?.children.find(
-      (child) => child.name === 'body-face-hover-out'
-    ) as THREE.Mesh<THREE.BufferGeometry, THREE.MeshLambertMaterial>;
-    expect(outgoing).toBeDefined();
-    expect(outgoing.visible).toBe(true);
-    expect(outgoing.material.opacity).toBeGreaterThan(0);
-    expect(manager.hoverFaceMesh.material.opacity).toBeGreaterThan(0);
+    const crossing = attachedFaceSlots(object);
+    expect(crossing).toHaveLength(2);
+    expect(crossing.map(hoverFaceKey).sort()).toEqual([
+      `${bodyId}:face-a`,
+      `${bodyId}:face-b`
+    ]);
+    expect(crossing.every((mesh) => mesh.visible)).toBe(true);
+    expect(crossing.every((mesh) => mesh.material.opacity > 0)).toBe(true);
 
-    // And the outgoing film lets go once it has gone.
     settle(manager);
-    expect(outgoing.visible).toBe(false);
-    expect(outgoing.parent).toBeNull();
-    expect(manager.hoverFaceMesh.material.opacity).toBeCloseTo(
-      settledOpacity,
-      5
-    );
+    expect(attachedFaceSlots(object)).toEqual([manager.hoverFaceMesh]);
+    expect(hoverFaceKey(manager.hoverFaceMesh)).toBe(`${bodyId}:face-b`);
+    expect(manager.hoverFaceMesh.material.opacity).toBeCloseTo(0.3, 5);
+    expect(oldGeometryDisposed).toBe(true);
+    expect(oldMesh.parent).toBeNull();
+  });
+
+  it('bounds an interrupted sweep to two slots and drops the oldest face', () => {
+    const { manager, bodyId, object } = threeFaceBody();
+
+    manager.setHoverFace({ bodyId, kind: 'face', topologyId: 'face-a' });
+    settle(manager);
+    manager.setHoverFace({ bodyId, kind: 'face', topologyId: 'face-b' });
+    manager.step(0.016);
+    manager.setHoverFace({ bodyId, kind: 'face', topologyId: 'face-c' });
+    manager.step(0.016);
+
+    const crossingKeys = attachedFaceSlots(object).map(hoverFaceKey).sort();
+    expect(crossingKeys).toEqual([`${bodyId}:face-b`, `${bodyId}:face-c`]);
+    settle(manager);
+    expect(attachedFaceSlots(object).map(hoverFaceKey)).toEqual([
+      `${bodyId}:face-c`
+    ]);
+  });
+
+  it('detaches and releases both slots on rebuild reset', () => {
+    const { manager, bodyId, object } = threeFaceBody();
+    manager.setHoverFace({ bodyId, kind: 'face', topologyId: 'face-a' });
+    settle(manager);
+    manager.setHoverFace({ bodyId, kind: 'face', topologyId: 'face-b' });
+    manager.step(0.016);
+    const attached = object.children.filter(
+      (child) => child.userData.hoverFaceSlot !== undefined
+    ) as THREE.Mesh<THREE.BufferGeometry, THREE.Material>[];
+    let disposedGeometryCount = 0;
+    let disposedMaterialCount = 0;
+    for (const mesh of attached) {
+      mesh.geometry.addEventListener('dispose', () => {
+        disposedGeometryCount += 1;
+      });
+      mesh.material.addEventListener('dispose', () => {
+        disposedMaterialCount += 1;
+      });
+    }
+
+    manager.resetForRebuild();
+
+    expect(attached).toHaveLength(4);
+    expect(disposedGeometryCount).toBe(4);
+    expect(disposedMaterialCount).toBe(0);
+    expect(attached.every((mesh) => mesh.parent === null)).toBe(true);
+    expect(attachedFaceSlots(object)).toHaveLength(0);
+    expect(manager.isSettling).toBe(false);
+
+    manager.setHoverFace({ bodyId, kind: 'face', topologyId: 'face-c' });
+    settle(manager);
+    expect(attachedFaceSlots(object)).toEqual([manager.hoverFaceMesh]);
+    expect(hoverFaceKey(manager.hoverFaceMesh)).toBe(`${bodyId}:face-c`);
+  });
+
+  it('disposes every slot resource even during an active cross-fade', () => {
+    const { manager, bodyId, object } = threeFaceBody();
+    manager.setHoverFace({ bodyId, kind: 'face', topologyId: 'face-a' });
+    settle(manager);
+    manager.setHoverFace({ bodyId, kind: 'face', topologyId: 'face-b' });
+    manager.step(0.016);
+    const attached = object.children.filter(
+      (child) => child.userData.hoverFaceSlot !== undefined
+    ) as THREE.Mesh<THREE.BufferGeometry, THREE.Material>[];
+    let disposedGeometryCount = 0;
+    let disposedMaterialCount = 0;
+    for (const mesh of attached) {
+      mesh.geometry.addEventListener('dispose', () => {
+        disposedGeometryCount += 1;
+      });
+      mesh.material.addEventListener('dispose', () => {
+        disposedMaterialCount += 1;
+      });
+    }
+
+    manager.dispose();
+
+    expect(attached).toHaveLength(4);
+    expect(disposedGeometryCount).toBe(4);
+    expect(disposedMaterialCount).toBe(4);
+    expect(attached.every((mesh) => mesh.parent === null)).toBe(true);
+    expect(manager.isSettling).toBe(false);
   });
 });
