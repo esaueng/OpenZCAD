@@ -116,6 +116,7 @@ export class CameraController {
   private active: THREE.Camera;
   private tween: CameraTween | null = null;
   private settleTimeout: number | null = null;
+  private deferredTimeout: number | null = null;
   private orbitGlideEndsAt: number | null = null;
   private gestureActive = false;
   private externalOrbitActive = false;
@@ -302,6 +303,26 @@ export class CameraController {
     // The settled emit still records the final frame afterwards.
     this.emitViewChange();
     this.scheduleSettledViewChange();
+  };
+
+  /**
+   * Reports a pose change that happened during a gesture, off the frame that
+   * produced it. Unlike the settled emit this is not gated on the gesture
+   * ending, because the change it carries — a re-pivot — happens at the
+   * start of one and would otherwise wait for a release that may be seconds
+   * away, or never come if the tab closes first.
+   */
+  private scheduleDeferredViewChange = () => {
+    if (this.deferredTimeout !== null) {
+      return;
+    }
+    this.deferredTimeout = window.setTimeout(() => {
+      this.deferredTimeout = null;
+      if (this.disposed) {
+        return;
+      }
+      this.emitViewChange();
+    }, VIEW_SETTLE_MS);
   };
 
   private scheduleSettledViewChange = () => {
@@ -580,10 +601,17 @@ export class CameraController {
     }
     this.orbit.target.copy(pivot);
     this.orbit.update();
-    // The target is part of the durable pose, and OrbitControls only emits
-    // a change when the *camera* moves — which re-pivoting deliberately
-    // avoids. Report it, or a reload restores a stale pivot.
-    this.emitViewChange();
+    // The target is part of the durable pose, and OrbitControls only emits a
+    // change when the *camera* moves — which re-pivoting deliberately avoids.
+    // Report it, or a reload restores a stale pivot.
+    //
+    // Deferred rather than immediate: this runs from pointerdown, and the
+    // sink writes the whole workspace session synchronously, so reporting
+    // here put a read-parse-validate-serialise-write on the frame the gesture
+    // began. It cannot go through `scheduleSettledViewChange`, which declines
+    // to fire while a gesture is running — a press-and-hold pivot would then
+    // never be reported at all.
+    this.scheduleDeferredViewChange();
   }
 
   /**
@@ -760,6 +788,10 @@ export class CameraController {
     if (this.settleTimeout !== null) {
       window.clearTimeout(this.settleTimeout);
       this.settleTimeout = null;
+    }
+    if (this.deferredTimeout !== null) {
+      window.clearTimeout(this.deferredTimeout);
+      this.deferredTimeout = null;
     }
     this.orbit.removeEventListener('start', this.beginGesture);
     this.orbit.removeEventListener('end', this.settleDamping);
