@@ -127,6 +127,7 @@ interface ViewerShellProps {
   projection: ProjectionMode;
   initialView: ViewportCameraState | null;
   onViewChange(view: ViewportCameraState): void;
+  onViewSettled(view: ViewportCameraState): void;
   orientationRef: MutableRefObject<((axes: AxisProjection) => void) | null>;
   selectionFilter: SelectionFilter;
   onBoxSelect(bodyIds: string[]): void;
@@ -247,6 +248,7 @@ export function ViewerShell({
   projection,
   initialView,
   onViewChange,
+  onViewSettled,
   orientationRef,
   onSelectTopology,
   onSelectEdgeChain,
@@ -377,6 +379,7 @@ export function ViewerShell({
         projection={projection}
         initialView={initialView}
         onViewChange={onViewChange}
+        onViewSettled={onViewSettled}
         orientationRef={orientationRef}
         orientationDragRef={orientationDragRef}
         onSelectTopology={onSelectTopology}
