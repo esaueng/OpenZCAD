@@ -5,7 +5,29 @@ import {
   stubApi,
   WORKSPACE_SESSION_STORAGE_KEY
 } from './openzcad-fixtures';
-import type { Page } from '@playwright/test';
+import type { Locator, Page } from '@playwright/test';
+
+interface CameraPose {
+  position: number[];
+  target: number[];
+  orthographicZoom: number;
+  orthographicHalfHeight?: number;
+}
+
+async function readLiveCamera(canvas: Locator): Promise<CameraPose> {
+  return canvas.evaluate(
+    (element) =>
+      new Promise<CameraPose>((resolve) => {
+        element.dispatchEvent(
+          new CustomEvent('openzcad:e2e-input-state', {
+            detail: {
+              resolve: (state: { camera: CameraPose }) => resolve(state.camera)
+            }
+          })
+        );
+      })
+  );
+}
 
 /**
  * Standard views live behind the viewer rail's flyout rather than each having
@@ -640,20 +662,24 @@ test('the middle-button drag preference changes what a middle drag does', async 
       { steps: 8 }
     );
     await page.mouse.up({ button: 'middle' });
-    await page.waitForTimeout(400);
   };
 
   // Default is pan, which moves the orbit target sideways.
   await expect.poll(camera).not.toBeNull();
   const beforePan = await camera();
   await middleDrag();
-  const afterPan = await camera();
-  const panned = Math.hypot(
-    afterPan!.target[0]! - beforePan!.target[0]!,
-    afterPan!.target[1]! - beforePan!.target[1]!,
-    afterPan!.target[2]! - beforePan!.target[2]!
-  );
-  expect(panned).toBeGreaterThan(1);
+  await expect
+    .poll(async () => {
+      const afterPan = await camera();
+      return afterPan
+        ? Math.hypot(
+            afterPan.target[0]! - beforePan!.target[0]!,
+            afterPan.target[1]! - beforePan!.target[1]!,
+            afterPan.target[2]! - beforePan!.target[2]!
+          )
+        : 0;
+    })
+    .toBeGreaterThan(1);
 
   // Switching to orbit first re-pivots onto the pointed geometry without
   // moving the camera, then turns the camera around that new target.
@@ -673,17 +699,20 @@ test('the middle-button drag preference changes what a middle drag does', async 
   const beforeOrbit = await camera();
   await page.mouse.down({ button: 'middle' });
   await page.waitForTimeout(400);
-  const afterPivot = await camera();
+  const afterPivot = await readLiveCamera(canvas);
+  // Holding a camera gesture keeps the live pivot readable without treating
+  // the in-progress pose as a durable workspace-session update.
+  expect(await camera()).toEqual(beforeOrbit);
   for (const axis of [0, 1, 2]) {
-    expect(afterPivot!.position[axis]!).toBeCloseTo(
+    expect(afterPivot.position[axis]!).toBeCloseTo(
       beforeOrbit!.position[axis]!,
       3
     );
   }
   const pivotTravel = Math.hypot(
-    afterPivot!.target[0]! - beforeOrbit!.target[0]!,
-    afterPivot!.target[1]! - beforeOrbit!.target[1]!,
-    afterPivot!.target[2]! - beforeOrbit!.target[2]!
+    afterPivot.target[0]! - beforeOrbit!.target[0]!,
+    afterPivot.target[1]! - beforeOrbit!.target[1]!,
+    afterPivot.target[2]! - beforeOrbit!.target[2]!
   );
   expect(pivotTravel).toBeGreaterThan(0.1);
 
@@ -693,14 +722,123 @@ test('the middle-button drag preference changes what a middle drag does', async 
     { steps: 8 }
   );
   await page.mouse.up({ button: 'middle' });
+  await expect
+    .poll(async () => {
+      const afterOrbit = await camera();
+      return afterOrbit
+        ? Math.hypot(
+            afterOrbit.position[0]! - afterPivot.position[0]!,
+            afterOrbit.position[1]! - afterPivot.position[1]!,
+            afterOrbit.position[2]! - afterPivot.position[2]!
+          )
+        : 0;
+    })
+    .toBeGreaterThan(1);
+});
+
+test('persists only the final camera pose after a gesture settles', async ({
+  page
+}) => {
+  await stubApi(page);
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('Settled Camera Part');
+  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
+  await page
+    .getByRole('region', { name: 'Feature inspector' })
+    .getByRole('button', { name: /^Create/ })
+    .click();
+  await expect(
+    page.locator('.feature-row-main', { hasText: 'Box' })
+  ).toBeVisible();
+
+  const canvas = page.locator('.viewer-host canvas');
+  await expect(canvas).toBeVisible({ timeout: 120_000 });
+  const bounds = await canvas.boundingBox();
+  expect(bounds).not.toBeNull();
+
+  const storedCamera = () =>
+    page.evaluate((storageKey) => {
+      const raw = localStorage.getItem(storageKey);
+      const views = raw
+        ? (
+            JSON.parse(raw) as {
+              views?: Record<string, { camera: CameraPose }>;
+            }
+          ).views
+        : undefined;
+      return views ? (Object.values(views)[0]?.camera ?? null) : null;
+    }, WORKSPACE_SESSION_STORAGE_KEY);
+
+  // Let the automatic fit and its controller settle finish before measuring
+  // only the gesture below.
+  await expect.poll(storedCamera).not.toBeNull();
   await page.waitForTimeout(400);
-  const afterOrbit = await camera();
-  const cameraMoved = Math.hypot(
-    afterOrbit!.position[0]! - afterPivot!.position[0]!,
-    afterOrbit!.position[1]! - afterPivot!.position[1]!,
-    afterOrbit!.position[2]! - afterPivot!.position[2]!
+  const before = await storedCamera();
+  expect(before).not.toBeNull();
+
+  await page.evaluate((storageKey) => {
+    const scope = window as typeof window & { __ozSessionWrites?: number };
+    scope.__ozSessionWrites = 0;
+    const setItem = Storage.prototype.setItem;
+    Storage.prototype.setItem = function patched(key: string, value: string) {
+      if (key === storageKey) {
+        scope.__ozSessionWrites = (scope.__ozSessionWrites ?? 0) + 1;
+      }
+      return setItem.call(this, key, value);
+    };
+  }, WORKSPACE_SESSION_STORAGE_KEY);
+  const sessionWrites = () =>
+    page.evaluate(
+      () =>
+        (window as typeof window & { __ozSessionWrites?: number })
+          .__ozSessionWrites ?? 0
+    );
+
+  const centre = {
+    x: bounds!.x + bounds!.width / 2,
+    y: bounds!.y + bounds!.height / 2
+  };
+  await page.mouse.move(centre.x, centre.y);
+  await page.keyboard.down('Shift');
+  await page.mouse.down();
+  expect(await sessionWrites()).toBe(0);
+
+  await page.mouse.move(centre.x + 64, centre.y + 32, { steps: 10 });
+  const moving = await readLiveCamera(canvas);
+  expect(
+    Math.hypot(
+      moving.position[0]! - before!.position[0]!,
+      moving.position[1]! - before!.position[1]!,
+      moving.position[2]! - before!.position[2]!
+    )
+  ).toBeGreaterThan(1);
+  expect(await sessionWrites()).toBe(0);
+
+  // Stay held beyond VIEW_SETTLE_MS: a separate fixed debounce would write
+  // here, while the controller's settle path knows the gesture is still live.
+  await page.waitForTimeout(160);
+  expect(await sessionWrites()).toBe(0);
+
+  await page.mouse.up();
+  await page.keyboard.up('Shift');
+  await expect.poll(sessionWrites).toBe(1);
+  await page.waitForTimeout(250);
+  expect(await sessionWrites()).toBe(1);
+
+  const stored = await storedCamera();
+  const live = await readLiveCamera(canvas);
+  expect(stored).not.toBeNull();
+  for (const field of ['position', 'target'] as const) {
+    for (const axis of [0, 1, 2]) {
+      expect(stored![field][axis]!).toBeCloseTo(live[field][axis]!, 10);
+    }
+  }
+  expect(stored!.orthographicZoom).toBeCloseTo(live.orthographicZoom, 10);
+  expect(stored!.orthographicHalfHeight).toBeCloseTo(
+    live.orthographicHalfHeight!,
+    10
   );
-  expect(cameraMoved).toBeGreaterThan(1);
 });
 
 test('repeated face clicks reach a body behind direct-edit handles', async ({
