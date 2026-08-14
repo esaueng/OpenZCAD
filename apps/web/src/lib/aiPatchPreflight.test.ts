@@ -306,4 +306,32 @@ describe('AI exact patch preflight', () => {
     });
     expect(result.candidate.derived.warnings).toEqual([]);
   });
+
+  it('refuses a staged selector when the prefix already consumed its body', async () => {
+    const base = createProjectDocument('AI', toUserId('user_ai'));
+    const stagedProposal = {
+      ...proposal,
+      operations: [
+        proposal.operations[0]!,
+        {
+          kind: 'add_edge_modifier' as const,
+          name: 'Edges',
+          localId: 'edges',
+          modifier: 'fillet' as const,
+          targetBodyId: '$box',
+          edgeHashes: [],
+          edgeSelector: 'all-feature-edges' as const,
+          size: 1
+        }
+      ]
+    };
+
+    await expect(
+      preflightCadPatch(base, stagedProposal, async (candidate) => {
+        const derived = exactDerived(candidate);
+        derived.bodyRepresentations[candidate.bodyOrder[0]!]!.consumed = true;
+        return derived;
+      })
+    ).rejects.toThrow(/consumed by the staged prefix/);
+  });
 });

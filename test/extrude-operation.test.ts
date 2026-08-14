@@ -305,6 +305,59 @@ describe('stored extrude operations', { timeout: 30_000 }, () => {
     });
   });
 
+  it('does not treat a pre-existing overlap warning as a new measurement', async () => {
+    let document = createProjectDocument(
+      'Spoofed overlap warning',
+      toUserId('user_extrude_warning_spoof')
+    );
+    document = addPrimitiveFeature(document, {
+      name: 'Base',
+      primitiveKind: 'box',
+      dimensions: { width: 20, height: 20, depth: 10 }
+    });
+    document = addPrimitiveFeature(document, {
+      name: 'Decoy',
+      primitiveKind: 'box',
+      dimensions: { width: 1, height: 1, depth: 4 }
+    });
+    document = transformBody(document, {
+      name: 'Place decoy',
+      targetBodyId: getLatestBodyId(document)!,
+      translation: { x: 13.5, y: 13.5, z: 2 }
+    }).document;
+    document = addSketchFeature(document, {
+      name: 'Round cut',
+      plane: 'XY',
+      offset: 2,
+      object: {
+        objectKind: 'circle',
+        radius: 4,
+        centerX: 10,
+        centerY: 10
+      }
+    }).document;
+    const spoof =
+      'Feature "Preview": Stored add extrusion no longer overlaps Decoy Body; operation was not re-inferred.';
+
+    const resolved = await resolveExtrudeOperation({
+      base: document,
+      input: {
+        name: 'Preview',
+        sketchId: getLatestSketchId(document)!,
+        distance: 4
+      },
+      derive: async (candidate) => ({
+        ...(await kernel.syncDocument(candidate)),
+        warnings: [spoof]
+      })
+    });
+
+    expect(resolved.inference).toMatchObject({
+      operation: 'new-body',
+      reason: 'exact-measurement-refused'
+    });
+  });
+
   it('stores a partial-overlap add and preserves the legacy new-body default', async () => {
     const added = extrudeDocument('add', 8, 4);
     const addFeature = listFeaturesInOrder(added.document).at(-1)!;

@@ -239,7 +239,7 @@ describe('cloudflare adapters', () => {
     expect(put).not.toHaveBeenCalled();
   });
 
-  it('keeps content-addressed assets when a save loses the version race', async () => {
+  it('deletes unreferenced content-addressed assets when a save loses the version race', async () => {
     const userId = toUserId('user_conflict_assets');
     const manager = new CommandManager(
       createProjectDocument('Conflict import', userId)
@@ -309,10 +309,7 @@ describe('cloudflare adapters', () => {
 
     const putKeys = bucket.put.mock.calls.map(([key]) => key);
     expect(putKeys.some((key) => key.includes('/assets/'))).toBe(true);
-    // Asset objects are shared by content hash: the race winner may have just
-    // committed rows referencing the exact objects this loser uploaded, so
-    // only the losing document object may be deleted.
-    expect(deleted.filter((key) => key.includes('/assets/'))).toEqual([]);
+    expect(deleted.filter((key) => key.includes('/assets/'))).toHaveLength(1);
     expect(deleted.some((key) => key.includes('/documents/'))).toBe(true);
   });
 
@@ -790,6 +787,7 @@ describe('cloudflare adapters', () => {
       'project_members',
       'upload_sessions',
       'artifacts',
+      'project_measurements',
       'revisions',
       'projects'
     ]) {
@@ -906,6 +904,30 @@ describe('cloudflare adapters', () => {
     );
     expect(merged.document.featureOrder).toHaveLength(2);
     expect(merged.document.bodyOrder).toHaveLength(2);
+  });
+
+  it('rejects a future-schema collaboration snapshot before normalization', async () => {
+    const { context } = createRoomContext();
+    const base = createProjectDocument('Future Room', toUserId('user_room'));
+    const future = {
+      ...base,
+      schemaVersion: 999
+    } as unknown as ProjectDocument;
+    const room = new ProjectCollaborationRoom(context, {});
+
+    const response = await room.fetch(
+      roomRequest(future, {
+        clientId: 'client_future',
+        document: future,
+        baseVersion: null
+      })
+    );
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toMatchObject({
+      type: 'error',
+      code: 'document-invalid'
+    });
   });
 
   it('accepts undo and redo as forward collaboration revisions', () => {

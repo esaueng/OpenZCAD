@@ -1,6 +1,10 @@
 import { useState, type FormEvent } from 'react';
 import { coerceParamValue, evaluateExpression } from '@openzcad/document-core';
-import type { SketchObjectData } from '@openzcad/shared';
+import {
+  MAX_SKETCH_ARC_SWEEP_DEGREES,
+  MAX_SKETCH_POLYGON_SIDES,
+  type SketchObjectData
+} from '@openzcad/shared';
 import { Trash2, X } from 'lucide-react';
 import { ExprInput } from './ExprInput';
 import { previewExpression } from '../lib/model';
@@ -179,9 +183,11 @@ function geometryError(
   }
   if (
     kind === 'polygon' &&
-    (!Number.isInteger(resolved.sides) || resolved.sides! < 3)
+    (!Number.isInteger(resolved.sides) ||
+      resolved.sides! < 3 ||
+      resolved.sides! > MAX_SKETCH_POLYGON_SIDES)
   ) {
-    return 'Polygon sides must be an integer of at least 3.';
+    return `Polygon sides must be an integer from 3 to ${MAX_SKETCH_POLYGON_SIDES}.`;
   }
   if (
     kind === 'line' &&
@@ -189,10 +195,15 @@ function geometryError(
   ) {
     return 'Line endpoints must be at least 0.5 units apart.';
   }
-  const arcSweep =
-    kind === 'arc'
-      ? Math.abs((resolved.endAngleDeg! - resolved.startAngleDeg!) % 360)
-      : null;
+  const rawArcSweep =
+    kind === 'arc' ? resolved.endAngleDeg! - resolved.startAngleDeg! : null;
+  if (
+    rawArcSweep !== null &&
+    Math.abs(rawArcSweep) > MAX_SKETCH_ARC_SWEEP_DEGREES
+  ) {
+    return `Arc sweep must not exceed ${MAX_SKETCH_ARC_SWEEP_DEGREES} degrees.`;
+  }
+  const arcSweep = rawArcSweep === null ? null : Math.abs(rawArcSweep % 360);
   if (arcSweep !== null && (arcSweep < 1 || 360 - arcSweep < 1)) {
     return 'Arc sweep must be at least 1 degree.';
   }

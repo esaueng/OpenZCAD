@@ -1,4 +1,9 @@
-import type { ParamValue, SketchObjectData } from '@openzcad/shared';
+import {
+  MAX_SKETCH_ARC_SWEEP_DEGREES,
+  MAX_SKETCH_POLYGON_SIDES,
+  type ParamValue,
+  type SketchObjectData
+} from '@openzcad/shared';
 import { geometryTolerance } from './tolerance';
 // Value import, and deliberately one-way: `text/sketchProfiles` imports only
 // *types* from this module, so there is no runtime cycle. It also avoids
@@ -215,6 +220,38 @@ const MAX_BEZIER_POLYLINE_SEGMENTS = 32;
 /** Fingerprints are identity hints, not geometric comparisons. */
 const FINGERPRINT_QUANTUM = 1e-6;
 
+export function boundedPolygonSides(value: number): number {
+  if (
+    !Number.isFinite(value) ||
+    !Number.isInteger(value) ||
+    value < 3 ||
+    value > MAX_SKETCH_POLYGON_SIDES
+  ) {
+    throw new Error(
+      `Polygon sides must be an integer from 3 to ${MAX_SKETCH_POLYGON_SIDES}.`
+    );
+  }
+  return value;
+}
+
+export function boundedArcSweepDegrees(start: number, end: number): number {
+  const delta = end - start;
+  if (
+    !Number.isFinite(delta) ||
+    delta === 0 ||
+    Math.abs(delta) > MAX_SKETCH_ARC_SWEEP_DEGREES
+  ) {
+    throw new Error(
+      `Arc sweep must be non-zero and at most ${MAX_SKETCH_ARC_SWEEP_DEGREES} degrees.`
+    );
+  }
+  const sweep = delta < 0 ? delta + MAX_SKETCH_ARC_SWEEP_DEGREES : delta;
+  if (sweep <= 0) {
+    throw new Error('Arc sweep must be non-zero.');
+  }
+  return sweep;
+}
+
 function normalizeAngle(angle: number): number {
   const wrapped = angle % TWO_PI;
   return wrapped < 0 ? wrapped + TWO_PI : wrapped;
@@ -273,7 +310,7 @@ function curvesForObject(
       );
     }
     case 'polygon': {
-      const sides = Math.max(3, Math.round(resolve(data.sides)));
+      const sides = boundedPolygonSides(resolve(data.sides));
       const radius = resolve(data.radius);
       const cx = resolve(data.centerX);
       const cy = resolve(data.centerY);
@@ -302,12 +339,11 @@ function curvesForObject(
       ];
     }
     case 'arc': {
-      const start = (resolve(data.startAngleDeg) * Math.PI) / 180;
-      const end = (resolve(data.endAngleDeg) * Math.PI) / 180;
-      let sweep = end - start;
-      if (sweep <= 0) {
-        sweep += TWO_PI;
-      }
+      const startDegrees = resolve(data.startAngleDeg);
+      const endDegrees = resolve(data.endAngleDeg);
+      const start = (startDegrees * Math.PI) / 180;
+      const sweep =
+        (boundedArcSweepDegrees(startDegrees, endDegrees) * Math.PI) / 180;
       return [
         {
           kind: 'arc',

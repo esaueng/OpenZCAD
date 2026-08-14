@@ -106,10 +106,11 @@ describe('sketch profiles', () => {
     expect(() => polygonProfile(6, 0)).toThrow(/positive/);
   });
 
-  it('clamps segment counts to a usable range', () => {
+  it('clamps circle segments and rejects unbounded polygon sides', () => {
     expect(circleProfile(5, 0, 0, 2)).toHaveLength(8);
     expect(circleProfile(5, 0, 0, 4096)).toHaveLength(128);
-    expect(polygonProfile(2, 5)).toHaveLength(3);
+    expect(() => polygonProfile(2, 5)).toThrow(/3 to 64/);
+    expect(() => polygonProfile(65, 5)).toThrow(/3 to 64/);
   });
 });
 
@@ -124,10 +125,7 @@ describe('mesh welding', () => {
   };
 
   it('welds duplicated triangle corners into shared vertices', () => {
-    const solid = solidFromTriangles(
-      tetrahedron.vertices,
-      tetrahedron.indices
-    );
+    const solid = solidFromTriangles(tetrahedron.vertices, tetrahedron.indices);
     expect(solid.vertices).toHaveLength(4);
     expect(solid.faces).toHaveLength(4);
     expect(validateSolid(solid).closed).toBe(true);
@@ -135,10 +133,7 @@ describe('mesh welding', () => {
   });
 
   it('drops degenerate triangles rather than emitting zero-area faces', () => {
-    const solid = solidFromTriangles(
-      [0, 0, 0, 1, 0, 0, 0, 0, 0],
-      [0, 1, 2]
-    );
+    const solid = solidFromTriangles([0, 0, 0, 1, 0, 0, 0, 0, 0], [0, 1, 2]);
     expect(solid.faces).toHaveLength(0);
   });
 
@@ -152,16 +147,15 @@ describe('mesh welding', () => {
   });
 
   it('signs the volume by winding, so an inside-out mesh is detectable', () => {
-    const solid = solidFromTriangles(
-      tetrahedron.vertices,
-      tetrahedron.indices
-    );
+    const solid = solidFromTriangles(tetrahedron.vertices, tetrahedron.indices);
     const flipped: Solid = {
       vertices: solid.vertices,
       faces: solid.faces.map((face) => [...face].reverse())
     };
     // Volume is signed, not absolute: reversing every loop reverses the sign.
     expect(solidVolume(flipped)).toBeCloseTo(-solidVolume(solid), 12);
-    expect(Math.sign(solidVolume(flipped))).toBe(-Math.sign(solidVolume(solid)));
+    expect(Math.sign(solidVolume(flipped))).toBe(
+      -Math.sign(solidVolume(solid))
+    );
   });
 });

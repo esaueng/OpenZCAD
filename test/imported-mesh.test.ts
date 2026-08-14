@@ -15,10 +15,12 @@ import {
 } from '@openzcad/kernel-adapter/exact';
 import {
   toUserId,
+  toArtifactId,
   type BodyId,
   type BodyNode,
   type ProjectDocument
 } from '@openzcad/shared';
+import { importedMeshStl } from '../packages/kernel-adapter/src/imported-mesh';
 
 /**
  * Imported meshes on the one exact kernel.
@@ -287,5 +289,20 @@ describe('imported meshes on the exact kernel', { timeout: 30_000 }, () => {
       'Feature "Single facet": An imported mesh needs at least two triangles to form a body.'
     ]);
     expect(Object.keys(derived.bodyRepresentations)).toHaveLength(0);
+  });
+});
+
+describe('imported mesh document validation', () => {
+  it('rejects malformed persisted triangle indices before serialization', () => {
+    expect(() =>
+      importedMeshStl({
+        featureKind: 'imported-mesh',
+        artifactId: toArtifactId('artifact_bad'),
+        sourceName: 'bad.stl',
+        triangleCount: 1,
+        vertices: [0, 0, 0, 1, 0, 0, 0, 1, 0],
+        indices: [0, 1, 99]
+      })
+    ).toThrow(/invalid triangle index/);
   });
 });

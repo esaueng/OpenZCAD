@@ -465,7 +465,7 @@ export class InMemoryPersistenceService implements PersistenceService {
     input: CreateProjectInvitationInput
   ): Promise<ProjectInvitationSummary> {
     await this.requireProjectOwner(ownerUserId, projectId);
-    const rateKey = `${projectId}:${ownerUserId}`;
+    const rateKey = ownerUserId;
     const windowStart =
       input.createdAt - PROJECT_INVITATION_RATE_WINDOW_SECONDS;
     const recent = (this.invitationRateEvents.get(rateKey) ?? []).filter(

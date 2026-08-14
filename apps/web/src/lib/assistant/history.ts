@@ -141,6 +141,7 @@ function parseQuestions(value: unknown): AssistantQuestion[] {
     if (
       !question ||
       typeof question.id !== 'string' ||
+      !/^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/.test(question.id) ||
       typeof question.prompt !== 'string'
     ) {
       return [];
@@ -254,7 +255,9 @@ export function parseStoredEntry(value: unknown): AssistantEntry | null {
           id: entry.id,
           proposal: parseCadPatchProposal(entry.proposal),
           readings: parseReadings(entry.readings),
-          status,
+          // A restored proposal no longer has the document snapshot it was
+          // generated against. Keep it as history, but never restore actions.
+          status: status === 'open' ? 'rejected' : status,
           ...timestamp(entry.at)
         };
       } catch {

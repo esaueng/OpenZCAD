@@ -167,6 +167,25 @@ describe('desktop bridge', () => {
     );
   });
 
+  it('does not invoke Rust when an upload is aborted while its body is read', async () => {
+    markDesktopRuntime();
+    const controller = new AbortController();
+    const body = new Blob(['queued upload']);
+    vi.spyOn(body, 'arrayBuffer').mockImplementation(async () => {
+      controller.abort();
+      return new TextEncoder().encode('queued upload').buffer;
+    });
+
+    await expect(
+      desktopFetch('/api/uploads', {
+        method: 'POST',
+        body,
+        signal: controller.signal
+      })
+    ).rejects.toMatchObject({ name: 'AbortError' });
+    expect(invoke).not.toHaveBeenCalled();
+  });
+
   it('accepts only a ticketed fixed-origin collaboration URL from Rust', async () => {
     (window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ =
       {};

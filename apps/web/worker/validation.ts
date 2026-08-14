@@ -2,10 +2,13 @@ import {
   MAX_ARTIFACT_UPLOAD_PARTS,
   MAX_CLOUD_PROJECT_DOCUMENT_BYTES,
   MAX_PROJECT_NAME_LENGTH,
+  MAX_PROJECT_CHECKPOINTS,
   THUMBNAIL_CONTENT_TYPE,
   persistedDocumentBytes,
   PROJECT_DOCUMENT_SCHEMA_VERSION,
   PROJECT_STATUSES,
+  isProjectCheckpoint,
+  isRevisionRecord,
   toArtifactId,
   toProjectId,
   toUploadSessionId,
@@ -245,6 +248,14 @@ function parseProjectDocument(
     !Array.isArray(record.commandLog)
   ) {
     throw badRequest('"document" is missing required collections.');
+  }
+  if (
+    !record.revisions.every(isRevisionRecord) ||
+    !Array.isArray(record.checkpoints) ||
+    record.checkpoints.length > MAX_PROJECT_CHECKPOINTS ||
+    !record.checkpoints.every(isProjectCheckpoint)
+  ) {
+    throw badRequest('"document" has invalid revision or checkpoint history.');
   }
   // A document written by a newer client can carry node kinds and references
   // this deployment does not understand. Normalization migrates forward, never

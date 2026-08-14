@@ -187,6 +187,61 @@ describe('SketchEntityEditor', () => {
     expect(screen.getByLabelText('Size')).toBeTruthy();
     expect(screen.getByRole('group', { name: 'Font style' })).toBeTruthy();
   });
+
+  it('refuses polygon side counts above the render budget', async () => {
+    const onApply = vi.fn();
+    const user = userEvent.setup();
+    render(
+      <SketchEntityEditor
+        data={{
+          objectKind: 'polygon',
+          sides: 6,
+          radius: 10,
+          centerX: 0,
+          centerY: 0
+        }}
+        scope={{}}
+        onApply={onApply}
+        onDelete={vi.fn()}
+        onClose={vi.fn()}
+      />
+    );
+
+    const sides = screen.getByLabelText('Sides');
+    await user.clear(sides);
+    await user.type(sides, '65');
+    expect(screen.getByRole('alert')).toHaveTextContent('3 to 64');
+    expect(screen.getByRole('button', { name: /apply/i })).toBeDisabled();
+    expect(onApply).not.toHaveBeenCalled();
+  });
+
+  it('refuses a multi-turn arc sweep', async () => {
+    const onApply = vi.fn();
+    const user = userEvent.setup();
+    render(
+      <SketchEntityEditor
+        data={{
+          objectKind: 'arc',
+          centerX: 0,
+          centerY: 0,
+          radius: 10,
+          startAngleDeg: 0,
+          endAngleDeg: 90
+        }}
+        scope={{}}
+        onApply={onApply}
+        onDelete={vi.fn()}
+        onClose={vi.fn()}
+      />
+    );
+
+    const end = screen.getByLabelText('End angle');
+    await user.clear(end);
+    await user.type(end, '720');
+    expect(screen.getByRole('alert')).toHaveTextContent('360 degrees');
+    expect(screen.getByRole('button', { name: /apply/i })).toBeDisabled();
+    expect(onApply).not.toHaveBeenCalled();
+  });
 });
 
 describe('text placement and movement', () => {

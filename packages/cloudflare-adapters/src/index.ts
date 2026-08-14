@@ -27,10 +27,14 @@ import {
   MAX_THUMBNAIL_BYTES,
   MAX_PERSISTED_DOCUMENT_BYTES,
   MAX_PROJECT_REVISIONS,
+  MAX_PROJECT_CHECKPOINTS,
   THUMBNAIL_CONTENT_TYPE,
   nowIso,
+  isProjectCheckpoint,
+  isRevisionRecord,
   persistedDocumentBytes,
   projectOrganization,
+  PROJECT_DOCUMENT_SCHEMA_VERSION,
   PROJECT_STATUSES,
   sanitizeFileName,
   toArtifactId,
@@ -393,7 +397,7 @@ export class D1R2PersistenceService implements PersistenceService {
          window_start = excluded.window_start
        RETURNING request_count`
     )
-      .bind(`project-invite:${projectId}:${ownerUserId}`, windowStart)
+      .bind(`project-invite-account:${ownerUserId}`, windowStart)
       .first<{ request_count: number }>();
     if (!rate || rate.request_count > PROJECT_INVITATION_RATE_LIMIT) {
       throw new ProjectSharingError(
@@ -1206,10 +1210,11 @@ export class D1R2PersistenceService implements PersistenceService {
     try {
       await this.env
         .DB!.prepare(
-          `DELETE FROM revisions WHERE project_id = ? AND id NOT IN (
-             SELECT id FROM revisions WHERE project_id = ?
+          `DELETE FROM revisions WHERE project_id = ? AND (
+             id IS NULL OR id NOT IN (
+             SELECT id FROM revisions WHERE project_id = ? AND id IS NOT NULL
              ORDER BY created_at DESC, id DESC LIMIT ?
-           )`
+           ))`
         )
         .bind(projectId, projectId, MAX_PROJECT_REVISIONS)
         .run();
@@ -2155,9 +2160,24 @@ export class D1R2PersistenceService implements PersistenceService {
 
       const bucket = this.projectStorageBucket();
       if (bucket) {
-        // Assets are content-addressed and may already be shared by a winner.
-        // The random document object is the only object unique to this write.
-        await Promise.allSettled([bucket.delete(write.objectKey)]);
+        const orphanedAssetKeys = await Promise.all(
+          write.missingAssets.map(async (asset) => {
+            const reference = await this.env
+              .DB!.prepare(
+                `SELECT 1 AS referenced FROM project_storage_assets
+                 WHERE project_id = ? AND object_key = ? LIMIT 1`
+              )
+              .bind(projectId, asset.objectKey)
+              .first<{ referenced: number }>();
+            return reference ? null : asset.objectKey;
+          })
+        );
+        await Promise.allSettled([
+          bucket.delete(write.objectKey),
+          ...orphanedAssetKeys.flatMap((key) =>
+            key === null ? [] : [bucket.delete(key)]
+          )
+        ]);
       }
       return { state: 'uncommitted', currentVersion };
     } catch {
@@ -2358,6 +2378,7 @@ export class D1R2PersistenceService implements PersistenceService {
         'DELETE FROM project_members WHERE project_id IN',
         'DELETE FROM upload_sessions WHERE project_id IN',
         'DELETE FROM artifacts WHERE project_id IN',
+        'DELETE FROM project_measurements WHERE project_id IN',
         'DELETE FROM revisions WHERE project_id IN',
         'DELETE FROM project_document_objects WHERE project_id IN',
         'DELETE FROM project_storage_assets WHERE project_id IN'
@@ -4029,6 +4050,20 @@ function checkClientDocument(value: unknown): CollaborationRejection | null {
         pending.push({ value: item, depth: entry.depth + 1 });
       }
     }
+  }
+  if (
+    typeof value.schemaVersion !== 'number' ||
+    value.schemaVersion > PROJECT_DOCUMENT_SCHEMA_VERSION ||
+    !Array.isArray(value.revisions) ||
+    !value.revisions.every(isRevisionRecord) ||
+    !Array.isArray(value.checkpoints) ||
+    value.checkpoints.length > MAX_PROJECT_CHECKPOINTS ||
+    !value.checkpoints.every(isProjectCheckpoint)
+  ) {
+    return {
+      code: 'document-invalid',
+      message: 'Collaboration document history or schema version is invalid.'
+    };
   }
   return null;
 }

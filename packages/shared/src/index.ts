@@ -60,6 +60,9 @@ export type AxisId = 'x' | 'y' | 'z';
  * parametric — editing a parameter regenerates every feature that uses it.
  */
 export type ParamValue = number | string;
+export const MAX_SKETCH_POLYGON_SIDES = 64;
+export const MAX_SKETCH_ARC_SWEEP_DEGREES = 360;
+export const MAX_HELICAL_SWEEP_TURNS = 100;
 
 export interface Vector3 {
   x: number;
@@ -1085,6 +1088,47 @@ export interface ProjectCheckpoint {
   documentVersion: number;
   createdAt: string;
   reason: string;
+}
+
+export const MAX_PROJECT_CHECKPOINTS = 100;
+
+function isBoundedString(value: unknown, max: number, min = 0): boolean {
+  return (
+    typeof value === 'string' && value.length >= min && value.length <= max
+  );
+}
+
+function isNonnegativeSafeInteger(value: unknown): boolean {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0;
+}
+
+export function isProjectCheckpoint(
+  value: unknown
+): value is ProjectCheckpoint {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return false;
+  }
+  const checkpoint = value as Record<string, unknown>;
+  return (
+    isBoundedString(checkpoint.checkpointId, 200, 1) &&
+    isBoundedString(checkpoint.revisionId, 200, 1) &&
+    isNonnegativeSafeInteger(checkpoint.documentVersion) &&
+    isBoundedString(checkpoint.createdAt, 100, 1) &&
+    isBoundedString(checkpoint.reason, 500)
+  );
+}
+
+export function isRevisionRecord(value: unknown): value is RevisionRecord {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return false;
+  }
+  const revision = value as Record<string, unknown>;
+  return (
+    isBoundedString(revision.revisionId, 200, 1) &&
+    isBoundedString(revision.createdAt, 100, 1) &&
+    isBoundedString(revision.reason, 500) &&
+    isNonnegativeSafeInteger(revision.commandCount)
+  );
 }
 
 /**

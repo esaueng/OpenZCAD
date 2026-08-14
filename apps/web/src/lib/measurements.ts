@@ -1251,14 +1251,23 @@ export function measurementsToText(
         formatted.quality,
         entry.status,
         entry.note ?? ''
-      ].join('\t');
+      ]
+        .map(spreadsheetCell)
+        .join('\t');
     })
     .join('\n');
 }
 
 function csvCell(value: string | number): string {
-  const text = String(value);
+  const text = spreadsheetCell(value);
   return /[",\n]/.test(text) ? `"${text.replaceAll('"', '""')}"` : text;
+}
+
+function spreadsheetCell(value: string | number): string {
+  const text = String(value);
+  return typeof value === 'string' && /^[=+\-@\t\r]/.test(text)
+    ? `'${text}`
+    : text;
 }
 
 export function measurementsToCsv(

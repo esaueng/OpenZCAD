@@ -80,7 +80,11 @@ function assertNativeParametricDocument(document: ProjectDocument): void {
       (node.data.featureKind === 'imported-step' ||
         node.data.featureKind === 'imported-mesh')
   );
-  if (importedFeature) {
+  const importedCommand = document.commandLog.some(
+    (command) =>
+      command.kind === 'import.step' || command.kind === 'import.mesh'
+  );
+  if (importedFeature || importedCommand) {
     throw new Error(
       'Diagnostic export currently supports native parametric documents only. Imported geometry can contain source-file metadata and must be sanitized separately.'
     );

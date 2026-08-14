@@ -450,7 +450,8 @@ import {
   saveLocalProjectOrganization,
   saveProjectMeasurements,
   saveProjectThumbnail,
-  saveLocalProject
+  saveLocalProject,
+  withMatchingLocalDerived
 } from './lib/localProjectStore';
 import {
   applyLocalProjectOrganizations,
@@ -1266,18 +1267,15 @@ export function App() {
   const [accountProjectListReached, setAccountProjectListReached] =
     useState(false);
   const thumbnailBackfillRuntimeRef = useRef({
-    cloudProjectIds,
-    syncOnce: geometry.syncOnce
+    cloudProjectIds
   });
   thumbnailBackfillRuntimeRef.current = {
-    cloudProjectIds,
-    syncOnce: geometry.syncOnce
+    cloudProjectIds
   };
   const thumbnailAccountUserId = session?.userId;
   /**
-   * Fills old or cross-device cards without making the user open each part.
-   * The collapsed shelf mounts at most nine projects, and this queue holds one
-   * document, one exact rebuild, and one WebGL context at a time.
+   * Publishes a device-cached preview when the account has no artifact. A cache
+   * miss stays a placeholder so the recovery shelf never loads project data.
    */
   const backfillThumbnail = useCallback(
     async (project: ProjectSummary): Promise<string | null | undefined> => {
@@ -1293,13 +1291,8 @@ export function App() {
         const result = await backfill.backfillProjectThumbnail(project, {
           loadCached: (projectId) =>
             loadProjectThumbnail(projectId).catch(() => null),
-          loadLocalDocument: (projectId) =>
-            loadLocalProject(projectId).catch(() => null),
           ...(cloudBacked
             ? {
-                loadCloudDocument: (projectId: string) =>
-                  api.loadProject(projectId).catch(() => null),
-                rebuild: runtime.syncOnce,
                 publish: async (input: {
                   projectId: ProjectDocument['projectId'];
                   source: string;
@@ -1312,7 +1305,6 @@ export function App() {
                 }
               }
             : {}),
-          render: thumbnail.renderThumbnailFrame,
           save: saveProjectThumbnail
         });
         if (result.artifactId) {
@@ -5187,14 +5179,7 @@ export function App() {
     remote: ProjectDocument,
     local: ProjectDocument
   ): ProjectDocument {
-    return {
-      ...remote,
-      derived: {
-        ...remote.derived,
-        bodyRepresentations: local.derived.bodyRepresentations,
-        exportableBodyIds: local.derived.exportableBodyIds
-      }
-    };
+    return withMatchingLocalDerived(remote, local);
   }
 
   /** Stores a document that the account has acknowledged on every local path. */

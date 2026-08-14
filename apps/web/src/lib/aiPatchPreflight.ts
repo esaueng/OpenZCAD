@@ -213,6 +213,11 @@ function selectedExactEdges(
   operation: StagedEdgeModifier
 ) {
   const body = candidate.derived.bodyRepresentations[bodyId];
+  if (body?.consumed) {
+    throw new Error(
+      `${operation.name} cannot modify a body consumed by the staged prefix.`
+    );
+  }
   if (!body?.topology) {
     throw new Error(
       `${operation.name} could not inspect exact topology for its staged target body.`
