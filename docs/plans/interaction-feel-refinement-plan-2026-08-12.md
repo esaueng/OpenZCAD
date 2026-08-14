@@ -32,7 +32,7 @@ Branch `claude/3d-modeling-interface-refinement-e7b650`.
 | 3.4 gizmo exit | **done** — disarmed rigs fade out and are disposed once gone |
 | 3.5 "kernel is behind" affordance | **done** — `LivePreview` announces the degrade once and the chip reads `paused` |
 | 4 trackpad two-finger pan + pinch zoom | **done** — `wheelGesture.ts` classifier, `auto`/`mouse`/`trackpad` supported by the controller |
-| 4 navigation preference in Settings | **not started** — the controller reads a mode, but nothing sets it yet, so misclassification has no escape hatch |
+| 4 navigation preference in Settings | **done** — Viewport › Scroll wheel: detect / mouse / trackpad |
 | 2.3 window-resize coalescing | **done** — one render per frame instead of one per event |
 | 2.1 defer the workspace-session write | **attempted and reverted** — see below |
 | 2.2 precompute move snap candidates | **not started** |
