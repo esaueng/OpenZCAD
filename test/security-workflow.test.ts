@@ -1,14 +1,30 @@
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 
-describe('secret-bearing automation', () => {
-  it('keeps the BrepKit updater on a GitHub-hosted runner', () => {
-    const workflow = readFileSync(
-      '.github/workflows/update-brepkit.yml',
-      'utf8'
-    );
+describe('workflow runner policy', () => {
+  it('keeps every workflow on GitHub-hosted runners', () => {
+    const workflowDirectory = '.github/workflows';
+    const expectedRunners: Record<string, string[]> = {
+      'ci.yml': ['ubuntu-latest'],
+      'macos-desktop.yml': ['macos-26'],
+      'production-health.yml': ['ubuntu-latest'],
+      'update-brepkit.yml': ['ubuntu-latest']
+    };
+    const workflowPaths = readdirSync(workflowDirectory)
+      .filter((path) => path.endsWith('.yml') || path.endsWith('.yaml'))
+      .sort();
 
-    expect(workflow).toContain('runs-on: ubuntu-latest');
-    expect(workflow).not.toContain('blacksmith-');
+    expect(workflowPaths).toEqual(Object.keys(expectedRunners).sort());
+    for (const workflowPath of workflowPaths) {
+      const workflow = readFileSync(
+        `${workflowDirectory}/${workflowPath}`,
+        'utf8'
+      );
+      const runners = [...workflow.matchAll(/^\s+runs-on:\s*(\S+)\s*$/gm)].map(
+        (match) => match[1]
+      );
+
+      expect(runners).toEqual(expectedRunners[workflowPath]);
+    }
   });
 });
