@@ -7,10 +7,10 @@ authoritative dependency inventory.
 
 ## Geometry kernels
 
-- **BrepKit / `brepkit-wasm` 3.2.22** — Copyright its contributors;
+- **BrepKit / `brepkit-wasm` 3.2.32** — Copyright its contributors;
   AGPL-3.0-only, with separate commercial licensing available from its
   licensor. Source and license texts: <https://github.com/esaueng/brepkit>.
-- **`occt-wasm` 3.8.0 build tooling and TypeScript wrapper** — Copyright its
+- **`occt-wasm` 3.8.1 build tooling and TypeScript wrapper** — Copyright its
   contributors; MIT OR Apache-2.0. Source:
   <https://github.com/andymai/occt-wasm>.
 - **Open CASCADE Technology compiled WebAssembly output** — LGPL-2.1-only as
@@ -25,7 +25,7 @@ authoritative dependency inventory.
 - **IBM Plex Sans and IBM Plex Mono 5.3.0** — Copyright IBM Corp.; SIL Open
   Font License 1.1. Source and license:
   <https://github.com/IBM/plex>.
-- **PDF.js / `pdfjs-dist` 6.1.200** — Copyright Mozilla and contributors;
+- **PDF.js / `pdfjs-dist` 6.2.108** — Copyright Mozilla and contributors;
   Apache-2.0. PDF.js distributions also contain Liberation fonts under the SIL
   Open Font License. Source and notices:
   <https://github.com/mozilla/pdf.js>.

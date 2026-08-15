@@ -41,3 +41,4 @@ service-account*.json
 
 *.tsbuildinfo
 .worktrees/
+backups/
