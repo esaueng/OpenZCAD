@@ -16,8 +16,8 @@ pnpm install --frozen-lockfile
 ```
 
 That install needs network access because `pnpm-lock.yaml` pins a GitHub-hosted
-`brepkit-wasm` tarball. Pull requests and manual dispatches run one cost-bounded
-`validate` job with these gates in order:
+`brepkit-wasm` tarball. Pull requests and manual dispatches run a `validate`
+job with these gates in order:
 
 ```bash
 pnpm lint
@@ -25,9 +25,12 @@ pnpm typecheck
 pnpm test
 pnpm test:parity-corpus
 pnpm build
-pnpm exec playwright install --with-deps chromium
-pnpm test:e2e
 ```
+
+plus a parallel `e2e-tests` job that shards the Playwright suite four ways
+(`pnpm test:e2e --shard=N/4`, each shard runs
+`pnpm exec playwright install --with-deps chromium` first) and an `e2e` gate
+job that aggregates the shards for branch protection.
 
 The Playwright install downloads Chromium and may install system packages; do
 not run it where network or system changes are unavailable. `pnpm test:e2e`

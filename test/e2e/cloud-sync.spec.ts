@@ -14,6 +14,11 @@ import {
 import type { StoredMeasurementRecord } from '../../apps/web/src/lib/measurementRecord';
 import { createProject, expect, stubApi, test } from './openzcad-fixtures';
 
+// Cross-tab IndexedDB sync settles much more slowly on the 2-core CI runners
+// than on a workstation; assertion budgets scale up there and stay tight
+// locally. These are upper bounds, not waits — a fast run never touches them.
+const SYNC_BUDGET_MS = process.env.CI ? 30_000 : 10_000;
+
 const accountUserId = toUserId('user_cloud_sync_e2e');
 
 function projectIdFrom(url: string): string {
@@ -346,7 +351,7 @@ test('stores an edit made inside the autosave debounce when the tab goes away', 
   await stubApi(page);
   await createProject(page, 'Debounce Window');
   await expect
-    .poll(() => storedProjectNames(page), { timeout: 10_000 })
+    .poll(() => storedProjectNames(page), { timeout: SYNC_BUDGET_MS })
     .toContain('Debounce Window');
   // Outlasts the trailing debounce that follows the first derived rebuild.
   await page.waitForTimeout(1500);
@@ -358,7 +363,7 @@ test('stores an edit made inside the autosave debounce when the tab goes away', 
 
   await page.evaluate(() => window.dispatchEvent(new Event('pagehide')));
   await expect
-    .poll(() => storedProjectNames(page), { timeout: 10_000 })
+    .poll(() => storedProjectNames(page), { timeout: SYNC_BUDGET_MS })
     .toContain('Saved On Page Hide');
 });
 
@@ -380,7 +385,7 @@ test('opens a project read-only when another tab already has it', async ({
   await stubApi(page);
   await createProject(page, 'Two Tabs');
   await expect
-    .poll(() => storedProjectNames(page), { timeout: 10_000 })
+    .poll(() => storedProjectNames(page), { timeout: SYNC_BUDGET_MS })
     .toContain('Two Tabs');
 
   // A second tab restores the same active project on its own.
@@ -392,14 +397,14 @@ test('opens a project read-only when another tab already has it', async ({
   ).toContainText('Two Tabs');
 
   await expect(second.getByRole('button', { name: /^Box \(B\)/ })).toBeDisabled(
-    { timeout: 10_000 }
+    { timeout: SYNC_BUDGET_MS }
   );
   // And settles on saying so, rather than leaving up a save that is never
   // going to happen. Claiming the project is asynchronous, so the indicator
   // reads as saving until the answer arrives.
   await expect(
     second.getByRole('group', { name: 'Workspace status', exact: true })
-  ).toContainText('syncLocal only', { timeout: 15_000 });
+  ).toContainText('syncLocal only', { timeout: SYNC_BUDGET_MS });
 
   // The tab that owns it keeps editing.
   await expect(page.getByRole('button', { name: /^Box \(B\)/ })).toBeEnabled();
@@ -407,7 +412,7 @@ test('opens a project read-only when another tab already has it', async ({
   // Handing the project back promotes the tab that was waiting for it.
   await page.goto('about:blank');
   await expect(second.getByRole('button', { name: /^Box \(B\)/ })).toBeEnabled({
-    timeout: 10_000
+    timeout: SYNC_BUDGET_MS
   });
   await second.close();
 });
@@ -431,7 +436,7 @@ test('does not write to the account when a project is only reopened', async ({
   await page.getByRole('button', { name: 'Create project' }).click();
   await expect(
     page.getByRole('group', { name: 'Workspace status', exact: true })
-  ).toContainText('syncSynced', { timeout: 10_000 });
+  ).toContainText('syncSynced', { timeout: SYNC_BUDGET_MS });
 
   documentWrites = 0;
   await page.reload();
@@ -440,7 +445,7 @@ test('does not write to the account when a project is only reopened', async ({
   ).toContainText('Reopen Echo');
   await expect(
     page.getByRole('group', { name: 'Workspace status', exact: true })
-  ).toContainText('syncSynced', { timeout: 10_000 });
+  ).toContainText('syncSynced', { timeout: SYNC_BUDGET_MS });
   // Outlasts this fixture's 1 s cloud-autosave delay, so a queued mirror of the
   // adopted document would have been sent by now.
   await page.waitForTimeout(3000);
@@ -457,13 +462,13 @@ test('restores an unreadable account document from the confirmed device copy', a
   await page.getByLabel('Project name').fill('Repair Fixture');
   await page.getByRole('button', { name: 'Create project' }).click();
   await expect(page.getByRole('button', { name: 'Saved' })).toBeVisible({
-    timeout: 10_000
+    timeout: SYNC_BUDGET_MS
   });
 
   api.documentUnavailable = true;
   await page.reload();
   await expect(page.getByRole('button', { name: 'Repair needed' })).toBeVisible(
-    { timeout: 10_000 }
+    { timeout: SYNC_BUDGET_MS }
   );
   await expect(
     page.getByRole('group', { name: 'Workspace status', exact: true })
@@ -474,14 +479,14 @@ test('restores an unreadable account document from the confirmed device copy', a
 
   await renameProject(page, 'Repair Fixture edited locally');
   await expect
-    .poll(() => storedProjectNames(page), { timeout: 10_000 })
+    .poll(() => storedProjectNames(page), { timeout: SYNC_BUDGET_MS })
     .toContain('Repair Fixture edited locally');
   // Outlast this fixture's 1 s cloud-autosave delay before baselining the
   // retry count, so the rename's queued mirror has already been refused
   // scheduling and the repair state is settled rather than mid-flight.
   await page.waitForTimeout(3000);
   await expect(page.getByRole('button', { name: 'Repair needed' })).toBeVisible(
-    { timeout: 10_000 }
+    { timeout: SYNC_BUDGET_MS }
   );
 
   const attemptsBeforeRetry = api.projectLoadAttempts;
@@ -506,11 +511,11 @@ test('restores an unreadable account document from the confirmed device copy', a
   await page.getByRole('button', { name: 'Repair needed' }).click();
   await acceptRestore;
   await expect
-    .poll(() => api.project?.name, { timeout: 10_000 })
+    .poll(() => api.project?.name, { timeout: SYNC_BUDGET_MS })
     .toBe('Repair Fixture edited locally');
   expect(api.documentUnavailable).toBe(false);
   await expect(page.getByRole('button', { name: 'Saved' })).toBeVisible({
-    timeout: 10_000
+    timeout: SYNC_BUDGET_MS
   });
 });
 
@@ -532,7 +537,7 @@ test('does not restore an unreadable account document from an older device copy'
   await page.getByLabel('Project name').fill('Older Repair Fixture');
   await page.getByRole('button', { name: 'Create project' }).click();
   await expect(page.getByRole('button', { name: 'Saved' })).toBeVisible({
-    timeout: 10_000
+    timeout: SYNC_BUDGET_MS
   });
 
   api.project = {
@@ -543,7 +548,7 @@ test('does not restore an unreadable account document from an older device copy'
   documentWrites = 0;
   await page.reload();
   await expect(page.getByRole('button', { name: 'Repair needed' })).toBeVisible(
-    { timeout: 10_000 }
+    { timeout: SYNC_BUDGET_MS }
   );
 
   await page.getByRole('button', { name: 'Repair needed' }).click();
@@ -581,7 +586,7 @@ test('syncs View measurements to a second device without changing the CAD docume
       .getByRole('button', { name: /^Create/ })
       .click();
     await expect(pageA.getByRole('button', { name: 'Saved' })).toBeVisible({
-      timeout: 10_000
+      timeout: SYNC_BUDGET_MS
     });
     const canonicalBeforeMeasurement = structuredClone(api.project);
 
@@ -597,7 +602,7 @@ test('syncs View measurements to a second device without changing the CAD docume
     expect(measured).toBeTruthy();
     await expect
       .poll(() => api.measurement?.record.measurements.length, {
-        timeout: 10_000
+        timeout: SYNC_BUDGET_MS
       })
       .toBe(1);
     expect(api.project).toEqual(canonicalBeforeMeasurement);
@@ -635,7 +640,7 @@ test('syncs across two devices and preserves the losing side of a conflict', asy
     await pageA.getByLabel('Project name').fill('Shared Bracket');
     await pageA.getByRole('button', { name: 'Create project' }).click();
     await expect(pageA.getByRole('button', { name: 'Saved' })).toBeVisible({
-      timeout: 10_000
+      timeout: SYNC_BUDGET_MS
     });
     await expect(
       pageA.getByRole('group', { name: 'Workspace status', exact: true })
@@ -650,7 +655,7 @@ test('syncs across two devices and preserves the losing side of a conflict', asy
     // already takes. It does not excuse a save that never lands: a document
     // that never reaches the account stays on "Saving" and still fails here.
     await expect(pageA.getByRole('button', { name: 'Saved' })).toBeVisible({
-      timeout: 10_000
+      timeout: SYNC_BUDGET_MS
     });
 
     await pageB.goto('/');
@@ -661,12 +666,12 @@ test('syncs across two devices and preserves the losing side of a conflict', asy
       pageB.getByRole('button', { name: 'Rename project' })
     ).toContainText('Shared Bracket');
     await expect(pageB.getByRole('button', { name: 'Saved' })).toBeVisible({
-      timeout: 10_000
+      timeout: SYNC_BUDGET_MS
     });
 
     await renameProject(pageA, 'Shared Bracket from A');
     await expect
-      .poll(() => api.project?.name, { timeout: 10_000 })
+      .poll(() => api.project?.name, { timeout: SYNC_BUDGET_MS })
       .toBe('Shared Bracket from A');
 
     await pageB.bringToFront();
@@ -676,21 +681,21 @@ test('syncs across two devices and preserves the losing side of a conflict', asy
     });
     await expect(
       pageB.getByRole('button', { name: 'Rename project' })
-    ).toContainText('Shared Bracket from A', { timeout: 10_000 });
+    ).toContainText('Shared Bracket from A', { timeout: SYNC_BUDGET_MS });
 
     await renameProject(pageB, 'Device B unsent edit');
     await deviceB.setOffline(true);
     await renameProject(pageA, 'Device A account edit');
     await pageA.evaluate(() => window.dispatchEvent(new Event('pagehide')));
     await expect
-      .poll(() => api.project?.name, { timeout: 10_000 })
+      .poll(() => api.project?.name, { timeout: SYNC_BUDGET_MS })
       .toBe('Device A account edit');
     await deviceB.setOffline(false);
 
     const conflict = pageB.getByRole('dialog', {
       name: 'This project changed in two places'
     });
-    await expect(conflict).toBeVisible({ timeout: 10_000 });
+    await expect(conflict).toBeVisible({ timeout: SYNC_BUDGET_MS });
     await expect(pageB.locator('.status-groups')).toContainText('syncConflict');
     // A lower overlay may mount after async conflict detection. The account
     // dialog remains painted above it and must not become inert just because
