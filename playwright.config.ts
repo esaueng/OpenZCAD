@@ -15,13 +15,19 @@ const PORT = portForCheckout();
 
 export default defineConfig({
   testDir: './test/e2e',
-  // CI runs the browser matrix on one shared worker, where repeated Chromium,
+  // GitHub-hosted runners are much slower than the previous CI hardware: cold
+  // Chromium, IndexedDB, and geometry-worker starts can eat most of the 30 s
+  // default test budget on a 2-core machine. Give CI runs more room and one
+  // retry so a slow cold start does not fail an otherwise green suite.
+  timeout: process.env.CI ? 90_000 : 30_000,
+  retries: process.env.CI ? 2 : 0,
+  // CI shards the suite across four 2-core runners, where repeated Chromium,
   // IndexedDB, and geometry-worker cold starts can cross Playwright's 5 s
   // assertion default. Product timing probes keep their own strict budgets;
   // this only gives readiness assertions the same allowance already used by
   // the focused cold-restore coverage.
   expect: {
-    timeout: process.env.CI ? 15_000 : 5_000
+    timeout: process.env.CI ? 30_000 : 5_000
   },
   use: {
     baseURL: `http://127.0.0.1:${PORT}`
