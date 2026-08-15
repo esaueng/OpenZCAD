@@ -101,9 +101,9 @@ them in the PR description. Common brepkit gate: `cargo fmt --all -- --check`,
   `applyEdgeModifier`'s acceptance test.
 - Stable refusal reason codes following `blend_failure_code`; every code needs a test
   that reaches it.
-- **Fixtures:** commit real exporter STEP files under `crates/io/tests` fixtures. Ask
-  Peter for the "Walking Stick Foot v3.step" file (session sandboxing may block
-  `~/Downloads` — have him copy it into the repo) plus at least one other real-exporter
+- **Fixtures:** commit real exporter STEP files under `crates/io/tests` fixtures.
+  Source the "Walking Stick Foot v3.step" file (check `~/Downloads`; sandboxing may
+  require copying it into the repo manually) plus at least one other real-exporter
   part; also build parametric fixtures in-test (box fillet, cylinder rim fillet). Cover:
   grow, shrink, radius→0, radius-too-large refusal, band-touches-freeform refusal.
 - WASM: `resizeBlend` binding + face-evolution payload for the produced band, following
