@@ -92,7 +92,7 @@ stashed comparison run.
   probe output in the description. Never push to a branch whose PR merged.
 - Probe numbers are SwiftShader CI numbers — regression gates, not UX
   claims. User-felt acceptance for motion work is a short screen recording
-  per phase for Peter to judge.
+  per phase for the maintainer to judge.
 - No public API changes anywhere in this plan. Feature flags are not needed:
   every change is behavior-preserving or pure presentation, except the
   motion work, which respects `reducedMotion`.
@@ -417,7 +417,7 @@ add/dispose to enter/exit. Add `setHot(boolean)` on rigs — pointer-over
 - Warning state transitions color via the tokens (`rigs.ts:198-208` eased;
   chip CSS gets `transition` on border/background).
 
-Acceptance for Phase 3: recording for Peter (hover sweep, select/deselect,
+Acceptance for Phase 3: recording for the maintainer (hover sweep, select/deselect,
 gizmo arm/disarm, fillet drag with deliberate slow preview) + reduced-motion
 spot check + probe unchanged-or-better frame numbers (motion must not add
 per-frame cost when idle: all eased values settle and stop requesting
@@ -455,7 +455,7 @@ In descending value:
 
 1. **BVH for body raycasts** (`three-mesh-bvh`, well-maintained, ~40 kB):
    build lazily per body mesh on install, dispose with it. This is a new
-   dependency — flagged now, needs Peter's OK. Fallback: screen-space AABB
+   dependency — flagged now, needs maintainer sign-off. Fallback: screen-space AABB
    prefilter before `intersectObjects`, no dependency.
 2. Cache the canvas rect: `setRayFromEvent`'s per-call
    `getBoundingClientRect` (`PickService.ts:104`) → cached, invalidated by
@@ -492,9 +492,9 @@ Phase 0 ──► Phase 1.1 ─► 1.2 ─► 1.3 ─► 1.4 ──► Phase 3 (
 
 - Phases 0–2 are objective (probe-gated) and safe to run autonomously,
   PR by PR.
-- Phase 3 needs Peter in the loop: after 3.1+3.2 land, a recording decides
+- Phase 3 needs the maintainer in the loop: after 3.1+3.2 land, a recording decides
   whether the values (100/200/350 ms, τ=60 ms) feel right before they're
-  applied everywhere. Peter's own recordings of worst moments (standing
+  applied everywhere. The maintainer's own recordings of worst moments (standing
   request) can reorder 3.2–3.5 at any time.
 - Re-baseline `docs/performance-baseline.md` after Phase 1 and Phase 5.
 - Close-out: distill final constants into a short
