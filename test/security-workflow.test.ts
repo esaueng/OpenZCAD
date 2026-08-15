@@ -6,6 +6,7 @@ describe('workflow runner policy', () => {
     const workflowDirectory = '.github/workflows';
     const expectedRunners: Record<string, string[]> = {
       'ci.yml': ['ubuntu-latest'],
+      'cloudflare.yml': ['ubuntu-latest', 'ubuntu-latest'],
       'macos-desktop.yml': ['macos-26'],
       'production-health.yml': ['ubuntu-latest'],
       'update-brepkit.yml': ['ubuntu-latest']
