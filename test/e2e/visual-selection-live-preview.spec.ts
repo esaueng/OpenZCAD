@@ -1,9 +1,13 @@
 import { expect, test, stubApi } from './openzcad-fixtures';
 
+// Streamed preview frames arrive much later on the 2-core CI runners under
+// SwiftShader than on a workstation. Budgets are upper bounds, not waits.
+const PREVIEW_BUDGET_MS = process.env.CI ? 60_000 : 30_000;
+
 test('streams exact planar previews and restores invalid or canceled offsets', async ({
   page
 }) => {
-  test.setTimeout(120_000);
+  test.setTimeout(process.env.CI ? 240_000 : 120_000);
   await stubApi(page);
   await page.setViewportSize({ width: 1440, height: 1000 });
   const consoleErrors: string[] = [];
@@ -92,7 +96,7 @@ test('streams exact planar previews and restores invalid or canceled offsets', a
     { steps: 1 }
   );
   await expect
-    .poll(readAxisLength, { timeout: 30_000 })
+    .poll(readAxisLength, { timeout: PREVIEW_BUDGET_MS })
     .toBeCloseTo(30, 4);
   // A second pointer value after the first exact frame must replace it rather
   // than leaving the coalescer stuck on the first sample.
@@ -102,7 +106,7 @@ test('streams exact planar previews and restores invalid or canceled offsets', a
     { steps: 1 }
   );
   await expect
-    .poll(readAxisLength, { timeout: 30_000 })
+    .poll(readAxisLength, { timeout: PREVIEW_BUDGET_MS })
     .toBeCloseTo(33, 4);
   await expect(canvas).toHaveAttribute('data-e2e-selected-face', /.+/);
   await expect(
@@ -112,7 +116,9 @@ test('streams exact planar previews and restores invalid or canceled offsets', a
 
   await page.keyboard.press('Escape');
   await page.mouse.up();
-  await expect.poll(readAxisLength).toBeCloseTo(28, 4);
+  await expect
+    .poll(readAxisLength, { timeout: PREVIEW_BUDGET_MS })
+    .toBeCloseTo(28, 4);
   await expect(chip).toHaveText('Total 28 mm');
   await expect(chip).toHaveAttribute('data-state', 'ready');
 
@@ -120,11 +126,13 @@ test('streams exact planar previews and restores invalid or canceled offsets', a
   let keypad = page.getByRole('dialog', { name: 'Total value' });
   await keypad.getByRole('textbox').fill('-1');
   const apply = keypad.getByRole('button', { name: 'Apply total' });
-  await expect(apply).toBeDisabled({ timeout: 30_000 });
+  await expect(apply).toBeDisabled({ timeout: PREVIEW_BUDGET_MS });
   await expect(keypad.getByRole('alert')).toBeVisible();
   await expect(chip).toHaveAttribute('data-state', 'warning');
   await expect(chip).toContainText('⚠ Total -1 mm');
-  await expect.poll(readAxisLength).toBeCloseTo(28, 4);
+  await expect
+    .poll(readAxisLength, { timeout: PREVIEW_BUDGET_MS })
+    .toBeCloseTo(28, 4);
   await page.keyboard.press('Escape');
   await expect(keypad).toBeHidden();
   await expect(chip).toHaveText('Total 28 mm');
@@ -135,7 +143,7 @@ test('streams exact planar previews and restores invalid or canceled offsets', a
   keypad = page.getByRole('dialog', { name: 'Total value' });
   await keypad.getByRole('textbox').fill('35.7');
   await expect
-    .poll(readAxisLength, { timeout: 30_000 })
+    .poll(readAxisLength, { timeout: PREVIEW_BUDGET_MS })
     .toBeCloseTo(35.7, 4);
   await expect(canvas).toHaveAttribute('data-e2e-selected-face', /.+/);
   await expect(keypad.getByRole('button', { name: 'Apply total' })).toBeEnabled();
@@ -144,6 +152,8 @@ test('streams exact planar previews and restores invalid or canceled offsets', a
   await expect(page.getByRole('contentinfo')).toContainText(
     'Cylinder height set to 35.7 mm.'
   );
-  await expect.poll(readAxisLength).toBeCloseTo(35.7, 4);
+  await expect
+    .poll(readAxisLength, { timeout: PREVIEW_BUDGET_MS })
+    .toBeCloseTo(35.7, 4);
   expect(consoleErrors).toEqual([]);
 });
