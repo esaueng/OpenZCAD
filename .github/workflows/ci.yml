@@ -32,5 +32,35 @@ jobs:
       # Keep exact BrepKit/OpenCascade STEP parity in the critical beta gate.
       - run: pnpm test:parity-corpus
       - run: pnpm build
+
+  e2e-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      # GitHub-hosted runners are 2-core; running the whole Playwright suite
+      # serially on one of them keeps the box saturated for ~25 minutes and
+      # timing-sensitive tests flake. Four shards run in parallel instead.
+      matrix:
+        shard: [1, 2, 3, 4]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6
+        with:
+          version: 10.8.0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
       - run: pnpm exec playwright install --with-deps chromium
-      - run: pnpm test:e2e
+      # The Playwright webServer builds and serves the app inside the job.
+      - run: pnpm test:e2e --shard=${{ matrix.shard }}/4
+
+  # A single stable check context for branch protection, so the required-check
+  # list does not depend on the shard count.
+  e2e:
+    needs: e2e-tests
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "all e2e shards green"
