@@ -113,6 +113,48 @@ const MAX_ARTIFACT_BODY_BYTES = 25 * 1024 * 1024;
 /** Cache only a proven-ready schema; failures stay retryable without a deploy. */
 const projectStorageReadyEnvironments = new WeakSet<Env>();
 const projectMeasurementStorageReadyEnvironments = new WeakSet<Env>();
+const HEALTH_READINESS_TTL_MS = 60_000;
+interface HealthReadiness {
+  documentStorageAccountingReady: boolean;
+  projectObjectStorageReady: boolean;
+  projectMeasurementStorageReady: boolean;
+  accountErasureReady: boolean;
+}
+const healthReadinessCache = new WeakMap<
+  Env,
+  { expiresAt: number; value: Promise<HealthReadiness> }
+>();
+
+function healthReadiness(env: Env): Promise<HealthReadiness> {
+  const now = Date.now();
+  const cached = healthReadinessCache.get(env);
+  if (cached && cached.expiresAt > now) {
+    return cached.value;
+  }
+  const value = Promise.all([
+    isDocumentStorageAccountingReady(env.DB),
+    isProjectObjectStorageReady(env.DB, env.PROJECT_STORAGE ?? env.ARTIFACTS),
+    isProjectMeasurementStorageReady(env.DB),
+    isAccountErasureReady(env.DB)
+  ]).then(
+    ([
+      documentStorageAccountingReady,
+      projectObjectStorageReady,
+      projectMeasurementStorageReady,
+      accountErasureReady
+    ]) => ({
+      documentStorageAccountingReady,
+      projectObjectStorageReady,
+      projectMeasurementStorageReady,
+      accountErasureReady
+    })
+  );
+  healthReadinessCache.set(env, {
+    expiresAt: now + HEALTH_READINESS_TTL_MS,
+    value
+  });
+  return value;
+}
 const collaborationRolloutEnvironments = new WeakMap<Env, Map<string, Env>>();
 
 function assertEditorLeaseEligible(
@@ -334,17 +376,12 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
   const { pathname } = url;
 
   if (request.method === 'GET' && pathname === '/api/health') {
-    const [
+    const {
       documentStorageAccountingReady,
       projectObjectStorageReady,
       projectMeasurementStorageReady,
       accountErasureReady
-    ] = await Promise.all([
-      isDocumentStorageAccountingReady(env.DB),
-      isProjectObjectStorageReady(env.DB, env.PROJECT_STORAGE ?? env.ARTIFACTS),
-      isProjectMeasurementStorageReady(env.DB),
-      isAccountErasureReady(env.DB)
-    ]);
+    } = await healthReadiness(env);
     return json({
       status: 'ok',
       environment: env.ENVIRONMENT ?? 'beta',
@@ -1441,7 +1478,11 @@ export default {
           409
         );
       }
-      console.error('Unhandled API error.', request.method, pathname, error);
+      console.error('Unhandled API error.', {
+        method: request.method,
+        pathname,
+        errorName: error instanceof Error ? error.name : 'UnknownError'
+      });
       return json({ error: 'Internal error' }, 500);
     }
   }

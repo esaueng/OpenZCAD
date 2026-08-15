@@ -254,6 +254,16 @@ describe('measurement workbench records', () => {
     expect(row).toContain(',exact-kernel,current,1,');
   });
 
+  it('neutralizes spreadsheet formulas in copied and CSV labels', () => {
+    const measurement = { ...edge(1, 84), label: '=WEBSERVICE("bad")' };
+    expect(measurementsToText([measurement], DISPLAY)).toContain(
+      '\'=WEBSERVICE("bad")'
+    );
+    expect(measurementsToCsv([measurement], DISPLAY)).toContain(
+      '"\'=WEBSERVICE(""bad"")"'
+    );
+  });
+
   it('creates exact edge, face-area, diameter, and body inspection records', () => {
     const body = measuredBody();
     const line = createSmartMeasurement(

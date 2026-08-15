@@ -123,6 +123,39 @@ function adapterWithCountedSource(importedStepCacheBytes?: number) {
 }
 
 describe('imported STEP rebuild cache', () => {
+  it('does not cache embedded text under an unrelated source reference', async () => {
+    const { adapter, reads } = adapterWithCountedSource();
+    const kernel = await adapter;
+    const manager = new CommandManager(
+      createProjectDocument('Mixed import', toUserId('user_rebuild_cache'))
+    );
+    manager.execute(
+      commandFactories.importStep({
+        name: 'Mixed',
+        artifactId: 'artifact_mixed',
+        sourceName: 'mixed.step',
+        stepText: new TextDecoder().decode(SOURCE)
+      })
+    );
+    const importFeature = Object.values(manager.document.nodes).find(
+      (node) =>
+        node.kind === 'feature' && node.data.featureKind === 'imported-step'
+    );
+    if (
+      !importFeature ||
+      importFeature.kind !== 'feature' ||
+      importFeature.data.featureKind !== 'imported-step'
+    ) {
+      throw new Error('import fixture missing');
+    }
+    importFeature.data.stepSourceRef = REFERENCE;
+    await kernel.syncDocument(manager.document);
+    expect(reads()).toBe(0);
+
+    await kernel.syncDocument(documentWithImport());
+    expect(reads()).toBe(1);
+  }, 60_000);
+
   it('reads and parses the source once across repeated rebuilds', async () => {
     const { adapter, reads } = adapterWithCountedSource();
     const kernel = await adapter;

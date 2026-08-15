@@ -131,4 +131,28 @@ describe('project diagnostic export', () => {
       'Diagnostic export currently supports native parametric documents only.'
     );
   });
+
+  it('refuses a deleted import that remains in command history', () => {
+    const manager = new CommandManager(
+      createProjectDocument('Imported', toUserId('user_private'))
+    );
+    manager.execute(
+      commandFactories.importStep({
+        name: 'Vendor part',
+        artifactId: toArtifactId('artifact_private'),
+        sourceName: 'customer-secret.step',
+        stepText: 'ISO-10303-21;END-ISO-10303-21;'
+      })
+    );
+    manager.execute(
+      commandFactories.deleteFeature({
+        featureId: manager.document.featureOrder[0]!
+      })
+    );
+    expect(manager.document.featureOrder).toEqual([]);
+
+    expect(() =>
+      createProjectDiagnosticBundle(manager.document, BUILD, CAPTURED_AT)
+    ).toThrow(/native parametric documents only/);
+  });
 });

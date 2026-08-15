@@ -1,4 +1,8 @@
-import { textDisplayLoops } from '@openzcad/geometry';
+import {
+  boundedArcSweepDegrees,
+  boundedPolygonSides,
+  textDisplayLoops
+} from '@openzcad/geometry';
 import type { SketchObjectData } from '@openzcad/shared';
 import type { SketchPoint } from './sketch/session';
 
@@ -56,7 +60,7 @@ export function objectPolylines(
       const cy = resolve(data.centerY);
       const sides =
         data.objectKind === 'polygon'
-          ? Math.max(3, Math.round(resolve(data.sides)))
+          ? boundedPolygonSides(resolve(data.sides))
           : CIRCLE_SEGMENTS;
       const phase = data.objectKind === 'polygon' ? Math.PI / 2 : 0;
       const points: SketchPoint[] = [];
@@ -73,13 +77,11 @@ export function objectPolylines(
       const radius = resolve(data.radius);
       const cx = resolve(data.centerX);
       const cy = resolve(data.centerY);
-      const start = (resolve(data.startAngleDeg) * Math.PI) / 180;
-      let sweep =
-        ((resolve(data.endAngleDeg) - resolve(data.startAngleDeg)) * Math.PI) /
-        180;
-      if (sweep <= 0) {
-        sweep += Math.PI * 2;
-      }
+      const startDegrees = resolve(data.startAngleDeg);
+      const endDegrees = resolve(data.endAngleDeg);
+      const start = (startDegrees * Math.PI) / 180;
+      const sweep =
+        (boundedArcSweepDegrees(startDegrees, endDegrees) * Math.PI) / 180;
       const steps = Math.max(
         8,
         Math.ceil((sweep / (Math.PI * 2)) * CIRCLE_SEGMENTS)

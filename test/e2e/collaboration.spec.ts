@@ -9,9 +9,44 @@ import {
 } from './openzcad-fixtures';
 import { createProjectDocument } from '@openzcad/document-core';
 import { DEFAULT_APP_SETTINGS, toUserId } from '@openzcad/shared';
+import type { Page } from '@playwright/test';
 import { PROJECT_INVITATION_SESSION_KEY } from '../../apps/web/src/lib/projectInvitationLink';
 
 const invitationToken = 'i'.repeat(43);
+
+async function hasCachedProjectThumbnail(page: Page): Promise<boolean> {
+  return page.evaluate(
+    () =>
+      new Promise<boolean>((resolve, reject) => {
+        const open = indexedDB.open('openzcad-v2');
+        open.onerror = () =>
+          reject(new Error(open.error?.message ?? 'IndexedDB unavailable.'));
+        open.onsuccess = () => {
+          const database = open.result;
+          if (!database.objectStoreNames.contains('projectThumbnails')) {
+            database.close();
+            resolve(false);
+            return;
+          }
+          const all = database
+            .transaction('projectThumbnails', 'readonly')
+            .objectStore('projectThumbnails')
+            .getAll();
+          all.onerror = () =>
+            reject(new Error(all.error?.message ?? 'Thumbnail read failed.'));
+          all.onsuccess = () => {
+            resolve(
+              (all.result as Array<{ source?: unknown }>).some(
+                ({ source }) =>
+                  typeof source === 'string' && source.startsWith('data:image/')
+              )
+            );
+            database.close();
+          };
+        };
+      })
+  );
+}
 
 test('loads the OpenZCAD shell', async ({ page }) => {
   await stubApi(page);
@@ -413,6 +448,7 @@ test('renders saved part geometry in the project thumbnail', async ({
     .getByRole('button', { name: /^Create/ })
     .click();
   await expect(page.getByRole('button', { name: /^Fillet/ })).toBeEnabled();
+  await expect.poll(() => hasCachedProjectThumbnail(page)).toBe(true);
 
   await page.getByTitle('Back to projects').click();
   const projectCard = page.locator('.start-tile-project', {

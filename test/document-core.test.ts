@@ -11,6 +11,7 @@ import {
   updateSketchObject,
   deleteFeature,
   deleteParameter,
+  duplicateProjectDocument,
   evaluateExpression,
   extrudeSketch,
   getLatestBodyId,
@@ -71,6 +72,37 @@ describe('document-core', () => {
     expect(saved.version).toBe(document.version);
     expect(saved.checkpoints).toHaveLength(2);
     expect(saved.checkpoints.at(-1)?.reason).toBe('Manual save');
+  });
+
+  it('sanitizes malformed and unbounded checkpoint history on load', () => {
+    const document = createProjectDocument('Checkpoint', user());
+    document.checkpoints = [
+      ...Array.from({ length: 120 }, (_, index) => ({
+        ...document.checkpoints[0]!,
+        checkpointId: `checkpoint_${index}`
+      })),
+      { reason: { unsafe: true } } as never
+    ];
+
+    const normalized = normalizeDocument(document);
+    expect(normalized.checkpoints).toHaveLength(99);
+    expect(
+      normalized.checkpoints.every(
+        (checkpoint) => typeof checkpoint.reason === 'string'
+      )
+    ).toBe(true);
+  });
+
+  it('gives a duplicate a fresh latest revision identity', () => {
+    const source = createProjectDocument('Source', user());
+    const duplicate = duplicateProjectDocument(source, 'Copy', user());
+
+    expect(duplicate.revisions.at(-1)?.revisionId).not.toBe(
+      source.revisions.at(-1)?.revisionId
+    );
+    expect(duplicate.checkpoints.at(-1)?.revisionId).toBe(
+      duplicate.revisions.at(-1)?.revisionId
+    );
   });
 
   it('adds primitives and extrudes sketches into bodies', () => {

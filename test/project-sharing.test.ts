@@ -218,25 +218,33 @@ describe('project sharing invitations', () => {
     ).rejects.toMatchObject({ code: 'INVITATION_NOT_FOUND' });
   });
 
-  it('rate-limits invitation creation per owner and project', async () => {
+  it('rate-limits invitation creation across an owner account', async () => {
     const service = new InMemoryPersistenceService();
     const owner = toUserId('user_rate_owner');
-    const project = await service.createProject(owner, { name: 'Rate limit' });
+    const projects = await Promise.all(
+      Array.from({ length: 11 }, (_, index) =>
+        service.createProject(owner, { name: `Rate limit ${index}` })
+      )
+    );
     const now = 2_000_000_000;
     for (let index = 0; index < 10; index += 1) {
-      await service.createProjectInvitation(owner, project.document.projectId, {
-        invitationId: `invite_rate_${index}`,
-        email: `member-${index}@example.com`,
-        role: 'viewer',
-        tokenHash: await hashProjectInvitationToken(
-          createProjectInvitationToken()
-        ),
-        createdAt: now + index,
-        expiresAt: now + PROJECT_INVITATION_TTL_SECONDS
-      });
+      await service.createProjectInvitation(
+        owner,
+        projects[index]!.document.projectId,
+        {
+          invitationId: `invite_rate_${index}`,
+          email: `member-${index}@example.com`,
+          role: 'viewer',
+          tokenHash: await hashProjectInvitationToken(
+            createProjectInvitationToken()
+          ),
+          createdAt: now + index,
+          expiresAt: now + PROJECT_INVITATION_TTL_SECONDS
+        }
+      );
     }
     await expect(
-      service.createProjectInvitation(owner, project.document.projectId, {
+      service.createProjectInvitation(owner, projects[10]!.document.projectId, {
         invitationId: 'invite_rate_rejected',
         email: 'rejected@example.com',
         role: 'viewer',

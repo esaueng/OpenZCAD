@@ -505,6 +505,23 @@ describe('worker api routes', () => {
     expect(query).toContain('idx_revisions_project_bytes');
   });
 
+  it('caches public health readiness probes for the same deployment', async () => {
+    const { db, prepare } = storageAccountingDb();
+    const cachedEnv = { ...env, DB: db };
+
+    await worker.fetch(
+      new Request('https://example.com/api/health'),
+      cachedEnv
+    );
+    const probesAfterFirstRequest = prepare.mock.calls.length;
+    await worker.fetch(
+      new Request('https://example.com/api/health'),
+      cachedEnv
+    );
+
+    expect(prepare.mock.calls).toHaveLength(probesAfterFirstRequest);
+  });
+
   it('keeps personal device sync closed when migration 0010 is incomplete', async () => {
     const { db } = storageAccountingDb({
       ...READY_STORAGE_ACCOUNTING_SCHEMA,
@@ -1699,6 +1716,25 @@ describe('worker api routes', () => {
     expect(mismatch.status).toBe(400);
   });
 
+  it('rejects future schemas and malformed checkpoint history before saving', async () => {
+    const created = await createProject('Untrusted document');
+    const route = `/api/projects/${created.document.projectId}/document`;
+    for (const document of [
+      { ...created.document, schemaVersion: 999 },
+      { ...created.document, checkpoints: [null] }
+    ]) {
+      const response = await worker.fetch(
+        put(route, {
+          projectId: created.document.projectId,
+          expectedVersion: created.document.version,
+          document
+        }),
+        env
+      );
+      expect(response.status).toBe(400);
+    }
+  });
+
   it('returns a conflict response for stale revision writes', async () => {
     const created = await createProject('Revision Conflict');
     const document = created.document;
@@ -2318,11 +2354,13 @@ describe('worker api routes', () => {
 
       expect(response.status).toBe(500);
       expect(await response.json()).toEqual({ error: 'Internal error' });
-      expect(errorSpy).toHaveBeenCalledWith(
-        'Unhandled API error.',
-        'GET',
-        '/api/projects',
-        failure
+      expect(errorSpy).toHaveBeenCalledWith('Unhandled API error.', {
+        method: 'GET',
+        pathname: '/api/projects',
+        errorName: 'Error'
+      });
+      expect(JSON.stringify(errorSpy.mock.calls)).not.toContain(
+        failure.message
       );
     } finally {
       errorSpy.mockRestore();

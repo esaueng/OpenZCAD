@@ -516,6 +516,49 @@ describe('assistant integration', () => {
     expect(request.provider).toBeUndefined();
   });
 
+  it.each([
+    'http://models.example.test/v1/responses',
+    'https://user:password@models.example.test/v1/responses',
+    'https://127.0.0.1/v1/responses',
+    'https://metadata.internal/v1/responses',
+    'https://models.example.test:8443/v1/responses',
+    'https://models.example.test/v1/responses#fragment'
+  ])('refuses an unsafe Responses-compatible endpoint: %s', async (baseUrl) => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+
+    const response = await streamAssistantProposal(
+      input,
+      {
+        AI_PROVIDER: 'responses-compatible',
+        AI_API_KEY: 'must-not-leak',
+        AI_BASE_URL: baseUrl
+      },
+      'user_test'
+    );
+
+    expect(response.status).toBe(503);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('pins the OpenAI provider to the OpenAI hostname', async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+
+    const response = await streamAssistantProposal(
+      input,
+      {
+        AI_PROVIDER: 'openai',
+        OPENAI_API_KEY: 'must-not-leak',
+        AI_BASE_URL: 'https://models.example.test/v1/responses'
+      },
+      'user_test'
+    );
+
+    expect(response.status).toBe(503);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it('uses one owner-scoped runtime configuration without leaking it into app defaults', async () => {
     const fetchMock = vi.fn(
       async (_input: RequestInfo | URL, _init?: RequestInit) =>
@@ -877,31 +920,23 @@ describe('assistant integration', () => {
     });
   });
 
-  it('retries an unavailable strict OpenRouter route without weakening local validation', async () => {
-    let attempt = 0;
+  it('does not retry an unavailable strict OpenRouter route without schema gating', async () => {
     const fetchMock = vi.fn(
-      async (_input: RequestInfo | URL, _init?: RequestInit) => {
-        attempt += 1;
-        if (attempt === 1) {
-          return Response.json(
-            {
-              error: {
-                code: 404,
-                message:
-                  'No allowed providers are available for the selected model'
-              }
-            },
-            { status: 404 }
-          );
-        }
-        return new Response('data: {"type":"response.completed"}\n\n', {
-          headers: { 'content-type': 'text/event-stream' }
-        });
-      }
+      async (_input: RequestInfo | URL, _init?: RequestInit) =>
+        Response.json(
+          {
+            error: {
+              code: 404,
+              message:
+                'No allowed providers are available for the selected model'
+            }
+          },
+          { status: 404 }
+        )
     );
     vi.stubGlobal('fetch', fetchMock);
-    const consoleWarn = vi
-      .spyOn(console, 'warn')
+    const consoleError = vi
+      .spyOn(console, 'error')
       .mockImplementation(() => undefined);
 
     const response = await streamAssistantProposal(input, {}, 'user_personal', {
@@ -914,23 +949,16 @@ describe('assistant integration', () => {
       customInstructions: ''
     });
 
-    expect(response.status).toBe(200);
-    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(response.status).toBe(502);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
     const [strictUrl, strictInit] = fetchMock.mock.calls[0]!;
-    const [fallbackUrl, fallbackInit] = fetchMock.mock.calls[1]!;
     expect(strictUrl).toBe('https://openrouter.ai/api/v1/responses');
-    expect(fallbackUrl).toBe(strictUrl);
     const strictRequest = JSON.parse(strictInit?.body as string) as Record<
       string,
       unknown
     >;
-    const fallbackRequest = JSON.parse(fallbackInit?.body as string) as Record<
-      string,
-      unknown
-    >;
     expect(strictRequest.provider).toEqual({ require_parameters: true });
-    expect(fallbackRequest.provider).toBeUndefined();
-    expect(fallbackRequest).toMatchObject({
+    expect(strictRequest).toMatchObject({
       model: 'openai/gpt-5.6-sol',
       safety_identifier: 'user_personal',
       text: {
@@ -941,15 +969,7 @@ describe('assistant integration', () => {
         }
       }
     });
-    expect(consoleWarn).toHaveBeenCalledWith(
-      'AI Responses strict route unavailable; retrying:',
-      expect.objectContaining({
-        provider: 'openrouter',
-        model: 'openai/gpt-5.6-sol',
-        status: 404
-      })
-    );
-    expect(JSON.stringify(consoleWarn.mock.calls)).not.toContain(
+    expect(JSON.stringify(consoleError.mock.calls)).not.toContain(
       'personal-key'
     );
   });
@@ -1048,6 +1068,66 @@ describe('assistant integration', () => {
     await response.text();
 
     expect(consoleError).not.toHaveBeenCalled();
+  });
+
+  it('bounds incomplete SSE framing diagnostics', async () => {
+    const oversizedFrame = `data: ${'x'.repeat(70 * 1024)}`;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(
+        async () =>
+          new Response(oversizedFrame, {
+            headers: { 'content-type': 'text/event-stream' }
+          })
+      )
+    );
+    const consoleError = vi
+      .spyOn(console, 'error')
+      .mockImplementation(() => undefined);
+
+    const response = await streamAssistantProposal(input, {
+      AI_PROVIDER: 'openrouter',
+      OPENROUTER_API_KEY: 'secret-key'
+    });
+    await response.text();
+
+    expect(consoleError).toHaveBeenCalledWith(
+      'AI Responses stream failed:',
+      expect.objectContaining({ classification: 'protocol_error' })
+    );
+    expect(JSON.stringify(consoleError.mock.calls)).not.toContain(
+      oversizedFrame.slice(-1_000)
+    );
+  });
+
+  it('bounds a provider-controlled terminal status before logging it', async () => {
+    const terminalStatus = `failed-${'sensitive'.repeat(1_000)}`;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(
+        async () =>
+          new Response(
+            `data: ${JSON.stringify({
+              type: 'response.done',
+              response: { status: terminalStatus }
+            })}\n\n`,
+            { headers: { 'content-type': 'text/event-stream' } }
+          )
+      )
+    );
+    const consoleError = vi
+      .spyOn(console, 'error')
+      .mockImplementation(() => undefined);
+
+    const response = await streamAssistantProposal(input, {
+      AI_PROVIDER: 'openrouter',
+      OPENROUTER_API_KEY: 'secret-key'
+    });
+    await response.text();
+
+    const logged = JSON.stringify(consoleError.mock.calls);
+    expect(logged).toContain(terminalStatus.slice(0, 160));
+    expect(logged).not.toContain(terminalStatus.slice(0, 161));
   });
 
   it('does not log raw upstream provider details', async () => {

@@ -852,6 +852,121 @@ describe('AI patch contracts', () => {
     ).toBe(proposal);
   });
 
+  it('refuses ambiguous all-edge grounding in a multi-body document', () => {
+    const document = createProjectDocument('Two bodies', toUserId('user_ai'));
+    const body = (bodyId: string, name: string) => ({
+      bodyId,
+      name,
+      consumed: false,
+      sourceFeatureKind: 'primitive',
+      volume: 1,
+      bbox: {
+        min: { x: 0, y: 0, z: 0 },
+        max: { x: 1, y: 1, z: 1 }
+      },
+      topology: {
+        faceCount: 0,
+        edgeCount: 1,
+        modifierEdgeCount: 1,
+        faceInventoryComplete: true,
+        edgeInventoryComplete: true,
+        faces: [],
+        edges: [
+          {
+            topologyId: `${bodyId}:edge`,
+            hash: 1,
+            modelingRole: 'edge' as const,
+            modifierCandidate: true
+          }
+        ]
+      }
+    });
+    const digest = {
+      ...createCadDocumentDigest(document),
+      bodies: [body('body_a', 'Plate'), body('body_b', 'Bracket')]
+    };
+    const proposal = parseCadPatchProposal({
+      proposalId: 'ambiguous',
+      summary: 'Fillet edges.',
+      assumptions: [],
+      operations: [
+        {
+          kind: 'add_edge_modifier',
+          name: 'Edges',
+          localId: null,
+          modifier: 'fillet',
+          targetBodyId: 'body_a',
+          edgeHashes: [1],
+          size: 1
+        }
+      ]
+    });
+
+    expect(() =>
+      groundCadPatchProposalToSelection('Fillet all edges', digest, proposal)
+    ).toThrow(/target is ambiguous/);
+  });
+
+  it('refuses instead of retargeting a valid operation onto a selected body', () => {
+    const document = createProjectDocument('Bodies', toUserId('user_ai'));
+    const selectedBody = toBodyId('body_selected');
+    const digest = createCadDocumentDigest(document, {
+      featureIds: [],
+      bodyIds: [selectedBody],
+      topologies: []
+    });
+    const proposal = parseCadPatchProposal({
+      proposalId: 'move_cube',
+      summary: 'Move the cube away.',
+      assumptions: [],
+      operations: [
+        {
+          kind: 'add_transform',
+          name: 'Move cube',
+          targetBodyId: 'body_cube',
+          translation: { x: 10, y: 0, z: 0 },
+          rotationDeg: { x: 0, y: 0, z: 0 }
+        }
+      ]
+    });
+
+    expect(() =>
+      groundCadPatchProposalToSelection(
+        'Move the cube away from the selected body',
+        digest,
+        proposal
+      )
+    ).toThrow('AI target mismatch.');
+  });
+
+  it('rejects AI sketch polygons above the side limit', () => {
+    expect(() =>
+      parseCadPatchProposal({
+        proposalId: 'large_polygon',
+        summary: 'Create a polygon.',
+        assumptions: [],
+        operations: [
+          {
+            kind: 'add_sketch',
+            name: 'Polygon',
+            localId: null,
+            plane: 'XY',
+            offset: 0,
+            objects: [
+              {
+                objectKind: 'polygon',
+                sides: 65,
+                radius: 10,
+                centerX: 0,
+                centerY: 0
+              }
+            ]
+          }
+        ]
+      })
+    ).toThrow(/Invalid add_sketch operation/);
+  });
+
   it('omits embedded geometry payloads from model context', () => {
     const imported = importStepBody(
       createProjectDocument('Imported', toUserId('user_ai')),
@@ -1028,6 +1143,12 @@ describe('assistant reply contract', () => {
         questions: [{ ...question, allowFreeText: 'yes' }]
       })
     ).toThrow('allowFreeText must be a boolean');
+    expect(() =>
+      parseAssistantReply({
+        ...base,
+        questions: [{ ...question, id: '__proto__' }]
+      })
+    ).toThrow('Unsafe question id.');
   });
 
   it('accepts a message reply and rejects an empty one', () => {

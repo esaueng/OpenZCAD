@@ -115,7 +115,10 @@ async function fromImageFile(
 ): Promise<AssistantAttachmentPreview[]> {
   const image = await loadImage(file);
   const scale = fitScale(image.naturalWidth, image.naturalHeight);
-  const canvas = canvasOf(image.naturalWidth * scale, image.naturalHeight * scale);
+  const canvas = canvasOf(
+    image.naturalWidth * scale,
+    image.naturalHeight * scale
+  );
   const context = canvas.getContext('2d');
   if (!context) {
     throw new AttachmentError('This browser cannot process images.');
@@ -125,11 +128,28 @@ async function fromImageFile(
   return [{ id, label: file.name, ...encoded }];
 }
 
-function sharedPdfWorkerPort(): Promise<Worker> {
-  pdfWorkerPortPromise ??= import(
-    'pdfjs-dist/build/pdf.worker.min.mjs?worker'
-  ).then(({ default: PdfWorker }) => new PdfWorker());
+type PdfWorkerFactory = () => Promise<Worker>;
+
+const createPdfWorker: PdfWorkerFactory = () =>
+  import('pdfjs-dist/build/pdf.worker.min.mjs?worker').then(
+    ({ default: PdfWorker }) => new PdfWorker()
+  );
+
+export function sharedPdfWorkerPort(
+  factory: PdfWorkerFactory = createPdfWorker
+): Promise<Worker> {
+  pdfWorkerPortPromise ??= factory();
   return pdfWorkerPortPromise;
+}
+
+export async function discardSharedPdfWorker(): Promise<void> {
+  const pending = pdfWorkerPortPromise;
+  pdfWorkerPortPromise = null;
+  if (!pending) {
+    return;
+  }
+  const worker = await pending.catch(() => null);
+  worker?.terminate();
 }
 
 async function fromPdfFile(
@@ -155,11 +175,11 @@ async function fromPdfFile(
     cMapPacked: true,
     wasmUrl: `${PDFJS_ASSET_BASE}wasm/`
   });
-  const pdf = await withTimeout(
-    loading.promise,
-    `${file.name} could not be opened as a PDF.`
-  );
   try {
+    const pdf = await withTimeout(
+      loading.promise,
+      `${file.name} could not be opened as a PDF.`
+    );
     const pages = Math.min(pdf.numPages, Math.max(1, pageBudget));
     const rendered: AssistantAttachmentPreview[] = [];
     for (let pageNumber = 1; pageNumber <= pages; pageNumber += 1) {
@@ -191,10 +211,7 @@ async function fromPdfFile(
       );
       rendered.push({
         id: `${id}_p${pageNumber}`,
-        label:
-          pdf.numPages > 1
-            ? `${file.name} page ${pageNumber}`
-            : file.name,
+        label: pdf.numPages > 1 ? `${file.name} page ${pageNumber}` : file.name,
         ...(await encode(canvas))
       });
     }
@@ -225,7 +242,12 @@ export async function attachmentsFromFile(
     );
   }
   if (file.type === 'application/pdf') {
-    return fromPdfFile(file, id, remainingSlots);
+    try {
+      return await fromPdfFile(file, id, remainingSlots);
+    } catch (error) {
+      await discardSharedPdfWorker();
+      throw error;
+    }
   }
   if (file.type.startsWith('image/')) {
     return fromImageFile(file, id);

@@ -25,6 +25,7 @@ import {
   BODY_OPACITY_METADATA_KEY,
   DEFAULT_BODY_COLOR,
   FULL_REVOLVE_ANGLE_DEG,
+  MAX_HELICAL_SWEEP_TURNS,
   UNIT_TO_MM,
   featureColor,
   isFeatureSuppressed,
@@ -4347,21 +4348,154 @@ function decodeText(bytes: Uint8Array): string {
 }
 
 /**
- * BrepKit's default hostile-input budgets (128 MiB / 2M entities) predate
- * reference-based imports. A user-chosen file is not hostile input, so both
- * budgets are raised to the file's own size: the byte budget exactly, the
- * entity budget proportionally (the densest realistic STEP runs ~20 bytes per
- * entity, so bytes/16 leaves margin without becoming unbounded).
+ * Keep BrepKit's hostile-input budgets for every source. A locally selected
+ * file can later be shared or restored, so its origin does not make it trusted.
  */
 function importStepWithOwnBudget(
   kernel: BrepKernel,
   bytes: Uint8Array
 ): Uint32Array {
-  return kernel.importStep(
-    bytes,
-    bytes.byteLength,
-    Math.max(2_000_000, Math.ceil(bytes.byteLength / 16))
-  );
+  return kernel.importStep(bytes, 128 * 1024 * 1024, 2_000_000);
+}
+
+function assertFiniteDirectEditNumber(value: unknown, label: string): number {
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    throw new Error(`Direct-edit ${label} must be finite.`);
+  }
+  return value;
+}
+
+function assertDirectEditVector(value: unknown, label: string): void {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error(`Direct-edit ${label} must be a vector.`);
+  }
+  const vector = value as Record<string, unknown>;
+  assertFiniteDirectEditNumber(vector.x, `${label}.x`);
+  assertFiniteDirectEditNumber(vector.y, `${label}.y`);
+  assertFiniteDirectEditNumber(vector.z, `${label}.z`);
+}
+
+function assertDirectEditParam(value: unknown, label: string): void {
+  if (
+    (typeof value === 'number' && Number.isFinite(value)) ||
+    (typeof value === 'string' &&
+      value.trim().length > 0 &&
+      value.length <= 500)
+  ) {
+    return;
+  }
+  throw new Error(`Direct-edit ${label} must be a finite value or expression.`);
+}
+
+function assertDirectEditOperation(operation: DirectEditOperation): void {
+  if (!operation || typeof operation !== 'object' || Array.isArray(operation)) {
+    throw new Error('Direct-edit operation must be an object.');
+  }
+  const value = operation as unknown as Record<string, unknown>;
+  if (
+    typeof value.faceHash !== 'number' ||
+    !Number.isSafeInteger(value.faceHash)
+  ) {
+    throw new Error('Direct-edit face hash must be a safe integer.');
+  }
+  switch (value.kind) {
+    case 'resize-through-hole':
+      if (
+        assertFiniteDirectEditNumber(value.sourceDiameter, 'source diameter') <=
+        0
+      ) {
+        throw new Error(
+          'Direct-edit source diameter must be greater than zero.'
+        );
+      }
+      assertDirectEditVector(value.sourceAxisStart, 'source axis start');
+      assertDirectEditVector(value.sourceAxisEnd, 'source axis end');
+      assertDirectEditParam(value.diameter, 'diameter');
+      if (
+        value.parameterBinding !== undefined &&
+        value.parameterBinding !== true
+      ) {
+        throw new Error('Direct-edit parameter binding is invalid.');
+      }
+      return;
+    case 'remove-face-feature': {
+      if (
+        typeof value.sourceSurfaceType !== 'string' ||
+        !value.sourceSurfaceType
+      ) {
+        throw new Error('Direct-edit source surface type is invalid.');
+      }
+      if (assertFiniteDirectEditNumber(value.sourceArea, 'source area') <= 0) {
+        throw new Error('Direct-edit source area must be greater than zero.');
+      }
+      assertDirectEditVector(value.sourceCenter, 'source center');
+      const throughHoleSnapshot = [
+        value.sourceDiameter,
+        value.sourceAxisStart,
+        value.sourceAxisEnd
+      ];
+      if (throughHoleSnapshot.some((entry) => entry !== undefined)) {
+        if (throughHoleSnapshot.some((entry) => entry === undefined)) {
+          throw new Error('Direct-edit through-hole snapshot is incomplete.');
+        }
+        if (
+          assertFiniteDirectEditNumber(
+            value.sourceDiameter,
+            'source diameter'
+          ) <= 0
+        ) {
+          throw new Error(
+            'Direct-edit source diameter must be greater than zero.'
+          );
+        }
+        assertDirectEditVector(value.sourceAxisStart, 'source axis start');
+        assertDirectEditVector(value.sourceAxisEnd, 'source axis end');
+      }
+      return;
+    }
+    case 'offset-face':
+      if (value.sourceSurfaceType !== 'plane') {
+        throw new Error('Direct-edit offset source must be planar.');
+      }
+      if (assertFiniteDirectEditNumber(value.sourceArea, 'source area') <= 0) {
+        throw new Error('Direct-edit source area must be greater than zero.');
+      }
+      assertDirectEditVector(value.sourceCenter, 'source center');
+      assertDirectEditVector(value.sourceNormal, 'source normal');
+      assertDirectEditParam(value.offset, 'offset');
+      return;
+    case 'resize-cylindrical-face':
+      if (
+        assertFiniteDirectEditNumber(value.sourceRadius, 'source radius') <= 0
+      ) {
+        throw new Error('Direct-edit source radius must be greater than zero.');
+      }
+      assertDirectEditVector(value.sourceAxisStart, 'source axis start');
+      assertDirectEditVector(value.sourceAxisEnd, 'source axis end');
+      if (value.concavity !== 'hole' && value.concavity !== 'boss') {
+        throw new Error('Direct-edit cylinder concavity is invalid.');
+      }
+      assertDirectEditParam(value.radius, 'radius');
+      return;
+    case 'resize-blend':
+      if (value.surfaceClass !== 'torus' && value.surfaceClass !== 'cylinder') {
+        throw new Error('Direct-edit blend surface class is invalid.');
+      }
+      if (
+        assertFiniteDirectEditNumber(value.recordedRadius, 'recorded radius') <=
+        0
+      ) {
+        throw new Error(
+          'Direct-edit recorded radius must be greater than zero.'
+        );
+      }
+      assertDirectEditVector(value.recordedCenter, 'recorded center');
+      assertDirectEditVector(value.recordedAxis, 'recorded axis');
+      assertDirectEditParam(value.newRadius, 'new radius');
+      return;
+    default:
+      throw new Error('Direct-edit operation kind is not supported.');
+  }
 }
 
 /** Diagnostics an imported STEP produces once, at parse time. */
@@ -4457,6 +4591,7 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
     for (const feature of listFeaturesInOrder(document)) {
       if (
         feature.data.featureKind !== 'imported-step' ||
+        feature.data.stepText !== undefined ||
         isFeatureSuppressed(feature)
       ) {
         continue;
@@ -4666,6 +4801,8 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
           CURVE_SEGMENTS
         );
         break;
+      default:
+        throw new Error('Primitive kind is not supported.');
     }
     return {
       solids: [solid],
@@ -5177,9 +5314,14 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
     const radius = resolveParamValue(feature.data.radius, scope, 'radius');
     const pitch = resolveParamValue(feature.data.pitch, scope, 'pitch');
     const turns = resolveParamValue(feature.data.turns, scope, 'turns');
-    if (!(radius > 0) || pitch === 0 || !(turns > 0)) {
+    if (
+      !(radius > 0) ||
+      pitch === 0 ||
+      !(turns > 0) ||
+      turns > MAX_HELICAL_SWEEP_TURNS
+    ) {
       throw new Error(
-        'Helical sweep requires a positive radius and turns, and a non-zero pitch.'
+        `Helical sweep requires a positive radius, no more than ${MAX_HELICAL_SWEEP_TURNS} turns, and a non-zero pitch.`
       );
     }
     const solid = kernel.helicalSweep(
@@ -5410,7 +5552,10 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
           }
           case 'imported-step': {
             if (feature.bodyId) {
-              const checksum = feature.data.stepSourceRef?.checksumSha256;
+              const checksum =
+                feature.data.stepText === undefined
+                  ? feature.data.stepSourceRef?.checksumSha256
+                  : undefined;
               const cached = checksum
                 ? this.importedStepCache.get(checksum)
                 : undefined;
@@ -6397,6 +6542,9 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
             if (count < 2 || count > 100) {
               throw new Error('Pattern count must be between 2 and 100.');
             }
+            if (target.solids.length * count > 100) {
+              throw new Error('A pattern may produce at most 100 solids.');
+            }
             const direction = axisDirection(feature.data.axis);
             const solids = [...target.solids];
             if (feature.data.patternKind === 'linear') {
@@ -6846,6 +6994,7 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
     scope: Record<string, number>,
     producingFeatureId?: FeatureId
   ): ExactShape {
+    assertDirectEditOperation(operation);
     const solid = collapseShape(kernel, target);
     const { face, viaLineage } = this.resolveDirectEditFace(
       kernel,

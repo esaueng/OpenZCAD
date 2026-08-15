@@ -680,6 +680,25 @@ describe('existing documents are unaffected', () => {
     expect(resolved).toHaveLength(1);
     expect(resolved[0]!.profileId).toBe(ring.profileId);
     expect(resolved[0]!.holes).toHaveLength(1);
+
+    const stale = {
+      profiles: [
+        {
+          regionFingerprint: ring.regionFingerprint + 1,
+          samplePoint: { x: 1_000_000, y: 1_000_000 },
+          sourceArea: ring.area * 10,
+          sourceEntityIds: ring.sourceEntityIds
+        }
+      ]
+    };
+    expect(() =>
+      resolveRegionProfiles(
+        document,
+        sketchNode(document, created.sketchId),
+        stale,
+        {}
+      )
+    ).toThrow(/Broken profile reference/);
   });
 });
 

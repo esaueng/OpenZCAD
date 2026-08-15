@@ -123,6 +123,39 @@ describe('assistant thread storage', () => {
     ).toBeNull();
   });
 
+  it('restores open proposals as inert history', () => {
+    expect(
+      parseStoredEntry({
+        kind: 'proposal',
+        id: 'p',
+        status: 'open',
+        proposal,
+        readings: []
+      })
+    ).toMatchObject({ kind: 'proposal', status: 'rejected' });
+  });
+
+  it('drops unsafe question identifiers from stored threads', () => {
+    expect(
+      parseStoredEntry({
+        kind: 'questions',
+        id: 'q1',
+        preamble: '',
+        questions: [
+          {
+            id: '__proto__',
+            prompt: 'Value?',
+            options: [],
+            allowFreeText: true,
+            unit: null
+          }
+        ],
+        answers: {},
+        sent: false
+      })
+    ).toBeNull();
+  });
+
   it('restores a question card mid-answer', () => {
     const restored = parseStoredEntry({
       kind: 'questions',

@@ -31,6 +31,12 @@ describe('validated feature warnings', () => {
     ).toBe('Union does not fill empty space.');
   });
 
+  it('does not treat an empty attributed warning as success', () => {
+    expect(
+      warningForFeature('Join housings', ['Feature "Join housings":'])
+    ).toBe('The exact geometry kernel rejected this operation.');
+  });
+
   it('rejects a missing result and a stale document', () => {
     expect(validatedFeatureRejection({ ...safe, bodyPresent: false })).toBe(
       'The operation did not produce its result body.'

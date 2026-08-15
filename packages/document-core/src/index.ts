@@ -2,6 +2,9 @@ import {
   createId,
   deepClone,
   featureColor,
+  isProjectCheckpoint,
+  isRevisionRecord,
+  MAX_PROJECT_CHECKPOINTS,
   nowIso,
   PROJECT_DOCUMENT_SCHEMA_VERSION,
   toArtifactId,
@@ -470,11 +473,15 @@ export function createProjectDocument(
  * pre-parametric document does not crash newer code paths.
  */
 export function normalizeDocument(document: ProjectDocument): ProjectDocument {
-  const revisions = document.revisions ?? [];
+  const revisions = Array.isArray(document.revisions)
+    ? document.revisions.filter(isRevisionRecord)
+    : [];
   const fallbackRevision = revisions.at(-1);
-  const checkpoints =
-    document.checkpoints ??
-    (fallbackRevision
+  const checkpoints = Array.isArray(document.checkpoints)
+    ? document.checkpoints
+        .slice(-MAX_PROJECT_CHECKPOINTS)
+        .filter(isProjectCheckpoint)
+    : fallbackRevision
       ? [
           {
             checkpointId: createId('checkpoint'),
@@ -484,7 +491,7 @@ export function normalizeDocument(document: ProjectDocument): ProjectDocument {
             reason: 'Migrated save point'
           }
         ]
-      : []);
+      : [];
   let nodes = document.nodes;
   // Schema v3 -> v4: sketches gain planeRef; the legacy plane/offset pair
   // becomes a canonical reference. Additive, so a missed migration degrades
@@ -548,13 +555,16 @@ export function duplicateProjectDocument(
     copy.nodes[copy.rootNodeId] = { ...rootNode, projectId, name };
   }
   return createCheckpoint(
-    {
-      ...copy,
-      projectId,
-      ownerUserId,
-      name,
-      derived: { ...copy.derived, updatedAt: nowIso() }
-    },
+    appendRevision(
+      {
+        ...copy,
+        projectId,
+        ownerUserId,
+        name,
+        derived: { ...copy.derived, updatedAt: nowIso() }
+      },
+      `Duplicated from ${source.name}`
+    ),
     `Duplicated from ${source.name}`
   );
 }
