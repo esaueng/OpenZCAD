@@ -17,7 +17,7 @@
     "lint": "eslint src worker vite.config.ts vitest.config.ts --ext .ts,.tsx"
   },
   "dependencies": {
-    "@cloudflare/vite-plugin": "^1.48.0",
+    "@cloudflare/vite-plugin": "^1.51.3",
     "@fontsource/ibm-plex-mono": "^5.3.0",
     "@fontsource/ibm-plex-sans": "^5.3.0",
     "@openzcad/ai-contracts": "workspace:*",
@@ -32,8 +32,8 @@
     "@openzcad/shared": "workspace:*",
     "@openzcad/viewport": "workspace:*",
     "@tauri-apps/api": "^2.11.1",
-    "@vitejs/plugin-react": "^6.0.4",
-    "lucide-react": "^1.27.0",
+    "@vitejs/plugin-react": "^6.0.5",
+    "lucide-react": "^1.31.0",
     "pdfjs-dist": "^6.2.108",
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
