@@ -82,6 +82,7 @@ export type BodyRef = string;
 export type LocalBodyId = string | null;
 
 export const LOCAL_ID_PATTERN = /^[a-zA-Z_][a-zA-Z0-9_]*$/;
+const SAFE_QUESTION_ID_PATTERN = /^[A-Za-z0-9][\w-]{0,63}$/;
 
 /** Strips the reference sigil so `$lid` and `lid` register the same alias. */
 export function normalizeLocalId(value: string): string {
@@ -108,10 +109,10 @@ type AssistantDirectEditOperation = Exclude<
 
 export type CadDirectEditOperation =
   AssistantDirectEditOperation extends infer Operation
-  ? Operation extends AssistantDirectEditOperation
-    ? RequiredFaceReference<Operation>
-    : never
-  : never;
+    ? Operation extends AssistantDirectEditOperation
+      ? RequiredFaceReference<Operation>
+      : never
+    : never;
 
 /** A face plane whose reference and geometry snapshots came from the digest. */
 export type CadFaceSketchPlaneRef = Omit<
@@ -873,7 +874,7 @@ const SELECTED_EDGES_PATTERN =
 const SELECTED_FEATURE_PATTERN =
   /\b(?:selected|this|that|these|those)\s+features?\b/i;
 const SELECTED_BODY_PATTERN =
-  /\b(?:selected|this|that|these|those)\s+(?:body|bodies|part|parts|solid|solids|feature|features)\b/i;
+  /\b(?:selected|this|that|these|those)\s+(?:body|bodies|part|parts|solid|solids)\b/i;
 const ALL_EDGES_PATTERN =
   /\b(?:all|every|each)\s+(?:of\s+)?(?:the\s+)?(?:[\w'-]+\s+){0,3}edges?\b/i;
 const NEGATED_ALL_EDGES_PATTERN =
@@ -923,6 +924,12 @@ export function groundCadPatchProposalToSelection(
   const referencesAllEdges =
     ALL_EDGES_PATTERN.test(prompt) && !NEGATED_ALL_EDGES_PATTERN.test(prompt);
   const liveBodies = (digest.bodies ?? []).filter((body) => !body.consumed);
+  const promptLower = prompt.toLowerCase();
+  const namedBodies = liveBodies.filter(
+    (body) =>
+      body.name.trim().length > 0 &&
+      promptLower.includes(body.name.trim().toLowerCase())
+  );
   let changed = false;
 
   const operations = proposal.operations.map((operation): CadPatchOperation => {
@@ -936,18 +943,14 @@ export function groundCadPatchProposalToSelection(
               (candidate) => candidate.bodyId === selectedBodyIds[0]
             )
           : undefined;
-      const proposedBody = liveBodies.find(
-        (candidate) => candidate.bodyId === operation.targetBodyId
-      );
       const soleLiveBody = liveBodies.length === 1 ? liveBodies[0] : undefined;
+      const namedBody = namedBodies.length === 1 ? namedBodies[0] : undefined;
       const body =
-        (referencesSelectedBody || referencesSelectedEdges
-          ? (selectedBody ?? proposedBody)
-          : (proposedBody ?? selectedBody)) ?? soleLiveBody;
+        referencesSelectedBody || referencesSelectedEdges
+          ? selectedBody
+          : (soleLiveBody ?? namedBody);
       if (!body) {
-        throw new Error(
-          'The assistant could not resolve which body "all edges" refers to.'
-        );
+        throw new Error('AI "all edges" target is ambiguous.');
       }
       if (!body.topology?.edgeInventoryComplete) {
         throw new Error(
@@ -1020,8 +1023,7 @@ export function groundCadPatchProposalToSelection(
         operation.kind === 'add_pattern') &&
       operation.targetBodyId !== selectedBodyId
     ) {
-      changed = true;
-      return { ...operation, targetBodyId: selectedBodyId };
+      throw new Error('AI target mismatch.');
     }
 
     if (
@@ -1030,8 +1032,7 @@ export function groundCadPatchProposalToSelection(
       operation.kind === 'add_boolean' &&
       !sameStrings(operation.targetBodyIds, selection.bodyIds)
     ) {
-      changed = true;
-      return { ...operation, targetBodyIds: [...selection.bodyIds] };
+      throw new Error('AI boolean mismatch.');
     }
 
     return operation;
@@ -1084,7 +1085,7 @@ const sketchObjectSchema = {
       additionalProperties: false,
       properties: {
         objectKind: { type: 'string', const: 'polygon' },
-        sides: scalarSchema,
+        sides: { type: 'integer', minimum: 3, maximum: 64 },
         radius: scalarSchema,
         centerX: scalarSchema,
         centerY: scalarSchema
@@ -2018,7 +2019,10 @@ export const ASSISTANT_REPLY_JSON_SCHEMA = {
             type: 'object',
             additionalProperties: false,
             properties: {
-              id: { type: 'string' },
+              id: {
+                type: 'string',
+                pattern: SAFE_QUESTION_ID_PATTERN.source
+              },
               prompt: { type: 'string' },
               options: {
                 type: 'array',
@@ -2100,6 +2104,9 @@ function parseAssistantQuestions(value: unknown): AssistantQuestion[] {
   return value.map((candidate, index) => {
     const question = record(candidate);
     const id = requireNonEmptyString(question.id, `questions[${index}].id`);
+    if (!SAFE_QUESTION_ID_PATTERN.test(id)) {
+      throw new Error('Unsafe question id.');
+    }
     if (ids.has(id)) {
       throw new Error(`Duplicate question id "${id}".`);
     }
@@ -2368,8 +2375,13 @@ function isSketchObjects(value: unknown): value is SketchObjectData[] {
             isScalar(object[key])
           );
         case 'polygon':
-          return ['sides', 'radius', 'centerX', 'centerY'].every((key) =>
-            isScalar(object[key])
+          return (
+            Number.isSafeInteger(object.sides) &&
+            (object.sides as number) >= 3 &&
+            (object.sides as number) <= 64 &&
+            ['radius', 'centerX', 'centerY'].every((key) =>
+              isScalar(object[key])
+            )
           );
         case 'line':
           return ['x1', 'y1', 'x2', 'y2'].every((key) => isScalar(object[key]));

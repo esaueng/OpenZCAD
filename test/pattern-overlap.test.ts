@@ -151,4 +151,35 @@ describe('a pattern whose instances overlap', () => {
     expect(body.volume).toBeLessThan(4 * oneBlade - 1);
     expect(body.volume).toBeGreaterThan(oneBlade);
   }, 120_000);
+
+  it('refuses nested patterns that would expand past 100 solids', async () => {
+    adapter ??= await createExactKernelAdapter();
+    let document = createProjectDocument('Nested', toUserId('user_pattern'));
+    document = addPrimitiveFeature(document, {
+      name: 'Block',
+      primitiveKind: 'box',
+      dimensions: { width: 1, height: 1, depth: 1 }
+    });
+    document = patternBody(document, {
+      name: 'First row',
+      patternKind: 'linear',
+      targetBodyId: document.bodyOrder.at(-1)!,
+      axis: 'x',
+      count: 10,
+      spacing: 2
+    }).document;
+    document = patternBody(document, {
+      name: 'Nested row',
+      patternKind: 'linear',
+      targetBodyId: document.bodyOrder.at(-1)!,
+      axis: 'y',
+      count: 11,
+      spacing: 2
+    }).document;
+
+    const derived = await adapter.syncDocument(document);
+    expect(derived.warnings).toContain(
+      'Feature "Nested row": A pattern may produce at most 100 solids.'
+    );
+  }, 120_000);
 });

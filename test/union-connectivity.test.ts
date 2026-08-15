@@ -118,4 +118,13 @@ describe('Union connectivity', () => {
     expect(result.connected).toBe(true);
     expect(result.contactTolerance).toBeGreaterThan(1e-7);
   });
+
+  it('rejects a connectivity graph above the bounded pair budget', () => {
+    const solids = Array.from({ length: 318 }, (_, index) =>
+      box(String(index), [index * 2, 0, 0], [index * 2 + 1, 1, 1])
+    );
+    expect(() => analyzeUnionConnectivity(solids, () => 1)).toThrow(
+      /limit is 50000/
+    );
+  });
 });

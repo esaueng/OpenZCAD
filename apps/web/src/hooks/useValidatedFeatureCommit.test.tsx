@@ -1676,7 +1676,7 @@ describe('the import orchestration, run rather than read', () => {
     });
 
     expect(outcome?.outcome).toBe('declined');
-    expect(statuses).toEqual(['STEP import is limited to 250 MB.']);
+    expect(statuses).toEqual(['STEP import is limited to 128 MB.']);
     expect(device.blobs.size).toBe(0);
   });
 

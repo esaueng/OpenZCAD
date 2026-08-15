@@ -7,6 +7,7 @@ import {
 } from 'react';
 import { Trash2, X } from 'lucide-react';
 import { coerceParamValue } from '@openzcad/document-core';
+import { findFontFace } from '@openzcad/geometry';
 import { FEATURE_COLORS, featureColor } from '@openzcad/shared';
 import type {
   BodyId,
@@ -57,6 +58,16 @@ import {
   canRemoveImportedBlendFace,
   importedBlendEditNotice
 } from '../lib/interaction/filletFaceEdit';
+
+function isValidTextSketchObject(
+  value: Extract<SketchObjectData, { objectKind: 'text' }>
+): boolean {
+  return (
+    typeof value.text === 'string' &&
+    typeof value.fontFamily === 'string' &&
+    findFontFace(value.fontFamily, value.fontStyle) !== undefined
+  );
+}
 
 export interface InspectorCallbacks {
   onLaunchTool(tool: ToolId): void;
@@ -810,7 +821,7 @@ export function Inspector(props: InspectorProps) {
     ) {
       // Text sketches get their own form: the closed-shape form below would
       // present them as a rectangle, and applying it would replace the text.
-      form = (
+      form = isValidTextSketchObject(selectedSketchObject) ? (
         <>
           <TextSketchForm
             key={editKey}
@@ -832,6 +843,10 @@ export function Inspector(props: InspectorProps) {
             onConvert={props.onConvertSketchToFixedPlane}
           />
         </>
+      ) : (
+        <p className="form-error" role="alert">
+          This text sketch is malformed and cannot be edited safely.
+        </p>
       );
     } else if (
       data.featureKind === 'sketch' &&

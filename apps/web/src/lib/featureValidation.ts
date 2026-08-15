@@ -5,7 +5,13 @@ export function warningForFeature(
 ): string | null {
   const prefix = `Feature "${featureName}":`;
   const match = warnings.find((warning) => warning.startsWith(prefix));
-  return match ? match.replace(/^Feature "[^"]+":\s*/, '') : null;
+  if (!match) {
+    return null;
+  }
+  return (
+    match.replace(/^Feature "[^"]+":\s*/, '').trim() ||
+    'The exact geometry kernel rejected this operation.'
+  );
 }
 
 export interface ValidatedFeatureVerdictInput {

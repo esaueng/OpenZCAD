@@ -134,6 +134,26 @@ describe('modeling operation form contracts', () => {
     ).toBe('Solid offset distance must resolve to a positive value.');
   });
 
+  it('rejects helical sweeps above the bounded turn count', () => {
+    expect(
+      modelingFormValidationReason(
+        {
+          operation: 'helical-sweep',
+          value: {
+            name: 'Helix',
+            profileId: 'profile',
+            axisOrigin: { x: '0', y: '0', z: '0' },
+            axisDirection: { x: '0', y: '0', z: '1' },
+            radius: '2',
+            pitch: '1',
+            turns: '101'
+          }
+        },
+        {}
+      )
+    ).toMatch(/must not exceed 100/);
+  });
+
   /**
    * K0.6 gave imported bodies persistent references, and their lineage name IS
    * the fingerprint because an import has no feature contract to name faces

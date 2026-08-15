@@ -1,6 +1,7 @@
 import { parseAssistantReply } from '@openzcad/ai-contracts';
 
 const MAX_CAPTURED_OUTPUT_BYTES = 8 * 1024 * 1024;
+const MAX_FRAMING_BUFFER_BYTES = 64 * 1024;
 
 type TerminalEvent =
   | 'response.completed'
@@ -30,6 +31,7 @@ interface DiagnosticContext {
 
 interface DiagnosticState {
   buffer: string;
+  framingAbandoned: boolean;
   captureComplete: boolean;
   malformedEvent: boolean;
   output: string;
@@ -140,7 +142,9 @@ function consumeEvent(state: DiagnosticState, event: unknown): void {
         ? (value.response as Record<string, unknown>)
         : undefined;
     state.terminalStatus =
-      typeof response?.status === 'string' ? response.status : undefined;
+      typeof response?.status === 'string'
+        ? safeLabel(response.status)
+        : undefined;
   }
 }
 
@@ -165,11 +169,19 @@ function consumeBlock(state: DiagnosticState, block: string): void {
 }
 
 function consumeText(state: DiagnosticState, text: string): void {
+  if (state.framingAbandoned) {
+    return;
+  }
   state.buffer += text;
   const blocks = state.buffer.split(/\r?\n\r?\n/);
   state.buffer = blocks.pop() ?? '';
   for (const block of blocks) {
     consumeBlock(state, block);
+  }
+  if (encoder.encode(state.buffer).byteLength > MAX_FRAMING_BUFFER_BYTES) {
+    state.buffer = '';
+    state.framingAbandoned = true;
+    state.malformedEvent = true;
   }
 }
 
@@ -271,6 +283,7 @@ export function observeAssistantResponse(
   const decoder = new TextDecoder();
   const state: DiagnosticState = {
     buffer: '',
+    framingAbandoned: false,
     captureComplete: true,
     malformedEvent: false,
     output: '',

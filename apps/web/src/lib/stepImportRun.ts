@@ -59,12 +59,10 @@ import {
 export const MAX_EMBEDDED_STEP_BYTES = 12 * 1024 * 1024;
 
 /**
- * Reference-form ceiling. The kernel comfortably imports files this size
- * (measured: 283 MB peaks at 1.2 GB wasm memory, ~7 s — see
- * scripts/profile-step-import.mjs); the binding constraint is wasm32 address
- * space, which this leaves 40% headroom against.
+ * Reference-form ceiling. It matches the exact kernel's hostile-input byte
+ * budget so shared or restored sources cannot opt into a larger parse budget.
  */
-export const MAX_SOURCE_IMPORT_BYTES = 250 * 1024 * 1024;
+export const MAX_SOURCE_IMPORT_BYTES = 128 * 1024 * 1024;
 
 function megabytes(bytes: number): number {
   return Math.round(bytes / (1024 * 1024));

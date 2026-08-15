@@ -1727,7 +1727,7 @@ describe('exact kernel adapter', { timeout: 30_000 }, () => {
     ).toHaveLength(5);
   });
 
-  it('remaps a profile reference through a parametric source-curve edit', async () => {
+  it('refuses a profile reference after a substantial source-curve edit', async () => {
     const resolve = (value: ParamValue): number =>
       typeof value === 'number' ? value : Number(value);
     const { document: withSketch, sketchId } = addSketchFeature(
@@ -1773,11 +1773,10 @@ describe('exact kernel adapter', { timeout: 30_000 }, () => {
     });
 
     const derived = await adapter.syncDocument(edited);
-    expect(derived.warnings).toEqual([]);
-    expect(derived.bodyRepresentations[bodyId]?.volume).toBeCloseTo(
-      Math.PI * 20 ** 2 * 5,
-      0
+    expect(derived.warnings).toContain(
+      'Feature "Parametric disk extrude": Broken profile reference — the bounded sketch region used by this extrude no longer resolves uniquely.'
     );
+    expect(derived.bodyRepresentations[bodyId]).toBeUndefined();
   });
 
   it('extrudes a chord-split region and resolves by fallback when the fingerprint drifts', async () => {
@@ -2045,6 +2044,109 @@ describe('exact kernel adapter', { timeout: 30_000 }, () => {
     ).toBe(true);
     // The target body still builds at its original size.
     expect(derived.bodyRepresentations[bodyId]?.volume).toBeCloseTo(6000, 4);
+  });
+
+  it('rejects non-finite direct-edit snapshots before topology matching', async () => {
+    const base = addPrimitiveFeature(
+      createProjectDocument('Malformed edit', toUserId('user_exact')),
+      {
+        name: 'Beam',
+        primitiveKind: 'box',
+        dimensions: { width: 10, height: 20, depth: 30 }
+      }
+    );
+    const bodyId = base.bodyOrder.at(-1)!;
+    const malformed = directEditBody(base, {
+      name: 'Malformed offset',
+      targetBodyId: bodyId,
+      operation: {
+        kind: 'offset-face',
+        faceHash: 1,
+        sourceSurfaceType: 'plane',
+        sourceArea: Number.NaN,
+        sourceCenter: { x: 0, y: 0, z: 0 },
+        sourceNormal: { x: 0, y: 0, z: 1 },
+        offset: 5
+      }
+    }).document;
+
+    const derived = await adapter.syncDocument(malformed);
+    expect(derived.warnings).toContain(
+      'Feature "Malformed offset": Direct-edit source area must be finite.'
+    );
+    expect(derived.bodyRepresentations[bodyId]?.volume).toBeCloseTo(6000, 4);
+  });
+
+  it('rejects unknown and incomplete direct-edit operations at runtime', async () => {
+    const base = addPrimitiveFeature(
+      createProjectDocument('Malformed edits', toUserId('user_exact')),
+      {
+        name: 'Beam',
+        primitiveKind: 'box',
+        dimensions: { width: 10, height: 20, depth: 30 }
+      }
+    );
+    const bodyId = base.bodyOrder.at(-1)!;
+    const cases = [
+      {
+        name: 'Unknown edit',
+        operation: { kind: 'erase-face', faceHash: 1 },
+        message: 'Direct-edit operation kind is not supported.'
+      },
+      {
+        name: 'Incomplete resize',
+        operation: {
+          kind: 'resize-through-hole',
+          faceHash: 1,
+          sourceDiameter: 4,
+          sourceAxisEnd: { x: 0, y: 0, z: 10 },
+          diameter: 6
+        },
+        message: 'Direct-edit source axis start must be a vector.'
+      }
+    ];
+
+    for (const testCase of cases) {
+      const malformed = directEditBody(base, {
+        name: testCase.name,
+        targetBodyId: bodyId,
+        operation: testCase.operation as unknown as DirectEditOperation
+      }).document;
+      const derived = await adapter.syncDocument(malformed);
+
+      expect(derived.warnings).toContain(
+        `Feature "${testCase.name}": ${testCase.message}`
+      );
+      expect(derived.bodyRepresentations[bodyId]?.volume).toBeCloseTo(6000, 4);
+    }
+  });
+
+  it('rejects an unsupported persisted primitive kind', async () => {
+    const document = addPrimitiveFeature(
+      createProjectDocument('Malformed primitive', toUserId('user_exact')),
+      {
+        name: 'Unknown',
+        primitiveKind: 'box',
+        dimensions: { width: 10, height: 20, depth: 30 }
+      }
+    );
+    const featureId = document.featureOrder[0]!;
+    const feature = Object.values(document.nodes).find(
+      (node) => node.kind === 'feature' && node.featureId === featureId
+    );
+    if (
+      !feature ||
+      feature.kind !== 'feature' ||
+      feature.data.featureKind !== 'primitive'
+    ) {
+      throw new Error('primitive fixture missing');
+    }
+    (feature.data as { primitiveKind: string }).primitiveKind = 'capsule';
+
+    const derived = await adapter.syncDocument(document);
+    expect(derived.warnings).toContain(
+      'Feature "Unknown": Primitive kind is not supported.'
+    );
   });
 
   it('resizes a cylindrical bore as a direct edit', async () => {

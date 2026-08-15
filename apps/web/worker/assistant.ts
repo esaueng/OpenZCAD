@@ -322,9 +322,86 @@ export function timeoutFor(env: CloudflareEnv): number {
     : DEFAULT_AI_TIMEOUT_MS;
 }
 
+function isPrivateIpv4(hostname: string): boolean {
+  const parts = hostname.split('.');
+  if (parts.length !== 4 || parts.some((part) => !/^\d{1,3}$/.test(part))) {
+    return false;
+  }
+  const octets = parts.map(Number);
+  if (octets.some((octet) => octet > 255)) {
+    return true;
+  }
+  const [first, second] = octets as [number, number, number, number];
+  return (
+    first === 0 ||
+    first === 10 ||
+    first === 127 ||
+    (first === 100 && second >= 64 && second <= 127) ||
+    (first === 169 && second === 254) ||
+    (first === 172 && second >= 16 && second <= 31) ||
+    (first === 192 && second === 168) ||
+    first >= 224
+  );
+}
+
+function isPrivateHostname(hostname: string): boolean {
+  const host = hostname.toLowerCase().replace(/^\[|\]$/g, '');
+  if (
+    host === 'localhost' ||
+    host.endsWith('.localhost') ||
+    host.endsWith('.local') ||
+    host.endsWith('.internal') ||
+    host.endsWith('.lan') ||
+    isPrivateIpv4(host)
+  ) {
+    return true;
+  }
+  if (!host.includes(':')) {
+    return false;
+  }
+  if (host === '::' || host === '::1' || /^(fc|fd|fe[89ab])/i.test(host)) {
+    return true;
+  }
+  const mappedIpv4 = host.match(/::ffff:(\d+\.\d+\.\d+\.\d+)$/i)?.[1];
+  return mappedIpv4 ? isPrivateIpv4(mappedIpv4) : false;
+}
+
+function validatedUpstreamUrl(raw: string, provider: string): string {
+  let url: URL;
+  try {
+    url = new URL(raw);
+  } catch {
+    throw new HttpAssistantConfigurationError('The AI endpoint is not a URL.');
+  }
+  if (
+    url.protocol !== 'https:' ||
+    url.username !== '' ||
+    url.password !== '' ||
+    url.port !== '' ||
+    url.hash !== '' ||
+    isPrivateHostname(url.hostname)
+  ) {
+    throw new HttpAssistantConfigurationError(
+      'The AI endpoint must be a public HTTPS URL without credentials, a custom port, or a fragment.'
+    );
+  }
+  const expectedHostname =
+    provider === 'openai'
+      ? 'api.openai.com'
+      : provider === 'openrouter'
+        ? 'openrouter.ai'
+        : null;
+  if (expectedHostname && url.hostname !== expectedHostname) {
+    throw new HttpAssistantConfigurationError(
+      `The ${provider} provider endpoint must use ${expectedHostname}.`
+    );
+  }
+  return url.toString();
+}
+
 function upstreamUrlFor(env: CloudflareEnv, provider: string) {
   if (env.AI_BASE_URL) {
-    return env.AI_BASE_URL;
+    return validatedUpstreamUrl(env.AI_BASE_URL, provider);
   }
   if (provider === 'openai') {
     return OPENAI_RESPONSES_URL;
@@ -340,7 +417,8 @@ function upstreamUrlForRuntime(
   runtime: AssistantRuntimeConfig | undefined,
   provider: string
 ): string | undefined {
-  return runtime?.baseUrl ?? upstreamUrlFor(env, provider);
+  const raw = runtime?.baseUrl ?? upstreamUrlFor(env, provider);
+  return raw ? validatedUpstreamUrl(raw, provider) : undefined;
 }
 
 const ROLLOUT_OPERATION_FLAGS = [
@@ -570,7 +648,19 @@ export async function streamAssistantProposal(
     );
   }
 
-  const upstreamUrl = upstreamUrlForRuntime(env, runtime, provider);
+  let upstreamUrl: string | undefined;
+  try {
+    upstreamUrl = upstreamUrlForRuntime(env, runtime, provider);
+  } catch (error) {
+    return jsonError(
+      error instanceof HttpAssistantConfigurationError
+        ? error.message
+        : 'The AI endpoint is invalid.',
+      'AI_PROVIDER_NOT_CONFIGURED',
+      503,
+      requestId
+    );
+  }
   if (!upstreamUrl) {
     return jsonError(
       'AI_BASE_URL is required for a Responses-compatible provider.',
@@ -591,7 +681,7 @@ export async function streamAssistantProposal(
     }
   }
 
-  const requestUpstream = (requireOpenRouterParameters: boolean) =>
+  const requestUpstream = () =>
     fetch(upstreamUrl, {
       method: 'POST',
       redirect: 'manual',
@@ -621,13 +711,7 @@ export async function streamAssistantProposal(
         max_output_tokens: runtime?.maxOutputTokens ?? maxOutputTokensFor(env),
         store: false,
         stream: true,
-        // Prefer a route that explicitly advertises structured output. The
-        // Responses API can still return 404 when account/provider routing
-        // filters leave no such route, even for a model that supports it. The
-        // caller retries that one pre-generation failure without this routing
-        // constraint; the strict schema and local contract parser still guard
-        // the returned proposal.
-        ...(provider === 'openrouter' && requireOpenRouterParameters
+        ...(provider === 'openrouter'
           ? { provider: { require_parameters: true } }
           : {}),
         ...(safetyIdentifier ? { safety_identifier: safetyIdentifier } : {})
@@ -636,17 +720,7 @@ export async function streamAssistantProposal(
 
   let upstream: Response;
   try {
-    upstream = await requestUpstream(true);
-    if (provider === 'openrouter' && upstream.status === 404) {
-      await upstream.body?.cancel();
-      console.warn('AI Responses strict route unavailable; retrying:', {
-        requestId,
-        provider,
-        model,
-        status: upstream.status
-      });
-      upstream = await requestUpstream(false);
-    }
+    upstream = await requestUpstream();
   } catch (error) {
     const timedOut =
       error instanceof DOMException &&

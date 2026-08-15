@@ -124,6 +124,18 @@ export function resolveRegionProfiles(
     const sourceIds = reference.sourceEntityIds
       ? [...reference.sourceEntityIds].sort().join('|')
       : undefined;
+    const unresolvedSource = reference.sourceEntityIds
+      ? analysis.diagnostics.find(
+          (diagnostic) =>
+            diagnostic.code === 'unresolved-outline' &&
+            diagnostic.sourceEntityIds.some((entityId) =>
+              reference.sourceEntityIds?.includes(entityId)
+            )
+        )
+      : undefined;
+    if (unresolvedSource) {
+      throw new Error(`Broken profile reference — ${unresolvedSource.message}`);
+    }
     const identityMatches = analysis.profiles.filter((candidate) => {
       if (reference.profileId && candidate.profileId === reference.profileId) {
         return true;
@@ -143,7 +155,9 @@ export function resolveRegionProfiles(
     const sourceMatches = sourceIds
       ? analysis.profiles.filter(
           (candidate) =>
-            [...candidate.sourceEntityIds].sort().join('|') === sourceIds
+            [...candidate.sourceEntityIds].sort().join('|') === sourceIds &&
+            Math.abs(candidate.area - reference.sourceArea) <= areaTolerance &&
+            profileContainsPoint(candidate, reference.samplePoint)
         )
       : [];
     if (sourceMatches.length === 1) {
