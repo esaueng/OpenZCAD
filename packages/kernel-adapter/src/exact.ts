@@ -1,4 +1,4 @@
-import { BrepKernel, type FaceEvolutionPayloadV1 } from 'brepkit-wasm';
+import { RemusKernel, type FaceEvolutionPayloadV1 } from './remus-runtime';
 import {
   findSketch,
   getParameterScope,
@@ -86,7 +86,7 @@ import {
   flattenBezierCurve,
   flattenedOutlineWarning
 } from './profile-bezier-edges';
-import { createBrepKitModelingOperations } from './brepkit-modeling-operations';
+import { createRemusModelingOperations } from './remus-modeling-operations';
 import {
   analyzeUnionConnectivity,
   disconnectedUnionWarning,
@@ -106,16 +106,16 @@ import {
   type EdgeSample
 } from './topology-fingerprint';
 import {
-  brepKitHashOnlyLineage,
-  createBrepKitImportedStepLineage,
-  createBrepKitModifierEvolutionLineage,
-  createBrepKitSemanticLineage,
-  mergeBrepKitLineageStates,
-  propagateBrepKitRigidTransformLineage,
-  type BrepKitLineageState,
-  type BrepKitSemanticAssignment,
-  type BrepKitTopologyCandidate
-} from './brepkit-lineage';
+  remusHashOnlyLineage,
+  createRemusImportedStepLineage,
+  createRemusModifierEvolutionLineage,
+  createRemusSemanticLineage,
+  mergeRemusLineageStates,
+  propagateRemusRigidTransformLineage,
+  type RemusLineageState,
+  type RemusSemanticAssignment,
+  type RemusTopologyCandidate
+} from './remus-lineage';
 import {
   resolveTopologyReference,
   topologyHashOfWitness,
@@ -200,7 +200,7 @@ const PERIODIC_SURFACE_TYPES = new Set(['cylinder', 'cone', 'sphere', 'torus']);
  *    `expectedCircleWitness`, which is `closed: true` with `length: 2*pi*r`.
  *    Below a full turn those edges are ARCS — an `EdgeWitnessV1` variant that
  *    witness can never equal — so every profile-vertex edge role fails.
- * 2. BrepKit splits a swept face at each 90 degree boundary, and the pieces
+ * 2. Remus splits a swept face at each 90 degree boundary, and the pieces
  *    carry duplicate analytic parameters, so the exactly-one-match rule in
  *    `addUniqueSemanticAssignment` goes ambiguous above 90 degrees.
  *
@@ -211,7 +211,7 @@ const PERIODIC_SURFACE_TYPES = new Set(['cylinder', 'cone', 'sphere', 'torus']);
  * and a piece-aware face role, not a change here.
  */
 const PARTIAL_REVOLVE_HASH_ONLY_REASON =
-  'A revolve below 360 degrees publishes hash-only references by design: its swept edges are arcs rather than the closed circles ADR-013 profile-vertex roles witness, and BrepKit splits its swept faces at 90 degree boundaries into pieces with duplicate analytic parameters.';
+  'A revolve below 360 degrees publishes hash-only references by design: its swept edges are arcs rather than the closed circles ADR-013 profile-vertex roles witness, and Remus splits its swept faces at 90 degree boundaries into pieces with duplicate analytic parameters.';
 
 /**
  * A revolve keeps ADR-013 semantic lineage for a full turn, and for a
@@ -269,7 +269,7 @@ function resolveParametricPoint(
 }
 
 function validateGeneratedSolid(
-  kernel: BrepKernel,
+  kernel: RemusKernel,
   solid: number,
   label: string
 ): number {
@@ -290,7 +290,7 @@ interface ExactShape {
   /** A body can contain several independent solids, as with a pattern. */
   solids: number[];
   /** Exact, handle-bound schema-v5 references plus fail-closed diagnostics. */
-  lineage?: BrepKitLineageState;
+  lineage?: RemusLineageState;
 }
 
 /** What the K0.6 import validator found on one `imported-step` feature. */
@@ -432,7 +432,7 @@ function positiveFinite(value: unknown): number | null {
 }
 
 function analyticSurfaceRecord(
-  kernel: BrepKernel,
+  kernel: RemusKernel,
   face: number
 ): Record<string, unknown> | null {
   try {
@@ -445,7 +445,7 @@ function analyticSurfaceRecord(
   }
 }
 
-function sameSphereSurface(kernel: BrepKernel, faces: number[]): boolean {
+function sameSphereSurface(kernel: RemusKernel, faces: number[]): boolean {
   if (
     faces.length !== 2 ||
     faces.some((face) => kernel.getSurfaceType(face) !== 'sphere')
@@ -575,7 +575,7 @@ export function edgeCircleMisfit(
  * mismeasured radius can fit.
  */
 function brepEdgeCircle(
-  kernel: BrepKernel,
+  kernel: RemusKernel,
   edge: number,
   points: readonly number[]
 ): { center: Vec3; axis: Vec3; radius: number } | undefined {
@@ -647,7 +647,7 @@ function brepEdgeCircle(
  * a real ellipse is to build one on a bare kernel and hand it to this.
  */
 export function brepEdgeCurve(
-  kernel: BrepKernel,
+  kernel: RemusKernel,
   edge: number,
   points: readonly number[]
 ): EdgeCurve | undefined {
@@ -744,12 +744,12 @@ function brepVertexIds(
 }
 
 /**
- * A periodic face references its UV-closing seam twice. BrepKit's sphere is
+ * A periodic face references its UV-closing seam twice. Remus's sphere is
  * currently built from two same-surface hemispheres, so their smooth equator
  * fragments are display seams too. Neither case is a physical feature edge.
  */
 function brepEdgeDisplayRole(
-  kernel: BrepKernel,
+  kernel: RemusKernel,
   edge: number,
   edgeToFaces: Record<string, number[]>
 ): 'feature' | 'seam' {
@@ -769,10 +769,10 @@ function brepEdgeDisplayRole(
 
 /**
  * Read a simple analytic cylinder (one cylindrical wall and two planar caps).
- * More complex solids deliberately fall through to BrepKit's general boolean.
+ * More complex solids deliberately fall through to Remus's general boolean.
  */
 function readAnalyticCylinder(
-  kernel: BrepKernel,
+  kernel: RemusKernel,
   solid: number
 ): AnalyticCylinder | null {
   const faces = Array.from(kernel.getSolidFaces(solid));
@@ -854,7 +854,7 @@ function coordinateFrameMatrix(origin: Vec3, zAxis: Vec3): Float64Array {
 
 /** Revolve a radial/axial section around local +Z, then place it in world space. */
 function revolveRadialProfile(
-  kernel: BrepKernel,
+  kernel: RemusKernel,
   profile: Vec2[],
   cylinder: AnalyticCylinder
 ): number {
@@ -874,7 +874,7 @@ function revolveRadialProfile(
 /**
  * True when `face` is a rolling-ball blend band rather than a modelled wall.
  *
- * Surface type alone used to answer this: every fillet BrepKit produced was
+ * Surface type alone used to answer this: every fillet Remus produced was
  * fitted as a `bspline`, so a free-form face WAS a blend. The kernel now
  * returns an exact `cylinder` for a fillet along a straight edge between two
  * planes, which makes a blend band and a drilled bore wall the same surface
@@ -884,7 +884,11 @@ function revolveRadialProfile(
  * a blend only when some adjacent planar face is parallel to its axis and
  * stands exactly one radius off it.
  */
-function isBlendFace(kernel: BrepKernel, solid: number, face: number): boolean {
+function isBlendFace(
+  kernel: RemusKernel,
+  solid: number,
+  face: number
+): boolean {
   const surfaceType = kernel.getSurfaceType(face);
   if (surfaceType === 'bspline') {
     return true;
@@ -955,7 +959,7 @@ function isBlendFace(kernel: BrepKernel, solid: number, face: number): boolean {
  * bordering it directly or ending on one of its boundary vertices.
  */
 function selectionTouchesBlendFace(
-  kernel: BrepKernel,
+  kernel: RemusKernel,
   solid: number,
   selectedEdges: number[]
 ): boolean {
@@ -1017,7 +1021,7 @@ interface UnionFuseOperand {
  * the sentence it belongs to. Both go through `inspectTriangleMeshClosure`
  * with the deflection the display pass picks for the body's own extents.
  */
-function solidMeshIsClosed(kernel: BrepKernel, solid: number): boolean {
+function solidMeshIsClosed(kernel: RemusKernel, solid: number): boolean {
   try {
     const bounds = kernel.boundingBox(solid);
     const tessellation = displayTessellationForExtents(
@@ -1044,7 +1048,7 @@ function solidMeshIsClosed(kernel: BrepKernel, solid: number): boolean {
 }
 
 function exactUnionOffsetSuggestion(
-  kernel: BrepKernel,
+  kernel: RemusKernel,
   operands: readonly UnionFuseOperand[],
   units: string
 ): string | null {
@@ -1150,7 +1154,7 @@ function exactUnionOffsetSuggestion(
  * turns into a lie.
  */
 function applyEdgeModifier(
-  kernel: BrepKernel,
+  kernel: RemusKernel,
   target: number,
   selected: number[],
   featureKind: 'fillet' | 'chamfer',
@@ -1201,13 +1205,13 @@ function applyEdgeModifier(
       return null;
     }
   }
-  // When a blend cannot be attached at all, BrepKit falls back to returning
+  // When a blend cannot be attached at all, Remus falls back to returning
   // the input handle. That is a failed feature, not a successful no-op.
   if (modified === target || kernel.validateSolidRelaxed(modified) !== 0) {
     return null;
   }
   if (featureKind === 'fillet') {
-    // A fillet rounds material inside the target envelope. BrepKit can return
+    // A fillet rounds material inside the target envelope. Remus can return
     // a closed but severely distorted fallback for an oversized radius,
     // expanding the body to the requested size. Reject that result rather
     // than guessing a radius limit from the selected edge's length: the valid
@@ -1271,7 +1275,7 @@ function applyEdgeModifier(
  * rather than structural. Runs on the failure path only.
  */
 function edgeModifierSucceedsSmaller(
-  kernel: BrepKernel,
+  kernel: RemusKernel,
   target: number,
   selected: number[],
   featureKind: 'fillet' | 'chamfer',
@@ -1348,7 +1352,7 @@ function blendSubsetRemedy(
 }
 
 function edgeModifierFailureMessage(
-  kernel: BrepKernel,
+  kernel: RemusKernel,
   target: number,
   selected: number[],
   featureKind: 'fillet' | 'chamfer',
@@ -1400,13 +1404,13 @@ function edgeModifierFailureMessage(
 /**
  * Move either cap of a simple analytic cylinder by rebuilding the equivalent
  * primitive in the cylinder's world-space frame. Repeated cylindrical
- * resizes leave a valid analytic solid, but BrepKit's generic cap boolean can
+ * resizes leave a valid analytic solid, but Remus's generic cap boolean can
  * accumulate a mismatched circular boundary and fail its exact volume gate.
  * This path is deliberately limited to the three-face cylinder case; every
  * more complex prismatic face still uses the general push/pull operation.
  */
 function tryExactAnalyticCylinderCapOffset(
-  kernel: BrepKernel,
+  kernel: RemusKernel,
   solid: number,
   face: number,
   offset: number
@@ -1434,7 +1438,7 @@ function tryExactAnalyticCylinderCapOffset(
   );
   const linearTolerance = ANALYTIC_MATCH_EPSILON * span;
   const areaTolerance = Math.max(
-    // Face area is measured through BrepKit's bounded-deflection integration,
+    // Face area is measured through Remus's bounded-deflection integration,
     // so a circular cap is not bit-exact even though its surface is analytic.
     Math.PI * cylinder.radius * cylinder.radius * 5e-4,
     1e-7
@@ -1485,13 +1489,13 @@ function tryExactAnalyticCylinderCapOffset(
 
 /**
  * Preserve analytic cylinder walls for the common hollow-part operation.
- * BrepKit's generic boolean currently falls back to a triangular B-rep when a
+ * Remus's generic boolean currently falls back to a triangular B-rep when a
  * smaller coaxial cylinder opens exactly onto either cap. Revolving the exact
  * radial section is the equivalent CSG result, but keeps true cylindrical
  * surfaces in the document and exported STEP file.
  */
 function tryExactCoaxialCylinderCut(
-  kernel: BrepKernel,
+  kernel: RemusKernel,
   targetSolid: number,
   toolSolid: number
 ): number | null {
@@ -1537,7 +1541,7 @@ function tryExactCoaxialCylinderCut(
   const opensBottom = toolMin <= target.axialMin + tolerance;
   const opensTop = toolMax >= target.axialMax - tolerance;
   if (!opensBottom && !opensTop) {
-    // A fully enclosed tool is already handled analytically by BrepKit as an
+    // A fully enclosed tool is already handled analytically by Remus as an
     // inner shell. Only the cap-opening cases need this construction.
     return null;
   }
@@ -1584,7 +1588,7 @@ function axisDirection(axis: 'x' | 'y' | 'z'): Vec3 {
 }
 
 export interface ExactKernelAdapter {
-  readonly kind: 'brepkit';
+  readonly kind: 'remus';
   syncDocument(document: ProjectDocument): Promise<DerivedState>;
   exportStep(document: ProjectDocument, bodyIds: BodyId[]): Promise<string>;
   exportStl(document: ProjectDocument, bodyIds: BodyId[]): Promise<string>;
@@ -1668,7 +1672,7 @@ function profilePoints(
 /**
  * Build the same ZYX Euler transform the viewport's Move gizmo composes, so a
  * dragged placement and the rebuilt body agree once more than one axis is
- * non-zero. BrepKit accepts row-major matrices and column vectors.
+ * non-zero. Remus accepts row-major matrices and column vectors.
  */
 function transformMatrix(translation: Vec3, rotationDeg: Vec3): Float64Array {
   const rx = (rotationDeg.x * Math.PI) / 180;
@@ -1733,8 +1737,8 @@ function pointAt(values: number[], offset: number): Vec3 {
   };
 }
 
-/** Sample the ADR-011 edge identity quantities from a BrepKit edge. */
-function edgeSampleOf(kernel: BrepKernel, edge: number): EdgeSample {
+/** Sample the ADR-011 edge identity quantities from a Remus edge. */
+function edgeSampleOf(kernel: RemusKernel, edge: number): EdgeSample {
   const vertices = Array.from(kernel.getEdgeVertices(edge));
   const start = pointAt(vertices, 0);
   const end = pointAt(vertices, 3);
@@ -1782,18 +1786,18 @@ function edgeSampleOf(kernel: BrepKernel, edge: number): EdgeSample {
   };
 }
 
-function edgeFingerprint(kernel: BrepKernel, edge: number): number {
+function edgeFingerprint(kernel: RemusKernel, edge: number): number {
   return edgeFingerprintOf(edgeSampleOf(kernel, edge));
 }
 
 /**
- * The pre-ADR-011 BrepKit scheme: closed curves hashed their seam vertex and
- * mid-parameter point, both of which depend on BrepKit's parameterization
+ * The pre-ADR-011 Remus scheme: closed curves hashed their seam vertex and
+ * mid-parameter point, both of which depend on Remus's parameterization
  * phase. Persisted documents still hold these values, so resolution maps
  * register them alongside the kernel-neutral fingerprint. (For open edges the
  * two schemes produce identical signatures.)
  */
-function legacyEdgeFingerprint(kernel: BrepKernel, edge: number): number {
+function legacyEdgeFingerprint(kernel: RemusKernel, edge: number): number {
   const vertices = Array.from(kernel.getEdgeVertices(edge));
   const endpoints = [vertices.slice(0, 3), vertices.slice(3, 6)].sort(
     (a, b) => {
@@ -1836,7 +1840,7 @@ function registerHandle(
 }
 
 function edgeHandlesByFingerprint(
-  kernel: BrepKernel,
+  kernel: RemusKernel,
   solid: number
 ): Map<number, number[]> {
   const result = new Map<number, number[]>();
@@ -1863,7 +1867,7 @@ function edgeHandlesByFingerprint(
   return result;
 }
 
-function faceVertexCentroid(kernel: BrepKernel, face: number): Vec3 | null {
+function faceVertexCentroid(kernel: RemusKernel, face: number): Vec3 | null {
   const vertices = Array.from(kernel.getFaceVertices(face));
   if (vertices.length === 0) {
     return null;
@@ -1882,7 +1886,7 @@ function faceVertexCentroid(kernel: BrepKernel, face: number): Vec3 | null {
   };
 }
 
-function analyticParamsSignature(kernel: BrepKernel, face: number): string {
+function analyticParamsSignature(kernel: RemusKernel, face: number): string {
   let parameters: unknown;
   try {
     parameters = JSON.parse(kernel.getAnalyticSurfaceParams(face));
@@ -1940,7 +1944,7 @@ function analyticParamsSignature(kernel: BrepKernel, face: number): string {
  * features fail closed instead of editing the wrong face (the same contract
  * ADR-008/ADR-010 establish for edges).
  */
-function faceFingerprint(kernel: BrepKernel, face: number): number {
+function faceFingerprint(kernel: RemusKernel, face: number): number {
   const surfaceType = kernel.getSurfaceType(face);
   let perimeter = 0;
   for (const edge of kernel.getFaceEdges(face)) {
@@ -2004,7 +2008,7 @@ function quantizedDirectionOf(direction: Vec3): QuantizedTopologyPoint | null {
   ];
 }
 
-function edgeWitnessOf(kernel: BrepKernel, edge: number): EdgeWitnessV1 {
+function edgeWitnessOf(kernel: RemusKernel, edge: number): EdgeWitnessV1 {
   const sample = edgeSampleOf(kernel, edge);
   if (sample.closed) {
     return {
@@ -2033,8 +2037,8 @@ function edgeWitnessOf(kernel: BrepKernel, edge: number): EdgeWitnessV1 {
   };
 }
 
-function brepKitFaceClosure(
-  kernel: BrepKernel,
+function remusFaceClosure(
+  kernel: RemusKernel,
   face: number,
   surfaceType: string
 ): FaceWitnessV1['closure'] {
@@ -2080,7 +2084,7 @@ function brepKitFaceClosure(
   }
 }
 
-function faceWitnessOf(kernel: BrepKernel, face: number): FaceWitnessV1 {
+function faceWitnessOf(kernel: RemusKernel, face: number): FaceWitnessV1 {
   const surfaceType = kernel.getSurfaceType(face);
   let perimeter = 0;
   for (const edge of kernel.getFaceEdges(face)) {
@@ -2133,7 +2137,7 @@ function faceWitnessOf(kernel: BrepKernel, face: number): FaceWitnessV1 {
     perimeter: quantizeCoordinate(perimeter),
     centroid: centroid ? quantizedPoint(centroid) : null,
     analytic,
-    closure: brepKitFaceClosure(kernel, face, surfaceType)
+    closure: remusFaceClosure(kernel, face, surfaceType)
   };
 }
 
@@ -2151,7 +2155,7 @@ function faceWitnessOf(kernel: BrepKernel, face: number): FaceWitnessV1 {
  * through either — it is what the file declares.
  */
 function diagnoseImportedSolid(
-  kernel: BrepKernel,
+  kernel: RemusKernel,
   solid: number,
   index: number
 ): ImportedSolidDiagnosis {
@@ -2184,9 +2188,9 @@ function diagnoseImportedSolid(
 }
 
 function topologyCandidatesForSolid(
-  kernel: BrepKernel,
+  kernel: RemusKernel,
   solid: number
-): BrepKitTopologyCandidate[] {
+): RemusTopologyCandidate[] {
   return [
     ...Array.from(kernel.getSolidFaces(solid), (handle) => ({
       handle,
@@ -2232,12 +2236,12 @@ function sameAnalyticCarrier(
 }
 
 function addUniqueSemanticAssignment(
-  candidates: readonly BrepKitTopologyCandidate[],
+  candidates: readonly RemusTopologyCandidate[],
   kind: 'edge' | 'face',
   lineageName: string,
-  predicate: (candidate: BrepKitTopologyCandidate) => boolean,
-  assignments: BrepKitSemanticAssignment[],
-  diagnostics: BrepKitLineageState[],
+  predicate: (candidate: RemusTopologyCandidate) => boolean,
+  assignments: RemusSemanticAssignment[],
+  diagnostics: RemusLineageState[],
   operation: 'primitive' | 'sweep' | 'fillet' | 'chamfer'
 ) {
   const matches = candidates.filter(
@@ -2245,7 +2249,7 @@ function addUniqueSemanticAssignment(
   );
   if (matches.length !== 1) {
     diagnostics.push(
-      brepKitHashOnlyLineage(
+      remusHashOnlyLineage(
         operation,
         `Semantic role ${lineageName} matched ${matches.length} exact candidates.`
       )
@@ -2297,19 +2301,19 @@ function primitiveBoxEdgeRole(
 }
 
 function buildPrimitiveLineage(
-  kernel: BrepKernel,
+  kernel: RemusKernel,
   solid: number,
   feature: FeatureNode
-): BrepKitLineageState {
+): RemusLineageState {
   if (feature.data.featureKind !== 'primitive') {
-    return brepKitHashOnlyLineage(
+    return remusHashOnlyLineage(
       'primitive',
       'Feature is not a primitive construction.'
     );
   }
   const candidates = topologyCandidatesForSolid(kernel, solid);
-  const assignments: BrepKitSemanticAssignment[] = [];
-  const diagnostics: BrepKitLineageState[] = [];
+  const assignments: RemusSemanticAssignment[] = [];
+  const diagnostics: RemusLineageState[] = [];
   const faces = candidates.filter((candidate) => candidate.kind === 'face');
   const edges = candidates.filter((candidate) => candidate.kind === 'edge');
   const boundsValues = Array.from(kernel.boundingBox(solid));
@@ -2469,7 +2473,7 @@ function buildPrimitiveLineage(
         'primitive'
       );
       diagnostics.push(
-        brepKitHashOnlyLineage(
+        remusHashOnlyLineage(
           'primitive',
           'Torus seam edges are parameterization artifacts.'
         )
@@ -2477,16 +2481,16 @@ function buildPrimitiveLineage(
       break;
     case 'sphere':
       diagnostics.push(
-        brepKitHashOnlyLineage(
+        remusHashOnlyLineage(
           'primitive',
-          'BrepKit sphere hemispheres share the same exact witness and cannot be named one-to-one.'
+          'Remus sphere hemispheres share the same exact witness and cannot be named one-to-one.'
         )
       );
       break;
   }
 
-  return mergeBrepKitLineageStates([
-    createBrepKitSemanticLineage(feature.featureId, 'primitive', assignments),
+  return mergeRemusLineageStates([
+    createRemusSemanticLineage(feature.featureId, 'primitive', assignments),
     ...diagnostics
   ]);
 }
@@ -2499,15 +2503,15 @@ function buildPrimitiveLineage(
  * keeps its wall/cap/rim roles across a cap offset or wall resize), those
  * roles re-identify the topology exactly, published under the ORIGINAL
  * producing feature so stored references keep matching. A role that is no
- * longer one-to-one publishes nothing (`createBrepKitSemanticLineage` keeps
+ * longer one-to-one publishes nothing (`createRemusSemanticLineage` keeps
  * that fail-closed), and a shape with no recognizable role at all stays
  * hash-only as before.
  */
 function rederivePrimitiveDirectEditLineage(
-  kernel: BrepKernel,
+  kernel: RemusKernel,
   shape: ExactShape,
   producer: FeatureNode | undefined
-): BrepKitLineageState | null {
+): RemusLineageState | null {
   if (
     !producer ||
     producer.data.featureKind !== 'primitive' ||
@@ -2568,15 +2572,15 @@ function modifierChainRootsAtCylinder(
  * between them, and closed circles classified by height. Republishing those
  * roles under the modifier feature keeps downstream picks resolvable. Every
  * predicate is radius-independent; a role that is not one-to-one publishes
- * nothing (fail-closed in `createBrepKitSemanticLineage`), a role with no
+ * nothing (fail-closed in `createRemusSemanticLineage`), a role with no
  * candidate is simply absent, and an unrecognizable shape — a tilted axis, a
  * foreign surface type, a vanished wall — returns null and stays hash-only.
  */
 function rederiveCylinderModifierLineage(
-  kernel: BrepKernel,
+  kernel: RemusKernel,
   solid: number,
   feature: FeatureNode
-): BrepKitLineageState | null {
+): RemusLineageState | null {
   if (
     feature.data.featureKind !== 'fillet' &&
     feature.data.featureKind !== 'chamfer'
@@ -2587,7 +2591,7 @@ function rederiveCylinderModifierLineage(
   const candidates = topologyCandidatesForSolid(kernel, solid);
   const faces = candidates.filter((candidate) => candidate.kind === 'face');
   const edges = candidates.filter((candidate) => candidate.kind === 'edge');
-  const surfaceOf = (candidate: BrepKitTopologyCandidate): string =>
+  const surfaceOf = (candidate: RemusTopologyCandidate): string =>
     (candidate.witness as FaceWitnessV1).surfaceType;
   const walls = faces.filter(
     (candidate) => surfaceOf(candidate) === 'cylinder'
@@ -2620,12 +2624,12 @@ function rederiveCylinderModifierLineage(
   }
   const zMid = (zMin + zMax) / 2;
 
-  const assignments: BrepKitSemanticAssignment[] = [];
-  const diagnostics: BrepKitLineageState[] = [];
+  const assignments: RemusSemanticAssignment[] = [];
+  const diagnostics: RemusLineageState[] = [];
   const addRole = (
     kind: 'edge' | 'face',
     lineageName: string,
-    predicate: (candidate: BrepKitTopologyCandidate) => boolean
+    predicate: (candidate: RemusTopologyCandidate) => boolean
   ) => {
     const pool = kind === 'face' ? faces : edges;
     // A role with no candidate is legitimately absent (a single-rim fillet
@@ -2643,15 +2647,12 @@ function rederiveCylinderModifierLineage(
       operation
     );
   };
-  const planeAtZ = (
-    candidate: BrepKitTopologyCandidate,
-    z: number
-  ): boolean => {
+  const planeAtZ = (candidate: RemusTopologyCandidate, z: number): boolean => {
     const witness = candidate.witness as FaceWitnessV1;
     return witness.surfaceType === 'plane' && witness.centroid?.[2] === z;
   };
   const blendInHalf = (
-    candidate: BrepKitTopologyCandidate,
+    candidate: RemusTopologyCandidate,
     lower: boolean
   ): boolean => {
     const witness = candidate.witness as FaceWitnessV1;
@@ -2662,7 +2663,7 @@ function rederiveCylinderModifierLineage(
     return z !== undefined && z !== null && (lower ? z < zMid : z >= zMid);
   };
   const circleAt = (
-    candidate: BrepKitTopologyCandidate,
+    candidate: RemusTopologyCandidate,
     matches: (z: number) => boolean
   ): boolean => {
     const witness = candidate.witness as EdgeWitnessV1;
@@ -2702,8 +2703,8 @@ function rederiveCylinderModifierLineage(
   if (assignments.length === 0) {
     return null;
   }
-  return mergeBrepKitLineageStates([
-    createBrepKitSemanticLineage(feature.featureId, operation, assignments),
+  return mergeRemusLineageStates([
+    createRemusSemanticLineage(feature.featureId, operation, assignments),
     ...diagnostics
   ]);
 }
@@ -2785,15 +2786,15 @@ function expectedCircleWitness(
 }
 
 function addFaceCarrierRole(
-  candidates: readonly BrepKitTopologyCandidate[],
+  candidates: readonly RemusTopologyCandidate[],
   carrier: FaceWitnessV1['analytic'] | null,
   lineageName: string,
-  assignments: BrepKitSemanticAssignment[],
-  diagnostics: BrepKitLineageState[]
+  assignments: RemusSemanticAssignment[],
+  diagnostics: RemusLineageState[]
 ) {
   if (!carrier) {
     diagnostics.push(
-      brepKitHashOnlyLineage(
+      remusHashOnlyLineage(
         'sweep',
         `Semantic role ${lineageName} has no exact analytic carrier.`
       )
@@ -2816,11 +2817,11 @@ function addFaceCarrierRole(
 }
 
 function addEdgeWitnessRole(
-  candidates: readonly BrepKitTopologyCandidate[],
+  candidates: readonly RemusTopologyCandidate[],
   witness: EdgeWitnessV1,
   lineageName: string,
-  assignments: BrepKitSemanticAssignment[],
-  diagnostics: BrepKitLineageState[]
+  assignments: RemusSemanticAssignment[],
+  diagnostics: RemusLineageState[]
 ) {
   addUniqueSemanticAssignment(
     candidates,
@@ -2834,7 +2835,7 @@ function addEdgeWitnessRole(
 }
 
 function buildExtrudeLineage(
-  kernel: BrepKernel,
+  kernel: RemusKernel,
   solid: number,
   feature: FeatureNode,
   objectId: string,
@@ -2842,10 +2843,10 @@ function buildExtrudeLineage(
   basis: PlaneBasis,
   distance: number,
   scope: Record<string, number>
-): BrepKitLineageState {
+): RemusLineageState {
   const candidates = topologyCandidatesForSolid(kernel, solid);
-  const assignments: BrepKitSemanticAssignment[] = [];
-  const diagnostics: BrepKitLineageState[] = [];
+  const assignments: RemusSemanticAssignment[] = [];
+  const diagnostics: RemusLineageState[] = [];
   const startOrigin = basis.origin;
   const endOrigin = {
     x: basis.origin.x + basis.normal.x * distance,
@@ -2952,14 +2953,14 @@ function buildExtrudeLineage(
     }
   }
 
-  return mergeBrepKitLineageStates([
-    createBrepKitSemanticLineage(feature.featureId, 'sweep', assignments),
+  return mergeRemusLineageStates([
+    createRemusSemanticLineage(feature.featureId, 'sweep', assignments),
     ...diagnostics
   ]);
 }
 
 function buildRevolveLineage(
-  kernel: BrepKernel,
+  kernel: RemusKernel,
   solid: number,
   feature: FeatureNode,
   objectId: string,
@@ -2968,10 +2969,10 @@ function buildRevolveLineage(
   axisDirection: Vec3,
   axisPoint: Vec3,
   scope: Record<string, number>
-): BrepKitLineageState {
+): RemusLineageState {
   const candidates = topologyCandidatesForSolid(kernel, solid);
-  const assignments: BrepKitSemanticAssignment[] = [];
-  const diagnostics: BrepKitLineageState[] = [];
+  const assignments: RemusSemanticAssignment[] = [];
+  const diagnostics: RemusLineageState[] = [];
   if (data.objectKind === 'circle') {
     addUniqueSemanticAssignment(
       candidates,
@@ -3038,14 +3039,14 @@ function buildRevolveLineage(
       }
     }
   }
-  return mergeBrepKitLineageStates([
-    createBrepKitSemanticLineage(feature.featureId, 'sweep', assignments),
+  return mergeRemusLineageStates([
+    createRemusSemanticLineage(feature.featureId, 'sweep', assignments),
     ...diagnostics
   ]);
 }
 
-/** The pre-ADR-011 BrepKit face scheme, kept only for persisted references. */
-function legacyFaceFingerprint(kernel: BrepKernel, face: number): number {
+/** The pre-ADR-011 Remus face scheme, kept only for persisted references. */
+function legacyFaceFingerprint(kernel: RemusKernel, face: number): number {
   const centroid = faceVertexCentroid(kernel, face);
   const signature = [
     kernel.getSurfaceType(face),
@@ -3069,7 +3070,7 @@ function legacyFaceFingerprint(kernel: BrepKernel, face: number): number {
 }
 
 function faceHandlesByFingerprint(
-  kernel: BrepKernel,
+  kernel: RemusKernel,
   solid: number
 ): Map<number, number[]> {
   const result = new Map<number, number[]>();
@@ -3085,7 +3086,7 @@ function faceHandlesByFingerprint(
 }
 
 function resolveFeatureFaces(
-  kernel: BrepKernel,
+  kernel: RemusKernel,
   shape: ExactShape,
   hashes: readonly number[],
   references: readonly FaceTopologyReferenceV5[] | undefined,
@@ -3156,7 +3157,7 @@ function resolveFeatureFaces(
  * every persisted reference to match a stored hash exactly.
  */
 function edgeReferenceRepairCandidate(
-  kernel: BrepKernel,
+  kernel: RemusKernel,
   shape: ExactShape,
   handle: number,
   storedHash: number
@@ -3173,7 +3174,7 @@ function edgeReferenceRepairCandidate(
 }
 
 function resolveEdgeModifierEdges(
-  kernel: BrepKernel,
+  kernel: RemusKernel,
   shape: ExactShape,
   solid: number,
   hashes: readonly number[],
@@ -3333,7 +3334,7 @@ const CLOSED_FORM_SURFACES = new Set(['cylinder', 'sphere', 'cone', 'torus']);
  * the first curved edge, and only planes pay for it at all.
  */
 function measureAreaProvenance(
-  kernel: BrepKernel,
+  kernel: RemusKernel,
   face: number,
   surfaceType: string
 ): FaceAreaProvenance | undefined {
@@ -3357,7 +3358,7 @@ function measureAreaProvenance(
 }
 
 function measureFaceGeometry(
-  kernel: BrepKernel,
+  kernel: RemusKernel,
   face: number
 ): FaceGeometry | undefined {
   const surfaceType = kernel.getSurfaceType(face);
@@ -3500,7 +3501,7 @@ function refuseThroughHole(message: string): ThroughHoleClassification {
 
 /** Point-in-solid classification, treating any kernel failure as unknown. */
 function classifySolidPoint(
-  kernel: BrepKernel,
+  kernel: RemusKernel,
   solid: number,
   point: Vec3
 ): 'inside' | 'outside' | 'boundary' | 'unknown' {
@@ -3530,7 +3531,7 @@ function classifySolidPoint(
  * OpenCascade answers the bore/wall half of that question from the face's
  * orientation flag — a hollow tube's outer wall and its bore share the same
  * void axis and the same two open ends, and only the orientation separates
- * them. BrepKit has no such flag (`getShapeOrientation` documents that every
+ * them. Remus has no such flag (`getShapeOrientation` documents that every
  * face reports `forward`, and a cylinder's parametric normal points away from
  * the axis whether it walls a bore or a boss), so the same distinction is
  * taken from the material itself: just outside a bore's wall is solid, just
@@ -3540,7 +3541,7 @@ function classifySolidPoint(
  * A case that cannot be settled is refused by name rather than guessed at.
  */
 function classifyThroughHoleFace(
-  kernel: BrepKernel,
+  kernel: RemusKernel,
   solid: number,
   face: number,
   geometry: FaceGeometry | undefined
@@ -3657,7 +3658,7 @@ function classifyThroughHoleFace(
 
 /** Face measurements plus the editable feature semantics the UI offers. */
 function measureOwnedFaceGeometry(
-  kernel: BrepKernel,
+  kernel: RemusKernel,
   solid: number,
   face: number
 ): FaceGeometry | undefined {
@@ -3738,7 +3739,7 @@ function blendCarrierSnapshot(
  * resize whichever face happened to inherit the fingerprint.
  */
 function requireThroughHole(
-  kernel: BrepKernel,
+  kernel: RemusKernel,
   solid: number,
   face: number,
   sourceDiameter?: number,
@@ -3789,7 +3790,7 @@ function requireThroughHole(
 
 /** Solid cylinder between two world points, optionally extended past both. */
 function cylinderAlongAxis(
-  kernel: BrepKernel,
+  kernel: RemusKernel,
   start: Vec3,
   end: Vec3,
   radius: number,
@@ -3813,7 +3814,7 @@ function cylinderAlongAxis(
  * Close exactly the selected through-hole span by fusing a plug of the bore's
  * own radius and merging the seams the fuse leaves behind.
  *
- * BrepKit's boolean drops to a co-refined mesh when its general face assembly
+ * Remus's boolean drops to a co-refined mesh when its general face assembly
  * will not accept the result, and closing a hole — collapsing a handle in the
  * body — is a configuration it declines often enough to matter. A mesh result
  * still encloses roughly the right space, so it is caught by counting faces
@@ -3822,7 +3823,7 @@ function cylinderAlongAxis(
  * analytic surface with a fan of triangles and multiplies the face count.
  */
 function fillThroughHole(
-  kernel: BrepKernel,
+  kernel: RemusKernel,
   solid: number,
   geometry: ThroughHoleGeometry
 ): number {
@@ -3858,7 +3859,7 @@ function fillThroughHole(
 
 /** Radii of every analytic cylinder in `solid` sharing the given axis line. */
 function coaxialCylinderRadii(
-  kernel: BrepKernel,
+  kernel: RemusKernel,
   solid: number,
   axisPoint: Vec3,
   axisDirection: Vec3,
@@ -3882,7 +3883,7 @@ function coaxialCylinderRadii(
 }
 
 function faceAttachmentCandidatesForShape(
-  kernel: BrepKernel,
+  kernel: RemusKernel,
   shape: ExactShape
 ): FaceAttachmentCandidate[] {
   return shape.solids.flatMap((solid) =>
@@ -3918,7 +3919,7 @@ function faceAttachmentCandidatesForShape(
 }
 
 function copyShape(
-  kernel: BrepKernel,
+  kernel: RemusKernel,
   shape: ExactShape,
   matrix: Float64Array
 ): ExactShape {
@@ -3930,7 +3931,7 @@ function copyShape(
 }
 
 function copyShapeWithVerifiedLineage(
-  kernel: BrepKernel,
+  kernel: RemusKernel,
   shape: ExactShape,
   matrix: Float64Array
 ): ExactShape {
@@ -3940,7 +3941,7 @@ function copyShapeWithVerifiedLineage(
       solids: shape.solids.map((solid) =>
         kernel.copyAndTransformSolid(solid, matrix)
       ),
-      lineage: brepKitHashOnlyLineage(
+      lineage: remusHashOnlyLineage(
         'rigid-transform',
         'The source body has no verified topology lineage.'
       )
@@ -3952,7 +3953,7 @@ function copyShapeWithVerifiedLineage(
     solids.push(resultSolid);
     const sourceFaces = new Set(kernel.getSolidFaces(sourceSolid));
     const sourceEdges = new Set(kernel.getSolidEdges(sourceSolid));
-    const source: BrepKitLineageState = {
+    const source: RemusLineageState = {
       faceReferences: new Map(
         [...shape.lineage!.faceReferences].filter(([handle]) =>
           sourceFaces.has(handle)
@@ -3965,17 +3966,17 @@ function copyShapeWithVerifiedLineage(
       ),
       diagnostics: index === 0 ? [...shape.lineage!.diagnostics] : []
     };
-    return propagateBrepKitRigidTransformLineage(
+    return propagateRemusRigidTransformLineage(
       source,
       topologyCandidatesForSolid(kernel, resultSolid),
       Array.from(matrix)
     );
   });
-  return { solids, lineage: mergeBrepKitLineageStates(lineages) };
+  return { solids, lineage: mergeRemusLineageStates(lineages) };
 }
 
-function projectBrepKitLineageDiagnostic(
-  diagnostic: BrepKitLineageState['diagnostics'][number]
+function projectRemusLineageDiagnostic(
+  diagnostic: RemusLineageState['diagnostics'][number]
 ): TopologyLineageDiagnostic {
   const status: TopologyLineageDiagnostic['status'] =
     diagnostic.code === 'hash-only'
@@ -4000,7 +4001,7 @@ function projectBrepKitLineageDiagnostic(
 /**
  * Bring an imported mesh into the kernel as a body it can actually model with.
  *
- * BrepKit's STL importer emits one face per triangle and does not share edges
+ * Remus's STL importer emits one face per triangle and does not share edges
  * between them, so the result fails strict validation and every modeling
  * operation refuses it. Sewing restores the shared-edge topology, and unifying
  * same-domain faces recovers the planar faces a tessellator split up — an
@@ -4011,7 +4012,7 @@ function projectBrepKitLineageDiagnostic(
  * it unchanged. If they do not, or the mesh cannot be sewn at all, the import
  * fails by name instead of publishing a body whose geometry silently drifted.
  */
-function importMeshSolid(kernel: BrepKernel, stlText: string): number {
+function importMeshSolid(kernel: RemusKernel, stlText: string): number {
   const imported = kernel.importStl(new TextEncoder().encode(stlText));
   const faces = kernel.getSolidFaces(imported);
   if (faces.length < 2) {
@@ -4093,7 +4094,7 @@ function inheritMeshOrigin(
   }
 }
 
-function collapseShape(kernel: BrepKernel, shape: ExactShape): number {
+function collapseShape(kernel: RemusKernel, shape: ExactShape): number {
   if (shape.solids.length === 0) {
     throw new Error('Exact body contains no solids.');
   }
@@ -4106,21 +4107,21 @@ function collapseShape(kernel: BrepKernel, shape: ExactShape): number {
  * Boolean union can leave adjacent coplanar faces split along the source-solid
  * boundary. The result is one valid solid, but those fragments render as false
  * seams and make a manufactured part look assembled from separate plates.
- * BrepKit unifies only faces on the same underlying surface, so real part
+ * Remus unifies only faces on the same underlying surface, so real part
  * boundaries, holes, blends, and sharp corners remain intact.
  */
-function unifyBooleanFaces(kernel: BrepKernel, solid: number): number {
+function unifyBooleanFaces(kernel: RemusKernel, solid: number): number {
   kernel.unifyFaces(solid);
   return solid;
 }
 
-function unifyUnionFaces(kernel: BrepKernel, solid: number): number {
+function unifyUnionFaces(kernel: RemusKernel, solid: number): number {
   return selectSafelyUnifiedSolid(kernel, solid, (candidate) =>
     isStrictBooleanSolid(kernel, candidate)
   );
 }
 
-function fuseUniformSolid(kernel: BrepKernel, solids: number[]): number {
+function fuseUniformSolid(kernel: RemusKernel, solids: number[]): number {
   const fused = kernel.fuseAll(Uint32Array.from(solids));
   return unifyUnionFaces(kernel, fused);
 }
@@ -4128,13 +4129,16 @@ function fuseUniformSolid(kernel: BrepKernel, solids: number[]): number {
 /**
  * Bounds of one face's disposable display projection.
  *
- * BrepKit's numeric handles are entity-local: a face handle is not a solid
+ * Remus's numeric handles are entity-local: a face handle is not a solid
  * handle, even when the two happen to share the same integer. Passing a face
  * to `boundingBox` used to work accidentally while that integer also named a
  * live solid. Tessellating the face is the supported face-level query, and
  * its deflection matches the approximation allowance used by the caller.
  */
-function tessellatedFaceBounds(kernel: BrepKernel, face: number): Float64Array {
+function tessellatedFaceBounds(
+  kernel: RemusKernel,
+  face: number
+): Float64Array {
   const mesh = kernel.tessellateFace(face, MEASUREMENT_DEFLECTION);
   try {
     const bounds = new Float64Array([
@@ -4190,7 +4194,7 @@ function tessellatedFaceBounds(kernel: BrepKernel, face: number): Float64Array {
  * This is the same dimensional mistake this project has now found in the
  * kernel five times, and it is not worth making again here.
  */
-function sharedSolidVolume(kernel: BrepKernel, solids: number[]): number {
+function sharedSolidVolume(kernel: RemusKernel, solids: number[]): number {
   if (solids.length < 2) {
     return 0;
   }
@@ -4242,7 +4246,7 @@ function sharedSolidVolume(kernel: BrepKernel, solids: number[]): number {
 }
 
 function inferenceBodyForShape(
-  kernel: BrepKernel,
+  kernel: RemusKernel,
   shape: ExactShape,
   bodyId: BodyId,
   name: string
@@ -4275,7 +4279,7 @@ function inferenceBodyForShape(
 
 /** Exact common material between two body shapes; tangency returns zero. */
 function sharedShapeVolume(
-  kernel: BrepKernel,
+  kernel: RemusKernel,
   left: ExactShape,
   right: ExactShape,
   leftBody: ExtrudeInferenceBody,
@@ -4322,7 +4326,7 @@ function sharedShapeVolume(
  * result remains a strict topological solid. The final Union acceptance gate
  * below separately checks its disposable viewport projection.
  */
-function isStrictBooleanSolid(kernel: BrepKernel, solid: number): boolean {
+function isStrictBooleanSolid(kernel: RemusKernel, solid: number): boolean {
   try {
     return kernel.validateSolid(solid) === 0;
   } catch {
@@ -4330,7 +4334,7 @@ function isStrictBooleanSolid(kernel: BrepKernel, solid: number): boolean {
   }
 }
 
-function isFaceConnectedSolid(kernel: BrepKernel, solid: number): boolean {
+function isFaceConnectedSolid(kernel: RemusKernel, solid: number): boolean {
   try {
     return (
       countFaceConnectedComponents(
@@ -4348,11 +4352,11 @@ function decodeText(bytes: Uint8Array): string {
 }
 
 /**
- * Keep BrepKit's hostile-input budgets for every source. A locally selected
+ * Keep Remus's hostile-input budgets for every source. A locally selected
  * file can later be shared or restored, so its origin does not make it trusted.
  */
 function importStepWithOwnBudget(
-  kernel: BrepKernel,
+  kernel: RemusKernel,
   bytes: Uint8Array
 ): Uint32Array {
   return kernel.importStep(bytes, 128 * 1024 * 1024, 2_000_000);
@@ -4546,8 +4550,8 @@ export interface ExactKernelAdapterOptions {
   importedStepCacheBytes?: number;
 }
 
-export class BrepKitKernelAdapter implements ExactKernelAdapter {
-  readonly kind = 'brepkit' as const;
+export class RemusKernelAdapter implements ExactKernelAdapter {
+  readonly kind = 'remus' as const;
 
   constructor(private readonly options: ExactKernelAdapterOptions = {}) {}
 
@@ -4638,7 +4642,7 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
    */
   private storeImportedStep(
     checksum: string,
-    kernel: BrepKernel,
+    kernel: RemusKernel,
     solids: number[],
     diagnostics: ImportedStepDiagnostics,
     pinned: ReadonlySet<string>
@@ -4668,7 +4672,7 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
   }
 
   private resolveSketchBasisAtHistory(
-    kernel: BrepKernel,
+    kernel: RemusKernel,
     document: ProjectDocument,
     sketch: SketchNode,
     result: ExactBuildResult,
@@ -4718,7 +4722,7 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
   }
 
   private makeProfileFace(
-    kernel: BrepKernel,
+    kernel: RemusKernel,
     data: SketchObjectData,
     basis: PlaneBasis,
     offset: number,
@@ -4762,7 +4766,7 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
   }
 
   private buildPrimitive(
-    kernel: BrepKernel,
+    kernel: RemusKernel,
     feature: FeatureNode,
     scope: Record<string, number>
   ): ExactShape {
@@ -4825,9 +4829,9 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
    * become true circular edges and glyph beziers become NURBS edges, so STEP
    * export keeps analytic surfaces and smooth outlines.
    *
-   * TODO(brepkit Phase 0.3): once `makeFaceFromWires(outer, inner[])` ships,
+   * TODO(remus Phase 0.3): once `makeFaceFromWires(outer, inner[])` ships,
    * replace the `makePlanarFaceFromWire` + `addHolesToFace` pair below with
-   * the single call. The pinned brepkit-wasm here does not have it, and this
+   * the single call. The pinned remus-wasm here does not have it, and this
    * must not depend on unreleased kernel work.
    *
    * `warn` is the document-level warning channel, not `console.warn`: the
@@ -4835,7 +4839,7 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
    * the person looking at the faceted result.
    */
   private makeRegionFace(
-    kernel: BrepKernel,
+    kernel: RemusKernel,
     region: SketchRegion,
     basis: PlaneBasis,
     warn: (message: string) => void
@@ -4851,8 +4855,8 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
       const edges: number[] = [];
       for (const curve of loop.curves) {
         if (curve.kind === 'line') {
-          const a = BrepKitKernelAdapter.planePoint3(basis, curve.a);
-          const b = BrepKitKernelAdapter.planePoint3(basis, curve.b);
+          const a = RemusKernelAdapter.planePoint3(basis, curve.a);
+          const b = RemusKernelAdapter.planePoint3(basis, curve.b);
           edges.push(kernel.makeLineEdge(a.x, a.y, a.z, b.x, b.y, b.z));
           continue;
         }
@@ -4883,17 +4887,14 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
           flattened += 1;
           const points = flattenBezierCurve(curve);
           for (let index = 0; index + 1 < points.length; index += 1) {
-            const a = BrepKitKernelAdapter.planePoint3(basis, points[index]!);
-            const b = BrepKitKernelAdapter.planePoint3(
-              basis,
-              points[index + 1]!
-            );
+            const a = RemusKernelAdapter.planePoint3(basis, points[index]!);
+            const b = RemusKernelAdapter.planePoint3(basis, points[index + 1]!);
             edges.push(kernel.makeLineEdge(a.x, a.y, a.z, b.x, b.y, b.z));
           }
           continue;
         }
         const span = Math.abs(curve.endAngle - curve.startAngle);
-        const center = BrepKitKernelAdapter.planePoint3(basis, curve.center);
+        const center = RemusKernelAdapter.planePoint3(basis, curve.center);
         if (span >= Math.PI * 2 - 1e-9) {
           // A standalone circle traces as one full-turn piece; the arc
           // constructor degenerates at start == end, so use a circle edge.
@@ -4923,11 +4924,11 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
         for (let piece = 0; piece < pieces; piece += 1) {
           const angleA = curve.startAngle + (sweep * piece) / pieces;
           const angleB = curve.startAngle + (sweep * (piece + 1)) / pieces;
-          const start = BrepKitKernelAdapter.planePoint3(basis, {
+          const start = RemusKernelAdapter.planePoint3(basis, {
             x: curve.center.x + Math.cos(angleA) * curve.radius,
             y: curve.center.y + Math.sin(angleA) * curve.radius
           });
-          const end = BrepKitKernelAdapter.planePoint3(basis, {
+          const end = RemusKernelAdapter.planePoint3(basis, {
             x: curve.center.x + Math.cos(angleB) * curve.radius,
             y: curve.center.y + Math.sin(angleB) * curve.radius
           });
@@ -4973,7 +4974,7 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
 
   /** Extrude one or more explicitly selected bounded sketch cells. */
   private buildRegionExtrude(
-    kernel: BrepKernel,
+    kernel: RemusKernel,
     document: ProjectDocument,
     sketch: SketchNode,
     feature: FeatureNode,
@@ -4995,7 +4996,7 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
       warn(flattenedOutlineWarning(flattenedOutlines));
     }
     const groups = connectedRegionGroups(regions);
-    const lineages: BrepKitLineageState[] = [];
+    const lineages: RemusLineageState[] = [];
     const solids = groups.map((group) => {
       const face = this.makeRegionFace(
         kernel,
@@ -5011,15 +5012,15 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
         distance
       );
       const candidates = topologyCandidatesForSolid(kernel, solid);
-      const assignments: BrepKitSemanticAssignment[] = [];
-      const diagnostics: BrepKitLineageState[] = [];
+      const assignments: RemusSemanticAssignment[] = [];
+      const diagnostics: RemusLineageState[] = [];
       const sourceEntityIds = [
         ...new Set(group.flatMap((region) => region.sourceEntityIds))
       ].sort();
       const token = sourceEntityIds.join('+');
       if (token.length === 0) {
         diagnostics.push(
-          brepKitHashOnlyLineage(
+          remusHashOnlyLineage(
             'sweep',
             'Selected sketch region has no stable authored-entity identity.'
           )
@@ -5045,15 +5046,15 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
           diagnostics
         );
         diagnostics.push(
-          brepKitHashOnlyLineage(
+          remusHashOnlyLineage(
             'sweep',
             `Selected-region side topology ${token} has no one-to-one semantic curve mapping.`
           )
         );
       }
       lineages.push(
-        mergeBrepKitLineageStates([
-          createBrepKitSemanticLineage(feature.featureId, 'sweep', assignments),
+        mergeRemusLineageStates([
+          createRemusSemanticLineage(feature.featureId, 'sweep', assignments),
           ...diagnostics
         ])
       );
@@ -5061,12 +5062,12 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
     });
     return {
       solids,
-      lineage: mergeBrepKitLineageStates(lineages)
+      lineage: mergeRemusLineageStates(lineages)
     };
   }
 
   private sectionFace(
-    kernel: BrepKernel,
+    kernel: RemusKernel,
     document: ProjectDocument,
     section: SketchSectionReference,
     scope: Record<string, number>,
@@ -5097,7 +5098,7 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
   }
 
   private buildLoft(
-    kernel: BrepKernel,
+    kernel: RemusKernel,
     document: ProjectDocument,
     feature: FeatureNode,
     scope: Record<string, number>,
@@ -5127,7 +5128,7 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
         : kernel.loft(Uint32Array.from(faces));
     return {
       solids: [validateGeneratedSolid(kernel, solid, 'Loft')],
-      lineage: brepKitHashOnlyLineage(
+      lineage: remusHashOnlyLineage(
         'sweep',
         'Loft section topology has no verified output evolution relation.'
       )
@@ -5135,7 +5136,7 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
   }
 
   private sweepPathEdges(
-    kernel: BrepKernel,
+    kernel: RemusKernel,
     document: ProjectDocument,
     path: SketchPathReference,
     scope: Record<string, number>,
@@ -5165,11 +5166,11 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
       }
       const data = node.data;
       if (data.objectKind === 'line') {
-        const start = BrepKitKernelAdapter.planePoint3(basis, {
+        const start = RemusKernelAdapter.planePoint3(basis, {
           x: resolveParamValue(data.x1, scope, 'path start X'),
           y: resolveParamValue(data.y1, scope, 'path start Y')
         });
-        const end = BrepKitKernelAdapter.planePoint3(basis, {
+        const end = RemusKernelAdapter.planePoint3(basis, {
           x: resolveParamValue(data.x2, scope, 'path end X'),
           y: resolveParamValue(data.y2, scope, 'path end Y')
         });
@@ -5198,16 +5199,16 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
       if (sweep <= GEOMETRY_EPSILON) {
         throw new Error('Sweep path arc must have a non-zero sweep.');
       }
-      const center = BrepKitKernelAdapter.planePoint3(basis, center2);
+      const center = RemusKernelAdapter.planePoint3(basis, center2);
       const pieces = Math.max(1, Math.ceil(sweep / (Math.PI / 2)));
       return Array.from({ length: pieces }, (_, index) => {
         const angleA = start + (sweep * index) / pieces;
         const angleB = start + (sweep * (index + 1)) / pieces;
-        const pointA = BrepKitKernelAdapter.planePoint3(basis, {
+        const pointA = RemusKernelAdapter.planePoint3(basis, {
           x: center2.x + Math.cos(angleA) * radius,
           y: center2.y + Math.sin(angleA) * radius
         });
-        const pointB = BrepKitKernelAdapter.planePoint3(basis, {
+        const pointB = RemusKernelAdapter.planePoint3(basis, {
           x: center2.x + Math.cos(angleB) * radius,
           y: center2.y + Math.sin(angleB) * radius
         });
@@ -5230,7 +5231,7 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
   }
 
   private buildProfileSweep(
-    kernel: BrepKernel,
+    kernel: RemusKernel,
     document: ProjectDocument,
     feature: FeatureNode,
     scope: Record<string, number>,
@@ -5269,7 +5270,7 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
         : kernel.sweepAlongEdges(face, Uint32Array.from(edges));
     return {
       solids: [validateGeneratedSolid(kernel, solid, 'Sweep')],
-      lineage: brepKitHashOnlyLineage(
+      lineage: remusHashOnlyLineage(
         'sweep',
         'Profile sweep topology has no verified output evolution relation.'
       )
@@ -5277,7 +5278,7 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
   }
 
   private buildHelicalSweep(
-    kernel: BrepKernel,
+    kernel: RemusKernel,
     document: ProjectDocument,
     feature: FeatureNode,
     scope: Record<string, number>,
@@ -5338,7 +5339,7 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
     );
     return {
       solids: [validateGeneratedSolid(kernel, solid, 'Helical sweep')],
-      lineage: brepKitHashOnlyLineage(
+      lineage: remusHashOnlyLineage(
         'sweep',
         'Helical sweep topology has no verified output evolution relation.'
       )
@@ -5346,7 +5347,7 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
   }
 
   private buildSweep(
-    kernel: BrepKernel,
+    kernel: RemusKernel,
     document: ProjectDocument,
     feature: FeatureNode,
     scope: Record<string, number>,
@@ -5456,12 +5457,12 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
             point,
             scope
           )
-        : brepKitHashOnlyLineage('sweep', PARTIAL_REVOLVE_HASH_ONLY_REASON)
+        : remusHashOnlyLineage('sweep', PARTIAL_REVOLVE_HASH_ONLY_REASON)
     };
   }
 
   private build(
-    kernel: BrepKernel,
+    kernel: RemusKernel,
     document: ProjectDocument,
     importSources: ReadonlyMap<string, Uint8Array> = new Map(),
     /** Import checksums this build reads; see {@link storeImportedStep}. */
@@ -5517,7 +5518,7 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
               result.meshBodies.add(feature.bodyId);
               result.shapes.set(feature.bodyId, {
                 solids: [solid],
-                lineage: brepKitHashOnlyLineage(
+                lineage: remusHashOnlyLineage(
                   'imported-mesh',
                   'Imported meshes carry no feature provenance; every facet is source-file data.'
                 )
@@ -5543,9 +5544,9 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
             );
             edited.lineage ??=
               rederivePrimitiveDirectEditLineage(kernel, edited, producer) ??
-              brepKitHashOnlyLineage(
+              remusHashOnlyLineage(
                 'direct-edit',
-                'BrepKit does not expose a complete direct-edit output relation.'
+                'Remus does not expose a complete direct-edit output relation.'
               );
             result.shapes.set(feature.data.targetBodyId, edited);
             break;
@@ -5627,7 +5628,7 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
                   );
                 }
               }
-              // BrepKit's STEP reader normalizes every length to millimetres
+              // Remus's STEP reader normalizes every length to millimetres
               // using the file's declared unit, but the document speaks its
               // own unit everywhere downstream (exports multiply by
               // UNIT_TO_MM). A non-mm document must adopt the solids at
@@ -5647,7 +5648,7 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
               result.importedStepDiagnostics.set(feature.bodyId, diagnostics);
               result.shapes.set(feature.bodyId, {
                 solids,
-                lineage: createBrepKitImportedStepLineage(
+                lineage: createRemusImportedStepLineage(
                   feature.featureId,
                   solids.flatMap((solid) =>
                     topologyCandidatesForSolid(kernel, solid)
@@ -5774,7 +5775,7 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
               result.consumed.add(targetBodyId);
               result.shapes.set(feature.bodyId, {
                 solids: [solid],
-                lineage: brepKitHashOnlyLineage(
+                lineage: remusHashOnlyLineage(
                   'boolean',
                   `The stored extrusion ${operation} does not expose a verified output topology relation.`
                 )
@@ -5912,12 +5913,12 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
                 'Mirror plane normal must be finite and non-zero.'
               );
             }
-            const operations = createBrepKitModelingOperations(kernel);
+            const operations = createRemusModelingOperations(kernel);
             result.shapes.set(feature.bodyId, {
               solids: target.solids.map((targetSolid) =>
                 operations.mirror({ targetSolid, planePoint, planeNormal })
               ),
-              lineage: brepKitHashOnlyLineage(
+              lineage: remusHashOnlyLineage(
                 'mirror',
                 'The pinned bridge does not expose a complete reflected topology relation.'
               )
@@ -5949,7 +5950,7 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
               scope,
               'shell thickness'
             );
-            const solid = createBrepKitModelingOperations(kernel).shell({
+            const solid = createRemusModelingOperations(kernel).shell({
               targetSolid: target.solids[0]!,
               thickness,
               openingFaces
@@ -5957,7 +5958,7 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
             result.consumed.add(feature.data.targetBodyId);
             result.shapes.set(feature.bodyId, {
               solids: [solid],
-              lineage: brepKitHashOnlyLineage(
+              lineage: remusHashOnlyLineage(
                 'shell',
                 'The pinned bridge does not expose removed, offset, and generated face relations.'
               )
@@ -5982,14 +5983,14 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
               scope,
               'solid offset distance'
             );
-            const operations = createBrepKitModelingOperations(kernel);
+            const operations = createRemusModelingOperations(kernel);
             const solids = target.solids.map((targetSolid) =>
               operations.offsetSolid({ targetSolid, distance })
             );
             result.consumed.add(feature.data.targetBodyId);
             result.shapes.set(feature.bodyId, {
               solids,
-              lineage: brepKitHashOnlyLineage(
+              lineage: remusHashOnlyLineage(
                 'solid-offset',
                 'The pinned bridge does not expose a complete offset topology relation.'
               )
@@ -6031,7 +6032,7 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
               scope,
               'draft angle'
             );
-            const solid = createBrepKitModelingOperations(kernel).draft({
+            const solid = createRemusModelingOperations(kernel).draft({
               targetSolid: target.solids[0]!,
               faces,
               pullDirection,
@@ -6041,7 +6042,7 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
             result.consumed.add(feature.data.targetBodyId);
             result.shapes.set(feature.bodyId, {
               solids: [solid],
-              lineage: brepKitHashOnlyLineage(
+              lineage: remusHashOnlyLineage(
                 'draft',
                 'Draft topology has no verified output evolution relation.'
               )
@@ -6075,14 +6076,14 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
               scope,
               'thicken distance'
             );
-            const solid = createBrepKitModelingOperations(kernel).thicken({
+            const solid = createRemusModelingOperations(kernel).thicken({
               sourceSolid: target.solids[0]!,
               face: face!,
               thickness
             });
             result.shapes.set(feature.bodyId, {
               solids: [solid],
-              lineage: brepKitHashOnlyLineage(
+              lineage: remusHashOnlyLineage(
                 'thicken',
                 'Thicken topology has no verified output evolution relation.'
               )
@@ -6404,7 +6405,7 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
             );
             result.shapes.set(feature.bodyId, {
               solids: [solid],
-              lineage: brepKitHashOnlyLineage(
+              lineage: remusHashOnlyLineage(
                 'boolean',
                 'The production boolean result may be face-unified after the kernel operation, so no unverified history payload is accepted.'
               )
@@ -6475,7 +6476,7 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
               ? rederiveCylinderModifierLineage(kernel, modified, feature)
               : null;
             const evolutionLineage = evolution
-              ? createBrepKitModifierEvolutionLineage({
+              ? createRemusModifierEvolutionLineage({
                   producingFeatureId: feature.featureId,
                   operation: feature.data.featureKind,
                   payload: evolution,
@@ -6497,8 +6498,8 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
             const verifiedLineages = [
               cylinderFallbackLineage,
               evolutionLineage
-            ].filter((lineage): lineage is BrepKitLineageState => !!lineage);
-            const verifiedLineage = mergeBrepKitLineageStates(verifiedLineages);
+            ].filter((lineage): lineage is RemusLineageState => !!lineage);
+            const verifiedLineage = mergeRemusLineageStates(verifiedLineages);
             result.consumed.add(feature.data.targetBodyId);
             result.shapes.set(feature.bodyId, {
               solids: [modified],
@@ -6507,7 +6508,7 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
                 verifiedLineage.edgeReferences.size > 0 ||
                 verifiedLineage.diagnostics.length > 0
                   ? verifiedLineage
-                  : brepKitHashOnlyLineage(
+                  : remusHashOnlyLineage(
                       feature.data.featureKind,
                       'No generated face passed the construction-history, exact support-witness, and uniqueness checks.'
                     )
@@ -6683,7 +6684,7 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
    * silently on a neighbouring face.
    */
   private resolveDirectEditFace(
-    kernel: BrepKernel,
+    kernel: RemusKernel,
     target: ExactShape,
     solid: number,
     operation: DirectEditOperation
@@ -6732,7 +6733,7 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
   }
 
   private resolveFaceByFingerprint(
-    kernel: BrepKernel,
+    kernel: RemusKernel,
     solid: number,
     faceHash: number
   ): number {
@@ -6760,12 +6761,12 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
    * it is wider, or fusing the annulus between the two radii when it is
    * narrower. Both forms are exact and produce identical volumes — see the
    * cross-kernel agreement test — but the single boolean skips the plug fuse,
-   * which BrepKit frequently declines to do analytically. The extension past
+   * which Remus frequently declines to do analytically. The extension past
    * both ends is OpenCascade's, so a hole through a slanted opening is trimmed
    * identically on either kernel.
    */
   private resizeThroughHole(
-    kernel: BrepKernel,
+    kernel: RemusKernel,
     solid: number,
     face: number,
     operation: Extract<DirectEditOperation, { kind: 'resize-through-hole' }>,
@@ -6883,7 +6884,7 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
    * Remove the feature the selected face belongs to.
    *
    * A through-hole is closed by fusing a plug of its own radius, exactly as
-   * OpenCascade does. Anything else goes to BrepKit's `defeature`, which
+   * OpenCascade does. Anything else goes to Remus's `defeature`, which
    * rebuilds the body from the planes of the faces it keeps and therefore
    * only accepts a body whose every remaining face is planar. That
    * precondition is checked before the call so an unsupported selection is
@@ -6892,7 +6893,7 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
    * body with the wrong walls.
    */
   private removeFaceFeature(
-    kernel: BrepKernel,
+    kernel: RemusKernel,
     solid: number,
     face: number,
     geometry: FaceGeometry | undefined,
@@ -6901,7 +6902,7 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
     if (geometry?.surfaceType !== operation.sourceSurfaceType) {
       throw new Error('Selected face no longer matches its recorded surface.');
     }
-    // Face area comes from BrepKit's bounded-deflection integration rather
+    // Face area comes from Remus's bounded-deflection integration rather
     // than an exact surface integral, so it is compared at the same relative
     // tolerance the planar offset uses. The centre is a vertex centroid and
     // is exact, so it keeps the direct-edit tolerance.
@@ -6946,7 +6947,7 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
     );
     if (nonPlanar.size > 0) {
       throw new Error(
-        `Removing a ${geometry.surfaceType} face needs BrepKit's defeature operation, which only supports bodies whose every remaining face is planar; this body still has ${[...nonPlanar].sort().join(', ')} faces.`
+        `Removing a ${geometry.surfaceType} face needs Remus's defeature operation, which only supports bodies whose every remaining face is planar; this body still has ${[...nonPlanar].sort().join(', ')} faces.`
       );
     }
     if (keptFaces.length < 4) {
@@ -6977,7 +6978,7 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
   }
 
   /**
-   * History-backed direct edits on the BrepKit path. Planar offsets and
+   * History-backed direct edits on the Remus path. Planar offsets and
    * cylindrical resizes are the kernel's own `pushPullFace` and
    * `resizeCylindricalFace`; through-hole resizes and feature removals build
    * their own tools from the selected face's analytic geometry. Each derives
@@ -6988,7 +6989,7 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
    * closed instead of editing the wrong face.
    */
   private applyDirectEdit(
-    kernel: BrepKernel,
+    kernel: RemusKernel,
     target: ExactShape,
     operation: DirectEditOperation,
     scope: Record<string, number>,
@@ -7065,7 +7066,7 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
           `Offsetting the face by ${offset} does not produce a valid solid.`
         );
       }
-      // Closure and volume checks still accept BrepKit's triangulated fallback.
+      // Closure and volume checks still accept Remus's triangulated fallback.
       // Preserve the last exact body instead of committing/exporting its facets.
       const facetFallback = directEditFacetFallbackWarning({
         operands: sourceCensus,
@@ -7134,7 +7135,7 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
           `Resizing the blend to radius ${newRadius} does not produce a valid solid.`
         );
       }
-      let lineage: BrepKitLineageState | undefined;
+      let lineage: RemusLineageState | undefined;
       if (newRadius > GEOMETRY_EPSILON) {
         const candidates = topologyCandidatesForSolid(kernel, output);
         const matching = candidates.filter((candidate) => {
@@ -7161,7 +7162,7 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
           );
         }
         if (matching.length === 1 && producingFeatureId) {
-          lineage = createBrepKitSemanticLineage(
+          lineage = createRemusSemanticLineage(
             producingFeatureId,
             'direct-edit',
             [
@@ -7265,7 +7266,7 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
   }
 
   private measureShape(
-    kernel: BrepKernel,
+    kernel: RemusKernel,
     shape: ExactShape,
     strictBooleanValidation = false
   ): MeasuredShape {
@@ -7275,7 +7276,7 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
     const vertices: number[] = [];
     const indices: number[] = [];
     const lineageDiagnostics =
-      shape.lineage?.diagnostics.map(projectBrepKitLineageDiagnostic) ?? [];
+      shape.lineage?.diagnostics.map(projectRemusLineageDiagnostic) ?? [];
     const topology: BodyTopology = { faces: [], edges: [] };
     const bbox = {
       min: { x: Infinity, y: Infinity, z: Infinity },
@@ -7364,7 +7365,7 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
               status: 'unsupported',
               topologyId: reference.lineageName,
               featureId: reference.producingFeatureId,
-              message: `BrepKit face lineage ${reference.lineageName} no longer matches its exact measured witness.`
+              message: `Remus face lineage ${reference.lineageName} no longer matches its exact measured witness.`
             });
           }
           faceHashByHandle.set(handle, hash);
@@ -7421,7 +7422,7 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
               status: 'unsupported',
               topologyId: reference.lineageName,
               featureId: reference.producingFeatureId,
-              message: `BrepKit edge lineage ${reference.lineageName} no longer matches its exact measured witness.`
+              message: `Remus edge lineage ${reference.lineageName} no longer matches its exact measured witness.`
             });
           }
           const points = edgePositions.slice(
@@ -7498,7 +7499,7 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
 
   async syncDocument(document: ProjectDocument): Promise<DerivedState> {
     const { sources, pinned } = await this.prefetchImportSources(document);
-    const kernel = new BrepKernel();
+    const kernel = new RemusKernel();
     try {
       const build = this.build(kernel, document, sources, pinned);
       const bodies = listNodesByKind(document, 'body');
@@ -7552,7 +7553,7 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
               body.name,
               imported.flagged.length,
               imported.declaredSolidCount,
-              'BrepKit'
+              'Remus'
             )
           );
         }
@@ -7624,7 +7625,7 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
     bodyIds: BodyId[]
   ): Promise<string> {
     const { sources, pinned } = await this.prefetchImportSources(document);
-    const kernel = new BrepKernel();
+    const kernel = new RemusKernel();
     try {
       const build = this.build(kernel, document, sources, pinned);
       const solids = bodyIds.flatMap((bodyId) => {
@@ -7662,7 +7663,7 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
     bodyIds: BodyId[]
   ): Promise<string> {
     const { sources, pinned } = await this.prefetchImportSources(document);
-    const kernel = new BrepKernel();
+    const kernel = new RemusKernel();
     try {
       const build = this.build(kernel, document, sources, pinned);
       const solids = bodyIds.flatMap((bodyId) => {
@@ -7731,7 +7732,7 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
     volume: number;
     reason?: string;
   }> {
-    const kernel = new BrepKernel();
+    const kernel = new RemusKernel();
     try {
       const bytes =
         typeof data === 'string'
@@ -7786,13 +7787,13 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
   }
 
   dispose(): void {
-    // Each operation owns and releases a short-lived BrepKernel instance, so
+    // Each operation owns and releases a short-lived RemusKernel instance, so
     // there is nothing adapter-scoped left to release.
   }
 }
 
 /**
- * BrepKit builds every document, imported STEP included.
+ * Remus builds every document, imported STEP included.
  *
  * Until Z3 a document carrying an `imported-step` feature rerouted WHOLE to
  * OpenCascade, so an import and everything modelled on top of it were built by
@@ -7805,5 +7806,5 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
 export async function createExactKernelAdapter(
   options: ExactKernelAdapterOptions = {}
 ): Promise<ExactKernelAdapter> {
-  return new BrepKitKernelAdapter(options);
+  return new RemusKernelAdapter(options);
 }

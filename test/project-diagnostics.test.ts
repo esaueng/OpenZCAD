@@ -9,8 +9,8 @@ import {
 } from '../apps/web/src/lib/projectDiagnostics';
 
 const BUILD = {
-  brepkitVersion: '2.129.0',
-  brepkitCommit: 'd3754bd2805d2fb174b6325a55a2b446e280dd74'
+  remusVersion: '2.129.0',
+  remusCommit: 'd3754bd2805d2fb174b6325a55a2b446e280dd74'
 };
 const CAPTURED_AT = '2026-07-30T12:00:00.000Z';
 
@@ -74,9 +74,9 @@ describe('project diagnostic export', () => {
       formatVersion: PROJECT_DIAGNOSTIC_FORMAT_VERSION,
       capturedAt: CAPTURED_AT,
       kernel: {
-        adapter: 'brepkit',
-        packageVersion: BUILD.brepkitVersion,
-        sourceCommit: BUILD.brepkitCommit
+        adapter: 'remus',
+        packageVersion: BUILD.remusVersion,
+        sourceCommit: BUILD.remusCommit
       }
     });
     expect(bundle.document.projectId).toBe('project_diagnostic');

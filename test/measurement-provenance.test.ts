@@ -5,7 +5,7 @@
  * ladder, and today `faceArea` and `edgeLength` are graded identically even
  * though only one of them is exact. Before that ladder can be corrected — and
  * before a face perimeter is published at all — the actual behaviour of the
- * PINNED BrepKit build has to be measured rather than inferred from doc
+ * PINNED Remus build has to be measured rather than inferred from doc
  * comments, because the two claims that mattered most both turned out to be
  * wrong in this file's first run.
  *
@@ -29,15 +29,15 @@
  */
 
 import { afterAll, describe, expect, it } from 'vitest';
-import { BrepKernel } from '../packages/kernel-adapter/node_modules/brepkit-wasm/brepkit_wasm.js';
+import { RemusKernel } from '../packages/kernel-adapter/src/remus-runtime';
 
 /** The deflection `exact.ts` passes for every published measurement. */
 const MEASUREMENT_DEFLECTION = 0.08;
 
-let kernel: BrepKernel | null = null;
+let kernel: RemusKernel | null = null;
 
-function useKernel(): BrepKernel {
-  kernel ??= new BrepKernel();
+function useKernel(): RemusKernel {
+  kernel ??= new RemusKernel();
   return kernel;
 }
 

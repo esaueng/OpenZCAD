@@ -9,7 +9,7 @@ describe('workflow runner policy', () => {
       'cloudflare.yml': ['ubuntu-latest', 'ubuntu-latest'],
       'macos-desktop.yml': ['macos-26'],
       'production-health.yml': ['ubuntu-latest'],
-      'update-brepkit.yml': ['ubuntu-latest']
+      'update-remus.yml': ['ubuntu-latest']
     };
     const workflowPaths = readdirSync(workflowDirectory)
       .filter((path) => path.endsWith('.yml') || path.endsWith('.yaml'))

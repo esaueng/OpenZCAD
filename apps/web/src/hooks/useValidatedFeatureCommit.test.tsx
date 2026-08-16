@@ -46,7 +46,7 @@ const TANGENT_BOSS_DIAGNOSTIC =
   'Union dropped geometry from operand "Boss Body": the result\'s maximum z is 8 mm, but the operand reaches 16 mm (8 mm missing). A cylindrical boss can trigger this kernel failure at exact tangency; move the operand slightly off tangency while keeping positive overlap, then try again.';
 
 /**
- * BrepKit's own verdict for `test/parity/corpus/f-hostile-dangling-reference.step`,
+ * Remus's own verdict for `test/parity/corpus/f-hostile-dangling-reference.step`,
  * pinned against the kernel in `test/step-import-rejection.test.ts`. It is the
  * text a refused import has to reach the user with, unparaphrased.
  */

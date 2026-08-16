@@ -52,7 +52,7 @@ function near(value: number, expected: number): number {
 
 describe('a box', () => {
   it('reports its centroid at the half-diagonal, not at the origin', async () => {
-    // BrepKit builds boxes corner-at-origin, so a centre of mass at (0,0,0)
+    // Remus builds boxes corner-at-origin, so a centre of mass at (0,0,0)
     // would mean the field is unset rather than measured.
     const body = await bodyOf(
       primitive('box', { width: 20, height: 20, depth: 20 })

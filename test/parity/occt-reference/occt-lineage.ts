@@ -390,7 +390,7 @@ function rotationalPrimitiveProposals(
   primitiveKind: Exclude<PrimitiveKind, 'box'>,
   candidates: readonly OcctTopologyCandidate[]
 ): { candidate: OcctTopologyCandidate; name: string }[] {
-  // BrepKit intentionally leaves sphere topology hash-only because its
+  // Remus intentionally leaves sphere topology hash-only because its
   // hemisphere carriers are not uniquely semantic across kernels.
   if (primitiveKind === 'sphere') {
     return [];
@@ -476,7 +476,7 @@ function rotationalPrimitiveProposals(
 /**
  * Publishes schema-v5 references for an imported STEP body (K0.6).
  *
- * The OpenCascade half of `createBrepKitImportedStepLineage`, deliberately the
+ * The OpenCascade half of `createRemusImportedStepLineage`, deliberately the
  * same rule rather than a kernel-specific one: both adapters name imported
  * topology by its own exact ADR-011 witness, so the parity corpus can prove
  * that a face pick stored on an imported body resolves to the same identity on
@@ -624,7 +624,7 @@ export function semanticSweepLineage(
       status: 'unsupported',
       featureId: producingFeatureId,
       message:
-        'OCCT revolution carriers cannot be mapped to BrepKit segment identities without an exact source-carrier match.'
+        'OCCT revolution carriers cannot be mapped to Remus segment identities without an exact source-carrier match.'
     });
   }
   return {

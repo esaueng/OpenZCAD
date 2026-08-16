@@ -1,5 +1,5 @@
 /**
- * BrepKit's topology-history surface, characterized against the pinned kernel.
+ * Remus's topology-history surface, characterized against the pinned kernel.
  *
  * `verifyCompleteBrepEvolution` is the load-bearing assertion here and it is
  * deliberately a SET equality, not a count: the failure it exists to catch is
@@ -15,15 +15,10 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
-// Note this reaches the kernel by relative path rather than by the
-// `brepkit-wasm` specifier, so `vitest.config.ts`'s `BREPKIT_WASM_PKG`
-// override does NOT apply here — running this file against a candidate pin
-// needs the pin actually installed. Worth knowing before trusting a green
-// run as evidence about a pin you thought you had swapped in.
 import {
-  BrepKernel,
+  RemusKernel,
   type FaceEvolutionPayloadV1
-} from '../packages/kernel-adapter/node_modules/brepkit-wasm/brepkit_wasm.js';
+} from '../packages/kernel-adapter/src/remus-runtime';
 
 interface BrepEvolution {
   solid: number;
@@ -73,21 +68,21 @@ function handleMap(value: unknown, label: string): Record<string, number[]> {
   return result;
 }
 
-/** Strictly decode the runtime contract that the generated BrepKit types omit. */
+/** Strictly decode the runtime contract that the generated Remus types omit. */
 function parseBrepEvolution(value: unknown): BrepEvolution {
   if (typeof value !== 'string') {
-    throw new Error('BrepKit evolution must be returned as JSON text.');
+    throw new Error('Remus evolution must be returned as JSON text.');
   }
   const parsed: unknown = JSON.parse(value);
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-    throw new Error('BrepKit evolution must be an object.');
+    throw new Error('Remus evolution must be an object.');
   }
   const root = parsed as Record<string, unknown>;
   if (!Number.isInteger(root.solid) || (root.solid as number) < 0) {
-    throw new Error('BrepKit evolution has no result solid handle.');
+    throw new Error('Remus evolution has no result solid handle.');
   }
   if (!root.evolution || typeof root.evolution !== 'object') {
-    throw new Error('BrepKit evolution has no evolution record.');
+    throw new Error('Remus evolution has no evolution record.');
   }
   const evolution = root.evolution as Record<string, unknown>;
   return {
@@ -118,7 +113,7 @@ function expectSameSet(actual: Iterable<number>, expected: Iterable<number>) {
 }
 
 function verifyCompleteBrepEvolution(
-  kernel: BrepKernel,
+  kernel: RemusKernel,
   sourceSolids: number[],
   payload: BrepEvolution
 ) {
@@ -174,7 +169,7 @@ function verifyCompleteBrepEvolution(
 }
 
 function verifyCompleteFaceEvolution(
-  kernel: BrepKernel,
+  kernel: RemusKernel,
   sourceSolid: number,
   payload: FaceEvolutionPayloadV1
 ) {
@@ -245,16 +240,23 @@ function verifyCompleteFaceEvolution(
 
 describe('topology-lineage kernel spike', () => {
   it('pins the declared history surface and its type gaps', () => {
-    const brepDeclarations = readFileSync(
-      resolve(
-        'packages/kernel-adapter/node_modules/brepkit-wasm/brepkit_wasm.d.ts'
-      ),
+    const packageRoot = resolve(
+      'packages/kernel-adapter/node_modules/remus-wasm'
+    );
+    const manifest = JSON.parse(
+      readFileSync(resolve(packageRoot, 'package.json'), 'utf8')
+    ) as { types?: unknown };
+    if (typeof manifest.types !== 'string') {
+      throw new Error('remus-wasm does not declare a TypeScript entry point.');
+    }
+    const remusDeclarations = readFileSync(
+      resolve(packageRoot, manifest.types),
       'utf8'
     );
-    expect(brepDeclarations).toMatch(
+    expect(remusDeclarations).toMatch(
       /export interface FaceEvolutionPayloadV1\s*{[^}]*schemaVersion: number;[^}]*source: EvolutionShapeV1;[^}]*result: EvolutionShapeV1;[^}]*evolution: FaceEvolutionClaimsV1;/s
     );
-    expect(brepDeclarations).toContain(
+    expect(remusDeclarations).toContain(
       'export function decodeEvolutionPayload(json: string): FaceEvolutionPayloadV1;'
     );
     for (const method of [
@@ -262,22 +264,22 @@ describe('topology-lineage kernel spike', () => {
       'cutWithEvolution',
       'intersectWithEvolution'
     ]) {
-      expect(brepDeclarations).toMatch(
+      expect(remusDeclarations).toMatch(
         new RegExp(`${method}\\([^;]+\\): any;`)
       );
     }
     for (const method of ['filletWithEvolution', 'chamferWithEvolution']) {
-      expect(brepDeclarations).toMatch(
+      expect(remusDeclarations).toMatch(
         new RegExp(`${method}\\([^;]+\\): FaceEvolutionPayloadV1;`)
       );
       expect(
-        (BrepKernel.prototype as unknown as Record<string, unknown>)[method]
+        (RemusKernel.prototype as unknown as Record<string, unknown>)[method]
       ).toBeTypeOf('function');
     }
   });
 
-  it('characterizes primitive, sweep, transform, boolean, fillet, and chamfer behavior in BrepKit', () => {
-    const kernel = new BrepKernel();
+  it('characterizes primitive, sweep, transform, boolean, fillet, and chamfer behavior in Remus', () => {
+    const kernel = new RemusKernel();
     try {
       const primitive = kernel.makeBox(10, 10, 10);
       expect(Array.from(kernel.getSolidFaces(primitive))).toHaveLength(6);

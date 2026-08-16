@@ -14,7 +14,7 @@ import {
 
 /**
  * Two operations a user can reach from the toolbar both went wrong on a
- * sphere, and on nothing else. brepkit#65 fixed both, and this file was
+ * sphere, and on nothing else. Historical BrepKit #65 fixed both, and this file was
  * flipped from a pair of `it.fails` tripwires to positive pins.
  *
  * PRODUCT-level: everything runs through `syncDocument`, so the volume is the
@@ -171,7 +171,7 @@ describe('a sphere under boolean and offset', () => {
       const { faces, surfaces, triangles, warnings } =
         await cutWithDisjointTool('sphere', { radius: SPHERE_R });
       expect(surfaces).toEqual(new Set(['sphere']));
-      // Two hemispheres, which is how BrepKit builds a sphere.
+      // Two hemispheres, which is how Remus builds a sphere.
       expect(faces).toBe(2);
       // And it uses the kernel's tolerance-driven analytic-sphere mesh, not
       // the 2588-plane polyhedron the old path substituted.

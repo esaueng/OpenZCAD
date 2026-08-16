@@ -1,7 +1,7 @@
 /**
  * The post-boolean face-count census.
  *
- * BrepKit's booleans can abandon exact surface intersection on sliver and
+ * Remus's booleans can abandon exact surface intersection on sliver and
  * near-tangent contacts — thin glyph stems and touching letters produce
  * exactly that — and return a triangulated, all-planar approximation instead.
  * The result is watertight, passes validation, and has a plausible volume and

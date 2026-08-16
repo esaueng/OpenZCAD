@@ -166,7 +166,7 @@ and shader compilation:
 three.js    29 ms   <- all application JS combined
 ```
 
-### Wave 3 confirmation, and what the drag probe does *not* measure (2026-08-07)
+### Wave 3 confirmation, and what the drag probe does _not_ measure (2026-08-07)
 
 Re-run on the M5 SwiftShader environment described above, after the whole
 edge-consolidation and selection-rebuild programme had landed:
@@ -197,12 +197,12 @@ pointer moves, so the interval between rendered proxy frames is bounded below
 by how fast the harness delivers input. Removing only that sleep, changing
 nothing in the application:
 
-| Metric               | With 10 ms sleep | With 0 ms sleep |
-| -------------------- | ---------------: | --------------: |
-| Frame interval p50   |          44.2 ms |         33.2 ms |
-| Frame interval p95   |         182.6 ms |         58.3 ms |
-| Input-to-frame p50   |           0.6 ms |          0.8 ms |
-| Rendered proxy frames |              40 |              40 |
+| Metric                | With 10 ms sleep | With 0 ms sleep |
+| --------------------- | ---------------: | --------------: |
+| Frame interval p50    |          44.2 ms |         33.2 ms |
+| Frame interval p95    |         182.6 ms |         58.3 ms |
+| Input-to-frame p50    |           0.6 ms |          0.8 ms |
+| Rendered proxy frames |               40 |              40 |
 
 The residual 33.2 ms is two frames at this environment's 16.6 ms, with 40
 frames produced from 80 moves — one render per animation frame, which is
@@ -228,11 +228,11 @@ twice as zero-length segments until the first edge hover, and every scene
 rebuild brought them back. Bisected to the visual-selection phases: PR #293
 added ~1,968 triangles and PR #295 ~1,969 more.
 
-| Metric | `d8561c7` (pre-vsel) | `ef77d45` (regressed) | Fixed |
-| --- | ---: | ---: | ---: |
-| Frame time p50 | 16.7 ms | 24.9 ms | 16.7 ms |
-| Mean draw calls | 11.58 | 13.9 | 12.32 |
-| Mean triangles | 2,801 | 6,530 | 2,595 |
+| Metric          | `d8561c7` (pre-vsel) | `ef77d45` (regressed) |   Fixed |
+| --------------- | -------------------: | --------------------: | ------: |
+| Frame time p50  |              16.7 ms |               24.9 ms | 16.7 ms |
+| Mean draw calls |                11.58 |                  13.9 |   12.32 |
+| Mean triangles  |                2,801 |                 6,530 |   2,595 |
 
 **New scenarios.** `hover sweep`, `move drag`, and `preview drag` join the
 orbit/pan probe and the cylinder proxy. Each reports `reactCommits`
@@ -243,12 +243,12 @@ refined gesture should commit on its lifecycle edges and nowhere in between.
 
 Baseline on the M5 SwiftShader environment, 2026-08-12, after the fix above:
 
-| Scenario | Frame p50 | Frame p95 | React commits | Note |
-| --- | ---: | ---: | ---: | --- |
-| Orbit + pan | 16.7 ms | 25.0 ms | — | camera only |
-| Hover sweep (121 moves) | 16.7 ms | 25.0 ms | **0** | fully imperative |
-| Move drag (60 moves) | 25.0 ms | 33.4 ms | **61** | one commit per pointer move |
-| Preview drag (50 moves) | 25.0 ms | 508.4 ms | 10 | scene teardown per publish |
+| Scenario                | Frame p50 | Frame p95 | React commits | Note                        |
+| ----------------------- | --------: | --------: | ------------: | --------------------------- |
+| Orbit + pan             |   16.7 ms |   25.0 ms |             — | camera only                 |
+| Hover sweep (121 moves) |   16.7 ms |   25.0 ms |         **0** | fully imperative            |
+| Move drag (60 moves)    |   25.0 ms |   33.4 ms |        **61** | one commit per pointer move |
+| Preview drag (50 moves) |   25.0 ms |  508.4 ms |            10 | scene teardown per publish  |
 
 The last two rows are the measurement this wave existed to get. Hover is the
 reference for what the interaction stack does when it behaves: 121 pointer
@@ -260,7 +260,7 @@ batches, hover state, and the shadow map are all torn down mid-gesture.
 
 **Read `frames` before reading `frameTimeMs` in these scenarios.** The mark
 records the interval since the previous rendered frame, and the viewport
-renders on demand. Removing a redundant invalidation therefore *raises*
+renders on demand. Removing a redundant invalidation therefore _raises_
 `frameTimeMs` while lowering the work done, because the loop simply idles
 longer between frames. Memoizing the viewport's array props (below) took the
 move drag from 121 rendered frames to 61 for the same 60 pointer moves — one
@@ -274,15 +274,15 @@ The preview-drag scenario's p95 was read as the scene teardown that happens on
 every published preview. Instrumenting each step of that path on the Heat Sink
 offset drag rules that out, and rules out everything else on the main thread:
 
-| Path | Cost across the whole drag |
-| --- | ---: |
-| Scene rebuild (`oz:viewer.bodies`) | 8 ms total, 2.9 ms max, over 4 rebuilds |
-| `LivePreview.build()` | 8 ms total, 1 ms max |
-| `postMessage` serialization | 3 ms total |
-| `publish()` | 0 ms |
-| Dimension labels, CSS2D render, callout clamp | 35 ms total over 131 frames |
-| `renderer.render` | 319 ms over 131 frames, 38 ms max |
-| Worker round trip | 74–211 ms, of which 60–138 ms is kernel compute |
+| Path                                          |                      Cost across the whole drag |
+| --------------------------------------------- | ----------------------------------------------: |
+| Scene rebuild (`oz:viewer.bodies`)            |         8 ms total, 2.9 ms max, over 4 rebuilds |
+| `LivePreview.build()`                         |                            8 ms total, 1 ms max |
+| `postMessage` serialization                   |                                      3 ms total |
+| `publish()`                                   |                                            0 ms |
+| Dimension labels, CSS2D render, callout clamp |                     35 ms total over 131 frames |
+| `renderer.render`                             |               319 ms over 131 frames, 38 ms max |
+| Worker round trip                             | 74–211 ms, of which 60–138 ms is kernel compute |
 
 The same drag contains six long tasks of 500–693 ms. A move drag, which runs
 no kernel preview, contains one of 71 ms — so the stalls do belong to the
@@ -301,12 +301,12 @@ Answering the question the section above ends on. Identical build and probes,
 run headed on the same machine so the renderer is ANGLE Metal on the Apple M5
 Pro rather than SwiftShader:
 
-| Scenario | Frame p50 | Frame p95 | Frame max | React commits |
-| --- | ---: | ---: | ---: | ---: |
-| Orbit + pan | 8.3 ms | 8.9 ms | 16.8 ms | — |
-| Hover sweep (121 moves) | 8.4 ms | 16.7 ms | 17.6 ms | 0 |
-| Move drag (60 moves) | 16.7 ms | 17.6 ms | 91.7 ms | 2 |
-| Preview drag (50 moves) | 8.4 ms | 25.1 ms | 33.5 ms | 6 |
+| Scenario                | Frame p50 | Frame p95 | Frame max | React commits |
+| ----------------------- | --------: | --------: | --------: | ------------: |
+| Orbit + pan             |    8.3 ms |    8.9 ms |   16.8 ms |             — |
+| Hover sweep (121 moves) |    8.4 ms |   16.7 ms |   17.6 ms |             0 |
+| Move drag (60 moves)    |   16.7 ms |   17.6 ms |   91.7 ms |             2 |
+| Preview drag (50 moves) |    8.4 ms |   25.1 ms |   33.5 ms |             6 |
 
 Cylinder-radius input-to-frame stays at 0.9 ms p50, and the coalescing probe
 still collapses 120 synthetic moves into 2 applications.
@@ -388,7 +388,7 @@ was never exercised here. It needs a durable project against the real API.
 ### P-03 — bundle size
 
 The kernels remain off the UI thread and are now lazy at both boundaries: an
-empty project does not import the exact adapter/BrepKit. (OCCT was a second
+empty project does not import the exact adapter/Remus. (OCCT was a second
 lazy boundary for STEP work when this was measured; Z3 removed it — see the
 note under the table.) A fresh Vite 8.1.5
 production build on 2026-07-31 emitted the following current entry and worker
@@ -420,18 +420,26 @@ chunks (decimal kB, using Vite's gzip report):
 > `capability.kernel === 'occt'` branch that could never be true after Z3.
 > Deleting them is the last of it:
 >
-> | Measure | Before Z5 | After Z5 | Delta |
-> | --- | ---: | ---: | ---: |
-> | `assets/index-*.js` raw | 400,750 B | 400,429 B | −321 B |
-> | `assets/index-*.js` gzip | 114,840 B | 114,690 B | −150 B |
-> | All reported assets, raw | 10,174,485 B | 10,174,164 B | −321 B |
-> | `apps/web/dist` on disk | 12,292,594 B | 12,292,273 B | −321 B |
-> | Files matching `occt`/`opencascade` | 1 | **0** | — |
+> | Measure                             |    Before Z5 |     After Z5 |  Delta |
+> | ----------------------------------- | -----------: | -----------: | -----: |
+> | `assets/index-*.js` raw             |    400,750 B |    400,429 B | −321 B |
+> | `assets/index-*.js` gzip            |    114,840 B |    114,690 B | −150 B |
+> | All reported assets, raw            | 10,174,485 B | 10,174,164 B | −321 B |
+> | `apps/web/dist` on disk             | 12,292,594 B | 12,292,273 B | −321 B |
+> | Files matching `occt`/`opencascade` |            1 |        **0** |      — |
 >
 > So the honest accounting is: Z3 banked 22,088 kB; Z5 banks 321 bytes and the
 > property that the shipped bundle contains no OpenCascade at all. What Z5
 > actually recovers is source, not payload — see the Z5 entry in
 > `docs/kernel-execution-plan.md` for the line counts.
+
+> **ADR-020 Remus migration (2026-08-15), measured on the migration branch.**
+> The pinned `esaueng/remus@20ac744` package emits a 7,605.80 kB raw / 2,522.82
+> kB gzip lazy WASM asset. The prior 6,815,744-byte kernel ceiling rejected the
+> build; the explicit kernel-only ceiling is now 8 MiB, leaving 782,806 bytes
+> of headroom. The asset remains absent from launcher HTML and loads only with
+> non-empty geometry. All reported assets total 13,290,327 bytes raw / 4,241,003
+> bytes gzip for this build.
 
 The three eager UI assets total about 362.9 kB gzip. PDF worker/runtime assets
 are emitted separately and are loaded only when reference-document support is
@@ -483,12 +491,12 @@ safety behavior only.
 Before changing the bounds or claiming a performance win, collect on the same
 target machine and browser:
 
-1. cold first non-empty rebuild, including `loading-brepkit`;
+1. cold first non-empty rebuild, including `loading-remus`;
 2. warm identical-document cache hit;
 3. canonical edit miss versus derived-only hit;
 4. eviction latency after 8+ representative documents;
 5. retained worker heap with large embedded STEP sources; and
-6. BrepKit first-load time for a STEP document (this used to read "OCCT";
+6. Remus first-load time for a STEP document (this used to read "OCCT";
    after Z3 it is the same load as line 1, since one kernel builds imports).
 
 Report median and p95 separately, include document byte size/body/face counts,

@@ -14,11 +14,16 @@ and `test/kernel-seam.test.ts` still hold BrepKit and OpenCascade to the same
 identities while OCCT survives as a reference. The Context section is left as
 written, because it is the record of why this was decided.
 
+**Amended 2026-08-15 (ADR-020).** Remus replaced the production BrepKit
+dependency without changing this identity contract. BrepKit references below
+name the historical producer and legacy hashes; current rebuilds use Remus and
+must continue resolving those persisted values.
+
 ## Context
 
 OpenZCAD builds every document on one of two exact kernels: BrepKit normally,
 OpenCascade whenever the document contains a STEP import. Adding or removing a
-STEP feature therefore reroutes the *entire* document between kernels, and any
+STEP feature therefore reroutes the _entire_ document between kernels, and any
 persisted topology reference — fillet/chamfer edge hashes, direct-edit face
 hashes — must resolve identically on both. Before this ADR, BrepKit persisted
 geometric fingerprints while OpenCascade persisted 1-based traversal ordinals

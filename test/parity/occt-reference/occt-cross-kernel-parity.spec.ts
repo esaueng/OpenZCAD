@@ -28,7 +28,7 @@ import { inspectTriangleMeshClosure } from '../../../packages/kernel-adapter/src
 import { OcctStepKernelAdapter } from './occt-step';
 
 /**
- * The two kernels are separate types — `kind: 'brepkit'` against
+ * The two kernels are separate types — `kind: 'remus'` against
  * `kind: 'occt'` — so a comparison holds them by the operation it uses rather
  * than by a shared adapter type. That is the whole surface these tests need.
  */
@@ -160,34 +160,34 @@ describe('cross-kernel agreement on modelled documents', () => {
     documents.push({ document: plate.document, bodyId: plate.bodyId });
 
     for (const { document, bodyId } of documents) {
-      const onBrepKit = await adapter.syncDocument(document);
+      const onRemus = await adapter.syncDocument(document);
       const onOcct = await occt.syncDocument(document);
-      expect(onBrepKit.warnings).toEqual([]);
+      expect(onRemus.warnings).toEqual([]);
       expect(onOcct.warnings).toEqual([]);
-      const brepkitEdges = onBrepKit.bodyRepresentations[
+      const remusEdges = onRemus.bodyRepresentations[
         bodyId
       ]!.topology!.edges.map((edge) => edge.hash).sort((a, b) => a - b);
       const occtEdges = onOcct.bodyRepresentations[bodyId]!.topology!.edges.map(
         (edge) => edge.hash
       ).sort((a, b) => a - b);
-      expect(occtEdges).toEqual(brepkitEdges);
+      expect(occtEdges).toEqual(remusEdges);
 
-      const brepkitFaces = onBrepKit.bodyRepresentations[
+      const remusFaces = onRemus.bodyRepresentations[
         bodyId
       ]!.topology!.faces.map((face) => face.hash).sort((a, b) => a - b);
       const occtFaces = onOcct.bodyRepresentations[bodyId]!.topology!.faces.map(
         (face) => face.hash
       ).sort((a, b) => a - b);
-      expect(occtFaces).toEqual(brepkitFaces);
+      expect(occtFaces).toEqual(remusFaces);
       // Non-vacuous: a body with no published topology would satisfy every
       // equality above. Each of these three has both faces and edges.
-      expect(brepkitFaces.length).toBeGreaterThan(0);
-      expect(brepkitEdges.length).toBeGreaterThan(0);
+      expect(remusFaces.length).toBeGreaterThan(0);
+      expect(remusEdges.length).toBeGreaterThan(0);
     }
   }, 120_000);
 
   it('builds the same text solid from exact beziers on both kernels', async () => {
-    // The `'bezier'` region-curve kind reaches BrepKit through
+    // The `'bezier'` region-curve kind reaches Remus through
     // `liftCurve2dToPlane` and OpenCascade through `makeBezierEdge` — two
     // different constructions of the same curve, and the OCCT one had no
     // coverage at all. Same document, same volume, both watertight.

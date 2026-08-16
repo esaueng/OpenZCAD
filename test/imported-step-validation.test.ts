@@ -3,7 +3,7 @@
  *
  * Two things are pinned here that the parity corpus can only observe from the
  * outside — the taxonomy's decision table, and the adapter behaviour that
- * follows from it. The corpus proves BrepKit and OpenCascade agree; this proves
+ * follows from it. The corpus proves Remus and OpenCascade agree; this proves
  * WHY they agree, so a change to the rule fails here with a readable message
  * rather than as a baseline diff.
  */
@@ -18,7 +18,7 @@ import { CommandManager, commandFactories } from '@openzcad/command-system';
 import { createProjectDocument } from '@openzcad/document-core';
 import { toUserId, type BodyRepresentation } from '@openzcad/shared';
 
-import { BrepKitKernelAdapter } from '../packages/kernel-adapter/src/exact';
+import { RemusKernelAdapter } from '../packages/kernel-adapter/src/exact';
 import {
   classifyImportedSolid,
   importedStepDroppedSolidWarning,
@@ -129,11 +129,12 @@ describe('imported STEP solid taxonomy', () => {
   });
 
   it('names the defect when nothing survives the import', () => {
-    expect(importedStepNoSolidError(['solid 1 (5 faces): it is an open shell']))
-      .toBe(
-        'STEP file contains no closed solids: solid 1 (5 faces): it is an ' +
-          'open shell.'
-      );
+    expect(
+      importedStepNoSolidError(['solid 1 (5 faces): it is an open shell'])
+    ).toBe(
+      'STEP file contains no closed solids: solid 1 (5 faces): it is an ' +
+        'open shell.'
+    );
   });
 
   it('names the dropped solid when the rest of the file survives', () => {
@@ -146,17 +147,17 @@ describe('imported STEP solid taxonomy', () => {
   });
 
   it('reports the kernel that objected in the partial-success warning', () => {
-    expect(importedStepValidationWarning('Part', 1, 1, 'BrepKit')).toContain(
-      'but its STEP solid has BrepKit B-rep validity issues'
+    expect(importedStepValidationWarning('Part', 1, 1, 'Remus')).toContain(
+      'but its STEP solid has Remus B-rep validity issues'
     );
   });
 });
 
-describe('BrepKit STEP import validation', () => {
-  let adapter: BrepKitKernelAdapter;
+describe('Remus STEP import validation', () => {
+  let adapter: RemusKernelAdapter;
 
   beforeAll(() => {
-    adapter = new BrepKitKernelAdapter();
+    adapter = new RemusKernelAdapter();
   });
   afterAll(() => {
     adapter.dispose();
@@ -225,11 +226,11 @@ describe('BrepKit STEP import validation', () => {
 });
 
 describe('imported STEP topology witnesses', () => {
-  let adapter: BrepKitKernelAdapter;
+  let adapter: RemusKernelAdapter;
   let box: BodyRepresentation;
 
   beforeAll(async () => {
-    adapter = new BrepKitKernelAdapter();
+    adapter = new RemusKernelAdapter();
     const derived = await adapter.syncDocument(
       importDocument(corpusStep('a-export-box'), 'witness-box')
     );
@@ -280,7 +281,7 @@ describe('imported STEP topology witnesses', () => {
 
   /**
    * Fail-closed, not best-effort: two faces with the same exact witness cannot
-   * be told apart, so neither is named. A sphere exported by BrepKit is the
+   * be told apart, so neither is named. A sphere exported by Remus is the
    * corpus case — its two hemispherical patches share a witness.
    */
   it('publishes no reference for topology it cannot name one-to-one', async () => {

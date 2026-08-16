@@ -18,7 +18,7 @@ interface HoverFaceState {
 }
 
 const REBUILDING =
-  /Starting geometry worker|Loading exact BrepKit kernel|Rebuilding exact geometry|Waiting for exact geometry|Exact geometry is still rebuilding/i;
+  /Starting geometry worker|Loading exact Remus kernel|Rebuilding exact geometry|Waiting for exact geometry|Exact geometry is still rebuilding/i;
 
 async function probeFace(
   canvas: Locator,

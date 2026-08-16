@@ -11,11 +11,11 @@ const DIAGNOSTIC_USER_ID = toUserId('user_diagnostic');
 const REDACTED_TIMESTAMP = '1970-01-01T00:00:00.000Z';
 
 export const PROJECT_DIAGNOSTIC_FORMAT = 'openzcad-project-diagnostic' as const;
-export const PROJECT_DIAGNOSTIC_FORMAT_VERSION = 1 as const;
+export const PROJECT_DIAGNOSTIC_FORMAT_VERSION = 2 as const;
 
 export interface ProjectDiagnosticBuild {
-  brepkitVersion: string;
-  brepkitCommit: string;
+  remusVersion: string;
+  remusCommit: string;
 }
 
 export interface ProjectDiagnosticBundle {
@@ -23,7 +23,7 @@ export interface ProjectDiagnosticBundle {
   formatVersion: typeof PROJECT_DIAGNOSTIC_FORMAT_VERSION;
   capturedAt: string;
   kernel: {
-    adapter: 'brepkit';
+    adapter: 'remus';
     packageVersion: string;
     sourceCommit: string;
   };
@@ -145,9 +145,9 @@ export function createProjectDiagnosticBundle(
     formatVersion: PROJECT_DIAGNOSTIC_FORMAT_VERSION,
     capturedAt,
     kernel: {
-      adapter: 'brepkit',
-      packageVersion: build.brepkitVersion,
-      sourceCommit: build.brepkitCommit
+      adapter: 'remus',
+      packageVersion: build.remusVersion,
+      sourceCommit: build.remusCommit
     },
     document: diagnosticDocument,
     observedResult: {

@@ -7,16 +7,17 @@ authoritative dependency inventory.
 
 ## Geometry kernels
 
-- **BrepKit / `brepkit-wasm` 3.2.32** — Copyright its contributors;
-  AGPL-3.0-only, with separate commercial licensing available from its
-  licensor. Source and license texts: <https://github.com/esaueng/brepkit>.
+- **Remus / `remus-wasm` 2.130.0** — Copyright its contributors; Apache-2.0
+  as declared by the pinned package. OpenZCAD installs the committed WASM
+  package from an immutable Remus commit recorded in `pnpm-lock.yaml`.
+  Source and license text: <https://github.com/esaueng/remus>.
 - **`occt-wasm` 3.8.1 build tooling and TypeScript wrapper** — Copyright its
   contributors; MIT OR Apache-2.0. Source:
   <https://github.com/andymai/occt-wasm>.
 - **Open CASCADE Technology compiled WebAssembly output** — LGPL-2.1-only as
   identified by `occt-wasm`; OCCT is distributed under LGPL-2.1 with the OCCT
-  additional exception. OpenZCAD loads the unmodified WASM component
-  separately in a browser worker. License and source information:
+  additional exception. It is used by the development parity corpus and is
+  not emitted in the production OpenZCAD bundle. License and source information:
   <https://dev.opencascade.org/resources/download/occt-public-license> and
   <https://github.com/Open-Cascade-SAS/OCCT>.
 

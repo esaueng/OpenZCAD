@@ -4,7 +4,7 @@ Two suites, run separately.
 
 ## 1. Scenario harness (`parity.test.ts`) — part of the root vitest run
 
-The acceptance benchmark for the BrepKit kernel: real modeling sessions
+The acceptance benchmark for the Remus kernel: real modeling sessions
 (the workspace demos plus stress scenarios) replayed headless through the
 exact kernel adapter, held to a per-body acceptance bar — zero sync warnings,
 watertight/manifold meshes (edge-use census on body meshes and exported STL),
@@ -18,8 +18,8 @@ pnpm exec vitest run test/parity
 # Rerecord baselines after an intentional geometry change
 OPENZCAD_WRITE_PARITY_BASELINES=1 pnpm exec vitest run test/parity
 
-# Run against a local brepkit build without touching the lockfile
-BREPKIT_WASM_PKG=/abs/path/to/brepkit/crates/wasm/pkg pnpm exec vitest run test/parity
+# Run against a local remus build without touching the lockfile
+REMUS_WASM_PKG=/abs/path/to/remus/crates/wasm/pkg pnpm exec vitest run test/parity
 ```
 
 Known kernel defects are **pinned**, not skipped: `expectedBuildFailure` /
@@ -30,7 +30,7 @@ are rerecorded. Per-scenario wall-clock lands in `last-run-timings.json`
 
 ## 2. STEP + geometry parity corpus (`corpus.spec.ts`) — its own CI job
 
-Categorized STEP files measured through **both** kernels (BrepKit and
+Categorized STEP files measured through **both** kernels (Remus and
 OpenCascade) so the deltas between them are recorded rather than argued about.
 This is the Z1.3 gate that blocks the STEP routing flip (Z3) and the OCCT
 deletion (Z5).
@@ -47,7 +47,7 @@ including how to add a file and how to re-record, is in
 [`corpus/README.md`](./corpus/README.md).
 
 The corpus's most valuable output is [`corpus-pins.ts`](./corpus-pins.ts): every
-recorded BrepKit-vs-OCCT delta and every kernel-vs-arithmetic deviation, each
+recorded Remus-vs-OCCT delta and every kernel-vs-arithmetic deviation, each
 naming the file, the metric, both literal values, and the plan item
 (K0.1 / K0.2 / K0.4 / K0.5 / K0.6) that owns closing it. Start there.
 

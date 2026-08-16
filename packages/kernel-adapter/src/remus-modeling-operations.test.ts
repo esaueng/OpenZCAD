@@ -1,7 +1,7 @@
-import { BrepKernel } from 'brepkit-wasm';
+import { RemusKernel } from './remus-runtime';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { createBrepKitModelingOperations } from './brepkit-modeling-operations';
+import { createRemusModelingOperations } from './remus-modeling-operations';
 
 const DEFLECTION = 0.001;
 
@@ -12,7 +12,7 @@ interface SolidReading {
   readonly validationErrors: number;
 }
 
-function readSolid(kernel: BrepKernel, solid: number): SolidReading {
+function readSolid(kernel: RemusKernel, solid: number): SolidReading {
   return {
     bounds: Array.from(kernel.boundingBox(solid)),
     faces: Array.from(kernel.getSolidFaces(solid)),
@@ -21,7 +21,7 @@ function readSolid(kernel: BrepKernel, solid: number): SolidReading {
   };
 }
 
-function topFace(kernel: BrepKernel, solid: number): number {
+function topFace(kernel: RemusKernel, solid: number): number {
   const matches = Array.from(kernel.getSolidFaces(solid)).filter((face) => {
     const normal = Array.from(kernel.getFaceNormal(face));
     return (
@@ -36,7 +36,7 @@ function topFace(kernel: BrepKernel, solid: number): number {
   return matches[0]!;
 }
 
-function sortedVertexPositions(kernel: BrepKernel, solid: number): number[][] {
+function sortedVertexPositions(kernel: RemusKernel, solid: number): number[][] {
   return Array.from(kernel.getSolidVertices(solid), (vertex) =>
     Array.from(kernel.getVertexPosition(vertex), (coordinate) =>
       Number(coordinate.toFixed(9))
@@ -52,11 +52,11 @@ function sortedVertexPositions(kernel: BrepKernel, solid: number): number[][] {
   });
 }
 
-describe('BrepKit modeling operations', () => {
-  let kernel: BrepKernel;
+describe('Remus modeling operations', () => {
+  let kernel: RemusKernel;
 
   beforeEach(() => {
-    kernel = new BrepKernel();
+    kernel = new RemusKernel();
   });
 
   afterEach(() => {
@@ -66,7 +66,7 @@ describe('BrepKit modeling operations', () => {
   it('mirrors a box across a translated, rotated plane without changing the input', () => {
     const source = kernel.makeBox(10, 20, 30);
     const before = readSolid(kernel, source);
-    const operations = createBrepKitModelingOperations(kernel);
+    const operations = createRemusModelingOperations(kernel);
     const inverseSqrtTwo = 1 / Math.sqrt(2);
 
     const mirrored = operations.mirror({
@@ -98,7 +98,7 @@ describe('BrepKit modeling operations', () => {
   it('shells a box through a unique opening face without changing the input', () => {
     const source = kernel.makeBox(10, 20, 30);
     const before = readSolid(kernel, source);
-    const operations = createBrepKitModelingOperations(kernel);
+    const operations = createRemusModelingOperations(kernel);
 
     const shelled = operations.shell({
       targetSolid: source,
@@ -118,7 +118,7 @@ describe('BrepKit modeling operations', () => {
   it('offsets a box outward with offsetSolidV2 without changing the input', () => {
     const source = kernel.makeBox(10, 20, 30);
     const before = readSolid(kernel, source);
-    const operations = createBrepKitModelingOperations(kernel);
+    const operations = createRemusModelingOperations(kernel);
 
     const offset = operations.offsetSolid({ targetSolid: source, distance: 1 });
 
@@ -154,7 +154,7 @@ describe('BrepKit modeling operations', () => {
       validateSolid: kernel.validateSolid.bind(kernel),
       volume: kernel.volume.bind(kernel)
     };
-    const operations = createBrepKitModelingOperations(brokenKernel);
+    const operations = createRemusModelingOperations(brokenKernel);
 
     expect(() =>
       operations.mirror({
@@ -166,7 +166,7 @@ describe('BrepKit modeling operations', () => {
     // A kernel that returns the input handle is refused before the volume
     // gate, so the two failure modes stay distinguishable.
     expect(() =>
-      createBrepKitModelingOperations({
+      createRemusModelingOperations({
         ...brokenKernel,
         mirror: () => source
       }).mirror({
@@ -179,7 +179,7 @@ describe('BrepKit modeling operations', () => {
     expect(
       readSolid(
         kernel,
-        createBrepKitModelingOperations(kernel).mirror({
+        createRemusModelingOperations(kernel).mirror({
           targetSolid: source,
           planePoint: { x: 0, y: 0, z: 0 },
           planeNormal: { x: 1, y: 0, z: 0 }
@@ -190,7 +190,7 @@ describe('BrepKit modeling operations', () => {
 
   it('rejects invalid mirror planes and zero or non-finite distances', () => {
     const source = kernel.makeBox(10, 20, 30);
-    const operations = createBrepKitModelingOperations(kernel);
+    const operations = createRemusModelingOperations(kernel);
     const point = { x: 0, y: 0, z: 0 };
 
     expect(() =>
@@ -235,7 +235,7 @@ describe('BrepKit modeling operations', () => {
     const other = kernel.makeBox(4, 4, 4);
     const opening = topFace(kernel, source);
     const foreign = topFace(kernel, other);
-    const operations = createBrepKitModelingOperations(kernel);
+    const operations = createRemusModelingOperations(kernel);
 
     expect(() =>
       operations.shell({ targetSolid: source, thickness: 1, openingFaces: [] })
@@ -266,7 +266,7 @@ describe('BrepKit modeling operations', () => {
   it('refuses oversized walls and offsets before calling the kernel', () => {
     const source = kernel.makeBox(10, 20, 30);
     const before = readSolid(kernel, source);
-    const operations = createBrepKitModelingOperations(kernel);
+    const operations = createRemusModelingOperations(kernel);
 
     expect(() =>
       operations.shell({
@@ -286,11 +286,11 @@ describe('BrepKit modeling operations', () => {
     const vertical = kernel.makeBox(5, 20, 10);
     const source = kernel.fuse(horizontal, vertical);
     const before = readSolid(kernel, source);
-    const operations = createBrepKitModelingOperations(kernel);
+    const operations = createRemusModelingOperations(kernel);
 
     expect(() =>
       operations.offsetSolid({ targetSolid: source, distance: 0.5 })
-    ).toThrow(/BrepKit solid offset refused/);
+    ).toThrow(/Remus solid offset refused/);
     expect(readSolid(kernel, source)).toEqual(before);
   });
 });
