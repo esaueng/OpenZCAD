@@ -1,5 +1,9 @@
 # Kernel execution plan (companion to kernel-roadmap.md)
 
+> Historical execution record. ADR-020 replaces the production kernel with
+> Remus; BrepKit names, package paths, issue references, pins, and measurements
+> below are retained as evidence of the work completed at that time.
+
 **Date:** 2026-08-01
 **Status:** detailed workstream specs for the roadmap in
 `docs/kernel-roadmap.md`. That doc says _what and why_; this one says _how_:

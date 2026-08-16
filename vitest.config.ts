@@ -23,19 +23,19 @@ const workspaceAliases = Object.fromEntries(
 );
 
 /**
- * Kernel overlay for the parity harness: point BREPKIT_WASM_PKG at a local
- * brepkit `crates/wasm/pkg` build to run every kernel test against it
- * without touching package.json or the lockfile. `exact.ts` is the sole
- * `brepkit-wasm` import site, so one alias swaps the kernel completely.
+ * Kernel overlay for the parity harness: point REMUS_WASM_PKG at a local
+ * remus `crates/wasm/pkg` build to run every kernel test against it
+ * without touching package.json or the lockfile. `remus-runtime.ts` is the
+ * runtime seam, so one package alias swaps the kernel completely.
  */
-const brepkitOverlay = process.env.BREPKIT_WASM_PKG
-  ? { 'brepkit-wasm': `${process.env.BREPKIT_WASM_PKG}/brepkit_wasm.js` }
+const remusOverlay = process.env.REMUS_WASM_PKG
+  ? { 'remus-wasm': process.env.REMUS_WASM_PKG }
   : {};
 
 export default defineConfig({
   test: {
     environment: 'node',
-    // Exact-kernel suites instantiate large OCCT/BrepKit WASM modules. Keep
+    // Exact-kernel suites instantiate large OCCT/Remus WASM modules. Keep
     // file-level parallelism bounded so CI does not turn kernel startup into
     // unrelated five-second test timeouts under CPU and memory contention.
     maxWorkers: 4,
@@ -56,7 +56,7 @@ export default defineConfig({
   },
   resolve: {
     alias: {
-      ...brepkitOverlay,
+      ...remusOverlay,
       '@openzcad/kernel-adapter/exact': fileURLToPath(
         new URL('./packages/kernel-adapter/src/exact.ts', import.meta.url)
       ),

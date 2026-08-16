@@ -277,7 +277,7 @@ function faceCensusDetail(
 /**
  * The signal that a boolean silently fell back to a faceted result.
  *
- * BrepKit's booleans can abandon exact surface intersection on sliver and
+ * Remus's booleans can abandon exact surface intersection on sliver and
  * near-tangent contacts and return a triangulated, all-planar approximation
  * instead — which is exactly what thin glyph stems and touching letters
  * produce. That result is watertight, valid, has a plausible volume, and its

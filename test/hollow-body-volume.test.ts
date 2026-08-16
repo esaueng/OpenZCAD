@@ -24,7 +24,7 @@ import {
  * cylinder — it IS the solid cylinder, exactly. That is what identified it as
  * a dropped shell rather than an integration error.
  *
- * brepkit#61 fixed it. `try_analytic_solid_volume` is the FIRST rung of
+ * Historical BrepKit #61 fixed it. `try_analytic_solid_volume` is the FIRST rung of
  * `solid_volume`'s fast-path ladder and read its face list from
  * `solid.outer_shell()` alone, so a cavity carried as an INNER shell was
  * invisible and the outer wall still matched the primitive recogniser. Four
@@ -107,7 +107,7 @@ describe('a body with an enclosed void', () => {
     // The cavity is a BOX rather than a cylinder deliberately: every face
     // here is planar, so nothing is tessellated and the closed form is exact.
     // A cylindrical cavity reads 3.0e-5 high instead, which is the inscribed
-    // mesh, not a defect -- brepkit#61 records the same residual class, since
+    // mesh, not a defect -- historical BrepKit #61 records the same residual class, since
     // the recogniser now refuses on an inner shell and defers to a mesh path.
     document = transformBody(document, {
       name: 'Seat the cavity fully inside',
@@ -156,7 +156,7 @@ describe('a body with an enclosed void', () => {
   });
 
   it('leaves a hollowed box alone, which was always correct', async () => {
-    // The scope control. brepkit#61 established that only bodies whose outer
+    // The scope control. Historical BrepKit #61 established that only bodies whose outer
     // shell alone is a recognisable primitive were ever affected, so this one
     // measured correctly before the fix as well. If it ever moves, the fix
     // has reached further than it was supposed to.

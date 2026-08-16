@@ -28,11 +28,11 @@ Several roadmap items already have working foundations:
   snapshot-only: `frameForPlaneRef` returns the stored frame verbatim and the
   fingerprint fields are written once and never read.
 - Multi-profile extrusion is implemented on both kernels.
-- Planar face offsets work through BrepKit and OpenCascade.
-- BrepKit supports cylindrical hole and boss radius edits (BrepKit-only; the
+- Planar face offsets work through Remus and OpenCascade.
+- Remus supports cylindrical hole and boss radius edits (Remus-only; the
   OCCT adapter rejects them).
 - Complete through-holes support recognition, resize, and removal on both
-  kernels. BrepKit refuses the hole-closing fill where its boolean falls back
+  kernels. Remus refuses the hole-closing fill where its boolean falls back
   to a mesh, and refuses `defeature` on any body that is not all-planar.
 - ADR-011 cross-kernel fingerprints are implemented and fail closed on
   zero-or-many matches. The closed-B-spline/NURBS exclusion is emergent
@@ -236,7 +236,7 @@ Likely ownership:
 Work — the spike must answer three questions explicitly, because the pinned
 kernel's evolution surface is narrower than lineage requires:
 
-1. **Geometric-matching acceptability.** The pinned brepkit-wasm commit
+1. **Geometric-matching acceptability.** The pinned remus-wasm commit
    exposes `fuseWithEvolution`, `cutWithEvolution`, `intersectWithEvolution`,
    and `filletWithEvolution`, but the fillet variant documents its provenance
    as matched geometrically (face normal + centroid) — exactly the
@@ -245,7 +245,7 @@ kernel's evolution surface is narrower than lineage requires:
    _input_ when re-verified with ADR-011-style quantized exact comparisons,
    or whether a kernel bridge change is required.
 2. **Coverage gaps.** No evolution API exists for chamfer, pattern, or
-   direct edits. Identify which operations need new BrepKit bridge APIs and
+   direct edits. Identify which operations need new Remus bridge APIs and
    which can be derived (e.g. transforms are one-to-one).
 3. **The `deleted` channel.** The typed `EvolutionResult` carries only
    `generated`/`modified`; deleted topology appears only in the untyped JSON
@@ -422,7 +422,7 @@ rather than blocking the wave.
 `topology-lineage.ts` and `topology-fingerprint.ts` are integrator-owned in
 this wave; Agents A and B consume but do not edit them.
 
-### Agent A: BrepKit lineage propagation
+### Agent A: Remus lineage propagation
 
 - Primitive semantic faces and edges.
 - Extrude/revolve caps and source-profile sides.
@@ -436,7 +436,7 @@ this wave; Agents A and B consume but do not edit them.
 ### Agent B: OpenCascade lineage propagation
 
 - Equivalent semantic identity and propagation.
-- Cross-kernel parity with BrepKit.
+- Cross-kernel parity with Remus.
 - STEP boundaries remain hash-only unless reliable feature provenance exists.
 - Cross-kernel rerouting must preserve lineage or fail closed.
 - Implement the explicit closed-B-spline/NURBS surface-class guard designed
@@ -492,15 +492,15 @@ the non-production config before lease rollout steps.
 Add typed worker states:
 
 - `starting`
-- `loading-brepkit`
+- `loading-remus`
 - `loading-occt`
 - `rebuilding`
 - `ready`
 - `failed`
 
-BrepKit is currently loaded eagerly at worker module scope, so
-`loading-brepkit` is defined here as a forward-compatible state the worker
-may pass through instantly; it becomes meaningful when Wave 5 makes BrepKit
+Remus is currently loaded eagerly at worker module scope, so
+`loading-remus` is defined here as a forward-compatible state the worker
+may pass through instantly; it becomes meaningful when Wave 5 makes Remus
 lazy. Today's worker (135 lines) has no state machine, no job queue, and
 swallows kernel-load failure into a silent fallback.
 
@@ -539,9 +539,9 @@ agents do not collide in it.
 
 Note the current adapter asymmetry, which this wave's parity work must
 resolve deliberately rather than assume: cylindrical hole/boss resize is
-BrepKit-only.
+Remus-only.
 
-### Agent A: BrepKit mirror, shell, and solid offset
+### Agent A: Remus mirror, shell, and solid offset
 
 Use the pinned kernel's exact `mirror`, `shell`, and `offsetSolidV2` APIs
 (all confirmed present in the pinned commit's typings; none currently used).
@@ -612,7 +612,7 @@ Freeze:
 Every operation passes:
 
 - create, edit, undo, redo, delete, reload, and replay;
-- BrepKit/OCCT conformance within scale-aware tolerances;
+- Remus/OCCT conformance within scale-aware tolerances;
 - valid STEP export and reimport;
 - mm, cm, m, and inch coverage — note this extends current fixtures, which
   cover mm and inch only; cm and m fixtures are new work;
@@ -744,16 +744,16 @@ project lease, or partially apply an invalid operation.
 ### Agent B: Kernel loading and caching
 
 - Keep worker bootstrap small.
-- Make BrepKit lazy: it is currently a static import instantiated at worker
+- Make Remus lazy: it is currently a static import instantiated at worker
   module scope before any message arrives. Load it only when exact geometry
-  is required, activating the Wave 2 `loading-brepkit` state.
+  is required, activating the Wave 2 `loading-remus` state.
 - Load OpenCascade only for STEP work (already lazy via dynamic import).
 - Add bounded in-flight/result caching keyed by canonical content excluding
   `derived` (no caching of any kind exists today; every sync constructs and
   frees a fresh kernel).
 - Verify immutable caching for hashed WASM/static assets in beta.
 - Do not add a service worker solely for caching.
-- Spike BrepKit feature-prefix caching only after lineage stabilizes.
+- Spike Remus feature-prefix caching only after lineage stabilizes.
 - Keep OpenCascade on result caching until retained-handle lifetime is proven
   safe.
 
@@ -883,7 +883,7 @@ Resolved by technical review; recorded here as frozen defaults.
 
 ## Principal risks
 
-- Boolean/generated-shape lineage may require a new BrepKit bridge API;
+- Boolean/generated-shape lineage may require a new Remus bridge API;
   chamfer, pattern, and direct-edit propagation have no evolution API today,
   and fillet evolution provenance is geometric matching that must be
   re-verified rather than trusted.

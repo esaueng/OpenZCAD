@@ -120,13 +120,12 @@ const OPERATION_CAPABILITIES: Readonly<
   draft: {
     status: 'unsupported',
     fallback: 'hash-only',
-    reason: 'BrepKit does not expose a verified draft face evolution relation.'
+    reason: 'Remus does not expose a verified draft face evolution relation.'
   },
   thicken: {
     status: 'unsupported',
     fallback: 'hash-only',
-    reason:
-      'BrepKit does not expose a verified thicken face evolution relation.'
+    reason: 'Remus does not expose a verified thicken face evolution relation.'
   },
   /**
    * Fillet is derived only for generated blend faces whose construction
