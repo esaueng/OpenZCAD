@@ -94,7 +94,7 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
     workerRef.current = worker;
     worker.onmessage = (event: MessageEvent<GeometryWorkerResult>) => {
       if (event.data.type === 'state') {
-        if (event.data.phase === 'loading-brepkit') {
+        if (event.data.phase === 'loading-remus') {
           mark('kernel.loading');
         } else if (
           event.data.phase === 'ready' &&

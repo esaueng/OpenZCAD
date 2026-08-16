@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 /**
- * BrepKit STEP-import memory/time profiling harness.
+ * Remus STEP-import memory/time profiling harness.
  *
- * Answers: how large a STEP file can the shipped brepkit-wasm kernel import,
+ * Answers: how large a STEP file can the shipped remus-wasm kernel import,
  * and what does peak wasm linear memory look like as file size grows? This is
  * the measurement behind raising the 12 MB import gate in App.tsx.
  *
@@ -15,8 +15,8 @@
  *    shrinks, so `memory.buffer.byteLength` after the import IS the high-water
  *    mark — but only if the instance starts cold.
  *  - The child captures the wasm memory object by wrapping
- *    `WebAssembly.Instance` before requiring brepkit_wasm_node.cjs.
- *  - BrepKit enforces hostile-input budgets (128 MiB input / 2M entities by
+ *    `WebAssembly.Instance` before requiring the package's Node entry point.
+ *  - Remus enforces hostile-input budgets (128 MiB input / 2M entities by
  *    default). When the default-budget call fails, the child retries with
  *    explicit maxInputBytes/maxEntities to learn whether the wasm API allows
  *    raising them or clamps to the production defaults.
@@ -45,10 +45,18 @@ import { fileURLToPath } from 'node:url';
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(scriptDir, '..');
-const BREPKIT_CJS = path.join(
+const REMUS_PACKAGE_JSON = path.join(
   repoRoot,
-  'packages/kernel-adapter/node_modules/brepkit-wasm/brepkit_wasm_node.cjs'
+  'packages/kernel-adapter/node_modules/remus-wasm/package.json'
 );
+
+function remusNodeEntry() {
+  const manifest = JSON.parse(fs.readFileSync(REMUS_PACKAGE_JSON, 'utf8'));
+  if (typeof manifest.main !== 'string' || manifest.main.length === 0) {
+    throw new Error('remus-wasm does not declare a Node entry point.');
+  }
+  return path.join(path.dirname(REMUS_PACKAGE_JSON), manifest.main);
+}
 
 // Matches the app's display tessellation for a bracket-sized (~60 mm) part:
 // linear = extent * DISPLAY_LINEAR_DEFLECTION_RATIO (2e-4), angular = 0.06.
@@ -136,7 +144,10 @@ function generateRung(seed, targetBytes, outPath) {
   }
   const { header, data, footer, stride } = seed;
   const copyBytes = Buffer.byteLength(data);
-  const copies = Math.max(1, Math.ceil((targetBytes - header.length) / copyBytes));
+  const copies = Math.max(
+    1,
+    Math.ceil((targetBytes - header.length) / copyBytes)
+  );
   const fd = fs.openSync(outPath, 'w');
   try {
     fs.writeSync(fd, header);
@@ -183,9 +194,9 @@ function runChild(filePath, withMesh) {
     }
   };
   const require = createRequire(import.meta.url);
-  let brepkit;
+  let remus;
   try {
-    brepkit = require(BREPKIT_CJS);
+    remus = require(remusNodeEntry());
   } finally {
     WebAssembly.Instance = OriginalInstance;
   }
@@ -193,7 +204,7 @@ function runChild(filePath, withMesh) {
   const memBytes = () => memory?.buffer.byteLength ?? null;
 
   const bytes = fs.readFileSync(filePath);
-  const kernel = new brepkit.BrepKernel();
+  const kernel = new remus.BrepKernel();
   result.wasmMemBaseBytes = memBytes();
 
   let handles = null;
@@ -202,10 +213,10 @@ function runChild(filePath, withMesh) {
     handles = kernel.importStep(bytes);
   } catch (error) {
     result.error = String(error?.message ?? error);
-    const panic = brepkit.lastPanicMessage?.();
+    const panic = remus.lastPanicMessage?.();
     if (panic) {
       result.error += ` [panic: ${panic}]`;
-      brepkit.clearLastPanicMessage?.();
+      remus.clearLastPanicMessage?.();
     }
     // Learn whether the wasm API accepts budgets above the production
     // defaults (docs say "tighten", implying a clamp — verify it).
@@ -215,10 +226,10 @@ function runChild(filePath, withMesh) {
       result.error = null;
     } catch (retryError) {
       result.raisedBudgetError = String(retryError?.message ?? retryError);
-      const retryPanic = brepkit.lastPanicMessage?.();
+      const retryPanic = remus.lastPanicMessage?.();
       if (retryPanic) {
         result.raisedBudgetError += ` [panic: ${retryPanic}]`;
-        brepkit.clearLastPanicMessage?.();
+        remus.clearLastPanicMessage?.();
       }
     }
   }
@@ -269,9 +280,9 @@ function formatMb(bytes) {
 }
 
 function runLadder(args) {
-  if (!fs.existsSync(BREPKIT_CJS)) {
+  if (!fs.existsSync(REMUS_PACKAGE_JSON)) {
     throw new Error(
-      `brepkit-wasm not installed at ${BREPKIT_CJS} — run pnpm install first.`
+      `remus-wasm not installed at ${REMUS_PACKAGE_JSON} — run pnpm install first.`
     );
   }
   fs.mkdirSync(args.workdir, { recursive: true });
@@ -281,10 +292,7 @@ function runLadder(args) {
 
   const results = [];
   for (const sizeMb of args.sizesMb) {
-    const rungPath = path.join(
-      args.workdir,
-      `${seedStem}-${sizeMb}mb.step`
-    );
+    const rungPath = path.join(args.workdir, `${seedStem}-${sizeMb}mb.step`);
     process.stderr.write(`\n[${sizeMb} MB] generating…`);
     const generated = generateRung(seed, sizeMb * MiB, rungPath);
     process.stderr.write(
@@ -317,12 +325,9 @@ function runLadder(args) {
         error:
           child.signal === 'SIGTERM'
             ? `timed out after ${CHILD_TIMEOUT_MS / 1000}s`
-            : `child crashed (${child.signal ?? child.status}): ${(
-                child.stderr ?? ''
-              )
-                .trim()
-                .split('\n')
-                .at(-1) ?? 'no output'}`
+            : `child crashed (${child.signal ?? child.status}): ${
+                (child.stderr ?? '').trim().split('\n').at(-1) ?? 'no output'
+              }`
       };
     }
     parsed.sizeMb = sizeMb;
@@ -374,7 +379,10 @@ function printReport(results, withMesh) {
   process.stdout.write('\n');
   for (const [index, row] of rows.entries()) {
     process.stdout.write(
-      `${row.map((cell, col) => cell.padEnd(widths[col])).join('  ').trimEnd()}\n`
+      `${row
+        .map((cell, col) => cell.padEnd(widths[col]))
+        .join('  ')
+        .trimEnd()}\n`
     );
     if (index === 0) {
       process.stdout.write(

@@ -1,4 +1,4 @@
-name: Update BrepKit
+name: Update Remus
 
 on:
   workflow_dispatch:
@@ -8,7 +8,7 @@ permissions:
   pull-requests: read
 
 concurrency:
-  group: update-brepkit
+  group: update-remus
   cancel-in-progress: false
 
 jobs:
@@ -16,7 +16,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - name: Check for an existing BrepKit update PR
+      - name: Check for an existing Remus update PR
         id: existing-pr
         env:
           BASE_BRANCH: ${{ github.event.repository.default_branch }}
@@ -28,7 +28,7 @@ jobs:
               --state open \
               --base "$BASE_BRANCH" \
               --json headRefName,url \
-              --jq '[.[] | select(.headRefName | startswith("automation/brepkit-"))][0].url // empty'
+              --jq '[.[] | select(.headRefName | startswith("automation/remus-"))][0].url // empty'
           )"
 
           if [[ -n "$existing_url" ]]; then
@@ -58,22 +58,22 @@ jobs:
           node-version: 22
           cache: pnpm
 
-      - name: Resolve the newest BrepKit commit
+      - name: Resolve the newest Remus commit
         if: steps.existing-pr.outputs.skip != 'true'
         id: update
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          extract_brepkit_sha() {
+          extract_remus_sha() {
             node --input-type=module <<'NODE'
           import { readFileSync } from 'node:fs';
 
           const lockfile = readFileSync('pnpm-lock.yaml', 'utf8');
-          const pattern = /https:\/\/codeload\.github\.com\/esaueng\/brepkit\/tar\.gz\/([0-9a-f]{40})#path:\/crates\/wasm\/pkg/g;
+          const pattern = /https:\/\/codeload\.github\.com\/esaueng\/remus\/tar\.gz\/([0-9a-f]{40})#path:\/crates\/wasm\/pkg/g;
           const shas = [...new Set([...lockfile.matchAll(pattern)].map((match) => match[1]))];
 
           if (shas.length !== 1) {
-            console.error(`Expected one immutable BrepKit SHA in pnpm-lock.yaml, found ${shas.length}.`);
+            console.error(`Expected one immutable Remus SHA in pnpm-lock.yaml, found ${shas.length}.`);
             process.exit(1);
           }
 
@@ -81,21 +81,21 @@ jobs:
           NODE
           }
 
-          old_sha="$(extract_brepkit_sha)"
+          old_sha="$(extract_remus_sha)"
 
-          pnpm update brepkit-wasm --filter @openzcad/kernel-adapter --lockfile-only
+          pnpm update remus-wasm --filter @openzcad/kernel-adapter --lockfile-only
 
-          new_sha="$(extract_brepkit_sha)"
-          upstream_sha="$(gh api repos/esaueng/brepkit/commits/main --jq .sha)"
+          new_sha="$(extract_remus_sha)"
+          upstream_sha="$(gh api repos/esaueng/remus/commits/main --jq .sha)"
 
           if [[ "$new_sha" != "$upstream_sha" ]]; then
-            echo "::error title=Stale BrepKit resolution::pnpm resolved $new_sha but esaueng/brepkit main is $upstream_sha. Refusing to open a PR."
+            echo "::error title=Stale Remus resolution::pnpm resolved $new_sha but esaueng/remus main is $upstream_sha. Refusing to open a PR."
             exit 1
           fi
 
           if git diff --quiet --exit-code; then
             echo "changed=false" >> "$GITHUB_OUTPUT"
-            echo "BrepKit is already current at $new_sha; no branch or PR was created." >> "$GITHUB_STEP_SUMMARY"
+            echo "Remus is already current at $new_sha; no branch or PR was created." >> "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
 
@@ -106,12 +106,12 @@ jobs:
           fi
 
           if [[ "$old_sha" == "$new_sha" ]]; then
-            echo "::error title=Unexpected lockfile diff::pnpm-lock.yaml changed without advancing the BrepKit SHA."
+            echo "::error title=Unexpected lockfile diff::pnpm-lock.yaml changed without advancing the Remus SHA."
             exit 1
           fi
 
           package_version="$(
-            gh api "repos/esaueng/brepkit/contents/crates/wasm/pkg/package.json?ref=$new_sha" --jq .content \
+            gh api "repos/esaueng/remus/contents/crates/wasm/pkg/package.json?ref=$new_sha" --jq .content \
               | base64 --decode \
               | node --input-type=module -e '
                   import { readFileSync } from "node:fs";
@@ -135,11 +135,11 @@ jobs:
       - name: Require CI-triggering GitHub App credentials
         if: steps.existing-pr.outputs.skip != 'true' && steps.update.outputs.changed == 'true'
         env:
-          APP_CLIENT_ID: ${{ vars.BREPKIT_UPDATER_APP_CLIENT_ID }}
-          APP_PRIVATE_KEY: ${{ secrets.BREPKIT_UPDATER_APP_PRIVATE_KEY }}
+          APP_CLIENT_ID: ${{ vars.REMUS_UPDATER_APP_CLIENT_ID }}
+          APP_PRIVATE_KEY: ${{ secrets.REMUS_UPDATER_APP_PRIVATE_KEY }}
         run: |
           if [[ -z "$APP_CLIENT_ID" || -z "$APP_PRIVATE_KEY" ]]; then
-            echo "::error title=GitHub App required::Configure BREPKIT_UPDATER_APP_CLIENT_ID and BREPKIT_UPDATER_APP_PRIVATE_KEY for a repository-installed app with Contents and Pull requests write permission. The default GITHUB_TOKEN is intentionally not used to open a CI-suppressed PR."
+            echo "::error title=GitHub App required::Configure REMUS_UPDATER_APP_CLIENT_ID and REMUS_UPDATER_APP_PRIVATE_KEY for a repository-installed app with Contents and Pull requests write permission. The default GITHUB_TOKEN is intentionally not used to open a CI-suppressed PR."
             exit 1
           fi
 
@@ -148,8 +148,8 @@ jobs:
         id: app-token
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         with:
-          client-id: ${{ vars.BREPKIT_UPDATER_APP_CLIENT_ID }}
-          private-key: ${{ secrets.BREPKIT_UPDATER_APP_PRIVATE_KEY }}
+          client-id: ${{ vars.REMUS_UPDATER_APP_CLIENT_ID }}
+          private-key: ${{ secrets.REMUS_UPDATER_APP_PRIVATE_KEY }}
           permission-contents: write
           permission-pull-requests: write
 
@@ -162,7 +162,7 @@ jobs:
           NEW_SHA: ${{ steps.update.outputs.new_sha }}
           SHORT_SHA: ${{ steps.update.outputs.short_sha }}
         run: |
-          branch="automation/brepkit-$SHORT_SHA"
+          branch="automation/remus-$SHORT_SHA"
           bot_login="${APP_SLUG}[bot]"
           bot_id="$(gh api "users/$bot_login" --jq .id)"
 
@@ -182,7 +182,7 @@ jobs:
             exit 1
           fi
 
-          git commit -m "chore(deps): update BrepKit to $SHORT_SHA"
+          git commit -m "chore(deps): update Remus to $SHORT_SHA"
           git push --set-upstream origin "$branch"
           echo "branch=$branch" >> "$GITHUB_OUTPUT"
 
@@ -197,13 +197,13 @@ jobs:
           SHORT_SHA: ${{ steps.update.outputs.short_sha }}
           PACKAGE_VERSION: ${{ steps.update.outputs.package_version }}
         run: |
-          body_file="$RUNNER_TEMP/brepkit-update-pr.md"
-          compare_url="https://github.com/esaueng/brepkit/compare/$OLD_SHA...$NEW_SHA"
+          body_file="$RUNNER_TEMP/remus-update-pr.md"
+          compare_url="https://github.com/esaueng/remus/compare/$OLD_SHA...$NEW_SHA"
 
           {
             echo '## Summary'
             echo
-            echo "- update \`brepkit-wasm\` from \`$OLD_SHA\` to \`$NEW_SHA\`"
+            echo "- update \`remus-wasm\` from \`$OLD_SHA\` to \`$NEW_SHA\`"
             echo "- package version: \`$PACKAGE_VERSION\`"
             echo "- compare: $compare_url"
             echo
@@ -213,9 +213,9 @@ jobs:
             echo
             echo '## Automation and verification'
             echo
-            echo '- Detected by the daily/manual BrepKit updater using only the targeted lockfile-only pnpm update.'
-            echo '- Duplicate update PRs are prevented by the workflow concurrency group and the open `automation/brepkit-*` PR check.'
-            echo '- This GitHub App-authored PR triggers the repository pull-request CI, including lint, typecheck, coverage, web tests, parity corpus, build, Playwright, and the applicable macOS checks.'
+            echo '- Detected by the manual Remus updater using only the targeted lockfile-only pnpm update.'
+            echo '- Duplicate update PRs are prevented by the workflow concurrency group and the open `automation/remus-*` PR check.'
+            echo '- This GitHub App-authored PR triggers the repository pull-request CI, including lint, typecheck, web tests, parity corpus, build, and Playwright.'
             echo '- No deployment, publication, merge, or auto-merge was performed.'
           } > "$body_file"
 
@@ -223,5 +223,5 @@ jobs:
             --repo "$GITHUB_REPOSITORY" \
             --base "$BASE_BRANCH" \
             --head "$BRANCH" \
-            --title "chore(deps): update BrepKit to $SHORT_SHA" \
+            --title "chore(deps): update Remus to $SHORT_SHA" \
             --body-file "$body_file"

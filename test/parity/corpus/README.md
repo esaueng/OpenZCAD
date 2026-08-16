@@ -1,6 +1,6 @@
 # STEP + geometry parity corpus
 
-Categorized STEP files measured through **both** kernel adapters — BrepKit and
+Categorized STEP files measured through **both** kernel adapters — Remus and
 OpenCascade — so the deltas between them are recorded rather than argued about.
 Once OCCT is deleted (Z5) there is no fallback kernel, and this corpus becomes
 the regression harness for STEP import/export and for modeling on imported
@@ -21,8 +21,8 @@ OPENZCAD_WRITE_PARITY_BASELINES=1 pnpm test:parity-corpus
 # Regenerate the corpus .step files themselves (rare — see below)
 OPENZCAD_WRITE_PARITY_CORPUS=1 pnpm test:parity-corpus
 
-# Run against a local brepkit build without touching the lockfile
-BREPKIT_WASM_PKG=/abs/path/to/brepkit/crates/wasm/pkg pnpm test:parity-corpus
+# Run against a local remus build without touching the lockfile
+REMUS_WASM_PKG=/abs/path/to/remus/crates/wasm/pkg pnpm test:parity-corpus
 ```
 
 ## Why it is a separate vitest project
@@ -39,17 +39,17 @@ default pool. CI runs it as its own job (`corpus` in `.github/workflows/ci.yml`)
 
 ## Layout
 
-| File | What it is |
-| --- | --- |
-| `manifest.ts` | The corpus: id, category, purpose, path, and the closed-form reference volume where one exists |
-| `step-authoring.ts` | A tiny AP214 writer for the cases no exporter can produce (inch units, degree angles, missing unit context, `BREP_WITH_VOIDS`) |
-| `generate.spec.ts` | Regenerates the files; without `OPENZCAD_WRITE_PARITY_CORPUS=1` it byte-verifies the committed ones |
-| `*.step` | The corpus itself. Committed on purpose (see below) |
-| `../corpus.spec.ts` | The measurement suite: baselines, reference volumes, kernel parity |
-| `../corpus-metrics.ts` | What gets measured and how |
-| `../corpus-pins.ts` | **The pin list** — every recorded BrepKit/OCCT delta, with owning plan item |
-| `../baselines/corpus.json` | Full per-file, per-kernel record |
-| `../baselines/import-modeling.json` | Same for the import-modeling scenarios |
+| File                                | What it is                                                                                                                     |
+| ----------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
+| `manifest.ts`                       | The corpus: id, category, purpose, path, and the closed-form reference volume where one exists                                 |
+| `step-authoring.ts`                 | A tiny AP214 writer for the cases no exporter can produce (inch units, degree angles, missing unit context, `BREP_WITH_VOIDS`) |
+| `generate.spec.ts`                  | Regenerates the files; without `OPENZCAD_WRITE_PARITY_CORPUS=1` it byte-verifies the committed ones                            |
+| `*.step`                            | The corpus itself. Committed on purpose (see below)                                                                            |
+| `../corpus.spec.ts`                 | The measurement suite: baselines, reference volumes, kernel parity                                                             |
+| `../corpus-metrics.ts`              | What gets measured and how                                                                                                     |
+| `../corpus-pins.ts`                 | **The pin list** — every recorded Remus/OCCT delta, with owning plan item                                                      |
+| `../baselines/corpus.json`          | Full per-file, per-kernel record                                                                                               |
+| `../baselines/import-modeling.json` | Same for the import-modeling scenarios                                                                                         |
 
 The corpus files are **committed, not generated at measurement time**. If they
 were produced during the run, a kernel regression would silently rewrite the
@@ -57,14 +57,14 @@ very inputs meant to detect it.
 
 ## Categories
 
-| Prefix | Category | What it stresses |
-| --- | --- | --- |
-| `a-` | Exports | The `samples/` files plus adapter exports of primitives and a boolean result — the all-planar and analytic-surface baselines |
-| `b-` | Units | mm, inch via `CONVERSION_BASED_UNIT`, degree plane angles, and a file with no `GLOBAL_UNIT_ASSIGNED_CONTEXT` at all |
-| `c-` | Voids | `BREP_WITH_VOIDS` cavities, one and two |
-| `d-` | Multi-solid | Several `MANIFOLD_SOLID_BREP`s in one representation, including one mixed with a voided solid |
-| `e-` | NURBS-heavy | A blended plate written as B-splines, paired with the *same nominal shape* written analytically |
-| `f-` | Known-hostile | OCCT-authored encoding, an open shell, a dangling reference, and a file with no shape representation |
+| Prefix | Category      | What it stresses                                                                                                             |
+| ------ | ------------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| `a-`   | Exports       | The `samples/` files plus adapter exports of primitives and a boolean result — the all-planar and analytic-surface baselines |
+| `b-`   | Units         | mm, inch via `CONVERSION_BASED_UNIT`, degree plane angles, and a file with no `GLOBAL_UNIT_ASSIGNED_CONTEXT` at all          |
+| `c-`   | Voids         | `BREP_WITH_VOIDS` cavities, one and two                                                                                      |
+| `d-`   | Multi-solid   | Several `MANIFOLD_SOLID_BREP`s in one representation, including one mixed with a voided solid                                |
+| `e-`   | NURBS-heavy   | A blended plate written as B-splines, paired with the _same nominal shape_ written analytically                              |
+| `f-`   | Known-hostile | OCCT-authored encoding, an open shell, a dangling reference, and a file with no shape representation                         |
 
 `modeling-base-plate.step` sits outside the categories: it is the shared base
 body the import-modeling scenarios (`fillet-on-import`, `boolean-with-import`,
@@ -87,10 +87,11 @@ Per file, per kernel, in `../baselines/corpus.json`:
   Since K0.6 an imported body names every face and edge by its own exact
   fingerprint — an import has no feature contract to name its topology from —
   so the name set can be large. The baseline keeps the full sorted list; the
-  *comparison* folds anything over twelve names to a count plus a digest, the
+  _comparison_ folds anything over twelve names to a count plus a digest, the
   same fold the hash sets already use, so a divergence stays a pin literal
   rather than a 50 KB dump. Equality is unaffected: the digests match iff the
   name sets do.
+
 - **`inspectStep`** — the pre-import validity probe the app shows users.
 - **round-trip delta** — re-export through the same kernel, re-import, and
   record the volume/face/edge deltas plus whether the re-export kept its solid
@@ -102,10 +103,10 @@ Per file, per kernel, in `../baselines/corpus.json`:
 1. **Baseline** — each kernel still reports what it reported last time.
 2. **Reference** — where a file has a closed-form volume derived from its own
    construction, each kernel must match it. This is the only bar that can say
-   which kernel is *wrong* rather than merely different, and it is why several
+   which kernel is _wrong_ rather than merely different, and it is why several
    corpus files are hand-authored boxes: arithmetic neither implementation gets
    a vote on.
-3. **Parity** — BrepKit and OCCT agree, except exactly where `corpus-pins.ts`
+3. **Parity** — Remus and OCCT agree, except exactly where `corpus-pins.ts`
    records that they do not.
 
 ## Adding a file
@@ -116,18 +117,18 @@ Per file, per kernel, in `../baselines/corpus.json`:
    it is what makes a future delta decidable. Set `expectNoSolids` for a file
    that should not import at all.
 2. Produce the file:
-   - *hand-authored* (units, voids, malformed): add it to `authoredFiles()` in
+   - _hand-authored_ (units, voids, malformed): add it to `authoredFiles()` in
      `generate.spec.ts` using `writeBoxStepFile`. These are byte-verified on
      every run, so they cannot be edited in place.
-   - *derived* from another corpus file: add it to `derivedFiles()`. Also
+   - _derived_ from another corpus file: add it to `derivedFiles()`. Also
      byte-verified.
-   - *adapter-exported*: add the id to `EXPORTED_IDS` and a producer to the
+   - _adapter-exported_: add the id to `EXPORTED_IDS` and a producer to the
      `produce` map. These are only rewritten under
      `OPENZCAD_WRITE_PARITY_CORPUS=1`, because a kernel bump legitimately
      changes their bytes.
 3. `OPENZCAD_WRITE_PARITY_CORPUS=1 pnpm test:parity-corpus` to write it.
 4. `OPENZCAD_WRITE_PARITY_BASELINES=1 …` to record it.
-5. Run once more with no env vars. Any BrepKit/OCCT divergence now fails with
+5. Run once more with no env vars. Any Remus/OCCT divergence now fails with
    the exact pin literal to paste into `corpus-pins.ts`. Fill in the owning
    plan item and a note that says what closing it looks like.
 6. Commit the `.step` file, the manifest entry, both baselines, and any pins.
@@ -140,7 +141,7 @@ rerecord is the one operation in this lane that can erase a regression, so the
 diff is the review: every changed number should be attributable to the change
 you are making.
 
-Re-recording does *not* touch the pin list. Pins are asserted against live
+Re-recording does _not_ touch the pin list. Pins are asserted against live
 measurements in both directions, so a kernel fix turns the corpus red until the
 pin is retired by hand — which is the point.
 
@@ -154,6 +155,6 @@ hides.
 
 These deliberately do **not** join `PARITY_SCENARIOS`: each scenario is built
 twice, once per kernel, so running them in the default pool would add an OCCT
-instantiation to the fast suite. Since Z3 the BrepKit column is what the app
+instantiation to the fast suite. Since Z3 the Remus column is what the app
 itself produces for these documents, and the OCCT column is the reference it
 is checked against until Z5.

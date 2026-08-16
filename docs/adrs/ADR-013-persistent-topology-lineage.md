@@ -9,6 +9,10 @@ design over [ADR-011](ADR-011-unified-topology-identity.md); unsupported
 operations retain fail-closed hash/witness resolution rather than synthesized
 lineage.
 
+Remus superseded the production BrepKit dependency in ADR-020. The BrepKit
+names and measurements below remain the historical evidence for the lineage
+contract; the Remus adapter inherits and must preserve that behavior.
+
 ## Context
 
 ADR-011 gives a topology reference a kernel-neutral geometric fingerprint and
@@ -286,7 +290,7 @@ the kernel owes an output relation OpenZCAD cannot currently verify, so it fails
 closed. An import is not a transition at all — it is the **root** of its own
 lineage. There is no earlier body whose names could be carried across, so there
 is nothing to fail closed about. The original clause therefore governs
-provenance *through* an import, which remains unavailable, not identity *within*
+provenance _through_ an import, which remains unavailable, not identity _within_
 one, which is exactly what a stored face pick on a supplier file needs.
 
 So an `imported-step` body publishes schema-v5 references with capability
@@ -308,7 +312,7 @@ So an `imported-step` body publishes schema-v5 references with capability
 
 Both exact adapters implement the same rule rather than a kernel-specific one.
 That is deliberate and time-limited: while OpenCascade still exists, the parity
-corpus can assert that both kernels give an imported body the *same* lineage
+corpus can assert that both kernels give an imported body the _same_ lineage
 names, which is the evidence the Z3 STEP route flip needs that a pick stored
 today survives the flip. Before K0.6 neither adapter published any reference on
 an imported body, so the question could not be asked.
@@ -329,7 +333,7 @@ hash-only references, and the reason is named in code as
 
 Measured, not assumed. The solid itself is fine at every angle — one closed
 shell, `validateSolid` 0, watertight tessellation, and a volume that matches
-Pappus times `angle/360` to 1e-9. Two separate things break in the *lineage*:
+Pappus times `angle/360` to 1e-9. Two separate things break in the _lineage_:
 
 - `expectedCircleWitness` hard-codes `closed: true` and `length: 2*pi*r`. Below
   a full turn the corresponding edges are **arcs**, an `EdgeWitnessV1` variant
@@ -366,7 +370,7 @@ It must not be reversed by matching a wedge's faces geometrically.
   deletion payloads, and unsupported free-form surfaces fail closed.
 - Some operations retain hash-only behavior. This is a visible
   capability limit, not a silent approximate implementation. Partial revolve
-  is the first case where that limit was accepted *before* shipping the
+  is the first case where that limit was accepted _before_ shipping the
   feature rather than found afterwards; see the Z7 amendment.
 - The original spike remains characterization evidence. Production now uses
   only the separately reviewed safe subset; remaining bridge work does not

@@ -30,7 +30,7 @@ import {
 } from '@openzcad/document-core';
 import { toUserId, type BodyId, type ProjectDocument } from '@openzcad/shared';
 
-import { BrepKitKernelAdapter } from '../../../packages/kernel-adapter/src/exact';
+import { RemusKernelAdapter } from '../../../packages/kernel-adapter/src/exact';
 import { OcctStepKernelAdapter } from '../occt-reference/occt-step';
 
 import { CORPUS, MODELING_BASE, REPO_ROOT } from './manifest';
@@ -67,7 +67,9 @@ function readCorpus(id: string): string {
 function purposeOf(id: string): string {
   const entry = CORPUS.find((candidate) => candidate.id === id);
   if (!entry) {
-    throw new Error(`generator emits '${id}' but the manifest does not list it`);
+    throw new Error(
+      `generator emits '${id}' but the manifest does not list it`
+    );
   }
   return entry.purpose;
 }
@@ -392,11 +394,14 @@ function primitiveDocument(
   primitiveKind: 'box' | 'cylinder' | 'cone' | 'sphere',
   dimensions: Record<string, number>
 ): ProjectDocument {
-  return addPrimitiveFeature(createProjectDocument(name, GENERATOR_USER, 'mm'), {
-    name,
-    primitiveKind,
-    dimensions
-  });
+  return addPrimitiveFeature(
+    createProjectDocument(name, GENERATOR_USER, 'mm'),
+    {
+      name,
+      primitiveKind,
+      dimensions
+    }
+  );
 }
 
 function boredPlateDocument(): { document: ProjectDocument; bodyId: BodyId } {
@@ -463,12 +468,12 @@ export function verticalCornerEdgeHashes(
 }
 
 /**
- * A filleted plate built and exported through the given adapter. BrepKit
+ * A filleted plate built and exported through the given adapter. Remus
  * writes the four fillet bands as B-splines and OCCT writes them as cylinders
  * — the two encodings that make up the (e) category.
  */
 async function filletedPlateStep(
-  adapter: BrepKitKernelAdapter | OcctStepKernelAdapter,
+  adapter: RemusKernelAdapter | OcctStepKernelAdapter,
   plateStep: string
 ): Promise<string> {
   const manager = new CommandManager(
@@ -512,19 +517,19 @@ async function filletedPlateStep(
 // ---------------------------------------------------------------------------
 
 describe('parity corpus files', () => {
-  let brepkit: BrepKitKernelAdapter;
+  let remus: RemusKernelAdapter;
   let occt: OcctStepKernelAdapter;
 
   beforeAll(async () => {
     if (!WRITE) {
       return;
     }
-    brepkit = new BrepKitKernelAdapter();
+    remus = new RemusKernelAdapter();
     occt = await OcctStepKernelAdapter.create();
   }, 120_000);
 
   afterAll(() => {
-    brepkit?.dispose();
+    remus?.dispose();
     occt?.dispose();
   });
 
@@ -533,53 +538,55 @@ describe('parity corpus files', () => {
     async () => {
       const plateStep = modelingBasePlateText();
 
-      const produce: Record<(typeof EXPORTED_IDS)[number], () => Promise<string>> =
-        {
-          'a-export-box': async () => {
-            const document = primitiveDocument('Box', 'box', {
-              width: 10,
-              height: 20,
-              depth: 30
-            });
-            return brepkit.exportStep(document, [document.bodyOrder[0]!]);
-          },
-          'a-export-cylinder': async () => {
-            const document = primitiveDocument('Cylinder', 'cylinder', {
-              radius: 8,
-              height: 20
-            });
-            return brepkit.exportStep(document, [document.bodyOrder[0]!]);
-          },
-          'a-export-cone': async () => {
-            const document = primitiveDocument('Cone', 'cone', {
-              bottomRadius: 10,
-              topRadius: 0,
-              height: 10
-            });
-            return brepkit.exportStep(document, [document.bodyOrder[0]!]);
-          },
-          'a-export-sphere': async () => {
-            const document = primitiveDocument('Sphere', 'sphere', {
-              radius: 6
-            });
-            return brepkit.exportStep(document, [document.bodyOrder[0]!]);
-          },
-          'a-export-bored-plate': async () => {
-            const { document, bodyId } = boredPlateDocument();
-            await brepkit.syncDocument(document);
-            return brepkit.exportStep(document, [bodyId]);
-          },
-          'e-nurbs-fillet-plate': () => filletedPlateStep(brepkit, plateStep),
-          'e-analytic-fillet-plate': () => filletedPlateStep(occt, plateStep),
-          'f-hostile-occt-authored-box': async () => {
-            const document = primitiveDocument('Box', 'box', {
-              width: 10,
-              height: 20,
-              depth: 30
-            });
-            return occt.exportStep(document, [document.bodyOrder[0]!]);
-          }
-        };
+      const produce: Record<
+        (typeof EXPORTED_IDS)[number],
+        () => Promise<string>
+      > = {
+        'a-export-box': async () => {
+          const document = primitiveDocument('Box', 'box', {
+            width: 10,
+            height: 20,
+            depth: 30
+          });
+          return remus.exportStep(document, [document.bodyOrder[0]!]);
+        },
+        'a-export-cylinder': async () => {
+          const document = primitiveDocument('Cylinder', 'cylinder', {
+            radius: 8,
+            height: 20
+          });
+          return remus.exportStep(document, [document.bodyOrder[0]!]);
+        },
+        'a-export-cone': async () => {
+          const document = primitiveDocument('Cone', 'cone', {
+            bottomRadius: 10,
+            topRadius: 0,
+            height: 10
+          });
+          return remus.exportStep(document, [document.bodyOrder[0]!]);
+        },
+        'a-export-sphere': async () => {
+          const document = primitiveDocument('Sphere', 'sphere', {
+            radius: 6
+          });
+          return remus.exportStep(document, [document.bodyOrder[0]!]);
+        },
+        'a-export-bored-plate': async () => {
+          const { document, bodyId } = boredPlateDocument();
+          await remus.syncDocument(document);
+          return remus.exportStep(document, [bodyId]);
+        },
+        'e-nurbs-fillet-plate': () => filletedPlateStep(remus, plateStep),
+        'e-analytic-fillet-plate': () => filletedPlateStep(occt, plateStep),
+        'f-hostile-occt-authored-box': async () => {
+          const document = primitiveDocument('Box', 'box', {
+            width: 10,
+            height: 20,
+            depth: 30
+          });
+          return occt.exportStep(document, [document.bodyOrder[0]!]);
+        }
+      };
 
       for (const id of EXPORTED_IDS) {
         writeFileSync(corpusPath(id), annotate(id, await produce[id](), true));
@@ -636,9 +643,10 @@ describe('parity corpus files', () => {
     expect(owned.length).toBeGreaterThan(0);
     for (const entry of owned) {
       const text = readCorpus(entry.id);
-      expect(text.startsWith('ISO-10303-21;'), `${entry.id} lost its magic`).toBe(
-        true
-      );
+      expect(
+        text.startsWith('ISO-10303-21;'),
+        `${entry.id} lost its magic`
+      ).toBe(true);
       expect(text, `${entry.id} carries no corpus comment`).toContain(
         `/* corpus: ${entry.id}`
       );

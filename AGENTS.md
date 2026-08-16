@@ -16,7 +16,7 @@ pnpm install --frozen-lockfile
 ```
 
 That install needs network access because `pnpm-lock.yaml` pins a GitHub-hosted
-`brepkit-wasm` tarball. Pull requests and manual dispatches run a `validate`
+`remus-wasm` tarball. Pull requests and manual dispatches run a `validate`
 job with these gates in order:
 
 ```bash
@@ -73,9 +73,9 @@ in `.github/workflows/macos-desktop.yml`.
 - `pnpm deploy:beta` is not a validation command. It applies remote D1
   migrations before deploying the Worker and therefore needs credentials and
   explicit deployment authorization.
-- `packages/kernel-adapter/package.json` follows the BrepKit branch, but frozen
-  installs use the one immutable commit in `pnpm-lock.yaml`. The scheduled
-  `.github/workflows/update-brepkit.yml` updater permits only a lockfile diff;
+- `packages/kernel-adapter/package.json` follows the Remus branch, but frozen
+  installs use the one immutable commit in `pnpm-lock.yaml`. The manual
+  `.github/workflows/update-remus.yml` updater permits only a lockfile diff;
   do not hand-edit the resolved SHA. Any kernel update still needs the full CI
   matrix, especially `pnpm test:parity-corpus` and Playwright.
 

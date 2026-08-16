@@ -2,7 +2,8 @@
 
 ## Status
 
-Accepted. Supersedes ADR-006 as the primary modeling and export path.
+Superseded by ADR-020. This file remains the historical record of the earlier
+BrepKit migration and its compatibility contracts.
 
 ## Decision
 

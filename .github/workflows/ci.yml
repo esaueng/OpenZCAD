@@ -29,7 +29,7 @@ jobs:
       - run: pnpm typecheck
       # The root command runs both the Node and web Vitest projects.
       - run: pnpm test
-      # Keep exact BrepKit/OpenCascade STEP parity in the critical beta gate.
+      # Keep exact Remus/OpenCascade STEP parity in the critical beta gate.
       - run: pnpm test:parity-corpus
       - run: pnpm build
 

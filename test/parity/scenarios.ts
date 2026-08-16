@@ -13,10 +13,7 @@ import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import {
-  CommandManager,
-  commandFactories
-} from '@openzcad/command-system';
+import { CommandManager, commandFactories } from '@openzcad/command-system';
 import {
   createBodyFeatureIds,
   createParameterIds,
@@ -161,27 +158,27 @@ function buildBoreGrid(): ProjectDocument {
  * snapshots, not STEP — a STEP round-trip normalises it away and the fuse
  * comes out analytic.
  *
- *   1. `fix(algo): canonical same-domain key for closed edges` (brepkit #21,
+ *   1. `fix(algo): canonical same-domain key for closed edges` (remus #21,
  *      1dc4541) — closed edges key on the centroid over the whole period
  *      instead of a midpoint sampled in stored order. Makes the blank analytic.
  *   2. `fix(algo): split plane faces carrying several closed section loops`
- *      (brepkit #24, 9ce6cce) — with the blank analytic the bolt-circle cut
+ *      (remus #24, 9ce6cce) — with the blank analytic the bolt-circle cut
  *      then failed with NonManifoldResult. `split_face_2d` routed a plane face
  *      to its internal-loops path only for exactly ONE closed section, so the
  *      six patterned bolts (fused into one tool, cut in one operation) left the
  *      cap and bottom unsplit and their bore walls stranded.
- *   3. `fix(algo): respect face holes in the EF containment test` (brepkit #25,
+ *   3. `fix(algo): respect face holes in the EF containment test` (remus #25,
  *      d108788) — the drilled body was then analytic but still meshed OPEN.
  *      Phase EF built its planar containment polygon from the outer wire alone,
  *      so the rim's z=10 cap (an annulus r24..45) accepted a crossing at
  *      (12, 0, 10) — 12mm inside its own hole — and paved a vertex there,
  *      splitting the bore seam. Every B-Rep gate passed; only the mesh leaked.
  *
- * All four are on brepkit main and this lock now carries them. The flange
+ * All four are on remus main and this lock now carries them. The flange
  * builds through Rev C: `Pipe Flange`, 15 faces (nine cylindrical bore/body
  * walls plus three conical chamfer bands), watertight, no warnings.
  *
- *   4. `feat(blend): chamfer closed circular rims` (brepkit #27, 3d0c11c) and
+ *   4. `feat(blend): chamfer closed circular rims` (remus #27, 3d0c11c) and
  *      `fix(blend): rim chamfer on a cap that carries holes` (#28, 9117219) —
  *      with the body finally analytic and watertight, Rev C's rim chamfer was
  *      the last thing failing. No engine could chamfer a closed circular edge:
@@ -201,7 +198,7 @@ const EXPECTED_BUILD_FAILURES: Record<string, RegExp> = {};
 
 /**
  * No mesh defects are pinned. The flange's 873 boundary edges — the
- * mesh-fallback signature — are gone as of brepkit #25; the body and its STL
+ * mesh-fallback signature — are gone as of remus #25; the body and its STL
  * both read 0.
  *
  * The reasoning that put that pin here still stands for the next one: pin an
@@ -222,9 +219,9 @@ const EXPECTED_MESH_DEFECTS: Record<
  *
  * Both entries that lived here have been retired by kernel fixes:
  *
- *   - bracket's 4-corner fillet, by brepkit #23 (638d141, G1 ridgeline spine
+ *   - bracket's 4-corner fillet, by remus #23 (638d141, G1 ridgeline spine
  *     propagation).
- *   - flange's Rev C rim chamfer, by brepkit #27 (3d0c11c) and #28 (9117219).
+ *   - flange's Rev C rim chamfer, by remus #27 (3d0c11c) and #28 (9117219).
  *     #27 taught the chamfer builder the annular rim rebuild the fillet
  *     builder already had — a cone band with a straight ruled seam, rather
  *     than a torus with a minor arc — replacing a guard that had refused every
@@ -263,7 +260,7 @@ export const PARITY_SCENARIOS: ParityScenario[] = [
  * Modeling operations layered on top of an IMPORTED body.
  *
  * These are separate from `PARITY_SCENARIOS` on purpose. They are measured on
- * BrepKit and OCCT *directly*, side by side, which is the only way the delta
+ * Remus and OCCT *directly*, side by side, which is the only way the delta
  * they exist to record is visible at all — and running two WASM kernels per
  * scenario does not belong in the fast pool. Before Z3 an `imported-step`
  * feature rerouted the whole production adapter to OpenCascade; that is no
@@ -297,11 +294,7 @@ const IMPORT_USER = toUserId('user_parity_import_modeling');
 
 function corpusStep(id: string): string {
   return readFileSync(
-    join(
-      dirname(fileURLToPath(import.meta.url)),
-      'corpus',
-      `${id}.step`
-    ),
+    join(dirname(fileURLToPath(import.meta.url)), 'corpus', `${id}.step`),
     'utf8'
   );
 }
@@ -312,7 +305,10 @@ const BASE_PLATE_PATH = join(REPO_ROOT, MODELING_BASE.path);
 function importedPlateManager(
   name: string,
   stepId: string
-): { manager: CommandManager; imported: ReturnType<typeof createBodyFeatureIds> } {
+): {
+  manager: CommandManager;
+  imported: ReturnType<typeof createBodyFeatureIds>;
+} {
   const manager = new CommandManager(
     createProjectDocument(name, IMPORT_USER, 'mm')
   );
@@ -421,7 +417,11 @@ export const IMPORT_MODELING_SCENARIOS: ImportModelingScenario[] = [
         'modeling-base-plate'
       );
       const derived = await sync(manager.document);
-      const { edges } = topologyOf(derived, imported.bodyId, 'fillet-on-import');
+      const { edges } = topologyOf(
+        derived,
+        imported.bodyId,
+        'fillet-on-import'
+      );
       manager.runTransaction('Break the imported corners', [
         commandFactories.filletEdges({
           name: 'Corner break',
@@ -448,7 +448,11 @@ export const IMPORT_MODELING_SCENARIOS: ImportModelingScenario[] = [
         'modeling-base-plate'
       );
       const derived = await sync(manager.document);
-      const { edges } = topologyOf(derived, imported.bodyId, 'chamfer-on-import');
+      const { edges } = topologyOf(
+        derived,
+        imported.bodyId,
+        'chamfer-on-import'
+      );
       manager.runTransaction('Chamfer the imported corners', [
         commandFactories.chamferEdges({
           name: 'Corner chamfer',
@@ -557,7 +561,8 @@ export const IMPORT_MODELING_SCENARIOS: ImportModelingScenario[] = [
       'A patterned tool subtracted from the import in ONE multi-tool boolean ' +
       '— three r2.5 bores in a row. Multi-tool booleans are where the ' +
       'section-loop handling on a single planar face gets stressed.',
-    nominalVolumeMm3: PLATE_VOLUME - 3 * Math.PI * 2.5 * 2.5 * MODELING_BASE.height,
+    nominalVolumeMm3:
+      PLATE_VOLUME - 3 * Math.PI * 2.5 * 2.5 * MODELING_BASE.height,
     nominalRtol: 1e-6,
     build: async () => {
       const { manager, imported } = importedPlateManager(
@@ -640,7 +645,7 @@ export const IMPORT_MODELING_SCENARIOS: ImportModelingScenario[] = [
     nominalVolumeMm3:
       PLATE_VOLUME -
       4 * CORNER_FILLET_AREA(3) * MODELING_BASE.height -
-      (Math.PI * 16) / 4 * MODELING_BASE.height +
+      ((Math.PI * 16) / 4) * MODELING_BASE.height +
       CORNER_FILLET_AREA(3) * MODELING_BASE.height,
     // 5e-3: the input body is a B-spline APPROXIMATION of the analytic
     // filleted plate, so the nominal figure is the design intent rather than

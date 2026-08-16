@@ -2,11 +2,11 @@
  * The OpenCascade reference adapter — the parity corpus's second opinion.
  *
  * This is NOT a production path and has not been one since Z3, which routed
- * every document, imported STEP included, through BrepKit. Z5 deleted the
+ * every document, imported STEP included, through Remus. Z5 deleted the
  * last of OpenCascade from `packages/kernel-adapter` and moved this cluster
  * here, next to the only thing that still runs it: `corpus.spec.ts` measures
  * every corpus file and every import-modeling scenario through BOTH this
- * adapter and BrepKit, and `corpus-pins.ts` is the record of where they
+ * adapter and Remus, and `corpus-pins.ts` is the record of where they
  * differ. `generate.spec.ts` also authors two corpus fixtures with it, which
  * is the only way to get a genuinely OCCT-written STEP file to import.
  *
@@ -237,7 +237,7 @@ function dot(left: Vec3, right: Vec3): number {
   return left.x * right.x + left.y * right.y + left.z * right.z;
 }
 
-/** OpenCascade's curve vocabulary mapped onto BrepKit's persisted names. */
+/** OpenCascade's curve vocabulary mapped onto Remus's persisted names. */
 const CURVE_TYPE_NAMES: Record<string, string> = {
   line: 'LINE',
   circle: 'CIRCLE',
@@ -1172,7 +1172,7 @@ export class OcctStepKernelAdapter {
 
   /**
    * Build an exact planar face for a detected region: outer wire plus hole
-   * wires from the region's line/arc/bezier curves. Mirrors the BrepKit
+   * wires from the region's line/arc/bezier curves. Mirrors the Remus
    * adapter's construction — including the identical ≤ 90° arc subdivision —
    * so the resulting edges carry the same ADR-011 fingerprints on both
    * kernels.
@@ -1195,7 +1195,7 @@ export class OcctStepKernelAdapter {
           if (exactBeziers) {
             // OpenCascade takes 3D control points directly, so the plane's
             // own basis lifts them — no dependence on how the kernel derives
-            // a second axis, unlike BrepKit's `liftCurve2dToPlane`.
+            // a second axis, unlike Remus's `liftCurve2dToPlane`.
             edges.push(
               this.kernel.makeBezierEdge(
                 [curve.a, ...curve.controls, curve.b].map((point) =>
@@ -1219,7 +1219,7 @@ export class OcctStepKernelAdapter {
         const span = Math.abs(curve.endAngle - curve.startAngle);
         const center = OcctStepKernelAdapter.planePoint3(basis, curve.center);
         if (span >= Math.PI * 2 - 1e-9) {
-          // OpenCascade seams its circles a quarter turn from where BrepKit
+          // OpenCascade seams its circles a quarter turn from where Remus
           // does. Rotate the edge about its own axis so the seam vertex — and
           // the wall seam it extrudes into — lands on the same point in both
           // kernels; otherwise cross-kernel fingerprints of the seam edge and
@@ -1238,7 +1238,7 @@ export class OcctStepKernelAdapter {
           );
           continue;
         }
-        // Arc pieces are subdivided to ≤ 90°, exactly as the BrepKit adapter
+        // Arc pieces are subdivided to ≤ 90°, exactly as the Remus adapter
         // subdivides them: quarter arcs are unambiguous and the piece
         // boundaries become shared vertices with identical coordinates.
         const wrap = Math.PI * 2;
@@ -1269,7 +1269,7 @@ export class OcctStepKernelAdapter {
     const outerWire = wireFor(region.outer);
     const holeWires = region.holes.map(wireFor);
     // No warning for `flattened` here. Flattening is the default (see
-    // `profile-bezier-edges`), and unlike the BrepKit adapter this one has no
+    // `profile-bezier-edges`), and unlike the Remus adapter this one has no
     // second way to reach the fallback — `exactBeziers` is the only gate, so a
     // warning would fire on every rebuild and say nothing.
     const face = this.kernel.makeFace(outerWire);
@@ -1311,7 +1311,7 @@ export class OcctStepKernelAdapter {
    * OpenCascade booleans hand back a compound wrapping their solids, and the
    * fillet/chamfer builders reject compounds outright. Collapse to the single
    * contained solid, fusing first when a pattern produced several — the same
-   * semantics as the BrepKit adapter's collapseShape.
+   * semantics as the Remus adapter's collapseShape.
    */
   private collapseToSolid(shape: ShapeHandle): ShapeHandle {
     if (this.kernel.isSolid(shape)) {

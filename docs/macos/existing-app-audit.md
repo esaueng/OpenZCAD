@@ -11,7 +11,7 @@ Audit baseline: 2026-08-04.
 - The document/history model remains the source of truth. Exact geometry and
   tessellation continue to run in browser workers; the native host does not
   implement or reinterpret geometry.
-- The bundled build includes BrepKit WASM, pdf.js worker/data, fonts, and all
+- The bundled build includes Remus WASM, pdf.js worker/data, fonts, and all
   normal application chunks. It does not load a hosted web page.
 - The current UI is dark-palette only. The existing "System" setting follows a
   dark-capable host; a separate light design system does not exist.

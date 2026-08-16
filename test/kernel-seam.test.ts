@@ -39,7 +39,7 @@ import {
  * the wrong geometry.
  *
  * There is one exact kernel now, so "the seam" is no longer a seam between
- * two kernels. Z3 made BrepKit build every document, imported STEP included,
+ * two kernels. Z3 made Remus build every document, imported STEP included,
  * and Z5 deleted OpenCascade from the adapter; the cross-kernel leg of each
  * case went with it. What these tests still hold is the seam that remains and
  * that regressions actually crossed:
@@ -52,7 +52,7 @@ import {
  *     not disturb what its neighbours resolve to.
  *
  * Bulk cross-kernel comparison lives on in the parity corpus
- * (`test/parity/`), which still measures BrepKit against OpenCascade file by
+ * (`test/parity/`), which still measures Remus against OpenCascade file by
  * file. This suite no longer does.
  */
 
@@ -253,14 +253,14 @@ describe('kernel seam correctness', { timeout: 30_000 }, () => {
   it('keeps a region-extrude hole beside a STEP import', async () => {
     const { document, bodyId, exactVolume } = plateWithHoleDocument();
 
-    const onBrepKit = await adapter.syncDocument(document);
-    expect(onBrepKit.warnings).toEqual([]);
-    const brepkitBody = onBrepKit.bodyRepresentations[bodyId];
+    const onRemus = await adapter.syncDocument(document);
+    expect(onRemus.warnings).toEqual([]);
+    const remusBody = onRemus.bodyRepresentations[bodyId];
     expect(
-      Math.abs((brepkitBody?.volume ?? 0) - exactVolume) / exactVolume
+      Math.abs((remusBody?.volume ?? 0) - exactVolume) / exactVolume
     ).toBeLessThan(0.005);
     expect(
-      brepkitBody?.topology?.faces.some(
+      remusBody?.topology?.faces.some(
         (face) => face.geometry?.surfaceType === 'cylinder'
       )
     ).toBe(true);
@@ -283,13 +283,11 @@ describe('kernel seam correctness', { timeout: 30_000 }, () => {
       ).toBe(true);
     }
 
-    // Removing the STEP source must return to identical BrepKit geometry.
-    const backToBrepKit = await adapter.syncDocument(
-      removeStepImport(withStep)
-    );
-    expect(backToBrepKit.warnings).toEqual([]);
-    expect(backToBrepKit.bodyRepresentations[bodyId]?.volume).toBeCloseTo(
-      brepkitBody!.volume,
+    // Removing the STEP source must return to identical Remus geometry.
+    const backToRemus = await adapter.syncDocument(removeStepImport(withStep));
+    expect(backToRemus.warnings).toEqual([]);
+    expect(backToRemus.bodyRepresentations[bodyId]?.volume).toBeCloseTo(
+      remusBody!.volume,
       6
     );
   });
@@ -348,14 +346,14 @@ describe('kernel seam correctness', { timeout: 30_000 }, () => {
     }).document;
     const filletBodyId = filleted.bodyOrder.at(-1)!;
 
-    const onBrepKit = await adapter.syncDocument(filleted);
-    expect(onBrepKit.warnings).toEqual([]);
-    const brepkitBody = onBrepKit.bodyRepresentations[filletBodyId];
+    const onRemus = await adapter.syncDocument(filleted);
+    expect(onRemus.warnings).toEqual([]);
+    const remusBody = onRemus.bodyRepresentations[filletBodyId];
     // The sharp corner line is gone; the nearest blend geometry stays ~0.59
     // from the old corner line, so nothing may remain within 0.3 of it.
-    expect(hasEdgePointNearLine(brepkitBody, 30, 18, 0.3)).toBe(false);
+    expect(hasEdgePointNearLine(remusBody, 30, 18, 0.3)).toBe(false);
     // The other intact corner survives untouched.
-    expect(edgeOnVerticalLine(brepkitBody, 30, 0)).toBeTruthy();
+    expect(edgeOnVerticalLine(remusBody, 30, 0)).toBeTruthy();
 
     // Adversarial upstream edit: widening the cutter shifts edge enumeration
     // but leaves the filleted edge's geometry identical. Under a positional
@@ -377,7 +375,7 @@ describe('kernel seam correctness', { timeout: 30_000 }, () => {
       expect(hasEdgePointNearLine(body, 30, 18, 0.3)).toBe(false);
       expect(edgeOnVerticalLine(body, 30, 0)).toBeTruthy();
       // The cutter edit landed: the notch is wider than before.
-      expect(body!.volume).toBeLessThan(brepkitBody!.volume - 300);
+      expect(body!.volume).toBeLessThan(remusBody!.volume - 300);
     }
   });
 
@@ -385,13 +383,13 @@ describe('kernel seam correctness', { timeout: 30_000 }, () => {
     // The Z3 migration case, and the one that decides whether the flip is
     // safe for documents that already exist. Until Z3, a document with a STEP
     // import was built by OpenCascade, so any edge or face the user picked
-    // was stored against that kernel's topology. BrepKit builds those
+    // was stored against that kernel's topology. Remus builds those
     // documents now.
     //
     // On analytic planar imports the two kernels published the SAME hashes
     // and nothing changed. They diverged on periodic surfaces: for this cone
-    // OpenCascade published three edges to BrepKit's two (the seam-edge pin
-    // in corpus-pins.ts, owner K0.6), and BrepKit's two were a subset — so a
+    // OpenCascade published three edges to Remus's two (the seam-edge pin
+    // in corpus-pins.ts, owner K0.6), and Remus's two were a subset — so a
     // pick on that extra seam edge has no counterpart after the flip. Z5
     // deleted the kernel that could still produce the orphan hash, so the
     // absent pick is now stated directly; the corpus keeps the seam-count
@@ -420,9 +418,9 @@ describe('kernel seam correctness', { timeout: 30_000 }, () => {
       }
     );
 
-    const onBrepKit = await adapter.syncDocument(document);
-    const edges = onBrepKit.bodyRepresentations[bodyId]!.topology!.edges;
-    // Pinned: BrepKit publishes two edges for this cone and no seam edge.
+    const onRemus = await adapter.syncDocument(document);
+    const edges = onRemus.bodyRepresentations[bodyId]!.topology!.edges;
+    // Pinned: Remus publishes two edges for this cone and no seam edge.
     expect(edges).toHaveLength(2);
     const published = new Set(edges.map((edge) => edge.hash));
     const orphan = 2_863_311_530;
@@ -464,8 +462,8 @@ describe('kernel seam correctness', { timeout: 30_000 }, () => {
         )
       }
     );
-    const onBrepKit = await adapter.syncDocument(document);
-    const body = onBrepKit.bodyRepresentations[bodyId]!;
+    const onRemus = await adapter.syncDocument(document);
+    const body = onRemus.bodyRepresentations[bodyId]!;
 
     expect(body.topology!.faces).toHaveLength(14);
     expect(body.topology!.edges).toHaveLength(43);
@@ -544,12 +542,12 @@ describe('kernel seam correctness', { timeout: 30_000 }, () => {
     }
   });
 
-  it('still resolves closed-edge hashes persisted by the previous BrepKit scheme', async () => {
-    // Pre-unification BrepKit fingerprinted a full circle from its seam
-    // vertex and mid-parameter point. For BrepKit's circle convention (seam
+  it('still resolves closed-edge hashes persisted by the previous Remus scheme', async () => {
+    // Pre-unification Remus fingerprinted a full circle from its seam
+    // vertex and mid-parameter point. For Remus's circle convention (seam
     // at +X of the frame, curve phase +90°) the rim of makeCylinder(5, 12)
     // at z=0 hashed exactly this signature. Documents persisted such hashes;
-    // they must keep resolving. If BrepKit ever changes its parameterization
+    // they must keep resolving. If Remus ever changes its parameterization
     // this pin breaks loudly — that is the point.
     const quantum = (value: number): number => Math.round(value / 1e-6);
     const legacyHash = fnv(

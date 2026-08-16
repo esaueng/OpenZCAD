@@ -82,7 +82,7 @@ describe('a cross-drilled shaft', () => {
         6;
     }
     // Boundary edges lying ON one of the shaft's two END RIMS -- the circles
-    // of radius 3 at z = 0 and z = 30. This is the invariant brepkit#66
+    // of radius 3 at z = 0 and z = 30. This is the invariant historical BrepKit #66
     // restored, and it is the right thing to assert because it depends on
     // neither the bore radius nor the deflection: an end rim is shared by
     // exactly two faces, so a shared rim has ZERO one-sided edges on it, at
@@ -136,7 +136,7 @@ describe('a cross-drilled shaft', () => {
   );
 
   /**
-   * The invariant brepkit#66 restored, and the one worth guarding.
+   * The invariant historical BrepKit #66 restored, and the one worth guarding.
    *
    * This asserts a PROPERTY rather than a count, deliberately. The earlier
    * version of this file pinned "+420 boundary edges at every radius" as

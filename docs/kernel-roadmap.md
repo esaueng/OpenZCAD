@@ -1,5 +1,9 @@
 # Kernel roadmap: BrepKit as the sole, professional-grade kernel
 
+> Historical roadmap snapshot. ADR-020 replaces the production kernel with
+> Remus; names, package paths, issue references, and measurements below record
+> the BrepKit-era work and must not be read as current configuration.
+
 **Date:** 2026-08-01
 **Scope:** Findings from a full review of BrepKit (v2.129.0, 257k LOC Rust)
 and its use in OpenZCAD, and the plan that follows from them. Two goals, per
@@ -22,11 +26,11 @@ merged as esaueng/brepkit#35), `docs/capability-matrix.md`.
 The status bar says one kernel; routing in
 `packages/kernel-adapter/src/exact.ts` says three:
 
-| Engine | When it runs | Size |
-| --- | --- | --- |
-| **BrepKit** (`brepkit-wasm`) | Every document without imports — the primary path (`exact.ts` ≈ 3886) | 5.2 MB wasm |
-| **OCCT** (`occt-wasm@3.8.0`) | The **whole document** reroutes to `OcctStepKernelAdapter` if it contains one `imported-step` feature; also pulled into pure-BrepKit docs for multi-body STEP export (`combineStepSolids`), and `inspectStep` is unconditionally OCCT | 22 MB wasm |
-| **Legacy JS polyhedral kernel** (`OpenZCADKernel` + `packages/geometry` BSP CSG) | The whole document reroutes here if it contains an `imported-mesh` feature (and no STEP) | — |
+| Engine                                                                           | When it runs                                                                                                                                                                                                                          | Size        |
+| -------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------- |
+| **BrepKit** (`brepkit-wasm`)                                                     | Every document without imports — the primary path (`exact.ts` ≈ 3886)                                                                                                                                                                 | 5.2 MB wasm |
+| **OCCT** (`occt-wasm@3.8.0`)                                                     | The **whole document** reroutes to `OcctStepKernelAdapter` if it contains one `imported-step` feature; also pulled into pure-BrepKit docs for multi-body STEP export (`combineStepSolids`), and `inspectStep` is unconditionally OCCT | 22 MB wasm  |
+| **Legacy JS polyhedral kernel** (`OpenZCADKernel` + `packages/geometry` BSP CSG) | The whole document reroutes here if it contains an `imported-mesh` feature (and no STEP)                                                                                                                                              | —           |
 
 > **Superseded by Track Z.** All three routes are gone. Z1.1 moved
 > `inspectStep`, Z1.2 deleted the legacy JS kernel, Z2 moved multi-solid
@@ -135,14 +139,14 @@ Ordered by leverage. K0 is also the dependency for Track Z (OCCT removal).
 
 ### K0 — Parity blockers (what OpenZCAD needs to drop OCCT)
 
-| # | Work | Kills |
-| --- | --- | --- |
-| K0.1 | **STEP import fidelity**: honor `GLOBAL_UNIT_ASSIGNED_CONTEXT` + `CONVERSION_BASED_UNIT` (length AND plane angle); read `BREP_WITH_VOIDS`/inner shells; write inner shells (today `write_solid` silently drops cavities); convert `SURFACE_OF_REVOLUTION`/`_LINEAR_EXTRUSION`/`TRIMMED_CURVE` to supported types on import instead of `UnsupportedEntity`; accept AP214 headers | The `normalizeStepPlaneAnglesForKernel` text rewriter; the OCCT import route |
-| K0.2 | **Multi-solid STEP export** (compound / multiple `MANIFOLD_SOLID_BREP` in one file) | `combineStepSolids` — the only OCCT intrusion into pure-BrepKit documents |
-| K0.3 | **Through-hole close + general defeature**: a `fill_through_hole` op and defeature beyond planar faces | The two OCCT-only direct edits (`resize-through-hole`, `remove-face-feature`) |
-| K0.4 | **Blend phases 1–2** (already planned in `docs/qa/2026-08-01/kernel-fillet-plan.md`): holed-cap corner fillets, walking-builder vertex blends, concave hole-rim fillets/chamfers | The plate-class failures; the adapter's analytic rim-fillet shortcut |
-| K0.5 | **Analytic×NURBS SSI** in the boolean engine, + torus pairs | Mesh-fallback degradation on any boolean touching an imported/blended face — the main source of the JS boolean distrust harness |
-| K0.6 | **STEP-import validation + lineage story** equal to what `occt-step.ts` provides (import warnings, topology witnesses on imported bodies) | The last reason the OCCT adapter exists |
+| #    | Work                                                                                                                                                                                                                                                                                                                                                                            | Kills                                                                                                                           |
+| ---- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| K0.1 | **STEP import fidelity**: honor `GLOBAL_UNIT_ASSIGNED_CONTEXT` + `CONVERSION_BASED_UNIT` (length AND plane angle); read `BREP_WITH_VOIDS`/inner shells; write inner shells (today `write_solid` silently drops cavities); convert `SURFACE_OF_REVOLUTION`/`_LINEAR_EXTRUSION`/`TRIMMED_CURVE` to supported types on import instead of `UnsupportedEntity`; accept AP214 headers | The `normalizeStepPlaneAnglesForKernel` text rewriter; the OCCT import route                                                    |
+| K0.2 | **Multi-solid STEP export** (compound / multiple `MANIFOLD_SOLID_BREP` in one file)                                                                                                                                                                                                                                                                                             | `combineStepSolids` — the only OCCT intrusion into pure-BrepKit documents                                                       |
+| K0.3 | **Through-hole close + general defeature**: a `fill_through_hole` op and defeature beyond planar faces                                                                                                                                                                                                                                                                          | The two OCCT-only direct edits (`resize-through-hole`, `remove-face-feature`)                                                   |
+| K0.4 | **Blend phases 1–2** (already planned in `docs/qa/2026-08-01/kernel-fillet-plan.md`): holed-cap corner fillets, walking-builder vertex blends, concave hole-rim fillets/chamfers                                                                                                                                                                                                | The plate-class failures; the adapter's analytic rim-fillet shortcut                                                            |
+| K0.5 | **Analytic×NURBS SSI** in the boolean engine, + torus pairs                                                                                                                                                                                                                                                                                                                     | Mesh-fallback degradation on any boolean touching an imported/blended face — the main source of the JS boolean distrust harness |
+| K0.6 | **STEP-import validation + lineage story** equal to what `occt-step.ts` provides (import warnings, topology witnesses on imported bodies)                                                                                                                                                                                                                                       | The last reason the OCCT adapter exists                                                                                         |
 
 ### K1 — Professional-competitive modeling
 
@@ -314,16 +318,16 @@ feature built on feature recognition + through-hole ops.
 
 ## 4. Suggested sequencing
 
-| Order | Item | Track | Depends on |
-| --- | --- | --- | --- |
-| 1 | Z1.1 inspectStep flip, Z1.2 mesh docs → BrepKit + JS-kernel deletion, Z1.3 parity corpus | Z | — |
-| 2 | K0.4 blend phases 1–2 (already planned/handed off) | K | — |
-| 3 | K0.1 STEP fidelity + K0.2 compound export | K | — |
-| 4 | Z2 compound export flip | Z | K0.2 |
-| 5 | K0.5 analytic×NURBS SSI; K0.3 defeature/through-hole; K0.6 import validation | K | — |
-| 6 | Z3 STEP route flip → Z4 direct-edit port → Z5 OCCT deletion | Z | K0.* |
-| 7 | Z6 workaround-ring retirement; Z7 feature exposure | Z | paced by K |
-| 8 | K1 competitive modeling; K2 platform | K | product priority |
+| Order | Item                                                                                     | Track | Depends on       |
+| ----- | ---------------------------------------------------------------------------------------- | ----- | ---------------- |
+| 1     | Z1.1 inspectStep flip, Z1.2 mesh docs → BrepKit + JS-kernel deletion, Z1.3 parity corpus | Z     | —                |
+| 2     | K0.4 blend phases 1–2 (already planned/handed off)                                       | K     | —                |
+| 3     | K0.1 STEP fidelity + K0.2 compound export                                                | K     | —                |
+| 4     | Z2 compound export flip                                                                  | Z     | K0.2             |
+| 5     | K0.5 analytic×NURBS SSI; K0.3 defeature/through-hole; K0.6 import validation             | K     | —                |
+| 6     | Z3 STEP route flip → Z4 direct-edit port → Z5 OCCT deletion                              | Z     | K0.*             |
+| 7     | Z6 workaround-ring retirement; Z7 feature exposure                                       | Z     | paced by K       |
+| 8     | K1 competitive modeling; K2 platform                                                     | K     | product priority |
 
 **Risk to hold in view:** with OCCT gone there is no fallback — a BrepKit
 regression is a product outage for the affected geometry class. The Z1.3

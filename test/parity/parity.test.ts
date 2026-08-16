@@ -1,5 +1,5 @@
 /**
- * Kernel parity harness: the acceptance benchmark for the BrepKit kernel.
+ * Kernel parity harness: the acceptance benchmark for the Remus kernel.
  *
  * Replays real modeling scenarios (the workspace demos plus stress cases)
  * headless through the exact kernel adapter and holds each body to the
@@ -24,7 +24,7 @@
  *   OPENZCAD_WRITE_PARITY_BASELINES=1 pnpm vitest run test/parity
  *
  * Run against a local kernel build (without touching the lockfile) with:
- *   BREPKIT_WASM_PKG=/abs/path/to/brepkit/crates/wasm/pkg pnpm vitest run test/parity
+ *   REMUS_WASM_PKG=/abs/path/to/remus/crates/wasm/pkg pnpm vitest run test/parity
  */
 
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
@@ -37,7 +37,11 @@ import { replayCommands } from '@openzcad/command-system';
 import { createProjectDocument } from '@openzcad/document-core';
 import { createExactKernelAdapter } from '@openzcad/kernel-adapter/exact';
 import type { ExactKernelAdapter } from '@openzcad/kernel-adapter/exact';
-import { toUserId, type DerivedState, type ProjectDocument } from '@openzcad/shared';
+import {
+  toUserId,
+  type DerivedState,
+  type ProjectDocument
+} from '@openzcad/shared';
 
 import { meshEdgeUse, parseAsciiStl } from './mesh-probe';
 import { PARITY_SCENARIOS, type MeshDefectPin } from './scenarios';
@@ -71,7 +75,7 @@ interface BodyBaseline {
    * the tens of faces; a kernel regression to a tessellated boolean multiplies
    * this into the hundreds, even while volume and validity still pass.
    * (The stronger surface-type-mix probe needs FaceGeometry.surfaceType,
-   * which the BrepKit adapter does not populate yet.)
+   * which the Remus adapter does not populate yet.)
    */
   faceCount: number;
 }
@@ -109,7 +113,10 @@ describe('kernel parity harness', () => {
   let adapter: ExactKernelAdapter;
   const measured: Baselines = {};
   const timings: Record<string, number> = {};
-  const documents = new Map<string, { document: ProjectDocument; derived: DerivedState }>();
+  const documents = new Map<
+    string,
+    { document: ProjectDocument; derived: DerivedState }
+  >();
 
   const buildFailures = new Map<string, unknown>();
 
@@ -178,8 +185,8 @@ describe('kernel parity harness', () => {
           derived.warnings.length,
           expected.length > 0
             ? `pinned warnings changed — if the kernel defect is fixed, ` +
-              `remove '${scenario.key}' from EXPECTED_WARNINGS and rerecord ` +
-              `baselines. warnings: ${JSON.stringify(derived.warnings)}`
+                `remove '${scenario.key}' from EXPECTED_WARNINGS and rerecord ` +
+                `baselines. warnings: ${JSON.stringify(derived.warnings)}`
             : `warnings: ${JSON.stringify(derived.warnings)}`
         ).toBe(expected.length);
         for (const [index, pattern] of expected.entries()) {
@@ -224,7 +231,10 @@ describe('kernel parity harness', () => {
 
       it('exports a watertight STL', async () => {
         const { document, derived } = documents.get(scenario.key)!;
-        const stl = await adapter.exportStl(document, derived.exportableBodyIds);
+        const stl = await adapter.exportStl(
+          document,
+          derived.exportableBodyIds
+        );
         const parsed = parseAsciiStl(stl);
         const report = meshEdgeUse(parsed.vertices, parsed.indices);
         const pin = scenario.expectedMeshDefects?.stl;
@@ -266,7 +276,10 @@ describe('kernel parity harness', () => {
             )
             .toBeLessThan(VOLUME_RTOL);
           expect
-            .soft(body.faceCount, `${body.name} face count (mesh-fallback tell)`)
+            .soft(
+              body.faceCount,
+              `${body.name} face count (mesh-fallback tell)`
+            )
             .toBe(expected.faceCount);
         }
       });

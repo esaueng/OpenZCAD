@@ -8,11 +8,11 @@ Use the hosted beta at [zcad.app](https://zcad.app/).
 
 ## Highlights
 
-**Exact parametric modeling.** Primitives, multi-profile sketch/extrude, revolve, booleans, transforms, mirror-copy, shell, solid offset, fillet, chamfer, and linear/circular patterns, built on the [BrepKit](https://github.com/esaueng/brepkit) exact kernel. New face-attached sketches re-resolve an exact lineage reference at their history position instead of freezing a viewport plane. Parametric expressions, ordered feature history with editing and deletion, deterministic replay, transactions, and undo/redo.
+**Exact parametric modeling.** Primitives, multi-profile sketch/extrude, revolve, booleans, transforms, mirror-copy, shell, solid offset, fillet, chamfer, and linear/circular patterns, built on the [Remus](https://github.com/esaueng/remus) exact kernel. New face-attached sketches re-resolve an exact lineage reference at their history position instead of freezing a viewport plane. Parametric expressions, ordered feature history with editing and deletion, deterministic replay, transactions, and undo/redo.
 
 **Direct manipulation.** Shapr3D-style modeling straight on the model: drag a face to offset it, drag a sketch region into a solid, drag an edge to grow a fillet or chamfer, move/rotate bodies with a snapping gizmo — every drag pairs with exact numeric entry. In-viewport sketching with snapping and live dimensions, box select, selection filters, a marking menu, an Esc ladder, and a live orientation widget with perspective/orthographic switching.
 
-**One kernel, one topology language.** BrepKit builds every document, imported STEP included. OpenCascade is gone from the adapter and survives only as the parity corpus's reference implementation under `test/parity/occt-reference`, which never ships. BrepKit publishes exact topology witnesses and a safe subset of semantic lineage ([ADR-011](docs/adrs/ADR-011-unified-topology-identity.md), [ADR-013](docs/adrs/ADR-013-persistent-topology-lineage.md)). Primitive, sweep, and supported rigid-transform identities can survive upstream edits. Boolean, blend, pattern, direct-edit, and STEP provenance remain hash-only where complete evolution is not proved, and every ambiguous or unsupported resolution fails closed.
+**One kernel, one topology language.** Remus builds every document, imported STEP included. OpenCascade is gone from the adapter and survives only as the parity corpus's reference implementation under `test/parity/occt-reference`, which never ships. Remus publishes exact topology witnesses and a safe subset of semantic lineage ([ADR-011](docs/adrs/ADR-011-unified-topology-identity.md), [ADR-013](docs/adrs/ADR-013-persistent-topology-lineage.md), [ADR-020](docs/adrs/ADR-020-remus-browser-kernel.md)). Primitive, sweep, and supported rigid-transform identities can survive upstream edits. Boolean, blend, pattern, direct-edit, and STEP provenance remain hash-only where complete evolution is not proved, and every ambiguous or unsupported resolution fails closed.
 
 **Import and export.** Editable STEP import is stored in replayable document history and rebuilt exactly, honouring the file's own declared length and plane-angle units. Selecting an exact imported face shows its surface type and area; the shipped direct-edit subset includes validated through-hole and cylindrical-face edits. A bounded read-only recognizer proves blind holes, counterbores, countersinks, bosses, prismatic pockets, and conical tapers in isolation, but those broader coordinated edits are not wired into the product yet. STEP export preserves distinct solids as a compound; STL export is always millimetres. STL imports become mesh bodies. All geometry and exports run in the browser worker.
 
@@ -45,7 +45,7 @@ React workspace (apps/web)
   ├─ IndexedDB autosave
   ├─ Three.js viewport                            (disposable projection)
   └─ geometry Web Worker
-       └─ brepkit-wasm  — the exact B-rep kernel, for every document
+       └─ remus-wasm  — the exact B-rep kernel, for every document
                            including STEP imports
 
 Cloudflare Worker (beta orchestration only)
@@ -67,7 +67,7 @@ See [architecture.md](architecture.md) and the decision records in [docs/adrs](d
 The current implementation status and explicitly unshipped gaps are tracked in
 [the capability matrix](docs/capability-matrix.md).
 
-The monorepo is a pnpm workspace: `apps/web` plus focused packages — `document-core` (canonical model), `command-system` (undo/redo, transactions), `geometry` (sketch regions, plane math), `kernel-adapter` (the BrepKit exact adapter), `viewport` (React-free three.js scene framework), `io-step`/`io-stl`, `ai-contracts`, `cloudflare-adapters`, `persistence`, and `shared`.
+The monorepo is a pnpm workspace: `apps/web` plus focused packages — `document-core` (canonical model), `command-system` (undo/redo, transactions), `geometry` (sketch regions, plane math), `kernel-adapter` (the Remus exact adapter), `viewport` (React-free three.js scene framework), `io-step`/`io-stl`, `ai-contracts`, `cloudflare-adapters`, `persistence`, and `shared`.
 
 ## Development
 
@@ -100,7 +100,7 @@ Interaction and startup performance are measured, not guessed — see [docs/perf
 OZ_PERF=1 pnpm exec playwright test interaction-probe
 ```
 
-The exact adapter and BrepKit WASM load lazily inside the geometry worker on the first non-empty rebuild or export. OpenCascade is no longer part of the adapter at all, so neither its ~22 MB WASM nor any code that reaches it is emitted into the bundle. Canonical rebuild results use a worker-local LRU capped at 8 entries and 32 MiB, with at most 4 distinct loads in flight. Cache hits are structured-cloned and exports remain uncached caller-owned work. See [ADR-015](docs/adrs/ADR-015-bounded-exact-rebuild-cache.md) and the measured bundle inventory in [docs/performance-baseline.md](docs/performance-baseline.md).
+The exact adapter and Remus WASM load lazily inside the geometry worker on the first non-empty rebuild or export. The manifest follows Remus `main`, while `pnpm-lock.yaml` freezes one immutable source commit for reproducible installs. OpenCascade is no longer part of the adapter at all, so neither its ~22 MB WASM nor any code that reaches it is emitted into the bundle. Canonical rebuild results use a worker-local LRU capped at 8 entries and 32 MiB, with at most 4 distinct loads in flight. Cache hits are structured-cloned and exports remain uncached caller-owned work. See [ADR-015](docs/adrs/ADR-015-bounded-exact-rebuild-cache.md) and the measured bundle inventory in [docs/performance-baseline.md](docs/performance-baseline.md).
 
 ## Deploying to Cloudflare
 
@@ -251,9 +251,9 @@ Current assistant limitations and gates:
 - Editable STEP sources are stored content-addressed: the document carries a SHA-256 reference and the bytes live in the browser's IndexedDB blob store (imports up to 250 MB), with the archived upload artifact as the cross-device fallback. Documents written before references keep their embedded text (12 MB cap) and replay unchanged; the embedded form is also the fallback when browser storage is denied. Cloud saves project payloads into checksum-verified R2 assets and keep only metadata/pointers in D1.
 - Imported STL builds on the exact kernel through its STL importer, sewn into a shell so it can be mirrored, shelled, and offset. It stays a mesh body: no parametric reconstruction is attempted, and a boolean against an exact body is refused by name rather than approximated.
 - Collaboration rooms store each document under its own Durable Object key (bounded history, atomic index updates, typed rejection frames for oversize or malformed payloads; documents over ~1.5 MB JSON are rejected). Invitations, owner/editor/viewer authorization, a persisted project edit lease, sharing UI, and recovery-copy-first conflict choices are implemented, but both checked-in sharing flags remain `false` pending controlled beta rollout.
-- BrepKit's difficult boolean cases can fall back to mesh-derived topology, and closed-B-spline/NURBS-blend faces are not fingerprint-stable against the corpus reference — they fail closed rather than mis-resolve.
+- Remus's difficult boolean cases can fall back to mesh-derived topology, and closed-B-spline/NURBS-blend faces are not fingerprint-stable against the corpus reference — they fail closed rather than mis-resolve.
 - True face attachment requires a schema-v5 lineage reference and an exact planar face at the sketch's history position. Legacy face attachments retain their stored migration frame with a warning; deleted, ambiguous, non-planar, and unsupported current references fail visibly.
-- The pinned BrepKit mirror preserves ordinary exact solids, but can report a volume mismatch for some dense boolean-plus-blend histories; exact preflight refuses those bodies without committing history rather than accepting a questionable reflection.
+- The pinned Remus mirror preserves ordinary exact solids, but can report a volume mismatch for some dense boolean-plus-blend histories; exact preflight refuses those bodies without committing history rather than accepting a questionable reflection.
 - Viewport idle edges are consolidated to one draw call per visible body; hover and selected edges use small reusable overlay batches.
 
 ## Next milestones

@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
-import { BrepKernel } from '../packages/kernel-adapter/node_modules/brepkit-wasm/brepkit_wasm.js';
+import { RemusKernel } from '../packages/kernel-adapter/src/remus-runtime';
 import {
   addPrimitiveFeature,
   addSketchFeature,
@@ -22,7 +22,7 @@ import {
   updateSketchObject
 } from '@openzcad/document-core';
 import {
-  BrepKitKernelAdapter,
+  RemusKernelAdapter,
   brepEdgeCurve,
   createExactKernelAdapter,
   edgeCircleMisfit,
@@ -212,7 +212,7 @@ describe('exact kernel adapter', { timeout: 30_000 }, () => {
     expect(derived.warnings).toEqual([]);
   });
 
-  it('preserves BrepKit semantic lineage through an exact rigid transform', async () => {
+  it('preserves Remus semantic lineage through an exact rigid transform', async () => {
     const base = addPrimitiveFeature(
       createProjectDocument('Lineage box', toUserId('user_lineage_transform')),
       {
@@ -267,9 +267,9 @@ describe('exact kernel adapter', { timeout: 30_000 }, () => {
       }
     );
     const bodyId = document.bodyOrder[0]!;
-    const brepKit = new BrepKitKernelAdapter();
+    const remus = new RemusKernelAdapter();
     try {
-      const derived = await brepKit.syncDocument(document);
+      const derived = await remus.syncDocument(document);
       const topology = derived.bodyRepresentations[bodyId]!.topology!;
       const names = [...topology.faces, ...topology.edges]
         .map((entry) => entry.reference?.lineageName)
@@ -279,7 +279,7 @@ describe('exact kernel adapter', { timeout: 30_000 }, () => {
       // Six faces and twelve edges, every one of them named.
       expect(names).toHaveLength(18);
     } finally {
-      brepKit.dispose();
+      remus.dispose();
     }
   });
 
@@ -353,9 +353,9 @@ describe('exact kernel adapter', { timeout: 30_000 }, () => {
         'Resize attachment source'
       )
     );
-    const brepKit = new BrepKitKernelAdapter();
+    const remus = new RemusKernelAdapter();
     try {
-      const derived = await brepKit.syncDocument(evolved);
+      const derived = await remus.syncDocument(evolved);
       expect(derived.warnings).toEqual([]);
       expect(derived.bodyRepresentations[extrusionBodyId]).toBeDefined();
       expect(
@@ -371,7 +371,7 @@ describe('exact kernel adapter', { timeout: 30_000 }, () => {
           'Suppress attachment source'
         )
       );
-      const stale = await brepKit.syncDocument(manager.document);
+      const stale = await remus.syncDocument(manager.document);
       expect(stale.bodyRepresentations[extrusionBodyId]).toBeUndefined();
       expect(stale.warnings).toContain(
         'Feature "Attachment box": Suppressed; skipped during exact rebuild.'
@@ -380,7 +380,7 @@ describe('exact kernel adapter', { timeout: 30_000 }, () => {
         `Feature "Top attachment": Sketch "Top attachment" cannot attach because source body ${sourceBodyId} is unavailable at the sketch's history position.`
       );
     } finally {
-      brepKit.dispose();
+      remus.dispose();
     }
   });
 
@@ -499,9 +499,9 @@ describe('exact kernel adapter', { timeout: 30_000 }, () => {
       }
     );
 
-    const brepKit = new BrepKitKernelAdapter();
+    const remus = new RemusKernelAdapter();
     try {
-      const derived = await brepKit.syncDocument(document);
+      const derived = await remus.syncDocument(document);
       expect(derived.warnings).toEqual([]);
       expect(derived.exportableBodyIds).toEqual([bodyId]);
       const body = derived.bodyRepresentations[bodyId]!;
@@ -525,7 +525,7 @@ describe('exact kernel adapter', { timeout: 30_000 }, () => {
         )
       ).toHaveLength(0);
     } finally {
-      brepKit.dispose();
+      remus.dispose();
     }
   });
 
@@ -784,7 +784,7 @@ describe('exact kernel adapter', { timeout: 30_000 }, () => {
       expect(new Set(adjacencyOf(edge)).size).toBe(2);
     }
 
-    // The sphere pins the limit rather than hiding it. BrepKit builds it from
+    // The sphere pins the limit rather than hiding it. Remus builds it from
     // two same-surface hemispheres that share one exact witness, so BOTH
     // patches hash identically and every edge reports a single distinct hash —
     // even the equator, which genuinely divides two faces. A consumer cannot
@@ -1042,7 +1042,7 @@ describe('exact kernel adapter', { timeout: 30_000 }, () => {
     // corpus holds no elliptical or spline edge either, so the gate that keeps
     // garbage out of the payload has no fixture that reaches it. Build one on
     // a bare kernel instead, rather than leave the branch untested.
-    const kernel = new BrepKernel();
+    const kernel = new RemusKernel();
     try {
       // Semi-major 3, semi-minor 1.5 in the z = 0 plane.
       const ellipse = kernel.makeEllipseEdge(0, 0, 0, 0, 0, 1, 3, 1.5);
@@ -1117,7 +1117,7 @@ describe('exact kernel adapter', { timeout: 30_000 }, () => {
   });
 
   it('survives a torus, whose only edges are zero length, and a dead handle', async () => {
-    // BrepKit's torus closes in both directions, so its two edges are
+    // Remus's torus closes in both directions, so its two edges are
     // degenerate: LINE type, a domain of [0, 0], start vertex equal to end
     // vertex. The trim-aware NURBS curve reader throws on exactly these, which
     // is why the record is not built from it — one unguarded call would take
@@ -1143,7 +1143,7 @@ describe('exact kernel adapter', { timeout: 30_000 }, () => {
     // An edge the kernel will not describe leaves the record absent — not
     // wrong, and not fatal. Same discipline the analytic surface reader
     // already applies to a face it cannot read.
-    const kernel = new BrepKernel();
+    const kernel = new RemusKernel();
     try {
       expect(() => kernel.getEdgeCurveType(999_999)).toThrow();
       expect(brepEdgeCurve(kernel, 999_999, [])).toBeUndefined();
@@ -1214,7 +1214,7 @@ describe('exact kernel adapter', { timeout: 30_000 }, () => {
     });
   });
 
-  it('refuses a shallow circular union instead of accepting a mesh fallback', async () => {
+  it('labels a shallow circular union when Remus returns a mesh fallback', async () => {
     const withCylinder = addPrimitiveFeature(
       createProjectDocument('Shallow circular union', toUserId('user_exact')),
       {
@@ -1248,15 +1248,37 @@ describe('exact kernel adapter', { timeout: 30_000 }, () => {
 
     const derived = await adapter.syncDocument(document);
     const resultId = document.bodyOrder.at(-1)!;
-    expect(derived.bodyRepresentations[resultId]).toBeUndefined();
-    expect(derived.warnings).toContain(
-      'Feature "Shallow circular union": invalid input: cluster fuse degraded to mesh fallback'
+    const result = derived.bodyRepresentations[resultId];
+    expect(result).toBeDefined();
+    expect(result?.faceCount).toBe(193);
+    expect(
+      derived.warnings.some(
+        (warning) =>
+          warning.startsWith('Feature "Shallow circular union":') &&
+          FACET_CENSUS_MESSAGE.test(warning)
+      )
+    ).toBe(true);
+    expect(
+      result?.topology?.faces.every(
+        (face) => face.geometry?.surfaceType === 'plane'
+      )
+    ).toBe(true);
+    expect(
+      isClosedConsistentlyOrientedMesh(
+        inspectTriangleMeshClosure(result!.mesh.vertices, result!.mesh.indices)
+      )
+    ).toBe(true);
+    expect(result?.exportableStep).toBe(true);
+    expect(derived.warnings).toContainEqual(
+      expect.stringContaining(
+        'The result is watertight, but its curved surfaces are now planar facets and will export that way.'
+      )
     );
-    // The latest kernel fails before returning an approximate body. Because
-    // the feature never commits, both exact operands remain available rather
-    // than being marked consumed behind a missing result.
-    expect(derived.bodyRepresentations[cylinderId]?.consumed).toBe(false);
-    expect(derived.bodyRepresentations[extrudeId]?.consumed).toBe(false);
+    // Remus now returns the approximation instead of failing the fuse. Keep
+    // that user-visible change explicit: the operands are consumed, but the
+    // result is labeled before it can be mistaken for exact analytic output.
+    expect(derived.bodyRepresentations[cylinderId]?.consumed).toBe(true);
+    expect(derived.bodyRepresentations[extrudeId]?.consumed).toBe(true);
     // Runs in under a second locally but has tripped the 5 s default on slow
     // CI runners; give it the same headroom as the other kernel-heavy tests.
   }, 30_000);
@@ -1344,7 +1366,7 @@ describe('exact kernel adapter', { timeout: 30_000 }, () => {
     // Fault injection pins the historical M4 kernel answer deterministically:
     // fuseAll reports success but returns its plate operand unchanged.
     const fuse = vi
-      .spyOn(BrepKernel.prototype, 'fuseAll')
+      .spyOn(RemusKernel.prototype, 'fuseAll')
       .mockImplementation((solids) => solids[0]!);
     let derived: DerivedState;
     try {
@@ -1434,7 +1456,7 @@ describe('exact kernel adapter', { timeout: 30_000 }, () => {
 
   it('attributes a strict Union validation failure to the feature', async () => {
     const validate = vi
-      .spyOn(BrepKernel.prototype, 'validateSolid')
+      .spyOn(RemusKernel.prototype, 'validateSolid')
       .mockReturnValue(1);
     try {
       const withFirst = addPrimitiveFeature(
@@ -1476,7 +1498,7 @@ describe('exact kernel adapter', { timeout: 30_000 }, () => {
     }
   });
 
-  it('diagnoses a disconnected BrepKit union without rewriting legacy history', async () => {
+  it('diagnoses a disconnected Remus union without rewriting legacy history', async () => {
     const withLower = addPrimitiveFeature(
       createProjectDocument('Separated union', toUserId('user_exact')),
       {
@@ -1986,9 +2008,9 @@ describe('exact kernel adapter', { timeout: 30_000 }, () => {
     // Fault injection pins the reported kernel failure: a valid result that
     // silently replaces both cylinders with planar faces.
     const pushPull = vi
-      .spyOn(BrepKernel.prototype, 'pushPullFace')
+      .spyOn(RemusKernel.prototype, 'pushPullFace')
       .mockImplementation(function (
-        this: BrepKernel,
+        this: RemusKernel,
         _solid: number,
         _face: number,
         _distance: number
@@ -2731,7 +2753,7 @@ describe('exact kernel adapter', { timeout: 30_000 }, () => {
     // A boss fused into a plate puts the union tool against a coaxial
     // cylindrical face. The kernel used to hand back the original solid —
     // valid, but unchanged — and only the adapter's read-back guard caught
-    // it. brepkit 2.129.0 grows the wall natively, so the edit now lands.
+    // it. BrepKit 2.129.0 grew the wall natively, so the edit now lands.
     // The guard itself still matters and is exercised by the shrink cases
     // above, which continue to fail closed.
     const plate = addPrimitiveFeature(
@@ -2876,7 +2898,7 @@ describe('exact kernel adapter', { timeout: 30_000 }, () => {
       filletDerived.bodyRepresentations[filleted.bodyOrder.at(-1)!];
     expect(filletDerived.warnings).toEqual([]);
     // Z3: blending an imported edge is one of the operations the flip newly
-    // sends to BrepKit, so pin the ANSWER, not just its direction. Rounding a
+    // sends to Remus, so pin the ANSWER, not just its direction. Rounding a
     // straight box edge of length L at radius r removes (1 - pi/4) r^2 L.
     const filletedEdge = body!.topology!.edges[0]!.points;
     const edgeLength = Math.hypot(
@@ -3231,9 +3253,9 @@ describe('exact kernel adapter', { timeout: 30_000 }, () => {
       return readings;
     }
 
-    const brepKit = new BrepKitKernelAdapter();
+    const remus = new RemusKernelAdapter();
     try {
-      const readings = await editSequence(brepKit);
+      const readings = await editSequence(remus);
 
       // Every stage: the source tube, the same tube re-read before each edit,
       // the 12 mm hole, the 4 mm hole and finally the filled body. Each
@@ -3259,11 +3281,11 @@ describe('exact kernel adapter', { timeout: 30_000 }, () => {
       });
       expect(readings.at(-1)).toMatchObject({ faceCount: 3, holeCount: 0 });
     } finally {
-      brepKit.dispose();
+      remus.dispose();
     }
   }, 60_000);
 
-  it('refuses BrepKit through-hole edits it cannot prove correct', async () => {
+  it('refuses Remus through-hole edits it cannot prove correct', async () => {
     const withOuter = addPrimitiveFeature(
       createProjectDocument('Refusal source', toUserId('user_direct_edit')),
       {
@@ -3293,9 +3315,9 @@ describe('exact kernel adapter', { timeout: 30_000 }, () => {
     );
     const bodyId = tube.bodyOrder.at(-1)!;
 
-    const brepKit = new BrepKitKernelAdapter();
+    const remus = new RemusKernelAdapter();
     try {
-      const derived = await brepKit.syncDocument(tube);
+      const derived = await remus.syncDocument(tube);
       const faces = derived.bodyRepresentations[bodyId]!.topology!.faces;
       const bore = faces.find(
         (face) => face.geometry?.featureType === 'through-hole'
@@ -3391,7 +3413,7 @@ describe('exact kernel adapter', { timeout: 30_000 }, () => {
             operation: refusal.operation
           })
         );
-        const failed = await brepKit.syncDocument(manager.document);
+        const failed = await remus.syncDocument(manager.document);
         expect(failed.warnings).toHaveLength(1);
         messages.push(failed.warnings[0]!);
         // A refused edit leaves the body exactly as the history built it.
@@ -3409,10 +3431,10 @@ describe('exact kernel adapter', { timeout: 30_000 }, () => {
           'Feature "Diameter breaks the body": Through-hole diameter 40 does not fit this body'
         ),
         'Feature "Unchanged diameter": Through-hole diameter must differ from its current diameter.',
-        'Feature "Defeature needs planar faces": Removing a plane face needs BrepKit\'s defeature operation, which only supports bodies whose every remaining face is planar; this body still has cylinder faces.'
+        'Feature "Defeature needs planar faces": Removing a plane face needs Remus\'s defeature operation, which only supports bodies whose every remaining face is planar; this body still has cylinder faces.'
       ]);
     } finally {
-      brepKit.dispose();
+      remus.dispose();
     }
   }, 60_000);
 
@@ -3439,9 +3461,9 @@ describe('exact kernel adapter', { timeout: 30_000 }, () => {
       }
     );
     const plateId = plate.bodyOrder[0]!;
-    const brepKit = new BrepKitKernelAdapter();
+    const remus = new RemusKernelAdapter();
     try {
-      const derived = await brepKit.syncDocument(plate);
+      const derived = await remus.syncDocument(plate);
       const plateBody = derived.bodyRepresentations[plateId]!;
 
       // --- the supported case: undo a chamfer -----------------------------
@@ -3452,7 +3474,7 @@ describe('exact kernel adapter', { timeout: 30_000 }, () => {
         size: 3
       }).document;
       const chamferBodyId = chamfered.bodyOrder.at(-1)!;
-      const chamferDerived = await brepKit.syncDocument(chamfered);
+      const chamferDerived = await remus.syncDocument(chamfered);
       const chamferBody = chamferDerived.bodyRepresentations[chamferBodyId]!;
       expect(chamferDerived.warnings).toEqual([]);
       // A 45-degree chamfer of leg 3 along a 30 mm edge removes half of a
@@ -3479,7 +3501,7 @@ describe('exact kernel adapter', { timeout: 30_000 }, () => {
           }
         })
       );
-      const restored = await brepKit.syncDocument(undone.document);
+      const restored = await remus.syncDocument(undone.document);
       const restoredBody = restored.bodyRepresentations[chamferBodyId]!;
       expect(restored.warnings).toEqual([]);
       // The closed form is the plate the chamfer was cut from: the three
@@ -3520,7 +3542,7 @@ describe('exact kernel adapter', { timeout: 30_000 }, () => {
           }
         })
       );
-      const failed = await brepKit.syncDocument(manager.document);
+      const failed = await remus.syncDocument(manager.document);
       expect(failed.warnings).toEqual([
         'Feature "Remove a plate face": Removing the selected face failed: ' +
           'defeature: unsupported configuration: no three faces around the ' +
@@ -3529,7 +3551,7 @@ describe('exact kernel adapter', { timeout: 30_000 }, () => {
       ]);
       expect(failed.bodyRepresentations[plateId]!.volume).toBeCloseTo(9000, 4);
     } finally {
-      brepKit.dispose();
+      remus.dispose();
     }
   }, 60_000);
 
@@ -3655,7 +3677,7 @@ describe('exact kernel adapter', { timeout: 30_000 }, () => {
     );
     const overcut = await adapter.syncDocument(manager.document);
     // Z3 pin. OpenCascade answered this with a generic "Offsetting the
-    // selected face does not produce a valid solid."; BrepKit names the
+    // selected face does not produce a valid solid."; Remus names the
     // boolean that came back empty. Both fail closed, which is the property
     // that matters — an overcut must never yield a body.
     expect(overcut.warnings).toEqual([
@@ -3699,7 +3721,7 @@ describe('exact kernel adapter', { timeout: 30_000 }, () => {
       commandFactories.importStep({
         name: 'Analytic fillet plate',
         artifactId: 'artifact_imported_blend',
-        sourceName: 'brepkit-fillet.step',
+        sourceName: 'remus-fillet.step',
         stepText
       })
     );
@@ -4303,7 +4325,7 @@ describe('exact kernel adapter', { timeout: 30_000 }, () => {
     // the kernel's vertex blends used to sag up to 5% of R below the corner
     // ball, fold triangles inward, and meet the fillet cylinders at a 105.8
     // degree crease — rendered as a pinched blob on every corner. Corner
-    // caps are exact analytic spheres since brepkit#33/#34; this pins that
+    // caps are exact analytic spheres since historical BrepKit #33/#34; this pins that
     // at the display-mesh level the app actually renders.
     const radius = 2;
     const [width, height, depth] = [30, 18, 24];
@@ -4549,7 +4571,7 @@ describe('exact kernel adapter', { timeout: 30_000 }, () => {
     ]);
     const inspection = await adapter.inspectStep(step);
     expect(inspection).toMatchObject({ solid: true, valid: true });
-    // BrepKit's STEP reader reconstructs NURBS blend trims independently,
+    // Remus's STEP reader reconstructs NURBS blend trims independently,
     // which can shift measured volume slightly while preserving a valid solid.
     expect(
       Math.abs(inspection.volume - body!.volume) / body!.volume
@@ -4557,7 +4579,7 @@ describe('exact kernel adapter', { timeout: 30_000 }, () => {
   });
 
   it('fillets an edge of an already-filleted body (sequential fillets)', async () => {
-    // BrepKit can extend a second blend from most planar-adjacent edges. What
+    // Remus can extend a second blend from most planar-adjacent edges. What
     // this pins is not which edges those are but that every REFUSAL carries
     // advice the kernel agrees with: a refusal that says "try a smaller
     // radius" is checked by actually trying smaller radii, and one that says
@@ -4995,7 +5017,7 @@ describe('exact kernel adapter', { timeout: 30_000 }, () => {
     // the right answer all along.
     //
     // Do not re-record these numbers. The closed form is the answer.
-    const kernel = new BrepKernel();
+    const kernel = new RemusKernel();
     try {
       const box = kernel.makeBox(80, 60, 6);
       const converged = (solid: number) => kernel.volume(solid, 1e-5);
@@ -5150,7 +5172,7 @@ describe('exact kernel adapter', { timeout: 30_000 }, () => {
     //
     // Both branches stay accepted. The refusal branch is the one that must
     // never regress into silence, and keeping it costs nothing.
-    const kernel = new BrepKernel();
+    const kernel = new RemusKernel();
     try {
       const plate = kernel.makeBox(80, 60, 6);
       const bore = kernel.copyAndTransformSolid(
@@ -5305,7 +5327,7 @@ describe('exact kernel adapter', { timeout: 30_000 }, () => {
     // Z3. Before the flip these three operations on an imported document ran
     // on OpenCascade, and the UI additionally refused solid offset outright
     // because that kernel's sharp offset was limited to proven convex planar
-    // bodies. BrepKit builds them now, and each answer is pinned against its
+    // bodies. Remus builds them now, and each answer is pinned against its
     // closed form.
     const source = addPrimitiveFeature(
       createProjectDocument('Import modeling source', toUserId('user_exact')),
