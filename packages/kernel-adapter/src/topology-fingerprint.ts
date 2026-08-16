@@ -11,9 +11,9 @@ import { GEOMETRY_LINEAR_TOLERANCE, type Vec3 } from '@openzcad/geometry';
  * measurements, traversal ordinals, or parameterization-phase-dependent
  * samples (kernels seam and phase closed curves differently).
  *
- * The open-edge signature is byte-identical to the scheme BrepKit has always
+ * The open-edge signature is byte-identical to the scheme Remus has always
  * persisted, so existing open-edge references keep their values. Closed edges
- * and faces changed format; the BrepKit adapter keeps resolving their legacy
+ * and faces changed format; the Remus adapter keeps resolving their legacy
  * hashes by registering both generations in its lookup maps.
  */
 
@@ -91,7 +91,7 @@ function quantizedDirection(direction: Vec3): string {
 
 export interface OpenEdgeSample {
   closed: false;
-  /** BrepKit's curve-type vocabulary: LINE, CIRCLE, ELLIPSE, BSPLINE_CURVE. */
+  /** Remus's curve-type vocabulary: LINE, CIRCLE, ELLIPSE, BSPLINE_CURVE. */
   curveType: string;
   length: number;
   endpoints: [Vec3, Vec3];

@@ -21,7 +21,7 @@ import { toUserId } from '@openzcad/shared';
  * The assistant is expected to answer "make a box with a lid" with a real
  * box-and-lid design rather than two blocks. This fixture is that patch,
  * written exactly as the system instructions describe it, and the tests below
- * build it through the real BrepKit kernel to prove the vocabulary can
+ * build it through the real Remus kernel to prove the vocabulary can
  * express the design and that the design itself is sound: hollow, open, and
  * assemblable with clearance.
  */
@@ -194,7 +194,8 @@ describe('AI-generated box with a lid', () => {
 
     // Hollow: the box is its walls and floor, not a solid block.
     const solidBlock = BOX_LEN * BOX_WID * BOX_HT;
-    const cavity = (BOX_LEN - 2 * WALL) * (BOX_WID - 2 * WALL) * (BOX_HT - FLOOR_T);
+    const cavity =
+      (BOX_LEN - 2 * WALL) * (BOX_WID - 2 * WALL) * (BOX_HT - FLOOR_T);
     expect(box.volume).toBeCloseTo(solidBlock - cavity, 3);
     expect(box.volume).toBeLessThan(solidBlock * 0.25);
 
@@ -206,7 +207,8 @@ describe('AI-generated box with a lid', () => {
       (BOX_LEN + 2 * (FIT_CLR + WALL)) *
       (BOX_WID + 2 * (FIT_CLR + WALL)) *
       (LID_TOP + LID_OVERLAP);
-    const lidPocket = (BOX_LEN + 2 * FIT_CLR) * (BOX_WID + 2 * FIT_CLR) * LID_OVERLAP;
+    const lidPocket =
+      (BOX_LEN + 2 * FIT_CLR) * (BOX_WID + 2 * FIT_CLR) * LID_OVERLAP;
     expect(lid.volume).toBeCloseTo(lidBlank - lidPocket, 3);
 
     // Separate: the parts are parked apart, so neither hides nor merges with
@@ -249,9 +251,7 @@ describe('AI-generated box with a lid', () => {
       commandsForCadPatch(manager.document, boxWithLidProposal())
     );
     const derived = await adapter.syncDocument(manager.document);
-    const digest = createCadDocumentDigest(
-      manager.commitDerivedState(derived)
-    );
+    const digest = createCadDocumentDigest(manager.commitDerivedState(derived));
 
     // The construction solids were absorbed by the booleans; only Box and Lid
     // remain targetable, and a follow-up turn must be able to see that.
@@ -355,9 +355,9 @@ describe('AI-generated sketch regions', () => {
       (candidate) => !candidate.consumed
     );
     const expected = Math.PI * (30 ** 2 - 24 ** 2) * 12;
-    expect(
-      Math.abs((body?.volume ?? 0) - expected) / expected
-    ).toBeLessThan(0.005);
+    expect(Math.abs((body?.volume ?? 0) - expected) / expected).toBeLessThan(
+      0.005
+    );
   });
 
   it('rejects a samplePoint outside every region', () => {
@@ -610,11 +610,10 @@ describe('AI-generated cylindrical features', () => {
     expect(live).toHaveLength(1);
 
     const expected =
-      PLATE_LEN * PLATE_WID * PLATE_T -
-      Math.PI * (BORE_DIA / 2) ** 2 * PLATE_T;
-    expect(
-      Math.abs((live[0]?.volume ?? 0) - expected) / expected
-    ).toBeLessThan(0.005);
+      PLATE_LEN * PLATE_WID * PLATE_T - Math.PI * (BORE_DIA / 2) ** 2 * PLATE_T;
+    expect(Math.abs((live[0]?.volume ?? 0) - expected) / expected).toBeLessThan(
+      0.005
+    );
 
     // The tool must break through both faces, leaving no skin behind.
     const bbox = live[0]!.bbox;

@@ -5,7 +5,7 @@
  * adapter, because the thing under test is precisely what our exporters never
  * emit: inch `CONVERSION_BASED_UNIT` length contexts, degree plane angles,
  * a missing `GLOBAL_UNIT_ASSIGNED_CONTEXT`, and `BREP_WITH_VOIDS` cavities
- * (BrepKit's `write_solid` silently drops inner shells — K0.1 step 2).
+ * (Remus's `write_solid` silently drops inner shells — K0.1 step 2).
  *
  * So those files are emitted here instead, from a deliberately tiny AP214
  * writer that only knows how to lay down axis-aligned planar box shells. Small
@@ -204,8 +204,7 @@ function writeBoxShell(
   );
 
   const edgeCurves = new Map<string, string>();
-  const edgeKey = (a: number, b: number) =>
-    a < b ? `${a}-${b}` : `${b}-${a}`;
+  const edgeKey = (a: number, b: number) => (a < b ? `${a}-${b}` : `${b}-${a}`);
 
   const orientedEdge = (a: number, b: number): string => {
     const key = edgeKey(a, b);
@@ -248,7 +247,9 @@ function writeBoxShell(
     const plane = writer.add(
       `PLANE('',${writer.placement(corners[face.origin]!, face.normal, face.ref)})`
     );
-    return writer.add(`ADVANCED_FACE('${label} ${face.label}',(${bound}),${plane},.T.)`);
+    return writer.add(
+      `ADVANCED_FACE('${label} ${face.label}',(${bound}),${plane},.T.)`
+    );
   });
 
   return writer.add(`CLOSED_SHELL('${label}',(${faces.join(',')}))`);
@@ -367,7 +368,9 @@ export function writeBoxStepFile(spec: StepFileSpec): string {
   const product = writer.add(
     `PRODUCT('${spec.id}','${spec.id}','',(${productContext}))`
   );
-  const formation = writer.add(`PRODUCT_DEFINITION_FORMATION('','',${product})`);
+  const formation = writer.add(
+    `PRODUCT_DEFINITION_FORMATION('','',${product})`
+  );
   const definitionContext = writer.add(
     `PRODUCT_DEFINITION_CONTEXT('part definition',${applicationContext},'design')`
   );
@@ -395,7 +398,11 @@ export function writeBoxStepFile(spec: StepFileSpec): string {
         `${solid.voids.length === 1 ? 'cavity' : 'cavities'} via BREP_WITH_VOIDS`
     );
     const voids = solid.voids.map((cavity, index) => {
-      const shell = writeBoxShell(writer, cavity, `${solid.name} void ${index + 1}`);
+      const shell = writeBoxShell(
+        writer,
+        cavity,
+        `${solid.name} void ${index + 1}`
+      );
       // .F. flips the outward-built shell so its normals face the material.
       return writer.add(`ORIENTED_CLOSED_SHELL('',*,${shell},.F.)`);
     });
@@ -434,9 +441,7 @@ function escapeStepString(text: string): string {
 /** Volume of a box, for asserting hand-authored expectations without a kernel. */
 export function boxVolume(box: BoxSpec): number {
   return (
-    (box.max.x - box.min.x) *
-    (box.max.y - box.min.y) *
-    (box.max.z - box.min.z)
+    (box.max.x - box.min.x) * (box.max.y - box.min.y) * (box.max.z - box.min.z)
   );
 }
 
@@ -447,7 +452,7 @@ const DEGREES_IN_RADIAN = 180 / Math.PI;
  * in degrees.
  *
  * Lifted from `test/step-import-compat.test.ts`'s `declareDegrees`, which is
- * where this case was first pinned. BrepKit used to read `CONICAL_SURFACE`
+ * where this case was first pinned. Remus used to read `CONICAL_SURFACE`
  * half-angles as radians regardless of the declared unit, so the adapter
  * rewrote the transient kernel input in JavaScript. K0.1 taught the kernel to
  * read the declared unit and Z3 deleted the rewriter; this file is what made

@@ -22,7 +22,7 @@ describe('modeling operation exact preflight', () => {
     // the exact-volume preflight and the body was refused. The preflight was
     // right to exist and wrong about this body. A reflection is a rigid
     // transform, so it CANNOT change volume; what changed was the measurement.
-    // BrepKit's `volume()` integrates a tessellation, and the old
+    // Remus's `volume()` integrates a tessellation, and the old
     // triangulation ran in a parameter box mixing an angle with a length, so
     // a cylindrical band and its mirror image were meshed differently and read
     // differently. The tessellation fix made the measurement reflection-

@@ -134,7 +134,7 @@ export interface TextProfileOptions {
 }
 
 /**
- * Signature of the planned brepkit `polygonUnion2d` binding
+ * Signature of the planned remus `polygonUnion2d` binding
  * (`docs/plans/text-feature-plan.md`, Phase 0.1).
  *
  * Input and output are flat `[x0, y0, x1, y1, ...]` coordinate arrays, one per

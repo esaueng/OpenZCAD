@@ -15,15 +15,14 @@ JavaScript object insertion order would miss equivalent requests; a key that
 omits canonical history could return stale geometry.
 
 Kernel delivery has a separate startup concern. Empty projects and users who
-never model should not pay to instantiate BrepKit, and non-STEP documents
-should not load OCCT.
+never model should not pay to instantiate Remus. OpenCascade is test-only and
+must not enter the production bundle.
 
 ## Decision
 
 The geometry worker shall dynamically import the exact adapter on the first
-non-empty sync or export. BrepKit initializes behind that boundary. OCCT remains
-lazy inside the adapter and is loaded only for STEP histories or the compound
-STEP-export path.
+non-empty sync or export. Remus initializes behind that boundary and handles
+all production geometry, including STEP histories and compound STEP export.
 
 Sync results use a worker-local cache with these invariants:
 

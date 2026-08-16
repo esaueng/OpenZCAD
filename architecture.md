@@ -1,6 +1,6 @@
 # OpenZCAD Architecture
 
-OpenZCAD is a local-first parametric CAD system. The canonical `ProjectDocument` and its command history live in the browser. Exact geometry is a derived projection rebuilt by BrepKit in a browser Web Worker, for every document including STEP imports. The Cloudflare Worker coordinates persistence, collaboration, and AI, but never owns interactive geometry.
+OpenZCAD is a local-first parametric CAD system. The canonical `ProjectDocument` and its command history live in the browser. Exact geometry is a derived projection rebuilt by Remus in a browser Web Worker, for every document including STEP imports. The Cloudflare Worker coordinates persistence, collaboration, and AI, but never owns interactive geometry.
 
 ## Layers
 
@@ -8,7 +8,7 @@ OpenZCAD is a local-first parametric CAD system. The canonical `ProjectDocument`
 - `document-core`: immutable document operations, feature ordering, parameter expression evaluation, editable STEP features, finishing/pattern/modeling features, v1–v5 normalization, and checkpoint creation.
 - `command-system`: pre-assigned deterministic IDs, validation, transactions, replay, and bounded undo/redo. It also converts reviewed `CadPatchProposal` operations into ordinary commands.
 - `ai-contracts`: compact document digests, the strict JSON Schema sent to the model, runtime proposal validation, and the allowlisted patch operation types.
-- `kernel-adapter/exact`: the lazy `brepkit-wasm` adapter. It owns native exact primitives, sweeps, transforms, booleans, mirror/shell/offset, edge finishing, patterns, imported meshes, face-attachment resolution, tessellation/topology projection, validity checks, measurements, and STEP/STL export, and the exact import of STEP sources. There is no second kernel: Z5 deleted OpenCascade from this package, and its adapter lives on only as the parity corpus's reference implementation in `test/parity/occt-reference/`.
+- `kernel-adapter/exact`: the lazy `remus-wasm` adapter. It owns native exact primitives, sweeps, transforms, booleans, mirror/shell/offset, edge finishing, patterns, imported meshes, face-attachment resolution, tessellation/topology projection, validity checks, measurements, and STEP/STL export, and the exact import of STEP sources. There is no second production kernel: OpenCascade lives only in the parity corpus's reference implementation under `test/parity/occt-reference/`. See [ADR-020](docs/adrs/ADR-020-remus-browser-kernel.md).
 - `kernel-adapter` (root): the synchronous helpers both adapters and the app share — topology lineage, face attachment, imported-feature recognition, and the mesh-to-STL handoff. No kernel runs here.
 - `geometry`: document-side geometry only — sketch-plane frames, 2D profiles, sketch regions, shared tolerances, and mesh welding. It builds no solids.
 - `viewport`: Three.js projection and picking only. It never mutates canonical geometry or document state. It renders Z-up to match the kernel, so a part's vertical axis is +Z on screen exactly as it is in the solid.

@@ -53,7 +53,7 @@ import {
  * The same 2 mm fillet measures 0.2 % over on a 20 mm block and 3.5 % over on
  * a 2 m beam. Nothing about the fillet changed.
  *
- * The likely mechanism, from BrepKit's own source rather than inferred here:
+ * The likely mechanism, from Remus's own source rather than inferred here:
  * `measure/volume.rs::volume_tessellation_deflection` clamps the caller's
  * deflection to `diag * 5e-5`, where `diag` is the bounding-box diagonal of
  * the WHOLE SOLID. Tessellation error on a face is governed by that face's own

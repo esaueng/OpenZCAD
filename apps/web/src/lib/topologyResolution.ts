@@ -18,7 +18,7 @@ import type {
  * silently answers "the first one". That is not a theoretical gap. A sphere
  * primitive publishes TWO faces carrying ONE hash — measured, not inferred:
  * `syncDocument` on a plain sphere returns `faces 2, unique 1` — because
- * BrepKit's two hemispheres are geometrically identical and ADR-011 hashes
+ * Remus's two hemispheres are geometrically identical and ADR-011 hashes
  * geometry. Picking either hemisphere therefore bound to the first, and a
  * plate with two identical through-holes behaved the same way. The numbers
  * happened to agree, which is precisely why nobody noticed: the binding was

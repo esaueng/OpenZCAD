@@ -20,7 +20,7 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { BrepKernel } from '../packages/kernel-adapter/node_modules/brepkit-wasm/brepkit_wasm.js';
+import { RemusKernel } from '../packages/kernel-adapter/src/remus-runtime';
 import { brepEdgeCurve } from '@openzcad/kernel-adapter/exact';
 import {
   edgeRunFrom,
@@ -40,7 +40,7 @@ import type { EdgeTopology } from '@openzcad/shared';
  * body-wide while the handle map is rebuilt per solid, so two solids that
  * touch exactly still share no vertex id.
  */
-function publishedEdges(kernel: BrepKernel, solids: number[]): EdgeTopology[] {
+function publishedEdges(kernel: RemusKernel, solids: number[]): EdgeTopology[] {
   const edges: EdgeTopology[] = [];
   let hash = 1;
   let nextVertexId = 0;
@@ -151,7 +151,7 @@ function runLengths(
   );
 }
 
-function verticalEdgesOf(kernel: BrepKernel, solid: number): number[] {
+function verticalEdgesOf(kernel: RemusKernel, solid: number): number[] {
   return Array.from(kernel.getSolidEdges(solid)).filter((edge) => {
     const ends = Array.from(kernel.getEdgeVertices(edge));
     return Math.abs(ends[2]! - ends[5]!) > 1e-12;
@@ -159,7 +159,7 @@ function verticalEdgesOf(kernel: BrepKernel, solid: number): number[] {
 }
 
 function regularPrism(
-  kernel: BrepKernel,
+  kernel: RemusKernel,
   sides: number,
   radius: number,
   height: number
@@ -169,7 +169,7 @@ function regularPrism(
 }
 
 /** A 20 x 20 x 10 box with its four vertical edges filleted, scaled by `k`. */
-function filletedBox(kernel: BrepKernel, k: number): number {
+function filletedBox(kernel: RemusKernel, k: number): number {
   const box = kernel.makeBox(20 * k, 20 * k, 10 * k);
   return kernel.fillet(
     box,
@@ -185,10 +185,10 @@ function sharesFace(left: EdgeTopology, right: EdgeTopology): boolean {
 
 describe('what the edge walk does', { timeout: 120_000 }, () => {
   // One kernel for the file. Every case builds its own solids from it, and a
-  // BrepKit instance is a large WASM module: standing eleven of them up in one
+  // Remus instance is a large WASM module: standing eleven of them up in one
   // worker is what turns unrelated kernel suites into timeouts under CI's
   // bounded file parallelism.
-  const kernel = new BrepKernel();
+  const kernel = new RemusKernel();
 
   it('takes a whole boss rim or one edge of it, depending on the side count', () => {
     // PINNED, and not fixable here. Nothing about a boss rim changes at eight
@@ -277,7 +277,9 @@ describe('what the edge walk does', { timeout: 120_000 }, () => {
     const solidOf = (topologyId: string) =>
       Number(topologyId.split(':')[1]) <= 12 ? 0 : 1;
     const runs = edges.map((edge) => edgeRunFrom(edges, edge.topologyId));
-    expect(runs.filter((run) => new Set(run.map(solidOf)).size > 1)).toEqual([]);
+    expect(runs.filter((run) => new Set(run.map(solidOf)).size > 1)).toEqual(
+      []
+    );
     // Two plain boxes: every edge is a run of one, as it is on one box alone.
     expect(runs.map((run) => run.length)).toEqual(Array(24).fill(1));
 
@@ -350,13 +352,21 @@ describe('what the edge walk does', { timeout: 120_000 }, () => {
     expect(rim).toHaveLength(8);
     const seed = rim[0]!.topologyId;
     // Above the kink: the whole band. At or below it: the seed alone.
-    expect(edgeRunFrom(edges, seed, { tangentToleranceDeg: 50 })).toHaveLength(8);
-    expect(edgeRunFrom(edges, seed, { tangentToleranceDeg: 45.5 })).toHaveLength(
+    expect(edgeRunFrom(edges, seed, { tangentToleranceDeg: 50 })).toHaveLength(
       8
     );
-    expect(edgeRunFrom(edges, seed, { tangentToleranceDeg: 45 })).toHaveLength(1);
-    expect(edgeRunFrom(edges, seed, { tangentToleranceDeg: 44 })).toHaveLength(1);
-    expect(edgeRunFrom(edges, seed, { tangentToleranceDeg: 12 })).toHaveLength(1);
+    expect(
+      edgeRunFrom(edges, seed, { tangentToleranceDeg: 45.5 })
+    ).toHaveLength(8);
+    expect(edgeRunFrom(edges, seed, { tangentToleranceDeg: 45 })).toHaveLength(
+      1
+    );
+    expect(edgeRunFrom(edges, seed, { tangentToleranceDeg: 44 })).toHaveLength(
+      1
+    );
+    expect(edgeRunFrom(edges, seed, { tangentToleranceDeg: 12 })).toHaveLength(
+      1
+    );
   });
 
   it('receives arcs as sampled curves, not as the single chord the docs claimed', () => {
@@ -386,7 +396,10 @@ describe('what the edge walk does', { timeout: 120_000 }, () => {
         // reads its end directions off exact geometry rather than off the
         // first and last of those 28 chords.
         expect(arc.curve?.type, `r=${radius}`).toBe('CIRCLE');
-        expect(arc.curve?.circle?.radius, `r=${radius}`).toBeCloseTo(radius, 12);
+        expect(arc.curve?.circle?.radius, `r=${radius}`).toBeCloseTo(
+          radius,
+          12
+        );
       }
     }
     // A cylinder's rim, which the old docstring held up as the well-sampled

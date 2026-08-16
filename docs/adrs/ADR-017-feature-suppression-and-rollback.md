@@ -21,7 +21,7 @@ the explicit per-feature control precedence over the current marker.
 The browser exact rebuild reports every skipped feature through the normal
 feature warning channel and emits no body or sketch basis for it. Downstream
 unsuppressed features therefore fail visibly if they depend on a skipped
-feature. OpenZCAD now has one production BrepKit build loop; the historical
+feature. OpenZCAD now has one production Remus build loop; the historical
 legacy mesh loop named in the expansion brief no longer exists.
 
 The compact AI digest includes each feature's effective `suppressed` state.

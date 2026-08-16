@@ -7,7 +7,7 @@ import type {
   QuantizedTopologyPoint,
   TopologyReferenceV5
 } from '@openzcad/shared';
-import type { FaceEvolutionPayloadV1 } from 'brepkit-wasm';
+import type { FaceEvolutionPayloadV1 } from './remus-runtime';
 import { GEOMETRY_LINEAR_TOLERANCE } from '@openzcad/geometry';
 import {
   importedStepLineageName,
@@ -24,7 +24,7 @@ import {
 const DIRECTION_SCALE = 1_000_000_000;
 const MATRIX_EPSILON = 1e-9;
 
-export type BrepKitLineageDiagnosticCode =
+export type RemusLineageDiagnosticCode =
   | 'hash-only'
   | 'invalid-semantic-witness'
   | 'ambiguous-semantic-role'
@@ -34,8 +34,8 @@ export type BrepKitLineageDiagnosticCode =
   | 'invalid-transform'
   | 'invalid-evolution-payload';
 
-export interface BrepKitLineageDiagnostic {
-  readonly code: BrepKitLineageDiagnosticCode;
+export interface RemusLineageDiagnostic {
+  readonly code: RemusLineageDiagnosticCode;
   readonly operation: TopologyLineageOperation;
   readonly message: string;
   readonly topologyKind?: TopologyKind;
@@ -44,23 +44,23 @@ export interface BrepKitLineageDiagnostic {
   readonly resultHandles?: readonly number[];
 }
 
-export interface BrepKitLineageState {
+export interface RemusLineageState {
   readonly faceReferences: Map<number, FaceTopologyReferenceV5>;
   readonly edgeReferences: Map<number, EdgeTopologyReferenceV5>;
-  readonly diagnostics: BrepKitLineageDiagnostic[];
+  readonly diagnostics: RemusLineageDiagnostic[];
 }
 
-export interface BrepKitTopologyCandidate {
+export interface RemusTopologyCandidate {
   readonly handle: number;
   readonly kind: TopologyKind;
   readonly witness: TopologyWitnessV1;
 }
 
-export interface BrepKitSemanticAssignment extends BrepKitTopologyCandidate {
+export interface RemusSemanticAssignment extends RemusTopologyCandidate {
   readonly lineageName: string;
 }
 
-function emptyLineageState(): BrepKitLineageState {
+function emptyLineageState(): RemusLineageState {
   return {
     faceReferences: new Map(),
     edgeReferences: new Map(),
@@ -70,7 +70,7 @@ function emptyLineageState(): BrepKitLineageState {
 
 function semanticReference(
   producingFeatureId: FeatureId,
-  assignment: BrepKitSemanticAssignment
+  assignment: RemusSemanticAssignment
 ): TopologyReferenceV5 {
   if (assignment.kind === 'edge') {
     const witness = assignment.witness as EdgeWitnessV1;
@@ -98,7 +98,7 @@ function semanticReference(
  * Publishes semantic construction names only when both the name and handle
  * are unique and the exact witness satisfies ADR-013.
  */
-export function createBrepKitSemanticLineage(
+export function createRemusSemanticLineage(
   producingFeatureId: FeatureId,
   operation:
     | 'primitive'
@@ -107,8 +107,8 @@ export function createBrepKitSemanticLineage(
     | 'fillet'
     | 'chamfer'
     | 'direct-edit',
-  assignments: readonly BrepKitSemanticAssignment[]
-): BrepKitLineageState {
+  assignments: readonly RemusSemanticAssignment[]
+): RemusLineageState {
   const state = emptyLineageState();
   const roleCounts = new Map<string, number>();
   const handleCounts = new Map<string, number>();
@@ -172,11 +172,11 @@ export function createBrepKitSemanticLineage(
  * closed B-spline face publishes no reference and the topology stays hash-only,
  * exactly as ADR-013 requires.
  */
-export function createBrepKitImportedStepLineage(
+export function createRemusImportedStepLineage(
   producingFeatureId: FeatureId,
-  candidates: readonly BrepKitTopologyCandidate[]
-): BrepKitLineageState {
-  return createBrepKitSemanticLineage(
+  candidates: readonly RemusTopologyCandidate[]
+): RemusLineageState {
+  return createRemusSemanticLineage(
     producingFeatureId,
     'imported-step',
     candidates.map((candidate) => ({
@@ -191,22 +191,22 @@ export function createBrepKitImportedStepLineage(
   );
 }
 
-export function brepKitHashOnlyLineage(
+export function remusHashOnlyLineage(
   operation: TopologyLineageOperation,
   reason: string
-): BrepKitLineageState {
+): RemusLineageState {
   const state = emptyLineageState();
   state.diagnostics.push({
     code: 'hash-only',
     operation,
-    message: `${operation} topology has no verified BrepKit lineage; ADR-011 hash fallback only. ${reason}`
+    message: `${operation} topology has no verified Remus lineage; ADR-011 hash fallback only. ${reason}`
   });
   return state;
 }
 
-export function mergeBrepKitLineageStates(
-  states: readonly BrepKitLineageState[]
-): BrepKitLineageState {
+export function mergeRemusLineageStates(
+  states: readonly RemusLineageState[]
+): RemusLineageState {
   const merged = emptyLineageState();
   for (const state of states) {
     for (const [handle, reference] of state.faceReferences) {
@@ -233,7 +233,7 @@ function sameHandleSet(
 
 function referenceMatchesCandidate(
   reference: FaceTopologyReferenceV5 | undefined,
-  candidate: BrepKitTopologyCandidate | undefined
+  candidate: RemusTopologyCandidate | undefined
 ): reference is FaceTopologyReferenceV5 {
   if (!reference || !candidate || candidate.kind !== 'face') {
     return false;
@@ -331,17 +331,17 @@ function supportIdentity(reference: FaceTopologyReferenceV5): string {
  * Generated blend faces are named by their two verified support identities;
  * malformed, unresolved, or ambiguous evidence publishes no reference.
  */
-export function createBrepKitModifierEvolutionLineage(input: {
+export function createRemusModifierEvolutionLineage(input: {
   readonly producingFeatureId: FeatureId;
   readonly operation: 'fillet' | 'chamfer';
   readonly payload: FaceEvolutionPayloadV1;
   readonly sourceSolid: number;
   readonly resultSolid: number;
-  readonly sourceCandidates: readonly BrepKitTopologyCandidate[];
-  readonly resultCandidates: readonly BrepKitTopologyCandidate[];
-  readonly sourceLineage: BrepKitLineageState | undefined;
+  readonly sourceCandidates: readonly RemusTopologyCandidate[];
+  readonly resultCandidates: readonly RemusTopologyCandidate[];
+  readonly sourceLineage: RemusLineageState | undefined;
   readonly generatedBlendFaces: ReadonlySet<number>;
-}): BrepKitLineageState {
+}): RemusLineageState {
   const sourceFaces = new Map(
     input.sourceCandidates
       .filter((candidate) => candidate.kind === 'face')
@@ -374,7 +374,7 @@ export function createBrepKitModifierEvolutionLineage(input: {
         .length ||
     !payloadMatches
   ) {
-    return brepKitHashOnlyLineage(
+    return remusHashOnlyLineage(
       input.operation,
       'The face-evolution payload did not match the exact production source and result domains.'
     );
@@ -388,7 +388,7 @@ export function createBrepKitModifierEvolutionLineage(input: {
       generatedSources.set(result, sources);
     }
   }
-  const assignments: BrepKitSemanticAssignment[] = [];
+  const assignments: RemusSemanticAssignment[] = [];
   for (const resultHandle of input.generatedBlendFaces) {
     const resultCandidate = resultFaces.get(resultHandle);
     const sources = [...(generatedSources.get(resultHandle) ?? [])];
@@ -416,7 +416,7 @@ export function createBrepKitModifierEvolutionLineage(input: {
     });
   }
 
-  return createBrepKitSemanticLineage(
+  return createRemusSemanticLineage(
     input.producingFeatureId,
     input.operation,
     assignments
@@ -587,7 +587,7 @@ function transformFaceWitness(
   };
 }
 
-export function transformBrepKitWitness(
+export function transformRemusWitness(
   kind: TopologyKind,
   witness: TopologyWitnessV1,
   matrix: readonly number[]
@@ -646,11 +646,11 @@ function transformedReference(
  * Deletion, split, merge, and generated-result conditions are reported and
  * left unreferenced rather than repaired by proximity or traversal order.
  */
-export function propagateBrepKitRigidTransformLineage(
-  source: BrepKitLineageState,
-  results: readonly BrepKitTopologyCandidate[],
+export function propagateRemusRigidTransformLineage(
+  source: RemusLineageState,
+  results: readonly RemusTopologyCandidate[],
   matrix: readonly number[]
-): BrepKitLineageState {
+): RemusLineageState {
   const output = emptyLineageState();
   output.diagnostics.push(...source.diagnostics);
   if (!matrixIsRigid(matrix)) {
@@ -671,7 +671,7 @@ export function propagateBrepKitRigidTransformLineage(
     ...source.edgeReferences.values()
   ];
   for (const reference of sources) {
-    const expected = transformBrepKitWitness(
+    const expected = transformRemusWitness(
       reference.kind,
       reference.witness,
       matrix
@@ -760,7 +760,7 @@ export function propagateBrepKitRigidTransformLineage(
   return output;
 }
 
-export interface BrepKitEvolutionPayload {
+export interface RemusEvolutionPayload {
   readonly solid: number;
   readonly evolution: {
     readonly modified: ReadonlyMap<number, readonly number[]>;
@@ -813,14 +813,14 @@ function sameIntegerSet(left: ReadonlySet<number>, right: ReadonlySet<number>) {
  * proves complete, disjoint source and result partitions. Callers must not
  * downgrade a rejection to an empty deletion set.
  */
-export function decodeVerifiedBrepKitEvolution(
+export function decodeVerifiedRemusEvolution(
   value: unknown,
   expected: {
     readonly resultSolid: number;
     readonly sourceFaces: readonly number[];
     readonly resultFaces: readonly number[];
   }
-): BrepKitEvolutionPayload {
+): RemusEvolutionPayload {
   try {
     if (typeof value !== 'string') {
       throw new Error('Evolution payload must be JSON text.');
@@ -898,6 +898,6 @@ export function decodeVerifiedBrepKitEvolution(
     };
   } catch (error) {
     const message = error instanceof Error ? error.message : 'invalid payload';
-    throw new Error(`BrepKit evolution rejected: ${message}`, { cause: error });
+    throw new Error(`Remus evolution rejected: ${message}`, { cause: error });
   }
 }

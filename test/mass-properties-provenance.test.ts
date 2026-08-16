@@ -1,5 +1,5 @@
 /**
- * What `massProperties` actually returns on the pinned BrepKit build, and how
+ * What `massProperties` actually returns on the pinned Remus build, and how
  * far its numbers can be trusted.
  *
  * The measurement overhaul wants to publish centre of mass, inertia, and
@@ -7,7 +7,8 @@
  * come from this one call. Two things had to be settled before any of that can
  * be built on, and neither is answerable from the typings:
  *
- * 1. `brepkit_wasm.d.ts` documents `massProperties` as "Returns a JSON string"
+ * 1. The installed package declarations document `massProperties` as
+ *    "Returns a JSON string"
  *    while typing it `any`. If it is a string and a consumer casts instead of
  *    parsing, every field reads `undefined` and a solid part publishes
  *    `0.00 mm^3` — a failure that renders as data rather than as an error. So
@@ -29,15 +30,15 @@
  */
 
 import { afterAll, describe, expect, it } from 'vitest';
-import { BrepKernel } from '../packages/kernel-adapter/node_modules/brepkit-wasm/brepkit_wasm.js';
+import { RemusKernel } from '../packages/kernel-adapter/src/remus-runtime';
 
 /** The deflection `exact.ts` uses for every published measurement. */
 const MEASUREMENT_DEFLECTION = 0.08;
 
-let kernel: BrepKernel | null = null;
+let kernel: RemusKernel | null = null;
 
-function useKernel(): BrepKernel {
-  kernel ??= new BrepKernel();
+function useKernel(): RemusKernel {
+  kernel ??= new RemusKernel();
   return kernel;
 }
 
@@ -117,7 +118,7 @@ describe('massProperties, on the pinned build', () => {
     // here and cannot be justified by accuracy on this shape.
     expect(parsed.volume).toBeCloseTo(deflected, 9);
 
-    // BrepKit's box is corner-origin, so the centroid is the half-diagonal.
+    // Remus's box is corner-origin, so the centroid is the half-diagonal.
     expect(parsed.centerOfMass[0]).toBeCloseTo(10, 9);
     expect(parsed.centerOfMass[1]).toBeCloseTo(10, 9);
     expect(parsed.centerOfMass[2]).toBeCloseTo(10, 9);

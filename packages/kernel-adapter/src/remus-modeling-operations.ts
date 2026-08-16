@@ -3,45 +3,45 @@ import { GEOMETRY_LINEAR_TOLERANCE } from '@openzcad/geometry';
 const VOLUME_DEFLECTION_RATIO = 1e-4;
 const NORMAL_TOLERANCE = 1e-9;
 
-export interface BrepKitModelingPoint {
+export interface RemusModelingPoint {
   readonly x: number;
   readonly y: number;
   readonly z: number;
 }
 
-export interface BrepKitMirrorInput {
+export interface RemusMirrorInput {
   readonly targetSolid: number;
-  readonly planePoint: BrepKitModelingPoint;
-  readonly planeNormal: BrepKitModelingPoint;
+  readonly planePoint: RemusModelingPoint;
+  readonly planeNormal: RemusModelingPoint;
 }
 
-export interface BrepKitShellInput {
+export interface RemusShellInput {
   readonly targetSolid: number;
   readonly thickness: number;
   readonly openingFaces: readonly number[];
 }
 
-export interface BrepKitSolidOffsetInput {
+export interface RemusSolidOffsetInput {
   readonly targetSolid: number;
   readonly distance: number;
 }
 
-export interface BrepKitDraftInput {
+export interface RemusDraftInput {
   readonly targetSolid: number;
   readonly faces: readonly number[];
-  readonly pullDirection: BrepKitModelingPoint;
-  readonly neutralPoint: BrepKitModelingPoint;
+  readonly pullDirection: RemusModelingPoint;
+  readonly neutralPoint: RemusModelingPoint;
   readonly angleDegrees: number;
 }
 
-export interface BrepKitThickenInput {
+export interface RemusThickenInput {
   readonly sourceSolid: number;
   readonly face: number;
   readonly thickness: number;
 }
 
-/** The pinned BrepKit calls and read-only gates used by these helpers. */
-export interface BrepKitModelingKernel {
+/** The pinned Remus calls and read-only gates used by these helpers. */
+export interface RemusModelingKernel {
   mirror(
     solid: number,
     px: number,
@@ -72,12 +72,12 @@ export interface BrepKitModelingKernel {
   volume(solid: number, deflection: number): number;
 }
 
-export interface BrepKitModelingOperations {
-  mirror(input: BrepKitMirrorInput): number;
-  shell(input: BrepKitShellInput): number;
-  offsetSolid(input: BrepKitSolidOffsetInput): number;
-  draft(input: BrepKitDraftInput): number;
-  thicken(input: BrepKitThickenInput): number;
+export interface RemusModelingOperations {
+  mirror(input: RemusMirrorInput): number;
+  shell(input: RemusShellInput): number;
+  offsetSolid(input: RemusSolidOffsetInput): number;
+  draft(input: RemusDraftInput): number;
+  thicken(input: RemusThickenInput): number;
 }
 
 interface SolidSnapshot {
@@ -91,7 +91,7 @@ interface SolidSnapshot {
   readonly minimumExtent: number;
 }
 
-function finitePoint(value: BrepKitModelingPoint, label: string): void {
+function finitePoint(value: RemusModelingPoint, label: string): void {
   if (![value.x, value.y, value.z].every(Number.isFinite)) {
     throw new Error(`${label} must contain three finite coordinates.`);
   }
@@ -102,7 +102,7 @@ function validHandle(value: number): boolean {
 }
 
 function inspectSolid(
-  kernel: BrepKitModelingKernel,
+  kernel: RemusModelingKernel,
   solid: number,
   label: string
 ): SolidSnapshot {
@@ -216,11 +216,11 @@ function assertNewOutputHandle(
 function operationFailure(operation: string, error: unknown): Error {
   const detail =
     error instanceof Error ? error.message : 'unknown kernel error';
-  return new Error(`BrepKit ${operation} refused: ${detail}`, { cause: error });
+  return new Error(`Remus ${operation} refused: ${detail}`, { cause: error });
 }
 
 function runOperation(
-  kernel: BrepKitModelingKernel,
+  kernel: RemusModelingKernel,
   operation: string,
   inputSolid: number,
   invoke: () => number,
@@ -276,8 +276,8 @@ function boundsContain(
 }
 
 function mirrorSolid(
-  kernel: BrepKitModelingKernel,
-  input: BrepKitMirrorInput
+  kernel: RemusModelingKernel,
+  input: RemusMirrorInput
 ): number {
   finitePoint(input.planePoint, 'Mirror plane point');
   finitePoint(input.planeNormal, 'Mirror plane normal');
@@ -319,8 +319,8 @@ function mirrorSolid(
 }
 
 function shellSolid(
-  kernel: BrepKitModelingKernel,
-  input: BrepKitShellInput
+  kernel: RemusModelingKernel,
+  input: RemusShellInput
 ): number {
   const source = inspectSolid(kernel, input.targetSolid, 'Target solid');
   assertScaleAppropriateDistance(input.thickness, source, 'Shell thickness');
@@ -364,8 +364,8 @@ function shellSolid(
 }
 
 function offsetSolid(
-  kernel: BrepKitModelingKernel,
-  input: BrepKitSolidOffsetInput
+  kernel: RemusModelingKernel,
+  input: RemusSolidOffsetInput
 ): number {
   const source = inspectSolid(kernel, input.targetSolid, 'Target solid');
   assertScaleAppropriateDistance(input.distance, source, 'Solid offset');
@@ -390,8 +390,8 @@ function offsetSolid(
 }
 
 function draftSolid(
-  kernel: BrepKitModelingKernel,
-  input: BrepKitDraftInput
+  kernel: RemusModelingKernel,
+  input: RemusDraftInput
 ): number {
   finitePoint(input.pullDirection, 'Draft pull direction');
   finitePoint(input.neutralPoint, 'Draft neutral point');
@@ -439,8 +439,8 @@ function draftSolid(
 }
 
 function thickenFace(
-  kernel: BrepKitModelingKernel,
-  input: BrepKitThickenInput
+  kernel: RemusModelingKernel,
+  input: RemusThickenInput
 ): number {
   const source = inspectSolid(kernel, input.sourceSolid, 'Source solid');
   if (!validHandle(input.face) || !source.faces.includes(input.face)) {
@@ -466,9 +466,9 @@ function thickenFace(
  * exact adapter. Document/history integration and original+copy semantics stay
  * outside this module.
  */
-export function createBrepKitModelingOperations(
-  kernel: BrepKitModelingKernel
-): BrepKitModelingOperations {
+export function createRemusModelingOperations(
+  kernel: RemusModelingKernel
+): RemusModelingOperations {
   return {
     mirror: (input) => mirrorSolid(kernel, input),
     shell: (input) => shellSolid(kernel, input),

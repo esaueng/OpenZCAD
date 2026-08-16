@@ -1,4 +1,5 @@
 {
+  "identifier": "app.esau.openzcad.e2e",
   "app": {
     "security": {
       "capabilities": [

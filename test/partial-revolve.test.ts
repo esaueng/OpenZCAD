@@ -309,7 +309,7 @@ describe('partial revolve geometry', () => {
    * saturates at a fixed relative error across every smaller scale. The
    * three larger angles now converge on the same floor.
    *
-   * That angle-dependence is why this is NOT the same thing as brepkit#59's
+   * That angle-dependence is why this is NOT the same thing as historical BrepKit #59's
    * `Tolerance::linear / min_radius` note. That ratio is angle-independent —
    * the profile's inner radius is 2*scale whatever the sweep — so it would
    * break all four angles at the same scale. The observed pattern instead
@@ -507,13 +507,13 @@ describe('partial revolve lineage', () => {
 
 describe('partial revolve mesh orientation', () => {
   /**
-   * These six were written as a CHARACTERIZATION of an open defect: BrepKit's
+   * These six were written as a CHARACTERIZATION of an open defect: Remus's
    * `revolve` returned a reversed shell below a full turn, so the display
    * mesh and the exported STL both came out inside-out. `writeAsciiStl`
    * computes facet normals from the winding, so a wedge exported with every
    * normal pointing into the solid.
    *
-   * brepkit#59 fixed it, and these were FLIPPED rather than relaxed — the
+   * Historical BrepKit #59 fixed it, and these were FLIPPED rather than relaxed — the
    * assertion is now stronger than the sign test it replaced. Two corrections
    * that PR established, kept here because they explain the shape of the
    * fix:

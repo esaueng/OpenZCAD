@@ -242,9 +242,9 @@ importers:
       '@openzcad/shared':
         specifier: workspace:*
         version: link:../shared
-      brepkit-wasm:
-        specifier: github:esaueng/brepkit#main&path:/crates/wasm/pkg
-        version: https://codeload.github.com/esaueng/brepkit/tar.gz/f7ebc249bae54e75a8c6b1279a82bb7bc54b1654#path:/crates/wasm/pkg
+      remus-wasm:
+        specifier: github:esaueng/remus#main&path:/crates/wasm/pkg
+        version: brepkit-wasm@https://codeload.github.com/esaueng/remus/tar.gz/20ac7446106231b3318bc29cf8b5d89b00fb7bd5#path:/crates/wasm/pkg
 
   packages/persistence:
     dependencies:
@@ -1327,9 +1327,9 @@ packages:
     resolution: {integrity: sha512-ScQ4IuvIEF1TMlP7Zt+vjJ//9zlPb2SDcxWxM3bk8s6t6GGdJ7KO1dCcTidOPJKePW30LE/2cT7wCyPho9/Wxg==}
     engines: {node: 20 || >=22}
 
-  brepkit-wasm@https://codeload.github.com/esaueng/brepkit/tar.gz/f7ebc249bae54e75a8c6b1279a82bb7bc54b1654#path:/crates/wasm/pkg:
-    resolution: {path: /crates/wasm/pkg, tarball: https://codeload.github.com/esaueng/brepkit/tar.gz/f7ebc249bae54e75a8c6b1279a82bb7bc54b1654}
-    version: 3.2.32
+  brepkit-wasm@https://codeload.github.com/esaueng/remus/tar.gz/20ac7446106231b3318bc29cf8b5d89b00fb7bd5#path:/crates/wasm/pkg:
+    resolution: {path: /crates/wasm/pkg, tarball: https://codeload.github.com/esaueng/remus/tar.gz/20ac7446106231b3318bc29cf8b5d89b00fb7bd5}
+    version: 2.130.0
 
   buffer-image-size@0.6.4:
     resolution: {integrity: sha512-nEh+kZOPY1w+gcCMobZ6ETUp9WfibndnosbpwB1iJk/8Gt5ZF2bhS6+B6bPYz424KtwsR6Rflc3tCz1/ghX2dQ==}
@@ -2936,7 +2936,7 @@ snapshots:
     dependencies:
       balanced-match: 4.0.4
 
-  brepkit-wasm@https://codeload.github.com/esaueng/brepkit/tar.gz/f7ebc249bae54e75a8c6b1279a82bb7bc54b1654#path:/crates/wasm/pkg: {}
+  brepkit-wasm@https://codeload.github.com/esaueng/remus/tar.gz/20ac7446106231b3318bc29cf8b5d89b00fb7bd5#path:/crates/wasm/pkg: {}
 
   buffer-image-size@0.6.4:
     dependencies:

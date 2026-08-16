@@ -39,9 +39,9 @@ const workspaceAliases = Object.fromEntries(
     ])
 );
 
-/** Same kernel overlay as the root config: swap in a local brepkit build. */
-const brepkitOverlay: Record<string, string> = process.env.BREPKIT_WASM_PKG
-  ? { 'brepkit-wasm': `${process.env.BREPKIT_WASM_PKG}/brepkit_wasm.js` }
+/** Same kernel overlay as the root config: swap in a local remus build. */
+const remusOverlay: Record<string, string> = process.env.REMUS_WASM_PKG
+  ? { 'remus-wasm': process.env.REMUS_WASM_PKG }
   : {};
 
 export default defineConfig({
@@ -61,7 +61,7 @@ export default defineConfig({
   },
   resolve: {
     alias: {
-      ...brepkitOverlay,
+      ...remusOverlay,
       '@openzcad/kernel-adapter/exact': fileURLToPath(
         new URL('packages/kernel-adapter/src/exact.ts', REPO_ROOT)
       ),

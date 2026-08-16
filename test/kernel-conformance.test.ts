@@ -20,7 +20,7 @@ import { toUserId, type ProjectDocument } from '@openzcad/shared';
 /**
  * Kernel conventions, pinned absolutely.
  *
- * BrepKit is the only kernel, so "where does a primitive sit and which way does
+ * Remus is the only kernel, so "where does a primitive sit and which way does
  * it point" can no longer be checked by agreeing with a second kernel — it has
  * to be asserted outright. Every case below states the analytic volume and the
  * exact placement the document model promises, so a kernel upgrade that quietly

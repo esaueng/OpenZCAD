@@ -7,14 +7,14 @@ import {
 } from '../apps/web/src/lib/kernelBuild';
 
 const PINNED = resolveKernelBuild({
-  OZ_BREPKIT_VERSION: '0.4.2',
-  OZ_BREPKIT_COMMIT: 'c4edaeb539a74feae8e03333ccc5337a3e6e151d'
+  OZ_REMUS_VERSION: '0.4.2',
+  OZ_REMUS_COMMIT: 'c4edaeb539a74feae8e03333ccc5337a3e6e151d'
 });
 
 describe('kernel build identity', () => {
   it('reads the version and commit Vite defines', () => {
     expect(PINNED).toEqual({
-      adapter: 'brepkit',
+      adapter: 'remus',
       packageVersion: '0.4.2',
       sourceCommit: 'c4edaeb539a74feae8e03333ccc5337a3e6e151d'
     });
@@ -24,12 +24,12 @@ describe('kernel build identity', () => {
     // Vitest applies neither define, and a settings row is a bad place to
     // discover that: "unknown" is a fact, "undefined" is a bug report.
     expect(resolveKernelBuild({})).toEqual({
-      adapter: 'brepkit',
+      adapter: 'remus',
       packageVersion: 'unknown',
       sourceCommit: 'unknown'
     });
     expect(
-      resolveKernelBuild({ OZ_BREPKIT_VERSION: '', OZ_BREPKIT_COMMIT: '' })
+      resolveKernelBuild({ OZ_REMUS_VERSION: '', OZ_REMUS_COMMIT: '' })
     ).toEqual(resolveKernelBuild({}));
   });
 });
@@ -46,9 +46,9 @@ describe('kernel build formatting', () => {
   });
 
   it('labels the row with the version and an abbreviated commit', () => {
-    expect(kernelBuildLabel(PINNED)).toBe('BrepKit 0.4.2 · c4edaeb');
+    expect(kernelBuildLabel(PINNED)).toBe('Remus 0.4.2 · c4edaeb');
     expect(kernelBuildLabel(resolveKernelBuild({}))).toBe(
-      'BrepKit unknown · unknown'
+      'Remus unknown · unknown'
     );
   });
 
@@ -56,7 +56,7 @@ describe('kernel build formatting', () => {
     // A short sha is ambiguous across repositories; a defect report needs the
     // repository and the whole commit.
     expect(kernelBuildDetail(PINNED)).toBe(
-      'BrepKit 0.4.2 — esaueng/brepkit@c4edaeb539a74feae8e03333ccc5337a3e6e151d'
+      'Remus 0.4.2 — esaueng/remus@c4edaeb539a74feae8e03333ccc5337a3e6e151d'
     );
   });
 });

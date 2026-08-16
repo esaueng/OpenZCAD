@@ -1,5 +1,9 @@
 # ADR-010: Imported STEP Direct Editing
 
+> **Historical amendment (2026-08-15):** ADR-020 replaces the production
+> BrepKit dependency with Remus. BrepKit references below describe the state
+> when this decision was recorded.
+
 ## Status
 
 Accepted.

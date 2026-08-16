@@ -148,7 +148,7 @@ describe('OCCT lineage contracts', () => {
     expect(names(forward)).toContain('primitive.box.edge.x.y-min.z-max');
   });
 
-  it('uses the BrepKit cylinder semantic identity vocabulary', () => {
+  it('uses the Remus cylinder semantic identity vocabulary', () => {
     const state = semanticPrimitiveLineage(FEATURE_ID, 'cylinder', [
       faceCandidate({
         surfaceType: 'cylinder',
@@ -492,7 +492,7 @@ describe('OCCT lineage adapter integration', () => {
    * lineage rather than a transition out of an earlier one, so the ADR-013
    * rule that imported STEP provenance is hash-only governs provenance THROUGH
    * the import, not identity within it. Every face and edge is named by its own
-   * exact ADR-011 witness — the same rule the BrepKit adapter uses, so a pick
+   * exact ADR-011 witness — the same rule the Remus adapter uses, so a pick
    * stored on an imported body resolves to the same identity on either kernel
    * across the Z3 route flip.
    */
