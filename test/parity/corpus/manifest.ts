@@ -97,7 +97,7 @@ export const CORPUS: CorpusEntry[] = [
     id: 'a-export-box',
     category: 'a-exports',
     purpose:
-      'BrepKit export of a 10x20x30 primitive box. The all-planar baseline: ' +
+      'Remus export of a 10x20x30 primitive box. The all-planar baseline: ' +
       'anything that diverges here is a parser problem, not a surface problem.',
     path: 'test/parity/corpus/a-export-box.step',
     referenceVolumeMm3: 10 * 20 * 30,
@@ -107,7 +107,7 @@ export const CORPUS: CorpusEntry[] = [
     id: 'a-export-cylinder',
     category: 'a-exports',
     purpose:
-      'BrepKit export of an r8 h20 cylinder. First periodic surface in the ' +
+      'Remus export of an r8 h20 cylinder. First periodic surface in the ' +
       'corpus: the seam edge is where the two kernels first disagree on how ' +
       'many edges a body has.',
     path: 'test/parity/corpus/a-export-cylinder.step',
@@ -118,7 +118,7 @@ export const CORPUS: CorpusEntry[] = [
     id: 'a-export-cone',
     category: 'a-exports',
     purpose:
-      'BrepKit export of an r10 h10 cone. Carries the CONICAL_SURFACE ' +
+      'Remus export of an r10 h10 cone. Carries the CONICAL_SURFACE ' +
       'half-angle in radians — the control for the degree variants in (b).',
     path: 'test/parity/corpus/a-export-cone.step',
     referenceVolumeMm3: (Math.PI * 10 * 10 * 10) / 3,
@@ -128,7 +128,7 @@ export const CORPUS: CorpusEntry[] = [
     id: 'a-export-sphere',
     category: 'a-exports',
     purpose:
-      'BrepKit export of an r6 sphere: two SPHERICAL_SURFACE patches with ' +
+      'Remus export of an r6 sphere: two SPHERICAL_SURFACE patches with ' +
       'degenerate polar edges.',
     path: 'test/parity/corpus/a-export-sphere.step',
     referenceVolumeMm3: (4 / 3) * Math.PI * 6 ** 3,
@@ -138,7 +138,7 @@ export const CORPUS: CorpusEntry[] = [
     id: 'a-export-bored-plate',
     category: 'a-exports',
     purpose:
-      'BrepKit export of a boolean result: a 40x24x10 plate with an r5 bore ' +
+      'Remus export of a boolean result: a 40x24x10 plate with an r5 bore ' +
       'through it. Analytic cylinder produced by a cut, not by a primitive.',
     path: 'test/parity/corpus/a-export-bored-plate.step',
     referenceVolumeMm3: 40 * 24 * 10 - Math.PI * 25 * 10,
@@ -266,7 +266,7 @@ export const CORPUS: CorpusEntry[] = [
     id: 'e-nurbs-fillet-plate',
     category: 'e-nurbs',
     purpose:
-      'BrepKit export of a 40x24x10 plate with four r3 vertical corner ' +
+      'Remus export of a 40x24x10 plate with four r3 vertical corner ' +
       'fillets, written as four B_SPLINE_SURFACE_WITH_KNOTS bands. The ' +
       'analytic truth of the shape is 9522.74 mm3; this file is the NURBS ' +
       'encoding of it.',
@@ -294,10 +294,10 @@ export const CORPUS: CorpusEntry[] = [
     id: 'f-hostile-occt-authored-box',
     category: 'f-hostile',
     purpose:
-      'A plain 10x20x30 box exported by OCCT rather than by BrepKit. Every ' +
+      'A plain 10x20x30 box exported by OCCT rather than by Remus. Every ' +
       'OCCT-written file carries SURFACE_CURVE with PCURVE pairs, and that is ' +
       'the single most common shape a real-world STEP file arrives in. This ' +
-      'is the smallest file in the corpus that BrepKit cannot read at all.',
+      'is the smallest file in the corpus that Remus cannot read at all.',
     path: 'test/parity/corpus/f-hostile-occt-authored-box.step',
     referenceVolumeMm3: 10 * 20 * 30,
     referenceSolidCount: 1

@@ -360,19 +360,19 @@ function elideOptionalPlacementReferences(stepText: string): {
 }
 
 /**
- * UNSKIP-ON-BREPKIT-PIN-BUMP.
+ * UNSKIP-ON-REMUS-PIN-BUMP.
  *
  * CATIA omits the optional `axis` and `ref_direction` of AXIS2_PLACEMENT_3D,
- * which the pinned BrepKit rejects outright:
+ * which the pinned Remus rejects outright:
  *
  *   parse error: AXIS2_PLACEMENT_3D #43 needs 3 sub-references
  *
  * The kernel fix is unreleased. Unskip this `describe` in the SAME change that
- * bumps `brepkit-wasm` in packages/kernel-adapter/package.json to a build
+ * bumps `remus-wasm` in packages/kernel-adapter/package.json to a build
  * containing it — nothing else makes it pass, and it must not be left failing
  * in the tree meanwhile.
  */
-describe.skip('CATIA optional AXIS2_PLACEMENT_3D references [UNSKIP-ON-BREPKIT-PIN-BUMP]', () => {
+describe.skip('CATIA optional AXIS2_PLACEMENT_3D references [UNSKIP-ON-REMUS-PIN-BUMP]', () => {
   it('imports to a visible body with zero warnings', async () => {
     const source = corpusStep('a-export-cylinder');
     const elided = elideOptionalPlacementReferences(source);

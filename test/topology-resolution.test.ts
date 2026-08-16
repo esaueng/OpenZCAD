@@ -165,7 +165,7 @@ describe('fail-closed topology resolution', () => {
 
 describe('against real kernel output', () => {
   it("refuses a sphere's twin hemispheres, which really do share one hash", async () => {
-    // Not a synthetic fixture: BrepKit's sphere publishes two faces carrying
+    // Not a synthetic fixture: Remus's sphere publishes two faces carrying
     // one hash, because the hemispheres are geometrically identical and
     // ADR-011 hashes geometry. Before this change, picking either bound to
     // the first with no indication anything was wrong.

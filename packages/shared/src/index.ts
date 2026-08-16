@@ -861,7 +861,7 @@ export interface EdgeTopology {
    *   edge on a flagged STEP import lists three or more. Multiplicity is kept
    *   rather than deduplicated, because it is the raw fact and a consumer can
    *   always narrow it.
-   * - **Not unique per face.** BrepKit builds a sphere from two same-surface
+   * - **Not unique per face.** Remus builds a sphere from two same-surface
    *   hemispheres that share one exact witness, so both patches hash
    *   identically. Two edges reporting a common hash therefore do not
    *   necessarily touch the same face. This is the identity scheme failing

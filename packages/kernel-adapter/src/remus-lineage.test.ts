@@ -5,20 +5,20 @@ import type {
   FaceWitnessV1,
   FeatureId
 } from '@openzcad/shared';
-import type { FaceEvolutionPayloadV1 } from 'brepkit-wasm';
+import type { FaceEvolutionPayloadV1 } from './remus-runtime';
 import { describe, expect, it } from 'vitest';
 
 import {
-  createBrepKitSemanticLineage,
-  createBrepKitModifierEvolutionLineage,
-  decodeVerifiedBrepKitEvolution,
-  propagateBrepKitRigidTransformLineage,
-  transformBrepKitWitness,
-  type BrepKitLineageState
-} from './brepkit-lineage';
+  createRemusSemanticLineage,
+  createRemusModifierEvolutionLineage,
+  decodeVerifiedRemusEvolution,
+  propagateRemusRigidTransformLineage,
+  transformRemusWitness,
+  type RemusLineageState
+} from './remus-lineage';
 import { topologyHashOfWitness } from './topology-lineage';
 
-const FEATURE_ID = 'feature_brepkit' as FeatureId;
+const FEATURE_ID = 'feature_remus' as FeatureId;
 const FILLET_FEATURE_ID = 'feature_fillet' as FeatureId;
 
 const FACE: FaceWitnessV1 = {
@@ -95,9 +95,9 @@ function edgeReference(): EdgeTopologyReferenceV5 {
   };
 }
 
-describe('BrepKit semantic lineage', () => {
+describe('Remus semantic lineage', () => {
   it('publishes only unique, supported semantic roles', () => {
-    const state = createBrepKitSemanticLineage(FEATURE_ID, 'primitive', [
+    const state = createRemusSemanticLineage(FEATURE_ID, 'primitive', [
       {
         handle: 11,
         kind: 'face',
@@ -120,7 +120,7 @@ describe('BrepKit semantic lineage', () => {
   });
 
   it('fails closed when a role or handle is ambiguous', () => {
-    const state = createBrepKitSemanticLineage(FEATURE_ID, 'primitive', [
+    const state = createRemusSemanticLineage(FEATURE_ID, 'primitive', [
       { handle: 11, kind: 'face', lineageName: 'box.face.side', witness: FACE },
       { handle: 12, kind: 'face', lineageName: 'box.face.side', witness: FACE }
     ]);
@@ -133,7 +133,7 @@ describe('BrepKit semantic lineage', () => {
   });
 });
 
-describe('BrepKit modifier evolution lineage', () => {
+describe('Remus modifier evolution lineage', () => {
   const payload = (generatedResults: number[]): FaceEvolutionPayloadV1 => ({
     schemaVersion: 1,
     source: { solid: 50, faces: [1, 2] },
@@ -154,7 +154,7 @@ describe('BrepKit modifier evolution lineage', () => {
     }
   });
 
-  const sourceLineage = createBrepKitSemanticLineage(FEATURE_ID, 'primitive', [
+  const sourceLineage = createRemusSemanticLineage(FEATURE_ID, 'primitive', [
     {
       handle: 1,
       kind: 'face',
@@ -193,7 +193,7 @@ describe('BrepKit modifier evolution lineage', () => {
   });
 
   it('attributes a unique generated band to the modifier feature', () => {
-    const result = createBrepKitModifierEvolutionLineage(input([13]));
+    const result = createRemusModifierEvolutionLineage(input([13]));
     const reference = result.faceReferences.get(13);
     expect(reference?.producingFeatureId).toBe(FILLET_FEATURE_ID);
     expect(reference?.lineageName).toContain(
@@ -204,7 +204,7 @@ describe('BrepKit modifier evolution lineage', () => {
   });
 
   it('rejects duplicate generated geometry instead of guessing a band', () => {
-    const result = createBrepKitModifierEvolutionLineage(input([13, 14]));
+    const result = createRemusModifierEvolutionLineage(input([13, 14]));
     expect(result.faceReferences.has(13)).toBe(false);
     expect(result.faceReferences.has(14)).toBe(false);
     expect(result.diagnostics).toEqual(
@@ -216,7 +216,7 @@ describe('BrepKit modifier evolution lineage', () => {
 
   it('falls back cleanly when the payload does not name the production result', () => {
     const mismatched = input([13]);
-    const result = createBrepKitModifierEvolutionLineage({
+    const result = createRemusModifierEvolutionLineage({
       ...mismatched,
       resultSolid: 61
     });
@@ -227,17 +227,17 @@ describe('BrepKit modifier evolution lineage', () => {
   });
 });
 
-describe('BrepKit rigid-transform lineage', () => {
+describe('Remus rigid-transform lineage', () => {
   it('preserves semantic identity only through exact transformed witnesses', () => {
-    const transformedFace = transformBrepKitWitness('face', FACE, TRANSLATION)!;
-    const transformedEdge = transformBrepKitWitness('edge', EDGE, TRANSLATION)!;
-    const source: BrepKitLineageState = {
+    const transformedFace = transformRemusWitness('face', FACE, TRANSLATION)!;
+    const transformedEdge = transformRemusWitness('edge', EDGE, TRANSLATION)!;
+    const source: RemusLineageState = {
       faceReferences: new Map([[1, faceReference()]]),
       edgeReferences: new Map([[2, edgeReference()]]),
       diagnostics: []
     };
 
-    const result = propagateBrepKitRigidTransformLineage(
+    const result = propagateRemusRigidTransformLineage(
       source,
       [
         { handle: 101, kind: 'face', witness: transformedFace },
@@ -263,8 +263,8 @@ describe('BrepKit rigid-transform lineage', () => {
   });
 
   it('diagnoses deletion, split, and merge instead of guessing', () => {
-    const transformed = transformBrepKitWitness('face', FACE, TRANSLATION)!;
-    const deleted = propagateBrepKitRigidTransformLineage(
+    const transformed = transformRemusWitness('face', FACE, TRANSLATION)!;
+    const deleted = propagateRemusRigidTransformLineage(
       {
         faceReferences: new Map([[1, faceReference()]]),
         edgeReferences: new Map(),
@@ -277,7 +277,7 @@ describe('BrepKit rigid-transform lineage', () => {
       expect.objectContaining({ code: 'transform-deleted' })
     );
 
-    const split = propagateBrepKitRigidTransformLineage(
+    const split = propagateRemusRigidTransformLineage(
       {
         faceReferences: new Map([[1, faceReference()]]),
         edgeReferences: new Map(),
@@ -293,7 +293,7 @@ describe('BrepKit rigid-transform lineage', () => {
       expect.objectContaining({ code: 'transform-split' })
     );
 
-    const merged = propagateBrepKitRigidTransformLineage(
+    const merged = propagateRemusRigidTransformLineage(
       {
         faceReferences: new Map([
           [1, faceReference('box.face.a')],
@@ -323,10 +323,22 @@ describe('BrepKit rigid-transform lineage', () => {
     const cos = Math.cos(angle);
     const sin = Math.sin(angle);
     const rotation = [
-      cos, -sin, 0, 0,
-      sin, cos, 0, 0,
-      0, 0, 1, 0,
-      0, 0, 0, 1
+      cos,
+      -sin,
+      0,
+      0,
+      sin,
+      cos,
+      0,
+      0,
+      0,
+      0,
+      1,
+      0,
+      0,
+      0,
+      0,
+      1
     ] as const;
     type Real3 = [number, number, number];
     const rotate = (p: Real3): Real3 => [
@@ -413,12 +425,12 @@ describe('BrepKit rigid-transform lineage', () => {
 
     // The regression premise: the derived and measured integers really do
     // disagree for this rotation — otherwise this test proves nothing.
-    const expectedEdge = transformBrepKitWitness('edge', sourceEdge, rotation)!;
+    const expectedEdge = transformRemusWitness('edge', sourceEdge, rotation)!;
     expect(
       topologyHashOfWitness('edge', expectedEdge as EdgeWitnessV1)
     ).not.toBe(topologyHashOfWitness('edge', measuredEdge));
 
-    const source: BrepKitLineageState = {
+    const source: RemusLineageState = {
       faceReferences: new Map([
         [
           1,
@@ -448,7 +460,7 @@ describe('BrepKit rigid-transform lineage', () => {
       diagnostics: []
     };
 
-    const result = propagateBrepKitRigidTransformLineage(
+    const result = propagateRemusRigidTransformLineage(
       source,
       [
         { handle: 101, kind: 'face', witness: measuredFace },
@@ -479,7 +491,7 @@ describe('BrepKit rigid-transform lineage', () => {
         measuredEdge.midpoint[2]
       ]
     };
-    const ambiguous = propagateBrepKitRigidTransformLineage(
+    const ambiguous = propagateRemusRigidTransformLineage(
       source,
       [
         { handle: 102, kind: 'edge', witness: measuredEdge },
@@ -501,7 +513,7 @@ describe('BrepKit rigid-transform lineage', () => {
         measuredEdge.midpoint[2]
       ]
     };
-    const deleted = propagateBrepKitRigidTransformLineage(
+    const deleted = propagateRemusRigidTransformLineage(
       source,
       [{ handle: 104, kind: 'edge', witness: far }],
       rotation
@@ -513,7 +525,7 @@ describe('BrepKit rigid-transform lineage', () => {
   });
 
   it('rejects a non-rigid transform without publishing references', () => {
-    const result = propagateBrepKitRigidTransformLineage(
+    const result = propagateRemusRigidTransformLineage(
       {
         faceReferences: new Map([[1, faceReference()]]),
         edgeReferences: new Map(),
@@ -529,9 +541,9 @@ describe('BrepKit rigid-transform lineage', () => {
   });
 });
 
-describe('BrepKit evolution bridge decoder', () => {
+describe('Remus evolution bridge decoder', () => {
   it('accepts only complete source and result partitions for the production solid', () => {
-    const decoded = decodeVerifiedBrepKitEvolution(
+    const decoded = decodeVerifiedRemusEvolution(
       JSON.stringify({
         solid: 77,
         evolution: {
@@ -554,16 +566,16 @@ describe('BrepKit evolution bridge decoder', () => {
       resultFaces: [10, 11]
     };
     expect(() =>
-      decodeVerifiedBrepKitEvolution(
+      decodeVerifiedRemusEvolution(
         JSON.stringify({
           solid: 77,
           evolution: { modified: { 1: [10], 2: [11] }, generated: {} }
         }),
         expected
       )
-    ).toThrow(/BrepKit evolution rejected/);
+    ).toThrow(/Remus evolution rejected/);
     expect(() =>
-      decodeVerifiedBrepKitEvolution(
+      decodeVerifiedRemusEvolution(
         JSON.stringify({
           solid: 78,
           evolution: {
@@ -576,7 +588,7 @@ describe('BrepKit evolution bridge decoder', () => {
       )
     ).toThrow(/production result/);
     expect(() =>
-      decodeVerifiedBrepKitEvolution(
+      decodeVerifiedRemusEvolution(
         JSON.stringify({
           solid: 77,
           evolution: {

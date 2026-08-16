@@ -15,10 +15,10 @@
  *   2. REFERENCE — where a corpus file has a closed-form volume derived from
  *      its own construction, each kernel must match it. This is the only bar
  *      that can say which kernel is WRONG rather than merely different.
- *   3. PARITY — BrepKit and OpenCascade agree, except exactly where
+ *   3. PARITY — Remus and OpenCascade agree, except exactly where
  *      `corpus-pins.ts` records that they do not.
  *
- * Nothing is asserted away. Where BrepKit is worse the delta is pinned with
+ * Nothing is asserted away. Where Remus is worse the delta is pinned with
  * literal values on both sides, and the pin fails on repair as well as on
  * regression.
  *
@@ -32,7 +32,7 @@ import { fileURLToPath } from 'node:url';
 
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
-import { BrepKitKernelAdapter } from '../../packages/kernel-adapter/src/exact';
+import { RemusKernelAdapter } from '../../packages/kernel-adapter/src/exact';
 import { OcctStepKernelAdapter } from './occt-reference/occt-step';
 
 import {
@@ -51,8 +51,8 @@ import {
 import { CORPUS, REPO_ROOT, type CorpusEntry } from './corpus/manifest';
 import { IMPORT_MODELING_SCENARIOS } from './scenarios';
 
-type KernelName = 'brepkit' | 'occt';
-const KERNELS: KernelName[] = ['brepkit', 'occt'];
+type KernelName = 'remus' | 'occt';
+const KERNELS: KernelName[] = ['remus', 'occt'];
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const BASELINE_DIR = join(HERE, 'baselines');
@@ -236,7 +236,7 @@ function sameFailureStage(left: string, right: string): boolean {
  *
  * When one kernel refuses a file the other reads, EVERY downstream metric
  * differs — fourteen of them for a single void file. Pinning all fourteen
- * would bury the one fact a kernel engineer needs ("BrepKit cannot read
+ * would bury the one fact a kernel engineer needs ("Remus cannot read
  * BREP_WITH_VOIDS") under thirteen restatements of it. So a divergence in a
  * governing metric SUBSUMES its dependants: the governing metric must be
  * pinned, and its dependants must NOT be (the suite enforces both). The full
@@ -306,19 +306,19 @@ function literal(value: string | number): string {
 function unpinnedDeltaMessage(
   subject: string,
   metric: string,
-  brepkit: string | number,
+  remus: string | number,
   occt: string | number
 ): string {
   return (
     `UNPINNED KERNEL DIVERGENCE — '${subject}' metric '${metric}':\n` +
-    `  brepkit: ${literal(brepkit)}\n` +
+    `  remus: ${literal(remus)}\n` +
     `  occt:    ${literal(occt)}\n` +
-    'If this is a known BrepKit gap, add it to KERNEL_DELTAS in ' +
+    'If this is a known Remus gap, add it to KERNEL_DELTAS in ' +
     'test/parity/corpus-pins.ts with the owning plan item:\n' +
     `  {\n` +
     `    subject: '${subject}',\n` +
     `    metric: '${metric}',\n` +
-    `    brepkit: ${literal(brepkit)},\n` +
+    `    remus: ${literal(remus)},\n` +
     `    occt: ${literal(occt)},\n` +
     `    owner: 'K0.?',\n` +
     `    note: '...'\n` +
@@ -347,10 +347,10 @@ function repairedPinMessage(
  */
 function assertPinnedParity(
   subject: string,
-  brepkitMeasurement: Omit<CorpusMeasurement, 'inspect'>,
+  remusMeasurement: Omit<CorpusMeasurement, 'inspect'>,
   occtMeasurement: Omit<CorpusMeasurement, 'inspect'>
 ): void {
-  const left = comparableMetrics(brepkitMeasurement);
+  const left = comparableMetrics(remusMeasurement);
   const right = comparableMetrics(occtMeasurement);
   const subsumed = subsumedMetrics(left, right);
 
@@ -386,9 +386,9 @@ function assertPinnedParity(
     }
     expect
       .soft(
-        metricsAgree(metric, value, pin.brepkit),
-        `${subject} ${metric}: BrepKit now ${literal(value)}, pinned as ` +
-          `${literal(pin.brepkit)} (owner ${pin.owner})`
+        metricsAgree(metric, value, pin.remus),
+        `${subject} ${metric}: Remus now ${literal(value)}, pinned as ` +
+          `${literal(pin.remus)} (owner ${pin.owner})`
       )
       .toBe(true);
     expect
@@ -416,14 +416,14 @@ describe('STEP parity corpus', () => {
   const buildFailures = new Map<string, string>();
   const timings: Timing[] = [];
 
-  let brepkit: BrepKitKernelAdapter;
+  let remus: RemusKernelAdapter;
   let occt: OcctStepKernelAdapter;
 
   const adapterFor = (kernel: KernelName): MeasurableAdapter =>
-    kernel === 'brepkit' ? brepkit : occt;
+    kernel === 'remus' ? remus : occt;
 
   beforeAll(async () => {
-    brepkit = new BrepKitKernelAdapter();
+    remus = new RemusKernelAdapter();
     occt = await OcctStepKernelAdapter.create();
 
     for (const entry of CORPUS) {
@@ -482,7 +482,10 @@ describe('STEP parity corpus', () => {
     mkdirSync(BASELINE_DIR, { recursive: true });
     if (WRITE_BASELINES) {
       writeFileSync(CORPUS_BASELINE, `${JSON.stringify(measured, null, 2)}\n`);
-      writeFileSync(MODELING_BASELINE, `${JSON.stringify(modeling, null, 2)}\n`);
+      writeFileSync(
+        MODELING_BASELINE,
+        `${JSON.stringify(modeling, null, 2)}\n`
+      );
     }
     // The forks pool swallows stdout; persist the run's shape to a file so a
     // slow corpus file can be found without rerunning under a debugger.
@@ -494,7 +497,7 @@ describe('STEP parity corpus', () => {
         2
       )}\n`
     );
-    brepkit?.dispose();
+    remus?.dispose();
     occt?.dispose();
   });
 
@@ -541,9 +544,8 @@ describe('STEP parity corpus', () => {
             failure,
             `'${scenario.key}' failed to build on ${kernel}: ${failure}`
           ).toBeUndefined();
-          const baseline = loadBaseline(MODELING_BASELINE)[scenario.key]?.[
-            kernel
-          ];
+          const baseline =
+            loadBaseline(MODELING_BASELINE)[scenario.key]?.[kernel];
           expect(
             baseline,
             `no ${kernel} baseline for '${scenario.key}' — rerecord with ` +
@@ -581,7 +583,9 @@ describe('STEP parity corpus', () => {
           const measurement = measured[entry.id]![kernel];
           const pin = findReferenceDeviation(entry.id, kernel);
           const reported: number | 'refused' | 'threw' =
-            measurement.status === 'imported' ? measurement.volume : measurement.status;
+            measurement.status === 'imported'
+              ? measurement.volume
+              : measurement.status;
 
           if (pin) {
             expect(
@@ -628,7 +632,9 @@ describe('STEP parity corpus', () => {
       }
     }
 
-    for (const entry of CORPUS.filter((candidate) => candidate.expectNoSolids)) {
+    for (const entry of CORPUS.filter(
+      (candidate) => candidate.expectNoSolids
+    )) {
       for (const kernel of KERNELS) {
         it(`${entry.id} yields no solid on ${kernel}`, () => {
           const measurement = measured[entry.id]![kernel];
@@ -711,30 +717,30 @@ describe('STEP parity corpus', () => {
   });
 
   // -------------------------------------------------------------------------
-  // Bar 3 — BrepKit vs OpenCascade, pinned in both directions
+  // Bar 3 — Remus vs OpenCascade, pinned in both directions
   // -------------------------------------------------------------------------
 
   describe('kernel parity', () => {
     for (const entry of CORPUS) {
-      it(`${entry.id}: BrepKit matches OCCT except where pinned`, () => {
+      it(`${entry.id}: Remus matches OCCT except where pinned`, () => {
         assertPinnedParity(
           entry.id,
-          measured[entry.id]!.brepkit,
+          measured[entry.id]!.remus,
           measured[entry.id]!.occt
         );
       });
     }
 
     for (const scenario of IMPORT_MODELING_SCENARIOS) {
-      it(`${scenario.key}: BrepKit matches OCCT except where pinned`, () => {
+      it(`${scenario.key}: Remus matches OCCT except where pinned`, () => {
         const both = modeling[scenario.key]!;
         expect(
-          both.brepkit && both.occt,
+          both.remus && both.occt,
           `'${scenario.key}' did not build on both kernels: ` +
-            `brepkit=${buildFailures.get(`${scenario.key}:brepkit`) ?? 'ok'}, ` +
+            `remus=${buildFailures.get(`${scenario.key}:remus`) ?? 'ok'}, ` +
             `occt=${buildFailures.get(`${scenario.key}:occt`) ?? 'ok'}`
         ).toBeTruthy();
-        assertPinnedParity(scenario.key, both.brepkit, both.occt);
+        assertPinnedParity(scenario.key, both.remus, both.occt);
       });
     }
   });
@@ -751,7 +757,7 @@ describe('STEP parity corpus', () => {
 
     it('every pin names a real subject and a real metric', () => {
       const metricNames = new Set(
-        Object.keys(comparableMetrics(measured[CORPUS[0]!.id]!.brepkit))
+        Object.keys(comparableMetrics(measured[CORPUS[0]!.id]!.remus))
       );
       for (const pin of KERNEL_DELTAS) {
         expect(
@@ -773,9 +779,10 @@ describe('STEP parity corpus', () => {
 
     it('no pin is duplicated', () => {
       const keys = KERNEL_DELTAS.map((pin) => `${pin.subject}:${pin.metric}`);
-      expect(new Set(keys).size, `duplicate KERNEL_DELTAS: ${keys.join(', ')}`).toBe(
-        keys.length
-      );
+      expect(
+        new Set(keys).size,
+        `duplicate KERNEL_DELTAS: ${keys.join(', ')}`
+      ).toBe(keys.length);
       const referenceKeys = REFERENCE_DEVIATIONS.map(
         (pin) => `${pin.subject}:${pin.kernel}`
       );

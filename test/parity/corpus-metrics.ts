@@ -14,7 +14,7 @@
  *     changed.
  *   - `faceCount` / `edgeCount` are the mesh-fallback tell (a tessellated
  *     boolean multiplies them) and the seam-representation tell (OCCT reports
- *     a closed cylinder's seam edge, BrepKit does not).
+ *     a closed cylinder's seam edge, Remus does not).
  *   - `surfaceTypes` catches the case counts cannot: same face count, cylinder
  *     replaced by B-spline.
  *   - `faceHashDigest` / `edgeHashDigest` fold the topology witness sets into
@@ -23,18 +23,21 @@
  *     picks would move even when every count matches.
  *   - `witnessedFaces` / `lineageNames` are K0.6's acceptance surface. The
  *     original premise — that OCCT already published schema-v5 references on
- *     imported bodies and BrepKit had to catch up — was measured and found
+ *     imported bodies and Remus had to catch up — was measured and found
  *     false: neither kernel published any. K0.6 built it on BOTH adapters
  *     against one shared rule, so these metrics now answer the question the Z3
  *     flip actually turns on: does a face pick stored on an imported body carry
  *     the same identity on either kernel.
  *   - `roundTrip` re-exports and re-imports through the SAME kernel. It is the
- *     only metric that catches writer defects — BrepKit's `write_solid`
+ *     only metric that catches writer defects — Remus's `write_solid`
  *     dropping inner shells is invisible until the file comes back.
  */
 
 import { CommandManager, commandFactories } from '@openzcad/command-system';
-import { createBodyFeatureIds, createProjectDocument } from '@openzcad/document-core';
+import {
+  createBodyFeatureIds,
+  createProjectDocument
+} from '@openzcad/document-core';
 import {
   toUserId,
   type BodyRepresentation,
@@ -101,7 +104,8 @@ export interface CorpusMeasurement {
   edgeHashDigest: string;
   bbox: number[] | null;
   /** `inspectStep`, the pre-import validity probe the app shows users. */
-  inspect: { solid: boolean; valid: boolean; volume: number } | { error: string };
+  inspect:
+    { solid: boolean; valid: boolean; volume: number } | { error: string };
   roundTrip: RoundTripReport;
 }
 
@@ -238,21 +242,23 @@ function aggregate(bodies: BodyRepresentation[]): Aggregate {
   };
 }
 
-const REFUSED: Omit<CorpusMeasurement, 'status' | 'warnings' | 'inspect' | 'roundTrip'> =
-  {
-    bodyCount: 0,
-    volume: 0,
-    faceCount: 0,
-    edgeCount: 0,
-    seamEdgeCount: 0,
-    surfaceTypes: {},
-    witnessedFaces: 0,
-    witnessedEdges: 0,
-    lineageNames: [],
-    faceHashDigest: 'empty',
-    edgeHashDigest: 'empty',
-    bbox: null
-  };
+const REFUSED: Omit<
+  CorpusMeasurement,
+  'status' | 'warnings' | 'inspect' | 'roundTrip'
+> = {
+  bodyCount: 0,
+  volume: 0,
+  faceCount: 0,
+  edgeCount: 0,
+  seamEdgeCount: 0,
+  surfaceTypes: {},
+  witnessedFaces: 0,
+  witnessedEdges: 0,
+  lineageNames: [],
+  faceHashDigest: 'empty',
+  edgeHashDigest: 'empty',
+  bbox: null
+};
 
 /**
  * Measure one derived state, then round-trip the same document through the
@@ -376,7 +382,10 @@ export async function measureStepFile(
       roundTrip: { status: 'skipped-no-body' }
     };
   }
-  return { ...(await measureDerived(adapter, document, derived, sourceName)), inspect };
+  return {
+    ...(await measureDerived(adapter, document, derived, sourceName)),
+    inspect
+  };
 }
 
 /** Measure an already-built document (the import-modeling scenarios). */

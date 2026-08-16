@@ -499,9 +499,7 @@ test('the orientation widget snaps to a view the rail cannot reach', async ({
       (coordinate, axis) => coordinate - camera.target[axis]!
     );
     return (
-      offset[0]! > 1 &&
-      Math.abs(offset[1]!) < 0.1 &&
-      Math.abs(offset[2]!) < 0.1
+      offset[0]! > 1 && Math.abs(offset[1]!) < 0.1 && Math.abs(offset[2]!) < 0.1
     );
   });
   const rightOffset = right.position.map(
@@ -997,7 +995,7 @@ test('double-clicking a filleted rim takes the whole run of edges', async ({
   // the viewport for an edge, otherwise the e2e hook can correctly locate a
   // stale box edge that topology actions must then reject.
   await expect(status).not.toContainText(
-    /Starting geometry worker|Loading exact BrepKit kernel|Rebuilding exact geometry|Waiting for exact geometry|Exact geometry is still rebuilding/i,
+    /Starting geometry worker|Loading exact Remus kernel|Rebuilding exact geometry|Waiting for exact geometry|Exact geometry is still rebuilding/i,
     { timeout: 30_000 }
   );
 

@@ -63,7 +63,7 @@ const workspaceAliases = {
   )
 };
 
-async function brepkitBuildInfo(): Promise<{
+async function remusBuildInfo(): Promise<{
   version: string;
   commit: string;
 }> {
@@ -71,7 +71,7 @@ async function brepkitBuildInfo(): Promise<{
     readFile(
       fileURLToPath(
         new URL(
-          '../../packages/kernel-adapter/node_modules/brepkit-wasm/package.json',
+          '../../packages/kernel-adapter/node_modules/remus-wasm/package.json',
           import.meta.url
         )
       ),
@@ -84,10 +84,10 @@ async function brepkitBuildInfo(): Promise<{
   ]);
   const packageJson = JSON.parse(packageText) as { version?: unknown };
   const commit = lockfile.match(
-    /brepkit-wasm@https:\/\/codeload\.github\.com\/esaueng\/brepkit\/tar\.gz\/([0-9a-f]{40})#path:\/crates\/wasm\/pkg/
+    /https:\/\/codeload\.github\.com\/esaueng\/remus\/tar\.gz\/([0-9a-f]{40})#path:\/crates\/wasm\/pkg/
   )?.[1];
   if (typeof packageJson.version !== 'string' || !commit) {
-    throw new Error('Unable to resolve the pinned BrepKit build identity.');
+    throw new Error('Unable to resolve the pinned Remus build identity.');
   }
   return { version: packageJson.version, commit };
 }
@@ -107,7 +107,7 @@ function sourceCommit(): string {
 
 function buildMetadata(
   commit: string,
-  brepkit: { version: string; commit: string }
+  remus: { version: string; commit: string }
 ): PluginOption {
   return {
     name: 'openzcad-build-metadata',
@@ -122,9 +122,9 @@ function buildMetadata(
         source: `${JSON.stringify(
           {
             format: 'openzcad-build-metadata',
-            formatVersion: 1,
+            formatVersion: 2,
             commit,
-            brepkit,
+            remus,
             assets
           },
           null,
@@ -243,7 +243,7 @@ function pdfjsAssets(): PluginOption {
 }
 
 export default defineConfig(async ({ command, isPreview, mode }) => {
-  const brepkit = await brepkitBuildInfo();
+  const remus = await remusBuildInfo();
   const commit = sourceCommit();
   const isDesktop = mode === 'desktop';
   const plugins = [];
@@ -253,7 +253,7 @@ export default defineConfig(async ({ command, isPreview, mode }) => {
     wasm(),
     pdfjsAssets(),
     textFontAssets(),
-    buildMetadata(commit, brepkit)
+    buildMetadata(commit, remus)
   );
 
   const nodeMajor = Number.parseInt(
@@ -285,12 +285,12 @@ export default defineConfig(async ({ command, isPreview, mode }) => {
       'import.meta.env.OZ_DESKTOP': JSON.stringify(isDesktop),
       'import.meta.env.OZ_PERF': JSON.stringify(process.env.OZ_PERF ?? ''),
       'import.meta.env.OZ_BUILD_COMMIT': JSON.stringify(commit),
-      'import.meta.env.OZ_BREPKIT_VERSION': JSON.stringify(brepkit.version),
-      'import.meta.env.OZ_BREPKIT_COMMIT': JSON.stringify(brepkit.commit)
+      'import.meta.env.OZ_REMUS_VERSION': JSON.stringify(remus.version),
+      'import.meta.env.OZ_REMUS_COMMIT': JSON.stringify(remus.commit)
     },
     optimizeDeps: {
       // The exact CAD kernel ships as WebAssembly and must remain a runtime asset.
-      exclude: ['brepkit-wasm']
+      exclude: ['remus-wasm']
     },
     worker: {
       format: 'es' as const,

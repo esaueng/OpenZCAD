@@ -118,7 +118,7 @@ describe('settings advanced section', () => {
     expect(value).toHaveTextContent(kernelBuildLabel(KERNEL_BUILD));
     // The abbreviated commit is what the row shows; the full one is the
     // tooltip, so a defect report can carry an unambiguous sha.
-    expect(value.textContent).toMatch(/^BrepKit /);
+    expect(value.textContent).toMatch(/^Remus /);
   });
 
   it('finds it by searching for the kernel', async () => {

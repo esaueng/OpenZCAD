@@ -19,7 +19,7 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { BrepKernel } from '../packages/kernel-adapter/node_modules/brepkit-wasm/brepkit_wasm.js';
+import { RemusKernel } from '../packages/kernel-adapter/src/remus-runtime';
 import { GEOMETRY_LINEAR_TOLERANCE } from '@openzcad/geometry';
 
 /** The same quantizer the ADR-011 edge signature and mesh welding both use. */
@@ -34,7 +34,7 @@ function distance(a: ArrayLike<number>, b: ArrayLike<number>): number {
 }
 
 /** The display polylines the viewport receives, in `getSolidEdges` order. */
-function displayPolylines(kernel: BrepKernel, solid: number): number[][] {
+function displayPolylines(kernel: RemusKernel, solid: number): number[][] {
   const bounds = Array.from(kernel.boundingBox(solid));
   const scale = Math.max(
     bounds[3]! - bounds[0]!,
@@ -55,7 +55,7 @@ function displayPolylines(kernel: BrepKernel, solid: number): number[][] {
   }
 }
 
-function verticalEdgesOf(kernel: BrepKernel, solid: number): number[] {
+function verticalEdgesOf(kernel: RemusKernel, solid: number): number[] {
   return Array.from(kernel.getSolidEdges(solid)).filter((edge) => {
     const ends = Array.from(kernel.getEdgeVertices(edge));
     return Math.abs(ends[2]! - ends[5]!) > 1e-12;
@@ -64,7 +64,7 @@ function verticalEdgesOf(kernel: BrepKernel, solid: number): number[] {
 
 describe('edge-to-vertex incidence', { timeout: 60_000 }, () => {
   it('comes from the kernel, which names a vertex handle at each end', () => {
-    const kernel = new BrepKernel();
+    const kernel = new RemusKernel();
     const bodies: [string, number, number, number][] = [
       // label, solid, expected vertices, expected edges
       ['box', kernel.makeBox(20, 20, 10), 8, 12],
@@ -110,7 +110,7 @@ describe('edge-to-vertex incidence', { timeout: 60_000 }, () => {
   });
 
   it('reports one vertex twice for a closed edge, of three different kinds', () => {
-    const kernel = new BrepKernel();
+    const kernel = new RemusKernel();
     const closedOf = (solid: number) =>
       Array.from(kernel.getSolidEdges(solid)).filter(
         (edge) => new Set(kernel.getEdgeVertexHandles(edge)).size === 1
@@ -148,7 +148,7 @@ describe('edge-to-vertex incidence', { timeout: 60_000 }, () => {
   // -------------------------------------------------------------------------
 
   it('now starts a closed edge at the vertex it owns, which it did not before', () => {
-    // THIS TEST WAS FLIPPED by the pin bump to 02bbf81 carrying brepkit#64.
+    // THIS TEST WAS FLIPPED by the pin bump to 02bbf81 carrying historical BrepKit #64.
     //
     // It used to assert the opposite, and was described here as "the decisive
     // result": a closed edge's polyline began a QUARTER TURN from the seam, so
@@ -157,7 +157,7 @@ describe('edge-to-vertex incidence', { timeout: 60_000 }, () => {
     // corpus: 73 vertices reached from two edges that quantize apart, every
     // one of them on a closed edge.
     //
-    // brepkit#64 fixed exactly that, for an unrelated reason — the offset
+    // Historical BrepKit #64 fixed exactly that, for an unrelated reason — the offset
     // sheared the CDT's parameter domain and folded a band's triangles back
     // over themselves. Closed rims are now sampled from the edge's own start
     // vertex, so the gap this test measured has gone from 10*sqrt(2) = 14.142
@@ -174,7 +174,7 @@ describe('edge-to-vertex incidence', { timeout: 60_000 }, () => {
     // rebuild may renumber, so they are not derivable from geometry at all.
     // Whether endpoint quantization would now succeed on the corpus is simply
     // unmeasured. Do not assume either way from this test.
-    const kernel = new BrepKernel();
+    const kernel = new RemusKernel();
     const cylinder = kernel.makeCylinder(10, 20);
     const edges = Array.from(kernel.getSolidEdges(cylinder));
     const polylines = displayPolylines(kernel, cylinder);
@@ -202,7 +202,7 @@ describe('edge-to-vertex incidence', { timeout: 60_000 }, () => {
     // `UnitSystem` includes metres, so a part a couple of microns across is
     // representable and its fillet is smaller still. At that size the 1e-6
     // quantum stops being a rounding step and becomes a feature-sized grid.
-    const kernel = new BrepKernel();
+    const kernel = new RemusKernel();
     const box = kernel.makeBox(2e-6, 2e-6, 1e-6);
     const filleted = kernel.fillet(
       box,
@@ -232,7 +232,7 @@ describe('edge-to-vertex incidence', { timeout: 60_000 }, () => {
     // the size where the quantum fails. Measured smallest vertex separation
     // across the whole corpus is 4.67e-2 (samples/parametric-bracket.step),
     // some 47,000 quanta, and collisions there are zero.
-    const kernel = new BrepKernel();
+    const kernel = new RemusKernel();
     for (const [width, height, radius] of [
       [2e-4, 1e-4, 3e-5],
       [2e-3, 1e-3, 3e-4]

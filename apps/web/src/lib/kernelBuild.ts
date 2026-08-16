@@ -1,12 +1,12 @@
 /**
  * The identity of the geometry kernel this bundle was built against.
  *
- * `brepkit-wasm` is pinned to a git commit rather than to a registry version,
+ * `remus-wasm` is pinned to a git commit rather than to a registry version,
  * so "which kernel am I running" has two halves: the version the pinned package
- * declares, and the brepkit commit that package was built from. Vite resolves
+ * declares, and the remus commit that package was built from. Vite resolves
  * both at build time — the version out of the installed package, the commit out
- * of the lockfile — and defines them as `OZ_BREPKIT_VERSION` and
- * `OZ_BREPKIT_COMMIT`. Nothing here reads the network or asks the worker, so
+ * of the lockfile — and defines them as `OZ_REMUS_VERSION` and
+ * `OZ_REMUS_COMMIT`. Nothing here reads the network or asks the worker, so
  * what this reports is the kernel the bundle actually carries.
  */
 
@@ -14,20 +14,20 @@
 const UNKNOWN = 'unknown';
 
 /** Human-facing name for the one adapter the app builds geometry through. */
-const ADAPTER_LABEL = 'BrepKit';
+const ADAPTER_LABEL = 'Remus';
 
 export interface KernelBuild {
   /** Adapter identifier, as the diagnostic bundle records it. */
-  adapter: 'brepkit';
-  /** Version declared by the pinned `brepkit-wasm` package. */
+  adapter: 'remus';
+  /** Version declared by the pinned `remus-wasm` package. */
   packageVersion: string;
-  /** Brepkit commit the pinned package was built from. */
+  /** Remus commit the pinned package was built from. */
   sourceCommit: string;
 }
 
 export interface KernelBuildEnv {
-  OZ_BREPKIT_VERSION?: string;
-  OZ_BREPKIT_COMMIT?: string;
+  OZ_REMUS_VERSION?: string;
+  OZ_REMUS_COMMIT?: string;
 }
 
 /**
@@ -37,9 +37,9 @@ export interface KernelBuildEnv {
  */
 export function resolveKernelBuild(env: KernelBuildEnv): KernelBuild {
   return {
-    adapter: 'brepkit',
-    packageVersion: env.OZ_BREPKIT_VERSION || UNKNOWN,
-    sourceCommit: env.OZ_BREPKIT_COMMIT || UNKNOWN
+    adapter: 'remus',
+    packageVersion: env.OZ_REMUS_VERSION || UNKNOWN,
+    sourceCommit: env.OZ_REMUS_COMMIT || UNKNOWN
   };
 }
 
@@ -54,7 +54,7 @@ export function shortCommit(commit: string): string {
   return /^[0-9a-f]{40}$/.test(commit) ? commit.slice(0, 7) : commit;
 }
 
-/** One line, short enough for a settings row: `BrepKit 0.4.2 · c4edaeb`. */
+/** One line, short enough for a settings row: `Remus 0.4.2 · c4edaeb`. */
 export function kernelBuildLabel(build: KernelBuild): string {
   return `${ADAPTER_LABEL} ${build.packageVersion} · ${shortCommit(build.sourceCommit)}`;
 }
@@ -65,5 +65,5 @@ export function kernelBuildLabel(build: KernelBuild): string {
  * repositories; this one is not.
  */
 export function kernelBuildDetail(build: KernelBuild): string {
-  return `${ADAPTER_LABEL} ${build.packageVersion} — esaueng/brepkit@${build.sourceCommit}`;
+  return `${ADAPTER_LABEL} ${build.packageVersion} — esaueng/remus@${build.sourceCommit}`;
 }

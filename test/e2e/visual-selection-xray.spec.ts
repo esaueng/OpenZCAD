@@ -89,7 +89,7 @@ test('x-rays the selected bore behind the outer wall only', async ({
   await expect(canvas).toBeVisible({ timeout: 120_000 });
   const status = page.getByRole('contentinfo');
   await expect(status).not.toContainText(
-    /Starting geometry worker|Loading exact BrepKit kernel|Rebuilding exact geometry|Waiting for exact geometry|Exact geometry is still rebuilding/i,
+    /Starting geometry worker|Loading exact Remus kernel|Rebuilding exact geometry|Waiting for exact geometry|Exact geometry is still rebuilding/i,
     { timeout: 60_000 }
   );
 

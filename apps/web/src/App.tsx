@@ -6636,8 +6636,8 @@ export function App() {
     }
     try {
       const bundle = createProjectDiagnosticBundle(doc, {
-        brepkitVersion: KERNEL_BUILD.packageVersion,
-        brepkitCommit: KERNEL_BUILD.sourceCommit
+        remusVersion: KERNEL_BUILD.packageVersion,
+        remusCommit: KERNEL_BUILD.sourceCommit
       });
       const fileName = `${exportFileStem(doc.name)}.openzcad-diagnostic.json`;
       downloadText(
@@ -9957,7 +9957,7 @@ export function App() {
 
   const geometryPhaseLabel: Record<typeof geometry.state.phase, string> = {
     starting: 'Starting geometry worker',
-    'loading-brepkit': 'Loading exact BrepKit kernel',
+    'loading-remus': 'Loading exact Remus kernel',
     rebuilding: 'Rebuilding exact geometry',
     ready: 'Exact geometry ready',
     failed: 'Exact geometry failed'
