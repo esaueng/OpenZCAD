@@ -7,7 +7,7 @@ the current branch; production enablement is a separate rollout decision.
 
 - Schema-v6 canonical documents with v1–v5 normalization, checkpoints, asset
   references, command replay, transactions, undo/redo, and local-first autosave.
-- A browser-worker BrepKit exact adapter with primitives, multi-profile
+- A browser-worker Remus exact adapter with primitives, multi-profile
   sweeps, transforms, booleans, finishing, patterns, mirror-copy, shell, solid
   offset, validity checks, measurements, and exact STEP/STL export.
 - Exact schema-v5 topology witnesses plus semantic lineage for the proved
@@ -19,7 +19,7 @@ the current branch; production enablement is a separate rollout decision.
   unsupported faces stop the rebuild; legacy attachments use their stored
   migration frame with a warning.
 - Modeling UI and command preflight for mirror, shell opening-face selection,
-  and positive-outward solid offset. BrepKit mirror refuses dense
+  and positive-outward solid offset. Remus mirror refuses dense
   blended/boolean bodies when the pinned kernel does not preserve measured
   solid volume. (The OpenCascade convex-planar solid-offset refusal is gone
   with the kernel — Z5.)
@@ -35,7 +35,7 @@ the current branch; production enablement is a separate rollout decision.
   validated direct edits. The six newer families are independently dark behind
   rollout flags; recognized imported-feature operations remain explicitly
   disabled.
-- Lazy exact-adapter/BrepKit loading in the geometry worker,
+- Lazy exact-adapter/Remus loading in the geometry worker,
   tagged loading/rebuild lifecycle, coalesced broadcasts, and a canonical
   rebuild LRU bounded to 8 entries, 32 MiB, and 4 in-flight loads.
 - CAD workspace, selection/topology labels, on-model direct manipulation,

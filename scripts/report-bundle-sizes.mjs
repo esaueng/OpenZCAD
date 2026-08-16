@@ -19,15 +19,15 @@ const APPROVED_LAZY_ASSETS = [
     reason: 'PDF parsing worker, loaded only for PDF attachments'
   },
   {
-    pattern: /^assets\/brepkit_wasm_bg-.*\.wasm$/,
-    maxBytes: 6_656 * 1024,
+    pattern: /^assets\/(?:remus|brepkit)_wasm_bg-.*\.wasm$/,
+    maxBytes: 8 * 1024 * 1024,
     reason: 'Exact geometry kernel, loaded only for non-empty geometry'
   }
 ];
 const LAZY_ENTRY_PATTERNS = [
   /^assets\/(?:three|three-addons)-.*\.js$/,
   /^assets\/(?:ViewerShell|partThumbnail|pdf|exact|src)-.*\.js$/,
-  /^assets\/brepkit_wasm_bg-.*\.wasm$/
+  /^assets\/(?:remus|brepkit)_wasm_bg-.*\.wasm$/
 ];
 
 function collect(directory) {
@@ -101,9 +101,9 @@ const metadata = JSON.parse(
 );
 if (
   metadata.format !== 'openzcad-build-metadata' ||
-  metadata.formatVersion !== 1 ||
+  metadata.formatVersion !== 2 ||
   !/^[0-9a-f]{40}$/i.test(metadata.commit) ||
-  !/^[0-9a-f]{40}$/i.test(metadata.brepkit?.commit)
+  !/^[0-9a-f]{40}$/i.test(metadata.remus?.commit)
 ) {
   failures.push({
     file: 'build-meta.json',
@@ -118,7 +118,7 @@ if (
  * It exists because a budget with a hard edge and no visible approach tells
  * you nothing until the day it fails, and that day lands on whoever happens
  * to push next rather than on whoever spent the headroom. The kernel wasm
- * sits near 90% of its 6 MB allowance, so the margin is real but finite.
+ * sits near its 8 MiB allowance, so the margin is real but finite.
  *
  * Growth is NOT uniform, which is why the raw number is more useful than any
  * rate: measured across one day of pin bumps, defect-fix kernel PRs cost
@@ -164,7 +164,7 @@ process.stdout.write(
       initialAssets,
       provenance: {
         commit: metadata.commit,
-        brepkit: metadata.brepkit
+        remus: metadata.remus
       },
       rows,
       totals,

@@ -1,5 +1,5 @@
 /**
- * The pin list: every place BrepKit and OpenCascade currently disagree on the
+ * The pin list: every place Remus and OpenCascade currently disagree on the
  * parity corpus, and every place a kernel disagrees with a corpus file's own
  * arithmetic.
  *
@@ -35,11 +35,11 @@
  * ---------------------------------------------------------------------------
  *
  * The first recording of this corpus found four things standing between
- * BrepKit and the STEP route flip (Z3). **Three of them are now closed**, which
+ * Remus and the STEP route flip (Z3). **Three of them are now closed**, which
  * is what the list is for — this section is the record of what moved, not a
  * static description.
  *
- *   1. SURFACE_CURVE. CLOSED (K0.1). BrepKit could not read ANY
+ *   1. SURFACE_CURVE. CLOSED (K0.1). Remus could not read ANY
  *      OpenCascade-authored STEP file; `f-hostile-occt-authored-box`, a plain
  *      six-faced box, failed outright. It now reads 6000 mm3, and
  *      `e-analytic-fillet-plate` — the same nominal shape as
@@ -47,7 +47,7 @@
  *      those two files is accuracy and edge identity, pinned below.
  *   2. Units. CLOSED (K0.1). `b-unit-inch-cube` read 1 mm3 instead of
  *      16387.064; it now reads the file's own declared conversion. The same
- *      change made BrepKit REFUSE `b-unit-no-global-context`, a file that
+ *      change made Remus REFUSE `b-unit-no-global-context`, a file that
  *      declares units and never binds them — see that pin, which is the one
  *      new divergence the unit work introduced.
  *   3. Voids. CLOSED (K0.1/K0.2). `BREP_WITH_VOIDS` reads and round-trips, and
@@ -55,17 +55,17 @@
  *      7216 mm3 on both kernels, re-exported as two solids with the cavity
  *      intact.
  *   4. Validity. CLOSED (K0.6). `f-hostile-open-shell` — a five-faced box that
- *      BrepKit imported as a solid of 666.67 mm3 — is now refused, and refused
+ *      Remus imported as a solid of 666.67 mm3 — is now refused, and refused
  *      with a message that names the defect and counts the boundary edges.
  *      Both kernels refuse it; only the wording differs, which is the one pin
- *      left on that file and BrepKit is the better side of it.
+ *      left on that file and Remus is the better side of it.
  *   5. Blend surfaces. CLOSED (K0.4). `fillet-on-import` fitted its four
  *      corner bands as B-splines just inside the true quarter cylinder. They
  *      are exact cylinders now, so THREE pins retire together: `surfaceTypes`
  *      (both kernels read `cylinder x4, plane x6`), `faceHashDigest` (both
  *      reach b563a24b, which is also what OCCT reads for the same shape
  *      imported as `e-analytic-fillet-plate` — the fingerprint stability that
- *      pin predicted), and `roundTripVolumeDelta` (BrepKit read its own
+ *      pin predicted), and `roundTripVolumeDelta` (Remus read its own
  *      filleted export back 0.175% heavy; it now round-trips to 0, because an
  *      analytic cylinder survives the writer where a spline did not). The
  *      volume and edge-hash pins survive with new values and new owners; see
@@ -92,7 +92,7 @@
  *      names those hashes generate.
  *
  *      **Z3 landed without settling this**, deliberately, because measuring
- *      it changed what it was. BrepKit's edge set is a strict SUBSET of
+ *      it changed what it was. Remus's edge set is a strict SUBSET of
  *      OCCT's on both bodies, so a stored pick either resolves unchanged or
  *      has no counterpart at all — it can never land on a different edge.
  *      The no-counterpart case fails closed by name ('A selected edge no
@@ -100,13 +100,13 @@
  *      and `test/kernel-seam.test.ts` pins that. The cost is therefore a
  *      re-select on seam picks, not a silently wrong body, which is a cost
  *      the flip could carry. K0.6 still owns closing it.
- *   2. **Sphere face identity.** BrepKit's two spherical patches share one
+ *   2. **Sphere face identity.** Remus's two spherical patches share one
  *      exact witness, so neither can be named one-to-one and the body publishes
  *      NO face references at all (`witnessedFaces` 0 vs OCCT's 2). This is the
  *      identity scheme failing closed exactly as designed — but it means a face
- *      pick on an imported sphere cannot be stored on BrepKit, which is a
+ *      pick on an imported sphere cannot be stored on Remus, which is a
  *      product limit, not a formality. Since Z3 it is a LIVE product limit
- *      rather than a corpus observation: BrepKit is the only kernel building
+ *      rather than a corpus observation: Remus is the only kernel building
  *      these documents, so face picks on imported spheres are unavailable in
  *      the app today. Highest-value K0.6 item for that reason.
  *   3. **Analytic-edge identity.** `a-sample-parametric-bracket` is now an
@@ -115,27 +115,27 @@
  *      but their edge digests still differ. The imported lineage-name digest
  *      follows that edge difference. Face identity is repaired; the edge pin
  *      remains until the differing subset is characterized.
- *   4. **Volume measurement.** BrepKit's `volume()` integrates a tessellation;
+ *   4. **Volume measurement.** Remus's `volume()` integrates a tessellation;
  *      OCCT's is exact. Shows up as ~1e-5 relative on every body with a curved
- *      wall, now including `e-analytic-fillet-plate`, which BrepKit could not
+ *      wall, now including `e-analytic-fillet-plate`, which Remus could not
  *      read at all before.
  *
  * Three findings cut the other way and are worth keeping visible, because the
  * plan's framing assumes OCCT is the oracle:
  *
- *   - BrepKit's REFUSALS are consistently better than OCCT's. On the hostile
+ *   - Remus's REFUSALS are consistently better than OCCT's. On the hostile
  *     files OCCT either throws an opaque `[object WebAssembly.Exception]` or
- *     reports a generic "contains no solids", where BrepKit names the entity,
+ *     reports a generic "contains no solids", where Remus names the entity,
  *     the missing unit, or the open shell and its boundary-edge count. K0.6
- *     asks BrepKit's warning taxonomy to match OCCT's; on this corpus that
+ *     asks Remus's warning taxonomy to match OCCT's; on this corpus that
  *     would be a downgrade, so it matched the intent and kept the text.
- *   - BrepKit publishes MORE imported-body face references than OCCT on
+ *   - Remus publishes MORE imported-body face references than OCCT on
  *     `e-nurbs-fillet-plate` (10 vs 6), because ADR-013 conservatively treats
  *     every OCCT B-spline face as closed — the OCCT bridge cannot report
- *     periodicity, and BrepKit's can. The guard is identical; only the
+ *     periodicity, and Remus's can. The guard is identical; only the
  *     evidence available to it differs.
- *   - OCCT gets `boolean-on-nurbs-import` wrong by +1.38% while BrepKit is
- *     within 0.1% of the closed-form answer. The plan predicts BrepKit
+ *   - OCCT gets `boolean-on-nurbs-import` wrong by +1.38% while Remus is
+ *     within 0.1% of the closed-form answer. The plan predicts Remus
  *     mesh-fallback for this class (K0.5); no mesh fallback occurs, and the
  *     kernel that misses is OpenCascade.
  *
@@ -167,14 +167,14 @@ export type PinOwner =
   /** Imported STEP feature editing, evolution-payload attribution. */
   | 'Phase A'
   /**
-   * BrepKit's `volume()` integrates a tessellation at
+   * Remus's `volume()` integrates a tessellation at
    * `MEASUREMENT_DEFLECTION` (0.08); OCCT's `getVolume` is exact BRepGProp.
    * Shows up as a ~1e-5 relative gap on bodies with curved walls. Not owned by
    * a listed plan item: closing it needs an exact volume integrator in the
    * kernel, and until then no volume assertion on a curved body can be
    * tightened past ~1e-4.
    */
-  | 'brepkit-measurement'
+  | 'remus-measurement'
   /** An OpenCascade defect. Recorded, but nothing in the plan will fix it. */
   | 'OCCT-defect';
 
@@ -183,8 +183,8 @@ export interface KernelDeltaPin {
   subject: string;
   /** Metric name from `comparableMetrics` in `corpus.spec.ts`. */
   metric: string;
-  /** Literal value BrepKit produces today. */
-  brepkit: string | number;
+  /** Literal value Remus produces today. */
+  remus: string | number;
   /** Literal value OpenCascade produces today. */
   occt: string | number;
   owner: PinOwner;
@@ -195,7 +195,7 @@ export interface KernelDeltaPin {
 export interface ReferenceDeviationPin {
   /** Corpus file id, or import-modeling scenario key. */
   subject: string;
-  kernel: 'brepkit' | 'occt';
+  kernel: 'remus' | 'occt';
   /**
    * Closed-form truth from the file's own construction, in mm³. Zero means
    * the file declares no importable solid at all.
@@ -225,7 +225,7 @@ const IMPORT_NAME_NOTE =
   'identities a saved selection is stored against.';
 
 const MEASUREMENT_NOTE =
-  "BrepKit's volume() integrates a tessellation at MEASUREMENT_DEFLECTION " +
+  "Remus's volume() integrates a tessellation at MEASUREMENT_DEFLECTION " +
   '(0.08) while OCCT uses exact BRepGProp, so a body with a curved wall can ' +
   'carry a small residue. This is a measurement gap, not a geometry gap: the ' +
   'B-rep is correct and the meshes agree. Note the residue is NOT simply ' +
@@ -235,14 +235,14 @@ const MEASUREMENT_NOTE =
   'entry as its own measurement rather than as an instance of a rule.';
 
 // ---------------------------------------------------------------------------
-// BrepKit vs OpenCascade
+// Remus vs OpenCascade
 // ---------------------------------------------------------------------------
 
 export const KERNEL_DELTAS: KernelDeltaPin[] = [
   {
     subject: 'boss-crossing-a-wall',
     metric: 'status',
-    brepkit: 'imported',
+    remus: 'imported',
     occt: 'threw',
     owner: 'OCCT-defect',
     note:
@@ -250,7 +250,7 @@ export const KERNEL_DELTAS: KernelDeltaPin[] = [
       'builds a body whose face count and tessellation group count disagree ' +
       '— 14 against 17 — and the adapter refuses it rather than publish ' +
       'triangle ranges it cannot trust. ' +
-      'BrepKit no longer facets it: brepkit#55 landed the analytic ' +
+      'Remus no longer facets it: historical BrepKit #55 landed the analytic ' +
       'curved-planar path, so the fuse now returns 9 planes and 2 cylinders ' +
       'with a bounding box that reaches its exact extent, and the SOLID ' +
       'matches the closed form to 6e-15. What survives is a measurement ' +
@@ -261,7 +261,7 @@ export const KERNEL_DELTAS: KernelDeltaPin[] = [
   {
     subject: 'a-sample-parametric-bracket',
     metric: 'edgeHashDigest',
-    brepkit: 'c5926051',
+    remus: 'c5926051',
     occt: 'ef5d5146',
     owner: 'K0.6',
     note:
@@ -274,7 +274,7 @@ export const KERNEL_DELTAS: KernelDeltaPin[] = [
   {
     subject: 'a-sample-parametric-bracket',
     metric: 'lineageNames',
-    brepkit: '57 names · 96fc27a4',
+    remus: '57 names · 96fc27a4',
     occt: '57 names · 46e5374f',
     owner: 'K0.6',
     note:
@@ -286,34 +286,34 @@ export const KERNEL_DELTAS: KernelDeltaPin[] = [
   {
     subject: 'a-sample-simple-assembly',
     metric: 'warnings',
-    brepkit: '["Feature \\"Imported\\": STEP file contains no solids."]',
+    remus: '["Feature \\"Imported\\": STEP file contains no solids."]',
     occt: '["Feature \\"Imported\\": importStep: [object WebAssembly.Exception]"]',
     owner: 'OCCT-defect',
     note:
-      'BrepKit is BETTER here and the pin exists to keep that visible. The ' +
+      'Remus is BETTER here and the pin exists to keep that visible. The ' +
       'shipped sample is product metadata with no shape representation; ' +
-      'BrepKit says so, OCCT lets a WASM exception escape and the user sees ' +
-      '"[object WebAssembly.Exception]". K0.6 asks BrepKit to match OCCT\'s ' +
+      'Remus says so, OCCT lets a WASM exception escape and the user sees ' +
+      '"[object WebAssembly.Exception]". K0.6 asks Remus to match OCCT\'s ' +
       'warning taxonomy — on this file that would be a downgrade, so match ' +
       'the intent, not the string.'
   },
   {
     subject: 'a-sample-simple-assembly',
     metric: 'inspect',
-    brepkit: 'solid=false valid=false',
+    remus: 'solid=false valid=false',
     occt: 'error: importStep: [object WebAssembly.Exception]',
     owner: 'OCCT-defect',
     note:
       'inspectStep is the pre-import probe the app shows before a user ' +
-      'commits to an import. BrepKit answers it (not a solid, not valid); ' +
-      'OCCT throws. Z1.1 flips inspectStep to BrepKit, which resolves this ' +
+      'commits to an import. Remus answers it (not a solid, not valid); ' +
+      'OCCT throws. Z1.1 flips inspectStep to Remus, which resolves this ' +
       'in OpenZCAD; the pin records that the flip is an improvement rather ' +
       'than a risk.'
   },
   {
     subject: 'a-export-cone',
     metric: 'edgeCount',
-    brepkit: 2,
+    remus: 2,
     occt: 3,
     owner: 'K0.6',
     note: SEAM_NOTE + ' On the cone the difference is one edge out of three.'
@@ -321,7 +321,7 @@ export const KERNEL_DELTAS: KernelDeltaPin[] = [
   {
     subject: 'a-export-cone',
     metric: 'seamEdgeCount',
-    brepkit: 1,
+    remus: 1,
     occt: 2,
     owner: 'K0.6',
     note:
@@ -333,7 +333,7 @@ export const KERNEL_DELTAS: KernelDeltaPin[] = [
   {
     subject: 'a-export-cone',
     metric: 'edgeHashDigest',
-    brepkit: 'd02fc837',
+    remus: 'd02fc837',
     occt: '60672a43',
     owner: 'K0.6',
     note:
@@ -344,7 +344,7 @@ export const KERNEL_DELTAS: KernelDeltaPin[] = [
   {
     subject: 'a-export-cone',
     metric: 'witnessedEdges',
-    brepkit: 2,
+    remus: 2,
     occt: 3,
     owner: 'K0.6',
     note:
@@ -357,7 +357,7 @@ export const KERNEL_DELTAS: KernelDeltaPin[] = [
   {
     subject: 'a-export-cone',
     metric: 'lineageNames',
-    brepkit:
+    remus:
       'import.step.edge.264da6b3,import.step.edge.d267f64f,import.step.face.642b7626,import.step.face.7bafc908',
     occt: 'import.step.edge.264da6b3,import.step.edge.a5507066,import.step.edge.d267f64f,import.step.face.642b7626,import.step.face.7bafc908',
     owner: 'K0.6',
@@ -366,13 +366,13 @@ export const KERNEL_DELTAS: KernelDeltaPin[] = [
       ' The most legible instance in the corpus, because the sets are small ' +
       'enough to print: four of the five names are IDENTICAL across kernels — ' +
       'both faces and two of the edges — and OCCT has one extra seam edge ' +
-      '(a5507066) that BrepKit does not publish. So the cross-kernel identity ' +
+      '(a5507066) that Remus does not publish. So the cross-kernel identity ' +
       'scheme works; the seam representation is the whole of the gap.'
   },
   {
     subject: 'a-export-sphere',
     metric: 'edgeCount',
-    brepkit: 32,
+    remus: 32,
     occt: 36,
     owner: 'K0.6',
     note:
@@ -383,20 +383,20 @@ export const KERNEL_DELTAS: KernelDeltaPin[] = [
   {
     subject: 'a-export-sphere',
     metric: 'seamEdgeCount',
-    brepkit: 32,
+    remus: 32,
     occt: 4,
     owner: 'K0.6',
     note:
-      "BrepKit classifies ALL 32 of the sphere's edges as seams; OCCT " +
+      "Remus classifies ALL 32 of the sphere's edges as seams; OCCT " +
       'classifies 4 of its 36. displayRole drives what the viewport draws, so ' +
-      'this is user-visible as well as reference-breaking: on BrepKit the ' +
+      'this is user-visible as well as reference-breaking: on Remus the ' +
       'sphere shows no feature edges at all. The largest single-metric ' +
       'divergence in the corpus.'
   },
   {
     subject: 'a-export-sphere',
     metric: 'faceHashDigest',
-    brepkit: 'e0d01c9d',
+    remus: 'e0d01c9d',
     occt: '26977392',
     owner: 'K0.6',
     note:
@@ -408,7 +408,7 @@ export const KERNEL_DELTAS: KernelDeltaPin[] = [
   {
     subject: 'a-export-sphere',
     metric: 'edgeHashDigest',
-    brepkit: 'ef3ea079',
+    remus: 'ef3ea079',
     occt: 'a527c73e',
     owner: 'K0.6',
     note:
@@ -418,24 +418,24 @@ export const KERNEL_DELTAS: KernelDeltaPin[] = [
   {
     subject: 'a-export-sphere',
     metric: 'witnessedFaces',
-    brepkit: 0,
+    remus: 0,
     occt: 2,
     owner: 'K0.6',
     note:
       'The identity scheme failing closed, correctly, on a real defect. ' +
-      "BrepKit's two hemispherical patches produce the SAME exact ADR-011 " +
+      "Remus's two hemispherical patches produce the SAME exact ADR-011 " +
       'witness, so neither can be named one-to-one and the body publishes no ' +
       "face reference at all; OCCT's two patches differ and both publish. " +
       'Nothing here should be loosened — an ambiguous name is worse than ' +
       'none — but the consequence is a product limit worth stating plainly: ' +
-      'a face pick on an imported sphere cannot be stored on BrepKit. It ' +
+      'a face pick on an imported sphere cannot be stored on Remus. It ' +
       'retires with the faceHashDigest pin above, since a fingerprint that ' +
       'distinguishes the two patches also names them.'
   },
   {
     subject: 'a-export-sphere',
     metric: 'witnessedEdges',
-    brepkit: 32,
+    remus: 32,
     occt: 36,
     owner: 'K0.6',
     note:
@@ -447,12 +447,12 @@ export const KERNEL_DELTAS: KernelDeltaPin[] = [
   {
     subject: 'a-export-sphere',
     metric: 'lineageNames',
-    brepkit: '32 names · 9b2eec30',
+    remus: '32 names · 9b2eec30',
     occt: '38 names · 15e3c5cb',
     owner: 'K0.6',
     note:
       IMPORT_NAME_NOTE +
-      ' 32 edge names on BrepKit and no face names; 36 edge plus 2 face names ' +
+      ' 32 edge names on Remus and no face names; 36 edge plus 2 face names ' +
       'on OCCT. Retires with the sphere hash pins.'
   },
 
@@ -460,7 +460,7 @@ export const KERNEL_DELTAS: KernelDeltaPin[] = [
   {
     subject: 'b-unit-degree-cone',
     metric: 'edgeCount',
-    brepkit: 2,
+    remus: 2,
     occt: 3,
     owner: 'K0.6',
     note:
@@ -471,7 +471,7 @@ export const KERNEL_DELTAS: KernelDeltaPin[] = [
   {
     subject: 'b-unit-degree-cone',
     metric: 'seamEdgeCount',
-    brepkit: 1,
+    remus: 1,
     occt: 2,
     owner: 'K0.6',
     note:
@@ -482,7 +482,7 @@ export const KERNEL_DELTAS: KernelDeltaPin[] = [
   {
     subject: 'b-unit-degree-cone',
     metric: 'edgeHashDigest',
-    brepkit: 'd02fc837',
+    remus: 'd02fc837',
     occt: '60672a43',
     owner: 'K0.6',
     note:
@@ -495,7 +495,7 @@ export const KERNEL_DELTAS: KernelDeltaPin[] = [
   {
     subject: 'b-unit-degree-cone',
     metric: 'witnessedEdges',
-    brepkit: 2,
+    remus: 2,
     occt: 3,
     owner: 'K0.6',
     note:
@@ -505,7 +505,7 @@ export const KERNEL_DELTAS: KernelDeltaPin[] = [
   {
     subject: 'b-unit-degree-cone',
     metric: 'lineageNames',
-    brepkit:
+    remus:
       'import.step.edge.264da6b3,import.step.edge.d267f64f,import.step.face.642b7626,import.step.face.7bafc908',
     occt: 'import.step.edge.264da6b3,import.step.edge.a5507066,import.step.edge.d267f64f,import.step.face.642b7626,import.step.face.7bafc908',
     owner: 'K0.6',
@@ -518,13 +518,13 @@ export const KERNEL_DELTAS: KernelDeltaPin[] = [
   {
     subject: 'b-unit-degree-cone-unassigned',
     metric: 'warnings',
-    brepkit:
+    remus:
       '["Feature \\"Imported\\": parse error: STEP file declares no LENGTH_UNIT in a GLOBAL_UNIT_ASSIGNED_CONTEXT; the model\'s length unit is unknown"]',
     occt: '["Feature \\"Imported\\": STEP file contains no solids."]',
     owner: 'K0.1',
     note:
       'The file with no GLOBAL_UNIT_ASSIGNED_CONTEXT, so the adapter ' +
-      'workaround is provably inert. Before K0.1 landed units, BrepKit read ' +
+      'workaround is provably inert. Before K0.1 landed units, Remus read ' +
       'the literal 45 as radians and complained about the CONICAL_SURFACE ' +
       'half-angle; it now refuses one step earlier, on the missing length ' +
       'unit, which is the more fundamental of the two objections and the ' +
@@ -536,7 +536,7 @@ export const KERNEL_DELTAS: KernelDeltaPin[] = [
   {
     subject: 'b-unit-no-global-context',
     metric: 'status',
-    brepkit: 'refused',
+    remus: 'refused',
     occt: 'imported',
     owner: 'K0.1',
     note:
@@ -544,7 +544,7 @@ export const KERNEL_DELTAS: KernelDeltaPin[] = [
       'carried specifically to catch it — its manifest entry says "a kernel ' +
       'change in flight may turn this into a hard refusal; the corpus exists ' +
       'to make that audible instead of silent". A 20 mm cube whose units are ' +
-      'declared but never bound: BrepKit now refuses with "STEP file declares ' +
+      'declared but never bound: Remus now refuses with "STEP file declares ' +
       'no LENGTH_UNIT in a GLOBAL_UNIT_ASSIGNED_CONTEXT", OCCT still assumes ' +
       'millimetres and reads 8000 mm3. Failing closed on an unknown scale is ' +
       'defensible — guessing millimetres is how a part arrives 25.4x wrong — ' +
@@ -557,13 +557,13 @@ export const KERNEL_DELTAS: KernelDeltaPin[] = [
   {
     subject: 'e-nurbs-fillet-plate',
     metric: 'volume',
-    brepkit: 9534.97678436453,
+    remus: 9534.97678436453,
     occt: 9499.999999999998,
     owner: 'K0.1',
     note:
       'Both kernels read the same B_SPLINE_SURFACE_WITH_KNOTS file and ' +
       'disagree by 0.37%, straddling the closed-form answer 9522.7433388: ' +
-      'BrepKit is +0.13%, OCCT is -0.24%. Neither is a tessellation ' +
+      'Remus is +0.13%, OCCT is -0.24%. Neither is a tessellation ' +
       'artefact at that magnitude. Something in NURBS surface evaluation or ' +
       'trimming differs, and since a-export-box / a-export-cylinder / ' +
       'a-export-cone all agree exactly, this file isolates it to the spline ' +
@@ -573,28 +573,28 @@ export const KERNEL_DELTAS: KernelDeltaPin[] = [
   {
     subject: 'e-nurbs-fillet-plate',
     metric: 'witnessedFaces',
-    brepkit: 10,
+    remus: 10,
     occt: 6,
     owner: 'OCCT-defect',
     note:
-      'BrepKit is BETTER here, by exactly the margin ADR-013 predicts. Both ' +
+      'Remus is BETTER here, by exactly the margin ADR-013 predicts. Both ' +
       'kernels apply the same closed-B-spline guard — a free-form face whose ' +
       'closure is closed OR UNKNOWN publishes no persistent reference — but ' +
       'the OCCT bridge cannot report surface periodicity at all, so all four ' +
       'of its spline bands are conservatively unknown and unnamed, while ' +
-      "BrepKit's bridge proves them open and names them. Nothing to fix on " +
-      'the BrepKit side; it retires when OCCT is deleted (Z5), or earlier if ' +
+      "Remus's bridge proves them open and names them. Nothing to fix on " +
+      'the Remus side; it retires when OCCT is deleted (Z5), or earlier if ' +
       'the OCCT bridge ever exposes periodic-U/periodic-V.'
   },
   {
     subject: 'e-nurbs-fillet-plate',
     metric: 'lineageNames',
-    brepkit: '34 names · ae180b36',
+    remus: '34 names · ae180b36',
     occt: '30 names · 58c3a755',
     owner: 'OCCT-defect',
     note:
       'Name-set counterpart of the witnessedFaces pin above: the same four ' +
-      'B-spline band faces, named on BrepKit and withheld on OCCT. The ' +
+      'B-spline band faces, named on Remus and withheld on OCCT. The ' +
       'digests differ rather than one being a subset of the other because ' +
       "the two kernels also disagree on this file's spline geometry (see " +
       'the volume pin), which moves every fingerprint on the body.'
@@ -602,14 +602,14 @@ export const KERNEL_DELTAS: KernelDeltaPin[] = [
   {
     subject: 'e-analytic-fillet-plate',
     metric: 'volume',
-    brepkit: 9522.606928409188,
+    remus: 9522.606928409188,
     occt: 9522.743338823155,
-    owner: 'brepkit-measurement',
+    owner: 'remus-measurement',
     note:
       MEASUREMENT_NOTE +
-      ' New measurement, only possible because K0.1 taught BrepKit to read ' +
+      ' New measurement, only possible because K0.1 taught Remus to read ' +
       'SURFACE_CURVE: this OCCT-authored file used to be refused outright. ' +
-      'BrepKit now reads it 1.43e-5 relative LOW against the closed-form ' +
+      'Remus now reads it 1.43e-5 relative LOW against the closed-form ' +
       '9522.7433388, which OCCT hits to 1e-12. Four quarter-cylinder bands. ' +
       'The plain-bore scenarios that used to sit beside this one have since ' +
       'converged on the closed form exactly, so this residue is specific to ' +
@@ -618,7 +618,7 @@ export const KERNEL_DELTAS: KernelDeltaPin[] = [
   {
     subject: 'e-analytic-fillet-plate',
     metric: 'edgeHashDigest',
-    brepkit: '2cf1303e',
+    remus: '2cf1303e',
     occt: '26f53b2e',
     owner: 'K0.6',
     note:
@@ -631,7 +631,7 @@ export const KERNEL_DELTAS: KernelDeltaPin[] = [
       'The divergence is the ARCS, and it comes from the witness itself: ' +
       '`edgeSampleOf` builds the ADR-011 open-edge midpoint as ' +
       '`evaluateEdgeCurve(edge, first + span / 2)` with first/span from ' +
-      '`getEdgeCurveParameters`, which on BrepKit returns the UNTRIMMED ' +
+      '`getEdgeCurveParameters`, which on Remus returns the UNTRIMMED ' +
       'period. For a trimmed arc that parameter is not the midpoint. ' +
       'Measured on a 20x20x10 box with all 12 edges filleted at r=1: all 24 ' +
       'arcs have a witness displaced by exactly r along their own arc, and ' +
@@ -640,7 +640,7 @@ export const KERNEL_DELTAS: KernelDeltaPin[] = [
       'arc witness is right and every arc hashes differently across kernels. ' +
       'Severity is bounded: 0 witness COLLISIONS at r=1 and r=3, because ' +
       'curve type, length and endpoints still discriminate — so picks resolve ' +
-      'correctly WITHIN BrepKit and the damage is cross-kernel only, which ' +
+      'correctly WITHIN Remus and the damage is cross-kernel only, which ' +
       'since Z3 means corpus-only rather than user-facing. Do not "fix" it ' +
       'here: the quantization is frozen and changing the witness invalidates ' +
       'every persisted reference to a fillet or chamfer edge. That is a ' +
@@ -649,7 +649,7 @@ export const KERNEL_DELTAS: KernelDeltaPin[] = [
   {
     subject: 'e-analytic-fillet-plate',
     metric: 'lineageNames',
-    brepkit: '34 names · 1de5dda1',
+    remus: '34 names · 1de5dda1',
     occt: '34 names · fa33bc13',
     owner: 'K0.6',
     note:
@@ -663,51 +663,50 @@ export const KERNEL_DELTAS: KernelDeltaPin[] = [
   {
     subject: 'f-hostile-open-shell',
     metric: 'warnings',
-    brepkit:
+    remus:
       '["Feature \\"Imported\\": STEP file contains no closed solids: solid 1 (5 faces): it is an open shell — 4 of its 12 edges are used by a single face, so it encloses no volume."]',
     occt: '["Feature \\"Imported\\": STEP file contains no solids."]',
     owner: 'OCCT-defect',
     note:
-      "All that is left of the corpus's headline validity gap, and BrepKit " +
-      'is now the better side of it. This file used to import on BrepKit as a ' +
+      "All that is left of the corpus's headline validity gap, and Remus " +
+      'is now the better side of it. This file used to import on Remus as a ' +
       'body of 666.67 mm3 with no warning; K0.6 refuses it, and refuses it ' +
       'by naming the defect and counting the boundary edges, where OCCT ' +
       'reports the generic "contains no solids" and leaves the user to work ' +
-      "out which face is missing. Keep BrepKit's message."
+      "out which face is missing. Keep Remus's message."
   },
   {
     subject: 'f-hostile-dangling-reference',
     metric: 'warnings',
-    brepkit:
-      '["Feature \\"Imported\\": parse error: entity #999999 not found"]',
+    remus: '["Feature \\"Imported\\": parse error: entity #999999 not found"]',
     occt: '["Feature \\"Imported\\": STEP file contains no solids."]',
     owner: 'OCCT-defect',
     note:
-      'BrepKit is better again: it names the missing entity, OCCT reports ' +
+      'Remus is better again: it names the missing entity, OCCT reports ' +
       'the generic "contains no solids" and leaves the user to find a ' +
-      "dangling reference by hand. Keep BrepKit's message when K0.6 aligns " +
+      "dangling reference by hand. Keep Remus's message when K0.6 aligns " +
       'the taxonomy.'
   },
   {
     subject: 'f-hostile-no-shape-representation',
     metric: 'warnings',
-    brepkit: '["Feature \\"Imported\\": STEP file contains no solids."]',
+    remus: '["Feature \\"Imported\\": STEP file contains no solids."]',
     occt: '["Feature \\"Imported\\": importStep: [object WebAssembly.Exception]"]',
     owner: 'OCCT-defect',
     note:
       'Minimal self-describing version of the a-sample-simple-assembly case: ' +
       'product structure and nothing else. OCCT lets a WASM exception ' +
-      'escape; BrepKit answers. Recorded on both files because the sample is ' +
+      'escape; Remus answers. Recorded on both files because the sample is ' +
       'shipped and the minimal file is diagnosable.'
   },
   {
     subject: 'f-hostile-no-shape-representation',
     metric: 'inspect',
-    brepkit: 'solid=false valid=false',
+    remus: 'solid=false valid=false',
     occt: 'error: importStep: [object WebAssembly.Exception]',
     owner: 'OCCT-defect',
     note:
-      'inspectStep counterpart. Z1.1 routes inspectStep to BrepKit, which ' +
+      'inspectStep counterpart. Z1.1 routes inspectStep to Remus, which ' +
       'removes this failure mode from the product; the pin keeps the ' +
       'evidence for that decision attached to a runnable file.'
   },
@@ -716,18 +715,18 @@ export const KERNEL_DELTAS: KernelDeltaPin[] = [
   {
     subject: 'fillet-on-import',
     metric: 'volume',
-    brepkit: 9522.60692840917,
+    remus: 9522.60692840917,
     occt: 9522.74333882308,
-    owner: 'brepkit-measurement',
+    owner: 'remus-measurement',
     note:
       MEASUREMENT_NOTE +
-      ' This pin used to read 9518.3321434 and belong to K0.4: BrepKit fitted ' +
+      ' This pin used to read 9518.3321434 and belong to K0.4: Remus fitted ' +
       'the four corner bands as B-splines just inside the true quarter ' +
       'cylinder and lost 4.4 mm3 (4.63e-4 relative). The bands are now exact ' +
       'cylinders — the surfaceTypes and faceHashDigest pins that recorded ' +
       'that gap are retired — and what is left is 1.43e-5, the residue the ' +
       'other blended plates in this corpus carry. ' +
-      'The reassignment is corroborated rather than assumed: BrepKit now ' +
+      'The reassignment is corroborated rather than assumed: Remus now ' +
       'reads this scenario within 2e-15 relative of its own import of ' +
       'e-analytic-fillet-plate (9522.6069284092), the OCCT-authored file of ' +
       'the same nominal shape, so the blend and the import agree on the ' +
@@ -736,18 +735,18 @@ export const KERNEL_DELTAS: KernelDeltaPin[] = [
   {
     subject: 'fillet-on-import',
     metric: 'witnessedFaces',
-    brepkit: 4,
+    remus: 4,
     occt: 0,
     owner: 'Phase A',
     note:
-      'The pinned BrepKit binding exposes construction-history attribution ' +
+      'The pinned Remus binding exposes construction-history attribution ' +
       'for the four generated corner bands. The OCCT adapter has no matching ' +
       'generated-face relation, so it remains fail-closed and hash-only.'
   },
   {
     subject: 'fillet-on-import',
     metric: 'lineageNames',
-    brepkit:
+    remus:
       'modifier.fillet.face.band-between.import.step.face.426c91a5|import.step.face.58bf7705,' +
       'modifier.fillet.face.band-between.import.step.face.426c91a5|import.step.face.62e02c7d,' +
       'modifier.fillet.face.band-between.import.step.face.58bf7705|import.step.face.ac22b2bd,' +
@@ -755,51 +754,51 @@ export const KERNEL_DELTAS: KernelDeltaPin[] = [
     occt: 'none',
     owner: 'Phase A',
     note:
-      'Each BrepKit band is named by its unique pair of exact imported-face ' +
+      'Each Remus band is named by its unique pair of exact imported-face ' +
       'support identities. OCCT publishes no generated-face evidence, so it ' +
       'cannot safely assign the same semantic names.'
   },
   {
     subject: 'fillet-on-import',
     metric: 'edgeHashDigest',
-    brepkit: '4de1dc1b',
+    remus: '4de1dc1b',
     occt: '26f53b2e',
     owner: 'K0.6',
     note:
-      'Was 9389207a under K0.4, when the divergence was that BrepKit bounded ' +
+      'Was 9389207a under K0.4, when the divergence was that Remus bounded ' +
       'B-spline bands and OCCT bounded cylinders. The bands agree now — the ' +
       'faces do too, both kernels reaching b563a24b — so what is left is the ' +
       'seam class, and this becomes the third instance of it alongside ' +
       'a-export-cone and e-analytic-fillet-plate. Measured element-wise the ' +
       'two kernels publish 24 edges each and 16 of the 24 carry the SAME ' +
       'hash, so a stored edge pick on this body usually survives and fails ' +
-      'closed when it does not. Note BrepKit does not reach its own ' +
+      'closed when it does not. Note Remus does not reach its own ' +
       'e-analytic-fillet-plate digest (2cf1303e) either, so the remaining ' +
       'difference is in how a blended edge is represented, not in importing.'
   },
   {
     subject: 'boolean-on-nurbs-import',
     metric: 'volume',
-    brepkit: 9425.426555957836,
+    remus: 9425.426555957836,
     occt: 9546.002960523074,
     owner: 'OCCT-defect',
     note:
       'The K0.5 scenario, and OpenCascade is the kernel that gets it wrong. ' +
       'An r4 bore is cut through a corner whose band arrived as a B-spline. ' +
-      'The closed-form answer is 9416.3938 mm3; BrepKit reads +0.098%, OCCT ' +
-      'reads +1.38%. BrepKit moved slightly closer to the closed form with ' +
+      'The closed-form answer is 9416.3938 mm3; Remus reads +0.098%, OCCT ' +
+      'reads +1.38%. Remus moved slightly closer to the closed form with ' +
       'the latest kernel, from +0.098% to +0.096%. OCCT returns MORE volume ' +
       'after a SUBTRACT than its own ' +
       'import of the same body (9500.0), which is not a tolerance question. ' +
       'Both produce 10 exact faces with no mesh fallback, so the K0.5 ' +
       'acceptance criterion "flip from mesh-fallback to exact" is already ' +
       'met for this class — the remaining work is accuracy, and the baseline ' +
-      'to beat is BrepKit, not OCCT.'
+      'to beat is Remus, not OCCT.'
   },
   {
     subject: 'boolean-on-nurbs-import',
     metric: 'faceHashDigest',
-    brepkit: '3c489854',
+    remus: '3c489854',
     occt: 'c1cead63',
     owner: 'K0.5',
     note:
@@ -812,7 +811,7 @@ export const KERNEL_DELTAS: KernelDeltaPin[] = [
   {
     subject: 'boolean-on-nurbs-import',
     metric: 'edgeHashDigest',
-    brepkit: 'e140444b',
+    remus: 'e140444b',
     occt: 'fea0548c',
     owner: 'K0.5',
     note:
@@ -832,7 +831,7 @@ export const KERNEL_DELTAS: KernelDeltaPin[] = [
 export const REFERENCE_DEVIATIONS: ReferenceDeviationPin[] = [
   {
     subject: 'boss-crossing-a-wall',
-    kernel: 'brepkit',
+    kernel: 'remus',
     referenceMm3:
       40 * 24 * 10 +
       Math.PI * 36 * 20 -
@@ -844,14 +843,14 @@ export const REFERENCE_DEVIATIONS: ReferenceDeviationPin[] = [
       'survived two kernel fixes by CHANGING CHARACTER rather than going ' +
       'away, and the shape of the remaining error has flipped, so read the ' +
       'sign before assuming which defect you are looking at. ' +
-      'brepkit#55 restored the geometry: before it, 57 faces, ALL PLANES, ' +
+      'historical BrepKit #55 restored the geometry: before it, 57 faces, ALL PLANES, ' +
       'every analytic surface destroyed, x-min reading -2.996917 where the ' +
       'construction says exactly -3. After it, 11 faces (9 planes + 2 ' +
       'CYLINDERS) and x-min exactly -3. On the raw kernel massProperties ' +
       'returns 10952.079901041969 against the closed form ' +
       '10952.079901041901 — agreement to 6e-15. The body has been right ' +
       'since then; only the app-facing route was not. ' +
-      'brepkit#64 then fixed that route, moving it from ' +
+      'historical BrepKit #64 then fixed that route, moving it from ' +
       '10984.864189375206 (+0.299% over) to 10951.844000782583 ' +
       '(-0.00215% under). Version 3.2.22 now reads 10951.56548068038 ' +
       '(-0.00470% under): a larger residual, but the same inscribed-mesh ' +
@@ -868,9 +867,9 @@ export const REFERENCE_DEVIATIONS: ReferenceDeviationPin[] = [
       'special defect of this body; it is the general tessellated-volume ' +
       'residual, and it should be retired by whatever fixes THAT. ' +
       'THE MECHANISM HERE HAS BEEN WRONG TWICE, which is why the history ' +
-      'stays. (1) brepkit#55 filed it as "the notched-wall detector ' +
+      'stays. (1) historical BrepKit #55 filed it as "the notched-wall detector ' +
       'declines and the area route credits the whole cylinder". ' +
-      '(2) brepkit#64 refuted that — the detector is RIGHT to decline, ' +
+      '(2) historical BrepKit #64 refuted that — the detector is RIGHT to decline, ' +
       'both faces genuinely are UV rectangles, and the exact integral was ' +
       'never wrong. Do not trust a confident-sounding third account either. ' +
       'ALSO, AND SEPARATELY: this body sits exactly on a cliff at ' +
@@ -882,7 +881,7 @@ export const REFERENCE_DEVIATIONS: ReferenceDeviationPin[] = [
       'scale — Linux at 1000x reproduces what macOS reports at 1x — so the ' +
       "11-face reading is this platform's answer, not the body's. " +
       'validate_solid and BOTH measurement routes call it fine on both ' +
-      'sides; mesh watertightness is the only witness. brepkit#64 pins that ' +
+      'sides; mesh watertightness is the only witness. historical BrepKit #64 pins that ' +
       'cliff but does not fix it. ' +
       'Switching the adapter to massProperties is still NOT an obvious ' +
       'fix — that route has its own open defect, reading a quadric sector ' +
@@ -916,13 +915,13 @@ export const REFERENCE_DEVIATIONS: ReferenceDeviationPin[] = [
   },
   {
     subject: 'b-unit-no-global-context',
-    kernel: 'brepkit',
+    kernel: 'remus',
     referenceMm3: 20 * 20 * 20,
     reported: 'refused',
     owner: 'K0.1',
     note:
       'A 20 mm cube whose units are declared and never bound to a ' +
-      "GLOBAL_UNIT_ASSIGNED_CONTEXT. K0.1's unit work made BrepKit refuse " +
+      "GLOBAL_UNIT_ASSIGNED_CONTEXT. K0.1's unit work made Remus refuse " +
       'it rather than assume millimetres. Fails closed, which is the safe ' +
       'direction — a wrong scale is silent and expensive — but the file is ' +
       'plainly readable and OCCT reads it to 8000, so this is a capability ' +
@@ -931,7 +930,7 @@ export const REFERENCE_DEVIATIONS: ReferenceDeviationPin[] = [
   },
   {
     subject: 'e-nurbs-fillet-plate',
-    kernel: 'brepkit',
+    kernel: 'remus',
     referenceMm3: 40 * 24 * 10 - 4 * (1 - Math.PI / 4) * 9 * 10,
     reported: 9534.97678436453,
     owner: 'K0.1',
@@ -950,19 +949,19 @@ export const REFERENCE_DEVIATIONS: ReferenceDeviationPin[] = [
     note:
       'OCCT reads the same B-spline file 0.24% LIGHT, and lands on exactly ' +
       '9500.0, which is suspiciously round for a body whose exact volume is ' +
-      '9522.7433. Recorded so nobody calibrates BrepKit against OCCT on this ' +
+      '9522.7433. Recorded so nobody calibrates Remus against OCCT on this ' +
       'file: the arithmetic is the target, and OCCT misses it by twice as ' +
-      'much as BrepKit does.'
+      'much as Remus does.'
   },
   {
     subject: 'e-analytic-fillet-plate',
-    kernel: 'brepkit',
+    kernel: 'remus',
     referenceMm3: 40 * 24 * 10 - 4 * (1 - Math.PI / 4) * 9 * 10,
     reported: 9522.606928409188,
-    owner: 'brepkit-measurement',
+    owner: 'remus-measurement',
     note:
       MEASUREMENT_NOTE +
-      ' This pin used to read "refused": BrepKit could not open an ' +
+      ' This pin used to read "refused": Remus could not open an ' +
       'OpenCascade-authored file at all. It now reads the file 1.43e-5 ' +
       'relative low, which is the deflection residue on four ' +
       'quarter-cylinder bands and nothing more — OCCT hits the arithmetic ' +
@@ -970,10 +969,10 @@ export const REFERENCE_DEVIATIONS: ReferenceDeviationPin[] = [
   },
   {
     subject: 'fillet-on-import',
-    kernel: 'brepkit',
+    kernel: 'remus',
     referenceMm3: 40 * 24 * 10 - 4 * (1 - Math.PI / 4) * 9 * 10,
     reported: 9522.60692840917,
-    owner: 'brepkit-measurement',
+    owner: 'remus-measurement',
     note:
       MEASUREMENT_NOTE +
       ' Was 9518.3321434 under K0.4 — B-spline corner bands sitting inside ' +
@@ -997,7 +996,7 @@ export const REFERENCE_DEVIATIONS: ReferenceDeviationPin[] = [
     note:
       'OCCT misses the closed-form answer by +1.38% on a subtract that ' +
       'crosses a B-spline face — and returns more volume than it imported. ' +
-      'BrepKit is inside 0.1% on the same scenario. The pin exists so this ' +
+      'Remus is inside 0.1% on the same scenario. The pin exists so this ' +
       'lane is not read as "OCCT is the reference": on the hardest boolean ' +
       'in the corpus it is the one that is wrong.'
   }
@@ -1014,7 +1013,7 @@ export function findKernelDelta(
 
 export function findReferenceDeviation(
   subject: string,
-  kernel: 'brepkit' | 'occt'
+  kernel: 'remus' | 'occt'
 ): ReferenceDeviationPin | undefined {
   return REFERENCE_DEVIATIONS.find(
     (pin) => pin.subject === subject && pin.kernel === kernel

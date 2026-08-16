@@ -1,9 +1,9 @@
 /**
  * 2D polygon union under the nonzero fill rule.
  *
- * `PolygonUnion2d` is the seam for brepkit's planned `polygonUnion2d` binding
+ * `PolygonUnion2d` is the seam for remus's planned `polygonUnion2d` binding
  * (`docs/plans/text-feature-plan.md`, Phase 0.1). That binding is not in the
- * pinned `brepkit-wasm` package yet, so this module ships a local
+ * pinned `remus-wasm` package yet, so this module ships a local
  * implementation behind the same signature; swap it by passing
  * `polygonUnion2d` in `TextProfileOptions` once the kernel exposes one.
  *
@@ -249,7 +249,15 @@ export const localPolygonUnion2d: PolygonUnion2d = (loops) => {
         const right2 = len2 * len2;
         if (left2 > 0) {
           for (const end of [right.a, right.b]) {
-            const t = project(end.x, end.y, left.a.x, left.a.y, r1x, r1y, left2);
+            const t = project(
+              end.x,
+              end.y,
+              left.a.x,
+              left.a.y,
+              r1x,
+              r1y,
+              left2
+            );
             if (t > 0 && t < 1) {
               left.splits.push(t);
             }

@@ -1,5 +1,6 @@
 /**
- * Focused exact-edit guard for the BrepKit f7ebc24 WASM refresh.
+ * Focused exact-edit guard proving Remus preserves the historical BrepKit
+ * f7ebc24 WASM refresh behavior.
  *
  * The upstream change tightened NURBS validation, but a committed WASM refresh
  * can move any exact operation. Keep the highest-risk editor contracts beside
@@ -16,7 +17,7 @@ import {
   directEditBody,
   transformBody
 } from '@openzcad/document-core';
-import { BrepKitKernelAdapter } from '@openzcad/kernel-adapter/exact';
+import { RemusKernelAdapter } from '@openzcad/kernel-adapter/exact';
 import {
   toUserId,
   type BodyId,
@@ -25,11 +26,11 @@ import {
   type FaceTopology,
   type ProjectDocument
 } from '@openzcad/shared';
-import { BrepKernel } from '../../packages/kernel-adapter/node_modules/brepkit-wasm/brepkit_wasm.js';
+import { RemusKernel } from '../../packages/kernel-adapter/src/remus-runtime';
 import { OcctStepKernelAdapter } from './occt-reference/occt-step';
 
 interface SafetyAdapter {
-  readonly kind: 'brepkit' | 'occt';
+  readonly kind: 'remus' | 'occt';
   syncDocument(document: ProjectDocument): Promise<DerivedState>;
   exportStep(document: ProjectDocument, bodyIds: BodyId[]): Promise<string>;
   inspectStep(data: string | ArrayBuffer): Promise<{
@@ -77,19 +78,19 @@ async function expectValidRoundTrip(
 }
 
 describe(
-  'BrepKit f7ebc24 direct-edit safety parity',
+  'Remus compatibility with the historical BrepKit f7ebc24 safety fixes',
   { timeout: 30_000 },
   () => {
-    let brepkit: BrepKitKernelAdapter;
+    let remus: RemusKernelAdapter;
     let occt: OcctStepKernelAdapter;
 
     beforeAll(async () => {
-      brepkit = new BrepKitKernelAdapter();
+      remus = new RemusKernelAdapter();
       occt = await OcctStepKernelAdapter.create();
     });
 
     afterAll(() => {
-      brepkit.dispose();
+      remus.dispose();
       occt.dispose();
     });
 
@@ -105,7 +106,7 @@ describe(
       const bodyId = base.bodyOrder.at(-1)!;
       const expectedVolume = Math.PI * 11 ** 2 * 22;
       const results = new Map<string, BodyRepresentation>();
-      for (const adapter of [brepkit, occt] satisfies SafetyAdapter[]) {
+      for (const adapter of [remus, occt] satisfies SafetyAdapter[]) {
         const source = bodyOf(await adapter.syncDocument(base), bodyId);
         const wall = requireFace(
           source,
@@ -172,7 +173,7 @@ describe(
         await expectValidRoundTrip(adapter, edited, bodyId, expectedVolume);
       }
 
-      expect(results.get('brepkit')!.volume).toBeCloseTo(
+      expect(results.get('remus')!.volume).toBeCloseTo(
         results.get('occt')!.volume,
         6
       );
@@ -188,7 +189,7 @@ describe(
         }
       );
       const bodyId = base.bodyOrder.at(-1)!;
-      for (const adapter of [brepkit, occt] satisfies SafetyAdapter[]) {
+      for (const adapter of [remus, occt] satisfies SafetyAdapter[]) {
         const source = bodyOf(await adapter.syncDocument(base), bodyId);
         const top = requireFace(
           source,
@@ -262,7 +263,7 @@ describe(
         })
       );
       const bodyId = bored.bodyOrder.at(-1)!;
-      const beforeState = await brepkit.syncDocument(bored);
+      const beforeState = await remus.syncDocument(bored);
       expect(beforeState.warnings).toEqual([]);
       const before = bodyOf(beforeState, bodyId);
       expect(before.faceCount).toBe(5);
@@ -296,9 +297,9 @@ describe(
       }).document;
 
       const pushPull = vi
-        .spyOn(BrepKernel.prototype, 'pushPullFace')
+        .spyOn(RemusKernel.prototype, 'pushPullFace')
         .mockImplementation(function (
-          this: BrepKernel,
+          this: RemusKernel,
           _solid: number,
           _face: number,
           _distance: number
@@ -308,8 +309,8 @@ describe(
       let after: DerivedState;
       let exported: string;
       try {
-        after = await brepkit.syncDocument(edited);
-        exported = await brepkit.exportStep(edited, [bodyId]);
+        after = await remus.syncDocument(edited);
+        exported = await remus.exportStep(edited, [bodyId]);
       } finally {
         pushPull.mockRestore();
       }
@@ -321,7 +322,7 @@ describe(
       expect(preserved.volume).toBeCloseTo(before.volume, 6);
       expect(preserved.faceCount).toBe(before.faceCount);
       expect(surfaceTypes(preserved)).toEqual(surfaceTypes(before));
-      const inspected = await brepkit.inspectStep(exported);
+      const inspected = await remus.inspectStep(exported);
       expect(inspected).toMatchObject({ solid: true, valid: true });
       expect(inspected.volume).toBeCloseTo(before.volume, 4);
     });

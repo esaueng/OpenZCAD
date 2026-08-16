@@ -17,7 +17,7 @@
  * between them was measured against the parity corpus rather than assumed:
  *
  *  - **Edge use counts**, read from the exact B-rep (`edgeToFaceMap` on
- *    BrepKit, ancestor faces on OpenCascade). A closed manifold shell uses
+ *    Remus, ancestor faces on OpenCascade). A closed manifold shell uses
  *    every edge exactly twice. This is the "is it a solid at all" test, it is
  *    exact rather than tessellated, and it yields a countable reason a user can
  *    act on ("4 of its 12 edges are used by a single face").
@@ -181,9 +181,7 @@ export function importedStepNoSolidError(
   if (rejections.length === 0) {
     return 'STEP file contains no solids.';
   }
-  return (
-    'STEP file contains no closed solids: ' + rejections.join('; ') + '.'
-  );
+  return 'STEP file contains no closed solids: ' + rejections.join('; ') + '.';
 }
 
 /**
@@ -200,7 +198,9 @@ export function importedStepDroppedSolidWarning(
   return (
     `Body "${bodyName}" imported, but ${rejections.length} of its ` +
     `${declaredSolidCount} STEP solids ${
-      rejections.length === 1 ? 'is not a closed solid and was' : 'are not closed solids and were'
+      rejections.length === 1
+        ? 'is not a closed solid and was'
+        : 'are not closed solids and were'
     } dropped: ${rejections.join('; ')}.`
   );
 }

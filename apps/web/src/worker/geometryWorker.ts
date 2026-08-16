@@ -20,11 +20,7 @@ export type GeometryWorkerRequest =
     };
 
 export type GeometryWorkerPhase =
-  | 'starting'
-  | 'loading-brepkit'
-  | 'rebuilding'
-  | 'ready'
-  | 'failed';
+  'starting' | 'loading-remus' | 'rebuilding' | 'ready' | 'failed';
 
 export interface GeometryWorkerState {
   type: 'state';
@@ -203,13 +199,13 @@ async function execute(job: GeometryWorkerJob): Promise<void> {
 
     if (request.type === 'export') {
       if (exactKernelStatus === 'idle' || exactKernelStatus === 'loading') {
-        post(stateFor('loading-brepkit', request, { stale: true }));
+        post(stateFor('loading-remus', request, { stale: true }));
       }
       const exact = await loadExactKernel();
       if (!exact) {
         throw exactKernelError instanceof Error
           ? exactKernelError
-          : new Error('The exact BrepKit kernel failed to load.');
+          : new Error('The exact Remus kernel failed to load.');
       }
       post(stateFor('rebuilding', request, { stale: true }));
       const text =
@@ -238,13 +234,13 @@ async function execute(job: GeometryWorkerJob): Promise<void> {
               exactKernelStatus === 'idle' ||
               exactKernelStatus === 'loading'
             ) {
-              post(stateFor('loading-brepkit', request, { stale: true }));
+              post(stateFor('loading-remus', request, { stale: true }));
             }
             const exact = await loadExactKernel();
             if (!exact) {
               throw exactKernelError instanceof Error
                 ? exactKernelError
-                : new Error('The exact BrepKit kernel failed to load.');
+                : new Error('The exact Remus kernel failed to load.');
             }
             if (!broadcastGate.isCurrent(job.broadcastToken)) {
               throw new Error('Superseded geometry broadcast.');

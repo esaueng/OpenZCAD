@@ -19,7 +19,7 @@ import type {
  * instructive way. An extruded glyph with exact walls *is* misclassified in
  * the middle of its bezier cap band — 16 of 109 probe points through an
  * extruded 'o' disagree with a winding-number ground truth, where flattened
- * walls score 0 of 109, and brepkit tracks that as the `#[ignore]` repro
+ * walls score 0 of 109, and remus tracks that as the `#[ignore]` repro
  * `o_glyph_bezier_cap_band_is_misclassified`. From "booleans stand on
  * classification" it seemed to follow that emboss and engrave were unreliable
  * on curved letters. That inference was not tested, and it is false.
@@ -69,7 +69,9 @@ const BASIS_HANDEDNESS_TOLERANCE = 1e-9;
 function initialFlag(): boolean {
   const override = (globalThis as Record<string, unknown>)
     .openzcadBezierProfileEdges;
-  return override === undefined ? DEFAULT_EXACT_BEZIER_EDGES : override === true;
+  return override === undefined
+    ? DEFAULT_EXACT_BEZIER_EDGES
+    : override === true;
 }
 
 let bezierProfileEdges = initialFlag();

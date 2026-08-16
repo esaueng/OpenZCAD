@@ -1008,7 +1008,7 @@ test('radius drag resizes an offset-and-filleted cylinder as one body', async ({
   // rebuilds. Wait for the revision barrier so the e2e hook cannot select the
   // stale pre-fillet cylinder that topology actions must reject.
   await expect(page.getByRole('contentinfo')).not.toContainText(
-    /Starting geometry worker|Loading exact BrepKit kernel|Rebuilding exact geometry|Waiting for exact geometry|Exact geometry is still rebuilding/i,
+    /Starting geometry worker|Loading exact Remus kernel|Rebuilding exact geometry|Waiting for exact geometry|Exact geometry is still rebuilding/i,
     { timeout: 30_000 }
   );
   await selectCylinderSurface('wall');
@@ -2083,7 +2083,7 @@ test('grounds all cylinder edges onto its two visible rims', async ({
 test('imports a STEP solid, fillets it, and re-exports it', async ({
   page
 }) => {
-  // Z3: imported STEP documents build on BrepKit like everything else. This
+  // Z3: imported STEP documents build on Remus like everything else. This
   // is the only e2e that drives a real imported B-rep through the product --
   // import, exact measurement, a blend on IMPORTED topology, and re-export --
   // so it is what says the routing flip works in the app rather than only in
@@ -2188,7 +2188,7 @@ test('refuses an unparseable STEP file without leaving a feature behind', async 
   page
 }) => {
   // The failure path the success path never covered. An import used to commit
-  // before any geometry ran, so a file BrepKit cannot parse produced a success
+  // before any geometry ran, so a file Remus cannot parse produced a success
   // toast next to a history row flagged "Feature failed to build", no body,
   // and a blank viewport that Fit View could not rescue. Nothing enters
   // history now, and the status bar carries the kernel's own verdict.
@@ -2498,7 +2498,7 @@ test('models a parametric part and exports a true STEP file', async ({
   };
   expect(diagnostic).toMatchObject({
     format: 'openzcad-project-diagnostic',
-    formatVersion: 1,
+    formatVersion: 2,
     document: {
       projectId: 'project_diagnostic',
       ownerUserId: 'user_diagnostic',
@@ -2642,7 +2642,7 @@ test('M opens the move gizmo overlay and applies an exact move', async ({
   );
 });
 
-test('a refused boolean explains itself inside the panel that asked', async ({
+test('Remus resolves the former face-plane tangent-union refusal', async ({
   page
 }) => {
   await stubApi(page);
@@ -2651,11 +2651,9 @@ test('a refused boolean explains itself inside the panel that asked', async ({
   await page.getByRole('button', { name: 'Create project' }).click();
   const inspector = page.getByRole('region', { name: 'Feature inspector' });
 
-  // A box and the default cylinder, the cylinder slid until its axis lies in
-  // the box's y = 0 face plane. That tangency still fuses into a result the
-  // exact kernel cannot close, so the union is refused. (This union at the
-  // corner axis used to be the refusal here; the current kernel resolves that
-  // one exactly, cylinder wall and all.)
+  // A box and the default cylinder, slid until its axis lies in the box's
+  // y = 0 face plane. The previous kernel could not close this tangency;
+  // Remus resolves it as an exact union, cylinder wall and all.
   await page.getByRole('button', { name: /^Box \(B\)/ }).click();
   await inspector.getByRole('button', { name: /^Create/ }).click();
   await page.getByRole('button', { name: /^Cylinder \(C\)/ }).click();
@@ -2670,33 +2668,14 @@ test('a refused boolean explains itself inside the panel that asked', async ({
   await inspector.locator('.pick-row', { hasText: 'Cylinder Body' }).click();
   await inspector.getByRole('button', { name: /^Create/ }).click();
 
-  // The refusal is readable where the user is looking. Before this it reached
-  // only the status bar, clipped mid-sentence, leaving Create looking inert.
-  const refusal = inspector.getByRole('alert');
-  await expect(refusal).toContainText(
-    'open, non-manifold, or inconsistently oriented result'
-  );
-  await expect(refusal).toContainText(
-    'Adjust the overlap or placement and try again.'
-  );
-  // The adapter only appends a move after applying it to these exact operands
-  // and validating the resulting union.
-  await expect(refusal).toContainText(/Moving Cylinder Body .+ clears it\./);
-
-  // Refused means refused: history is untouched and the form stays open with
-  // its picks intact, ready for another operation.
-  await expect(page.locator('.feature-row', { hasText: 'Union' })).toHaveCount(
-    0
-  );
-  await expect(page.locator('.body-row.consumed')).toHaveCount(0);
-  await expect(inspector.locator('.pick-row.selected')).toHaveCount(2);
-
-  // Starting a different operation clears the stale reason.
-  await page.getByRole('button', { name: /^Subtract \(X\)/ }).click();
-  await expect(inspector.getByRole('alert')).toHaveCount(0);
+  const union = page.locator('.feature-row', { hasText: 'Union' });
+  await expect(union).toBeVisible();
+  await expect(union.getByTitle('Feature failed to build')).toHaveCount(0);
+  await expect(page.locator('.body-row.consumed')).toHaveCount(2);
+  await expect(page.getByRole('contentinfo')).toContainText('warnings0');
 });
 
-test('a union that facets at a tangency succeeds once the overlap moves off it', async ({
+test('Remus resolves the former small-radius tangent-union fallback', async ({
   page
 }) => {
   await stubApi(page);
@@ -2705,41 +2684,19 @@ test('a union that facets at a tangency succeeds once the overlap moves off it',
   await page.getByRole('button', { name: 'Create project' }).click();
   const inspector = page.getByRole('region', { name: 'Feature inspector' });
 
-  // Default placement is the kernel's worst case and nothing about the UI says
-  // so: a box is corner-origin and a cylinder is axis-origin, so a new
-  // cylinder's axis lands exactly on the box's corner edge — a tangency the
-  // fuse cannot resolve exactly.
+  // A small cylinder with its axis in the box's y = 0 face plane used to
+  // facet or fail. Remus keeps the same construction exact.
   await page.getByRole('button', { name: /^Box \(B\)/ }).click();
   await inspector.getByRole('button', { name: /^Create/ }).click();
   await page.getByRole('button', { name: /^Cylinder \(C\)/ }).click();
   await inspector.getByLabel('Radius').fill('6');
   await inspector.getByRole('button', { name: /^Create/ }).click();
 
-  // Moving along X keeps the axis in the y = 0 face plane, so it still fails —
-  // which is why "move the overlap" needs a direction to be useful advice.
+  // Moving along X keeps the axis in the y = 0 face plane.
   await page.getByRole('button', { name: /^Move \(M\)/ }).click();
   const shiftX = page.getByRole('form', { name: 'Move controls' });
   await shiftX.getByLabel('Move X in mm').fill('15');
   await shiftX.getByRole('button', { name: /Apply move/ }).click();
-
-  await page.getByRole('button', { name: /^Union \(U\)/ }).click();
-  await inspector.locator('.pick-row', { hasText: 'Box Body' }).click();
-  await inspector.locator('.pick-row', { hasText: 'Cylinder Body' }).click();
-  await inspector.getByRole('button', { name: /^Create/ }).click();
-  // Either facet check can be the one that fires — a smaller round operand
-  // facets into too few faces to trip the count test — so assert the remedy
-  // they share. Here the adapter has proved a move that works, so it names it.
-  await expect(inspector.getByRole('alert')).toContainText('clears it');
-  await expect(page.locator('.feature-row', { hasText: 'Union' })).toHaveCount(
-    0
-  );
-
-  // Offset into the solid instead and the same union is exact.
-  await page.keyboard.press('Escape');
-  await page.getByRole('button', { name: /^Move \(M\)/ }).click();
-  const shiftY = page.getByRole('form', { name: 'Move controls' });
-  await shiftY.getByLabel('Move Y in mm').fill('9');
-  await shiftY.getByRole('button', { name: /Apply move/ }).click();
 
   await page.getByRole('button', { name: /^Union \(U\)/ }).click();
   await inspector.locator('.pick-row', { hasText: 'Box Body' }).click();

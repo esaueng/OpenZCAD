@@ -1,5 +1,9 @@
 # ADR-014: Resolve face-attached sketches at their history position
 
+> **Historical amendment (2026-08-15):** ADR-020 replaces the production
+> BrepKit dependency with Remus. BrepKit references below describe the state
+> when this decision was recorded.
+
 ## Status
 
 Accepted and implemented for schema-v5 face references on both exact adapters

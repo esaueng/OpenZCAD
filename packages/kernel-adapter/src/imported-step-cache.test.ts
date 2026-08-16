@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
-import { BrepKernel } from 'brepkit-wasm';
+import { RemusKernel } from './remus-runtime';
 import { GEOMETRY_LINEAR_TOLERANCE } from '@openzcad/geometry';
 
 /**
@@ -11,10 +11,12 @@ import { GEOMETRY_LINEAR_TOLERANCE } from '@openzcad/geometry';
  */
 
 const SOURCE = new Uint8Array(
-  readFileSync(new URL('../../../samples/parametric-bracket.step', import.meta.url))
+  readFileSync(
+    new URL('../../../samples/parametric-bracket.step', import.meta.url)
+  )
 );
 
-function importSolids(kernel: BrepKernel, bytes: Uint8Array): number[] {
+function importSolids(kernel: RemusKernel, bytes: Uint8Array): number[] {
   return Array.from(
     kernel.importStep(
       bytes,
@@ -24,14 +26,15 @@ function importSolids(kernel: BrepKernel, bytes: Uint8Array): number[] {
   );
 }
 
-const quantize = (value: number) => Math.round(value / GEOMETRY_LINEAR_TOLERANCE);
+const quantize = (value: number) =>
+  Math.round(value / GEOMETRY_LINEAR_TOLERANCE);
 
 /**
  * The quantized geometry every topology fingerprint is derived from. Raw f64s
  * can differ by an ULP where restoring recomputes a plane offset; what decides
  * whether a saved reference still resolves is this form.
  */
-function quantizedTopology(kernel: BrepKernel, solid: number) {
+function quantizedTopology(kernel: RemusKernel, solid: number) {
   const faces = Array.from(kernel.getSolidFaces(solid));
   const edges = Array.from(kernel.getSolidEdges(solid));
   return {
@@ -71,7 +74,7 @@ function quantizedNumbers(json: string): number[] {
   return found;
 }
 
-function measures(kernel: BrepKernel, solid: number) {
+function measures(kernel: RemusKernel, solid: number) {
   return {
     volume: kernel.volume(solid, 0.01),
     area: kernel.surfaceArea(solid, 0.01)
@@ -80,7 +83,7 @@ function measures(kernel: BrepKernel, solid: number) {
 
 describe('imported STEP cache round trip', () => {
   it('restores a solid whose fingerprint inputs are identical', () => {
-    const kernel = new BrepKernel();
+    const kernel = new RemusKernel();
     try {
       const parsed = importSolids(kernel, SOURCE)[0]!;
       const restored = kernel.deserializeSolid(kernel.serializeSolid(parsed));
@@ -100,7 +103,7 @@ describe('imported STEP cache round trip', () => {
   it('survives a serialise/restore cycle repeated across rebuilds', () => {
     // A cache entry is written once and restored on every later rebuild, so
     // the restored form has to be a fixed point rather than drifting.
-    const kernel = new BrepKernel();
+    const kernel = new RemusKernel();
     try {
       const parsed = importSolids(kernel, SOURCE)[0]!;
       const blob = kernel.serializeSolid(parsed);
@@ -122,7 +125,7 @@ describe('imported STEP cache round trip', () => {
     // The residual risk in caching: restoring recomputes a handful of plane
     // offsets to within an ULP, and booleans can be sub-ULP sensitive. Cut a
     // box out of both forms and require the outcomes to agree.
-    const kernel = new BrepKernel();
+    const kernel = new RemusKernel();
     try {
       const parsed = importSolids(kernel, SOURCE)[0]!;
       const restored = kernel.deserializeSolid(kernel.serializeSolid(parsed));
