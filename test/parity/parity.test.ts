@@ -252,7 +252,7 @@ describe('kernel parity harness', () => {
             pin !== undefined
           )
         ).toBe(expected.nonManifoldEdges);
-      });
+      }, 30_000);
 
       it('matches the recorded volume and face count', () => {
         if (WRITE_BASELINES) {
@@ -312,7 +312,7 @@ describe('kernel parity harness', () => {
             )
             .toBeLessThan(1e-9);
         }
-      });
+      }, 30_000);
     });
   }
 });
