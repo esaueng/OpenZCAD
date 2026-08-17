@@ -5,6 +5,13 @@ updates:
     schedule:
       interval: monthly
     open-pull-requests-limit: 5
+    # TypeScript 6 needs a source migration first (ambient CSS module
+    # declarations, and the lib change making ArrayBufferView generic); 7 is
+    # additionally unsupported by typescript-eslint. See #10.
+    ignore:
+      - dependency-name: typescript
+        versions:
+          - '>= 6.0.0'
     groups:
       production-dependencies:
         dependency-type: production
