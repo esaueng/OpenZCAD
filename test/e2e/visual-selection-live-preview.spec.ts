@@ -1,13 +1,16 @@
+import type { Page } from '@playwright/test';
 import { expect, test, stubApi } from './openzcad-fixtures';
 
 // Streamed preview frames arrive much later on the 2-core CI runners under
 // SwiftShader than on a workstation. Budgets are upper bounds, not waits.
 const PREVIEW_BUDGET_MS = process.env.CI ? 60_000 : 30_000;
 
-test('streams exact planar previews and restores invalid or canceled offsets', async ({
-  page
-}) => {
-  test.setTimeout(process.env.CI ? 240_000 : 120_000);
+/**
+ * Builds the cylinder, selects its top cap, and returns the handles both specs
+ * drag. Extracted so the deterministic deferred-preview case does not repeat
+ * eighty lines of setup.
+ */
+async function armTopCapOffset(page: Page) {
   await stubApi(page);
   await page.setViewportSize({ width: 1440, height: 1000 });
   const consoleErrors: string[] = [];
@@ -88,6 +91,15 @@ test('streams exact planar previews and restores invalid or canceled offsets', a
   const bounds = await canvas.boundingBox();
   expect(bounds).not.toBeNull();
   const start = { x: bounds!.x + handle.x, y: bounds!.y + handle.y };
+  return { canvas, chip, readAxisLength, handle, start, consoleErrors };
+}
+
+test('streams exact planar previews and restores invalid or canceled offsets', async ({
+  page
+}) => {
+  test.setTimeout(process.env.CI ? 240_000 : 120_000);
+  const { canvas, chip, readAxisLength, handle, start, consoleErrors } =
+    await armTopCapOffset(page);
   await page.mouse.move(start.x, start.y);
   await page.mouse.down();
   await page.mouse.move(
@@ -99,15 +111,28 @@ test('streams exact planar previews and restores invalid or canceled offsets', a
     .poll(readAxisLength, { timeout: PREVIEW_BUDGET_MS })
     .toBeCloseTo(30, 4);
   // A second pointer value after the first exact frame must replace it rather
-  // than leaving the coalescer stuck on the first sample.
+  // than leaving the coalescer stuck on the first sample. Offset-face runs with
+  // continueAfterSlow false, so a rebuild over the slow-frame budget instead
+  // pauses previewing for the rest of the gesture and says so on the chip --
+  // routine on the 2-core CI runners. Both outcomes are correct; silently
+  // holding the first sample is the regression worth catching.
   await page.mouse.move(
     start.x + handle.dx * handle.pixelsPerUnit * 5,
     start.y + handle.dy * handle.pixelsPerUnit * 5,
     { steps: 1 }
   );
+  const secondSample = async () => {
+    if ((await chip.getAttribute('data-state')) === 'deferred') {
+      return 'paused';
+    }
+    const length = await readAxisLength();
+    return length !== null && Math.abs(length - 33) < 5e-5
+      ? 'advanced'
+      : 'stale';
+  };
   await expect
-    .poll(readAxisLength, { timeout: PREVIEW_BUDGET_MS })
-    .toBeCloseTo(33, 4);
+    .poll(secondSample, { timeout: PREVIEW_BUDGET_MS })
+    .not.toBe('stale');
   await expect(canvas).toHaveAttribute('data-e2e-selected-face', /.+/);
   await expect(
     page.getByRole('region', { name: 'Offset Face operation' })
@@ -155,5 +180,44 @@ test('streams exact planar previews and restores invalid or canceled offsets', a
   await expect
     .poll(readAxisLength, { timeout: PREVIEW_BUDGET_MS })
     .toBeCloseTo(35.7, 4);
+  expect(consoleErrors).toEqual([]);
+});
+
+test('clears the paused-preview chip when a degraded gesture is canceled', async ({
+  page
+}) => {
+  test.setTimeout(process.env.CI ? 240_000 : 120_000);
+  // Forcing the budget to 0 makes every rebuild count as slow, so offset-face
+  // degrades on its first frame instead of whenever the kernel happens to be
+  // slow. Without this the deferred path is unreachable on a fast machine and
+  // a coin toss on CI.
+  await page.addInitScript(() => {
+    window.__openzcadE2ESlowFrameMs = 0;
+  });
+  const { chip, readAxisLength, handle, start, consoleErrors } =
+    await armTopCapOffset(page);
+
+  await page.mouse.move(start.x, start.y);
+  await page.mouse.down();
+  await page.mouse.move(
+    start.x + handle.dx * handle.pixelsPerUnit * 2,
+    start.y + handle.dy * handle.pixelsPerUnit * 2,
+    { steps: 1 }
+  );
+  await expect(chip).toHaveAttribute('data-state', 'deferred', {
+    timeout: PREVIEW_BUDGET_MS
+  });
+
+  // clear() re-arms the previewer, so the chip must stop claiming the preview
+  // is paused. It used to stay deferred until the next commit.
+  await page.keyboard.press('Escape');
+  await page.mouse.up();
+  await expect(chip).toHaveAttribute('data-state', 'ready', {
+    timeout: PREVIEW_BUDGET_MS
+  });
+  await expect(chip).toHaveText('Total 28 mm');
+  await expect
+    .poll(readAxisLength, { timeout: PREVIEW_BUDGET_MS })
+    .toBeCloseTo(28, 4);
   expect(consoleErrors).toEqual([]);
 });
