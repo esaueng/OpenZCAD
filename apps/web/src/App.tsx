@@ -549,6 +549,25 @@ const START_SCREEN_DEMOS =
     ? [...DEMO_DEFINITIONS, VISUAL_SELECTION_ACCEPTANCE_DEMO]
     : DEMO_DEFINITIONS;
 
+declare global {
+  interface Window {
+    /**
+     * Overrides the offset previewer's slow-frame budget, honoured only in
+     * `VITE_E2E=1` builds. Whether a rebuild degrades otherwise depends on how
+     * long the kernel happens to take, which an end-to-end test cannot pin
+     * down; setting this to 0 makes the deferred-preview path deterministic.
+     */
+    __openzcadE2ESlowFrameMs?: number;
+  }
+}
+
+const E2E_SLOW_FRAME_MS =
+  (import.meta.env as unknown as { VITE_E2E?: string }).VITE_E2E === '1' &&
+  typeof window !== 'undefined' &&
+  typeof window.__openzcadE2ESlowFrameMs === 'number'
+    ? window.__openzcadE2ESlowFrameMs
+    : undefined;
+
 /**
  * How often an open cloud project checks whether another device has moved it.
  * Focus and reconnect cover the cases that matter most; the interval is the
@@ -1467,6 +1486,9 @@ export function App() {
       acceptValue: (offset) =>
         Number.isFinite(offset) && Math.abs(offset) > 1e-9,
       continueAfterSlow: false,
+      ...(E2E_SLOW_FRAME_MS === undefined
+        ? {}
+        : { slowFrameMs: E2E_SLOW_FRAME_MS }),
       onDegrade: () => setPreviewDeferred(true)
     })
   ).current;
