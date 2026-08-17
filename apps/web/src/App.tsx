@@ -7202,6 +7202,7 @@ export function App() {
       : null;
   useEffect(() => {
     offsetPreview.clear();
+    setPreviewDeferred(false);
     offsetPreviewValueRef.current = null;
   }, [offsetInteractionKey, offsetPreview]);
 
@@ -8688,6 +8689,7 @@ export function App() {
     offsetPreviewValueRef.current = offset;
     if (Math.abs(offset) <= 1e-9) {
       offsetPreview.clear();
+      setPreviewDeferred(false);
       recoverOffsetPreviewInteraction();
       return;
     }
@@ -8696,6 +8698,10 @@ export function App() {
 
   function handleOffsetCancel() {
     offsetPreview.clear();
+    // clear() re-arms the slow-frame guard, so the chip must stop reporting a
+    // paused preview too. Commit and validation failure already do this; a
+    // canceled gesture left it latched until the next one of those.
+    setPreviewDeferred(false);
     offsetPreviewValueRef.current = null;
     setRenderedOffsetPreview(null);
     const current = interactionRef.current;
