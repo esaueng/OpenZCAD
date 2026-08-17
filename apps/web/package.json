@@ -40,13 +40,13 @@
     "three": "^0.185.1"
   },
   "devDependencies": {
-    "@testing-library/jest-dom": "^7.0.0",
+    "@testing-library/jest-dom": "^7.0.1",
     "@testing-library/react": "^16.3.2",
-    "@testing-library/user-event": "^14.6.1",
+    "@testing-library/user-event": "^14.6.4",
     "fake-indexeddb": "^6.2.5",
-    "happy-dom": "^20.11.1",
-    "vite": "^8.1.5",
+    "happy-dom": "^20.11.2",
+    "vite": "^8.2.1",
     "vite-plugin-wasm": "3.6.0",
-    "wrangler": "^4.118.0"
+    "wrangler": "^4.123.0"
   }
 }
