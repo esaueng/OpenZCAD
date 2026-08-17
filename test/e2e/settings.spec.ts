@@ -18,7 +18,7 @@ test('suggests a fresh part name without selecting it', async ({ page }) => {
       window.crypto.getRandomValues.bind(window.crypto);
     Object.defineProperty(window.crypto, 'getRandomValues', {
       configurable: true,
-      value: <T extends ArrayBufferView>(array: T): T => {
+      value: <T extends ArrayBufferView<ArrayBuffer>>(array: T): T => {
         if (array instanceof Uint32Array && array.length === 1) {
           array[0] = seed;
           return array;

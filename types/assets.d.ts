@@ -29,3 +29,10 @@ declare module '*?worker' {
   const WorkerConstructor: new () => Worker;
   export default WorkerConstructor;
 }
+
+/**
+ * Stylesheets imported for their side effect only. TypeScript 6 requires a
+ * declaration for a side-effect import; these carry no value, so the modules
+ * are declared empty rather than given a default export nothing consumes.
+ */
+declare module '*.css' {}
