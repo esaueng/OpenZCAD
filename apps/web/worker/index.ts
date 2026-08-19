@@ -468,11 +468,14 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
     const headers = new Headers(request.headers);
     headers.delete('authorization');
     headers.delete('cookie');
-    headers.delete('x-openzcad-user-id');
-    headers.delete('x-openzcad-display-name');
-    headers.delete('x-openzcad-user-email');
-    headers.delete('x-openzcad-project-role');
-    headers.delete('x-openzcad-internal-ticket-request');
+    // Namespace-wide, not a hand-maintained list: the room trusts every
+    // x-openzcad-* header it receives, so an addition to that namespace must
+    // never require remembering to extend a delete list here.
+    for (const name of [...headers.keys()]) {
+      if (name.toLowerCase().startsWith('x-openzcad-')) {
+        headers.delete(name);
+      }
+    }
     return env
       .PROJECT_ROOM!.getByName(projectId)
       .fetch(new Request(roomUrl, { method: 'GET', headers }));
@@ -1118,10 +1121,20 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
       );
     }
     const headers = new Headers(request.headers);
+    // The room authenticates its privileged verbs purely by x-openzcad-*
+    // headers, so no client-supplied value in that namespace may survive the
+    // forward — not just the identity trio. Today only GET/POST reach the
+    // room and the privileged headers gate other verbs, but a future
+    // forwarded verb must not become an instant privilege hole because a
+    // header slipped through here.
+    for (const name of [...headers.keys()]) {
+      if (name.toLowerCase().startsWith('x-openzcad-')) {
+        headers.delete(name);
+      }
+    }
     headers.set('x-openzcad-user-id', userId);
     headers.set('x-openzcad-display-name', session.displayName);
     headers.set('x-openzcad-project-role', access.role);
-    headers.delete('x-openzcad-user-email');
     if (session.email) {
       headers.set('x-openzcad-user-email', session.email);
     }

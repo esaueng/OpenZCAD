@@ -18,6 +18,7 @@ import {
 import {
   decryptAssistantCredential,
   encryptAssistantCredential,
+  isProjectSharingPreferenceEnabled,
   parseUpdateAppSettingsRequest,
   validateAssistantBaseUrl
 } from '../apps/web/worker/settings';
@@ -413,5 +414,46 @@ describe('application settings', () => {
     expect(parsed.settings.files.cloudAutosaveDelaySeconds).toBe(
       CLOUD_AUTOSAVE_DELAY_BOUNDS.max
     );
+  });
+});
+
+describe('isProjectSharingPreferenceEnabled', () => {
+  const envWithRow = (row: { settings_json: string } | null) =>
+    ({
+      DB: {
+        prepare: () => ({
+          bind: () => ({ first: async () => row })
+        })
+      }
+    }) as unknown as Parameters<typeof isProjectSharingPreferenceEnabled>[1];
+
+  it('honors a stored explicit false even when the full settings no longer validate', async () => {
+    // The regression: readSettings falls back to DEFAULT_APP_SETTINGS —
+    // collaboration enabled — whenever the stored row fails full validation
+    // for ANY reason, silently re-enabling sharing the owner turned off.
+    // A row that is valid JSON but not a valid settings document must still
+    // honor its collaboration flag, exactly as the D1 json_extract path does.
+    const row = {
+      settings_json: JSON.stringify({
+        collaboration: { enabled: false },
+        notASettingsField: true
+      })
+    };
+    await expect(
+      isProjectSharingPreferenceEnabled(toUserId('user_off'), envWithRow(row))
+    ).resolves.toBe(false);
+  });
+
+  it('applies the default for a missing row and for unreadable JSON', async () => {
+    const fallback = DEFAULT_APP_SETTINGS.collaboration.enabled;
+    await expect(
+      isProjectSharingPreferenceEnabled(toUserId('user_new'), envWithRow(null))
+    ).resolves.toBe(fallback);
+    await expect(
+      isProjectSharingPreferenceEnabled(
+        toUserId('user_corrupt'),
+        envWithRow({ settings_json: '{not json' })
+      )
+    ).resolves.toBe(fallback);
   });
 });
