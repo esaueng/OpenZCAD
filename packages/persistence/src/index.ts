@@ -4,6 +4,7 @@ import {
   DEFAULT_PROJECT_ORGANIZATION,
   duplicateProjectName,
   isPurgeDue,
+  MAX_ACCOUNT_ARTIFACT_BYTES,
   MAX_PERSISTED_DOCUMENT_BYTES,
   MAX_PROJECT_REVISIONS,
   MAX_ARTIFACT_UPLOAD_PARTS,
@@ -119,16 +120,18 @@ export class ArtifactStorageError extends Error {
   }
 }
 
-/** An artifact finalization that would push the account past its ceiling. */
-export class ArtifactStorageLimitError extends Error {
-  constructor(
-    readonly usedBytes: number,
-    readonly limitBytes: number
-  ) {
-    super(
-      'The account artifact storage limit has been reached. Delete imports or exports you no longer need, then finish the upload again.'
-    );
-    this.name = 'ArtifactStorageLimitError';
+/**
+ * The account's finalized artifacts have reached their byte ceiling. Waiting
+ * changes nothing — the remedy is deleting artifacts (or their projects), so
+ * the limit travels with the error for the client to name.
+ */
+export class ArtifactQuotaError extends Error {
+  readonly limitBytes: number;
+
+  constructor(limitBytes: number) {
+    super('Account artifact storage limit reached.');
+    this.name = 'ArtifactQuotaError';
+    this.limitBytes = limitBytes;
   }
 }
 
@@ -346,6 +349,16 @@ export interface PersistenceService {
 }
 
 export class InMemoryPersistenceService implements PersistenceService {
+  /**
+   * The account artifact ceiling, injectable so tests can exercise the quota
+   * without allocating gigabytes. Production construction never passes it.
+   */
+  private readonly artifactLimitBytes: number;
+
+  constructor(artifactLimitBytes: number = MAX_ACCOUNT_ARTIFACT_BYTES) {
+    this.artifactLimitBytes = artifactLimitBytes;
+  }
+
   private readonly projects = new Map<string, ProjectDocument>();
   private readonly projectMembers = new Map<
     string,
@@ -844,11 +857,42 @@ export class InMemoryPersistenceService implements PersistenceService {
     this.revisionBytes.set(projectId, history.slice(-MAX_PROJECT_REVISIONS));
   }
 
+  /**
+   * Finalized artifact bytes attributed to the account that owns the
+   * projects, regardless of which editor uploaded — the owner bears the
+   * storage.
+   */
+  private accountArtifacts(ownerUserId: UserId): {
+    bytes: number;
+    count: number;
+  } {
+    const ownedIds = new Set(
+      this.ownedProjects(ownerUserId).map((document) => document.projectId)
+    );
+    let bytes = 0;
+    let count = 0;
+    for (const artifact of this.artifacts.values()) {
+      if (ownedIds.has(artifact.projectId)) {
+        bytes += artifact.bytes ?? 0;
+        count += 1;
+      }
+    }
+    return { bytes, count };
+  }
+
+  private assertArtifactQuota(ownerUserId: UserId, incomingBytes: number): void {
+    const { bytes } = this.accountArtifacts(ownerUserId);
+    if (bytes + incomingBytes > this.artifactLimitBytes) {
+      throw new ArtifactQuotaError(this.artifactLimitBytes);
+    }
+  }
+
   async getStorageUsage(userId: UserId): Promise<AccountStorageUsage> {
     const owned = this.ownedProjects(userId);
     const revisions = owned.flatMap(
       (document) => this.revisionBytes.get(document.projectId) ?? []
     );
+    const artifacts = this.accountArtifacts(userId);
     return {
       projectCount: owned.length,
       documentBytes: owned.reduce(
@@ -858,7 +902,10 @@ export class InMemoryPersistenceService implements PersistenceService {
       revisionBytes: revisions.reduce((total, bytes) => total + bytes, 0),
       revisionCount: revisions.length,
       documentLimitBytes: MAX_PERSISTED_DOCUMENT_BYTES,
-      maxRevisionsPerProject: MAX_PROJECT_REVISIONS
+      maxRevisionsPerProject: MAX_PROJECT_REVISIONS,
+      artifactBytes: artifacts.bytes,
+      artifactCount: artifacts.count,
+      artifactLimitBytes: this.artifactLimitBytes
     };
   }
 
@@ -896,7 +943,8 @@ export class InMemoryPersistenceService implements PersistenceService {
     userId: UserId,
     request: CreateUploadSessionRequest
   ): Promise<CreateUploadSessionResponse> {
-    await this.requireProjectEdit(userId, request.projectId);
+    const access = await this.requireProjectEdit(userId, request.projectId);
+    this.assertArtifactQuota(access.ownerUserId, 1);
     await this.purgeExpiredUploadSessions();
     const session: UploadSessionRecord = {
       uploadSessionId: toUploadSessionId(`upload_${crypto.randomUUID()}`),
@@ -922,7 +970,8 @@ export class InMemoryPersistenceService implements PersistenceService {
     if (!upload) {
       throw new ArtifactStorageError('Upload session was not found.');
     }
-    await this.requireProjectEdit(userId, upload.projectId);
+    const access = await this.requireProjectEdit(userId, upload.projectId);
+    this.assertArtifactQuota(access.ownerUserId, body.byteLength);
     this.uploadBodies.set(upload.objectKey, body);
   }
 
@@ -969,7 +1018,11 @@ export class InMemoryPersistenceService implements PersistenceService {
     ) {
       throw new ArtifactStorageError('Upload part number is out of range.');
     }
-    await this.requireProjectEdit(userId, upload.projectId);
+    const access = await this.requireProjectEdit(userId, upload.projectId);
+    // Approximate: parts already streamed into this session are not summed
+    // here (that would need per-session accounting); the authoritative check
+    // runs against the assembled size at finalize.
+    this.assertArtifactQuota(access.ownerUserId, body.byteLength);
     parts.set(partNumber, body);
     return { partNumber, etag: `etag-${partNumber}-${body.byteLength}` };
   }
@@ -1029,7 +1082,7 @@ export class InMemoryPersistenceService implements PersistenceService {
     userId: UserId,
     request: FinalizeArtifactRequest
   ): Promise<ArtifactRecord | null> {
-    await this.requireProjectEdit(userId, request.projectId);
+    const access = await this.requireProjectEdit(userId, request.projectId);
     const upload = this.uploads.get(request.uploadSessionId);
     const body = upload ? this.uploadBodies.get(upload.objectKey) : undefined;
     if (
@@ -1042,6 +1095,13 @@ export class InMemoryPersistenceService implements PersistenceService {
       return null;
     }
     this.uploads.delete(request.uploadSessionId);
+    try {
+      this.assertArtifactQuota(access.ownerUserId, body.byteLength);
+    } catch (error) {
+      // The over-quota object must not linger as unaccounted storage.
+      this.uploadBodies.delete(upload.objectKey);
+      throw error;
+    }
 
     const artifact: ArtifactRecord = {
       artifactId: request.artifactId,

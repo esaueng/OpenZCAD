@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   addPrimitiveFeature,
+  cloneDocument,
   addSketchFeature,
   addSketchObjects,
   appendRevision,
@@ -722,5 +723,29 @@ describe('document size and clone cost bounds', () => {
     const normalized = normalizeDocument(oversized);
     expect(normalized.revisions).toHaveLength(MAX_PROJECT_REVISION_RECORDS);
     expect(normalized.revisions.at(-1)?.reason).toBe(`stored ${overflow - 1}`);
+  });
+});
+
+describe('cloneDocument derived sharing', () => {
+  it('shares derived by reference and deep-copies canonical content', () => {
+    // Derived state is a rebuildable projection carrying the mesh arrays;
+    // deep-copying it on every command was the dominant per-edit allocation
+    // and multiplied through the undo history. It is never mutated in place
+    // (attachDerivedState replaces the whole field), so sharing is safe.
+    const document = addPrimitiveFeature(
+      createProjectDocument('Clone sharing', toUserId('user_clone')),
+      {
+        name: 'Box',
+        primitiveKind: 'box',
+        dimensions: { width: 10, height: 5, depth: 2 }
+      }
+    );
+    const clone = cloneDocument(document);
+
+    expect(clone.derived).toBe(document.derived);
+    expect(clone.nodes).not.toBe(document.nodes);
+    expect(clone.featureOrder).not.toBe(document.featureOrder);
+    expect(clone).not.toBe(document);
+    expect(clone.nodes).toEqual(document.nodes);
   });
 });

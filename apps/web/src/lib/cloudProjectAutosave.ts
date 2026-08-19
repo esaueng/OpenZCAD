@@ -76,11 +76,14 @@ export interface CloudProjectAutosaveConnectivity {
 
 export interface CloudProjectAutosaveOptions {
   api: {
-    saveProjectDocument(input: {
-      projectId: string;
-      expectedVersion: number;
-      document: ProjectDocument;
-    }): Promise<SaveProjectDocumentResponse>;
+    saveProjectDocument(
+      input: {
+        projectId: string;
+        expectedVersion: number;
+        document: ProjectDocument;
+      },
+      options?: { keepalive?: boolean }
+    ): Promise<SaveProjectDocumentResponse>;
   };
   connectivity?: CloudProjectAutosaveConnectivity;
   idleDelayMs?: number;
@@ -181,6 +184,12 @@ export class CloudProjectAutosave {
    */
   #halted: 'conflict' | 'repair' | 'refused' | null = null;
   #disposed = false;
+  /**
+   * Set while a page-teardown drain is running so `#persist` asks the fetch
+   * layer for a keepalive request — a plain fetch started from `pagehide` is
+   * aborted with the document, and the account write silently never lands.
+   */
+  #keepalive = false;
   readonly #unsubscribeConnectivity: () => void;
 
   constructor(options: CloudProjectAutosaveOptions) {
@@ -396,19 +405,28 @@ export class CloudProjectAutosave {
    * reach the account is not a lost document, and the callers — logout, page
    * hide — must not be blocked by one.
    */
-  async flushPending(): Promise<void> {
+  async flushPending(options?: { keepalive?: boolean }): Promise<void> {
     if (this.#disposed) {
       return;
     }
-    while (this.#pending) {
-      const before = this.#pending.editEpoch;
-      await this.flush();
+    if (options?.keepalive) {
+      this.#keepalive = true;
+    }
+    try {
+      while (this.#pending) {
+        const before = this.#pending.editEpoch;
+        await this.flush();
+        await this.#queue;
+        if (!this.#pending || this.#pending.editEpoch === before) {
+          return;
+        }
+      }
       await this.#queue;
-      if (!this.#pending || this.#pending.editEpoch === before) {
-        return;
+    } finally {
+      if (options?.keepalive) {
+        this.#keepalive = false;
       }
     }
-    await this.#queue;
   }
 
   async whenIdle(): Promise<void> {
@@ -432,11 +450,14 @@ export class CloudProjectAutosave {
     }
     const expectedVersion = this.#project!.version;
     try {
-      const response = await this.#options.api.saveProjectDocument({
-        projectId: next.projectId,
-        expectedVersion,
-        document: withoutDerivedProjection(next.document)
-      });
+      const response = await this.#options.api.saveProjectDocument(
+        {
+          projectId: next.projectId,
+          expectedVersion,
+          document: withoutDerivedProjection(next.document)
+        },
+        { keepalive: this.#keepalive }
+      );
       if (!this.#isActive(epoch, next.projectId)) {
         return { state: 'stale' };
       }
