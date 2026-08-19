@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { createProjectDocument } from '@openzcad/document-core';
-import { toUserId } from '@openzcad/shared';
+import { toRevisionId, toUserId } from '@openzcad/shared';
 import {
   ExactRebuildCache,
   LatestBroadcastGate,
@@ -35,6 +35,41 @@ describe('canonical exact rebuild keys', () => {
     expect(
       canonicalProjectContentKey({ ...document, name: 'Changed content' })
     ).not.toBe(canonicalProjectContentKey(document));
+  });
+
+  it('ignores version, revisions, commandLog, and checkpoints so undo/redo hit the cache', () => {
+    const document = createProjectDocument('Cache key', toUserId('user'));
+    // Undo restores earlier content under a NEW version with extra log and
+    // revision entries. The rebuild replays only canonical content, so those
+    // bookkeeping fields must not invalidate the cached exact result.
+    const afterUndo: typeof document = {
+      ...document,
+      version: document.version + 3,
+      revisions: [
+        ...document.revisions,
+        {
+          revisionId: toRevisionId('rev-undo'),
+          createdAt: '2099-01-01T00:00:00.000Z',
+          reason: 'undo',
+          commandCount: 3
+        }
+      ],
+      commandLog: [
+        ...document.commandLog,
+        {
+          kind: 'noop',
+          payload: {},
+          replayVersion: 1,
+          label: 'noop',
+          timestamp: '2099-01-01T00:00:00.000Z'
+        }
+      ],
+      checkpoints: [...document.checkpoints]
+    };
+
+    expect(canonicalProjectContentKey(afterUndo)).toBe(
+      canonicalProjectContentKey(document)
+    );
   });
 });
 

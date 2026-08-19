@@ -28,9 +28,23 @@ function stableJson(value: unknown): string {
   return `{${entries.join(',')}}`;
 }
 
-/** Canonical project content for exact rebuilds. Derived projections are output. */
+/**
+ * Canonical project content for exact rebuilds. Derived projections are
+ * output, and `version`, `revisions`, `commandLog`, and `checkpoints` are
+ * bookkeeping the rebuild never reads: every command (including undo/redo,
+ * which restores earlier content under a new version) advances them, so
+ * keying on them made undo and redo unconditional cache misses that replayed
+ * the full exact history.
+ */
 export function canonicalProjectContentKey(document: ProjectDocument): string {
-  const { derived: _derived, ...content } = document;
+  const {
+    derived: _derived,
+    version: _version,
+    revisions: _revisions,
+    commandLog: _commandLog,
+    checkpoints: _checkpoints,
+    ...content
+  } = document;
   return stableJson(content);
 }
 
