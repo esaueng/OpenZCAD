@@ -1,6 +1,7 @@
 import { DurableObject } from 'cloudflare:workers';
 import {
   ArtifactStorageError,
+  ArtifactStorageLimitError,
   assertPersistableDocument,
   DocumentTooLargeError,
   getInMemoryPersistence,
@@ -193,6 +194,32 @@ export interface CloudflareEnv {
    * document and bounded snapshot history, which the D1/R2 sweeps never reach.
    */
   PROJECT_ROOM?: DurableObjectNamespace<ProjectCollaborationRoom>;
+  /**
+   * Ceiling on the total finalized artifact bytes stored across one account's
+   * projects, enforced when an upload finalizes (the only point where the
+   * true size is known). Unset or unparsable uses
+   * {@link DEFAULT_ARTIFACT_ACCOUNT_STORAGE_LIMIT_BYTES}.
+   */
+  ARTIFACT_ACCOUNT_STORAGE_LIMIT_BYTES?: string;
+}
+
+/**
+ * Default per-account artifact storage ceiling. Individual uploads are
+ * already bounded (64 parts x 32 MB), but nothing bounded how many artifacts
+ * an account accumulates; 2 GiB is generous for beta while making R2 growth
+ * finite. Un-finalized uploads are bounded separately by session expiry and
+ * the hourly sweep.
+ */
+export const DEFAULT_ARTIFACT_ACCOUNT_STORAGE_LIMIT_BYTES = 2 * 1024 ** 3;
+
+function artifactAccountStorageLimitBytes(env: CloudflareEnv): number {
+  const configured = Number.parseInt(
+    (env.ARTIFACT_ACCOUNT_STORAGE_LIMIT_BYTES ?? '').trim(),
+    10
+  );
+  return Number.isFinite(configured) && configured > 0
+    ? configured
+    : DEFAULT_ARTIFACT_ACCOUNT_STORAGE_LIMIT_BYTES;
 }
 
 export const CLOUDFLARE_BOOLEAN_FLAGS = [
@@ -1734,6 +1761,33 @@ export class D1R2PersistenceService implements PersistenceService {
     const stored = await this.env.ARTIFACTS.head(upload.object_key);
     if (!stored) {
       return null;
+    }
+
+    // The ceiling is per project OWNER: an editor's upload counts against the
+    // account that owns the project. Enforced here because finalization is
+    // the first point the true size is known. Rejection keeps the upload
+    // session valid, so freeing space and retrying the finalize succeeds
+    // without re-uploading; an abandoned session is reclaimed by the expiry
+    // sweep as usual. Concurrent finalizes can overshoot by one artifact,
+    // which is acceptable for a storage ceiling.
+    const owner = await this.env.DB.prepare(
+      `SELECT user_id FROM projects WHERE id = ?`
+    )
+      .bind(request.projectId)
+      .first<{ user_id: string }>();
+    if (owner) {
+      const usage = await this.env.DB.prepare(
+        `SELECT COALESCE(SUM(artifacts.bytes), 0) AS total
+         FROM artifacts JOIN projects ON projects.id = artifacts.project_id
+         WHERE projects.user_id = ?`
+      )
+        .bind(owner.user_id)
+        .first<{ total: number }>();
+      const usedBytes = usage?.total ?? 0;
+      const limitBytes = artifactAccountStorageLimitBytes(this.env);
+      if (usedBytes + stored.size > limitBytes) {
+        throw new ArtifactStorageLimitError(usedBytes, limitBytes);
+      }
     }
 
     const artifact: ArtifactRecord = {
