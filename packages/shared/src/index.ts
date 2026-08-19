@@ -1092,6 +1092,16 @@ export interface ProjectCheckpoint {
 
 export const MAX_PROJECT_CHECKPOINTS = 100;
 
+/**
+ * Retained in-document revision records. One is appended on every command,
+ * undo, redo, and normalization, so without a bound document size grows
+ * linearly with lifetime edit count. The records are small bookkeeping rows
+ * (id, timestamp, reason, command count) that nothing looks up beyond the
+ * most recent entries, so trimming the oldest loses no behavior; the durable
+ * server-side snapshots have their own separate `MAX_PROJECT_REVISIONS` cap.
+ */
+export const MAX_PROJECT_REVISION_RECORDS = 500;
+
 function isBoundedString(value: unknown, max: number, min = 0): boolean {
   return (
     typeof value === 'string' && value.length >= min && value.length <= max

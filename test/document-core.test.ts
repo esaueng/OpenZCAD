@@ -3,6 +3,8 @@ import {
   addPrimitiveFeature,
   addSketchFeature,
   addSketchObjects,
+  appendRevision,
+  attachDerivedState,
   booleanBodies,
   createCheckpoint,
   createProjectDocument,
@@ -27,6 +29,7 @@ import {
   updateSketch
 } from '@openzcad/document-core';
 import {
+  MAX_PROJECT_REVISION_RECORDS,
   PROJECT_DOCUMENT_SCHEMA_VERSION,
   sanitizeFileName,
   toUserId
@@ -663,5 +666,61 @@ describe('revolve angle', () => {
       }).document
     );
     expect(revolveData(document)).not.toHaveProperty('angleDeg');
+  });
+});
+
+describe('document size and clone cost bounds', () => {
+  it('shares the derived projection by reference across operations', () => {
+    // Derived state is replaced wholesale by attachDerivedState and never
+    // edited in place, so cloning operations hand it through by reference —
+    // for a dense import its mesh arrays are most of the document's bytes,
+    // and copying them made every command cost O(mesh bytes).
+    const base = createProjectDocument('Shared derived', user());
+    const derived = {
+      ...base.derived,
+      warnings: ['projection to keep'],
+      updatedAt: '2026-08-01T00:00:00.000Z'
+    };
+    const attached = attachDerivedState(base, derived);
+    const edited = addPrimitiveFeature(attached, {
+      name: 'Box',
+      primitiveKind: 'box',
+      dimensions: { width: 10, height: 10, depth: 10 }
+    });
+    expect(edited.derived).toBe(attached.derived);
+    // Replacing derived on the edited document leaves the earlier snapshot's
+    // projection untouched — the sharing is safe because replacement, not
+    // mutation, is the only write path.
+    const rederived = attachDerivedState(edited, {
+      ...edited.derived,
+      warnings: []
+    });
+    expect(attached.derived.warnings).toEqual(['projection to keep']);
+    expect(rederived.derived.warnings).toEqual([]);
+  });
+
+  it('bounds the in-document revision records', () => {
+    let document = createProjectDocument('Bounded revisions', user());
+    const overflow = MAX_PROJECT_REVISION_RECORDS + 25;
+    for (let index = 0; index < overflow; index += 1) {
+      document = appendRevision(document, `edit ${index}`);
+    }
+    expect(document.revisions).toHaveLength(MAX_PROJECT_REVISION_RECORDS);
+    // Newest entries are the ones retained.
+    expect(document.revisions.at(-1)?.reason).toBe(`edit ${overflow - 1}`);
+
+    // Loading a document written before the bound trims it the same way.
+    const oversized = {
+      ...document,
+      revisions: Array.from({ length: overflow }, (_, index) => ({
+        revisionId: document.revisions[0]!.revisionId,
+        createdAt: '2026-08-01T00:00:00.000Z',
+        reason: `stored ${index}`,
+        commandCount: 0
+      }))
+    };
+    const normalized = normalizeDocument(oversized);
+    expect(normalized.revisions).toHaveLength(MAX_PROJECT_REVISION_RECORDS);
+    expect(normalized.revisions.at(-1)?.reason).toBe(`stored ${overflow - 1}`);
   });
 });
