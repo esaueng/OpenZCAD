@@ -2126,9 +2126,13 @@ export function App() {
       // it: the controller only learns of an edit once the local save has
       // stored it, so draining the account copy first would miss an edit still
       // sitting in the 450 ms debounce and the tab would take it with it.
+      // `keepalive` lets the account write started during teardown outlive
+      // the page; without it the browser aborts the fetch with the document.
       void flushPendingLocalSaveRef
         .current()
-        .then(() => cloudProjectAutosaveRef.current?.flushPending());
+        .then(() =>
+          cloudProjectAutosaveRef.current?.flushPending({ keepalive: true })
+        );
     };
     const onVisibilityChange = () => {
       if (globalThis.document.visibilityState === 'hidden') {
@@ -2761,15 +2765,22 @@ export function App() {
   // would hide exactly the problems the preview exists to reveal.
   const warnings = (previewDoc ?? doc)?.derived.warnings ?? [];
 
+  // Keyed on the derived body table, not the whole document: commands clone
+  // the document but share `derived` by reference, so keying on `doc` gave
+  // these arrays a new identity on every edit and made the viewport dispose
+  // and re-upload every GPU buffer twice per command (once on the optimistic
+  // document swap, again when the worker result landed) for identical
+  // geometry.
+  const liveBodyRepresentations = doc?.derived.bodyRepresentations ?? null;
   const viewerBodies = useMemo<BodyRepresentation[]>(
     () =>
       (previewDoc
         ? Object.values(renderedRepresentations)
-        : doc
-          ? Object.values(doc.derived.bodyRepresentations)
+        : liveBodyRepresentations
+          ? Object.values(liveBodyRepresentations)
           : []
       ).filter((body) => !body.consumed && !hiddenBodyIds.has(body.bodyId)),
-    [doc, previewDoc, renderedRepresentations, hiddenBodyIds]
+    [liveBodyRepresentations, previewDoc, renderedRepresentations, hiddenBodyIds]
   );
 
   /**
@@ -2782,11 +2793,11 @@ export function App() {
     () =>
       (previewDoc
         ? Object.values(renderedRepresentations)
-        : doc
-          ? Object.values(doc.derived.bodyRepresentations)
+        : liveBodyRepresentations
+          ? Object.values(liveBodyRepresentations)
           : []
       ).filter((body) => !body.consumed),
-    [doc, previewDoc, renderedRepresentations]
+    [liveBodyRepresentations, previewDoc, renderedRepresentations]
   );
 
   const directEditableBodyIds = useMemo<string[]>(

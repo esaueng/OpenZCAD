@@ -536,17 +536,14 @@ export function normalizeDocument(document: ProjectDocument): ProjectDocument {
   };
 }
 
-/**
- * Clones the canonical document but shares the derived projection by
- * reference. Derived state is only ever replaced wholesale
- * ({@link attachDerivedState}) — never edited in place — and for a dense
- * import its mesh arrays are most of the document's bytes, so copying them
- * on every command apply made each edit cost O(mesh bytes) in time and in
- * memory retained by undo snapshots.
- */
 export function cloneDocument(document: ProjectDocument): ProjectDocument {
-  const { derived, ...canonical } = document;
-  return { ...deepClone(canonical), derived };
+  // Derived state is a disposable projection the geometry worker rebuilds,
+  // and nothing mutates it in place — `attachDerivedState` replaces the whole
+  // field. It also carries every body's mesh arrays, so deep-copying it here
+  // was the single largest main-thread allocation per command and multiplied
+  // through all 100 undo snapshots. Share it by reference and clone the rest.
+  const { derived, ...content } = document;
+  return { ...deepClone(content), derived };
 }
 
 /**

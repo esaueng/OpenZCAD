@@ -1,7 +1,7 @@
 import { DurableObject } from 'cloudflare:workers';
 import {
+  ArtifactQuotaError,
   ArtifactStorageError,
-  ArtifactStorageLimitError,
   assertPersistableDocument,
   DocumentTooLargeError,
   getInMemoryPersistence,
@@ -24,6 +24,7 @@ import {
   DEFAULT_PROJECT_ORGANIZATION,
   duplicateProjectName,
   MAX_CLOUD_PROJECT_DOCUMENT_BYTES,
+  MAX_ACCOUNT_ARTIFACT_BYTES,
   MAX_ARTIFACT_UPLOAD_PARTS,
   MAX_THUMBNAIL_BYTES,
   MAX_PERSISTED_DOCUMENT_BYTES,
@@ -194,32 +195,6 @@ export interface CloudflareEnv {
    * document and bounded snapshot history, which the D1/R2 sweeps never reach.
    */
   PROJECT_ROOM?: DurableObjectNamespace<ProjectCollaborationRoom>;
-  /**
-   * Ceiling on the total finalized artifact bytes stored across one account's
-   * projects, enforced when an upload finalizes (the only point where the
-   * true size is known). Unset or unparsable uses
-   * {@link DEFAULT_ARTIFACT_ACCOUNT_STORAGE_LIMIT_BYTES}.
-   */
-  ARTIFACT_ACCOUNT_STORAGE_LIMIT_BYTES?: string;
-}
-
-/**
- * Default per-account artifact storage ceiling. Individual uploads are
- * already bounded (64 parts x 32 MB), but nothing bounded how many artifacts
- * an account accumulates; 2 GiB is generous for beta while making R2 growth
- * finite. Un-finalized uploads are bounded separately by session expiry and
- * the hourly sweep.
- */
-export const DEFAULT_ARTIFACT_ACCOUNT_STORAGE_LIMIT_BYTES = 2 * 1024 ** 3;
-
-function artifactAccountStorageLimitBytes(env: CloudflareEnv): number {
-  const configured = Number.parseInt(
-    (env.ARTIFACT_ACCOUNT_STORAGE_LIMIT_BYTES ?? '').trim(),
-    10
-  );
-  return Number.isFinite(configured) && configured > 0
-    ? configured
-    : DEFAULT_ARTIFACT_ACCOUNT_STORAGE_LIMIT_BYTES;
 }
 
 export const CLOUDFLARE_BOOLEAN_FLAGS = [
@@ -1256,6 +1231,36 @@ export class D1R2PersistenceService implements PersistenceService {
     }
   }
 
+  /**
+   * Finalized artifact usage attributed to the account owning the projects —
+   * the owner bears the R2 storage regardless of which editor uploaded.
+   * Legacy rows with NULL bytes predate accounting and count as zero.
+   */
+  private async accountArtifactUsage(
+    ownerUserId: UserId
+  ): Promise<{ bytes: number; count: number }> {
+    const row = await this.env
+      .DB!.prepare(
+        `SELECT COALESCE(SUM(a.bytes), 0) AS total, COUNT(*) AS count
+         FROM artifacts a
+         JOIN projects p ON p.id = a.project_id
+         WHERE p.user_id = ?`
+      )
+      .bind(ownerUserId)
+      .first<{ total: number; count: number }>();
+    return { bytes: row?.total ?? 0, count: row?.count ?? 0 };
+  }
+
+  private async assertArtifactQuota(
+    ownerUserId: UserId,
+    incomingBytes: number
+  ): Promise<void> {
+    const { bytes } = await this.accountArtifactUsage(ownerUserId);
+    if (bytes + incomingBytes > MAX_ACCOUNT_ARTIFACT_BYTES) {
+      throw new ArtifactQuotaError(MAX_ACCOUNT_ARTIFACT_BYTES);
+    }
+  }
+
   async getStorageUsage(userId: UserId): Promise<AccountStorageUsage> {
     if (!this.env.DB) {
       return getInMemoryPersistence().getStorageUsage(userId);
@@ -1274,6 +1279,7 @@ export class D1R2PersistenceService implements PersistenceService {
     )
       .bind(userId)
       .first<{ revision_count: number; revision_bytes: number }>();
+    const artifacts = await this.accountArtifactUsage(userId);
     return {
       projectCount: totals?.project_count ?? 0,
       documentBytes: totals?.document_bytes ?? 0,
@@ -1282,7 +1288,10 @@ export class D1R2PersistenceService implements PersistenceService {
       documentLimitBytes: this.projectStorageBucket()
         ? MAX_CLOUD_PROJECT_DOCUMENT_BYTES
         : MAX_PERSISTED_DOCUMENT_BYTES,
-      maxRevisionsPerProject: MAX_PROJECT_REVISIONS
+      maxRevisionsPerProject: MAX_PROJECT_REVISIONS,
+      artifactBytes: artifacts.bytes,
+      artifactCount: artifacts.count,
+      artifactLimitBytes: MAX_ACCOUNT_ARTIFACT_BYTES
     };
   }
 
@@ -1462,10 +1471,11 @@ export class D1R2PersistenceService implements PersistenceService {
     if (!this.env.DB) {
       return getInMemoryPersistence().createUploadSession(userId, request);
     }
-    await this.requireProjectEdit(userId, request.projectId);
+    const access = await this.requireProjectEdit(userId, request.projectId);
     if (!this.env.ARTIFACTS) {
       throw new ArtifactStorageError();
     }
+    await this.assertArtifactQuota(access.ownerUserId, 1);
     await this.purgeExpiredUploadSessions();
     const session = createUploadSessionRecord(request);
     await this.env.DB.prepare(
@@ -1509,12 +1519,13 @@ export class D1R2PersistenceService implements PersistenceService {
         'Upload session was not found or expired.'
       );
     }
-    await this.requireProjectEdit(userId, upload.project_id);
+    const access = await this.requireProjectEdit(userId, upload.project_id);
     if (Date.parse(upload.expires_at) < Date.now()) {
       throw new ArtifactStorageError(
         'Upload session was not found or expired.'
       );
     }
+    await this.assertArtifactQuota(access.ownerUserId, body.byteLength);
     if (!this.env.ARTIFACTS) {
       throw new ArtifactStorageError();
     }
@@ -1537,6 +1548,7 @@ export class D1R2PersistenceService implements PersistenceService {
     kind: ArtifactRecord['kind'];
     metadata: Record<string, unknown>;
     metadataJson: string;
+    ownerUserId: UserId;
   }> {
     const upload = await this.env
       .DB!.prepare(
@@ -1556,7 +1568,7 @@ export class D1R2PersistenceService implements PersistenceService {
         'Upload session was not found or expired.'
       );
     }
-    await this.requireProjectEdit(userId, upload.project_id);
+    const access = await this.requireProjectEdit(userId, upload.project_id);
     if (!this.env.ARTIFACTS) {
       throw new ArtifactStorageError();
     }
@@ -1565,7 +1577,8 @@ export class D1R2PersistenceService implements PersistenceService {
       contentType: upload.content_type,
       kind: upload.kind,
       metadata: JSON.parse(upload.metadata_json) as Record<string, unknown>,
-      metadataJson: upload.metadata_json
+      metadataJson: upload.metadata_json,
+      ownerUserId: access.ownerUserId
     };
   }
 
@@ -1653,6 +1666,10 @@ export class D1R2PersistenceService implements PersistenceService {
     ) {
       throw new ArtifactStorageError('Upload part number is out of range.');
     }
+    // Approximate: earlier parts of this session are not summed (that would
+    // need per-session accounting); the authoritative check runs against the
+    // assembled object size at finalize, which also deletes the overage.
+    await this.assertArtifactQuota(session.ownerUserId, body.byteLength);
     const upload = this.env.ARTIFACTS!.resumeMultipartUpload(
       session.objectKey,
       uploadId
@@ -1732,7 +1749,7 @@ export class D1R2PersistenceService implements PersistenceService {
     if (!this.env.DB) {
       return getInMemoryPersistence().finalizeArtifact(userId, request);
     }
-    await this.requireProjectEdit(userId, request.projectId);
+    const access = await this.requireProjectEdit(userId, request.projectId);
     const upload = await this.env.DB.prepare(
       `SELECT artifact_id, object_key, project_id, file_name, content_type, kind, metadata_json, expires_at FROM upload_sessions WHERE id = ?`
     )
@@ -1762,32 +1779,14 @@ export class D1R2PersistenceService implements PersistenceService {
     if (!stored) {
       return null;
     }
-
-    // The ceiling is per project OWNER: an editor's upload counts against the
-    // account that owns the project. Enforced here because finalization is
-    // the first point the true size is known. Rejection keeps the upload
-    // session valid, so freeing space and retrying the finalize succeeds
-    // without re-uploading; an abandoned session is reclaimed by the expiry
-    // sweep as usual. Concurrent finalizes can overshoot by one artifact,
-    // which is acceptable for a storage ceiling.
-    const owner = await this.env.DB.prepare(
-      `SELECT user_id FROM projects WHERE id = ?`
-    )
-      .bind(request.projectId)
-      .first<{ user_id: string }>();
-    if (owner) {
-      const usage = await this.env.DB.prepare(
-        `SELECT COALESCE(SUM(artifacts.bytes), 0) AS total
-         FROM artifacts JOIN projects ON projects.id = artifacts.project_id
-         WHERE projects.user_id = ?`
-      )
-        .bind(owner.user_id)
-        .first<{ total: number }>();
-      const usedBytes = usage?.total ?? 0;
-      const limitBytes = artifactAccountStorageLimitBytes(this.env);
-      if (usedBytes + stored.size > limitBytes) {
-        throw new ArtifactStorageLimitError(usedBytes, limitBytes);
-      }
+    const usage = await this.accountArtifactUsage(access.ownerUserId);
+    if (usage.bytes + stored.size > MAX_ACCOUNT_ARTIFACT_BYTES) {
+      // The assembled object must not linger as unaccounted storage.
+      await this.env.ARTIFACTS.delete(upload.object_key).catch(() => undefined);
+      await this.env.DB.prepare(`DELETE FROM upload_sessions WHERE id = ?`)
+        .bind(request.uploadSessionId)
+        .run();
+      throw new ArtifactQuotaError(MAX_ACCOUNT_ARTIFACT_BYTES);
     }
 
     const artifact: ArtifactRecord = {

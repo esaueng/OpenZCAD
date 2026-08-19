@@ -250,15 +250,27 @@ export const api = {
   /**
    * The continuous-sync write. Same fencing as `saveRevision`, no history
    * entry, and only an acknowledgement comes back.
+   *
+   * `keepalive` is best-effort: browsers cap keepalive request bodies at
+   * 64 KiB and reject larger ones outright, so it is applied only when the
+   * body fits. An oversized document falls back to a plain fetch, which is
+   * exactly the pre-keepalive behaviour.
    */
-  saveProjectDocument: (payload: SaveProjectDocumentRequest) =>
-    requestJson<SaveProjectDocumentResponse>(
+  saveProjectDocument: (
+    payload: SaveProjectDocumentRequest,
+    options?: { keepalive?: boolean }
+  ) => {
+    const body = JSON.stringify(payload);
+    return requestJson<SaveProjectDocumentResponse>(
       `/api/projects/${payload.projectId}/document`,
       {
         method: 'PUT',
-        body: JSON.stringify(payload)
+        body,
+        keepalive:
+          options?.keepalive === true && new Blob([body]).size <= 60_000
       }
-    ),
+    );
+  },
   createUploadSession: (payload: CreateUploadSessionRequest) =>
     requestJson<CreateUploadSessionResponse>('/api/uploads', {
       method: 'POST',
