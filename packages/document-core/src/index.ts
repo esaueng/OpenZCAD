@@ -5,6 +5,7 @@ import {
   isProjectCheckpoint,
   isRevisionRecord,
   MAX_PROJECT_CHECKPOINTS,
+  MAX_PROJECT_REVISION_RECORDS,
   nowIso,
   PROJECT_DOCUMENT_SCHEMA_VERSION,
   toArtifactId,
@@ -475,7 +476,9 @@ export function createProjectDocument(
  */
 export function normalizeDocument(document: ProjectDocument): ProjectDocument {
   const revisions = Array.isArray(document.revisions)
-    ? document.revisions.filter(isRevisionRecord)
+    ? document.revisions
+        .filter(isRevisionRecord)
+        .slice(-MAX_PROJECT_REVISION_RECORDS)
     : [];
   const fallbackRevision = revisions.at(-1);
   const checkpoints = Array.isArray(document.checkpoints)
@@ -533,8 +536,17 @@ export function normalizeDocument(document: ProjectDocument): ProjectDocument {
   };
 }
 
+/**
+ * Clones the canonical document but shares the derived projection by
+ * reference. Derived state is only ever replaced wholesale
+ * ({@link attachDerivedState}) — never edited in place — and for a dense
+ * import its mesh arrays are most of the document's bytes, so copying them
+ * on every command apply made each edit cost O(mesh bytes) in time and in
+ * memory retained by undo snapshots.
+ */
 export function cloneDocument(document: ProjectDocument): ProjectDocument {
-  return deepClone(document);
+  const { derived, ...canonical } = document;
+  return { ...deepClone(canonical), derived };
 }
 
 /**
@@ -2038,6 +2050,8 @@ export function appendRevision(
   // shared sub-objects are never mutated in place (see module invariant).
   return {
     ...document,
+    // Trimming the oldest keeps the array bounded; consumers only read the
+    // newest entries and the count, never a trimmed record.
     revisions: [
       ...document.revisions,
       {
@@ -2046,7 +2060,7 @@ export function appendRevision(
         reason,
         commandCount: document.commandLog.length
       }
-    ],
+    ].slice(-MAX_PROJECT_REVISION_RECORDS),
     version: document.version + 1
   };
 }
