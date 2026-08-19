@@ -1,7 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
   InMemoryPersistenceService,
-  ProjectNotFoundError
+  ProjectNotFoundError,
+  ArtifactQuotaError
 } from '@openzcad/persistence';
 import type { RevisionConflictError } from '@openzcad/persistence';
 import { createProjectDocument } from '@openzcad/document-core';
@@ -522,5 +523,68 @@ describe('project shelves', () => {
         (project) => project.name
       )
     ).toEqual(['Second', 'Third', 'First']);
+  });
+
+  it('refuses uploads beyond the account artifact byte ceiling', async () => {
+    // Injected tiny limit: the production ceiling is gigabytes, and the test
+    // only needs the arithmetic, not the allocation.
+    const service = new InMemoryPersistenceService(24);
+    const created = await service.createProject(userId, { name: 'Quota' });
+    const projectId = created.document.projectId;
+
+    const first = await service.createUploadSession(userId, {
+      projectId,
+      fileName: 'a.stl',
+      contentType: 'model/stl',
+      kind: 'stl-import'
+    });
+    const sixteenBytes = new ArrayBuffer(16);
+    await service.putUpload(userId, first.session.uploadSessionId, sixteenBytes);
+    await service.finalizeArtifact(userId, {
+      projectId,
+      uploadSessionId: first.session.uploadSessionId,
+      artifactId: first.session.artifactId
+    });
+
+    const usage = await service.getStorageUsage(userId);
+    expect(usage.artifactBytes).toBe(16);
+    expect(usage.artifactCount).toBe(1);
+    expect(usage.artifactLimitBytes).toBe(24);
+
+    // A second 16-byte upload would land at 32 > 24: the single-shot PUT is
+    // refused up front, and a body that slips to finalize is refused there
+    // with the staged object discarded.
+    const second = await service.createUploadSession(userId, {
+      projectId,
+      fileName: 'b.stl',
+      contentType: 'model/stl',
+      kind: 'stl-import'
+    });
+    await expect(
+      service.putUpload(userId, second.session.uploadSessionId, sixteenBytes)
+    ).rejects.toThrow(ArtifactQuotaError);
+
+    // Within the remaining 8 bytes, uploads still work.
+    await service.putUpload(
+      userId,
+      second.session.uploadSessionId,
+      new ArrayBuffer(8)
+    );
+    const finalized = await service.finalizeArtifact(userId, {
+      projectId,
+      uploadSessionId: second.session.uploadSessionId,
+      artifactId: second.session.artifactId
+    });
+    expect(finalized?.bytes).toBe(8);
+
+    // At the ceiling, even opening a new session is refused.
+    await expect(
+      service.createUploadSession(userId, {
+        projectId,
+        fileName: 'c.stl',
+        contentType: 'model/stl',
+        kind: 'stl-import'
+      })
+    ).rejects.toThrow(ArtifactQuotaError);
   });
 });

@@ -529,6 +529,35 @@ describe('cloud project autosave — flushing', () => {
     controller.dispose();
   });
 
+  it('asks for keepalive only during a page-teardown drain', async () => {
+    // The pagehide flush must survive the page; ordinary saves must not pay
+    // the keepalive body-size budget.
+    const keepaliveFlags: Array<boolean | undefined> = [];
+    const controller = new CloudProjectAutosave({
+      connectivity: testConnectivity(true).connectivity,
+      api: {
+        async saveProjectDocument(input, options) {
+          keepaliveFlags.push(options?.keepalive);
+          return {
+            projectId: input.document.projectId,
+            version: input.document.version,
+            updatedAt: '2026-01-01T00:00:00.000Z'
+          };
+        }
+      }
+    });
+    const document = documentAt(2);
+    controller.openProject(document.projectId, 2);
+    controller.schedule(documentAt(3, document));
+    await controller.flushPending({ keepalive: true });
+
+    controller.schedule(documentAt(4, document));
+    await controller.flushPending();
+
+    expect(keepaliveFlags).toEqual([true, false]);
+    controller.dispose();
+  });
+
   it('resolves rather than throwing when it cannot reach the account', async () => {
     // Logout and page-hide both call this. A document that cannot be uploaded
     // is not a lost document, and neither caller can be blocked by one.
