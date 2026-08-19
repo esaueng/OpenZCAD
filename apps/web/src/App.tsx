@@ -2765,15 +2765,22 @@ export function App() {
   // would hide exactly the problems the preview exists to reveal.
   const warnings = (previewDoc ?? doc)?.derived.warnings ?? [];
 
+  // Keyed on the derived body table, not the whole document: commands clone
+  // the document but share `derived` by reference, so keying on `doc` gave
+  // these arrays a new identity on every edit and made the viewport dispose
+  // and re-upload every GPU buffer twice per command (once on the optimistic
+  // document swap, again when the worker result landed) for identical
+  // geometry.
+  const liveBodyRepresentations = doc?.derived.bodyRepresentations ?? null;
   const viewerBodies = useMemo<BodyRepresentation[]>(
     () =>
       (previewDoc
         ? Object.values(renderedRepresentations)
-        : doc
-          ? Object.values(doc.derived.bodyRepresentations)
+        : liveBodyRepresentations
+          ? Object.values(liveBodyRepresentations)
           : []
       ).filter((body) => !body.consumed && !hiddenBodyIds.has(body.bodyId)),
-    [doc, previewDoc, renderedRepresentations, hiddenBodyIds]
+    [liveBodyRepresentations, previewDoc, renderedRepresentations, hiddenBodyIds]
   );
 
   /**
@@ -2786,11 +2793,11 @@ export function App() {
     () =>
       (previewDoc
         ? Object.values(renderedRepresentations)
-        : doc
-          ? Object.values(doc.derived.bodyRepresentations)
+        : liveBodyRepresentations
+          ? Object.values(liveBodyRepresentations)
           : []
       ).filter((body) => !body.consumed),
-    [doc, previewDoc, renderedRepresentations]
+    [liveBodyRepresentations, previewDoc, renderedRepresentations]
   );
 
   const directEditableBodyIds = useMemo<string[]>(
