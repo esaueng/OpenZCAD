@@ -1328,6 +1328,49 @@ describe('command-system', () => {
     ).toThrow(/already consumed/);
   });
 
+  it('rejects a consumed body even when derived state has not been rebuilt', () => {
+    // Consumption must be read from the canonical feature history, not only
+    // from derived state: a document loaded but not yet rebuilt has empty
+    // bodyRepresentations, and validation has to fail closed without them.
+    const manager = new CommandManager(
+      createProjectDocument('No Derived Yet', toUserId('user_test'))
+    );
+    const box = (name: string) =>
+      commandFactories.addPrimitive({
+        name,
+        primitiveKind: 'box',
+        dimensions: { width: 10, height: 10, depth: 10 }
+      });
+    manager.execute(box('A'));
+    manager.execute(box('B'));
+    const [first, second] = manager.document.bodyOrder;
+    manager.execute(
+      commandFactories.booleanBodies({
+        name: 'Merged',
+        operation: 'union',
+        targetBodyIds: [first!, second!]
+      })
+    );
+    expect(manager.document.derived.bodyRepresentations).toEqual({});
+
+    expect(() =>
+      commandsForCadPatch(manager.document, {
+        proposalId: 'proposal_stale_derived',
+        summary: 'Move an absorbed body before any rebuild.',
+        assumptions: [],
+        operations: [
+          {
+            kind: 'add_transform',
+            name: 'Move absorbed',
+            targetBodyId: first!,
+            translation: { x: 5, y: 0, z: 0 },
+            rotationDeg: { x: 0, y: 0, z: 0 }
+          }
+        ]
+      })
+    ).toThrow(/already consumed/);
+  });
+
   it('rejects a parameter expression the evaluator cannot read', () => {
     const manager = new CommandManager(
       createProjectDocument('Bad Expression', toUserId('user_test'))

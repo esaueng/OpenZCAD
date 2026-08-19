@@ -429,6 +429,31 @@ describe('feature editing', () => {
     ).toThrow(/cannot change kind/);
   });
 
+  it('rejects data keys the feature kind does not declare', () => {
+    // An unrecognized key written into feature data would persist in the
+    // document and replay forever, so a malformed payload fails instead.
+    let document = createProjectDocument('Edit', user());
+    document = addPrimitiveFeature(document, {
+      name: 'Box',
+      primitiveKind: 'box',
+      dimensions: { width: 1, height: 1, depth: 1 }
+    });
+    const feature = listFeaturesInOrder(document)[0]!;
+    expect(() =>
+      updateFeature(document, {
+        featureId: feature.featureId,
+        data: { injected: 'junk' } as never
+      })
+    ).toThrow(/not valid for a primitive feature/);
+    expect(() =>
+      updateFeature(document, {
+        featureId: feature.featureId,
+        // A key that is real for another kind is still junk for this one.
+        data: { targetBodyIds: [] }
+      })
+    ).toThrow(/not valid for a primitive feature/);
+  });
+
   it('updates sketch plane, offset, and profile', () => {
     let document = createProjectDocument('Edit', user());
     const { document: withSketch, sketchId } = addSketchFeature(document, {

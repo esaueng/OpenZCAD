@@ -126,8 +126,14 @@ function loadExactKernel(): Promise<ExactKernel | null> {
         return adapter;
       },
       (error: unknown) => {
+        // A load failure is usually transient — the WASM chunk fetch lost a
+        // network race. Clearing the memoized promise lets the next rebuild
+        // or export attempt a fresh load instead of leaving this worker
+        // permanently kernel-less until the page reloads. The failed status
+        // and error stick around for messaging until a retry begins.
         exactKernelStatus = 'failed';
         exactKernelError = error;
+        exactKernelPromise = null;
         return null;
       }
     );
@@ -198,7 +204,9 @@ async function execute(job: GeometryWorkerJob): Promise<void> {
     await preloadDocumentFonts(document);
 
     if (request.type === 'export') {
-      if (exactKernelStatus === 'idle' || exactKernelStatus === 'loading') {
+      // 'failed' means the next load call retries, so it is a loading state
+      // here too, not a terminal one.
+      if (exactKernelStatus !== 'ready') {
         post(stateFor('loading-remus', request, { stale: true }));
       }
       const exact = await loadExactKernel();
@@ -230,10 +238,9 @@ async function execute(job: GeometryWorkerJob): Promise<void> {
       : await rebuildCache.get(
           canonicalProjectContentKey(document),
           async () => {
-            if (
-              exactKernelStatus === 'idle' ||
-              exactKernelStatus === 'loading'
-            ) {
+            // 'failed' retries on the next load call, so it counts as a
+            // loading state here too.
+            if (exactKernelStatus !== 'ready') {
               post(stateFor('loading-remus', request, { stale: true }));
             }
             const exact = await loadExactKernel();
