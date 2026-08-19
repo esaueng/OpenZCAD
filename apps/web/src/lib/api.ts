@@ -261,14 +261,13 @@ export const api = {
     options?: { keepalive?: boolean }
   ) => {
     const body = JSON.stringify(payload);
-    const keepalive =
-      options?.keepalive === true && new Blob([body]).size <= 60_000;
     return requestJson<SaveProjectDocumentResponse>(
       `/api/projects/${payload.projectId}/document`,
       {
         method: 'PUT',
         body,
-        ...(keepalive ? { keepalive: true } : {})
+        keepalive:
+          options?.keepalive === true && new Blob([body]).size <= 60_000
       }
     );
   },

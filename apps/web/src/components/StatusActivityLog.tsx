@@ -121,11 +121,9 @@ export function StatusActivityLog({
         <div>
           <strong>Activity log</strong>
           <span>
-            {nextEntryIdRef.current > MAX_STATUS_LOG_ENTRIES
-              ? `latest ${entries.length} entries`
-              : `${entries.length} ${
-                  entries.length === 1 ? 'entry' : 'entries'
-                } this session`}
+            {nextEntryIdRef.current > MAX_STATUS_LOG_ENTRIES ? 'latest ' : ''}
+            {entries.length} {entries.length === 1 ? 'entry' : 'entries'} this
+            session
           </span>
         </div>
         <button
