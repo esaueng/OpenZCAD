@@ -137,6 +137,7 @@ import {
   openDesktopCadFile,
   pollDesktopSignIn,
   protectDesktopClose,
+  saveCadBinaryFile,
   saveCadTextFile,
   startDesktopSignIn,
   type DesktopMenuCommand
@@ -207,6 +208,10 @@ import {
   clearPendingProjectInvitation
 } from './lib/projectInvitationLink';
 import { ProjectConflictDialog } from './components/ProjectConflictDialog';
+import {
+  ExportDialog,
+  type MeshExportDialogFormat
+} from './components/ExportDialog';
 import {
   ExtrudeOverlay,
   MoveOverlay,
@@ -1010,6 +1015,7 @@ export function App() {
     autoFocus: true
   });
   const [sharingOpen, setSharingOpen] = useState(false);
+  const [meshExportOpen, setMeshExportOpen] = useState(false);
   const [settingsBusy, setSettingsBusy] = useState(false);
   const [settingsMessage, setSettingsMessage] = useState(
     pendingInvitationToken
@@ -6613,20 +6619,23 @@ export function App() {
     );
   }
 
-  async function handleExport(format: 'step' | 'stl') {
+  async function handleExportStep() {
     if (!doc || exportBodyIds.length === 0) {
       setStatus('Create a body before exporting.');
       return;
     }
     const stem = exportFileStem(doc.name);
     try {
-      setStatus(`Exporting exact ${format.toUpperCase()}…`);
-      const result = await geometry.exportModel(format, doc, exportBodyIds);
-      const fileName = `${stem}.${format}`;
-      const contentType = format === 'step' ? 'model/step' : 'model/stl';
-      const saved = await saveCadTextFile(fileName, format, result.text);
+      setStatus('Exporting exact STEP…');
+      const result = await geometry.exportModel('step', doc, exportBodyIds);
+      if (!('text' in result)) {
+        throw new Error('The STEP export returned no text.');
+      }
+      const fileName = `${stem}.step`;
+      const contentType = 'model/step';
+      const saved = await saveCadTextFile(fileName, 'step', result.text);
       if (!saved) {
-        setStatus(`${format.toUpperCase()} export cancelled.`);
+        setStatus('STEP export cancelled.');
         return;
       }
       let archived = false;
@@ -6634,7 +6643,7 @@ export function App() {
         await archiveArtifact({
           fileName,
           contentType,
-          kind: format === 'step' ? 'step-export' : 'stl-export',
+          kind: 'step-export',
           body: new Blob([result.text], { type: contentType }),
           metadata: {
             bodyIds: exportBodyIds.join(','),
@@ -6646,20 +6655,84 @@ export function App() {
       } catch {
         // The local download has already completed successfully.
       }
-      if (format === 'step') {
-        setStatus(
-          result.warnings.length > 0
-            ? `Exported STEP with ${result.warnings.length} warning(s).`
-            : `Exported ${exportBodyIds.length} body(ies) to ${stem}.step${archived ? ' and archived it' : ''}.`
-        );
-      } else {
-        setStatus(
-          `Exported ${exportBodyIds.length} body(ies) to ${stem}.stl${archived ? ' and archived it' : ''}.`
-        );
-      }
+      setStatus(
+        result.warnings.length > 0
+          ? `Exported STEP with ${result.warnings.length} warning(s).`
+          : `Exported ${exportBodyIds.length} body(ies) to ${stem}.step${archived ? ' and archived it' : ''}.`
+      );
     } catch (error) {
-      setStatus(errorMessage(error, `${format.toUpperCase()} export failed.`));
+      setStatus(errorMessage(error, 'STEP export failed.'));
     }
+  }
+
+  /**
+   * Mesh export from the dialog. Throws on failure so the dialog can show
+   * the error in place; a cancelled save dialog resolves quietly.
+   */
+  async function handleExportMesh(
+    format: MeshExportDialogFormat,
+    deflection: number
+  ) {
+    if (!doc || exportBodyIds.length === 0) {
+      throw new Error('Create a body before exporting.');
+    }
+    const stem = exportFileStem(doc.name);
+    const extension = format === '3mf' ? '3mf' : 'stl';
+    const fileName = `${stem}.${extension}`;
+    const contentType = format === '3mf' ? 'model/3mf' : 'model/stl';
+    const label = format === '3mf' ? '3MF' : 'STL';
+    setStatus(`Exporting ${label}…`);
+    const result = await geometry.exportModel(format, doc, exportBodyIds, {
+      deflection
+    });
+    let body: Blob;
+    let saved: boolean;
+    if ('data' in result) {
+      body = new Blob([result.data], { type: contentType });
+      saved = await saveCadBinaryFile(
+        fileName,
+        format === '3mf' ? '3mf' : 'stl',
+        result.data
+      );
+    } else {
+      body = new Blob([result.text], { type: contentType });
+      saved = await saveCadTextFile(fileName, 'stl', result.text);
+    }
+    if (!saved) {
+      setStatus(`${label} export cancelled.`);
+      return;
+    }
+    let archived = false;
+    try {
+      await archiveArtifact({
+        fileName,
+        contentType,
+        kind: format === '3mf' ? '3mf-export' : 'stl-export',
+        body,
+        metadata: {
+          bodyIds: exportBodyIds.join(','),
+          documentVersion: doc.version,
+          units: doc.units,
+          format,
+          deflectionMm: deflection
+        }
+      });
+      archived = true;
+    } catch {
+      // The local download has already completed successfully.
+    }
+    setStatus(
+      `Exported ${exportBodyIds.length} body(ies) to ${fileName}${archived ? ' and archived it' : ''}.`
+    );
+  }
+
+  function handleCheckMeshQuality(deflection: number) {
+    if (!doc || exportBodyIds.length === 0) {
+      return Promise.reject(
+        new Error('Create a body before checking printability.')
+      );
+    }
+    return geometry.meshQuality(doc, exportBodyIds, deflection);
   }
 
   function handleExportDiagnostics() {
@@ -6697,10 +6770,14 @@ export function App() {
         void handleSave();
         break;
       case 'export-step':
-        void handleExport('step');
+        void handleExportStep();
         break;
-      case 'export-stl':
-        void handleExport('stl');
+      case 'export-mesh':
+        if (exportBodyIds.length > 0) {
+          setMeshExportOpen(true);
+        } else {
+          setStatus('Create a body before exporting.');
+        }
         break;
       case 'undo':
         handleUndo();
@@ -10197,15 +10274,15 @@ export function App() {
       group: 'File',
       icon: <Download size={16} aria-hidden="true" />,
       disabledReason: exportBodyIds.length === 0 ? 'Create a body first' : null,
-      run: () => void handleExport('step')
+      run: () => void handleExportStep()
     },
     {
-      id: 'file-export-stl',
-      label: 'Export STL',
+      id: 'file-export-mesh',
+      label: 'Export mesh (3MF / STL)…',
       group: 'File',
       icon: <Download size={16} aria-hidden="true" />,
       disabledReason: exportBodyIds.length === 0 ? 'Create a body first' : null,
-      run: () => void handleExport('stl')
+      run: () => setMeshExportOpen(true)
     },
     {
       id: 'file-import',
@@ -10531,7 +10608,8 @@ export function App() {
           onWorkspaceMode={handleWorkspaceMode}
           onSave={() => void handleSave()}
           onImportFile={(file) => void handleImportFile(file)}
-          onExport={(format) => void handleExport(format)}
+          onExportStep={() => void handleExportStep()}
+          onOpenMeshExport={() => setMeshExportOpen(true)}
           onArchiveLocalSources={() => void handleArchiveLocalSources()}
           onExportDiagnostics={handleExportDiagnostics}
           onRenameProject={(name) =>
@@ -11723,6 +11801,25 @@ export function App() {
                 void resolveAccountConflict(resolution)
               }
               onClose={() => setAccountConflict(null)}
+            />
+          )}
+          {meshExportOpen && doc && exportBodyIds.length > 0 && (
+            <ExportDialog
+              scopeLabel={
+                selectedBody &&
+                !selectedBody.consumed &&
+                selectedBody.exportableStep
+                  ? selectedBody.name
+                  : `all bodies (${exportBodyIds.length})`
+              }
+              bodies={exportBodyIds.map((bodyId) => ({
+                bodyId,
+                name:
+                  doc.derived.bodyRepresentations[bodyId]?.name ?? bodyId
+              }))}
+              onClose={() => setMeshExportOpen(false)}
+              onExport={handleExportMesh}
+              onCheckQuality={handleCheckMeshQuality}
             />
           )}
           {settingsOverlay}

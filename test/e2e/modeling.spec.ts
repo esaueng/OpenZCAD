@@ -2539,6 +2539,60 @@ test('models a parametric part and exports a true STEP file', async ({
   await expect(paramInput).toHaveValue('30');
 });
 
+test('exports a 3MF package through the mesh export dialog', async ({
+  page
+}) => {
+  await stubApi(page);
+  await page.goto('/');
+
+  await page.getByLabel('Project name').fill('Print Part');
+  await page.getByRole('button', { name: 'Create project' }).click();
+  await expect(page.getByRole('region', { name: '3D viewport' })).toBeVisible();
+
+  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
+  await page
+    .getByRole('region', { name: 'Feature inspector' })
+    .getByRole('button', { name: /^Create/ })
+    .click();
+  await expect(
+    page.locator('.feature-row-main', { hasText: 'Box' })
+  ).toBeVisible();
+  // Wait for the rebuild so the export scope is populated.
+  await page.locator('.feature-row-main', { hasText: 'Box' }).click();
+  await expect(page.locator('.panel-body')).toContainText('volume', {
+    ignoreCase: true
+  });
+
+  const fileMenu = page.locator('details.file-menu');
+  await fileMenu.locator('summary').click();
+  await fileMenu.getByRole('button', { name: /Export Mesh/ }).click();
+
+  const dialog = page.getByRole('dialog', { name: /Export mesh/ });
+  await expect(dialog).toBeVisible();
+
+  // The printability check runs the real kernel and names the body.
+  await dialog.getByRole('button', { name: /Check watertightness/ }).click();
+  await expect(dialog.locator('.export-dialog-report')).toContainText(
+    'watertight'
+  );
+
+  const downloadPromise = page.waitForEvent('download');
+  await dialog.getByRole('button', { name: /Export 3MF/ }).click();
+  const download = await downloadPromise;
+  expect(download.suggestedFilename()).toBe('Print-Part.3mf');
+  const stream = await download.createReadStream();
+  const chunks: Buffer[] = [];
+  for await (const chunk of stream) {
+    chunks.push(chunk as Buffer);
+  }
+  const bytes = Buffer.concat(chunks);
+  // A 3MF file is a zip package: PK local-file-header magic.
+  expect(Array.from(bytes.subarray(0, 4))).toEqual([0x50, 0x4b, 0x03, 0x04]);
+  // The export closes the dialog and reports success.
+  await expect(dialog).toHaveCount(0);
+  await expect(page.getByRole('contentinfo')).toContainText('Print-Part.3mf');
+});
+
 test('rejects a disconnected Union and succeeds after the gap is closed', async ({
   page
 }) => {

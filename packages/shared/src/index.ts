@@ -1223,6 +1223,7 @@ export interface ArtifactRecord {
     | 'stl-import'
     | 'step-export'
     | 'stl-export'
+    | '3mf-export'
     | 'snapshot'
     | 'thumbnail';
   name: string;
