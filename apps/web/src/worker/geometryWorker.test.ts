@@ -123,6 +123,60 @@ describe('geometry worker rebuild coordination', () => {
     expect(results[0]!.derived).not.toBe(results[1]!.derived);
   });
 
+  it('retries the exact-kernel load after a failed fetch instead of staying bricked', async () => {
+    const scope: FakeWorkerScope = {
+      postMessage: vi.fn(),
+      onmessage: null
+    };
+    const syncDocument = vi.fn(async () => derived('recovered'));
+    const createExactKernelAdapter = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('WASM chunk fetch failed'))
+      .mockResolvedValue({
+        syncDocument,
+        exportStep: vi.fn(),
+        exportStl: vi.fn(),
+        inspectStep: vi.fn(),
+        dispose: vi.fn()
+      });
+    vi.stubGlobal('self', scope);
+    vi.doMock('@openzcad/kernel-adapter/exact', () => ({
+      createExactKernelAdapter
+    }));
+    await import('./geometryWorker');
+    const document = addPrimitiveFeature(
+      createProjectDocument('Retry', toUserId('user')),
+      {
+        name: 'Box',
+        primitiveKind: 'box',
+        dimensions: { width: 10, height: 20, depth: 30 }
+      }
+    );
+
+    post(scope, { type: 'sync', document, requestId: 'first' });
+    await vi.waitFor(() =>
+      expect(scope.postMessage).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: 'sync',
+          ok: false,
+          requestId: 'first',
+          error: 'WASM chunk fetch failed'
+        })
+      )
+    );
+
+    // A transient network failure must not disable geometry until page
+    // reload: the next request attempts a fresh load.
+    post(scope, { type: 'sync', document, requestId: 'second' });
+    await vi.waitFor(() =>
+      expect(scope.postMessage).toHaveBeenCalledWith(
+        expect.objectContaining({ type: 'sync', ok: true, requestId: 'second' })
+      )
+    );
+    expect(createExactKernelAdapter).toHaveBeenCalledTimes(2);
+    expect(syncDocument).toHaveBeenCalledOnce();
+  });
+
   it('publishes only the newest broadcast when a rebuild is superseded', async () => {
     const first = deferred<ProjectDocument['derived']>();
     const syncDocument = vi

@@ -6,7 +6,8 @@ import {
   isCloudflareFeatureEnabled,
   projectCollaborationRollout,
   ProjectCollaborationRoom,
-  resolveCollaborationDocument
+  resolveCollaborationDocument,
+  type CloudflareEnv
 } from '@openzcad/cloudflare-adapters';
 import {
   toArtifactId,
@@ -772,8 +773,15 @@ describe('cloudflare adapters', () => {
       statements.push(query);
       return { bind: () => ({ all, query }) };
     });
+    const roomFetch = vi.fn(
+      async (_request: Request) => new Response(null, { status: 204 })
+    );
+    const getByName = vi.fn(() => ({ fetch: roomFetch }));
     const service = new D1R2PersistenceService({
-      DB: { prepare, batch } as unknown as D1Database
+      DB: { prepare, batch } as unknown as D1Database,
+      PROJECT_ROOM: {
+        getByName
+      } as unknown as CloudflareEnv['PROJECT_ROOM']
     });
 
     expect(await service.purgeExpiredProjects(toUserId('user_test'))).toEqual([
@@ -794,6 +802,45 @@ describe('cloudflare adapters', () => {
       expect(destroyed).toContain(`DELETE FROM ${table}`);
     }
     expect(batch).toHaveBeenCalledTimes(1);
+    // The project's collaboration room is erased too: its Durable Object
+    // storage holds the latest document and snapshot history, which the
+    // D1/R2 sweeps above never reach.
+    expect(getByName).toHaveBeenCalledWith('proj_expired');
+    expect(roomFetch).toHaveBeenCalledTimes(1);
+    const eraseRequest = roomFetch.mock.calls[0]![0];
+    expect(eraseRequest.method).toBe('DELETE');
+    expect(
+      eraseRequest.headers.get('x-openzcad-internal-project-erasure')
+    ).toBe('v1');
+    expect(new URL(eraseRequest.url).searchParams.get('projectId')).toBe(
+      'proj_expired'
+    );
+  });
+
+  it('keeps project rows retryable when room erasure fails', async () => {
+    const batch = vi.fn(async () => []);
+    const prepare = vi.fn((query: string) => ({
+      bind: () => ({
+        all: async () => ({
+          results: query.includes('SELECT object_key')
+            ? []
+            : [{ id: 'proj_expired' }]
+        })
+      })
+    }));
+    const service = new D1R2PersistenceService({
+      DB: { prepare, batch } as unknown as D1Database,
+      PROJECT_ROOM: {
+        getByName: () => ({
+          fetch: async () => new Response('nope', { status: 500 })
+        })
+      } as unknown as CloudflareEnv['PROJECT_ROOM']
+    });
+
+    await expect(
+      service.purgeExpiredProjects(toUserId('user_test'))
+    ).rejects.toThrow('room erasure failed');
+    expect(batch).not.toHaveBeenCalled();
   });
 
   it('keeps project rows retryable when R2 deletion fails', async () => {

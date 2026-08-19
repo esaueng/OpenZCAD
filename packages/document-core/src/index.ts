@@ -27,6 +27,7 @@ import {
   type FeatureData,
   type ExtrudeOperation,
   type FeatureId,
+  type FeatureKind,
   type FeatureNode,
   type ImportedSourceReference,
   type ParameterId,
@@ -1808,6 +1809,75 @@ export function coerceParamValue(raw: string): ParamValue {
 // Feature editing.
 // ---------------------------------------------------------------------------
 
+/**
+ * Keys a data patch may write, per feature kind — exactly the fields of the
+ * corresponding `FeatureData` variant. `featureKind` itself is handled (and
+ * rejected on change) separately. Anything else is a payload bug: an
+ * unrecognized key written here would persist in the document and replay
+ * forever, so it is rejected instead.
+ */
+const FEATURE_DATA_KEYS: Record<FeatureKind, readonly string[]> = {
+  primitive: ['primitiveKind', 'dimensions'],
+  sketch: ['sketchId'],
+  extrude: [
+    'sketchId',
+    'distance',
+    'operation',
+    'targetBodyId',
+    'profile',
+    'profiles'
+  ],
+  revolve: ['sketchId', 'axis', 'angleDeg'],
+  loft: ['sections', 'mode'],
+  sweep: ['profile', 'path', 'mode'],
+  'helical-sweep': [
+    'profile',
+    'axisOrigin',
+    'axisDirection',
+    'radius',
+    'pitch',
+    'turns'
+  ],
+  boolean: ['operation', 'targetBodyIds'],
+  transform: ['targetBodyId', 'transform'],
+  mirror: ['targetBodyId', 'plane'],
+  shell: [
+    'targetBodyId',
+    'openingFaceHashes',
+    'openingFaceReferences',
+    'thickness'
+  ],
+  'solid-offset': ['targetBodyId', 'distance'],
+  draft: [
+    'targetBodyId',
+    'faceHashes',
+    'faceReferences',
+    'pullDirection',
+    'neutralPoint',
+    'angleDeg'
+  ],
+  thicken: ['targetBodyId', 'faceHash', 'faceReference', 'thickness'],
+  fillet: ['targetBodyId', 'edgeHashes', 'edgeReferences', 'radius'],
+  chamfer: ['targetBodyId', 'edgeHashes', 'edgeReferences', 'distance'],
+  pattern: [
+    'targetBodyId',
+    'patternKind',
+    'count',
+    'axis',
+    'spacing',
+    'angleDeg'
+  ],
+  'direct-edit': ['targetBodyId', 'operation'],
+  'imported-step': ['artifactId', 'sourceName', 'stepText', 'stepSourceRef'],
+  'imported-mesh': [
+    'artifactId',
+    'sourceName',
+    'triangleCount',
+    'vertices',
+    'indices'
+  ]
+};
+
 export function updateFeature(
   document: ProjectDocument,
   input: FeatureUpdateInput
@@ -1833,10 +1903,16 @@ export function updateFeature(
     }
     delete patch.featureKind;
 
+    const allowedKeys = FEATURE_DATA_KEYS[feature.data.featureKind];
     const data = feature.data as unknown as Record<string, unknown>;
     for (const [key, value] of Object.entries(patch)) {
       if (value === undefined) {
         continue;
+      }
+      if (!allowedKeys.includes(key)) {
+        throw new Error(
+          `Feature data key "${key}" is not valid for a ${feature.data.featureKind} feature.`
+        );
       }
       if (key === 'dimensions' && feature.data.featureKind === 'primitive') {
         feature.data.dimensions = {

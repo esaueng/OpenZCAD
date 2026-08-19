@@ -28,9 +28,25 @@ function stableJson(value: unknown): string {
   return `{${entries.join(',')}}`;
 }
 
-/** Canonical project content for exact rebuilds. Derived projections are output. */
+/**
+ * Canonical project content for exact rebuilds. Derived projections are
+ * output, and the version/history bookkeeping fields are excluded because the
+ * rebuild never reads them: `version` and `revisions` advance on every
+ * command *and every undo/redo*, so keying on them would make undo/redo — the
+ * main scenario this cache exists for — a guaranteed miss even though the
+ * restored nodes are identical to an already-built state. `commandLog` and
+ * `checkpoints` are replay/recovery records of how the nodes came to be, not
+ * rebuild inputs.
+ */
 export function canonicalProjectContentKey(document: ProjectDocument): string {
-  const { derived: _derived, ...content } = document;
+  const {
+    derived: _derived,
+    version: _version,
+    revisions: _revisions,
+    checkpoints: _checkpoints,
+    commandLog: _commandLog,
+    ...content
+  } = document;
   return stableJson(content);
 }
 
