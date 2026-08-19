@@ -650,7 +650,11 @@ describe('cloneDocument derived sharing', () => {
     // (attachDerivedState replaces the whole field), so sharing is safe.
     const document = addPrimitiveFeature(
       createProjectDocument('Clone sharing', toUserId('user_clone')),
-      { primitiveKind: 'box', name: 'Box', width: 10, height: 5, depth: 2 }
+      {
+        name: 'Box',
+        primitiveKind: 'box',
+        dimensions: { width: 10, height: 5, depth: 2 }
+      }
     );
     const clone = cloneDocument(document);
 
