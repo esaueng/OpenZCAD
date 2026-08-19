@@ -517,7 +517,6 @@ import type {
  */
 import type * as MeasurementModule from './lib/measurements';
 import { buildMeasurementRecord } from './lib/measurementRecord';
-import { committedMeasurementBodies } from './lib/measurementRefreshBodies';
 import {
   EMPTY_MEASURE_SESSION,
   edgeRunIsTotalable,
@@ -2571,8 +2570,7 @@ export function App() {
   // worker, so the faces this document names have to be parsed here too.
   const textFontsVersion = useDocumentFonts(doc ?? null);
 
-  const committedRepresentations = doc?.derived.bodyRepresentations;
-  const representations = committedRepresentations ?? {};
+  const representations = doc?.derived.bodyRepresentations ?? {};
   const renderedRepresentations =
     previewDoc?.derived.bodyRepresentations ?? representations;
   /**
@@ -3213,12 +3211,7 @@ export function App() {
   }, [viewMode, measurementApi]);
 
   useEffect(() => {
-    if (
-      !doc ||
-      !committedRepresentations ||
-      !exactGeometryReady ||
-      !measurementApi
-    ) {
+    if (!doc || !exactGeometryReady || !measurementApi) {
       return;
     }
     // Stored rows and worker bodies can arrive in either order. Re-resolve on
@@ -3227,14 +3220,16 @@ export function App() {
     // Only the committed exact projection is authoritative here: previewDoc is
     // transient and must never rewrite the persisted list. Hidden bodies stay
     // included because visibility does not invalidate their measurements.
-    const bodies = committedMeasurementBodies(committedRepresentations);
+    const bodies = Object.values(representations).filter(
+      (body) => !body.consumed
+    );
     setMeasurements((current) =>
       measurementApi.refreshMeasurements(current, bodies, doc.version, {
         force: true
       })
     );
   }, [
-    committedRepresentations,
+    representations,
     doc?.version,
     exactGeometryReady,
     measurementApi,
