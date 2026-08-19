@@ -773,12 +773,42 @@ export async function getAppSettings(
  * Server-side authorization must not rely on the browser honoring the sharing
  * preference. Keep this small helper beside settings parsing so missing and
  * legacy rows receive the same default as the settings API.
+ *
+ * Deliberately reads the stored flag directly instead of going through
+ * `readSettings`: that path re-validates the whole settings document and
+ * falls back to `DEFAULT_APP_SETTINGS` — where collaboration is enabled —
+ * whenever the row fails validation for ANY reason (for example a saved AI
+ * endpoint whose host later left `AI_ALLOWED_BASE_URL_HOSTS`). An owner's
+ * explicit "off" must never silently flip back on because an unrelated
+ * setting stopped parsing. This mirrors the D1 authorization query, which
+ * `json_extract`s the same flag from the same row.
  */
 export async function isProjectSharingPreferenceEnabled(
   userId: UserId,
   env: CloudflareEnv
 ): Promise<boolean> {
-  return (await readSettings(userId, env)).settings.collaboration.enabled;
+  if (!env.DB) {
+    return DEFAULT_APP_SETTINGS.collaboration.enabled;
+  }
+  const row = await env.DB.prepare(
+    'SELECT settings_json FROM user_settings WHERE user_id = ?'
+  )
+    .bind(userId)
+    .first<{ settings_json: string }>();
+  if (row) {
+    try {
+      const parsed = JSON.parse(row.settings_json) as {
+        collaboration?: { enabled?: unknown };
+      } | null;
+      const enabled = parsed?.collaboration?.enabled;
+      if (typeof enabled === 'boolean') {
+        return enabled;
+      }
+    } catch {
+      // Unreadable row: fall through to the same default the SQL path uses.
+    }
+  }
+  return DEFAULT_APP_SETTINGS.collaboration.enabled;
 }
 
 export async function updateAppSettings(

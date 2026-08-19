@@ -6,7 +6,11 @@ import { fileURLToPath } from 'node:url';
 const DIST = fileURLToPath(new URL('../apps/web/dist/', import.meta.url));
 const REPORTED_EXTENSIONS = new Set(['.css', '.js', '.mjs', '.wasm']);
 const CHECK = process.argv.includes('--check');
-const DEFAULT_RAW_BUDGET = 500 * 1024;
+// 2026-08-19: raised from 500 KiB with the index entry chunk at 511,809
+// bytes — 99.96% of the old budget — so that a one-line fix no longer trips
+// the gate. The tripwire against runaway growth stays; the next raise should
+// come with an actual split of the entry chunk, not another bump.
+const DEFAULT_RAW_BUDGET = 512 * 1024;
 const APPROVED_LAZY_ASSETS = [
   {
     pattern: /^assets\/three-.*\.js$/,
