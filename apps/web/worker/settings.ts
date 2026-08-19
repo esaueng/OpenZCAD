@@ -499,6 +499,41 @@ export async function decryptAssistantCredential(
   }
 }
 
+/**
+ * A stored settings row can stop re-parsing after the row was written — for
+ * example, a saved Responses-compatible endpoint whose hostname later left
+ * `AI_ALLOWED_BASE_URL_HOSTS`. Falling back to `DEFAULT_APP_SETTINGS`
+ * wholesale would silently flip the user's sharing opt-out back on
+ * (`collaboration.enabled` defaults to true) while SQL-side authorization
+ * keeps reading the raw stored value, so the two enforcement paths would
+ * disagree. Degrade to defaults but preserve the stored sharing choice
+ * verbatim; a missing or non-boolean value keeps the default, matching how
+ * legacy rows without the key are treated everywhere else.
+ */
+export function salvageStoredSettings(raw: string): AppSettings {
+  const settings = deepClone(DEFAULT_APP_SETTINGS);
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      const collaboration = (parsed as Record<string, unknown>).collaboration;
+      if (
+        collaboration &&
+        typeof collaboration === 'object' &&
+        !Array.isArray(collaboration)
+      ) {
+        const enabled = (collaboration as Record<string, unknown>).enabled;
+        if (typeof enabled === 'boolean') {
+          settings.collaboration.enabled = enabled;
+        }
+      }
+    }
+  } catch {
+    // Unreadable JSON keeps the defaults; the SQL-side check reads the same
+    // row and resolves the same way for a row json_extract cannot read.
+  }
+  return settings;
+}
+
 async function readSettings(
   userId: UserId,
   env: CloudflareEnv
@@ -538,7 +573,7 @@ async function readSettings(
     };
   } catch {
     return {
-      settings: deepClone(DEFAULT_APP_SETTINGS),
+      settings: salvageStoredSettings(row.settings_json),
       revision: row.revision,
       synced: true
     };
