@@ -774,7 +774,7 @@ describe('cloudflare adapters', () => {
       return { bind: () => ({ all, query }) };
     });
     const roomFetch = vi.fn(
-      async () => new Response(null, { status: 204 })
+      async (_request: Request) => new Response(null, { status: 204 })
     );
     const getByName = vi.fn(() => ({ fetch: roomFetch }));
     const service = new D1R2PersistenceService({
@@ -807,7 +807,7 @@ describe('cloudflare adapters', () => {
     // D1/R2 sweeps above never reach.
     expect(getByName).toHaveBeenCalledWith('proj_expired');
     expect(roomFetch).toHaveBeenCalledTimes(1);
-    const eraseRequest = roomFetch.mock.calls[0]![0] as Request;
+    const eraseRequest = roomFetch.mock.calls[0]![0];
     expect(eraseRequest.method).toBe('DELETE');
     expect(
       eraseRequest.headers.get('x-openzcad-internal-project-erasure')
