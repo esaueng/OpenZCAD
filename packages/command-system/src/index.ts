@@ -1225,17 +1225,54 @@ function assertOperationExpressions(
  */
 class LocalBodyScope {
   private readonly aliases = new Map<string, BodyId>();
+  /** Body → phrase describing what consumed it, used in rejection messages. */
   private readonly consumed = new Map<BodyId, string>();
 
   constructor(private readonly document: ProjectDocument) {
     // Consumption is not limited to this proposal: a body an earlier turn's
     // boolean absorbed is still listed in bodyOrder and would otherwise pass
-    // every check here.
+    // every check here. The canonical feature history is the primary source,
+    // because derived state can be absent or stale — a document that was
+    // loaded but not rebuilt yet — and this check must fail closed without
+    // it. The kinds below mirror exactly which features the exact adapter
+    // marks as consuming their target; an extrude whose stored operation the
+    // kernel later refuses stays consumed here, which rejects rather than
+    // risks targeting it.
+    const consumedByHistory = 'feature in the document';
+    for (const featureId of document.featureOrder) {
+      const feature = findFeature(document, featureId);
+      if (!feature) {
+        continue;
+      }
+      const data = feature.data;
+      switch (data.featureKind) {
+        case 'boolean':
+          for (const bodyId of data.targetBodyIds) {
+            this.consumed.set(bodyId, consumedByHistory);
+          }
+          break;
+        case 'extrude':
+          if (data.targetBodyId) {
+            this.consumed.set(data.targetBodyId, consumedByHistory);
+          }
+          break;
+        case 'shell':
+        case 'solid-offset':
+        case 'draft':
+        case 'fillet':
+        case 'chamfer':
+        case 'pattern':
+          this.consumed.set(data.targetBodyId, consumedByHistory);
+          break;
+        default:
+          break;
+      }
+    }
     for (const [bodyId, body] of Object.entries(
       document.derived.bodyRepresentations
     )) {
-      if (body.consumed) {
-        this.consumed.set(bodyId as BodyId, 'feature');
+      if (body.consumed && !this.consumed.has(bodyId as BodyId)) {
+        this.consumed.set(bodyId as BodyId, consumedByHistory);
       }
     }
   }
@@ -1278,13 +1315,15 @@ class LocalBodyScope {
     const consumedBy = this.consumed.get(bodyId);
     if (consumedBy) {
       throw new Error(
-        `Body "${reference}" was already consumed by an earlier ${consumedBy} in this proposal.`
+        `Body "${reference}" was already consumed by an earlier ${consumedBy}.`
       );
     }
   }
 
   consume(bodyIds: BodyId[], operationKind: string): void {
-    bodyIds.forEach((bodyId) => this.consumed.set(bodyId, operationKind));
+    bodyIds.forEach((bodyId) =>
+      this.consumed.set(bodyId, `${operationKind} in this proposal`)
+    );
   }
 
   /** Guards against a reference to a body that is not in the document either. */
