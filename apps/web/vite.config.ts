@@ -361,10 +361,17 @@ export default defineConfig(async ({ command, isPreview, mode }) => {
             // The document model is shared by the eager workspace, the lazy
             // Assistant, and exact-preview modules. Give that deliberate
             // first-paint dependency a stable name so it is not mistaken for
-            // an app-code `src-*` leak by the bundle gate.
+            // an app-code `src-*` leak by the bundle gate. The command layer
+            // and AI contracts ride along: they are the same eager-workspace /
+            // lazy-Assistant dependency (command-system imports ai-contracts,
+            // so routing one without the other would strand a shared anonymous
+            // chunk in first paint), and keeping them here keeps the launcher
+            // `index-*` chunk clear of the document machinery entirely.
             if (
               id.includes('/packages/shared/') ||
-              id.includes('/packages/document-core/')
+              id.includes('/packages/document-core/') ||
+              id.includes('/packages/command-system/') ||
+              id.includes('/packages/ai-contracts/')
             ) {
               return 'model';
             }
