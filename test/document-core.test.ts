@@ -449,7 +449,7 @@ describe('feature editing', () => {
       updateFeature(document, {
         featureId: feature.featureId,
         // A key that is real for another kind is still junk for this one.
-        data: { targetBodyIds: [] } as never
+        data: { targetBodyIds: [] }
       })
     ).toThrow(/not valid for a primitive feature/);
   });
