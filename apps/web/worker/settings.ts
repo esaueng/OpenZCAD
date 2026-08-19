@@ -15,6 +15,7 @@ import {
 } from '@openzcad/shared';
 import type { CloudflareEnv } from '@openzcad/cloudflare-adapters';
 import { getAssistantStatus, type AssistantRuntimeConfig } from './assistant';
+import { isPrivateHostname } from './privateNetwork';
 import { HttpError } from './validation';
 
 interface SettingsRow {
@@ -166,25 +167,6 @@ function requiredString(
   return value.trim();
 }
 
-function isPrivateIpv4(hostname: string): boolean {
-  const match = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(hostname);
-  if (!match) {
-    return false;
-  }
-  const octets = match.slice(1).map(Number);
-  if (octets.some((octet) => octet > 255)) {
-    return true;
-  }
-  return (
-    octets[0] === 10 ||
-    octets[0] === 127 ||
-    (octets[0] === 169 && octets[1] === 254) ||
-    (octets[0] === 172 && octets[1]! >= 16 && octets[1]! <= 31) ||
-    (octets[0] === 192 && octets[1] === 168) ||
-    octets[0] === 0
-  );
-}
-
 export function validateAssistantBaseUrl(
   value: string,
   environment: CloudflareEnv['ENVIRONMENT'],
@@ -200,10 +182,6 @@ export function validateAssistantBaseUrl(
     throw new HttpError(400, 'The AI endpoint cannot contain credentials.');
   }
   const hostname = url.hostname.toLowerCase();
-  const bareHostname =
-    hostname.startsWith('[') && hostname.endsWith(']')
-      ? hostname.slice(1, -1)
-      : hostname;
   const localDevelopment =
     environment === 'development' &&
     url.protocol === 'http:' &&
@@ -211,22 +189,8 @@ export function validateAssistantBaseUrl(
   if (url.protocol !== 'https:' && !localDevelopment) {
     throw new HttpError(400, 'The AI endpoint must use HTTPS.');
   }
-  if (
-    hostname === 'localhost' ||
-    bareHostname === '::' ||
-    bareHostname === '::1' ||
-    // IPv4-mapped and NAT64 forms tunnel private IPv4 targets through the
-    // IPv6 grammar; no legitimate public provider uses them, so block all.
-    bareHostname.startsWith('::ffff:') ||
-    bareHostname.startsWith('64:ff9b::') ||
-    /^(?:fc|fd|fe8|fe9|fea|feb)/i.test(bareHostname) ||
-    hostname.endsWith('.local') ||
-    hostname.endsWith('.internal') ||
-    isPrivateIpv4(hostname)
-  ) {
-    if (!localDevelopment) {
-      throw new HttpError(400, 'Private-network AI endpoints are not allowed.');
-    }
+  if (isPrivateHostname(hostname) && !localDevelopment) {
+    throw new HttpError(400, 'Private-network AI endpoints are not allowed.');
   }
   if (environment !== 'development') {
     const allowedHosts = new Set(
