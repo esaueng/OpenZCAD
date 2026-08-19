@@ -92,8 +92,12 @@ reports every open PR as mergeable regardless of CI. Two consequences:
 - **Never `gh pr merge --auto` here.** With nothing required, "merge when
   checks pass" silently means "merge now"; it has already merged a PR while
   `apple-silicon` was still running.
-- **Read `gh pr checks` and see `validate` and `apple-silicon` pass before
-  merging.** `validate` is the slow one at roughly seven minutes.
+- **Read `gh pr checks` and see `validate`, `e2e`, `Cloudflare version /
+  verify`, and `apple-silicon` pass before merging.** `validate` is the slow
+  one at roughly seven minutes. `e2e` is the aggregate over the four
+  Playwright shards (it fails, rather than skips, when a shard fails), and
+  `Cloudflare version / verify` proves the Worker config still dry-run
+  deploys.
 
 `apple-silicon` is the only check that exercises the desktop shell, and
 `apps/desktop/e2e/cad-smoke.mjs` drives the real WKWebView workspace —
