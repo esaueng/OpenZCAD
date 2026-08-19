@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
+import { CommandManager, commandFactories } from '@openzcad/command-system';
 import { createProjectDocument } from '@openzcad/document-core';
-import { toRevisionId, toUserId } from '@openzcad/shared';
+import { toUserId } from '@openzcad/shared';
 import {
   ExactRebuildCache,
   LatestBroadcastGate,
@@ -37,39 +38,38 @@ describe('canonical exact rebuild keys', () => {
     ).not.toBe(canonicalProjectContentKey(document));
   });
 
-  it('ignores version, revisions, commandLog, and checkpoints so undo/redo hit the cache', () => {
-    const document = createProjectDocument('Cache key', toUserId('user'));
-    // Undo restores earlier content under a NEW version with extra log and
-    // revision entries. The rebuild replays only canonical content, so those
-    // bookkeeping fields must not invalidate the cached exact result.
-    const afterUndo: typeof document = {
-      ...document,
-      version: document.version + 3,
-      revisions: [
-        ...document.revisions,
-        {
-          revisionId: toRevisionId('rev-undo'),
-          createdAt: '2099-01-01T00:00:00.000Z',
-          reason: 'undo',
-          commandCount: 3
-        }
-      ],
-      commandLog: [
-        ...document.commandLog,
-        {
-          kind: 'noop',
-          payload: {},
-          replayVersion: 1,
-          label: 'noop',
-          timestamp: '2099-01-01T00:00:00.000Z'
-        }
-      ],
-      checkpoints: [...document.checkpoints]
-    };
-
-    expect(canonicalProjectContentKey(afterUndo)).toBe(
-      canonicalProjectContentKey(document)
+  it('keys undo/redo restorations identically to the state they restore', () => {
+    // Undo/redo advance `version` and append revisions while restoring the
+    // modeling content itself, so the key must ignore that bookkeeping — it
+    // is the main scenario the rebuild cache exists for.
+    const manager = new CommandManager(
+      createProjectDocument('Undo cache key', toUserId('user'))
     );
+    manager.execute(
+      commandFactories.addPrimitive({
+        name: 'Base Block',
+        primitiveKind: 'box',
+        dimensions: { width: 40, height: 20, depth: 8 }
+      })
+    );
+    const afterFirst = canonicalProjectContentKey(manager.document);
+    manager.execute(
+      commandFactories.addPrimitive({
+        name: 'Boss',
+        primitiveKind: 'cylinder',
+        dimensions: { radius: 5, height: 12 }
+      })
+    );
+    const afterSecond = canonicalProjectContentKey(manager.document);
+    expect(afterSecond).not.toBe(afterFirst);
+
+    const versionBeforeUndo = manager.document.version;
+    manager.undo();
+    expect(manager.document.version).not.toBe(versionBeforeUndo);
+    expect(canonicalProjectContentKey(manager.document)).toBe(afterFirst);
+
+    manager.redo();
+    expect(canonicalProjectContentKey(manager.document)).toBe(afterSecond);
   });
 });
 

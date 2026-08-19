@@ -1,6 +1,6 @@
 # OpenZCAD Roadmap
 
-Status snapshot: 2026-07-31, schema v6. “Working” below means implemented on
+Status snapshot: 2026-08-19, schema v6. “Working” below means implemented on
 the current branch; production enablement is a separate rollout decision.
 
 ## Working now
@@ -28,8 +28,9 @@ the current branch; production enablement is a separate rollout decision.
   This is a tested read-only proof module, not live product editing yet.
 - Owner/editor/viewer sharing APIs and UI, one persisted project-wide edit
   lease, per-message authorization, and recovery-copy-first conflict actions.
-  Unresolved local divergence survives dialog close/reload. Deployment flags
-  remain off in checked-in development and beta configuration.
+  Unresolved local divergence survives dialog close/reload. The checked-in
+  beta configuration enables the sharing and lease-enforcement flags for
+  authenticated accounts; the development configuration keeps them off.
 - Strict AI contracts and digest-bound preflight for the existing operations
   plus face sketches, multi-profile extrusion, mirror, shell, solid offset, and
   validated direct edits. The six newer families are independently dark behind
@@ -50,7 +51,8 @@ the current branch; production enablement is a separate rollout decision.
   sync baseline that makes both-moved divergence detectable and recoverable
   outside a live room; bounded revision retention with per-account byte
   accounting; and a switchable, visible sync state. `PROJECT_PERSONAL_SYNC_ENABLED`
-  is off in checked-in configuration and is independent of sharing.
+  is enabled in the checked-in beta configuration, unset (off) in the
+  development configuration, and independent of sharing.
 - Signed-off orientation cube with face and corner snapping, an origin-corner
   XYZ triad, drag orbiting, and pointer-lifecycle cleanup.
 - Start-screen archive, recycle bin, pinning, and manual project ordering.
@@ -61,13 +63,13 @@ the current branch; production enablement is a separate rollout decision.
 
 ## Release gates / next
 
-- Apply migration 0010 and enable `PROJECT_PERSONAL_SYNC_ENABLED` for the
-  owner's own devices once cross-device sync has been exercised against a real
-  beta session. The flag is deliberately separate from `PROJECT_SHARING_ENABLED`
-  and must not be enabled together with it by accident.
-- Run the collaboration recovery-copy reload E2E against a real beta session;
-  apply the sharing migration and verify revocation/lease expiry before enabling
-  viewer sharing, then editor sharing.
+- `PROJECT_PERSONAL_SYNC_ENABLED` is now on in the checked-in beta
+  configuration (it remains deliberately separate from
+  `PROJECT_SHARING_ENABLED`): exercise cross-device sync against a real beta
+  session and confirm migration 0010 is applied remotely.
+- Run the collaboration recovery-copy reload E2E against a real beta session
+  and verify revocation/lease expiry for the sharing rollout now enabled in
+  the checked-in beta configuration.
 - Connect the imported-feature proof query to live kernel face adjacency and add
   deterministic coordinated edit commands before enabling those UI or AI paths.
 - Extend verified lineage through production boolean post-processing, blends,

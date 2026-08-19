@@ -20,6 +20,7 @@ import {
   encryptAssistantCredential,
   isProjectSharingPreferenceEnabled,
   parseUpdateAppSettingsRequest,
+  salvageStoredSettings,
   validateAssistantBaseUrl
 } from '../apps/web/worker/settings';
 
@@ -167,6 +168,49 @@ describe('application settings', () => {
         'development'
       )
     ).toBe('http://localhost:11434/v1/responses');
+  });
+
+  it('preserves the sharing opt-out when a stored row stops re-parsing', () => {
+    // A saved Responses-compatible endpoint whose hostname later leaves
+    // AI_ALLOWED_BASE_URL_HOSTS makes the whole strict re-parse throw. The
+    // fallback must not flip the user's sharing opt-out back to the default.
+    const stored = deepClone(DEFAULT_APP_SETTINGS);
+    stored.collaboration.enabled = false;
+    stored.assistant.credentialSource = 'personal';
+    stored.assistant.provider = 'responses-compatible';
+    stored.assistant.baseUrl = 'https://models.example.test/v1/responses';
+    expect(() =>
+      parseUpdateAppSettingsRequest(
+        { expectedRevision: 1, settings: stored },
+        'beta'
+      )
+    ).toThrow('not approved');
+
+    const salvaged = salvageStoredSettings(JSON.stringify(stored));
+    expect(salvaged.collaboration.enabled).toBe(false);
+    // Everything else degrades to the defaults, including the assistant,
+    // whose default is already fail-closed.
+    expect(salvaged.assistant.enabled).toBe(false);
+    expect(salvaged.assistant.baseUrl).toBe(
+      DEFAULT_APP_SETTINGS.assistant.baseUrl
+    );
+
+    // A stored opt-in stays an opt-in; legacy rows without the key and
+    // unreadable rows receive the same default as the settings API.
+    const optIn = deepClone(DEFAULT_APP_SETTINGS) as unknown as Record<
+      string,
+      unknown
+    >;
+    expect(
+      salvageStoredSettings(JSON.stringify(optIn)).collaboration.enabled
+    ).toBe(true);
+    delete optIn.collaboration;
+    expect(
+      salvageStoredSettings(JSON.stringify(optIn)).collaboration.enabled
+    ).toBe(DEFAULT_APP_SETTINGS.collaboration.enabled);
+    expect(salvageStoredSettings('not json').collaboration.enabled).toBe(
+      DEFAULT_APP_SETTINGS.collaboration.enabled
+    );
   });
 
   it('carries resized panel widths to the account, in range', () => {

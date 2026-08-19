@@ -189,6 +189,12 @@ export interface CloudflareEnv {
   /** Optional dedicated bucket; ARTIFACTS remains the rollout fallback. */
   PROJECT_STORAGE?: R2Bucket;
   ARTIFACTS?: R2Bucket;
+  /**
+   * Per-project collaboration rooms. When bound, hard project deletion also
+   * erases each project's Durable Object storage — the room holds the latest
+   * document and bounded snapshot history, which the D1/R2 sweeps never reach.
+   */
+  PROJECT_ROOM?: DurableObjectNamespace<ProjectCollaborationRoom>;
 }
 
 export const CLOUDFLARE_BOOLEAN_FLAGS = [
@@ -2388,6 +2394,30 @@ export class D1R2PersistenceService implements PersistenceService {
   private async destroyProjects(projectIds: string[]): Promise<void> {
     if (projectIds.length === 0) {
       return;
+    }
+    // Collaboration rooms keep the latest document and bounded snapshot
+    // history in Durable Object storage that no D1/R2 sweep reaches. Erase
+    // them before anything else: a failure keeps every database row, so the
+    // deletion stays visible and retryable, matching the R2 policy below.
+    // Erasure is idempotent, so a retry (or the account-erasure coordinator
+    // erasing the same room first) is harmless.
+    if (this.env.PROJECT_ROOM) {
+      for (const projectId of projectIds) {
+        const response = await this.env.PROJECT_ROOM.getByName(
+          projectId
+        ).fetch(
+          new Request(
+            `https://project-room.internal/?projectId=${encodeURIComponent(projectId)}`,
+            {
+              method: 'DELETE',
+              headers: { 'x-openzcad-internal-project-erasure': 'v1' }
+            }
+          )
+        );
+        if (!response.ok) {
+          throw new Error(`Project room erasure failed for ${projectId}.`);
+        }
+      }
     }
     const placeholders = projectIds.map(() => '?').join(', ');
     if (this.env.ARTIFACTS) {
