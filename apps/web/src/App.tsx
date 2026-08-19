@@ -2126,9 +2126,13 @@ export function App() {
       // it: the controller only learns of an edit once the local save has
       // stored it, so draining the account copy first would miss an edit still
       // sitting in the 450 ms debounce and the tab would take it with it.
+      // `keepalive` lets the account write started during teardown outlive
+      // the page; without it the browser aborts the fetch with the document.
       void flushPendingLocalSaveRef
         .current()
-        .then(() => cloudProjectAutosaveRef.current?.flushPending());
+        .then(() =>
+          cloudProjectAutosaveRef.current?.flushPending({ keepalive: true })
+        );
     };
     const onVisibilityChange = () => {
       if (globalThis.document.visibilityState === 'hidden') {
