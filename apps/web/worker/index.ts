@@ -8,6 +8,7 @@ import {
   type CloudflareEnv
 } from '@openzcad/cloudflare-adapters';
 import {
+  ArtifactQuotaError,
   ArtifactStorageError,
   DocumentTooLargeError,
   ProjectAdoptionError,
@@ -1459,6 +1460,16 @@ export default {
       }
       if (error instanceof HttpAssistantConfigurationError) {
         return json({ error: error.message }, 502);
+      }
+      if (error instanceof ArtifactQuotaError) {
+        return json(
+          {
+            error: error.message,
+            code: 'ARTIFACT_QUOTA_EXCEEDED',
+            limitBytes: error.limitBytes
+          },
+          413
+        );
       }
       if (error instanceof ArtifactStorageError) {
         return json({ error: error.message }, 503);
