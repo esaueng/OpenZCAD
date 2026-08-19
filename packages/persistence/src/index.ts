@@ -119,6 +119,19 @@ export class ArtifactStorageError extends Error {
   }
 }
 
+/** An artifact finalization that would push the account past its ceiling. */
+export class ArtifactStorageLimitError extends Error {
+  constructor(
+    readonly usedBytes: number,
+    readonly limitBytes: number
+  ) {
+    super(
+      'The account artifact storage limit has been reached. Delete imports or exports you no longer need, then finish the upload again.'
+    );
+    this.name = 'ArtifactStorageLimitError';
+  }
+}
+
 export class RevisionConflictError extends Error {
   constructor(
     readonly projectId: string,
