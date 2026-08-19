@@ -106,6 +106,81 @@ describe('useGeometryWorker', () => {
     expect(result.current.isReadyFor(document)).toBe(true);
   });
 
+  it('respawns a crashed worker so later requests still settle', async () => {
+    installWorker();
+    const document = createProjectDocument('Respawn', toUserId('user'));
+    const onError = vi.fn();
+    const { result } = renderHook(() =>
+      useGeometryWorker({
+        manager: () => null,
+        onDerived: vi.fn(),
+        onError
+      })
+    );
+
+    const orphaned = result.current.syncOnce(document);
+    const first = FakeWorker.instances[0]!;
+    act(() => {
+      first.onerror?.({} as ErrorEvent);
+    });
+
+    // The crash rejects what was in flight, announces the restart, and
+    // installs a fresh worker.
+    await expect(orphaned).rejects.toThrow('Geometry worker crashed');
+    expect(first.terminate).toHaveBeenCalled();
+    expect(FakeWorker.instances).toHaveLength(2);
+    expect(onError).toHaveBeenCalledWith(
+      expect.stringContaining('Restarting the geometry worker')
+    );
+
+    // A request made AFTER the crash reaches the replacement and settles —
+    // this is the regression: it used to post into the corpse forever.
+    const second = FakeWorker.instances[1]!;
+    const followUp = result.current.syncOnce(document);
+    expect(second.postMessage).toHaveBeenCalledTimes(1);
+    const requestId = (
+      second.postMessage.mock.calls[0]![0] as { requestId: string }
+    ).requestId;
+    act(() => {
+      second.emit({
+        type: 'sync',
+        ok: true,
+        projectId: document.projectId,
+        version: document.version,
+        requestId,
+        derived: document.derived
+      });
+    });
+    await expect(followUp).resolves.toEqual(document.derived);
+  });
+
+  it('stops respawning after repeated boot failures and fails loudly', () => {
+    installWorker();
+    const onError = vi.fn();
+    const { result } = renderHook(() =>
+      useGeometryWorker({
+        manager: () => null,
+        onDerived: vi.fn(),
+        onError
+      })
+    );
+
+    // Initial worker plus three respawns; the fourth crash exhausts the
+    // budget without creating a fifth instance.
+    for (let crash = 0; crash < 4; crash += 1) {
+      const current = FakeWorker.instances.at(-1)!;
+      act(() => {
+        current.onerror?.({} as ErrorEvent);
+      });
+    }
+
+    expect(FakeWorker.instances).toHaveLength(4);
+    expect(result.current.state.phase).toBe('failed');
+    expect(onError).toHaveBeenCalledWith(
+      expect.stringContaining('reload the page to recover')
+    );
+  });
+
   it('rejects every outstanding promise when the worker terminates', async () => {
     installWorker();
     const document = createProjectDocument('Pending', toUserId('user'));

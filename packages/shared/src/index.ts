@@ -1529,6 +1529,15 @@ export const ARTIFACT_UPLOAD_PART_BYTES = 16 * 1024 * 1024;
 export const MAX_ARTIFACT_PART_BYTES = 32 * 1024 * 1024;
 /** Ceiling on parts per upload (with 16 MiB parts: 1 GiB). */
 export const MAX_ARTIFACT_UPLOAD_PARTS = 64;
+/**
+ * Ceiling on finalized artifact bytes per account, attributed to the project
+ * owner. Uploads are otherwise unmetered R2 writes on an open-signup beta —
+ * without an account ceiling, a scripted client can park unbounded storage on
+ * the operator's bucket (32 MiB × 64 parts per artifact, no artifact count
+ * limit). 2 GiB comfortably covers real use (the largest supported STEP
+ * import is 250 MB) while bounding abuse.
+ */
+export const MAX_ACCOUNT_ARTIFACT_BYTES = 2 * 1024 * 1024 * 1024;
 /** Maximum encoded size of a shelf thumbnail that clients automatically load. */
 export const MAX_THUMBNAIL_BYTES = 512 * 1024;
 /** The thumbnail renderer publishes WebP; other image formats are not accepted. */
@@ -2040,6 +2049,12 @@ export interface AccountStorageUsage {
   /** The per-document ceiling, so the client can name it without hardcoding. */
   documentLimitBytes: number;
   maxRevisionsPerProject: number;
+  /** Finalized artifact bytes across the account's projects. */
+  artifactBytes: number;
+  /** How many finalized artifacts the account's projects hold. */
+  artifactCount: number;
+  /** The account-wide artifact ceiling, for the same no-hardcoding reason. */
+  artifactLimitBytes: number;
 }
 
 /** The three independently confirmed cloud-data deletion operations. */

@@ -534,7 +534,13 @@ export function normalizeDocument(document: ProjectDocument): ProjectDocument {
 }
 
 export function cloneDocument(document: ProjectDocument): ProjectDocument {
-  return deepClone(document);
+  // Derived state is a disposable projection the geometry worker rebuilds,
+  // and nothing mutates it in place — `attachDerivedState` replaces the whole
+  // field. It also carries every body's mesh arrays, so deep-copying it here
+  // was the single largest main-thread allocation per command and multiplied
+  // through all 100 undo snapshots. Share it by reference and clone the rest.
+  const { derived, ...content } = document;
+  return { ...deepClone(content), derived };
 }
 
 /**
