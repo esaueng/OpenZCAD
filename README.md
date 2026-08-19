@@ -16,7 +16,7 @@ Use the hosted beta at [zcad.app](https://zcad.app/).
 
 **Import and export.** Editable STEP import is stored in replayable document history and rebuilt exactly, honouring the file's own declared length and plane-angle units. Selecting an exact imported face shows its surface type and area; the shipped direct-edit subset includes validated through-hole and cylindrical-face edits. A bounded read-only recognizer proves blind holes, counterbores, countersinks, bosses, prismatic pockets, and conical tapers in isolation, but those broader coordinated edits are not wired into the product yet. STEP export preserves distinct solids as a compound; STL export is always millimetres. STL imports become mesh bodies. All geometry and exports run in the browser worker.
 
-**Local-first, optionally cloud.** IndexedDB autosave works with no account; when local and cloud copies diverge, OpenZCAD preserves both and asks which one to keep instead of guessing from versions or timestamps. Optional passwordless profiles unlock cloud projects, synced settings, and live per-project collaboration with owner/editor/viewer roles and one project-wide edit lease. Conflict recovery always writes a local recovery project before choosing the room version, keeping the leased local version, or saving the local version as a copy. Sharing and lease enforcement remain disabled in checked-in deployment configuration pending controlled rollout.
+**Local-first, optionally cloud.** IndexedDB autosave works with no account; when local and cloud copies diverge, OpenZCAD preserves both and asks which one to keep instead of guessing from versions or timestamps. Optional passwordless profiles unlock cloud projects, synced settings, and live per-project collaboration with owner/editor/viewer roles and one project-wide edit lease. Conflict recovery always writes a local recovery project before choosing the room version, keeping the leased local version, or saving the local version as a copy. The checked-in beta configuration enables sharing and lease enforcement for authenticated accounts; the local development configuration keeps them off.
 
 <p align="center">
   <img src="docs/design/readme-pipe-flange.png" width="49%" alt="Pipe Flange demo — revolved flange with a patterned bolt circle" />
@@ -67,7 +67,7 @@ See [architecture.md](architecture.md) and the decision records in [docs/adrs](d
 The current implementation status and explicitly unshipped gaps are tracked in
 [the capability matrix](docs/capability-matrix.md).
 
-The monorepo is a pnpm workspace: `apps/web` plus focused packages — `document-core` (canonical model), `command-system` (undo/redo, transactions), `geometry` (sketch regions, plane math), `kernel-adapter` (the Remus exact adapter), `viewport` (React-free three.js scene framework), `io-step`/`io-stl`, `ai-contracts`, `cloudflare-adapters`, `persistence`, and `shared`.
+The monorepo is a pnpm workspace: `apps/web`, `apps/desktop` (a Tauri 2 macOS shell, see below), plus focused packages — `document-core` (canonical model), `command-system` (undo/redo, transactions), `geometry` (sketch regions, plane math), `kernel-adapter` (the Remus exact adapter), `viewport` (React-free three.js scene framework), `io-step`/`io-stl`, `ai-contracts`, `cloudflare-adapters`, `persistence`, and `shared`.
 
 ## Development
 
@@ -77,9 +77,10 @@ pnpm typecheck        # TypeScript
 pnpm lint             # ESLint
 pnpm test             # unit and integration tests (Vitest)
 pnpm test:web         # web app tests
+pnpm test:parity-corpus  # serial Remus parity corpus vs the OpenCascade reference
 pnpm test:e2e         # Playwright end-to-end suite
 pnpm test:coverage    # unit tests with coverage
-pnpm build            # production web/worker bundle
+pnpm build            # production web/worker bundle + bundle-size check
 pnpm deploy:beta      # official deployment; maintainers only
 ```
 
@@ -91,6 +92,23 @@ domains are non-secret identifiers; they do not grant access. To deploy an
 independent instance, use the separate example and instructions in
 [Self-hosting OpenZCAD](docs/SELF_HOSTING.md). Never copy the official resource
 identifiers into a self-hosting configuration.
+
+### macOS desktop (Tauri)
+
+`apps/desktop` is a Tauri 2 shell for Apple Silicon that bundles the same web
+workspace; geometry still runs in the browser workers, and the Rust host stays
+narrow — native menus, user-picked CAD files, exports, and window-state
+restoration. It needs macOS 14+, Xcode Command Line Tools, and stable Rust with
+the `aarch64-apple-darwin` target:
+
+```bash
+pnpm dev:desktop      # tauri dev against the local workspace
+pnpm build:desktop    # .app and DMG for aarch64-apple-darwin (ad-hoc signed)
+```
+
+See [docs/macos/README.md](docs/macos/README.md) for the full setup, the
+WKWebView smoke test (`pnpm --filter @openzcad/desktop test:e2e`), and the
+manual `macos-desktop` CI workflow.
 
 ### Performance
 
@@ -142,19 +160,20 @@ artifact storage, collaboration, and optional server-side AI.
 1. Fork or clone the repository and install the supported Node.js and pnpm
    versions from [Quick start](#quick-start).
 2. In a Cloudflare account you control, create a D1 database and private R2
-   bucket, then configure the Durable Object binding and migration defined in
-   the top-level [`wrangler.jsonc`](wrangler.jsonc). Copy that configuration and
-   adapt its resource names and IDs, sending domain, Turnstile site key, public
-   app origin, and authentication settings for your own deployment.
+   bucket. Copy [`wrangler.selfhost.example.jsonc`](wrangler.selfhost.example.jsonc)
+   to a git-ignored `wrangler.selfhost.jsonc` and fill in your own resource
+   names and IDs, sending domain, Turnstile site key, public app origin, and
+   authentication settings. `pnpm selfhost:check` validates the result and
+   refuses the official beta identifiers.
 3. Configure the required secrets with `wrangler secret put`; do not put them
    in `wrangler.jsonc`, `.dev.vars`, source code, or CI logs. The required
    values are listed in the deployment section above. AI provider credentials
    are optional when users supply their own credentials.
-4. Review every pending migration, take a D1 recovery bookmark, then apply the
-   migrations to your database before publishing. Run `pnpm build`, then deploy
-   with `pnpm deploy:beta` (or an equivalent CI command using the top-level
-   Wrangler configuration). Do not deploy the development-only
-   `apps/web/wrangler.jsonc`.
+4. Review every pending migration and take a D1 recovery bookmark, then run
+   `pnpm deploy:selfhost` — it validates the configuration, builds, applies the
+   migrations to your database, and deploys the Worker with your
+   `wrangler.selfhost.jsonc`. Do not use `pnpm deploy:beta` or the
+   development-only `apps/web/wrangler.jsonc` for a self-hosted deployment.
 5. Follow the [cloud-sync release runbook](docs/runbooks/project-cloud-sync-release.md)
    for the authenticated two-device canary. It covers the D1/R2 pointer check,
    reload, conflict recovery, and any collaboration rollout.
@@ -250,7 +269,7 @@ Current assistant limitations and gates:
 
 - Editable STEP sources are stored content-addressed: the document carries a SHA-256 reference and the bytes live in the browser's IndexedDB blob store (imports up to 250 MB), with the archived upload artifact as the cross-device fallback. Documents written before references keep their embedded text (12 MB cap) and replay unchanged; the embedded form is also the fallback when browser storage is denied. Cloud saves project payloads into checksum-verified R2 assets and keep only metadata/pointers in D1.
 - Imported STL builds on the exact kernel through its STL importer, sewn into a shell so it can be mirrored, shelled, and offset. It stays a mesh body: no parametric reconstruction is attempted, and a boolean against an exact body is refused by name rather than approximated.
-- Collaboration rooms store each document under its own Durable Object key (bounded history, atomic index updates, typed rejection frames for oversize or malformed payloads; documents over ~1.5 MB JSON are rejected). Invitations, owner/editor/viewer authorization, a persisted project edit lease, sharing UI, and recovery-copy-first conflict choices are implemented, but both checked-in sharing flags remain `false` pending controlled beta rollout.
+- Collaboration rooms store each document under its own Durable Object key (bounded history, atomic index updates, typed rejection frames for oversize or malformed payloads; documents over ~1.5 MB JSON are rejected). Invitations, owner/editor/viewer authorization, a persisted project edit lease, sharing UI, and recovery-copy-first conflict choices are implemented and enabled in the checked-in beta configuration; the local development configuration keeps both sharing flags `false`.
 - Remus's difficult boolean cases can fall back to mesh-derived topology, and closed-B-spline/NURBS-blend faces are not fingerprint-stable against the corpus reference — they fail closed rather than mis-resolve.
 - True face attachment requires a schema-v5 lineage reference and an exact planar face at the sketch's history position. Legacy face attachments retain their stored migration frame with a warning; deleted, ambiguous, non-planar, and unsupported current references fail visibly.
 - The pinned Remus mirror preserves ordinary exact solids, but can report a volume mismatch for some dense boolean-plus-blend histories; exact preflight refuses those bodies without committing history rather than accepting a questionable reflection.
@@ -258,7 +277,7 @@ Current assistant limitations and gates:
 
 ## Next milestones
 
-1. Run the recovery-copy reload E2E and staged beta checks, then enable viewer sharing before editor sharing; keep both deployment flags off until those gates pass.
+1. Complete the recovery-copy reload E2E and the staged real-session beta checks for the sharing rollout now enabled in the checked-in beta configuration.
 2. Wire the exact imported-feature query into live imported bodies and add coordinated edits for proved blind/counterbored/countersunk holes, bosses, pockets, and tapers.
 3. Extend verified lineage through boolean post-processing, blends, patterns, and direct edits without nearest-geometry rebinding.
 4. Enable AI imported-feature operations only after the same deterministic manual command and exact preflight path ships.
