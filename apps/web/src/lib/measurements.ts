@@ -977,16 +977,51 @@ function firstTargetFailure(
   return null;
 }
 
+function hasValidTargetArity(measurement: Measurement): boolean {
+  for (let index = 0; index < measurement.targets.length; index += 1) {
+    if (
+      measurement.targets[index] === undefined ||
+      measurement.targets[index] === null
+    ) {
+      return false;
+    }
+  }
+  if (measurement.kind === 'distance' || measurement.kind === 'angle') {
+    return measurement.targets.length === 2;
+  }
+  if (measurement.kind === 'edge-total') {
+    return measurement.targets.length >= 2;
+  }
+  return measurement.targets.length === 1;
+}
+
 /** Re-resolve only by authoritative body/topology identity; never proximity. */
 export function refreshMeasurements(
   list: readonly Measurement[],
   bodies: readonly BodyRepresentation[],
-  sourceRevision: number
+  sourceRevision: number,
+  options: { force?: boolean } = {}
 ): Measurement[] {
   let changed = false;
   const refreshedList = list.map((measurement) => {
-    if (measurement.sourceRevision === sourceRevision) {
+    if (!options.force && measurement.sourceRevision === sourceRevision) {
       return measurement;
+    }
+    if (!hasValidTargetArity(measurement)) {
+      if (
+        measurement.status === 'unresolved' &&
+        measurement.reason === 'not-found' &&
+        measurement.sourceRevision === sourceRevision
+      ) {
+        return measurement;
+      }
+      changed = true;
+      return {
+        ...measurement,
+        status: 'unresolved' as const,
+        sourceRevision,
+        reason: 'not-found' as const
+      };
     }
     const purpose: MeasurementMode =
       measurement.kind === 'distance'
@@ -1019,7 +1054,7 @@ export function refreshMeasurements(
         ...measurement,
         status,
         sourceRevision,
-        ...(failure ? { reason: failure } : {})
+        reason: failure ?? undefined
       };
     }
     const resolved = targets as MeasurementTarget[];
@@ -1060,20 +1095,28 @@ export function refreshMeasurements(
         );
       }
     }
-    changed = true;
     if (refreshed) {
+      changed = true;
       // `refreshed` carries no `reason`, so a row that starts resolving again
       // sheds its explanation rather than keeping a stale one beside a fresh
       // number.
       return retainRowState(measurement, refreshed);
     }
+    if (
+      measurement.status === 'stale' &&
+      measurement.reason === undefined &&
+      measurement.sourceRevision === sourceRevision
+    ) {
+      return measurement;
+    }
+    changed = true;
     // Every target resolved, yet no measurement could be rebuilt from them —
     // the topology is present but no longer supports this kind of figure.
     return {
       ...measurement,
-      status: 'unresolved' as const,
+      status: 'stale' as const,
       sourceRevision,
-      reason: firstTargetFailure(measurement, bodies) ?? 'not-found'
+      reason: undefined
     };
   });
   return changed ? refreshedList : (list as Measurement[]);

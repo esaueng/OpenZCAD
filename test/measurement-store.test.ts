@@ -126,6 +126,20 @@ describe('what gets read back', () => {
     expect(parsed?.measurements[0]).not.toHaveProperty('unknownFutureField');
   });
 
+  it('rejects a sparse target array preserved by structured cloning', () => {
+    const unsafe = {
+      ...record([measurement(1)]),
+      measurements: [
+        {
+          ...persistableMeasurement(measurement(1)),
+          targets: Array<unknown>(1)
+        }
+      ]
+    };
+
+    expect(parseStoredMeasurements(unsafe)?.measurements).toEqual([]);
+  });
+
   it('refuses a record from a newer build outright', () => {
     // Reading it partially would be worse than not reading it: this build
     // would drop the fields it did not understand and then write the

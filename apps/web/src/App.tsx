@@ -517,6 +517,7 @@ import type {
  */
 import type * as MeasurementModule from './lib/measurements';
 import { buildMeasurementRecord } from './lib/measurementRecord';
+import { committedMeasurementBodies } from './lib/measurementRefreshBodies';
 import {
   EMPTY_MEASURE_SESSION,
   edgeRunIsTotalable,
@@ -2570,7 +2571,8 @@ export function App() {
   // worker, so the faces this document names have to be parsed here too.
   const textFontsVersion = useDocumentFonts(doc ?? null);
 
-  const representations = doc?.derived.bodyRepresentations ?? {};
+  const committedRepresentations = doc?.derived.bodyRepresentations;
+  const representations = committedRepresentations ?? {};
   const renderedRepresentations =
     previewDoc?.derived.bodyRepresentations ?? representations;
   /**
@@ -3065,6 +3067,13 @@ export function App() {
     readonly TopologySelection[]
   >(EMPTY_MEASURE_SESSION.edgeRun);
   const [measurements, setMeasurements] = useState<Measurement[]>([]);
+  /** Advances whenever a persisted list replaces the in-memory measurement list. */
+  const [measurementRestoreGeneration, setMeasurementRestoreGeneration] =
+    useState(0);
+  const applyStoredMeasurements = useCallback((restored: Measurement[]) => {
+    setMeasurements(restored);
+    setMeasurementRestoreGeneration((current) => current + 1);
+  }, []);
   const [activeMeasurementId, setActiveMeasurementId] = useState<string | null>(
     null
   );
@@ -3114,7 +3123,7 @@ export function App() {
           return;
         }
         if (record) {
-          setMeasurements(record.measurements);
+          applyStoredMeasurements(record.measurements);
           setMeasurementUnit(record.display.unit);
           setMeasurementPrecision(record.display.precision);
           setRadialDisplay(record.display.radialDisplay);
@@ -3130,7 +3139,7 @@ export function App() {
     return () => {
       cancelled = true;
     };
-  }, [doc?.projectId]);
+  }, [applyStoredMeasurements, doc?.projectId]);
 
   /**
    * Writes the measurement list back, debounced.
@@ -3204,13 +3213,33 @@ export function App() {
   }, [viewMode, measurementApi]);
 
   useEffect(() => {
-    if (!doc || !exactGeometryReady || !measurementApi) {
+    if (
+      !doc ||
+      !committedRepresentations ||
+      !exactGeometryReady ||
+      !measurementApi
+    ) {
       return;
     }
+    // Stored rows and worker bodies can arrive in either order. Re-resolve on
+    // each authoritative arrival even when the document revision is equal;
+    // the library's default short-circuit remains intact for other callers.
+    // Only the committed exact projection is authoritative here: previewDoc is
+    // transient and must never rewrite the persisted list. Hidden bodies stay
+    // included because visibility does not invalidate their measurements.
+    const bodies = committedMeasurementBodies(committedRepresentations);
     setMeasurements((current) =>
-      measurementApi.refreshMeasurements(current, viewerBodies, doc.version)
+      measurementApi.refreshMeasurements(current, bodies, doc.version, {
+        force: true
+      })
     );
-  }, [doc?.version, exactGeometryReady, viewerBodies, measurementApi]);
+  }, [
+    committedRepresentations,
+    doc?.version,
+    exactGeometryReady,
+    measurementApi,
+    measurementRestoreGeneration
+  ]);
 
   function recordMeasurement(measurement: Measurement) {
     // Checked before the state update rather than inside it, so the refusal can
@@ -7968,10 +7997,14 @@ export function App() {
         y: target.normal[1],
         z: target.normal[2]
       },
-      initialValue: offsetPreviewValueRef.current ?? interaction.lastValue ?? 0,
+      initialValue:
+        renderedOffsetPreview ??
+        offsetPreviewValueRef.current ??
+        interaction.lastValue ??
+        0,
       ...(totalBaseline === undefined ? {} : { totalBaseline })
     };
-  }, [doc, interaction]);
+  }, [doc, interaction, renderedOffsetPreview]);
 
   const cylinderRadiusHandleTarget = useMemo(() => {
     if (
@@ -10638,7 +10671,7 @@ export function App() {
               measurementHydratedProjectId,
               measurements,
               measurementDisplay,
-              setMeasurements,
+              applyStoredMeasurements,
               setMeasurementUnit,
               setMeasurementPrecision,
               setRadialDisplay,

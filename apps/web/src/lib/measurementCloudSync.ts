@@ -83,15 +83,31 @@ export const projectMeasurementCloudApi: ProjectMeasurementCloudApi = {
     )
 };
 
+function stableJsonObjectOrder(_key: string, value: unknown): unknown {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+    return value;
+  }
+  return Object.fromEntries(
+    Object.entries(value).sort(([left], [right]) =>
+      left < right ? -1 : left > right ? 1 : 0
+    )
+  );
+}
+
 export function measurementRecordContentKey(
   record: StoredMeasurementRecord
 ): string {
-  return JSON.stringify({
-    projectId: record.projectId,
-    version: record.version,
-    measurements: record.measurements,
-    display: record.display
-  });
+  // The storage boundary rebuilds validated objects, so insertion order is not
+  // content and must not turn a server echo into a new device edit.
+  return JSON.stringify(
+    {
+      projectId: record.projectId,
+      version: record.version,
+      measurements: record.measurements,
+      display: record.display
+    },
+    stableJsonObjectOrder
+  );
 }
 
 /**
