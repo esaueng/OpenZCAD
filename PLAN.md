@@ -1,5 +1,12 @@
 # OpenZCAD Implementation Plan
 
+> **Historical document.** This plan describes the pre-Z5 program — including
+> the dual-kernel period and schema-v4 face attachments — and much of it has
+> since been executed and superseded. Current state lives in
+> [architecture.md](architecture.md), [TODO.md](TODO.md), and
+> [docs/capability-matrix.md](docs/capability-matrix.md); this file is kept as
+> an execution record, not active guidance.
+
 Status: revised after technical review (2026-07-31); review decisions resolved
 Scope: reliability, viewport scalability, persistent topology, modeling breadth,
 collaboration, AI operations, and exact-kernel delivery
