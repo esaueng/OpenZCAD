@@ -1878,7 +1878,6 @@ packages:
   remus-wasm@https://codeload.github.com/esaueng/remus/tar.gz/bea7d4ce9d4b6e192615c4bd2fbc22b2f388ed7b#path:/crates/wasm/pkg:
     resolution: {path: /crates/wasm/pkg, tarball: https://codeload.github.com/esaueng/remus/tar.gz/bea7d4ce9d4b6e192615c4bd2fbc22b2f388ed7b}
     version: 2.130.0
-  remus-wasm@https://codeload.github.com/esaueng/remus/tar.gz/bea7d4ce9d4b6e192615c4bd2fbc22b2f388ed7b#path:/crates/wasm/pkg: {}
 
   rolldown@1.2.4:
     resolution: {integrity: sha512-rSr7irW0K7QRWzjdJXqZowkcRdDtjRduh43rBltnVKd0VFq839l1lJoDvGJb6gl7+4rTTCrPWu+YfujUL8Ug7w==}
@@ -3562,6 +3561,7 @@ snapshots:
       strip-indent: 3.0.0
 
 
+  remus-wasm@https://codeload.github.com/esaueng/remus/tar.gz/bea7d4ce9d4b6e192615c4bd2fbc22b2f388ed7b#path:/crates/wasm/pkg: {}
   rolldown@1.2.4:
     dependencies:
       '@oxc-project/types': 0.144.0
