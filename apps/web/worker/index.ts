@@ -9,6 +9,7 @@ import {
 } from '@openzcad/cloudflare-adapters';
 import {
   ArtifactStorageError,
+  ArtifactStorageLimitError,
   DocumentTooLargeError,
   ProjectAdoptionError,
   ProjectNotFoundError,
@@ -1446,6 +1447,12 @@ export default {
       }
       if (error instanceof HttpAssistantConfigurationError) {
         return json({ error: error.message }, 502);
+      }
+      if (error instanceof ArtifactStorageLimitError) {
+        return json(
+          { error: error.message, code: 'ARTIFACT_STORAGE_LIMIT' },
+          413
+        );
       }
       if (error instanceof ArtifactStorageError) {
         return json({ error: error.message }, 503);
