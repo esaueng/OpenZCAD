@@ -13,6 +13,7 @@ import type {
   AssistantReasoningEffort
 } from '@openzcad/shared';
 import { observeAssistantResponse } from './assistantStreamDiagnostics';
+import { isPrivateHostname } from './privateNetwork';
 
 export const DEFAULT_AI_MODEL = 'gpt-5.6-sol';
 export const DEFAULT_OPENROUTER_MODEL = 'openai/gpt-5.6-sol';
@@ -320,50 +321,6 @@ export function timeoutFor(env: CloudflareEnv): number {
   return Number.isFinite(configured) && configured >= 5_000
     ? Math.min(configured, 5 * 60_000)
     : DEFAULT_AI_TIMEOUT_MS;
-}
-
-function isPrivateIpv4(hostname: string): boolean {
-  const parts = hostname.split('.');
-  if (parts.length !== 4 || parts.some((part) => !/^\d{1,3}$/.test(part))) {
-    return false;
-  }
-  const octets = parts.map(Number);
-  if (octets.some((octet) => octet > 255)) {
-    return true;
-  }
-  const [first, second] = octets as [number, number, number, number];
-  return (
-    first === 0 ||
-    first === 10 ||
-    first === 127 ||
-    (first === 100 && second >= 64 && second <= 127) ||
-    (first === 169 && second === 254) ||
-    (first === 172 && second >= 16 && second <= 31) ||
-    (first === 192 && second === 168) ||
-    first >= 224
-  );
-}
-
-function isPrivateHostname(hostname: string): boolean {
-  const host = hostname.toLowerCase().replace(/^\[|\]$/g, '');
-  if (
-    host === 'localhost' ||
-    host.endsWith('.localhost') ||
-    host.endsWith('.local') ||
-    host.endsWith('.internal') ||
-    host.endsWith('.lan') ||
-    isPrivateIpv4(host)
-  ) {
-    return true;
-  }
-  if (!host.includes(':')) {
-    return false;
-  }
-  if (host === '::' || host === '::1' || /^(fc|fd|fe[89ab])/i.test(host)) {
-    return true;
-  }
-  const mappedIpv4 = host.match(/::ffff:(\d+\.\d+\.\d+\.\d+)$/i)?.[1];
-  return mappedIpv4 ? isPrivateIpv4(mappedIpv4) : false;
 }
 
 function validatedUpstreamUrl(raw: string, provider: string): string {
