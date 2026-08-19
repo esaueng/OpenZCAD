@@ -836,7 +836,7 @@ export const REFERENCE_DEVIATIONS: ReferenceDeviationPin[] = [
       40 * 24 * 10 +
       Math.PI * 36 * 20 -
       (Math.PI * 36 - (36 * Math.acos(0.5) - 3 * Math.sqrt(27))) * 10,
-    reported: 10951.56548068038,
+    reported: 10951.579362034887,
     owner: 'K0.5',
     note:
       'THE SOLID IS EXACT; THE MEASUREMENT IS NEARLY SO. This pin has now ' +
@@ -887,8 +887,12 @@ export const REFERENCE_DEVIATIONS: ReferenceDeviationPin[] = [
       'fix — that route has its own open defect, reading a quadric sector ' +
       'wider than pi as its own complement (4.3% light). ' +
       'Retire this pin when the app-facing volume reaches the closed form ' +
-      '(the corpus bar is 1e-6; the current -4.70e-5 is 47x above it), not ' +
-      'before. Exact tangency is separate and still falls back at 0.02%.'
+      '(the corpus bar is 1e-6), not before. Exact tangency is separate and ' +
+      'still falls back at 0.02%. ' +
+      'The remus pin bump to bea7d4c moved the reading from 10951.56548068038 ' +
+      '(-4.70e-5, 47x above the bar) to 10951.579362034887 (-1.27e-6, 1.27x ' +
+      'above it), and the round-trip delta improved 6x — same inscribed-mesh ' +
+      'signature, much smaller residual. Close, but the bar is the bar.'
   },
   {
     subject: 'boss-crossing-a-wall',
