@@ -1,4 +1,4 @@
-# ADR-018: Stored extrude operation inference
+# ADR-021: Stored extrude operation inference
 
 ## Status
 
@@ -46,4 +46,4 @@ operation and target.
 - Older clients preserve the additive fields when their document handling
   spreads feature data, but render the extrusion as a new body because they do
   not understand its boolean meaning. Mixed-version collaboration therefore
-  requires an ADR-018-capable client before relying on the projected result.
+  requires an ADR-021-capable client before relying on the projected result.
