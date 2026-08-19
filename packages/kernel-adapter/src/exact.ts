@@ -1719,8 +1719,16 @@ function profilePoints(
  * Build the same ZYX Euler transform the viewport's Move gizmo composes, so a
  * dragged placement and the rebuilt body agree once more than one axis is
  * non-zero. Remus accepts row-major matrices and column vectors.
+ *
+ * `scale` multiplies the rotation block, i.e. T·R·S with the scaling about
+ * the world origin. Uniform scale commutes with rotation, so this is also
+ * S-then-R; the kernel keeps analytic surfaces exact under it.
  */
-function transformMatrix(translation: Vec3, rotationDeg: Vec3): Float64Array {
+function transformMatrix(
+  translation: Vec3,
+  rotationDeg: Vec3,
+  scale = 1
+): Float64Array {
   const rx = (rotationDeg.x * Math.PI) / 180;
   const ry = (rotationDeg.y * Math.PI) / 180;
   const rz = (rotationDeg.z * Math.PI) / 180;
@@ -1731,17 +1739,17 @@ function transformMatrix(translation: Vec3, rotationDeg: Vec3): Float64Array {
   const cc = Math.cos(rz);
   const sc = Math.sin(rz);
   return new Float64Array([
-    cc * cb,
-    cc * sb * sa - sc * ca,
-    cc * sb * ca + sc * sa,
+    scale * cc * cb,
+    scale * (cc * sb * sa - sc * ca),
+    scale * (cc * sb * ca + sc * sa),
     translation.x,
-    sc * cb,
-    sc * sb * sa + cc * ca,
-    sc * sb * ca - cc * sa,
+    scale * sc * cb,
+    scale * (sc * sb * sa + cc * ca),
+    scale * (sc * sb * ca - cc * sa),
     translation.y,
-    -sb,
-    cb * sa,
-    cb * ca,
+    scale * -sb,
+    scale * cb * sa,
+    scale * cb * ca,
     translation.z,
     0,
     0,
@@ -5948,6 +5956,19 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
             }
             const translation = feature.data.transform.translation;
             const rotation = feature.data.transform.rotationDeg;
+            const scaleFactor =
+              feature.data.transform.scale !== undefined
+                ? resolveParamValue(
+                    feature.data.transform.scale,
+                    scope,
+                    'scale'
+                  )
+                : 1;
+            if (!Number.isFinite(scaleFactor) || scaleFactor <= 0) {
+              throw new Error(
+                'Transform scale must resolve to a positive number.'
+              );
+            }
             result.shapes.set(
               feature.data.targetBodyId,
               copyShapeWithVerifiedLineage(
@@ -5963,7 +5984,8 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
                     x: resolveParamValue(rotation.x, scope, 'rotate X'),
                     y: resolveParamValue(rotation.y, scope, 'rotate Y'),
                     z: resolveParamValue(rotation.z, scope, 'rotate Z')
-                  }
+                  },
+                  scaleFactor
                 )
               )
             );

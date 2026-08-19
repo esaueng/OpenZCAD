@@ -381,6 +381,69 @@ describe('kernel export', { timeout: 30_000 }, () => {
     ).rejects.toThrow(/positive/);
   });
 
+  it('scales a body uniformly through a parameter', async () => {
+    const manager = newManager('Scaled Part');
+    manager.execute(
+      commandFactories.setParameter({ name: 'k', expression: '2' })
+    );
+    manager.execute(
+      commandFactories.addPrimitive({
+        name: 'Box',
+        primitiveKind: 'box',
+        dimensions: { width: 5, height: 6, depth: 7 }
+      })
+    );
+    const bodyId = getLatestBodyId(manager.document)!;
+    manager.execute(
+      commandFactories.transformBody({
+        name: 'Scale',
+        targetBodyId: bodyId,
+        translation: { x: 0, y: 0, z: 0 },
+        scale: 'k'
+      })
+    );
+    const derived = await kernel.syncDocument(manager.document);
+    expect(derived.warnings).toEqual([]);
+    expect(derived.bodyRepresentations[bodyId]!.volume).toBeCloseTo(
+      5 * 6 * 7 * 8,
+      3
+    );
+
+    // Parametric: re-driving the parameter rescales the same feature.
+    manager.execute(
+      commandFactories.setParameter({ name: 'k', expression: '3' })
+    );
+    const rescaled = await kernel.syncDocument(manager.document);
+    expect(rescaled.bodyRepresentations[bodyId]!.volume).toBeCloseTo(
+      5 * 6 * 7 * 27,
+      2
+    );
+  });
+
+  it('rejects a non-positive transform scale as a feature warning', async () => {
+    const manager = newManager('Bad Scale');
+    manager.execute(
+      commandFactories.addPrimitive({
+        name: 'Box',
+        primitiveKind: 'box',
+        dimensions: { width: 5, height: 6, depth: 7 }
+      })
+    );
+    const bodyId = getLatestBodyId(manager.document)!;
+    manager.execute(
+      commandFactories.transformBody({
+        name: 'Collapse',
+        targetBodyId: bodyId,
+        translation: { x: 0, y: 0, z: 0 },
+        scale: 0
+      })
+    );
+    const derived = await kernel.syncDocument(manager.document);
+    expect(derived.warnings.join('\n')).toMatch(/positive/);
+    // The failed feature leaves the body at its unscaled size.
+    expect(derived.bodyRepresentations[bodyId]!.volume).toBeCloseTo(210, 4);
+  });
+
   it('reports watertight mesh quality for a solid box', async () => {
     const manager = newManager('Quality Part');
     manager.execute(

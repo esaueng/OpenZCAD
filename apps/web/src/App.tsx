@@ -11412,7 +11412,10 @@ export function App() {
                       name: value.name,
                       targetBodyId: value.targetBodyId,
                       translation: value.translation,
-                      rotationDeg: value.rotationDeg
+                      rotationDeg: value.rotationDeg,
+                      ...(value.scale !== undefined
+                        ? { scale: value.scale }
+                        : {})
                     })
                   )
                 }
@@ -11631,7 +11634,12 @@ export function App() {
                           targetBodyId: value.targetBodyId,
                           transform: {
                             translation: value.translation,
-                            rotationDeg: value.rotationDeg
+                            rotationDeg: value.rotationDeg,
+                            // Replaces the whole transform object, so leaving
+                            // scale out here is what clears a previous one.
+                            ...(value.scale !== undefined
+                              ? { scale: value.scale }
+                              : {})
                           }
                         }
                       },
