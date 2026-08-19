@@ -83,84 +83,17 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
   hostRef.current = host;
 
   useEffect(() => {
-    mark('worker.requested');
-    const worker = timed(
-      'worker.create',
-      () =>
-        new Worker(new URL('../worker/geometryWorker.ts', import.meta.url), {
-          type: 'module'
-        })
-    );
-    workerRef.current = worker;
-    worker.onmessage = (event: MessageEvent<GeometryWorkerResult>) => {
-      if (event.data.type === 'state') {
-        if (event.data.phase === 'loading-remus') {
-          mark('kernel.loading');
-        } else if (
-          event.data.phase === 'ready' &&
-          !firstReadyMarkedRef.current
-        ) {
-          firstReadyMarkedRef.current = true;
-          mark('worker.ready');
-          measure('worker.firstReady', 'worker.requested', 'worker.ready');
-          measure('kernel.ready', 'kernel.loading', 'worker.ready');
-        }
-        // One-off previews and exports have their own promises and must not
-        // make the live document look stale or ready out of order.
-        if (!event.data.requestId) {
-          setState(event.data);
-          if (event.data.phase === 'failed' && event.data.error) {
-            hostRef.current.onError(
-              `Geometry rebuild failed: ${event.data.error}`
-            );
-          }
-        }
-        return;
-      }
-      if (event.data.type === 'export') {
-        const pending = exportRequests.current.get(event.data.requestId);
-        if (!pending) {
-          return;
-        }
-        exportRequests.current.delete(event.data.requestId);
-        if (event.data.ok) {
-          pending.resolve(event.data);
-        } else {
-          pending.reject(new Error(event.data.error));
-        }
-        return;
-      }
-      if (event.data.requestId) {
-        const pending = syncRequests.current.get(event.data.requestId);
-        if (pending) {
-          syncRequests.current.delete(event.data.requestId);
-          if (event.data.ok) {
-            pending.resolve(event.data.derived);
-          } else {
-            pending.reject(new Error(event.data.error));
-          }
-        }
-        return;
-      }
-      const manager = hostRef.current.manager();
-      if (!manager) {
-        return;
-      }
-      const result = event.data;
-      // Ignore results for documents we are no longer showing.
-      if (
-        result.projectId !== manager.document.projectId ||
-        result.version !== manager.document.version
-      ) {
-        return;
-      }
-      if (!result.ok) {
-        lastSyncedKey.current = null;
-        hostRef.current.onError(`Geometry rebuild failed: ${result.error}`);
-        return;
-      }
-      hostRef.current.onDerived(result.derived);
-    };
+    // A crashed worker used to stay installed as a corpse: outstanding
+    // requests were rejected, but every LATER sync or export posted into the
+    // dead worker and its promise never settled, and only a page reload
+    // recovered. Supervise instead: terminate and respawn on error, with a
+    // boot-loop cap so a worker that cannot start (missing chunk, wasm abort
+    // on load) fails permanently and loudly rather than cycling forever. A
+    // successful `ready` resets the budget — a crash after hours of editing
+    // should not be charged against startup attempts.
+    const RESPAWN_LIMIT = 3;
+    let disposed = false;
+    let respawnsSinceReady = 0;
 
     const rejectOutstanding = (error: Error) => {
       for (const request of exportRequests.current.values()) {
@@ -173,37 +106,130 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
       syncRequests.current.clear();
     };
 
-    worker.onerror = () => {
-      const error = new Error('Geometry worker crashed.');
-      rejectOutstanding(error);
-      lastSyncedKey.current = null;
-      setState({
-        type: 'state',
-        phase: 'failed',
-        stale: true,
-        error: error.message
-      });
-      hostRef.current.onError(error.message);
-    };
-    worker.onmessageerror = () => {
-      const error = new Error(
-        'Geometry worker returned an unreadable message.'
+    const spawn = () => {
+      mark('worker.requested');
+      const worker = timed(
+        'worker.create',
+        () =>
+          new Worker(new URL('../worker/geometryWorker.ts', import.meta.url), {
+            type: 'module'
+          })
       );
-      rejectOutstanding(error);
-      lastSyncedKey.current = null;
-      setState({
-        type: 'state',
-        phase: 'failed',
-        stale: true,
-        error: error.message
-      });
-      hostRef.current.onError(error.message);
+      workerRef.current = worker;
+
+      const failAndMaybeRespawn = (message: string) => {
+        if (workerRef.current !== worker) {
+          return; // A stale handler from an already-replaced worker.
+        }
+        rejectOutstanding(new Error(message));
+        lastSyncedKey.current = null;
+        worker.terminate();
+        workerRef.current = null;
+        if (!disposed && respawnsSinceReady < RESPAWN_LIMIT) {
+          respawnsSinceReady += 1;
+          hostRef.current.onError(
+            `${message} Restarting the geometry worker (attempt ${respawnsSinceReady} of ${RESPAWN_LIMIT}).`
+          );
+          setState({ type: 'state', phase: 'starting', stale: true });
+          spawn();
+        } else {
+          setState({
+            type: 'state',
+            phase: 'failed',
+            stale: true,
+            error: message
+          });
+          hostRef.current.onError(
+            `${message} The geometry worker could not be restarted; reload the page to recover.`
+          );
+        }
+      };
+
+      worker.onmessage = (event: MessageEvent<GeometryWorkerResult>) => {
+        if (event.data.type === 'state') {
+          if (event.data.phase === 'loading-remus') {
+            mark('kernel.loading');
+          } else if (event.data.phase === 'ready') {
+            respawnsSinceReady = 0;
+            if (!firstReadyMarkedRef.current) {
+              firstReadyMarkedRef.current = true;
+              mark('worker.ready');
+              measure('worker.firstReady', 'worker.requested', 'worker.ready');
+              measure('kernel.ready', 'kernel.loading', 'worker.ready');
+            }
+          }
+          // One-off previews and exports have their own promises and must not
+          // make the live document look stale or ready out of order.
+          if (!event.data.requestId) {
+            setState(event.data);
+            if (event.data.phase === 'failed' && event.data.error) {
+              hostRef.current.onError(
+                `Geometry rebuild failed: ${event.data.error}`
+              );
+            }
+          }
+          return;
+        }
+        if (event.data.type === 'export') {
+          const pending = exportRequests.current.get(event.data.requestId);
+          if (!pending) {
+            return;
+          }
+          exportRequests.current.delete(event.data.requestId);
+          if (event.data.ok) {
+            pending.resolve(event.data);
+          } else {
+            pending.reject(new Error(event.data.error));
+          }
+          return;
+        }
+        if (event.data.requestId) {
+          const pending = syncRequests.current.get(event.data.requestId);
+          if (pending) {
+            syncRequests.current.delete(event.data.requestId);
+            if (event.data.ok) {
+              pending.resolve(event.data.derived);
+            } else {
+              pending.reject(new Error(event.data.error));
+            }
+          }
+          return;
+        }
+        const manager = hostRef.current.manager();
+        if (!manager) {
+          return;
+        }
+        const result = event.data;
+        // Ignore results for documents we are no longer showing.
+        if (
+          result.projectId !== manager.document.projectId ||
+          result.version !== manager.document.version
+        ) {
+          return;
+        }
+        if (!result.ok) {
+          lastSyncedKey.current = null;
+          hostRef.current.onError(`Geometry rebuild failed: ${result.error}`);
+          return;
+        }
+        hostRef.current.onDerived(result.derived);
+      };
+
+      worker.onerror = () => {
+        failAndMaybeRespawn('Geometry worker crashed.');
+      };
+      worker.onmessageerror = () => {
+        failAndMaybeRespawn('Geometry worker returned an unreadable message.');
+      };
     };
 
+    spawn();
+
     return () => {
+      disposed = true;
       const closed = new Error('Geometry worker closed.');
       rejectOutstanding(closed);
-      worker.terminate();
+      workerRef.current?.terminate();
       workerRef.current = null;
     };
   }, []);

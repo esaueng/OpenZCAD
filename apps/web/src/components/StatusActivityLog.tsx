@@ -25,6 +25,11 @@ const statusTimeFormatter = new Intl.DateTimeFormat(undefined, {
   second: '2-digit'
 });
 
+// Status ticks arrive from every hover prompt, save, and rebuild for the life
+// of the session; without a bound a day-long session accumulates thousands of
+// entries and every append reallocates the array.
+const MAX_STATUS_LOG_ENTRIES = 200;
+
 export function StatusActivityLog({
   id,
   open,
@@ -47,15 +52,17 @@ export function StatusActivityLog({
       return;
     }
     previousStatusRef.current = { status, tone };
-    setEntries((current) => [
-      ...current,
-      {
-        id: nextEntryIdRef.current++,
-        message: status,
-        timestamp: Date.now(),
-        tone
-      }
-    ]);
+    setEntries((current) =>
+      [
+        ...current,
+        {
+          id: nextEntryIdRef.current++,
+          message: status,
+          timestamp: Date.now(),
+          tone
+        }
+      ].slice(-MAX_STATUS_LOG_ENTRIES)
+    );
   }, [status, tone]);
 
   useEffect(() => {
@@ -114,6 +121,7 @@ export function StatusActivityLog({
         <div>
           <strong>Activity log</strong>
           <span>
+            {nextEntryIdRef.current > MAX_STATUS_LOG_ENTRIES ? 'latest ' : ''}
             {entries.length} {entries.length === 1 ? 'entry' : 'entries'} this
             session
           </span>

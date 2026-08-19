@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { InMemoryPersistenceService } from '@openzcad/persistence';
 import { createProjectDocument } from '@openzcad/document-core';
 import {
+  MAX_ACCOUNT_ARTIFACT_BYTES,
   MAX_PERSISTED_DOCUMENT_BYTES,
   MAX_PROJECT_REVISIONS,
   toUserId,
@@ -123,7 +124,10 @@ describe('account storage accounting', () => {
       revisionBytes: 0,
       revisionCount: 0,
       documentLimitBytes: MAX_PERSISTED_DOCUMENT_BYTES,
-      maxRevisionsPerProject: MAX_PROJECT_REVISIONS
+      maxRevisionsPerProject: MAX_PROJECT_REVISIONS,
+      artifactBytes: 0,
+      artifactCount: 0,
+      artifactLimitBytes: MAX_ACCOUNT_ARTIFACT_BYTES
     });
   });
 
