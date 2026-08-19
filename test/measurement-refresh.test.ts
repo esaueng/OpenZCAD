@@ -1,11 +1,19 @@
 import { describe, expect, it } from 'vitest';
-import type { BodyId, BodyRepresentation } from '@openzcad/shared';
+import type {
+  BodyId,
+  BodyRepresentation,
+  FaceTopologyReferenceV5,
+  FeatureId
+} from '@openzcad/shared';
 import {
+  createAngleMeasurement,
   createDistanceMeasurement,
+  createEdgeTotalMeasurement,
   createSmartMeasurement,
   measurementTargetFromSelection,
   refreshMeasurements,
-  type Measurement
+  type Measurement,
+  type MeasurementTarget
 } from '../apps/web/src/lib/measurements';
 
 /**
@@ -37,10 +45,35 @@ function bodyWith(
   };
 }
 
-function planarFace(hash: number, z: number) {
+function faceLineage(
+  lineageName: string,
+  currentHash: number
+): FaceTopologyReferenceV5 {
+  return {
+    kind: 'face',
+    producingFeatureId: 'feature-1' as FeatureId,
+    lineageName,
+    currentHash,
+    witnessVersion: 1,
+    witness: {
+      surfaceType: 'plane',
+      perimeter: 40,
+      centroid: [5, 5, 0],
+      analytic: { kind: 'none' },
+      closure: { u: 'open', v: 'open' }
+    }
+  };
+}
+
+function planarFace(
+  hash: number,
+  z: number,
+  reference?: FaceTopologyReferenceV5
+) {
   return {
     topologyId: `face:${hash}`,
     hash,
+    ...(reference ? { reference } : {}),
     triangleStart: 0,
     triangleCount: 2,
     geometry: {
@@ -120,6 +153,47 @@ describe('a raw surface pick across a rebuild', () => {
     expect(refreshed[0]!.reason).toBe('not-found');
     // The last known value is kept so a reader can still see what it WAS.
     expect(refreshed[0]!.result.value).toBeCloseTo(10, 9);
+  });
+
+  it('clears an obsolete resolution reason when only lineage still resolves', () => {
+    const topLineage = faceLineage('top', 21);
+    const body = bodyWith([planarFace(21, 10, topLineage), planarFace(22, 0)]);
+    const first = measurementTargetFromSelection(
+      body,
+      {
+        bodyId: BODY_ID,
+        kind: 'face',
+        hash: 21,
+        reference: topLineage
+      },
+      { x: 2, y: 3, z: 10 },
+      'distance'
+    )!;
+    const second = measurementTargetFromSelection(
+      body,
+      { bodyId: BODY_ID, kind: 'face', hash: 22 },
+      { x: 2, y: 3, z: 0 },
+      'distance'
+    )!;
+    const measured = createDistanceMeasurement(first, second, 1, 'mm')!;
+    const receipt: Measurement = {
+      ...measured,
+      status: 'unresolved',
+      reason: 'body-missing',
+      annotation: undefined
+    };
+    const moved = bodyWith([
+      planarFace(31, 25, faceLineage('top', 31)),
+      planarFace(22, 0)
+    ]);
+
+    const stale = refreshMeasurements([receipt], [moved], 1, { force: true });
+    expect(stale[0]!.status).toBe('stale');
+    expect(stale[0]!.reason).toBeUndefined();
+
+    const again = refreshMeasurements(stale, [moved], 1, { force: true });
+    expect(again).toBe(stale);
+    expect(again[0]).toBe(stale[0]);
   });
 });
 
@@ -215,5 +289,190 @@ describe('the refresh short-circuit', () => {
     )!;
     const list: Measurement[] = [measured];
     expect(refreshMeasurements(list, [body], 1)).toBe(list);
+  });
+
+  it('can recover a persisted transient failure at the same revision', () => {
+    const body = bodyWith([], [straightEdge(11, 10)]);
+    const measured = createSmartMeasurement(
+      body,
+      { bodyId: BODY_ID, kind: 'edge', hash: 11 },
+      undefined,
+      1,
+      'mm'
+    )!;
+    const receipt: Measurement = {
+      ...measured,
+      status: 'unresolved',
+      reason: 'body-missing',
+      annotation: undefined
+    };
+    const list = [receipt];
+
+    // Ordinary same-revision refreshes retain their identity fast path.
+    expect(refreshMeasurements(list, [body], 1)).toBe(list);
+
+    // Applying persisted state is an authoritative arrival and may follow an
+    // earlier refresh against bodies that were not ready yet.
+    const recovered = refreshMeasurements(list, [body], 1, { force: true });
+    expect(recovered[0]!.status).toBe('current');
+    expect(recovered[0]!.reason).toBeUndefined();
+    expect(recovered[0]!.annotation).toBeDefined();
+  });
+});
+
+describe('malformed persisted target counts', () => {
+  it('fails an empty body row closed during a forced same-revision refresh', () => {
+    const body = bodyWith([]);
+    const measured = createSmartMeasurement(
+      body,
+      { bodyId: BODY_ID, kind: 'body' },
+      undefined,
+      1,
+      'mm'
+    )!;
+    const malformed: Measurement = { ...measured, targets: [] };
+
+    const refreshed = refreshMeasurements([malformed], [body], 1, {
+      force: true
+    });
+
+    expect(refreshed[0]).toMatchObject({
+      status: 'unresolved',
+      reason: 'not-found',
+      sourceRevision: 1,
+      targets: []
+    });
+    expect(refreshed[0]!.result).toEqual(malformed.result);
+  });
+
+  it('fails a sparse single-target row closed instead of dereferencing a hole', () => {
+    const body = bodyWith([]);
+    const measured = createSmartMeasurement(
+      body,
+      { bodyId: BODY_ID, kind: 'body' },
+      undefined,
+      1,
+      'mm'
+    )!;
+    const malformed: Measurement = {
+      ...measured,
+      targets: Array<MeasurementTarget>(1)
+    };
+
+    const refreshed = refreshMeasurements([malformed], [body], 1, {
+      force: true
+    });
+
+    expect(refreshed[0]).toMatchObject({
+      status: 'unresolved',
+      reason: 'not-found',
+      sourceRevision: 1
+    });
+  });
+
+  it.each(['distance', 'angle'] as const)(
+    'fails an incomplete %s row closed during a forced same-revision refresh',
+    (kind) => {
+      const body = bodyWith([planarFace(21, 10), planarFace(22, 0)]);
+      const first = measurementTargetFromSelection(
+        body,
+        { bodyId: BODY_ID, kind: 'face', hash: 21 },
+        kind === 'distance' ? { x: 2, y: 3, z: 10 } : undefined,
+        kind
+      )!;
+      const second = measurementTargetFromSelection(
+        body,
+        { bodyId: BODY_ID, kind: 'face', hash: 22 },
+        kind === 'distance' ? { x: 2, y: 3, z: 0 } : undefined,
+        kind
+      )!;
+      const measured =
+        kind === 'distance'
+          ? createDistanceMeasurement(first, second, 1, 'mm')!
+          : createAngleMeasurement(first, second, 1, 'mm')!;
+      const malformed: Measurement = {
+        ...measured,
+        targets: [measured.targets[0]!]
+      };
+
+      const refreshed = refreshMeasurements([malformed], [body], 1, {
+        force: true
+      });
+
+      expect(refreshed[0]).toMatchObject({
+        status: 'unresolved',
+        reason: 'not-found',
+        sourceRevision: 1
+      });
+      expect(refreshed[0]!.targets).toHaveLength(1);
+      expect(refreshed[0]!.result).toEqual(malformed.result);
+    }
+  );
+
+  it('requires at least two targets for an edge total and preserves its failure identity', () => {
+    const body = bodyWith([], [straightEdge(11, 10), straightEdge(12, 20)]);
+    const measured = createEdgeTotalMeasurement(
+      [body],
+      [
+        { bodyId: BODY_ID, kind: 'edge', hash: 11 },
+        { bodyId: BODY_ID, kind: 'edge', hash: 12 }
+      ],
+      1,
+      'mm'
+    )!;
+    const valid = refreshMeasurements([measured], [body], 1, { force: true });
+    expect(valid[0]).toMatchObject({
+      status: 'current',
+      result: { value: 30 }
+    });
+    expect(valid[0]!.targets).toHaveLength(2);
+
+    const malformed: Measurement = {
+      ...measured,
+      targets: [measured.targets[0]!]
+    };
+    const unresolved = refreshMeasurements([malformed], [body], 1, {
+      force: true
+    });
+    expect(unresolved[0]).toMatchObject({
+      status: 'unresolved',
+      reason: 'not-found',
+      sourceRevision: 1
+    });
+
+    const again = refreshMeasurements(unresolved, [body], 1, { force: true });
+    expect(again).toBe(unresolved);
+    expect(again[0]).toBe(unresolved[0]);
+  });
+});
+
+describe('topology that no longer supports its measurement kind', () => {
+  it('becomes stale without claiming that the topology is missing', () => {
+    const body = bodyWith([], [straightEdge(11, 10)]);
+    const measured = createSmartMeasurement(
+      body,
+      { bodyId: BODY_ID, kind: 'edge', hash: 11 },
+      undefined,
+      1,
+      'mm'
+    )!;
+    const receipt: Measurement = {
+      ...measured,
+      status: 'unresolved',
+      reason: 'body-missing',
+      annotation: undefined
+    };
+    const collapsed = bodyWith([], [straightEdge(11, 0)]);
+
+    const stale = refreshMeasurements([receipt], [collapsed], 1, {
+      force: true
+    });
+    expect(stale[0]).toMatchObject({ status: 'stale', sourceRevision: 1 });
+    expect(stale[0]!.reason).toBeUndefined();
+    expect(stale[0]!.result).toEqual(receipt.result);
+
+    const again = refreshMeasurements(stale, [collapsed], 1, { force: true });
+    expect(again).toBe(stale);
+    expect(again[0]).toBe(stale[0]);
   });
 });

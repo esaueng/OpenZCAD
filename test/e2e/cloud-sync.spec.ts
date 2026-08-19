@@ -602,6 +602,17 @@ test('syncs View measurements to a second device without changing the CAD docume
       .toBe(1);
     expect(api.project).toEqual(canonicalBeforeMeasurement);
 
+    // Blacksmith caught the receiving device between its stored-record apply
+    // and exact-body refresh: the row had advanced to this document revision
+    // as unresolved, then the same-revision short-circuit made that transient
+    // status permanent even after the body arrived. A persisted row is only a
+    // receipt; device B must re-derive its runtime status from its exact body.
+    api.measurement!.record.measurements[0] = {
+      ...api.measurement!.record.measurements[0]!,
+      status: 'unresolved',
+      reason: 'body-missing'
+    };
+
     await pageB.goto('/');
     await pageB
       .locator('.start-tile-open', { hasText: 'Measured Across Devices' })

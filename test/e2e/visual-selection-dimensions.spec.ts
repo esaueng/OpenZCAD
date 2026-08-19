@@ -34,9 +34,9 @@ test('round-trips diameter entry and edits a cylinder cap by total height', asyn
       );
     }, surface);
   };
-  const readWallGeometry = () =>
+  const readWallGeometry = (select = true) =>
     canvas.evaluate(
-      (element) =>
+      (element, shouldSelect) =>
         new Promise<{
           radius?: number;
           diameter?: number;
@@ -46,11 +46,23 @@ test('round-trips diameter entry and edits a cylinder cap by total height', asyn
         } | null>((resolve) => {
           element.dispatchEvent(
             new CustomEvent('openzcad:e2e-select-cylinder', {
-              detail: { surface: 'wall', resolve }
+              detail: { surface: 'wall', select: shouldSelect, resolve }
             })
           );
-        })
+        }),
+      select
     );
+  const readCylinderHeight = async () => {
+    const geometry = await readWallGeometry(false);
+    if (!geometry?.axisStart || !geometry.axisEnd) {
+      return null;
+    }
+    return Math.hypot(
+      geometry.axisEnd.x - geometry.axisStart.x,
+      geometry.axisEnd.y - geometry.axisStart.y,
+      geometry.axisEnd.z - geometry.axisStart.z
+    );
+  };
 
   await expect
     .poll(async () => (await readWallGeometry())?.diameter)
@@ -87,6 +99,10 @@ test('round-trips diameter entry and edits a cylinder cap by total height', asyn
   const totalKeypad = page.getByRole('dialog', { name: 'Total value' });
   await totalKeypad.getByRole('textbox').fill('35.7');
   await expect(valueChip).toHaveText('Total 35.7 mm');
+  // The value chip updates immediately, before the exact preview replaces the
+  // rendered body and rebuilds its handle. Prove that replacement has landed
+  // before checking that the dimension survived it.
+  await expect.poll(readCylinderHeight).toBeCloseTo(35.7, 5);
   await expect(canvas).toHaveAttribute(
     'data-e2e-offset-dimension-visible',
     'true'
@@ -98,18 +114,6 @@ test('round-trips diameter entry and edits a cylinder cap by total height', asyn
   await expect(
     page.locator('.feature-row', { hasText: 'Offset Face' })
   ).toHaveCount(0);
-  await expect
-    .poll(async () => {
-      const geometry = await readWallGeometry();
-      if (!geometry?.axisStart || !geometry.axisEnd) {
-        return null;
-      }
-      return Math.hypot(
-        geometry.axisEnd.x - geometry.axisStart.x,
-        geometry.axisEnd.y - geometry.axisStart.y,
-        geometry.axisEnd.z - geometry.axisStart.z
-      );
-    })
-    .toBeCloseTo(35.7, 5);
+  await expect.poll(readCylinderHeight).toBeCloseTo(35.7, 5);
   expect(consoleErrors).toEqual([]);
 });
