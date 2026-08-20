@@ -8,6 +8,7 @@ import {
   Expand,
   FlipHorizontal2,
   Globe,
+  Grid3x3,
   Layers,
   Move3d,
   PanelTopOpen,
@@ -46,7 +47,8 @@ export type ToolId =
   | 'fillet'
   | 'chamfer'
   | 'linear-pattern'
-  | 'circular-pattern';
+  | 'circular-pattern'
+  | 'grid-pattern';
 
 export type ToolGroup = 'solid' | 'sketch' | 'modify' | 'finish';
 
@@ -229,6 +231,12 @@ export const TOOL_META: Record<ToolId, ToolMeta> = {
     icon: icon(<RotateCw size={16} aria-hidden="true" />),
     group: 'finish',
     hint: 'Repeat a body around an axis'
+  },
+  'grid-pattern': {
+    label: 'Grid pattern',
+    icon: icon(<Grid3x3 size={16} aria-hidden="true" />),
+    group: 'finish',
+    hint: 'Repeat a body along two directions'
   }
 };
 
@@ -256,7 +264,8 @@ export const TOOL_GROUPS: { id: ToolGroup; label: string; tools: ToolId[] }[] =
         'fillet',
         'chamfer',
         'linear-pattern',
-        'circular-pattern'
+        'circular-pattern',
+        'grid-pattern'
       ]
     }
   ];
@@ -333,7 +342,9 @@ export function toolDisabledReason(
     return 'Needs a body';
   }
   if (
-    (tool === 'linear-pattern' || tool === 'circular-pattern') &&
+    (tool === 'linear-pattern' ||
+      tool === 'circular-pattern' ||
+      tool === 'grid-pattern') &&
     avail.liveBodyCount < 1
   ) {
     return 'Needs a body';
