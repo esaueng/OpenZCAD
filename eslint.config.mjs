@@ -1,6 +1,7 @@
 import js from "@eslint/js";
 import tseslint from "typescript-eslint";
 import prettier from "eslint-config-prettier";
+import reactHooks from "eslint-plugin-react-hooks";
 
 export default tseslint.config(
   {
@@ -42,6 +43,18 @@ export default tseslint.config(
       "@typescript-eslint/require-await": "off",
       "@typescript-eslint/unbound-method": "off",
       "@typescript-eslint/no-empty-object-type": "off"
+    }
+  },
+  {
+    // The web app is the only React surface (packages/viewport is
+    // deliberately React-free). rules-of-hooks violations are runtime bugs,
+    // so they fail the build; exhaustive-deps stays advisory because the
+    // viewer's imperative mount effect intentionally closes over refs.
+    files: ["apps/web/src/**/*.ts", "apps/web/src/**/*.tsx"],
+    plugins: { "react-hooks": reactHooks },
+    rules: {
+      "react-hooks/rules-of-hooks": "error",
+      "react-hooks/exhaustive-deps": "warn"
     }
   }
 );
