@@ -1,8 +1,11 @@
 import { useEffect, useRef, useState } from 'react';
-import type { BodyId, ProjectDocument } from '@openzcad/shared';
+import type { BodyId, ProjectDocument, SketchId } from '@openzcad/shared';
 import type { CommandManager } from '@openzcad/command-system';
 import { mark, measure, timed } from '../lib/perf';
-import type { MeshQualityReport } from '@openzcad/kernel-adapter/exact';
+import type {
+  MeshQualityReport,
+  SketchSolveOutcome
+} from '@openzcad/kernel-adapter/exact';
 import type {
   GeometryExportFormat,
   GeometryExportResult,
@@ -62,6 +65,14 @@ export interface GeometryWorkerApi {
     bodyIds: BodyId[],
     deflection: number
   ): Promise<MeshQualityReport>;
+  /**
+   * Solves one sketch's persisted constraints via the kernel's GCS and
+   * returns solved geometry plus classification and DOF diagnostics.
+   */
+  solveSketch(
+    document: ProjectDocument,
+    sketchId: SketchId
+  ): Promise<SketchSolveOutcome>;
   /** Forces the next `sync` to post even if the version has not changed. */
   invalidate(): void;
 }
@@ -82,6 +93,9 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
   );
   const meshQualityRequests = useRef(
     new Map<string, PendingRequest<MeshQualityReport>>()
+  );
+  const solveSketchRequests = useRef(
+    new Map<string, PendingRequest<SketchSolveOutcome>>()
   );
   const syncRequests = useRef(new Map<string, PendingRequest<DerivedState>>());
   const lastSyncedKey = useRef<string | null>(null);
@@ -119,6 +133,10 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
         request.reject(error);
       }
       meshQualityRequests.current.clear();
+      for (const request of solveSketchRequests.current.values()) {
+        request.reject(error);
+      }
+      solveSketchRequests.current.clear();
       for (const request of syncRequests.current.values()) {
         request.reject(error);
       }
@@ -210,6 +228,19 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
           meshQualityRequests.current.delete(event.data.requestId);
           if (event.data.ok) {
             pending.resolve(event.data.report);
+          } else {
+            pending.reject(new Error(event.data.error));
+          }
+          return;
+        }
+        if (event.data.type === 'solve-sketch') {
+          const pending = solveSketchRequests.current.get(event.data.requestId);
+          if (!pending) {
+            return;
+          }
+          solveSketchRequests.current.delete(event.data.requestId);
+          if (event.data.ok) {
+            pending.resolve(event.data.outcome);
           } else {
             pending.reject(new Error(event.data.error));
           }
@@ -334,6 +365,22 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
           document,
           bodyIds,
           deflection
+        });
+      });
+    },
+    solveSketch(document, sketchId) {
+      const worker = workerRef.current;
+      if (!worker) {
+        return Promise.reject(new Error('Geometry worker is unavailable.'));
+      }
+      const requestId = crypto.randomUUID();
+      return new Promise((resolve, reject) => {
+        solveSketchRequests.current.set(requestId, { resolve, reject });
+        worker.postMessage({
+          type: 'solve-sketch',
+          requestId,
+          document,
+          sketchId
         });
       });
     },

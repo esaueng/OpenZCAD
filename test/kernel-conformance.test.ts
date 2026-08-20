@@ -1,13 +1,16 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
   addPrimitiveFeature,
+  addSketchConstraint,
   addSketchFeature,
   booleanBodies,
   createProjectDocument,
   extrudeSketch,
+  findSketch,
   getLatestBodyId,
   getLatestSketchId,
   revolveSketch,
+  setParameter,
   transformBody,
   type PrimitiveInput
 } from '@openzcad/document-core';
@@ -282,5 +285,140 @@ describe('exact kernel conventions', { timeout: 30_000 }, () => {
     // Six outer faces plus the five cavity walls: the cavity is open on +Z.
     expect(measured.faceCount).toBe(11);
     expectBounds(measured, [0, 0, 0], [40, 30, 20]);
+  });
+
+  it('solves persisted sketch constraints through the GCS', async () => {
+    let document = createProjectDocument(
+      'GCS Solve',
+      toUserId('user_conformance')
+    );
+    document = setParameter(document, { name: 'len', expression: '20' });
+    const { document: withSketch, sketchId } = addSketchFeature(document, {
+      name: 'Profile',
+      planeRef: { type: 'canonical', plane: 'XY', offset: 0 },
+      objects: [
+        { objectKind: 'line', x1: 0, y1: 0, x2: 9, y2: 2 },
+        { objectKind: 'line', x1: 0, y1: 5, x2: 11, y2: 9 },
+        { objectKind: 'circle', radius: 4, centerX: 30, centerY: 0 }
+      ]
+    });
+    const sketch = findSketch(withSketch, sketchId)!;
+    const [lineA, lineB, circle] = sketch.objectIds;
+
+    let constrained = addSketchConstraint(withSketch, {
+      sketchId,
+      constraint: { constraintKind: 'horizontal', objectId: lineA! }
+    }).document;
+    constrained = addSketchConstraint(constrained, {
+      sketchId,
+      constraint: { constraintKind: 'parallel', a: lineA!, b: lineB! }
+    }).document;
+    constrained = addSketchConstraint(constrained, {
+      sketchId,
+      constraint: {
+        constraintKind: 'distance',
+        a: { objectId: lineA!, point: 'start' },
+        b: { objectId: lineA!, point: 'end' },
+        // A driving dimension through a named parameter, like every other
+        // sketch dimension.
+        value: 'len'
+      }
+    }).document;
+    constrained = addSketchConstraint(constrained, {
+      sketchId,
+      constraint: { constraintKind: 'radius', objectId: circle!, value: 7 }
+    }).document;
+
+    const outcome = await exact.solveSketch(constrained, sketchId);
+    expect(outcome.converged).toBe(true);
+    expect(outcome.rolledBack).toBe(false);
+    expect(outcome.maxResidual).toBeLessThan(1e-8);
+    // Positions are still free, so the sketch cannot classify as fully
+    // solved — but it must not read as redundant or unsatisfied either.
+    expect(['solved', 'underConstrained']).toContain(outcome.classification);
+    expect(outcome.dof.dof).toBeGreaterThan(0);
+    expect(outcome.constraintResiduals).toHaveLength(4);
+    for (const residual of outcome.constraintResiduals) {
+      expect(residual.maxResidual).toBeLessThan(1e-8);
+    }
+
+    const solvedLineA = outcome.objects.find(
+      (object) => object.objectId === lineA
+    );
+    const solvedLineB = outcome.objects.find(
+      (object) => object.objectId === lineB
+    );
+    const solvedCircle = outcome.objects.find(
+      (object) => object.objectId === circle
+    );
+    if (
+      solvedLineA?.kind !== 'line' ||
+      solvedLineB?.kind !== 'line' ||
+      solvedCircle?.kind !== 'circle'
+    ) {
+      throw new Error('Solved geometry lost an object.');
+    }
+    // Horizontal: the line's endpoints share a Y.
+    expect(Math.abs(solvedLineA.y2 - solvedLineA.y1)).toBeLessThan(1e-8);
+    // Driven length via the parameter.
+    expect(
+      Math.hypot(
+        solvedLineA.x2 - solvedLineA.x1,
+        solvedLineA.y2 - solvedLineA.y1
+      )
+    ).toBeCloseTo(20, 8);
+    // Parallel: cross product of directions vanishes.
+    expect(
+      Math.abs(
+        (solvedLineA.x2 - solvedLineA.x1) * (solvedLineB.y2 - solvedLineB.y1) -
+          (solvedLineA.y2 - solvedLineA.y1) * (solvedLineB.x2 - solvedLineB.x1)
+      )
+    ).toBeLessThan(1e-6);
+    expect(solvedCircle.radius).toBeCloseTo(7, 8);
+  });
+
+  it('rolls back a sketch whose driving dimensions conflict', async () => {
+    const base = createProjectDocument(
+      'GCS Conflict',
+      toUserId('user_conformance')
+    );
+    const { document: withSketch, sketchId } = addSketchFeature(base, {
+      name: 'Profile',
+      planeRef: { type: 'canonical', plane: 'XY', offset: 0 },
+      objects: [{ objectKind: 'line', x1: 0, y1: 0, x2: 10, y2: 0 }]
+    });
+    const [line] = findSketch(withSketch, sketchId)!.objectIds;
+    let conflicted = addSketchConstraint(withSketch, {
+      sketchId,
+      constraint: {
+        constraintKind: 'distance',
+        a: { objectId: line!, point: 'start' },
+        b: { objectId: line!, point: 'end' },
+        value: 10
+      }
+    }).document;
+    conflicted = addSketchConstraint(conflicted, {
+      sketchId,
+      constraint: {
+        constraintKind: 'distance',
+        a: { objectId: line!, point: 'start' },
+        b: { objectId: line!, point: 'end' },
+        value: 20
+      }
+    }).document;
+
+    const outcome = await exact.solveSketch(conflicted, sketchId);
+    // The same two points cannot be both 10 and 20 apart. The kernel's
+    // detailed solve is transactional, so the input geometry survives.
+    expect(outcome.converged).toBe(false);
+    expect(outcome.rolledBack).toBe(true);
+    const restored = outcome.objects.find(
+      (object) => object.objectId === line
+    );
+    if (restored?.kind !== 'line') {
+      throw new Error('Rolled-back geometry lost the line.');
+    }
+    expect(restored.x1).toBeCloseTo(0, 8);
+    expect(restored.x2).toBeCloseTo(10, 8);
   });
 });
