@@ -30,6 +30,25 @@ export interface ExportDialogBody {
 }
 
 /**
+ * Coarse stages of a running export or printability check, narrated in the
+ * dialog. The caller maps the geometry worker's request states onto these;
+ * `saving` is the caller's own stage between receiving the payload and the
+ * file being written.
+ */
+export type ExportProgress =
+  | 'preparing'
+  | 'loading-kernel'
+  | 'building'
+  | 'saving';
+
+const PROGRESS_LABELS: Record<ExportProgress, string> = {
+  preparing: 'Preparing…',
+  'loading-kernel': 'Loading the geometry kernel…',
+  building: 'Building exact geometry…',
+  saving: 'Writing the file…'
+};
+
+/**
  * Chordal deviation in millimetres, the space every slicer works in. The
  * standard value matches what exports have always used; draft and fine bracket
  * it by the spread slicers themselves default across.
@@ -83,9 +102,23 @@ export interface ExportDialogProps {
   /** Bodies in the export, for naming printability rows. */
   bodies: ExportDialogBody[];
   onClose(): void;
-  /** Resolves when the file is saved (or the save dialog is cancelled). */
-  onExport(format: MeshExportDialogFormat, deflection: number): Promise<void>;
-  onCheckQuality(deflection: number): Promise<MeshQualityReport>;
+  /**
+   * Resolves when the file is saved (or the save dialog is cancelled).
+   * Aborting the signal must abandon the export — reject with an
+   * `AbortError`-named error or resolve without saving anything.
+   */
+  onExport(
+    format: MeshExportDialogFormat,
+    deflection: number,
+    options: {
+      signal: AbortSignal;
+      onProgress(progress: ExportProgress): void;
+    }
+  ): Promise<void>;
+  onCheckQuality(
+    deflection: number,
+    options?: { onProgress?(progress: ExportProgress): void }
+  ): Promise<MeshQualityReport>;
 }
 
 /**
@@ -107,6 +140,8 @@ export function ExportDialog({
   const [preset, setPreset] = useState<QualityPresetId>('standard');
   const [customDeflection, setCustomDeflection] = useState('0.05');
   const [phase, setPhase] = useState<'idle' | 'checking' | 'exporting'>('idle');
+  const [progress, setProgress] = useState<ExportProgress | null>(null);
+  const exportAbortRef = useRef<AbortController | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [report, setReport] = useState<{
     deflection: number;
@@ -133,9 +168,12 @@ export function ExportDialog({
       return;
     }
     setPhase('checking');
+    setProgress('preparing');
     setError(null);
     try {
-      const result = await onCheckQuality(deflection);
+      const result = await onCheckQuality(deflection, {
+        onProgress: setProgress
+      });
       setReport({ deflection, result });
     } catch (checkError) {
       setReport(null);
@@ -146,6 +184,7 @@ export function ExportDialog({
       );
     } finally {
       setPhase('idle');
+      setProgress(null);
     }
   }
 
@@ -153,19 +192,41 @@ export function ExportDialog({
     if (deflection === null || phase !== 'idle') {
       return;
     }
+    const controller = new AbortController();
+    exportAbortRef.current = controller;
     setPhase('exporting');
+    setProgress('preparing');
     setError(null);
     try {
-      await onExport(format, deflection);
+      await onExport(format, deflection, {
+        signal: controller.signal,
+        onProgress: setProgress
+      });
       onClose();
     } catch (exportError) {
+      if (controller.signal.aborted) {
+        return; // Cancelled from this dialog; it is already closing.
+      }
       setPhase('idle');
+      setProgress(null);
       setError(
         exportError instanceof Error
           ? exportError.message
           : 'The export failed.'
       );
+    } finally {
+      exportAbortRef.current = null;
     }
+  }
+
+  /**
+   * Closing while an export runs must also stop it: without the abort, the
+   * work kept going and a save-file prompt appeared long after the dialog
+   * was gone.
+   */
+  function cancelAndClose() {
+    exportAbortRef.current?.abort();
+    onClose();
   }
 
   return (
@@ -179,7 +240,7 @@ export function ExportDialog({
         onKeyDown={(event) => {
           if (event.key === 'Escape') {
             event.stopPropagation();
-            onClose();
+            cancelAndClose();
           }
         }}
       >
@@ -302,9 +363,16 @@ export function ExportDialog({
           </p>
         ) : null}
 
+        {phase !== 'idle' && progress ? (
+          <p className="export-dialog-progress" role="status">
+            <LoaderCircle size={13} className="spinner" aria-hidden="true" />
+            {PROGRESS_LABELS[progress]}
+          </p>
+        ) : null}
+
         <div className="export-dialog-actions">
-          <button type="button" className="secondary" onClick={onClose}>
-            Cancel
+          <button type="button" className="secondary" onClick={cancelAndClose}>
+            {phase === 'exporting' ? 'Cancel export' : 'Cancel'}
           </button>
           <button
             type="button"

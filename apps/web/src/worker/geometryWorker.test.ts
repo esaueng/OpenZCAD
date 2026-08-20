@@ -276,6 +276,58 @@ describe('geometry worker rebuild coordination', () => {
     });
   });
 
+  it('skips a queued export cancelled before it started', async () => {
+    const gate = deferred<Uint8Array>();
+    const exportMesh = vi
+      .fn<() => Promise<Uint8Array>>()
+      .mockImplementationOnce(() => gate.promise)
+      .mockImplementation(async () => new Uint8Array([1]));
+    const { scope } = await installWorker(async () => derived('unused'), {
+      exportMesh
+    });
+    const document = addPrimitiveFeature(
+      createProjectDocument('Cancelled Export', toUserId('user')),
+      {
+        name: 'Box',
+        primitiveKind: 'box',
+        dimensions: { width: 10, height: 20, depth: 30 }
+      }
+    );
+    const exportRequest = (requestId: string) =>
+      ({
+        type: 'export',
+        requestId,
+        document,
+        bodyIds: document.bodyOrder,
+        format: '3mf',
+        deflection: 0.05
+      }) as const;
+    post(scope, exportRequest('mesh-a'));
+    post(scope, exportRequest('mesh-b'));
+    // The cancel lands while mesh-b is still queued behind the running job.
+    post(scope, { type: 'cancel', requestId: 'mesh-b' });
+    gate.resolve(new Uint8Array([9]));
+
+    await vi.waitFor(() =>
+      expect(scope.postMessage).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: 'export',
+          ok: true,
+          requestId: 'mesh-a'
+        }),
+        expect.anything()
+      )
+    );
+    // Let the queue surface (and skip) the cancelled job.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(exportMesh).toHaveBeenCalledTimes(1);
+    const meshBMessages = scope.postMessage.mock.calls.filter(
+      ([message]) => (message as { requestId?: string }).requestId === 'mesh-b'
+    );
+    expect(meshBMessages).toHaveLength(0);
+  });
+
   it('answers solve-sketch requests with the adapter outcome', async () => {
     const outcome = {
       classification: 'solved',

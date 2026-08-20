@@ -60,6 +60,16 @@ export type GeometryWorkerRequest =
       requestId: string;
       document: ProjectDocument;
       sketchId: SketchId;
+    }
+  | {
+      /**
+       * Abandon a caller-owned request. A job still queued is skipped
+       * without executing or posting anything; a job already running
+       * completes (wasm cannot be interrupted) and the main thread discards
+       * its result. Never applies to broadcasts, which have no request id.
+       */
+      type: 'cancel';
+      requestId: string;
     };
 
 export type GeometryWorkerPhase =
@@ -221,11 +231,24 @@ const rebuildCache = new ExactRebuildCache<ProjectDocument['derived']>({
 });
 const broadcastGate = new LatestBroadcastGate();
 
+/** Every request that carries work; `cancel` is handled before the queue. */
+type GeometryWorkerWorkRequest = Exclude<
+  GeometryWorkerRequest,
+  { type: 'cancel' }
+>;
+
 interface GeometryWorkerJob {
-  request: GeometryWorkerRequest;
+  request: GeometryWorkerWorkRequest;
   requestId?: string;
   broadcastToken: number | null;
 }
+
+/**
+ * Requests cancelled while still queued. Entries are consumed when the
+ * skipped job surfaces, or cleared when a cancel raced a job that was
+ * already running by the time it arrived.
+ */
+const cancelledRequests = new Set<string>();
 
 function isGeometryEmpty(document: ProjectDocument): boolean {
   return document.featureOrder.length === 0 && document.bodyOrder.length === 0;
@@ -242,7 +265,7 @@ function emptyDerived(document: ProjectDocument): ProjectDocument['derived'] {
 
 function stateFor(
   phase: GeometryWorkerPhase,
-  request: GeometryWorkerRequest,
+  request: GeometryWorkerWorkRequest,
   options: Pick<GeometryWorkerState, 'stale' | 'error'>
 ): GeometryWorkerState {
   return {
@@ -264,6 +287,9 @@ function errorMessage(error: unknown): string {
 const DEFAULT_EXPORT_DEFLECTION = 0.08;
 
 async function execute(job: GeometryWorkerJob): Promise<void> {
+  if (job.requestId && cancelledRequests.delete(job.requestId)) {
+    return; // Cancelled while queued; the caller already dropped its promise.
+  }
   const request = job.request;
   const document = request.document;
   const post = (message: GeometryWorkerResult, transfer?: Transferable[]) => {
@@ -440,6 +466,12 @@ async function execute(job: GeometryWorkerJob): Promise<void> {
       post(result);
     }
     post(stateFor('failed', request, { stale: true, error: message }));
+  } finally {
+    // A cancel that raced a job already running leaves its entry behind;
+    // sweep it so the set cannot grow across a long session.
+    if (job.requestId) {
+      cancelledRequests.delete(job.requestId);
+    }
   }
 }
 
@@ -447,6 +479,10 @@ const queue = new GeometryWorkerQueue<GeometryWorkerJob>(execute);
 
 self.onmessage = (event: MessageEvent<GeometryWorkerRequest>) => {
   const request = event.data;
+  if (request.type === 'cancel') {
+    cancelledRequests.add(request.requestId);
+    return;
+  }
   const isBroadcast = request.type === 'sync' && !request.requestId;
   queue.enqueue({
     request,
