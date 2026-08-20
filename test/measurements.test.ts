@@ -53,7 +53,7 @@ function measuredBody(): BodyRepresentation {
     bodyId: 'body-1' as BodyRepresentation['bodyId'],
     name: 'Bracket',
     source: 'primitive',
-    mesh: { kind: 'mesh', vertices: [], indices: [] },
+    mesh: { kind: 'mesh', vertices: Float32Array.from([]), indices: Uint32Array.from([]) },
     faceCount: 2,
     color: '#fff',
     exportableStep: true,

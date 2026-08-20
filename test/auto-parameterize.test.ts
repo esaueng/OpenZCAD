@@ -209,7 +209,7 @@ describe('assistant auto-parameterization', () => {
           bodyId,
           name: 'Imported Tube',
           source: 'imported-step',
-          mesh: { kind: 'mesh', vertices: [], indices: [] },
+          mesh: { kind: 'mesh', vertices: new Float32Array(), indices: new Uint32Array() },
           faceCount: 1,
           color: '#fff',
           exportableStep: true,

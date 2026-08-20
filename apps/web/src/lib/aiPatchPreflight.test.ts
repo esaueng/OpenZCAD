@@ -44,7 +44,7 @@ function exactDerived(candidate: ProjectDocument): ProjectDocument['derived'] {
         color: '#fff',
         consumed: false,
         exportableStep: true,
-        mesh: { kind: 'mesh', vertices: [], indices: [] },
+        mesh: { kind: 'mesh', vertices: new Float32Array(), indices: new Uint32Array() },
         faceCount: 6,
         volume: 6000,
         bbox: {
