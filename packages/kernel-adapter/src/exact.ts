@@ -203,6 +203,17 @@ import {
   resolveFaceAttachment
 } from './face-attachment';
 import {
+  solveSketchWithGcs,
+  type ResolvedSketchObject,
+  type SketchSolveOutcome
+} from './gcs-sketch';
+
+export type {
+  SketchDofSummary,
+  SketchSolveOutcome,
+  SolvedSketchObject
+} from './gcs-sketch';
+import {
   classifyImportedSolid,
   importedStepDroppedSolidWarning,
   importedStepNoSolidError,
@@ -321,6 +332,16 @@ export interface ExactKernelAdapter {
     bodyIds: BodyId[],
     deflection: number
   ): Promise<MeshQualityReport>;
+  /**
+   * Solves one sketch's persisted constraints with the kernel's GCS and
+   * returns the solved geometry plus classification, DOF, and per-constraint
+   * residuals. Read-only: writing solved positions back into the document is
+   * the caller's command to make.
+   */
+  solveSketch(
+    document: ProjectDocument,
+    sketchId: SketchId
+  ): Promise<SketchSolveOutcome>;
   inspectStep(data: string | ArrayBuffer): Promise<{
     solid: boolean;
     valid: boolean;
@@ -3650,6 +3671,76 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
           bodies.length > 0 && bodies.every((body) => body.watertight),
         bodies
       };
+    } finally {
+      kernel.free();
+    }
+  }
+
+  // Synchronous under the hood, but async like every adapter method so the
+  // worker boundary and a future off-thread solver need no signature change.
+  async solveSketch(
+    document: ProjectDocument,
+    sketchId: SketchId
+  ): Promise<SketchSolveOutcome> {
+    const sketch = findSketch(document, sketchId);
+    if (!sketch) {
+      throw new Error(`Sketch ${sketchId} not found.`);
+    }
+    const { scope, errors } = getParameterScope(document);
+    if (errors.length > 0) {
+      throw new Error(`Parameters failed to evaluate: ${errors.join('; ')}`);
+    }
+    const objects: ResolvedSketchObject[] = [];
+    for (const objectId of sketch.objectIds) {
+      const node = document.nodes[objectId];
+      if (!node || node.kind !== 'sketch-object') {
+        continue;
+      }
+      const data = node.data;
+      // Rectangles, polygons, and text are not solvable geometry in v1;
+      // document validation refuses constraints that reference them, so
+      // skipping them here cannot orphan a constraint.
+      if (data.objectKind === 'line') {
+        objects.push({
+          objectId,
+          kind: 'line',
+          x1: resolveParamValue(data.x1, scope, 'x1'),
+          y1: resolveParamValue(data.y1, scope, 'y1'),
+          x2: resolveParamValue(data.x2, scope, 'x2'),
+          y2: resolveParamValue(data.y2, scope, 'y2')
+        });
+      } else if (data.objectKind === 'circle') {
+        objects.push({
+          objectId,
+          kind: 'circle',
+          centerX: resolveParamValue(data.centerX, scope, 'centerX'),
+          centerY: resolveParamValue(data.centerY, scope, 'centerY'),
+          radius: resolveParamValue(data.radius, scope, 'radius')
+        });
+      } else if (data.objectKind === 'arc') {
+        objects.push({
+          objectId,
+          kind: 'arc',
+          centerX: resolveParamValue(data.centerX, scope, 'centerX'),
+          centerY: resolveParamValue(data.centerY, scope, 'centerY'),
+          radius: resolveParamValue(data.radius, scope, 'radius'),
+          startAngleDeg: resolveParamValue(
+            data.startAngleDeg,
+            scope,
+            'startAngleDeg'
+          ),
+          endAngleDeg: resolveParamValue(data.endAngleDeg, scope, 'endAngleDeg')
+        });
+      }
+    }
+    const kernel = new RemusKernel();
+    try {
+      return solveSketchWithGcs(
+        kernel,
+        objects,
+        sketch.constraints ?? [],
+        (value, label) => resolveParamValue(value, scope, label)
+      );
     } finally {
       kernel.free();
     }
