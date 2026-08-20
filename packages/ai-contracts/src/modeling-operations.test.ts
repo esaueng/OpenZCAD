@@ -124,7 +124,7 @@ describe('AI deterministic modeling operation contracts', () => {
       bodyId,
       name: 'Source',
       source: 'primitive',
-      mesh: { kind: 'mesh', vertices: [], indices: [] },
+      mesh: { kind: 'mesh', vertices: Float32Array.from([]), indices: Uint32Array.from([]) },
       faceCount: 1,
       color: '#888888',
       exportableStep: true,

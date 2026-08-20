@@ -2065,8 +2065,8 @@ export class OcctStepKernelAdapter {
       source: feature?.featureKind ?? 'primitive',
       mesh: {
         kind: 'mesh',
-        vertices: Array.from(mesh.positions),
-        indices: Array.from(mesh.indices)
+        vertices: Float32Array.from(mesh.positions),
+        indices: Uint32Array.from(mesh.indices)
       },
       faceCount: faces.length,
       color:

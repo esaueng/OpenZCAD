@@ -103,7 +103,7 @@ function projectedChordError(
 }
 
 function circularMeshRing(
-  vertices: number[],
+  vertices: ArrayLike<number>,
   radius: number,
   z: number
 ): number[] {
@@ -4935,7 +4935,7 @@ describe('exact kernel adapter', { timeout: 30_000 }, () => {
       };
     };
     const watertight = (body: {
-      mesh: { vertices: number[]; indices: number[] };
+      mesh: { vertices: ArrayLike<number>; indices: ArrayLike<number> };
     }) =>
       isClosedConsistentlyOrientedMesh(
         inspectTriangleMeshClosure(body.mesh.vertices, body.mesh.indices)

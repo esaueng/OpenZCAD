@@ -164,7 +164,7 @@ describe('through createAngleMeasurement', () => {
       bodyId: BODY_ID,
       name: 'Wedge',
       source: 'primitive',
-      mesh: { kind: 'mesh', vertices: [], indices: [] },
+      mesh: { kind: 'mesh', vertices: Float32Array.from([]), indices: Uint32Array.from([]) },
       faceCount: 2,
       color: '#fff',
       exportableStep: true,

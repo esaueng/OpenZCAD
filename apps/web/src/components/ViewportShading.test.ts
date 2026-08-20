@@ -52,8 +52,8 @@ describe('CAD viewport shading', () => {
   it('splits normals across hard face boundaries', () => {
     const geometry = renderedGeometry({
       kind: 'mesh',
-      vertices: [0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1],
-      indices: [0, 1, 2, 0, 3, 1]
+      vertices: Float32Array.from([0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1]),
+      indices: Uint32Array.from([0, 1, 2, 0, 3, 1])
     });
     const normals = geometry.getAttribute('normal');
     const renderedIndices = Array.from(geometry.getIndex()!.array);
@@ -72,7 +72,7 @@ describe('CAD viewport shading', () => {
     const angle = THREE.MathUtils.degToRad(20);
     const geometry = renderedGeometry({
       kind: 'mesh',
-      vertices: [
+      vertices: Float32Array.from([
         0,
         0,
         0,
@@ -85,8 +85,8 @@ describe('CAD viewport shading', () => {
         0,
         Math.cos(angle),
         Math.sin(angle)
-      ],
-      indices: [0, 1, 2, 0, 1, 3]
+      ]),
+      indices: Uint32Array.from([0, 1, 2, 0, 1, 3])
     });
     const normals = geometry.getAttribute('normal');
     const renderedIndices = Array.from(geometry.getIndex()!.array);
@@ -111,7 +111,7 @@ describe('CAD viewport shading', () => {
     const angle = THREE.MathUtils.degToRad(20);
     const mesh: MeshGeometry = {
       kind: 'mesh',
-      vertices: [
+      vertices: Float32Array.from([
         0,
         0,
         0,
@@ -124,8 +124,8 @@ describe('CAD viewport shading', () => {
         0,
         Math.cos(angle),
         Math.sin(angle)
-      ],
-      indices: [0, 1, 2, 0, 1, 3]
+      ]),
+      indices: Uint32Array.from([0, 1, 2, 0, 1, 3])
     };
     const geometry = renderedGeometry(mesh, {
       faces: [
@@ -150,7 +150,7 @@ describe('CAD viewport shading', () => {
   });
 
   it('uses a classic technical material for CAD solids', () => {
-    const body = bodyWithMesh({ kind: 'mesh', vertices: [], indices: [] });
+    const body = bodyWithMesh({ kind: 'mesh', vertices: Float32Array.from([]), indices: Uint32Array.from([]) });
     const material = createBodyMaterial(body);
     const object = createObjectForBody(body) as THREE.Mesh;
 
@@ -201,8 +201,8 @@ describe('CAD viewport shading', () => {
     const object = createObjectForBody(
       bodyWithMesh({
         kind: 'mesh',
-        vertices: [0, 0, 0, 1, 0, 0, 0, 1, 0],
-        indices: [0, 1, 2]
+        vertices: Float32Array.from([0, 0, 0, 1, 0, 0, 0, 1, 0]),
+        indices: Uint32Array.from([0, 1, 2])
       })
     );
     const edgeOverlay = object.children[0];
@@ -236,8 +236,8 @@ describe('CAD viewport shading', () => {
       bodyWithMesh(
         {
           kind: 'mesh',
-          vertices: [0, 0, 0, 1, 0, 0, 0, 1, 0],
-          indices: [0, 2, 1]
+          vertices: Float32Array.from([0, 0, 0, 1, 0, 0, 0, 1, 0]),
+          indices: Uint32Array.from([0, 2, 1])
         },
         undefined,
         'imported-step'
@@ -251,8 +251,8 @@ describe('CAD viewport shading', () => {
     const object = createObjectForBody(
       bodyWithMesh({
         kind: 'mesh',
-        vertices: [0, 0, 0, 1, 0, 0, 0, 1, 0],
-        indices: [0, 1, 2]
+        vertices: Float32Array.from([0, 0, 0, 1, 0, 0, 0, 1, 0]),
+        indices: Uint32Array.from([0, 1, 2])
       })
     );
     const group = new THREE.Group();

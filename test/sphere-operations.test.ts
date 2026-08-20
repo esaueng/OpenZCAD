@@ -61,7 +61,7 @@ describe('a sphere under boolean and offset', () => {
   const SPHERE = (4 / 3) * Math.PI * SPHERE_R ** 3;
 
   /** Edges used by other than exactly two triangles — 0 iff watertight. */
-  const openEdgeCount = (mesh: { indices: number[] }) => {
+  const openEdgeCount = (mesh: { indices: ArrayLike<number> }) => {
     const counts = new Map<string, number>();
     for (let i = 0; i < mesh.indices.length; i += 3) {
       const tri = [

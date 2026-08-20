@@ -24,7 +24,7 @@ function quantize(value: number): number {
 }
 
 /** Edge-use census of an indexed triangle mesh (flat vertex/index arrays). */
-export function meshEdgeUse(vertices: number[], indices: number[]): EdgeUseReport {
+export function meshEdgeUse(vertices: ArrayLike<number>, indices: ArrayLike<number>): EdgeUseReport {
   const keyOf = (index: number): string => {
     const base = index * 3;
     return `${quantize(vertices[base] ?? 0)},${quantize(vertices[base + 1] ?? 0)},${quantize(vertices[base + 2] ?? 0)}`;

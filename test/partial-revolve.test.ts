@@ -62,8 +62,8 @@ function partialRevolveVolume(angleDeg: number, scale: number): number {
  * boundary edges is being counted the same way here.
  */
 function eulerCharacteristic(mesh: {
-  vertices: number[];
-  indices: number[];
+  vertices: ArrayLike<number>;
+  indices: ArrayLike<number>;
 }): number {
   const bounds = [
     Infinity,
@@ -208,8 +208,8 @@ function expectSoundSolid(
  * chord error, so it is used for the SIGN only.
  */
 function meshSignedVolume(mesh: {
-  vertices: number[];
-  indices: number[];
+  vertices: ArrayLike<number>;
+  indices: ArrayLike<number>;
 }): number {
   let total = 0;
   const at = (index: number, axis: number): number =>

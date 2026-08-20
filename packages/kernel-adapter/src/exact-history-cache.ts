@@ -210,7 +210,7 @@ export interface MeasuredBodyCacheEntry {
 
 /** Approximate retained bytes of one measurement's dominant buffers. */
 export function measuredShapeBytes(measured: MeasuredShape): number {
-  return measured.vertices.length * 8 + measured.indices.length * 4;
+  return measured.vertices.byteLength + measured.indices.byteLength;
 }
 
 /** Telemetry for tests and tuning; not part of the derived state. */

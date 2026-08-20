@@ -2502,11 +2502,10 @@ export function ModelViewer({
       for (let offset = 0; offset < face.triangleCount; offset += 1) {
         const triangle = face.triangleStart + offset;
         const first = triangle * 3;
-        const points = body.mesh.indices
-          .slice(first, first + 3)
-          .map((index) =>
-            new THREE.Vector3().fromArray(body.mesh.vertices, index * 3)
-          );
+        const points = Array.from(
+          body.mesh.indices.subarray(first, first + 3),
+          (index) => new THREE.Vector3().fromArray(body.mesh.vertices, index * 3)
+        );
         const candidateNormal = normalForTriangle(body, triangle);
         if (points.length !== 3 || !candidateNormal) {
           continue;
@@ -7235,12 +7234,15 @@ export function ModelViewer({
       ghostGeometry = new THREE.BufferGeometry();
       ghostGeometry.setAttribute(
         'position',
-        new THREE.Float32BufferAttribute(body.mesh.vertices, 3)
+        new THREE.BufferAttribute(body.mesh.vertices, 3)
       );
       ghostGeometry.setIndex(
-        body.mesh.indices.slice(
-          face.triangleStart * 3,
-          (face.triangleStart + face.triangleCount) * 3
+        new THREE.BufferAttribute(
+          body.mesh.indices.slice(
+            face.triangleStart * 3,
+            (face.triangleStart + face.triangleCount) * 3
+          ),
+          1
         )
       );
     }

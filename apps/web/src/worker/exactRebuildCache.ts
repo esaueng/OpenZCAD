@@ -84,6 +84,12 @@ function defaultSizeOf(value: unknown): number {
       return 0;
     }
     seen.add(object);
+    // Typed mesh buffers: their retained size IS their byte length. Without
+    // this branch the walker falls through to Object.entries and pays a
+    // per-element string key for every float.
+    if (ArrayBuffer.isView(object)) {
+      return 16 + object.byteLength;
+    }
     if (Array.isArray(object)) {
       let total = 16;
       for (const entry of object) {
