@@ -13,6 +13,7 @@ import {
   PanelTopOpen,
   PenLine,
   RotateCw,
+  Scaling,
   Scissors,
   Shapes,
   Spline,
@@ -36,6 +37,7 @@ export type ToolId =
   | 'subtract'
   | 'intersect'
   | 'transform'
+  | 'scale'
   | 'mirror'
   | 'shell'
   | 'solid-offset'
@@ -168,6 +170,12 @@ export const TOOL_META: Record<ToolId, ToolMeta> = {
     shortcut: 'M',
     hint: 'Translate or rotate a body'
   },
+  scale: {
+    label: 'Scale',
+    icon: icon(<Scaling size={16} aria-hidden="true" />),
+    group: 'modify',
+    hint: 'Uniformly resize a body about the origin'
+  },
   mirror: {
     label: 'Mirror',
     icon: icon(<FlipHorizontal2 size={16} aria-hidden="true" />),
@@ -235,7 +243,7 @@ export const TOOL_GROUPS: { id: ToolGroup; label: string; tools: ToolId[] }[] =
     {
       id: 'modify',
       label: 'Modify',
-      tools: ['union', 'subtract', 'intersect', 'transform', 'mirror']
+      tools: ['union', 'subtract', 'intersect', 'transform', 'scale', 'mirror']
     },
     {
       id: 'finish',
@@ -311,7 +319,8 @@ export function toolDisabledReason(
     return 'Needs a body or a sketch';
   }
   if (
-    (tool === 'mirror' ||
+    (tool === 'scale' ||
+      tool === 'mirror' ||
       tool === 'shell' ||
       tool === 'solid-offset' ||
       tool === 'draft' ||

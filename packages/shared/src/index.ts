@@ -153,6 +153,14 @@ export interface Transform3D {
 export interface ParametricTransform3D {
   translation: ParametricVector3;
   rotationDeg: ParametricVector3;
+  /**
+   * Uniform scale factor about the world origin, applied before rotation and
+   * translation. Absent means 1 (no scaling); the rebuild rejects values that
+   * do not resolve to a positive finite number. Uniform only: the exact
+   * kernel preserves analytic surfaces under conformal maps, and a
+   * non-uniform factor would silently degrade cylinders to NURBS.
+   */
+  scale?: ParamValue;
 }
 
 /** Parametric plane used by exact mirror features. */
@@ -1233,6 +1241,7 @@ export interface ArtifactRecord {
     | 'stl-import'
     | 'step-export'
     | 'stl-export'
+    | '3mf-export'
     | 'snapshot'
     | 'thumbnail';
   name: string;

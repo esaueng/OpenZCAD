@@ -1024,6 +1024,8 @@ export interface TransformFormValue {
   targetBodyId: BodyId;
   translation: { x: ParamValue; y: ParamValue; z: ParamValue };
   rotationDeg: { x: ParamValue; y: ParamValue; z: ParamValue };
+  /** Uniform scale about the world origin; 1 means unscaled. */
+  scale?: ParamValue;
 }
 
 interface TransformFormProps {
@@ -1032,6 +1034,8 @@ interface TransformFormProps {
   initial?: TransformFormValue;
   /** Body already picked in the viewport. */
   initialTarget?: BodyId;
+  /** Name seeded for a new feature; edits carry `initial.name` instead. */
+  defaultName?: string;
   submitLabel: string;
   onSubmit(value: TransformFormValue): void;
   onCancel?: () => void;
@@ -1042,12 +1046,13 @@ export function TransformForm({
   bodies,
   initial,
   initialTarget,
+  defaultName = 'Move',
   submitLabel,
   onSubmit,
   onCancel
 }: TransformFormProps) {
   const live = bodies.filter((body) => !body.consumed);
-  const [name, setName] = useState(initial?.name ?? 'Move');
+  const [name, setName] = useState(initial?.name ?? defaultName);
   const [target, setTarget] = useState<BodyId | ''>(
     initial?.targetBodyId ?? initialTarget ?? live.at(-1)?.bodyId ?? ''
   );
@@ -1057,7 +1062,8 @@ export function TransformForm({
     tz: paramValueText(initial?.translation.z ?? 0),
     rx: paramValueText(initial?.rotationDeg.x ?? 0),
     ry: paramValueText(initial?.rotationDeg.y ?? 0),
-    rz: paramValueText(initial?.rotationDeg.z ?? 0)
+    rz: paramValueText(initial?.rotationDeg.z ?? 0),
+    scale: paramValueText(initial?.scale ?? 1)
   }));
   const setValue = (key: string) => (value: string) =>
     setValues((current) => ({ ...current, [key]: value }));
@@ -1073,7 +1079,10 @@ export function TransformForm({
       onName={setName}
       submitLabel={submitLabel}
       canSubmit={canSubmit}
-      onSubmit={() =>
+      onSubmit={() => {
+        // A literal 1 is "no scaling" and stays out of the stored feature, so
+        // older documents and unscaled moves keep byte-identical data.
+        const scale = coerceParamValue(values.scale ?? '1');
         onSubmit({
           name: name.trim(),
           targetBodyId: target as BodyId,
@@ -1086,9 +1095,10 @@ export function TransformForm({
             x: coerceParamValue(values.rx ?? '0'),
             y: coerceParamValue(values.ry ?? '0'),
             z: coerceParamValue(values.rz ?? '0')
-          }
-        })
-      }
+          },
+          ...(scale === 1 ? {} : { scale })
+        });
+      }}
       onCancel={onCancel}
     >
       <label className="field">
@@ -1146,6 +1156,12 @@ export function TransformForm({
           onChange={setValue('rz')}
         />
       </div>
+      <ExprInput
+        label="Scale ×"
+        value={values.scale ?? ''}
+        scope={scope}
+        onChange={setValue('scale')}
+      />
     </FormShell>
   );
 }
