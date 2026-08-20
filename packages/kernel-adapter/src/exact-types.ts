@@ -8,6 +8,7 @@ import type { PlaneBasis, Vec3 } from '@openzcad/geometry';
 import type {
   BodyId,
   BodyMassProperties,
+  FaceTopologyReferenceV5,
   BodyTopology,
   EdgeReferenceRepair,
   SketchId
@@ -81,4 +82,11 @@ export interface MeasuredShape {
     min: Vec3;
     max: Vec3;
   };
+}
+
+/** Face identity for the DXF face export: the app's selection shape. */
+export interface DxfFaceSelector {
+  bodyId: BodyId;
+  faceHash: number;
+  faceReference?: FaceTopologyReferenceV5;
 }
