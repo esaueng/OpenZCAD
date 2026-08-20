@@ -162,6 +162,20 @@ describe('application settings', () => {
     expect(() =>
       validateAssistantBaseUrl('https://[64:ff9b::7f00:1]/v1/responses', 'beta')
     ).toThrow('Private-network');
+    // The unified validator carries the request-time checks too: .lan and
+    // .localhost suffixes, carrier-grade NAT, and multicast space.
+    expect(() =>
+      validateAssistantBaseUrl('https://models.lan/v1/responses', 'beta')
+    ).toThrow('Private-network');
+    expect(() =>
+      validateAssistantBaseUrl('https://ai.localhost/v1/responses', 'beta')
+    ).toThrow('Private-network');
+    expect(() =>
+      validateAssistantBaseUrl('https://100.64.0.1/v1/responses', 'beta')
+    ).toThrow('Private-network');
+    expect(() =>
+      validateAssistantBaseUrl('https://224.0.0.1/v1/responses', 'beta')
+    ).toThrow('Private-network');
     expect(
       validateAssistantBaseUrl(
         'http://localhost:11434/v1/responses',
