@@ -41,8 +41,8 @@ describe('project diagnostic export', () => {
           source: 'primitive',
           mesh: {
             kind: 'mesh',
-            vertices: [0, 0, 0, 1, 0, 0, 0, 1, 0],
-            indices: [0, 1, 2]
+            vertices: Float32Array.from([0, 0, 0, 1, 0, 0, 0, 1, 0]),
+            indices: Uint32Array.from([0, 1, 2])
           },
           faceCount: 3,
           color: '#00ff00',

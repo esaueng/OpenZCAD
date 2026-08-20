@@ -18,7 +18,7 @@ function bodyWithFaces(faces: FaceTopology[]): BodyRepresentation {
     bodyId: 'body-1' as BodyRepresentation['bodyId'],
     name: 'Cylinder Body',
     source: 'primitive',
-    mesh: { kind: 'mesh', vertices: [], indices: [] },
+    mesh: { kind: 'mesh', vertices: Float32Array.from([]), indices: Uint32Array.from([]) },
     faceCount: faces.length,
     color: '#ffffff',
     exportableStep: true,

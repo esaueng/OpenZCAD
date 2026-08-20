@@ -870,10 +870,21 @@ export type DocumentNode =
   | FeatureNode
   | BodyNode;
 
+/**
+ * Display/derived triangle mesh. Typed arrays, deliberately: these live only
+ * in `derived.bodyRepresentations`, which every serializer strips
+ * (`withoutDerivedProjection`) and every rebuild reconstructs, so they never
+ * meet JSON — and as typed arrays they cross the worker boundary without
+ * per-element boxing and feed three.js buffer attributes without a copy.
+ * Canonical mesh data that IS persisted (the `imported-mesh` feature payload)
+ * stays `number[]` for exactly the inverse reason.
+ */
 export interface MeshGeometry {
   kind: 'mesh';
-  vertices: number[];
-  indices: number[];
+  /** Flat xyz triples in document units. */
+  vertices: Float32Array;
+  /** Triangle vertex indices. */
+  indices: Uint32Array;
 }
 
 export interface BoundingBox {

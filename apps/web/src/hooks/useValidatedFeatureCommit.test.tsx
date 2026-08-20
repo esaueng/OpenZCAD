@@ -66,7 +66,7 @@ function bodyRepresentation(
     color: '#56b4e9',
     consumed: false,
     exportableStep: true,
-    mesh: { kind: 'mesh', vertices: [], indices: [] },
+    mesh: { kind: 'mesh', vertices: Float32Array.from([]), indices: Uint32Array.from([]) },
     faceCount: 6,
     volume: 6000,
     bbox: { min: { x: 0, y: 0, z: 0 }, max: { x: 10, y: 20, z: 30 } }
@@ -114,7 +114,7 @@ describe('validated feature commit', () => {
               color: '#ff7452',
               consumed: false,
               exportableStep: true,
-              mesh: { kind: 'mesh', vertices: [], indices: [] },
+              mesh: { kind: 'mesh', vertices: new Float32Array(), indices: new Uint32Array() },
               faceCount: 6,
               volume: 19_200,
               bbox: {
@@ -194,7 +194,7 @@ describe('validated feature commit', () => {
               color: '#56b4e9',
               consumed: false,
               exportableStep: true,
-              mesh: { kind: 'mesh', vertices: [], indices: [] },
+              mesh: { kind: 'mesh', vertices: new Float32Array(), indices: new Uint32Array() },
               faceCount: 3,
               volume: Math.PI * 0.5 ** 2 * 12,
               bbox: {

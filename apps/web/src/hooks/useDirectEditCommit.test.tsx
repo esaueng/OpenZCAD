@@ -23,7 +23,7 @@ function body(bodyId: BodyId, name: string): BodyRepresentation {
     color: '#56b4e9',
     consumed: false,
     exportableStep: true,
-    mesh: { kind: 'mesh', vertices: [], indices: [] },
+    mesh: { kind: 'mesh', vertices: Float32Array.from([]), indices: Uint32Array.from([]) },
     faceCount: 3,
     volume: 1,
     bbox: {

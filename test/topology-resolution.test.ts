@@ -52,7 +52,7 @@ function bodyWith(
     bodyId: 'body_1' as BodyId,
     name: 'Part',
     source: 'primitive',
-    mesh: { kind: 'mesh', vertices: [], indices: [] },
+    mesh: { kind: 'mesh', vertices: Float32Array.from([]), indices: Uint32Array.from([]) },
     faceCount: faces.length,
     color: '#888888',
     exportableStep: true,
