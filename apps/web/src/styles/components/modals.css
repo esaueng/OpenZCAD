@@ -308,6 +308,15 @@
   font-size: var(--fs-sm);
 }
 
+.export-dialog-progress {
+  margin: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  color: var(--color-text-muted);
+  font-size: var(--fs-sm);
+}
+
 .export-dialog-actions {
   display: flex;
   justify-content: flex-end;

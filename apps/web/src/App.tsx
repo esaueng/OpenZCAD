@@ -228,8 +228,24 @@ import {
 import { ProjectConflictDialog } from './components/ProjectConflictDialog';
 import {
   ExportDialog,
+  type ExportProgress,
   type MeshExportDialogFormat
 } from './components/ExportDialog';
+import type { GeometryWorkerState } from './worker/geometryWorker';
+
+/** The export dialog's progress stage for one geometry-worker state. */
+function exportProgressFor(state: GeometryWorkerState): ExportProgress | null {
+  switch (state.phase) {
+    case 'starting':
+      return 'preparing';
+    case 'loading-remus':
+      return 'loading-kernel';
+    case 'rebuilding':
+      return 'building';
+    default:
+      return null; // Terminal states arrive as the result or the error.
+  }
+}
 
 /** Per-format file identity for exports from the Export Mesh dialog. */
 const MESH_EXPORT_FILE_INFO: Record<
@@ -6737,7 +6753,11 @@ export function App() {
    */
   async function handleExportMesh(
     format: MeshExportDialogFormat,
-    deflection: number
+    deflection: number,
+    options?: {
+      signal?: AbortSignal;
+      onProgress?(progress: ExportProgress): void;
+    }
   ) {
     if (!doc || exportBodyIds.length === 0) {
       throw new Error('Create a body before exporting.');
@@ -6746,9 +6766,31 @@ export function App() {
     const stem = exportFileStem(doc.name);
     const fileName = `${stem}.${info.extension}`;
     setStatus(`Exporting ${info.label}…`);
-    const result = await geometry.exportModel(format, doc, exportBodyIds, {
-      deflection
-    });
+    let result: Awaited<ReturnType<typeof geometry.exportModel>>;
+    try {
+      result = await geometry.exportModel(format, doc, exportBodyIds, {
+        deflection,
+        ...(options?.signal ? { signal: options.signal } : {}),
+        onState: (state) => {
+          const progress = exportProgressFor(state);
+          if (progress) {
+            options?.onProgress?.(progress);
+          }
+        }
+      });
+    } catch (error) {
+      if (options?.signal?.aborted) {
+        setStatus(`${info.label} export cancelled.`);
+      }
+      throw error;
+    }
+    // The result can win the race against a cancel click; the user asked to
+    // stop, so no save prompt may appear.
+    if (options?.signal?.aborted) {
+      setStatus(`${info.label} export cancelled.`);
+      return;
+    }
+    options?.onProgress?.('saving');
     let body: Blob;
     let saved: boolean;
     if ('data' in result) {
@@ -6786,13 +6828,23 @@ export function App() {
     );
   }
 
-  function handleCheckMeshQuality(deflection: number) {
+  function handleCheckMeshQuality(
+    deflection: number,
+    options?: { onProgress?(progress: ExportProgress): void }
+  ) {
     if (!doc || exportBodyIds.length === 0) {
       return Promise.reject(
         new Error('Create a body before checking printability.')
       );
     }
-    return geometry.meshQuality(doc, exportBodyIds, deflection);
+    return geometry.meshQuality(doc, exportBodyIds, deflection, {
+      onState: (state) => {
+        const progress = exportProgressFor(state);
+        if (progress) {
+          options?.onProgress?.(progress);
+        }
+      }
+    });
   }
 
   function handleExportDiagnostics() {
