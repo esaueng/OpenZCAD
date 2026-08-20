@@ -354,7 +354,7 @@
       "status": "imported",
       "warnings": [],
       "bodyCount": 1,
-      "volume": 9425.426555957838,
+      "volume": 9427.714820937017,
       "faceCount": 10,
       "edgeCount": 24,
       "seamEdgeCount": 0,
@@ -372,7 +372,7 @@
       "roundTrip": {
         "status": "ok",
         "warnings": [],
-        "volumeRelativeDelta": 1.9298748897428609e-16,
+        "volumeRelativeDelta": 1.9294064766429452e-16,
         "faceCountDelta": 0,
         "edgeCountDelta": 0,
         "exportedSolidCount": 1,

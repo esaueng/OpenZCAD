@@ -290,6 +290,19 @@ export function solveSketchWithGcs(
         }
         break;
       }
+      case 'tangent': {
+        // Document validation guarantees one line and one circle, in either
+        // order; the kernel constraint names its sides.
+        const a = objectHandles(data.a);
+        const b = objectHandles(data.b);
+        const [line, circle] = a.kind === 'line' ? [a, b] : [b, a];
+        add(id, {
+          type: 'tangentLineCircle',
+          line: line.entity,
+          circle: circle.entity
+        });
+        break;
+      }
       case 'concentric': {
         const a = objectHandles(data.a);
         const b = objectHandles(data.b);

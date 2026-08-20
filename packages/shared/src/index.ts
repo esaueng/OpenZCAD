@@ -385,9 +385,13 @@ export type SketchConstraintData =
   | { constraintKind: 'perpendicular'; a: EntityId; b: EntityId }
   /** Equal length (two lines) or equal radius (two circles/arcs). */
   | { constraintKind: 'equal'; a: EntityId; b: EntityId }
-  // No tangent in v1: the kernel expresses tangency through an explicit
-  // shared contact-point entity (TangentLineArc/TangentArcArc), which the
-  // document cannot name until the mapper synthesizes contact points.
+  /**
+   * One line tangent to one circle, in either order. Point-free: the kernel's
+   * `tangentLineCircle` constrains center-to-line distance to the radius, so
+   * no synthesized contact-point entity is needed. Arcs still require the
+   * contact-point form (TangentLineArc) and stay excluded.
+   */
+  | { constraintKind: 'tangent'; a: EntityId; b: EntityId }
   | { constraintKind: 'concentric'; a: EntityId; b: EntityId }
   | { constraintKind: 'midpoint'; point: SketchPointRef; line: EntityId }
   | {

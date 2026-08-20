@@ -2578,13 +2578,9 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
               (message) => {
                 reportedRefusal = message;
               },
-              // The kernel has no evolution variant for distance-angle
-              // chamfers, so those keep hash-only lineage.
-              chamferAngleRadians === undefined
-                ? (payload) => {
-                    evolution = payload;
-                  }
-                : undefined,
+              (payload) => {
+                evolution = payload;
+              },
               chamferAngleRadians
             );
             if (modified === null) {

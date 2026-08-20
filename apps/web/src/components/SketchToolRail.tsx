@@ -18,6 +18,7 @@ import {
   Radius,
   ScanSearch,
   Square,
+  Tangent,
   Trash2,
   Type,
   Waypoints
@@ -72,6 +73,7 @@ const CONSTRAINT_ICONS: Record<SketchConstraintToolKind, typeof Minus> = {
   horizontal: MoveHorizontal,
   vertical: MoveVertical,
   parallel: Equal,
+  tangent: Tangent,
   coincident: CircleDot,
   radius: Radius
 };
