@@ -2,7 +2,9 @@ import { useEffect, useRef, useState } from 'react';
 import type { BodyId, ProjectDocument } from '@openzcad/shared';
 import type { CommandManager } from '@openzcad/command-system';
 import { mark, measure, timed } from '../lib/perf';
+import type { MeshQualityReport } from '@openzcad/kernel-adapter/exact';
 import type {
+  GeometryExportFormat,
   GeometryExportResult,
   GeometryWorkerState,
   GeometryWorkerResult
@@ -46,10 +48,20 @@ export interface GeometryWorkerApi {
    */
   syncOnce(document: ProjectDocument): Promise<DerivedState>;
   exportModel(
-    format: 'step' | 'stl',
+    format: GeometryExportFormat,
     document: ProjectDocument,
-    bodyIds: BodyId[]
+    bodyIds: BodyId[],
+    options?: { deflection?: number }
   ): Promise<ExportSuccess>;
+  /**
+   * Pre-export printability check: watertightness per body at the deflection
+   * the export would use, in millimetres.
+   */
+  meshQuality(
+    document: ProjectDocument,
+    bodyIds: BodyId[],
+    deflection: number
+  ): Promise<MeshQualityReport>;
   /** Forces the next `sync` to post even if the version has not changed. */
   invalidate(): void;
 }
@@ -67,6 +79,9 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
   const workerRef = useRef<Worker | null>(null);
   const exportRequests = useRef(
     new Map<string, PendingRequest<ExportSuccess>>()
+  );
+  const meshQualityRequests = useRef(
+    new Map<string, PendingRequest<MeshQualityReport>>()
   );
   const syncRequests = useRef(new Map<string, PendingRequest<DerivedState>>());
   const lastSyncedKey = useRef<string | null>(null);
@@ -100,6 +115,10 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
         request.reject(error);
       }
       exportRequests.current.clear();
+      for (const request of meshQualityRequests.current.values()) {
+        request.reject(error);
+      }
+      meshQualityRequests.current.clear();
       for (const request of syncRequests.current.values()) {
         request.reject(error);
       }
@@ -178,6 +197,19 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
           exportRequests.current.delete(event.data.requestId);
           if (event.data.ok) {
             pending.resolve(event.data);
+          } else {
+            pending.reject(new Error(event.data.error));
+          }
+          return;
+        }
+        if (event.data.type === 'mesh-quality') {
+          const pending = meshQualityRequests.current.get(event.data.requestId);
+          if (!pending) {
+            return;
+          }
+          meshQualityRequests.current.delete(event.data.requestId);
+          if (event.data.ok) {
+            pending.resolve(event.data.report);
           } else {
             pending.reject(new Error(event.data.error));
           }
@@ -268,7 +300,7 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
         worker.postMessage({ type: 'sync', document, requestId });
       });
     },
-    exportModel(format, document, bodyIds) {
+    exportModel(format, document, bodyIds, options) {
       const worker = workerRef.current;
       if (!worker) {
         return Promise.reject(new Error('Geometry worker is unavailable.'));
@@ -281,7 +313,27 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
           requestId,
           document,
           bodyIds,
-          format
+          format,
+          ...(options?.deflection !== undefined
+            ? { deflection: options.deflection }
+            : {})
+        });
+      });
+    },
+    meshQuality(document, bodyIds, deflection) {
+      const worker = workerRef.current;
+      if (!worker) {
+        return Promise.reject(new Error('Geometry worker is unavailable.'));
+      }
+      const requestId = crypto.randomUUID();
+      return new Promise((resolve, reject) => {
+        meshQualityRequests.current.set(requestId, { resolve, reject });
+        worker.postMessage({
+          type: 'mesh-quality',
+          requestId,
+          document,
+          bodyIds,
+          deflection
         });
       });
     },

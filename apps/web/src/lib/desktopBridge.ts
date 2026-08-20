@@ -4,7 +4,7 @@ export type DesktopMenuCommand =
   | 'open-model'
   | 'save-project'
   | 'export-step'
-  | 'export-stl'
+  | 'export-mesh'
   | 'undo'
   | 'redo'
   | 'settings';
@@ -210,9 +210,9 @@ export async function openDesktopCadFile(): Promise<File | null> {
   return selected ? nativeCadFile(selected) : null;
 }
 
-function downloadTextFile(
+function downloadBlobFile(
   fileName: string,
-  contents: string,
+  contents: BlobPart,
   contentType: string
 ): void {
   const href = URL.createObjectURL(new Blob([contents], { type: contentType }));
@@ -229,7 +229,7 @@ export async function saveCadTextFile(
   contents: string
 ): Promise<boolean> {
   if (!isDesktopApp()) {
-    downloadTextFile(
+    downloadBlobFile(
       suggestedName,
       contents,
       format === 'step' ? 'model/step' : 'model/stl'
@@ -241,6 +241,32 @@ export async function saveCadTextFile(
     suggestedName,
     format,
     contents
+  });
+}
+
+/**
+ * Binary twin of `saveCadTextFile` for 3MF packages and binary STL. Bytes
+ * cross into Rust as a plain array, the same shape `open_cad_file` already
+ * uses in the other direction.
+ */
+export async function saveCadBinaryFile(
+  suggestedName: string,
+  format: 'stl' | '3mf',
+  contents: Uint8Array<ArrayBuffer>
+): Promise<boolean> {
+  if (!isDesktopApp()) {
+    downloadBlobFile(
+      suggestedName,
+      contents,
+      format === '3mf' ? 'model/3mf' : 'model/stl'
+    );
+    return true;
+  }
+  const { invoke } = await import('@tauri-apps/api/core');
+  return invoke<boolean>('save_cad_binary_file', {
+    suggestedName,
+    format,
+    contents: Array.from(contents)
   });
 }
 
