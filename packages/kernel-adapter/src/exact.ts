@@ -1173,7 +1173,13 @@ function applyEdgeModifier(
   /** Receives the kernel's own refusal text, when it threw one. */
   reportRefusal?: (message: string) => void,
   /** Receives construction history only after the same result is accepted. */
-  reportEvolution?: (payload: FaceEvolutionPayloadV1) => void
+  reportEvolution?: (payload: FaceEvolutionPayloadV1) => void,
+  /**
+   * Chamfer only: bevel angle in radians, strictly inside (0, π/2). The
+   * kernel has no evolution variant for distance-angle chamfers, so lineage
+   * falls back to hash-only for them.
+   */
+  chamferAngleRadians?: number
 ): number | null {
   const targetBounds = kernel.boundingBox(target);
   const handles = Uint32Array.from(selected);
@@ -1201,7 +1207,14 @@ function applyEdgeModifier(
     }
   } else {
     try {
-      if (reportEvolution) {
+      if (chamferAngleRadians !== undefined) {
+        modified = kernel.chamferDistanceAngle(
+          target,
+          handles,
+          size,
+          chamferAngleRadians
+        );
+      } else if (reportEvolution) {
         try {
           evolution = kernel.chamferWithEvolution(target, handles, size);
           modified = evolution.result.solid;
@@ -4428,6 +4441,26 @@ function decodeText(bytes: Uint8Array): string {
 }
 
 /**
+ * The same plane basis translated along its own normal — the plane an offset
+ * extrude actually starts from. Building the profile face AND the lineage
+ * carriers from the shifted basis keeps every cap and side-wall carrier
+ * consistent with the geometry, instead of shifting each site separately.
+ */
+function shiftBasisAlongNormal(basis: PlaneBasis, offset: number): PlaneBasis {
+  if (offset === 0) {
+    return basis;
+  }
+  return {
+    ...basis,
+    origin: {
+      x: basis.origin.x + basis.normal.x * offset,
+      y: basis.origin.y + basis.normal.y * offset,
+      z: basis.origin.z + basis.normal.z * offset
+    }
+  };
+}
+
+/**
  * The `meshQuality` binding is typed `any` and returns a JSON string. Parse
  * defensively so a malformed payload reads as a raised error rather than a
  * passing check — this result gates whether an export is called printable.
@@ -5096,6 +5129,11 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
   ): ExactShape {
     const regions = resolveRegionProfiles(document, sketch, data, scope);
     const distance = resolveParamValue(data.distance, scope, 'distance');
+    // Symmetric region extrudes start half the distance behind the sketch
+    // plane, exactly like the single-profile path.
+    const extrudeBasis = data.symmetric
+      ? shiftBasisAlongNormal(basis, -distance / 2)
+      : basis;
     // A profile whose loops are a polyline approximation of curves the font
     // actually draws is a degradation the user can see in the result and in
     // the STEP export, and nothing downstream can tell it from an authored
@@ -5112,14 +5150,14 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
       const face = this.makeRegionFace(
         kernel,
         mergeAdjacentProfiles(group),
-        basis,
+        extrudeBasis,
         warn
       );
       const solid = kernel.extrude(
         face,
-        basis.normal.x,
-        basis.normal.y,
-        basis.normal.z,
+        extrudeBasis.normal.x,
+        extrudeBasis.normal.y,
+        extrudeBasis.normal.z,
         distance
       );
       const candidates = topologyCandidatesForSolid(kernel, solid);
@@ -5138,20 +5176,20 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
         );
       } else {
         const endOrigin = {
-          x: basis.origin.x + basis.normal.x * distance,
-          y: basis.origin.y + basis.normal.y * distance,
-          z: basis.origin.z + basis.normal.z * distance
+          x: extrudeBasis.origin.x + extrudeBasis.normal.x * distance,
+          y: extrudeBasis.origin.y + extrudeBasis.normal.y * distance,
+          z: extrudeBasis.origin.z + extrudeBasis.normal.z * distance
         };
         addFaceCarrierRole(
           candidates,
-          planeCarrier(basis.normal, basis.origin),
+          planeCarrier(extrudeBasis.normal, extrudeBasis.origin),
           `sweep.face.cap.start.region.${token}`,
           assignments,
           diagnostics
         );
         addFaceCarrierRole(
           candidates,
-          planeCarrier(basis.normal, endOrigin),
+          planeCarrier(extrudeBasis.normal, endOrigin),
           `sweep.face.cap.end.region.${token}`,
           assignments,
           diagnostics
@@ -5509,7 +5547,6 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
         `Sketch "${sketch.name}" plane did not resolve at its history position.`
       );
     }
-    const face = this.makeProfileFace(kernel, object.data, basis, 0, scope);
 
     if (feature.data.featureKind === 'extrude') {
       const distance = resolveParamValue(
@@ -5517,11 +5554,24 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
         scope,
         'distance'
       );
+      // A symmetric extrude starts half the distance behind the sketch
+      // plane; the shifted basis carries that offset into the profile face
+      // and every lineage carrier at once.
+      const extrudeBasis = feature.data.symmetric
+        ? shiftBasisAlongNormal(basis, -distance / 2)
+        : basis;
+      const face = this.makeProfileFace(
+        kernel,
+        object.data,
+        extrudeBasis,
+        0,
+        scope
+      );
       const solid = kernel.extrude(
         face,
-        basis.normal.x,
-        basis.normal.y,
-        basis.normal.z,
+        extrudeBasis.normal.x,
+        extrudeBasis.normal.y,
+        extrudeBasis.normal.z,
         distance
       );
       return {
@@ -5532,12 +5582,13 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
           feature,
           String(object.id),
           object.data,
-          basis,
+          extrudeBasis,
           distance,
           scope
         )
       };
     }
+    const face = this.makeProfileFace(kernel, object.data, basis, 0, scope);
 
     const direction = feature.data.axis === 'vertical' ? basis.v : basis.u;
     const point = pointOnPlane(basis, { x: 0, y: 0 }, 0);
@@ -6565,6 +6616,25 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
             if (size <= GEOMETRY_EPSILON) {
               throw new Error('Edge modifier size must be greater than zero.');
             }
+            let chamferAngleRadians: number | undefined;
+            if (
+              feature.data.featureKind === 'chamfer' &&
+              feature.data.angleDeg !== undefined
+            ) {
+              const angleDeg = resolveParamValue(
+                feature.data.angleDeg,
+                scope,
+                'angle'
+              );
+              // The kernel rejects angles at or past 90°; 45° exactly is the
+              // symmetric chamfer, but an explicit 45 is honored as stored.
+              if (!(angleDeg > 0 && angleDeg < 90)) {
+                throw new Error(
+                  'Chamfer angle must be strictly between 0 and 90 degrees.'
+                );
+              }
+              chamferAngleRadians = (angleDeg * Math.PI) / 180;
+            }
             let reportedRefusal: string | null = null;
             let evolution: FaceEvolutionPayloadV1 | null = null;
             const sourceCandidates = topologyCandidatesForSolid(kernel, target);
@@ -6577,9 +6647,14 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
               (message) => {
                 reportedRefusal = message;
               },
-              (payload) => {
-                evolution = payload;
-              }
+              // The kernel has no evolution variant for distance-angle
+              // chamfers, so those keep hash-only lineage.
+              chamferAngleRadians === undefined
+                ? (payload) => {
+                    evolution = payload;
+                  }
+                : undefined,
+              chamferAngleRadians
             );
             if (modified === null) {
               throw new Error(

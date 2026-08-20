@@ -3906,6 +3906,66 @@ describe('exact kernel adapter', { timeout: 30_000 }, () => {
     expect(chamferBody?.faceCount).toBeGreaterThan(6);
   });
 
+  it('builds distance-angle chamfers with the exact bevel volume', async () => {
+    const base = addPrimitiveFeature(
+      createProjectDocument('Angled chamfer', toUserId('user_exact')),
+      {
+        name: 'Block',
+        primitiveKind: 'box',
+        dimensions: { width: 20, height: 20, depth: 20 }
+      }
+    );
+    const baseDerived = await adapter.syncDocument(base);
+    const edgeHash = Object.values(baseDerived.bodyRepresentations)[0]?.topology
+      ?.edges[0]?.hash;
+    expect(edgeHash).toBeTypeOf('number');
+
+    // Distance 2 on the first face, 60° toward the second: the removed
+    // wedge has legs 2 and 2·tan(60°), so its volume is closed-form.
+    const angled = chamferEdges(base, {
+      name: 'Angled chamfer',
+      targetBodyId: base.bodyOrder[0]!,
+      edgeHashes: [edgeHash!],
+      size: 2,
+      angleDeg: 60
+    }).document;
+    const angledDerived = await adapter.syncDocument(angled);
+    const angledBody =
+      angledDerived.bodyRepresentations[angled.bodyOrder.at(-1)!];
+    expect(angledDerived.warnings).toEqual([]);
+    expect(angledBody?.volume).toBeCloseTo(
+      8000 - ((2 * 2 * Math.tan(Math.PI / 3)) / 2) * 20,
+      6
+    );
+
+    // An explicit 45° is the symmetric chamfer's geometry.
+    const explicit45 = chamferEdges(base, {
+      name: 'Explicit 45',
+      targetBodyId: base.bodyOrder[0]!,
+      edgeHashes: [edgeHash!],
+      size: 2,
+      angleDeg: 45
+    }).document;
+    const explicitDerived = await adapter.syncDocument(explicit45);
+    const explicitBody =
+      explicitDerived.bodyRepresentations[explicit45.bodyOrder.at(-1)!];
+    expect(explicitDerived.warnings).toEqual([]);
+    expect(explicitBody?.volume).toBeCloseTo(8000 - ((2 * 2) / 2) * 20, 6);
+
+    // Out-of-range angles are a feature error, not a kernel crash.
+    const rejected = chamferEdges(base, {
+      name: 'Too steep',
+      targetBodyId: base.bodyOrder[0]!,
+      edgeHashes: [edgeHash!],
+      size: 2,
+      angleDeg: 90
+    }).document;
+    const rejectedDerived = await adapter.syncDocument(rejected);
+    expect(rejectedDerived.warnings.join('\n')).toMatch(
+      /strictly between 0 and 90/
+    );
+  });
+
   // Convex cap-rim fillets on a plain cylinder. This began life as the test
   // for an adapter workaround that rebuilt the rims from a 64-segment revolved
   // profile, because the kernel refused the blend at f/r >= 0.5. The kernel

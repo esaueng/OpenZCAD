@@ -219,6 +219,8 @@ export interface ExtrudeInput {
   name: string;
   sketchId: SketchId;
   distance: ParamValue;
+  /** Half the distance to each side of the sketch plane; absent = one-sided. */
+  symmetric?: boolean;
   /** Explicitly stored by new clients; absent reads as the legacy new body. */
   operation?: ExtrudeOperation;
   /** Existing live body consumed by an add or cut extrusion. */
@@ -338,6 +340,8 @@ export interface EdgeModifierInput {
   edgeHashes: number[];
   edgeReferences?: EdgeTopologyReferenceV5[];
   size: ParamValue;
+  /** Chamfer only: bevel angle in degrees; absent means symmetric 45°. */
+  angleDeg?: ParamValue;
   ids?: BodyFeatureIds;
 }
 
@@ -1265,6 +1269,7 @@ export function extrudeSketch(
       featureKind: 'extrude',
       sketchId: input.sketchId,
       distance: input.distance,
+      ...(input.symmetric ? { symmetric: true } : {}),
       ...(input.operation === undefined ? {} : { operation: input.operation }),
       ...(input.targetBodyId === undefined
         ? {}
@@ -1722,7 +1727,8 @@ export function chamferEdges(
       ...(input.edgeReferences
         ? { edgeReferences: deepClone(input.edgeReferences) }
         : {}),
-      distance: input.size
+      distance: input.size,
+      ...(input.angleDeg !== undefined ? { angleDeg: input.angleDeg } : {})
     },
     input.ids
   );
@@ -2048,6 +2054,7 @@ const FEATURE_DATA_KEYS: Record<FeatureKind, readonly string[]> = {
   extrude: [
     'sketchId',
     'distance',
+    'symmetric',
     'operation',
     'targetBodyId',
     'profile',
@@ -2084,7 +2091,13 @@ const FEATURE_DATA_KEYS: Record<FeatureKind, readonly string[]> = {
   ],
   thicken: ['targetBodyId', 'faceHash', 'faceReference', 'thickness'],
   fillet: ['targetBodyId', 'edgeHashes', 'edgeReferences', 'radius'],
-  chamfer: ['targetBodyId', 'edgeHashes', 'edgeReferences', 'distance'],
+  chamfer: [
+    'targetBodyId',
+    'edgeHashes',
+    'edgeReferences',
+    'distance',
+    'angleDeg'
+  ],
   pattern: [
     'targetBodyId',
     'patternKind',

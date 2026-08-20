@@ -11615,7 +11615,11 @@ export function App() {
                         name: value.name,
                         data: {
                           ...feature.data,
-                          distance: value.distance
+                          distance: value.distance,
+                          // Stored explicitly on edits: updateFeature patches
+                          // keys and cannot delete one, so unchecking must
+                          // write false rather than omit the key.
+                          symmetric: value.symmetric === true
                         }
                       },
                       `Edit ${value.name}`
@@ -11714,7 +11718,10 @@ export function App() {
                                 ...(value.edgeReferences
                                   ? { edgeReferences: value.edgeReferences }
                                   : {}),
-                                distance: value.size
+                                distance: value.size,
+                                ...(value.angleDeg !== undefined
+                                  ? { angleDeg: value.angleDeg }
+                                  : {})
                               }
                       },
                       `Edit ${value.name}`

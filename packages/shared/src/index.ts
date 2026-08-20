@@ -558,6 +558,11 @@ export type FeatureData =
       sketchId: SketchId;
       distance: ParamValue;
       /**
+       * Extrude half the distance to each side of the sketch plane instead
+       * of all of it above. Absent means the legacy one-sided extrude.
+       */
+      symmetric?: boolean;
+      /**
        * Resolved once at creation time. Absent preserves the legacy new-body
        * behavior; rebuilds never infer a different operation.
        */
@@ -672,6 +677,13 @@ export type FeatureData =
       edgeHashes: number[];
       edgeReferences?: EdgeTopologyReferenceV5[];
       distance: ParamValue;
+      /**
+       * Distance-angle chamfer: `distance` lands on the first adjacent face
+       * and the bevel leaves it at this angle (degrees, strictly between 0
+       * and 90). Absent means the symmetric 45° chamfer with `distance` on
+       * both faces, which is what every earlier document stored.
+       */
+      angleDeg?: ParamValue;
     }
   | {
       featureKind: 'pattern';
