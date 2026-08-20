@@ -400,3 +400,59 @@ describe('incremental prefix rebuild cache', { timeout: 120_000 }, () => {
     }
   });
 });
+
+describe('exports on the history kernel', { timeout: 120_000 }, () => {
+  it('serves exports from the synced kernel and leaves the cache sound', async () => {
+    const events: RebuildCacheEvent[] = [];
+    const adapter = await createExactKernelAdapter({
+      onRebuildCacheEvent: (event) => events.push(event)
+    });
+    try {
+      const { document } = chainDocument();
+      const first = await adapter.syncDocument(document);
+      const bodyIds = first.exportableBodyIds;
+      expect(bodyIds.length).toBeGreaterThan(0);
+
+      // Exports mutate the kernel (unit-scaling copies, tessellation) and
+      // must restore it afterwards: running the same export twice from the
+      // same checkpoint has to be byte-identical, or the first export leaked
+      // state into the second.
+      const step = await adapter.exportStep(document, bodyIds);
+      expect(step).toContain('MANIFOLD_SOLID_BREP');
+      expect(await adapter.exportStep(document, bodyIds)).toBe(step);
+      const stl = await adapter.exportStl(document, bodyIds);
+      expect(await adapter.exportStl(document, bodyIds)).toBe(stl);
+      const quality = await adapter.meshQuality(document, bodyIds, 0.08);
+      expect(quality.watertight).toBe(true);
+
+      // The exports left the checkpoint table sound: the next sync of the
+      // unchanged document is a full prefix restore, not a rebuild, and its
+      // derived state matches the pre-export one.
+      const again = await adapter.syncDocument(document);
+      expect(events.at(-1)).toMatchObject({
+        kind: 'prefix-restore',
+        replayed: 0,
+        restored: 5
+      });
+      expect(normalized(again)).toEqual(normalized(first));
+
+      // An edit after an export still restores the shared prefix: the
+      // export's restore-to-last-checkpoint must not have truncated or
+      // corrupted earlier checkpoints.
+      await adapter.exportStl(document, bodyIds);
+      const edited = addPrimitiveFeature(document, {
+        name: 'Late box',
+        primitiveKind: 'box',
+        dimensions: { width: 2, height: 2, depth: 2 }
+      });
+      await adapter.syncDocument(edited);
+      expect(events.at(-1)).toMatchObject({
+        kind: 'prefix-restore',
+        replayed: 1,
+        restored: 5
+      });
+    } finally {
+      adapter.dispose();
+    }
+  });
+});
