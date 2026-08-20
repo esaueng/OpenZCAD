@@ -42,10 +42,15 @@ import {
   type ProjectCheckpoint,
   type RevisionRecord,
   type RevolveAxis,
+  toSketchConstraintId,
+  type SketchConstraint,
+  type SketchConstraintData,
+  type SketchConstraintId,
   type SketchId,
   type SketchNode,
   type SketchObjectData,
   type SketchObjectNode,
+  type SketchPointRef,
   type SketchPlaneRef,
   type SketchProfileReference,
   type SketchSectionReference,
@@ -197,6 +202,17 @@ export interface SketchObjectUpdateInput {
 export interface SketchObjectDeleteInput {
   sketchId: SketchId;
   objectId: EntityId;
+}
+
+export interface SketchConstraintAddInput {
+  sketchId: SketchId;
+  constraint: SketchConstraintData;
+  ids?: { constraintId: SketchConstraintId };
+}
+
+export interface SketchConstraintDeleteInput {
+  sketchId: SketchId;
+  constraintId: SketchConstraintId;
 }
 
 export interface ExtrudeInput {
@@ -516,11 +532,13 @@ export function normalizeDocument(document: ProjectDocument): ProjectDocument {
     } satisfies SketchNode;
   }
   // Schema v4 -> v5 topology references, v5 -> v6 modeling feature kinds,
-  // v6 -> v7 text sketch objects plus entity-wide profile references, and
-  // v7 -> v8 advanced modeling feature kinds are all
+  // v6 -> v7 text sketch objects plus entity-wide profile references,
+  // v7 -> v8 advanced modeling feature kinds, and v8 -> v9 sketch
+  // constraints are all
   // additive. Existing hashes and exact source geometry remain the fail-closed
   // fallback until a feature writes a lineage reference; a v6 document has no
-  // text objects and no `all: true` reference, so nothing needs rewriting.
+  // text objects and no `all: true` reference, and a v8 sketch simply has no
+  // `constraints`, so nothing needs rewriting.
   return {
     ...document,
     schemaVersion: PROJECT_DOCUMENT_SCHEMA_VERSION,
@@ -1022,7 +1040,206 @@ export function deleteSketchObject(
   const next = cloneDocument(document);
   const { sketch } = requireSketchObject(next, input.sketchId, input.objectId);
   sketch.objectIds = sketch.objectIds.filter((id) => id !== input.objectId);
+  // Constraints referencing the deleted object go with it: a dangling
+  // reference would fail every later solve rather than one delete.
+  if (sketch.constraints && sketch.constraints.length > 0) {
+    sketch.constraints = sketch.constraints.filter(
+      (constraint) =>
+        !constraintObjectIds(constraint.data).includes(input.objectId)
+    );
+  }
   delete next.nodes[input.objectId];
+  next.version += 1;
+  return next;
+}
+
+/** Every sketch object a constraint references, in declaration order. */
+function constraintObjectIds(data: SketchConstraintData): EntityId[] {
+  switch (data.constraintKind) {
+    case 'coincident':
+      return [data.a.objectId, data.b.objectId];
+    case 'horizontal':
+    case 'vertical':
+    case 'radius':
+      return [data.objectId];
+    case 'parallel':
+    case 'perpendicular':
+    case 'equal':
+    case 'concentric':
+    case 'angle':
+      return [data.a, data.b];
+    case 'midpoint':
+      return [data.point.objectId, data.line];
+    case 'distance':
+      return [data.a.objectId, data.b.objectId];
+  }
+}
+
+type ConstrainableKind = 'line' | 'arc' | 'circle';
+
+function requireConstrainableObject(
+  document: ProjectDocument,
+  sketch: SketchNode,
+  objectId: EntityId,
+  allowed: readonly ConstrainableKind[]
+): ConstrainableKind {
+  const node = sketch.objectIds.includes(objectId)
+    ? document.nodes[objectId]
+    : undefined;
+  if (!node || node.kind !== 'sketch-object') {
+    throw new Error(`Sketch ${sketch.sketchId} has no object ${objectId}.`);
+  }
+  const kind = node.objectKind;
+  if (!(allowed as readonly string[]).includes(kind)) {
+    // v1 constraints attach to point-addressable objects only; rectangles,
+    // polygons, and text have no point identity to constrain.
+    throw new Error(
+      `A ${kind} object cannot carry this constraint; expected ${allowed.join(' or ')}.`
+    );
+  }
+  return kind as ConstrainableKind;
+}
+
+function requireConstraintPoint(
+  document: ProjectDocument,
+  sketch: SketchNode,
+  ref: SketchPointRef
+): void {
+  const kind = requireConstrainableObject(document, sketch, ref.objectId, [
+    'line',
+    'arc',
+    'circle'
+  ]);
+  const legal =
+    kind === 'line'
+      ? ref.point === 'start' || ref.point === 'end'
+      : kind === 'circle'
+        ? ref.point === 'center'
+        : true; // arcs expose center, start, and end
+  if (!legal) {
+    throw new Error(`A ${kind} object has no '${ref.point}' point.`);
+  }
+}
+
+function requireLiteralPositive(value: unknown, label: string): void {
+  if (typeof value === 'number' && (!Number.isFinite(value) || value <= 0)) {
+    throw new Error(`${label} must be a positive number.`);
+  }
+}
+
+/**
+ * Structural validation for a constraint against its sketch: every referenced
+ * object exists, is a constrainable kind, and exposes the named points.
+ * Expression values are validated at solve time, when parameters resolve.
+ */
+function validateSketchConstraint(
+  document: ProjectDocument,
+  sketch: SketchNode,
+  data: SketchConstraintData
+): void {
+  switch (data.constraintKind) {
+    case 'coincident':
+      requireConstraintPoint(document, sketch, data.a);
+      requireConstraintPoint(document, sketch, data.b);
+      break;
+    case 'horizontal':
+    case 'vertical':
+      requireConstrainableObject(document, sketch, data.objectId, ['line']);
+      break;
+    case 'parallel':
+    case 'perpendicular':
+      requireConstrainableObject(document, sketch, data.a, ['line']);
+      requireConstrainableObject(document, sketch, data.b, ['line']);
+      break;
+    case 'equal': {
+      const a = requireConstrainableObject(document, sketch, data.a, [
+        'line',
+        'arc',
+        'circle'
+      ]);
+      const b = requireConstrainableObject(document, sketch, data.b, [
+        'line',
+        'arc',
+        'circle'
+      ]);
+      // Equal length pairs lines; equal radius pairs curves. Mixing the two
+      // has no meaning the solver could satisfy.
+      if ((a === 'line') !== (b === 'line')) {
+        throw new Error(
+          'An equal constraint pairs two lines or two circles/arcs.'
+        );
+      }
+      break;
+    }
+    case 'concentric':
+      requireConstrainableObject(document, sketch, data.a, ['arc', 'circle']);
+      requireConstrainableObject(document, sketch, data.b, ['arc', 'circle']);
+      break;
+    case 'midpoint':
+      requireConstraintPoint(document, sketch, data.point);
+      requireConstrainableObject(document, sketch, data.line, ['line']);
+      break;
+    case 'distance':
+      requireConstraintPoint(document, sketch, data.a);
+      requireConstraintPoint(document, sketch, data.b);
+      requireLiteralPositive(data.value, 'Distance');
+      break;
+    case 'radius':
+      requireConstrainableObject(document, sketch, data.objectId, [
+        'arc',
+        'circle'
+      ]);
+      requireLiteralPositive(data.value, 'Radius');
+      break;
+    case 'angle':
+      requireConstrainableObject(document, sketch, data.a, ['line']);
+      requireConstrainableObject(document, sketch, data.b, ['line']);
+      if (typeof data.valueDeg === 'number' && !Number.isFinite(data.valueDeg)) {
+        throw new Error('Angle must be a finite number of degrees.');
+      }
+      break;
+  }
+}
+
+export function addSketchConstraint(
+  document: ProjectDocument,
+  input: SketchConstraintAddInput
+): { document: ProjectDocument; constraintId: SketchConstraintId } {
+  const next = cloneDocument(document);
+  const sketch = findSketch(next, input.sketchId);
+  if (!sketch) {
+    throw new Error(`Sketch ${input.sketchId} not found.`);
+  }
+  validateSketchConstraint(next, sketch, input.constraint);
+  const constraintId =
+    input.ids?.constraintId ?? toSketchConstraintId(createId('scon'));
+  const constraint: SketchConstraint = {
+    constraintId,
+    data: input.constraint
+  };
+  sketch.constraints = [...(sketch.constraints ?? []), constraint];
+  next.version += 1;
+  return { document: next, constraintId };
+}
+
+export function deleteSketchConstraint(
+  document: ProjectDocument,
+  input: SketchConstraintDeleteInput
+): ProjectDocument {
+  const next = cloneDocument(document);
+  const sketch = findSketch(next, input.sketchId);
+  if (!sketch) {
+    throw new Error(`Sketch ${input.sketchId} not found.`);
+  }
+  const remaining = (sketch.constraints ?? []).filter(
+    (constraint) => constraint.constraintId !== input.constraintId
+  );
+  if (remaining.length === (sketch.constraints ?? []).length) {
+    throw new Error(
+      `Sketch ${input.sketchId} has no constraint ${input.constraintId}.`
+    );
+  }
+  sketch.constraints = remaining;
   next.version += 1;
   return next;
 }
