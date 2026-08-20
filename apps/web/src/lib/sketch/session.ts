@@ -468,6 +468,14 @@ export interface SnapTarget extends SketchPoint {
   /** Stable within one evaluated sketch; used by hysteresis and Tab cycling. */
   id?: string;
   sourceId?: string;
+  /**
+   * The constraint-schema name of this snap point on its source object, set
+   * only where `SketchPointRef` has one (line/arc start and end, circle and
+   * arc centers). First-class rather than parsed back out of `id`, whose
+   * index is an opaque per-object counter that reordering would corrupt
+   * silently.
+   */
+  pointRef?: 'start' | 'end' | 'center';
 }
 
 export type SketchInferenceSegment = readonly [SketchPoint, SketchPoint];
@@ -519,10 +527,16 @@ export function snapTargetsForObject(
   sourceId?: string
 ): SnapTarget[] {
   let index = 0;
-  const target = (kind: SnapTargetKind, x: number, y: number): SnapTarget => ({
+  const target = (
+    kind: SnapTargetKind,
+    x: number,
+    y: number,
+    pointRef?: 'start' | 'end' | 'center'
+  ): SnapTarget => ({
     x,
     y,
     kind,
+    ...(pointRef ? { pointRef } : {}),
     ...(sourceId ? { sourceId, id: `${sourceId}:${kind}:${index++}` } : {})
   });
   switch (data.objectKind) {
@@ -532,8 +546,8 @@ export function snapTargetsForObject(
       const x2 = resolve(data.x2);
       const y2 = resolve(data.y2);
       return [
-        target('endpoint', x1, y1),
-        target('endpoint', x2, y2),
+        target('endpoint', x1, y1, 'start'),
+        target('endpoint', x2, y2, 'end'),
         target('midpoint', (x1 + x2) / 2, (y1 + y2) / 2)
       ];
     }
@@ -562,7 +576,7 @@ export function snapTargetsForObject(
       const centerX = resolve(data.centerX);
       const centerY = resolve(data.centerY);
       return [
-        target('center', centerX, centerY),
+        target('center', centerX, centerY, 'center'),
         target('quadrant', centerX + radius, centerY),
         target('quadrant', centerX, centerY + radius),
         target('quadrant', centerX - radius, centerY),
@@ -589,10 +603,10 @@ export function snapTargetsForObject(
       const arcEnd = onArc(start + sweep);
       const arcMid = onArc(start + sweep / 2);
       return [
-        target('endpoint', arcStart.x, arcStart.y),
-        target('endpoint', arcEnd.x, arcEnd.y),
+        target('endpoint', arcStart.x, arcStart.y, 'start'),
+        target('endpoint', arcEnd.x, arcEnd.y, 'end'),
         target('midpoint', arcMid.x, arcMid.y),
-        target('center', cx, cy)
+        target('center', cx, cy, 'center')
       ];
     }
     case 'text':

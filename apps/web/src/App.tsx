@@ -116,7 +116,24 @@ import type {
   HealthResponse,
   ProjectCollaborationCapabilitiesResponse
 } from '@openzcad/shared';
-import { toArtifactId, toUserId, UNIT_TO_MM } from '@openzcad/shared';
+import {
+  toArtifactId,
+  toSketchConstraintId,
+  toUserId,
+  UNIT_TO_MM
+} from '@openzcad/shared';
+import {
+  buildConstraint,
+  constraintToolSpec,
+  describeConstraint,
+  refusePick,
+  type ConstraintPick
+} from './lib/sketch/constraints';
+import {
+  solveStatusLabel,
+  solvedSketchCommands
+} from './lib/sketch/applySolve';
+import type { SketchSolveStatus } from './components/SketchToolRail';
 import { ApiError, api, isProjectDocumentUnavailableError } from './lib/api';
 import { uploadArtifactBody } from './lib/artifactUpload';
 import {
@@ -7649,6 +7666,186 @@ export function App() {
     }
   }
 
+  // ---------------------------------------------------------------------
+  // Sketch constraints (stage 1): pick routing, CRUD, and solve-apply.
+  // ---------------------------------------------------------------------
+  const [sketchSolveStatus, setSketchSolveStatus] =
+    useState<SketchSolveStatus | null>(null);
+  const [sketchSolving, setSketchSolving] = useState(false);
+  // The pill describes a solve of THIS session's sketch; leaving sketch mode
+  // orphans it.
+  useEffect(() => {
+    if (interaction.mode !== 'sketch') {
+      setSketchSolveStatus(null);
+      setSketchSolving(false);
+    }
+  }, [interaction.mode]);
+
+  const editingSketchNode =
+    interaction.mode === 'sketch' && interaction.session.sketchId && doc
+      ? (findSketch(doc, interaction.session.sketchId as SketchId) ?? null)
+      : null;
+
+  const sketchConstraintItems = useMemo(() => {
+    if (!editingSketchNode || !doc) {
+      return [];
+    }
+    const nameOf = (objectId: EntityId) => {
+      const node = doc.nodes[objectId];
+      return node?.kind === 'sketch-object'
+        ? node.name || node.data.objectKind
+        : 'entity';
+    };
+    return (editingSketchNode.constraints ?? []).map(
+      ({ constraintId, data }) => ({
+        constraintId: String(constraintId),
+        label: describeConstraint(data, nameOf)
+      })
+    );
+  }, [editingSketchNode, doc]);
+
+  /**
+   * Routes a sketch click while a constraint tool is armed. Returns true
+   * when the click was consumed — an armed tool never falls through to
+   * selection, even on a miss, so a stray click cannot silently deselect
+   * mid-sequence.
+   */
+  function handleSketchConstraintPick(
+    objectId: string | null,
+    snapPoint: { objectId: string; point: 'start' | 'end' | 'center' } | null
+  ): boolean {
+    if (
+      interaction.mode !== 'sketch' ||
+      !interaction.session.pendingConstraint
+    ) {
+      return false;
+    }
+    if (!doc || !editingSketchNode) {
+      return true;
+    }
+    const pending = interaction.session.pendingConstraint;
+    const spec = constraintToolSpec(pending.kind);
+    const pick: ConstraintPick | null =
+      spec.pickKind === 'point'
+        ? snapPoint
+          ? { kind: 'point', ...snapPoint }
+          : null
+        : objectId
+          ? { kind: 'object', objectId }
+          : null;
+    if (!pick) {
+      setStatus(spec.hint);
+      return true;
+    }
+    const refusal = refusePick(
+      doc,
+      editingSketchNode,
+      pending.kind,
+      pending.picks,
+      pick
+    );
+    if (refusal) {
+      setStatus(refusal);
+      return true;
+    }
+    const picks = [...pending.picks, pick];
+    if (picks.length < spec.picks) {
+      dispatchInteraction({ type: 'sketch-constraint-pick', pick });
+      setStatus(`${spec.label}: pick ${picks.length + 1} of ${spec.picks}.`);
+      return true;
+    }
+    const built = buildConstraint(doc, editingSketchNode, pending.kind, picks);
+    if ('error' in built) {
+      setStatus(built.error);
+    } else if (
+      executeCommand(
+        commandFactories.addSketchConstraint(
+          {
+            sketchId: editingSketchNode.sketchId,
+            constraint: built.data
+          },
+          `Add ${spec.label.toLowerCase()} constraint`
+        )
+      )
+    ) {
+      setSketchSolveStatus(null);
+      setStatus(`${spec.label} constraint added · Solve applies it.`);
+    }
+    dispatchInteraction({ type: 'sketch-constraint-tool', kind: null });
+    return true;
+  }
+
+  function handleDeleteSketchConstraint(constraintId: string) {
+    if (!editingSketchNode) {
+      return;
+    }
+    if (
+      executeCommand(
+        commandFactories.deleteSketchConstraint(
+          {
+            sketchId: editingSketchNode.sketchId,
+            constraintId: toSketchConstraintId(constraintId)
+          },
+          'Delete constraint'
+        )
+      )
+    ) {
+      setSketchSolveStatus(null);
+      setStatus('Deleted constraint.');
+    }
+  }
+
+  async function handleSolveSketch() {
+    if (!doc || !editingSketchNode || sketchSolving) {
+      return;
+    }
+    setSketchSolving(true);
+    try {
+      const outcome = await geometry.solveSketch(
+        doc,
+        editingSketchNode.sketchId
+      );
+      setSketchSolveStatus({
+        label: solveStatusLabel(outcome),
+        tone:
+          outcome.classification === 'solved'
+            ? 'ok'
+            : outcome.classification === 'underConstrained'
+              ? 'info'
+              : 'warn'
+      });
+      if (!outcome.converged || outcome.rolledBack) {
+        setStatus(
+          'Constraints did not solve; sketch geometry left unchanged.'
+        );
+        return;
+      }
+      const commands = solvedSketchCommands(
+        doc,
+        editingSketchNode.sketchId,
+        outcome
+      );
+      if (commands.length === 0) {
+        setStatus('Sketch already satisfies its constraints.');
+        return;
+      }
+      if (executeTransaction('Solve sketch', commands)) {
+        setStatus(
+          `Solved sketch · ${commands.length} ${commands.length === 1 ? 'entity' : 'entities'} updated · ${solveStatusLabel(outcome)}.`
+        );
+      }
+    } catch (error) {
+      setSketchSolveStatus({ label: 'Solve failed', tone: 'warn' });
+      setStatus(
+        error instanceof Error
+          ? `Sketch solve failed: ${error.message}`
+          : 'Sketch solve failed.'
+      );
+    } finally {
+      setSketchSolving(false);
+    }
+  }
+
   /**
    * Region-detected sketch rendering data: every sketch's curves plus its
    * detected closed regions, lifted by the shared plane resolution. The
@@ -10865,9 +11062,12 @@ export function App() {
             onSketchDrawingChange={(drawing) =>
               dispatchInteraction({ type: 'sketch-drawing', drawing })
             }
-            onSketchSelectObject={(objectId) =>
-              dispatchInteraction({ type: 'sketch-select-object', objectId })
-            }
+            onSketchSelectObject={(objectId, snapPoint) => {
+              if (handleSketchConstraintPick(objectId, snapPoint ?? null)) {
+                return;
+              }
+              dispatchInteraction({ type: 'sketch-select-object', objectId });
+            }}
             sketchViews={sketchViews}
             selectedProfileIds={viewerSelectedProfileIds}
             profileSelectionMode={tool === 'extrude'}
@@ -11007,6 +11207,24 @@ export function App() {
                       settings={appSettings.sketching}
                       units={doc.units}
                       paletteVisible={selectedSketchEntity === null}
+                      canConstrain={Boolean(interaction.session.sketchId)}
+                      pendingConstraint={interaction.session.pendingConstraint}
+                      constraints={sketchConstraintItems}
+                      solveStatus={sketchSolveStatus}
+                      solving={sketchSolving}
+                      onConstraintTool={(kind) => {
+                        dispatchInteraction({
+                          type: 'sketch-constraint-tool',
+                          kind
+                        });
+                        if (kind) {
+                          setStatus(constraintToolSpec(kind).hint);
+                        }
+                      }}
+                      onDeleteConstraint={handleDeleteSketchConstraint}
+                      onSolve={() => {
+                        void handleSolveSketch();
+                      }}
                       onTool={(sketchTool) =>
                         dispatchInteraction({
                           type: 'sketch-tool',

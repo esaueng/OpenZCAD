@@ -508,7 +508,18 @@ interface ModelViewerProps {
   /** Mirrors chain/drag liveness into the interaction machine. */
   onSketchDrawingChange(drawing: boolean): void;
   /** Selects a committed entity for exact-value editing. */
-  onSketchSelectObject(objectId: string | null): void;
+  onSketchSelectObject(
+    objectId: string | null,
+    /**
+     * The named point under the cursor at click time, when the active snap
+     * was one with constraint-schema identity (line/arc endpoints, centers).
+     * Constraint picking consumes it; plain selection ignores it.
+     */
+    snapPoint?: {
+      objectId: string;
+      point: 'start' | 'end' | 'center';
+    } | null
+  ): void;
   onSelectSketchProfile(sketchId: string): void;
   onResizePrimitiveFace(commit: FaceResizeCommit): void;
   onExtrudeDistanceChange(distance: number): void;
@@ -5580,7 +5591,16 @@ export function ModelViewer({
             ) * 8;
           const objectId =
             rig?.pickObject(context.raycaster, pickThreshold) ?? null;
-          onSketchSelectObjectRef.current(objectId);
+          // `sketchPointAt` above already resolved the snap under the cursor;
+          // surface it when it names a constraint-schema point.
+          const snapPoint =
+            activeSketchSnap?.sourceId && activeSketchSnap.pointRef
+              ? {
+                  objectId: activeSketchSnap.sourceId,
+                  point: activeSketchSnap.pointRef
+                }
+              : null;
+          onSketchSelectObjectRef.current(objectId, snapPoint);
           if (!objectId) {
             const profile = picker.pick(event)?.region;
             if (profile) {

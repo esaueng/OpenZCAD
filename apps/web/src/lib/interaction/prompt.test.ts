@@ -88,7 +88,8 @@ function sketchState(
       tool,
       circleMode: 'center-radius',
       drawing,
-      selectedObjectId
+      selectedObjectId,
+      pendingConstraint: null
     }
   };
 }

@@ -32,6 +32,7 @@ const ESCAPE_LABELS: Record<ReturnType<typeof escapeTarget>, string | null> = {
   'cancel-drag': 'cancels the drag',
   'recover-failure': 'dismisses the error',
   'end-drawing': 'ends the chain',
+  'cancel-constraint': 'cancels the constraint',
   'exit-drawing-tool': 'returns to selection',
   'clear-sketch-selection': 'deselects',
   'clear-selection': 'clears the selection',
@@ -110,6 +111,9 @@ export function commandPrompt(
   if (state.mode === 'sketch') {
     if (state.session.drawing) {
       return { step: 'Click the next point · Enter finishes', escape };
+    }
+    if (state.session.pendingConstraint) {
+      return { step: 'Pick geometry for the constraint', escape };
     }
     return {
       step:

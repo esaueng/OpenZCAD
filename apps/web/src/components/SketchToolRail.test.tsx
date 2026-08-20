@@ -15,10 +15,18 @@ function renderRail(
     settings: structuredClone(DEFAULT_APP_SETTINGS.sketching),
     units: 'mm',
     paletteVisible: true,
+    canConstrain: true,
+    pendingConstraint: null,
+    constraints: [],
+    solveStatus: null,
+    solving: false,
     onTool: vi.fn(),
     onCircleMode: vi.fn(),
     onConstruction: vi.fn(),
     onSettings: vi.fn(),
+    onConstraintTool: vi.fn(),
+    onDeleteConstraint: vi.fn(),
+    onSolve: vi.fn(),
     onDiagnostics: vi.fn(),
     onExtrude: vi.fn(),
     onExit: vi.fn(),
@@ -72,5 +80,64 @@ describe('SketchToolRail', () => {
 
     await user.click(screen.getByRole('button', { name: 'Finish Sketch' }));
     expect(onExit).toHaveBeenCalledOnce();
+  });
+
+  it('arms a constraint tool and disarms it on a second click', async () => {
+    const user = userEvent.setup();
+    const onConstraintTool = vi.fn();
+    const { rerender, props } = renderRail({ onConstraintTool });
+
+    await user.click(screen.getByRole('button', { name: 'Parallel' }));
+    expect(onConstraintTool).toHaveBeenLastCalledWith('parallel');
+
+    rerender(
+      <SketchToolRail
+        {...props}
+        pendingConstraint={{ kind: 'parallel', picks: [] }}
+      />
+    );
+    const armed = screen.getByRole('button', { name: 'Parallel' });
+    expect(armed).toHaveAttribute('aria-pressed', 'true');
+    await user.click(armed);
+    expect(onConstraintTool).toHaveBeenLastCalledWith(null);
+  });
+
+  it('disables constraining until the sketch node exists', () => {
+    renderRail({ canConstrain: false });
+    expect(screen.getByRole('button', { name: 'Horizontal' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Solve' })).toBeDisabled();
+  });
+
+  it('solves on demand and shows the status pill', async () => {
+    const user = userEvent.setup();
+    const onSolve = vi.fn();
+    renderRail({
+      onSolve,
+      constraints: [{ constraintId: 'scon_1', label: 'Horizontal · Line' }],
+      solveStatus: { label: '2 DOF remaining', tone: 'info' }
+    });
+
+    expect(screen.getByRole('status')).toHaveTextContent('2 DOF remaining');
+    await user.click(screen.getByRole('button', { name: 'Solve' }));
+    expect(onSolve).toHaveBeenCalledOnce();
+  });
+
+  it('lists constraints in the palette with per-row delete', async () => {
+    const user = userEvent.setup();
+    const onDeleteConstraint = vi.fn();
+    renderRail({
+      onDeleteConstraint,
+      constraints: [
+        { constraintId: 'scon_1', label: 'Horizontal · Line 1' },
+        { constraintId: 'scon_2', label: 'Parallel · Line 1 ∥ Line 2' }
+      ]
+    });
+
+    await user.click(
+      screen.getByRole('button', {
+        name: 'Delete constraint: Parallel · Line 1 ∥ Line 2'
+      })
+    );
+    expect(onDeleteConstraint).toHaveBeenCalledWith('scon_2');
   });
 });
