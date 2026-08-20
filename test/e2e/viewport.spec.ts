@@ -1681,6 +1681,53 @@ test('view keys still work while a profile pick is waiting for a click', async (
   ).toHaveCount(0);
 });
 
+test('section view cycles planes, offers an offset slider, and cuts nothing from the model', async ({
+  page
+}) => {
+  await stubApi(page);
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('Section Cutaway');
+  await page.getByRole('button', { name: 'Create project' }).click();
+  await expect(page.locator('.viewer-host canvas')).toBeVisible();
+
+  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
+  await page
+    .getByRole('region', { name: 'Feature inspector' })
+    .getByRole('button', { name: /^Create/ })
+    .click();
+  await expect(
+    page.locator('.feature-row-main', { hasText: 'Box' })
+  ).toBeVisible();
+
+  const sectionButton = page.getByRole('button', { name: /^Section view/ });
+  await expect(sectionButton).toHaveAttribute('aria-pressed', 'false');
+
+  // Off → XY, with the offset slider sliding out beside the rail.
+  await sectionButton.click();
+  await expect(sectionButton).toHaveAttribute('aria-pressed', 'true');
+  await expect(sectionButton).toHaveAttribute(
+    'aria-label',
+    /now: XY plane/
+  );
+  const slider = page.getByRole('slider', { name: 'Section plane offset' });
+  await expect(slider).toBeVisible();
+  await slider.focus();
+  await page.keyboard.press('ArrowLeft');
+
+  // XY → XZ → YZ → off; the cut is display-only, so the feature tree and
+  // the body list never change while cycling.
+  await sectionButton.click();
+  await expect(sectionButton).toHaveAttribute('aria-label', /now: XZ plane/);
+  await sectionButton.click();
+  await expect(sectionButton).toHaveAttribute('aria-label', /now: YZ plane/);
+  await sectionButton.click();
+  await expect(sectionButton).toHaveAttribute('aria-pressed', 'false');
+  await expect(slider).toHaveCount(0);
+  await expect(
+    page.locator('.feature-row-main', { hasText: 'Box' })
+  ).toBeVisible();
+});
+
 test('the control reference shows the mouse bindings, not just the keys', async ({
   page
 }) => {
