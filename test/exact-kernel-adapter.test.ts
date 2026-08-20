@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
@@ -16,6 +17,8 @@ import {
   mirrorBody,
   addSplitFeature,
   holeBody,
+  importStepBody,
+  updateFeature,
   offsetSolidBody,
   patternBody,
   shellBody,
@@ -5539,6 +5542,144 @@ describe('exact kernel adapter', { timeout: 30_000 }, () => {
         solid: true,
         valid: true
       });
+    }
+  });
+
+  it('imports only the selected solids of a multi-solid STEP file', async () => {
+    // Author a two-solid file with the adapter's own writer: a 10-cube and a
+    // 20-cube, so each solid is identifiable by volume alone.
+    let source = addPrimitiveFeature(
+      createProjectDocument('Multi source', toUserId('user_exact')),
+      {
+        name: 'Small',
+        primitiveKind: 'box',
+        dimensions: { width: 10, height: 10, depth: 10 }
+      }
+    );
+    source = addPrimitiveFeature(source, {
+      name: 'Large',
+      primitiveKind: 'box',
+      dimensions: { width: 20, height: 20, depth: 20 }
+    });
+    const stepText = await adapter.exportStep(source, source.bodyOrder);
+
+    const importDocument = (solidIndices?: number[]) =>
+      importStepBody(
+        createProjectDocument('Partial import', toUserId('user_exact')),
+        {
+          name: 'Imported',
+          artifactId: 'artifact_partial',
+          sourceName: 'partial.step',
+          stepText,
+          ...(solidIndices ? { solidIndices } : {})
+        }
+      );
+
+    const everything = importDocument();
+    const allDerived = await adapter.syncDocument(everything.document);
+    expect(allDerived.warnings).toEqual([]);
+    const allBody = allDerived.bodyRepresentations[everything.bodyId];
+    expect(allBody?.importedStepDeclaredSolidCount).toBe(2);
+    expect(allBody?.volume).toBeCloseTo(1000 + 8000, 4);
+
+    // Selection names DECLARED indices, in the file's stable order.
+    const first = importDocument([0]);
+    const firstDerived = await adapter.syncDocument(first.document);
+    expect(firstDerived.warnings).toEqual([]);
+    expect(firstDerived.bodyRepresentations[first.bodyId]?.volume).toBeCloseTo(
+      1000,
+      4
+    );
+    const second = importDocument([1]);
+    const secondDerived = await adapter.syncDocument(second.document);
+    expect(secondDerived.warnings).toEqual([]);
+    expect(
+      secondDerived.bodyRepresentations[second.bodyId]?.volume
+    ).toBeCloseTo(8000, 4);
+
+    // Editing the selection on an existing import re-imports accordingly —
+    // the inspector's include/exclude flow is exactly this patch.
+    const featureId = everything.document.featureOrder[0]!;
+    const narrowed = updateFeature(everything.document, {
+      featureId,
+      data: { solidIndices: [1] }
+    });
+    const narrowedDerived = await adapter.syncDocument(narrowed);
+    expect(narrowedDerived.warnings).toEqual([]);
+    expect(
+      narrowedDerived.bodyRepresentations[everything.bodyId]?.volume
+    ).toBeCloseTo(8000, 4);
+
+    // A selection outside the declared range keeps nothing: a build warning,
+    // not a silent empty body.
+    const missed = importDocument([7]);
+    const missedDerived = await adapter.syncDocument(missed.document);
+    expect(missedDerived.warnings.join('\n')).toMatch(
+      /excludes every readable solid/
+    );
+    expect(missedDerived.bodyRepresentations[missed.bodyId]).toBeUndefined();
+  });
+
+  it('shares one cached parse across features selecting different solids', async () => {
+    let source = addPrimitiveFeature(
+      createProjectDocument('Cache source', toUserId('user_exact')),
+      {
+        name: 'Small',
+        primitiveKind: 'box',
+        dimensions: { width: 10, height: 10, depth: 10 }
+      }
+    );
+    source = addPrimitiveFeature(source, {
+      name: 'Large',
+      primitiveKind: 'box',
+      dimensions: { width: 20, height: 20, depth: 20 }
+    });
+    const stepText = await adapter.exportStep(source, source.bodyOrder);
+    const bytes = new TextEncoder().encode(stepText);
+    const checksum = createHash('sha256').update(bytes).digest('hex');
+    const ref = {
+      marker: 'openzcad-source-ref',
+      version: 1,
+      hashAlgorithm: 'sha256',
+      checksumSha256: checksum,
+      logicalBytes: bytes.byteLength
+    } as const;
+
+    const cachingAdapter = await createExactKernelAdapter({
+      resolveSourceBytes: async () => bytes
+    });
+    try {
+      // Two features import the SAME file with different selections: the
+      // second must be served by the file-level cache and still filter to
+      // its own subset.
+      const document = importStepBody(
+        createProjectDocument('Shared parse', toUserId('user_exact')),
+        {
+          name: 'First half',
+          artifactId: 'artifact_shared',
+          sourceName: 'shared.step',
+          stepSourceRef: ref,
+          solidIndices: [0]
+        }
+      ).document;
+      const firstBodyId = document.bodyOrder[0]!;
+      const withSecond = importStepBody(document, {
+        name: 'Second half',
+        artifactId: 'artifact_shared',
+        sourceName: 'shared.step',
+        stepSourceRef: ref,
+        solidIndices: [1]
+      });
+      const derived = await cachingAdapter.syncDocument(withSecond.document);
+      expect(derived.warnings).toEqual([]);
+      expect(
+        derived.bodyRepresentations[firstBodyId]?.volume
+      ).toBeCloseTo(1000, 4);
+      expect(
+        derived.bodyRepresentations[withSecond.bodyId]?.volume
+      ).toBeCloseTo(8000, 4);
+    } finally {
+      cachingAdapter.dispose();
     }
   });
 
