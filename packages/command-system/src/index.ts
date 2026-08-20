@@ -9,14 +9,17 @@ import {
   type ParametricTransform3D,
   type ProjectDocument,
   type SerializedCommand,
+  toSketchConstraintId,
   type SketchId,
   type SketchObjectData,
   type SketchProfileReference
 } from '@openzcad/shared';
 import {
   addPrimitiveFeature,
+  addSketchConstraint,
   addSketchFeature,
   addSketchObjects,
+  deleteSketchConstraint,
   deleteSketchObject,
   resolveSketchInput,
   updateSketchObject,
@@ -77,6 +80,8 @@ import {
   type PatternInput,
   type PrimitiveInput,
   type RevolveInput,
+  type SketchConstraintAddInput,
+  type SketchConstraintDeleteInput,
   type SketchInput,
   type SketchObjectAddInput,
   type SketchObjectDeleteInput,
@@ -110,6 +115,8 @@ export type CommandKind =
   | 'sketch.object.add'
   | 'sketch.object.update'
   | 'sketch.object.delete'
+  | 'sketch.constraint.add'
+  | 'sketch.constraint.delete'
   | 'feature.extrude'
   | 'feature.revolve'
   | 'feature.loft'
@@ -159,6 +166,8 @@ export type AnyCommand =
   | CommandDefinition<SketchObjectAddInput>
   | CommandDefinition<SketchObjectUpdateInput>
   | CommandDefinition<SketchObjectDeleteInput>
+  | CommandDefinition<SketchConstraintAddInput>
+  | CommandDefinition<SketchConstraintDeleteInput>
   | CommandDefinition<ExtrudeInput>
   | CommandDefinition<RevolveInput>
   | CommandDefinition<LoftInput>
@@ -577,6 +586,44 @@ export const commandFactories = {
       label,
       payload,
       (document) => deleteSketchObject(document, payload),
+      (document) => {
+        if (!findSketch(document, payload.sketchId)) {
+          throw new Error(`Sketch ${payload.sketchId} not found.`);
+        }
+      }
+    );
+  },
+  addSketchConstraint(
+    payload: SketchConstraintAddInput,
+    label = 'Add sketch constraint'
+  ): CommandDefinition<SketchConstraintAddInput> {
+    const withIds = {
+      ...payload,
+      ids: payload.ids ?? {
+        constraintId: toSketchConstraintId(createId('scon'))
+      }
+    };
+    return makeCommand(
+      'sketch.constraint.add',
+      label,
+      withIds,
+      (document) => addSketchConstraint(document, withIds).document,
+      (document) => {
+        if (!findSketch(document, payload.sketchId)) {
+          throw new Error(`Sketch ${payload.sketchId} not found.`);
+        }
+      }
+    );
+  },
+  deleteSketchConstraint(
+    payload: SketchConstraintDeleteInput,
+    label = 'Delete sketch constraint'
+  ): CommandDefinition<SketchConstraintDeleteInput> {
+    return makeCommand(
+      'sketch.constraint.delete',
+      label,
+      payload,
+      (document) => deleteSketchConstraint(document, payload),
       (document) => {
         if (!findSketch(document, payload.sketchId)) {
           throw new Error(`Sketch ${payload.sketchId} not found.`);
@@ -2110,6 +2157,18 @@ export function replayCommands(
         next = deleteSketchObject(
           next,
           command.payload as SketchObjectDeleteInput
+        );
+        break;
+      case 'sketch.constraint.add':
+        next = addSketchConstraint(
+          next,
+          command.payload as SketchConstraintAddInput
+        ).document;
+        break;
+      case 'sketch.constraint.delete':
+        next = deleteSketchConstraint(
+          next,
+          command.payload as SketchConstraintDeleteInput
         );
         break;
       case 'feature.extrude':
