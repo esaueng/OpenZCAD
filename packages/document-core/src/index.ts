@@ -2351,6 +2351,52 @@ export function updateFeature(
   return next;
 }
 
+export interface FeatureMoveInput {
+  featureId: FeatureId;
+  /** Target position in the RESOLVED feature order (0-based). */
+  toIndex: number;
+}
+
+/**
+ * Move a feature to a new position in the replay timeline.
+ *
+ * Operates on the resolved order (`listFeaturesInOrder`), so features a
+ * partial `featureOrder` merely implies are materialized into an explicit
+ * order by the move. Returns the document unchanged — same reference, no
+ * version bump — when the move is a no-op: unknown feature, out-of-range
+ * index, or the feature's current position.
+ *
+ * Order LEGALITY (a feature landing before a body it consumes exists) is
+ * deliberately not checked here: document-core mutations are pure shape
+ * edits, and the command layer validates dependencies before applying,
+ * exactly as feature updates do.
+ */
+export function moveFeature(
+  document: ProjectDocument,
+  input: FeatureMoveInput
+): ProjectDocument {
+  const ordered = listFeaturesInOrder(document).map(
+    (feature) => feature.featureId
+  );
+  const from = ordered.indexOf(input.featureId);
+  if (
+    from === -1 ||
+    !Number.isInteger(input.toIndex) ||
+    input.toIndex < 0 ||
+    input.toIndex >= ordered.length ||
+    input.toIndex === from
+  ) {
+    return document;
+  }
+  const next = cloneDocument(document);
+  const reordered = [...ordered];
+  const [moved] = reordered.splice(from, 1);
+  reordered.splice(input.toIndex, 0, moved!);
+  next.featureOrder = reordered;
+  next.version += 1;
+  return next;
+}
+
 export function deleteFeature(
   document: ProjectDocument,
   input: FeatureDeleteInput

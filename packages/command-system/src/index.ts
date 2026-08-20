@@ -19,72 +19,69 @@ import {
   addSketchConstraint,
   addSketchFeature,
   addSketchObjects,
-  deleteSketchConstraint,
-  deleteSketchObject,
-  resolveSketchInput,
-  updateSketchObject,
+  addSplitFeature,
   appendRevision,
   attachDerivedState,
   booleanBodies,
+  type BooleanInput,
   chamferEdges,
   createBodyFeatureIds,
   createFeatureOnlyIds,
   createParameterIds,
   createSketchFeatureIds,
+  createSplitFeatureIds,
   deleteFeature,
-  directEditBody,
-  draftBody,
   deleteParameter,
+  deleteSketchConstraint,
+  deleteSketchObject,
+  directEditBody,
+  type DirectEditInput,
+  draftBody,
+  type DraftInput,
+  type EdgeModifierInput,
   evaluateExpression,
+  type ExtrudeInput,
   extrudeSketch,
-  helicalSweepProfile,
+  type FeatureDeleteInput,
+  type FeatureMoveInput,
+  type FeatureUpdateInput,
   filletEdges,
   findFeature,
   findSketch,
   getParameterScope,
-  isValidParameterName,
+  type HelicalSweepInput,
+  helicalSweepProfile,
+  holeBody,
+  type HoleInput,
+  type ImportedMeshInput,
+  type ImportedStepInput,
   importMeshBody,
   importStepBody,
-  mirrorBody,
-  addSplitFeature,
-  createSplitFeatureIds,
-  holeBody,
+  isValidParameterName,
+  listFeaturesInOrder,
+  listNodesByKind,
+  type LoftInput,
   loftSections,
+  mirrorBody,
+  type MirrorInput,
+  moveFeature,
+  type NodeMetadataInput,
+  type NodeRenameInput,
   offsetSolidBody,
+  type ParameterDeleteInput,
+  type ParameterSetInput,
   patternBody,
+  type PatternInput,
+  type PrimitiveInput,
   renameNode,
   resolveParamValue,
+  resolveSketchInput,
+  type RevolveInput,
   revolveSketch,
   setNodeMetadata,
   setParameter,
   shellBody,
-  sweepProfile,
-  thickenFace,
-  transformBody,
-  updateFeature,
-  updateSketch,
-  translateSketch,
-  type BooleanInput,
-  type DirectEditInput,
-  type DraftInput,
-  type ExtrudeInput,
-  type HelicalSweepInput,
-  type EdgeModifierInput,
-  type FeatureDeleteInput,
-  type FeatureUpdateInput,
-  type ImportedMeshInput,
-  type ImportedStepInput,
-  type MirrorInput,
-  type SplitInput,
-  type HoleInput,
-  type LoftInput,
-  type NodeMetadataInput,
-  type NodeRenameInput,
-  type ParameterDeleteInput,
-  type ParameterSetInput,
-  type PatternInput,
-  type PrimitiveInput,
-  type RevolveInput,
+  type ShellInput,
   type SketchConstraintAddInput,
   type SketchConstraintDeleteInput,
   type SketchInput,
@@ -93,11 +90,18 @@ import {
   type SketchObjectUpdateInput,
   type SketchTranslateInput,
   type SketchUpdateInput,
-  type ShellInput,
   type SolidOffsetInput,
+  type SplitInput,
   type SweepInput,
+  sweepProfile,
+  thickenFace,
   type ThickenInput,
-  type TransformInput
+  transformBody,
+  type TransformInput,
+  translateSketch,
+  updateFeature,
+  updateSketch,
+  updateSketchObject
 } from '@openzcad/document-core';
 import {
   isSketchDimensionField,
@@ -142,6 +146,7 @@ export type CommandKind =
   | 'feature.pattern'
   | 'feature.update'
   | 'feature.delete'
+  | 'feature.reorder'
   | 'parameter.set'
   | 'parameter.delete'
   | 'import.mesh'
@@ -223,6 +228,98 @@ function makeCommand<TPayload>(
       };
     }
   };
+}
+
+/** Every string primitive nested anywhere in a feature's data payload. */
+function collectDataStrings(value: unknown, into: Set<string>): void {
+  if (typeof value === 'string') {
+    into.add(value);
+    return;
+  }
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      collectDataStrings(item, into);
+    }
+    return;
+  }
+  if (value !== null && typeof value === 'object') {
+    for (const item of Object.values(value)) {
+      collectDataStrings(item, into);
+    }
+  }
+}
+
+/**
+ * Refuse a reorder that would replay a feature before something it consumes
+ * exists. The dependency walk is identity-based rather than schema-based:
+ * every body id in a feature's payload must be produced by a strictly
+ * earlier feature (body nodes record their producing feature), and every
+ * feature id it references (a face attachment's producing feature, a
+ * lineage reference) must likewise come earlier. Ids are namespaced
+ * (`body_*`, `feat_*` UUIDs), so bare membership is collision-free, and a
+ * schema walk would rot every time a feature kind adds a field.
+ *
+ * Without this gate an illegal order does not fail loudly — the exact
+ * replay is fail-soft per feature, so the model would quietly lose every
+ * downstream body behind one warning.
+ */
+function validateFeatureReorder(
+  document: ProjectDocument,
+  payload: FeatureMoveInput
+): void {
+  const ordered = listFeaturesInOrder(document);
+  const from = ordered.findIndex(
+    (feature) => feature.featureId === payload.featureId
+  );
+  if (from === -1) {
+    throw new Error(`Feature ${payload.featureId} not found.`);
+  }
+  if (
+    !Number.isInteger(payload.toIndex) ||
+    payload.toIndex < 0 ||
+    payload.toIndex >= ordered.length ||
+    payload.toIndex === from
+  ) {
+    return; // The apply is a no-op; nothing to validate.
+  }
+  const reordered = [...ordered];
+  const [moved] = reordered.splice(from, 1);
+  reordered.splice(payload.toIndex, 0, moved!);
+
+  const featurePosition = new Map<string, number>();
+  reordered.forEach((feature, index) => {
+    featurePosition.set(feature.featureId, index);
+  });
+  const bodyProducerPosition = new Map<string, number>();
+  for (const body of listNodesByKind(document, 'body')) {
+    const producer = featurePosition.get(body.featureId);
+    if (producer !== undefined) {
+      bodyProducerPosition.set(body.bodyId, producer);
+    }
+  }
+
+  reordered.forEach((feature, index) => {
+    const referenced = new Set<string>();
+    collectDataStrings(feature.data, referenced);
+    for (const id of referenced) {
+      const producedAt = bodyProducerPosition.get(id);
+      if (
+        producedAt !== undefined &&
+        producedAt > index &&
+        featurePosition.get(feature.featureId) !== producedAt
+      ) {
+        throw new Error(
+          `Cannot reorder: "${feature.name}" would run before the body it uses exists.`
+        );
+      }
+      const featureAt = featurePosition.get(id);
+      if (featureAt !== undefined && id !== feature.featureId && featureAt > index) {
+        throw new Error(
+          `Cannot reorder: "${feature.name}" would run before the feature it depends on.`
+        );
+      }
+    }
+  });
 }
 
 function validateBodyTarget(document: ProjectDocument, bodyId: BodyId): void {
@@ -1065,6 +1162,18 @@ export const commandFactories = {
       payload,
       (document) => updateFeature(document, payload),
       (document) => validateModelingFeatureUpdate(document, payload)
+    );
+  },
+  moveFeature(
+    payload: FeatureMoveInput,
+    label = 'Reorder feature'
+  ): CommandDefinition<FeatureMoveInput> {
+    return makeCommand(
+      'feature.reorder',
+      label,
+      payload,
+      (document) => moveFeature(document, payload),
+      (document) => validateFeatureReorder(document, payload)
     );
   },
   deleteFeature(
@@ -2409,6 +2518,9 @@ export function replayCommands(
           next,
           command.payload as ImportedStepInput
         ).document;
+        break;
+      case 'feature.reorder':
+        next = moveFeature(next, command.payload as FeatureMoveInput);
         break;
       case 'node.rename':
         next = renameNode(next, command.payload as NodeRenameInput);

@@ -13,6 +13,7 @@ import {
   EyeOff,
   FileBox,
   Globe,
+  GripVertical,
   History,
   Layers,
   Move3d,
@@ -283,6 +284,7 @@ interface SidebarProps {
   onSetParameter(name: string, expression: string): void;
   onDeleteParameter(name: string): void;
   onDeleteFeature(featureId: FeatureId, name: string): void;
+  onReorderFeature(featureId: FeatureId, toIndex: number): void;
   panelState: PanelState;
   onToggleSection(id: SidebarSectionId): void;
 }
@@ -327,9 +329,13 @@ export function Sidebar({
   onSetParameter,
   onDeleteParameter,
   onDeleteFeature,
+  onReorderFeature,
   panelState,
   onToggleSection
 }: SidebarProps) {
+  // Drag-to-reorder state for the history timeline (StartScreen's pattern).
+  const [dragFeatureId, setDragFeatureId] = useState<string | null>(null);
+  const [dropFeatureId, setDropFeatureId] = useState<string | null>(null);
   // Bodies in feature-history order so the tree matches the timeline below.
   const bodies: BodyRepresentation[] = [];
   const seen = new Set<string>();
@@ -482,12 +488,71 @@ export function Sidebar({
             return (
               <div
                 key={feature.id}
-                className={`feature-row ${selectedFeatureNodeId === feature.id ? 'selected' : ''} ${consumed ? 'consumed' : ''} ${hidden ? 'hidden-body' : ''} ${suppressed ? 'suppressed' : ''} ${rollbackMarkerIndex === index ? 'rollback-marker' : ''}`}
+                className={`feature-row ${selectedFeatureNodeId === feature.id ? 'selected' : ''} ${consumed ? 'consumed' : ''} ${hidden ? 'hidden-body' : ''} ${suppressed ? 'suppressed' : ''} ${rollbackMarkerIndex === index ? 'rollback-marker' : ''} ${dragFeatureId === feature.featureId ? 'is-dragging' : ''} ${dropFeatureId === feature.featureId ? 'is-drop-target' : ''}`}
                 onContextMenu={(event) => {
                   event.preventDefault();
                   onFeatureContextMenu(event, feature);
                 }}
+                onDragOver={(event) => {
+                  if (!dragFeatureId || dragFeatureId === feature.featureId) {
+                    return;
+                  }
+                  event.preventDefault();
+                  event.dataTransfer.dropEffect = 'move';
+                  setDropFeatureId(feature.featureId);
+                }}
+                onDragLeave={() => {
+                  setDropFeatureId((current) =>
+                    current === feature.featureId ? null : current
+                  );
+                }}
+                onDrop={(event) => {
+                  if (!dragFeatureId) {
+                    return;
+                  }
+                  event.preventDefault();
+                  onReorderFeature(dragFeatureId as FeatureId, index);
+                  setDragFeatureId(null);
+                  setDropFeatureId(null);
+                }}
               >
+                <button
+                  type="button"
+                  className="row-action feature-row-grip"
+                  aria-label={`Reorder ${feature.name}. Use the arrow keys to move it.`}
+                  title="Drag to reorder"
+                  draggable
+                  onDragStart={(event) => {
+                    event.dataTransfer.effectAllowed = 'move';
+                    event.dataTransfer.setData('text/plain', feature.featureId);
+                    const row = event.currentTarget.closest('.feature-row');
+                    if (row instanceof HTMLElement) {
+                      // Without this the drag ghost is the grip alone, which
+                      // gives no clue which row is being moved.
+                      event.dataTransfer.setDragImage(row, 16, 16);
+                    }
+                    setDragFeatureId(feature.featureId);
+                  }}
+                  onDragEnd={() => {
+                    setDragFeatureId(null);
+                    setDropFeatureId(null);
+                  }}
+                  onKeyDown={(event) => {
+                    const offset =
+                      event.key === 'ArrowUp'
+                        ? -1
+                        : event.key === 'ArrowDown'
+                          ? 1
+                          : 0;
+                    if (offset === 0) {
+                      return;
+                    }
+                    event.preventDefault();
+                    onReorderFeature(feature.featureId, index + offset);
+                  }}
+                >
+                  <GripVertical size={12} aria-hidden="true" />
+                </button>
                 <button
                   type="button"
                   className="feature-row-main"
