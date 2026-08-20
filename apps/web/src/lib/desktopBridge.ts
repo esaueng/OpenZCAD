@@ -225,14 +225,18 @@ function downloadBlobFile(
 
 export async function saveCadTextFile(
   suggestedName: string,
-  format: 'step' | 'stl',
+  format: 'step' | 'stl' | 'dxf',
   contents: string
 ): Promise<boolean> {
   if (!isDesktopApp()) {
     downloadBlobFile(
       suggestedName,
       contents,
-      format === 'step' ? 'model/step' : 'model/stl'
+      format === 'step'
+        ? 'model/step'
+        : format === 'dxf'
+          ? 'image/vnd.dxf'
+          : 'model/stl'
     );
     return true;
   }

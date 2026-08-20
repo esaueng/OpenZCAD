@@ -26,9 +26,25 @@ describe('selectionCapabilities', () => {
     });
     expect(capabilities.map((capability) => capability.action)).toEqual([
       'offset-face',
-      'sketch-on-face'
+      'sketch-on-face',
+      'export-face-dxf'
     ]);
     expect(preferredCapability(capabilities)?.action).toBe('offset-face');
+  });
+
+  it('offers the DXF outline export only for planar faces', () => {
+    const planar = selectionCapabilities({
+      kind: 'face',
+      target: { surfaceType: 'planar', hash: 12 }
+    });
+    expect(planar.some((c) => c.action === 'export-face-dxf' && c.enabled)).toBe(
+      true
+    );
+    const cylindrical = selectionCapabilities({
+      kind: 'face',
+      target: { surfaceType: 'cylindrical', hash: 12, radius: 3 }
+    });
+    expect(cylindrical.some((c) => c.action === 'export-face-dxf')).toBe(false);
   });
 
   it('keeps offset available but disables sketch for a hash-only planar face', () => {
