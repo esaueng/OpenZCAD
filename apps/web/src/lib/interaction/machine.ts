@@ -60,6 +60,24 @@ export type SketchToolId =
 export type SketchCircleMode =
   'center-radius' | 'two-point-diameter' | 'three-point';
 
+/** Stage-1 constraint tools exposed by the sketch rail. */
+export type SketchConstraintToolKind =
+  | 'horizontal'
+  | 'vertical'
+  | 'parallel'
+  | 'coincident'
+  | 'radius';
+
+export type SketchConstraintPick =
+  | { kind: 'object'; objectId: string }
+  | { kind: 'point'; objectId: string; point: 'start' | 'end' | 'center' };
+
+/** An armed constraint tool collecting viewport picks. */
+export interface PendingSketchConstraint {
+  kind: SketchConstraintToolKind;
+  picks: SketchConstraintPick[];
+}
+
 export interface SketchSessionState {
   /** Null until the first entity commit creates the sketch node. */
   sketchId: string | null;
@@ -70,6 +88,8 @@ export interface SketchSessionState {
   drawing: boolean;
   /** Stable document id of the entity selected for editing. */
   selectedObjectId: string | null;
+  /** Armed constraint tool, if any; picking routes here instead of select. */
+  pendingConstraint: PendingSketchConstraint | null;
 }
 
 export type OperationPhase =
@@ -124,6 +144,11 @@ export type InteractionEvent =
   | { type: 'sketch-created'; sketchId: string }
   | { type: 'sketch-drawing'; drawing: boolean }
   | { type: 'sketch-select-object'; objectId: string | null }
+  | {
+      type: 'sketch-constraint-tool';
+      kind: SketchConstraintToolKind | null;
+    }
+  | { type: 'sketch-constraint-pick'; pick: SketchConstraintPick }
   | { type: 'exit-sketch' }
   | { type: 'escape' }
   | { type: 'clear' }
@@ -152,6 +177,7 @@ export function escapeTarget(
   | 'recover-failure'
   | 'end-drawing'
   | 'exit-drawing-tool'
+  | 'cancel-constraint'
   | 'clear-sketch-selection'
   | 'clear-selection'
   | 'exit-sketch'
@@ -162,6 +188,11 @@ export function escapeTarget(
   if (state.mode === 'sketch') {
     if (state.session.drawing) {
       return 'end-drawing';
+    }
+    // A pick sequence in flight is the innermost sketch state: Escape must
+    // abandon it, never fall through and exit the sketch mid-pick.
+    if (state.session.pendingConstraint) {
+      return 'cancel-constraint';
     }
     if (state.session.tool !== 'select') {
       return 'exit-drawing-tool';
@@ -321,7 +352,8 @@ export function interactionReducer(
           tool: 'line',
           circleMode: 'center-radius',
           drawing: false,
-          selectedObjectId: null
+          selectedObjectId: null,
+          pendingConstraint: null
         }
       };
     case 'sketch-circle-mode':
@@ -335,7 +367,8 @@ export function interactionReducer(
           tool: 'circle',
           circleMode: event.mode,
           drawing: false,
-          selectedObjectId: null
+          selectedObjectId: null,
+          pendingConstraint: null
         }
       };
     case 'sketch-tool':
@@ -349,7 +382,40 @@ export function interactionReducer(
           tool: event.tool,
           drawing: false,
           selectedObjectId:
-            event.tool === 'select' ? state.session.selectedObjectId : null
+            event.tool === 'select' ? state.session.selectedObjectId : null,
+          pendingConstraint: null
+        }
+      };
+    case 'sketch-constraint-tool':
+      if (state.mode !== 'sketch') {
+        return state;
+      }
+      return {
+        ...state,
+        session: {
+          ...state.session,
+          // Picking rides the select tool's hit-testing, so arming a
+          // constraint always lands there; re-arming the same kind restarts
+          // its pick sequence.
+          tool: 'select',
+          drawing: false,
+          pendingConstraint: event.kind
+            ? { kind: event.kind, picks: [] }
+            : null
+        }
+      };
+    case 'sketch-constraint-pick':
+      if (state.mode !== 'sketch' || !state.session.pendingConstraint) {
+        return state;
+      }
+      return {
+        ...state,
+        session: {
+          ...state.session,
+          pendingConstraint: {
+            ...state.session.pendingConstraint,
+            picks: [...state.session.pendingConstraint.picks, event.pick]
+          }
         }
       };
     case 'sketch-created':
@@ -392,6 +458,11 @@ export function interactionReducer(
           return interactionReducer(state, {
             type: 'sketch-drawing',
             drawing: false
+          });
+        case 'cancel-constraint':
+          return interactionReducer(state, {
+            type: 'sketch-constraint-tool',
+            kind: null
           });
         case 'exit-drawing-tool':
           return interactionReducer(state, {
@@ -576,8 +647,9 @@ export function toolCardFor(state: InteractionState): ToolCardModel | null {
       return {
         icon: 'sketch',
         title: 'Sketch',
-        hint:
-          state.session.tool === 'select'
+        hint: state.session.pendingConstraint
+          ? 'Pick geometry for the constraint · Esc cancels.'
+          : state.session.tool === 'select'
             ? 'Select an entity to edit its exact values.'
             : state.session.tool === 'circle'
               ? state.session.circleMode === 'center-radius'

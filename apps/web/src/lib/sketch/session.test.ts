@@ -257,8 +257,8 @@ describe('sketch entity snapping', () => {
       identity
     );
     expect(targets).toEqual([
-      { x: 0, y: 0, kind: 'endpoint' },
-      { x: 10, y: 4, kind: 'endpoint' },
+      { x: 0, y: 0, kind: 'endpoint', pointRef: 'start' },
+      { x: 10, y: 4, kind: 'endpoint', pointRef: 'end' },
       { x: 5, y: 2, kind: 'midpoint' }
     ]);
   });
@@ -280,7 +280,12 @@ describe('sketch entity snapping', () => {
       { objectKind: 'circle', radius: 5, centerX: 3, centerY: -2 },
       identity
     );
-    expect(circleTargets).toContainEqual({ x: 3, y: -2, kind: 'center' });
+    expect(circleTargets).toContainEqual({
+      x: 3,
+      y: -2,
+      kind: 'center',
+      pointRef: 'center'
+    });
     expect(circleTargets).toContainEqual({ x: 8, y: -2, kind: 'quadrant' });
     expect(circleTargets).toHaveLength(5);
 
@@ -295,7 +300,12 @@ describe('sketch entity snapping', () => {
       },
       identity
     );
-    expect(arcTargets).toContainEqual({ x: 0, y: 0, kind: 'center' });
+    expect(arcTargets).toContainEqual({
+      x: 0,
+      y: 0,
+      kind: 'center',
+      pointRef: 'center'
+    });
     const start = arcTargets.find(
       (target) => target.kind === 'endpoint' && target.x === 10
     );
