@@ -66,8 +66,10 @@ export interface ExactBuildResult {
 }
 
 export interface MeasuredShape {
-  vertices: number[];
-  indices: number[];
+  /** Flat xyz triples; owned copy, detached from the WASM heap. */
+  vertices: Float32Array;
+  /** Body-scoped triangle indices (per-solid offsets already applied). */
+  indices: Uint32Array;
   topology: BodyTopology;
   faceCount: number;
   volume: number;

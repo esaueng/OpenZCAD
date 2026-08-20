@@ -3761,8 +3761,13 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     if (shape.solids.length === 0) {
       throw new Error('Exact body contains no solids.');
     }
-    const vertices: number[] = [];
-    const indices: number[] = [];
+    // Per-solid mesh chunks, concatenated once at the end. Typed throughout:
+    // the old number[] accumulation boxed every float and every index on its
+    // way to a structured clone across the worker boundary.
+    const vertexChunks: Float32Array[] = [];
+    const indexChunks: Uint32Array[] = [];
+    let vertexFloatCount = 0;
+    let indexCount = 0;
     const lineageDiagnostics =
       shape.lineage?.diagnostics.map(projectRemusLineageDiagnostic) ?? [];
     const topology: BodyTopology = { faces: [], edges: [] };
@@ -3815,17 +3820,21 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
       );
       try {
         const faceOffsets = Array.from(mesh.faceOffsets);
-        const vertexOffset = vertices.length / 3;
-        const indexOffset = indices.length;
-        // Large curved bodies can cross V8's argument-count limit when copied
-        // with `push(...typedArray)`. Iteration is bounded and avoids a second
-        // full-sized mapped array while the WASM mesh is still alive.
-        for (const position of mesh.positions) {
-          vertices.push(position);
+        const vertexOffset = vertexFloatCount / 3;
+        const indexOffset = indexCount;
+        // `slice` copies out of the WASM heap while the mesh is still alive;
+        // the shifted index copy applies the body-scoped vertex offset in the
+        // same pass.
+        const positions = mesh.positions.slice();
+        const meshIndices = mesh.indices;
+        const shifted = new Uint32Array(meshIndices.length);
+        for (let i = 0; i < meshIndices.length; i += 1) {
+          shifted[i] = meshIndices[i]! + vertexOffset;
         }
-        for (const index of mesh.indices) {
-          indices.push(index + vertexOffset);
-        }
+        vertexChunks.push(positions);
+        vertexFloatCount += positions.length;
+        indexChunks.push(shifted);
+        indexCount += shifted.length;
         // Both the tessellation groups and getSolidFaces iterate the same
         // underlying shell, so face handle i owns triangle range i. Guarded
         // because the fingerprint hash below silently depends on it.
@@ -3958,6 +3967,20 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
 
     if (lineageDiagnostics.length > 0) {
       topology.lineageDiagnostics = lineageDiagnostics;
+    }
+    const vertices = new Float32Array(vertexFloatCount);
+    const indices = new Uint32Array(indexCount);
+    {
+      let offset = 0;
+      for (const chunk of vertexChunks) {
+        vertices.set(chunk, offset);
+        offset += chunk.length;
+      }
+      offset = 0;
+      for (const chunk of indexChunks) {
+        indices.set(chunk, offset);
+        offset += chunk.length;
+      }
     }
     const meshClosure = strictBooleanValidation
       ? inspectTriangleMeshClosure(vertices, indices)

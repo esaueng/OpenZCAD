@@ -26,7 +26,7 @@ function bodyWith(
     bodyId: BODY_ID,
     name: 'Plate',
     source: 'primitive',
-    mesh: { kind: 'mesh', vertices: [], indices: [] },
+    mesh: { kind: 'mesh', vertices: Float32Array.from([]), indices: Uint32Array.from([]) },
     faceCount: faces.length,
     color: '#fff',
     exportableStep: true,
