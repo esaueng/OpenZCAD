@@ -230,17 +230,22 @@ export function SketchToolRail({
           const Icon = CONSTRAINT_ICONS[kind];
           const active = pendingConstraint?.kind === kind;
           return (
+            // Icon-only on purpose: five labelled buttons made the rail wider
+            // than the viewer, sliding its left edge under the sidebar where
+            // the parameter form intercepted every click on the Select tool.
             <button
               key={kind}
               type="button"
               className={active ? 'active' : undefined}
               aria-pressed={active}
+              aria-label={label}
               disabled={!canConstrain}
-              title={canConstrain ? hint : 'Draw an entity first.'}
+              title={
+                canConstrain ? `${label} — ${hint}` : 'Draw an entity first.'
+              }
               onClick={() => onConstraintTool(active ? null : kind)}
             >
               <Icon size={14} aria-hidden="true" />
-              {label}
             </button>
           );
         })}
