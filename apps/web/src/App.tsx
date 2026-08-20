@@ -9642,6 +9642,47 @@ export function App() {
     );
   }
 
+  /**
+   * Include or exclude one declared solid of an imported STEP feature. The
+   * inspector disables removing the last included solid, and the adapter
+   * refuses an empty selection as a build warning if one arrives anyway.
+   */
+  function handleToggleImportedSolid(featureId: FeatureId, solidIndex: number) {
+    if (!doc) {
+      return;
+    }
+    const feature = findFeature(doc, featureId);
+    if (
+      !feature ||
+      feature.data.featureKind !== 'imported-step' ||
+      !feature.bodyId
+    ) {
+      return;
+    }
+    const declared =
+      doc.derived.bodyRepresentations[feature.bodyId]
+        ?.importedStepDeclaredSolidCount ?? 0;
+    if (declared === 0) {
+      return;
+    }
+    const current =
+      feature.data.solidIndices ??
+      Array.from({ length: declared }, (_, index) => index);
+    const excluding = current.includes(solidIndex);
+    const next = excluding
+      ? current.filter((index) => index !== solidIndex)
+      : [...current, solidIndex].sort((a, b) => a - b);
+    if (next.length === 0) {
+      return;
+    }
+    executeCommand(
+      commandFactories.updateFeature(
+        { featureId, data: { solidIndices: next } },
+        excluding ? 'Exclude imported solid' : 'Include imported solid'
+      )
+    );
+  }
+
   function handleDeleteFeature(featureId: FeatureId, name: string) {
     if (
       executeCommand(
@@ -12101,6 +12142,7 @@ export function App() {
                 onDeleteFeature={(feature) =>
                   handleDeleteFeature(feature.featureId, feature.name)
                 }
+                onToggleImportedSolid={handleToggleImportedSolid}
               />
             )}
           </ErrorBoundary>

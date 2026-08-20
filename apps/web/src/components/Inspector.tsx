@@ -14,6 +14,7 @@ import type {
   BodyRepresentation,
   BooleanOperation,
   FaceGeometry,
+  FeatureId,
   FeatureNode,
   ParamValue,
   PrimitiveKind,
@@ -158,6 +159,8 @@ export interface InspectorCallbacks {
     geometry: FaceGeometry
   ): void;
   onDeleteFeature(feature: FeatureNode): void;
+  /** Include/exclude one declared solid of an imported-step feature. */
+  onToggleImportedSolid(featureId: FeatureId, solidIndex: number): void;
   /** Drag-phase body appearance patch; null restores the committed look. */
   onPreviewBodyAppearance(preview: BodyAppearancePreview | null): void;
   /** Commits body appearance through node metadata; null opacity resets. */
@@ -1107,13 +1110,46 @@ export function Inspector(props: InspectorProps) {
         </div>
       );
     } else if (data.featureKind === 'imported-step') {
+      const declaredCount =
+        selectedBody?.importedStepDeclaredSolidCount ?? 0;
+      const included = (index: number) =>
+        data.solidIndices === undefined || data.solidIndices.includes(index);
+      const includedCount = Array.from(
+        { length: declaredCount },
+        (_, index) => index
+      ).filter(included).length;
       form = (
-        <div className="kv-grid">
-          <b>source</b>
-          <span>{data.sourceName}</span>
-          <b>mode</b>
-          <span>editable exact B-rep</span>
-        </div>
+        <>
+          <div className="kv-grid">
+            <b>source</b>
+            <span>{data.sourceName}</span>
+            <b>mode</b>
+            <span>editable exact B-rep</span>
+          </div>
+          {declaredCount > 1 && (
+            <fieldset className="import-solid-selection">
+              <legend>Imported solids</legend>
+              {Array.from({ length: declaredCount }, (_, index) => (
+                <label key={index}>
+                  <input
+                    type="checkbox"
+                    checked={included(index)}
+                    // The last included solid cannot be removed: an import
+                    // of nothing is a build failure, not a lighter body.
+                    disabled={included(index) && includedCount === 1}
+                    onChange={() =>
+                      props.onToggleImportedSolid(
+                        selectedFeature.featureId,
+                        index
+                      )
+                    }
+                  />
+                  <span>Solid {index + 1}</span>
+                </label>
+              ))}
+            </fieldset>
+          )}
+        </>
       );
     }
 

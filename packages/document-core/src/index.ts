@@ -429,6 +429,8 @@ export interface ImportedStepInput {
   stepText?: string;
   /** Content-addressed form; the bytes live in the source blob store. */
   stepSourceRef?: ImportedSourceReference;
+  /** Partial import: declared-order solid indices to keep; absent = all. */
+  solidIndices?: number[];
   ids?: BodyFeatureIds;
 }
 
@@ -1984,7 +1986,10 @@ export function importStepBody(
       sourceName: input.sourceName,
       ...(input.stepText !== undefined
         ? { stepText: input.stepText }
-        : { stepSourceRef: input.stepSourceRef })
+        : { stepSourceRef: input.stepSourceRef }),
+      ...(input.solidIndices !== undefined
+        ? { solidIndices: [...input.solidIndices] }
+        : {})
     }
   };
 
@@ -2280,7 +2285,13 @@ const FEATURE_DATA_KEYS: Record<FeatureKind, readonly string[]> = {
     'count2'
   ],
   'direct-edit': ['targetBodyId', 'operation'],
-  'imported-step': ['artifactId', 'sourceName', 'stepText', 'stepSourceRef'],
+  'imported-step': [
+    'artifactId',
+    'sourceName',
+    'stepText',
+    'stepSourceRef',
+    'solidIndices'
+  ],
   'imported-mesh': [
     'artifactId',
     'sourceName',
