@@ -1,7 +1,13 @@
-import type { BodyId, ProjectDocument, ProjectId } from '@openzcad/shared';
+import type {
+  BodyId,
+  ProjectDocument,
+  ProjectId,
+  SketchId
+} from '@openzcad/shared';
 import type {
   createExactKernelAdapter,
-  MeshQualityReport
+  MeshQualityReport,
+  SketchSolveOutcome
 } from '@openzcad/kernel-adapter/exact';
 import {
   ExactRebuildCache,
@@ -36,6 +42,12 @@ export type GeometryWorkerRequest =
       document: ProjectDocument;
       bodyIds: BodyId[];
       deflection: number;
+    }
+  | {
+      type: 'solve-sketch';
+      requestId: string;
+      document: ProjectDocument;
+      sketchId: SketchId;
     };
 
 export type GeometryWorkerPhase =
@@ -109,11 +121,21 @@ export type GeometryMeshQualityResult =
     }
   | { type: 'mesh-quality'; ok: false; requestId: string; error: string };
 
+export type GeometrySolveSketchResult =
+  | {
+      type: 'solve-sketch';
+      ok: true;
+      requestId: string;
+      outcome: SketchSolveOutcome;
+    }
+  | { type: 'solve-sketch'; ok: false; requestId: string; error: string };
+
 export type GeometryWorkerResult =
   | GeometryWorkerState
   | GeometrySyncResult
   | GeometryExportResult
-  | GeometryMeshQualityResult;
+  | GeometryMeshQualityResult
+  | GeometrySolveSketchResult;
 
 type ExactKernel = Awaited<ReturnType<typeof createExactKernelAdapter>>;
 let exactKernelStatus: 'idle' | 'loading' | 'ready' | 'failed' = 'idle';
@@ -251,7 +273,11 @@ async function execute(job: GeometryWorkerJob): Promise<void> {
     // blocks the rest of the model on one unavailable font.
     await preloadDocumentFonts(document);
 
-    if (request.type === 'export' || request.type === 'mesh-quality') {
+    if (
+      request.type === 'export' ||
+      request.type === 'mesh-quality' ||
+      request.type === 'solve-sketch'
+    ) {
       // 'failed' means the next load call retries, so it is a loading state
       // here too, not a terminal one.
       if (exactKernelStatus !== 'ready') {
@@ -264,6 +290,17 @@ async function execute(job: GeometryWorkerJob): Promise<void> {
           : new Error('The exact Remus kernel failed to load.');
       }
       post(stateFor('rebuilding', request, { stale: true }));
+      if (request.type === 'solve-sketch') {
+        const outcome = await exact.solveSketch(document, request.sketchId);
+        post({
+          type: 'solve-sketch',
+          ok: true,
+          requestId: request.requestId,
+          outcome
+        });
+        post(stateFor('ready', request, { stale: false }));
+        return;
+      }
       if (request.type === 'mesh-quality') {
         const report = await exact.meshQuality(
           document,
@@ -368,6 +405,13 @@ async function execute(job: GeometryWorkerJob): Promise<void> {
     } else if (request.type === 'mesh-quality') {
       post({
         type: 'mesh-quality',
+        ok: false,
+        requestId: request.requestId,
+        error: message
+      });
+    } else if (request.type === 'solve-sketch') {
+      post({
+        type: 'solve-sketch',
         ok: false,
         requestId: request.requestId,
         error: message

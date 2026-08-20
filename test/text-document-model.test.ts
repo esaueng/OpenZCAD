@@ -623,7 +623,7 @@ describe('existing documents are unaffected', () => {
     const migrated = normalizeDocument(legacy);
 
     expect(migrated.schemaVersion).toBe(PROJECT_DOCUMENT_SCHEMA_VERSION);
-    expect(PROJECT_DOCUMENT_SCHEMA_VERSION).toBe(8);
+    expect(PROJECT_DOCUMENT_SCHEMA_VERSION).toBe(9);
     // Nothing but the version stamp moves.
     expect({ ...migrated, schemaVersion: 6 }).toEqual(legacy);
   });

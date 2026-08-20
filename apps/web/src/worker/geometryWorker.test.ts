@@ -3,7 +3,7 @@ import {
   addPrimitiveFeature,
   createProjectDocument
 } from '@openzcad/document-core';
-import { toUserId, type ProjectDocument } from '@openzcad/shared';
+import { toSketchId, toUserId, type ProjectDocument } from '@openzcad/shared';
 import type {
   GeometryWorkerRequest,
   GeometryWorkerResult
@@ -274,6 +274,49 @@ describe('geometry worker rebuild coordination', () => {
       format: '3mf',
       deflection: 0.05
     });
+  });
+
+  it('answers solve-sketch requests with the adapter outcome', async () => {
+    const outcome = {
+      classification: 'solved',
+      converged: true,
+      iterations: 3,
+      maxResidual: 0,
+      rolledBack: false,
+      dof: { dof: 4, rank: 2, numParams: 6, numEquations: 2 },
+      constraintResiduals: [],
+      objects: []
+    };
+    const solveSketch = vi.fn(async () => outcome);
+    const { scope } = await installWorker(async () => derived('unused'), {
+      solveSketch
+    });
+    const document = addPrimitiveFeature(
+      createProjectDocument('Sketch Solve', toUserId('user')),
+      {
+        name: 'Box',
+        primitiveKind: 'box',
+        dimensions: { width: 10, height: 20, depth: 30 }
+      }
+    );
+    post(scope, {
+      type: 'solve-sketch',
+      requestId: 'solve-1',
+      document,
+      sketchId: toSketchId('sketch_a')
+    });
+
+    await vi.waitFor(() =>
+      expect(scope.postMessage).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: 'solve-sketch',
+          ok: true,
+          requestId: 'solve-1',
+          outcome
+        })
+      )
+    );
+    expect(solveSketch).toHaveBeenCalledWith(document, 'sketch_a');
   });
 
   it('answers mesh-quality requests with the adapter report', async () => {

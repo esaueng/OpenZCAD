@@ -11,8 +11,9 @@ export type ArtifactId = Brand<string, 'ArtifactId'>;
 export type RevisionId = Brand<string, 'RevisionId'>;
 export type UploadSessionId = Brand<string, 'UploadSessionId'>;
 export type AssetId = Brand<string, 'AssetId'>;
+export type SketchConstraintId = Brand<string, 'SketchConstraintId'>;
 
-export const PROJECT_DOCUMENT_SCHEMA_VERSION = 8 as const;
+export const PROJECT_DOCUMENT_SCHEMA_VERSION = 9 as const;
 export type ProjectDocumentSchemaVersion =
   typeof PROJECT_DOCUMENT_SCHEMA_VERSION;
 
@@ -348,6 +349,61 @@ export interface SketchNode extends BaseNode {
   /** @deprecated Schema v3 field; superseded by `planeRef`. Kept so legacy documents parse. */
   offset?: ParamValue;
   objectIds: EntityId[];
+  /**
+   * Persisted design intent between this sketch's objects, solved by the
+   * kernel's GCS. Schema v9, additive: absent means no constraints, so every
+   * earlier document replays untouched.
+   */
+  constraints?: SketchConstraint[];
+}
+
+/**
+ * Which point of a sketch object a constraint grabs. Lines expose `start`
+ * (x1, y1) and `end` (x2, y2); circles expose `center`; arcs expose `center`
+ * plus their sweep's `start` and `end`.
+ */
+export interface SketchPointRef {
+  objectId: EntityId;
+  point: 'start' | 'end' | 'center';
+}
+
+/**
+ * v1 constraints attach to `line`, `arc`, and `circle` objects only.
+ * Rectangles, polygons, and text are single parametric nodes without point
+ * identity; decomposing them into constrainable point graphs would rewrite
+ * `SketchObjectData` (and the persisted region fingerprints derived from it),
+ * which this additive slice deliberately avoids.
+ *
+ * Dimensional values are `ParamValue`s like every other sketch dimension, so
+ * a driving dimension can be an expression over named parameters.
+ */
+export type SketchConstraintData =
+  | { constraintKind: 'coincident'; a: SketchPointRef; b: SketchPointRef }
+  | { constraintKind: 'horizontal'; objectId: EntityId }
+  | { constraintKind: 'vertical'; objectId: EntityId }
+  | { constraintKind: 'parallel'; a: EntityId; b: EntityId }
+  | { constraintKind: 'perpendicular'; a: EntityId; b: EntityId }
+  /** Equal length (two lines) or equal radius (two circles/arcs). */
+  | { constraintKind: 'equal'; a: EntityId; b: EntityId }
+  // No tangent in v1: the kernel expresses tangency through an explicit
+  // shared contact-point entity (TangentLineArc/TangentArcArc), which the
+  // document cannot name until the mapper synthesizes contact points.
+  | { constraintKind: 'concentric'; a: EntityId; b: EntityId }
+  | { constraintKind: 'midpoint'; point: SketchPointRef; line: EntityId }
+  | {
+      constraintKind: 'distance';
+      a: SketchPointRef;
+      b: SketchPointRef;
+      value: ParamValue;
+    }
+  | { constraintKind: 'radius'; objectId: EntityId; value: ParamValue }
+  | { constraintKind: 'angle'; a: EntityId; b: EntityId; valueDeg: ParamValue };
+
+export type SketchConstraintKind = SketchConstraintData['constraintKind'];
+
+export interface SketchConstraint {
+  constraintId: SketchConstraintId;
+  data: SketchConstraintData;
 }
 
 export type SketchObjectData = (
@@ -2120,6 +2176,8 @@ export const toUploadSessionId = (value: string): UploadSessionId =>
   value as UploadSessionId;
 export const toUserId = (value: string): UserId => value as UserId;
 export const toAssetId = (value: string): AssetId => value as AssetId;
+export const toSketchConstraintId = (value: string): SketchConstraintId =>
+  value as SketchConstraintId;
 
 export const DEFAULT_BODY_COLOR = '#e1a948';
 
