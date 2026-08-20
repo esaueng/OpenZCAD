@@ -244,21 +244,30 @@ export async function saveCadTextFile(
   });
 }
 
+const BINARY_EXPORT_CONTENT_TYPES = {
+  stl: 'model/stl',
+  '3mf': 'model/3mf',
+  obj: 'model/obj',
+  glb: 'model/gltf-binary'
+} as const;
+
+export type CadBinaryExportFormat = keyof typeof BINARY_EXPORT_CONTENT_TYPES;
+
 /**
- * Binary twin of `saveCadTextFile` for 3MF packages and binary STL. Bytes
- * cross into Rust as a plain array, the same shape `open_cad_file` already
- * uses in the other direction.
+ * Binary twin of `saveCadTextFile` for mesh exports. Bytes cross into Rust
+ * as a plain array, the same shape `open_cad_file` already uses in the
+ * other direction.
  */
 export async function saveCadBinaryFile(
   suggestedName: string,
-  format: 'stl' | '3mf',
+  format: CadBinaryExportFormat,
   contents: Uint8Array<ArrayBuffer>
 ): Promise<boolean> {
   if (!isDesktopApp()) {
     downloadBlobFile(
       suggestedName,
       contents,
-      format === '3mf' ? 'model/3mf' : 'model/stl'
+      BINARY_EXPORT_CONTENT_TYPES[format]
     );
     return true;
   }

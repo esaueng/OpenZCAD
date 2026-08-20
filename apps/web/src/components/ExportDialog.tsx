@@ -9,7 +9,20 @@ import type { MeshQualityReport } from '@openzcad/kernel-adapter/exact';
 import { useModalFocus } from '../lib/useModalFocus';
 
 /** Worker export formats this dialog can request; `stl` is ASCII. */
-export type MeshExportDialogFormat = '3mf' | 'stl-binary' | 'stl';
+export type MeshExportDialogFormat =
+  | '3mf'
+  | 'stl-binary'
+  | 'stl'
+  | 'obj'
+  | 'glb';
+
+const FORMAT_LABELS: Record<MeshExportDialogFormat, string> = {
+  '3mf': '3MF',
+  'stl-binary': 'STL',
+  stl: 'STL',
+  obj: 'OBJ',
+  glb: 'glTF'
+};
 
 export interface ExportDialogBody {
   bodyId: string;
@@ -51,6 +64,16 @@ const FORMAT_OPTIONS: {
     format: 'stl',
     label: 'STL (ASCII)',
     hint: 'Plain text for tools that diff or parse it'
+  },
+  {
+    format: 'obj',
+    label: 'OBJ',
+    hint: 'One merged mesh for DCC tools'
+  },
+  {
+    format: 'glb',
+    label: 'glTF (GLB)',
+    hint: 'One merged mesh for web and AR viewers'
   }
 ];
 
@@ -294,7 +317,7 @@ export function ExportDialog({
             ) : (
               <Download size={13} aria-hidden="true" />
             )}
-            Export {format === '3mf' ? '3MF' : 'STL'}
+            Export {FORMAT_LABELS[format]}
           </button>
         </div>
       </div>

@@ -1288,6 +1288,8 @@ export interface ArtifactRecord {
     | 'step-export'
     | 'stl-export'
     | '3mf-export'
+    | 'obj-export'
+    | 'gltf-export'
     | 'snapshot'
     | 'thumbnail';
   name: string;
