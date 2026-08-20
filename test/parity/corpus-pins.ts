@@ -561,16 +561,18 @@ export const KERNEL_DELTAS: KernelDeltaPin[] = [
     occt: 9499.999999999998,
     owner: 'K0.1',
     note:
-      'Both kernels read the same B_SPLINE_SURFACE_WITH_KNOTS file and ' +
-      'disagree by 0.40%, straddling the closed-form answer 9522.7433388: ' +
-      'Remus is +0.16% (was +0.13% before the arc-chained quadric ' +
-      'ray-cast classifier fix nudged it away), OCCT is -0.24%. Neither ' +
-      'is a tessellation ' +
-      'artefact at that magnitude. Something in NURBS surface evaluation or ' +
-      'trimming differs, and since a-export-box / a-export-cylinder / ' +
-      'a-export-cone all agree exactly, this file isolates it to the spline ' +
-      'path. Both REFERENCE_DEVIATIONS entries below record the two sides ' +
-      'against the arithmetic.'
+      'RESOLVED kernel-side (remus PR #62, fixture ' +
+      'openzcad_step_validity.rs): the old hypothesis that "something in ' +
+      'NURBS surface evaluation or trimming differs" is closed. The FILE ' +
+      'itself deviates from the closed form: its four corner bands are ' +
+      'degree-2 NON-RATIONAL B-splines — parabolas, which remove 1.5 mm² ' +
+      'per corner where the true r=3 arc removes 9·(1 − π/4) ≈ 1.9314 — so ' +
+      'the file content is exactly 9540.0 mm³, +0.181% over the 9522.7433 ' +
+      'intent. Remus tessellation converges on 9540.0; the +0.16% pinned ' +
+      'here is the file deviation minus a small inscribed-mesh undercount. ' +
+      'OCCT is -0.24%, at a suspiciously round 9500.0 that matches neither ' +
+      'the file nor the intent. Both REFERENCE_DEVIATIONS entries below ' +
+      'record the two sides against the arithmetic.'
   },
   {
     subject: 'e-nurbs-fillet-plate',
@@ -942,10 +944,15 @@ export const REFERENCE_DEVIATIONS: ReferenceDeviationPin[] = [
     reported: 9537.866030094898,
     owner: 'K0.1',
     note:
-      'Reads its OWN B-spline export 0.16% heavy. Recorded against the ' +
-      'arithmetic rather than against OCCT because both kernels miss here, ' +
-      'in opposite directions — so a fix that merely agreed with OCCT would ' +
-      'be aiming at the wrong number.'
+      'Reads 0.16% over the closed-form INTENT because the FILE is 0.181% ' +
+      'over it: the corner bands are non-rational quadratic B-splines ' +
+      '(parabolas), and the file content is exactly 9540.0 mm³. Remus is ' +
+      'FAITHFUL to the file (converges on 9540.0 as deflection shrinks; ' +
+      'the residue vs 9540 is the ordinary inscribed-mesh undercount). ' +
+      'Resolved by remus PR #62; the pin stays because the corpus compares ' +
+      'against the design intent, which no honest reader of this file can ' +
+      'hit. A fix that merely agreed with OCCT would aim at a number that ' +
+      'matches neither the file nor the intent.'
   },
   {
     subject: 'e-nurbs-fillet-plate',
@@ -954,11 +961,13 @@ export const REFERENCE_DEVIATIONS: ReferenceDeviationPin[] = [
     reported: 9499.999999999998,
     owner: 'OCCT-defect',
     note:
-      'OCCT reads the same B-spline file 0.24% LIGHT, and lands on exactly ' +
-      '9500.0, which is suspiciously round for a body whose exact volume is ' +
-      '9522.7433. Recorded so nobody calibrates Remus against OCCT on this ' +
-      'file: the arithmetic is the target, and OCCT misses it by twice as ' +
-      'much as Remus does.'
+      'OCCT reads the same B-spline file 0.24% LIGHT, at exactly 9500.0 — ' +
+      'suspiciously round, and matching NEITHER the design intent ' +
+      '(9522.7433) nor the file content (exactly 9540.0, per the parabolic ' +
+      'band arithmetic in the remus entry above). Recorded so nobody ' +
+      'calibrates Remus against OCCT on this file: Remus is faithful to ' +
+      'the file; OCCT is 0.42% below it with no arithmetic that explains ' +
+      'the number.'
   },
   {
     subject: 'e-analytic-fillet-plate',
