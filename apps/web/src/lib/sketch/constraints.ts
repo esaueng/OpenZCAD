@@ -18,6 +18,7 @@ export type PendingConstraintKind =
   | 'horizontal'
   | 'vertical'
   | 'parallel'
+  | 'tangent'
   | 'coincident'
   | 'radius';
 
@@ -57,6 +58,13 @@ export const CONSTRAINT_TOOL_SPECS: readonly ConstraintToolSpec[] = [
     picks: 2,
     pickKind: 'object',
     hint: 'Click two lines to make them parallel.'
+  },
+  {
+    kind: 'tangent',
+    label: 'Tangent',
+    picks: 2,
+    pickKind: 'object',
+    hint: 'Click a line and a circle to make them tangent.'
   },
   {
     kind: 'coincident',
@@ -140,6 +148,21 @@ export function refusePick(
       return data.objectKind === 'line'
         ? null
         : 'This constraint applies to lines.';
+    case 'tangent': {
+      if (data.objectKind !== 'line' && data.objectKind !== 'circle') {
+        return 'Tangent applies to a line and a circle.';
+      }
+      const first = existing[0];
+      if (first) {
+        const firstData = sketchObjectData(document, sketch, first.objectId);
+        if (firstData && firstData.objectKind === data.objectKind) {
+          return firstData.objectKind === 'line'
+            ? 'Tangent needs a circle for its second pick.'
+            : 'Tangent needs a line for its second pick.';
+        }
+      }
+      return null;
+    }
     case 'radius':
       return data.objectKind === 'circle' || data.objectKind === 'arc'
         ? null
@@ -182,12 +205,13 @@ export function buildConstraint(
         data: { constraintKind: kind, objectId: pick.objectId as EntityId }
       };
     }
-    case 'parallel': {
+    case 'parallel':
+    case 'tangent': {
       const a = picks[0]!;
       const b = picks[1]!;
       return {
         data: {
-          constraintKind: 'parallel',
+          constraintKind: kind,
           a: a.objectId as EntityId,
           b: b.objectId as EntityId
         }
@@ -241,6 +265,8 @@ export function describeConstraint(
       return `Perpendicular · ${nameOf(data.a)} ⊥ ${nameOf(data.b)}`;
     case 'equal':
       return `Equal · ${nameOf(data.a)} = ${nameOf(data.b)}`;
+    case 'tangent':
+      return `Tangent · ${nameOf(data.a)} ○ ${nameOf(data.b)}`;
     case 'concentric':
       return `Concentric · ${nameOf(data.a)} ◎ ${nameOf(data.b)}`;
     case 'coincident':

@@ -851,6 +851,41 @@ describe('cloneDocument derived sharing', () => {
       ).toThrow(/positive/);
     });
 
+    it('accepts a tangent pairing one line with one circle, either order', () => {
+      const { document, sketchId, lineA, lineB, circle, rectangle } =
+        sketchWithGeometry();
+      const added = addSketchConstraint(document, {
+        sketchId,
+        constraint: { constraintKind: 'tangent', a: lineA, b: circle }
+      });
+      const reversed = addSketchConstraint(added.document, {
+        sketchId,
+        constraint: { constraintKind: 'tangent', a: circle, b: lineB }
+      });
+      expect(findSketch(reversed.document, sketchId)!.constraints).toHaveLength(
+        2
+      );
+
+      expect(() =>
+        addSketchConstraint(document, {
+          sketchId,
+          constraint: { constraintKind: 'tangent', a: lineA, b: lineB }
+        })
+      ).toThrow(/one line with one circle/);
+      expect(() =>
+        addSketchConstraint(document, {
+          sketchId,
+          constraint: { constraintKind: 'tangent', a: circle, b: circle }
+        })
+      ).toThrow(/one line with one circle/);
+      expect(() =>
+        addSketchConstraint(document, {
+          sketchId,
+          constraint: { constraintKind: 'tangent', a: lineA, b: rectangle }
+        })
+      ).toThrow(/rectangle/);
+    });
+
     it('drops constraints referencing a deleted object', () => {
       const { document, sketchId, lineA, lineB, circle } =
         sketchWithGeometry();

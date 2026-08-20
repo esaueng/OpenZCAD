@@ -122,6 +122,37 @@ describe('sketch constraint picking', () => {
     ).toEqual({ error: 'Parallel needs 2 pick(s).' });
   });
 
+  it('guides tangent to one line plus one circle, in either order', () => {
+    const { document, sketch, lineA, lineB, circle, rectangle } = fixture();
+    expect(refusePick(document, sketch, 'tangent', [], object(lineA))).toBe(
+      null
+    );
+    expect(refusePick(document, sketch, 'tangent', [], object(circle))).toBe(
+      null
+    );
+    expect(
+      refusePick(document, sketch, 'tangent', [], object(rectangle))
+    ).toMatch(/line and a circle/);
+    // The second pick must complete the pair, whichever side came first.
+    expect(
+      refusePick(document, sketch, 'tangent', [object(lineA)], object(lineB))
+    ).toMatch(/needs a circle/);
+    expect(
+      refusePick(document, sketch, 'tangent', [object(circle)], object(circle))
+    ).toMatch(/already part/);
+    expect(
+      refusePick(document, sketch, 'tangent', [object(circle)], object(lineA))
+    ).toBe(null);
+    expect(
+      buildConstraint(document, sketch, 'tangent', [
+        object(circle),
+        object(lineA)
+      ])
+    ).toEqual({
+      data: { constraintKind: 'tangent', a: circle, b: lineA }
+    });
+  });
+
   it('describes constraints with entity names', () => {
     const names: Record<string, string> = { a: 'Left edge', b: 'Right edge' };
     const nameOf = (objectId: EntityId) => names[String(objectId)] ?? 'entity';

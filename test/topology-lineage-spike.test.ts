@@ -268,7 +268,11 @@ describe('topology-lineage kernel spike', () => {
         new RegExp(`${method}\\([^;]+\\): any;`)
       );
     }
-    for (const method of ['filletWithEvolution', 'chamferWithEvolution']) {
+    for (const method of [
+      'filletWithEvolution',
+      'chamferWithEvolution',
+      'chamferDistanceAngleWithEvolution'
+    ]) {
       expect(remusDeclarations).toMatch(
         new RegExp(`${method}\\([^;]+\\): FaceEvolutionPayloadV1;`)
       );
@@ -400,6 +404,22 @@ describe('topology-lineage kernel spike', () => {
       expect(
         Array.from(kernel.getSolidFaces(chamfer.result.solid)).length
       ).toBeGreaterThan(6);
+
+      // The distance-angle variant carries the same complete evolution record
+      // as the symmetric one, on the same closed-form geometry: distance 2 at
+      // 60° removes a wedge with legs 2 and 2·tan(60°) along a 10 mm edge.
+      const angled = kernel.chamferDistanceAngleWithEvolution(
+        primitive,
+        Uint32Array.from([selectedEdge]),
+        2,
+        Math.PI / 3
+      );
+      verifyCompleteFaceEvolution(kernel, primitive, angled);
+      expect(kernel.validateSolidRelaxed(angled.result.solid)).toBe(0);
+      expect(kernel.volume(angled.result.solid, 0.08)).toBeCloseTo(
+        1_000 - ((2 * 2 * Math.tan(Math.PI / 3)) / 2) * 10,
+        6
+      );
     } finally {
       kernel.free();
     }
