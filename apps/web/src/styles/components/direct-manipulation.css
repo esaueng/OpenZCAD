@@ -635,8 +635,14 @@
   left: 50%;
   z-index: calc(var(--z-inspector-float) + 1);
   display: flex;
+  /* Never wider than the viewer: an overflowing centered rail slides its
+     left edge under the sidebar, whose panels then intercept every click on
+     the leftmost tools. Wrapping to a second row is the honest fallback. */
+  flex-wrap: wrap;
+  max-width: calc(100% - 16px);
   gap: 4px;
   align-items: center;
+  justify-content: center;
   padding: 5px;
   background: var(--color-surface-2);
   border: 1px solid var(--color-border-strong);
@@ -695,6 +701,51 @@
 
 .sketch-rail .sketch-rail-exit {
   color: var(--color-accent-hi);
+}
+
+/* Solve-status pill: inline in the rail, tone-tinted, never positioned. */
+.sketch-rail .sketch-solve-pill {
+  padding: 3px 8px;
+  border: 1px solid var(--color-border-strong);
+  border-radius: 999px;
+  font-size: var(--fs-xs);
+  white-space: nowrap;
+  color: var(--color-text-dim);
+}
+
+.sketch-rail .sketch-solve-pill[data-tone='ok'] {
+  color: var(--color-accent-hi);
+  border-color: var(--color-accent-border);
+}
+
+.sketch-rail .sketch-solve-pill[data-tone='warn'] {
+  color: #ffb4a6;
+  border-color: rgba(255, 128, 100, 0.55);
+}
+
+/* Constraint list in the palette: label + trailing delete per row. */
+.sketch-constraint-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.sketch-constraint-list li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  min-width: 0;
+}
+
+.sketch-constraint-list li > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--fs-xs);
 }
 
 .sketch-circle-tool {

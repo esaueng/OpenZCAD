@@ -225,6 +225,39 @@ describe('interactionReducer', () => {
     state = interactionReducer(state, { type: 'exit-sketch' });
     expect(state).toEqual(IDLE);
   });
+
+  it('collects constraint picks and clears them on tool changes', () => {
+    let state = interactionReducer(IDLE, {
+      type: 'enter-sketch',
+      plane
+    });
+    state = interactionReducer(state, {
+      type: 'sketch-constraint-tool',
+      kind: 'parallel'
+    });
+    expect(state.mode === 'sketch' && state.session.tool).toBe('select');
+    expect(
+      state.mode === 'sketch' && state.session.pendingConstraint
+    ).toEqual({ kind: 'parallel', picks: [] });
+    state = interactionReducer(state, {
+      type: 'sketch-constraint-pick',
+      pick: { kind: 'object', objectId: 'ent_a' }
+    });
+    expect(
+      state.mode === 'sketch' && state.session.pendingConstraint?.picks
+    ).toEqual([{ kind: 'object', objectId: 'ent_a' }]);
+    // Arming a drawing tool abandons the pick sequence.
+    state = interactionReducer(state, { type: 'sketch-tool', tool: 'line' });
+    expect(
+      state.mode === 'sketch' && state.session.pendingConstraint
+    ).toBeNull();
+    // Picks without an armed tool are ignored.
+    const untouched = interactionReducer(state, {
+      type: 'sketch-constraint-pick',
+      pick: { kind: 'object', objectId: 'ent_b' }
+    });
+    expect(untouched).toBe(state);
+  });
 });
 
 describe('escape chain', () => {
@@ -270,6 +303,25 @@ describe('escape chain', () => {
     expect(escapeTarget(state)).toBe('exit-drawing-tool');
     state = interactionReducer(state, { type: 'escape' });
     expect(state.mode === 'sketch' && state.session.tool).toBe('select');
+    expect(escapeTarget(state)).toBe('exit-sketch');
+  });
+
+  it('cancels a constraint pick sequence before anything exits the sketch', () => {
+    let state = interactionReducer(IDLE, { type: 'enter-sketch', plane });
+    state = interactionReducer(state, {
+      type: 'sketch-constraint-tool',
+      kind: 'coincident'
+    });
+    state = interactionReducer(state, {
+      type: 'sketch-constraint-pick',
+      pick: { kind: 'point', objectId: 'ent_a', point: 'end' }
+    });
+    expect(escapeTarget(state)).toBe('cancel-constraint');
+    state = interactionReducer(state, { type: 'escape' });
+    expect(
+      state.mode === 'sketch' && state.session.pendingConstraint
+    ).toBeNull();
+    expect(state.mode).toBe('sketch');
     expect(escapeTarget(state)).toBe('exit-sketch');
   });
 
