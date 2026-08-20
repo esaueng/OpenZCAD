@@ -55,6 +55,7 @@ const ARTIFACT_KINDS: readonly ArtifactKind[] = [
   'stl-import',
   'step-export',
   'stl-export',
+  '3mf-export',
   'snapshot',
   'thumbnail'
 ];

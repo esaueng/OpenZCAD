@@ -127,6 +127,18 @@ import {
 } from './exact-brep';
 export { brepEdgeCurve, edgeCircleMisfit } from './exact-brep';
 import {
+  readMeshQuality,
+  type BodyMeshQuality,
+  type MeshExportFormat,
+  type MeshQualityReport
+} from './exact-shape-utils';
+export {
+  readMeshQuality,
+  type BodyMeshQuality,
+  type MeshExportFormat,
+  type MeshQualityReport
+};
+import {
   DIRECT_EDIT_TOLERANCE,
   GEOMETRY_EPSILON,
   axisDirection,
@@ -286,7 +298,29 @@ export interface ExactKernelAdapter {
   readonly kind: 'remus';
   syncDocument(document: ProjectDocument): Promise<DerivedState>;
   exportStep(document: ProjectDocument, bodyIds: BodyId[]): Promise<string>;
-  exportStl(document: ProjectDocument, bodyIds: BodyId[]): Promise<string>;
+  exportStl(
+    document: ProjectDocument,
+    bodyIds: BodyId[],
+    deflection?: number
+  ): Promise<string>;
+  /**
+   * Tessellated mesh export at a caller-chosen deflection (millimetres,
+   * applied after unit scaling — the same space every slicer works in).
+   */
+  exportMesh(
+    document: ProjectDocument,
+    bodyIds: BodyId[],
+    options: { format: MeshExportFormat; deflection: number }
+  ): Promise<Uint8Array<ArrayBuffer>>;
+  /**
+   * Pre-export printability check: tessellates each body at the given
+   * deflection and reports welded-mesh watertightness per body.
+   */
+  meshQuality(
+    document: ProjectDocument,
+    bodyIds: BodyId[],
+    deflection: number
+  ): Promise<MeshQualityReport>;
   inspectStep(data: string | ArrayBuffer): Promise<{
     solid: boolean;
     valid: boolean;
@@ -1659,6 +1693,19 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
             }
             const translation = feature.data.transform.translation;
             const rotation = feature.data.transform.rotationDeg;
+            const scaleFactor =
+              feature.data.transform.scale !== undefined
+                ? resolveParamValue(
+                    feature.data.transform.scale,
+                    scope,
+                    'scale'
+                  )
+                : 1;
+            if (!Number.isFinite(scaleFactor) || scaleFactor <= 0) {
+              throw new Error(
+                'Transform scale must resolve to a positive number.'
+              );
+            }
             result.shapes.set(
               feature.data.targetBodyId,
               copyShapeWithVerifiedLineage(
@@ -1674,7 +1721,8 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
                     x: resolveParamValue(rotation.x, scope, 'rotate X'),
                     y: resolveParamValue(rotation.y, scope, 'rotate Y'),
                     z: resolveParamValue(rotation.z, scope, 'rotate Z')
-                  }
+                  },
+                  scaleFactor
                 )
               )
             );
@@ -3452,7 +3500,8 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
 
   async exportStl(
     document: ProjectDocument,
-    bodyIds: BodyId[]
+    bodyIds: BodyId[],
+    deflection: number = STL_EXPORT_DEFLECTION
   ): Promise<string> {
     const { sources, pinned } = await this.prefetchImportSources(document);
     const kernel = new RemusKernel();
@@ -3479,17 +3528,12 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
               )
             );
       if (exportSolids.length === 1) {
-        return decodeText(
-          kernel.exportStlAscii(exportSolids[0]!, STL_EXPORT_DEFLECTION)
-        );
+        return decodeText(kernel.exportStlAscii(exportSolids[0]!, deflection));
       }
       // Several consumers stop at the first `solid` block, so a multi-body
       // export must be one block containing every body's facets.
       const meshes = exportSolids.map((solid, index) => {
-        const mesh = kernel.tessellateSolidGroupedBinary(
-          solid,
-          STL_EXPORT_DEFLECTION
-        );
+        const mesh = kernel.tessellateSolidGroupedBinary(solid, deflection);
         try {
           return {
             name: `body_${index + 1}`,
@@ -3501,6 +3545,111 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
         }
       });
       return writeAsciiStl(document.name, meshes);
+    } finally {
+      kernel.free();
+    }
+  }
+
+  async exportMesh(
+    document: ProjectDocument,
+    bodyIds: BodyId[],
+    options: { format: MeshExportFormat; deflection: number }
+  ): Promise<Uint8Array<ArrayBuffer>> {
+    const { format, deflection } = options;
+    if (!Number.isFinite(deflection) || deflection <= 0) {
+      throw new Error('Mesh export deflection must be a positive number.');
+    }
+    if (format === 'stl-ascii') {
+      return new TextEncoder().encode(
+        await this.exportStl(document, bodyIds, deflection)
+      );
+    }
+    const { sources, pinned } = await this.prefetchImportSources(document);
+    const kernel = new RemusKernel();
+    try {
+      const build = this.build(kernel, document, sources, pinned);
+      const solids = bodyIds.flatMap((bodyId) => {
+        const shape = build.shapes.get(bodyId);
+        if (!shape) {
+          throw new Error(`Body ${bodyId} has no exact geometry.`);
+        }
+        return shape.solids;
+      });
+      if (solids.length === 0) {
+        throw new Error('Select at least one body to export.');
+      }
+      const millimeterScale = UNIT_TO_MM[document.units];
+      const exportSolids =
+        millimeterScale === 1
+          ? solids
+          : solids.map((solid) =>
+              kernel.copyAndTransformSolid(
+                solid,
+                uniformScaleMatrix(millimeterScale)
+              )
+            );
+      const handles = new Uint32Array(exportSolids);
+      // Both writers take the whole solid list, so bodies stay distinct
+      // objects in the 3MF package and merge into one facet stream for STL —
+      // the shapes slicers expect from each format. wasm-bindgen copies the
+      // Vec<u8> into a fresh, never-shared buffer, so the narrowing holds.
+      const bytes =
+        format === '3mf'
+          ? kernel.export3mfMulti(handles, deflection)
+          : kernel.exportStlMulti(handles, deflection);
+      return bytes as Uint8Array<ArrayBuffer>;
+    } finally {
+      kernel.free();
+    }
+  }
+
+  async meshQuality(
+    document: ProjectDocument,
+    bodyIds: BodyId[],
+    deflection: number
+  ): Promise<MeshQualityReport> {
+    if (!Number.isFinite(deflection) || deflection <= 0) {
+      throw new Error('Mesh quality deflection must be a positive number.');
+    }
+    const { sources, pinned } = await this.prefetchImportSources(document);
+    const kernel = new RemusKernel();
+    try {
+      const build = this.build(kernel, document, sources, pinned);
+      const millimeterScale = UNIT_TO_MM[document.units];
+      const bodies: BodyMeshQuality[] = bodyIds.map((bodyId) => {
+        const shape = build.shapes.get(bodyId);
+        if (!shape) {
+          throw new Error(`Body ${bodyId} has no exact geometry.`);
+        }
+        let boundaryEdges = 0;
+        let nonManifoldEdges = 0;
+        // A body with no solids has nothing to print, which is a failed
+        // check, not a vacuous pass.
+        let watertight = shape.solids.length > 0;
+        for (const solid of shape.solids) {
+          // Checked in the same millimetre space the export tessellates, so
+          // the verdict describes the file the user is about to write.
+          const measured =
+            millimeterScale === 1
+              ? solid
+              : kernel.copyAndTransformSolid(
+                  solid,
+                  uniformScaleMatrix(millimeterScale)
+                );
+          const quality = readMeshQuality(
+            kernel.meshQuality(measured, deflection)
+          );
+          boundaryEdges += quality.boundaryEdges;
+          nonManifoldEdges += quality.nonManifoldEdges;
+          watertight &&= quality.isWatertight;
+        }
+        return { bodyId, boundaryEdges, nonManifoldEdges, watertight };
+      });
+      return {
+        watertight:
+          bodies.length > 0 && bodies.every((body) => body.watertight),
+        bodies
+      };
     } finally {
       kernel.free();
     }
