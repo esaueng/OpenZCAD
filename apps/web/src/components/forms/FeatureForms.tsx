@@ -8,6 +8,7 @@ import {
   type EdgeTopologyReferenceV5,
   type ExtrudeOperation,
   type ParamValue,
+  type ParametricVector3,
   type PatternKind,
   type PlaneId,
   type PrimitiveKind,
@@ -1323,6 +1324,14 @@ export interface PatternFormValue {
   axis: AxisId;
   spacing: ParamValue;
   angleDeg: ParamValue;
+  /** Linear only: arbitrary repeat direction overriding `axis`. */
+  direction?: ParametricVector3;
+  /** Grid only: second repeat axis. */
+  axis2?: AxisId;
+  /** Grid only: spacing along `axis2`. */
+  spacing2?: ParamValue;
+  /** Grid only: instance count along `axis2`. */
+  count2?: ParamValue;
 }
 
 interface PatternFormProps {
@@ -1350,7 +1359,12 @@ export function PatternForm({
     (body) => !body.consumed || body.bodyId === initial?.targetBodyId
   );
   const [name, setName] = useState(
-    initial?.name ?? (kind === 'linear' ? 'Linear pattern' : 'Circular pattern')
+    initial?.name ??
+      (kind === 'linear'
+        ? 'Linear pattern'
+        : kind === 'grid'
+          ? 'Grid pattern'
+          : 'Circular pattern')
   );
   const [targetBodyId, setTargetBodyId] = useState<BodyId | ''>(
     initial?.targetBodyId ?? selectedBodyId ?? available[0]?.bodyId ?? ''
@@ -1363,10 +1377,39 @@ export function PatternForm({
   const [angleDeg, setAngleDeg] = useState(
     paramValueText(initial?.angleDeg ?? 360)
   );
+  const [axis2, setAxis2] = useState<AxisId>(initial?.axis2 ?? 'y');
+  const [count2, setCount2] = useState(paramValueText(initial?.count2 ?? 3));
+  const [spacing2, setSpacing2] = useState(
+    paramValueText(initial?.spacing2 ?? 20)
+  );
+  const [dirX, setDirX] = useState(
+    initial?.direction ? paramValueText(initial.direction.x) : ''
+  );
+  const [dirY, setDirY] = useState(
+    initial?.direction ? paramValueText(initial.direction.y) : ''
+  );
+  const [dirZ, setDirZ] = useState(
+    initial?.direction ? paramValueText(initial.direction.z) : ''
+  );
+  const directionActive =
+    kind === 'linear' &&
+    [dirX, dirY, dirZ].some((field) => field.trim() !== '');
+  const kindFieldsValid =
+    kind === 'linear'
+      ? fieldsValid(scope, [
+          spacing,
+          ...[dirX, dirY, dirZ].filter((field) => field.trim() !== '')
+        ])
+      : kind === 'grid'
+        ? fieldsValid(scope, [spacing, spacing2, count2]) && axis !== axis2
+        : fieldsValid(scope, [angleDeg]);
   const canSubmit =
     name.trim().length > 0 &&
     targetBodyId !== '' &&
-    fieldsValid(scope, [count, kind === 'linear' ? spacing : angleDeg]);
+    fieldsValid(scope, [count]) &&
+    kindFieldsValid;
+  const coerceDirectionField = (field: string) =>
+    coerceParamValue(field.trim() === '' ? '0' : field);
 
   return (
     <FormShell
@@ -1382,7 +1425,35 @@ export function PatternForm({
           count: coerceParamValue(count),
           axis,
           spacing: coerceParamValue(spacing),
-          angleDeg: coerceParamValue(angleDeg)
+          angleDeg: coerceParamValue(angleDeg),
+          // `updateFeature` patches keys and cannot delete one, so blanking
+          // every direction field on a pattern that stored a direction
+          // submits the axis's explicit unit vector instead of silently
+          // keeping the old direction.
+          ...(directionActive
+            ? {
+                direction: {
+                  x: coerceDirectionField(dirX),
+                  y: coerceDirectionField(dirY),
+                  z: coerceDirectionField(dirZ)
+                }
+              }
+            : kind === 'linear' && initial?.direction
+              ? {
+                  direction: {
+                    x: axis === 'x' ? 1 : 0,
+                    y: axis === 'y' ? 1 : 0,
+                    z: axis === 'z' ? 1 : 0
+                  }
+                }
+              : {}),
+          ...(kind === 'grid'
+            ? {
+                axis2,
+                spacing2: coerceParamValue(spacing2),
+                count2: coerceParamValue(count2)
+              }
+            : {})
         })
       }
       onCancel={onCancel}
@@ -1421,7 +1492,7 @@ export function PatternForm({
           </select>
         </label>
       </div>
-      {kind === 'linear' ? (
+      {kind === 'linear' || kind === 'grid' ? (
         <ExprInput
           label="Spacing"
           value={spacing}
@@ -1436,6 +1507,72 @@ export function PatternForm({
           onChange={setAngleDeg}
         />
       )}
+      {kind === 'linear' ? (
+        <>
+          <p className="muted edge-selection-hint">
+            Custom direction (blank = axis):
+          </p>
+          <div className="field-pair">
+            <ExprInput
+              label="X"
+              value={dirX}
+              scope={scope}
+              optional
+              onChange={setDirX}
+            />
+            <ExprInput
+              label="Y"
+              value={dirY}
+              scope={scope}
+              optional
+              onChange={setDirY}
+            />
+          </div>
+          <ExprInput
+            label="Z"
+            value={dirZ}
+            scope={scope}
+            optional
+            onChange={setDirZ}
+          />
+        </>
+      ) : null}
+      {kind === 'grid' ? (
+        <>
+          <div className="field-pair">
+            <ExprInput
+              label="Count 2"
+              value={count2}
+              scope={scope}
+              onChange={setCount2}
+            />
+            <label className="field">
+              <span>Axis 2</span>
+              <select
+                value={axis2}
+                onChange={(event) =>
+                  setAxis2(event.target.value as AxisId)
+                }
+              >
+                <option value="x">X</option>
+                <option value="y">Y</option>
+                <option value="z">Z</option>
+              </select>
+            </label>
+          </div>
+          <ExprInput
+            label="Spacing 2"
+            value={spacing2}
+            scope={scope}
+            onChange={setSpacing2}
+          />
+          {axis === axis2 ? (
+            <p className="muted edge-selection-hint">
+              The two axes must differ.
+            </p>
+          ) : null}
+        </>
+      ) : null}
     </FormShell>
   );
 }

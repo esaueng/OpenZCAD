@@ -5366,6 +5366,86 @@ describe('exact kernel adapter', { timeout: 30_000 }, () => {
     expect(circularBody?.volume).toBeCloseTo(4 * 5 * 6 * 4, 4);
   });
 
+  it('builds grid and arbitrary-direction exact body patterns', async () => {
+    const base = addPrimitiveFeature(
+      createProjectDocument('Grid patterns', toUserId('user_exact')),
+      {
+        name: 'Block',
+        primitiveKind: 'box',
+        dimensions: { width: 4, height: 5, depth: 6 }
+      }
+    );
+    const targetBodyId = base.bodyOrder[0]!;
+
+    // 3 along X, 2 along Y, disjoint spacings: exactly six blocks, so the
+    // volume is the base times the instance product with nothing shared.
+    const grid = patternBody(base, {
+      name: 'Grid pattern',
+      targetBodyId,
+      patternKind: 'grid',
+      count: 3,
+      axis: 'x',
+      spacing: 10,
+      axis2: 'y',
+      spacing2: 12,
+      count2: 2
+    }).document;
+    const gridDerived = await adapter.syncDocument(grid);
+    const gridBody = gridDerived.bodyRepresentations[grid.bodyOrder.at(-1)!];
+    expect(gridDerived.warnings).toEqual([]);
+    expect(gridBody?.volume).toBeCloseTo(4 * 5 * 6 * 6, 4);
+
+    // A custom direction is normalized before use, so spacing 15 along the
+    // XY diagonal moves each copy ~10.6 in each axis — well clear of the
+    // 4x5 footprint, keeping the three copies disjoint.
+    const diagonal = patternBody(base, {
+      name: 'Diagonal pattern',
+      targetBodyId,
+      patternKind: 'linear',
+      count: 3,
+      axis: 'x',
+      spacing: 15,
+      direction: { x: 1, y: 1, z: 0 }
+    }).document;
+    const diagonalDerived = await adapter.syncDocument(diagonal);
+    const diagonalBody =
+      diagonalDerived.bodyRepresentations[diagonal.bodyOrder.at(-1)!];
+    expect(diagonalDerived.warnings).toEqual([]);
+    expect(diagonalBody?.volume).toBeCloseTo(4 * 5 * 6 * 3, 4);
+
+    // Parallel grid directions are a feature error, not a kernel crash.
+    const parallel = patternBody(base, {
+      name: 'Parallel grid',
+      targetBodyId,
+      patternKind: 'grid',
+      count: 2,
+      axis: 'x',
+      spacing: 10,
+      axis2: 'x',
+      spacing2: 10,
+      count2: 2
+    }).document;
+    const parallelDerived = await adapter.syncDocument(parallel);
+    expect(parallelDerived.warnings.join('\n')).toMatch(
+      /Grid pattern directions cannot be parallel/
+    );
+
+    // So is a zero direction vector.
+    const zero = patternBody(base, {
+      name: 'Zero direction',
+      targetBodyId,
+      patternKind: 'linear',
+      count: 2,
+      axis: 'x',
+      spacing: 10,
+      direction: { x: 0, y: 0, z: 0 }
+    }).document;
+    const zeroDerived = await adapter.syncDocument(zero);
+    expect(zeroDerived.warnings.join('\n')).toMatch(
+      /Pattern direction must be a non-zero vector/
+    );
+  });
+
   it('exports STEP that reimports as a valid exact solid', async () => {
     const document = addPrimitiveFeature(
       createProjectDocument('Round trip', toUserId('user_exact')),

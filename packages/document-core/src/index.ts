@@ -353,6 +353,14 @@ export interface PatternInput {
   axis: AxisId;
   spacing?: ParamValue;
   angleDeg?: ParamValue;
+  /** Linear only: arbitrary repeat direction overriding `axis`. */
+  direction?: ParametricVector3;
+  /** Grid only: second repeat axis; absent reads as 'y'. */
+  axis2?: AxisId;
+  /** Grid only: spacing along `axis2`; absent reads as `spacing`. */
+  spacing2?: ParamValue;
+  /** Grid only: instance count along `axis2`; absent reads as `count`. */
+  count2?: ParamValue;
   ids?: BodyFeatureIds;
 }
 
@@ -1749,7 +1757,11 @@ export function patternBody(
       count: input.count,
       axis: input.axis,
       spacing: input.spacing ?? 10,
-      angleDeg: input.angleDeg ?? 360
+      angleDeg: input.angleDeg ?? 360,
+      ...(input.direction ? { direction: input.direction } : {}),
+      ...(input.axis2 ? { axis2: input.axis2 } : {}),
+      ...(input.spacing2 !== undefined ? { spacing2: input.spacing2 } : {}),
+      ...(input.count2 !== undefined ? { count2: input.count2 } : {})
     },
     input.ids
   );
@@ -2104,7 +2116,11 @@ const FEATURE_DATA_KEYS: Record<FeatureKind, readonly string[]> = {
     'count',
     'axis',
     'spacing',
-    'angleDeg'
+    'angleDeg',
+    'direction',
+    'axis2',
+    'spacing2',
+    'count2'
   ],
   'direct-edit': ['targetBodyId', 'operation'],
   'imported-step': ['artifactId', 'sourceName', 'stepText', 'stepSourceRef'],

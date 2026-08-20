@@ -818,7 +818,12 @@ export function Inspector(props: InspectorProps) {
         />
       );
     } else {
-      const patternKind = tool === 'linear-pattern' ? 'linear' : 'circular';
+      const patternKind =
+        tool === 'linear-pattern'
+          ? 'linear'
+          : tool === 'grid-pattern'
+            ? 'grid'
+            : 'circular';
       body = (
         <PatternForm
           key={`create-${patternKind}`}
@@ -1038,7 +1043,13 @@ export function Inspector(props: InspectorProps) {
             count: data.count,
             axis: data.axis,
             spacing: data.spacing,
-            angleDeg: data.angleDeg
+            angleDeg: data.angleDeg,
+            ...(data.direction ? { direction: data.direction } : {}),
+            ...(data.axis2 ? { axis2: data.axis2 } : {}),
+            ...(data.spacing2 !== undefined
+              ? { spacing2: data.spacing2 }
+              : {}),
+            ...(data.count2 !== undefined ? { count2: data.count2 } : {})
           }}
           submitLabel="Apply"
           onSubmit={(value) => props.onApplyPattern(selectedFeature, value)}

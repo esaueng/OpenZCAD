@@ -51,7 +51,7 @@ export type SketchObjectKind =
 export type TextFontStyle = 'regular' | 'bold' | 'italic' | 'boldItalic';
 export type TextAlign = 'left' | 'center' | 'right';
 export type BooleanOperation = 'union' | 'subtract' | 'intersect';
-export type PatternKind = 'linear' | 'circular';
+export type PatternKind = 'linear' | 'circular' | 'grid';
 export type AxisId = 'x' | 'y' | 'z';
 
 /**
@@ -693,6 +693,18 @@ export type FeatureData =
       axis: AxisId;
       spacing: ParamValue;
       angleDeg: ParamValue;
+      /**
+       * Linear patterns only: an arbitrary repeat direction that overrides
+       * `axis` when present. Normalized at rebuild; a near-zero vector is a
+       * feature error rather than a guess.
+       */
+      direction?: ParametricVector3;
+      /** Grid patterns: the second repeat axis. Absent reads as 'y'. */
+      axis2?: AxisId;
+      /** Grid patterns: spacing along `axis2`. Absent reads as `spacing`. */
+      spacing2?: ParamValue;
+      /** Grid patterns: instance count along `axis2`. Absent reads as `count`. */
+      count2?: ParamValue;
     }
   | {
       featureKind: 'direct-edit';

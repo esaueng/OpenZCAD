@@ -1611,6 +1611,18 @@ function axisDirection(axis: 'x' | 'y' | 'z'): Vec3 {
   };
 }
 
+function resolvePatternDirection(
+  value: { x: ParamValue; y: ParamValue; z: ParamValue },
+  scope: Record<string, number>
+): Vec3 {
+  const resolved = resolveParametricPoint(value, scope, 'pattern direction');
+  const unit = normalized(resolved);
+  if (!unit) {
+    throw new Error('Pattern direction must be a non-zero vector.');
+  }
+  return unit;
+}
+
 /**
  * Mesh export formats the adapter can produce. `stl` is ASCII for
  * compatibility with consumers that diff or parse the text; `stl-binary` is
@@ -6743,10 +6755,32 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
             if (count < 2 || count > 100) {
               throw new Error('Pattern count must be between 2 and 100.');
             }
-            if (target.solids.length * count > 100) {
+            // Grid instance counts multiply, so the solid cap is enforced on
+            // the total rather than per axis.
+            const count2 =
+              feature.data.patternKind === 'grid'
+                ? Math.round(
+                    resolveParamValue(
+                      feature.data.count2 ?? feature.data.count,
+                      scope,
+                      'count 2'
+                    )
+                  )
+                : 1;
+            if (
+              feature.data.patternKind === 'grid' &&
+              (count2 < 2 || count2 > 100)
+            ) {
+              throw new Error('Pattern count must be between 2 and 100.');
+            }
+            const totalInstances = count * count2;
+            if (target.solids.length * totalInstances > 100) {
               throw new Error('A pattern may produce at most 100 solids.');
             }
-            const direction = axisDirection(feature.data.axis);
+            const direction =
+              feature.data.patternKind !== 'circular' && feature.data.direction
+                ? resolvePatternDirection(feature.data.direction, scope)
+                : axisDirection(feature.data.axis);
             const solids = [...target.solids];
             if (feature.data.patternKind === 'linear') {
               const spacing = resolveParamValue(
@@ -6771,6 +6805,60 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
                   )
                 );
                 solids.push(...instance.solids);
+              }
+            } else if (feature.data.patternKind === 'grid') {
+              const spacing = resolveParamValue(
+                feature.data.spacing,
+                scope,
+                'spacing'
+              );
+              const spacing2 = resolveParamValue(
+                feature.data.spacing2 ?? feature.data.spacing,
+                scope,
+                'spacing 2'
+              );
+              if (
+                Math.abs(spacing) <= GEOMETRY_EPSILON ||
+                Math.abs(spacing2) <= GEOMETRY_EPSILON
+              ) {
+                throw new Error('Pattern spacing cannot be zero.');
+              }
+              const direction2 = axisDirection(feature.data.axis2 ?? 'y');
+              const cross = {
+                x: direction.y * direction2.z - direction.z * direction2.y,
+                y: direction.z * direction2.x - direction.x * direction2.z,
+                z: direction.x * direction2.y - direction.y * direction2.x
+              };
+              if (
+                Math.hypot(cross.x, cross.y, cross.z) <= GEOMETRY_EPSILON
+              ) {
+                throw new Error('Grid pattern directions cannot be parallel.');
+              }
+              for (let ix = 0; ix < count; ix += 1) {
+                for (let iy = 0; iy < count2; iy += 1) {
+                  if (ix === 0 && iy === 0) {
+                    continue; // the original occupies (0, 0)
+                  }
+                  const instance = copyShape(
+                    kernel,
+                    target,
+                    transformMatrix(
+                      {
+                        x:
+                          direction.x * spacing * ix +
+                          direction2.x * spacing2 * iy,
+                        y:
+                          direction.y * spacing * ix +
+                          direction2.y * spacing2 * iy,
+                        z:
+                          direction.z * spacing * ix +
+                          direction2.z * spacing2 * iy
+                      },
+                      { x: 0, y: 0, z: 0 }
+                    )
+                  );
+                  solids.push(...instance.solids);
+                }
               }
             } else {
               const angle = resolveParamValue(

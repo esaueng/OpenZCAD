@@ -11741,7 +11741,17 @@ export function App() {
                           count: value.count,
                           axis: value.axis,
                           spacing: value.spacing,
-                          angleDeg: value.angleDeg
+                          angleDeg: value.angleDeg,
+                          ...(value.direction
+                            ? { direction: value.direction }
+                            : {}),
+                          ...(value.axis2 ? { axis2: value.axis2 } : {}),
+                          ...(value.spacing2 !== undefined
+                            ? { spacing2: value.spacing2 }
+                            : {}),
+                          ...(value.count2 !== undefined
+                            ? { count2: value.count2 }
+                            : {})
                         }
                       },
                       `Edit ${value.name}`
