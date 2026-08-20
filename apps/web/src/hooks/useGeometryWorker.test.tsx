@@ -181,6 +181,106 @@ describe('useGeometryWorker', () => {
     );
   });
 
+  it('routes request-tagged states to that request and not the live document', async () => {
+    installWorker();
+    const document = createProjectDocument('Progress', toUserId('user'));
+    const { result } = renderHook(() =>
+      useGeometryWorker({
+        manager: () => null,
+        onDerived: vi.fn(),
+        onError: vi.fn()
+      })
+    );
+    const worker = FakeWorker.instances[0]!;
+    const onState = vi.fn();
+    const exported = result.current.exportModel('3mf', document, [], {
+      onState
+    });
+    const requestId = (
+      worker.postMessage.mock.calls[0]![0] as { requestId: string }
+    ).requestId;
+
+    const livePhase = result.current.state.phase;
+    act(() => {
+      worker.emit({
+        type: 'state',
+        phase: 'rebuilding',
+        projectId: document.projectId,
+        version: document.version,
+        requestId,
+        stale: true
+      });
+    });
+
+    expect(onState).toHaveBeenCalledWith(
+      expect.objectContaining({ phase: 'rebuilding', requestId })
+    );
+    expect(result.current.state.phase).toBe(livePhase);
+
+    // Settling the request unsubscribes it: later states go nowhere.
+    act(() => {
+      worker.emit({
+        type: 'export',
+        ok: true,
+        requestId,
+        format: '3mf',
+        data: new Uint8Array(new ArrayBuffer(0)),
+        warnings: []
+      });
+      worker.emit({
+        type: 'state',
+        phase: 'ready',
+        projectId: document.projectId,
+        version: document.version,
+        requestId,
+        stale: false
+      });
+    });
+    await exported;
+    expect(onState).toHaveBeenCalledTimes(1);
+  });
+
+  it('aborting an export rejects it, tells the worker, and drops the late result', async () => {
+    installWorker();
+    const document = createProjectDocument('Abort', toUserId('user'));
+    const { result } = renderHook(() =>
+      useGeometryWorker({
+        manager: () => null,
+        onDerived: vi.fn(),
+        onError: vi.fn()
+      })
+    );
+    const worker = FakeWorker.instances[0]!;
+    const controller = new AbortController();
+    const exported = result.current.exportModel('3mf', document, [], {
+      signal: controller.signal
+    });
+    const requestId = (
+      worker.postMessage.mock.calls[0]![0] as { requestId: string }
+    ).requestId;
+
+    controller.abort();
+
+    await expect(exported).rejects.toMatchObject({ name: 'AbortError' });
+    expect(worker.postMessage).toHaveBeenCalledWith({
+      type: 'cancel',
+      requestId
+    });
+
+    // The worker was mid-job when the cancel landed; its result must be
+    // swallowed, not resolved into a promise that no longer exists.
+    act(() => {
+      worker.emit({
+        type: 'export',
+        ok: true,
+        requestId,
+        format: '3mf',
+        data: new Uint8Array(new ArrayBuffer(0)),
+        warnings: []
+      });
+    });
+  });
+
   it('rejects every outstanding promise when the worker terminates', async () => {
     installWorker();
     const document = createProjectDocument('Pending', toUserId('user'));
