@@ -22,7 +22,11 @@ import type {
   SketchId
 } from '@openzcad/shared';
 import type { BodyId } from '@openzcad/shared';
-import type { ExactBuildResult, ExactShape } from './exact-types';
+import type {
+  ExactBuildResult,
+  ExactShape,
+  MeasuredShape
+} from './exact-types';
 import { bezierProfileEdgesEnabled } from './profile-bezier-edges';
 
 /**
@@ -172,6 +176,43 @@ export interface HistoryCheckpointEntry {
   snapshot: ExactBuildResult;
 }
 
+/**
+ * One body's cached measure-pass output, keyed by the solid handles that
+ * produced it. Handle identity is a proof of unchanged geometry: the kernel
+ * never reuses a retired handle for a different entity, and every adapter
+ * path that changes a body's geometry allocates new solids (the single
+ * `transformSolid` in-place mutation runs on a diagnostic-probe copy that
+ * never reaches `result.shapes`). Same handles across syncs ⟹ same solids
+ * ⟹ same measurement.
+ *
+ * The `MeasuredShape` alone is cached — never the warnings or the
+ * `BodyRepresentation` wrapper. Names, colors, and diagnostics can change
+ * without the geometry changing, so everything derived from them is
+ * recomputed each sync from the cached measurement, which is the expensive
+ * part.
+ */
+export interface MeasuredBodyCacheEntry {
+  /** `shape.solids.join(',')` — the handle-identity key. */
+  solidKey: string;
+  /** Whether the cached measure ran with strict union validation. */
+  strict: boolean;
+  /**
+   * Total face-handle count across the body's solids at cache time. A cheap
+   * paranoia probe re-checks it before serving a hit, so an in-place kernel
+   * mutation (which the invariant above forbids) fails loudly as a miss
+   * instead of silently serving a stale mesh.
+   */
+  faceHandleCount: number;
+  /** Approximate retained bytes (mesh buffers), for the byte budget. */
+  bytes: number;
+  measured: MeasuredShape;
+}
+
+/** Approximate retained bytes of one measurement's dominant buffers. */
+export function measuredShapeBytes(measured: MeasuredShape): number {
+  return measured.vertices.length * 8 + measured.indices.length * 4;
+}
+
 /** Telemetry for tests and tuning; not part of the derived state. */
 export interface RebuildCacheEvent {
   kind: 'full-rebuild' | 'prefix-restore';
@@ -179,4 +220,8 @@ export interface RebuildCacheEvent {
   replayed: number;
   /** Features restored from the cache (0 on a full rebuild). */
   restored: number;
+  /** Bodies tessellated and measured by this sync. */
+  remeasured: number;
+  /** Bodies whose measurement was served from the per-body cache. */
+  reusedMeasurements: number;
 }
