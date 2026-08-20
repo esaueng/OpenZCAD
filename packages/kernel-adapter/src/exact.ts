@@ -2037,6 +2037,74 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
             );
             break;
           }
+          case 'split': {
+            if (!feature.bodyId) {
+              throw new Error('Split has no result body.');
+            }
+            const target = result.shapes.get(feature.data.targetBodyId);
+            if (!target) {
+              throw new Error('Split target is unavailable.');
+            }
+            const origin = feature.data.plane.origin;
+            const rawNormal = feature.data.plane.normal;
+            const planePoint = {
+              x: resolveParamValue(origin.x, scope, 'split origin X'),
+              y: resolveParamValue(origin.y, scope, 'split origin Y'),
+              z: resolveParamValue(origin.z, scope, 'split origin Z')
+            };
+            const planeNormal = normalized({
+              x: resolveParamValue(rawNormal.x, scope, 'split normal X'),
+              y: resolveParamValue(rawNormal.y, scope, 'split normal Y'),
+              z: resolveParamValue(rawNormal.z, scope, 'split normal Z')
+            });
+            if (!planeNormal) {
+              throw new Error(
+                'Split plane normal must be finite and non-zero.'
+              );
+            }
+            // A multi-solid target is fused first: the kernel splits one
+            // solid, and each half must again be one body's worth of solids.
+            const targetSolid = collapseShape(kernel, target);
+            // The kernel refuses rather than approximates — a plane through
+            // an edge, across a curved face, or missing the solid entirely
+            // is a typed error that lands in the feature's warnings.
+            const halves = kernel.split(
+              targetSolid,
+              planePoint.x,
+              planePoint.y,
+              planePoint.z,
+              planeNormal.x,
+              planeNormal.y,
+              planeNormal.z
+            );
+            const positive = halves[0];
+            const negative = halves[1];
+            if (positive === undefined || negative === undefined) {
+              throw new Error('Split did not return two halves.');
+            }
+            const lineageNote =
+              'The kernel split does not report face ancestry across the cut.';
+            result.shapes.set(feature.bodyId, {
+              solids: [positive],
+              lineage: remusHashOnlyLineage('split', lineageNote)
+            });
+            result.shapes.set(feature.data.secondBodyId, {
+              solids: [negative],
+              lineage: remusHashOnlyLineage('split', lineageNote)
+            });
+            result.consumed.add(feature.data.targetBodyId);
+            inheritMeshOrigin(
+              result,
+              feature.data.targetBodyId,
+              feature.bodyId
+            );
+            inheritMeshOrigin(
+              result,
+              feature.data.targetBodyId,
+              feature.data.secondBodyId
+            );
+            break;
+          }
           case 'shell': {
             if (!feature.bodyId) {
               throw new Error('Shell has no result body.');

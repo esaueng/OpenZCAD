@@ -54,6 +54,7 @@ export type TopologyLineageOperation =
   | 'imported-mesh'
   | 'rigid-transform'
   | 'mirror'
+  | 'split'
   | 'shell'
   | 'solid-offset'
   | 'draft'
@@ -104,6 +105,12 @@ const OPERATION_CAPABILITIES: Readonly<
     fallback: 'hash-only',
     reason:
       'Mirror lineage is bridge-gated until reflected orientation and the complete output relation are verified.'
+  },
+  split: {
+    status: 'unsupported',
+    fallback: 'hash-only',
+    reason:
+      'The kernel split does not report which input face each half-face came from, and both cap faces are new.'
   },
   shell: {
     status: 'unsupported',
