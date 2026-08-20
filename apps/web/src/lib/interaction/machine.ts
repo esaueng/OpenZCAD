@@ -65,6 +65,7 @@ export type SketchConstraintToolKind =
   | 'horizontal'
   | 'vertical'
   | 'parallel'
+  | 'tangent'
   | 'coincident'
   | 'radius';
 

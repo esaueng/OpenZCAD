@@ -557,13 +557,15 @@ export const KERNEL_DELTAS: KernelDeltaPin[] = [
   {
     subject: 'e-nurbs-fillet-plate',
     metric: 'volume',
-    remus: 9534.97678436453,
+    remus: 9537.866030094898,
     occt: 9499.999999999998,
     owner: 'K0.1',
     note:
       'Both kernels read the same B_SPLINE_SURFACE_WITH_KNOTS file and ' +
-      'disagree by 0.37%, straddling the closed-form answer 9522.7433388: ' +
-      'Remus is +0.13%, OCCT is -0.24%. Neither is a tessellation ' +
+      'disagree by 0.40%, straddling the closed-form answer 9522.7433388: ' +
+      'Remus is +0.16% (was +0.13% before the arc-chained quadric ' +
+      'ray-cast classifier fix nudged it away), OCCT is -0.24%. Neither ' +
+      'is a tessellation ' +
       'artefact at that magnitude. Something in NURBS surface evaluation or ' +
       'trimming differs, and since a-export-box / a-export-cylinder / ' +
       'a-export-cone all agree exactly, this file isolates it to the spline ' +
@@ -779,15 +781,16 @@ export const KERNEL_DELTAS: KernelDeltaPin[] = [
   {
     subject: 'boolean-on-nurbs-import',
     metric: 'volume',
-    remus: 9425.426555957836,
+    remus: 9427.714820937017,
     occt: 9546.002960523074,
     owner: 'OCCT-defect',
     note:
       'The K0.5 scenario, and OpenCascade is the kernel that gets it wrong. ' +
       'An r4 bore is cut through a corner whose band arrived as a B-spline. ' +
-      'The closed-form answer is 9416.3938 mm3; Remus reads +0.098%, OCCT ' +
-      'reads +1.38%. Remus moved slightly closer to the closed form with ' +
-      'the latest kernel, from +0.098% to +0.096%. OCCT returns MORE volume ' +
+      'The closed-form answer is 9416.3938 mm3; Remus reads +0.12%, OCCT ' +
+      'reads +1.38%. The arc-chained quadric ray-cast classifier fix moved ' +
+      'Remus from +0.096% to +0.12% — still an order of magnitude closer ' +
+      'to the arithmetic than OCCT. OCCT returns MORE volume ' +
       'after a SUBTRACT than its own ' +
       'import of the same body (9500.0), which is not a tolerance question. ' +
       'Both produce 10 exact faces with no mesh fallback, so the K0.5 ' +
@@ -936,10 +939,10 @@ export const REFERENCE_DEVIATIONS: ReferenceDeviationPin[] = [
     subject: 'e-nurbs-fillet-plate',
     kernel: 'remus',
     referenceMm3: 40 * 24 * 10 - 4 * (1 - Math.PI / 4) * 9 * 10,
-    reported: 9534.97678436453,
+    reported: 9537.866030094898,
     owner: 'K0.1',
     note:
-      'Reads its OWN B-spline export 0.13% heavy. Recorded against the ' +
+      'Reads its OWN B-spline export 0.16% heavy. Recorded against the ' +
       'arithmetic rather than against OCCT because both kernels miss here, ' +
       'in opposite directions — so a fix that merely agreed with OCCT would ' +
       'be aiming at the wrong number.'

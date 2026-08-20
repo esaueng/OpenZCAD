@@ -435,6 +435,55 @@ describe('exact kernel conventions', { timeout: 30_000 }, () => {
     expect(solvedCircle.radius).toBeCloseTo(7, 8);
   });
 
+  it('solves a tangent constraint between a line and a circle', async () => {
+    const base = createProjectDocument(
+      'GCS Tangent',
+      toUserId('user_conformance')
+    );
+    const { document: withSketch, sketchId } = addSketchFeature(base, {
+      name: 'Profile',
+      planeRef: { type: 'canonical', plane: 'XY', offset: 0 },
+      objects: [
+        { objectKind: 'line', x1: -10, y1: 0, x2: 10, y2: 0 },
+        { objectKind: 'circle', radius: 2, centerX: 0, centerY: 3.5 }
+      ]
+    });
+    const sketch = findSketch(withSketch, sketchId)!;
+    const [line, circle] = sketch.objectIds;
+    // Circle first: either declaration order maps onto the kernel's
+    // line/circle slots.
+    const constrained = addSketchConstraint(withSketch, {
+      sketchId,
+      constraint: { constraintKind: 'tangent', a: circle!, b: line! }
+    }).document;
+
+    const outcome = await exact.solveSketch(constrained, sketchId);
+    expect(outcome.converged).toBe(true);
+    expect(outcome.rolledBack).toBe(false);
+    expect(outcome.maxResidual).toBeLessThan(1e-8);
+
+    const solvedLine = outcome.objects.find(
+      (object) => object.objectId === line
+    );
+    const solvedCircle = outcome.objects.find(
+      (object) => object.objectId === circle
+    );
+    if (solvedLine?.kind !== 'line' || solvedCircle?.kind !== 'circle') {
+      throw new Error('Solved geometry lost an object.');
+    }
+    // Tangency is point-free and the LINE is free to move too, so the claim
+    // must be measured against the solved line, not the seed line: the
+    // center-to-line distance equals the solved radius.
+    const dx = solvedLine.x2 - solvedLine.x1;
+    const dy = solvedLine.y2 - solvedLine.y1;
+    const distance =
+      Math.abs(
+        dy * (solvedCircle.centerX - solvedLine.x1) -
+          dx * (solvedCircle.centerY - solvedLine.y1)
+      ) / Math.hypot(dx, dy);
+    expect(distance).toBeCloseTo(solvedCircle.radius, 7);
+  });
+
   it('rolls back a sketch whose driving dimensions conflict', async () => {
     const base = createProjectDocument(
       'GCS Conflict',

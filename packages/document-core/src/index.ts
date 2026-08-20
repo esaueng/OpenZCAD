@@ -1080,6 +1080,7 @@ function constraintObjectIds(data: SketchConstraintData): EntityId[] {
     case 'parallel':
     case 'perpendicular':
     case 'equal':
+    case 'tangent':
     case 'concentric':
     case 'angle':
       return [data.a, data.b];
@@ -1182,6 +1183,24 @@ function validateSketchConstraint(
       if ((a === 'line') !== (b === 'line')) {
         throw new Error(
           'An equal constraint pairs two lines or two circles/arcs.'
+        );
+      }
+      break;
+    }
+    case 'tangent': {
+      // The kernel's tangency is the point-free line↔circle form; arcs would
+      // need a synthesized contact point and stay excluded.
+      const a = requireConstrainableObject(document, sketch, data.a, [
+        'line',
+        'circle'
+      ]);
+      const b = requireConstrainableObject(document, sketch, data.b, [
+        'line',
+        'circle'
+      ]);
+      if ((a === 'line') === (b === 'line')) {
+        throw new Error(
+          'A tangent constraint pairs one line with one circle.'
         );
       }
       break;
