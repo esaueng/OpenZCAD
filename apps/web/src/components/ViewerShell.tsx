@@ -218,6 +218,9 @@ interface ViewerShellProps {
   onRotateView(direction: 'cw' | 'ccw'): void;
   onCycleDisplayMode(): void;
   onToggleProjection(): void;
+  sectionRange: { min: number; max: number } | null;
+  onCycleSection(): void;
+  onSectionOffset(offset: number): void;
 }
 
 export function ViewerShell({
@@ -306,7 +309,10 @@ export function ViewerShell({
   onView,
   onRotateView,
   onCycleDisplayMode,
-  onToggleProjection
+  onToggleProjection,
+  sectionRange,
+  onCycleSection,
+  onSectionOffset
 }: ViewerShellProps) {
   const orientationDragRef = useRef<OrientationDragControls | null>(null);
   const selectionChipLabelRef = useRef<HTMLSpanElement | null>(null);
@@ -463,6 +469,9 @@ export function ViewerShell({
               onView={onView}
               onCycleDisplayMode={onCycleDisplayMode}
               onToggleProjection={onToggleProjection}
+              sectionRange={sectionRange}
+              onCycleSection={onCycleSection}
+              onSectionOffset={onSectionOffset}
             />
           )}
         </>

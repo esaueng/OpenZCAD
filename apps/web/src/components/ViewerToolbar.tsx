@@ -1,8 +1,9 @@
 import { useEffect, useId, useRef, useState } from 'react';
-import { Camera, Grid3x3, Maximize2, Redo2, Undo2 } from 'lucide-react';
+import { Camera, Grid3x3, Maximize2, Redo2, Slice, Undo2 } from 'lucide-react';
 import { VIEW_LABELS } from '@openzcad/viewport';
 import type {
   ProjectionMode,
+  SectionPlaneId,
   StandardView,
   ViewerSettings
 } from '@openzcad/viewport';
@@ -34,6 +35,8 @@ interface ViewerToolbarProps {
   projection: ProjectionMode;
   canUndo: boolean;
   canRedo: boolean;
+  /** Slider bounds for the active section plane's axis; null with no bodies. */
+  sectionRange: { min: number; max: number } | null;
   onUndo(): void;
   onRedo(): void;
   onToggleGrid(): void;
@@ -41,7 +44,16 @@ interface ViewerToolbarProps {
   onView(view: StandardView): void;
   onCycleDisplayMode(): void;
   onToggleProjection(): void;
+  /** Advances the section view: off → XY → XZ → YZ → off. */
+  onCycleSection(): void;
+  onSectionOffset(offset: number): void;
 }
+
+const SECTION_PLANE_LABELS: Record<SectionPlaneId, string> = {
+  XY: 'XY plane',
+  XZ: 'XZ plane',
+  YZ: 'YZ plane'
+};
 
 /**
  * Right-hand utility rail, centred against the viewport edge: fit, grid,
@@ -55,19 +67,25 @@ export function ViewerToolbar({
   projection,
   canUndo,
   canRedo,
+  sectionRange,
   onUndo,
   onRedo,
   onToggleGrid,
   onFit,
   onView,
   onCycleDisplayMode,
-  onToggleProjection
+  onToggleProjection,
+  onCycleSection,
+  onSectionOffset
 }: ViewerToolbarProps) {
   const [viewsOpen, setViewsOpen] = useState(false);
   const anchorRef = useRef<HTMLDivElement | null>(null);
   const triggerRef = useRef<HTMLButtonElement | null>(null);
   const panelId = useId();
   const displayModeLabel = DISPLAY_MODE_LABELS[settings.displayMode];
+  const sectionLabel = settings.sectionView
+    ? SECTION_PLANE_LABELS[settings.sectionView.plane]
+    : 'off';
 
   // Close on an outside pointer or Escape; Escape hands focus back to the
   // control that opened the flyout, so the rail stays keyboard-navigable.
@@ -152,6 +170,36 @@ export function ViewerToolbar({
       >
         <Camera size={15} aria-hidden="true" />
       </button>
+      <div className="rail-views-anchor">
+        <button
+          type="button"
+          className={`rail-button ${settings.sectionView ? 'active' : ''}`}
+          onClick={onCycleSection}
+          title={`Section view — now: ${sectionLabel}`}
+          aria-label={`Section view — now: ${sectionLabel}`}
+          aria-pressed={settings.sectionView !== undefined}
+        >
+          <Slice size={15} aria-hidden="true" />
+        </button>
+        {settings.sectionView && sectionRange && (
+          <div
+            className="rail-section-panel"
+            role="group"
+            aria-label="Section plane offset"
+          >
+            <input
+              type="range"
+              className="rail-section-slider"
+              min={sectionRange.min}
+              max={sectionRange.max}
+              step={(sectionRange.max - sectionRange.min) / 200 || 0.1}
+              value={settings.sectionView.offset}
+              onChange={(event) => onSectionOffset(Number(event.target.value))}
+              aria-label="Section plane offset"
+            />
+          </div>
+        )}
+      </div>
       <button
         type="button"
         className="rail-button"
