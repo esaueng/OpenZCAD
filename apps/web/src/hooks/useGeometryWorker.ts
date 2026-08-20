@@ -21,6 +21,13 @@ interface PendingRequest<T> {
   reject(error: Error): void;
 }
 
+/** Cancellation rejection, named so callers can tell it from a failure. */
+function abortError(): Error {
+  const error = new Error('Export cancelled.');
+  error.name = 'AbortError';
+  return error;
+}
+
 export interface GeometryWorkerHost {
   /**
    * The manager whose document a broadcast rebuild must match. Read at
@@ -50,11 +57,21 @@ export interface GeometryWorkerApi {
    * document is ever opened.
    */
   syncOnce(document: ProjectDocument): Promise<DerivedState>;
+  /**
+   * `onState` receives this request's own lifecycle states (kernel load,
+   * rebuild) so a dialog can narrate progress. Aborting the `signal` rejects
+   * with an `AbortError`-named error, discards the eventual worker result,
+   * and — when the job has not started yet — skips it entirely.
+   */
   exportModel(
     format: GeometryExportFormat,
     document: ProjectDocument,
     bodyIds: BodyId[],
-    options?: { deflection?: number }
+    options?: {
+      deflection?: number;
+      signal?: AbortSignal;
+      onState?(state: GeometryWorkerState): void;
+    }
   ): Promise<ExportSuccess>;
   /**
    * Pre-export printability check: watertightness per body at the deflection
@@ -63,7 +80,8 @@ export interface GeometryWorkerApi {
   meshQuality(
     document: ProjectDocument,
     bodyIds: BodyId[],
-    deflection: number
+    deflection: number,
+    options?: { onState?(state: GeometryWorkerState): void }
   ): Promise<MeshQualityReport>;
   /**
    * Solves one sketch's persisted constraints via the kernel's GCS and
@@ -98,6 +116,10 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
     new Map<string, PendingRequest<SketchSolveOutcome>>()
   );
   const syncRequests = useRef(new Map<string, PendingRequest<DerivedState>>());
+  // Callers who asked to watch their own request's lifecycle states.
+  const stateSubscribers = useRef(
+    new Map<string, (state: GeometryWorkerState) => void>()
+  );
   const lastSyncedKey = useRef<string | null>(null);
   const firstReadyMarkedRef = useRef(false);
   const [state, setState] = useState<GeometryWorkerState>({
@@ -141,6 +163,7 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
         request.reject(error);
       }
       syncRequests.current.clear();
+      stateSubscribers.current.clear();
     };
 
     const spawn = () => {
@@ -196,23 +219,27 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
             }
           }
           // One-off previews and exports have their own promises and must not
-          // make the live document look stale or ready out of order.
-          if (!event.data.requestId) {
-            setState(event.data);
-            if (event.data.phase === 'failed' && event.data.error) {
-              hostRef.current.onError(
-                `Geometry rebuild failed: ${event.data.error}`
-              );
-            }
+          // make the live document look stale or ready out of order; their
+          // states go to the caller that asked to watch them, or nowhere.
+          if (event.data.requestId) {
+            stateSubscribers.current.get(event.data.requestId)?.(event.data);
+            return;
+          }
+          setState(event.data);
+          if (event.data.phase === 'failed' && event.data.error) {
+            hostRef.current.onError(
+              `Geometry rebuild failed: ${event.data.error}`
+            );
           }
           return;
         }
         if (event.data.type === 'export') {
           const pending = exportRequests.current.get(event.data.requestId);
           if (!pending) {
-            return;
+            return; // Cancelled — the caller's promise is already rejected.
           }
           exportRequests.current.delete(event.data.requestId);
+          stateSubscribers.current.delete(event.data.requestId);
           if (event.data.ok) {
             pending.resolve(event.data);
           } else {
@@ -226,6 +253,7 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
             return;
           }
           meshQualityRequests.current.delete(event.data.requestId);
+          stateSubscribers.current.delete(event.data.requestId);
           if (event.data.ok) {
             pending.resolve(event.data.report);
           } else {
@@ -336,9 +364,36 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
       if (!worker) {
         return Promise.reject(new Error('Geometry worker is unavailable.'));
       }
+      if (options?.signal?.aborted) {
+        return Promise.reject(abortError());
+      }
       const requestId = crypto.randomUUID();
       return new Promise((resolve, reject) => {
-        exportRequests.current.set(requestId, { resolve, reject });
+        const onAbort = () => {
+          if (!exportRequests.current.delete(requestId)) {
+            return; // Already settled.
+          }
+          stateSubscribers.current.delete(requestId);
+          // Best effort: the worker drops the job if it has not started; a
+          // running wasm build cannot be interrupted, but its result finds
+          // no pending request and is discarded.
+          workerRef.current?.postMessage({ type: 'cancel', requestId });
+          reject(abortError());
+        };
+        exportRequests.current.set(requestId, {
+          resolve: (value) => {
+            options?.signal?.removeEventListener('abort', onAbort);
+            resolve(value);
+          },
+          reject: (error) => {
+            options?.signal?.removeEventListener('abort', onAbort);
+            reject(error);
+          }
+        });
+        if (options?.onState) {
+          stateSubscribers.current.set(requestId, options.onState);
+        }
+        options?.signal?.addEventListener('abort', onAbort, { once: true });
         worker.postMessage({
           type: 'export',
           requestId,
@@ -351,7 +406,7 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
         });
       });
     },
-    meshQuality(document, bodyIds, deflection) {
+    meshQuality(document, bodyIds, deflection, options) {
       const worker = workerRef.current;
       if (!worker) {
         return Promise.reject(new Error('Geometry worker is unavailable.'));
@@ -359,6 +414,9 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
       const requestId = crypto.randomUUID();
       return new Promise((resolve, reject) => {
         meshQualityRequests.current.set(requestId, { resolve, reject });
+        if (options?.onState) {
+          stateSubscribers.current.set(requestId, options.onState);
+        }
         worker.postMessage({
           type: 'mesh-quality',
           requestId,
