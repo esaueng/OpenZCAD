@@ -4288,6 +4288,7 @@ export function App() {
     if (
       nextTool === 'mirror' ||
       nextTool === 'split' ||
+      nextTool === 'hole' ||
       nextTool === 'shell' ||
       nextTool === 'solid-offset' ||
       nextTool === 'draft' ||
@@ -10695,6 +10696,7 @@ export function App() {
   const modelingOperation: ModelingOperationKind | null =
     tool === 'mirror' ||
     tool === 'split' ||
+    tool === 'hole' ||
     tool === 'shell' ||
     tool === 'solid-offset' ||
     tool === 'loft' ||
@@ -10762,7 +10764,7 @@ export function App() {
     : undefined;
   const modelingFaces = modelingFaceOptions(modelingTargetBody?.topology);
   const modelingOperationFaces =
-    modelingOperation === 'draft'
+    modelingOperation === 'draft' || modelingOperation === 'hole'
       ? modelingFaces.filter((face) => face.surfaceType === 'plane')
       : modelingFaces;
   const modelingUnsupportedReason = modelingOperation
@@ -10789,6 +10791,8 @@ export function App() {
         return commandFactories.mirrorBody(submission.input);
       case 'split':
         return commandFactories.splitBody(submission.input);
+      case 'hole':
+        return commandFactories.holeBody(submission.input);
       case 'shell':
         return commandFactories.shellBody(submission.input);
       case 'solid-offset':

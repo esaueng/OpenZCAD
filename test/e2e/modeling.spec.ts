@@ -1321,6 +1321,44 @@ test('preflights and splits a box into two live half bodies', async ({
   expect(consoleErrors).toEqual([]);
 });
 
+test('preflights and drills a through hole into the top face', async ({
+  page
+}) => {
+  await stubApi(page);
+  const consoleErrors: string[] = [];
+  page.on('console', (message) => {
+    if (message.type() === 'error') {
+      consoleErrors.push(message.text());
+    }
+  });
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('Drilled Block');
+  await page.getByRole('button', { name: 'Create project' }).click();
+
+  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
+  await page
+    .getByRole('region', { name: 'Feature inspector' })
+    .getByRole('button', { name: /^Create/ })
+    .click();
+
+  await page.getByRole('button', { name: /^Hole/ }).click();
+  const entry = page.getByRole('group', { name: 'Entry face' });
+  await entry.getByRole('button', { name: /Plane face box.*z max/ }).click();
+  await page.getByRole('button', { name: 'Check exact result' }).click();
+  await expect(
+    page.getByRole('status').filter({ hasText: 'Exact preflight passed' })
+  ).toBeVisible({ timeout: 20_000 });
+  await page.getByRole('button', { name: 'Create hole' }).click();
+
+  await expect(
+    page.locator('.feature-row-main', { hasText: 'Hole' })
+  ).toBeVisible();
+  await expect(page.locator('.body-row.consumed')).toContainText('Box Body');
+  await expectBodyCount(page, 1);
+  await expect(page.getByRole('contentinfo')).toContainText('warnings0');
+  expect(consoleErrors).toEqual([]);
+});
+
 test('preflights and creates an exact open-top shell', async ({ page }) => {
   await stubApi(page);
   const consoleErrors: string[] = [];

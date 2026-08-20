@@ -15,6 +15,7 @@ import {
   listFeaturesInOrder,
   mirrorBody,
   addSplitFeature,
+  holeBody,
   offsetSolidBody,
   patternBody,
   shellBody,
@@ -5539,6 +5540,110 @@ describe('exact kernel adapter', { timeout: 30_000 }, () => {
         valid: true
       });
     }
+  });
+
+  it('drills simple, counterbore, and countersink holes with closed-form volumes', async () => {
+    const base = addPrimitiveFeature(
+      createProjectDocument('Hole parity', toUserId('user_exact')),
+      {
+        name: 'Block',
+        primitiveKind: 'box',
+        dimensions: { width: 20, height: 20, depth: 20 }
+      }
+    );
+    const sourceBodyId = base.bodyOrder[0]!;
+    const baseDerived = await adapter.syncDocument(base);
+    // Drill into the top face (z = 20), so the axis is -Z.
+    const top = baseDerived.bodyRepresentations[
+      sourceBodyId
+    ]?.topology?.faces.find(
+      (face) =>
+        face.geometry?.surfaceType === 'plane' &&
+        Math.abs(face.geometry.center.z - 20) < 1e-6
+    );
+    expect(top).toBeTruthy();
+
+    const drill = (
+      overrides: Partial<Parameters<typeof holeBody>[1]>
+    ): ReturnType<typeof holeBody> =>
+      holeBody(base, {
+        name: 'Bore',
+        targetBodyId: sourceBodyId,
+        faceHash: top!.hash,
+        ...(top!.reference ? { faceReference: top!.reference } : {}),
+        style: 'simple',
+        diameter: 6,
+        depthMode: 'through',
+        position: { u: 0, v: 0 },
+        ...overrides
+      });
+
+    // Through hole: a full-height cylinder of material leaves.
+    const through = drill({});
+    const throughDerived = await adapter.syncDocument(through.document);
+    expect(throughDerived.warnings).toEqual([]);
+    expect(
+      throughDerived.bodyRepresentations[sourceBodyId]?.consumed
+    ).toBe(true);
+    expect(
+      throughDerived.bodyRepresentations[through.bodyId]?.volume
+    ).toBeCloseTo(8000 - Math.PI * 9 * 20, 4);
+
+    // Blind hole: exactly the requested depth, floor intact.
+    const blind = drill({ depthMode: 'blind', depth: 10 });
+    const blindDerived = await adapter.syncDocument(blind.document);
+    expect(blindDerived.warnings).toEqual([]);
+    expect(blindDerived.bodyRepresentations[blind.bodyId]?.volume).toBeCloseTo(
+      8000 - Math.PI * 9 * 10,
+      4
+    );
+
+    // Counterbore: the wider seat removes an extra annular ring.
+    const counterbore = drill({
+      style: 'counterbore',
+      counterboreDiameter: 10,
+      counterboreDepth: 3
+    });
+    const counterboreDerived = await adapter.syncDocument(
+      counterbore.document
+    );
+    expect(counterboreDerived.warnings).toEqual([]);
+    expect(
+      counterboreDerived.bodyRepresentations[counterbore.bodyId]?.volume
+    ).toBeCloseTo(8000 - Math.PI * 9 * 20 - Math.PI * (25 - 9) * 3, 4);
+
+    // Countersink at 90°: sink depth is (R - r), the frustum minus the bore
+    // already counted leaves 36π of extra removal.
+    const countersink = drill({
+      style: 'countersink',
+      countersinkDiameter: 12,
+      countersinkAngleDeg: 90
+    });
+    const countersinkDerived = await adapter.syncDocument(
+      countersink.document
+    );
+    expect(countersinkDerived.warnings).toEqual([]);
+    expect(
+      countersinkDerived.bodyRepresentations[countersink.bodyId]?.volume
+    ).toBeCloseTo(8000 - Math.PI * 9 * 20 - Math.PI * 36, 4);
+
+    // The kernel's own recognizer sees the through bore as one hole.
+    const throughBody = throughDerived.bodyRepresentations[through.bodyId];
+    expect(throughBody?.topology?.faces.length).toBeGreaterThan(6);
+    const exported = await adapter.exportStep(through.document, [
+      through.bodyId
+    ]);
+    await expect(adapter.inspectStep(exported)).resolves.toMatchObject({
+      solid: true,
+      valid: true
+    });
+
+    // A hole aimed off the body is a refusal in the feature's warnings,
+    // never a silent no-op body.
+    const missed = drill({ position: { u: 100, v: 0 } });
+    const missedDerived = await adapter.syncDocument(missed.document);
+    expect(missedDerived.warnings.join('\n')).toMatch(/Bore/);
+    expect(missedDerived.bodyRepresentations[missed.bodyId]).toBeUndefined();
   });
 
   it('splits a body into two watertight halves whose volumes sum exactly', async () => {
