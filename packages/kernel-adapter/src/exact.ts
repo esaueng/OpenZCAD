@@ -155,6 +155,15 @@ import {
   uniformScaleMatrix
 } from './exact-math';
 import { displayTessellationForExtents } from './display-tessellation';
+import {
+  MAX_HISTORY_CHECKPOINTS,
+  cloneBuildState,
+  historyFeatureDigest,
+  historyScopeDigest,
+  type HistoryCheckpointEntry,
+  type RebuildCacheEvent
+} from './exact-history-cache';
+export type { RebuildCacheEvent };
 import { readBodyMassProperties } from './body-properties';
 import {
   booleanFacetFallbackWarning,
@@ -398,6 +407,17 @@ export interface ExactKernelAdapterOptions {
    * sets it.
    */
   importedStepCacheBytes?: number;
+  /**
+   * Overrides {@link MAX_HISTORY_CHECKPOINTS}. Tests pin the over-limit
+   * bypass without building a 33-feature document; nothing in the app sets
+   * it.
+   */
+  historyCheckpointLimit?: number;
+  /**
+   * Observes each sync's cache outcome. Tests assert restores actually
+   * happen — correctness alone cannot distinguish a hit from a rebuild.
+   */
+  onRebuildCacheEvent?: (event: RebuildCacheEvent) => void;
 }
 
 export class RemusKernelAdapter implements ExactKernelAdapter {
@@ -421,6 +441,126 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
 
   private get maxImportedStepCacheBytes(): number {
     return this.options.importedStepCacheBytes ?? MAX_IMPORTED_STEP_CACHE_BYTES;
+  }
+
+  /**
+   * The long-lived history kernel and its per-feature checkpoint table. Owned
+   * exclusively by {@link syncDocument}; every other method keeps its own
+   * throwaway kernel. Invariant: `historyCheckpoints[i].checkpointId === i`,
+   * because checkpoints are taken in feature order and `restore(k)` truncates
+   * the kernel's stack to `k + 1` while the table is sliced in lockstep.
+   */
+  private historyKernel: RemusKernel | null = null;
+  private historyCheckpoints: HistoryCheckpointEntry[] = [];
+  private historyScopeKey: string | null = null;
+
+  private get maxHistoryCheckpoints(): number {
+    return this.options.historyCheckpointLimit ?? MAX_HISTORY_CHECKPOINTS;
+  }
+
+  private invalidateHistoryCache(): void {
+    this.historyCheckpoints = [];
+    this.historyScopeKey = null;
+    if (this.historyKernel) {
+      this.historyKernel.free();
+      this.historyKernel = null;
+    }
+  }
+
+  /**
+   * Restores the longest cached prefix whose digests still match and replays
+   * only the remaining features; falls back to a from-scratch build when the
+   * scope changed, no prefix matches, the document is over the checkpoint
+   * cap, or a kernel restore fails.
+   */
+  private buildWithHistoryCache(
+    document: ProjectDocument,
+    importSources: ReadonlyMap<string, Uint8Array>,
+    pinnedImports: ReadonlySet<string>
+  ): { kernel: RemusKernel; build: ExactBuildResult } {
+    const features = listFeaturesInOrder(document);
+    const cachingEnabled = features.length <= this.maxHistoryCheckpoints;
+    const scopeKey = cachingEnabled ? historyScopeDigest(document) : null;
+    const digests = cachingEnabled
+      ? features.map((feature, index) =>
+          historyFeatureDigest(document, feature, index)
+        )
+      : [];
+
+    let kernel = this.historyKernel;
+    let startIndex = 0;
+    let initial: ExactBuildResult | null = null;
+
+    if (
+      kernel &&
+      cachingEnabled &&
+      this.historyScopeKey !== null &&
+      this.historyScopeKey === scopeKey
+    ) {
+      let prefix = -1;
+      const limit = Math.min(this.historyCheckpoints.length, digests.length);
+      for (let index = 0; index < limit; index += 1) {
+        if (this.historyCheckpoints[index]!.digest !== digests[index]) {
+          break;
+        }
+        prefix = index;
+      }
+      if (prefix >= 0) {
+        try {
+          kernel.restore(this.historyCheckpoints[prefix]!.checkpointId);
+          this.historyCheckpoints = this.historyCheckpoints.slice(
+            0,
+            prefix + 1
+          );
+          startIndex = prefix + 1;
+          // Two copies deep: the snapshot must survive this replay's in-place
+          // mutation, and the replay must not share containers with it.
+          initial = cloneBuildState(this.historyCheckpoints[prefix]!.snapshot);
+        } catch {
+          this.invalidateHistoryCache();
+          kernel = null;
+        }
+      } else {
+        this.invalidateHistoryCache();
+        kernel = null;
+      }
+    } else {
+      this.invalidateHistoryCache();
+      kernel = null;
+    }
+
+    if (!kernel) {
+      kernel = new RemusKernel();
+      this.historyKernel = kernel;
+      this.historyScopeKey = scopeKey;
+    }
+    const activeKernel = kernel;
+
+    const onFeature = cachingEnabled
+      ? (index: number, result: ExactBuildResult) => {
+          const checkpointId = activeKernel.checkpoint();
+          this.historyCheckpoints.push({
+            digest: digests[index]!,
+            checkpointId,
+            snapshot: cloneBuildState(result)
+          });
+        }
+      : undefined;
+
+    const build = this.build(
+      activeKernel,
+      document,
+      importSources,
+      pinnedImports,
+      initial ? { startIndex, initial } : undefined,
+      onFeature
+    );
+    this.options.onRebuildCacheEvent?.({
+      kind: startIndex > 0 ? 'prefix-restore' : 'full-rebuild',
+      replayed: features.length - startIndex,
+      restored: startIndex
+    });
+    return { kernel: activeKernel, build };
   }
 
   /**
@@ -1333,10 +1473,19 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     document: ProjectDocument,
     importSources: ReadonlyMap<string, Uint8Array> = new Map(),
     /** Import checksums this build reads; see {@link storeImportedStep}. */
-    pinnedImports: ReadonlySet<string> = new Set(importSources.keys())
+    pinnedImports: ReadonlySet<string> = new Set(importSources.keys()),
+    /**
+     * Prefix-restore continuation: the kernel already holds the state after
+     * feature `startIndex - 1` and `initial` is that point's JS state, so
+     * the loop replays only `startIndex..end`. The scope errors seeded into
+     * fresh warnings below are already inside `initial`.
+     */
+    resume?: { startIndex: number; initial: ExactBuildResult },
+    /** Runs after every feature index this call executed, failed included. */
+    onFeature?: (index: number, result: ExactBuildResult) => void
   ): ExactBuildResult {
     const { scope, errors } = getParameterScope(document);
-    const result: ExactBuildResult = {
+    const result: ExactBuildResult = resume?.initial ?? {
       shapes: new Map(),
       sketchBases: new Map(),
       consumed: new Set(),
@@ -1346,12 +1495,16 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
       warnings: [...errors],
       referenceRepairs: []
     };
+    const startIndex = resume?.startIndex ?? 0;
+    const features = listFeaturesInOrder(document);
 
-    for (const feature of listFeaturesInOrder(document)) {
+    for (let index = startIndex; index < features.length; index += 1) {
+      const feature = features[index]!;
       if (isFeatureSuppressed(feature)) {
         result.warnings.push(
           `Feature "${feature.name}": Suppressed; skipped during exact rebuild.`
         );
+        onFeature?.(index, result);
         continue;
       }
       try {
@@ -2644,6 +2797,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
           error instanceof Error ? error.message : 'exact geometry failed';
         result.warnings.push(`Feature "${feature.name}": ${reason}`);
       }
+      onFeature?.(index, result);
     }
     return result;
   }
@@ -3474,9 +3628,15 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
 
   async syncDocument(document: ProjectDocument): Promise<DerivedState> {
     const { sources, pinned } = await this.prefetchImportSources(document);
-    const kernel = new RemusKernel();
+    // The history kernel outlives this call on purpose — its checkpoints are
+    // what the next sync restores. On ANY throw the whole cache is dropped:
+    // a failed sync must never leave a table the next sync would trust.
     try {
-      const build = this.build(kernel, document, sources, pinned);
+      const { kernel, build } = this.buildWithHistoryCache(
+        document,
+        sources,
+        pinned
+      );
       const bodies = listNodesByKind(document, 'body');
       const features = new Map(
         listNodesByKind(document, 'feature').map((feature) => [
@@ -3590,8 +3750,9 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
           ? { referenceRepairs: build.referenceRepairs }
           : {})
       };
-    } finally {
-      kernel.free();
+    } catch (error) {
+      this.invalidateHistoryCache();
+      throw error;
     }
   }
 
@@ -3938,8 +4099,9 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
   }
 
   dispose(): void {
-    // Each operation owns and releases a short-lived RemusKernel instance, so
-    // there is nothing adapter-scoped left to release.
+    // Export and solve methods own short-lived kernels, but the history
+    // kernel and its checkpoints are adapter-scoped and must be released.
+    this.invalidateHistoryCache();
   }
 }
 
