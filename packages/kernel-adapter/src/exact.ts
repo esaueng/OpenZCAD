@@ -4181,42 +4181,81 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     }
   }
 
+  /**
+   * Runs `operate` against a build of `document` on the long-lived history
+   * kernel instead of a throwaway one. Right after a sync this is a full
+   * prefix restore — zero features replayed — which is what makes "export
+   * doesn't rebuild the model" true.
+   *
+   * The kernel is restored to the last feature checkpoint afterwards, so
+   * anything the operation allocated (unit-scaling solid copies, tessellation
+   * scratch) vanishes and the checkpoint table stays sound for the next sync.
+   * With checkpointing disabled (over-cap histories) there is nothing to
+   * restore to, so the cache is invalidated exactly as a thrown sync would —
+   * the next sync rebuilds from scratch either way.
+   */
+  private async withExportBuild<T>(
+    document: ProjectDocument,
+    operate: (kernel: RemusKernel, build: ExactBuildResult) => T
+  ): Promise<T> {
+    const { sources, pinned } = await this.prefetchImportSources(document);
+    const { kernel, build } = this.buildWithHistoryCache(
+      document,
+      sources,
+      pinned
+    );
+    try {
+      return operate(kernel, build);
+    } finally {
+      const last = this.historyCheckpoints.length - 1;
+      if (last >= 0) {
+        try {
+          kernel.restore(this.historyCheckpoints[last]!.checkpointId);
+        } catch {
+          this.invalidateHistoryCache();
+        }
+      } else {
+        this.invalidateHistoryCache();
+      }
+    }
+  }
+
+  private exportSolidsFor(
+    kernel: RemusKernel,
+    build: ExactBuildResult,
+    document: ProjectDocument,
+    bodyIds: BodyId[]
+  ): number[] {
+    const solids = bodyIds.flatMap((bodyId) => {
+      const shape = build.shapes.get(bodyId);
+      if (!shape) {
+        throw new Error(`Body ${bodyId} has no exact geometry.`);
+      }
+      return shape.solids;
+    });
+    if (solids.length === 0) {
+      throw new Error('Select at least one body to export.');
+    }
+    const millimeterScale = UNIT_TO_MM[document.units];
+    return millimeterScale === 1
+      ? solids
+      : solids.map((solid) =>
+          kernel.copyAndTransformSolid(solid, uniformScaleMatrix(millimeterScale))
+        );
+  }
+
   async exportStep(
     document: ProjectDocument,
     bodyIds: BodyId[]
   ): Promise<string> {
-    const { sources, pinned } = await this.prefetchImportSources(document);
-    const kernel = new RemusKernel();
-    try {
-      const build = this.build(kernel, document, sources, pinned);
-      const solids = bodyIds.flatMap((bodyId) => {
-        const shape = build.shapes.get(bodyId);
-        if (!shape) {
-          throw new Error(`Body ${bodyId} has no exact geometry.`);
-        }
-        return shape.solids;
-      });
-      if (solids.length === 0) {
-        throw new Error('Select at least one body to export.');
-      }
-      const millimeterScale = UNIT_TO_MM[document.units];
-      const exportSolids =
-        millimeterScale === 1
-          ? solids
-          : solids.map((solid) =>
-              kernel.copyAndTransformSolid(
-                solid,
-                uniformScaleMatrix(millimeterScale)
-              )
-            );
+    return this.withExportBuild(document, (kernel, build) => {
+      const exportSolids = this.exportSolidsFor(kernel, build, document, bodyIds);
       // Never fuse: a boolean union changes the geometry (overlaps merge,
       // coincident faces weld). The kernel writes each body as its own
       // MANIFOLD_SOLID_BREP inside one shape representation, so they stay
       // distinct through a round trip.
       return decodeText(kernel.exportStepMulti(new Uint32Array(exportSolids)));
-    } finally {
-      kernel.free();
-    }
+    });
   }
 
   async exportStl(
@@ -4224,30 +4263,8 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     bodyIds: BodyId[],
     deflection: number = STL_EXPORT_DEFLECTION
   ): Promise<string> {
-    const { sources, pinned } = await this.prefetchImportSources(document);
-    const kernel = new RemusKernel();
-    try {
-      const build = this.build(kernel, document, sources, pinned);
-      const solids = bodyIds.flatMap((bodyId) => {
-        const shape = build.shapes.get(bodyId);
-        if (!shape) {
-          throw new Error(`Body ${bodyId} has no exact geometry.`);
-        }
-        return shape.solids;
-      });
-      if (solids.length === 0) {
-        throw new Error('Select at least one body to export.');
-      }
-      const millimeterScale = UNIT_TO_MM[document.units];
-      const exportSolids =
-        millimeterScale === 1
-          ? solids
-          : solids.map((solid) =>
-              kernel.copyAndTransformSolid(
-                solid,
-                uniformScaleMatrix(millimeterScale)
-              )
-            );
+    return this.withExportBuild(document, (kernel, build) => {
+      const exportSolids = this.exportSolidsFor(kernel, build, document, bodyIds);
       if (exportSolids.length === 1) {
         return decodeText(kernel.exportStlAscii(exportSolids[0]!, deflection));
       }
@@ -4266,9 +4283,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
         }
       });
       return writeAsciiStl(document.name, meshes);
-    } finally {
-      kernel.free();
-    }
+    });
   }
 
   async exportMesh(
@@ -4285,30 +4300,8 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
         await this.exportStl(document, bodyIds, deflection)
       );
     }
-    const { sources, pinned } = await this.prefetchImportSources(document);
-    const kernel = new RemusKernel();
-    try {
-      const build = this.build(kernel, document, sources, pinned);
-      const solids = bodyIds.flatMap((bodyId) => {
-        const shape = build.shapes.get(bodyId);
-        if (!shape) {
-          throw new Error(`Body ${bodyId} has no exact geometry.`);
-        }
-        return shape.solids;
-      });
-      if (solids.length === 0) {
-        throw new Error('Select at least one body to export.');
-      }
-      const millimeterScale = UNIT_TO_MM[document.units];
-      const exportSolids =
-        millimeterScale === 1
-          ? solids
-          : solids.map((solid) =>
-              kernel.copyAndTransformSolid(
-                solid,
-                uniformScaleMatrix(millimeterScale)
-              )
-            );
+    return this.withExportBuild(document, (kernel, build) => {
+      const exportSolids = this.exportSolidsFor(kernel, build, document, bodyIds);
       const handles = new Uint32Array(exportSolids);
       // Every writer takes the whole solid list: bodies stay distinct
       // objects in the 3MF package and merge into one facet stream for the
@@ -4324,9 +4317,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
               ? kernel.exportGlbMulti(handles, deflection)
               : kernel.exportStlMulti(handles, deflection);
       return bytes as Uint8Array<ArrayBuffer>;
-    } finally {
-      kernel.free();
-    }
+    });
   }
 
   async meshQuality(
@@ -4337,10 +4328,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     if (!Number.isFinite(deflection) || deflection <= 0) {
       throw new Error('Mesh quality deflection must be a positive number.');
     }
-    const { sources, pinned } = await this.prefetchImportSources(document);
-    const kernel = new RemusKernel();
-    try {
-      const build = this.build(kernel, document, sources, pinned);
+    return this.withExportBuild(document, (kernel, build) => {
       const millimeterScale = UNIT_TO_MM[document.units];
       const bodies: BodyMeshQuality[] = bodyIds.map((bodyId) => {
         const shape = build.shapes.get(bodyId);
@@ -4376,9 +4364,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
           bodies.length > 0 && bodies.every((body) => body.watertight),
         bodies
       };
-    } finally {
-      kernel.free();
-    }
+    });
   }
 
   // Synchronous under the hood, but async like every adapter method so the
