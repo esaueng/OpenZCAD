@@ -21,15 +21,13 @@ import {
   quantizeCoordinate,
   type EdgeSample
 } from './topology-fingerprint';
-import { analyticSurfaceRecord, faceVertexCentroid } from './exact-brep';
+import { faceVertexCentroid } from './exact-brep';
 import {
-  GEOMETRY_EPSILON,
   cross,
   dot,
   finiteVec3,
   normalized,
   pointAt,
-  positiveFinite,
   quantizeEdgeCoordinate,
   scale,
   subtract

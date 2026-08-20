@@ -5,7 +5,6 @@
  */
 import type { RemusKernel } from './remus-runtime';
 import type {
-  EdgeReferenceRepair,
   EdgeTopologyReferenceV5,
   FaceTopologyReferenceV5
 } from '@openzcad/shared';
@@ -21,14 +20,10 @@ import {
   type TopologyResolutionCandidate
 } from './topology-lineage';
 import {
-  edgeFingerprint,
   edgeHandlesByFingerprint,
   edgeWitnessOf,
-  faceFingerprint,
   faceHandlesByFingerprint,
-  faceWitnessOf,
-  legacyEdgeFingerprint,
-  legacyFaceFingerprint
+  faceWitnessOf
 } from './exact-witnesses';
 
 export function resolveFeatureFaces(

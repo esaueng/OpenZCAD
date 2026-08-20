@@ -10,9 +10,7 @@ import type {
   BodyMassProperties,
   BodyTopology,
   EdgeReferenceRepair,
-  FaceGeometry,
-  SketchId,
-  TopologyLineageDiagnostic
+  SketchId
 } from '@openzcad/shared';
 import type { TriangleMeshClosure } from './boolean-result-validation';
 import type { RemusLineageState } from './remus-lineage';
