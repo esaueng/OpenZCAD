@@ -3,6 +3,7 @@ import {
   addPrimitiveFeature,
   chamferEdges,
   createProjectDocument,
+  directEditBody,
   filletEdges,
   listFeaturesInOrder,
   transformBody
@@ -50,6 +51,49 @@ describe('affected feature targets', () => {
       { featureName: 'Cylinder', resultBodyId: cylinderBodyId },
       { featureName: 'Cylinder rim fillet', resultBodyId: fillet.bodyId },
       { featureName: 'Move filleted cylinder', resultBodyId: fillet.bodyId }
+    ]);
+  });
+
+  it('resolves an in-place direct edit as its own source body', () => {
+    const box = addPrimitiveFeature(
+      createProjectDocument('Direct-edit source', toUserId('user_affected')),
+      {
+        name: 'Plate',
+        primitiveKind: 'box',
+        dimensions: { width: 40, height: 10, depth: 24 }
+      }
+    );
+    const bodyId = box.bodyOrder[0]!;
+    const edited = directEditBody(box, {
+      name: 'Raise top',
+      targetBodyId: bodyId,
+      operation: {
+        kind: 'offset-face',
+        faceHash: 1234,
+        sourceSurfaceType: 'plane',
+        sourceArea: 400,
+        sourceCenter: { x: 0, y: 0, z: 0 },
+        sourceNormal: { x: 0, y: 0, z: 1 },
+        offset: 5
+      }
+    }).document;
+    const downstream = filletEdges(edited, {
+      name: 'Soften',
+      targetBodyId: bodyId,
+      edgeHashes: [7],
+      size: 1
+    });
+    const directEdit = listFeaturesInOrder(downstream.document).find(
+      (feature) => feature.name === 'Raise top'
+    )!;
+
+    // Direct edits carry no result body on the node; the body they rewrite is
+    // the source, and everything downstream of it is affected.
+    expect(
+      affectedFeatureTargets(downstream.document, directEdit.featureId)
+    ).toEqual([
+      { featureName: 'Raise top', resultBodyId: bodyId },
+      { featureName: 'Soften', resultBodyId: downstream.bodyId }
     ]);
   });
 });
