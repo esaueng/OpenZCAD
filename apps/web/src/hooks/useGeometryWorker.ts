@@ -4,7 +4,8 @@ import type { CommandManager } from '@openzcad/command-system';
 import { mark, measure, timed } from '../lib/perf';
 import type {
   MeshQualityReport,
-  SketchSolveOutcome
+  SketchSolveOutcome,
+  DxfFaceSelector
 } from '@openzcad/kernel-adapter/exact';
 import type {
   GeometryExportFormat,
@@ -69,6 +70,8 @@ export interface GeometryWorkerApi {
     bodyIds: BodyId[],
     options?: {
       deflection?: number;
+      /** Required for 'dxf': the planar face whose outline to export. */
+      face?: DxfFaceSelector;
       signal?: AbortSignal;
       onState?(state: GeometryWorkerState): void;
     }
@@ -402,7 +405,8 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
           format,
           ...(options?.deflection !== undefined
             ? { deflection: options.deflection }
-            : {})
+            : {}),
+          ...(options?.face !== undefined ? { face: options.face } : {})
         });
       });
     },

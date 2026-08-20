@@ -12,6 +12,7 @@
   "dependencies": {
     "@openzcad/document-core": "workspace:*",
     "@openzcad/geometry": "workspace:*",
+    "@openzcad/io-dxf": "workspace:*",
     "@openzcad/io-step": "workspace:*",
     "@openzcad/io-stl": "workspace:*",
     "@openzcad/shared": "workspace:*",

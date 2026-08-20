@@ -241,6 +241,9 @@ importers:
       '@openzcad/geometry':
         specifier: workspace:*
         version: link:../geometry
+      '@openzcad/io-dxf':
+        specifier: workspace:*
+        version: link:../io-dxf
       '@openzcad/io-step':
         specifier: workspace:*
         version: link:../io-step

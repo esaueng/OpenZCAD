@@ -6,6 +6,7 @@ import type {
 } from '@openzcad/shared';
 import type {
   createExactKernelAdapter,
+  DxfFaceSelector,
   MeshQualityReport,
   SketchSolveOutcome
 } from '@openzcad/kernel-adapter/exact';
@@ -19,14 +20,16 @@ import { preloadDocumentFonts } from '../lib/textFonts';
 import { loadSourceBlob, putSourceBlob } from '../lib/localProjectStore';
 
 /**
- * `step` and `stl` produce text (STEP data, ASCII STL); `stl-binary`,
- * `3mf`, `obj`, and `glb` produce bytes. Mesh formats accept a deflection
- * in millimetres — chordal tolerance after unit scaling — defaulting to the
- * adapter's standard export tessellation when omitted.
+ * `step`, `stl`, and `dxf` produce text (STEP data, ASCII STL, DXF R12);
+ * `stl-binary`, `3mf`, `obj`, and `glb` produce bytes. Mesh formats accept
+ * a deflection in millimetres — chordal tolerance after unit scaling —
+ * defaulting to the adapter's standard export tessellation when omitted.
+ * `dxf` exports ONE planar face's outline and requires the `face` field.
  */
 export type GeometryExportFormat =
   | 'step'
   | 'stl'
+  | 'dxf'
   | 'stl-binary'
   | '3mf'
   | 'obj'
@@ -47,6 +50,8 @@ export type GeometryWorkerRequest =
       bodyIds: BodyId[];
       format: GeometryExportFormat;
       deflection?: number;
+      /** Required for 'dxf': the planar face whose outline to export. */
+      face?: DxfFaceSelector;
     }
   | {
       type: 'mesh-quality';
@@ -113,7 +118,7 @@ export type GeometryExportResult =
       type: 'export';
       ok: true;
       requestId: string;
-      format: 'step' | 'stl';
+      format: 'step' | 'stl' | 'dxf';
       text: string;
       warnings: string[];
     }
@@ -350,6 +355,22 @@ async function execute(job: GeometryWorkerJob): Promise<void> {
           ok: true,
           requestId: request.requestId,
           report
+        });
+        post(stateFor('ready', request, { stale: false }));
+        return;
+      }
+      if (request.format === 'dxf') {
+        if (!request.face) {
+          throw new Error('DXF export needs a face selection.');
+        }
+        const text = await exact.exportFaceDxf(document, request.face);
+        post({
+          type: 'export',
+          ok: true,
+          requestId: request.requestId,
+          format: 'dxf',
+          text,
+          warnings: []
         });
         post(stateFor('ready', request, { stale: false }));
         return;
