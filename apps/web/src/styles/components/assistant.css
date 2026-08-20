@@ -1036,7 +1036,7 @@
 
 .assistant-readings tr.unreadable th,
 .assistant-readings tr.unreadable td {
-  color: #fca5a5;
+  color: var(--color-error-text);
 }
 
 .assistant-confidence {
@@ -1061,7 +1061,7 @@
 
 .assistant-notice {
   margin: 0;
-  color: #fca5a5;
+  color: var(--color-error-text);
   font-size: var(--fs-mini);
   line-height: 1.4;
 }
@@ -1208,7 +1208,7 @@
 }
 
 .assistant-submit.stop:hover {
-  color: #fca5a5;
+  color: var(--color-error-text);
   border-color: rgba(239, 68, 68, 0.55);
   background: var(--color-surface-2);
 }

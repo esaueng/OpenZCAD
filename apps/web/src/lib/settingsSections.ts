@@ -48,7 +48,7 @@ export const SETTINGS_SECTIONS: readonly SettingsSectionMeta[] = [
   {
     id: 'appearance',
     label: 'Appearance',
-    detail: 'Density and accessibility',
+    detail: 'Theme, density, and accessibility',
     settings: ['Theme', 'Interface density', 'Reduce motion']
   },
   {
