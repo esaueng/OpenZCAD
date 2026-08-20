@@ -1808,7 +1808,7 @@
       "status": "imported",
       "warnings": [],
       "bodyCount": 1,
-      "volume": 9534.97678436453,
+      "volume": 9537.866030094898,
       "faceCount": 10,
       "edgeCount": 24,
       "seamEdgeCount": 0,
@@ -1869,7 +1869,7 @@
       "inspect": {
         "solid": true,
         "valid": true,
-        "volume": 9534.97678436453
+        "volume": 9537.866030094898
       }
     },
     "occt": {
