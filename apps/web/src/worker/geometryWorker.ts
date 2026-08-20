@@ -19,12 +19,24 @@ import { preloadDocumentFonts } from '../lib/textFonts';
 import { loadSourceBlob, putSourceBlob } from '../lib/localProjectStore';
 
 /**
- * `step` and `stl` produce text (STEP data, ASCII STL); `stl-binary` and
- * `3mf` produce bytes. Mesh formats accept a deflection in millimetres —
- * chordal tolerance after unit scaling — defaulting to the adapter's
- * standard export tessellation when omitted.
+ * `step` and `stl` produce text (STEP data, ASCII STL); `stl-binary`,
+ * `3mf`, `obj`, and `glb` produce bytes. Mesh formats accept a deflection
+ * in millimetres — chordal tolerance after unit scaling — defaulting to the
+ * adapter's standard export tessellation when omitted.
  */
-export type GeometryExportFormat = 'step' | 'stl' | 'stl-binary' | '3mf';
+export type GeometryExportFormat =
+  | 'step'
+  | 'stl'
+  | 'stl-binary'
+  | '3mf'
+  | 'obj'
+  | 'glb';
+
+/** The export formats whose payload crosses back as transferred bytes. */
+export type GeometryBinaryExportFormat = Extract<
+  GeometryExportFormat,
+  'stl-binary' | '3mf' | 'obj' | 'glb'
+>;
 
 export type GeometryWorkerRequest =
   | { type: 'sync'; document: ProjectDocument; requestId?: string }
@@ -99,7 +111,7 @@ export type GeometryExportResult =
       type: 'export';
       ok: true;
       requestId: string;
-      format: 'stl-binary' | '3mf';
+      format: GeometryBinaryExportFormat;
       /** Transferred, not copied — a fine mesh export can be tens of MB. */
       data: Uint8Array<ArrayBuffer>;
       warnings: string[];
@@ -316,9 +328,9 @@ async function execute(job: GeometryWorkerJob): Promise<void> {
         post(stateFor('ready', request, { stale: false }));
         return;
       }
-      if (request.format === 'stl-binary' || request.format === '3mf') {
+      if (request.format !== 'step' && request.format !== 'stl') {
         const data = await exact.exportMesh(document, request.bodyIds, {
-          format: request.format === '3mf' ? '3mf' : 'stl-binary',
+          format: request.format,
           deflection: request.deflection ?? DEFAULT_EXPORT_DEFLECTION
         });
         post(

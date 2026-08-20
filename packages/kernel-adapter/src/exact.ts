@@ -1601,10 +1601,11 @@ function axisDirection(axis: 'x' | 'y' | 'z'): Vec3 {
 /**
  * Mesh export formats the adapter can produce. `stl` is ASCII for
  * compatibility with consumers that diff or parse the text; `stl-binary` is
- * the same facets at 5–10× smaller, and `3mf` is the zipped package modern
- * slicers prefer.
+ * the same facets at 5–10× smaller; `3mf` is the zipped package modern
+ * slicers prefer; `obj` and `glb` serve DCC and web/AR consumers, each as
+ * one merged mesh.
  */
-export type MeshExportFormat = 'stl-ascii' | 'stl-binary' | '3mf';
+export type MeshExportFormat = 'stl-ascii' | 'stl-binary' | '3mf' | 'obj' | 'glb';
 
 /** Per-body watertightness verdict from the kernel's welded-mesh counter. */
 export interface BodyMeshQuality {
@@ -7873,14 +7874,19 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
               )
             );
       const handles = new Uint32Array(exportSolids);
-      // Both writers take the whole solid list, so bodies stay distinct
-      // objects in the 3MF package and merge into one facet stream for STL —
-      // the shapes slicers expect from each format. wasm-bindgen copies the
-      // Vec<u8> into a fresh, never-shared buffer, so the narrowing holds.
+      // Every writer takes the whole solid list: bodies stay distinct
+      // objects in the 3MF package and merge into one facet stream for the
+      // mesh formats — the shapes their consumers expect. wasm-bindgen
+      // copies the Vec<u8> into a fresh, never-shared buffer, so the
+      // narrowing holds.
       const bytes =
         format === '3mf'
           ? kernel.export3mfMulti(handles, deflection)
-          : kernel.exportStlMulti(handles, deflection);
+          : format === 'obj'
+            ? kernel.exportObjMulti(handles, deflection)
+            : format === 'glb'
+              ? kernel.exportGlbMulti(handles, deflection)
+              : kernel.exportStlMulti(handles, deflection);
       return bytes as Uint8Array<ArrayBuffer>;
     } finally {
       kernel.free();

@@ -65,6 +65,8 @@ fn export_path(path: &Path, format: &str) -> Result<PathBuf, String> {
     let expected = match format {
         "step" => &["step", "stp"][..],
         "3mf" => &["3mf"][..],
+        "obj" => &["obj"][..],
+        "glb" => &["glb"][..],
         _ => &["stl"][..],
     };
     let extension = path
@@ -126,7 +128,7 @@ async fn save_cad_binary_file(
     format: String,
     contents: Vec<u8>,
 ) -> Result<bool, String> {
-    if !matches!(format.as_str(), "stl" | "3mf") {
+    if !matches!(format.as_str(), "stl" | "3mf" | "obj" | "glb") {
         return Err("Unsupported export format.".to_string());
     }
     if suggested_name.is_empty()
@@ -138,12 +140,14 @@ async fn save_cad_binary_file(
     if contents.len() as u64 > MAX_NATIVE_FILE_BYTES {
         return Err("The export exceeds the 50 MB desktop safety limit.".to_string());
     }
+    let title = match format.as_str() {
+        "3mf" => "Export 3MF",
+        "obj" => "Export OBJ",
+        "glb" => "Export glTF",
+        _ => "Export STL",
+    };
     let handle = rfd::AsyncFileDialog::new()
-        .set_title(if format == "3mf" {
-            "Export 3MF"
-        } else {
-            "Export STL"
-        })
+        .set_title(title)
         .set_file_name(&suggested_name)
         .add_filter(format.to_ascii_uppercase(), &[format.as_str()])
         .save_file()
@@ -308,8 +312,18 @@ mod tests {
             export_path(Path::new("part.3MF"), "3mf").unwrap(),
             Path::new("part.3MF")
         );
-        // An STL export must not silently claim a .3mf name, or vice versa.
+        assert_eq!(
+            export_path(Path::new("part"), "obj").unwrap(),
+            Path::new("part.obj")
+        );
+        assert_eq!(
+            export_path(Path::new("part"), "glb").unwrap(),
+            Path::new("part.glb")
+        );
+        // One format's export must not silently claim another's name.
         assert!(export_path(Path::new("part.3mf"), "stl").is_err());
         assert!(export_path(Path::new("part.stl"), "3mf").is_err());
+        assert!(export_path(Path::new("part.obj"), "glb").is_err());
+        assert!(export_path(Path::new("part.glb"), "obj").is_err());
     }
 }

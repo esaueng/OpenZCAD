@@ -346,6 +346,42 @@ describe('kernel export', { timeout: 30_000 }, () => {
     expect(Array.from(bytes.subarray(0, 4))).toEqual([0x50, 0x4b, 0x03, 0x04]);
   });
 
+  it('exports OBJ and glTF meshes for multi-body documents', async () => {
+    const manager = managerWithTwoBoxes();
+    const [bodyA, bodyB] = manager.document.bodyOrder;
+    const obj = await kernel.exportMesh(manager.document, [bodyA!, bodyB!], {
+      format: 'obj',
+      deflection: 0.08
+    });
+    const text = new TextDecoder().decode(obj);
+    expect(text).toContain('# remus OBJ export');
+    // Two boxes: 8 corners each triangulated per face; the exact count is
+    // the writer's, but both bodies' vertices must be present.
+    const vertexLines = text
+      .split('\n')
+      .filter((line) => line.startsWith('v ')).length;
+    const single = new TextDecoder().decode(
+      await kernel.exportMesh(manager.document, [bodyA!], {
+        format: 'obj',
+        deflection: 0.08
+      })
+    );
+    const singleVertexLines = single
+      .split('\n')
+      .filter((line) => line.startsWith('v ')).length;
+    expect(vertexLines).toBe(2 * singleVertexLines);
+
+    const glb = await kernel.exportMesh(manager.document, [bodyA!, bodyB!], {
+      format: 'glb',
+      deflection: 0.08
+    });
+    // GLB header: magic "glTF", version 2, declared length == byte length.
+    expect(new TextDecoder().decode(glb.subarray(0, 4))).toBe('glTF');
+    const header = new DataView(glb.buffer, glb.byteOffset, glb.byteLength);
+    expect(header.getUint32(4, true)).toBe(2);
+    expect(header.getUint32(8, true)).toBe(glb.byteLength);
+  });
+
   it('encodes the ASCII STL format choice as bytes', async () => {
     const manager = newManager('ASCII Mesh Part');
     manager.execute(

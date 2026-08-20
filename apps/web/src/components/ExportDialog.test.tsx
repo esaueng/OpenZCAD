@@ -64,6 +64,17 @@ describe('ExportDialog', () => {
     );
   });
 
+  it('offers OBJ and glTF formats', async () => {
+    const user = userEvent.setup();
+    const props = renderDialog();
+
+    await user.click(screen.getByRole('radio', { name: /glTF \(GLB\)/ }));
+    await user.click(screen.getByRole('button', { name: /Export glTF/ }));
+
+    await waitFor(() => expect(props.onExport).toHaveBeenCalledWith('glb', 0.08));
+    expect(screen.queryByRole('radio', { name: /OBJ/ })).not.toBeNull();
+  });
+
   it('blocks export while a custom deviation is out of range', async () => {
     const user = userEvent.setup();
     const props = renderDialog();
