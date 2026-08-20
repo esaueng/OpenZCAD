@@ -62,10 +62,10 @@ async fn open_cad_file() -> Result<Option<NativeCadFile>, String> {
 }
 
 fn export_path(path: &Path, format: &str) -> Result<PathBuf, String> {
-    let expected = if format == "step" {
-        &["step", "stp"][..]
-    } else {
-        &["stl"][..]
+    let expected = match format {
+        "step" => &["step", "stp"][..],
+        "3mf" => &["3mf"][..],
+        _ => &["stl"][..],
     };
     let extension = path
         .extension()
@@ -120,6 +120,42 @@ async fn save_cad_file(
     Ok(true)
 }
 
+#[tauri::command]
+async fn save_cad_binary_file(
+    suggested_name: String,
+    format: String,
+    contents: Vec<u8>,
+) -> Result<bool, String> {
+    if !matches!(format.as_str(), "stl" | "3mf") {
+        return Err("Unsupported export format.".to_string());
+    }
+    if suggested_name.is_empty()
+        || suggested_name.len() > 160
+        || suggested_name.contains(['/', '\\', '\0'])
+    {
+        return Err("The suggested export name is invalid.".to_string());
+    }
+    if contents.len() as u64 > MAX_NATIVE_FILE_BYTES {
+        return Err("The export exceeds the 50 MB desktop safety limit.".to_string());
+    }
+    let handle = rfd::AsyncFileDialog::new()
+        .set_title(if format == "3mf" {
+            "Export 3MF"
+        } else {
+            "Export STL"
+        })
+        .set_file_name(&suggested_name)
+        .add_filter(format.to_ascii_uppercase(), &[format.as_str()])
+        .save_file()
+        .await;
+    let Some(handle) = handle else {
+        return Ok(false);
+    };
+    let path = export_path(handle.path(), &format)?;
+    std::fs::write(path, &contents).map_err(|error| error.to_string())?;
+    Ok(true)
+}
+
 fn install_menu(app: &mut tauri::App) -> tauri::Result<()> {
     let open_model = MenuItemBuilder::with_id("open-model", "Open Model…")
         .accelerator("CmdOrCtrl+O")
@@ -155,7 +191,7 @@ fn install_menu(app: &mut tauri::App) -> tauri::Result<()> {
         .separator()
         .item(&save_project)
         .text("export-step", "Export STEP…")
-        .text("export-stl", "Export STL…")
+        .text("export-mesh", "Export Mesh…")
         .separator()
         .close_window()
         .build()?;
@@ -218,7 +254,7 @@ pub fn run() {
                 "open-model"
                     | "save-project"
                     | "export-step"
-                    | "export-stl"
+                    | "export-mesh"
                     | "undo"
                     | "redo"
                     | "settings"
@@ -229,6 +265,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             open_cad_file,
             save_cad_file,
+            save_cad_binary_file,
             start_desktop_sign_in,
             poll_desktop_sign_in,
             cancel_desktop_sign_in,
@@ -259,5 +296,20 @@ mod tests {
             Path::new("part.step")
         );
         assert!(export_path(Path::new("part.txt"), "step").is_err());
+    }
+
+    #[test]
+    fn keeps_binary_export_formats_apart() {
+        assert_eq!(
+            export_path(Path::new("part"), "3mf").unwrap(),
+            Path::new("part.3mf")
+        );
+        assert_eq!(
+            export_path(Path::new("part.3MF"), "3mf").unwrap(),
+            Path::new("part.3MF")
+        );
+        // An STL export must not silently claim a .3mf name, or vice versa.
+        assert!(export_path(Path::new("part.3mf"), "stl").is_err());
+        assert!(export_path(Path::new("part.stl"), "3mf").is_err());
     }
 }

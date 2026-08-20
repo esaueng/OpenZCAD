@@ -307,3 +307,62 @@ export function importStepWithOwnBudget(
 ): Uint32Array {
   return kernel.importStep(bytes, 128 * 1024 * 1024, 2_000_000);
 }
+
+/**
+ * Mesh export formats the adapter can produce. `stl` is ASCII for
+ * compatibility with consumers that diff or parse the text; `stl-binary` is
+ * the same facets at 5–10× smaller, and `3mf` is the zipped package modern
+ * slicers prefer.
+ */
+export type MeshExportFormat = 'stl-ascii' | 'stl-binary' | '3mf';
+
+/** Per-body watertightness verdict from the kernel's welded-mesh counter. */
+export interface BodyMeshQuality {
+  bodyId: BodyId;
+  /** Edges used by exactly one triangle after position welding. */
+  boundaryEdges: number;
+  /** Edges used by more than two triangles after position welding. */
+  nonManifoldEdges: number;
+  watertight: boolean;
+}
+
+export interface MeshQualityReport {
+  /** True only when every exported body is individually watertight. */
+  watertight: boolean;
+  bodies: BodyMeshQuality[];
+}
+
+/**
+ * The `meshQuality` binding is typed `any` and returns a JSON string. Parse
+ * defensively so a malformed payload reads as a raised error rather than a
+ * passing check — this result gates whether an export is called printable.
+ */
+export function readMeshQuality(raw: unknown): {
+  boundaryEdges: number;
+  nonManifoldEdges: number;
+  isWatertight: boolean;
+} {
+  let payload: unknown = raw;
+  if (typeof raw === 'string') {
+    try {
+      payload = JSON.parse(raw);
+    } catch {
+      payload = null;
+    }
+  }
+  if (typeof payload !== 'object' || payload === null) {
+    throw new Error('The kernel returned an unreadable mesh-quality result.');
+  }
+  const record = payload as Record<string, unknown>;
+  const { boundaryEdges, nonManifoldEdges, isWatertight } = record;
+  if (
+    typeof boundaryEdges !== 'number' ||
+    !Number.isFinite(boundaryEdges) ||
+    typeof nonManifoldEdges !== 'number' ||
+    !Number.isFinite(nonManifoldEdges) ||
+    typeof isWatertight !== 'boolean'
+  ) {
+    throw new Error('The kernel returned an unreadable mesh-quality result.');
+  }
+  return { boundaryEdges, nonManifoldEdges, isWatertight };
+}

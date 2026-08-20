@@ -1,5 +1,8 @@
 import type { BodyId, ProjectDocument, ProjectId } from '@openzcad/shared';
-import type { createExactKernelAdapter } from '@openzcad/kernel-adapter/exact';
+import type {
+  createExactKernelAdapter,
+  MeshQualityReport
+} from '@openzcad/kernel-adapter/exact';
 import {
   ExactRebuildCache,
   LatestBroadcastGate,
@@ -9,6 +12,14 @@ import { GeometryWorkerQueue } from './geometryWorkerQueue';
 import { preloadDocumentFonts } from '../lib/textFonts';
 import { loadSourceBlob, putSourceBlob } from '../lib/localProjectStore';
 
+/**
+ * `step` and `stl` produce text (STEP data, ASCII STL); `stl-binary` and
+ * `3mf` produce bytes. Mesh formats accept a deflection in millimetres —
+ * chordal tolerance after unit scaling — defaulting to the adapter's
+ * standard export tessellation when omitted.
+ */
+export type GeometryExportFormat = 'step' | 'stl' | 'stl-binary' | '3mf';
+
 export type GeometryWorkerRequest =
   | { type: 'sync'; document: ProjectDocument; requestId?: string }
   | {
@@ -16,7 +27,15 @@ export type GeometryWorkerRequest =
       requestId: string;
       document: ProjectDocument;
       bodyIds: BodyId[];
-      format: 'step' | 'stl';
+      format: GeometryExportFormat;
+      deflection?: number;
+    }
+  | {
+      type: 'mesh-quality';
+      requestId: string;
+      document: ProjectDocument;
+      bodyIds: BodyId[];
+      deflection: number;
     };
 
 export type GeometryWorkerPhase =
@@ -66,14 +85,35 @@ export type GeometryExportResult =
     }
   | {
       type: 'export';
+      ok: true;
+      requestId: string;
+      format: 'stl-binary' | '3mf';
+      /** Transferred, not copied — a fine mesh export can be tens of MB. */
+      data: Uint8Array<ArrayBuffer>;
+      warnings: string[];
+    }
+  | {
+      type: 'export';
       ok: false;
       requestId: string;
-      format: 'step' | 'stl';
+      format: GeometryExportFormat;
       error: string;
     };
 
+export type GeometryMeshQualityResult =
+  | {
+      type: 'mesh-quality';
+      ok: true;
+      requestId: string;
+      report: MeshQualityReport;
+    }
+  | { type: 'mesh-quality'; ok: false; requestId: string; error: string };
+
 export type GeometryWorkerResult =
-  GeometryWorkerState | GeometrySyncResult | GeometryExportResult;
+  | GeometryWorkerState
+  | GeometrySyncResult
+  | GeometryExportResult
+  | GeometryMeshQualityResult;
 
 type ExactKernel = Awaited<ReturnType<typeof createExactKernelAdapter>>;
 let exactKernelStatus: 'idle' | 'loading' | 'ready' | 'failed' = 'idle';
@@ -186,11 +226,19 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : 'Geometry operation failed.';
 }
 
+/** Matches the adapter's standard export tessellation, in millimetres. */
+const DEFAULT_EXPORT_DEFLECTION = 0.08;
+
 async function execute(job: GeometryWorkerJob): Promise<void> {
   const request = job.request;
   const document = request.document;
-  const post = (message: GeometryWorkerResult) => {
-    if (broadcastGate.isCurrent(job.broadcastToken)) {
+  const post = (message: GeometryWorkerResult, transfer?: Transferable[]) => {
+    if (!broadcastGate.isCurrent(job.broadcastToken)) {
+      return;
+    }
+    if (transfer && transfer.length > 0) {
+      self.postMessage(message, { transfer });
+    } else {
       self.postMessage(message);
     }
   };
@@ -203,7 +251,7 @@ async function execute(job: GeometryWorkerJob): Promise<void> {
     // blocks the rest of the model on one unavailable font.
     await preloadDocumentFonts(document);
 
-    if (request.type === 'export') {
+    if (request.type === 'export' || request.type === 'mesh-quality') {
       // 'failed' means the next load call retries, so it is a loading state
       // here too, not a terminal one.
       if (exactKernelStatus !== 'ready') {
@@ -216,10 +264,44 @@ async function execute(job: GeometryWorkerJob): Promise<void> {
           : new Error('The exact Remus kernel failed to load.');
       }
       post(stateFor('rebuilding', request, { stale: true }));
+      if (request.type === 'mesh-quality') {
+        const report = await exact.meshQuality(
+          document,
+          request.bodyIds,
+          request.deflection
+        );
+        post({
+          type: 'mesh-quality',
+          ok: true,
+          requestId: request.requestId,
+          report
+        });
+        post(stateFor('ready', request, { stale: false }));
+        return;
+      }
+      if (request.format === 'stl-binary' || request.format === '3mf') {
+        const data = await exact.exportMesh(document, request.bodyIds, {
+          format: request.format === '3mf' ? '3mf' : 'stl-binary',
+          deflection: request.deflection ?? DEFAULT_EXPORT_DEFLECTION
+        });
+        post(
+          {
+            type: 'export',
+            ok: true,
+            requestId: request.requestId,
+            format: request.format,
+            data,
+            warnings: []
+          },
+          [data.buffer]
+        );
+        post(stateFor('ready', request, { stale: false }));
+        return;
+      }
       const text =
         request.format === 'step'
           ? await exact.exportStep(document, request.bodyIds)
-          : await exact.exportStl(document, request.bodyIds);
+          : await exact.exportStl(document, request.bodyIds, request.deflection);
       const result: GeometryExportResult = {
         type: 'export',
         ok: true,
@@ -283,6 +365,13 @@ async function execute(job: GeometryWorkerJob): Promise<void> {
         error: message
       };
       post(result);
+    } else if (request.type === 'mesh-quality') {
+      post({
+        type: 'mesh-quality',
+        ok: false,
+        requestId: request.requestId,
+        error: message
+      });
     } else {
       const result: GeometrySyncResult = {
         type: 'sync',
