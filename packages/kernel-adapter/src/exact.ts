@@ -441,6 +441,48 @@ export interface ExactKernelAdapterOptions {
  */
 const MAX_MEASURED_SHAPE_CACHE_BYTES = 128 * 1024 * 1024;
 
+
+/**
+ * The effective span of an extrude feature. `symmetric` starts half the
+ * distance behind the sketch plane; `backDistance` extends the solid behind
+ * the plane (opposite the `distance` direction) by its own resolved amount,
+ * so the span runs from `-back` to `distance` along the normal. The two are
+ * mutually exclusive: creation rejects the combination, and a hand-written
+ * document that carries both fails closed here rather than guessing which
+ * side wins. The shifted basis carries the offset into the profile face and
+ * every lineage carrier at once, exactly like the symmetric path always has.
+ */
+function resolveExtrudeSpan(
+  data: { symmetric?: boolean; backDistance?: ParamValue },
+  basis: PlaneBasis,
+  distance: number,
+  scope: Record<string, number>
+): { extrudeBasis: PlaneBasis; totalDistance: number } {
+  const back =
+    data.backDistance === undefined
+      ? 0
+      : resolveParamValue(data.backDistance, scope, 'back distance');
+  if (back !== 0 && data.symmetric) {
+    throw new Error(
+      'Extrude cannot be both symmetric and two-sided; set symmetric or backDistance, not both.'
+    );
+  }
+  if (back < 0) {
+    throw new Error(`Extrude back distance must be non-negative, got ${back}.`);
+  }
+  if (data.symmetric) {
+    return {
+      extrudeBasis: shiftBasisAlongNormal(basis, -distance / 2),
+      totalDistance: distance
+    };
+  }
+  const sign = distance < 0 ? -1 : 1;
+  return {
+    extrudeBasis: shiftBasisAlongNormal(basis, -sign * back),
+    totalDistance: distance + sign * back
+  };
+}
+
 export class RemusKernelAdapter implements ExactKernelAdapter {
   readonly kind = 'remus' as const;
 
@@ -1059,11 +1101,14 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
   ): ExactShape {
     const regions = resolveRegionProfiles(document, sketch, data, scope);
     const distance = resolveParamValue(data.distance, scope, 'distance');
-    // Symmetric region extrudes start half the distance behind the sketch
-    // plane, exactly like the single-profile path.
-    const extrudeBasis = data.symmetric
-      ? shiftBasisAlongNormal(basis, -distance / 2)
-      : basis;
+    // Symmetric and two-sided region extrudes shift the basis behind the
+    // sketch plane, exactly like the single-profile path.
+    const { extrudeBasis, totalDistance } = resolveExtrudeSpan(
+      data,
+      basis,
+      distance,
+      scope
+    );
     // A profile whose loops are a polyline approximation of curves the font
     // actually draws is a degradation the user can see in the result and in
     // the STEP export, and nothing downstream can tell it from an authored
@@ -1088,7 +1133,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
         extrudeBasis.normal.x,
         extrudeBasis.normal.y,
         extrudeBasis.normal.z,
-        distance
+        totalDistance
       );
       const candidates = topologyCandidatesForSolid(kernel, solid);
       const assignments: RemusSemanticAssignment[] = [];
@@ -1106,9 +1151,9 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
         );
       } else {
         const endOrigin = {
-          x: extrudeBasis.origin.x + extrudeBasis.normal.x * distance,
-          y: extrudeBasis.origin.y + extrudeBasis.normal.y * distance,
-          z: extrudeBasis.origin.z + extrudeBasis.normal.z * distance
+          x: extrudeBasis.origin.x + extrudeBasis.normal.x * totalDistance,
+          y: extrudeBasis.origin.y + extrudeBasis.normal.y * totalDistance,
+          z: extrudeBasis.origin.z + extrudeBasis.normal.z * totalDistance
         };
         addFaceCarrierRole(
           candidates,
@@ -1483,12 +1528,15 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
         scope,
         'distance'
       );
-      // A symmetric extrude starts half the distance behind the sketch
-      // plane; the shifted basis carries that offset into the profile face
-      // and every lineage carrier at once.
-      const extrudeBasis = feature.data.symmetric
-        ? shiftBasisAlongNormal(basis, -distance / 2)
-        : basis;
+      // Symmetric and two-sided extrudes start behind the sketch plane;
+      // the shifted basis carries that offset into the profile face and
+      // every lineage carrier at once.
+      const { extrudeBasis, totalDistance } = resolveExtrudeSpan(
+        feature.data,
+        basis,
+        distance,
+        scope
+      );
       const face = this.makeProfileFace(
         kernel,
         object.data,
@@ -1501,7 +1549,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
         extrudeBasis.normal.x,
         extrudeBasis.normal.y,
         extrudeBasis.normal.z,
-        distance
+        totalDistance
       );
       return {
         solids: [solid],
@@ -1512,7 +1560,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
           String(object.id),
           object.data,
           extrudeBasis,
-          distance,
+          totalDistance,
           scope
         )
       };

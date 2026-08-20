@@ -11997,8 +11997,10 @@ export function App() {
                           distance: value.distance,
                           // Stored explicitly on edits: updateFeature patches
                           // keys and cannot delete one, so unchecking must
-                          // write false rather than omit the key.
-                          symmetric: value.symmetric === true
+                          // write false rather than omit the key — and a
+                          // cleared back distance writes the explicit 0.
+                          symmetric: value.symmetric === true,
+                          backDistance: value.backDistance ?? 0
                         }
                       },
                       `Edit ${value.name}`

@@ -569,6 +569,13 @@ export type FeatureData =
        */
       symmetric?: boolean;
       /**
+       * Additional depth extruded behind the sketch plane, opposite the
+       * `distance` direction. Absent or zero means the one-sided extrude;
+       * combining it with `symmetric` is rejected at creation and fails
+       * closed on rebuild rather than guessing which side wins.
+       */
+      backDistance?: ParamValue;
+      /**
        * Resolved once at creation time. Absent preserves the legacy new-body
        * behavior; rebuilds never infer a different operation.
        */

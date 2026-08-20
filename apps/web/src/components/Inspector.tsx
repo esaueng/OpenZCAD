@@ -123,6 +123,7 @@ export interface InspectorCallbacks {
       sketchId: SketchId;
       distance: ParamValue;
       symmetric?: boolean;
+      backDistance?: ParamValue;
     }
   ): void;
   onApplyRevolve(
@@ -947,6 +948,9 @@ export function Inspector(props: InspectorProps) {
             sketchId: data.sketchId,
             distance: data.distance,
             ...(data.symmetric ? { symmetric: true } : {}),
+            ...(data.backDistance !== undefined
+              ? { backDistance: data.backDistance }
+              : {}),
             operation: data.operation
           }}
           submitLabel="Apply"
