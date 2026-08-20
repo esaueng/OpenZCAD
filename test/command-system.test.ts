@@ -1408,4 +1408,70 @@ describe('command-system', () => {
       115.2
     );
   });
+
+  it('replays sketch constraint commands with undo and redo', () => {
+    const base = createProjectDocument('Constraint Log', toUserId('user_test'));
+    const manager = new CommandManager(base);
+    manager.execute(
+      commandFactories.addSketch({
+        name: 'Profile',
+        planeRef: { type: 'canonical', plane: 'XY', offset: 0 },
+        objects: [
+          { objectKind: 'line', x1: 0, y1: 0, x2: 10, y2: 2 },
+          { objectKind: 'line', x1: 0, y1: 5, x2: 10, y2: 8 }
+        ]
+      })
+    );
+    const sketchId = getLatestSketchId(manager.document)!;
+    const findConstraintSketch = (document: ProjectDocument) =>
+      Object.values(document.nodes).find(
+        (node) => node.kind === 'sketch' && node.sketchId === sketchId
+      );
+    const sketch = findConstraintSketch(manager.document)!;
+    const [lineA, lineB] =
+      sketch.kind === 'sketch' ? sketch.objectIds : [undefined, undefined];
+
+    manager.execute(
+      commandFactories.addSketchConstraint({
+        sketchId,
+        constraint: { constraintKind: 'parallel', a: lineA!, b: lineB! }
+      })
+    );
+    const afterAdd = findConstraintSketch(manager.document)!;
+    const constraintId =
+      afterAdd.kind === 'sketch'
+        ? afterAdd.constraints![0]!.constraintId
+        : undefined;
+    expect(constraintId).toBeTruthy();
+
+    manager.execute(
+      commandFactories.deleteSketchConstraint({
+        sketchId,
+        constraintId: constraintId!
+      })
+    );
+    const afterDelete = findConstraintSketch(manager.document)!;
+    expect(
+      afterDelete.kind === 'sketch' ? afterDelete.constraints : undefined
+    ).toHaveLength(0);
+
+    // Undo restores the constraint under its recorded id; redo removes it
+    // again; a from-scratch replay of the log agrees with the live document.
+    manager.undo();
+    const undone = findConstraintSketch(manager.document)!;
+    expect(
+      undone.kind === 'sketch'
+        ? undone.constraints![0]!.constraintId
+        : undefined
+    ).toBe(constraintId);
+    manager.redo();
+
+    const replayed = replayCommands(base, manager.document.commandLog);
+    const replayedSketch = Object.values(replayed.nodes).find(
+      (node) => node.kind === 'sketch'
+    );
+    expect(
+      replayedSketch?.kind === 'sketch' ? replayedSketch.constraints : undefined
+    ).toHaveLength(0);
+  });
 });
