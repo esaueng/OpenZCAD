@@ -55,7 +55,9 @@ interface TopBarProps {
   onWorkspaceMode(mode: WorkspaceMode): void;
   onSave(): void;
   onImportFile(file: File): void;
-  onExport(format: 'step' | 'stl'): void;
+  onExportStep(): void;
+  /** Opens the mesh export dialog (3MF / STL with quality control). */
+  onOpenMeshExport(): void;
   onArchiveLocalSources(): void;
   onExportDiagnostics(): void;
   onRenameProject(name: string): void;
@@ -82,7 +84,8 @@ export function TopBar({
   onWorkspaceMode,
   onSave,
   onImportFile,
-  onExport,
+  onExportStep,
+  onOpenMeshExport,
   onArchiveLocalSources,
   onExportDiagnostics,
   onRenameProject,
@@ -329,7 +332,7 @@ export function TopBar({
               className="topbar-menu-item"
               disabled={!canExport}
               title={exportTitle('STEP')}
-              onClick={() => onExport('step')}
+              onClick={onExportStep}
             >
               <Download size={13} aria-hidden="true" />
               <span>Export STEP</span>
@@ -339,12 +342,12 @@ export function TopBar({
               type="button"
               className="topbar-menu-item"
               disabled={!canExport}
-              title={exportTitle('STL')}
-              onClick={() => onExport('stl')}
+              title={exportTitle('3MF or STL')}
+              onClick={onOpenMeshExport}
             >
               <Download size={13} aria-hidden="true" />
-              <span>Export STL</span>
-              <small>{exportScope ?? 'all bodies'}</small>
+              <span>Export Mesh…</span>
+              <small>3MF · STL</small>
             </button>
             {localOnlySourceCount > 0 ? (
               <button

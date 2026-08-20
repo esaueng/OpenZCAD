@@ -249,6 +249,7 @@ function BodyStats({
     y: body.bbox.max.y - body.bbox.min.y,
     z: body.bbox.max.z - body.bbox.min.z
   };
+  const mass = body.massProperties;
   return (
     <>
       <h3 className="section-title">Measurements</h3>
@@ -267,6 +268,28 @@ function BodyStats({
         <b>status</b>
         <span>{body.consumed ? 'consumed by boolean' : 'live'}</span>
       </div>
+      {mass ? (
+        // Unit density: multiply by a material density for physical values.
+        // Rendered only when the kernel integrated this solid — the absence
+        // of the section is the honest reading of a failed integration.
+        <>
+          <h3 className="section-title">Mass properties</h3>
+          <div className="kv-grid">
+            <b>center of mass</b>
+            <span>
+              {formatNumber(mass.centerOfMass.x)},{' '}
+              {formatNumber(mass.centerOfMass.y)},{' '}
+              {formatNumber(mass.centerOfMass.z)} {units}
+            </span>
+            <b>principal inertia</b>
+            <span>
+              {formatNumber(mass.principalMoments[0])} ·{' '}
+              {formatNumber(mass.principalMoments[1])} ·{' '}
+              {formatNumber(mass.principalMoments[2])} {units}⁵
+            </span>
+          </div>
+        </>
+      ) : null}
     </>
   );
 }
@@ -737,6 +760,25 @@ export function Inspector(props: InspectorProps) {
       // make a Move now that it carries the Name field and body picker this
       // form existed for (WF-07). Editing an existing Move still uses
       // TransformForm, below.
+    } else if (tool === 'scale') {
+      // Scale has no gizmo: the factor is parametric, so the form is the
+      // right UI. It creates the same transform feature a Move does.
+      body = (
+        <TransformForm
+          key="create-scale"
+          scope={scope}
+          bodies={bodies}
+          initialTarget={
+            selectedTopology?.bodyId ??
+            selectedBodyIds.at(-1) ??
+            selectedBody?.bodyId
+          }
+          defaultName="Scale"
+          submitLabel="Create"
+          onSubmit={props.onCreateTransform}
+          onCancel={props.onCancel}
+        />
+      );
     } else if (tool === 'fillet' || tool === 'chamfer') {
       body = (
         <EdgeModifierForm
@@ -939,7 +981,10 @@ export function Inspector(props: InspectorProps) {
             name: selectedFeature.name,
             targetBodyId: data.targetBodyId,
             translation: data.transform.translation,
-            rotationDeg: data.transform.rotationDeg
+            rotationDeg: data.transform.rotationDeg,
+            ...(data.transform.scale !== undefined
+              ? { scale: data.transform.scale }
+              : {})
           }}
           submitLabel="Apply"
           onSubmit={(value) => props.onApplyTransform(selectedFeature, value)}

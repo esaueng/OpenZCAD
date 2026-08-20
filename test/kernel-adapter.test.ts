@@ -291,4 +291,178 @@ describe('kernel export', { timeout: 30_000 }, () => {
       kernel.exportStep(manager.document, [toBodyId('body_missing')])
     ).rejects.toThrow(/no exact geometry/);
   });
+
+  it('exports binary STL with the exact facet count in its header', async () => {
+    const manager = newManager('Binary STL Part');
+    manager.execute(
+      commandFactories.addPrimitive({
+        name: 'Box',
+        primitiveKind: 'box',
+        dimensions: { width: 5, height: 6, depth: 7 }
+      })
+    );
+    const bytes = await kernel.exportMesh(
+      manager.document,
+      [getLatestBodyId(manager.document)!],
+      { format: 'stl-binary', deflection: 0.08 }
+    );
+    // 80-byte header, 4-byte little-endian facet count, 50 bytes per facet.
+    const facets = new DataView(
+      bytes.buffer,
+      bytes.byteOffset,
+      bytes.byteLength
+    ).getUint32(80, true);
+    expect(facets).toBe(12);
+    expect(bytes.byteLength).toBe(84 + facets * 50);
+  });
+
+  it('merges every body into one binary STL facet stream', async () => {
+    const manager = managerWithTwoBoxes();
+    const [bodyA, bodyB] = manager.document.bodyOrder;
+    const facetCount = (bytes: Uint8Array) =>
+      new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength).getUint32(
+        80,
+        true
+      );
+    const single = await kernel.exportMesh(manager.document, [bodyA!], {
+      format: 'stl-binary',
+      deflection: 0.08
+    });
+    const both = await kernel.exportMesh(manager.document, [bodyA!, bodyB!], {
+      format: 'stl-binary',
+      deflection: 0.08
+    });
+    expect(facetCount(both)).toBe(2 * facetCount(single));
+  });
+
+  it('exports a multi-body 3MF package', async () => {
+    const manager = managerWithTwoBoxes();
+    const [bodyA, bodyB] = manager.document.bodyOrder;
+    const bytes = await kernel.exportMesh(manager.document, [bodyA!, bodyB!], {
+      format: '3mf',
+      deflection: 0.08
+    });
+    // A 3MF file is a zip package: PK local-file-header magic.
+    expect(Array.from(bytes.subarray(0, 4))).toEqual([0x50, 0x4b, 0x03, 0x04]);
+  });
+
+  it('encodes the ASCII STL format choice as bytes', async () => {
+    const manager = newManager('ASCII Mesh Part');
+    manager.execute(
+      commandFactories.addPrimitive({
+        name: 'Box',
+        primitiveKind: 'box',
+        dimensions: { width: 5, height: 6, depth: 7 }
+      })
+    );
+    const bytes = await kernel.exportMesh(
+      manager.document,
+      [getLatestBodyId(manager.document)!],
+      { format: 'stl-ascii', deflection: 0.08 }
+    );
+    expect(new TextDecoder().decode(bytes.subarray(0, 6))).toBe('solid ');
+  });
+
+  it('rejects a non-positive mesh export deflection', async () => {
+    const manager = newManager('Bad Deflection');
+    manager.execute(
+      commandFactories.addPrimitive({
+        name: 'Box',
+        primitiveKind: 'box',
+        dimensions: { width: 5, height: 6, depth: 7 }
+      })
+    );
+    await expect(
+      kernel.exportMesh(
+        manager.document,
+        [getLatestBodyId(manager.document)!],
+        { format: 'stl-binary', deflection: 0 }
+      )
+    ).rejects.toThrow(/positive/);
+  });
+
+  it('scales a body uniformly through a parameter', async () => {
+    const manager = newManager('Scaled Part');
+    manager.execute(
+      commandFactories.setParameter({ name: 'k', expression: '2' })
+    );
+    manager.execute(
+      commandFactories.addPrimitive({
+        name: 'Box',
+        primitiveKind: 'box',
+        dimensions: { width: 5, height: 6, depth: 7 }
+      })
+    );
+    const bodyId = getLatestBodyId(manager.document)!;
+    manager.execute(
+      commandFactories.transformBody({
+        name: 'Scale',
+        targetBodyId: bodyId,
+        translation: { x: 0, y: 0, z: 0 },
+        scale: 'k'
+      })
+    );
+    const derived = await kernel.syncDocument(manager.document);
+    expect(derived.warnings).toEqual([]);
+    expect(derived.bodyRepresentations[bodyId]!.volume).toBeCloseTo(
+      5 * 6 * 7 * 8,
+      3
+    );
+
+    // Parametric: re-driving the parameter rescales the same feature.
+    manager.execute(
+      commandFactories.setParameter({ name: 'k', expression: '3' })
+    );
+    const rescaled = await kernel.syncDocument(manager.document);
+    expect(rescaled.bodyRepresentations[bodyId]!.volume).toBeCloseTo(
+      5 * 6 * 7 * 27,
+      2
+    );
+  });
+
+  it('rejects a non-positive transform scale as a feature warning', async () => {
+    const manager = newManager('Bad Scale');
+    manager.execute(
+      commandFactories.addPrimitive({
+        name: 'Box',
+        primitiveKind: 'box',
+        dimensions: { width: 5, height: 6, depth: 7 }
+      })
+    );
+    const bodyId = getLatestBodyId(manager.document)!;
+    manager.execute(
+      commandFactories.transformBody({
+        name: 'Collapse',
+        targetBodyId: bodyId,
+        translation: { x: 0, y: 0, z: 0 },
+        scale: 0
+      })
+    );
+    const derived = await kernel.syncDocument(manager.document);
+    expect(derived.warnings.join('\n')).toMatch(/positive/);
+    // The failed feature leaves the body at its unscaled size.
+    expect(derived.bodyRepresentations[bodyId]!.volume).toBeCloseTo(210, 4);
+  });
+
+  it('reports watertight mesh quality for a solid box', async () => {
+    const manager = newManager('Quality Part');
+    manager.execute(
+      commandFactories.addPrimitive({
+        name: 'Box',
+        primitiveKind: 'box',
+        dimensions: { width: 5, height: 6, depth: 7 }
+      })
+    );
+    const bodyId = getLatestBodyId(manager.document)!;
+    const report = await kernel.meshQuality(manager.document, [bodyId], 0.08);
+    expect(report.watertight).toBe(true);
+    expect(report.bodies).toEqual([
+      {
+        bodyId,
+        boundaryEdges: 0,
+        nonManifoldEdges: 0,
+        watertight: true
+      }
+    ]);
+  });
 });
