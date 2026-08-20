@@ -5,6 +5,7 @@ import {
   Cone,
   CopyPlus,
   Cylinder,
+  Drill,
   Expand,
   FlipHorizontal2,
   Globe,
@@ -46,6 +47,7 @@ export type ToolId =
   | 'solid-offset'
   | 'draft'
   | 'thicken'
+  | 'hole'
   | 'fillet'
   | 'chamfer'
   | 'linear-pattern'
@@ -216,6 +218,12 @@ export const TOOL_META: Record<ToolId, ToolMeta> = {
     group: 'finish',
     hint: 'Turn one exact face into a solid wall'
   },
+  hole: {
+    label: 'Hole',
+    icon: icon(<Drill size={16} aria-hidden="true" />),
+    group: 'finish',
+    hint: 'Drill a simple, counterbore, or countersink hole into a face'
+  },
   fillet: {
     label: 'Fillet',
     icon: icon(<Spline size={16} aria-hidden="true" />),
@@ -277,6 +285,7 @@ export const TOOL_GROUPS: { id: ToolGroup; label: string; tools: ToolId[] }[] =
         'solid-offset',
         'draft',
         'thicken',
+        'hole',
         'fillet',
         'chamfer',
         'linear-pattern',
@@ -314,7 +323,8 @@ export function toolDisabledReason(
       tool === 'shell' ||
       tool === 'solid-offset' ||
       tool === 'draft' ||
-      tool === 'thicken') &&
+      tool === 'thicken' ||
+      tool === 'hole') &&
     !avail.exactGeometryReady
   ) {
     return 'Waiting for exact geometry';
@@ -351,7 +361,8 @@ export function toolDisabledReason(
       tool === 'shell' ||
       tool === 'solid-offset' ||
       tool === 'draft' ||
-      tool === 'thicken') &&
+      tool === 'thicken' ||
+      tool === 'hole') &&
     avail.liveBodyCount < 1
   ) {
     return 'Needs a body';

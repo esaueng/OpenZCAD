@@ -71,6 +71,7 @@ import {
 import {
   coaxialCylinderRadii,
   cylinderAlongAxis,
+  drillHole,
   fillThroughHole,
   tryExactAnalyticCylinderCapOffset,
   tryExactCoaxialCylinderCut
@@ -2028,6 +2029,182 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
               lineage: remusHashOnlyLineage(
                 'mirror',
                 'The pinned bridge does not expose a complete reflected topology relation.'
+              )
+            });
+            inheritMeshOrigin(
+              result,
+              feature.data.targetBodyId,
+              feature.bodyId
+            );
+            break;
+          }
+          case 'hole': {
+            if (!feature.bodyId) {
+              throw new Error('Hole has no result body.');
+            }
+            const target = result.shapes.get(feature.data.targetBodyId);
+            if (!target) {
+              throw new Error('Hole target is unavailable.');
+            }
+            // Face resolution works on a single solid; fuse a multi-solid
+            // body first, exactly as an edge modifier would.
+            const shape: ExactShape =
+              target.solids.length === 1
+                ? target
+                : { solids: [collapseShape(kernel, target)] };
+            const targetSolid = shape.solids[0]!;
+            const faces = resolveFeatureFaces(
+              kernel,
+              shape,
+              [feature.data.faceHash],
+              feature.data.faceReference
+                ? [feature.data.faceReference]
+                : undefined,
+              'Hole'
+            );
+            const geometry = measureFaceGeometry(kernel, faces[0]!);
+            if (
+              geometry?.surfaceType !== 'plane' ||
+              geometry.normal === undefined
+            ) {
+              throw new Error(
+                'A hole needs a planar entry face with an analytic normal.'
+              );
+            }
+            // The same frame construction as `frameFromFace` and the
+            // kernel's cylinder frames, so the stored (u, v) re-derives the
+            // identical world position on every rebuild.
+            const zAxis = normalized(geometry.normal);
+            if (!zAxis) {
+              throw new Error('Hole entry face normal is degenerate.');
+            }
+            const reference =
+              Math.abs(zAxis.z) < 0.9
+                ? { x: 0, y: 0, z: 1 }
+                : { x: 1, y: 0, z: 0 };
+            const xAxis = normalized(cross(reference, zAxis))!;
+            const yAxis = cross(zAxis, xAxis);
+            const u = resolveParamValue(
+              feature.data.position.u,
+              scope,
+              'hole position U'
+            );
+            const v = resolveParamValue(
+              feature.data.position.v,
+              scope,
+              'hole position V'
+            );
+            const surfacePoint = {
+              x: geometry.center.x + xAxis.x * u + yAxis.x * v,
+              y: geometry.center.y + xAxis.y * u + yAxis.y * v,
+              z: geometry.center.z + xAxis.z * u + yAxis.z * v
+            };
+            const axis = {
+              x: -zAxis.x,
+              y: -zAxis.y,
+              z: -zAxis.z
+            };
+            const diameter = resolveParamValue(
+              feature.data.diameter,
+              scope,
+              'hole diameter'
+            );
+            if (!(diameter > 0)) {
+              throw new Error('Hole diameter must be greater than zero.');
+            }
+            let depth: number;
+            if (feature.data.depthMode === 'through') {
+              // Far enough to clear the body from this entry point, however
+              // the body sits relative to the face.
+              const bounds = kernel.boundingBox(targetSolid);
+              const corners = [0, 1].flatMap((cx) =>
+                [0, 1].flatMap((cy) =>
+                  [0, 1].map((cz) => ({
+                    x: bounds[cx * 3]!,
+                    y: bounds[cy * 3 + 1]!,
+                    z: bounds[cz * 3 + 2]!
+                  }))
+                )
+              );
+              depth = corners.reduce(
+                (maximum, corner) =>
+                  Math.max(maximum, dot(subtract(corner, surfacePoint), axis)),
+                0
+              );
+              if (!(depth > 0)) {
+                throw new Error('The hole points away from the body.');
+              }
+            } else {
+              if (feature.data.depth === undefined) {
+                throw new Error('A blind hole needs a depth.');
+              }
+              depth = resolveParamValue(
+                feature.data.depth,
+                scope,
+                'hole depth'
+              );
+              if (!(depth > 0)) {
+                throw new Error('Hole depth must be greater than zero.');
+              }
+            }
+            // The overshoot heuristic resizeThroughHole already uses, so a
+            // bore through a slanted opening trims identically.
+            const extension = Math.max(
+              DIRECT_EDIT_TOLERANCE * 10,
+              depth * 0.02,
+              diameter * 0.01
+            );
+            const style = feature.data.style;
+            const resolveOptional = (
+              value: ParamValue | undefined,
+              label: string
+            ): number | undefined =>
+              value === undefined
+                ? undefined
+                : resolveParamValue(value, scope, label);
+            const countersinkAngleDeg = resolveOptional(
+              feature.data.countersinkAngleDeg,
+              'countersink angle'
+            );
+            const counterboreDiameter = resolveOptional(
+              feature.data.counterboreDiameter,
+              'counterbore diameter'
+            );
+            const drilled = drillHole(kernel, targetSolid, {
+              surfacePoint,
+              axis,
+              radius: diameter / 2,
+              depth,
+              style,
+              counterboreRadius:
+                counterboreDiameter === undefined
+                  ? undefined
+                  : counterboreDiameter / 2,
+              counterboreDepth: resolveOptional(
+                feature.data.counterboreDepth,
+                'counterbore depth'
+              ),
+              countersinkRadius: (() => {
+                const value = resolveOptional(
+                  feature.data.countersinkDiameter,
+                  'countersink diameter'
+                );
+                return value === undefined ? undefined : value / 2;
+              })(),
+              countersinkAngle:
+                countersinkAngleDeg === undefined
+                  ? undefined
+                  : (countersinkAngleDeg * Math.PI) / 180,
+              entryExtension: extension,
+              exitExtension:
+                feature.data.depthMode === 'through' ? extension : 0
+            });
+            result.consumed.add(feature.data.targetBodyId);
+            result.shapes.set(feature.bodyId, {
+              solids: [drilled],
+              lineage: remusHashOnlyLineage(
+                'hole',
+                'The compound cut does not report face ancestry through the bore.'
               )
             });
             inheritMeshOrigin(
