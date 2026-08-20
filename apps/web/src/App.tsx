@@ -9743,6 +9743,18 @@ export function App() {
     }
   }
 
+  function handleReorderFeature(featureId: FeatureId, toIndex: number) {
+    const name =
+      doc && listFeaturesInOrder(doc).find((f) => f.featureId === featureId)
+        ?.name;
+    executeCommand(
+      commandFactories.moveFeature(
+        { featureId, toIndex },
+        name ? `Reorder ${name}` : 'Reorder feature'
+      )
+    );
+  }
+
   function handleToggleFeatureSuppression(feature: FeatureNode) {
     const resume = isFeatureSuppressed(feature);
     executeCommand(
@@ -11148,6 +11160,7 @@ export function App() {
               executeCommand(commandFactories.deleteParameter({ name }))
             }
             onDeleteFeature={handleDeleteFeature}
+            onReorderFeature={handleReorderFeature}
             panelState={panelState}
             onToggleSection={(id: SidebarSectionId) =>
               setPanelState((current) => toggleSidebarSection(current, id))
