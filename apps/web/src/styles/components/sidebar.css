@@ -298,3 +298,26 @@
   flex: 0 0 auto;
   margin-top: 2px;
 }
+
+/* ── History drag-to-reorder ─────────────────────────────── */
+
+/* The grip only appears on hover/focus so the timeline stays quiet; it is
+   still keyboard-reachable, and focus reveals it for arrow-key moves. */
+.feature-row-grip {
+  cursor: grab;
+  opacity: 0;
+}
+
+.feature-row:hover .feature-row-grip,
+.feature-row-grip:focus-visible {
+  opacity: 1;
+}
+
+.feature-row.is-dragging {
+  opacity: 0.45;
+}
+
+.feature-row.is-drop-target {
+  outline: 2px dashed var(--color-accent);
+  outline-offset: -2px;
+}
