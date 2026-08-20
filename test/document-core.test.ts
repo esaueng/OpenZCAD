@@ -1,11 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import {
   addPrimitiveFeature,
+  addSketchConstraint,
   cloneDocument,
   addSketchFeature,
   addSketchObjects,
   appendRevision,
   attachDerivedState,
+  deleteSketchConstraint,
   booleanBodies,
   createCheckpoint,
   createProjectDocument,
@@ -747,5 +749,144 @@ describe('cloneDocument derived sharing', () => {
     expect(clone.featureOrder).not.toBe(document.featureOrder);
     expect(clone).not.toBe(document);
     expect(clone.nodes).toEqual(document.nodes);
+  });
+
+  describe('sketch constraints (schema v9)', () => {
+    function sketchWithGeometry() {
+      const base = createProjectDocument('Constraints', user());
+      const { document, sketchId } = addSketchFeature(base, {
+        name: 'Profile',
+        planeRef: { type: 'canonical', plane: 'XY', offset: 0 },
+        objects: [
+          { objectKind: 'line', x1: 0, y1: 0, x2: 10, y2: 2 },
+          { objectKind: 'line', x1: 0, y1: 5, x2: 10, y2: 8 },
+          { objectKind: 'circle', radius: 4, centerX: 20, centerY: 0 },
+          { objectKind: 'rectangle', width: 8, height: 4, centerX: 0, centerY: 0 }
+        ]
+      });
+      const sketch = findSketch(document, sketchId)!;
+      const [lineA, lineB, circle, rectangle] = sketch.objectIds;
+      return {
+        document,
+        sketchId,
+        lineA: lineA!,
+        lineB: lineB!,
+        circle: circle!,
+        rectangle: rectangle!
+      };
+    }
+
+    it('adds, validates, and deletes constraints', () => {
+      const { document, sketchId, lineA, lineB, circle } =
+        sketchWithGeometry();
+      const added = addSketchConstraint(document, {
+        sketchId,
+        constraint: { constraintKind: 'parallel', a: lineA, b: lineB }
+      });
+      const withRadius = addSketchConstraint(added.document, {
+        sketchId,
+        constraint: { constraintKind: 'radius', objectId: circle, value: 'r' }
+      });
+      const sketch = findSketch(withRadius.document, sketchId)!;
+      expect(sketch.constraints).toHaveLength(2);
+      expect(sketch.constraints![0]!.constraintId).toBe(added.constraintId);
+
+      const removed = deleteSketchConstraint(withRadius.document, {
+        sketchId,
+        constraintId: added.constraintId
+      });
+      expect(findSketch(removed, sketchId)!.constraints).toHaveLength(1);
+      expect(() =>
+        deleteSketchConstraint(removed, {
+          sketchId,
+          constraintId: added.constraintId
+        })
+      ).toThrow(/no constraint/);
+    });
+
+    it('refuses constraints on objects without point identity', () => {
+      const { document, sketchId, lineA, rectangle } = sketchWithGeometry();
+      expect(() =>
+        addSketchConstraint(document, {
+          sketchId,
+          constraint: { constraintKind: 'parallel', a: lineA, b: rectangle }
+        })
+      ).toThrow(/rectangle/);
+      expect(() =>
+        addSketchConstraint(document, {
+          sketchId,
+          constraint: { constraintKind: 'horizontal', objectId: rectangle }
+        })
+      ).toThrow(/rectangle/);
+    });
+
+    it('refuses points an object does not expose and mixed equals', () => {
+      const { document, sketchId, lineA, lineB, circle } =
+        sketchWithGeometry();
+      expect(() =>
+        addSketchConstraint(document, {
+          sketchId,
+          constraint: {
+            constraintKind: 'coincident',
+            a: { objectId: lineA, point: 'center' },
+            b: { objectId: circle, point: 'center' }
+          }
+        })
+      ).toThrow(/has no 'center' point/);
+      expect(() =>
+        addSketchConstraint(document, {
+          sketchId,
+          constraint: { constraintKind: 'equal', a: lineB, b: circle }
+        })
+      ).toThrow(/pairs two lines or two circles/);
+      expect(() =>
+        addSketchConstraint(document, {
+          sketchId,
+          constraint: {
+            constraintKind: 'radius',
+            objectId: circle,
+            value: -1
+          }
+        })
+      ).toThrow(/positive/);
+    });
+
+    it('drops constraints referencing a deleted object', () => {
+      const { document, sketchId, lineA, lineB, circle } =
+        sketchWithGeometry();
+      let next = addSketchConstraint(document, {
+        sketchId,
+        constraint: { constraintKind: 'parallel', a: lineA, b: lineB }
+      }).document;
+      next = addSketchConstraint(next, {
+        sketchId,
+        constraint: { constraintKind: 'radius', objectId: circle, value: 4 }
+      }).document;
+      const afterDelete = deleteSketchObject(next, {
+        sketchId,
+        objectId: lineB
+      });
+      const sketch = findSketch(afterDelete, sketchId)!;
+      // The parallel constraint went with lineB; the radius one survived.
+      expect(sketch.constraints).toHaveLength(1);
+      expect(sketch.constraints![0]!.data.constraintKind).toBe('radius');
+    });
+
+    it('normalizes a v8 document without touching its sketches', () => {
+      const { document, sketchId } = sketchWithGeometry();
+      const v8 = {
+        ...cloneDocument(document),
+        schemaVersion: 8
+      } as unknown as typeof document;
+      const normalized = normalizeDocument(v8);
+      expect(normalized.schemaVersion).toBe(PROJECT_DOCUMENT_SCHEMA_VERSION);
+      const sketch = findSketch(normalized, sketchId)!;
+      // v8 -> v9 is additive: absent constraints stay absent, nothing is
+      // rewritten to an empty array.
+      expect(sketch.constraints).toBeUndefined();
+      expect(sketch.objectIds).toEqual(
+        findSketch(document, sketchId)!.objectIds
+      );
+    });
   });
 });
