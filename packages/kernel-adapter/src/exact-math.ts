@@ -14,7 +14,7 @@ import {
   type Vec2,
   type Vec3
 } from '@openzcad/geometry';
-import type { SketchObjectData } from '@openzcad/shared';
+import type { ParamValue, SketchObjectData } from '@openzcad/shared';
 
 export const GEOMETRY_EPSILON = 1e-9;
 export const ANALYTIC_MATCH_EPSILON = 1e-7;
@@ -122,6 +122,45 @@ export function coordinateFrameMatrix(origin: Vec3, zAxis: Vec3): Float64Array {
 
 export function errorText(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+export function resolvePatternDirection(
+  value: { x: ParamValue; y: ParamValue; z: ParamValue },
+  scope: Record<string, number>
+): Vec3 {
+  const resolved = {
+    x: resolveParamValue(value.x, scope, 'pattern direction X'),
+    y: resolveParamValue(value.y, scope, 'pattern direction Y'),
+    z: resolveParamValue(value.z, scope, 'pattern direction Z')
+  };
+  const unit = normalized(resolved);
+  if (!unit) {
+    throw new Error('Pattern direction must be a non-zero vector.');
+  }
+  return unit;
+}
+
+/**
+ * The same plane basis translated along its own normal — the plane an offset
+ * extrude actually starts from. Building the profile face AND the lineage
+ * carriers from the shifted basis keeps every cap and side-wall carrier
+ * consistent with the geometry, instead of shifting each site separately.
+ */
+export function shiftBasisAlongNormal(
+  basis: PlaneBasis,
+  offset: number
+): PlaneBasis {
+  if (offset === 0) {
+    return basis;
+  }
+  return {
+    ...basis,
+    origin: {
+      x: basis.origin.x + basis.normal.x * offset,
+      y: basis.origin.y + basis.normal.y * offset,
+      z: basis.origin.z + basis.normal.z * offset
+    }
+  };
 }
 
 export function axisDirection(axis: 'x' | 'y' | 'z'): Vec3 {

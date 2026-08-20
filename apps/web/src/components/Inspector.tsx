@@ -84,6 +84,7 @@ export interface InspectorCallbacks {
     name: string;
     sketchId: SketchId;
     distance: ParamValue;
+    symmetric?: boolean;
   }): void;
   onCreateRevolve(value: {
     name: string;
@@ -116,7 +117,12 @@ export interface InspectorCallbacks {
   onEditSketchInViewport(feature: FeatureNode): void;
   onApplyExtrude(
     feature: FeatureNode,
-    value: { name: string; sketchId: SketchId; distance: ParamValue }
+    value: {
+      name: string;
+      sketchId: SketchId;
+      distance: ParamValue;
+      symmetric?: boolean;
+    }
   ): void;
   onApplyRevolve(
     feature: FeatureNode,
@@ -812,7 +818,12 @@ export function Inspector(props: InspectorProps) {
         />
       );
     } else {
-      const patternKind = tool === 'linear-pattern' ? 'linear' : 'circular';
+      const patternKind =
+        tool === 'linear-pattern'
+          ? 'linear'
+          : tool === 'grid-pattern'
+            ? 'grid'
+            : 'circular';
       body = (
         <PatternForm
           key={`create-${patternKind}`}
@@ -932,6 +943,7 @@ export function Inspector(props: InspectorProps) {
             name: selectedFeature.name,
             sketchId: data.sketchId,
             distance: data.distance,
+            ...(data.symmetric ? { symmetric: true } : {}),
             operation: data.operation
           }}
           submitLabel="Apply"
@@ -1005,7 +1017,10 @@ export function Inspector(props: InspectorProps) {
           edgeReferences={data.edgeReferences}
           initial={{
             name: selectedFeature.name,
-            size: data.featureKind === 'fillet' ? data.radius : data.distance
+            size: data.featureKind === 'fillet' ? data.radius : data.distance,
+            ...(data.featureKind === 'chamfer' && data.angleDeg !== undefined
+              ? { angleDeg: data.angleDeg }
+              : {})
           }}
           submitLabel="Apply"
           onSubmit={(value) =>
@@ -1028,7 +1043,13 @@ export function Inspector(props: InspectorProps) {
             count: data.count,
             axis: data.axis,
             spacing: data.spacing,
-            angleDeg: data.angleDeg
+            angleDeg: data.angleDeg,
+            ...(data.direction ? { direction: data.direction } : {}),
+            ...(data.axis2 ? { axis2: data.axis2 } : {}),
+            ...(data.spacing2 !== undefined
+              ? { spacing2: data.spacing2 }
+              : {}),
+            ...(data.count2 !== undefined ? { count2: data.count2 } : {})
           }}
           submitLabel="Apply"
           onSubmit={(value) => props.onApplyPattern(selectedFeature, value)}

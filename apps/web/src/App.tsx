@@ -11615,7 +11615,11 @@ export function App() {
                         name: value.name,
                         data: {
                           ...feature.data,
-                          distance: value.distance
+                          distance: value.distance,
+                          // Stored explicitly on edits: updateFeature patches
+                          // keys and cannot delete one, so unchecking must
+                          // write false rather than omit the key.
+                          symmetric: value.symmetric === true
                         }
                       },
                       `Edit ${value.name}`
@@ -11714,7 +11718,10 @@ export function App() {
                                 ...(value.edgeReferences
                                   ? { edgeReferences: value.edgeReferences }
                                   : {}),
-                                distance: value.size
+                                distance: value.size,
+                                ...(value.angleDeg !== undefined
+                                  ? { angleDeg: value.angleDeg }
+                                  : {})
                               }
                       },
                       `Edit ${value.name}`
@@ -11734,7 +11741,17 @@ export function App() {
                           count: value.count,
                           axis: value.axis,
                           spacing: value.spacing,
-                          angleDeg: value.angleDeg
+                          angleDeg: value.angleDeg,
+                          ...(value.direction
+                            ? { direction: value.direction }
+                            : {}),
+                          ...(value.axis2 ? { axis2: value.axis2 } : {}),
+                          ...(value.spacing2 !== undefined
+                            ? { spacing2: value.spacing2 }
+                            : {}),
+                          ...(value.count2 !== undefined
+                            ? { count2: value.count2 }
+                            : {})
                         }
                       },
                       `Edit ${value.name}`

@@ -220,6 +220,8 @@ export interface ExtrudeInput {
   name: string;
   sketchId: SketchId;
   distance: ParamValue;
+  /** Half the distance to each side of the sketch plane; absent = one-sided. */
+  symmetric?: boolean;
   /** Explicitly stored by new clients; absent reads as the legacy new body. */
   operation?: ExtrudeOperation;
   /** Existing live body consumed by an add or cut extrusion. */
@@ -339,6 +341,8 @@ export interface EdgeModifierInput {
   edgeHashes: number[];
   edgeReferences?: EdgeTopologyReferenceV5[];
   size: ParamValue;
+  /** Chamfer only: bevel angle in degrees; absent means symmetric 45°. */
+  angleDeg?: ParamValue;
   ids?: BodyFeatureIds;
 }
 
@@ -350,6 +354,14 @@ export interface PatternInput {
   axis: AxisId;
   spacing?: ParamValue;
   angleDeg?: ParamValue;
+  /** Linear only: arbitrary repeat direction overriding `axis`. */
+  direction?: ParametricVector3;
+  /** Grid only: second repeat axis; absent reads as 'y'. */
+  axis2?: AxisId;
+  /** Grid only: spacing along `axis2`; absent reads as `spacing`. */
+  spacing2?: ParamValue;
+  /** Grid only: instance count along `axis2`; absent reads as `count`. */
+  count2?: ParamValue;
   ids?: BodyFeatureIds;
 }
 
@@ -1268,6 +1280,7 @@ export function extrudeSketch(
       featureKind: 'extrude',
       sketchId: input.sketchId,
       distance: input.distance,
+      ...(input.symmetric ? { symmetric: true } : {}),
       ...(input.operation === undefined ? {} : { operation: input.operation }),
       ...(input.targetBodyId === undefined
         ? {}
@@ -1725,7 +1738,8 @@ export function chamferEdges(
       ...(input.edgeReferences
         ? { edgeReferences: deepClone(input.edgeReferences) }
         : {}),
-      distance: input.size
+      distance: input.size,
+      ...(input.angleDeg !== undefined ? { angleDeg: input.angleDeg } : {})
     },
     input.ids
   );
@@ -1746,7 +1760,11 @@ export function patternBody(
       count: input.count,
       axis: input.axis,
       spacing: input.spacing ?? 10,
-      angleDeg: input.angleDeg ?? 360
+      angleDeg: input.angleDeg ?? 360,
+      ...(input.direction ? { direction: input.direction } : {}),
+      ...(input.axis2 ? { axis2: input.axis2 } : {}),
+      ...(input.spacing2 !== undefined ? { spacing2: input.spacing2 } : {}),
+      ...(input.count2 !== undefined ? { count2: input.count2 } : {})
     },
     input.ids
   );
@@ -2051,6 +2069,7 @@ const FEATURE_DATA_KEYS: Record<FeatureKind, readonly string[]> = {
   extrude: [
     'sketchId',
     'distance',
+    'symmetric',
     'operation',
     'targetBodyId',
     'profile',
@@ -2087,14 +2106,24 @@ const FEATURE_DATA_KEYS: Record<FeatureKind, readonly string[]> = {
   ],
   thicken: ['targetBodyId', 'faceHash', 'faceReference', 'thickness'],
   fillet: ['targetBodyId', 'edgeHashes', 'edgeReferences', 'radius'],
-  chamfer: ['targetBodyId', 'edgeHashes', 'edgeReferences', 'distance'],
+  chamfer: [
+    'targetBodyId',
+    'edgeHashes',
+    'edgeReferences',
+    'distance',
+    'angleDeg'
+  ],
   pattern: [
     'targetBodyId',
     'patternKind',
     'count',
     'axis',
     'spacing',
-    'angleDeg'
+    'angleDeg',
+    'direction',
+    'axis2',
+    'spacing2',
+    'count2'
   ],
   'direct-edit': ['targetBodyId', 'operation'],
   'imported-step': ['artifactId', 'sourceName', 'stepText', 'stepSourceRef'],

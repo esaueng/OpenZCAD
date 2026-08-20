@@ -36,7 +36,13 @@ export function applyEdgeModifier(
   /** Receives the kernel's own refusal text, when it threw one. */
   reportRefusal?: (message: string) => void,
   /** Receives construction history only after the same result is accepted. */
-  reportEvolution?: (payload: FaceEvolutionPayloadV1) => void
+  reportEvolution?: (payload: FaceEvolutionPayloadV1) => void,
+  /**
+   * Chamfer only: bevel angle in radians, strictly inside (0, π/2). The
+   * kernel has no evolution variant for distance-angle chamfers, so lineage
+   * falls back to hash-only for them.
+   */
+  chamferAngleRadians?: number
 ): number | null {
   const targetBounds = kernel.boundingBox(target);
   const handles = Uint32Array.from(selected);
@@ -64,7 +70,14 @@ export function applyEdgeModifier(
     }
   } else {
     try {
-      if (reportEvolution) {
+      if (chamferAngleRadians !== undefined) {
+        modified = kernel.chamferDistanceAngle(
+          target,
+          handles,
+          size,
+          chamferAngleRadians
+        );
+      } else if (reportEvolution) {
         try {
           evolution = kernel.chamferWithEvolution(target, handles, size);
           modified = evolution.result.solid;

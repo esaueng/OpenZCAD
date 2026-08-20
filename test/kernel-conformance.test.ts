@@ -201,6 +201,64 @@ describe('exact kernel conventions', { timeout: 30_000 }, () => {
     expectBounds(measured, [-16, -9, 0], [16, 9, 12]);
   });
 
+  it('extrudes symmetrically about the sketch plane when asked', async () => {
+    let document = createProjectDocument(
+      'Symmetric extrude',
+      toUserId('user_conformance')
+    );
+    document = addSketchFeature(document, {
+      name: 'Profile',
+      plane: 'XY',
+      offset: 0,
+      object: {
+        objectKind: 'rectangle',
+        width: 32,
+        height: 18,
+        centerX: 0,
+        centerY: 0
+      }
+    }).document;
+    document = extrudeSketch(document, {
+      name: 'Symmetric pad',
+      sketchId: getLatestSketchId(document)!,
+      distance: 12,
+      symmetric: true
+    }).document;
+    const measured = await measure(document);
+    // Same volume as the one-sided pad; the material splits ±6 about z=0.
+    expect(measured.volume).toBeCloseTo(32 * 18 * 12, 6);
+    expectBounds(measured, [-16, -9, -6], [16, 9, 6]);
+  });
+
+  it('splits a negative symmetric extrude the same way', async () => {
+    let document = createProjectDocument(
+      'Negative symmetric extrude',
+      toUserId('user_conformance')
+    );
+    document = addSketchFeature(document, {
+      name: 'Circle profile',
+      plane: 'XY',
+      offset: 4,
+      object: {
+        objectKind: 'circle',
+        radius: 6,
+        centerX: 3,
+        centerY: -2
+      }
+    }).document;
+    document = extrudeSketch(document, {
+      name: 'Negative symmetric pad',
+      sketchId: getLatestSketchId(document)!,
+      distance: -12,
+      symmetric: true
+    }).document;
+    const measured = await measure(document);
+    expect(measured.volume).toBeCloseTo(Math.PI * 36 * 12, 9);
+    // Plane at z=4: the solid spans 6 to each side of it regardless of the
+    // distance's sign.
+    expectBounds(measured, [-3, -8, -2], [9, 4, 10]);
+  });
+
   it('extrudes a circle below its offset plane for a negative distance', async () => {
     let document = createProjectDocument(
       'Negative circle extrude',
