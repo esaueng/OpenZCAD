@@ -13,7 +13,7 @@ export type UploadSessionId = Brand<string, 'UploadSessionId'>;
 export type AssetId = Brand<string, 'AssetId'>;
 export type SketchConstraintId = Brand<string, 'SketchConstraintId'>;
 
-export const PROJECT_DOCUMENT_SCHEMA_VERSION = 11 as const;
+export const PROJECT_DOCUMENT_SCHEMA_VERSION = 12 as const;
 export type ProjectDocumentSchemaVersion =
   typeof PROJECT_DOCUMENT_SCHEMA_VERSION;
 
@@ -796,6 +796,15 @@ export type FeatureData =
        * hundred bytes while its source runs to hundreds of megabytes.
        */
       stepSourceRef?: ImportedSourceReference;
+      /**
+       * Partial import: zero-based indices into the file's DECLARED solid
+       * order (the stable order the reader reports, before unreadable solids
+       * are dropped — the same numbering the import diagnostics use). Absent
+       * means every solid, and a set naming every declared solid is
+       * equivalent to absent. Selected indices that turn out unreadable are
+       * still dropped with the usual warning.
+       */
+      solidIndices?: number[];
     };
 
 /**
@@ -1195,6 +1204,11 @@ export interface BodyRepresentation {
   exportableStep: boolean;
   /** True when a later boolean feature consumed this body. */
   consumed: boolean;
+  /**
+   * For imported-step bodies: how many solids the source file declares, so
+   * the inspector can offer per-solid selection. Absent on other sources.
+   */
+  importedStepDeclaredSolidCount?: number;
   volume: number;
   bbox: BoundingBox;
   /**

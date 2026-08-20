@@ -487,3 +487,27 @@
   margin-top: 8px;
 }
 
+
+/* Per-solid include/exclude list on an imported STEP feature. */
+.import-solid-selection {
+  margin: 0;
+  padding: var(--sp-2) var(--sp-3);
+  border: var(--border-thin);
+  border-radius: var(--radius-md);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+}
+
+.import-solid-selection legend {
+  padding: 0 var(--sp-1);
+  color: var(--color-text-muted);
+  font-size: var(--fs-xs);
+}
+
+.import-solid-selection label {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  font-size: var(--fs-sm);
+}

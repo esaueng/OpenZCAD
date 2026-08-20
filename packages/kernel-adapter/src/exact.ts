@@ -378,6 +378,11 @@ export interface ExactKernelAdapter {
  */
 interface CachedImportedStep {
   solids: Uint8Array[];
+  /**
+   * Each cached solid's zero-based index in the file's declared order, so a
+   * feature that selects a subset can filter a file-level cache entry.
+   */
+  acceptedDeclaredIndices: number[];
   diagnostics: ImportedStepDiagnostics;
 }
 
@@ -708,6 +713,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     checksum: string,
     kernel: RemusKernel,
     solids: number[],
+    acceptedDeclaredIndices: number[],
     diagnostics: ImportedStepDiagnostics,
     pinned: ReadonlySet<string>
   ): void {
@@ -718,7 +724,11 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
       return;
     }
     const bytes = serialized.reduce((sum, blob) => sum + blob.byteLength, 0);
-    this.importedStepCache.set(checksum, { solids: serialized, diagnostics });
+    this.importedStepCache.set(checksum, {
+      solids: serialized,
+      acceptedDeclaredIndices,
+      diagnostics
+    });
     this.importedStepCacheBytes += bytes;
     for (const [key, entry] of this.importedStepCache) {
       if (this.importedStepCacheBytes <= this.maxImportedStepCacheBytes) {
@@ -1655,6 +1665,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
                 ? this.importedStepCache.get(checksum)
                 : undefined;
               let solids: number[];
+              let acceptedDeclaredIndices: number[];
               let diagnostics: ImportedStepDiagnostics;
               if (cached) {
                 // The checksum determines the result, so restoring is exact.
@@ -1662,6 +1673,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
                 solids = cached.solids.map((blob) =>
                   kernel.deserializeSolid(blob)
                 );
+                acceptedDeclaredIndices = cached.acceptedDeclaredIndices;
                 diagnostics = cached.diagnostics;
               } else {
                 let sourceBytes: Uint8Array;
@@ -1699,6 +1711,9 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
                 solids = declared.filter(
                   (_, index) => verdicts[index]!.kind !== 'not-a-solid'
                 );
+                acceptedDeclaredIndices = declared.flatMap((_, index) =>
+                  verdicts[index]!.kind !== 'not-a-solid' ? [index] : []
+                );
                 const rejections = verdicts.flatMap((verdict) =>
                   verdict.kind === 'not-a-solid' ? [verdict.reason] : []
                 );
@@ -1717,8 +1732,24 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
                     checksum,
                     kernel,
                     solids,
+                    acceptedDeclaredIndices,
                     diagnostics,
                     pinnedImports
+                  );
+                }
+              }
+              // Partial import: the selection names DECLARED indices — the
+              // stable file order the diagnostics number — applied after the
+              // file-level cache so every subset shares one cached parse.
+              const selection = feature.data.solidIndices;
+              if (selection !== undefined) {
+                const wanted = new Set(selection);
+                solids = solids.filter((_, position) =>
+                  wanted.has(acceptedDeclaredIndices[position]!)
+                );
+                if (solids.length === 0) {
+                  throw new Error(
+                    `Import selection excludes every readable solid in "${feature.data.sourceName}".`
                   );
                 }
               }
@@ -4087,6 +4118,9 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
           ),
           exportableStep: body.exportableStep,
           consumed,
+          ...(imported
+            ? { importedStepDeclaredSolidCount: imported.declaredSolidCount }
+            : {}),
           volume: measured.volume,
           bbox: measured.bbox,
           // One kernel call per solid, inside the pass that already holds it.
