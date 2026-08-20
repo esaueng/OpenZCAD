@@ -17,6 +17,9 @@ import {
 import type { SketchObjectData } from '@openzcad/shared';
 
 export const GEOMETRY_EPSILON = 1e-9;
+export const ANALYTIC_MATCH_EPSILON = 1e-7;
+export const DIRECT_EDIT_TOLERANCE = 1e-6;
+export const FULL_REVOLUTION = Math.PI * 2;
 
 export function dot(left: Vec3, right: Vec3): number {
   return left.x * right.x + left.y * right.y + left.z * right.z;
