@@ -309,6 +309,24 @@ export interface MirrorInput {
   ids?: BodyFeatureIds;
 }
 
+export interface HoleInput {
+  name: string;
+  /** Consumed: the drilled body replaces it. */
+  targetBodyId: BodyId;
+  faceHash: number;
+  faceReference?: FaceTopologyReferenceV5;
+  style: 'simple' | 'counterbore' | 'countersink';
+  diameter: ParamValue;
+  depthMode: 'blind' | 'through';
+  depth?: ParamValue;
+  counterboreDiameter?: ParamValue;
+  counterboreDepth?: ParamValue;
+  countersinkDiameter?: ParamValue;
+  countersinkAngleDeg?: ParamValue;
+  position: { u: ParamValue; v: ParamValue };
+  ids?: BodyFeatureIds;
+}
+
 export interface SplitInput {
   name: string;
   /** Consumed: the two halves replace it. */
@@ -1586,6 +1604,7 @@ function addBodyResultFeature(
     | 'chamfer'
     | 'pattern'
     | 'mirror'
+    | 'hole'
     | 'shell'
     | 'solid-offset'
     | 'loft'
@@ -1601,6 +1620,7 @@ function addBodyResultFeature(
         | 'chamfer'
         | 'pattern'
         | 'mirror'
+        | 'hole'
         | 'shell'
         | 'solid-offset'
         | 'loft'
@@ -1703,6 +1723,21 @@ export function addSplitFeature(
   attachToPart(next, featureNodeId, bodyNodeId, ids.secondBodyNodeId);
   next.version += 1;
   return { document: next, bodyId, secondBodyId: ids.secondBodyId };
+}
+
+/** Drills a hole feature; the target body is consumed by its drilled result. */
+export function holeBody(
+  document: ProjectDocument,
+  input: HoleInput
+): { document: ProjectDocument; bodyId: BodyId } {
+  const { name, targetBodyId, ids: _ids, ...parameters } = input;
+  return addBodyResultFeature(
+    document,
+    name,
+    'hole',
+    deepClone({ featureKind: 'hole', targetBodyId, ...parameters }),
+    input.ids
+  );
 }
 
 /** Adds an independent mirrored copy; the source body is not consumed. */
@@ -2194,6 +2229,20 @@ const FEATURE_DATA_KEYS: Record<FeatureKind, readonly string[]> = {
   mirror: ['targetBodyId', 'plane'],
   // `secondBodyId` is body wiring, not a parameter: never patchable.
   split: ['targetBodyId', 'plane'],
+  hole: [
+    'targetBodyId',
+    'faceHash',
+    'faceReference',
+    'style',
+    'diameter',
+    'depthMode',
+    'depth',
+    'counterboreDiameter',
+    'counterboreDepth',
+    'countersinkDiameter',
+    'countersinkAngleDeg',
+    'position'
+  ],
   shell: [
     'targetBodyId',
     'openingFaceHashes',

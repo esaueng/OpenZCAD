@@ -624,8 +624,9 @@ describe('existing documents are unaffected', () => {
 
     expect(migrated.schemaVersion).toBe(PROJECT_DOCUMENT_SCHEMA_VERSION);
     // Bumping this pin means re-verifying the assertion below: v10 added the
-    // additive `split` feature kind, which needs no node migration.
-    expect(PROJECT_DOCUMENT_SCHEMA_VERSION).toBe(10);
+    // additive `split` feature kind and v11 the additive `hole` kind; neither
+    // needs a node migration.
+    expect(PROJECT_DOCUMENT_SCHEMA_VERSION).toBe(11);
     // Nothing but the version stamp moves.
     expect({ ...migrated, schemaVersion: 6 }).toEqual(legacy);
   });

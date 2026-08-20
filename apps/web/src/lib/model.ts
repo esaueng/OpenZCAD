@@ -84,6 +84,7 @@ export const FEATURE_KIND_LABELS: Record<FeatureKind, string> = {
   transform: 'Move / Rotate',
   mirror: 'Mirror',
   split: 'Split',
+  hole: 'Hole',
   shell: 'Shell',
   'solid-offset': 'Solid offset',
   draft: 'Draft',

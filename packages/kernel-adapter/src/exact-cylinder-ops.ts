@@ -291,6 +291,147 @@ export function fillThroughHole(
   return filled;
 }
 
+export interface HoleToolSpec {
+  /** Point on the entry face where the hole axis crosses it. */
+  surfacePoint: Vec3;
+  /** Unit drilling direction, INTO the body. */
+  axis: Vec3;
+  radius: number;
+  /** Axial bore length from the surface; through-holes span the whole body. */
+  depth: number;
+  style: 'simple' | 'counterbore' | 'countersink';
+  counterboreRadius?: number;
+  counterboreDepth?: number;
+  countersinkRadius?: number;
+  /** Full included countersink angle, radians. */
+  countersinkAngle?: number;
+  /**
+   * How far the tool overshoots the entry surface (and, for through-holes,
+   * the exit) so a bore through a face that is not perfectly flat to the
+   * tool still cuts cleanly. Zero on the exit side keeps a blind floor exact.
+   */
+  entryExtension: number;
+  exitExtension: number;
+}
+
+/**
+ * Cuts one hole — simple, counterbore, or countersink — as a compound cut of
+ * analytic tool solids, then proves the result: still a valid solid, material
+ * actually removed but not all of it, no mesh-boolean face explosion, and the
+ * requested bores read back as analytic cylinders at their radii. Every
+ * failure is a thrown message for the feature's warning, never a silent
+ * approximation.
+ */
+export function drillHole(
+  kernel: RemusKernel,
+  solid: number,
+  spec: HoleToolSpec
+): number {
+  const facesBefore = kernel.getSolidFaces(solid).length;
+  const volumeBefore = kernel.volume(solid, HOLE_PROOF_DEFLECTION);
+  const start = subtract(
+    spec.surfacePoint,
+    scale(spec.axis, spec.entryExtension)
+  );
+  const boreEnd = {
+    x: spec.surfacePoint.x + spec.axis.x * (spec.depth + spec.exitExtension),
+    y: spec.surfacePoint.y + spec.axis.y * (spec.depth + spec.exitExtension),
+    z: spec.surfacePoint.z + spec.axis.z * (spec.depth + spec.exitExtension)
+  };
+  const tools = [cylinderAlongAxis(kernel, start, boreEnd, spec.radius)];
+  if (spec.style === 'counterbore') {
+    if (
+      spec.counterboreRadius === undefined ||
+      spec.counterboreDepth === undefined
+    ) {
+      throw new Error('A counterbore needs its diameter and depth.');
+    }
+    const counterboreEnd = {
+      x: spec.surfacePoint.x + spec.axis.x * spec.counterboreDepth,
+      y: spec.surfacePoint.y + spec.axis.y * spec.counterboreDepth,
+      z: spec.surfacePoint.z + spec.axis.z * spec.counterboreDepth
+    };
+    tools.push(
+      cylinderAlongAxis(kernel, start, counterboreEnd, spec.counterboreRadius)
+    );
+  } else if (spec.style === 'countersink') {
+    if (
+      spec.countersinkRadius === undefined ||
+      spec.countersinkAngle === undefined
+    ) {
+      throw new Error('A countersink needs its diameter and angle.');
+    }
+    const halfTangent = Math.tan(spec.countersinkAngle / 2);
+    if (!(halfTangent > GEOMETRY_EPSILON)) {
+      throw new Error('Countersink angle must be strictly between 0 and 180°.');
+    }
+    const sinkDepth = (spec.countersinkRadius - spec.radius) / halfTangent;
+    if (!(sinkDepth > GEOMETRY_EPSILON)) {
+      throw new Error(
+        'Countersink diameter must be larger than the hole diameter.'
+      );
+    }
+    // The cone keeps its own taper through the entry overshoot, so the
+    // countersink meets the surface at exactly the requested diameter.
+    const entryRadius =
+      spec.countersinkRadius + spec.entryExtension * halfTangent;
+    const cone = kernel.makeCone(
+      entryRadius,
+      spec.radius,
+      spec.entryExtension + sinkDepth
+    );
+    tools.push(
+      kernel.copyAndTransformSolid(cone, coordinateFrameMatrix(start, spec.axis))
+    );
+  }
+
+  const cut = kernel.compoundCut(solid, Uint32Array.from(tools));
+  kernel.unifyFaces(cut);
+  if (kernel.validateSolid(cut) !== 0) {
+    throw new Error('The hole cut did not produce a valid solid.');
+  }
+  const volumeAfter = kernel.volume(cut, HOLE_PROOF_DEFLECTION);
+  if (!(volumeAfter < volumeBefore - GEOMETRY_EPSILON)) {
+    throw new Error('The hole removed no material — it misses the body.');
+  }
+  if (!(volumeAfter > GEOMETRY_EPSILON)) {
+    throw new Error('The hole removed the whole body.');
+  }
+  // A mesh-boolean fallback replaces a handful of analytic faces with
+  // hundreds of triangles; a real hole adds at most a few faces per style.
+  if (kernel.getSolidFaces(cut).length > facesBefore + 8) {
+    throw new Error(
+      'The hole cut fell back to a faceted mesh boolean, which would replace exact surfaces with triangles.'
+    );
+  }
+  const bores = coaxialCylinderRadii(
+    kernel,
+    cut,
+    spec.surfacePoint,
+    spec.axis,
+    ANALYTIC_MATCH_EPSILON
+  );
+  const expected = [spec.radius];
+  if (spec.style === 'counterbore' && spec.counterboreRadius !== undefined) {
+    expected.push(spec.counterboreRadius);
+  }
+  for (const radius of expected) {
+    if (
+      !bores.some(
+        (bore) => Math.abs(bore - radius) <= ANALYTIC_MATCH_EPSILON * radius
+      )
+    ) {
+      throw new Error(
+        `The hole's ${radius * 2} bore did not come back as an analytic cylinder.`
+      );
+    }
+  }
+  return cut;
+}
+
+/** Matches the adapter's measurement tessellation for volume proofs. */
+const HOLE_PROOF_DEFLECTION = 0.08;
+
 /** Radii of every analytic cylinder in `solid` sharing the given axis line. */
 export function coaxialCylinderRadii(
   kernel: RemusKernel,

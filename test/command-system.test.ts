@@ -161,6 +161,58 @@ describe('command-system', () => {
     ).toBe(true);
   });
 
+  it('validates hole commands and replays them deterministically', () => {
+    const base = createProjectDocument('Hole replay', toUserId('user_test'));
+    const manager = new CommandManager(base);
+    manager.execute(
+      commandFactories.addPrimitive({
+        name: 'Source',
+        primitiveKind: 'box',
+        dimensions: { width: 20, height: 20, depth: 20 }
+      })
+    );
+    const sourceBodyId = manager.document.bodyOrder[0]!;
+
+    // A counterbore no wider than the bore is rejected before it can
+    // enter the document.
+    expect(() =>
+      manager.execute(
+        commandFactories.holeBody({
+          name: 'Bad seat',
+          targetBodyId: sourceBodyId,
+          faceHash: 1,
+          style: 'counterbore',
+          diameter: 6,
+          counterboreDiameter: 6,
+          counterboreDepth: 3,
+          depthMode: 'through',
+          position: { u: 0, v: 0 }
+        })
+      )
+    ).toThrow(/larger than the hole diameter/);
+
+    manager.execute(
+      commandFactories.holeBody({
+        name: 'Bore',
+        targetBodyId: sourceBodyId,
+        faceHash: 1,
+        style: 'simple',
+        diameter: '3 * 2',
+        depthMode: 'blind',
+        depth: 10,
+        position: { u: 0, v: 0 }
+      })
+    );
+    expect(manager.document.bodyOrder).toHaveLength(2);
+
+    const replayed = replayCommands(base, manager.document.commandLog);
+    expect(replayed.bodyOrder).toEqual(manager.document.bodyOrder);
+    expect(replayed.featureOrder).toEqual(manager.document.featureOrder);
+
+    manager.undo();
+    expect(manager.document.bodyOrder).toEqual([sourceBodyId]);
+  });
+
   it('serializes and replays a split with both result bodies stable', () => {
     const base = createProjectDocument('Split replay', toUserId('user_test'));
     const manager = new CommandManager(base);

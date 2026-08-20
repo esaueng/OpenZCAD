@@ -55,6 +55,7 @@ export type TopologyLineageOperation =
   | 'rigid-transform'
   | 'mirror'
   | 'split'
+  | 'hole'
   | 'shell'
   | 'solid-offset'
   | 'draft'
@@ -111,6 +112,12 @@ const OPERATION_CAPABILITIES: Readonly<
     fallback: 'hash-only',
     reason:
       'The kernel split does not report which input face each half-face came from, and both cap faces are new.'
+  },
+  hole: {
+    status: 'unsupported',
+    fallback: 'hash-only',
+    reason:
+      'The compound cut behind a hole does not report face ancestry through the bore.'
   },
   shell: {
     status: 'unsupported',
