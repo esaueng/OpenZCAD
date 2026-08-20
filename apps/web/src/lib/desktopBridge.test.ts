@@ -8,7 +8,8 @@ import {
   desktopFetch,
   isDesktopApp,
   nativeCadFile,
-  protectDesktopClose
+  protectDesktopClose,
+  saveCadBinaryFile
 } from './desktopBridge';
 import {
   CLOUD_FUNCTIONS_STORAGE_KEY,
@@ -127,6 +128,52 @@ describe('desktop bridge', () => {
     expect(preventDefault).toHaveBeenCalledOnce();
     expect(confirm).toHaveBeenCalledOnce();
     expect(appWindow.destroy).toHaveBeenCalledOnce();
+  });
+
+  it('routes binary exports to Rust as plain byte arrays', async () => {
+    markDesktopRuntime();
+    vi.mocked(invoke).mockResolvedValue(true);
+
+    const saved = await saveCadBinaryFile(
+      'bracket.3mf',
+      '3mf',
+      new Uint8Array([0x50, 0x4b, 0x03, 0x04])
+    );
+
+    expect(saved).toBe(true);
+    expect(invoke).toHaveBeenCalledWith('save_cad_binary_file', {
+      suggestedName: 'bracket.3mf',
+      format: '3mf',
+      contents: [0x50, 0x4b, 0x03, 0x04]
+    });
+  });
+
+  it('downloads binary exports through a blob anchor in the browser', async () => {
+    const createObjectURL = vi.fn<(blob: Blob) => string>(() => 'blob:mesh');
+    const revokeObjectURL = vi.fn();
+    vi.stubGlobal('URL', {
+      ...URL,
+      createObjectURL,
+      revokeObjectURL
+    });
+    const click = vi
+      .spyOn(HTMLAnchorElement.prototype, 'click')
+      .mockImplementation(() => undefined);
+
+    const saved = await saveCadBinaryFile(
+      'bracket.stl',
+      'stl',
+      new Uint8Array([1, 2, 3])
+    );
+
+    expect(saved).toBe(true);
+    expect(createObjectURL).toHaveBeenCalledOnce();
+    const blob = createObjectURL.mock.calls[0]![0];
+    expect(blob.type).toBe('model/stl');
+    expect(blob.size).toBe(3);
+    expect(click).toHaveBeenCalledOnce();
+    expect(revokeObjectURL).toHaveBeenCalledWith('blob:mesh');
+    expect(invoke).not.toHaveBeenCalled();
   });
 
   it('converts native bytes into a browser File with CAD content type', async () => {

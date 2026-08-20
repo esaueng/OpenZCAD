@@ -28,7 +28,12 @@ function derived(label: string): ProjectDocument['derived'] {
 
 interface FakeWorkerScope {
   postMessage: ReturnType<
-    typeof vi.fn<(message: GeometryWorkerResult) => void>
+    typeof vi.fn<
+      (
+        message: GeometryWorkerResult,
+        options?: StructuredSerializeOptions
+      ) => void
+    >
   >;
   onmessage: ((event: MessageEvent<GeometryWorkerRequest>) => void) | null;
 }
@@ -36,7 +41,8 @@ interface FakeWorkerScope {
 async function installWorker(
   syncDocument: (
     document: ProjectDocument
-  ) => Promise<ProjectDocument['derived']>
+  ) => Promise<ProjectDocument['derived']>,
+  adapterOverrides: Record<string, unknown> = {}
 ) {
   const scope: FakeWorkerScope = {
     postMessage: vi.fn(),
@@ -46,8 +52,11 @@ async function installWorker(
     syncDocument,
     exportStep: vi.fn(),
     exportStl: vi.fn(),
+    exportMesh: vi.fn(),
+    meshQuality: vi.fn(),
     inspectStep: vi.fn(),
-    dispose: vi.fn()
+    dispose: vi.fn(),
+    ...adapterOverrides
   }));
   vi.stubGlobal('self', scope);
   vi.doMock('@openzcad/kernel-adapter/exact', () => ({
@@ -224,5 +233,85 @@ describe('geometry worker rebuild coordination', () => {
       .filter((message) => message.type === 'sync' && !message.requestId);
     expect(broadcastResults).toHaveLength(1);
     expect(broadcastResults[0]).toMatchObject({ version: newest.version });
+  });
+
+  it('transfers binary mesh exports back with their request id', async () => {
+    const exportMesh = vi.fn(async () => new Uint8Array([80, 75, 3, 4]));
+    const { scope } = await installWorker(async () => derived('unused'), {
+      exportMesh
+    });
+    const document = addPrimitiveFeature(
+      createProjectDocument('Mesh Export', toUserId('user')),
+      {
+        name: 'Box',
+        primitiveKind: 'box',
+        dimensions: { width: 10, height: 20, depth: 30 }
+      }
+    );
+    post(scope, {
+      type: 'export',
+      requestId: 'mesh-1',
+      document,
+      bodyIds: document.bodyOrder,
+      format: '3mf',
+      deflection: 0.05
+    });
+
+    await vi.waitFor(() =>
+      expect(scope.postMessage).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: 'export',
+          ok: true,
+          format: '3mf',
+          requestId: 'mesh-1',
+          data: new Uint8Array([80, 75, 3, 4])
+        }),
+        // The payload buffer is transferred, not structured-cloned.
+        expect.objectContaining({ transfer: [expect.any(ArrayBuffer)] })
+      )
+    );
+    expect(exportMesh).toHaveBeenCalledWith(document, document.bodyOrder, {
+      format: '3mf',
+      deflection: 0.05
+    });
+  });
+
+  it('answers mesh-quality requests with the adapter report', async () => {
+    const report = { watertight: true, bodies: [] };
+    const meshQuality = vi.fn(async () => report);
+    const { scope } = await installWorker(async () => derived('unused'), {
+      meshQuality
+    });
+    const document = addPrimitiveFeature(
+      createProjectDocument('Quality Check', toUserId('user')),
+      {
+        name: 'Box',
+        primitiveKind: 'box',
+        dimensions: { width: 10, height: 20, depth: 30 }
+      }
+    );
+    post(scope, {
+      type: 'mesh-quality',
+      requestId: 'quality-1',
+      document,
+      bodyIds: document.bodyOrder,
+      deflection: 0.08
+    });
+
+    await vi.waitFor(() =>
+      expect(scope.postMessage).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: 'mesh-quality',
+          ok: true,
+          requestId: 'quality-1',
+          report
+        })
+      )
+    );
+    expect(meshQuality).toHaveBeenCalledWith(
+      document,
+      document.bodyOrder,
+      0.08
+    );
   });
 });

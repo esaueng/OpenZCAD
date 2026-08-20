@@ -1587,11 +1587,57 @@ function axisDirection(axis: 'x' | 'y' | 'z'): Vec3 {
   };
 }
 
+/**
+ * Mesh export formats the adapter can produce. `stl` is ASCII for
+ * compatibility with consumers that diff or parse the text; `stl-binary` is
+ * the same facets at 5–10× smaller, and `3mf` is the zipped package modern
+ * slicers prefer.
+ */
+export type MeshExportFormat = 'stl-ascii' | 'stl-binary' | '3mf';
+
+/** Per-body watertightness verdict from the kernel's welded-mesh counter. */
+export interface BodyMeshQuality {
+  bodyId: BodyId;
+  /** Edges used by exactly one triangle after position welding. */
+  boundaryEdges: number;
+  /** Edges used by more than two triangles after position welding. */
+  nonManifoldEdges: number;
+  watertight: boolean;
+}
+
+export interface MeshQualityReport {
+  /** True only when every exported body is individually watertight. */
+  watertight: boolean;
+  bodies: BodyMeshQuality[];
+}
+
 export interface ExactKernelAdapter {
   readonly kind: 'remus';
   syncDocument(document: ProjectDocument): Promise<DerivedState>;
   exportStep(document: ProjectDocument, bodyIds: BodyId[]): Promise<string>;
-  exportStl(document: ProjectDocument, bodyIds: BodyId[]): Promise<string>;
+  exportStl(
+    document: ProjectDocument,
+    bodyIds: BodyId[],
+    deflection?: number
+  ): Promise<string>;
+  /**
+   * Tessellated mesh export at a caller-chosen deflection (millimetres,
+   * applied after unit scaling — the same space every slicer works in).
+   */
+  exportMesh(
+    document: ProjectDocument,
+    bodyIds: BodyId[],
+    options: { format: MeshExportFormat; deflection: number }
+  ): Promise<Uint8Array<ArrayBuffer>>;
+  /**
+   * Pre-export printability check: tessellates each body at the given
+   * deflection and reports welded-mesh watertightness per body.
+   */
+  meshQuality(
+    document: ProjectDocument,
+    bodyIds: BodyId[],
+    deflection: number
+  ): Promise<MeshQualityReport>;
   inspectStep(data: string | ArrayBuffer): Promise<{
     solid: boolean;
     valid: boolean;
@@ -1673,8 +1719,16 @@ function profilePoints(
  * Build the same ZYX Euler transform the viewport's Move gizmo composes, so a
  * dragged placement and the rebuilt body agree once more than one axis is
  * non-zero. Remus accepts row-major matrices and column vectors.
+ *
+ * `scale` multiplies the rotation block, i.e. T·R·S with the scaling about
+ * the world origin. Uniform scale commutes with rotation, so this is also
+ * S-then-R; the kernel keeps analytic surfaces exact under it.
  */
-function transformMatrix(translation: Vec3, rotationDeg: Vec3): Float64Array {
+function transformMatrix(
+  translation: Vec3,
+  rotationDeg: Vec3,
+  scale = 1
+): Float64Array {
   const rx = (rotationDeg.x * Math.PI) / 180;
   const ry = (rotationDeg.y * Math.PI) / 180;
   const rz = (rotationDeg.z * Math.PI) / 180;
@@ -1685,17 +1739,17 @@ function transformMatrix(translation: Vec3, rotationDeg: Vec3): Float64Array {
   const cc = Math.cos(rz);
   const sc = Math.sin(rz);
   return new Float64Array([
-    cc * cb,
-    cc * sb * sa - sc * ca,
-    cc * sb * ca + sc * sa,
+    scale * cc * cb,
+    scale * (cc * sb * sa - sc * ca),
+    scale * (cc * sb * ca + sc * sa),
     translation.x,
-    sc * cb,
-    sc * sb * sa + cc * ca,
-    sc * sb * ca - cc * sa,
+    scale * sc * cb,
+    scale * (sc * sb * sa + cc * ca),
+    scale * (sc * sb * ca - cc * sa),
     translation.y,
-    -sb,
-    cb * sa,
-    cb * ca,
+    scale * -sb,
+    scale * cb * sa,
+    scale * cb * ca,
     translation.z,
     0,
     0,
@@ -4352,6 +4406,41 @@ function decodeText(bytes: Uint8Array): string {
 }
 
 /**
+ * The `meshQuality` binding is typed `any` and returns a JSON string. Parse
+ * defensively so a malformed payload reads as a raised error rather than a
+ * passing check — this result gates whether an export is called printable.
+ */
+function readMeshQuality(raw: unknown): {
+  boundaryEdges: number;
+  nonManifoldEdges: number;
+  isWatertight: boolean;
+} {
+  let payload: unknown = raw;
+  if (typeof raw === 'string') {
+    try {
+      payload = JSON.parse(raw);
+    } catch {
+      payload = null;
+    }
+  }
+  if (typeof payload !== 'object' || payload === null) {
+    throw new Error('The kernel returned an unreadable mesh-quality result.');
+  }
+  const record = payload as Record<string, unknown>;
+  const { boundaryEdges, nonManifoldEdges, isWatertight } = record;
+  if (
+    typeof boundaryEdges !== 'number' ||
+    !Number.isFinite(boundaryEdges) ||
+    typeof nonManifoldEdges !== 'number' ||
+    !Number.isFinite(nonManifoldEdges) ||
+    typeof isWatertight !== 'boolean'
+  ) {
+    throw new Error('The kernel returned an unreadable mesh-quality result.');
+  }
+  return { boundaryEdges, nonManifoldEdges, isWatertight };
+}
+
+/**
  * Keep Remus's hostile-input budgets for every source. A locally selected
  * file can later be shared or restored, so its origin does not make it trusted.
  */
@@ -5867,6 +5956,19 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
             }
             const translation = feature.data.transform.translation;
             const rotation = feature.data.transform.rotationDeg;
+            const scaleFactor =
+              feature.data.transform.scale !== undefined
+                ? resolveParamValue(
+                    feature.data.transform.scale,
+                    scope,
+                    'scale'
+                  )
+                : 1;
+            if (!Number.isFinite(scaleFactor) || scaleFactor <= 0) {
+              throw new Error(
+                'Transform scale must resolve to a positive number.'
+              );
+            }
             result.shapes.set(
               feature.data.targetBodyId,
               copyShapeWithVerifiedLineage(
@@ -5882,7 +5984,8 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
                     x: resolveParamValue(rotation.x, scope, 'rotate X'),
                     y: resolveParamValue(rotation.y, scope, 'rotate Y'),
                     z: resolveParamValue(rotation.z, scope, 'rotate Z')
-                  }
+                  },
+                  scaleFactor
                 )
               )
             );
@@ -7660,7 +7763,8 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
 
   async exportStl(
     document: ProjectDocument,
-    bodyIds: BodyId[]
+    bodyIds: BodyId[],
+    deflection: number = STL_EXPORT_DEFLECTION
   ): Promise<string> {
     const { sources, pinned } = await this.prefetchImportSources(document);
     const kernel = new RemusKernel();
@@ -7687,17 +7791,12 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
               )
             );
       if (exportSolids.length === 1) {
-        return decodeText(
-          kernel.exportStlAscii(exportSolids[0]!, STL_EXPORT_DEFLECTION)
-        );
+        return decodeText(kernel.exportStlAscii(exportSolids[0]!, deflection));
       }
       // Several consumers stop at the first `solid` block, so a multi-body
       // export must be one block containing every body's facets.
       const meshes = exportSolids.map((solid, index) => {
-        const mesh = kernel.tessellateSolidGroupedBinary(
-          solid,
-          STL_EXPORT_DEFLECTION
-        );
+        const mesh = kernel.tessellateSolidGroupedBinary(solid, deflection);
         try {
           return {
             name: `body_${index + 1}`,
@@ -7709,6 +7808,111 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
         }
       });
       return writeAsciiStl(document.name, meshes);
+    } finally {
+      kernel.free();
+    }
+  }
+
+  async exportMesh(
+    document: ProjectDocument,
+    bodyIds: BodyId[],
+    options: { format: MeshExportFormat; deflection: number }
+  ): Promise<Uint8Array<ArrayBuffer>> {
+    const { format, deflection } = options;
+    if (!Number.isFinite(deflection) || deflection <= 0) {
+      throw new Error('Mesh export deflection must be a positive number.');
+    }
+    if (format === 'stl-ascii') {
+      return new TextEncoder().encode(
+        await this.exportStl(document, bodyIds, deflection)
+      );
+    }
+    const { sources, pinned } = await this.prefetchImportSources(document);
+    const kernel = new RemusKernel();
+    try {
+      const build = this.build(kernel, document, sources, pinned);
+      const solids = bodyIds.flatMap((bodyId) => {
+        const shape = build.shapes.get(bodyId);
+        if (!shape) {
+          throw new Error(`Body ${bodyId} has no exact geometry.`);
+        }
+        return shape.solids;
+      });
+      if (solids.length === 0) {
+        throw new Error('Select at least one body to export.');
+      }
+      const millimeterScale = UNIT_TO_MM[document.units];
+      const exportSolids =
+        millimeterScale === 1
+          ? solids
+          : solids.map((solid) =>
+              kernel.copyAndTransformSolid(
+                solid,
+                uniformScaleMatrix(millimeterScale)
+              )
+            );
+      const handles = new Uint32Array(exportSolids);
+      // Both writers take the whole solid list, so bodies stay distinct
+      // objects in the 3MF package and merge into one facet stream for STL —
+      // the shapes slicers expect from each format. wasm-bindgen copies the
+      // Vec<u8> into a fresh, never-shared buffer, so the narrowing holds.
+      const bytes =
+        format === '3mf'
+          ? kernel.export3mfMulti(handles, deflection)
+          : kernel.exportStlMulti(handles, deflection);
+      return bytes as Uint8Array<ArrayBuffer>;
+    } finally {
+      kernel.free();
+    }
+  }
+
+  async meshQuality(
+    document: ProjectDocument,
+    bodyIds: BodyId[],
+    deflection: number
+  ): Promise<MeshQualityReport> {
+    if (!Number.isFinite(deflection) || deflection <= 0) {
+      throw new Error('Mesh quality deflection must be a positive number.');
+    }
+    const { sources, pinned } = await this.prefetchImportSources(document);
+    const kernel = new RemusKernel();
+    try {
+      const build = this.build(kernel, document, sources, pinned);
+      const millimeterScale = UNIT_TO_MM[document.units];
+      const bodies: BodyMeshQuality[] = bodyIds.map((bodyId) => {
+        const shape = build.shapes.get(bodyId);
+        if (!shape) {
+          throw new Error(`Body ${bodyId} has no exact geometry.`);
+        }
+        let boundaryEdges = 0;
+        let nonManifoldEdges = 0;
+        // A body with no solids has nothing to print, which is a failed
+        // check, not a vacuous pass.
+        let watertight = shape.solids.length > 0;
+        for (const solid of shape.solids) {
+          // Checked in the same millimetre space the export tessellates, so
+          // the verdict describes the file the user is about to write.
+          const measured =
+            millimeterScale === 1
+              ? solid
+              : kernel.copyAndTransformSolid(
+                  solid,
+                  uniformScaleMatrix(millimeterScale)
+                );
+          const quality = readMeshQuality(
+            kernel.meshQuality(measured, deflection)
+          );
+          boundaryEdges += quality.boundaryEdges;
+          nonManifoldEdges += quality.nonManifoldEdges;
+          watertight &&= quality.isWatertight;
+        }
+        return { bodyId, boundaryEdges, nonManifoldEdges, watertight };
+      });
+      return {
+        watertight:
+          bodies.length > 0 && bodies.every((body) => body.watertight),
+        bodies
+      };
     } finally {
       kernel.free();
     }
