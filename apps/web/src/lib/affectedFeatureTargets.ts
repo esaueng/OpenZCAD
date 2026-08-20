@@ -30,14 +30,23 @@ export function affectedFeatureTargets(
     (feature) => feature.featureId === sourceFeatureId
   );
   const source = features[sourceIndex];
-  if (sourceIndex < 0 || !source?.bodyId || isFeatureSuppressed(source)) {
+  // In-place edits carry no result body on the node; their "result" is the
+  // body they rewrite, exactly as the downstream walk below already treats
+  // them when they are the dependents rather than the source.
+  const sourceBodyId =
+    source?.bodyId ??
+    (source?.data.featureKind === 'transform' ||
+    source?.data.featureKind === 'direct-edit'
+      ? source.data.targetBodyId
+      : undefined);
+  if (sourceIndex < 0 || !source || !sourceBodyId || isFeatureSuppressed(source)) {
     return [];
   }
 
-  const affectedBodies = new Set<BodyId>([source.bodyId]);
+  const affectedBodies = new Set<BodyId>([sourceBodyId]);
   const affectedSketches = new Set<SketchId>();
   const targets: AffectedFeatureTarget[] = [
-    { featureName: source.name, resultBodyId: source.bodyId }
+    { featureName: source.name, resultBodyId: sourceBodyId }
   ];
 
   for (const feature of features.slice(sourceIndex + 1)) {
