@@ -120,12 +120,14 @@ describe('incremental prefix rebuild cache', { timeout: 120_000 }, () => {
       onRebuildCacheEvent: (event) => events.push(event)
     });
     try {
-      const { document } = chainDocument();
+      const { document, baseBodyId } = chainDocument();
       const first = await adapter.syncDocument(document);
       expect(events.at(-1)).toEqual({
         kind: 'full-rebuild',
         replayed: 5,
-        restored: 0
+        restored: 0,
+        remeasured: 3,
+        reusedMeasurements: 0
       });
       expect(normalized(first)).toEqual(normalized(await freshDerived(document)));
 
@@ -141,10 +143,18 @@ describe('incremental prefix rebuild cache', { timeout: 120_000 }, () => {
       expect(events.at(-1)).toEqual({
         kind: 'prefix-restore',
         replayed: 1,
-        restored: 4
+        restored: 4,
+        remeasured: 1,
+        reusedMeasurements: 2
       });
       expect(normalized(second)).toEqual(
         normalized(await freshDerived(editedTail))
+      );
+      // A reused measurement is the SAME mesh, byte for byte — the
+      // triangulation exemption in `normalized` exists only for re-measured
+      // bodies, whose solids land in different arena slots.
+      expect(second.bodyRepresentations[baseBodyId]!.mesh).toEqual(
+        first.bodyRepresentations[baseBodyId]!.mesh
       );
 
       // Editing a MID feature replays it and everything after it.
@@ -164,7 +174,9 @@ describe('incremental prefix rebuild cache', { timeout: 120_000 }, () => {
       expect(events.at(-1)).toEqual({
         kind: 'prefix-restore',
         replayed: 4,
-        restored: 1
+        restored: 1,
+        remeasured: 3,
+        reusedMeasurements: 0
       });
       expect(normalized(third)).toEqual(
         normalized(await freshDerived(editedMid))
@@ -182,7 +194,9 @@ describe('incremental prefix rebuild cache', { timeout: 120_000 }, () => {
       expect(events.at(-1)).toEqual({
         kind: 'full-rebuild',
         replayed: 5,
-        restored: 0
+        restored: 0,
+        remeasured: 3,
+        reusedMeasurements: 0
       });
       expect(normalized(fourth)).toEqual(
         normalized(await freshDerived(editedHead))
@@ -193,7 +207,9 @@ describe('incremental prefix rebuild cache', { timeout: 120_000 }, () => {
       expect(events.at(-1)).toEqual({
         kind: 'prefix-restore',
         replayed: 0,
-        restored: 5
+        restored: 5,
+        remeasured: 0,
+        reusedMeasurements: 3
       });
       expect(normalized(fifth)).toEqual(normalized(fourth));
     } finally {
@@ -223,7 +239,9 @@ describe('incremental prefix rebuild cache', { timeout: 120_000 }, () => {
       expect(events.at(-1)).toEqual({
         kind: 'prefix-restore',
         replayed: 3,
-        restored: 2
+        restored: 2,
+        remeasured: 2,
+        reusedMeasurements: 1
       });
       expect(normalized(derived)).toEqual(
         normalized(await freshDerived(edited))
@@ -249,7 +267,9 @@ describe('incremental prefix rebuild cache', { timeout: 120_000 }, () => {
       expect(events.at(-1)).toEqual({
         kind: 'full-rebuild',
         replayed: 5,
-        restored: 0
+        restored: 0,
+        remeasured: 3,
+        reusedMeasurements: 0
       });
       expect(normalized(derived)).toEqual(
         normalized(await freshDerived(withParam))
@@ -307,7 +327,9 @@ describe('incremental prefix rebuild cache', { timeout: 120_000 }, () => {
       expect(events.at(-1)).toEqual({
         kind: 'prefix-restore',
         replayed: 1,
-        restored: 2
+        restored: 2,
+        remeasured: 1,
+        reusedMeasurements: 1
       });
       expect(
         second.warnings.filter((warning) =>
@@ -328,7 +350,9 @@ describe('incremental prefix rebuild cache', { timeout: 120_000 }, () => {
       expect(events.at(-1)).toEqual({
         kind: 'prefix-restore',
         replayed: 1,
-        restored: 2
+        restored: 2,
+        remeasured: 0,
+        reusedMeasurements: 1
       });
       expect(
         third.warnings.filter((warning) => warning.includes('Suppressed'))
@@ -352,8 +376,20 @@ describe('incremental prefix rebuild cache', { timeout: 120_000 }, () => {
       const first = await adapter.syncDocument(document);
       const second = await adapter.syncDocument(document);
       expect(events).toEqual([
-        { kind: 'full-rebuild', replayed: 5, restored: 0 },
-        { kind: 'full-rebuild', replayed: 5, restored: 0 }
+        {
+          kind: 'full-rebuild',
+          replayed: 5,
+          restored: 0,
+          remeasured: 3,
+          reusedMeasurements: 0
+        },
+        {
+          kind: 'full-rebuild',
+          replayed: 5,
+          restored: 0,
+          remeasured: 3,
+          reusedMeasurements: 0
+        }
       ]);
       expect(normalized(second)).toEqual(normalized(first));
       expect(normalized(first)).toEqual(
