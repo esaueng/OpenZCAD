@@ -140,6 +140,7 @@ import {
   saveCadBinaryFile,
   saveCadTextFile,
   startDesktopSignIn,
+  type CadBinaryExportFormat,
   type DesktopMenuCommand
 } from './lib/desktopBridge';
 import {
@@ -212,6 +213,54 @@ import {
   ExportDialog,
   type MeshExportDialogFormat
 } from './components/ExportDialog';
+
+/** Per-format file identity for exports from the Export Mesh dialog. */
+const MESH_EXPORT_FILE_INFO: Record<
+  MeshExportDialogFormat,
+  {
+    extension: string;
+    contentType: string;
+    label: string;
+    kind: ArtifactKind;
+    binaryFormat: CadBinaryExportFormat;
+  }
+> = {
+  '3mf': {
+    extension: '3mf',
+    contentType: 'model/3mf',
+    label: '3MF',
+    kind: '3mf-export',
+    binaryFormat: '3mf'
+  },
+  'stl-binary': {
+    extension: 'stl',
+    contentType: 'model/stl',
+    label: 'STL',
+    kind: 'stl-export',
+    binaryFormat: 'stl'
+  },
+  stl: {
+    extension: 'stl',
+    contentType: 'model/stl',
+    label: 'STL',
+    kind: 'stl-export',
+    binaryFormat: 'stl'
+  },
+  obj: {
+    extension: 'obj',
+    contentType: 'model/obj',
+    label: 'OBJ',
+    kind: 'obj-export',
+    binaryFormat: 'obj'
+  },
+  glb: {
+    extension: 'glb',
+    contentType: 'model/gltf-binary',
+    label: 'glTF',
+    kind: 'gltf-export',
+    binaryFormat: 'glb'
+  }
+};
 import {
   ExtrudeOverlay,
   MoveOverlay,
@@ -6676,38 +6725,32 @@ export function App() {
     if (!doc || exportBodyIds.length === 0) {
       throw new Error('Create a body before exporting.');
     }
+    const info = MESH_EXPORT_FILE_INFO[format];
     const stem = exportFileStem(doc.name);
-    const extension = format === '3mf' ? '3mf' : 'stl';
-    const fileName = `${stem}.${extension}`;
-    const contentType = format === '3mf' ? 'model/3mf' : 'model/stl';
-    const label = format === '3mf' ? '3MF' : 'STL';
-    setStatus(`Exporting ${label}…`);
+    const fileName = `${stem}.${info.extension}`;
+    setStatus(`Exporting ${info.label}…`);
     const result = await geometry.exportModel(format, doc, exportBodyIds, {
       deflection
     });
     let body: Blob;
     let saved: boolean;
     if ('data' in result) {
-      body = new Blob([result.data], { type: contentType });
-      saved = await saveCadBinaryFile(
-        fileName,
-        format === '3mf' ? '3mf' : 'stl',
-        result.data
-      );
+      body = new Blob([result.data], { type: info.contentType });
+      saved = await saveCadBinaryFile(fileName, info.binaryFormat, result.data);
     } else {
-      body = new Blob([result.text], { type: contentType });
+      body = new Blob([result.text], { type: info.contentType });
       saved = await saveCadTextFile(fileName, 'stl', result.text);
     }
     if (!saved) {
-      setStatus(`${label} export cancelled.`);
+      setStatus(`${info.label} export cancelled.`);
       return;
     }
     let archived = false;
     try {
       await archiveArtifact({
         fileName,
-        contentType,
-        kind: format === '3mf' ? '3mf-export' : 'stl-export',
+        contentType: info.contentType,
+        kind: info.kind,
         body,
         metadata: {
           bodyIds: exportBodyIds.join(','),
