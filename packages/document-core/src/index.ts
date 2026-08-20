@@ -262,6 +262,8 @@ export interface TransformInput {
   targetBodyId: BodyId;
   translation: ParametricVector3;
   rotationDeg?: ParametricVector3;
+  /** Uniform scale about the world origin; omitted means 1. */
+  scale?: ParamValue;
   ids?: FeatureOnlyIds;
 }
 
@@ -1257,7 +1259,8 @@ export function transformBody(
       targetBodyId: input.targetBodyId,
       transform: {
         translation: input.translation,
-        rotationDeg: input.rotationDeg ?? { x: 0, y: 0, z: 0 }
+        rotationDeg: input.rotationDeg ?? { x: 0, y: 0, z: 0 },
+        ...(input.scale !== undefined ? { scale: input.scale } : {})
       }
     }
   };
