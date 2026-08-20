@@ -10,11 +10,8 @@ import type { Vec3 } from '@openzcad/geometry';
 import type { FaceAreaProvenance, FaceGeometry } from '@openzcad/shared';
 import { MEASUREMENT_DEFLECTION } from './exact-witnesses';
 import {
-  analyticSurfaceRecord,
   faceVertexCentroid,
-  isBlendFace,
-  readAnalyticCylinder,
-  type AnalyticCylinder
+  isBlendFace
 } from './exact-brep';
 import {
   DIRECT_EDIT_TOLERANCE,
@@ -22,12 +19,9 @@ import {
   GEOMETRY_EPSILON,
   add,
   cross,
-  dot,
-  errorText,
   finiteVec3,
   length,
   normalized,
-  pointAt,
   positiveFinite,
   scale,
   subtract

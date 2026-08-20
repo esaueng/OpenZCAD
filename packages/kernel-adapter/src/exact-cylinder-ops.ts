@@ -11,21 +11,16 @@ import {
   type ThroughHoleGeometry
 } from './exact-measure';
 import {
-  analyticSurfaceRecord,
   readAnalyticCylinder,
   type AnalyticCylinder
 } from './exact-brep';
 import {
   ANALYTIC_MATCH_EPSILON,
   GEOMETRY_EPSILON,
-  add,
   coordinateFrameMatrix,
-  cross,
   dot,
-  finiteVec3,
   length,
   normalized,
-  positiveFinite,
   scale,
   subtract
 } from './exact-math';

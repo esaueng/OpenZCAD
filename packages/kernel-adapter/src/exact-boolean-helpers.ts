@@ -5,7 +5,6 @@
  * feature performs) stays with the adapter's build loop.
  */
 import type { RemusKernel } from './remus-runtime';
-import type { Vec3 } from '@openzcad/geometry';
 import type { BodyId } from '@openzcad/shared';
 import {
   extrudeBoundsCanShareVolume,
@@ -26,12 +25,7 @@ import type { UnionBounds } from './union-connectivity';
 import type { ExactShape } from './exact-types';
 import {
   GEOMETRY_EPSILON,
-  add,
-  errorText,
-  pointAt,
-  transformMatrix,
-  scale,
-  subtract
+  transformMatrix
 } from './exact-math';
 
 export interface UnionFuseOperand {
