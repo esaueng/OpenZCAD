@@ -17,6 +17,7 @@ import {
 
 const OPERATION_LABELS: Record<ModelingOperationKind, string> = {
   mirror: 'Mirror',
+  split: 'Split body',
   shell: 'Shell',
   'solid-offset': 'Solid offset',
   loft: 'Loft',
@@ -60,6 +61,16 @@ function initialState(
         operation,
         value: {
           name: 'Mirror',
+          targetBodyId,
+          origin: { x: '0', y: '0', z: '0' },
+          normal: { x: '1', y: '0', z: '0' }
+        }
+      };
+    case 'split':
+      return {
+        operation,
+        value: {
+          name: 'Split',
           targetBodyId,
           origin: { x: '0', y: '0', z: '0' },
           normal: { x: '1', y: '0', z: '0' }
@@ -622,7 +633,7 @@ export function ModelingOperationsForm({
         </>
       ) : null}
 
-      {state.operation === 'mirror' ? (
+      {state.operation === 'mirror' || state.operation === 'split' ? (
         <>
           <VectorFields
             legend="Plane origin"
@@ -641,7 +652,9 @@ export function ModelingOperationsForm({
             }
           />
           <p className="muted">
-            The original remains; Mirror creates a separate copy without fusion.
+            {state.operation === 'mirror'
+              ? 'The original remains; Mirror creates a separate copy without fusion.'
+              : 'Split replaces the body with the two halves on either side of the plane.'}
           </p>
         </>
       ) : null}

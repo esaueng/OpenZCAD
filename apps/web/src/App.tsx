@@ -4287,6 +4287,7 @@ export function App() {
     }
     if (
       nextTool === 'mirror' ||
+      nextTool === 'split' ||
       nextTool === 'shell' ||
       nextTool === 'solid-offset' ||
       nextTool === 'draft' ||
@@ -10693,6 +10694,7 @@ export function App() {
     !viewMode && !directMode && (tool !== null || selectedFeature !== null);
   const modelingOperation: ModelingOperationKind | null =
     tool === 'mirror' ||
+    tool === 'split' ||
     tool === 'shell' ||
     tool === 'solid-offset' ||
     tool === 'loft' ||
@@ -10785,6 +10787,8 @@ export function App() {
     switch (submission.operation) {
       case 'mirror':
         return commandFactories.mirrorBody(submission.input);
+      case 'split':
+        return commandFactories.splitBody(submission.input);
       case 'shell':
         return commandFactories.shellBody(submission.input);
       case 'solid-offset':

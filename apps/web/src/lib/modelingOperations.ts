@@ -6,6 +6,7 @@ import {
   type MirrorInput,
   type ShellInput,
   type SolidOffsetInput,
+  type SplitInput,
   type SweepInput,
   type ThickenInput
 } from '@openzcad/document-core';
@@ -21,6 +22,7 @@ import { evalParamValue, previewExpression } from './model';
 
 export type ModelingOperationKind =
   | 'mirror'
+  | 'split'
   | 'shell'
   | 'solid-offset'
   | 'loft'
@@ -111,6 +113,8 @@ export interface ThickenFormState {
 
 export type ModelingOperationFormState =
   | { operation: 'mirror'; value: MirrorFormState }
+  /** A split's plane form is shape-identical to mirror's. */
+  | { operation: 'split'; value: MirrorFormState }
   | { operation: 'shell'; value: ShellFormState }
   | { operation: 'solid-offset'; value: SolidOffsetFormState }
   | { operation: 'loft'; value: LoftFormState }
@@ -121,6 +125,7 @@ export type ModelingOperationFormState =
 
 export type ModelingOperationSubmission =
   | { operation: 'mirror'; input: MirrorInput }
+  | { operation: 'split'; input: SplitInput }
   | { operation: 'shell'; input: ShellInput }
   | { operation: 'solid-offset'; input: SolidOffsetInput }
   | { operation: 'loft'; input: LoftInput }
@@ -303,18 +308,20 @@ export function modelingFormValidationReason(
         ? null
         : `Radius and turns must be positive, turns must not exceed ${MAX_HELICAL_SWEEP_TURNS}, and pitch must be non-zero.`;
     }
-    case 'mirror': {
+    case 'mirror':
+    case 'split': {
+      const label = state.operation === 'mirror' ? 'Mirror' : 'Split';
       if (state.value.targetBodyId === '') return 'Select a target body.';
       const expressions = [
         ...Object.values(state.value.origin),
         ...Object.values(state.value.normal)
       ];
       if (!allExpressionsValid(scope, expressions)) {
-        return 'Mirror plane fields must be valid expressions.';
+        return `${label} plane fields must be valid expressions.`;
       }
       return nonZeroVector(scope, state.value.normal)
         ? null
-        : 'Mirror plane normal must be non-zero.';
+        : `${label} plane normal must be non-zero.`;
     }
     case 'shell':
       if (state.value.targetBodyId === '') return 'Select a target body.';
@@ -445,26 +452,22 @@ export function buildModelingOperationSubmission(
   }
   const targetBodyId = state.value.targetBodyId;
   if (targetBodyId === '') throw new Error('A target body is required.');
-  if (state.operation === 'mirror') {
-    return {
-      operation: 'mirror',
-      input: {
-        name,
-        targetBodyId,
-        plane: {
-          origin: {
-            x: coerceParamValue(state.value.origin.x),
-            y: coerceParamValue(state.value.origin.y),
-            z: coerceParamValue(state.value.origin.z)
-          },
-          normal: {
-            x: coerceParamValue(state.value.normal.x),
-            y: coerceParamValue(state.value.normal.y),
-            z: coerceParamValue(state.value.normal.z)
-          }
-        }
+  if (state.operation === 'mirror' || state.operation === 'split') {
+    const plane = {
+      origin: {
+        x: coerceParamValue(state.value.origin.x),
+        y: coerceParamValue(state.value.origin.y),
+        z: coerceParamValue(state.value.origin.z)
+      },
+      normal: {
+        x: coerceParamValue(state.value.normal.x),
+        y: coerceParamValue(state.value.normal.y),
+        z: coerceParamValue(state.value.normal.z)
       }
     };
+    return state.operation === 'mirror'
+      ? { operation: 'mirror', input: { name, targetBodyId, plane } }
+      : { operation: 'split', input: { name, targetBodyId, plane } };
   }
   if (state.operation === 'shell') {
     const selected = requireFaces(state.value.openingFaceHashes, faceOptions);

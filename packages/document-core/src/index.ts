@@ -107,6 +107,23 @@ export function createBodyFeatureIds(): BodyFeatureIds {
   };
 }
 
+/**
+ * A split replaces one body with two, so its command payload has to carry
+ * both result bodies' identities for deterministic replay.
+ */
+export interface SplitFeatureIds extends BodyFeatureIds {
+  secondBodyId: BodyId;
+  secondBodyNodeId: EntityId;
+}
+
+export function createSplitFeatureIds(): SplitFeatureIds {
+  return {
+    ...createBodyFeatureIds(),
+    secondBodyId: toBodyId(createId('body')),
+    secondBodyNodeId: toEntityId(createId('ent'))
+  };
+}
+
 export function createSketchFeatureIds(objectCount = 1): SketchFeatureIds {
   const objectNodeIds = Array.from({ length: Math.max(objectCount, 0) }, () =>
     toEntityId(createId('ent'))
@@ -290,6 +307,14 @@ export interface MirrorInput {
   targetBodyId: BodyId;
   plane: ParametricPlane;
   ids?: BodyFeatureIds;
+}
+
+export interface SplitInput {
+  name: string;
+  /** Consumed: the two halves replace it. */
+  targetBodyId: BodyId;
+  plane: ParametricPlane;
+  ids?: SplitFeatureIds;
 }
 
 export interface ShellInput {
@@ -1621,6 +1646,65 @@ function addBodyResultFeature(
   return { document: next, bodyId };
 }
 
+/**
+ * Splits one body by a plane into two: the feature's own `bodyId` is the
+ * half on the side the plane normal points toward, `secondBodyId` the other.
+ * Unlike every `addBodyResultFeature` kind this writes TWO body nodes, which
+ * is why it is its own function rather than a wrapper.
+ */
+export function addSplitFeature(
+  document: ProjectDocument,
+  input: SplitInput
+): { document: ProjectDocument; bodyId: BodyId; secondBodyId: BodyId } {
+  const next = cloneDocument(document);
+  const ids = input.ids ?? createSplitFeatureIds();
+  const { featureId, featureNodeId, bodyId, bodyNodeId } = ids;
+  next.nodes[featureNodeId] = {
+    id: featureNodeId,
+    kind: 'feature',
+    name: input.name,
+    parentId: next.activePartId,
+    revisionId: null,
+    featureId,
+    bodyId,
+    featureKind: 'split',
+    data: {
+      featureKind: 'split',
+      targetBodyId: input.targetBodyId,
+      plane: deepClone(input.plane),
+      secondBodyId: ids.secondBodyId
+    }
+  };
+  const bodyNode = (
+    id: EntityId,
+    ownBodyId: BodyId,
+    name: string
+  ): BodyNode => ({
+    id,
+    kind: 'body',
+    name,
+    parentId: next.activePartId,
+    revisionId: null,
+    bodyId: ownBodyId,
+    featureId,
+    bodyType: 'solid',
+    representationSource: 'brep',
+    exportableStep: true,
+    metadata: { color: featureColor('split') }
+  });
+  next.nodes[bodyNodeId] = bodyNode(bodyNodeId, bodyId, input.name);
+  next.nodes[ids.secondBodyNodeId] = bodyNode(
+    ids.secondBodyNodeId,
+    ids.secondBodyId,
+    `${input.name} (back)`
+  );
+  next.featureOrder.push(featureId);
+  next.bodyOrder.push(bodyId, ids.secondBodyId);
+  attachToPart(next, featureNodeId, bodyNodeId, ids.secondBodyNodeId);
+  next.version += 1;
+  return { document: next, bodyId, secondBodyId: ids.secondBodyId };
+}
+
 /** Adds an independent mirrored copy; the source body is not consumed. */
 export function mirrorBody(
   document: ProjectDocument,
@@ -2108,6 +2192,8 @@ const FEATURE_DATA_KEYS: Record<FeatureKind, readonly string[]> = {
   boolean: ['operation', 'targetBodyIds'],
   transform: ['targetBodyId', 'transform'],
   mirror: ['targetBodyId', 'plane'],
+  // `secondBodyId` is body wiring, not a parameter: never patchable.
+  split: ['targetBodyId', 'plane'],
   shell: [
     'targetBodyId',
     'openingFaceHashes',

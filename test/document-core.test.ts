@@ -15,6 +15,7 @@ import {
   findSketch,
   updateSketchObject,
   deleteFeature,
+  addSplitFeature,
   deleteParameter,
   duplicateProjectDocument,
   evaluateExpression,
@@ -501,6 +502,51 @@ describe('feature editing', () => {
         });
       }
     }
+  });
+
+  it('split mints two bodies, deletes with both, and locks its body wiring', () => {
+    let document = createProjectDocument('Split doc', user());
+    document = addPrimitiveFeature(document, {
+      name: 'Box',
+      primitiveKind: 'box',
+      dimensions: { width: 20, height: 20, depth: 20 }
+    });
+    const sourceBodyId = document.bodyOrder[0]!;
+    const split = addSplitFeature(document, {
+      name: 'Halved',
+      targetBodyId: sourceBodyId,
+      plane: { origin: { x: 5, y: 0, z: 0 }, normal: { x: 1, y: 0, z: 0 } }
+    });
+    document = split.document;
+    expect(document.bodyOrder).toEqual([
+      sourceBodyId,
+      split.bodyId,
+      split.secondBodyId
+    ]);
+    const bodies = Object.values(document.nodes).filter(
+      (node) => node.kind === 'body'
+    );
+    expect(bodies).toHaveLength(3);
+    // The second half is named after the first so the tree reads as a pair.
+    expect(
+      bodies.find((node) => node.kind === 'body' && node.bodyId === split.secondBodyId)?.name
+    ).toBe('Halved (back)');
+
+    const feature = listFeaturesInOrder(document).at(-1)!;
+    // `secondBodyId` is body wiring, not a parameter; a patch cannot move it.
+    expect(() =>
+      updateFeature(document, {
+        featureId: feature.featureId,
+        data: { secondBodyId: sourceBodyId }
+      })
+    ).toThrow(/secondBodyId/);
+
+    // Deleting the split removes the feature and BOTH result bodies.
+    document = deleteFeature(document, { featureId: feature.featureId });
+    expect(document.bodyOrder).toEqual([sourceBodyId]);
+    expect(
+      Object.values(document.nodes).filter((node) => node.kind === 'body')
+    ).toHaveLength(1);
   });
 
   it('deletes a feature with its body, and sketch features with their sketches', () => {

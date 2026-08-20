@@ -161,6 +161,52 @@ describe('command-system', () => {
     ).toBe(true);
   });
 
+  it('serializes and replays a split with both result bodies stable', () => {
+    const base = createProjectDocument('Split replay', toUserId('user_test'));
+    const manager = new CommandManager(base);
+    manager.execute(
+      commandFactories.addPrimitive({
+        name: 'Source',
+        primitiveKind: 'box',
+        dimensions: { width: 20, height: 20, depth: 20 }
+      })
+    );
+    const sourceBodyId = manager.document.bodyOrder[0]!;
+    manager.execute(
+      commandFactories.splitBody({
+        name: 'Halved',
+        targetBodyId: sourceBodyId,
+        plane: {
+          origin: { x: 5, y: 0, z: 0 },
+          normal: { x: 1, y: 0, z: 0 }
+        }
+      })
+    );
+    // One feature, THREE bodies total: the consumed source plus both halves.
+    expect(manager.document.bodyOrder).toHaveLength(3);
+    const feature = Object.values(manager.document.nodes).find(
+      (node): node is FeatureNode =>
+        node.kind === 'feature' && node.data.featureKind === 'split'
+    )!;
+    expect(feature.bodyId).toBe(manager.document.bodyOrder[1]);
+    expect(
+      feature.data.featureKind === 'split' && feature.data.secondBodyId
+    ).toBe(manager.document.bodyOrder[2]);
+
+    const replayed = replayCommands(base, manager.document.commandLog);
+    expect(replayed.bodyOrder).toEqual(manager.document.bodyOrder);
+    expect(replayed.featureOrder).toEqual(manager.document.featureOrder);
+
+    manager.undo();
+    // Undo removes the feature and BOTH result bodies.
+    expect(manager.document.bodyOrder).toEqual([sourceBodyId]);
+    expect(
+      Object.values(manager.document.nodes).some(
+        (node) => node.kind === 'feature' && node.data.featureKind === 'split'
+      )
+    ).toBe(false);
+  });
+
   it('serializes and replays mirror, shell, and solid-offset features', () => {
     const base = createProjectDocument('Modeling v6', toUserId('user_test'));
     const manager = new CommandManager(base);

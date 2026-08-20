@@ -46,6 +46,8 @@ import {
   importMeshBody,
   importStepBody,
   mirrorBody,
+  addSplitFeature,
+  createSplitFeatureIds,
   loftSections,
   offsetSolidBody,
   patternBody,
@@ -72,6 +74,7 @@ import {
   type ImportedMeshInput,
   type ImportedStepInput,
   type MirrorInput,
+  type SplitInput,
   type LoftInput,
   type NodeMetadataInput,
   type NodeRenameInput,
@@ -125,6 +128,7 @@ export type CommandKind =
   | 'feature.boolean'
   | 'feature.transform'
   | 'feature.mirror'
+  | 'feature.split'
   | 'feature.shell'
   | 'feature.solid-offset'
   | 'feature.draft'
@@ -317,6 +321,29 @@ function validateMirrorInput(
   }
 }
 
+function validateSplitInput(
+  document: ProjectDocument,
+  input: SplitInput
+): void {
+  validateBodyTarget(document, input.targetBodyId);
+  const { origin, normal } = input.plane;
+  for (const [label, value] of Object.entries({
+    'split origin X': origin.x,
+    'split origin Y': origin.y,
+    'split origin Z': origin.z
+  })) {
+    resolvedModelingValue(document, label, value);
+  }
+  const length = Math.hypot(
+    resolvedModelingValue(document, 'split normal X', normal.x),
+    resolvedModelingValue(document, 'split normal Y', normal.y),
+    resolvedModelingValue(document, 'split normal Z', normal.z)
+  );
+  if (!Number.isFinite(length) || length <= 1e-12) {
+    throw new Error('Split plane normal must be finite and non-zero.');
+  }
+}
+
 function validatePositiveModelingValue(
   document: ProjectDocument,
   label: string,
@@ -474,6 +501,13 @@ function validateModelingFeatureUpdate(
       break;
     case 'mirror':
       validateMirrorInput(preview, {
+        name: feature.name,
+        targetBodyId: feature.data.targetBodyId,
+        plane: feature.data.plane
+      });
+      break;
+    case 'split':
+      validateSplitInput(preview, {
         name: feature.name,
         targetBodyId: feature.data.targetBodyId,
         plane: feature.data.plane
@@ -797,6 +831,16 @@ export const commandFactories = {
       withIds,
       (document) => mirrorBody(document, withIds).document,
       (document) => validateMirrorInput(document, withIds)
+    );
+  },
+  splitBody(payload: SplitInput): CommandDefinition<SplitInput> {
+    const withIds = { ...payload, ids: payload.ids ?? createSplitFeatureIds() };
+    return makeCommand(
+      'feature.split',
+      'Split body',
+      withIds,
+      (document) => addSplitFeature(document, withIds).document,
+      (document) => validateSplitInput(document, withIds)
     );
   },
   shellBody(payload: ShellInput): CommandDefinition<ShellInput> {
@@ -2203,6 +2247,9 @@ export function replayCommands(
         break;
       case 'feature.mirror':
         next = mirrorBody(next, command.payload as MirrorInput).document;
+        break;
+      case 'feature.split':
+        next = addSplitFeature(next, command.payload as SplitInput).document;
         break;
       case 'feature.shell':
         next = shellBody(next, command.payload as ShellInput).document;
