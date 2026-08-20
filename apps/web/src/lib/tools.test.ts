@@ -42,7 +42,8 @@ describe('finish tool selection order', () => {
       'shell',
       'solid-offset',
       'draft',
-      'thicken'
+      'thicken',
+      'hole'
     ] as const) {
       expect(
         toolDisabledReason(tool, {

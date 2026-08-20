@@ -18,6 +18,7 @@ import {
 const OPERATION_LABELS: Record<ModelingOperationKind, string> = {
   mirror: 'Mirror',
   split: 'Split body',
+  hole: 'Hole',
   shell: 'Shell',
   'solid-offset': 'Solid offset',
   loft: 'Loft',
@@ -143,6 +144,24 @@ function initialState(
           targetBodyId,
           faceHash: null,
           thickness: '2'
+        }
+      };
+    case 'hole':
+      return {
+        operation,
+        value: {
+          name: 'Hole',
+          targetBodyId,
+          faceHash: null,
+          style: 'simple',
+          diameter: '6',
+          depthMode: 'through',
+          depth: '10',
+          counterboreDiameter: '11',
+          counterboreDepth: '3',
+          countersinkDiameter: '12',
+          countersinkAngleDeg: '90',
+          position: { u: '0', v: '0' }
         }
       };
   }
@@ -746,6 +765,156 @@ export function ModelingOperationsForm({
               replaceState({ ...state, value: { ...state.value, angleDeg } })
             }
           />
+        </>
+      ) : null}
+
+      {state.operation === 'hole' ? (
+        <>
+          <FacePicker
+            legend="Entry face"
+            options={faceOptions}
+            selected={
+              state.value.faceHash === null ? [] : [state.value.faceHash]
+            }
+            multiple={false}
+            onChange={(hashes) => {
+              onOpeningFaceSelectionChange?.(hashes);
+              replaceState({
+                ...state,
+                value: { ...state.value, faceHash: hashes[0] ?? null }
+              });
+            }}
+            onRequest={onRequestOpeningFaceSelection}
+          />
+          <label className="form-field">
+            <span>Style</span>
+            <select
+              value={state.value.style}
+              onChange={(event) =>
+                replaceState({
+                  ...state,
+                  value: {
+                    ...state.value,
+                    style: event.target.value as
+                      | 'simple'
+                      | 'counterbore'
+                      | 'countersink'
+                  }
+                })
+              }
+            >
+              <option value="simple">Simple</option>
+              <option value="counterbore">Counterbore</option>
+              <option value="countersink">Countersink</option>
+            </select>
+          </label>
+          <ExprInput
+            label="Diameter"
+            value={state.value.diameter}
+            scope={scope}
+            onChange={(diameter) =>
+              replaceState({ ...state, value: { ...state.value, diameter } })
+            }
+          />
+          <label className="form-field">
+            <span>Depth</span>
+            <select
+              value={state.value.depthMode}
+              onChange={(event) =>
+                replaceState({
+                  ...state,
+                  value: {
+                    ...state.value,
+                    depthMode: event.target.value as 'blind' | 'through'
+                  }
+                })
+              }
+            >
+              <option value="through">Through all</option>
+              <option value="blind">Blind</option>
+            </select>
+          </label>
+          {state.value.depthMode === 'blind' ? (
+            <ExprInput
+              label="Blind depth"
+              value={state.value.depth}
+              scope={scope}
+              onChange={(depth) =>
+                replaceState({ ...state, value: { ...state.value, depth } })
+              }
+            />
+          ) : null}
+          {state.value.style === 'counterbore' ? (
+            <>
+              <ExprInput
+                label="Counterbore diameter"
+                value={state.value.counterboreDiameter}
+                scope={scope}
+                onChange={(counterboreDiameter) =>
+                  replaceState({
+                    ...state,
+                    value: { ...state.value, counterboreDiameter }
+                  })
+                }
+              />
+              <ExprInput
+                label="Counterbore depth"
+                value={state.value.counterboreDepth}
+                scope={scope}
+                onChange={(counterboreDepth) =>
+                  replaceState({
+                    ...state,
+                    value: { ...state.value, counterboreDepth }
+                  })
+                }
+              />
+            </>
+          ) : null}
+          {state.value.style === 'countersink' ? (
+            <>
+              <ExprInput
+                label="Countersink diameter"
+                value={state.value.countersinkDiameter}
+                scope={scope}
+                onChange={(countersinkDiameter) =>
+                  replaceState({
+                    ...state,
+                    value: { ...state.value, countersinkDiameter }
+                  })
+                }
+              />
+              <ExprInput
+                label="Countersink angle (deg)"
+                value={state.value.countersinkAngleDeg}
+                scope={scope}
+                onChange={(countersinkAngleDeg) =>
+                  replaceState({
+                    ...state,
+                    value: { ...state.value, countersinkAngleDeg }
+                  })
+                }
+              />
+            </>
+          ) : null}
+          <FieldGroup legend="Position on face (from centre)">
+            {(['u', 'v'] as const).map((axis) => (
+              <ExprInput
+                key={axis}
+                label={axis.toUpperCase()}
+                value={state.value.position[axis]}
+                scope={scope}
+                onChange={(component) =>
+                  replaceState({
+                    ...state,
+                    value: {
+                      ...state.value,
+                      position: { ...state.value.position, [axis]: component }
+                    }
+                  })
+                }
+              />
+            ))}
+          </FieldGroup>
         </>
       ) : null}
 

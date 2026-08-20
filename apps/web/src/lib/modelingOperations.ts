@@ -2,6 +2,7 @@ import {
   coerceParamValue,
   type DraftInput,
   type HelicalSweepInput,
+  type HoleInput,
   type LoftInput,
   type MirrorInput,
   type ShellInput,
@@ -23,6 +24,7 @@ import { evalParamValue, previewExpression } from './model';
 export type ModelingOperationKind =
   | 'mirror'
   | 'split'
+  | 'hole'
   | 'shell'
   | 'solid-offset'
   | 'loft'
@@ -104,6 +106,23 @@ export interface DraftFormState {
   angleDeg: string;
 }
 
+export interface HoleFormState {
+  name: string;
+  targetBodyId: BodyId | '';
+  /** The planar entry face; null until picked. */
+  faceHash: number | null;
+  style: 'simple' | 'counterbore' | 'countersink';
+  diameter: string;
+  depthMode: 'blind' | 'through';
+  depth: string;
+  counterboreDiameter: string;
+  counterboreDepth: string;
+  countersinkDiameter: string;
+  countersinkAngleDeg: string;
+  /** Axis position in the face frame; (0, 0) is the face centre. */
+  position: { u: string; v: string };
+}
+
 export interface ThickenFormState {
   name: string;
   targetBodyId: BodyId | '';
@@ -115,6 +134,7 @@ export type ModelingOperationFormState =
   | { operation: 'mirror'; value: MirrorFormState }
   /** A split's plane form is shape-identical to mirror's. */
   | { operation: 'split'; value: MirrorFormState }
+  | { operation: 'hole'; value: HoleFormState }
   | { operation: 'shell'; value: ShellFormState }
   | { operation: 'solid-offset'; value: SolidOffsetFormState }
   | { operation: 'loft'; value: LoftFormState }
@@ -126,6 +146,7 @@ export type ModelingOperationFormState =
 export type ModelingOperationSubmission =
   | { operation: 'mirror'; input: MirrorInput }
   | { operation: 'split'; input: SplitInput }
+  | { operation: 'hole'; input: HoleInput }
   | { operation: 'shell'; input: ShellInput }
   | { operation: 'solid-offset'; input: SolidOffsetInput }
   | { operation: 'loft'; input: LoftInput }
@@ -223,6 +244,9 @@ export function modelingOperationDisabledReason(
   }
   if (operation === 'shell' && (capability.openingFaceCount ?? 0) === 0) {
     return 'Select at least one opening face';
+  }
+  if (operation === 'hole' && (capability.openingFaceCount ?? 0) === 0) {
+    return 'The target body has no planar face to drill';
   }
   return null;
 }
@@ -357,6 +381,63 @@ export function modelingFormValidationReason(
       return nonZeroExpression(scope, state.value.angleDeg)
         ? null
         : 'Draft angle must be non-zero.';
+    }
+    case 'hole': {
+      if (state.value.targetBodyId === '') return 'Select a target body.';
+      if (state.value.faceHash === null) return 'Select the entry face.';
+      const expressions = [
+        state.value.diameter,
+        ...Object.values(state.value.position),
+        ...(state.value.depthMode === 'blind' ? [state.value.depth] : []),
+        ...(state.value.style === 'counterbore'
+          ? [state.value.counterboreDiameter, state.value.counterboreDepth]
+          : []),
+        ...(state.value.style === 'countersink'
+          ? [state.value.countersinkDiameter, state.value.countersinkAngleDeg]
+          : [])
+      ];
+      if (!allExpressionsValid(scope, expressions)) {
+        return 'Hole fields must be valid expressions.';
+      }
+      const diameter = resolvedExpression(scope, state.value.diameter);
+      if (diameter === null || diameter <= 0) {
+        return 'Hole diameter must resolve to a positive value.';
+      }
+      if (
+        state.value.depthMode === 'blind' &&
+        !positiveExpression(scope, state.value.depth)
+      ) {
+        return 'Blind hole depth must resolve to a positive value.';
+      }
+      if (state.value.style === 'counterbore') {
+        const counterbore = resolvedExpression(
+          scope,
+          state.value.counterboreDiameter
+        );
+        if (counterbore === null || counterbore <= diameter) {
+          return 'Counterbore diameter must be larger than the hole diameter.';
+        }
+        if (!positiveExpression(scope, state.value.counterboreDepth)) {
+          return 'Counterbore depth must resolve to a positive value.';
+        }
+      }
+      if (state.value.style === 'countersink') {
+        const countersink = resolvedExpression(
+          scope,
+          state.value.countersinkDiameter
+        );
+        if (countersink === null || countersink <= diameter) {
+          return 'Countersink diameter must be larger than the hole diameter.';
+        }
+        const angle = resolvedExpression(
+          scope,
+          state.value.countersinkAngleDeg
+        );
+        if (angle === null || angle <= 0 || angle >= 180) {
+          return 'Countersink angle must be strictly between 0 and 180 degrees.';
+        }
+      }
+      return null;
     }
     case 'thicken':
       if (state.value.targetBodyId === '') return 'Select a target body.';
@@ -518,6 +599,46 @@ export function buildModelingOperationSubmission(
           z: coerceParamValue(state.value.neutralPoint.z)
         },
         angleDeg: coerceParamValue(state.value.angleDeg)
+      }
+    };
+  }
+  if (state.operation === 'hole') {
+    const [entry] = requireFaces([state.value.faceHash!], faceOptions);
+    return {
+      operation: 'hole',
+      input: {
+        name,
+        targetBodyId,
+        faceHash: entry!.hash,
+        ...(entry!.reference ? { faceReference: entry!.reference } : {}),
+        style: state.value.style,
+        diameter: coerceParamValue(state.value.diameter),
+        depthMode: state.value.depthMode,
+        ...(state.value.depthMode === 'blind'
+          ? { depth: coerceParamValue(state.value.depth) }
+          : {}),
+        ...(state.value.style === 'counterbore'
+          ? {
+              counterboreDiameter: coerceParamValue(
+                state.value.counterboreDiameter
+              ),
+              counterboreDepth: coerceParamValue(state.value.counterboreDepth)
+            }
+          : {}),
+        ...(state.value.style === 'countersink'
+          ? {
+              countersinkDiameter: coerceParamValue(
+                state.value.countersinkDiameter
+              ),
+              countersinkAngleDeg: coerceParamValue(
+                state.value.countersinkAngleDeg
+              )
+            }
+          : {}),
+        position: {
+          u: coerceParamValue(state.value.position.u),
+          v: coerceParamValue(state.value.position.v)
+        }
       }
     };
   }

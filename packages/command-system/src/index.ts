@@ -48,6 +48,7 @@ import {
   mirrorBody,
   addSplitFeature,
   createSplitFeatureIds,
+  holeBody,
   loftSections,
   offsetSolidBody,
   patternBody,
@@ -75,6 +76,7 @@ import {
   type ImportedStepInput,
   type MirrorInput,
   type SplitInput,
+  type HoleInput,
   type LoftInput,
   type NodeMetadataInput,
   type NodeRenameInput,
@@ -129,6 +131,7 @@ export type CommandKind =
   | 'feature.transform'
   | 'feature.mirror'
   | 'feature.split'
+  | 'feature.hole'
   | 'feature.shell'
   | 'feature.solid-offset'
   | 'feature.draft'
@@ -344,6 +347,86 @@ function validateSplitInput(
   }
 }
 
+function validateHoleInput(
+  document: ProjectDocument,
+  input: HoleInput
+): void {
+  validateBodyTarget(document, input.targetBodyId);
+  const diameter = resolvedModelingValue(
+    document,
+    'hole diameter',
+    input.diameter
+  );
+  if (!(diameter > 0)) {
+    throw new Error('Hole diameter must resolve to a positive value.');
+  }
+  resolvedModelingValue(document, 'hole position U', input.position.u);
+  resolvedModelingValue(document, 'hole position V', input.position.v);
+  if (input.depthMode === 'blind') {
+    if (input.depth === undefined) {
+      throw new Error('A blind hole needs a depth.');
+    }
+    const depth = resolvedModelingValue(document, 'hole depth', input.depth);
+    if (!(depth > 0)) {
+      throw new Error('Hole depth must resolve to a positive value.');
+    }
+  }
+  if (input.style === 'counterbore') {
+    if (
+      input.counterboreDiameter === undefined ||
+      input.counterboreDepth === undefined
+    ) {
+      throw new Error('A counterbore needs its diameter and depth.');
+    }
+    const counterbore = resolvedModelingValue(
+      document,
+      'counterbore diameter',
+      input.counterboreDiameter
+    );
+    if (!(counterbore > diameter)) {
+      throw new Error(
+        'Counterbore diameter must be larger than the hole diameter.'
+      );
+    }
+    const counterboreDepth = resolvedModelingValue(
+      document,
+      'counterbore depth',
+      input.counterboreDepth
+    );
+    if (!(counterboreDepth > 0)) {
+      throw new Error('Counterbore depth must resolve to a positive value.');
+    }
+  }
+  if (input.style === 'countersink') {
+    if (
+      input.countersinkDiameter === undefined ||
+      input.countersinkAngleDeg === undefined
+    ) {
+      throw new Error('A countersink needs its diameter and angle.');
+    }
+    const countersink = resolvedModelingValue(
+      document,
+      'countersink diameter',
+      input.countersinkDiameter
+    );
+    if (!(countersink > diameter)) {
+      throw new Error(
+        'Countersink diameter must be larger than the hole diameter.'
+      );
+    }
+    const angle = resolvedModelingValue(
+      document,
+      'countersink angle',
+      input.countersinkAngleDeg
+    );
+    if (!(angle > 0 && angle < 180)) {
+      throw new Error(
+        'Countersink angle must be strictly between 0 and 180 degrees.'
+      );
+    }
+  }
+}
+
 function validatePositiveModelingValue(
   document: ProjectDocument,
   label: string,
@@ -511,6 +594,12 @@ function validateModelingFeatureUpdate(
         name: feature.name,
         targetBodyId: feature.data.targetBodyId,
         plane: feature.data.plane
+      });
+      break;
+    case 'hole':
+      validateHoleInput(preview, {
+        name: feature.name,
+        ...feature.data
       });
       break;
     case 'shell':
@@ -841,6 +930,16 @@ export const commandFactories = {
       withIds,
       (document) => addSplitFeature(document, withIds).document,
       (document) => validateSplitInput(document, withIds)
+    );
+  },
+  holeBody(payload: HoleInput): CommandDefinition<HoleInput> {
+    const withIds = { ...payload, ids: payload.ids ?? createBodyFeatureIds() };
+    return makeCommand(
+      'feature.hole',
+      'Drill hole',
+      withIds,
+      (document) => holeBody(document, withIds).document,
+      (document) => validateHoleInput(document, withIds)
     );
   },
   shellBody(payload: ShellInput): CommandDefinition<ShellInput> {
@@ -2250,6 +2349,9 @@ export function replayCommands(
         break;
       case 'feature.split':
         next = addSplitFeature(next, command.payload as SplitInput).document;
+        break;
+      case 'feature.hole':
+        next = holeBody(next, command.payload as HoleInput).document;
         break;
       case 'feature.shell':
         next = shellBody(next, command.payload as ShellInput).document;

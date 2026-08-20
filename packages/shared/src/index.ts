@@ -13,7 +13,7 @@ export type UploadSessionId = Brand<string, 'UploadSessionId'>;
 export type AssetId = Brand<string, 'AssetId'>;
 export type SketchConstraintId = Brand<string, 'SketchConstraintId'>;
 
-export const PROJECT_DOCUMENT_SCHEMA_VERSION = 10 as const;
+export const PROJECT_DOCUMENT_SCHEMA_VERSION = 11 as const;
 export type ProjectDocumentSchemaVersion =
   typeof PROJECT_DOCUMENT_SCHEMA_VERSION;
 
@@ -39,6 +39,7 @@ export type FeatureKind =
   | 'chamfer'
   | 'pattern'
   | 'split'
+  | 'hole'
   | 'direct-edit'
   | 'imported-step'
   | 'imported-mesh';
@@ -638,6 +639,32 @@ export type FeatureData =
       targetBodyId: BodyId;
       /** The original remains live; this feature owns only the mirrored copy. */
       plane: ParametricPlane;
+    }
+  | {
+      featureKind: 'hole';
+      /** Consumed: the drilled body replaces it. */
+      targetBodyId: BodyId;
+      /** The planar entry face, by fingerprint with an optional v5 anchor. */
+      faceHash: number;
+      faceReference?: FaceTopologyReferenceV5;
+      style: 'simple' | 'counterbore' | 'countersink';
+      diameter: ParamValue;
+      /** 'blind' drills to `depth`; 'through' spans the whole body. */
+      depthMode: 'blind' | 'through';
+      depth?: ParamValue;
+      counterboreDiameter?: ParamValue;
+      counterboreDepth?: ParamValue;
+      countersinkDiameter?: ParamValue;
+      /** Full included angle, degrees. */
+      countersinkAngleDeg?: ParamValue;
+      /**
+       * Axis position on the face, in the face's derived frame — the same
+       * `frameFromFace(center, normal)` construction sketch-on-face and the
+       * kernel's cylinder frames use, so it re-derives identically at every
+       * rebuild from the resolved face rather than storing a world point
+       * that would go stale when upstream features move the body.
+       */
+      position: { u: ParamValue; v: ParamValue };
     }
   | {
       featureKind: 'split';
@@ -2254,6 +2281,7 @@ export const FEATURE_COLORS: Record<FeatureKind, string> = {
   chamfer: '#fb7185',
   pattern: '#38bdf8',
   split: '#f472b6',
+  hole: '#fb923c',
   'direct-edit': '#2dd4bf',
   'imported-step': '#d6a653',
   'imported-mesh': '#7aa3ff'
