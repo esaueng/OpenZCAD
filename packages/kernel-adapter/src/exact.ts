@@ -7,16 +7,11 @@ import {
   resolveParamValue
 } from '@openzcad/document-core';
 import {
-  GEOMETRY_LINEAR_TOLERANCE,
-  circleProfile,
   frameForPlaneRef,
   geometryTolerance,
   mergeAdjacentProfiles,
-  polygonProfile,
-  rectangleProfile,
   type PlaneBasis,
   type SketchRegion,
-  type Vec2,
   type Vec2Like,
   type Vec3
 } from '@openzcad/geometry';
@@ -36,27 +31,17 @@ import {
   type BodyTopology,
   type DerivedState,
   type DirectEditOperation,
-  type EdgeCurve,
-  type EdgeReferenceRepair,
-  type EdgeTopologyReferenceV5,
-  type EdgeWitnessV1,
-  type BodyMassProperties,
-  type FaceAreaProvenance,
   type FaceGeometry,
-  type FaceTopologyReferenceV5,
-  type FaceWitnessV1,
   type FeatureId,
   type FeatureNode,
   type ImportedSourceReference,
   type ProjectDocument,
   type SketchId,
-  type QuantizedTopologyPoint,
   type ParamValue,
   type SketchNode,
   type SketchObjectData,
   type SketchPathReference,
-  type SketchSectionReference,
-  type TopologyLineageDiagnostic
+  type SketchSectionReference
 } from '@openzcad/shared';
 import type {
   ExactBuildResult,
@@ -65,22 +50,15 @@ import type {
   MeasuredShape
 } from './exact-types';
 import {
-  addEdgeWitnessRole,
   addFaceCarrierRole,
-  addUniqueSemanticAssignment,
   buildExtrudeLineage,
   buildPrimitiveLineage,
   buildRevolveLineage,
-  cylinderCarrier,
   diagnoseImportedSolid,
-  expectedCircleWitness,
-  expectedLineWitness,
   modifierChainRootsAtCylinder,
   planeCarrier,
   rederiveCylinderModifierLineage,
   rederivePrimitiveDirectEditLineage,
-  sameAnalyticCarrier,
-  samePoint,
   topologyCandidatesForSolid
 } from './exact-lineage-builders';
 import {
@@ -88,8 +66,7 @@ import {
   classifyThroughHoleFace,
   measureFaceGeometry,
   measureOwnedFaceGeometry,
-  requireThroughHole,
-  type ThroughHoleGeometry
+  requireThroughHole
 } from './exact-measure';
 import {
   coaxialCylinderRadii,
@@ -120,55 +97,44 @@ import {
   resolveFeatureFaces
 } from './exact-reference-resolution';
 import {
+  bodyName,
+  bodyOpacityFromMetadata,
+  copyShape,
+  copyShapeWithVerifiedLineage,
+  decodeText,
+  faceAttachmentCandidatesForShape,
+  formatMeasuredVolume,
+  importMeshSolid,
+  importStepWithOwnBudget,
+  inheritMeshOrigin,
+  projectRemusLineageDiagnostic,
+  resolveParametricPoint,
+  validateGeneratedSolid
+} from './exact-shape-utils';
+import { assertDirectEditOperation } from './exact-direct-edit-guards';
+import {
   MEASUREMENT_DEFLECTION,
-  analyticParamsSignature,
-  edgeFingerprint,
-  edgeHandlesByFingerprint,
-  edgeSampleOf,
   edgeWitnessOf,
-  faceFingerprint,
   faceHandlesByFingerprint,
-  faceWitnessOf,
-  legacyEdgeFingerprint,
-  legacyFaceFingerprint,
-  quantizedDirectionOf,
-  quantizedPoint,
-  registerHandle,
-  remusFaceClosure
+  faceWitnessOf
 } from './exact-witnesses';
 import {
-  BLEND_TANGENCY_TOLERANCE,
   brepAdjacentFaceHashes,
   brepEdgeCurve,
   brepEdgeDisplayRole,
   brepVertexIds,
-  edgeCircleMisfit,
-  faceVertexCentroid,
-  isBlendFace,
-  readAnalyticCylinder,
-  sameSphereSurface,
-  selectionTouchesBlendFace,
-  type AnalyticCylinder
+  isBlendFace
 } from './exact-brep';
 export { brepEdgeCurve, edgeCircleMisfit } from './exact-brep';
 import {
   DIRECT_EDIT_TOLERANCE,
   GEOMETRY_EPSILON,
-  add,
   axisDirection,
-  coordinateFrameMatrix,
-  cross,
   dot,
-  errorText,
-  finiteVec3,
   length,
   normalized,
-  pointAt,
   pointOnPlane,
-  positiveFinite,
   profilePoints,
-  quantizeEdgeCoordinate,
-  scale,
   subtract,
   transformMatrix,
   uniformScaleMatrix
@@ -178,18 +144,14 @@ import { readBodyMassProperties } from './body-properties';
 import {
   booleanFacetFallbackWarning,
   censusOfSolids,
-  countFaceConnectedComponents,
   directEditFacetFallbackWarning,
   droppedUnionOperandWarning,
   inspectTriangleMeshClosure,
-  isClosedConsistentlyOrientedMesh,
-  selectSafelyUnifiedSolid,
-  type TriangleMeshClosure
+  isClosedConsistentlyOrientedMesh
 } from './boolean-result-validation';
 import { importedMeshStl, meshBooleanUnsupportedError } from './imported-mesh';
 import { connectedRegionGroups, resolveRegionProfiles } from './region-profile';
 import {
-  extrudeBoundsCanShareVolume,
   extrudeVolumeTolerance,
   type ExtrudeInferenceBody
 } from './extrude-inference';
@@ -204,21 +166,11 @@ import {
 import { createRemusModelingOperations } from './remus-modeling-operations';
 import {
   analyzeUnionConnectivity,
-  disconnectedUnionWarning,
-  type UnionBounds
+  disconnectedUnionWarning
 } from './union-connectivity';
 import {
   ambiguousReferenceError,
-  canonicalDirection,
-  canonicalizeDirection,
-  cylinderAnalyticSignature,
-  edgeFingerprintOf,
-  faceFingerprintOf,
-  isClosedEdge,
-  planeAnalyticSignature,
-  quantizeCoordinate,
-  unresolvedReferenceError,
-  type EdgeSample
+  unresolvedReferenceError
 } from './topology-fingerprint';
 import {
   remusHashOnlyLineage,
@@ -226,10 +178,8 @@ import {
   createRemusModifierEvolutionLineage,
   createRemusSemanticLineage,
   mergeRemusLineageStates,
-  propagateRemusRigidTransformLineage,
   type RemusLineageState,
-  type RemusSemanticAssignment,
-  type RemusTopologyCandidate
+  type RemusSemanticAssignment
 } from './remus-lineage';
 import {
   resolveTopologyReference,
@@ -238,16 +188,14 @@ import {
   type TopologyResolutionCandidate
 } from './topology-lineage';
 import {
-  resolveFaceAttachment,
-  type FaceAttachmentCandidate
+  resolveFaceAttachment
 } from './face-attachment';
 import {
   classifyImportedSolid,
   importedStepDroppedSolidWarning,
   importedStepNoSolidError,
   importedStepRejectedSolidSummary,
-  importedStepValidationWarning,
-  type ImportedSolidDiagnosis
+  importedStepValidationWarning
 } from './imported-step-validation';
 
 const STL_EXPORT_DEFLECTION = 0.08;
@@ -260,28 +208,6 @@ const STL_EXPORT_DEFLECTION = 0.08;
  */
 const MINIMUM_SUBTRACT_REMOVAL_RATIO = 0.5;
 
-function formatMeasuredVolume(value: number): string {
-  const magnitude = Math.abs(value);
-  if (magnitude !== 0 && (magnitude < 0.001 || magnitude >= 1_000_000)) {
-    return value.toExponential(3);
-  }
-  return Number(value.toPrecision(7)).toString();
-}
-
-/**
- * Per-body display opacity rides body metadata through the derived projection.
- * Anything that is not a finite number (unset, legacy string, NaN) means
- * "fully opaque" and stays absent so opaque bodies keep the fast render path.
- */
-function bodyOpacityFromMetadata(value: unknown): number | undefined {
-  if (typeof value !== 'number' || !Number.isFinite(value)) {
-    return undefined;
-  }
-  const clamped = Math.min(1, Math.max(0, value));
-  return clamped >= 1 ? undefined : clamped;
-}
-/** Sewing gap for imported meshes, relative to the mesh's largest extent. */
-const MESH_SEW_TOLERANCE_RATIO = 1e-6;
 const CURVE_SEGMENTS = 32;
 /** `liftCurve2dToPlane` curve types: 0 line, 1 circle, 2 ellipse, 3 NURBS. */
 const NURBS_CURVE_TYPE = 3;
@@ -356,36 +282,6 @@ function resolveRevolveAngleDeg(
   return resolved;
 }
 
-function resolveParametricPoint(
-  value: { x: ParamValue; y: ParamValue; z: ParamValue },
-  scope: Record<string, number>,
-  label: string
-): Vec3 {
-  return {
-    x: resolveParamValue(value.x, scope, `${label} X`),
-    y: resolveParamValue(value.y, scope, `${label} Y`),
-    z: resolveParamValue(value.z, scope, `${label} Z`)
-  };
-}
-
-function validateGeneratedSolid(
-  kernel: RemusKernel,
-  solid: number,
-  label: string
-): number {
-  if (!Number.isSafeInteger(solid) || solid < 0) {
-    throw new Error(`${label} did not return a solid handle.`);
-  }
-  if (kernel.validateSolid(solid) !== 0) {
-    throw new Error(`${label} did not produce a valid closed solid.`);
-  }
-  const volume = kernel.volume(solid, MEASUREMENT_DEFLECTION);
-  if (!Number.isFinite(volume) || volume <= 0) {
-    throw new Error(`${label} did not produce a finite positive volume.`);
-  }
-  return solid;
-}
-
 export interface ExactKernelAdapter {
   readonly kind: 'remus';
   syncDocument(document: ProjectDocument): Promise<DerivedState>;
@@ -403,373 +299,6 @@ export interface ExactKernelAdapter {
     reason?: string;
   }>;
   dispose(): void;
-}
-
-function faceAttachmentCandidatesForShape(
-  kernel: RemusKernel,
-  shape: ExactShape
-): FaceAttachmentCandidate[] {
-  return shape.solids.flatMap((solid) =>
-    Array.from(kernel.getSolidFaces(solid), (handle) => {
-      const witness = faceWitnessOf(kernel, handle);
-      const reference = shape.lineage?.faceReferences.get(handle);
-      const geometry = measureFaceGeometry(kernel, handle);
-      const plane =
-        geometry?.surfaceType.toLowerCase() === 'plane' &&
-        geometry.normal !== undefined
-          ? { center: geometry.center, normal: geometry.normal }
-          : null;
-      return {
-        kind: 'face' as const,
-        currentHash: topologyHashOfWitness('face', witness),
-        witnessVersion: 1 as const,
-        witness,
-        plane,
-        ...(reference
-          ? {
-              lineage: {
-                source: 'derived' as const,
-                identity: {
-                  producingFeatureId: reference.producingFeatureId,
-                  lineageName: reference.lineageName
-                }
-              }
-            }
-          : {})
-      };
-    })
-  );
-}
-
-function copyShape(
-  kernel: RemusKernel,
-  shape: ExactShape,
-  matrix: Float64Array
-): ExactShape {
-  return {
-    solids: shape.solids.map((solid) =>
-      kernel.copyAndTransformSolid(solid, matrix)
-    )
-  };
-}
-
-function copyShapeWithVerifiedLineage(
-  kernel: RemusKernel,
-  shape: ExactShape,
-  matrix: Float64Array
-): ExactShape {
-  const solids: number[] = [];
-  if (!shape.lineage) {
-    return {
-      solids: shape.solids.map((solid) =>
-        kernel.copyAndTransformSolid(solid, matrix)
-      ),
-      lineage: remusHashOnlyLineage(
-        'rigid-transform',
-        'The source body has no verified topology lineage.'
-      )
-    };
-  }
-
-  const lineages = shape.solids.map((sourceSolid, index) => {
-    const resultSolid = kernel.copyAndTransformSolid(sourceSolid, matrix);
-    solids.push(resultSolid);
-    const sourceFaces = new Set(kernel.getSolidFaces(sourceSolid));
-    const sourceEdges = new Set(kernel.getSolidEdges(sourceSolid));
-    const source: RemusLineageState = {
-      faceReferences: new Map(
-        [...shape.lineage!.faceReferences].filter(([handle]) =>
-          sourceFaces.has(handle)
-        )
-      ),
-      edgeReferences: new Map(
-        [...shape.lineage!.edgeReferences].filter(([handle]) =>
-          sourceEdges.has(handle)
-        )
-      ),
-      diagnostics: index === 0 ? [...shape.lineage!.diagnostics] : []
-    };
-    return propagateRemusRigidTransformLineage(
-      source,
-      topologyCandidatesForSolid(kernel, resultSolid),
-      Array.from(matrix)
-    );
-  });
-  return { solids, lineage: mergeRemusLineageStates(lineages) };
-}
-
-function projectRemusLineageDiagnostic(
-  diagnostic: RemusLineageState['diagnostics'][number]
-): TopologyLineageDiagnostic {
-  const status: TopologyLineageDiagnostic['status'] =
-    diagnostic.code === 'hash-only'
-      ? 'hash-only'
-      : diagnostic.code === 'transform-deleted'
-        ? 'deleted'
-        : diagnostic.code === 'transform-split'
-          ? 'split'
-          : diagnostic.code === 'transform-merge'
-            ? 'merged'
-            : diagnostic.code === 'ambiguous-semantic-role'
-              ? 'ambiguous'
-              : 'unsupported';
-  return {
-    kind: diagnostic.topologyKind ?? 'body',
-    status,
-    topologyId: diagnostic.lineageName,
-    message: diagnostic.message
-  };
-}
-
-/**
- * Bring an imported mesh into the kernel as a body it can actually model with.
- *
- * Remus's STL importer emits one face per triangle and does not share edges
- * between them, so the result fails strict validation and every modeling
- * operation refuses it. Sewing restores the shared-edge topology, and unifying
- * same-domain faces recovers the planar faces a tessellator split up — an
- * imported cube comes back as six faces, not twelve triangles, so a user can
- * select, mirror, shell and offset it like any other body.
- *
- * The repair is topological only: the measured volume and bounds must survive
- * it unchanged. If they do not, or the mesh cannot be sewn at all, the import
- * fails by name instead of publishing a body whose geometry silently drifted.
- */
-function importMeshSolid(kernel: RemusKernel, stlText: string): number {
-  const imported = kernel.importStl(new TextEncoder().encode(stlText));
-  const faces = kernel.getSolidFaces(imported);
-  if (faces.length < 2) {
-    throw new Error(
-      'An imported mesh needs at least two triangles to form a body.'
-    );
-  }
-  const bounds = Array.from(kernel.boundingBox(imported));
-  const volume = kernel.volume(imported, MEASUREMENT_DEFLECTION);
-  const scale = Math.max(
-    1,
-    bounds[3]! - bounds[0]!,
-    bounds[4]! - bounds[1]!,
-    bounds[5]! - bounds[2]!
-  );
-
-  let repaired: number;
-  try {
-    const sewn = kernel.sewFaces(faces, scale * MESH_SEW_TOLERANCE_RATIO);
-    const healed = kernel.runHealPipeline(sewn, ['unify_same_domain']) as
-      string | { solid?: number };
-    const parsed = (
-      typeof healed === 'string' ? JSON.parse(healed) : healed
-    ) as { solid?: number };
-    repaired = typeof parsed.solid === 'number' ? parsed.solid : sewn;
-  } catch (error) {
-    const detail =
-      error instanceof Error ? error.message : 'unknown kernel error';
-    throw new Error(
-      `This mesh could not be sewn into a shell the kernel can model with: ${detail}`,
-      { cause: error }
-    );
-  }
-
-  const repairedBounds = Array.from(kernel.boundingBox(repaired));
-  const repairedVolume = kernel.volume(repaired, MEASUREMENT_DEFLECTION);
-  const linearTolerance = Math.max(GEOMETRY_EPSILON, scale * 1e-6);
-  if (
-    repairedBounds.length !== bounds.length ||
-    repairedBounds.some(
-      (coordinate, index) =>
-        Math.abs(coordinate - bounds[index]!) > linearTolerance
-    ) ||
-    Math.abs(repairedVolume - volume) >
-      Math.max(linearTolerance ** 3, Math.abs(volume) * 1e-6)
-  ) {
-    throw new Error(
-      'Sewing this mesh changed its size, so the import was refused rather than publishing altered geometry.'
-    );
-  }
-  return repaired;
-}
-
-function bodyName(document: ProjectDocument, bodyId: BodyId): string {
-  return (
-    listNodesByKind(document, 'body').find(
-      (candidate) => candidate.bodyId === bodyId
-    )?.name ?? String(bodyId)
-  );
-}
-
-/**
- * Carry the imported-mesh origin onto a body derived from one. Mirroring,
- * shelling or offsetting a mesh still leaves a facet shell, so the derived
- * body must refuse booleans for the same reason its source does.
- */
-function inheritMeshOrigin(
-  result: ExactBuildResult,
-  source: BodyId,
-  derived: BodyId | undefined
-): void {
-  if (derived !== undefined && result.meshBodies.has(source)) {
-    result.meshBodies.add(derived);
-  }
-  // A wedge stays a wedge through a transform, mirror, pattern or shell, so
-  // the edge-modifier advice below has to travel with it.
-  if (derived !== undefined && result.partialRevolveBodies.has(source)) {
-    result.partialRevolveBodies.add(derived);
-  }
-}
-
-function decodeText(bytes: Uint8Array): string {
-  return new TextDecoder().decode(bytes);
-}
-
-/**
- * Keep Remus's hostile-input budgets for every source. A locally selected
- * file can later be shared or restored, so its origin does not make it trusted.
- */
-function importStepWithOwnBudget(
-  kernel: RemusKernel,
-  bytes: Uint8Array
-): Uint32Array {
-  return kernel.importStep(bytes, 128 * 1024 * 1024, 2_000_000);
-}
-
-function assertFiniteDirectEditNumber(value: unknown, label: string): number {
-  if (typeof value !== 'number' || !Number.isFinite(value)) {
-    throw new Error(`Direct-edit ${label} must be finite.`);
-  }
-  return value;
-}
-
-function assertDirectEditVector(value: unknown, label: string): void {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) {
-    throw new Error(`Direct-edit ${label} must be a vector.`);
-  }
-  const vector = value as Record<string, unknown>;
-  assertFiniteDirectEditNumber(vector.x, `${label}.x`);
-  assertFiniteDirectEditNumber(vector.y, `${label}.y`);
-  assertFiniteDirectEditNumber(vector.z, `${label}.z`);
-}
-
-function assertDirectEditParam(value: unknown, label: string): void {
-  if (
-    (typeof value === 'number' && Number.isFinite(value)) ||
-    (typeof value === 'string' &&
-      value.trim().length > 0 &&
-      value.length <= 500)
-  ) {
-    return;
-  }
-  throw new Error(`Direct-edit ${label} must be a finite value or expression.`);
-}
-
-function assertDirectEditOperation(operation: DirectEditOperation): void {
-  if (!operation || typeof operation !== 'object' || Array.isArray(operation)) {
-    throw new Error('Direct-edit operation must be an object.');
-  }
-  const value = operation as unknown as Record<string, unknown>;
-  if (
-    typeof value.faceHash !== 'number' ||
-    !Number.isSafeInteger(value.faceHash)
-  ) {
-    throw new Error('Direct-edit face hash must be a safe integer.');
-  }
-  switch (value.kind) {
-    case 'resize-through-hole':
-      if (
-        assertFiniteDirectEditNumber(value.sourceDiameter, 'source diameter') <=
-        0
-      ) {
-        throw new Error(
-          'Direct-edit source diameter must be greater than zero.'
-        );
-      }
-      assertDirectEditVector(value.sourceAxisStart, 'source axis start');
-      assertDirectEditVector(value.sourceAxisEnd, 'source axis end');
-      assertDirectEditParam(value.diameter, 'diameter');
-      if (
-        value.parameterBinding !== undefined &&
-        value.parameterBinding !== true
-      ) {
-        throw new Error('Direct-edit parameter binding is invalid.');
-      }
-      return;
-    case 'remove-face-feature': {
-      if (
-        typeof value.sourceSurfaceType !== 'string' ||
-        !value.sourceSurfaceType
-      ) {
-        throw new Error('Direct-edit source surface type is invalid.');
-      }
-      if (assertFiniteDirectEditNumber(value.sourceArea, 'source area') <= 0) {
-        throw new Error('Direct-edit source area must be greater than zero.');
-      }
-      assertDirectEditVector(value.sourceCenter, 'source center');
-      const throughHoleSnapshot = [
-        value.sourceDiameter,
-        value.sourceAxisStart,
-        value.sourceAxisEnd
-      ];
-      if (throughHoleSnapshot.some((entry) => entry !== undefined)) {
-        if (throughHoleSnapshot.some((entry) => entry === undefined)) {
-          throw new Error('Direct-edit through-hole snapshot is incomplete.');
-        }
-        if (
-          assertFiniteDirectEditNumber(
-            value.sourceDiameter,
-            'source diameter'
-          ) <= 0
-        ) {
-          throw new Error(
-            'Direct-edit source diameter must be greater than zero.'
-          );
-        }
-        assertDirectEditVector(value.sourceAxisStart, 'source axis start');
-        assertDirectEditVector(value.sourceAxisEnd, 'source axis end');
-      }
-      return;
-    }
-    case 'offset-face':
-      if (value.sourceSurfaceType !== 'plane') {
-        throw new Error('Direct-edit offset source must be planar.');
-      }
-      if (assertFiniteDirectEditNumber(value.sourceArea, 'source area') <= 0) {
-        throw new Error('Direct-edit source area must be greater than zero.');
-      }
-      assertDirectEditVector(value.sourceCenter, 'source center');
-      assertDirectEditVector(value.sourceNormal, 'source normal');
-      assertDirectEditParam(value.offset, 'offset');
-      return;
-    case 'resize-cylindrical-face':
-      if (
-        assertFiniteDirectEditNumber(value.sourceRadius, 'source radius') <= 0
-      ) {
-        throw new Error('Direct-edit source radius must be greater than zero.');
-      }
-      assertDirectEditVector(value.sourceAxisStart, 'source axis start');
-      assertDirectEditVector(value.sourceAxisEnd, 'source axis end');
-      if (value.concavity !== 'hole' && value.concavity !== 'boss') {
-        throw new Error('Direct-edit cylinder concavity is invalid.');
-      }
-      assertDirectEditParam(value.radius, 'radius');
-      return;
-    case 'resize-blend':
-      if (value.surfaceClass !== 'torus' && value.surfaceClass !== 'cylinder') {
-        throw new Error('Direct-edit blend surface class is invalid.');
-      }
-      if (
-        assertFiniteDirectEditNumber(value.recordedRadius, 'recorded radius') <=
-        0
-      ) {
-        throw new Error(
-          'Direct-edit recorded radius must be greater than zero.'
-        );
-      }
-      assertDirectEditVector(value.recordedCenter, 'recorded center');
-      assertDirectEditVector(value.recordedAxis, 'recorded axis');
-      assertDirectEditParam(value.newRadius, 'new radius');
-      return;
-    default:
-      throw new Error('Direct-edit operation kind is not supported.');
-  }
 }
 
 /**

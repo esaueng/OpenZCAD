@@ -10,7 +10,7 @@ import type { RemusKernel } from './remus-runtime';
 import { listFeaturesInOrder, resolveParamValue } from '@openzcad/document-core';
 import type { ExactShape } from './exact-types';
 import type { ImportedSolidDiagnosis } from './imported-step-validation';
-import type { PlaneBasis, Vec2, Vec3 } from '@openzcad/geometry';
+import type { PlaneBasis, Vec3 } from '@openzcad/geometry';
 import type {
   BodyId,
   EdgeWitnessV1,
@@ -18,9 +18,7 @@ import type {
   FeatureNode,
   ProjectDocument,
   QuantizedTopologyPoint,
-  SketchNode,
-  SketchObjectData,
-  TopologyLineageDiagnostic
+  SketchObjectData
 } from '@openzcad/shared';
 import {
   createRemusSemanticLineage,
@@ -30,9 +28,8 @@ import {
   type RemusSemanticAssignment,
   type RemusTopologyCandidate
 } from './remus-lineage';
-import { topologyHashOfWitness, topologyWitnessesEqual } from './topology-lineage';
-import { canonicalDirection, canonicalizeDirection, quantizeCoordinate } from './topology-fingerprint';
-import { analyticSurfaceRecord, readAnalyticCylinder, type AnalyticCylinder } from './exact-brep';
+import { topologyWitnessesEqual } from './topology-lineage';
+import { canonicalDirection, quantizeCoordinate } from './topology-fingerprint';
 import {
   edgeWitnessOf,
   faceWitnessOf,
@@ -40,15 +37,11 @@ import {
   quantizedPoint
 } from './exact-witnesses';
 import {
-  GEOMETRY_EPSILON,
-  add,
   pointAt,
   pointOnPlane,
   profilePoints,
   cross,
   dot,
-  finiteVec3,
-  length,
   normalized,
   scale,
   subtract

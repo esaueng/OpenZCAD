@@ -6,7 +6,7 @@
  */
 import type { RemusKernel } from './remus-runtime';
 import { canonicalDirection } from './topology-fingerprint';
-import type { Vec2, Vec3 } from '@openzcad/geometry';
+import type { Vec3 } from '@openzcad/geometry';
 import type { EdgeCurve } from '@openzcad/shared';
 import {
   GEOMETRY_EPSILON,
