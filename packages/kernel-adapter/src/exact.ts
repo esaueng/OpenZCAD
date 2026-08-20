@@ -58,6 +58,42 @@ import {
   type SketchSectionReference,
   type TopologyLineageDiagnostic
 } from '@openzcad/shared';
+import {
+  BLEND_TANGENCY_TOLERANCE,
+  brepAdjacentFaceHashes,
+  brepEdgeCurve,
+  brepEdgeDisplayRole,
+  brepVertexIds,
+  edgeCircleMisfit,
+  faceVertexCentroid,
+  isBlendFace,
+  readAnalyticCylinder,
+  sameSphereSurface,
+  selectionTouchesBlendFace,
+  type AnalyticCylinder
+} from './exact-brep';
+export { brepEdgeCurve, edgeCircleMisfit } from './exact-brep';
+import {
+  GEOMETRY_EPSILON,
+  add,
+  axisDirection,
+  coordinateFrameMatrix,
+  cross,
+  dot,
+  errorText,
+  finiteVec3,
+  length,
+  normalized,
+  pointAt,
+  pointOnPlane,
+  positiveFinite,
+  profilePoints,
+  quantizeEdgeCoordinate,
+  scale,
+  subtract,
+  transformMatrix,
+  uniformScaleMatrix
+} from './exact-math';
 import { displayTessellationForExtents } from './display-tessellation';
 import { readBodyMassProperties } from './body-properties';
 import {
@@ -171,10 +207,7 @@ const MESH_SEW_TOLERANCE_RATIO = 1e-6;
 const CURVE_SEGMENTS = 32;
 /** `liftCurve2dToPlane` curve types: 0 line, 1 circle, 2 ellipse, 3 NURBS. */
 const NURBS_CURVE_TYPE = 3;
-const GEOMETRY_EPSILON = 1e-9;
 const ANALYTIC_MATCH_EPSILON = 1e-7;
-/** Relative bar for proving a plane runs tangent to a cylindrical band. */
-const BLEND_TANGENCY_TOLERANCE = 1e-6;
 /**
  * Fractions of a refused fillet/chamfer size retried to tell a size-bound
  * failure from a structural one. A ladder rather than one probe because the
@@ -184,8 +217,16 @@ const BLEND_TANGENCY_TOLERANCE = 1e-6;
 const EDGE_MODIFIER_PROBE_RATIOS = [1 / 2, 1 / 8, 1 / 64] as const;
 const DIRECT_EDIT_TOLERANCE = 1e-6;
 const FULL_REVOLUTION = Math.PI * 2;
-const PERIODIC_SURFACE_TYPES = new Set(['cylinder', 'cone', 'sphere', 'torus']);
 
+/**
+ * Resolve a revolve's sweep angle and enforce the kernel's `(0, 360]` domain
+ * here rather than letting the WASM boundary throw. The kernel's own refusal
+ * is a generic operation failure naming no parameter; a rebuild warning has
+ * to say which field is out of range and what the range is.
+ *
+ * An absent field means a full turn, so a document written before partial
+ * revolve existed resolves to exactly 360 and rebuilds unchanged.
+ */
 /**
  * Why a partial revolve of a non-circular profile publishes no ADR-013
  * semantic names, spelled out here so a reader finds a decision rather than an
@@ -231,15 +272,6 @@ function revolveKeepsSemanticLineage(
   return angleDeg >= FULL_REVOLVE_ANGLE_DEG || data.objectKind === 'circle';
 }
 
-/**
- * Resolve a revolve's sweep angle and enforce the kernel's `(0, 360]` domain
- * here rather than letting the WASM boundary throw. The kernel's own refusal
- * is a generic operation failure naming no parameter; a rebuild warning has
- * to say which field is out of range and what the range is.
- *
- * An absent field means a full turn, so a document written before partial
- * revolve existed resolves to exactly 360 and rebuilds unchanged.
- */
 function resolveRevolveAngleDeg(
   angleDeg: ParamValue | undefined,
   scope: Record<string, number>
@@ -352,506 +384,6 @@ interface MeasuredShape {
   };
 }
 
-interface AnalyticCylinder {
-  origin: Vec3;
-  axis: Vec3;
-  radius: number;
-  axialMin: number;
-  axialMax: number;
-}
-
-function dot(left: Vec3, right: Vec3): number {
-  return left.x * right.x + left.y * right.y + left.z * right.z;
-}
-
-function subtract(left: Vec3, right: Vec3): Vec3 {
-  return {
-    x: left.x - right.x,
-    y: left.y - right.y,
-    z: left.z - right.z
-  };
-}
-
-function add(left: Vec3, right: Vec3): Vec3 {
-  return {
-    x: left.x + right.x,
-    y: left.y + right.y,
-    z: left.z + right.z
-  };
-}
-
-function scale(vector: Vec3, factor: number): Vec3 {
-  return {
-    x: vector.x * factor,
-    y: vector.y * factor,
-    z: vector.z * factor
-  };
-}
-
-function cross(left: Vec3, right: Vec3): Vec3 {
-  return {
-    x: left.y * right.z - left.z * right.y,
-    y: left.z * right.x - left.x * right.z,
-    z: left.x * right.y - left.y * right.x
-  };
-}
-
-function length(vector: Vec3): number {
-  return Math.hypot(vector.x, vector.y, vector.z);
-}
-
-function normalized(vector: Vec3): Vec3 | null {
-  const magnitude = length(vector);
-  return magnitude > GEOMETRY_EPSILON ? scale(vector, 1 / magnitude) : null;
-}
-
-function finiteVec3(value: unknown): Vec3 | null {
-  if (!Array.isArray(value) || value.length !== 3) {
-    return null;
-  }
-  const [x, y, z] = value as unknown[];
-  if (
-    typeof x !== 'number' ||
-    typeof y !== 'number' ||
-    typeof z !== 'number' ||
-    !Number.isFinite(x) ||
-    !Number.isFinite(y) ||
-    !Number.isFinite(z)
-  ) {
-    return null;
-  }
-  return { x, y, z };
-}
-
-function positiveFinite(value: unknown): number | null {
-  return typeof value === 'number' &&
-    Number.isFinite(value) &&
-    value > GEOMETRY_EPSILON
-    ? value
-    : null;
-}
-
-function analyticSurfaceRecord(
-  kernel: RemusKernel,
-  face: number
-): Record<string, unknown> | null {
-  try {
-    const value: unknown = JSON.parse(kernel.getAnalyticSurfaceParams(face));
-    return value && typeof value === 'object'
-      ? (value as Record<string, unknown>)
-      : null;
-  } catch {
-    return null;
-  }
-}
-
-function sameSphereSurface(kernel: RemusKernel, faces: number[]): boolean {
-  if (
-    faces.length !== 2 ||
-    faces.some((face) => kernel.getSurfaceType(face) !== 'sphere')
-  ) {
-    return false;
-  }
-  const records = faces.map((face) => analyticSurfaceRecord(kernel, face));
-  const centers = records.map((record) => finiteVec3(record?.center));
-  const radii = records.map((record) => record?.radius);
-  if (
-    !centers[0] ||
-    !centers[1] ||
-    typeof radii[0] !== 'number' ||
-    typeof radii[1] !== 'number'
-  ) {
-    return false;
-  }
-  const scale = Math.max(
-    1,
-    Math.abs(centers[0].x),
-    Math.abs(centers[0].y),
-    Math.abs(centers[0].z),
-    Math.abs(centers[1].x),
-    Math.abs(centers[1].y),
-    Math.abs(centers[1].z),
-    Math.abs(radii[0]),
-    Math.abs(radii[1])
-  );
-  const tolerance = scale * GEOMETRY_EPSILON;
-  return (
-    Math.abs(radii[0] - radii[1]) <= tolerance &&
-    Math.hypot(
-      centers[0].x - centers[1].x,
-      centers[0].y - centers[1].y,
-      centers[0].z - centers[1].z
-    ) <= tolerance
-  );
-}
-
-/**
- * Bar for accepting a candidate circle as the edge's own geometry, as a
- * fraction of how far the edge itself reaches.
- *
- * The sampled polyline is taken off the exact curve, so a true circle's
- * residue is a few multiples of double-precision rounding and anything that
- * clears this bar is a fit rather than a near miss.
- */
-const EDGE_CIRCLE_MISFIT_TOLERANCE = 1e-6;
-
-/**
- * How badly a candidate circle misses the edge's own sampled polyline: the
- * larger of the radial and the out-of-plane error over every sample, divided by
- * the extent of the polyline.
- *
- * Divided by the EDGE's size, never the circle's, and that is the whole point.
- * Scaling the residue by the candidate radius hands a wrong answer a tolerance
- * budget proportional to how wrong it is: the kernel's elliptical misreading is
- * a radius of 7.5e11 for a curve six units across, so against its own radius a
- * miss of several whole units scores about 4e-12 and sails through. Against the
- * edge's own six units the same miss scores 1 and is thrown out. Every
- * mismeasurement worth catching is one where the two scales disagree, which is
- * exactly the case a self-relative test cannot see.
- *
- * This is the only thing standing between a wrong analytic radius and the
- * published payload, so it fails closed: fewer than two samples, or samples
- * with no extent, is unverifiable rather than acceptable and returns infinity.
- * Exported because no fixture in the corpus is an ellipse or a spline, so
- * nothing in CI otherwise exercises the rejection path this exists for.
- */
-export function edgeCircleMisfit(
-  circle: { center: Vec3; axis: Vec3; radius: number },
-  points: readonly number[]
-): number {
-  const { center, axis, radius } = circle;
-  if (!Number.isFinite(radius) || radius <= GEOMETRY_EPSILON) {
-    return Number.POSITIVE_INFINITY;
-  }
-  const samples: Vec3[] = [];
-  for (let offset = 0; offset + 2 < points.length; offset += 3) {
-    samples.push({
-      x: points[offset] ?? 0,
-      y: points[offset + 1] ?? 0,
-      z: points[offset + 2] ?? 0
-    });
-  }
-  const first = samples[0];
-  if (samples.length < 2 || !first) {
-    return Number.POSITIVE_INFINITY;
-  }
-  const extent = samples.reduce(
-    (widest, sample) => Math.max(widest, length(subtract(sample, first))),
-    0
-  );
-  if (extent <= GEOMETRY_EPSILON) {
-    return Number.POSITIVE_INFINITY;
-  }
-  let worst = 0;
-  for (const sample of samples) {
-    const toSample = subtract(sample, center);
-    const axial = dot(toSample, axis);
-    const radial = length(subtract(toSample, scale(axis, axial)));
-    worst = Math.max(
-      worst,
-      Math.abs(radial - radius) / extent,
-      Math.abs(axial) / extent
-    );
-  }
-  return worst;
-}
-
-/**
- * Read the circle a circular edge lies on, or `undefined` when it cannot be
- * proven.
- *
- * Curvature rather than the curve's parameters, deliberately. The obvious
- * source — `getEdgeCurveParameters` plus `evaluateEdgeCurve` across that range
- * — reports the UNDERLYING curve's domain rather than the edge's trim of it, so
- * a quarter fillet arc reads as a full turn. Curvature is constant along a
- * circle, so an untrimmed parameter cannot contaminate it: the radius is right
- * whichever point on the circle is asked, and so is the centre, because every
- * point of the underlying circle is the same distance from it.
- *
- * The caller has already gated on the kernel calling this edge a CIRCLE. That
- * gate matters — the same curvature call is silently wrong for ellipses by
- * about 1e12 — but it is not trusted on its own: the candidate is accepted only
- * once it has been checked against the edge's own sampled polyline, which no
- * mismeasured radius can fit.
- */
-function brepEdgeCircle(
-  kernel: RemusKernel,
-  edge: number,
-  points: readonly number[]
-): { center: Vec3; axis: Vec3; radius: number } | undefined {
-  let curvature: number[];
-  let position: number[];
-  try {
-    // Any parameter on the underlying circle gives the same circle. The domain
-    // start is simply one the kernel is certain to accept; nothing about the
-    // range itself is used, and nothing about it is published.
-    const parameter = Array.from(kernel.getEdgeCurveParameters(edge))[0] ?? 0;
-    curvature = Array.from(kernel.measureCurvatureAtEdge(edge, parameter));
-    position = Array.from(kernel.evaluateEdgeCurve(edge, parameter));
-  } catch {
-    // Matching `analyticSurfaceRecord`: an invalid handle throws out of the
-    // WASM boundary, and an edge the kernel will not describe is an edge with
-    // no published curve rather than a failed rebuild.
-    return undefined;
-  }
-  const curvatureValue = curvature[0];
-  const measuredTangent = finiteVec3(curvature.slice(1, 4));
-  // Points at the centre of curvature, which is what turns a point on the
-  // circle into the circle's centre.
-  const measuredInward = finiteVec3(curvature.slice(4, 7));
-  const anchor = finiteVec3(position.slice(0, 3));
-  if (
-    typeof curvatureValue !== 'number' ||
-    !Number.isFinite(curvatureValue) ||
-    curvatureValue <= GEOMETRY_EPSILON ||
-    !measuredTangent ||
-    !measuredInward ||
-    !anchor
-  ) {
-    return undefined;
-  }
-  const tangent = normalized(measuredTangent);
-  const inward = normalized(measuredInward);
-  if (!tangent || !inward) {
-    return undefined;
-  }
-  const axis = normalized(cross(tangent, inward));
-  if (!axis) {
-    return undefined;
-  }
-  const radius = 1 / curvatureValue;
-  const circle = {
-    center: add(anchor, scale(inward, radius)),
-    // The Frenet frame's sign follows the parameterization phase, which is not
-    // stable across rebuilds; the published axis is the plane's unoriented
-    // normal, so it is canonicalized like every other direction in a payload.
-    axis: canonicalDirection(axis),
-    radius
-  };
-  return edgeCircleMisfit(circle, points) <= EDGE_CIRCLE_MISFIT_TOLERANCE
-    ? circle
-    : undefined;
-}
-
-/**
- * Describe the exact curve under an edge: always its type, plus analytic data
- * for circles.
- *
- * Circles only because they are what the viewport needs and what the kernel
- * can be held to. The type alone is still worth publishing for the rest — it
- * is how a consumer tells a straight edge from a curved one without measuring
- * chords.
- *
- * Exported for the same reason `edgeCircleMisfit` is: no document primitive
- * produces an elliptical edge, so the only way to hold the CIRCLE gate against
- * a real ellipse is to build one on a bare kernel and hand it to this.
- */
-export function brepEdgeCurve(
-  kernel: RemusKernel,
-  edge: number,
-  points: readonly number[]
-): EdgeCurve | undefined {
-  let type: string;
-  try {
-    type = kernel.getEdgeCurveType(edge);
-  } catch {
-    return undefined;
-  }
-  if (typeof type !== 'string' || type.length === 0) {
-    return undefined;
-  }
-  if (type !== 'CIRCLE') {
-    return { type };
-  }
-  const circle = brepEdgeCircle(kernel, edge, points);
-  // A circle that could not be proven still publishes its type. The field
-  // narrows; it never lies.
-  return circle ? { type, circle } : { type };
-}
-
-/**
- * Translate the kernel's edge-to-face map into the face hashes the topology
- * payload publishes, sorted ascending.
- *
- * Sorted because `edgeToFaceMap`'s order is kernel-determined: the parity
- * corpus digests hashes only after sorting, so an unsorted array would pass
- * every existing test while making rebuild output non-reproducible.
- *
- * Multiplicity is preserved — a seam edge lists its one face twice. Returns
- * `undefined` rather than an empty array when the kernel reports no owners, so
- * the field is simply absent instead of asserting an edge bounds nothing.
- */
-function brepAdjacentFaceHashes(
-  edge: number,
-  edgeToFaces: Record<string, number[]>,
-  faceHashByHandle: ReadonlyMap<number, number>
-): number[] | undefined {
-  const owners = edgeToFaces[String(edge)];
-  if (!Array.isArray(owners) || owners.length === 0) {
-    return undefined;
-  }
-  const hashes = owners.map((handle) => {
-    const hash = faceHashByHandle.get(handle);
-    if (hash === undefined) {
-      // Guarded like the face/tessellation coupling above: an owner outside
-      // this solid's own face set means the two kernel calls disagree about
-      // what the solid contains, and publishing a partial array would hide it.
-      throw new Error(
-        `Edge ${edge} names face handle ${handle}, which is not among this solid's faces.`
-      );
-    }
-    return hash;
-  });
-  return hashes.sort((left, right) => left - right);
-}
-
-/**
- * The two vertices an edge runs between, renumbered into the body-scoped ids
- * `EdgeTopology.vertexIds` publishes.
- *
- * Read straight from the kernel rather than derived from positions. Quantizing
- * endpoints at the ADR-011 quantum was measured against these handles and does
- * not work — `test/vertex-identity.test.ts` carries the numbers, the decisive
- * one being that a closed edge's display polyline begins a quarter turn away
- * from its own vertex.
- *
- * NOT sorted, unlike the face hashes above. The order is the edge's own
- * start-then-end, which is the direction `points` is sampled in and is
- * reproducible for that reason; sorting would discard which end is which. A
- * closed edge names one vertex twice and keeps both entries.
- */
-function brepVertexIds(
-  edge: number,
-  handles: Uint32Array,
-  vertexIdByHandle: ReadonlyMap<number, number>
-): [number, number] | undefined {
-  if (handles.length !== 2) {
-    return undefined;
-  }
-  const ids = Array.from(handles, (handle) => {
-    const id = vertexIdByHandle.get(handle);
-    if (id === undefined) {
-      // Same guard as the face owners above: a vertex outside this solid's own
-      // vertex set means two kernel calls disagree about what the solid
-      // contains, and publishing a half-resolved pair would hide it.
-      throw new Error(
-        `Edge ${edge} names vertex handle ${handle}, which is not among this solid's vertices.`
-      );
-    }
-    return id;
-  });
-  return [ids[0]!, ids[1]!];
-}
-
-/**
- * A periodic face references its UV-closing seam twice. Remus's sphere is
- * currently built from two same-surface hemispheres, so their smooth equator
- * fragments are display seams too. Neither case is a physical feature edge.
- */
-function brepEdgeDisplayRole(
-  kernel: RemusKernel,
-  edge: number,
-  edgeToFaces: Record<string, number[]>
-): 'feature' | 'seam' {
-  const owners = edgeToFaces[String(edge)];
-  if (!Array.isArray(owners) || owners.length < 2) {
-    return 'feature';
-  }
-  const uniqueOwners = [...new Set(owners)];
-  if (
-    uniqueOwners.length === 1 &&
-    PERIODIC_SURFACE_TYPES.has(kernel.getSurfaceType(uniqueOwners[0]!))
-  ) {
-    return 'seam';
-  }
-  return sameSphereSurface(kernel, uniqueOwners) ? 'seam' : 'feature';
-}
-
-/**
- * Read a simple analytic cylinder (one cylindrical wall and two planar caps).
- * More complex solids deliberately fall through to Remus's general boolean.
- */
-function readAnalyticCylinder(
-  kernel: RemusKernel,
-  solid: number
-): AnalyticCylinder | null {
-  const faces = Array.from(kernel.getSolidFaces(solid));
-  const cylinderFaces = faces.filter(
-    (face) => kernel.getSurfaceType(face) === 'cylinder'
-  );
-  if (
-    faces.length !== 3 ||
-    cylinderFaces.length !== 1 ||
-    faces.filter((face) => kernel.getSurfaceType(face) === 'plane').length !== 2
-  ) {
-    return null;
-  }
-
-  const face = cylinderFaces[0]!;
-  let parameters: unknown;
-  try {
-    parameters = JSON.parse(kernel.getAnalyticSurfaceParams(face));
-  } catch {
-    return null;
-  }
-  if (!parameters || typeof parameters !== 'object') {
-    return null;
-  }
-  const record = parameters as Record<string, unknown>;
-  const origin = finiteVec3(record.origin);
-  const rawAxis = finiteVec3(record.axis);
-  const axis = rawAxis ? normalized(rawAxis) : null;
-  const radius = record.radius;
-  const domain = Array.from(kernel.getSurfaceDomain(face));
-  if (
-    !origin ||
-    !axis ||
-    typeof radius !== 'number' ||
-    !Number.isFinite(radius) ||
-    radius <= GEOMETRY_EPSILON ||
-    domain.length !== 4 ||
-    !domain.every(Number.isFinite)
-  ) {
-    return null;
-  }
-
-  return {
-    origin,
-    axis,
-    radius,
-    axialMin: Math.min(domain[2]!, domain[3]!),
-    axialMax: Math.max(domain[2]!, domain[3]!)
-  };
-}
-
-function coordinateFrameMatrix(origin: Vec3, zAxis: Vec3): Float64Array {
-  const reference =
-    Math.abs(zAxis.z) < 0.9 ? { x: 0, y: 0, z: 1 } : { x: 1, y: 0, z: 0 };
-  const xAxis = normalized(cross(reference, zAxis));
-  if (!xAxis) {
-    throw new Error('Could not construct a cylinder coordinate frame.');
-  }
-  const yAxis = cross(zAxis, xAxis);
-  return new Float64Array([
-    xAxis.x,
-    yAxis.x,
-    zAxis.x,
-    origin.x,
-    xAxis.y,
-    yAxis.y,
-    zAxis.y,
-    origin.y,
-    xAxis.z,
-    yAxis.z,
-    zAxis.z,
-    origin.z,
-    0,
-    0,
-    0,
-    1
-  ]);
-}
-
 /** Revolve a radial/axial section around local +Z, then place it in world space. */
 function revolveRadialProfile(
   kernel: RemusKernel,
@@ -869,123 +401,6 @@ function revolveRadialProfile(
     local,
     coordinateFrameMatrix(cylinder.origin, cylinder.axis)
   );
-}
-
-/**
- * True when `face` is a rolling-ball blend band rather than a modelled wall.
- *
- * Surface type alone used to answer this: every fillet Remus produced was
- * fitted as a `bspline`, so a free-form face WAS a blend. The kernel now
- * returns an exact `cylinder` for a fillet along a straight edge between two
- * planes, which makes a blend band and a drilled bore wall the same surface
- * type. They are still distinguishable by tangency, which is what a blend
- * IS: a band runs tangent into the face it meets along their shared edge,
- * where a bore wall meets its caps at a right angle. So a cylinder counts as
- * a blend only when some adjacent planar face is parallel to its axis and
- * stands exactly one radius off it.
- */
-function isBlendFace(
-  kernel: RemusKernel,
-  solid: number,
-  face: number
-): boolean {
-  const surfaceType = kernel.getSurfaceType(face);
-  if (surfaceType === 'bspline') {
-    return true;
-  }
-  if (surfaceType === 'torus') {
-    return true;
-  }
-  if (surfaceType !== 'cylinder') {
-    return false;
-  }
-  let parameters: unknown;
-  try {
-    parameters = JSON.parse(kernel.getAnalyticSurfaceParams(face));
-  } catch {
-    return false;
-  }
-  const record = (parameters ?? {}) as Record<string, unknown>;
-  const origin = finiteVec3(record.origin);
-  const rawAxis = finiteVec3(record.axis);
-  const axis = rawAxis ? normalized(rawAxis) : null;
-  const radius = positiveFinite(record.radius);
-  if (!origin || !axis || radius === null) {
-    return false;
-  }
-  const bandEdges = new Set(kernel.getFaceEdges(face));
-  const tolerance = Math.max(
-    BLEND_TANGENCY_TOLERANCE * radius,
-    GEOMETRY_EPSILON
-  );
-  for (const neighbour of kernel.getSolidFaces(solid)) {
-    if (
-      neighbour === face ||
-      kernel.getSurfaceType(neighbour) !== 'plane' ||
-      !Array.from(kernel.getFaceEdges(neighbour)).some((edge) =>
-        bandEdges.has(edge)
-      )
-    ) {
-      continue;
-    }
-    const onPlane = faceVertexCentroid(kernel, neighbour);
-    let normal: Vec3 | null;
-    try {
-      const raw = kernel.getFaceNormal(neighbour);
-      normal = normalized({ x: raw[0]!, y: raw[1]!, z: raw[2]! });
-    } catch {
-      // NURBS-backed planes have no analytic normal; they cannot be proven
-      // tangent, so they do not make their neighbour a blend.
-      normal = null;
-    }
-    if (!onPlane || !normal) {
-      continue;
-    }
-    if (Math.abs(dot(normal, axis)) > BLEND_TANGENCY_TOLERANCE) {
-      continue;
-    }
-    if (
-      Math.abs(Math.abs(dot(subtract(origin, onPlane), normal)) - radius) <=
-      tolerance
-    ) {
-      return true;
-    }
-  }
-  return false;
-}
-
-/**
- * True when a selected edge touches a blend face of the target — either
- * bordering it directly or ending on one of its boundary vertices.
- */
-function selectionTouchesBlendFace(
-  kernel: RemusKernel,
-  solid: number,
-  selectedEdges: number[]
-): boolean {
-  const blendVertices = new Set<number>();
-  for (const face of kernel.getSolidFaces(solid)) {
-    if (!isBlendFace(kernel, solid, face)) {
-      continue;
-    }
-    for (const edge of kernel.getFaceEdges(face)) {
-      for (const vertex of kernel.getEdgeVertexHandles(edge)) {
-        blendVertices.add(vertex);
-      }
-    }
-  }
-  if (blendVertices.size === 0) {
-    return false;
-  }
-  return selectedEdges.some((edge) =>
-    Array.from(kernel.getEdgeVertexHandles(edge)).some((vertex) =>
-      blendVertices.has(vertex)
-    )
-  );
-}
-
-function errorText(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
 }
 
 interface UnionFuseOperand {
@@ -1579,14 +994,6 @@ function tryExactCoaxialCylinderCut(
   return revolveRadialProfile(kernel, profile, target);
 }
 
-function axisDirection(axis: 'x' | 'y' | 'z'): Vec3 {
-  return {
-    x: axis === 'x' ? 1 : 0,
-    y: axis === 'y' ? 1 : 0,
-    z: axis === 'z' ? 1 : 0
-  };
-}
-
 export interface ExactKernelAdapter {
   readonly kind: 'remus';
   syncDocument(document: ProjectDocument): Promise<DerivedState>;
@@ -1604,137 +1011,6 @@ export interface ExactKernelAdapter {
     reason?: string;
   }>;
   dispose(): void;
-}
-
-function pointOnPlane(basis: PlaneBasis, point: Vec2, offset: number): Vec3 {
-  return {
-    x:
-      basis.origin.x +
-      basis.u.x * point.x +
-      basis.v.x * point.y +
-      basis.normal.x * offset,
-    y:
-      basis.origin.y +
-      basis.u.y * point.x +
-      basis.v.y * point.y +
-      basis.normal.y * offset,
-    z:
-      basis.origin.z +
-      basis.u.z * point.x +
-      basis.v.z * point.y +
-      basis.normal.z * offset
-  };
-}
-
-function profilePoints(
-  data: SketchObjectData,
-  scope: Record<string, number>
-): Vec2[] {
-  switch (data.objectKind) {
-    case 'rectangle':
-      return rectangleProfile(
-        resolveParamValue(data.width, scope, 'width'),
-        resolveParamValue(data.height, scope, 'height'),
-        resolveParamValue(data.centerX, scope, 'center X'),
-        resolveParamValue(data.centerY, scope, 'center Y')
-      );
-    case 'circle':
-      return circleProfile(
-        resolveParamValue(data.radius, scope, 'radius'),
-        resolveParamValue(data.centerX, scope, 'center X'),
-        resolveParamValue(data.centerY, scope, 'center Y')
-      );
-    case 'polygon':
-      return polygonProfile(
-        resolveParamValue(data.sides, scope, 'sides'),
-        resolveParamValue(data.radius, scope, 'radius'),
-        resolveParamValue(data.centerX, scope, 'center X'),
-        resolveParamValue(data.centerY, scope, 'center Y')
-      );
-    case 'line':
-    case 'arc':
-      // Open curves cannot be swept directly; they participate in sketches
-      // through detected closed regions instead.
-      throw new Error(
-        `A ${data.objectKind} is not a closed profile and cannot be extruded on its own.`
-      );
-    case 'text':
-      // This legacy path sweeps a single polygonal profile. Text is many
-      // regions with holes and exact beziers; approximating it here would
-      // silently produce the wrong solid, so it must go through the region
-      // path instead.
-      throw new Error(
-        'Text must be extruded through its detected sketch regions, not as a single profile.'
-      );
-  }
-}
-
-/**
- * Build the same ZYX Euler transform the viewport's Move gizmo composes, so a
- * dragged placement and the rebuilt body agree once more than one axis is
- * non-zero. Remus accepts row-major matrices and column vectors.
- */
-function transformMatrix(translation: Vec3, rotationDeg: Vec3): Float64Array {
-  const rx = (rotationDeg.x * Math.PI) / 180;
-  const ry = (rotationDeg.y * Math.PI) / 180;
-  const rz = (rotationDeg.z * Math.PI) / 180;
-  const ca = Math.cos(rx);
-  const sa = Math.sin(rx);
-  const cb = Math.cos(ry);
-  const sb = Math.sin(ry);
-  const cc = Math.cos(rz);
-  const sc = Math.sin(rz);
-  return new Float64Array([
-    cc * cb,
-    cc * sb * sa - sc * ca,
-    cc * sb * ca + sc * sa,
-    translation.x,
-    sc * cb,
-    sc * sb * sa + cc * ca,
-    sc * sb * ca - cc * sa,
-    translation.y,
-    -sb,
-    cb * sa,
-    cb * ca,
-    translation.z,
-    0,
-    0,
-    0,
-    1
-  ]);
-}
-
-function uniformScaleMatrix(factor: number): Float64Array {
-  return new Float64Array([
-    factor,
-    0,
-    0,
-    0,
-    0,
-    factor,
-    0,
-    0,
-    0,
-    0,
-    factor,
-    0,
-    0,
-    0,
-    0,
-    1
-  ]);
-}
-
-function quantizeEdgeCoordinate(value: number): number {
-  return Math.round(value / GEOMETRY_LINEAR_TOLERANCE);
-}
-
-function pointAt(values: number[], offset: number): Vec3 {
-  return {
-    x: values[offset] ?? 0,
-    y: values[offset + 1] ?? 0,
-    z: values[offset + 2] ?? 0
-  };
 }
 
 /** Sample the ADR-011 edge identity quantities from a Remus edge. */
@@ -1865,25 +1141,6 @@ function edgeHandlesByFingerprint(
     }
   }
   return result;
-}
-
-function faceVertexCentroid(kernel: RemusKernel, face: number): Vec3 | null {
-  const vertices = Array.from(kernel.getFaceVertices(face));
-  if (vertices.length === 0) {
-    return null;
-  }
-  const centroid = { x: 0, y: 0, z: 0 };
-  for (const vertex of vertices) {
-    const position = kernel.getVertexPosition(vertex);
-    centroid.x += position[0]!;
-    centroid.y += position[1]!;
-    centroid.z += position[2]!;
-  }
-  return {
-    x: centroid.x / vertices.length,
-    y: centroid.y / vertices.length,
-    z: centroid.z / vertices.length
-  };
 }
 
 function analyticParamsSignature(kernel: RemusKernel, face: number): string {
