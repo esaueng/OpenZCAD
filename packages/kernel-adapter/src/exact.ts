@@ -15,10 +15,13 @@ import {
   type Vec2Like,
   type Vec3
 } from '@openzcad/geometry';
+import { writeDxf } from '@openzcad/io-dxf';
 import { writeAsciiStl } from '@openzcad/io-stl';
+import { faceDxfEntities } from './exact-dxf';
 import {
   BODY_OPACITY_METADATA_KEY,
   DEFAULT_BODY_COLOR,
+  type FaceTopologyReferenceV5,
   FULL_REVOLVE_ANGLE_DEG,
   MAX_HELICAL_SWEEP_TURNS,
   UNIT_TO_MM,
@@ -320,10 +323,25 @@ function resolveRevolveAngleDeg(
   return resolved;
 }
 
+/** Face identity for the DXF face export: the app's selection shape. */
+export interface DxfFaceSelector {
+  bodyId: BodyId;
+  faceHash: number;
+  faceReference?: FaceTopologyReferenceV5;
+}
+
 export interface ExactKernelAdapter {
   readonly kind: 'remus';
   syncDocument(document: ProjectDocument): Promise<DerivedState>;
   exportStep(document: ProjectDocument, bodyIds: BodyId[]): Promise<string>;
+  /**
+   * DXF R12 outline of one PLANAR face, in millimetres — the laser-cutting
+   * export. Fails closed on non-planar faces and stale face references.
+   */
+  exportFaceDxf(
+    document: ProjectDocument,
+    face: DxfFaceSelector
+  ): Promise<string>;
   exportStl(
     document: ProjectDocument,
     bodyIds: BodyId[],
@@ -3161,7 +3179,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     kernel: RemusKernel,
     target: ExactShape,
     solid: number,
-    operation: DirectEditOperation
+    operation: Pick<DxfFaceSelector, 'faceHash' | 'faceReference'>
   ): { face: number; viaLineage: boolean } {
     const reference = operation.faceReference;
     const lineage = target.solids.length === 1 ? target.lineage : undefined;
@@ -4255,6 +4273,34 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
       // MANIFOLD_SOLID_BREP inside one shape representation, so they stay
       // distinct through a round trip.
       return decodeText(kernel.exportStepMulti(new Uint32Array(exportSolids)));
+    });
+  }
+
+  async exportFaceDxf(
+    document: ProjectDocument,
+    face: DxfFaceSelector
+  ): Promise<string> {
+    return this.withExportBuild(document, (kernel, build) => {
+      const shape = build.shapes.get(face.bodyId);
+      if (!shape) {
+        throw new Error(`Body ${face.bodyId} has no exact geometry.`);
+      }
+      const solid = collapseShape(kernel, shape);
+      const { face: faceHandle } = this.resolveDirectEditFace(
+        kernel,
+        shape,
+        solid,
+        face
+      );
+      // The face resolves on the UNSCALED solid; uniform unit scaling
+      // commutes with plane projection, so the extraction scales its 2D
+      // output instead of copying the solid.
+      const entities = faceDxfEntities(
+        kernel,
+        faceHandle,
+        UNIT_TO_MM[document.units]
+      );
+      return writeDxf(entities);
     });
   }
 

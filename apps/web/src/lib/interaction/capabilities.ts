@@ -10,6 +10,7 @@ import type { FaceTopologyReferenceV5, FeatureId } from '@openzcad/shared';
 import { UNSTABLE_FACE_SKETCH_REASON } from '../faceSketchAttachment';
 
 export type SelectionActionId =
+  | 'export-face-dxf'
   | 'offset-face'
   | 'resize-radial-face'
   | 'edit-fillet'
@@ -136,7 +137,10 @@ export function selectionCapabilities(
             'transform-proxy',
             true
           ),
-          sketchCapability
+          sketchCapability,
+          // A planar outline is exactly what a laser cutter consumes; the
+          // export never mutates the body, so no geometry gate applies.
+          enabled('export-face-dxf', 'Export DXF', undefined, 'exact-worker')
         ];
       }
       if (

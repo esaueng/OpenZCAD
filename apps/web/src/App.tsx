@@ -6756,6 +6756,52 @@ export function App() {
     );
   }
 
+  /** Export one selected planar face's outline as a DXF for laser cutting. */
+  async function handleExportFaceDxf(target: {
+    bodyId: string;
+    topologyId: string;
+  }) {
+    if (!doc) {
+      return;
+    }
+    const face = representations[
+      target.bodyId as BodyId
+    ]?.topology?.faces.find(
+      (candidate) => candidate.topologyId === target.topologyId
+    );
+    if (!face) {
+      setStatus('The selected face is no longer available.');
+      return;
+    }
+    const stem = exportFileStem(doc.name);
+    try {
+      setStatus('Exporting face outline as DXF…');
+      const result = await geometry.exportModel(
+        'dxf',
+        doc,
+        [target.bodyId as BodyId],
+        {
+          face: {
+            bodyId: target.bodyId as BodyId,
+            faceHash: face.hash,
+            ...(face.reference?.kind === 'face'
+              ? { faceReference: face.reference }
+              : {})
+          }
+        }
+      );
+      if (!('text' in result)) {
+        throw new Error('The DXF export returned no text.');
+      }
+      const saved = await saveCadTextFile(`${stem}-face.dxf`, 'dxf', result.text);
+      setStatus(
+        saved ? `Exported face outline to ${stem}-face.dxf.` : 'DXF export cancelled.'
+      );
+    } catch (error) {
+      setStatus(errorMessage(error, 'DXF export failed.'));
+    }
+  }
+
   async function handleExportStep() {
     if (!doc || exportBodyIds.length === 0) {
       setStatus('Create a body before exporting.');
@@ -9182,6 +9228,10 @@ export function App() {
     }
     if (action === 'sketch-on-face' && interaction.mode === 'face') {
       startSketchOnFace(interaction.target);
+      return;
+    }
+    if (action === 'export-face-dxf' && interaction.mode === 'face') {
+      void handleExportFaceDxf(interaction.target);
       return;
     }
     if (
