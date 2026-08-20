@@ -176,7 +176,13 @@ interface ViewerShellProps {
   sketchMode: SketchModeState | null;
   onSketchCommit(object: SketchObjectData): void;
   onSketchDrawingChange(drawing: boolean): void;
-  onSketchSelectObject(objectId: string | null): void;
+  onSketchSelectObject(
+    objectId: string | null,
+    snapPoint?: {
+      objectId: string;
+      point: 'start' | 'end' | 'center';
+    } | null
+  ): void;
   sketchViews: SketchViewData[];
   selectedProfileIds: string[];
   profileSelectionMode: boolean;

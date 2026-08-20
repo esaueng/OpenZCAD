@@ -697,6 +697,51 @@
   color: var(--color-accent-hi);
 }
 
+/* Solve-status pill: inline in the rail, tone-tinted, never positioned. */
+.sketch-rail .sketch-solve-pill {
+  padding: 3px 8px;
+  border: 1px solid var(--color-border-strong);
+  border-radius: 999px;
+  font-size: var(--fs-xs);
+  white-space: nowrap;
+  color: var(--color-text-dim);
+}
+
+.sketch-rail .sketch-solve-pill[data-tone='ok'] {
+  color: var(--color-accent-hi);
+  border-color: var(--color-accent-border);
+}
+
+.sketch-rail .sketch-solve-pill[data-tone='warn'] {
+  color: #ffb4a6;
+  border-color: rgba(255, 128, 100, 0.55);
+}
+
+/* Constraint list in the palette: label + trailing delete per row. */
+.sketch-constraint-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.sketch-constraint-list li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  min-width: 0;
+}
+
+.sketch-constraint-list li > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--fs-xs);
+}
+
 .sketch-circle-tool {
   position: relative;
   display: flex;

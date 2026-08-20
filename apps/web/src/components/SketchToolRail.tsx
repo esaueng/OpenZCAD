@@ -4,22 +4,44 @@ import {
   ChevronDown,
   ChevronRight,
   Circle,
+  CircleDot,
   Construction,
+  Equal,
   Grid3x3,
   Layers3,
   Magnet,
   MousePointer2,
   Minus,
+  MoveHorizontal,
+  MoveVertical,
+  Play,
+  Radius,
   ScanSearch,
   Square,
+  Trash2,
   Type,
   Waypoints
 } from 'lucide-react';
 import type { AppSettings } from '@openzcad/shared';
 import type {
+  PendingSketchConstraint,
   SketchCircleMode,
+  SketchConstraintToolKind,
   SketchToolId
 } from '../lib/interaction/machine';
+import { CONSTRAINT_TOOL_SPECS } from '../lib/sketch/constraints';
+
+/** One row of the palette's constraint list, pre-rendered by App. */
+export interface SketchConstraintListItem {
+  constraintId: string;
+  label: string;
+}
+
+/** What the solve-status pill shows; null until a solve has run. */
+export interface SketchSolveStatus {
+  label: string;
+  tone: 'ok' | 'info' | 'warn';
+}
 
 interface SketchToolRailProps {
   tool: SketchToolId;
@@ -28,14 +50,31 @@ interface SketchToolRailProps {
   settings: AppSettings['sketching'];
   units: string;
   paletteVisible: boolean;
+  /** Null until the first entity commit creates the sketch node. */
+  canConstrain: boolean;
+  pendingConstraint: PendingSketchConstraint | null;
+  constraints: SketchConstraintListItem[];
+  solveStatus: SketchSolveStatus | null;
+  solving: boolean;
   onTool(tool: SketchToolId): void;
   onCircleMode(mode: SketchCircleMode): void;
   onConstruction(value: boolean): void;
   onSettings(settings: AppSettings['sketching']): void;
+  onConstraintTool(kind: SketchConstraintToolKind | null): void;
+  onDeleteConstraint(constraintId: string): void;
+  onSolve(): void;
   onDiagnostics(): void;
   onExtrude(): void;
   onExit(): void;
 }
+
+const CONSTRAINT_ICONS: Record<SketchConstraintToolKind, typeof Minus> = {
+  horizontal: MoveHorizontal,
+  vertical: MoveVertical,
+  parallel: Equal,
+  coincident: CircleDot,
+  radius: Radius
+};
 
 const TOOLS: {
   id: Exclude<SketchToolId, 'circle'>;
@@ -86,10 +125,18 @@ export function SketchToolRail({
   settings,
   units,
   paletteVisible,
+  canConstrain,
+  pendingConstraint,
+  constraints,
+  solveStatus,
+  solving,
   onTool,
   onCircleMode,
   onConstruction,
   onSettings,
+  onConstraintTool,
+  onDeleteConstraint,
+  onSolve,
   onDiagnostics,
   onExtrude,
   onExit
@@ -177,6 +224,48 @@ export function SketchToolRail({
             <kbd>{keyHint}</kbd>
           </button>
         ))}
+        <span className="sketch-rail-divider" aria-hidden="true" />
+        <span className="sketch-rail-group-label">Constrain</span>
+        {CONSTRAINT_TOOL_SPECS.map(({ kind, label, hint }) => {
+          const Icon = CONSTRAINT_ICONS[kind];
+          const active = pendingConstraint?.kind === kind;
+          return (
+            <button
+              key={kind}
+              type="button"
+              className={active ? 'active' : undefined}
+              aria-pressed={active}
+              disabled={!canConstrain}
+              title={canConstrain ? hint : 'Draw an entity first.'}
+              onClick={() => onConstraintTool(active ? null : kind)}
+            >
+              <Icon size={14} aria-hidden="true" />
+              {label}
+            </button>
+          );
+        })}
+        <button
+          type="button"
+          disabled={!canConstrain || constraints.length === 0 || solving}
+          title={
+            constraints.length === 0
+              ? 'Add a constraint first.'
+              : 'Solve the sketch constraints and apply the result.'
+          }
+          onClick={onSolve}
+        >
+          <Play size={14} aria-hidden="true" />
+          {solving ? 'Solving…' : 'Solve'}
+        </button>
+        {solveStatus ? (
+          <span
+            className="sketch-solve-pill"
+            data-tone={solveStatus.tone}
+            role="status"
+          >
+            {solveStatus.label}
+          </span>
+        ) : null}
         <span className="sketch-rail-divider" aria-hidden="true" />
         <button
           type="button"
@@ -317,6 +406,27 @@ export function SketchToolRail({
                   </span>
                 </label>
               </fieldset>
+              {constraints.length > 0 ? (
+                <fieldset>
+                  <legend>Constraints</legend>
+                  <ul className="sketch-constraint-list">
+                    {constraints.map(({ constraintId, label }) => (
+                      <li key={constraintId}>
+                        <span title={label}>{label}</span>
+                        <button
+                          type="button"
+                          className="row-delete"
+                          title={`Delete constraint: ${label}`}
+                          aria-label={`Delete constraint: ${label}`}
+                          onClick={() => onDeleteConstraint(constraintId)}
+                        >
+                          <Trash2 size={12} aria-hidden="true" />
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                </fieldset>
+              ) : null}
               <p className="sketch-palette-help">
                 <Magnet size={12} aria-hidden="true" />
                 Tab cycles overlaps · Shift suppresses snaps
