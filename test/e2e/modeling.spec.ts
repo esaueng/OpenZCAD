@@ -1271,6 +1271,56 @@ for (const modifier of [
   });
 }
 
+test('preflights and splits a box into two live half bodies', async ({
+  page
+}) => {
+  await stubApi(page);
+  const consoleErrors: string[] = [];
+  page.on('console', (message) => {
+    if (message.type() === 'error') {
+      consoleErrors.push(message.text());
+    }
+  });
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('Split Halves');
+  await page.getByRole('button', { name: 'Create project' }).click();
+
+  const inspector = page.getByRole('region', { name: 'Feature inspector' });
+  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
+  await inspector.getByLabel('Width (X)').fill('20');
+  await inspector.getByLabel('Depth (Y)').fill('20');
+  await inspector.getByLabel('Height (Z)').fill('20');
+  await inspector.getByRole('button', { name: /^Create/ }).click();
+  await expect(
+    page.locator('.feature-row-main', { hasText: 'Box' })
+  ).toBeVisible();
+
+  await page.getByRole('button', { name: /^Split/ }).click();
+  // The default plane sits on the box's x=0 face, which the kernel refuses
+  // (the plane must cross the interior); move it to a quarter of the width.
+  await page
+    .getByRole('group', { name: 'Plane origin' })
+    .getByLabel('X')
+    .fill('5');
+  await page.getByRole('button', { name: 'Check exact result' }).click();
+  await expect(
+    page.getByRole('status').filter({ hasText: 'Exact preflight passed' })
+  ).toBeVisible({ timeout: 20_000 });
+  await page.getByRole('button', { name: 'Create split body' }).click();
+
+  await expect(
+    page.locator('.feature-row-main', { hasText: 'Split' })
+  ).toBeVisible();
+  // The input is consumed; its two halves are live bodies of their own.
+  await expect(page.locator('.body-row.consumed')).toContainText('Box Body');
+  await expect(
+    page.locator('.body-row', { hasText: 'Split (back)' })
+  ).toBeVisible();
+  await expectBodyCount(page, 2);
+  await expect(page.getByRole('contentinfo')).toContainText('warnings0');
+  expect(consoleErrors).toEqual([]);
+});
+
 test('preflights and creates an exact open-top shell', async ({ page }) => {
   await stubApi(page);
   const consoleErrors: string[] = [];

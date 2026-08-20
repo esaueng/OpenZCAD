@@ -13,7 +13,7 @@ export type UploadSessionId = Brand<string, 'UploadSessionId'>;
 export type AssetId = Brand<string, 'AssetId'>;
 export type SketchConstraintId = Brand<string, 'SketchConstraintId'>;
 
-export const PROJECT_DOCUMENT_SCHEMA_VERSION = 9 as const;
+export const PROJECT_DOCUMENT_SCHEMA_VERSION = 10 as const;
 export type ProjectDocumentSchemaVersion =
   typeof PROJECT_DOCUMENT_SCHEMA_VERSION;
 
@@ -38,6 +38,7 @@ export type FeatureKind =
   | 'fillet'
   | 'chamfer'
   | 'pattern'
+  | 'split'
   | 'direct-edit'
   | 'imported-step'
   | 'imported-mesh';
@@ -637,6 +638,19 @@ export type FeatureData =
       targetBodyId: BodyId;
       /** The original remains live; this feature owns only the mirrored copy. */
       plane: ParametricPlane;
+    }
+  | {
+      featureKind: 'split';
+      /** Consumed: the two halves replace the input body. */
+      targetBodyId: BodyId;
+      plane: ParametricPlane;
+      /**
+       * The half on the side the plane normal points away from. The
+       * feature's own `bodyId` names the positive half; a `FeatureNode`
+       * carries one body, so the second travels in the data, mirroring how
+       * `targetBodyIds` carries body references.
+       */
+      secondBodyId: BodyId;
     }
   | {
       featureKind: 'shell';
@@ -2239,6 +2253,7 @@ export const FEATURE_COLORS: Record<FeatureKind, string> = {
   fillet: '#f59e0b',
   chamfer: '#fb7185',
   pattern: '#38bdf8',
+  split: '#f472b6',
   'direct-edit': '#2dd4bf',
   'imported-step': '#d6a653',
   'imported-mesh': '#7aa3ff'

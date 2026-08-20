@@ -14,6 +14,7 @@ import {
   importMeshBody,
   listFeaturesInOrder,
   mirrorBody,
+  addSplitFeature,
   offsetSolidBody,
   patternBody,
   shellBody,
@@ -5538,6 +5539,55 @@ describe('exact kernel adapter', { timeout: 30_000 }, () => {
         valid: true
       });
     }
+  });
+
+  it('splits a body into two watertight halves whose volumes sum exactly', async () => {
+    const base = addPrimitiveFeature(
+      createProjectDocument('Split parity', toUserId('user_exact')),
+      {
+        name: 'Block',
+        primitiveKind: 'box',
+        dimensions: { width: 20, height: 20, depth: 20 }
+      }
+    );
+    const sourceBodyId = base.bodyOrder[0]!;
+    const split = addSplitFeature(base, {
+      name: 'Half',
+      targetBodyId: sourceBodyId,
+      plane: { origin: { x: 5, y: 0, z: 0 }, normal: { x: 1, y: 0, z: 0 } }
+    });
+    const derived = await adapter.syncDocument(split.document);
+    expect(derived.warnings).toEqual([]);
+    // The input is consumed; its two halves are real, separately exportable
+    // bodies. Positive is the side the plane normal points toward.
+    expect(derived.bodyRepresentations[sourceBodyId]?.consumed).toBe(true);
+    const positive = derived.bodyRepresentations[split.bodyId];
+    const negative = derived.bodyRepresentations[split.secondBodyId];
+    expect(positive?.consumed).toBe(false);
+    expect(negative?.consumed).toBe(false);
+    expect(positive?.volume).toBeCloseTo(15 * 20 * 20, 6);
+    expect(negative?.volume).toBeCloseTo(5 * 20 * 20, 6);
+    for (const bodyId of [split.bodyId, split.secondBodyId]) {
+      const exported = await adapter.exportStep(split.document, [bodyId]);
+      await expect(adapter.inspectStep(exported)).resolves.toMatchObject({
+        solid: true,
+        valid: true
+      });
+    }
+
+    // A plane that misses the solid is a typed kernel refusal surfacing as
+    // the feature's warning, never a silent no-op or a crash.
+    const missed = addSplitFeature(base, {
+      name: 'Missed',
+      targetBodyId: sourceBodyId,
+      plane: { origin: { x: 50, y: 0, z: 0 }, normal: { x: 1, y: 0, z: 0 } }
+    });
+    const missedDerived = await adapter.syncDocument(missed.document);
+    expect(missedDerived.warnings.join('\n')).toMatch(/Missed/);
+    expect(missedDerived.bodyRepresentations[missed.bodyId]).toBeUndefined();
+    expect(
+      missedDerived.bodyRepresentations[missed.secondBodyId]
+    ).toBeUndefined();
   });
 
   it('keeps mirror, shell, and solid offset conformant on a modelled body', async () => {

@@ -38,6 +38,7 @@ describe('finish tool selection order', () => {
   it('gates exact body modifiers on one exact live body', () => {
     for (const tool of [
       'mirror',
+      'split',
       'shell',
       'solid-offset',
       'draft',

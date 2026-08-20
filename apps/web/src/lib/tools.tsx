@@ -17,6 +17,7 @@ import {
   Scaling,
   Scissors,
   Shapes,
+  Slice,
   Spline,
   Torus,
   TriangleRight
@@ -40,6 +41,7 @@ export type ToolId =
   | 'transform'
   | 'scale'
   | 'mirror'
+  | 'split'
   | 'shell'
   | 'solid-offset'
   | 'draft'
@@ -184,6 +186,12 @@ export const TOOL_META: Record<ToolId, ToolMeta> = {
     group: 'modify',
     hint: 'Create a separate reflected copy of a body'
   },
+  split: {
+    label: 'Split',
+    icon: icon(<Slice size={16} aria-hidden="true" />),
+    group: 'modify',
+    hint: 'Cut a body into two along a plane'
+  },
   shell: {
     label: 'Shell',
     icon: icon(<PanelTopOpen size={16} aria-hidden="true" />),
@@ -251,7 +259,15 @@ export const TOOL_GROUPS: { id: ToolGroup; label: string; tools: ToolId[] }[] =
     {
       id: 'modify',
       label: 'Modify',
-      tools: ['union', 'subtract', 'intersect', 'transform', 'scale', 'mirror']
+      tools: [
+        'union',
+        'subtract',
+        'intersect',
+        'transform',
+        'scale',
+        'mirror',
+        'split'
+      ]
     },
     {
       id: 'finish',
@@ -294,6 +310,7 @@ export function toolDisabledReason(
   }
   if (
     (tool === 'mirror' ||
+      tool === 'split' ||
       tool === 'shell' ||
       tool === 'solid-offset' ||
       tool === 'draft' ||
@@ -330,6 +347,7 @@ export function toolDisabledReason(
   if (
     (tool === 'scale' ||
       tool === 'mirror' ||
+      tool === 'split' ||
       tool === 'shell' ||
       tool === 'solid-offset' ||
       tool === 'draft' ||

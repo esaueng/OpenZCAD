@@ -85,6 +85,7 @@ export function affectedFeatureTargets(
           affectedBodies.has(bodyId)
         );
         break;
+      case 'split':
       case 'transform':
       case 'mirror':
       case 'shell':
@@ -116,6 +117,15 @@ export function affectedFeatureTargets(
     }
     affectedBodies.add(resultBodyId);
     targets.push({ featureName: feature.name, resultBodyId });
+    // A split's second half is a result body too; downstream features
+    // targeting it are just as affected as those on the primary half.
+    if (data.featureKind === 'split') {
+      affectedBodies.add(data.secondBodyId);
+      targets.push({
+        featureName: feature.name,
+        resultBodyId: data.secondBodyId
+      });
+    }
   }
 
   return targets;
