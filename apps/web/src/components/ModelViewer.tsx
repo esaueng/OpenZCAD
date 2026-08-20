@@ -15,6 +15,8 @@ import {
   RightClickGestureTracker,
   viewDirectionFor,
   applyDisplayMode,
+  applySectionPlane,
+  sectionClippingPlane,
   CameraController,
   buildCylinderRadiusHandle,
   buildEdgeRadiusHandle,
@@ -1056,6 +1058,8 @@ export function ModelViewer({
   unitsRef.current = units;
   const displayModeRef = useRef(settings.displayMode);
   displayModeRef.current = settings.displayMode;
+  const sectionViewRef = useRef(settings.sectionView ?? null);
+  sectionViewRef.current = settings.sectionView ?? null;
   const showGridRef = useRef(settings.showGrid);
   showGridRef.current = settings.showGrid;
   const reducedMotionRef = useRef(settings.reducedMotion);
@@ -1253,6 +1257,9 @@ export function ModelViewer({
     }
     watchPixelRatio();
     renderer.outputColorSpace = THREE.SRGBColorSpace;
+    // Material-level clipping for the section view; global clipping would
+    // also cut the grid, backdrop, and gizmos.
+    renderer.localClippingEnabled = true;
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
     renderer.toneMappingExposure = 1.0;
     renderer.shadowMap.enabled = true;
@@ -6923,6 +6930,14 @@ export function ModelViewer({
     if (bodiesChanged) {
       applyDisplayMode(context.bodyGroup, displayModeRef.current);
     }
+    // Rebuilt bodies and freshly created highlight geometry arrive without
+    // clip planes; reapply so an active section survives both.
+    applySectionPlane(
+      context.bodyGroup,
+      sectionViewRef.current
+        ? sectionClippingPlane(sectionViewRef.current)
+        : null
+    );
 
     // Retune the key light's shadow frustum around the current model so the
     // grounding shadow stays crisp instead of being clipped or pixelated.
@@ -8077,6 +8092,20 @@ export function ModelViewer({
       context.requestRender();
     }
   }, [settings.showGrid, settings.displayMode]);
+
+  useEffect(() => {
+    const context = contextRef.current;
+    if (!context) {
+      return;
+    }
+    applySectionPlane(
+      context.bodyGroup,
+      settings.sectionView ? sectionClippingPlane(settings.sectionView) : null
+    );
+    // The frozen ground shadow must follow the cut, not the uncut silhouette.
+    context.refreshShadowMap();
+    context.requestRender();
+  }, [settings.sectionView]);
 
   useEffect(() => {
     const context = contextRef.current;

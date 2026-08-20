@@ -377,7 +377,11 @@ import type {
   SketchOverlay,
   ViewTarget
 } from '@openzcad/viewport/types';
-import type { MovePreview, MoveSnap } from '@openzcad/viewport';
+import type {
+  MovePreview,
+  MoveSnap,
+  SectionPlaneId
+} from '@openzcad/viewport';
 
 /**
  * Space activates focused buttons and belongs in free-text fields. Numeric and
@@ -4531,6 +4535,55 @@ export function App() {
       setStatus(`Projection: ${next}.`);
       return next;
     });
+  }
+
+  /**
+   * The live model's extent along the axis a section plane slides on, so the
+   * offset slider spans exactly the geometry it can cut. Null with no bodies.
+   */
+  function sectionAxisRange(
+    plane: SectionPlaneId
+  ): { min: number; max: number } | null {
+    const axis = plane === 'XY' ? 'z' : plane === 'XZ' ? 'y' : 'x';
+    let min = Infinity;
+    let max = -Infinity;
+    for (const body of Object.values(doc?.derived.bodyRepresentations ?? {})) {
+      if (body.consumed) {
+        continue;
+      }
+      min = Math.min(min, body.bbox.min[axis]);
+      max = Math.max(max, body.bbox.max[axis]);
+    }
+    return min < max ? { min, max } : null;
+  }
+
+  /** Off → XY → XZ → YZ → off, each plane starting at the model's centre. */
+  function cycleSectionView() {
+    const order: (SectionPlaneId | null)[] = [null, 'XY', 'XZ', 'YZ'];
+    const currentPlane = viewerSettings.sectionView?.plane ?? null;
+    const next = order[(order.indexOf(currentPlane) + 1) % order.length]!;
+    if (!next) {
+      setViewerSettings(({ sectionView: _cleared, ...rest }) => rest);
+      setStatus('Section view off.');
+      return;
+    }
+    const range = sectionAxisRange(next);
+    const offset = range ? (range.min + range.max) / 2 : 0;
+    setViewerSettings((current) => ({
+      ...current,
+      sectionView: { plane: next, offset }
+    }));
+    setStatus(
+      `Section view: ${next} plane. Drag the slider to move the cut; the model itself is untouched.`
+    );
+  }
+
+  function setSectionOffset(offset: number) {
+    setViewerSettings((current) =>
+      current.sectionView
+        ? { ...current, sectionView: { ...current.sectionView, offset } }
+        : current
+    );
   }
 
   function toggleBodyVisibility(bodyId: string) {
@@ -11607,6 +11660,13 @@ export function App() {
             onRotateView={requestRotate}
             onCycleDisplayMode={cycleDisplayMode}
             onToggleProjection={toggleProjection}
+            sectionRange={
+              viewerSettings.sectionView
+                ? sectionAxisRange(viewerSettings.sectionView.plane)
+                : null
+            }
+            onCycleSection={cycleSectionView}
+            onSectionOffset={setSectionOffset}
           />
         </ErrorBoundary>
       }

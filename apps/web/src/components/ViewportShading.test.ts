@@ -1,10 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import * as THREE from 'three';
 import {
+  applySectionPlane,
   createBodyMaterial,
   createFatLineMaterial,
   createObjectForBody,
   createStudioHemisphereLight,
+  sectionClippingPlane,
   shouldRenderTopologyEdge,
   VIEWPORT_RENDER_ORDER
 } from '@openzcad/viewport';
@@ -243,6 +245,59 @@ describe('CAD viewport shading', () => {
     );
 
     expect(material.side).toBe(THREE.FrontSide);
+  });
+
+  it('section plane clips every material and relaxes culling while active', () => {
+    const object = createObjectForBody(
+      bodyWithMesh({
+        kind: 'mesh',
+        vertices: [0, 0, 0, 1, 0, 0, 0, 1, 0],
+        indices: [0, 1, 2]
+      })
+    );
+    const group = new THREE.Group();
+    group.add(object);
+
+    const plane = sectionClippingPlane({ plane: 'XY', offset: 2 });
+    // Negative signed distance is clipped, so the XY section's normal points
+    // down Z and everything above the offset is cut away.
+    expect(plane.normal.toArray()).toEqual([0, 0, -1]);
+    expect(plane.constant).toBe(2);
+
+    applySectionPlane(group, plane);
+    let materials = 0;
+    group.traverse((child) => {
+      const material = (child as THREE.Mesh).material as
+        | THREE.Material
+        | undefined;
+      if (!material || Array.isArray(material)) {
+        return;
+      }
+      materials += 1;
+      expect(material.clippingPlanes).toEqual([plane]);
+      expect(material.clipShadows).toBe(true);
+      if (material instanceof THREE.MeshPhongMaterial) {
+        expect(material.side).toBe(THREE.DoubleSide);
+      }
+    });
+    // The body mesh plus its fallback edge overlay both took the plane.
+    expect(materials).toBeGreaterThanOrEqual(2);
+
+    applySectionPlane(group, null);
+    group.traverse((child) => {
+      const material = (child as THREE.Mesh).material as
+        | THREE.Material
+        | undefined;
+      if (!material || Array.isArray(material)) {
+        return;
+      }
+      expect(material.clippingPlanes).toBeNull();
+      expect(material.clipShadows).toBe(false);
+      if (material instanceof THREE.MeshPhongMaterial) {
+        // The orientation canary returns as soon as the section clears.
+        expect(material.side).toBe(THREE.FrontSide);
+      }
+    });
   });
 
   it('uses a visible ground bounce for downward-facing surfaces', () => {

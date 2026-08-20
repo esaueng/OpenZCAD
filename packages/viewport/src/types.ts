@@ -62,9 +62,25 @@ export interface AxisProjection {
   z: { x: number; y: number; z: number };
 }
 
+/** Canonical cutting planes the section view can cycle through. */
+export type SectionPlaneId = 'XY' | 'XZ' | 'YZ';
+
+/**
+ * Display-only cutaway: geometry on the positive side of the chosen canonical
+ * plane (above `offset` along its axis) is clipped from rendering. Never a
+ * document mutation — the model is untouched, only its rasterization.
+ */
+export interface SectionViewSettings {
+  plane: SectionPlaneId;
+  /** Plane position along its axis, in model units. */
+  offset: number;
+}
+
 export interface ViewerSettings {
   showGrid: boolean;
   displayMode: DisplayMode;
+  /** Runtime-only cutaway state; absent means no section is active. */
+  sectionView?: SectionViewSettings;
   /** Runtime-only accessibility preference; omitted by older saved views. */
   reducedMotion?: boolean;
   /** Runtime-only navigation preference; omitted by older saved views. */
