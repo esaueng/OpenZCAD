@@ -1,7 +1,11 @@
 import * as THREE from 'three';
 import { Line2 } from 'three/examples/jsm/lines/Line2.js';
 import { CSS2DObject } from 'three/examples/jsm/renderers/CSS2DRenderer.js';
-import type { DisplayMode, SketchOverlay } from '../types';
+import type {
+  DisplayMode,
+  SectionViewSettings,
+  SketchOverlay
+} from '../types';
 import type { EdgeTopology } from '@openzcad/shared';
 import { isViewerMesh } from '../pick/meshes';
 import {
@@ -74,6 +78,55 @@ export function applyDisplayMode(bodyGroup: THREE.Group, mode: DisplayMode) {
         );
         material.opacity = mode === 'wireframe' ? 1 : EDGE_IDLE_OPACITY;
       }
+    }
+  });
+}
+
+/**
+ * The three.js clipping plane for one section-view setting. Points with
+ * negative signed distance are clipped, so the normal points down the axis:
+ * everything above `offset` along the chosen axis is cut away.
+ */
+export function sectionClippingPlane(
+  section: SectionViewSettings
+): THREE.Plane {
+  const normal =
+    section.plane === 'XY'
+      ? new THREE.Vector3(0, 0, -1)
+      : section.plane === 'XZ'
+        ? new THREE.Vector3(0, -1, 0)
+        : new THREE.Vector3(-1, 0, 0);
+  return new THREE.Plane(normal, section.offset);
+}
+
+/**
+ * Applies (or clears, with `null`) a display-only section plane to every
+ * material under `root` — body meshes, their edge overlays, and any
+ * highlight geometry parented to them. Clipped solids render their interior
+ * back faces instead of a see-through shell, so face culling is relaxed to
+ * double-sided while a section is active; `applyDisplayMode`'s orientation
+ * canary returns as soon as the section is cleared.
+ */
+export function applySectionPlane(
+  root: THREE.Object3D,
+  plane: THREE.Plane | null
+) {
+  const planes = plane ? [plane] : null;
+  root.traverse((child: THREE.Object3D) => {
+    const materials = (child as THREE.Mesh).material;
+    for (const material of Array.isArray(materials)
+      ? materials
+      : materials
+        ? [materials]
+        : []) {
+      material.clippingPlanes = planes;
+      // Keep the frozen ground shadow honest: the cut body's shadow should
+      // match what is rendered, not the uncut silhouette.
+      material.clipShadows = plane !== null;
+      if (isViewerMesh(child)) {
+        material.side = plane ? THREE.DoubleSide : THREE.FrontSide;
+      }
+      material.needsUpdate = true;
     }
   });
 }

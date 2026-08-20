@@ -96,6 +96,25 @@
   position: relative;
 }
 
+/* Slides out beside the section button while a cut is active. */
+.rail-section-panel {
+  position: absolute;
+  right: calc(100% + 7px);
+  top: 50%;
+  transform: translateY(-50%);
+  display: flex;
+  align-items: center;
+  padding: 6px 10px;
+  background: var(--color-surface);
+  border: var(--border-thin);
+  border-radius: var(--radius-md);
+  box-shadow: 0 8px 22px rgba(0, 0, 0, 0.45);
+}
+
+.rail-section-slider {
+  width: 140px;
+}
+
 /* Opens to the left of the rail and grows upward, so it never covers the
    rail itself and stays clear of the status bar. */
 .rail-views-panel {
