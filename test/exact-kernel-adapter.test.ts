@@ -3906,6 +3906,66 @@ describe('exact kernel adapter', { timeout: 30_000 }, () => {
     expect(chamferBody?.faceCount).toBeGreaterThan(6);
   });
 
+  it('builds distance-angle chamfers with the exact bevel volume', async () => {
+    const base = addPrimitiveFeature(
+      createProjectDocument('Angled chamfer', toUserId('user_exact')),
+      {
+        name: 'Block',
+        primitiveKind: 'box',
+        dimensions: { width: 20, height: 20, depth: 20 }
+      }
+    );
+    const baseDerived = await adapter.syncDocument(base);
+    const edgeHash = Object.values(baseDerived.bodyRepresentations)[0]?.topology
+      ?.edges[0]?.hash;
+    expect(edgeHash).toBeTypeOf('number');
+
+    // Distance 2 on the first face, 60° toward the second: the removed
+    // wedge has legs 2 and 2·tan(60°), so its volume is closed-form.
+    const angled = chamferEdges(base, {
+      name: 'Angled chamfer',
+      targetBodyId: base.bodyOrder[0]!,
+      edgeHashes: [edgeHash!],
+      size: 2,
+      angleDeg: 60
+    }).document;
+    const angledDerived = await adapter.syncDocument(angled);
+    const angledBody =
+      angledDerived.bodyRepresentations[angled.bodyOrder.at(-1)!];
+    expect(angledDerived.warnings).toEqual([]);
+    expect(angledBody?.volume).toBeCloseTo(
+      8000 - ((2 * 2 * Math.tan(Math.PI / 3)) / 2) * 20,
+      6
+    );
+
+    // An explicit 45° is the symmetric chamfer's geometry.
+    const explicit45 = chamferEdges(base, {
+      name: 'Explicit 45',
+      targetBodyId: base.bodyOrder[0]!,
+      edgeHashes: [edgeHash!],
+      size: 2,
+      angleDeg: 45
+    }).document;
+    const explicitDerived = await adapter.syncDocument(explicit45);
+    const explicitBody =
+      explicitDerived.bodyRepresentations[explicit45.bodyOrder.at(-1)!];
+    expect(explicitDerived.warnings).toEqual([]);
+    expect(explicitBody?.volume).toBeCloseTo(8000 - ((2 * 2) / 2) * 20, 6);
+
+    // Out-of-range angles are a feature error, not a kernel crash.
+    const rejected = chamferEdges(base, {
+      name: 'Too steep',
+      targetBodyId: base.bodyOrder[0]!,
+      edgeHashes: [edgeHash!],
+      size: 2,
+      angleDeg: 90
+    }).document;
+    const rejectedDerived = await adapter.syncDocument(rejected);
+    expect(rejectedDerived.warnings.join('\n')).toMatch(
+      /strictly between 0 and 90/
+    );
+  });
+
   // Convex cap-rim fillets on a plain cylinder. This began life as the test
   // for an adapter workaround that rebuilt the rims from a 64-segment revolved
   // profile, because the kernel refused the blend at f/r >= 0.5. The kernel
@@ -5304,6 +5364,86 @@ describe('exact kernel adapter', { timeout: 30_000 }, () => {
       circularDerived.bodyRepresentations[circular.bodyOrder.at(-1)!];
     expect(circularDerived.warnings).toEqual([]);
     expect(circularBody?.volume).toBeCloseTo(4 * 5 * 6 * 4, 4);
+  });
+
+  it('builds grid and arbitrary-direction exact body patterns', async () => {
+    const base = addPrimitiveFeature(
+      createProjectDocument('Grid patterns', toUserId('user_exact')),
+      {
+        name: 'Block',
+        primitiveKind: 'box',
+        dimensions: { width: 4, height: 5, depth: 6 }
+      }
+    );
+    const targetBodyId = base.bodyOrder[0]!;
+
+    // 3 along X, 2 along Y, disjoint spacings: exactly six blocks, so the
+    // volume is the base times the instance product with nothing shared.
+    const grid = patternBody(base, {
+      name: 'Grid pattern',
+      targetBodyId,
+      patternKind: 'grid',
+      count: 3,
+      axis: 'x',
+      spacing: 10,
+      axis2: 'y',
+      spacing2: 12,
+      count2: 2
+    }).document;
+    const gridDerived = await adapter.syncDocument(grid);
+    const gridBody = gridDerived.bodyRepresentations[grid.bodyOrder.at(-1)!];
+    expect(gridDerived.warnings).toEqual([]);
+    expect(gridBody?.volume).toBeCloseTo(4 * 5 * 6 * 6, 4);
+
+    // A custom direction is normalized before use, so spacing 15 along the
+    // XY diagonal moves each copy ~10.6 in each axis — well clear of the
+    // 4x5 footprint, keeping the three copies disjoint.
+    const diagonal = patternBody(base, {
+      name: 'Diagonal pattern',
+      targetBodyId,
+      patternKind: 'linear',
+      count: 3,
+      axis: 'x',
+      spacing: 15,
+      direction: { x: 1, y: 1, z: 0 }
+    }).document;
+    const diagonalDerived = await adapter.syncDocument(diagonal);
+    const diagonalBody =
+      diagonalDerived.bodyRepresentations[diagonal.bodyOrder.at(-1)!];
+    expect(diagonalDerived.warnings).toEqual([]);
+    expect(diagonalBody?.volume).toBeCloseTo(4 * 5 * 6 * 3, 4);
+
+    // Parallel grid directions are a feature error, not a kernel crash.
+    const parallel = patternBody(base, {
+      name: 'Parallel grid',
+      targetBodyId,
+      patternKind: 'grid',
+      count: 2,
+      axis: 'x',
+      spacing: 10,
+      axis2: 'x',
+      spacing2: 10,
+      count2: 2
+    }).document;
+    const parallelDerived = await adapter.syncDocument(parallel);
+    expect(parallelDerived.warnings.join('\n')).toMatch(
+      /Grid pattern directions cannot be parallel/
+    );
+
+    // So is a zero direction vector.
+    const zero = patternBody(base, {
+      name: 'Zero direction',
+      targetBodyId,
+      patternKind: 'linear',
+      count: 2,
+      axis: 'x',
+      spacing: 10,
+      direction: { x: 0, y: 0, z: 0 }
+    }).document;
+    const zeroDerived = await adapter.syncDocument(zero);
+    expect(zeroDerived.warnings.join('\n')).toMatch(
+      /Pattern direction must be a non-zero vector/
+    );
   });
 
   it('exports STEP that reimports as a valid exact solid', async () => {

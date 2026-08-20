@@ -900,7 +900,13 @@ export const commandFactories = {
     const withIds = { ...payload, ids: payload.ids ?? createBodyFeatureIds() };
     return makeCommand(
       'feature.pattern',
-      `${payload.patternKind === 'linear' ? 'Linear' : 'Circular'} pattern`,
+      `${
+        payload.patternKind === 'linear'
+          ? 'Linear'
+          : payload.patternKind === 'grid'
+            ? 'Grid'
+            : 'Circular'
+      } pattern`,
       withIds,
       (document) => patternBody(document, withIds).document,
       (document) => validateBodyTarget(document, payload.targetBodyId)

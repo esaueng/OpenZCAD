@@ -51,7 +51,7 @@ export type SketchObjectKind =
 export type TextFontStyle = 'regular' | 'bold' | 'italic' | 'boldItalic';
 export type TextAlign = 'left' | 'center' | 'right';
 export type BooleanOperation = 'union' | 'subtract' | 'intersect';
-export type PatternKind = 'linear' | 'circular';
+export type PatternKind = 'linear' | 'circular' | 'grid';
 export type AxisId = 'x' | 'y' | 'z';
 
 /**
@@ -558,6 +558,11 @@ export type FeatureData =
       sketchId: SketchId;
       distance: ParamValue;
       /**
+       * Extrude half the distance to each side of the sketch plane instead
+       * of all of it above. Absent means the legacy one-sided extrude.
+       */
+      symmetric?: boolean;
+      /**
        * Resolved once at creation time. Absent preserves the legacy new-body
        * behavior; rebuilds never infer a different operation.
        */
@@ -672,6 +677,13 @@ export type FeatureData =
       edgeHashes: number[];
       edgeReferences?: EdgeTopologyReferenceV5[];
       distance: ParamValue;
+      /**
+       * Distance-angle chamfer: `distance` lands on the first adjacent face
+       * and the bevel leaves it at this angle (degrees, strictly between 0
+       * and 90). Absent means the symmetric 45° chamfer with `distance` on
+       * both faces, which is what every earlier document stored.
+       */
+      angleDeg?: ParamValue;
     }
   | {
       featureKind: 'pattern';
@@ -681,6 +693,18 @@ export type FeatureData =
       axis: AxisId;
       spacing: ParamValue;
       angleDeg: ParamValue;
+      /**
+       * Linear patterns only: an arbitrary repeat direction that overrides
+       * `axis` when present. Normalized at rebuild; a near-zero vector is a
+       * feature error rather than a guess.
+       */
+      direction?: ParametricVector3;
+      /** Grid patterns: the second repeat axis. Absent reads as 'y'. */
+      axis2?: AxisId;
+      /** Grid patterns: spacing along `axis2`. Absent reads as `spacing`. */
+      spacing2?: ParamValue;
+      /** Grid patterns: instance count along `axis2`. Absent reads as `count`. */
+      count2?: ParamValue;
     }
   | {
       featureKind: 'direct-edit';

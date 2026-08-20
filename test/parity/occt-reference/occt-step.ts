@@ -1868,6 +1868,14 @@ export class OcctStepKernelAdapter {
             if (!target) {
               throw new Error('Pattern target is unavailable.');
             }
+            // Fail fast rather than mirror a grid as a circular pattern: no
+            // corpus scenario uses these fields, and a silent misread here
+            // would corrupt parity rather than flag it.
+            if (feature.data.patternKind === 'grid' || feature.data.direction) {
+              throw new Error(
+                'Grid patterns and custom directions are not mirrored in the OCCT reference.'
+              );
+            }
             const count = Math.round(
               resolveParamValue(feature.data.count, scope, 'count')
             );
