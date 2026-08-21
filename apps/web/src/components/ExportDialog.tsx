@@ -323,7 +323,7 @@ export function ExportDialog({
               {phase === 'checking' ? (
                 <LoaderCircle
                   size={13}
-                  className="spinner"
+                  className="spin"
                   aria-hidden="true"
                 />
               ) : null}
@@ -365,7 +365,7 @@ export function ExportDialog({
 
         {phase !== 'idle' && progress ? (
           <p className="export-dialog-progress" role="status">
-            <LoaderCircle size={13} className="spinner" aria-hidden="true" />
+            <LoaderCircle size={13} className="spin" aria-hidden="true" />
             {PROGRESS_LABELS[progress]}
           </p>
         ) : null}
@@ -381,7 +381,7 @@ export function ExportDialog({
             onClick={() => void runExport()}
           >
             {phase === 'exporting' ? (
-              <LoaderCircle size={13} className="spinner" aria-hidden="true" />
+              <LoaderCircle size={13} className="spin" aria-hidden="true" />
             ) : (
               <Download size={13} aria-hidden="true" />
             )}
