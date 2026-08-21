@@ -45,8 +45,8 @@
 }
 
 .secondary.danger:hover:not(:disabled) {
-  border-color: rgba(239, 68, 68, 0.5);
-  background: rgba(239, 68, 68, 0.08);
+  border-color: color-mix(in srgb, var(--color-error) 50%, transparent);
+  background: color-mix(in srgb, var(--color-error) 8%, transparent);
 }
 
 .wide {

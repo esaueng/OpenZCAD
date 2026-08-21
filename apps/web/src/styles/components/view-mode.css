@@ -368,7 +368,7 @@
   flex: 0 0 auto;
   width: 9px;
   height: 9px;
-  border-radius: 2px;
+  border-radius: var(--radius-sm);
   box-shadow: inset 0 0 0 1px rgb(0 0 0 / 35%);
 }
 
@@ -701,7 +701,7 @@
   border: 1px solid color-mix(in srgb, currentColor 28%, transparent);
   border-radius: 999px;
   font-family: var(--font-mono);
-  font-size: 9px;
+  font-size: var(--fs-mini);
   line-height: 14px;
   text-transform: uppercase;
 }
@@ -795,6 +795,11 @@
   font: inherit;
   font-size: var(--fs-xs);
   cursor: pointer;
+}
+
+.measurement-row-editor-actions button:hover:not(:disabled) {
+  color: var(--color-text);
+  background: var(--color-surface-hover);
 }
 
 .measurement-dock-foot {

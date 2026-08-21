@@ -13,7 +13,6 @@ const defaultProps = {
   warningCount: 0,
   documentVersion: 3,
   saveState: 'synced' as const,
-  units: 'mm',
   selectionFilter: 'any' as const,
   selectionFilterIsAutomatic: true,
   onSelectionFilter: vi.fn()

@@ -32,7 +32,7 @@
 
 /* The mode switch takes room out of the middle of the bar, so the two status
    chips drop to their icons here rather than at 620px — the project name is
-   worth more than the words "Signed in". */
+   worth more than the chips’ words. */
 @media (max-width: 1000px) {
   .account-state,
   .collaboration-state {
@@ -43,8 +43,10 @@
     font-size: 0;
   }
 
-  .topbar-actions {
-    grid-template-columns: 28px 128px 28px 28px 28px;
+  /* The save chip's label changes with state; a fixed width keeps the row
+     from breathing as it does. */
+  .save-state {
+    width: 128px;
   }
 }
 

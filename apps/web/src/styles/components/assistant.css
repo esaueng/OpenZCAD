@@ -140,7 +140,7 @@
   font-size: var(--fs-sm);
   box-shadow:
     0 8px 22px rgba(0, 0, 0, 0.45),
-    0 0 0 4px rgba(77, 163, 255, 0.1);
+    0 0 0 4px color-mix(in srgb, var(--color-accent) 10%, transparent);
   cursor: pointer;
   transition:
     background-color var(--dur-fast) var(--ease-out),
@@ -165,7 +165,7 @@
   transform: translateY(-1px);
   box-shadow:
     0 10px 26px rgba(0, 0, 0, 0.5),
-    0 0 0 5px rgba(77, 163, 255, 0.16);
+    0 0 0 5px color-mix(in srgb, var(--color-accent) 16%, transparent);
 }
 
 .assistant-launcher:active {
@@ -219,7 +219,7 @@
 .assistant-launcher.unread {
   box-shadow:
     0 6px 20px rgba(0, 0, 0, 0.45),
-    0 0 0 5px rgba(77, 163, 255, 0.22);
+    0 0 0 5px color-mix(in srgb, var(--color-accent) 22%, transparent);
 }
 
 /* Something is still streaming behind the closed dock. */
@@ -352,11 +352,11 @@
   flex: 0 0 auto;
   padding: 1px 5px;
   color: var(--color-accent);
-  background: var(--color-accent-soft, var(--color-surface-raised));
+  background: var(--color-accent-dim);
   border: 1px solid var(--color-accent-border);
   border-radius: 999px;
   font-size: var(--fs-mini);
-  font-weight: 600;
+  font-weight: var(--fw-medium);
   letter-spacing: 0.02em;
 }
 
@@ -445,8 +445,8 @@
   color: var(--color-text);
   background: linear-gradient(
     180deg,
-    rgba(77, 163, 255, 0.16),
-    rgba(77, 163, 255, 0.09)
+    color-mix(in srgb, var(--color-accent) 16%, transparent),
+    color-mix(in srgb, var(--color-accent) 9%, transparent)
   );
   border: 1px solid var(--color-accent-border);
   border-radius: 10px 10px 3px 10px;
@@ -479,7 +479,7 @@
 
 .assistant-answer-list > div + div {
   padding-top: 6px;
-  border-top: 1px solid rgba(77, 163, 255, 0.18);
+  border-top: 1px solid color-mix(in srgb, var(--color-accent) 18%, transparent);
 }
 
 .assistant-answer-list dt {
@@ -508,7 +508,7 @@
   object-fit: cover;
   background: #fff;
   border: var(--border-thin);
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   transition:
     transform var(--dur-fast) var(--ease-out),
     border-color var(--dur-fast) var(--ease-out);
@@ -676,7 +676,7 @@
 }
 
 .assistant-card.message.error {
-  border-color: rgba(239, 68, 68, 0.55);
+  border-color: color-mix(in srgb, var(--color-error) 55%, transparent);
 }
 
 .assistant-card-label {
@@ -711,7 +711,7 @@
   gap: 3px;
   padding: 1px 6px;
   color: var(--color-preview);
-  background: rgba(88, 214, 194, 0.12);
+  background: color-mix(in srgb, var(--color-preview) 12%, transparent);
   border-radius: 999px;
   letter-spacing: 0.04em;
   text-transform: none;
@@ -764,7 +764,7 @@
   padding: 1px 4px;
   color: var(--color-accent-hi);
   background: var(--color-bg);
-  border-radius: 2px;
+  border-radius: var(--radius-sm);
   font-family: var(--font-mono);
   font-size: 0.94em;
 }
@@ -1088,7 +1088,7 @@
   height: 22px;
   object-fit: cover;
   background: #fff;
-  border-radius: 2px;
+  border-radius: var(--radius-sm);
 }
 
 .assistant-pending-label {
@@ -1209,7 +1209,7 @@
 
 .assistant-submit.stop:hover {
   color: var(--color-error-text);
-  border-color: rgba(239, 68, 68, 0.55);
+  border-color: color-mix(in srgb, var(--color-error) 55%, transparent);
   background: var(--color-surface-2);
 }
 
