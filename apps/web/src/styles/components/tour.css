@@ -1,0 +1,110 @@
+/* ── First-model guided tour ──
+   A small non-modal card over the viewport's lower-left corner, plus the
+   outline it paints on the chrome region the current step talks about.
+   Split per component like the rest; imported from app.css. ── */
+
+.workspace-tour {
+  position: absolute;
+  /* Clear of the floating tool palette on the left and the status bar hint
+     text below; the assistant launcher owns the opposite corner. */
+  left: 178px;
+  bottom: 14px;
+  z-index: var(--z-inspector-float);
+  width: 296px;
+  padding: var(--sp-3) var(--sp-4);
+  background: var(--color-surface);
+  border: var(--border-strong);
+  border-radius: var(--radius-lg);
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.4);
+  animation: workspace-tour-in var(--dur-base) var(--ease-out);
+}
+
+@keyframes workspace-tour-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.workspace-tour-head {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  margin-bottom: var(--sp-2);
+}
+
+.workspace-tour-progress {
+  flex: 1;
+  display: inline-flex;
+  gap: 5px;
+}
+
+.workspace-tour-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: var(--color-border-strong);
+}
+
+.workspace-tour-dot.is-active {
+  background: var(--color-accent);
+}
+
+.workspace-tour-dot.is-done {
+  background: var(--color-accent-border);
+}
+
+.workspace-tour-count {
+  color: var(--color-text-subtle);
+  font-size: var(--fs-mini);
+}
+
+.workspace-tour-title {
+  margin: 0 0 var(--sp-1);
+  font-size: var(--fs-md);
+  font-weight: var(--fw-medium);
+}
+
+.workspace-tour-body {
+  margin: 0;
+  color: var(--color-text-muted);
+  font-size: var(--fs-xs);
+  line-height: var(--lh-normal);
+}
+
+.workspace-tour-actions {
+  margin-top: var(--sp-3);
+  display: flex;
+  justify-content: flex-end;
+}
+
+.workspace-tour-next {
+  padding: 5px 12px;
+  color: var(--color-on-accent);
+  background: var(--color-accent);
+  border-radius: var(--radius-md);
+  font-size: var(--fs-xs);
+  font-weight: var(--fw-medium);
+}
+
+.workspace-tour-next:hover {
+  background: var(--color-accent-hi);
+}
+
+/* The chrome region the current step points at. */
+.tour-target {
+  outline: 2px dashed var(--color-accent-border);
+  outline-offset: 2px;
+}
+
+/* On narrow screens the workspace stacks and the palette floats over less
+   room; the card would cover the tools it is pointing at. */
+@media (max-width: 720px) {
+  .workspace-tour {
+    display: none;
+  }
+}

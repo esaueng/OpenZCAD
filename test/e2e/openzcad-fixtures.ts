@@ -25,12 +25,24 @@ export async function stubApi(
   page: Page,
   {
     assistantEnabled = false,
-    collaborationRole
+    collaborationRole,
+    workspaceTour = false
   }: {
     assistantEnabled?: boolean;
     collaborationRole?: 'owner' | 'editor' | 'viewer';
+    /**
+     * Every fresh context is a "first run", so without this pre-seed the
+     * first-model tour card would float over the lower-left viewport in
+     * every test that creates a project. The suite's baseline is the
+     * workspace as a returning user has it; the tour opts in for its own
+     * coverage.
+     */
+    workspaceTour?: boolean;
   } = {}
 ) {
+  if (!workspaceTour) {
+    await seedDismissedWorkspaceTour(page);
+  }
   const settings = structuredClone(DEFAULT_APP_SETTINGS);
   settings.assistant.enabled = assistantEnabled;
   // The preview server serves the static bundle without the Worker Durable
@@ -269,6 +281,7 @@ export async function stubApi(
 }
 
 export async function stubAnonymousApi(page: Page) {
+  await seedDismissedWorkspaceTour(page);
   await page.route('**/api/auth/config', (route) =>
     route.fulfill({
       json: {
@@ -600,6 +613,27 @@ export async function stubAssistant(page: Page, gate?: Promise<void>) {
         })
       })}\n\ndata: ${JSON.stringify({ type: 'response.completed' })}\n\n`
     });
+  });
+}
+
+/**
+ * Marks the first-model tour as already dismissed before the app boots.
+ * Merged, not overwritten: the script re-runs on every navigation, and a test
+ * that changed panel state before reloading must keep that change.
+ */
+export async function seedDismissedWorkspaceTour(page: Page) {
+  await page.addInitScript(() => {
+    const key = 'openzcad-panel-state:v1';
+    try {
+      const raw = window.localStorage.getItem(key);
+      const state: Record<string, unknown> = raw
+        ? (JSON.parse(raw) as Record<string, unknown>)
+        : {};
+      state.workspaceTourDismissed = true;
+      window.localStorage.setItem(key, JSON.stringify(state));
+    } catch {
+      // Unreadable storage falls back to the app's own defaults.
+    }
   });
 }
 

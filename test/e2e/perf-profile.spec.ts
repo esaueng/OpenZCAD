@@ -1,4 +1,5 @@
 import { test, type Page } from '@playwright/test';
+import { seedDismissedWorkspaceTour } from './openzcad-fixtures';
 import { createProjectDocument } from '@openzcad/document-core';
 import { toUserId } from '@openzcad/shared';
 
@@ -11,6 +12,7 @@ test.skip(
 );
 
 async function stubApi(page: Page) {
+  await seedDismissedWorkspaceTour(page);
   await page.route('**/api/health', (route) =>
     route.fulfill({
       json: {
