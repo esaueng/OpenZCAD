@@ -80,10 +80,12 @@ the current branch; production enablement is a separate rollout decision.
   are safety bounds, not a measured performance promise.
 - Measure the consolidated viewport edge overlays on target hardware and retain
   the Heat Sink interaction probe as the acceptance signal.
-- Add multi-profile editing refinements, symmetric/two-sided extrude, and
-  richer sketch constraints only through deterministic commands. (Partial
-  revolve shipped: the revolve form exposes `angleDeg` and
-  `test/partial-revolve.test.ts` pins it.)
+- Add multi-profile editing refinements and richer sketch constraints only
+  through deterministic commands. (Partial revolve shipped: the revolve form
+  exposes `angleDeg` and `test/partial-revolve.test.ts` pins it. Two-sided
+  extrude shipped the same way: `backDistance` on the extrude command and
+  form, mutually exclusive with `symmetric`, `test/two-sided-extrude.test.ts`
+  pins volume, placement, and legacy byte-compatibility.)
 - Enable AI imported-feature operations only after the equivalent manual
   command and exact preflight are shipping and tested.
 
@@ -92,7 +94,6 @@ the current branch; production enablement is a separate rollout decision.
 - Assemblies and mates.
 - Drawings, dimensions, and inspection tools.
 - Constraint solving, design tables, and variant management.
-- Symmetric/two-sided extrude.
 - Region-of-interest cropping for a drawing sheet, so a detail view can be
   sent at full resolution.
 - Turning a drawing's dimension audit into editable parameter overrides

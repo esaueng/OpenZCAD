@@ -239,6 +239,11 @@ export interface ExtrudeInput {
   distance: ParamValue;
   /** Half the distance to each side of the sketch plane; absent = one-sided. */
   symmetric?: boolean;
+  /**
+   * Additional depth behind the sketch plane, opposite the `distance`
+   * direction; absent = one-sided. Mutually exclusive with `symmetric`.
+   */
+  backDistance?: ParamValue;
   /** Explicitly stored by new clients; absent reads as the legacy new body. */
   operation?: ExtrudeOperation;
   /** Existing live body consumed by an add or cut extrusion. */
@@ -1327,6 +1332,11 @@ export function extrudeSketch(
   document: ProjectDocument,
   input: ExtrudeInput
 ): { document: ProjectDocument; bodyId: BodyId } {
+  if (input.symmetric && input.backDistance !== undefined) {
+    throw new Error(
+      'An extrude cannot be both symmetric and two-sided; set symmetric or backDistance, not both.'
+    );
+  }
   const next = cloneDocument(document);
   const { featureId, featureNodeId, bodyId, bodyNodeId } =
     input.ids ?? createBodyFeatureIds();
@@ -1345,6 +1355,9 @@ export function extrudeSketch(
       sketchId: input.sketchId,
       distance: input.distance,
       ...(input.symmetric ? { symmetric: true } : {}),
+      ...(input.backDistance === undefined
+        ? {}
+        : { backDistance: input.backDistance }),
       ...(input.operation === undefined ? {} : { operation: input.operation }),
       ...(input.targetBodyId === undefined
         ? {}
@@ -2213,6 +2226,7 @@ const FEATURE_DATA_KEYS: Record<FeatureKind, readonly string[]> = {
     'sketchId',
     'distance',
     'symmetric',
+    'backDistance',
     'operation',
     'targetBodyId',
     'profile',
