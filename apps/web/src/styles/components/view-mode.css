@@ -5,11 +5,10 @@
 
 /* ── Top bar: the mode switch ────────────────────────────── */
 
-/* Sits between the project name and the workspace actions, in the middle of
-   the bar — see `.breadcrumb` in topbar.css for how that space is cleared. */
+/* Docked at the left of the bar, between the brand and the project name:
+   the workspace you are in reads before the document you are in it with. */
 .mode-switch {
   flex: 0 0 auto;
-  margin-inline: auto;
   display: inline-flex;
   padding: 2px;
   background: var(--color-surface-2);
@@ -18,8 +17,11 @@
 }
 
 .mode-switch-option {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
   min-height: 24px;
-  padding: 0 14px;
+  padding: 0 10px;
   color: var(--color-text-muted);
   background: none;
   border: 0;
@@ -48,6 +50,71 @@
   color: var(--color-text-subtle);
   opacity: 0.5;
   cursor: not-allowed;
+}
+
+/* ── Tweak mode: the parameter panel ─────────────────────── */
+
+/* Reuses the sidebar column and the parameter row styles; only what Tweak
+   adds on top lives here. */
+.tweak-panel {
+  gap: 0;
+}
+
+.tweak-panel-intro {
+  margin: 10px 12px 2px;
+  font-size: var(--fs-xs);
+  line-height: 1.5;
+}
+
+.tweak-panel .sidebar-hint {
+  margin: 8px 12px 0;
+}
+
+.tweak-panel-params {
+  padding: 10px;
+}
+
+/* No delete column in Tweak: the row grid gives its slot back. */
+.tweak-panel .param-row {
+  grid-template-columns: minmax(48px, 0.8fr) minmax(0, 1.2fr) auto;
+}
+
+.tweak-panel-actions {
+  display: grid;
+  gap: 6px;
+  margin-top: auto;
+  padding: 10px;
+  border-top: var(--border-thin);
+}
+
+.tweak-panel-action {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 2px 8px;
+  padding: 7px 8px;
+  color: var(--color-text);
+  background: var(--color-surface-2);
+  border: var(--border-thin);
+  border-radius: var(--radius-md);
+  font-size: var(--fs-xs);
+  text-align: left;
+}
+
+.tweak-panel-action svg {
+  grid-row: 1 / span 2;
+  color: var(--color-text-muted);
+}
+
+.tweak-panel-action small {
+  color: var(--color-text-subtle);
+}
+
+.tweak-panel-action:hover:not(:disabled),
+.tweak-panel-action:focus-visible {
+  background: var(--color-surface-hover);
+  border-color: var(--color-border-strong);
+  outline: none;
 }
 
 /* ── Workspace without a sidebar ─────────────────────────── */
@@ -759,12 +826,14 @@
 }
 
 @media (max-width: 620px) {
-  .mode-switch {
-    margin-inline: 0;
+  /* Icons alone carry the modes when the bar has no room for labels; the
+     title tooltip still names each one. */
+  .mode-switch-option {
+    padding-inline: 8px;
   }
 
-  .mode-switch-option {
-    padding-inline: 9px;
+  .mode-switch-option .mode-switch-label {
+    display: none;
   }
 
   /* The stacked narrow layout gives the sidebar a row; without one the

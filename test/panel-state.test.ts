@@ -96,6 +96,16 @@ describe('workspace panel state', () => {
     expect(loadPanelState().workspaceMode).toBe('view');
   });
 
+  it('remembers Tweak as a workspace mode of its own', () => {
+    expect(
+      savePanelState({ ...defaultPanelState(), workspaceMode: 'tweak' })
+    ).toBe(true);
+    expect(loadPanelState().workspaceMode).toBe('tweak');
+    expect(normalizePanelState({ workspaceMode: 'tweak' }).workspaceMode).toBe(
+      'tweak'
+    );
+  });
+
   it('falls back to Build on an unrecognised workspace mode', () => {
     // A stored value from a future build must not strip the modeling UI.
     expect(normalizePanelState({ workspaceMode: 'review' }).workspaceMode).toBe(

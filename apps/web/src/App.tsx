@@ -27,6 +27,7 @@ import {
   Save,
   Settings as SettingsIcon,
   Scissors,
+  SlidersHorizontal,
   Spline,
   Trash2,
   TriangleRight,
@@ -211,6 +212,7 @@ import { TopBar } from './components/TopBar';
 import { ToolBar } from './components/ToolBar';
 import { ViewModeRail } from './components/ViewModeRail';
 import { Sidebar } from './components/Sidebar';
+import { TweakPanel } from './components/TweakPanel';
 import { WorkspaceTour } from './components/WorkspaceTour';
 import { Inspector } from './components/Inspector';
 import { ModelingOperationsForm } from './components/forms/ModelingOperationsForm';
@@ -230,6 +232,11 @@ import {
   captureProjectInvitationLink,
   clearPendingProjectInvitation
 } from './lib/projectInvitationLink';
+import {
+  captureProjectShareToken,
+  clearProjectShareFragment
+} from './lib/projectShareLink';
+import { fetchSharedProject } from './lib/projectShareClient';
 import { ProjectConflictDialog } from './components/ProjectConflictDialog';
 import {
   ExportDialog,
@@ -976,6 +983,19 @@ export function App() {
   const [pendingInvitationToken, setPendingInvitationToken] = useState(
     captureProjectInvitationLink
   );
+  /**
+   * A `#share=` link this tab was opened with, read once at mount. Non-null
+   * turns this into a shared-link session: the shared document is fetched
+   * anonymously, pinned to the Tweak workspace, and never written to this
+   * device's storage — Make a copy is the one road out.
+   */
+  const [pendingShareToken] = useState(captureProjectShareToken);
+  const [shareSession, setShareSession] = useState<{ token: string } | null>(
+    null
+  );
+  const shareSessionRef = useRef(shareSession);
+  shareSessionRef.current = shareSession;
+  const shareOpenAttemptRef = useRef(false);
   const [pendingInvitationError, setPendingInvitationError] = useState<
     string | null
   >(null);
@@ -1012,7 +1032,9 @@ export function App() {
   // lets the first render choose a stable restore surface instead of mounting
   // the launcher while IndexedDB and the optional cloud copy are still loading.
   const [startupProjectId] = useState<string | null>(() =>
-    !pendingInvitationToken && appSettings.general.reopenLastProject
+    !pendingInvitationToken &&
+    !pendingShareToken &&
+    appSettings.general.reopenLastProject
       ? loadActiveProjectId()
       : null
   );
@@ -1836,45 +1858,86 @@ export function App() {
     doc.ownerUserId !== session.userId
   );
   // A read-only share has no build workspace to offer, so the mode switch is
-  // pinned to View rather than presenting a Build mode that refuses every edit.
-  const buildModeDisabledReason =
-    !sharedProjectDisabled &&
-    cloudAvailable &&
-    session &&
-    projectSharingEnabled &&
-    (collaboration.role === 'viewer' || collaboration.status === 'read-only')
+  // pinned to View rather than presenting a Build mode that refuses every
+  // edit. A shared-link session locks Build for its own reason: the visitor's
+  // workspace is the parameters, and Make a copy is the road to Build.
+  const buildModeDisabledReason = shareSession
+    ? 'This is a shared link — Make a copy to open Build mode'
+    : !sharedProjectDisabled &&
+        cloudAvailable &&
+        session &&
+        projectSharingEnabled &&
+        (collaboration.role === 'viewer' || collaboration.status === 'read-only')
       ? 'This shared project is read-only'
       : null;
-  const viewMode =
-    panelState.workspaceMode === 'view' || buildModeDisabledReason !== null;
+  // A parameter change is still a document edit, so a read-only seat locks
+  // Tweak exactly as it locks Build. A shared link is the opposite: Tweak is
+  // the whole point of the visit.
+  const tweakModeDisabledReason = shareSession ? null : buildModeDisabledReason;
+  // The stored preference resolves against what the project allows: a
+  // read-only share pins the workspace to View whatever this device prefers,
+  // and a shared link lands in Tweak unless the visitor chose View.
+  const resolvedWorkspaceMode: WorkspaceMode = shareSession
+    ? panelState.workspaceMode === 'view'
+      ? 'view'
+      : 'tweak'
+    : buildModeDisabledReason !== null
+      ? 'view'
+      : panelState.workspaceMode;
+  const viewMode = resolvedWorkspaceMode === 'view';
+  const tweakMode = resolvedWorkspaceMode === 'tweak';
+  // Both reading workspaces disarm every modeling surface — tools, handles,
+  // sketches, the inspector. Tweak differs from View in one thing only: the
+  // parameter guard below lets `parameter.set` commands through.
+  const modelingLocked = viewMode || tweakMode;
+  // Conditions that lock the document whatever workspace is showing. Tweak's
+  // parameter edits answer to these too: a second tab or a read-only
+  // collaboration seat locks parameters as firmly as features.
+  const baseEditDisabledReason = projectOpenElsewhere
+    ? 'This project is open in another tab'
+    : shareSession
+      ? // A shared-link session has no account seat, no lease and no second
+        // tab: its edits live and die in this browser session.
+        null
+      : sharedProjectDisabled
+      ? 'Project sharing is disabled in Settings'
+      : !cloudAvailable || !session || !projectSharingEnabled
+        ? null
+        : collaboration.conflict
+          ? 'Resolve the collaboration conflict before editing'
+          : collaboration.role === 'viewer' ||
+              collaboration.status === 'read-only'
+            ? 'This shared project is read-only'
+            : collaboration.role === null
+              ? 'Waiting for project access'
+              : collaborationRollout.editLeasesEnforced &&
+                  !activeCollaborationLease
+                ? collaboration.status === 'lease-denied'
+                  ? 'Another collaborator holds the edit lease'
+                  : 'Waiting for the project edit lease'
+                : null;
   // View mode joins the same guard every other read-only condition uses, so a
   // keyboard shortcut or a command that slips past the hidden UI is refused at
   // the same choke point rather than needing its own check.
-  const editDisabledReason = projectOpenElsewhere
-    ? 'This project is open in another tab'
-    : viewMode
+  const editDisabledReason =
+    baseEditDisabledReason ??
+    (viewMode
       ? // "Switch to Build" is only advice worth giving to someone who can.
         // A read-only share pins the mode to View, so telling a viewer to
         // switch names a route they will find disabled — say why instead.
         (buildModeDisabledReason ??
         'View mode is read-only — switch to Build to edit')
-      : sharedProjectDisabled
-        ? 'Project sharing is disabled in Settings'
-        : !cloudAvailable || !session || !projectSharingEnabled
-          ? null
-          : collaboration.conflict
-            ? 'Resolve the collaboration conflict before editing'
-            : collaboration.role === 'viewer' ||
-                collaboration.status === 'read-only'
-              ? 'This shared project is read-only'
-              : collaboration.role === null
-                ? 'Waiting for project access'
-                : collaborationRollout.editLeasesEnforced &&
-                    !activeCollaborationLease
-                  ? collaboration.status === 'lease-denied'
-                    ? 'Another collaborator holds the edit lease'
-                    : 'Waiting for the project edit lease'
-                  : null;
+      : tweakMode
+        ? 'Tweak mode adjusts parameters only — switch to Build to edit'
+        : null);
+  // The parameter guard: everything the base chain refuses, plus View mode.
+  // Tweak deliberately passes.
+  const parameterEditDisabledReason =
+    baseEditDisabledReason ??
+    (viewMode
+      ? (buildModeDisabledReason ??
+        'View mode is read-only — switch to Tweak or Build to change parameters')
+      : null);
 
   // Read through a ref, because an async caller holds the closure of the
   // render it started in: a STEP import that spends minutes rebuilding and
@@ -1882,6 +1945,8 @@ export function App() {
   // mode was entered or the project was opened in a second tab.
   const editDisabledReasonRef = useRef(editDisabledReason);
   editDisabledReasonRef.current = editDisabledReason;
+  const parameterEditDisabledReasonRef = useRef(parameterEditDisabledReason);
+  parameterEditDisabledReasonRef.current = parameterEditDisabledReason;
 
   function ensureCanEdit(action = 'edit this project'): boolean {
     const reason = editDisabledReasonRef.current;
@@ -1890,6 +1955,32 @@ export function App() {
     }
     setStatus(`Cannot ${action}: ${reason}.`);
     return false;
+  }
+
+  function ensureCanEditParameters(action = 'change this parameter'): boolean {
+    const reason = parameterEditDisabledReasonRef.current;
+    if (!reason) {
+      return true;
+    }
+    setStatus(`Cannot ${action}: ${reason}.`);
+    return false;
+  }
+
+  /**
+   * Routes a batch of commands to the guard that governs it. A batch made
+   * only of parameter sets is Tweak's whole vocabulary and passes in Tweak
+   * mode; anything else needs the full editing guard. Deciding per batch at
+   * the choke point means no caller — palette, keyboard, AI, panel — can
+   * smuggle a feature edit through Tweak mode by pairing it with a
+   * parameter change.
+   */
+  function ensureCanExecute(commands: AnyCommand[], action: string): boolean {
+    const parametersOnly =
+      commands.length > 0 &&
+      commands.every((command) => command.kind === 'parameter.set');
+    return parametersOnly
+      ? ensureCanEditParameters(action)
+      : ensureCanEdit(action);
   }
 
   const conflictHandlers: ConflictResolutionHandlers = {
@@ -2219,7 +2310,10 @@ export function App() {
    */
   useEffect(() => {
     const projectId = doc?.projectId ?? null;
-    if (!projectId) {
+    if (!projectId || shareSession) {
+      // A shared-link session never writes device storage, so it has no
+      // claim to make — and must not contest one. The owner opening their
+      // own share link must not knock their real tab read-only.
       projectOwnershipSettledRef.current = null;
       setProjectOpenElsewhere(false);
       return;
@@ -2251,7 +2345,7 @@ export function App() {
       projectOwnershipSettledRef.current = null;
       claim?.release();
     };
-  }, [doc?.projectId]);
+  }, [doc?.projectId, shareSession]);
 
   useEffect(() => {
     // An armed face re-pick names a feature by id; a different project's
@@ -2671,6 +2765,12 @@ export function App() {
     if (!doc) {
       return;
     }
+    if (shareSession) {
+      // Shared-link tweaks are session-local by design: nothing is written
+      // to this device until the visitor makes the model their own copy.
+      setSaveState('local');
+      return;
+    }
     if (projectOpenElsewhereRef.current) {
       // Nothing here is on its way to storage, so the indicator must not claim
       // it is. The tab that owns the project is the one keeping it current.
@@ -2690,7 +2790,7 @@ export function App() {
         localSaveTimeoutRef.current = null;
       }
     };
-  }, [doc, cloudAvailable]);
+  }, [doc, cloudAvailable, shareSession]);
 
   useEffect(() => {
     if (!doc || !session || !cloudProjectIds.has(doc.projectId)) {
@@ -3376,7 +3476,7 @@ export function App() {
   >(null);
 
   useEffect(() => {
-    if (!viewMode || measurementApi) {
+    if (!modelingLocked || measurementApi) {
       return;
     }
     let cancelled = false;
@@ -3388,7 +3488,7 @@ export function App() {
     return () => {
       cancelled = true;
     };
-  }, [viewMode, measurementApi]);
+  }, [modelingLocked, measurementApi]);
 
   useEffect(() => {
     if (!doc || !exactGeometryReady || !measurementApi) {
@@ -3451,7 +3551,7 @@ export function App() {
     selection: TopologySelection,
     point?: { x: number; y: number; z: number }
   ): string | null {
-    if (!doc || !viewMode || !measuring || !measurementApi) {
+    if (!doc || !modelingLocked || !measuring || !measurementApi) {
       return null;
     }
     const body = renderedRepresentations[selection.bodyId];
@@ -3528,7 +3628,7 @@ export function App() {
     additive: boolean,
     detail?: PickDetail
   ): boolean {
-    if (!doc || !viewMode || !measuring) {
+    if (!doc || !modelingLocked || !measuring) {
       return false;
     }
     // One guard for the whole handler. Dropping a pick that lands before the
@@ -3809,8 +3909,8 @@ export function App() {
     [appSettings.experiments.directManipulation, sketchOverlays]
   );
   const viewerEditableBodyIds = useMemo(
-    () => (viewMode ? EMPTY_BODY_IDS : directEditableBodyIds),
-    [viewMode, directEditableBodyIds]
+    () => (modelingLocked ? EMPTY_BODY_IDS : directEditableBodyIds),
+    [modelingLocked, directEditableBodyIds]
   );
   const viewerSelectedProfileIds = useMemo(
     () => selectedProfiles.map((profile) => profile.profileId),
@@ -3904,6 +4004,12 @@ export function App() {
     if (localSaveTimeoutRef.current !== null) {
       window.clearTimeout(localSaveTimeoutRef.current);
       localSaveTimeoutRef.current = null;
+    }
+    if (shareSessionRef.current) {
+      // Belt to the autosave effect's braces: a shared-link document must
+      // never reach this device's project store under the owner's id.
+      pendingLocalSaveRef.current = null;
+      return;
     }
     const pending = pendingLocalSaveRef.current;
     pendingLocalSaveRef.current = null;
@@ -4007,7 +4113,7 @@ export function App() {
     command: AnyCommand,
     derived?: ProjectDocument['derived']
   ): boolean {
-    if (!managerRef.current || !ensureCanEdit('run this command')) {
+    if (!managerRef.current || !ensureCanExecute([command], 'run this command')) {
       return false;
     }
     try {
@@ -4037,7 +4143,7 @@ export function App() {
     if (
       !managerRef.current ||
       commands.length === 0 ||
-      !ensureCanEdit('apply this edit')
+      !ensureCanExecute(commands, 'apply this edit')
     ) {
       return false;
     }
@@ -4445,7 +4551,7 @@ export function App() {
    * to cancel it from.
    */
   function handleWorkspaceMode(mode: WorkspaceMode) {
-    if (mode === 'view') {
+    if (mode === 'view' || mode === 'tweak') {
       cancelDirectManipulationRef.current?.();
       cylinderRadiusPreview.clear();
       cylinderRadiusInspectorSetterRef.current?.(null);
@@ -4453,7 +4559,11 @@ export function App() {
       setKeypad(null);
       dispatchInteraction({ type: 'clear' });
       cancelPanel();
-      setStatus('View mode · the model is read-only here.');
+      setStatus(
+        mode === 'view'
+          ? 'View mode · the model is read-only here.'
+          : 'Tweak mode · adjust parameters; the design stays locked.'
+      );
     } else {
       // The tape survives the trip — leaving to make an edit and coming back
       // should not cost the figures you just took — but recording stops.
@@ -5917,6 +6027,90 @@ export function App() {
   }
   acceptPendingInvitationRef.current = handleAcceptProjectInvitation;
 
+  /**
+   * Opens a `#share=` link: fetches the shared snapshot anonymously and
+   * hydrates it as a session-local document. Nothing is remembered and
+   * nothing is stored — reloading the link re-fetches the owner's current
+   * model, and Make a copy below is how the visitor keeps anything.
+   */
+  useEffect(() => {
+    if (!pendingShareToken || shareOpenAttemptRef.current) {
+      return;
+    }
+    shareOpenAttemptRef.current = true;
+    setBusy(true);
+    void (async () => {
+      try {
+        const shared = await fetchSharedProject(pendingShareToken);
+        if (!shared) {
+          setStatus(
+            'This share link is no longer available. It may have been revoked.'
+          );
+          return;
+        }
+        // Before the document lands: the collaboration hook and the cloud
+        // autosave controller must treat this project as not account-backed,
+        // whatever this browser knew about the account before.
+        setCloudAvailable(false);
+        setShareSession({ token: pendingShareToken });
+        shareSessionRef.current = { token: pendingShareToken };
+        hydrateDocument(shared.document, {
+          rememberProject: false
+        });
+        setStatus(
+          `Opened shared model ${shared.project.name} · adjust its parameters and export. Make a copy to build on it.`
+        );
+      } catch (error) {
+        setStatus(errorMessage(error, 'Could not open the share link.'));
+      } finally {
+        setBusy(false);
+      }
+    })();
+  }, [pendingShareToken]);
+
+  /**
+   * The road out of a shared-link session: the shared document becomes an
+   * ordinary project of the visitor's own — new project id, saved on this
+   * device, Build unlocked. From here every existing flow (cloud adoption,
+   * sync, export) treats it like any other local project.
+   */
+  async function handleMakeShareCopy() {
+    const source = managerRef.current?.document;
+    if (!source || !shareSessionRef.current) {
+      return;
+    }
+    setBusy(true);
+    try {
+      const copy = duplicateProjectDocument(
+        source,
+        duplicateProjectName(
+          source.name,
+          projects.map((summary) => summary.name)
+        ),
+        session?.userId ?? localUserId
+      );
+      setShareSession(null);
+      shareSessionRef.current = null;
+      clearProjectShareFragment();
+      await saveLocalProject(copy);
+      setProjects((current) =>
+        [
+          ...current,
+          summarizeLocalDocument(copy, DEFAULT_PROJECT_ORGANIZATION)
+        ].sort(compareProjectSummaries)
+      );
+      hydrateDocument(copy);
+      handleWorkspaceMode('build');
+      setStatus(
+        `${copy.name} is yours now — saved on this device. Build mode is open.`
+      );
+    } catch (error) {
+      setStatus(errorMessage(error, 'Could not copy the shared model.'));
+    } finally {
+      setBusy(false);
+    }
+  }
+
   useEffect(() => {
     if (
       startupState !== 'ready' ||
@@ -5971,6 +6165,13 @@ export function App() {
   async function handleGoHome() {
     await flushPendingLocalSave();
     await cloudProjectAutosaveRef.current?.flushPending();
+    if (shareSessionRef.current) {
+      // Leaving the shared session drops it: the shelf that follows is this
+      // device's own projects, and the link in the URL has been consumed.
+      setShareSession(null);
+      shareSessionRef.current = null;
+      clearProjectShareFragment();
+    }
     clearActiveProject();
     forgetProjectView();
     managerRef.current = null;
@@ -6494,6 +6695,12 @@ export function App() {
 
   async function handleSave() {
     if (!doc) {
+      return;
+    }
+    if (shareSessionRef.current) {
+      setStatus(
+        'This is a shared link session — Make a copy to keep the model.'
+      );
       return;
     }
     try {
@@ -9948,7 +10155,7 @@ export function App() {
     // View mode gets the viewport menu whatever was clicked: the selection
     // menu is entirely modeling actions, and an empty one would be worse than
     // the viewport controls someone reading a model actually wants.
-    if (!selection || viewMode) {
+    if (!selection || modelingLocked) {
       openContextMenu(
         x,
         y,
@@ -10291,10 +10498,30 @@ export function App() {
 
       if (meta && event.shiftKey && event.key.toLowerCase() === 'm') {
         event.preventDefault();
-        if (viewMode && buildModeDisabledReason) {
-          setStatus(`Build mode unavailable: ${buildModeDisabledReason}.`);
-        } else {
-          handleWorkspaceMode(viewMode ? 'build' : 'view');
+        // Cycle View → Tweak → Build, skipping whatever the project locks.
+        const order: readonly WorkspaceMode[] = ['view', 'tweak', 'build'];
+        const at = order.indexOf(resolvedWorkspaceMode);
+        for (let step = 1; step <= order.length; step += 1) {
+          const next = order[(at + step) % order.length]!;
+          const reason =
+            next === 'build'
+              ? buildModeDisabledReason
+              : next === 'tweak'
+                ? tweakModeDisabledReason
+                : null;
+          if (reason !== null) {
+            continue;
+          }
+          if (next === resolvedWorkspaceMode) {
+            // Every other mode is locked; say why instead of "switching"
+            // to where we already are.
+            setStatus(
+              `Workspace pinned to View: ${buildModeDisabledReason ?? 'other modes are unavailable'}.`
+            );
+          } else {
+            handleWorkspaceMode(next);
+          }
+          return;
         }
         return;
       }
@@ -10375,7 +10602,9 @@ export function App() {
       const historyKey =
         meta &&
         (event.key.toLowerCase() === 'z' || event.key.toLowerCase() === 'y');
-      if (historyKey && viewMode) {
+      if (historyKey && modelingLocked) {
+        // Undo stays locked in Tweak too: history snapshots restore whole
+        // documents, so an undo here could quietly revert modeling work.
         event.preventDefault();
         ensureCanEdit('undo or redo');
         return;
@@ -10461,7 +10690,7 @@ export function App() {
       }
       switch (event.key) {
         case 'Escape':
-          if (viewMode && measuring) {
+          if (modelingLocked && measuring) {
             event.preventDefault();
             if (measurementDraft) {
               clearMeasurementPicks();
@@ -10525,7 +10754,7 @@ export function App() {
           return;
         case 'Delete':
         case 'Backspace':
-          if (viewMode) {
+          if (modelingLocked) {
             if (activeMeasurementId) {
               event.preventDefault();
               setMeasurements((current) =>
@@ -10569,7 +10798,7 @@ export function App() {
       }
 
       const key = event.key.toLowerCase();
-      if (key === 'm' && viewMode) {
+      if (key === 'm' && modelingLocked) {
         event.preventDefault();
         const next = !measuring;
         setMeasuring(next);
@@ -10611,7 +10840,7 @@ export function App() {
         return;
       }
       const shortcutTool = SHORTCUT_TO_TOOL[key];
-      if (shortcutTool && viewMode) {
+      if (shortcutTool && modelingLocked) {
         event.preventDefault();
         ensureCanEdit(`use ${TOOL_META[shortcutTool].label}`);
         return;
@@ -10798,9 +11027,16 @@ export function App() {
       : viewerBodies.length > 0
         ? 'Click a body, face, or edge · Measure records what you pick'
         : 'Ctrl+K commands · ? shortcuts';
+  const tweakModeHint = measuring
+    ? viewModeHint
+    : parameters.length > 0
+      ? 'Edit a parameter and press Enter · the model rebuilds exactly'
+      : 'This model has no parameters · Build mode is where they are defined';
   const hint = viewMode
     ? viewModeHint
-    : (commandPromptText(
+    : tweakMode
+      ? tweakModeHint
+      : (commandPromptText(
         interaction,
         tool !== null || selectedFeatureNodeId !== null
       ) ??
@@ -10831,9 +11067,10 @@ export function App() {
                         : 'Ctrl+K commands · ? shortcuts'));
 
   const paletteCommands: PaletteCommand[] = [
-    // Modeling tools leave the palette entirely in View mode rather than
-    // appearing greyed out: a list of things you cannot do is not a menu.
-    ...(viewMode
+    // Modeling tools leave the palette entirely in the reading workspaces
+    // rather than appearing greyed out: a list of things you cannot do is
+    // not a menu.
+    ...(modelingLocked
       ? []
       : TOOL_GROUPS.flatMap((group) =>
           group.tools.map((toolId): PaletteCommand => {
@@ -10977,19 +11214,46 @@ export function App() {
       icon: <FolderOpen size={16} aria-hidden="true" />,
       run: () => void handleGoHome()
     },
-    {
-      id: 'workspace-mode',
-      label: viewMode ? 'Switch to Build mode' : 'Switch to View mode',
-      group: 'General',
-      shortcut: 'Ctrl+Shift+M',
-      icon: viewMode ? (
-        <PenLine size={16} aria-hidden="true" />
-      ) : (
-        <Eye size={16} aria-hidden="true" />
-      ),
-      disabledReason: viewMode ? buildModeDisabledReason : null,
-      run: () => handleWorkspaceMode(viewMode ? 'build' : 'view')
-    },
+    // One palette entry per workspace the user is not already in: naming the
+    // destination beats a toggle whose meaning depends on where you stand.
+    ...(!viewMode
+      ? [
+          {
+            id: 'workspace-mode-view',
+            label: 'Switch to View mode',
+            group: 'General',
+            shortcut: 'Ctrl+Shift+M',
+            icon: <Eye size={16} aria-hidden="true" />,
+            run: () => handleWorkspaceMode('view')
+          } satisfies PaletteCommand
+        ]
+      : []),
+    ...(!tweakMode
+      ? [
+          {
+            id: 'workspace-mode-tweak',
+            label: 'Switch to Tweak mode',
+            group: 'General',
+            shortcut: 'Ctrl+Shift+M',
+            icon: <SlidersHorizontal size={16} aria-hidden="true" />,
+            disabledReason: tweakModeDisabledReason,
+            run: () => handleWorkspaceMode('tweak')
+          } satisfies PaletteCommand
+        ]
+      : []),
+    ...(!(resolvedWorkspaceMode === 'build')
+      ? [
+          {
+            id: 'workspace-mode-build',
+            label: 'Switch to Build mode',
+            group: 'General',
+            shortcut: 'Ctrl+Shift+M',
+            icon: <PenLine size={16} aria-hidden="true" />,
+            disabledReason: buildModeDisabledReason,
+            run: () => handleWorkspaceMode('build')
+          } satisfies PaletteCommand
+        ]
+      : []),
     {
       id: 'app-settings',
       label: 'Open settings',
@@ -11009,8 +11273,10 @@ export function App() {
   // rail's mount effect. A direct-manipulation mode only hides it — the panel
   // owns the conversation and the in-flight request, so unmounting to enter a
   // sketch would throw both away.
+  // Locked in Tweak as well: the assistant authors feature edits, which is
+  // exactly what Tweak promises cannot happen.
   const assistantAvailable =
-    cloudFunctionsEnabled && appSettings.assistant.enabled && !viewMode;
+    cloudFunctionsEnabled && appSettings.assistant.enabled && !modelingLocked;
   const assistantHidden = directMode;
   const baseToolCard = toolCardFor(interaction);
   const editingSketchName =
@@ -11024,7 +11290,9 @@ export function App() {
       ? { ...baseToolCard, title: `Editing Sketch: ${editingSketchName}` }
       : baseToolCard;
   const inspectorActive =
-    !viewMode && !directMode && (tool !== null || selectedFeature !== null);
+    !modelingLocked &&
+    !directMode &&
+    (tool !== null || selectedFeature !== null);
   const modelingOperation: ModelingOperationKind | null =
     tool === 'mirror' ||
     tool === 'split' ||
@@ -11288,8 +11556,9 @@ export function App() {
           projectSharingEnabled={
             cloudFunctionsEnabled && projectSharingPreferenceEnabled
           }
-          workspaceMode={viewMode ? 'view' : 'build'}
+          workspaceMode={resolvedWorkspaceMode}
           buildModeDisabledReason={buildModeDisabledReason}
+          tweakModeDisabledReason={tweakModeDisabledReason}
           onWorkspaceMode={handleWorkspaceMode}
           onSave={() => void handleSave()}
           onImportFile={(file) => void handleImportFile(file)}
@@ -11308,7 +11577,7 @@ export function App() {
         />
       }
       toolBar={
-        viewMode ? (
+        modelingLocked ? (
           <ViewModeBar
             settings={viewerSettings}
             projection={projection}
@@ -11363,7 +11632,32 @@ export function App() {
         )
       }
       sidebar={
-        viewMode ? null : (
+        viewMode ? null : tweakMode ? (
+          <TweakPanel
+            parameters={parameters}
+            parameterValues={parameterScope.scope}
+            canExport={exportBodyIds.length > 0}
+            exportScope={
+              selectedBody &&
+              !selectedBody.consumed &&
+              selectedBody.exportableStep
+                ? selectedBody.name
+                : null
+            }
+            onSetParameter={(name, expression) =>
+              executeCommand(
+                commandFactories.setParameter({ name, expression })
+              )
+            }
+            onExportStep={() => void handleExportStep()}
+            onOpenMeshExport={() => setMeshExportOpen(true)}
+            share={
+              shareSession
+                ? { onMakeCopy: () => void handleMakeShareCopy() }
+                : null
+            }
+          />
+        ) : (
           <Sidebar
             parameters={parameters}
             parameterValues={parameterScope.scope}
@@ -11460,11 +11754,11 @@ export function App() {
             moveCommitHold={moveCommitHold}
             appearancePreview={bodyAppearancePreview}
             hideViewerToolbar={false}
-            viewMode={viewMode}
+            viewMode={modelingLocked}
             selectionChip={selectionChip}
             onClearSelection={clearSelection}
-            canUndo={!viewMode && (managerRef.current?.canUndo ?? false)}
-            canRedo={!viewMode && (managerRef.current?.canRedo ?? false)}
+            canUndo={!modelingLocked && (managerRef.current?.canUndo ?? false)}
+            canRedo={!modelingLocked && (managerRef.current?.canRedo ?? false)}
             onUndo={handleUndo}
             onRedo={handleRedo}
             initialView={initialView}
@@ -11472,7 +11766,7 @@ export function App() {
             onViewSettled={handleViewportSettled}
             onMovePreviewChange={handleMovePreviewChange}
             moveValuesSetterRef={moveValuesSetterRef}
-            offsetHandle={viewMode ? null : offsetHandleTarget}
+            offsetHandle={modelingLocked ? null : offsetHandleTarget}
             onOffsetPreview={handleOffsetPreview}
             onOffsetCommit={handleOffsetCommit}
             onOffsetCancel={handleOffsetCancel}
@@ -11485,7 +11779,9 @@ export function App() {
             onOpenOffsetKeypad={handleOpenOffsetKeypad}
             keypadAnchorRef={keypadAnchorRef}
             offsetSetterRef={offsetSetterRef}
-            cylinderRadiusHandle={viewMode ? null : cylinderRadiusHandleTarget}
+            cylinderRadiusHandle={
+              modelingLocked ? null : cylinderRadiusHandleTarget
+            }
             cylinderDimensionMode={cylinderDimensionMode}
             onCylinderDimensionModeChange={setCylinderDimensionMode}
             onCylinderRadiusPreview={handleCylinderRadiusPreview}
@@ -11493,7 +11789,7 @@ export function App() {
             onCylinderRadiusCancel={handleCylinderRadiusCancel}
             onOpenCylinderRadiusKeypad={handleOpenCylinderRadiusKeypad}
             cancelDirectManipulationRef={cancelDirectManipulationRef}
-            edgeHandle={viewMode ? null : edgeHandleTarget}
+            edgeHandle={modelingLocked ? null : edgeHandleTarget}
             onEdgeRadiusPreview={(size) => edgePreview.request(size)}
             onEdgeCommit={handleEdgeCommit}
             onEdgeCancel={handleEdgeCancel}
@@ -11503,7 +11799,7 @@ export function App() {
                 type: dragging ? 'drag-engage' : 'drag-release'
               })
             }
-            sketchMode={viewMode ? null : sketchModeState}
+            sketchMode={modelingLocked ? null : sketchModeState}
             onSketchCommit={handleSketchCommit}
             onSketchDrawingChange={(drawing) =>
               dispatchInteraction({ type: 'sketch-drawing', drawing })
@@ -11519,10 +11815,12 @@ export function App() {
             profileSelectionMode={tool === 'extrude'}
             onSelectRegion={handleSelectRegion}
             onHoverRegion={handleHoverRegion}
-            onMeasurePreview={viewMode && measuring ? previewMeasurement : null}
-            regionHandle={viewMode ? null : regionHandleTarget}
+            onMeasurePreview={
+              modelingLocked && measuring ? previewMeasurement : null
+            }
+            regionHandle={modelingLocked ? null : regionHandleTarget}
             modeOverlay={
-              viewMode ? (
+              modelingLocked ? (
                 <>
                   <ViewModeRail
                     bodies={partBodies}
@@ -12009,7 +12307,7 @@ export function App() {
             onCycleSection={cycleSectionView}
             onSectionOffset={setSectionOffset}
           />
-          {!viewMode &&
+          {!modelingLocked &&
             !panelState.workspaceTourDismissed &&
             tourProjectId === doc.projectId &&
             interaction.mode !== 'sketch' && (
