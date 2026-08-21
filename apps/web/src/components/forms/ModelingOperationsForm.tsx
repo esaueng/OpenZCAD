@@ -235,7 +235,7 @@ function FacePicker({
           Pick faces in viewport
         </button>
       ) : null}
-      <div className="body-picker">
+      <div className="pick-list">
         {options.length === 0 ? (
           <p className="muted">No exact faces are available.</p>
         ) : null}
@@ -245,7 +245,7 @@ function FacePicker({
             <button
               key={face.topologyId}
               type="button"
-              className={`body-pick-row${active ? ' selected' : ''}`}
+              className={`pick-row${active ? ' selected' : ''}`}
               aria-pressed={active}
               onClick={() => {
                 if (!multiple) {
@@ -786,7 +786,7 @@ export function ModelingOperationsForm({
             }}
             onRequest={onRequestOpeningFaceSelection}
           />
-          <label className="form-field">
+          <label className="field">
             <span>Style</span>
             <select
               value={state.value.style}
@@ -816,7 +816,7 @@ export function ModelingOperationsForm({
               replaceState({ ...state, value: { ...state.value, diameter } })
             }
           />
-          <label className="form-field">
+          <label className="field">
             <span>Depth</span>
             <select
               value={state.value.depthMode}
