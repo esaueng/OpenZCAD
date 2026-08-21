@@ -41,7 +41,7 @@
   border: 1px solid var(--color-accent-border);
   border-radius: var(--radius-sm);
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: var(--fs-mini);
   line-height: 1;
   text-transform: uppercase;
 }
@@ -92,7 +92,7 @@
   flex: 0 0 auto;
   color: var(--color-text-subtle);
   opacity: 0;
-  transition: opacity 120ms ease;
+  transition: opacity var(--dur-fast) var(--ease-out);
 }
 
 .project-title-button:hover svg,
@@ -122,10 +122,13 @@
   color: var(--color-text-subtle);
 }
 
+/* Auto-flowing columns: the account chip comes and goes with account state,
+   so the row cannot assume a fixed slot count. */
 .topbar-actions {
   flex: 0 0 auto;
   display: grid;
-  grid-template-columns: repeat(4, max-content) 28px;
+  grid-auto-flow: column;
+  grid-auto-columns: max-content;
   align-items: center;
   gap: var(--sp-2);
   margin-left: auto;
