@@ -336,6 +336,7 @@ export function Sidebar({
   // Drag-to-reorder state for the history timeline (StartScreen's pattern).
   const [dragFeatureId, setDragFeatureId] = useState<string | null>(null);
   const [dropFeatureId, setDropFeatureId] = useState<string | null>(null);
+  const [showConsumed, setShowConsumed] = useState(false);
   // Bodies in feature-history order so the tree matches the timeline below.
   const bodies: BodyRepresentation[] = [];
   const seen = new Set<string>();
@@ -354,6 +355,56 @@ export function Sidebar({
       bodies.push(body);
     }
   }
+  // Consumed bodies live behind a disclosure row: in a model built from
+  // booleans nearly every body is an input to a later feature, and a list
+  // that is mostly dead entries buries the ones that still exist.
+  const liveBodies = bodies.filter((body) => !body.consumed);
+  const consumedBodies = bodies.filter((body) => body.consumed);
+
+  function renderBodyRow(body: BodyRepresentation) {
+    const hidden = hiddenBodyIds.has(body.bodyId);
+    const selected = selectedBodyIds.includes(body.bodyId);
+    return (
+      <div
+        key={body.bodyId}
+        className={`body-row ${selected ? 'selected' : ''} ${body.consumed ? 'consumed' : ''} ${hidden ? 'hidden-body' : ''}`}
+        role="listitem"
+      >
+        <button
+          type="button"
+          className="body-row-main"
+          aria-pressed={selected}
+          title={`${body.name}${body.consumed ? ' — consumed by a later feature' : ''} — click to select, ⇧click to add`}
+          onClick={(event) =>
+            onSelectBody(
+              body.bodyId,
+              event.shiftKey || event.metaKey || event.ctrlKey
+            )
+          }
+        >
+          <span className="feature-icon">{bodyIcon(body)}</span>
+          <span className="feature-name">{body.name}</span>
+        </button>
+        {!body.consumed && (
+          <button
+            type="button"
+            className={`row-visibility ${hidden ? 'is-hidden' : ''}`}
+            title={hidden ? `Show body ${body.name}` : `Hide body ${body.name}`}
+            aria-label={hidden ? `Show body ${body.name}` : `Hide body ${body.name}`}
+            aria-pressed={hidden}
+            onClick={() => onToggleBodyVisibility(body.bodyId)}
+          >
+            {hidden ? (
+              <EyeOff size={12} aria-hidden="true" />
+            ) : (
+              <Eye size={12} aria-hidden="true" />
+            )}
+          </button>
+        )}
+      </div>
+    );
+  }
+
   const rollbackMarkerIndex = features.findIndex(
     (feature, index) =>
       index < features.length - 1 &&
@@ -395,7 +446,7 @@ export function Sidebar({
       <SidebarSection
         id="bodies"
         title="Bodies"
-        count={bodies.length}
+        count={liveBodies.length}
         open={panelState.sidebarSections.bodies}
         onToggle={onToggleSection}
       >
@@ -405,50 +456,28 @@ export function Sidebar({
               No bodies yet. Create a primitive or extrude a sketch.
             </p>
           )}
-          {bodies.map((body) => {
-            const hidden = hiddenBodyIds.has(body.bodyId);
-            const selected = selectedBodyIds.includes(body.bodyId);
-            return (
-              <div
-                key={body.bodyId}
-                className={`body-row ${selected ? 'selected' : ''} ${body.consumed ? 'consumed' : ''} ${hidden ? 'hidden-body' : ''}`}
-                role="listitem"
-              >
-                <button
-                  type="button"
-                  className="body-row-main"
-                  aria-pressed={selected}
-                  title={`${body.name} — click to select, ⇧click to add`}
-                  onClick={(event) =>
-                    onSelectBody(
-                      body.bodyId,
-                      event.shiftKey || event.metaKey || event.ctrlKey
-                    )
-                  }
-                >
-                  <span className="feature-icon">{bodyIcon(body)}</span>
-                  <span className="feature-name">{body.name}</span>
-                  {body.consumed && <small className="feature-flag">consumed</small>}
-                </button>
-                {!body.consumed && (
-                  <button
-                    type="button"
-                    className={`row-visibility ${hidden ? 'is-hidden' : ''}`}
-                    title={hidden ? `Show body ${body.name}` : `Hide body ${body.name}`}
-                    aria-label={hidden ? `Show body ${body.name}` : `Hide body ${body.name}`}
-                    aria-pressed={hidden}
-                    onClick={() => onToggleBodyVisibility(body.bodyId)}
-                  >
-                    {hidden ? (
-                      <EyeOff size={12} aria-hidden="true" />
-                    ) : (
-                      <Eye size={12} aria-hidden="true" />
-                    )}
-                  </button>
-                )}
-              </div>
-            );
-          })}
+          {liveBodies.map(renderBodyRow)}
+          {consumedBodies.length > 0 && (
+            <button
+              type="button"
+              className="consumed-toggle"
+              aria-expanded={showConsumed}
+              onClick={() => setShowConsumed((current) => !current)}
+              title={
+                showConsumed
+                  ? 'Hide bodies consumed by later features'
+                  : 'Show bodies consumed by later features'
+              }
+            >
+              {showConsumed ? (
+                <ChevronDown size={11} aria-hidden="true" />
+              ) : (
+                <ChevronRight size={11} aria-hidden="true" />
+              )}
+              <span>{consumedBodies.length} consumed</span>
+            </button>
+          )}
+          {showConsumed && consumedBodies.map(renderBodyRow)}
         </div>
       </SidebarSection>
 
@@ -560,7 +589,7 @@ export function Sidebar({
                   // Every row used to announce the same generic kind label, so
                   // a history read aloud was a list of identical items. The
                   // feature's own name comes first, as on screen.
-                  title={`${feature.name} — ${FEATURE_KIND_LABELS[feature.featureKind]}, click to edit`}
+                  title={`${feature.name} — ${FEATURE_KIND_LABELS[feature.featureKind]}${consumed ? ', consumed by a later feature' : ''}, click to edit`}
                 >
                   <span className="feature-icon">{featureIcon(feature)}</span>
                   <span className="feature-name">{feature.name}</span>
@@ -572,7 +601,6 @@ export function Sidebar({
                       <AlertTriangle size={11} aria-hidden="true" />
                     </span>
                   )}
-                  {consumed && <small className="feature-flag">consumed</small>}
                   {suppressed && (
                     <small className="feature-flag">suppressed</small>
                   )}
