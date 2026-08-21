@@ -3,6 +3,7 @@ import {
   test,
   expect,
   expectBodyCount,
+  expectConsumedBodyCount,
   openAssistant,
   shiftSelectTwoVisibleBoxEdges,
   stubApi
@@ -1167,7 +1168,8 @@ for (const modifier of [
     });
     await expect(blend).toBeVisible();
     await expect(blend.getByTitle('Feature failed to build')).toHaveCount(0);
-    await expect(page.getByRole('button', { name: 'Bodies 2' })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Bodies 1' })).toBeVisible();
+    await expectConsumedBodyCount(page, 1);
     await expect(page.getByText('Diagnostics', { exact: true })).toHaveCount(0);
     await expect(page.locator('.feature-row')).toHaveCount(2);
 
@@ -1231,7 +1233,8 @@ for (const modifier of [
     );
     await expect(page.locator('.feature-row')).toHaveCount(2);
     await expect(blend.getByTitle('Feature failed to build')).toHaveCount(0);
-    await expect(page.getByRole('button', { name: 'Bodies 2' })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Bodies 1' })).toBeVisible();
+    await expectConsumedBodyCount(page, 1);
     await expect(page.getByText('Diagnostics', { exact: true })).toHaveCount(0);
     await cylinder.locator('.feature-row-main').click();
     await expect
@@ -1312,6 +1315,8 @@ test('preflights and splits a box into two live half bodies', async ({
     page.locator('.feature-row-main', { hasText: 'Split' })
   ).toBeVisible();
   // The input is consumed; its two halves are live bodies of their own.
+  await expectConsumedBodyCount(page, 1);
+  await page.locator('.consumed-toggle').click();
   await expect(page.locator('.body-row.consumed')).toContainText('Box Body');
   await expect(
     page.locator('.body-row', { hasText: 'Split (back)' })
@@ -1353,6 +1358,8 @@ test('preflights and drills a through hole into the top face', async ({
   await expect(
     page.locator('.feature-row-main', { hasText: 'Hole' })
   ).toBeVisible();
+  await expectConsumedBodyCount(page, 1);
+  await page.locator('.consumed-toggle').click();
   await expect(page.locator('.body-row.consumed')).toContainText('Box Body');
   await expectBodyCount(page, 1);
   await expect(page.getByRole('contentinfo')).toContainText('warnings0');
@@ -1389,6 +1396,8 @@ test('preflights and creates an exact open-top shell', async ({ page }) => {
   await expect(
     page.locator('.feature-row-main', { hasText: 'Shell' })
   ).toBeVisible();
+  await expectConsumedBodyCount(page, 1);
+  await page.locator('.consumed-toggle').click();
   await expect(page.locator('.body-row.consumed')).toContainText('Box Body');
   await expectBodyCount(page, 1);
   await expect(page.getByRole('contentinfo')).toContainText('warnings0');
@@ -1944,7 +1953,7 @@ test('rejects a disconnected Union proposed by the assistant before commit', asy
   await expect(
     page.locator('.feature-row', { hasText: 'AI disconnected Union' })
   ).toHaveCount(0);
-  await expect(page.locator('.body-row.consumed')).toHaveCount(0);
+  await expectConsumedBodyCount(page, 0);
 
   await page
     .locator('.feature-row-main', { hasText: 'Separate upper' })
@@ -1962,7 +1971,7 @@ test('rejects a disconnected Union proposed by the assistant before commit', asy
   await expect(page.locator('.assistant-card.proposal.applied')).toContainText(
     'Applied'
   );
-  await expect(page.locator('.body-row.consumed')).toHaveCount(2);
+  await expectConsumedBodyCount(page, 2);
   await expect(page.getByRole('contentinfo')).toContainText('warnings0');
 });
 
@@ -2725,7 +2734,7 @@ test('rejects a disconnected Union and succeeds after the gap is closed', async 
     0
   );
   await expect(inspector.locator('.pick-row.selected')).toHaveCount(2);
-  await expect(page.locator('.body-row.consumed')).toHaveCount(0);
+  await expectConsumedBodyCount(page, 0);
 
   await page.locator('.feature-row-main', { hasText: 'Lift upper' }).click();
   await inspector.getByLabel('Move Z').fill('10');
@@ -2739,7 +2748,7 @@ test('rejects a disconnected Union and succeeds after the gap is closed', async 
   const union = page.locator('.feature-row', { hasText: 'Union' });
   await expect(union).toBeVisible();
   await expect(union.getByTitle('Feature failed to build')).toHaveCount(0);
-  await expect(page.locator('.body-row.consumed')).toHaveCount(2);
+  await expectConsumedBodyCount(page, 2);
   await expect(page.getByRole('contentinfo')).toContainText('warnings0');
 });
 
@@ -2813,7 +2822,7 @@ test('Remus resolves the former face-plane tangent-union refusal', async ({
   const union = page.locator('.feature-row', { hasText: 'Union' });
   await expect(union).toBeVisible();
   await expect(union.getByTitle('Feature failed to build')).toHaveCount(0);
-  await expect(page.locator('.body-row.consumed')).toHaveCount(2);
+  await expectConsumedBodyCount(page, 2);
   await expect(page.getByRole('contentinfo')).toContainText('warnings0');
 });
 
@@ -2848,7 +2857,7 @@ test('Remus resolves the former small-radius tangent-union fallback', async ({
   const union = page.locator('.feature-row', { hasText: 'Union' });
   await expect(union).toBeVisible();
   await expect(union.getByTitle('Feature failed to build')).toHaveCount(0);
-  await expect(page.locator('.body-row.consumed')).toHaveCount(2);
+  await expectConsumedBodyCount(page, 2);
   await expect(page.getByRole('contentinfo')).toContainText('warnings0');
 });
 

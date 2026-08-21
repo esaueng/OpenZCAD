@@ -164,11 +164,34 @@
   border-left-color: var(--color-accent);
 }
 
+/* Consumed rows only dim: strikethrough is reserved for suppressed, where
+   the feature really is out of the build. Consumed is the normal fate of a
+   boolean input, not a defect. */
 .feature-row.consumed .feature-name,
 .body-row.consumed .feature-name {
   color: var(--color-text-subtle);
-  text-decoration: line-through;
-  text-decoration-color: rgba(139, 148, 158, 0.5);
+}
+
+.feature-row.consumed .feature-icon,
+.body-row.consumed .feature-icon {
+  opacity: 0.55;
+}
+
+.consumed-toggle {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 22px;
+  padding: 2px 6px;
+  color: var(--color-text-subtle);
+  font-size: var(--fs-mini);
+  border-radius: var(--radius-sm);
+  text-align: left;
+}
+
+.consumed-toggle:hover {
+  color: var(--color-text-muted);
+  background: var(--color-surface-hover);
 }
 
 .feature-row.suppressed .feature-name {
