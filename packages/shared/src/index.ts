@@ -1810,7 +1810,7 @@ export interface VerifyEmailLoginRequest {
 
 export const APP_SETTINGS_SCHEMA_VERSION = 1 as const;
 
-export type AppTheme = 'system' | 'dark';
+export type AppTheme = 'system' | 'dark' | 'light';
 export type AppDensity = 'compact' | 'comfortable';
 export type SettingsProjectionMode = 'perspective' | 'orthographic';
 export type SettingsDisplayMode = 'shaded-edges' | 'shaded' | 'wireframe';

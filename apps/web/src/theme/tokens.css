@@ -23,6 +23,9 @@
   --color-on-accent: #06111e;
   --color-warning: #f59e0b;
   --color-error: #ef4444;
+  /* Error TEXT on tinted chips: lighter than --color-error so it clears the
+     dark surfaces; the light theme swaps it for a deeper red instead. */
+  --color-error-text: #fca5a5;
   --color-success: #22c55e;
   --color-viewport-bg: #070b10;
 
@@ -103,6 +106,45 @@
   --z-start-screen: 100;
   /* Settings layers over the workspace *and* the start screen. */
   --z-settings: 110;
+}
+
+/* ─────────────────────────────────────────────────────────────
+   Light theme.
+
+   Applied via `data-theme` on the root element, which the App resolves
+   from the Appearance setting ('system' follows prefers-color-scheme).
+   Only the CHROME re-themes: panels, text, borders, semantic hues. The
+   3D viewport keeps its dark stage (--color-viewport-bg and every
+   viewport-overlay color are deliberately not overridden) — a dark
+   modeling canvas under light chrome is the standard CAD arrangement,
+   and the WebGL scene's own materials are tuned for it.
+
+   The layout, typography, spacing, motion and z-index tokens are shared:
+   a theme may only repaint, never move anything.
+   ───────────────────────────────────────────────────────────── */
+
+:root[data-theme='light'] {
+  /* Surfaces & text — the cool-steel ramp, inverted. */
+  --color-bg: #eef1f5;
+  --color-surface: #f7f9fb;
+  --color-surface-2: #e7ebf1;
+  --color-surface-hover: #dfe5ec;
+  --color-border: #cdd5de;
+  --color-border-strong: #aeb9c6;
+  --color-text: #1a2330;
+  --color-text-muted: #5b6572;
+  --color-text-subtle: #6d7885;
+
+  /* Semantic — deeper hues, so text and borders clear the light ground. */
+  --color-accent: #1f6fd6;
+  --color-accent-hi: #1858ad;
+  --color-accent-dim: rgba(31, 111, 214, 0.1);
+  --color-accent-border: rgba(31, 111, 214, 0.45);
+  --color-on-accent: #ffffff;
+  --color-warning: #b45309;
+  --color-error: #dc2626;
+  --color-error-text: #b91c1c;
+  --color-success: #15803d;
 }
 
 kbd {

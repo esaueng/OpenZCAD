@@ -594,6 +594,7 @@ import {
 import {
   defaultAppSettings,
   loadLocalAppSettingsRecord,
+  resolvedAppTheme,
   saveLocalAppSettings,
   shouldAdoptAccountSettings
 } from './lib/appSettings';
@@ -2039,6 +2040,31 @@ export function App() {
       pointerNavigation: appSettings.viewport.pointerNavigation
     }));
   }, [appSettings]);
+
+  useEffect(() => {
+    // Resolves the theme setting to the palette actually painted. 'system'
+    // tracks the host's preference live, so an OS appearance change mid-
+    // session re-themes the chrome without a reload; an explicit choice
+    // needs no listener. The 3D viewport keeps its dark stage either way —
+    // only the chrome tokens switch (see theme/tokens.css).
+    const root = globalThis.document.documentElement;
+    const theme = appSettings.appearance.theme;
+    if (theme !== 'system') {
+      root.dataset.theme = theme;
+      return;
+    }
+    const media = globalThis.matchMedia?.('(prefers-color-scheme: light)');
+    if (!media) {
+      root.dataset.theme = 'dark';
+      return;
+    }
+    const apply = () => {
+      root.dataset.theme = resolvedAppTheme('system', media.matches);
+    };
+    apply();
+    media.addEventListener('change', apply);
+    return () => media.removeEventListener('change', apply);
+  }, [appSettings.appearance.theme]);
 
   useEffect(() => {
     const controller = new CloudSettingsAutosave({

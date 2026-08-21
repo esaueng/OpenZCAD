@@ -30,7 +30,13 @@ export default defineConfig({
     timeout: process.env.CI ? 30_000 : 5_000
   },
   use: {
-    baseURL: `http://127.0.0.1:${PORT}`
+    baseURL: `http://127.0.0.1:${PORT}`,
+    // Playwright's default emulation prefers LIGHT, and the theme setting's
+    // 'system' default follows it — so without this pin the whole suite would
+    // silently run the light chrome. The suite's baseline is the product's
+    // dark default; theme switching has its own coverage in settings.spec.ts,
+    // which emulates both preferences explicitly.
+    colorScheme: 'dark'
   },
   webServer: {
     command: `VITE_E2E=1 pnpm --filter @openzcad/web build && pnpm --filter @openzcad/web preview --host 127.0.0.1 --port ${PORT}`,

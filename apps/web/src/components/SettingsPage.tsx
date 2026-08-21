@@ -836,7 +836,7 @@ export function SettingsPage({
             >
               <SettingRow
                 title="Theme"
-                description="OpenZCAD currently uses its exact-workspace dark palette; System follows dark-capable hosts."
+                description="Light and Dark repaint the workspace chrome; System follows your OS appearance. The 3D viewport keeps its dark modeling stage either way."
                 scope="This device"
               >
                 <select
@@ -854,6 +854,7 @@ export function SettingsPage({
                 >
                   <option value="system">System</option>
                   <option value="dark">Dark</option>
+                  <option value="light">Light</option>
                 </select>
               </SettingRow>
               <SettingRow
