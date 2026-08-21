@@ -70,6 +70,7 @@ import {
   fitCameraToObjects,
   forEachMesh,
   isSameMoveGizmoFocus,
+  layoutMeasurementCallouts,
   makeLabel,
   markExtrudeGizmo,
   moveCalloutAnchor,
@@ -115,6 +116,7 @@ import {
   type ViewerSettings,
   type FatLineResolution,
   type BodyEdgeOverlay,
+  type CalloutLayoutItem,
   type DimensionGraphic,
   easeToward
 } from '@openzcad/viewport';
@@ -657,12 +659,13 @@ interface DimensionLabelBinding {
  * edge. CSS2DRenderer centres each label on its projected point and rewrites
  * the transform every frame, so the correction rides on the margins instead:
  * the label's unmargined box is recovered from the current margin, and a new
- * margin is computed from scratch — no feedback across frames. Dimension and
- * drag-value callouts are excluded; they have their own placement scheme.
+ * margin is computed from scratch — no feedback across frames. Dimension,
+ * drag-value and measurement callouts are excluded; they have their own
+ * placement schemes.
  */
 function clampNameCallouts(container: HTMLElement) {
   const labels = container.querySelectorAll<HTMLElement>(
-    '.selection-callout:not(.dimension-callout):not(.extrude-value-callout)'
+    '.selection-callout:not(.dimension-callout):not(.extrude-value-callout):not(.measurement-callout)'
   );
   if (labels.length === 0) {
     return;
@@ -738,6 +741,141 @@ function updateDimensionLabels(
       '--dimension-label-scale',
       layout.scale.toFixed(3)
     );
+  }
+}
+
+interface MeasurementCalloutBinding {
+  element: HTMLDivElement;
+  leader: HTMLDivElement;
+  anchor: THREE.Vector3;
+  kind: 'anchor' | 'span' | 'arms';
+  spanStart?: THREE.Vector3;
+  spanEnd?: THREE.Vector3;
+}
+
+interface MeasurementSceneBounds {
+  center: THREE.Vector3;
+  radius: number;
+}
+
+/**
+ * Keeps measurement callouts off the geometry they describe. CSS2DRenderer
+ * centres each pill on its projected anchor, which for a face-area or
+ * diameter measurement is the middle of the model; the layout in
+ * `layoutMeasurementCallouts` moves the pill outside the model's projected
+ * silhouette instead, and this applies the result as margins (rewritten
+ * from scratch every frame, like `clampNameCallouts`) plus a leader line
+ * pointing back at the anchor.
+ */
+function updateMeasurementCallouts(
+  bindings: readonly MeasurementCalloutBinding[],
+  bounds: MeasurementSceneBounds | null,
+  camera: THREE.Camera,
+  viewportWidth: number,
+  viewportHeight: number
+) {
+  if (bindings.length === 0) {
+    return;
+  }
+  const center = bounds
+    ? projectToScreen(bounds.center, camera, viewportWidth, viewportHeight)
+    : null;
+  const radius = bounds
+    ? projectedWorldSizePx(
+        camera,
+        bounds.center,
+        bounds.radius,
+        viewportHeight
+      )
+    : 0;
+  // Every read happens before any write so a frame with N callouts costs
+  // one reflow, not N.
+  const visible: {
+    binding: MeasurementCalloutBinding;
+    item: CalloutLayoutItem;
+  }[] = [];
+  for (const binding of bindings) {
+    const anchor = projectToScreen(
+      binding.anchor,
+      camera,
+      viewportWidth,
+      viewportHeight
+    );
+    if (!anchor) {
+      binding.element.style.marginLeft = '';
+      binding.element.style.marginTop = '';
+      binding.leader.style.display = 'none';
+      continue;
+    }
+    let spanDir: { x: number; y: number } | undefined;
+    if (binding.kind === 'span' && binding.spanStart && binding.spanEnd) {
+      const start = projectToScreen(
+        binding.spanStart,
+        camera,
+        viewportWidth,
+        viewportHeight
+      );
+      const end = projectToScreen(
+        binding.spanEnd,
+        camera,
+        viewportWidth,
+        viewportHeight
+      );
+      if (start && end) {
+        spanDir = { x: end.x - start.x, y: end.y - start.y };
+      }
+    }
+    visible.push({
+      binding,
+      item: {
+        anchor,
+        width: binding.element.offsetWidth || 1,
+        height: binding.element.offsetHeight || 1,
+        kind: binding.kind,
+        spanDir
+      }
+    });
+  }
+  const placements = layoutMeasurementCallouts(
+    visible.map((entry) => entry.item),
+    { width: viewportWidth, height: viewportHeight, center, radius }
+  );
+  for (let index = 0; index < visible.length; index += 1) {
+    const entry = visible[index];
+    const placement = placements[index];
+    if (!entry || !placement) {
+      continue;
+    }
+    const { binding, item } = entry;
+    const offsetX = placement.x - item.anchor.x;
+    const offsetY = placement.y - item.anchor.y;
+    binding.element.style.marginLeft = offsetX ? `${offsetX}px` : '';
+    binding.element.style.marginTop = offsetY ? `${offsetY}px` : '';
+    // The leader runs from the pill's border back to the anchor point. It
+    // lives inside the pill, so its geometry is relative to the pill centre.
+    const backX = item.anchor.x - placement.x;
+    const backY = item.anchor.y - placement.y;
+    const distance = Math.hypot(backX, backY);
+    if (!placement.leader || distance < 1e-3) {
+      binding.leader.style.display = 'none';
+      continue;
+    }
+    const unitX = backX / distance;
+    const unitY = backY / distance;
+    const edge = Math.min(
+      Math.abs(unitX) > 1e-6 ? item.width / 2 / Math.abs(unitX) : Infinity,
+      Math.abs(unitY) > 1e-6 ? item.height / 2 / Math.abs(unitY) : Infinity
+    );
+    const length = distance - edge - 3;
+    if (length < 6) {
+      binding.leader.style.display = 'none';
+      continue;
+    }
+    binding.leader.style.display = '';
+    binding.leader.style.width = `${length.toFixed(1)}px`;
+    binding.leader.style.transform = `rotate(${THREE.MathUtils.radToDeg(
+      Math.atan2(backY, backX)
+    ).toFixed(2)}deg) translateX(${edge.toFixed(1)}px)`;
   }
 }
 
@@ -1155,6 +1293,38 @@ export function ModelViewer({
       end: THREE.Vector3;
     }[]
   >([]);
+  /**
+   * Measurement pills plus their anchors, for the per-frame declutter pass.
+   * Held outside React for the same reason as the dimension graphics: the
+   * pass runs on every drawn frame because any camera change moves where the
+   * model's silhouette projects.
+   */
+  const measurementCalloutsRef = useRef<MeasurementCalloutBinding[]>([]);
+  /** World bounds of the rendered bodies, projected each frame to place callouts. */
+  const measurementBoundsRef = useRef<MeasurementSceneBounds | null>(null);
+  useEffect(() => {
+    let box: THREE.Box3 | null = null;
+    for (const body of bodies) {
+      const bodyBox = new THREE.Box3(
+        new THREE.Vector3(body.bbox.min.x, body.bbox.min.y, body.bbox.min.z),
+        new THREE.Vector3(body.bbox.max.x, body.bbox.max.y, body.bbox.max.z)
+      );
+      if (box) {
+        box.union(bodyBox);
+      } else {
+        box = bodyBox;
+      }
+    }
+    measurementBoundsRef.current = box
+      ? {
+          center: box.getCenter(new THREE.Vector3()),
+          radius: Math.max(
+            box.getSize(new THREE.Vector3()).length() / 2,
+            1e-6
+          )
+        }
+      : null;
+  }, [bodies]);
   const onSketchCommitRef = useRef(onSketchCommit);
   onSketchCommitRef.current = onSketchCommit;
   const onSketchDrawingChangeRef = useRef(onSketchDrawingChange);
@@ -6282,6 +6452,13 @@ export function ModelViewer({
         });
       }
       clampNameCallouts(labelRenderer.domElement);
+      updateMeasurementCallouts(
+        measurementCalloutsRef.current,
+        measurementBoundsRef.current,
+        context.activeCamera,
+        renderer.domElement.clientWidth,
+        renderer.domElement.clientHeight
+      );
 
       // Push camera orientation to the view widget only when it changes.
       const orientationCamera = context.activeCamera;
@@ -6481,6 +6658,7 @@ export function ModelViewer({
       entry.graphic.dispose();
     }
     measurementDimensionsRef.current = [];
+    measurementCalloutsRef.current = [];
     clearGroup(group);
     const resolution = context.fatLineResolution();
     for (const annotation of measurementAnnotations) {
@@ -6559,7 +6737,40 @@ export function ModelViewer({
         annotation.anchor.z
       );
       label.element.setAttribute('role', 'status');
+      // The declutter pass slides the pill off the geometry; the leader keeps
+      // pointing at the anchor so the number still reads as belonging to it.
+      const leader = document.createElement('div');
+      leader.className = 'measurement-leader';
+      leader.style.display = 'none';
+      label.element.appendChild(leader);
       group.add(label);
+      const firstSegment = annotation.segments[0];
+      measurementCalloutsRef.current.push({
+        element: label.element as HTMLDivElement,
+        leader,
+        anchor: new THREE.Vector3(
+          annotation.anchor.x,
+          annotation.anchor.y,
+          annotation.anchor.z
+        ),
+        kind: annotation.graphic,
+        spanStart:
+          annotation.graphic === 'span' && firstSegment
+            ? new THREE.Vector3(
+                firstSegment.start.x,
+                firstSegment.start.y,
+                firstSegment.start.z
+              )
+            : undefined,
+        spanEnd:
+          annotation.graphic === 'span' && firstSegment
+            ? new THREE.Vector3(
+                firstSegment.end.x,
+                firstSegment.end.y,
+                firstSegment.end.z
+              )
+            : undefined
+      });
     }
     context.requestRender();
   }, [measurementAnnotations]);
