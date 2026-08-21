@@ -88,17 +88,18 @@ test('keeps the top-bar order fixed and dismisses the file menu outside', async 
     name: 'Workspace actions'
   });
   const actionSlots = actions.locator(':scope > *');
-  await expect(actionSlots).toHaveCount(5);
-  await expect(actionSlots.nth(0)).toHaveClass(/account-state/);
-  await expect(actionSlots.nth(0)).toHaveText('Signed in');
-  await expect(actionSlots.nth(1)).toHaveClass(/save-state/);
+  // Signed in is the happy default: the account chip renders only when the
+  // account needs attention, so the save chip leads the row.
+  await expect(actionSlots).toHaveCount(4);
+  await expect(topbar).not.toContainText('Signed in');
+  await expect(actionSlots.nth(0)).toHaveClass(/save-state/);
   await expect(topbar).not.toContainText('E2E user');
-  await expect(actionSlots.nth(2)).toHaveAttribute(
+  await expect(actionSlots.nth(1)).toHaveAttribute(
     'aria-label',
     'Open project sharing'
   );
-  await expect(actionSlots.nth(3)).toHaveClass(/file-menu/);
-  await expect(actionSlots.nth(4)).toHaveAttribute(
+  await expect(actionSlots.nth(2)).toHaveClass(/file-menu/);
+  await expect(actionSlots.nth(3)).toHaveAttribute(
     'aria-label',
     'Open settings'
   );
@@ -113,17 +114,13 @@ test('keeps the top-bar order fixed and dismisses the file menu outside', async 
   await actions.locator('.save-state').evaluate((element) => {
     element.lastChild!.textContent = 'Autosave off';
   });
-  await actions.locator('.account-state').evaluate((element) => {
-    element.lastChild!.textContent = 'Unavailable';
-  });
   await actions.locator('.collaboration-state').evaluate((element) => {
     element.lastChild!.textContent = 'Update required';
   });
-  await expect(actionSlots.nth(0)).toHaveClass(/account-state/);
-  await expect(actionSlots.nth(1)).toHaveClass(/save-state/);
-  await expect(actionSlots.nth(2)).toHaveClass(/collaboration-state/);
-  await expect(actionSlots.nth(3)).toHaveClass(/file-menu/);
-  await expect(actionSlots.nth(4)).toHaveAttribute(
+  await expect(actionSlots.nth(0)).toHaveClass(/save-state/);
+  await expect(actionSlots.nth(1)).toHaveClass(/collaboration-state/);
+  await expect(actionSlots.nth(2)).toHaveClass(/file-menu/);
+  await expect(actionSlots.nth(3)).toHaveAttribute(
     'aria-label',
     'Open settings'
   );
