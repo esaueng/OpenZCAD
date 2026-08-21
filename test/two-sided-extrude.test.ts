@@ -52,8 +52,8 @@ function boxVolume(depth: number): number {
 
 /** `V - E + F` over the welded display mesh, as in the partial-revolve pin. */
 function eulerCharacteristic(mesh: {
-  vertices: number[];
-  indices: number[];
+  vertices: ArrayLike<number>;
+  indices: ArrayLike<number>;
 }): number {
   const bounds = [
     Infinity,
@@ -169,7 +169,7 @@ function expectSoundSolid(body: BodyRepresentation): void {
  * makes that the world z axis, so the span pins where the solid sits
  * relative to the plane — the property `backDistance` exists to control.
  */
-function normalSpan(mesh: { vertices: number[] }): {
+function normalSpan(mesh: { vertices: ArrayLike<number> }): {
   min: number;
   max: number;
 } {
