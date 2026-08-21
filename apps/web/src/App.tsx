@@ -211,6 +211,7 @@ import { TopBar } from './components/TopBar';
 import { ToolBar } from './components/ToolBar';
 import { ViewModeRail } from './components/ViewModeRail';
 import { Sidebar } from './components/Sidebar';
+import { WorkspaceTour } from './components/WorkspaceTour';
 import { Inspector } from './components/Inspector';
 import { ModelingOperationsForm } from './components/forms/ModelingOperationsForm';
 import { StatusBar } from './components/StatusBar';
@@ -1107,6 +1108,14 @@ export function App() {
   });
   const [sharingOpen, setSharingOpen] = useState(false);
   const [meshExportOpen, setMeshExportOpen] = useState(false);
+  /**
+   * First-model tour eligibility, latched per project: set when a project
+   * OPENS empty on this device, so the tour rides along while its first
+   * features are added but never appears over someone's existing model.
+   */
+  const [tourProjectId, setTourProjectId] = useState<string | null>(null);
+  /** The export dialog has been opened this session — the tour's last signal. */
+  const [tourExportSeen, setTourExportSeen] = useState(false);
   const [settingsBusy, setSettingsBusy] = useState(false);
   const [settingsMessage, setSettingsMessage] = useState(
     pendingInvitationToken
@@ -2249,6 +2258,30 @@ export function App() {
     // features must never satisfy it.
     setFaceRepair(null);
   }, [doc?.projectId]);
+
+  useEffect(() => {
+    // Read through the manager so the latch keys on the project alone: the
+    // eligibility question is "did this project OPEN empty", which must not
+    // re-evaluate as its first features arrive.
+    const current = managerRef.current?.document;
+    if (!current) {
+      setTourProjectId(null);
+      return;
+    }
+    setTourProjectId((previous) =>
+      previous === current.projectId
+        ? previous
+        : listFeaturesInOrder(current).length === 0
+          ? current.projectId
+          : null
+    );
+  }, [doc?.projectId]);
+
+  useEffect(() => {
+    if (meshExportOpen) {
+      setTourExportSeen(true);
+    }
+  }, [meshExportOpen]);
 
   /**
    * Last call before the tab goes away. `pagehide` is the only one of these
@@ -11948,6 +11981,26 @@ export function App() {
             onCycleSection={cycleSectionView}
             onSectionOffset={setSectionOffset}
           />
+          {!viewMode &&
+            !panelState.workspaceTourDismissed &&
+            tourProjectId === doc.projectId &&
+            interaction.mode !== 'sketch' && (
+              <WorkspaceTour
+                featureCount={features.length}
+                hasSelection={
+                  selectedTopology !== null ||
+                  selectedEdges.length > 0 ||
+                  selectedBodyIds.length > 0
+                }
+                exportSeen={tourExportSeen}
+                onDismiss={() =>
+                  setPanelState((current) => ({
+                    ...current,
+                    workspaceTourDismissed: true
+                  }))
+                }
+              />
+            )}
         </ErrorBoundary>
       }
       inspector={
