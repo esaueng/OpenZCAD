@@ -39,7 +39,7 @@ interface ProjectMeasurementSchema {
   erasure_triggers: number;
 }
 
-/** Whether migrations through 0015 installed the erasure fence and write guards. */
+/** Whether migrations through 0016 installed the erasure fence and write guards. */
 export async function isAccountErasureReady(
   db: D1Database | undefined
 ): Promise<boolean> {
@@ -60,7 +60,7 @@ export async function isAccountErasureReady(
           ) AS trigger_count`
       )
       .first<AccountErasureSchema>();
-    return schema?.table_ready === 1 && schema.trigger_count === 25;
+    return schema?.table_ready === 1 && schema.trigger_count === 26;
   } catch {
     return false;
   }
