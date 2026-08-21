@@ -1,8 +1,11 @@
 // @vitest-environment happy-dom
 
 import { describe, expect, it, vi } from 'vitest';
+import type { BodyId } from '@openzcad/shared';
 import type { StoredMeasurementRecord } from '../apps/web/src/lib/measurementRecord';
+import { parseStoredMeasurements } from '../apps/web/src/lib/measurementStore';
 import {
+  measurementRecordContentKey,
   syncProjectMeasurements,
   watchProjectMeasurements,
   type ProjectMeasurementCloudApi,
@@ -30,13 +33,60 @@ function record(updatedAt: string, label: string): StoredMeasurementRecord {
         id: 'body:one',
         kind: 'body',
         label,
-        targets: [],
+        targets: [
+          {
+            bodyId: 'body_one' as BodyId,
+            bodyName: 'One',
+            kind: 'body',
+            label: 'One',
+            semantic: 'body-center',
+            quality: 'exact-kernel',
+            point: { x: 0, y: 0, z: 0 }
+          }
+        ],
         result: { value: 10, dimension: 'volume' },
         quality: 'tessellated',
         status: 'current',
         sourceRevision: 1,
         sourceUnit: 'mm',
         visible: true
+      }
+    ]
+  };
+}
+
+/** The property order produced by createSmartMeasurement before persistence. */
+function runtimeOrderedRecord(
+  updatedAt: string,
+  label: string
+): StoredMeasurementRecord {
+  const stored = record(updatedAt, label);
+  const {
+    id,
+    kind,
+    label: measurementLabel,
+    targets,
+    result,
+    quality,
+    status,
+    sourceRevision,
+    sourceUnit,
+    visible
+  } = stored.measurements[0]!;
+  return {
+    ...stored,
+    measurements: [
+      {
+        targets,
+        status,
+        sourceRevision,
+        sourceUnit,
+        visible,
+        id,
+        kind,
+        label: measurementLabel,
+        result,
+        quality
       }
     ]
   };
@@ -131,6 +181,50 @@ describe('measurement cloud reconciliation', () => {
       syncProjectMeasurements(harness.api, local.projectId, local)
     ).resolves.toEqual({ revision: 7, record: remote, source: 'cloud' });
     expect(harness.save).not.toHaveBeenCalled();
+  });
+
+  it('does not push a production-canonicalized echo again', async () => {
+    let snapshot: ProjectMeasurementSnapshot = {
+      revision: 0,
+      record: null
+    };
+    const save = vi.fn(async (input: SaveInput) => {
+      const canonical = parseStoredMeasurements(input.record);
+      if (!canonical) throw new Error('Fixture record did not parse.');
+      snapshot = {
+        revision: snapshot.revision + 1,
+        record: canonical
+      };
+      return structuredClone(snapshot);
+    });
+    const cloud: ProjectMeasurementCloudApi = {
+      loadProjectMeasurements: vi.fn(async () => structuredClone(snapshot)),
+      saveProjectMeasurements: save
+    };
+    const first = runtimeOrderedRecord(
+      '2026-08-07T12:00:00.000Z',
+      'Same measurement'
+    );
+
+    await expect(
+      syncProjectMeasurements(cloud, first.projectId, first)
+    ).resolves.toMatchObject({ revision: 1, source: 'local' });
+    const canonical = snapshot.record!;
+    expect(JSON.stringify(first.measurements)).not.toBe(
+      JSON.stringify(canonical.measurements)
+    );
+    expect(measurementRecordContentKey(first)).toBe(
+      measurementRecordContentKey(canonical)
+    );
+
+    const refreshed = runtimeOrderedRecord(
+      '2026-08-07T13:00:00.000Z',
+      'Same measurement'
+    );
+    await expect(
+      syncProjectMeasurements(cloud, refreshed.projectId, refreshed)
+    ).resolves.toMatchObject({ revision: 1, source: 'cloud' });
+    expect(save).toHaveBeenCalledTimes(1);
   });
 
   it('hydrates once and forwards later device changes through one watcher', async () => {
