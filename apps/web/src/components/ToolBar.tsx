@@ -1,4 +1,3 @@
-import { Fragment } from 'react';
 import { PanelLeftClose, PanelLeftOpen, Search } from 'lucide-react';
 import {
   TOOL_GROUPS,
@@ -20,10 +19,10 @@ interface ToolBarProps {
 }
 
 /**
- * Floating vertical tool palette over the viewport's left edge. Every tool
- * shows its icon, label, and single-key shortcut; groups are separated by
- * thin rules and unavailable tools stay visible with the reason in their
- * tooltip. Command search sits pinned at the top.
+ * Floating tool palette over the viewport's left edge. Each group is a
+ * captioned grid of icon buttons so all 28 tools fit above the fold; the
+ * tooltip carries the name, shortcut, and — for unavailable tools, which
+ * stay visible — the reason. Command search sits pinned at the top.
  */
 export function ToolBar({
   activeTool,
@@ -72,9 +71,16 @@ export function ToolBar({
         </button>
       </div>
       {TOOL_GROUPS.map((group) => (
-        <Fragment key={group.id}>
-          <div className="palette-sep" />
-          <div role="group" aria-label={group.label} className="palette-group">
+        <div
+          key={group.id}
+          role="group"
+          aria-label={group.label}
+          className="palette-group"
+        >
+          <div className="palette-group-label" aria-hidden="true">
+            {group.label}
+          </div>
+          <div className="palette-grid">
             {group.tools.map((tool) => {
               const meta = TOOL_META[tool];
               return (
@@ -89,13 +95,11 @@ export function ToolBar({
                   onClick={() => onLaunchTool(tool)}
                 >
                   {meta.icon}
-                  <span className="palette-label">{meta.label}</span>
-                  {meta.shortcut && <kbd>{meta.shortcut}</kbd>}
                 </button>
               );
             })}
           </div>
-        </Fragment>
+        </div>
       ))}
     </nav>
   );
