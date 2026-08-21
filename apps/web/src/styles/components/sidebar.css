@@ -85,13 +85,13 @@
 .param-row,
 .param-add {
   display: grid;
-  grid-template-columns: minmax(48px, 0.8fr) minmax(0, 1.2fr) auto 20px;
+  grid-template-columns: minmax(0, 1fr) 76px auto 20px;
   align-items: center;
   gap: 6px;
 }
 
 .param-add {
-  grid-template-columns: minmax(48px, 0.8fr) minmax(0, 1.2fr) 28px;
+  grid-template-columns: minmax(0, 1fr) 76px 28px;
   margin-top: 4px;
 }
 
