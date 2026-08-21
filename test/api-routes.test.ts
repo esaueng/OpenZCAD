@@ -92,7 +92,7 @@ function storageAccountingDb(
         return projectMeasurementRow;
       }
       if (query.includes('account_erasure_requests')) {
-        return { table_ready: 1, trigger_count: 25 };
+        return { table_ready: 1, trigger_count: 26 };
       }
       return row;
     })
