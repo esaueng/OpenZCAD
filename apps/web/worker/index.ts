@@ -77,8 +77,11 @@ import {
 import {
   acceptInvitation,
   createInvitation,
+  createShareLink,
+  hashProjectInvitationToken,
   parseCreateInvitation,
   parseProjectMemberRole,
+  parseShareLinkToken,
   sendProjectInvitationEmail,
   SharingRequestError
 } from './sharing';
@@ -183,6 +186,11 @@ const PROJECT_INVITATIONS_ROUTE = /^\/api\/projects\/([^/]+)\/invitations$/;
 const PROJECT_INVITATION_ROUTE =
   /^\/api\/projects\/([^/]+)\/invitations\/([^/]+)$/;
 const PROJECT_MEMBER_ROUTE = /^\/api\/projects\/([^/]+)\/members\/([^/]+)$/;
+const PROJECT_SHARE_LINKS_ROUTE = /^\/api\/projects\/([^/]+)\/share-links$/;
+const PROJECT_SHARE_LINK_ROUTE =
+  /^\/api\/projects\/([^/]+)\/share-links\/([^/]+)$/;
+const SHARED_PROJECT_ROUTE = /^\/api\/share\/([^/]+)$/;
+const SHARED_PROJECT_ASSET_ROUTE = /^\/api\/share\/([^/]+)\/assets\/([^/]+)$/;
 const INVITATION_ACCEPT_ROUTE = '/api/project-invitations/accept';
 const PROJECT_ARTIFACTS_ROUTE = /^\/api\/projects\/([^/]+)\/artifacts$/;
 const UPLOAD_CONTENT_ROUTE = /^\/api\/uploads\/([^/]+)\/content$/;
@@ -421,6 +429,72 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
     return json(await getDesktopAuthConfig(env));
   }
 
+  // Anonymous share-link reads, registered alongside the other public routes.
+  // The capability token in the path is the entire authorization, so these
+  // deliberately never touch authenticateRequest, and unknown, malformed, and
+  // revoked tokens all collapse into one opaque 404.
+  const sharedProjectMatch = SHARED_PROJECT_ROUTE.exec(pathname);
+  const sharedProjectAssetMatch = SHARED_PROJECT_ASSET_ROUTE.exec(pathname);
+  if (
+    request.method === 'GET' &&
+    (sharedProjectMatch || sharedProjectAssetMatch)
+  ) {
+    const sharedNotFound = () => json({ error: 'Share link not found.' }, 404);
+    // The sharing flag has to reach this route too, or turning it off would
+    // stop new links being minted while every link already out there kept
+    // serving whole documents anonymously. Resolved without an email: an
+    // anonymous caller has no account, so only the deployment-wide flag can
+    // speak here. Answered as the same opaque 404 the rest of the route
+    // uses, rather than telling an anonymous prober how this deployment is
+    // configured.
+    if (!projectCollaborationRollout(env).sharingEnabled) {
+      return sharedNotFound();
+    }
+    const token = parseShareLinkToken(
+      (sharedProjectAssetMatch ?? sharedProjectMatch)![1]!
+    );
+    if (!token) {
+      return sharedNotFound();
+    }
+    const sharedPersistence = createPersistenceService(env);
+    const tokenHash = await hashProjectInvitationToken(token);
+    if (sharedProjectAssetMatch) {
+      const asset = await sharedPersistence.loadSharedProjectAsset(
+        tokenHash,
+        sharedProjectAssetMatch[2]!
+      );
+      if (!asset) {
+        return sharedNotFound();
+      }
+      return new Response(asset.body, {
+        headers: {
+          'content-type': asset.contentType,
+          'content-length': String(asset.body.byteLength),
+          'cache-control': 'no-store',
+          'x-content-type-options': 'nosniff'
+        }
+      });
+    }
+    const shared = await sharedPersistence.loadSharedProjectByTokenHash(
+      tokenHash
+    );
+    if (!shared) {
+      return sharedNotFound();
+    }
+    return json(
+      {
+        project: {
+          projectId: shared.projectId,
+          name: shared.name,
+          mode: shared.mode
+        },
+        document: shared.document
+      },
+      200,
+      { 'cache-control': 'no-store' }
+    );
+  }
+
   const collaborationMatch = PROJECT_COLLABORATION_ROUTE.exec(pathname);
   const measurementsMatch = PROJECT_MEASUREMENTS_ROUTE.exec(pathname);
   const collaborationTicketMatch =
@@ -429,9 +503,16 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
   const invitationsMatch = PROJECT_INVITATIONS_ROUTE.exec(pathname);
   const invitationMatch = PROJECT_INVITATION_ROUTE.exec(pathname);
   const memberMatch = PROJECT_MEMBER_ROUTE.exec(pathname);
+  const shareLinksMatch = PROJECT_SHARE_LINKS_ROUTE.exec(pathname);
+  const shareLinkMatch = PROJECT_SHARE_LINK_ROUTE.exec(pathname);
   const isSharingRoute =
     Boolean(
-      sharingMatch || invitationsMatch || invitationMatch || memberMatch
+      sharingMatch ||
+        invitationsMatch ||
+        invitationMatch ||
+        memberMatch ||
+        shareLinksMatch ||
+        shareLinkMatch
     ) || pathname === INVITATION_ACCEPT_ROUTE;
   if (
     (request.method === 'GET' || request.method === 'POST') &&
@@ -728,6 +809,7 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
   );
   const requiresActorSharingPreference =
     (request.method === 'POST' && Boolean(invitationsMatch)) ||
+    (request.method === 'POST' && Boolean(shareLinksMatch)) ||
     (request.method === 'PATCH' && Boolean(memberMatch));
 
   if (
@@ -982,6 +1064,38 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
       );
     }
     return json(created, 201);
+  }
+
+  if (request.method === 'POST' && shareLinksMatch) {
+    return json(
+      await createShareLink(
+        persistence,
+        userId,
+        shareLinksMatch[1]!,
+        await readJsonBody(request),
+        now
+      ),
+      201
+    );
+  }
+
+  if (request.method === 'GET' && shareLinksMatch) {
+    return json({
+      shareLinks: await persistence.listProjectShareLinks(
+        userId,
+        shareLinksMatch[1]!
+      )
+    });
+  }
+
+  if (request.method === 'DELETE' && shareLinkMatch) {
+    await persistence.revokeProjectShareLink(
+      userId,
+      shareLinkMatch[1]!,
+      shareLinkMatch[2]!,
+      now
+    );
+    return new Response(null, { status: 204 });
   }
 
   if (request.method === 'DELETE' && invitationMatch) {

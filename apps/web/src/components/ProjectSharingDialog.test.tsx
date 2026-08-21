@@ -13,6 +13,7 @@ import {
 } from '@openzcad/shared';
 import type { ConflictResolutionHandlers } from '../lib/conflictRecovery';
 import type { ProjectSharingClient } from '../lib/projectSharing';
+import type { ProjectShareLinkClient } from '../lib/projectShareClient';
 import { ProjectSharingDialog } from './ProjectSharingDialog';
 
 const owner = toUserId('user_sharing_owner');
@@ -87,6 +88,41 @@ function client(): ProjectSharingClient {
   };
 }
 
+function shareLinkClient(): ProjectShareLinkClient {
+  const links: Array<{
+    shareLinkId: string;
+    projectId: string;
+    mode: 'tweak' | 'view';
+    createdAt: number;
+    revokedAt: null;
+  }> = [];
+  return {
+    createProjectShareLink: vi.fn(
+      async (projectId: string, mode: 'tweak' | 'view') => {
+      const shareLink = {
+        shareLinkId: `share_${links.length + 1}`,
+        projectId,
+        mode,
+        createdAt: 1_700_000_000,
+        revokedAt: null
+      };
+        links.push(shareLink);
+        return { shareLink, token: 'a'.repeat(43) };
+      }
+    ),
+    listProjectShareLinks: vi.fn(async () => [...links]),
+    revokeProjectShareLink: vi.fn(async (_projectId, shareLinkId: string) => {
+      const index = links.findIndex(
+        (link) => link.shareLinkId === shareLinkId
+      );
+      if (index >= 0) {
+        links.splice(index, 1);
+      }
+    }),
+    fetchSharedProject: vi.fn(async () => null)
+  };
+}
+
 function recoveryHandlers(calls: string[] = []): ConflictResolutionHandlers {
   return {
     writeRecoveryCopy: vi.fn(async () => {
@@ -155,6 +191,7 @@ describe('ProjectSharingDialog', () => {
         collaborationStatus="live"
         lease={null}
         client={sharingClient}
+        shareLinkClient={shareLinkClient()}
         onClose={vi.fn()}
       />
     );
@@ -196,6 +233,62 @@ describe('ProjectSharingDialog', () => {
     ).not.toBeInTheDocument();
   });
 
+  it('mints a share link shown once, copies it, and revokes active links', async () => {
+    const base = createProjectDocument('Share links', owner);
+    const links = shareLinkClient();
+    const writeText = vi.fn(async () => undefined);
+    vi.spyOn(navigator.clipboard, 'writeText').mockImplementation(writeText);
+    const user = userEvent.setup();
+    render(
+      <ProjectSharingDialog
+        projectId={base.projectId}
+        role="owner"
+        collaborationStatus="live"
+        lease={null}
+        client={client()}
+        shareLinkClient={links}
+        onClose={vi.fn()}
+      />
+    );
+
+    expect(await screen.findByText('No active share links.')).toBeVisible();
+    expect(
+      screen.getByText(
+        'Anyone with the link can open this model, adjust its parameters and export — without an account.'
+      )
+    ).toBeVisible();
+
+    await user.click(screen.getByRole('button', { name: 'Create link' }));
+    await waitFor(() =>
+      expect(links.createProjectShareLink).toHaveBeenCalledWith(
+        base.projectId,
+        'tweak'
+      )
+    );
+    const url = screen.getByLabelText('Share link');
+    expect(url).toHaveValue(`${location.origin}/#share=${'a'.repeat(43)}`);
+    await user.click(screen.getByRole('button', { name: 'Copy' }));
+    await waitFor(() =>
+      expect(writeText).toHaveBeenCalledWith(
+        `${location.origin}/#share=${'a'.repeat(43)}`
+      )
+    );
+    expect(screen.getByRole('button', { name: 'Copied' })).toBeVisible();
+    expect(screen.getByText('Anyone with the link')).toBeVisible();
+
+    await user.click(
+      screen.getByRole('button', { name: /Revoke share link created/ })
+    );
+    await waitFor(() =>
+      expect(links.revokeProjectShareLink).toHaveBeenCalledWith(
+        base.projectId,
+        'share_1'
+      )
+    );
+    expect(await screen.findByText('No active share links.')).toBeVisible();
+    expect(screen.queryByLabelText('Share link')).not.toBeInTheDocument();
+  });
+
   it('keeps editor assignment unavailable when lease enforcement is off', async () => {
     const base = createProjectDocument('Viewer-only rollout', owner);
     render(
@@ -206,6 +299,7 @@ describe('ProjectSharingDialog', () => {
         lease={null}
         editorInvitationsEnabled={false}
         client={client()}
+        shareLinkClient={shareLinkClient()}
         onClose={vi.fn()}
       />
     );

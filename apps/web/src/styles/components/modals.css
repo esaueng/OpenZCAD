@@ -768,6 +768,58 @@
   font-size: var(--fs-xs);
 }
 
+.sharing-share-hint {
+  margin: var(--sp-1) 0 var(--sp-2);
+  padding: 0 var(--sp-1);
+  color: var(--color-text-muted);
+  font-size: var(--fs-xs);
+  line-height: 1.5;
+}
+
+.sharing-share-create {
+  min-height: 26px;
+  padding: 2px 10px;
+  font-size: var(--fs-xs);
+}
+
+/* The minted link appears exactly once; the row keeps it selectable next to
+   its copy affordance without pretending to be part of the link list. */
+.sharing-share-output {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: var(--sp-2);
+  align-items: center;
+  margin-top: var(--sp-2);
+  padding: var(--sp-2);
+  border: 1px dashed var(--color-accent-border);
+  border-radius: var(--radius-md);
+  background: var(--color-accent-dim);
+}
+
+.sharing-share-url {
+  min-width: 0;
+  height: 26px;
+  padding: 0 var(--sp-1);
+  border: var(--border-thin);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-2);
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+}
+
+.sharing-share-copy {
+  min-height: 26px;
+  padding: 2px 10px;
+  font-size: var(--fs-xs);
+}
+
+.sharing-share-once {
+  grid-column: 1 / -1;
+  margin: 0;
+  color: var(--color-text-muted);
+  font-size: var(--fs-mini);
+}
+
 .sharing-conflict {
   padding: var(--sp-2) var(--sp-2) var(--sp-3);
   border: 1px solid color-mix(in srgb, var(--color-warning) 35%, transparent);
