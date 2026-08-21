@@ -478,7 +478,7 @@
 .settings-auth-controls label > span {
   color: var(--color-text-muted);
   font-size: var(--fs-mini);
-  font-weight: 600;
+  font-weight: var(--fw-medium);
 }
 
 .settings-auth-controls input {
@@ -814,5 +814,5 @@
 .settings-field-inline span {
   color: var(--color-text-muted);
   font-size: var(--fs-mini);
-  font-weight: 600;
+  font-weight: var(--fw-medium);
 }

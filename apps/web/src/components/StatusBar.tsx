@@ -19,7 +19,6 @@ interface StatusBarProps {
   warningCount: number;
   documentVersion: number | null;
   saveState: WorkspaceSaveState;
-  units: string;
   /** What picking is currently narrowed to, however that was decided. */
   selectionFilter: SelectionFilter;
   /** True while the active tool is choosing the filter rather than the user. */
@@ -38,7 +37,6 @@ export function StatusBar({
   warningCount,
   documentVersion,
   saveState,
-  units,
   selectionFilter,
   selectionFilterIsAutomatic,
   onSelectionFilter
@@ -125,29 +123,20 @@ export function StatusBar({
             );
           })}
         </div>
+        {/* Only readouts that change stay: the kernel name never did, units
+            already sit beside the project title, and the revision lives in
+            this tooltip instead of its own slot. */}
         <div
           className="status-groups"
           role="group"
           aria-label="Workspace status"
         >
           <span>
-            <b>kernel</b>
-            Exact B-rep
-          </span>
-          <span>
-            <b>units</b>
-            {units}
-          </span>
-          <span>
             <b>warnings</b>
             {warningCount}
           </span>
-          <span>
-            <b>rev</b>
-            {documentVersion ?? '—'}
-          </span>
           <span
-            title={workspaceSummary}
+            title={`${workspaceSummary} · rev ${documentVersion ?? '—'}`}
             aria-label={`${workspaceSummary}. Sync ${syncLabel}.`}
           >
             <b>sync</b>

@@ -66,9 +66,9 @@
       var(--color-accent-dim),
       transparent 65%
     ),
-    linear-gradient(rgba(77, 163, 255, 0.055) 1px, transparent 1px) 0 0 / 42px
+    linear-gradient(color-mix(in srgb, var(--color-accent) 6%, transparent) 1px, transparent 1px) 0 0 / 42px
       42px,
-    linear-gradient(90deg, rgba(77, 163, 255, 0.055) 1px, transparent 1px) 0 0 /
+    linear-gradient(90deg, color-mix(in srgb, var(--color-accent) 6%, transparent) 1px, transparent 1px) 0 0 /
       42px 42px;
   -webkit-mask-image: linear-gradient(#000, #000 45%, transparent 92%);
   mask-image: linear-gradient(#000, #000 45%, transparent 92%);
@@ -479,7 +479,7 @@
   gap: var(--sp-2);
   margin-bottom: var(--sp-3);
   padding: var(--sp-2) var(--sp-3);
-  background: var(--color-surface-1);
+  background: var(--color-surface);
   border: var(--border-thin);
   border-radius: var(--radius-md);
   color: var(--color-text-subtle);
@@ -514,7 +514,7 @@
   right: 4px;
   display: inline-flex;
   padding: 3px;
-  background: var(--color-surface-1);
+  background: var(--color-surface);
   border: var(--border-thin);
   border-radius: var(--radius-sm);
   color: var(--color-text-subtle);
@@ -555,7 +555,7 @@
   gap: var(--sp-2);
   margin-bottom: var(--sp-3);
   padding: var(--sp-2) var(--sp-3);
-  background: var(--color-surface-1);
+  background: var(--color-surface);
   border: var(--border-thin);
   border-radius: var(--radius-md);
   color: var(--color-text-subtle);
@@ -608,7 +608,7 @@
 .start-sync-fill {
   height: 100%;
   background: var(--color-success);
-  transition: width 240ms ease;
+  transition: width var(--dur-base) var(--ease-out);
 }
 
 .start-sync-fill.is-failed {
@@ -644,7 +644,7 @@
   text-overflow: ellipsis;
   white-space: nowrap;
   color: var(--color-text);
-  font-weight: 600;
+  font-weight: var(--fw-medium);
 }
 
 .start-sync-failure-detail {

@@ -16,6 +16,20 @@ export async function expectBodyCount(page: Page, count: number) {
 }
 
 /**
+ * Consumed bodies sit collapsed behind the sidebar's disclosure row, so the
+ * row's own count is the observable; zero consumed bodies means no row at all.
+ */
+export async function expectConsumedBodyCount(page: Page, count: number) {
+  if (count === 0) {
+    await expect(page.locator('.consumed-toggle')).toHaveCount(0);
+  } else {
+    await expect(page.locator('.consumed-toggle')).toContainText(
+      `${count} consumed`
+    );
+  }
+}
+
+/**
  * The preview server hosts the static SPA without the Worker API, so the
  * handful of API routes the app touches are stubbed here. Everything else —
  * commands, the geometry worker, the viewport, STEP writing — is the real

@@ -56,7 +56,7 @@
 }
 
 .primary:hover:not(:disabled) {
-  box-shadow: 0 2px 14px rgba(77, 163, 255, 0.28);
+  box-shadow: 0 2px 14px color-mix(in srgb, var(--color-accent) 28%, transparent);
 }
 
 /* Fields acknowledge focus before the caret even moves. */

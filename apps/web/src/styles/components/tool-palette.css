@@ -123,22 +123,32 @@
   gap: 2px;
 }
 
-.palette-sep {
-  height: 1px;
-  margin: 4px 6px;
-  background: var(--color-border);
-  flex: 0 0 auto;
+.palette-group-label {
+  padding: 6px 6px 1px;
+  color: var(--color-text-subtle);
+  font-size: var(--fs-mini);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  white-space: nowrap;
+}
+
+/* Icon grid: four tools per row keeps all 28 above the fold where the old
+   one-per-row list overflowed every common viewport height. */
+.palette-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(30px, 1fr));
+  gap: 2px;
 }
 
 .palette-item {
   min-height: 30px;
   display: flex;
   align-items: center;
+  justify-content: center;
   gap: 8px;
-  padding: 4px 8px;
+  padding: 4px;
   color: var(--color-text-muted);
   border: 1px solid transparent;
-  border-left: 2px solid transparent;
   border-radius: var(--radius-sm);
   font-size: var(--fs-sm);
   text-align: left;
@@ -178,7 +188,7 @@
 .palette-item.active {
   color: var(--color-text);
   background: var(--color-accent-dim);
-  border-left-color: var(--color-accent);
+  border-color: var(--color-accent);
 }
 
 .palette-item.active svg {
@@ -186,17 +196,19 @@
 }
 
 .palette-search {
+  justify-content: flex-start;
   color: var(--color-text-subtle);
 }
 
-/* Collapse to icons when the viewport gets tight; tooltips carry the names. */
+/* Search is the only row still carrying a label; drop it when the viewport
+   gets tight, its tooltip carries the name. */
 @media (max-width: 1280px), (max-height: 760px) {
   .tool-palette .palette-label,
   .palette-item kbd {
     display: none;
   }
 
-  .palette-item {
+  .palette-search {
     justify-content: center;
     padding: 6px;
   }

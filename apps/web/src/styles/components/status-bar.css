@@ -59,7 +59,7 @@
 .status-log-caret {
   flex: 0 0 auto;
   color: var(--color-text-subtle);
-  font-size: 10px;
+  font-size: var(--fs-mini);
 }
 
 .status-log-panel {
