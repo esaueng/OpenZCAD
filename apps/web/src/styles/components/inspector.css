@@ -153,7 +153,7 @@
   margin-bottom: var(--sp-3);
   padding: var(--sp-2);
   line-height: 1.45;
-  background: var(--color-error-dim, rgba(255, 116, 82, 0.12));
+  background: color-mix(in srgb, var(--color-error) 12%, transparent);
   border: 1px solid var(--color-error);
   border-radius: var(--radius-sm);
 }
@@ -233,6 +233,8 @@
 }
 
 .kbd-inline {
+  /* Always a lightened chip with dark text, whatever the theme: the primary
+     button behind it is accent-filled in both. */
   color: rgba(6, 17, 30, 0.75);
   background: rgba(255, 255, 255, 0.28);
   border: none;
@@ -357,7 +359,7 @@
 
 .appearance-inputs input[type='range']::-webkit-slider-runnable-track {
   height: 4px;
-  border-radius: 2px;
+  border-radius: var(--radius-sm);
   background: var(--color-border);
 }
 
@@ -374,7 +376,7 @@
 
 .appearance-inputs input[type='range']::-moz-range-track {
   height: 4px;
-  border-radius: 2px;
+  border-radius: var(--radius-sm);
   background: var(--color-border);
 }
 

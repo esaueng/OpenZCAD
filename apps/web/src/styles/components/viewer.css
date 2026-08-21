@@ -188,15 +188,56 @@
 }
 
 .selection-callout.measurement-callout {
-  padding: 4px 8px;
+  padding: 3px 7px;
   color: rgba(225, 242, 255, 0.96);
-  background: rgba(9, 24, 40, 0.82);
-  border-color: rgba(124, 192, 255, 0.58);
-  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.28);
+  background: rgba(9, 24, 40, 0.78);
+  border-color: rgba(124, 192, 255, 0.48);
+  box-shadow: 0 3px 10px rgba(0, 0, 0, 0.24);
   font-family: var(--font-mono);
-  font-size: var(--fs-xs);
+  font-size: var(--fs-mini);
   font-variant-numeric: tabular-nums;
   pointer-events: none;
+}
+
+/*
+ * Leader from a decluttered measurement pill back to its anchor point. The
+ * viewer sets its width and rotation every frame; the dot marks the anchor.
+ */
+.measurement-leader {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  height: 0;
+  border-top: 1px solid rgba(124, 192, 255, 0.55);
+  transform-origin: 0 50%;
+  pointer-events: none;
+}
+
+.measurement-leader::after {
+  content: '';
+  position: absolute;
+  top: -3px;
+  right: -3px;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: rgba(124, 192, 255, 0.92);
+}
+
+.selection-callout.measurement-callout.selected .measurement-leader {
+  border-top-color: rgba(155, 211, 255, 0.85);
+}
+
+.selection-callout.measurement-callout.selected .measurement-leader::after {
+  background: rgb(155, 211, 255);
+}
+
+.selection-callout.measurement-callout.stale .measurement-leader {
+  border-top-color: rgba(245, 158, 11, 0.55);
+}
+
+.selection-callout.measurement-callout.stale .measurement-leader::after {
+  background: rgba(245, 158, 11, 0.92);
 }
 
 .selection-callout.measurement-callout.selected {

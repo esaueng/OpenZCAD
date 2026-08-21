@@ -230,6 +230,11 @@
   font-size: var(--fs-sm);
 }
 
+.export-dialog-presets button:hover:not(:disabled) {
+  background: var(--color-surface-hover);
+  border-color: var(--color-border-strong);
+}
+
 .export-dialog-presets button small {
   color: var(--color-text-subtle);
   font-size: var(--fs-mini);
@@ -391,6 +396,7 @@
   font-size: var(--fs-sm);
 }
 
+.palette-row:not(.disabled):hover,
 .palette-row.active {
   color: var(--color-text);
   background: var(--color-surface-hover);
@@ -515,7 +521,7 @@
 
 .sharing-room-dot[data-state='live'] {
   background: var(--color-success);
-  box-shadow: 0 0 6px rgba(34, 197, 94, 0.45);
+  box-shadow: 0 0 6px color-mix(in srgb, var(--color-success) 45%, transparent);
 }
 
 .sharing-room-dot[data-state='connecting'] {
@@ -559,7 +565,7 @@
 
 .sharing-status-line[data-tone='error'] {
   color: var(--color-error);
-  background: rgba(239, 68, 68, 0.08);
+  background: color-mix(in srgb, var(--color-error) 8%, transparent);
 }
 
 .sharing-status-line[data-tone='busy'] {
@@ -706,7 +712,7 @@
 
 .sharing-presence[data-status='active']::before {
   background: var(--color-success);
-  box-shadow: 0 0 6px rgba(34, 197, 94, 0.45);
+  box-shadow: 0 0 6px color-mix(in srgb, var(--color-success) 45%, transparent);
 }
 
 .sharing-role-select {
@@ -752,7 +758,7 @@
 
 .sharing-row-action:hover:not(:disabled) {
   color: var(--color-error);
-  background: rgba(239, 68, 68, 0.08);
+  background: color-mix(in srgb, var(--color-error) 8%, transparent);
 }
 
 .sharing-empty {
@@ -816,9 +822,9 @@
 
 .sharing-conflict {
   padding: var(--sp-2) var(--sp-2) var(--sp-3);
-  border: 1px solid rgba(245, 158, 11, 0.35);
+  border: 1px solid color-mix(in srgb, var(--color-warning) 35%, transparent);
   border-radius: var(--radius-md);
-  background: rgba(245, 158, 11, 0.06);
+  background: color-mix(in srgb, var(--color-warning) 6%, transparent);
 }
 
 .sharing-conflict h3 {

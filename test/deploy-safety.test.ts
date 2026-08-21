@@ -38,9 +38,32 @@ describe('beta deployment safety', () => {
     expect(command).toBeDefined();
     expect(command).toContain('wrangler d1 migrations apply');
     expect(command).toContain('wrangler deploy');
+    expect(command).toContain('verify-beta-deployment.mjs');
     expect(command!.indexOf('wrangler d1 migrations apply')).toBeLessThan(
       command!.indexOf('wrangler deploy')
     );
+    expect(command!.indexOf('wrangler deploy')).toBeLessThan(
+      command!.indexOf('verify-beta-deployment.mjs')
+    );
+  });
+
+  it('fails production health when measurement or erasure is unavailable', () => {
+    const workflow = readFileSync(
+      '.github/workflows/production-health.yml',
+      'utf8'
+    );
+
+    for (const field of [
+      'documentStorageAccountingReady',
+      'projectObjectStorageReady',
+      'projectMeasurementStorageReady',
+      'accountErasureReady',
+      'projectErasureReady',
+      'projectMeasurementSyncEnabled'
+    ]) {
+      expect(workflow).toContain(`.${field} == true`);
+    }
+    expect(workflow).toContain('/api/health?cb=');
   });
 
   it('keeps the root release command delegated to the guarded web script', () => {

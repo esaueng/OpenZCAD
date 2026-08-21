@@ -1893,7 +1893,7 @@ export function App() {
   // Conditions that lock the document whatever workspace is showing. Tweak's
   // parameter edits answer to these too: a second tab or a read-only
   // collaboration seat locks parameters as firmly as features.
-  const baseEditDisabledReason = projectOpenElsewhere
+  const projectEditDisabledReason = projectOpenElsewhere
     ? 'This project is open in another tab'
     : shareSession
       ? // A shared-link session has no account seat, no lease and no second
@@ -1916,12 +1916,12 @@ export function App() {
                   ? 'Another collaborator holds the edit lease'
                   : 'Waiting for the project edit lease'
                 : null;
-  // View mode joins the same guard every other read-only condition uses, so a
-  // keyboard shortcut or a command that slips past the hidden UI is refused at
-  // the same choke point rather than needing its own check.
-  const editDisabledReason =
-    baseEditDisabledReason ??
-    (viewMode
+  // View mode joins the same guard every other modeling edit uses. Project
+  // rename has its own mode-aware guard below because it is workspace metadata:
+  // owners may change it from either mode, while editors remain Build-only.
+  const editDisabledReason = projectOpenElsewhere
+    ? projectEditDisabledReason
+    : viewMode
       ? // "Switch to Build" is only advice worth giving to someone who can.
         // A read-only share pins the mode to View, so telling a viewer to
         // switch names a route they will find disabled — say why instead.
@@ -1929,15 +1929,28 @@ export function App() {
         'View mode is read-only — switch to Build to edit')
       : tweakMode
         ? 'Tweak mode adjusts parameters only — switch to Build to edit'
-        : null);
-  // The parameter guard: everything the base chain refuses, plus View mode.
-  // Tweak deliberately passes.
-  const parameterEditDisabledReason =
-    baseEditDisabledReason ??
-    (viewMode
+        : projectEditDisabledReason;
+  // The parameter guard: the same chain, except Tweak deliberately passes —
+  // adjusting a published dimension is the one edit that workspace allows.
+  const parameterEditDisabledReason = projectOpenElsewhere
+    ? projectEditDisabledReason
+    : viewMode
       ? (buildModeDisabledReason ??
         'View mode is read-only — switch to Tweak or Build to change parameters')
-      : null);
+      : projectEditDisabledReason;
+  const ownsOpenProject = Boolean(
+    doc &&
+    (doc.ownerUserId === session?.userId ||
+      (!cloudAvailable && doc.ownerUserId === localUserId))
+  );
+  // Editors keep rename in the modeling workspace only; Tweak is a reading
+  // workspace like View, so it stays owner-only too.
+  const hasProjectRenameAccess =
+    ownsOpenProject || (!modelingLocked && collaboration.role === 'editor');
+  const projectRenameDisabledReason = !hasProjectRenameAccess
+    ? 'Only the project owner can rename outside Build mode'
+    : projectEditDisabledReason;
+  const canRenameProject = projectRenameDisabledReason === null;
 
   // Read through a ref, because an async caller holds the closure of the
   // render it started in: a STEP import that spends minutes rebuilding and
@@ -1947,6 +1960,8 @@ export function App() {
   editDisabledReasonRef.current = editDisabledReason;
   const parameterEditDisabledReasonRef = useRef(parameterEditDisabledReason);
   parameterEditDisabledReasonRef.current = parameterEditDisabledReason;
+  const projectRenameDisabledReasonRef = useRef(projectRenameDisabledReason);
+  projectRenameDisabledReasonRef.current = projectRenameDisabledReason;
 
   function ensureCanEdit(action = 'edit this project'): boolean {
     const reason = editDisabledReasonRef.current;
@@ -1981,6 +1996,15 @@ export function App() {
     return parametersOnly
       ? ensureCanEditParameters(action)
       : ensureCanEdit(action);
+  }
+
+  function ensureCanRenameProject(): boolean {
+    const reason = projectRenameDisabledReasonRef.current;
+    if (!reason) {
+      return true;
+    }
+    setStatus(`Cannot rename this project: ${reason}.`);
+    return false;
   }
 
   const conflictHandlers: ConflictResolutionHandlers = {
@@ -4111,9 +4135,15 @@ export function App() {
 
   function executeCommand(
     command: AnyCommand,
-    derived?: ProjectDocument['derived']
+    derived?: ProjectDocument['derived'],
+    permission: 'edit' | 'rename' = 'edit'
   ): boolean {
-    if (!managerRef.current || !ensureCanExecute([command], 'run this command')) {
+    if (
+      !managerRef.current ||
+      !(permission === 'rename'
+        ? ensureCanRenameProject()
+        : ensureCanExecute([command], 'run this command'))
+    ) {
       return false;
     }
     try {
@@ -11557,6 +11587,7 @@ export function App() {
             cloudFunctionsEnabled && projectSharingPreferenceEnabled
           }
           workspaceMode={resolvedWorkspaceMode}
+          canRenameProject={canRenameProject}
           buildModeDisabledReason={buildModeDisabledReason}
           tweakModeDisabledReason={tweakModeDisabledReason}
           onWorkspaceMode={handleWorkspaceMode}
@@ -11568,7 +11599,9 @@ export function App() {
           onExportDiagnostics={handleExportDiagnostics}
           onRenameProject={(name) =>
             executeCommand(
-              commandFactories.renameNode({ nodeId: doc.rootNodeId, name })
+              commandFactories.renameNode({ nodeId: doc.rootNodeId, name }),
+              undefined,
+              'rename'
             )
           }
           onGoHome={() => void handleGoHome()}
@@ -12788,7 +12821,6 @@ export function App() {
           warningCount={warnings.length}
           documentVersion={doc.version}
           saveState={presentedSaveState}
-          units={doc.units}
           selectionFilter={selectionFilter}
           selectionFilterIsAutomatic={manualSelectionFilter === null}
           onSelectionFilter={setManualSelectionFilter}
