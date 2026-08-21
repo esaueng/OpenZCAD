@@ -96,7 +96,8 @@ test('accepts a signed-in project invitation link and scrubs the token', async (
 
   await expect(
     page.getByRole('button', { name: 'Rename project' })
-  ).toContainText(document.name);
+  ).toHaveCount(0);
+  await expect(page.locator('.breadcrumb')).toContainText(document.name);
   await expect(page.getByRole('contentinfo')).toContainText(
     `Opened ${document.name}`
   );
@@ -169,7 +170,8 @@ test('focuses signed-out invitation links on email sign-in and resumes them', as
 
   await expect(
     page.getByRole('button', { name: 'Rename project' })
-  ).toContainText(document.name);
+  ).toHaveCount(0);
+  await expect(page.locator('.breadcrumb')).toContainText(document.name);
   await expect(page.getByRole('dialog', { name: 'Settings' })).toHaveCount(0);
   expect(
     await page.evaluate(
@@ -205,6 +207,10 @@ test('keeps a shared-project viewer visibly read-only', async ({ page }) => {
     page.getByRole('navigation', { name: 'Feature tools' })
   ).toHaveCount(0);
   await expect(page.getByRole('button', { name: /^Box \(B\)/ })).toHaveCount(0);
+  await expect(
+    page.getByRole('button', { name: 'Rename project' })
+  ).toHaveCount(0);
+  await expect(page.getByLabel('Project name')).toHaveCount(0);
 
   // The parameter field this used to type into is gone with the rest of the
   // build UI, so exercise the guard the hidden UI is backed by: a keyboard
@@ -233,6 +239,30 @@ test('keeps a shared-project viewer visibly read-only', async ({ page }) => {
   await expect(dialog).toContainText(
     'Only the project owner can manage members and invitations.'
   );
+});
+
+test('lets the project owner rename from View mode', async ({ page }) => {
+  await stubApi(page);
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('Owner View Part');
+  await page.getByRole('button', { name: 'Create project' }).click();
+
+  const workspaceMode = page.getByRole('group', { name: 'Workspace mode' });
+  await workspaceMode.getByRole('button', { name: 'View' }).click();
+  await expect(
+    workspaceMode.getByRole('button', { name: 'View' })
+  ).toHaveAttribute('aria-pressed', 'true');
+
+  await page.getByRole('button', { name: 'Rename project' }).click();
+  await page.getByLabel('Project name').fill('Renamed from View');
+  await page.getByLabel('Project name').press('Enter');
+
+  await expect(
+    page.getByRole('button', { name: 'Rename project' })
+  ).toContainText('Renamed from View');
+  await expect(
+    workspaceMode.getByRole('button', { name: 'View' })
+  ).toHaveAttribute('aria-pressed', 'true');
 });
 
 test('uses a one-use native ticket for desktop collaboration without exposing a bearer', async ({
