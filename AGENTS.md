@@ -85,6 +85,15 @@ TypeScript strictness is enforced by `pnpm typecheck`, and ESLint enforces the
 rules in `eslint.config.mjs`. There is currently no dependency-boundary lint
 rule: package-direction claims are design intent, not an automated CI gate.
 
+Markup keeps its styling contract through `test/css-class-coverage.test.ts`,
+which fails when an element carries only class names no stylesheet defines —
+the defect that shipped an unstyled Hole face list, three dead export spinners
+and a bare viewport fallback in one release, none of which a type or unit test
+can see. `node scripts/check-css-classes.mjs` runs the same check on its own.
+An element styled entirely from a parent, a child, or a wrapper component
+belongs in `UNSTYLED_ALLOWANCES` in that script together with the reason; an
+entry that stops matching fails as stale, so the list cannot quietly rot.
+
 **No status check is required to merge.** The org is on GitHub Free and this
 repo is private, so branch protection and rulesets are unavailable — GitHub
 reports every open PR as mergeable regardless of CI. Two consequences:
