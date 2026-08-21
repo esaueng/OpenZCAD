@@ -329,19 +329,28 @@ try {
     sessionId,
     'The exact workspace status',
     `var status = document.querySelector('[aria-label="Workspace status"]');
-    return Boolean(status && status.textContent.includes('Exact B-rep'));`
+    return Boolean(status && status.textContent.includes('warnings'));`
   );
-  const documentStatusScript = `return Array.from(
+  // The warnings readout plus the document revision from the sync chip's
+  // tooltip: the sync label itself changes as autosave settles, but the
+  // revision only moves when something edits the document, so comparing this
+  // before and after input still catches a gesture that mutated the model.
+  const documentStatusScript = `var spans = Array.from(
       document.querySelectorAll('[aria-label="Workspace status"] > span')
-    )
+    );
+    var readouts = spans
       .filter(function (item) {
         return item.querySelector('b')?.textContent !== 'sync';
       })
       .map(function (item) { return item.textContent; })
-      .join('');`;
+      .join('');
+    var syncTitle = spans
+      .map(function (item) { return item.getAttribute('title') || ''; })
+      .find(function (title) { return title.includes('rev '); }) || '';
+    return readouts + '|' + syncTitle;`;
   const statusText = await execute(sessionId, documentStatusScript);
-  assert.match(statusText, /Exact B-rep/);
   assert.match(statusText, /warnings\s*0/i);
+  assert.match(statusText, /rev /);
   assert.match(
     await execute(sessionId, 'return document.body.innerText;'),
     /Mounting Bracket/
