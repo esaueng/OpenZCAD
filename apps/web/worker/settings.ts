@@ -33,7 +33,7 @@ interface CredentialRow {
 }
 
 const UNIT_SYSTEMS = ['mm', 'cm', 'm', 'inch'] as const;
-const THEMES = ['system', 'dark'] as const;
+const THEMES = ['system', 'dark', 'light'] as const;
 const DENSITIES = ['compact', 'comfortable'] as const;
 const PROJECTIONS = ['perspective', 'orthographic'] as const;
 const DISPLAY_MODES = ['shaded-edges', 'shaded', 'wireframe'] as const;

@@ -12,6 +12,7 @@ import {
   loadLocalAppSettings,
   loadLocalAppSettingsRecord,
   normalizeAppSettings,
+  resolvedAppTheme,
   saveLocalAppSettings,
   shouldAdoptAccountSettings
 } from '../apps/web/src/lib/appSettings';
@@ -72,6 +73,33 @@ describe('application settings', () => {
     expect(normalized.collaboration.enabled).toBe(false);
     expect(normalized.assistant.enabled).toBe(false);
     expect(normalized.assistant.model).toBe('openai/gpt-5.6-sol');
+  });
+
+  it('accepts the light theme on both layers and falls back on junk', () => {
+    expect(
+      normalizeAppSettings({ appearance: { theme: 'light' } }).appearance.theme
+    ).toBe('light');
+    expect(
+      normalizeAppSettings({ appearance: { theme: 'sepia' } }).appearance.theme
+    ).toBe('system');
+
+    // The account boundary validates the theme independently of the client
+    // normalizer; before 'light' existed there, saving it was rejected — a
+    // cloud-autosave outage the client alone could not have caught.
+    const settings = deepClone(DEFAULT_APP_SETTINGS);
+    settings.appearance.theme = 'light';
+    const parsed = parseUpdateAppSettingsRequest(
+      { expectedRevision: 0, settings },
+      'development'
+    );
+    expect(parsed.settings.appearance.theme).toBe('light');
+  });
+
+  it('resolves the painted palette from the setting and the OS preference', () => {
+    expect(resolvedAppTheme('dark', true)).toBe('dark');
+    expect(resolvedAppTheme('light', false)).toBe('light');
+    expect(resolvedAppTheme('system', true)).toBe('light');
+    expect(resolvedAppTheme('system', false)).toBe('dark');
   });
 
   it('returns independent default objects', () => {
