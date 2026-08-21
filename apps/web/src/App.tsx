@@ -1847,34 +1847,46 @@ export function App() {
       : null;
   const viewMode =
     panelState.workspaceMode === 'view' || buildModeDisabledReason !== null;
-  // View mode joins the same guard every other read-only condition uses, so a
-  // keyboard shortcut or a command that slips past the hidden UI is refused at
-  // the same choke point rather than needing its own check.
-  const editDisabledReason = projectOpenElsewhere
+  const projectEditDisabledReason = projectOpenElsewhere
     ? 'This project is open in another tab'
+    : sharedProjectDisabled
+      ? 'Project sharing is disabled in Settings'
+      : !cloudAvailable || !session || !projectSharingEnabled
+        ? null
+        : collaboration.conflict
+          ? 'Resolve the collaboration conflict before editing'
+          : collaboration.role === 'viewer' ||
+              collaboration.status === 'read-only'
+            ? 'This shared project is read-only'
+            : collaboration.role === null
+              ? 'Waiting for project access'
+              : collaborationRollout.editLeasesEnforced &&
+                  !activeCollaborationLease
+                ? collaboration.status === 'lease-denied'
+                  ? 'Another collaborator holds the edit lease'
+                  : 'Waiting for the project edit lease'
+                : null;
+  // View mode joins the same guard every other modeling edit uses. Project
+  // rename has its own owner-only guard below because it is workspace metadata,
+  // not a modeling operation, and owners may change it from either mode.
+  const editDisabledReason = projectOpenElsewhere
+    ? projectEditDisabledReason
     : viewMode
       ? // "Switch to Build" is only advice worth giving to someone who can.
         // A read-only share pins the mode to View, so telling a viewer to
         // switch names a route they will find disabled — say why instead.
         (buildModeDisabledReason ??
         'View mode is read-only — switch to Build to edit')
-      : sharedProjectDisabled
-        ? 'Project sharing is disabled in Settings'
-        : !cloudAvailable || !session || !projectSharingEnabled
-          ? null
-          : collaboration.conflict
-            ? 'Resolve the collaboration conflict before editing'
-            : collaboration.role === 'viewer' ||
-                collaboration.status === 'read-only'
-              ? 'This shared project is read-only'
-              : collaboration.role === null
-                ? 'Waiting for project access'
-                : collaborationRollout.editLeasesEnforced &&
-                    !activeCollaborationLease
-                  ? collaboration.status === 'lease-denied'
-                    ? 'Another collaborator holds the edit lease'
-                    : 'Waiting for the project edit lease'
-                  : null;
+      : projectEditDisabledReason;
+  const ownsOpenProject = Boolean(
+    doc &&
+    (doc.ownerUserId === session?.userId ||
+      (!cloudAvailable && doc.ownerUserId === localUserId))
+  );
+  const projectRenameDisabledReason = !ownsOpenProject
+    ? 'Only the project owner can rename this project'
+    : projectEditDisabledReason;
+  const canRenameProject = projectRenameDisabledReason === null;
 
   // Read through a ref, because an async caller holds the closure of the
   // render it started in: a STEP import that spends minutes rebuilding and
@@ -1882,6 +1894,8 @@ export function App() {
   // mode was entered or the project was opened in a second tab.
   const editDisabledReasonRef = useRef(editDisabledReason);
   editDisabledReasonRef.current = editDisabledReason;
+  const projectRenameDisabledReasonRef = useRef(projectRenameDisabledReason);
+  projectRenameDisabledReasonRef.current = projectRenameDisabledReason;
 
   function ensureCanEdit(action = 'edit this project'): boolean {
     const reason = editDisabledReasonRef.current;
@@ -1889,6 +1903,15 @@ export function App() {
       return true;
     }
     setStatus(`Cannot ${action}: ${reason}.`);
+    return false;
+  }
+
+  function ensureCanRenameProject(): boolean {
+    const reason = projectRenameDisabledReasonRef.current;
+    if (!reason) {
+      return true;
+    }
+    setStatus(`Cannot rename this project: ${reason}.`);
     return false;
   }
 
@@ -4005,9 +4028,15 @@ export function App() {
 
   function executeCommand(
     command: AnyCommand,
-    derived?: ProjectDocument['derived']
+    derived?: ProjectDocument['derived'],
+    permission: 'edit' | 'rename' = 'edit'
   ): boolean {
-    if (!managerRef.current || !ensureCanEdit('run this command')) {
+    if (
+      !managerRef.current ||
+      !(permission === 'rename'
+        ? ensureCanRenameProject()
+        : ensureCanEdit('run this command'))
+    ) {
       return false;
     }
     try {
@@ -11289,6 +11318,7 @@ export function App() {
             cloudFunctionsEnabled && projectSharingPreferenceEnabled
           }
           workspaceMode={viewMode ? 'view' : 'build'}
+          canRenameProject={canRenameProject}
           buildModeDisabledReason={buildModeDisabledReason}
           onWorkspaceMode={handleWorkspaceMode}
           onSave={() => void handleSave()}
@@ -11299,7 +11329,9 @@ export function App() {
           onExportDiagnostics={handleExportDiagnostics}
           onRenameProject={(name) =>
             executeCommand(
-              commandFactories.renameNode({ nodeId: doc.rootNodeId, name })
+              commandFactories.renameNode({ nodeId: doc.rootNodeId, name }),
+              undefined,
+              'rename'
             )
           }
           onGoHome={() => void handleGoHome()}
