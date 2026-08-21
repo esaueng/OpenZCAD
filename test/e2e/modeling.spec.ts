@@ -2915,7 +2915,9 @@ test('the panel refuses a zero extrude and keeps a boolean name honest', async (
     .locator('.feature-row-main', { hasText: 'Extrude' })
     .first()
     .click();
-  const distance = inspector.getByLabel('Distance');
+  // exact: the extrude panel now also carries a "Back distance" field,
+  // which a substring label match resolves alongside this one.
+  const distance = inspector.getByLabel('Distance', { exact: true });
   await distance.fill('0');
   await expect(inspector.getByText('Distance cannot be zero')).toBeVisible();
   await expect(

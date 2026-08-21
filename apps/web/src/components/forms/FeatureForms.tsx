@@ -649,6 +649,7 @@ interface ExtrudeFormProps {
     sketchId: SketchId;
     distance: ParamValue;
     symmetric?: boolean;
+    backDistance?: ParamValue;
     operation?: ExtrudeOperation;
   };
   /** Pre-selected sketch for new features, e.g. the one picked in the tree. */
@@ -659,6 +660,7 @@ interface ExtrudeFormProps {
     sketchId: SketchId;
     distance: ParamValue;
     symmetric?: boolean;
+    backDistance?: ParamValue;
   }): void;
   onCancel?: () => void;
 }
@@ -680,6 +682,9 @@ export function ExtrudeForm({
     paramValueText(initial?.distance ?? 24)
   );
   const [symmetric, setSymmetric] = useState(initial?.symmetric ?? false);
+  const [backDistance, setBackDistance] = useState(
+    paramValueText(initial?.backDistance ?? 0)
+  );
   // A zero-distance extrude builds nothing, and the kernel says so only after
   // the edit has committed and taken the body with it — the panel showed no
   // error, Apply stayed enabled, and the solid simply vanished, leaving a
@@ -691,11 +696,26 @@ export function ExtrudeForm({
     distancePreview.ok &&
     distancePreview.value !== undefined &&
     distancePreview.value === 0;
+  // The back distance extends the solid behind the sketch plane, opposite
+  // the distance direction. Zero keeps the extrude one-sided; a negative
+  // value would silently mean "in front" and is rejected here the same way
+  // a zero distance is. Symmetric and two-sided are mutually exclusive, so
+  // whichever is engaged disables the other control below.
+  const backPreview = previewExpression(backDistance, scope);
+  const backIsPositive =
+    backPreview.ok &&
+    backPreview.value !== undefined &&
+    backPreview.value > 0;
+  const backIsNegative =
+    backPreview.ok &&
+    backPreview.value !== undefined &&
+    backPreview.value < 0;
   const canSubmit =
     name.trim().length > 0 &&
     sketchId !== '' &&
     fieldsValid(scope, [distance]) &&
-    !distanceIsZero;
+    !distanceIsZero &&
+    (symmetric || (fieldsValid(scope, [backDistance]) && !backIsNegative));
 
   return (
     <FormShell
@@ -708,7 +728,10 @@ export function ExtrudeForm({
           name: name.trim(),
           sketchId: sketchId as SketchId,
           distance: coerceParamValue(distance),
-          symmetric
+          symmetric,
+          ...(symmetric || !backIsPositive
+            ? {}
+            : { backDistance: coerceParamValue(backDistance) })
         })
       }
       onCancel={onCancel}
@@ -747,10 +770,25 @@ export function ExtrudeForm({
         <input
           type="checkbox"
           checked={symmetric}
+          disabled={backIsPositive}
           onChange={(event) => setSymmetric(event.target.checked)}
         />
         <span>Symmetric about the sketch plane</span>
       </label>
+      {!symmetric && (
+        <ExprInput
+          label="Back distance"
+          value={backDistance}
+          scope={scope}
+          onChange={setBackDistance}
+        />
+      )}
+      {!symmetric && backIsNegative && (
+        <p className="muted error">
+          Back distance cannot be negative — it always extends behind the
+          sketch plane, opposite the distance direction.
+        </p>
+      )}
       <p className="muted">
         Negative distances extrude below the sketch plane. The operation is
         resolved when the feature is created and is not re-inferred by edits.
