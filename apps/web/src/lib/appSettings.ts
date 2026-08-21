@@ -10,7 +10,24 @@ import {
 export const APP_SETTINGS_STORAGE_KEY = 'openzcad-app-settings:v1';
 
 const UNITS: UnitSystem[] = ['mm', 'cm', 'm', 'inch'];
-const THEMES: AppSettings['appearance']['theme'][] = ['system', 'dark'];
+const THEMES: AppSettings['appearance']['theme'][] = [
+  'system',
+  'dark',
+  'light'
+];
+
+/**
+ * The palette a theme setting actually paints. 'system' follows the host's
+ * `prefers-color-scheme`; an explicit choice ignores it. Kept pure — the App
+ * effect owns the media query and its change listener — so the resolution
+ * itself is testable without a DOM.
+ */
+export function resolvedAppTheme(
+  theme: AppSettings['appearance']['theme'],
+  prefersLight: boolean
+): 'dark' | 'light' {
+  return theme === 'system' ? (prefersLight ? 'light' : 'dark') : theme;
+}
 const DENSITIES: AppSettings['appearance']['density'][] = [
   'compact',
   'comfortable'

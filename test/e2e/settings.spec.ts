@@ -313,6 +313,38 @@ test('settings name their sections and search individual settings', async ({
   await expect(page.locator('.start-screen')).not.toHaveAttribute('inert', '');
 });
 
+test('theme setting repaints the chrome and follows the system preference', async ({
+  page
+}) => {
+  await page.emulateMedia({ colorScheme: 'dark' });
+  await stubApi(page);
+  await page.goto('/');
+  const root = page.locator('html');
+  await expect(root).toHaveAttribute('data-theme', 'dark');
+
+  await page.getByRole('button', { name: 'Open settings' }).click();
+  await page.getByRole('button', { name: 'Appearance', exact: true }).click();
+  const theme = page.getByLabel('Theme');
+  await theme.selectOption('light');
+  await expect(root).toHaveAttribute('data-theme', 'light');
+  // The tokens really repaint — the page ground leaves the dark ramp.
+  const background = await page.evaluate(
+    () => getComputedStyle(document.body).backgroundColor
+  );
+  expect(background).toBe('rgb(238, 241, 245)');
+
+  // 'system' tracks a live OS appearance change without a reload.
+  await theme.selectOption('system');
+  await expect(root).toHaveAttribute('data-theme', 'dark');
+  await page.emulateMedia({ colorScheme: 'light' });
+  await expect(root).toHaveAttribute('data-theme', 'light');
+
+  // The choice persists across a reload from device storage.
+  await theme.selectOption('dark');
+  await page.reload();
+  await expect(root).toHaveAttribute('data-theme', 'dark');
+});
+
 test('turns project sharing off without disabling cloud saves', async ({
   page
 }) => {
