@@ -56,10 +56,18 @@ test('a project that opens with history never shows the tour', async ({
     .click();
   await expect(page.getByRole('button', { name: /^Fillet/ })).toBeEnabled();
 
-  // The tour was skipped by nobody — the RELOADED project simply opens with
-  // features, so eligibility never latches even though the flag is unset.
-  await page.reload();
+  // Leave WITHOUT skipping — the exit through the project list flushes the
+  // local save, and the dismissal flag stays unset.
+  await page.getByTitle('Back to projects').click();
+  const savedProject = page.locator('.start-tile-open', {
+    hasText: 'Veteran Part'
+  });
+  await expect(savedProject).toBeVisible();
+  await savedProject.click();
   await expect(page.getByRole('button', { name: /^Box \(B\)/ })).toBeVisible();
+
+  // The tour was skipped by nobody — the project simply reopens WITH history,
+  // so eligibility never latches even though the flag is still unset.
   await expect(page.locator('.feature-row')).toHaveCount(1);
   await expect(page.locator('.workspace-tour')).toHaveCount(0);
 });
