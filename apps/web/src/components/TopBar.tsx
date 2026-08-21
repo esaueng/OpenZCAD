@@ -1,7 +1,6 @@
 import { type ChangeEvent, useEffect, useRef, useState } from 'react';
 import {
   Check,
-  Cloud,
   CloudOff,
   Download,
   Files,
@@ -244,21 +243,24 @@ export function TopBar({
         role="group"
         aria-label="Workspace actions"
       >
-        <span
-          className={`account-state is-${accountState}`}
-          role="status"
-          title={`Cloud account: ${accountLabel.toLowerCase()}`}
-          aria-label={`Cloud account: ${accountLabel.toLowerCase()}`}
-        >
-          {accountState === 'checking' ? (
-            <LoaderCircle className="spin" size={13} aria-hidden="true" />
-          ) : accountState === 'signed-in' ? (
-            <Cloud size={13} aria-hidden="true" />
-          ) : (
-            <CloudOff size={13} aria-hidden="true" />
-          )}
-          {accountLabel}
-        </span>
+        {/* Signed in is the happy default and the save chip already shows
+            cloud state, so the account chip appears only when something
+            needs attention. */}
+        {accountState !== 'signed-in' && (
+          <span
+            className={`account-state is-${accountState}`}
+            role="status"
+            title={`Cloud account: ${accountLabel.toLowerCase()}`}
+            aria-label={`Cloud account: ${accountLabel.toLowerCase()}`}
+          >
+            {accountState === 'checking' ? (
+              <LoaderCircle className="spin" size={13} aria-hidden="true" />
+            ) : (
+              <CloudOff size={13} aria-hidden="true" />
+            )}
+            {accountLabel}
+          </span>
+        )}
         <button
           className={`save-state topbar-action is-${saveState}`}
           type="button"

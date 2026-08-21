@@ -1026,7 +1026,7 @@
 }
 
 .text-style-toggles .toggle.active {
-  background: var(--color-accent-soft, var(--color-surface-raised));
+  background: var(--color-accent-dim);
   border-color: var(--color-accent);
   color: var(--color-accent);
 }
@@ -1138,7 +1138,7 @@
 
 .sketch-plane-buttons .sketch-plane-dismiss:hover {
   color: var(--color-text);
-  background: var(--color-surface-raised, rgba(255, 255, 255, 0.08));
+  background: var(--color-surface-hover);
 }
 
 /* One-click return to the source sketch after a region extrude. */
