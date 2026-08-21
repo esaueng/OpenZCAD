@@ -12490,7 +12490,6 @@ export function App() {
           warningCount={warnings.length}
           documentVersion={doc.version}
           saveState={presentedSaveState}
-          units={doc.units}
           selectionFilter={selectionFilter}
           selectionFilterIsAutomatic={manualSelectionFilter === null}
           onSelectionFilter={setManualSelectionFilter}
