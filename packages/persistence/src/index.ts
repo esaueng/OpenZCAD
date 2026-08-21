@@ -33,6 +33,8 @@ import {
   type ProjectInvitationSummary,
   type ProjectMemberRole as SharedProjectMemberRole,
   type ProjectSharingResponse,
+  type ProjectShareLinkMode,
+  type ProjectShareLinkSummary,
   type ProjectId,
   type ProjectOrganization,
   type ProjectSummary,
@@ -71,7 +73,8 @@ export type ProjectSharingErrorCode =
   | 'INVITATION_RATE_LIMIT'
   | 'MEMBER_NOT_FOUND'
   | 'MEMBER_LIMIT'
-  | 'OWNER_IMMUTABLE';
+  | 'OWNER_IMMUTABLE'
+  | 'SHARE_LINK_NOT_FOUND';
 
 export class ProjectSharingError extends Error {
   constructor(
@@ -90,6 +93,33 @@ export interface CreateProjectInvitationInput {
   tokenHash: string;
   createdAt: number;
   expiresAt: number;
+}
+
+export interface CreateProjectShareLinkInput {
+  shareLinkId: string;
+  mode: ProjectShareLinkMode;
+  tokenHash: string;
+  createdAt: number;
+}
+
+/**
+ * A shared project resolved purely by token hash. The token IS the
+ * authorization, so no user identity participates in this read.
+ */
+export interface SharedProjectSnapshot {
+  projectId: string;
+  name: string;
+  mode: ProjectShareLinkMode;
+  document: ProjectDocument;
+}
+
+/** One decoded import-source asset served to a share-link visitor. */
+export interface SharedProjectAssetDownload {
+  assetId: string;
+  projectId: string;
+  kind: 'step-source' | 'mesh-payload';
+  contentType: string;
+  body: ArrayBuffer;
 }
 
 /**
@@ -229,6 +259,38 @@ export interface PersistenceService {
     tokenHash: string,
     acceptedAt: number
   ): Promise<{ projectId: string; role: ProjectMemberRole }>;
+  createProjectShareLink(
+    ownerUserId: UserId,
+    projectId: string,
+    input: CreateProjectShareLinkInput
+  ): Promise<ProjectShareLinkSummary>;
+  /** Active links only; token hashes never leave the store. */
+  listProjectShareLinks(
+    ownerUserId: UserId,
+    projectId: string
+  ): Promise<ProjectShareLinkSummary[]>;
+  revokeProjectShareLink(
+    ownerUserId: UserId,
+    projectId: string,
+    shareLinkId: string,
+    revokedAt: number
+  ): Promise<void>;
+  /**
+   * Resolves an unrevoked share link and loads its project document with the
+   * derived projection stripped. Unknown and revoked tokens are equally null
+   * so the route can stay an indistinguishable 404.
+   */
+  loadSharedProjectByTokenHash(
+    tokenHash: string
+  ): Promise<SharedProjectSnapshot | null>;
+  /**
+   * Serves one import-source asset to a share-link visitor, only when the
+   * asset belongs to the unrevoked link's own project.
+   */
+  loadSharedProjectAsset(
+    tokenHash: string,
+    assetId: string
+  ): Promise<SharedProjectAssetDownload | null>;
   listProjects(userId: UserId): Promise<ListProjectsResponse>;
   createProject(
     userId: UserId,
@@ -378,6 +440,14 @@ export class InMemoryPersistenceService implements PersistenceService {
     }
   >();
   private readonly invitationRateEvents = new Map<string, number[]>();
+  private readonly projectShareLinks = new Map<
+    string,
+    CreateProjectShareLinkInput & {
+      projectId: string;
+      createdByUserId: UserId;
+      revokedAt: number | null;
+    }
+  >();
   private readonly organization = new Map<string, ProjectOrganization>();
   /**
    * Sizes only, per project, newest last. Enough to reproduce the account's
@@ -648,6 +718,91 @@ export class InMemoryPersistenceService implements PersistenceService {
       updatedAt: acceptedAt
     });
     return { projectId: invitation.projectId, role: invitation.role };
+  }
+
+  async createProjectShareLink(
+    ownerUserId: UserId,
+    projectId: string,
+    input: CreateProjectShareLinkInput
+  ): Promise<ProjectShareLinkSummary> {
+    await this.requireProjectOwner(ownerUserId, projectId);
+    this.projectShareLinks.set(input.shareLinkId, {
+      ...input,
+      projectId,
+      createdByUserId: ownerUserId,
+      revokedAt: null
+    });
+    return {
+      shareLinkId: input.shareLinkId,
+      projectId,
+      mode: input.mode,
+      createdAt: input.createdAt,
+      revokedAt: null
+    };
+  }
+
+  async listProjectShareLinks(
+    ownerUserId: UserId,
+    projectId: string
+  ): Promise<ProjectShareLinkSummary[]> {
+    await this.requireProjectOwner(ownerUserId, projectId);
+    return Array.from(this.projectShareLinks.values())
+      .filter(
+        (link) => link.projectId === projectId && link.revokedAt === null
+      )
+      .sort((left, right) => right.createdAt - left.createdAt)
+      .map((link) => ({
+        shareLinkId: link.shareLinkId,
+        projectId: link.projectId,
+        mode: link.mode,
+        createdAt: link.createdAt,
+        revokedAt: link.revokedAt
+      }));
+  }
+
+  async revokeProjectShareLink(
+    ownerUserId: UserId,
+    projectId: string,
+    shareLinkId: string,
+    revokedAt: number
+  ): Promise<void> {
+    await this.requireProjectOwner(ownerUserId, projectId);
+    const link = this.projectShareLinks.get(shareLinkId);
+    if (!link || link.projectId !== projectId || link.revokedAt !== null) {
+      throw new ProjectSharingError(
+        'SHARE_LINK_NOT_FOUND',
+        'Project share link not found.'
+      );
+    }
+    link.revokedAt = revokedAt;
+  }
+
+  async loadSharedProjectByTokenHash(
+    tokenHash: string
+  ): Promise<SharedProjectSnapshot | null> {
+    const link = Array.from(this.projectShareLinks.values()).find(
+      (candidate) =>
+        candidate.tokenHash === tokenHash && candidate.revokedAt === null
+    );
+    const document = link ? this.projects.get(link.projectId) : undefined;
+    if (!link || !document) {
+      return null;
+    }
+    return {
+      projectId: link.projectId,
+      name: document.name,
+      mode: link.mode,
+      document: withoutDerivedProjection(normalizeDocument(document))
+    };
+  }
+
+  async loadSharedProjectAsset(
+    _tokenHash: string,
+    _assetId: string
+  ): Promise<SharedProjectAssetDownload | null> {
+    // The in-memory service has no project_storage_assets analog: documents
+    // stay self-contained, so a share-link visitor never needs a side asset.
+    return null;
   }
 
   async listProjects(userId: UserId): Promise<ListProjectsResponse> {
@@ -1204,6 +1359,11 @@ export class InMemoryPersistenceService implements PersistenceService {
     for (const [invitationId, invitation] of this.projectInvitations) {
       if (invitation.projectId === projectId) {
         this.projectInvitations.delete(invitationId);
+      }
+    }
+    for (const [shareLinkId, shareLink] of this.projectShareLinks) {
+      if (shareLink.projectId === projectId) {
+        this.projectShareLinks.delete(shareLinkId);
       }
     }
     for (const key of this.invitationRateEvents.keys()) {

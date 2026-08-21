@@ -57,8 +57,8 @@ describe('R2 project storage readiness', () => {
 });
 
 describe('account erasure readiness', () => {
-  it('requires the erasure fence and every write-safety trigger through 0015', async () => {
-    const first = vi.fn(async () => ({ table_ready: 1, trigger_count: 25 }));
+  it('requires the erasure fence and every write-safety trigger through 0016', async () => {
+    const first = vi.fn(async () => ({ table_ready: 1, trigger_count: 26 }));
     const prepare = vi.fn((_query: string) => ({ first }));
     const db = {
       prepare
@@ -73,7 +73,7 @@ describe('account erasure readiness', () => {
   it('fails closed when any erasure trigger is missing', async () => {
     const db = {
       prepare: vi.fn(() => ({
-        first: vi.fn(async () => ({ table_ready: 1, trigger_count: 24 }))
+        first: vi.fn(async () => ({ table_ready: 1, trigger_count: 25 }))
       }))
     } as unknown as D1Database;
     await expect(isAccountErasureReady(db)).resolves.toBe(false);
