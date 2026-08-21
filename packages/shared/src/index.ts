@@ -2093,6 +2093,44 @@ export interface AcceptProjectInvitationResponse {
   role: ProjectMemberRole;
 }
 
+/**
+ * What a share-link visitor may do with the project. `tweak` opens the
+ * parameters-only workspace; `view` is read-only.
+ */
+export type ProjectShareLinkMode = 'tweak' | 'view';
+
+export interface ProjectShareLinkSummary {
+  shareLinkId: string;
+  projectId: string;
+  mode: ProjectShareLinkMode;
+  createdAt: number;
+  revokedAt: number | null;
+}
+
+export interface CreateProjectShareLinkRequest {
+  mode: ProjectShareLinkMode;
+}
+
+export interface CreateProjectShareLinkResponse {
+  shareLink: ProjectShareLinkSummary;
+  /** Returned only once. Persistence stores only its SHA-256 hash. */
+  token: string;
+}
+
+export interface ListProjectShareLinksResponse {
+  shareLinks: ProjectShareLinkSummary[];
+}
+
+/** Payload served to an anonymous visitor presenting a valid share token. */
+export interface SharedProjectResponse {
+  project: {
+    projectId: string;
+    name: string;
+    mode: ProjectShareLinkMode;
+  };
+  document: ProjectDocument;
+}
+
 export interface ProjectEditLease {
   leaseId: string;
   projectId: string;

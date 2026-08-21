@@ -1,14 +1,17 @@
 import { type ChangeEvent, useEffect, useRef, useState } from 'react';
 import {
+  Box,
   Check,
   Cloud,
   CloudOff,
   Download,
+  Eye,
   Files,
   FolderOpen,
   LoaderCircle,
   Pencil,
   Settings as SettingsIcon,
+  SlidersHorizontal,
   TriangleAlert,
   Upload,
   Users
@@ -52,6 +55,11 @@ interface TopBarProps {
    * a mode that would refuse every edit.
    */
   buildModeDisabledReason: string | null;
+  /**
+   * Why Tweak is unavailable, or null when it is. A read-only collaborator
+   * cannot change parameters either, so the reason usually matches Build's.
+   */
+  tweakModeDisabledReason: string | null;
   onWorkspaceMode(mode: WorkspaceMode): void;
   onSave(): void;
   onImportFile(file: File): void;
@@ -65,6 +73,38 @@ interface TopBarProps {
   onOpenSharing(): void;
   onOpenSettings(): void;
 }
+
+/**
+ * The three workspaces, in the order they appear. Each hint doubles as the
+ * tooltip body — the one place the difference between the modes is spelled
+ * out, which matters most for Tweak, a mode a shared-link visitor may be
+ * meeting for the first time.
+ */
+const WORKSPACE_MODE_OPTIONS: ReadonlyArray<{
+  mode: WorkspaceMode;
+  label: string;
+  hint: string;
+  Icon: typeof Eye;
+}> = [
+  {
+    mode: 'view',
+    label: 'View',
+    hint: 'Read the model. Measure, orbit, inspect — nothing changes.',
+    Icon: Eye
+  },
+  {
+    mode: 'tweak',
+    label: 'Tweak',
+    hint: 'Adjust parameters and export. The design itself stays locked.',
+    Icon: SlidersHorizontal
+  },
+  {
+    mode: 'build',
+    label: 'Build',
+    hint: 'Full modeling workspace. Sketch, features, history.',
+    Icon: Box
+  }
+];
 
 export function TopBar({
   projectName,
@@ -81,6 +121,7 @@ export function TopBar({
   projectSharingEnabled,
   workspaceMode,
   buildModeDisabledReason,
+  tweakModeDisabledReason,
   onWorkspaceMode,
   onSave,
   onImportFile,
@@ -168,6 +209,36 @@ export function TopBar({
         OpenZCAD <span className="beta-tag">Beta</span>
       </button>
       <div className="topbar-divider" />
+      <div
+        className="mode-switch"
+        role="group"
+        aria-label="Workspace mode"
+        title="Switch between viewing, tweaking parameters and modeling (Ctrl+Shift+M)"
+      >
+        {WORKSPACE_MODE_OPTIONS.map(({ mode, label, hint, Icon }) => {
+          const disabledReason =
+            mode === 'build'
+              ? buildModeDisabledReason
+              : mode === 'tweak'
+                ? tweakModeDisabledReason
+                : null;
+          return (
+            <button
+              key={mode}
+              type="button"
+              className={`mode-switch-option${workspaceMode === mode ? ' active' : ''}`}
+              aria-pressed={workspaceMode === mode}
+              disabled={disabledReason !== null}
+              title={disabledReason ?? `${label} — ${hint}`}
+              onClick={() => onWorkspaceMode(mode)}
+            >
+              <Icon size={13} aria-hidden="true" />
+              <span className="mode-switch-label">{label}</span>
+            </button>
+          );
+        })}
+      </div>
+      <div className="topbar-divider" />
       <div className="breadcrumb">
         {projectName ? (
           editingProjectName ? (
@@ -206,34 +277,6 @@ export function TopBar({
           <strong>No project</strong>
         )}
         {projectName && <span className="mono">{units ?? ''}</span>}
-      </div>
-      <div
-        className="mode-switch"
-        role="group"
-        aria-label="Workspace mode"
-        title={
-          buildModeDisabledReason
-            ? `View mode · ${buildModeDisabledReason}`
-            : 'Switch between viewing and modeling (Ctrl+Shift+M)'
-        }
-      >
-        {(['view', 'build'] as const).map((mode) => {
-          const disabledReason =
-            mode === 'build' ? buildModeDisabledReason : null;
-          return (
-            <button
-              key={mode}
-              type="button"
-              className={`mode-switch-option${workspaceMode === mode ? ' active' : ''}`}
-              aria-pressed={workspaceMode === mode}
-              disabled={disabledReason !== null}
-              title={disabledReason ?? undefined}
-              onClick={() => onWorkspaceMode(mode)}
-            >
-              {mode === 'view' ? 'View' : 'Build'}
-            </button>
-          );
-        })}
       </div>
       <div
         className="topbar-actions"

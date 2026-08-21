@@ -53,10 +53,10 @@
 }
 
 /*
-  Sized to its content rather than greedy, so the mode switch after it can take
-  the middle of the bar instead of being pushed against the actions. The cap
-  stops a long project name from claiming that middle back; narrow screens hand
-  the growth back in responsive.css, where there is no middle left to hold.
+  Sized to its content rather than greedy, so the bar keeps clear space between
+  the identity cluster on the left and the actions on the right. The cap stops
+  a long project name from claiming the whole middle; narrow screens hand the
+  growth back in responsive.css, where there is no middle left to hold.
 */
 .breadcrumb {
   flex: 0 1 auto;
