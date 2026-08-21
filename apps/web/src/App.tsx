@@ -1867,8 +1867,8 @@ export function App() {
                   : 'Waiting for the project edit lease'
                 : null;
   // View mode joins the same guard every other modeling edit uses. Project
-  // rename has its own owner-only guard below because it is workspace metadata,
-  // not a modeling operation, and owners may change it from either mode.
+  // rename has its own mode-aware guard below because it is workspace metadata:
+  // owners may change it from either mode, while editors remain Build-only.
   const editDisabledReason = projectOpenElsewhere
     ? projectEditDisabledReason
     : viewMode
@@ -1883,8 +1883,10 @@ export function App() {
     (doc.ownerUserId === session?.userId ||
       (!cloudAvailable && doc.ownerUserId === localUserId))
   );
-  const projectRenameDisabledReason = !ownsOpenProject
-    ? 'Only the project owner can rename this project'
+  const hasProjectRenameAccess =
+    ownsOpenProject || (!viewMode && collaboration.role === 'editor');
+  const projectRenameDisabledReason = !hasProjectRenameAccess
+    ? 'Only the project owner can rename from View mode'
     : projectEditDisabledReason;
   const canRenameProject = projectRenameDisabledReason === null;
 
