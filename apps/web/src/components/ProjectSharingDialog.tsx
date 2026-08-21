@@ -4,9 +4,15 @@ import type {
   ProjectAccessRole,
   ProjectEditLease,
   ProjectMemberRole,
+  ProjectShareLinkSummary,
   ProjectSharingResponse,
   UserId
 } from '@openzcad/shared';
+import {
+  buildShareLinkUrl,
+  createProjectShareLinkClient,
+  type ProjectShareLinkClient
+} from '../lib/projectShareClient';
 import {
   resolveProjectConflict,
   type ProjectConflict,
@@ -21,6 +27,7 @@ import type { CollaborationStatus } from '../lib/useCollaboration';
 import { useModalFocus } from '../lib/useModalFocus';
 
 const defaultClient = createProjectSharingClient();
+const defaultShareLinkClient = createProjectShareLinkClient();
 
 export interface ProjectSharingDialogProps {
   projectId: string;
@@ -32,6 +39,7 @@ export interface ProjectSharingDialogProps {
   conflict?: ProjectConflict | null;
   conflictHandlers?: ConflictResolutionHandlers;
   client?: ProjectSharingClient;
+  shareLinkClient?: ProjectShareLinkClient;
   editorInvitationsEnabled?: boolean;
   onClose(): void;
 }
@@ -42,6 +50,10 @@ function errorMessage(error: unknown): string {
 
 function initialOf(name: string): string {
   return name.trim().charAt(0).toUpperCase() || '?';
+}
+
+function createdLabel(createdAt: number): string {
+  return new Date(createdAt * 1000).toLocaleDateString();
 }
 
 function expiryLabel(expiresAt: number): string {
@@ -76,11 +88,18 @@ export function ProjectSharingDialog({
   conflict = null,
   conflictHandlers,
   client = defaultClient,
+  shareLinkClient = defaultShareLinkClient,
   editorInvitationsEnabled = true,
   onClose
 }: ProjectSharingDialogProps) {
   const dialogRef = useRef<HTMLDivElement | null>(null);
+  const shareLinkUrlRef = useRef<HTMLInputElement | null>(null);
   const [sharing, setSharing] = useState<ProjectSharingResponse | null>(null);
+  const [shareLinks, setShareLinks] = useState<ProjectShareLinkSummary[]>([]);
+  const [createdShareLinkUrl, setCreatedShareLinkUrl] = useState<string | null>(
+    null
+  );
+  const [shareLinkCopied, setShareLinkCopied] = useState(false);
   const [email, setEmail] = useState('');
   const [inviteRole, setInviteRole] = useState<ProjectMemberRole>('viewer');
   const [invitationSentTo, setInvitationSentTo] = useState<string | null>(null);
@@ -91,18 +110,38 @@ export function ProjectSharingDialog({
   const refresh = useCallback(async () => {
     if (role !== 'owner') {
       setSharing(null);
+      setShareLinks([]);
       return;
     }
     setBusy('loading');
     setError(null);
     try {
-      setSharing(await client.getProjectSharing(projectId));
+      const [nextSharing, nextShareLinks] = await Promise.all([
+        client.getProjectSharing(projectId),
+        shareLinkClient.listProjectShareLinks(projectId)
+      ]);
+      setSharing(nextSharing);
+      setShareLinks(nextShareLinks);
     } catch (caught) {
       setError(errorMessage(caught));
     } finally {
       setBusy(null);
     }
-  }, [client, projectId, role]);
+  }, [client, shareLinkClient, projectId, role]);
+
+  const copyShareLink = async (url: string) => {
+    try {
+      await navigator.clipboard.writeText(url);
+      setShareLinkCopied(true);
+    } catch {
+      const input = shareLinkUrlRef.current;
+      if (input) {
+        input.focus();
+        input.select();
+        setShareLinkCopied(document.execCommand('copy'));
+      }
+    }
+  };
 
   useEffect(() => {
     void refresh();
@@ -473,6 +512,106 @@ export function ProjectSharingDialog({
                   </ul>
                 ) : (
                   <p className="sharing-empty">No pending invitations.</p>
+                )}
+              </section>
+
+              <section
+                className="sharing-section"
+                aria-labelledby="share-links-title"
+              >
+                <h3 id="share-links-title" className="sharing-group-label">
+                  <span>Share link</span>
+                  <span className="sharing-count">{shareLinks.length}</span>
+                </h3>
+                <p className="sharing-share-hint">
+                  Anyone with the link can open this model, adjust its
+                  parameters and export — without an account.
+                </p>
+                <button
+                  type="button"
+                  className="primary sharing-share-create"
+                  disabled={busy !== null}
+                  onClick={() =>
+                    void mutate('share-link:create', async () => {
+                      setCreatedShareLinkUrl(null);
+                      setShareLinkCopied(false);
+                      const created =
+                        await shareLinkClient.createProjectShareLink(
+                          projectId,
+                          'tweak'
+                        );
+                      setCreatedShareLinkUrl(buildShareLinkUrl(created.token));
+                      await refresh();
+                    })
+                  }
+                >
+                  Create link
+                </button>
+                {createdShareLinkUrl && (
+                  <div className="sharing-share-output" role="status">
+                    <input
+                      ref={shareLinkUrlRef}
+                      className="sharing-share-url"
+                      type="text"
+                      readOnly
+                      aria-label="Share link"
+                      value={createdShareLinkUrl}
+                      onFocus={(event) => event.target.select()}
+                    />
+                    <button
+                      type="button"
+                      className="sharing-share-copy"
+                      onClick={() => void copyShareLink(createdShareLinkUrl)}
+                    >
+                      {shareLinkCopied ? 'Copied' : 'Copy'}
+                    </button>
+                    <p className="sharing-share-once">
+                      Copy it now — this link is shown only once.
+                    </p>
+                  </div>
+                )}
+                {shareLinks.length ? (
+                  <ul className="sharing-list">
+                    {shareLinks.map((shareLink) => (
+                      <li key={shareLink.shareLinkId}>
+                        <span className="sharing-avatar" aria-hidden="true">
+                          ⚲
+                        </span>
+                        <span className="sharing-member-id">
+                          Anyone with the link
+                        </span>
+                        <span className="sharing-kind">
+                          {shareLink.mode} ·{' '}
+                          {createdLabel(shareLink.createdAt)}
+                        </span>
+                        <button
+                          type="button"
+                          className="sharing-row-action"
+                          aria-label={`Revoke share link created ${createdLabel(
+                            shareLink.createdAt
+                          )}`}
+                          disabled={busy !== null}
+                          onClick={() =>
+                            void mutate(
+                              `share-link:revoke:${shareLink.shareLinkId}`,
+                              async () => {
+                                await shareLinkClient.revokeProjectShareLink(
+                                  projectId,
+                                  shareLink.shareLinkId
+                                );
+                                setCreatedShareLinkUrl(null);
+                                await refresh();
+                              }
+                            )
+                          }
+                        >
+                          Revoke
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                ) : (
+                  <p className="sharing-empty">No active share links.</p>
                 )}
               </section>
             </>
