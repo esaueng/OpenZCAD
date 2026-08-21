@@ -119,6 +119,20 @@ describe('workspace panel state', () => {
     ).toBe(true);
   });
 
+  it('remembers a dismissed first-model tour across reloads', () => {
+    // Not dismissed to begin with — a fresh device gets the tour on its first
+    // empty project — and a dismissal is forever on this device.
+    expect(defaultPanelState().workspaceTourDismissed).toBe(false);
+    expect(
+      savePanelState({ ...defaultPanelState(), workspaceTourDismissed: true })
+    ).toBe(true);
+    expect(loadPanelState().workspaceTourDismissed).toBe(true);
+    expect(
+      normalizePanelState({ workspaceTourDismissed: 'yes' })
+        .workspaceTourDismissed
+    ).toBe(false);
+  });
+
   it('ignores unknown sections and wrong types', () => {
     const normalized = normalizePanelState({
       toolPaletteOpen: 'yes',

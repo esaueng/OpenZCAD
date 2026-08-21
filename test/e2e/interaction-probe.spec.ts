@@ -1,4 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
+import { seedDismissedWorkspaceTour } from './openzcad-fixtures';
 
 // Measurement, not a pass/fail timing gate: GPU state and hardware dominate
 // the absolute values. Run deliberately:
@@ -11,6 +12,7 @@ test.skip(
 test.setTimeout(180_000);
 
 async function stubApi(page: Page) {
+  await seedDismissedWorkspaceTour(page);
   await page.route('**/api/health', (route) =>
     route.fulfill({
       json: {

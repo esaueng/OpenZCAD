@@ -1,8 +1,10 @@
 import { test, expect, type Page } from '@playwright/test';
+import { seedDismissedWorkspaceTour } from './openzcad-fixtures';
 import { createProjectDocument } from '@openzcad/document-core';
 import { toUserId } from '@openzcad/shared';
 
 async function stubApi(page: Page) {
+  await seedDismissedWorkspaceTour(page);
   await page.route('**/api/health', (route) =>
     route.fulfill({
       json: { status: 'ok', environment: 'beta', time: new Date().toISOString() }

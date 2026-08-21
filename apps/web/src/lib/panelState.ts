@@ -62,6 +62,13 @@ export interface PanelState {
    * conversation nobody has started yet.
    */
   assistantCollapsed: boolean;
+  /**
+   * The first-model guided tour has been finished or skipped on this device.
+   * Per-device like every other chrome habit here: a tour someone dismissed
+   * must never come back, and one they have not seen yet should still appear
+   * on their next fresh project.
+   */
+  workspaceTourDismissed: boolean;
 }
 
 export const DEFAULT_PANEL_STATE: PanelState = {
@@ -75,7 +82,8 @@ export const DEFAULT_PANEL_STATE: PanelState = {
   toolPaletteOpen: true,
   workspaceMode: 'build',
   viewModeRailOpen: true,
-  assistantCollapsed: true
+  assistantCollapsed: true,
+  workspaceTourDismissed: false
 };
 
 function copyDefaults(): PanelState {
@@ -84,7 +92,8 @@ function copyDefaults(): PanelState {
     toolPaletteOpen: DEFAULT_PANEL_STATE.toolPaletteOpen,
     workspaceMode: DEFAULT_PANEL_STATE.workspaceMode,
     viewModeRailOpen: DEFAULT_PANEL_STATE.viewModeRailOpen,
-    assistantCollapsed: DEFAULT_PANEL_STATE.assistantCollapsed
+    assistantCollapsed: DEFAULT_PANEL_STATE.assistantCollapsed,
+    workspaceTourDismissed: DEFAULT_PANEL_STATE.workspaceTourDismissed
   };
 }
 
@@ -99,6 +108,9 @@ export function normalizePanelState(value: unknown): PanelState {
   }
   if (typeof root.assistantCollapsed === 'boolean') {
     state.assistantCollapsed = root.assistantCollapsed;
+  }
+  if (typeof root.workspaceTourDismissed === 'boolean') {
+    state.workspaceTourDismissed = root.workspaceTourDismissed;
   }
   if (root.workspaceMode === 'view' || root.workspaceMode === 'build') {
     state.workspaceMode = root.workspaceMode;
