@@ -309,6 +309,17 @@ function profileCleanupStatements(
         .bind(userId),
       db
         .prepare(
+          `UPDATE project_access_events SET share_link_id = NULL
+           WHERE share_link_id IN (
+             SELECT id FROM project_share_links WHERE created_by_user_id = ?
+           )`
+        )
+        .bind(userId),
+      db
+        .prepare(`DELETE FROM project_share_links WHERE created_by_user_id = ?`)
+        .bind(userId),
+      db
+        .prepare(
           `DELETE FROM project_members
            WHERE user_id = ? OR added_by_user_id = ?`
         )
