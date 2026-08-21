@@ -15,9 +15,12 @@ import {
   RevisionConflictError,
   UPLOAD_SESSION_TTL_MS,
   type CreateProjectInvitationInput,
+  type CreateProjectShareLinkInput,
   type ProjectAccess,
   type ProjectMemberRole,
-  type PersistenceService
+  type PersistenceService,
+  type SharedProjectAssetDownload,
+  type SharedProjectSnapshot
 } from '@openzcad/persistence';
 import {
   applyOrganizationUpdate,
@@ -67,6 +70,8 @@ import {
   type ProjectEditLease,
   type ProjectInvitationSummary,
   type ProjectSharingResponse,
+  type ProjectShareLinkMode,
+  type ProjectShareLinkSummary,
   type ProjectId,
   type ProjectOrganization,
   type ProjectStatus,
@@ -745,6 +750,214 @@ export class D1R2PersistenceService implements PersistenceService {
       );
     }
     return { projectId: invitation.project_id, role: invitation.role };
+  }
+
+  async createProjectShareLink(
+    ownerUserId: UserId,
+    projectId: string,
+    input: CreateProjectShareLinkInput
+  ): Promise<ProjectShareLinkSummary> {
+    if (!this.env.DB) {
+      return getInMemoryPersistence().createProjectShareLink(
+        ownerUserId,
+        projectId,
+        input
+      );
+    }
+    await this.requireProjectOwner(ownerUserId, projectId);
+    await this.env.DB.prepare(
+      `INSERT INTO project_share_links
+         (id, project_id, mode, token_hash, created_by_user_id, created_at)
+       VALUES (?, ?, ?, ?, ?, ?)`
+    )
+      .bind(
+        input.shareLinkId,
+        projectId,
+        input.mode,
+        input.tokenHash,
+        ownerUserId,
+        input.createdAt
+      )
+      .run();
+    await this.env.DB.prepare(
+      `INSERT INTO project_access_events
+         (project_id, actor_user_id, share_link_id, event_type, created_at,
+          metadata_json)
+       VALUES (?, ?, ?, 'share-link-created', ?, ?)`
+    )
+      .bind(
+        projectId,
+        ownerUserId,
+        input.shareLinkId,
+        input.createdAt,
+        JSON.stringify({ mode: input.mode })
+      )
+      .run();
+    return {
+      shareLinkId: input.shareLinkId,
+      projectId,
+      mode: input.mode,
+      createdAt: input.createdAt,
+      revokedAt: null
+    };
+  }
+
+  async listProjectShareLinks(
+    ownerUserId: UserId,
+    projectId: string
+  ): Promise<ProjectShareLinkSummary[]> {
+    if (!this.env.DB) {
+      return getInMemoryPersistence().listProjectShareLinks(
+        ownerUserId,
+        projectId
+      );
+    }
+    await this.requireProjectOwner(ownerUserId, projectId);
+    const rows = await this.env.DB.prepare(
+      `SELECT id, project_id, mode, created_at
+       FROM project_share_links
+       WHERE project_id = ? AND revoked_at IS NULL
+       ORDER BY created_at DESC`
+    )
+      .bind(projectId)
+      .all<ProjectShareLinkRow>();
+    return (rows.results ?? []).map(shareLinkFromRow);
+  }
+
+  async revokeProjectShareLink(
+    ownerUserId: UserId,
+    projectId: string,
+    shareLinkId: string,
+    revokedAt: number
+  ): Promise<void> {
+    if (!this.env.DB) {
+      return getInMemoryPersistence().revokeProjectShareLink(
+        ownerUserId,
+        projectId,
+        shareLinkId,
+        revokedAt
+      );
+    }
+    await this.requireProjectOwner(ownerUserId, projectId);
+    const result = await this.env.DB.prepare(
+      `UPDATE project_share_links SET revoked_at = ?
+       WHERE id = ? AND project_id = ? AND revoked_at IS NULL`
+    )
+      .bind(revokedAt, shareLinkId, projectId)
+      .run();
+    if (result.meta?.changes !== 1) {
+      throw new ProjectSharingError(
+        'SHARE_LINK_NOT_FOUND',
+        'Project share link not found.'
+      );
+    }
+    await this.env.DB.prepare(
+      `INSERT INTO project_access_events
+         (project_id, actor_user_id, share_link_id, event_type, created_at)
+       VALUES (?, ?, ?, 'share-link-revoked', ?)`
+    )
+      .bind(projectId, ownerUserId, shareLinkId, revokedAt)
+      .run();
+  }
+
+  async loadSharedProjectByTokenHash(
+    tokenHash: string
+  ): Promise<SharedProjectSnapshot | null> {
+    if (!this.env.DB) {
+      return getInMemoryPersistence().loadSharedProjectByTokenHash(tokenHash);
+    }
+    // The token hash is the entire authorization: no user access check runs
+    // here on purpose, and unknown stays indistinguishable from revoked.
+    const row = await this.env.DB.prepare(
+      `SELECT l.mode, p.id AS project_id, p.name, p.document_json,
+              p.document_object_id
+       FROM project_share_links l
+       INNER JOIN projects p ON p.id = l.project_id
+       WHERE l.token_hash = ? AND l.revoked_at IS NULL`
+    )
+      .bind(tokenHash)
+      .first<{
+        mode: ProjectShareLinkMode;
+        project_id: string;
+        name: string;
+        document_json: string;
+        document_object_id: string | null;
+      }>();
+    if (!row) {
+      return null;
+    }
+    const document = row.document_object_id
+      ? await this.loadProjectObject(row.project_id, row.document_object_id)
+      : normalizeDocument(JSON.parse(row.document_json) as ProjectDocument);
+    return {
+      projectId: row.project_id,
+      name: row.name,
+      mode: row.mode,
+      document: withoutDerivedProjection(document)
+    };
+  }
+
+  async loadSharedProjectAsset(
+    tokenHash: string,
+    assetId: string
+  ): Promise<SharedProjectAssetDownload | null> {
+    if (!this.env.DB) {
+      return getInMemoryPersistence().loadSharedProjectAsset(
+        tokenHash,
+        assetId
+      );
+    }
+    // The join is the authorization: the asset is served only when it belongs
+    // to the unrevoked link's own project.
+    const row = await this.env.DB.prepare(
+      `SELECT a.id, a.project_id, a.kind, a.object_key, a.checksum_sha256,
+              a.logical_bytes, a.content_encoding
+       FROM project_storage_assets a
+       INNER JOIN project_share_links l ON l.project_id = a.project_id
+       WHERE l.token_hash = ? AND l.revoked_at IS NULL AND a.id = ?`
+    )
+      .bind(tokenHash, assetId)
+      .first<SharedProjectAssetRow>();
+    if (!row) {
+      return null;
+    }
+    if (row.content_encoding !== 'gzip') {
+      throw new ProjectObjectStorageError(
+        'Project asset metadata is missing or invalid.'
+      );
+    }
+    const bucket = this.projectStorageBucket();
+    if (!bucket) {
+      throw new ProjectObjectStorageError(
+        'Project object storage is not configured.'
+      );
+    }
+    const stored = await bucket.get(row.object_key);
+    if (!stored) {
+      throw new ProjectObjectStorageError(
+        `Project asset ${row.object_key} is missing from storage.`
+      );
+    }
+    const body = await decodeProjectStorageBody(
+      await stored.arrayBuffer(),
+      'gzip'
+    );
+    if (
+      body.byteLength !== row.logical_bytes ||
+      (await sha256Hex(body)) !== row.checksum_sha256
+    ) {
+      throw new ProjectObjectStorageError(
+        'Project asset failed its integrity check.'
+      );
+    }
+    return {
+      assetId: row.id,
+      projectId: row.project_id,
+      kind: row.kind,
+      contentType:
+        row.kind === 'step-source' ? 'application/step' : 'application/json',
+      body: Uint8Array.from(body).buffer
+    };
   }
 
   async listProjects(userId: UserId): Promise<ListProjectsResponse> {
@@ -2457,6 +2670,7 @@ export class D1R2PersistenceService implements PersistenceService {
     await this.env.DB!.batch(
       [
         'DELETE FROM project_access_events WHERE project_id IN',
+        'DELETE FROM project_share_links WHERE project_id IN',
         'DELETE FROM project_invitations WHERE project_id IN',
         'DELETE FROM project_members WHERE project_id IN',
         'DELETE FROM upload_sessions WHERE project_id IN',
@@ -2782,6 +2996,33 @@ interface ProjectInvitationRow {
   role: ProjectMemberRole;
   created_at: number;
   expires_at: number;
+}
+
+interface ProjectShareLinkRow {
+  id: string;
+  project_id: string;
+  mode: ProjectShareLinkMode;
+  created_at: number;
+}
+
+function shareLinkFromRow(row: ProjectShareLinkRow): ProjectShareLinkSummary {
+  return {
+    shareLinkId: row.id,
+    projectId: row.project_id,
+    mode: row.mode,
+    createdAt: row.created_at,
+    revokedAt: null
+  };
+}
+
+interface SharedProjectAssetRow {
+  id: string;
+  project_id: string;
+  kind: 'step-source' | 'mesh-payload';
+  object_key: string;
+  checksum_sha256: string;
+  logical_bytes: number;
+  content_encoding: string;
 }
 
 function invitationFromRow(
