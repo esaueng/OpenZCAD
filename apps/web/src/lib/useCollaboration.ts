@@ -170,15 +170,17 @@ export function parseServerMessage(
 }
 
 function collaborationDocument(document: ProjectDocument): ProjectDocument {
-  return {
-    ...structuredClone(document),
+  // Strip the derived projection BEFORE cloning: the old order cloned every
+  // mesh buffer only to throw the copies away on the next line.
+  return structuredClone({
+    ...document,
     derived: {
       bodyRepresentations: {},
       exportableBodyIds: [],
       warnings: [],
       updatedAt: document.derived.updatedAt
     }
-  };
+  });
 }
 
 /**

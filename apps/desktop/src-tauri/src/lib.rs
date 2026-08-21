@@ -92,7 +92,7 @@ async fn save_cad_file(
     format: String,
     contents: String,
 ) -> Result<bool, String> {
-    if !matches!(format.as_str(), "step" | "stl") {
+    if !matches!(format.as_str(), "step" | "stl" | "dxf") {
         return Err("Unsupported export format.".to_string());
     }
     if suggested_name.is_empty()
@@ -105,10 +105,10 @@ async fn save_cad_file(
         return Err("The export exceeds the 50 MB desktop safety limit.".to_string());
     }
     let handle = rfd::AsyncFileDialog::new()
-        .set_title(if format == "step" {
-            "Export STEP"
-        } else {
-            "Export STL"
+        .set_title(match format.as_str() {
+            "step" => "Export STEP",
+            "dxf" => "Export DXF",
+            _ => "Export STL",
         })
         .set_file_name(&suggested_name)
         .add_filter(format.to_ascii_uppercase(), &[format.as_str()])

@@ -2365,6 +2365,246 @@ export function updateFeature(
   return next;
 }
 
+/** Direct-edit kinds whose source pins a re-picked face can fully refresh. */
+export type RepairableDirectEditKind =
+  'offset-face' | 'resize-cylindrical-face' | 'resize-through-hole';
+
+const REPAIRABLE_DIRECT_EDIT_KINDS: readonly RepairableDirectEditKind[] = [
+  'offset-face',
+  'resize-cylindrical-face',
+  'resize-through-hole'
+];
+
+/** A broken direct edit the user can fix by picking its face again. */
+export interface StaleDirectEditFaceRepair {
+  featureId: FeatureId;
+  featureName: string;
+  targetBodyId: BodyId;
+  operationKind: RepairableDirectEditKind;
+}
+
+/**
+ * Adapter warnings that mean the stored face IDENTITY failed to resolve —
+ * the class of failure a re-pick fixes. Post-resolution failures (an edit
+ * whose boolean produced an invalid solid, say) are deliberately excluded:
+ * those are about the edit's own geometry, not about which face it names.
+ */
+const STALE_FACE_WARNINGS: readonly RegExp[] = [
+  /^Direct-edit face is stale/,
+  /^A selected face no longer exists/,
+  /^A selected face is geometrically ambiguous/,
+  /^A selected face was saved by an older version of OpenZCAD/,
+  /^The selected face no longer matches its recorded/
+];
+
+/**
+ * Detects a direct-edit feature whose stored face selection went stale.
+ *
+ * A direct edit pins its face by geometric fingerprint (plus a v5 lineage
+ * reference when the producer publishes one). An upstream parametric edit
+ * changes the face's geometry, so a hash-only pin stops resolving and the
+ * fail-soft replay skips the edit behind one warning — the model quietly
+ * loses the feature and nothing in the document can bring it back short of
+ * recreating it. This match is the entry to the repair path: the feature
+ * must be a direct edit of a repairable kind AND carry a rebuild warning
+ * that names a face-identity failure.
+ *
+ * `warnings` are the derived rebuild warnings, in the adapter's
+ * `Feature "name": reason` convention.
+ */
+export function staleDirectEditFaceRepair(
+  feature: FeatureNode,
+  warnings: readonly string[]
+): StaleDirectEditFaceRepair | null {
+  if (feature.data.featureKind !== 'direct-edit') {
+    return null;
+  }
+  const kind = feature.data.operation.kind;
+  if (!(REPAIRABLE_DIRECT_EDIT_KINDS as readonly string[]).includes(kind)) {
+    return null;
+  }
+  const prefix = `Feature "${feature.name}":`;
+  const warning = warnings
+    .find((entry) => entry.startsWith(prefix))
+    ?.slice(prefix.length)
+    .trim();
+  if (!warning || !STALE_FACE_WARNINGS.some((pattern) => pattern.test(warning))) {
+    return null;
+  }
+  return {
+    featureId: feature.featureId,
+    featureName: feature.name,
+    targetBodyId: feature.data.targetBodyId,
+    operationKind: kind as RepairableDirectEditKind
+  };
+}
+
+/** Minimal face-projection shape the repair reads; matches `FaceTopology`. */
+export interface RepairFacePick {
+  hash: number;
+  reference?: FaceTopologyReferenceV5;
+  geometry?: {
+    surfaceType: string;
+    area: number;
+    center: { x: number; y: number; z: number };
+    normal?: { x: number; y: number; z: number };
+    radius?: number;
+    diameter?: number;
+    axisStart?: { x: number; y: number; z: number };
+    axisEnd?: { x: number; y: number; z: number };
+    featureType?: 'through-hole' | 'blend';
+  };
+}
+
+/**
+ * Rebuilds a stale direct-edit operation around a freshly picked face.
+ *
+ * The identity (hash + reference) and every source measurement pin are
+ * refreshed from the picked face's CURRENT projection; only the edit's own
+ * value fields (offset, radius, diameter) carry over. This is sound exactly
+ * because repair runs while the feature is broken: the broken edit
+ * contributed nothing to the rendered body, so what the user picks is a face
+ * of the same state the feature will see at its replay position. (When a
+ * downstream feature has since reshaped that face, the refreshed pins won't
+ * match at replay either — the validated commit rebuild refuses the repair
+ * instead of storing it, so the failure mode is a refusal, never a wrong
+ * edit.)
+ *
+ * Throws with a user-facing reason when the picked face cannot carry the
+ * operation, so callers can keep the pick armed and let the user try again.
+ */
+export function repairedDirectEditOperation(
+  operation: DirectEditOperation,
+  face: RepairFacePick
+): DirectEditOperation {
+  const geometry = face.geometry;
+  const vec = (value: { x: number; y: number; z: number }) => ({
+    x: value.x,
+    y: value.y,
+    z: value.z
+  });
+  const identity = {
+    faceHash: face.hash,
+    ...(face.reference ? { faceReference: deepClone(face.reference) } : {})
+  };
+  switch (operation.kind) {
+    case 'offset-face': {
+      if (
+        geometry?.surfaceType !== 'plane' ||
+        !geometry.normal ||
+        !Number.isFinite(geometry.area) ||
+        geometry.area <= 0
+      ) {
+        throw new Error(
+          'Pick a planar face with exact measurements to repair this offset.'
+        );
+      }
+      return {
+        kind: 'offset-face',
+        ...identity,
+        sourceSurfaceType: 'plane',
+        sourceArea: geometry.area,
+        sourceCenter: vec(geometry.center),
+        sourceNormal: vec(geometry.normal),
+        offset: deepClone(operation.offset)
+      };
+    }
+    case 'resize-cylindrical-face': {
+      if (
+        geometry?.surfaceType !== 'cylinder' ||
+        geometry.radius === undefined ||
+        !geometry.axisStart ||
+        !geometry.axisEnd
+      ) {
+        throw new Error(
+          'Pick a cylindrical face with exact measurements to repair this resize.'
+        );
+      }
+      return {
+        kind: 'resize-cylindrical-face',
+        ...identity,
+        sourceRadius: geometry.radius,
+        sourceAxisStart: vec(geometry.axisStart),
+        sourceAxisEnd: vec(geometry.axisEnd),
+        concavity: operation.concavity,
+        radius: deepClone(operation.radius)
+      };
+    }
+    case 'resize-through-hole': {
+      if (
+        geometry?.surfaceType !== 'cylinder' ||
+        geometry.featureType !== 'through-hole' ||
+        geometry.diameter === undefined ||
+        !geometry.axisStart ||
+        !geometry.axisEnd
+      ) {
+        throw new Error(
+          'Pick a through-hole wall to repair this hole resize.'
+        );
+      }
+      return {
+        kind: 'resize-through-hole',
+        ...identity,
+        sourceDiameter: geometry.diameter,
+        sourceAxisStart: vec(geometry.axisStart),
+        sourceAxisEnd: vec(geometry.axisEnd),
+        diameter: deepClone(operation.diameter),
+        ...(operation.parameterBinding ? { parameterBinding: true } : {})
+      };
+    }
+    default:
+      throw new Error(
+        `A ${operation.kind} edit cannot be repaired by re-picking; delete and recreate it instead.`
+      );
+  }
+}
+
+export interface FeatureMoveInput {
+  featureId: FeatureId;
+  /** Target position in the RESOLVED feature order (0-based). */
+  toIndex: number;
+}
+
+/**
+ * Move a feature to a new position in the replay timeline.
+ *
+ * Operates on the resolved order (`listFeaturesInOrder`), so features a
+ * partial `featureOrder` merely implies are materialized into an explicit
+ * order by the move. Returns the document unchanged — same reference, no
+ * version bump — when the move is a no-op: unknown feature, out-of-range
+ * index, or the feature's current position.
+ *
+ * Order LEGALITY (a feature landing before a body it consumes exists) is
+ * deliberately not checked here: document-core mutations are pure shape
+ * edits, and the command layer validates dependencies before applying,
+ * exactly as feature updates do.
+ */
+export function moveFeature(
+  document: ProjectDocument,
+  input: FeatureMoveInput
+): ProjectDocument {
+  const ordered = listFeaturesInOrder(document).map(
+    (feature) => feature.featureId
+  );
+  const from = ordered.indexOf(input.featureId);
+  if (
+    from === -1 ||
+    !Number.isInteger(input.toIndex) ||
+    input.toIndex < 0 ||
+    input.toIndex >= ordered.length ||
+    input.toIndex === from
+  ) {
+    return document;
+  }
+  const next = cloneDocument(document);
+  const reordered = [...ordered];
+  const [moved] = reordered.splice(from, 1);
+  reordered.splice(input.toIndex, 0, moved!);
+  next.featureOrder = reordered;
+  next.version += 1;
+  return next;
+}
+
 export function deleteFeature(
   document: ProjectDocument,
   input: FeatureDeleteInput

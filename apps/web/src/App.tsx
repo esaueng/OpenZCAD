@@ -14,6 +14,7 @@ import {
 import {
   Camera,
   Combine,
+  Crosshair,
   Download,
   Eye,
   FolderOpen,
@@ -51,9 +52,12 @@ import {
   listNodesByKind,
   listParameters,
   normalizeDocument,
+  repairedDirectEditOperation,
   resolveParamValue,
+  staleDirectEditFaceRepair,
   withoutDerivedProjection,
-  type ExtrudeInput
+  type ExtrudeInput,
+  type StaleDirectEditFaceRepair
 } from '@openzcad/document-core';
 import {
   circleProfile,
@@ -1128,6 +1132,14 @@ export function App() {
   // Viewport-only edge picks for one fillet/chamfer feature. The document
   // remains the source of truth once the command is committed.
   const [selectedEdges, setSelectedEdges] = useState<TopologySelection[]>([]);
+  /**
+   * Armed face re-pick for a direct edit whose stored face went stale. While
+   * set, the next viewport face pick repairs that feature instead of arming
+   * a selection; Escape disarms it.
+   */
+  const [faceRepair, setFaceRepair] = useState<StaleDirectEditFaceRepair | null>(
+    null
+  );
   /** Null means the active tool decides what picking is narrowed to. */
   const [manualSelectionFilter, setManualSelectionFilter] =
     useState<SelectionFilter | null>(null);
@@ -2204,6 +2216,12 @@ export function App() {
       projectOwnershipSettledRef.current = null;
       claim?.release();
     };
+  }, [doc?.projectId]);
+
+  useEffect(() => {
+    // An armed face re-pick names a feature by id; a different project's
+    // features must never satisfy it.
+    setFaceRepair(null);
   }, [doc?.projectId]);
 
   /**
@@ -6756,6 +6774,52 @@ export function App() {
     );
   }
 
+  /** Export one selected planar face's outline as a DXF for laser cutting. */
+  async function handleExportFaceDxf(target: {
+    bodyId: string;
+    topologyId: string;
+  }) {
+    if (!doc) {
+      return;
+    }
+    const face = representations[
+      target.bodyId as BodyId
+    ]?.topology?.faces.find(
+      (candidate) => candidate.topologyId === target.topologyId
+    );
+    if (!face) {
+      setStatus('The selected face is no longer available.');
+      return;
+    }
+    const stem = exportFileStem(doc.name);
+    try {
+      setStatus('Exporting face outline as DXF…');
+      const result = await geometry.exportModel(
+        'dxf',
+        doc,
+        [target.bodyId as BodyId],
+        {
+          face: {
+            bodyId: target.bodyId as BodyId,
+            faceHash: face.hash,
+            ...(face.reference?.kind === 'face'
+              ? { faceReference: face.reference }
+              : {})
+          }
+        }
+      );
+      if (!('text' in result)) {
+        throw new Error('The DXF export returned no text.');
+      }
+      const saved = await saveCadTextFile(`${stem}-face.dxf`, 'dxf', result.text);
+      setStatus(
+        saved ? `Exported face outline to ${stem}-face.dxf.` : 'DXF export cancelled.'
+      );
+    } catch (error) {
+      setStatus(errorMessage(error, 'DXF export failed.'));
+    }
+  }
+
   async function handleExportStep() {
     if (!doc || exportBodyIds.length === 0) {
       setStatus('Create a body before exporting.');
@@ -7062,6 +7126,12 @@ export function App() {
     detail?: PickDetail
   ) {
     if (!doc) {
+      return;
+    }
+    // An armed face re-pick owns the click outright: the pick answers "which
+    // face should this broken edit use", never a selection or a drag handle.
+    if (faceRepair) {
+      handleFaceRepairPick(selection);
       return;
     }
     // The pick detail (click point + normal) anchors selection-first drag
@@ -9184,6 +9254,10 @@ export function App() {
       startSketchOnFace(interaction.target);
       return;
     }
+    if (action === 'export-face-dxf' && interaction.mode === 'face') {
+      void handleExportFaceDxf(interaction.target);
+      return;
+    }
     if (
       action === 'remove-fillet' &&
       interaction.mode === 'face' &&
@@ -9693,6 +9767,18 @@ export function App() {
     }
   }
 
+  function handleReorderFeature(featureId: FeatureId, toIndex: number) {
+    const name =
+      doc && listFeaturesInOrder(doc).find((f) => f.featureId === featureId)
+        ?.name;
+    executeCommand(
+      commandFactories.moveFeature(
+        { featureId, toIndex },
+        name ? `Reorder ${name}` : 'Reorder feature'
+      )
+    );
+  }
+
   function handleToggleFeatureSuppression(feature: FeatureNode) {
     const resume = isFeatureSuppressed(feature);
     executeCommand(
@@ -9923,17 +10009,129 @@ export function App() {
     );
   }
 
+  /** What kind of face the armed repair is waiting for, for the prompt. */
+  function faceRepairPickHint(repair: StaleDirectEditFaceRepair): string {
+    switch (repair.operationKind) {
+      case 'offset-face':
+        return 'planar face';
+      case 'resize-cylindrical-face':
+        return 'cylindrical face';
+      case 'resize-through-hole':
+        return 'through-hole wall';
+    }
+  }
+
+  function armFaceRepair(repair: StaleDirectEditFaceRepair) {
+    if (!ensureCanEdit('repair a feature')) {
+      return;
+    }
+    setTool(null);
+    setExtrudePreview(null);
+    clearSelection();
+    setFaceRepair(repair);
+    const bodyName =
+      representations[repair.targetBodyId]?.name ?? 'the edited body';
+    setStatus(
+      `Re-pick the face for "${repair.featureName}": click the ${faceRepairPickHint(repair)} on ${bodyName} · Esc cancels.`
+    );
+  }
+
+  /**
+   * Consumes a viewport pick while a face re-pick is armed. A pick that
+   * cannot repair the feature keeps the re-pick armed and says why, so the
+   * user can simply click again; only a validated commit or Escape ends it.
+   */
+  function handleFaceRepairPick(selection: TopologySelection | null) {
+    const repair = faceRepair;
+    if (!repair || !doc) {
+      return;
+    }
+    const feature = findFeature(doc, repair.featureId);
+    if (!feature || feature.data.featureKind !== 'direct-edit') {
+      setFaceRepair(null);
+      setStatus('The feature to repair is no longer in the document.');
+      return;
+    }
+    if (!selection) {
+      setStatus(
+        `Click the face for "${repair.featureName}" · Esc cancels the re-pick.`
+      );
+      return;
+    }
+    if (!exactGeometryReady) {
+      setStatus(
+        'Exact geometry is still rebuilding. Try the re-pick again in a moment.'
+      );
+      return;
+    }
+    if (selection.kind !== 'face' || selection.bodyId !== repair.targetBodyId) {
+      const bodyName =
+        representations[repair.targetBodyId]?.name ?? 'the edited body';
+      setStatus(
+        `Pick a ${faceRepairPickHint(repair)} on ${bodyName} to repair "${repair.featureName}" · Esc cancels.`
+      );
+      return;
+    }
+    const face = representations[selection.bodyId]?.topology?.faces.find(
+      (candidate) => candidate.topologyId === selection.topologyId
+    );
+    if (!face) {
+      setStatus('That face has no exact measurements; pick another face.');
+      return;
+    }
+    try {
+      const operation = repairedDirectEditOperation(
+        feature.data.operation,
+        face
+      );
+      const targets = affectedFeatureTargets(doc, repair.featureId);
+      void executeValidatedFeature(
+        commandFactories.updateFeature(
+          { featureId: repair.featureId, data: { operation } },
+          `Re-pick face for ${feature.name}`
+        ),
+        {
+          featureName: feature.name,
+          resultBodyId: repair.targetBodyId,
+          ...(targets.length > 0 ? { targets } : {}),
+          validatingMessage: `Rebuilding "${feature.name}" with the re-picked face…`,
+          successMessage: `"${feature.name}" rebuilt with the re-picked face.`,
+          onSuccess: () => setFaceRepair(null),
+          // The refusal belongs in the status bar (there is no open feature
+          // form for the host sink to render into), and the re-pick stays
+          // armed so the next click can try a different face.
+          onFailure: () => {}
+        }
+      );
+    } catch (error) {
+      setStatus(errorMessage(error, 'That face cannot carry this edit.'));
+    }
+  }
+
   function handleFeatureContextMenu(
     event: React.MouseEvent,
     feature: FeatureNode
   ) {
     const bodyId = feature.bodyId ?? null;
     const body = bodyId ? representations[bodyId] : null;
+    const repair = staleDirectEditFaceRepair(feature, warnings);
     openContextMenu(event.clientX, event.clientY, [
       {
         item: { id: 'edit', label: 'Edit Properties' },
         run: () => handleSelectFeatureFromTree(feature.id)
       },
+      ...(repair
+        ? [
+            {
+              item: {
+                id: 'repair-face',
+                label: 'Re-pick Face…',
+                icon: <Crosshair size={13} aria-hidden="true" />
+              },
+              run: () => armFaceRepair(repair)
+            }
+          ]
+        : []),
       ...(bodyId && body && !body.consumed
         ? [
             {
@@ -10189,6 +10387,12 @@ export function App() {
                 'Measure off · pinned results remain in this View session.'
               );
             }
+            return;
+          }
+          if (faceRepair) {
+            event.preventDefault();
+            setFaceRepair(null);
+            setStatus('Face re-pick canceled · the feature is unchanged.');
             return;
           }
           if (interaction.mode !== 'idle') {
@@ -11098,6 +11302,7 @@ export function App() {
               executeCommand(commandFactories.deleteParameter({ name }))
             }
             onDeleteFeature={handleDeleteFeature}
+            onReorderFeature={handleReorderFeature}
             panelState={panelState}
             onToggleSection={(id: SidebarSectionId) =>
               setPanelState((current) => toggleSidebarSection(current, id))
