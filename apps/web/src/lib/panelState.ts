@@ -28,13 +28,16 @@ export const SIDEBAR_SECTION_IDS: readonly SidebarSectionId[] = [
  *
  * `build` is the modeling workspace — every panel, tool and gizmo. `view` is
  * the reading workspace: the viewport, the orientation cube and a small bar of
- * view controls, with the document locked against edits.
+ * view controls, with the document locked against edits. `tweak` sits between
+ * them: the reading workspace plus the parameter table, so the model's driving
+ * dimensions can be adjusted and the result exported while the design itself —
+ * sketches, features, history — stays locked.
  *
  * Named `workspaceMode` rather than "viewer" because that word already means
  * both the 3D viewport (`ViewerShell`) and the collaboration role in this
  * codebase, and a third meaning would make either impossible to grep for.
  */
-export type WorkspaceMode = 'view' | 'build';
+export type WorkspaceMode = 'view' | 'tweak' | 'build';
 
 export interface PanelState {
   /** Section id to open/closed. Absent means open. */
@@ -112,7 +115,11 @@ export function normalizePanelState(value: unknown): PanelState {
   if (typeof root.workspaceTourDismissed === 'boolean') {
     state.workspaceTourDismissed = root.workspaceTourDismissed;
   }
-  if (root.workspaceMode === 'view' || root.workspaceMode === 'build') {
+  if (
+    root.workspaceMode === 'view' ||
+    root.workspaceMode === 'tweak' ||
+    root.workspaceMode === 'build'
+  ) {
     state.workspaceMode = root.workspaceMode;
   }
   if (typeof root.viewModeRailOpen === 'boolean') {
