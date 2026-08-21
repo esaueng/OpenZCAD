@@ -1,6 +1,8 @@
 import type {
   CreateProjectInvitationResponse,
+  CreateProjectShareLinkResponse,
   ProjectMemberRole,
+  ProjectShareLinkMode,
   UserId
 } from '@openzcad/shared';
 import type { PersistenceService } from '@openzcad/persistence';
@@ -213,6 +215,58 @@ export async function createInvitation(
     }
   );
   return { invitation, token };
+}
+
+export function parseProjectShareLinkMode(value: unknown): ProjectShareLinkMode {
+  if (value !== 'tweak' && value !== 'view') {
+    throw new SharingRequestError(
+      400,
+      'SHARE_LINK_MODE_INVALID',
+      'Share link mode must be tweak or view.'
+    );
+  }
+  return value;
+}
+
+export function parseCreateShareLink(value: unknown): {
+  mode: ProjectShareLinkMode;
+} {
+  return { mode: parseProjectShareLinkMode(asRecord(value).mode) };
+}
+
+/**
+ * Accepts exactly the shape of tokens this Worker mints (32 random bytes as
+ * base64url). Anything else resolves to null so the public routes can answer
+ * with the same opaque 404 as an unknown token.
+ */
+export function parseShareLinkToken(value: string): string | null {
+  return value.length >= 40 &&
+    value.length <= 128 &&
+    /^[A-Za-z0-9_-]+$/.test(value)
+    ? value
+    : null;
+}
+
+export async function createShareLink(
+  persistence: PersistenceService,
+  ownerUserId: UserId,
+  projectId: string,
+  value: unknown,
+  now = Math.floor(Date.now() / 1000)
+): Promise<CreateProjectShareLinkResponse> {
+  const request = parseCreateShareLink(value);
+  const token = createProjectInvitationToken();
+  const shareLink = await persistence.createProjectShareLink(
+    ownerUserId,
+    projectId,
+    {
+      shareLinkId: `share_${crypto.randomUUID()}`,
+      mode: request.mode,
+      tokenHash: await hashProjectInvitationToken(token),
+      createdAt: now
+    }
+  );
+  return { shareLink, token };
 }
 
 export async function acceptInvitation(
