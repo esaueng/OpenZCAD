@@ -249,7 +249,10 @@ function parseMeasurement(value: unknown): Measurement | null {
   ) {
     return null;
   }
-  const parsedTargets = targets.map(parseTarget);
+  // `Array.prototype.map` preserves holes, and `some` below would then skip
+  // them too. IndexedDB structured cloning preserves sparse arrays, so
+  // densify first and make a missing target fail this storage boundary.
+  const parsedTargets = Array.from(targets, (target) => parseTarget(target));
   if (parsedTargets.some((target) => target === null)) {
     return null;
   }
