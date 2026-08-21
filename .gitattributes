@@ -1,0 +1,32 @@
+# Normalize line endings across platforms.
+#
+# Without this file, a Windows clone with Git's default `core.autocrlf=true`
+# rewrites tracked files to CRLF on checkout. Several tests compare exporter
+# output (always LF) byte-for-byte against golden files on disk, so a CRLF
+# checkout breaks `pnpm test` on a cold clone. Contributors previously had to
+# set `core.autocrlf=false` by hand; CI runs on Linux and never caught it.
+
+# Default: detect text, store it LF in the index, and check it out LF everywhere.
+* text=auto eol=lf
+
+# Golden / fixture files read back byte-for-byte by the test suite. These are
+# forced text (not `text=auto`) so they can never fall through to Git's binary
+# heuristic and escape normalization.
+*.step text eol=lf
+*.stl  text eol=lf
+*.snap text eol=lf
+
+# Shell scripts break under CRLF regardless of platform.
+*.sh text eol=lf
+
+# Windows batch files are the one case that genuinely needs CRLF.
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# Binary assets — never normalize or diff as text.
+*.ttf  binary
+*.png  binary
+*.jpg  binary
+*.jpeg binary
+*.icns binary
+*.ico  binary
