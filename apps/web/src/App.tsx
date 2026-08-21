@@ -461,7 +461,7 @@ function ViewerShell(props: ComponentProps<typeof LazyViewerShell>) {
   return (
     <Suspense
       fallback={
-        <div className="viewer" role="status" aria-live="polite">
+        <div className="viewer-shell" role="status" aria-live="polite">
           Loading 3D viewport…
         </div>
       }
