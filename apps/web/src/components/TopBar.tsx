@@ -46,6 +46,7 @@ interface TopBarProps {
   collaboratorCount: number;
   projectSharingEnabled: boolean;
   workspaceMode: WorkspaceMode;
+  canRenameProject: boolean;
   /**
    * Why Build is unavailable, or null when it is. A read-only share has no
    * build workspace to switch to, so the control says so rather than offering
@@ -80,6 +81,7 @@ export function TopBar({
   collaboratorCount,
   projectSharingEnabled,
   workspaceMode,
+  canRenameProject,
   buildModeDisabledReason,
   onWorkspaceMode,
   onSave,
@@ -126,7 +128,7 @@ export function TopBar({
   }, []);
 
   function beginProjectRename() {
-    if (!projectName) {
+    if (!projectName || !canRenameProject) {
       return;
     }
     setProjectNameDraft(projectName);
@@ -136,7 +138,7 @@ export function TopBar({
   function commitProjectRename() {
     const nextName = projectNameDraft.trim();
     setEditingProjectName(false);
-    if (nextName && nextName !== projectName) {
+    if (canRenameProject && nextName && nextName !== projectName) {
       onRenameProject(nextName);
       return;
     }
@@ -170,7 +172,7 @@ export function TopBar({
       <div className="topbar-divider" />
       <div className="breadcrumb">
         {projectName ? (
-          editingProjectName ? (
+          editingProjectName && canRenameProject ? (
             <input
               ref={projectNameInputRef}
               className="project-title-input"
@@ -190,7 +192,7 @@ export function TopBar({
                 }
               }}
             />
-          ) : (
+          ) : canRenameProject ? (
             <button
               className="project-title-button"
               type="button"
@@ -201,6 +203,8 @@ export function TopBar({
               <strong>{projectName}</strong>
               <Pencil size={11} aria-hidden="true" />
             </button>
+          ) : (
+            <strong>{projectName}</strong>
           )
         ) : (
           <strong>No project</strong>
