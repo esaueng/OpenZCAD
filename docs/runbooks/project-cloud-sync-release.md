@@ -15,8 +15,10 @@ approval for one as approval for the others.
 3. Confirm the target Worker binds the intended D1 database and `ARTIFACTS` R2
    bucket. Do not create or substitute production resources from this runbook.
 4. List remote D1 migrations and inspect any pending SQL before applying it.
-5. Confirm `/api/health` reports both `documentStorageAccountingReady` and
-   `projectObjectStorageReady` as `true` after the migration step.
+5. Confirm `/api/health` reports `documentStorageAccountingReady`,
+   `projectObjectStorageReady`, `projectMeasurementStorageReady`,
+   `accountErasureReady`, `projectErasureReady`, and
+   `projectMeasurementSyncEnabled` as `true` after the migration step.
 
 ## 2. Fail-closed build configuration
 
@@ -27,10 +29,17 @@ pnpm run deploy:beta
 ```
 
 That command applies remote D1 migrations before `wrangler deploy`. Verify the
-Cloudflare build token has the required D1 and Worker permissions before
-changing the production build setting. If it cannot apply migrations, make the
+Cloudflare build token retains the existing Worker permissions and adds account
+`D1 Edit` before changing the production build setting; the default token that
+Workers Builds generates does not include D1 access. Keep the non-production
+deploy command on `wrangler versions upload` so preview builds never mutate the
+official database. If the production token cannot apply migrations, make the
 default-branch build fail and use a separately approved release job; never fall
 back to a raw `wrangler deploy` that can publish code ahead of its schema.
+
+The guarded release command finishes by polling cache-busted `build-meta.json`
+and `/api/health`. It must prove the deployed commit and all storage,
+measurement, and erasure gates before the release is considered successful.
 
 Changing the Cloudflare Build command is a live configuration mutation and
 requires explicit approval.
