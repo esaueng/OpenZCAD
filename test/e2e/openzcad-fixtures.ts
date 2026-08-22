@@ -1,5 +1,10 @@
 import { test, expect, type Page } from '@playwright/test';
-import { createProjectDocument } from '@openzcad/document-core';
+import {
+  createCheckpoint,
+  createProjectDocument,
+  normalizeDocument
+} from '@openzcad/document-core';
+import type { ProjectDocument } from '@openzcad/shared';
 import { DEFAULT_APP_SETTINGS, toUserId } from '@openzcad/shared';
 import { WORKSPACE_SESSION_STORAGE_KEY } from '../../apps/web/src/lib/workspaceSession';
 
@@ -219,8 +224,21 @@ export async function stubApi(
       // the panel offers is one this device stored.
       return route.fulfill({ json: { revisions: [], maxRevisions: 50 } });
     }
-    const payload = route.request().postDataJSON() as { document: unknown };
-    return route.fulfill({ json: payload.document });
+    const payload = route.request().postDataJSON() as {
+      reason: string;
+      document: ProjectDocument;
+    };
+    // The worker checkpoints the document it is handed and returns the result,
+    // which is how a save becomes a save point the client can see. Echoing the
+    // payload back unchanged made every explicit save a no-op here — the
+    // history panel could never list more than the save a project is born
+    // with, so nothing that depends on a second one was testable.
+    return route.fulfill({
+      json: createCheckpoint(
+        normalizeDocument(payload.document),
+        payload.reason
+      )
+    });
   });
   // Cloud autosave writes here continuously once a project is account-backed.
   // Unstubbed it would 404 against the static preview, and the console-error
