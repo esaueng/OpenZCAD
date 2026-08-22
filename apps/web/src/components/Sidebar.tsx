@@ -12,6 +12,7 @@ import {
   Eye,
   EyeOff,
   FileBox,
+  GitBranch,
   Globe,
   GripVertical,
   History,
@@ -127,6 +128,13 @@ interface SidebarProps {
   hiddenBodyIds: ReadonlySet<string>;
   warnings: string[];
   checkpoints: ProjectCheckpoint[];
+  /** The open document's version, to mark the save point it sits on. */
+  documentVersion: number;
+  /**
+   * Checkpoints whose model can actually be opened, from this device or the
+   * account. The rest are listed as history without an action.
+   */
+  restorableCheckpointIds: ReadonlySet<string>;
   onSelectFeature(nodeId: string): void;
   onSelectBody(bodyId: string, additive: boolean): void;
   onToggleBodyVisibility(bodyId: string): void;
@@ -137,6 +145,8 @@ interface SidebarProps {
   onDeleteParameter(name: string): void;
   onDeleteFeature(featureId: FeatureId, name: string): void;
   onReorderFeature(featureId: FeatureId, toIndex: number): void;
+  onRestoreCheckpoint(checkpoint: ProjectCheckpoint): void;
+  onBranchCheckpoint(checkpoint: ProjectCheckpoint): void;
   panelState: PanelState;
   onToggleSection(id: SidebarSectionId): void;
 }
@@ -172,6 +182,8 @@ export function Sidebar({
   hiddenBodyIds,
   warnings,
   checkpoints,
+  documentVersion,
+  restorableCheckpointIds,
   onSelectFeature,
   onSelectBody,
   onToggleBodyVisibility,
@@ -182,6 +194,8 @@ export function Sidebar({
   onDeleteParameter,
   onDeleteFeature,
   onReorderFeature,
+  onRestoreCheckpoint,
+  onBranchCheckpoint,
   panelState,
   onToggleSection
 }: SidebarProps) {
@@ -536,19 +550,63 @@ export function Sidebar({
           onToggle={onToggleSection}
         >
           <div className="revision-list">
-            {[...checkpoints].reverse().map((checkpoint, index) => (
-              <div
-                key={checkpoint.checkpointId}
-                className={`revision-row ${index === 0 ? 'latest' : ''}`}
-                title={`${checkpoint.reason} · document v${checkpoint.documentVersion} · ${new Date(checkpoint.createdAt).toLocaleString()}`}
-              >
-                <span className="revision-dot" aria-hidden="true" />
-                <span className="revision-reason">{checkpoint.reason}</span>
-                <small className="revision-time mono">
-                  {new Date(checkpoint.createdAt).toLocaleDateString()}
-                </small>
-              </div>
-            ))}
+            {[...checkpoints].reverse().map((checkpoint, index) => {
+              // The save point the open document is currently sitting on.
+              // Offering to restore what is already loaded would be a no-op
+              // dressed up as an action.
+              const isCurrent = checkpoint.documentVersion === documentVersion;
+              const stored = restorableCheckpointIds.has(
+                checkpoint.checkpointId
+              );
+              return (
+                <div
+                  key={checkpoint.checkpointId}
+                  className={`revision-row ${index === 0 ? 'latest' : ''}`}
+                  title={`${checkpoint.reason} · document v${checkpoint.documentVersion} · ${new Date(checkpoint.createdAt).toLocaleString()}`}
+                >
+                  <span className="revision-dot" aria-hidden="true" />
+                  <span className="revision-reason">{checkpoint.reason}</span>
+                  <small className="revision-time mono">
+                    {new Date(checkpoint.createdAt).toLocaleDateString()}
+                  </small>
+                  {stored ? (
+                    <span className="revision-actions">
+                      {!isCurrent && (
+                        <button
+                          type="button"
+                          className="revision-action"
+                          title={`Restore “${checkpoint.reason}”. This is one Undo away, and the current state is saved first.`}
+                          aria-label={`Restore ${checkpoint.reason}`}
+                          onClick={() => onRestoreCheckpoint(checkpoint)}
+                        >
+                          <History size={12} aria-hidden="true" />
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        className="revision-action"
+                        title={`Branch “${checkpoint.reason}” into a new project. This project is left as it is.`}
+                        aria-label={`Branch ${checkpoint.reason} into a new project`}
+                        onClick={() => onBranchCheckpoint(checkpoint)}
+                      >
+                        <GitBranch size={12} aria-hidden="true" />
+                      </button>
+                    </span>
+                  ) : (
+                    // Retention drops stored documents while the checkpoints
+                    // naming them stay in the document, so some rows are a
+                    // record of a save rather than a save you can open. Saying
+                    // so beats a button that fails when pressed.
+                    <span
+                      className="revision-unavailable"
+                      title="This save is listed in the project's history, but its model is no longer stored."
+                    >
+                      not stored
+                    </span>
+                  )}
+                </div>
+              );
+            })}
           </div>
         </SidebarSection>
       )}

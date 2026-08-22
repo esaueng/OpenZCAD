@@ -13,6 +13,7 @@ import {
   ProjectNotFoundError,
   ProjectSharingError,
   RevisionConflictError,
+  RevisionNotFoundError,
   UPLOAD_SESSION_TTL_MS,
   type CreateProjectInvitationInput,
   type CreateProjectShareLinkInput,
@@ -38,6 +39,7 @@ import {
   isProjectCheckpoint,
   isRevisionRecord,
   persistedDocumentBytes,
+  projectBranchPoint,
   projectOrganization,
   PROJECT_DOCUMENT_SCHEMA_VERSION,
   PROJECT_STATUSES,
@@ -46,6 +48,7 @@ import {
   toProjectId,
   toRevisionId,
   toUploadSessionId,
+  toUserId,
   TRASH_RETENTION_MS,
   type AccountStorageUsage,
   type ArtifactMetadataResponse,
@@ -65,7 +68,9 @@ import {
   type FinalizeArtifactRequest,
   type ListArtifactsResponse,
   type ListProjectsResponse,
+  type ListRevisionsResponse,
   type ProjectDocument,
+  type ProjectBranchPoint,
   type ProjectAccessRole as SharedProjectAccessRole,
   type ProjectEditLease,
   type ProjectInvitationSummary,
@@ -1076,12 +1081,22 @@ export class D1R2PersistenceService implements PersistenceService {
     if (!this.env.DB) {
       return getInMemoryPersistence().duplicateProject(userId, request);
     }
-    const source = await this.loadProject(userId, request.projectId);
-    if (!source) {
+    const head = await this.loadProject(userId, request.projectId);
+    if (!head) {
       throw new ProjectNotFoundError(request.projectId);
     }
-    const name = request.name ?? (await this.copyNameFor(userId, source.name));
-    const document = duplicateProjectDocument(source, name, userId);
+    const branch = request.revisionId
+      ? await this.branchPointFor(request.projectId, request.revisionId, head)
+      : null;
+    // The copy is named after the project, not after the save state it starts
+    // from: "Bracket (copy)" is what the user is looking for on the shelf.
+    const name = request.name ?? (await this.copyNameFor(userId, head.name));
+    const document = duplicateProjectDocument(
+      branch?.document ?? head,
+      name,
+      userId,
+      branch?.origin
+    );
     // A copy lands next to its original rather than at the top of the shelf,
     // which is where you go looking for it. It starts unpinned and active: the
     // point of a duplicate is to diverge from the original, not to inherit its
@@ -1098,6 +1113,44 @@ export class D1R2PersistenceService implements PersistenceService {
         sortOrder: sortOrder?.sort_order ?? 0
       }),
       document
+    };
+  }
+
+  /**
+   * The stored save state to branch, together with the lineage the copy will
+   * carry. Read directly rather than through {@link loadRevision} so a pruned
+   * revision is refused here instead of silently branching the head document —
+   * a copy of the wrong model is worse than an error.
+   */
+  private async branchPointFor(
+    projectId: string,
+    revisionId: string,
+    head: ProjectDocument
+  ): Promise<{ document: ProjectDocument; origin: ProjectBranchPoint }> {
+    const row = await this.env
+      .DB!.prepare(
+        `SELECT document_json, document_object_id, reason
+         FROM revisions
+         WHERE id = ? AND project_id = ?`
+      )
+      .bind(revisionId, projectId)
+      .first<{
+        document_json: string;
+        document_object_id: string | null;
+        reason: string;
+      }>();
+    if (!row) {
+      throw new RevisionNotFoundError(projectId, revisionId);
+    }
+    const document = row.document_object_id
+      ? await this.loadProjectObject(projectId, row.document_object_id)
+      : normalizeDocument(JSON.parse(row.document_json) as ProjectDocument);
+    return {
+      document,
+      origin: projectBranchPoint(head, {
+        revisionId: toRevisionId(revisionId),
+        reason: row.reason
+      })
     };
   }
 
@@ -1221,6 +1274,71 @@ export class D1R2PersistenceService implements PersistenceService {
     if (!row) {
       return null;
     }
+    return row.document_object_id
+      ? this.loadProjectObject(projectId, row.document_object_id)
+      : normalizeDocument(JSON.parse(row.document_json) as ProjectDocument);
+  }
+
+  async listRevisions(
+    userId: UserId,
+    projectId: string
+  ): Promise<ListRevisionsResponse> {
+    if (!this.env.DB) {
+      return getInMemoryPersistence().listRevisions(userId, projectId);
+    }
+    await this.requireProjectRead(userId, projectId);
+    const rows = await this.env.DB.prepare(
+      `SELECT id, reason, created_at, author_user_id, document_bytes
+       FROM revisions
+       WHERE project_id = ?
+       ORDER BY created_at DESC, id DESC
+       LIMIT ?`
+    )
+      .bind(projectId, MAX_PROJECT_REVISIONS)
+      .all<RevisionRow>();
+    return {
+      revisions: (rows.results ?? []).map((row) => ({
+        revisionId: toRevisionId(row.id),
+        projectId: toProjectId(projectId),
+        reason: row.reason,
+        createdAt: row.created_at,
+        // Null for revisions written before authorship was recorded, which is
+        // absent rather than "unknown user" — the panel simply says nothing.
+        ...(row.author_user_id
+          ? { authorUserId: toUserId(row.author_user_id) }
+          : {}),
+        documentBytes: row.document_bytes ?? 0
+      })),
+      maxRevisions: MAX_PROJECT_REVISIONS
+    };
+  }
+
+  async loadRevision(
+    userId: UserId,
+    projectId: string,
+    revisionId: string
+  ): Promise<ProjectDocument | null> {
+    if (!this.env.DB) {
+      return getInMemoryPersistence().loadRevision(
+        userId,
+        projectId,
+        revisionId
+      );
+    }
+    await this.requireProjectRead(userId, projectId);
+    const row = await this.env.DB.prepare(
+      `SELECT document_json, document_object_id
+       FROM revisions
+       WHERE id = ? AND project_id = ?`
+    )
+      .bind(revisionId, projectId)
+      .first<{ document_json: string; document_object_id: string | null }>();
+    if (!row) {
+      return null;
+    }
+    // Where object storage is in use, `document_json` holds the envelope
+    // rather than the document, so the pointer decides — exactly as in
+    // `loadProject`.
     return row.document_object_id
       ? this.loadProjectObject(projectId, row.document_object_id)
       : normalizeDocument(JSON.parse(row.document_json) as ProjectDocument);
@@ -2884,6 +3002,16 @@ interface ProjectRow {
   deleted_at: string | null;
   archived_at: string | null;
   thumbnail_artifact_id?: string | null;
+}
+
+interface RevisionRow {
+  id: string;
+  reason: string;
+  created_at: string;
+  /** Null on rows written before migration 0009 added authorship. */
+  author_user_id: string | null;
+  /** Null on rows written before migration 0010 added byte accounting. */
+  document_bytes: number | null;
 }
 
 interface ProjectDocumentObjectRow {

@@ -78,6 +78,60 @@
   font-size: var(--fs-mini);
 }
 
+/* Restore and Branch. Held back until the row is engaged with: the timeline is
+   read far more often than it is acted on, and two buttons on every row turn a
+   quiet list into a wall of controls. Focus-within keeps them reachable by
+   keyboard, where "hover" has no meaning. */
+.revision-actions {
+  display: flex;
+  flex: none;
+  gap: 2px;
+  opacity: 0;
+  transition: opacity var(--dur-base) var(--ease-out);
+}
+
+.revision-row:hover .revision-actions,
+.revision-row:focus-within .revision-actions {
+  opacity: 1;
+}
+
+.revision-action {
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  color: var(--color-text-muted);
+  background: none;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition:
+    color var(--dur-base) var(--ease-out),
+    background-color var(--dur-base) var(--ease-out),
+    border-color var(--dur-base) var(--ease-out);
+}
+
+.revision-action:hover {
+  color: var(--color-text);
+  background: var(--color-surface-raised);
+  border-color: var(--color-border);
+}
+
+.revision-action:focus-visible {
+  color: var(--color-text);
+  outline: none;
+  border-color: var(--color-accent);
+}
+
+/* A save point whose model is no longer stored anywhere reachable. */
+.revision-unavailable {
+  flex: none;
+  color: var(--color-text-subtle);
+  font-size: var(--fs-mini);
+  font-style: italic;
+}
+
 .error-boundary {
   display: grid;
   place-content: center;
