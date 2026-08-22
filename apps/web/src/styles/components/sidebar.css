@@ -123,6 +123,24 @@
   color: var(--color-error);
 }
 
+/* An exposed parameter and the gloss beneath it read as one entry, so the
+   description sits inside the row's grid gap rather than as a sibling row. */
+.param-entry {
+  display: grid;
+  gap: 3px;
+}
+
+.param-description {
+  height: 24px;
+  padding: 2px 6px;
+  color: var(--color-text-muted);
+  font-size: var(--fs-mini);
+}
+
+.param-description::placeholder {
+  color: var(--color-text-subtle);
+}
+
 /* Curation toggle: which parameters a Tweak workspace or share link offers.
    Unlike `.row-delete` it stays visible when it is on, because "this one is
    published" is state worth seeing without hovering every row. */

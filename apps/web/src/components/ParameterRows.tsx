@@ -27,6 +27,13 @@ interface ParameterRowProps {
    * can be shown there without carrying the flag.
    */
   exposedInTweak?: boolean;
+  /**
+   * Edits the gloss shown beside this parameter in Tweak. Offered only for a
+   * deliberately exposed parameter: an uncurated document exposes everything,
+   * and a description field under all twenty rows would bury the table it is
+   * meant to explain.
+   */
+  onDescribe?: (name: string, description: string) => void;
 }
 
 export function ParameterRow({
@@ -35,7 +42,8 @@ export function ParameterRow({
   onSet,
   onDelete,
   onExpose,
-  exposedInTweak
+  exposedInTweak,
+  onDescribe
 }: ParameterRowProps) {
   const [expression, setExpression] = useState(parameter.expression);
   const [editing, setEditing] = useState(false);
@@ -69,7 +77,9 @@ export function ParameterRow({
     }
   }
 
+  const describable = onDescribe && parameter.exposed === true;
   return (
+    <div className={describable ? 'param-entry' : undefined}>
     <div
       className="param-row"
       title={`${parameter.name} = ${parameter.expression}`}
@@ -139,6 +149,70 @@ export function ParameterRow({
         </button>
       )}
     </div>
+    {describable && (
+      <ParameterDescriptionField
+        parameter={parameter}
+        onDescribe={onDescribe}
+      />
+    )}
+    </div>
+  );
+}
+
+/**
+ * The description under an exposed parameter. Its own component so the
+ * draft state resets cleanly when curation is toggled off and on, and so it
+ * follows the same commit-on-blur, revert-on-Escape contract as the
+ * expression field above it.
+ */
+function ParameterDescriptionField({
+  parameter,
+  onDescribe
+}: {
+  parameter: ParameterNode;
+  onDescribe: (name: string, description: string) => void;
+}) {
+  const canonical = parameter.description ?? '';
+  const [draft, setDraft] = useState(canonical);
+  const [synced, setSynced] = useState(canonical);
+  const [editing, setEditing] = useState(false);
+
+  if (canonical !== synced) {
+    setSynced(canonical);
+    if (!editing) {
+      setDraft(canonical);
+    }
+  }
+
+  function commit() {
+    if (draft.trim() !== canonical) {
+      onDescribe(parameter.name, draft);
+    }
+  }
+
+  return (
+    <input
+      className="param-description"
+      value={draft}
+      placeholder="What this controls (shown in Tweak)"
+      spellCheck
+      maxLength={140}
+      aria-label={`Description for ${parameter.name}`}
+      onChange={(event) => setDraft(event.target.value)}
+      onFocus={() => setEditing(true)}
+      onBlur={() => {
+        setEditing(false);
+        commit();
+      }}
+      onKeyDown={(event) => {
+        if (event.key === 'Enter') {
+          event.currentTarget.blur();
+        }
+        if (event.key === 'Escape') {
+          setDraft(canonical);
+        }
+      }}
+    />
   );
 }
 
