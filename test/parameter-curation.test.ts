@@ -4,6 +4,7 @@ import {
   listExposedParameters,
   listParameters,
   setParameter,
+  setParameterDescription,
   setParameterExposed
 } from '@openzcad/document-core';
 import { commandFactories } from '@openzcad/command-system';
@@ -92,5 +93,69 @@ describe('curated parameters', () => {
     expect(
       commandFactories.setParameter({ name: 'width', expression: '30' }).kind
     ).toBe('parameter.set');
+  });
+});
+
+describe('parameter descriptions', () => {
+  it('stores a gloss for whoever meets the model through a share link', () => {
+    const document = setParameterDescription(documentWithParameters(), {
+      name: 'width',
+      description: 'Overall width across the mounting flanges'
+    });
+    expect(
+      listParameters(document).find((p) => p.name === 'width')?.description
+    ).toBe('Overall width across the mounting flanges');
+  });
+
+  it('trims, and clears rather than storing an empty string', () => {
+    // "No description" needs one representation, or the panel has to test for
+    // both absent and blank before deciding whether to render a line.
+    let document = setParameterDescription(documentWithParameters(), {
+      name: 'width',
+      description: '  Overall width  '
+    });
+    expect(
+      listParameters(document).find((p) => p.name === 'width')?.description
+    ).toBe('Overall width');
+    document = setParameterDescription(document, {
+      name: 'width',
+      description: '   '
+    });
+    expect(
+      listParameters(document).find((p) => p.name === 'width')
+    ).not.toHaveProperty('description');
+  });
+
+  it('survives curation and expression edits', () => {
+    let document = setParameterDescription(documentWithParameters(), {
+      name: 'width',
+      description: 'Overall width'
+    });
+    document = setParameterExposed(document, { name: 'width', exposed: true });
+    document = setParameter(document, { name: 'width', expression: '45' });
+    document = setParameterExposed(document, { name: 'width', exposed: false });
+    expect(
+      listParameters(document).find((p) => p.name === 'width')?.description
+    ).toBe('Overall width');
+  });
+
+  it('refuses to describe a parameter that does not exist', () => {
+    expect(() =>
+      setParameterDescription(documentWithParameters(), {
+        name: 'nope',
+        description: 'x'
+      })
+    ).toThrow(/does not exist/);
+  });
+
+  it('describes under its own command kind, not parameter.set', () => {
+    // Same reasoning as curation: a Tweak visitor may turn the knobs, but
+    // must not rewrite what the owner said they mean.
+    expect(
+      commandFactories.setParameterDescription({
+        name: 'width',
+        description: 'Overall width'
+      }).kind
+    ).toBe('parameter.describe');
   });
 });

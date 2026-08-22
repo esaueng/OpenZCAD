@@ -455,6 +455,11 @@ export interface ParameterExposeInput {
   exposed: boolean;
 }
 
+export interface ParameterDescribeInput {
+  name: string;
+  description: string;
+}
+
 export interface FeatureUpdateInput {
   featureId: FeatureId;
   name?: string;
@@ -2205,6 +2210,36 @@ export function setParameterExposed(
  * list is taken as deliberate and becomes exactly the exposed set, which is
  * also how hiding everything but one dimension is expressed.
  */
+/**
+ * Sets the gloss shown beside a parameter in Tweak mode and share links.
+ *
+ * Its own command for the same reason curation is: Tweak admits
+ * `parameter.set` so a visitor can turn the published knobs, and a visitor
+ * must not be able to rewrite what the owner said those knobs mean. Blank
+ * clears it rather than storing an empty string, so "no description" has one
+ * representation.
+ */
+export function setParameterDescription(
+  document: ProjectDocument,
+  input: ParameterDescribeInput
+): ProjectDocument {
+  const next = cloneDocument(document);
+  const parameter = listParameters(next).find(
+    (candidate) => candidate.name === input.name
+  );
+  if (!parameter) {
+    throw new Error(`Parameter "${input.name}" does not exist.`);
+  }
+  const description = input.description.trim();
+  if (description.length > 0) {
+    parameter.description = description;
+  } else {
+    delete parameter.description;
+  }
+  next.version += 1;
+  return next;
+}
+
 export function listExposedParameters(
   document: ProjectDocument
 ): ParameterNode[] {

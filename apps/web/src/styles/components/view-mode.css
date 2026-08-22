@@ -80,6 +80,19 @@
   grid-template-columns: minmax(0, 1fr) 76px auto;
 }
 
+/* Read, not edited: in Tweak the gloss is prose under the control, and it is
+   what a share-link visitor has instead of the feature that consumes it. */
+.param-description-text {
+  margin: 0 0 2px 2px;
+  color: var(--color-text-subtle);
+  font-size: var(--fs-mini);
+  line-height: 1.4;
+}
+
+.tweak-panel-params .param-entry {
+  gap: 2px;
+}
+
 .tweak-panel-actions {
   display: grid;
   gap: 6px;
