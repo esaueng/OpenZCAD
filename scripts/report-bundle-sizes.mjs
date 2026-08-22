@@ -10,7 +10,14 @@ const CHECK = process.argv.includes('--check');
 // bytes — 99.96% of the old budget — so that a one-line fix no longer trips
 // the gate. The tripwire against runaway growth stays; the next raise should
 // come with an actual split of the entry chunk, not another bump.
-const DEFAULT_RAW_BUDGET = 512 * 1024;
+//
+// 2026-08-22: that split happened — settings, the sharing and export dialogs,
+// the inspector forms and the demo builders now load on the gesture that needs
+// them — taking the entry chunk from 517,965 bytes to 395,469. The 12 KiB of
+// slack borrowed above is given back rather than banked as new room to grow
+// into: a budget only reports something when its edge is somewhere the code
+// can actually reach.
+const DEFAULT_RAW_BUDGET = 500 * 1024;
 const APPROVED_LAZY_ASSETS = [
   {
     pattern: /^assets\/three-.*\.js$/,
