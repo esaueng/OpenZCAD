@@ -450,6 +450,11 @@ export interface ParameterDeleteInput {
   name: string;
 }
 
+export interface ParameterExposeInput {
+  name: string;
+  exposed: boolean;
+}
+
 export interface FeatureUpdateInput {
   featureId: FeatureId;
   name?: string;
@@ -2166,6 +2171,46 @@ export function deleteParameter(
   refreshParameterValues(next);
   next.version += 1;
   return next;
+}
+
+/**
+ * Chooses whether a parameter is offered in Tweak mode and through a share
+ * link. Deliberately its own command rather than a field on `setParameter`:
+ * Tweak mode admits `parameter.set` so a visitor can turn the published
+ * knobs, and folding curation into that command would let the same visitor
+ * publish knobs the owner never offered.
+ */
+export function setParameterExposed(
+  document: ProjectDocument,
+  input: ParameterExposeInput
+): ProjectDocument {
+  const next = cloneDocument(document);
+  const parameter = listParameters(next).find(
+    (candidate) => candidate.name === input.name
+  );
+  if (!parameter) {
+    throw new Error(`Parameter "${input.name}" does not exist.`);
+  }
+  parameter.exposed = input.exposed;
+  next.version += 1;
+  return next;
+}
+
+/**
+ * The parameters a Tweak-mode workspace offers, in `parameterOrder`.
+ *
+ * An uncurated document — nobody has exposed anything — offers all of them,
+ * so a model authored before curation existed, or shared without thinking
+ * about it, behaves as it always did. The moment one parameter is exposed the
+ * list is taken as deliberate and becomes exactly the exposed set, which is
+ * also how hiding everything but one dimension is expressed.
+ */
+export function listExposedParameters(
+  document: ProjectDocument
+): ParameterNode[] {
+  const parameters = listParameters(document);
+  const exposed = parameters.filter((parameter) => parameter.exposed === true);
+  return exposed.length > 0 ? exposed : parameters;
 }
 
 export interface ParameterScopeResult {

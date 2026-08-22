@@ -74,9 +74,10 @@
   padding: 10px;
 }
 
-/* No delete column in Tweak: the row grid gives its slot back. */
+/* Tweak shows neither the curation toggle nor delete: the row gives both
+   slots back to the name and the expression. */
 .tweak-panel .param-row {
-  grid-template-columns: minmax(48px, 0.8fr) minmax(0, 1.2fr) auto;
+  grid-template-columns: minmax(0, 1fr) 76px auto;
 }
 
 .tweak-panel-actions {
