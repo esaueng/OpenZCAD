@@ -12,10 +12,15 @@ import {
   THUMBNAIL_CONTENT_TYPE,
   nowIso,
   persistedDocumentBytes,
+  projectBranchPoint,
   sanitizeFileName,
   toArtifactId,
+  toProjectId,
   toUploadSessionId,
   type AccountStorageUsage,
+  type ListRevisionsResponse,
+  type ProjectBranchPoint,
+  type RevisionId,
   type ArtifactMetadataResponse,
   type ArtifactRecord,
   type CreateProjectRequest,
@@ -136,6 +141,22 @@ export interface ProjectAccess {
  * Deliberately covers both missing and unauthorized projects so callers can
  * preserve indistinguishable 404 behavior.
  */
+/**
+ * A save state the caller named is no longer stored. Distinct from
+ * {@link ProjectNotFoundError} because the project is right there — telling
+ * somebody their project does not exist when a pruned save is what went
+ * missing sends them looking for the wrong problem.
+ */
+export class RevisionNotFoundError extends Error {
+  constructor(
+    readonly projectId: string,
+    readonly revisionId: string
+  ) {
+    super('That save state is no longer stored for this project.');
+    this.name = 'RevisionNotFoundError';
+  }
+}
+
 export class ProjectNotFoundError extends Error {
   constructor(projectId: string) {
     super(`Project ${projectId} not found.`);
@@ -215,6 +236,16 @@ export function assertPersistableDocument(document: ProjectDocument): void {
   if (bytes > MAX_PERSISTED_DOCUMENT_BYTES) {
     throw new DocumentTooLargeError(bytes, MAX_PERSISTED_DOCUMENT_BYTES);
   }
+}
+
+/** One retained save state in {@link InMemoryPersistenceService}. */
+interface StoredRevision {
+  revisionId: RevisionId;
+  reason: string;
+  createdAt: string;
+  authorUserId: UserId;
+  documentBytes: number;
+  document: ProjectDocument;
 }
 
 export interface PersistenceService {
@@ -338,6 +369,29 @@ export interface PersistenceService {
     request: SaveRevisionRequest
   ): Promise<ProjectDocument>;
   /**
+   * The project's retained save states, newest first, without their documents.
+   *
+   * Read access, not edit: a viewer may look through the history and branch a
+   * save into a project of their own, which touches nothing here.
+   *
+   * @throws ProjectNotFoundError when the project does not exist.
+   */
+  listRevisions(
+    userId: UserId,
+    projectId: string
+  ): Promise<ListRevisionsResponse>;
+  /**
+   * One retained save state's document, or null when retention has already
+   * dropped it. A checkpoint recorded in a document outlives the stored
+   * snapshot it names, so "gone" is an ordinary answer here rather than an
+   * error.
+   */
+  loadRevision(
+    userId: UserId,
+    projectId: string,
+    revisionId: string
+  ): Promise<ProjectDocument | null>;
+  /**
    * A fenced document write that adds no revision. Continuous sync uses this;
    * explicit checkpoints use {@link PersistenceService.saveRevision}.
    *
@@ -450,11 +504,15 @@ export class InMemoryPersistenceService implements PersistenceService {
   >();
   private readonly organization = new Map<string, ProjectOrganization>();
   /**
-   * Sizes only, per project, newest last. Enough to reproduce the account's
-   * retention count and byte totals without keeping a second copy of every
-   * document in memory.
+   * Stored save states per project, newest last, bounded exactly as the
+   * account's are.
+   *
+   * These hold their documents. The development server runs on this service
+   * with no D1 behind it, and a history panel that cannot open the save it
+   * lists is worse than no panel — so "in-memory" has to mean the same
+   * behaviour in less durable storage, not less behaviour.
    */
-  private readonly revisionBytes = new Map<string, number[]>();
+  private readonly revisions = new Map<string, StoredRevision[]>();
   private readonly artifacts = new Map<string, ArtifactRecord>();
   private readonly uploads = new Map<string, UploadSessionRecord>();
   private readonly uploadBodies = new Map<string, ArrayBuffer>();
@@ -860,19 +918,28 @@ export class InMemoryPersistenceService implements PersistenceService {
     userId: UserId,
     request: DuplicateProjectRequest
   ): Promise<CreateProjectResponse> {
-    const source = this.projects.get(request.projectId);
-    if (!source) {
+    const head = this.projects.get(request.projectId);
+    if (!head) {
       throw new ProjectNotFoundError(request.projectId);
     }
     await this.requireProjectRead(userId, request.projectId);
+    const branch = request.revisionId
+      ? this.branchPointFor(request.projectId, request.revisionId, head)
+      : null;
+    const source = branch?.document ?? head;
     const owned = this.ownedProjects(userId);
     const name =
       request.name ??
       duplicateProjectName(
-        source.name,
+        head.name,
         owned.map((document) => document.name)
       );
-    const document = duplicateProjectDocument(source, name, userId);
+    const document = duplicateProjectDocument(
+      source,
+      name,
+      userId,
+      branch?.origin
+    );
     this.projects.set(document.projectId, document);
     // A copy lands next to its original rather than at the top of the shelf,
     // which is where you go looking for it. It starts unpinned and active: the
@@ -886,6 +953,23 @@ export class InMemoryPersistenceService implements PersistenceService {
           : 0
     });
     return { project: this.summarize(document), document };
+  }
+
+  private branchPointFor(
+    projectId: string,
+    revisionId: string,
+    head: ProjectDocument
+  ): { document: ProjectDocument; origin: ProjectBranchPoint } {
+    const stored = (this.revisions.get(projectId) ?? []).find(
+      (revision) => revision.revisionId === revisionId
+    );
+    if (!stored) {
+      throw new RevisionNotFoundError(projectId, revisionId);
+    }
+    return {
+      document: stored.document,
+      origin: projectBranchPoint(head, stored)
+    };
   }
 
   async updateProject(
@@ -997,19 +1081,65 @@ export class InMemoryPersistenceService implements PersistenceService {
     );
     assertPersistableDocument(document);
     this.projects.set(request.projectId, document);
-    this.recordRevision(request.projectId, document);
+    this.recordRevision(request.projectId, document, userId, request.reason);
     return document;
   }
 
-  /**
-   * Mirrors the store's retention rule so tests and the no-D1 development
-   * server behave the same way the account does. Only the count matters here —
-   * the in-memory service never persists the bodies.
-   */
-  private recordRevision(projectId: string, document: ProjectDocument): void {
-    const history = this.revisionBytes.get(projectId) ?? [];
-    history.push(persistedDocumentBytes(document));
-    this.revisionBytes.set(projectId, history.slice(-MAX_PROJECT_REVISIONS));
+  /** Mirrors the store's retention rule, bodies included. */
+  private recordRevision(
+    projectId: string,
+    document: ProjectDocument,
+    authorUserId: UserId,
+    reason: string
+  ): void {
+    const latest = document.revisions.at(-1);
+    if (!latest) {
+      return;
+    }
+    const history = this.revisions.get(projectId) ?? [];
+    history.push({
+      revisionId: latest.revisionId,
+      reason,
+      createdAt: latest.createdAt,
+      authorUserId,
+      documentBytes: persistedDocumentBytes(document),
+      document
+    });
+    this.revisions.set(projectId, history.slice(-MAX_PROJECT_REVISIONS));
+  }
+
+  async listRevisions(
+    userId: UserId,
+    projectId: string
+  ): Promise<ListRevisionsResponse> {
+    await this.requireProjectRead(userId, projectId);
+    if (!this.projects.has(projectId)) {
+      throw new ProjectNotFoundError(projectId);
+    }
+    const stored = this.revisions.get(projectId) ?? [];
+    return {
+      revisions: [...stored].reverse().map((revision) => ({
+        revisionId: revision.revisionId,
+        projectId: toProjectId(projectId),
+        reason: revision.reason,
+        createdAt: revision.createdAt,
+        authorUserId: revision.authorUserId,
+        documentBytes: revision.documentBytes
+      })),
+      maxRevisions: MAX_PROJECT_REVISIONS
+    };
+  }
+
+  async loadRevision(
+    userId: UserId,
+    projectId: string,
+    revisionId: string
+  ): Promise<ProjectDocument | null> {
+    await this.requireProjectRead(userId, projectId);
+    const stored = (this.revisions.get(projectId) ?? []).find(
+      (revision) => revision.revisionId === revisionId
+    );
+    return stored ? normalizeDocument(stored.document) : null;
   }
 
   /**
@@ -1045,7 +1175,7 @@ export class InMemoryPersistenceService implements PersistenceService {
   async getStorageUsage(userId: UserId): Promise<AccountStorageUsage> {
     const owned = this.ownedProjects(userId);
     const revisions = owned.flatMap(
-      (document) => this.revisionBytes.get(document.projectId) ?? []
+      (document) => this.revisions.get(document.projectId) ?? []
     );
     const artifacts = this.accountArtifacts(userId);
     return {
@@ -1054,7 +1184,10 @@ export class InMemoryPersistenceService implements PersistenceService {
         (total, document) => total + persistedDocumentBytes(document),
         0
       ),
-      revisionBytes: revisions.reduce((total, bytes) => total + bytes, 0),
+      revisionBytes: revisions.reduce(
+        (total, revision) => total + revision.documentBytes,
+        0
+      ),
       revisionCount: revisions.length,
       documentLimitBytes: MAX_PERSISTED_DOCUMENT_BYTES,
       maxRevisionsPerProject: MAX_PROJECT_REVISIONS,
@@ -1354,6 +1487,7 @@ export class InMemoryPersistenceService implements PersistenceService {
 
   private destroyProject(projectId: string): void {
     this.projects.delete(projectId);
+    this.revisions.delete(projectId);
     this.organization.delete(projectId);
     this.projectMembers.delete(projectId);
     for (const [invitationId, invitation] of this.projectInvitations) {

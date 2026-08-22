@@ -40,6 +40,7 @@ import {
   type PlaneId,
   type PrimitiveKind,
   type ProjectDocument,
+  type ProjectBranchPoint,
   type ProjectCheckpoint,
   type RevisionRecord,
   type RevolveAxis,
@@ -638,7 +639,8 @@ export function cloneDocument(document: ProjectDocument): ProjectDocument {
 export function duplicateProjectDocument(
   source: ProjectDocument,
   name: string,
-  ownerUserId: UserId
+  ownerUserId: UserId,
+  branchedFrom?: ProjectBranchPoint
 ): ProjectDocument {
   const copy = cloneDocument(normalizeDocument(source));
   const projectId = toProjectId(createId('proj'));
@@ -646,6 +648,11 @@ export function duplicateProjectDocument(
   if (rootNode?.kind === 'project') {
     copy.nodes[copy.rootNodeId] = { ...rootNode, projectId, name };
   }
+  // A branch says which save it started from, because that is the thing the
+  // user picked; a plain duplicate has only the project to name.
+  const reason = branchedFrom
+    ? `Branched from ${branchedFrom.projectName} · ${branchedFrom.checkpointReason}`
+    : `Duplicated from ${source.name}`;
   return createCheckpoint(
     appendRevision(
       {
@@ -653,11 +660,55 @@ export function duplicateProjectDocument(
         projectId,
         ownerUserId,
         name,
+        // A branch of a branch records where it actually came from, not where
+        // its parent did.
+        ...(branchedFrom ? { branchedFrom } : {}),
         derived: { ...copy.derived, updatedAt: nowIso() }
       },
-      `Duplicated from ${source.name}`
+      reason
     ),
-    `Duplicated from ${source.name}`
+    reason
+  );
+}
+
+/**
+ * `current` rewound to the model `snapshot` held, as a forward edit.
+ *
+ * Restoring an old save is not a rewind of the project's timeline, and this is
+ * the whole subtlety of the operation. `version` is a monotonic clock that
+ * collaboration and every fenced cloud write compare against, and the
+ * revision/checkpoint lists are the record of moments the user marked. Moving
+ * any of them backwards would make an old save look like an unsaved edit to
+ * the account, invite a conflict against a room that has already moved on, and
+ * quietly delete the save points made after the one being restored — including
+ * the one this restore is about to create, which is what makes a restore
+ * escapable. So the model content comes from the snapshot and the timeline
+ * keeps running: exactly the rule `restoreHistorySnapshot` already applies to
+ * undo, for the same reasons.
+ *
+ * `branchedFrom` follows the timeline rather than the content: this project's
+ * origin is a fact about the project, not about which save is currently loaded.
+ */
+export function restoreFromSaveState(
+  current: ProjectDocument,
+  snapshot: ProjectDocument,
+  reason: string
+): ProjectDocument {
+  const restored = cloneDocument(normalizeDocument(snapshot));
+  return appendRevision(
+    {
+      ...restored,
+      projectId: current.projectId,
+      ownerUserId: current.ownerUserId,
+      version: current.version,
+      revisions: current.revisions,
+      checkpoints: current.checkpoints,
+      ...(current.branchedFrom ? { branchedFrom: current.branchedFrom } : {}),
+      // The restored model is not the geometry currently on screen. Keep the
+      // stored `warnings` and stamp the edit time; the rebuild attaches meshes.
+      derived: { ...restored.derived, updatedAt: nowIso() }
+    },
+    reason
   );
 }
 
