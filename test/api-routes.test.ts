@@ -1,7 +1,10 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import worker from '../apps/web/worker/index';
 import { getInMemoryPersistence } from '@openzcad/persistence';
-import { createProjectDocument } from '@openzcad/document-core';
+import {
+  addPrimitiveFeature,
+  createProjectDocument
+} from '@openzcad/document-core';
 import {
   DEFAULT_APP_SETTINGS,
   MAX_ARTIFACT_UPLOAD_PARTS,
@@ -9,6 +12,7 @@ import {
   projectOrganization,
   toUserId,
   type CreateProjectResponse,
+  type ListRevisionsResponse,
   type ProjectDocument,
   type ProjectSummary
 } from '@openzcad/shared';
@@ -2365,5 +2369,113 @@ describe('worker api routes', () => {
     } finally {
       errorSpy.mockRestore();
     }
+  });
+});
+
+describe('save-state history routes', () => {
+  /** A project with two explicit saves, the second holding a box. */
+  async function projectWithTwoSaves() {
+    const created = await createProject('History Test');
+    const projectId = created.project.projectId;
+    const first = (await (
+      await worker.fetch(
+        post(`/api/projects/${projectId}/revisions`, {
+          projectId,
+          reason: 'First save',
+          expectedVersion: created.document.version,
+          document: created.document
+        }),
+        env
+      )
+    ).json()) as ProjectDocument;
+    const boxed = addPrimitiveFeature(first, {
+      name: 'Box',
+      primitiveKind: 'box',
+      dimensions: { width: 10, depth: 10, height: 10 }
+    });
+    const second = (await (
+      await worker.fetch(
+        post(`/api/projects/${projectId}/revisions`, {
+          projectId,
+          reason: 'Second save',
+          expectedVersion: first.version,
+          document: boxed
+        }),
+        env
+      )
+    ).json()) as ProjectDocument;
+    return { projectId, first, second };
+  }
+
+  it('lists a project\u2019s saves and serves the model of one', async () => {
+    const { projectId, first } = await projectWithTwoSaves();
+
+    const listed = (await (
+      await worker.fetch(
+        new Request(`https://example.com/api/projects/${projectId}/revisions`),
+        env
+      )
+    ).json()) as ListRevisionsResponse;
+    expect(listed.revisions.map((revision) => revision.reason)).toEqual([
+      'Second save',
+      'First save'
+    ]);
+
+    const revisionId = first.revisions.at(-1)!.revisionId;
+    const response = await worker.fetch(
+      new Request(
+        `https://example.com/api/projects/${projectId}/revisions/${revisionId}`
+      ),
+      env
+    );
+    expect(response.status).toBe(200);
+    // The older model, not whatever the project holds now.
+    expect(((await response.json()) as ProjectDocument).featureOrder).toEqual(
+      []
+    );
+  });
+
+  it('answers 404 for a save it no longer stores', async () => {
+    const { projectId } = await projectWithTwoSaves();
+
+    const response = await worker.fetch(
+      new Request(
+        `https://example.com/api/projects/${projectId}/revisions/rev_pruned`
+      ),
+      env
+    );
+    // Retention drops stored documents while the checkpoints naming them live
+    // on inside projects, so asking for a gone one is ordinary, not a fault.
+    expect(response.status).toBe(404);
+  });
+
+  it('branches a named save into a new project', async () => {
+    const { projectId, first } = await projectWithTwoSaves();
+    const revisionId = first.revisions.at(-1)!.revisionId;
+
+    const response = await worker.fetch(
+      post(`/api/projects/${projectId}/duplicate`, { revisionId }),
+      env
+    );
+    expect(response.status).toBe(201);
+    const branch = (await response.json()) as CreateProjectResponse;
+    expect(branch.document.featureOrder).toEqual([]);
+    expect(branch.document.branchedFrom?.revisionId).toBe(revisionId);
+    expect(branch.project.projectId).not.toBe(projectId);
+  });
+
+  it('refuses to branch a save that is not stored', async () => {
+    const { projectId } = await projectWithTwoSaves();
+
+    const response = await worker.fetch(
+      post(`/api/projects/${projectId}/duplicate`, {
+        revisionId: 'rev_pruned'
+      }),
+      env
+    );
+    expect(response.status).toBe(404);
+    expect((await response.json()) as { code?: string }).toMatchObject({
+      code: 'REVISION_NOT_FOUND'
+    });
   });
 });

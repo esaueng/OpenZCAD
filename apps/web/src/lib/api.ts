@@ -18,6 +18,7 @@ import type {
   FinalizeArtifactRequest,
   HealthResponse,
   ListProjectsResponse,
+  ListRevisionsResponse,
   ProjectCollaborationCapabilitiesResponse,
   ProjectDocument,
   ListArtifactsResponse,
@@ -203,14 +204,46 @@ export const api = {
     }),
   loadProject: (projectId: string) =>
     requestJson<ProjectDocument>(`/api/projects/${projectId}`),
-  duplicateProject: (projectId: string, name?: string) =>
+  /**
+   * Copies a project. With `revisionId`, the copy starts from that stored save
+   * state instead of the project's current document and records where it came
+   * from; the source project is untouched either way.
+   */
+  duplicateProject: (
+    projectId: string,
+    options: { name?: string; revisionId?: string } = {}
+  ) =>
     requestJson<DuplicateProjectResponse>(
       `/api/projects/${projectId}/duplicate`,
       {
         method: 'POST',
-        body: JSON.stringify(name === undefined ? {} : { name })
+        body: JSON.stringify({
+          ...(options.name === undefined ? {} : { name: options.name }),
+          ...(options.revisionId === undefined
+            ? {}
+            : { revisionId: options.revisionId })
+        })
       }
     ),
+  /** The project's retained save states, newest first, without documents. */
+  listRevisions: (projectId: string) =>
+    requestJson<ListRevisionsResponse>(`/api/projects/${projectId}/revisions`),
+  /**
+   * One save state's document. Resolves to null when the account no longer
+   * stores it, which retention makes an ordinary outcome rather than a fault.
+   */
+  loadRevision: async (projectId: string, revisionId: string) => {
+    try {
+      return await requestJson<ProjectDocument>(
+        `/api/projects/${projectId}/revisions/${revisionId}`
+      );
+    } catch (error) {
+      if (error instanceof ApiError && error.status === 404) {
+        return null;
+      }
+      throw error;
+    }
+  },
   updateProject: (payload: UpdateProjectRequest) =>
     requestJson<UpdateProjectResponse>(`/api/projects/${payload.projectId}`, {
       method: 'PATCH',

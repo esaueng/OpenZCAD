@@ -1,15 +1,20 @@
 import {
   isPurgeDue,
+  MAX_LOCAL_CHECKPOINT_DOCUMENTS,
   type ArtifactId,
   type ImportedSourceReference,
+  type ProjectCheckpoint,
   type ProjectDocument,
   type ProjectOrganization,
-  type ProjectSummary
+  type ProjectSummary,
+  type RevisionId
 } from '@openzcad/shared';
+import { withoutDerivedProjection } from '@openzcad/document-core';
 import type { StoredMeasurementRecord } from './measurementRecord';
 import type { SourceBlobClaim } from './sourceBlobClaims';
 import {
   LOCAL_PROJECT_BLOB_STORE,
+  LOCAL_PROJECT_CHECKPOINT_STORE,
   LOCAL_PROJECT_CLAIM_STORE,
   LOCAL_PROJECT_DATABASE_NAME,
   LOCAL_PROJECT_DATABASE_VERSION,
@@ -94,10 +99,28 @@ const SUMMARY_STORE_NAME = 'projectSummaries';
  */
 const MEASUREMENT_STORE_NAME = 'projectMeasurements';
 /**
+ * Save-state documents, so restoring one does not require the account.
+ *
+ * The cloud has kept a full document per explicit save since the first
+ * migration, but nothing on the device did, which would have made "revert to
+ * an earlier save" the one core modelling operation that stops working
+ * offline — in an app whose whole premise is that the document is canonical in
+ * the browser. Keyed by project and checkpoint together: one project holds
+ * many, and each is written once and never updated.
+ *
+ * Bounded by {@link MAX_LOCAL_CHECKPOINT_DOCUMENTS} per project, and
+ * deliberately far below the account's retention. The checkpoint list itself
+ * lives in the document and stays complete either way; a row whose body has
+ * been pruned here is still restorable from the account.
+ */
+const CHECKPOINT_STORE_NAME = LOCAL_PROJECT_CHECKPOINT_STORE;
+const CHECKPOINT_AGE_INDEX = 'byProjectDocumentVersion';
+/**
  * Version 7 shipped the measurement store and, crucially, taught every opened
- * connection to close on `versionchange`. Version 8 can therefore add claims
- * without a version-7 tab parking the upgrade: IndexedDB notifies that tab, its
- * connection closes after any in-flight transaction, and this gate proceeds.
+ * connection to close on `versionchange`. Every version after it — 8's claims,
+ * 9's save-state documents — can therefore add stores without an older tab
+ * parking the upgrade: IndexedDB notifies that tab, its connection closes
+ * after any in-flight transaction, and this gate proceeds.
  *
  * The shared gate and blocked timeout remain for genuinely older builds that
  * predate that handler. They turn an otherwise permanent startup hang into one
@@ -130,6 +153,21 @@ export interface ProjectThumbnailRecord {
 interface ProjectSyncRecord {
   projectId: string;
   lastSyncedVersion: number;
+}
+
+/**
+ * One save state's document, filed under the checkpoint that named it. The
+ * metadata is copied from that checkpoint so the row can describe itself
+ * without opening the document it holds.
+ */
+interface ProjectCheckpointDocumentRecord {
+  projectId: string;
+  checkpointId: string;
+  revisionId: RevisionId;
+  documentVersion: number;
+  createdAt: string;
+  reason: string;
+  document: ProjectDocument;
 }
 
 export const LOCAL_STORAGE_BLOCKED_MESSAGE =
@@ -205,6 +243,30 @@ function createExpectedStores(database: IDBDatabase): void {
     database.createObjectStore(MEASUREMENT_STORE_NAME, {
       keyPath: 'projectId'
     });
+  }
+  // Empty on an upgraded database: the save states a project made before this
+  // store existed were never kept on the device, and inventing rows for them
+  // from the current document would be a lie about what they contained. The
+  // history panel offers those older rows from the account, and fills in here
+  // from the next explicit save onwards.
+  if (!database.objectStoreNames.contains(CHECKPOINT_STORE_NAME)) {
+    const checkpoints = database.createObjectStore(CHECKPOINT_STORE_NAME, {
+      keyPath: ['projectId', 'checkpointId']
+    });
+    // Checkpoint ids are random, so the primary key says nothing about age.
+    // Retention needs the oldest first, and listing what a project has stored
+    // must not deserialize documents to find out — both are key-only reads
+    // over this index.
+    //
+    // Ordered by document version rather than by timestamp: the version is the
+    // project's own clock and strictly increases, while `createdAt` has
+    // millisecond resolution and several saves can land inside one. Ties there
+    // are broken by the random primary key, which would let retention drop a
+    // newer save and keep an older one.
+    checkpoints.createIndex(CHECKPOINT_AGE_INDEX, [
+      'projectId',
+      'documentVersion'
+    ]);
   }
 }
 
@@ -678,13 +740,148 @@ export function summarizeProjectDocument(
  * notice the disagreement.
  */
 export function saveLocalProject(document: ProjectDocument): Promise<void> {
-  return multiStoreTransaction(
-    [STORE_NAME, SUMMARY_STORE_NAME],
+  return scopedTransaction(
     'readwrite',
-    (stores) => {
-      stores[STORE_NAME]?.put(document);
-      stores[SUMMARY_STORE_NAME]?.put(summarizeProjectDocument(document));
+    [STORE_NAME, SUMMARY_STORE_NAME, CHECKPOINT_STORE_NAME],
+    async (store) => {
+      store(STORE_NAME).put(document);
+      store(SUMMARY_STORE_NAME).put(summarizeProjectDocument(document));
+      // Inspected here rather than before the transaction opens, so a document
+      // this function cannot make sense of still fails where it always did —
+      // inside, with the writes above rolled back — instead of throwing early
+      // and leaving the store's rollback contract untested. The checkpoint
+      // store is in scope on every save for the same reason: the decision is
+      // made after the scope is fixed.
+      const saveState = unstoredSaveState(document);
+      if (saveState) {
+        await putSaveState(store(CHECKPOINT_STORE_NAME), document, saveState);
+      }
     }
+  );
+}
+
+/**
+ * The checkpoint this document *is*, if it holds one.
+ *
+ * `createCheckpoint` stamps the version it was taken at and does not advance
+ * it, so a document whose newest checkpoint names its current version is that
+ * save state exactly — not an edited descendant of it. One edit later the
+ * versions differ and this reports nothing, which is what keeps an ordinary
+ * autosave from writing a snapshot body every 450ms.
+ */
+function unstoredSaveState(
+  document: ProjectDocument
+): ProjectCheckpoint | null {
+  const latest = document.checkpoints.at(-1);
+  return latest && latest.documentVersion === document.version ? latest : null;
+}
+
+async function putSaveState(
+  store: IDBObjectStore,
+  document: ProjectDocument,
+  checkpoint: ProjectCheckpoint
+): Promise<void> {
+  // Each save state is written once and never revised, so an existing row is
+  // already the right bytes. Counted rather than read: the value here is a
+  // whole document, and re-reading one on the save path is the cost this
+  // guard exists to avoid.
+  const stored = await settled(
+    store.count([document.projectId, checkpoint.checkpointId])
+  );
+  if (stored > 0) {
+    return;
+  }
+  const record: ProjectCheckpointDocumentRecord = {
+    projectId: document.projectId,
+    checkpointId: checkpoint.checkpointId,
+    revisionId: checkpoint.revisionId,
+    documentVersion: checkpoint.documentVersion,
+    createdAt: checkpoint.createdAt,
+    reason: checkpoint.reason,
+    // Meshes are a projection the kernel rebuilds from this very history, so
+    // storing them here would multiply the largest part of the document across
+    // every save state to buy nothing.
+    document: withoutDerivedProjection(document)
+  };
+  store.put(record);
+  await pruneSaveStates(store, document.projectId);
+}
+
+/**
+ * Drops a project's oldest stored save states beyond the cap.
+ *
+ * Key-only cursor: the point is to delete documents without loading them.
+ */
+async function pruneSaveStates(
+  store: IDBObjectStore,
+  projectId: string
+): Promise<void> {
+  const index = store.index(CHECKPOINT_AGE_INDEX);
+  const oldestFirst = await settled(
+    index.getAllKeys(checkpointKeyRange(projectId))
+  );
+  const excess = oldestFirst.length - MAX_LOCAL_CHECKPOINT_DOCUMENTS;
+  for (let position = 0; position < excess; position += 1) {
+    store.delete(oldestFirst[position]!);
+  }
+}
+
+/**
+ * Every key under one project, in the primary key's space and the age index's
+ * alike. Both bounds are arrays because the keys are: `[projectId]` sorts below
+ * every `[projectId, value]`, and an empty array sorts above every number and
+ * string, so the pair spans exactly this project's rows whichever of the two
+ * the second component holds.
+ */
+function checkpointKeyRange(projectId: string): IDBKeyRange {
+  return IDBKeyRange.bound([projectId], [projectId, []]);
+}
+
+/**
+ * One stored save state's document, or null when this device does not hold it.
+ *
+ * Null is ordinary rather than exceptional: retention prunes bodies while the
+ * checkpoints naming them stay in the document, and a project that predates
+ * this store has none of its older save states here at all. The caller falls
+ * back to the account copy.
+ */
+export function loadLocalSaveState(
+  projectId: string,
+  checkpointId: string
+): Promise<ProjectDocument | null> {
+  return transaction<ProjectCheckpointDocumentRecord | undefined>(
+    'readonly',
+    (store) =>
+      store.get([projectId, checkpointId]) as IDBRequest<
+        ProjectCheckpointDocumentRecord | undefined
+      >,
+    CHECKPOINT_STORE_NAME
+  ).then((record) => record?.document ?? null);
+}
+
+/**
+ * Which of a project's save states this device can open without the network.
+ * Key-only, so a project with dense imported geometry costs the same as any
+ * other to ask about.
+ */
+export function listLocalSaveStateIds(
+  projectId: string
+): Promise<Set<string>> {
+  return transactionScope(
+    'readonly',
+    async (store) => {
+      const keys = await settled(
+        store.getAllKeys(checkpointKeyRange(projectId))
+      );
+      return new Set(
+        keys
+          .map((key) => (Array.isArray(key) ? key[1] : undefined))
+          .filter((checkpointId): checkpointId is string =>
+            typeof checkpointId === 'string'
+          )
+      );
+    },
+    CHECKPOINT_STORE_NAME
   );
 }
 
@@ -934,11 +1131,20 @@ export function deleteLocalProject(projectId: string): Promise<void> {
     SUMMARY_STORE_NAME,
     MEASUREMENT_STORE_NAME
   ];
-  return multiStoreTransaction(storeNames, 'readwrite', (stores) => {
-    for (const storeName of storeNames) {
-      stores[storeName]?.delete(projectId);
+  return multiStoreTransaction(
+    [...storeNames, CHECKPOINT_STORE_NAME],
+    'readwrite',
+    (stores) => {
+      for (const storeName of storeNames) {
+        stores[storeName]?.delete(projectId);
+      }
+      // Keyed by project *and* checkpoint, so this one takes a range rather
+      // than the bare id — and it matters for the reason above: adoption
+      // reuses project ids, and a left-behind save state would offer one
+      // project's model as another's history.
+      stores[CHECKPOINT_STORE_NAME]?.delete(checkpointKeyRange(projectId));
     }
-  });
+  );
 }
 
 /**

@@ -55,6 +55,12 @@ the current branch; production enablement is a separate rollout decision.
   development configuration, and independent of sharing.
 - Signed-off orientation cube with face and corner snapping, an origin-corner
   XYZ triad, drag orbiting, and pointer-lifecycle cleanup.
+- Save-state restore and branching ([ADR-022](docs/adrs/ADR-022-save-state-restore-and-branching.md)):
+  the sidebar's revision rows restore a save state as one undoable forward edit
+  behind a "Before restore" safety save point, or branch it into a new project
+  carrying `branchedFrom` lineage. Save-state documents are kept on the device
+  (IndexedDB v9, 25 per project) with the account's revisions as the fallback,
+  so reverting works offline. Branch merging stays out of scope per ADR-016.
 - Start-screen archive, recycle bin, pinning, and manual project ordering.
 - Model browser visibility/selection controls, human-readable topology labels,
   explicit command lifecycle states, edge measurements, and sketch snapping.
