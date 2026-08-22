@@ -309,7 +309,7 @@ export function TopBar({
           type="button"
           disabled={!projectName}
           onClick={onSave}
-          title={`${WORKSPACE_SAVE_STATE_PRESENTATION[saveState].title} Click to save a revision (Ctrl+S).`}
+          title={`${WORKSPACE_SAVE_STATE_PRESENTATION[saveState].title} Click to save a revision (Ctrl+S), or Ctrl+Shift+S to name it.`}
         >
           {saveState === 'saving' || saveState === 'syncing' ? (
             <LoaderCircle className="spin" size={14} aria-hidden="true" />

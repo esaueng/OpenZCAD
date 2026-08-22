@@ -244,6 +244,7 @@ import {
 } from './lib/projectShareLink';
 import { fetchSharedProject } from './lib/projectShareClient';
 import { ProjectConflictDialog } from './components/ProjectConflictDialog';
+import { SaveRevisionDialog } from './components/SaveRevisionDialog';
 import {
   ExportDialog,
   type ExportProgress,
@@ -395,11 +396,7 @@ import type {
   SketchOverlay,
   ViewTarget
 } from '@openzcad/viewport/types';
-import type {
-  MovePreview,
-  MoveSnap,
-  SectionPlaneId
-} from '@openzcad/viewport';
+import type { MovePreview, MoveSnap, SectionPlaneId } from '@openzcad/viewport';
 
 /**
  * Space activates focused buttons and belongs in free-text fields. Numeric and
@@ -692,6 +689,11 @@ const FRESHNESS_POLL_INTERVAL_MS = 60_000;
  * they have already closed the tab on.
  */
 const BEFORE_RESTORE_REASON = 'Before restore';
+/**
+ * What an unnamed save is called. Ctrl+S stays a reflex and takes this; naming
+ * one is its own gesture (Ctrl+Shift+S).
+ */
+const DEFAULT_SAVE_REASON = 'Manual save';
 const DISABLED_COLLABORATION_ROLLOUT: ProjectCollaborationCapabilitiesResponse =
   {
     sharingEnabled: false,
@@ -1176,6 +1178,8 @@ export function App() {
   const [restorableCheckpointIds, setRestorableCheckpointIds] = useState<
     ReadonlySet<string>
   >(new Set());
+  /** Open while the user is naming a save point. */
+  const [namingSave, setNamingSave] = useState(false);
   // Named `doc` (not `document`) so the global DOM document is never shadowed.
   const [doc, setDoc] = useState<ProjectDocument | null>(null);
   const [selectedFeatureNodeId, setSelectedFeatureNodeId] = useState<
@@ -1191,9 +1195,8 @@ export function App() {
    * set, the next viewport face pick repairs that feature instead of arming
    * a selection; Escape disarms it.
    */
-  const [faceRepair, setFaceRepair] = useState<StaleDirectEditFaceRepair | null>(
-    null
-  );
+  const [faceRepair, setFaceRepair] =
+    useState<StaleDirectEditFaceRepair | null>(null);
   /** Null means the active tool decides what picking is narrowed to. */
   const [manualSelectionFilter, setManualSelectionFilter] =
     useState<SelectionFilter | null>(null);
@@ -1889,7 +1892,8 @@ export function App() {
         cloudAvailable &&
         session &&
         projectSharingEnabled &&
-        (collaboration.role === 'viewer' || collaboration.status === 'read-only')
+        (collaboration.role === 'viewer' ||
+          collaboration.status === 'read-only')
       ? 'This shared project is read-only'
       : null;
   // A parameter change is still a document edit, so a read-only seat locks
@@ -1922,22 +1926,22 @@ export function App() {
         // tab: its edits live and die in this browser session.
         null
       : sharedProjectDisabled
-      ? 'Project sharing is disabled in Settings'
-      : !cloudAvailable || !session || !projectSharingEnabled
-        ? null
-        : collaboration.conflict
-          ? 'Resolve the collaboration conflict before editing'
-          : collaboration.role === 'viewer' ||
-              collaboration.status === 'read-only'
-            ? 'This shared project is read-only'
-            : collaboration.role === null
-              ? 'Waiting for project access'
-              : collaborationRollout.editLeasesEnforced &&
-                  !activeCollaborationLease
-                ? collaboration.status === 'lease-denied'
-                  ? 'Another collaborator holds the edit lease'
-                  : 'Waiting for the project edit lease'
-                : null;
+        ? 'Project sharing is disabled in Settings'
+        : !cloudAvailable || !session || !projectSharingEnabled
+          ? null
+          : collaboration.conflict
+            ? 'Resolve the collaboration conflict before editing'
+            : collaboration.role === 'viewer' ||
+                collaboration.status === 'read-only'
+              ? 'This shared project is read-only'
+              : collaboration.role === null
+                ? 'Waiting for project access'
+                : collaborationRollout.editLeasesEnforced &&
+                    !activeCollaborationLease
+                  ? collaboration.status === 'lease-denied'
+                    ? 'Another collaborator holds the edit lease'
+                    : 'Waiting for the project edit lease'
+                  : null;
   // View mode joins the same guard every other modeling edit uses. Project
   // rename has its own mode-aware guard below because it is workspace metadata:
   // owners may change it from either mode, while editors remain Build-only.
@@ -2858,9 +2862,7 @@ export function App() {
           .listRevisions(projectId)
           .then(
             (response) =>
-              new Set(
-                response.revisions.map((revision) => revision.revisionId)
-              )
+              new Set(response.revisions.map((revision) => revision.revisionId))
           )
           .catch(() => null);
         for (const checkpoint of stored ? checkpoints : []) {
@@ -3153,7 +3155,12 @@ export function App() {
           ? Object.values(liveBodyRepresentations)
           : []
       ).filter((body) => !body.consumed && !hiddenBodyIds.has(body.bodyId)),
-    [liveBodyRepresentations, previewDoc, renderedRepresentations, hiddenBodyIds]
+    [
+      liveBodyRepresentations,
+      previewDoc,
+      renderedRepresentations,
+      hiddenBodyIds
+    ]
   );
 
   /**
@@ -6956,7 +6963,38 @@ export function App() {
     }
   }
 
-  async function handleSave() {
+  /**
+   * Opens the naming dialog, when there is something to name.
+   *
+   * The refusals mirror `handleSave`'s own: a shared-link session has nothing
+   * of its own to save, and a viewer cannot write to the project. Checking
+   * them here keeps the user from typing a name into a save that was never
+   * going to happen.
+   */
+  function openSaveNameDialog() {
+    if (!doc) {
+      return;
+    }
+    if (shareSessionRef.current) {
+      setStatus(
+        'This is a shared link session — Make a copy to keep the model.'
+      );
+      return;
+    }
+    if (!ensureCanEdit('save a named revision')) {
+      return;
+    }
+    setNamingSave(true);
+  }
+
+  /**
+   * Marks the current state as a save point.
+   *
+   * `reason` is what the history panel shows for it ever after, which is why
+   * naming is worth a gesture of its own — see {@link SaveRevisionDialog}. The
+   * default keeps Ctrl+S a reflex.
+   */
+  async function handleSave(reason: string = DEFAULT_SAVE_REASON) {
     if (!doc) {
       return;
     }
@@ -6979,6 +7017,23 @@ export function App() {
       }
       const expectedVersion = remoteVersionsRef.current.get(doc.projectId);
       if (!session || expectedVersion === undefined) {
+        // No account will checkpoint this one, so the save point is made here.
+        // Without it a device-only project could never gain a save beyond the
+        // one it was born with — which would leave restore and branch with
+        // nothing to offer exactly where they are needed most, and would drop
+        // a name the user had just typed.
+        const marked = createCheckpoint(doc, reason);
+        const live = managerRef.current?.document;
+        if (
+          !live ||
+          (live.projectId === doc.projectId && live.version === doc.version)
+        ) {
+          await saveLocalProject(marked);
+          if (managerRef.current) {
+            managerRef.current.document = marked;
+          }
+          setDoc(marked);
+        }
         setCloudAvailable(false);
         setSaveState('local');
         setStatus('Saved on this device.');
@@ -6990,7 +7045,7 @@ export function App() {
       await cloudProjectAutosaveRef.current?.flushPending();
       const saved = await api.saveRevision({
         projectId: doc.projectId,
-        reason: 'Manual save',
+        reason,
         expectedVersion:
           cloudProjectAutosaveRef.current?.syncedVersion ?? expectedVersion,
         document: withoutDerivedProjection(doc)
@@ -7335,9 +7390,7 @@ export function App() {
     if (!doc) {
       return;
     }
-    const face = representations[
-      target.bodyId as BodyId
-    ]?.topology?.faces.find(
+    const face = representations[target.bodyId as BodyId]?.topology?.faces.find(
       (candidate) => candidate.topologyId === target.topologyId
     );
     if (!face) {
@@ -7364,9 +7417,15 @@ export function App() {
       if (!('text' in result)) {
         throw new Error('The DXF export returned no text.');
       }
-      const saved = await saveCadTextFile(`${stem}-face.dxf`, 'dxf', result.text);
+      const saved = await saveCadTextFile(
+        `${stem}-face.dxf`,
+        'dxf',
+        result.text
+      );
       setStatus(
-        saved ? `Exported face outline to ${stem}-face.dxf.` : 'DXF export cancelled.'
+        saved
+          ? `Exported face outline to ${stem}-face.dxf.`
+          : 'DXF export cancelled.'
       );
     } catch (error) {
       setStatus(errorMessage(error, 'DXF export failed.'));
@@ -8545,9 +8604,7 @@ export function App() {
               : 'warn'
       });
       if (!outcome.converged || outcome.rolledBack) {
-        setStatus(
-          'Constraints did not solve; sketch geometry left unchanged.'
-        );
+        setStatus('Constraints did not solve; sketch geometry left unchanged.');
         return;
       }
       const commands = solvedSketchCommands(
@@ -10326,8 +10383,8 @@ export function App() {
 
   function handleReorderFeature(featureId: FeatureId, toIndex: number) {
     const name =
-      doc && listFeaturesInOrder(doc).find((f) => f.featureId === featureId)
-        ?.name;
+      doc &&
+      listFeaturesInOrder(doc).find((f) => f.featureId === featureId)?.name;
     executeCommand(
       commandFactories.moveFeature(
         { featureId, toIndex },
@@ -10888,7 +10945,11 @@ export function App() {
       }
       if (meta && event.key.toLowerCase() === 's') {
         event.preventDefault();
-        void handleSave();
+        if (event.shiftKey) {
+          openSaveNameDialog();
+        } else {
+          void handleSave();
+        }
         return;
       }
 
@@ -11300,34 +11361,34 @@ export function App() {
     : tweakMode
       ? tweakModeHint
       : (commandPromptText(
-        interaction,
-        tool !== null || selectedFeatureNodeId !== null
-      ) ??
-      (tool === 'sketch'
-        ? 'Drag to draw · R rectangle · C circle · P polygon · Enter finishes'
-        : tool === 'extrude'
-          ? extrudePreview
-            ? 'Drag the arrow across the plane · Enter creates · Esc cancels'
-            : 'Click a shaded closed profile · Esc cancels'
-          : tool === 'fillet' || tool === 'chamfer'
-            ? selectedEdges.length > 0
-              ? `${selectedEdges.length} edge${selectedEdges.length === 1 ? '' : 's'} selected · Shift+Click adjusts · Enter creates`
-              : 'Click edges with Shift or choose Select all edges · Esc cancels'
-            : tool
-              ? 'Enter creates · Esc cancels'
-              : selectedBodyIds.length >= 2
-                ? `${selectedBodyIds.length} bodies picked — U union · X subtract · I intersect`
-                : selectedTopology?.kind === 'face'
-                  ? 'Face selected — Space faces it head-on'
-                  : selectedTopology?.kind === 'edge'
-                    ? // Neither tool has a shortcut, so the rail is the only
-                      // route: name it the way the rail names itself.
-                      'Edge selected — Fillet or Chamfer in Feature tools'
-                    : selectedFeature
-                      ? 'Edit in the panel · Del deletes · Esc closes'
-                      : viewerBodies.length > 0
-                        ? 'Click a body, face, or edge · Shift+Click adds to selection'
-                        : 'Ctrl+K commands · ? shortcuts'));
+          interaction,
+          tool !== null || selectedFeatureNodeId !== null
+        ) ??
+        (tool === 'sketch'
+          ? 'Drag to draw · R rectangle · C circle · P polygon · Enter finishes'
+          : tool === 'extrude'
+            ? extrudePreview
+              ? 'Drag the arrow across the plane · Enter creates · Esc cancels'
+              : 'Click a shaded closed profile · Esc cancels'
+            : tool === 'fillet' || tool === 'chamfer'
+              ? selectedEdges.length > 0
+                ? `${selectedEdges.length} edge${selectedEdges.length === 1 ? '' : 's'} selected · Shift+Click adjusts · Enter creates`
+                : 'Click edges with Shift or choose Select all edges · Esc cancels'
+              : tool
+                ? 'Enter creates · Esc cancels'
+                : selectedBodyIds.length >= 2
+                  ? `${selectedBodyIds.length} bodies picked — U union · X subtract · I intersect`
+                  : selectedTopology?.kind === 'face'
+                    ? 'Face selected — Space faces it head-on'
+                    : selectedTopology?.kind === 'edge'
+                      ? // Neither tool has a shortcut, so the rail is the only
+                        // route: name it the way the rail names itself.
+                        'Edge selected — Fillet or Chamfer in Feature tools'
+                      : selectedFeature
+                        ? 'Edit in the panel · Del deletes · Esc closes'
+                        : viewerBodies.length > 0
+                          ? 'Click a body, face, or edge · Shift+Click adds to selection'
+                          : 'Ctrl+K commands · ? shortcuts'));
 
   const paletteCommands: PaletteCommand[] = [
     // Modeling tools leave the palette entirely in the reading workspaces
@@ -11446,6 +11507,14 @@ export function App() {
       shortcut: 'Ctrl+S',
       icon: <Save size={16} aria-hidden="true" />,
       run: () => void handleSave()
+    },
+    {
+      id: 'file-save-named',
+      label: 'Save revision with a name…',
+      group: 'File',
+      shortcut: 'Ctrl+Shift+S',
+      icon: <Save size={16} aria-hidden="true" />,
+      run: openSaveNameDialog
     },
     {
       id: 'file-export-step',
@@ -13137,6 +13206,16 @@ export function App() {
                 onClose={() => setSharingOpen(false)}
               />
             )}
+          {namingSave && doc && (
+            <SaveRevisionDialog
+              projectName={doc.name}
+              onCancel={() => setNamingSave(false)}
+              onSave={(name) => {
+                setNamingSave(false);
+                void handleSave(name);
+              }}
+            />
+          )}
           {accountConflict && (
             <ProjectConflictDialog
               conflict={accountConflict}
@@ -13158,8 +13237,7 @@ export function App() {
               }
               bodies={exportBodyIds.map((bodyId) => ({
                 bodyId,
-                name:
-                  doc.derived.bodyRepresentations[bodyId]?.name ?? bodyId
+                name: doc.derived.bodyRepresentations[bodyId]?.name ?? bodyId
               }))}
               onClose={() => setMeshExportOpen(false)}
               onExport={handleExportMesh}
