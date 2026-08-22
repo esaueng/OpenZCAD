@@ -2306,6 +2306,16 @@ export type CollaborationErrorCode =
 export const MAX_PROJECT_NAME_LENGTH = 200;
 
 /**
+ * How long a save point's reason may be.
+ *
+ * Shared rather than private to the worker's validator because the field is
+ * now typed by a person: the input that bounds what they enter and the
+ * validator that refuses what arrives have to agree, or the UI accepts a name
+ * the save then rejects.
+ */
+export const MAX_CHECKPOINT_REASON_LENGTH = 500;
+
+/**
  * Largest self-contained document stored in one legacy D1 or Durable Object
  * value. R2-backed account persistence has a separate request ceiling, but
  * collaboration rooms intentionally retain this value until their snapshots
