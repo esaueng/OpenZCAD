@@ -1,5 +1,5 @@
 import { useRef, useState } from 'react';
-import { Plus, Trash2 } from 'lucide-react';
+import { Eye, EyeOff, Plus, Trash2 } from 'lucide-react';
 import type { ParameterNode } from '@openzcad/shared';
 import { formatNumber } from '../lib/model';
 
@@ -15,13 +15,27 @@ interface ParameterRowProps {
   onSet(name: string, expression: string): void;
   /** Absent hides the delete affordance: Tweak adjusts, it never removes. */
   onDelete?: (name: string) => void;
+  /**
+   * Absent hides the curation toggle, which belongs to Build mode — the
+   * workspace that decides what a share link offers, rather than the one
+   * that turns what it was given.
+   */
+  onExpose?: (name: string, exposed: boolean) => void;
+  /**
+   * Whether this row is currently offered in Tweak. Distinct from
+   * `parameter.exposed`: an uncurated document offers everything, so a row
+   * can be shown there without carrying the flag.
+   */
+  exposedInTweak?: boolean;
 }
 
 export function ParameterRow({
   parameter,
   value,
   onSet,
-  onDelete
+  onDelete,
+  onExpose,
+  exposedInTweak
 }: ParameterRowProps) {
   const [expression, setExpression] = useState(parameter.expression);
   const [editing, setEditing] = useState(false);
@@ -93,6 +107,26 @@ export function ParameterRow({
       >
         {value === undefined ? 'err' : formatNumber(value)}
       </span>
+      {onExpose && (
+        <button
+          type="button"
+          className={`param-expose${exposedInTweak ? ' on' : ''}`}
+          aria-pressed={exposedInTweak ?? false}
+          title={
+            exposedInTweak
+              ? `${parameter.name} is offered in Tweak mode and share links`
+              : `${parameter.name} is hidden from Tweak mode and share links`
+          }
+          aria-label={`${exposedInTweak ? 'Hide' : 'Show'} ${parameter.name} in Tweak mode`}
+          onClick={() => onExpose(parameter.name, !exposedInTweak)}
+        >
+          {exposedInTweak ? (
+            <Eye size={12} aria-hidden="true" />
+          ) : (
+            <EyeOff size={12} aria-hidden="true" />
+          )}
+        </button>
+      )}
       {onDelete && (
         <button
           type="button"
