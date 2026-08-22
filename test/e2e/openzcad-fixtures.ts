@@ -209,6 +209,16 @@ export async function stubApi(
     return route.fulfill({ json: { projects: [] } });
   });
   await page.route('**/api/projects/*/revisions', (route) => {
+    // Two verbs share this path: an explicit save POSTs a document, and the
+    // history panel GETs the list of stored save states when a project opens.
+    // Reading post data off the GET throws inside the handler, which strands
+    // the page rather than failing one assertion — so the verb is checked
+    // before the body is touched.
+    if (route.request().method() !== 'POST') {
+      // Empty: these specs have no account-side history, so every save state
+      // the panel offers is one this device stored.
+      return route.fulfill({ json: { revisions: [], maxRevisions: 50 } });
+    }
     const payload = route.request().postDataJSON() as { document: unknown };
     return route.fulfill({ json: payload.document });
   });
