@@ -113,6 +113,22 @@ reports every open PR as mergeable regardless of CI. Two consequences:
   complete within a minute of a push — reading "suite succeeded" as "CI
   succeeded" will call a PR green while `validate` and the shards are still
   running.
+- **Confirm a run exists for the PR's current head at all.** A pull request
+  can sit with no `ci` run against the commit you are about to merge, and the
+  checks list then looks quiet rather than wrong. Two causes have been seen:
+  a PR conflicting with its base has no merge ref for `pull_request` workflows
+  to run against, so none are scheduled until the conflict is resolved (#55
+  sat that way, its only green checks Cloudflare's); and some pushes produce
+  no `synchronize` run even on a mergeable branch (#57's `8aad6c5` and
+  `017b91d` heads got manual dispatches only, while its other heads triggered
+  normally). Absence of red is not green — match a run's `head_sha` to the
+  PR's, and dispatch `ci.yml` manually when none exists.
+- **Do not manually dispatch `Cloudflare version` to fill that gap.** Its
+  `upload` job is gated `if: github.event_name != 'pull_request'`, so a
+  `workflow_dispatch` runs a real `wrangler versions upload`, which fails on
+  absent credentials and leaves a red check that belongs to the dispatch
+  rather than to the code. `verify` — the half that is a merge gate — already
+  runs on `pull_request` on its own.
 
 **Never dispatch `apple-silicon` unless it is explicitly asked for.** It is
 macOS-runner time and costs real money, so it is `workflow_dispatch`-only and
