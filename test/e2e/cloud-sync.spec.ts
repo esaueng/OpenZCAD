@@ -142,6 +142,12 @@ class SharedCloudProjectApi {
     });
     await page.route('**/api/projects/*/revisions', async (route) => {
       const current = this.project;
+      // The history panel GETs this path when a project opens; only an
+      // explicit save POSTs to it. Reading post data off the GET throws inside
+      // the handler and strands the page, so the verb decides first.
+      if (route.request().method() !== 'POST') {
+        return route.fulfill({ json: { revisions: [], maxRevisions: 50 } });
+      }
       const payload = route.request().postDataJSON() as {
         expectedVersion: number;
         document: ProjectDocument;

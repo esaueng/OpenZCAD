@@ -27,6 +27,7 @@ import {
   listParameters,
   normalizeDocument,
   resolveParamValue,
+  restoreFromSaveState,
   revolveSketch,
   setParameter,
   updateFeature,
@@ -35,7 +36,10 @@ import {
 import {
   MAX_PROJECT_REVISION_RECORDS,
   PROJECT_DOCUMENT_SCHEMA_VERSION,
+  projectBranchPoint,
   sanitizeFileName,
+  toProjectId,
+  toRevisionId,
   toUserId
 } from '@openzcad/shared';
 
@@ -969,5 +973,138 @@ describe('cloneDocument derived sharing', () => {
         findSketch(document, sketchId)!.objectIds
       );
     });
+  });
+});
+
+describe('restoring a save state', () => {
+  /** A project with two distinct save points and an edit after the second. */
+  function projectWithHistory() {
+    const created = createProjectDocument('Bracket', user());
+    const firstSave = createCheckpoint(created, 'First save');
+    const boxed = addPrimitiveFeature(firstSave, {
+      name: 'Box',
+      primitiveKind: 'box',
+      dimensions: { width: 10, depth: 10, height: 10 }
+    });
+    const secondSave = createCheckpoint(
+      appendRevision(boxed, 'Added box'),
+      'Second save'
+    );
+    const edited = addPrimitiveFeature(secondSave, {
+      name: 'Sphere',
+      primitiveKind: 'sphere',
+      dimensions: { radius: 4 }
+    });
+    return { firstSave, secondSave, current: appendRevision(edited, 'Added sphere') };
+  }
+
+  it('brings back the model the save state held', () => {
+    const { firstSave, current } = projectWithHistory();
+    const restored = restoreFromSaveState(current, firstSave, 'Restored');
+
+    expect(listFeaturesInOrder(current)).toHaveLength(2);
+    expect(listFeaturesInOrder(restored)).toHaveLength(0);
+    expect(restored.featureOrder).toEqual(firstSave.featureOrder);
+  });
+
+  it('runs the durable timeline forward rather than rewinding it', () => {
+    const { firstSave, current } = projectWithHistory();
+    const restored = restoreFromSaveState(current, firstSave, 'Restored');
+
+    // The version is a monotonic clock that collaboration and every fenced
+    // cloud write compare against. Rewinding it would make a restore look like
+    // an unsaved edit to a room that has already moved past it.
+    expect(restored.version).toBe(current.version + 1);
+    // Save points made after the restored one survive: they are the way back.
+    expect(restored.checkpoints).toEqual(current.checkpoints);
+    expect(restored.revisions.slice(0, current.revisions.length)).toEqual(
+      current.revisions
+    );
+    expect(restored.revisions.at(-1)?.reason).toBe('Restored');
+  });
+
+  it('keeps the project’s own identity, not the snapshot’s', () => {
+    const { firstSave, current } = projectWithHistory();
+    const otherProject = {
+      ...firstSave,
+      projectId: toProjectId('proj_elsewhere'),
+      ownerUserId: toUserId('user_someone_else')
+    };
+    const restored = restoreFromSaveState(current, otherProject, 'Restored');
+
+    expect(restored.projectId).toBe(current.projectId);
+    expect(restored.ownerUserId).toBe(current.ownerUserId);
+  });
+
+  it('leaves the restored document independent of the snapshot', () => {
+    const { firstSave, current } = projectWithHistory();
+    const restored = restoreFromSaveState(current, firstSave, 'Restored');
+    const mutated = addPrimitiveFeature(restored, {
+      name: 'Box',
+      primitiveKind: 'box',
+      dimensions: { width: 1, depth: 1, height: 1 }
+    });
+
+    // The snapshot is still whatever the store holds; a restore that shared
+    // structure with it would corrupt the save state it came from.
+    expect(listFeaturesInOrder(firstSave)).toHaveLength(0);
+    expect(listFeaturesInOrder(mutated)).toHaveLength(1);
+  });
+
+  it('carries the branch lineage of the project, not of the save state', () => {
+    const { firstSave, current } = projectWithHistory();
+    const branched = {
+      ...current,
+      branchedFrom: {
+        projectId: toProjectId('proj_origin'),
+        revisionId: toRevisionId('rev_origin'),
+        projectName: 'Origin',
+        checkpointReason: 'First save',
+        branchedAt: '2026-01-01T00:00:00.000Z'
+      }
+    };
+    const restored = restoreFromSaveState(branched, firstSave, 'Restored');
+
+    // Where a project came from is a fact about the project, not about which
+    // of its save states happens to be loaded.
+    expect(restored.branchedFrom).toEqual(branched.branchedFrom);
+  });
+});
+
+describe('branching a project', () => {
+  it('records where the copy came from and says so in its first save', () => {
+    const source = createProjectDocument('Bracket', user());
+    const origin = projectBranchPoint(source, {
+      revisionId: toRevisionId('rev_first'),
+      reason: 'Before the fillets'
+    });
+    const branch = duplicateProjectDocument(source, 'Bracket (copy)', user(), origin);
+
+    expect(branch.branchedFrom).toEqual(origin);
+    expect(branch.projectId).not.toBe(source.projectId);
+    expect(branch.checkpoints.at(-1)?.reason).toBe(
+      'Branched from Bracket · Before the fillets'
+    );
+    // Lineage is provenance, never a link: the source keeps no trace.
+    expect(source.branchedFrom).toBeUndefined();
+  });
+
+  it('leaves an ordinary duplicate with no lineage at all', () => {
+    const source = createProjectDocument('Bracket', user());
+    const copy = duplicateProjectDocument(source, 'Bracket (copy)', user());
+
+    expect(copy.branchedFrom).toBeUndefined();
+    expect(copy.checkpoints.at(-1)?.reason).toBe('Duplicated from Bracket');
+  });
+
+  it('survives normalization, so an old client cannot strip it', () => {
+    const source = createProjectDocument('Bracket', user());
+    const origin = projectBranchPoint(source, {
+      revisionId: toRevisionId('rev_first'),
+      reason: 'First save'
+    });
+    const branch = duplicateProjectDocument(source, 'Copy', user(), origin);
+
+    expect(normalizeDocument(branch).branchedFrom).toEqual(origin);
   });
 });

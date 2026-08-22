@@ -1,7 +1,19 @@
 import 'fake-indexeddb/auto';
 import { IDBFactory } from 'fake-indexeddb';
-import { createProjectDocument, importStepBody } from '@openzcad/document-core';
-import { toProjectId, toUserId, type ProjectDocument } from '@openzcad/shared';
+import {
+  addPrimitiveFeature,
+  appendRevision,
+  createCheckpoint,
+  createProjectDocument,
+  importStepBody
+} from '@openzcad/document-core';
+import {
+  MAX_LOCAL_CHECKPOINT_DOCUMENTS,
+  toBodyId,
+  toProjectId,
+  toUserId,
+  type ProjectDocument
+} from '@openzcad/shared';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   deleteLocalProject,
@@ -10,6 +22,8 @@ import {
   ensureLocalProjectStorage,
   hasSourceBlob,
   listLocalProjects,
+  listLocalSaveStateIds,
+  loadLocalSaveState,
   loadProjectMeasurements,
   saveProjectMeasurements,
   loadLocalProject,
@@ -831,5 +845,160 @@ describe('project measurements', () => {
 
     await deleteLocalProject(projectId);
     expect(await loadProjectMeasurements(projectId)).toBeNull();
+  });
+});
+
+describe('save states on the device', () => {
+  /** A document sitting exactly on a save point, as an explicit save leaves it. */
+  function savedDocument(
+    name: string,
+    id: string,
+    reason: string
+  ): ProjectDocument {
+    return createCheckpoint(projectDocument(name, id), reason);
+  }
+
+  it('keeps the model of each save, and gives it back', async () => {
+    const first = savedDocument('Bracket', 'proj-a', 'First save');
+    await saveLocalProject(first);
+    const boxed = appendRevision(
+      addPrimitiveFeature(first, {
+        name: 'Box',
+        primitiveKind: 'box',
+        dimensions: { width: 10, depth: 10, height: 10 }
+      }),
+      'Added box'
+    );
+    const second = createCheckpoint(boxed, 'Second save');
+    await saveLocalProject(second);
+
+    const restored = await loadLocalSaveState(
+      'proj-a',
+      first.checkpoints.at(-1)!.checkpointId
+    );
+    // The first save's model, not the current one — that is the whole point.
+    expect(restored?.featureOrder).toEqual([]);
+    expect(second.featureOrder).toHaveLength(1);
+    expect(await listLocalSaveStateIds('proj-a')).toEqual(
+      new Set([
+        first.checkpoints.at(-1)!.checkpointId,
+        second.checkpoints.at(-1)!.checkpointId
+      ])
+    );
+  });
+
+  it('stores nothing extra for an autosave between saves', async () => {
+    const saved = savedDocument('Bracket', 'proj-a', 'First save');
+    await saveLocalProject(saved);
+    // An ordinary edit: same checkpoint list, a version further on. Writing a
+    // snapshot body here would mean one per 450ms of modelling.
+    const edited = appendRevision(
+      addPrimitiveFeature(saved, {
+        name: 'Sphere',
+        primitiveKind: 'sphere',
+        dimensions: { radius: 3 }
+      }),
+      'Added sphere'
+    );
+    await saveLocalProject(edited);
+
+    expect(await listLocalSaveStateIds('proj-a')).toEqual(
+      new Set([saved.checkpoints.at(-1)!.checkpointId])
+    );
+  });
+
+  it('does not keep the meshes, which the kernel rebuilds anyway', async () => {
+    const saved = createCheckpoint(
+      {
+        ...projectDocument('Bracket', 'proj-a'),
+        derived: {
+          bodyRepresentations: {
+            [toBodyId('body_1')]: { bodyId: toBodyId('body_1') }
+          },
+          exportableBodyIds: [toBodyId('body_1')],
+          warnings: ['kept'],
+          updatedAt: '2026-08-06T14:30:00.000Z'
+        } as unknown as ProjectDocument['derived']
+      },
+      'First save'
+    );
+    await saveLocalProject(saved);
+
+    const restored = await loadLocalSaveState(
+      'proj-a',
+      saved.checkpoints.at(-1)!.checkpointId
+    );
+    expect(restored?.derived.bodyRepresentations).toEqual({});
+    expect(restored?.derived.exportableBodyIds).toEqual([]);
+    // Conclusions about the document survive; geometry does not.
+    expect(restored?.derived.warnings).toEqual(['kept']);
+  });
+
+  it('keeps the newest saves and drops the oldest past the bound', async () => {
+    let document = projectDocument('Busy', 'proj-a');
+    const reasons: string[] = [];
+    for (let save = 0; save < MAX_LOCAL_CHECKPOINT_DOCUMENTS + 4; save += 1) {
+      const reason = `Save ${save}`;
+      reasons.push(reason);
+      document = createCheckpoint(
+        appendRevision(document, `Edit ${save}`),
+        reason
+      );
+      await saveLocalProject(document);
+    }
+
+    const stored = await listLocalSaveStateIds('proj-a');
+    expect(stored.size).toBe(MAX_LOCAL_CHECKPOINT_DOCUMENTS);
+    const kept = document.checkpoints.filter((checkpoint) =>
+      stored.has(checkpoint.checkpointId)
+    );
+    // Exactly the tail: history is most useful nearest the present, and the
+    // account keeps a longer run of it for the rest.
+    expect(kept.map((checkpoint) => checkpoint.reason)).toEqual(
+      reasons.slice(-MAX_LOCAL_CHECKPOINT_DOCUMENTS)
+    );
+  });
+
+  it('reports a save this device never had, rather than inventing one', async () => {
+    await saveLocalProject(projectDocument('Bracket', 'proj-a'));
+
+    expect(await loadLocalSaveState('proj-a', 'checkpoint_elsewhere')).toBeNull();
+  });
+
+  it('takes a project’s save states with the project when it is deleted', async () => {
+    const saved = savedDocument('Bracket', 'proj-a', 'First save');
+    await saveLocalProject(saved);
+    await deleteLocalProject('proj-a');
+
+    // Project ids are reused by adoption, so a survivor would surface as some
+    // other project's history.
+    expect(await listLocalSaveStateIds('proj-a')).toEqual(new Set());
+  });
+
+  it('keeps one project’s save states out of another’s', async () => {
+    const bracket = savedDocument('Bracket', 'proj-a', 'Bracket save');
+    const flange = savedDocument('Flange', 'proj-b', 'Flange save');
+    await saveLocalProject(bracket);
+    await saveLocalProject(flange);
+    await deleteLocalProject('proj-a');
+
+    expect(await listLocalSaveStateIds('proj-b')).toEqual(
+      new Set([flange.checkpoints.at(-1)!.checkpointId])
+    );
+  });
+
+  it('opens a database from before the store existed, and fills it from the next save', async () => {
+    const legacy = await openLegacyDatabase();
+    legacy.close();
+
+    // Older saves were never kept on this device and cannot be invented, so
+    // the upgraded database starts empty and earns its rows from here on.
+    expect(await ensureLocalProjectStorage()).toBe('ready');
+    expect(await listLocalSaveStateIds('proj-a')).toEqual(new Set());
+    const saved = savedDocument('Bracket', 'proj-a', 'First save');
+    await saveLocalProject(saved);
+    expect(await listLocalSaveStateIds('proj-a')).toEqual(
+      new Set([saved.checkpoints.at(-1)!.checkpointId])
+    );
   });
 });

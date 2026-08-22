@@ -1255,6 +1255,67 @@ export interface ProjectCheckpoint {
   reason: string;
 }
 
+/**
+ * Where a project was branched from, recorded on the copy at the moment it is
+ * made.
+ *
+ * Provenance, not a live link. The source project can be renamed, edited past
+ * this point, or deleted outright without the branch noticing: the whole point
+ * of branching a save state is that the copy stops depending on the original.
+ */
+export interface ProjectBranchPoint {
+  projectId: ProjectId;
+  /** The save state the copy started from. */
+  revisionId: RevisionId;
+  /** The source project's name when the branch was taken. */
+  projectName: string;
+  /** That save point's reason, so the shelf can say which save it was. */
+  checkpointReason: string;
+  branchedAt: string;
+}
+
+/**
+ * One stored save state, without its document. What the history panel lists.
+ *
+ * `available` is the honest answer to a question the three retention bounds
+ * make unavoidable: an in-document checkpoint can outlive the stored snapshot
+ * it points at, and a row the user can click has to know that before they
+ * click it.
+ */
+export interface RevisionSummary {
+  revisionId: RevisionId;
+  projectId: ProjectId;
+  reason: string;
+  createdAt: string;
+  /** Absent for revisions stored before authorship was recorded. */
+  authorUserId?: UserId;
+  documentBytes: number;
+}
+
+export interface ListRevisionsResponse {
+  revisions: RevisionSummary[];
+  /** The account's retention bound, so the panel can explain a short list. */
+  maxRevisions: number;
+}
+
+/**
+ * The lineage a branch records, built from the source project as it stands now
+ * and the save state being branched. Both stores construct it the same way, so
+ * a branch made online and one made offline describe themselves identically.
+ */
+export function projectBranchPoint(
+  source: { projectId: ProjectId; name: string },
+  revision: { revisionId: RevisionId; reason: string }
+): ProjectBranchPoint {
+  return {
+    projectId: source.projectId,
+    revisionId: revision.revisionId,
+    projectName: source.name,
+    checkpointReason: revision.reason,
+    branchedAt: nowIso()
+  };
+}
+
 export const MAX_PROJECT_CHECKPOINTS = 100;
 
 /**
@@ -1367,6 +1428,11 @@ export interface ProjectDocument {
   commandLog: SerializedCommand[];
   assets: Record<AssetId, ProjectAssetRef>;
   derived: DerivedState;
+  /**
+   * Set once, when this project was branched off a save state of another one.
+   * Absent on every project created the ordinary way.
+   */
+  branchedFrom?: ProjectBranchPoint;
 }
 
 export interface SerializedCommand<TPayload = unknown> {
@@ -1629,6 +1695,12 @@ export interface DuplicateProjectRequest {
   projectId: ProjectId;
   /** Defaults to a non-colliding "(copy)" of the source name. */
   name?: string;
+  /**
+   * Branch from this stored save state instead of the project's current
+   * document. The copy records where it came from in `branchedFrom`; the
+   * source project is not touched either way.
+   */
+  revisionId?: RevisionId;
 }
 
 export type DuplicateProjectResponse = CreateProjectResponse;
@@ -2241,12 +2313,22 @@ export function persistedDocumentBytes(document: ProjectDocument): number {
  * How many revisions a project keeps before the oldest are dropped.
  *
  * Each revision is a whole copy of the document, so an unbounded history is an
- * unbounded multiple of the project itself. Fifty explicit saves is far more
- * history than the UI exposes any way to reach, and continuous sync no longer
- * adds to this count — every remaining revision is a save somebody chose to
- * make.
+ * unbounded multiple of the project itself. Continuous sync does not add to
+ * this count — every retained revision is a save somebody chose to make, and
+ * the history panel lists exactly these.
  */
 export const MAX_PROJECT_REVISIONS = 50;
+
+/**
+ * How many save-state documents one project keeps on this device.
+ *
+ * Restore has to work offline, which means the browser holds snapshot bodies
+ * rather than only the account. That is the one genuinely new storage cost of
+ * the history panel, so it is bounded well below the account's retention: the
+ * checkpoint list stays complete either way, and a row whose local body has
+ * been pruned falls back to the account copy.
+ */
+export const MAX_LOCAL_CHECKPOINT_DOCUMENTS = 25;
 
 /** What an account is currently storing, for the settings panel. */
 export interface AccountStorageUsage {

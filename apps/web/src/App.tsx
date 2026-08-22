@@ -43,6 +43,8 @@ import type {
   CadSelectionContext
 } from '@openzcad/ai-contracts';
 import {
+  appendRevision,
+  createCheckpoint,
   createProjectDocument,
   duplicateProjectDocument,
   findBodyNode,
@@ -55,6 +57,7 @@ import {
   normalizeDocument,
   repairedDirectEditOperation,
   resolveParamValue,
+  restoreFromSaveState,
   staleDirectEditFaceRepair,
   withoutDerivedProjection,
   type ExtrudeInput,
@@ -87,6 +90,7 @@ import type {
   FaceGeometry,
   FaceTopology,
   ParamValue,
+  ProjectCheckpoint,
   ProjectDocument,
   ProjectOrganization,
   ProjectStatus,
@@ -109,6 +113,7 @@ import {
   FEATURE_SUPPRESSED_METADATA_KEY,
   isFeatureRollbackSuppressed,
   isFeatureSuppressed,
+  projectBranchPoint,
   projectOrganization,
   toProjectId,
   TRASH_RETENTION_DAYS
@@ -542,8 +547,10 @@ import {
   isLocalStorageBlockedError,
   listLocalProjectOrganizations,
   listLocalProjects,
+  listLocalSaveStateIds,
   loadLastSyncedVersion,
   loadLocalProject,
+  loadLocalSaveState,
   loadProjectMeasurements,
   loadProjectThumbnail,
   loadSourceBlob,
@@ -678,6 +685,12 @@ const E2E_SLOW_FRAME_MS =
  * backstop for a tab left open and in front of somebody.
  */
 const FRESHNESS_POLL_INTERVAL_MS = 60_000;
+/**
+ * The save point a restore leaves behind for itself. Named once so the panel
+ * and the handler agree on the row a user goes looking for to undo a restore
+ * they have already closed the tab on.
+ */
+const BEFORE_RESTORE_REASON = 'Before restore';
 const DISABLED_COLLABORATION_ROLLOUT: ProjectCollaborationCapabilitiesResponse =
   {
     sharingEnabled: false,
@@ -1154,6 +1167,14 @@ export function App() {
   const cloudSettingsSessionUserRef = useRef<string | null>(null);
   const [projects, setProjects] = useState<ProjectSummary[]>([]);
   const [artifacts, setArtifacts] = useState<ArtifactRecord[]>([]);
+  /**
+   * Which of the open project's save points can actually be opened. Empty
+   * until the stores answer, so a row never offers an action before it is
+   * known to work.
+   */
+  const [restorableCheckpointIds, setRestorableCheckpointIds] = useState<
+    ReadonlySet<string>
+  >(new Set());
   // Named `doc` (not `document`) so the global DOM document is never shadowed.
   const [doc, setDoc] = useState<ProjectDocument | null>(null);
   const [selectedFeatureNodeId, setSelectedFeatureNodeId] = useState<
@@ -2815,6 +2836,53 @@ export function App() {
       }
     };
   }, [doc, cloudAvailable, shareSession]);
+
+  useEffect(() => {
+    const projectId = doc?.projectId;
+    if (!projectId) {
+      setRestorableCheckpointIds(new Set());
+      return;
+    }
+    const checkpoints = doc.checkpoints;
+    let cancelled = false;
+    void (async () => {
+      const restorable = new Set(
+        await listLocalSaveStateIds(projectId).catch(() => new Set<string>())
+      );
+      // The account holds save states this device never had — made on another
+      // machine, or older than this device's own retention — so a project the
+      // account knows is asked as well, and the two answers are merged.
+      if (session && cloudProjectIds.has(projectId)) {
+        const stored = await api
+          .listRevisions(projectId)
+          .then(
+            (response) =>
+              new Set(
+                response.revisions.map((revision) => revision.revisionId)
+              )
+          )
+          .catch(() => null);
+        for (const checkpoint of stored ? checkpoints : []) {
+          if (stored?.has(checkpoint.revisionId)) {
+            restorable.add(checkpoint.checkpointId);
+          }
+        }
+      }
+      if (!cancelled) {
+        setRestorableCheckpointIds(restorable);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // Keyed on the checkpoint count rather than the array: every command
+    // clones the document, so the array's identity changes on each edit and
+    // depending on it would re-ask both stores — one of them over the
+    // network — for every keystroke's worth of modelling. Checkpoints are
+    // only ever appended, so a change in length is the only thing that can
+    // change the answer.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [doc?.projectId, doc?.checkpoints.length, session, cloudProjectIds]);
 
   useEffect(() => {
     if (!doc || !session || !cloudProjectIds.has(doc.projectId)) {
@@ -6340,13 +6408,27 @@ export function App() {
     }
   }
 
-  async function handleDuplicateProject(project: ProjectSummary) {
+  /**
+   * Copies a project, optionally starting from one of its save states.
+   *
+   * Branching is the same operation as duplicating, aimed at an earlier point:
+   * a new project, a new id, no link back except the lineage it records. Giving
+   * it its own handler would mean a second copy of the cloud-then-device
+   * fallback, the derived-projection rescue and the shelf bookkeeping below,
+   * which is where the interesting failure modes live.
+   */
+  async function handleDuplicateProject(
+    project: ProjectSummary,
+    saveState?: ProjectCheckpoint
+  ) {
     setBusy(true);
     try {
       await flushPendingLocalSave();
       if (session) {
         try {
-          const response = await api.duplicateProject(project.projectId);
+          const response = await api.duplicateProject(project.projectId, {
+            ...(saveState ? { revisionId: saveState.revisionId } : {})
+          });
           const localSource = await loadLocalProject(project.projectId).catch(
             () => null
           );
@@ -6377,7 +6459,11 @@ export function App() {
           setProjects((current) =>
             [...current, response.project].sort(compareProjectSummaries)
           );
-          setStatus(`Duplicated ${project.name} as ${response.project.name}.`);
+          setStatus(
+            saveState
+              ? `Branched ${project.name} from “${saveState.reason}” as ${response.project.name}.`
+              : `Duplicated ${project.name} as ${response.project.name}.`
+          );
           return;
         } catch (error) {
           // A project the account has never seen is not a failure — it just
@@ -6390,17 +6476,31 @@ export function App() {
           }
         }
       }
-      const source = await loadLocalProject(project.projectId);
-      if (!source) {
+      const head = await loadLocalProject(project.projectId);
+      if (!head) {
         throw new Error('The project could not be read from this device.');
+      }
+      const source = saveState
+        ? await loadLocalSaveState(project.projectId, saveState.checkpointId)
+        : head;
+      if (!source) {
+        throw new Error(
+          'That save state is not stored on this device, and your account could not be reached to fetch it.'
+        );
       }
       const copy = duplicateProjectDocument(
         source,
         duplicateProjectName(
-          source.name,
+          head.name,
           projects.map((summary) => summary.name)
         ),
-        session?.userId ?? localUserId
+        session?.userId ?? localUserId,
+        saveState
+          ? projectBranchPoint(head, {
+              revisionId: saveState.revisionId,
+              reason: saveState.reason
+            })
+          : undefined
       );
       const organization: ProjectOrganization = {
         ...DEFAULT_PROJECT_ORGANIZATION,
@@ -6415,12 +6515,133 @@ export function App() {
           compareProjectSummaries
         )
       );
-      setStatus(`Duplicated ${project.name} as ${copy.name}.`);
+      setStatus(
+        saveState
+          ? `Branched ${project.name} from “${saveState.reason}” as ${copy.name}.`
+          : `Duplicated ${project.name} as ${copy.name}.`
+      );
     } catch (error) {
-      setStatus(errorMessage(error, 'Could not duplicate the project.'));
+      setStatus(
+        errorMessage(
+          error,
+          saveState
+            ? 'Could not branch that save state.'
+            : 'Could not duplicate the project.'
+        )
+      );
     } finally {
       setBusy(false);
     }
+  }
+
+  /**
+   * One save state's document: this device first, the account second.
+   *
+   * Device first because it is the faster and more available of the two and
+   * holds the same bytes — and because a restore has to work with the network
+   * down. The account is the fallback for save states older than this device's
+   * retention, or made on another device entirely.
+   */
+  async function loadSaveStateDocument(
+    projectId: string,
+    checkpoint: ProjectCheckpoint
+  ): Promise<ProjectDocument | null> {
+    const local = await loadLocalSaveState(
+      projectId,
+      checkpoint.checkpointId
+    ).catch(() => null);
+    if (local) {
+      return local;
+    }
+    if (!session || !cloudProjectIds.has(projectId)) {
+      return null;
+    }
+    return api.loadRevision(projectId, checkpoint.revisionId).catch(() => null);
+  }
+
+  /**
+   * Rewinds the open project to one of its save states.
+   *
+   * Two invariants shape the order of the steps. The pre-restore document is
+   * checkpointed and written *first*, so the state being left is reachable
+   * afterwards even past the undo depth — a restore the user cannot escape is
+   * a data-loss feature. And the restore itself goes through the command
+   * manager as one document edit, which makes it a single Undo and leaves the
+   * durable timeline running forward (see `restoreFromSaveState`) instead of
+   * rewinding a clock that collaboration and every fenced cloud write compare
+   * against.
+   */
+  async function handleRestoreSaveState(checkpoint: ProjectCheckpoint) {
+    const manager = managerRef.current;
+    const current = manager?.document;
+    if (!manager || !current) {
+      return;
+    }
+    if (shareSessionRef.current) {
+      setStatus(
+        'This is a shared link session — Make a copy before restoring a save.'
+      );
+      return;
+    }
+    if (!ensureCanEdit('restore a save state')) {
+      return;
+    }
+    setBusy(true);
+    try {
+      await flushPendingLocalSave();
+      const snapshot = await loadSaveStateDocument(
+        current.projectId,
+        checkpoint
+      );
+      if (!snapshot) {
+        setStatus(
+          'That save state is no longer stored on this device or in your account.'
+        );
+        return;
+      }
+      const guarded = createCheckpoint(
+        appendRevision(current, BEFORE_RESTORE_REASON),
+        BEFORE_RESTORE_REASON
+      );
+      // Written before anything is replaced: this is the way back.
+      await saveLocalProject(guarded);
+      const reason = `Restored “${checkpoint.reason}”`;
+      const restored = createCheckpoint(
+        restoreFromSaveState(guarded, snapshot, reason),
+        reason
+      );
+      manager.applyDocumentEdit(restored, reason);
+      // The meshes on screen belong to the document being left, and the
+      // restored history has to be rebuilt from scratch to replace them.
+      geometry.invalidate();
+      setDoc(restored);
+      setSelectedFeatureNodeId(null);
+      setSelectedTopology(null);
+      setSelectedEdges([]);
+      setSelectedBodyIds([]);
+      setSelectedSketchProfileId(null);
+      setSelectedProfiles([]);
+      setExtrudePreview(null);
+      setPreviewDoc(null);
+      setTool(null);
+      setStatus(`${reason}. Undo puts it back.`);
+    } catch (error) {
+      setStatus(errorMessage(error, 'Could not restore that save state.'));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  /** Branches the open project's save state into a project of its own. */
+  async function handleBranchSaveState(checkpoint: ProjectCheckpoint) {
+    const current = managerRef.current?.document;
+    if (!current) {
+      return;
+    }
+    const project =
+      projects.find((summary) => summary.projectId === current.projectId) ??
+      summarizeLocalDocument(current, DEFAULT_PROJECT_ORGANIZATION);
+    await handleDuplicateProject(project, checkpoint);
   }
 
   /** Destroys projects in both stores. There is no undo past this point. */
@@ -11700,6 +11921,8 @@ export function App() {
             hiddenBodyIds={hiddenBodyIds}
             warnings={warnings}
             checkpoints={doc?.checkpoints ?? []}
+            documentVersion={doc?.version ?? 0}
+            restorableCheckpointIds={restorableCheckpointIds}
             onSelectFeature={handleSelectFeatureFromTree}
             onSelectBody={handleSelectBodyFromTree}
             selectedBodyIds={selectedBodyIds}
@@ -11717,6 +11940,12 @@ export function App() {
             }
             onDeleteFeature={handleDeleteFeature}
             onReorderFeature={handleReorderFeature}
+            onRestoreCheckpoint={(checkpoint) =>
+              void handleRestoreSaveState(checkpoint)
+            }
+            onBranchCheckpoint={(checkpoint) =>
+              void handleBranchSaveState(checkpoint)
+            }
             panelState={panelState}
             onToggleSection={(id: SidebarSectionId) =>
               setPanelState((current) => toggleSidebarSection(current, id))

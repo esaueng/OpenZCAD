@@ -14,7 +14,8 @@ import {
   ProjectAdoptionError,
   ProjectNotFoundError,
   ProjectSharingError,
-  RevisionConflictError
+  RevisionConflictError,
+  RevisionNotFoundError
 } from '@openzcad/persistence';
 import {
   HttpError,
@@ -176,6 +177,7 @@ function assertEditorLeaseEligible(
 const PROJECT_ROUTE = /^\/api\/projects\/([^/]+)$/;
 const PROJECT_DUPLICATE_ROUTE = /^\/api\/projects\/([^/]+)\/duplicate$/;
 const PROJECT_REVISIONS_ROUTE = /^\/api\/projects\/([^/]+)\/revisions$/;
+const PROJECT_REVISION_ROUTE = /^\/api\/projects\/([^/]+)\/revisions\/([^/]+)$/;
 const PROJECT_DOCUMENT_ROUTE = /^\/api\/projects\/([^/]+)\/document$/;
 const PROJECT_MEASUREMENTS_ROUTE = /^\/api\/projects\/([^/]+)\/measurements$/;
 const PROJECT_COLLABORATION_ROUTE = /^\/api\/projects\/([^/]+)\/collaboration$/;
@@ -1327,6 +1329,25 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
     return json(await persistence.saveRevision(userId, payload));
   }
 
+  if (request.method === 'GET' && revisionsMatch) {
+    return json(await persistence.listRevisions(userId, revisionsMatch[1]!));
+  }
+
+  const revisionMatch = PROJECT_REVISION_ROUTE.exec(pathname);
+  if (request.method === 'GET' && revisionMatch) {
+    const document = await persistence.loadRevision(
+      userId,
+      revisionMatch[1]!,
+      revisionMatch[2]!
+    );
+    // Retention drops the oldest save states while the checkpoints naming them
+    // live on inside documents, so a request for one that is gone is a plain
+    // 404 rather than a fault.
+    return document
+      ? json(document)
+      : json({ error: 'That save state is no longer stored.' }, 404);
+  }
+
   const documentMatch = PROJECT_DOCUMENT_ROUTE.exec(pathname);
   if (request.method === 'PUT' && documentMatch) {
     const payload = parseSaveProjectDocumentRequest(
@@ -1523,6 +1544,9 @@ export default {
       }
       if (error instanceof ProjectNotFoundError) {
         return json({ error: error.message }, 404);
+      }
+      if (error instanceof RevisionNotFoundError) {
+        return json({ error: error.message, code: 'REVISION_NOT_FOUND' }, 404);
       }
       if (error instanceof SharingRequestError) {
         return json({ error: error.message, code: error.code }, error.status);

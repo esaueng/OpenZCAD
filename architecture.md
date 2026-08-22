@@ -25,6 +25,10 @@ OpenZCAD is a local-first parametric CAD system. The canonical `ProjectDocument`
 6. The worker returns derived meshes, bounds, volume, face counts, validity warnings, and exportable body IDs tagged with project/version.
 7. The app rejects stale results and attaches only matching derived state without advancing model history.
 8. Manual save creates a durable checkpoint in the beta persistence service.
+9. A checkpoint's document is kept on the device as well as in the account, so
+   restoring an earlier save state works offline. Restoring adopts that model
+   as one undoable forward edit; branching copies it into a new project. See
+   [ADR-022](docs/adrs/ADR-022-save-state-restore-and-branching.md).
 
 Exact faces and edges carry kernel-neutral witnesses and, for the safe subset, semantic lineage names. Selection remains viewport state until a command captures a topology reference; feature commands never depend on Three.js objects, transient kernel handles, nearest geometry, or traversal order.
 
