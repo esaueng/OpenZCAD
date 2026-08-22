@@ -59,7 +59,8 @@ export function TweakPanel({
       </div>
       {parameters.length === 0 && (
         <p className="muted sidebar-hint">
-          This model has no parameters. Build mode is where they are defined.
+          This model offers no parameters to adjust. Build mode is where they
+          are defined and chosen.
         </p>
       )}
       <div className="tweak-panel-actions">
