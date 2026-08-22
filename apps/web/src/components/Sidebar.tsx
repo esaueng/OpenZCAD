@@ -143,6 +143,9 @@ interface SidebarProps {
   onRollbackAfterFeature(featureId: FeatureId, name: string): void;
   onSetParameter(name: string, expression: string): void;
   onDeleteParameter(name: string): void;
+  onExposeParameter(name: string, exposed: boolean): void;
+  /** Names currently offered in Tweak, from `listExposedParameters`. */
+  exposedParameterNames: ReadonlySet<string>;
   onDeleteFeature(featureId: FeatureId, name: string): void;
   onReorderFeature(featureId: FeatureId, toIndex: number): void;
   onRestoreCheckpoint(checkpoint: ProjectCheckpoint): void;
@@ -192,6 +195,8 @@ export function Sidebar({
   onRollbackAfterFeature,
   onSetParameter,
   onDeleteParameter,
+  onExposeParameter,
+  exposedParameterNames,
   onDeleteFeature,
   onReorderFeature,
   onRestoreCheckpoint,
@@ -297,6 +302,8 @@ export function Sidebar({
               value={parameterValues[parameter.name]}
               onSet={onSetParameter}
               onDelete={onDeleteParameter}
+              onExpose={onExposeParameter}
+              exposedInTweak={exposedParameterNames.has(parameter.name)}
             />
           ))}
           <AddParameterRow onSet={onSetParameter} />

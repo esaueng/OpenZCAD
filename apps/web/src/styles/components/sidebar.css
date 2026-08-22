@@ -85,7 +85,8 @@
 .param-row,
 .param-add {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 76px auto 20px;
+  /* name · expression · value · curation toggle · delete */
+  grid-template-columns: minmax(0, 1fr) 76px auto 20px 20px;
   align-items: center;
   gap: 6px;
 }
@@ -120,6 +121,33 @@
 
 .param-value.error {
   color: var(--color-error);
+}
+
+/* Curation toggle: which parameters a Tweak workspace or share link offers.
+   Unlike `.row-delete` it stays visible when it is on, because "this one is
+   published" is state worth seeing without hovering every row. */
+.param-expose {
+  width: 20px;
+  height: 20px;
+  display: inline-grid;
+  place-items: center;
+  color: var(--color-text-subtle);
+  border-radius: var(--radius-sm);
+  opacity: 0;
+}
+
+.param-row:hover .param-expose,
+.param-expose:focus-visible,
+.param-expose.on {
+  opacity: 1;
+}
+
+.param-expose.on {
+  color: var(--color-accent);
+}
+
+.param-expose:hover {
+  background: var(--color-surface-hover);
 }
 
 .row-delete {

@@ -53,6 +53,7 @@ import {
   getParameterScope,
   listFeaturesInOrder,
   listNodesByKind,
+  listExposedParameters,
   listParameters,
   normalizeDocument,
   repairedDirectEditOperation,
@@ -2916,6 +2917,17 @@ export function App() {
     [doc]
   );
   const parameters = useMemo(() => (doc ? listParameters(doc) : []), [doc]);
+  // What Tweak mode and a share link offer. An uncurated document offers
+  // everything, so the rule lives in document-core rather than here — the
+  // panel and the Build-mode toggles must never disagree about it.
+  const exposedParameters = useMemo(
+    () => (doc ? listExposedParameters(doc) : []),
+    [doc]
+  );
+  const exposedParameterNames = useMemo(
+    () => new Set(exposedParameters.map((parameter) => parameter.name)),
+    [exposedParameters]
+  );
   // Import sources that were never archived to the account. They gate the
   // sync indicator: a doc that references them is not fully "Synced".
   const localOnlySources = useMemo(
@@ -11888,7 +11900,7 @@ export function App() {
       sidebar={
         viewMode ? null : tweakMode ? (
           <TweakPanel
-            parameters={parameters}
+            parameters={exposedParameters}
             parameterValues={parameterScope.scope}
             canExport={exportBodyIds.length > 0}
             exportScope={
@@ -11938,6 +11950,12 @@ export function App() {
             onDeleteParameter={(name) =>
               executeCommand(commandFactories.deleteParameter({ name }))
             }
+            onExposeParameter={(name, exposed) =>
+              executeCommand(
+                commandFactories.setParameterExposed({ name, exposed })
+              )
+            }
+            exposedParameterNames={exposedParameterNames}
             onDeleteFeature={handleDeleteFeature}
             onReorderFeature={handleReorderFeature}
             onRestoreCheckpoint={(checkpoint) =>
