@@ -11955,6 +11955,11 @@ export function App() {
                 commandFactories.setParameterExposed({ name, exposed })
               )
             }
+            onDescribeParameter={(name, description) =>
+              executeCommand(
+                commandFactories.setParameterDescription({ name, description })
+              )
+            }
             exposedParameterNames={exposedParameterNames}
             onDeleteFeature={handleDeleteFeature}
             onReorderFeature={handleReorderFeature}
