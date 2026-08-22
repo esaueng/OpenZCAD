@@ -14,13 +14,22 @@ import {
   type SketchFeatureIds
 } from '@openzcad/document-core';
 import {
-  toProjectId,
   toUserId,
   type DerivedState,
   type ProjectDocument,
-  type ProjectId,
   type UserId
 } from '@openzcad/shared';
+import {
+  DEMO_DEFINITIONS,
+  VISUAL_SELECTION_ACCEPTANCE_DEMO,
+  type DemoDefinition
+} from './demoDefinitions';
+
+export {
+  DEMO_DEFINITIONS,
+  VISUAL_SELECTION_ACCEPTANCE_DEMO,
+  type DemoDefinition
+};
 
 /**
  * Design revision demos: three seeded projects that each tell a three-stage
@@ -30,51 +39,6 @@ import {
  * chamfer) reference exact edge hashes resolved through a live kernel sync,
  * exactly like an interactive edge pick.
  */
-
-export interface DemoDefinition {
-  key: string;
-  projectId: ProjectId;
-  name: string;
-  tagline: string;
-  revisions: [string, string, string];
-}
-
-export const DEMO_DEFINITIONS: DemoDefinition[] = [
-  {
-    key: 'bracket',
-    projectId: toProjectId('proj_demo_mounting_bracket'),
-    name: 'Demo · Mounting Bracket',
-    tagline: 'L-bracket with boss and mounting holes',
-    revisions: [
-      'A — L-bracket blank',
-      'B — Boss + holes',
-      'C — Edge break fillet'
-    ]
-  },
-  {
-    key: 'flange',
-    projectId: toProjectId('proj_demo_pipe_flange'),
-    name: 'Demo · Pipe Flange',
-    tagline: 'Revolved flange with a patterned bolt circle',
-    revisions: ['A — Revolved blank', 'B — Bolt circle', 'C — Rim chamfer']
-  },
-  {
-    key: 'heatsink',
-    projectId: toProjectId('proj_demo_heat_sink'),
-    name: 'Demo · Heat Sink',
-    tagline: 'Extruded base with a parametric fin field',
-    revisions: ['A — Base extrusion', 'B — Fin field', 'C — Corner fillets']
-  }
-];
-
-/** E2E-only seeded part with every analytic surface used by visual acceptance. */
-export const VISUAL_SELECTION_ACCEPTANCE_DEMO: DemoDefinition = {
-  key: 'visual-selection-acceptance',
-  projectId: toProjectId('proj_e2e_visual_selection_acceptance'),
-  name: 'Demo · Visual Selection Reference',
-  tagline: 'Boss with through-bore and a finished rim',
-  revisions: ['A — Boss blank', 'B — Through-bore', 'C — Lower rim fillet']
-};
 
 export type ExactSyncFn = (
   document: ProjectDocument
