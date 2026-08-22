@@ -49,12 +49,16 @@ export function TweakPanel({
       </p>
       <div className="param-list tweak-panel-params">
         {parameters.map((parameter) => (
-          <ParameterRow
-            key={parameter.parameterId}
-            parameter={parameter}
-            value={parameterValues[parameter.name]}
-            onSet={onSetParameter}
-          />
+          <div className="param-entry" key={parameter.parameterId}>
+            <ParameterRow
+              parameter={parameter}
+              value={parameterValues[parameter.name]}
+              onSet={onSetParameter}
+            />
+            {parameter.description && (
+              <p className="param-description-text">{parameter.description}</p>
+            )}
+          </div>
         ))}
       </div>
       {parameters.length === 0 && (

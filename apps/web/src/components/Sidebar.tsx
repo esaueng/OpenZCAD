@@ -144,6 +144,7 @@ interface SidebarProps {
   onSetParameter(name: string, expression: string): void;
   onDeleteParameter(name: string): void;
   onExposeParameter(name: string, exposed: boolean): void;
+  onDescribeParameter(name: string, description: string): void;
   /** Names currently offered in Tweak, from `listExposedParameters`. */
   exposedParameterNames: ReadonlySet<string>;
   onDeleteFeature(featureId: FeatureId, name: string): void;
@@ -196,6 +197,7 @@ export function Sidebar({
   onSetParameter,
   onDeleteParameter,
   onExposeParameter,
+  onDescribeParameter,
   exposedParameterNames,
   onDeleteFeature,
   onReorderFeature,
@@ -304,6 +306,7 @@ export function Sidebar({
               onDelete={onDeleteParameter}
               onExpose={onExposeParameter}
               exposedInTweak={exposedParameterNames.has(parameter.name)}
+              onDescribe={onDescribeParameter}
             />
           ))}
           <AddParameterRow onSet={onSetParameter} />

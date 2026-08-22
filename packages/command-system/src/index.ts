@@ -69,6 +69,7 @@ import {
   type NodeRenameInput,
   offsetSolidBody,
   type ParameterDeleteInput,
+  type ParameterDescribeInput,
   type ParameterExposeInput,
   type ParameterSetInput,
   patternBody,
@@ -81,6 +82,7 @@ import {
   revolveSketch,
   setNodeMetadata,
   setParameter,
+  setParameterDescription,
   setParameterExposed,
   shellBody,
   type ShellInput,
@@ -151,6 +153,7 @@ export type CommandKind =
   | 'feature.reorder'
   | 'parameter.set'
   | 'parameter.expose'
+  | 'parameter.describe'
   | 'parameter.delete'
   | 'import.mesh'
   | 'import.step'
@@ -1214,6 +1217,16 @@ export const commandFactories = {
       `${payload.exposed ? 'Show' : 'Hide'} parameter ${payload.name} in Tweak`,
       payload,
       (document) => setParameterExposed(document, payload)
+    );
+  },
+  setParameterDescription(
+    payload: ParameterDescribeInput
+  ): CommandDefinition<ParameterDescribeInput> {
+    return makeCommand(
+      'parameter.describe',
+      `Describe parameter ${payload.name}`,
+      payload,
+      (document) => setParameterDescription(document, payload)
     );
   },
   deleteParameter(
@@ -2556,6 +2569,12 @@ export function replayCommands(
         next = setParameterExposed(
           next,
           command.payload as ParameterExposeInput
+        );
+        break;
+      case 'parameter.describe':
+        next = setParameterDescription(
+          next,
+          command.payload as ParameterDescribeInput
         );
         break;
       case 'parameter.delete':
