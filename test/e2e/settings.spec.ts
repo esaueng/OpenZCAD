@@ -108,7 +108,9 @@ test('keeps the top-bar order fixed and dismisses the file menu outside', async 
   await fileMenu.locator('summary').click();
   await expect(fileMenu).toHaveAttribute('open', '');
 
-  await topbar.locator('.topbar-divider').click();
+  // The bar carries a divider either side of the workspace-mode switch; any
+  // one of them is the neutral outside-click this dismissal needs.
+  await topbar.locator('.topbar-divider').first().click();
   await expect(fileMenu).not.toHaveAttribute('open', '');
 
   await actions.locator('.save-state').evaluate((element) => {
