@@ -65,9 +65,7 @@ describe('useModalFocus', () => {
     await user.tab();
     expect(screen.getByLabelText('Test dialog first field')).toHaveFocus();
 
-    await user.click(
-      screen.getByRole('button', { name: 'Close Test dialog' })
-    );
+    await user.click(screen.getByRole('button', { name: 'Close Test dialog' }));
     await waitFor(() => expect(opener).toHaveFocus());
     expect(opener).not.toHaveAttribute('inert');
     expect(background).not.toHaveAttribute('inert');
@@ -162,5 +160,62 @@ describe('useModalFocus', () => {
     expect(lower.parentElement).toHaveAttribute('inert');
     expect(top.parentElement).not.toHaveAttribute('inert');
     expect(screen.getByLabelText('Top dialog first field')).toHaveFocus();
+  });
+
+  it('focuses the first control of a dialog whose body arrives later', async () => {
+    // A code-split dialog mounts with an empty frame while its chunk loads.
+    // Focus has to end up inside it anyway, or the keyboard is left on the
+    // workspace the dialog claims to be modal over.
+    function LateContentModal({ loaded }: { loaded: boolean }) {
+      const dialogRef = useRef<HTMLDivElement | null>(null);
+      useModalFocus(dialogRef, { autoFocus: true });
+      return (
+        <div
+          ref={dialogRef}
+          role="dialog"
+          aria-label="Late dialog"
+          tabIndex={-1}
+        >
+          {loaded && <button type="button">Late action</button>}
+        </div>
+      );
+    }
+
+    const { rerender } = render(<LateContentModal loaded={false} />);
+    const dialog = screen.getByRole('dialog', { name: 'Late dialog' });
+    expect(dialog).toHaveFocus();
+
+    rerender(<LateContentModal loaded />);
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Late action' })).toHaveFocus()
+    );
+  });
+
+  it('leaves focus alone when the viewer moved it before the body arrived', async () => {
+    function LateContentModal({ loaded }: { loaded: boolean }) {
+      const dialogRef = useRef<HTMLDivElement | null>(null);
+      useModalFocus(dialogRef, { autoFocus: true });
+      return (
+        <div
+          ref={dialogRef}
+          role="dialog"
+          aria-label="Late dialog"
+          tabIndex={-1}
+        >
+          <button type="button">Always here</button>
+          {loaded && <button type="button">Late action</button>}
+        </div>
+      );
+    }
+
+    const { rerender } = render(<LateContentModal loaded={false} />);
+    const anchor = screen.getByRole('button', { name: 'Always here' });
+    expect(anchor).toHaveFocus();
+
+    rerender(<LateContentModal loaded />);
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Late action' })).toBeVisible();
+    });
+    expect(anchor).toHaveFocus();
   });
 });

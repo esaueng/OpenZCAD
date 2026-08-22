@@ -30,6 +30,7 @@ interface ModalRegistration {
   initialFocusRef?: RefObject<HTMLElement | null>;
   restoreBackground?: () => void;
   removeKeyListener?: () => void;
+  stopWaitingForContent?: () => void;
 }
 
 // Async conflict detection can open a dialog while another modal is mounted.
@@ -74,13 +75,51 @@ function inertBackground(dialog: HTMLElement): () => void {
   };
 }
 
+/**
+ * Moves focus to the dialog's first control once its content mounts.
+ *
+ * Gives up as soon as focus has moved anywhere on its own — the arriving
+ * content may autofocus a field of its own, and a viewer who has already
+ * tabbed or clicked somewhere should not be yanked back.
+ */
+function waitForContent(registration: ModalRegistration): void {
+  const { dialog, initialFocusRef } = registration;
+  const observer = new MutationObserver(() => {
+    if (document.activeElement !== dialog) {
+      registration.stopWaitingForContent?.();
+      return;
+    }
+    const target =
+      initialFocusRef?.current ?? dialog.querySelector<HTMLElement>(FOCUSABLE);
+    if (target) {
+      registration.stopWaitingForContent?.();
+      target.focus();
+    }
+  });
+  observer.observe(dialog, { childList: true, subtree: true });
+  registration.stopWaitingForContent = () => {
+    observer.disconnect();
+    registration.stopWaitingForContent = undefined;
+  };
+}
+
 function activateModal(registration: ModalRegistration): void {
   const { dialog, autoFocus, initialFocusRef } = registration;
   registration.restoreBackground = inertBackground(dialog);
 
   if (autoFocus && !dialog.contains(document.activeElement)) {
     const first = dialog.querySelector<HTMLElement>(FOCUSABLE);
-    (initialFocusRef?.current ?? first ?? dialog).focus();
+    const target = initialFocusRef?.current ?? first;
+    (target ?? dialog).focus();
+    if (!target) {
+      // A dialog whose body is code-split mounts empty for as long as its
+      // chunk takes to arrive, so there is nothing to focus yet. Parking focus
+      // on the container keeps the keyboard inside the modal meanwhile; this
+      // hands it to the first real control the moment one exists, which is
+      // where an eagerly rendered dialog would have put it. Without this the
+      // dialog opens and the keyboard has nowhere to go.
+      waitForContent(registration);
+    }
   }
 
   const onKeyDown = (event: KeyboardEvent) => {
@@ -114,6 +153,7 @@ function activateModal(registration: ModalRegistration): void {
 }
 
 function deactivateModal(registration: ModalRegistration): void {
+  registration.stopWaitingForContent?.();
   registration.removeKeyListener?.();
   registration.removeKeyListener = undefined;
   registration.restoreBackground?.();
