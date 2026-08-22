@@ -11,6 +11,7 @@ import {
   isRevisionRecord,
   toArtifactId,
   toProjectId,
+  toRevisionId,
   toUploadSessionId,
   type ArtifactKind,
   type CompleteMultipartUploadRequest,
@@ -184,7 +185,14 @@ export function parseDuplicateProjectRequest(
     projectId: toProjectId(projectIdFromPath),
     ...(record.name === undefined
       ? {}
-      : { name: requireString(record, 'name', MAX_NAME_LENGTH) })
+      : { name: requireString(record, 'name', MAX_NAME_LENGTH) }),
+    ...(record.revisionId === undefined
+      ? {}
+      : {
+          revisionId: toRevisionId(
+            requireString(record, 'revisionId', MAX_NAME_LENGTH)
+          )
+        })
   };
 }
 

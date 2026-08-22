@@ -2347,6 +2347,41 @@ export class CommandManager {
     return this.document;
   }
 
+  /**
+   * Adopts `next` as the document, undoable in one step.
+   *
+   * Restoring a save state is the caller for this. It is a document-level
+   * splice rather than a command: the replacement content is a whole stored
+   * document, so there is nothing to validate against the current one and
+   * nothing worth writing to `commandLog` — a log entry carrying an entire
+   * document would be replayed on every future rebuild and would dwarf the
+   * history it sits in. The undo entry is a plain snapshot swap, which is what
+   * every other entry already is, so undoing a restore returns the document the
+   * user was looking at before it.
+   *
+   * `next` must already carry its own forward revision (see
+   * `restoreFromSaveState`); this method does not append one, so the label here
+   * names the step for undo alone.
+   */
+  applyDocumentEdit(next: ProjectDocument, label: string): ProjectDocument {
+    if (next === this.document) {
+      return this.document;
+    }
+    this.pushUndo({
+      snapshot: this.document,
+      command: {
+        kind: 'document.replace',
+        label,
+        payload: null,
+        replayVersion: 1,
+        timestamp: nowIso()
+      }
+    });
+    this.redoStack = [];
+    this.document = next;
+    return this.document;
+  }
+
   private pushUndo(entry: HistoryEntry): void {
     this.undoStack.push(entry);
     if (this.undoStack.length > MAX_HISTORY_DEPTH) {
