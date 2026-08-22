@@ -1,5 +1,9 @@
 import { expect, test, type Page } from '@playwright/test';
-import { expectBodyCount, stubApi } from './openzcad-fixtures';
+import {
+  expectBodyCount,
+  stubAnonymousApi,
+  stubApi
+} from './openzcad-fixtures';
 
 /**
  * The history panel in the browser it ships in.
@@ -209,4 +213,103 @@ test('lists a project’s save points newest first', async ({ page }) => {
   await expect(revisions(page)).toHaveCount(2);
   await expect(revisions(page).first()).toContainText('Manual save');
   await expect(revisions(page).last()).not.toContainText('Manual save');
+});
+
+test('names a save point, and the name is what history shows', async ({
+  page
+}) => {
+  await stubApi(page);
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('Named Save Part');
+  await page.getByRole('button', { name: 'Create project' }).click();
+  await addPrimitive(page, /^Box \(B\)/);
+  await expectBodyCount(page, 1);
+
+  // Ctrl+S is a reflex and stays one; naming is its own gesture.
+  await page.keyboard.press('ControlOrMeta+Shift+s');
+  const dialog = page.getByRole('dialog', { name: 'Name this save' });
+  await expect(dialog).toBeVisible();
+  await dialog.getByLabel('Save name').fill('Before the fillet pass');
+  await dialog.getByRole('button', { name: 'Save', exact: true }).click();
+
+  // The name is the only thing the panel shows for a save afterwards, which
+  // is the whole reason for typing one.
+  await expect(dialog).toHaveCount(0);
+  await expect(revisionRow(page, 'Before the fillet pass')).toBeVisible();
+  await expect(revisionRow(page, 'Manual save')).toHaveCount(0);
+});
+
+test('a named save can be restored by its name', async ({ page }) => {
+  await stubApi(page);
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('Named Restore Part');
+  await page.getByRole('button', { name: 'Create project' }).click();
+  await addPrimitive(page, /^Box \(B\)/);
+  await expectBodyCount(page, 1);
+
+  await page.keyboard.press('ControlOrMeta+Shift+s');
+  const dialog = page.getByRole('dialog', { name: 'Name this save' });
+  await dialog.getByLabel('Save name').fill('Just the box');
+  await dialog.getByRole('button', { name: 'Save', exact: true }).click();
+  await expect(revisionRow(page, 'Just the box')).toBeVisible();
+
+  await addPrimitive(page, /^Cylinder/);
+  await expectBodyCount(page, 2);
+
+  const named = revisionRow(page, 'Just the box');
+  await named.hover();
+  await named.getByRole('button', { name: 'Restore Just the box' }).click();
+  await expectBodyCount(page, 1);
+  await expect(revisionRow(page, 'Restored')).toBeVisible();
+});
+
+test('refuses an empty name rather than saving an unnamed one', async ({
+  page
+}) => {
+  await stubApi(page);
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('Empty Name Part');
+  await page.getByRole('button', { name: 'Create project' }).click();
+  await addPrimitive(page, /^Box \(B\)/);
+
+  await page.keyboard.press('ControlOrMeta+Shift+s');
+  const dialog = page.getByRole('dialog', { name: 'Name this save' });
+  const save = dialog.getByRole('button', { name: 'Save', exact: true });
+  // An unnamed named-save is Ctrl+S with extra steps, so it is not offered.
+  await expect(save).toBeDisabled();
+  await dialog.getByLabel('Save name').fill('   ');
+  await expect(save).toBeDisabled();
+
+  // Escape leaves without marking anything.
+  await page.keyboard.press('Escape');
+  await expect(dialog).toHaveCount(0);
+  await expect(revisions(page)).toHaveCount(1);
+});
+
+test('marks a named save point with no account behind it', async ({ page }) => {
+  // Signed out, the project lives only on this device and no server will
+  // checkpoint it. That is exactly where restore and branch matter most, so
+  // the save point — and the name — have to be made here or not at all.
+  await stubAnonymousApi(page);
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('Offline Named Part');
+  await page.getByRole('button', { name: 'Create project' }).click();
+  await addPrimitive(page, /^Box \(B\)/);
+  await expectBodyCount(page, 1);
+
+  await page.keyboard.press('ControlOrMeta+Shift+s');
+  const dialog = page.getByRole('dialog', { name: 'Name this save' });
+  await dialog.getByLabel('Save name').fill('Local milestone');
+  await dialog.getByRole('button', { name: 'Save', exact: true }).click();
+
+  await expect(revisionRow(page, 'Local milestone')).toBeVisible();
+  await expectSaveSettled(page);
+
+  // And it is a real save point: it survives a reload and can be restored.
+  await addPrimitive(page, /^Cylinder/);
+  await expectBodyCount(page, 2);
+  const named = revisionRow(page, 'Local milestone');
+  await named.hover();
+  await named.getByRole('button', { name: 'Restore Local milestone' }).click();
+  await expectBodyCount(page, 1);
 });
