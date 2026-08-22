@@ -1,9 +1,13 @@
 # Save-state versioning and branching plan
 
+**Status: implemented.** M1–M3 and the interactive history rows of M4 shipped
+together; [ADR-022](../adrs/ADR-022-save-state-restore-and-branching.md)
+records the decisions as built. What this plan proposed and the implementation
+did not take up is listed under "Not built" at the end.
+
 Goal: let a user revert a project to a previous save state, and branch a new
 project off any save state — "git for CAD", scoped to what OpenZCAD's
-architecture already supports. This plan is design-only; no product code
-changes ship with it.
+architecture already supports.
 
 ## What already exists (and what this plan reuses)
 
@@ -263,3 +267,23 @@ and the local checkpoint store bounds.
 - **Device-only projects with no cloud account** rely entirely on the local
   store; the 25-snapshot cap is their whole history depth. Called out in the
   ADR as an accepted beta bound.
+
+## Not built
+
+Deliberately left for later, none of it blocking the feature:
+
+- **Preview mode.** Opening a save state read-only behind a banner before
+  deciding. Restore is one Undo away and writes a "Before restore" save point
+  first, which covers the same need at a fraction of the surface.
+- **Naming a checkpoint at save time, and renaming it later.** Saves still
+  carry their automatic reasons ("Manual save", "Restored …", "Before
+  restore").
+- **Content-key dedup of stored save states.** It would cost a full
+  canonicalization of the document on the save path; `createCheckpoint` already
+  collapses consecutive checkpoints at the same version, and each stored row is
+  written once.
+- **A Playwright walkthrough of restore and branch.** The flows are covered by
+  unit, worker-route and happy-dom store tests; the browser suite has no
+  save-state spec yet.
+- **Per-checkpoint thumbnails, and diffing two save states.** Nothing in the
+  shipped design blocks either.
