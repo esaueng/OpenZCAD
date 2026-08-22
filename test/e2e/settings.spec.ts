@@ -108,9 +108,8 @@ test('keeps the top-bar order fixed and dismisses the file menu outside', async 
   await fileMenu.locator('summary').click();
   await expect(fileMenu).toHaveAttribute('open', '');
 
-  // The top bar has carried two dividers since the mode switch landed between
-  // the brand and the breadcrumb. Either one is inert chrome outside the menu,
-  // which is all this click needs; naming the first keeps the locator strict.
+  // The bar carries a divider either side of the workspace-mode switch; any
+  // one of them is the neutral outside-click this dismissal needs.
   await topbar.locator('.topbar-divider').first().click();
   await expect(fileMenu).not.toHaveAttribute('open', '');
 

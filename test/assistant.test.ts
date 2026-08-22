@@ -8,6 +8,7 @@ import {
   getAssistantStatus,
   maxOutputTokensFor,
   streamAssistantProposal,
+  testAssistantConnection,
   timeoutFor
 } from '../apps/web/worker/assistant';
 import { parseAssistantProposalRequest } from '../apps/web/worker/validation';
@@ -1170,7 +1171,8 @@ describe('assistant integration', () => {
     const requestId = response.headers.get('x-openzcad-request-id');
     expect(requestId).toMatch(/^[0-9a-f-]{36}$/);
     await expect(response.json()).resolves.toEqual({
-      error: 'The modeling assistant could not generate a patch.',
+      error:
+        'The AI provider rejected the configured model or structured-output request. Check the provider and model, then run Test connection in Settings.',
       code: 'AI_UPSTREAM_ERROR'
     });
     expect(consoleError).toHaveBeenCalledWith(
@@ -1187,5 +1189,100 @@ describe('assistant integration', () => {
     expect(logged).not.toContain(longMessage);
     expect(logged).not.toContain('invalid_json_schema');
     expect(logged).not.toContain('OpenAI');
+  });
+
+  it.each([
+    [
+      401,
+      'The AI provider rejected the saved credential. Update it and run Test connection in Settings.'
+    ],
+    [
+      403,
+      'The AI provider rejected the saved credential. Update it and run Test connection in Settings.'
+    ],
+    [
+      429,
+      "The AI provider's rate or spending limit was reached. Check provider usage and billing, or try again later."
+    ],
+    [503, 'The AI provider is temporarily unavailable. Try again later.']
+  ])(
+    'returns actionable personal-provider guidance for upstream status %i',
+    async (status, error) => {
+      vi.stubGlobal(
+        'fetch',
+        vi.fn(async () => new Response('provider detail', { status }))
+      );
+      vi.spyOn(console, 'error').mockImplementation(() => undefined);
+
+      const response = await streamAssistantProposal(
+        input,
+        {},
+        'user_personal',
+        {
+          provider: 'openai',
+          apiKey: 'personal-key',
+          model: 'gpt-5.6-sol',
+          reasoningEffort: 'high',
+          maxOutputTokens: 32_000,
+          timeoutMs: 120_000,
+          customInstructions: ''
+        }
+      );
+
+      expect(response.status).toBe(502);
+      await expect(response.json()).resolves.toEqual({
+        error,
+        code: 'AI_UPSTREAM_ERROR'
+      });
+    }
+  );
+
+  it('tests the structured streaming capability used by proposals', async () => {
+    const fetchMock = vi.fn(
+      async (_input: RequestInfo | URL, _init?: RequestInit) =>
+        new Response('data: {"type":"response.completed"}\n\n', {
+          headers: { 'content-type': 'text/event-stream' }
+        })
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(
+      testAssistantConnection(
+        {
+          provider: 'openrouter',
+          apiKey: 'personal-key',
+          model: 'openai/gpt-5.6-sol',
+          reasoningEffort: 'high',
+          maxOutputTokens: 32_000,
+          timeoutMs: 120_000,
+          customInstructions: ''
+        },
+        {}
+      )
+    ).resolves.toMatchObject({ ok: true });
+
+    const [, init] = fetchMock.mock.calls[0]!;
+    const request = JSON.parse(init?.body as string) as {
+      stream: boolean;
+      provider: { require_parameters: boolean };
+      text: {
+        format: {
+          type: string;
+          strict: boolean;
+          schema: Record<string, unknown>;
+        };
+      };
+    };
+    expect(request).toMatchObject({
+      stream: true,
+      provider: { require_parameters: true },
+      text: {
+        format: {
+          type: 'json_schema',
+          strict: true
+        }
+      }
+    });
+    expect(request.text.format.schema).toHaveProperty('properties.replyKind');
   });
 });

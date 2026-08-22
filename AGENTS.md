@@ -39,8 +39,8 @@ rerun after merge while the product is in beta; validate the pull-request head
 and use the manual dispatch when a hosted rerun is needed.
 
 The Apple Silicon workflow is manual while the browser beta is the active
-delivery target. Run it before desktop distribution or when a change needs
-real WKWebView evidence. Its package-specific checks are:
+delivery target, and deliberately expensive to run — dispatch it only when
+asked (see the merge-gate section below). Its package-specific checks are:
 
 ```bash
 pnpm --filter @openzcad/web lint
@@ -99,18 +99,31 @@ repo is private, so branch protection and rulesets are unavailable — GitHub
 reports every open PR as mergeable regardless of CI. Two consequences:
 
 - **Never `gh pr merge --auto` here.** With nothing required, "merge when
-  checks pass" silently means "merge now"; it has already merged a PR while
-  `apple-silicon` was still running.
-- **Read `gh pr checks` and see `validate`, `e2e`, `Cloudflare version /
-  verify`, and `apple-silicon` pass before merging.** `validate` is the slow
-  one at roughly seven minutes. `e2e` is the aggregate over the four
-  Playwright shards (it fails, rather than skips, when a shard fails), and
-  `Cloudflare version / verify` proves the Worker config still dry-run
-  deploys.
+  checks pass" silently means "merge now". Merging before the shards report
+  has already put a red `main` in front of us: #55 went in with three
+  Playwright shards outstanding, and shard 3 was failing.
+- **Read `gh pr checks` and see `validate`, `e2e`, and `Cloudflare version /
+  verify` pass before merging.** `validate` is the slow one at roughly seven
+  minutes. `e2e` is the aggregate over the four Playwright shards (it fails,
+  rather than skips, when a shard fails), and `Cloudflare version / verify`
+  proves the Worker config still dry-run deploys. Those three are the merge
+  gate; `apple-silicon` is not one of them — see below.
+- **Verify those from the check runs themselves, not from a passing check
+  suite.** Several GitHub Apps report suites here, and the Cloudflare ones
+  complete within a minute of a push — reading "suite succeeded" as "CI
+  succeeded" will call a PR green while `validate` and the shards are still
+  running.
 
-`apple-silicon` is the only check that exercises the desktop shell, and
-`apps/desktop/e2e/cad-smoke.mjs` drives the real WKWebView workspace —
-camera, wheel, selection. Neither Vitest nor Playwright can see that surface,
-so a viewport or input change can pass every local suite and still break the
-desktop app there. Expect that job to have an opinion about anything touching
-navigation.
+**Never dispatch `apple-silicon` unless it is explicitly asked for.** It is
+macOS-runner time and costs real money, so it is `workflow_dispatch`-only and
+stays that way: it does not run on pull requests, and its absence never blocks
+a merge. Do not trigger it to be thorough, and do not report a PR as unverified
+for want of it.
+
+What it covers, for when someone does ask: it is the only check that exercises
+the desktop shell, and `apps/desktop/e2e/cad-smoke.mjs` drives the real
+WKWebView workspace — camera, wheel, selection. Neither Vitest nor Playwright
+can see that surface, so a viewport or input change can pass every other suite
+and still break the desktop app. That makes it worth requesting before desktop
+distribution, or when a navigation or viewport change needs real WKWebView
+evidence — but that call is the maintainer's to make, not an agent's.

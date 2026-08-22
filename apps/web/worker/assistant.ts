@@ -586,6 +586,54 @@ function jsonError(
   });
 }
 
+function proposalProviderErrorMessage(
+  status: number,
+  usesPersonalConfiguration: boolean
+): string {
+  if (status === 401 || status === 403) {
+    return usesPersonalConfiguration
+      ? 'The AI provider rejected the saved credential. Update it and run Test connection in Settings.'
+      : 'The deployment AI credential was rejected. Ask the deployment operator to verify it.';
+  }
+  if (status === 429) {
+    return "The AI provider's rate or spending limit was reached. Check provider usage and billing, or try again later.";
+  }
+  if (status === 400 || status === 404 || status === 422) {
+    return 'The AI provider rejected the configured model or structured-output request. Check the provider and model, then run Test connection in Settings.';
+  }
+  if (status >= 500) {
+    return 'The AI provider is temporarily unavailable. Try again later.';
+  }
+  return 'The modeling assistant could not generate a patch.';
+}
+
+function connectionProviderErrorMessage(status: number): string {
+  if (status === 401 || status === 403) {
+    return 'The AI provider rejected the saved credential.';
+  }
+  if (status === 429) {
+    return "The AI provider's rate or spending limit was reached. Check provider usage and billing, or try again later.";
+  }
+  if (status === 400 || status === 404 || status === 422) {
+    return 'The AI provider rejected the configured model or structured-output request.';
+  }
+  if (status >= 500) {
+    return 'The AI provider is temporarily unavailable. Try again later.';
+  }
+  return `The AI provider rejected the connection test (${status}).`;
+}
+
+function structuredReplyText(env: CloudflareEnv) {
+  return {
+    format: {
+      type: 'json_schema',
+      name: 'openzcad_reply',
+      strict: true,
+      schema: assistantReplySchemaFor(env)
+    }
+  };
+}
+
 export async function streamAssistantProposal(
   input: ProposalInput,
   env: CloudflareEnv,
@@ -657,14 +705,7 @@ export async function streamAssistantProposal(
             env.AI_REASONING_EFFORT ??
             DEFAULT_AI_REASONING_EFFORT
         ),
-        text: {
-          format: {
-            type: 'json_schema',
-            name: 'openzcad_reply',
-            strict: true,
-            schema: assistantReplySchemaFor(env)
-          }
-        },
+        text: structuredReplyText(env),
         max_output_tokens: runtime?.maxOutputTokens ?? maxOutputTokensFor(env),
         store: false,
         stream: true,
@@ -707,7 +748,7 @@ export async function streamAssistantProposal(
       status: upstream.status
     });
     return jsonError(
-      'The modeling assistant could not generate a patch.',
+      proposalProviderErrorMessage(upstream.status, Boolean(runtime)),
       'AI_UPSTREAM_ERROR',
       502,
       requestId
@@ -757,10 +798,17 @@ export async function testAssistantConnection(
       signal: AbortSignal.timeout(Math.min(runtime.timeoutMs, 30_000)),
       body: JSON.stringify({
         model: runtime.model,
-        input: 'Reply with OK.',
-        max_output_tokens: 16,
+        instructions:
+          'Return a short connection confirmation as an OpenZCAD message reply.',
+        input: 'Test the configured OpenZCAD AI connection.',
+        text: structuredReplyText(env),
+        max_output_tokens: Math.min(runtime.maxOutputTokens, 1_024),
         store: false,
-        ...reasoningRequest(runtime.reasoningEffort)
+        stream: true,
+        ...reasoningRequest(runtime.reasoningEffort),
+        ...(runtime.provider === 'openrouter'
+          ? { provider: { require_parameters: true } }
+          : {})
       })
     });
   } catch {
@@ -771,7 +819,7 @@ export async function testAssistantConnection(
   if (!response.ok) {
     await response.body?.cancel();
     throw new HttpAssistantConfigurationError(
-      `The AI provider rejected the connection test (${response.status}).`
+      connectionProviderErrorMessage(response.status)
     );
   }
   await response.body?.cancel();
