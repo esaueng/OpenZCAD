@@ -315,6 +315,13 @@ export interface ParameterNode extends BaseNode {
    * rule lives.
    */
   exposed?: boolean;
+  /**
+   * What this parameter means, for whoever meets the model through Tweak mode
+   * or a share link and never sees the feature that consumes it. Absent or
+   * blank simply shows nothing: a name like `wall_thickness` often needs no
+   * gloss, and an empty line under every row would be worse than none.
+   */
+  description?: string;
 }
 
 /**
