@@ -220,19 +220,15 @@ import { ViewModeRail } from './components/ViewModeRail';
 import { Sidebar } from './components/Sidebar';
 import { TweakPanel } from './components/TweakPanel';
 import { WorkspaceTour } from './components/WorkspaceTour';
-import { Inspector } from './components/Inspector';
-import { ModelingOperationsForm } from './components/forms/ModelingOperationsForm';
 import { StatusBar } from './components/StatusBar';
 import { StartScreen } from './components/StartScreen';
 import { StartupScreen } from './components/StartupScreen';
-import { SettingsPage, type AuthConfigStatus } from './components/SettingsPage';
+import type { AuthConfigStatus } from './components/SettingsPage';
 import {
-  buildDemoDocument,
   DEMO_DEFINITIONS,
   VISUAL_SELECTION_ACCEPTANCE_DEMO
-} from './lib/demos';
-import type { DemoDefinition } from './lib/demos';
-import { ProjectSharingDialog } from './components/ProjectSharingDialog';
+} from './lib/demoDefinitions';
+import type { DemoDefinition } from './lib/demoDefinitions';
 import { createProjectSharingClient } from './lib/projectSharing';
 import {
   captureProjectInvitationLink,
@@ -245,10 +241,9 @@ import {
 import { fetchSharedProject } from './lib/projectShareClient';
 import { ProjectConflictDialog } from './components/ProjectConflictDialog';
 import { SaveRevisionDialog } from './components/SaveRevisionDialog';
-import {
-  ExportDialog,
-  type ExportProgress,
-  type MeshExportDialogFormat
+import type {
+  ExportProgress,
+  MeshExportDialogFormat
 } from './components/ExportDialog';
 import type { GeometryWorkerState } from './worker/geometryWorker';
 
@@ -458,6 +453,48 @@ const LazyAssistantPanel = lazy(() =>
     default: module.AssistantPanel
   }))
 );
+/**
+ * Surfaces that open on a deliberate gesture, and so are not first paint.
+ *
+ * Settings is the largest single module in the app after the viewport, and it
+ * pulls the cloud-deletion dialog in behind it; sharing and export are modals
+ * that most sessions never open. Loading all three eagerly put their whole
+ * weight in the launcher chunk — before a project is even open — for the sake
+ * of a click that may never come.
+ */
+const LazySettingsPage = lazy(() =>
+  import('./components/SettingsPage').then((module) => ({
+    default: module.SettingsPage
+  }))
+);
+const LazyProjectSharingDialog = lazy(() =>
+  import('./components/ProjectSharingDialog').then((module) => ({
+    default: module.ProjectSharingDialog
+  }))
+);
+const LazyExportDialog = lazy(() =>
+  import('./components/ExportDialog').then((module) => ({
+    default: module.ExportDialog
+  }))
+);
+/**
+ * The edit panel, which only exists while something is being edited.
+ *
+ * `inspectorActive` gates it, so it is never on screen at first paint and
+ * often never in a session spent reading a model. Between them the two forms
+ * and the field library behind them were the largest workspace-only weight
+ * left in the launcher chunk.
+ */
+const LazyInspector = lazy(() =>
+  import('./components/Inspector').then((module) => ({
+    default: module.Inspector
+  }))
+);
+const LazyModelingOperationsForm = lazy(() =>
+  import('./components/forms/ModelingOperationsForm').then((module) => ({
+    default: module.ModelingOperationsForm
+  }))
+);
 
 function AssistantPanel(props: ComponentProps<typeof LazyAssistantPanel>) {
   return (
@@ -511,6 +548,50 @@ function SketchEntityEditor(
   return (
     <Suspense fallback={null}>
       <LazySketchEntityEditor {...props} />
+    </Suspense>
+  );
+}
+
+function SettingsPage(props: ComponentProps<typeof LazySettingsPage>) {
+  return (
+    <Suspense fallback={null}>
+      <LazySettingsPage {...props} />
+    </Suspense>
+  );
+}
+
+function ProjectSharingDialog(
+  props: ComponentProps<typeof LazyProjectSharingDialog>
+) {
+  return (
+    <Suspense fallback={null}>
+      <LazyProjectSharingDialog {...props} />
+    </Suspense>
+  );
+}
+
+function ExportDialog(props: ComponentProps<typeof LazyExportDialog>) {
+  return (
+    <Suspense fallback={null}>
+      <LazyExportDialog {...props} />
+    </Suspense>
+  );
+}
+
+function Inspector(props: ComponentProps<typeof LazyInspector>) {
+  return (
+    <Suspense fallback={null}>
+      <LazyInspector {...props} />
+    </Suspense>
+  );
+}
+
+function ModelingOperationsForm(
+  props: ComponentProps<typeof LazyModelingOperationsForm>
+) {
+  return (
+    <Suspense fallback={null}>
+      <LazyModelingOperationsForm {...props} />
     </Suspense>
   );
 }
@@ -6000,6 +6081,10 @@ export function App() {
         return;
       }
       setStatus(`Building ${definition.name}…`);
+      // The builders are only reachable from here, and only for a demo that
+      // has not been seeded yet — the branch above returns for every later
+      // open. Fetching them now keeps them out of first paint.
+      const { buildDemoDocument } = await import('./lib/demos');
       const document = await buildDemoDocument(
         definition,
         session?.userId ?? localUserId,

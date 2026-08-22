@@ -33,7 +33,7 @@ import {
 import { generateCutePartName } from '../lib/cutePartName';
 import { bucketProjectsByShelf, moveItem } from '../lib/projectShelf';
 import { syncRunTotals, type SyncEntry } from '../lib/syncRun';
-import type { DemoDefinition } from '../lib/demos';
+import type { DemoDefinition } from '../lib/demoDefinitions';
 import { BrandMark } from './BrandMark';
 import { PartThumbnail } from './PartThumbnail';
 
