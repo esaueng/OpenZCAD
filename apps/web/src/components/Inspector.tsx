@@ -1070,13 +1070,19 @@ export function Inspector(props: InspectorProps) {
           <span>
             {data.operation.kind === 'resize-through-hole'
               ? 'resize through hole'
-              : data.operation.kind === 'resize-cylindrical-face'
-                ? 'resize cylinder radius'
-                : data.operation.kind === 'resize-blend'
-                  ? 'resize imported blend'
-                  : data.operation.kind === 'offset-face'
-                    ? 'offset face'
-                    : 'remove face feature'}
+              : data.operation.kind === 'resize-imported-blind-hole'
+                ? 'parameterize imported blind hole'
+                : data.operation.kind === 'resize-imported-counterbore'
+                  ? 'parameterize imported counterbore'
+                  : data.operation.kind === 'resize-imported-countersink'
+                    ? 'parameterize imported countersink'
+                    : data.operation.kind === 'resize-cylindrical-face'
+                      ? 'resize cylinder radius'
+                      : data.operation.kind === 'resize-blend'
+                        ? 'resize imported blend'
+                        : data.operation.kind === 'offset-face'
+                          ? 'offset face'
+                          : 'remove face feature'}
           </span>
           <b>source face</b>
           <span>
@@ -1088,6 +1094,34 @@ export function Inspector(props: InspectorProps) {
             <>
               <b>diameter</b>
               <span>{String(data.operation.diameter)}</span>
+            </>
+          )}
+          {data.operation.kind === 'resize-imported-blind-hole' && (
+            <>
+              <b>diameter</b>
+              <span>{String(data.operation.diameter)}</span>
+              <b>depth</b>
+              <span>{String(data.operation.depth)}</span>
+            </>
+          )}
+          {data.operation.kind === 'resize-imported-counterbore' && (
+            <>
+              <b>bore diameter</b>
+              <span>{String(data.operation.boreDiameter)}</span>
+              <b>counterbore diameter</b>
+              <span>{String(data.operation.counterboreDiameter)}</span>
+              <b>counterbore depth</b>
+              <span>{String(data.operation.counterboreDepth)}</span>
+            </>
+          )}
+          {data.operation.kind === 'resize-imported-countersink' && (
+            <>
+              <b>bore diameter</b>
+              <span>{String(data.operation.boreDiameter)}</span>
+              <b>sink diameter</b>
+              <span>{String(data.operation.sinkDiameter)}</span>
+              <b>included angle (rad)</b>
+              <span>{String(data.operation.angleRadians)}</span>
             </>
           )}
           {data.operation.kind === 'resize-cylindrical-face' && (

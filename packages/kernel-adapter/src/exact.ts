@@ -48,6 +48,10 @@ import {
   measureOwnedFaceGeometry
 } from './exact-measure';
 import {
+  collectRecognizedImportedFeatures,
+  type ImportedRecognitionFaceIdentity
+} from './imported-feature-query';
+import {
   collapseShape
 } from './exact-boolean-helpers';
 import {
@@ -242,6 +246,35 @@ export interface ExactKernelAdapterOptions {
    * happen — correctness alone cannot distinguish a hit from a rebuild.
    */
   onRebuildCacheEvent?: (event: RebuildCacheEvent) => void;
+}
+
+/** Bodies whose exact geometry descends from an imported STEP feature. */
+function importedExactBodyIds(document: ProjectDocument): Set<BodyId> {
+  const imported = new Set<BodyId>();
+  for (const feature of listFeaturesInOrder(document)) {
+    if (isFeatureSuppressed(feature)) {
+      continue;
+    }
+    const data = feature.data;
+    if (data.featureKind === 'imported-step' && feature.bodyId) {
+      imported.add(feature.bodyId);
+      continue;
+    }
+    const targetIsImported =
+      'targetBodyId' in data &&
+      data.targetBodyId !== undefined &&
+      imported.has(data.targetBodyId);
+    const booleanUsesImported =
+      data.featureKind === 'boolean' &&
+      data.targetBodyIds.some((bodyId) => imported.has(bodyId));
+    if ((targetIsImported || booleanUsesImported) && feature.bodyId) {
+      imported.add(feature.bodyId);
+    }
+    if (targetIsImported && data.featureKind === 'split') {
+      imported.add(data.secondBodyId);
+    }
+  }
+  return imported;
 }
 
 /**
@@ -573,7 +606,8 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
   private measureShape(
     kernel: RemusKernel,
     shape: ExactShape,
-    strictBooleanValidation = false
+    strictBooleanValidation = false,
+    recognizeImportedFeatures = false
   ): MeasuredShape {
     if (shape.solids.length === 0) {
       throw new Error('Exact body contains no solids.');
@@ -618,6 +652,10 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
       // them, and face handles are only observed to be globally unique, not
       // contracted to be.
       const faceHashByHandle = new Map<number, number>();
+      const recognitionIdentities = new Map<
+        number,
+        ImportedRecognitionFaceIdentity
+      >();
       // Vertex handle -> body-scoped id, for the same reason and with the same
       // scoping: `getSolidVertices` is per solid, and vertex handles are only
       // observed to be globally unique, not contracted to be. Numbered from
@@ -683,6 +721,10 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
             });
           }
           faceHashByHandle.set(handle, hash);
+          recognitionIdentities.set(handle, {
+            hash,
+            ...(verifiedReference ? { reference: verifiedReference } : {})
+          });
           topology.faces.push({
             topologyId: `face:${hash}`,
             hash,
@@ -694,6 +736,17 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
         }
       } finally {
         mesh.free();
+      }
+      if (recognizeImportedFeatures) {
+        const recognized = collectRecognizedImportedFeatures(
+          kernel,
+          solid,
+          recognitionIdentities
+        );
+        if (recognized.length > 0) {
+          topology.recognizedImportedFeatures ??= [];
+          topology.recognizedImportedFeatures.push(...recognized);
+        }
       }
 
       // Use the kernel's adaptive exact-curve sampler with the same chordal and
@@ -840,6 +893,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
           feature
         ])
       );
+      const importedBodyIds = importedExactBodyIds(document);
       const bodyRepresentations: Record<BodyId, BodyRepresentation> = {};
       const exportableBodyIds: BodyId[] = [];
       // Entries for bodies this build no longer produces are dead weight —
@@ -864,6 +918,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
           !consumed &&
           feature?.data.featureKind === 'boolean' &&
           feature.data.operation === 'union';
+        const recognizeImportedFeatures = importedBodyIds.has(bodyId);
         // Tessellation dominates a sync once the prefix cache removed the
         // replay cost, so an unchanged body serves its previous measurement.
         // Handle identity is the key (see MeasuredBodyCacheEntry); the
@@ -876,6 +931,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
           cached &&
           cached.solidKey === solidKey &&
           cached.strict === requiresStrictUnionValidation &&
+          cached.recognizedImportedFeatures === recognizeImportedFeatures &&
           countFaceHandles(kernel, shape.solids) ===
             cached.faceHandleCount
         ) {
@@ -885,12 +941,14 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
           measured = this.measureShape(
             kernel,
             shape,
-            requiresStrictUnionValidation
+            requiresStrictUnionValidation,
+            recognizeImportedFeatures
           );
           remeasured += 1;
           this.storeMeasuredShape(bodyId, {
             solidKey,
             strict: requiresStrictUnionValidation,
+            recognizedImportedFeatures: recognizeImportedFeatures,
             faceHandleCount: countFaceHandles(kernel, shape.solids),
             bytes: measuredShapeBytes(measured),
             measured

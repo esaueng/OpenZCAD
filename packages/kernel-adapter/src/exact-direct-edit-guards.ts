@@ -65,6 +65,88 @@ export function assertDirectEditOperation(operation: DirectEditOperation): void 
         throw new Error('Direct-edit parameter binding is invalid.');
       }
       return;
+    case 'resize-imported-blind-hole':
+      assertDirectEditVector(value.sourceOpeningPoint, 'source opening point');
+      assertDirectEditVector(
+        value.sourceAxisDirection,
+        'source axis direction'
+      );
+      if (
+        assertFiniteDirectEditNumber(value.sourceDiameter, 'source diameter') <=
+          0 ||
+        assertFiniteDirectEditNumber(value.sourceDepth, 'source depth') <= 0
+      ) {
+        throw new Error(
+          'Direct-edit imported blind-hole source dimensions must be greater than zero.'
+        );
+      }
+      assertDirectEditParam(value.diameter, 'diameter');
+      assertDirectEditParam(value.depth, 'depth');
+      if (
+        value.parameterBinding !== undefined &&
+        value.parameterBinding !== true
+      ) {
+        throw new Error('Direct-edit parameter binding is invalid.');
+      }
+      return;
+    case 'resize-imported-counterbore':
+      assertDirectEditVector(value.sourceOpeningPoint, 'source opening point');
+      assertDirectEditVector(
+        value.sourceAxisDirection,
+        'source axis direction'
+      );
+      for (const [source, label] of [
+        [value.sourceBoreDiameter, 'source bore diameter'],
+        [value.sourceCounterboreDiameter, 'source counterbore diameter'],
+        [value.sourceCounterboreDepth, 'source counterbore depth'],
+        [value.sourceTotalDepth, 'source total depth']
+      ] as const) {
+        if (assertFiniteDirectEditNumber(source, label) <= 0) {
+          throw new Error(`Direct-edit ${label} must be greater than zero.`);
+        }
+      }
+      if (typeof value.sourceEntryChamfered !== 'boolean') {
+        throw new Error(
+          'Direct-edit source entry-chamfer state must be boolean.'
+        );
+      }
+      assertDirectEditParam(value.boreDiameter, 'bore diameter');
+      assertDirectEditParam(value.counterboreDiameter, 'counterbore diameter');
+      assertDirectEditParam(value.counterboreDepth, 'counterbore depth');
+      if (
+        value.parameterBinding !== undefined &&
+        value.parameterBinding !== true
+      ) {
+        throw new Error('Direct-edit parameter binding is invalid.');
+      }
+      return;
+    case 'resize-imported-countersink':
+      assertDirectEditVector(value.sourceOpeningPoint, 'source opening point');
+      assertDirectEditVector(
+        value.sourceAxisDirection,
+        'source axis direction'
+      );
+      for (const [source, label] of [
+        [value.sourceBoreDiameter, 'source bore diameter'],
+        [value.sourceSinkDiameter, 'source sink diameter'],
+        [value.sourceAngleRadians, 'source included angle'],
+        [value.sourceCountersinkDepth, 'source countersink depth'],
+        [value.sourceTotalDepth, 'source total depth']
+      ] as const) {
+        if (assertFiniteDirectEditNumber(source, label) <= 0) {
+          throw new Error(`Direct-edit ${label} must be greater than zero.`);
+        }
+      }
+      assertDirectEditParam(value.boreDiameter, 'bore diameter');
+      assertDirectEditParam(value.sinkDiameter, 'sink diameter');
+      assertDirectEditParam(value.angleRadians, 'included angle');
+      if (
+        value.parameterBinding !== undefined &&
+        value.parameterBinding !== true
+      ) {
+        throw new Error('Direct-edit parameter binding is invalid.');
+      }
+      return;
     case 'remove-face-feature': {
       if (
         typeof value.sourceSurfaceType !== 'string' ||
