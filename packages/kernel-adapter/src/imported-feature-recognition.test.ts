@@ -156,6 +156,54 @@ describe('recognizeImportedFeature', () => {
     }
   });
 
+  it('keeps a chamfered entry grouped with its counterbore', () => {
+    const graph = new ExactGraph()
+      .add({
+        id: 'entry-chamfer',
+        surface: {
+          kind: 'cone',
+          axisOrigin: ORIGIN,
+          axisDirection: Z_AXIS,
+          axialStart: 0,
+          axialEnd: 1,
+          radiusAtStart: 5,
+          radiusAtEnd: 4,
+          semiAngleRadians: Math.PI / 4,
+          sweepRadians: Math.PI * 2,
+          radialSense: 'toward-axis'
+        }
+      })
+      .add(cylinder('outer', 4, 1, 3, 'toward-axis'))
+      .add(cylinder('inner', 2, 3, 8, 'toward-axis'))
+      .add(plane('opening', 0, 200))
+      .add(plane('step', 3, Math.PI * 12))
+      .add(plane('bottom', 8, Math.PI * 4))
+      .link('entry-chamfer', 'opening', 'concave', 'circle', true)
+      .link('entry-chamfer', 'outer', 'concave', 'circle', true)
+      .link('outer', 'step', 'concave', 'circle', true)
+      .link('inner', 'step', 'concave', 'circle', true)
+      .link('inner', 'bottom', 'concave', 'circle', true);
+
+    for (const seed of ['outer', 'inner']) {
+      expect(expectRecognized(graph, seed).proof).toMatchObject({
+        kind: 'counterbore',
+        outerDiameter: 8,
+        innerDiameter: 4,
+        counterboreDepth: 3,
+        totalDepth: 8,
+        entryChamferFaceId: 'entry-chamfer',
+        participatingFaceIds: [
+          'bottom',
+          'entry-chamfer',
+          'inner',
+          'opening',
+          'outer',
+          'step'
+        ]
+      });
+    }
+  });
+
   it('proves a countersink and keeps the included angle authoritative', () => {
     const graph = new ExactGraph()
       .add({
