@@ -92,6 +92,22 @@ describe('AI exact patch preflight', () => {
     expect(base).toEqual(snapshot);
   });
 
+  it('reports every feature that failed exact preflight', async () => {
+    const base = createProjectDocument('AI', toUserId('user_ai'));
+
+    await expect(
+      preflightCadPatch(base, proposal, async (candidate) => ({
+        ...exactDerived(candidate),
+        warnings: [
+          'Feature "Parameterize plate hole 2": Direct-edit face is stale.',
+          'Feature "Parameterize plate fillet 3": Blend is not analytic.'
+        ]
+      }))
+    ).rejects.toThrow(
+      /Parameterize plate hole 2[\s\S]*Parameterize plate fillet 3/
+    );
+  });
+
   it('does not reclassify a pre-existing exact warning as a patch failure', async () => {
     const base = createProjectDocument('AI', toUserId('user_ai'));
     base.derived.warnings = ['Existing legacy warning'];

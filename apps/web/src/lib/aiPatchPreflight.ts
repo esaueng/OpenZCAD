@@ -65,6 +65,16 @@ function newExactWarnings(
   return derived.warnings.filter((warning) => !existing.has(warning));
 }
 
+function exactWarningsError(warnings: readonly string[]): Error {
+  return new Error(
+    warnings.length === 1
+      ? warnings[0]
+      : `Exact geometry preflight failed:\n${warnings
+          .map((warning) => `- ${warning}`)
+          .join('\n')}`
+  );
+}
+
 function sortedStrings(values: readonly string[]): string[] {
   return [...values].sort((left, right) => left.localeCompare(right));
 }
@@ -282,7 +292,7 @@ async function materializePatchCommands(
   const prefixDerived = await derive(prefixCandidate);
   const prefixWarnings = newExactWarnings(base, prefixDerived);
   if (prefixWarnings.length > 0) {
-    throw new Error(prefixWarnings[0]);
+    throw exactWarningsError(prefixWarnings);
   }
   const exactPrefix = { ...prefixCandidate, derived: prefixDerived };
   const edges = selectedExactEdges(exactPrefix, targetBodyId, staged.operation);
@@ -320,7 +330,7 @@ export async function preflightCadPatch(
   const derived = await derive(candidate);
   const warnings = newExactWarnings(base, derived);
   if (warnings.length > 0) {
-    throw new Error(warnings[0]);
+    throw exactWarningsError(warnings);
   }
   const targets = exactPatchTargets(commands);
   const missing = targets.find(

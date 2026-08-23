@@ -166,7 +166,7 @@ export function resizeThroughHole(
   face: number,
   operation: Extract<DirectEditOperation, { kind: 'resize-through-hole' }>,
   scope: Record<string, number>
-): number {
+): { solid: number; changed: boolean } {
   const geometry = requireThroughHole(
     kernel,
     solid,
@@ -190,7 +190,7 @@ export function resizeThroughHole(
   );
   if (Math.abs(radius - geometry.radius) <= radiusTolerance) {
     if (operation.parameterBinding) {
-      return solid;
+      return { solid, changed: false };
     }
     throw new Error(
       'Through-hole diameter must differ from its current diameter.'
@@ -272,7 +272,7 @@ export function resizeThroughHole(
         : `The kernel returned no analytic bore at diameter ${diameter} — the wall came back as a mesh approximation.`
     );
   }
-  return output;
+  return { solid: output, changed: true };
 }
 
 /**
@@ -399,9 +399,10 @@ export function applyDirectEdit(
     operation
   );
   if (operation.kind === 'resize-through-hole') {
-    return {
-      solids: [resizeThroughHole(kernel, solid, face, operation, scope)]
-    };
+    const resized = resizeThroughHole(kernel, solid, face, operation, scope);
+    // Keeping only the same solid handle would still discard the imported
+    // semantic face map and make the next no-op binding stale.
+    return resized.changed ? { solids: [resized.solid] } : target;
   }
 
   const geometry = measureFaceGeometry(kernel, face);
