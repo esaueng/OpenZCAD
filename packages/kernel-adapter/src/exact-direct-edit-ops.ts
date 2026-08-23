@@ -20,10 +20,9 @@ import {
   topologyCandidatesForSolid
 } from './exact-lineage-builders';
 import {
-  blendCarrierSnapshot,
   classifyThroughHoleFace,
   measureFaceGeometry,
-  measureOwnedFaceGeometry,
+  requireBlendRegion,
   requireThroughHole
 } from './exact-measure';
 import {
@@ -1019,22 +1018,18 @@ export function applyDirectEdit(
   }
 
   if (operation.kind === 'resize-blend') {
-    const snapshot = blendCarrierSnapshot(
-      measureOwnedFaceGeometry(kernel, solid, face)
+    const snapshot = requireBlendRegion(
+      kernel,
+      solid,
+      face,
+      operation.recordedRadius
     );
-    if (!snapshot || snapshot.surfaceClass !== operation.surfaceClass) {
+    if (snapshot.surfaceClass !== operation.surfaceClass) {
       throw new Error(
         `The selected face is no longer an analytic ${operation.surfaceClass} blend.`
       );
     }
     const radiusTolerance = Math.max(operation.recordedRadius * 1e-5, 1e-9);
-    if (
-      Math.abs(snapshot.radius - operation.recordedRadius) > radiusTolerance
-    ) {
-      throw new Error(
-        'The selected blend no longer matches its recorded radius.'
-      );
-    }
     const carrierTolerance = Math.max(operation.recordedRadius * 1e-5, 1e-6);
     if (
       length(subtract(snapshot.center, operation.recordedCenter)) >
@@ -1062,6 +1057,9 @@ export function applyDirectEdit(
       throw new Error('Blend radius must be zero or greater.');
     }
     if (Math.abs(newRadius - snapshot.radius) <= radiusTolerance) {
+      if (operation.parameterBinding) {
+        return target;
+      }
       throw new Error('Blend radius must differ from its current radius.');
     }
     const output = kernel.resizeBlend(
