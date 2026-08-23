@@ -662,6 +662,7 @@ import { directEditRejection } from './lib/directEdit';
 import { validatedFeatureRejection } from './lib/featureValidation';
 import { useCollaboration } from './lib/useCollaboration';
 import { preflightCadPatch } from './lib/aiPatchPreflight';
+import type { AssistantPreviewOutcome } from './components/assistant/AssistantPanel';
 import {
   clearUnresolvedConflict,
   conflictFromDocuments,
@@ -7202,16 +7203,16 @@ export function App() {
 
   async function handlePreviewPatch(
     proposal: CadPatchProposal | null
-  ): Promise<boolean> {
+  ): Promise<AssistantPreviewOutcome> {
     const epoch = ++aiPreviewEpochRef.current;
     if (!proposal) {
       setPreviewDoc(null);
       setStatus('Preview cleared.');
-      return true;
+      return { ok: true };
     }
     const current = managerRef.current?.document;
     if (!current) {
-      return false;
+      return { ok: false, reason: 'No project is open to preview.' };
     }
     try {
       setStatus('Validating AI preview with the exact geometry kernel…');
@@ -7227,18 +7228,27 @@ export function App() {
         live.projectId !== current.projectId ||
         live.version !== current.version
       ) {
-        return false;
+        return {
+          ok: false,
+          reason:
+            'The document changed during exact AI preflight. Review the refreshed proposal.'
+        };
       }
       setPreviewDoc(preflight.candidate);
       setStatus('Previewing exact proposed geometry.');
-      return true;
+      return { ok: true };
     } catch (error) {
       if (epoch !== aiPreviewEpochRef.current) {
-        return false;
+        return {
+          ok: false,
+          reason:
+            'The document changed during exact AI preflight. Review the refreshed proposal.'
+        };
       }
       setPreviewDoc(null);
-      setStatus(errorMessage(error, 'Patch preview failed.'));
-      return false;
+      const reason = errorMessage(error, 'Patch preview failed.');
+      setStatus(reason);
+      return { ok: false, reason };
     }
   }
 
