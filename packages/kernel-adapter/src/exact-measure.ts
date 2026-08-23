@@ -386,6 +386,16 @@ export function measureOwnedFaceGeometry(
           : undefined;
     if (blendRadius !== undefined) {
       geometry.blendRadius = blendRadius;
+      const region = measureBlendRegion(kernel, solid, face);
+      if (
+        region &&
+        Math.abs(region.radius - blendRadius) <=
+          Math.max(blendRadius * 1e-5, 1e-9)
+      ) {
+        geometry.editableDimension = 'blendRadius';
+        geometry.blendRegionKey = region.key;
+        geometry.blendRegionFaceCount = region.faces.length;
+      }
     }
   } else if (
     geometry.surfaceType === 'cylinder' &&
@@ -403,6 +413,59 @@ export interface BlendCarrierSnapshot {
   radius: number;
   center: Vec3;
   axis: Vec3;
+}
+
+export interface BlendRegionMeasurement {
+  faces: number[];
+  radius: number;
+  key: string;
+}
+
+/** Read one exact kernel grouping proof without trusting JS-side adjacency. */
+export function measureBlendRegion(
+  kernel: RemusKernel,
+  solid: number,
+  face: number
+): BlendRegionMeasurement | null {
+  try {
+    const value: unknown = JSON.parse(kernel.getBlendRegion(solid, face));
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+      return null;
+    }
+    const candidate = value as { faces?: unknown; radius?: unknown };
+    if (
+      !Array.isArray(candidate.faces) ||
+      candidate.faces.length === 0 ||
+      typeof candidate.radius !== 'number' ||
+      !Number.isFinite(candidate.radius) ||
+      candidate.radius <= 0
+    ) {
+      return null;
+    }
+    const faces = candidate.faces.filter(
+      (handle): handle is number =>
+        typeof handle === 'number' &&
+        Number.isSafeInteger(handle) &&
+        handle >= 0 &&
+        handle <= 0xffff_ffff
+    );
+    if (
+      faces.length !== candidate.faces.length ||
+      new Set(faces).size !== faces.length ||
+      !faces.includes(face)
+    ) {
+      return null;
+    }
+    faces.sort((left, right) => left - right);
+    return {
+      faces,
+      radius: candidate.radius,
+      key: `${solid}:${faces.join(',')}`
+    };
+  } catch {
+    // Older pins and unsupported analytic regions both fail closed here.
+    return null;
+  }
 }
 
 /** Exact analytic identity used to authorize and re-check a blend edit. */
@@ -441,6 +504,45 @@ export function blendCarrierSnapshot(
     };
   }
   return null;
+}
+
+export interface BlendRegionSnapshot extends BlendCarrierSnapshot {
+  regionKey: string;
+  faceCount: number;
+}
+
+/** Re-prove a recorded blend seed, its carrier, region, and source radius. */
+export function requireBlendRegion(
+  kernel: RemusKernel,
+  solid: number,
+  face: number,
+  sourceRadius: number
+): BlendRegionSnapshot {
+  const geometry = measureOwnedFaceGeometry(kernel, solid, face);
+  const carrier = blendCarrierSnapshot(geometry);
+  if (
+    !carrier ||
+    geometry?.editableDimension !== 'blendRadius' ||
+    !geometry.blendRegionKey ||
+    geometry.blendRegionFaceCount === undefined
+  ) {
+    throw new Error(
+      'Selected face is not a proven constant-radius analytic blend region.'
+    );
+  }
+  if (
+    Math.abs(carrier.radius - sourceRadius) >
+    Math.max(sourceRadius * 1e-5, 1e-9)
+  ) {
+    throw new Error(
+      'The selected blend no longer matches its recorded radius.'
+    );
+  }
+  return {
+    ...carrier,
+    regionKey: geometry.blendRegionKey,
+    faceCount: geometry.blendRegionFaceCount
+  };
 }
 
 /**
