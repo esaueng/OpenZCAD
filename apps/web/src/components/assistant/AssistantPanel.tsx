@@ -75,13 +75,18 @@ import { ProposalCard } from './ProposalCard';
 import { RichText } from './RichText';
 import { AssistantLauncher } from './AssistantLauncher';
 
+export type AssistantPreviewOutcome =
+  { ok: true } | { ok: false; reason: string };
+
 interface AssistantPanelProps {
   document: ProjectDocument;
   selection: CadSelectionContext;
   /** Returns false when the patch could not be applied, so the panel can say so. */
   onApply(proposal: CadPatchProposal): Promise<boolean>;
-  /** Returns false when the patch could not be previewed. */
-  onPreview(proposal: CadPatchProposal | null): Promise<boolean>;
+  /** Returns the exact rejection reason when the patch could not be previewed. */
+  onPreview(
+    proposal: CadPatchProposal | null
+  ): Promise<AssistantPreviewOutcome>;
   collapsed: boolean;
   onCollapsedChange(collapsed: boolean): void;
   /**
@@ -511,9 +516,10 @@ export function AssistantPanel({
           const proposal = parseCadPatchProposal(
             structuredClone(verifiedSuggestion.proposal)
           );
-          if (!(await onPreview(proposal))) {
+          const preview = await onPreview(proposal);
+          if (!preview.ok) {
             throw new Error(
-              'This verified recipe did not pass exact geometry preflight. Nothing was changed; see the activity log for the exact feature failure.'
+              `This verified recipe did not pass exact geometry preflight. Nothing was changed.\n\n${preview.reason}`
             );
           }
           const entryId = nextEntryId('reply');
@@ -552,10 +558,13 @@ export function AssistantPanel({
             onDelta: (partial) => setProgress(readAssistantProgress(partial))
           }
         );
-        if (reply.kind === 'patch' && !(await onPreview(reply.proposal))) {
-          throw new Error(
-            'The proposed change did not pass exact geometry preflight. Nothing was changed; see the activity log for the exact feature failure.'
-          );
+        if (reply.kind === 'patch') {
+          const preview = await onPreview(reply.proposal);
+          if (!preview.ok) {
+            throw new Error(
+              `The proposed change did not pass exact geometry preflight. Nothing was changed.\n\n${preview.reason}`
+            );
+          }
         }
         const entryId = nextEntryId('reply');
         dispatch({
@@ -690,10 +699,9 @@ export function AssistantPanel({
       dispatch({ type: 'preview', entryId: null });
       return;
     }
-    if (!(await onPreview(proposal))) {
-      setNotice(
-        'That patch could not be previewed. See the status bar for details.'
-      );
+    const preview = await onPreview(proposal);
+    if (!preview.ok) {
+      setNotice(`That patch could not be previewed: ${preview.reason}`);
       return;
     }
     dispatch({ type: 'preview', entryId });

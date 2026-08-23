@@ -1946,6 +1946,9 @@ test('rejects a disconnected Union proposed by the assistant before commit', asy
   await page.getByLabel('CAD change request').press('Enter');
   const failure = page.locator('.assistant-card.message.error');
   await expect(failure).toContainText('did not pass exact geometry preflight');
+  await expect(failure).toContainText(
+    'Feature "AI disconnected Union": Union does not fill empty space.'
+  );
   await expect(page.getByRole('contentinfo')).toContainText(
     'Union does not fill empty space.'
   );

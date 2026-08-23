@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
   parseCadPatchProposal,
   type CadSelectionContext
@@ -17,10 +17,15 @@ import {
   listParameters
 } from '@openzcad/document-core';
 import {
+  createExactKernelAdapter,
+  type ExactKernelAdapter
+} from '@openzcad/kernel-adapter/exact';
+import {
   toUserId,
   type FaceTopologyReferenceV5,
   type ProjectDocument
 } from '@openzcad/shared';
+import { preflightCadPatch } from '../apps/web/src/lib/aiPatchPreflight';
 
 const noSelection: CadSelectionContext = {
   featureIds: [],
@@ -54,6 +59,92 @@ function nativeDocument(): ProjectDocument {
     })
   );
   return manager.document;
+}
+
+async function importedTwoHoleDocument(
+  adapter: ExactKernelAdapter
+): Promise<ProjectDocument> {
+  const source = new CommandManager(
+    createProjectDocument('Two-hole source', toUserId('user_auto_two_holes'))
+  );
+  source.execute(
+    commandFactories.addPrimitive({
+      name: 'Plate',
+      primitiveKind: 'box',
+      dimensions: { width: 30, height: 20, depth: 8 }
+    })
+  );
+
+  const topFace = (
+    document: ProjectDocument,
+    bodyId: ProjectDocument['bodyOrder'][number]
+  ) => {
+    const body = document.derived.bodyRepresentations[bodyId];
+    const face = body?.topology?.faces.find(
+      (candidate) =>
+        candidate.geometry?.surfaceType === 'plane' &&
+        Math.abs(candidate.geometry.center.z - 8) <= 1e-6
+    );
+    if (!face) {
+      throw new Error('Expected the plate top face.');
+    }
+    return face;
+  };
+
+  source.document.derived = await adapter.syncDocument(source.document);
+  const plateBodyId = source.document.bodyOrder[0]!;
+  const firstTop = topFace(source.document, plateBodyId);
+  source.execute(
+    commandFactories.holeBody({
+      name: 'First bore',
+      targetBodyId: plateBodyId,
+      faceHash: firstTop.hash,
+      ...(firstTop.reference ? { faceReference: firstTop.reference } : {}),
+      style: 'simple',
+      diameter: 4,
+      depthMode: 'through',
+      position: { u: -6, v: 0 }
+    })
+  );
+
+  source.document.derived = await adapter.syncDocument(source.document);
+  const firstHoleBodyId = source.document.bodyOrder.at(-1)!;
+  const secondTop = topFace(source.document, firstHoleBodyId);
+  source.execute(
+    commandFactories.holeBody({
+      name: 'Second bore',
+      targetBodyId: firstHoleBodyId,
+      faceHash: secondTop.hash,
+      ...(secondTop.reference ? { faceReference: secondTop.reference } : {}),
+      style: 'simple',
+      diameter: 4,
+      depthMode: 'through',
+      position: { u: 6, v: 0 }
+    })
+  );
+
+  const twoHoleBodyId = source.document.bodyOrder.at(-1)!;
+  source.document.derived = await adapter.syncDocument(source.document);
+  expect(source.document.derived.warnings).toEqual([]);
+  const stepText = await adapter.exportStep(source.document, [twoHoleBodyId]);
+
+  const imported = new CommandManager(
+    createProjectDocument(
+      'Imported two-hole plate',
+      toUserId('user_auto_import')
+    )
+  );
+  imported.execute(
+    commandFactories.importStep({
+      name: 'Imported two-hole plate',
+      artifactId: 'artifact_two_hole_plate',
+      sourceName: 'two-hole-plate.step',
+      stepText
+    })
+  );
+  imported.document.derived = await adapter.syncDocument(imported.document);
+  expect(imported.document.derived.warnings).toEqual([]);
+  return imported.document;
 }
 
 describe('assistant auto-parameterization', () => {
@@ -287,3 +378,82 @@ describe('assistant auto-parameterization', () => {
     ).toBeNull();
   });
 });
+
+describe(
+  'assistant imported multi-hole auto-parameterization',
+  { timeout: 120_000 },
+  () => {
+    let adapter: ExactKernelAdapter;
+    let imported: ProjectDocument;
+
+    beforeAll(async () => {
+      adapter = await createExactKernelAdapter();
+      imported = await importedTwoHoleDocument(adapter);
+    });
+
+    afterAll(() => {
+      adapter.dispose();
+    });
+
+    it('preflights and applies multiple no-op bindings without changing geometry', async () => {
+      const bodyId = imported.bodyOrder[0]!;
+      const before = imported.derived.bodyRepresentations[bodyId]!;
+      const proposal = createAutoParameterizeProposal(imported, noSelection);
+      expect(
+        proposal?.operations.filter(
+          (operation) => operation.kind === 'add_direct_edit'
+        )
+      ).toHaveLength(2);
+
+      const preflight = await preflightCadPatch(
+        imported,
+        proposal!,
+        (candidate) => adapter.syncDocument(candidate)
+      );
+      const applied = new CommandManager(imported).runTransaction(
+        'Apply auto-parameterization',
+        preflight.commands
+      );
+      applied.derived = await adapter.syncDocument(applied);
+
+      const bindings = listFeaturesInOrder(applied).filter(
+        (feature) =>
+          feature.data.featureKind === 'direct-edit' &&
+          feature.data.operation.kind === 'resize-through-hole' &&
+          feature.data.operation.parameterBinding
+      );
+      expect(bindings).toHaveLength(2);
+      const after = applied.derived.bodyRepresentations[bodyId]!;
+      expect(after.mesh.vertices).toEqual(before.mesh.vertices);
+      expect(after.mesh.indices).toEqual(before.mesh.indices);
+      expect(after.volume).toBe(before.volume);
+      expect(after.faceCount).toBe(before.faceCount);
+      expect(
+        after.topology?.faces.map((face) => face.reference)
+      ).toEqual(before.topology?.faces.map((face) => face.reference));
+    });
+
+    it('still rejects a genuinely stale face reference on the no-op path', async () => {
+      const proposal = structuredClone(
+        createAutoParameterizeProposal(imported, noSelection)!
+      );
+      const directEdit = proposal.operations.find(
+        (operation) => operation.kind === 'add_direct_edit'
+      );
+      if (
+        !directEdit ||
+        directEdit.operation.kind !== 'resize-through-hole' ||
+        !directEdit.operation.faceReference
+      ) {
+        throw new Error('Expected an imported through-hole binding.');
+      }
+      directEdit.operation.faceReference.lineageName += '.stale';
+
+      await expect(
+        preflightCadPatch(imported, proposal, (candidate) =>
+          adapter.syncDocument(candidate)
+        )
+      ).rejects.toThrow(/Direct-edit face is stale/);
+    });
+  }
+);
