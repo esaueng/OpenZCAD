@@ -103,10 +103,7 @@ type RequiredFaceReference<T extends DirectEditOperation> = Omit<
   faceReference: FaceTopologyReferenceV5;
 };
 
-type AssistantDirectEditOperation = Exclude<
-  DirectEditOperation,
-  { kind: 'resize-blend' }
->;
+type AssistantDirectEditOperation = DirectEditOperation;
 
 export type CadDirectEditOperation =
   AssistantDirectEditOperation extends infer Operation
@@ -339,6 +336,9 @@ export interface CadDigestFaceSnapshot {
   axisStart?: Vector3;
   axisEnd?: Vector3;
   axialLength?: number;
+  torusCenter?: Vector3;
+  axis?: Vector3;
+  blendRadius?: number;
   featureType?: FaceGeometry['featureType'];
 }
 
@@ -651,6 +651,13 @@ function compactFace(
         ...(geometry.axisEnd ? { axisEnd: { ...geometry.axisEnd } } : {}),
         ...(geometry.axialLength !== undefined
           ? { axialLength: geometry.axialLength }
+          : {}),
+        ...(geometry.torusCenter
+          ? { torusCenter: { ...geometry.torusCenter } }
+          : {}),
+        ...(geometry.axis ? { axis: { ...geometry.axis } } : {}),
+        ...(geometry.blendRadius !== undefined
+          ? { blendRadius: geometry.blendRadius }
           : {}),
         ...(geometry.featureType ? { featureType: geometry.featureType } : {})
       }
@@ -1545,6 +1552,30 @@ const directEditOperationSchema = {
         'sourceAxisEnd',
         'concavity',
         'radius'
+      ]
+    },
+    {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        kind: { type: 'string', const: 'resize-blend' },
+        faceHash: { type: 'integer', minimum: 1 },
+        faceReference: faceReferenceSchema,
+        surfaceClass: { type: 'string', enum: ['torus', 'cylinder'] },
+        recordedRadius: { type: 'number', exclusiveMinimum: 0 },
+        recordedCenter: numberVectorSchema,
+        recordedAxis: numberVectorSchema,
+        newRadius: scalarSchema
+      },
+      required: [
+        'kind',
+        'faceHash',
+        'faceReference',
+        'surfaceClass',
+        'recordedRadius',
+        'recordedCenter',
+        'recordedAxis',
+        'newRadius'
       ]
     }
   ]
@@ -2892,7 +2923,16 @@ export function parseCadPatchProposal(
             edit.sourceRadius > 0 &&
             commonAxis &&
             ['hole', 'boss'].includes(String(edit.concavity)) &&
-            isScalar(edit.radius));
+            isScalar(edit.radius)) ||
+          (edit.kind === 'resize-blend' &&
+            ['torus', 'cylinder'].includes(String(edit.surfaceClass)) &&
+            typeof edit.recordedRadius === 'number' &&
+            edit.recordedRadius > 0 &&
+            isNumberVector(edit.recordedCenter) &&
+            isNumberVector(edit.recordedAxis) &&
+            isScalar(edit.newRadius) &&
+            (edit.parameterBinding === undefined ||
+              edit.parameterBinding === true));
         if (!valid) {
           throw new Error('Invalid add_direct_edit operation payload.');
         }
@@ -3384,6 +3424,52 @@ export function validateCadPatchProposalAgainstDigest(
               edit.sourceAxisEnd
             );
             break;
+          case 'resize-blend': {
+            if (
+              snapshot.featureType !== 'blend' ||
+              snapshot.surfaceType !== edit.surfaceClass ||
+              snapshot.blendRadius === undefined
+            ) {
+              throw new Error(
+                'AI blend resize requires a kernel-recognized analytic blend carrier.'
+              );
+            }
+            let center: Vector3 | undefined;
+            let axis: Vector3 | null | undefined;
+            if (edit.surfaceClass === 'torus') {
+              center = snapshot.torusCenter;
+              axis = snapshot.axis;
+            } else if (snapshot.axisStart && snapshot.axisEnd) {
+              center = {
+                x: (snapshot.axisStart.x + snapshot.axisEnd.x) / 2,
+                y: (snapshot.axisStart.y + snapshot.axisEnd.y) / 2,
+                z: (snapshot.axisStart.z + snapshot.axisEnd.z) / 2
+              };
+              axis = normalized({
+                x: snapshot.axisEnd.x - snapshot.axisStart.x,
+                y: snapshot.axisEnd.y - snapshot.axisStart.y,
+                z: snapshot.axisEnd.z - snapshot.axisStart.z
+              });
+            }
+            if (!center || !axis) {
+              throw new Error(
+                'AI blend resize requires the exact carrier center and axis.'
+              );
+            }
+            expected.push(
+              snapshot.surfaceType,
+              snapshot.blendRadius,
+              center,
+              axis
+            );
+            received.push(
+              edit.surfaceClass,
+              edit.recordedRadius,
+              edit.recordedCenter,
+              edit.recordedAxis
+            );
+            break;
+          }
         }
         if (canonicalJson(expected) !== canonicalJson(received)) {
           throw new Error(

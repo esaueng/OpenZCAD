@@ -290,6 +290,12 @@ export type DirectEditOperation =
       recordedAxis: Vector3;
       /** Zero removes the analytic blend band and restores its sharp edge. */
       newRadius: ParamValue;
+      /**
+       * An auto-parameterization binding may start at the recorded radius.
+       * The exact adapter still re-proves the seed and complete region, then
+       * leaves the source solid unchanged until the parameter moves.
+       */
+      parameterBinding?: true;
     };
 
 export interface BaseNode {
@@ -1104,8 +1110,15 @@ export interface FaceGeometry {
   featureType?: 'through-hole' | 'blend';
   /** Rolling-ball radius for a recognized blend surface. */
   blendRadius?: number;
+  /**
+   * Rebuild-local identity of the exact tangency-connected blend region.
+   * Kernel handles are intentionally not persisted beyond derived state.
+   */
+  blendRegionKey?: string;
+  /** Number of exact analytic faces in {@link blendRegionKey}. */
+  blendRegionFaceCount?: number;
   /** Dimension currently supported by a deterministic direct edit. */
-  editableDimension?: 'diameter';
+  editableDimension?: 'diameter' | 'blendRadius';
 }
 
 export interface EdgeTopology {
