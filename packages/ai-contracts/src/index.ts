@@ -22,6 +22,7 @@ import type {
   ParamValue,
   PrimitiveKind,
   ProjectDocument,
+  RecognizedImportedFeature,
   RevolveAxis,
   SketchId,
   SketchPlaneFrame,
@@ -355,6 +356,8 @@ export interface CadDigestBodyTopology {
    */
   faceInventoryComplete: boolean;
   edgeInventoryComplete: boolean;
+  /** Exact bounded proofs available for imported-feature direct edits. */
+  recognizedImportedFeatures?: RecognizedImportedFeature[];
   faces: Array<{
     topologyId: string;
     hash: number;
@@ -799,6 +802,15 @@ export function createCadDocumentDigest(
       modifierEdgeCount: edges.filter((edge) => edge.modifierCandidate).length,
       faceInventoryComplete: faces.length === body.topology.faces.length,
       edgeInventoryComplete: edges.length === body.topology.edges.length,
+      ...(body.topology.recognizedImportedFeatures
+        ? {
+            recognizedImportedFeatures:
+              body.topology.recognizedImportedFeatures.slice(
+                0,
+                MAX_DIGEST_TOPOLOGY_PER_BODY
+              )
+          }
+        : {}),
       faces,
       edges
     });
@@ -1370,6 +1382,104 @@ const directEditOperationSchema = {
       type: 'object',
       additionalProperties: false,
       properties: {
+        kind: { type: 'string', const: 'resize-imported-blind-hole' },
+        faceHash: { type: 'integer', minimum: 1 },
+        faceReference: faceReferenceSchema,
+        sourceOpeningPoint: numberVectorSchema,
+        sourceAxisDirection: numberVectorSchema,
+        sourceDiameter: { type: 'number', exclusiveMinimum: 0 },
+        sourceDepth: { type: 'number', exclusiveMinimum: 0 },
+        diameter: scalarSchema,
+        depth: scalarSchema
+      },
+      required: [
+        'kind',
+        'faceHash',
+        'faceReference',
+        'sourceOpeningPoint',
+        'sourceAxisDirection',
+        'sourceDiameter',
+        'sourceDepth',
+        'diameter',
+        'depth'
+      ]
+    },
+    {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        kind: { type: 'string', const: 'resize-imported-counterbore' },
+        faceHash: { type: 'integer', minimum: 1 },
+        faceReference: faceReferenceSchema,
+        sourceOpeningPoint: numberVectorSchema,
+        sourceAxisDirection: numberVectorSchema,
+        sourceBoreDiameter: { type: 'number', exclusiveMinimum: 0 },
+        sourceCounterboreDiameter: { type: 'number', exclusiveMinimum: 0 },
+        sourceCounterboreDepth: { type: 'number', exclusiveMinimum: 0 },
+        sourceTotalDepth: { type: 'number', exclusiveMinimum: 0 },
+        sourceEntryChamfered: { type: 'boolean' },
+        boreDiameter: scalarSchema,
+        counterboreDiameter: scalarSchema,
+        counterboreDepth: scalarSchema
+      },
+      required: [
+        'kind',
+        'faceHash',
+        'faceReference',
+        'sourceOpeningPoint',
+        'sourceAxisDirection',
+        'sourceBoreDiameter',
+        'sourceCounterboreDiameter',
+        'sourceCounterboreDepth',
+        'sourceTotalDepth',
+        'sourceEntryChamfered',
+        'boreDiameter',
+        'counterboreDiameter',
+        'counterboreDepth'
+      ]
+    },
+    {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        kind: { type: 'string', const: 'resize-imported-countersink' },
+        faceHash: { type: 'integer', minimum: 1 },
+        faceReference: faceReferenceSchema,
+        sourceOpeningPoint: numberVectorSchema,
+        sourceAxisDirection: numberVectorSchema,
+        sourceBoreDiameter: { type: 'number', exclusiveMinimum: 0 },
+        sourceSinkDiameter: { type: 'number', exclusiveMinimum: 0 },
+        sourceAngleRadians: {
+          type: 'number',
+          exclusiveMinimum: 0,
+          exclusiveMaximum: Math.PI
+        },
+        sourceCountersinkDepth: { type: 'number', exclusiveMinimum: 0 },
+        sourceTotalDepth: { type: 'number', exclusiveMinimum: 0 },
+        boreDiameter: scalarSchema,
+        sinkDiameter: scalarSchema,
+        angleRadians: scalarSchema
+      },
+      required: [
+        'kind',
+        'faceHash',
+        'faceReference',
+        'sourceOpeningPoint',
+        'sourceAxisDirection',
+        'sourceBoreDiameter',
+        'sourceSinkDiameter',
+        'sourceAngleRadians',
+        'sourceCountersinkDepth',
+        'sourceTotalDepth',
+        'boreDiameter',
+        'sinkDiameter',
+        'angleRadians'
+      ]
+    },
+    {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
         kind: { type: 'string', const: 'remove-face-feature' },
         faceHash: { type: 'integer', minimum: 1 },
         faceReference: faceReferenceSchema,
@@ -1451,9 +1561,8 @@ export const AI_CAD_OPERATION_CAPABILITIES = {
   add_shell: { enabled: true, reason: null },
   add_solid_offset: { enabled: true, reason: null },
   recognized_imported_feature: {
-    enabled: false,
-    reason:
-      'Recognition diagnostics do not yet expose a stable command contract and exact editable topology inventory.'
+    enabled: true,
+    reason: null
   }
 } as const;
 
@@ -2713,12 +2822,53 @@ export function parseCadPatchProposal(
         const commonAxis =
           isNumberVector(edit.sourceAxisStart) &&
           isNumberVector(edit.sourceAxisEnd);
+        const commonImportedHole =
+          isNumberVector(edit.sourceOpeningPoint) &&
+          isNumberVector(edit.sourceAxisDirection);
         const valid =
           (edit.kind === 'resize-through-hole' &&
             typeof edit.sourceDiameter === 'number' &&
             edit.sourceDiameter > 0 &&
             commonAxis &&
             isScalar(edit.diameter)) ||
+          (edit.kind === 'resize-imported-blind-hole' &&
+            commonImportedHole &&
+            typeof edit.sourceDiameter === 'number' &&
+            edit.sourceDiameter > 0 &&
+            typeof edit.sourceDepth === 'number' &&
+            edit.sourceDepth > 0 &&
+            isScalar(edit.diameter) &&
+            isScalar(edit.depth)) ||
+          (edit.kind === 'resize-imported-counterbore' &&
+            commonImportedHole &&
+            typeof edit.sourceBoreDiameter === 'number' &&
+            edit.sourceBoreDiameter > 0 &&
+            typeof edit.sourceCounterboreDiameter === 'number' &&
+            edit.sourceCounterboreDiameter > edit.sourceBoreDiameter &&
+            typeof edit.sourceCounterboreDepth === 'number' &&
+            edit.sourceCounterboreDepth > 0 &&
+            typeof edit.sourceTotalDepth === 'number' &&
+            edit.sourceTotalDepth > edit.sourceCounterboreDepth &&
+            typeof edit.sourceEntryChamfered === 'boolean' &&
+            isScalar(edit.boreDiameter) &&
+            isScalar(edit.counterboreDiameter) &&
+            isScalar(edit.counterboreDepth)) ||
+          (edit.kind === 'resize-imported-countersink' &&
+            commonImportedHole &&
+            typeof edit.sourceBoreDiameter === 'number' &&
+            edit.sourceBoreDiameter > 0 &&
+            typeof edit.sourceSinkDiameter === 'number' &&
+            edit.sourceSinkDiameter > edit.sourceBoreDiameter &&
+            typeof edit.sourceAngleRadians === 'number' &&
+            edit.sourceAngleRadians > 0 &&
+            edit.sourceAngleRadians < Math.PI &&
+            typeof edit.sourceCountersinkDepth === 'number' &&
+            edit.sourceCountersinkDepth > 0 &&
+            typeof edit.sourceTotalDepth === 'number' &&
+            edit.sourceTotalDepth > edit.sourceCountersinkDepth &&
+            isScalar(edit.boreDiameter) &&
+            isScalar(edit.sinkDiameter) &&
+            isScalar(edit.angleRadians)) ||
           (edit.kind === 'remove-face-feature' &&
             typeof edit.sourceSurfaceType === 'string' &&
             typeof edit.sourceArea === 'number' &&
@@ -2929,7 +3079,7 @@ export function parseCadPatchProposal(
       case 'recognized_imported_feature':
       case 'add_recognized_imported_feature':
         throw new Error(
-          `Recognized imported-feature AI edits are disabled: ${AI_CAD_OPERATION_CAPABILITIES.recognized_imported_feature.reason}`
+          'Recognized imported features are expressed as exact add_direct_edit operations; this standalone operation kind is unsupported.'
         );
       default:
         throw new Error(
@@ -2985,6 +3135,31 @@ function exactDigestFace(
   return face;
 }
 
+function exactDigestImportedFeature(
+  digest: CadDocumentDigest,
+  bodyId: string,
+  faceHash: number,
+  reference: FaceTopologyReferenceV5,
+  kind: RecognizedImportedFeature['kind']
+): RecognizedImportedFeature {
+  const body = digest.bodies?.find(
+    (candidate) => candidate.bodyId === bodyId && !candidate.consumed
+  );
+  const feature = body?.topology?.recognizedImportedFeatures?.find(
+    (candidate) =>
+      candidate.kind === kind &&
+      candidate.seedFaceHash === faceHash &&
+      candidate.seedFaceReference !== undefined &&
+      canonicalJson(candidate.seedFaceReference) === canonicalJson(reference)
+  );
+  if (!feature) {
+    throw new Error(
+      `add_direct_edit contains a stale or unavailable ${kind} proof for body ${bodyId}. Refresh the proposal from the current document digest.`
+    );
+  }
+  return feature;
+}
+
 /**
  * Binds topology-dependent operations to the exact digest that prompted the
  * assistant. Structural parsing alone cannot distinguish a copied lineage
@@ -3030,6 +3205,105 @@ export function validateCadPatchProposalAgainstDigest(
       }
       case 'add_direct_edit': {
         const edit = operation.operation;
+        if (edit.kind === 'resize-imported-blind-hole') {
+          const proof = exactDigestImportedFeature(
+            digest,
+            operation.targetBodyId,
+            edit.faceHash,
+            edit.faceReference,
+            'blind-cylindrical-hole'
+          );
+          if (
+            proof.kind !== 'blind-cylindrical-hole' ||
+            canonicalJson([
+              proof.openingPoint,
+              proof.axisDirection,
+              proof.diameter,
+              proof.depth
+            ]) !==
+              canonicalJson([
+                edit.sourceOpeningPoint,
+                edit.sourceAxisDirection,
+                edit.sourceDiameter,
+                edit.sourceDepth
+              ])
+          ) {
+            throw new Error(
+              'add_direct_edit source geometry does not exactly match the current imported-feature proof.'
+            );
+          }
+          break;
+        }
+        if (edit.kind === 'resize-imported-counterbore') {
+          const proof = exactDigestImportedFeature(
+            digest,
+            operation.targetBodyId,
+            edit.faceHash,
+            edit.faceReference,
+            'counterbore'
+          );
+          if (
+            proof.kind !== 'counterbore' ||
+            canonicalJson([
+              proof.openingPoint,
+              proof.axisDirection,
+              proof.boreDiameter,
+              proof.counterboreDiameter,
+              proof.counterboreDepth,
+              proof.totalDepth,
+              proof.entryChamfered
+            ]) !==
+              canonicalJson([
+                edit.sourceOpeningPoint,
+                edit.sourceAxisDirection,
+                edit.sourceBoreDiameter,
+                edit.sourceCounterboreDiameter,
+                edit.sourceCounterboreDepth,
+                edit.sourceTotalDepth,
+                edit.sourceEntryChamfered
+              ])
+          ) {
+            throw new Error(
+              'add_direct_edit source geometry does not exactly match the current imported-feature proof.'
+            );
+          }
+          break;
+        }
+        if (edit.kind === 'resize-imported-countersink') {
+          const proof = exactDigestImportedFeature(
+            digest,
+            operation.targetBodyId,
+            edit.faceHash,
+            edit.faceReference,
+            'countersink'
+          );
+          if (
+            proof.kind !== 'countersink' ||
+            canonicalJson([
+              proof.openingPoint,
+              proof.axisDirection,
+              proof.boreDiameter,
+              proof.sinkDiameter,
+              proof.angleRadians,
+              proof.countersinkDepth,
+              proof.totalDepth
+            ]) !==
+              canonicalJson([
+                edit.sourceOpeningPoint,
+                edit.sourceAxisDirection,
+                edit.sourceBoreDiameter,
+                edit.sourceSinkDiameter,
+                edit.sourceAngleRadians,
+                edit.sourceCountersinkDepth,
+                edit.sourceTotalDepth
+              ])
+          ) {
+            throw new Error(
+              'add_direct_edit source geometry does not exactly match the current imported-feature proof.'
+            );
+          }
+          break;
+        }
         const face = exactDigestFace(
           digest,
           operation.targetBodyId,

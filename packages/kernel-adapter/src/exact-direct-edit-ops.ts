@@ -29,9 +29,17 @@ import {
 import {
   coaxialCylinderRadii,
   cylinderAlongAxis,
+  drillHole,
   fillThroughHole,
   tryExactAnalyticCylinderCapOffset
 } from './exact-cylinder-ops';
+import { recognizeImportedFeatureOnSolid } from './imported-feature-query';
+import type {
+  BlindCylindricalHoleProof,
+  CounterboreProof,
+  CountersinkProof,
+  ImportedFeatureProof
+} from './imported-feature-recognition';
 import {
   collapseShape
 } from './exact-boolean-helpers';
@@ -275,6 +283,528 @@ export function resizeThroughHole(
   return { solid: output, changed: true };
 }
 
+type ImportedBlindHoleOperation = Extract<
+  DirectEditOperation,
+  { kind: 'resize-imported-blind-hole' }
+>;
+type ImportedCounterboreOperation = Extract<
+  DirectEditOperation,
+  { kind: 'resize-imported-counterbore' }
+>;
+type ImportedCountersinkOperation = Extract<
+  DirectEditOperation,
+  { kind: 'resize-imported-countersink' }
+>;
+type ImportedHoleOperation =
+  | ImportedBlindHoleOperation
+  | ImportedCounterboreOperation
+  | ImportedCountersinkOperation;
+
+function importedProofTolerance(...dimensions: number[]): number {
+  return Math.max(
+    DIRECT_EDIT_TOLERANCE,
+    ...dimensions.map((dimension) => Math.abs(dimension) * 1e-6)
+  );
+}
+
+function requireImportedProofKind<K extends ImportedFeatureProof['kind']>(
+  kernel: RemusKernel,
+  solid: number,
+  face: number,
+  kind: K
+): Extract<ImportedFeatureProof, { kind: K }> {
+  const recognition = recognizeImportedFeatureOnSolid(kernel, solid, face);
+  if (recognition.status !== 'recognized' || recognition.proof.kind !== kind) {
+    throw new Error(
+      recognition.status === 'unsupported'
+        ? `The imported feature can no longer be proved: ${recognition.message}`
+        : `The selected face now proves a ${recognition.proof.kind}, not a ${kind}.`
+    );
+  }
+  return recognition.proof as Extract<ImportedFeatureProof, { kind: K }>;
+}
+
+function requireImportedHoleFrame(
+  openingPoint: Vec3,
+  directionIntoBody: Vec3,
+  sourceOpeningPoint: Vec3,
+  sourceAxisDirection: Vec3,
+  tolerance: number
+): void {
+  if (length(subtract(openingPoint, sourceOpeningPoint)) > tolerance) {
+    throw new Error(
+      'The imported hole no longer matches its recorded opening point.'
+    );
+  }
+  const sourceDirection = normalized(sourceAxisDirection);
+  const rebuiltDirection = normalized(directionIntoBody);
+  if (
+    !sourceDirection ||
+    !rebuiltDirection ||
+    dot(sourceDirection, rebuiltDirection) < 1 - 1e-6
+  ) {
+    throw new Error('The imported hole no longer matches its recorded axis.');
+  }
+}
+
+function requireRecordedDimension(
+  actual: number,
+  expected: number,
+  label: string,
+  tolerance: number
+): void {
+  if (Math.abs(actual - expected) > tolerance) {
+    throw new Error(
+      `The imported hole no longer matches its recorded ${label}.`
+    );
+  }
+}
+
+export function requireImportedBlindHole(
+  kernel: RemusKernel,
+  solid: number,
+  face: number,
+  operation: ImportedBlindHoleOperation
+): BlindCylindricalHoleProof {
+  const proof = requireImportedProofKind(
+    kernel,
+    solid,
+    face,
+    'blind-cylindrical-hole'
+  );
+  const tolerance = importedProofTolerance(
+    operation.sourceDiameter,
+    operation.sourceDepth
+  );
+  requireImportedHoleFrame(
+    {
+      x: proof.openingPoint[0],
+      y: proof.openingPoint[1],
+      z: proof.openingPoint[2]
+    },
+    {
+      x: proof.directionIntoBody[0],
+      y: proof.directionIntoBody[1],
+      z: proof.directionIntoBody[2]
+    },
+    operation.sourceOpeningPoint,
+    operation.sourceAxisDirection,
+    tolerance
+  );
+  requireRecordedDimension(
+    proof.diameter,
+    operation.sourceDiameter,
+    'diameter',
+    tolerance
+  );
+  requireRecordedDimension(
+    proof.depth,
+    operation.sourceDepth,
+    'depth',
+    tolerance
+  );
+  return proof;
+}
+
+export function requireImportedCounterbore(
+  kernel: RemusKernel,
+  solid: number,
+  face: number,
+  operation: ImportedCounterboreOperation
+): CounterboreProof {
+  const proof = requireImportedProofKind(kernel, solid, face, 'counterbore');
+  const tolerance = importedProofTolerance(
+    operation.sourceBoreDiameter,
+    operation.sourceCounterboreDiameter,
+    operation.sourceCounterboreDepth,
+    operation.sourceTotalDepth
+  );
+  requireImportedHoleFrame(
+    {
+      x: proof.openingPoint[0],
+      y: proof.openingPoint[1],
+      z: proof.openingPoint[2]
+    },
+    {
+      x: proof.directionIntoBody[0],
+      y: proof.directionIntoBody[1],
+      z: proof.directionIntoBody[2]
+    },
+    operation.sourceOpeningPoint,
+    operation.sourceAxisDirection,
+    tolerance
+  );
+  requireRecordedDimension(
+    proof.innerDiameter,
+    operation.sourceBoreDiameter,
+    'bore diameter',
+    tolerance
+  );
+  requireRecordedDimension(
+    proof.outerDiameter,
+    operation.sourceCounterboreDiameter,
+    'counterbore diameter',
+    tolerance
+  );
+  requireRecordedDimension(
+    proof.counterboreDepth,
+    operation.sourceCounterboreDepth,
+    'counterbore depth',
+    tolerance
+  );
+  requireRecordedDimension(
+    proof.totalDepth,
+    operation.sourceTotalDepth,
+    'total depth',
+    tolerance
+  );
+  if (
+    (proof.entryChamferFaceId !== undefined) !==
+    operation.sourceEntryChamfered
+  ) {
+    throw new Error(
+      'The imported counterbore no longer matches its recorded entry chamfer.'
+    );
+  }
+  return proof;
+}
+
+export function requireImportedCountersink(
+  kernel: RemusKernel,
+  solid: number,
+  face: number,
+  operation: ImportedCountersinkOperation
+): CountersinkProof {
+  const proof = requireImportedProofKind(kernel, solid, face, 'countersink');
+  const tolerance = importedProofTolerance(
+    operation.sourceBoreDiameter,
+    operation.sourceSinkDiameter,
+    operation.sourceCountersinkDepth,
+    operation.sourceTotalDepth
+  );
+  requireImportedHoleFrame(
+    {
+      x: proof.openingPoint[0],
+      y: proof.openingPoint[1],
+      z: proof.openingPoint[2]
+    },
+    {
+      x: proof.directionIntoBody[0],
+      y: proof.directionIntoBody[1],
+      z: proof.directionIntoBody[2]
+    },
+    operation.sourceOpeningPoint,
+    operation.sourceAxisDirection,
+    tolerance
+  );
+  requireRecordedDimension(
+    proof.holeDiameter,
+    operation.sourceBoreDiameter,
+    'bore diameter',
+    tolerance
+  );
+  requireRecordedDimension(
+    proof.openingDiameter,
+    operation.sourceSinkDiameter,
+    'sink diameter',
+    tolerance
+  );
+  requireRecordedDimension(
+    proof.angleRadians,
+    operation.sourceAngleRadians,
+    'included angle',
+    Math.max(1e-10, Math.abs(operation.sourceAngleRadians) * 1e-9)
+  );
+  requireRecordedDimension(
+    proof.countersinkDepth,
+    operation.sourceCountersinkDepth,
+    'countersink depth',
+    tolerance
+  );
+  requireRecordedDimension(
+    proof.totalDepth,
+    operation.sourceTotalDepth,
+    'total depth',
+    tolerance
+  );
+  return proof;
+}
+
+function fillImportedHole(
+  kernel: RemusKernel,
+  solid: number,
+  openingPoint: Vec3,
+  axisDirection: Vec3,
+  totalDepth: number,
+  maximumRadius: number
+): number {
+  const end = {
+    x: openingPoint.x + axisDirection.x * totalDepth,
+    y: openingPoint.y + axisDirection.y * totalDepth,
+    z: openingPoint.z + axisDirection.z * totalDepth
+  };
+  const facesBefore = kernel.getSolidFaces(solid).length;
+  let filled: number;
+  try {
+    filled = kernel.fuse(
+      solid,
+      cylinderAlongAxis(kernel, openingPoint, end, maximumRadius)
+    );
+  } catch (error) {
+    throw new Error(
+      `Filling the imported hole before resizing failed: ${
+        error instanceof Error ? error.message : 'the kernel rejected the fuse'
+      }.`,
+      { cause: error }
+    );
+  }
+  kernel.unifyFaces(filled);
+  if (kernel.validateSolid(filled) !== 0) {
+    throw new Error(
+      'Filling the imported hole before resizing did not produce a valid solid.'
+    );
+  }
+  if (kernel.getSolidFaces(filled).length >= facesBefore) {
+    throw new Error(
+      'Filling the imported hole fell back to a faceted mesh boolean, so its exact feature cannot be resized.'
+    );
+  }
+  return filled;
+}
+
+function positiveImportedDimension(value: number, label: string): number {
+  if (!Number.isFinite(value) || value <= GEOMETRY_EPSILON) {
+    throw new Error(`${label} must be greater than zero.`);
+  }
+  return value;
+}
+
+function applyImportedHoleEdit(
+  kernel: RemusKernel,
+  solid: number,
+  face: number,
+  operation: ImportedHoleOperation,
+  scope: Record<string, number>
+): { solid: number; changed: boolean } {
+  if (operation.kind === 'resize-imported-blind-hole') {
+    const proof = requireImportedBlindHole(kernel, solid, face, operation);
+    const diameter = positiveImportedDimension(
+      resolveParamValue(
+        operation.diameter,
+        scope,
+        'imported blind-hole diameter'
+      ),
+      'Imported blind-hole diameter'
+    );
+    const depth = positiveImportedDimension(
+      resolveParamValue(operation.depth, scope, 'imported blind-hole depth'),
+      'Imported blind-hole depth'
+    );
+    const tolerance = importedProofTolerance(proof.diameter, proof.depth);
+    if (Math.abs(depth - proof.depth) > tolerance) {
+      throw new Error(
+        'Changing an imported blind-hole depth is not yet supported; its diameter can be edited.'
+      );
+    }
+    if (Math.abs(diameter - proof.diameter) <= tolerance) {
+      if (operation.parameterBinding) {
+        return { solid, changed: false };
+      }
+      throw new Error(
+        'Imported blind-hole diameter must differ from its current diameter.'
+      );
+    }
+    const filled = fillImportedHole(
+      kernel,
+      solid,
+      operation.sourceOpeningPoint,
+      operation.sourceAxisDirection,
+      proof.depth,
+      proof.diameter / 2
+    );
+    return {
+      solid: drillHole(kernel, filled, {
+        surfacePoint: operation.sourceOpeningPoint,
+        axis: operation.sourceAxisDirection,
+        radius: diameter / 2,
+        depth: proof.depth,
+        style: 'simple',
+        entryExtension: Math.max(
+          DIRECT_EDIT_TOLERANCE * 10,
+          proof.depth * 0.02,
+          diameter * 0.01
+        ),
+        exitExtension: 0
+      }),
+      changed: true
+    };
+  }
+
+  if (operation.kind === 'resize-imported-counterbore') {
+    const proof = requireImportedCounterbore(kernel, solid, face, operation);
+    const boreDiameter = positiveImportedDimension(
+      resolveParamValue(
+        operation.boreDiameter,
+        scope,
+        'imported counterbore bore diameter'
+      ),
+      'Imported counterbore bore diameter'
+    );
+    const counterboreDiameter = positiveImportedDimension(
+      resolveParamValue(
+        operation.counterboreDiameter,
+        scope,
+        'imported counterbore diameter'
+      ),
+      'Imported counterbore diameter'
+    );
+    const counterboreDepth = positiveImportedDimension(
+      resolveParamValue(
+        operation.counterboreDepth,
+        scope,
+        'imported counterbore depth'
+      ),
+      'Imported counterbore depth'
+    );
+    if (!(counterboreDiameter > boreDiameter)) {
+      throw new Error(
+        'Imported counterbore diameter must be larger than its bore diameter.'
+      );
+    }
+    const tolerance = importedProofTolerance(
+      proof.innerDiameter,
+      proof.outerDiameter,
+      proof.counterboreDepth
+    );
+    if (Math.abs(counterboreDepth - proof.counterboreDepth) > tolerance) {
+      throw new Error(
+        'Changing an imported counterbore depth is not yet supported; its bore and counterbore diameters can be edited.'
+      );
+    }
+    if (
+      Math.abs(boreDiameter - proof.innerDiameter) <= tolerance &&
+      Math.abs(counterboreDiameter - proof.outerDiameter) <= tolerance
+    ) {
+      if (operation.parameterBinding) {
+        return { solid, changed: false };
+      }
+      throw new Error('Imported counterbore dimensions must change.');
+    }
+    if (proof.entryChamferFaceId !== undefined) {
+      throw new Error(
+        'Changing diameters on an imported counterbore with a chamfered entry is not yet supported; its grouped parameter binding remains geometry-preserving.'
+      );
+    }
+    const filled = fillImportedHole(
+      kernel,
+      solid,
+      operation.sourceOpeningPoint,
+      operation.sourceAxisDirection,
+      proof.totalDepth,
+      proof.outerDiameter / 2
+    );
+    return {
+      solid: drillHole(kernel, filled, {
+        surfacePoint: operation.sourceOpeningPoint,
+        axis: operation.sourceAxisDirection,
+        radius: boreDiameter / 2,
+        depth: proof.totalDepth,
+        style: 'counterbore',
+        counterboreRadius: counterboreDiameter / 2,
+        counterboreDepth: proof.counterboreDepth,
+        entryExtension: Math.max(
+          DIRECT_EDIT_TOLERANCE * 10,
+          proof.totalDepth * 0.02,
+          counterboreDiameter * 0.01
+        ),
+        exitExtension: 0
+      }),
+      changed: true
+    };
+  }
+
+  const proof = requireImportedCountersink(kernel, solid, face, operation);
+  const boreDiameter = positiveImportedDimension(
+    resolveParamValue(
+      operation.boreDiameter,
+      scope,
+      'imported countersink bore diameter'
+    ),
+    'Imported countersink bore diameter'
+  );
+  const sinkDiameter = positiveImportedDimension(
+    resolveParamValue(
+      operation.sinkDiameter,
+      scope,
+      'imported countersink diameter'
+    ),
+    'Imported countersink diameter'
+  );
+  const angleRadians = resolveParamValue(
+    operation.angleRadians,
+    scope,
+    'imported countersink included angle'
+  );
+  if (!(sinkDiameter > boreDiameter)) {
+    throw new Error(
+      'Imported countersink diameter must be larger than its bore diameter.'
+    );
+  }
+  if (!(angleRadians > 0 && angleRadians < Math.PI)) {
+    throw new Error(
+      'Imported countersink included angle must be strictly between 0 and pi radians.'
+    );
+  }
+  const tolerance = importedProofTolerance(
+    proof.holeDiameter,
+    proof.openingDiameter,
+    proof.countersinkDepth
+  );
+  if (
+    Math.abs(angleRadians - proof.angleRadians) >
+    Math.max(1e-10, proof.angleRadians * 1e-9)
+  ) {
+    throw new Error(
+      'Changing an imported countersink angle is not yet supported; its bore and sink diameters can be edited.'
+    );
+  }
+  if (
+    Math.abs(boreDiameter - proof.holeDiameter) <= tolerance &&
+    Math.abs(sinkDiameter - proof.openingDiameter) <= tolerance
+  ) {
+    if (operation.parameterBinding) {
+      return { solid, changed: false };
+    }
+    throw new Error('Imported countersink dimensions must change.');
+  }
+  const filled = fillImportedHole(
+    kernel,
+    solid,
+    operation.sourceOpeningPoint,
+    operation.sourceAxisDirection,
+    proof.totalDepth,
+    proof.openingDiameter / 2
+  );
+  return {
+    solid: drillHole(kernel, filled, {
+      surfacePoint: operation.sourceOpeningPoint,
+      axis: operation.sourceAxisDirection,
+      radius: boreDiameter / 2,
+      depth: proof.totalDepth,
+      style: 'countersink',
+      countersinkRadius: sinkDiameter / 2,
+      countersinkAngle: proof.angleRadians,
+      entryExtension: Math.max(
+        DIRECT_EDIT_TOLERANCE * 10,
+        proof.totalDepth * 0.02,
+        sinkDiameter * 0.01
+      ),
+      exitExtension: 0
+    }),
+    changed: true
+  };
+}
+
 /**
  * Remove the feature the selected face belongs to.
  *
@@ -402,6 +932,20 @@ export function applyDirectEdit(
     const resized = resizeThroughHole(kernel, solid, face, operation, scope);
     // Keeping only the same solid handle would still discard the imported
     // semantic face map and make the next no-op binding stale.
+    return resized.changed ? { solids: [resized.solid] } : target;
+  }
+  if (
+    operation.kind === 'resize-imported-blind-hole' ||
+    operation.kind === 'resize-imported-counterbore' ||
+    operation.kind === 'resize-imported-countersink'
+  ) {
+    const resized = applyImportedHoleEdit(
+      kernel,
+      solid,
+      face,
+      operation,
+      scope
+    );
     return resized.changed ? { solids: [resized.solid] } : target;
   }
 

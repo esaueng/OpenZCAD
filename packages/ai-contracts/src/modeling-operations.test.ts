@@ -124,7 +124,11 @@ describe('AI deterministic modeling operation contracts', () => {
       bodyId,
       name: 'Source',
       source: 'primitive',
-      mesh: { kind: 'mesh', vertices: Float32Array.from([]), indices: Uint32Array.from([]) },
+      mesh: {
+        kind: 'mesh',
+        vertices: Float32Array.from([]),
+        indices: Uint32Array.from([])
+      },
       faceCount: 1,
       color: '#888888',
       exportableStep: true,
@@ -370,13 +374,13 @@ describe('AI deterministic modeling operation contracts', () => {
     ).toThrow(/Invalid add_shell/);
   });
 
-  it('labels unsupported recognized-import editing and produces readable summaries', () => {
+  it('enables proof-backed recognized-import edits but rejects the obsolete standalone operation', () => {
     expect(
       AI_CAD_OPERATION_CAPABILITIES.recognized_imported_feature.enabled
-    ).toBe(false);
+    ).toBe(true);
     expect(
       AI_CAD_OPERATION_CAPABILITIES.recognized_imported_feature.reason
-    ).toMatch(/stable command contract/);
+    ).toBeNull();
     expect(() =>
       parseCadPatchProposal(
         proposal([
@@ -386,7 +390,7 @@ describe('AI deterministic modeling operation contracts', () => {
           }
         ])
       )
-    ).toThrow(/disabled.*stable command contract/i);
+    ).toThrow(/expressed as exact add_direct_edit.*unsupported/i);
     const parsed = parseCadPatchProposal(
       proposal([
         {

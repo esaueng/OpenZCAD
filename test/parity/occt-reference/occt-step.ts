@@ -821,6 +821,14 @@ function applyDirectEdit(
     throw new Error(
       'OCCT parity reference does not implement imported blend resizing.'
     );
+  } else if (
+    operation.kind === 'resize-imported-blind-hole' ||
+    operation.kind === 'resize-imported-counterbore' ||
+    operation.kind === 'resize-imported-countersink'
+  ) {
+    throw new Error(
+      'OCCT parity reference does not implement recognized imported-hole resizing.'
+    );
   } else {
     const geometry = faceGeometry(kernel, owner, face);
     if (geometry.surfaceType !== operation.sourceSurfaceType) {

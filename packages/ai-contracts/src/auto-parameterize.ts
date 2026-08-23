@@ -16,17 +16,22 @@ import type {
 } from './index';
 import { isSketchDimensionField } from './sketch-dimensions';
 
-/** Two patch operations (declare + bind) are emitted for every candidate. */
+/** Parameter declarations are capped independently of grouped feature binds. */
 const MAX_AUTO_PARAMETER_CANDIDATES = 30;
 const NUMERIC_LITERAL =
   /^[+-]?(?:(?:\d+(?:\.\d*)?)|(?:\.\d+))(?:[eE][+-]?\d+)?$/;
 const PARAMETER_NAME = /^[a-zA-Z_][a-zA-Z0-9_]*$/;
 
-interface ParameterCandidate {
+interface CandidateParameter {
+  key: string;
   baseName: string;
   expression: string;
+}
+
+interface ParameterCandidate {
+  parameters: CandidateParameter[];
   imported: boolean;
-  bind(parameterName: string): CadPatchOperation;
+  bind(parameterNames: ReadonlyMap<string, string>): CadPatchOperation;
 }
 
 function listFeaturesInOrder(document: ProjectDocument): FeatureNode[] {
@@ -248,14 +253,19 @@ function featureCandidate(
     return null;
   }
   return {
-    baseName: parameterBase(feature.name, field.replace('.', '_')),
-    expression,
+    parameters: [
+      {
+        key: field,
+        baseName: parameterBase(feature.name, field.replace('.', '_')),
+        expression
+      }
+    ],
     imported: false,
-    bind: (parameterName) => ({
+    bind: (parameterNames) => ({
       kind: 'set_feature_dimension',
       featureId: feature.featureId,
       field,
-      value: parameterName
+      value: parameterNames.get(field)!
     })
   };
 }
@@ -305,20 +315,25 @@ function sketchCandidates(
         continue;
       }
       candidates.push({
-        baseName: parameterBase(
-          feature.name,
-          data.objectKind,
-          String(index + 1),
-          field
-        ),
-        expression,
+        parameters: [
+          {
+            key: field,
+            baseName: parameterBase(
+              feature.name,
+              data.objectKind,
+              String(index + 1),
+              field
+            ),
+            expression
+          }
+        ],
         imported: false,
-        bind: (parameterName) => ({
+        bind: (parameterNames) => ({
           kind: 'set_sketch_dimension',
           sketchId: sketch.sketchId,
           objectId,
           field,
-          value: parameterName
+          value: parameterNames.get(field)!
         })
       });
     }
@@ -401,6 +416,53 @@ function nativeCandidates(
       case 'direct-edit':
         if (data.operation.kind === 'resize-through-hole') {
           add(featureCandidate(feature, 'diameter', data.operation.diameter));
+        } else if (data.operation.kind === 'resize-imported-blind-hole') {
+          add(featureCandidate(feature, 'diameter', data.operation.diameter));
+          add(featureCandidate(feature, 'depth', data.operation.depth));
+        } else if (data.operation.kind === 'resize-imported-counterbore') {
+          add(
+            featureCandidate(
+              feature,
+              'boreDiameter',
+              data.operation.boreDiameter
+            )
+          );
+          add(
+            featureCandidate(
+              feature,
+              'counterboreDiameter',
+              data.operation.counterboreDiameter
+            )
+          );
+          add(
+            featureCandidate(
+              feature,
+              'counterboreDepth',
+              data.operation.counterboreDepth
+            )
+          );
+        } else if (data.operation.kind === 'resize-imported-countersink') {
+          add(
+            featureCandidate(
+              feature,
+              'boreDiameter',
+              data.operation.boreDiameter
+            )
+          );
+          add(
+            featureCandidate(
+              feature,
+              'sinkDiameter',
+              data.operation.sinkDiameter
+            )
+          );
+          add(
+            featureCandidate(
+              feature,
+              'angleRadians',
+              data.operation.angleRadians
+            )
+          );
         } else if (data.operation.kind === 'resize-cylindrical-face') {
           add(featureCandidate(feature, 'radius', data.operation.radius));
         } else if (data.operation.kind === 'resize-blend') {
@@ -449,7 +511,10 @@ function importedThroughHoleCandidates(
       return scope.has(feature.featureId) &&
         data.featureKind === 'direct-edit' &&
         data.targetBodyId === bodyId &&
-        data.operation.kind === 'resize-through-hole'
+        (data.operation.kind === 'resize-through-hole' ||
+          data.operation.kind === 'resize-imported-blind-hole' ||
+          data.operation.kind === 'resize-imported-counterbore' ||
+          data.operation.kind === 'resize-imported-countersink')
         ? [data.operation]
         : [];
     });
@@ -457,7 +522,181 @@ function importedThroughHoleCandidates(
       continue;
     }
 
+    const sameImportedHole = (
+      openingPoint: { x: number; y: number; z: number },
+      axisDirection: { x: number; y: number; z: number }
+    ): boolean =>
+      existingHoleEdits.some((edit) => {
+        if (edit.kind === 'resize-through-hole') {
+          return false;
+        }
+        const scale = Math.max(
+          1,
+          Math.hypot(openingPoint.x, openingPoint.y, openingPoint.z)
+        );
+        const pointTolerance = scale * 1e-8;
+        const pointDistance = Math.hypot(
+          openingPoint.x - edit.sourceOpeningPoint.x,
+          openingPoint.y - edit.sourceOpeningPoint.y,
+          openingPoint.z - edit.sourceOpeningPoint.z
+        );
+        const alignment = Math.abs(
+          axisDirection.x * edit.sourceAxisDirection.x +
+            axisDirection.y * edit.sourceAxisDirection.y +
+            axisDirection.z * edit.sourceAxisDirection.z
+        );
+        return pointDistance <= pointTolerance && alignment >= 1 - 1e-8;
+      });
+    const recognizedFeatures = body.topology.recognizedImportedFeatures ?? [];
+    const claimedFaceHashes = new Set(
+      recognizedFeatures
+        .filter((recognized) =>
+          ['blind-cylindrical-hole', 'counterbore', 'countersink'].includes(
+            recognized.kind
+          )
+        )
+        .flatMap((recognized) => recognized.participatingFaceHashes)
+    );
     let holeIndex = 0;
+    for (const recognized of recognizedFeatures) {
+      if (
+        recognized.kind !== 'blind-cylindrical-hole' &&
+        recognized.kind !== 'counterbore' &&
+        recognized.kind !== 'countersink'
+      ) {
+        continue;
+      }
+      holeIndex += 1;
+      const recognizedIndex = holeIndex;
+      const reference = recognized.seedFaceReference;
+      if (
+        !reference ||
+        reference.currentHash !== recognized.seedFaceHash ||
+        sameImportedHole(recognized.openingPoint, recognized.axisDirection)
+      ) {
+        continue;
+      }
+      const nameBase = [body.name, 'hole', String(recognizedIndex)];
+      if (recognized.kind === 'blind-cylindrical-hole') {
+        candidates.push({
+          parameters: [
+            {
+              key: 'diameter',
+              baseName: parameterBase(...nameBase, 'diameter'),
+              expression: String(recognized.diameter)
+            },
+            {
+              key: 'depth',
+              baseName: parameterBase(...nameBase, 'depth'),
+              expression: String(recognized.depth)
+            }
+          ],
+          imported: true,
+          bind: (parameterNames) => ({
+            kind: 'add_direct_edit',
+            name: `Parameterize ${body.name} hole ${recognizedIndex}`,
+            targetBodyId: bodyId,
+            operation: {
+              kind: 'resize-imported-blind-hole',
+              faceHash: recognized.seedFaceHash,
+              faceReference: reference,
+              sourceOpeningPoint: recognized.openingPoint,
+              sourceAxisDirection: recognized.axisDirection,
+              sourceDiameter: recognized.diameter,
+              sourceDepth: recognized.depth,
+              diameter: parameterNames.get('diameter')!,
+              depth: parameterNames.get('depth')!,
+              parameterBinding: true
+            }
+          })
+        });
+      } else if (recognized.kind === 'counterbore') {
+        candidates.push({
+          parameters: [
+            {
+              key: 'boreDiameter',
+              baseName: parameterBase(...nameBase, 'bore', 'diameter'),
+              expression: String(recognized.boreDiameter)
+            },
+            {
+              key: 'counterboreDiameter',
+              baseName: parameterBase(...nameBase, 'counterbore', 'diameter'),
+              expression: String(recognized.counterboreDiameter)
+            },
+            {
+              key: 'counterboreDepth',
+              baseName: parameterBase(...nameBase, 'counterbore', 'depth'),
+              expression: String(recognized.counterboreDepth)
+            }
+          ],
+          imported: true,
+          bind: (parameterNames) => ({
+            kind: 'add_direct_edit',
+            name: `Parameterize ${body.name} hole ${recognizedIndex}`,
+            targetBodyId: bodyId,
+            operation: {
+              kind: 'resize-imported-counterbore',
+              faceHash: recognized.seedFaceHash,
+              faceReference: reference,
+              sourceOpeningPoint: recognized.openingPoint,
+              sourceAxisDirection: recognized.axisDirection,
+              sourceBoreDiameter: recognized.boreDiameter,
+              sourceCounterboreDiameter: recognized.counterboreDiameter,
+              sourceCounterboreDepth: recognized.counterboreDepth,
+              sourceTotalDepth: recognized.totalDepth,
+              sourceEntryChamfered: recognized.entryChamfered,
+              boreDiameter: parameterNames.get('boreDiameter')!,
+              counterboreDiameter: parameterNames.get('counterboreDiameter')!,
+              counterboreDepth: parameterNames.get('counterboreDepth')!,
+              parameterBinding: true
+            }
+          })
+        });
+      } else {
+        candidates.push({
+          parameters: [
+            {
+              key: 'boreDiameter',
+              baseName: parameterBase(...nameBase, 'bore', 'diameter'),
+              expression: String(recognized.boreDiameter)
+            },
+            {
+              key: 'sinkDiameter',
+              baseName: parameterBase(...nameBase, 'sink', 'diameter'),
+              expression: String(recognized.sinkDiameter)
+            },
+            {
+              key: 'angleRadians',
+              baseName: parameterBase(...nameBase, 'sink', 'angle', 'radians'),
+              expression: String(recognized.angleRadians)
+            }
+          ],
+          imported: true,
+          bind: (parameterNames) => ({
+            kind: 'add_direct_edit',
+            name: `Parameterize ${body.name} hole ${recognizedIndex}`,
+            targetBodyId: bodyId,
+            operation: {
+              kind: 'resize-imported-countersink',
+              faceHash: recognized.seedFaceHash,
+              faceReference: reference,
+              sourceOpeningPoint: recognized.openingPoint,
+              sourceAxisDirection: recognized.axisDirection,
+              sourceBoreDiameter: recognized.boreDiameter,
+              sourceSinkDiameter: recognized.sinkDiameter,
+              sourceAngleRadians: recognized.angleRadians,
+              sourceCountersinkDepth: recognized.countersinkDepth,
+              sourceTotalDepth: recognized.totalDepth,
+              boreDiameter: parameterNames.get('boreDiameter')!,
+              sinkDiameter: parameterNames.get('sinkDiameter')!,
+              angleRadians: parameterNames.get('angleRadians')!,
+              parameterBinding: true
+            }
+          })
+        });
+      }
+    }
+
     for (const face of body.topology.faces) {
       const geometry = face.geometry;
       const reference = face.reference;
@@ -470,18 +709,21 @@ function importedThroughHoleCandidates(
         !axisStart ||
         !axisEnd ||
         !reference ||
-        reference.currentHash !== face.hash
+        reference.currentHash !== face.hash ||
+        claimedFaceHashes.has(face.hash)
       ) {
         continue;
       }
       if (
-        existingHoleEdits.some((edit) =>
-          sameAxisSpan(
-            axisStart,
-            axisEnd,
-            edit.sourceAxisStart,
-            edit.sourceAxisEnd
-          )
+        existingHoleEdits.some(
+          (edit) =>
+            edit.kind === 'resize-through-hole' &&
+            sameAxisSpan(
+              axisStart,
+              axisEnd,
+              edit.sourceAxisStart,
+              edit.sourceAxisEnd
+            )
         )
       ) {
         continue;
@@ -489,15 +731,20 @@ function importedThroughHoleCandidates(
       holeIndex += 1;
       const recognizedIndex = holeIndex;
       candidates.push({
-        baseName: parameterBase(
-          body.name,
-          'hole',
-          String(recognizedIndex),
-          'diameter'
-        ),
-        expression: String(diameter),
+        parameters: [
+          {
+            key: 'diameter',
+            baseName: parameterBase(
+              body.name,
+              'hole',
+              String(recognizedIndex),
+              'diameter'
+            ),
+            expression: String(diameter)
+          }
+        ],
         imported: true,
-        bind: (parameterName) => ({
+        bind: (parameterNames) => ({
           kind: 'add_direct_edit',
           name: `Parameterize ${body.name} hole ${recognizedIndex}`,
           targetBodyId: bodyId,
@@ -508,7 +755,7 @@ function importedThroughHoleCandidates(
             sourceDiameter: diameter,
             sourceAxisStart: axisStart,
             sourceAxisEnd: axisEnd,
-            diameter: parameterName,
+            diameter: parameterNames.get('diameter')!,
             parameterBinding: true
           }
         })
@@ -538,17 +785,35 @@ export function createAutoParameterizeProposal(
     return null;
   }
 
-  const selected = allCandidates.slice(0, MAX_AUTO_PARAMETER_CANDIDATES);
+  const selected: ParameterCandidate[] = [];
+  let selectedParameterCount = 0;
+  for (const candidate of allCandidates) {
+    if (
+      selectedParameterCount + candidate.parameters.length >
+      MAX_AUTO_PARAMETER_CANDIDATES
+    ) {
+      break;
+    }
+    selected.push(candidate);
+    selectedParameterCount += candidate.parameters.length;
+  }
   const usedNames = new Set(
     listParameters(document).map((parameter) => parameter.name)
   );
   const named = selected.map((candidate) => ({
     candidate,
-    name: uniqueParameterName(candidate.baseName, usedNames)
+    names: new Map(
+      candidate.parameters.map((parameter) => [
+        parameter.key,
+        uniqueParameterName(parameter.baseName, usedNames)
+      ])
+    )
   }));
-  const importedCount = named.filter(
-    ({ candidate }) => candidate.imported
-  ).length;
+  const importedGroups = named.filter(({ candidate }) => candidate.imported);
+  const importedCount = importedGroups.reduce(
+    (count, { candidate }) => count + candidate.parameters.length,
+    0
+  );
   const assumptions = [
     'Every literal remains an independent parameter; equal numbers were not coupled without design-intent evidence.',
     'Exact preview must preserve the current body geometry before this proposal can be applied.'
@@ -558,28 +823,34 @@ export function createAutoParameterizeProposal(
       'Line and arc coordinates remain literal because independent bindings could open a closed profile without a constraint solver.'
     );
   }
-  if (allCandidates.length > selected.length) {
+  const allParameterCount = allCandidates.reduce(
+    (count, candidate) => count + candidate.parameters.length,
+    0
+  );
+  if (allParameterCount > selectedParameterCount) {
     assumptions.push(
-      `${allCandidates.length - selected.length} additional literal dimensions remain; run Auto-parameterize again after applying this bounded batch.`
+      `${allParameterCount - selectedParameterCount} additional literal dimensions remain; run Auto-parameterize again after applying this bounded batch.`
     );
   }
   if (importedCount > 0) {
     assumptions.push(
-      `${importedCount} imported through-hole diameter${importedCount === 1 ? '' : 's'} use kernel-proven exact topology; unsupported imported features remain unchanged.`
+      `${importedCount} imported hole dimension${importedCount === 1 ? '' : 's'} across ${importedGroups.length} kernel-proven feature${importedGroups.length === 1 ? '' : 's'} use grouped exact topology; unsupported imported features remain unchanged.`
     );
   }
 
   return {
-    proposalId: `auto_parameterize_v1_${document.version}`,
-    summary: `${named.length} editable parameter${named.length === 1 ? '' : 's'} will replace literal driving values without changing the current exact geometry.`,
+    proposalId: `auto_parameterize_v2_${document.version}`,
+    summary: `${selectedParameterCount} editable parameter${selectedParameterCount === 1 ? '' : 's'} will replace literal driving values without changing the current exact geometry.`,
     assumptions,
     operations: [
-      ...named.map(({ candidate, name }) => ({
-        kind: 'set_parameter' as const,
-        name,
-        expression: candidate.expression
-      })),
-      ...named.map(({ candidate, name }) => candidate.bind(name))
+      ...named.flatMap(({ candidate, names }) =>
+        candidate.parameters.map((parameter) => ({
+          kind: 'set_parameter' as const,
+          name: names.get(parameter.key)!,
+          expression: parameter.expression
+        }))
+      ),
+      ...named.map(({ candidate, names }) => candidate.bind(names))
     ],
     preserveGeometry: true
   };

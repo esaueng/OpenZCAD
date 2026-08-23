@@ -35,3 +35,10 @@ export {
   type RecognitionLimits,
   type RecognitionRefusalReason
 } from './imported-feature-recognition';
+
+export {
+  RemusImportedFeatureQuery,
+  collectRecognizedImportedFeatures,
+  recognizeImportedFeatureOnSolid,
+  type ImportedRecognitionFaceIdentity
+} from './imported-feature-query';

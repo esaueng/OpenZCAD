@@ -1474,6 +1474,49 @@ function assertOperationExpressions(
           `${operation.name} diameter`,
           operation.operation.diameter
         );
+      } else if (operation.operation.kind === 'resize-imported-blind-hole') {
+        assertEvaluableExpression(
+          scope,
+          `${operation.name} diameter`,
+          operation.operation.diameter
+        );
+        assertEvaluableExpression(
+          scope,
+          `${operation.name} depth`,
+          operation.operation.depth
+        );
+      } else if (operation.operation.kind === 'resize-imported-counterbore') {
+        assertEvaluableExpression(
+          scope,
+          `${operation.name} bore diameter`,
+          operation.operation.boreDiameter
+        );
+        assertEvaluableExpression(
+          scope,
+          `${operation.name} counterbore diameter`,
+          operation.operation.counterboreDiameter
+        );
+        assertEvaluableExpression(
+          scope,
+          `${operation.name} counterbore depth`,
+          operation.operation.counterboreDepth
+        );
+      } else if (operation.operation.kind === 'resize-imported-countersink') {
+        assertEvaluableExpression(
+          scope,
+          `${operation.name} bore diameter`,
+          operation.operation.boreDiameter
+        );
+        assertEvaluableExpression(
+          scope,
+          `${operation.name} sink diameter`,
+          operation.operation.sinkDiameter
+        );
+        assertEvaluableExpression(
+          scope,
+          `${operation.name} included angle`,
+          operation.operation.angleRadians
+        );
       } else if (operation.operation.kind === 'offset-face') {
         assertEvaluableExpression(
           scope,
@@ -2236,6 +2279,18 @@ export function commandsForCadPatch(
           const editable =
             (edit.kind === 'resize-through-hole' &&
               operation.field === 'diameter') ||
+            (edit.kind === 'resize-imported-blind-hole' &&
+              ['diameter', 'depth'].includes(operation.field)) ||
+            (edit.kind === 'resize-imported-counterbore' &&
+              [
+                'boreDiameter',
+                'counterboreDiameter',
+                'counterboreDepth'
+              ].includes(operation.field)) ||
+            (edit.kind === 'resize-imported-countersink' &&
+              ['boreDiameter', 'sinkDiameter', 'angleRadians'].includes(
+                operation.field
+              )) ||
             (edit.kind === 'resize-cylindrical-face' &&
               operation.field === 'radius') ||
             (edit.kind === 'resize-blend' && operation.field === 'newRadius') ||
