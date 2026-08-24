@@ -167,6 +167,7 @@ interface ViewerShellProps {
     dimensionMode: DimensionMode
   ): void;
   cancelDirectManipulationRef: MutableRefObject<(() => boolean) | null>;
+  openExactEntryRef: MutableRefObject<(() => boolean) | null>;
   edgeHandle: EdgeHandleTarget | null;
   onEdgeRadiusPreview(size: number): void;
   onEdgeCommit(size: number): void;
@@ -282,6 +283,7 @@ export function ViewerShell({
   onCylinderRadiusCancel,
   onOpenCylinderRadiusKeypad,
   cancelDirectManipulationRef,
+  openExactEntryRef,
   edgeHandle,
   onEdgeRadiusPreview,
   onEdgeCommit,
@@ -419,6 +421,7 @@ export function ViewerShell({
         onCylinderRadiusCancel={onCylinderRadiusCancel}
         onOpenCylinderRadiusKeypad={onOpenCylinderRadiusKeypad}
         cancelDirectManipulationRef={cancelDirectManipulationRef}
+        openExactEntryRef={openExactEntryRef}
         edgeHandle={edgeHandle}
         onEdgeRadiusPreview={onEdgeRadiusPreview}
         onEdgeCommit={onEdgeCommit}

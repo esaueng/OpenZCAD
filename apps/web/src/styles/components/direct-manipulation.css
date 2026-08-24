@@ -407,12 +407,16 @@
   grid-column: span 3;
   padding: 7px 0;
   color: #08121e;
+  font-size: var(--fs-sm);
+  font-weight: 600;
   background: var(--color-accent);
   border: 0;
   border-radius: var(--radius-sm);
   cursor: pointer;
-  display: grid;
-  place-items: center;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
 }
 
 .keypad-commit:hover {

@@ -25,7 +25,7 @@ test('round-trips diameter entry and edits a cylinder cap by total height', asyn
 
   const canvas = page.locator('.viewer-host canvas');
   await expect(canvas).toBeVisible({ timeout: 120_000 });
-  const selectCylinderSurface = async (surface: 'wall' | 'top-cap') => {
+  const selectCylinderSurface = async (surface: 'wall' | 'cap' | 'top-cap') => {
     await canvas.evaluate((element, requestedSurface) => {
       element.dispatchEvent(
         new CustomEvent('openzcad:e2e-select-cylinder', {
@@ -113,5 +113,79 @@ test('round-trips diameter entry and edits a cylinder cap by total height', asyn
     page.locator('.feature-row', { hasText: 'Offset Face' })
   ).toHaveCount(0);
   await expect.poll(readCylinderHeight).toBeCloseTo(35.7, 5);
+
+  // ── One value, one commit gesture ──────────────────────────────────────
+  //
+  // Every armed handle promises drag-or-type, but typing was reachable only by
+  // clicking its chip, so the keyboard half of the contract did not exist.
+  // These checks hold all three direct-manipulation commands to the same keys.
+  //
+  // Deliberately folded into this test rather than given a spec of its own: a
+  // new spec file claims another worker and another kernel boot, and that
+  // extra parallel load was enough to push a cloud-sync test past its budget.
+  //
+  // The handle's chip is the readiness signal. The command card is React state
+  // and flips first, while the handle it describes is installed by the render
+  // loop a frame later; a user presses a key once they can see the handle.
+  const awaitArmedHandle = async () => {
+    await expect(valueChip).toBeVisible();
+    await expect(valueChip).not.toHaveText('');
+  };
+
+  await selectCylinderSurface('wall');
+  await expect(
+    page.getByRole('region', { name: 'Resize Cylinder Radius operation' })
+  ).toBeVisible();
+  await awaitArmedHandle();
+  await page.keyboard.press('Enter');
+  const typedKeypad = page.getByRole('dialog', { name: 'Diameter value' });
+  await expect(typedKeypad).toBeVisible();
+
+  // A unit typed into the field beats the entry chip, and the converted value
+  // is shown in the document's units before it can be committed unseen.
+  await typedKeypad.getByRole('textbox').fill('1 in');
+  await expect(typedKeypad).toContainText('= 25.4 mm');
+  await page.keyboard.press('Escape');
+  await expect(typedKeypad).toBeHidden();
+
+  await selectCylinderSurface('cap');
+  await expect(
+    page.getByRole('region', { name: 'Offset Face operation' })
+  ).toBeVisible();
+  await awaitArmedHandle();
+  await page.keyboard.press('Enter');
+  const offsetKeypad = page.getByRole('dialog', { name: 'Offset value' });
+  await expect(offsetKeypad).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(offsetKeypad).toBeHidden();
+
+  const selectCircularEdge = () =>
+    canvas.evaluate(
+      (element) =>
+        new Promise<boolean>((resolve) => {
+          element.dispatchEvent(
+            new CustomEvent('openzcad:e2e-select-edge', {
+              detail: {
+                curve: 'circle',
+                resolve: (selection: unknown) => resolve(selection !== null)
+              }
+            })
+          );
+        })
+    );
+  await expect.poll(selectCircularEdge, { timeout: 30_000 }).toBe(true);
+  await expect(
+    page.getByRole('region', { name: 'Fillet operation' })
+  ).toBeVisible();
+  await awaitArmedHandle();
+  await page.keyboard.press('Enter');
+  const filletKeypad = page.getByRole('dialog', { name: 'Radius value' });
+  await expect(filletKeypad).toBeVisible();
+  // The commit control names what it applies rather than showing a bare tick.
+  await expect(
+    filletKeypad.getByRole('button', { name: 'Apply radius' })
+  ).toHaveText(/Apply radius/);
+  await page.keyboard.press('Escape');
+
   expect(consoleErrors).toEqual([]);
 });
