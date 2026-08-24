@@ -1448,6 +1448,23 @@ export function App() {
     void archiveLocalSourcesRef.current();
   }, []);
   /**
+   * The running import's abort handle. Held in a ref rather than in the run
+   * state because aborting is not a render: the card learns a cancel is
+   * pending from `cancelRequested`, and the run itself learns from the signal.
+   */
+  const importAbortRef = useRef<AbortController | null>(null);
+  const cancelImportRun = useCallback(() => {
+    importAbortRef.current?.abort();
+    // Flipped here rather than waiting for the run to report, because during
+    // the rebuild the run cannot report anything for minutes — the wasm call
+    // has the worker thread. The card needs to acknowledge the press now.
+    setImportRun((current) =>
+      current && !current.outcome
+        ? { ...current, cancelRequested: true }
+        : current
+    );
+  }, []);
+  /**
    * The last refusal from an exact rebuild, shown inside the form that asked
    * for it. Cleared whenever a panel opens or closes so a stale reason can
    * never outlive the attempt that produced it.
@@ -7552,11 +7569,13 @@ export function App() {
       return;
     }
 
+    const abort = startImportAbort();
     await runStepImport({
       file,
       contentType,
       archive: archiveArtifact,
       validatedFeature,
+      signal: abort.signal,
       status: { setStatus, setFeatureFormError },
       progress: createImportProgressSink(),
       marks: {
@@ -7567,6 +7586,25 @@ export function App() {
       editDisabledReason: () => editDisabledReasonRef.current,
       newId: () => crypto.randomUUID()
     });
+    finishImportAbort(abort);
+  }
+
+  /**
+   * Arms cancellation for a new import, replacing any previous run's handle:
+   * only the newest import is cancellable from the card, because only it has
+   * a card.
+   */
+  function startImportAbort(): AbortController {
+    const abort = new AbortController();
+    importAbortRef.current = abort;
+    return abort;
+  }
+
+  /** Drops the handle once its run has ended, unless a newer one replaced it. */
+  function finishImportAbort(abort: AbortController): void {
+    if (importAbortRef.current === abort) {
+      importAbortRef.current = null;
+    }
   }
 
   function createImportProgressSink(): ImportProgressSink {
@@ -7587,6 +7625,7 @@ export function App() {
           fileName,
           phases,
           progress: { phase: phases[0] ?? 'building', fraction: null },
+          cancelRequested: false,
           outcome: null
         }),
       update: publishProgress,
@@ -7716,12 +7755,14 @@ export function App() {
           }
         : null
     );
+    const shaprAbort = startImportAbort();
     const result = await runStepImport({
       file: pending.inspection.sanitizedStepFile,
       contentType:
         pending.inspection.sanitizedStepFile.type || 'application/step',
       archive: archiveArtifact,
       validatedFeature,
+      signal: shaprAbort.signal,
       status: { setStatus, setFeatureFormError },
       progress: createImportProgressSink(),
       marks: {
@@ -7741,6 +7782,7 @@ export function App() {
           ? '; sanitized STEP source archived.'
           : '; sanitized STEP source saved locally.')
     });
+    finishImportAbort(shaprAbort);
     if (result.outcome === 'committed') {
       setPendingShaprImport(null);
       return;
@@ -13625,6 +13667,7 @@ export function App() {
           />
           <ImportProgressCard
             run={importRun}
+            onCancel={cancelImportRun}
             onDismiss={dismissImportRun}
             onArchiveNow={archiveImportSourcesFromCard}
           />
