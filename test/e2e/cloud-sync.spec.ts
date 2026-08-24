@@ -394,13 +394,15 @@ test('opens a project read-only when another tab already has it', async ({
     .poll(() => storedProjectNames(page), { timeout: SYNC_BUDGET_MS })
     .toContain('Two Tabs');
 
-  // A second tab restores the same active project on its own.
+  // A second tab restores the same active project on its own. Assert the name
+  // alone, not the rename button: the title is only a button while the tab
+  // still believes it may edit, so once the claim resolves — the very thing
+  // this test is about — the button is gone and the name is plain text. The
+  // button form is a pre-claim frame this used to race, and win.
   const second = await page.context().newPage();
   await stubApi(second);
   await second.goto('/');
-  await expect(
-    second.getByRole('button', { name: 'Rename project' })
-  ).toContainText('Two Tabs');
+  await expect(second.getByRole('banner')).toContainText('Two Tabs');
 
   await expect(second.getByRole('button', { name: /^Box \(B\)/ })).toBeDisabled(
     { timeout: SYNC_BUDGET_MS }
