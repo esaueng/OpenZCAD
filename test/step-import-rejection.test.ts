@@ -106,7 +106,7 @@ describe('refused STEP import', () => {
         bodyPresent: Boolean(derived.bodyRepresentations[candidate.ids.bodyId]),
         documentMoved: false
       })
-    ).toBe('parse error: entity #999999 not found');
+    ).toEqual({ message: 'parse error: entity #999999 not found' });
   }, 60_000);
 
   it('names the missing body when the file parses but yields no solid', async () => {
@@ -123,7 +123,7 @@ describe('refused STEP import', () => {
         warnings: derived.warnings,
         bodyPresent: false,
         documentMoved: false
-      })
+      })?.message
     ).toContain('STEP file contains no closed solids');
   }, 60_000);
 

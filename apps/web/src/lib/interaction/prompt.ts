@@ -129,8 +129,8 @@ export function commandPrompt(
     return {
       step: state.error
         ? isStaleSelectionError(state.error)
-          ? state.error
-          : `${state.error} Try another value.`
+          ? state.error.message
+          : `${state.error.message} Try another value.`
         : 'That value did not build. Try another.',
       escape
     };

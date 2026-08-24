@@ -47,11 +47,23 @@ describe('affected feature targets', () => {
     }).document;
     const sourceFeature = listFeaturesInOrder(moved)[0]!;
 
-    expect(affectedFeatureTargets(moved, sourceFeature.featureId)).toEqual([
+    const targets = affectedFeatureTargets(moved, sourceFeature.featureId);
+    expect(
+      targets.map(({ featureName, resultBodyId }) => ({
+        featureName,
+        resultBodyId
+      }))
+    ).toEqual([
       { featureName: 'Cylinder', resultBodyId: cylinderBodyId },
       { featureName: 'Cylinder rim fillet', resultBodyId: fillet.bodyId },
       { featureName: 'Move filleted cylinder', resultBodyId: fillet.bodyId }
     ]);
+    // Each target identifies its feature, which is what lets a refusal naming
+    // one offer to open it.
+    expect(targets[0]?.featureId).toBe(sourceFeature.featureId);
+    expect(
+      targets.every((target) => typeof target.featureId === 'string')
+    ).toBe(true);
   });
 
   it('resolves an in-place direct edit as its own source body', () => {
@@ -91,7 +103,7 @@ describe('affected feature targets', () => {
     // the source, and everything downstream of it is affected.
     expect(
       affectedFeatureTargets(downstream.document, directEdit.featureId)
-    ).toEqual([
+    ).toMatchObject([
       { featureName: 'Raise top', resultBodyId: bodyId },
       { featureName: 'Soften', resultBodyId: downstream.bodyId }
     ]);
