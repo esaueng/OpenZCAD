@@ -1,6 +1,7 @@
 import {
   test,
   expect,
+  bareCanvasDrags,
   expectBodyCount,
   stubApi,
   WORKSPACE_SESSION_STORAGE_KEY
@@ -1618,26 +1619,22 @@ test('view keys still work while a profile pick is waiting for a click', async (
   await page.goto('/');
   await page.getByLabel('Project name').fill('Profile Keys');
   await page.getByRole('button', { name: 'Create project' }).click();
-  const canvas = page.locator('.viewer-host canvas');
-
   await page.getByRole('button', { name: /^Sketch \(S\)/ }).click();
   await page.getByRole('button', { name: 'Top (XY)' }).click();
   const sketchTools = page.getByRole('toolbar', { name: 'Sketch tools' });
-  const bounds = await canvas.boundingBox();
-  if (!bounds) {
-    throw new Error('viewer canvas not laid out');
-  }
-  const centre = {
-    x: bounds.x + bounds.width * 0.55,
-    y: bounds.y + bounds.height * 0.55
-  };
   // Two profiles, so the pick genuinely waits for a click: a lone profile is
-  // selected automatically and the mode moves straight past the state under test.
-  for (const dx of [-140, 140]) {
+  // selected automatically and the mode moves straight past the state under
+  // test. Both have to be drawn on bare canvas, and sketch mode floats the
+  // palette over the right of it — offsetting from the canvas centre left the
+  // second drag ending 15.6px short of the palette's left edge, so measure
+  // what is bare instead.
+  await expect(page.locator('.sketch-palette')).toBeVisible();
+  const centres = await bareCanvasDrags(page, { count: 2, dragX: 55 });
+  for (const centre of centres) {
     await sketchTools.getByRole('button', { name: /^Circle/ }).click();
-    await page.mouse.move(centre.x + dx, centre.y);
+    await page.mouse.move(centre.x, centre.y);
     await page.mouse.down();
-    await page.mouse.move(centre.x + dx + 55, centre.y, { steps: 6 });
+    await page.mouse.move(centre.x + 55, centre.y, { steps: 6 });
     await page.mouse.up();
   }
 
