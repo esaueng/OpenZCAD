@@ -524,6 +524,51 @@ async function sha256Hex(bytes: Uint8Array<ArrayBuffer>): Promise<string> {
   ).join('');
 }
 
+/**
+ * Reads a blob whole, reporting bytes as they arrive when anyone is listening.
+ *
+ * Streamed rather than buffered because `arrayBuffer()` is one opaque call
+ * that can run for seconds on a 250 MB import, and the progress card has
+ * nothing to show for that stretch otherwise. The destination is allocated
+ * once at the blob's declared size and chunks are written into it, so peak
+ * memory matches `arrayBuffer()` rather than doubling it by concatenating.
+ *
+ * Anything unexpected — no `stream()` (older engines, and the plain objects
+ * tests use as files), or a stream whose length disagrees with `size` — falls
+ * back to `arrayBuffer()`. Progress is presentation; the bytes are not.
+ */
+async function readBlobBytes(
+  source: Blob,
+  onBytesRead?: (read: number, total: number) => void
+): Promise<Uint8Array<ArrayBuffer>> {
+  if (!onBytesRead || typeof source.stream !== 'function') {
+    return new Uint8Array(await source.arrayBuffer());
+  }
+  const total = source.size;
+  const bytes = new Uint8Array(total);
+  let read = 0;
+  const reader = source.stream().getReader();
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) {
+        break;
+      }
+      if (read + value.byteLength > total) {
+        // The blob grew, or `size` lied. Neither should happen; take the
+        // safe path rather than throwing inside an import.
+        return new Uint8Array(await source.arrayBuffer());
+      }
+      bytes.set(value, read);
+      read += value.byteLength;
+      onBytesRead(read, total);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  return read === total ? bytes : new Uint8Array(await source.arrayBuffer());
+}
+
 export interface StoredSourceBlob {
   ref: ImportedSourceReference;
   /**
@@ -553,12 +598,16 @@ export interface StoredSourceBlob {
  */
 export async function putSourceBlobIfAbsent(
   source: Blob | Uint8Array<ArrayBuffer>,
-  options: { claimId?: string } = {}
+  options: {
+    claimId?: string;
+    /** Read progress, for a caller with somewhere to show it. */
+    onBytesRead?(read: number, total: number): void;
+  } = {}
 ): Promise<StoredSourceBlob> {
   const bytes =
     source instanceof Uint8Array
       ? source
-      : new Uint8Array(await source.arrayBuffer());
+      : await readBlobBytes(source, options.onBytesRead);
   const checksumSha256 = await sha256Hex(bytes);
   const createdAt = new Date().toISOString();
   const record: SourceBlobRecord = {
