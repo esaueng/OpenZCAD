@@ -127,6 +127,7 @@ import type {
   TopologySelection
 } from '@openzcad/shared';
 import { formatNumber } from '../lib/model';
+import { renderLabelSegments, setLiveDiameter } from '../lib/liveLabels';
 import type { DimensionMode } from '../lib/keypad';
 import type { ViewportCameraState } from '../lib/workspaceSession';
 import type { MeasurementViewportAnnotation } from '../lib/measurements';
@@ -178,8 +179,10 @@ import type { ParamValue, SketchObjectData } from '@openzcad/shared';
 import { evalParamValue } from '../lib/model';
 import {
   edgeLabel,
-  faceLabel,
-  topologySelectionLabel
+  faceLabelSegments,
+  textLabelSegments,
+  topologySelectionLabel,
+  type LabelSegment
 } from '../lib/topologyLabels';
 
 export interface FaceResizeCommit {
@@ -1898,21 +1901,20 @@ export function ModelViewer({
       requestedAt: number;
     } | null = null;
 
+    /**
+     * Shows the dragged value in the selection chip and the viewport callouts
+     * while the document still holds the old one. Only the diameter node of a
+     * segmented name is rewritten, so the wording around it — which branch of
+     * `faceLabel` produced the name, and how that branch words it — cannot
+     * affect whether the number keeps moving. `null` restores the document
+     * value.
+     */
     function updateCylinderRadiusLabels(radius: number | null) {
       cylinderRadiusLabelSetterRef.current?.(radius);
-      if (radius === null) {
-        return;
-      }
-      const replacement = `$1${formatNumber(radius * 2)}`;
-      for (const label of labelRenderer.domElement.querySelectorAll<HTMLElement>(
-        '.selection-callout:not(.dimension-callout):not(.extrude-value-callout)'
-      )) {
-        label.textContent =
-          label.textContent?.replace(
-            /(Cylindrical face Ø)[^ ·]+/,
-            replacement
-          ) ?? null;
-      }
+      setLiveDiameter(
+        labelRenderer.domElement,
+        radius === null ? null : radius * 2
+      );
     }
 
     function restoreCylinderRadiusProxy() {
@@ -7210,29 +7212,37 @@ export function ModelViewer({
           const top = box.getCenter(new THREE.Vector3());
           top.z =
             box.max.z + Math.max(box.getSize(new THREE.Vector3()).z * 0.12, 5);
-          const suffix =
+          const suffix: readonly LabelSegment[] =
             selectedTopology?.bodyId === primaryId &&
             selectedTopology.topologyId
-              ? ` · ${
-                  selectedTopology.kind === 'edge'
-                    ? edgeLabel(
+              ? [
+                  { kind: 'text', text: ' · ' },
+                  ...(selectedTopology.kind === 'edge'
+                    ? textLabelSegments(
+                        edgeLabel(
+                          body,
+                          selectedTopology.hash,
+                          selectedTopology.topologyId
+                        )
+                      )
+                    : faceLabelSegments(
                         body,
                         selectedTopology.hash,
                         selectedTopology.topologyId
-                      )
-                    : faceLabel(
-                        body,
-                        selectedTopology.hash,
-                        selectedTopology.topologyId
-                      )
-                }`
-              : '';
+                      ))
+                ]
+              : [];
           const count =
             selectedBodyIds.length > 1 ? ` +${selectedBodyIds.length - 1}` : '';
-          const label = makeLabel(
-            'selection-callout',
-            `${body.name}${suffix}${count}`
-          );
+          const label = makeLabel('selection-callout', '');
+          // Segmented rather than one text run: a cylinder radius drag rewrites
+          // the diameter node in place while the document still holds the old
+          // value.
+          renderLabelSegments(label.element, [
+            { kind: 'text', text: body.name },
+            ...suffix,
+            ...(count ? [{ kind: 'text' as const, text: count }] : [])
+          ]);
           label.position.copy(top);
           // The callout lives in the overlay group, not under the body, so a
           // move preview would leave the name behind while its body slid out
