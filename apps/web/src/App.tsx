@@ -1286,7 +1286,16 @@ export function App() {
     id: string | null,
     source: FeatureSelectionSource
   ) {
-    setSelectedFeatureNode(id ? { id, source } : null);
+    // Keep the object when nothing moved. Re-picking the same feature used to
+    // set an unchanged string and cost no render; a fresh object every time
+    // would re-render the workspace on every repeat pick.
+    setSelectedFeatureNode((current) =>
+      current?.id === id && current.source === source
+        ? current
+        : id
+          ? { id, source }
+          : null
+    );
   }
   /** The feature that currently defines a picked body, if there is one. */
   function inferFeatureNodeFor(bodyId: BodyId | null) {
