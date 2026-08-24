@@ -163,7 +163,12 @@ const ARMED: OperationLifecycle = {
   error: null
 };
 
-function isOperationState(
+/**
+ * Whether a command surface is showing this state's lifecycle. Callers use it
+ * to decide who owns a diagnostic: a command that can display its own failure
+ * must not also push it into the workspace status line.
+ */
+export function isOperationState(
   state: InteractionState
 ): state is Exclude<InteractionState, { mode: 'idle' } | { mode: 'sketch' }> {
   return state.mode !== 'idle' && state.mode !== 'sketch';
@@ -514,6 +519,119 @@ export interface ToolCardModel {
   error?: string;
 }
 
+/** Stable identity of the command a selection has armed. */
+export type CommandId =
+  | 'offset-face'
+  | 'resize-cylinder-radius'
+  | 'edit-fillet'
+  | 'remove-face-feature'
+  | 'fillet'
+  | 'chamfer'
+  | 'extrude-region'
+  | 'sketch';
+
+interface CommandIdentity {
+  id: CommandId;
+  icon: ToolCardIcon;
+  title: string;
+}
+
+/**
+ * The one place a running command gets its name.
+ *
+ * Every surface that names the active command reads this, so the tool card,
+ * the inspector, and a diagnostic cannot disagree about which command is
+ * running. Adding a second label here is the defect this function exists to
+ * prevent.
+ */
+function commandIdentityFor(state: InteractionState): CommandIdentity | null {
+  switch (state.mode) {
+    case 'idle':
+      return null;
+    case 'face':
+      switch (state.op) {
+        case 'edit-fillet':
+          return { id: 'edit-fillet', icon: 'fillet', title: 'Edit Fillet' };
+        case 'remove-face-feature':
+          return {
+            id: 'remove-face-feature',
+            icon: 'fillet',
+            title: 'Blend Face'
+          };
+        case 'resize-cylinder-radius':
+          return {
+            id: 'resize-cylinder-radius',
+            icon: 'resize-cylinder-radius',
+            title: 'Resize Cylinder Radius'
+          };
+        case 'offset-face':
+          return {
+            id: 'offset-face',
+            icon: 'offset-face',
+            title: 'Offset Face'
+          };
+      }
+      break;
+    case 'edges':
+      return state.op === 'fillet'
+        ? { id: 'fillet', icon: 'fillet', title: 'Fillet' }
+        : { id: 'chamfer', icon: 'fillet', title: 'Chamfer' };
+    case 'region':
+      return { id: 'extrude-region', icon: 'extrude', title: 'Extrude' };
+    case 'sketch':
+      return { id: 'sketch', icon: 'sketch', title: 'Sketch' };
+  }
+  return null;
+}
+
+/** What the running command is acting on. */
+export interface CommandTarget {
+  kind: 'face' | 'edges' | 'region' | 'sketch';
+  count: number;
+}
+
+/**
+ * The active command, as every surface outside the viewport sees it.
+ *
+ * Deliberately carries no per-frame drag value: those stay in the viewport's
+ * imperative layer so a pointer move costs no React render. What lives here is
+ * the semantic lifecycle — which command, on what, in which phase, with which
+ * rejection — and it is read, never mirrored into a second piece of state.
+ */
+export interface CommandSession {
+  id: CommandId;
+  title: string;
+  target: CommandTarget;
+  /** Null in sketch mode, which has no value lifecycle of its own. */
+  phase: OperationPhase | null;
+  /** Exact-kernel rejection owned by this command; cleared when it re-arms. */
+  error: string | null;
+}
+
+export function commandSessionFor(
+  state: InteractionState
+): CommandSession | null {
+  const identity = commandIdentityFor(state);
+  if (!identity) {
+    return null;
+  }
+  const target: CommandTarget =
+    state.mode === 'edges'
+      ? { kind: 'edges', count: state.edges.length }
+      : state.mode === 'face'
+        ? { kind: 'face', count: 1 }
+        : state.mode === 'region'
+          ? { kind: 'region', count: 1 }
+          : { kind: 'sketch', count: 0 };
+  return {
+    id: identity.id,
+    title: identity.title,
+    target,
+    phase: isOperationState(state) ? state.phase : null,
+    error: isOperationState(state) ? state.error : null
+  };
+}
+
 /**
  * A stale stored selection fails at EVERY value, so "try again" advice would
  * send the user in circles; the error text carries its own repair guidance.
@@ -547,9 +665,12 @@ function lifecycleHint(
 }
 
 export function toolCardFor(state: InteractionState): ToolCardModel | null {
+  const identity = commandIdentityFor(state);
+  if (!identity) {
+    return null;
+  }
+  const { icon, title } = identity;
   switch (state.mode) {
-    case 'idle':
-      return null;
     case 'face': {
       const capabilities = selectionCapabilities({
         kind: 'face',
@@ -570,45 +691,24 @@ export function toolCardFor(state: InteractionState): ToolCardModel | null {
           (state.op === 'remove-face-feature' &&
             capability.action === 'remove-face-feature')
       }));
-      return state.op === 'edit-fillet'
-        ? {
-            icon: 'fillet',
-            title: 'Edit Fillet',
-            actions,
-            ...lifecycleHint(
-              state,
-              'Drag the radial handle or tap R to edit · set R0 to remove.'
-            )
-          }
-        : state.op === 'remove-face-feature'
-          ? {
-              icon: 'fillet',
-              title: 'Blend Face',
-              actions,
-              ...lifecycleHint(
-                state,
-                `R${state.target.blendRadius ?? '?'} is read-only; this imported blend can be removed.`
-              )
-            }
-          : state.op === 'resize-cylinder-radius'
-            ? {
-                icon: 'resize-cylinder-radius',
-                title: 'Resize Cylinder Radius',
-                ...(actions.length > 1 ? { actions } : {}),
-                ...lifecycleHint(
-                  state,
-                  'Drag the radial handle or tap the value to set the radius.'
-                )
-              }
-            : {
-                icon: 'offset-face',
-                title: 'Offset Face',
-                ...(actions.length > 1 ? { actions } : {}),
-                ...lifecycleHint(
-                  state,
-                  'Drag the arrow to offset the face, or tap the value to type · Space faces it head-on.'
-                )
-              };
+      const hint =
+        state.op === 'edit-fillet'
+          ? 'Drag the radial handle or tap R to edit · set R0 to remove.'
+          : state.op === 'remove-face-feature'
+            ? `R${state.target.blendRadius ?? '?'} is read-only; this imported blend can be removed.`
+            : state.op === 'resize-cylinder-radius'
+              ? 'Drag the radial handle or tap the value to set the radius.'
+              : 'Drag the arrow to offset the face, or tap the value to type · Space faces it head-on.';
+      // Single-capability faces suppress the action row: one button that only
+      // restates the title is noise on a card meant to stay out of the way.
+      const alwaysShowActions =
+        state.op === 'edit-fillet' || state.op === 'remove-face-feature';
+      return {
+        icon,
+        title,
+        ...(alwaysShowActions || actions.length > 1 ? { actions } : {}),
+        ...lifecycleHint(state, hint)
+      };
     }
     case 'edges': {
       const actions = selectionCapabilities({
@@ -627,8 +727,8 @@ export function toolCardFor(state: InteractionState): ToolCardModel | null {
         active: capability.action === state.op
       }));
       return {
-        icon: 'fillet',
-        title: state.op === 'fillet' ? 'Fillet' : 'Chamfer',
+        icon,
+        title,
         actions,
         ...lifecycleHint(
           state,
@@ -640,14 +740,14 @@ export function toolCardFor(state: InteractionState): ToolCardModel | null {
     }
     case 'region':
       return {
-        icon: 'extrude',
-        title: 'Extrude',
+        icon,
+        title,
         ...lifecycleHint(state, 'Drag the region to pull it into a solid.')
       };
     case 'sketch':
       return {
-        icon: 'sketch',
-        title: 'Sketch',
+        icon,
+        title,
         hint: state.session.pendingConstraint
           ? 'Pick geometry for the constraint · Esc cancels.'
           : state.session.tool === 'select'
@@ -660,5 +760,7 @@ export function toolCardFor(state: InteractionState): ToolCardModel | null {
                   : 'Place three circumference points. Collinear input is rejected.'
               : 'Draw with exact geometry snaps. Esc ends a chain.'
       };
+    case 'idle':
+      return null;
   }
 }

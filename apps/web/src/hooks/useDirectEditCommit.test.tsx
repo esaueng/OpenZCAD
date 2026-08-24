@@ -132,6 +132,7 @@ describe('direct manipulation commit', () => {
       'Resize Cylinder Radius'
     );
     const onValidationFailed = vi.fn();
+    const onStatus = vi.fn();
     const { result } = renderHook(() =>
       useDirectEditCommit({
         manager: () => manager,
@@ -152,7 +153,7 @@ describe('direct manipulation commit', () => {
         onValidationFailed,
         onCommitted: vi.fn(),
         onBusy: vi.fn(),
-        onStatus: vi.fn()
+        onStatus
       })
     );
 
@@ -178,5 +179,13 @@ describe('direct manipulation commit', () => {
       'Fillet could not be created on 2 selected edges with radius 1.',
       0.5
     );
+    // One owner per diagnostic: the running command shows the rejection at the
+    // handle that caused it, and the status line is not handed a second copy
+    // that can go stale while the value moves on.
+    expect(
+      onStatus.mock.calls.flat().filter((message) =>
+        String(message).includes('Fillet could not be created')
+      )
+    ).toEqual([]);
   });
 });

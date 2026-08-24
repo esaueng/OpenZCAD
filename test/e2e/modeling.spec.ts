@@ -101,7 +101,7 @@ test('resizes a cylinder wall concentrically with one undoable radius edit', asy
     name: 'Resize Cylinder Radius operation'
   });
   await expect(radiusOperation).toBeVisible();
-  await expect(page.getByTestId('live-cylinder-radius')).toHaveText('Ø 28 mm');
+  await expect(page.getByTestId('direct-manipulation-value')).toHaveText('Ø 28 mm');
   await expect(page.getByRole('region', { name: '3D viewport' })).toContainText(
     'Cylindrical face Ø28'
   );
@@ -141,7 +141,6 @@ test('resizes a cylinder wall concentrically with one undoable radius edit', asy
   await page.mouse.move(start.x, start.y);
   await page.mouse.down();
   await page.mouse.move(end.x, end.y, { steps: 8 });
-  await expect(page.getByTestId('live-cylinder-radius')).toHaveText('Ø 36 mm');
   await expect(page.getByTestId('direct-manipulation-value')).toHaveText(
     'Ø 36 mm'
   );
@@ -200,10 +199,10 @@ test('resizes a cylinder wall concentrically with one undoable radius edit', asy
     cancelStart.y + cancelHandle.dy * cancelHandle.pixelsPerUnit * 2,
     { steps: 6 }
   );
-  await expect(page.getByTestId('live-cylinder-radius')).toHaveText('Ø 40 mm');
+  await expect(page.getByTestId('direct-manipulation-value')).toHaveText('Ø 40 mm');
   await expect(radiusOperation).toContainText('Dragging');
   await page.keyboard.press('Escape');
-  await expect(page.getByTestId('live-cylinder-radius')).toHaveText('Ø 36 mm');
+  await expect(page.getByTestId('direct-manipulation-value')).toHaveText('Ø 36 mm');
   await expect(page.getByLabel('Radius', { exact: true })).toHaveValue('18');
   await expect(canvas).not.toHaveAttribute(
     'data-e2e-cylinder-proxy-radius',
@@ -1033,7 +1032,7 @@ test('radius drag resizes an offset-and-filleted cylinder as one body', async ({
     start.y + handle.dy * handle.pixelsPerUnit * 4,
     { steps: 8 }
   );
-  await expect(page.getByTestId('live-cylinder-radius')).toHaveText('Ø 36 mm');
+  await expect(page.getByTestId('direct-manipulation-value')).toHaveText('Ø 36 mm');
   await page.mouse.up();
   await expect(page.getByRole('contentinfo')).toContainText(
     'Adjusted cylinder diameter to Ø 36 mm.'
@@ -1185,7 +1184,7 @@ for (const modifier of [
     await expect(
       page.getByRole('region', { name: 'Resize Cylinder Radius operation' })
     ).toBeVisible();
-    await expect(page.getByTestId('live-cylinder-radius')).toHaveText(
+    await expect(page.getByTestId('direct-manipulation-value')).toHaveText(
       'Ø 9.2 mm'
     );
     await expect(canvas).toHaveAttribute('data-e2e-handle-x', /.+/);
@@ -1216,7 +1215,7 @@ for (const modifier of [
     await page.keyboard.down('Shift');
     try {
       await page.mouse.move(end.x, end.y, { steps: 8 });
-      await expect(page.getByTestId('live-cylinder-radius')).toHaveText(
+      await expect(page.getByTestId('direct-manipulation-value')).toHaveText(
         'Ø 12.8 mm'
       );
       await expect(canvas).not.toHaveAttribute(
