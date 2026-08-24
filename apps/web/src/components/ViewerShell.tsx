@@ -40,7 +40,9 @@ import type {
   MeasurementViewportAnnotation
 } from '../lib/measurements';
 import type { RegionPickData } from './viewer/regionOverlay';
-import { formatNumber } from '../lib/model';
+import { setLiveDiameter } from '../lib/liveLabels';
+import type { LabelSegment } from '../lib/topologyLabels';
+import { LabelSegments } from './LabelSegments';
 import {
   MeasurementCloudSyncAgent,
   type MeasurementCloudSyncAgentProps
@@ -118,7 +120,10 @@ interface ViewerShellProps {
    */
   viewMode?: boolean;
   /** Bottom-center summary of the current selection, with a measurement. */
-  selectionChip: { label: string; detail?: string } | null;
+  selectionChip: {
+    label: readonly LabelSegment[];
+    detail?: string;
+  } | null;
   onClearSelection(): void;
   canUndo: boolean;
   canRedo: boolean;
@@ -327,18 +332,14 @@ export function ViewerShell({
     measurementCloudSync[1] &&
     measurementCloudSync[2].has(cloudProjectId) &&
     measurementCloudSync[3] === cloudProjectId;
+  // Live drag value: only the chip's diameter node is rewritten, never its
+  // wording, and `null` puts the document value back.
   cylinderRadiusLabelSetterRef.current = (radius) => {
     const label = selectionChipLabelRef.current;
-    if (!label || !selectionChip) {
+    if (!label) {
       return;
     }
-    label.textContent =
-      radius === null
-        ? selectionChip.label
-        : selectionChip.label.replace(
-            /(Cylindrical face Ø)[^ ·]+/,
-            `$1${formatNumber(radius * 2)}`
-          );
+    setLiveDiameter(label, radius === null ? null : radius * 2);
   };
 
   return (
@@ -482,7 +483,7 @@ export function ViewerShell({
       {selectionChip && (
         <div className="selection-chip" role="status">
           <span ref={selectionChipLabelRef} className="selection-chip-label">
-            {selectionChip.label}
+            <LabelSegments segments={selectionChip.label} />
           </span>
           {selectionChip.detail && (
             <span className="selection-chip-detail">
