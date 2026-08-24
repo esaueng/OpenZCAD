@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useMemo, useRef, useState, type ReactNode } from 'react';
 import { coerceParamValue } from '@openzcad/document-core';
 import {
   FULL_REVOLVE_ANGLE_DEG,
@@ -176,8 +176,6 @@ interface PrimitiveFormProps {
   scope: Record<string, number>;
   initialName: string;
   initialDimensions?: Record<string, ParamValue>;
-  /** Transient direct-manipulation value; never writes document history. */
-  liveRadius?: number | null;
   submitLabel: string;
   onSubmit(name: string, dimensions: Record<string, ParamValue>): void;
   onCancel?: () => void;
@@ -188,40 +186,43 @@ export function PrimitiveForm({
   scope,
   initialName,
   initialDimensions,
-  liveRadius,
   submitLabel,
   onSubmit,
   onCancel
 }: PrimitiveFormProps) {
   const fields = PRIMITIVE_FIELDS[kind];
   const [name, setName] = useState(initialName);
-  const [values, setValues] = useState<Record<string, string>>(() =>
-    Object.fromEntries(
-      fields.map((field) => [
-        field.key,
-        initialDimensions
-          ? paramValueText(initialDimensions[field.key])
-          : field.initial
-      ])
-    )
+  const documentValues = Object.fromEntries(
+    fields.map((field) => [
+      field.key,
+      initialDimensions
+        ? paramValueText(initialDimensions[field.key])
+        : field.initial
+    ])
   );
+  const [values, setValues] = useState<Record<string, string>>(
+    () => documentValues
+  );
+
+  /**
+   * Follow the document when it moves underneath the open form.
+   *
+   * A viewport drag can commit a new size while this panel is showing the old
+   * one, and the panel is not re-keyed by the edit, so nothing else would
+   * refresh these fields. Comparing the document's own text means typing is
+   * never clobbered: local edits do not change what the document says.
+   */
+  const documentSignature = fields
+    .map((field) => documentValues[field.key])
+    .join('\u0000');
+  const lastDocumentSignature = useRef(documentSignature);
+  if (lastDocumentSignature.current !== documentSignature) {
+    lastDocumentSignature.current = documentSignature;
+    setValues(documentValues);
+  }
 
   const canSubmit =
     name.trim().length > 0 && fieldsValid(scope, Object.values(values));
-
-  useEffect(() => {
-    if (
-      kind !== 'cylinder' ||
-      liveRadius === undefined ||
-      liveRadius === null
-    ) {
-      return;
-    }
-    const text = String(Math.round(liveRadius * 1000) / 1000);
-    setValues((current) =>
-      current.radius === text ? current : { ...current, radius: text }
-    );
-  }, [kind, liveRadius]);
 
   return (
     <FormShell

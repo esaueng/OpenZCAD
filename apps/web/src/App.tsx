@@ -344,6 +344,8 @@ import {
   IDLE,
   escapeTarget,
   interactionReducer,
+  commandSessionFor,
+  isOperationState,
   toolCardFor,
   type FaceTarget
 } from './lib/interaction/machine';
@@ -362,6 +364,7 @@ import {
   faceLabel,
   topologySelectionLabel
 } from './lib/topologyLabels';
+import type { FeatureSelectionSource } from './lib/inspectorHeading';
 import { resolveFace } from './lib/topologyResolution';
 import { objectPolylines } from './lib/objectPolyline';
 import type { RegionPickData } from './components/viewer/regionOverlay';
@@ -1264,9 +1267,40 @@ export function App() {
   const [namingSave, setNamingSave] = useState(false);
   // Named `doc` (not `document`) so the global DOM document is never shadowed.
   const [doc, setDoc] = useState<ProjectDocument | null>(null);
-  const [selectedFeatureNodeId, setSelectedFeatureNodeId] = useState<
-    string | null
-  >(null);
+  /**
+   * The feature the inspector is showing, and how it got there.
+   *
+   * A history-tree click *pins* a feature: the user asked for that feature, so
+   * it names the panel. A viewport pick *infers* the feature that currently
+   * defines the picked body — an answer to "what made this shape", which is
+   * not the command the pick just armed. Keeping the provenance is what stops
+   * the panel from titling itself after an unrelated earlier operation.
+   */
+  const [selectedFeatureNode, setSelectedFeatureNode] = useState<{
+    id: string;
+    source: FeatureSelectionSource;
+  } | null>(null);
+  const selectedFeatureNodeId = selectedFeatureNode?.id ?? null;
+  const featureSelectionSource = selectedFeatureNode?.source ?? null;
+  function selectFeatureNode(
+    id: string | null,
+    source: FeatureSelectionSource
+  ) {
+    // Keep the object when nothing moved. Re-picking the same feature used to
+    // set an unchanged string and cost no render; a fresh object every time
+    // would re-render the workspace on every repeat pick.
+    setSelectedFeatureNode((current) =>
+      current?.id === id && current.source === source
+        ? current
+        : id
+          ? { id, source }
+          : null
+    );
+  }
+  /** The feature that currently defines a picked body, if there is one. */
+  function inferFeatureNodeFor(bodyId: BodyId | null) {
+    selectFeatureNode(bodyId ? featureNodeIdForBody(bodyId) : null, 'inferred');
+  }
   const [selectedTopology, setSelectedTopology] =
     useState<TopologySelection | null>(null);
   // Viewport-only edge picks for one fillet/chamfer feature. The document
@@ -1468,10 +1502,8 @@ export function App() {
       ) => void)
     | null
   >(null);
-  /** Localized inspector update; avoids rerendering the whole workspace per move. */
-  const cylinderRadiusInspectorSetterRef = useRef<
-    ((radius: number | null) => void) | null
-  >(null);
+  /** Whether the running command will render the current edit's rejection. */
+  const commandOwnsDiagnosticRef = useRef(false);
   /** Cancels the viewport's captured pointer session on keyboard Escape. */
   const cancelDirectManipulationRef = useRef<(() => boolean) | null>(null);
   const contextMenuActionsRef = useRef<Record<string, () => void>>({});
@@ -1826,15 +1858,24 @@ export function App() {
     manager: () => managerRef.current,
     derive: (document) => geometry.syncOnce(document),
     commit: (command, derived) => executeCommand(command, derived),
-    onValidationStart: (value) =>
-      dispatchInteraction({ type: 'validation-start', value }),
+    onValidationStart: (value) => {
+      // Recorded before the dispatch, while the machine still holds the state
+      // the reducer will test: a command that owns this run will render its own
+      // rejection, so the status line must not print a second copy.
+      commandOwnsDiagnosticRef.current = isOperationState(
+        interactionRef.current
+      );
+      dispatchInteraction({ type: 'validation-start', value });
+    },
     onValidationFailed: (message, value) => {
       cylinderRadiusPreview.clear();
       offsetPreview.clear();
       setPreviewDeferred(false);
       offsetPreviewValueRef.current = null;
-      cylinderRadiusInspectorSetterRef.current?.(null);
       dispatchInteraction({ type: 'validation-failed', message, value });
+      if (!commandOwnsDiagnosticRef.current) {
+        setStatus(message);
+      }
     },
     onCommitted: (bodyId) => {
       cylinderRadiusPreview.clear();
@@ -1845,7 +1886,7 @@ export function App() {
       setSelectedTopology(null);
       setSelectedEdges([]);
       setSelectedBodyIds([bodyId]);
-      setSelectedFeatureNodeId(featureNodeIdForBody(bodyId));
+      inferFeatureNodeFor(bodyId);
     },
     onBusy: setBusy,
     onStatus: setStatus
@@ -4162,7 +4203,7 @@ export function App() {
     geometry.invalidate();
     setDoc(normalized);
     setPreviewDoc(null);
-    setSelectedFeatureNodeId(null);
+    setSelectedFeatureNode(null);
     setSelectedTopology(null);
     setSelectedEdges([]);
     setSelectedBodyIds([]);
@@ -4366,7 +4407,7 @@ export function App() {
     // Back to an idle viewport so sequential adds stay one key away; the
     // new feature is selectable from the history or the viewport.
     setTool(null);
-    setSelectedFeatureNodeId(null);
+    setSelectedFeatureNode(null);
     setSelectedTopology(null);
     setSelectedEdges([]);
     setSelectedBodyIds([]);
@@ -4456,7 +4497,7 @@ export function App() {
     );
     const initialProfiles =
       existing.length > 0 ? existing : available.length === 1 ? available : [];
-    setSelectedFeatureNodeId(null);
+    setSelectedFeatureNode(null);
     setSelectedTopology(null);
     setSelectedEdges([]);
     setSelectedBodyIds([]);
@@ -4542,7 +4583,7 @@ export function App() {
     setTool(null);
     extrudeSketchReturnRef.current = null;
     extrudeSelectionReturnRef.current = null;
-    setSelectedFeatureNodeId(createdFeature?.id ?? null);
+    selectFeatureNode(createdFeature?.id ?? null, 'pinned');
     setSelectedBodyIds(createdFeature?.bodyId ? [createdFeature.bodyId] : []);
     setStatus(`Created ${createdFeature?.name ?? 'extrusion'}.`);
   }
@@ -4606,7 +4647,6 @@ export function App() {
     if (interaction.mode !== 'idle') {
       cancelDirectManipulationRef.current?.();
       cylinderRadiusPreview.clear();
-      cylinderRadiusInspectorSetterRef.current?.(null);
       edgePreview.clear();
       dispatchInteraction({ type: 'clear' });
       setKeypad(null);
@@ -4634,7 +4674,7 @@ export function App() {
           profiles: [...selectedProfiles],
           sketchId: selectedSketchProfileId
         };
-        setSelectedFeatureNodeId(null);
+        setSelectedFeatureNode(null);
         setSelectedTopology(null);
         setSelectedEdges([]);
         setSelectedBodyIds([]);
@@ -4726,7 +4766,7 @@ export function App() {
     setSelectedSketchProfileId(selectionReturn?.sketchId ?? null);
     setMovePreview(null);
     setTool(null);
-    setSelectedFeatureNodeId(null);
+    setSelectedFeatureNode(null);
     extrudeSketchReturnRef.current = null;
     extrudeSelectionReturnRef.current = null;
     if (sketchReturn) {
@@ -4753,7 +4793,6 @@ export function App() {
     if (mode === 'view' || mode === 'tweak') {
       cancelDirectManipulationRef.current?.();
       cylinderRadiusPreview.clear();
-      cylinderRadiusInspectorSetterRef.current?.(null);
       edgePreview.clear();
       setKeypad(null);
       dispatchInteraction({ type: 'clear' });
@@ -4900,7 +4939,7 @@ export function App() {
       cancelDirectManipulationRef.current?.();
       handleCylinderRadiusCancel();
     }
-    setSelectedFeatureNodeId(null);
+    setSelectedFeatureNode(null);
     setSelectedTopology(null);
     setSelectedEdges([]);
     setSelectedBodyIds([]);
@@ -6380,7 +6419,7 @@ export function App() {
     managerRef.current = null;
     setDoc(null);
     setArtifacts([]);
-    setSelectedFeatureNodeId(null);
+    setSelectedFeatureNode(null);
     setSelectedTopology(null);
     setSelectedEdges([]);
     setSelectedBodyIds([]);
@@ -6720,7 +6759,7 @@ export function App() {
       // restored history has to be rebuilt from scratch to replace them.
       geometry.invalidate();
       setDoc(restored);
-      setSelectedFeatureNodeId(null);
+      setSelectedFeatureNode(null);
       setSelectedTopology(null);
       setSelectedEdges([]);
       setSelectedBodyIds([]);
@@ -7786,7 +7825,7 @@ export function App() {
     }
     setTool(null);
     setExtrudePreview(null);
-    setSelectedFeatureNodeId(null);
+    setSelectedFeatureNode(null);
     setSelectedTopology(null);
     setSelectedEdges([]);
     setSelectedBodyIds([]);
@@ -7814,7 +7853,7 @@ export function App() {
       type: 'enter-sketch',
       plane: attachment.planeRef
     });
-    setSelectedFeatureNodeId(null);
+    setSelectedFeatureNode(null);
     setSelectedTopology(null);
     setSelectedEdges([]);
     setSelectedBodyIds([]);
@@ -8076,7 +8115,7 @@ export function App() {
       setSelectedTopology(
         nextEdges.at(-1) ?? { bodyId: selection.bodyId, kind: 'body' }
       );
-      setSelectedFeatureNodeId(featureNodeIdForBody(selection.bodyId));
+      inferFeatureNodeFor(selection.bodyId);
       if (!additive && tool !== 'fillet' && tool !== 'chamfer') {
         setTool(null);
       }
@@ -8103,10 +8142,10 @@ export function App() {
       setSelectedTopology(
         additive ? { bodyId: nextIds[0]!, kind: 'body' } : selection
       );
-      setSelectedFeatureNodeId(featureNodeIdForBody(nextIds[0]!));
+      inferFeatureNodeFor(nextIds[0]!);
     } else {
       setSelectedTopology(null);
-      setSelectedFeatureNodeId(null);
+      setSelectedFeatureNode(null);
     }
   }
 
@@ -8123,7 +8162,7 @@ export function App() {
     setSelectedEdges(edges);
     setSelectedBodyIds([body.bodyId]);
     setSelectedTopology(edges.at(-1) ?? { bodyId: body.bodyId, kind: 'body' });
-    setSelectedFeatureNodeId(featureNodeIdForBody(body.bodyId));
+    inferFeatureNodeFor(body.bodyId);
     setStatus(`Selected all ${edges.length} exact edges on ${body.name}.`);
   }
 
@@ -8155,7 +8194,7 @@ export function App() {
     setSelectedEdges(selections);
     setSelectedBodyIds([first.bodyId]);
     setSelectedTopology(selections.at(-1) ?? first);
-    setSelectedFeatureNodeId(featureNodeIdForBody(first.bodyId));
+    inferFeatureNodeFor(first.bodyId);
     setStatus(
       `Selected a run of ${selections.length} connected edges. Fillet or chamfer applies to all of them.`
     );
@@ -8204,9 +8243,7 @@ export function App() {
         ? { bodyId: bodyIds[0] as BodyId, kind: 'body' }
         : null
     );
-    setSelectedFeatureNodeId(
-      bodyIds.length === 1 ? featureNodeIdForBody(bodyIds[0] as BodyId) : null
-    );
+    inferFeatureNodeFor(bodyIds.length === 1 ? (bodyIds[0] as BodyId) : null);
     setStatus(
       bodyIds.length === 0
         ? 'Nothing in the box. Selection cleared.'
@@ -8958,7 +8995,7 @@ export function App() {
     setSelectedProfiles(nextProfiles);
     setResolvedExtrudePreview(null);
     setSelectedSketchProfileId(region.sketchId as SketchId);
-    setSelectedFeatureNodeId(null);
+    setSelectedFeatureNode(null);
     setSelectedTopology(null);
     setSelectedEdges([]);
     setSelectedBodyIds([]);
@@ -9245,12 +9282,6 @@ export function App() {
         )
     };
   }, [interaction, representations]);
-  const cylinderRadiusInspectorInitial =
-    interaction.mode === 'face' &&
-    interaction.op === 'resize-cylinder-radius' &&
-    interaction.target.radius !== undefined
-      ? interaction.target.radius
-      : null;
   const cylinderSelectionKey =
     interaction.mode === 'face' && interaction.op === 'resize-cylinder-radius'
       ? `${interaction.target.bodyId}:${interaction.target.topologyId}`
@@ -9258,16 +9289,6 @@ export function App() {
   useEffect(() => {
     setCylinderDimensionMode('diameter');
   }, [cylinderSelectionKey]);
-  const cylinderRadiusInspectorEdit = useMemo(
-    () =>
-      cylinderRadiusInspectorInitial === null
-        ? null
-        : {
-            initialRadius: cylinderRadiusInspectorInitial,
-            dimensionMode: cylinderDimensionMode
-          },
-    [cylinderDimensionMode, cylinderRadiusInspectorInitial]
-  );
 
   function buildCylinderRadiusCommand(
     radius: ParamValue
@@ -9385,7 +9406,6 @@ export function App() {
     ) {
       return;
     }
-    cylinderRadiusInspectorSetterRef.current?.(radius);
     if (exactGeometry) {
       cylinderRadiusPreview.request(radius);
     } else {
@@ -9398,7 +9418,6 @@ export function App() {
 
   function handleCylinderRadiusCancel() {
     cylinderRadiusPreview.clear();
-    cylinderRadiusInspectorSetterRef.current?.(null);
   }
 
   function handleCylinderRadiusCommit(radius: number, exact?: ParamValue) {
@@ -9416,7 +9435,6 @@ export function App() {
       !isValidCylinderRadius(radius, sourceRadius) ||
       !plan
     ) {
-      cylinderRadiusInspectorSetterRef.current?.(null);
       setStatus('Radius is too small to form valid geometry at this scale.');
       return false;
     }
@@ -9829,8 +9847,9 @@ export function App() {
                       candidate.data.targetBodyId === current.target.bodyId
                   )
               : null;
-            setSelectedFeatureNodeId(
-              feature?.id ?? committedFeature?.id ?? null
+            selectFeatureNode(
+              feature?.id ?? committedFeature?.id ?? null,
+              'inferred'
             );
             dispatchInteraction({ type: 'select-face', target: nextTarget });
           },
@@ -10314,8 +10333,12 @@ export function App() {
     setExtrudePreview(null);
     setSelectedTopology(null);
     setSelectedEdges([]);
+    // Picking in the tree is a selection change like any other. Dropping the
+    // topology selection while leaving the machine armed would leave a command
+    // running against geometry the panel no longer shows.
+    dispatchInteraction({ type: 'clear' });
     const next = selectedFeatureNodeId === nodeId ? null : nodeId;
-    setSelectedFeatureNodeId(next);
+    selectFeatureNode(next, 'pinned');
     const node = next && doc ? doc.nodes[next] : undefined;
     const bodyId = node?.kind === 'feature' ? node.bodyId : undefined;
     const sourceSketchId =
@@ -10414,9 +10437,9 @@ export function App() {
     setSelectedBodyIds(nextIds);
     if (nextIds.length === 1) {
       setSelectedTopology({ bodyId: nextIds[0]!, kind: 'body' });
-      setSelectedFeatureNodeId(featureNodeIdForBody(nextIds[0]!));
+      inferFeatureNodeFor(nextIds[0]!);
     } else {
-      setSelectedFeatureNodeId(null);
+      setSelectedFeatureNode(null);
     }
     setStatus(
       nextIds.length > 0
@@ -11705,6 +11728,7 @@ export function App() {
   const assistantAvailable =
     cloudFunctionsEnabled && appSettings.assistant.enabled && !modelingLocked;
   const assistantHidden = directMode;
+  const commandSession = commandSessionFor(interaction);
   const baseToolCard = toolCardFor(interaction);
   const editingSketchName =
     interaction.mode === 'sketch' && interaction.session.sketchId
@@ -12845,8 +12869,8 @@ export function App() {
                 units={doc.units}
                 selectedBodyIds={selectedBodyIds}
                 preferredSketchId={selectedSketch?.sketchId ?? null}
-                cylinderRadiusEdit={cylinderRadiusInspectorEdit}
-                cylinderRadiusSetterRef={cylinderRadiusInspectorSetterRef}
+                commandSession={commandSession}
+                featureSelectionSource={featureSelectionSource}
                 onLaunchTool={launchTool}
                 onPreviewBodyAppearance={previewBodyAppearance}
                 onCommitBodyAppearance={commitBodyAppearance}
