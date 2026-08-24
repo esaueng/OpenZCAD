@@ -1,5 +1,6 @@
 import { useRef } from 'react';
-import type { BodyId, ProjectDocument } from '@openzcad/shared';
+import type {
+  FeatureId, BodyId, ProjectDocument } from '@openzcad/shared';
 import { CommandManager, type AnyCommand } from '@openzcad/command-system';
 import { errorMessage } from '../lib/errors';
 import { validatedFeatureRejection } from '../lib/featureValidation';
@@ -42,6 +43,8 @@ export interface ValidatedFeatureCommitOptions {
 
 export interface ValidatedFeatureTarget {
   featureName: string;
+  /** Identifies the feature so a refusal naming it can offer to open it. */
+  featureId?: FeatureId;
   resultBodyId: BodyId;
 }
 
@@ -316,7 +319,7 @@ export function useValidatedFeatureCommit(
           documentMoved
         });
         if (rejection) {
-          throw new Error(rejection);
+          throw new Error(rejection.message);
         }
       }
       if (input.targets.length === 0 && documentMoved) {

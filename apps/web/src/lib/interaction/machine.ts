@@ -96,12 +96,33 @@ export interface SketchSessionState {
 export type OperationPhase =
   'armed' | 'dragging' | 'exact-entry' | 'validating' | 'failed';
 
+/**
+ * A refusal, in the pieces a user can act on.
+ *
+ * The kernel's own sentence is the whole of what a rejection used to be, shown
+ * as a red paragraph with nothing to do about it. Splitting it lets the cause
+ * lead, the machinery wait behind a disclosure, and — where the refusal names
+ * an existing feature — the way out be a button rather than a suggestion.
+ */
+export interface CommandDiagnostic {
+  /** One plain sentence naming the cause. */
+  message: string;
+  /** Kernel text, shown only on request. */
+  detail?: string;
+  /**
+   * The existing feature whose rebuild refused, when the failure names one.
+   * A new fillet that cannot be built beside an older one fails as the older
+   * one, and that feature is where the user has to go.
+   */
+  culprit?: { featureId: string; featureName: string };
+}
+
 interface OperationLifecycle {
   phase: OperationPhase;
   /** Last submitted value, retained when exact validation fails. */
   lastValue: number | null;
   /** Exact-kernel failure; only present in the failed phase. */
-  error: string | null;
+  error: CommandDiagnostic | null;
 }
 
 export type InteractionState =
@@ -137,7 +158,11 @@ export type InteractionEvent =
   | { type: 'keypad-open' }
   | { type: 'keypad-close' }
   | { type: 'validation-start'; value: number }
-  | { type: 'validation-failed'; message: string; value?: number }
+  | {
+      type: 'validation-failed';
+      diagnostic: CommandDiagnostic;
+      value?: number;
+    }
   | { type: 'recover' }
   | { type: 'enter-sketch'; plane: SketchPlaneRef; sketchId?: string }
   | { type: 'sketch-tool'; tool: SketchToolId }
@@ -342,7 +367,7 @@ export function interactionReducer(
             ...state,
             phase: 'failed',
             lastValue: event.value ?? state.lastValue,
-            error: event.message
+            error: event.diagnostic
           }
         : state;
     case 'recover':
@@ -516,7 +541,7 @@ export interface ToolCardModel {
   actions?: ToolCardAction[];
   hint: string;
   phase?: OperationPhase;
-  error?: string;
+  error?: CommandDiagnostic;
 }
 
 /** Stable identity of the command a selection has armed. */
@@ -631,7 +656,7 @@ export interface CommandSession {
   /** Null in sketch mode, which has no value lifecycle of its own. */
   phase: OperationPhase | null;
   /** Exact-kernel rejection owned by this command; cleared when it re-arms. */
-  error: string | null;
+  error: CommandDiagnostic | null;
 }
 
 export function commandSessionFor(
@@ -663,9 +688,9 @@ export function commandSessionFor(
  * send the user in circles; the error text carries its own repair guidance.
  */
 export function isStaleSelectionError(
-  error: string | null | undefined
+  error: CommandDiagnostic | null | undefined
 ): boolean {
-  return /no longer exists/.test(error ?? '');
+  return /no longer exists/.test(error?.message ?? '');
 }
 
 function lifecycleHint(
@@ -684,7 +709,9 @@ function lifecycleHint(
       hint: isStaleSelectionError(state.error)
         ? 'Esc closes the tool.'
         : 'Adjust the value and try again.',
-      error: state.error ?? 'The exact operation was rejected.'
+      error: state.error ?? {
+        message: 'The exact operation was rejected.'
+      }
     };
   }
   return { phase: state.phase, hint: armedHint };

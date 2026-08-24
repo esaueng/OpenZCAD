@@ -11,8 +11,9 @@ import { commandPrompt, commandPromptText } from './prompt';
 function faceState(
   phase: OperationPhase,
   op: Extract<InteractionState, { mode: 'face' }>['op'] = 'offset-face',
-  error: string | null = null
+  message: string | null = null
 ): InteractionState {
+  const error = message === null ? null : { message };
   return {
     mode: 'face',
     op,
