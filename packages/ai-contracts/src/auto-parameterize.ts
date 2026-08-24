@@ -845,14 +845,14 @@ function importedBlendCandidates(
       continue;
     }
     const existingBlendEdits = features.flatMap((feature) => {
-        const data = feature.data;
-        return scope.has(feature.featureId) &&
-          data.featureKind === 'direct-edit' &&
-          data.targetBodyId === bodyId &&
-          data.operation.kind === 'resize-blend'
-          ? [data.operation]
-          : [];
-      });
+      const data = feature.data;
+      return scope.has(feature.featureId) &&
+        data.featureKind === 'direct-edit' &&
+        data.targetBodyId === bodyId &&
+        data.operation.kind === 'resize-blend'
+        ? [data.operation]
+        : [];
+    });
     const regions = new Map<
       string,
       Array<(typeof body.topology.faces)[number]>

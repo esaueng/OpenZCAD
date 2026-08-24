@@ -49,7 +49,6 @@ import {
   inspectTriangleMeshClosure,
   isClosedConsistentlyOrientedMesh
 } from '../packages/kernel-adapter/src/boolean-result-validation';
-import { resolveImportedBlendFace } from '../apps/web/src/lib/interaction/filletFaceEdit';
 
 const NORMAL_PROJECTED_RADIUS_PX = 240;
 
@@ -3857,16 +3856,26 @@ describe('exact kernel adapter', { timeout: 30_000 }, () => {
     expect(second.warnings).toEqual([]);
     const firstBody = first.bodyRepresentations[bodyId];
     const secondBody = second.bodyRepresentations[bodyId];
-    const editFeature = listFeaturesInOrder(manager.document).at(-1)!;
-    const resizedFace = resolveImportedBlendFace(
-      firstBody?.topology?.faces ?? [],
-      source!,
-      String(editFeature.featureId)
-    );
-    expect(resizedFace?.geometry?.blendRadius).toBeCloseTo(2, 8);
-    expect(resizedFace?.reference?.producingFeatureId).toBe(
-      editFeature.featureId
-    );
+    const resizedRegion =
+      firstBody?.topology?.faces.filter(
+        (face) =>
+          Math.abs((face.geometry?.blendRadius ?? 0) - 2) < 1e-6 &&
+          face.geometry?.blendRegionFaceCount === 4
+      ) ?? [];
+    expect(resizedRegion).toHaveLength(3);
+    expect(
+      new Set(
+        resizedRegion.map((face) => face.geometry?.blendRegionKey)
+      ).size
+    ).toBe(1);
+    expect(
+      firstBody?.topology?.faces.filter(
+        (face) =>
+          face.geometry?.surfaceType === 'sphere' &&
+          Math.abs((face.geometry.radius ?? 0) - 2) < 1e-6
+      )
+    ).toHaveLength(1);
+    expect(firstBody?.faceCount).toBe(10);
     expect(
       firstBody?.topology?.faces.some(
         (face) => Math.abs((face.geometry?.blendRadius ?? 0) - 2) < 1e-6
