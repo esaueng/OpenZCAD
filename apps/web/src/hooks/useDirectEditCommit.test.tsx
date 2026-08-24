@@ -50,7 +50,8 @@ function filletedCylinder() {
     edgeHashes: [101, 202],
     size: 1
   });
-  return { cylinder, sourceBodyId, sourceFeature, fillet };
+  const filletFeature = listFeaturesInOrder(fillet.document).at(-1)!;
+  return { cylinder, sourceBodyId, sourceFeature, fillet, filletFeature };
 }
 
 describe('direct manipulation commit', () => {
@@ -121,7 +122,8 @@ describe('direct manipulation commit', () => {
   });
 
   it('reports a downstream blend failure without changing document history', async () => {
-    const { sourceBodyId, sourceFeature, fillet } = filletedCylinder();
+    const { sourceBodyId, sourceFeature, fillet, filletFeature } =
+      filletedCylinder();
     const manager = new CommandManager(fillet.document);
     const before = structuredClone(manager.document);
     const command = commandFactories.updateFeature(
@@ -166,8 +168,16 @@ describe('direct manipulation commit', () => {
         0.5,
         undefined,
         [
-          { featureName: 'Cylinder', resultBodyId: sourceBodyId },
-          { featureName: 'Two rim fillet', resultBodyId: fillet.bodyId }
+          {
+            featureName: 'Cylinder',
+            featureId: sourceFeature.featureId,
+            resultBodyId: sourceBodyId
+          },
+          {
+            featureName: 'Two rim fillet',
+            featureId: filletFeature.featureId,
+            resultBodyId: fillet.bodyId
+          }
         ]
       );
     });
@@ -175,8 +185,17 @@ describe('direct manipulation commit', () => {
     expect(applied).toBe(false);
     expect(manager.document).toEqual(before);
     expect(manager.canUndo).toBe(false);
+    // The refusal names the existing feature that could not be rebuilt, so the
+    // panel can offer to open it rather than describing it in prose.
     expect(onValidationFailed).toHaveBeenCalledWith(
-      'Fillet could not be created on 2 selected edges with radius 1.',
+      {
+        message:
+          'Fillet could not be created on 2 selected edges with radius 1.',
+        culprit: {
+          featureId: filletFeature.featureId,
+          featureName: 'Two rim fillet'
+        }
+      },
       0.5
     );
     // One owner per diagnostic: the running command shows the rejection at the
