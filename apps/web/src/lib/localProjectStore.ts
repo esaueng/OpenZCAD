@@ -539,9 +539,11 @@ async function sha256Hex(bytes: Uint8Array<ArrayBuffer>): Promise<string> {
  */
 async function readBlobBytes(
   source: Blob,
-  onBytesRead?: (read: number, total: number) => void
+  onBytesRead?: (read: number, total: number) => void,
+  signal?: AbortSignal
 ): Promise<Uint8Array<ArrayBuffer>> {
-  if (!onBytesRead || typeof source.stream !== 'function') {
+  if ((!onBytesRead && !signal) || typeof source.stream !== 'function') {
+    signal?.throwIfAborted();
     return new Uint8Array(await source.arrayBuffer());
   }
   const total = source.size;
@@ -550,6 +552,9 @@ async function readBlobBytes(
   const reader = source.stream().getReader();
   try {
     for (;;) {
+      // Between chunks, which is the only place this loop can be stopped
+      // without leaving a half-filled buffer to be hashed.
+      signal?.throwIfAborted();
       const { done, value } = await reader.read();
       if (done) {
         break;
@@ -561,9 +566,12 @@ async function readBlobBytes(
       }
       bytes.set(value, read);
       read += value.byteLength;
-      onBytesRead(read, total);
+      onBytesRead?.(read, total);
     }
   } finally {
+    // Cancels the underlying source too, so an abandoned read stops pulling
+    // from disk instead of running to completion behind the caller's back.
+    void reader.cancel().catch(() => undefined);
     reader.releaseLock();
   }
   return read === total ? bytes : new Uint8Array(await source.arrayBuffer());
@@ -602,13 +610,22 @@ export async function putSourceBlobIfAbsent(
     claimId?: string;
     /** Read progress, for a caller with somewhere to show it. */
     onBytesRead?(read: number, total: number): void;
+    /**
+     * Stops the read between chunks. Aborting here writes nothing at all —
+     * the record is put in a single transaction after the whole blob has been
+     * read and hashed, so there is no partial state to undo.
+     */
+    signal?: AbortSignal;
   } = {}
 ): Promise<StoredSourceBlob> {
   const bytes =
     source instanceof Uint8Array
       ? source
-      : await readBlobBytes(source, options.onBytesRead);
+      : await readBlobBytes(source, options.onBytesRead, options.signal);
   const checksumSha256 = await sha256Hex(bytes);
+  // Hashing 250 MB takes about 0.2 s, and the transaction below is the point
+  // of no return for this key, so it is worth one more check.
+  options.signal?.throwIfAborted();
   const createdAt = new Date().toISOString();
   const record: SourceBlobRecord = {
     checksumSha256,

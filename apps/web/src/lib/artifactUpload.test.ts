@@ -212,4 +212,45 @@ describe('uploadArtifactBody', () => {
     ).rejects.toThrow('part rejected');
     expect(reported).toEqual([8]);
   });
+
+  /**
+   * Aborting must still unwind the multipart state. A stopped upload that left
+   * its parts behind would occupy the session with an upload nobody finishes.
+   */
+  it('aborts the multipart state when cancelled between parts', async () => {
+    const shared = recordingTransport();
+    const controller = new AbortController();
+    const cancelling: ArtifactUploadTransport = {
+      ...shared.transport,
+      async uploadArtifactPart(_session, _uploadId, partNumber, body) {
+        if (partNumber === 2) {
+          controller.abort();
+        }
+        return { partNumber, etag: `etag-${partNumber}-${body.size}` };
+      }
+    };
+    await expect(
+      uploadArtifactBody(cancelling, session, new Blob(['a'.repeat(20)]), {
+        partBytes: 8,
+        retryDelay: noDelay,
+        signal: controller.signal
+      })
+    ).rejects.toThrow();
+    expect(shared.calls.at(-1)).toBe('abort:upload_test');
+    expect(shared.calls).not.toContain('complete:3');
+  });
+
+  it('uploads nothing at all when already cancelled', async () => {
+    const { transport, calls } = recordingTransport();
+    const controller = new AbortController();
+    controller.abort();
+    await expect(
+      uploadArtifactBody(transport, session, new Blob(['a'.repeat(20)]), {
+        partBytes: 8,
+        retryDelay: noDelay,
+        signal: controller.signal
+      })
+    ).rejects.toThrow();
+    expect(calls).toEqual([]);
+  });
 });

@@ -3,6 +3,7 @@ import {
   IMPORT_CARD_DELAY_MS,
   IMPORT_CARD_SUCCESS_LINGER_MS,
   IMPORT_PHASE_LABEL,
+  importOutcomeIsQuiet,
   importOverallFraction,
   type ImportRunState
 } from '../lib/importProgress';
@@ -14,6 +15,8 @@ interface ImportProgressCardProps {
   onDismiss(): void;
   /** Retries the upload of a source that only reached this device. */
   onArchiveNow(): void;
+  /** Stops the import at the next point it can stop. */
+  onCancel(): void;
 }
 
 /**
@@ -53,7 +56,8 @@ export function elapsedLabel(ms: number): string {
 export function ImportProgressCard({
   run,
   onDismiss,
-  onArchiveNow
+  onArchiveNow,
+  onCancel
 }: ImportProgressCardProps) {
   const runId = run?.id ?? null;
   const outcome = run?.outcome ?? null;
@@ -94,7 +98,7 @@ export function ImportProgressCard({
   }, [runId, outcome]);
 
   useEffect(() => {
-    if (!runId || outcome?.tone !== 'ok') {
+    if (!runId || !outcome || !importOutcomeIsQuiet(outcome)) {
       return;
     }
     const timer = window.setTimeout(onDismiss, IMPORT_CARD_SUCCESS_LINGER_MS);
@@ -106,16 +110,16 @@ export function ImportProgressCard({
   }
 
   // An import that fails or degrades inside the delay window still has
-  // something the user needs; only a quiet success is allowed to pass in
-  // silence.
-  const needsAttention = outcome !== null && outcome.tone !== 'ok';
+  // something the user needs; a quiet ending — a success, or a cancel the
+  // user asked for — is allowed to pass in silence.
+  const needsAttention = outcome !== null && !importOutcomeIsQuiet(outcome);
   if (!delayPassed && !needsAttention) {
     return null;
   }
 
-  // The bar completes only when a body actually landed. A refusal or a
-  // superseded rebuild leaves it exactly where it stopped, which says the
-  // file was stored and read and the geometry is what failed.
+  // The bar completes only when a body actually landed. A refusal, a
+  // superseded rebuild, or a cancel leaves it exactly where it stopped, which
+  // says the file was stored and read and something later is what stopped it.
   const bodyLanded =
     outcome !== null &&
     (outcome.tone === 'ok' || outcome.action === 'archive');
@@ -124,7 +128,19 @@ export function ImportProgressCard({
     : importOverallFraction(run.phases, run.progress);
   // Striped, and parked: running, extent unknown. Never a creeping number.
   const indeterminate = outcome === null && run.progress.fraction === null;
-  const line = outcome ? outcome.message : IMPORT_PHASE_LABEL[run.progress.phase];
+  // A requested cancel that has not taken effect yet is its own state, and the
+  // card says so for as long as it lasts. During `building` that is until the
+  // kernel returns from a wasm call nothing can preempt — minutes, on a large
+  // assembly — and a card still reading "Building geometry" after the user
+  // pressed Cancel reads as a button that did nothing.
+  const cancelling = outcome === null && run.cancelRequested;
+  const line = outcome
+    ? outcome.message
+    : cancelling
+      ? run.progress.phase === 'building'
+        ? 'Cancelling — waiting for the rebuild to finish'
+        : 'Cancelling…'
+      : IMPORT_PHASE_LABEL[run.progress.phase];
   const toneClass = outcome ? ` ${outcome.tone}` : '';
 
   return (
@@ -174,6 +190,25 @@ export function ImportProgressCard({
           onClick={onArchiveNow}
         >
           Archive now
+        </button>
+      )}
+      {/* Its own control, in the same slot the archive retry uses, rather than
+          a second meaning for the ✕. Those two want opposite things — one
+          clears the panel, one throws away minutes of work — and putting both
+          on one glyph makes the destructive one reachable by accident. */}
+      {outcome === null && (
+        <button
+          type="button"
+          className="import-card-action cancel"
+          disabled={cancelling}
+          title={
+            run.progress.phase === 'building'
+              ? 'Stop the import. The current rebuild has to finish first, and nothing will be added to your model.'
+              : 'Stop the import. Nothing will be added to your model.'
+          }
+          onClick={onCancel}
+        >
+          {cancelling ? 'Cancelling…' : 'Cancel'}
         </button>
       )}
     </section>

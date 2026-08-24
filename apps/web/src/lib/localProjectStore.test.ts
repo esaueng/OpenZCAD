@@ -437,6 +437,39 @@ describe('reading a source blob for storage', () => {
   });
 });
 
+describe('a cancelled source read', () => {
+  const text = 'ISO-10303-21; /* stopped part way */';
+
+  it('writes nothing when cancelled before it starts', async () => {
+    // Settle the schema first, so the assertion below reads an empty claim
+    // store rather than failing on a database the abort never opened.
+    expect(await ensureLocalProjectStorage()).toBe('ready');
+    const controller = new AbortController();
+    controller.abort();
+    await expect(
+      putSourceBlobIfAbsent(new Blob([text]), {
+        claimId: 'tab-a',
+        signal: controller.signal
+      })
+    ).rejects.toThrow();
+    // Neither the bytes nor the claim: the record and the claim are written in
+    // one transaction after the whole blob has been read and hashed, so an
+    // abort has nothing to undo.
+    expect(
+      await withStore(CLAIM_STORE, 'readonly', (store) => store.getAllKeys())
+    ).toEqual([]);
+  });
+
+  it('still stores normally when its signal is never aborted', async () => {
+    const controller = new AbortController();
+    const stored = await putSourceBlobIfAbsent(new Blob([text]), {
+      claimId: 'tab-a',
+      signal: controller.signal
+    });
+    expect(await hasSourceBlob(stored.ref.checksumSha256)).toBe(true);
+  });
+});
+
 describe('device-wide source blob claims', () => {
   const source = new TextEncoder().encode(
     'ISO-10303-21; /* one file shared across tabs */'
