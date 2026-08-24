@@ -40,6 +40,7 @@ const WORKSPACE_PACKAGES = [
   'ai-contracts',
   'viewport',
   'io-step',
+  'io-shapr',
   'io-stl',
   'jobs',
   'cloudflare-adapters',
@@ -290,7 +291,7 @@ export default defineConfig(async ({ command, isPreview, mode }) => {
     },
     optimizeDeps: {
       // The exact CAD kernel ships as WebAssembly and must remain a runtime asset.
-      exclude: ['remus-wasm']
+      exclude: ['remus-wasm', '@sqlite.org/sqlite-wasm']
     },
     worker: {
       format: 'es' as const,
