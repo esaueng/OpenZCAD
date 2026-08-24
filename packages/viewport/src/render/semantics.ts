@@ -52,6 +52,18 @@ export const SELECTION_SEMANTICS = {
     boundary: 0xc7ebff,
     boundaryWidth: 6
   },
+  /**
+   * Geometry that will exist if the command is committed.
+   *
+   * Distinct from `selected` although it shares its colour: a preview has to
+   * stand out against the body it is being added to, so it keeps the stronger
+   * fill that selection gave up. The two shared one constant until lowering
+   * the selection fill measurably dimmed the preview with it.
+   */
+  preview: {
+    added: 0x4da3ff,
+    addedOpacity: 0.5
+  },
   /** The thing being dragged. */
   handle: {
     idle: 0xff8a2b,
