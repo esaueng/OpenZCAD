@@ -118,7 +118,8 @@ import {
   type BodyEdgeOverlay,
   type CalloutLayoutItem,
   type DimensionGraphic,
-  easeToward
+  easeToward,
+  SELECTION_SEMANTICS
 } from '@openzcad/viewport';
 import type {
   BodyRepresentation,
@@ -947,15 +948,19 @@ interface MoveDragState {
   } | null;
 }
 
-const SELECTION_EMISSIVE = 0x173a5e;
-const SELECTED_FACE_COLOR = 0x4da3ff;
-const SELECTED_FACE_OPACITY = 0.5;
-const SELECTED_FACE_HIDDEN_OPACITY = 0.16;
+// Selection colours live with hover's in the viewport's semantics table. They
+// were declared here while hover was declared there, which is how one state's
+// language drifted out of sight of the other's.
+const SELECTION_EMISSIVE = SELECTION_SEMANTICS.selected.bodyEmissive;
+const SELECTED_FACE_COLOR = SELECTION_SEMANTICS.selected.face;
+const SELECTED_FACE_OPACITY = SELECTION_SEMANTICS.selected.faceOpacity;
+const SELECTED_FACE_HIDDEN_OPACITY =
+  SELECTION_SEMANTICS.selected.hiddenFaceOpacity;
 /**
  * Opacity an overlay fades to when it registers for the fade without naming a
  * target. Mirrors the viewport's own default so both fade paths agree.
  */
-const DEFAULT_OVERLAY_FADE_TARGET = 0.34;
+const DEFAULT_OVERLAY_FADE_TARGET = SELECTION_SEMANTICS.defaultFadeTarget;
 
 /**
  * Starts a deselected highlight fading instead of deleting it outright.
@@ -7127,7 +7132,7 @@ export function ModelViewer({
             continue;
           }
           const material = new THREE.MeshLambertMaterial({
-            color: SELECTED_FACE_COLOR,
+            color: SELECTION_SEMANTICS.preview.added,
             toneMapped: false,
             transparent: true,
             // Same rise as a committed selection: which code path built the
@@ -7138,7 +7143,10 @@ export function ModelViewer({
             polygonOffset: true,
             polygonOffsetFactor: -3
           });
-          material.userData.targetOpacity = SELECTED_FACE_OPACITY;
+          // Geometry that does not exist yet has to read against the body it
+          // is being added to, so it keeps the stronger fill.
+          material.userData.targetOpacity =
+            SELECTION_SEMANTICS.preview.addedOpacity;
           context.fadeIns.add(material);
           const highlight = new THREE.Mesh(geometry, material);
           highlight.name = 'body-face-preview-created';
