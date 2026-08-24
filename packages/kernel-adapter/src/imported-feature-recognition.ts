@@ -101,6 +101,9 @@ export interface BlindCylindricalHoleProof extends ProofBase {
   bottomFaceId: string;
   axisOrigin: ExactPoint3;
   axisDirection: ExactPoint3;
+  /** Exact axis/entry intersection, with direction pointing into the body. */
+  openingPoint: ExactPoint3;
+  directionIntoBody: ExactPoint3;
   diameter: number;
   depth: number;
 }
@@ -110,10 +113,15 @@ export interface CounterboreProof extends ProofBase {
   outerWallFaceId: string;
   innerWallFaceId: string;
   openingFaceId: string;
+  /** Present when an exact conical chamfer joins the opening to the outer wall. */
+  entryChamferFaceId?: string;
   stepFaceId: string;
   bottomFaceId: string;
   axisOrigin: ExactPoint3;
   axisDirection: ExactPoint3;
+  /** Exact axis/entry intersection, with direction pointing into the body. */
+  openingPoint: ExactPoint3;
+  directionIntoBody: ExactPoint3;
   outerDiameter: number;
   innerDiameter: number;
   counterboreDepth: number;
@@ -128,6 +136,9 @@ export interface CountersinkProof extends ProofBase {
   bottomFaceId: string;
   axisOrigin: ExactPoint3;
   axisDirection: ExactPoint3;
+  /** Exact axis/entry intersection, with direction pointing into the body. */
+  openingPoint: ExactPoint3;
+  directionIntoBody: ExactPoint3;
   openingDiameter: number;
   holeDiameter: number;
   /** Included cone angle. This is the authoritative editable parameter. */
@@ -400,9 +411,6 @@ function recognizeFromSeed(
         'The cylindrical wall touches multiple conical candidates.'
       );
     }
-    if (coneNeighbors.length === 1) {
-      return recognizeCountersink(context, coneNeighbors[0]!, seed.id);
-    }
     const coaxial = coaxialCylindersThroughPlanes(context, cylinder);
     if (coaxial.length > 1) {
       refuse(
@@ -411,8 +419,11 @@ function recognizeFromSeed(
       );
     }
     if (cylinder.surface.radialSense === 'toward-axis') {
-      return coaxial.length === 1
-        ? recognizeCounterbore(context, cylinder, coaxial[0]!)
+      if (coaxial.length === 1) {
+        return recognizeCounterbore(context, cylinder, coaxial[0]!);
+      }
+      return coneNeighbors.length === 1
+        ? recognizeCountersink(context, coneNeighbors[0]!, seed.id)
         : recognizeBlindHole(context, cylinder);
     }
     if (coaxial.length > 0) {
@@ -465,6 +476,16 @@ function recognizeBlindHole(
   }
   const bottom = roles.caps[0]!;
   const opening = roles.references[0]!;
+  const openingCoordinate = planeAxisCoordinate(
+    context,
+    opening.surface,
+    wall.surface
+  );
+  const bottomCoordinate = planeAxisCoordinate(
+    context,
+    bottom.surface,
+    wall.surface
+  );
   const depth = endpointDistance(context, wall.surface, opening, bottom);
   return proofWithFaces(
     {
@@ -475,6 +496,12 @@ function recognizeBlindHole(
       bottomFaceId: bottom.id,
       axisOrigin: wall.surface.axisOrigin,
       axisDirection: wall.surface.axisDirection,
+      openingPoint: pointOnAxis(wall.surface, openingCoordinate),
+      directionIntoBody: directionBetweenAxisCoordinates(
+        wall.surface.axisDirection,
+        openingCoordinate,
+        bottomCoordinate
+      ),
       diameter: wall.surface.radius * 2,
       depth
     },
@@ -566,30 +593,94 @@ function recognizeCounterbore(
       'The counterbore step is not the exact annulus between both walls.'
     );
   }
-  const outerOther = directFacesOfKind(context, outer.id, 'plane').filter(
+  const outerOtherPlanes = directFacesOfKind(context, outer.id, 'plane').filter(
     (face) => face.id !== step.id
   );
   const innerOther = directFacesOfKind(context, inner.id, 'plane').filter(
     (face) => face.id !== step.id
   );
-  if (outerOther.length !== 1 || innerOther.length !== 1) {
+  const entryCones = directFacesOfKind(context, outer.id, 'cone');
+  if (
+    innerOther.length !== 1 ||
+    !(
+      (outerOtherPlanes.length === 1 && entryCones.length === 0) ||
+      (outerOtherPlanes.length === 0 && entryCones.length === 1)
+    )
+  ) {
     refuse('incomplete-proof', 'Counterbore opening or bottom is not unique.');
   }
-  const opening = outerOther[0]!;
   const bottom = innerOther[0]!;
-  requireCylinderEndPlane(context, outer, opening, 'concave');
   requireCylinderEndPlane(context, inner, bottom, 'concave');
-  if (isDiskCap(context, opening, outer.surface.radius)) {
-    refuse(
-      'incomplete-proof',
-      'The counterbore has no proved exterior opening plane.'
-    );
-  }
   if (!isDiskCap(context, bottom, inner.surface.radius)) {
     refuse(
       'incomplete-proof',
       'The counterbore bottom is not an exact disk cap.'
     );
+  }
+  let opening: ExactRecognitionFace & { surface: ExactPlaneSurface };
+  let entryChamfer:
+    (ExactRecognitionFace & { surface: ExactConeSurface }) | undefined;
+  if (outerOtherPlanes.length === 1) {
+    opening = outerOtherPlanes[0]!;
+    requireCylinderEndPlane(context, outer, opening, 'concave');
+    if (isDiskCap(context, opening, outer.surface.radius)) {
+      refuse(
+        'incomplete-proof',
+        'The counterbore has no proved exterior opening plane.'
+      );
+    }
+  } else {
+    entryChamfer = entryCones[0]!;
+    assertCone(context, entryChamfer.surface);
+    if (
+      entryChamfer.surface.radialSense !== 'toward-axis' ||
+      !coaxial(context, outer.surface, entryChamfer.surface)
+    ) {
+      refuse(
+        'incomplete-proof',
+        'The counterbore entry chamfer is not an internal coaxial cone.'
+      );
+    }
+    requireLink(context, entryChamfer.id, outer.id, 'concave', 'circle', true);
+    const openings = directFacesOfKind(context, entryChamfer.id, 'plane');
+    if (openings.length !== 1) {
+      refuse(
+        'incomplete-proof',
+        'The counterbore entry chamfer has no unique exterior opening.'
+      );
+    }
+    opening = openings[0]!;
+    requireConeEndPlane(context, entryChamfer, opening, 'concave');
+    const openingOnCone = planeAxisCoordinate(
+      context,
+      opening.surface,
+      entryChamfer.surface
+    );
+    const junctionOnCone = sharedEndpoint(
+      context,
+      entryChamfer.surface,
+      outer.surface
+    );
+    const openingRadius = coneRadiusAt(
+      context,
+      entryChamfer.surface,
+      openingOnCone
+    );
+    const junctionRadius = coneRadiusAt(
+      context,
+      entryChamfer.surface,
+      junctionOnCone
+    );
+    if (
+      !greaterThan(context, openingRadius, junctionRadius) ||
+      !near(context, junctionRadius, outer.surface.radius) ||
+      isDiskCap(context, opening, openingRadius)
+    ) {
+      refuse(
+        'incomplete-proof',
+        'The counterbore entry chamfer radii or opening are not exact.'
+      );
+    }
   }
   const openingCoordinate = planeAxisCoordinate(
     context,
@@ -629,16 +720,30 @@ function recognizeCounterbore(
       outerWallFaceId: outer.id,
       innerWallFaceId: inner.id,
       openingFaceId: opening.id,
+      ...(entryChamfer ? { entryChamferFaceId: entryChamfer.id } : {}),
       stepFaceId: step.id,
       bottomFaceId: bottom.id,
       axisOrigin: outer.surface.axisOrigin,
       axisDirection: outer.surface.axisDirection,
+      openingPoint: pointOnAxis(outer.surface, openingCoordinate),
+      directionIntoBody: directionBetweenAxisCoordinates(
+        outer.surface.axisDirection,
+        openingCoordinate,
+        bottomCoordinate
+      ),
       outerDiameter: outer.surface.radius * 2,
       innerDiameter: inner.surface.radius * 2,
       counterboreDepth,
       totalDepth
     },
-    [outer.id, inner.id, opening.id, step.id, bottom.id]
+    [
+      outer.id,
+      inner.id,
+      opening.id,
+      step.id,
+      bottom.id,
+      ...(entryChamfer ? [entryChamfer.id] : [])
+    ]
   );
 }
 
@@ -748,6 +853,12 @@ function recognizeCountersink(
       bottomFaceId: bottom.id,
       axisOrigin: coneFace.surface.axisOrigin,
       axisDirection: coneFace.surface.axisDirection,
+      openingPoint: pointOnAxis(coneFace.surface, openingCoordinate),
+      directionIntoBody: directionBetweenAxisCoordinates(
+        coneFace.surface.axisDirection,
+        openingCoordinate,
+        bottomCoordinate
+      ),
       openingDiameter: openingRadius * 2,
       holeDiameter: cylinder.surface.radius * 2,
       angleRadians: coneFace.surface.semiAngleRadians * 2,
@@ -1147,11 +1258,14 @@ function sharedEndpoint(
   left: ExactConeSurface,
   right: ExactCylinderSurface
 ): number {
-  const candidates = [left.axialStart, left.axialEnd].filter(
-    (value) =>
-      near(context, value, right.axialStart) ||
-      near(context, value, right.axialEnd)
-  );
+  const candidates = [left.axialStart, left.axialEnd].filter((value) => {
+    const point = pointOnAxis(left, value);
+    return [right.axialStart, right.axialEnd].some(
+      (rightCoordinate) =>
+        magnitude(subtract(point, pointOnAxis(right, rightCoordinate))) <=
+        scaledTolerance(context, magnitude(point))
+    );
+  });
   if (candidates.length !== 1) {
     refuse(
       'incomplete-proof',
@@ -1187,6 +1301,21 @@ function coneRadiusAt(
   }
   const ratio = (coordinate - cone.axialStart) / span;
   return cone.radiusAtStart + ratio * (cone.radiusAtEnd - cone.radiusAtStart);
+}
+
+function pointOnAxis(
+  axial: ExactCylinderSurface | ExactConeSurface,
+  coordinate: number
+): ExactPoint3 {
+  return add(axial.axisOrigin, scale(axial.axisDirection, coordinate));
+}
+
+function directionBetweenAxisCoordinates(
+  axisDirection: ExactPoint3,
+  from: number,
+  to: number
+): ExactPoint3 {
+  return scale(axisDirection, to >= from ? 1 : -1);
 }
 
 function assertCylinder(

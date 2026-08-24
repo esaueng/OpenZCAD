@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
+  createCadDocumentDigest,
   parseCadPatchProposal,
   type CadSelectionContext
 } from '@openzcad/ai-contracts';
@@ -139,6 +140,88 @@ async function importedTwoHoleDocument(
       name: 'Imported two-hole plate',
       artifactId: 'artifact_two_hole_plate',
       sourceName: 'two-hole-plate.step',
+      stepText
+    })
+  );
+  imported.document.derived = await adapter.syncDocument(imported.document);
+  expect(imported.document.derived.warnings).toEqual([]);
+  return imported.document;
+}
+
+async function importedRecognizedHoleDocument(
+  adapter: ExactKernelAdapter,
+  style: 'blind' | 'counterbore' | 'countersink'
+): Promise<ProjectDocument> {
+  const source = new CommandManager(
+    createProjectDocument(
+      'Recognized-hole source',
+      toUserId('user_auto_recognized_source')
+    )
+  );
+  source.execute(
+    commandFactories.addPrimitive({
+      name: 'Plate',
+      primitiveKind: 'box',
+      dimensions: { width: 60, height: 24, depth: 12 }
+    })
+  );
+
+  const hole =
+    style === 'counterbore'
+      ? {
+          name: 'Counterbore',
+          style: 'counterbore' as const,
+          counterboreDiameter: 10,
+          counterboreDepth: 3
+        }
+      : style === 'countersink'
+        ? {
+            name: 'Countersink',
+            style: 'countersink' as const,
+            countersinkDiameter: 10,
+            countersinkAngleDeg: 90
+          }
+        : { name: 'Blind bore', style: 'simple' as const };
+  source.document.derived = await adapter.syncDocument(source.document);
+  const targetBodyId = source.document.bodyOrder.at(-1)!;
+  const top = source.document.derived.bodyRepresentations[
+    targetBodyId
+  ]?.topology?.faces.find(
+    (face) =>
+      face.geometry?.surfaceType === 'plane' &&
+      (face.geometry.normal?.z ?? 0) > 0.9
+  );
+  if (!top) {
+    throw new Error(`Expected a top face before ${hole.name}.`);
+  }
+  source.execute(
+    commandFactories.holeBody({
+      ...hole,
+      targetBodyId,
+      faceHash: top.hash,
+      ...(top.reference ? { faceReference: top.reference } : {}),
+      diameter: 5,
+      depthMode: 'blind',
+      depth: 8,
+      position: { u: 0, v: 0 }
+    })
+  );
+
+  const resultBodyId = source.document.bodyOrder.at(-1)!;
+  source.document.derived = await adapter.syncDocument(source.document);
+  expect(source.document.derived.warnings).toEqual([]);
+  const stepText = await adapter.exportStep(source.document, [resultBodyId]);
+  const imported = new CommandManager(
+    createProjectDocument(
+      'Imported recognized holes',
+      toUserId('user_auto_recognized_import')
+    )
+  );
+  imported.execute(
+    commandFactories.importStep({
+      name: 'Imported recognized holes',
+      artifactId: `artifact_recognized_${style}`,
+      sourceName: `recognized-${style}.step`,
       stepText
     })
   );
@@ -300,7 +383,11 @@ describe('assistant auto-parameterization', () => {
           bodyId,
           name: 'Imported Tube',
           source: 'imported-step',
-          mesh: { kind: 'mesh', vertices: new Float32Array(), indices: new Uint32Array() },
+          mesh: {
+            kind: 'mesh',
+            vertices: new Float32Array(),
+            indices: new Uint32Array()
+          },
           faceCount: 1,
           color: '#fff',
           exportableStep: true,
@@ -377,6 +464,138 @@ describe('assistant auto-parameterization', () => {
       })
     ).toBeNull();
   });
+
+  it('offers both counterbored and chamfered hammer-holder holes exactly once', () => {
+    const imported = importStepBody(
+      createProjectDocument(
+        'Hammer-holder acceptance shape',
+        toUserId('user_auto_hammer')
+      ),
+      {
+        name: 'Hammer Holder',
+        artifactId: 'artifact_hammer_holder',
+        sourceName: 'Hammer Holder v4.step',
+        stepText: 'ISO-10303-21;END-ISO-10303-21;'
+      }
+    );
+    const bodyId = imported.bodyId;
+    const feature = listFeaturesInOrder(imported.document)[0]!;
+    const reference = (
+      hash: number,
+      index: number
+    ): FaceTopologyReferenceV5 => ({
+      kind: 'face',
+      producingFeatureId: feature.featureId,
+      lineageName: `imported.face.counterbore.${index}`,
+      currentHash: hash,
+      witnessVersion: 1,
+      witness: {
+        surfaceType: 'cylinder',
+        perimeter: 314159,
+        centroid: [index * 1000, 0, 7000],
+        analytic: {
+          kind: 'cylinder',
+          axis: [0, 0, 1000],
+          axisFoot: [index * 1000, 0, 0],
+          radius: 5000
+        },
+        closure: { u: 'closed', v: 'open' }
+      }
+    });
+    const firstReference = reference(701, 1);
+    const secondReference = reference(702, 2);
+    imported.document.derived = {
+      bodyRepresentations: {
+        [bodyId]: {
+          bodyId,
+          name: 'Hammer Holder',
+          source: 'imported-step',
+          mesh: {
+            kind: 'mesh',
+            vertices: new Float32Array(),
+            indices: new Uint32Array()
+          },
+          faceCount: 12,
+          color: '#fff',
+          exportableStep: true,
+          consumed: false,
+          volume: 100,
+          bbox: {
+            min: { x: -20, y: -20, z: 0 },
+            max: { x: 20, y: 20, z: 12 }
+          },
+          topology: {
+            faces: [],
+            edges: [],
+            recognizedImportedFeatures: [
+              {
+                kind: 'counterbore',
+                seedFaceHash: 701,
+                seedFaceReference: firstReference,
+                participatingFaceHashes: [701, 711, 721, 731, 741, 751],
+                openingPoint: { x: -10, y: 0, z: 12 },
+                axisDirection: { x: 0, y: 0, z: -1 },
+                boreDiameter: 5,
+                counterboreDiameter: 10,
+                counterboreDepth: 3,
+                totalDepth: 9,
+                entryChamfered: true
+              },
+              {
+                kind: 'counterbore',
+                seedFaceHash: 702,
+                seedFaceReference: secondReference,
+                participatingFaceHashes: [702, 712, 722, 732, 742, 752],
+                openingPoint: { x: 10, y: 0, z: 12 },
+                axisDirection: { x: 0, y: 0, z: -1 },
+                boreDiameter: 5,
+                counterboreDiameter: 10,
+                counterboreDepth: 3,
+                totalDepth: 9,
+                entryChamfered: true
+              }
+            ]
+          }
+        }
+      },
+      exportableBodyIds: [bodyId],
+      warnings: [],
+      updatedAt: imported.document.derived.updatedAt
+    };
+
+    const parsed = parseCadPatchProposal(
+      structuredClone(
+        createAutoParameterizeProposal(imported.document, noSelection)
+      ),
+      createCadDocumentDigest(imported.document)
+    );
+    const edits = parsed.operations.filter(
+      (operation) => operation.kind === 'add_direct_edit'
+    );
+    expect(edits).toHaveLength(2);
+    expect(edits.map((operation) => operation.operation)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: 'resize-imported-counterbore',
+          sourceBoreDiameter: 5,
+          sourceCounterboreDiameter: 10,
+          sourceEntryChamfered: true
+        })
+      ])
+    );
+    expect(
+      parsed.operations.filter(
+        (operation) =>
+          operation.kind === 'set_parameter' && operation.expression === '5'
+      )
+    ).toHaveLength(2);
+    expect(
+      parsed.operations.filter(
+        (operation) =>
+          operation.kind === 'set_parameter' && operation.expression === '10'
+      )
+    ).toHaveLength(2);
+  });
 });
 
 describe(
@@ -428,9 +647,9 @@ describe(
       expect(after.mesh.indices).toEqual(before.mesh.indices);
       expect(after.volume).toBe(before.volume);
       expect(after.faceCount).toBe(before.faceCount);
-      expect(
-        after.topology?.faces.map((face) => face.reference)
-      ).toEqual(before.topology?.faces.map((face) => face.reference));
+      expect(after.topology?.faces.map((face) => face.reference)).toEqual(
+        before.topology?.faces.map((face) => face.reference)
+      );
     });
 
     it('still rejects a genuinely stale face reference on the no-op path', async () => {
@@ -454,6 +673,224 @@ describe(
           adapter.syncDocument(candidate)
         )
       ).rejects.toThrow(/Direct-edit face is stale/);
+    });
+  }
+);
+
+describe(
+  'assistant recognized imported-hole auto-parameterization',
+  { timeout: 120_000 },
+  () => {
+    let adapter: ExactKernelAdapter;
+    let importedByStyle: Record<
+      'blind' | 'counterbore' | 'countersink',
+      ProjectDocument
+    >;
+
+    beforeAll(async () => {
+      adapter = await createExactKernelAdapter();
+      importedByStyle = {
+        blind: await importedRecognizedHoleDocument(adapter, 'blind'),
+        counterbore: await importedRecognizedHoleDocument(
+          adapter,
+          'counterbore'
+        ),
+        countersink: await importedRecognizedHoleDocument(
+          adapter,
+          'countersink'
+        )
+      };
+    });
+
+    afterAll(() => {
+      adapter.dispose();
+    });
+
+    it('recognizes grouped blind, counterbore, and countersink parameters and applies them as no-ops', async () => {
+      const expectations = {
+        blind: {
+          proof: 'blind-cylindrical-hole',
+          edit: 'resize-imported-blind-hole',
+          parameters: 2
+        },
+        counterbore: {
+          proof: 'counterbore',
+          edit: 'resize-imported-counterbore',
+          parameters: 3
+        },
+        countersink: {
+          proof: 'countersink',
+          edit: 'resize-imported-countersink',
+          parameters: 3
+        }
+      } as const;
+
+      for (const style of ['blind', 'counterbore', 'countersink'] as const) {
+        const imported = importedByStyle[style];
+        const bodyId = imported.bodyOrder[0]!;
+        const before = imported.derived.bodyRepresentations[bodyId]!;
+        expect(
+          before.topology?.recognizedImportedFeatures?.map(
+            (feature) => feature.kind
+          )
+        ).toContain(expectations[style].proof);
+
+        const proposal = createAutoParameterizeProposal(imported, noSelection)!;
+        const parsed = parseCadPatchProposal(
+          structuredClone(proposal),
+          createCadDocumentDigest(imported)
+        );
+        const parameterOperations = parsed.operations.filter(
+          (operation) => operation.kind === 'set_parameter'
+        );
+        const directEdits = parsed.operations.filter(
+          (operation) => operation.kind === 'add_direct_edit'
+        );
+        expect(parameterOperations).toHaveLength(
+          expectations[style].parameters
+        );
+        expect(directEdits).toHaveLength(1);
+        expect(directEdits[0]?.operation.kind).toBe(expectations[style].edit);
+        expect(parameterOperations.map((operation) => operation.name)).toEqual(
+          expect.arrayContaining(
+            style === 'blind'
+              ? [
+                  expect.stringMatching(/hole_1_diameter$/),
+                  expect.stringMatching(/hole_1_depth$/)
+                ]
+              : style === 'counterbore'
+                ? [
+                    expect.stringMatching(/hole_1_bore_diameter$/),
+                    expect.stringMatching(/hole_1_counterbore_diameter$/),
+                    expect.stringMatching(/hole_1_counterbore_depth$/)
+                  ]
+                : [
+                    expect.stringMatching(/hole_1_bore_diameter$/),
+                    expect.stringMatching(/hole_1_sink_diameter$/),
+                    expect.stringMatching(/hole_1_sink_angle_radians$/)
+                  ]
+          )
+        );
+
+        const preflight = await preflightCadPatch(
+          imported,
+          parsed,
+          (candidate) => adapter.syncDocument(candidate)
+        );
+        const applied = new CommandManager(imported).runTransaction(
+          'Apply recognized auto-parameterization',
+          preflight.commands
+        );
+        applied.derived = await adapter.syncDocument(applied);
+        const after = applied.derived.bodyRepresentations[bodyId]!;
+        expect(after.mesh.vertices).toEqual(before.mesh.vertices);
+        expect(after.mesh.indices).toEqual(before.mesh.indices);
+        expect(after.volume).toBe(before.volume);
+        expect(after.faceCount).toBe(before.faceCount);
+        expect(
+          listFeaturesInOrder(applied).filter(
+            (feature) =>
+              feature.data.featureKind === 'direct-edit' &&
+              feature.data.operation.kind === expectations[style].edit &&
+              feature.data.operation.parameterBinding
+          )
+        ).toHaveLength(1);
+      }
+    });
+
+    it.each([
+      ['blind', 'diameter', 'blind-cylindrical-hole', 'diameter'],
+      ['counterbore', 'boreDiameter', 'counterbore', 'boreDiameter'],
+      ['countersink', 'boreDiameter', 'countersink', 'boreDiameter']
+    ] as const)(
+      're-proves and rebuilds one changed %s diameter',
+      async (style, operationField, proofKind, proofField) => {
+        const imported = importedByStyle[style];
+        const proposal = createAutoParameterizeProposal(imported, noSelection)!;
+        const directEdit = proposal.operations.find(
+          (operation) => operation.kind === 'add_direct_edit'
+        );
+        if (!directEdit) {
+          throw new Error(`Expected an editable ${style} diameter.`);
+        }
+        const parameterName =
+          style === 'blind' &&
+          directEdit.operation.kind === 'resize-imported-blind-hole'
+            ? String(directEdit.operation.diameter)
+            : style === 'counterbore' &&
+                directEdit.operation.kind === 'resize-imported-counterbore'
+              ? String(directEdit.operation.boreDiameter)
+              : style === 'countersink' &&
+                  directEdit.operation.kind === 'resize-imported-countersink'
+                ? String(directEdit.operation.boreDiameter)
+                : null;
+        if (!parameterName) {
+          throw new Error(`Expected an editable ${style} ${operationField}.`);
+        }
+        const preflight = await preflightCadPatch(
+          imported,
+          proposal,
+          (candidate) => adapter.syncDocument(candidate)
+        );
+        const manager = new CommandManager(preflight.candidate);
+        manager.execute(
+          commandFactories.setParameter({
+            name: parameterName,
+            expression: '6'
+          })
+        );
+        manager.document.derived = await adapter.syncDocument(manager.document);
+        expect(manager.document.derived.warnings).toEqual([]);
+        const liveBody = Object.values(
+          manager.document.derived.bodyRepresentations
+        ).find((body) => !body.consumed && body.exportableStep);
+        const proof = liveBody?.topology?.recognizedImportedFeatures?.find(
+          (feature) => feature.kind === proofKind
+        );
+        expect(proof).toBeDefined();
+        const resizedDiameter =
+          proof?.kind === 'blind-cylindrical-hole' && proofField === 'diameter'
+            ? proof.diameter
+            : (proof?.kind === 'counterbore' ||
+                  proof?.kind === 'countersink') &&
+                proofField === 'boreDiameter'
+              ? proof.boreDiameter
+              : null;
+        expect(resizedDiameter).toBeCloseTo(6, 6);
+      }
+    );
+
+    it('reports an explicit not-yet-supported error for a changed compound depth', async () => {
+      const imported = importedByStyle.counterbore;
+      const proposal = createAutoParameterizeProposal(imported, noSelection)!;
+      const directEdit = proposal.operations.find(
+        (operation) =>
+          operation.kind === 'add_direct_edit' &&
+          operation.operation.kind === 'resize-imported-counterbore'
+      );
+      if (
+        !directEdit ||
+        directEdit.kind !== 'add_direct_edit' ||
+        directEdit.operation.kind !== 'resize-imported-counterbore'
+      ) {
+        throw new Error('Expected an imported counterbore binding.');
+      }
+      const preflight = await preflightCadPatch(
+        imported,
+        proposal,
+        (candidate) => adapter.syncDocument(candidate)
+      );
+      const manager = new CommandManager(preflight.candidate);
+      manager.execute(
+        commandFactories.setParameter({
+          name: String(directEdit.operation.counterboreDepth),
+          expression: '4'
+        })
+      );
+      manager.document.derived = await adapter.syncDocument(manager.document);
+      expect(manager.document.derived.warnings.join('\n')).toMatch(
+        /Changing an imported counterbore depth is not yet supported/
+      );
     });
   }
 );

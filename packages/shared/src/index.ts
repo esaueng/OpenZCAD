@@ -196,6 +196,54 @@ export type DirectEditOperation =
       parameterBinding?: true;
     }
   | {
+      kind: 'resize-imported-blind-hole';
+      faceHash: number;
+      faceReference?: FaceTopologyReferenceV5;
+      sourceOpeningPoint: Vector3;
+      /** Unit direction from the opening toward the blind floor. */
+      sourceAxisDirection: Vector3;
+      sourceDiameter: number;
+      sourceDepth: number;
+      diameter: ParamValue;
+      depth: ParamValue;
+      parameterBinding?: true;
+    }
+  | {
+      kind: 'resize-imported-counterbore';
+      faceHash: number;
+      faceReference?: FaceTopologyReferenceV5;
+      sourceOpeningPoint: Vector3;
+      /** Unit direction from the opening toward the blind floor. */
+      sourceAxisDirection: Vector3;
+      sourceBoreDiameter: number;
+      sourceCounterboreDiameter: number;
+      sourceCounterboreDepth: number;
+      sourceTotalDepth: number;
+      sourceEntryChamfered: boolean;
+      boreDiameter: ParamValue;
+      counterboreDiameter: ParamValue;
+      counterboreDepth: ParamValue;
+      parameterBinding?: true;
+    }
+  | {
+      kind: 'resize-imported-countersink';
+      faceHash: number;
+      faceReference?: FaceTopologyReferenceV5;
+      sourceOpeningPoint: Vector3;
+      /** Unit direction from the opening toward the blind floor. */
+      sourceAxisDirection: Vector3;
+      sourceBoreDiameter: number;
+      sourceSinkDiameter: number;
+      /** Full included angle, in radians, matching the recognition proof. */
+      sourceAngleRadians: number;
+      sourceCountersinkDepth: number;
+      sourceTotalDepth: number;
+      boreDiameter: ParamValue;
+      sinkDiameter: ParamValue;
+      angleRadians: ParamValue;
+      parameterBinding?: true;
+    }
+  | {
       kind: 'remove-face-feature';
       faceHash: number;
       faceReference?: FaceTopologyReferenceV5;
@@ -926,6 +974,60 @@ export interface FaceTopology {
   geometry?: FaceGeometry;
 }
 
+interface RecognizedImportedFeatureBase {
+  /** Canonical face used to re-run the proof during exact rebuild. */
+  seedFaceHash: number;
+  seedFaceReference?: FaceTopologyReferenceV5;
+  /** All faces consumed by the proof, used to suppress weaker overlapping hints. */
+  participatingFaceHashes: number[];
+}
+
+interface RecognizedImportedHoleBase extends RecognizedImportedFeatureBase {
+  openingPoint: Vector3;
+  /** Unit direction from the opening into the body. */
+  axisDirection: Vector3;
+}
+
+/** Bounded exact imported-feature proofs published with derived topology. */
+export type RecognizedImportedFeature =
+  | (RecognizedImportedHoleBase & {
+      kind: 'blind-cylindrical-hole';
+      diameter: number;
+      depth: number;
+    })
+  | (RecognizedImportedHoleBase & {
+      kind: 'counterbore';
+      boreDiameter: number;
+      counterboreDiameter: number;
+      counterboreDepth: number;
+      totalDepth: number;
+      entryChamfered: boolean;
+    })
+  | (RecognizedImportedHoleBase & {
+      kind: 'countersink';
+      boreDiameter: number;
+      sinkDiameter: number;
+      angleRadians: number;
+      countersinkDepth: number;
+      totalDepth: number;
+    })
+  | (RecognizedImportedFeatureBase & {
+      kind: 'cylindrical-boss';
+      diameter: number;
+      height: number;
+    })
+  | (RecognizedImportedFeatureBase & {
+      kind: 'prismatic-pocket';
+      depth: number;
+    })
+  | (RecognizedImportedFeatureBase & {
+      kind: 'conical-taper';
+      referenceRadius: number;
+      oppositeRadius: number;
+      length: number;
+      angleRadians: number;
+    });
+
 /**
  * Whether {@link FaceGeometry.area} is the true area or an approximation.
  *
@@ -1162,6 +1264,8 @@ export interface EdgeCurve {
 export interface BodyTopology {
   faces: FaceTopology[];
   edges: EdgeTopology[];
+  /** Non-overlapping exact proofs created while imported topology is live. */
+  recognizedImportedFeatures?: RecognizedImportedFeature[];
   lineageDiagnostics?: TopologyLineageDiagnostic[];
 }
 
