@@ -707,8 +707,41 @@ test('extrudes and edits one of multiple closed sketch regions', async ({
       y: bounds!.y + bounds!.height * 0.76
     }
   ];
+  // Closed regions the sketch has actually detected. The status bar cannot
+  // stand in for this: every circle after the first reports the same "Add
+  // circle", so a dropped gesture leaves the previous iteration's message in
+  // place and reads as success. The count only advances when a gesture really
+  // committed.
+  const detectedRegions = () =>
+    canvas.evaluate(
+      (element) =>
+        new Promise<number>((resolve) => {
+          element.dispatchEvent(
+            new CustomEvent('openzcad:e2e-render-policy', {
+              detail: {
+                resolve: (policy: { sketchLines: { name: string }[] }) =>
+                  resolve(
+                    policy.sketchLines.filter(
+                      (line) => line.name === 'sketch-region-boundary'
+                    ).length
+                  )
+              }
+            })
+          );
+        })
+    );
+  const circleTool = sketchTools.getByRole('button', { name: /^Circle/ });
+  const gridReadout = page.locator('.sketch-grid-indicator');
   for (const [index, center] of centers.entries()) {
-    await sketchTools.getByRole('button', { name: /^Circle/ }).click();
+    await circleTool.click();
+    // The rail button is React state and flips first; the viewport only owns
+    // the tool once its render loop has the sketch rig, and the adaptive grid
+    // readout is written from that same pass. A user draws once they can see
+    // the plane. Dragging before it, the pointerdown reaches a viewport with
+    // no sketch plane to project onto and the whole gesture is discarded.
+    await expect(circleTool).toHaveAttribute('aria-pressed', 'true');
+    await expect(gridReadout).toBeVisible();
+    await expect(gridReadout).not.toHaveText('');
     await page.mouse.move(center.x, center.y);
     await page.mouse.down();
     await page.mouse.move(center.x + 38, center.y, { steps: 6 });
@@ -716,6 +749,7 @@ test('extrudes and edits one of multiple closed sketch regions', async ({
     await expect(page.getByRole('contentinfo')).toContainText(
       index === 0 ? 'Sketch 01 started.' : 'Add circle'
     );
+    await expect.poll(detectedRegions).toBe(index + 1);
   }
 
   await sketchTools.getByRole('button', { name: 'Extrude' }).click();
