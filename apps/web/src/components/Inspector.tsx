@@ -2,7 +2,6 @@ import {
   useEffect,
   useRef,
   useState,
-  type MutableRefObject,
   type ReactNode
 } from 'react';
 import { Trash2, X } from 'lucide-react';
@@ -24,7 +23,6 @@ import type {
   SketchObjectData,
   TopologySelection
 } from '@openzcad/shared';
-import type { DimensionMode } from '../lib/keypad';
 import {
   BooleanForm,
   EdgeModifierForm,
@@ -51,6 +49,11 @@ import {
   previewExpression
 } from '../lib/model';
 import { edgeLabel, faceLabel } from '../lib/topologyLabels';
+import type { CommandSession } from '../lib/interaction/machine';
+import {
+  inspectorHeadingForFeature,
+  type FeatureSelectionSource
+} from '../lib/inspectorHeading';
 import { ExprInput } from './ExprInput';
 import { ColorPicker } from './ColorPicker';
 import { FieldAutoFocusProvider } from './forms/fieldAutoFocus';
@@ -189,14 +192,19 @@ interface InspectorProps extends InspectorCallbacks {
   selectedBodyIds: BodyId[];
   /** Sketch to pre-select in extrude/revolve, e.g. the one picked in the tree. */
   preferredSketchId: SketchId | null;
-  /** Active cylindrical-wall gesture, localized to the inspector subtree. */
-  cylinderRadiusEdit: {
-    initialRadius: number;
-    dimensionMode: DimensionMode;
-  } | null;
-  cylinderRadiusSetterRef: MutableRefObject<
-    ((radius: number | null) => void) | null
-  >;
+  /**
+   * The command the viewport selection has armed, read straight from the
+   * interaction machine. The panel names it but never edits its value: the
+   * handle and its chip own that, and a second editable copy here is how the
+   * two used to disagree.
+   */
+  commandSession: CommandSession | null;
+  /**
+   * Whether the selected feature was pinned by a click in the history tree or
+   * inferred from the body under a viewport pick. Only a pinned feature may
+   * title this panel.
+   */
+  featureSelectionSource: FeatureSelectionSource | null;
 }
 
 function SketchAttachmentSummary({
@@ -644,30 +652,12 @@ export function Inspector(props: InspectorProps) {
     units,
     selectedBodyIds,
     preferredSketchId,
-    cylinderRadiusEdit,
-    cylinderRadiusSetterRef
+    commandSession,
+    featureSelectionSource
   } = props;
-  const [liveCylinderRadius, setLiveCylinderRadius] = useState<number | null>(
-    cylinderRadiusEdit?.initialRadius ?? null
-  );
-  const initialCylinderRadius = cylinderRadiusEdit?.initialRadius ?? null;
   const selectedEdgeReferences = selectedEdges.flatMap((edge) =>
     edge.reference?.kind === 'edge' ? [edge.reference] : []
   );
-
-  useEffect(() => {
-    if (initialCylinderRadius === null) {
-      setLiveCylinderRadius(null);
-      cylinderRadiusSetterRef.current = null;
-      return;
-    }
-    setLiveCylinderRadius(initialCylinderRadius);
-    cylinderRadiusSetterRef.current = (radius) =>
-      setLiveCylinderRadius(radius ?? initialCylinderRadius);
-    return () => {
-      cylinderRadiusSetterRef.current = null;
-    };
-  }, [cylinderRadiusSetterRef, initialCylinderRadius]);
 
   /**
    * Hand an edit panel the keyboard without handing it a field.
@@ -846,8 +836,15 @@ export function Inspector(props: InspectorProps) {
       );
     }
   } else if (selectedFeature) {
-    eyebrow = FEATURE_KIND_LABELS[selectedFeature.featureKind];
-    title = selectedFeature.name;
+    const heading = inspectorHeadingForFeature({
+      featureName: selectedFeature.name,
+      featureKindLabel: FEATURE_KIND_LABELS[selectedFeature.featureKind],
+      featureSelectionSource,
+      commandSession
+    });
+    const inferredUnderCommand = heading.demoted;
+    eyebrow = heading.eyebrow;
+    title = heading.title;
     const editKey = `edit-${selectedFeature.id}`;
     const data = selectedFeature.data;
     let form: ReactNode = null;
@@ -860,9 +857,6 @@ export function Inspector(props: InspectorProps) {
           scope={scope}
           initialName={selectedFeature.name}
           initialDimensions={data.dimensions}
-          liveRadius={
-            data.primitiveKind === 'cylinder' ? liveCylinderRadius : undefined
-          }
           submitLabel="Apply"
           onSubmit={(name, dimensions) =>
             props.onApplyPrimitive(selectedFeature, name, dimensions)
@@ -1159,30 +1153,6 @@ export function Inspector(props: InspectorProps) {
 
     body = (
       <>
-        {cylinderRadiusEdit && liveCylinderRadius !== null && (
-          <section
-            className="direct-face-editor"
-            aria-label="Cylinder dimension properties"
-          >
-            <h3 className="section-title">Direct edit</h3>
-            <div className="kv-grid">
-              <b>
-                {cylinderRadiusEdit.dimensionMode === 'diameter'
-                  ? 'Diameter'
-                  : 'Radius'}
-              </b>
-              <span data-testid="live-cylinder-radius">
-                {cylinderRadiusEdit.dimensionMode === 'diameter' ? 'Ø ' : 'R '}
-                {formatNumber(
-                  cylinderRadiusEdit.dimensionMode === 'diameter'
-                    ? liveCylinderRadius * 2
-                    : liveCylinderRadius
-                )}{' '}
-                {units}
-              </span>
-            </div>
-          </section>
-        )}
         {selectedTopology?.kind === 'edge' && (
           <>
             <h3 className="section-title">
@@ -1205,6 +1175,9 @@ export function Inspector(props: InspectorProps) {
             </div>
           </>
         )}
+        {inferredUnderCommand && form ? (
+          <h3 className="section-title">Defined by {selectedFeature.name}</h3>
+        ) : null}
         {form}
         {selectedTopology?.kind === 'face' &&
           selectedBody?.source === 'imported-step' && (
