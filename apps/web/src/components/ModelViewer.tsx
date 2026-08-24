@@ -469,6 +469,12 @@ interface ModelViewerProps {
   ): void;
   /** Escape reaches the active imperative pointer session through this ref. */
   cancelDirectManipulationRef: MutableRefObject<(() => boolean) | null>;
+  /**
+   * Opens exact entry for whichever handle is armed, and reports whether one
+   * was. The chip's click does the same thing; this is how the keyboard
+   * reaches it, so drag-or-type holds without a pointer.
+   */
+  openExactEntryRef: MutableRefObject<(() => boolean) | null>;
   /** Armed edge fillet/chamfer handle (selection-first direct manipulation). */
   edgeHandle: EdgeHandleTarget | null;
   /** Streamed while an edge-radius drag is in flight (throttled by App). */
@@ -1119,6 +1125,7 @@ export function ModelViewer({
   onCylinderRadiusCancel,
   onOpenCylinderRadiusKeypad,
   cancelDirectManipulationRef,
+  openExactEntryRef,
   edgeHandle,
   onEdgeRadiusPreview,
   onEdgeCommit,
@@ -2327,14 +2334,14 @@ export function ModelViewer({
       requestRender();
     };
     dimensionPrefix.addEventListener('click', toggleCylinderDimensionMode);
-    const handleChipClick = () => {
+    const openExactEntry = () => {
       const cylinderRig = cylinderRadiusRigRef.current;
       if (cylinderRig) {
         onOpenCylinderRadiusKeypadRef.current(
           cylinderRig.value(),
           cylinderDimensionModeRef.current
         );
-        return;
+        return true;
       }
       const offsetRig = offsetRigRef.current;
       if (offsetRig) {
@@ -2342,12 +2349,18 @@ export function ModelViewer({
           offsetRig.value(),
           offsetHandleRef.current?.totalBaseline
         );
-        return;
+        return true;
       }
       const edgeRig = edgeRigRef.current;
       if (edgeRig) {
         onOpenEdgeKeypadRef.current(edgeRig.value());
+        return true;
       }
+      return false;
+    };
+    openExactEntryRef.current = openExactEntry;
+    const handleChipClick = () => {
+      openExactEntry();
     };
     offsetChip.addEventListener('click', handleChipClick);
     offsetChipRef.current = offsetChip;
@@ -6625,6 +6638,7 @@ export function ModelViewer({
       sketchCenterTargetRef.current = null;
       offsetSetterRef.current = null;
       cancelDirectManipulationRef.current = null;
+      openExactEntryRef.current = null;
       cylinderRadiusProxyControllerRef.current = null;
       moveGizmoHudRef.current = null;
       if (orientationDragRef.current === orientationDragControls) {
