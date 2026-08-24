@@ -26,6 +26,12 @@ import {
   createInFlightImportChecksums,
   importSourceChecksums
 } from '../lib/importArchival';
+import type {
+  ImportPhase,
+  ImportProgressSink,
+  ImportRunOutcome,
+  ImportRunProgress
+} from '../lib/importProgress';
 import {
   deleteSourceBlobIfUnreferenced,
   ensureLocalProjectStorage,
@@ -1244,6 +1250,9 @@ function importOnce(
     editDisabledReason?(): string | null;
     fileSize?: number;
     limits?: { maxSourceBytes?: number; maxEmbeddedBytes?: number };
+    progress?: ImportProgressSink;
+    /** Rejects the upload, as a session with no cloud reachable does. */
+    refuseArchive?: boolean;
   }
 ): Promise<StepImportResult> {
   return runStepImport({
@@ -1256,8 +1265,12 @@ function importOnce(
     }),
     archive: async () => {
       await deps.archiving;
+      if (deps.refuseArchive) {
+        throw new Error('Artifact upload is unavailable.');
+      }
       return 'artifact_cloud_step';
     },
+    ...(deps.progress ? { progress: deps.progress } : {}),
     validatedFeature: { reserve: deps.reserve, run: deps.run },
     status: {
       setStatus: (message) => deps.onStatus?.(message),
@@ -2619,5 +2632,270 @@ describe('two tabs importing one file', () => {
     expect(outcome?.sourceDeleted).toBe(true);
     expect(device.deleteRequests).toEqual([file.checksum]);
     expect(device.blobs.has(file.checksum)).toBe(false);
+  });
+});
+
+/**
+ * What the progress card is told, taken off the REAL run rather than a
+ * description of it. The card can only be as truthful as this sequence: a
+ * phase emitted in the wrong place, or an ending mapped to the wrong tone, is
+ * a panel confidently reporting something that did not happen.
+ */
+describe('what an import reports while it runs', () => {
+  const file = {
+    name: 'Frame.step',
+    checksum: 'sha256-frame',
+    bytes: 'ISO-10303-21;'
+  };
+
+  function recorder(): ImportProgressSink & {
+    phases: ImportPhase[];
+    updates: ImportRunProgress[];
+    started: { fileName: string; phases: readonly ImportPhase[] } | null;
+    ended: ImportRunOutcome | null;
+  } {
+    const sink = {
+      phases: [] as ImportPhase[],
+      updates: [] as ImportRunProgress[],
+      started: null as { fileName: string; phases: readonly ImportPhase[] } | null,
+      ended: null as ImportRunOutcome | null,
+      start(input: { fileName: string; phases: readonly ImportPhase[] }) {
+        sink.started = input;
+      },
+      update(progress: ImportRunProgress) {
+        sink.updates.push(progress);
+        if (sink.phases.at(-1) !== progress.phase) {
+          sink.phases.push(progress.phase);
+        }
+      },
+      finish(outcome: ImportRunOutcome) {
+        sink.ended = outcome;
+      }
+    };
+    return sink;
+  }
+
+  function oneTab(device: SharedDevice, derive = acceptsEverything()) {
+    const manager = new CommandManager(
+      createProjectDocument('Progress', toUserId('user_import_progress'))
+    );
+    const { result } = renderHook(() =>
+      useValidatedFeatureCommit(tabHost(manager, derive))
+    );
+    const session = importSession(device, manager, () =>
+      result.current.reserve()
+    );
+    return { manager, result, session };
+  }
+
+  it('walks the phases in the order they actually happen', async () => {
+    const device = createDevice();
+    const { session, result } = oneTab(device);
+    const progress = recorder();
+
+    await act(async () => {
+      await importOnce(file, {
+        ...session,
+        progress,
+        run: (command, options) => result.current.run(command, options)
+      });
+    });
+
+    expect(progress.started?.fileName).toBe('Frame.step');
+    expect(progress.started?.phases).toEqual([
+      'saving',
+      'reading',
+      'building',
+      'archiving'
+    ]);
+    expect(progress.phases).toEqual([
+      'saving',
+      'reading',
+      'building',
+      'archiving'
+    ]);
+  });
+
+  /**
+   * The kernel call is one synchronous trip into wasm. Reporting any fraction
+   * for it would be an invention, and the card draws a null as a held, striped
+   * bar precisely so it does not have to.
+   */
+  it('reports no fraction for the phase that cannot measure itself', async () => {
+    const device = createDevice();
+    const { session, result } = oneTab(device);
+    const progress = recorder();
+
+    await act(async () => {
+      await importOnce(file, {
+        ...session,
+        progress,
+        run: (command, options) => result.current.run(command, options)
+      });
+    });
+
+    const building = progress.updates.filter(
+      (update) => update.phase === 'building'
+    );
+    expect(building).not.toHaveLength(0);
+    expect(building.every((update) => update.fraction === null)).toBe(true);
+  });
+
+  /**
+   * A storage-denied session writes no blob, so it has no `saving` phase at
+   * all. Announcing one would divide the bar over a phase that never runs and
+   * start every such import a tenth of the way along.
+   */
+  it('leaves out the phase a storage-denied session never runs', async () => {
+    const device = createDevice();
+    const { session, result } = oneTab(device);
+    const progress = recorder();
+
+    await act(async () => {
+      await importOnce(file, {
+        ...session,
+        readiness: 'unavailable',
+        progress,
+        run: (command, options) => result.current.run(command, options)
+      });
+    });
+
+    expect(progress.started?.phases).toEqual([
+      'reading',
+      'building',
+      'archiving'
+    ]);
+    expect(progress.phases).not.toContain('saving');
+  });
+
+  it('ends a committed and archived import quietly', async () => {
+    const device = createDevice();
+    const { session, result } = oneTab(device);
+    const progress = recorder();
+
+    await act(async () => {
+      await importOnce(file, {
+        ...session,
+        progress,
+        run: (command, options) => result.current.run(command, options)
+      });
+    });
+
+    expect(progress.ended).toEqual({ tone: 'ok', message: 'Imported — 1 body' });
+  });
+
+  /**
+   * The ending most worth surfacing: the body is in the model, but its source
+   * never left this device, so no other device can rebuild the project. It is
+   * the only ending that carries an action.
+   */
+  it('ends an unarchived import with the retry it needs', async () => {
+    const device = createDevice();
+    const { session, result } = oneTab(device);
+    const progress = recorder();
+
+    await act(async () => {
+      await importOnce(file, {
+        ...session,
+        refuseArchive: true,
+        progress,
+        run: (command, options) => result.current.run(command, options)
+      });
+    });
+
+    expect(progress.ended).toEqual({
+      tone: 'warning',
+      message: 'Imported, but saved on this device only',
+      action: 'archive'
+    });
+  });
+
+  /**
+   * The kernel's own words. They already reach the status bar, which the next
+   * message overwrites; the card is this import's own surface and can keep
+   * them.
+   */
+  it('ends a refusal with the reason the kernel gave', async () => {
+    const device = createDevice();
+    const { session, result } = oneTab(device, refusesFile('Frame'));
+    const progress = recorder();
+
+    await act(async () => {
+      await importOnce(file, {
+        ...session,
+        progress,
+        run: (command, options) => result.current.run(command, options)
+      });
+    });
+
+    expect(progress.ended?.tone).toBe('error');
+    // The kernel's diagnosis, not a generic "import failed" — this is the one
+    // sentence that tells the user what to fix upstream.
+    expect(progress.ended?.message).toBe(DANGLING_REFERENCE_PARSE_ERROR);
+    expect(progress.ended?.action).toBeUndefined();
+  });
+
+  /**
+   * Turned away before any work started. The status bar already says why, and
+   * a card that appeared and vanished in the same breath would read as a
+   * glitch rather than as an answer.
+   */
+  it('says nothing at all for an import refused before it began', async () => {
+    const device = createDevice();
+    const { session, result } = oneTab(device);
+    const progress = recorder();
+
+    await act(async () => {
+      await importOnce(file, {
+        ...session,
+        progress,
+        fileSize: 900,
+        limits: { maxSourceBytes: 100 },
+        run: (command, options) => result.current.run(command, options)
+      });
+    });
+
+    expect(progress.started).toBeNull();
+    expect(progress.ended).toBeNull();
+  });
+
+  /** Every run that announces itself must also settle. A card left spinning
+   * forever is worse than the single status line this replaces. */
+  it('always settles a run it announced', async () => {
+    const device = createDevice();
+    const { session, result } = oneTab(device, refusesFile('Frame'));
+
+    for (const variant of ['committed', 'refused', 'unarchived'] as const) {
+      const progress = recorder();
+      const tab = oneTab(
+        createDevice(),
+        variant === 'refused' ? refusesFile('Frame') : acceptsEverything()
+      );
+      await act(async () => {
+        await importOnce(file, {
+          ...tab.session,
+          progress,
+          ...(variant === 'unarchived' ? { refuseArchive: true } : {}),
+          run: (command, options) => tab.result.current.run(command, options)
+        });
+      });
+      expect(progress.started, variant).not.toBeNull();
+      expect(progress.ended, variant).not.toBeNull();
+    }
+
+    // The busy path too: a second import bounced off the commit lock is
+    // declined before it announces anything.
+    const held = result.current.reserve();
+    const progress = recorder();
+    await act(async () => {
+      await importOnce(file, {
+        ...session,
+        progress,
+        run: (command, options) => result.current.run(command, options)
+      });
+    });
+    expect(progress.started).toBeNull();
+    held?.release();
+    expect(device.blobs.size).toBe(0);
   });
 });
