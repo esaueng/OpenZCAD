@@ -1506,6 +1506,8 @@ export function App() {
   const commandOwnsDiagnosticRef = useRef(false);
   /** Cancels the viewport's captured pointer session on keyboard Escape. */
   const cancelDirectManipulationRef = useRef<(() => boolean) | null>(null);
+  /** Opens exact entry for the armed handle, as tapping its chip would. */
+  const openExactEntryRef = useRef<(() => boolean) | null>(null);
   const contextMenuActionsRef = useRef<Record<string, () => void>>({});
   const managerRef = useRef<CommandManager | null>(null);
   const geometry = useGeometryWorker({
@@ -11130,6 +11132,20 @@ export function App() {
         }
         return;
       }
+      // Enter is the keyboard half of drag-or-type. Every armed handle can be
+      // dragged or tapped to type an exact value; without this the typing half
+      // needed a pointer, which is not a contract at all.
+      if (
+        event.key === 'Enter' &&
+        isOperationState(interaction) &&
+        interaction.phase === 'armed' &&
+        !keypad
+      ) {
+        if (openExactEntryRef.current?.() === true) {
+          event.preventDefault();
+          return;
+        }
+      }
       switch (event.key) {
         case 'Escape':
           if (modelingLocked && measuring) {
@@ -12262,6 +12278,7 @@ export function App() {
             onCylinderRadiusCancel={handleCylinderRadiusCancel}
             onOpenCylinderRadiusKeypad={handleOpenCylinderRadiusKeypad}
             cancelDirectManipulationRef={cancelDirectManipulationRef}
+            openExactEntryRef={openExactEntryRef}
             edgeHandle={modelingLocked ? null : edgeHandleTarget}
             onEdgeRadiusPreview={(size) => edgePreview.request(size)}
             onEdgeCommit={handleEdgeCommit}
@@ -12509,11 +12526,13 @@ export function App() {
                           handleOffsetPreview(value);
                         }
                       }}
+                      // A refused value is refused for every command, not just
+                      // offsets: leaving the control live beside its own
+                      // rejection invited the same value to be submitted again.
                       commitDisabled={
-                        keypad.kind === 'offset' &&
-                        interaction.mode === 'face' &&
-                        interaction.op === 'offset-face' &&
-                        interaction.phase === 'failed'
+                        isOperationState(interaction) &&
+                        (interaction.phase === 'failed' ||
+                          interaction.phase === 'validating')
                       }
                       commitDisabledReason={
                         interaction.mode !== 'idle' &&
