@@ -527,7 +527,7 @@ test('accepts exact visual selection and direct editing on the seeded boss', asy
     { ...handle, ...handleStart }
   );
   await expect(
-    page.getByRole('region', { name: 'Resize Cylinder Radius operation' })
+    page.getByRole('region', { name: 'Resize Cylinder operation' })
   ).toContainText('Dragging');
   await expect
     .poll(

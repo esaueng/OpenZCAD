@@ -10,7 +10,7 @@ export function warningForFeature(
   }
   return (
     match.replace(/^Feature "[^"]+":\s*/, '').trim() ||
-    'The exact geometry kernel rejected this operation.'
+    'This operation does not produce valid geometry.'
   );
 }
 

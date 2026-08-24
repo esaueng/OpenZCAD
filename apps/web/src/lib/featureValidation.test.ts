@@ -34,7 +34,7 @@ describe('validated feature warnings', () => {
   it('does not treat an empty attributed warning as success', () => {
     expect(
       warningForFeature('Join housings', ['Feature "Join housings":'])
-    ).toBe('The exact geometry kernel rejected this operation.');
+    ).toBe('This operation does not produce valid geometry.');
   });
 
   it('rejects a missing result and a stale document', () => {

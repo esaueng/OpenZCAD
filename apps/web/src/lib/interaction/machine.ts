@@ -530,6 +530,32 @@ export type CommandId =
   | 'extrude-region'
   | 'sketch';
 
+/**
+ * Names a radial face edit after the thing being edited.
+ *
+ * "Resize Cylinder Radius" described the kernel's view — a cylindrical surface
+ * and the parameter that defines it — while the value beside it was labelled
+ * Diameter, so the command and its own number disagreed about what was being
+ * set. Naming the object instead removes the disagreement rather than keeping
+ * two labels in step: the chip owns the quantity, and switching Ø/R cannot
+ * make the title wrong.
+ *
+ * Used for the command surface and for the feature this edit writes into
+ * history, so the operation is called the same thing while it runs and
+ * afterwards.
+ *
+ * Only the inward-facing case is named specifically. `concavity` comes from
+ * the surface normal, so it reports 'boss' for the outer wall of a plain
+ * cylinder just as it does for a raised boss, and nothing published
+ * distinguishes them — "Resize Cylinder" is true of both, where "Resize Boss"
+ * would be wrong half the time.
+ */
+export function radialFaceOperationName(target: FaceTarget): string {
+  return target.featureType === 'through-hole' || target.concavity === 'hole'
+    ? 'Resize Hole'
+    : 'Resize Cylinder';
+}
+
 interface CommandIdentity {
   id: CommandId;
   icon: ToolCardIcon;
@@ -562,7 +588,7 @@ function commandIdentityFor(state: InteractionState): CommandIdentity | null {
           return {
             id: 'resize-cylinder-radius',
             icon: 'resize-cylinder-radius',
-            title: 'Resize Cylinder Radius'
+            title: radialFaceOperationName(state.target)
           };
         case 'offset-face':
           return {
@@ -649,7 +675,7 @@ function lifecycleHint(
   if (state.phase === 'validating') {
     return {
       phase: state.phase,
-      hint: 'Validating with the exact geometry kernel…'
+      hint: 'Checking geometry…'
     };
   }
   if (state.phase === 'failed') {
