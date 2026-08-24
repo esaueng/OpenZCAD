@@ -366,6 +366,7 @@ import {
   topologySelectionLabel
 } from './lib/topologyLabels';
 import type { FeatureSelectionSource } from './lib/inspectorHeading';
+import type { CommandDiagnostic } from './lib/interaction/machine';
 import { resolveFace } from './lib/topologyResolution';
 import { objectPolylines } from './lib/objectPolyline';
 import type { RegionPickData } from './components/viewer/regionOverlay';
@@ -819,7 +820,7 @@ interface OffsetPreviewCandidate {
 
 interface OffsetPreviewResult {
   derived: ProjectDocument['derived'];
-  rejection: string | null;
+  rejection: CommandDiagnostic | null;
 }
 
 function desktopAuthorizationAttemptFromLocation(): string | null {
@@ -1703,11 +1704,12 @@ export function App() {
           !live ||
           live.document.projectId !== candidate.baseProjectId ||
           live.document.version !== candidate.baseVersion;
-        let rejection: string | null = null;
+        let rejection: CommandDiagnostic | null = null;
         if (candidate.validationTargets) {
           for (const target of candidate.validationTargets) {
             rejection = validatedFeatureRejection({
               featureName: target.featureName,
+              ...(target.featureId ? { featureId: target.featureId } : {}),
               warnings: derived.warnings,
               bodyPresent: Boolean(
                 derived.bodyRepresentations[target.resultBodyId]
@@ -1723,16 +1725,18 @@ export function App() {
             candidate.validationTargets.length === 0 &&
             documentMoved
           ) {
-            rejection =
-              'The document changed while the preview was rebuilding.';
+            rejection = {
+              message: 'The document changed while the preview was rebuilding.'
+            };
           }
         } else {
-          rejection = directEditRejection({
+          const message = directEditRejection({
             label: candidate.label,
             warnings: derived.warnings,
             bodyPresent: Boolean(derived.bodyRepresentations[candidate.bodyId]),
             documentMoved
           });
+          rejection = message ? { message } : null;
         }
         return { derived, rejection };
       },
@@ -1744,7 +1748,7 @@ export function App() {
         }
         if (preview.derived.rejection) {
           reportOffsetPreviewFailure(
-            preview.derived.rejection,
+            preview.derived.rejection.message,
             preview.document.offset
           );
           return;
@@ -1870,14 +1874,18 @@ export function App() {
       );
       dispatchInteraction({ type: 'validation-start', value });
     },
-    onValidationFailed: (message, value) => {
+    onValidationFailed: (diagnostic, value) => {
       cylinderRadiusPreview.clear();
       offsetPreview.clear();
       setPreviewDeferred(false);
       offsetPreviewValueRef.current = null;
-      dispatchInteraction({ type: 'validation-failed', message, value });
+      dispatchInteraction({
+        type: 'validation-failed',
+        diagnostic,
+        value
+      });
       if (!commandOwnsDiagnosticRef.current) {
-        setStatus(message);
+        setStatus(diagnostic.message);
       }
     },
     onCommitted: (bodyId) => {
@@ -9673,6 +9681,7 @@ export function App() {
     return [
       {
         featureName: source?.name ?? feature.name,
+        featureId: source?.featureId ?? feature.featureId,
         resultBodyId: targetBodyId
       },
       ...affectedFeatureTargets(base, feature.featureId).slice(1)
@@ -9918,7 +9927,11 @@ export function App() {
     }
     setPreviewDoc(null);
     setRenderedOffsetPreview(null);
-    dispatchInteraction({ type: 'validation-failed', message, value });
+    dispatchInteraction({
+      type: 'validation-failed',
+      diagnostic: { message },
+      value
+    });
     setStatus(`Offset preview refused: ${message}`);
   }
 
@@ -10195,7 +10208,9 @@ export function App() {
       return false;
     }
     if (current.phase === 'failed') {
-      setStatus(current.error ?? 'The current offset preview is invalid.');
+      setStatus(
+        current.error?.message ?? 'The current offset preview is invalid.'
+      );
       return false;
     }
     const plan = buildOffsetEditPlan(offset, exact);
@@ -10331,6 +10346,27 @@ export function App() {
         `Resize ${feature.name} ${dimension}`
       )
     );
+  }
+
+  /**
+   * Open the existing feature a refusal named.
+   *
+   * The recorded failure told the user to go and edit an earlier fillet and
+   * left them to find it. The rejection already knows which feature refused,
+   * so this is routing rather than new attribution: clear the failed command
+   * and select that feature exactly as clicking it in the tree would.
+   */
+  function handleEditCulpritFeature(featureId: string) {
+    const node = doc
+      ? Object.values(doc.nodes).find(
+          (candidate) =>
+            candidate.kind === 'feature' && candidate.featureId === featureId
+        )
+      : undefined;
+    if (!node) {
+      return;
+    }
+    handleSelectFeatureFromTree(node.id);
   }
 
   function handleSelectFeatureFromTree(nodeId: string) {
@@ -12417,6 +12453,7 @@ export function App() {
                   <ToolCard
                     model={contextualToolCard}
                     onAction={handleSelectionAction}
+                    onEditCulprit={handleEditCulpritFeature}
                     onClose={() => {
                       if (
                         interaction.mode !== 'idle' &&
@@ -12540,7 +12577,7 @@ export function App() {
                       commitDisabledReason={
                         interaction.mode !== 'idle' &&
                         interaction.mode !== 'sketch'
-                          ? interaction.error
+                          ? (interaction.error?.message ?? null)
                           : null
                       }
                       onCommit={(value, raw) => {

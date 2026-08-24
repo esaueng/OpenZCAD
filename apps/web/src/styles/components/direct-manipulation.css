@@ -101,14 +101,52 @@
 }
 
 .tool-card-copy small {
-  color: var(--color-text-dim);
+  color: var(--color-text-muted);
   font-size: var(--fs-xs);
+}
+
+/* A refusal reads as text with a red mark on it, not as red text: small red
+   glyphs on a dark panel were the least legible thing in the workspace. */
+.tool-card-diagnostic {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-width: 360px;
+  margin-top: 2px;
+  padding: 6px 8px;
+  border: 1px solid var(--color-error);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--color-error) 12%, transparent);
 }
 
 .tool-card-copy .tool-card-error {
   max-width: 360px;
-  color: var(--color-error);
+  color: var(--color-error-text);
   white-space: normal;
+}
+
+.tool-card-recovery {
+  align-self: flex-start;
+  padding: 3px 8px;
+  color: var(--color-text);
+  font-size: var(--fs-xs);
+  background: rgba(255, 255, 255, 0.08);
+  border: var(--border-thin);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+
+.tool-card-recovery:hover {
+  background: rgba(255, 255, 255, 0.16);
+}
+
+.tool-card-details {
+  font-size: var(--fs-xs);
+  color: var(--color-text-dim);
+}
+
+.tool-card-details summary {
+  cursor: pointer;
 }
 
 .tool-card[aria-busy='true'] .tool-card-icon svg {

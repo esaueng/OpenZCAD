@@ -176,7 +176,7 @@ describe('interactionReducer', () => {
     expect(state.mode === 'face' && state.phase).toBe('validating');
     state = interactionReducer(state, {
       type: 'validation-failed',
-      message: 'Face would self-intersect.'
+      diagnostic: { message: 'Face would self-intersect.' }
     });
     expect(state.mode === 'face' && state.phase).toBe('failed');
     expect(state.mode === 'face' && state.lastValue).toBe(8);
@@ -354,7 +354,7 @@ describe('escape chain', () => {
     expect(interactionReducer(state, { type: 'escape' })).toBe(state);
     state = interactionReducer(state, {
       type: 'validation-failed',
-      message: 'Self-intersection.'
+      diagnostic: { message: 'Self-intersection.' }
     });
     expect(escapeTarget(state)).toBe('recover-failure');
     state = interactionReducer(state, { type: 'escape' });
@@ -500,12 +500,12 @@ describe('command session', () => {
     });
     const failed = interactionReducer(armed, {
       type: 'validation-failed',
-      message: 'Fillet could not be created.',
+      diagnostic: { message: 'Fillet could not be created.' },
       value: 4.8
     });
     expect(commandSessionFor(failed)).toMatchObject({
       phase: 'failed',
-      error: 'Fillet could not be created.'
+      error: { message: 'Fillet could not be created.' }
     });
     // A stale diagnostic beside a value that has since moved is the failure
     // this clears: dragging again re-arms the command and the message goes.
