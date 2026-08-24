@@ -118,7 +118,8 @@ import {
   type BodyEdgeOverlay,
   type CalloutLayoutItem,
   type DimensionGraphic,
-  easeToward
+  easeToward,
+  SELECTION_SEMANTICS
 } from '@openzcad/viewport';
 import type {
   BodyRepresentation,
@@ -947,15 +948,19 @@ interface MoveDragState {
   } | null;
 }
 
-const SELECTION_EMISSIVE = 0x173a5e;
-const SELECTED_FACE_COLOR = 0x4da3ff;
-const SELECTED_FACE_OPACITY = 0.5;
-const SELECTED_FACE_HIDDEN_OPACITY = 0.16;
+// Selection colours live with hover's in the viewport's semantics table. They
+// were declared here while hover was declared there, which is how one state's
+// language drifted out of sight of the other's.
+const SELECTION_EMISSIVE = SELECTION_SEMANTICS.selected.bodyEmissive;
+const SELECTED_FACE_COLOR = SELECTION_SEMANTICS.selected.face;
+const SELECTED_FACE_OPACITY = SELECTION_SEMANTICS.selected.faceOpacity;
+const SELECTED_FACE_HIDDEN_OPACITY =
+  SELECTION_SEMANTICS.selected.hiddenFaceOpacity;
 /**
  * Opacity an overlay fades to when it registers for the fade without naming a
  * target. Mirrors the viewport's own default so both fade paths agree.
  */
-const DEFAULT_OVERLAY_FADE_TARGET = 0.34;
+const DEFAULT_OVERLAY_FADE_TARGET = SELECTION_SEMANTICS.defaultFadeTarget;
 
 /**
  * Starts a deselected highlight fading instead of deleting it outright.

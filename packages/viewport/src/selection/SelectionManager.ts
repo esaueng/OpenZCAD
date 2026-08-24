@@ -19,22 +19,24 @@ import {
   idleEdgeColor
 } from '../pick/edges';
 import { VIEWPORT_RENDER_ORDER } from '../render/scene';
+import { SELECTION_SEMANTICS } from '../render/semantics';
 import { createFaceHighlightGeometry } from './faceHighlightGeometry';
 import { easeToward, SETTLE_EPSILON } from '../motion';
 
-const HOVER_EMISSIVE = 0x101d2c;
-const HOVER_FACE_COLOR = 0x8fc8ff;
-const HOVER_FACE_OPACITY = 0.3;
-const HOVER_FACE_HIDDEN_OPACITY = 0.1;
+const HOVER_EMISSIVE = SELECTION_SEMANTICS.hover.faceEmissive;
+const HOVER_FACE_COLOR = SELECTION_SEMANTICS.hover.face;
+const HOVER_FACE_OPACITY = SELECTION_SEMANTICS.hover.faceOpacity;
+const HOVER_FACE_HIDDEN_OPACITY = SELECTION_SEMANTICS.hover.hiddenFaceOpacity;
 
 /** Detected sketch regions: subtle at rest, stronger on hover and selection. */
-export const REGION_IDLE_OPACITY = 0.22;
-export const REGION_COMMAND_OPACITY = 0.28;
-export const REGION_HOVER_OPACITY = 0.38;
-export const REGION_SELECTED_OPACITY = 0.52;
+export const REGION_IDLE_OPACITY = SELECTION_SEMANTICS.region.idleOpacity;
+export const REGION_COMMAND_OPACITY = SELECTION_SEMANTICS.region.commandOpacity;
+export const REGION_HOVER_OPACITY = SELECTION_SEMANTICS.region.hoverOpacity;
+export const REGION_SELECTED_OPACITY =
+  SELECTION_SEMANTICS.region.selectedOpacity;
 
 /** Opacity a fading overlay settles on when it declares no target. */
-const DEFAULT_FADE_TARGET = 0.34;
+const DEFAULT_FADE_TARGET = SELECTION_SEMANTICS.defaultFadeTarget;
 
 type HoverFaceMesh = THREE.Mesh<
   THREE.BufferGeometry,
@@ -490,10 +492,10 @@ export class SelectionManager {
           : VIEWPORT_RENDER_ORDER.HOVER_HIGHLIGHT;
       boundary.material.color.setHex(
         state === 'selected'
-          ? 0xffc45c
+          ? SELECTION_SEMANTICS.region.boundarySelected
           : state === 'hover'
-            ? 0xaed5ff
-            : 0x79b8ff
+            ? SELECTION_SEMANTICS.region.boundaryHover
+            : SELECTION_SEMANTICS.region.boundaryIdle
       );
       boundary.material.linewidth =
         state === 'selected' ? 3 : state === 'hover' ? 2.5 : 1.6;

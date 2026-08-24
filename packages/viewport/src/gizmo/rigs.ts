@@ -13,6 +13,7 @@ import {
 import { createDimensionGraphic } from '../annotation/dimensionGraphic';
 import { ANALYTIC_GHOST_COLOR } from '../selection/analyticCylinderGhost';
 import { easeToward, hasSettled } from '../motion';
+import { SELECTION_SEMANTICS } from '../render/semantics';
 
 const ARROW_SHAFT_RADIUS = 0.05;
 const ARROW_HEAD_RADIUS = 0.14;
@@ -20,9 +21,9 @@ const ARROW_HEAD_LENGTH = 0.3;
 const ARROW_HALF_LENGTH = 0.75;
 const ARROW_HIT_RADIUS = 0.34;
 const GHOST_OPACITY = 0.28;
-export const HANDLE_WARNING_COLOR = 0xf59e0b;
+export const HANDLE_WARNING_COLOR = SELECTION_SEMANTICS.handle.invalid;
 /** The handle under the pointer, so "grabbable" is visible before pressing. */
-const HANDLE_HOT_COLOR = 0xffc178;
+const HANDLE_HOT_COLOR = SELECTION_SEMANTICS.handle.hot;
 /**
  * The eased presence and hover state every drag rig shares.
  *

@@ -3,6 +3,7 @@ import { Line2 } from 'three/examples/jsm/lines/Line2.js';
 import { LineGeometry } from 'three/examples/jsm/lines/LineGeometry.js';
 import { LineMaterial } from 'three/examples/jsm/lines/LineMaterial.js';
 import type { FatLineResolution } from '../render/scene';
+import { SELECTION_SEMANTICS } from '../render/semantics';
 
 /**
  * A drawing's dimension, drawn in the scene.
@@ -28,7 +29,7 @@ import type { FatLineResolution } from '../render/scene';
  */
 
 /** The near-white of a drawing's linework, matched to the drag rigs. */
-export const DIMENSION_LINE_COLOR = 0xf4f7fb;
+export const DIMENSION_LINE_COLOR = SELECTION_SEMANTICS.reference.dimension;
 
 /**
  * Cone size in world units at unit scale, kept identical to the rig's shipped

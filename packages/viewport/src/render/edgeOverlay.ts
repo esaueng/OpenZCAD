@@ -5,6 +5,7 @@ import type {
   EdgeTopologyReferenceV5,
   TopologySelection
 } from '@openzcad/shared';
+import { SELECTION_SEMANTICS } from './semantics';
 import {
   EDGE_HOVER_COLOR,
   EDGE_HOVER_WIDTH,
@@ -49,8 +50,8 @@ export interface BatchedEdgeTarget {
 }
 
 const EMPTY_SEGMENT = [0, 0, 0, 0, 0, 0] as const;
-const FACE_BOUNDARY_SELECTED_COLOR = 0xc7ebff;
-const FACE_BOUNDARY_SELECTED_WIDTH = 6;
+const FACE_BOUNDARY_SELECTED_COLOR = SELECTION_SEMANTICS.selected.boundary;
+const FACE_BOUNDARY_SELECTED_WIDTH = SELECTION_SEMANTICS.selected.boundaryWidth;
 const HIDDEN_EDGE_OPACITY = 0.34;
 
 function edgeKey(owner: Pick<EdgeSegmentOwner, 'bodyId' | 'topologyId'>) {
