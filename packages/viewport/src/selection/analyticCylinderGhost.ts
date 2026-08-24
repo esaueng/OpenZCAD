@@ -4,8 +4,9 @@ import { LineGeometry } from 'three/examples/jsm/lines/LineGeometry.js';
 import type { FaceGeometry } from '@openzcad/shared';
 import { createDimensionLineMaterial } from '../annotation/dimensionGraphic';
 import { VIEWPORT_RENDER_ORDER, type FatLineResolution } from '../render/scene';
+import { SELECTION_SEMANTICS } from '../render/semantics';
 
-export const ANALYTIC_GHOST_COLOR = 0x78998a;
+export const ANALYTIC_GHOST_COLOR = SELECTION_SEMANTICS.reference.ghost;
 export const ANALYTIC_GHOST_OPACITY = 0.18;
 
 type CylinderGeometry = Pick<
