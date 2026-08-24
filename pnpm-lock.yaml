@@ -255,7 +255,7 @@ importers:
         version: link:../shared
       remus-wasm:
         specifier: github:esaueng/remus#main&path:/crates/wasm/pkg
-        version: https://codeload.github.com/esaueng/remus/tar.gz/6532fe9e6813d8cfb7a9324ee84a987842636299#path:/crates/wasm/pkg
+        version: https://codeload.github.com/esaueng/remus/tar.gz/f66b45bdaec646bca79bf715d940a38f42b392b5#path:/crates/wasm/pkg
 
   packages/persistence:
     dependencies:
@@ -1883,8 +1883,8 @@ packages:
     resolution: {integrity: sha512-6tDA8g98We0zd0GvVeMT9arEOnTw9qM03L9cJXaCjrip1OO764RDBLBfrB4cwzNGDj5OA5ioymC9GkizgWJDUg==}
     engines: {node: '>=8'}
 
-  remus-wasm@https://codeload.github.com/esaueng/remus/tar.gz/6532fe9e6813d8cfb7a9324ee84a987842636299#path:/crates/wasm/pkg:
-    resolution: {path: /crates/wasm/pkg, tarball: https://codeload.github.com/esaueng/remus/tar.gz/6532fe9e6813d8cfb7a9324ee84a987842636299}
+  remus-wasm@https://codeload.github.com/esaueng/remus/tar.gz/f66b45bdaec646bca79bf715d940a38f42b392b5#path:/crates/wasm/pkg:
+    resolution: {path: /crates/wasm/pkg, tarball: https://codeload.github.com/esaueng/remus/tar.gz/f66b45bdaec646bca79bf715d940a38f42b392b5}
     version: 2.130.0
 
   rolldown@1.2.4:
@@ -3568,7 +3568,7 @@ snapshots:
       indent-string: 4.0.0
       strip-indent: 3.0.0
 
-  remus-wasm@https://codeload.github.com/esaueng/remus/tar.gz/6532fe9e6813d8cfb7a9324ee84a987842636299#path:/crates/wasm/pkg: {}
+  remus-wasm@https://codeload.github.com/esaueng/remus/tar.gz/f66b45bdaec646bca79bf715d940a38f42b392b5#path:/crates/wasm/pkg: {}
 
   rolldown@1.2.4:
     dependencies:
