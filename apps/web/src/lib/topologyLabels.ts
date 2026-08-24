@@ -40,13 +40,13 @@ function dominantAxis(
 }
 
 /** Directional planar names assume the app's Z-up world. */
-const PLANAR_NAMES: Record<string, string> = {
-  'z:1': 'Top face',
-  'z:-1': 'Bottom face',
-  'x:1': 'Right face',
-  'x:-1': 'Left face',
-  'y:1': 'Back face',
-  'y:-1': 'Front face'
+const PLANAR_DIRECTIONS: Record<string, string> = {
+  'z:1': 'Top',
+  'z:-1': 'Bottom',
+  'x:1': 'Right',
+  'x:-1': 'Left',
+  'y:1': 'Back',
+  'y:-1': 'Front'
 };
 
 /**
@@ -74,6 +74,19 @@ function findEdge(
 ): { edge: EdgeTopology; index: number } | null {
   const found = resolveEdge(body, { hash, topologyId });
   return found.ok ? { edge: found.entry, index: found.index } : null;
+}
+
+/** Which way an axis-aligned planar face points, if it is one. */
+function planarDirection(
+  geometry: FaceTopology['geometry'] | undefined
+): string | undefined {
+  if (geometry?.surfaceType !== 'plane' || !geometry.normal) {
+    return undefined;
+  }
+  const axis = dominantAxis(geometry.normal);
+  return axis
+    ? PLANAR_DIRECTIONS[`${axis.axis}:${axis.sign}`]
+    : undefined;
 }
 
 /**
@@ -107,11 +120,8 @@ export function faceLabel(
     return `Through hole Ø${formatNumber(geometry.diameter)}`;
   }
   if (geometry?.surfaceType === 'plane' && geometry.normal) {
-    const axis = dominantAxis(geometry.normal);
-    if (axis) {
-      return PLANAR_NAMES[`${axis.axis}:${axis.sign}`] ?? 'Planar face';
-    }
-    return 'Planar face';
+    const direction = planarDirection(geometry);
+    return direction ? `${direction} face` : 'Planar face';
   }
   if (geometry?.surfaceType === 'cylinder') {
     return geometry.diameter !== undefined
@@ -121,22 +131,72 @@ export function faceLabel(
   return `Face ${index + 1}`;
 }
 
-/** Names a picked edge by its stable ordinal inside the body. */
+/**
+ * The faces an edge bounds, deduplicated.
+ *
+ * `adjacentFaceHashes` keeps multiplicity — a seam edge names its one face
+ * twice — and on a sphere two patches share one hash, so this narrows to
+ * distinct faces and gives up entirely if any of them fails to resolve.
+ */
+function adjacentFaces(
+  body: BodyRepresentation | undefined,
+  edge: EdgeTopology
+): FaceTopology[] {
+  const byHash = new Map<number, FaceTopology>();
+  for (const faceHash of edge.adjacentFaceHashes ?? []) {
+    const found = resolveFace(body, { hash: faceHash });
+    if (!found.ok) {
+      return [];
+    }
+    byHash.set(faceHash, found.entry);
+  }
+  return [...byHash.values()];
+}
+
+/**
+ * Names a picked edge by what it is, falling back to its stable ordinal.
+ *
+ * An ordinal is identity, not a description: "Edge 25" and "Edge 28" tell the
+ * user which edge only by elimination. The kernel already publishes the faces
+ * an edge bounds and the circle it runs on, which is enough to say what most
+ * edges actually are.
+ */
 export function edgeLabel(
   body: BodyRepresentation | undefined,
   hash: number | undefined,
   topologyId?: string
 ): string {
   const match = findEdge(body, hash, topologyId);
-  const radius = match?.edge.curve?.circle?.radius;
+  if (!match) {
+    return 'Edge';
+  }
+  const neighbours = adjacentFaces(body, match.edge);
+  const radius = match.edge.curve?.circle?.radius;
   if (
     radius !== undefined &&
     Number.isFinite(radius) &&
     radius > GEOMETRY_LINEAR_TOLERANCE
   ) {
-    return `Edge R${formatNumber(radius)}`;
+    // A rim reads in the notation of the feature it belongs to: a hole and a
+    // cylinder are diameters, a blend is the radius that was filleted.
+    if (neighbours.some((face) => face.geometry?.featureType === 'blend')) {
+      return `Blend edge R${formatNumber(radius)}`;
+    }
+    const hole = neighbours.some(
+      (face) => face.geometry?.featureType === 'through-hole'
+    );
+    return `${hole ? 'Hole' : 'Circular'} edge Ø${formatNumber(radius * 2)}`;
   }
-  return match ? `Edge ${match.index + 1}` : 'Edge';
+  // Two axis-aligned planes meeting is the most specific thing a straight edge
+  // is, and the only pairing that names itself well: "Cylindrical face Ø40"
+  // does not belong in the middle of an edge's name.
+  const directions = neighbours.flatMap(
+    (face) => planarDirection(face.geometry) ?? []
+  );
+  if (directions.length === 2 && neighbours.length === 2) {
+    return `${directions[0]} · ${directions[1]} edge`;
+  }
+  return `Edge ${match.index + 1}`;
 }
 
 /**

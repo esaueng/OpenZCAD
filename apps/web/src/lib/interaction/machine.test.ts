@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   IDLE,
   commandSessionFor,
+  radialFaceOperationName,
   escapeTarget,
   interactionReducer,
   toolCardFor,
@@ -382,7 +383,9 @@ describe('toolCardFor', () => {
         target: face({ surfaceType: 'cylindrical', radius: 4 })
       })
     );
-    expect(holeCard?.title).toBe('Resize Cylinder Radius');
+    // A bare cylindrical face is neither a hole nor a boss, so it is named
+    // for what it is rather than for the parameter that defines it.
+    expect(holeCard?.title).toBe('Resize Cylinder');
     expect(holeCard?.hint).toContain('radius');
     let edges = interactionReducer(IDLE, {
       type: 'select-edge',
@@ -462,7 +465,7 @@ describe('command session', () => {
     }
     expect(states.map((state) => commandSessionFor(state)?.title)).toEqual([
       'Offset Face',
-      'Resize Cylinder Radius',
+      'Resize Hole',
       'Fillet',
       'Chamfer',
       'Extrude'
@@ -523,5 +526,32 @@ describe('command session', () => {
       phase: null,
       error: null
     });
+  });
+});
+
+describe('radialFaceOperationName', () => {
+  it('names the object being resized, not the kernel parameter', () => {
+    // The command used to be "Resize Cylinder Radius" while its own value was
+    // labelled Diameter. Naming the object leaves nothing to disagree with.
+    expect(
+      radialFaceOperationName(
+        face({ surfaceType: 'cylindrical', radius: 4, featureType: 'through-hole' })
+      )
+    ).toBe('Resize Hole');
+    expect(
+      radialFaceOperationName(
+        face({ surfaceType: 'cylindrical', radius: 4, concavity: 'hole' })
+      )
+    ).toBe('Resize Hole');
+    // `concavity` is read off the surface normal, so a plain cylinder's outer
+    // wall reports 'boss' exactly like a raised boss does. Both are cylinders.
+    expect(
+      radialFaceOperationName(
+        face({ surfaceType: 'cylindrical', radius: 4, concavity: 'boss' })
+      )
+    ).toBe('Resize Cylinder');
+    expect(
+      radialFaceOperationName(face({ surfaceType: 'cylindrical', radius: 4 }))
+    ).toBe('Resize Cylinder');
   });
 });

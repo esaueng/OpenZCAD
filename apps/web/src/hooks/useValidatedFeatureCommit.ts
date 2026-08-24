@@ -274,7 +274,7 @@ export function useValidatedFeatureCommit(
     host.onBusy(true);
     host.onStatus(
       input.validatingMessage ??
-        'Validating operation with the exact geometry kernel…'
+        'Checking geometry…'
     );
     try {
       let derived: ProjectDocument['derived'];

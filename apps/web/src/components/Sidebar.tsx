@@ -247,7 +247,7 @@ export function Sidebar({
           type="button"
           className="body-row-main"
           aria-pressed={selected}
-          title={`${body.name}${body.consumed ? ' — consumed by a later feature' : ''} — click to select, ⇧click to add`}
+          title={`${body.name}${body.consumed ? ' — combined into a later feature' : ''} — click to select, ⇧click to add`}
           onClick={(event) =>
             onSelectBody(
               body.bodyId,
@@ -341,8 +341,8 @@ export function Sidebar({
               onClick={() => setShowConsumed((current) => !current)}
               title={
                 showConsumed
-                  ? 'Hide bodies consumed by later features'
-                  : 'Show bodies consumed by later features'
+                  ? 'Hide the earlier bodies this model was built from'
+                  : 'Show the earlier bodies this model was built from — each was combined into a later feature and is no longer separate'
               }
             >
               {showConsumed ? (
@@ -350,7 +350,10 @@ export function Sidebar({
               ) : (
                 <ChevronRight size={11} aria-hidden="true" />
               )}
-              <span>{consumedBodies.length} consumed</span>
+              <span>
+                {consumedBodies.length} source{' '}
+                {consumedBodies.length === 1 ? 'body' : 'bodies'}
+              </span>
             </button>
           )}
           {showConsumed && consumedBodies.map(renderBodyRow)}
@@ -465,7 +468,7 @@ export function Sidebar({
                   // Every row used to announce the same generic kind label, so
                   // a history read aloud was a list of identical items. The
                   // feature's own name comes first, as on screen.
-                  title={`${feature.name} — ${FEATURE_KIND_LABELS[feature.featureKind]}${consumed ? ', consumed by a later feature' : ''}, click to edit`}
+                  title={`${feature.name} — ${FEATURE_KIND_LABELS[feature.featureKind]}${consumed ? ', combined into a later feature' : ''}, click to edit`}
                 >
                   <span className="feature-icon">{featureIcon(feature)}</span>
                   <span className="feature-name">{feature.name}</span>

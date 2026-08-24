@@ -21,15 +21,15 @@ export async function expectBodyCount(page: Page, count: number) {
 }
 
 /**
- * Consumed bodies sit collapsed behind the sidebar's disclosure row, so the
- * row's own count is the observable; zero consumed bodies means no row at all.
+ * Source bodies sit collapsed behind the sidebar's disclosure row, so the
+ * row's own count is the observable; zero of them means no row at all.
  */
 export async function expectConsumedBodyCount(page: Page, count: number) {
   if (count === 0) {
     await expect(page.locator('.consumed-toggle')).toHaveCount(0);
   } else {
     await expect(page.locator('.consumed-toggle')).toContainText(
-      `${count} consumed`
+      `${count} source ${count === 1 ? 'body' : 'bodies'}`
     );
   }
 }

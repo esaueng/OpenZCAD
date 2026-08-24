@@ -83,7 +83,7 @@ export function useDirectEditCommit(
       host.onValidationStart(submittedValue);
       const current = manager.document;
       host.onBusy(true);
-      host.onStatus('Validating operation with the exact geometry kernel…');
+      host.onStatus('Checking geometry…');
       try {
         command.validate(current);
         const preview = command.apply(current);
