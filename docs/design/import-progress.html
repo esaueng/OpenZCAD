@@ -1,0 +1,899 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Import Activity Card</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+</head>
+<body>
+
+<style>
+/* ─────────────────────────────────────────────────────────────
+   Tokens lifted verbatim from apps/web/src/theme/tokens.css.
+   Single-theme on purpose: the specimen IS the dark workspace,
+   so every colour is painted explicitly and never inherited.
+   ───────────────────────────────────────────────────────────── */
+:root {
+  --bg: #0b0f14;
+  --surface: #111821;
+  --surface-2: #17202b;
+  --surface-hover: #1b2430;
+  --border: #2a3441;
+  --border-strong: #3a4554;
+  --text: #e6edf3;
+  --muted: #8b949e;
+  --subtle: #6e7a87;
+  --accent: #4da3ff;
+  --accent-hi: #7cc0ff;
+  --accent-dim: rgba(77, 163, 255, 0.14);
+  --accent-border: rgba(77, 163, 255, 0.45);
+  --warning: #f59e0b;
+  --error: #ef4444;
+  --success: #22c55e;
+  --viewport: #070b10;
+
+  --font-ui: 'IBM Plex Sans', system-ui, -apple-system, sans-serif;
+  --font-mono: 'IBM Plex Mono', ui-monospace, 'SF Mono', Menlo, monospace;
+  --r-sm: 3px;
+  --r-md: 4px;
+  --r-lg: 8px;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-ui);
+  font-size: 14px;
+  line-height: 1.55;
+  -webkit-font-smoothing: antialiased;
+}
+
+.page { max-width: 1060px; margin: 0 auto; padding: 0 24px 96px; }
+
+/* ── Masthead ─────────────────────────────────────────────── */
+.masthead {
+  border-bottom: 1px solid var(--border);
+  padding: 56px 0 40px;
+  margin-bottom: 48px;
+}
+.eyebrow {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--accent);
+  margin: 0 0 14px;
+}
+h1 {
+  font-size: clamp(30px, 4.4vw, 44px);
+  font-weight: 600;
+  line-height: 1.1;
+  letter-spacing: -0.02em;
+  margin: 0 0 18px;
+  text-wrap: balance;
+}
+.deck { max-width: 62ch; font-size: 16px; color: var(--muted); margin: 0; }
+.deck + .deck { margin-top: 12px; }
+.deck strong { color: var(--text); font-weight: 500; }
+
+/* ── Section scaffolding ──────────────────────────────────── */
+section { margin-bottom: 64px; }
+.sec-head { margin-bottom: 22px; }
+.sec-head .eyebrow { color: var(--subtle); margin-bottom: 8px; }
+h2 { font-size: 22px; font-weight: 600; letter-spacing: -0.01em; margin: 0 0 8px; }
+.sec-head p { max-width: 68ch; margin: 0; color: var(--muted); font-size: 14px; }
+h3 { font-size: 13px; font-weight: 600; margin: 0 0 6px; color: var(--text); }
+
+.note { font-size: 12.5px; color: var(--subtle); max-width: 70ch; }
+code, .mono { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+code {
+  font-size: 12px;
+  color: var(--accent-hi);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  padding: 1px 5px;
+}
+
+/* ── Baseline strip ───────────────────────────────────────── */
+.baseline-frame {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  overflow: hidden;
+}
+.baseline-frame .statusbar { border-top: none; }
+
+/* ── Workspace specimen ───────────────────────────────────── */
+.specimen {
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-lg);
+  overflow: hidden;
+  background: var(--surface);
+}
+.specimen-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 14px;
+  padding: 10px 14px;
+  background: var(--surface-2);
+  border-bottom: 1px solid var(--border);
+}
+/* Joined segmented groups: one bordered capsule per choice, so nothing
+   can wrap into a stray fragment. */
+.seg-group {
+  display: inline-flex;
+  align-items: stretch;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  overflow: hidden;
+}
+.chip {
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  line-height: 1;
+  white-space: nowrap;
+  color: var(--muted);
+  background: transparent;
+  border: none;
+  padding: 7px 12px;
+  cursor: pointer;
+  transition: color 120ms, background 120ms, box-shadow 120ms;
+}
+.chip + .chip { border-left: 1px solid var(--border); }
+.chip:hover { color: var(--text); background: var(--surface-hover); }
+.chip[aria-pressed="true"] {
+  color: var(--accent-hi);
+  background: var(--accent-dim);
+  box-shadow: inset 0 0 0 1px var(--accent-border);
+}
+.chip:focus-visible { outline: 1px solid var(--accent); outline-offset: -2px; }
+.run-btn {
+  margin-left: auto;
+  font-size: 13px;
+  font-weight: 500;
+  color: #06111e;
+  background: var(--accent);
+  border: 1px solid var(--accent);
+  border-radius: var(--r-md);
+  padding: 6px 18px;
+  cursor: pointer;
+}
+.run-btn:hover { background: var(--accent-hi); border-color: var(--accent-hi); }
+.run-btn:focus-visible { outline: 1px solid var(--accent-hi); outline-offset: 2px; }
+
+.stage {
+  position: relative;
+  height: 340px;
+  background:
+    repeating-linear-gradient(0deg, rgba(77,163,255,0.05) 0 1px, transparent 1px 40px),
+    repeating-linear-gradient(90deg, rgba(77,163,255,0.05) 0 1px, transparent 1px 40px),
+    radial-gradient(120% 90% at 50% 40%, #0d141c 0%, var(--viewport) 70%);
+  overflow: hidden;
+}
+.stage-part {
+  position: absolute;
+  left: 50%;
+  top: 44%;
+  transform: translate(-50%, -50%);
+  text-align: center;
+  color: var(--subtle);
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  transition: color 500ms ease;
+}
+.stage-part svg { display: block; margin: 0 auto 10px; }
+.stage-part svg [stroke] { transition: stroke 500ms ease; }
+.stage-part.landed { color: var(--accent-hi); }
+.stage-part.landed svg [stroke] { stroke: var(--accent); }
+
+/* ── The card. Three lines, one control. ──────────────────── */
+.card {
+  position: absolute;
+  right: 14px;
+  bottom: 14px;
+  width: 300px;
+  background: color-mix(in srgb, var(--surface) 97%, black);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-lg);
+  box-shadow: 0 18px 44px rgb(0 0 0 / 0.5);
+  padding: 11px 12px 12px;
+}
+.card.static { position: relative; right: auto; bottom: auto; box-shadow: none; }
+.card[hidden] { display: none; }
+
+.card-row { display: flex; align-items: center; gap: 9px; }
+.card-row .glyph { flex: 0 0 auto; display: grid; place-items: center; width: 12px; height: 12px; }
+.card-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.icon-btn {
+  flex: 0 0 auto;
+  width: 20px;
+  height: 20px;
+  display: grid;
+  place-items: center;
+  color: var(--subtle);
+  background: transparent;
+  border: none;
+  border-radius: var(--r-sm);
+  cursor: pointer;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1;
+}
+.icon-btn:hover { color: var(--text); background: var(--surface-hover); }
+
+.card-line {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: 3px;
+  padding-left: 21px;
+  font-size: 11.5px;
+  color: var(--muted);
+}
+.card-line .t {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  color: var(--subtle);
+  flex: 0 0 auto;
+}
+.card-line.warn { color: var(--warning); }
+.card-line.bad { color: var(--error); }
+
+/* One bar. It fills while progress is knowable, and holds still
+   with a moving stripe while the kernel is inside its blocking call. */
+.bar {
+  height: 3px;
+  margin: 9px 0 0 21px;
+  border-radius: 2px;
+  background: var(--surface-hover);
+  overflow: hidden;
+}
+.bar > i {
+  display: block;
+  height: 100%;
+  width: 0%;
+  border-radius: 2px;
+  background: var(--accent);
+  transition: width 140ms linear;
+}
+.bar.opaque > i {
+  background: repeating-linear-gradient(
+    115deg, var(--accent) 0 6px, rgba(77,163,255,0.3) 6px 14px
+  );
+  background-size: 200% 100%;
+  animation: slide 900ms linear infinite;
+}
+.bar.bad > i { background: var(--error); }
+.bar.warn > i { background: var(--warning); }
+@keyframes slide { to { background-position: -28px 0; } }
+
+.spin {
+  width: 12px;
+  height: 12px;
+  border: 1.5px solid var(--accent-dim);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 800ms linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+.dot { width: 9px; height: 9px; border-radius: 50%; display: block; }
+.dot.ok { background: var(--success); }
+.dot.warn { background: var(--warning); }
+.dot.bad { background: var(--error); }
+
+.card-action {
+  margin: 10px 0 0 21px;
+  font-size: 11.5px;
+  color: var(--accent-hi);
+  background: var(--accent-dim);
+  border: 1px solid var(--accent-border);
+  border-radius: var(--r-sm);
+  padding: 4px 10px;
+  cursor: pointer;
+}
+.card-action:hover { background: rgba(77,163,255,0.22); }
+
+/* ── Status bar replica ───────────────────────────────────── */
+.statusbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  height: 30px;
+  padding: 0 12px;
+  background: var(--surface);
+  border-top: 1px solid var(--border);
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+}
+.statusbar .state { display: inline-flex; align-items: center; gap: 6px; color: var(--text); min-width: 0; }
+.statusbar .state > i { width: 7px; height: 7px; border-radius: 999px; flex: 0 0 auto; background: var(--success); }
+.statusbar .state.running > i { background: var(--accent); }
+.statusbar .state.warning > i { background: var(--warning); }
+.statusbar .state.bad > i { background: var(--error); }
+.statusbar .state span { overflow: hidden; text-overflow: ellipsis; }
+.statusbar .groups { margin-left: auto; display: flex; gap: 14px; color: var(--subtle); }
+.statusbar .groups b { font-weight: 400; color: #57626e; margin-right: 5px; }
+
+/* ── Anatomy ──────────────────────────────────────────────── */
+.anatomy { display: grid; grid-template-columns: 300px 1fr; gap: 34px; align-items: start; }
+.anatomy ol { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 18px; }
+.anatomy li { display: flex; gap: 12px; }
+.anatomy li p { margin: 0; font-size: 13px; color: var(--muted); max-width: 58ch; }
+.pin {
+  display: inline-grid;
+  place-items: center;
+  width: 17px;
+  height: 17px;
+  border-radius: 50%;
+  background: var(--accent-dim);
+  border: 1px solid var(--accent-border);
+  color: var(--accent-hi);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  flex: 0 0 auto;
+}
+
+/* ── Tables ───────────────────────────────────────────────── */
+.tablewrap { overflow-x: auto; border: 1px solid var(--border); border-radius: var(--r-lg); }
+table { border-collapse: collapse; width: 100%; min-width: 640px; font-size: 12.5px; }
+th, td { text-align: left; padding: 11px 14px; border-bottom: 1px solid var(--border); vertical-align: top; }
+th {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  font-weight: 400;
+  color: var(--subtle);
+  background: var(--surface-2);
+}
+tbody tr:last-child td { border-bottom: none; }
+td { color: var(--muted); }
+td b { color: var(--text); font-weight: 500; }
+.tag {
+  display: inline-block;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  padding: 2px 6px;
+  border-radius: var(--r-sm);
+  border: 1px solid;
+  white-space: nowrap;
+}
+.tag.real { color: var(--success); border-color: rgba(34,197,94,0.4); background: rgba(34,197,94,0.1); }
+.tag.none { color: var(--warning); border-color: rgba(245,158,11,0.4); background: rgba(245,158,11,0.1); }
+
+/* ── State gallery ────────────────────────────────────────── */
+.gallery { display: grid; grid-template-columns: repeat(auto-fit, minmax(290px, 1fr)); gap: 22px; }
+.gallery figure { margin: 0; display: flex; flex-direction: column; gap: 10px; }
+.gallery figcaption { font-size: 12.5px; color: var(--muted); }
+.gallery figcaption b { display: block; color: var(--text); font-weight: 500; margin-bottom: 2px; }
+
+/* ── Seams ────────────────────────────────────────────────── */
+.seams { border: 1px solid var(--border); border-radius: var(--r-lg); overflow: hidden; }
+.seam { display: grid; grid-template-columns: minmax(0, 270px) 1fr; gap: 20px; padding: 13px 16px; border-bottom: 1px solid var(--border); }
+.seam:last-child { border-bottom: none; }
+.seam:nth-child(odd) { background: rgba(255,255,255,0.012); }
+.seam .path { font-family: var(--font-mono); font-size: 11.5px; color: var(--accent-hi); word-break: break-all; }
+.seam p { margin: 0; font-size: 13px; color: var(--muted); }
+
+@media (max-width: 820px) {
+  .anatomy { grid-template-columns: 1fr; }
+  .seam { grid-template-columns: 1fr; gap: 4px; }
+  .card { position: static; width: auto; }
+  .stage { height: auto; padding: 20px 14px; }
+  .stage-part { position: static; transform: none; margin-bottom: 18px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .spin, .bar.opaque > i { animation: none; }
+  .bar.opaque > i { background: var(--accent-dim); }
+}
+</style>
+
+<div class="page">
+
+  <header class="masthead">
+    <p class="eyebrow">OpenZCAD · file import</p>
+    <h1>Is it working, or is it stuck?</h1>
+    <p class="deck">
+      Importing a 283&nbsp;MB STEP assembly today produces one piece of feedback: the line
+      <em>“Rebuilding assembly.step with the exact geometry kernel…”</em> in the status bar, and a blue
+      dot. It never moves. For minutes.
+    </p>
+    <p class="deck">
+      This is the smallest thing that fixes it — <strong>one card, three lines, one control</strong>.
+      No settings, no options, nothing to configure. It appears when an import will take a while,
+      and it goes away.
+    </p>
+  </header>
+
+  <!-- ── Baseline ─────────────────────────────────────────── -->
+  <section>
+    <div class="sec-head">
+      <p class="eyebrow">What ships today</p>
+      <h2>One clipped line</h2>
+      <p>The status bar carries the whole import, and it says the same thing from start to finish.</p>
+    </div>
+    <div class="baseline-frame">
+      <div class="statusbar">
+        <span class="state running"><i></i><span>Rebuilding assembly.step with the exact geometry kernel…</span></span>
+        <span class="groups">
+          <span><b>kernel</b>Exact B-rep</span>
+          <span><b>warnings</b>0</span>
+          <span><b>rev</b>41</span>
+        </span>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── Live specimen ────────────────────────────────────── -->
+  <section>
+    <div class="sec-head">
+      <p class="eyebrow">Live specimen</p>
+      <h2>The card, running</h2>
+      <p>
+        Press Import. Phase durations are real proportions, scaled off the measured kernel rate
+        (283&nbsp;MB in about 7&nbsp;s, from <code>scripts/profile-step-import.mjs</code>) and played
+        back at 8× so a minute-long import fits in seven seconds.
+      </p>
+    </div>
+
+    <div class="specimen">
+      <div class="specimen-controls">
+        <span class="seg-group" role="group" aria-label="File to import">
+          <button type="button" class="chip" data-size="1.4" aria-pressed="false">1.4 MB bracket</button>
+          <button type="button" class="chip" data-size="283" aria-pressed="true">283 MB assembly</button>
+        </span>
+        <span class="seg-group" role="group" aria-label="How the import ends">
+          <button type="button" class="chip" data-scenario="done" aria-pressed="true">succeeds</button>
+          <button type="button" class="chip" data-scenario="local" aria-pressed="false">upload fails</button>
+          <button type="button" class="chip" data-scenario="refused" aria-pressed="false">file refused</button>
+        </span>
+        <button type="button" class="run-btn" id="run">Import</button>
+      </div>
+
+      <div class="stage">
+        <div class="stage-part" id="stagePart">
+          <svg width="120" height="96" viewBox="0 0 120 96" fill="none" aria-hidden="true">
+            <path d="M18 70 L18 30 L46 16 L102 16 L102 56 L74 70 Z" stroke="#2f3d4d" stroke-width="1.5" stroke-linejoin="round"/>
+            <path d="M18 30 L74 30 L102 16 M74 30 L74 70" stroke="#2f3d4d" stroke-width="1.5" stroke-linejoin="round"/>
+            <circle cx="46" cy="50" r="9" stroke="#2f3d4d" stroke-width="1.5"/>
+          </svg>
+          <span id="stageLabel">Empty project</span>
+        </div>
+
+        <section class="card" id="card" hidden aria-label="Import progress">
+          <div class="card-row">
+            <span class="glyph" id="glyph"><span class="spin"></span></span>
+            <span class="card-name" id="cardName">assembly.step</span>
+            <button type="button" class="icon-btn" id="close" aria-label="Hide import progress" title="Hide this card. The import keeps running.">✕</button>
+          </div>
+          <p class="card-line" id="cardLine" aria-live="polite">
+            <span id="cardPhase">Saving to this device</span><span class="t" id="cardTime">0.0 s</span>
+          </p>
+          <div class="bar" id="bar"><i></i></div>
+          <button type="button" class="card-action" id="action" hidden>Archive now</button>
+        </section>
+      </div>
+
+      <div class="statusbar">
+        <span class="state" id="sbState"><i></i><span id="sbText">Ready.</span></span>
+        <span class="groups">
+          <span><b>kernel</b>Exact B-rep</span>
+          <span><b>warnings</b>0</span>
+          <span><b>rev</b><span id="sbRev">41</span></span>
+        </span>
+      </div>
+    </div>
+
+    <p class="note" style="margin-top:12px">
+      The 1.4&nbsp;MB file does nothing at all. Below a 600&nbsp;ms projected total the card never
+      appears — a panel that flashes for a third of a second is noise, not feedback.
+    </p>
+  </section>
+
+  <!-- ── Anatomy ──────────────────────────────────────────── -->
+  <section>
+    <div class="sec-head">
+      <p class="eyebrow">Anatomy</p>
+      <h2>Everything it shows, and nothing else</h2>
+      <p>Frozen at the hardest moment: the kernel is chewing on the file and nothing can be measured.</p>
+    </div>
+
+    <div class="anatomy">
+      <div class="card static">
+        <div class="card-row">
+          <span class="glyph"><span class="spin"></span></span>
+          <span class="card-name">assembly.step</span>
+          <button type="button" class="icon-btn" aria-label="Hide import progress" title="Hide this card. The import keeps running.">✕</button>
+        </div>
+        <p class="card-line"><span>Building geometry</span><span class="t">9.4 s</span></p>
+        <div class="bar opaque"><i style="width:38%"></i></div>
+      </div>
+
+      <ol>
+        <li>
+          <span class="pin">1</span>
+          <div>
+            <h3>The file name, and what it is doing right now</h3>
+            <p>Four phases, in plain words: <em>saving to this device</em>, <em>reading the file</em>,
+            <em>building geometry</em>, <em>archiving the original</em>. No sub-steps, no counts, no
+            checklist of what already finished.</p>
+          </div>
+        </li>
+        <li>
+          <span class="pin">2</span>
+          <div>
+            <h3>A clock that proves it is alive</h3>
+            <p>It runs on the main thread, so it keeps ticking even while the worker is frozen inside
+            the kernel. This is the single most important element on the card — everything else could
+            go and it would still answer the question.</p>
+          </div>
+        </li>
+        <li>
+          <span class="pin">3</span>
+          <div>
+            <h3>One bar that never lies</h3>
+            <p>It fills while progress is genuinely knowable. During the kernel call — one synchronous
+            wasm call that cannot report anything — it <em>stops moving and starts striping</em>. A held,
+            striped bar says “running, extent unknown”. A bar that creeps to 90% and sits there is a lie.</p>
+          </div>
+        </li>
+      </ol>
+    </div>
+  </section>
+
+  <!-- ── Feasibility ──────────────────────────────────────── -->
+  <section>
+    <div class="sec-head">
+      <p class="eyebrow">Why the bar behaves that way</p>
+      <h2>Two of four phases are worth measuring</h2>
+      <p>
+        The long pole cannot be measured at all: <code>kernel.importStep()</code> is a single
+        synchronous call into wasm that blocks the worker thread it runs on, so it can post neither a
+        percentage nor a heartbeat. Reading the file turned out to be the opposite problem — measured,
+        it is too fast to be worth a number.
+      </p>
+    </div>
+    <div class="tablewrap">
+      <table>
+        <thead>
+          <tr><th>Phase</th><th>Signal</th><th>What the bar does</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><b>Saving to this device</b></td>
+            <td><span class="tag real">bytes</span></td>
+            <td>Fills, over the streamed blob read. Measured on 250 MB: read ~0.12&nbsp;s, SHA-256 ~0.2&nbsp;s. The IndexedDB write that follows reports nothing, so the bar parks at the end of this phase for the length of that write.</td>
+          </tr>
+          <tr>
+            <td><b>Reading the file</b></td>
+            <td><span class="tag none">too fast</span></td>
+            <td>Reports no fraction. Measured at about 0.15&nbsp;s for 250 MB — decode and header scan together — so there is nothing to watch. It stays a named phase only because it is the truthful label for that moment.</td>
+          </tr>
+          <tr>
+            <td><b>Building geometry</b></td>
+            <td><span class="tag none">opaque</span></td>
+            <td>Holds and stripes. The solid-checking and tessellation loops either side of the blocking call are countable, but showing those counts is detail this card does not need.</td>
+          </tr>
+          <tr>
+            <td><b>Archiving the original</b></td>
+            <td><span class="tag real">parts</span></td>
+            <td>Fills. Exact — the 16 MB part plan is computed up front, so 283 MB is 18 known steps.</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- ── States ───────────────────────────────────────────── -->
+  <section>
+    <div class="sec-head">
+      <p class="eyebrow">How it ends</p>
+      <h2>Three endings</h2>
+      <p>
+        Each is one line. Only one of them earns a button, because only one of them leaves something
+        for you to do.
+      </p>
+    </div>
+    <div class="gallery">
+
+      <figure>
+        <div class="card static">
+          <div class="card-row">
+            <span class="glyph"><span class="dot ok"></span></span>
+            <span class="card-name">assembly.step</span>
+            <button type="button" class="icon-btn" aria-label="Dismiss">✕</button>
+          </div>
+          <p class="card-line"><span>Imported — 1 body</span><span class="t">41.8 s</span></p>
+          <div class="bar"><i style="width:100%"></i></div>
+        </div>
+        <figcaption><b>It worked</b>Fades out on its own after a few seconds. The existing status line and activity log already keep the record.</figcaption>
+      </figure>
+
+      <figure>
+        <div class="card static">
+          <div class="card-row">
+            <span class="glyph"><span class="dot warn"></span></span>
+            <span class="card-name">assembly.step</span>
+            <button type="button" class="icon-btn" aria-label="Dismiss">✕</button>
+          </div>
+          <p class="card-line warn"><span>Imported, but saved on this device only</span><span class="t">38.1 s</span></p>
+          <div class="bar warn"><i style="width:100%"></i></div>
+          <button type="button" class="card-action">Archive now</button>
+        </div>
+        <figcaption><b>The upload failed</b>The body is in your model, but the project is not portable to another device yet. The retry already exists in the File menu — this puts it where the failure happened.</figcaption>
+      </figure>
+
+      <figure>
+        <div class="card static">
+          <div class="card-row">
+            <span class="glyph"><span class="dot bad"></span></span>
+            <span class="card-name">assembly.step</span>
+            <button type="button" class="icon-btn" aria-label="Dismiss">✕</button>
+          </div>
+          <p class="card-line bad"><span>Not imported — no closed solids in the file</span><span class="t">12.6 s</span></p>
+          <div class="bar bad"><i style="width:62%"></i></div>
+        </div>
+        <figcaption><b>The kernel refused it</b>Nothing was added to your model. The bar stops where it stopped, which tells you the file was stored and read fine and the geometry is what failed.</figcaption>
+      </figure>
+
+    </div>
+    <p class="note" style="margin-top:18px">
+      Refusals that happen before anything starts — file over the 250&nbsp;MB cap, browser storage
+      unavailable, another exact operation still running — never get a card at all. They are settled in
+      under a second, and the status line already handles them.
+    </p>
+  </section>
+
+  <!-- ── Seams ────────────────────────────────────────────── -->
+  <section>
+    <div class="sec-head">
+      <p class="eyebrow">Built</p>
+      <h2>Where it touches the code</h2>
+      <p>
+        The import already ran as an ordered sequence of exactly these phases — it just reported none
+        of them. Every change is additive; the progress sink is optional on the run, because nothing
+        it carries reaches the document or the device.
+      </p>
+    </div>
+    <div class="seams">
+      <div class="seam">
+        <span class="path">apps/web/src/lib/importProgress.ts</span>
+        <p>New. The phase vocabulary, the weights that divide the bar, the bar arithmetic, and the filter that keeps a four-thousand-chunk read from re-rendering the workspace four thousand times.</p>
+      </div>
+      <div class="seam">
+        <span class="path">apps/web/src/lib/stepImportRun.ts</span>
+        <p>A <code>progress</code> sink beside the existing <code>status</code> sink, emitting one phase at each of the four steps its header comment already enumerates, plus one place that maps how a run ended to the line the card shows. No control-flow change.</p>
+      </div>
+      <div class="seam">
+        <span class="path">apps/web/src/lib/localProjectStore.ts</span>
+        <p>Reads the blob through <code>stream()</code> with a byte callback instead of one <code>arrayBuffer()</code> call, then digests. Allocates the destination once at the blob's size, so peak memory matches the old path rather than doubling it. Falls back to <code>arrayBuffer()</code> whenever anything is unexpected.</p>
+      </div>
+      <div class="seam">
+        <span class="path">apps/web/src/lib/artifactUpload.ts</span>
+        <p>An optional <code>onProgress</code> callback in <code>uploadArtifactBody</code>, reporting the byte the store has actually accepted after each part.</p>
+      </div>
+      <div class="seam">
+        <span class="path">apps/web/src/components/ImportProgressCard.tsx</span>
+        <p>New, and small. Owns the elapsed clock and the 600 ms appearance threshold. The clock lives here rather than in the workspace: it ticks ten times a second, and state that ticked in <code>App</code> would re-render the editor around the viewport for the whole length of an import.</p>
+      </div>
+    </div>
+    <p class="note" style="margin-top:14px">
+      <b style="color:var(--text);font-weight:500">Not built: cancel.</b> The ✕ hides the card and the
+      import keeps running, which is what its label says. A real cancel would have to thread an abort
+      through the source-blob settlement — the logic that decides whether up to 250 MB of stored bytes
+      are kept or pruned — and the geometry worker supports no cancellation at all, so the phase you
+      would most want to stop is the one phase that cannot be stopped. Worth doing, separately, on its
+      own terms.
+    </p>
+    <p class="note" style="margin-top:10px">
+      Two things noticed while measuring, unrelated to progress and worth their own change:
+      <code>file.text()</code> pulls the whole file into a JS string purely to regex two entity types,
+      doubling peak memory on a 250 MB import; and the per-solid rejection reasons the kernel collects
+      are flattened into a single sentence before anyone sees them.
+    </p>
+  </section>
+
+</div>
+
+<script>
+(function () {
+  'use strict';
+
+  // Illustrative device rates (ms per MB). Only the kernel figure is measured:
+  // 283 MB in ~7 s from scripts/profile-step-import.mjs.
+  var RATE = { store: 55, read: 22, kernel: 31, archive: 90 };
+  var SPEED = 8;
+  var SHOW_THRESHOLD_MS = 600;
+
+  var state = { size: 283, scenario: 'done' };
+
+  var el = {};
+  ['card','glyph','cardName','cardLine','cardPhase','cardTime','bar','action','close',
+   'sbState','sbText','sbRev','stagePart','stageLabel','run'].forEach(function (id) {
+    el[id] = document.getElementById(id);
+  });
+  var fill = el.bar.firstElementChild;
+
+  function clock(ms) {
+    var s = ms / 1000;
+    return s < 10 ? s.toFixed(1) + ' s' : Math.round(s) + ' s';
+  }
+
+  function plan() {
+    var mb = state.size;
+    return [
+      { label: 'Saving to this device', ms: mb * RATE.store, opaque: false },
+      { label: 'Reading the file', ms: mb * RATE.read, opaque: false },
+      { label: 'Building geometry', ms: mb * RATE.kernel, opaque: true },
+      { label: 'Archiving the original', ms: mb * RATE.archive, opaque: false }
+    ];
+  }
+
+  var run = null;
+  var raf = null;
+
+  function setStatus(text, tone) {
+    el.sbText.textContent = text;
+    el.sbState.className = 'state' + (tone ? ' ' + tone : '');
+  }
+
+  function glyph(cls) {
+    el.glyph.textContent = '';
+    var node = document.createElement('span');
+    node.className = cls;
+    el.glyph.appendChild(node);
+  }
+
+  function land() {
+    el.stagePart.className = 'stage-part landed';
+    el.stageLabel.textContent = 'Bracket Assembly · 1 body';
+    el.sbRev.textContent = '42';
+  }
+
+  function settle(tone, line, width, action) {
+    cancelAnimationFrame(raf);
+    run.done = true;
+    glyph('dot ' + tone);
+    el.cardPhase.textContent = line;
+    el.cardTime.textContent = clock(run.t);
+    el.cardLine.className = 'card-line' + (tone === 'ok' ? '' : ' ' + tone);
+    el.bar.className = 'bar' + (tone === 'ok' ? '' : ' ' + tone);
+    fill.style.width = width;
+    el.close.setAttribute('aria-label', 'Dismiss');
+    if (action) { el.action.hidden = false; el.action.textContent = action; }
+  }
+
+  function tick(now) {
+    if (!run || run.done) return;
+    run.t += (now - run.last) * SPEED;
+    run.last = now;
+
+    var acc = 0;
+    for (var i = 0; i < run.steps.length; i++) {
+      var s = run.steps[i];
+      if (run.t >= acc + s.ms) { acc += s.ms; continue; }
+
+      var into = run.t - acc;
+      var frac = into / s.ms;
+
+      // The two failures, each at the phase where it really happens.
+      if (s.opaque && state.scenario === 'refused' && frac > 0.6) {
+        settle('bad', 'Not imported — no closed solids in the file',
+          ((acc + into) / run.total * 100) + '%', null);
+        setStatus('assembly.step was not imported: no closed solids in the file.', 'bad');
+        return;
+      }
+      if (i === 3 && state.scenario === 'local' && frac > 0.35) {
+        land();
+        settle('warn', 'Imported, but saved on this device only', '100%', 'Archive now');
+        setStatus('Imported editable STEP solid from ' + run.file
+          + ': exact body rebuilt (cloud archive unavailable; source saved locally).', 'warning');
+        return;
+      }
+
+      el.cardPhase.textContent = s.label;
+      el.cardTime.textContent = clock(run.t);
+      el.bar.className = s.opaque ? 'bar opaque' : 'bar';
+      // An opaque phase holds the bar where the previous phase left it.
+      fill.style.width = ((acc + (s.opaque ? 0 : into)) / run.total * 100) + '%';
+      setStatus(s.label + ' — ' + run.file + '…', 'running');
+      raf = requestAnimationFrame(tick);
+      return;
+    }
+
+    land();
+    settle('ok', 'Imported — 1 body', '100%', null);
+    setStatus('Imported editable STEP solid from ' + run.file
+      + ': exact body rebuilt, source archived.', '');
+  }
+
+  function start() {
+    cancelAnimationFrame(raf);
+    el.action.hidden = true;
+    el.cardLine.className = 'card-line';
+    el.bar.className = 'bar';
+    fill.style.width = '0%';
+    glyph('spin');
+    el.close.setAttribute('aria-label', 'Hide import progress');
+    el.stagePart.className = 'stage-part';
+    el.stageLabel.textContent = 'Empty project';
+    el.sbRev.textContent = '41';
+
+    var file = state.size < 5 ? 'parametric-bracket.step' : 'assembly.step';
+    var steps = plan();
+    var total = steps.reduce(function (t, s) { return t + s.ms; }, 0);
+    el.cardName.textContent = file;
+
+    // Below the threshold the card never appears.
+    if (total < SHOW_THRESHOLD_MS) {
+      el.card.hidden = true;
+      setStatus('Rebuilding ' + file + ' with the exact geometry kernel…', 'running');
+      window.setTimeout(function () {
+        el.stagePart.className = 'stage-part landed';
+        el.stageLabel.textContent = 'Parametric Bracket · 1 body';
+        el.sbRev.textContent = '42';
+        setStatus('Imported editable STEP solid from ' + file
+          + ': exact body rebuilt, source archived.', '');
+      }, total / SPEED);
+      return;
+    }
+
+    el.card.hidden = false;
+    run = { steps: steps, total: total, t: 0, last: performance.now(), file: file, done: false };
+    raf = requestAnimationFrame(tick);
+  }
+
+  el.run.addEventListener('click', start);
+
+  el.close.addEventListener('click', function () {
+    if (run && !run.done) {
+      cancelAnimationFrame(raf);
+      run.done = true;
+      setStatus('Import continues in the background.', 'running');
+    }
+    el.card.hidden = true;
+  });
+
+  Array.prototype.forEach.call(
+    document.querySelectorAll('.specimen-controls .chip'),
+    function (chip) {
+      chip.addEventListener('click', function () {
+        var size = chip.dataset.size;
+        var group = size ? '[data-size]' : '[data-scenario]';
+        Array.prototype.forEach.call(
+          document.querySelectorAll('.specimen-controls ' + group),
+          function (other) { other.setAttribute('aria-pressed', String(other === chip)); }
+        );
+        if (size) { state.size = Number(size); } else { state.scenario = chip.dataset.scenario; }
+      });
+    }
+  );
+})();
+</script>
+
+</body>
+</html>
