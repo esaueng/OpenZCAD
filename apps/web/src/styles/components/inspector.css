@@ -513,3 +513,80 @@
   gap: var(--sp-2);
   font-size: var(--fs-sm);
 }
+
+/* ── Foldable sections ───────────────────────────────────── */
+
+/* Secondary detail stays one keystroke away rather than being moved out of
+   the panel: an engineer who wants inertia should not have to go looking. */
+.panel-section > summary.section-title {
+  cursor: pointer;
+  list-style: none;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.panel-section > summary.section-title::-webkit-details-marker {
+  display: none;
+}
+
+.panel-section > summary.section-title::before {
+  content: '›';
+  display: inline-block;
+  color: var(--color-text-muted);
+  transition: transform var(--dur-fast) var(--ease-out);
+}
+
+.panel-section[open] > summary.section-title::before {
+  transform: rotate(90deg);
+}
+
+/* ── Header overflow ─────────────────────────────────────── */
+
+.panel-overflow {
+  position: relative;
+}
+
+.panel-overflow > summary {
+  list-style: none;
+  cursor: pointer;
+}
+
+.panel-overflow > summary::-webkit-details-marker {
+  display: none;
+}
+
+.panel-overflow-menu {
+  position: absolute;
+  right: 0;
+  z-index: var(--z-popover, 40);
+  min-width: 176px;
+  padding: 4px;
+  background: var(--color-surface);
+  border: var(--border-thin);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-popover, 0 8px 24px rgba(0, 0, 0, 0.35));
+}
+
+.panel-overflow-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 6px 8px;
+  color: var(--color-text);
+  font-size: var(--fs-sm);
+  text-align: left;
+  background: transparent;
+  border: 0;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+
+.panel-overflow-item:hover {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.panel-overflow-item.danger {
+  color: var(--color-error-text);
+}
