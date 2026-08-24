@@ -43,10 +43,50 @@
     font-size: 0;
   }
 
+  /*
+    The tracks have to shrink with them.
+
+    `.topbar-actions` is a grid whose columns are pinned by width above, so
+    collapsing the chips to their icons moved the icons and left the columns
+    at their full width — the row went on claiming 446px and the space was
+    never handed back. Measured at 768px before this: brand 139, mode switch
+    210, actions 446, and a breadcrumb of exactly 0.
+  */
+  .topbar-actions {
+    grid-template-columns: 28px 128px 28px 28px 28px;
+  }
+
   /* The save chip's label changes with state; a fixed width keeps the row
      from breathing as it does. */
   .save-state {
     width: 128px;
+  }
+}
+
+/*
+  Below this the document name is gone, not shrunk.
+
+  `.topbar-actions` is `flex: 0 0 auto`, so the breadcrumb absorbs every pixel
+  of shrinkage and hits zero with `overflow: hidden` — no ellipsis, no cue,
+  the project name simply is not there. Measured at 768px: brand 139px,
+  actions 446px, breadcrumb 0.
+
+  The save chip is the widest thing in the row at 128px and the last one still
+  carrying a label, so it is where the space comes from. Its full sentence
+  stays in the accessible name and the tooltip, exactly as the account and
+  collaboration chips already do above.
+*/
+@media (max-width: 900px) {
+  .save-state {
+    width: 28px;
+    justify-content: center;
+    gap: 0;
+    padding-inline: 0;
+    font-size: 0;
+  }
+
+  .topbar-actions {
+    grid-template-columns: repeat(5, 28px);
   }
 }
 
