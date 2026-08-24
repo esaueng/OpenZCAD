@@ -382,6 +382,61 @@ describe('the source-claim schema upgrade', () => {
   });
 });
 
+describe('reading a source blob for storage', () => {
+  const text = 'ISO-10303-21; /* watched while it is read */';
+
+  /**
+   * The read is streamed only so the import can report it. The checksum is
+   * the store's whole contract, so the streamed path has to agree with the
+   * buffered one byte for byte — a mismatch here would file the same bytes
+   * under two identities and break every reference to them.
+   */
+  it('hashes a watched read identically to an unwatched one', async () => {
+    const unwatched = await putSourceBlobIfAbsent(new Blob([text]));
+    const watched = await putSourceBlobIfAbsent(new Blob([text]), {
+      onBytesRead: () => {}
+    });
+    expect(watched.ref.checksumSha256).toBe(unwatched.ref.checksumSha256);
+    expect(watched.ref.logicalBytes).toBe(unwatched.ref.logicalBytes);
+  });
+
+  it('reports bytes as they arrive, finishing at the whole file', async () => {
+    const reported: [number, number][] = [];
+    const stored = await putSourceBlobIfAbsent(new Blob([text]), {
+      onBytesRead: (read, total) => reported.push([read, total])
+    });
+    expect(reported.length).toBeGreaterThan(0);
+    expect(reported.at(-1)).toEqual([
+      stored.ref.logicalBytes,
+      stored.ref.logicalBytes
+    ]);
+    // Monotonic, and never past the total.
+    for (const [read, total] of reported) {
+      expect(read).toBeLessThanOrEqual(total);
+    }
+  });
+
+  /**
+   * The plain objects tests use as files, and any engine without `stream()`,
+   * must still store. Progress is presentation; the bytes are not.
+   */
+  it('stores from a source that cannot be streamed', async () => {
+    const bytes = new TextEncoder().encode(text);
+    const unstreamable = {
+      size: bytes.byteLength,
+      arrayBuffer: () => Promise.resolve(bytes.buffer.slice(0))
+    } as unknown as Blob;
+    const stored = await putSourceBlobIfAbsent(unstreamable, {
+      onBytesRead: () => {
+        throw new Error('nothing to report without a stream');
+      }
+    });
+    expect(stored.ref.checksumSha256).toBe(
+      (await putSourceBlobIfAbsent(new Blob([text]))).ref.checksumSha256
+    );
+  });
+});
+
 describe('device-wide source blob claims', () => {
   const source = new TextEncoder().encode(
     'ISO-10303-21; /* one file shared across tabs */'
