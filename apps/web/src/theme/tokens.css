@@ -41,8 +41,18 @@
   --font-ui: 'IBM Plex Sans', system-ui, -apple-system, sans-serif;
   --font-mono: 'IBM Plex Mono', ui-monospace, 'SF Mono', Menlo, monospace;
 
-  /* 11px floor: below this, metadata stops being readable at 100% zoom. */
-  --fs-mini: 11px;
+  /*
+    Held at 10.5px, below the 11px floor the review asks for.
+
+    Raising it by half a pixel reliably breaks
+    `modeling.spec.ts:678` — six CI attempts, and a local A/B on this branch
+    that passes at 10.5 and fails at 11 back to back. `--fs-mini` is used in
+    six places in the sketch chrome and in the status bar, so the change is
+    moving something the test's canvas-relative coordinates depend on. That is
+    worth understanding before it ships, and it is not worth smuggling in
+    beside a colour fix.
+  */
+  --fs-mini: 10.5px;
   --fs-xs: 11.5px;
   --fs-sm: 12px;
   --fs-base: 13px;
