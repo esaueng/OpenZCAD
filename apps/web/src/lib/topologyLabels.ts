@@ -90,18 +90,50 @@ function planarDirection(
 }
 
 /**
+ * A name split into the pieces a live drag can rewrite. Only a `diameter`
+ * segment carries a value that a cylinder-radius drag changes; everything
+ * around it is opaque text. Rewording a name therefore cannot stop its live
+ * value from moving — the two used to be coupled through a regex run over the
+ * already-rendered label.
+ */
+export type LabelSegment =
+  | { readonly kind: 'text'; readonly text: string }
+  | { readonly kind: 'diameter'; readonly diameter: number };
+
+/** The one spelling of a diameter value, shared by every renderer. */
+export function formatDiameter(diameter: number): string {
+  return `Ø${formatNumber(diameter)}`;
+}
+
+/** The plain-text form of a segmented name. */
+export function labelSegmentsText(segments: readonly LabelSegment[]): string {
+  return segments
+    .map((segment) =>
+      segment.kind === 'diameter'
+        ? formatDiameter(segment.diameter)
+        : segment.text
+    )
+    .join('');
+}
+
+/** A name with nothing live in it. */
+export function textLabelSegments(text: string): readonly LabelSegment[] {
+  return [{ kind: 'text', text }];
+}
+
+/**
  * Names a picked face from its exact surface measurements: directional names
  * for axis-aligned planes, feature names for holes/cylinders, and a stable
  * ordinal as the last resort. Never leaks the raw fingerprint.
  */
-export function faceLabel(
+export function faceLabelSegments(
   body: BodyRepresentation | undefined,
   hash: number | undefined,
   topologyId?: string
-): string {
+): readonly LabelSegment[] {
   const match = findFace(body, hash, topologyId);
   if (!match) {
-    return 'Face';
+    return textLabelSegments('Face');
   }
   const { face, index } = match;
   const geometry = face.geometry;
@@ -111,24 +143,41 @@ export function faceLabel(
     Number.isFinite(geometry.blendRadius) &&
     geometry.blendRadius > GEOMETRY_LINEAR_TOLERANCE
   ) {
-    return `Blend face R${formatNumber(geometry.blendRadius)}`;
+    return textLabelSegments(
+      `Blend face R${formatNumber(geometry.blendRadius)}`
+    );
   }
   if (
     geometry?.featureType === 'through-hole' &&
     geometry.diameter !== undefined
   ) {
-    return `Through hole Ø${formatNumber(geometry.diameter)}`;
+    return [
+      { kind: 'text', text: 'Through hole ' },
+      { kind: 'diameter', diameter: geometry.diameter }
+    ];
   }
   if (geometry?.surfaceType === 'plane' && geometry.normal) {
     const direction = planarDirection(geometry);
-    return direction ? `${direction} face` : 'Planar face';
+    return textLabelSegments(direction ? `${direction} face` : 'Planar face');
   }
   if (geometry?.surfaceType === 'cylinder') {
     return geometry.diameter !== undefined
-      ? `Cylindrical face Ø${formatNumber(geometry.diameter)}`
-      : 'Cylindrical face';
+      ? [
+          { kind: 'text', text: 'Cylindrical face ' },
+          { kind: 'diameter', diameter: geometry.diameter }
+        ]
+      : textLabelSegments('Cylindrical face');
   }
-  return `Face ${index + 1}`;
+  return textLabelSegments(`Face ${index + 1}`);
+}
+
+/** The rendered form of {@link faceLabelSegments}. */
+export function faceLabel(
+  body: BodyRepresentation | undefined,
+  hash: number | undefined,
+  topologyId?: string
+): string {
+  return labelSegmentsText(faceLabelSegments(body, hash, topologyId));
 }
 
 /**
@@ -204,18 +253,26 @@ export function edgeLabel(
  * select-other list. Keeping the body prefix here prevents those surfaces
  * from growing subtly different naming vocabularies.
  */
+export function topologySelectionLabelSegments(
+  body: BodyRepresentation | undefined,
+  selection: Pick<TopologySelection, 'kind' | 'hash' | 'topologyId'>
+): readonly LabelSegment[] {
+  if (selection.kind === 'body') {
+    return textLabelSegments(body?.name ?? 'Body');
+  }
+  const entity =
+    selection.kind === 'edge'
+      ? textLabelSegments(edgeLabel(body, selection.hash, selection.topologyId))
+      : faceLabelSegments(body, selection.hash, selection.topologyId);
+  return body ? [{ kind: 'text', text: `${body.name} · ` }, ...entity] : entity;
+}
+
+/** The rendered form of {@link topologySelectionLabelSegments}. */
 export function topologySelectionLabel(
   body: BodyRepresentation | undefined,
   selection: Pick<TopologySelection, 'kind' | 'hash' | 'topologyId'>
 ): string {
-  if (selection.kind === 'body') {
-    return body?.name ?? 'Body';
-  }
-  const entity =
-    selection.kind === 'edge'
-      ? edgeLabel(body, selection.hash, selection.topologyId)
-      : faceLabel(body, selection.hash, selection.topologyId);
-  return body ? `${body.name} · ${entity}` : entity;
+  return labelSegmentsText(topologySelectionLabelSegments(body, selection));
 }
 
 /**

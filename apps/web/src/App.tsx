@@ -363,7 +363,9 @@ import {
 import {
   edgeLengthMeasurement,
   faceLabel,
-  topologySelectionLabel
+  textLabelSegments,
+  topologySelectionLabelSegments,
+  type LabelSegment
 } from './lib/topologyLabels';
 import type { FeatureSelectionSource } from './lib/inspectorHeading';
 import type { CommandDiagnostic } from './lib/interaction/machine';
@@ -3450,7 +3452,7 @@ export function App() {
    * state effects.
    */
   const selectionSummary = useMemo<{
-    label: string;
+    label: readonly LabelSegment[];
     detail?: string;
   } | null>(() => {
     if (!doc || tool === 'sketch') {
@@ -3470,7 +3472,7 @@ export function App() {
         sampled = sampled || measured?.quality === 'sampled';
         return sum + (measured?.value ?? 0);
       }, 0);
-      const label = `${selectedEdges.length} edges`;
+      const label = textLabelSegments(`${selectedEdges.length} edges`);
       const value =
         total > 0
           ? `${sampled ? '≈ ' : ''}${round(total)} ${units}`
@@ -3491,7 +3493,7 @@ export function App() {
       const topologyId =
         selectedEdges[0]?.topologyId ?? renderedSelectedTopology?.topologyId;
       const length = edgeLengthMeasurement(body, hash, topologyId);
-      const label = topologySelectionLabel(body, {
+      const label = topologySelectionLabelSegments(body, {
         kind: 'edge',
         hash,
         topologyId
@@ -3518,11 +3520,14 @@ export function App() {
       ) {
         const value = `Ø ${round(geometry.diameter)} ${units}`;
         return {
-          label: 'Through hole',
+          label: textLabelSegments('Through hole'),
           detail: value
         };
       }
-      const label = topologySelectionLabel(body, renderedSelectedTopology);
+      const label = topologySelectionLabelSegments(
+        body,
+        renderedSelectedTopology
+      );
       // A cylinder is the other pick that carries a number of its own; every
       // other face kind has a name but nothing to measure yet.
       const cylinderDiameter =
@@ -3539,7 +3544,7 @@ export function App() {
     }
     if (selectedBodyIds.length > 1) {
       return {
-        label: `${selectedBodyIds.length} bodies`,
+        label: textLabelSegments(`${selectedBodyIds.length} bodies`),
         detail: 'U union · X subtract · I intersect'
       };
     }
@@ -3553,7 +3558,7 @@ export function App() {
       };
       const value = `${size.x} × ${size.y} × ${size.z} ${units}`;
       return {
-        label: body.name,
+        label: textLabelSegments(body.name),
         detail: value
       };
     }
