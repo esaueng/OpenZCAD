@@ -2,6 +2,7 @@ import { fileURLToPath } from 'node:url';
 import {
   test,
   expect,
+  bareCanvasDrags,
   expectBodyCount,
   expectConsumedBodyCount,
   openAssistant,
@@ -695,18 +696,13 @@ test('extrudes and edits one of multiple closed sketch regions', async ({
   await page.getByRole('button', { name: /^Sketch \(S\)/ }).click();
   await page.getByRole('button', { name: 'Top (XY)' }).click();
   const sketchTools = page.getByRole('toolbar', { name: 'Sketch tools' });
-  const bounds = await canvas.boundingBox();
-  expect(bounds).not.toBeNull();
-  const centers = [
-    {
-      x: bounds!.x + bounds!.width * 0.58,
-      y: bounds!.y + bounds!.height * 0.76
-    },
-    {
-      x: bounds!.x + bounds!.width * 0.78,
-      y: bounds!.y + bounds!.height * 0.76
-    }
-  ];
+  // Both circles have to be drawn on bare canvas, and sketch mode floats the
+  // palette over the right of it. Wait for that palette, then measure around
+  // it: a fraction of the canvas box is not an anchor, and the fractions this
+  // test used put the second circle's row 0.96px below the palette's lower
+  // edge, with both of its drag points inside the palette's column.
+  await expect(page.locator('.sketch-palette')).toBeVisible();
+  const centers = await bareCanvasDrags(page, { count: 2, dragX: 38 });
   // Closed regions the sketch has actually detected. The status bar cannot
   // stand in for this: every circle after the first reports the same "Add
   // circle", so a dropped gesture leaves the previous iteration's message in
