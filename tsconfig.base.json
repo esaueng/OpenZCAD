@@ -39,6 +39,7 @@
       ],
       "@openzcad/viewport/types": ["./packages/viewport/src/types.ts"],
       "@openzcad/io-step": ["./packages/io-step/src/index.ts"],
+      "@openzcad/io-shapr": ["./packages/io-shapr/src/index.ts"],
       "@openzcad/io-stl": ["./packages/io-stl/src/index.ts"],
       "@openzcad/persistence": ["./packages/persistence/src/index.ts"],
       "@openzcad/cloudflare-adapters": [

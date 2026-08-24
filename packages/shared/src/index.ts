@@ -12,8 +12,9 @@ export type RevisionId = Brand<string, 'RevisionId'>;
 export type UploadSessionId = Brand<string, 'UploadSessionId'>;
 export type AssetId = Brand<string, 'AssetId'>;
 export type SketchConstraintId = Brand<string, 'SketchConstraintId'>;
+export type ShaprImportId = Brand<string, 'ShaprImportId'>;
 
-export const PROJECT_DOCUMENT_SCHEMA_VERSION = 12 as const;
+export const PROJECT_DOCUMENT_SCHEMA_VERSION = 13 as const;
 export type ProjectDocumentSchemaVersion =
   typeof PROJECT_DOCUMENT_SCHEMA_VERSION;
 
@@ -1504,6 +1505,86 @@ export interface ProjectAssetRef {
   createdAt: string;
 }
 
+export type ShaprMigrationOperationKind =
+  | 'import'
+  | 'sketch'
+  | 'transform'
+  | 'delete'
+  | 'midplane'
+  | 'split'
+  | 'offset-face'
+  | 'union'
+  | 'extrude'
+  | 'unknown';
+
+export type ShaprMigrationOperationStatus =
+  'proven' | 'candidate' | 'unsupported' | 'ambiguous';
+
+/**
+ * Sanitized, non-operative evidence recovered from a Shapr3D project. Raw
+ * database rows, Parasolid data, thumbnails, paths, and remote identifiers are
+ * deliberately excluded from the canonical document.
+ */
+export interface ShaprMigrationOperationRecord {
+  sourceNodeId: number;
+  name: string;
+  kind: ShaprMigrationOperationKind;
+  status: ShaprMigrationOperationStatus;
+  numericCandidates: number[];
+  diagnostic: string;
+}
+
+export interface ShaprMigrationDiagnostic {
+  severity: 'info' | 'warning' | 'error';
+  code: string;
+  message: string;
+}
+
+export interface ShaprMigrationRecord {
+  importId: ShaprImportId;
+  representation: 'openzcad-shapr-migration';
+  version: 1;
+  sourceName: string;
+  sourceChecksumSha256: string;
+  companionStepName: string;
+  companionStepChecksumSha256: string;
+  createdAt: string;
+  schema: {
+    workspaceSchemaVersion: number;
+    schemaVersion: number;
+    historyVersion: number;
+    projectVersion: number;
+  };
+  units: {
+    source: 'metre-candidate';
+    evidence: 'inferred';
+    documentScaleCandidate: number;
+  };
+  exactGeometry: {
+    featureId: FeatureId;
+    bodyId: BodyId;
+    stepChecksumSha256: string;
+    validation: 'exact-kernel-preflight';
+  };
+  summary: {
+    historyNodeCount: number;
+    sketchCount: number;
+    curveCount: number;
+    constraintCount: number;
+    importedBodyCount: number;
+    importedPrototypeCount: number;
+    revisionBlockCount: number;
+    revisionDeltaCount: number;
+  };
+  operations: ShaprMigrationOperationRecord[];
+  diagnostics: ShaprMigrationDiagnostic[];
+  semanticReplay: {
+    status: 'not-applied';
+    reason: string;
+  };
+  privateDataOmitted: true;
+}
+
 /**
  * Kernel-proven v5 references for one legacy hash-only edge modifier. A
  * closed-edge hash embeds its length, so the only moment a hash-only
@@ -1548,6 +1629,8 @@ export interface ProjectDocument {
   checkpoints: ProjectCheckpoint[];
   commandLog: SerializedCommand[];
   assets: Record<AssetId, ProjectAssetRef>;
+  shaprImports: Record<ShaprImportId, ShaprMigrationRecord>;
+  shaprImportOrder: ShaprImportId[];
   derived: DerivedState;
   /**
    * Set once, when this project was branched off a save state of another one.
@@ -2542,6 +2625,8 @@ export const toUserId = (value: string): UserId => value as UserId;
 export const toAssetId = (value: string): AssetId => value as AssetId;
 export const toSketchConstraintId = (value: string): SketchConstraintId =>
   value as SketchConstraintId;
+export const toShaprImportId = (value: string): ShaprImportId =>
+  value as ShaprImportId;
 
 export const DEFAULT_BODY_COLOR = '#e1a948';
 

@@ -385,6 +385,170 @@
   gap: var(--sp-1);
 }
 
+/* ── Shapr3D paired migration preview ───────────────────── */
+
+.shapr-import-dialog {
+  width: min(680px, 100%);
+  max-height: min(760px, 90vh);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+  padding: var(--sp-4);
+  overflow: auto;
+  background: var(--color-surface);
+  border: var(--border-strong);
+  border-radius: var(--radius-lg);
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.55);
+}
+
+.shapr-import-dialog header h2 {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  margin: 0;
+  font-size: var(--fs-md);
+}
+
+.shapr-import-dialog header p,
+.shapr-import-history > p,
+.shapr-import-privacy {
+  margin: var(--sp-1) 0 0;
+  color: var(--color-text-muted);
+  font-size: var(--fs-xs);
+}
+
+.shapr-import-progress,
+.shapr-import-error {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  margin: 0;
+  font-size: var(--fs-sm);
+}
+
+.shapr-import-error {
+  color: var(--color-error);
+}
+
+.shapr-import-exact {
+  display: flex;
+  gap: var(--sp-2);
+  padding: var(--sp-3);
+  color: var(--color-success);
+  background: color-mix(in srgb, var(--color-success) 9%, transparent);
+  border: 1px solid color-mix(in srgb, var(--color-success) 35%, transparent);
+  border-radius: var(--radius-md);
+}
+
+.shapr-import-exact p {
+  margin: var(--sp-1) 0 0;
+  color: var(--color-text-muted);
+  font-size: var(--fs-xs);
+}
+
+.shapr-import-summary {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--sp-2);
+  margin: 0;
+}
+
+.shapr-import-summary div {
+  padding: var(--sp-2);
+  background: var(--color-surface-2);
+  border: var(--border-thin);
+  border-radius: var(--radius-md);
+}
+
+.shapr-import-summary dt {
+  color: var(--color-text-subtle);
+  font-size: var(--fs-mini);
+}
+
+.shapr-import-summary dd {
+  margin: var(--sp-1) 0 0;
+  font-family: var(--font-mono);
+  font-size: var(--fs-sm);
+}
+
+.shapr-import-history h3 {
+  margin: 0;
+  font-size: var(--fs-sm);
+}
+
+.shapr-import-history ol {
+  max-height: 240px;
+  display: grid;
+  gap: var(--sp-1);
+  margin: var(--sp-2) 0 0;
+  padding: 0;
+  overflow: auto;
+  list-style: none;
+}
+
+.shapr-import-history li {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: var(--sp-1) var(--sp-2);
+  align-items: center;
+  padding: var(--sp-2);
+  border-bottom: var(--border-thin);
+  font-size: var(--fs-xs);
+}
+
+.shapr-import-history li > span:first-child {
+  display: flex;
+  gap: var(--sp-2);
+  align-items: baseline;
+}
+
+.shapr-import-history li small {
+  color: var(--color-text-subtle);
+}
+
+.shapr-import-history li > small {
+  grid-column: 1 / -1;
+  font-family: var(--font-mono);
+}
+
+.shapr-status {
+  padding: 2px var(--sp-2);
+  border-radius: 999px;
+  font-family: var(--font-mono);
+  font-size: var(--fs-mini);
+  color: var(--color-warning);
+  background: color-mix(in srgb, var(--color-warning) 12%, transparent);
+}
+
+.shapr-status.unsupported,
+.shapr-status.ambiguous {
+  color: var(--color-text-muted);
+  background: var(--color-surface-2);
+}
+
+.shapr-status.proven {
+  color: var(--color-success);
+  background: color-mix(in srgb, var(--color-success) 12%, transparent);
+}
+
+.shapr-import-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--sp-2);
+}
+
+.shapr-import-actions .primary {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+}
+
+@media (max-width: 600px) {
+  .shapr-import-summary {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
 .palette {
   width: min(520px, 100%);
   display: flex;

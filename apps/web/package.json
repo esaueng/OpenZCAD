@@ -26,6 +26,7 @@
     "@openzcad/document-core": "workspace:*",
     "@openzcad/geometry": "workspace:*",
     "@openzcad/io-step": "workspace:*",
+    "@openzcad/io-shapr": "workspace:*",
     "@openzcad/io-stl": "workspace:*",
     "@openzcad/kernel-adapter": "workspace:*",
     "@openzcad/persistence": "workspace:*",
