@@ -14,6 +14,7 @@ import {
   evaluateKeypadInput,
   keypadClampPosition,
   type DimensionMode,
+  type KeypadExclusion,
   type KeypadUnit
 } from '../lib/keypad';
 
@@ -65,6 +66,31 @@ const PAD_KEYS = [
   ['1', '2', '3', '-'],
   ['±', '0', '.', '+']
 ];
+
+/**
+ * Panels floating over the viewport, in host-relative pixels.
+ *
+ * Read from the DOM rather than passed down: these are siblings laid out by
+ * CSS, so their live width — resized, collapsed, or absent — is the only
+ * honest source, and it is one measurement taken once per opening.
+ */
+function dockedPanelBands(host: HTMLElement): KeypadExclusion[] {
+  const area = host.closest('.viewer-area');
+  if (!area) {
+    return [];
+  }
+  const hostRect = host.getBoundingClientRect();
+  return ['.inspector-float', '.palette-float'].flatMap((selector) => {
+    const panel = area.querySelector(selector);
+    if (!panel) {
+      return [];
+    }
+    const rect = panel.getBoundingClientRect();
+    return rect.width > 0
+      ? [{ x: rect.left - hostRect.left, width: rect.width }]
+      : [];
+  });
+}
 
 /**
  * Floating exact-value entry anchored at the point of action — the keyboard
@@ -138,7 +164,8 @@ export function NumericKeypad({
           width: root.offsetWidth || 232,
           height: root.offsetHeight || 280
         },
-        { width: host.clientWidth, height: host.clientHeight }
+        { width: host.clientWidth, height: host.clientHeight },
+        dockedPanelBands(host)
       );
       root.style.visibility = 'visible';
       root.style.left = `${placement.x}px`;
@@ -224,13 +251,15 @@ export function NumericKeypad({
           onChange={(event) => previewIfValid(event.target.value)}
         />
       </div>
-      {evaluation.isExpression && (
+      {/* A converted or computed value is shown in the document's own units,
+          so a value typed in some other unit is never committed unseen. */}
+      {evaluation.isExpression || evaluation.typedUnit ? (
         <div className="keypad-expr-preview">
           {evaluation.ok && evaluation.value !== undefined
             ? `= ${Math.round((evaluation.displayValue ?? evaluation.value) * 1000) / 1000} ${units}`
             : (evaluation.error ?? 'invalid')}
         </div>
-      )}
+      ) : null}
       {commitDisabled && commitDisabledReason ? (
         <div className="keypad-warning" role="alert">
           {commitDisabledReason}
@@ -306,14 +335,16 @@ export function NumericKeypad({
         >
           <Delete size={14} aria-hidden="true" />
         </button>
+        {/* Named, not just ticked: a bare checkmark makes the user guess what
+            it applies, and the name is the same one assistive tech reads. */}
         <button
           type="button"
           className="keypad-commit"
-          aria-label={`Apply ${label.toLowerCase()}`}
           disabled={!evaluation.ok || commitDisabled}
           onClick={commit}
         >
           <Check size={16} aria-hidden="true" />
+          {`Apply ${label.toLowerCase()}`}
         </button>
       </div>
     </div>
