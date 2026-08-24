@@ -35,6 +35,11 @@ import {
   settleImportSource,
   type InFlightImportChecksums
 } from './importArchival';
+import type {
+  ImportPhase,
+  ImportProgressSink,
+  ImportRunOutcome
+} from './importProgress';
 import {
   deleteSourceBlobIfUnreferenced,
   ensureLocalProjectStorage,
@@ -77,7 +82,10 @@ export interface StepImportSourceStore {
   ensureLocalProjectStorage(): Promise<LocalStorageReadiness>;
   putSourceBlobIfAbsent(
     source: Blob,
-    options?: { claimId?: string }
+    options?: {
+      claimId?: string;
+      onBytesRead?(read: number, total: number): void;
+    }
   ): Promise<StoredSourceBlob>;
   deleteSourceBlobIfUnreferenced(input: {
     checksumSha256: string;
@@ -155,9 +163,19 @@ export interface StepImportRunDeps {
     kind: 'step-import';
     body: Blob;
     metadata: Record<string, string>;
+    onUploadProgress?(uploaded: number, total: number): void;
   }): Promise<string>;
   validatedFeature: StepImportCommitHook;
   status: StepImportStatusSink;
+  /**
+   * Where the progress card reads this run, if one is listening.
+   *
+   * Optional, and deliberately so: unlike {@link status}, nothing here reaches
+   * the document, the device, or the user's data, so a host that drops it
+   * loses a panel and nothing else. Every other collaborator on this interface
+   * is required for exactly the opposite reason.
+   */
+  progress?: ImportProgressSink;
   marks: StepImportMarks;
   /** The document as it stands now — it moves while the rebuild runs. */
   currentDocument(): ProjectDocument | null;
@@ -184,6 +202,53 @@ export interface StepImportResult {
   sourceBlobCreated: boolean;
   /** Whether the bytes were deleted again as the run wound down. */
   sourceDeleted: boolean;
+}
+
+/**
+ * How the run ended, in the one line the progress card has room for.
+ *
+ * Kept apart from the status-bar copy on purpose. The status bar narrates a
+ * session and is overwritten by whatever happens next; this is the card's
+ * final state and may sit on screen until it is dismissed, so it says the
+ * shortest true thing and offers an action only where one exists.
+ */
+function importRunOutcome(input: {
+  outcome: ValidatedFeatureOutcome | 'failed';
+  archived: boolean;
+  rejection: string | null;
+  thrown: string | null;
+}): ImportRunOutcome {
+  switch (input.outcome) {
+    case 'committed':
+      // Two different endings, and the difference matters: an import whose
+      // source never reached the cloud is a project no other device can
+      // rebuild. That is worth an amber card and a button, not a tick.
+      return input.archived
+        ? { tone: 'ok', message: 'Imported — 1 body' }
+        : {
+            tone: 'warning',
+            message: 'Imported, but saved on this device only',
+            action: 'archive'
+          };
+    case 'rejected':
+      return {
+        tone: 'error',
+        message: input.rejection ?? 'Not imported — the file was refused'
+      };
+    case 'superseded':
+      // Says nothing against the file, so it is amber rather than red.
+      return {
+        tone: 'warning',
+        message: 'Not imported — the model kept changing while it rebuilt'
+      };
+    case 'busy':
+      return {
+        tone: 'warning',
+        message: 'Not imported — another exact operation was still running'
+      };
+    default:
+      return { tone: 'error', message: input.thrown ?? 'Import failed' };
+  }
 }
 
 /** Turned away before anything was written, so there is nothing to report. */
@@ -257,6 +322,24 @@ export async function runStepImport(
     return declined();
   }
 
+  // Announced only once the run is certainly going ahead. Everything above
+  // this point is settled in well under a second and reports through the
+  // status bar; a card that appeared for those would be a panel flashing at
+  // someone who has not finished letting go of the mouse.
+  //
+  // A storage-denied session never writes bytes, so `saving` is not one of
+  // its phases and the bar divides over the three that remain.
+  const progress = deps.progress;
+  const phases: ImportPhase[] = [
+    ...(readiness === 'unavailable' ? [] : (['saving'] as const)),
+    'reading',
+    'building',
+    'archiving'
+  ];
+  progress?.start({ fileName: file.name, phases });
+  /** The kernel's own words, kept for the card's one failure line. */
+  let rejection: string | null = null;
+
   // Content-addressed storage first: the document carries a checksum reference
   // and the bytes live in the browser's blob store (and the artifact archive,
   // once uploaded). Embedding the text in the document is the fallback.
@@ -270,13 +353,24 @@ export async function runStepImport(
   // `failed` is the import going wrong before it ever reached the kernel; its
   // bytes are as abandoned as a refusal's.
   let outcome: ValidatedFeatureOutcome | 'failed' = 'failed';
+  /** What went wrong on the way, when nothing ever reached a verdict. */
+  let thrown: string | null = null;
   try {
     // A store that could not be opened a moment ago will not open now, and
     // asking anyway only spends a second failed open to learn the same thing.
     if (readiness !== 'unavailable') {
       try {
+        progress?.update({ phase: 'saving', fraction: 0 });
         const stored = await store.putSourceBlobIfAbsent(file, {
-          claimId: sourceClaimId
+          claimId: sourceClaimId,
+          // Covers the read and hash. The IndexedDB write that follows
+          // reports nothing, so the bar parks at the end of this phase for
+          // the length of that write rather than pretending to advance.
+          onBytesRead: (read, total) =>
+            progress?.update({
+              phase: 'saving',
+              fraction: total > 0 ? read / total : null
+            })
         });
         sourceRef = stored.ref;
         sourceBlobCreated = stored.created;
@@ -287,10 +381,17 @@ export async function runStepImport(
       } catch {
         if (file.size > maxEmbeddedBytes) {
           status.setStatus(storageUnavailableMessage(maxEmbeddedBytes));
+          progress?.finish({
+            tone: 'error',
+            message: storageUnavailableMessage(maxEmbeddedBytes)
+          });
           return declined();
         }
       }
     }
+    // Measured at about 0.15 s for 250 MB — decode and header scan together —
+    // so this reports no fraction. There is nothing to watch.
+    progress?.update({ phase: 'reading', fraction: null });
     const stepText = await file.text();
     const metadata = parseStepMetadata(file.name, stepText);
     const productName = metadata.products[0]?.trim();
@@ -311,6 +412,10 @@ export async function runStepImport(
     // fallback. So a candidate validated against a provisional local id
     // rebuilds identically once the finalized id replaces it.
     const localArtifactId = `artifact_local_${deps.newId()}`;
+    // The long pole, and the one phase with nothing to report: the kernel
+    // reads the file inside a single synchronous wasm call that blocks the
+    // worker thread it runs on.
+    progress?.update({ phase: 'building', fraction: null });
     outcome = await deps.validatedFeature.run(
       commandFactories.importStep({ ...payload, artifactId: localArtifactId }),
       {
@@ -346,12 +451,18 @@ export async function runStepImport(
           }
           let artifactId = localArtifactId;
           try {
+            progress?.update({ phase: 'archiving', fraction: 0 });
             artifactId = await deps.archive({
               fileName: file.name,
               contentType: deps.contentType,
               kind: 'step-import',
               body: file,
-              metadata: { source: 'direct-upload' }
+              metadata: { source: 'direct-upload' },
+              onUploadProgress: (uploaded, total) =>
+                progress?.update({
+                  phase: 'archiving',
+                  fraction: total > 0 ? uploaded / total : null
+                })
             });
             archived = true;
           } catch {
@@ -367,16 +478,22 @@ export async function runStepImport(
           (archived
             ? 'exact body rebuilt, source archived.'
             : 'exact body rebuilt (cloud archive unavailable; source saved locally).'),
-        onFailure: () => {
+        onFailure: (message) => {
           // The kernel's verdict is already in the status bar. The host sink
           // renders inline in whichever feature form is open, and an import has
           // none of its own — routing it there would show a STEP parse error as
           // the refusal of an unrelated operation.
+          //
+          // Kept here, though, because the progress card is this import's own
+          // surface: it can say why the file was refused instead of leaving
+          // the reason in a status line that the next message overwrites.
+          rejection = message;
         }
       }
     );
   } catch (error) {
-    status.setStatus(errorMessage(error, 'STEP import failed.'));
+    thrown = errorMessage(error, 'STEP import failed.');
+    status.setStatus(thrown);
   } finally {
     // `run` released the lock itself; this covers every path that never reached
     // it, and releasing twice is a no-op.
@@ -385,6 +502,9 @@ export async function runStepImport(
       deps.marks.inFlight.release(sourceRef.checksumSha256);
     }
   }
+  progress?.finish(
+    importRunOutcome({ outcome, archived, rejection, thrown })
+  );
   if (!sourceRef) {
     return {
       outcome,
