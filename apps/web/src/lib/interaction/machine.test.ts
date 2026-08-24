@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   IDLE,
+  commandSessionFor,
   escapeTarget,
   interactionReducer,
   toolCardFor,
@@ -419,5 +420,108 @@ describe('toolCardFor', () => {
       card?.actions?.find((action) => action.id === 'sketch-on-face')
         ?.disabledReason
     ).toBe(UNSTABLE_FACE_SKETCH_REASON);
+  });
+});
+
+describe('command session', () => {
+  const cylinderFace = face({
+    surfaceType: 'cylindrical',
+    radius: 7.5,
+    concavity: 'hole',
+    axisStart: [0, 0, 0],
+    axisEnd: [0, 0, 10],
+    featureType: 'through-hole',
+    diameter: 15
+  });
+
+  const states: InteractionState[] = [
+    interactionReducer(IDLE, { type: 'select-face', target: face() }),
+    interactionReducer(IDLE, { type: 'select-face', target: cylinderFace }),
+    interactionReducer(IDLE, {
+      type: 'select-edge',
+      selection: edge(11),
+      additive: false
+    }),
+    interactionReducer(
+      interactionReducer(IDLE, {
+        type: 'select-edge',
+        selection: edge(11),
+        additive: false
+      }),
+      { type: 'toggle-edge-op' }
+    ),
+    interactionReducer(IDLE, { type: 'select-region', target: region })
+  ];
+
+  it('gives every surface the same name for the running command', () => {
+    // The acceptance criterion the recorded defect broke: one command, one
+    // name, wherever it is shown. Both readers derive from one identity, so a
+    // new command cannot be added to only one of them.
+    for (const state of states) {
+      expect(commandSessionFor(state)?.title).toBe(toolCardFor(state)?.title);
+    }
+    expect(states.map((state) => commandSessionFor(state)?.title)).toEqual([
+      'Offset Face',
+      'Resize Cylinder Radius',
+      'Fillet',
+      'Chamfer',
+      'Extrude'
+    ]);
+  });
+
+  it('has no session while nothing is selected', () => {
+    expect(commandSessionFor(IDLE)).toBeNull();
+    expect(toolCardFor(IDLE)).toBeNull();
+  });
+
+  it('reports what the command is acting on', () => {
+    const twoEdges = interactionReducer(
+      interactionReducer(IDLE, {
+        type: 'select-edge',
+        selection: edge(11),
+        additive: false
+      }),
+      { type: 'select-edge', selection: edge(12), additive: true }
+    );
+    expect(commandSessionFor(twoEdges)?.target).toEqual({
+      kind: 'edges',
+      count: 2
+    });
+  });
+
+  it('carries the rejection the command must show, and drops it on re-arm', () => {
+    const armed = interactionReducer(IDLE, {
+      type: 'select-edge',
+      selection: edge(11),
+      additive: false
+    });
+    const failed = interactionReducer(armed, {
+      type: 'validation-failed',
+      message: 'Fillet could not be created.',
+      value: 4.8
+    });
+    expect(commandSessionFor(failed)).toMatchObject({
+      phase: 'failed',
+      error: 'Fillet could not be created.'
+    });
+    // A stale diagnostic beside a value that has since moved is the failure
+    // this clears: dragging again re-arms the command and the message goes.
+    const dragging = interactionReducer(failed, { type: 'drag-engage' });
+    expect(commandSessionFor(dragging)).toMatchObject({
+      phase: 'dragging',
+      error: null
+    });
+  });
+
+  it('has no value lifecycle in a sketch session', () => {
+    const sketching = interactionReducer(IDLE, {
+      type: 'enter-sketch',
+      plane
+    });
+    expect(commandSessionFor(sketching)).toMatchObject({
+      id: 'sketch',
+      phase: null,
+      error: null
+    });
   });
 });

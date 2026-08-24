@@ -18,6 +18,11 @@ export interface DirectEditCommitOptions {
    */
   commit(command: AnyCommand, derived: ProjectDocument['derived']): boolean;
   onValidationStart(value: number): void;
+  /**
+   * The exact rebuild refused this edit. The host owns where that shows: a
+   * running command displays it itself, and only a host with no such surface
+   * should fall back to the status line.
+   */
   onValidationFailed(message: string, value: number): void;
   /** The edit landed; the target body is the new selection. */
   onCommitted(bodyId: BodyId): void;
@@ -126,8 +131,12 @@ export function useDirectEditCommit(
         return true;
       } catch (error) {
         const message = errorMessage(error, 'Operation was not applied.');
+        // One owner per diagnostic. `onValidationFailed` hands the rejection to
+        // the command that caused it, which shows it at the handle the user is
+        // looking at; echoing it into the workspace status line as well is how
+        // the same failure used to appear twice, and how one copy went stale
+        // while the other moved on.
         host.onValidationFailed(message, submittedValue);
-        host.onStatus(message);
         return false;
       } finally {
         inFlight.current = false;
