@@ -1630,8 +1630,19 @@ test('view keys still work while a profile pick is waiting for a click', async (
   // what is bare instead.
   await expect(page.locator('.sketch-palette')).toBeVisible();
   const centres = await bareCanvasDrags(page, { count: 2, dragX: 55 });
+  const circleTool = sketchTools.getByRole('button', { name: /^Circle/ });
+  const gridReadout = page.locator('.sketch-grid-indicator');
   for (const centre of centres) {
-    await sketchTools.getByRole('button', { name: /^Circle/ }).click();
+    await circleTool.click();
+    // The rail button is React state and flips first; the viewport only owns
+    // the tool once its render loop has the sketch rig, and the adaptive grid
+    // readout is written from that same pass. Dragging before it, the
+    // pointerdown reaches a viewport with no sketch plane to project onto and
+    // the whole gesture is discarded. The readout is only written while the
+    // grid is on, so this has to stay ahead of the `g` press below.
+    await expect(circleTool).toHaveAttribute('aria-pressed', 'true');
+    await expect(gridReadout).toBeVisible();
+    await expect(gridReadout).not.toHaveText('');
     await page.mouse.move(centre.x, centre.y);
     await page.mouse.down();
     await page.mouse.move(centre.x + 55, centre.y, { steps: 6 });
