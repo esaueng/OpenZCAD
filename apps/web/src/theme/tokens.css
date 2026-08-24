@@ -41,6 +41,17 @@
   --font-ui: 'IBM Plex Sans', system-ui, -apple-system, sans-serif;
   --font-mono: 'IBM Plex Mono', ui-monospace, 'SF Mono', Menlo, monospace;
 
+  /*
+    Held at 10.5px, below the 11px floor the review asks for.
+
+    Raising it by half a pixel reliably breaks
+    `modeling.spec.ts:678` — six CI attempts, and a local A/B on this branch
+    that passes at 10.5 and fails at 11 back to back. `--fs-mini` is used in
+    six places in the sketch chrome and in the status bar, so the change is
+    moving something the test's canvas-relative coordinates depend on. That is
+    worth understanding before it ships, and it is not worth smuggling in
+    beside a colour fix.
+  */
   --fs-mini: 10.5px;
   --fs-xs: 11.5px;
   --fs-sm: 12px;
@@ -133,18 +144,26 @@
   --color-border-strong: #aeb9c6;
   --color-text: #1a2330;
   --color-text-muted: #5b6572;
-  --color-text-subtle: #6d7885;
+  /*
+    Measured against every surface in this theme, not just the lightest one.
+    At their previous values these cleared #f7f9fb and failed everywhere else:
+    subtle text reached only 3.54:1 on the hover surface, and accent, warning
+    and success all sat under 4.0 on three of the four. Each is now the
+    lightest value of its own hue that holds 4.5:1 against all four, so the
+    palette does not depend on which surface a label happens to land on.
+  */
+  --color-text-subtle: #5e6773;
 
   /* Semantic — deeper hues, so text and borders clear the light ground. */
-  --color-accent: #1f6fd6;
+  --color-accent: #1c64c2;
   --color-accent-hi: #1858ad;
   --color-accent-dim: rgba(31, 111, 214, 0.1);
   --color-accent-border: rgba(31, 111, 214, 0.45);
   --color-on-accent: #ffffff;
-  --color-warning: #b45309;
+  --color-warning: #a64c08;
   --color-error: #dc2626;
   --color-error-text: #b91c1c;
-  --color-success: #15803d;
+  --color-success: #137638;
 }
 
 kbd {
@@ -203,11 +222,24 @@ button:disabled {
   opacity: 0.45;
 }
 
+/*
+  `summary` and `a` were not in this list.
+
+  A disclosure is focusable and operable from the keyboard by default, so it
+  could be tabbed to and activated with nothing on screen to say where the
+  focus was — and the panel sections, the overflow menu and the diagnostic's
+  details are all disclosures. Two pixels rather than one: a 1px ring is under
+  the perimeter WCAG 2.2 asks for, and outlines do not affect layout, so the
+  extra pixel costs nothing but visibility.
+*/
+a:focus-visible,
 button:focus-visible,
 input:focus-visible,
 select:focus-visible,
+summary:focus-visible,
+textarea:focus-visible,
 [tabindex]:focus-visible {
-  outline: 1px solid var(--color-accent);
+  outline: 2px solid var(--color-accent);
   outline-offset: 1px;
 }
 
