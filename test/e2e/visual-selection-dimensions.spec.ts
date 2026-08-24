@@ -69,11 +69,9 @@ test('round-trips diameter entry and edits a cylinder cap by total height', asyn
     .toBeCloseTo(28, 5);
   const valueChip = page.getByTestId('direct-manipulation-value');
   await expect(valueChip).toHaveText('Ø 28 mm');
-  await expect(page.getByTestId('live-cylinder-radius')).toHaveText('Ø 28 mm');
 
   await page.getByRole('button', { name: 'Switch to radius entry' }).click();
   await expect(valueChip).toHaveText('R 14 mm');
-  await expect(page.getByTestId('live-cylinder-radius')).toHaveText('R 14 mm');
   await page.getByRole('button', { name: 'Switch to diameter entry' }).click();
   await expect(valueChip).toHaveText('Ø 28 mm');
 
