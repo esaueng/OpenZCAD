@@ -1,10 +1,5 @@
-import {
-  useEffect,
-  useRef,
-  useState,
-  type ReactNode
-} from 'react';
-import { Trash2, X } from 'lucide-react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { MoreHorizontal, Trash2, X } from 'lucide-react';
 import { coerceParamValue } from '@openzcad/document-core';
 import { findFontFace } from '@openzcad/geometry';
 import { FEATURE_COLORS, featureColor } from '@openzcad/shared';
@@ -270,28 +265,30 @@ function BodyStats({
   const mass = body.massProperties;
   return (
     <>
-      <h3 className="section-title">Measurements</h3>
-      <div className="kv-grid">
-        <b>volume</b>
-        <span>
-          {formatNumber(body.volume)} {units}³
-        </span>
-        <b>size</b>
-        <span>
-          {formatNumber(size.x)} × {formatNumber(size.y)} ×{' '}
-          {formatNumber(size.z)} {units}
-        </span>
-        <b>faces</b>
-        <span>{body.faceCount}</span>
-        <b>status</b>
-        <span>{body.consumed ? 'combined into a later feature' : 'live'}</span>
-      </div>
+      <CollapsibleSection title="Measurements" defaultOpen>
+        <div className="kv-grid">
+          <b>volume</b>
+          <span>
+            {formatNumber(body.volume)} {units}³
+          </span>
+          <b>size</b>
+          <span>
+            {formatNumber(size.x)} × {formatNumber(size.y)} ×{' '}
+            {formatNumber(size.z)} {units}
+          </span>
+          <b>faces</b>
+          <span>{body.faceCount}</span>
+          <b>status</b>
+          <span>
+            {body.consumed ? 'combined into a later feature' : 'live'}
+          </span>
+        </div>
+      </CollapsibleSection>
       {mass ? (
         // Unit density: multiply by a material density for physical values.
         // Rendered only when the kernel integrated this solid — the absence
         // of the section is the honest reading of a failed integration.
-        <>
-          <h3 className="section-title">Mass properties</h3>
+        <CollapsibleSection title="Mass properties">
           <div className="kv-grid">
             <b>center of mass</b>
             <span>
@@ -306,9 +303,84 @@ function BodyStats({
               {formatNumber(mass.principalMoments[2])} {units}⁵
             </span>
           </div>
-        </>
+        </CollapsibleSection>
       ) : null}
     </>
+  );
+}
+
+/**
+ * The header's overflow menu.
+ *
+ * A native disclosure does not close when you click away from it, which for a
+ * menu means it sits open over the panel until you click it again. The colour
+ * picker in this file already solved that; this uses the same listener rather
+ * than inventing a second behaviour for the same gesture.
+ */
+function PanelOverflow({ children }: { children: ReactNode }) {
+  const ref = useRef<HTMLDetailsElement | null>(null);
+  useEffect(() => {
+    const close = (event: Event) => {
+      const menu = ref.current;
+      if (
+        menu?.open &&
+        event.target instanceof Node &&
+        !menu.contains(event.target)
+      ) {
+        menu.open = false;
+      }
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape' && ref.current?.open) {
+        // Stop here: the panel's own Escape handler closes the whole panel,
+        // and dismissing a menu should not also dismiss what it belongs to.
+        event.stopPropagation();
+        ref.current.open = false;
+      }
+    };
+    document.addEventListener('pointerdown', close);
+    document.addEventListener('keydown', onKeyDown, true);
+    return () => {
+      document.removeEventListener('pointerdown', close);
+      document.removeEventListener('keydown', onKeyDown, true);
+    };
+  }, []);
+  return (
+    <details className="panel-overflow" ref={ref}>
+      <summary
+        className="icon-button"
+        title="More actions"
+        aria-label="More actions"
+      >
+        <MoreHorizontal size={14} aria-hidden="true" />
+      </summary>
+      <div className="panel-overflow-menu">{children}</div>
+    </details>
+  );
+}
+
+/**
+ * A panel section that can be folded away.
+ *
+ * Everything here used to be laid out flat, so a body's principal inertia had
+ * the same claim on the panel as the thing the user had just selected. The
+ * sections stay one keystroke away rather than being moved somewhere else —
+ * an engineer who wants inertia should not have to go looking for it.
+ */
+function CollapsibleSection({
+  title,
+  defaultOpen = false,
+  children
+}: {
+  title: string;
+  defaultOpen?: boolean;
+  children: ReactNode;
+}) {
+  return (
+    <details className="panel-section" open={defaultOpen}>
+      <summary className="section-title">{title}</summary>
+      {children}
+    </details>
   );
 }
 
@@ -407,8 +479,7 @@ function BodyAppearance({
     draftOpacity >= 1;
 
   return (
-    <>
-      <h3 className="section-title">Appearance</h3>
+    <CollapsibleSection title="Appearance">
       <div className="appearance-controls" ref={controlsRef}>
         <div className="appearance-field">
           <span>Color</span>
@@ -483,7 +554,7 @@ function BodyAppearance({
           </button>
         )}
       </div>
-    </>
+    </CollapsibleSection>
   );
 }
 
@@ -687,6 +758,15 @@ export function Inspector(props: InspectorProps) {
   let eyebrow = '';
   let title = '';
   let body: ReactNode = null;
+  /**
+   * The panel's destructive action, when it has one.
+   *
+   * It used to sit at the foot of every edit panel as a permanent full-width
+   * red button — the most prominent control in the panel was the one that
+   * throws the feature away. It lives in the header menu now; the command
+   * history makes it recoverable, which is what earns it a quiet place.
+   */
+  let deleteAction: { label: string; run: () => void } | null = null;
 
   if (tool) {
     eyebrow = 'New feature';
@@ -1047,9 +1127,7 @@ export function Inspector(props: InspectorProps) {
             angleDeg: data.angleDeg,
             ...(data.direction ? { direction: data.direction } : {}),
             ...(data.axis2 ? { axis2: data.axis2 } : {}),
-            ...(data.spacing2 !== undefined
-              ? { spacing2: data.spacing2 }
-              : {}),
+            ...(data.spacing2 !== undefined ? { spacing2: data.spacing2 } : {}),
             ...(data.count2 !== undefined ? { count2: data.count2 } : {})
           }}
           submitLabel="Apply"
@@ -1142,8 +1220,7 @@ export function Inspector(props: InspectorProps) {
         </div>
       );
     } else if (data.featureKind === 'imported-step') {
-      const declaredCount =
-        selectedBody?.importedStepDeclaredSolidCount ?? 0;
+      const declaredCount = selectedBody?.importedStepDeclaredSolidCount ?? 0;
       const included = (index: number) =>
         data.solidIndices === undefined || data.solidIndices.includes(index);
       const includedCount = Array.from(
@@ -1253,21 +1330,15 @@ export function Inspector(props: InspectorProps) {
             </span>
           </div>
         )}
-        <div className="form-actions danger-zone">
-          <button
-            type="button"
-            className="secondary danger"
-            title="Delete feature (Del)"
-            onClick={() => props.onDeleteFeature(selectedFeature)}
-          >
-            <Trash2 size={13} aria-hidden="true" />
-            {selectedFeature.data.featureKind === 'imported-step'
-              ? 'Delete imported body'
-              : 'Delete feature'}
-          </button>
-        </div>
       </>
     );
+    deleteAction = {
+      label:
+        selectedFeature.data.featureKind === 'imported-step'
+          ? 'Delete imported body'
+          : 'Delete feature',
+      run: () => props.onDeleteFeature(selectedFeature)
+    };
   }
 
   if (!body) {
@@ -1296,6 +1367,19 @@ export function Inspector(props: InspectorProps) {
         <div className="panel-title-row">
           <h2>{title}</h2>
           <span className="panel-eyebrow">{eyebrow}</span>
+          {deleteAction ? (
+            <PanelOverflow>
+              <button
+                type="button"
+                className="panel-overflow-item danger"
+                title={`${deleteAction.label} (Del)`}
+                onClick={deleteAction.run}
+              >
+                <Trash2 size={13} aria-hidden="true" />
+                {deleteAction.label}
+              </button>
+            </PanelOverflow>
+          ) : null}
           <button
             type="button"
             className="icon-button panel-close"
