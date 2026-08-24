@@ -23,7 +23,10 @@
  */
 
 import { commandFactories, type AnyCommand } from '@openzcad/command-system';
-import { createBodyFeatureIds } from '@openzcad/document-core';
+import {
+  createBodyFeatureIds,
+  type ImportedStepInput
+} from '@openzcad/document-core';
 import { parseStepMetadata } from '@openzcad/io-step';
 import type {
   ImportedSourceReference,
@@ -165,6 +168,10 @@ export interface StepImportRunDeps {
   editDisabledReason(): string | null;
   /** Unique per call. `crypto.randomUUID` in the app. */
   newId(): string;
+  /** Alternate atomic command for imports that carry additional evidence. */
+  commandFactory?(payload: ImportedStepInput): AnyCommand;
+  validatingMessage?: string;
+  successMessage?(input: { fileName: string; archived: boolean }): string;
   /** Overridable so a test need not build a 250 MB file. */
   limits?: { maxSourceBytes?: number; maxEmbeddedBytes?: number };
 }
@@ -204,6 +211,7 @@ export async function runStepImport(
   const maxSourceBytes = deps.limits?.maxSourceBytes ?? MAX_SOURCE_IMPORT_BYTES;
   const maxEmbeddedBytes =
     deps.limits?.maxEmbeddedBytes ?? MAX_EMBEDDED_STEP_BYTES;
+  const commandFactory = deps.commandFactory ?? commandFactories.importStep;
 
   if (file.size > maxSourceBytes) {
     status.setStatus(
@@ -312,14 +320,16 @@ export async function runStepImport(
     // rebuilds identically once the finalized id replaces it.
     const localArtifactId = `artifact_local_${deps.newId()}`;
     outcome = await deps.validatedFeature.run(
-      commandFactories.importStep({ ...payload, artifactId: localArtifactId }),
+      commandFactory({ ...payload, artifactId: localArtifactId }),
       {
         featureName: name,
         resultBodyId: ids.bodyId,
         // The lock this run has been holding since before it wrote a byte. The
         // run adopts it instead of competing for it.
         reservation: commitLock,
-        validatingMessage: `Checking ${file.name} against exact geometry…`,
+        validatingMessage:
+          deps.validatingMessage ??
+          `Checking ${file.name} against exact geometry…`,
         // The workspace stays live while this rebuilds, and rebuilding a large
         // assembly takes minutes: renaming a feature or nudging a body in that
         // time must not destroy the import. The candidate is simply rebuilt
@@ -357,16 +367,17 @@ export async function runStepImport(
           } catch {
             // Local-only, and listed in the File menu for a later retry.
           }
-          return commandFactories.importStep({ ...payload, artifactId });
+          return commandFactory({ ...payload, artifactId });
         },
         // Two separate facts: the source is stored, and the exact kernel
         // rebuilt a body from it. Claiming the second before the rebuild ran is
         // what left a success toast next to an empty viewport.
         successMessage: () =>
+          deps.successMessage?.({ fileName: file.name, archived }) ??
           `Imported editable STEP solid from ${file.name}: ` +
-          (archived
-            ? 'exact body rebuilt, source archived.'
-            : 'exact body rebuilt (cloud archive unavailable; source saved locally).'),
+            (archived
+              ? 'exact body rebuilt, source archived.'
+              : 'exact body rebuilt (cloud archive unavailable; source saved locally).'),
         onFailure: () => {
           // The kernel's verdict is already in the status bar. The host sink
           // renders inline in whichever feature form is open, and an import has
