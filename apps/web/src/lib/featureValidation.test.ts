@@ -28,7 +28,7 @@ describe('validated feature warnings', () => {
         ...safe,
         warnings: ['Feature "Join housings": Union does not fill empty space.']
       })
-    ).toBe('Union does not fill empty space.');
+    ).toEqual({ message: 'Union does not fill empty space.' });
   });
 
   it('does not treat an empty attributed warning as success', () => {
@@ -38,12 +38,14 @@ describe('validated feature warnings', () => {
   });
 
   it('rejects a missing result and a stale document', () => {
-    expect(validatedFeatureRejection({ ...safe, bodyPresent: false })).toBe(
-      'The operation did not produce its result body.'
-    );
-    expect(validatedFeatureRejection({ ...safe, documentMoved: true })).toBe(
-      'The document changed while the operation validated.'
-    );
+    expect(
+      validatedFeatureRejection({ ...safe, bodyPresent: false })
+    ).toEqual({ message: 'The operation did not produce its result body.' });
+    expect(
+      validatedFeatureRejection({ ...safe, documentMoved: true })
+    ).toEqual({
+      message: 'The document changed while the operation validated.'
+    });
   });
 
   it('accepts a warning-free current result', () => {

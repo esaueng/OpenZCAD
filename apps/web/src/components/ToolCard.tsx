@@ -25,6 +25,8 @@ const PHASE_LABELS: Record<OperationPhase, string> = {
 interface ToolCardProps {
   model: ToolCardModel;
   onAction?(action: SelectionActionId): void;
+  /** Opens the existing feature a refusal named, so the way out is a button. */
+  onEditCulprit?(featureId: string): void;
   onClose(): void;
 }
 
@@ -33,7 +35,12 @@ interface ToolCardProps {
  * ("Offset Face", "Fillet", ...) with a one-line hint — the viewport-native
  * companion of the selection-first interaction machine.
  */
-export function ToolCard({ model, onAction, onClose }: ToolCardProps) {
+export function ToolCard({
+  model,
+  onAction,
+  onEditCulprit,
+  onClose
+}: ToolCardProps) {
   const Icon = ICONS[model.icon];
   return (
     <div
@@ -55,9 +62,27 @@ export function ToolCard({ model, onAction, onClose }: ToolCardProps) {
           ) : null}
         </strong>
         {model.error ? (
-          <small className="tool-card-error" role="alert">
-            {model.error}
-          </small>
+          <span className="tool-card-diagnostic" role="alert">
+            <span className="tool-card-error">{model.error.message}</span>
+            {model.error.culprit && onEditCulprit ? (
+              <button
+                type="button"
+                className="tool-card-recovery"
+                onClick={() => onEditCulprit(model.error!.culprit!.featureId)}
+              >
+                Edit {model.error.culprit.featureName}
+              </button>
+            ) : null}
+            {model.error.detail ? (
+              // The kernel's own words are kept, but a person reads the cause
+              // first and asks for the machinery only if the cause was not
+              // enough.
+              <details className="tool-card-details">
+                <summary>Details</summary>
+                <span>{model.error.detail}</span>
+              </details>
+            ) : null}
+          </span>
         ) : null}
         <small aria-live="polite">{model.hint}</small>
       </span>

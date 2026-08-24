@@ -9,6 +9,8 @@ import {
 
 export interface AffectedFeatureTarget {
   featureName: string;
+  /** Identifies the feature so a refusal naming it can offer to open it. */
+  featureId: FeatureId;
   resultBodyId: BodyId;
 }
 
@@ -46,7 +48,11 @@ export function affectedFeatureTargets(
   const affectedBodies = new Set<BodyId>([sourceBodyId]);
   const affectedSketches = new Set<SketchId>();
   const targets: AffectedFeatureTarget[] = [
-    { featureName: source.name, resultBodyId: sourceBodyId }
+    {
+      featureName: source.name,
+      featureId: source.featureId,
+      resultBodyId: sourceBodyId
+    }
   ];
 
   for (const feature of features.slice(sourceIndex + 1)) {
@@ -125,13 +131,18 @@ export function affectedFeatureTargets(
       continue;
     }
     affectedBodies.add(resultBodyId);
-    targets.push({ featureName: feature.name, resultBodyId });
+    targets.push({
+      featureName: feature.name,
+      featureId: feature.featureId,
+      resultBodyId
+    });
     // A split's second half is a result body too; downstream features
     // targeting it are just as affected as those on the primary half.
     if (data.featureKind === 'split') {
       affectedBodies.add(data.secondBodyId);
       targets.push({
         featureName: feature.name,
+        featureId: feature.featureId,
         resultBodyId: data.secondBodyId
       });
     }
