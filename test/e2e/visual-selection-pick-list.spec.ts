@@ -62,6 +62,27 @@ test('lists stacked faces without disturbing selection or click cycling', async 
   await expect(canvas).toHaveAttribute('data-e2e-selected-face', /.+/);
   const selectedBefore = await canvas.getAttribute('data-e2e-selected-face');
 
+  // Neither wait above proves the viewport can answer a probe. The status bar
+  // clears within milliseconds of the demo click — it never reports this
+  // path's rebuild — and `data-e2e-selected-face` is written from the React
+  // effect that installs the bodies, so both are satisfied while that install
+  // is still the only thing the main thread is doing. The probe below needs no
+  // extra geometry; measured under parallel CPU load it always found its stack
+  // on the first call, in about 10 ms, whenever it got to run at all. What it
+  // needs is a free main thread, and the install holds one for seconds, long
+  // enough that a probe dispatched into that window never executes.
+  //
+  // The selection callout is the readiness signal. It is the CSS2D label the
+  // bodies pass hands to the render loop, so it reaches the DOM only once a
+  // frame has been drawn on top of the install — the same reason the sketch
+  // grid readout gates drawing in modeling.spec.ts. Waiting for it costs
+  // nothing when the app is idle and absorbs the install when it is not, which
+  // is why it carries the geometry-scale budget the readiness waits above use
+  // while the probe itself keeps the strict default.
+  const selectionCallout = page.locator('.viewer-host .selection-callout');
+  await expect(selectionCallout).toBeVisible({ timeout: 60_000 });
+  await expect(selectionCallout).not.toHaveText('', { timeout: 60_000 });
+
   let probe: PickStackProbe | null = null;
   await expect
     .poll(async () => {
