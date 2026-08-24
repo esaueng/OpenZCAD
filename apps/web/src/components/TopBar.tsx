@@ -62,7 +62,7 @@ interface TopBarProps {
   tweakModeDisabledReason: string | null;
   onWorkspaceMode(mode: WorkspaceMode): void;
   onSave(): void;
-  onImportFile(file: File): void;
+  onImportFiles(files: File[]): void;
   onExportStep(): void;
   /** Opens the mesh export dialog (3MF / STL with quality control). */
   onOpenMeshExport(): void;
@@ -125,7 +125,7 @@ export function TopBar({
   tweakModeDisabledReason,
   onWorkspaceMode,
   onSave,
-  onImportFile,
+  onImportFiles,
   onExportStep,
   onOpenMeshExport,
   onArchiveLocalSources,
@@ -359,19 +359,21 @@ export function TopBar({
           <div className="topbar-menu-panel">
             <label
               className="topbar-menu-item"
-              title="Import an editable STEP solid or STL mesh"
+              title="Import STEP, STL, or a paired Shapr3D project and STEP"
             >
               <Upload size={13} aria-hidden="true" />
-              <span>Import STEP or STL…</span>
+              <span>Import CAD files…</span>
               <input
                 type="file"
-                accept=".stl,.step,.stp"
+                aria-label="Import STEP or STL…"
+                accept=".shapr,.stl,.step,.stp"
+                multiple
                 style={{ display: 'none' }}
                 onChange={(event: ChangeEvent<HTMLInputElement>) => {
-                  const file = event.target.files?.[0];
+                  const files = [...(event.target.files ?? [])];
                   event.target.value = '';
-                  if (file) {
-                    onImportFile(file);
+                  if (files.length > 0) {
+                    onImportFiles(files);
                   }
                 }}
               />

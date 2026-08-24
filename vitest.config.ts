@@ -10,6 +10,7 @@ const WORKSPACE_PACKAGES = [
   'ai-contracts',
   'viewport',
   'io-step',
+  'io-shapr',
   'io-stl',
   'persistence',
   'cloudflare-adapters'

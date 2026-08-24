@@ -246,6 +246,11 @@ export async function prepareProjectStorageSnapshot(
       }
       if (entry.kind === 'import.step') {
         await externalizeStep(entry.payload);
+      } else if (
+        entry.kind === 'import.shapr-guided' &&
+        isRecord(entry.payload.step)
+      ) {
+        await externalizeStep(entry.payload.step);
       } else if (entry.kind === 'import.mesh') {
         await externalizeMesh(entry.payload);
       }
@@ -377,6 +382,11 @@ export async function hydrateProjectStorageSnapshot(
       }
       if (entry.kind === 'import.step') {
         await hydrateStep(entry.payload);
+      } else if (
+        entry.kind === 'import.shapr-guided' &&
+        isRecord(entry.payload.step)
+      ) {
+        await hydrateStep(entry.payload.step);
       } else if (entry.kind === 'import.mesh') {
         await hydrateMesh(entry.payload);
       }
