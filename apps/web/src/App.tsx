@@ -154,6 +154,12 @@ import {
   listLocalOnlyImportSources
 } from './lib/importArchival';
 import {
+  coalesceImportProgress,
+  type ImportProgressSink,
+  type ImportRunState
+} from './lib/importProgress';
+import { ImportProgressCard } from './components/ImportProgressCard';
+import {
   LOCAL_AUTOSAVE_FAILED_STATUS,
   reparkFailedAutosave
 } from './lib/localAutosaveFailure';
@@ -1421,6 +1427,26 @@ export function App() {
     cloudFunctionsEnabled ? 'Checking beta API...' : 'Offline workspace'
   );
   const [busy, setBusy] = useState(false);
+  /**
+   * The import the progress card is reporting, or null for none. The card
+   * owns its own clock, so this only changes on a phase step or an ending —
+   * not on every tick.
+   */
+  const [importRun, setImportRun] = useState<ImportRunState | null>(null);
+  /**
+   * Stable for the card's benefit: it holds the auto-dismiss timer for a
+   * successful import in an effect keyed on this, so an identity that changed
+   * every render would restart that timer on every render.
+   */
+  const dismissImportRun = useCallback(() => setImportRun(null), []);
+  // `handleArchiveLocalSources` is a hoisted declaration further down the
+  // component and closes over state that moves; reached through a ref so the
+  // card's callback can stay stable without capturing a stale one.
+  const archiveLocalSourcesRef = useRef<() => Promise<void>>(async () => {});
+  const archiveImportSourcesFromCard = useCallback(() => {
+    setImportRun(null);
+    void archiveLocalSourcesRef.current();
+  }, []);
   /**
    * The last refusal from an exact rebuild, shown inside the form that asked
    * for it. Cleared whenever a panel opens or closes so a stale reason can
@@ -7398,6 +7424,8 @@ export function App() {
     kind: ArtifactKind;
     body: Blob;
     metadata?: Record<string, string | number | boolean>;
+    /** Bytes the store has accepted, for a caller reporting the upload. */
+    onUploadProgress?(uploaded: number, total: number): void;
   }): Promise<string> {
     if (!doc) {
       throw new Error('No project is open.');
@@ -7422,7 +7450,10 @@ export function App() {
     await uploadArtifactBody(
       api,
       { uploadSessionId: upload.uploadSessionId, uploadUrl: upload.uploadUrl },
-      input.body
+      input.body,
+      input.onUploadProgress
+        ? { onProgress: input.onUploadProgress }
+        : undefined
     );
     await api.finalizeArtifact({
       projectId: doc.projectId,
@@ -7527,6 +7558,7 @@ export function App() {
       archive: archiveArtifact,
       validatedFeature,
       status: { setStatus, setFeatureFormError },
+      progress: createImportProgressSink(),
       marks: {
         inFlight: inFlightImportChecksums.current,
         abandoned: abandonedImportChecksums.current
@@ -7535,6 +7567,38 @@ export function App() {
       editDisabledReason: () => editDisabledReasonRef.current,
       newId: () => crypto.randomUUID()
     });
+  }
+
+  function createImportProgressSink(): ImportProgressSink {
+    // New per run, so a second import replaces the card rather than being
+    // merged into the first one's phases.
+    const importRunId = crypto.randomUUID();
+    const publishProgress = coalesceImportProgress((progress) =>
+      setImportRun((current) =>
+        current && current.id === importRunId && !current.outcome
+          ? { ...current, progress }
+          : current
+      )
+    );
+    return {
+      start: ({ fileName, phases }) =>
+        setImportRun({
+          id: importRunId,
+          fileName,
+          phases,
+          progress: { phase: phases[0] ?? 'building', fraction: null },
+          outcome: null
+        }),
+      update: publishProgress,
+      // Guarded on the id: a run that ends after the user has already
+      // started another import must not overwrite the newer card.
+      finish: (outcome) =>
+        setImportRun((current) =>
+          current && current.id === importRunId
+            ? { ...current, outcome }
+            : current
+        )
+    };
   }
 
   function cancelShaprImport() {
@@ -7659,6 +7723,7 @@ export function App() {
       archive: archiveArtifact,
       validatedFeature,
       status: { setStatus, setFeatureFormError },
+      progress: createImportProgressSink(),
       marks: {
         inFlight: inFlightImportChecksums.current,
         abandoned: abandonedImportChecksums.current
@@ -7692,6 +7757,10 @@ export function App() {
         : null
     );
   }
+
+  // Republished every render so the progress card's stable callback reaches
+  // the current closure rather than the one from the render that mounted it.
+  archiveLocalSourcesRef.current = handleArchiveLocalSources;
 
   /**
    * Uploads import sources that exist only in this browser (their archival
@@ -13553,6 +13622,11 @@ export function App() {
                 void handleImportFiles(files);
               }
             }}
+          />
+          <ImportProgressCard
+            run={importRun}
+            onDismiss={dismissImportRun}
+            onArchiveNow={archiveImportSourcesFromCard}
           />
           {paletteOpen && (
             <CommandPalette
