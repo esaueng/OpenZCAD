@@ -15,6 +15,7 @@ import {
   toParameterId,
   toProjectId,
   toRevisionId,
+  toShaprImportId,
   toSketchId,
   type BodyId,
   type BodyNode,
@@ -43,6 +44,8 @@ import {
   type ProjectBranchPoint,
   type ProjectCheckpoint,
   type RevisionRecord,
+  type ShaprImportId,
+  type ShaprMigrationRecord,
   type RevolveAxis,
   toSketchConstraintId,
   type SketchConstraint,
@@ -440,6 +443,12 @@ export interface ImportedStepInput {
   ids?: BodyFeatureIds;
 }
 
+export interface ShaprGuidedImportInput {
+  importId?: ShaprImportId;
+  step: ImportedStepInput;
+  migration: Omit<ShaprMigrationRecord, 'importId' | 'exactGeometry'>;
+}
+
 export interface ParameterSetInput {
   name: string;
   expression: string;
@@ -552,6 +561,8 @@ export function createProjectDocument(
     checkpoints: [initialCheckpoint],
     commandLog: [],
     assets: {},
+    shaprImports: {},
+    shaprImportOrder: [],
     derived: {
       bodyRepresentations: {},
       exportableBodyIds: [],
@@ -625,7 +636,9 @@ export function normalizeDocument(document: ProjectDocument): ProjectDocument {
     sketchOrder: document.sketchOrder ?? [],
     revisions,
     checkpoints,
-    assets: document.assets ?? {}
+    assets: document.assets ?? {},
+    shaprImports: document.shaprImports ?? {},
+    shaprImportOrder: document.shaprImportOrder ?? []
   };
 }
 
@@ -2088,6 +2101,37 @@ export function importStepBody(
   return { document: next, bodyId };
 }
 
+/**
+ * Atomically imports the exact STEP witness and its sanitized Shapr migration
+ * evidence. Candidate operations stay non-operative until a later adapter can
+ * prove units, operands, coordinate frames, and topology correspondence.
+ */
+export function importShaprGuided(
+  document: ProjectDocument,
+  input: ShaprGuidedImportInput
+): { document: ProjectDocument; bodyId: BodyId; importId: ShaprImportId } {
+  if (!input.step.ids) {
+    throw new Error('A guided SHAPR import requires deterministic STEP ids.');
+  }
+  const importId = input.importId ?? toShaprImportId(createId('shapr'));
+  if (document.shaprImports[importId]) {
+    throw new Error(`SHAPR import ${importId} already exists.`);
+  }
+  const imported = importStepBody(document, input.step);
+  imported.document.shaprImports[importId] = {
+    ...deepClone(input.migration),
+    importId,
+    exactGeometry: {
+      featureId: input.step.ids.featureId,
+      bodyId: input.step.ids.bodyId,
+      stepChecksumSha256: input.migration.companionStepChecksumSha256,
+      validation: 'exact-kernel-preflight'
+    }
+  };
+  imported.document.shaprImportOrder.push(importId);
+  return { document: imported.document, bodyId: imported.bodyId, importId };
+}
+
 // ---------------------------------------------------------------------------
 // Parameters.
 // ---------------------------------------------------------------------------
@@ -2772,6 +2816,19 @@ export function deleteFeature(
   next.featureOrder = next.featureOrder.filter(
     (id) => id !== feature.featureId
   );
+  const removedShaprImports = next.shaprImportOrder.filter(
+    (importId) =>
+      next.shaprImports[importId]?.exactGeometry.featureId === feature.featureId
+  );
+  for (const importId of removedShaprImports) {
+    delete next.shaprImports[importId];
+  }
+  if (removedShaprImports.length > 0) {
+    const removed = new Set(removedShaprImports);
+    next.shaprImportOrder = next.shaprImportOrder.filter(
+      (importId) => !removed.has(importId)
+    );
+  }
   for (const nodeId of removedNodeIds) {
     delete next.nodes[nodeId];
   }

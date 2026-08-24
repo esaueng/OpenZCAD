@@ -129,6 +129,7 @@ import type {
 } from '@openzcad/shared';
 import {
   toArtifactId,
+  toShaprImportId,
   toSketchConstraintId,
   toUserId,
   UNIT_TO_MM
@@ -157,6 +158,11 @@ import {
   reparkFailedAutosave
 } from './lib/localAutosaveFailure';
 import { MAX_SOURCE_IMPORT_BYTES, runStepImport } from './lib/stepImportRun';
+import {
+  inspectShaprPair,
+  type ShaprPairInspection
+} from './lib/shaprImportWorkerClient';
+import { shaprMigrationDraft } from './lib/shaprMigration';
 import { presentedWorkspaceSaveState } from './lib/workspaceSaveStatePresentation';
 import {
   cancelDesktopSignIn,
@@ -245,6 +251,7 @@ import type {
   ExportProgress,
   MeshExportDialogFormat
 } from './components/ExportDialog';
+import type { ShaprImportDialogPhase } from './components/ShaprImportDialog';
 import type { GeometryWorkerState } from './worker/geometryWorker';
 
 /** The export dialog's progress stage for one geometry-worker state. */
@@ -484,6 +491,11 @@ const LazyExportDialog = lazy(() =>
     default: module.ExportDialog
   }))
 );
+const LazyShaprImportDialog = lazy(() =>
+  import('./components/ShaprImportDialog').then((module) => ({
+    default: module.ShaprImportDialog
+  }))
+);
 /**
  * The edit panel, which only exists while something is being edited.
  *
@@ -581,6 +593,16 @@ function ExportDialog(props: ComponentProps<typeof LazyExportDialog>) {
   return (
     <Suspense fallback={null}>
       <LazyExportDialog {...props} />
+    </Suspense>
+  );
+}
+
+function ShaprImportDialog(
+  props: ComponentProps<typeof LazyShaprImportDialog>
+) {
+  return (
+    <Suspense fallback={null}>
+      <LazyShaprImportDialog {...props} />
     </Suspense>
   );
 }
@@ -1072,6 +1094,15 @@ function resolvedSketchPlaneBasis(
 const EMPTY_SKETCH_OVERLAYS: SketchOverlay[] = [];
 const EMPTY_BODY_IDS: string[] = [];
 
+interface PendingShaprImport {
+  shaprFile: File;
+  sourceStepFile: File;
+  phase: ShaprImportDialogPhase;
+  progress: string;
+  error: string | null;
+  inspection: ShaprPairInspection | null;
+}
+
 export function App() {
   // Counts this component's commits for the interaction probes. Deliberately
   // dependency-free so it runs after every commit, and deliberately inside
@@ -1235,6 +1266,15 @@ export function App() {
   });
   const [sharingOpen, setSharingOpen] = useState(false);
   const [meshExportOpen, setMeshExportOpen] = useState(false);
+  const [pendingShaprImport, setPendingShaprImport] =
+    useState<PendingShaprImport | null>(null);
+  const shaprPreviewAbortRef = useRef<AbortController | null>(null);
+  useEffect(
+    () => () => {
+      shaprPreviewAbortRef.current?.abort();
+    },
+    []
+  );
   /**
    * First-model tour eligibility, latched per project: set when a project
    * OPENS empty on this device, so the tour rides along while its first
@@ -7410,6 +7450,17 @@ export function App() {
     const contentType = file.type || inferContentType(file.name);
     const lowerName = file.name.toLowerCase();
 
+    if (lowerName.endsWith('.shapr')) {
+      setStatus(
+        'Shapr3D migration requires selecting one .shapr project and its companion .step file together.'
+      );
+      return;
+    }
+    if (!/\.(?:stl|step|stp)$/i.test(file.name)) {
+      setStatus(`Unsupported import format: ${file.name}`);
+      return;
+    }
+
     if (lowerName.endsWith('.stl')) {
       if (file.size > MAX_SOURCE_IMPORT_BYTES) {
         setStatus('STL import is limited to 250 MB.');
@@ -7484,6 +7535,162 @@ export function App() {
       editDisabledReason: () => editDisabledReasonRef.current,
       newId: () => crypto.randomUUID()
     });
+  }
+
+  function cancelShaprImport() {
+    shaprPreviewAbortRef.current?.abort();
+    shaprPreviewAbortRef.current = null;
+    setPendingShaprImport(null);
+  }
+
+  async function handleImportFiles(files: File[]) {
+    const shaprFiles = files.filter((file) => /\.shapr$/i.test(file.name));
+    if (shaprFiles.length === 0) {
+      if (files.length !== 1) {
+        setStatus('Select one STEP or STL file, or one .shapr + STEP pair.');
+        return;
+      }
+      await handleImportFile(files[0]!);
+      return;
+    }
+    const stepFiles = files.filter((file) =>
+      /\.(?:step|stp)$/i.test(file.name)
+    );
+    if (
+      files.length !== 2 ||
+      shaprFiles.length !== 1 ||
+      stepFiles.length !== 1
+    ) {
+      setStatus(
+        'Shapr3D migration requires exactly one .shapr project and one companion .step or .stp file.'
+      );
+      return;
+    }
+    if (!managerRef.current || !doc || !ensureCanEdit('import geometry')) {
+      return;
+    }
+
+    shaprPreviewAbortRef.current?.abort();
+    const controller = new AbortController();
+    shaprPreviewAbortRef.current = controller;
+    const shaprFile = shaprFiles[0]!;
+    const sourceStepFile = stepFiles[0]!;
+    setPendingShaprImport({
+      shaprFile,
+      sourceStepFile,
+      phase: 'parsing',
+      progress: 'Starting the isolated parser worker…',
+      error: null,
+      inspection: null
+    });
+    try {
+      const inspection = await inspectShaprPair(shaprFile, sourceStepFile, {
+        signal: controller.signal,
+        onProgress: (progress) => {
+          if (shaprPreviewAbortRef.current === controller) {
+            setPendingShaprImport((current) =>
+              current ? { ...current, progress } : null
+            );
+          }
+        }
+      });
+      if (shaprPreviewAbortRef.current !== controller) {
+        return;
+      }
+      setPendingShaprImport((current) =>
+        current
+          ? {
+              ...current,
+              phase: 'preview',
+              progress: 'Preview ready.',
+              inspection
+            }
+          : null
+      );
+    } catch (error) {
+      if (controller.signal.aborted) {
+        return;
+      }
+      const message = errorMessage(error, 'Shapr3D preview failed.');
+      setStatus(message);
+      setPendingShaprImport((current) =>
+        current
+          ? { ...current, phase: 'preview', progress: '', error: message }
+          : null
+      );
+    } finally {
+      if (shaprPreviewAbortRef.current === controller) {
+        shaprPreviewAbortRef.current = null;
+      }
+    }
+  }
+
+  async function applyShaprImport() {
+    const pending = pendingShaprImport;
+    if (
+      !pending?.inspection ||
+      !managerRef.current ||
+      !doc ||
+      !ensureCanEdit('import geometry')
+    ) {
+      return;
+    }
+    const migration = shaprMigrationDraft({
+      ir: pending.inspection.ir,
+      shaprFileName: pending.shaprFile.name,
+      stepFileName: pending.sourceStepFile.name,
+      stepChecksumSha256: pending.inspection.stepChecksumSha256
+    });
+    const importId = toShaprImportId(`shapr_${crypto.randomUUID()}`);
+    setPendingShaprImport((current) =>
+      current
+        ? {
+            ...current,
+            phase: 'applying',
+            progress: 'Validating the sanitized STEP in the exact kernel…',
+            error: null
+          }
+        : null
+    );
+    const result = await runStepImport({
+      file: pending.inspection.sanitizedStepFile,
+      contentType:
+        pending.inspection.sanitizedStepFile.type || 'application/step',
+      archive: archiveArtifact,
+      validatedFeature,
+      status: { setStatus, setFeatureFormError },
+      marks: {
+        inFlight: inFlightImportChecksums.current,
+        abandoned: abandonedImportChecksums.current
+      },
+      currentDocument: () => managerRef.current?.document ?? null,
+      editDisabledReason: () => editDisabledReasonRef.current,
+      newId: () => crypto.randomUUID(),
+      commandFactory: (step) =>
+        commandFactories.importShaprGuided({ step, migration, importId }),
+      validatingMessage:
+        'Rebuilding the companion STEP and checking exact geometry…',
+      successMessage: ({ archived }) =>
+        `Imported ${pending.shaprFile.name}: exact STEP body rebuilt; recovered history saved as non-operative evidence` +
+        (archived
+          ? '; sanitized STEP source archived.'
+          : '; sanitized STEP source saved locally.')
+    });
+    if (result.outcome === 'committed') {
+      setPendingShaprImport(null);
+      return;
+    }
+    setPendingShaprImport((current) =>
+      current
+        ? {
+            ...current,
+            phase: 'preview',
+            progress: 'Preview ready.',
+            error:
+              'The exact STEP body was not committed. Review the status message, then retry or cancel.'
+          }
+        : null
+    );
   }
 
   /**
@@ -10960,7 +11167,8 @@ export function App() {
    * edit a model the user cannot see. The palette and the shortcut overlay are
    * not listed — they are handled inside the map, which they need to reach.
    */
-  const workspaceInputEnabled = !settingsOpen && !sharingOpen;
+  const workspaceInputEnabled =
+    !settingsOpen && !sharingOpen && !pendingShaprImport;
 
   // Workspace keyboard map (ignored while typing in a field). The ref must be
   // refreshed before paint: a keydown arriving between a commit and a passive
@@ -12073,7 +12281,7 @@ export function App() {
           tweakModeDisabledReason={tweakModeDisabledReason}
           onWorkspaceMode={handleWorkspaceMode}
           onSave={() => void handleSave()}
-          onImportFile={(file) => void handleImportFile(file)}
+          onImportFiles={(files) => void handleImportFiles(files)}
           onExportStep={() => void handleExportStep()}
           onOpenMeshExport={() => setMeshExportOpen(true)}
           onArchiveLocalSources={() => void handleArchiveLocalSources()}
@@ -13335,13 +13543,14 @@ export function App() {
           <input
             ref={importInputRef}
             type="file"
-            accept=".stl,.step,.stp"
+            accept=".shapr,.stl,.step,.stp"
+            multiple
             style={{ display: 'none' }}
             onChange={(event: ChangeEvent<HTMLInputElement>) => {
-              const file = event.target.files?.[0];
+              const files = [...(event.target.files ?? [])];
               event.target.value = '';
-              if (file) {
-                void handleImportFile(file);
+              if (files.length > 0) {
+                void handleImportFiles(files);
               }
             }}
           />
@@ -13425,6 +13634,18 @@ export function App() {
               onClose={() => setMeshExportOpen(false)}
               onExport={handleExportMesh}
               onCheckQuality={handleCheckMeshQuality}
+            />
+          )}
+          {pendingShaprImport && (
+            <ShaprImportDialog
+              shaprFileName={pendingShaprImport.shaprFile.name}
+              stepFileName={pendingShaprImport.sourceStepFile.name}
+              phase={pendingShaprImport.phase}
+              progress={pendingShaprImport.progress}
+              error={pendingShaprImport.error}
+              inspection={pendingShaprImport.inspection}
+              onCancel={cancelShaprImport}
+              onApply={() => void applyShaprImport()}
             />
           )}
           {settingsOverlay}

@@ -34,6 +34,61 @@ function importedDocument() {
   return manager.document;
 }
 
+function guidedShaprDocument() {
+  const manager = new CommandManager(
+    createProjectDocument('Guided import', toUserId('user_shapr_storage'))
+  );
+  const checksum = 'a'.repeat(64);
+  manager.execute(
+    commandFactories.importShaprGuided({
+      step: {
+        name: 'Exact witness',
+        artifactId: 'artifact_shapr_step',
+        sourceName: 'holder.step',
+        stepText: `ISO-10303-21;\n${'ADVANCED_FACE'.repeat(20_000)}\nEND-ISO-10303-21;`
+      },
+      migration: {
+        representation: 'openzcad-shapr-migration',
+        version: 1,
+        sourceName: 'holder.shapr',
+        sourceChecksumSha256: 'b'.repeat(64),
+        companionStepName: 'holder.step',
+        companionStepChecksumSha256: checksum,
+        createdAt: '2026-08-24T12:00:00.000Z',
+        schema: {
+          workspaceSchemaVersion: 269,
+          schemaVersion: 307_000,
+          historyVersion: 100,
+          projectVersion: 249_000
+        },
+        units: {
+          source: 'metre-candidate',
+          evidence: 'inferred',
+          documentScaleCandidate: 1_000
+        },
+        summary: {
+          historyNodeCount: 1,
+          sketchCount: 0,
+          curveCount: 0,
+          constraintCount: 0,
+          importedBodyCount: 1,
+          importedPrototypeCount: 1,
+          revisionBlockCount: 0,
+          revisionDeltaCount: 0
+        },
+        operations: [],
+        diagnostics: [],
+        semanticReplay: {
+          status: 'not-applied',
+          reason: 'Topology correspondence is not proven.'
+        },
+        privateDataOmitted: true
+      }
+    })
+  );
+  return manager.document;
+}
+
 async function assetLoader(
   prepared: Awaited<ReturnType<typeof prepareProjectStorageSnapshot>>,
   reference: ProjectStorageAssetReference
@@ -90,6 +145,24 @@ describe('R2 project object projection', () => {
         }
       )
     ).rejects.toThrow(/checksum/);
+  });
+
+  it('externalizes and hydrates the nested STEP command in a guided SHAPR import', async () => {
+    const original = guidedShaprDocument();
+    const prepared = await prepareProjectStorageSnapshot(original);
+
+    expect(prepared.assets).toHaveLength(1);
+    expect(prepared.assets[0]?.kind).toBe('step-source');
+    expect(JSON.stringify(prepared.snapshot)).not.toContain(
+      'ADVANCED_FACEADVANCED_FACE'
+    );
+
+    const hydrated = await hydrateProjectStorageSnapshot(
+      prepared.snapshot,
+      original.projectId,
+      (reference) => assetLoader(prepared, reference)
+    );
+    expect(hydrated).toEqual(JSON.parse(JSON.stringify(original)));
   });
 
   it('rejects a snapshot being loaded under another project id', async () => {
