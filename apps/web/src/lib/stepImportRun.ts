@@ -319,7 +319,7 @@ export async function runStepImport(
         // The lock this run has been holding since before it wrote a byte. The
         // run adopts it instead of competing for it.
         reservation: commitLock,
-        validatingMessage: `Rebuilding ${file.name} with the exact geometry kernel…`,
+        validatingMessage: `Checking ${file.name} against exact geometry…`,
         // The workspace stays live while this rebuilds, and rebuilding a large
         // assembly takes minutes: renaming a feature or nudging a body in that
         // time must not destroy the import. The candidate is simply rebuilt

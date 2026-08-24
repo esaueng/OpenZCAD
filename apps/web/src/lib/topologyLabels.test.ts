@@ -123,7 +123,7 @@ describe('edgeLabel / edgeLength', () => {
     expect(edgeLabel(undefined, 11)).toBe('Edge');
   });
 
-  it('names exact circular edges by radius', () => {
+  const circularBody = (adjacentFaceHashes?: number[]) => {
     const circular = makeBody();
     circular.topology!.edges[0]!.curve = {
       type: 'CIRCLE',
@@ -133,7 +133,52 @@ describe('edgeLabel / edgeLength', () => {
         radius: 4
       }
     };
-    expect(edgeLabel(circular, 11)).toBe('Edge R4');
+    if (adjacentFaceHashes) {
+      circular.topology!.edges[0]!.adjacentFaceHashes = adjacentFaceHashes;
+    }
+    return circular;
+  };
+
+  it('names a circular edge by diameter, as a drawing would', () => {
+    expect(edgeLabel(circularBody(), 11)).toBe('Circular edge Ø8');
+  });
+
+  it('names a rim after the feature it belongs to', () => {
+    // face:3 is the through hole, face:1 the top plane it breaks through.
+    expect(edgeLabel(circularBody([1, 3]), 11)).toBe('Hole edge Ø8');
+  });
+
+  it('keeps a blend rim in the radius that was filleted', () => {
+    const blend = circularBody([1, 4]);
+    blend.topology!.faces[3]!.geometry = {
+      surfaceType: 'torus',
+      area: 12,
+      center: { x: 0, y: 0, z: 0 },
+      featureType: 'blend',
+      blendRadius: 4
+    };
+    expect(edgeLabel(blend, 11)).toBe('Blend edge R4');
+  });
+
+  it('names a straight edge after the two faces that meet along it', () => {
+    // An ordinal identifies an edge only by elimination; the faces say what it
+    // is. Only axis-aligned planes are used — "Cylindrical face Ø8" does not
+    // belong in the middle of an edge's name.
+    const box = makeBody();
+    box.topology!.edges[0]!.adjacentFaceHashes = [1, 2];
+    expect(edgeLabel(box, 11)).toBe('Top · Bottom edge');
+  });
+
+  it('falls back to the ordinal when a neighbour has no directional name', () => {
+    const mixed = makeBody();
+    mixed.topology!.edges[0]!.adjacentFaceHashes = [1, 3];
+    expect(edgeLabel(mixed, 11)).toBe('Edge 1');
+  });
+
+  it('gives up on adjacency it cannot resolve', () => {
+    const unresolved = makeBody();
+    unresolved.topology!.edges[0]!.adjacentFaceHashes = [1, 999];
+    expect(edgeLabel(unresolved, 11)).toBe('Edge 1');
   });
 
   it('measures the sampled polyline length', () => {

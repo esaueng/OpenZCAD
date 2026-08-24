@@ -526,8 +526,10 @@ test('accepts exact visual selection and direct editing on the seeded boss', asy
     },
     { ...handle, ...handleStart }
   );
+  // The bore, not the outer wall: an inward-facing cylindrical face is a hole,
+  // and the command is named for it.
   await expect(
-    page.getByRole('region', { name: 'Resize Cylinder Radius operation' })
+    page.getByRole('region', { name: 'Resize Hole operation' })
   ).toContainText('Dragging');
   await expect
     .poll(

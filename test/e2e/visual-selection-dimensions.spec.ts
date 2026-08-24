@@ -134,7 +134,7 @@ test('round-trips diameter entry and edits a cylinder cap by total height', asyn
 
   await selectCylinderSurface('wall');
   await expect(
-    page.getByRole('region', { name: 'Resize Cylinder Radius operation' })
+    page.getByRole('region', { name: 'Resize Cylinder operation' })
   ).toBeVisible();
   await awaitArmedHandle();
   await page.keyboard.press('Enter');
