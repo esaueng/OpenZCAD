@@ -196,6 +196,8 @@ export interface MeasuredBodyCacheEntry {
   solidKey: string;
   /** Whether the cached measure ran with strict union validation. */
   strict: boolean;
+  /** Whether exact imported-feature proofs were collected with the topology. */
+  recognizedImportedFeatures: boolean;
   /**
    * Total face-handle count across the body's solids at cache time. A cheap
    * paranoia probe re-checks it before serving a hit, so an in-place kernel
