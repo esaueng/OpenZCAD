@@ -41,18 +41,12 @@
   --font-ui: 'IBM Plex Sans', system-ui, -apple-system, sans-serif;
   --font-mono: 'IBM Plex Mono', ui-monospace, 'SF Mono', Menlo, monospace;
 
-  /*
-    Held at 10.5px, below the 11px floor the review asks for.
-
-    Raising it by half a pixel reliably breaks
-    `modeling.spec.ts:678` — six CI attempts, and a local A/B on this branch
-    that passes at 10.5 and fails at 11 back to back. `--fs-mini` is used in
-    six places in the sketch chrome and in the status bar, so the change is
-    moving something the test's canvas-relative coordinates depend on. That is
-    worth understanding before it ships, and it is not worth smuggling in
-    beside a colour fix.
-  */
-  --fs-mini: 10.5px;
+  /* The accessibility review's floor: below 11px this metadata stops being
+     readable at 100% zoom. Half a pixel less used to be needed because it
+     kept the sketch palette three pixels shorter, which was all that stood
+     between one e2e drag and the panel it would otherwise land on; that
+     gesture now measures the bare canvas instead of assuming it. */
+  --fs-mini: 11px;
   --fs-xs: 11.5px;
   --fs-sm: 12px;
   --fs-base: 13px;
