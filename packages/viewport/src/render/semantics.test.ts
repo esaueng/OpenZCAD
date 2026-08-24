@@ -46,6 +46,14 @@ describe('selection semantics', () => {
     expect(selected.boundaryWidth).toBeGreaterThan(selected.edgeWidth);
   });
 
+  it('keeps a preview readable against the body it is added to', () => {
+    // These shared one constant. Lowering the selection fill dimmed the
+    // fillet preview with it, which the visual acceptance suite measured as a
+    // drop in how cyan the new blend faces read.
+    const { preview, selected } = SELECTION_SEMANTICS;
+    expect(preview.addedOpacity).toBeGreaterThan(selected.faceOpacity);
+  });
+
   it('keeps hidden portions dimmer than visible ones', () => {
     const { hover, selected } = SELECTION_SEMANTICS;
     expect(hover.hiddenFaceOpacity).toBeLessThan(hover.faceOpacity);

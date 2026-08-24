@@ -7132,7 +7132,7 @@ export function ModelViewer({
             continue;
           }
           const material = new THREE.MeshLambertMaterial({
-            color: SELECTED_FACE_COLOR,
+            color: SELECTION_SEMANTICS.preview.added,
             toneMapped: false,
             transparent: true,
             // Same rise as a committed selection: which code path built the
@@ -7143,7 +7143,10 @@ export function ModelViewer({
             polygonOffset: true,
             polygonOffsetFactor: -3
           });
-          material.userData.targetOpacity = SELECTED_FACE_OPACITY;
+          // Geometry that does not exist yet has to read against the body it
+          // is being added to, so it keeps the stronger fill.
+          material.userData.targetOpacity =
+            SELECTION_SEMANTICS.preview.addedOpacity;
           context.fadeIns.add(material);
           const highlight = new THREE.Mesh(geometry, material);
           highlight.name = 'body-face-preview-created';
