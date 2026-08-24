@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { Line2 } from 'three/examples/jsm/lines/Line2.js';
+import { SELECTION_SEMANTICS } from '../render/semantics';
 
 /**
  * Selection-first drag handles.
@@ -57,7 +58,7 @@ export interface HandleVec3 {
   z: number;
 }
 
-export const HANDLE_COLOR = 0xff8a2b;
+export const HANDLE_COLOR = SELECTION_SEMANTICS.handle.idle;
 
 /** Handles draw over the model so the target is never buried in geometry. */
 export const HANDLE_RENDER_ORDER = 30;

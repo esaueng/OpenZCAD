@@ -12,6 +12,7 @@ export * from './input/wheelGesture';
 
 // Rendering: meshes, materials, lighting, grid, and camera fitting.
 export * from './render/scene';
+export * from './render/semantics';
 export * from './render/edgeOverlay';
 
 // Camera: the controller that owns cameras/controls/projection/glides,
