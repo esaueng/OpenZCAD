@@ -52,7 +52,17 @@ export interface ImportRunProgress {
   fraction: number | null;
 }
 
-export type ImportOutcomeTone = 'ok' | 'warning' | 'error';
+/**
+ * `cancelled` is its own tone rather than a warning: the user asked for it, so
+ * it is not a problem to flag, and like `ok` it takes itself off the screen
+ * instead of waiting to be dismissed by someone who already knows.
+ */
+export type ImportOutcomeTone = 'ok' | 'cancelled' | 'warning' | 'error';
+
+/** Endings the user does not need to acknowledge, so the card clears itself. */
+export function importOutcomeIsQuiet(outcome: ImportRunOutcome): boolean {
+  return outcome.tone === 'ok' || outcome.tone === 'cancelled';
+}
 
 export interface ImportRunOutcome {
   tone: ImportOutcomeTone;
@@ -73,6 +83,16 @@ export interface ImportRunState {
    * `saving` phase at all, and the bar must divide over what will happen. */
   phases: readonly ImportPhase[];
   progress: ImportRunProgress;
+  /**
+   * The user has asked to stop, and the run has not finished unwinding yet.
+   *
+   * Not the same as an ending, and the gap between them is real rather than
+   * cosmetic: a cancel during `building` cannot take effect until the kernel
+   * returns from a wasm call that cannot be preempted, which on a large
+   * assembly is minutes. The card says what is actually happening for that
+   * whole stretch instead of freezing on a button that appears not to work.
+   */
+  cancelRequested: boolean;
   /** Null while running. Set once, and the card stops moving. */
   outcome: ImportRunOutcome | null;
 }
