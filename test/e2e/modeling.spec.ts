@@ -98,7 +98,7 @@ test('resizes a cylinder wall concentrically with one undoable radius edit', asy
   await selectCylinderSurface('wall');
 
   const radiusOperation = page.getByRole('region', {
-    name: 'Resize Cylinder Radius operation'
+    name: 'Resize Cylinder operation'
   });
   await expect(radiusOperation).toBeVisible();
   await expect(page.getByTestId('direct-manipulation-value')).toHaveText('Ø 28 mm');
@@ -1002,7 +1002,7 @@ test('radius drag resizes an offset-and-filleted cylinder as one body', async ({
 
   // Drag the wall. The parametric ancestry now crosses the referenced cap
   // offset, so this must edit the Cylinder's radius parameter — one body —
-  // instead of appending a Resize Cylinder Radius direct edit that would
+  // instead of appending a Resize Cylinder direct edit that would
   // move the wall and leave the offset cap behind.
   // The prior exact projection remains visible while the filleted revision
   // rebuilds. Wait for the revision barrier so the e2e hook cannot select the
@@ -1013,7 +1013,7 @@ test('radius drag resizes an offset-and-filleted cylinder as one body', async ({
   );
   await selectCylinderSurface('wall');
   await expect(
-    page.getByRole('region', { name: 'Resize Cylinder Radius operation' })
+    page.getByRole('region', { name: 'Resize Cylinder operation' })
   ).toBeVisible();
   await expect(canvas).toHaveAttribute('data-e2e-handle-x', /.+/);
   const handle = await canvas.evaluate((element) => ({
@@ -1041,7 +1041,7 @@ test('radius drag resizes an offset-and-filleted cylinder as one body', async ({
   // Parametric, not stacked: the Cylinder feature carries the new radius, no
   // Resize feature was appended, and the whole chain rebuilt warning-free.
   await expect(
-    page.locator('.feature-row', { hasText: 'Resize Cylinder Radius' })
+    page.locator('.feature-row', { hasText: 'Resize Cylinder' })
   ).toHaveCount(0);
   await expect(page.getByRole('contentinfo')).toContainText('warnings0');
   await expect(page.getByText('Diagnostics', { exact: true })).toHaveCount(0);
@@ -1182,7 +1182,7 @@ for (const modifier of [
       );
     });
     await expect(
-      page.getByRole('region', { name: 'Resize Cylinder Radius operation' })
+      page.getByRole('region', { name: 'Resize Cylinder operation' })
     ).toBeVisible();
     await expect(page.getByTestId('direct-manipulation-value')).toHaveText(
       'Ø 9.2 mm'

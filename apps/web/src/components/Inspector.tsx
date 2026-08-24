@@ -284,7 +284,7 @@ function BodyStats({
         <b>faces</b>
         <span>{body.faceCount}</span>
         <b>status</b>
-        <span>{body.consumed ? 'consumed by boolean' : 'live'}</span>
+        <span>{body.consumed ? 'combined into a later feature' : 'live'}</span>
       </div>
       {mass ? (
         // Unit density: multiply by a material density for physical values.

@@ -346,6 +346,7 @@ import {
   interactionReducer,
   commandSessionFor,
   isOperationState,
+  radialFaceOperationName,
   toolCardFor,
   type FaceTarget
 } from './lib/interaction/machine';
@@ -7256,7 +7257,7 @@ export function App() {
       return { ok: false, reason: 'No project is open to preview.' };
     }
     try {
-      setStatus('Validating AI preview with the exact geometry kernel…');
+      setStatus('Checking the AI preview against exact geometry…');
       const preflight = await preflightCadPatch(
         current,
         proposal,
@@ -7305,7 +7306,7 @@ export function App() {
     }
     setBusy(true);
     try {
-      setStatus('Validating AI patch with the exact geometry kernel…');
+      setStatus('Checking the AI change against exact geometry…');
       const preflight = await preflightCadPatch(
         current,
         proposal,
@@ -9366,7 +9367,7 @@ export function App() {
               }
             }
           },
-          'Resize Cylinder Radius'
+          radialFaceOperationName(target)
         ),
         sourceFeatureId: primitive.featureId
       };
@@ -9374,7 +9375,9 @@ export function App() {
 
     return {
       command: commandFactories.directEditBody({
-        name: 'Resize Cylinder Radius',
+        // The history row and the command card read the same name, so a
+        // feature is called the same thing while it runs and afterwards.
+        name: radialFaceOperationName(target),
         targetBodyId: target.bodyId as BodyId,
         operation: {
           kind: 'resize-cylindrical-face',
