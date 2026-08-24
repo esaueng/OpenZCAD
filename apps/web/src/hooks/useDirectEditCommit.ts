@@ -3,6 +3,7 @@ import type { BodyId, ProjectDocument } from '@openzcad/shared';
 import type { AnyCommand, CommandManager } from '@openzcad/command-system';
 import { directEditRejection } from '../lib/directEdit';
 import { errorMessage } from '../lib/errors';
+import type { CommandDiagnostic } from '../lib/interaction/machine';
 import { validatedFeatureRejection } from '../lib/featureValidation';
 import type { ValidatedFeatureTarget } from './useValidatedFeatureCommit';
 
@@ -23,7 +24,7 @@ export interface DirectEditCommitOptions {
    * running command displays it itself, and only a host with no such surface
    * should fall back to the status line.
    */
-  onValidationFailed(message: string, value: number): void;
+  onValidationFailed(diagnostic: CommandDiagnostic, value: number): void;
   /** The edit landed; the target body is the new selection. */
   onCommitted(bodyId: BodyId): void;
   onBusy(busy: boolean): void;
@@ -93,11 +94,12 @@ export function useDirectEditCommit(
           live !== manager ||
           manager.document.projectId !== current.projectId ||
           manager.document.version !== current.version;
-        let rejection: string | null = null;
+        let rejection: CommandDiagnostic | null = null;
         if (validationTargets) {
           for (const target of validationTargets) {
             rejection = validatedFeatureRejection({
               featureName: target.featureName,
+              ...(target.featureId ? { featureId: target.featureId } : {}),
               warnings: derived.warnings,
               bodyPresent: Boolean(
                 derived.bodyRepresentations[target.resultBodyId]
@@ -109,18 +111,25 @@ export function useDirectEditCommit(
             }
           }
           if (!rejection && validationTargets.length === 0 && documentMoved) {
-            rejection = 'The document changed while the edit was validating.';
+            rejection = {
+              message: 'The document changed while the edit was validating.'
+            };
           }
         } else {
-          rejection = directEditRejection({
+          const message = directEditRejection({
             label: command.label,
             warnings: derived.warnings,
             bodyPresent: Boolean(derived.bodyRepresentations[targetBodyId]),
             documentMoved
           });
+          rejection = message ? { message } : null;
         }
+        // Reported rather than thrown: a refusal is an answer, and rebuilding
+        // it from an Error's message would drop the feature it names — which
+        // is the part the user can act on.
         if (rejection) {
-          throw new Error(rejection);
+          host.onValidationFailed(rejection, submittedValue);
+          return false;
         }
         if (!host.commit(command, derived)) {
           throw new Error('The validated edit could not be committed.');
@@ -136,7 +145,7 @@ export function useDirectEditCommit(
         // looking at; echoing it into the workspace status line as well is how
         // the same failure used to appear twice, and how one copy went stale
         // while the other moved on.
-        host.onValidationFailed(message, submittedValue);
+        host.onValidationFailed({ message }, submittedValue);
         return false;
       } finally {
         inFlight.current = false;
