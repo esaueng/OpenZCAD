@@ -82,10 +82,18 @@ export async function uploadArtifactBody(
      * once, on completion — there is no progress inside one request to report.
      */
     onProgress?: (uploaded: number, total: number) => void;
+    /**
+     * Stops the upload between parts. A chunked upload that stops this way
+     * still aborts its multipart state on the way out, so no partial upload is
+     * left occupying the session.
+     */
+    signal?: AbortSignal;
   }
 ): Promise<void> {
   const partBytes = options?.partBytes ?? ARTIFACT_UPLOAD_PART_BYTES;
   const onProgress = options?.onProgress;
+  const signal = options?.signal;
+  signal?.throwIfAborted();
   if (body.size <= partBytes) {
     await transport.uploadArtifact(session.uploadUrl, body);
     onProgress?.(body.size, body.size);
@@ -101,6 +109,9 @@ export async function uploadArtifactBody(
   try {
     const parts: UploadedArtifactPart[] = [];
     for (const plan of planUploadParts(body.size, partBytes)) {
+      // Between parts. Mid-request there is nothing to stop, and the `catch`
+      // below turns this into the same abort-and-rethrow a failed part gets.
+      signal?.throwIfAborted();
       parts.push(
         await uploadPartWithRetry(
           transport,

@@ -16,6 +16,7 @@ function running(
     fileName: 'assembly.step',
     phases: ['saving', 'reading', 'building', 'archiving'],
     progress: { phase: 'saving', fraction: 0.5 },
+    cancelRequested: false,
     outcome: null,
     ...overrides
   };
@@ -28,14 +29,16 @@ function settled(outcome: ImportRunOutcome): ImportRunState {
 function renderCard(run: ImportRunState | null) {
   const onDismiss = vi.fn();
   const onArchiveNow = vi.fn();
+  const onCancel = vi.fn();
   const view = render(
     <ImportProgressCard
       run={run}
       onDismiss={onDismiss}
       onArchiveNow={onArchiveNow}
+      onCancel={onCancel}
     />
   );
-  return { ...view, onDismiss, onArchiveNow };
+  return { ...view, onDismiss, onArchiveNow, onCancel };
 }
 
 /** Advances past the appearance threshold, ticking the card's own interval. */
@@ -139,6 +142,7 @@ describe('ImportProgressCard', () => {
         run={running({ progress: { phase: 'archiving', fraction: 0.75 } })}
         onDismiss={onDismiss}
         onArchiveNow={onArchiveNow}
+        onCancel={vi.fn()}
       />
     );
     const threeQuarters = Number.parseInt(
@@ -219,6 +223,7 @@ describe('ImportProgressCard', () => {
         run={settled({ tone: 'ok', message: 'Imported — 1 body' })}
         onDismiss={onDismiss}
         onArchiveNow={onArchiveNow}
+        onCancel={vi.fn()}
       />
     );
     expect(screen.getByText('Imported — 1 body')).toBeTruthy();
@@ -261,12 +266,155 @@ describe('ImportProgressCard', () => {
         run={running({ id: 'run-2', fileName: 'bracket.step' })}
         onDismiss={onDismiss}
         onArchiveNow={onArchiveNow}
+        onCancel={vi.fn()}
       />
     );
     expect(screen.queryByLabelText('File import')).toBeNull();
     passDelay();
     expect(screen.getByText('bracket.step')).toBeTruthy();
     expect(screen.queryByText('20 s')).toBeNull();
+  });
+});
+
+describe('cancelling, from the card', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('offers cancel while running and not after it has ended', () => {
+    const { rerender, onDismiss, onArchiveNow } = renderCard(running());
+    passDelay();
+    expect(screen.getByRole('button', { name: 'Cancel' })).toBeTruthy();
+    rerender(
+      <ImportProgressCard
+        run={settled({ tone: 'ok', message: 'Imported — 1 body' })}
+        onDismiss={onDismiss}
+        onArchiveNow={onArchiveNow}
+        onCancel={vi.fn()}
+      />
+    );
+    expect(screen.queryByRole('button', { name: 'Cancel' })).toBeNull();
+  });
+
+  /**
+   * Cancel and hide want opposite things — one throws away minutes of work,
+   * the other just clears the panel — so they are separate controls. Merging
+   * them onto the ✕ would put the destructive one under an accidental click.
+   */
+  it('keeps cancel off the hide control', () => {
+    const { onDismiss, onCancel } = renderCard(running());
+    passDelay();
+    screen.getByRole('button', { name: 'Hide import progress' }).click();
+    expect(onDismiss).toHaveBeenCalledTimes(1);
+    expect(onCancel).not.toHaveBeenCalled();
+  });
+
+  it('asks to cancel exactly once per press', () => {
+    const { onCancel } = renderCard(running());
+    passDelay();
+    screen.getByRole('button', { name: 'Cancel' }).click();
+    expect(onCancel).toHaveBeenCalledTimes(1);
+  });
+
+  /**
+   * The press has to be acknowledged immediately. During the rebuild the run
+   * cannot report anything until the kernel returns from a wasm call nothing
+   * can preempt — minutes on a large assembly — and a card still reading
+   * "Building geometry" would read as a button that did nothing.
+   */
+  it('says it is cancelling, and why the wait, during the rebuild', () => {
+    renderCard(
+      running({
+        progress: { phase: 'building', fraction: null },
+        cancelRequested: true
+      })
+    );
+    passDelay();
+    expect(
+      screen.getByText('Cancelling — waiting for the rebuild to finish')
+    ).toBeTruthy();
+    expect(screen.queryByText('Building geometry')).toBeNull();
+  });
+
+  it('says plainly it is cancelling in a phase that can stop promptly', () => {
+    renderCard(
+      running({
+        progress: { phase: 'saving', fraction: 0.4 },
+        cancelRequested: true
+      })
+    );
+    passDelay();
+    // Scoped to the announced line: the button also reads "Cancelling…".
+    expect(document.querySelector('[aria-live]')?.textContent).toBe(
+      'Cancelling…'
+    );
+  });
+
+  it('cannot be pressed twice while it is taking effect', () => {
+    const { onCancel } = renderCard(running({ cancelRequested: true }));
+    passDelay();
+    const button = screen.getByRole('button', { name: 'Cancelling…' });
+    expect(button.hasAttribute('disabled')).toBe(true);
+    button.click();
+    expect(onCancel).not.toHaveBeenCalled();
+  });
+
+  /** A cancel is not a fault, so the card clears itself like a success does. */
+  it('takes a cancelled card away on its own', () => {
+    const { rerender, onDismiss, onArchiveNow } = renderCard(running());
+    passDelay();
+    rerender(
+      <ImportProgressCard
+        run={settled({ tone: 'cancelled', message: 'Import cancelled' })}
+        onDismiss={onDismiss}
+        onArchiveNow={onArchiveNow}
+        onCancel={vi.fn()}
+      />
+    );
+    expect(screen.getByText('Import cancelled')).toBeTruthy();
+    expect(onDismiss).not.toHaveBeenCalled();
+    act(() => {
+      vi.advanceTimersByTime(IMPORT_CARD_SUCCESS_LINGER_MS + 50);
+    });
+    expect(onDismiss).toHaveBeenCalledTimes(1);
+  });
+
+  /**
+   * Nothing landed, so the bar must not complete — it stops where the import
+   * stopped, the same as a refusal does.
+   */
+  it('leaves the bar where the cancel stopped it', () => {
+    // Visible first, then settled: a quiet ending reached inside the delay
+    // window shows nothing at all, which is a separate rule tested below.
+    const { rerender, onDismiss, onArchiveNow } = renderCard(running());
+    passDelay();
+    rerender(
+      <ImportProgressCard
+        run={settled({ tone: 'cancelled', message: 'Import cancelled' })}
+        onDismiss={onDismiss}
+        onArchiveNow={onArchiveNow}
+        onCancel={vi.fn()}
+      />
+    );
+    const width = Number.parseInt(
+      (bar().firstElementChild as HTMLElement).style.width,
+      10
+    );
+    expect(width).toBeLessThan(100);
+    expect(bar().className).toContain('cancelled');
+  });
+
+  /**
+   * A cancel that lands before the card was ever worth showing shows nothing:
+   * the user pressed nothing, because there was no card to press.
+   */
+  it('shows nothing for a cancel reached inside the delay window', () => {
+    renderCard(settled({ tone: 'cancelled', message: 'Import cancelled' }));
+    expect(screen.queryByLabelText('File import')).toBeNull();
   });
 });
 

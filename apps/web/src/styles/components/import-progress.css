@@ -128,6 +128,11 @@
   background: var(--color-error);
 }
 
+/* A cancel is not a fault, so it drains of colour rather than turning amber. */
+.import-card-bar.cancelled > i {
+  background: var(--color-border-strong);
+}
+
 @keyframes import-card-stripe {
   to {
     background-position: -28px 0;
@@ -164,6 +169,14 @@
   background: var(--color-error);
 }
 
+.import-dot.cancelled {
+  background: var(--color-text-subtle);
+}
+
+.import-card-line.cancelled {
+  color: var(--color-text-subtle);
+}
+
 .import-card-action {
   margin: 10px 0 0 21px;
   padding: 4px 10px;
@@ -176,6 +189,25 @@
 
 .import-card-action:hover {
   background: color-mix(in srgb, var(--color-accent) 22%, transparent);
+}
+
+/* Deliberately the quieter of the two: it throws work away, so it should not
+   be the thing the eye lands on while an import is running normally. */
+.import-card-action.cancel {
+  color: var(--color-text-muted);
+  background: var(--color-surface-2);
+  border-color: var(--color-border);
+}
+
+.import-card-action.cancel:hover:not(:disabled) {
+  color: var(--color-error);
+  border-color: color-mix(in srgb, var(--color-error) 55%, transparent);
+  background: color-mix(in srgb, var(--color-error) 12%, transparent);
+}
+
+.import-card-action.cancel:disabled {
+  color: var(--color-text-subtle);
+  cursor: default;
 }
 
 /* The spinner and the stripe are the only proof the card is live while the
