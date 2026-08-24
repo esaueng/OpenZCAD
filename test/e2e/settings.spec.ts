@@ -128,6 +128,57 @@ test('keeps the top-bar order fixed and dismisses the file menu outside', async 
   );
 });
 
+test('keeps the narrow top bar’s action slots side by side', async ({
+  page
+}) => {
+  await stubApi(page);
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('Narrow Bar Part');
+  await page.getByRole('button', { name: 'Create project' }).click();
+  await expect(page.getByRole('button', { name: /^Box \(B\)/ })).toBeVisible();
+
+  const actions = page.locator('.topbar').getByRole('group', {
+    name: 'Workspace actions'
+  });
+  await expect(actions.locator(':scope > *')).toHaveCount(4);
+
+  // One width inside each top-bar breakpoint. Signed in the row carries four
+  // controls, so any rule that pins a five-track grid template hands every
+  // control the previous one's track: the collaboration chip lands on top of
+  // the save chip's label and its click target, and the row goes on claiming
+  // a track nothing sits in.
+  for (const width of [1100, 982, 880, 600]) {
+    await page.setViewportSize({ width, height: 800 });
+    await expect
+      .poll(
+        () =>
+          actions.evaluate((group) => {
+            const slots = [...group.children].map((child) =>
+              child.getBoundingClientRect()
+            );
+            const first = slots.at(0);
+            const last = slots.at(-1);
+            if (!first || !last) {
+              throw new Error('the top bar action row rendered no controls');
+            }
+            let overlap = 0;
+            let previousRight = first.right;
+            for (const slot of slots.slice(1)) {
+              overlap = Math.max(overlap, previousRight - slot.left);
+              previousRight = slot.right;
+            }
+            const row = group.getBoundingClientRect();
+            return {
+              overlap: Math.round(Math.max(0, overlap)),
+              unclaimedWidth: Math.round(row.width - (last.right - first.left))
+            };
+          }),
+        { message: `top bar action row at ${width}px` }
+      )
+      .toEqual({ overlap: 0, unclaimedWidth: 0 });
+  }
+});
+
 test('opens new projects blank with the assistant collapsed', async ({
   page
 }) => {
