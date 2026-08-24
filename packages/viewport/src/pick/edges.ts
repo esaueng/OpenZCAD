@@ -1,18 +1,19 @@
 import type * as THREE from 'three';
+import { SELECTION_SEMANTICS } from '../render/semantics';
 
 /**
  * Exact topology edges render as screen-space fat lines so they read clearly
  * and their states are unmistakable: idle slate, hover glow, selected accent.
  */
-export const EDGE_IDLE_COLOR = 0x151c26;
+export const EDGE_IDLE_COLOR = SELECTION_SEMANTICS.idle.edge;
 /** Idle edge contrast when there is no shaded face behind the topology. */
-export const EDGE_WIREFRAME_COLOR = 0xa9c2da;
-export const EDGE_HOVER_COLOR = 0xbfdcff;
-export const EDGE_SELECTED_COLOR = 0x7cc0ff;
-export const EDGE_IDLE_WIDTH = 1.4;
-export const EDGE_HOVER_WIDTH = 4;
-export const EDGE_SELECTED_WIDTH = 4.5;
-export const EDGE_IDLE_OPACITY = 0.92;
+export const EDGE_WIREFRAME_COLOR = SELECTION_SEMANTICS.idle.wireframeEdge;
+export const EDGE_HOVER_COLOR = SELECTION_SEMANTICS.hover.edge;
+export const EDGE_SELECTED_COLOR = SELECTION_SEMANTICS.selected.edge;
+export const EDGE_IDLE_WIDTH = SELECTION_SEMANTICS.idle.edgeWidth;
+export const EDGE_HOVER_WIDTH = SELECTION_SEMANTICS.hover.edgeWidth;
+export const EDGE_SELECTED_WIDTH = SELECTION_SEMANTICS.selected.edgeWidth;
+export const EDGE_IDLE_OPACITY = SELECTION_SEMANTICS.idle.edgeOpacity;
 
 export function idleEdgeColor(edge: THREE.Object3D): number {
   return edge.userData.displayMode === 'wireframe'
