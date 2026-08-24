@@ -3,6 +3,7 @@ import {
   deepClone,
   nowIso,
   toEntityId,
+  toShaprImportId,
   type BodyId,
   type EntityId,
   type ParamValue,
@@ -56,6 +57,7 @@ import {
   type ImportedMeshInput,
   type ImportedStepInput,
   importMeshBody,
+  importShaprGuided,
   importStepBody,
   isValidParameterName,
   listFeaturesInOrder,
@@ -86,6 +88,7 @@ import {
   setParameterExposed,
   shellBody,
   type ShellInput,
+  type ShaprGuidedImportInput,
   type SketchConstraintAddInput,
   type SketchConstraintDeleteInput,
   type SketchInput,
@@ -157,6 +160,7 @@ export type CommandKind =
   | 'parameter.delete'
   | 'import.mesh'
   | 'import.step'
+  | 'import.shapr-guided'
   | 'node.rename'
   | 'node.metadata.set';
 
@@ -207,6 +211,7 @@ export type AnyCommand =
   | CommandDefinition<ParameterDeleteInput>
   | CommandDefinition<ImportedMeshInput>
   | CommandDefinition<ImportedStepInput>
+  | CommandDefinition<ShaprGuidedImportInput>
   | CommandDefinition<NodeRenameInput>
   | CommandDefinition<NodeMetadataInput>;
 
@@ -1255,6 +1260,24 @@ export const commandFactories = {
       'Import editable STEP solid',
       withIds,
       (document) => importStepBody(document, withIds).document
+    );
+  },
+  importShaprGuided(
+    payload: ShaprGuidedImportInput
+  ): CommandDefinition<ShaprGuidedImportInput> {
+    const withIds = {
+      ...payload,
+      importId: payload.importId ?? toShaprImportId(createId('shapr')),
+      step: {
+        ...payload.step,
+        ids: payload.step.ids ?? createBodyFeatureIds()
+      }
+    };
+    return makeCommand(
+      'import.shapr-guided',
+      'Import Shapr3D project with exact STEP witness',
+      withIds,
+      (document) => importShaprGuided(document, withIds).document
     );
   },
   renameNode(payload: NodeRenameInput): CommandDefinition<NodeRenameInput> {
@@ -2645,6 +2668,12 @@ export function replayCommands(
         next = importStepBody(
           next,
           command.payload as ImportedStepInput
+        ).document;
+        break;
+      case 'import.shapr-guided':
+        next = importShaprGuided(
+          next,
+          command.payload as ShaprGuidedImportInput
         ).document;
         break;
       case 'feature.reorder':
