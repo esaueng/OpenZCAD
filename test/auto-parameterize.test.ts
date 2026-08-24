@@ -718,30 +718,37 @@ describe('assistant auto-parameterization', () => {
       (operation) => operation.kind === 'add_direct_edit'
     );
     expect(edits).toHaveLength(2);
-    expect(edits).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          targetBodyId: bodyId,
-          operation: expect.objectContaining({
-            kind: 'resize-blend',
-            faceHash: 601,
-            recordedRadius: 3,
-            newRadius: 'imported_bracket_fillet_1_radius',
-            parameterBinding: true
-          })
-        }),
-        expect.objectContaining({
-          targetBodyId: bodyId,
-          operation: expect.objectContaining({
-            kind: 'resize-blend',
-            faceHash: 701,
-            recordedRadius: 1.5,
-            newRadius: 'imported_bracket_fillet_2_radius',
-            parameterBinding: true
-          })
-        })
-      ])
-    );
+    expect(
+      edits?.map((edit) =>
+        edit.operation.kind === 'resize-blend'
+          ? {
+              targetBodyId: edit.targetBodyId,
+              kind: edit.operation.kind,
+              faceHash: edit.operation.faceHash,
+              recordedRadius: edit.operation.recordedRadius,
+              newRadius: edit.operation.newRadius,
+              parameterBinding: edit.operation.parameterBinding
+            }
+          : { targetBodyId: edit.targetBodyId, kind: edit.operation.kind }
+      )
+    ).toEqual([
+      {
+        targetBodyId: bodyId,
+        kind: 'resize-blend',
+        faceHash: 601,
+        recordedRadius: 3,
+        newRadius: 'imported_bracket_fillet_1_radius',
+        parameterBinding: true
+      },
+      {
+        targetBodyId: bodyId,
+        kind: 'resize-blend',
+        faceHash: 701,
+        recordedRadius: 1.5,
+        newRadius: 'imported_bracket_fillet_2_radius',
+        parameterBinding: true
+      }
+    ]);
 
     const parsed = parseCadPatchProposal(structuredClone(proposal));
     const parameterized = new CommandManager(imported.document).runTransaction(
