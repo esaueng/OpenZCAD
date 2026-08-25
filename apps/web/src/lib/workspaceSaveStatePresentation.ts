@@ -71,6 +71,12 @@ export const WORKSPACE_SAVE_STATE_PRESENTATION: Record<
     statusBarLabel: 'Too large',
     title: 'Too large for your account. Saved on this device.'
   },
+  'device-failed': {
+    topBarLabel: 'Not saved',
+    statusBarLabel: 'Not saved',
+    title:
+      'This device could not store your work — it exists only in this tab and will be lost if you close it. Export your model now.'
+  },
   paused: {
     topBarLabel: 'Autosave off',
     statusBarLabel: 'Autosave off',
