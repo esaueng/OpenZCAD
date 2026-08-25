@@ -35,9 +35,11 @@ Exact faces and edges carry kernel-neutral witnesses and, for the safe subset, s
 For a current face-attached sketch, each exact adapter pauses replay at the
 sketch's history position, resolves its schema-v5 lineage reference against the
 then-current source body, requires one exact planar face, and derives a
-deterministic frame from the evolved center/normal. The persisted frame is
-diagnostic only. Legacy attachments without lineage retain their migration
-frame with a warning. See [ADR-014](docs/adrs/ADR-014-true-face-attachment.md).
+deterministic frame from the evolved center/normal, oriented by the frame the
+sketch was attached with — the anchor that keeps an ordinary dimension change
+from silently rotating or mirroring the sketch, since no normal-only rule can
+be continuous everywhere. The snapshot still never decides which face resolves.
+Legacy attachments without lineage retain their migration frame with a warning. See [ADR-014](docs/adrs/ADR-014-true-face-attachment.md).
 
 When opening a project, local and remote copies are loaded together. The higher document version wins; derived timestamps break ties. This prevents an older cloud response from shadowing newer local edits.
 
