@@ -33,7 +33,8 @@ The exact browser kernel must rebuild and accept the sanitized STEP before the
 single guided-import command can commit. The command adds that exact STEP body
 and a versioned, sanitized migration record atomically, so undo, redo,
 persistence, collaboration replay, and offline replay cannot separate the
-evidence from its geometry witness.
+evidence from its geometry witness. Validation runs in a disposable worker;
+cancelling terminates its exact rebuild and leaves document history unchanged.
 
 Recognized sketch, transform, union, and extrusion rows are `candidate` data.
 Import, delete, midplane, split, face-offset, unknown operations, and all

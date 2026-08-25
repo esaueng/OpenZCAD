@@ -3,11 +3,11 @@
  *
  * An import is a sequence of phases, three of which can report real progress
  * and one of which cannot: `kernel.importStep` is a single synchronous call
- * into wasm that blocks the worker thread it runs on, so it can post neither a
- * percentage nor a heartbeat. The whole point of the shape below is to carry
- * that distinction — {@link ImportRunProgress.fraction} is `null` for a phase
- * with nothing to report, and {@link importOverallFraction} holds the bar
- * still rather than inventing a number for it.
+ * into wasm, so its disposable worker can be terminated but cannot post a
+ * percentage or heartbeat while it runs. The whole point of the shape below
+ * is to carry that distinction — {@link ImportRunProgress.fraction} is `null`
+ * for a phase with nothing to report, and {@link importOverallFraction} holds
+ * the bar still rather than inventing a number for it.
  */
 
 export type ImportPhase = 'saving' | 'reading' | 'building' | 'archiving';
@@ -86,11 +86,8 @@ export interface ImportRunState {
   /**
    * The user has asked to stop, and the run has not finished unwinding yet.
    *
-   * Not the same as an ending, and the gap between them is real rather than
-   * cosmetic: a cancel during `building` cannot take effect until the kernel
-   * returns from a wasm call that cannot be preempted, which on a large
-   * assembly is minutes. The card says what is actually happening for that
-   * whole stretch instead of freezing on a button that appears not to work.
+   * Not the same as an ending: terminating the disposable rebuild worker and
+   * pruning any source bytes still take place before the run settles.
    */
   cancelRequested: boolean;
   /** Null while running. Set once, and the card stops moving. */
