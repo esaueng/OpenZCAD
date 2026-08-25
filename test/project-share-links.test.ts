@@ -145,6 +145,41 @@ describe('project share links (persistence)', () => {
     ).resolves.toBeNull();
   });
 
+  it('withdraws a link while the project sits in the trash', async () => {
+    // Trashing a project reads as "stop sharing this" and did nothing to the
+    // links; the D1 path had the same hole. Restoring brings them back, so
+    // this is a predicate rather than a revocation.
+    const service = new InMemoryPersistenceService();
+    const owner = toUserId('user_share_trash');
+    const project = await service.createProject(owner, { name: 'Trashed' });
+    const projectId = project.document.projectId;
+    await service.createProjectShareLink(owner, projectId, {
+      shareLinkId: 'share_trash',
+      mode: 'view',
+      tokenHash: 'hash_trash',
+      createdAt: 2_000_000_000
+    });
+    await expect(
+      service.loadSharedProjectByTokenHash('hash_trash')
+    ).resolves.not.toBeNull();
+
+    await service.updateProject(owner, { projectId, status: 'deleted' });
+    await expect(
+      service.loadSharedProjectByTokenHash('hash_trash')
+    ).resolves.toBeNull();
+
+    await service.updateProject(owner, { projectId, status: 'active' });
+    await expect(
+      service.loadSharedProjectByTokenHash('hash_trash')
+    ).resolves.not.toBeNull();
+
+    // An archived project is shelved, not withdrawn.
+    await service.updateProject(owner, { projectId, status: 'archived' });
+    await expect(
+      service.loadSharedProjectByTokenHash('hash_trash')
+    ).resolves.not.toBeNull();
+  });
+
   it('authorizes the D1 shared reads purely by unrevoked token hash', async () => {
     const statements: Array<{ query: string; bindings: unknown[] }> = [];
     const prepare = vi.fn((query: string) => ({
