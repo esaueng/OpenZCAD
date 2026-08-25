@@ -221,6 +221,12 @@ export function assertDirectEditOperation(operation: DirectEditOperation): void 
       assertDirectEditVector(value.recordedCenter, 'recorded center');
       assertDirectEditVector(value.recordedAxis, 'recorded axis');
       assertDirectEditParam(value.newRadius, 'new radius');
+      if (
+        value.parameterBinding !== undefined &&
+        value.parameterBinding !== true
+      ) {
+        throw new Error('Direct-edit parameter binding is invalid.');
+      }
       return;
     default:
       throw new Error('Direct-edit operation kind is not supported.');

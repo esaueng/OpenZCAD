@@ -596,6 +596,173 @@ describe('assistant auto-parameterization', () => {
       )
     ).toHaveLength(2);
   });
+
+  it('creates one identity-safe radius binding per imported blend region', () => {
+    const imported = importStepBody(
+      createProjectDocument('Imported bracket', toUserId('user_auto_blend')),
+      {
+        name: 'Imported Bracket',
+        artifactId: 'artifact_blend',
+        sourceName: 'bracket.step',
+        stepText: 'ISO-10303-21;END-ISO-10303-21;'
+      }
+    );
+    const bodyId = imported.bodyId;
+    const feature = listFeaturesInOrder(imported.document)[0]!;
+    const reference = (
+      hash: number,
+      name: string
+    ): FaceTopologyReferenceV5 => ({
+      kind: 'face',
+      producingFeatureId: feature.featureId,
+      lineageName: name,
+      currentHash: hash,
+      witnessVersion: 1,
+      witness: {
+        surfaceType: 'cylinder',
+        perimeter: 18850,
+        centroid: [hash, 0, 5000],
+        analytic: {
+          kind: 'cylinder',
+          axis: [0, 0, 1000],
+          axisFoot: [hash, 0, 0],
+          radius: 3000
+        },
+        closure: { u: 'open', v: 'open' }
+      }
+    });
+    const blendFace = (
+      hash: number,
+      index: number,
+      regionKey: string,
+      regionFaceCount: number,
+      radius: number
+    ) => ({
+      topologyId: `face:blend:${index}`,
+      hash,
+      reference: reference(hash, `imported.face.blend.${index}`),
+      triangleStart: 0,
+      triangleCount: 0,
+      geometry: {
+        surfaceType: 'cylinder' as const,
+        area: 30,
+        center: { x: index * 10, y: 0, z: 5 },
+        radius,
+        diameter: radius * 2,
+        axisStart: { x: index * 10, y: 0, z: 0 },
+        axisEnd: { x: index * 10, y: 0, z: 10 },
+        axialLength: 10,
+        featureType: 'blend' as const,
+        blendRadius: radius,
+        blendRegionKey: regionKey,
+        blendRegionFaceCount: regionFaceCount,
+        editableDimension: 'blendRadius' as const
+      }
+    });
+    const blendFaces = [
+      blendFace(601, 1, '7:41,42,43,44', 4, 3),
+      blendFace(602, 2, '7:41,42,43,44', 4, 3),
+      blendFace(603, 3, '7:41,42,43,44', 4, 3),
+      blendFace(701, 4, '7:51', 1, 1.5)
+    ];
+    imported.document.derived = {
+      bodyRepresentations: {
+        [bodyId]: {
+          bodyId,
+          name: 'Imported Bracket',
+          source: 'imported-step',
+          mesh: {
+            kind: 'mesh',
+            vertices: new Float32Array(),
+            indices: new Uint32Array()
+          },
+          faceCount: 5,
+          color: '#fff',
+          exportableStep: true,
+          consumed: false,
+          volume: 100,
+          bbox: {
+            min: { x: 0, y: 0, z: 0 },
+            max: { x: 50, y: 10, z: 10 }
+          },
+          topology: { faces: blendFaces, edges: [] }
+        }
+      },
+      exportableBodyIds: [bodyId],
+      warnings: [],
+      updatedAt: imported.document.derived.updatedAt
+    };
+
+    const proposal = createAutoParameterizeProposal(imported.document, {
+      featureIds: [],
+      bodyIds: [bodyId],
+      topologies: []
+    });
+    expect(
+      proposal?.operations.filter(
+        (operation) => operation.kind === 'set_parameter'
+      )
+    ).toEqual([
+      {
+        kind: 'set_parameter',
+        name: 'imported_bracket_fillet_1_radius',
+        expression: '3'
+      },
+      {
+        kind: 'set_parameter',
+        name: 'imported_bracket_fillet_2_radius',
+        expression: '1.5'
+      }
+    ]);
+    const edits = proposal?.operations.filter(
+      (operation) => operation.kind === 'add_direct_edit'
+    );
+    expect(edits).toHaveLength(2);
+    expect(
+      edits?.map((edit) =>
+        edit.operation.kind === 'resize-blend'
+          ? {
+              targetBodyId: edit.targetBodyId,
+              kind: edit.operation.kind,
+              faceHash: edit.operation.faceHash,
+              recordedRadius: edit.operation.recordedRadius,
+              newRadius: edit.operation.newRadius,
+              parameterBinding: edit.operation.parameterBinding
+            }
+          : { targetBodyId: edit.targetBodyId, kind: edit.operation.kind }
+      )
+    ).toEqual([
+      {
+        targetBodyId: bodyId,
+        kind: 'resize-blend',
+        faceHash: 601,
+        recordedRadius: 3,
+        newRadius: 'imported_bracket_fillet_1_radius',
+        parameterBinding: true
+      },
+      {
+        targetBodyId: bodyId,
+        kind: 'resize-blend',
+        faceHash: 701,
+        recordedRadius: 1.5,
+        newRadius: 'imported_bracket_fillet_2_radius',
+        parameterBinding: true
+      }
+    ]);
+
+    const parsed = parseCadPatchProposal(structuredClone(proposal));
+    const parameterized = new CommandManager(imported.document).runTransaction(
+      'Auto-parameterize imported blends',
+      commandsForCadPatch(imported.document, parsed)
+    );
+    expect(
+      createAutoParameterizeProposal(parameterized, {
+        featureIds: [],
+        bodyIds: [bodyId],
+        topologies: []
+      })
+    ).toBeNull();
+  });
 });
 
 describe(

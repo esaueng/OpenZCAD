@@ -49,7 +49,6 @@ import {
   inspectTriangleMeshClosure,
   isClosedConsistentlyOrientedMesh
 } from '../packages/kernel-adapter/src/boolean-result-validation';
-import { resolveImportedBlendFace } from '../apps/web/src/lib/interaction/filletFaceEdit';
 
 const NORMAL_PROJECTED_RADIUS_PX = 240;
 
@@ -3696,7 +3695,7 @@ describe('exact kernel adapter', { timeout: 30_000 }, () => {
     expect(overcut.bodyRepresentations[importedBodyId]?.faceCount).toBe(6);
   });
 
-  it('resizes an imported analytic blend as replayable exact history', async () => {
+  it('resizes an imported connected blend region as replayable exact history', async () => {
     const sourceDocument = addPrimitiveFeature(
       createProjectDocument('Blend source', toUserId('user_exact')),
       {
@@ -3707,14 +3706,29 @@ describe('exact kernel adapter', { timeout: 30_000 }, () => {
     );
     const sourceDerived = await adapter.syncDocument(sourceDocument);
     const sourceBodyId = sourceDocument.bodyOrder[0]!;
-    const edgeHash = sourceDerived.bodyRepresentations[
-      sourceBodyId
-    ]?.topology?.edges.find((edge) => edge.displayRole !== 'seam')?.hash;
-    expect(edgeHash).toBeTypeOf('number');
+    const corner = { x: 20, y: 20, z: 20 };
+    const edgeHashes =
+      sourceDerived.bodyRepresentations[sourceBodyId]?.topology?.edges
+        .filter((edge) => {
+          for (let offset = 0; offset + 2 < edge.points.length; offset += 3) {
+            if (
+              Math.hypot(
+                edge.points[offset]! - corner.x,
+                edge.points[offset + 1]! - corner.y,
+                edge.points[offset + 2]! - corner.z
+              ) <= 1e-8
+            ) {
+              return true;
+            }
+          }
+          return false;
+        })
+        .map((edge) => edge.hash) ?? [];
+    expect(edgeHashes).toHaveLength(3);
     const filleted = filletEdges(sourceDocument, {
-      name: 'Source fillet',
+      name: 'Source corner fillet',
       targetBodyId: sourceBodyId,
-      edgeHashes: [edgeHash!],
+      edgeHashes,
       size: 3
     }).document;
     const filletedBodyId = filleted.bodyOrder.at(-1)!;
@@ -3762,21 +3776,77 @@ describe('exact kernel adapter', { timeout: 30_000 }, () => {
     ).toBe(true);
     expect(center).toBeTruthy();
     expect(axis).toBeTruthy();
+    expect(source?.reference).toBeTruthy();
+    expect(geometry).toMatchObject({
+      editableDimension: 'blendRadius',
+      blendRegionFaceCount: 4
+    });
 
-    manager.execute(
+    const staleManager = new CommandManager(manager.document);
+    staleManager.execute(
       commandFactories.directEditBody({
-        name: 'Resize imported blend',
+        name: 'Stale blend seed',
         targetBodyId: bodyId,
         operation: {
           kind: 'resize-blend',
           faceHash: source!.hash,
-          ...(source!.reference ? { faceReference: source!.reference } : {}),
+          faceReference: {
+            ...source!.reference!,
+            lineageName: 'imported.face.missing-blend'
+          },
           surfaceClass: geometry.surfaceType as 'torus' | 'cylinder',
           recordedRadius: geometry.blendRadius!,
           recordedCenter: center!,
           recordedAxis: axis!,
-          newRadius: 2
+          newRadius: 3,
+          parameterBinding: true
         }
+      })
+    );
+    const stale = await adapter.syncDocument(staleManager.document);
+    expect(stale.warnings).toHaveLength(1);
+    expect(stale.warnings[0]).toMatch(
+      /^Feature "Stale blend seed": Direct-edit face is stale:/
+    );
+
+    manager.execute(
+      commandFactories.setParameter({
+        name: 'imported_blend_radius',
+        expression: '3'
+      })
+    );
+    manager.execute(
+      commandFactories.directEditBody({
+        name: 'Parameterize imported blend',
+        targetBodyId: bodyId,
+        operation: {
+          kind: 'resize-blend',
+          faceHash: source!.hash,
+          faceReference: source!.reference!,
+          surfaceClass: geometry.surfaceType as 'torus' | 'cylinder',
+          recordedRadius: geometry.blendRadius!,
+          recordedCenter: center!,
+          recordedAxis: axis!,
+          newRadius: 'imported_blend_radius',
+          parameterBinding: true
+        }
+      })
+    );
+
+    const bound = await adapter.syncDocument(manager.document);
+    expect(bound.warnings).toEqual([]);
+    expect(bound.bodyRepresentations[bodyId]?.faceCount).toBe(
+      imported.bodyRepresentations[bodyId]?.faceCount
+    );
+    expect(bound.bodyRepresentations[bodyId]?.volume).toBeCloseTo(
+      imported.bodyRepresentations[bodyId]!.volume,
+      8
+    );
+
+    manager.execute(
+      commandFactories.setParameter({
+        name: 'imported_blend_radius',
+        expression: '2'
       })
     );
 
@@ -3786,16 +3856,26 @@ describe('exact kernel adapter', { timeout: 30_000 }, () => {
     expect(second.warnings).toEqual([]);
     const firstBody = first.bodyRepresentations[bodyId];
     const secondBody = second.bodyRepresentations[bodyId];
-    const editFeature = listFeaturesInOrder(manager.document).at(-1)!;
-    const resizedFace = resolveImportedBlendFace(
-      firstBody?.topology?.faces ?? [],
-      source!,
-      String(editFeature.featureId)
-    );
-    expect(resizedFace?.geometry?.blendRadius).toBeCloseTo(2, 8);
-    expect(resizedFace?.reference?.producingFeatureId).toBe(
-      editFeature.featureId
-    );
+    const resizedRegion =
+      firstBody?.topology?.faces.filter(
+        (face) =>
+          Math.abs((face.geometry?.blendRadius ?? 0) - 2) < 1e-6 &&
+          face.geometry?.blendRegionFaceCount === 4
+      ) ?? [];
+    expect(resizedRegion).toHaveLength(3);
+    expect(
+      new Set(
+        resizedRegion.map((face) => face.geometry?.blendRegionKey)
+      ).size
+    ).toBe(1);
+    expect(
+      firstBody?.topology?.faces.filter(
+        (face) =>
+          face.geometry?.surfaceType === 'sphere' &&
+          Math.abs((face.geometry.radius ?? 0) - 2) < 1e-6
+      )
+    ).toHaveLength(1);
+    expect(firstBody?.faceCount).toBe(10);
     expect(
       firstBody?.topology?.faces.some(
         (face) => Math.abs((face.geometry?.blendRadius ?? 0) - 2) < 1e-6
