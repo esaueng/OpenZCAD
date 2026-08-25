@@ -4,6 +4,12 @@
 > BrepKit dependency with Remus. BrepKit references below describe the state
 > when this decision was recorded.
 
+> **Historical amendment (2026-08-25):** the in-plane axis is no longer derived
+> from the world axis least aligned with the normal, and the persisted frame is
+> no longer diagnostic only. Both are described under "Frame orientation is
+> anchored to the attachment" below; the paragraphs in Decision record the
+> original rule.
+
 ## Status
 
 Accepted and implemented for schema-v5 face references on both exact adapters
@@ -40,9 +46,50 @@ The in-plane axis is derived from the world axis least aligned with the
 canonical face normal, then crossed and normalized. It is not inherited from a
 kernel parameterization or traversal order. Both adapters use the shared
 resolver so the frame convention cannot drift by kernel.
+*(Superseded 2026-08-25 — see "Frame orientation is anchored to the
+attachment".)*
 
 The persisted source area, center, normal, and frame are a migration snapshot
 and diagnostic evidence only. They never rescue a current lineage reference.
+*(The frame is no longer diagnostic only; the rest stands, and none of them
+rescue a reference. See below.)*
+
+### Frame orientation is anchored to the attachment (2026-08-25)
+
+Deriving the in-plane axis from the normal alone is not implementable, which
+the original rule did not account for: a sphere carries no continuous field of
+tangent directions, so every normal-only rule has a discontinuity somewhere and
+can only move it. The chosen rule had two, and ordinary parametric edits walked
+into both.
+
+- Picking the world axis least aligned with the normal flips which axis wins
+  the moment the two smallest components tie. Measured: a 30-degree-tilted face
+  nudged from 44.9 to 45.1 degrees about Z rotated its sketch 81.8 degrees, and
+  the jump does not shrink with the step.
+- `canonicalNormal` orients by the sign of the first non-zero component, so a
+  face whose raw measured normal crosses that component's zero reverses, taking
+  `yAxis` with it and mirroring the sketch. `plane.normal` comes straight from
+  `measureFaceGeometry` and is not canonical, so this is reachable.
+
+Neither raised a warning: the sketch and every feature built on it silently
+moved.
+
+The frame therefore needs an anchor, and the frame persisted when the user
+chose the face is the only one available. Both degrees of freedom are seeded
+from it — the resolved normal keeps the sense the stored `zAxis` had, and the
+in-plane axis is the stored `xAxis` projected back onto the evolved plane. The
+world-axis rule remains underneath for a seed that cannot span the new plane.
+
+This narrows what "diagnostic only" meant rather than abandoning it. The
+snapshot still never decides *which* face a reference resolves to — the
+fail-closed lineage resolver alone does that, and every failure mode above
+still fails. It now decides only how the frame is oriented within the plane
+that resolver already chose.
+
+Determinism is unaffected: the result is a pure function of the resolved
+center, the resolved normal, and the persisted frame, all of which are in the
+document. It cannot drift, because every rebuild seeds from the same stored
+snapshot rather than from the previous rebuild's output.
 If the face was deleted, resolves ambiguously, becomes non-planar, has an
 unsupported witness, or is unavailable at the sketch's history position, the
 rebuild fails with the sketch and source feature named.
