@@ -26,6 +26,10 @@ import type {
 } from '@openzcad/viewport';
 import { ViewerToolbar } from './ViewerToolbar';
 import { OrientationWidget } from './OrientationWidget';
+import {
+  ViewportScaleIndicator,
+  type ViewportScaleSink
+} from './ViewportScaleIndicator';
 import type {
   ArtifactId,
   BodyRepresentation,
@@ -322,6 +326,7 @@ export function ViewerShell({
   onSectionOffset
 }: ViewerShellProps) {
   const orientationDragRef = useRef<OrientationDragControls | null>(null);
+  const scaleIndicatorRef = useRef<ViewportScaleSink | null>(null);
   const selectionChipLabelRef = useRef<HTMLSpanElement | null>(null);
   const cylinderRadiusLabelSetterRef = useRef<
     ((radius: number | null) => void) | null
@@ -399,6 +404,7 @@ export function ViewerShell({
         onViewSettled={onViewSettled}
         orientationRef={orientationRef}
         orientationDragRef={orientationDragRef}
+        scaleIndicatorRef={scaleIndicatorRef}
         onSelectTopology={onSelectTopology}
         onSelectEdgeChain={onSelectEdgeChain}
         selectionFilter={selectionFilter}
@@ -502,6 +508,7 @@ export function ViewerShell({
         </div>
       )}
       {modeOverlay}
+      <ViewportScaleIndicator scaleSinkRef={scaleIndicatorRef} units={units} />
     </section>
   );
 }
