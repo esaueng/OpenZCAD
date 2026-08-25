@@ -199,11 +199,6 @@ describe('ImportProgressCard', () => {
     expect(screen.queryByRole('button', { name: 'Archive now' })).toBeNull();
   });
 
-  /**
-   * The button hides the card; it cannot stop the rebuild, which is a
-   * synchronous wasm call. Labelling it "cancel" would promise an interrupt
-   * that does not exist.
-   */
   it('offers to hide, not to cancel, while the import is running', () => {
     const { onDismiss } = renderCard(running());
     passDelay();
@@ -320,13 +315,7 @@ describe('cancelling, from the card', () => {
     expect(onCancel).toHaveBeenCalledTimes(1);
   });
 
-  /**
-   * The press has to be acknowledged immediately. During the rebuild the run
-   * cannot report anything until the kernel returns from a wasm call nothing
-   * can preempt — minutes on a large assembly — and a card still reading
-   * "Building geometry" would read as a button that did nothing.
-   */
-  it('says it is cancelling, and why the wait, during the rebuild', () => {
+  it('acknowledges cancellation while the rebuild worker terminates', () => {
     renderCard(
       running({
         progress: { phase: 'building', fraction: null },
@@ -334,9 +323,9 @@ describe('cancelling, from the card', () => {
       })
     );
     passDelay();
-    expect(
-      screen.getByText('Cancelling — waiting for the rebuild to finish')
-    ).toBeTruthy();
+    expect(document.querySelector('[aria-live]')?.textContent).toBe(
+      'Cancelling…'
+    );
     expect(screen.queryByText('Building geometry')).toBeNull();
   });
 

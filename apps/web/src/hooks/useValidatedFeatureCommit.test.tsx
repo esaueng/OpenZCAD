@@ -1340,6 +1340,10 @@ function tabHost(
   options: {
     refuseCommit?: () => boolean;
     onFailure?: () => void;
+    deriveCancellable?: (
+      candidate: ProjectDocument,
+      signal: AbortSignal
+    ) => Promise<ProjectDocument['derived']>;
     /** The status bar, which in the app is the same sink the run writes to. */
     onStatus?: (message: string) => void;
   } = {}
@@ -1347,6 +1351,9 @@ function tabHost(
   return {
     manager: () => manager,
     derive,
+    ...(options.deriveCancellable
+      ? { deriveCancellable: options.deriveCancellable }
+      : {}),
     ...(options.onFailure ? { onFailure: options.onFailure } : {}),
     commit: (
       command: AnyCommand,
@@ -2983,22 +2990,36 @@ describe('cancelling an import', () => {
     expect(listFeaturesInOrder(manager.document)).toHaveLength(0);
   });
 
-  /**
-   * The rebuild cannot be interrupted, so it runs to completion — but its
-   * result must not land, and the upload ahead of the commit must never
-   * happen. Spending a 250 MB transfer on a withdrawn import is the expensive
-   * way to get this wrong.
-   */
-  it('neither archives nor commits a rebuild cancelled while it ran', async () => {
+  it('terminates an isolated rebuild without archiving or committing it', async () => {
     const device = createDevice();
     const manager = new CommandManager(
       createProjectDocument('Cancel', toUserId('user_cancel_rebuild'))
     );
     const abort = new AbortController();
     const rebuilding = deferred<void>();
+    const fallbackDerive = vi.fn(acceptsEverything());
+    const deriveCancellable = vi.fn(
+      (candidate: ProjectDocument, signal: AbortSignal) => {
+        rebuilding.settle();
+        return new Promise<ProjectDocument['derived']>((resolve, reject) => {
+          signal.addEventListener(
+            'abort',
+            () => {
+              const error = new Error('Disposable rebuild terminated.');
+              error.name = 'AbortError';
+              reject(error);
+            },
+            { once: true }
+          );
+          // An uncancelled test would still be able to complete this fake.
+          void resolve;
+          void candidate;
+        });
+      }
+    );
     const { result } = renderHook(() =>
       useValidatedFeatureCommit(
-        tabHost(manager, acceptsEverything(rebuilding.promise))
+        tabHost(manager, fallbackDerive, { deriveCancellable })
       )
     );
     const session = importSession(device, manager, () =>
@@ -3030,14 +3051,14 @@ describe('cancelling an import', () => {
         editDisabledReason: () => null,
         newId: () => 'id-cancel-rebuild'
       });
-      // The kernel is mid-rebuild and cannot be stopped; the cancel lands
-      // while it is still running.
+      await rebuilding.promise;
       abort.abort();
-      rebuilding.settle();
       outcome = await running;
     });
 
     expect(outcome?.outcome).toBe('cancelled');
+    expect(deriveCancellable).toHaveBeenCalledOnce();
+    expect(fallbackDerive).not.toHaveBeenCalled();
     expect(archiveCalls).toBe(0);
     expect(listFeaturesInOrder(manager.document)).toHaveLength(0);
     expect(device.blobs.has(file.checksum)).toBe(false);
