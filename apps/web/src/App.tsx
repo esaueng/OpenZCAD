@@ -168,6 +168,7 @@ import {
   inspectShaprPair,
   type ShaprPairInspection
 } from './lib/shaprImportWorkerClient';
+import { rebuildImportInDisposableWorker } from './lib/importRebuildWorkerClient';
 import { shaprMigrationDraft } from './lib/shaprMigration';
 import { presentedWorkspaceSaveState } from './lib/workspaceSaveStatePresentation';
 import {
@@ -1455,9 +1456,8 @@ export function App() {
   const importAbortRef = useRef<AbortController | null>(null);
   const cancelImportRun = useCallback(() => {
     importAbortRef.current?.abort();
-    // Flipped here rather than waiting for the run to report, because during
-    // the rebuild the run cannot report anything for minutes — the wasm call
-    // has the worker thread. The card needs to acknowledge the press now.
+    // Flipped synchronously so the card acknowledges the press while worker
+    // termination and source cleanup unwind in the background.
     setImportRun((current) =>
       current && !current.outcome
         ? { ...current, cancelRequested: true }
@@ -1994,6 +1994,7 @@ export function App() {
   const validatedFeature = useValidatedFeatureCommit({
     manager: () => managerRef.current,
     derive: (document) => geometry.syncOnce(document),
+    deriveCancellable: rebuildImportInDisposableWorker,
     commit: (command, derived) => executeCommand(command, derived ?? undefined),
     commitTransaction: (label, commands, derived) =>
       executeTransaction(label, commands, derived ?? undefined),
