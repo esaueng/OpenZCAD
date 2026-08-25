@@ -154,6 +154,56 @@ test('P toggles the camera projection', async ({ page }) => {
   await expect(orthoButton).toHaveAttribute('aria-pressed', 'false');
 });
 
+test('the viewport scale indicator tracks zoom in document units', async ({
+  page
+}) => {
+  await stubApi(page);
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('Scale Indicator Part');
+  await page.getByRole('button', { name: 'Create project' }).click();
+
+  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
+  await page
+    .getByRole('region', { name: 'Feature inspector' })
+    .getByRole('button', { name: /^Create/ })
+    .click();
+  await expectBodyCount(page, 1);
+
+  const indicator = page.getByTestId('viewport-scale-indicator');
+  const rule = page.getByTestId('viewport-scale-rule');
+  await expect(indicator).toBeVisible({ timeout: 15_000 });
+  await expect(indicator).toHaveAttribute(
+    'aria-label',
+    /^Viewport scale at the camera focus plane: .+ mm$/
+  );
+
+  const initialLabel = await indicator.textContent();
+  const initialWidth = await rule.evaluate(
+    (element) => element.getBoundingClientRect().width
+  );
+  expect(initialWidth).toBeGreaterThanOrEqual(80);
+  expect(initialWidth).toBeLessThanOrEqual(200.1);
+
+  const canvas = page.locator('.viewer-host canvas');
+  const bounds = await canvas.boundingBox();
+  expect(bounds).not.toBeNull();
+  await page.mouse.move(
+    bounds!.x + bounds!.width / 2,
+    bounds!.y + bounds!.height / 2
+  );
+  for (let step = 0; step < 8; step += 1) {
+    await page.mouse.wheel(0, -120);
+    await page.waitForTimeout(80);
+  }
+
+  await expect.poll(() => indicator.textContent()).not.toBe(initialLabel);
+  const zoomedWidth = await rule.evaluate(
+    (element) => element.getBoundingClientRect().width
+  );
+  expect(zoomedWidth).toBeGreaterThanOrEqual(80);
+  expect(zoomedWidth).toBeLessThanOrEqual(200.1);
+});
+
 test('Space centres and faces an exact planar selection head-on', async ({
   page
 }) => {
