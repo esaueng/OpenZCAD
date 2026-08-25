@@ -4565,20 +4565,34 @@ export function resolveCollaborationDocument(
   if (!latest) {
     return { kind: 'accept', document: incoming };
   }
-  if (
-    base &&
+  const behindLatest =
+    base !== undefined &&
     base.projectId === latest.projectId &&
     base.projectId === incoming.projectId &&
     base.version < latest.version &&
-    base.version < incoming.version
-  ) {
+    base.version < incoming.version;
+  if (behindLatest) {
     const merged = mergeCollaborationDocuments(base, latest, incoming);
     if (merged) {
       return { kind: 'accept', document: merged };
     }
+    // The submission descends from a version the room has already moved past,
+    // and the two lines cannot be reconciled. Falling through to the version
+    // comparison below would accept it purely because its number is larger —
+    // silently discarding everything committed since `base`. A submitter that
+    // is provably behind can only ever be accepted by a successful merge.
+    return { kind: 'conflict', document: latest };
   }
   if (incoming.version > latest.version) {
-    return { kind: 'accept', document: incoming };
+    // A larger version number is not evidence of descent. A client that edited
+    // offline outranks the room numerically while sharing none of its history,
+    // and accepting on the number alone replaced whatever was committed while
+    // that client was away. `revisions` is append-only through edits, undo and
+    // redo alike, so one list being a prefix of the other is the room's own
+    // proof that the two documents are on the same line.
+    return sharesRevisionLineage(latest, incoming)
+      ? { kind: 'accept', document: incoming }
+      : { kind: 'conflict', document: latest };
   }
   const sameHistory =
     incoming.version === latest.version &&
@@ -4601,6 +4615,31 @@ export function resolveCollaborationDocument(
   return sameHistory
     ? { kind: 'same', document: latest }
     : { kind: 'conflict', document: latest };
+}
+
+/**
+ * Whether two documents sit on one line of history.
+ *
+ * `revisions` only ever grows — an undo appends its own revision rather than
+ * dropping the one it reverses — so a shared line shows up as one id list being
+ * a prefix of the other, in either direction. Documents built without revisions
+ * carry no lineage to compare and are treated as compatible, which keeps the
+ * check permissive exactly where it has nothing to say.
+ */
+function sharesRevisionLineage(
+  latest: ProjectDocument,
+  incoming: ProjectDocument
+): boolean {
+  const latestIds = (latest.revisions ?? []).map(
+    (revision) => revision.revisionId
+  );
+  const incomingIds = (incoming.revisions ?? []).map(
+    (revision) => revision.revisionId
+  );
+  return (
+    hasJsonPrefix(incomingIds, latestIds) ||
+    hasJsonPrefix(latestIds, incomingIds)
+  );
 }
 
 const MERGE_CONFLICT = Symbol('collaboration-merge-conflict');

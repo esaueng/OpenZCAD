@@ -160,7 +160,7 @@ import {
 } from './lib/importProgress';
 import { ImportProgressCard } from './components/ImportProgressCard';
 import {
-  LOCAL_AUTOSAVE_FAILED_STATUS,
+  localAutosaveFailedStatus,
   reparkFailedAutosave
 } from './lib/localAutosaveFailure';
 import { MAX_SOURCE_IMPORT_BYTES, runStepImport } from './lib/stepImportRun';
@@ -2981,6 +2981,14 @@ export function App() {
             return;
           }
           if (restoredOutcome.choice === 'diverged') {
+            // Halt the account writer before the dialog opens. The
+            // `openProject` effect runs on its own schedule and used to clear
+            // any halt, so the debounced writer would send this local copy up
+            // — regressing the account version the user is still being asked
+            // about, and taking the other device's work with it.
+            cloudProjectAutosaveRef.current?.haltForConflict(
+              restoredOutcome.local.projectId
+            );
             setAccountConflict(
               conflictFromDocuments(
                 restoredOutcome.local,
@@ -4381,7 +4389,7 @@ export function App() {
       } else {
         controller.schedule(pending);
       }
-    } catch {
+    } catch (error) {
       // The document goes back in the queue rather than on the floor. It was
       // taken out of the ref above so a write that LANDS is not repeated, but a
       // write that did not land leaves this closure holding the only copy of
@@ -4393,8 +4401,13 @@ export function App() {
       if (repark) {
         pendingLocalSaveRef.current = repark;
       }
-      setSaveState('offline');
-      setStatus(LOCAL_AUTOSAVE_FAILED_STATUS);
+      // Not `offline`: that state's own tooltip promises the work is saved on
+      // this device, which is the one thing a failed device write disproves.
+      // The account copy is never queued either — `controller.schedule` sits
+      // after the write above — so the document exists only in this tab.
+      console.error('Local autosave failed.', error);
+      setSaveState('device-failed');
+      setStatus(localAutosaveFailedStatus(error));
     }
   }
 
@@ -6040,6 +6053,7 @@ export function App() {
       const outcome = await adoptLocalProject(project.projectId);
       if (outcome.state === 'conflict') {
         hydrateDocument(outcome.conflict.localDocument);
+        cloudProjectAutosaveRef.current?.haltForConflict(project.projectId);
         setAccountConflict(outcome.conflict);
         setCloudAvailable(true);
         setSaveState('conflict');
@@ -6315,6 +6329,9 @@ export function App() {
         // Open the local one — it is the work in front of the user — and ask
         // rather than discarding either side.
         hydrateDocument(outcome.local);
+        cloudProjectAutosaveRef.current?.haltForConflict(
+          outcome.local.projectId
+        );
         setAccountConflict(
           conflictFromDocuments(outcome.local, outcome.remote, 'account')
         );
@@ -7021,6 +7038,7 @@ export function App() {
       .then((remote) => {
         accountDocumentUnavailableProjectIdRef.current = null;
         setCloudAvailable(true);
+        cloudProjectAutosaveRef.current?.haltForConflict(projectId);
         setAccountConflict(
           conflictFromDocuments(localDocument, remote, 'account')
         );
@@ -7060,6 +7078,9 @@ export function App() {
         lastSyncedVersion
       );
       if (outcome.choice === 'diverged') {
+        cloudProjectAutosaveRef.current?.haltForConflict(
+          outcome.local.projectId
+        );
         setAccountConflict(
           conflictFromDocuments(outcome.local, outcome.remote, 'account')
         );
