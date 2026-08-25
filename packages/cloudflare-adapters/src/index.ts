@@ -873,12 +873,35 @@ export class D1R2PersistenceService implements PersistenceService {
     }
     // The token hash is the entire authorization: no user access check runs
     // here on purpose, and unknown stays indistinguishable from revoked.
+    //
+    // The owner's two kill switches have to reach this read, not only the
+    // write side that mints links. Turning "Project sharing" off cut every
+    // member off immediately and blocked new links, while every link already
+    // in someone's inbox kept serving the whole document — and the same
+    // setting hides the Share button, so the owner could no longer even see
+    // what was still being served. Trashing the project had no effect either.
+    // Both are re-evaluated per read rather than revoking the rows, so
+    // re-enabling sharing or restoring from trash brings the links back,
+    // exactly as member access already behaves.
     const row = await this.env.DB.prepare(
       `SELECT l.mode, p.id AS project_id, p.name, p.document_json,
               p.document_object_id
        FROM project_share_links l
        INNER JOIN projects p ON p.id = l.project_id
-       WHERE l.token_hash = ? AND l.revoked_at IS NULL`
+       LEFT JOIN user_settings owner_settings
+         ON owner_settings.user_id = p.user_id
+       WHERE l.token_hash = ?
+         AND l.revoked_at IS NULL
+         AND p.status != 'deleted'
+         AND COALESCE(
+           CASE WHEN json_valid(owner_settings.settings_json)
+             THEN json_extract(
+               owner_settings.settings_json,
+               '$.collaboration.enabled'
+             )
+           END,
+           1
+         ) = 1`
     )
       .bind(tokenHash)
       .first<{
@@ -913,13 +936,31 @@ export class D1R2PersistenceService implements PersistenceService {
       );
     }
     // The join is the authorization: the asset is served only when it belongs
-    // to the unrevoked link's own project.
+    // to the unrevoked link's own project — and, as above, only while the
+    // owner still has sharing on and has not trashed the project. Serving a
+    // side asset for a link whose document read is refused would leak the
+    // imported source of a model the owner has already withdrawn.
     const row = await this.env.DB.prepare(
       `SELECT a.id, a.project_id, a.kind, a.object_key, a.checksum_sha256,
               a.logical_bytes, a.content_encoding
        FROM project_storage_assets a
        INNER JOIN project_share_links l ON l.project_id = a.project_id
-       WHERE l.token_hash = ? AND l.revoked_at IS NULL AND a.id = ?`
+       INNER JOIN projects p ON p.id = a.project_id
+       LEFT JOIN user_settings owner_settings
+         ON owner_settings.user_id = p.user_id
+       WHERE l.token_hash = ?
+         AND l.revoked_at IS NULL
+         AND a.id = ?
+         AND p.status != 'deleted'
+         AND COALESCE(
+           CASE WHEN json_valid(owner_settings.settings_json)
+             THEN json_extract(
+               owner_settings.settings_json,
+               '$.collaboration.enabled'
+             )
+           END,
+           1
+         ) = 1`
     )
       .bind(tokenHash, assetId)
       .first<SharedProjectAssetRow>();
