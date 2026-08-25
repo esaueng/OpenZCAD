@@ -176,7 +176,13 @@ describe('useCollaboration lease ordering', () => {
       document: typeof local;
     };
     expect(submitted.type).toBe('document');
-    expect(submitted.baseVersion).toBe(remote.version);
+    // Not `remote.version`, which is what this asserted while the room could
+    // still be overwritten by a stale submission. `local` descends from `base`;
+    // `remote` is its sibling, and this client refused to adopt it two frames
+    // ago. Naming it as the merge base claims an ancestry this document does
+    // not have, and the room then accepts it on version ordering alone. Having
+    // adopted nothing this session, the honest answer is "no base".
+    expect(submitted.baseVersion).toBeNull();
     expect(submitted.leaseId).toBe(lease.leaseId);
     expect(submitted.document.featureOrder).toEqual(local.featureOrder);
     expect(submitted.document.featureOrder).not.toEqual(remote.featureOrder);
