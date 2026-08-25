@@ -43,6 +43,7 @@ import {
   buildMoveGizmoParts,
   chooseMoveSnapStep,
   chooseRotateSnapStep,
+  chooseViewportScale,
   clearGroup,
   closestAxisT,
   composeMoveTransform,
@@ -99,6 +100,7 @@ import {
   type DepthCycle,
   type DragRig,
   type MoveSnap,
+  type ViewportScale,
   type PickCandidate,
   type PickDetail,
   type ProfilePickTarget,
@@ -410,6 +412,10 @@ interface ModelViewerProps {
   orientationRef: MutableRefObject<((axes: AxisProjection) => void) | null>;
   /** Imperative bridge from the SVG view cube into the live camera rig. */
   orientationDragRef: MutableRefObject<OrientationDragControls | null>;
+  /** Imperative sink for the zoom-aware scale without React frame updates. */
+  scaleIndicatorRef: MutableRefObject<
+    ((scale: ViewportScale | null) => void) | null
+  >;
   onSelectTopology(
     selection: TopologySelection | null,
     additive: boolean,
@@ -1111,6 +1117,7 @@ export function ModelViewer({
   onViewSettled,
   orientationRef,
   orientationDragRef,
+  scaleIndicatorRef,
   onSelectTopology,
   onSelectEdgeChain,
   selectionFilter,
@@ -6423,6 +6430,9 @@ export function ModelViewer({
       }
       const cylinderRadiusProxyFrame = flushCylinderRadiusProxy();
       updateOffsetChip();
+      scaleIndicatorRef.current?.(
+        chooseViewportScale(worldPerPixelAt(cameraRig.controls.target))
+      );
       updateStudioGrid(grid, context.activeCamera, cameraRig.controls.target);
       updateAxesGizmo(axes, context.activeCamera);
       shadowCatcher.visible = shouldShowGroundShadow(
