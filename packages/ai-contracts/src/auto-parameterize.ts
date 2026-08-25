@@ -1,6 +1,7 @@
 import {
   isFeatureSuppressed,
   type BodyId,
+  type FaceGeometry,
   type FeatureId,
   type FeatureNode,
   type ParameterNode,
@@ -147,6 +148,56 @@ function sameAxisSpan(
     (close(firstStart, secondStart) && close(firstEnd, secondEnd)) ||
     (close(firstStart, secondEnd) && close(firstEnd, secondStart))
   );
+}
+
+function normalizedAxis(
+  start: { x: number; y: number; z: number },
+  end: { x: number; y: number; z: number }
+): { x: number; y: number; z: number } | null {
+  const x = end.x - start.x;
+  const y = end.y - start.y;
+  const z = end.z - start.z;
+  const magnitude = Math.hypot(x, y, z);
+  return Number.isFinite(magnitude) && magnitude > 1e-12
+    ? { x: x / magnitude, y: y / magnitude, z: z / magnitude }
+    : null;
+}
+
+function blendCarrier(geometry: FaceGeometry): {
+  surfaceClass: 'torus' | 'cylinder';
+  center: { x: number; y: number; z: number };
+  axis: { x: number; y: number; z: number };
+} | null {
+  if (
+    geometry.surfaceType === 'torus' &&
+    geometry.torusCenter &&
+    geometry.axis
+  ) {
+    const origin = { x: 0, y: 0, z: 0 };
+    const axis = normalizedAxis(origin, geometry.axis);
+    return axis
+      ? { surfaceClass: 'torus', center: geometry.torusCenter, axis }
+      : null;
+  }
+  if (
+    geometry.surfaceType === 'cylinder' &&
+    geometry.axisStart &&
+    geometry.axisEnd
+  ) {
+    const axis = normalizedAxis(geometry.axisStart, geometry.axisEnd);
+    return axis
+      ? {
+          surfaceClass: 'cylinder',
+          center: {
+            x: (geometry.axisStart.x + geometry.axisEnd.x) / 2,
+            y: (geometry.axisStart.y + geometry.axisEnd.y) / 2,
+            z: (geometry.axisStart.z + geometry.axisEnd.z) / 2
+          },
+          axis
+        }
+      : null;
+  }
+  return null;
 }
 
 /** Walks the canonical history backwards from one or more result bodies. */
@@ -765,6 +816,160 @@ function importedThroughHoleCandidates(
   return candidates;
 }
 
+function importedBlendCandidates(
+  document: ProjectDocument,
+  selection: CadSelectionContext
+): ParameterCandidate[] {
+  const selected = selectedBodyIds(selection);
+  const targetBodyIds =
+    selected.length > 0
+      ? selected
+      : document.derived.exportableBodyIds.filter(
+          (bodyId) => !document.derived.bodyRepresentations[bodyId]?.consumed
+        );
+  const features = listFeaturesInOrder(document);
+  const candidates: ParameterCandidate[] = [];
+
+  for (const bodyId of targetBodyIds) {
+    const body = document.derived.bodyRepresentations[bodyId];
+    if (!body?.topology || body.consumed) {
+      continue;
+    }
+    const scope = featureScopeForBodies(document, [bodyId]);
+    const imported = features.some(
+      (feature) =>
+        scope.has(feature.featureId) &&
+        feature.data.featureKind === 'imported-step'
+    );
+    if (!imported) {
+      continue;
+    }
+    const existingBlendEdits = features.flatMap((feature) => {
+      const data = feature.data;
+      return scope.has(feature.featureId) &&
+        data.featureKind === 'direct-edit' &&
+        data.targetBodyId === bodyId &&
+        data.operation.kind === 'resize-blend'
+        ? [data.operation]
+        : [];
+    });
+    const regions = new Map<
+      string,
+      Array<(typeof body.topology.faces)[number]>
+    >();
+    for (const face of body.topology.faces) {
+      const geometry = face.geometry;
+      if (
+        geometry?.featureType !== 'blend' ||
+        geometry.editableDimension !== 'blendRadius' ||
+        !geometry.blendRegionKey ||
+        geometry.blendRegionFaceCount === undefined ||
+        geometry.blendRegionFaceCount <= 0 ||
+        geometry.blendRadius === undefined ||
+        !Number.isFinite(geometry.blendRadius) ||
+        geometry.blendRadius <= 0 ||
+        !face.reference ||
+        face.reference.currentHash !== face.hash
+      ) {
+        continue;
+      }
+      const group = regions.get(geometry.blendRegionKey) ?? [];
+      group.push(face);
+      regions.set(geometry.blendRegionKey, group);
+    }
+
+    let regionIndex = 0;
+    for (const faces of regions.values()) {
+      faces.sort((left, right) => left.hash - right.hash);
+      const radius = faces[0]?.geometry?.blendRadius;
+      const faceCount = faces[0]?.geometry?.blendRegionFaceCount;
+      if (
+        radius === undefined ||
+        faceCount === undefined ||
+        faces.length > faceCount ||
+        faces.some(
+          (face) =>
+            face.geometry?.blendRegionFaceCount !== faceCount ||
+            face.geometry?.blendRadius === undefined ||
+            Math.abs(face.geometry.blendRadius - radius) >
+              Math.max(radius * 1e-5, 1e-9)
+        )
+      ) {
+        continue;
+      }
+      const seed = faces.find((face) =>
+        face.geometry ? blendCarrier(face.geometry) !== null : false
+      );
+      const carrier = seed?.geometry ? blendCarrier(seed.geometry) : null;
+      if (!seed?.reference || !carrier) {
+        continue;
+      }
+      const alreadyParameterized = existingBlendEdits.some((edit) => {
+        if (edit.surfaceClass !== carrier.surfaceClass) {
+          return false;
+        }
+        const recordedAxis = normalizedAxis(
+          { x: 0, y: 0, z: 0 },
+          edit.recordedAxis
+        );
+        if (!recordedAxis) {
+          return false;
+        }
+        const tolerance = Math.max(edit.recordedRadius * 1e-5, 1e-6);
+        const centerDistance = Math.hypot(
+          carrier.center.x - edit.recordedCenter.x,
+          carrier.center.y - edit.recordedCenter.y,
+          carrier.center.z - edit.recordedCenter.z
+        );
+        const axisAlignment = Math.abs(
+          carrier.axis.x * recordedAxis.x +
+            carrier.axis.y * recordedAxis.y +
+            carrier.axis.z * recordedAxis.z
+        );
+        return centerDistance <= tolerance && axisAlignment >= 1 - 1e-6;
+      });
+      if (alreadyParameterized) {
+        continue;
+      }
+      const reference = seed.reference;
+      regionIndex += 1;
+      const recognizedIndex = regionIndex;
+      candidates.push({
+        parameters: [
+          {
+            key: 'radius',
+            baseName: parameterBase(
+              body.name,
+              'fillet',
+              String(recognizedIndex),
+              'radius'
+            ),
+            expression: String(radius)
+          }
+        ],
+        imported: true,
+        bind: (parameterNames) => ({
+          kind: 'add_direct_edit',
+          name: `Parameterize ${body.name} fillet ${recognizedIndex}`,
+          targetBodyId: bodyId,
+          operation: {
+            kind: 'resize-blend',
+            faceHash: seed.hash,
+            faceReference: reference,
+            surfaceClass: carrier.surfaceClass,
+            recordedRadius: radius,
+            recordedCenter: carrier.center,
+            recordedAxis: carrier.axis,
+            newRadius: parameterNames.get('radius')!,
+            parameterBinding: true
+          }
+        })
+      });
+    }
+  }
+  return candidates;
+}
+
 /**
  * Creates a provider-free assistant proposal from exact document state.
  * Language-model output never supplies topology here: names and bindings are
@@ -779,7 +984,8 @@ export function createAutoParameterizeProposal(
   const native = nativeCandidates(document, scope);
   const allCandidates = [
     ...native.candidates,
-    ...importedThroughHoleCandidates(document, selection)
+    ...importedThroughHoleCandidates(document, selection),
+    ...importedBlendCandidates(document, selection)
   ];
   if (allCandidates.length === 0) {
     return null;
@@ -834,7 +1040,7 @@ export function createAutoParameterizeProposal(
   }
   if (importedCount > 0) {
     assumptions.push(
-      `${importedCount} imported hole dimension${importedCount === 1 ? '' : 's'} across ${importedGroups.length} kernel-proven feature${importedGroups.length === 1 ? '' : 's'} use grouped exact topology; unsupported imported features remain unchanged.`
+      `${importedCount} imported dimension${importedCount === 1 ? '' : 's'} across ${importedGroups.length} kernel-proven feature${importedGroups.length === 1 ? '' : 's'} use grouped exact topology; unsupported imported features remain unchanged.`
     );
   }
 
