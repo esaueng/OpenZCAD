@@ -228,6 +228,17 @@ export function useCollaboration({
   const conflictHandlerRef = useRef(onConflict);
   const lastSentVersionRef = useRef<number | null>(null);
   const serverVersionRef = useRef<number | null>(null);
+  /**
+   * The room version this client's document actually descends from — the merge
+   * base, which is not the same thing as the newest room version this client
+   * has *seen*. An editor that is shown a broadcast it refuses to adopt (its
+   * own unsent work would be lost) still learns that version exists; submitting
+   * against it claims an ancestry the document does not have, and the room then
+   * accepts it on version ordering alone and drops whatever was committed in
+   * between. Advanced only where the local document genuinely becomes, or is
+   * confirmed as, that version.
+   */
+  const baseVersionRef = useRef<number | null>(null);
   const roleRef = useRef<ProjectAccessRole | null>(null);
   const leaseIdRef = useRef<string | null>(null);
   const leaseRef = useRef<ProjectEditLease | null>(null);
@@ -260,6 +271,7 @@ export function useCollaboration({
     leaseRef.current = null;
     setLease(null);
     serverVersionRef.current = null;
+    baseVersionRef.current = null;
     setRoomVersion(null);
     keepMinePendingRef.current = false;
     let disposed = false;
@@ -314,7 +326,7 @@ export function useCollaboration({
         type,
         clientId: id,
         displayName,
-        baseVersion: serverVersionRef.current,
+        baseVersion: baseVersionRef.current,
         document: type === 'hello' ? null : collaborationDocument(current),
         ...(leaseIdRef.current ? { leaseId: leaseIdRef.current } : {})
       });
@@ -336,7 +348,7 @@ export function useCollaboration({
           headers: { 'content-type': 'application/json' },
           body: JSON.stringify({
             clientId: id,
-            baseVersion: serverVersionRef.current,
+            baseVersion: baseVersionRef.current,
             document: collaborationDocument(current),
             leaseId: leaseIdRef.current
           })
@@ -367,6 +379,7 @@ export function useCollaboration({
             if (message.type === 'ack') {
               lastSentVersionRef.current = message.version;
               serverVersionRef.current = message.version;
+              baseVersionRef.current = message.version;
               if (message.document) {
                 remoteHandlerRef.current(message.document);
               }
@@ -452,6 +465,7 @@ export function useCollaboration({
             const retained = retainConflict(message.document);
             if (message.role === 'viewer' && !retained) {
               lastSentVersionRef.current = message.document.version;
+              baseVersionRef.current = message.document.version;
               documentRef.current = message.document;
               remoteHandlerRef.current(message.document);
             }
@@ -561,6 +575,7 @@ export function useCollaboration({
             // Keeps a second broadcast arriving before the adoption has been
             // rendered from reading this client as divergent.
             documentRef.current = message.document;
+            baseVersionRef.current = message.document.version;
             remoteHandlerRef.current(message.document);
           }
           return;
@@ -568,6 +583,7 @@ export function useCollaboration({
         if (message.type === 'ack') {
           lastSentVersionRef.current = message.version;
           serverVersionRef.current = message.version;
+          baseVersionRef.current = message.version;
           setRoomVersion(message.version);
           if (keepMinePendingRef.current) {
             keepMinePendingRef.current = false;
@@ -698,7 +714,7 @@ export function useCollaboration({
       const payload = JSON.stringify({
         type: 'document',
         clientId: clientId(),
-        baseVersion: serverVersionRef.current,
+        baseVersion: baseVersionRef.current,
         document: collaborationDocument(document),
         leaseId: leaseIdRef.current
       });
@@ -709,7 +725,7 @@ export function useCollaboration({
           headers: { 'content-type': 'application/json' },
           body: JSON.stringify({
             clientId: clientId(),
-            baseVersion: serverVersionRef.current,
+            baseVersion: baseVersionRef.current,
             document: collaborationDocument(document),
             leaseId: leaseIdRef.current
           })
@@ -748,6 +764,7 @@ export function useCollaboration({
             if (message.type === 'ack') {
               lastSentVersionRef.current = message.version;
               serverVersionRef.current = message.version;
+              baseVersionRef.current = message.version;
               if (message.document) {
                 remoteHandlerRef.current(message.document);
               }
@@ -885,6 +902,7 @@ export function useCollaboration({
           );
         }
         serverVersionRef.current = message.version;
+        baseVersionRef.current = message.version;
         setRoomVersion(message.version);
         clearUnresolvedConflict(projectId);
         conflictRef.current = null;
