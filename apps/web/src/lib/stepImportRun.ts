@@ -88,6 +88,7 @@ export interface StepImportSourceStore {
     options?: {
       claimId?: string;
       onBytesRead?(read: number, total: number): void;
+      signal?: AbortSignal;
     }
   ): Promise<StoredSourceBlob>;
   deleteSourceBlobIfUnreferenced(input: {
@@ -181,14 +182,10 @@ export interface StepImportRunDeps {
    */
   progress?: ImportProgressSink;
   /**
-   * Stops the run at the next point it can stop without leaving a trace.
-   *
-   * Deliberately NOT plumbed into the rebuild: the kernel reads the file
-   * inside one synchronous wasm call, and no signal can preempt a blocked
-   * worker thread. What aborting does is stop the read, decline the upload,
-   * and decline the commit — so the geometry already in flight is discarded
-   * rather than landed, and the bytes this run wrote are pruned on the way
-   * out. See {@link ImportRunResult} for why they are pruned and not kept.
+   * Stops the current phase. Exact validation runs in a disposable browser
+   * worker, so this signal terminates even a synchronous wasm rebuild; the
+   * remaining guards decline the upload and atomic commit if cancellation
+   * races a phase boundary.
    */
   signal?: AbortSignal;
   marks: StepImportMarks;
@@ -453,8 +450,7 @@ export async function runStepImport(
     progress?.update({ phase: 'reading', fraction: null });
     const stepText = await file.text();
     const metadata = parseStepMetadata(file.name, stepText);
-    // The last point a cancel costs nothing at all: past here the rebuild
-    // starts, and stopping it only discards work already done.
+    // Last boundary before the disposable exact-rebuild worker is created.
     stopIfCancelled();
     const productName = metadata.products[0]?.trim();
     const name = productName || file.name.replace(/\.(step|stp)$/i, '');
@@ -475,8 +471,8 @@ export async function runStepImport(
     // rebuilds identically once the finalized id replaces it.
     const localArtifactId = `artifact_local_${deps.newId()}`;
     // The long pole, and the one phase with nothing to report: the kernel
-    // reads the file inside a single synchronous wasm call that blocks the
-    // worker thread it runs on.
+    // reads the file inside one synchronous wasm call. Its disposable worker
+    // is the cancellation boundary even though the call cannot yield progress.
     progress?.update({ phase: 'building', fraction: null });
     outcome = await deps.validatedFeature.run(
       commandFactory({ ...payload, artifactId: localArtifactId }),
@@ -486,9 +482,10 @@ export async function runStepImport(
         // The lock this run has been holding since before it wrote a byte. The
         // run adopts it instead of competing for it.
         reservation: commitLock,
-        // The rebuild itself cannot be stopped. This declines to spend the
-        // upload on its result, and declines to land it.
+        // The hook terminates the disposable rebuild worker through this same
+        // signal, then re-checks it at the upload and commit boundaries.
         cancelled: () => signal?.aborted === true,
+        ...(signal ? { signal } : {}),
         validatingMessage:
           deps.validatingMessage ??
           `Checking ${file.name} against exact geometry…`,
@@ -582,12 +579,9 @@ export async function runStepImport(
     }
   }
   // Said HERE rather than in the catch above, because a cancel reaches this
-  // point two different ways: thrown, when it stopped the read or landed at a
-  // phase boundary, and RETURNED by the commit hook, when it stopped a rebuild
-  // that had to run to completion. Only the thrown path passes through the
-  // catch, so a status set there left the status bar still reading "Checking…"
-  // for every cancel during the rebuild — the long case, and the one people
-  // will actually use.
+  // point two different ways: thrown while reading, or returned by the commit
+  // hook after it terminates a disposable exact-rebuild worker. Only the first
+  // path passes through the catch, so the shared ending owns the status text.
   if (outcome === 'cancelled') {
     status.setStatus(`${file.name} was not imported: you cancelled it.`);
   }

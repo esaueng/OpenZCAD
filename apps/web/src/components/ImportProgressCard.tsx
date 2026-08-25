@@ -129,17 +129,12 @@ export function ImportProgressCard({
   // Striped, and parked: running, extent unknown. Never a creeping number.
   const indeterminate = outcome === null && run.progress.fraction === null;
   // A requested cancel that has not taken effect yet is its own state, and the
-  // card says so for as long as it lasts. During `building` that is until the
-  // kernel returns from a wasm call nothing can preempt — minutes, on a large
-  // assembly — and a card still reading "Building geometry" after the user
-  // pressed Cancel reads as a button that did nothing.
+  // card says so while worker termination and source cleanup unwind.
   const cancelling = outcome === null && run.cancelRequested;
   const line = outcome
     ? outcome.message
     : cancelling
-      ? run.progress.phase === 'building'
-        ? 'Cancelling — waiting for the rebuild to finish'
-        : 'Cancelling…'
+      ? 'Cancelling…'
       : IMPORT_PHASE_LABEL[run.progress.phase];
   const toneClass = outcome ? ` ${outcome.tone}` : '';
 
@@ -156,8 +151,6 @@ export function ImportProgressCard({
           type="button"
           className="import-card-close"
           // While the import is running this hides the card and nothing else.
-          // Saying "cancel" would be a lie: the rebuild is a synchronous call
-          // into wasm that cannot be interrupted once it has started.
           title={
             outcome
               ? 'Dismiss'
@@ -201,11 +194,7 @@ export function ImportProgressCard({
           type="button"
           className="import-card-action cancel"
           disabled={cancelling}
-          title={
-            run.progress.phase === 'building'
-              ? 'Stop the import. The current rebuild has to finish first, and nothing will be added to your model.'
-              : 'Stop the import. Nothing will be added to your model.'
-          }
+          title="Stop the import. Nothing will be added to your model."
           onClick={onCancel}
         >
           {cancelling ? 'Cancelling…' : 'Cancel'}
