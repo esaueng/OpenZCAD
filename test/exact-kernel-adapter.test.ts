@@ -6,6 +6,8 @@ import { RemusKernel } from '../packages/kernel-adapter/src/remus-runtime';
 import {
   addPrimitiveFeature,
   addSketchFeature,
+  addSketchObjects,
+  setParameter,
   chamferEdges,
   createProjectDocument,
   directEditBody,
@@ -1753,7 +1755,7 @@ describe('exact kernel adapter', { timeout: 30_000 }, () => {
     ).toHaveLength(5);
   });
 
-  it('refuses a profile reference after a substantial source-curve edit', async () => {
+  it('rebinds a profile reference after a substantial source-curve edit', async () => {
     const resolve = (value: ParamValue): number =>
       typeof value === 'number' ? value : Number(value);
     const { document: withSketch, sketchId } = addSketchFeature(
@@ -1798,9 +1800,132 @@ describe('exact kernel adapter', { timeout: 30_000 }, () => {
       }
     });
 
+    // This used to refuse, and refusing was the defect. Doubling a circle's
+    // radius is the ordinary parametric edit: it invalidates `profileId`,
+    // `regionFingerprint` and `sourceArea` in one go, because all three are
+    // derived from the curve. There is still exactly one region bounded by
+    // exactly the referenced circle, so identity is unambiguous and the
+    // reference rebinds — where before the solid vanished behind a warning,
+    // taking every fillet, boolean and pattern built on it with it.
     const derived = await adapter.syncDocument(edited);
+    expect(derived.warnings).toEqual([]);
+    expect(derived.bodyRepresentations[bodyId]?.volume).toBeCloseTo(
+      Math.PI * 20 ** 2 * 5,
+      0
+    );
+  });
+
+  it('rebuilds at the new size when the named parameter driving a sketch dimension changes', async () => {
+    // The reported shape of the defect, end to end: name a sketch dimension,
+    // change the parameter, and the solid used to disappear behind a warning.
+    const seeded = setParameter(
+      createProjectDocument('Parametric bracket', toUserId('user_exact')),
+      { name: 'disk_r', expression: '10' }
+    );
+    const { document: withSketch, sketchId } = addSketchFeature(seeded, {
+      name: 'Driven disk',
+      planeRef: { type: 'canonical', plane: 'XY', offset: 0 },
+      objects: [
+        { objectKind: 'circle', radius: 'disk_r', centerX: 0, centerY: 0 }
+      ]
+    });
+    const sketch = findSketch(withSketch, sketchId)!;
+    const profile = computeSketchRegions(
+      sketch.objectIds.flatMap((id) => {
+        const node = withSketch.nodes[id];
+        return node?.kind === 'sketch-object' ? [{ id, data: node.data }] : [];
+      }),
+      (value) => (typeof value === 'number' ? value : 10)
+    )[0]!;
+    const { document: extruded, bodyId } = extrudeSketch(withSketch, {
+      name: 'Driven extrude',
+      sketchId,
+      distance: 5,
+      profiles: [
+        {
+          profileId: profile.profileId,
+          regionFingerprint: profile.regionFingerprint,
+          samplePoint: profile.samplePoint,
+          sourceArea: profile.area,
+          sourceEntityIds: profile.sourceEntityIds
+        }
+      ]
+    });
+
+    const before = await adapter.syncDocument(extruded);
+    expect(before.warnings).toEqual([]);
+    expect(before.bodyRepresentations[bodyId]?.volume).toBeCloseTo(
+      Math.PI * 10 ** 2 * 5,
+      0
+    );
+
+    const enlarged = setParameter(extruded, {
+      name: 'disk_r',
+      expression: '20'
+    });
+    const after = await adapter.syncDocument(enlarged);
+    expect(after.warnings).toEqual([]);
+    expect(after.bodyRepresentations[bodyId]?.volume).toBeCloseTo(
+      Math.PI * 20 ** 2 * 5,
+      0
+    );
+
+    // Scope note, so this is not read as more than it is: the profile
+    // reference rebinds, so the extrude and anything keyed to the BODY
+    // survives. A downstream feature holding an edge *hash* — a fillet on the
+    // rim — still fails with "A selected edge no longer exists", because edge
+    // lineage does not yet extend through blends (TODO.md, release gates).
+    // That is a separate gap, not this one.
+  });
+
+  it('still refuses when the referenced entities stop bounding one region', async () => {
+    // The fail-closed half of the same rule. Identity is only trusted when it
+    // is unambiguous: splitting the circle leaves two regions carrying the
+    // same entity set, and the stored area and sample point no longer pick
+    // either of them out, so the reference must not guess.
+    const resolve = (value: ParamValue): number =>
+      typeof value === 'number' ? value : Number(value);
+    const { document: withSketch, sketchId } = addSketchFeature(
+      createProjectDocument('Ambiguous profile', toUserId('user_exact')),
+      {
+        name: 'Splittable disk',
+        planeRef: { type: 'canonical', plane: 'XY', offset: 0 },
+        objects: [{ objectKind: 'circle', radius: 10, centerX: 0, centerY: 0 }]
+      }
+    );
+    const sketch = findSketch(withSketch, sketchId)!;
+    const profile = computeSketchRegions(
+      sketch.objectIds.flatMap((id) => {
+        const node = withSketch.nodes[id];
+        return node?.kind === 'sketch-object' ? [{ id, data: node.data }] : [];
+      }),
+      resolve
+    )[0]!;
+    const { document: extruded, bodyId } = extrudeSketch(withSketch, {
+      name: 'Ambiguous disk extrude',
+      sketchId,
+      distance: 5,
+      profiles: [
+        {
+          profileId: profile.profileId,
+          regionFingerprint: profile.regionFingerprint,
+          samplePoint: profile.samplePoint,
+          sourceArea: profile.area,
+          sourceEntityIds: profile.sourceEntityIds
+        }
+      ]
+    });
+    // A chord across the circle splits it into two cells. Both are bounded by
+    // the circle plus the new line, so neither carries the stored entity set
+    // on its own — and the stored geometry matches neither half.
+    const { document: split } = addSketchObjects(extruded, {
+      sketchId,
+      objects: [{ objectKind: 'line', x1: -30, y1: 0.5, x2: 30, y2: 0.5 }]
+    });
+
+    const derived = await adapter.syncDocument(split);
     expect(derived.warnings).toContain(
-      'Feature "Parametric disk extrude": Broken profile reference — the bounded sketch region used by this extrude no longer resolves uniquely.'
+      'Feature "Ambiguous disk extrude": Broken profile reference — the bounded sketch region used by this extrude no longer resolves uniquely.'
     );
     expect(derived.bodyRepresentations[bodyId]).toBeUndefined();
   });
