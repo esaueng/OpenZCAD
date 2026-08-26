@@ -3219,3 +3219,8 @@ export function evaluateExpression(
   }
   return result;
 }
+
+export {
+  keyableImportedNodeData,
+  keyableImportedNodes
+} from './imported-payload-key';
