@@ -4611,66 +4611,45 @@ export function App() {
         profile.sketchId === sketchId &&
         available.some((candidate) => candidate.profileId === profile.profileId)
     );
-    if (activeSketch) {
-      // In-sketch Extrude stays in place: leave the sketch (its exit glide
-      // brings the camera back) and arm the imperative region rig on the
-      // sketch's profiles — no overlay, no iso jump. The commit path infers
-      // add/cut from drag direction and the kernel's classification. With no
-      // in-sketch selection, every valid profile extrudes together; the
-      // largest one anchors the arrow.
-      const chosen = existing.length > 0 ? existing : available;
-      const anchor = chosen.reduce(
-        (best, candidate) => (candidate.area > best.area ? candidate : best),
-        chosen[0]!
-      );
-      setSelectedFeatureNode(null);
-      setSelectedTopology(null);
-      setSelectedEdges([]);
-      setSelectedBodyIds([]);
-      setSelectedSketchProfileId(sketchId);
-      setSelectedProfiles(chosen);
-      setResolvedExtrudePreview(null);
-      setExtrudePreview(null);
-      setTool(null);
-      dispatchInteraction({ type: 'exit-sketch' });
-      dispatchInteraction({
-        type: 'select-region',
-        target: {
-          sketchId: anchor.sketchId,
-          regionFingerprint: anchor.regionFingerprint,
-          samplePoint: anchor.samplePoint,
-          area: anchor.area,
-          sourceEntityIds: anchor.sourceEntityIds
-        }
-      });
-      setStatus(
-        chosen.length === 1
-          ? 'Closed sketch profile selected · drag the arrow to extrude, or type a distance.'
-          : `${chosen.length} profiles selected · drag the arrow to extrude them together.`
-      );
-      return;
-    }
-    const initialProfiles =
-      existing.length > 0 ? existing : available.length === 1 ? available : [];
+    // Extrude is one flow, in or out of a sketch: arm the imperative region
+    // rig on the sketch's profiles — no overlay form, no iso jump. From
+    // inside a sketch it leaves first (the exit glide brings the camera
+    // back). The commit path infers add/cut from drag direction and the
+    // kernel's classification. With no prior selection, every valid profile
+    // extrudes together; the largest one anchors the arrow.
+    const chosen = existing.length > 0 ? existing : available;
+    const anchor = chosen.reduce(
+      (best, candidate) => (candidate.area > best.area ? candidate : best),
+      chosen[0]!
+    );
     setSelectedFeatureNode(null);
     setSelectedTopology(null);
     setSelectedEdges([]);
     setSelectedBodyIds([]);
     setSelectedSketchProfileId(sketchId);
-    setSelectedProfiles(initialProfiles);
+    setSelectedProfiles(chosen);
     setResolvedExtrudePreview(null);
-    setExtrudePreview(
-      initialProfiles.length > 0 ? { sketchId, distance: 24 } : null
-    );
-    setTool('extrude');
-    if (interaction.mode !== 'idle') {
+    setExtrudePreview(null);
+    setTool(null);
+    if (activeSketch) {
+      dispatchInteraction({ type: 'exit-sketch' });
+    } else if (interaction.mode !== 'idle') {
       dispatchInteraction({ type: 'clear' });
     }
-    requestView('iso');
+    dispatchInteraction({
+      type: 'select-region',
+      target: {
+        sketchId: anchor.sketchId,
+        regionFingerprint: anchor.regionFingerprint,
+        samplePoint: anchor.samplePoint,
+        area: anchor.area,
+        sourceEntityIds: anchor.sourceEntityIds
+      }
+    });
     setStatus(
-      initialProfiles.length > 0
-        ? `${initialProfiles.length} profile${initialProfiles.length === 1 ? '' : 's'} selected · exact preview updating.`
-        : `Select one or more closed profiles · ${available.length} valid profiles available.`
+      chosen.length === 1
+        ? 'Closed sketch profile selected · drag the arrow to extrude, or type a distance.'
+        : `${chosen.length} profiles selected · drag the arrow to extrude them together.`
     );
   }
 
@@ -4819,16 +4798,10 @@ export function App() {
       if (sketchId) {
         startExtrude(sketchId);
       } else {
-        extrudeSelectionReturnRef.current = {
-          profiles: [...selectedProfiles],
-          sketchId: selectedSketchProfileId
-        };
-        setSelectedFeatureNode(null);
-        setSelectedTopology(null);
-        setSelectedEdges([]);
-        setSelectedBodyIds([]);
-        setTool('extrude');
-        setStatus('Extrude: select a shaded closed profile in the viewport.');
+        // No sketch to resolve, and there is no picking mode any more: a
+        // click on any shaded closed profile arms the drag-arrow rig
+        // directly, so the hint is the whole flow.
+        setStatus('Extrude: click a shaded closed sketch profile to arm it.');
       }
       return;
     }
