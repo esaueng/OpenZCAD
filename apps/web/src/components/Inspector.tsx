@@ -1148,13 +1148,15 @@ export function Inspector(props: InspectorProps) {
                   ? 'parameterize imported counterbore'
                   : data.operation.kind === 'resize-imported-countersink'
                     ? 'parameterize imported countersink'
-                    : data.operation.kind === 'resize-cylindrical-face'
-                      ? 'resize cylinder radius'
-                      : data.operation.kind === 'resize-blend'
-                        ? 'resize imported blend'
-                        : data.operation.kind === 'offset-face'
-                          ? 'offset face'
-                          : 'remove face feature'}
+                    : data.operation.kind === 'set-face-distance'
+                      ? 'set face distance'
+                      : data.operation.kind === 'resize-cylindrical-face'
+                        ? 'resize cylinder radius'
+                        : data.operation.kind === 'resize-blend'
+                          ? 'resize imported blend'
+                          : data.operation.kind === 'offset-face'
+                            ? 'offset face'
+                            : 'remove face feature'}
           </span>
           <b>source face</b>
           <span>
@@ -1162,6 +1164,23 @@ export function Inspector(props: InspectorProps) {
               ? faceLabel(props.selectedBody, data.operation.faceHash)
               : `face ${String(data.operation.faceHash).slice(-6)}`}
           </span>
+          {data.operation.kind === 'set-face-distance' && (
+            <>
+              <b>opposite face</b>
+              <span>
+                {props.selectedBody
+                  ? faceLabel(
+                      props.selectedBody,
+                      data.operation.oppositeFaceHash
+                    )
+                  : `face ${String(data.operation.oppositeFaceHash).slice(-6)}`}
+              </span>
+              <b>distance</b>
+              <span>{String(data.operation.distance)}</span>
+              <b>move mode</b>
+              <span>{data.operation.moveMode.replaceAll('-', ' ')}</span>
+            </>
+          )}
           {data.operation.kind === 'resize-through-hole' && (
             <>
               <b>diameter</b>

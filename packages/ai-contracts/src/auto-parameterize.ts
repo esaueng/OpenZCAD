@@ -4,11 +4,13 @@ import {
   type FaceGeometry,
   type FeatureId,
   type FeatureNode,
+  type OpposingPlanarFacePair,
   type ParameterNode,
   type ParamValue,
   type ProjectDocument,
   type SketchNode,
-  type SketchObjectData
+  type SketchObjectData,
+  type Vector3
 } from '@openzcad/shared';
 import type {
   CadPatchOperation,
@@ -32,6 +34,8 @@ interface CandidateParameter {
 interface ParameterCandidate {
   parameters: CandidateParameter[];
   imported: boolean;
+  /** Lower values rebuild first when several new exact edits share a body. */
+  bindOrder?: number;
   bind(parameterNames: ReadonlyMap<string, string>): CadPatchOperation;
 }
 
@@ -467,6 +471,8 @@ function nativeCandidates(
       case 'direct-edit':
         if (data.operation.kind === 'resize-through-hole') {
           add(featureCandidate(feature, 'diameter', data.operation.diameter));
+        } else if (data.operation.kind === 'set-face-distance') {
+          add(featureCandidate(feature, 'distance', data.operation.distance));
         } else if (data.operation.kind === 'resize-imported-blind-hole') {
           add(featureCandidate(feature, 'diameter', data.operation.diameter));
           add(featureCandidate(feature, 'depth', data.operation.depth));
@@ -970,6 +976,135 @@ function importedBlendCandidates(
   return candidates;
 }
 
+function dimensionBaseName(normal: Vector3, rank: number): string {
+  const axes = [
+    ['x', Math.abs(normal.x)],
+    ['y', Math.abs(normal.y)],
+    ['z', Math.abs(normal.z)]
+  ] as const;
+  const [axis, alignment] = axes.reduce((best, candidate) =>
+    candidate[1] > best[1] ? candidate : best
+  );
+  if (alignment < 1 - 1e-6) {
+    return `thickness_${rank}`;
+  }
+  return axis === 'x' ? 'width_x' : axis === 'y' ? 'depth_y' : 'height_z';
+}
+
+function faceDistancePairKey(first: number, second: number): string {
+  return [first, second].sort((left, right) => left - right).join(':');
+}
+
+function importedFaceDistanceCandidates(
+  document: ProjectDocument,
+  selection: CadSelectionContext
+): ParameterCandidate[] {
+  const selected = selectedBodyIds(selection);
+  const targetBodyIds =
+    selected.length > 0
+      ? selected
+      : document.derived.exportableBodyIds.filter(
+          (bodyId) => !document.derived.bodyRepresentations[bodyId]?.consumed
+        );
+  const features = listFeaturesInOrder(document);
+  const candidates: ParameterCandidate[] = [];
+
+  for (const bodyId of targetBodyIds) {
+    const body = document.derived.bodyRepresentations[bodyId];
+    const topology = body?.topology;
+    if (!body || !topology || body.consumed) {
+      continue;
+    }
+    const scope = featureScopeForBodies(document, [bodyId]);
+    if (
+      !features.some(
+        (feature) =>
+          scope.has(feature.featureId) &&
+          feature.data.featureKind === 'imported-step'
+      )
+    ) {
+      continue;
+    }
+    const existingPairs = new Set(
+      features.flatMap((feature) => {
+        const data = feature.data;
+        return scope.has(feature.featureId) &&
+          data.featureKind === 'direct-edit' &&
+          data.targetBodyId === bodyId &&
+          data.operation.kind === 'set-face-distance'
+          ? [
+              faceDistancePairKey(
+                data.operation.faceHash,
+                data.operation.oppositeFaceHash
+              )
+            ]
+          : [];
+      })
+    );
+    const claimedFaceHashes = new Set(
+      (topology.recognizedImportedFeatures ?? []).flatMap(
+        (feature) => feature.participatingFaceHashes
+      )
+    );
+    const ranked = [...(topology.opposingPlanarFacePairs ?? [])]
+      .filter((pair) => {
+        const key = faceDistancePairKey(pair.faceAHash, pair.faceBHash);
+        return (
+          pair.faceAReference.currentHash === pair.faceAHash &&
+          pair.faceBReference.currentHash === pair.faceBHash &&
+          Number.isFinite(pair.provenChangedDistance) &&
+          Math.abs(pair.provenChangedDistance - pair.distance) >
+            Math.max(pair.distance * 1e-6, 1e-9) &&
+          !claimedFaceHashes.has(pair.faceAHash) &&
+          !claimedFaceHashes.has(pair.faceBHash) &&
+          !existingPairs.has(key)
+        );
+      })
+      .sort((left, right) => {
+        const score = (pair: OpposingPlanarFacePair) =>
+          pair.overlapArea * Math.max(pair.faceAreaA, pair.faceAreaB);
+        return (
+          score(right) - score(left) ||
+          right.distance - left.distance ||
+          left.faceAHash - right.faceAHash ||
+          left.faceBHash - right.faceBHash
+        );
+      });
+
+    ranked.forEach((pair, index) => {
+      const rank = index + 1;
+      candidates.push({
+        parameters: [
+          {
+            key: 'distance',
+            baseName: dimensionBaseName(pair.normal, rank),
+            expression: String(pair.distance)
+          }
+        ],
+        imported: true,
+        bindOrder: -1,
+        bind: (parameterNames) => ({
+          kind: 'add_direct_edit',
+          name: `Parameterize ${body.name} ${dimensionBaseName(pair.normal, rank)}`,
+          targetBodyId: bodyId,
+          operation: {
+            kind: 'set-face-distance',
+            faceHash: pair.faceAHash,
+            faceReference: pair.faceAReference,
+            oppositeFaceHash: pair.faceBHash,
+            oppositeFaceReference: pair.faceBReference,
+            sourceDistance: pair.distance,
+            moveMode: pair.moveMode,
+            distance: parameterNames.get('distance')!,
+            parameterBinding: true
+          }
+        })
+      });
+    });
+  }
+  return candidates;
+}
+
 /**
  * Creates a provider-free assistant proposal from exact document state.
  * Language-model output never supplies topology here: names and bindings are
@@ -985,7 +1120,8 @@ export function createAutoParameterizeProposal(
   const allCandidates = [
     ...native.candidates,
     ...importedThroughHoleCandidates(document, selection),
-    ...importedBlendCandidates(document, selection)
+    ...importedBlendCandidates(document, selection),
+    ...importedFaceDistanceCandidates(document, selection)
   ];
   if (allCandidates.length === 0) {
     return null;
@@ -1056,7 +1192,14 @@ export function createAutoParameterizeProposal(
           expression: parameter.expression
         }))
       ),
-      ...named.map(({ candidate, names }) => candidate.bind(names))
+      ...named
+        .map(({ candidate, names }, index) => ({ candidate, names, index }))
+        .sort(
+          (left, right) =>
+            (left.candidate.bindOrder ?? 0) -
+              (right.candidate.bindOrder ?? 0) || left.index - right.index
+        )
+        .map(({ candidate, names }) => candidate.bind(names))
     ],
     preserveGeometry: true
   };

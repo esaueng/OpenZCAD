@@ -1,6 +1,4 @@
-import {
-  RemusKernel
-} from './remus-runtime';
+import { RemusKernel } from './remus-runtime';
 import {
   findSketch,
   getParameterScope,
@@ -8,15 +6,9 @@ import {
   listNodesByKind,
   resolveParamValue
 } from '@openzcad/document-core';
-import {
-  writeDxf
-} from '@openzcad/io-dxf';
-import {
-  writeAsciiStl
-} from '@openzcad/io-stl';
-import {
-  faceDxfEntities
-} from './exact-dxf';
+import { writeDxf } from '@openzcad/io-dxf';
+import { writeAsciiStl } from '@openzcad/io-stl';
+import { faceDxfEntities } from './exact-dxf';
 import {
   BODY_OPACITY_METADATA_KEY,
   DEFAULT_BODY_COLOR,
@@ -29,9 +21,14 @@ import {
   type BodyRepresentation,
   type BodyTopology,
   type DerivedState,
+  type FaceDistanceMoveMode,
+  type FaceGeometry,
+  type FaceTopology,
   type ImportedSourceReference,
+  type OpposingPlanarFacePair,
   type ProjectDocument,
-  type SketchId
+  type SketchId,
+  type Vector3
 } from '@openzcad/shared';
 import type {
   DxfFaceSelector,
@@ -41,19 +38,13 @@ import type {
   MeasuredShape
 } from './exact-types';
 export type { DxfFaceSelector } from './exact-types';
-import {
-  diagnoseImportedSolid
-} from './exact-lineage-builders';
-import {
-  measureOwnedFaceGeometry
-} from './exact-measure';
+import { diagnoseImportedSolid } from './exact-lineage-builders';
+import { measureOwnedFaceGeometry } from './exact-measure';
 import {
   collectRecognizedImportedFeatures,
   type ImportedRecognitionFaceIdentity
 } from './imported-feature-query';
-import {
-  collapseShape
-} from './exact-boolean-helpers';
+import { collapseShape } from './exact-boolean-helpers';
 import {
   bodyOpacityFromMetadata,
   decodeText,
@@ -93,12 +84,8 @@ export {
   type MeshExportFormat,
   type MeshQualityReport
 };
-import {
-  uniformScaleMatrix
-} from './exact-math';
-import {
-  displayTessellationForExtents
-} from './display-tessellation';
+import { dot, length, subtract, uniformScaleMatrix } from './exact-math';
+import { displayTessellationForExtents } from './display-tessellation';
 import {
   MAX_HISTORY_CHECKPOINTS,
   cloneBuildState,
@@ -110,9 +97,7 @@ import {
   type RebuildCacheEvent
 } from './exact-history-cache';
 export type { RebuildCacheEvent };
-import {
-  readBodyMassProperties
-} from './body-properties';
+import { readBodyMassProperties } from './body-properties';
 import {
   inspectTriangleMeshClosure,
   isClosedConsistentlyOrientedMesh
@@ -139,8 +124,282 @@ import {
   importedStepRejectedSolidSummary,
   importedStepValidationWarning
 } from './imported-step-validation';
+import {
+  faceDistancePairScore,
+  pairNormalVector,
+  proveChangedFaceDistance,
+  queryOpposingPlanarFacePairs,
+  type RemusOpposingPlanarFacePair
+} from './exact-face-distance';
 
 const STL_EXPORT_DEFLECTION = 0.08;
+const MAX_PLANAR_FACE_PAIR_QUERY_FACES = 512;
+const MAX_PROVEN_FACE_DISTANCE_PAIRS = 30;
+
+function reflectPoint(
+  point: Vector3,
+  normal: Vector3,
+  offset: number
+): Vector3 {
+  const distance = dot(normal, point) - offset;
+  return {
+    x: point.x - 2 * distance * normal.x,
+    y: point.y - 2 * distance * normal.y,
+    z: point.z - 2 * distance * normal.z
+  };
+}
+
+function reflectDirection(direction: Vector3, normal: Vector3): Vector3 {
+  const projection = dot(normal, direction);
+  return {
+    x: direction.x - 2 * projection * normal.x,
+    y: direction.y - 2 * projection * normal.y,
+    z: direction.z - 2 * projection * normal.z
+  };
+}
+
+function mirroredFaceGeometry(
+  source: FaceGeometry,
+  candidate: FaceGeometry,
+  normal: Vector3,
+  offset: number,
+  linearTolerance: number
+): boolean {
+  if (source.surfaceType !== candidate.surfaceType) {
+    return false;
+  }
+  const areaTolerance = Math.max(1e-9, source.area * 1e-5);
+  if (Math.abs(source.area - candidate.area) > areaTolerance) {
+    return false;
+  }
+  if (
+    length(
+      subtract(reflectPoint(source.center, normal, offset), candidate.center)
+    ) > linearTolerance
+  ) {
+    return false;
+  }
+  if (source.normal && candidate.normal) {
+    if (
+      dot(reflectDirection(source.normal, normal), candidate.normal) <
+      1 - 1e-6
+    ) {
+      return false;
+    }
+  } else if (source.normal || candidate.normal) {
+    return false;
+  }
+  if (source.axis && candidate.axis) {
+    if (
+      Math.abs(dot(reflectDirection(source.axis, normal), candidate.axis)) <
+      1 - 1e-6
+    ) {
+      return false;
+    }
+  } else if (source.axis || candidate.axis) {
+    return false;
+  }
+  return true;
+}
+
+function pairBisectsSolidSymmetry(
+  faces: ReadonlyMap<number, FaceTopology>,
+  pair: RemusOpposingPlanarFacePair,
+  bounds: Float64Array | number[]
+): boolean {
+  const faceA = faces.get(pair.faceA);
+  const faceB = faces.get(pair.faceB);
+  if (!faceA?.geometry || !faceB?.geometry || faces.size === 0) {
+    return false;
+  }
+  const normal = pairNormalVector(pair);
+  const normalLength = length(normal);
+  if (!Number.isFinite(normalLength) || normalLength <= Number.EPSILON) {
+    return false;
+  }
+  const unit = {
+    x: normal.x / normalLength,
+    y: normal.y / normalLength,
+    z: normal.z / normalLength
+  };
+  const offset =
+    (dot(unit, faceA.geometry.center) + dot(unit, faceB.geometry.center)) / 2;
+  const bboxCenter = {
+    x: (bounds[0]! + bounds[3]!) / 2,
+    y: (bounds[1]! + bounds[4]!) / 2,
+    z: (bounds[2]! + bounds[5]!) / 2
+  };
+  const diagonal = Math.hypot(
+    bounds[3]! - bounds[0]!,
+    bounds[4]! - bounds[1]!,
+    bounds[5]! - bounds[2]!
+  );
+  const linearTolerance = Math.max(1e-7, diagonal * 1e-6);
+  if (Math.abs(dot(unit, bboxCenter) - offset) > linearTolerance) {
+    return false;
+  }
+
+  const list = [...faces.values()];
+  const unmatched = new Set(list.map((_, index) => index));
+  for (const source of list) {
+    if (!source.geometry) {
+      return false;
+    }
+    const match = [...unmatched].find((index) => {
+      const candidate = list[index]?.geometry;
+      return (
+        candidate !== undefined &&
+        mirroredFaceGeometry(
+          source.geometry!,
+          candidate,
+          unit,
+          offset,
+          linearTolerance
+        )
+      );
+    });
+    if (match === undefined) {
+      return false;
+    }
+    unmatched.delete(match);
+  }
+  return unmatched.size === 0;
+}
+
+function oneSidedFaceDistanceModes(
+  faces: ReadonlyMap<number, FaceTopology>,
+  pair: RemusOpposingPlanarFacePair,
+  bounds: Float64Array | number[]
+): [FaceDistanceMoveMode, FaceDistanceMoveMode] {
+  const areaTolerance = Math.max(
+    1e-9,
+    Math.max(pair.faceAreaA, pair.faceAreaB) * 1e-6
+  );
+  let preferred: FaceDistanceMoveMode;
+  if (Math.abs(pair.faceAreaA - pair.faceAreaB) > areaTolerance) {
+    preferred =
+      pair.faceAreaA < pair.faceAreaB ? 'one-sided-first' : 'one-sided-second';
+  } else {
+    const center = {
+      x: (bounds[0]! + bounds[3]!) / 2,
+      y: (bounds[1]! + bounds[4]!) / 2,
+      z: (bounds[2]! + bounds[5]!) / 2
+    };
+    const faceA = faces.get(pair.faceA);
+    const faceB = faces.get(pair.faceB);
+    const distanceA = faceA?.geometry
+      ? length(subtract(faceA.geometry.center, center))
+      : 0;
+    const distanceB = faceB?.geometry
+      ? length(subtract(faceB.geometry.center, center))
+      : 0;
+    preferred =
+      Math.abs(distanceA - distanceB) > 1e-9
+        ? distanceA > distanceB
+          ? 'one-sided-first'
+          : 'one-sided-second'
+        : (faceA?.hash ?? Number.MAX_SAFE_INTEGER) <=
+            (faceB?.hash ?? Number.MAX_SAFE_INTEGER)
+          ? 'one-sided-first'
+          : 'one-sided-second';
+  }
+  return preferred === 'one-sided-first'
+    ? [preferred, 'one-sided-second']
+    : [preferred, 'one-sided-first'];
+}
+
+function planarPairKey(
+  faces: ReadonlyMap<number, FaceTopology>,
+  pair: RemusOpposingPlanarFacePair
+): string {
+  const faceA = faces.get(pair.faceA)?.geometry;
+  const faceB = faces.get(pair.faceB)?.geometry;
+  if (
+    faceA?.surfaceType !== 'plane' ||
+    faceB?.surfaceType !== 'plane' ||
+    faceA.planeOffset === undefined ||
+    faceB.planeOffset === undefined
+  ) {
+    throw new Error('Planar face-pair proof resolved non-planar endpoints.');
+  }
+  const normal = pair.normal.map((value) => value.toPrecision(12)).join(',');
+  return `${normal}:${faceA.planeOffset.toPrecision(12)}:${faceB.planeOffset.toPrecision(12)}`;
+}
+
+function provenOpposingPlanarFacePairs(
+  kernel: RemusKernel,
+  solid: number,
+  faces: ReadonlyMap<number, FaceTopology>,
+  bounds: Float64Array | number[],
+  claimedFaceHashes: ReadonlySet<number>
+): OpposingPlanarFacePair[] {
+  if (faces.size > MAX_PLANAR_FACE_PAIR_QUERY_FACES) {
+    return [];
+  }
+  const ranked = queryOpposingPlanarFacePairs(kernel, solid).sort(
+    (left, right) =>
+      faceDistancePairScore(right) - faceDistancePairScore(left) ||
+      right.distance - left.distance ||
+      left.faceA - right.faceA ||
+      left.faceB - right.faceB
+  );
+  const seenPlanes = new Set<string>();
+  const published: OpposingPlanarFacePair[] = [];
+  for (const pair of ranked) {
+    const faceA = faces.get(pair.faceA);
+    const faceB = faces.get(pair.faceB);
+    if (
+      !faceA?.reference ||
+      !faceB?.reference ||
+      claimedFaceHashes.has(faceA.hash) ||
+      claimedFaceHashes.has(faceB.hash)
+    ) {
+      continue;
+    }
+    const key = planarPairKey(faces, pair);
+    if (seenPlanes.has(key)) {
+      continue;
+    }
+    seenPlanes.add(key);
+    const modes: FaceDistanceMoveMode[] = pairBisectsSolidSymmetry(
+      faces,
+      pair,
+      bounds
+    )
+      ? ['symmetric']
+      : oneSidedFaceDistanceModes(faces, pair, bounds);
+    let proof: { mode: FaceDistanceMoveMode; distance: number } | null = null;
+    for (const mode of modes) {
+      const distance = proveChangedFaceDistance(kernel, solid, pair, mode);
+      if (distance !== null) {
+        proof = { mode, distance };
+        break;
+      }
+    }
+    if (!proof) {
+      continue;
+    }
+    published.push({
+      faceAHash: faceA.hash,
+      faceAReference: faceA.reference,
+      faceBHash: faceB.hash,
+      faceBReference: faceB.reference,
+      distance: pair.distance,
+      overlapArea: pair.overlapArea,
+      faceAreaA: pair.faceAreaA,
+      faceAreaB: pair.faceAreaB,
+      normal: pairNormalVector(pair),
+      faceABordersBlend: pair.faceABordersBlend,
+      faceBBordersBlend: pair.faceBBordersBlend,
+      moveMode: proof.mode,
+      provenChangedDistance: proof.distance
+    });
+    if (published.length >= MAX_PROVEN_FACE_DISTANCE_PAIRS) {
+      break;
+    }
+  }
+  return published;
+}
 export interface ExactKernelAdapter {
   readonly kind: 'remus';
   syncDocument(document: ProjectDocument): Promise<DerivedState>;
@@ -305,7 +564,14 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
   /** The build loop's read/write seam onto {@link importedStepCache}. */
   private readonly importedSteps: ImportedStepStore = {
     lookup: (checksum) => this.importedStepCache.get(checksum),
-    store: (checksum, kernel, solids, acceptedDeclaredIndices, diagnostics, pinned) =>
+    store: (
+      checksum,
+      kernel,
+      solids,
+      acceptedDeclaredIndices,
+      diagnostics,
+      pinned
+    ) =>
       this.storeImportedStep(
         checksum,
         kernel,
@@ -652,6 +918,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
       // them, and face handles are only observed to be globally unique, not
       // contracted to be.
       const faceHashByHandle = new Map<number, number>();
+      const faceTopologyByHandle = new Map<number, FaceTopology>();
       const recognitionIdentities = new Map<
         number,
         ImportedRecognitionFaceIdentity
@@ -725,18 +992,21 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
             hash,
             ...(verifiedReference ? { reference: verifiedReference } : {})
           });
-          topology.faces.push({
+          const publishedFace: FaceTopology = {
             topologyId: `face:${hash}`,
             hash,
             reference: verifiedReference,
             triangleStart: (indexOffset + start) / 3,
             triangleCount: (end - start) / 3,
             geometry: measureOwnedFaceGeometry(kernel, solid, handle)
-          });
+          };
+          faceTopologyByHandle.set(handle, publishedFace);
+          topology.faces.push(publishedFace);
         }
       } finally {
         mesh.free();
       }
+      let claimedFaceHashes = new Set<number>();
       if (recognizeImportedFeatures) {
         const recognized = collectRecognizedImportedFeatures(
           kernel,
@@ -746,6 +1016,25 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
         if (recognized.length > 0) {
           topology.recognizedImportedFeatures ??= [];
           topology.recognizedImportedFeatures.push(...recognized);
+          claimedFaceHashes = new Set(
+            recognized.flatMap((feature) => feature.participatingFaceHashes)
+          );
+        }
+        // Replay collapses a body before direct edit, so a proof against only
+        // one member of a multi-solid body would authorize different topology.
+        const pairs =
+          shape.solids.length === 1
+            ? provenOpposingPlanarFacePairs(
+                kernel,
+                solid,
+                faceTopologyByHandle,
+                bounds,
+                claimedFaceHashes
+              )
+            : [];
+        if (pairs.length > 0) {
+          topology.opposingPlanarFacePairs ??= [];
+          topology.opposingPlanarFacePairs.push(...pairs);
         }
       }
 
@@ -884,8 +1173,11 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     // what the next sync restores. On ANY throw the whole cache is dropped:
     // a failed sync must never leave a table the next sync would trust.
     try {
-      const { kernel, build, replayed, restored } =
-        this.buildWithHistoryCache(document, sources, pinned);
+      const { kernel, build, replayed, restored } = this.buildWithHistoryCache(
+        document,
+        sources,
+        pinned
+      );
       const bodies = listNodesByKind(document, 'body');
       const features = new Map(
         listNodesByKind(document, 'feature').map((feature) => [
@@ -932,8 +1224,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
           cached.solidKey === solidKey &&
           cached.strict === requiresStrictUnionValidation &&
           cached.recognizedImportedFeatures === recognizeImportedFeatures &&
-          countFaceHandles(kernel, shape.solids) ===
-            cached.faceHandleCount
+          countFaceHandles(kernel, shape.solids) === cached.faceHandleCount
         ) {
           measured = cached.measured;
           reusedMeasurements += 1;
@@ -1115,7 +1406,10 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     return millimeterScale === 1
       ? solids
       : solids.map((solid) =>
-          kernel.copyAndTransformSolid(solid, uniformScaleMatrix(millimeterScale))
+          kernel.copyAndTransformSolid(
+            solid,
+            uniformScaleMatrix(millimeterScale)
+          )
         );
   }
 
@@ -1124,7 +1418,12 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     bodyIds: BodyId[]
   ): Promise<string> {
     return this.withExportBuild(document, (kernel, build) => {
-      const exportSolids = this.exportSolidsFor(kernel, build, document, bodyIds);
+      const exportSolids = this.exportSolidsFor(
+        kernel,
+        build,
+        document,
+        bodyIds
+      );
       // Never fuse: a boolean union changes the geometry (overlaps merge,
       // coincident faces weld). The kernel writes each body as its own
       // MANIFOLD_SOLID_BREP inside one shape representation, so they stay
@@ -1167,7 +1466,12 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     deflection: number = STL_EXPORT_DEFLECTION
   ): Promise<string> {
     return this.withExportBuild(document, (kernel, build) => {
-      const exportSolids = this.exportSolidsFor(kernel, build, document, bodyIds);
+      const exportSolids = this.exportSolidsFor(
+        kernel,
+        build,
+        document,
+        bodyIds
+      );
       if (exportSolids.length === 1) {
         return decodeText(kernel.exportStlAscii(exportSolids[0]!, deflection));
       }
@@ -1204,7 +1508,12 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
       );
     }
     return this.withExportBuild(document, (kernel, build) => {
-      const exportSolids = this.exportSolidsFor(kernel, build, document, bodyIds);
+      const exportSolids = this.exportSolidsFor(
+        kernel,
+        build,
+        document,
+        bodyIds
+      );
       const handles = new Uint32Array(exportSolids);
       // Every writer takes the whole solid list: bodies stay distinct
       // objects in the 3MF package and merge into one facet stream for the
