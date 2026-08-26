@@ -324,7 +324,11 @@ function validateFeatureReorder(
         );
       }
       const featureAt = featurePosition.get(id);
-      if (featureAt !== undefined && id !== feature.featureId && featureAt > index) {
+      if (
+        featureAt !== undefined &&
+        id !== feature.featureId &&
+        featureAt > index
+      ) {
         throw new Error(
           `Cannot reorder: "${feature.name}" would run before the feature it depends on.`
         );
@@ -455,10 +459,7 @@ function validateSplitInput(
   }
 }
 
-function validateHoleInput(
-  document: ProjectDocument,
-  input: HoleInput
-): void {
+function validateHoleInput(document: ProjectDocument, input: HoleInput): void {
   validateBodyTarget(document, input.targetBodyId);
   const diameter = resolvedModelingValue(
     document,
@@ -1546,6 +1547,12 @@ function assertOperationExpressions(
           `${operation.name} offset`,
           operation.operation.offset
         );
+      } else if (operation.operation.kind === 'set-face-distance') {
+        assertEvaluableExpression(
+          scope,
+          `${operation.name} distance`,
+          operation.operation.distance
+        );
       } else if (operation.operation.kind === 'resize-cylindrical-face') {
         assertEvaluableExpression(
           scope,
@@ -2314,6 +2321,8 @@ export function commandsForCadPatch(
               ['boreDiameter', 'sinkDiameter', 'angleRadians'].includes(
                 operation.field
               )) ||
+            (edit.kind === 'set-face-distance' &&
+              operation.field === 'distance') ||
             (edit.kind === 'resize-cylindrical-face' &&
               operation.field === 'radius') ||
             (edit.kind === 'resize-blend' && operation.field === 'newRadius') ||

@@ -817,6 +817,10 @@ function applyDirectEdit(
     });
   } else if (operation.kind === 'offset-face') {
     output = offsetPlanarFace(kernel, owner, face, operation, scope);
+  } else if (operation.kind === 'set-face-distance') {
+    throw new Error(
+      'OCCT parity reference does not implement face-distance direct edits.'
+    );
   } else if (operation.kind === 'resize-blend') {
     throw new Error(
       'OCCT parity reference does not implement imported blend resizing.'
