@@ -936,7 +936,85 @@ describe('AI patch contracts', () => {
         digest,
         proposal
       )
-    ).toThrow('AI target mismatch.');
+    ).toThrow(/referred to the selected body/);
+  });
+
+  it('lets a patch place a body it created in the same proposal', () => {
+    // The regression. An alias names a body this patch is creating, so it can
+    // never equal a digest body id — the guard rejected the exact shape the
+    // system prompt asks for. "Add a lid to this part" answers with the lid
+    // created and then parked beside the selection via `add_transform` on the
+    // alias, and the whole reply was discarded before the user saw a card.
+    const document = createProjectDocument('Bodies', toUserId('user_ai'));
+    const selectedBody = toBodyId('body_selected');
+    const digest = createCadDocumentDigest(document, {
+      featureIds: [],
+      bodyIds: [selectedBody],
+      topologies: []
+    });
+    const proposal = parseCadPatchProposal({
+      proposalId: 'add_lid',
+      summary: 'Add a lid beside the part.',
+      assumptions: [],
+      operations: [
+        {
+          kind: 'add_primitive',
+          name: 'Lid',
+          primitiveKind: 'box',
+          localId: '$lid',
+          dimensions: { width: 10, height: 2, depth: 10 }
+        },
+        {
+          kind: 'add_transform',
+          name: 'Park lid',
+          targetBodyId: '$lid',
+          translation: { x: 20, y: 0, z: 0 },
+          rotationDeg: { x: 0, y: 0, z: 0 }
+        }
+      ]
+    });
+
+    expect(() =>
+      groundCadPatchProposalToSelection(
+        'Add a lid to this part',
+        digest,
+        proposal
+      )
+    ).not.toThrow();
+  });
+
+  it('still refuses a boolean over different real bodies than the selection', () => {
+    // The alias exemption must not blind the boolean guard to real ids: only
+    // the `$` entries are excused, and the rest must still match the selection.
+    const document = createProjectDocument('Bodies', toUserId('user_ai'));
+    const first = toBodyId('body_first');
+    const second = toBodyId('body_second');
+    const digest = createCadDocumentDigest(document, {
+      featureIds: [],
+      bodyIds: [first, second],
+      topologies: []
+    });
+    const proposal = parseCadPatchProposal({
+      proposalId: 'union_wrong',
+      summary: 'Union the wrong pair.',
+      assumptions: [],
+      operations: [
+        {
+          kind: 'add_boolean',
+          name: 'Union',
+          operation: 'union',
+          targetBodyIds: ['body_first', 'body_other']
+        }
+      ]
+    });
+
+    expect(() =>
+      groundCadPatchProposalToSelection(
+        'Combine these selected bodies',
+        digest,
+        proposal
+      )
+    ).toThrow(/different set of bodies/);
   });
 
   it('rejects AI sketch polygons above the side limit', () => {
