@@ -5171,6 +5171,74 @@ export function App() {
     });
   }
 
+  /**
+   * Per-sketch visibility override. Absent means the default: a sketch whose
+   * profile a feature consumed hides itself, everything else shows. View
+   * state, deliberately not written into the document.
+   */
+  const [sketchVisibilityOverrides, setSketchVisibilityOverrides] = useState<
+    Record<string, boolean>
+  >({});
+
+  /** Sketches referenced by any feature: extrude/revolve, loft sections, sweep profile + path. */
+  const consumedSketchIds = useMemo(() => {
+    const consumed = new Set<string>();
+    if (!doc) {
+      return consumed;
+    }
+    for (const feature of listFeaturesInOrder(doc)) {
+      const data = feature.data as {
+        featureKind: string;
+        sketchId?: string;
+        sections?: { sketchId: string }[];
+        profile?: { sketchId?: string };
+        path?: { sketchId?: string };
+      };
+      // A sketch feature's own row references its sketch without consuming it.
+      if (data.featureKind === 'sketch') {
+        continue;
+      }
+      if (typeof data.sketchId === 'string') {
+        consumed.add(data.sketchId);
+      }
+      for (const section of data.sections ?? []) {
+        consumed.add(section.sketchId);
+      }
+      if (typeof data.profile?.sketchId === 'string') {
+        consumed.add(data.profile.sketchId);
+      }
+      if (typeof data.path?.sketchId === 'string') {
+        consumed.add(data.path.sketchId);
+      }
+    }
+    return consumed;
+  }, [doc]);
+
+  const hiddenSketchIds = useMemo(() => {
+    const hidden = new Set<string>();
+    if (!doc) {
+      return hidden;
+    }
+    for (const sketch of listNodesByKind(doc, 'sketch')) {
+      const visible =
+        sketchVisibilityOverrides[sketch.sketchId] ??
+        !consumedSketchIds.has(sketch.sketchId);
+      if (!visible) {
+        hidden.add(sketch.sketchId);
+      }
+    }
+    return hidden;
+  }, [doc, sketchVisibilityOverrides, consumedSketchIds]);
+
+  function toggleSketchVisibility(sketchId: string) {
+    const show = hiddenSketchIds.has(sketchId);
+    setSketchVisibilityOverrides((current) => ({
+      ...current,
+      [sketchId]: show
+    }));
+    setStatus(show ? 'Sketch shown.' : 'Sketch hidden.');
+  }
+
   function previewBodyAppearance(preview: BodyAppearancePreview | null) {
     setBodyAppearancePreview(preview);
   }
@@ -9163,6 +9231,11 @@ export function App() {
       const active =
         interaction.mode === 'sketch' &&
         interaction.session.sketchId === sketch.sketchId;
+      // Consumed sketches auto-hide (Shapr-style); the history row's eye
+      // overrides either way. The in-session sketch always renders its rig.
+      if (hiddenSketchIds.has(sketch.sketchId) && !active) {
+        return [];
+      }
       const selected =
         selectedSketch?.sketchId === sketch.sketchId ||
         selectedSketchProfileId === sketch.sketchId;
@@ -9251,7 +9324,8 @@ export function App() {
     // Text outlines resolve from already-parsed faces, so a face arriving
     // after this memo last ran has to re-run it or the glyph stays a
     // diagnostic until something unrelated invalidates the memo.
-    textFontsVersion
+    textFontsVersion,
+    hiddenSketchIds
   ]);
 
   useEffect(() => {
@@ -12590,6 +12664,7 @@ export function App() {
             representations={representations}
             selectedFeatureNodeId={selectedFeatureNodeId}
             hiddenBodyIds={hiddenBodyIds}
+            hiddenSketchIds={hiddenSketchIds}
             warnings={warnings}
             checkpoints={doc?.checkpoints ?? []}
             documentVersion={doc?.version ?? 0}
@@ -12598,6 +12673,7 @@ export function App() {
             onSelectBody={handleSelectBodyFromTree}
             selectedBodyIds={selectedBodyIds}
             onToggleBodyVisibility={toggleBodyVisibility}
+            onToggleSketchVisibility={toggleSketchVisibility}
             onFeatureContextMenu={handleFeatureContextMenu}
             onToggleFeatureSuppression={handleToggleFeatureSuppression}
             onRollbackAfterFeature={handleRollbackAfterFeature}
