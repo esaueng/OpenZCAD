@@ -34,4 +34,17 @@ describe('STEP metadata parsing', () => {
     const metadata = parseStepMetadata('empty.step', 'ISO-10303-21;\nEND-ISO-10303-21;');
     expect(metadata).toEqual({ name: 'empty.step', products: [], colors: [] });
   });
+
+  it('caps collected labels so a crafted file cannot balloon memory', () => {
+    // 2 000 tiny matches in well under a megabyte of file must not become
+    // 2 000 collected strings; the scan feeds UI labels, and the first
+    // entries are the only ones a user can meaningfully see.
+    const text = Array.from(
+      { length: 2_000 },
+      (_, index) => `#${index}=PRODUCT('P${index}');`
+    ).join('\n');
+    const metadata = parseStepMetadata('crafted.step', text);
+    expect(metadata.products.length).toBe(1_000);
+    expect(metadata.products[0]).toBe('P0');
+  });
 });
