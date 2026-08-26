@@ -1035,23 +1035,41 @@ export function groundCadPatchProposalToSelection(
       return { ...operation, featureId: selectedFeatureId as FeatureId };
     }
 
+    // A `$alias` names a body this same patch is creating, so it can never
+    // equal a body id from the digest — comparing them rejected the shape the
+    // system prompt asks for. "Add a lid to this part" answers with the lid
+    // created and then parked beside the selection via `add_transform` on the
+    // alias, and the whole reply was discarded before the user ever saw it.
+    // `add_boolean` has no placement field, so a boolean-derived companion
+    // part can only be positioned this way.
+    //
+    // The guard is worth keeping for real ids: it catches a model that says
+    // "this body" and then targets a different existing one.
     if (
       referencesSelectedBody &&
       selectedBodyId &&
       (operation.kind === 'add_transform' ||
         operation.kind === 'add_pattern') &&
+      !isLocalBodyRef(operation.targetBodyId) &&
       operation.targetBodyId !== selectedBodyId
     ) {
-      throw new Error('AI target mismatch.');
+      throw new Error(
+        `AI targeted ${operation.targetBodyId} while the prompt referred to the selected body.`
+      );
     }
 
     if (
       referencesSelectedBody &&
       selection.bodyIds.length >= 2 &&
       operation.kind === 'add_boolean' &&
-      !sameStrings(operation.targetBodyIds, selection.bodyIds)
+      !sameStrings(
+        operation.targetBodyIds.filter((id) => !isLocalBodyRef(id)),
+        selection.bodyIds
+      )
     ) {
-      throw new Error('AI boolean mismatch.');
+      throw new Error(
+        'AI combined a different set of bodies than the prompt selected.'
+      );
     }
 
     return operation;
