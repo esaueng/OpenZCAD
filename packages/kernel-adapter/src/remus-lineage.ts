@@ -191,6 +191,63 @@ export function createRemusImportedStepLineage(
   );
 }
 
+/**
+ * Carries only source identities whose exact witnesses survive unchanged.
+ * Moved, split, merged, or otherwise altered topology stays hash-only.
+ */
+export function propagateRemusUnchangedDirectEditLineage(
+  source: RemusLineageState | undefined,
+  results: readonly RemusTopologyCandidate[]
+): RemusLineageState | undefined {
+  if (!source) {
+    return undefined;
+  }
+  const output = emptyLineageState();
+  output.diagnostics.push(...source.diagnostics);
+  const claimedResults = new Set<string>();
+  let omitted = 0;
+  const references: TopologyReferenceV5[] = [
+    ...source.faceReferences.values(),
+    ...source.edgeReferences.values()
+  ];
+  for (const reference of references) {
+    const matches = results.filter(
+      (candidate) =>
+        candidate.kind === reference.kind &&
+        topologyWitnessesEqual(
+          reference.kind,
+          reference.witness,
+          candidate.witness
+        )
+    );
+    if (matches.length !== 1) {
+      omitted += 1;
+      continue;
+    }
+    const match = matches[0]!;
+    const key = `${match.kind}:${match.handle}`;
+    if (claimedResults.has(key)) {
+      omitted += 1;
+      continue;
+    }
+    claimedResults.add(key);
+    const inherited = transformedReference(reference, match.witness);
+    if (inherited.kind === 'edge') {
+      output.edgeReferences.set(match.handle, inherited);
+    } else {
+      output.faceReferences.set(match.handle, inherited);
+    }
+  }
+  if (omitted > 0) {
+    output.diagnostics.push({
+      code: 'hash-only',
+      operation: 'direct-edit',
+      message: `direct-edit retained ${references.length - omitted} unchanged semantic references; ${omitted} changed or ambiguous references remain hash-only.`
+    });
+  }
+  return output;
+}
+
 export function remusHashOnlyLineage(
   operation: TopologyLineageOperation,
   reason: string

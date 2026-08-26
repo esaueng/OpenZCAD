@@ -2,6 +2,8 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
   createCadDocumentDigest,
   parseCadPatchProposal,
+  type CadPatchOperation,
+  type CadPatchProposal,
   type CadSelectionContext
 } from '@openzcad/ai-contracts';
 import { createAutoParameterizeProposal } from '@openzcad/ai-contracts/auto-parameterize';
@@ -23,6 +25,7 @@ import {
 } from '@openzcad/kernel-adapter/exact';
 import {
   toUserId,
+  type DirectEditOperation,
   type FaceTopologyReferenceV5,
   type ProjectDocument
 } from '@openzcad/shared';
@@ -33,6 +36,41 @@ const noSelection: CadSelectionContext = {
   bodyIds: [],
   topologies: []
 };
+
+type FaceDistanceEdit = Extract<
+  DirectEditOperation,
+  { kind: 'set-face-distance' }
+>;
+
+function faceDistanceEdits(proposal: CadPatchProposal): FaceDistanceEdit[] {
+  return proposal.operations.flatMap((operation) =>
+    operation.kind === 'add_direct_edit' &&
+    operation.operation.kind === 'set-face-distance'
+      ? [operation.operation]
+      : []
+  );
+}
+
+type DirectEditPatchOperation = Extract<
+  CadPatchOperation,
+  { kind: 'add_direct_edit' }
+>;
+
+function directEditPatchOperations(
+  proposal: CadPatchProposal
+): DirectEditPatchOperation[] {
+  return proposal.operations.flatMap((operation) =>
+    operation.kind === 'add_direct_edit' ? [operation] : []
+  );
+}
+
+function parameterPatchOperations(
+  proposal: CadPatchProposal
+): Array<Extract<CadPatchOperation, { kind: 'set_parameter' }>> {
+  return proposal.operations.flatMap((operation) =>
+    operation.kind === 'set_parameter' ? [operation] : []
+  );
+}
 
 function nativeDocument(): ProjectDocument {
   const manager = new CommandManager(
@@ -227,6 +265,89 @@ async function importedRecognizedHoleDocument(
   );
   imported.document.derived = await adapter.syncDocument(imported.document);
   expect(imported.document.derived.warnings).toEqual([]);
+  return imported.document;
+}
+
+async function importedShaprBoxDocument(
+  adapter: ExactKernelAdapter
+): Promise<ProjectDocument> {
+  const source = new CommandManager(
+    createProjectDocument('Shapr box source', toUserId('user_shapr_box_source'))
+  );
+  source.execute(
+    commandFactories.addPrimitive({
+      name: 'Source Box',
+      primitiveKind: 'box',
+      dimensions: { width: 20, height: 12, depth: 8 }
+    })
+  );
+  source.document.derived = await adapter.syncDocument(source.document);
+  const stepText = await adapter.exportStep(source.document, [
+    source.document.bodyOrder[0]!
+  ]);
+  const checksum = 'a'.repeat(64);
+  const imported = new CommandManager(
+    createProjectDocument('Guided Shapr box', toUserId('user_shapr_box_import'))
+  );
+  imported.execute(
+    commandFactories.importShaprGuided({
+      step: {
+        name: 'Imported Shapr Box',
+        artifactId: checksum,
+        sourceName: 'box.step',
+        stepText
+      },
+      migration: {
+        representation: 'openzcad-shapr-migration',
+        version: 1,
+        sourceName: 'box.shapr',
+        sourceChecksumSha256: 'b'.repeat(64),
+        companionStepName: 'box.step',
+        companionStepChecksumSha256: checksum,
+        createdAt: '2026-08-26T12:00:00.000Z',
+        schema: {
+          workspaceSchemaVersion: 269,
+          schemaVersion: 307_000,
+          historyVersion: 100,
+          projectVersion: 249_000
+        },
+        units: {
+          source: 'metre-candidate',
+          evidence: 'inferred',
+          documentScaleCandidate: 1_000
+        },
+        summary: {
+          historyNodeCount: 1,
+          sketchCount: 0,
+          curveCount: 0,
+          constraintCount: 0,
+          importedBodyCount: 1,
+          importedPrototypeCount: 1,
+          revisionBlockCount: 0,
+          revisionDeltaCount: 0
+        },
+        operations: [
+          {
+            sourceNodeId: 1,
+            name: 'Import 01',
+            kind: 'import',
+            status: 'unsupported',
+            numericCandidates: [],
+            diagnostic: 'Preserved by exact STEP geometry.'
+          }
+        ],
+        diagnostics: [],
+        semanticReplay: {
+          status: 'not-applied',
+          reason: 'Source history does not prove topology correspondence.'
+        },
+        privateDataOmitted: true
+      }
+    })
+  );
+  imported.document.derived = await adapter.syncDocument(imported.document);
+  expect(imported.document.derived.warnings).toEqual([]);
+  expect(imported.document.shaprImportOrder).toHaveLength(1);
   return imported.document;
 }
 
@@ -787,7 +908,9 @@ describe(
       const proposal = createAutoParameterizeProposal(imported, noSelection);
       expect(
         proposal?.operations.filter(
-          (operation) => operation.kind === 'add_direct_edit'
+          (operation) =>
+            operation.kind === 'add_direct_edit' &&
+            operation.operation.kind === 'resize-through-hole'
         )
       ).toHaveLength(2);
 
@@ -823,8 +946,8 @@ describe(
       const proposal = structuredClone(
         createAutoParameterizeProposal(imported, noSelection)!
       );
-      const directEdit = proposal.operations.find(
-        (operation) => operation.kind === 'add_direct_edit'
+      const directEdit = directEditPatchOperations(proposal).find(
+        (operation) => operation.operation.kind === 'resize-through-hole'
       );
       if (
         !directEdit ||
@@ -907,11 +1030,11 @@ describe(
           structuredClone(proposal),
           createCadDocumentDigest(imported)
         );
-        const parameterOperations = parsed.operations.filter(
-          (operation) => operation.kind === 'set_parameter'
+        const parameterOperations = parameterPatchOperations(parsed).filter(
+          (operation) => operation.name.includes('_hole_')
         );
-        const directEdits = parsed.operations.filter(
-          (operation) => operation.kind === 'add_direct_edit'
+        const directEdits = directEditPatchOperations(parsed).filter(
+          (operation) => operation.operation.kind === expectations[style].edit
         );
         expect(parameterOperations).toHaveLength(
           expectations[style].parameters
@@ -974,8 +1097,14 @@ describe(
       async (style, operationField, proofKind, proofField) => {
         const imported = importedByStyle[style];
         const proposal = createAutoParameterizeProposal(imported, noSelection)!;
-        const directEdit = proposal.operations.find(
-          (operation) => operation.kind === 'add_direct_edit'
+        const directEdit = directEditPatchOperations(proposal).find(
+          (operation) =>
+            operation.operation.kind ===
+            (style === 'blind'
+              ? 'resize-imported-blind-hole'
+              : style === 'counterbore'
+                ? 'resize-imported-counterbore'
+                : 'resize-imported-countersink')
         );
         if (!directEdit) {
           throw new Error(`Expected an editable ${style} diameter.`);
@@ -1058,6 +1187,168 @@ describe(
       expect(manager.document.derived.warnings.join('\n')).toMatch(
         /Changing an imported counterbore depth is not yet supported/
       );
+    });
+  }
+);
+
+describe(
+  'assistant Shapr imported global dimensions',
+  { timeout: 120_000 },
+  () => {
+    let adapter: ExactKernelAdapter;
+    let imported: ProjectDocument;
+
+    beforeAll(async () => {
+      adapter = await createExactKernelAdapter();
+      imported = await importedShaprBoxDocument(adapter);
+    });
+
+    afterAll(() => {
+      adapter.dispose();
+    });
+
+    it('publishes and parses only pairs with a real changed-value proof', () => {
+      const bodyId = imported.bodyOrder[0]!;
+      const pairs =
+        imported.derived.bodyRepresentations[bodyId]?.topology
+          ?.opposingPlanarFacePairs;
+      expect(
+        pairs?.map((pair) => pair.distance).sort((left, right) => left - right)
+      ).toEqual([8, 12, 20]);
+      expect(
+        pairs?.every(
+          (pair) =>
+            pair.moveMode === 'symmetric' &&
+            pair.provenChangedDistance > pair.distance
+        )
+      ).toBe(true);
+
+      const proposal = createAutoParameterizeProposal(imported, noSelection)!;
+      expect(faceDistanceEdits(proposal)).toHaveLength(3);
+      expect(
+        parseCadPatchProposal(
+          structuredClone(proposal),
+          createCadDocumentDigest(imported)
+        ).operations
+      ).toHaveLength(proposal.operations.length);
+
+      const withoutProof = structuredClone(imported);
+      for (const pair of withoutProof.derived.bodyRepresentations[bodyId]!
+        .topology?.opposingPlanarFacePairs ?? []) {
+        pair.provenChangedDistance = pair.distance;
+      }
+      expect(
+        createAutoParameterizeProposal(withoutProof, noSelection)
+      ).toBeNull();
+    });
+
+    it('applies all initial bindings as identity-preserving no-ops', async () => {
+      const bodyId = imported.bodyOrder[0]!;
+      const before = imported.derived.bodyRepresentations[bodyId]!;
+      const proposal = createAutoParameterizeProposal(imported, noSelection)!;
+      const preflight = await preflightCadPatch(
+        imported,
+        proposal,
+        (candidate) => adapter.syncDocument(candidate)
+      );
+      const applied = new CommandManager(imported).runTransaction(
+        'Apply Shapr global dimensions',
+        preflight.commands
+      );
+      applied.derived = await adapter.syncDocument(applied);
+      const after = applied.derived.bodyRepresentations[bodyId]!;
+      expect(after.mesh.vertices).toEqual(before.mesh.vertices);
+      expect(after.mesh.indices).toEqual(before.mesh.indices);
+      expect(after.volume).toBe(before.volume);
+      expect(after.faceCount).toBe(before.faceCount);
+      expect(after.topology?.faces.map((face) => face.reference)).toEqual(
+        before.topology?.faces.map((face) => face.reference)
+      );
+      expect(applied.derived.warnings).toEqual([]);
+    });
+
+    it('re-proves and exactly rebuilds every changed box dimension', async () => {
+      const bodyId = imported.bodyOrder[0]!;
+      const before = imported.derived.bodyRepresentations[bodyId]!;
+      const proposal = createAutoParameterizeProposal(imported, noSelection)!;
+      const preflight = await preflightCadPatch(
+        imported,
+        proposal,
+        (candidate) => adapter.syncDocument(candidate)
+      );
+      for (const edit of faceDistanceEdits(proposal)) {
+        const parameterName = String(edit.distance);
+        const desired = edit.sourceDistance + 1;
+        const axis = parameterName.endsWith('_x')
+          ? 'x'
+          : parameterName.endsWith('_y')
+            ? 'y'
+            : 'z';
+        const beforeCenter =
+          (before.bbox.min[axis] + before.bbox.max[axis]) / 2;
+        const manager = new CommandManager(preflight.candidate);
+        manager.execute(
+          commandFactories.setParameter({
+            name: parameterName,
+            expression: String(desired)
+          })
+        );
+        manager.document.derived = await adapter.syncDocument(manager.document);
+        expect(manager.document.derived.warnings).toEqual([]);
+        const after = manager.document.derived.bodyRepresentations[bodyId]!;
+        expect(after.bbox.max[axis] - after.bbox.min[axis]).toBeCloseTo(
+          desired,
+          7
+        );
+        expect(after.volume).toBeCloseTo(
+          before.volume * (desired / edit.sourceDistance),
+          6
+        );
+        expect((after.bbox.min[axis] + after.bbox.max[axis]) / 2).toBeCloseTo(
+          beforeCenter,
+          7
+        );
+      }
+    });
+
+    it('fails closed on a stale opposite reference even at the no-op value', async () => {
+      const proposal = structuredClone(
+        createAutoParameterizeProposal(imported, noSelection)!
+      );
+      const edit = directEditPatchOperations(proposal).find(
+        (operation) => operation.operation.kind === 'set-face-distance'
+      );
+      if (
+        !edit ||
+        edit.operation.kind !== 'set-face-distance' ||
+        !edit.operation.oppositeFaceReference
+      ) {
+        throw new Error('Expected a face-distance binding.');
+      }
+      edit.operation.oppositeFaceReference.lineageName += '.stale';
+      await expect(
+        preflightCadPatch(imported, proposal, (candidate) =>
+          adapter.syncDocument(candidate)
+        )
+      ).rejects.toThrow(/Direct-edit face is stale/);
+    });
+
+    it('fails closed when the recorded pair distance is stale', async () => {
+      const proposal = structuredClone(
+        createAutoParameterizeProposal(imported, noSelection)!
+      );
+      const edit = directEditPatchOperations(proposal).find(
+        (operation) => operation.operation.kind === 'set-face-distance'
+      );
+      if (!edit || edit.operation.kind !== 'set-face-distance') {
+        throw new Error('Expected a face-distance binding.');
+      }
+      edit.operation.sourceDistance += 1;
+      await expect(
+        preflightCadPatch(imported, proposal, (candidate) =>
+          adapter.syncDocument(candidate)
+        )
+      ).rejects.toThrow(/no longer matches its recorded source distance/);
     });
   }
 );

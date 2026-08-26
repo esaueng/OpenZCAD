@@ -5,7 +5,10 @@
  */
 import type { DirectEditOperation } from '@openzcad/shared';
 
-export function assertFiniteDirectEditNumber(value: unknown, label: string): number {
+export function assertFiniteDirectEditNumber(
+  value: unknown,
+  label: string
+): number {
   if (typeof value !== 'number' || !Number.isFinite(value)) {
     throw new Error(`Direct-edit ${label} must be finite.`);
   }
@@ -34,7 +37,9 @@ export function assertDirectEditParam(value: unknown, label: string): void {
   throw new Error(`Direct-edit ${label} must be a finite value or expression.`);
 }
 
-export function assertDirectEditOperation(operation: DirectEditOperation): void {
+export function assertDirectEditOperation(
+  operation: DirectEditOperation
+): void {
   if (!operation || typeof operation !== 'object' || Array.isArray(operation)) {
     throw new Error('Direct-edit operation must be an object.');
   }
@@ -192,6 +197,39 @@ export function assertDirectEditOperation(operation: DirectEditOperation): void 
       assertDirectEditVector(value.sourceCenter, 'source center');
       assertDirectEditVector(value.sourceNormal, 'source normal');
       assertDirectEditParam(value.offset, 'offset');
+      return;
+    case 'set-face-distance':
+      if (
+        typeof value.oppositeFaceHash !== 'number' ||
+        !Number.isSafeInteger(value.oppositeFaceHash) ||
+        value.oppositeFaceHash === value.faceHash
+      ) {
+        throw new Error(
+          'Direct-edit opposite face hash must identify a distinct safe integer.'
+        );
+      }
+      if (
+        assertFiniteDirectEditNumber(value.sourceDistance, 'source distance') <=
+        0
+      ) {
+        throw new Error(
+          'Direct-edit source distance must be greater than zero.'
+        );
+      }
+      if (
+        value.moveMode !== 'symmetric' &&
+        value.moveMode !== 'one-sided-first' &&
+        value.moveMode !== 'one-sided-second'
+      ) {
+        throw new Error('Direct-edit face-distance move mode is invalid.');
+      }
+      assertDirectEditParam(value.distance, 'distance');
+      if (
+        value.parameterBinding !== undefined &&
+        value.parameterBinding !== true
+      ) {
+        throw new Error('Direct-edit parameter binding is invalid.');
+      }
       return;
     case 'resize-cylindrical-face':
       if (

@@ -174,6 +174,9 @@ export interface ParametricPlane {
   normal: ParametricVector3;
 }
 
+export type FaceDistanceMoveMode =
+  'symmetric' | 'one-sided-first' | 'one-sided-second';
+
 /**
  * History-backed edits applied directly to exact B-Rep topology. The source
  * dimension is a geometric fingerprint: rebuilding fails closed if the face
@@ -266,6 +269,20 @@ export type DirectEditOperation =
       sourceNormal: Vector3;
       /** Signed distance along sourceNormal; positive adds material. */
       offset: ParamValue;
+    }
+  | {
+      kind: 'set-face-distance';
+      faceHash: number;
+      faceReference?: FaceTopologyReferenceV5;
+      oppositeFaceHash: number;
+      oppositeFaceReference?: FaceTopologyReferenceV5;
+      /** Exact perpendicular separation recorded when the binding is made. */
+      sourceDistance: number;
+      /** The checkpointed changed-value proof fixes which face group moves. */
+      moveMode: FaceDistanceMoveMode;
+      distance: ParamValue;
+      /** Auto-parameterization may deliberately begin as an exact no-op. */
+      parameterBinding?: true;
     }
   | {
       kind: 'resize-cylindrical-face';
@@ -1221,6 +1238,28 @@ export interface EdgeTopology {
 }
 
 /**
+ * An exact opposing planar pair whose stored move mode passed a non-zero
+ * checkpointed rebuild before publication.
+ */
+export interface OpposingPlanarFacePair {
+  faceAHash: number;
+  faceAReference: FaceTopologyReferenceV5;
+  faceBHash: number;
+  faceBReference: FaceTopologyReferenceV5;
+  distance: number;
+  overlapArea: number;
+  faceAreaA: number;
+  faceAreaB: number;
+  /** Outward unit normal of face A. */
+  normal: Vector3;
+  faceABordersBlend: boolean;
+  faceBBordersBlend: boolean;
+  moveMode: FaceDistanceMoveMode;
+  /** The real changed distance accepted by the exact proof rebuild. */
+  provenChangedDistance: number;
+}
+
+/**
  * Exact geometry for one edge's underlying curve.
  *
  * Only `type` is always present. Analytic data is published for circles alone,
@@ -1280,6 +1319,8 @@ export interface BodyTopology {
   edges: EdgeTopology[];
   /** Non-overlapping exact proofs created while imported topology is live. */
   recognizedImportedFeatures?: RecognizedImportedFeature[];
+  /** Bounded imported-body dimensions with a successful changed-value proof. */
+  opposingPlanarFacePairs?: OpposingPlanarFacePair[];
   lineageDiagnostics?: TopologyLineageDiagnostic[];
 }
 

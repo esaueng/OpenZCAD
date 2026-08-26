@@ -45,12 +45,16 @@ operation order, and topology correspondence are uniquely proven. A missing or
 multiple match remains unresolved; ordinal or nearest-geometry substitution is
 not allowed.
 
-The hammer-holder's nominal 46 mm dimension is therefore not exposed. Promotion
-requires proving a single semantic parameter controls every coordinated edit,
-matching the unchanged default to the exact witness, and rebuilding at a real
-changed value while checking closure, manifoldness, volume, bounds, surface
-inventory, topology identities, STEP export/re-import, and rendered browser
-behavior.
+After import, Auto-parameterize may offer an opposing-planar face distance only
+when the exact pair is re-proved and its deterministic move passes a non-zero
+strict B-Rep and watertight-mesh rebuild. Unsupported pairs are omitted, and a
+same-value binding still resolves both stored references before leaving the
+original exact shape unchanged.
+
+That proof does not promote a source-history number by itself. The
+hammer-holder's nominal 46 mm dimension remains unavailable unless its exact
+pair and intended coordinated move pass the same changed-value contract;
+semantic reconstruction still requires the broader guided workflow.
 
 ## Legal boundary
 

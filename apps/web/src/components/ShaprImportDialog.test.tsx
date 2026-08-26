@@ -76,7 +76,9 @@ describe('ShaprImportDialog', () => {
     );
 
     expect(screen.getByText('Exact geometry is authoritative')).toBeVisible();
-    expect(screen.getByText(/No 46 mm parameter is exposed/)).toBeVisible();
+    expect(
+      screen.getByText(/offers only exact planar face distances/)
+    ).toBeVisible();
     expect(screen.getByText('candidate')).toBeVisible();
     await userEvent.click(
       screen.getByRole('button', { name: 'Import exact STEP + evidence' })
