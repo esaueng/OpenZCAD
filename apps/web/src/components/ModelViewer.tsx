@@ -182,7 +182,8 @@ import {
 } from '../lib/sketch/session';
 import type { SketchCircleMode } from '../lib/interaction/machine';
 import type { PlaneBasis } from '@openzcad/geometry';
-import type { ParamValue, SketchObjectData } from '@openzcad/shared';
+import type { ParamValue, PlaneId, SketchObjectData } from '@openzcad/shared';
+import { buildPlanePickerRig } from './viewer/planePickerRig';
 import { evalParamValue } from '../lib/model';
 import {
   edgeLabel,
@@ -531,6 +532,13 @@ interface ModelViewerProps {
     modifiers: { additive: boolean; toggle: boolean }
   ): void;
   onHoverRegion(region: RegionPickData | null): void;
+  /**
+   * The Sketch tool is armed and waiting for a plane: show the three ghost
+   * quads at the origin so picking one is a click in the model.
+   */
+  planePickerArmed: boolean;
+  /** A ghost plane was clicked. */
+  onPickPlane(plane: PlaneId): void;
   /**
    * What measuring the hovered target would report, for the preview chip.
    * Null when measuring is off or the pick has nothing honest to say.
@@ -1178,6 +1186,8 @@ export function ModelViewer({
   profileSelectionMode,
   onSelectRegion,
   onHoverRegion,
+  planePickerArmed,
+  onPickPlane,
   onMeasurePreview,
   regionHandle,
   sketchMode,
@@ -1307,6 +1317,11 @@ export function ModelViewer({
   onHoverRegionRef.current = onHoverRegion;
   const onMeasurePreviewRef = useRef(onMeasurePreview);
   onMeasurePreviewRef.current = onMeasurePreview;
+  const onPickPlaneRef = useRef(onPickPlane);
+  onPickPlaneRef.current = onPickPlane;
+  const planePickerRigRef = useRef<ReturnType<
+    typeof buildPlanePickerRig
+  > | null>(null);
   const profileSelectionModeRef = useRef(profileSelectionMode);
   profileSelectionModeRef.current = profileSelectionMode;
   const profilePickTargetsRef = useRef<ProfilePickTarget[]>([]);
@@ -2454,6 +2469,24 @@ export function ModelViewer({
 
     function pick(event: PointerEvent | MouseEvent) {
       return picker.pick(event);
+    }
+
+    /**
+     * Nearest ghost plane under the pointer, or null. Distance-compared with
+     * the solid pick by the callers, so a plane in front of the model wins
+     * the click and a face in front of a plane still wins its own.
+     */
+    function pickGhostPlane(
+      event: PointerEvent | MouseEvent
+    ): { plane: PlaneId; distance: number } | null {
+      const rig = planePickerRigRef.current;
+      if (!rig) {
+        return null;
+      }
+      picker.setRayFromEvent(event);
+      const hit = picker.intersect(rig.targets(), false)[0];
+      const plane = hit?.object.userData.pickPlane as PlaneId | undefined;
+      return plane ? { plane, distance: hit!.distance } : null;
     }
 
     /**
@@ -3695,6 +3728,14 @@ export function ModelViewer({
       );
       depthCycle = stepped.cycle;
       const result = stepped.candidate;
+      // A ghost plane in front of whatever the stack resolved starts the
+      // sketch instead: it is armed precisely to be clicked.
+      const ghost = pickGhostPlane(event);
+      if (ghost && (!result || ghost.distance < result.distance)) {
+        planePickerRigRef.current?.setHover(null);
+        onPickPlaneRef.current(ghost.plane);
+        return;
+      }
       if (result?.region) {
         onSelectRegionRef.current(result.region, {
           additive: event.shiftKey,
@@ -3983,7 +4024,20 @@ export function ModelViewer({
         updateMeasurePreview(event);
         return;
       }
-      applyHover(pick(event));
+      // A ghost plane nearer than the solid under the cursor owns the hover:
+      // the click will start a sketch on it, not select the face behind.
+      const ghost = pickGhostPlane(event);
+      const solid = pick(event);
+      if (ghost && (!solid || ghost.distance < solid.distance)) {
+        planePickerRigRef.current?.setHover(ghost.plane);
+        applyHover(null);
+        renderer.domElement.style.cursor = 'pointer';
+        updateMeasurePreview(event);
+        requestRender();
+        return;
+      }
+      planePickerRigRef.current?.setHover(null);
+      applyHover(solid);
       updateMeasurePreview(event);
     }
 
@@ -6346,6 +6400,13 @@ export function ModelViewer({
         camera.quaternion.copy(orthographic.quaternion);
       }
 
+      // Ghost planes hold their screen size, so they stay a target rather
+      // than a backdrop as the camera dollies.
+      const planePicker = planePickerRigRef.current;
+      if (planePicker) {
+        planePicker.setScale(worldPerPixelAt(new THREE.Vector3()));
+      }
+
       const activeSketchMode = sketchModeRef.current;
       const activeSketchRig = sketchRigRef.current;
       let inferenceAnimating = false;
@@ -7872,6 +7933,30 @@ export function ModelViewer({
       context.requestRender();
     };
   }, [regionHandle, sketchViews]);
+
+  // Ghost planes while the Sketch tool waits for one. Installed and torn
+  // down with the armed state; the render loop keeps their screen size.
+  useEffect(() => {
+    const context = contextRef.current;
+    if (!context || !planePickerArmed) {
+      return;
+    }
+    const rig = buildPlanePickerRig();
+    // The render loop sizes it against the live camera on the next frame;
+    // this only keeps the first frame from drawing a unit-sized sliver.
+    rig.setScale(0.05);
+    context.scene.add(rig.group);
+    planePickerRigRef.current = rig;
+    context.requestRender();
+    return () => {
+      context.scene.remove(rig.group);
+      rig.dispose();
+      if (planePickerRigRef.current === rig) {
+        planePickerRigRef.current = null;
+      }
+      context.requestRender();
+    };
+  }, [planePickerArmed]);
 
   // In-viewport sketch mode lifecycle: build the plane rig, glide the camera
   // head-on, and recede the solids; restore everything on exit. Keyed on the

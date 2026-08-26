@@ -24,6 +24,16 @@ export interface ResolveExtrudeOptions {
   base: ProjectDocument;
   input: ExtrudeInput;
   derive(document: ProjectDocument): Promise<DerivedState>;
+  /**
+   * For a sketch attached to a body's face whose extrusion runs into that
+   * body (negative distance along the face's outward normal). Direction
+   * carries the user's intent where volume measurement alone is ambiguous:
+   * a profile overhanging the rim dragged inward partially overlaps — which
+   * reads as "add" — but the gesture means cut. (The mirror case, joining a
+   * boss grown off a face, is blocked at the document layer: a stored add
+   * with zero shared volume is refused by the exact rebuild.)
+   */
+  faceAttachment?: { bodyId: BodyId; direction: 'into' };
 }
 
 function withOperation(
@@ -155,12 +165,20 @@ export async function resolveExtrudeOperation(
     }
   }
 
-  const inference = classifyExtrudeOperation(
+  let inference = classifyExtrudeOperation(
     extrusion,
     measurements,
     unresolved,
     liveTargets.length
   );
+  const attachment = options.faceAttachment;
+  if (
+    attachment &&
+    inference.operation === 'add' &&
+    inference.targetBodyId === attachment.bodyId
+  ) {
+    inference = { ...inference, operation: 'cut', reason: 'into-face-body' };
+  }
   if (inference.operation === 'new-body') {
     return {
       command: newBodyCommand,
