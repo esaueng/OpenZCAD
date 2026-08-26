@@ -2012,6 +2012,72 @@ describe('worker api routes', () => {
     }
   );
 
+  it.each([
+    { description: 'without Content-Length', contentLength: undefined },
+    { description: 'with underreported Content-Length', contentLength: '1' }
+  ])(
+    'rejects an oversized artifact upload stream $description with 413',
+    async ({ contentLength }) => {
+      const created = await createProject('Artifact Stream Cap');
+      const sessionResponse = await worker.fetch(
+        post('/api/uploads', {
+          projectId: created.project.projectId,
+          fileName: 'oversized.step',
+          contentType: 'model/step',
+          kind: 'step-import'
+        }),
+        env
+      );
+      const { session } = (await sessionResponse.json()) as {
+        session: { uploadSessionId: string };
+      };
+      const chunk = new Uint8Array(1024 * 1024).fill(0x20);
+      // MAX_ARTIFACT_BODY_BYTES is 25 MiB; 26 chunks exceed it without any
+      // content-length the pre-check could trust.
+      let chunksRemaining = 26;
+      const body = new ReadableStream<Uint8Array>({
+        pull(controller) {
+          if (chunksRemaining === 0) {
+            controller.close();
+            return;
+          }
+          chunksRemaining -= 1;
+          controller.enqueue(chunk);
+        }
+      });
+      const request = new Request(
+        `https://example.com/api/uploads/${session.uploadSessionId}/content`,
+        {
+          method: 'PUT',
+          headers: contentLength
+            ? { 'content-length': contentLength }
+            : undefined,
+          body,
+          duplex: 'half'
+        } as RequestInit & { duplex: 'half' }
+      );
+
+      const response = await worker.fetch(request, env);
+      expect(response.status).toBe(413);
+      expect(await response.json()).toEqual({
+        error: 'Artifact is too large.'
+      });
+    }
+  );
+
+  it('sets baseline security headers on API responses', async () => {
+    const response = await worker.fetch(
+      new Request('https://example.com/api/health'),
+      env
+    );
+    expect(response.status).toBe(200);
+    expect(response.headers.get('x-content-type-options')).toBe('nosniff');
+    expect(response.headers.get('referrer-policy')).toBe('no-referrer');
+    expect(response.headers.get('cross-origin-resource-policy')).toBe(
+      'same-origin'
+    );
+  });
+
   it('adopts a device-local document under its own project id', async () => {
     const local = createProjectDocument('Adopted', toUserId('user_local'));
     const response = await worker.fetch(
