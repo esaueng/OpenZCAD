@@ -145,6 +145,7 @@ import {
   solveStatusLabel,
   solvedSketchCommands
 } from './lib/sketch/applySolve';
+import { sketchContentFramePoints } from './lib/sketch/session';
 import type { SketchSolveStatus } from './components/SketchToolRail';
 import { ApiError, api, isProjectDocumentUnavailableError } from './lib/api';
 import { uploadArtifactBody } from './lib/artifactUpload';
@@ -8722,8 +8723,25 @@ export function App() {
     } catch {
       // An unresolved parameter must not make the sketch session disappear.
     }
+    // What the entry glide frames: re-entered content when the sketch has
+    // any, else the attached face, else nothing (fresh canonical plane).
+    const frame =
+      objects.length > 0
+        ? {
+            kind: 'content' as const,
+            points: sketchContentFramePoints(objects, resolve, sketchBasis)
+          }
+        : session.plane.type === 'face'
+          ? {
+              kind: 'face' as const,
+              bodyId: session.plane.bodyId as string,
+              faceHash: session.plane.faceHash,
+              center: session.plane.sourceCenter
+            }
+          : null;
     return {
       basis: sketchBasis,
+      frame,
       tool: session.tool,
       circleMode: session.circleMode,
       snapStep: appSettings.sketching.snapEnabled

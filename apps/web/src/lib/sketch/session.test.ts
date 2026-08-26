@@ -21,6 +21,7 @@ import {
   resolveSketchSnap,
   screenRayToPlanePoint,
   sketchEntryPose,
+  sketchContentFramePoints,
   sketchObjectFromDrag,
   snapSketchPoint,
   snapTargetsForObject
@@ -414,5 +415,38 @@ describe('sketch entity snapping', () => {
     expect(centerInferenceSegments({ x: 4, y: -2, kind: 'grid' }, 10)).toEqual(
       []
     );
+  });
+});
+
+describe('sketchContentFramePoints', () => {
+  const resolve = (value: unknown) => value as number;
+
+  it('lifts a circle through a non-XY basis, quadrants included', () => {
+    const points = sketchContentFramePoints(
+      [
+        {
+          data: {
+            objectKind: 'circle',
+            centerX: 10,
+            centerY: 0,
+            radius: 5
+          } as never
+        }
+      ],
+      resolve,
+      PLANE_BASES.XZ
+    );
+    // XZ basis: sketch x → world x, sketch y → world z.
+    expect(points).toContainEqual({ x: 10, y: 0, z: 0 });
+    expect(points).toContainEqual({ x: 15, y: 0, z: 0 });
+    expect(points).toContainEqual({ x: 10, y: 0, z: 5 });
+    // Every lifted point stays on the sketch plane (world y = 0 for XZ).
+    for (const point of points) {
+      expect(point.y).toBe(0);
+    }
+  });
+
+  it('returns no points for an empty sketch', () => {
+    expect(sketchContentFramePoints([], resolve, PLANE_BASES.XY)).toEqual([]);
   });
 });
