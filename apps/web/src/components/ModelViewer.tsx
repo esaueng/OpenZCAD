@@ -230,8 +230,25 @@ interface CylinderRadiusProxyController {
 }
 
 /** Active in-viewport sketch session, derived from the interaction machine. */
+/**
+ * What the sketch-entry camera glide should frame: the attached face's
+ * display triangles, or the world-space bounds of the sketch's committed
+ * content on re-entry. Null keeps the pre-framing behavior (orient head-on
+ * at the current distance) — a fresh sketch on a canonical plane has nothing
+ * to frame.
+ */
+export type SketchEntryFrame =
+  | {
+      kind: 'face';
+      bodyId: string;
+      faceHash: number;
+      center: { x: number; y: number; z: number };
+    }
+  | { kind: 'content'; points: { x: number; y: number; z: number }[] };
+
 export interface SketchModeState {
   basis: PlaneBasis;
+  frame: SketchEntryFrame | null;
   tool: 'select' | 'line' | 'arc' | 'circle' | 'rectangle' | 'text';
   circleMode: SketchCircleMode;
   snapStep: number | null;
@@ -6376,6 +6393,14 @@ export function ModelViewer({
           DEFAULT_OVERLAY_FADE_TARGET;
         material.opacity = easeToward(material.opacity, target, dt * 1000);
         if (material.opacity === target) {
+          // A material faded back to full opacity goes back to the opaque
+          // pass once it settles — leaving `transparent` set would keep it
+          // in depth-sorted rendering and risk sorting artifacts.
+          if (material.userData.restoreOpaque === true) {
+            material.transparent = false;
+            delete material.userData.restoreOpaque;
+            material.needsUpdate = true;
+          }
           context.fadeIns.delete(material);
         }
       }
@@ -7849,8 +7874,12 @@ export function ModelViewer({
 
   // In-viewport sketch mode lifecycle: build the plane rig, glide the camera
   // head-on, and recede the solids; restore everything on exit. Keyed on the
-  // basis object identity so drawing/object updates do not re-enter.
+  // basis object identity so drawing/object updates do not re-enter. The
+  // frame rides a ref for the same reason: the entry glide wants the frame
+  // as it was at entry, not a re-run per sketch edit.
   const sketchBasis = sketchMode?.basis ?? null;
+  const sketchEntryFrameRef = useRef<SketchEntryFrame | null>(null);
+  sketchEntryFrameRef.current = sketchMode?.frame ?? null;
   useEffect(() => {
     const context = contextRef.current;
     if (!context || !sketchBasis) {
@@ -7882,11 +7911,87 @@ export function ModelViewer({
       sketchBasis.origin.y,
       sketchBasis.origin.z
     );
+    // Frame the glide's subject when there is one — the attached face, or
+    // re-entered content — reusing the normal-to-face fit so a wide face
+    // fills a portrait viewport too. Fall back to orient-only at the current
+    // distance: a fresh canonical-plane sketch has nothing to frame, and a
+    // frame that fails to resolve must not block entering the sketch.
+    const framedPose = (() => {
+      const frame = sketchEntryFrameRef.current;
+      if (!frame) {
+        return null;
+      }
+      const normal = new THREE.Vector3(
+        sketchBasis.normal.x,
+        sketchBasis.normal.y,
+        sketchBasis.normal.z
+      );
+      if (frame.kind === 'face') {
+        const body = bodiesRef.current.find(
+          (candidate) => candidate.bodyId === frame.bodyId
+        );
+        const face = body?.topology?.faces.find(
+          (candidate) => candidate.hash === frame.faceHash
+        );
+        if (!body || !face) {
+          return null;
+        }
+        const points: THREE.Vector3[] = [];
+        const firstIndex = face.triangleStart * 3;
+        const endIndex = (face.triangleStart + face.triangleCount) * 3;
+        for (let corner = firstIndex; corner < endIndex; corner += 1) {
+          const vertexIndex = body.mesh.indices[corner];
+          if (vertexIndex === undefined) {
+            return null;
+          }
+          points.push(
+            new THREE.Vector3().fromArray(body.mesh.vertices, vertexIndex * 3)
+          );
+        }
+        // Target the triangles' area-weighted centroid, not the attachment's
+        // sourceCenter: that anchor can sit on the face's rim (it is the
+        // surface's reference point, not the centroid), which would frame
+        // off-center and over-distance.
+        const centroid = new THREE.Vector3();
+        let area = 0;
+        for (let i = 0; i + 2 < points.length; i += 3) {
+          const [a, b, c] = [points[i], points[i + 1], points[i + 2]] as [
+            THREE.Vector3,
+            THREE.Vector3,
+            THREE.Vector3
+          ];
+          const triangleArea = new THREE.Vector3()
+            .subVectors(b, a)
+            .cross(new THREE.Vector3().subVectors(c, a))
+            .length();
+          centroid.addScaledVector(
+            new THREE.Vector3().add(a).add(b).add(c).divideScalar(3),
+            triangleArea
+          );
+          area += triangleArea;
+        }
+        const center =
+          area > 1e-12
+            ? centroid.divideScalar(area)
+            : new THREE.Vector3(frame.center.x, frame.center.y, frame.center.z);
+        return computeNormalToFacePose(context.camera, points, center, normal);
+      }
+      if (frame.points.length === 0) {
+        return null;
+      }
+      const points = frame.points.map(
+        (point) => new THREE.Vector3(point.x, point.y, point.z)
+      );
+      const center = points
+        .reduce((sum, point) => sum.add(point), new THREE.Vector3())
+        .divideScalar(points.length);
+      return computeNormalToFacePose(context.camera, points, center, normal);
+    })();
     const distance = Math.max(context.camera.position.distanceTo(origin), 40);
     const pose = sketchEntryPose(sketchBasis, distance);
     context.controls.enableRotate = false;
     context.startCameraTween(
-      {
+      framedPose ?? {
         position: new THREE.Vector3(
           pose.position.x,
           pose.position.y,
@@ -8021,11 +8126,28 @@ export function ModelViewer({
             transparent: material.transparent
           };
         }
+        // Eased, not flipped: the recede rides the same fade set as the
+        // other scene fades, subordinate to the entry camera glide. A body
+        // rebuilt mid-sketch re-enters here at full opacity and fades again.
         material.transparent = true;
-        material.opacity = 0.35;
+        delete material.userData.restoreOpaque;
+        if (reducedMotionRef.current === true) {
+          material.opacity = 0.35;
+        } else {
+          material.userData.targetOpacity = 0.35;
+          context.fadeIns.add(material);
+        }
       } else if (stored.sketchRecede) {
-        material.opacity = stored.sketchRecede.opacity;
-        material.transparent = stored.sketchRecede.transparent;
+        if (reducedMotionRef.current === true) {
+          material.opacity = stored.sketchRecede.opacity;
+          material.transparent = stored.sketchRecede.transparent;
+        } else {
+          material.userData.targetOpacity = stored.sketchRecede.opacity;
+          if (!stored.sketchRecede.transparent) {
+            material.userData.restoreOpaque = true;
+          }
+          context.fadeIns.add(material);
+        }
         delete stored.sketchRecede;
       }
     });
