@@ -318,3 +318,103 @@ describe('BodyEdgeOverlay', () => {
     }
   });
 });
+
+/**
+ * A body of `edgeCount` straight edges, each a `pointCount`-point polyline.
+ * Large enough that per-batch allocation is the dominant cost.
+ */
+function largeOverlay(edgeCount: number, pointCount: number) {
+  return createBodyEdgeOverlay(
+    {
+      bodyId: BODY_ID,
+      topology: {
+        faces: [],
+        edges: Array.from({ length: edgeCount }, (_, index) => ({
+          topologyId: `edge-${index}`,
+          hash: 1_000 + index,
+          points: Array.from(
+            { length: pointCount * 3 },
+            (_, component) => (index * 7 + component) % 50
+          )
+        }))
+      }
+    },
+    { width: 800, height: 600 }
+  );
+}
+
+function instanceBufferFloats(line: THREE.Object3D): number {
+  const geometry = (line as THREE.Mesh).geometry;
+  const attribute = geometry.getAttribute('instanceStart');
+  return attribute instanceof THREE.InterleavedBufferAttribute
+    ? attribute.data.array.length
+    : 0;
+}
+
+/**
+ * The six hover/selection batches used to be born at the body's entire idle
+ * edge count so `replacePositions` could never overflow — seven full-size
+ * buffers per body, six of which draw nothing until the user hovers or selects
+ * something. Measured on a 20k-edge import (an ordinary mid-size STEP): 115 MB
+ * across seven equal batches and 338 ms on the main thread, with 98 MB of that
+ * idle. They start empty now and grow to what is actually drawn.
+ */
+describe('BodyEdgeOverlay allocation', () => {
+  const AUXILIARY = [
+    'body-edge-hover',
+    'body-edge-hover-hidden',
+    'body-edge-selected',
+    'body-edge-selected-hidden',
+    'body-face-boundary-selected',
+    'body-face-boundary-selected-hidden'
+  ];
+
+  it('does not size the hover and selection batches to the whole body', () => {
+    const overlay = largeOverlay(2_000, 20);
+    const idle = instanceBufferFloats(overlay.idleEdges);
+    expect(idle).toBeGreaterThan(100_000);
+
+    for (const name of AUXILIARY) {
+      const batch = overlay.children.find((child) => child.name === name);
+      expect(batch, name).toBeDefined();
+      // Two orders of magnitude below the idle batch, not equal to it.
+      expect(instanceBufferFloats(batch!), name).toBeLessThan(idle / 100);
+    }
+  });
+
+  it('grows a batch to hold a selection larger than its capacity', () => {
+    const overlay = largeOverlay(400, 8);
+    const selected = overlay.children.find(
+      (child) => child.name === 'body-edge-selected'
+    )!;
+    const before = instanceBufferFloats(selected);
+
+    overlay.setSelected(
+      Array.from({ length: 400 }, (_, index) => selection(`edge-${index}`))
+    );
+
+    const geometry = (selected as THREE.Mesh).geometry;
+    expect(instanceBufferFloats(selected)).toBeGreaterThan(before);
+    expect(geometry.instanceCount).toBe(400 * 7);
+    expect(selected.visible).toBe(true);
+  });
+
+  it('reuses the grown buffer for a smaller selection instead of shrinking', () => {
+    // Capacity ratchets to the high-water mark, so repeatedly changing the
+    // selection does not reallocate on every change.
+    const overlay = largeOverlay(400, 8);
+    const selected = overlay.children.find(
+      (child) => child.name === 'body-edge-selected'
+    )!;
+
+    overlay.setSelected(
+      Array.from({ length: 400 }, (_, index) => selection(`edge-${index}`))
+    );
+    const grown = instanceBufferFloats(selected);
+
+    overlay.setSelected([selection('edge-0')]);
+    expect(instanceBufferFloats(selected)).toBe(grown);
+    const geometry = (selected as THREE.Mesh).geometry;
+    expect(geometry.instanceCount).toBe(7);
+  });
+});
