@@ -343,6 +343,16 @@ function largeOverlay(edgeCount: number, pointCount: number) {
   );
 }
 
+/**
+ * `instanceCount` lives on `InstancedBufferGeometry`, which is what a
+ * `LineSegments2` carries — reading it through the plain `BufferGeometry` a
+ * `Mesh` declares does not typecheck.
+ */
+function instanceCountOf(line: THREE.Object3D): number {
+  const geometry = (line as THREE.Mesh).geometry as THREE.InstancedBufferGeometry;
+  return geometry.instanceCount;
+}
+
 function instanceBufferFloats(line: THREE.Object3D): number {
   const geometry = (line as THREE.Mesh).geometry;
   const attribute = geometry.getAttribute('instanceStart');
@@ -393,9 +403,8 @@ describe('BodyEdgeOverlay allocation', () => {
       Array.from({ length: 400 }, (_, index) => selection(`edge-${index}`))
     );
 
-    const geometry = (selected as THREE.Mesh).geometry;
     expect(instanceBufferFloats(selected)).toBeGreaterThan(before);
-    expect(geometry.instanceCount).toBe(400 * 7);
+    expect(instanceCountOf(selected)).toBe(400 * 7);
     expect(selected.visible).toBe(true);
   });
 
@@ -414,7 +423,6 @@ describe('BodyEdgeOverlay allocation', () => {
 
     overlay.setSelected([selection('edge-0')]);
     expect(instanceBufferFloats(selected)).toBe(grown);
-    const geometry = (selected as THREE.Mesh).geometry;
-    expect(geometry.instanceCount).toBe(7);
+    expect(instanceCountOf(selected)).toBe(7);
   });
 });
