@@ -582,6 +582,12 @@ test('keeps a source circle stable over its coincident extrude edge', async ({
     page.locator('.feature-row-main', { hasText: 'Sketch 01' })
   ).toBeVisible();
 
+  // The extrude consumed this sketch, so it hides itself. Show it again: the
+  // coincident-edge render policy below is exactly what makes a re-shown
+  // source curve readable over the extrude edge it sits on.
+  await page.getByRole('button', { name: 'Show Sketch 01' }).click();
+  await expect(page.getByRole('contentinfo')).toContainText('Sketch shown.');
+
   const renderPolicy = await canvas.evaluate(
     (element) =>
       new Promise<{
