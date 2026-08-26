@@ -27,8 +27,8 @@ Ground truth about the current code that shaped this plan:
 | # | Item | Status |
 | --- | --- | --- |
 | 1.1 | Camera easing vocabulary: `viewJumpEase` (ease-out) for standard views / fit / normal-to-face / cube arrows, `sketchGlideEase` (velocity trapezoid, fixed 800 ms) for sketch entry/exit; `startTween` accepts a per-move glide style; eases unit-tested; `docs/interaction-design.md` amended | **done** (this branch) |
-| 1.2 | Sketch entry frames its subject: face-attached sketches frame the face (reuse the normal-to-face framing math), re-entered sketches frame the sketch bounds; a fresh canonical-plane sketch keeps current distance | planned |
-| 1.3 | Body recede eases over the camera flight (scene fade, `DUR_BASE_MS`), restoring symmetrically on exit | planned |
+| 1.2 | Sketch entry frames its subject: face-attached sketches frame the face (reuse the normal-to-face framing math), re-entered sketches frame the sketch bounds; a fresh canonical-plane sketch keeps current distance. Gotcha found live: the face attachment's `sourceCenter` is the surface's reference point, which can sit on the rim — frame on the display triangles' area-weighted centroid instead | **done** |
+| 1.3 | Body recede eases over the camera flight (rides `fadeIns`, snaps under reduced motion; materials faded back to opaque leave the transparent pass on settle) | **done** |
 | 2.1 | In-sketch Extrude stays in place: `E`/rail Extrude arms the imperative region rig on the active sketch's regions instead of exiting to iso + panel; camera pulls back with `sketchGlideEase`; distance chip + numeric entry ride the rig as they do for region extrude | planned |
 | 2.2 | Retire the create-path `ExtrudeOverlay` panel once 2.1 covers it (edit path and stored-operation override stay) | planned |
 | 3.1 | Ghost-plane picker: entering Sketch with no face under the cursor shows three pickable plane quads at the origin in the viewport (hover highlight, click to pick) replacing the XY/XZ/YZ button overlay | planned |
