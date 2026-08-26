@@ -317,7 +317,12 @@ export function createFatLineSegments(
   options: FatLineOptions
 ): LineSegments2 {
   const geometry = new LineSegmentsGeometry();
-  geometry.setPositions(Array.from(positions));
+  // `setPositions` keeps a Float32Array as-is and copies anything else into
+  // one, so `Array.from` here built a whole JS array for three to immediately
+  // throw away. Callers holding a typed array now hand it straight over.
+  geometry.setPositions(
+    positions instanceof Float32Array ? positions : Float32Array.from(positions)
+  );
   const segments = new LineSegments2(geometry, createFatLineMaterial(options));
   segments.computeLineDistances();
   return segments;
