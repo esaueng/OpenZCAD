@@ -133,9 +133,10 @@ export function ShaprImportDialog({
             <section className="shapr-import-history">
               <h3>Recognized history</h3>
               <p>
-                Numeric values and the metre scale are unverified. No 46 mm
-                parameter is exposed until coordinated edits and topology are
-                proven with a changed-value rebuild.
+                Numeric values and the metre scale are unverified. After import,
+                Auto-parameterize offers only exact planar face distances that
+                pass a real changed-value rebuild; source history numbers such
+                as 46 mm are not promoted by themselves.
               </p>
               <ol>
                 {ir.operations.map((operation) => (
