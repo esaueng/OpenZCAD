@@ -50,6 +50,7 @@ import {
   computeFitPose,
   computeNormalToFacePose,
   cylinderRadiusPreviewMatrix,
+  faceTrianglesCentroid,
   createBodyEdgeOverlay,
   createAnalyticCylinderGhost,
   createFaceHighlightGeometry,
@@ -8405,9 +8406,11 @@ export function ModelViewer({
     });
   }, [viewRequest]);
 
-  // A normal-to-face request uses the exact surface centre/normal for the
-  // target and orientation, then the selected face's display triangles only
-  // for framing. Body vertices are already world-space projections.
+  // A normal-to-face request uses the exact surface normal for orientation
+  // and the selected face's display triangles for the target and framing.
+  // The surface's own centre is only a fallback: it is the parametric
+  // reference point, which on a cylinder-top disc sits on the rim. Body
+  // vertices are already world-space projections.
   useEffect(() => {
     const context = contextRef.current;
     if (!context || !normalToFaceRequest) {
@@ -8441,14 +8444,13 @@ export function ModelViewer({
         new THREE.Vector3().fromArray(body.mesh.vertices, vertexIndex * 3)
       );
     }
+    const center =
+      faceTrianglesCentroid(points) ??
+      new THREE.Vector3(geometry.center.x, geometry.center.y, geometry.center.z);
     const pose = computeNormalToFacePose(
       context.camera,
       points,
-      new THREE.Vector3(
-        geometry.center.x,
-        geometry.center.y,
-        geometry.center.z
-      ),
+      center,
       new THREE.Vector3(geometry.normal.x, geometry.normal.y, geometry.normal.z)
     );
     if (!pose) {
