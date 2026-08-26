@@ -653,6 +653,8 @@ function extrudeInferenceDescription(resolved: ResolvedExtrude | null): string {
       return 'No live body can be targeted; New Body is stored.';
     case 'no-overlap':
       return 'No positive-volume overlap; New Body is stored.';
+    case 'into-face-body':
+      return `Pushed into ${inference.targetBodyName}; Cut is stored.`;
   }
 }
 import {
@@ -4609,6 +4611,45 @@ export function App() {
         profile.sketchId === sketchId &&
         available.some((candidate) => candidate.profileId === profile.profileId)
     );
+    if (activeSketch) {
+      // In-sketch Extrude stays in place: leave the sketch (its exit glide
+      // brings the camera back) and arm the imperative region rig on the
+      // sketch's profiles — no overlay, no iso jump. The commit path infers
+      // add/cut from drag direction and the kernel's classification. With no
+      // in-sketch selection, every valid profile extrudes together; the
+      // largest one anchors the arrow.
+      const chosen = existing.length > 0 ? existing : available;
+      const anchor = chosen.reduce(
+        (best, candidate) => (candidate.area > best.area ? candidate : best),
+        chosen[0]!
+      );
+      setSelectedFeatureNode(null);
+      setSelectedTopology(null);
+      setSelectedEdges([]);
+      setSelectedBodyIds([]);
+      setSelectedSketchProfileId(sketchId);
+      setSelectedProfiles(chosen);
+      setResolvedExtrudePreview(null);
+      setExtrudePreview(null);
+      setTool(null);
+      dispatchInteraction({ type: 'exit-sketch' });
+      dispatchInteraction({
+        type: 'select-region',
+        target: {
+          sketchId: anchor.sketchId,
+          regionFingerprint: anchor.regionFingerprint,
+          samplePoint: anchor.samplePoint,
+          area: anchor.area,
+          sourceEntityIds: anchor.sourceEntityIds
+        }
+      });
+      setStatus(
+        chosen.length === 1
+          ? 'Closed sketch profile selected · drag the arrow to extrude, or type a distance.'
+          : `${chosen.length} profiles selected · drag the arrow to extrude them together.`
+      );
+      return;
+    }
     const initialProfiles =
       existing.length > 0 ? existing : available.length === 1 ? available : [];
     setSelectedFeatureNode(null);
@@ -4622,13 +4663,7 @@ export function App() {
       initialProfiles.length > 0 ? { sketchId, distance: 24 } : null
     );
     setTool('extrude');
-    if (activeSketch) {
-      extrudeSketchReturnRef.current = {
-        plane: activeSketch.plane,
-        sketchId
-      };
-      dispatchInteraction({ type: 'exit-sketch' });
-    } else if (interaction.mode !== 'idle') {
+    if (interaction.mode !== 'idle') {
       dispatchInteraction({ type: 'clear' });
     }
     requestView('iso');
@@ -9481,24 +9516,68 @@ export function App() {
               area: target.area
             }
           ];
-    const command = commandFactories.extrudeSketch({
+    const input: ExtrudeInput = {
       name: 'Extrude',
       sketchId: target.sketchId as SketchId,
       distance: exact ?? rounded,
       profiles: profileReferencesForSelection(profiles, entityWideProfileSource)
-    });
-    const resultBodyId =
-      command.payload.ids?.bodyId ?? (target.sketchId as unknown as BodyId);
-    void executeValidatedDirectEdit(
-      command,
-      resultBodyId,
-      `Extruded region by ${rounded} ${doc?.units ?? ''}.`,
-      rounded,
-      () => {
-        setSelectedProfiles([]);
-        setRevertPill({ sketchId: target.sketchId as SketchId });
+    };
+    void (async () => {
+      // The drag direction decided the volume; the kernel's exact overlap
+      // classification decides add / cut / new-body — the same inference the
+      // Extrude form runs, so a drag into a body cuts it instead of leaving
+      // a coincident second solid. Unclassifiable (kernel busy, document
+      // changed mid-flight) falls back to a plain new body.
+      const manager = managerRef.current;
+      let payload: ExtrudeInput = input;
+      let operationNote = '';
+      if (manager) {
+        const base = manager.document;
+        const sketchNode = listNodesByKind(base, 'sketch').find(
+          (candidate) => candidate.sketchId === target.sketchId
+        );
+        const faceAttachment =
+          sketchNode?.planeRef.type === 'face' && rounded < 0
+            ? {
+                bodyId: sketchNode.planeRef.bodyId,
+                direction: 'into' as const
+              }
+            : undefined;
+        setBusy(true);
+        setStatus('Classifying the extrusion against the model…');
+        try {
+          const resolved = await resolveExtrudeOperation({
+            base,
+            input,
+            derive: (document) => geometry.syncOnce(document),
+            ...(faceAttachment ? { faceAttachment } : {})
+          });
+          if (
+            managerRef.current === manager &&
+            manager.document.version === base.version
+          ) {
+            payload = { ...resolved.command.payload, name: input.name };
+            operationNote = ` (${resolved.inference.operation})`;
+          }
+        } catch {
+          // Fall through to the uninferred command.
+        }
+        setBusy(false);
       }
-    );
+      const command = commandFactories.extrudeSketch(payload);
+      const resultBodyId =
+        command.payload.ids?.bodyId ?? (target.sketchId as unknown as BodyId);
+      void executeValidatedDirectEdit(
+        command,
+        resultBodyId,
+        `Extruded region by ${rounded} ${doc?.units ?? ''}${operationNote}.`,
+        rounded,
+        () => {
+          setSelectedProfiles([]);
+          setRevertPill({ sketchId: target.sketchId as SketchId });
+        }
+      );
+    })();
   }
 
   /** Armed edge handle; memoized for the same rig-stability reason as faces. */
