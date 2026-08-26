@@ -124,3 +124,49 @@ describe('beta deployment safety', () => {
     );
   });
 });
+
+/**
+ * Guards that exist so a green check means what a human reads it to mean.
+ * Both defend gates rather than product behaviour, so nothing else fails when
+ * they regress — which is exactly why they need a test of their own.
+ */
+describe('CI gates cannot silently stop testing', () => {
+  it('forbids test.only in CI so a shard cannot report green on one test', () => {
+    // Playwright's focus is run-wide, not file-wide: one stray `test.only`
+    // makes all four shards run that single test, three run zero, every shard
+    // exits 0, and the `e2e` aggregate prints green having exercised 1 of 161.
+    // Root Vitest is safe by default (`allowOnly` defaults to `!CI`).
+    expect(readFileSync('playwright.config.ts', 'utf8')).toMatch(
+      /forbidOnly:\s*!!process\.env\.CI/
+    );
+  });
+
+  it('refuses a geometry kernel bump that rides along with another change', () => {
+    // `remus-wasm` is a production dependency on a moving branch, so ANY
+    // lockfile regeneration re-resolves it — it has landed on main four times
+    // inside unrelated dependency PRs. `update-remus.yml` refuses a diff that
+    // touches anything but the lockfile precisely so a kernel change gets its
+    // own parity-tested review; without this guard, a Dependabot bump bypasses
+    // that entirely and no commit message mentions the kernel.
+    const ci = readFileSync('.github/workflows/ci.yml', 'utf8');
+    expect(ci).toContain('Refuse an unannounced geometry kernel bump');
+    expect(ci).toContain('automation/remus-');
+    // The default checkout is shallow, so the guard has to fetch the one base
+    // commit it compares against or it silently compares nothing.
+    expect(ci).toMatch(/git fetch --no-tags --depth=1 origin "\$BASE_REF"/);
+  });
+
+  it('keeps the kernel resolved to exactly one commit', () => {
+    // Two different resolutions in one lockfile would mean two kernels in one
+    // build, and the guard above compares a single SHA.
+    const shas = new Set(
+      Array.from(
+        readFileSync('pnpm-lock.yaml', 'utf8').matchAll(
+          /codeload\.github\.com\/esaueng\/remus\/tar\.gz\/([0-9a-f]{40})/g
+        ),
+        (match) => match[1]
+      )
+    );
+    expect(shas.size).toBe(1);
+  });
+});
