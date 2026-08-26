@@ -92,6 +92,7 @@ import type {
   FaceTopology,
   ParamValue,
   ProjectCheckpoint,
+  PlaneId,
   ProjectDocument,
   ProjectOrganization,
   ProjectStatus,
@@ -8269,6 +8270,26 @@ export function App() {
     setStatus(`${name}: closed profile selected · press E to extrude.`);
   }
 
+  /**
+   * Enters a sketch on a principal plane. Shared by the prompt's buttons and
+   * the viewport's ghost planes so both produce the same session and status.
+   */
+  function startSketchOnPlane(plane: PlaneId) {
+    dispatchInteraction({
+      type: 'enter-sketch',
+      plane: { type: 'canonical', plane, offset: 0 }
+    });
+    setTool(null);
+    setStatus(
+      // Keep the plane id here rather than PLANE_LABELS: the e2e test that
+      // pins the label-to-plane mapping reads this line precisely because it
+      // is derived from the id, so a rename that only edits strings cannot
+      // keep it green. Only the "Esc exits" claim goes — the armed Line tool
+      // makes it untrue on the first press.
+      `Sketching on the ${plane} plane · Finish Sketch when done.`
+    );
+  }
+
   function startSketchOnFace(target: FaceTarget): boolean {
     const faceTopology = representations[
       target.bodyId as BodyId
@@ -12836,6 +12857,8 @@ export function App() {
             profileSelectionMode={tool === 'extrude'}
             onSelectRegion={handleSelectRegion}
             onHoverRegion={handleHoverRegion}
+            planePickerArmed={!modelingLocked && tool === 'sketch'}
+            onPickPlane={startSketchOnPlane}
             onMeasurePreview={
               modelingLocked && measuring ? previewMeasurement : null
             }
@@ -13217,23 +13240,7 @@ export function App() {
                       <button
                         key={plane}
                         type="button"
-                        onClick={() => {
-                          dispatchInteraction({
-                            type: 'enter-sketch',
-                            plane: { type: 'canonical', plane, offset: 0 }
-                          });
-                          setTool(null);
-                          setStatus(
-                            // Keep the plane id here rather than PLANE_LABELS:
-                            // the e2e test that pins the label-to-plane
-                            // mapping reads this line precisely because it is
-                            // derived from the id, so a rename that only edits
-                            // strings cannot keep it green. Only the "Esc
-                            // exits" claim goes — the armed Line tool makes it
-                            // untrue on the first press.
-                            `Sketching on the ${plane} plane · Finish Sketch when done.`
-                          );
-                        }}
+                        onClick={() => startSketchOnPlane(plane)}
                       >
                         {PLANE_LABELS[plane]}
                       </button>
