@@ -34,7 +34,7 @@ Ground truth about the current code that shaped this plan:
 | 2.3 | Delete the dead create-panel machinery (`ExtrudeOverlay`, `extrudePreview`/`resolvedExtrudePreview`, `profileExtrudePreview`, `confirmExtrude`, the viewer's React-state extrude gizmo path) | planned |
 | 3.1 | Ghost-plane picker: entering Sketch with no face under the cursor shows three pickable plane quads at the origin in the viewport (hover highlight, click to pick) replacing the XY/XZ/YZ button overlay | planned |
 | 3.2 | Plane offset: the prompt's face-click path already covers on-face sketches; add an offset field/drag to the ghost-plane picker (data model already stores `offset`) | planned |
-| 4.1 | Consumed-sketch auto-hide: a sketch whose profile fed a feature renders hidden by default, with an eye toggle in the feature tree (view state, not document content) | planned |
+| 4.1 | Consumed-sketch auto-hide: a sketch referenced by any feature (extrude/revolve `sketchId`, loft sections, sweep profile + path) hides by default; the history row grows an eye toggle that overrides in either direction. View state only — nothing written into the document | **done** |
 | 4.2 | Sketch-entry toolbar crossfade in the top bar (chrome half of the mode switch, `--dur-base`) | planned |
 
 Deliberately not in this slice: selection-driven top-bar filtering (next
