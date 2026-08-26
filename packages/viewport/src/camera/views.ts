@@ -290,6 +290,58 @@ export function orbitPivotForPoint(
   return cameraPosition.clone().addScaledVector(forward, depth);
 }
 
+/** Maps normalized tween time to normalized progress. */
+export type CameraEase = (t: number) => number;
+
+/**
+ * The default glide: symmetric cubic in-out. Fine for pivots and restores,
+ * where nothing about the move tells the user which end matters.
+ */
+export const easeInOutCubic: CameraEase = (t) =>
+  t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+
+/**
+ * View jumps (standard views, fit, normal-to-face) leave at full speed and
+ * decay monotonically — the move reads as "thrown" toward the destination,
+ * so the user knows where they are going from the first frame. Matches the
+ * measured envelope of the reference CAD's view transitions.
+ */
+export const viewJumpEase: CameraEase = (t) => 1 - Math.pow(1 - t, 3);
+
+/**
+ * A velocity trapezoid: ramp up over `attack`, cruise, ramp down over
+ * `decel` (both fractions of the duration). C1-continuous. This is the
+ * measured envelope of the reference CAD's sketch-entry snap — a short
+ * attack so the response is immediate, a cruise long enough to stay
+ * readable, and a soft landing.
+ */
+export function trapezoidEase(attack: number, decel: number): CameraEase {
+  const cruise = 1 / (1 - attack / 2 - decel / 2);
+  return (t) => {
+    if (t <= 0) {
+      return 0;
+    }
+    if (t >= 1) {
+      return 1;
+    }
+    if (t < attack) {
+      return (cruise * t * t) / (2 * attack);
+    }
+    if (t <= 1 - decel) {
+      return cruise * (attack / 2 + (t - attack));
+    }
+    return 1 - (cruise * (1 - t) * (1 - t)) / (2 * decel);
+  };
+}
+
+/**
+ * Entering or leaving a sketch is the longest choreographed move: a fixed
+ * duration (it is a mode change, not a nudge, so travel scaling would make
+ * short trips feel abrupt) with a ~100 ms attack and a ~240 ms landing.
+ */
+export const SKETCH_GLIDE_MS = 800;
+export const sketchGlideEase: CameraEase = trapezoidEase(0.125, 0.3);
+
 /** A glide short enough to feel instant for a nudge. */
 export const MIN_TWEEN_MS = 170;
 /** A glide long enough to stay readable across a full reorientation. */
