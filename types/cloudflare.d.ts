@@ -31,6 +31,7 @@ declare interface R2Object {
 }
 
 declare interface R2ObjectBody extends R2Object {
+  body: ReadableStream<Uint8Array>;
   arrayBuffer(): Promise<ArrayBuffer>;
 }
 
@@ -102,6 +103,11 @@ declare const WebSocketPair: {
 
 declare interface ResponseInit {
   webSocket?: WebSocket;
+}
+
+// Workers runtime extension: set on the 101 answer to a WebSocket upgrade.
+declare interface Response {
+  readonly webSocket?: WebSocket | null;
 }
 
 declare module 'cloudflare:workers' {
