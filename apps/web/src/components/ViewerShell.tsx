@@ -33,6 +33,7 @@ import {
 import type {
   ArtifactId,
   BodyRepresentation,
+  PlaneId,
   ProjectId,
   SketchObjectData,
   TopologySelection
@@ -201,6 +202,8 @@ interface ViewerShellProps {
     modifiers: { additive: boolean; toggle: boolean }
   ): void;
   onHoverRegion(region: RegionPickData | null): void;
+  planePickerArmed: boolean;
+  onPickPlane(plane: PlaneId): void;
   /** What measuring the hovered target would report; null when measure is off. */
   onMeasurePreview?:
     | ((
@@ -308,6 +311,8 @@ export function ViewerShell({
   profileSelectionMode,
   onSelectRegion,
   onHoverRegion,
+  planePickerArmed,
+  onPickPlane,
   onMeasurePreview,
   regionHandle,
   onSelectSketchProfile,
@@ -444,6 +449,8 @@ export function ViewerShell({
         profileSelectionMode={profileSelectionMode}
         onSelectRegion={onSelectRegion}
         onHoverRegion={onHoverRegion}
+        planePickerArmed={planePickerArmed}
+        onPickPlane={onPickPlane}
         onMeasurePreview={onMeasurePreview}
         regionHandle={regionHandle}
         onSelectSketchProfile={onSelectSketchProfile}
