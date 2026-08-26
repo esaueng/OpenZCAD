@@ -24,8 +24,12 @@ import {
   prioritizeVisibleEdgeHit,
   MAX_TWEEN_MS,
   MIN_TWEEN_MS,
+  easeInOutCubic,
   orbitPivotForPoint,
+  sketchGlideEase,
+  trapezoidEase,
   tweenDurationFor,
+  viewJumpEase,
   tweenOrientationFor,
   projectToScreen,
   RightClickGestureTracker,
@@ -868,5 +872,61 @@ describe('glide duration follows how far the camera travels', () => {
     const degenerate = tweenDurationFor(focus, v(1, 0, 0), focus, focus);
     expect(degenerate).toBeGreaterThanOrEqual(MIN_TWEEN_MS);
     expect(degenerate).toBeLessThanOrEqual(MAX_TWEEN_MS);
+  });
+});
+
+describe('camera glide easing profiles', () => {
+  const velocity = (ease: (t: number) => number, t: number, h = 1e-4) =>
+    (ease(t + h) - ease(t - h)) / (2 * h);
+
+  it.each([
+    ['easeInOutCubic', easeInOutCubic],
+    ['viewJumpEase', viewJumpEase],
+    ['sketchGlideEase', sketchGlideEase]
+  ])('%s spans exactly 0 to 1 and never moves backward', (_name, ease) => {
+    expect(ease(0)).toBeCloseTo(0, 9);
+    expect(ease(1)).toBeCloseTo(1, 9);
+    let previous = 0;
+    for (let i = 1; i <= 100; i += 1) {
+      const value = ease(i / 100);
+      expect(value).toBeGreaterThanOrEqual(previous);
+      previous = value;
+    }
+  });
+
+  it('viewJumpEase leaves at full speed and only decelerates', () => {
+    // "Thrown" toward the destination: peak velocity at the start.
+    expect(velocity(viewJumpEase, 0.01)).toBeGreaterThan(
+      velocity(viewJumpEase, 0.5)
+    );
+    expect(velocity(viewJumpEase, 0.5)).toBeGreaterThan(
+      velocity(viewJumpEase, 0.95)
+    );
+  });
+
+  it('trapezoidEase cruises at constant speed between the ramps', () => {
+    const ease = trapezoidEase(0.2, 0.3);
+    const cruiseA = velocity(ease, 0.3);
+    const cruiseB = velocity(ease, 0.6);
+    expect(cruiseB).toBeCloseTo(cruiseA, 6);
+    // The ramps are slower than the cruise on both ends.
+    expect(velocity(ease, 0.05)).toBeLessThan(cruiseA);
+    expect(velocity(ease, 0.95)).toBeLessThan(cruiseA);
+  });
+
+  it('trapezoidEase is continuous where the ramps meet the cruise', () => {
+    const ease = trapezoidEase(0.125, 0.3);
+    for (const knot of [0.125, 0.7]) {
+      expect(velocity(ease, knot - 1e-5, 1e-6)).toBeCloseTo(
+        velocity(ease, knot + 1e-5, 1e-6),
+        3
+      );
+    }
+  });
+
+  it('sketchGlideEase lands softly: the last stretch decelerates', () => {
+    expect(velocity(sketchGlideEase, 0.99)).toBeLessThan(
+      velocity(sketchGlideEase, 0.5) * 0.2
+    );
   });
 });

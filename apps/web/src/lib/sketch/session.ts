@@ -395,6 +395,30 @@ export function sketchEntryPose(
 }
 
 /**
+ * World-space points bounding the sketch's committed content: every object's
+ * snap targets, lifted through the plane basis. Circle quadrants, rectangle
+ * corners, and arc endpoints bound their entities exactly, so the set frames
+ * the sketch without sampling curves.
+ */
+export function sketchContentFramePoints(
+  objects: ReadonlyArray<{ data: SketchObjectData }>,
+  resolve: (value: unknown) => number,
+  basis: PlaneBasis
+): Vector3[] {
+  const points: Vector3[] = [];
+  for (const object of objects) {
+    for (const target of snapTargetsForObject(object.data, resolve)) {
+      points.push({
+        x: basis.origin.x + basis.u.x * target.x + basis.v.x * target.y,
+        y: basis.origin.y + basis.u.y * target.x + basis.v.y * target.y,
+        z: basis.origin.z + basis.u.z * target.x + basis.v.z * target.y
+      });
+    }
+  }
+  return points;
+}
+
+/**
  * Builds an orthonormal right-handed sketch frame on a planar face, using the
  * same reference-axis convention as the kernel's cylinder frames so repeated
  * derivations agree.
