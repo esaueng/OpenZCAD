@@ -13,6 +13,7 @@ import {
   configureEdgeRaycasting,
   computeNormalToFacePose,
   createExtrudePreviewGeometry,
+  faceTrianglesCentroid,
   dimensionLabelLayout,
   directEditDirectionFromNormal,
   EDGE_IDLE_WIDTH,
@@ -610,6 +611,60 @@ describe('normal-to-face camera framing', () => {
         new THREE.Vector3()
       )
     ).toBeNull();
+  });
+});
+
+describe('face triangle centroid', () => {
+  it('recovers a disc centre from a rim-anchored triangle fan', () => {
+    // A cylinder-top disc tessellates as a fan; its surface reference point
+    // sits on the rim, which is exactly what the centroid must not return.
+    const discCenter = new THREE.Vector3(10, -4, 28);
+    const radius = 25;
+    const corners: THREE.Vector3[] = [];
+    const segments = 48;
+    for (let i = 0; i < segments; i += 1) {
+      const a0 = (i / segments) * Math.PI * 2;
+      const a1 = ((i + 1) / segments) * Math.PI * 2;
+      corners.push(
+        discCenter.clone(),
+        discCenter
+          .clone()
+          .add(new THREE.Vector3(Math.cos(a0) * radius, Math.sin(a0) * radius, 0)),
+        discCenter
+          .clone()
+          .add(new THREE.Vector3(Math.cos(a1) * radius, Math.sin(a1) * radius, 0))
+      );
+    }
+    const centroid = faceTrianglesCentroid(corners);
+    expect(centroid).not.toBeNull();
+    expect(centroid!.distanceTo(discCenter)).toBeLessThan(1e-9);
+  });
+
+  it('weights by triangle area, not by corner count', () => {
+    // Two coplanar triangles of very different area: a per-corner average
+    // would land midway, the area weighting stays near the big one.
+    const corners = [
+      new THREE.Vector3(0, 0, 0),
+      new THREE.Vector3(100, 0, 0),
+      new THREE.Vector3(0, 100, 0),
+      new THREE.Vector3(1000, 0, 0),
+      new THREE.Vector3(1001, 0, 0),
+      new THREE.Vector3(1000, 1, 0)
+    ];
+    const centroid = faceTrianglesCentroid(corners);
+    expect(centroid).not.toBeNull();
+    expect(centroid!.x).toBeLessThan(34);
+    expect(centroid!.y).toBeGreaterThan(33);
+  });
+
+  it('fails closed for empty or degenerate triangles', () => {
+    expect(faceTrianglesCentroid([])).toBeNull();
+    const collinear = [
+      new THREE.Vector3(0, 0, 0),
+      new THREE.Vector3(1, 0, 0),
+      new THREE.Vector3(2, 0, 0)
+    ];
+    expect(faceTrianglesCentroid(collinear)).toBeNull();
   });
 });
 
