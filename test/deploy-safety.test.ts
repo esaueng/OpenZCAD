@@ -154,6 +154,11 @@ describe('CI gates cannot silently stop testing', () => {
     // The default checkout is shallow, so the guard has to fetch the one base
     // commit it compares against or it silently compares nothing.
     expect(ci).toMatch(/git fetch --no-tags --depth=1 origin "\$BASE_REF"/);
+    // A guard that reads nothing and passes is the failure this repo already
+    // names elsewhere, and the first CI run of this one passed in silence. It
+    // has to refuse an empty baseline and say what it compared.
+    expect(ci).toContain('Kernel baseline missing');
+    expect(ci).toContain('Kernel pin unchanged at $head.');
   });
 
   it('keeps the kernel resolved to exactly one commit', () => {
