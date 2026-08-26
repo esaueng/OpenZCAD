@@ -121,7 +121,11 @@ import {
   type CalloutLayoutItem,
   type DimensionGraphic,
   easeToward,
-  SELECTION_SEMANTICS
+  SELECTION_SEMANTICS,
+  SKETCH_GLIDE_MS,
+  sketchGlideEase,
+  viewJumpEase,
+  type CameraGlideStyle
 } from '@openzcad/viewport';
 import type {
   BodyRepresentation,
@@ -598,7 +602,11 @@ export interface SceneContext {
   /** Re-applies navigation preferences onto the live orbit controls. */
   refreshNavigation(): void;
   /** Starts a glide toward a new pose; user input cancels it. */
-  startCameraTween(pose: CameraPose, onComplete?: () => void): void;
+  startCameraTween(
+    pose: CameraPose,
+    onComplete?: () => void,
+    glide?: CameraGlideStyle
+  ): void;
   /** The durable pose to persist for this project. */
   captureView(): ViewportCameraState;
   /** Invalidates the viewport and schedules a render if it is idle. */
@@ -1761,8 +1769,8 @@ export function ModelViewer({
       applyProjection: (mode) => cameraRig.applyProjection(mode),
       syncOrthographic: (resetZoom) => cameraRig.syncOrthographic(resetZoom),
       refreshNavigation: () => cameraRig.refreshNavigationPreferences(),
-      startCameraTween: (pose, onComplete) =>
-        cameraRig.startTween(pose, onComplete),
+      startCameraTween: (pose, onComplete, glide) =>
+        cameraRig.startTween(pose, onComplete, glide),
       captureView: () => cameraRig.capture(),
       requestRender,
       renderer,
@@ -6223,11 +6231,15 @@ export function ModelViewer({
         return;
       }
       const pose = computeFitPose(camera, bodyGroup.children);
-      cameraRig.startTween(pose, () => {
-        if (context.projection === 'orthographic') {
-          cameraRig.syncOrthographic(true);
-        }
-      });
+      cameraRig.startTween(
+        pose,
+        () => {
+          if (context.projection === 'orthographic') {
+            cameraRig.syncOrthographic(true);
+          }
+        },
+        { ease: viewJumpEase }
+      );
     };
 
     const handleContextMenu = (event: MouseEvent) => {
@@ -7887,7 +7899,8 @@ export function ModelViewer({
       () => {
         context.applyProjection('orthographic');
         context.syncOrthographic(true);
-      }
+      },
+      { ease: sketchGlideEase, durationMs: SKETCH_GLIDE_MS }
     );
     context.requestRender();
     return () => {
@@ -7912,12 +7925,16 @@ export function ModelViewer({
       sketchReturnRef.current = null;
       if (saved) {
         context.applyProjection(saved.projection);
-        context.startCameraTween({
-          position: saved.position,
-          target: saved.target,
-          near: context.camera.near,
-          far: context.camera.far
-        });
+        context.startCameraTween(
+          {
+            position: saved.position,
+            target: saved.target,
+            near: context.camera.near,
+            far: context.camera.far
+          },
+          undefined,
+          { ease: sketchGlideEase, durationMs: SKETCH_GLIDE_MS }
+        );
       }
       context.requestRender();
     };
@@ -8380,11 +8397,15 @@ export function ModelViewer({
       return;
     }
     const pose = computeFitPose(context.camera, fitTargets);
-    context.startCameraTween(pose, () => {
-      if (context.projection === 'orthographic') {
-        context.syncOrthographic(true);
-      }
-    });
+    context.startCameraTween(
+      pose,
+      () => {
+        if (context.projection === 'orthographic') {
+          context.syncOrthographic(true);
+        }
+      },
+      { ease: viewJumpEase }
+    );
   }, [fitSignal]);
 
   // View requests keep the current zoom and glide the camera to the axis —
@@ -8397,12 +8418,16 @@ export function ModelViewer({
     const { camera, controls } = context;
     const distance = Math.max(camera.position.distanceTo(controls.target), 1);
     const direction = viewDirectionFor(viewRequest.view);
-    context.startCameraTween({
-      position: controls.target.clone().addScaledVector(direction, distance),
-      target: controls.target.clone(),
-      near: camera.near,
-      far: camera.far
-    });
+    context.startCameraTween(
+      {
+        position: controls.target.clone().addScaledVector(direction, distance),
+        target: controls.target.clone(),
+        near: camera.near,
+        far: camera.far
+      },
+      undefined,
+      { ease: viewJumpEase }
+    );
   }, [viewRequest]);
 
   // A normal-to-face request uses the exact surface centre/normal for the
@@ -8454,11 +8479,15 @@ export function ModelViewer({
     if (!pose) {
       return;
     }
-    context.startCameraTween(pose, () => {
-      if (context.projection === 'orthographic') {
-        context.syncOrthographic(true);
-      }
-    });
+    context.startCameraTween(
+      pose,
+      () => {
+        if (context.projection === 'orthographic') {
+          context.syncOrthographic(true);
+        }
+      },
+      { ease: viewJumpEase }
+    );
   }, [bodies, normalToFaceRequest]);
 
   // The view-cube arrows swing the camera a quarter turn around the world up
@@ -8479,12 +8508,16 @@ export function ModelViewer({
       .clone()
       .sub(controls.target)
       .applyAxisAngle(new THREE.Vector3(0, 0, 1), angle);
-    context.startCameraTween({
-      position: controls.target.clone().add(offset),
-      target: controls.target.clone(),
-      near: camera.near,
-      far: camera.far
-    });
+    context.startCameraTween(
+      {
+        position: controls.target.clone().add(offset),
+        target: controls.target.clone(),
+        near: camera.near,
+        far: camera.far
+      },
+      undefined,
+      { ease: viewJumpEase }
+    );
   }, [rotateRequest]);
 
   return <div className="viewer-host" ref={hostRef} />;
