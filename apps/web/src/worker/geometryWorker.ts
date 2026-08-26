@@ -17,7 +17,19 @@ import {
 } from './exactRebuildCache';
 import { GeometryWorkerQueue } from './geometryWorkerQueue';
 import { preloadDocumentFonts } from '../lib/textFonts';
-import { loadSourceBlob, putSourceBlob } from '../lib/localProjectStore';
+import {
+  loadSourceBlob,
+  putSourceBlob,
+  sha256Hex
+} from '../lib/localProjectStore';
+
+/**
+ * Bytes a cloud artifact download may stream before the rebuild gives up on
+ * it. Aligned with the exact kernel's own STEP import budget
+ * (`importStep` in @openzcad/kernel-adapter): anything larger could never be
+ * rebuilt, so reading it would only spend memory on bytes that must fail.
+ */
+const MAX_ARTIFACT_DOWNLOAD_BYTES = 128 * 1024 * 1024;
 
 /**
  * `step`, `stl`, and `dxf` produce text (STEP data, ASCII STL, DXF R12);
@@ -27,13 +39,7 @@ import { loadSourceBlob, putSourceBlob } from '../lib/localProjectStore';
  * `dxf` exports ONE planar face's outline and requires the `face` field.
  */
 export type GeometryExportFormat =
-  | 'step'
-  | 'stl'
-  | 'dxf'
-  | 'stl-binary'
-  | '3mf'
-  | 'obj'
-  | 'glb';
+  'step' | 'stl' | 'dxf' | 'stl-binary' | '3mf' | 'obj' | 'glb';
 
 /** The export formats whose payload crosses back as transferred bytes. */
 export type GeometryBinaryExportFormat = Extract<
@@ -170,10 +176,63 @@ let exactKernelError: unknown;
 let exactKernelPromise: Promise<ExactKernel | null> | null = null;
 
 /**
+ * Buffers a response body with a hard byte ceiling, returning null when the
+ * body exceeds it. The content-length check is advisory only — a missing or
+ * understated header must not let the body grow past the cap while reading.
+ */
+async function readResponseBytes(
+  response: Response,
+  maxBytes: number
+): Promise<Uint8Array<ArrayBuffer> | null> {
+  const declared = Number(response.headers.get('content-length') ?? '');
+  if (Number.isFinite(declared) && declared > maxBytes) {
+    await response.body?.cancel().catch(() => undefined);
+    return null;
+  }
+  const reader = response.body?.getReader();
+  if (!reader) {
+    return null;
+  }
+  const chunks: Uint8Array[] = [];
+  let totalBytes = 0;
+  let overflow = false;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) {
+        break;
+      }
+      totalBytes += value.byteLength;
+      if (totalBytes > maxBytes) {
+        overflow = true;
+        await reader.cancel().catch(() => undefined);
+        break;
+      }
+      chunks.push(value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  if (overflow) {
+    return null;
+  }
+  const bytes = new Uint8Array(totalBytes);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return bytes;
+}
+
+/**
  * Produces bytes for reference-form imports: the local blob store first, then
  * the artifact archived at import time. A cloud fetch is written back to the
- * blob store so the next rebuild is local. `putSourceBlob` hashes what it
- * stores, so a corrupted or wrong download can never satisfy the reference.
+ * blob store so the next rebuild is local. The archive is other people's
+ * data as often as our own — a shared project can reference a collaborator's
+ * upload — so the download is size-capped and its checksum verified BEFORE
+ * anything is persisted, keeping a wrong or oversized body out of the blob
+ * store and out of the kernel.
  */
 async function resolveSourceBytes(
   ref: { checksumSha256: string },
@@ -188,9 +247,12 @@ async function resolveSourceBytes(
       `/api/artifacts/${context.artifactId}/download`
     );
     if (response.ok) {
-      const bytes = new Uint8Array(await response.arrayBuffer());
-      const stored = await putSourceBlob(bytes);
-      if (stored.checksumSha256 === ref.checksumSha256) {
+      const bytes = await readResponseBytes(
+        response,
+        MAX_ARTIFACT_DOWNLOAD_BYTES
+      );
+      if (bytes && (await sha256Hex(bytes)) === ref.checksumSha256) {
+        await putSourceBlob(bytes);
         return bytes;
       }
     }
@@ -397,7 +459,11 @@ async function execute(job: GeometryWorkerJob): Promise<void> {
       const text =
         request.format === 'step'
           ? await exact.exportStep(document, request.bodyIds)
-          : await exact.exportStl(document, request.bodyIds, request.deflection);
+          : await exact.exportStl(
+              document,
+              request.bodyIds,
+              request.deflection
+            );
       const result: GeometryExportResult = {
         type: 'export',
         ok: true,
