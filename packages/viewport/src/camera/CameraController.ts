@@ -2,10 +2,12 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import type { CameraPose } from '../render/scene';
 import {
+  easeInOutCubic,
   orbitPivotForPoint,
   tweenDurationFor,
   tweenOrientationFor,
-  VIEW_DIRECTIONS
+  VIEW_DIRECTIONS,
+  type CameraEase
 } from './views';
 import {
   pointerBindingsFor,
@@ -63,9 +65,16 @@ const DEFAULT_ORBIT_RADIUS = 150;
  * near a pole the roll that `lookAt` derives from the interpolated position
  * snaps in the last few frames.
  */
+/** Overrides the glide's default duration and easing per move kind. */
+export interface CameraGlideStyle {
+  durationMs?: number;
+  ease?: CameraEase;
+}
+
 interface CameraTween {
   startTime: number;
   duration: number;
+  ease: CameraEase;
   fromTarget: THREE.Vector3;
   toTarget: THREE.Vector3;
   fromQuaternion: THREE.Quaternion;
@@ -435,7 +444,11 @@ export class CameraController {
    * per-frame sync mirrors it into the ortho frustum, and any user input
    * cancels the glide immediately.
    */
-  startTween(pose: CameraPose, onComplete?: () => void) {
+  startTween(
+    pose: CameraPose,
+    onComplete?: () => void,
+    glide?: CameraGlideStyle
+  ) {
     // Consume leftover damping inertia so the glide starts from rest.
     this.orbitGlideEndsAt = null;
     this.orbit.dampingFactor = DRAG_DAMPING;
@@ -475,12 +488,10 @@ export class CameraController {
           );
     this.tween = {
       startTime: performance.now(),
-      duration: tweenDurationFor(
-        fromPosition,
-        pose.position,
-        fromTarget,
-        pose.target
-      ),
+      duration:
+        glide?.durationMs ??
+        tweenDurationFor(fromPosition, pose.position, fromTarget, pose.target),
+      ease: glide?.ease ?? easeInOutCubic,
       fromTarget,
       toTarget: pose.target.clone(),
       fromQuaternion: this.perspective.quaternion.clone(),
@@ -662,7 +673,7 @@ export class CameraController {
       return false;
     }
     const t = Math.min((now - tween.startTime) / tween.duration, 1);
-    const eased = t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+    const eased = tween.ease(t);
     const quaternion = tween.fromQuaternion
       .clone()
       .slerp(tween.toQuaternion, eased);

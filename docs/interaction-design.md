@@ -24,10 +24,27 @@ bookkeeping. Anything that reaches its target within `SETTLE_EPSILON` snaps
 and stops being stepped, which is also what lets the render loop go back to
 sleep.
 
-Camera motion is separate and older: view changes tween over 170–520 ms scaled
-by travel (`camera/views.ts`), and orbit uses two damping regimes — tight
-while the pointer is down, a short glide on release, bounded in wall-clock so
-a slow device cannot stretch it into a coast.
+Camera motion is separate and older, and carries its own vocabulary of three
+named glides (`camera/views.ts`), calibrated against frame-by-frame
+measurements of the reference CAD (spec: "Sketch & Body Interaction Spec",
+Part II):
+
+| Glide | Easing | Duration |
+| --- | --- | --- |
+| View jump — standard views, fit, normal-to-face, cube arrows | `viewJumpEase` (cubic ease-out: full speed at frame one) | 170–520 ms scaled by travel |
+| Sketch entry/exit | `sketchGlideEase` (velocity trapezoid: ~100 ms attack, cruise, ~240 ms landing) | fixed 800 ms |
+| Everything else — pivots, restores | `easeInOutCubic` | 170–520 ms scaled by travel |
+
+Orbit uses two damping regimes — tight while the pointer is down, a short
+glide on release, bounded in wall-clock so a slow device cannot stretch it
+into a coast.
+
+The same measurements showed the reference spends its entire motion budget on
+the camera and on panel-content crossfades: geometry state (selection fills,
+extrude previews, boolean commits) changes on the next frame, deliberately.
+Treat that as the ceiling for animating modeled state — the symmetry rule
+below governs chrome and scene *fades*, not solid geometry appearing where
+the user just put it.
 
 ### Rules
 
