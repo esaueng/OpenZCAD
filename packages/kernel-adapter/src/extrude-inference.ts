@@ -25,7 +25,10 @@ export type ExtrudeInferenceReason =
   | 'enclosed'
   | 'coincident'
   | 'multiple-overlap'
-  | 'exact-measurement-refused';
+  | 'exact-measurement-refused'
+  // Direction override for a face-attached sketch whose drag went into the
+  // face's own body: the gesture means cut even where volume reads "add".
+  | 'into-face-body';
 
 export interface ExtrudeOperationInference {
   operation: ExtrudeOperation;
