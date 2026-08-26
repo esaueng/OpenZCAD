@@ -20,6 +20,7 @@ import type {
   PatternKind,
   ParametricPlane,
   ParamValue,
+  OpposingPlanarFacePair,
   PrimitiveKind,
   ProjectDocument,
   RecognizedImportedFeature,
@@ -358,6 +359,8 @@ export interface CadDigestBodyTopology {
   edgeInventoryComplete: boolean;
   /** Exact bounded proofs available for imported-feature direct edits. */
   recognizedImportedFeatures?: RecognizedImportedFeature[];
+  /** Planar dimensions that already passed a changed-value exact rebuild. */
+  opposingPlanarFacePairs?: OpposingPlanarFacePair[];
   faces: Array<{
     topologyId: string;
     hash: number;
@@ -800,7 +803,17 @@ export function createCadDocumentDigest(
     const edges = body.topology.edges
       .slice(0, edgeLimit)
       .map((edge) => compactEdge(edge, primitiveKind));
-    const faces = body.topology.faces.slice(0, faceLimit).map(compactFace);
+    const provenPairHashes = new Set(
+      (body.topology.opposingPlanarFacePairs ?? []).flatMap((pair) => [
+        pair.faceAHash,
+        pair.faceBHash
+      ])
+    );
+    const prioritizedFaces = [
+      ...body.topology.faces.filter((face) => provenPairHashes.has(face.hash)),
+      ...body.topology.faces.filter((face) => !provenPairHashes.has(face.hash))
+    ];
+    const faces = prioritizedFaces.slice(0, faceLimit).map(compactFace);
     remainingEdges -= edges.length;
     remainingFaces -= faces.length;
     topologyByBodyId.set(bodyId, {
@@ -813,6 +826,15 @@ export function createCadDocumentDigest(
         ? {
             recognizedImportedFeatures:
               body.topology.recognizedImportedFeatures.slice(
+                0,
+                MAX_DIGEST_TOPOLOGY_PER_BODY
+              )
+          }
+        : {}),
+      ...(body.topology.opposingPlanarFacePairs
+        ? {
+            opposingPlanarFacePairs:
+              body.topology.opposingPlanarFacePairs.slice(
                 0,
                 MAX_DIGEST_TOPOLOGY_PER_BODY
               )
@@ -1528,6 +1550,34 @@ const directEditOperationSchema = {
         'sourceCenter',
         'sourceNormal',
         'offset'
+      ]
+    },
+    {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        kind: { type: 'string', const: 'set-face-distance' },
+        faceHash: { type: 'integer', minimum: 1 },
+        faceReference: faceReferenceSchema,
+        oppositeFaceHash: { type: 'integer', minimum: 1 },
+        oppositeFaceReference: faceReferenceSchema,
+        sourceDistance: { type: 'number', exclusiveMinimum: 0 },
+        moveMode: {
+          type: 'string',
+          enum: ['symmetric', 'one-sided-first', 'one-sided-second']
+        },
+        distance: scalarSchema,
+        parameterBinding: { type: 'boolean', const: true }
+      },
+      required: [
+        'kind',
+        'faceHash',
+        'faceReference',
+        'oppositeFaceHash',
+        'oppositeFaceReference',
+        'sourceDistance',
+        'moveMode',
+        'distance'
       ]
     },
     {
@@ -2850,6 +2900,18 @@ export function parseCadPatchProposal(
             'add_direct_edit requires a matching faceHash and exact schema-v5 faceReference from the digest.'
           );
         }
+        if (
+          edit.kind === 'set-face-distance' &&
+          (!Number.isSafeInteger(edit.oppositeFaceHash) ||
+            Number(edit.oppositeFaceHash) <= 0 ||
+            edit.oppositeFaceHash === edit.faceHash ||
+            !isFaceReference(edit.oppositeFaceReference) ||
+            edit.oppositeFaceReference.currentHash !== edit.oppositeFaceHash)
+        ) {
+          throw new Error(
+            'add_direct_edit face distance requires a distinct matching oppositeFaceHash and exact schema-v5 oppositeFaceReference from the digest.'
+          );
+        }
         const commonAxis =
           isNumberVector(edit.sourceAxisStart) &&
           isNumberVector(edit.sourceAxisEnd);
@@ -2918,6 +2980,15 @@ export function parseCadPatchProposal(
             isNumberVector(edit.sourceCenter) &&
             isNumberVector(edit.sourceNormal) &&
             isScalar(edit.offset)) ||
+          (edit.kind === 'set-face-distance' &&
+            typeof edit.sourceDistance === 'number' &&
+            edit.sourceDistance > 0 &&
+            ['symmetric', 'one-sided-first', 'one-sided-second'].includes(
+              String(edit.moveMode)
+            ) &&
+            isScalar(edit.distance) &&
+            (edit.parameterBinding === undefined ||
+              edit.parameterBinding === true)) ||
           (edit.kind === 'resize-cylindrical-face' &&
             typeof edit.sourceRadius === 'number' &&
             edit.sourceRadius > 0 &&
@@ -3175,6 +3246,35 @@ function exactDigestFace(
   return face;
 }
 
+function exactDigestFaceDistancePair(
+  digest: CadDocumentDigest,
+  bodyId: string,
+  operation: Extract<DirectEditOperation, { kind: 'set-face-distance' }>
+): OpposingPlanarFacePair {
+  const body = digest.bodies?.find(
+    (candidate) => candidate.bodyId === bodyId && !candidate.consumed
+  );
+  const pair = body?.topology?.opposingPlanarFacePairs?.find(
+    (candidate) =>
+      candidate.faceAHash === operation.faceHash &&
+      candidate.faceBHash === operation.oppositeFaceHash &&
+      canonicalJson(candidate.faceAReference) ===
+        canonicalJson(operation.faceReference) &&
+      canonicalJson(candidate.faceBReference) ===
+        canonicalJson(operation.oppositeFaceReference) &&
+      candidate.distance === operation.sourceDistance &&
+      candidate.moveMode === operation.moveMode &&
+      Number.isFinite(candidate.provenChangedDistance) &&
+      candidate.provenChangedDistance !== candidate.distance
+  );
+  if (!pair) {
+    throw new Error(
+      `add_direct_edit contains a stale or unavailable changed-value face-distance proof for body ${bodyId}. Refresh the proposal from the current document digest.`
+    );
+  }
+  return pair;
+}
+
 function exactDigestImportedFeature(
   digest: CadDocumentDigest,
   bodyId: string,
@@ -3360,6 +3460,32 @@ export function validateCadPatchProposalAgainstDigest(
         const expected: unknown[] = [];
         const received: unknown[] = [];
         switch (edit.kind) {
+          case 'set-face-distance': {
+            if (!edit.oppositeFaceReference) {
+              throw new Error(
+                'add_direct_edit face distance requires an exact opposite face reference.'
+              );
+            }
+            const opposite = exactDigestFace(
+              digest,
+              operation.targetBodyId,
+              edit.oppositeFaceHash,
+              edit.oppositeFaceReference,
+              operation.kind
+            );
+            if (
+              snapshot.surfaceType !== 'plane' ||
+              opposite.snapshot?.surfaceType !== 'plane' ||
+              !snapshot.normal ||
+              !opposite.snapshot.normal
+            ) {
+              throw new Error(
+                'add_direct_edit face distance requires two exact planar face snapshots.'
+              );
+            }
+            exactDigestFaceDistancePair(digest, operation.targetBodyId, edit);
+            break;
+          }
           case 'resize-through-hole':
             expected.push(
               snapshot.diameter,
