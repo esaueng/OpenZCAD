@@ -51,13 +51,20 @@ jobs:
             printf '%s\n' "$head"
             exit 1
           fi
-          if [[ -n "$base" && "$base" != "$head" ]]; then
-            if [[ "$HEAD_REF" == automation/remus-* ]]; then
-              echo "Kernel moved $base -> $head on the updater branch, as intended."
-            else
-              echo "::error title=Unannounced kernel bump::pnpm-lock.yaml moves the Remus kernel $base -> $head on a branch that is not automation/remus-*. Any lockfile regeneration re-resolves the #main specifier; land kernel changes through update-remus.yml so they get their own parity-tested review."
-              exit 1
-            fi
+          # An empty base is the extraction breaking, not an absent kernel:
+          # every branch this can run against has a pin. Skipping quietly here
+          # would leave a guard that reads nothing and passes forever.
+          if [[ -z "$base" ]]; then
+            echo "::error title=Kernel baseline missing::Found no remus codeload SHA in $BASE_REF's pnpm-lock.yaml. If the lockfile format or the kernel host changed, update this guard rather than leaving it comparing nothing."
+            exit 1
+          fi
+          if [[ "$base" == "$head" ]]; then
+            echo "Kernel pin unchanged at $head."
+          elif [[ "$HEAD_REF" == automation/remus-* ]]; then
+            echo "Kernel moved $base -> $head on the updater branch, as intended."
+          else
+            echo "::error title=Unannounced kernel bump::pnpm-lock.yaml moves the Remus kernel $base -> $head on a branch that is not automation/remus-*. Any lockfile regeneration re-resolves the #main specifier; land kernel changes through update-remus.yml so they get their own parity-tested review."
+            exit 1
           fi
       - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6
         with:
