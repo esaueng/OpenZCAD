@@ -80,6 +80,43 @@ export function viewDirectionFor(target: ViewTarget): THREE.Vector3 {
 const FACE_VIEW_PADDING = 1.18;
 
 /**
+ * Area-weighted centroid of a face's display triangles, given as consecutive
+ * corner triples. Face framing must target this, not the surface's parametric
+ * reference point: that anchor can sit on the face's rim (on a cylinder-top
+ * disc it does), which frames the view off-centre and over-distanced.
+ *
+ * Returns null when the triangles are missing or degenerate so callers fall
+ * back to the reference point instead of aiming at the origin.
+ */
+export function faceTrianglesCentroid(
+  corners: readonly THREE.Vector3[]
+): THREE.Vector3 | null {
+  const centroid = new THREE.Vector3();
+  let area = 0;
+  for (let i = 0; i + 2 < corners.length; i += 3) {
+    const a = corners[i];
+    const b = corners[i + 1];
+    const c = corners[i + 2];
+    if (!a || !b || !c) {
+      return null;
+    }
+    const triangleArea = new THREE.Vector3()
+      .subVectors(b, a)
+      .cross(new THREE.Vector3().subVectors(c, a))
+      .length();
+    centroid.addScaledVector(
+      new THREE.Vector3().add(a).add(b).add(c).divideScalar(3),
+      triangleArea
+    );
+    area += triangleArea;
+  }
+  if (!Number.isFinite(area) || area < 1e-12) {
+    return null;
+  }
+  return centroid.divideScalar(area);
+}
+
+/**
  * Computes a camera pose that centres one planar face and looks back along its
  * outward normal. The face vertices are projected into the eventual screen
  * basis, so a wide face fits a portrait viewport without relying on a
