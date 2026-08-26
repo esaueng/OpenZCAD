@@ -126,6 +126,8 @@ interface SidebarProps {
   selectedFeatureNodeId: string | null;
   selectedBodyIds: string[];
   hiddenBodyIds: ReadonlySet<string>;
+  /** Sketches currently hidden — consumed by default, or by the eye toggle. */
+  hiddenSketchIds: ReadonlySet<string>;
   warnings: string[];
   checkpoints: ProjectCheckpoint[];
   /** The open document's version, to mark the save point it sits on. */
@@ -138,6 +140,7 @@ interface SidebarProps {
   onSelectFeature(nodeId: string): void;
   onSelectBody(bodyId: string, additive: boolean): void;
   onToggleBodyVisibility(bodyId: string): void;
+  onToggleSketchVisibility(sketchId: string): void;
   onFeatureContextMenu(event: React.MouseEvent, feature: FeatureNode): void;
   onToggleFeatureSuppression(feature: FeatureNode): void;
   onRollbackAfterFeature(featureId: FeatureId, name: string): void;
@@ -184,6 +187,7 @@ export function Sidebar({
   selectedFeatureNodeId,
   selectedBodyIds,
   hiddenBodyIds,
+  hiddenSketchIds,
   warnings,
   checkpoints,
   documentVersion,
@@ -191,6 +195,7 @@ export function Sidebar({
   onSelectFeature,
   onSelectBody,
   onToggleBodyVisibility,
+  onToggleSketchVisibility,
   onFeatureContextMenu,
   onToggleFeatureSuppression,
   onRollbackAfterFeature,
@@ -536,6 +541,36 @@ export function Sidebar({
                     )}
                   </button>
                 )}
+                {feature.featureKind === 'sketch' &&
+                  feature.data.featureKind === 'sketch' &&
+                  (() => {
+                    const sketchId = feature.data.sketchId as string;
+                    const sketchHidden = hiddenSketchIds.has(sketchId);
+                    return (
+                      <button
+                        type="button"
+                        className={`row-visibility ${sketchHidden ? 'is-hidden' : ''}`}
+                        title={
+                          sketchHidden
+                            ? `Show ${feature.name}`
+                            : `Hide ${feature.name}`
+                        }
+                        aria-label={
+                          sketchHidden
+                            ? `Show ${feature.name}`
+                            : `Hide ${feature.name}`
+                        }
+                        aria-pressed={sketchHidden}
+                        onClick={() => onToggleSketchVisibility(sketchId)}
+                      >
+                        {sketchHidden ? (
+                          <EyeOff size={12} aria-hidden="true" />
+                        ) : (
+                          <Eye size={12} aria-hidden="true" />
+                        )}
+                      </button>
+                    );
+                  })()}
                 <button
                   type="button"
                   className="row-delete"

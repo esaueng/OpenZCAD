@@ -92,6 +92,7 @@ import type {
   FaceTopology,
   ParamValue,
   ProjectCheckpoint,
+  PlaneId,
   ProjectDocument,
   ProjectOrganization,
   ProjectStatus,
@@ -653,6 +654,8 @@ function extrudeInferenceDescription(resolved: ResolvedExtrude | null): string {
       return 'No live body can be targeted; New Body is stored.';
     case 'no-overlap':
       return 'No positive-volume overlap; New Body is stored.';
+    case 'into-face-body':
+      return `Pushed into ${inference.targetBodyName}; Cut is stored.`;
   }
 }
 import {
@@ -4609,33 +4612,45 @@ export function App() {
         profile.sketchId === sketchId &&
         available.some((candidate) => candidate.profileId === profile.profileId)
     );
-    const initialProfiles =
-      existing.length > 0 ? existing : available.length === 1 ? available : [];
+    // Extrude is one flow, in or out of a sketch: arm the imperative region
+    // rig on the sketch's profiles — no overlay form, no iso jump. From
+    // inside a sketch it leaves first (the exit glide brings the camera
+    // back). The commit path infers add/cut from drag direction and the
+    // kernel's classification. With no prior selection, every valid profile
+    // extrudes together; the largest one anchors the arrow.
+    const chosen = existing.length > 0 ? existing : available;
+    const anchor = chosen.reduce(
+      (best, candidate) => (candidate.area > best.area ? candidate : best),
+      chosen[0]!
+    );
     setSelectedFeatureNode(null);
     setSelectedTopology(null);
     setSelectedEdges([]);
     setSelectedBodyIds([]);
     setSelectedSketchProfileId(sketchId);
-    setSelectedProfiles(initialProfiles);
+    setSelectedProfiles(chosen);
     setResolvedExtrudePreview(null);
-    setExtrudePreview(
-      initialProfiles.length > 0 ? { sketchId, distance: 24 } : null
-    );
-    setTool('extrude');
+    setExtrudePreview(null);
+    setTool(null);
     if (activeSketch) {
-      extrudeSketchReturnRef.current = {
-        plane: activeSketch.plane,
-        sketchId
-      };
       dispatchInteraction({ type: 'exit-sketch' });
     } else if (interaction.mode !== 'idle') {
       dispatchInteraction({ type: 'clear' });
     }
-    requestView('iso');
+    dispatchInteraction({
+      type: 'select-region',
+      target: {
+        sketchId: anchor.sketchId,
+        regionFingerprint: anchor.regionFingerprint,
+        samplePoint: anchor.samplePoint,
+        area: anchor.area,
+        sourceEntityIds: anchor.sourceEntityIds
+      }
+    });
     setStatus(
-      initialProfiles.length > 0
-        ? `${initialProfiles.length} profile${initialProfiles.length === 1 ? '' : 's'} selected · exact preview updating.`
-        : `Select one or more closed profiles · ${available.length} valid profiles available.`
+      chosen.length === 1
+        ? 'Closed sketch profile selected · drag the arrow to extrude, or type a distance.'
+        : `${chosen.length} profiles selected · drag the arrow to extrude them together.`
     );
   }
 
@@ -4784,16 +4799,10 @@ export function App() {
       if (sketchId) {
         startExtrude(sketchId);
       } else {
-        extrudeSelectionReturnRef.current = {
-          profiles: [...selectedProfiles],
-          sketchId: selectedSketchProfileId
-        };
-        setSelectedFeatureNode(null);
-        setSelectedTopology(null);
-        setSelectedEdges([]);
-        setSelectedBodyIds([]);
-        setTool('extrude');
-        setStatus('Extrude: select a shaded closed profile in the viewport.');
+        // No sketch to resolve, and there is no picking mode any more: a
+        // click on any shaded closed profile arms the drag-arrow rig
+        // directly, so the hint is the whole flow.
+        setStatus('Extrude: click a shaded closed sketch profile to arm it.');
       }
       return;
     }
@@ -5161,6 +5170,74 @@ export function App() {
       }
       return next;
     });
+  }
+
+  /**
+   * Per-sketch visibility override. Absent means the default: a sketch whose
+   * profile a feature consumed hides itself, everything else shows. View
+   * state, deliberately not written into the document.
+   */
+  const [sketchVisibilityOverrides, setSketchVisibilityOverrides] = useState<
+    Record<string, boolean>
+  >({});
+
+  /** Sketches referenced by any feature: extrude/revolve, loft sections, sweep profile + path. */
+  const consumedSketchIds = useMemo(() => {
+    const consumed = new Set<string>();
+    if (!doc) {
+      return consumed;
+    }
+    for (const feature of listFeaturesInOrder(doc)) {
+      const data = feature.data as {
+        featureKind: string;
+        sketchId?: string;
+        sections?: { sketchId: string }[];
+        profile?: { sketchId?: string };
+        path?: { sketchId?: string };
+      };
+      // A sketch feature's own row references its sketch without consuming it.
+      if (data.featureKind === 'sketch') {
+        continue;
+      }
+      if (typeof data.sketchId === 'string') {
+        consumed.add(data.sketchId);
+      }
+      for (const section of data.sections ?? []) {
+        consumed.add(section.sketchId);
+      }
+      if (typeof data.profile?.sketchId === 'string') {
+        consumed.add(data.profile.sketchId);
+      }
+      if (typeof data.path?.sketchId === 'string') {
+        consumed.add(data.path.sketchId);
+      }
+    }
+    return consumed;
+  }, [doc]);
+
+  const hiddenSketchIds = useMemo(() => {
+    const hidden = new Set<string>();
+    if (!doc) {
+      return hidden;
+    }
+    for (const sketch of listNodesByKind(doc, 'sketch')) {
+      const visible =
+        sketchVisibilityOverrides[sketch.sketchId] ??
+        !consumedSketchIds.has(sketch.sketchId);
+      if (!visible) {
+        hidden.add(sketch.sketchId);
+      }
+    }
+    return hidden;
+  }, [doc, sketchVisibilityOverrides, consumedSketchIds]);
+
+  function toggleSketchVisibility(sketchId: string) {
+    const show = hiddenSketchIds.has(sketchId);
+    setSketchVisibilityOverrides((current) => ({
+      ...current,
+      [sketchId]: show
+    }));
+    setStatus(show ? 'Sketch shown.' : 'Sketch hidden.');
   }
 
   function previewBodyAppearance(preview: BodyAppearancePreview | null) {
@@ -8193,6 +8270,26 @@ export function App() {
     setStatus(`${name}: closed profile selected · press E to extrude.`);
   }
 
+  /**
+   * Enters a sketch on a principal plane. Shared by the prompt's buttons and
+   * the viewport's ghost planes so both produce the same session and status.
+   */
+  function startSketchOnPlane(plane: PlaneId) {
+    dispatchInteraction({
+      type: 'enter-sketch',
+      plane: { type: 'canonical', plane, offset: 0 }
+    });
+    setTool(null);
+    setStatus(
+      // Keep the plane id here rather than PLANE_LABELS: the e2e test that
+      // pins the label-to-plane mapping reads this line precisely because it
+      // is derived from the id, so a rename that only edits strings cannot
+      // keep it green. Only the "Esc exits" claim goes — the armed Line tool
+      // makes it untrue on the first press.
+      `Sketching on the ${plane} plane · Finish Sketch when done.`
+    );
+  }
+
   function startSketchOnFace(target: FaceTarget): boolean {
     const faceTopology = representations[
       target.bodyId as BodyId
@@ -9155,6 +9252,11 @@ export function App() {
       const active =
         interaction.mode === 'sketch' &&
         interaction.session.sketchId === sketch.sketchId;
+      // Consumed sketches auto-hide (Shapr-style); the history row's eye
+      // overrides either way. The in-session sketch always renders its rig.
+      if (hiddenSketchIds.has(sketch.sketchId) && !active) {
+        return [];
+      }
       const selected =
         selectedSketch?.sketchId === sketch.sketchId ||
         selectedSketchProfileId === sketch.sketchId;
@@ -9243,7 +9345,8 @@ export function App() {
     // Text outlines resolve from already-parsed faces, so a face arriving
     // after this memo last ran has to re-run it or the glyph stays a
     // diagnostic until something unrelated invalidates the memo.
-    textFontsVersion
+    textFontsVersion,
+    hiddenSketchIds
   ]);
 
   useEffect(() => {
@@ -9481,24 +9584,68 @@ export function App() {
               area: target.area
             }
           ];
-    const command = commandFactories.extrudeSketch({
+    const input: ExtrudeInput = {
       name: 'Extrude',
       sketchId: target.sketchId as SketchId,
       distance: exact ?? rounded,
       profiles: profileReferencesForSelection(profiles, entityWideProfileSource)
-    });
-    const resultBodyId =
-      command.payload.ids?.bodyId ?? (target.sketchId as unknown as BodyId);
-    void executeValidatedDirectEdit(
-      command,
-      resultBodyId,
-      `Extruded region by ${rounded} ${doc?.units ?? ''}.`,
-      rounded,
-      () => {
-        setSelectedProfiles([]);
-        setRevertPill({ sketchId: target.sketchId as SketchId });
+    };
+    void (async () => {
+      // The drag direction decided the volume; the kernel's exact overlap
+      // classification decides add / cut / new-body — the same inference the
+      // Extrude form runs, so a drag into a body cuts it instead of leaving
+      // a coincident second solid. Unclassifiable (kernel busy, document
+      // changed mid-flight) falls back to a plain new body.
+      const manager = managerRef.current;
+      let payload: ExtrudeInput = input;
+      let operationNote = '';
+      if (manager) {
+        const base = manager.document;
+        const sketchNode = listNodesByKind(base, 'sketch').find(
+          (candidate) => candidate.sketchId === target.sketchId
+        );
+        const faceAttachment =
+          sketchNode?.planeRef.type === 'face' && rounded < 0
+            ? {
+                bodyId: sketchNode.planeRef.bodyId,
+                direction: 'into' as const
+              }
+            : undefined;
+        setBusy(true);
+        setStatus('Classifying the extrusion against the model…');
+        try {
+          const resolved = await resolveExtrudeOperation({
+            base,
+            input,
+            derive: (document) => geometry.syncOnce(document),
+            ...(faceAttachment ? { faceAttachment } : {})
+          });
+          if (
+            managerRef.current === manager &&
+            manager.document.version === base.version
+          ) {
+            payload = { ...resolved.command.payload, name: input.name };
+            operationNote = ` (${resolved.inference.operation})`;
+          }
+        } catch {
+          // Fall through to the uninferred command.
+        }
+        setBusy(false);
       }
-    );
+      const command = commandFactories.extrudeSketch(payload);
+      const resultBodyId =
+        command.payload.ids?.bodyId ?? (target.sketchId as unknown as BodyId);
+      void executeValidatedDirectEdit(
+        command,
+        resultBodyId,
+        `Extruded region by ${rounded} ${doc?.units ?? ''}${operationNote}.`,
+        rounded,
+        () => {
+          setSelectedProfiles([]);
+          setRevertPill({ sketchId: target.sketchId as SketchId });
+        }
+      );
+    })();
   }
 
   /** Armed edge handle; memoized for the same rig-stability reason as faces. */
@@ -12538,6 +12685,7 @@ export function App() {
             representations={representations}
             selectedFeatureNodeId={selectedFeatureNodeId}
             hiddenBodyIds={hiddenBodyIds}
+            hiddenSketchIds={hiddenSketchIds}
             warnings={warnings}
             checkpoints={doc?.checkpoints ?? []}
             documentVersion={doc?.version ?? 0}
@@ -12546,6 +12694,7 @@ export function App() {
             onSelectBody={handleSelectBodyFromTree}
             selectedBodyIds={selectedBodyIds}
             onToggleBodyVisibility={toggleBodyVisibility}
+            onToggleSketchVisibility={toggleSketchVisibility}
             onFeatureContextMenu={handleFeatureContextMenu}
             onToggleFeatureSuppression={handleToggleFeatureSuppression}
             onRollbackAfterFeature={handleRollbackAfterFeature}
@@ -12708,6 +12857,8 @@ export function App() {
             profileSelectionMode={tool === 'extrude'}
             onSelectRegion={handleSelectRegion}
             onHoverRegion={handleHoverRegion}
+            planePickerArmed={!modelingLocked && tool === 'sketch'}
+            onPickPlane={startSketchOnPlane}
             onMeasurePreview={
               modelingLocked && measuring ? previewMeasurement : null
             }
@@ -13089,23 +13240,7 @@ export function App() {
                       <button
                         key={plane}
                         type="button"
-                        onClick={() => {
-                          dispatchInteraction({
-                            type: 'enter-sketch',
-                            plane: { type: 'canonical', plane, offset: 0 }
-                          });
-                          setTool(null);
-                          setStatus(
-                            // Keep the plane id here rather than PLANE_LABELS:
-                            // the e2e test that pins the label-to-plane
-                            // mapping reads this line precisely because it is
-                            // derived from the id, so a rename that only edits
-                            // strings cannot keep it green. Only the "Esc
-                            // exits" claim goes — the armed Line tool makes it
-                            // untrue on the first press.
-                            `Sketching on the ${plane} plane · Finish Sketch when done.`
-                          );
-                        }}
+                        onClick={() => startSketchOnPlane(plane)}
                       >
                         {PLANE_LABELS[plane]}
                       </button>
