@@ -410,3 +410,144 @@ describe('geometry worker rebuild coordination', () => {
     );
   });
 });
+
+describe('resolveSourceBytes download safeguards', () => {
+  interface ResolveSourceBytes {
+    (
+      ref: { checksumSha256: string },
+      context: { artifactId: string; sourceName: string }
+    ): Promise<Uint8Array>;
+  }
+
+  async function installResolver() {
+    const scope: FakeWorkerScope = {
+      postMessage: vi.fn(),
+      onmessage: null
+    };
+    let resolveSourceBytes!: ResolveSourceBytes;
+    const createExactKernelAdapter = vi.fn(
+      async (deps: { resolveSourceBytes: ResolveSourceBytes }) => {
+        resolveSourceBytes = deps.resolveSourceBytes;
+        return {
+          syncDocument: vi.fn(async () => derived('unused')),
+          exportStep: vi.fn(),
+          exportStl: vi.fn(),
+          exportMesh: vi.fn(),
+          meshQuality: vi.fn(),
+          inspectStep: vi.fn(),
+          dispose: vi.fn()
+        };
+      }
+    );
+    const putSourceBlob = vi.fn(async (bytes: Uint8Array<ArrayBuffer>) => ({
+      checksumSha256: await sha256Hex(bytes)
+    }));
+    vi.stubGlobal('self', scope);
+    vi.doMock('@openzcad/kernel-adapter/exact', () => ({
+      createExactKernelAdapter
+    }));
+    vi.doMock('../lib/localProjectStore', () => ({
+      loadSourceBlob: vi.fn(async () => null),
+      putSourceBlob,
+      sha256Hex
+    }));
+    await import('./geometryWorker');
+    // Loading the exact kernel captures the resolver wired into the adapter.
+    const document = addPrimitiveFeature(
+      createProjectDocument('Imports', toUserId('user')),
+      {
+        name: 'Box',
+        primitiveKind: 'box',
+        dimensions: { width: 10, height: 20, depth: 30 }
+      }
+    );
+    post(scope, { type: 'sync', document });
+    await vi.waitFor(() =>
+      expect(createExactKernelAdapter).toHaveBeenCalled()
+    );
+    return { resolveSourceBytes, putSourceBlob };
+  }
+
+  async function sha256Hex(
+    bytes: Uint8Array<ArrayBuffer>
+  ): Promise<string> {
+    const digest = await crypto.subtle.digest('SHA-256', bytes);
+    return Array.from(new Uint8Array(digest), (value) =>
+      value.toString(16).padStart(2, '0')
+    ).join('');
+  }
+
+  const context = { artifactId: 'artifact_cloud', sourceName: 'part.step' };
+
+  it('verifies the checksum before persisting a downloaded artifact', async () => {
+    const { resolveSourceBytes, putSourceBlob } = await installResolver();
+    const bytes = new TextEncoder().encode('ISO-10303-21;');
+    const checksumSha256 = await sha256Hex(bytes);
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => new Response(bytes))
+    );
+
+    const resolved = await resolveSourceBytes({ checksumSha256 }, context);
+
+    expect(resolved).toEqual(bytes);
+    expect(putSourceBlob).toHaveBeenCalledOnce();
+  });
+
+  it('rejects a checksum mismatch without persisting the bytes', async () => {
+    const { resolveSourceBytes, putSourceBlob } = await installResolver();
+    const correct = await sha256Hex(new TextEncoder().encode('expected'));
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => new Response(new TextEncoder().encode('tampered')))
+    );
+
+    await expect(
+      resolveSourceBytes({ checksumSha256: correct }, context)
+    ).rejects.toThrow('could not be fetched');
+    expect(putSourceBlob).not.toHaveBeenCalled();
+  });
+
+  it('refuses a download whose declared length exceeds the import budget', async () => {
+    const { resolveSourceBytes, putSourceBlob } = await installResolver();
+    const checksumSha256 = await sha256Hex(new Uint8Array(1));
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(
+        async () =>
+          new Response(new Uint8Array(1), {
+            headers: { 'content-length': String(129 * 1024 * 1024) }
+          })
+      )
+    );
+
+    await expect(
+      resolveSourceBytes({ checksumSha256 }, context)
+    ).rejects.toThrow('could not be fetched');
+    expect(putSourceBlob).not.toHaveBeenCalled();
+  });
+
+  it('stops reading a streamed body once it passes the import budget', async () => {
+    const { resolveSourceBytes, putSourceBlob } = await installResolver();
+    const checksumSha256 = await sha256Hex(new Uint8Array(1));
+    // No content-length: the byte ceiling has to hold while streaming.
+    const chunk = new Uint8Array(16 * 1024 * 1024);
+    let chunksRemaining = 9; // 144 MiB > 128 MiB budget.
+    const body = new ReadableStream<Uint8Array>({
+      pull(controllerInstance) {
+        if (chunksRemaining === 0) {
+          controllerInstance.close();
+          return;
+        }
+        chunksRemaining -= 1;
+        controllerInstance.enqueue(chunk);
+      }
+    });
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(body)));
+
+    await expect(
+      resolveSourceBytes({ checksumSha256 }, context)
+    ).rejects.toThrow('could not be fetched');
+    expect(putSourceBlob).not.toHaveBeenCalled();
+  });
+});
