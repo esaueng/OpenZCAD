@@ -1699,12 +1699,12 @@ test('view keys still work while a profile pick is waiting for a click', async (
     await page.mouse.up();
   }
 
-  // Profile picking asks for a click on a region it has not framed, so the
-  // navigation keys are exactly what a stranded user reaches for. They used to
-  // be swallowed wholesale by the mode.
+  // Extrude arms every valid profile on the drag-arrow rig. The display and
+  // grid keys must keep working while that armed state owns the screen — they
+  // used to be swallowed wholesale by the old profile-picking mode.
   await sketchTools.getByRole('button', { name: 'Extrude' }).click();
   await expect(page.getByRole('contentinfo')).toContainText(
-    'valid profiles available'
+    'profiles selected · drag the arrow'
   );
 
   const displayButton = page.getByRole('button', {
@@ -1725,18 +1725,17 @@ test('view keys still work while a profile pick is waiting for a click', async (
     gridBefore ?? ''
   );
 
-  // …and the pick is still live, not cancelled by the navigation. The status
-  // message itself is now the display-mode one, which is the point; the mode's
-  // standing hint is what says the pick survived.
+  // …and the armed profile selection survives the navigation keys: the
+  // standing hint still offers the drag-arrow extrude.
   await expect(page.getByRole('contentinfo')).toContainText(
-    'Click a shaded closed profile'
+    'Drag the arrow off the plane to extrude the profile'
   );
 
-  // A letter that would launch another tool stays reserved.
-  await page.keyboard.press('b');
-  await expect(
-    page.getByRole('region', { name: 'Feature inspector' })
-  ).toHaveCount(0);
+  // Escape clears the armed selection, exactly as the hint promises.
+  await page.keyboard.press('Escape');
+  await expect(page.getByRole('contentinfo')).not.toContainText(
+    'Drag the arrow off the plane to extrude the profile'
+  );
 });
 
 test('section view cycles planes, offers an offset slider, and cuts nothing from the model', async ({

@@ -213,9 +213,12 @@ test('keeps a chained line anchored across committed sketch entities', async ({
 
   const sketchTools = page.getByRole('toolbar', { name: 'Sketch tools' });
   await sketchTools.getByRole('button', { name: 'Extrude' }).click();
-  await expect(
-    page.getByRole('form', { name: 'Extrude controls' })
-  ).toContainText('1 bounded cell', { timeout: 20_000 });
+  // Extrude stays in place: the profile arms the drag-arrow rig directly (no
+  // create form), which only happens once the chain closed into one region.
+  await expect(page.getByRole('contentinfo')).toContainText(
+    'Closed sketch profile selected',
+    { timeout: 20_000 }
+  );
 });
 
 test('clears every transient sketch HUD overlay when finishing a sketch', async ({
