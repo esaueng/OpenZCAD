@@ -4,6 +4,17 @@
 
 /* ── Narrow screens ──────────────────────────────────────── */
 
+/*
+  Narrowing the top bar is a matter of shrinking the controls themselves, never
+  of pinning `.topbar-actions` to a track list. The account chip renders only
+  when the account needs attention, so the row holds four items or five, and a
+  positional template silently hands every item the previous one's track: at
+  1000px the save chip kept a 128px width inside a 28px track and the
+  collaboration chip printed on top of its label, covering 28px of the save
+  button's own click target. `grid-auto-columns: max-content` in topbar.css
+  sizes each track to whatever item lands in it, so every rule below sets a
+  width on the control and lets its track follow.
+*/
 @media (max-width: 1120px) {
   /* The chosen width still applies; only the viewport's floor tightens. */
   .workspace {
@@ -16,13 +27,18 @@
     padding-inline: 0;
   }
 
-  .topbar-actions {
-    grid-template-columns: 104px 128px 126px 28px 28px;
+  /* The save chip's label changes with state; a fixed width keeps the row
+     from breathing as it does. */
+  .save-state {
+    width: 128px;
   }
 
+  /* Icon-only from here down, so the label no longer supplies the width —
+     hold the same 28px hit target the other icon controls have. */
   .file-menu > summary {
-    width: 100%;
+    width: 28px;
     min-height: 28px;
+    justify-content: center;
   }
 
   .shortcuts-grid {
@@ -41,25 +57,6 @@
     gap: 0;
     padding-inline: 0;
     font-size: 0;
-  }
-
-  /*
-    The tracks have to shrink with them.
-
-    `.topbar-actions` is a grid whose columns are pinned by width above, so
-    collapsing the chips to their icons moved the icons and left the columns
-    at their full width — the row went on claiming 446px and the space was
-    never handed back. Measured at 768px before this: brand 139, mode switch
-    210, actions 446, and a breadcrumb of exactly 0.
-  */
-  .topbar-actions {
-    grid-template-columns: 28px 128px 28px 28px 28px;
-  }
-
-  /* The save chip's label changes with state; a fixed width keeps the row
-     from breathing as it does. */
-  .save-state {
-    width: 128px;
   }
 }
 
@@ -83,10 +80,6 @@
     gap: 0;
     padding-inline: 0;
     font-size: 0;
-  }
-
-  .topbar-actions {
-    grid-template-columns: repeat(5, 28px);
   }
 }
 
@@ -137,7 +130,6 @@
   }
 
   .topbar-actions {
-    grid-template-columns: repeat(5, 28px);
     gap: var(--sp-1);
     margin-left: 0;
   }

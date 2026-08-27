@@ -162,6 +162,16 @@ export type ImportRunResult =
   /** The file was judged — by the kernel or by the commit — and refused. */
   | 'refused'
   /**
+   * The user stopped it. Settled exactly like `refused`, and separate from it
+   * only so the intent is legible here: nothing judged the file, but nobody is
+   * waiting on these bytes either, and nothing sweeps unreferenced blobs. The
+   * alternative — treating a cancel as `no-verdict` — leaves up to 250 MB on
+   * the device permanently every time someone changes their mind, and the
+   * retry it protects costs a re-read and re-hash measured in tenths of a
+   * second.
+   */
+  | 'cancelled'
+  /**
    * Nothing was decided about the file: the commit lock turned the run away,
    * or the document kept moving underneath its rebuild. The obvious next step
    * is the same import again, so the bytes are not garbage.

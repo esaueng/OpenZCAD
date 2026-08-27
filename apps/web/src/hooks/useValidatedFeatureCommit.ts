@@ -9,6 +9,15 @@ export interface ValidatedFeatureCommitOptions {
   manager(): CommandManager | null;
   derive(document: ProjectDocument): Promise<ProjectDocument['derived']>;
   /**
+   * Exact rebuild boundary for work that must be preemptible. The app backs
+   * this with a disposable browser worker, so aborting can terminate a
+   * synchronous wasm rebuild without restarting the live geometry worker.
+   */
+  deriveCancellable?(
+    document: ProjectDocument,
+    signal: AbortSignal
+  ): Promise<ProjectDocument['derived']>;
+  /**
    * `derived` is the exact rebuild validation already produced for this
    * candidate; committing it alongside the command lets the caller render
    * the new geometry immediately instead of waiting for the broadcast
@@ -127,6 +136,21 @@ export interface ValidatedFeatureRunOptions extends ValidatedFeatureTarget {
   onFailure?(message: string): void;
   onSuccess?(): void;
   /**
+   * Asked at each point where this run could still stop without a trace, so a
+   * caller with a cancel control can withdraw a candidate it no longer wants.
+   *
+   * With `signal` and a cancellable derive boundary this also stops the rebuild
+   * itself. The checks remain necessary after a successful rebuild and after
+   * finalize, where cancellation must still decline the archive or commit.
+   */
+  cancelled?(): boolean;
+  /**
+   * Cancels a rebuild through {@link ValidatedFeatureCommitOptions.deriveCancellable}.
+   * Callers still provide `cancelled` because the same signal must guard the
+   * finalize and commit boundaries after a successful rebuild.
+   */
+  signal?: AbortSignal;
+  /**
    * A lock this caller already holds, from {@link ValidatedFeatureReservation}.
    * The run adopts it rather than testing whether the lock is free — which is
    * the point: between reserving and running, the caller did the expensive
@@ -168,7 +192,13 @@ export type ValidatedFeatureOutcome =
    * refusal must keep it here, because the obvious next step is to try the
    * same input again.
    */
-  | 'superseded';
+  | 'superseded'
+  /**
+   * The caller withdrew it. Nothing was committed, and — unlike every other
+   * outcome here — nothing failed either, so this must not reach a failure
+   * sink: the user already knows, having asked for it.
+   */
+  | 'cancelled';
 
 export const VALIDATED_FEATURE_BUSY_STATUS =
   'Another exact operation is still finishing. Try again once it completes.';
@@ -230,6 +260,8 @@ export function useValidatedFeatureCommit(
     onFailure?(message: string): void;
     preview(current: ProjectDocument): ProjectDocument;
     reservation?: ValidatedFeatureReservation;
+    cancelled?(): boolean;
+    signal?: AbortSignal;
     finalize?(): Promise<AnyCommand>;
     commit(
       host: ValidatedFeatureCommitOptions,
@@ -289,7 +321,10 @@ export function useValidatedFeatureCommit(
       // rebuild running forever.
       for (let attempt = 0; ; attempt += 1) {
         const preview = input.preview(current);
-        derived = await host.derive(preview);
+        derived =
+          input.signal && host.deriveCancellable
+            ? await host.deriveCancellable(preview, input.signal)
+            : await host.derive(preview);
         documentMoved = documentMovedFrom(current);
         if (
           !documentMoved ||
@@ -325,6 +360,13 @@ export function useValidatedFeatureCommit(
       if (input.targets.length === 0 && documentMoved) {
         throw new Error('The document changed while the operation validated.');
       }
+      // Withdrawn while the rebuild ran. Checked HERE, before `finalize`,
+      // because finalize is where an import spends its upload: a cancel that
+      // only stopped the commit would still push up to 250 MB first and leave
+      // the artifact behind, unreferenced.
+      if (input.cancelled?.()) {
+        return 'cancelled';
+      }
       // Past the acceptance decision, so anything deferred to `finalize` is
       // spent only on a candidate that is going into history.
       let finalized: AnyCommand | null = null;
@@ -350,6 +392,12 @@ export function useValidatedFeatureCommit(
         if (documentMovedFrom(current)) {
           commitDerived = null;
         }
+        // Again after finalize: the lock was handed back for the transfer, so
+        // this window is as long as the upload and is exactly where a user
+        // watching a slow archive would reach for cancel.
+        if (input.cancelled?.()) {
+          return 'cancelled';
+        }
       }
       if (!input.commit(host, commitDerived, finalized)) {
         throw new Error(input.commitFailure);
@@ -363,6 +411,13 @@ export function useValidatedFeatureCommit(
       );
       return 'committed';
     } catch (error) {
+      // A disposable rebuild worker rejects as soon as its signal terminates
+      // it. Cancellation is the requested outcome, not a kernel refusal, so it
+      // must bypass both failure sinks while the finally block releases the
+      // atomic-commit lock.
+      if (input.cancelled?.() || input.signal?.aborted) {
+        return 'cancelled';
+      }
       const message = errorMessage(error, 'Operation was not applied.');
       host.onStatus(message);
       if (input.onFailure) {
@@ -406,6 +461,8 @@ export function useValidatedFeatureCommit(
           command.validate(current);
           return command.apply(current);
         },
+        ...(runOptions.cancelled ? { cancelled: runOptions.cancelled } : {}),
+        ...(runOptions.signal ? { signal: runOptions.signal } : {}),
         ...(runOptions.reservation
           ? { reservation: runOptions.reservation }
           : {}),

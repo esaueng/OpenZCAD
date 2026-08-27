@@ -77,11 +77,26 @@ export async function uploadArtifactBody(
     partBytes?: number;
     /** Test seam; defaults to a short real delay between retry attempts. */
     retryDelay?: (attempt: number) => Promise<void>;
+    /**
+     * Bytes accepted so far, after each part lands. A single-PUT body reports
+     * once, on completion — there is no progress inside one request to report.
+     */
+    onProgress?: (uploaded: number, total: number) => void;
+    /**
+     * Stops the upload between parts. A chunked upload that stops this way
+     * still aborts its multipart state on the way out, so no partial upload is
+     * left occupying the session.
+     */
+    signal?: AbortSignal;
   }
 ): Promise<void> {
   const partBytes = options?.partBytes ?? ARTIFACT_UPLOAD_PART_BYTES;
+  const onProgress = options?.onProgress;
+  const signal = options?.signal;
+  signal?.throwIfAborted();
   if (body.size <= partBytes) {
     await transport.uploadArtifact(session.uploadUrl, body);
+    onProgress?.(body.size, body.size);
     return;
   }
   const retryDelay =
@@ -94,6 +109,9 @@ export async function uploadArtifactBody(
   try {
     const parts: UploadedArtifactPart[] = [];
     for (const plan of planUploadParts(body.size, partBytes)) {
+      // Between parts. Mid-request there is nothing to stop, and the `catch`
+      // below turns this into the same abort-and-rethrow a failed part gets.
+      signal?.throwIfAborted();
       parts.push(
         await uploadPartWithRetry(
           transport,
@@ -104,6 +122,9 @@ export async function uploadArtifactBody(
           retryDelay
         )
       );
+      // `plan.end` is the exact byte the store has now accepted, so this is
+      // measured rather than a part count scaled to look like bytes.
+      onProgress?.(plan.end, body.size);
     }
     await transport.completeMultipartUpload(session.uploadSessionId, {
       uploadId,

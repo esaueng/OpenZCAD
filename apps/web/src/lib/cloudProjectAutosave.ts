@@ -59,8 +59,17 @@ export type CloudProjectSyncState =
  * source that was never archived, so other devices cannot rebuild it and a
  * plain "Synced" would be a lie.
  */
+/**
+ * `device-failed` is the workspace's own state, never the controller's: it
+ * means the IndexedDB write itself rejected, so the document exists only in
+ * this tab. It is deliberately not `offline` — that one promises the work is
+ * safe on the device, which is the one thing that is not true here.
+ */
 export type WorkspaceSaveState =
-  CloudProjectSyncState | 'saving' | 'local-source';
+  | CloudProjectSyncState
+  | 'saving'
+  | 'local-source'
+  | 'device-failed';
 
 export interface CloudProjectAutosaveStatus {
   state: CloudProjectSyncState;
@@ -183,6 +192,15 @@ export class CloudProjectAutosave {
    * `adoptAccountVersion`, both of which re-establish a baseline.
    */
   #halted: 'conflict' | 'repair' | 'refused' | null = null;
+  /**
+   * The project whose divergence was detected by the reconciler rather than by
+   * a fenced 409. `openProject` runs from an effect that can fire *after* the
+   * conflict was raised — and it used to clear the halt, so the losing local
+   * copy went on to overwrite the account version the user was still being
+   * asked about. Survives `openProject` for the same project; cleared only by
+   * `adoptAccountVersion` (the resolution) or `closeProject`.
+   */
+  #conflictProjectId: string | null = null;
   #disposed = false;
   /**
    * Set while a page-teardown drain is running so `#persist` asks the fetch
@@ -288,12 +306,34 @@ export class CloudProjectAutosave {
       version: accountVersion,
       epoch: ++this.#projectEpoch
     };
-    this.#halted = null;
+    this.#halted = this.#conflictProjectId === projectId ? 'conflict' : null;
     this.#automaticRetries = 0;
-    if (this.#pending && this.#connectivity.isOnline()) {
+    if (this.#halted) {
+      this.#emit(this.#halted);
+    } else if (this.#pending && this.#connectivity.isOnline()) {
       this.#armTimer(0);
     } else {
       this.#emit(this.#pending ? 'offline' : 'synced');
+    }
+  }
+
+  /**
+   * Halts on a divergence the reconciler found, rather than one the account
+   * refused. A fenced 409 halts the writer on its own; a divergence detected
+   * while opening the project does not, so without this the conflict dialog is
+   * still asking which copy to keep while the debounced writer is already
+   * sending the local one — and the account's `document_version` regresses.
+   *
+   * Idempotent, and safe to call before `openProject`: the halt is remembered
+   * against the project id and re-applied when that project opens.
+   */
+  haltForConflict(projectId: string): void {
+    this.#assertUsable();
+    this.#clearTimer();
+    this.#conflictProjectId = projectId;
+    if (!this.#project || this.#project.projectId === projectId) {
+      this.#halted = 'conflict';
+      this.#emit('conflict');
     }
   }
 
@@ -309,6 +349,7 @@ export class CloudProjectAutosave {
     this.#pending = null;
     this.#pendingSince = null;
     this.#halted = null;
+    this.#conflictProjectId = null;
     this.#automaticRetries = 0;
   }
 
@@ -327,6 +368,7 @@ export class CloudProjectAutosave {
     this.#pending = null;
     this.#pendingSince = null;
     this.#halted = null;
+    this.#conflictProjectId = null;
     this.#automaticRetries = 0;
     this.#emit('synced');
   }

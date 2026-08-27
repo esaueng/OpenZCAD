@@ -2,6 +2,7 @@ import { fileURLToPath } from 'node:url';
 import {
   test,
   expect,
+  bareCanvasDrags,
   expectBodyCount,
   expectConsumedBodyCount,
   openAssistant,
@@ -572,11 +573,20 @@ test('keeps a source circle stable over its coincident extrude edge', async ({
   ).toBeVisible();
 
   await sketchTools.getByRole('button', { name: 'Extrude' }).click();
-  await page.getByRole('button', { name: 'Apply Extrude' }).click();
+  await page.getByTestId('direct-manipulation-value').click();
+  const heightKeypad = page.getByRole('dialog', { name: 'Height value' });
+  await heightKeypad.getByRole('textbox').fill('24');
+  await heightKeypad.getByRole('button', { name: 'Apply height' }).click();
   await expectBodyCount(page, 1);
   await expect(
     page.locator('.feature-row-main', { hasText: 'Sketch 01' })
   ).toBeVisible();
+
+  // The extrude consumed this sketch, so it hides itself. Show it again: the
+  // coincident-edge render policy below is exactly what makes a re-shown
+  // source curve readable over the extrude edge it sits on.
+  await page.getByRole('button', { name: 'Show Sketch 01' }).click();
+  await expect(page.getByRole('contentinfo')).toContainText('Sketch shown.');
 
   const renderPolicy = await canvas.evaluate(
     (element) =>
@@ -695,18 +705,13 @@ test('extrudes and edits one of multiple closed sketch regions', async ({
   await page.getByRole('button', { name: /^Sketch \(S\)/ }).click();
   await page.getByRole('button', { name: 'Top (XY)' }).click();
   const sketchTools = page.getByRole('toolbar', { name: 'Sketch tools' });
-  const bounds = await canvas.boundingBox();
-  expect(bounds).not.toBeNull();
-  const centers = [
-    {
-      x: bounds!.x + bounds!.width * 0.58,
-      y: bounds!.y + bounds!.height * 0.76
-    },
-    {
-      x: bounds!.x + bounds!.width * 0.78,
-      y: bounds!.y + bounds!.height * 0.76
-    }
-  ];
+  // Both circles have to be drawn on bare canvas, and sketch mode floats the
+  // palette over the right of it. Wait for that palette, then measure around
+  // it: a fraction of the canvas box is not an anchor, and the fractions this
+  // test used put the second circle's row 0.96px below the palette's lower
+  // edge, with both of its drag points inside the palette's column.
+  await expect(page.locator('.sketch-palette')).toBeVisible();
+  const centers = await bareCanvasDrags(page, { count: 2, dragX: 38 });
   // Closed regions the sketch has actually detected. The status bar cannot
   // stand in for this: every circle after the first reports the same "Add
   // circle", so a dropped gesture leaves the previous iteration's message in
@@ -753,60 +758,44 @@ test('extrudes and edits one of multiple closed sketch regions', async ({
   }
 
   await sketchTools.getByRole('button', { name: 'Extrude' }).click();
+  // Extrude stays in place: every valid profile is selected and armed on the
+  // drag-arrow rig — there is no create form. The e2e-only canvas hook then
+  // narrows the selection the way a click on a region would, so this
+  // lifecycle test cannot race the camera glide on slower machines, and the
+  // value chip's keypad commits an exact height.
   await expect(page.getByRole('contentinfo')).toContainText(
-    '2 valid profiles available'
-  );
-  // Profile picking itself is covered by the viewport package. Select one
-  // detected region through the e2e-only canvas hook so this lifecycle test
-  // cannot race the camera tween on slower machines.
-  await canvas.dispatchEvent('openzcad:e2e-select-profile', {
-    detail: { index: 0 }
-  });
-  const extrude = page.getByRole('form', { name: 'Extrude controls' });
-  await expect(extrude).toContainText('1 selected');
-  await expect(
-    extrude.getByRole('button', { name: 'Select all valid' })
-  ).toBeVisible();
-  await expect(page.getByRole('contentinfo')).toContainText(
-    '1 profile selected · exact preview ready',
-    { timeout: 20_000 }
-  );
-  await extrude.getByRole('button', { name: 'Select all valid' }).click();
-  await expect(page.getByRole('contentinfo')).toContainText(
-    '2 profiles selected · exact preview ready',
-    { timeout: 20_000 }
-  );
-  await expect(extrude).toContainText('2 selected');
-  await extrude.getByRole('button', { name: 'Clear' }).click();
-  await expect(page.getByRole('contentinfo')).toContainText(
-    'Select one or more closed profiles.'
+    '2 profiles selected · drag the arrow to extrude them together.'
   );
   await canvas.dispatchEvent('openzcad:e2e-select-profile', {
     detail: { index: 0 }
   });
   await expect(page.getByRole('contentinfo')).toContainText(
-    '1 profile selected · exact preview ready',
-    { timeout: 20_000 }
+    'Closed sketch profile selected'
   );
-  await expect(extrude).toContainText('1 selected');
-  await extrude.getByRole('button', { name: 'Apply Extrude' }).click();
+  await page.getByTestId('direct-manipulation-value').click();
+  const heightKeypad = page.getByRole('dialog', { name: 'Height value' });
+  await heightKeypad.getByRole('textbox').fill('24');
+  await heightKeypad.getByRole('button', { name: 'Apply height' }).click();
   await expectBodyCount(page, 1);
   await expect(
-    page.locator('.feature-row-main', { hasText: 'Extrude 1' })
+    page.locator('.feature-row-main', { hasText: 'Extrude' })
   ).toBeVisible();
 
+  // The rig commit leaves nothing selected; editing goes through the history
+  // row, same as any committed feature.
+  await page.locator('.feature-row-main', { hasText: 'Extrude' }).click();
   const inspector = page.getByRole('region', { name: 'Feature inspector' });
   await expect(inspector).toBeVisible();
   await inspector.getByRole('textbox', { name: /^Distance/ }).fill('32');
   await inspector.getByRole('button', { name: /^Apply/ }).click();
-  await expect(page.getByRole('contentinfo')).toContainText('Edit Extrude 1');
+  await expect(page.getByRole('contentinfo')).toContainText('Edit Extrude');
   await expect(page.getByRole('button', { name: 'Undo' })).toBeEnabled();
   // The feature inspector intentionally floats over the rail at this viewport.
   // Exercise the same history commands through their supported shortcuts.
   await page.keyboard.press('Control+z');
   await page.keyboard.press('Control+Shift+z');
   await expect(page.getByRole('contentinfo')).toContainText('Redo');
-  await page.locator('.feature-row-main', { hasText: 'Extrude 1' }).click();
+  await page.locator('.feature-row-main', { hasText: 'Extrude' }).click();
   await expect(
     page
       .getByRole('region', { name: 'Feature inspector' })
@@ -848,20 +837,19 @@ test('resolves a negative free-plane extrude preview', async ({ page }) => {
   );
 
   await sketchTools.getByRole('button', { name: 'Extrude' }).click();
-  await canvas.dispatchEvent('openzcad:e2e-select-profile', {
-    detail: { index: 0 }
-  });
-  const extrude = page.getByRole('form', { name: 'Extrude controls' });
-  await expect(extrude).toContainText('1 selected');
-  await extrude.getByRole('spinbutton').fill('-24');
-  await expect(extrude).toContainText('Opposite side');
   await expect(page.getByRole('contentinfo')).toContainText(
-    '1 profile selected · exact preview ready · New Body',
+    'Closed sketch profile selected'
+  );
+  // A negative height extrudes to the opposite side of the plane and, with
+  // nothing there to meet, the exact classification stores a new body.
+  await page.getByTestId('direct-manipulation-value').click();
+  const heightKeypad = page.getByRole('dialog', { name: 'Height value' });
+  await heightKeypad.getByRole('textbox').fill('-24');
+  await heightKeypad.getByRole('button', { name: 'Apply height' }).click();
+  await expect(page.getByRole('contentinfo')).toContainText(
+    'Extruded region by -24 mm (new-body)',
     { timeout: 20_000 }
   );
-  await expect(
-    extrude.getByRole('button', { name: 'Apply Extrude' })
-  ).toBeEnabled();
 });
 
 test('infers and stores an additive extrude from exact overlap', async ({
@@ -903,23 +891,27 @@ test('infers and stores an additive extrude from exact overlap', async ({
   await page.mouse.up();
 
   await sketchTools.getByRole('button', { name: 'Extrude' }).click();
-  const extrude = page.getByRole('form', { name: 'Extrude controls' });
-  await expect(extrude.getByLabel('Extrude operation')).toHaveValue('add', {
-    timeout: 20_000
-  });
-  await expect(extrude).toContainText(/overlaps Box Body; Add is stored/);
   await expect(page.getByRole('contentinfo')).toContainText(
-    'exact preview ready · Add to Box Body',
-    { timeout: 20_000 }
+    'Closed sketch profile selected'
   );
   await expectBodyCount(page, 1);
-  await extrude.getByRole('button', { name: 'Apply Extrude' }).click();
+  // The commit classifies against the exact kernel: the extrusion overlaps
+  // the box, so Add is stored and no second body appears.
+  await page.getByTestId('direct-manipulation-value').click();
+  const heightKeypad = page.getByRole('dialog', { name: 'Height value' });
+  await heightKeypad.getByRole('textbox').fill('24');
+  await heightKeypad.getByRole('button', { name: 'Apply height' }).click();
+  await expect(page.getByRole('contentinfo')).toContainText(
+    'Extruded region by 24 mm (add)',
+    { timeout: 20_000 }
+  );
 
   const extrudeFeature = page.getByRole('button', {
-    name: 'Extrude 1',
+    name: 'Extrude',
     exact: true
   });
   await expect(extrudeFeature).toBeVisible();
+  await extrudeFeature.click();
   const inspector = page.getByRole('region', { name: 'Feature inspector' });
   await expect(inspector).toBeVisible();
   await expect(inspector.getByLabel('Stored extrude operation')).toHaveValue(
@@ -927,7 +919,7 @@ test('infers and stores an additive extrude from exact overlap', async ({
   );
   await inspector.getByRole('textbox', { name: /^Distance/ }).fill('32');
   await inspector.getByRole('button', { name: /^Apply/ }).click();
-  await expect(page.getByRole('contentinfo')).toContainText('Edit Extrude 1');
+  await expect(page.getByRole('contentinfo')).toContainText('Edit Extrude');
   await expect(inspector.getByLabel('Stored extrude operation')).toHaveValue(
     'add'
   );
@@ -2945,10 +2937,10 @@ test('the panel refuses a zero extrude and keeps a boolean name honest', async (
   await canvas.dispatchEvent('openzcad:e2e-select-profile', {
     detail: { index: 0 }
   });
-  await page
-    .getByRole('form', { name: 'Extrude controls' })
-    .getByRole('button', { name: /Apply Extrude/ })
-    .click();
+  await page.getByTestId('direct-manipulation-value').click();
+  const extrudeKeypad = page.getByRole('dialog', { name: 'Height value' });
+  await extrudeKeypad.getByRole('textbox').fill('24');
+  await extrudeKeypad.getByRole('button', { name: 'Apply height' }).click();
   await expect(
     page.locator('.feature-row-main', { hasText: 'Extrude' })
   ).toBeVisible();
@@ -3034,10 +3026,10 @@ test('each sketch plane label names the plane it actually opens', async ({
   await canvas.dispatchEvent('openzcad:e2e-select-profile', {
     detail: { index: 0 }
   });
-  await page
-    .getByRole('form', { name: 'Extrude controls' })
-    .getByRole('button', { name: /Apply Extrude/ })
-    .click();
+  await page.getByTestId('direct-manipulation-value').click();
+  const extrudeKeypad = page.getByRole('dialog', { name: 'Height value' });
+  await extrudeKeypad.getByRole('textbox').fill('24');
+  await extrudeKeypad.getByRole('button', { name: 'Apply height' }).click();
   await expect(page.locator('.selection-chip')).toBeVisible();
   const chip = (await page.locator('.selection-chip').textContent()) ?? '';
   const triple = /([\d.]+)\s*×\s*([\d.]+)\s*×\s*([\d.]+)/.exec(chip);
@@ -3141,10 +3133,10 @@ test('types an exact rectangle while drawing it', async ({ page }) => {
   await canvas.dispatchEvent('openzcad:e2e-select-profile', {
     detail: { index: 0 }
   });
-  await page
-    .getByRole('form', { name: 'Extrude controls' })
-    .getByRole('button', { name: /Apply Extrude/ })
-    .click();
+  await page.getByTestId('direct-manipulation-value').click();
+  const extrudeKeypad = page.getByRole('dialog', { name: 'Height value' });
+  await extrudeKeypad.getByRole('textbox').fill('24');
+  await extrudeKeypad.getByRole('button', { name: 'Apply height' }).click();
 
   await expect(page.locator('.selection-chip')).toBeVisible();
   const chip = (await page.locator('.selection-chip').textContent()) ?? '';

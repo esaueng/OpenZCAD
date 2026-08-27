@@ -73,10 +73,18 @@ function resolveEntityProfiles(
  * Resolve the persisted region profiles of an extrude against the sketch's
  * current regions. Shared by both exact kernels so a document means the same
  * region — or fails with the same error — wherever it builds. Resolution is
- * fail-closed (ADR-010): the stored fingerprint must match a current region,
- * with a single tolerant fallback — the stored sample point still falls
- * inside a region whose area is within 1% — so nudging a curve keeps the
- * feature alive while topology changes refuse to guess.
+ * fail-closed (ADR-010), in three tiers that narrow from exact to tolerant:
+ *
+ * 1. the stored fingerprint (or `profileId`) matches a current region;
+ * 2. exactly one current region is bounded by exactly the referenced
+ *    entities — identity, which survives the dimension change that
+ *    invalidates every geometric field at once. Where several regions share
+ *    that entity set, the stored area and sample point choose between them;
+ * 3. a legacy reference with no entity ids falls back to area-and-point over
+ *    arrangement cells alone.
+ *
+ * Nudging a curve or resizing it keeps the feature alive; genuinely ambiguous
+ * topology still refuses to guess.
  *
  * One reference kind opts out of geometric identity entirely: an
  * `{ all: true, sourceEntityIds }` reference resolves by entity id alone (see
@@ -152,14 +160,39 @@ export function resolveRegionProfiles(
       return identityMatches[0]!;
     }
 
-    const sourceMatches = sourceIds
+    // Entity identity, then geometry to disambiguate — not geometry as a
+    // second gate on identity.
+    //
+    // `profileId` and `regionFingerprint` both hash quantized curve
+    // coordinates and `sourceArea` is the area those curves had, so changing a
+    // sketch dimension — or the named parameter driving it — invalidates all
+    // three at once. That is the ordinary parametric edit, and requiring the
+    // old area and the old sample point here meant it landed in the throw
+    // below: the solid disappeared behind a warning, taking every fillet,
+    // boolean and pattern built on it. `App.tsx:10760` already binds on a
+    // unique entity-set match with no geometric test, so the viewport was
+    // highlighting the region the kernel then refused.
+    //
+    // Still fail-closed, because identity is only trusted when it is
+    // unambiguous. Exactly one current region bounded by exactly the
+    // referenced entities IS that region, whatever its dimensions now are. Two
+    // or more — a line drawn across the circle, a text object whose glyphs all
+    // carry the object's id — cannot be told apart by identity alone, so the
+    // stored geometry picks between them, and anything left over still throws.
+    const entitySetMatches = sourceIds
       ? analysis.profiles.filter(
           (candidate) =>
-            [...candidate.sourceEntityIds].sort().join('|') === sourceIds &&
-            Math.abs(candidate.area - reference.sourceArea) <= areaTolerance &&
-            profileContainsPoint(candidate, reference.samplePoint)
+            [...candidate.sourceEntityIds].sort().join('|') === sourceIds
         )
       : [];
+    if (entitySetMatches.length === 1) {
+      return entitySetMatches[0]!;
+    }
+    const sourceMatches = entitySetMatches.filter(
+      (candidate) =>
+        Math.abs(candidate.area - reference.sourceArea) <= areaTolerance &&
+        profileContainsPoint(candidate, reference.samplePoint)
+    );
     if (sourceMatches.length === 1) {
       return sourceMatches[0]!;
     }

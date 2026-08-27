@@ -15,6 +15,13 @@ const PORT = portForCheckout();
 
 export default defineConfig({
   testDir: './test/e2e',
+  // Playwright's focus is run-wide, not file-wide, so one `test.only` left in a
+  // push turns all four CI shards into a single executed test: three run zero,
+  // every shard exits 0, and the `e2e` aggregate — documented below as the one
+  // stable context a human is meant to trust — prints green having exercised
+  // that single test. Root Vitest gets this for free (`allowOnly` defaults to
+  // `!CI`); Playwright does not.
+  forbidOnly: !!process.env.CI,
   // GitHub-hosted runners are much slower than the previous CI hardware: cold
   // Chromium, IndexedDB, and geometry-worker starts can eat most of the 30 s
   // default test budget on a 2-core machine. Give CI runs more room and one

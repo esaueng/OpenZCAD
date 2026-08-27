@@ -249,6 +249,56 @@ describe('assistant integration', () => {
     ).resolves.toEqual({ kind: 'message', message: 'Finished' });
   });
 
+  it('binds a streamed patch to the digest it was generated from', async () => {
+    // The regression. `parseCadPatchProposal` runs its witness-binding checks
+    // only when a digest is supplied, and the one production stream parse
+    // omitted it — with `request.digest` in scope 14 lines away. The whole
+    // layer ran in the test suite and nowhere else, while architecture.md
+    // asserted twice that it was enforced. This proposal edits a sketch the
+    // digest does not contain, which the binding rejects and bare parsing
+    // accepts.
+    const output = JSON.stringify({
+      replyKind: 'patch',
+      proposal: {
+        proposalId: 'stale_sketch',
+        summary: 'Widen the bracket.',
+        assumptions: [],
+        operations: [
+          {
+            kind: 'set_sketch_dimension',
+            sketchId: 'sketch_not_in_digest',
+            objectId: 'ent_not_in_digest',
+            field: 'width',
+            value: 40
+          }
+        ]
+      },
+      questions: null,
+      message: null,
+      readings: null
+    });
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(
+        async () =>
+          new Response(
+            `data: ${JSON.stringify({
+              type: 'response.output_text.delta',
+              delta: output
+            })}\n\ndata: ${JSON.stringify({
+              type: 'response.done',
+              response: { status: 'completed' }
+            })}\n\ndata: [DONE]\n\n`,
+            { headers: { 'content-type': 'text/event-stream' } }
+          )
+      )
+    );
+
+    await expect(
+      streamAssistantReply({ prompt: input.prompt, digest: input.digest })
+    ).rejects.toMatchObject({ code: 'AI_INVALID_REPLY' });
+  });
+
   it('bounds conversation history and rejects unusable attachments', () => {
     const base = { prompt: 'Model this', digest: input.digest };
     const png = (bytes: number) => 'A'.repeat(Math.ceil(bytes / 3) * 4);

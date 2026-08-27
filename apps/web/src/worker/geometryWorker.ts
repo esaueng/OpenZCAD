@@ -16,20 +16,9 @@ import {
   canonicalProjectContentKey
 } from './exactRebuildCache';
 import { GeometryWorkerQueue } from './geometryWorkerQueue';
+import { resolveExactSourceBytes } from '../lib/exactSourceResolver';
 import { preloadDocumentFonts } from '../lib/textFonts';
-import {
-  loadSourceBlob,
-  putSourceBlob,
-  sha256Hex
-} from '../lib/localProjectStore';
 
-/**
- * Bytes a cloud artifact download may stream before the rebuild gives up on
- * it. Aligned with the exact kernel's own STEP import budget
- * (`importStep` in @openzcad/kernel-adapter): anything larger could never be
- * rebuilt, so reading it would only spend memory on bytes that must fail.
- */
-const MAX_ARTIFACT_DOWNLOAD_BYTES = 128 * 1024 * 1024;
 
 /**
  * `step`, `stl`, and `dxf` produce text (STEP data, ASCII STL, DXF R12);
@@ -176,118 +165,53 @@ let exactKernelError: unknown;
 let exactKernelPromise: Promise<ExactKernel | null> | null = null;
 
 /**
- * Buffers a response body with a hard byte ceiling, returning null when the
- * body exceeds it. The content-length check is advisory only — a missing or
- * understated header must not let the body grow past the cap while reading.
+ * The kernel is a multi-megabyte wasm fetch plus compile; a stalled fetch
+ * must fail the job (and clear the memoized promise so the next attempt
+ * retries) rather than hang the queue forever.
  */
-async function readResponseBytes(
-  response: Response,
-  maxBytes: number
-): Promise<Uint8Array<ArrayBuffer> | null> {
-  const declared = Number(response.headers.get('content-length') ?? '');
-  if (Number.isFinite(declared) && declared > maxBytes) {
-    await response.body?.cancel().catch(() => undefined);
-    return null;
-  }
-  const reader = response.body?.getReader();
-  if (!reader) {
-    return null;
-  }
-  const chunks: Uint8Array[] = [];
-  let totalBytes = 0;
-  let overflow = false;
-  try {
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) {
-        break;
-      }
-      totalBytes += value.byteLength;
-      if (totalBytes > maxBytes) {
-        overflow = true;
-        await reader.cancel().catch(() => undefined);
-        break;
-      }
-      chunks.push(value);
-    }
-  } finally {
-    reader.releaseLock();
-  }
-  if (overflow) {
-    return null;
-  }
-  const bytes = new Uint8Array(totalBytes);
-  let offset = 0;
-  for (const chunk of chunks) {
-    bytes.set(chunk, offset);
-    offset += chunk.byteLength;
-  }
-  return bytes;
-}
-
-/**
- * Produces bytes for reference-form imports: the local blob store first, then
- * the artifact archived at import time. A cloud fetch is written back to the
- * blob store so the next rebuild is local. The archive is other people's
- * data as often as our own — a shared project can reference a collaborator's
- * upload — so the download is size-capped and its checksum verified BEFORE
- * anything is persisted, keeping a wrong or oversized body out of the blob
- * store and out of the kernel.
- */
-async function resolveSourceBytes(
-  ref: { checksumSha256: string },
-  context: { artifactId: string; sourceName: string }
-): Promise<Uint8Array> {
-  const local = await loadSourceBlob(ref.checksumSha256);
-  if (local) {
-    return local;
-  }
-  if (!context.artifactId.startsWith('artifact_local_')) {
-    const response = await fetch(
-      `/api/artifacts/${context.artifactId}/download`
-    );
-    if (response.ok) {
-      const bytes = await readResponseBytes(
-        response,
-        MAX_ARTIFACT_DOWNLOAD_BYTES
-      );
-      if (bytes && (await sha256Hex(bytes)) === ref.checksumSha256) {
-        await putSourceBlob(bytes);
-        return bytes;
-      }
-    }
-  }
-  throw new Error(
-    `Import source for "${context.sourceName}" is not in local storage and could not be fetched.`
-  );
-}
+const KERNEL_LOAD_BUDGET_MS = 90_000;
 
 function loadExactKernel(): Promise<ExactKernel | null> {
   if (exactKernelPromise) {
     return exactKernelPromise;
   }
   exactKernelStatus = 'loading';
-  exactKernelPromise = import('@openzcad/kernel-adapter/exact')
-    .then(({ createExactKernelAdapter }) =>
-      createExactKernelAdapter({ resolveSourceBytes })
-    )
-    .then(
-      (adapter) => {
-        exactKernelStatus = 'ready';
-        return adapter;
-      },
-      (error: unknown) => {
-        // A load failure is usually transient — the WASM chunk fetch lost a
-        // network race. Clearing the memoized promise lets the next rebuild
-        // or export attempt a fresh load instead of leaving this worker
-        // permanently kernel-less until the page reloads. The failed status
-        // and error stick around for messaging until a retry begins.
-        exactKernelStatus = 'failed';
-        exactKernelError = error;
-        exactKernelPromise = null;
-        return null;
-      }
+  const attempt = import('@openzcad/kernel-adapter/exact').then(
+    ({ createExactKernelAdapter }) =>
+      createExactKernelAdapter({
+        resolveSourceBytes: resolveExactSourceBytes
+      })
+  );
+  // The budget losing the race leaves `attempt` pending; keep its eventual
+  // rejection from surfacing as an unhandled one.
+  attempt.catch(() => undefined);
+  let budgetTimer: ReturnType<typeof setTimeout> | undefined;
+  const budget = new Promise<never>((_, reject) => {
+    budgetTimer = setTimeout(
+      () => reject(new Error('The exact Remus kernel took too long to load.')),
+      KERNEL_LOAD_BUDGET_MS
     );
+  });
+  exactKernelPromise = Promise.race([attempt, budget]).then(
+    (adapter) => {
+      clearTimeout(budgetTimer);
+      exactKernelStatus = 'ready';
+      return adapter;
+    },
+    (error: unknown) => {
+      clearTimeout(budgetTimer);
+      // A load failure is usually transient — the WASM chunk fetch lost a
+      // network race. Clearing the memoized promise lets the next rebuild
+      // or export attempt a fresh load instead of leaving this worker
+      // permanently kernel-less until the page reloads. The failed status
+      // and error stick around for messaging until a retry begins. The
+      // budget above feeds this same path, so a stalled fetch also retries.
+      exactKernelStatus = 'failed';
+      exactKernelError = error;
+      exactKernelPromise = null;
+      return null;
+    }
+  );
   return exactKernelPromise;
 }
 
