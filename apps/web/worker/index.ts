@@ -329,6 +329,54 @@ async function readJsonBody(
   }
 }
 
+/**
+ * Binary variant of readJsonBody for artifact uploads: enforces the byte cap
+ * while streaming, so a missing or understated content-length cannot buffer an
+ * oversized body into isolate memory before the size check runs.
+ */
+async function readBinaryBody(
+  request: Request,
+  maxBytes: number,
+  labels: { empty: string; tooLarge: string }
+): Promise<ArrayBuffer> {
+  const contentLength = Number(request.headers.get('content-length') ?? '0');
+  if (Number.isFinite(contentLength) && contentLength > maxBytes) {
+    throw new HttpError(413, labels.tooLarge);
+  }
+  const reader = request.body?.getReader();
+  if (!reader) {
+    throw new HttpError(400, labels.empty);
+  }
+  const chunks: Uint8Array[] = [];
+  let totalBytes = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) {
+        break;
+      }
+      totalBytes += value.byteLength;
+      if (totalBytes > maxBytes) {
+        await reader.cancel().catch(() => undefined);
+        throw new HttpError(413, labels.tooLarge);
+      }
+      chunks.push(value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  if (totalBytes === 0) {
+    throw new HttpError(400, labels.empty);
+  }
+  const body = new Uint8Array(totalBytes);
+  let offset = 0;
+  for (const chunk of chunks) {
+    body.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return body.buffer;
+}
+
 async function notifyProjectRoleChange(
   env: Env,
   projectId: string,
@@ -510,11 +558,11 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
   const isSharingRoute =
     Boolean(
       sharingMatch ||
-        invitationsMatch ||
-        invitationMatch ||
-        memberMatch ||
-        shareLinksMatch ||
-        shareLinkMatch
+      invitationsMatch ||
+      invitationMatch ||
+      memberMatch ||
+      shareLinksMatch ||
+      shareLinkMatch
     ) || pathname === INVITATION_ACCEPT_ROUTE;
   if (
     (request.method === 'GET' || request.method === 'POST') &&
@@ -1366,20 +1414,10 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
 
   const uploadContentMatch = UPLOAD_CONTENT_ROUTE.exec(pathname);
   if (request.method === 'PUT' && uploadContentMatch) {
-    const contentLength = Number(request.headers.get('content-length') ?? '0');
-    if (
-      Number.isFinite(contentLength) &&
-      contentLength > MAX_ARTIFACT_BODY_BYTES
-    ) {
-      throw new HttpError(413, 'Artifact is too large.');
-    }
-    const body = await request.arrayBuffer();
-    if (body.byteLength === 0 || body.byteLength > MAX_ARTIFACT_BODY_BYTES) {
-      throw new HttpError(
-        body.byteLength === 0 ? 400 : 413,
-        body.byteLength === 0 ? 'Artifact is empty.' : 'Artifact is too large.'
-      );
-    }
+    const body = await readBinaryBody(request, MAX_ARTIFACT_BODY_BYTES, {
+      empty: 'Artifact is empty.',
+      tooLarge: 'Artifact is too large.'
+    });
     await persistence.putUpload(userId, uploadContentMatch[1]!, body);
     return new Response(null, { status: 204 });
   }
@@ -1417,22 +1455,10 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
         `Upload part number cannot exceed ${MAX_ARTIFACT_UPLOAD_PARTS}.`
       );
     }
-    const contentLength = Number(request.headers.get('content-length') ?? '0');
-    if (
-      Number.isFinite(contentLength) &&
-      contentLength > MAX_ARTIFACT_PART_BYTES
-    ) {
-      throw new HttpError(413, 'Upload part is too large.');
-    }
-    const body = await request.arrayBuffer();
-    if (body.byteLength === 0 || body.byteLength > MAX_ARTIFACT_PART_BYTES) {
-      throw new HttpError(
-        body.byteLength === 0 ? 400 : 413,
-        body.byteLength === 0
-          ? 'Upload part is empty.'
-          : 'Upload part is too large.'
-      );
-    }
+    const body = await readBinaryBody(request, MAX_ARTIFACT_PART_BYTES, {
+      empty: 'Upload part is empty.',
+      tooLarge: 'Upload part is too large.'
+    });
     return json(
       await persistence.putUploadPart(
         userId,
@@ -1489,10 +1515,18 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
     if (!download) {
       return json({ error: 'Artifact not found.' }, 404);
     }
+    // Streamed bodies carry no byteLength; the recorded size stands in so the
+    // client still gets a content-length for progress and integrity checks.
+    const contentLength =
+      download.body instanceof ArrayBuffer
+        ? download.body.byteLength
+        : download.artifact.bytes;
     return new Response(download.body, {
       headers: {
         'content-type': download.artifact.contentType,
-        'content-length': String(download.body.byteLength),
+        ...(contentLength !== undefined
+          ? { 'content-length': String(contentLength) }
+          : {}),
         'content-disposition': `attachment; filename="${download.artifact.name.replace(/["\\\r\n]/g, '_')}"`,
         'x-content-type-options': 'nosniff'
       }
@@ -1520,134 +1554,164 @@ export default {
   },
   async fetch(request: Request, env: Env): Promise<Response> {
     assertSafeRuntimeConfiguration(env);
-    const { pathname } = new URL(request.url);
-    try {
-      return await handleApiRequest(request, env);
-    } catch (error) {
-      if (error instanceof HttpError) {
-        return json({ error: error.message }, error.status);
-      }
-      if (error instanceof AuthFlowError) {
-        return json({ error: error.message, code: error.code }, error.status);
-      }
-      if (error instanceof AuthenticationError) {
-        return json(
-          { error: error.message, code: 'AUTH_REQUIRED' },
-          401,
-          error.failure === 'invalid'
-            ? { 'set-cookie': await destroyEmailSession(request, env) }
-            : undefined
-        );
-      }
-      if (error instanceof AccountDeletionError) {
-        return json({ error: error.message, code: error.code }, error.status);
-      }
-      if (error instanceof ProjectNotFoundError) {
-        return json({ error: error.message }, 404);
-      }
-      if (error instanceof RevisionNotFoundError) {
-        return json({ error: error.message, code: 'REVISION_NOT_FOUND' }, 404);
-      }
-      if (error instanceof SharingRequestError) {
-        return json({ error: error.message, code: error.code }, error.status);
-      }
-      if (error instanceof ProjectSharingError) {
-        const status =
-          error.code === 'INVITATION_RATE_LIMIT'
-            ? 429
-            : error.code.endsWith('_NOT_FOUND')
-              ? 404
-              : 409;
-        return json({ error: error.message, code: error.code }, status);
-      }
-      if (error instanceof ProjectAdoptionError) {
-        return json({ error: error.message, code: error.code }, 409);
-      }
-      if (error instanceof DocumentTooLargeError) {
-        return json(
-          {
-            error: error.message,
-            code: 'DOCUMENT_TOO_LARGE',
-            limitBytes: error.limitBytes
-          },
-          413
-        );
-      }
-      if (error instanceof RevisionConflictError) {
-        return json(
-          {
-            error: error.message,
-            code: 'REVISION_CONFLICT',
-            currentVersion: error.currentVersion
-          },
-          409
-        );
-      }
-      if (error instanceof ProjectMeasurementRequestError) {
-        return json({ error: error.message }, error.status);
-      }
-      if (error instanceof ProjectMeasurementRevisionConflictError) {
-        return json(
-          {
-            error: error.message,
-            code: 'MEASUREMENT_REVISION_CONFLICT',
-            currentRevision: error.currentRevision
-          },
-          409
-        );
-      }
-      if (error instanceof HttpAssistantConfigurationError) {
-        return json({ error: error.message }, 502);
-      }
-      if (error instanceof ArtifactQuotaError) {
-        return json(
-          {
-            error: error.message,
-            code: 'ARTIFACT_QUOTA_EXCEEDED',
-            limitBytes: error.limitBytes
-          },
-          413
-        );
-      }
-      if (error instanceof ArtifactStorageError) {
-        return json({ error: error.message }, 503);
-      }
-      if (error instanceof ProjectObjectStorageError) {
-        console.error(
-          'Project document storage unavailable.',
-          request.method,
-          pathname,
-          error
-        );
-        return json(
-          {
-            error:
-              'The account copy of this project is temporarily unavailable. Your work remains saved on this device.',
-            code: 'PROJECT_DOCUMENT_UNAVAILABLE'
-          },
-          503
-        );
-      }
-      if (
-        error instanceof Error &&
-        error.message.includes('ACCOUNT_ERASURE_IN_PROGRESS')
-      ) {
-        return json(
-          {
-            error: 'Cloud data deletion is already in progress.',
-            code: 'ACCOUNT_ERASURE_IN_PROGRESS'
-          },
-          409
-        );
-      }
-      console.error('Unhandled API error.', {
-        method: request.method,
-        pathname,
-        errorName: error instanceof Error ? error.name : 'UnknownError'
-      });
-      return json({ error: 'Internal error' }, 500);
-    }
+    const response = await dispatchApiRequest(request, env);
+    return withApiSecurityHeaders(response);
   }
 };
+
+/**
+ * Defense-in-depth headers on every API response. The HTML/asset surface gets
+ * its CSP and related headers from `apps/web/public/_headers`; these cover the
+ * API half. A WebSocket upgrade response cannot be rebuilt without dropping
+ * the socket, and it serves no document to sniff or frame, so it passes
+ * through untouched.
+ */
+function withApiSecurityHeaders(response: Response): Response {
+  if (response.webSocket) {
+    return response;
+  }
+  const wrapped = new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers: response.headers
+  });
+  wrapped.headers.set('x-content-type-options', 'nosniff');
+  wrapped.headers.set('referrer-policy', 'no-referrer');
+  wrapped.headers.set('cross-origin-resource-policy', 'same-origin');
+  return wrapped;
+}
+
+async function dispatchApiRequest(
+  request: Request,
+  env: Env
+): Promise<Response> {
+  const { pathname } = new URL(request.url);
+  try {
+    return await handleApiRequest(request, env);
+  } catch (error) {
+    if (error instanceof HttpError) {
+      return json({ error: error.message }, error.status);
+    }
+    if (error instanceof AuthFlowError) {
+      return json({ error: error.message, code: error.code }, error.status);
+    }
+    if (error instanceof AuthenticationError) {
+      return json(
+        { error: error.message, code: 'AUTH_REQUIRED' },
+        401,
+        error.failure === 'invalid'
+          ? { 'set-cookie': await destroyEmailSession(request, env) }
+          : undefined
+      );
+    }
+    if (error instanceof AccountDeletionError) {
+      return json({ error: error.message, code: error.code }, error.status);
+    }
+    if (error instanceof ProjectNotFoundError) {
+      return json({ error: error.message }, 404);
+    }
+    if (error instanceof RevisionNotFoundError) {
+      return json({ error: error.message, code: 'REVISION_NOT_FOUND' }, 404);
+    }
+    if (error instanceof SharingRequestError) {
+      return json({ error: error.message, code: error.code }, error.status);
+    }
+    if (error instanceof ProjectSharingError) {
+      const status =
+        error.code === 'INVITATION_RATE_LIMIT'
+          ? 429
+          : error.code.endsWith('_NOT_FOUND')
+            ? 404
+            : 409;
+      return json({ error: error.message, code: error.code }, status);
+    }
+    if (error instanceof ProjectAdoptionError) {
+      return json({ error: error.message, code: error.code }, 409);
+    }
+    if (error instanceof DocumentTooLargeError) {
+      return json(
+        {
+          error: error.message,
+          code: 'DOCUMENT_TOO_LARGE',
+          limitBytes: error.limitBytes
+        },
+        413
+      );
+    }
+    if (error instanceof RevisionConflictError) {
+      return json(
+        {
+          error: error.message,
+          code: 'REVISION_CONFLICT',
+          currentVersion: error.currentVersion
+        },
+        409
+      );
+    }
+    if (error instanceof ProjectMeasurementRequestError) {
+      return json({ error: error.message }, error.status);
+    }
+    if (error instanceof ProjectMeasurementRevisionConflictError) {
+      return json(
+        {
+          error: error.message,
+          code: 'MEASUREMENT_REVISION_CONFLICT',
+          currentRevision: error.currentRevision
+        },
+        409
+      );
+    }
+    if (error instanceof HttpAssistantConfigurationError) {
+      return json({ error: error.message }, 502);
+    }
+    if (error instanceof ArtifactQuotaError) {
+      return json(
+        {
+          error: error.message,
+          code: 'ARTIFACT_QUOTA_EXCEEDED',
+          limitBytes: error.limitBytes
+        },
+        413
+      );
+    }
+    if (error instanceof ArtifactStorageError) {
+      return json({ error: error.message }, 503);
+    }
+    if (error instanceof ProjectObjectStorageError) {
+      console.error(
+        'Project document storage unavailable.',
+        request.method,
+        pathname,
+        error
+      );
+      return json(
+        {
+          error:
+            'The account copy of this project is temporarily unavailable. Your work remains saved on this device.',
+          code: 'PROJECT_DOCUMENT_UNAVAILABLE'
+        },
+        503
+      );
+    }
+    if (
+      error instanceof Error &&
+      error.message.includes('ACCOUNT_ERASURE_IN_PROGRESS')
+    ) {
+      return json(
+        {
+          error: 'Cloud data deletion is already in progress.',
+          code: 'ACCOUNT_ERASURE_IN_PROGRESS'
+        },
+        409
+      );
+    }
+    console.error('Unhandled API error.', {
+      method: request.method,
+      pathname,
+      errorName: error instanceof Error ? error.name : 'UnknownError'
+    });
+    return json({ error: 'Internal error' }, 500);
+  }
+}
 
 export { ProjectCollaborationRoom };

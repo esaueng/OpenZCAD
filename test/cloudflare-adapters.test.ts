@@ -240,6 +240,57 @@ describe('cloudflare adapters', () => {
     expect(put).not.toHaveBeenCalled();
   });
 
+  it('streams artifact downloads from object storage instead of buffering them', async () => {
+    const userId = toUserId('user_stream_owner');
+    const artifactRow = {
+      id: 'artifact_stream',
+      project_id: 'project_stream',
+      kind: 'step-import',
+      name: 'part.step',
+      object_key: 'project_stream/uploads/abc123-part.step',
+      content_type: 'model/step',
+      bytes: 9,
+      metadata_json: '{}',
+      created_at: '2026-01-01T00:00:00.000Z'
+    };
+    const prepare = vi.fn((query: string) => ({
+      bind: () => ({
+        first: async () => {
+          if (query.includes('FROM artifacts')) {
+            return artifactRow;
+          }
+          if (query.includes('owner_user_id')) {
+            return { owner_user_id: userId };
+          }
+          return null;
+        }
+      })
+    }));
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode('STEP DATA'));
+        controller.close();
+      }
+    });
+    // A regression here turns a multi-hundred-MB artifact into Worker memory.
+    const arrayBuffer = vi.fn(async () => {
+      throw new Error('download must stream, not buffer');
+    });
+    const service = new D1R2PersistenceService({
+      DB: { prepare } as unknown as D1Database,
+      ARTIFACTS: {
+        get: vi.fn(async () => ({ size: 9, body, arrayBuffer }))
+      } as unknown as R2Bucket
+    });
+
+    const download = await service.downloadArtifact(userId, 'artifact_stream');
+
+    expect(download?.artifact.artifactId).toBe('artifact_stream');
+    expect(download?.body).toBe(body);
+    expect(arrayBuffer).not.toHaveBeenCalled();
+    expect(await new Response(download!.body).text()).toBe('STEP DATA');
+  });
+
   it('deletes unreferenced content-addressed assets when a save loses the version race', async () => {
     const userId = toUserId('user_conflict_assets');
     const manager = new CommandManager(
