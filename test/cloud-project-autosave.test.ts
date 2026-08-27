@@ -638,3 +638,71 @@ describe('cloud project autosave — flushing', () => {
     expect(() => controller.schedule(documentAt(3))).toThrow(/disposed/);
   });
 });
+
+describe('a divergence the reconciler found rather than the account', () => {
+  const conflictedProject = () => documentAt(12);
+
+  it('does not write the local copy while the user is being asked', async () => {
+    // The regression. A fenced 409 halts the writer on its own, but a
+    // divergence detected while opening the project did not — and the
+    // `openProject` effect runs on its own schedule, clearing any halt. The
+    // debounced writer then sent the local copy up, so the account version
+    // regressed to the losing side before the dialog was answered.
+    const { controller, saves, statuses } = harness();
+    const document = conflictedProject();
+
+    controller.haltForConflict(document.projectId);
+    controller.openProject(document.projectId, 14);
+    controller.schedule(document);
+    await vi.advanceTimersByTimeAsync(PROJECT_AUTOSAVE_MAX_WAIT_MS * 4);
+
+    expect(saves).toEqual([]);
+    expect(lastState(statuses)).toBe('conflict');
+  });
+
+  it('holds the halt across a repeated openProject for the same project', async () => {
+    const { controller, saves } = harness();
+    const document = conflictedProject();
+
+    controller.openProject(document.projectId, 14);
+    controller.haltForConflict(document.projectId);
+    controller.schedule(document);
+    // The effect re-runs — a re-render is all it takes.
+    controller.openProject(document.projectId, 14);
+    await vi.advanceTimersByTimeAsync(PROJECT_AUTOSAVE_MAX_WAIT_MS * 4);
+
+    expect(saves).toEqual([]);
+  });
+
+  it('writes again once the conflict is resolved', async () => {
+    const { controller, saves } = harness();
+    const document = conflictedProject();
+
+    controller.openProject(document.projectId, 14);
+    controller.haltForConflict(document.projectId);
+    controller.schedule(document);
+    await vi.advanceTimersByTimeAsync(PROJECT_AUTOSAVE_MAX_WAIT_MS * 2);
+    expect(saves).toEqual([]);
+
+    // Resolution re-establishes a baseline both copies agree on.
+    controller.adoptAccountVersion(document.projectId, 14);
+    controller.openProject(document.projectId, 14);
+    controller.schedule(documentAt(15, document));
+    await vi.advanceTimersByTimeAsync(PROJECT_AUTOSAVE_MAX_WAIT_MS * 2);
+
+    expect(saves).toHaveLength(1);
+  });
+
+  it('leaves a different project free to keep syncing', async () => {
+    const { controller, saves } = harness();
+    const diverged = conflictedProject();
+    const other = documentAt(3, createProjectDocument('Other', owner));
+
+    controller.haltForConflict(diverged.projectId);
+    controller.openProject(other.projectId, 3);
+    controller.schedule(other);
+    await vi.advanceTimersByTimeAsync(PROJECT_AUTOSAVE_MAX_WAIT_MS * 2);
+
+    expect(saves).toHaveLength(1);
+  });
+});

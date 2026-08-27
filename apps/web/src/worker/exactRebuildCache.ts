@@ -1,4 +1,5 @@
 import type { ProjectDocument } from '@openzcad/shared';
+import { keyableImportedNodes } from '@openzcad/document-core';
 
 export interface ExactRebuildCacheOptions<T> {
   maxEntries: number;
@@ -47,7 +48,7 @@ export function canonicalProjectContentKey(document: ProjectDocument): string {
     commandLog: _commandLog,
     ...content
   } = document;
-  return stableJson(content);
+  return stableJson({ ...content, nodes: keyableImportedNodes(content.nodes) });
 }
 
 /**

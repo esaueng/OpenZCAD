@@ -33,12 +33,19 @@ const APPROVED_LAZY_ASSETS = [
     pattern: /^assets\/(?:remus|brepkit)_wasm_bg-.*\.wasm$/,
     maxBytes: 8 * 1024 * 1024,
     reason: 'Exact geometry kernel, loaded only for non-empty geometry'
+  },
+  {
+    pattern: /^assets\/sqlite3-.*\.wasm$/,
+    maxBytes: 1024 * 1024,
+    reason: 'SQLite parser, loaded only in a one-shot Shapr3D import worker'
   }
 ];
 const LAZY_ENTRY_PATTERNS = [
   /^assets\/(?:three|three-addons)-.*\.js$/,
   /^assets\/(?:ViewerShell|partThumbnail|pdf|exact|src)-.*\.js$/,
-  /^assets\/(?:remus|brepkit)_wasm_bg-.*\.wasm$/
+  /^assets\/(?:remus|brepkit)_wasm_bg-.*\.wasm$/,
+  /^assets\/sqlite3-.*\.wasm$/,
+  /^assets\/shaprImportWorker-.*\.js$/
 ];
 
 function collect(directory) {

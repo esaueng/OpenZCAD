@@ -624,10 +624,10 @@ describe('existing documents are unaffected', () => {
 
     expect(migrated.schemaVersion).toBe(PROJECT_DOCUMENT_SCHEMA_VERSION);
     // Bumping this pin means re-verifying the assertion below: v10 added the
-    // additive `split` feature kind, v11 the additive `hole` kind, and v12
-    // the optional `solidIndices` partial-import field; none needs a node
-    // migration.
-    expect(PROJECT_DOCUMENT_SCHEMA_VERSION).toBe(12);
+    // additive `split` feature kind, v11 the additive `hole` kind, v12
+    // the optional `solidIndices` partial-import field, and v13 the additive
+    // guided Shapr import collections; none needs a node migration.
+    expect(PROJECT_DOCUMENT_SCHEMA_VERSION).toBe(13);
     // Nothing but the version stamp moves.
     expect({ ...migrated, schemaVersion: 6 }).toEqual(legacy);
   });
@@ -685,13 +685,41 @@ describe('existing documents are unaffected', () => {
     expect(resolved[0]!.profileId).toBe(ring.profileId);
     expect(resolved[0]!.holes).toHaveLength(1);
 
-    const stale = {
+    // Drifted geometry, but the entity ids still name exactly one region.
+    // This used to throw and now rebinds, which is the point: every geometric
+    // field moves together when a dimension changes, so treating them as a
+    // second gate on an already-unambiguous identity is what made an ordinary
+    // parameter edit delete the solid. The ring is the only region bounded by
+    // exactly these entities, so it is the region this reference names.
+    const drifted = {
       profiles: [
         {
           regionFingerprint: ring.regionFingerprint + 1,
           samplePoint: { x: 1_000_000, y: 1_000_000 },
           sourceArea: ring.area * 10,
           sourceEntityIds: ring.sourceEntityIds
+        }
+      ]
+    };
+    const rebound = resolveRegionProfiles(
+      document,
+      sketchNode(document, created.sketchId),
+      drifted,
+      {}
+    );
+    expect(rebound).toHaveLength(1);
+    expect(rebound[0]!.profileId).toBe(ring.profileId);
+
+    // A legacy reference carrying no entity ids has no identity to fall back
+    // on, so the geometric tier is all it has and a stale one still fails
+    // closed. This is the path the "existing documents are unaffected"
+    // guarantee actually rests on.
+    const stale = {
+      profiles: [
+        {
+          regionFingerprint: ring.regionFingerprint + 1,
+          samplePoint: { x: 1_000_000, y: 1_000_000 },
+          sourceArea: ring.area * 10
         }
       ]
     };

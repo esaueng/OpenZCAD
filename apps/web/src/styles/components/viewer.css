@@ -30,6 +30,42 @@
   display: none !important;
 }
 
+.viewport-scale-indicator {
+  position: absolute;
+  bottom: 38px;
+  left: 18px;
+  z-index: var(--z-viewer-overlay);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  color: var(--color-text);
+  pointer-events: none;
+  user-select: none;
+}
+
+.viewport-scale-indicator[hidden] {
+  display: none;
+}
+
+.viewer-shell canvas.viewport-scale-rule {
+  display: block;
+  flex: 0 0 auto;
+  width: var(--viewport-scale-width, 1px) !important;
+  height: 18px !important;
+}
+
+.viewport-scale-value {
+  min-width: max-content;
+  margin-top: 4px;
+  color: var(--color-text);
+  font-family: var(--font-mono);
+  font-size: 16px;
+  font-weight: var(--fw-regular);
+  line-height: 1;
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+}
+
 /* Top-right orientation widget. The utility rail used to stack beneath it;
    it now sits centred against the right edge as `.viewer-rail`. */
 .viewer-rail-stack {

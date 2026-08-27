@@ -26,9 +26,14 @@ import type {
 } from '@openzcad/viewport';
 import { ViewerToolbar } from './ViewerToolbar';
 import { OrientationWidget } from './OrientationWidget';
+import {
+  ViewportScaleIndicator,
+  type ViewportScaleSink
+} from './ViewportScaleIndicator';
 import type {
   ArtifactId,
   BodyRepresentation,
+  PlaneId,
   ProjectId,
   SketchObjectData,
   TopologySelection
@@ -197,6 +202,8 @@ interface ViewerShellProps {
     modifiers: { additive: boolean; toggle: boolean }
   ): void;
   onHoverRegion(region: RegionPickData | null): void;
+  planePickerArmed: boolean;
+  onPickPlane(plane: PlaneId): void;
   /** What measuring the hovered target would report; null when measure is off. */
   onMeasurePreview?:
     | ((
@@ -304,6 +311,8 @@ export function ViewerShell({
   profileSelectionMode,
   onSelectRegion,
   onHoverRegion,
+  planePickerArmed,
+  onPickPlane,
   onMeasurePreview,
   regionHandle,
   onSelectSketchProfile,
@@ -322,6 +331,7 @@ export function ViewerShell({
   onSectionOffset
 }: ViewerShellProps) {
   const orientationDragRef = useRef<OrientationDragControls | null>(null);
+  const scaleIndicatorRef = useRef<ViewportScaleSink | null>(null);
   const selectionChipLabelRef = useRef<HTMLSpanElement | null>(null);
   const cylinderRadiusLabelSetterRef = useRef<
     ((radius: number | null) => void) | null
@@ -399,6 +409,7 @@ export function ViewerShell({
         onViewSettled={onViewSettled}
         orientationRef={orientationRef}
         orientationDragRef={orientationDragRef}
+        scaleIndicatorRef={scaleIndicatorRef}
         onSelectTopology={onSelectTopology}
         onSelectEdgeChain={onSelectEdgeChain}
         selectionFilter={selectionFilter}
@@ -438,6 +449,8 @@ export function ViewerShell({
         profileSelectionMode={profileSelectionMode}
         onSelectRegion={onSelectRegion}
         onHoverRegion={onHoverRegion}
+        planePickerArmed={planePickerArmed}
+        onPickPlane={onPickPlane}
         onMeasurePreview={onMeasurePreview}
         regionHandle={regionHandle}
         onSelectSketchProfile={onSelectSketchProfile}
@@ -502,6 +515,7 @@ export function ViewerShell({
         </div>
       )}
       {modeOverlay}
+      <ViewportScaleIndicator scaleSinkRef={scaleIndicatorRef} units={units} />
     </section>
   );
 }

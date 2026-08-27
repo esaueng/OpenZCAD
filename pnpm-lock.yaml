@@ -104,6 +104,9 @@ importers:
       '@openzcad/geometry':
         specifier: workspace:*
         version: link:../../packages/geometry
+      '@openzcad/io-shapr':
+        specifier: workspace:*
+        version: link:../../packages/io-shapr
       '@openzcad/io-step':
         specifier: workspace:*
         version: link:../../packages/io-step
@@ -222,6 +225,15 @@ importers:
 
   packages/io-dxf: {}
 
+  packages/io-shapr:
+    dependencies:
+      '@sqlite.org/sqlite-wasm':
+        specifier: 3.53.0-build1
+        version: 3.53.0-build1
+      fflate:
+        specifier: 0.8.2
+        version: 0.8.2
+
   packages/io-step:
     dependencies:
       '@openzcad/geometry':
@@ -255,7 +267,7 @@ importers:
         version: link:../shared
       remus-wasm:
         specifier: github:esaueng/remus#main&path:/crates/wasm/pkg
-        version: https://codeload.github.com/esaueng/remus/tar.gz/6532fe9e6813d8cfb7a9324ee84a987842636299#path:/crates/wasm/pkg
+        version: https://codeload.github.com/esaueng/remus/tar.gz/7918b45d085641b0323ea64b2e66f39ee95260ed#path:/crates/wasm/pkg
 
   packages/persistence:
     dependencies:
@@ -1005,6 +1017,10 @@ packages:
   '@speed-highlight/core@1.2.24':
     resolution: {integrity: sha512-qeW2e1l78afw8VhRPfPQ1Gjj+KU5XFQ/OFV5ti6eTa9bruO7mJyZtA4vw0ofqmA3tKCkROE9xLk3VZoeRc98nw==}
 
+  '@sqlite.org/sqlite-wasm@3.53.0-build1':
+    resolution: {integrity: sha512-PfWPWN2n+/37doa8oh2/oUXk4OOsRYZsxc1W1sDXIGb/Pu5Yrb+f2eyYpgQMGITVX7HVgxhs9P18Rc6I97ym/g==}
+    engines: {node: '>=22'}
+
   '@standard-schema/spec@1.1.0':
     resolution: {integrity: sha512-l2aFy5jALhniG5HgqrD6jXLi/rUWrKvqN/qJx6yoJsgKhblVd+iqqU4RCXavm/jPityDo5TCvKMnpjKnOriy0w==}
 
@@ -1526,6 +1542,9 @@ packages:
       picomatch:
         optional: true
 
+  fflate@0.8.2:
+    resolution: {integrity: sha512-cPJU47OaAoCbg0pBvzsgpTPhmhqI5eJjh/JIu8tPj5q+T7iLvW/JAYUqmE7KOB4R1ZyEhzBaIQpQpardBF5z8A==}
+
   fflate@0.8.3:
     resolution: {integrity: sha512-tbZNuJrLwGUp3zshBtdy4W+ORxZuIh8a5ilyIEQDC5rY1f3U20JMry0Ll3WBzU58EZKsEuJFXhb5gwv8CsPvgA==}
 
@@ -1883,8 +1902,8 @@ packages:
     resolution: {integrity: sha512-6tDA8g98We0zd0GvVeMT9arEOnTw9qM03L9cJXaCjrip1OO764RDBLBfrB4cwzNGDj5OA5ioymC9GkizgWJDUg==}
     engines: {node: '>=8'}
 
-  remus-wasm@https://codeload.github.com/esaueng/remus/tar.gz/6532fe9e6813d8cfb7a9324ee84a987842636299#path:/crates/wasm/pkg:
-    resolution: {path: /crates/wasm/pkg, tarball: https://codeload.github.com/esaueng/remus/tar.gz/6532fe9e6813d8cfb7a9324ee84a987842636299}
+  remus-wasm@https://codeload.github.com/esaueng/remus/tar.gz/7918b45d085641b0323ea64b2e66f39ee95260ed#path:/crates/wasm/pkg:
+    resolution: {path: /crates/wasm/pkg, tarball: https://codeload.github.com/esaueng/remus/tar.gz/7918b45d085641b0323ea64b2e66f39ee95260ed}
     version: 2.130.0
 
   rolldown@1.2.4:
@@ -2738,6 +2757,8 @@ snapshots:
 
   '@speed-highlight/core@1.2.24': {}
 
+  '@sqlite.org/sqlite-wasm@3.53.0-build1': {}
+
   '@standard-schema/spec@1.1.0': {}
 
   '@tauri-apps/api@2.11.1': {}
@@ -3270,6 +3291,8 @@ snapshots:
     optionalDependencies:
       picomatch: 4.0.5
 
+  fflate@0.8.2: {}
+
   fflate@0.8.3: {}
 
   file-entry-cache@8.0.0:
@@ -3568,7 +3591,7 @@ snapshots:
       indent-string: 4.0.0
       strip-indent: 3.0.0
 
-  remus-wasm@https://codeload.github.com/esaueng/remus/tar.gz/6532fe9e6813d8cfb7a9324ee84a987842636299#path:/crates/wasm/pkg: {}
+  remus-wasm@https://codeload.github.com/esaueng/remus/tar.gz/7918b45d085641b0323ea64b2e66f39ee95260ed#path:/crates/wasm/pkg: {}
 
   rolldown@1.2.4:
     dependencies:

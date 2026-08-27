@@ -70,6 +70,19 @@ interface ChipAnchor {
   world: Point3;
 }
 
+/**
+ * Budget for the polls that wait on the viewport republishing topology after
+ * an action.
+ *
+ * Each iteration is a round trip into the viewport's main thread, and the
+ * geometry worker competes for that same thread. Instrumenting the two that
+ * timed out showed the hook running exactly once and returning the right
+ * answer, so what these wait on is transport, not readiness. CI already grants
+ * every assertion 30 s; naming the same budget here keeps a heavily parallel
+ * local run from failing while the product is behaving correctly.
+ */
+const REPUBLISH = { timeout: 30_000 } as const;
+
 const REBUILDING =
   /Starting geometry worker|Loading exact Remus kernel|Rebuilding exact geometry|Waiting for exact geometry|Exact geometry is still rebuilding/i;
 
@@ -174,31 +187,75 @@ async function settleRender(canvas: Locator) {
   );
 }
 
+/**
+ * Waits until the render loop stops moving the camera after an orbit.
+ *
+ * Sampling this from Node cost one round trip per sample and needed three
+ * consecutive still ones, so the wait only ever finished if at least four
+ * probes completed inside its budget. Each round trip runs to seconds when
+ * the viewport's main thread is contended, which spent the budget on
+ * transport rather than on the coast being measured.
+ *
+ * The loop belongs in the page. OrbitControls damps per rendered frame, so
+ * consecutive frames — not wall-clock samples — are the unit that decides
+ * when the coast is over, and the whole wait costs one round trip.
+ */
 async function waitForCameraToSettle(canvas: Locator) {
-  let previous: [number, number, number] | null = null;
-  let stableSamples = 0;
-  await expect
-    .poll(
-      async () => {
-        const current = (await readInputState(canvas)).camera.position;
-        if (
-          previous &&
-          Math.hypot(
-            current[0] - previous[0],
-            current[1] - previous[1],
-            current[2] - previous[2]
-          ) < 1e-4
-        ) {
-          stableSamples += 1;
-        } else {
-          stableSamples = 0;
-        }
-        previous = current;
-        return stableSamples;
-      },
-      { timeout: 10_000, intervals: [16, 32, 64, 100] }
-    )
-    .toBeGreaterThanOrEqual(3);
+  const settled = await canvas.evaluate(
+    (element, budgetMs) =>
+      new Promise<boolean>((resolve) => {
+        const readPosition = () => {
+          let position: [number, number, number] | null = null;
+          element.dispatchEvent(
+            new CustomEvent('openzcad:e2e-input-state', {
+              detail: {
+                resolve: (state: {
+                  camera: { position: [number, number, number] };
+                }) => {
+                  position = state.camera.position;
+                }
+              }
+            })
+          );
+          return position;
+        };
+        const deadline = performance.now() + budgetMs;
+        let previous: [number, number, number] | null = null;
+        let stableFrames = 0;
+        const step = () => {
+          const current = readPosition();
+          if (!current) {
+            resolve(false);
+            return;
+          }
+          if (
+            previous &&
+            Math.hypot(
+              current[0] - previous[0],
+              current[1] - previous[1],
+              current[2] - previous[2]
+            ) < 1e-4
+          ) {
+            stableFrames += 1;
+          } else {
+            stableFrames = 0;
+          }
+          previous = current;
+          if (stableFrames >= 3) {
+            resolve(true);
+            return;
+          }
+          if (performance.now() > deadline) {
+            resolve(false);
+            return;
+          }
+          requestAnimationFrame(step);
+        };
+        requestAnimationFrame(step);
+      }),
+    30_000
+  );
+  expect(settled).toBe(true);
 }
 
 async function sampleAround(
@@ -379,7 +436,18 @@ async function expectAnchorMatchesProjection(
 test('accepts exact visual selection and direct editing on the seeded boss', async ({
   page
 }, testInfo) => {
-  test.setTimeout(180_000);
+  // Measured, not guessed. This scenario is ten sections long and does about
+  // 23 s of real work on an idle machine, most of it waiting on the kernel:
+  // two geometry rebuilds, a drag that streams preview topology, and an orbit.
+  // None of that is a race the spec can gate away — instrumenting the probes
+  // that time out showed each one running exactly once and returning the right
+  // answer, so what runs out is wall clock, not readiness.
+  //
+  // Under parallel CPU load the same run takes 2.9-4.0 minutes, because the
+  // geometry worker is contended too. At 180 s a contended shard therefore
+  // failed the whole scenario mid-orbit. 300 s covers the worst run measured
+  // under load heavier than CI's, with room to spare.
+  test.setTimeout(300_000);
   await stubApi(page);
   await page.setViewportSize({ width: 1440, height: 1000 });
   const consoleErrors: string[] = [];
@@ -474,7 +542,7 @@ test('accepts exact visual selection and direct editing on the seeded boss', asy
   expect((await readBlend(canvas, 2))?.blendRadius).toBeCloseTo(2, 6);
   await page.getByRole('button', { name: 'Delete Lower rim fillet' }).click();
   await expect(status).not.toContainText(REBUILDING, { timeout: 60_000 });
-  await expect.poll(() => readBlend(canvas, 2)).toBeNull();
+  await expect.poll(() => readBlend(canvas, 2), REPUBLISH).toBeNull();
 
   // 5. Dragging streams monotone diameter chips and exact preview topology.
   expect(await probeFace(canvas, 'bore')).not.toBeNull();
@@ -531,14 +599,17 @@ test('accepts exact visual selection and direct editing on the seeded boss', asy
   await expect(
     page.getByRole('region', { name: 'Resize Hole operation' })
   ).toContainText('Dragging');
+  // Keep the probe the poll accepted. Re-reading it is a second round trip
+  // into a viewport that may already have moved on, and every round trip is
+  // seconds of budget when the main thread is contended.
+  let firstPreview: FaceProbe | null = null;
   await expect
-    .poll(
-      async () =>
-        (await probeFace(canvas, 'bore', 'inspect'))?.geometry.diameter
-    )
+    .poll(async () => {
+      firstPreview = await probeFace(canvas, 'bore', 'inspect');
+      return firstPreview?.geometry.diameter;
+    }, REPUBLISH)
     .toBeLessThan(20);
-  const firstPreviewDiameter = (await probeFace(canvas, 'bore', 'inspect'))!
-    .geometry.diameter!;
+  const firstPreviewDiameter = firstPreview!.geometry.diameter!;
   const firstDraggedValue = readChipValue(await chip.innerText());
   expect(firstDraggedValue).toBeLessThan(20);
   expect(firstPreviewDiameter).toBeCloseTo(firstDraggedValue, 3);
@@ -561,14 +632,14 @@ test('accepts exact visual selection and direct editing on the seeded boss', asy
     },
     { ...handle, ...handleStart }
   );
+  let secondPreview: FaceProbe | null = null;
   await expect
-    .poll(
-      async () =>
-        (await probeFace(canvas, 'bore', 'inspect'))?.geometry.diameter
-    )
+    .poll(async () => {
+      secondPreview = await probeFace(canvas, 'bore', 'inspect');
+      return secondPreview?.geometry.diameter;
+    }, REPUBLISH)
     .toBeLessThan(firstPreviewDiameter);
-  const secondPreviewDiameter = (await probeFace(canvas, 'bore', 'inspect'))!
-    .geometry.diameter!;
+  const secondPreviewDiameter = secondPreview!.geometry.diameter!;
   const secondDraggedValue = readChipValue(await chip.innerText());
   expect(secondDraggedValue).toBeLessThan(firstDraggedValue);
   expect(secondPreviewDiameter).toBeCloseTo(secondDraggedValue, 3);
@@ -591,7 +662,8 @@ test('accepts exact visual selection and direct editing on the seeded boss', asy
   await expect
     .poll(
       async () =>
-        (await probeFace(canvas, 'bore', 'inspect'))?.geometry.diameter
+        (await probeFace(canvas, 'bore', 'inspect'))?.geometry.diameter,
+      REPUBLISH
     )
     .toBeCloseTo(20, 5);
 
@@ -607,7 +679,8 @@ test('accepts exact visual selection and direct editing on the seeded boss', asy
   await expect
     .poll(
       async () =>
-        (await probeFace(canvas, 'bore', 'inspect'))?.geometry.diameter
+        (await probeFace(canvas, 'bore', 'inspect'))?.geometry.diameter,
+      REPUBLISH
     )
     .toBeCloseTo(17.4, 6);
 
@@ -637,17 +710,23 @@ test('accepts exact visual selection and direct editing on the seeded boss', asy
         canvas.evaluate((element) =>
           Number(element.dataset.e2ePreviewBlendCount ?? 0)
         ),
-      { timeout: 30_000 }
+      REPUBLISH
     )
     .toBeGreaterThan(0);
-  await expect.poll(async () => readBlend(canvas, 1.5)).not.toBeNull();
-  const previewRimBlend = await readBlend(canvas, 1.5);
+  let polledRimBlend: BlendProbe | null = null;
+  await expect
+    .poll(async () => {
+      polledRimBlend = await readBlend(canvas, 1.5);
+      return polledRimBlend;
+    }, REPUBLISH)
+    .not.toBeNull();
+  const previewRimBlend = polledRimBlend!;
   expect(previewRimBlend?.x).toBeDefined();
   expect(previewRimBlend?.y).toBeDefined();
   await settleRender(canvas);
   const previewBlendPixels = await sampleAround(page, canvas, {
-    x: previewRimBlend!.x!,
-    y: previewRimBlend!.y!
+    x: previewRimBlend.x!,
+    y: previewRimBlend.y!
   });
   await testInfo.attach('angle-a-rim-fillet-preview', {
     body: await page.screenshot(),
@@ -656,7 +735,7 @@ test('accepts exact visual selection and direct editing on the seeded boss', asy
   await filletKeypad.getByRole('button', { name: 'Apply radius' }).click();
   await expect(status).not.toContainText(REBUILDING, { timeout: 60_000 });
   await expect
-    .poll(async () => (await readBlend(canvas, 1.5))?.blendRadius)
+    .poll(async () => (await readBlend(canvas, 1.5))?.blendRadius, REPUBLISH)
     .toBeCloseTo(1.5, 6);
   expect(strongestCyanPixel(previewBlendPixels)).toBeGreaterThan(40);
 
@@ -679,8 +758,14 @@ test('accepts exact visual selection and direct editing on the seeded boss', asy
   );
   await expect(chip).toBeVisible();
   await expect(chip).toHaveText('R 0 mm');
-  await expect.poll(() => readChipAnchor(canvas)).not.toBeNull();
-  const initialAnchor = await readChipAnchor(canvas);
+  let polledAnchor: ChipAnchor | null = null;
+  await expect
+    .poll(async () => {
+      polledAnchor = await readChipAnchor(canvas);
+      return polledAnchor;
+    }, REPUBLISH)
+    .not.toBeNull();
+  const initialAnchor: ChipAnchor | null = polledAnchor;
   expect(initialAnchor).not.toBeNull();
   const beforeOrbit = await expectAnchorMatchesProjection(
     canvas,

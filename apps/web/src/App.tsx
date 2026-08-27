@@ -92,6 +92,7 @@ import type {
   FaceTopology,
   ParamValue,
   ProjectCheckpoint,
+  PlaneId,
   ProjectDocument,
   ProjectOrganization,
   ProjectStatus,
@@ -129,6 +130,7 @@ import type {
 } from '@openzcad/shared';
 import {
   toArtifactId,
+  toShaprImportId,
   toSketchConstraintId,
   toUserId,
   UNIT_TO_MM
@@ -144,6 +146,7 @@ import {
   solveStatusLabel,
   solvedSketchCommands
 } from './lib/sketch/applySolve';
+import { sketchContentFramePoints } from './lib/sketch/session';
 import type { SketchSolveStatus } from './components/SketchToolRail';
 import { ApiError, api, isProjectDocumentUnavailableError } from './lib/api';
 import { uploadArtifactBody } from './lib/artifactUpload';
@@ -153,10 +156,22 @@ import {
   listLocalOnlyImportSources
 } from './lib/importArchival';
 import {
-  LOCAL_AUTOSAVE_FAILED_STATUS,
+  coalesceImportProgress,
+  type ImportProgressSink,
+  type ImportRunState
+} from './lib/importProgress';
+import { ImportProgressCard } from './components/ImportProgressCard';
+import {
+  localAutosaveFailedStatus,
   reparkFailedAutosave
 } from './lib/localAutosaveFailure';
 import { MAX_SOURCE_IMPORT_BYTES, runStepImport } from './lib/stepImportRun';
+import {
+  inspectShaprPair,
+  type ShaprPairInspection
+} from './lib/shaprImportWorkerClient';
+import { rebuildImportInDisposableWorker } from './lib/importRebuildWorkerClient';
+import { shaprMigrationDraft } from './lib/shaprMigration';
 import { presentedWorkspaceSaveState } from './lib/workspaceSaveStatePresentation';
 import {
   cancelDesktopSignIn,
@@ -245,6 +260,7 @@ import type {
   ExportProgress,
   MeshExportDialogFormat
 } from './components/ExportDialog';
+import type { ShaprImportDialogPhase } from './components/ShaprImportDialog';
 import type { GeometryWorkerState } from './worker/geometryWorker';
 
 /** The export dialog's progress stage for one geometry-worker state. */
@@ -484,6 +500,11 @@ const LazyExportDialog = lazy(() =>
     default: module.ExportDialog
   }))
 );
+const LazyShaprImportDialog = lazy(() =>
+  import('./components/ShaprImportDialog').then((module) => ({
+    default: module.ShaprImportDialog
+  }))
+);
 /**
  * The edit panel, which only exists while something is being edited.
  *
@@ -585,6 +606,16 @@ function ExportDialog(props: ComponentProps<typeof LazyExportDialog>) {
   );
 }
 
+function ShaprImportDialog(
+  props: ComponentProps<typeof LazyShaprImportDialog>
+) {
+  return (
+    <Suspense fallback={null}>
+      <LazyShaprImportDialog {...props} />
+    </Suspense>
+  );
+}
+
 function Inspector(props: ComponentProps<typeof LazyInspector>) {
   return (
     <Suspense fallback={null}>
@@ -623,6 +654,8 @@ function extrudeInferenceDescription(resolved: ResolvedExtrude | null): string {
       return 'No live body can be targeted; New Body is stored.';
     case 'no-overlap':
       return 'No positive-volume overlap; New Body is stored.';
+    case 'into-face-body':
+      return `Pushed into ${inference.targetBodyName}; Cut is stored.`;
   }
 }
 import {
@@ -1072,6 +1105,15 @@ function resolvedSketchPlaneBasis(
 const EMPTY_SKETCH_OVERLAYS: SketchOverlay[] = [];
 const EMPTY_BODY_IDS: string[] = [];
 
+interface PendingShaprImport {
+  shaprFile: File;
+  sourceStepFile: File;
+  phase: ShaprImportDialogPhase;
+  progress: string;
+  error: string | null;
+  inspection: ShaprPairInspection | null;
+}
+
 export function App() {
   // Counts this component's commits for the interaction probes. Deliberately
   // dependency-free so it runs after every commit, and deliberately inside
@@ -1235,6 +1277,15 @@ export function App() {
   });
   const [sharingOpen, setSharingOpen] = useState(false);
   const [meshExportOpen, setMeshExportOpen] = useState(false);
+  const [pendingShaprImport, setPendingShaprImport] =
+    useState<PendingShaprImport | null>(null);
+  const shaprPreviewAbortRef = useRef<AbortController | null>(null);
+  useEffect(
+    () => () => {
+      shaprPreviewAbortRef.current?.abort();
+    },
+    []
+  );
   /**
    * First-model tour eligibility, latched per project: set when a project
    * OPENS empty on this device, so the tour rides along while its first
@@ -1381,6 +1432,42 @@ export function App() {
     cloudFunctionsEnabled ? 'Checking beta API...' : 'Offline workspace'
   );
   const [busy, setBusy] = useState(false);
+  /**
+   * The import the progress card is reporting, or null for none. The card
+   * owns its own clock, so this only changes on a phase step or an ending —
+   * not on every tick.
+   */
+  const [importRun, setImportRun] = useState<ImportRunState | null>(null);
+  /**
+   * Stable for the card's benefit: it holds the auto-dismiss timer for a
+   * successful import in an effect keyed on this, so an identity that changed
+   * every render would restart that timer on every render.
+   */
+  const dismissImportRun = useCallback(() => setImportRun(null), []);
+  // `handleArchiveLocalSources` is a hoisted declaration further down the
+  // component and closes over state that moves; reached through a ref so the
+  // card's callback can stay stable without capturing a stale one.
+  const archiveLocalSourcesRef = useRef<() => Promise<void>>(async () => {});
+  const archiveImportSourcesFromCard = useCallback(() => {
+    setImportRun(null);
+    void archiveLocalSourcesRef.current();
+  }, []);
+  /**
+   * The running import's abort handle. Held in a ref rather than in the run
+   * state because aborting is not a render: the card learns a cancel is
+   * pending from `cancelRequested`, and the run itself learns from the signal.
+   */
+  const importAbortRef = useRef<AbortController | null>(null);
+  const cancelImportRun = useCallback(() => {
+    importAbortRef.current?.abort();
+    // Flipped synchronously so the card acknowledges the press while worker
+    // termination and source cleanup unwind in the background.
+    setImportRun((current) =>
+      current && !current.outcome
+        ? { ...current, cancelRequested: true }
+        : current
+    );
+  }, []);
   /**
    * The last refusal from an exact rebuild, shown inside the form that asked
    * for it. Cleared whenever a panel opens or closes so a stale reason can
@@ -1911,6 +1998,7 @@ export function App() {
   const validatedFeature = useValidatedFeatureCommit({
     manager: () => managerRef.current,
     derive: (document) => geometry.syncOnce(document),
+    deriveCancellable: rebuildImportInDisposableWorker,
     commit: (command, derived) => executeCommand(command, derived ?? undefined),
     commitTransaction: (label, commands, derived) =>
       executeTransaction(label, commands, derived ?? undefined),
@@ -2898,6 +2986,14 @@ export function App() {
             return;
           }
           if (restoredOutcome.choice === 'diverged') {
+            // Halt the account writer before the dialog opens. The
+            // `openProject` effect runs on its own schedule and used to clear
+            // any halt, so the debounced writer would send this local copy up
+            // — regressing the account version the user is still being asked
+            // about, and taking the other device's work with it.
+            cloudProjectAutosaveRef.current?.haltForConflict(
+              restoredOutcome.local.projectId
+            );
             setAccountConflict(
               conflictFromDocuments(
                 restoredOutcome.local,
@@ -4298,7 +4394,7 @@ export function App() {
       } else {
         controller.schedule(pending);
       }
-    } catch {
+    } catch (error) {
       // The document goes back in the queue rather than on the floor. It was
       // taken out of the ref above so a write that LANDS is not repeated, but a
       // write that did not land leaves this closure holding the only copy of
@@ -4310,8 +4406,13 @@ export function App() {
       if (repark) {
         pendingLocalSaveRef.current = repark;
       }
-      setSaveState('offline');
-      setStatus(LOCAL_AUTOSAVE_FAILED_STATUS);
+      // Not `offline`: that state's own tooltip promises the work is saved on
+      // this device, which is the one thing a failed device write disproves.
+      // The account copy is never queued either — `controller.schedule` sits
+      // after the write above — so the document exists only in this tab.
+      console.error('Local autosave failed.', error);
+      setSaveState('device-failed');
+      setStatus(localAutosaveFailedStatus(error));
     }
   }
 
@@ -4511,33 +4612,45 @@ export function App() {
         profile.sketchId === sketchId &&
         available.some((candidate) => candidate.profileId === profile.profileId)
     );
-    const initialProfiles =
-      existing.length > 0 ? existing : available.length === 1 ? available : [];
+    // Extrude is one flow, in or out of a sketch: arm the imperative region
+    // rig on the sketch's profiles — no overlay form, no iso jump. From
+    // inside a sketch it leaves first (the exit glide brings the camera
+    // back). The commit path infers add/cut from drag direction and the
+    // kernel's classification. With no prior selection, every valid profile
+    // extrudes together; the largest one anchors the arrow.
+    const chosen = existing.length > 0 ? existing : available;
+    const anchor = chosen.reduce(
+      (best, candidate) => (candidate.area > best.area ? candidate : best),
+      chosen[0]!
+    );
     setSelectedFeatureNode(null);
     setSelectedTopology(null);
     setSelectedEdges([]);
     setSelectedBodyIds([]);
     setSelectedSketchProfileId(sketchId);
-    setSelectedProfiles(initialProfiles);
+    setSelectedProfiles(chosen);
     setResolvedExtrudePreview(null);
-    setExtrudePreview(
-      initialProfiles.length > 0 ? { sketchId, distance: 24 } : null
-    );
-    setTool('extrude');
+    setExtrudePreview(null);
+    setTool(null);
     if (activeSketch) {
-      extrudeSketchReturnRef.current = {
-        plane: activeSketch.plane,
-        sketchId
-      };
       dispatchInteraction({ type: 'exit-sketch' });
     } else if (interaction.mode !== 'idle') {
       dispatchInteraction({ type: 'clear' });
     }
-    requestView('iso');
+    dispatchInteraction({
+      type: 'select-region',
+      target: {
+        sketchId: anchor.sketchId,
+        regionFingerprint: anchor.regionFingerprint,
+        samplePoint: anchor.samplePoint,
+        area: anchor.area,
+        sourceEntityIds: anchor.sourceEntityIds
+      }
+    });
     setStatus(
-      initialProfiles.length > 0
-        ? `${initialProfiles.length} profile${initialProfiles.length === 1 ? '' : 's'} selected · exact preview updating.`
-        : `Select one or more closed profiles · ${available.length} valid profiles available.`
+      chosen.length === 1
+        ? 'Closed sketch profile selected · drag the arrow to extrude, or type a distance.'
+        : `${chosen.length} profiles selected · drag the arrow to extrude them together.`
     );
   }
 
@@ -4686,16 +4799,10 @@ export function App() {
       if (sketchId) {
         startExtrude(sketchId);
       } else {
-        extrudeSelectionReturnRef.current = {
-          profiles: [...selectedProfiles],
-          sketchId: selectedSketchProfileId
-        };
-        setSelectedFeatureNode(null);
-        setSelectedTopology(null);
-        setSelectedEdges([]);
-        setSelectedBodyIds([]);
-        setTool('extrude');
-        setStatus('Extrude: select a shaded closed profile in the viewport.');
+        // No sketch to resolve, and there is no picking mode any more: a
+        // click on any shaded closed profile arms the drag-arrow rig
+        // directly, so the hint is the whole flow.
+        setStatus('Extrude: click a shaded closed sketch profile to arm it.');
       }
       return;
     }
@@ -5063,6 +5170,74 @@ export function App() {
       }
       return next;
     });
+  }
+
+  /**
+   * Per-sketch visibility override. Absent means the default: a sketch whose
+   * profile a feature consumed hides itself, everything else shows. View
+   * state, deliberately not written into the document.
+   */
+  const [sketchVisibilityOverrides, setSketchVisibilityOverrides] = useState<
+    Record<string, boolean>
+  >({});
+
+  /** Sketches referenced by any feature: extrude/revolve, loft sections, sweep profile + path. */
+  const consumedSketchIds = useMemo(() => {
+    const consumed = new Set<string>();
+    if (!doc) {
+      return consumed;
+    }
+    for (const feature of listFeaturesInOrder(doc)) {
+      const data = feature.data as {
+        featureKind: string;
+        sketchId?: string;
+        sections?: { sketchId: string }[];
+        profile?: { sketchId?: string };
+        path?: { sketchId?: string };
+      };
+      // A sketch feature's own row references its sketch without consuming it.
+      if (data.featureKind === 'sketch') {
+        continue;
+      }
+      if (typeof data.sketchId === 'string') {
+        consumed.add(data.sketchId);
+      }
+      for (const section of data.sections ?? []) {
+        consumed.add(section.sketchId);
+      }
+      if (typeof data.profile?.sketchId === 'string') {
+        consumed.add(data.profile.sketchId);
+      }
+      if (typeof data.path?.sketchId === 'string') {
+        consumed.add(data.path.sketchId);
+      }
+    }
+    return consumed;
+  }, [doc]);
+
+  const hiddenSketchIds = useMemo(() => {
+    const hidden = new Set<string>();
+    if (!doc) {
+      return hidden;
+    }
+    for (const sketch of listNodesByKind(doc, 'sketch')) {
+      const visible =
+        sketchVisibilityOverrides[sketch.sketchId] ??
+        !consumedSketchIds.has(sketch.sketchId);
+      if (!visible) {
+        hidden.add(sketch.sketchId);
+      }
+    }
+    return hidden;
+  }, [doc, sketchVisibilityOverrides, consumedSketchIds]);
+
+  function toggleSketchVisibility(sketchId: string) {
+    const show = hiddenSketchIds.has(sketchId);
+    setSketchVisibilityOverrides((current) => ({
+      ...current,
+      [sketchId]: show
+    }));
+    setStatus(show ? 'Sketch shown.' : 'Sketch hidden.');
   }
 
   function previewBodyAppearance(preview: BodyAppearancePreview | null) {
@@ -5957,6 +6132,7 @@ export function App() {
       const outcome = await adoptLocalProject(project.projectId);
       if (outcome.state === 'conflict') {
         hydrateDocument(outcome.conflict.localDocument);
+        cloudProjectAutosaveRef.current?.haltForConflict(project.projectId);
         setAccountConflict(outcome.conflict);
         setCloudAvailable(true);
         setSaveState('conflict');
@@ -6232,6 +6408,9 @@ export function App() {
         // Open the local one — it is the work in front of the user — and ask
         // rather than discarding either side.
         hydrateDocument(outcome.local);
+        cloudProjectAutosaveRef.current?.haltForConflict(
+          outcome.local.projectId
+        );
         setAccountConflict(
           conflictFromDocuments(outcome.local, outcome.remote, 'account')
         );
@@ -6938,6 +7117,7 @@ export function App() {
       .then((remote) => {
         accountDocumentUnavailableProjectIdRef.current = null;
         setCloudAvailable(true);
+        cloudProjectAutosaveRef.current?.haltForConflict(projectId);
         setAccountConflict(
           conflictFromDocuments(localDocument, remote, 'account')
         );
@@ -6977,6 +7157,9 @@ export function App() {
         lastSyncedVersion
       );
       if (outcome.choice === 'diverged') {
+        cloudProjectAutosaveRef.current?.haltForConflict(
+          outcome.local.projectId
+        );
         setAccountConflict(
           conflictFromDocuments(outcome.local, outcome.remote, 'account')
         );
@@ -7358,6 +7541,8 @@ export function App() {
     kind: ArtifactKind;
     body: Blob;
     metadata?: Record<string, string | number | boolean>;
+    /** Bytes the store has accepted, for a caller reporting the upload. */
+    onUploadProgress?(uploaded: number, total: number): void;
   }): Promise<string> {
     if (!doc) {
       throw new Error('No project is open.');
@@ -7382,7 +7567,10 @@ export function App() {
     await uploadArtifactBody(
       api,
       { uploadSessionId: upload.uploadSessionId, uploadUrl: upload.uploadUrl },
-      input.body
+      input.body,
+      input.onUploadProgress
+        ? { onProgress: input.onUploadProgress }
+        : undefined
     );
     await api.finalizeArtifact({
       projectId: doc.projectId,
@@ -7409,6 +7597,17 @@ export function App() {
     }
     const contentType = file.type || inferContentType(file.name);
     const lowerName = file.name.toLowerCase();
+
+    if (lowerName.endsWith('.shapr')) {
+      setStatus(
+        'Shapr3D migration requires selecting one .shapr project and its companion .step file together.'
+      );
+      return;
+    }
+    if (!/\.(?:stl|step|stp)$/i.test(file.name)) {
+      setStatus(`Unsupported import format: ${file.name}`);
+      return;
+    }
 
     if (lowerName.endsWith('.stl')) {
       if (file.size > MAX_SOURCE_IMPORT_BYTES) {
@@ -7470,12 +7669,15 @@ export function App() {
       return;
     }
 
+    const abort = startImportAbort();
     await runStepImport({
       file,
       contentType,
       archive: archiveArtifact,
       validatedFeature,
+      signal: abort.signal,
       status: { setStatus, setFeatureFormError },
+      progress: createImportProgressSink(),
       marks: {
         inFlight: inFlightImportChecksums.current,
         abandoned: abandonedImportChecksums.current
@@ -7484,7 +7686,223 @@ export function App() {
       editDisabledReason: () => editDisabledReasonRef.current,
       newId: () => crypto.randomUUID()
     });
+    finishImportAbort(abort);
   }
+
+  /**
+   * Arms cancellation for a new import, replacing any previous run's handle:
+   * only the newest import is cancellable from the card, because only it has
+   * a card.
+   */
+  function startImportAbort(): AbortController {
+    const abort = new AbortController();
+    importAbortRef.current = abort;
+    return abort;
+  }
+
+  /** Drops the handle once its run has ended, unless a newer one replaced it. */
+  function finishImportAbort(abort: AbortController): void {
+    if (importAbortRef.current === abort) {
+      importAbortRef.current = null;
+    }
+  }
+
+  function createImportProgressSink(): ImportProgressSink {
+    // New per run, so a second import replaces the card rather than being
+    // merged into the first one's phases.
+    const importRunId = crypto.randomUUID();
+    const publishProgress = coalesceImportProgress((progress) =>
+      setImportRun((current) =>
+        current && current.id === importRunId && !current.outcome
+          ? { ...current, progress }
+          : current
+      )
+    );
+    return {
+      start: ({ fileName, phases }) =>
+        setImportRun({
+          id: importRunId,
+          fileName,
+          phases,
+          progress: { phase: phases[0] ?? 'building', fraction: null },
+          cancelRequested: false,
+          outcome: null
+        }),
+      update: publishProgress,
+      // Guarded on the id: a run that ends after the user has already
+      // started another import must not overwrite the newer card.
+      finish: (outcome) =>
+        setImportRun((current) =>
+          current && current.id === importRunId
+            ? { ...current, outcome }
+            : current
+        )
+    };
+  }
+
+  function cancelShaprImport() {
+    shaprPreviewAbortRef.current?.abort();
+    shaprPreviewAbortRef.current = null;
+    setPendingShaprImport(null);
+  }
+
+  async function handleImportFiles(files: File[]) {
+    const shaprFiles = files.filter((file) => /\.shapr$/i.test(file.name));
+    if (shaprFiles.length === 0) {
+      if (files.length !== 1) {
+        setStatus('Select one STEP or STL file, or one .shapr + STEP pair.');
+        return;
+      }
+      await handleImportFile(files[0]!);
+      return;
+    }
+    const stepFiles = files.filter((file) =>
+      /\.(?:step|stp)$/i.test(file.name)
+    );
+    if (
+      files.length !== 2 ||
+      shaprFiles.length !== 1 ||
+      stepFiles.length !== 1
+    ) {
+      setStatus(
+        'Shapr3D migration requires exactly one .shapr project and one companion .step or .stp file.'
+      );
+      return;
+    }
+    if (!managerRef.current || !doc || !ensureCanEdit('import geometry')) {
+      return;
+    }
+
+    shaprPreviewAbortRef.current?.abort();
+    const controller = new AbortController();
+    shaprPreviewAbortRef.current = controller;
+    const shaprFile = shaprFiles[0]!;
+    const sourceStepFile = stepFiles[0]!;
+    setPendingShaprImport({
+      shaprFile,
+      sourceStepFile,
+      phase: 'parsing',
+      progress: 'Starting the isolated parser worker…',
+      error: null,
+      inspection: null
+    });
+    try {
+      const inspection = await inspectShaprPair(shaprFile, sourceStepFile, {
+        signal: controller.signal,
+        onProgress: (progress) => {
+          if (shaprPreviewAbortRef.current === controller) {
+            setPendingShaprImport((current) =>
+              current ? { ...current, progress } : null
+            );
+          }
+        }
+      });
+      if (shaprPreviewAbortRef.current !== controller) {
+        return;
+      }
+      setPendingShaprImport((current) =>
+        current
+          ? {
+              ...current,
+              phase: 'preview',
+              progress: 'Preview ready.',
+              inspection
+            }
+          : null
+      );
+    } catch (error) {
+      if (controller.signal.aborted) {
+        return;
+      }
+      const message = errorMessage(error, 'Shapr3D preview failed.');
+      setStatus(message);
+      setPendingShaprImport((current) =>
+        current
+          ? { ...current, phase: 'preview', progress: '', error: message }
+          : null
+      );
+    } finally {
+      if (shaprPreviewAbortRef.current === controller) {
+        shaprPreviewAbortRef.current = null;
+      }
+    }
+  }
+
+  async function applyShaprImport() {
+    const pending = pendingShaprImport;
+    if (
+      !pending?.inspection ||
+      !managerRef.current ||
+      !doc ||
+      !ensureCanEdit('import geometry')
+    ) {
+      return;
+    }
+    const migration = shaprMigrationDraft({
+      ir: pending.inspection.ir,
+      shaprFileName: pending.shaprFile.name,
+      stepFileName: pending.sourceStepFile.name,
+      stepChecksumSha256: pending.inspection.stepChecksumSha256
+    });
+    const importId = toShaprImportId(`shapr_${crypto.randomUUID()}`);
+    setPendingShaprImport((current) =>
+      current
+        ? {
+            ...current,
+            phase: 'applying',
+            progress: 'Validating the sanitized STEP in the exact kernel…',
+            error: null
+          }
+        : null
+    );
+    const shaprAbort = startImportAbort();
+    const result = await runStepImport({
+      file: pending.inspection.sanitizedStepFile,
+      contentType:
+        pending.inspection.sanitizedStepFile.type || 'application/step',
+      archive: archiveArtifact,
+      validatedFeature,
+      signal: shaprAbort.signal,
+      status: { setStatus, setFeatureFormError },
+      progress: createImportProgressSink(),
+      marks: {
+        inFlight: inFlightImportChecksums.current,
+        abandoned: abandonedImportChecksums.current
+      },
+      currentDocument: () => managerRef.current?.document ?? null,
+      editDisabledReason: () => editDisabledReasonRef.current,
+      newId: () => crypto.randomUUID(),
+      commandFactory: (step) =>
+        commandFactories.importShaprGuided({ step, migration, importId }),
+      validatingMessage:
+        'Rebuilding the companion STEP and checking exact geometry…',
+      successMessage: ({ archived }) =>
+        `Imported ${pending.shaprFile.name}: exact STEP body rebuilt; recovered history saved as non-operative evidence` +
+        (archived
+          ? '; sanitized STEP source archived.'
+          : '; sanitized STEP source saved locally.')
+    });
+    finishImportAbort(shaprAbort);
+    if (result.outcome === 'committed') {
+      setPendingShaprImport(null);
+      return;
+    }
+    setPendingShaprImport((current) =>
+      current
+        ? {
+            ...current,
+            phase: 'preview',
+            progress: 'Preview ready.',
+            error:
+              'The exact STEP body was not committed. Review the status message, then retry or cancel.'
+          }
+        : null
+    );
+  }
+
+  // Republished every render so the progress card's stable callback reaches
+  // the current closure rather than the one from the render that mounted it.
+  archiveLocalSourcesRef.current = handleArchiveLocalSources;
 
   /**
    * Uploads import sources that exist only in this browser (their archival
@@ -7850,6 +8268,26 @@ export function App() {
       sketchOptions.find((candidate) => candidate.sketchId === typedSketchId)
         ?.name ?? 'Profile';
     setStatus(`${name}: closed profile selected · press E to extrude.`);
+  }
+
+  /**
+   * Enters a sketch on a principal plane. Shared by the prompt's buttons and
+   * the viewport's ghost planes so both produce the same session and status.
+   */
+  function startSketchOnPlane(plane: PlaneId) {
+    dispatchInteraction({
+      type: 'enter-sketch',
+      plane: { type: 'canonical', plane, offset: 0 }
+    });
+    setTool(null);
+    setStatus(
+      // Keep the plane id here rather than PLANE_LABELS: the e2e test that
+      // pins the label-to-plane mapping reads this line precisely because it
+      // is derived from the id, so a rename that only edits strings cannot
+      // keep it green. Only the "Esc exits" claim goes — the armed Line tool
+      // makes it untrue on the first press.
+      `Sketching on the ${plane} plane · Finish Sketch when done.`
+    );
   }
 
   function startSketchOnFace(target: FaceTarget): boolean {
@@ -8382,8 +8820,25 @@ export function App() {
     } catch {
       // An unresolved parameter must not make the sketch session disappear.
     }
+    // What the entry glide frames: re-entered content when the sketch has
+    // any, else the attached face, else nothing (fresh canonical plane).
+    const frame =
+      objects.length > 0
+        ? {
+            kind: 'content' as const,
+            points: sketchContentFramePoints(objects, resolve, sketchBasis)
+          }
+        : session.plane.type === 'face'
+          ? {
+              kind: 'face' as const,
+              bodyId: session.plane.bodyId as string,
+              faceHash: session.plane.faceHash,
+              center: session.plane.sourceCenter
+            }
+          : null;
     return {
       basis: sketchBasis,
+      frame,
       tool: session.tool,
       circleMode: session.circleMode,
       snapStep: appSettings.sketching.snapEnabled
@@ -8797,6 +9252,11 @@ export function App() {
       const active =
         interaction.mode === 'sketch' &&
         interaction.session.sketchId === sketch.sketchId;
+      // Consumed sketches auto-hide (Shapr-style); the history row's eye
+      // overrides either way. The in-session sketch always renders its rig.
+      if (hiddenSketchIds.has(sketch.sketchId) && !active) {
+        return [];
+      }
       const selected =
         selectedSketch?.sketchId === sketch.sketchId ||
         selectedSketchProfileId === sketch.sketchId;
@@ -8885,7 +9345,8 @@ export function App() {
     // Text outlines resolve from already-parsed faces, so a face arriving
     // after this memo last ran has to re-run it or the glyph stays a
     // diagnostic until something unrelated invalidates the memo.
-    textFontsVersion
+    textFontsVersion,
+    hiddenSketchIds
   ]);
 
   useEffect(() => {
@@ -9123,24 +9584,68 @@ export function App() {
               area: target.area
             }
           ];
-    const command = commandFactories.extrudeSketch({
+    const input: ExtrudeInput = {
       name: 'Extrude',
       sketchId: target.sketchId as SketchId,
       distance: exact ?? rounded,
       profiles: profileReferencesForSelection(profiles, entityWideProfileSource)
-    });
-    const resultBodyId =
-      command.payload.ids?.bodyId ?? (target.sketchId as unknown as BodyId);
-    void executeValidatedDirectEdit(
-      command,
-      resultBodyId,
-      `Extruded region by ${rounded} ${doc?.units ?? ''}.`,
-      rounded,
-      () => {
-        setSelectedProfiles([]);
-        setRevertPill({ sketchId: target.sketchId as SketchId });
+    };
+    void (async () => {
+      // The drag direction decided the volume; the kernel's exact overlap
+      // classification decides add / cut / new-body — the same inference the
+      // Extrude form runs, so a drag into a body cuts it instead of leaving
+      // a coincident second solid. Unclassifiable (kernel busy, document
+      // changed mid-flight) falls back to a plain new body.
+      const manager = managerRef.current;
+      let payload: ExtrudeInput = input;
+      let operationNote = '';
+      if (manager) {
+        const base = manager.document;
+        const sketchNode = listNodesByKind(base, 'sketch').find(
+          (candidate) => candidate.sketchId === target.sketchId
+        );
+        const faceAttachment =
+          sketchNode?.planeRef.type === 'face' && rounded < 0
+            ? {
+                bodyId: sketchNode.planeRef.bodyId,
+                direction: 'into' as const
+              }
+            : undefined;
+        setBusy(true);
+        setStatus('Classifying the extrusion against the model…');
+        try {
+          const resolved = await resolveExtrudeOperation({
+            base,
+            input,
+            derive: (document) => geometry.syncOnce(document),
+            ...(faceAttachment ? { faceAttachment } : {})
+          });
+          if (
+            managerRef.current === manager &&
+            manager.document.version === base.version
+          ) {
+            payload = { ...resolved.command.payload, name: input.name };
+            operationNote = ` (${resolved.inference.operation})`;
+          }
+        } catch {
+          // Fall through to the uninferred command.
+        }
+        setBusy(false);
       }
-    );
+      const command = commandFactories.extrudeSketch(payload);
+      const resultBodyId =
+        command.payload.ids?.bodyId ?? (target.sketchId as unknown as BodyId);
+      void executeValidatedDirectEdit(
+        command,
+        resultBodyId,
+        `Extruded region by ${rounded} ${doc?.units ?? ''}${operationNote}.`,
+        rounded,
+        () => {
+          setSelectedProfiles([]);
+          setRevertPill({ sketchId: target.sketchId as SketchId });
+        }
+      );
+    })();
   }
 
   /** Armed edge handle; memoized for the same rig-stability reason as faces. */
@@ -10960,7 +11465,8 @@ export function App() {
    * edit a model the user cannot see. The palette and the shortcut overlay are
    * not listed — they are handled inside the map, which they need to reach.
    */
-  const workspaceInputEnabled = !settingsOpen && !sharingOpen;
+  const workspaceInputEnabled =
+    !settingsOpen && !sharingOpen && !pendingShaprImport;
 
   // Workspace keyboard map (ignored while typing in a field). The ref must be
   // refreshed before paint: a keydown arriving between a commit and a passive
@@ -12073,7 +12579,7 @@ export function App() {
           tweakModeDisabledReason={tweakModeDisabledReason}
           onWorkspaceMode={handleWorkspaceMode}
           onSave={() => void handleSave()}
-          onImportFile={(file) => void handleImportFile(file)}
+          onImportFiles={(files) => void handleImportFiles(files)}
           onExportStep={() => void handleExportStep()}
           onOpenMeshExport={() => setMeshExportOpen(true)}
           onArchiveLocalSources={() => void handleArchiveLocalSources()}
@@ -12179,6 +12685,7 @@ export function App() {
             representations={representations}
             selectedFeatureNodeId={selectedFeatureNodeId}
             hiddenBodyIds={hiddenBodyIds}
+            hiddenSketchIds={hiddenSketchIds}
             warnings={warnings}
             checkpoints={doc?.checkpoints ?? []}
             documentVersion={doc?.version ?? 0}
@@ -12187,6 +12694,7 @@ export function App() {
             onSelectBody={handleSelectBodyFromTree}
             selectedBodyIds={selectedBodyIds}
             onToggleBodyVisibility={toggleBodyVisibility}
+            onToggleSketchVisibility={toggleSketchVisibility}
             onFeatureContextMenu={handleFeatureContextMenu}
             onToggleFeatureSuppression={handleToggleFeatureSuppression}
             onRollbackAfterFeature={handleRollbackAfterFeature}
@@ -12349,6 +12857,8 @@ export function App() {
             profileSelectionMode={tool === 'extrude'}
             onSelectRegion={handleSelectRegion}
             onHoverRegion={handleHoverRegion}
+            planePickerArmed={!modelingLocked && tool === 'sketch'}
+            onPickPlane={startSketchOnPlane}
             onMeasurePreview={
               modelingLocked && measuring ? previewMeasurement : null
             }
@@ -12730,23 +13240,7 @@ export function App() {
                       <button
                         key={plane}
                         type="button"
-                        onClick={() => {
-                          dispatchInteraction({
-                            type: 'enter-sketch',
-                            plane: { type: 'canonical', plane, offset: 0 }
-                          });
-                          setTool(null);
-                          setStatus(
-                            // Keep the plane id here rather than PLANE_LABELS:
-                            // the e2e test that pins the label-to-plane
-                            // mapping reads this line precisely because it is
-                            // derived from the id, so a rename that only edits
-                            // strings cannot keep it green. Only the "Esc
-                            // exits" claim goes — the armed Line tool makes it
-                            // untrue on the first press.
-                            `Sketching on the ${plane} plane · Finish Sketch when done.`
-                          );
-                        }}
+                        onClick={() => startSketchOnPlane(plane)}
                       >
                         {PLANE_LABELS[plane]}
                       </button>
@@ -13335,15 +13829,22 @@ export function App() {
           <input
             ref={importInputRef}
             type="file"
-            accept=".stl,.step,.stp"
+            accept=".shapr,.stl,.step,.stp"
+            multiple
             style={{ display: 'none' }}
             onChange={(event: ChangeEvent<HTMLInputElement>) => {
-              const file = event.target.files?.[0];
+              const files = [...(event.target.files ?? [])];
               event.target.value = '';
-              if (file) {
-                void handleImportFile(file);
+              if (files.length > 0) {
+                void handleImportFiles(files);
               }
             }}
+          />
+          <ImportProgressCard
+            run={importRun}
+            onCancel={cancelImportRun}
+            onDismiss={dismissImportRun}
+            onArchiveNow={archiveImportSourcesFromCard}
           />
           {paletteOpen && (
             <CommandPalette
@@ -13425,6 +13926,18 @@ export function App() {
               onClose={() => setMeshExportOpen(false)}
               onExport={handleExportMesh}
               onCheckQuality={handleCheckMeshQuality}
+            />
+          )}
+          {pendingShaprImport && (
+            <ShaprImportDialog
+              shaprFileName={pendingShaprImport.shaprFile.name}
+              stepFileName={pendingShaprImport.sourceStepFile.name}
+              phase={pendingShaprImport.phase}
+              progress={pendingShaprImport.progress}
+              error={pendingShaprImport.error}
+              inspection={pendingShaprImport.inspection}
+              onCancel={cancelShaprImport}
+              onApply={() => void applyShaprImport()}
             />
           )}
           {settingsOverlay}

@@ -219,6 +219,46 @@ describe('stored extrude operations', { timeout: 30_000 }, () => {
     }
   });
 
+  it('cuts when a face-attached drag runs into its body, even on partial overlap', async () => {
+    // z 8..12 over a 10-tall box: volume alone reads "add" — the direction
+    // hint is what encodes that a profile dragged into the body is a cut.
+    const { document: base, targetBodyId } = baseSketchDocument(8);
+    const resolved = await resolveExtrudeOperation({
+      base,
+      input: {
+        name: 'Preview',
+        sketchId: getLatestSketchId(base)!,
+        distance: 4
+      },
+      derive: (document) => kernel.syncDocument(document),
+      faceAttachment: { bodyId: targetBodyId, direction: 'into' }
+    });
+    expect(resolved.inference).toMatchObject({
+      operation: 'cut',
+      reason: 'into-face-body',
+      targetBodyId
+    });
+    expect(resolved.command.payload.operation).toBe('cut');
+  });
+
+  it('keeps the classifier result when the drag overlaps a different body', async () => {
+    // The hint only overrides toward the face's own body — an overlap with
+    // some other solid keeps the measured operation.
+    const { document: base } = baseSketchDocument(8);
+    const resolved = await resolveExtrudeOperation({
+      base,
+      input: {
+        name: 'Preview',
+        sketchId: getLatestSketchId(base)!,
+        distance: 4
+      },
+      derive: (document) => kernel.syncDocument(document),
+      faceAttachment: { bodyId: toBodyId('body_unrelated'), direction: 'into' }
+    });
+    expect(resolved.inference.operation).toBe('add');
+    expect(resolved.command.payload.operation).toBe('add');
+  });
+
   it('resolves a negative free-plane preview as a new body', async () => {
     let base = createProjectDocument(
       'Negative free-plane preview',

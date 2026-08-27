@@ -36,6 +36,18 @@ authoritative dependency inventory.
   Feather are covered by the MIT license included in Lucide's license file.
   Source and license: <https://github.com/lucide-icons/lucide>.
 
+## Interchange file parsing
+
+- **SQLite Wasm / `@sqlite.org/sqlite-wasm` 3.53.0-build1** — Apache-2.0 as
+  declared by the wrapper package. The embedded SQLite library is dedicated to
+  the public domain. Used only in an isolated browser worker to inspect bounded
+  Shapr3D workspace databases. Source and terms:
+  <https://github.com/sqlite/sqlite-wasm> and
+  <https://www.sqlite.org/copyright.html>.
+- **`fflate` 0.8.2** — Copyright Arjun Barrett; MIT. Used for bounded streaming
+  ZIP decompression after independent central-directory validation. Source and
+  license: <https://github.com/101arrowz/fflate>.
+
 ## Text-on-model fonts
 
 OpenZCAD redistributes the following font binaries in

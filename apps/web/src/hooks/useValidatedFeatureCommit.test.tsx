@@ -26,6 +26,12 @@ import {
   createInFlightImportChecksums,
   importSourceChecksums
 } from '../lib/importArchival';
+import type {
+  ImportPhase,
+  ImportProgressSink,
+  ImportRunOutcome,
+  ImportRunProgress
+} from '../lib/importProgress';
 import {
   deleteSourceBlobIfUnreferenced,
   ensureLocalProjectStorage,
@@ -1244,6 +1250,10 @@ function importOnce(
     editDisabledReason?(): string | null;
     fileSize?: number;
     limits?: { maxSourceBytes?: number; maxEmbeddedBytes?: number };
+    progress?: ImportProgressSink;
+    /** Rejects the upload, as a session with no cloud reachable does. */
+    refuseArchive?: boolean;
+    signal?: AbortSignal;
   }
 ): Promise<StepImportResult> {
   return runStepImport({
@@ -1256,8 +1266,13 @@ function importOnce(
     }),
     archive: async () => {
       await deps.archiving;
+      if (deps.refuseArchive) {
+        throw new Error('Artifact upload is unavailable.');
+      }
       return 'artifact_cloud_step';
     },
+    ...(deps.progress ? { progress: deps.progress } : {}),
+    ...(deps.signal ? { signal: deps.signal } : {}),
     validatedFeature: { reserve: deps.reserve, run: deps.run },
     status: {
       setStatus: (message) => deps.onStatus?.(message),
@@ -1325,6 +1340,10 @@ function tabHost(
   options: {
     refuseCommit?: () => boolean;
     onFailure?: () => void;
+    deriveCancellable?: (
+      candidate: ProjectDocument,
+      signal: AbortSignal
+    ) => Promise<ProjectDocument['derived']>;
     /** The status bar, which in the app is the same sink the run writes to. */
     onStatus?: (message: string) => void;
   } = {}
@@ -1332,6 +1351,9 @@ function tabHost(
   return {
     manager: () => manager,
     derive,
+    ...(options.deriveCancellable
+      ? { deriveCancellable: options.deriveCancellable }
+      : {}),
     ...(options.onFailure ? { onFailure: options.onFailure } : {}),
     commit: (
       command: AnyCommand,
@@ -2619,5 +2641,606 @@ describe('two tabs importing one file', () => {
     expect(outcome?.sourceDeleted).toBe(true);
     expect(device.deleteRequests).toEqual([file.checksum]);
     expect(device.blobs.has(file.checksum)).toBe(false);
+  });
+});
+
+/**
+ * What the progress card is told, taken off the REAL run rather than a
+ * description of it. The card can only be as truthful as this sequence: a
+ * phase emitted in the wrong place, or an ending mapped to the wrong tone, is
+ * a panel confidently reporting something that did not happen.
+ */
+describe('what an import reports while it runs', () => {
+  const file = {
+    name: 'Frame.step',
+    checksum: 'sha256-frame',
+    bytes: 'ISO-10303-21;'
+  };
+
+  function recorder(): ImportProgressSink & {
+    phases: ImportPhase[];
+    updates: ImportRunProgress[];
+    started: { fileName: string; phases: readonly ImportPhase[] } | null;
+    ended: ImportRunOutcome | null;
+  } {
+    const sink = {
+      phases: [] as ImportPhase[],
+      updates: [] as ImportRunProgress[],
+      started: null as { fileName: string; phases: readonly ImportPhase[] } | null,
+      ended: null as ImportRunOutcome | null,
+      start(input: { fileName: string; phases: readonly ImportPhase[] }) {
+        sink.started = input;
+      },
+      update(progress: ImportRunProgress) {
+        sink.updates.push(progress);
+        if (sink.phases.at(-1) !== progress.phase) {
+          sink.phases.push(progress.phase);
+        }
+      },
+      finish(outcome: ImportRunOutcome) {
+        sink.ended = outcome;
+      }
+    };
+    return sink;
+  }
+
+  function oneTab(device: SharedDevice, derive = acceptsEverything()) {
+    const manager = new CommandManager(
+      createProjectDocument('Progress', toUserId('user_import_progress'))
+    );
+    const { result } = renderHook(() =>
+      useValidatedFeatureCommit(tabHost(manager, derive))
+    );
+    const session = importSession(device, manager, () =>
+      result.current.reserve()
+    );
+    return { manager, result, session };
+  }
+
+  it('walks the phases in the order they actually happen', async () => {
+    const device = createDevice();
+    const { session, result } = oneTab(device);
+    const progress = recorder();
+
+    await act(async () => {
+      await importOnce(file, {
+        ...session,
+        progress,
+        run: (command, options) => result.current.run(command, options)
+      });
+    });
+
+    expect(progress.started?.fileName).toBe('Frame.step');
+    expect(progress.started?.phases).toEqual([
+      'saving',
+      'reading',
+      'building',
+      'archiving'
+    ]);
+    expect(progress.phases).toEqual([
+      'saving',
+      'reading',
+      'building',
+      'archiving'
+    ]);
+  });
+
+  /**
+   * The kernel call is one synchronous trip into wasm. Reporting any fraction
+   * for it would be an invention, and the card draws a null as a held, striped
+   * bar precisely so it does not have to.
+   */
+  it('reports no fraction for the phase that cannot measure itself', async () => {
+    const device = createDevice();
+    const { session, result } = oneTab(device);
+    const progress = recorder();
+
+    await act(async () => {
+      await importOnce(file, {
+        ...session,
+        progress,
+        run: (command, options) => result.current.run(command, options)
+      });
+    });
+
+    const building = progress.updates.filter(
+      (update) => update.phase === 'building'
+    );
+    expect(building).not.toHaveLength(0);
+    expect(building.every((update) => update.fraction === null)).toBe(true);
+  });
+
+  /**
+   * A storage-denied session writes no blob, so it has no `saving` phase at
+   * all. Announcing one would divide the bar over a phase that never runs and
+   * start every such import a tenth of the way along.
+   */
+  it('leaves out the phase a storage-denied session never runs', async () => {
+    const device = createDevice();
+    const { session, result } = oneTab(device);
+    const progress = recorder();
+
+    await act(async () => {
+      await importOnce(file, {
+        ...session,
+        readiness: 'unavailable',
+        progress,
+        run: (command, options) => result.current.run(command, options)
+      });
+    });
+
+    expect(progress.started?.phases).toEqual([
+      'reading',
+      'building',
+      'archiving'
+    ]);
+    expect(progress.phases).not.toContain('saving');
+  });
+
+  it('ends a committed and archived import quietly', async () => {
+    const device = createDevice();
+    const { session, result } = oneTab(device);
+    const progress = recorder();
+
+    await act(async () => {
+      await importOnce(file, {
+        ...session,
+        progress,
+        run: (command, options) => result.current.run(command, options)
+      });
+    });
+
+    expect(progress.ended).toEqual({ tone: 'ok', message: 'Imported — 1 body' });
+  });
+
+  /**
+   * The ending most worth surfacing: the body is in the model, but its source
+   * never left this device, so no other device can rebuild the project. It is
+   * the only ending that carries an action.
+   */
+  it('ends an unarchived import with the retry it needs', async () => {
+    const device = createDevice();
+    const { session, result } = oneTab(device);
+    const progress = recorder();
+
+    await act(async () => {
+      await importOnce(file, {
+        ...session,
+        refuseArchive: true,
+        progress,
+        run: (command, options) => result.current.run(command, options)
+      });
+    });
+
+    expect(progress.ended).toEqual({
+      tone: 'warning',
+      message: 'Imported, but saved on this device only',
+      action: 'archive'
+    });
+  });
+
+  /**
+   * The kernel's own words. They already reach the status bar, which the next
+   * message overwrites; the card is this import's own surface and can keep
+   * them.
+   */
+  it('ends a refusal with the reason the kernel gave', async () => {
+    const device = createDevice();
+    const { session, result } = oneTab(device, refusesFile('Frame'));
+    const progress = recorder();
+
+    await act(async () => {
+      await importOnce(file, {
+        ...session,
+        progress,
+        run: (command, options) => result.current.run(command, options)
+      });
+    });
+
+    expect(progress.ended?.tone).toBe('error');
+    // The kernel's diagnosis, not a generic "import failed" — this is the one
+    // sentence that tells the user what to fix upstream.
+    expect(progress.ended?.message).toBe(DANGLING_REFERENCE_PARSE_ERROR);
+    expect(progress.ended?.action).toBeUndefined();
+  });
+
+  /**
+   * Turned away before any work started. The status bar already says why, and
+   * a card that appeared and vanished in the same breath would read as a
+   * glitch rather than as an answer.
+   */
+  it('says nothing at all for an import refused before it began', async () => {
+    const device = createDevice();
+    const { session, result } = oneTab(device);
+    const progress = recorder();
+
+    await act(async () => {
+      await importOnce(file, {
+        ...session,
+        progress,
+        fileSize: 900,
+        limits: { maxSourceBytes: 100 },
+        run: (command, options) => result.current.run(command, options)
+      });
+    });
+
+    expect(progress.started).toBeNull();
+    expect(progress.ended).toBeNull();
+  });
+
+  /** Every run that announces itself must also settle. A card left spinning
+   * forever is worse than the single status line this replaces. */
+  it('always settles a run it announced', async () => {
+    const device = createDevice();
+    const { session, result } = oneTab(device, refusesFile('Frame'));
+
+    for (const variant of ['committed', 'refused', 'unarchived'] as const) {
+      const progress = recorder();
+      const tab = oneTab(
+        createDevice(),
+        variant === 'refused' ? refusesFile('Frame') : acceptsEverything()
+      );
+      await act(async () => {
+        await importOnce(file, {
+          ...tab.session,
+          progress,
+          ...(variant === 'unarchived' ? { refuseArchive: true } : {}),
+          run: (command, options) => tab.result.current.run(command, options)
+        });
+      });
+      expect(progress.started, variant).not.toBeNull();
+      expect(progress.ended, variant).not.toBeNull();
+    }
+
+    // The busy path too: a second import bounced off the commit lock is
+    // declined before it announces anything.
+    const held = result.current.reserve();
+    const progress = recorder();
+    await act(async () => {
+      await importOnce(file, {
+        ...session,
+        progress,
+        run: (command, options) => result.current.run(command, options)
+      });
+    });
+    expect(progress.started).toBeNull();
+    held?.release();
+    expect(device.blobs.size).toBe(0);
+  });
+});
+
+/**
+ * Cancelling, against the REAL orchestration.
+ *
+ * The stakes here are not cosmetic. A cancel decides whether up to 250 MB of
+ * source bytes stay on the device forever, whether an upload is spent on a
+ * result nobody wants, and whether a body the user stopped lands in history
+ * anyway. Each of those is checked below by running the thing, not by reading
+ * it.
+ */
+describe('cancelling an import', () => {
+  const file = {
+    name: 'Frame.step',
+    checksum: 'sha256-frame',
+    bytes: 'ISO-10303-21;'
+  };
+
+  function oneTab(device: SharedDevice, derive = acceptsEverything()) {
+    const manager = new CommandManager(
+      createProjectDocument('Cancel', toUserId('user_import_cancel'))
+    );
+    const { result } = renderHook(() =>
+      useValidatedFeatureCommit(tabHost(manager, derive))
+    );
+    const session = importSession(device, manager, () =>
+      result.current.reserve()
+    );
+    return { manager, result, session };
+  }
+
+  it('stops before the file is ever stored when cancelled up front', async () => {
+    const device = createDevice();
+    const { session, result, manager } = oneTab(device);
+    const abort = new AbortController();
+    abort.abort();
+
+    let outcome: StepImportResult | undefined;
+    await act(async () => {
+      outcome = await importOnce(file, {
+        ...session,
+        signal: abort.signal,
+        run: (command, options) => result.current.run(command, options)
+      });
+    });
+
+    expect(outcome?.outcome).toBe('cancelled');
+    expect(device.blobs.size).toBe(0);
+    expect(listFeaturesInOrder(manager.document)).toHaveLength(0);
+  });
+
+  /**
+   * The bytes are PRUNED, not kept. Nothing sweeps unreferenced blobs, so
+   * keeping them would leave up to 250 MB on the device every time someone
+   * changes their mind about an import.
+   */
+  it('takes back the bytes it wrote', async () => {
+    const device = createDevice();
+    const { session, result, manager } = oneTab(device);
+    const abort = new AbortController();
+    const gate = deferred<void>();
+
+    let outcome: StepImportResult | undefined;
+    await act(async () => {
+      const running = importOnce(file, {
+        ...session,
+        signal: abort.signal,
+        storing: gate.promise,
+        run: (command, options) => result.current.run(command, options)
+      });
+      // Cancelled while the write is parked, so the bytes are already on the
+      // device when the cancel lands — the case that leaks if this is wrong.
+      abort.abort();
+      gate.settle();
+      outcome = await running;
+    });
+
+    expect(outcome?.outcome).toBe('cancelled');
+    expect(outcome?.sourceDeleted).toBe(true);
+    expect(device.blobs.has(file.checksum)).toBe(false);
+    expect(listFeaturesInOrder(manager.document)).toHaveLength(0);
+  });
+
+  it('terminates an isolated rebuild without archiving or committing it', async () => {
+    const device = createDevice();
+    const manager = new CommandManager(
+      createProjectDocument('Cancel', toUserId('user_cancel_rebuild'))
+    );
+    const abort = new AbortController();
+    const rebuilding = deferred<void>();
+    const fallbackDerive = vi.fn(acceptsEverything());
+    const deriveCancellable = vi.fn(
+      (candidate: ProjectDocument, signal: AbortSignal) => {
+        rebuilding.settle();
+        return new Promise<ProjectDocument['derived']>((resolve, reject) => {
+          signal.addEventListener(
+            'abort',
+            () => {
+              const error = new Error('Disposable rebuild terminated.');
+              error.name = 'AbortError';
+              reject(error);
+            },
+            { once: true }
+          );
+          // An uncancelled test would still be able to complete this fake.
+          void resolve;
+          void candidate;
+        });
+      }
+    );
+    const { result } = renderHook(() =>
+      useValidatedFeatureCommit(
+        tabHost(manager, fallbackDerive, { deriveCancellable })
+      )
+    );
+    const session = importSession(device, manager, () =>
+      result.current.reserve()
+    );
+    let archiveCalls = 0;
+
+    let outcome: StepImportResult | undefined;
+    await act(async () => {
+      const running = runStepImport({
+        file: uploadedFile(file),
+        contentType: 'model/step',
+        store: deviceStore(device, file),
+        signal: abort.signal,
+        archive: async () => {
+          archiveCalls += 1;
+          return 'artifact_cloud_step';
+        },
+        validatedFeature: {
+          reserve: session.reserve,
+          run: (command, options) => result.current.run(command, options)
+        },
+        status: {
+          setStatus: () => undefined,
+          setFeatureFormError: () => undefined
+        },
+        marks: session.marks,
+        currentDocument: session.document,
+        editDisabledReason: () => null,
+        newId: () => 'id-cancel-rebuild'
+      });
+      await rebuilding.promise;
+      abort.abort();
+      outcome = await running;
+    });
+
+    expect(outcome?.outcome).toBe('cancelled');
+    expect(deriveCancellable).toHaveBeenCalledOnce();
+    expect(fallbackDerive).not.toHaveBeenCalled();
+    expect(archiveCalls).toBe(0);
+    expect(listFeaturesInOrder(manager.document)).toHaveLength(0);
+    expect(device.blobs.has(file.checksum)).toBe(false);
+  });
+
+  /** And the lock has to come back, or the tab is dead for every later edit. */
+  it('gives the commit lock back', async () => {
+    const device = createDevice();
+    const { session, result } = oneTab(device);
+    const abort = new AbortController();
+    abort.abort();
+
+    await act(async () => {
+      await importOnce(file, {
+        ...session,
+        signal: abort.signal,
+        run: (command, options) => result.current.run(command, options)
+      });
+    });
+
+    const afterwards = result.current.reserve();
+    expect(afterwards).not.toBeNull();
+    afterwards?.release();
+  });
+
+  it('reports the ending as cancelled rather than as a failure', async () => {
+    const device = createDevice();
+    const { session, result } = oneTab(device);
+    const abort = new AbortController();
+    abort.abort();
+    const endings: ImportRunOutcome[] = [];
+
+    await act(async () => {
+      await importOnce(file, {
+        ...session,
+        signal: abort.signal,
+        progress: {
+          start: () => undefined,
+          update: () => undefined,
+          finish: (outcome) => endings.push(outcome)
+        },
+        run: (command, options) => result.current.run(command, options)
+      });
+    });
+
+    expect(endings).toEqual([{ tone: 'cancelled', message: 'Import cancelled' }]);
+  });
+
+  /**
+   * A cancelled read must not be mistaken for "storage is unavailable". That
+   * catch exists to fall back to embedding the file in the document — which
+   * would complete, in full, the import the user just stopped.
+   */
+  it('does not fall back to embedding the file it was told to stop reading', async () => {
+    const device = createDevice();
+    const { session, result, manager } = oneTab(device);
+    const abort = new AbortController();
+    abort.abort();
+
+    let outcome: StepImportResult | undefined;
+    await act(async () => {
+      outcome = await runStepImport({
+        file: uploadedFile(file),
+        contentType: 'model/step',
+        // A store that rejects the write, exactly as a storage-denied session
+        // does: without the cancellation guard the run embeds and commits.
+        store: deviceStore(device, file, { refuseWrite: true }),
+        signal: abort.signal,
+        archive: async () => 'artifact_cloud_step',
+        validatedFeature: {
+          reserve: session.reserve,
+          run: (command, options) => result.current.run(command, options)
+        },
+        status: {
+          setStatus: () => undefined,
+          setFeatureFormError: () => undefined
+        },
+        marks: session.marks,
+        currentDocument: session.document,
+        editDisabledReason: () => null,
+        newId: () => 'id-cancel-embed'
+      });
+    });
+
+    expect(outcome?.outcome).toBe('cancelled');
+    expect(listFeaturesInOrder(manager.document)).toHaveLength(0);
+  });
+
+  /** An import left alone still commits; the guards must not fire on their own. */
+  it('leaves an uncancelled import untouched', async () => {
+    const device = createDevice();
+    const { session, result, manager } = oneTab(device);
+    const abort = new AbortController();
+
+    let outcome: StepImportResult | undefined;
+    await act(async () => {
+      outcome = await importOnce(file, {
+        ...session,
+        signal: abort.signal,
+        run: (command, options) => result.current.run(command, options)
+      });
+    });
+
+    expect(outcome?.outcome).toBe('committed');
+    expect(listFeaturesInOrder(manager.document)).toHaveLength(1);
+    expect(device.blobs.has(file.checksum)).toBe(true);
+  });
+
+  /**
+   * A cancel reaches the end of the run two different ways: THROWN, when it
+   * stopped the read or landed on a phase boundary, and RETURNED by the commit
+   * hook, when it stopped a rebuild that had to run to completion anyway.
+   *
+   * Only the thrown path passes through the run's catch. Saying this there
+   * left the status bar reading "Checking … against exact geometry" forever
+   * after every cancel during a rebuild — the long case, and the one anyone
+   * would actually reach for. Both paths are checked here.
+   */
+  it('tells the status bar it was cancelled, whichever way the cancel arrived', async () => {
+    const thrownPath: string[] = [];
+    const device = createDevice();
+    const first = oneTab(device);
+    const abortEarly = new AbortController();
+    abortEarly.abort();
+    await act(async () => {
+      await importOnce(file, {
+        ...first.session,
+        signal: abortEarly.signal,
+        onStatus: (message) => thrownPath.push(message),
+        run: (command, options) => first.result.current.run(command, options)
+      });
+    });
+    expect(thrownPath.at(-1)).toBe(
+      'Frame.step was not imported: you cancelled it.'
+    );
+
+    // Returned: the abort has to land while `derive` is genuinely in flight,
+    // AFTER the phase-boundary check in front of the rebuild. Aborting any
+    // earlier takes the thrown path and proves nothing about this one.
+    const returnedPath: string[] = [];
+    const secondDevice = createDevice();
+    const manager = new CommandManager(
+      createProjectDocument('Cancel', toUserId('user_cancel_status'))
+    );
+    const rebuilding = deferred<void>();
+    const enteredRebuild = deferred<void>();
+    const abortLate = new AbortController();
+    const { result } = renderHook(() =>
+      useValidatedFeatureCommit(
+        tabHost(
+          manager,
+          async (candidate: ProjectDocument) => {
+            enteredRebuild.settle();
+            await rebuilding.promise;
+            return derivedFromCandidate(candidate);
+          },
+          { onStatus: (message) => returnedPath.push(message) }
+        )
+      )
+    );
+    const session = importSession(
+      secondDevice,
+      manager,
+      () => result.current.reserve(),
+      (message) => returnedPath.push(message)
+    );
+    await act(async () => {
+      const running = importOnce(file, {
+        ...session,
+        signal: abortLate.signal,
+        run: (command, options) => result.current.run(command, options)
+      });
+      await enteredRebuild.promise;
+      abortLate.abort();
+      rebuilding.settle();
+      await running;
+    });
+    // The rebuild ran to completion and was then declined, so this is the
+    // hook RETURNING 'cancelled' rather than the run throwing.
+    expect(listFeaturesInOrder(manager.document)).toHaveLength(0);
+    expect(returnedPath.at(-1)).toBe(
+      'Frame.step was not imported: you cancelled it.'
+    );
   });
 });

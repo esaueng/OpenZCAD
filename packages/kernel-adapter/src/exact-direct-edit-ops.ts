@@ -1,29 +1,18 @@
-import type {
-  RemusKernel
-} from './remus-runtime';
-import {
-  resolveParamValue
-} from '@openzcad/document-core';
-import {
-  type Vec3
-} from '@openzcad/geometry';
+import type { RemusKernel } from './remus-runtime';
+import { resolveParamValue } from '@openzcad/document-core';
+import { type Vec3 } from '@openzcad/geometry';
 import {
   type DirectEditOperation,
   type FaceGeometry,
+  type FaceTopologyReferenceV5,
   type FeatureId
 } from '@openzcad/shared';
-import type {
-  DxfFaceSelector,
-  ExactShape
-} from './exact-types';
+import type { DxfFaceSelector, ExactShape } from './exact-types';
+import { topologyCandidatesForSolid } from './exact-lineage-builders';
 import {
-  topologyCandidatesForSolid
-} from './exact-lineage-builders';
-import {
-  blendCarrierSnapshot,
   classifyThroughHoleFace,
   measureFaceGeometry,
-  measureOwnedFaceGeometry,
+  requireBlendRegion,
   requireThroughHole
 } from './exact-measure';
 import {
@@ -40,16 +29,9 @@ import type {
   CountersinkProof,
   ImportedFeatureProof
 } from './imported-feature-recognition';
-import {
-  collapseShape
-} from './exact-boolean-helpers';
-import {
-  assertDirectEditOperation
-} from './exact-direct-edit-guards';
-import {
-  faceHandlesByFingerprint,
-  faceWitnessOf
-} from './exact-witnesses';
+import { collapseShape } from './exact-boolean-helpers';
+import { assertDirectEditOperation } from './exact-direct-edit-guards';
+import { faceHandlesByFingerprint, faceWitnessOf } from './exact-witnesses';
 import {
   DIRECT_EDIT_TOLERANCE,
   GEOMETRY_EPSILON,
@@ -68,13 +50,19 @@ import {
 } from './topology-fingerprint';
 import {
   createRemusSemanticLineage,
+  propagateRemusUnchangedDirectEditLineage,
   type RemusLineageState
 } from './remus-lineage';
 import {
+  importedStepLineageName,
   resolveTopologyReference,
   topologyHashOfWitness,
   type TopologyResolutionCandidate
 } from './topology-lineage';
+import {
+  measuredOpposingPlanarFacePair,
+  rebuildFaceDistance
+} from './exact-face-distance';
 
 /** Resolves a fingerprint to exactly one face handle, failing closed. */
 /**
@@ -838,8 +826,7 @@ export function removeFaceFeature(
   );
   if (
     Math.abs(geometry.area - operation.sourceArea) > areaTolerance ||
-    length(subtract(geometry.center, operation.sourceCenter)) >
-      centerTolerance
+    length(subtract(geometry.center, operation.sourceCenter)) > centerTolerance
   ) {
     throw new Error('Selected face no longer matches its recorded geometry.');
   }
@@ -902,6 +889,116 @@ export function removeFaceFeature(
   return output;
 }
 
+function resolveFaceDistanceEndpoint(
+  kernel: RemusKernel,
+  target: ExactShape,
+  solid: number,
+  faceHash: number,
+  faceReference: FaceTopologyReferenceV5 | undefined
+): number {
+  try {
+    return resolveDirectEditFace(kernel, target, solid, {
+      faceHash,
+      faceReference
+    }).face;
+  } catch (error) {
+    const followsFaceDistanceMove = target.lineage?.diagnostics.some(
+      (diagnostic) => diagnostic.operation === 'direct-edit'
+    );
+    const analytic = faceReference?.witness.analytic;
+    const canonicalImportedReference =
+      faceReference?.lineageName ===
+      importedStepLineageName('face', faceReference?.currentHash ?? -1);
+    if (
+      !followsFaceDistanceMove ||
+      !canonicalImportedReference ||
+      analytic?.kind !== 'plane'
+    ) {
+      throw error;
+    }
+    const matches = Array.from(kernel.getSolidFaces(solid)).filter((face) => {
+      const candidate = faceWitnessOf(kernel, face).analytic;
+      return (
+        candidate.kind === 'plane' &&
+        candidate.offset === analytic.offset &&
+        candidate.normal[0] === analytic.normal[0] &&
+        candidate.normal[1] === analytic.normal[1] &&
+        candidate.normal[2] === analytic.normal[2]
+      );
+    });
+    if (matches.length !== 1) {
+      throw new Error(
+        matches.length === 0
+          ? 'Direct-edit face is stale: its exact planar carrier no longer exists after an upstream face-distance edit.'
+          : 'Direct-edit face is stale: its exact planar carrier is ambiguous after an upstream face-distance edit.',
+        { cause: error }
+      );
+    }
+    return matches[0]!;
+  }
+}
+
+function setFaceDistance(
+  kernel: RemusKernel,
+  target: ExactShape,
+  solid: number,
+  face: number,
+  operation: Extract<DirectEditOperation, { kind: 'set-face-distance' }>,
+  scope: Record<string, number>
+): ExactShape {
+  const oppositeFace = resolveFaceDistanceEndpoint(
+    kernel,
+    target,
+    solid,
+    operation.oppositeFaceHash,
+    operation.oppositeFaceReference
+  );
+  if (oppositeFace === face) {
+    throw new Error('A face-distance edit requires two distinct faces.');
+  }
+  const proof = measuredOpposingPlanarFacePair(
+    kernel,
+    solid,
+    face,
+    oppositeFace
+  );
+  const sourceTolerance = Math.max(
+    DIRECT_EDIT_TOLERANCE,
+    operation.sourceDistance * 1e-6
+  );
+  if (Math.abs(proof.distance - operation.sourceDistance) > sourceTolerance) {
+    throw new Error(
+      'The selected face pair no longer matches its recorded source distance.'
+    );
+  }
+  const distance = resolveParamValue(
+    operation.distance,
+    scope,
+    'face distance'
+  );
+  if (!Number.isFinite(distance) || distance <= DIRECT_EDIT_TOLERANCE) {
+    throw new Error('Face distance must be greater than zero.');
+  }
+  if (Math.abs(distance - proof.distance) <= sourceTolerance) {
+    if (operation.parameterBinding) {
+      return target;
+    }
+    throw new Error('Face distance must differ from its current distance.');
+  }
+  const output = rebuildFaceDistance(
+    kernel,
+    solid,
+    proof,
+    operation.moveMode,
+    distance
+  );
+  const lineage = propagateRemusUnchangedDirectEditLineage(
+    target.lineage,
+    topologyCandidatesForSolid(kernel, output)
+  );
+  return { solids: [output], ...(lineage ? { lineage } : {}) };
+}
+
 /**
  * History-backed direct edits on the Remus path. Planar offsets and
  * cylindrical resizes are the kernel's own `pushPullFace` and
@@ -922,12 +1019,20 @@ export function applyDirectEdit(
 ): ExactShape {
   assertDirectEditOperation(operation);
   const solid = collapseShape(kernel, target);
-  const { face, viaLineage } = resolveDirectEditFace(
-    kernel,
-    target,
-    solid,
-    operation
-  );
+  const resolved =
+    operation.kind === 'set-face-distance'
+      ? {
+          face: resolveFaceDistanceEndpoint(
+            kernel,
+            target,
+            solid,
+            operation.faceHash,
+            operation.faceReference
+          ),
+          viaLineage: false
+        }
+      : resolveDirectEditFace(kernel, target, solid, operation);
+  const { face, viaLineage } = resolved;
   if (operation.kind === 'resize-through-hole') {
     const resized = resizeThroughHole(kernel, solid, face, operation, scope);
     // Keeping only the same solid handle would still discard the imported
@@ -948,14 +1053,15 @@ export function applyDirectEdit(
     );
     return resized.changed ? { solids: [resized.solid] } : target;
   }
+  if (operation.kind === 'set-face-distance') {
+    return setFaceDistance(kernel, target, solid, face, operation, scope);
+  }
 
   const geometry = measureFaceGeometry(kernel, face);
 
   if (operation.kind === 'remove-face-feature') {
     return {
-      solids: [
-        removeFaceFeature(kernel, solid, face, geometry, operation)
-      ]
+      solids: [removeFaceFeature(kernel, solid, face, geometry, operation)]
     };
   }
 
@@ -1019,22 +1125,18 @@ export function applyDirectEdit(
   }
 
   if (operation.kind === 'resize-blend') {
-    const snapshot = blendCarrierSnapshot(
-      measureOwnedFaceGeometry(kernel, solid, face)
+    const snapshot = requireBlendRegion(
+      kernel,
+      solid,
+      face,
+      operation.recordedRadius
     );
-    if (!snapshot || snapshot.surfaceClass !== operation.surfaceClass) {
+    if (snapshot.surfaceClass !== operation.surfaceClass) {
       throw new Error(
         `The selected face is no longer an analytic ${operation.surfaceClass} blend.`
       );
     }
     const radiusTolerance = Math.max(operation.recordedRadius * 1e-5, 1e-9);
-    if (
-      Math.abs(snapshot.radius - operation.recordedRadius) > radiusTolerance
-    ) {
-      throw new Error(
-        'The selected blend no longer matches its recorded radius.'
-      );
-    }
     const carrierTolerance = Math.max(operation.recordedRadius * 1e-5, 1e-6);
     if (
       length(subtract(snapshot.center, operation.recordedCenter)) >
@@ -1062,6 +1164,9 @@ export function applyDirectEdit(
       throw new Error('Blend radius must be zero or greater.');
     }
     if (Math.abs(newRadius - snapshot.radius) <= radiusTolerance) {
+      if (operation.parameterBinding) {
+        return target;
+      }
       throw new Error('Blend radius must differ from its current radius.');
     }
     const output = kernel.resizeBlend(
@@ -1129,9 +1234,7 @@ export function applyDirectEdit(
   }
   const radiusTolerance = Math.max(operation.sourceRadius * 1e-5, 1e-9);
   if (Math.abs(geometry.radius - operation.sourceRadius) > radiusTolerance) {
-    throw new Error(
-      'The selected face no longer matches its recorded radius.'
-    );
+    throw new Error('The selected face no longer matches its recorded radius.');
   }
   const axisTolerance = Math.max(
     geometry.axialLength * 1e-5,
@@ -1211,7 +1314,10 @@ export function applyDirectEdit(
  * so an in-place mutation of a cached solid (which the handle-identity
  * invariant forbids) surfaces as a cache miss rather than a stale mesh.
  */
-export function countFaceHandles(kernel: RemusKernel, solids: number[]): number {
+export function countFaceHandles(
+  kernel: RemusKernel,
+  solids: number[]
+): number {
   let count = 0;
   for (const solid of solids) {
     count += kernel.getSolidFaces(solid).length;

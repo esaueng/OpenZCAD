@@ -80,6 +80,43 @@ export function viewDirectionFor(target: ViewTarget): THREE.Vector3 {
 const FACE_VIEW_PADDING = 1.18;
 
 /**
+ * Area-weighted centroid of a face's display triangles, given as consecutive
+ * corner triples. Face framing must target this, not the surface's parametric
+ * reference point: that anchor can sit on the face's rim (on a cylinder-top
+ * disc it does), which frames the view off-centre and over-distanced.
+ *
+ * Returns null when the triangles are missing or degenerate so callers fall
+ * back to the reference point instead of aiming at the origin.
+ */
+export function faceTrianglesCentroid(
+  corners: readonly THREE.Vector3[]
+): THREE.Vector3 | null {
+  const centroid = new THREE.Vector3();
+  let area = 0;
+  for (let i = 0; i + 2 < corners.length; i += 3) {
+    const a = corners[i];
+    const b = corners[i + 1];
+    const c = corners[i + 2];
+    if (!a || !b || !c) {
+      return null;
+    }
+    const triangleArea = new THREE.Vector3()
+      .subVectors(b, a)
+      .cross(new THREE.Vector3().subVectors(c, a))
+      .length();
+    centroid.addScaledVector(
+      new THREE.Vector3().add(a).add(b).add(c).divideScalar(3),
+      triangleArea
+    );
+    area += triangleArea;
+  }
+  if (!Number.isFinite(area) || area < 1e-12) {
+    return null;
+  }
+  return centroid.divideScalar(area);
+}
+
+/**
  * Computes a camera pose that centres one planar face and looks back along its
  * outward normal. The face vertices are projected into the eventual screen
  * basis, so a wide face fits a portrait viewport without relying on a
@@ -252,6 +289,58 @@ export function orbitPivotForPoint(
   }
   return cameraPosition.clone().addScaledVector(forward, depth);
 }
+
+/** Maps normalized tween time to normalized progress. */
+export type CameraEase = (t: number) => number;
+
+/**
+ * The default glide: symmetric cubic in-out. Fine for pivots and restores,
+ * where nothing about the move tells the user which end matters.
+ */
+export const easeInOutCubic: CameraEase = (t) =>
+  t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+
+/**
+ * View jumps (standard views, fit, normal-to-face) leave at full speed and
+ * decay monotonically — the move reads as "thrown" toward the destination,
+ * so the user knows where they are going from the first frame. Matches the
+ * measured envelope of the reference CAD's view transitions.
+ */
+export const viewJumpEase: CameraEase = (t) => 1 - Math.pow(1 - t, 3);
+
+/**
+ * A velocity trapezoid: ramp up over `attack`, cruise, ramp down over
+ * `decel` (both fractions of the duration). C1-continuous. This is the
+ * measured envelope of the reference CAD's sketch-entry snap — a short
+ * attack so the response is immediate, a cruise long enough to stay
+ * readable, and a soft landing.
+ */
+export function trapezoidEase(attack: number, decel: number): CameraEase {
+  const cruise = 1 / (1 - attack / 2 - decel / 2);
+  return (t) => {
+    if (t <= 0) {
+      return 0;
+    }
+    if (t >= 1) {
+      return 1;
+    }
+    if (t < attack) {
+      return (cruise * t * t) / (2 * attack);
+    }
+    if (t <= 1 - decel) {
+      return cruise * (attack / 2 + (t - attack));
+    }
+    return 1 - (cruise * (1 - t) * (1 - t)) / (2 * decel);
+  };
+}
+
+/**
+ * Entering or leaving a sketch is the longest choreographed move: a fixed
+ * duration (it is a mode change, not a nudge, so travel scaling would make
+ * short trips feel abrupt) with a ~100 ms attack and a ~240 ms landing.
+ */
+export const SKETCH_GLIDE_MS = 800;
+export const sketchGlideEase: CameraEase = trapezoidEase(0.125, 0.3);
 
 /** A glide short enough to feel instant for a nudge. */
 export const MIN_TWEEN_MS = 170;

@@ -298,7 +298,12 @@ export async function streamAssistantReply(
   }
   let reply: AssistantReply;
   try {
-    reply = parseAssistantReply(decoded);
+    // The digest the model was given, so the witness-binding checks in
+    // `parseCadPatchProposal` actually run. Without it they were dead outside
+    // the test suite: `validateCadPatchProposalAgainstDigest` is called only
+    // when a digest is present, so a proposal quoting a stale or invented
+    // topology witness reached the user's review card unchallenged.
+    reply = parseAssistantReply(decoded, request.digest);
   } catch {
     throw new AssistantStreamError(
       'AI_INVALID_REPLY',

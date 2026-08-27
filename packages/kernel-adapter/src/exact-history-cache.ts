@@ -15,7 +15,11 @@
  * kernels: they are rare, and sharing the history kernel with them would put
  * its checkpoints one bug away from corruption.
  */
-import { findSketch, getParameterScope } from '@openzcad/document-core';
+import {
+  findSketch,
+  getParameterScope,
+  keyableImportedNodeData
+} from '@openzcad/document-core';
 import type {
   FeatureNode,
   ProjectDocument,
@@ -111,7 +115,22 @@ export function historyFeatureDigest(
       )
     };
   });
-  return stableJson({ index, feature, sketches });
+  // The feature node of an imported mesh or STEP carries its whole payload
+  // inline, so this used to serialise it in full on every cache miss —
+  // measured at 100,000 triangles, 111 ms for a 7.5-million-character digest,
+  // and 243 ms at the 200,000 import cap. The same reduction the rebuild
+  // cache's key uses keeps the digest exactly as content-sensitive at
+  // constant size, and sharing it is what keeps the two from drifting apart.
+  return stableJson({
+    index,
+    feature: {
+      ...feature,
+      data: keyableImportedNodeData(
+        feature.data
+      )
+    },
+    sketches
+  });
 }
 
 /**
