@@ -2,6 +2,7 @@ import { act, renderHook } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createProjectDocument } from '@openzcad/document-core';
 import { toUserId } from '@openzcad/shared';
+import type { CommandManager } from '@openzcad/command-system';
 import type { GeometryWorkerResult } from '../worker/geometryWorker';
 import { useGeometryWorker } from './useGeometryWorker';
 
@@ -299,5 +300,204 @@ describe('useGeometryWorker', () => {
     await expect(sync).rejects.toThrow('Geometry worker closed');
     await expect(exported).rejects.toThrow('Geometry worker closed');
     expect(FakeWorker.instances[0]!.terminate).toHaveBeenCalledOnce();
+  });
+
+  describe('watchdog', () => {
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it('respawns a silent worker and re-posts the live document sync', () => {
+      vi.useFakeTimers();
+      installWorker();
+      const document = createProjectDocument('Watchdog', toUserId('user'));
+      const manager = { document } as unknown as CommandManager;
+      const onError = vi.fn();
+      const { result } = renderHook(() =>
+        useGeometryWorker({
+          manager: () => manager,
+          onDerived: vi.fn(),
+          onError
+        })
+      );
+      const first = FakeWorker.instances[0]!;
+      result.current.sync(document);
+      expect(first.postMessage).toHaveBeenCalledTimes(1);
+
+      act(() => {
+        vi.advanceTimersByTime(20_000);
+      });
+
+      // The silent worker was judged wedged and replaced.
+      expect(first.terminate).toHaveBeenCalled();
+      expect(FakeWorker.instances).toHaveLength(2);
+      expect(onError).toHaveBeenCalledWith(
+        expect.stringContaining('stopped responding')
+      );
+      // The replacement owes the visible document a rebuild without waiting
+      // for the next edit — the regression: a respawn used to sit idle.
+      const second = FakeWorker.instances[1]!;
+      expect(second.postMessage).toHaveBeenCalledWith({
+        type: 'sync',
+        document
+      });
+    });
+
+    it('does not respawn a worker that keeps reporting progress', () => {
+      vi.useFakeTimers();
+      installWorker();
+      const document = createProjectDocument('Healthy', toUserId('user'));
+      const { result } = renderHook(() =>
+        useGeometryWorker({
+          manager: () => null,
+          onDerived: vi.fn(),
+          onError: vi.fn()
+        })
+      );
+      const worker = FakeWorker.instances[0]!;
+      result.current.sync(document);
+      const state = (phase: 'starting' | 'loading-remus' | 'rebuilding') => ({
+        type: 'state' as const,
+        phase,
+        projectId: document.projectId,
+        version: document.version,
+        stale: true
+      });
+
+      act(() => {
+        worker.emit(state('starting'));
+        vi.advanceTimersByTime(10_000);
+        worker.emit(state('loading-remus'));
+        vi.advanceTimersByTime(60_000);
+        worker.emit(state('rebuilding'));
+        vi.advanceTimersByTime(90_000);
+        worker.emit({
+          type: 'state',
+          phase: 'ready',
+          projectId: document.projectId,
+          version: document.version,
+          stale: false
+        });
+        vi.advanceTimersByTime(120_000);
+      });
+
+      expect(FakeWorker.instances).toHaveLength(1);
+      expect(result.current.state.phase).toBe('ready');
+    });
+
+    it('leaves an unarmed worker alone when no work was ever posted', () => {
+      vi.useFakeTimers();
+      installWorker();
+      renderHook(() =>
+        useGeometryWorker({
+          manager: () => null,
+          onDerived: vi.fn(),
+          onError: vi.fn()
+        })
+      );
+
+      act(() => {
+        vi.advanceTimersByTime(60_000);
+      });
+
+      expect(FakeWorker.instances).toHaveLength(1);
+    });
+
+    it('fails loudly when every respawn goes silent too', () => {
+      vi.useFakeTimers();
+      installWorker();
+      const document = createProjectDocument('Dead', toUserId('user'));
+      const manager = { document } as unknown as CommandManager;
+      const onError = vi.fn();
+      const { result } = renderHook(() =>
+        useGeometryWorker({
+          manager: () => manager,
+          onDerived: vi.fn(),
+          onError
+        })
+      );
+      result.current.sync(document);
+
+      act(() => {
+        vi.advanceTimersByTime(80_000);
+      });
+
+      // Initial worker plus three silent respawns, then the loud failure.
+      expect(FakeWorker.instances).toHaveLength(4);
+      expect(result.current.state.phase).toBe('failed');
+      expect(onError).toHaveBeenCalledWith(
+        expect.stringContaining('reload the page to recover')
+      );
+    });
+
+    it('treats a worker the constructor cannot even create as a boot failure', () => {
+      class ExplodingWorker {
+        constructor() {
+          throw new Error('blocked by policy');
+        }
+      }
+      FakeWorker.instances = [];
+      vi.stubGlobal('Worker', ExplodingWorker);
+      const onError = vi.fn();
+      const { result } = renderHook(() =>
+        useGeometryWorker({
+          manager: () => null,
+          onDerived: vi.fn(),
+          onError
+        })
+      );
+
+      expect(result.current.state.phase).toBe('failed');
+      expect(result.current.state.error).toContain('blocked by policy');
+      expect(onError).toHaveBeenCalledWith(
+        expect.stringContaining('could not be started')
+      );
+    });
+
+    it('extends the budget while a request-tagged job holds the queue', () => {
+      vi.useFakeTimers();
+      installWorker();
+      const document = createProjectDocument('Tagged', toUserId('user'));
+      const { result } = renderHook(() =>
+        useGeometryWorker({
+          manager: () => null,
+          onDerived: vi.fn(),
+          onError: vi.fn()
+        })
+      );
+      const worker = FakeWorker.instances[0]!;
+      result.current.sync(document);
+      act(() => {
+        worker.emit({
+          type: 'state',
+          phase: 'starting',
+          projectId: document.projectId,
+          version: document.version,
+          stale: true
+        });
+      });
+      // An export behind the live sync announces its own rebuild; the live
+      // document waits in the queue while that long phase runs silently.
+      const requestId = 'tagged-export';
+      act(() => {
+        worker.emit({
+          type: 'state',
+          phase: 'rebuilding',
+          projectId: document.projectId,
+          version: document.version,
+          requestId,
+          stale: true
+        });
+        vi.advanceTimersByTime(60_000);
+      });
+
+      expect(FakeWorker.instances).toHaveLength(1);
+
+      // Past even the extended budget with no message at all, it respawns.
+      act(() => {
+        vi.advanceTimersByTime(70_000);
+      });
+      expect(FakeWorker.instances).toHaveLength(2);
+    });
   });
 });
