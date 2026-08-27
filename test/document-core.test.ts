@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import {
+  MAX_CHECKPOINT_REASON_LENGTH,
+  isRevisionRecord
+} from '@openzcad/shared';
+import {
   addPrimitiveFeature,
   addSketchConstraint,
   cloneDocument,
@@ -1106,5 +1110,34 @@ describe('branching a project', () => {
     const branch = duplicateProjectDocument(source, 'Copy', user(), origin);
 
     expect(normalizeDocument(branch).branchedFrom).toEqual(origin);
+  });
+});
+
+describe('a revision reason the account would refuse', () => {
+  it('clamps a long label instead of making every later save fail', () => {
+    // Command labels interpolate user text (`Edit ${name}`), and the feature
+    // Name field is unbounded. A long enough name pushed the revision past the
+    // 500-character limit the account enforces on every write, so the document
+    // became permanently unsaveable — a 400 no retry can fix, which the client
+    // reports as "Offline" because it only names 409/413/403/401 explicitly.
+    // Reloading then dropped the offending revision silently, taking that save
+    // point with it, and re-editing the same feature reintroduced it.
+    const document = createProjectDocument('Bounded', toUserId('user_bound'));
+    const long = `Edit ${'a'.repeat(900)}`;
+
+    const next = appendRevision(document, long);
+    const reason = next.revisions.at(-1)!.reason;
+
+    expect(reason.length).toBeLessThanOrEqual(MAX_CHECKPOINT_REASON_LENGTH);
+    expect(isRevisionRecord(next.revisions.at(-1))).toBe(true);
+    // Truncated rather than replaced: the label still says what it was.
+    expect(reason.startsWith('Edit aaa')).toBe(true);
+    expect(reason.endsWith('…')).toBe(true);
+  });
+
+  it('leaves an ordinary label exactly as given', () => {
+    const document = createProjectDocument('Bounded', toUserId('user_bound'));
+    const next = appendRevision(document, 'Edit Bracket');
+    expect(next.revisions.at(-1)!.reason).toBe('Edit Bracket');
   });
 });
