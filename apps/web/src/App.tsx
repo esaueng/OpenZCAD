@@ -325,7 +325,6 @@ const MESH_EXPORT_FILE_INFO: Record<
   }
 };
 import {
-  ExtrudeOverlay,
   MoveOverlay,
   ProfileQuickAction
 } from './components/DirectModelingOverlays';
@@ -402,7 +401,6 @@ import {
 } from './lib/extrudeInference';
 import type {
   BodyAppearancePreview,
-  ExtrudePreview,
   FaceResizeCommit,
   NormalToFaceRequest
 } from './components/ModelViewer';
@@ -632,31 +630,6 @@ function ModelingOperationsForm(
       <LazyModelingOperationsForm {...props} />
     </Suspense>
   );
-}
-
-function extrudeInferenceDescription(resolved: ResolvedExtrude | null): string {
-  if (!resolved) {
-    return 'Measuring positive-volume overlap in the exact kernel…';
-  }
-  const inference = resolved.inference;
-  switch (inference.reason) {
-    case 'enclosed':
-      return `Enclosed by ${inference.targetBodyName}; Cut is stored.`;
-    case 'partial-overlap':
-      return `Partially overlaps ${inference.targetBodyName}; Add is stored.`;
-    case 'multiple-overlap':
-      return 'Several bodies overlap; New Body avoids implicit consumption.';
-    case 'coincident':
-      return 'Coincident volume is ambiguous; New Body is stored.';
-    case 'exact-measurement-refused':
-      return 'Exact overlap was inconclusive; New Body is stored.';
-    case 'no-live-body':
-      return 'No live body can be targeted; New Body is stored.';
-    case 'no-overlap':
-      return 'No positive-volume overlap; New Body is stored.';
-    case 'into-face-body':
-      return `Pushed into ${inference.targetBodyName}; Cut is stored.`;
-  }
 }
 import {
   chooseProjectDocument,
@@ -1380,13 +1353,6 @@ export function App() {
   );
   const selectedProfilesRef = useRef(selectedProfiles);
   selectedProfilesRef.current = selectedProfiles;
-  const [extrudePreview, setExtrudePreview] = useState<ExtrudePreview | null>(
-    null
-  );
-  const [resolvedExtrudePreview, setResolvedExtrudePreview] =
-    useState<ResolvedExtrude | null>(null);
-  const extrudePreviewRef = useRef(extrudePreview);
-  extrudePreviewRef.current = extrudePreview;
   const [movePreview, setMovePreview] = useState<MovePreview | null>(null);
   /**
    * Name for the Move feature the gizmo is about to create. The gizmo is now
@@ -1864,91 +1830,6 @@ export function App() {
     })
   ).current;
 
-  /**
-   * Exact profile extrusion preview. LivePreview supplies newest-request wins
-   * sequencing, so a slow worker response can never replace a newer distance
-   * or profile selection.
-   */
-  const profileExtrudePreview = useRef(
-    new LivePreview<
-      { base: ProjectDocument; input: ExtrudeInput },
-      ResolvedExtrude
-    >({
-      build: (distance) => {
-        const draft = extrudePreviewRef.current;
-        const profiles = selectedProfilesRef.current;
-        const base = managerRef.current?.document;
-        if (
-          !base ||
-          !draft ||
-          profiles.length === 0 ||
-          Math.abs(distance) < 0.1 ||
-          profiles.some((profile) => profile.sketchId !== draft.sketchId)
-        ) {
-          return null;
-        }
-        const command = commandFactories.extrudeSketch({
-          name: 'Extrude preview',
-          sketchId: draft.sketchId as SketchId,
-          distance,
-          profiles: profiles.map((profile) => ({
-            profileId: profile.profileId,
-            regionFingerprint: profile.regionFingerprint,
-            samplePoint: profile.samplePoint,
-            sourceArea: profile.area,
-            sourceEntityIds: profile.sourceEntityIds
-          }))
-        });
-        return { base, input: command.payload };
-      },
-      derive: ({ base, input }) =>
-        resolveExtrudeOperation({
-          base,
-          input,
-          derive: (document) => geometry.syncOnce(document)
-        }),
-      publish: (preview) => {
-        setPreviewDoc(
-          preview
-            ? {
-                ...preview.derived.document,
-                derived: preview.derived.derived
-              }
-            : null
-        );
-        setResolvedExtrudePreview(preview?.derived ?? null);
-        if (preview) {
-          const count = selectedProfilesRef.current.length;
-          const inference = preview.derived.inference;
-          const operation =
-            inference.operation === 'new-body'
-              ? 'New Body'
-              : inference.operation === 'add'
-                ? `Add to ${inference.targetBodyName}`
-                : `Cut ${inference.targetBodyName}`;
-          setStatus(
-            `${count} profile${count === 1 ? '' : 's'} selected · exact preview ready · ${operation}.`
-          );
-        }
-      },
-      acceptValue: (distance) =>
-        Number.isFinite(distance) && Math.abs(distance) >= 0.1,
-      continueAfterSlow: true
-    })
-  ).current;
-
-  useEffect(() => {
-    if (
-      !extrudePreview ||
-      selectedProfiles.length === 0 ||
-      Math.abs(extrudePreview.distance) < 0.1
-    ) {
-      profileExtrudePreview.clear();
-      return;
-    }
-    setResolvedExtrudePreview(null);
-    profileExtrudePreview.request(extrudePreview.distance);
-  }, [extrudePreview, profileExtrudePreview, selectedProfiles]);
 
   const { run: executeValidatedDirectEdit } = useDirectEditCommit({
     manager: () => managerRef.current,
@@ -4321,7 +4202,6 @@ export function App() {
     setSelectedBodyIds([]);
     setSelectedSketchProfileId(null);
     setSelectedProfiles([]);
-    setExtrudePreview(null);
     setMoveCommitHold(null);
     setTool(null);
   }
@@ -4529,7 +4409,6 @@ export function App() {
     setSelectedEdges([]);
     setSelectedBodyIds([]);
     setSelectedSketchProfileId(null);
-    setExtrudePreview(null);
   }
 
   function createFeature(command: AnyCommand): boolean {
@@ -4540,10 +4419,6 @@ export function App() {
     return false;
   }
 
-  const extrudeSketchReturnRef = useRef<{
-    plane: SketchPlaneRef;
-    sketchId: string;
-  } | null>(null);
   const extrudeSelectionReturnRef = useRef<{
     profiles: RegionPickData[];
     sketchId: SketchId | null;
@@ -4565,16 +4440,6 @@ export function App() {
     },
     [doc]
   );
-
-  function updateExtrudeDistance(distance: number) {
-    if (!Number.isFinite(distance)) {
-      return;
-    }
-    setResolvedExtrudePreview(null);
-    setExtrudePreview((current) =>
-      current ? { ...current, distance } : current
-    );
-  }
 
   function startExtrude(sketchId: SketchId) {
     if (tool !== 'extrude') {
@@ -4629,8 +4494,6 @@ export function App() {
     setSelectedBodyIds([]);
     setSelectedSketchProfileId(sketchId);
     setSelectedProfiles(chosen);
-    setResolvedExtrudePreview(null);
-    setExtrudePreview(null);
     setTool(null);
     if (activeSketch) {
       dispatchInteraction({ type: 'exit-sketch' });
@@ -4652,69 +4515,6 @@ export function App() {
         ? 'Closed sketch profile selected · drag the arrow to extrude, or type a distance.'
         : `${chosen.length} profiles selected · drag the arrow to extrude them together.`
     );
-  }
-
-  async function confirmExtrude() {
-    if (
-      !extrudePreview ||
-      !resolvedExtrudePreview ||
-      selectedProfiles.length === 0 ||
-      Math.abs(extrudePreview.distance) < 0.1
-    ) {
-      setStatus(
-        resolvedExtrudePreview
-          ? 'Drag the extrusion arrow away from the sketch plane first.'
-          : 'Wait for exact overlap inference to finish.'
-      );
-      return;
-    }
-    const manager = managerRef.current;
-    if (
-      !manager ||
-      manager.document.version !== resolvedExtrudePreview.baseVersion
-    ) {
-      setResolvedExtrudePreview(null);
-      profileExtrudePreview.request(extrudePreview.distance);
-      setStatus(
-        'The document changed; refreshing exact extrusion inference before applying.'
-      );
-      return;
-    }
-    const resolvedInput = resolvedExtrudePreview.command.payload;
-    const command = commandFactories.extrudeSketch({
-      ...resolvedInput,
-      name: `Extrude ${features.filter((feature) => feature.featureKind === 'extrude').length + 1}`,
-      profiles: profileReferencesForSelection(
-        selectedProfiles,
-        entityWideProfileSource
-      )
-    });
-    const createdBodyId = command.payload.ids!.bodyId;
-    profileExtrudePreview.clear();
-    const created = await executeValidatedDirectEdit(
-      command,
-      createdBodyId,
-      `Created ${resolvedExtrudePreview.inference.operation} extrusion ${extrudePreview.distance > 0 ? 'above' : 'below'} the sketch plane.`,
-      extrudePreview.distance
-    );
-    if (!created) {
-      profileExtrudePreview.request(extrudePreview.distance);
-      return;
-    }
-    const createdFeature = listFeaturesInOrder(managerRef.current!.document).at(
-      -1
-    );
-    setExtrudePreview(null);
-    setResolvedExtrudePreview(null);
-    setPreviewDoc(null);
-    setSelectedProfiles([]);
-    setSelectedSketchProfileId(null);
-    setTool(null);
-    extrudeSketchReturnRef.current = null;
-    extrudeSelectionReturnRef.current = null;
-    selectFeatureNode(createdFeature?.id ?? null, 'pinned');
-    setSelectedBodyIds(createdFeature?.bodyId ? [createdFeature.bodyId] : []);
-    setStatus(`Created ${createdFeature?.name ?? 'extrusion'}.`);
   }
 
   async function createInferredExtrude(input: ExtrudeInput) {
@@ -4782,7 +4582,6 @@ export function App() {
     }
     if (nextTool === 'sketch') {
       clearSelection();
-      setExtrudePreview(null);
       setTool('sketch');
       setStatus('Sketch mode: draw one closed profile on the selected plane.');
       return;
@@ -4811,7 +4610,6 @@ export function App() {
       // a sketch translation rather than a Move feature, so every downstream
       // extrude rebuilds in place.
       if (selectedSketch) {
-        setExtrudePreview(null);
         setMovePreview({
           bodyId: selectedSketch.sketchId,
           target: 'sketch',
@@ -4839,7 +4637,6 @@ export function App() {
         selectedBodyIds.at(-1) ?? viewerBodies.at(-1)?.bodyId ?? null;
       if (targetBodyId) {
         setMoveName('Move');
-        setExtrudePreview(null);
         setSelectedBodyIds([targetBodyId]);
         setMovePreview({
           bodyId: targetBodyId,
@@ -4871,37 +4668,20 @@ export function App() {
       );
     }
     // Selection is kept on purpose: booleans/move/fillet pre-fill from it.
-    setExtrudePreview(null);
     setTool(nextTool);
   }
 
   function cancelPanel() {
     setFeatureFormError(null);
-    const sketchReturn =
-      tool === 'extrude' || extrudePreview
-        ? extrudeSketchReturnRef.current
-        : null;
     const selectionReturn = extrudeSelectionReturnRef.current;
-    profileExtrudePreview.clear();
     setPreviewDoc(null);
-    setExtrudePreview(null);
     setSelectedProfiles(selectionReturn?.profiles ?? []);
     setSelectedSketchProfileId(selectionReturn?.sketchId ?? null);
     setMovePreview(null);
     setTool(null);
     setSelectedFeatureNode(null);
-    extrudeSketchReturnRef.current = null;
     extrudeSelectionReturnRef.current = null;
-    if (sketchReturn) {
-      dispatchInteraction({
-        type: 'enter-sketch',
-        plane: sketchReturn.plane,
-        sketchId: sketchReturn.sketchId
-      });
-      setStatus(
-        'Back in the sketch · extrude canceled; sketch edits preserved.'
-      );
-    } else if (selectionReturn) {
+    if (selectionReturn) {
       setStatus('Extrude canceled · prior profile selection restored.');
     }
   }
@@ -6620,7 +6400,6 @@ export function App() {
     setSelectedBodyIds([]);
     setSelectedSketchProfileId(null);
     setSelectedProfiles([]);
-    setExtrudePreview(null);
     setTool(null);
     try {
       const listed = await loadProjectSummaries(Boolean(session));
@@ -6960,7 +6739,6 @@ export function App() {
       setSelectedBodyIds([]);
       setSelectedSketchProfileId(null);
       setSelectedProfiles([]);
-      setExtrudePreview(null);
       setPreviewDoc(null);
       setTool(null);
       setStatus(`${reason}. Undo puts it back.`);
@@ -7074,7 +6852,6 @@ export function App() {
     // just replaced; keeping it would render geometry from a lineage that no
     // longer exists.
     setPreviewDoc(null);
-    setExtrudePreview(null);
     setMoveCommitHold(null);
     setTool(null);
     clearSelection();
@@ -7087,7 +6864,6 @@ export function App() {
     }
     setDoc(managerRef.current.redo());
     setPreviewDoc(null);
-    setExtrudePreview(null);
     setMoveCommitHold(null);
     setTool(null);
     clearSelection();
@@ -8253,12 +8029,7 @@ export function App() {
 
   function handleSelectSketchProfile(sketchId: string) {
     const typedSketchId = sketchId as SketchId;
-    if (tool === 'extrude' && !extrudePreview) {
-      startExtrude(typedSketchId);
-      return;
-    }
     setTool(null);
-    setExtrudePreview(null);
     setSelectedFeatureNode(null);
     setSelectedTopology(null);
     setSelectedEdges([]);
@@ -8338,7 +8109,6 @@ export function App() {
     // handles; stashed for the direct-manipulation flow.
     lastPickDetailRef.current = detail ?? null;
     setSelectedSketchProfileId(null);
-    setExtrudePreview(null);
     if (!selection) {
       if (!additive) {
         clearSelection();
@@ -8635,7 +8405,6 @@ export function App() {
       return;
     }
     setSelectedSketchProfileId(null);
-    setExtrudePreview(null);
     if (appSettings.experiments.directManipulation) {
       selections.forEach((selection, index) => {
         dispatchInteraction({
@@ -8689,7 +8458,6 @@ export function App() {
       dispatchInteraction({ type: 'clear' });
     }
     setSelectedSketchProfileId(null);
-    setExtrudePreview(null);
     setSelectedEdges([]);
     setSelectedBodyIds(bodyIds as BodyId[]);
     setSelectedTopology(
@@ -9401,53 +9169,6 @@ export function App() {
     });
   }, [sketchViews]);
 
-  const extrudeSketchId =
-    extrudePreview?.sketchId ??
-    selectedProfiles[0]?.sketchId ??
-    selectedSketchProfileId;
-  const availableExtrudeProfiles = useMemo(() => {
-    if (!extrudeSketchId) {
-      return [];
-    }
-    const view = sketchViews.find(
-      (candidate) => candidate.sketchId === extrudeSketchId
-    );
-    return (
-      view?.regions.map((profile): RegionPickData => ({
-        sketchId: extrudeSketchId,
-        profileId: profile.profileId,
-        regionFingerprint: profile.regionFingerprint,
-        samplePoint: profile.samplePoint,
-        centroid: profile.centroid,
-        boundingBox: profile.boundingBox,
-        sourceEntityIds: profile.sourceEntityIds,
-        area: profile.area
-      })) ?? []
-    );
-  }, [extrudeSketchId, sketchViews]);
-
-  function selectAllValidExtrudeProfiles() {
-    if (!extrudeSketchId || availableExtrudeProfiles.length === 0) {
-      return;
-    }
-    setSelectedProfiles(availableExtrudeProfiles);
-    setResolvedExtrudePreview(null);
-    setExtrudePreview((current) => ({
-      sketchId: extrudeSketchId,
-      distance: current?.distance ?? 24
-    }));
-    setStatus(
-      `${availableExtrudeProfiles.length} valid profiles selected · exact preview updating.`
-    );
-  }
-
-  function clearExtrudeProfiles() {
-    profileExtrudePreview.clear();
-    setPreviewDoc(null);
-    setSelectedProfiles([]);
-    setExtrudePreview(null);
-    setStatus('Select one or more closed profiles.');
-  }
 
   /** After a region extrude, offer a one-click edit of its source sketch. */
   const [revertPill, setRevertPill] = useState<{ sketchId: SketchId } | null>(
@@ -9470,7 +9191,6 @@ export function App() {
       modifiers
     );
     setSelectedProfiles(nextProfiles);
-    setResolvedExtrudePreview(null);
     setSelectedSketchProfileId(region.sketchId as SketchId);
     setSelectedFeatureNode(null);
     setSelectedTopology(null);
@@ -9485,30 +9205,6 @@ export function App() {
       );
       return;
     }
-    if (tool === 'extrude') {
-      setExtrudePreview(
-        nextProfiles.length > 0
-          ? {
-              sketchId: region.sketchId,
-              distance:
-                extrudePreview?.sketchId === region.sketchId
-                  ? extrudePreview.distance
-                  : 24
-            }
-          : null
-      );
-      if (interaction.mode !== 'idle') {
-        dispatchInteraction({ type: 'clear' });
-      }
-      setStatus(
-        nextProfiles.length > 0
-          ? `${nextProfiles.length} profile${nextProfiles.length === 1 ? '' : 's'} selected · exact preview updating.`
-          : 'Select one or more closed profiles.'
-      );
-      return;
-    }
-
-    setExtrudePreview(null);
     dispatchInteraction({
       type: 'select-region',
       target: {
@@ -10881,7 +10577,6 @@ export function App() {
 
   function handleSelectFeatureFromTree(nodeId: string) {
     setTool(null);
-    setExtrudePreview(null);
     setSelectedTopology(null);
     setSelectedEdges([]);
     // Picking in the tree is a selection change like any other. Dropping the
@@ -11309,7 +11004,6 @@ export function App() {
       return;
     }
     setTool(null);
-    setExtrudePreview(null);
     clearSelection();
     setFaceRepair(repair);
     const bodyName =
@@ -11553,28 +11247,6 @@ export function App() {
           setStatus('Sketch canceled · no plane was chosen.');
         }
         return;
-      }
-      if (tool === 'extrude') {
-        if (event.key === 'Escape') {
-          event.preventDefault();
-          cancelPanel();
-          return;
-        }
-        if (event.key === 'Enter' && !typing) {
-          event.preventDefault();
-          void confirmExtrude();
-          return;
-        }
-        // Everything else used to stop here, which took the view keys with it.
-        // Profile picking asks the user to click a region it has not framed —
-        // the camera returns to the solid, and the profiles can be off-screen
-        // entirely — so F, the standard views, the grid and the display mode
-        // are exactly what someone reaches for, and exactly what did nothing.
-        // Only the letters that would launch another tool mid-pick stay
-        // reserved.
-        if (SHORTCUT_TO_TOOL[event.key.toLowerCase()]) {
-          return;
-        }
       }
       if (movePreview) {
         if (event.key === 'Escape') {
@@ -12050,11 +11722,7 @@ export function App() {
         ) ??
         (tool === 'sketch'
           ? 'Drag to draw · R rectangle · C circle · P polygon · Enter finishes'
-          : tool === 'extrude'
-            ? extrudePreview
-              ? 'Drag the arrow across the plane · Enter creates · Esc cancels'
-              : 'Click a shaded closed profile · Esc cancels'
-            : tool === 'fillet' || tool === 'chamfer'
+          : tool === 'fillet' || tool === 'chamfer'
               ? selectedEdges.length > 0
                 ? `${selectedEdges.length} edge${selectedEdges.length === 1 ? '' : 's'} selected · Shift+Click adjusts · Enter creates`
                 : 'Click edges with Shift or choose Select all edges · Esc cancels'
@@ -12790,7 +12458,6 @@ export function App() {
             // so view mode keeps orbit, pan and picking while no gesture can
             // reach the document.
             editableBodyIds={viewerEditableBodyIds}
-            extrudePreview={extrudePreview}
             movePreview={movePreview}
             moveCommitHold={moveCommitHold}
             appearancePreview={bodyAppearancePreview}
@@ -13259,42 +12926,6 @@ export function App() {
                     </button>
                   </span>
                 </div>
-              ) : extrudePreview && selectedSketchProfileName ? (
-                <ExtrudeOverlay
-                  profileName={`${selectedSketchProfileName} · ${selectedProfiles.length} bounded cell${selectedProfiles.length === 1 ? '' : 's'}`}
-                  profileCount={selectedProfiles.length}
-                  availableProfileCount={availableExtrudeProfiles.length}
-                  distance={extrudePreview.distance}
-                  units={doc.units}
-                  operation={
-                    resolvedExtrudePreview?.inference.operation ?? 'inferring'
-                  }
-                  operationDetail={extrudeInferenceDescription(
-                    resolvedExtrudePreview
-                  )}
-                  canConfirm={
-                    resolvedExtrudePreview !== null &&
-                    resolvedExtrudePreview.baseVersion === doc.version
-                  }
-                  onDistanceChange={updateExtrudeDistance}
-                  onClearProfiles={clearExtrudeProfiles}
-                  onSelectAllProfiles={selectAllValidExtrudeProfiles}
-                  onBackToSketch={
-                    extrudeSketchReturnRef.current ? cancelPanel : undefined
-                  }
-                  onConfirm={() => void confirmExtrude()}
-                  onCancel={cancelPanel}
-                />
-              ) : tool === 'extrude' ? (
-                <div className="profile-pick-prompt" role="status">
-                  <Layers3 size={18} aria-hidden="true" />
-                  <span>
-                    <strong>Select a closed profile</strong>
-                    <small>
-                      Click a shaded sketch region to begin extruding.
-                    </small>
-                  </span>
-                </div>
               ) : selectedProfiles.length > 0 && selectedSketchProfileName ? (
                 <ProfileQuickAction
                   profileName={selectedSketchProfileName}
@@ -13317,7 +12948,6 @@ export function App() {
             onBoxSelect={handleBoxSelectFromViewer}
             onSelectSketchProfile={handleSelectSketchProfile}
             onResizePrimitiveFace={handleResizePrimitiveFace}
-            onExtrudeDistanceChange={updateExtrudeDistance}
             onContextMenu={handleViewportContextMenu}
             onToggleGrid={() =>
               setViewerSettings((current) => ({
