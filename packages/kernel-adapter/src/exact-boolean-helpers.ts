@@ -366,6 +366,71 @@ export function inferenceBodyForShape(
   };
 }
 
+/**
+ * Whether two solids share material or meet exactly.
+ *
+ * Shared volume alone cannot answer this: two solids meeting at a face — a
+ * boss grown off the face it was sketched on — have none, and read as
+ * disjoint by volume while being perfectly joinable. Exact distance is what
+ * separates that from a solid sitting apart in space.
+ *
+ * The tolerance matches `union-connectivity`'s contact rule, and is
+ * deliberately numerical rather than a modeling tolerance: touching must
+ * never be stretched to bridge a real empty gap. A bounding-box test is not
+ * enough here — two solids can share an overlapping box and still be well
+ * clear of each other.
+ */
+export function solidsShareMaterialOrTouch(
+  kernel: RemusKernel,
+  left: number,
+  right: number
+): boolean {
+  try {
+    if (
+      kernel.volume(kernel.intersect(left, right), MEASUREMENT_DEFLECTION) > 0
+    ) {
+      return true;
+    }
+  } catch {
+    // A refused intersection is not evidence of separation; the distance
+    // query below answers contact directly. It is also the path for kernels
+    // that report penetration depth instead of zero for intersecting solids.
+  }
+  try {
+    const distance = kernel.solidToSolidDistance(left, right)[0];
+    if (distance === undefined || !Number.isFinite(distance) || distance < 0) {
+      return false;
+    }
+    const boxes = [kernel.boundingBox(left), kernel.boundingBox(right)];
+    const scale = Math.max(
+      1,
+      ...boxes.flatMap((box) => [
+        Math.hypot(box[3]! - box[0]!, box[4]! - box[1]!, box[5]! - box[2]!),
+        ...Array.from(box, Math.abs)
+      ])
+    );
+    return distance <= Number.EPSILON * scale * 128;
+  } catch {
+    return false;
+  }
+}
+
+/** Whether any solid of one shape shares material with or touches the other. */
+export function shapesShareMaterialOrTouch(
+  kernel: RemusKernel,
+  left: ExactShape,
+  right: ExactShape
+): boolean {
+  for (const leftSolid of left.solids) {
+    for (const rightSolid of right.solids) {
+      if (solidsShareMaterialOrTouch(kernel, leftSolid, rightSolid)) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
 /** Exact common material between two body shapes; tangency returns zero. */
 export function sharedShapeVolume(
   kernel: RemusKernel,
