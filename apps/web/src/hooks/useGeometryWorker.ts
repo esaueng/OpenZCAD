@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { documentForWorker } from '../lib/meshTransport';
 import type { BodyId, ProjectDocument, SketchId } from '@openzcad/shared';
 import type { CommandManager } from '@openzcad/command-system';
 import { mark, measure, timed } from '../lib/perf';
@@ -69,7 +70,7 @@ function postSync(
   }
   lastSyncedKey.current = syncKey;
   armed.current = true;
-  worker.postMessage({ type: 'sync', document });
+  worker.postMessage({ type: 'sync', document: documentForWorker(document) });
 }
 
 /** Cancellation rejection, named so callers can tell it from a failure. */
@@ -493,7 +494,11 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
         const requestId = crypto.randomUUID();
         syncRequests.current.set(requestId, { resolve, reject });
         armedRef.current = true;
-        worker.postMessage({ type: 'sync', document, requestId });
+        worker.postMessage({
+          type: 'sync',
+          document: documentForWorker(document),
+          requestId
+        });
       });
     },
     exportModel(format, document, bodyIds, options) {
@@ -536,7 +541,7 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
         worker.postMessage({
           type: 'export',
           requestId,
-          document,
+          document: documentForWorker(document),
           bodyIds,
           format,
           ...(options?.deflection !== undefined
@@ -561,7 +566,7 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
         worker.postMessage({
           type: 'mesh-quality',
           requestId,
-          document,
+          document: documentForWorker(document),
           bodyIds,
           deflection
         });
@@ -579,7 +584,7 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
         worker.postMessage({
           type: 'solve-sketch',
           requestId,
-          document,
+          document: documentForWorker(document),
           sketchId
         });
       });
