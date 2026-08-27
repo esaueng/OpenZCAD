@@ -16,6 +16,7 @@ import {
   canonicalProjectContentKey
 } from './exactRebuildCache';
 import { GeometryWorkerQueue } from './geometryWorkerQueue';
+import { unpackWorkerRequest } from '../lib/meshTransport';
 import { resolveExactSourceBytes } from '../lib/exactSourceResolver';
 import { preloadDocumentFonts } from '../lib/textFonts';
 
@@ -489,7 +490,9 @@ async function execute(job: GeometryWorkerJob): Promise<void> {
 const queue = new GeometryWorkerQueue<GeometryWorkerJob>(execute);
 
 self.onmessage = (event: MessageEvent<GeometryWorkerRequest>) => {
-  const request = event.data;
+  // Unpack before anything reads the document: every consumer past this point
+  // — the rebuild, the cache key, the history digest — expects plain arrays.
+  const request = unpackWorkerRequest(event.data);
   if (request.type === 'cancel') {
     cancelledRequests.add(request.requestId);
     return;
