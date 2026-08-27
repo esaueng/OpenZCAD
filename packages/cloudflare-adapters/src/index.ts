@@ -15,6 +15,7 @@ import {
   RevisionConflictError,
   RevisionNotFoundError,
   UPLOAD_SESSION_TTL_MS,
+  type ArtifactBody,
   type CreateProjectInvitationInput,
   type CreateProjectShareLinkInput,
   type ProjectAccess,
@@ -2272,7 +2273,7 @@ export class D1R2PersistenceService implements PersistenceService {
   async downloadArtifact(
     userId: UserId,
     artifactId: string
-  ): Promise<{ artifact: ArtifactRecord; body: ArrayBuffer } | null> {
+  ): Promise<{ artifact: ArtifactRecord; body: ArtifactBody } | null> {
     if (!this.env.DB) {
       return getInMemoryPersistence().downloadArtifact(userId, artifactId);
     }
@@ -2284,7 +2285,9 @@ export class D1R2PersistenceService implements PersistenceService {
       throw new ArtifactStorageError();
     }
     const stored = await this.env.ARTIFACTS.get(artifact.objectKey);
-    return stored ? { artifact, body: await stored.arrayBuffer() } : null;
+    // Stream rather than buffer: artifacts can be hundreds of MB, and a
+    // Worker isolate has 128 MB for everything it does.
+    return stored ? { artifact, body: stored.body } : null;
   }
 
   /**

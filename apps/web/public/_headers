@@ -8,5 +8,17 @@
 # its URL is stable — index.html above all, since it names the hashed bundles
 # a client should be loading.
 
+# Baseline hardening for every served path, index.html included. The CSP mirrors
+# the desktop shell's: the kernel needs wasm-unsafe-eval, Turnstile loads its
+# script and frame from challenges.cloudflare.com, the geometry and pdf.js
+# workers come from this origin (blob: covers Vite's dev-time worker), and the
+# injected text-preview @font-face block needs style-src 'unsafe-inline'.
+/*
+  Content-Security-Policy: default-src 'self'; script-src 'self' 'wasm-unsafe-eval' https://challenges.cloudflare.com; connect-src 'self' https://challenges.cloudflare.com; font-src 'self' data:; img-src 'self' blob: data:; style-src 'self' 'unsafe-inline'; worker-src 'self' blob:; frame-src https://challenges.cloudflare.com; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'
+  Strict-Transport-Security: max-age=15552000
+  X-Content-Type-Options: nosniff
+  Referrer-Policy: strict-origin-when-cross-origin
+  Permissions-Policy: camera=(), microphone=(), geolocation=()
+
 /assets/*
   Cache-Control: public, max-age=31536000, immutable

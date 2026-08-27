@@ -170,14 +170,14 @@ export function installWorkerSocketGlobals(): {
   const serverSockets: FakeWebSocket[] = [];
 
   class UpgradeResponse extends NativeResponse {
-    webSocket?: unknown;
+    override webSocket?: WebSocket | null;
 
     constructor(body?: BodyInit | null, init?: ResponseInit) {
       const status = init?.status;
       if (status === 101) {
         super(null, { ...init, status: 200 });
         Object.defineProperty(this, 'status', { value: 101 });
-        this.webSocket = (init as { webSocket?: unknown }).webSocket;
+        this.webSocket = (init as { webSocket?: WebSocket | null }).webSocket;
         return;
       }
       super(body, init);
