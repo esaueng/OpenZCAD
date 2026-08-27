@@ -8038,28 +8038,9 @@ export function ModelViewer({
         // sourceCenter: that anchor can sit on the face's rim (it is the
         // surface's reference point, not the centroid), which would frame
         // off-center and over-distance.
-        const centroid = new THREE.Vector3();
-        let area = 0;
-        for (let i = 0; i + 2 < points.length; i += 3) {
-          const [a, b, c] = [points[i], points[i + 1], points[i + 2]] as [
-            THREE.Vector3,
-            THREE.Vector3,
-            THREE.Vector3
-          ];
-          const triangleArea = new THREE.Vector3()
-            .subVectors(b, a)
-            .cross(new THREE.Vector3().subVectors(c, a))
-            .length();
-          centroid.addScaledVector(
-            new THREE.Vector3().add(a).add(b).add(c).divideScalar(3),
-            triangleArea
-          );
-          area += triangleArea;
-        }
         const center =
-          area > 1e-12
-            ? centroid.divideScalar(area)
-            : new THREE.Vector3(frame.center.x, frame.center.y, frame.center.z);
+          faceTrianglesCentroid(points) ??
+          new THREE.Vector3(frame.center.x, frame.center.y, frame.center.z);
         return computeNormalToFacePose(context.camera, points, center, normal);
       }
       if (frame.points.length === 0) {
