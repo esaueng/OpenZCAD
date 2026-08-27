@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { documentForWorker } from '../lib/meshTransport';
 import type { BodyId, ProjectDocument, SketchId } from '@openzcad/shared';
 import type { CommandManager } from '@openzcad/command-system';
 import { mark, measure, timed } from '../lib/perf';
@@ -349,7 +350,7 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
         return;
       }
       lastSyncedKey.current = syncKey;
-      worker.postMessage({ type: 'sync', document });
+      worker.postMessage({ type: 'sync', document: documentForWorker(document) });
     },
     syncOnce(document) {
       const worker = workerRef.current;
@@ -359,7 +360,11 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
       return new Promise((resolve, reject) => {
         const requestId = crypto.randomUUID();
         syncRequests.current.set(requestId, { resolve, reject });
-        worker.postMessage({ type: 'sync', document, requestId });
+        worker.postMessage({
+          type: 'sync',
+          document: documentForWorker(document),
+          requestId
+        });
       });
     },
     exportModel(format, document, bodyIds, options) {
@@ -400,7 +405,7 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
         worker.postMessage({
           type: 'export',
           requestId,
-          document,
+          document: documentForWorker(document),
           bodyIds,
           format,
           ...(options?.deflection !== undefined
@@ -424,7 +429,7 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
         worker.postMessage({
           type: 'mesh-quality',
           requestId,
-          document,
+          document: documentForWorker(document),
           bodyIds,
           deflection
         });
@@ -441,7 +446,7 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
         worker.postMessage({
           type: 'solve-sketch',
           requestId,
-          document,
+          document: documentForWorker(document),
           sketchId
         });
       });
