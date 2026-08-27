@@ -170,32 +170,54 @@ let exactKernelStatus: 'idle' | 'loading' | 'ready' | 'failed' = 'idle';
 let exactKernelError: unknown;
 let exactKernelPromise: Promise<ExactKernel | null> | null = null;
 
+/**
+ * The kernel is a multi-megabyte wasm fetch plus compile; a stalled fetch
+ * must fail the job (and clear the memoized promise so the next attempt
+ * retries) rather than hang the queue forever.
+ */
+const KERNEL_LOAD_BUDGET_MS = 90_000;
+
 function loadExactKernel(): Promise<ExactKernel | null> {
   if (exactKernelPromise) {
     return exactKernelPromise;
   }
   exactKernelStatus = 'loading';
-  exactKernelPromise = import('@openzcad/kernel-adapter/exact')
-    .then(({ createExactKernelAdapter }) =>
-      createExactKernelAdapter({ resolveSourceBytes: resolveExactSourceBytes })
-    )
-    .then(
-      (adapter) => {
-        exactKernelStatus = 'ready';
-        return adapter;
-      },
-      (error: unknown) => {
-        // A load failure is usually transient — the WASM chunk fetch lost a
-        // network race. Clearing the memoized promise lets the next rebuild
-        // or export attempt a fresh load instead of leaving this worker
-        // permanently kernel-less until the page reloads. The failed status
-        // and error stick around for messaging until a retry begins.
-        exactKernelStatus = 'failed';
-        exactKernelError = error;
-        exactKernelPromise = null;
-        return null;
-      }
+  const attempt = import('@openzcad/kernel-adapter/exact').then(
+    ({ createExactKernelAdapter }) =>
+      createExactKernelAdapter({
+        resolveSourceBytes: resolveExactSourceBytes
+      })
+  );
+  // The budget losing the race leaves `attempt` pending; keep its eventual
+  // rejection from surfacing as an unhandled one.
+  attempt.catch(() => undefined);
+  let budgetTimer: ReturnType<typeof setTimeout> | undefined;
+  const budget = new Promise<never>((_, reject) => {
+    budgetTimer = setTimeout(
+      () => reject(new Error('The exact Remus kernel took too long to load.')),
+      KERNEL_LOAD_BUDGET_MS
     );
+  });
+  exactKernelPromise = Promise.race([attempt, budget]).then(
+    (adapter) => {
+      clearTimeout(budgetTimer);
+      exactKernelStatus = 'ready';
+      return adapter;
+    },
+    (error: unknown) => {
+      clearTimeout(budgetTimer);
+      // A load failure is usually transient — the WASM chunk fetch lost a
+      // network race. Clearing the memoized promise lets the next rebuild
+      // or export attempt a fresh load instead of leaving this worker
+      // permanently kernel-less until the page reloads. The failed status
+      // and error stick around for messaging until a retry begins. The
+      // budget above feeds this same path, so a stalled fetch also retries.
+      exactKernelStatus = 'failed';
+      exactKernelError = error;
+      exactKernelPromise = null;
+      return null;
+    }
+  );
   return exactKernelPromise;
 }
 
