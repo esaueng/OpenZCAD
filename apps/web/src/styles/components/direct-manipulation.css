@@ -691,6 +691,26 @@
   border-radius: var(--radius-md);
   box-shadow: 0 12px 30px rgba(0, 0, 0, 0.4);
   transform: translateX(-50%);
+  /* Entering a sketch glides the camera for most of a second; chrome that
+     snaps in on the first frame arrives before the move it belongs to. The
+     base duration lands it inside that flight, so the mode switch and the
+     camera read as one gesture. Same reason the tool card fades. */
+  animation: sketch-chrome-in var(--dur-base) var(--ease-out);
+}
+
+@keyframes sketch-chrome-in {
+  from {
+    opacity: 0;
+    transform: translateX(-50%) translateY(-6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(-50%) translateY(0);
+  }
+}
+
+[data-reduced-motion='true'] .sketch-rail {
+  animation: none;
 }
 
 .sketch-rail-group-label {
@@ -856,6 +876,22 @@
   border-radius: var(--radius-md);
   box-shadow: 0 14px 34px rgba(0, 0, 0, 0.4);
   backdrop-filter: blur(12px);
+  /* Arrives with the rail and the camera, for the same reason. No transform
+     of its own to preserve, so it only fades. */
+  animation: sketch-palette-in var(--dur-base) var(--ease-out);
+}
+
+@keyframes sketch-palette-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+[data-reduced-motion='true'] .sketch-palette {
+  animation: none;
 }
 
 .sketch-palette.collapsed {
