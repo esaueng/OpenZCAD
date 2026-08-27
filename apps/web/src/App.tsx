@@ -9301,10 +9301,10 @@ export function App() {
           (candidate) => candidate.sketchId === target.sketchId
         );
         const faceAttachment =
-          sketchNode?.planeRef.type === 'face' && rounded < 0
+          sketchNode?.planeRef.type === 'face' && rounded !== 0
             ? {
                 bodyId: sketchNode.planeRef.bodyId,
-                direction: 'into' as const
+                direction: rounded < 0 ? ('into' as const) : ('away' as const)
               }
             : undefined;
         setBusy(true);
