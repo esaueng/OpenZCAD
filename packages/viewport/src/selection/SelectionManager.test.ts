@@ -29,7 +29,6 @@ function makeManager(overrides: Partial<{ editable: string[] }> = {}) {
   let renders = 0;
   let bodies: BodyRepresentation[] = [];
   const editable = new Set(overrides.editable ?? []);
-  let extrudeArmed = false;
   const manager = new SelectionManager({
     bodyGroup,
     objectsByBodyId,
@@ -38,8 +37,7 @@ function makeManager(overrides: Partial<{ editable: string[] }> = {}) {
       renders += 1;
     },
     bodies: () => bodies,
-    isEditableBody: (bodyId) => editable.has(bodyId),
-    extrudeArmed: () => extrudeArmed
+    isEditableBody: (bodyId) => editable.has(bodyId)
   });
   return {
     manager,
@@ -49,9 +47,6 @@ function makeManager(overrides: Partial<{ editable: string[] }> = {}) {
     renders: () => renders,
     setBodies: (next: BodyRepresentation[]) => {
       bodies = next;
-    },
-    setExtrudeArmed: (value: boolean) => {
-      extrudeArmed = value;
     }
   };
 }
@@ -265,12 +260,6 @@ describe('cursor feedback', () => {
     expect(domElement.style.cursor).toBe('');
   });
 
-  it('lets an armed extrude gizmo claim the cursor', () => {
-    const { manager, domElement, setExtrudeArmed } = makeManager();
-    setExtrudeArmed(true);
-    manager.applyHover(null);
-    expect(domElement.style.cursor).toBe('grab');
-  });
 });
 
 describe('body emissive is reserved for whole-body picks', () => {
