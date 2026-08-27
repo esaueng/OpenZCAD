@@ -3271,3 +3271,47 @@ test('dragging the move gizmo streams live values and commits what was dragged',
     )
     .toBeGreaterThan(5);
 });
+
+test('imports an STL mesh and measures the body the worker rebuilt', async ({
+  page
+}) => {
+  // The only e2e that drives an `imported-mesh` feature at all, which is why
+  // it exists: the mesh payload crosses `postMessage` packed into typed arrays
+  // and is unpacked in the worker, and nothing else in this suite touches that
+  // path.
+  //
+  // What it catches, verified by sabotage rather than assumed: corrupted
+  // VALUES. Halving the packed vertices makes the size read 10 x 10 and this
+  // fails. What it does NOT catch is the payload arriving still typed —
+  // `importedMeshStl` reads it through `.length`, `.slice` and `.some`, all of
+  // which a `Float64Array` answers correctly, so the geometry comes out right
+  // anyway. That failure shows up in the rebuild cache key instead, where
+  // `Array.isArray` is false, and `meshTransport.test.ts` is what pins it.
+  test.setTimeout(90_000);
+  await stubApi(page);
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('Imported Mesh');
+  await page.getByRole('button', { name: 'Create project' }).click();
+  await expect(page.getByRole('region', { name: '3D viewport' })).toBeVisible();
+
+  await page
+    .getByLabel('Import STEP or STL…')
+    .setInputFiles(
+      fileURLToPath(new URL('../../samples/simple-block.stl', import.meta.url))
+    );
+
+  const importedRow = page.locator('.feature-row', {
+    hasText: 'simple-block.stl'
+  });
+  await expect(importedRow).toBeVisible();
+  await expect(importedRow.getByTitle('Feature failed to build')).toHaveCount(
+    0
+  );
+  await expectBodyCount(page, 1);
+
+  // Two triangles spanning 20x20 in the XY plane. The size is what proves the
+  // vertices survived the round trip with their values intact — a corrupted
+  // unpack still yields a body, just the wrong one.
+  await importedRow.locator('.feature-row-main').click();
+  await expect(page.locator('.panel-body')).toContainText('20 × 20 × 0');
+});
