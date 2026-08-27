@@ -357,6 +357,17 @@
   border-color: currentcolor;
 }
 
+/*
+ * `device-failed` is the one save state that is not "at risk" but "already
+ * lost on close": the device write itself rejected, so the document is only in
+ * this tab. It reads as an error rather than a warning because there is no
+ * copy anywhere for the user to fall back to.
+ */
+.save-state.is-device-failed {
+  color: var(--color-error);
+  border-color: currentcolor;
+}
+
 .account-state,
 .collaboration-state {
   width: 100%;

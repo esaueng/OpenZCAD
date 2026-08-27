@@ -23,7 +23,10 @@
  */
 
 import { commandFactories, type AnyCommand } from '@openzcad/command-system';
-import { createBodyFeatureIds } from '@openzcad/document-core';
+import {
+  createBodyFeatureIds,
+  type ImportedStepInput
+} from '@openzcad/document-core';
 import { parseStepMetadata } from '@openzcad/io-step';
 import type {
   ImportedSourceReference,
@@ -35,6 +38,11 @@ import {
   settleImportSource,
   type InFlightImportChecksums
 } from './importArchival';
+import type {
+  ImportPhase,
+  ImportProgressSink,
+  ImportRunOutcome
+} from './importProgress';
 import {
   deleteSourceBlobIfUnreferenced,
   ensureLocalProjectStorage,
@@ -77,7 +85,11 @@ export interface StepImportSourceStore {
   ensureLocalProjectStorage(): Promise<LocalStorageReadiness>;
   putSourceBlobIfAbsent(
     source: Blob,
-    options?: { claimId?: string }
+    options?: {
+      claimId?: string;
+      onBytesRead?(read: number, total: number): void;
+      signal?: AbortSignal;
+    }
   ): Promise<StoredSourceBlob>;
   deleteSourceBlobIfUnreferenced(input: {
     checksumSha256: string;
@@ -155,9 +167,27 @@ export interface StepImportRunDeps {
     kind: 'step-import';
     body: Blob;
     metadata: Record<string, string>;
+    onUploadProgress?(uploaded: number, total: number): void;
+    signal?: AbortSignal;
   }): Promise<string>;
   validatedFeature: StepImportCommitHook;
   status: StepImportStatusSink;
+  /**
+   * Where the progress card reads this run, if one is listening.
+   *
+   * Optional, and deliberately so: unlike {@link status}, nothing here reaches
+   * the document, the device, or the user's data, so a host that drops it
+   * loses a panel and nothing else. Every other collaborator on this interface
+   * is required for exactly the opposite reason.
+   */
+  progress?: ImportProgressSink;
+  /**
+   * Stops the current phase. Exact validation runs in a disposable browser
+   * worker, so this signal terminates even a synchronous wasm rebuild; the
+   * remaining guards decline the upload and atomic commit if cancellation
+   * races a phase boundary.
+   */
+  signal?: AbortSignal;
   marks: StepImportMarks;
   /** The document as it stands now — it moves while the rebuild runs. */
   currentDocument(): ProjectDocument | null;
@@ -165,6 +195,10 @@ export interface StepImportRunDeps {
   editDisabledReason(): string | null;
   /** Unique per call. `crypto.randomUUID` in the app. */
   newId(): string;
+  /** Alternate atomic command for imports that carry additional evidence. */
+  commandFactory?(payload: ImportedStepInput): AnyCommand;
+  validatingMessage?: string;
+  successMessage?(input: { fileName: string; archived: boolean }): string;
   /** Overridable so a test need not build a 250 MB file. */
   limits?: { maxSourceBytes?: number; maxEmbeddedBytes?: number };
 }
@@ -186,6 +220,78 @@ export interface StepImportResult {
   sourceDeleted: boolean;
 }
 
+/**
+ * How the run ended, in the one line the progress card has room for.
+ *
+ * Kept apart from the status-bar copy on purpose. The status bar narrates a
+ * session and is overwritten by whatever happens next; this is the card's
+ * final state and may sit on screen until it is dismissed, so it says the
+ * shortest true thing and offers an action only where one exists.
+ */
+/**
+ * Thrown to unwind a cancelled run. A sentinel rather than a message, so the
+ * top-level catch can tell "the user stopped this" from "this broke" without
+ * matching on error text — and so an abort raised deep inside the blob read
+ * cannot be mistaken for a storage failure and quietly fall back to embedding
+ * the file, which is what the pre-existing catch around the write does.
+ */
+class ImportCancelledError extends Error {
+  constructor() {
+    super('The import was cancelled.');
+    this.name = 'ImportCancelledError';
+  }
+}
+
+/** True for our own sentinel and for the DOMException an abort raises. */
+function isCancellation(error: unknown, signal?: AbortSignal): boolean {
+  return (
+    error instanceof ImportCancelledError ||
+    signal?.aborted === true ||
+    (error instanceof Error && error.name === 'AbortError')
+  );
+}
+
+function importRunOutcome(input: {
+  outcome: ValidatedFeatureOutcome | 'failed';
+  archived: boolean;
+  rejection: string | null;
+  thrown: string | null;
+}): ImportRunOutcome {
+  switch (input.outcome) {
+    case 'cancelled':
+      return { tone: 'cancelled', message: 'Import cancelled' };
+    case 'committed':
+      // Two different endings, and the difference matters: an import whose
+      // source never reached the cloud is a project no other device can
+      // rebuild. That is worth an amber card and a button, not a tick.
+      return input.archived
+        ? { tone: 'ok', message: 'Imported — 1 body' }
+        : {
+            tone: 'warning',
+            message: 'Imported, but saved on this device only',
+            action: 'archive'
+          };
+    case 'rejected':
+      return {
+        tone: 'error',
+        message: input.rejection ?? 'Not imported — the file was refused'
+      };
+    case 'superseded':
+      // Says nothing against the file, so it is amber rather than red.
+      return {
+        tone: 'warning',
+        message: 'Not imported — the model kept changing while it rebuilt'
+      };
+    case 'busy':
+      return {
+        tone: 'warning',
+        message: 'Not imported — another exact operation was still running'
+      };
+    default:
+      return { tone: 'error', message: input.thrown ?? 'Import failed' };
+  }
+}
+
 /** Turned away before anything was written, so there is nothing to report. */
 function declined(): StepImportResult {
   return {
@@ -204,6 +310,7 @@ export async function runStepImport(
   const maxSourceBytes = deps.limits?.maxSourceBytes ?? MAX_SOURCE_IMPORT_BYTES;
   const maxEmbeddedBytes =
     deps.limits?.maxEmbeddedBytes ?? MAX_EMBEDDED_STEP_BYTES;
+  const commandFactory = deps.commandFactory ?? commandFactories.importStep;
 
   if (file.size > maxSourceBytes) {
     status.setStatus(
@@ -257,6 +364,30 @@ export async function runStepImport(
     return declined();
   }
 
+  // Announced only once the run is certainly going ahead. Everything above
+  // this point is settled in well under a second and reports through the
+  // status bar; a card that appeared for those would be a panel flashing at
+  // someone who has not finished letting go of the mouse.
+  //
+  // A storage-denied session never writes bytes, so `saving` is not one of
+  // its phases and the bar divides over the three that remain.
+  const progress = deps.progress;
+  const phases: ImportPhase[] = [
+    ...(readiness === 'unavailable' ? [] : (['saving'] as const)),
+    'reading',
+    'building',
+    'archiving'
+  ];
+  progress?.start({ fileName: file.name, phases });
+  /** The kernel's own words, kept for the card's one failure line. */
+  let rejection: string | null = null;
+  const signal = deps.signal;
+  const stopIfCancelled = (): void => {
+    if (signal?.aborted) {
+      throw new ImportCancelledError();
+    }
+  };
+
   // Content-addressed storage first: the document carries a checksum reference
   // and the bytes live in the browser's blob store (and the artifact archive,
   // once uploaded). Embedding the text in the document is the fallback.
@@ -270,13 +401,25 @@ export async function runStepImport(
   // `failed` is the import going wrong before it ever reached the kernel; its
   // bytes are as abandoned as a refusal's.
   let outcome: ValidatedFeatureOutcome | 'failed' = 'failed';
+  /** What went wrong on the way, when nothing ever reached a verdict. */
+  let thrown: string | null = null;
   try {
     // A store that could not be opened a moment ago will not open now, and
     // asking anyway only spends a second failed open to learn the same thing.
     if (readiness !== 'unavailable') {
       try {
+        progress?.update({ phase: 'saving', fraction: 0 });
         const stored = await store.putSourceBlobIfAbsent(file, {
-          claimId: sourceClaimId
+          claimId: sourceClaimId,
+          ...(signal ? { signal } : {}),
+          // Covers the read and hash. The IndexedDB write that follows
+          // reports nothing, so the bar parks at the end of this phase for
+          // the length of that write rather than pretending to advance.
+          onBytesRead: (read, total) =>
+            progress?.update({
+              phase: 'saving',
+              fraction: total > 0 ? read / total : null
+            })
         });
         sourceRef = stored.ref;
         sourceBlobCreated = stored.created;
@@ -284,15 +427,31 @@ export async function runStepImport(
         // window exists in which a concurrent import of the same file sees a
         // blob it could prune.
         deps.marks.inFlight.acquire(sourceRef.checksumSha256);
-      } catch {
+      } catch (error) {
+        // A cancelled read is not a storage failure. Without this the abort
+        // would be swallowed here and the run would carry on to embed the
+        // file — completing, in full, the import the user just stopped.
+        if (isCancellation(error, signal)) {
+          throw error;
+        }
         if (file.size > maxEmbeddedBytes) {
           status.setStatus(storageUnavailableMessage(maxEmbeddedBytes));
+          progress?.finish({
+            tone: 'error',
+            message: storageUnavailableMessage(maxEmbeddedBytes)
+          });
           return declined();
         }
       }
     }
+    stopIfCancelled();
+    // Measured at about 0.15 s for 250 MB — decode and header scan together —
+    // so this reports no fraction. There is nothing to watch.
+    progress?.update({ phase: 'reading', fraction: null });
     const stepText = await file.text();
     const metadata = parseStepMetadata(file.name, stepText);
+    // Last boundary before the disposable exact-rebuild worker is created.
+    stopIfCancelled();
     const productName = metadata.products[0]?.trim();
     const name = productName || file.name.replace(/\.(step|stp)$/i, '');
     // Pre-assigned so the pre-flight can ask about THIS body, and reused
@@ -311,15 +470,25 @@ export async function runStepImport(
     // fallback. So a candidate validated against a provisional local id
     // rebuilds identically once the finalized id replaces it.
     const localArtifactId = `artifact_local_${deps.newId()}`;
+    // The long pole, and the one phase with nothing to report: the kernel
+    // reads the file inside one synchronous wasm call. Its disposable worker
+    // is the cancellation boundary even though the call cannot yield progress.
+    progress?.update({ phase: 'building', fraction: null });
     outcome = await deps.validatedFeature.run(
-      commandFactories.importStep({ ...payload, artifactId: localArtifactId }),
+      commandFactory({ ...payload, artifactId: localArtifactId }),
       {
         featureName: name,
         resultBodyId: ids.bodyId,
         // The lock this run has been holding since before it wrote a byte. The
         // run adopts it instead of competing for it.
         reservation: commitLock,
-        validatingMessage: `Checking ${file.name} against exact geometry…`,
+        // The hook terminates the disposable rebuild worker through this same
+        // signal, then re-checks it at the upload and commit boundaries.
+        cancelled: () => signal?.aborted === true,
+        ...(signal ? { signal } : {}),
+        validatingMessage:
+          deps.validatingMessage ??
+          `Checking ${file.name} against exact geometry…`,
         // The workspace stays live while this rebuilds, and rebuilding a large
         // assembly takes minutes: renaming a feature or nudging a body in that
         // time must not destroy the import. The candidate is simply rebuilt
@@ -346,37 +515,61 @@ export async function runStepImport(
           }
           let artifactId = localArtifactId;
           try {
+            progress?.update({ phase: 'archiving', fraction: 0 });
             artifactId = await deps.archive({
               fileName: file.name,
               contentType: deps.contentType,
               kind: 'step-import',
               body: file,
-              metadata: { source: 'direct-upload' }
+              metadata: { source: 'direct-upload' },
+              ...(signal ? { signal } : {}),
+              onUploadProgress: (uploaded, total) =>
+                progress?.update({
+                  phase: 'archiving',
+                  fraction: total > 0 ? uploaded / total : null
+                })
             });
             archived = true;
           } catch {
             // Local-only, and listed in the File menu for a later retry.
+            //
+            // A cancelled upload lands here too, and must NOT be rethrown: a
+            // throw out of `finalize` is caught by the commit hook and reported
+            // as a rejection, which would blame the file for something the user
+            // did. The hook re-checks `cancelled` immediately after finalize
+            // returns, so the run still ends as cancelled and nothing commits.
           }
-          return commandFactories.importStep({ ...payload, artifactId });
+          return commandFactory({ ...payload, artifactId });
         },
         // Two separate facts: the source is stored, and the exact kernel
         // rebuilt a body from it. Claiming the second before the rebuild ran is
         // what left a success toast next to an empty viewport.
         successMessage: () =>
+          deps.successMessage?.({ fileName: file.name, archived }) ??
           `Imported editable STEP solid from ${file.name}: ` +
-          (archived
-            ? 'exact body rebuilt, source archived.'
-            : 'exact body rebuilt (cloud archive unavailable; source saved locally).'),
-        onFailure: () => {
+            (archived
+              ? 'exact body rebuilt, source archived.'
+              : 'exact body rebuilt (cloud archive unavailable; source saved locally).'),
+        onFailure: (message) => {
           // The kernel's verdict is already in the status bar. The host sink
           // renders inline in whichever feature form is open, and an import has
           // none of its own — routing it there would show a STEP parse error as
           // the refusal of an unrelated operation.
+          //
+          // Kept here, though, because the progress card is this import's own
+          // surface: it can say why the file was refused instead of leaving
+          // the reason in a status line that the next message overwrites.
+          rejection = message;
         }
       }
     );
   } catch (error) {
-    status.setStatus(errorMessage(error, 'STEP import failed.'));
+    if (isCancellation(error, signal)) {
+      outcome = 'cancelled';
+    } else {
+      thrown = errorMessage(error, 'STEP import failed.');
+      status.setStatus(thrown);
+    }
   } finally {
     // `run` released the lock itself; this covers every path that never reached
     // it, and releasing twice is a no-op.
@@ -385,6 +578,14 @@ export async function runStepImport(
       deps.marks.inFlight.release(sourceRef.checksumSha256);
     }
   }
+  // Said HERE rather than in the catch above, because a cancel reaches this
+  // point two different ways: thrown while reading, or returned by the commit
+  // hook after it terminates a disposable exact-rebuild worker. Only the first
+  // path passes through the catch, so the shared ending owns the status text.
+  if (outcome === 'cancelled') {
+    status.setStatus(`${file.name} was not imported: you cancelled it.`);
+  }
+  progress?.finish(importRunOutcome({ outcome, archived, rejection, thrown }));
   if (!sourceRef) {
     return {
       outcome,
@@ -408,9 +609,14 @@ export async function runStepImport(
     result:
       outcome === 'committed'
         ? 'committed'
-        : outcome === 'busy' || outcome === 'superseded'
-          ? 'no-verdict'
-          : 'refused',
+        : outcome === 'cancelled'
+          ? // Pruned, not kept. Nobody is waiting on the bytes of an import
+            // the user withdrew, nothing sweeps unreferenced blobs, and the
+            // re-read a retry costs is measured in tenths of a second.
+            'cancelled'
+          : outcome === 'busy' || outcome === 'superseded'
+            ? 'no-verdict'
+            : 'refused',
     createdByThisImport: sourceBlobCreated,
     abandonedChecksums: deps.marks.abandoned,
     document: deps.currentDocument(),

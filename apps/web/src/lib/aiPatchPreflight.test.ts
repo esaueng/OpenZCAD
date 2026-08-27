@@ -1,10 +1,16 @@
 import { describe, expect, it, vi } from 'vitest';
+import { createAutoParameterizeProposal } from '@openzcad/ai-contracts/auto-parameterize';
 import { CommandManager, commandFactories } from '@openzcad/command-system';
-import { createProjectDocument } from '@openzcad/document-core';
+import {
+  createProjectDocument,
+  importStepBody,
+  listFeaturesInOrder
+} from '@openzcad/document-core';
 import {
   toFeatureId,
   toUserId,
   type EdgeTopologyReferenceV5,
+  type FaceTopologyReferenceV5,
   type ProjectDocument
 } from '@openzcad/shared';
 import { preflightCadPatch } from './aiPatchPreflight';
@@ -57,6 +63,93 @@ function exactDerived(candidate: ProjectDocument): ProjectDocument['derived'] {
     warnings: [],
     updatedAt: candidate.derived.updatedAt
   };
+}
+
+function importedBlendDocument(): ProjectDocument {
+  const imported = importStepBody(
+    createProjectDocument('Imported blend', toUserId('user_ai_blend')),
+    {
+      name: 'Imported Bracket',
+      artifactId: 'artifact_ai_blend',
+      sourceName: 'bracket.step',
+      stepText: 'ISO-10303-21;END-ISO-10303-21;'
+    }
+  );
+  const bodyId = imported.bodyId;
+  const feature = listFeaturesInOrder(imported.document)[0]!;
+  const faceReference: FaceTopologyReferenceV5 = {
+    kind: 'face',
+    producingFeatureId: feature.featureId,
+    lineageName: 'imported.face.blend',
+    currentHash: 701,
+    witnessVersion: 1,
+    witness: {
+      surfaceType: 'cylinder',
+      perimeter: 18850,
+      centroid: [0, 0, 5000],
+      analytic: {
+        kind: 'cylinder',
+        axis: [0, 0, 1000],
+        axisFoot: [0, 0, 0],
+        radius: 3000
+      },
+      closure: { u: 'open', v: 'open' }
+    }
+  };
+  imported.document.derived = {
+    bodyRepresentations: {
+      [bodyId]: {
+        bodyId,
+        name: 'Imported Bracket',
+        source: 'imported-step',
+        color: '#fff',
+        consumed: false,
+        exportableStep: true,
+        mesh: {
+          kind: 'mesh',
+          vertices: new Float32Array(),
+          indices: new Uint32Array()
+        },
+        faceCount: 1,
+        volume: 100,
+        bbox: {
+          min: { x: 0, y: 0, z: 0 },
+          max: { x: 20, y: 20, z: 10 }
+        },
+        topology: {
+          faces: [
+            {
+              topologyId: 'face:blend',
+              hash: 701,
+              reference: faceReference,
+              triangleStart: 0,
+              triangleCount: 0,
+              geometry: {
+                surfaceType: 'cylinder',
+                area: 30,
+                center: { x: 0, y: 0, z: 5 },
+                radius: 3,
+                diameter: 6,
+                axisStart: { x: 0, y: 0, z: 0 },
+                axisEnd: { x: 0, y: 0, z: 10 },
+                axialLength: 10,
+                featureType: 'blend',
+                blendRadius: 3,
+                blendRegionKey: '9:31',
+                blendRegionFaceCount: 1,
+                editableDimension: 'blendRadius'
+              }
+            }
+          ],
+          edges: []
+        }
+      }
+    },
+    exportableBodyIds: [bodyId],
+    warnings: [],
+    updatedAt: imported.document.derived.updatedAt
+  };
+  return imported.document;
 }
 
 describe('AI exact patch preflight', () => {
@@ -167,6 +260,45 @@ describe('AI exact patch preflight', () => {
         return changed;
       })
     ).rejects.toThrow(/changed the exact geometry/);
+  });
+
+  it('preflights and applies an imported blend binding as an exact geometric no-op', async () => {
+    const base = importedBlendDocument();
+    const bodyId = base.bodyOrder[0]!;
+    const proposal = createAutoParameterizeProposal(base, {
+      featureIds: [],
+      bodyIds: [bodyId],
+      topologies: []
+    });
+    expect(proposal?.preserveGeometry).toBe(true);
+    if (!proposal) {
+      throw new Error('expected imported blend proposal');
+    }
+
+    const result = await preflightCadPatch(
+      base,
+      proposal,
+      async (candidate) => ({
+        ...structuredClone(base.derived),
+        updatedAt: candidate.derived.updatedAt
+      })
+    );
+    const applied = new CommandManager(base).runTransaction(
+      'Apply blend recipe',
+      result.commands
+    );
+    const edit = listFeaturesInOrder(applied).at(-1);
+    expect(edit?.data).toMatchObject({
+      featureKind: 'direct-edit',
+      operation: {
+        kind: 'resize-blend',
+        newRadius: 'imported_bracket_fillet_1_radius',
+        parameterBinding: true
+      }
+    });
+    expect(result.candidate.derived.bodyRepresentations[bodyId]).toEqual(
+      base.derived.bodyRepresentations[bodyId]
+    );
   });
 
   it('materializes a final same-proposal rim chamfer from exact topology', async () => {

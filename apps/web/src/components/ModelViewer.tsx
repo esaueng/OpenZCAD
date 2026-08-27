@@ -43,12 +43,14 @@ import {
   buildMoveGizmoParts,
   chooseMoveSnapStep,
   chooseRotateSnapStep,
+  chooseViewportScale,
   clearGroup,
   closestAxisT,
   composeMoveTransform,
   computeFitPose,
   computeNormalToFacePose,
   cylinderRadiusPreviewMatrix,
+  faceTrianglesCentroid,
   createBodyEdgeOverlay,
   createAnalyticCylinderGhost,
   createFaceHighlightGeometry,
@@ -99,6 +101,7 @@ import {
   type DepthCycle,
   type DragRig,
   type MoveSnap,
+  type ViewportScale,
   type PickCandidate,
   type PickDetail,
   type ProfilePickTarget,
@@ -119,7 +122,11 @@ import {
   type CalloutLayoutItem,
   type DimensionGraphic,
   easeToward,
-  SELECTION_SEMANTICS
+  SELECTION_SEMANTICS,
+  SKETCH_GLIDE_MS,
+  sketchGlideEase,
+  viewJumpEase,
+  type CameraGlideStyle
 } from '@openzcad/viewport';
 import type {
   BodyRepresentation,
@@ -175,7 +182,8 @@ import {
 } from '../lib/sketch/session';
 import type { SketchCircleMode } from '../lib/interaction/machine';
 import type { PlaneBasis } from '@openzcad/geometry';
-import type { ParamValue, SketchObjectData } from '@openzcad/shared';
+import type { ParamValue, PlaneId, SketchObjectData } from '@openzcad/shared';
+import { buildPlanePickerRig } from './viewer/planePickerRig';
 import { evalParamValue } from '../lib/model';
 import {
   edgeLabel,
@@ -224,8 +232,25 @@ interface CylinderRadiusProxyController {
 }
 
 /** Active in-viewport sketch session, derived from the interaction machine. */
+/**
+ * What the sketch-entry camera glide should frame: the attached face's
+ * display triangles, or the world-space bounds of the sketch's committed
+ * content on re-entry. Null keeps the pre-framing behavior (orient head-on
+ * at the current distance) — a fresh sketch on a canonical plane has nothing
+ * to frame.
+ */
+export type SketchEntryFrame =
+  | {
+      kind: 'face';
+      bodyId: string;
+      faceHash: number;
+      center: { x: number; y: number; z: number };
+    }
+  | { kind: 'content'; points: { x: number; y: number; z: number }[] };
+
 export interface SketchModeState {
   basis: PlaneBasis;
+  frame: SketchEntryFrame | null;
   tool: 'select' | 'line' | 'arc' | 'circle' | 'rectangle' | 'text';
   circleMode: SketchCircleMode;
   snapStep: number | null;
@@ -410,6 +435,10 @@ interface ModelViewerProps {
   orientationRef: MutableRefObject<((axes: AxisProjection) => void) | null>;
   /** Imperative bridge from the SVG view cube into the live camera rig. */
   orientationDragRef: MutableRefObject<OrientationDragControls | null>;
+  /** Imperative sink for the zoom-aware scale without React frame updates. */
+  scaleIndicatorRef: MutableRefObject<
+    ((scale: ViewportScale | null) => void) | null
+  >;
   onSelectTopology(
     selection: TopologySelection | null,
     additive: boolean,
@@ -504,6 +533,13 @@ interface ModelViewerProps {
   ): void;
   onHoverRegion(region: RegionPickData | null): void;
   /**
+   * The Sketch tool is armed and waiting for a plane: show the three ghost
+   * quads at the origin so picking one is a click in the model.
+   */
+  planePickerArmed: boolean;
+  /** A ghost plane was clicked. */
+  onPickPlane(plane: PlaneId): void;
+  /**
    * What measuring the hovered target would report, for the preview chip.
    * Null when measuring is off or the pick has nothing honest to say.
    */
@@ -592,7 +628,11 @@ export interface SceneContext {
   /** Re-applies navigation preferences onto the live orbit controls. */
   refreshNavigation(): void;
   /** Starts a glide toward a new pose; user input cancels it. */
-  startCameraTween(pose: CameraPose, onComplete?: () => void): void;
+  startCameraTween(
+    pose: CameraPose,
+    onComplete?: () => void,
+    glide?: CameraGlideStyle
+  ): void;
   /** The durable pose to persist for this project. */
   captureView(): ViewportCameraState;
   /** Invalidates the viewport and schedules a render if it is idle. */
@@ -1111,6 +1151,7 @@ export function ModelViewer({
   onViewSettled,
   orientationRef,
   orientationDragRef,
+  scaleIndicatorRef,
   onSelectTopology,
   onSelectEdgeChain,
   selectionFilter,
@@ -1145,6 +1186,8 @@ export function ModelViewer({
   profileSelectionMode,
   onSelectRegion,
   onHoverRegion,
+  planePickerArmed,
+  onPickPlane,
   onMeasurePreview,
   regionHandle,
   sketchMode,
@@ -1274,6 +1317,11 @@ export function ModelViewer({
   onHoverRegionRef.current = onHoverRegion;
   const onMeasurePreviewRef = useRef(onMeasurePreview);
   onMeasurePreviewRef.current = onMeasurePreview;
+  const onPickPlaneRef = useRef(onPickPlane);
+  onPickPlaneRef.current = onPickPlane;
+  const planePickerRigRef = useRef<ReturnType<
+    typeof buildPlanePickerRig
+  > | null>(null);
   const profileSelectionModeRef = useRef(profileSelectionMode);
   profileSelectionModeRef.current = profileSelectionMode;
   const profilePickTargetsRef = useRef<ProfilePickTarget[]>([]);
@@ -1754,8 +1802,8 @@ export function ModelViewer({
       applyProjection: (mode) => cameraRig.applyProjection(mode),
       syncOrthographic: (resetZoom) => cameraRig.syncOrthographic(resetZoom),
       refreshNavigation: () => cameraRig.refreshNavigationPreferences(),
-      startCameraTween: (pose, onComplete) =>
-        cameraRig.startTween(pose, onComplete),
+      startCameraTween: (pose, onComplete, glide) =>
+        cameraRig.startTween(pose, onComplete, glide),
       captureView: () => cameraRig.capture(),
       requestRender,
       renderer,
@@ -2421,6 +2469,24 @@ export function ModelViewer({
 
     function pick(event: PointerEvent | MouseEvent) {
       return picker.pick(event);
+    }
+
+    /**
+     * Nearest ghost plane under the pointer, or null. Distance-compared with
+     * the solid pick by the callers, so a plane in front of the model wins
+     * the click and a face in front of a plane still wins its own.
+     */
+    function pickGhostPlane(
+      event: PointerEvent | MouseEvent
+    ): { plane: PlaneId; distance: number } | null {
+      const rig = planePickerRigRef.current;
+      if (!rig) {
+        return null;
+      }
+      picker.setRayFromEvent(event);
+      const hit = picker.intersect(rig.targets(), false)[0];
+      const plane = hit?.object.userData.pickPlane as PlaneId | undefined;
+      return plane ? { plane, distance: hit!.distance } : null;
     }
 
     /**
@@ -3662,6 +3728,14 @@ export function ModelViewer({
       );
       depthCycle = stepped.cycle;
       const result = stepped.candidate;
+      // A ghost plane in front of whatever the stack resolved starts the
+      // sketch instead: it is armed precisely to be clicked.
+      const ghost = pickGhostPlane(event);
+      if (ghost && (!result || ghost.distance < result.distance)) {
+        planePickerRigRef.current?.setHover(null);
+        onPickPlaneRef.current(ghost.plane);
+        return;
+      }
       if (result?.region) {
         onSelectRegionRef.current(result.region, {
           additive: event.shiftKey,
@@ -3950,7 +4024,20 @@ export function ModelViewer({
         updateMeasurePreview(event);
         return;
       }
-      applyHover(pick(event));
+      // A ghost plane nearer than the solid under the cursor owns the hover:
+      // the click will start a sketch on it, not select the face behind.
+      const ghost = pickGhostPlane(event);
+      const solid = pick(event);
+      if (ghost && (!solid || ghost.distance < solid.distance)) {
+        planePickerRigRef.current?.setHover(ghost.plane);
+        applyHover(null);
+        renderer.domElement.style.cursor = 'pointer';
+        updateMeasurePreview(event);
+        requestRender();
+        return;
+      }
+      planePickerRigRef.current?.setHover(null);
+      applyHover(solid);
       updateMeasurePreview(event);
     }
 
@@ -6216,11 +6303,15 @@ export function ModelViewer({
         return;
       }
       const pose = computeFitPose(camera, bodyGroup.children);
-      cameraRig.startTween(pose, () => {
-        if (context.projection === 'orthographic') {
-          cameraRig.syncOrthographic(true);
-        }
-      });
+      cameraRig.startTween(
+        pose,
+        () => {
+          if (context.projection === 'orthographic') {
+            cameraRig.syncOrthographic(true);
+          }
+        },
+        { ease: viewJumpEase }
+      );
     };
 
     const handleContextMenu = (event: MouseEvent) => {
@@ -6309,6 +6400,13 @@ export function ModelViewer({
         camera.quaternion.copy(orthographic.quaternion);
       }
 
+      // Ghost planes hold their screen size, so they stay a target rather
+      // than a backdrop as the camera dollies.
+      const planePicker = planePickerRigRef.current;
+      if (planePicker) {
+        planePicker.setScale(worldPerPixelAt(new THREE.Vector3()));
+      }
+
       const activeSketchMode = sketchModeRef.current;
       const activeSketchRig = sketchRigRef.current;
       let inferenceAnimating = false;
@@ -6357,6 +6455,14 @@ export function ModelViewer({
           DEFAULT_OVERLAY_FADE_TARGET;
         material.opacity = easeToward(material.opacity, target, dt * 1000);
         if (material.opacity === target) {
+          // A material faded back to full opacity goes back to the opaque
+          // pass once it settles — leaving `transparent` set would keep it
+          // in depth-sorted rendering and risk sorting artifacts.
+          if (material.userData.restoreOpaque === true) {
+            material.transparent = false;
+            delete material.userData.restoreOpaque;
+            material.needsUpdate = true;
+          }
           context.fadeIns.delete(material);
         }
       }
@@ -6423,6 +6529,9 @@ export function ModelViewer({
       }
       const cylinderRadiusProxyFrame = flushCylinderRadiusProxy();
       updateOffsetChip();
+      scaleIndicatorRef.current?.(
+        chooseViewportScale(worldPerPixelAt(cameraRig.controls.target))
+      );
       updateStudioGrid(grid, context.activeCamera, cameraRig.controls.target);
       updateAxesGizmo(axes, context.activeCamera);
       shadowCatcher.visible = shouldShowGroundShadow(
@@ -7825,10 +7934,38 @@ export function ModelViewer({
     };
   }, [regionHandle, sketchViews]);
 
+  // Ghost planes while the Sketch tool waits for one. Installed and torn
+  // down with the armed state; the render loop keeps their screen size.
+  useEffect(() => {
+    const context = contextRef.current;
+    if (!context || !planePickerArmed) {
+      return;
+    }
+    const rig = buildPlanePickerRig();
+    // The render loop sizes it against the live camera on the next frame;
+    // this only keeps the first frame from drawing a unit-sized sliver.
+    rig.setScale(0.05);
+    context.scene.add(rig.group);
+    planePickerRigRef.current = rig;
+    context.requestRender();
+    return () => {
+      context.scene.remove(rig.group);
+      rig.dispose();
+      if (planePickerRigRef.current === rig) {
+        planePickerRigRef.current = null;
+      }
+      context.requestRender();
+    };
+  }, [planePickerArmed]);
+
   // In-viewport sketch mode lifecycle: build the plane rig, glide the camera
   // head-on, and recede the solids; restore everything on exit. Keyed on the
-  // basis object identity so drawing/object updates do not re-enter.
+  // basis object identity so drawing/object updates do not re-enter. The
+  // frame rides a ref for the same reason: the entry glide wants the frame
+  // as it was at entry, not a re-run per sketch edit.
   const sketchBasis = sketchMode?.basis ?? null;
+  const sketchEntryFrameRef = useRef<SketchEntryFrame | null>(null);
+  sketchEntryFrameRef.current = sketchMode?.frame ?? null;
   useEffect(() => {
     const context = contextRef.current;
     if (!context || !sketchBasis) {
@@ -7860,11 +7997,87 @@ export function ModelViewer({
       sketchBasis.origin.y,
       sketchBasis.origin.z
     );
+    // Frame the glide's subject when there is one — the attached face, or
+    // re-entered content — reusing the normal-to-face fit so a wide face
+    // fills a portrait viewport too. Fall back to orient-only at the current
+    // distance: a fresh canonical-plane sketch has nothing to frame, and a
+    // frame that fails to resolve must not block entering the sketch.
+    const framedPose = (() => {
+      const frame = sketchEntryFrameRef.current;
+      if (!frame) {
+        return null;
+      }
+      const normal = new THREE.Vector3(
+        sketchBasis.normal.x,
+        sketchBasis.normal.y,
+        sketchBasis.normal.z
+      );
+      if (frame.kind === 'face') {
+        const body = bodiesRef.current.find(
+          (candidate) => candidate.bodyId === frame.bodyId
+        );
+        const face = body?.topology?.faces.find(
+          (candidate) => candidate.hash === frame.faceHash
+        );
+        if (!body || !face) {
+          return null;
+        }
+        const points: THREE.Vector3[] = [];
+        const firstIndex = face.triangleStart * 3;
+        const endIndex = (face.triangleStart + face.triangleCount) * 3;
+        for (let corner = firstIndex; corner < endIndex; corner += 1) {
+          const vertexIndex = body.mesh.indices[corner];
+          if (vertexIndex === undefined) {
+            return null;
+          }
+          points.push(
+            new THREE.Vector3().fromArray(body.mesh.vertices, vertexIndex * 3)
+          );
+        }
+        // Target the triangles' area-weighted centroid, not the attachment's
+        // sourceCenter: that anchor can sit on the face's rim (it is the
+        // surface's reference point, not the centroid), which would frame
+        // off-center and over-distance.
+        const centroid = new THREE.Vector3();
+        let area = 0;
+        for (let i = 0; i + 2 < points.length; i += 3) {
+          const [a, b, c] = [points[i], points[i + 1], points[i + 2]] as [
+            THREE.Vector3,
+            THREE.Vector3,
+            THREE.Vector3
+          ];
+          const triangleArea = new THREE.Vector3()
+            .subVectors(b, a)
+            .cross(new THREE.Vector3().subVectors(c, a))
+            .length();
+          centroid.addScaledVector(
+            new THREE.Vector3().add(a).add(b).add(c).divideScalar(3),
+            triangleArea
+          );
+          area += triangleArea;
+        }
+        const center =
+          area > 1e-12
+            ? centroid.divideScalar(area)
+            : new THREE.Vector3(frame.center.x, frame.center.y, frame.center.z);
+        return computeNormalToFacePose(context.camera, points, center, normal);
+      }
+      if (frame.points.length === 0) {
+        return null;
+      }
+      const points = frame.points.map(
+        (point) => new THREE.Vector3(point.x, point.y, point.z)
+      );
+      const center = points
+        .reduce((sum, point) => sum.add(point), new THREE.Vector3())
+        .divideScalar(points.length);
+      return computeNormalToFacePose(context.camera, points, center, normal);
+    })();
     const distance = Math.max(context.camera.position.distanceTo(origin), 40);
     const pose = sketchEntryPose(sketchBasis, distance);
     context.controls.enableRotate = false;
     context.startCameraTween(
-      {
+      framedPose ?? {
         position: new THREE.Vector3(
           pose.position.x,
           pose.position.y,
@@ -7877,7 +8090,8 @@ export function ModelViewer({
       () => {
         context.applyProjection('orthographic');
         context.syncOrthographic(true);
-      }
+      },
+      { ease: sketchGlideEase, durationMs: SKETCH_GLIDE_MS }
     );
     context.requestRender();
     return () => {
@@ -7902,12 +8116,16 @@ export function ModelViewer({
       sketchReturnRef.current = null;
       if (saved) {
         context.applyProjection(saved.projection);
-        context.startCameraTween({
-          position: saved.position,
-          target: saved.target,
-          near: context.camera.near,
-          far: context.camera.far
-        });
+        context.startCameraTween(
+          {
+            position: saved.position,
+            target: saved.target,
+            near: context.camera.near,
+            far: context.camera.far
+          },
+          undefined,
+          { ease: sketchGlideEase, durationMs: SKETCH_GLIDE_MS }
+        );
       }
       context.requestRender();
     };
@@ -7994,11 +8212,28 @@ export function ModelViewer({
             transparent: material.transparent
           };
         }
+        // Eased, not flipped: the recede rides the same fade set as the
+        // other scene fades, subordinate to the entry camera glide. A body
+        // rebuilt mid-sketch re-enters here at full opacity and fades again.
         material.transparent = true;
-        material.opacity = 0.35;
+        delete material.userData.restoreOpaque;
+        if (reducedMotionRef.current === true) {
+          material.opacity = 0.35;
+        } else {
+          material.userData.targetOpacity = 0.35;
+          context.fadeIns.add(material);
+        }
       } else if (stored.sketchRecede) {
-        material.opacity = stored.sketchRecede.opacity;
-        material.transparent = stored.sketchRecede.transparent;
+        if (reducedMotionRef.current === true) {
+          material.opacity = stored.sketchRecede.opacity;
+          material.transparent = stored.sketchRecede.transparent;
+        } else {
+          material.userData.targetOpacity = stored.sketchRecede.opacity;
+          if (!stored.sketchRecede.transparent) {
+            material.userData.restoreOpaque = true;
+          }
+          context.fadeIns.add(material);
+        }
         delete stored.sketchRecede;
       }
     });
@@ -8370,11 +8605,15 @@ export function ModelViewer({
       return;
     }
     const pose = computeFitPose(context.camera, fitTargets);
-    context.startCameraTween(pose, () => {
-      if (context.projection === 'orthographic') {
-        context.syncOrthographic(true);
-      }
-    });
+    context.startCameraTween(
+      pose,
+      () => {
+        if (context.projection === 'orthographic') {
+          context.syncOrthographic(true);
+        }
+      },
+      { ease: viewJumpEase }
+    );
   }, [fitSignal]);
 
   // View requests keep the current zoom and glide the camera to the axis —
@@ -8387,17 +8626,23 @@ export function ModelViewer({
     const { camera, controls } = context;
     const distance = Math.max(camera.position.distanceTo(controls.target), 1);
     const direction = viewDirectionFor(viewRequest.view);
-    context.startCameraTween({
-      position: controls.target.clone().addScaledVector(direction, distance),
-      target: controls.target.clone(),
-      near: camera.near,
-      far: camera.far
-    });
+    context.startCameraTween(
+      {
+        position: controls.target.clone().addScaledVector(direction, distance),
+        target: controls.target.clone(),
+        near: camera.near,
+        far: camera.far
+      },
+      undefined,
+      { ease: viewJumpEase }
+    );
   }, [viewRequest]);
 
-  // A normal-to-face request uses the exact surface centre/normal for the
-  // target and orientation, then the selected face's display triangles only
-  // for framing. Body vertices are already world-space projections.
+  // A normal-to-face request uses the exact surface normal for orientation
+  // and the selected face's display triangles for the target and framing.
+  // The surface's own centre is only a fallback: it is the parametric
+  // reference point, which on a cylinder-top disc sits on the rim. Body
+  // vertices are already world-space projections.
   useEffect(() => {
     const context = contextRef.current;
     if (!context || !normalToFaceRequest) {
@@ -8431,24 +8676,27 @@ export function ModelViewer({
         new THREE.Vector3().fromArray(body.mesh.vertices, vertexIndex * 3)
       );
     }
+    const center =
+      faceTrianglesCentroid(points) ??
+      new THREE.Vector3(geometry.center.x, geometry.center.y, geometry.center.z);
     const pose = computeNormalToFacePose(
       context.camera,
       points,
-      new THREE.Vector3(
-        geometry.center.x,
-        geometry.center.y,
-        geometry.center.z
-      ),
+      center,
       new THREE.Vector3(geometry.normal.x, geometry.normal.y, geometry.normal.z)
     );
     if (!pose) {
       return;
     }
-    context.startCameraTween(pose, () => {
-      if (context.projection === 'orthographic') {
-        context.syncOrthographic(true);
-      }
-    });
+    context.startCameraTween(
+      pose,
+      () => {
+        if (context.projection === 'orthographic') {
+          context.syncOrthographic(true);
+        }
+      },
+      { ease: viewJumpEase }
+    );
   }, [bodies, normalToFaceRequest]);
 
   // The view-cube arrows swing the camera a quarter turn around the world up
@@ -8469,12 +8717,16 @@ export function ModelViewer({
       .clone()
       .sub(controls.target)
       .applyAxisAngle(new THREE.Vector3(0, 0, 1), angle);
-    context.startCameraTween({
-      position: controls.target.clone().add(offset),
-      target: controls.target.clone(),
-      near: camera.near,
-      far: camera.far
-    });
+    context.startCameraTween(
+      {
+        position: controls.target.clone().add(offset),
+        target: controls.target.clone(),
+        near: camera.near,
+        far: camera.far
+      },
+      undefined,
+      { ease: viewJumpEase }
+    );
   }, [rotateRequest]);
 
   return <div className="viewer-host" ref={hostRef} />;

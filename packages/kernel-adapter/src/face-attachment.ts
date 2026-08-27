@@ -25,7 +25,14 @@ export interface FaceAttachmentCandidate extends FaceTopologyResolutionCandidate
   readonly plane: ExactPlanarFaceAttachmentData | null;
 }
 
-/** Persisted schema snapshot. It is included in errors and never resolves a face. */
+/**
+ * Persisted schema snapshot, written when the user chose the face.
+ *
+ * It never resolves a face — the fail-closed lineage resolver alone decides
+ * that, and this is included in the errors it raises. `frame` additionally
+ * anchors the orientation of the frame derived from whichever face the
+ * resolver picked; see `deterministicFrame`.
+ */
 export interface FaceAttachmentSnapshot {
   readonly sourceArea: number;
   readonly sourceCenter: Vector3;
@@ -63,7 +70,7 @@ function snapshotDiagnostic(snapshot: FaceAttachmentSnapshot): string {
   const vector = (value: Vector3) => `(${value.x}, ${value.y}, ${value.z})`;
   return (
     `Stored snapshot: area ${snapshot.sourceArea}, center ${vector(snapshot.sourceCenter)}, ` +
-    `normal ${vector(snapshot.sourceNormal)}. The snapshot is diagnostic only and was not used as a fallback.`
+    `normal ${vector(snapshot.sourceNormal)}. The snapshot orients a resolved frame and was not used to resolve a face.`
   );
 }
 
@@ -164,17 +171,16 @@ function canonicalNormal(value: Vector3): Vector3 | null {
   return cleaned(signComponent < 0 ? scale(unit, -1) : unit);
 }
 
-function deterministicFrame(
-  center: Vector3,
-  rawNormal: Vector3
-): SketchPlaneFrame | null {
-  if (!finiteVector(center)) {
-    return null;
-  }
-  const zAxis = canonicalNormal(rawNormal);
-  if (!zAxis) {
-    return null;
-  }
+/**
+ * Below this, a seeded axis carries no usable direction and the world-axis
+ * rule takes over. It is a sine: the stored xAxis projected onto the new plane
+ * has length `sin(angle between that axis and the new normal)`, so 1e-3 is
+ * about 0.057 degrees away from parallel. Inside that band the projection is
+ * numerical noise rather than an orientation.
+ */
+const SEED_DEGENERATE_LIMIT = 1e-3;
+
+function worldHelperAxis(zAxis: Vector3): Vector3 | null {
   const worldAxes: readonly Vector3[] = [
     { x: 1, y: 0, z: 0 },
     { x: 0, y: 1, z: 0 },
@@ -185,8 +191,67 @@ function deterministicFrame(
       ? candidate
       : best
   );
-  const projected = subtract(helper, scale(zAxis, dot(helper, zAxis)));
-  const xAxis = normalized(projected);
+  return normalized(subtract(helper, scale(zAxis, dot(helper, zAxis))));
+}
+
+/**
+ * The frame of the evolved face, anchored to the frame the sketch was attached
+ * with.
+ *
+ * Deriving orientation from the normal alone cannot work, and not because the
+ * old rule was written badly: a sphere carries no continuous field of tangent
+ * directions, so every normal-only rule has a discontinuity somewhere and can
+ * only move it. The old rule had two, and ordinary parametric edits walked into
+ * both. Choosing the world axis least aligned with the normal flips which axis
+ * wins the moment two components tie — measured, a 30-degree-tilted face nudged
+ * from 44.9 to 45.1 degrees about Z rotated its sketch 81.8 degrees. And
+ * `canonicalNormal` orients by the sign of the first non-zero component, so a
+ * normal crossing that component's zero reverses, taking `yAxis` with it and
+ * mirroring the sketch. Neither raised a warning.
+ *
+ * So the fix is an anchor, and `snapshot.frame` — written when the user chose
+ * the face — is the only one available. Both degrees of freedom are seeded from
+ * it: the normal keeps the sense the stored `zAxis` had, and the in-plane axis
+ * is the stored `xAxis` projected back onto the evolved plane. The world-axis
+ * rule stays underneath for the degenerate cases and for a caller with no seed.
+ *
+ * Still deterministic, which is what the name promises and what replay needs:
+ * the result is a pure function of the resolved center, the resolved normal and
+ * the persisted frame, all of which live in the document. And it cannot drift,
+ * because every rebuild seeds from that same stored snapshot rather than from
+ * the previous rebuild's output.
+ */
+function deterministicFrame(
+  center: Vector3,
+  rawNormal: Vector3,
+  seed?: SketchPlaneFrame
+): SketchPlaneFrame | null {
+  if (!finiteVector(center)) {
+    return null;
+  }
+  const canonical = canonicalNormal(rawNormal);
+  if (!canonical) {
+    return null;
+  }
+  // Only the sense comes from the seed, never the direction: the resolved
+  // plane's own normal stays authoritative. Past the limit the face has turned
+  // roughly perpendicular to where it was attached, so the sign carries no
+  // meaning and the canonical rule keeps it.
+  const seedZ = seed ? normalized(seed.zAxis) : null;
+  const alignment = seedZ ? dot(canonical, seedZ) : 0;
+  const zAxis =
+    Math.abs(alignment) > SEED_DEGENERATE_LIMIT && alignment < 0
+      ? cleaned(scale(canonical, -1))
+      : canonical;
+
+  const seedX = seed ? normalized(seed.xAxis) : null;
+  const projectedSeed = seedX
+    ? subtract(seedX, scale(zAxis, dot(seedX, zAxis)))
+    : null;
+  const xAxis =
+    projectedSeed && magnitude(projectedSeed) >= SEED_DEGENERATE_LIMIT
+      ? normalized(projectedSeed)
+      : worldHelperAxis(zAxis);
   if (!xAxis) {
     return null;
   }
@@ -251,7 +316,8 @@ export function resolveFaceAttachment(
   }
   const frame = deterministicFrame(
     candidate.plane.center,
-    candidate.plane.normal
+    candidate.plane.normal,
+    input.snapshot.frame
   );
   if (!frame) {
     throw failure(

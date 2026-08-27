@@ -60,6 +60,14 @@ export async function installTextFontProvider(): Promise<void> {
 }
 
 /**
+ * The font library's first load fetches a separate parser chunk; on a stalled
+ * connection that dynamic import can hang forever, and it runs at the front of
+ * every geometry rebuild — a hang here used to wedge the whole worker queue.
+ * Text degrades to a per-string diagnostic instead.
+ */
+const FONT_PRELOAD_BUDGET_MS = 10_000;
+
+/**
  * Loads every face the document's text objects name, so the next analysis can
  * resolve them synchronously.
  *
@@ -83,12 +91,17 @@ export async function preloadDocumentFonts(
   if (wanted.size === 0) {
     return;
   }
-  const library = await fontLibrary();
-  await Promise.all(
-    [...wanted.values()].map(async ({ family, style }) =>
-      library.load(family, style).catch(() => undefined)
-    )
-  );
+  await Promise.race([
+    (async () => {
+      const library = await fontLibrary();
+      await Promise.all(
+        [...wanted.values()].map(async ({ family, style }) =>
+          library.load(family, style).catch(() => undefined)
+        )
+      );
+    })(),
+    new Promise((resolve) => setTimeout(resolve, FONT_PRELOAD_BUDGET_MS))
+  ]).catch(() => undefined);
 }
 
 /** Loads one face on demand — for previews in the font picker. */

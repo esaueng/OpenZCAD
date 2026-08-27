@@ -226,8 +226,7 @@ describe('face attachment resolver', () => {
     expect(error.message).toContain('Sketch "Mounted sketch"');
     expect(error.message).toContain('source feature "Base extrusion"');
     expect(error.message).toContain('attached face was deleted');
-    expect(error.message).toContain('diagnostic only');
-    expect(error.message).toContain('was not used as a fallback');
+    expect(error.message).toContain('was not used to resolve a face');
   });
 
   it('reports ambiguous lineage instead of depending on candidate order', () => {
@@ -313,6 +312,129 @@ describe('face attachment resolver', () => {
 
     expect(error.reason).toBe('deleted');
     expect(error.message).toContain('lineage no longer exists');
-    expect(error.message).toContain('was not used as a fallback');
+    expect(error.message).toContain('was not used to resolve a face');
+  });
+});
+
+/**
+ * Continuity, swept rather than sampled.
+ *
+ * The defect was not a wrong value at one angle — it was a jump, and a jump is
+ * only visible between neighbouring inputs. Two hand-picked angles would pass
+ * against a rule that jumps somewhere else, so these walk the face all the way
+ * around and assert that no single step moves the frame more than the step
+ * itself could account for.
+ */
+describe('face attachment frame continuity', () => {
+  const DEG = Math.PI / 180;
+
+  function planeCandidate(normal: Vector3): FaceAttachmentCandidate {
+    const length = vectorLength(normal);
+    const unit = {
+      x: normal.x / length,
+      y: normal.y / length,
+      z: normal.z / length
+    };
+    // The witness carries a sign-canonical normal, which the lineage inspector
+    // requires; `plane.normal` carries the raw outward normal the kernel
+    // measured, exactly as `faceAttachmentCandidatesForShape` builds them. The
+    // frame is derived from the raw one, which is why it must survive that
+    // normal's leading component crossing zero.
+    const lead = [unit.x, unit.y, unit.z].find(
+      (component) => Math.abs(component) > 1e-12
+    );
+    const sign = lead !== undefined && lead < 0 ? -1 : 1;
+    const witness: FaceWitnessV1 = {
+      ...SOURCE_WITNESS,
+      analytic: {
+        kind: 'plane',
+        normal: [
+          Math.round(unit.x * sign * 1_000_000_000),
+          Math.round(unit.y * sign * 1_000_000_000),
+          Math.round(unit.z * sign * 1_000_000_000)
+        ],
+        offset: 10_000_000
+      }
+    };
+    return candidate(
+      witness,
+      { center: { x: 5, y: 5, z: 10 }, normal: unit },
+      { lineageSource: 'derived' }
+    );
+  }
+
+  const frameAt = (normal: Vector3): SketchPlaneFrame =>
+    resolveFaceAttachment(input([planeCandidate(normal)]));
+
+  const angleBetween = (left: Vector3, right: Vector3): number =>
+    Math.acos(Math.min(1, Math.max(-1, dot(left, right)))) / DEG;
+
+  const largestStep = (
+    normalAt: (t: number) => Vector3,
+    from: number,
+    to: number,
+    steps: number
+  ): { degrees: number; at: number } => {
+    let previous = frameAt(normalAt(from));
+    let worst = { degrees: 0, at: from };
+    for (let index = 1; index <= steps; index += 1) {
+      const t = from + ((to - from) * index) / steps;
+      const current = frameAt(normalAt(t));
+      const moved = Math.max(
+        angleBetween(current.xAxis, previous.xAxis),
+        angleBetween(current.yAxis, previous.yAxis),
+        angleBetween(current.zAxis, previous.zAxis)
+      );
+      if (moved > worst.degrees) {
+        worst = { degrees: moved, at: t };
+      }
+      previous = current;
+    }
+    return worst;
+  };
+
+  it('does not jump when a tilted face turns past the world-axis tie', () => {
+    // A 30-degree-tilted face rotated about Z. At 45 degrees |nx| equals |ny|,
+    // and the old rule's "least aligned world axis" flipped there: measured,
+    // 44.9 to 45.1 degrees rotated the sketch 81.8 degrees. The sweep steps by
+    // 0.18 degrees, so anything above ~0.5 is a jump rather than the sweep.
+    const tilted = (t: number): Vector3 => ({
+      x: 0.5 * Math.sin(t * DEG),
+      y: -0.5 * Math.cos(t * DEG),
+      z: Math.cos(30 * DEG)
+    });
+    const worst = largestStep(tilted, 0, 360, 2000);
+    expect(worst.degrees).toBeLessThan(0.5);
+  });
+
+  it('does not mirror when the normal crosses a canonicalization boundary', () => {
+    // `canonicalNormal` orients by the sign of the first non-zero component,
+    // so a normal whose x passes through zero used to reverse — taking yAxis
+    // with it and mirroring every sketch on the face. Nothing warned.
+    const crossing = (t: number): Vector3 => ({
+      x: Math.sin(t * DEG),
+      y: 0.6,
+      z: 0.8
+    });
+    const worst = largestStep(crossing, 10, -10, 2000);
+    expect(worst.degrees).toBeLessThan(0.5);
+  });
+
+  it('keeps the attached orientation rather than snapping to a world axis', () => {
+    // The stored frame is x=+X on a +Z face. Tilting the face slightly must
+    // carry that orientation along, not reset it to whichever world axis wins.
+    const tilted = frameAt({ x: 0.05, y: 0, z: 1 });
+    expect(angleBetween(tilted.xAxis, SNAPSHOT_FRAME.xAxis)).toBeLessThan(5);
+    expect(angleBetween(tilted.zAxis, SNAPSHOT_FRAME.zAxis)).toBeLessThan(5);
+    expectFrame(tilted);
+  });
+
+  it('still derives a usable frame when the seed cannot span the new plane', () => {
+    // The face has turned to face along the stored xAxis, so projecting that
+    // axis onto the new plane is numerical noise. The world-axis rule takes
+    // over and the frame stays orthonormal and right-handed.
+    const turned = frameAt({ x: 1, y: 0, z: 0 });
+    expectFrame(turned);
+    expect(dot(turned.zAxis, { x: 1, y: 0, z: 0 })).toBeCloseTo(1, 9);
   });
 });

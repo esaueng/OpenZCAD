@@ -393,6 +393,161 @@ export async function shiftSelectTwoVisibleBoxEdges(page: Page) {
   ).toBeVisible();
 }
 
+/** A pointer-down anchor for a horizontal drag across bare viewport canvas. */
+export interface BareCanvasDrag {
+  x: number;
+  y: number;
+}
+
+/** Vertical room a chosen row keeps on both sides, so chrome may grow a little. */
+const BARE_CANVAS_CLEARANCE_PX = 24;
+
+/**
+ * Anchors for horizontal drags that land on bare viewport canvas.
+ *
+ * Sketch mode floats chrome over the canvas, and the tallest of it — the
+ * sketch palette — is sized by its own text, so a gesture placed as a plain
+ * fraction of the canvas box can slide underneath after a change as unrelated
+ * as the type scale. `--fs-mini` at 11px instead of 10.5px grows the palette by
+ * three pixels, which was enough to swallow the 0.96px of clearance one such
+ * gesture had. Measuring what is bare keeps the gesture following the chrome
+ * instead of racing it, and makes an impossible request fail saying what
+ * covered the canvas.
+ *
+ * `dragX` is one drag's pointer travel. Each anchor also keeps `dragX` of bare
+ * canvas to its left and a full `2 * dragX` from its neighbours, so a
+ * centre-and-radius circle is drawn whole and two of them stay disjoint
+ * profiles.
+ *
+ * Call this only once the chrome under test has settled — entering sketch mode
+ * floats the palette, so wait for that palette before measuring around it.
+ */
+export async function bareCanvasDrags(
+  page: Page,
+  { count, dragX }: { count: number; dragX: number }
+): Promise<BareCanvasDrag[]> {
+  const measured = await page.evaluate(
+    ({ count: wanted, dragX: travel, step }) => {
+      const canvas = document.querySelector('.viewer-host canvas');
+      if (!canvas) return { error: 'viewer canvas not laid out' };
+      const box = canvas.getBoundingClientRect();
+      const xs: number[] = [];
+      for (let x = box.left + step; x <= box.right - step; x += step)
+        xs.push(x);
+      const ys: number[] = [];
+      for (let y = box.top + step; y <= box.bottom - step; y += step)
+        ys.push(y);
+      // Whatever would receive the gesture. Anything painted above the canvas
+      // reads as covered; a `pointer-events: none` overlay reads as bare,
+      // which is what the gesture sees too.
+      const bare = ys.map((y) =>
+        xs.map((x) => document.elementFromPoint(x, y) === canvas)
+      );
+      const clear = (row: boolean[], from: number, length: number) => {
+        for (let i = from; i < from + length; i += 1) {
+          if (!row[i]) return false;
+        }
+        return true;
+      };
+
+      // Every drag needs its own 2 * travel of room: the pointer travels right
+      // from the anchor, and the circle it draws reaches as far back left.
+      const span = Math.ceil((2 * travel * wanted) / step);
+      let choice: {
+        row: number;
+        start: number;
+        length: number;
+        clearance: number;
+      } | null = null;
+      for (let row = 0; row < bare.length; row += 1) {
+        // The widest run on this row that is wide enough for every drag.
+        let best: { start: number; length: number } | null = null;
+        let start = -1;
+        for (let i = 0; i <= xs.length; i += 1) {
+          if (bare[row]?.[i]) {
+            if (start < 0) start = i;
+            continue;
+          }
+          const length = i - start;
+          if (start >= 0 && length >= span && (!best || length > best.length)) {
+            best = { start, length };
+          }
+          start = -1;
+        }
+        if (!best) continue;
+        // Margin is the whole point, so keep the row with the most bare rows
+        // above and below rather than the first row that happens to fit.
+        let above = 0;
+        while (
+          row - above > 0 &&
+          clear(bare[row - above - 1] ?? [], best.start, best.length)
+        )
+          above += 1;
+        let below = 0;
+        while (
+          row + below < bare.length - 1 &&
+          clear(bare[row + below + 1] ?? [], best.start, best.length)
+        )
+          below += 1;
+        const clearance = Math.min(above, below) * step;
+        if (!choice || clearance > choice.clearance) {
+          choice = { row, start: best.start, length: best.length, clearance };
+        }
+      }
+
+      if (!choice) {
+        const covering = Array.from(document.body.querySelectorAll('*'))
+          .filter((element) => {
+            if (element === canvas || element.contains(canvas)) return false;
+            if (getComputedStyle(element).position === 'static') return false;
+            const rect = element.getBoundingClientRect();
+            return (
+              rect.width > 0 &&
+              rect.height > 0 &&
+              rect.right > box.left &&
+              rect.left < box.right &&
+              rect.bottom > box.top &&
+              rect.top < box.bottom
+            );
+          })
+          .map(
+            (element) =>
+              `${element.tagName.toLowerCase()}${
+                typeof element.className === 'string' && element.className
+                  ? `.${element.className.trim().split(/\s+/).join('.')}`
+                  : ''
+              }`
+          );
+        return {
+          error: `no bare row of the viewport canvas fits ${wanted} drag(s) of ${travel}px; chrome over the canvas: ${covering.join(', ') || 'none'}`
+        };
+      }
+
+      const left = box.left + step + choice.start * step;
+      const slot = (choice.length * step) / wanted;
+      const y = box.top + step + choice.row * step;
+      return {
+        clearance: choice.clearance,
+        drags: Array.from({ length: wanted }, (_unused, index) => ({
+          x: left + slot * (index + 0.5),
+          y
+        }))
+      };
+    },
+    { count, dragX, step: 8 }
+  );
+  if ('error' in measured) {
+    throw new Error(measured.error);
+  }
+  // A row only a pixel clear of the chrome is the failure this helper exists to
+  // prevent, so say so here rather than in whatever the gesture does next.
+  expect(
+    measured.clearance,
+    'bare viewport canvas row is too close to floating chrome for a stable gesture'
+  ).toBeGreaterThanOrEqual(BARE_CANVAS_CLEARANCE_PX);
+  return measured.drags;
+}
+
 /**
  * Waits until the given surfaces have finished their entrance motion.
  *

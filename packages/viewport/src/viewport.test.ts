@@ -13,6 +13,7 @@ import {
   configureEdgeRaycasting,
   computeNormalToFacePose,
   createExtrudePreviewGeometry,
+  faceTrianglesCentroid,
   dimensionLabelLayout,
   directEditDirectionFromNormal,
   EDGE_IDLE_WIDTH,
@@ -23,8 +24,12 @@ import {
   prioritizeVisibleEdgeHit,
   MAX_TWEEN_MS,
   MIN_TWEEN_MS,
+  easeInOutCubic,
   orbitPivotForPoint,
+  sketchGlideEase,
+  trapezoidEase,
   tweenDurationFor,
+  viewJumpEase,
   tweenOrientationFor,
   projectToScreen,
   RightClickGestureTracker,
@@ -613,6 +618,60 @@ describe('normal-to-face camera framing', () => {
   });
 });
 
+describe('face triangle centroid', () => {
+  it('recovers a disc centre from a rim-anchored triangle fan', () => {
+    // A cylinder-top disc tessellates as a fan; its surface reference point
+    // sits on the rim, which is exactly what the centroid must not return.
+    const discCenter = new THREE.Vector3(10, -4, 28);
+    const radius = 25;
+    const corners: THREE.Vector3[] = [];
+    const segments = 48;
+    for (let i = 0; i < segments; i += 1) {
+      const a0 = (i / segments) * Math.PI * 2;
+      const a1 = ((i + 1) / segments) * Math.PI * 2;
+      corners.push(
+        discCenter.clone(),
+        discCenter
+          .clone()
+          .add(new THREE.Vector3(Math.cos(a0) * radius, Math.sin(a0) * radius, 0)),
+        discCenter
+          .clone()
+          .add(new THREE.Vector3(Math.cos(a1) * radius, Math.sin(a1) * radius, 0))
+      );
+    }
+    const centroid = faceTrianglesCentroid(corners);
+    expect(centroid).not.toBeNull();
+    expect(centroid!.distanceTo(discCenter)).toBeLessThan(1e-9);
+  });
+
+  it('weights by triangle area, not by corner count', () => {
+    // Two coplanar triangles of very different area: a per-corner average
+    // would land midway, the area weighting stays near the big one.
+    const corners = [
+      new THREE.Vector3(0, 0, 0),
+      new THREE.Vector3(100, 0, 0),
+      new THREE.Vector3(0, 100, 0),
+      new THREE.Vector3(1000, 0, 0),
+      new THREE.Vector3(1001, 0, 0),
+      new THREE.Vector3(1000, 1, 0)
+    ];
+    const centroid = faceTrianglesCentroid(corners);
+    expect(centroid).not.toBeNull();
+    expect(centroid!.x).toBeLessThan(34);
+    expect(centroid!.y).toBeGreaterThan(33);
+  });
+
+  it('fails closed for empty or degenerate triangles', () => {
+    expect(faceTrianglesCentroid([])).toBeNull();
+    const collinear = [
+      new THREE.Vector3(0, 0, 0),
+      new THREE.Vector3(1, 0, 0),
+      new THREE.Vector3(2, 0, 0)
+    ];
+    expect(faceTrianglesCentroid(collinear)).toBeNull();
+  });
+});
+
 describe('the move gizmo is built to be picked and focused', () => {
   const parts = buildMoveGizmoParts(10);
   const tagged = (key: string) =>
@@ -813,5 +872,61 @@ describe('glide duration follows how far the camera travels', () => {
     const degenerate = tweenDurationFor(focus, v(1, 0, 0), focus, focus);
     expect(degenerate).toBeGreaterThanOrEqual(MIN_TWEEN_MS);
     expect(degenerate).toBeLessThanOrEqual(MAX_TWEEN_MS);
+  });
+});
+
+describe('camera glide easing profiles', () => {
+  const velocity = (ease: (t: number) => number, t: number, h = 1e-4) =>
+    (ease(t + h) - ease(t - h)) / (2 * h);
+
+  it.each([
+    ['easeInOutCubic', easeInOutCubic],
+    ['viewJumpEase', viewJumpEase],
+    ['sketchGlideEase', sketchGlideEase]
+  ])('%s spans exactly 0 to 1 and never moves backward', (_name, ease) => {
+    expect(ease(0)).toBeCloseTo(0, 9);
+    expect(ease(1)).toBeCloseTo(1, 9);
+    let previous = 0;
+    for (let i = 1; i <= 100; i += 1) {
+      const value = ease(i / 100);
+      expect(value).toBeGreaterThanOrEqual(previous);
+      previous = value;
+    }
+  });
+
+  it('viewJumpEase leaves at full speed and only decelerates', () => {
+    // "Thrown" toward the destination: peak velocity at the start.
+    expect(velocity(viewJumpEase, 0.01)).toBeGreaterThan(
+      velocity(viewJumpEase, 0.5)
+    );
+    expect(velocity(viewJumpEase, 0.5)).toBeGreaterThan(
+      velocity(viewJumpEase, 0.95)
+    );
+  });
+
+  it('trapezoidEase cruises at constant speed between the ramps', () => {
+    const ease = trapezoidEase(0.2, 0.3);
+    const cruiseA = velocity(ease, 0.3);
+    const cruiseB = velocity(ease, 0.6);
+    expect(cruiseB).toBeCloseTo(cruiseA, 6);
+    // The ramps are slower than the cruise on both ends.
+    expect(velocity(ease, 0.05)).toBeLessThan(cruiseA);
+    expect(velocity(ease, 0.95)).toBeLessThan(cruiseA);
+  });
+
+  it('trapezoidEase is continuous where the ramps meet the cruise', () => {
+    const ease = trapezoidEase(0.125, 0.3);
+    for (const knot of [0.125, 0.7]) {
+      expect(velocity(ease, knot - 1e-5, 1e-6)).toBeCloseTo(
+        velocity(ease, knot + 1e-5, 1e-6),
+        3
+      );
+    }
+  });
+
+  it('sketchGlideEase lands softly: the last stretch decelerates', () => {
+    expect(velocity(sketchGlideEase, 0.99)).toBeLessThan(
+      velocity(sketchGlideEase, 0.5) * 0.2
+    );
   });
 });

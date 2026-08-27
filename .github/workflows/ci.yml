@@ -17,6 +17,55 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      # The geometry kernel is a production dependency on a moving branch
+      # (`github:esaueng/remus#main`), so ANY lockfile regeneration re-resolves
+      # it. That is not hypothetical: `ca0f83bf` ("bump @cloudflare/vite-plugin")
+      # moved the kernel two SHAs, and its PR body mentions neither "remus" nor
+      # "kernel". `update-remus.yml` refuses to open a PR whose diff touches
+      # anything but the lockfile precisely so a kernel bump gets its own
+      # parity-tested review; a dependency bump that carries one along bypasses
+      # all of it. A `dependabot.yml` ignore entry does not help — Dependabot
+      # never proposes this update, it falls out of re-resolution.
+      - name: Refuse an unannounced geometry kernel bump
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_REF: ${{ github.base_ref }}
+          HEAD_REF: ${{ github.head_ref }}
+        run: |
+          # One commit of the base branch is all the comparison needs; the
+          # default checkout is shallow and does not carry it.
+          git fetch --no-tags --depth=1 origin "$BASE_REF"
+          sha_of() {
+            git show "$1:pnpm-lock.yaml" 2>/dev/null \
+              | sed -n 's|.*codeload\.github\.com/esaueng/remus/tar\.gz/\([0-9a-f]\{40\}\).*|\1|p' \
+              | sort -u
+          }
+          base="$(sha_of FETCH_HEAD)"
+          head="$(sha_of HEAD)"
+          if [[ -z "$head" ]]; then
+            echo "::error title=Kernel pin missing::No remus codeload SHA found in pnpm-lock.yaml."
+            exit 1
+          fi
+          if [[ "$(printf '%s\n' "$head" | wc -l)" -ne 1 ]]; then
+            echo "::error title=Split kernel pin::pnpm-lock.yaml resolves more than one remus SHA:"
+            printf '%s\n' "$head"
+            exit 1
+          fi
+          # An empty base is the extraction breaking, not an absent kernel:
+          # every branch this can run against has a pin. Skipping quietly here
+          # would leave a guard that reads nothing and passes forever.
+          if [[ -z "$base" ]]; then
+            echo "::error title=Kernel baseline missing::Found no remus codeload SHA in $BASE_REF's pnpm-lock.yaml. If the lockfile format or the kernel host changed, update this guard rather than leaving it comparing nothing."
+            exit 1
+          fi
+          if [[ "$base" == "$head" ]]; then
+            echo "Kernel pin unchanged at $head."
+          elif [[ "$HEAD_REF" == automation/remus-* ]]; then
+            echo "Kernel moved $base -> $head on the updater branch, as intended."
+          else
+            echo "::error title=Unannounced kernel bump::pnpm-lock.yaml moves the Remus kernel $base -> $head on a branch that is not automation/remus-*. Any lockfile regeneration re-resolves the #main specifier; land kernel changes through update-remus.yml so they get their own parity-tested review."
+            exit 1
+          fi
       - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6
         with:
           version: 10.8.0

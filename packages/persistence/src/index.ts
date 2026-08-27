@@ -853,6 +853,13 @@ export class InMemoryPersistenceService implements PersistenceService {
     if (!link || !document) {
       return null;
     }
+    // Trashing a project withdraws its links, here as in D1. Restoring it
+    // brings them back, so this is a predicate rather than a revocation.
+    // (The owner's sharing preference lives in `user_settings`, which this
+    // service has no analog for; the D1 path checks it as well.)
+    if (this.organizationOf(link.projectId).status === 'deleted') {
+      return null;
+    }
     return {
       projectId: link.projectId,
       name: document.name,

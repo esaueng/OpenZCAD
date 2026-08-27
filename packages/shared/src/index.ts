@@ -12,8 +12,9 @@ export type RevisionId = Brand<string, 'RevisionId'>;
 export type UploadSessionId = Brand<string, 'UploadSessionId'>;
 export type AssetId = Brand<string, 'AssetId'>;
 export type SketchConstraintId = Brand<string, 'SketchConstraintId'>;
+export type ShaprImportId = Brand<string, 'ShaprImportId'>;
 
-export const PROJECT_DOCUMENT_SCHEMA_VERSION = 12 as const;
+export const PROJECT_DOCUMENT_SCHEMA_VERSION = 13 as const;
 export type ProjectDocumentSchemaVersion =
   typeof PROJECT_DOCUMENT_SCHEMA_VERSION;
 
@@ -173,6 +174,9 @@ export interface ParametricPlane {
   normal: ParametricVector3;
 }
 
+export type FaceDistanceMoveMode =
+  'symmetric' | 'one-sided-first' | 'one-sided-second';
+
 /**
  * History-backed edits applied directly to exact B-Rep topology. The source
  * dimension is a geometric fingerprint: rebuilding fails closed if the face
@@ -267,6 +271,20 @@ export type DirectEditOperation =
       offset: ParamValue;
     }
   | {
+      kind: 'set-face-distance';
+      faceHash: number;
+      faceReference?: FaceTopologyReferenceV5;
+      oppositeFaceHash: number;
+      oppositeFaceReference?: FaceTopologyReferenceV5;
+      /** Exact perpendicular separation recorded when the binding is made. */
+      sourceDistance: number;
+      /** The checkpointed changed-value proof fixes which face group moves. */
+      moveMode: FaceDistanceMoveMode;
+      distance: ParamValue;
+      /** Auto-parameterization may deliberately begin as an exact no-op. */
+      parameterBinding?: true;
+    }
+  | {
       kind: 'resize-cylindrical-face';
       faceHash: number;
       faceReference?: FaceTopologyReferenceV5;
@@ -290,6 +308,12 @@ export type DirectEditOperation =
       recordedAxis: Vector3;
       /** Zero removes the analytic blend band and restores its sharp edge. */
       newRadius: ParamValue;
+      /**
+       * An auto-parameterization binding may start at the recorded radius.
+       * The exact adapter still re-proves the seed and complete region, then
+       * leaves the source solid unchanged until the parameter moves.
+       */
+      parameterBinding?: true;
     };
 
 export interface BaseNode {
@@ -1104,8 +1128,15 @@ export interface FaceGeometry {
   featureType?: 'through-hole' | 'blend';
   /** Rolling-ball radius for a recognized blend surface. */
   blendRadius?: number;
+  /**
+   * Rebuild-local identity of the exact tangency-connected blend region.
+   * Kernel handles are intentionally not persisted beyond derived state.
+   */
+  blendRegionKey?: string;
+  /** Number of exact analytic faces in {@link blendRegionKey}. */
+  blendRegionFaceCount?: number;
   /** Dimension currently supported by a deterministic direct edit. */
-  editableDimension?: 'diameter';
+  editableDimension?: 'diameter' | 'blendRadius';
 }
 
 export interface EdgeTopology {
@@ -1207,6 +1238,28 @@ export interface EdgeTopology {
 }
 
 /**
+ * An exact opposing planar pair whose stored move mode passed a non-zero
+ * checkpointed rebuild before publication.
+ */
+export interface OpposingPlanarFacePair {
+  faceAHash: number;
+  faceAReference: FaceTopologyReferenceV5;
+  faceBHash: number;
+  faceBReference: FaceTopologyReferenceV5;
+  distance: number;
+  overlapArea: number;
+  faceAreaA: number;
+  faceAreaB: number;
+  /** Outward unit normal of face A. */
+  normal: Vector3;
+  faceABordersBlend: boolean;
+  faceBBordersBlend: boolean;
+  moveMode: FaceDistanceMoveMode;
+  /** The real changed distance accepted by the exact proof rebuild. */
+  provenChangedDistance: number;
+}
+
+/**
  * Exact geometry for one edge's underlying curve.
  *
  * Only `type` is always present. Analytic data is published for circles alone,
@@ -1266,6 +1319,8 @@ export interface BodyTopology {
   edges: EdgeTopology[];
   /** Non-overlapping exact proofs created while imported topology is live. */
   recognizedImportedFeatures?: RecognizedImportedFeature[];
+  /** Bounded imported-body dimensions with a successful changed-value proof. */
+  opposingPlanarFacePairs?: OpposingPlanarFacePair[];
   lineageDiagnostics?: TopologyLineageDiagnostic[];
 }
 
@@ -1504,6 +1559,86 @@ export interface ProjectAssetRef {
   createdAt: string;
 }
 
+export type ShaprMigrationOperationKind =
+  | 'import'
+  | 'sketch'
+  | 'transform'
+  | 'delete'
+  | 'midplane'
+  | 'split'
+  | 'offset-face'
+  | 'union'
+  | 'extrude'
+  | 'unknown';
+
+export type ShaprMigrationOperationStatus =
+  'proven' | 'candidate' | 'unsupported' | 'ambiguous';
+
+/**
+ * Sanitized, non-operative evidence recovered from a Shapr3D project. Raw
+ * database rows, Parasolid data, thumbnails, paths, and remote identifiers are
+ * deliberately excluded from the canonical document.
+ */
+export interface ShaprMigrationOperationRecord {
+  sourceNodeId: number;
+  name: string;
+  kind: ShaprMigrationOperationKind;
+  status: ShaprMigrationOperationStatus;
+  numericCandidates: number[];
+  diagnostic: string;
+}
+
+export interface ShaprMigrationDiagnostic {
+  severity: 'info' | 'warning' | 'error';
+  code: string;
+  message: string;
+}
+
+export interface ShaprMigrationRecord {
+  importId: ShaprImportId;
+  representation: 'openzcad-shapr-migration';
+  version: 1;
+  sourceName: string;
+  sourceChecksumSha256: string;
+  companionStepName: string;
+  companionStepChecksumSha256: string;
+  createdAt: string;
+  schema: {
+    workspaceSchemaVersion: number;
+    schemaVersion: number;
+    historyVersion: number;
+    projectVersion: number;
+  };
+  units: {
+    source: 'metre-candidate';
+    evidence: 'inferred';
+    documentScaleCandidate: number;
+  };
+  exactGeometry: {
+    featureId: FeatureId;
+    bodyId: BodyId;
+    stepChecksumSha256: string;
+    validation: 'exact-kernel-preflight';
+  };
+  summary: {
+    historyNodeCount: number;
+    sketchCount: number;
+    curveCount: number;
+    constraintCount: number;
+    importedBodyCount: number;
+    importedPrototypeCount: number;
+    revisionBlockCount: number;
+    revisionDeltaCount: number;
+  };
+  operations: ShaprMigrationOperationRecord[];
+  diagnostics: ShaprMigrationDiagnostic[];
+  semanticReplay: {
+    status: 'not-applied';
+    reason: string;
+  };
+  privateDataOmitted: true;
+}
+
 /**
  * Kernel-proven v5 references for one legacy hash-only edge modifier. A
  * closed-edge hash embeds its length, so the only moment a hash-only
@@ -1548,6 +1683,8 @@ export interface ProjectDocument {
   checkpoints: ProjectCheckpoint[];
   commandLog: SerializedCommand[];
   assets: Record<AssetId, ProjectAssetRef>;
+  shaprImports: Record<ShaprImportId, ShaprMigrationRecord>;
+  shaprImportOrder: ShaprImportId[];
   derived: DerivedState;
   /**
    * Set once, when this project was branched off a save state of another one.
@@ -2542,6 +2679,8 @@ export const toUserId = (value: string): UserId => value as UserId;
 export const toAssetId = (value: string): AssetId => value as AssetId;
 export const toSketchConstraintId = (value: string): SketchConstraintId =>
   value as SketchConstraintId;
+export const toShaprImportId = (value: string): ShaprImportId =>
+  value as ShaprImportId;
 
 export const DEFAULT_BODY_COLOR = '#e1a948';
 

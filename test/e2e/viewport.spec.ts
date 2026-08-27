@@ -1,6 +1,7 @@
 import {
   test,
   expect,
+  bareCanvasDrags,
   expectBodyCount,
   stubApi,
   WORKSPACE_SESSION_STORAGE_KEY
@@ -151,6 +152,56 @@ test('P toggles the camera projection', async ({ page }) => {
   );
   await orthoButton.click();
   await expect(orthoButton).toHaveAttribute('aria-pressed', 'false');
+});
+
+test('the viewport scale indicator tracks zoom in document units', async ({
+  page
+}) => {
+  await stubApi(page);
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('Scale Indicator Part');
+  await page.getByRole('button', { name: 'Create project' }).click();
+
+  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
+  await page
+    .getByRole('region', { name: 'Feature inspector' })
+    .getByRole('button', { name: /^Create/ })
+    .click();
+  await expectBodyCount(page, 1);
+
+  const indicator = page.getByTestId('viewport-scale-indicator');
+  const rule = page.getByTestId('viewport-scale-rule');
+  await expect(indicator).toBeVisible({ timeout: 15_000 });
+  await expect(indicator).toHaveAttribute(
+    'aria-label',
+    /^Viewport scale at the camera focus plane: .+ mm$/
+  );
+
+  const initialLabel = await indicator.textContent();
+  const initialWidth = await rule.evaluate(
+    (element) => element.getBoundingClientRect().width
+  );
+  expect(initialWidth).toBeGreaterThanOrEqual(80);
+  expect(initialWidth).toBeLessThanOrEqual(200.1);
+
+  const canvas = page.locator('.viewer-host canvas');
+  const bounds = await canvas.boundingBox();
+  expect(bounds).not.toBeNull();
+  await page.mouse.move(
+    bounds!.x + bounds!.width / 2,
+    bounds!.y + bounds!.height / 2
+  );
+  for (let step = 0; step < 8; step += 1) {
+    await page.mouse.wheel(0, -120);
+    await page.waitForTimeout(80);
+  }
+
+  await expect.poll(() => indicator.textContent()).not.toBe(initialLabel);
+  const zoomedWidth = await rule.evaluate(
+    (element) => element.getBoundingClientRect().width
+  );
+  expect(zoomedWidth).toBeGreaterThanOrEqual(80);
+  expect(zoomedWidth).toBeLessThanOrEqual(200.1);
 });
 
 test('Space centres and faces an exact planar selection head-on', async ({
@@ -1618,35 +1669,42 @@ test('view keys still work while a profile pick is waiting for a click', async (
   await page.goto('/');
   await page.getByLabel('Project name').fill('Profile Keys');
   await page.getByRole('button', { name: 'Create project' }).click();
-  const canvas = page.locator('.viewer-host canvas');
-
   await page.getByRole('button', { name: /^Sketch \(S\)/ }).click();
   await page.getByRole('button', { name: 'Top (XY)' }).click();
   const sketchTools = page.getByRole('toolbar', { name: 'Sketch tools' });
-  const bounds = await canvas.boundingBox();
-  if (!bounds) {
-    throw new Error('viewer canvas not laid out');
-  }
-  const centre = {
-    x: bounds.x + bounds.width * 0.55,
-    y: bounds.y + bounds.height * 0.55
-  };
   // Two profiles, so the pick genuinely waits for a click: a lone profile is
-  // selected automatically and the mode moves straight past the state under test.
-  for (const dx of [-140, 140]) {
-    await sketchTools.getByRole('button', { name: /^Circle/ }).click();
-    await page.mouse.move(centre.x + dx, centre.y);
+  // selected automatically and the mode moves straight past the state under
+  // test. Both have to be drawn on bare canvas, and sketch mode floats the
+  // palette over the right of it — offsetting from the canvas centre left the
+  // second drag ending 15.6px short of the palette's left edge, so measure
+  // what is bare instead.
+  await expect(page.locator('.sketch-palette')).toBeVisible();
+  const centres = await bareCanvasDrags(page, { count: 2, dragX: 55 });
+  const circleTool = sketchTools.getByRole('button', { name: /^Circle/ });
+  const gridReadout = page.locator('.sketch-grid-indicator');
+  for (const centre of centres) {
+    await circleTool.click();
+    // The rail button is React state and flips first; the viewport only owns
+    // the tool once its render loop has the sketch rig, and the adaptive grid
+    // readout is written from that same pass. Dragging before it, the
+    // pointerdown reaches a viewport with no sketch plane to project onto and
+    // the whole gesture is discarded. The readout is only written while the
+    // grid is on, so this has to stay ahead of the `g` press below.
+    await expect(circleTool).toHaveAttribute('aria-pressed', 'true');
+    await expect(gridReadout).toBeVisible();
+    await expect(gridReadout).not.toHaveText('');
+    await page.mouse.move(centre.x, centre.y);
     await page.mouse.down();
-    await page.mouse.move(centre.x + dx + 55, centre.y, { steps: 6 });
+    await page.mouse.move(centre.x + 55, centre.y, { steps: 6 });
     await page.mouse.up();
   }
 
-  // Profile picking asks for a click on a region it has not framed, so the
-  // navigation keys are exactly what a stranded user reaches for. They used to
-  // be swallowed wholesale by the mode.
+  // Extrude arms every valid profile on the drag-arrow rig. The display and
+  // grid keys must keep working while that armed state owns the screen — they
+  // used to be swallowed wholesale by the old profile-picking mode.
   await sketchTools.getByRole('button', { name: 'Extrude' }).click();
   await expect(page.getByRole('contentinfo')).toContainText(
-    'valid profiles available'
+    'profiles selected · drag the arrow'
   );
 
   const displayButton = page.getByRole('button', {
@@ -1667,18 +1725,17 @@ test('view keys still work while a profile pick is waiting for a click', async (
     gridBefore ?? ''
   );
 
-  // …and the pick is still live, not cancelled by the navigation. The status
-  // message itself is now the display-mode one, which is the point; the mode's
-  // standing hint is what says the pick survived.
+  // …and the armed profile selection survives the navigation keys: the
+  // standing hint still offers the drag-arrow extrude.
   await expect(page.getByRole('contentinfo')).toContainText(
-    'Click a shaded closed profile'
+    'Drag the arrow off the plane to extrude the profile'
   );
 
-  // A letter that would launch another tool stays reserved.
-  await page.keyboard.press('b');
-  await expect(
-    page.getByRole('region', { name: 'Feature inspector' })
-  ).toHaveCount(0);
+  // Escape clears the armed selection, exactly as the hint promises.
+  await page.keyboard.press('Escape');
+  await expect(page.getByRole('contentinfo')).not.toContainText(
+    'Drag the arrow off the plane to extrude the profile'
+  );
 });
 
 test('section view cycles planes, offers an offset slider, and cuts nothing from the model', async ({

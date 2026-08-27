@@ -20,6 +20,7 @@ import type {
   PatternKind,
   ParametricPlane,
   ParamValue,
+  OpposingPlanarFacePair,
   PrimitiveKind,
   ProjectDocument,
   RecognizedImportedFeature,
@@ -103,10 +104,7 @@ type RequiredFaceReference<T extends DirectEditOperation> = Omit<
   faceReference: FaceTopologyReferenceV5;
 };
 
-type AssistantDirectEditOperation = Exclude<
-  DirectEditOperation,
-  { kind: 'resize-blend' }
->;
+type AssistantDirectEditOperation = DirectEditOperation;
 
 export type CadDirectEditOperation =
   AssistantDirectEditOperation extends infer Operation
@@ -339,6 +337,9 @@ export interface CadDigestFaceSnapshot {
   axisStart?: Vector3;
   axisEnd?: Vector3;
   axialLength?: number;
+  torusCenter?: Vector3;
+  axis?: Vector3;
+  blendRadius?: number;
   featureType?: FaceGeometry['featureType'];
 }
 
@@ -358,6 +359,8 @@ export interface CadDigestBodyTopology {
   edgeInventoryComplete: boolean;
   /** Exact bounded proofs available for imported-feature direct edits. */
   recognizedImportedFeatures?: RecognizedImportedFeature[];
+  /** Planar dimensions that already passed a changed-value exact rebuild. */
+  opposingPlanarFacePairs?: OpposingPlanarFacePair[];
   faces: Array<{
     topologyId: string;
     hash: number;
@@ -652,6 +655,13 @@ function compactFace(
         ...(geometry.axialLength !== undefined
           ? { axialLength: geometry.axialLength }
           : {}),
+        ...(geometry.torusCenter
+          ? { torusCenter: { ...geometry.torusCenter } }
+          : {}),
+        ...(geometry.axis ? { axis: { ...geometry.axis } } : {}),
+        ...(geometry.blendRadius !== undefined
+          ? { blendRadius: geometry.blendRadius }
+          : {}),
         ...(geometry.featureType ? { featureType: geometry.featureType } : {})
       }
     : undefined;
@@ -793,7 +803,17 @@ export function createCadDocumentDigest(
     const edges = body.topology.edges
       .slice(0, edgeLimit)
       .map((edge) => compactEdge(edge, primitiveKind));
-    const faces = body.topology.faces.slice(0, faceLimit).map(compactFace);
+    const provenPairHashes = new Set(
+      (body.topology.opposingPlanarFacePairs ?? []).flatMap((pair) => [
+        pair.faceAHash,
+        pair.faceBHash
+      ])
+    );
+    const prioritizedFaces = [
+      ...body.topology.faces.filter((face) => provenPairHashes.has(face.hash)),
+      ...body.topology.faces.filter((face) => !provenPairHashes.has(face.hash))
+    ];
+    const faces = prioritizedFaces.slice(0, faceLimit).map(compactFace);
     remainingEdges -= edges.length;
     remainingFaces -= faces.length;
     topologyByBodyId.set(bodyId, {
@@ -806,6 +826,15 @@ export function createCadDocumentDigest(
         ? {
             recognizedImportedFeatures:
               body.topology.recognizedImportedFeatures.slice(
+                0,
+                MAX_DIGEST_TOPOLOGY_PER_BODY
+              )
+          }
+        : {}),
+      ...(body.topology.opposingPlanarFacePairs
+        ? {
+            opposingPlanarFacePairs:
+              body.topology.opposingPlanarFacePairs.slice(
                 0,
                 MAX_DIGEST_TOPOLOGY_PER_BODY
               )
@@ -1028,23 +1057,41 @@ export function groundCadPatchProposalToSelection(
       return { ...operation, featureId: selectedFeatureId as FeatureId };
     }
 
+    // A `$alias` names a body this same patch is creating, so it can never
+    // equal a body id from the digest — comparing them rejected the shape the
+    // system prompt asks for. "Add a lid to this part" answers with the lid
+    // created and then parked beside the selection via `add_transform` on the
+    // alias, and the whole reply was discarded before the user ever saw it.
+    // `add_boolean` has no placement field, so a boolean-derived companion
+    // part can only be positioned this way.
+    //
+    // The guard is worth keeping for real ids: it catches a model that says
+    // "this body" and then targets a different existing one.
     if (
       referencesSelectedBody &&
       selectedBodyId &&
       (operation.kind === 'add_transform' ||
         operation.kind === 'add_pattern') &&
+      !isLocalBodyRef(operation.targetBodyId) &&
       operation.targetBodyId !== selectedBodyId
     ) {
-      throw new Error('AI target mismatch.');
+      throw new Error(
+        `AI targeted ${operation.targetBodyId} while the prompt referred to the selected body.`
+      );
     }
 
     if (
       referencesSelectedBody &&
       selection.bodyIds.length >= 2 &&
       operation.kind === 'add_boolean' &&
-      !sameStrings(operation.targetBodyIds, selection.bodyIds)
+      !sameStrings(
+        operation.targetBodyIds.filter((id) => !isLocalBodyRef(id)),
+        selection.bodyIds
+      )
     ) {
-      throw new Error('AI boolean mismatch.');
+      throw new Error(
+        'AI combined a different set of bodies than the prompt selected.'
+      );
     }
 
     return operation;
@@ -1527,6 +1574,34 @@ const directEditOperationSchema = {
       type: 'object',
       additionalProperties: false,
       properties: {
+        kind: { type: 'string', const: 'set-face-distance' },
+        faceHash: { type: 'integer', minimum: 1 },
+        faceReference: faceReferenceSchema,
+        oppositeFaceHash: { type: 'integer', minimum: 1 },
+        oppositeFaceReference: faceReferenceSchema,
+        sourceDistance: { type: 'number', exclusiveMinimum: 0 },
+        moveMode: {
+          type: 'string',
+          enum: ['symmetric', 'one-sided-first', 'one-sided-second']
+        },
+        distance: scalarSchema,
+        parameterBinding: { type: 'boolean', const: true }
+      },
+      required: [
+        'kind',
+        'faceHash',
+        'faceReference',
+        'oppositeFaceHash',
+        'oppositeFaceReference',
+        'sourceDistance',
+        'moveMode',
+        'distance'
+      ]
+    },
+    {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
         kind: { type: 'string', const: 'resize-cylindrical-face' },
         faceHash: { type: 'integer', minimum: 1 },
         faceReference: faceReferenceSchema,
@@ -1545,6 +1620,30 @@ const directEditOperationSchema = {
         'sourceAxisEnd',
         'concavity',
         'radius'
+      ]
+    },
+    {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        kind: { type: 'string', const: 'resize-blend' },
+        faceHash: { type: 'integer', minimum: 1 },
+        faceReference: faceReferenceSchema,
+        surfaceClass: { type: 'string', enum: ['torus', 'cylinder'] },
+        recordedRadius: { type: 'number', exclusiveMinimum: 0 },
+        recordedCenter: numberVectorSchema,
+        recordedAxis: numberVectorSchema,
+        newRadius: scalarSchema
+      },
+      required: [
+        'kind',
+        'faceHash',
+        'faceReference',
+        'surfaceClass',
+        'recordedRadius',
+        'recordedCenter',
+        'recordedAxis',
+        'newRadius'
       ]
     }
   ]
@@ -2819,6 +2918,18 @@ export function parseCadPatchProposal(
             'add_direct_edit requires a matching faceHash and exact schema-v5 faceReference from the digest.'
           );
         }
+        if (
+          edit.kind === 'set-face-distance' &&
+          (!Number.isSafeInteger(edit.oppositeFaceHash) ||
+            Number(edit.oppositeFaceHash) <= 0 ||
+            edit.oppositeFaceHash === edit.faceHash ||
+            !isFaceReference(edit.oppositeFaceReference) ||
+            edit.oppositeFaceReference.currentHash !== edit.oppositeFaceHash)
+        ) {
+          throw new Error(
+            'add_direct_edit face distance requires a distinct matching oppositeFaceHash and exact schema-v5 oppositeFaceReference from the digest.'
+          );
+        }
         const commonAxis =
           isNumberVector(edit.sourceAxisStart) &&
           isNumberVector(edit.sourceAxisEnd);
@@ -2887,12 +2998,30 @@ export function parseCadPatchProposal(
             isNumberVector(edit.sourceCenter) &&
             isNumberVector(edit.sourceNormal) &&
             isScalar(edit.offset)) ||
+          (edit.kind === 'set-face-distance' &&
+            typeof edit.sourceDistance === 'number' &&
+            edit.sourceDistance > 0 &&
+            ['symmetric', 'one-sided-first', 'one-sided-second'].includes(
+              String(edit.moveMode)
+            ) &&
+            isScalar(edit.distance) &&
+            (edit.parameterBinding === undefined ||
+              edit.parameterBinding === true)) ||
           (edit.kind === 'resize-cylindrical-face' &&
             typeof edit.sourceRadius === 'number' &&
             edit.sourceRadius > 0 &&
             commonAxis &&
             ['hole', 'boss'].includes(String(edit.concavity)) &&
-            isScalar(edit.radius));
+            isScalar(edit.radius)) ||
+          (edit.kind === 'resize-blend' &&
+            ['torus', 'cylinder'].includes(String(edit.surfaceClass)) &&
+            typeof edit.recordedRadius === 'number' &&
+            edit.recordedRadius > 0 &&
+            isNumberVector(edit.recordedCenter) &&
+            isNumberVector(edit.recordedAxis) &&
+            isScalar(edit.newRadius) &&
+            (edit.parameterBinding === undefined ||
+              edit.parameterBinding === true));
         if (!valid) {
           throw new Error('Invalid add_direct_edit operation payload.');
         }
@@ -3135,6 +3264,35 @@ function exactDigestFace(
   return face;
 }
 
+function exactDigestFaceDistancePair(
+  digest: CadDocumentDigest,
+  bodyId: string,
+  operation: Extract<DirectEditOperation, { kind: 'set-face-distance' }>
+): OpposingPlanarFacePair {
+  const body = digest.bodies?.find(
+    (candidate) => candidate.bodyId === bodyId && !candidate.consumed
+  );
+  const pair = body?.topology?.opposingPlanarFacePairs?.find(
+    (candidate) =>
+      candidate.faceAHash === operation.faceHash &&
+      candidate.faceBHash === operation.oppositeFaceHash &&
+      canonicalJson(candidate.faceAReference) ===
+        canonicalJson(operation.faceReference) &&
+      canonicalJson(candidate.faceBReference) ===
+        canonicalJson(operation.oppositeFaceReference) &&
+      candidate.distance === operation.sourceDistance &&
+      candidate.moveMode === operation.moveMode &&
+      Number.isFinite(candidate.provenChangedDistance) &&
+      candidate.provenChangedDistance !== candidate.distance
+  );
+  if (!pair) {
+    throw new Error(
+      `add_direct_edit contains a stale or unavailable changed-value face-distance proof for body ${bodyId}. Refresh the proposal from the current document digest.`
+    );
+  }
+  return pair;
+}
+
 function exactDigestImportedFeature(
   digest: CadDocumentDigest,
   bodyId: string,
@@ -3320,6 +3478,32 @@ export function validateCadPatchProposalAgainstDigest(
         const expected: unknown[] = [];
         const received: unknown[] = [];
         switch (edit.kind) {
+          case 'set-face-distance': {
+            if (!edit.oppositeFaceReference) {
+              throw new Error(
+                'add_direct_edit face distance requires an exact opposite face reference.'
+              );
+            }
+            const opposite = exactDigestFace(
+              digest,
+              operation.targetBodyId,
+              edit.oppositeFaceHash,
+              edit.oppositeFaceReference,
+              operation.kind
+            );
+            if (
+              snapshot.surfaceType !== 'plane' ||
+              opposite.snapshot?.surfaceType !== 'plane' ||
+              !snapshot.normal ||
+              !opposite.snapshot.normal
+            ) {
+              throw new Error(
+                'add_direct_edit face distance requires two exact planar face snapshots.'
+              );
+            }
+            exactDigestFaceDistancePair(digest, operation.targetBodyId, edit);
+            break;
+          }
           case 'resize-through-hole':
             expected.push(
               snapshot.diameter,
@@ -3384,6 +3568,52 @@ export function validateCadPatchProposalAgainstDigest(
               edit.sourceAxisEnd
             );
             break;
+          case 'resize-blend': {
+            if (
+              snapshot.featureType !== 'blend' ||
+              snapshot.surfaceType !== edit.surfaceClass ||
+              snapshot.blendRadius === undefined
+            ) {
+              throw new Error(
+                'AI blend resize requires a kernel-recognized analytic blend carrier.'
+              );
+            }
+            let center: Vector3 | undefined;
+            let axis: Vector3 | null | undefined;
+            if (edit.surfaceClass === 'torus') {
+              center = snapshot.torusCenter;
+              axis = snapshot.axis;
+            } else if (snapshot.axisStart && snapshot.axisEnd) {
+              center = {
+                x: (snapshot.axisStart.x + snapshot.axisEnd.x) / 2,
+                y: (snapshot.axisStart.y + snapshot.axisEnd.y) / 2,
+                z: (snapshot.axisStart.z + snapshot.axisEnd.z) / 2
+              };
+              axis = normalized({
+                x: snapshot.axisEnd.x - snapshot.axisStart.x,
+                y: snapshot.axisEnd.y - snapshot.axisStart.y,
+                z: snapshot.axisEnd.z - snapshot.axisStart.z
+              });
+            }
+            if (!center || !axis) {
+              throw new Error(
+                'AI blend resize requires the exact carrier center and axis.'
+              );
+            }
+            expected.push(
+              snapshot.surfaceType,
+              snapshot.blendRadius,
+              center,
+              axis
+            );
+            received.push(
+              edit.surfaceClass,
+              edit.recordedRadius,
+              edit.recordedCenter,
+              edit.recordedAxis
+            );
+            break;
+          }
         }
         if (canonicalJson(expected) !== canonicalJson(received)) {
           throw new Error(

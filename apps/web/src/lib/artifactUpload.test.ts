@@ -154,4 +154,103 @@ describe('uploadArtifactBody', () => {
     ).rejects.toThrow('completion refused');
     expect(shared.calls.at(-1)).toBe('abort:upload_test');
   });
+
+  /**
+   * Progress here is exact rather than estimated: the part plan is computed
+   * before the first request, so each report is the byte the store has
+   * actually accepted.
+   */
+  it('reports accepted bytes after each part', async () => {
+    const { transport } = recordingTransport();
+    const reported: [number, number][] = [];
+    await uploadArtifactBody(transport, session, new Blob(['a'.repeat(20)]), {
+      partBytes: 8,
+      retryDelay: noDelay,
+      onProgress: (uploaded, total) => reported.push([uploaded, total])
+    });
+    expect(reported).toEqual([
+      [8, 20],
+      [16, 20],
+      [20, 20]
+    ]);
+  });
+
+  /**
+   * There is no progress inside a single request to report, so a small body
+   * goes from nothing to done. Staying silent instead would leave the card's
+   * archiving phase looking stalled for the whole upload.
+   */
+  it('reports once on completion for a single-PUT body', async () => {
+    const { transport } = recordingTransport();
+    const reported: [number, number][] = [];
+    await uploadArtifactBody(transport, session, new Blob(['abc']), {
+      partBytes: 8,
+      onProgress: (uploaded, total) => reported.push([uploaded, total])
+    });
+    expect(reported).toEqual([[3, 3]]);
+  });
+
+  /** A part that never lands must not be counted as accepted. */
+  it('reports nothing for a part the store refused', async () => {
+    const shared = recordingTransport();
+    const failing: ArtifactUploadTransport = {
+      ...shared.transport,
+      async uploadArtifactPart(_session, _uploadId, partNumber, body) {
+        if (partNumber === 2) {
+          throw new Error('part rejected');
+        }
+        return { partNumber, etag: `etag-${partNumber}-${body.size}` };
+      }
+    };
+    const reported: number[] = [];
+    await expect(
+      uploadArtifactBody(failing, session, new Blob(['a'.repeat(20)]), {
+        partBytes: 8,
+        retryDelay: noDelay,
+        onProgress: (uploaded) => reported.push(uploaded)
+      })
+    ).rejects.toThrow('part rejected');
+    expect(reported).toEqual([8]);
+  });
+
+  /**
+   * Aborting must still unwind the multipart state. A stopped upload that left
+   * its parts behind would occupy the session with an upload nobody finishes.
+   */
+  it('aborts the multipart state when cancelled between parts', async () => {
+    const shared = recordingTransport();
+    const controller = new AbortController();
+    const cancelling: ArtifactUploadTransport = {
+      ...shared.transport,
+      async uploadArtifactPart(_session, _uploadId, partNumber, body) {
+        if (partNumber === 2) {
+          controller.abort();
+        }
+        return { partNumber, etag: `etag-${partNumber}-${body.size}` };
+      }
+    };
+    await expect(
+      uploadArtifactBody(cancelling, session, new Blob(['a'.repeat(20)]), {
+        partBytes: 8,
+        retryDelay: noDelay,
+        signal: controller.signal
+      })
+    ).rejects.toThrow();
+    expect(shared.calls.at(-1)).toBe('abort:upload_test');
+    expect(shared.calls).not.toContain('complete:3');
+  });
+
+  it('uploads nothing at all when already cancelled', async () => {
+    const { transport, calls } = recordingTransport();
+    const controller = new AbortController();
+    controller.abort();
+    await expect(
+      uploadArtifactBody(transport, session, new Blob(['a'.repeat(20)]), {
+        partBytes: 8,
+        retryDelay: noDelay,
+        signal: controller.signal
+      })
+    ).rejects.toThrow();
+    expect(calls).toEqual([]);
+  });
 });

@@ -1,0 +1,12 @@
+{
+  "name": "@openzcad/io-shapr",
+  "version": "0.1.0",
+  "private": true,
+  "license": "Apache-2.0",
+  "type": "module",
+  "exports": "./src/index.ts",
+  "dependencies": {
+    "@sqlite.org/sqlite-wasm": "3.53.0-build1",
+    "fflate": "0.8.2"
+  }
+}
