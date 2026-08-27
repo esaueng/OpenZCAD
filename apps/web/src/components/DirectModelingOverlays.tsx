@@ -1,5 +1,4 @@
 import {
-  ArrowUpDown,
   Check,
   Layers3,
   MousePointer2,
@@ -7,7 +6,6 @@ import {
   X
 } from 'lucide-react';
 import { useEffect, useState, type MutableRefObject } from 'react';
-import type { ExtrudeOperation } from '@openzcad/shared';
 
 interface ProfileQuickActionProps {
   profileName: string;
@@ -54,155 +52,6 @@ export function ProfileQuickAction({
   );
 }
 
-interface ExtrudeOverlayProps {
-  profileName: string;
-  profileCount: number;
-  availableProfileCount: number;
-  distance: number;
-  units: string;
-  operation: ExtrudeOperation | 'inferring';
-  operationDetail: string;
-  canConfirm: boolean;
-  onDistanceChange(value: number): void;
-  onClearProfiles(): void;
-  onSelectAllProfiles(): void;
-  onBackToSketch?: () => void;
-  onConfirm(): void;
-  onCancel(): void;
-}
-
-export function ExtrudeOverlay({
-  profileName,
-  profileCount,
-  availableProfileCount,
-  distance,
-  units,
-  operation,
-  operationDetail,
-  canConfirm,
-  onDistanceChange,
-  onClearProfiles,
-  onSelectAllProfiles,
-  onBackToSketch,
-  onConfirm,
-  onCancel
-}: ExtrudeOverlayProps) {
-  const direction =
-    distance > 0
-      ? 'Positive side'
-      : distance < 0
-        ? 'Opposite side'
-        : 'Choose either side';
-  return (
-    <>
-      <div className="extrude-instruction" role="status">
-        <span className="extrude-instruction-icon">
-          <MousePointer2 size={17} aria-hidden="true" />
-        </span>
-        <span>
-          <strong>Drag the arrow through the sketch plane</strong>
-          <small>
-            Move either direction, then press Enter to create the solid.
-          </small>
-        </span>
-      </div>
-
-      <form
-        className="extrude-controller"
-        aria-label="Extrude controls"
-        onSubmit={(event) => {
-          event.preventDefault();
-          if (canConfirm && Math.abs(distance) >= 0.1) {
-            onConfirm();
-          }
-        }}
-      >
-        <div className="extrude-controller-header">
-          <span>
-            <Layers3 size={16} aria-hidden="true" />
-            Extrude
-          </span>
-          <button type="button" aria-label="Cancel extrude" onClick={onCancel}>
-            <X size={15} aria-hidden="true" />
-          </button>
-        </div>
-        <div className="extrude-profile-field">
-          <span>
-            <strong>Profiles</strong>
-            <small>{profileName}</small>
-          </span>
-          <b>{profileCount} selected</b>
-          <button type="button" onClick={onClearProfiles}>
-            Clear
-          </button>
-          {availableProfileCount > profileCount && (
-            <button type="button" onClick={onSelectAllProfiles}>
-              Select all valid
-            </button>
-          )}
-        </div>
-        <label>
-          <span>Operation</span>
-          <select aria-label="Extrude operation" value={operation} disabled>
-            <option value="inferring">Inferring…</option>
-            <option value="new-body">New Body</option>
-            <option value="add">Add</option>
-            <option value="cut">Cut</option>
-          </select>
-          <small>{operationDetail}</small>
-        </label>
-        <label>
-          <span>Distance</span>
-          <span className="extrude-distance-input">
-            <input
-              type="number"
-              step="0.5"
-              value={Number.isFinite(distance) ? distance : 0}
-              onChange={(event) => onDistanceChange(Number(event.target.value))}
-            />
-            <b>{units}</b>
-          </span>
-        </label>
-        <div className="extrude-direction">
-          <ArrowUpDown size={14} aria-hidden="true" />
-          <span>{direction}</span>
-          <button
-            type="button"
-            onClick={() => onDistanceChange(distance === 0 ? -24 : -distance)}
-          >
-            Flip
-          </button>
-        </div>
-        <div className="extrude-actions">
-          {onBackToSketch && (
-            <button
-              type="button"
-              className="secondary"
-              onClick={onBackToSketch}
-            >
-              Back to Sketch
-            </button>
-          )}
-          <button type="button" className="secondary" onClick={onCancel}>
-            Cancel Extrude
-          </button>
-          <button
-            type="submit"
-            className="primary"
-            disabled={
-              !canConfirm ||
-              !Number.isFinite(distance) ||
-              Math.abs(distance) < 0.1
-            }
-          >
-            <Check size={15} aria-hidden="true" />
-            Apply Extrude
-          </button>
-        </div>
-      </form>
-    </>
-  );
-}
 
 export interface MoveOverlayValues {
   translation: { x: number; y: number; z: number };
