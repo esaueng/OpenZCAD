@@ -2,7 +2,6 @@ import { useRef, type MutableRefObject, type ReactNode } from 'react';
 import {
   ModelViewer,
   type BodyAppearancePreview,
-  type ExtrudePreview,
   type FaceResizeCommit,
   type CylinderRadiusHandleTarget,
   type EdgeHandleTarget,
@@ -110,7 +109,6 @@ interface ViewerShellProps {
   rotateRequest: { direction: 'cw' | 'ccw'; nonce: number } | null;
   units: string;
   editableBodyIds: string[];
-  extrudePreview: ExtrudePreview | null;
   movePreview: MovePreview | null;
   /** Committed Move awaiting its rebuild; forwarded to the viewer's pose hold. */
   moveCommitHold: MovePreview | null;
@@ -214,7 +212,6 @@ interface ViewerShellProps {
   regionHandle: RegionHandleTarget | null;
   onSelectSketchProfile(sketchId: string): void;
   onResizePrimitiveFace(commit: FaceResizeCommit): void;
-  onExtrudeDistanceChange(distance: number): void;
   onMovePreviewChange(
     translation: MovePreview['translation'],
     rotationDeg: MovePreview['rotationDeg'],
@@ -255,7 +252,6 @@ export function ViewerShell({
   rotateRequest,
   units,
   editableBodyIds,
-  extrudePreview,
   movePreview,
   moveCommitHold,
   appearancePreview,
@@ -317,7 +313,6 @@ export function ViewerShell({
   regionHandle,
   onSelectSketchProfile,
   onResizePrimitiveFace,
-  onExtrudeDistanceChange,
   onMovePreviewChange,
   onContextMenu,
   onToggleGrid,
@@ -399,7 +394,6 @@ export function ViewerShell({
         rotateRequest={rotateRequest}
         units={units}
         editableBodyIds={editableBodyIds}
-        extrudePreview={extrudePreview}
         movePreview={movePreview}
         moveCommitHold={moveCommitHold}
         appearancePreview={appearancePreview}
@@ -455,7 +449,6 @@ export function ViewerShell({
         regionHandle={regionHandle}
         onSelectSketchProfile={onSelectSketchProfile}
         onResizePrimitiveFace={onResizePrimitiveFace}
-        onExtrudeDistanceChange={onExtrudeDistanceChange}
         onMovePreviewChange={onMovePreviewChange}
         onContextMenu={onContextMenu}
       />

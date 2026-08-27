@@ -245,8 +245,6 @@ export interface SelectionManagerOptions {
   bodies(): BodyRepresentation[];
   /** Faces of these bodies drive document dimensions, so they read draggable. */
   isEditableBody(bodyId: string): boolean;
-  /** An extrude gizmo is armed and owns the drag. */
-  extrudeArmed(): boolean;
 }
 
 /**
@@ -545,10 +543,8 @@ export class SelectionManager {
     }
     this.setEdgeHover(hoveredEdge, hoveredTopologyIds);
     this.setHoverFace(candidate?.selection ?? null);
-    const cursor = this.options.extrudeArmed()
+    const cursor = canDragFace
       ? 'grab'
-      : canDragFace
-        ? 'grab'
         : bodyId || candidate?.sketchId || candidate?.region
           ? 'pointer'
           : '';
