@@ -157,6 +157,13 @@ export class RevisionNotFoundError extends Error {
   }
 }
 
+/**
+ * Artifact bytes as a download hands them over. Backends holding the object
+ * in memory return an ArrayBuffer; object-storage backends stream the body so
+ * a multi-hundred-MB artifact never has to fit in Worker memory at once.
+ */
+export type ArtifactBody = ArrayBuffer | ReadableStream<Uint8Array>;
+
 export class ProjectNotFoundError extends Error {
   constructor(projectId: string) {
     super(`Project ${projectId} not found.`);
@@ -461,7 +468,7 @@ export interface PersistenceService {
   downloadArtifact(
     userId: UserId,
     artifactId: string
-  ): Promise<{ artifact: ArtifactRecord; body: ArrayBuffer } | null>;
+  ): Promise<{ artifact: ArtifactRecord; body: ArtifactBody } | null>;
 }
 
 export class InMemoryPersistenceService implements PersistenceService {
@@ -1460,7 +1467,7 @@ export class InMemoryPersistenceService implements PersistenceService {
   async downloadArtifact(
     userId: UserId,
     artifactId: string
-  ): Promise<{ artifact: ArtifactRecord; body: ArrayBuffer } | null> {
+  ): Promise<{ artifact: ArtifactRecord; body: ArtifactBody } | null> {
     const { artifact } = await this.getArtifactMetadata(userId, artifactId);
     if (!artifact) {
       return null;

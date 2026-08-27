@@ -19,6 +19,7 @@ import { GeometryWorkerQueue } from './geometryWorkerQueue';
 import { resolveExactSourceBytes } from '../lib/exactSourceResolver';
 import { preloadDocumentFonts } from '../lib/textFonts';
 
+
 /**
  * `step`, `stl`, and `dxf` produce text (STEP data, ASCII STL, DXF R12);
  * `stl-binary`, `3mf`, `obj`, and `glb` produce bytes. Mesh formats accept
@@ -27,13 +28,7 @@ import { preloadDocumentFonts } from '../lib/textFonts';
  * `dxf` exports ONE planar face's outline and requires the `face` field.
  */
 export type GeometryExportFormat =
-  | 'step'
-  | 'stl'
-  | 'dxf'
-  | 'stl-binary'
-  | '3mf'
-  | 'obj'
-  | 'glb';
+  'step' | 'stl' | 'dxf' | 'stl-binary' | '3mf' | 'obj' | 'glb';
 
 /** The export formats whose payload crosses back as transferred bytes. */
 export type GeometryBinaryExportFormat = Extract<
@@ -388,7 +383,11 @@ async function execute(job: GeometryWorkerJob): Promise<void> {
       const text =
         request.format === 'step'
           ? await exact.exportStep(document, request.bodyIds)
-          : await exact.exportStl(document, request.bodyIds, request.deflection);
+          : await exact.exportStl(
+              document,
+              request.bodyIds,
+              request.deflection
+            );
       const result: GeometryExportResult = {
         type: 'export',
         ok: true,

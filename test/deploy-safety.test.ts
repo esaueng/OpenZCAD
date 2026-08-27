@@ -111,6 +111,32 @@ describe('beta deployment safety', () => {
     }
   });
 
+  it('ships baseline security headers on every served path', () => {
+    const text = readFileSync('apps/web/public/_headers', 'utf8');
+    const lines = text.split('\n');
+    const catchAll = lines.findIndex((line) => line.trim() === '/*');
+    expect(catchAll).toBeGreaterThanOrEqual(0);
+    const ruleLines = lines
+      .slice(catchAll + 1)
+      .filter((line) => /^\s+\S/.test(line));
+    const headers = new Map(
+      ruleLines.map((line) => {
+        const [name, ...value] = line.trim().split(':');
+        return [name!.toLowerCase(), value.join(':').trim()];
+      })
+    );
+
+    const csp = headers.get('content-security-policy') ?? '';
+    expect(csp).toContain("default-src 'self'");
+    expect(csp).toContain("object-src 'none'");
+    expect(csp).toContain("frame-ancestors 'none'");
+    expect(csp).not.toContain("'unsafe-eval'");
+    expect(headers.get('x-content-type-options')).toBe('nosniff');
+    expect(headers.get('referrer-policy')).toBe(
+      'strict-origin-when-cross-origin'
+    );
+  });
+
   it('uses the onboarded noreply sender for authentication and project invitations', () => {
     const config = readFileSync('wrangler.jsonc', 'utf8');
 

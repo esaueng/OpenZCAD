@@ -74,6 +74,31 @@ export function sanitizeStepHeaderPrivacy(
 }
 
 /**
+ * Upper bound on collected labels. The scan feeds UI labels only, and a
+ * crafted file could otherwise multiply a small pattern (PRODUCT('x')) into
+ * millions of collected strings before the kernel ever sees the bytes.
+ */
+const MAX_METADATA_MATCHES = 1_000;
+
+function collectMatches(
+  text: string,
+  pattern: RegExp,
+  map: (match: RegExpExecArray) => string | undefined
+): string[] {
+  const collected: string[] = [];
+  for (const match of text.matchAll(pattern)) {
+    const value = map(match);
+    if (value) {
+      collected.push(value);
+    }
+    if (collected.length >= MAX_METADATA_MATCHES) {
+      break;
+    }
+  }
+  return collected;
+}
+
+/**
  * Lightweight metadata scan of a STEP file (product names and colors). The
  * geometry itself is imported by the kernel; this only reads the labels needed
  * to describe the file to the user.
@@ -82,11 +107,12 @@ export function parseStepMetadata(
   fileName: string,
   text: string
 ): ParsedStepMetadata {
-  const products = Array.from(
-    text.matchAll(/PRODUCT\('([^']+)'/g),
+  const products = collectMatches(
+    text,
+    /PRODUCT\('([^']+)'/g,
     (match) => match[1]
-  ).filter((value): value is string => Boolean(value));
-  const colors = Array.from(text.matchAll(/COLOUR_RGB\('([^']*)'/g), (match) =>
+  );
+  const colors = collectMatches(text, /COLOUR_RGB\('([^']*)'/g, (match) =>
     match[1] ? match[1] : 'unnamed'
   );
   return { name: fileName, products, colors };

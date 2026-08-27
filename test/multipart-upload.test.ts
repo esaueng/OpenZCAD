@@ -65,7 +65,12 @@ describe('multipart artifact upload', () => {
       userId,
       session.artifactId
     );
-    expect(new TextDecoder().decode(downloaded!.body)).toBe('HELLO-WORLD');
+    // The in-memory backend always returns buffered bytes; object-storage
+    // backends stream, which is why the contract is a union.
+    expect(downloaded!.body).toBeInstanceOf(ArrayBuffer);
+    expect(new TextDecoder().decode(downloaded!.body as ArrayBuffer)).toBe(
+      'HELLO-WORLD'
+    );
   });
 
   it('rejects completion with a stale etag or unknown upload id', async () => {
