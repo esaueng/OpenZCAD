@@ -127,6 +127,90 @@ function sameKeys(left: ReadonlySet<string>, right: ReadonlySet<string>) {
 }
 
 /**
+ * One eased highlight tier: a visible batch, its x-ray twin, and the 0..1
+ * presence that drives the width and opacity of both.
+ *
+ * Hover, edge selection, and a selected face's rim are the same ramp over
+ * different widths. They were three hand-maintained copies, which is how the
+ * selection tiers came to be missing the ramp hover already had.
+ */
+class PresenceTier {
+  private presence = 0;
+  private target = 0;
+  /** Whether the batch is holding geometry only to finish fading it out. */
+  private clearing = false;
+
+  /**
+   * @param refreshPositions Repoints the batch at whatever the tier now owns.
+   *   Reads `isClearing`, so a tier mid-fade keeps drawing what it is losing.
+   * @param onCleared Extra work once the fade-out has finished.
+   */
+  constructor(
+    private readonly visible: LineSegments2,
+    private readonly hidden: LineSegments2,
+    private readonly activeWidth: number,
+    private readonly refreshPositions: () => void,
+    private readonly onCleared?: () => void
+  ) {}
+
+  get isClearing(): boolean {
+    return this.clearing;
+  }
+
+  /** True once the batch has something to draw and any presence to draw it at. */
+  get drawable(): boolean {
+    return this.visible.geometry.instanceCount > 0 && this.presence > 0;
+  }
+
+  get hiddenDrawable(): boolean {
+    return this.drawable && this.hidden.geometry.instanceCount > 0;
+  }
+
+  /**
+   * Points the tier at content or starts its fade-out. Retargeting keeps the
+   * presence already on screen, so moving between edges reads as one highlight
+   * travelling rather than a stutter of fades.
+   */
+  retarget(hasContent: boolean) {
+    this.target = hasContent ? 1 : 0;
+    this.clearing = !hasContent;
+    if (hasContent) {
+      this.refreshPositions();
+    }
+    this.apply();
+  }
+
+  /**
+   * Width and opacity both ride the ramp: fading alone leaves a full-width
+   * ghost, and growing alone reads as the line thickening rather than
+   * lighting up.
+   */
+  apply() {
+    const width =
+      EDGE_IDLE_WIDTH + (this.activeWidth - EDGE_IDLE_WIDTH) * this.presence;
+    this.visible.material.opacity = this.presence;
+    this.visible.material.linewidth = width;
+    this.hidden.material.opacity = this.presence * HIDDEN_EDGE_OPACITY;
+    this.hidden.material.linewidth = width;
+  }
+
+  /** Advances one frame. Returns false once there is nothing left to move. */
+  step(dtMs: number): boolean {
+    if (hasSettled(this.presence, this.target)) {
+      return false;
+    }
+    this.presence = easeToward(this.presence, this.target, dtMs);
+    if (this.presence === 0 && this.clearing) {
+      this.clearing = false;
+      this.refreshPositions();
+      this.onCleared?.();
+    }
+    this.apply();
+    return true;
+  }
+}
+
+/**
  * One body's exact edge display.
  *
  * All resting topology edges share `idleEdges`, which caps their resting
@@ -155,33 +239,14 @@ export class BodyEdgeOverlay extends THREE.Group {
   private hoveredKeys = new Set<string>();
   private selectedFaceBoundaryKeys = new Set<string>();
   /**
-   * Eased 0..1 presence of the hover tier. The batch swaps between edges
-   * instantly — pointing at a new edge should feel immediate — but appearing
-   * and disappearing ramps, because a 1.4 px slate line becoming a 4 px pale
+   * The three eased highlight tiers. Each swaps between edges instantly —
+   * pointing at or picking a new edge should feel immediate — but appearing
+   * and disappearing ramps, because a 1.4 px slate line becoming a 4–6 px pale
    * one in a single frame is the loudest pop in the viewport.
    */
-  private hoverPresence = 0;
-  private hoverPresenceTarget = 0;
-  /** Positions to drop once the hover tier has finished fading out. */
-  private hoverClearPending = false;
-  /**
-   * Eased 0..1 presence of the selected tier, on the same ramp as hover. The
-   * hover tier smoothed 1.4 px → 4 px because that jump was the loudest pop in
-   * the viewport; selection jumps 1.4 px → 4.5 px at full opacity and popped
-   * for exactly the same reason.
-   */
-  private selectedPresence = 0;
-  private selectedPresenceTarget = 0;
-  /** Positions to drop once the selected tier has finished fading out. */
-  private selectedClearPending = false;
-  /**
-   * Eased 0..1 presence of a selected face's rim — the widest tier at 6 px, so
-   * the loudest of the three when it lands in one frame.
-   */
-  private faceBoundaryPresence = 0;
-  private faceBoundaryPresenceTarget = 0;
-  /** Positions to drop once the rim has finished fading out. */
-  private faceBoundaryClearPending = false;
+  private readonly hoverTier: PresenceTier;
+  private readonly selectedTier: PresenceTier;
+  private readonly faceBoundaryTier: PresenceTier;
   private displayMode: DisplayMode = 'shaded-edges';
   private xrayEnabled = true;
 
@@ -323,9 +388,30 @@ export class BodyEdgeOverlay extends THREE.Group {
       this.seamEdges.raycast = () => undefined;
       this.add(this.seamEdges);
     }
-    this.applyHoverPresence();
-    this.applySelectedPresence();
-    this.applyFaceBoundaryPresence();
+    this.hoverTier = new PresenceTier(
+      this.hoverEdges,
+      this.hoverHiddenEdges,
+      EDGE_HOVER_WIDTH,
+      () => this.refreshHoveredPositions()
+    );
+    this.selectedTier = new PresenceTier(
+      this.selectedEdges,
+      this.selectedHiddenEdges,
+      EDGE_SELECTED_WIDTH,
+      () => this.refreshSelectedPositions(),
+      // The hover tier excludes selected keys, so an edge losing selection has
+      // to be handed back to hover if the pointer is still on it.
+      () => this.refreshHoveredPositions()
+    );
+    this.faceBoundaryTier = new PresenceTier(
+      this.selectedFaceBoundaryEdges,
+      this.selectedFaceBoundaryHiddenEdges,
+      FACE_BOUNDARY_SELECTED_WIDTH,
+      () => this.refreshFaceBoundaryPositions()
+    );
+    this.hoverTier.apply();
+    this.selectedTier.apply();
+    this.faceBoundaryTier.apply();
     this.add(
       this.idleEdges,
       this.hoverHiddenEdges,
@@ -394,19 +480,7 @@ export class BodyEdgeOverlay extends THREE.Group {
       return false;
     }
     this.selectedKeys = nextKeys;
-    this.selectedPresenceTarget = nextKeys.size > 0 ? 1 : 0;
-    if (nextKeys.size > 0) {
-      // Selecting another edge keeps the presence already on screen and
-      // re-points the batch, so retargeting reads as one highlight moving
-      // rather than a fade out and back in.
-      this.selectedClearPending = false;
-      this.refreshSelectedPositions();
-    } else {
-      // Hold the geometry until the fade finishes; dropping it now would make
-      // the ramp invisible.
-      this.selectedClearPending = true;
-    }
-    this.applySelectedPresence();
+    this.selectedTier.retarget(nextKeys.size > 0);
     this.refreshHoveredPositions();
     this.refreshVisibility();
     return true;
@@ -430,19 +504,7 @@ export class BodyEdgeOverlay extends THREE.Group {
       return false;
     }
     this.hoveredKeys = nextKeys;
-    this.hoverPresenceTarget = nextKeys.size > 0 ? 1 : 0;
-    if (nextKeys.size > 0) {
-      // Moving to another edge keeps whatever presence is already on screen
-      // and re-points the batch, so a sweep along a row of edges reads as one
-      // highlight travelling rather than a stutter of fades.
-      this.hoverClearPending = false;
-      this.refreshHoveredPositions();
-    } else {
-      // Hold the geometry until the fade finishes; dropping it now would make
-      // the ramp invisible.
-      this.hoverClearPending = true;
-    }
-    this.applyHoverPresence();
+    this.hoverTier.retarget(nextKeys.size > 0);
     this.refreshVisibility();
     return true;
   }
@@ -452,101 +514,15 @@ export class BodyEdgeOverlay extends THREE.Group {
    * still moving, so the render loop knows to keep drawing.
    */
   step(dtMs: number): boolean {
-    const hoverSettled = hasSettled(
-      this.hoverPresence,
-      this.hoverPresenceTarget
-    );
-    const selectedSettled = hasSettled(
-      this.selectedPresence,
-      this.selectedPresenceTarget
-    );
-    const faceBoundarySettled = hasSettled(
-      this.faceBoundaryPresence,
-      this.faceBoundaryPresenceTarget
-    );
-    if (hoverSettled && selectedSettled && faceBoundarySettled) {
+    // Every tier steps: `||` would short-circuit and strand the later ones.
+    const hoverMoved = this.hoverTier.step(dtMs);
+    const selectedMoved = this.selectedTier.step(dtMs);
+    const rimMoved = this.faceBoundaryTier.step(dtMs);
+    if (!hoverMoved && !selectedMoved && !rimMoved) {
       return false;
-    }
-    if (!hoverSettled) {
-      this.hoverPresence = easeToward(
-        this.hoverPresence,
-        this.hoverPresenceTarget,
-        dtMs
-      );
-      if (this.hoverPresence === 0 && this.hoverClearPending) {
-        this.hoverClearPending = false;
-        this.refreshHoveredPositions();
-      }
-      this.applyHoverPresence();
-    }
-    if (!selectedSettled) {
-      this.selectedPresence = easeToward(
-        this.selectedPresence,
-        this.selectedPresenceTarget,
-        dtMs
-      );
-      if (this.selectedPresence === 0 && this.selectedClearPending) {
-        this.selectedClearPending = false;
-        this.refreshSelectedPositions();
-        // The hover tier excludes selected keys, so an edge losing selection
-        // has to be handed back to hover if the pointer is still on it.
-        this.refreshHoveredPositions();
-      }
-      this.applySelectedPresence();
-    }
-    if (!faceBoundarySettled) {
-      this.faceBoundaryPresence = easeToward(
-        this.faceBoundaryPresence,
-        this.faceBoundaryPresenceTarget,
-        dtMs
-      );
-      if (this.faceBoundaryPresence === 0 && this.faceBoundaryClearPending) {
-        this.faceBoundaryClearPending = false;
-        this.refreshFaceBoundaryPositions();
-      }
-      this.applyFaceBoundaryPresence();
     }
     this.refreshVisibility();
     return true;
-  }
-
-  /**
-   * Width and opacity both ride the ramp: fading alone leaves a full-width
-   * ghost, and growing alone reads as the line thickening rather than
-   * lighting up.
-   */
-  private applyHoverPresence() {
-    const presence = this.hoverPresence;
-    const width =
-      EDGE_IDLE_WIDTH + (EDGE_HOVER_WIDTH - EDGE_IDLE_WIDTH) * presence;
-    this.hoverEdges.material.opacity = presence;
-    this.hoverEdges.material.linewidth = width;
-    this.hoverHiddenEdges.material.opacity = presence * HIDDEN_EDGE_OPACITY;
-    this.hoverHiddenEdges.material.linewidth = width;
-  }
-
-  /** The selected tier's half of {@link applyHoverPresence}. */
-  private applySelectedPresence() {
-    const presence = this.selectedPresence;
-    const width =
-      EDGE_IDLE_WIDTH + (EDGE_SELECTED_WIDTH - EDGE_IDLE_WIDTH) * presence;
-    this.selectedEdges.material.opacity = presence;
-    this.selectedEdges.material.linewidth = width;
-    this.selectedHiddenEdges.material.opacity = presence * HIDDEN_EDGE_OPACITY;
-    this.selectedHiddenEdges.material.linewidth = width;
-  }
-
-  /** The rim tier's half of {@link applyHoverPresence}. */
-  private applyFaceBoundaryPresence() {
-    const presence = this.faceBoundaryPresence;
-    const width =
-      EDGE_IDLE_WIDTH +
-      (FACE_BOUNDARY_SELECTED_WIDTH - EDGE_IDLE_WIDTH) * presence;
-    this.selectedFaceBoundaryEdges.material.opacity = presence;
-    this.selectedFaceBoundaryEdges.material.linewidth = width;
-    this.selectedFaceBoundaryHiddenEdges.material.opacity =
-      presence * HIDDEN_EDGE_OPACITY;
-    this.selectedFaceBoundaryHiddenEdges.material.linewidth = width;
   }
 
   /** Highlights only physical edges that bound the selected exact face. */
@@ -564,14 +540,7 @@ export class BodyEdgeOverlay extends THREE.Group {
       return false;
     }
     this.selectedFaceBoundaryKeys = nextKeys;
-    this.faceBoundaryPresenceTarget = nextKeys.size > 0 ? 1 : 0;
-    if (nextKeys.size > 0) {
-      this.faceBoundaryClearPending = false;
-      this.refreshFaceBoundaryPositions();
-    } else {
-      this.faceBoundaryClearPending = true;
-    }
-    this.applyFaceBoundaryPresence();
+    this.faceBoundaryTier.retarget(nextKeys.size > 0);
     this.refreshVisibility();
     return true;
   }
@@ -628,7 +597,7 @@ export class BodyEdgeOverlay extends THREE.Group {
   }
 
   private refreshHoveredPositions() {
-    const positions = this.hoverClearPending
+    const positions = this.hoverTier.isClearing
       ? []
       : [...this.entriesByKey]
           .filter(
@@ -640,7 +609,7 @@ export class BodyEdgeOverlay extends THREE.Group {
   }
 
   private refreshSelectedPositions() {
-    const positions = this.selectedClearPending
+    const positions = this.selectedTier.isClearing
       ? []
       : [...this.entriesByKey]
           .filter(([key]) => this.selectedKeys.has(key))
@@ -650,7 +619,7 @@ export class BodyEdgeOverlay extends THREE.Group {
   }
 
   private refreshFaceBoundaryPositions() {
-    const positions = this.faceBoundaryClearPending
+    const positions = this.faceBoundaryTier.isClearing
       ? []
       : [...this.entriesByKey]
           .filter(([key]) => this.selectedFaceBoundaryKeys.has(key))
@@ -667,36 +636,19 @@ export class BodyEdgeOverlay extends THREE.Group {
       this.seamEdges.visible = this.displayMode === 'wireframe';
     }
     this.idleEdges.visible = showEdges && this.ownershipBySegment.length > 0;
-    // Gated on presence rather than key count so the tier survives its own
-    // fade-out, which runs after the keys are already gone.
-    const selectedVisible =
-      showEdges &&
-      this.selectedEdges.geometry.instanceCount > 0 &&
-      this.selectedPresence > 0;
-    this.selectedEdges.visible = selectedVisible;
+    // `drawable` is gated on presence rather than key count, so a tier
+    // survives its own fade-out, which runs after the keys are already gone.
+    this.selectedEdges.visible = showEdges && this.selectedTier.drawable;
     this.selectedHiddenEdges.visible =
-      this.xrayEnabled &&
-      selectedVisible &&
-      this.selectedHiddenEdges.geometry.instanceCount > 0;
-    const hoverVisible =
-      showEdges &&
-      this.hoverEdges.geometry.instanceCount > 0 &&
-      this.hoverPresence > 0;
-    this.hoverEdges.visible = hoverVisible;
+      this.xrayEnabled && showEdges && this.selectedTier.hiddenDrawable;
+    this.hoverEdges.visible = showEdges && this.hoverTier.drawable;
     this.hoverHiddenEdges.visible =
-      this.xrayEnabled &&
-      hoverVisible &&
-      this.hoverHiddenEdges.geometry.instanceCount > 0;
+      this.xrayEnabled && showEdges && this.hoverTier.hiddenDrawable;
     // Deliberately not gated on `showEdges`: a selected face keeps its rim even
     // in the shaded view, where it is the only thing marking the selection.
-    const faceBoundaryVisible =
-      this.selectedFaceBoundaryEdges.geometry.instanceCount > 0 &&
-      this.faceBoundaryPresence > 0;
-    this.selectedFaceBoundaryEdges.visible = faceBoundaryVisible;
+    this.selectedFaceBoundaryEdges.visible = this.faceBoundaryTier.drawable;
     this.selectedFaceBoundaryHiddenEdges.visible =
-      this.xrayEnabled &&
-      faceBoundaryVisible &&
-      this.selectedFaceBoundaryHiddenEdges.geometry.instanceCount > 0;
+      this.xrayEnabled && this.faceBoundaryTier.hiddenDrawable;
   }
 }
 
