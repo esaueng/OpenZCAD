@@ -5,8 +5,10 @@ import { RemusKernel } from '../packages/kernel-adapter/src/remus-runtime';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import {
+  detectReflectionSymmetries,
   measureImportedStep,
-  measureRuledEdgeSweepDeviation
+  measureRuledEdgeSweepDeviation,
+  type AnalyticInventory
 } from './support/reconstruction-measurement';
 
 const HAMMER_HOLDER_STEP = process.env.OPENZCAD_HAMMER_HOLDER_STEP;
@@ -108,6 +110,64 @@ describe('guided-reconstruction measurement tooling', () => {
       rectangularFace!.face
     );
     expect(planarDeviation.maximum).toBeLessThan(1e-8);
+  });
+
+  it('refuses over-budget symmetry and edge-sweep work', () => {
+    const faces = Array.from({ length: 65 }, (_, index) => {
+      const center = {
+        x: index,
+        y: index ** 2,
+        z: index ** 3
+      };
+      return {
+        face: index,
+        surfaceType: 'sphere',
+        analytic: true,
+        area: 1,
+        center,
+        vertices: [center],
+        parameters: { radius: 1 },
+        radius: 1
+      };
+    });
+    const inventory: AnalyticInventory = {
+      totalFaces: faces.length,
+      analyticFaces: faces.length,
+      bySurfaceType: { sphere: faces.length },
+      faces
+    };
+    expect(() =>
+      detectReflectionSymmetries(inventory, {
+        min: { x: 0, y: 0, z: 0 },
+        max: { x: 64, y: 64 ** 2, z: 64 ** 3 }
+      })
+    ).toThrow(/candidate budget/);
+    expect(() =>
+      detectReflectionSymmetries(
+        { ...inventory, faces: Array(129).fill(faces[0]) },
+        {
+          min: { x: 0, y: 0, z: 0 },
+          max: { x: 1, y: 1, z: 1 }
+        }
+      )
+    ).toThrow(/analytic-face budget/);
+    expect(() =>
+      detectReflectionSymmetries(
+        { ...inventory, faces: [faces[0]!] },
+        {
+          min: { x: 0, y: 0, z: 0 },
+          max: { x: 1, y: 1, z: 1 }
+        },
+        { maxSymmetries: 33 }
+      )
+    ).toThrow(/max symmetries/);
+
+    expect(() =>
+      measureRuledEdgeSweepDeviation(kernel, 0, { samplesPerRail: 66 })
+    ).toThrow(/samples per rail/);
+    expect(() =>
+      measureRuledEdgeSweepDeviation(kernel, 0, { edgeDeflection: 1e-5 })
+    ).toThrow(/rail deflection/);
   });
 
   it.skipIf(!HAMMER_HOLDER_STEP)(
