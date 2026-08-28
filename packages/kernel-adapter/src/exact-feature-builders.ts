@@ -420,21 +420,19 @@ function buildExtrudeFeature(
       feature.bodyId,
       feature.name
     );
-    // A cut needs shared material — with none there is nothing to remove.
-    // An add only needs contact: a boss extruded off the face it was sketched
-    // on meets its target exactly at that face and shares no volume at all,
-    // which is a union the Union feature already accepts. Testing add by
-    // volume alone refused the commonest way to grow a body.
-    const joined =
-      sharedShapeVolume(kernel, target, extrusion, targetBody, extrusionBody) >
-        0 ||
-      (operation === 'add' &&
-        shapesShareMaterialOrTouch(kernel, target, extrusion));
-    if (!joined) {
-      // Wording unchanged on purpose: `isMeasuredZeroOverlap` in the web
-      // app matches this sentence to tell a measured zero-overlap candidate
-      // from a kernel refusal, and "overlaps" still reads correctly for an
-      // add whose operands do not even touch.
+    const sharedVolume = sharedShapeVolume(
+      kernel,
+      target,
+      extrusion,
+      targetBody,
+      extrusionBody
+    );
+    // A cut needs shared material: with none there is nothing to remove, and
+    // that can be settled before doing any work.
+    if (operation === 'cut' && sharedVolume <= 0) {
+      // Wording unchanged on purpose: `isMeasuredZeroOverlap` in the web app
+      // matches this sentence to tell a measured zero-overlap candidate from
+      // a kernel refusal.
       throw new Error(
         `Stored ${operation} extrusion no longer overlaps ${targetBody.name}; operation was not re-inferred.`
       );
@@ -455,6 +453,18 @@ function buildExtrudeFeature(
               extrusionSolid
             ) ?? kernel.cut(targetSolid, extrusionSolid)
           );
+    // An add only needs the two to meet. Shared volume cannot answer that —
+    // a boss grown off the face it was sketched on meets its target exactly
+    // there and shares none — so contact is measured by exact distance.
+    if (
+      operation === 'add' &&
+      sharedVolume <= 0 &&
+      !shapesShareMaterialOrTouch(kernel, target, extrusion)
+    ) {
+      throw new Error(
+        `Stored ${operation} extrusion no longer overlaps ${targetBody.name}; operation was not re-inferred.`
+      );
+    }
     const resultBounds = kernel.boundingBox(solid);
     const resultBody: ExtrudeInferenceBody = {
       bodyId: feature.bodyId,
