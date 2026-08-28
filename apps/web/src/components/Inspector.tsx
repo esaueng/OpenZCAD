@@ -1,9 +1,11 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { unitLabel } from '../lib/measurements';
 import { MoreHorizontal, Trash2, X } from 'lucide-react';
 import { coerceParamValue } from '@openzcad/document-core';
 import { findFontFace } from '@openzcad/geometry';
 import { FEATURE_COLORS, featureColor } from '@openzcad/shared';
 import type {
+  UnitSystem,
   BodyId,
   BodyRepresentation,
   BooleanOperation,
@@ -182,7 +184,7 @@ interface InspectorProps extends InspectorCallbacks {
   scope: Record<string, number>;
   sketches: SketchOption[];
   bodies: BodyOption[];
-  units: string;
+  units: UnitSystem;
   /** Viewport selection, in pick order — pre-fills boolean/move targets. */
   selectedBodyIds: BodyId[];
   /** Sketch to pre-select in extrude/revolve, e.g. the one picked in the tree. */
@@ -255,7 +257,7 @@ function BodyStats({
   units
 }: {
   body: BodyRepresentation;
-  units: string;
+  units: UnitSystem;
 }) {
   const size = {
     x: body.bbox.max.x - body.bbox.min.x,
@@ -269,12 +271,12 @@ function BodyStats({
         <div className="kv-grid">
           <b>volume</b>
           <span>
-            {formatNumber(body.volume)} {units}³
+            {formatNumber(body.volume)} {unitLabel('volume', units)}
           </span>
           <b>size</b>
           <span>
             {formatNumber(size.x)} × {formatNumber(size.y)} ×{' '}
-            {formatNumber(size.z)} {units}
+            {formatNumber(size.z)} {unitLabel('length', units)}
           </span>
           <b>faces</b>
           <span>{body.faceCount}</span>
@@ -579,7 +581,7 @@ function FaceDirectEdit({
   body: BodyRepresentation;
   selection: TopologySelection;
   scope: Record<string, number>;
-  units: string;
+  units: UnitSystem;
   onResizeThroughHole: InspectorCallbacks['onResizeThroughHole'];
   onRemoveFaceFeature: InspectorCallbacks['onRemoveFaceFeature'];
 }) {
