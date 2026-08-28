@@ -334,6 +334,8 @@ export interface HoleInput {
   countersinkDiameter?: ParamValue;
   countersinkAngleDeg?: ParamValue;
   position: { u: ParamValue; v: ParamValue };
+  /** Anchor `position` is measured from; see the `hole` feature data. */
+  positionAnchor?: 'centroid';
   ids?: BodyFeatureIds;
 }
 

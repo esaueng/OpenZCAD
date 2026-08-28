@@ -775,6 +775,25 @@ export type FeatureData =
        * that would go stale when upstream features move the body.
        */
       position: { u: ParamValue; v: ParamValue };
+      /**
+       * Where {@link position} is measured FROM on the resolved entry face:
+       * present means the face's area centroid, absent means the vertex mean
+       * `FaceGeometry.center` that every hole drilled before the centroid
+       * existed was already placed against.
+       *
+       * The presence of the marker selects the anchor, exactly as
+       * `SketchPlaneRef.sourceCentroid` does, and for the same reason: on a
+       * face bounded by one closed circular edge the two points are a whole
+       * radius apart, so re-anchoring an existing hole would move it. New
+       * holes take the centroid; saved documents keep the anchor they were
+       * drilled against.
+       *
+       * Unlike the sketch's marker this carries no snapshot of the point. A
+       * hole deliberately stores no world position — see {@link position} —
+       * because upstream features move the body underneath it, and a value
+       * that is never read back would be exactly that stale world point.
+       */
+      positionAnchor?: 'centroid';
     }
   | {
       featureKind: 'split';
