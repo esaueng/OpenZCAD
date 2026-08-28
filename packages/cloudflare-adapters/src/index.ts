@@ -3703,7 +3703,43 @@ export class ProjectCollaborationRoom extends DurableObject {
     return claim ? this.refreshTicketAccess(claim) : null;
   }
 
-  /** Re-check D1 after ticket issuance so a just-revoked member cannot connect. */
+  private async currentMemberRole(
+    projectId: string,
+    userId: UserId
+  ): Promise<'editor' | 'viewer' | null> {
+    if (!this.roomEnv.DB) {
+      return null;
+    }
+    const row = await this.roomEnv.DB.prepare(
+      `SELECT pm.role,
+              COALESCE(
+                CASE WHEN json_valid(owner_settings.settings_json)
+                  THEN json_extract(
+                    owner_settings.settings_json,
+                    '$.collaboration.enabled'
+                  )
+                END,
+                1
+              ) AS collaboration_enabled
+       FROM project_members pm
+       INNER JOIN projects p ON p.id = pm.project_id
+       LEFT JOIN user_settings owner_settings
+         ON owner_settings.user_id = p.user_id
+       WHERE pm.project_id = ? AND pm.user_id = ?`
+    )
+      .bind(projectId, userId)
+      .first<{ role: string; collaboration_enabled?: number | boolean }>();
+    if (
+      (row?.role !== 'editor' && row?.role !== 'viewer') ||
+      row.collaboration_enabled === 0 ||
+      row.collaboration_enabled === false
+    ) {
+      return null;
+    }
+    return row.role;
+  }
+
+  /** Re-check D1 after ticket issuance so stale access cannot connect. */
   private async refreshTicketAccess(
     claim: CollaborationSocketTicket
   ): Promise<CollaborationSocketTicket | null> {
@@ -3740,14 +3776,8 @@ export class ProjectCollaborationRoom extends DurableObject {
     if (!rollout.sharingEnabled) {
       return null;
     }
-    const member = await this.roomEnv.DB.prepare(
-      `SELECT role FROM project_members WHERE project_id = ? AND user_id = ?`
-    )
-      .bind(claim.projectId, claim.userId)
-      .first<{ role: string }>();
-    return member?.role === 'editor' || member?.role === 'viewer'
-      ? { ...claim, role: member.role }
-      : null;
+    const role = await this.currentMemberRole(claim.projectId, claim.userId);
+    return role ? { ...claim, role } : null;
   }
 
   private async handleSocketMessage(
@@ -3777,13 +3807,23 @@ export class ProjectCollaborationRoom extends DurableObject {
       return;
     }
 
-    if (!this.collaborationAccessAllowed(role, email)) {
-      socket.close(1008, 'Collaboration access is disabled.');
-      this.removeSocket(socket);
-      return;
-    }
-
     if (message.type === 'hello') {
+      const currentRole = await this.currentConnectionRole({
+        userId,
+        role,
+        email
+      });
+      if (!currentRole) {
+        socket.close(
+          1008,
+          this.collaborationAccessAllowed(role, email)
+            ? 'Project collaboration access is no longer available.'
+            : 'Collaboration access is disabled.'
+        );
+        this.removeSocket(socket);
+        return;
+      }
+      role = currentRole;
       this.sockets.set(socket, {
         clientId: message.clientId,
         userId,
@@ -3809,7 +3849,7 @@ export class ProjectCollaborationRoom extends DurableObject {
         role,
         lease: this.editLease
       });
-      this.broadcastPresence();
+      await this.broadcastPresence();
       return;
     }
     const connection = this.sockets.get(socket);
@@ -3818,8 +3858,20 @@ export class ProjectCollaborationRoom extends DurableObject {
       return;
     }
     if (message.type === 'presence') {
+      const currentRole = await this.currentConnectionRole(connection);
+      if (!currentRole) {
+        socket.close(
+          1008,
+          this.collaborationAccessAllowed(connection.role, connection.email)
+            ? 'Project collaboration access is no longer available.'
+            : 'Collaboration access is disabled.'
+        );
+        this.removeSocket(socket);
+        return;
+      }
+      connection.role = currentRole;
       this.presence.set(message.clientId, message.status);
-      this.broadcastPresence();
+      await this.broadcastPresence();
       return;
     }
     if (message.type === 'lease-acquire') {
@@ -3910,7 +3962,7 @@ export class ProjectCollaborationRoom extends DurableObject {
       // the sender stays silently divergent while reporting itself synced.
       this.send(socket, ackFor(resolution.document, document));
       if (broadcast) {
-        this.broadcast(
+        await this.broadcast(
           { type: 'document', clientId, document: resolution.document },
           socket
         );
@@ -3974,10 +4026,7 @@ export class ProjectCollaborationRoom extends DurableObject {
       email?: string;
     }
   ): Promise<void> {
-    if (
-      connection.role === 'viewer' ||
-      !(await this.membershipStillAllowsAuthoring(connection))
-    ) {
+    if (!(await this.membershipStillAllowsAuthoring(connection))) {
       if (
         this.editLease?.userId === connection.userId &&
         this.editLease.clientId === connection.clientId
@@ -4095,31 +4144,43 @@ export class ProjectCollaborationRoom extends DurableObject {
     );
   }
 
-  /**
-   * The room learns role changes through an internal PATCH from the Worker,
-   * which can fail after the D1 change has committed: a 500 there leaves the
-   * member row removed while an open socket keeps its old in-memory role. The
-   * membership row is the source of truth, so every authored document from a
-   * non-owner re-checks it. Owners cannot be demoted, and without a database
-   * or a known project the in-memory role is all the room has.
-   */
+  private async currentConnectionRole(connection: {
+    userId: UserId;
+    role: SharedProjectAccessRole;
+    email?: string;
+  }): Promise<SharedProjectAccessRole | null> {
+    if (!this.collaborationAccessAllowed(connection.role, connection.email)) {
+      return null;
+    }
+    if (connection.role === 'owner' || !this.projectId || !this.roomEnv.DB) {
+      return connection.role;
+    }
+    try {
+      const role = await this.currentMemberRole(
+        this.projectId,
+        connection.userId
+      );
+      return role && this.collaborationAccessAllowed(role, connection.email)
+        ? role
+        : null;
+    } catch {
+      console.error('Collaboration access refresh failed.');
+      return null;
+    }
+  }
+
+  /** Membership and the owner's sharing preference are authoritative. */
   private async membershipStillAllowsAuthoring(connection: {
     userId: UserId;
     role: SharedProjectAccessRole;
     email?: string;
   }): Promise<boolean> {
-    if (!this.collaborationAccessAllowed(connection.role, connection.email)) {
+    const role = await this.currentConnectionRole(connection);
+    if (!role) {
       return false;
     }
-    if (connection.role === 'owner' || !this.projectId || !this.roomEnv.DB) {
-      return true;
-    }
-    const row = await this.roomEnv.DB.prepare(
-      `SELECT role FROM project_members WHERE project_id = ? AND user_id = ?`
-    )
-      .bind(this.projectId, connection.userId)
-      .first<{ role: string }>();
-    return row?.role === 'editor';
+    connection.role = role;
+    return role === 'owner' || role === 'editor';
   }
 
   private async canAuthor(
@@ -4132,19 +4193,14 @@ export class ProjectCollaborationRoom extends DurableObject {
     leaseId: string | undefined,
     socket: WebSocket
   ): Promise<boolean> {
-    if (connection.role === 'viewer') {
-      this.send(socket, {
-        type: 'error',
-        code: 'permission-denied',
-        message: 'Viewers cannot change the collaboration document.'
-      });
-      return false;
-    }
     if (!(await this.membershipStillAllowsAuthoring(connection))) {
       this.send(socket, {
         type: 'error',
         code: 'permission-denied',
-        message: 'Project membership no longer allows editing.'
+        message:
+          connection.role === 'viewer'
+            ? 'Viewers cannot change the collaboration document.'
+            : 'Project membership no longer allows editing.'
       });
       return false;
     }
@@ -4183,17 +4239,44 @@ export class ProjectCollaborationRoom extends DurableObject {
     const projectId = new URL(request.url).searchParams.get('projectId');
     const userId = request.headers.get('x-openzcad-internal-user-id');
     const roleValue = request.headers.get('x-openzcad-internal-project-role');
+    const ownerDisableValue = request.headers.get(
+      'x-openzcad-internal-owner-collaboration-disabled'
+    );
+    const ownerDisabled = ownerDisableValue === 'v1';
     const role =
       roleValue === 'editor' || roleValue === 'viewer' ? roleValue : null;
     if (
       !projectId ||
-      !userId ||
+      (ownerDisableValue !== null && !ownerDisabled) ||
+      (!ownerDisabled && !userId) ||
+      (ownerDisabled && (userId !== null || roleValue !== null)) ||
       (roleValue !== null && role === null) ||
       (this.projectId && this.projectId !== projectId)
     ) {
       return new Response('Invalid project role update.', { status: 400 });
     }
     await this.enqueueLeaseOperation(async () => {
+      let removed = false;
+      if (ownerDisabled) {
+        if (this.editLease) {
+          const lost = this.editLease;
+          await this.roomContext.storage.delete(ROOM_EDIT_LEASE_KEY);
+          this.editLease = null;
+          this.notifyLeaseHolder(lost, 'role-changed');
+        }
+        for (const [socket, connection] of this.sockets) {
+          if (connection.role === 'owner') {
+            continue;
+          }
+          socket.close(
+            1008,
+            'Project collaboration was disabled by the owner.'
+          );
+          this.removeSocket(socket, false);
+        }
+        await this.broadcastPresence();
+        return;
+      }
       if (
         this.editLease?.userId === userId &&
         (role === null || role === 'viewer')
@@ -4212,8 +4295,12 @@ export class ProjectCollaborationRoom extends DurableObject {
         } else {
           this.send(socket, { type: 'lease-lost', reason: 'role-changed' });
           socket.close(1008, 'Project access was removed.');
-          this.removeSocket(socket);
+          this.removeSocket(socket, false);
+          removed = true;
         }
+      }
+      if (removed) {
+        await this.broadcastPresence();
       }
     });
     return new Response(null, { status: 204 });
@@ -4357,7 +4444,7 @@ export class ProjectCollaborationRoom extends DurableObject {
         return rejectionResponse(oversize);
       }
       await this.commitDocument(resolution.document);
-      this.broadcast({
+      await this.broadcast({
         type: 'document',
         clientId: payload.clientId,
         document: resolution.document
@@ -4432,29 +4519,52 @@ export class ProjectCollaborationRoom extends DurableObject {
     }
   }
 
-  private broadcast(
+  private async broadcast(
     message: CollaborationServerMessage,
     except?: WebSocket
-  ): void {
-    for (const socket of this.sockets.keys()) {
-      if (socket !== except) {
-        this.send(socket, message);
+  ): Promise<void> {
+    let removed = false;
+    for (const [socket, connection] of Array.from(this.sockets.entries())) {
+      const role = await this.currentConnectionRole(connection);
+      if (!role) {
+        socket.close(
+          1008,
+          'Project collaboration access is no longer available.'
+        );
+        this.removeSocket(socket, false);
+        removed = true;
+        continue;
       }
+      connection.role = role;
+      if (socket !== except) {
+        const outgoing =
+          message.type === 'presence'
+            ? ({ type: 'presence', members: this.members() } as const)
+            : message;
+        this.send(socket, outgoing);
+      }
+    }
+    if (removed && message.type !== 'presence') {
+      await this.broadcastPresence();
     }
   }
 
-  private broadcastPresence(): void {
-    this.broadcast({ type: 'presence', members: this.members() });
+  private async broadcastPresence(): Promise<void> {
+    await this.broadcast({ type: 'presence', members: this.members() });
   }
 
-  private removeSocket(socket: WebSocket): void {
+  private removeSocket(socket: WebSocket, broadcast = true): void {
     const connection = this.sockets.get(socket);
     if (!connection) {
       return;
     }
     this.sockets.delete(socket);
     this.presence.delete(connection.clientId);
-    this.broadcastPresence();
+    if (broadcast) {
+      void this.broadcastPresence().catch(() => {
+        console.error('Collaboration presence broadcast failed.');
+      });
+    }
   }
 
   async snapshot() {
