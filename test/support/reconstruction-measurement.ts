@@ -17,7 +17,20 @@ const ANALYTIC_SURFACE_TYPES = new Set([
 ]);
 const DEFAULT_LINEAR_TOLERANCE = 1e-5;
 const DEFAULT_RELATIVE_TOLERANCE = 1e-6;
-const MAX_SYMMETRY_CANDIDATES = 256;
+const MAX_MEASUREMENT_FACES = 512;
+const MAX_MEASUREMENT_EDGES = 4_096;
+const MAX_FACE_EDGES = 512;
+const MAX_SYMMETRY_FACES = 128;
+const MAX_SYMMETRY_CANDIDATES = 2_048;
+const MAX_REPORTED_SYMMETRIES = 32;
+const MAX_PARALLEL_PLANE_SPACINGS = 2_048;
+const MIN_DEVIATION_DEFLECTION = 1e-4;
+const MAX_DEVIATION_DEFLECTION = 1;
+const MAX_EDGE_SAMPLE_POINTS = 50_000;
+const MAX_DEVIATION_MESH_POINTS = 50_000;
+const MAX_DEVIATION_MESH_TRIANGLES = 100_000;
+const MAX_DEVIATION_DISTANCE_CHECKS = 100_000_000;
+const MAX_SWEEP_SAMPLES_PER_RAIL = 65;
 
 export interface MeasurementPoint {
   x: number;
@@ -120,6 +133,92 @@ interface ReflectionPlane {
   offset: number;
 }
 
+interface ResolvedReconstructionMeasurementOptions {
+  linearTolerance: number;
+  relativeTolerance: number;
+  maxSymmetries: number;
+}
+
+interface ResolvedRuledEdgeSweepDeviationOptions {
+  edgeDeflection: number;
+  faceDeflection: number;
+  samplesPerRail: number;
+}
+
+function finitePoint(value: MeasurementPoint): boolean {
+  return [value.x, value.y, value.z].every(Number.isFinite);
+}
+
+function finiteWithin(
+  value: number,
+  minimum: number,
+  maximum: number,
+  label: string
+): number {
+  if (!Number.isFinite(value) || value < minimum || value > maximum) {
+    throw new Error(
+      `${label} must be finite and between ${minimum} and ${maximum}.`
+    );
+  }
+  return value;
+}
+
+function resolveMeasurementOptions(
+  options: ReconstructionMeasurementOptions
+): ResolvedReconstructionMeasurementOptions {
+  const linearTolerance = finiteWithin(
+    options.linearTolerance ?? DEFAULT_LINEAR_TOLERANCE,
+    Number.EPSILON,
+    1,
+    'Reconstruction measurement linear tolerance'
+  );
+  const relativeTolerance = finiteWithin(
+    options.relativeTolerance ?? DEFAULT_RELATIVE_TOLERANCE,
+    0,
+    0.01,
+    'Reconstruction measurement relative tolerance'
+  );
+  const maxSymmetries = options.maxSymmetries ?? 8;
+  if (
+    !Number.isSafeInteger(maxSymmetries) ||
+    maxSymmetries < 1 ||
+    maxSymmetries > MAX_REPORTED_SYMMETRIES
+  ) {
+    throw new Error(
+      `Reconstruction measurement max symmetries must be an integer between 1 and ${MAX_REPORTED_SYMMETRIES}.`
+    );
+  }
+  return { linearTolerance, relativeTolerance, maxSymmetries };
+}
+
+function resolveDeviationOptions(
+  options: RuledEdgeSweepDeviationOptions
+): ResolvedRuledEdgeSweepDeviationOptions {
+  const edgeDeflection = finiteWithin(
+    options.edgeDeflection ?? 0.01,
+    MIN_DEVIATION_DEFLECTION,
+    MAX_DEVIATION_DEFLECTION,
+    'Edge sweep rail deflection'
+  );
+  const faceDeflection = finiteWithin(
+    options.faceDeflection ?? 0.01,
+    MIN_DEVIATION_DEFLECTION,
+    MAX_DEVIATION_DEFLECTION,
+    'Edge sweep face deflection'
+  );
+  const samplesPerRail = options.samplesPerRail ?? 33;
+  if (
+    !Number.isSafeInteger(samplesPerRail) ||
+    samplesPerRail < 3 ||
+    samplesPerRail > MAX_SWEEP_SAMPLES_PER_RAIL
+  ) {
+    throw new Error(
+      `Edge sweep samples per rail must be an integer between 3 and ${MAX_SWEEP_SAMPLES_PER_RAIL}.`
+    );
+  }
+  return { edgeDeflection, faceDeflection, samplesPerRail };
+}
+
 function point(values: ArrayLike<number>, offset = 0): MeasurementPoint {
   return {
     x: Number(values[offset]),
@@ -213,16 +312,24 @@ function closeNumber(
 
 function readAnalyticParameters(
   kernel: RemusKernel,
-  face: number
+  face: number,
+  surfaceType: string
 ): Readonly<Record<string, unknown>> | undefined {
+  if (!ANALYTIC_SURFACE_TYPES.has(surfaceType)) return undefined;
+  let parsed: unknown;
   try {
-    const parsed: unknown = JSON.parse(kernel.getAnalyticSurfaceParams(face));
-    return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
-      ? (parsed as Record<string, unknown>)
-      : undefined;
+    parsed = JSON.parse(kernel.getAnalyticSurfaceParams(face));
   } catch {
-    return undefined;
+    throw new Error(
+      `Analytic ${surfaceType} face ${face} returned malformed parameters.`
+    );
   }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw new Error(
+      `Analytic ${surfaceType} face ${face} returned incomplete parameters.`
+    );
+  }
+  return parsed as Record<string, unknown>;
 }
 
 function faceVertices(
@@ -231,11 +338,21 @@ function faceVertices(
 ): readonly MeasurementPoint[] {
   const seen = new Set<number>();
   const vertices: MeasurementPoint[] = [];
-  for (const edge of kernel.getFaceEdges(face)) {
+  const edges = kernel.getFaceEdges(face);
+  if (edges.length > MAX_FACE_EDGES) {
+    throw new Error(
+      `Face ${face} exceeds the ${MAX_FACE_EDGES}-edge measurement budget.`
+    );
+  }
+  for (const edge of edges) {
     for (const vertex of kernel.getEdgeVertexHandles(edge)) {
       if (seen.has(vertex)) continue;
       seen.add(vertex);
-      vertices.push(point(kernel.getVertexPosition(vertex)));
+      const position = point(kernel.getVertexPosition(vertex));
+      if (!finitePoint(position)) {
+        throw new Error(`Face ${face} returned a non-finite vertex.`);
+      }
+      vertices.push(position);
     }
   }
   return vertices.sort((left, right) =>
@@ -247,26 +364,80 @@ function faceVertices(
   );
 }
 
+function requireAnalyticGeometry(face: AnalyticFaceMeasurement): void {
+  if (!face.analytic) return;
+  const invalidPoint = (value: MeasurementPoint | undefined): boolean =>
+    !value || !finitePoint(value);
+  const invalidPositive = (value: number | undefined): boolean =>
+    value === undefined || !Number.isFinite(value) || value <= 0;
+  const invalidScalar = (value: number | undefined): boolean =>
+    value === undefined || !Number.isFinite(value);
+
+  const incomplete =
+    face.parameters === undefined ||
+    (face.surfaceType === 'plane' &&
+      (invalidPoint(face.normal) || invalidScalar(face.planeOffset))) ||
+    (face.surfaceType === 'cylinder' &&
+      (invalidPositive(face.radius) ||
+        invalidPoint(face.axisStart) ||
+        invalidPoint(face.axisEnd) ||
+        distance(face.axisStart!, face.axisEnd!) <= Number.EPSILON)) ||
+    (face.surfaceType === 'sphere' && invalidPositive(face.radius)) ||
+    (face.surfaceType === 'cone' &&
+      (invalidPoint(face.apex) ||
+        invalidPoint(face.axis) ||
+        invalidPositive(face.halfAngle) ||
+        face.halfAngle! >= Math.PI / 2)) ||
+    (face.surfaceType === 'torus' &&
+      (invalidPoint(face.torusCenter) ||
+        invalidPositive(face.majorRadius) ||
+        invalidPositive(face.minorRadius)));
+  if (incomplete) {
+    throw new Error(
+      `Analytic ${face.surfaceType} face ${face.face} returned incomplete geometry.`
+    );
+  }
+}
+
 export function measureAnalyticInventory(
   kernel: RemusKernel,
   solid: number
 ): AnalyticInventory {
   const bySurfaceType: Record<string, number> = {};
-  const faces = Array.from(kernel.getSolidFaces(solid), (face) => {
+  const faceHandles = Array.from(kernel.getSolidFaces(solid));
+  if (faceHandles.length > MAX_MEASUREMENT_FACES) {
+    throw new Error(
+      `Imported STEP exceeds the ${MAX_MEASUREMENT_FACES}-face measurement budget.`
+    );
+  }
+  const faces = faceHandles.map((face) => {
     const geometry = measureFaceGeometry(kernel, face);
-    if (!geometry) {
+    if (
+      !geometry ||
+      !Number.isFinite(geometry.area) ||
+      geometry.area <= 0 ||
+      !finitePoint(geometry.center)
+    ) {
       throw new Error(`Face ${face} could not be measured.`);
     }
     bySurfaceType[geometry.surfaceType] =
       (bySurfaceType[geometry.surfaceType] ?? 0) + 1;
-    const parameters = readAnalyticParameters(kernel, face);
-    return {
+    const parameters = readAnalyticParameters(
+      kernel,
+      face,
+      geometry.surfaceType
+    );
+    const vertices = faceVertices(kernel, face);
+    if (vertices.length === 0) {
+      throw new Error(`Face ${face} has no measurable boundary vertices.`);
+    }
+    const measurement = {
       face,
       surfaceType: geometry.surfaceType,
       analytic: ANALYTIC_SURFACE_TYPES.has(geometry.surfaceType),
       area: geometry.area,
       center: geometry.center,
-      vertices: faceVertices(kernel, face),
+      vertices,
       ...(parameters ? { parameters } : {}),
       ...(geometry.normal ? { normal: geometry.normal } : {}),
       ...(geometry.planeOffset === undefined
@@ -288,6 +459,8 @@ export function measureAnalyticInventory(
         ? {}
         : { minorRadius: geometry.minorRadius })
     } satisfies AnalyticFaceMeasurement;
+    requireAnalyticGeometry(measurement);
+    return measurement;
   });
   return {
     totalFaces: faces.length,
@@ -342,6 +515,35 @@ function optionalPointsMatch(
       );
 }
 
+function optionalVectorsMatch(
+  reflected: MeasurementPoint | undefined,
+  candidate: MeasurementPoint | undefined,
+  angularTolerance: number
+): boolean {
+  return reflected === undefined && candidate === undefined
+    ? true
+    : Boolean(
+        reflected &&
+        candidate &&
+        unorientedVectorsMatch(reflected, candidate, angularTolerance)
+      );
+}
+
+function optionalNumbersMatch(
+  left: number | undefined,
+  right: number | undefined,
+  linearTolerance: number,
+  relativeTolerance: number
+): boolean {
+  return left === undefined && right === undefined
+    ? true
+    : Boolean(
+        left !== undefined &&
+        right !== undefined &&
+        closeNumber(left, right, linearTolerance, relativeTolerance)
+      );
+}
+
 function reflectedFaceMatches(
   source: AnalyticFaceMeasurement,
   candidate: AnalyticFaceMeasurement,
@@ -369,10 +571,8 @@ function reflectedFaceMatches(
   }
   const angularTolerance = Math.max(relativeTolerance * 10, 1e-8);
   if (
-    source.normal &&
-    candidate.normal &&
-    !unorientedVectorsMatch(
-      reflectVector(source.normal, plane),
+    !optionalVectorsMatch(
+      source.normal ? reflectVector(source.normal, plane) : undefined,
       candidate.normal,
       angularTolerance
     )
@@ -380,9 +580,7 @@ function reflectedFaceMatches(
     return false;
   }
   if (
-    source.radius !== undefined &&
-    candidate.radius !== undefined &&
-    !closeNumber(
+    !optionalNumbersMatch(
       source.radius,
       candidate.radius,
       linearTolerance,
@@ -434,10 +632,8 @@ function reflectedFaceMatches(
     }
   }
   if (
-    source.axis &&
-    candidate.axis &&
-    !unorientedVectorsMatch(
-      reflectVector(source.axis, plane),
+    !optionalVectorsMatch(
+      source.axis ? reflectVector(source.axis, plane) : undefined,
       candidate.axis,
       angularTolerance
     )
@@ -450,9 +646,7 @@ function reflectedFaceMatches(
     [source.minorRadius, candidate.minorRadius]
   ] as const) {
     if (
-      left !== undefined &&
-      right !== undefined &&
-      !closeNumber(left, right, linearTolerance, relativeTolerance)
+      !optionalNumbersMatch(left, right, linearTolerance, relativeTolerance)
     ) {
       return false;
     }
@@ -479,9 +673,12 @@ function addCandidate(
   ) {
     return;
   }
-  if (candidates.length < MAX_SYMMETRY_CANDIDATES) {
-    candidates.push({ normal, offset });
+  if (candidates.length >= MAX_SYMMETRY_CANDIDATES) {
+    throw new Error(
+      `Reflection symmetry search exceeds the ${MAX_SYMMETRY_CANDIDATES}-candidate budget.`
+    );
   }
+  candidates.push({ normal, offset });
 }
 
 function reflectionCandidates(
@@ -534,11 +731,23 @@ export function detectReflectionSymmetries(
   bounds: ImportedStepMeasurement['bounds'],
   options: ReconstructionMeasurementOptions = {}
 ): readonly ReflectionSymmetryMeasurement[] {
-  const linearTolerance = options.linearTolerance ?? DEFAULT_LINEAR_TOLERANCE;
-  const relativeTolerance =
-    options.relativeTolerance ?? DEFAULT_RELATIVE_TOLERANCE;
-  const maxSymmetries = options.maxSymmetries ?? 8;
+  const { linearTolerance, relativeTolerance, maxSymmetries } =
+    resolveMeasurementOptions(options);
+  if (
+    !finitePoint(bounds.min) ||
+    !finitePoint(bounds.max) ||
+    bounds.min.x > bounds.max.x ||
+    bounds.min.y > bounds.max.y ||
+    bounds.min.z > bounds.max.z
+  ) {
+    throw new Error('Reflection symmetry search received invalid bounds.');
+  }
   const faces = inventory.faces.filter((face) => face.analytic);
+  if (faces.length > MAX_SYMMETRY_FACES) {
+    throw new Error(
+      `Reflection symmetry search exceeds the ${MAX_SYMMETRY_FACES}-analytic-face budget.`
+    );
+  }
   if (faces.length === 0) return [];
   const measurements = reflectionCandidates(
     inventory,
@@ -612,9 +821,29 @@ export function measureParallelPlaneSpacings(
   inventory: AnalyticInventory,
   linearTolerance = DEFAULT_LINEAR_TOLERANCE
 ): readonly ParallelPlaneSpacingMeasurement[] {
+  const resolvedTolerance = finiteWithin(
+    linearTolerance,
+    Number.EPSILON,
+    1,
+    'Parallel-plane linear tolerance'
+  );
+  if (inventory.faces.length > MAX_MEASUREMENT_FACES) {
+    throw new Error(
+      `Parallel-plane search exceeds the ${MAX_MEASUREMENT_FACES}-face measurement budget.`
+    );
+  }
   const measurements = new Map<string, ParallelPlaneSpacingMeasurement>();
   for (const pair of queryOpposingPlanarFacePairs(kernel, solid)) {
-    measurements.set(pairKey(pair.faceA, pair.faceB), {
+    const key = pairKey(pair.faceA, pair.faceB);
+    if (measurements.has(key)) {
+      throw new Error('Planar face-pair query returned a duplicate pair.');
+    }
+    if (measurements.size >= MAX_PARALLEL_PLANE_SPACINGS) {
+      throw new Error(
+        `Parallel-plane search exceeds the ${MAX_PARALLEL_PLANE_SPACINGS}-result budget.`
+      );
+    }
+    measurements.set(key, {
       faceA: pair.faceA,
       faceB: pair.faceB,
       distance: pair.distance,
@@ -626,9 +855,13 @@ export function measureParallelPlaneSpacings(
       bordersBlend: pair.faceABordersBlend || pair.faceBBordersBlend
     });
   }
-  const planes = inventory.faces.filter(
-    (face) => face.surfaceType === 'plane' && canonicalPlane(face)
-  );
+  const planes = inventory.faces.filter((face) => {
+    if (face.surfaceType !== 'plane') return false;
+    if (!canonicalPlane(face)) {
+      throw new Error(`Planar face ${face.face} has incomplete geometry.`);
+    }
+    return true;
+  });
   for (let first = 0; first < planes.length; first += 1) {
     for (let second = first + 1; second < planes.length; second += 1) {
       const left = planes[first]!;
@@ -641,7 +874,12 @@ export function measureParallelPlaneSpacings(
         continue;
       }
       const spacing = Math.abs(leftPlane.offset - rightPlane.offset);
-      if (spacing <= linearTolerance) continue;
+      if (spacing <= resolvedTolerance) continue;
+      if (measurements.size >= MAX_PARALLEL_PLANE_SPACINGS) {
+        throw new Error(
+          `Parallel-plane search exceeds the ${MAX_PARALLEL_PLANE_SPACINGS}-result budget.`
+        );
+      }
       measurements.set(key, {
         faceA: left.face,
         faceB: right.face,
@@ -707,9 +945,19 @@ function orientedEdgeSamples(
   sampleCount: number
 ): readonly MeasurementPoint[] {
   const flat = kernel.sampleEdge(edge, deflection);
-  const samples = Array.from(
-    { length: Math.floor(flat.length / 3) },
-    (_, index) => point(flat, index * 3)
+  const pointCount = flat.length / 3;
+  if (
+    flat.length % 3 !== 0 ||
+    pointCount < 2 ||
+    pointCount > MAX_EDGE_SAMPLE_POINTS ||
+    !Array.from(flat).every(Number.isFinite)
+  ) {
+    throw new Error(
+      `Edge sweep rail ${edge} returned an invalid or over-budget sample.`
+    );
+  }
+  const samples = Array.from({ length: pointCount }, (_, index) =>
+    point(flat, index * 3)
   );
   if (!kernel.isEdgeForwardInWire(edge, wire)) samples.reverse();
   return resamplePolyline(samples, sampleCount);
@@ -806,6 +1054,11 @@ function directionalDeviation(
   if (samples.length === 0 || triangles.length === 0) {
     throw new Error('Deviation measurement requires non-empty surface meshes.');
   }
+  if (samples.length * triangles.length > MAX_DEVIATION_DISTANCE_CHECKS) {
+    throw new Error(
+      `Deviation measurement exceeds the ${MAX_DEVIATION_DISTANCE_CHECKS}-distance-check budget.`
+    );
+  }
   let maximumSquared = 0;
   let sumSquared = 0;
   for (const sample of samples) {
@@ -833,16 +1086,37 @@ function trianglesFromIndexedMesh(
   points: readonly MeasurementPoint[];
   triangles: readonly MeasurementTriangle[];
 } {
+  if (
+    positions.length % 3 !== 0 ||
+    indices.length % 3 !== 0 ||
+    positions.length / 3 === 0 ||
+    indices.length / 3 === 0 ||
+    positions.length / 3 > MAX_DEVIATION_MESH_POINTS ||
+    indices.length / 3 > MAX_DEVIATION_MESH_TRIANGLES ||
+    !Array.from(positions).every(Number.isFinite)
+  ) {
+    throw new Error('Witness face tessellation is invalid or over budget.');
+  }
   const points = Array.from(
     { length: Math.floor(positions.length / 3) },
     (_, index) => point(positions, index * 3)
   );
   const triangles: MeasurementTriangle[] = [];
   for (let index = 0; index < indices.length; index += 3) {
+    const firstIndex = indices[index]!;
+    const secondIndex = indices[index + 1]!;
+    const thirdIndex = indices[index + 2]!;
+    if (
+      firstIndex >= points.length ||
+      secondIndex >= points.length ||
+      thirdIndex >= points.length
+    ) {
+      throw new Error('Witness face tessellation contains an invalid index.');
+    }
     triangles.push([
-      points[indices[index]!]!,
-      points[indices[index + 1]!]!,
-      points[indices[index + 2]!]!
+      points[firstIndex]!,
+      points[secondIndex]!,
+      points[thirdIndex]!
     ]);
   }
   return { points, triangles };
@@ -859,6 +1133,9 @@ function ruledSweepMesh(
     throw new Error('Edge sweep rails must use the same sampling count.');
   }
   const sampleCount = firstRail.length;
+  if (sampleCount < 3 || sampleCount > MAX_SWEEP_SAMPLES_PER_RAIL) {
+    throw new Error('Edge sweep rails are outside the sampling budget.');
+  }
   const points: MeasurementPoint[] = [];
   for (let railIndex = 0; railIndex < sampleCount; railIndex += 1) {
     for (let sweepIndex = 0; sweepIndex < sampleCount; sweepIndex += 1) {
@@ -897,12 +1174,8 @@ export function measureRuledEdgeSweepDeviation(
   witnessFace: number,
   options: RuledEdgeSweepDeviationOptions = {}
 ): RuledEdgeSweepDeviationMeasurement {
-  const edgeDeflection = options.edgeDeflection ?? 0.01;
-  const faceDeflection = options.faceDeflection ?? 0.01;
-  const samplesPerRail = options.samplesPerRail ?? 33;
-  if (edgeDeflection <= 0 || faceDeflection <= 0 || samplesPerRail < 3) {
-    throw new Error('Edge sweep deviation options are outside their bounds.');
-  }
+  const { edgeDeflection, faceDeflection, samplesPerRail } =
+    resolveDeviationOptions(options);
   const wire = kernel.getFaceOuterWire(witnessFace);
   const edges = Array.from(kernel.getWireEdges(wire));
   if (edges.length !== 4) {
@@ -963,6 +1236,7 @@ export function measureImportedStep(
   step: Uint8Array,
   options: ReconstructionMeasurementOptions = {}
 ): ImportedStepMeasurement {
+  const resolvedOptions = resolveMeasurementOptions(options);
   const solids = Array.from(importStepWithOwnBudget(kernel, step));
   if (solids.length !== 1) {
     throw new Error(
@@ -975,24 +1249,45 @@ export function measureImportedStep(
     throw new Error('Imported STEP returned invalid solid bounds.');
   }
   const bounds = { min: point(rawBounds), max: point(rawBounds, 3) };
+  if (
+    bounds.min.x > bounds.max.x ||
+    bounds.min.y > bounds.max.y ||
+    bounds.min.z > bounds.max.z
+  ) {
+    throw new Error('Imported STEP returned inverted solid bounds.');
+  }
+  const edges = kernel.getSolidEdges(solid);
+  if (edges.length > MAX_MEASUREMENT_EDGES) {
+    throw new Error(
+      `Imported STEP exceeds the ${MAX_MEASUREMENT_EDGES}-edge measurement budget.`
+    );
+  }
   const inventory = measureAnalyticInventory(kernel, solid);
   const reflectionSymmetries = detectReflectionSymmetries(
     inventory,
     bounds,
-    options
+    resolvedOptions
   );
   const parallelPlaneSpacings = measureParallelPlaneSpacings(
     kernel,
     solid,
     inventory,
-    options.linearTolerance
+    resolvedOptions.linearTolerance
   );
+  const volume = kernel.volume(solid, 0.01);
+  const validationErrors = kernel.validateSolid(solid);
+  if (!Number.isFinite(volume) || volume <= 0) {
+    throw new Error('Imported STEP returned an invalid mesh volume.');
+  }
+  if (!Number.isSafeInteger(validationErrors) || validationErrors < 0) {
+    throw new Error('Imported STEP returned an invalid validation result.');
+  }
   return {
     solid,
     faceCount: inventory.totalFaces,
-    edgeCount: kernel.getSolidEdges(solid).length,
-    volume: kernel.volume(solid, 0.01),
-    validationErrors: kernel.validateSolid(solid),
+    edgeCount: edges.length,
+    volume,
+    validationErrors,
     bounds,
     inventory,
     reflectionSymmetries,
