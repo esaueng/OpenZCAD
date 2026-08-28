@@ -786,6 +786,12 @@ test('extrudes and edits one of multiple closed sketch regions', async ({
   await page.locator('.feature-row-main', { hasText: 'Extrude' }).click();
   const inspector = page.getByRole('region', { name: 'Feature inspector' });
   await expect(inspector).toBeVisible();
+  // A healthy extrude, freshly clicked. Its source sketch is consumed and so
+  // not rendered, which used to read as every profile reference failing to
+  // resolve — and the footer accused the feature of a broken reference.
+  await expect(page.getByRole('contentinfo')).not.toContainText(
+    'Broken profile reference'
+  );
   await inspector.getByRole('textbox', { name: /^Distance/ }).fill('32');
   await inspector.getByRole('button', { name: /^Apply/ }).click();
   await expect(page.getByRole('contentinfo')).toContainText('Edit Extrude');
@@ -1480,6 +1486,45 @@ for (const modifier of [
     expect(consoleErrors).toEqual([]);
   });
 }
+
+test('the armed fillet handle rounds every shift-selected edge, not just the last', async ({
+  page
+}) => {
+  // Two lists hold "the selected edges": the app's `selectedEdges` (which the
+  // Inspector's Create path reads, covered above) and the interaction
+  // machine's `edges` (which the direct-manipulation handle commits). A
+  // stray `clear` dispatched between the first pick and an additive second
+  // one reset the machine's list on every shift-click, so the viewport
+  // highlighted N edges while the armed handle filleted one.
+  await stubApi(page);
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('Handle multi edge');
+  await page.getByRole('button', { name: 'Create project' }).click();
+
+  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
+  await page
+    .getByRole('region', { name: 'Feature inspector' })
+    .getByRole('button', { name: /^Create/ })
+    .click();
+
+  await shiftSelectTwoVisibleBoxEdges(page);
+  await expect(
+    page.getByRole('region', { name: 'Fillet operation' })
+  ).toBeVisible();
+
+  // Commit through the handle's own keypad — the path that reads the
+  // machine's list rather than the app's.
+  const chip = page.getByTestId('direct-manipulation-value');
+  await chip.click();
+  const keypad = page.getByRole('dialog', { name: 'Radius value' });
+  await keypad.getByRole('textbox').fill('1');
+  await keypad.getByRole('button', { name: 'Apply radius' }).click();
+
+  // The count in this message is the edge list the COMMAND carried.
+  await expect(page.getByRole('contentinfo')).toContainText(
+    'Filleted 2 edges at 1 mm.'
+  );
+});
 
 test('applies an assistant-created sketch and same-proposal extrude', async ({
   page
@@ -3498,4 +3543,118 @@ test('cancelling an export stops its archive upload', async ({ page }) => {
   // Nothing is finalized, so nothing appears in the File menu's stored files.
   await page.waitForTimeout(1500);
   expect(finalizeCalls).toBe(0);
+});
+
+test('an archive that outlives its project stays out of the next project’s File menu', async ({
+  page
+}) => {
+  // The STL import archives its source with no dialog and no busy state, so
+  // the user can walk away mid-upload — the same window the wrong-project
+  // import guard covers. The artifacts list is keyed to the OPEN project,
+  // but the callback that prepends a freshly stored artifact used to run
+  // unguarded, so a late-finishing archive put its record, and the File
+  // badge, into whichever project was showing when the upload settled.
+  test.setTimeout(90_000);
+  await stubApi(page);
+
+  const importUploadSessionId = 'upload_import_switch_e2e';
+  const importArtifactId = 'artifact_import_switch_e2e';
+  let releaseUpload: (() => void) | undefined;
+  let finalized = 0;
+
+  // Unlike the suite's default stub — and unlike the wrong-project import
+  // test above, which 404s the session — this upload SUCCEEDS. The defect
+  // only exists when the archive is able to finish.
+  await page.route('**/api/uploads', async (route) => {
+    const payload = route.request().postDataJSON() as {
+      kind?: string;
+      projectId?: string;
+      fileName?: string;
+      contentType?: string;
+    };
+    if (payload.kind !== 'stl-import') {
+      return route.fallback();
+    }
+    return route.fulfill({
+      status: 201,
+      json: {
+        session: {
+          uploadSessionId: importUploadSessionId,
+          artifactId: importArtifactId,
+          projectId: payload.projectId,
+          objectKey: `${payload.projectId}/uploads/simple-block.stl`,
+          uploadUrl: `/api/uploads/${importUploadSessionId}/content`,
+          expiresAt: '2099-01-01T00:00:00.000Z',
+          fileName: payload.fileName,
+          contentType: payload.contentType,
+          kind: payload.kind,
+          metadata: {}
+        }
+      }
+    });
+  });
+  const uploadReached = new Promise<void>((resolveReached) => {
+    const held = new Promise<void>((resolveHeld) => {
+      releaseUpload = resolveHeld;
+    });
+    void page.route(
+      `**/api/uploads/${importUploadSessionId}/content`,
+      async (route) => {
+        resolveReached();
+        await held;
+        return route.fulfill({ status: 204, body: '' });
+      }
+    );
+  });
+  await page.route('**/api/artifacts/finalize', (route) => {
+    const payload = route.request().postDataJSON() as { artifactId?: string };
+    if (payload.artifactId !== importArtifactId) {
+      return route.fallback();
+    }
+    finalized += 1;
+    return route.fulfill({ json: { artifactId: importArtifactId } });
+  });
+  await page.route(`**/api/artifacts/${importArtifactId}`, (route) =>
+    route.fulfill({
+      json: {
+        artifact: {
+          artifactId: importArtifactId,
+          projectId: 'proj_import_origin',
+          kind: 'stl-import',
+          fileName: 'simple-block.stl',
+          contentType: 'model/stl',
+          bytes: 10,
+          checksumSha256: 'sha',
+          createdAt: '2026-01-01T00:00:00.000Z'
+        }
+      }
+    })
+  );
+
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('Import Origin');
+  await page.getByRole('button', { name: 'Create project' }).click();
+  await expect(page.getByRole('region', { name: '3D viewport' })).toBeVisible();
+
+  await page
+    .getByLabel('Import STEP or STL…')
+    .setInputFiles(
+      fileURLToPath(new URL('../../samples/simple-block.stl', import.meta.url))
+    );
+  await uploadReached;
+
+  // Leave mid-upload for a different project, then let the archive finish.
+  await page.getByTitle('Back to projects').click();
+  await page.getByLabel('Project name').fill('Somewhere Else');
+  await page.getByRole('button', { name: 'Create project' }).click();
+  await expect(page.getByRole('region', { name: '3D viewport' })).toBeVisible();
+  releaseUpload?.();
+
+  // The archive finishes and finalizes — that part is legitimate. What must
+  // not happen is its record landing in THIS project's File menu.
+  await expect.poll(() => finalized, { timeout: 15_000 }).toBe(1);
+  await page.waitForTimeout(1000);
+  await expect(
+    page.locator('details.file-menu summary')
+  ).not.toContainText('File 1');
 });

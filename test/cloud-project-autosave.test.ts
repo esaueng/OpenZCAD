@@ -419,6 +419,44 @@ describe('cloud project autosave — refusals', () => {
     controller.dispose();
   });
 
+  it('ignores an adoption for a project that is no longer open', async () => {
+    // Adoption is called from async work — a pull, a conflict resolution, the
+    // freshness poll — so it can land after the user opened another project.
+    // It used to re-point the controller unconditionally, leaving it
+    // mirroring a document no longer on screen and fencing the open project's
+    // next push against a version it never held.
+    const saves: { projectId: string; expectedVersion: number }[] = [];
+    const { controller } = harness({
+      respond: (input) => {
+        saves.push({
+          projectId: input.document.projectId,
+          expectedVersion: input.expectedVersion
+        });
+        return Promise.resolve({
+          projectId: input.document.projectId,
+          version: input.document.version,
+          updatedAt: '2026-01-01T00:00:00.000Z'
+        });
+      }
+    });
+    const stale = documentAt(2);
+    const open = documentAt(2, createProjectDocument('Open', owner));
+    controller.openProject(open.projectId, 2);
+
+    // The stale project's pull answers late.
+    controller.adoptAccountVersion(stale.projectId, 9);
+
+    controller.schedule(documentAt(3, open));
+    await vi.advanceTimersByTimeAsync(PROJECT_AUTOSAVE_IDLE_MS);
+    await controller.whenIdle();
+
+    expect(saves).toHaveLength(1);
+    expect(saves[0]?.projectId).toBe(open.projectId);
+    // Based on the version the OPEN project holds, not the stale adoption's.
+    expect(saves[0]?.expectedVersion).toBe(2);
+    controller.dispose();
+  });
+
   it('stops permanently on a document the account will not store', async () => {
     let attempts = 0;
     const { controller, statuses } = harness({

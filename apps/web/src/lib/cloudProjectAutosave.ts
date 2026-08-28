@@ -359,6 +359,15 @@ export class CloudProjectAutosave {
    */
   adoptAccountVersion(projectId: string, accountVersion: number): void {
     this.#assertUsable();
+    // Same guard `haltForConflict` above has always applied, for the same
+    // reason: the caller is usually async — a pull, a conflict resolution, a
+    // freshness poll — and can land after the user has opened a different
+    // project. Re-pointing the controller at the stale project would leave it
+    // mirroring a document that is no longer on screen and fence the open
+    // one's next push against a version it never held.
+    if (this.#project && this.#project.projectId !== projectId) {
+      return;
+    }
     this.#clearTimer();
     this.#project = {
       projectId,
