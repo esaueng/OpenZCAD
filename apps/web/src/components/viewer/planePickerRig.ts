@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { PLANE_BASES } from '@openzcad/geometry';
 import { VIEWPORT_RENDER_ORDER } from '@openzcad/viewport';
 import type { PlaneId } from '@openzcad/shared';
 
@@ -110,12 +111,6 @@ export function buildPlanePickerRig(): PlanePickerRig {
 
   let hovered: PlaneId | null = null;
   let offsetDistance = 0;
-  // Normals match PLANE_EULER: XY faces +Z, XZ faces -Y, YZ faces +X.
-  const PLANE_NORMAL: Record<PlaneId, THREE.Vector3> = {
-    XY: new THREE.Vector3(0, 0, 1),
-    XZ: new THREE.Vector3(0, -1, 0),
-    YZ: new THREE.Vector3(1, 0, 0)
-  };
 
   /**
    * Places each quad at the current offset. The group carries the screen-size
@@ -126,8 +121,9 @@ export function buildPlanePickerRig(): PlanePickerRig {
   const applyOffset = () => {
     const scale = group.scale.x || 1;
     for (const [plane, mesh] of meshes) {
+      const normal = PLANE_BASES[plane].normal;
       mesh.position
-        .copy(PLANE_NORMAL[plane])
+        .set(normal.x, normal.y, normal.z)
         .multiplyScalar(offsetDistance / scale);
       borderByPlane.get(plane)?.position.copy(mesh.position);
     }
