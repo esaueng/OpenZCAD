@@ -1,6 +1,7 @@
 # Guided Parametric Reconstruction Plan
 
-Status: approved plan of record (2026-08-25); no implementation started.
+Status: approved plan of record (2026-08-25); Phase R0 implemented 2026-08-27;
+R1 and later phases not started.
 Scope decision: build the reusable guided-reconstruction **framework** now, with
 the hammer holder (46 mm) as its first profile. Generality is NOT claimed until
 at least two further, structurally different parts pass the same validation
@@ -187,7 +188,9 @@ generated U-bracket exercising the same hypothesis kinds).
   measurements locally; synthetic fixture in CI. Also run the neck-blend
   deviation experiment (rebuild one neck via edge sweep, measure deviation vs.
   witness) — its result decides whether exact-NURBS sketch entities (R5) are
-  ever worth it.
+  ever worth it. **Result:** the better witness-edge ruled sweep still reached
+  1.913926 mm maximum bidirectional deviation, so the neck does not justify R5.
+  See [the R0 measurement record](../qa/2026-08-27/guided-reconstruction-r0.md).
 - **Phase R1 — evidence pack (`packages/io-shapr`).** Read `PersistedCalls`
   into an additive optional `executed` field on operation IR. Acceptance:
   synthetic fixtures for the observed call shapes; absent field → byte-
@@ -213,9 +216,10 @@ generated U-bracket exercising the same hypothesis kinds).
   apply/perturb/undo/redo/export. Rollback: command unexecuted → today's
   witness-only import; undo → exact prior state.
 - **Phase R5 — deferred, needs explicit authorization.** Exact-NURBS sketch
-  entities for byte-exact necks/text (only if R0's deviation measurement
-  justifies it); Shapr schema-270+ adapters when the format moves; profiles 2+
-  (revolve-heavy, drafted, multi-body parts) to earn the generality claim.
+  entities for byte-exact necks/text (the R0 neck experiment did not justify
+  them; a different measured use case is required); Shapr schema-270+ adapters
+  when the format moves; profiles 2+ (revolve-heavy, drafted, multi-body parts)
+  to earn the generality claim.
 
 R0–R2 are independent of each other except R2 using R0's helpers; R3 depends on
 R2; R4 on R2+R3.
