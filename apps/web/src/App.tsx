@@ -13410,6 +13410,9 @@ export function App() {
               onPreview={handlePreviewPatch}
               collapsed={assistantCollapsed}
               onCollapsedChange={setAssistantCollapsed}
+              confirmDestructive={
+                appSettings.general.confirmDestructiveActions
+              }
               hidden={assistantHidden}
             />
           </ErrorBoundary>

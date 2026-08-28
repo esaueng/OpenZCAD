@@ -799,7 +799,7 @@ export function SettingsPage({
               </SettingRow>
               <SettingRow
                 title="Confirm destructive actions"
-                description="Ask before clearing saved preferences or removing a personal credential."
+                description="Ask before an action that discards something for good — emptying the trash, resetting preferences, removing a personal credential, or clearing an AI conversation."
                 scope="All devices"
               >
                 <Toggle
