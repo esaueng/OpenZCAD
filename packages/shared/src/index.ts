@@ -2043,7 +2043,7 @@ export const MAX_ARTIFACT_UPLOAD_PARTS = 64;
  * without an account ceiling, a scripted client can park unbounded storage on
  * the operator's bucket (32 MiB × 64 parts per artifact, no artifact count
  * limit). 2 GiB comfortably covers real use (the largest supported STEP
- * import is 250 MB) while bounding abuse.
+ * import is 128 MB) while bounding abuse.
  */
 export const MAX_ACCOUNT_ARTIFACT_BYTES = 2 * 1024 * 1024 * 1024;
 /** Maximum encoded size of a shelf thumbnail that clients automatically load. */
