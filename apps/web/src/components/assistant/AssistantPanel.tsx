@@ -90,6 +90,13 @@ interface AssistantPanelProps {
   collapsed: boolean;
   onCollapsedChange(collapsed: boolean): void;
   /**
+   * The user's "Confirm destructive actions" preference. Clearing the thread
+   * throws away every drawing attached to it and every reason the model was
+   * built the way it was, and nothing anywhere keeps a copy, so it asks on the
+   * same setting that guards emptying the trash.
+   */
+  confirmDestructive: boolean;
+  /**
    * Takes the dock off screen without unmounting it. The conversation and the
    * in-flight request live here, so a direct-manipulation mode hides the panel
    * rather than destroying what the user is in the middle of.
@@ -211,6 +218,7 @@ export function AssistantPanel({
   onPreview,
   collapsed,
   onCollapsedChange,
+  confirmDestructive,
   hidden = false
 }: AssistantPanelProps) {
   const projectId = doc.projectId;
@@ -644,6 +652,14 @@ export function AssistantPanel({
   }
 
   function clearThread() {
+    if (
+      confirmDestructive &&
+      !window.confirm(
+        'Clear the AI conversation for this project? This cannot be undone.'
+      )
+    ) {
+      return;
+    }
     stopThinking();
     void onPreview(null);
     dispatch({ type: 'reset' });
