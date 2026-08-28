@@ -183,8 +183,8 @@ artifact storage, collaboration, and optional server-side AI.
 `GET /api/health` is public and returns JSON only; it is safe to poll without
 credentials and never returns configuration secrets. A healthy running service
 returns HTTP 200 with `status: "ok"`. For a cloud-enabled deployment, also
-require `documentStorageAccountingReady` and `projectObjectStorageReady` to be
-`true` before enabling project sync. The remaining readiness fields describe
+require `artifactUploadAccountingReady`, `documentStorageAccountingReady`, and
+`projectObjectStorageReady` to be `true` before enabling project sync. The remaining readiness fields describe
 separately deployed capabilities (such as measurement sync and account
 erasure); a `false` value means that capability is not ready, not that the
 basic service endpoint is down.

@@ -8,6 +8,7 @@ const WORKER_NAME = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
 const D1_DATABASE_ID =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const ACCOUNT_ID = /^[0-9a-f]{32}$/i;
+export const UPLOAD_CLEANUP_CRON = '17 * * * *';
 
 export const REQUIRED_SECRETS = [
   'AUTH_OTP_PEPPER',
@@ -184,6 +185,14 @@ function validateCommon(config, { allowPlaceholders }) {
     if (typeof cron !== 'string' || cron.trim().split(/\s+/).length !== 5) {
       errors.push(`cron ${String(cron)} must contain five fields`);
     }
+  }
+  if (
+    config.triggers?.crons?.length !== 1 ||
+    config.triggers.crons[0] !== UPLOAD_CLEANUP_CRON
+  ) {
+    errors.push(
+      `triggers.crons must contain only the upload cleanup schedule ${UPLOAD_CLEANUP_CRON}`
+    );
   }
 
   return errors;

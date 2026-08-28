@@ -88,6 +88,7 @@ import {
 } from './sharing';
 import {
   isAccountErasureReady,
+  isArtifactUploadAccountingReady,
   isDocumentStorageAccountingReady,
   isProjectMeasurementStorageReady,
   isProjectObjectStorageReady
@@ -120,6 +121,7 @@ const projectStorageReadyEnvironments = new WeakSet<Env>();
 const projectMeasurementStorageReadyEnvironments = new WeakSet<Env>();
 const HEALTH_READINESS_TTL_MS = 60_000;
 interface HealthReadiness {
+  artifactUploadAccountingReady: boolean;
   documentStorageAccountingReady: boolean;
   projectObjectStorageReady: boolean;
   projectMeasurementStorageReady: boolean;
@@ -137,17 +139,20 @@ function healthReadiness(env: Env): Promise<HealthReadiness> {
     return cached.value;
   }
   const value = Promise.all([
+    isArtifactUploadAccountingReady(env.DB),
     isDocumentStorageAccountingReady(env.DB),
     isProjectObjectStorageReady(env.DB, env.PROJECT_STORAGE ?? env.ARTIFACTS),
     isProjectMeasurementStorageReady(env.DB),
     isAccountErasureReady(env.DB)
   ]).then(
     ([
+      artifactUploadAccountingReady,
       documentStorageAccountingReady,
       projectObjectStorageReady,
       projectMeasurementStorageReady,
       accountErasureReady
     ]) => ({
+      artifactUploadAccountingReady,
       documentStorageAccountingReady,
       projectObjectStorageReady,
       projectMeasurementStorageReady,
@@ -476,6 +481,7 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
 
   if (request.method === 'GET' && pathname === '/api/health') {
     const {
+      artifactUploadAccountingReady,
       documentStorageAccountingReady,
       projectObjectStorageReady,
       projectMeasurementStorageReady,
@@ -485,6 +491,7 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
       status: 'ok',
       environment: env.ENVIRONMENT ?? 'beta',
       time: new Date().toISOString(),
+      artifactUploadAccountingReady,
       documentStorageAccountingReady,
       projectObjectStorageReady,
       projectMeasurementStorageReady,
@@ -565,9 +572,8 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
         }
       });
     }
-    const shared = await sharedPersistence.loadSharedProjectByTokenHash(
-      tokenHash
-    );
+    const shared =
+      await sharedPersistence.loadSharedProjectByTokenHash(tokenHash);
     if (!shared) {
       return sharedNotFound();
     }
