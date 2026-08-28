@@ -126,6 +126,59 @@ test('viewport context menu hides a body and the sidebar eye restores it', async
   await expect(page.locator('.viewer-notice')).toHaveCount(0);
 });
 
+test('choosing Move from an edge right-click disarms the fillet handle it just armed', async ({
+  page
+}) => {
+  // A right-click commits the pick and arms the edge handle, then builds the
+  // menu's action closures — in the same event, from the render BEFORE it.
+  // launchTool used to read that stale render's interaction, see `idle`, and
+  // skip its disarm, so the fillet handle stayed armed underneath the Move
+  // gizmo and two manipulators claimed the next pointer.
+  await stubApi(page);
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('Menu Disarm');
+  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
+  await page
+    .getByRole('region', { name: 'Feature inspector' })
+    .getByRole('button', { name: /^Create/ })
+    .click();
+  await expect(page.getByRole('button', { name: /^Fillet/ })).toBeEnabled();
+
+  const canvas = page.locator('.viewer-host canvas');
+  const bounds = await canvas.boundingBox();
+  if (!bounds) {
+    throw new Error('viewer canvas not laid out');
+  }
+  // The same visible box edge the shift-select fixture clicks.
+  await page.getByRole('button', { name: 'Edge', exact: true }).click();
+  await canvas.click({
+    button: 'right',
+    position: { x: bounds.width * 0.578, y: bounds.height * 0.29 }
+  });
+
+  const menu = page.locator('.marking-menu');
+  await expect(menu).toBeVisible();
+  // Edge actions prove the right-click armed the edge handle underneath.
+  await expect(
+    menu.getByRole('menuitem', { name: /Fillet Edge/ })
+  ).toBeVisible();
+  await expect(
+    page.getByRole('region', { name: 'Fillet operation' })
+  ).toBeVisible();
+
+  await menu.getByRole('menuitem', { name: /Move \/ Rotate/ }).click();
+  await expect(menu).toBeHidden();
+
+  // One manipulator owns the pointer: the gizmo is up, the handle is gone.
+  await expect(
+    page.getByRole('form', { name: 'Move controls' })
+  ).toBeVisible();
+  await expect(
+    page.getByRole('region', { name: 'Fillet operation' })
+  ).toHaveCount(0);
+});
+
 test('P toggles the camera projection', async ({ page }) => {
   await stubApi(page);
   await page.goto('/');
