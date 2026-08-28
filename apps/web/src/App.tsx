@@ -349,7 +349,10 @@ import {
   primitiveCylinderHeightAncestor,
   primitiveCylinderRadiusAncestor
 } from './lib/interaction/cylinderPrimitiveAncestry';
-import { resolveOffsetPreviewFace } from './lib/interaction/offsetPreview';
+import {
+  offsetPreviewRejection,
+  resolveOffsetPreviewFace
+} from './lib/interaction/offsetPreview';
 import {
   blendRadialDirection,
   canRemoveImportedBlendFace,
@@ -675,8 +678,6 @@ import {
   affectedFeatureTargets,
   type AffectedFeatureTarget
 } from './lib/affectedFeatureTargets';
-import { directEditRejection } from './lib/directEdit';
-import { validatedFeatureRejection } from './lib/featureValidation';
 import { useCollaboration } from './lib/useCollaboration';
 import { preflightCadPatch } from './lib/aiPatchPreflight';
 import type { AssistantPreviewOutcome } from './components/assistant/AssistantPanel';
@@ -1787,40 +1788,15 @@ export function App() {
           !live ||
           live.document.projectId !== candidate.baseProjectId ||
           live.document.version !== candidate.baseVersion;
-        let rejection: CommandDiagnostic | null = null;
-        if (candidate.validationTargets) {
-          for (const target of candidate.validationTargets) {
-            rejection = validatedFeatureRejection({
-              featureName: target.featureName,
-              ...(target.featureId ? { featureId: target.featureId } : {}),
-              warnings: derived.warnings,
-              bodyPresent: Boolean(
-                derived.bodyRepresentations[target.resultBodyId]
-              ),
-              documentMoved
-            });
-            if (rejection) {
-              break;
-            }
-          }
-          if (
-            !rejection &&
-            candidate.validationTargets.length === 0 &&
-            documentMoved
-          ) {
-            rejection = {
-              message: 'The document changed while the preview was rebuilding.'
-            };
-          }
-        } else {
-          const message = directEditRejection({
-            label: candidate.label,
-            warnings: derived.warnings,
-            bodyPresent: Boolean(derived.bodyRepresentations[candidate.bodyId]),
-            documentMoved
-          });
-          rejection = message ? { message } : null;
-        }
+        const rejection = offsetPreviewRejection({
+          label: candidate.label,
+          bodyId: candidate.bodyId,
+          ...(candidate.validationTargets
+            ? { validationTargets: candidate.validationTargets }
+            : {}),
+          derived,
+          documentMoved
+        });
         return { derived, rejection };
       },
       publish: (preview) => {
