@@ -407,7 +407,8 @@ async function notifyOwnedRoomsCollaborationDisabled(
   env: Env,
   ownerUserId: string
 ): Promise<void> {
-  if (!env.DB || !env.PROJECT_ROOM) {
+  const rooms = env.PROJECT_ROOM;
+  if (!env.DB || !rooms) {
     return;
   }
   const owned = await env.DB.prepare(
@@ -415,21 +416,30 @@ async function notifyOwnedRoomsCollaborationDisabled(
   )
     .bind(ownerUserId)
     .all<{ id: string }>();
-  for (const { id: projectId } of owned.results ?? []) {
-    const response = await env.PROJECT_ROOM.getByName(projectId).fetch(
-      new Request(
-        `https://project-room.internal/?projectId=${encodeURIComponent(projectId)}`,
-        {
-          method: 'PATCH',
-          headers: {
-            'x-openzcad-internal-owner-collaboration-disabled': 'v1'
+  const notifications = await Promise.allSettled(
+    (owned.results ?? []).map(async ({ id: projectId }) => {
+      const response = await rooms.getByName(projectId).fetch(
+        new Request(
+          `https://project-room.internal/?projectId=${encodeURIComponent(projectId)}`,
+          {
+            method: 'PATCH',
+            headers: {
+              'x-openzcad-internal-owner-collaboration-disabled': 'v1'
+            }
           }
-        }
-      )
-    );
-    if (!response.ok) {
-      throw new Error('Project room rejected a collaboration disable update.');
-    }
+        )
+      );
+      if (!response.ok) {
+        throw new Error(
+          'Project room rejected a collaboration disable update.'
+        );
+      }
+    })
+  );
+  if (
+    notifications.some((notification) => notification.status === 'rejected')
+  ) {
+    throw new Error('A project room rejected a collaboration disable update.');
   }
 }
 
