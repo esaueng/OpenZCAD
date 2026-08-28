@@ -979,6 +979,60 @@ describe('command-system', () => {
     ).toBe(180);
   });
 
+  it('rejects updating a revolve to a sketch produced later in history', () => {
+    const manager = new CommandManager(
+      createProjectDocument('Revolve History', toUserId('user_test'))
+    );
+    manager.execute(
+      commandFactories.addSketch({
+        name: 'First profile',
+        plane: 'XZ',
+        offset: 0,
+        object: {
+          objectKind: 'rectangle',
+          width: 10,
+          height: 10,
+          centerX: 10,
+          centerY: 0
+        }
+      })
+    );
+    manager.execute(
+      commandFactories.revolveSketch({
+        name: 'Ring',
+        sketchId: getLatestSketchId(manager.document)!,
+        axis: 'vertical'
+      })
+    );
+    manager.execute(
+      commandFactories.addSketch({
+        name: 'Later profile',
+        plane: 'XZ',
+        offset: 0,
+        object: {
+          objectKind: 'rectangle',
+          width: 5,
+          height: 5,
+          centerX: 15,
+          centerY: 0
+        }
+      })
+    );
+    const laterSketchId = getLatestSketchId(manager.document)!;
+    const revolve = featureOfKind(manager.document, 'revolve');
+    const before = structuredClone(manager.document);
+
+    expect(() =>
+      manager.execute(
+        commandFactories.updateFeature({
+          featureId: revolve.featureId,
+          data: { featureKind: 'revolve', sketchId: laterSketchId }
+        })
+      )
+    ).toThrow(/before the sketch it uses exists/);
+    expect(manager.document).toEqual(before);
+  });
+
   it('rejects updating fillet, transform, and pattern features to a nonexistent body', () => {
     const manager = new CommandManager(
       createProjectDocument('Retarget Update', toUserId('user_test'))

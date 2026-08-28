@@ -298,8 +298,12 @@ function validateFeatureReorder(
   reordered.splice(payload.toIndex, 0, moved!);
 
   const featurePosition = new Map<string, number>();
+  const sketchProducerPosition = new Map<string, number>();
   reordered.forEach((feature, index) => {
     featurePosition.set(feature.featureId, index);
+    if (feature.data.featureKind === 'sketch') {
+      sketchProducerPosition.set(feature.data.sketchId, index);
+    }
   });
   const bodyProducerPosition = new Map<string, number>();
   for (const body of listNodesByKind(document, 'body')) {
@@ -331,6 +335,11 @@ function validateFeatureReorder(
       ) {
         throw new Error(
           `Cannot reorder: "${feature.name}" would run before the feature it depends on.`
+        );
+      }
+      if ((sketchProducerPosition.get(id) ?? -1) > index) {
+        throw new Error(
+          `Cannot reorder: "${feature.name}" would run before the sketch it uses exists.`
         );
       }
     }
@@ -369,8 +378,12 @@ function validateFeatureHistoryPosition(
     return;
   }
   const featurePosition = new Map<string, number>();
+  const sketchProducerPosition = new Map<string, number>();
   ordered.forEach((entry, at) => {
     featurePosition.set(entry.featureId, at);
+    if (entry.data.featureKind === 'sketch') {
+      sketchProducerPosition.set(entry.data.sketchId, at);
+    }
   });
   const bodyProducerPosition = new Map<string, number>();
   for (const body of listNodesByKind(document, 'body')) {
@@ -392,6 +405,11 @@ function validateFeatureHistoryPosition(
     if (id !== feature.featureId && (featurePosition.get(id) ?? -1) > index) {
       throw new Error(
         `"${feature.name}" would run before the feature it depends on.`
+      );
+    }
+    if ((sketchProducerPosition.get(id) ?? -1) > index) {
+      throw new Error(
+        `"${feature.name}" would run before the sketch it uses exists.`
       );
     }
   }
