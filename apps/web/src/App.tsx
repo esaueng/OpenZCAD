@@ -1039,7 +1039,11 @@ function resolvedSketchPlaneBasis(
         witness: reference.witness,
         plane:
           geometry.surfaceType.toLowerCase() === 'plane' && geometry.normal
-            ? { center: geometry.center, normal: geometry.normal }
+            ? {
+                center: geometry.center,
+                centroid: geometry.centroid ?? null,
+                normal: geometry.normal
+              }
             : null,
         lineage: {
           source: 'derived',
@@ -1060,6 +1064,9 @@ function resolvedSketchPlaneBasis(
     snapshot: {
       sourceArea: planeRef.sourceArea,
       sourceCenter: planeRef.sourceCenter,
+      ...(planeRef.sourceCentroid
+        ? { sourceCentroid: planeRef.sourceCentroid }
+        : {}),
       sourceNormal: planeRef.sourceNormal,
       frame: planeRef.frame
     },
@@ -8539,7 +8546,10 @@ export function App() {
               kind: 'face' as const,
               bodyId: session.plane.bodyId as string,
               faceHash: session.plane.faceHash,
-              center: session.plane.sourceCenter
+              // Fallback only, for a face whose triangles the viewer cannot
+              // find; `sourceCenter` is a vertex mean and sits on the rim of a
+              // round face, so prefer the centroid when the sketch has one.
+              center: session.plane.sourceCentroid ?? session.plane.sourceCenter
             }
           : null;
     return {

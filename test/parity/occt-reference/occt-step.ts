@@ -440,6 +440,10 @@ function faceGeometry(
     );
     if (normal) {
       geometry.normal = normal;
+      // OCCT hands back the exact surface centre of mass, which is what the
+      // centroid means; the adapter reaches the same point by integrating the
+      // face's own boundary.
+      geometry.centroid = kernel.getSurfaceCenterOfMass(face);
     }
     return geometry;
   }
@@ -524,7 +528,11 @@ function faceAttachmentCandidatesForShape(
     const geometry = faceGeometry(kernel, shape, face);
     const plane =
       geometry.surfaceType.toLowerCase() === 'plane' && geometry.normal
-        ? { center: geometry.center, normal: geometry.normal }
+        ? {
+            center: geometry.center,
+            centroid: geometry.centroid ?? null,
+            normal: geometry.normal
+          }
         : null;
     return {
       ...candidate,
