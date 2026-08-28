@@ -798,6 +798,79 @@ describe('worker api routes', () => {
     expect(roomFetch).toHaveBeenCalledTimes(2);
   });
 
+  it('attempts every owned room when one disable notification fails', async () => {
+    let storedSettings = structuredClone(DEFAULT_APP_SETTINGS);
+    let storedRevision = 1;
+    const prepare = vi.fn((query: string) => {
+      let values: unknown[] = [];
+      const statement = {
+        bind(...next: unknown[]) {
+          values = next;
+          return statement;
+        },
+        async first() {
+          return query.includes('FROM user_settings')
+            ? {
+                settings_json: JSON.stringify(storedSettings),
+                revision: storedRevision
+              }
+            : null;
+        },
+        async run() {
+          if (query.includes('UPDATE user_settings')) {
+            storedSettings = JSON.parse(
+              String(values[0])
+            ) as typeof storedSettings;
+            storedRevision = Number(values[1]);
+            return { meta: { changes: 1 } };
+          }
+          return { meta: { changes: 0 } };
+        },
+        async all() {
+          return query.includes('SELECT id FROM projects')
+            ? {
+                results: [{ id: 'project_failing' }, { id: 'project_notified' }]
+              }
+            : { results: [] };
+        }
+      };
+      return statement;
+    });
+    const getByName = vi.fn((projectId: string) => ({
+      fetch: vi.fn(
+        async () =>
+          new Response(null, {
+            status: projectId === 'project_failing' ? 500 : 204
+          })
+      )
+    }));
+    const disabled = structuredClone(DEFAULT_APP_SETTINGS);
+    disabled.collaboration.enabled = false;
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    try {
+      const response = await worker.fetch(
+        patch('/api/settings', {
+          settings: disabled,
+          expectedRevision: 1
+        }),
+        {
+          ...env,
+          DB: { prepare },
+          PROJECT_ROOM: { getByName }
+        } as never
+      );
+
+      expect(response.status).toBe(500);
+      expect(getByName.mock.calls.map(([projectId]) => projectId)).toEqual([
+        'project_failing',
+        'project_notified'
+      ]);
+    } finally {
+      errorSpy.mockRestore();
+    }
+  });
+
   it('reports assistant configuration without exposing secrets', async () => {
     const response = await worker.fetch(
       new Request('https://example.com/api/assistant/status'),
