@@ -457,62 +457,63 @@ test('the orientation widget snaps to a view the rail cannot reach', async ({
   const widget = page.getByRole('group', { name: 'View orientation' });
   await expect(widget).toBeVisible();
 
-  const cameraPose = async () =>
-    page.evaluate(() => {
-      const raw = localStorage.getItem('openzcad-workspace-session:v1');
-      const views = raw
-        ? (
-            JSON.parse(raw) as {
-              views?: Record<
-                string,
-                { camera: { position: number[]; target: number[] } }
-              >;
-            }
-          ).views
-        : undefined;
-      const first = views ? Object.values(views)[0] : undefined;
-      return first ? first.camera : null;
-    });
-  // The durable pose trails the camera by the glide's damping tail plus the
-  // settle window, so a fixed wait races the write. Poll for the pose each
-  // snap is expected to reach instead.
-  const pollCameraPose = async (
-    reached: (camera: { position: number[]; target: number[] }) => boolean
-  ) => {
-    let matched: { position: number[]; target: number[] } | null = null;
+  const canvas = page.locator('.viewer-host canvas');
+  const pollLiveCamera = async (
+    reached: (camera: CameraPose) => boolean
+  ): Promise<CameraPose> => {
+    let matched: CameraPose | null = null;
     await expect
       .poll(async () => {
-        const pose = await cameraPose();
+        const pose = await readLiveCamera(canvas);
         matched = pose;
-        return pose ? reached(pose) : false;
+        return reached(pose);
       })
       .toBe(true);
     return matched!;
+  };
+  const pollLiveDirection = (expected: readonly [number, number, number]) => {
+    const expectedLength = Math.hypot(...expected);
+    return pollLiveCamera((camera) => {
+      const offset = camera.position.map(
+        (coordinate, axis) => coordinate - camera.target[axis]!
+      );
+      const offsetLength = Math.hypot(...offset);
+      const cosine =
+        offset.reduce(
+          (dot, coordinate, axis) => dot + coordinate * expected[axis]!,
+          0
+        ) /
+        (offsetLength * expectedLength);
+      return cosine > 0.999_999;
+    });
   };
 
   // Bottom has no toolbar shortcut. The cube reaches it in two clicks:
   // face the top, then click the now head-on face to flip to the far side.
   await widget.getByRole('button', { name: 'Top view' }).click();
-  const top = await pollCameraPose((camera) => camera.position[2]! > 0);
+  const top = await pollLiveDirection([0, -0.0001, 1]);
   expect(top.position[2]!).toBeGreaterThan(0);
 
   await widget.getByRole('button', { name: 'Bottom view' }).click();
   // Looking up at the part puts the camera below it.
-  await pollCameraPose((camera) => camera.position[2]! < 0);
+  await pollLiveDirection([0, 0.0001, -1]);
 
   // Left works the same way from the right face, after resetting to iso so
   // the right face is visible again.
   await selectRailView(page, /^Isometric view/);
-  await page.waitForTimeout(900);
+  // A rail click commits React state before the viewport renders the requested
+  // frame. Wait on that live frame before resolving a cube face: the previous
+  // view can expose a different polygon with the same accessible action.
+  await pollLiveDirection([1, -1, 0.9]);
   await widget.getByRole('button', { name: 'Right view' }).click();
-  await page.waitForTimeout(900);
+  await pollLiveDirection([1, 0, 0]);
   await widget.getByRole('button', { name: 'Left view' }).click();
-  await pollCameraPose((camera) => camera.position[0]! < 0);
+  await pollLiveDirection([-1, 0, 0]);
 
   // Ordinary pointer wobble below the 4 px drag threshold remains one face
   // activation. This boundary is easy to regress when capture cleanup changes.
   await selectRailView(page, /^Isometric view/);
-  await page.waitForTimeout(900);
+  await pollLiveDirection([1, -1, 0.9]);
   const wobbleFace = widget.getByRole('button', { name: 'Right view' });
   await wobbleFace.evaluate((element) => {
     const browserWindow = window as typeof window & {
@@ -534,7 +535,6 @@ test('the orientation widget snaps to a view the rail cannot reach', async ({
   await page.mouse.down();
   await page.mouse.move(wobbleStart.x + 3, wobbleStart.y);
   await page.mouse.up();
-  await page.waitForTimeout(900);
   expect(
     await page.evaluate(
       () =>
@@ -545,14 +545,7 @@ test('the orientation widget snaps to a view the rail cannot reach', async ({
         ).__ozOrientationWobbleClicks
     )
   ).toBe(1);
-  const right = await pollCameraPose((camera) => {
-    const offset = camera.position.map(
-      (coordinate, axis) => coordinate - camera.target[axis]!
-    );
-    return (
-      offset[0]! > 1 && Math.abs(offset[1]!) < 0.1 && Math.abs(offset[2]!) < 0.1
-    );
-  });
+  const right = await pollLiveDirection([1, 0, 0]);
   const rightOffset = right.position.map(
     (coordinate, axis) => coordinate - right.target[axis]!
   );
@@ -563,21 +556,16 @@ test('the orientation widget snaps to a view the rail cannot reach', async ({
   // The rotate arrows swing the camera a quarter turn about the world up
   // axis: from iso (x > 0, y < 0), a clockwise model turn lands at y > 0.
   await selectRailView(page, /^Isometric view/);
-  const iso = await pollCameraPose(
-    (camera) => camera.position[0]! > 0 && camera.position[1]! < 0
-  );
+  const iso = await pollLiveDirection([1, -1, 0.9]);
   expect(iso.position[0]!).toBeGreaterThan(0);
   expect(iso.position[1]!).toBeLessThan(0);
   await widget.getByRole('button', { name: 'Rotate view clockwise' }).click();
-  await pollCameraPose(
-    (camera) => camera.position[0]! > 0 && camera.position[1]! > 0
-  );
+  await pollLiveDirection([1, 1, 0.9]);
 
   // Dragging a visible cube face continuously orbits the camera. Releasing
   // must suppress the face's click, or the camera would then glide to the
   // face's standard view and erase the free rotation.
-  const beforeDrag = await cameraPose();
-  expect(beforeDrag).not.toBeNull();
+  const beforeDrag = await readLiveCamera(canvas);
   const dragFace = widget.getByRole('button', { name: 'Right view' });
   const dragFaceBounds = await dragFace.boundingBox();
   expect(dragFaceBounds).not.toBeNull();
@@ -589,12 +577,12 @@ test('the orientation widget snaps to a view the rail cannot reach', async ({
   await page.mouse.down();
   await page.mouse.move(dragStart.x - 42, dragStart.y + 24, { steps: 5 });
   await page.mouse.up();
-  const afterDrag = await pollCameraPose(
+  const afterDrag = await pollLiveCamera(
     (camera) =>
       Math.hypot(
-        camera.position[0]! - beforeDrag!.position[0]!,
-        camera.position[1]! - beforeDrag!.position[1]!,
-        camera.position[2]! - beforeDrag!.position[2]!
+        camera.position[0]! - beforeDrag.position[0]!,
+        camera.position[1]! - beforeDrag.position[1]!,
+        camera.position[2]! - beforeDrag.position[2]!
       ) > 1
   );
   const afterOffset = afterDrag.position.map(
