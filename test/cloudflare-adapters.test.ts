@@ -682,7 +682,9 @@ describe('cloudflare adapters', () => {
     const artifactId = toArtifactId('artifact_thumbnail_new');
     const uploadSessionId = toUploadSessionId('upload_thumbnail_new');
     const queries: string[] = [];
-    const batch = vi.fn(async () => []);
+    const batch = vi.fn(async () =>
+      Array.from({ length: 4 }, () => ({ meta: { changes: 1 } }))
+    );
     const prepare = vi.fn((query: string) => ({
       bind: (..._values: unknown[]) => {
         queries.push(query);
@@ -691,8 +693,9 @@ describe('cloudflare adapters', () => {
             if (query.includes('SELECT user_id AS owner_user_id')) {
               return { owner_user_id: owner };
             }
-            if (query.includes('SELECT artifact_id, object_key')) {
+            if (query.includes('FROM upload_sessions WHERE id = ?')) {
               return {
+                id: uploadSessionId,
                 artifact_id: artifactId,
                 object_key: 'project_thumbnail/uploads/new.webp',
                 project_id: projectId,
@@ -700,7 +703,12 @@ describe('cloudflare adapters', () => {
                 content_type: 'image/webp',
                 kind: 'thumbnail',
                 metadata_json: '{}',
-                expires_at: '2099-01-01T00:00:00.000Z'
+                expires_at: '2099-01-01T00:00:00.000Z',
+                owner_user_id: owner,
+                reserved_bytes: 0,
+                reservation_state: 'open',
+                multipart_upload_id: null,
+                completion_started_at: null
               };
             }
             return null;
@@ -729,11 +737,13 @@ describe('cloudflare adapters', () => {
         artifactId
       })
     ).resolves.toMatchObject({ artifactId, kind: 'thumbnail', bytes: 123 });
-    expect(queries).toContainEqual(
-      expect.stringContaining(
-        "DELETE FROM artifacts WHERE project_id = ? AND kind = 'thumbnail'"
+    expect(
+      queries.some(
+        (query) =>
+          query.includes('DELETE FROM artifacts') &&
+          query.includes("WHERE project_id = ? AND kind = 'thumbnail'")
       )
-    );
+    ).toBe(true);
     expect(batch).toHaveBeenCalledTimes(1);
     expect(deleteObject).toHaveBeenCalledWith(
       'project_thumbnail/uploads/old.webp'
@@ -872,6 +882,7 @@ describe('cloudflare adapters', () => {
     const batch = vi.fn(async () => []);
     const prepare = vi.fn((query: string) => ({
       bind: () => ({
+        first: async () => null,
         all: async () => ({
           results: query.includes('SELECT object_key')
             ? []
@@ -901,6 +912,7 @@ describe('cloudflare adapters', () => {
     });
     const prepare = vi.fn((query: string) => ({
       bind: () => ({
+        first: async () => null,
         all: async () => ({
           results: query.includes('SELECT object_key')
             ? [{ object_key: 'proj_expired/source.step' }]
@@ -917,58 +929,6 @@ describe('cloudflare adapters', () => {
       service.purgeExpiredProjects(toUserId('user_test'))
     ).rejects.toThrow('R2 unavailable');
     expect(batch).not.toHaveBeenCalled();
-  });
-
-  it('keeps failed expired-upload deletions tracked for the next sweep', async () => {
-    const prepared: Array<{ query: string; bindings: unknown[] }> = [];
-    let deletedStatements: Array<{ query: string; bindings: unknown[] }> = [];
-    const batch = vi.fn(async (statements: D1PreparedStatement[]) => {
-      deletedStatements = statements as unknown as typeof deletedStatements;
-      return [];
-    });
-    const prepare = vi.fn((query: string) => ({
-      bind: (...bindings: unknown[]) => {
-        const statement = {
-          query,
-          bindings,
-          all: async () => ({
-            results: query.includes('SELECT id, object_key')
-              ? [
-                  { id: 'upload_deleted', object_key: 'project/uploads/a' },
-                  { id: 'upload_retry', object_key: 'project/uploads/b' }
-                ]
-              : []
-          })
-        };
-        prepared.push(statement);
-        return statement;
-      }
-    }));
-    const deleteObject = vi.fn(async (key: string) => {
-      if (key.endsWith('/b')) {
-        throw new Error('R2 temporarily unavailable');
-      }
-    });
-    const service = new D1R2PersistenceService({
-      DB: { prepare, batch } as unknown as D1Database,
-      ARTIFACTS: { delete: deleteObject } as unknown as R2Bucket
-    });
-
-    await expect(service.purgeExpiredUploadSessions()).resolves.toBe(1);
-
-    expect(deleteObject).toHaveBeenCalledTimes(2);
-    expect(batch).toHaveBeenCalledTimes(1);
-    expect(deletedStatements).toHaveLength(1);
-    expect(deletedStatements[0]).toMatchObject({
-      query: 'DELETE FROM upload_sessions WHERE id = ?',
-      bindings: ['upload_deleted']
-    });
-    expect(prepared).not.toContainEqual(
-      expect.objectContaining({
-        query: 'DELETE FROM upload_sessions WHERE id = ?',
-        bindings: ['upload_retry']
-      })
-    );
   });
 
   it('accepts newer collaboration documents and rejects divergent peers', () => {

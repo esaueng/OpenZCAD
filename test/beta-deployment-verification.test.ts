@@ -24,6 +24,7 @@ describe('beta deployment verification', () => {
     const errors = betaDeploymentErrors({
       health: {
         ...REQUIRED_BETA_HEALTH,
+        artifactUploadAccountingReady: false,
         projectMeasurementStorageReady: false,
         accountErasureReady: false,
         projectErasureReady: false,
@@ -38,6 +39,7 @@ describe('beta deployment verification', () => {
 
     expect(errors).toEqual(
       expect.arrayContaining([
+        'health.artifactUploadAccountingReady must be true',
         'health.projectMeasurementStorageReady must be true',
         'health.accountErasureReady must be true',
         'health.projectErasureReady must be true',

@@ -15,10 +15,11 @@ approval for one as approval for the others.
 3. Confirm the target Worker binds the intended D1 database and `ARTIFACTS` R2
    bucket. Do not create or substitute production resources from this runbook.
 4. List remote D1 migrations and inspect any pending SQL before applying it.
-5. Confirm `/api/health` reports `documentStorageAccountingReady`,
-   `projectObjectStorageReady`, `projectMeasurementStorageReady`,
-   `accountErasureReady`, `projectErasureReady`, and
-   `projectMeasurementSyncEnabled` as `true` after the migration step.
+5. Confirm `/api/health` reports `artifactUploadAccountingReady`,
+   `documentStorageAccountingReady`, `projectObjectStorageReady`,
+   `projectMeasurementStorageReady`, `accountErasureReady`,
+   `projectErasureReady`, and `projectMeasurementSyncEnabled` as `true` after
+   the migration step.
 
 ## 2. Fail-closed build configuration
 
