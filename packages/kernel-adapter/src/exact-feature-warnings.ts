@@ -45,17 +45,21 @@ export function raiseFeatureWarning(
  * same string, and the gate matches on it to tell an accounted warning from an
  * unattributed one — so amending only the display copy would leave the record
  * naming a sentence that no longer exists anywhere.
+ *
+ * Feature identity is part of the lookup because names and warning text may
+ * both repeat; text alone can amend another feature's record.
  */
 export function amendFeatureWarning(
   result: ExactBuildResult,
   index: number,
+  featureId: FeatureId,
   suffix: string
 ): void {
   const amended = `${result.warnings[index]!} ${suffix}`;
   const previous = result.warnings[index]!;
   result.warnings[index] = amended;
   const record = result.featureWarnings?.find(
-    (entry) => entry.message === previous
+    (entry) => entry.featureId === featureId && entry.message === previous
   );
   if (record) {
     record.message = amended;

@@ -1450,7 +1450,7 @@ function buildBooleanFeature(
       document.units
     );
     if (suggestion) {
-      amendFeatureWarning(result, refusalIndex, suggestion);
+      amendFeatureWarning(result, refusalIndex, feature.featureId, suggestion);
     }
   }
   data.targetBodyIds.forEach((bodyId) =>
