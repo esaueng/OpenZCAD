@@ -296,13 +296,14 @@ function BodyStats({
             <span>
               {formatNumber(mass.centerOfMass.x)},{' '}
               {formatNumber(mass.centerOfMass.y)},{' '}
-              {formatNumber(mass.centerOfMass.z)} {units}
+              {formatNumber(mass.centerOfMass.z)} {unitLabel('length', units)}
             </span>
             <b>principal inertia</b>
             <span>
               {formatNumber(mass.principalMoments[0])} ·{' '}
               {formatNumber(mass.principalMoments[1])} ·{' '}
-              {formatNumber(mass.principalMoments[2])} {units}⁵
+              {formatNumber(mass.principalMoments[2])}{' '}
+              {unitLabel('length', units)}⁵
             </span>
           </div>
         </CollapsibleSection>
