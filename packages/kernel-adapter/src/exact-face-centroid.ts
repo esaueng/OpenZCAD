@@ -136,8 +136,14 @@ function chainWireLoop(
     1e-12,
     extentOf(segments.flat()) * CHAIN_TOLERANCE_RATIO
   );
-  // A closed edge is a whole loop on its own. Alongside others it would chain
-  // against itself, so refuse the face rather than integrate a made-up boundary.
+  // A closed edge is a whole loop on its own, so sharing a WIRE with other
+  // edges is malformed — it would chain against itself, and a made-up boundary
+  // is worse than no answer.
+  //
+  // Per wire, not per face: a pocketed cap is an outer rectangle plus a closed
+  // inner circle, and those are two wires, so this never fires on it. Read as
+  // per face it would look like it blanked the centroid on every face with a
+  // hole, which would be a regression rather than this degenerate-case refusal.
   if (
     segments.length > 1 &&
     segments.some(
