@@ -201,3 +201,59 @@ describe('CI gates cannot silently stop testing', () => {
     expect(shas.size).toBe(1);
   });
 });
+
+/**
+ * The repo's own orientation documents, checked against the code they
+ * describe.
+ *
+ * AGENTS.md points contributors and agents at `architecture.md` and `TODO.md`
+ * first, so a wrong number there is read as fact and reasoned from. Both had
+ * drifted badly: the schema version was recorded as v6 and v8 while the
+ * constant said 13, and `architecture.md` said sharing and lease enforcement
+ * were disabled in checked-in configuration while the deployed `wrangler.jsonc`
+ * enabled both. Nothing failed when they drifted, which is why they did.
+ */
+describe('documented facts match the code', () => {
+  const read = (path: string) => readFileSync(path, 'utf8');
+
+  it('names the schema version the code actually declares', () => {
+    const declared = /PROJECT_DOCUMENT_SCHEMA_VERSION = (\d+)/.exec(
+      read('packages/shared/src/index.ts')
+    )?.[1];
+    expect(declared).toBeDefined();
+
+    for (const path of ['architecture.md', 'TODO.md']) {
+      const claimed = Array.from(
+        read(path).matchAll(/schema[- ]v(\d+)/gi),
+        (match) => match[1]
+      );
+      // A doc may mention older schema versions in historical context; what it
+      // must not do is name a *current* version that is not the current one.
+      expect(claimed, path).toContain(declared);
+    }
+  });
+
+  it('does not claim sharing is disabled while the deployment enables it', () => {
+    const config = read('wrangler.jsonc');
+    const sharingEnabled = /"PROJECT_SHARING_ENABLED":\s*"true"/.test(config);
+    const architecture = read('architecture.md');
+    if (sharingEnabled) {
+      expect(architecture).not.toMatch(
+        /[Ss]haring and lease\s+enforcement remain disabled/
+      );
+    }
+  });
+
+  it('states the import ceiling the code enforces', () => {
+    const bytes = /MAX_SOURCE_IMPORT_BYTES = (\d+) \* 1024 \* 1024/.exec(
+      read('apps/web/src/lib/stepImportRun.ts')
+    )?.[1];
+    expect(bytes).toBeDefined();
+    const megabytes = `${bytes} MB`;
+    // The refusal message used to say 250 MB against a 128 MB cap, so a file
+    // was rejected by a sentence saying it was allowed.
+    for (const path of ['README.md', 'architecture.md']) {
+      expect(read(path), path).toContain(megabytes);
+    }
+  });
+});

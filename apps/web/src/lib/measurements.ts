@@ -1135,7 +1135,16 @@ function convertedValue(
   return value * Math.pow(UNIT_TO_MM[from] / UNIT_TO_MM[to], exponent);
 }
 
-function unitLabel(dimension: MeasurementDimension, unit: UnitSystem): string {
+/**
+ * How a unit is written for a reader. `inch` is the document's unit name; `in`
+ * is what it is called on screen, and the measurement dock has always said so.
+ * Exported because the Inspector printed the raw enum and the two panels named
+ * the same solid differently — "12.5 inch³" beside "12.5 in³".
+ */
+export function unitLabel(
+  dimension: MeasurementDimension,
+  unit: UnitSystem
+): string {
   if (dimension === 'angle') {
     return '°';
   }
