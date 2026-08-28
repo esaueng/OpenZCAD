@@ -190,7 +190,9 @@ generated U-bracket exercising the same hypothesis kinds).
   witness) — its result decides whether exact-NURBS sketch entities (R5) are
   ever worth it. **Result:** the better witness-edge ruled sweep still reached
   1.913926 mm maximum bidirectional deviation, so the neck does not justify R5.
-  See [the R0 measurement record](../qa/2026-08-27/guided-reconstruction-r0.md).
+  The test-only probes fail closed on malformed geometry or exhausted face,
+  candidate, spacing, tessellation, and comparison budgets. See
+  [the R0 measurement record](../qa/2026-08-27/guided-reconstruction-r0.md).
 - **Phase R1 — evidence pack (`packages/io-shapr`).** Read `PersistedCalls`
   into an additive optional `executed` field on operation IR. Acceptance:
   synthetic fixtures for the observed call shapes; absent field → byte-

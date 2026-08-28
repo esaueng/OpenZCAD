@@ -37,6 +37,20 @@ OPENZCAD_HAMMER_HOLDER_STEP=/absolute/path/to/Hammer\ Holder.step \
 The test is skipped when the environment variable is absent, so the file is
 never needed by CI or copied into the repository.
 
+## Bounded-work and refusal behavior
+
+The probes return no partial report when a budget or geometry check fails.
+Imported solids are limited to 512 faces and 4,096 edges; a face may contribute
+at most 512 boundary edges. Reflection analysis is limited to 128 analytic
+faces, 2,048 distinct candidate planes, and 32 returned symmetries.
+Parallel-plane analysis is limited to 2,048 results. Exceeding any limit throws
+a named error instead of silently truncating the measurement.
+
+The edge-sweep diagnostic accepts 3–65 samples per rail and deflections from
+0.0001 mm through 1 mm. Edge samples, witness tessellation points/triangles,
+and point-to-triangle distance checks each carry explicit caps. Malformed or
+over-budget tessellation data is refused before deviation is reported.
+
 ## Neck edge-sweep deviation
 
 The experiment selected the only four-sided, large B-spline patch on the left
