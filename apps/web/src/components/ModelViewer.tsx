@@ -1,6 +1,12 @@
 import { useEffect, useRef, type MutableRefObject } from 'react';
 import * as THREE from 'three';
 import { mark, measure, timed } from '../lib/perf';
+import {
+  disposeRetiringOverlays,
+  disposeSettledOverlays,
+  retireOverlay,
+  type RetiringOverlay
+} from '../lib/retiringOverlays';
 import type { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { Line2 } from 'three/examples/jsm/lines/Line2.js';
 import { LineGeometry } from 'three/examples/jsm/lines/LineGeometry.js';
@@ -117,7 +123,6 @@ import {
   type BodyEdgeOverlay,
   type CalloutLayoutItem,
   type DimensionGraphic,
-  easeToward,
   SELECTION_SEMANTICS,
   SKETCH_GLIDE_MS,
   sketchGlideEase,
@@ -986,68 +991,6 @@ const SELECTED_FACE_OPACITY = SELECTION_SEMANTICS.selected.faceOpacity;
 const SELECTED_FACE_HIDDEN_OPACITY =
   SELECTION_SEMANTICS.selected.hiddenFaceOpacity;
 /**
- * Opacity an overlay fades to when it registers for the fade without naming a
- * target. Mirrors the viewport's own default so both fade paths agree.
- */
-const DEFAULT_OVERLAY_FADE_TARGET = SELECTION_SEMANTICS.defaultFadeTarget;
-
-/**
- * Starts a deselected highlight fading instead of deleting it outright.
- *
- * The overlay is renamed first: the rebuild finds selection overlays by name,
- * and a fading one must not be mistaken for the current selection's. Its
- * materials are handed to the same fade the entrance uses, aimed at zero.
- */
-function retireOverlay(
-  context: SceneContext,
-  retiring: { group: THREE.Group; parent: THREE.Object3D }[],
-  group: THREE.Group
-) {
-  const parent = group.parent;
-  if (!parent) {
-    return;
-  }
-  group.name = `${group.name}-retiring`;
-  let hasMaterial = false;
-  group.traverse((child) => {
-    const material = (child as THREE.Mesh).material;
-    if (material && !Array.isArray(material)) {
-      material.userData.targetOpacity = 0;
-      context.fadeIns.add(material);
-      hasMaterial = true;
-    }
-  });
-  if (!hasMaterial) {
-    clearGroup(group);
-    parent.remove(group);
-    return;
-  }
-  retiring.push({ group, parent });
-  context.requestRender();
-}
-
-/** Disposes retired overlays once their fade has reached zero. */
-function disposeSettledOverlays(
-  retiring: { group: THREE.Group; parent: THREE.Object3D }[]
-) {
-  for (let index = retiring.length - 1; index >= 0; index -= 1) {
-    const entry = retiring[index]!;
-    let faded = true;
-    entry.group.traverse((child) => {
-      const material = (child as THREE.Mesh).material;
-      if (material && !Array.isArray(material) && material.opacity > 0) {
-        faded = false;
-      }
-    });
-    if (faded) {
-      clearGroup(entry.group);
-      entry.parent.remove(entry.group);
-      retiring.splice(index, 1);
-    }
-  }
-}
-
-/**
  * Scratch vector for the snap projectors. They run once per candidate — every
  * edge endpoint and face centre of every other body — on each frame of a move
  * drag, and each call used to allocate.
@@ -1323,9 +1266,7 @@ export function ModelViewer({
    * detached from the naming scheme first so a rebuild cannot find and reuse
    * them, then disposed once their materials reach zero.
    */
-  const retiringOverlaysRef = useRef<
-    { group: THREE.Group; parent: THREE.Object3D }[]
-  >([]);
+  const retiringOverlaysRef = useRef<RetiringOverlay[]>([]);
   /**
    * Rigs that have been disarmed and are fading out. They stay in the scene,
    * and stay stepped, until they report themselves gone.
@@ -3987,8 +3928,13 @@ export function ModelViewer({
       if (updateRigHover(event)) {
         // The handle owns the pointer: highlighting whatever face lies behind
         // it would say the click will select, when it will drag.
-        renderer.domElement.style.cursor = 'grab';
+        //
+        // Dropping the hover first, then claiming the cursor. `applyHover`
+        // writes the cursor for whatever it is now hovering — nothing — so
+        // claiming it first only to have that write land on top of it is how
+        // the handle's own cursor used to come and go.
         applyHover(null);
+        renderer.domElement.style.cursor = 'grab';
         updateMeasurePreview(event);
         return;
       }
@@ -4005,6 +3951,8 @@ export function ModelViewer({
         return;
       }
       planePickerRigRef.current?.setHover(null);
+      // `applyHover` owns the cursor here, including clearing it over empty
+      // space, now that it no longer skips a write on a stale cache.
       applyHover(solid);
       updateMeasurePreview(event);
     }
@@ -6232,8 +6180,20 @@ export function ModelViewer({
     });
 
     const lastQuaternion = new THREE.Quaternion();
+    /**
+     * Frames drawn, for the one contract no other hook can express: that the
+     * loop goes back to sleep. It is on-demand, so a still scene should stop
+     * counting entirely — and a single condition stuck true (a retired
+     * overlay that never finished fading, say) pins it at full rate for the
+     * rest of the session with nothing on screen to show for it.
+     */
+    let framesDrawn = 0;
     function animate(now: number) {
       animationFrame = null;
+      if (e2eCanvasHooksEnabled) {
+        framesDrawn += 1;
+        renderer.domElement.dataset.e2eFrames = String(framesDrawn);
+      }
       if (resizePending) {
         resizePending = false;
         const width = viewerHost.clientWidth;
@@ -6318,24 +6278,9 @@ export function ModelViewer({
           edgesAnimating = true;
         }
       }
+      // `selection.step` above already eased every material in this set —
+      // `context.fadeIns` is that same set — so there is no second pass here.
       disposeSettledOverlays(retiringOverlaysRef.current);
-      for (const material of context.fadeIns) {
-        const target =
-          (material.userData.targetOpacity as number | undefined) ??
-          DEFAULT_OVERLAY_FADE_TARGET;
-        material.opacity = easeToward(material.opacity, target, dt * 1000);
-        if (material.opacity === target) {
-          // A material faded back to full opacity goes back to the opaque
-          // pass once it settles — leaving `transparent` set would keep it
-          // in depth-sorted rendering and risk sorting artifacts.
-          if (material.userData.restoreOpaque === true) {
-            material.transparent = false;
-            delete material.userData.restoreOpaque;
-            material.needsUpdate = true;
-          }
-          context.fadeIns.delete(material);
-        }
-      }
       // Dimensions are resized on every drawn frame, not behind a guard keyed
       // on the camera's orientation: a wheel-zoom changes the world size of a
       // pixel without rotating anything, and a rotation guard would leave the
@@ -6795,6 +6740,10 @@ export function ModelViewer({
       // The manager owns hover-slot geometry even while the slots are
       // parented under bodies, so it must detach them before body disposal.
       context.selection.resetForRebuild();
+      // Same reasoning as the highlight dropped rather than retired below:
+      // the bodies these were fading against are about to be disposed. Their
+      // fade also died with the set `resetForRebuild` just cleared.
+      disposeRetiringOverlays(retiringOverlaysRef.current);
       clearGroup(context.bodyGroup);
       context.objectsByBodyId.clear();
       context.edgeOverlaysByBodyId.clear();
