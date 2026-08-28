@@ -13,6 +13,7 @@ import {
   faceVertexCentroid,
   isBlendFace
 } from './exact-brep';
+import { planarFaceCentroid } from './exact-face-centroid';
 import {
   DIRECT_EDIT_TOLERANCE,
   FULL_REVOLUTION,
@@ -92,6 +93,10 @@ export function measureFaceGeometry(
         y: normal[1]!,
         z: normal[2]!
       };
+      const measured = planarFaceCentroid(kernel, face, geometry.normal);
+      if (measured) {
+        geometry.centroid = measured.centroid;
+      }
       // The plane's own equation, n·x = d, completed here because it is
       // arithmetic on two values already in hand rather than a kernel call.
       // `center` is the mean of the face's vertices and every one of them lies

@@ -1039,7 +1039,11 @@ function resolvedSketchPlaneBasis(
         witness: reference.witness,
         plane:
           geometry.surfaceType.toLowerCase() === 'plane' && geometry.normal
-            ? { center: geometry.center, normal: geometry.normal }
+            ? {
+                center: geometry.center,
+                centroid: geometry.centroid ?? null,
+                normal: geometry.normal
+              }
             : null,
         lineage: {
           source: 'derived',
@@ -1060,6 +1064,9 @@ function resolvedSketchPlaneBasis(
     snapshot: {
       sourceArea: planeRef.sourceArea,
       sourceCenter: planeRef.sourceCenter,
+      ...(planeRef.sourceCentroid
+        ? { sourceCentroid: planeRef.sourceCentroid }
+        : {}),
       sourceNormal: planeRef.sourceNormal,
       frame: planeRef.frame
     },
