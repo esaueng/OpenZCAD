@@ -62,7 +62,7 @@ describe('planUploadParts', () => {
     }
   });
 
-  it('keeps the advertised 250 MB limit within the part-count ceiling', () => {
+  it('keeps the advertised import limit within the part-count ceiling', () => {
     const parts = planUploadParts(250 * 1000 * 1000);
     expect(parts.length).toBe(15);
     expect(parts.every((p, i) => p.partNumber === i + 1)).toBe(true);
