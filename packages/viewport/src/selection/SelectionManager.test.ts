@@ -221,6 +221,11 @@ describe('edge hover styling', () => {
     const { manager } = makeManager();
     const { overlay, selection, hit } = makeBatchedEdge();
     overlay.setSelected([selection]);
+    // The selected tier ramps in, so run it to rest before asking what is
+    // drawn — this is about double-drawing, not about the ramp.
+    for (let frame = 0; frame < 60 && overlay.step(16); frame += 1) {
+      // stepping until it reports nothing left to move
+    }
 
     manager.applyHover(candidate({ kind: 'edge', selection, hit }));
     expect(overlay.selectedEdges.visible).toBe(true);
