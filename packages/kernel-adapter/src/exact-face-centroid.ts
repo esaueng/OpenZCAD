@@ -8,11 +8,12 @@
  * closed circular edge has a single seam vertex, so its vertex mean sits on the
  * RIM, one radius away from where the face looks centred.
  *
- * The integral is Green's theorem over the face's own boundary wires, so hole
- * wires — which run opposite the outer wire — subtract themselves without being
- * identified as holes. Straight boundaries integrate exactly; a curved boundary
- * is inscribed with a polygon dense enough that the residual is far below any
- * modelling tolerance, and says so through {@link PlanarFaceCentroid.provenance}.
+ * The integral is Green's theorem over the face's own boundary wires: the
+ * largest wire is the outer one and every other wire subtracts, which is how a
+ * face with holes comes out right. Straight boundaries integrate exactly; a
+ * curved boundary is inscribed with a polygon dense enough that the residual is
+ * far below any modelling tolerance, and says so through
+ * {@link PlanarFaceCentroid.provenance}.
  */
 import type { Vec3 } from '@openzcad/geometry';
 import type { FaceAreaProvenance } from '@openzcad/shared';
@@ -59,7 +60,10 @@ function edgePolyline(
     if (vertices.length < 6) {
       return null;
     }
-    return { points: [pointAt(vertices, 0), pointAt(vertices, 1)], curved: false };
+    return {
+      points: [pointAt(vertices, 0), pointAt(vertices, 1)],
+      curved: false
+    };
   }
   const edgeLength = kernel.edgeLength(edge);
   if (!Number.isFinite(edgeLength) || edgeLength <= 0) {
@@ -70,7 +74,7 @@ function edgePolyline(
     return null;
   }
   const points: Vec3[] = [];
-  for (let index = 0; index * 3 < flat.length; index += 1) {
+  for (let index = 0; index * 3 + 2 < flat.length; index += 1) {
     points.push(pointAt(flat, index));
   }
   return { points, curved: true };
@@ -80,12 +84,25 @@ function distance(left: Vec3, right: Vec3): number {
   return Math.hypot(left.x - right.x, left.y - right.y, left.z - right.z);
 }
 
+/**
+ * The loop's own size, not its distance from the origin: a 1 mm face parked at
+ * x = 10000 must not inherit a tolerance a thousand times its own width.
+ */
 function extentOf(points: readonly Vec3[]): number {
-  let extent = 0;
-  for (const point of points) {
-    extent = Math.max(extent, Math.abs(point.x), Math.abs(point.y), Math.abs(point.z));
-  }
-  return extent;
+  const axis = (read: (point: Vec3) => number): number => {
+    let low = Infinity;
+    let high = -Infinity;
+    for (const point of points) {
+      low = Math.min(low, read(point));
+      high = Math.max(high, read(point));
+    }
+    return high - low;
+  };
+  return Math.max(
+    axis((point) => point.x),
+    axis((point) => point.y),
+    axis((point) => point.z)
+  );
 }
 
 /**
@@ -119,6 +136,16 @@ function chainWireLoop(
     1e-12,
     extentOf(segments.flat()) * CHAIN_TOLERANCE_RATIO
   );
+  // A closed edge is a whole loop on its own. Alongside others it would chain
+  // against itself, so refuse the face rather than integrate a made-up boundary.
+  if (
+    segments.length > 1 &&
+    segments.some(
+      (points) => distance(points[0]!, points[points.length - 1]!) <= tolerance
+    )
+  ) {
+    return null;
+  }
   const used = new Array<boolean>(segments.length).fill(false);
   const loop = [...segments[0]!];
   used[0] = true;
@@ -163,8 +190,24 @@ function chainWireLoop(
  * `normal` only fixes the plane the boundary is projected onto; the returned
  * point does not depend on which in-plane axes are chosen, so it stays the
  * same value whatever frame a caller later builds on it.
+ *
+ * Total by contract: every kernel call below can raise on an imported face,
+ * and this is one optional measurement among the several its caller assembles.
+ * A raise here must read as "no centroid", never as "no face geometry".
  */
 export function planarFaceCentroid(
+  kernel: RemusKernel,
+  face: number,
+  normal: Vec3
+): PlanarFaceCentroid | null {
+  try {
+    return measurePlanarFaceCentroid(kernel, face, normal);
+  } catch {
+    return null;
+  }
+}
+
+function measurePlanarFaceCentroid(
   kernel: RemusKernel,
   face: number,
   normal: Vec3
@@ -181,8 +224,7 @@ export function planarFaceCentroid(
   const helper = worldAxes.reduce((best, candidate) =>
     Math.abs(
       zAxis.x * candidate.x + zAxis.y * candidate.y + zAxis.z * candidate.z
-    ) <
-    Math.abs(zAxis.x * best.x + zAxis.y * best.y + zAxis.z * best.z)
+    ) < Math.abs(zAxis.x * best.x + zAxis.y * best.y + zAxis.z * best.z)
       ? candidate
       : best
   );
@@ -192,12 +234,7 @@ export function planarFaceCentroid(
   }
   const vAxis = cross(zAxis, uAxis);
 
-  let wires: number[];
-  try {
-    wires = Array.from(kernel.getFaceWires(face));
-  } catch {
-    return null;
-  }
+  const wires = Array.from(kernel.getFaceWires(face));
   if (wires.length === 0) {
     return null;
   }

@@ -93,10 +93,6 @@ export function measureFaceGeometry(
         y: normal[1]!,
         z: normal[2]!
       };
-      const measured = planarFaceCentroid(kernel, face, geometry.normal);
-      if (measured) {
-        geometry.centroid = measured.centroid;
-      }
       // The plane's own equation, n·x = d, completed here because it is
       // arithmetic on two values already in hand rather than a kernel call.
       // `center` is the mean of the face's vertices and every one of them lies
@@ -107,6 +103,13 @@ export function measureFaceGeometry(
         geometry.normal.x * geometry.center.x +
         geometry.normal.y * geometry.center.y +
         geometry.normal.z * geometry.center.z;
+      // Last, and never inside anything the fields above depend on: the
+      // centroid is one optional measurement, and it must not be able to cost
+      // this face its normal or its plane equation.
+      const measured = planarFaceCentroid(kernel, face, geometry.normal);
+      if (measured) {
+        geometry.centroid = measured.centroid;
+      }
     } catch {
       // NURBS-backed planes have no analytic normal; leave both unset. These
       // are exactly the imported-STEP faces a raw pick tends to land on, so
