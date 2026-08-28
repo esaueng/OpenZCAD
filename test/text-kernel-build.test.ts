@@ -340,6 +340,13 @@ describe('text built by the exact kernel', { timeout: 120_000 }, () => {
     expect(flattened.warnings.join('\n')).toContain(
       "reached the kernel as polylines rather than the font's own curves"
     );
+    // And what that warning MEANS, which the string cannot say. The body
+    // below is real, measured and exportable; it is merely faceted. A commit
+    // gate that refused on this would throw away work that succeeded, which
+    // is what it did while every warning looked alike.
+    expect(
+      flattened.featureWarnings?.map((entry) => entry.kind)
+    ).toContain('advisory');
     const flattenedFaces = bodyOf(flattened).topology?.faces ?? [];
     expect(
       flattenedFaces.filter((face) => face.geometry?.surfaceType === 'bspline')

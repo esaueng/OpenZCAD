@@ -40,6 +40,7 @@ import type {
 export type { DxfFaceSelector } from './exact-types';
 import { diagnoseImportedSolid } from './exact-lineage-builders';
 import { measureOwnedFaceGeometry } from './exact-measure';
+import { raiseFeatureWarning } from './exact-feature-warnings';
 import {
   collectRecognizedImportedFeatures,
   type ImportedRecognitionFaceIdentity
@@ -1283,8 +1284,11 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
             measured.meshClosure === null ||
             !isClosedConsistentlyOrientedMesh(measured.meshClosure))
         ) {
-          build.warnings.push(
-            `Feature "${feature.name}": Union produced an open, non-manifold, or inconsistently oriented result. Adjust the overlap or placement and try again.`
+          raiseFeatureWarning(
+            build,
+            feature,
+            'Union produced an open, non-manifold, or inconsistently oriented result. Adjust the overlap or placement and try again.',
+            'refusal'
           );
         }
         bodyRepresentations[bodyId] = {
