@@ -1733,7 +1733,6 @@ function buildPatternFeature(
       solids.push(...instance.solids);
     }
   }
-  result.consumed.add(data.targetBodyId);
   // Instances that interpenetrate have to become ONE solid before
   // anything measures them. Every consumer downstream — the volume
   // the Inspector prints, the STL writer, the mesh the viewport
@@ -1790,6 +1789,13 @@ function buildPatternFeature(
   } else {
     result.shapes.set(feature.bodyId, { solids });
   }
+  // Consumed only once a shape exists, which is what the other eight consume
+  // sites in this file do. The build loop is not transactional: it catches a
+  // throw per feature, records a warning, and carries on with the same
+  // mutable result — so a consume-mark set before the fallible fuse survived
+  // the failure that cancelled the pattern, and the target vanished from the
+  // viewport, the parts list and the STEP scope with nothing replacing it.
+  result.consumed.add(data.targetBodyId);
   inheritMeshOrigin(
     result,
     data.targetBodyId,

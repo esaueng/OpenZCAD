@@ -1,4 +1,7 @@
 import type { ShaprImportIR } from '@openzcad/io-shapr';
+// Deep import on purpose: the package barrel pulls the zip, SQLite-WASM and
+// MessagePack readers, and this module is in the entry chunk.
+import { truncateCodeUnits } from '@openzcad/io-shapr/truncate';
 import type { ShaprMigrationRecord } from '@openzcad/shared';
 
 export type ShaprMigrationDraft = Omit<
@@ -8,7 +11,7 @@ export type ShaprMigrationDraft = Omit<
 
 function safeFileName(name: string): string {
   const baseName = name.replaceAll('\\', '/').split('/').at(-1) ?? '';
-  const sanitized = [...baseName]
+  const bounded = [...baseName]
     .map((character) => {
       const code = character.codePointAt(0) ?? 0;
       return character === '/' ||
@@ -19,8 +22,8 @@ function safeFileName(name: string): string {
         : character;
     })
     .join('')
-    .trim()
-    .slice(0, 240);
+    .trim();
+  const sanitized = truncateCodeUnits(bounded, 240);
   if (!sanitized) {
     throw new Error('Import source name is empty after privacy filtering.');
   }

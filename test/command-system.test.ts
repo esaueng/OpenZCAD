@@ -751,6 +751,112 @@ describe('command-system', () => {
     ).toThrow(/cannot target its own result body/);
   });
 
+  /**
+   * The reorder gate has always refused an arrangement where a feature "would
+   * run before the body it uses exists". An edit reached the same arrangement
+   * without moving a row: every per-kind update check asked whether the
+   * referenced body EXISTS, never where in history it exists, and the
+   * Inspector's body picker offers the whole of `bodyOrder`.
+   *
+   * What that cost was silent. The replay is fail-soft per feature, so the
+   * transform was skipped behind one warning; a transform node carries no
+   * `bodyId`, so the sidebar's failed badge never lit up; and the document was
+   * left in a state the reorder gate calls illegal, so unrelated drags started
+   * throwing too.
+   */
+  it('refuses to retarget a transform to a body produced later in history', () => {
+    const manager = new CommandManager(
+      createProjectDocument('Forward ref', toUserId('user_test'))
+    );
+    manager.execute(
+      commandFactories.addPrimitive({
+        name: 'Box',
+        primitiveKind: 'box',
+        dimensions: { width: 10, height: 10, depth: 10 }
+      })
+    );
+    const boxBodyId = manager.document.bodyOrder[0]!;
+    manager.execute(
+      commandFactories.transformBody({
+        name: 'Move',
+        targetBodyId: boxBodyId,
+        translation: { x: 20, y: 0, z: 0 }
+      })
+    );
+    manager.execute(
+      commandFactories.addPrimitive({
+        name: 'Cylinder',
+        primitiveKind: 'cylinder',
+        dimensions: { radius: 3, height: 5 }
+      })
+    );
+    const laterBodyId = manager.document.bodyOrder.at(-1)!;
+    const move = featureOfKind(manager.document, 'transform');
+    const before = structuredClone(manager.document);
+
+    expect(() =>
+      manager.execute(
+        commandFactories.updateFeature({
+          featureId: move.featureId,
+          data: {
+            featureKind: 'transform',
+            targetBodyId: laterBodyId,
+            transform:
+              move.data.featureKind === 'transform'
+                ? move.data.transform
+                : undefined
+          }
+        })
+      )
+    ).toThrow(/before the body it uses exists/);
+    expect(manager.document).toEqual(before);
+  });
+
+  it('accepts a transform retargeted to a body that already exists', () => {
+    // The guard must not refuse an ordinary retarget backwards in history,
+    // which is the whole point of the Inspector's body picker.
+    const manager = new CommandManager(
+      createProjectDocument('Backward ref', toUserId('user_test'))
+    );
+    for (const name of ['Box', 'Second']) {
+      manager.execute(
+        commandFactories.addPrimitive({
+          name,
+          primitiveKind: 'box',
+          dimensions: { width: 10, height: 10, depth: 10 }
+        })
+      );
+    }
+    const [first, second] = manager.document.bodyOrder;
+    manager.execute(
+      commandFactories.transformBody({
+        name: 'Move',
+        targetBodyId: second!,
+        translation: { x: 20, y: 0, z: 0 }
+      })
+    );
+    const move = featureOfKind(manager.document, 'transform');
+    manager.execute(
+      commandFactories.updateFeature({
+        featureId: move.featureId,
+        data: {
+          featureKind: 'transform',
+          targetBodyId: first!,
+          transform:
+            move.data.featureKind === 'transform'
+              ? move.data.transform
+              : undefined
+        }
+      })
+    );
+    const updated = featureOfKind(manager.document, 'transform');
+    expect(
+      updated.data.featureKind === 'transform'
+        ? updated.data.targetBodyId
+        : null
+    ).toBe(first);
+  });
+
   it('accepts a boolean update that retargets to live distinct bodies', () => {
     const { manager, first, third, feature } = booleanUpdateFixture();
     manager.execute(
@@ -871,6 +977,60 @@ describe('command-system', () => {
     expect(
       updated.data.featureKind === 'revolve' ? updated.data.angleDeg : undefined
     ).toBe(180);
+  });
+
+  it('rejects updating a revolve to a sketch produced later in history', () => {
+    const manager = new CommandManager(
+      createProjectDocument('Revolve History', toUserId('user_test'))
+    );
+    manager.execute(
+      commandFactories.addSketch({
+        name: 'First profile',
+        plane: 'XZ',
+        offset: 0,
+        object: {
+          objectKind: 'rectangle',
+          width: 10,
+          height: 10,
+          centerX: 10,
+          centerY: 0
+        }
+      })
+    );
+    manager.execute(
+      commandFactories.revolveSketch({
+        name: 'Ring',
+        sketchId: getLatestSketchId(manager.document)!,
+        axis: 'vertical'
+      })
+    );
+    manager.execute(
+      commandFactories.addSketch({
+        name: 'Later profile',
+        plane: 'XZ',
+        offset: 0,
+        object: {
+          objectKind: 'rectangle',
+          width: 5,
+          height: 5,
+          centerX: 15,
+          centerY: 0
+        }
+      })
+    );
+    const laterSketchId = getLatestSketchId(manager.document)!;
+    const revolve = featureOfKind(manager.document, 'revolve');
+    const before = structuredClone(manager.document);
+
+    expect(() =>
+      manager.execute(
+        commandFactories.updateFeature({
+          featureId: revolve.featureId,
+          data: { featureKind: 'revolve', sketchId: laterSketchId }
+        })
+      )
+    ).toThrow(/before the sketch it uses exists/);
+    expect(manager.document).toEqual(before);
   });
 
   it('rejects updating fillet, transform, and pattern features to a nonexistent body', () => {
