@@ -19,6 +19,7 @@ import {
   REGION_SELECTED_OPACITY,
   SelectionManager
 } from './SelectionManager';
+import { easeToward } from '../motion';
 import { VIEWPORT_RENDER_ORDER } from '../render/scene';
 import { createBodyEdgeOverlay } from '../render/edgeOverlay';
 
@@ -265,6 +266,119 @@ describe('cursor feedback', () => {
     expect(domElement.style.cursor).toBe('');
   });
 
+  /**
+   * This manager is not the only thing that writes the canvas cursor: the
+   * viewer sets `grab` over a move-gizmo handle and over a direct-edit
+   * handle, and the gesture router saves and restores the cursor around a
+   * captured drag. A cache of "what I last wrote" is stale the instant any of
+   * them writes, and the next hover that happens to agree with the stale
+   * value then skips its own write — leaving the other writer's cursor on
+   * screen for as long as the pointer stays over things that agree with it.
+   */
+  it('corrects a cursor another writer left on the canvas', () => {
+    const { manager, domElement } = makeManager();
+    // Hover empty space, so the cache reads ''.
+    manager.applyHover(null);
+    expect(domElement.style.cursor).toBe('');
+
+    // The move gizmo claims the pointer and writes `grab` straight to the
+    // canvas, exactly as the viewer does when a handle is under the pointer.
+    domElement.style.cursor = 'grab';
+
+    // The pointer moves off the handle onto empty space again. The cursor has
+    // to come back, even though nothing changed as far as the cache knows.
+    manager.applyHover(null);
+    expect(domElement.style.cursor).toBe('');
+  });
+
+  it('still skips the write when the canvas already agrees', () => {
+    const { manager, domElement } = makeManager({ editable: ['body-1'] });
+    const face = candidate({
+      kind: 'face',
+      selection: { bodyId: 'body-1', kind: 'face', topologyId: 'f1' }
+    } as Partial<PickCandidate>);
+    manager.applyHover(face);
+    expect(domElement.style.cursor).toBe('grab');
+
+    // Sweeping across a dense face still writes nothing per frame: the point
+    // of the cache is that a hover that changes nothing costs nothing.
+    let writes = 0;
+    Object.defineProperty(domElement.style, 'cursor', {
+      get: () => 'grab',
+      set: () => {
+        writes += 1;
+      },
+      configurable: true
+    });
+    manager.applyHover(face);
+    manager.applyHover(face);
+    expect(writes).toBe(0);
+  });
+});
+
+/**
+ * The viewer used to run a second copy of this same loop over this same set
+ * in the same frame, so every registered fade played at double speed and the
+ * restore below fired only when the viewer's pass — rather than this one —
+ * happened to be the one that landed the value on its target.
+ */
+describe('the fade set', () => {
+  function fading(opacity = 0) {
+    return new THREE.MeshBasicMaterial({ transparent: true, opacity });
+  }
+
+  it('eases a registered material once per step, not twice', () => {
+    const { manager } = makeManager();
+    const material = fading();
+    material.userData.targetOpacity = 1;
+    manager.fadeIns.add(material);
+
+    manager.step(0.016);
+    const afterOne = material.opacity;
+    manager.step(0.016);
+    const afterTwo = material.opacity;
+
+    expect(afterOne).toBeCloseTo(easeToward(0, 1, 16), 6);
+    expect(afterTwo).toBeCloseTo(easeToward(afterOne, 1, 16), 6);
+  });
+
+  it('takes a settled material back out of the transparent pass', () => {
+    const { manager } = makeManager();
+    // What leaving sketch mode registers: a body that was receded, fading
+    // back to the fully opaque state it started in.
+    const material = fading(0.35);
+    material.userData.targetOpacity = 1;
+    material.userData.restoreOpaque = true;
+    const version = material.version;
+    manager.fadeIns.add(material);
+
+    for (let frame = 0; frame < 200 && manager.fadeIns.size > 0; frame += 1) {
+      manager.step(0.016);
+    }
+
+    expect(manager.fadeIns.size).toBe(0);
+    expect(material.opacity).toBe(1);
+    // Left transparent, the body stays in depth-sorted rendering for the rest
+    // of the session and sorts against whatever is behind it.
+    expect(material.transparent).toBe(false);
+    expect(material.userData.restoreOpaque).toBeUndefined();
+    // `needsUpdate` is write-only on a three.js material; the version bump is
+    // what it does, and what makes the renderer recompile the program.
+    expect(material.version).toBeGreaterThan(version);
+  });
+
+  it('leaves a material alone that never asked to go back to opaque', () => {
+    const { manager } = makeManager();
+    const material = fading();
+    material.userData.targetOpacity = 1;
+    manager.fadeIns.add(material);
+
+    for (let frame = 0; frame < 200 && manager.fadeIns.size > 0; frame += 1) {
+      manager.step(0.016);
+    }
+
+    expect(material.transparent).toBe(true);
+  });
 });
 
 describe('body emissive is reserved for whole-body picks', () => {
