@@ -757,10 +757,22 @@ function buildHoleFeature(
     scope,
     'hole position V'
   );
+  // Which point (u, v) is measured from is versioned by the marker's
+  // presence, never by what this build can compute: `center` is the mean of
+  // the face's VERTICES, so on a face bounded by one closed circular edge it
+  // sits on the rim, a whole radius from the centroid. Re-anchoring a hole
+  // that was drilled against the rim would silently relocate it.
+  if (data.positionAnchor === 'centroid' && !geometry.centroid) {
+    throw new Error(
+      'The hole entry face no longer reports an area centroid, and this hole is positioned from one.'
+    );
+  }
+  const anchor =
+    data.positionAnchor === 'centroid' ? geometry.centroid! : geometry.center;
   const surfacePoint = {
-    x: geometry.center.x + xAxis.x * u + yAxis.x * v,
-    y: geometry.center.y + xAxis.y * u + yAxis.y * v,
-    z: geometry.center.z + xAxis.z * u + yAxis.z * v
+    x: anchor.x + xAxis.x * u + yAxis.x * v,
+    y: anchor.y + xAxis.y * u + yAxis.y * v,
+    z: anchor.z + xAxis.z * u + yAxis.z * v
   };
   const axis = {
     x: -zAxis.x,
