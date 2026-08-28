@@ -1652,6 +1652,30 @@ export interface EdgeReferenceRepair {
   edgeReferences: EdgeTopologyReferenceV5[];
 }
 
+/**
+ * One warning the rebuild loop raised, with the feature it belongs to.
+ *
+ * `warnings` is a flat list of strings prefixed `Feature "<name>":`, which is
+ * the right shape to show a user and the wrong shape to decide anything from.
+ * Two features may share a name, and the loop emits the same prefix both when
+ * a feature FAILED to build and when it was deliberately SKIPPED for being
+ * suppressed — ten lines apart, in identical format. A commit gate reading
+ * those strings therefore refuses an edit because some unrelated feature is
+ * suppressed, and mis-attributes a failure whenever a name repeats.
+ *
+ * This carries the attribution the string cannot. It says who and whether the
+ * feature was skipped; it does not yet distinguish a builder's advisory (the
+ * body was produced, but approximately) from a refusal, which is why the gate
+ * still falls back to the string for warnings raised inside a builder.
+ */
+export interface FeatureWarning {
+  featureId: FeatureId;
+  featureName: string;
+  /** The full warning text, exactly as it appears in `warnings`. */
+  message: string;
+  kind: 'build-failed' | 'suppressed';
+}
+
 export interface DerivedState {
   bodyRepresentations: Record<BodyId, BodyRepresentation>;
   exportableBodyIds: BodyId[];
@@ -1662,6 +1686,8 @@ export interface DerivedState {
    * `attachDerivedState` strips it so it is never persisted or replayed.
    */
   referenceRepairs?: EdgeReferenceRepair[];
+  /** Attribution for `warnings`. Session-only, stripped like the repairs. */
+  featureWarnings?: FeatureWarning[];
 }
 
 export interface ProjectDocument {
