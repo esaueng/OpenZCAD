@@ -1383,6 +1383,17 @@ export function App() {
     baseVersion: number;
   } | null>(null);
   const [sketchConstruction, setSketchConstruction] = useState(false);
+  /**
+   * Offset for the next canonical-plane sketch, as typed. Kept as text so a
+   * half-entered value ("-", "1.") survives a keystroke; the ghost planes and
+   * the sketch itself both read the parsed number, and an unparseable entry
+   * simply means zero rather than blocking the pick.
+   */
+  const [sketchPlaneOffsetText, setSketchPlaneOffsetText] = useState('0');
+  const sketchPlaneOffset = (() => {
+    const parsed = Number(sketchPlaneOffsetText);
+    return Number.isFinite(parsed) ? parsed : 0;
+  })();
   const [sketchDiagnosticPoints, setSketchDiagnosticPoints] = useState<
     { x: number; y: number }[]
   >([]);
@@ -7997,9 +8008,10 @@ export function App() {
    * the viewport's ghost planes so both produce the same session and status.
    */
   function startSketchOnPlane(plane: PlaneId) {
+    const offset = sketchPlaneOffset;
     dispatchInteraction({
       type: 'enter-sketch',
-      plane: { type: 'canonical', plane, offset: 0 }
+      plane: { type: 'canonical', plane, offset }
     });
     setTool(null);
     setStatus(
@@ -8008,7 +8020,9 @@ export function App() {
       // is derived from the id, so a rename that only edits strings cannot
       // keep it green. Only the "Esc exits" claim goes — the armed Line tool
       // makes it untrue on the first press.
-      `Sketching on the ${plane} plane · Finish Sketch when done.`
+      offset === 0
+        ? `Sketching on the ${plane} plane · Finish Sketch when done.`
+        : `Sketching on the ${plane} plane offset ${offset} ${doc?.units ?? ''} · Finish Sketch when done.`
     );
   }
 
@@ -12474,6 +12488,7 @@ export function App() {
             onSelectRegion={handleSelectRegion}
             onHoverRegion={handleHoverRegion}
             planePickerArmed={!modelingLocked && tool === 'sketch'}
+            planePickerOffset={sketchPlaneOffset}
             onPickPlane={startSketchOnPlane}
             onMeasurePreview={
               modelingLocked && measuring ? previewMeasurement : null
@@ -12851,6 +12866,21 @@ export function App() {
                       plane.
                     </small>
                   </span>
+                  <label className="sketch-plane-offset">
+                    <span>Offset</span>
+                    <input
+                      type="number"
+                      step="any"
+                      value={sketchPlaneOffsetText}
+                      aria-label="Sketch plane offset"
+                      onChange={(event) =>
+                        setSketchPlaneOffsetText(event.target.value)
+                      }
+                    />
+                    <span className="sketch-plane-offset-units">
+                      {doc.units}
+                    </span>
+                  </label>
                   <span className="sketch-plane-buttons">
                     {(['XY', 'XZ', 'YZ'] as const).map((plane) => (
                       <button
