@@ -8,12 +8,15 @@
  * from the async orchestration so each rejection has a test.
  */
 
-import { warningForFeature } from './featureValidation';
+import { refusingWarning } from './featureValidation';
+import type { FeatureWarning } from '@openzcad/shared';
 
 export interface DirectEditVerdictInput {
   /** The feature label, as it appears in a derived warning's prefix. */
   label: string;
   warnings: readonly string[];
+  /** Attribution for `warnings`, when the rebuild supplied it. */
+  featureWarnings?: readonly FeatureWarning[];
   /** Whether the rebuild still produced the body the edit targets. */
   bodyPresent: boolean;
   /** Whether the document changed while the rebuild was in flight. */
@@ -31,7 +34,11 @@ export interface DirectEditVerdictInput {
 export function directEditRejection(
   input: DirectEditVerdictInput
 ): string | null {
-  const warning = warningForFeature(input.label, input.warnings);
+  const warning = refusingWarning(
+    input.label,
+    input.warnings,
+    input.featureWarnings
+  );
   if (warning) {
     return warning;
   }

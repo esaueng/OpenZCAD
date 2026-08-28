@@ -183,6 +183,14 @@ export function cloneBuildState(result: ExactBuildResult): ExactBuildResult {
     meshBodies: new Set(result.meshBodies),
     partialRevolveBodies: new Set(result.partialRevolveBodies),
     warnings: [...result.warnings],
+    // Copied with the warnings they attribute. A snapshot that carried the
+    // strings without their attribution would leave every cached rebuild —
+    // which is the common case — falling back to matching feature names, and
+    // the gate would go on mistaking a suppression for a failure exactly
+    // where it does most of its work.
+    ...(result.featureWarnings
+      ? { featureWarnings: result.featureWarnings.map((entry) => ({ ...entry })) }
+      : {}),
     referenceRepairs: [...result.referenceRepairs]
   };
 }

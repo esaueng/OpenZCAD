@@ -119,6 +119,9 @@ export function useDirectEditCommit(
           const message = directEditRejection({
             label: command.label,
             warnings: derived.warnings,
+            ...(derived.featureWarnings
+              ? { featureWarnings: derived.featureWarnings }
+              : {}),
             bodyPresent: Boolean(derived.bodyRepresentations[targetBodyId]),
             documentMoved
           });

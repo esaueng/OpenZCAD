@@ -10494,20 +10494,36 @@ export function App() {
       );
       return;
     }
-    executeCommand(
-      commandFactories.updateFeature(
-        {
-          featureId: feature.featureId,
-          data: {
-            dimensions: {
-              ...feature.data.dimensions,
-              [dimension]: Math.max(0.1, commit.value)
-            }
+    const command = commandFactories.updateFeature(
+      {
+        featureId: feature.featureId,
+        data: {
+          dimensions: {
+            ...feature.data.dimensions,
+            [dimension]: Math.max(0.1, commit.value)
           }
-        },
-        `Resize ${feature.name} ${dimension}`
-      )
+        }
+      },
+      `Resize ${feature.name} ${dimension}`
     );
+    if (!feature.bodyId) {
+      executeCommand(command);
+      return;
+    }
+    // The same command the Inspector's dimension field builds, so it takes
+    // the same path. This was the only primitive resize — and the only
+    // direct-manipulation commit anywhere in this file — that committed
+    // without asking the kernel first: dragging a box face until a downstream
+    // fillet no longer fit landed the edit and left the fillet broken, while
+    // typing the identical number into the inspector was refused and named
+    // the fillet. Which of the two a user reached for is not a reason for
+    // them to behave differently.
+    void executeValidatedFeature(command, {
+      featureName: feature.name,
+      resultBodyId: feature.bodyId,
+      targets: affectedFeatureTargets(doc, feature.featureId),
+      successMessage: command.label
+    });
   }
 
   /**
@@ -12066,6 +12082,21 @@ export function App() {
       command.validate(current);
       const candidate = command.apply(current);
       const derived = await geometry.syncOnce(candidate);
+      // Deliberately stricter than the judge the commit itself uses, and
+      // deliberately left that way. A modeling operation is appended to the
+      // end of history (`featureOrder.push`), so it has nothing downstream to
+      // break — the "new warning anywhere" rule that looks like a deadlock
+      // waiting to happen cannot actually fire as one here. What it does
+      // catch, and what the feature-scoped judge does not, is
+      // `Body "<name>" failed exact B-rep validation.`, which the kernel
+      // announces on a different channel while still registering the body.
+      //
+      // Making the two agree therefore means making the COMMIT stricter, not
+      // this looser — and that needs the kernel to separate a defect from the
+      // invalidity a STEP import deliberately admits (see
+      // imported-step-validation.ts, which keeps and flags a supplier's open
+      // shell on purpose). Until warnings carry that distinction, relaxing
+      // this would trade a refusal that works for one that does not exist.
       const existingWarnings = new Set(current.derived.warnings);
       const warning = derived.warnings.find(
         (candidateWarning) => !existingWarnings.has(candidateWarning)

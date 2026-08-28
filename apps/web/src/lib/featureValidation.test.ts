@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { toFeatureId } from '@openzcad/shared';
 import {
   validatedFeatureRejection,
   warningForFeature
@@ -50,5 +51,114 @@ describe('validated feature warnings', () => {
 
   it('accepts a warning-free current result', () => {
     expect(validatedFeatureRejection(safe)).toBeNull();
+  });
+});
+
+/**
+ * A name prefix cannot answer "did my feature build?".
+ *
+ * The rebuild loop writes the same `Feature "<name>":` shape whether a
+ * feature FAILED to build or was deliberately SKIPPED for being suppressed —
+ * ten lines apart in exact-build-loop.ts, in identical format. And a name
+ * repeats: nothing stops two features sharing one. So the gate refused an
+ * edit because some unrelated feature was suppressed, and blamed the wrong
+ * feature whenever a name collided. Attribution is what decides both.
+ */
+describe('a verdict with warning attribution', () => {
+  const suppressed = {
+    featureId: toFeatureId('feat_old'),
+    featureName: 'Shell',
+    message: 'Feature "Shell": Suppressed; skipped during exact rebuild.',
+    kind: 'suppressed' as const
+  };
+
+  it('does not read a suppression as a failure', () => {
+    expect(
+      validatedFeatureRejection({
+        featureName: 'Shell',
+        featureId: toFeatureId('feat_new'),
+        warnings: [suppressed.message],
+        featureWarnings: [suppressed],
+        bodyPresent: true,
+        documentMoved: false
+      })
+    ).toBeNull();
+  });
+
+  it('refused it before, on the string alone', () => {
+    // The same inputs with no attribution: this is what every gated commit
+    // saw, and why creating a feature named like a suppressed one failed.
+    expect(
+      validatedFeatureRejection({
+        featureName: 'Shell',
+        warnings: [suppressed.message],
+        bodyPresent: true,
+        documentMoved: false
+      })?.message
+    ).toBe('Suppressed; skipped during exact rebuild.');
+  });
+
+  it('blames the feature that actually failed, not the one that shares its name', () => {
+    const mine = toFeatureId('feat_mine');
+    const theirs = toFeatureId('feat_theirs');
+    const verdict = validatedFeatureRejection({
+      featureName: 'Shell',
+      featureId: mine,
+      warnings: [
+        'Feature "Shell": Shell wall thickness exceeds the body.',
+        'Feature "Shell": Suppressed; skipped during exact rebuild.'
+      ],
+      featureWarnings: [
+        {
+          featureId: theirs,
+          featureName: 'Shell',
+          message: 'Feature "Shell": Shell wall thickness exceeds the body.',
+          kind: 'build-failed'
+        },
+        { ...suppressed, featureId: mine, featureName: 'Shell' }
+      ],
+      bodyPresent: true,
+      documentMoved: false
+    });
+    // The failure belongs to a different feature; mine was merely suppressed.
+    expect(verdict).toBeNull();
+  });
+
+  it('still refuses when the failure is genuinely mine', () => {
+    const mine = toFeatureId('feat_mine');
+    expect(
+      validatedFeatureRejection({
+        featureName: 'Shell',
+        featureId: mine,
+        warnings: ['Feature "Shell": Shell wall thickness exceeds the body.'],
+        featureWarnings: [
+          {
+            featureId: mine,
+            featureName: 'Shell',
+            message:
+              'Feature "Shell": Shell wall thickness exceeds the body.',
+            kind: 'build-failed'
+          }
+        ],
+        bodyPresent: true,
+        documentMoved: false
+      })?.message
+    ).toBe('Shell wall thickness exceeds the body.');
+  });
+
+  it('still reads a builder warning it has no record for', () => {
+    // Builders push straight onto the string list, so the name match is all
+    // there is for them. That is deliberately unchanged here: telling a
+    // builder advisory from a builder refusal is a separate problem.
+    expect(
+      validatedFeatureRejection({
+        featureName: 'Subtract',
+        featureId: toFeatureId('feat_sub'),
+        warnings: ['Feature "Subtract": Subtract refused: the tools overlap.'],
+        featureWarnings: [suppressed],
+        bodyPresent: true,
+        documentMoved: false
+      })?.message
+    ).toBe('Subtract refused: the tools overlap.');
   });
 });
