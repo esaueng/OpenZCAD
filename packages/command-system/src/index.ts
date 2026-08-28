@@ -2371,6 +2371,16 @@ export class CommandManager {
     command.validate(this.document);
     const previous = this.document;
     let next = command.apply(this.document);
+    // `runTransaction` and `applyDocumentEdit` both refuse a command that
+    // changed nothing; this one did not, and a command that returns the same
+    // document still appended a revision, pushed an undo entry, bumped the
+    // version and — because the version is part of the geometry sync key —
+    // posted a whole-document rebuild. `moveFeature` returns its input for an
+    // out-of-range index, which ArrowUp on the first row produces, so holding
+    // the key evicted the user's real undo history one dead entry at a time.
+    if (next === this.document) {
+      return this.document;
+    }
     next.commandLog.push(command.serialize());
     next = appendRevision(next, command.label);
     this.pushUndo({ snapshot: previous, command: command.serialize() });

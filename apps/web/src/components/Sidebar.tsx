@@ -461,7 +461,15 @@ export function Sidebar({
                       return;
                     }
                     event.preventDefault();
-                    onReorderFeature(feature.featureId, index + offset);
+                    // Clamped so the ends of the list are a no-op rather than
+                    // a move to -1 or past the end. The command layer refuses
+                    // those too, but a keypress that cannot do anything should
+                    // not travel that far to find out.
+                    const target = index + offset;
+                    if (target < 0 || target >= features.length) {
+                      return;
+                    }
+                    onReorderFeature(feature.featureId, target);
                   }}
                 >
                   <GripVertical size={12} aria-hidden="true" />
