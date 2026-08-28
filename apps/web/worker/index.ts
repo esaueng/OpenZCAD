@@ -403,6 +403,36 @@ async function notifyProjectRoleChange(
   }
 }
 
+async function notifyOwnedRoomsCollaborationDisabled(
+  env: Env,
+  ownerUserId: string
+): Promise<void> {
+  if (!env.DB || !env.PROJECT_ROOM) {
+    return;
+  }
+  const owned = await env.DB.prepare(
+    'SELECT id FROM projects WHERE user_id = ?'
+  )
+    .bind(ownerUserId)
+    .all<{ id: string }>();
+  for (const { id: projectId } of owned.results ?? []) {
+    const response = await env.PROJECT_ROOM.getByName(projectId).fetch(
+      new Request(
+        `https://project-room.internal/?projectId=${encodeURIComponent(projectId)}`,
+        {
+          method: 'PATCH',
+          headers: {
+            'x-openzcad-internal-owner-collaboration-disabled': 'v1'
+          }
+        }
+      )
+    );
+    if (!response.ok) {
+      throw new Error('Project room rejected a collaboration disable update.');
+    }
+  }
+}
+
 function projectInvitationEmailConfig(env: Env): {
   email: SendEmail;
   sender: string;
@@ -947,7 +977,16 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
       env.ENVIRONMENT,
       env.AI_ALLOWED_BASE_URL_HOSTS
     );
-    return json(await updateAppSettings(userId, payload, env, session.email));
+    const updated = await updateAppSettings(
+      userId,
+      payload,
+      env,
+      session.email
+    );
+    if (!updated.settings.collaboration.enabled) {
+      await notifyOwnedRoomsCollaborationDisabled(env, userId);
+    }
+    return json(updated);
   }
 
   if (pathname === '/api/settings/assistant-credential') {
