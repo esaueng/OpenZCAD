@@ -331,6 +331,12 @@ export default defineConfig(async ({ command, isPreview, mode }) => {
         '@openzcad/viewport/types': fileURLToPath(
           new URL('../../packages/viewport/src/types.ts', import.meta.url)
         ),
+        // Same reason as the text loader above: the io-shapr index pulls the
+        // zip reader, SQLite-WASM and the MessagePack decoder, and the module
+        // that wants this one pure string helper is in the entry chunk.
+        '@openzcad/io-shapr/truncate': fileURLToPath(
+          new URL('../../packages/io-shapr/src/truncate.ts', import.meta.url)
+        ),
         ...workspaceAliases
       }
     },
