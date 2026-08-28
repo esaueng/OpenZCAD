@@ -395,10 +395,7 @@ import { ShortcutsOverlay } from './components/ShortcutsOverlay';
 import { DISPLAY_MODE_LABELS } from './lib/displayMode';
 import { ContextMenu, type ContextMenuState } from './components/ContextMenu';
 import { MarkingMenu } from './components/MarkingMenu';
-import {
-  resolveExtrudeOperation,
-  type ResolvedExtrude
-} from './lib/extrudeInference';
+import { resolveExtrudeOperation } from './lib/extrudeInference';
 import type {
   BodyAppearancePreview,
   FaceResizeCommit,
@@ -4514,52 +4511,6 @@ export function App() {
       chosen.length === 1
         ? 'Closed sketch profile selected · drag the arrow to extrude, or type a distance.'
         : `${chosen.length} profiles selected · drag the arrow to extrude them together.`
-    );
-  }
-
-  async function createInferredExtrude(input: ExtrudeInput) {
-    const manager = managerRef.current;
-    if (!manager) {
-      return;
-    }
-    const base = manager.document;
-    setBusy(true);
-    setStatus('Inferring the extrusion operation with the exact kernel…');
-    let resolved: ResolvedExtrude;
-    try {
-      resolved = await resolveExtrudeOperation({
-        base,
-        input,
-        derive: (document) => geometry.syncOnce(document)
-      });
-    } catch (error) {
-      setStatus(errorMessage(error, 'Extrusion inference failed.'));
-      setBusy(false);
-      return;
-    }
-    setBusy(false);
-    if (
-      managerRef.current !== manager ||
-      manager.document.version !== base.version
-    ) {
-      setStatus('The document changed while extrusion inference was running.');
-      return;
-    }
-    const command = commandFactories.extrudeSketch({
-      ...resolved.command.payload,
-      name: input.name
-    });
-    const bodyId = command.payload.ids?.bodyId;
-    if (!bodyId) {
-      setStatus('Extrude could not reserve a result body.');
-      return;
-    }
-    await executeValidatedDirectEdit(
-      command,
-      bodyId,
-      `Created ${resolved.inference.operation} extrusion.`,
-      typeof input.distance === 'number' ? input.distance : 0,
-      finishFeatureCreation
     );
   }
 
@@ -11949,9 +11900,7 @@ export function App() {
   ];
 
   const directMode =
-    tool === 'sketch' ||
-    tool === 'extrude' ||
-    (tool === 'transform' && movePreview !== null);
+    tool === 'sketch' || (tool === 'transform' && movePreview !== null);
   // The setting is the only gate on the assistant's presence: rendering nothing
   // also means no /api/assistant/status probe, since that fetch lives in the
   // rail's mount effect. A direct-manipulation mode only hides it — the panel
@@ -13074,10 +13023,6 @@ export function App() {
                     })
                   )
                 }
-                onCreateSketch={(value) =>
-                  createFeature(commandFactories.addSketch(value))
-                }
-                onCreateExtrude={(value) => void createInferredExtrude(value)}
                 onCreateRevolve={(value) =>
                   createFeature(commandFactories.revolveSketch(value))
                 }
