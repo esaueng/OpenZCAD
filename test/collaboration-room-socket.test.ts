@@ -21,38 +21,55 @@ afterAll(() => {
   globals.restore();
 });
 
-function upgradeRequest(projectId: string): Request {
+interface SocketIdentity {
+  userId: string;
+  displayName: string;
+  role: 'owner' | 'editor' | 'viewer';
+}
+
+const ownerIdentity: SocketIdentity = {
+  userId: 'user_room',
+  displayName: 'Room user',
+  role: 'owner'
+};
+
+function upgradeRequest(
+  projectId: string,
+  identity: SocketIdentity = ownerIdentity
+): Request {
   return new Request(`https://room.test/?projectId=${projectId}`, {
     headers: {
       upgrade: 'websocket',
-      'x-openzcad-user-id': 'user_room',
-      'x-openzcad-display-name': 'Room user',
-      'x-openzcad-project-role': 'owner'
+      'x-openzcad-user-id': identity.userId,
+      'x-openzcad-display-name': identity.displayName,
+      'x-openzcad-project-role': identity.role
     }
   });
 }
 
 async function openSocket(
   room: ProjectCollaborationRoom,
-  projectId: string
+  projectId: string,
+  identity: SocketIdentity = ownerIdentity
 ): Promise<FakeWebSocket> {
-  const response = await room.fetch(upgradeRequest(projectId));
+  const response = await room.fetch(upgradeRequest(projectId, identity));
   expect(response.status).toBe(101);
   return globals.serverSockets.at(-1)!;
 }
 
 async function issueSocketTicket(
   room: ProjectCollaborationRoom,
-  projectId: string
+  projectId: string,
+  identity: SocketIdentity = ownerIdentity
 ): Promise<{ ticket: string; expiresAt: number }> {
   const response = await room.fetch(
     new Request(`https://room.test/?projectId=${projectId}`, {
       method: 'PUT',
       headers: {
         'x-openzcad-internal-ticket-request': 'v1',
-        'x-openzcad-user-id': 'user_room',
-        'x-openzcad-display-name': 'Room user',
-        'x-openzcad-project-role': 'owner'
+        'x-openzcad-user-id': identity.userId,
+        'x-openzcad-display-name': identity.displayName,
+        'x-openzcad-project-role': identity.role
       }
     })
   );
@@ -155,6 +172,272 @@ describe('collaboration room socket handling', () => {
       code: 1008,
       reason: 'Collaboration access is disabled.'
     });
+  });
+
+  it('withholds broadcasts from a member removed while its socket stays open', async () => {
+    const { context } = createRoomContext();
+    const base = createProjectDocument(
+      'Revoked broadcast room',
+      toUserId('user_room')
+    );
+    let memberRole: 'editor' | null = 'editor';
+    const room = new ProjectCollaborationRoom(context, {
+      DB: {
+        prepare: () => ({
+          bind: () => ({
+            first: async () =>
+              memberRole ? { role: memberRole, collaboration_enabled: 1 } : null
+          })
+        })
+      }
+    });
+    const owner = await openSocket(room, base.projectId);
+    await owner.receive(hello(base, 'client_owner'));
+    const member = await openSocket(room, base.projectId, {
+      userId: 'user_removed',
+      displayName: 'Removed member',
+      role: 'editor'
+    });
+    await member.receive(hello(null, 'client_member'));
+    memberRole = null;
+    member.sent.length = 0;
+
+    const next = addPrimitiveFeature(base, {
+      name: 'Private after removal',
+      primitiveKind: 'box',
+      dimensions: { width: 1, height: 1, depth: 1 }
+    });
+    await owner.receive(documentFrame(next, base.version, 'client_owner'));
+
+    expect(member.closed).toEqual({
+      code: 1008,
+      reason: 'Project collaboration access is no longer available.'
+    });
+    expect(member.frames()).not.toContainEqual(
+      expect.objectContaining({ type: 'document' })
+    );
+  });
+
+  it('sends immediately after each recipient access check', async () => {
+    const { context } = createRoomContext();
+    const base = createProjectDocument(
+      'Recipient check ordering',
+      toUserId('user_room')
+    );
+    let delayBlocker = false;
+    let releaseBlocker: (() => void) | undefined;
+    const room = new ProjectCollaborationRoom(context, {
+      DB: {
+        prepare: () => ({
+          bind: (_projectId: string, userId: string) => ({
+            first: async () => {
+              if (delayBlocker && userId === 'user_blocker') {
+                await new Promise<void>((resolve) => {
+                  releaseBlocker = resolve;
+                });
+              }
+              return { role: 'viewer', collaboration_enabled: 1 };
+            }
+          })
+        })
+      }
+    });
+    const owner = await openSocket(room, base.projectId);
+    await owner.receive(hello(base, 'client_owner'));
+    const target = await openSocket(room, base.projectId, {
+      userId: 'user_target',
+      displayName: 'Target viewer',
+      role: 'viewer'
+    });
+    await target.receive(hello(null, 'client_target'));
+    const blocker = await openSocket(room, base.projectId, {
+      userId: 'user_blocker',
+      displayName: 'Blocking viewer',
+      role: 'viewer'
+    });
+    await blocker.receive(hello(null, 'client_blocker'));
+    target.sent.length = 0;
+    blocker.sent.length = 0;
+    delayBlocker = true;
+
+    const next = addPrimitiveFeature(base, {
+      name: 'Checked recipient',
+      primitiveKind: 'sphere',
+      dimensions: { radius: 1 }
+    });
+    await owner.receive(documentFrame(next, base.version, 'client_owner'));
+
+    expect(target.frames()).toContainEqual(
+      expect.objectContaining({ type: 'document' })
+    );
+    expect(blocker.frames()).not.toContainEqual(
+      expect.objectContaining({ type: 'document' })
+    );
+    releaseBlocker?.();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(blocker.frames()).toContainEqual(
+      expect.objectContaining({ type: 'document' })
+    );
+  });
+
+  it('does not resend room state when a removed member repeats hello', async () => {
+    const { context } = createRoomContext();
+    const base = createProjectDocument(
+      'Revoked state room',
+      toUserId('user_room')
+    );
+    let memberPresent = true;
+    const room = new ProjectCollaborationRoom(context, {
+      DB: {
+        prepare: () => ({
+          bind: () => ({
+            first: async () =>
+              memberPresent
+                ? { role: 'viewer', collaboration_enabled: 1 }
+                : null
+          })
+        })
+      }
+    });
+    const owner = await openSocket(room, base.projectId);
+    await owner.receive(hello(base, 'client_owner'));
+    const member = await openSocket(room, base.projectId, {
+      userId: 'user_removed_viewer',
+      displayName: 'Removed viewer',
+      role: 'viewer'
+    });
+    await member.receive(hello(null, 'client_viewer'));
+    memberPresent = false;
+    member.sent.length = 0;
+
+    await member.receive(hello(null, 'client_viewer'));
+
+    expect(member.closed).toMatchObject({ code: 1008 });
+    expect(member.frames()).not.toContainEqual(
+      expect.objectContaining({ type: 'state' })
+    );
+  });
+
+  it('closes connected collaborators when the owner disables collaboration', async () => {
+    const { context } = createRoomContext();
+    const base = createProjectDocument(
+      'Disabled collaboration room',
+      toUserId('user_room')
+    );
+    const room = new ProjectCollaborationRoom(context, {});
+    const owner = await openSocket(room, base.projectId);
+    await owner.receive(hello(base, 'client_owner'));
+    const viewer = await openSocket(room, base.projectId, {
+      userId: 'user_viewer',
+      displayName: 'Room viewer',
+      role: 'viewer'
+    });
+    await viewer.receive(hello(null, 'client_viewer'));
+
+    const response = await room.fetch(
+      new Request(
+        `https://project-room.internal/?projectId=${base.projectId}`,
+        {
+          method: 'PATCH',
+          headers: {
+            'x-openzcad-internal-owner-collaboration-disabled': 'v1'
+          }
+        }
+      )
+    );
+
+    expect(response.status).toBe(204);
+    expect(viewer.closed).toEqual({
+      code: 1008,
+      reason: 'Project collaboration was disabled by the owner.'
+    });
+    expect(owner.closed).toBeNull();
+    await expect(room.snapshot()).resolves.toEqual({
+      members: [['client_owner', 'active']],
+      lease: null
+    });
+  });
+
+  it('clears a disconnected collaborator lease when the owner disables collaboration', async () => {
+    const { context, values } = createRoomContext();
+    const base = createProjectDocument(
+      'Disabled lease room',
+      toUserId('user_room')
+    );
+    const roomEnv = { PROJECT_EDIT_LEASES_ENFORCED: 'true' };
+    const room = new ProjectCollaborationRoom(context, roomEnv);
+    const editor = await openSocket(room, base.projectId, {
+      userId: 'user_disconnected_editor',
+      displayName: 'Disconnected editor',
+      role: 'editor'
+    });
+    await editor.receive(hello(null, 'client_editor'));
+    await editor.receive(
+      JSON.stringify({ type: 'lease-acquire', clientId: 'client_editor' })
+    );
+    expect(values.has('room:edit-lease')).toBe(true);
+
+    const restarted = new ProjectCollaborationRoom(context, roomEnv);
+    const response = await restarted.fetch(
+      new Request(
+        `https://project-room.internal/?projectId=${base.projectId}`,
+        {
+          method: 'PATCH',
+          headers: {
+            'x-openzcad-internal-owner-collaboration-disabled': 'v1'
+          }
+        }
+      )
+    );
+
+    expect(response.status).toBe(204);
+    expect(values.has('room:edit-lease')).toBe(false);
+  });
+
+  it('rejects a pre-issued member ticket after the owner disables collaboration', async () => {
+    const { context } = createRoomContext();
+    const base = createProjectDocument(
+      'Disabled ticket room',
+      toUserId('user_room')
+    );
+    let collaborationEnabled = true;
+    const room = new ProjectCollaborationRoom(context, {
+      ENVIRONMENT: 'development',
+      AUTH_MODE: 'development',
+      DB: {
+        prepare: (query: string) => ({
+          bind: () => ({
+            first: async () => {
+              if (query.includes('account_erasure_requests')) {
+                return null;
+              }
+              if (query.includes('SELECT user_id FROM projects')) {
+                return null;
+              }
+              return {
+                role: 'viewer',
+                collaboration_enabled: collaborationEnabled ? 1 : 0
+              };
+            }
+          })
+        })
+      }
+    });
+    const issued = await issueSocketTicket(room, base.projectId, {
+      userId: 'user_ticket_viewer',
+      displayName: 'Ticket viewer',
+      role: 'viewer'
+    });
+    collaborationEnabled = false;
+
+    const response = await room.fetch(
+      new Request(
+        `https://room.test/?projectId=${base.projectId}&ticket=${issued.ticket}`,
+        { headers: { upgrade: 'websocket' } }
+      )
+    );
+
+    expect(response.status).toBe(401);
   });
 
   it('stores only a hash and consumes a native socket ticket once', async () => {
