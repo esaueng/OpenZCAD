@@ -7313,6 +7313,11 @@ export function App() {
     if (!managerRef.current || !doc || !ensureCanEdit('import geometry')) {
       return;
     }
+    // The manager this import belongs to, by identity rather than by project
+    // id: reopening the same project replaces the manager too, and a mesh
+    // built against the document that was on screen does not belong in the
+    // one that replaced it.
+    const importManager = managerRef.current;
     const contentType = file.type || inferContentType(file.name);
     const lowerName = file.name.toLowerCase();
 
@@ -7366,6 +7371,17 @@ export function App() {
         // Continue with the local import.
       }
 
+      // Between the entry check and here are two awaits, the second an
+      // upload of up to 128 MB. This path shows no busy state and no import
+      // card, so Home and the project shelf stay live throughout — and the
+      // vertices were already scaled by the units of the document that was
+      // open when the file was read, so landing them anywhere else is both
+      // the wrong project and the wrong size. The STEP path is guarded by
+      // `useValidatedFeatureCommit`; this one had nothing.
+      if (managerRef.current !== importManager) {
+        setStatus('The project changed while the import finished.');
+        return;
+      }
       const created = executeCommand(
         commandFactories.importMesh({
           name: parsed.name,
@@ -7828,6 +7844,10 @@ export function App() {
         contentType: info.contentType,
         kind: info.kind,
         body,
+        // The dialog's Cancel is already honoured by the two awaits above;
+        // without it here the archive kept uploading the file the user had
+        // just stopped exporting, and finalized it into the File menu.
+        ...(options?.signal ? { signal: options.signal } : {}),
         metadata: {
           bodyIds: exportBodyIds.join(','),
           documentVersion: doc.version,
