@@ -7914,10 +7914,10 @@ export function ModelViewer({
             new THREE.Vector3().fromArray(body.mesh.vertices, vertexIndex * 3)
           );
         }
-        // Target the triangles' area-weighted centroid, not the attachment's
-        // sourceCenter: that anchor can sit on the face's rim (it is the
-        // surface's reference point, not the centroid), which would frame
-        // off-center and over-distance.
+        // Target the triangles' area-weighted centroid. The display mesh is
+        // already in hand here, so this costs nothing and needs no kernel
+        // round trip — and it must not be used for anything persisted, since
+        // tessellation quality is a user setting.
         const center =
           faceTrianglesCentroid(points) ??
           new THREE.Vector3(frame.center.x, frame.center.y, frame.center.z);
