@@ -1,5 +1,6 @@
 import { decodeSqlText, parseBoundedJson } from './json';
 import type { ShaprImportLimits } from './limits';
+import { truncateCodeUnits } from './truncate';
 import { decodeShaprMessagePack } from './msgpack';
 import type {
   ShaprDatabase,
@@ -122,7 +123,7 @@ function boundedName(value: unknown, fallback: string): string {
     })
     .join('')
     .trim();
-  return decoded.length > 0 ? decoded.slice(0, 200) : fallback;
+  return decoded.length > 0 ? truncateCodeUnits(decoded, 200) : fallback;
 }
 
 function objectValue(value: unknown, label: string): Record<string, unknown> {

@@ -24,6 +24,15 @@ export class TopologyPickList {
 
   private options: TopologyPickListOptions;
 
+  /**
+   * Where focus was when this list took it, so closing can give it back.
+   *
+   * Only recorded for a keyboard open. Hiding the element that holds focus
+   * drops focus on the document body, which for a keyboard user means losing
+   * their place in the app entirely — the same defect the React menus had.
+   */
+  private focusReturn: HTMLElement | null = null;
+
   constructor(options: TopologyPickListOptions) {
     this.options = options;
     this.element = options.hud.create('topology-pick-list');
@@ -121,6 +130,11 @@ export class TopologyPickList {
       return false;
     }
     if (focusFirst) {
+      const active = document.activeElement;
+      this.focusReturn =
+        active instanceof HTMLElement && !this.element.contains(active)
+          ? active
+          : null;
       rows[0]?.focus({ preventScroll: true });
     }
     return true;
@@ -130,7 +144,18 @@ export class TopologyPickList {
     if (!this.element.hidden) {
       this.options.onHover(null);
     }
+    // Read before hiding: hiding the element that holds focus is what drops it.
+    const active = document.activeElement;
+    const heldFocus =
+      active instanceof HTMLElement && this.element.contains(active);
+    const focusReturn = this.focusReturn;
+    this.focusReturn = null;
     this.options.hud.hide(this.element);
+    // Only when this list actually had focus. Closing on an outside click
+    // while the user has tabbed elsewhere must not haul focus back.
+    if (heldFocus && focusReturn?.isConnected) {
+      focusReturn.focus({ preventScroll: true });
+    }
   }
 
   private buttons(): HTMLButtonElement[] {
