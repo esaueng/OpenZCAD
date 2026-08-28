@@ -730,6 +730,74 @@ describe('worker api routes', () => {
     ).toBe(true);
   });
 
+  it('notifies every owned room when the owner disables collaboration', async () => {
+    let storedSettings = structuredClone(DEFAULT_APP_SETTINGS);
+    let storedRevision = 1;
+    const prepare = vi.fn((query: string) => {
+      let values: unknown[] = [];
+      const statement = {
+        bind(...next: unknown[]) {
+          values = next;
+          return statement;
+        },
+        async first() {
+          if (query.includes('FROM user_settings')) {
+            return {
+              settings_json: JSON.stringify(storedSettings),
+              revision: storedRevision
+            };
+          }
+          return null;
+        },
+        async run() {
+          if (query.includes('UPDATE user_settings')) {
+            storedSettings = JSON.parse(
+              String(values[0])
+            ) as typeof storedSettings;
+            storedRevision = Number(values[1]);
+            return { meta: { changes: 1 } };
+          }
+          return { meta: { changes: 0 } };
+        },
+        async all() {
+          return query.includes('SELECT id FROM projects')
+            ? { results: [{ id: 'project_one' }, { id: 'project_two' }] }
+            : { results: [] };
+        }
+      };
+      return statement;
+    });
+    const roomFetch = vi.fn(async (request: Request) => {
+      expect(request.method).toBe('PATCH');
+      expect(
+        request.headers.get('x-openzcad-internal-owner-collaboration-disabled')
+      ).toBe('v1');
+      return new Response(null, { status: 204 });
+    });
+    const getByName = vi.fn((_projectId: string) => ({ fetch: roomFetch }));
+    const disabled = structuredClone(DEFAULT_APP_SETTINGS);
+    disabled.collaboration.enabled = false;
+
+    const response = await worker.fetch(
+      patch('/api/settings', {
+        settings: disabled,
+        expectedRevision: 1
+      }),
+      {
+        ...env,
+        DB: { prepare },
+        PROJECT_ROOM: { getByName }
+      } as never
+    );
+
+    expect(response.status).toBe(200);
+    expect(getByName.mock.calls.map(([projectId]) => projectId)).toEqual([
+      'project_one',
+      'project_two'
+    ]);
+    expect(roomFetch).toHaveBeenCalledTimes(2);
+  });
+
   it('reports assistant configuration without exposing secrets', async () => {
     const response = await worker.fetch(
       new Request('https://example.com/api/assistant/status'),
