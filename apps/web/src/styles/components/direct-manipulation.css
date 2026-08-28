@@ -1145,6 +1145,33 @@
   font-size: var(--fs-xs);
 }
 
+/* Distance from the principal plane the next sketch starts on. Sits between
+   the prompt copy and the plane buttons because it qualifies the pick that
+   follows rather than being an action of its own. */
+.sketch-plane-offset {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  color: var(--color-text-muted);
+  font-size: var(--fs-xs);
+}
+
+.sketch-plane-offset input {
+  width: 64px;
+  padding: 4px 6px;
+  color: var(--color-text);
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  text-align: right;
+  background: var(--color-surface-1);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-sm);
+}
+
+.sketch-plane-offset-units {
+  color: var(--color-text-dim);
+}
+
 .sketch-plane-buttons {
   display: flex;
   gap: 4px;
