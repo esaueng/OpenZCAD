@@ -78,13 +78,6 @@ export interface InspectorCallbacks {
     name: string,
     dimensions: Record<string, ParamValue>
   ): void;
-  onCreateSketch(value: SketchFormValue): void;
-  onCreateExtrude(value: {
-    name: string;
-    sketchId: SketchId;
-    distance: ParamValue;
-    symmetric?: boolean;
-  }): void;
   onCreateRevolve(value: {
     name: string;
     sketchId: SketchId;
@@ -783,28 +776,6 @@ export function Inspector(props: InspectorProps) {
           onSubmit={(name, dimensions) =>
             props.onCreatePrimitive(kind, name, dimensions)
           }
-          onCancel={props.onCancel}
-        />
-      );
-    } else if (tool === 'sketch') {
-      body = (
-        <SketchForm
-          key="create-sketch"
-          scope={scope}
-          submitLabel="Create"
-          onSubmit={props.onCreateSketch}
-          onCancel={props.onCancel}
-        />
-      );
-    } else if (tool === 'extrude') {
-      body = (
-        <ExtrudeForm
-          key="create-extrude"
-          scope={scope}
-          sketches={sketches}
-          initialSketchId={preferredSketchId ?? undefined}
-          submitLabel="Create"
-          onSubmit={props.onCreateExtrude}
           onCancel={props.onCancel}
         />
       );
