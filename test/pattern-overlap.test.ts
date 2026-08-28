@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   addPrimitiveFeature,
   createProjectDocument,
@@ -10,6 +10,7 @@ import {
   createExactKernelAdapter,
   type ExactKernelAdapter
 } from '@openzcad/kernel-adapter/exact';
+import { RemusKernel } from '../packages/kernel-adapter/src/remus-runtime';
 
 /**
  * A pattern whose instances INTERPENETRATE used to be counted twice.
@@ -116,6 +117,68 @@ describe('a pattern whose instances overlap', () => {
     },
     120_000
   );
+
+  /**
+   * The fuse above is fallible, and the build loop that calls it is not
+   * transactional: `exact-build-loop` catches a feature's throw, records a
+   * warning, and carries on with the same mutable result. So anything the
+   * builder wrote before the throw survives the failure that cancelled it.
+   *
+   * The pattern builder used to mark its target consumed on the way in, ahead
+   * of the fuse. A refused fuse then produced no pattern shape AND left the
+   * input marked consumed, which hides it from the viewport, the parts list
+   * and the STEP export scope. The user was left with an empty viewport, one
+   * warning line, and their geometry still in the document but invisible and
+   * unexportable. Every other consuming builder in that file leaves its input
+   * on screen when it fails.
+   */
+  it('leaves the target body visible when the pattern fuse is refused', async () => {
+    adapter ??= await createExactKernelAdapter();
+    let document = createProjectDocument('Pattern', toUserId('user_pattern'));
+    document = addPrimitiveFeature(document, {
+      name: 'Block',
+      primitiveKind: 'box',
+      dimensions: { width: CUBE, height: CUBE, depth: CUBE }
+    });
+    const targetBodyId = document.bodyOrder.at(-1)!;
+    // Spacing below the cube edge is what puts the instances into the
+    // `shared > 0` branch, so the fuse actually runs. The disjoint controls
+    // above skip it entirely and could not reach this at all.
+    document = patternBody(document, {
+      name: 'Row',
+      patternKind: 'linear',
+      targetBodyId,
+      axis: 'x',
+      count: 2,
+      spacing: 10
+    }).document;
+    const patternBodyId = document.bodyOrder.at(-1)!;
+
+    // `fuseAll` documents an "empty or non-manifold result" refusal, which is
+    // exactly the throw this ordering mishandles. Injecting it pins the
+    // failure without depending on finding geometry the kernel dislikes.
+    const fuse = vi
+      .spyOn(RemusKernel.prototype, 'fuseAll')
+      .mockImplementation(() => {
+        throw new Error('kernel refused the fuse');
+      });
+    let derived;
+    try {
+      derived = await adapter.syncDocument(document);
+    } finally {
+      fuse.mockRestore();
+    }
+
+    expect(derived.warnings).toContain(
+      'Feature "Row": kernel refused the fuse'
+    );
+    // The pattern produced nothing, which is correct and is not what changed.
+    expect(derived.bodyRepresentations[patternBodyId]).toBeUndefined();
+    // Its input must therefore still be there. This is the assertion that
+    // failed: the box was marked consumed by a feature that never delivered.
+    expect(derived.bodyRepresentations[targetBodyId]!.consumed).toBe(false);
+    expect(derived.exportableBodyIds).toContain(targetBodyId);
+  }, 120_000);
 
   it('folds an overlapping CIRCULAR pattern too', async () => {
     adapter ??= await createExactKernelAdapter();

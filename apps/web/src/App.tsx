@@ -149,7 +149,10 @@ import {
 import { sketchContentFramePoints } from './lib/sketch/session';
 import type { SketchSolveStatus } from './components/SketchToolRail';
 import { ApiError, api, isProjectDocumentUnavailableError } from './lib/api';
-import { uploadArtifactBody } from './lib/artifactUpload';
+import {
+  archiveArtifact as archiveArtifactBody,
+  type ArchiveArtifactInput
+} from './lib/archiveArtifact';
 import {
   archiveLocalOnlyImportSources,
   createInFlightImportChecksums,
@@ -7277,15 +7280,9 @@ export function App() {
     }
   }
 
-  async function archiveArtifact(input: {
-    fileName: string;
-    contentType: string;
-    kind: ArtifactKind;
-    body: Blob;
-    metadata?: Record<string, string | number | boolean>;
-    /** Bytes the store has accepted, for a caller reporting the upload. */
-    onUploadProgress?(uploaded: number, total: number): void;
-  }): Promise<string> {
+  async function archiveArtifact(
+    input: ArchiveArtifactInput
+  ): Promise<string> {
     if (!doc) {
       throw new Error('No project is open.');
     }
@@ -7294,34 +7291,7 @@ export function App() {
         editDisabledReasonRef.current ?? 'Project editing is unavailable.'
       );
     }
-    const { session: upload } = await api.createUploadSession({
-      projectId: doc.projectId,
-      fileName: input.fileName,
-      contentType: input.contentType,
-      kind: input.kind,
-      metadata: input.metadata
-    });
-    if (!upload.uploadUrl) {
-      throw new Error('Artifact upload is unavailable.');
-    }
-    // Chunked above the part size, single PUT below; retries each part and
-    // aborts the multipart state if the upload cannot finish.
-    await uploadArtifactBody(
-      api,
-      { uploadSessionId: upload.uploadSessionId, uploadUrl: upload.uploadUrl },
-      input.body,
-      input.onUploadProgress
-        ? { onProgress: input.onUploadProgress }
-        : undefined
-    );
-    await api.finalizeArtifact({
-      projectId: doc.projectId,
-      uploadSessionId: upload.uploadSessionId,
-      artifactId: upload.artifactId
-    });
-    const stored = await api.getArtifactMetadata(upload.artifactId);
-    if (stored.artifact) {
-      const artifact = stored.artifact;
+    return archiveArtifactBody(api, doc.projectId, input, (artifact) => {
       setArtifacts((current) => [
         artifact,
         ...current.filter(
@@ -7329,8 +7299,7 @@ export function App() {
             currentArtifact.artifactId !== artifact.artifactId
         )
       ]);
-    }
-    return upload.artifactId;
+    });
   }
 
   async function handleImportFile(file: File) {
