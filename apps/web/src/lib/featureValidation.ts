@@ -41,11 +41,17 @@ export interface ValidatedFeatureVerdictInput {
  * suppressed under a colliding name, and blamed the wrong feature whenever a
  * name repeated. Attribution decides both.
  *
- * What it does NOT yet decide is whether a warning raised inside a BUILDER is
- * a refusal or an advisory. Those are pushed straight onto the string list by
- * the builders themselves, with no record here, and several of them accompany
- * a body that was produced perfectly well. Those still fall through to the
- * name match, and still over-refuse; classifying them is a separate change.
+ * Builder-raised warnings now carry that judgement too. `advisory` means the
+ * result is real and merely approximate — curves that came back faceted, a
+ * pattern whose overlapping instances did not merge — and refusing those would
+ * destroy work that succeeded. `refusal` means a shape was produced and is the
+ * wrong one, which is what every union check reports.
+ *
+ * Anything with NO record still falls through to the name match, which refuses.
+ * That is the deliberate direction to fail in: a site nobody classified then
+ * blocks an edit, which the user sees at once, rather than committing geometry
+ * the kernel objected to, which they may not discover until it is a STEP file
+ * in someone else's hands.
  */
 export function refusingWarning(
   featureName: string,
@@ -58,7 +64,7 @@ export function refusingWarning(
   }
   const failure = featureWarnings.find(
     (entry) =>
-      entry.kind === 'build-failed' &&
+      (entry.kind === 'build-failed' || entry.kind === 'refusal') &&
       (featureId
         ? entry.featureId === featureId
         : entry.featureName === featureName)

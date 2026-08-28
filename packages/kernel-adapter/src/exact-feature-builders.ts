@@ -52,6 +52,10 @@ import {
   type UnionFuseOperand
 }  from './exact-boolean-helpers';
 import {
+  amendFeatureWarning,
+  raiseFeatureWarning
+}  from './exact-feature-warnings';
+import {
   resolveEdgeModifierEdges,
   resolveFeatureFaces
 }  from './exact-reference-resolution';
@@ -379,7 +383,7 @@ function buildExtrudeFeature(
       scope,
       result.sketchBases,
       (message) =>
-        result.warnings.push(`Feature "${feature.name}": ${message}`)
+        raiseFeatureWarning(result, feature, message, 'advisory')
     );
     const operation = data.operation ?? 'new-body';
     if (operation === 'new-body') {
@@ -519,9 +523,7 @@ function buildRevolveFeature(
         scope,
         result.sketchBases,
         (message) =>
-          result.warnings.push(
-            `Feature "${feature.name}": ${message}`
-          )
+          raiseFeatureWarning(result, feature, message, 'advisory')
       )
     );
     if (
@@ -548,9 +550,7 @@ function buildLoftFeature(
         scope,
         result.sketchBases,
         (message) =>
-          result.warnings.push(
-            `Feature "${feature.name}": ${message}`
-          )
+          raiseFeatureWarning(result, feature, message, 'advisory')
       )
     );
   }
@@ -571,9 +571,7 @@ function buildSweepFeature(
         scope,
         result.sketchBases,
         (message) =>
-          result.warnings.push(
-            `Feature "${feature.name}": ${message}`
-          )
+          raiseFeatureWarning(result, feature, message, 'advisory')
       )
     );
   }
@@ -594,9 +592,7 @@ function buildHelicalSweepFeature(
         scope,
         result.sketchBases,
         (message) =>
-          result.warnings.push(
-            `Feature "${feature.name}": ${message}`
-          )
+          raiseFeatureWarning(result, feature, message, 'advisory')
       )
     );
   }
@@ -1308,20 +1304,18 @@ function buildBooleanFeature(
       approximationTolerance: MEASUREMENT_DEFLECTION
     });
     if (droppedOperand) {
-      result.warnings.push(
-        `Feature "${feature.name}": ${droppedOperand}`
-      );
+      raiseFeatureWarning(result, feature, droppedOperand, 'refusal');
     }
     if (
       !connectivity.connected &&
       !isFaceConnectedSolid(kernel, solid)
     ) {
       unionDisconnected = true;
-      result.warnings.push(
-        `Feature "${feature.name}": ${disconnectedUnionWarning(
-          connectivity,
-          document.units
-        )}`
+      raiseFeatureWarning(
+        result,
+        feature,
+        disconnectedUnionWarning(connectivity, document.units),
+        'refusal'
       );
     }
   } else {
@@ -1421,22 +1415,25 @@ function buildBooleanFeature(
   // Track the refusal actually pushed here instead.
   let refusalIndex: number | null = null;
   if (facetFallback) {
-    refusalIndex = result.warnings.length;
-    result.warnings.push(
-      `Feature "${feature.name}": ${facetFallback}`
+    refusalIndex = raiseFeatureWarning(
+      result,
+      feature,
+      facetFallback,
+      'refusal'
     );
   } else if (unionNotSolid) {
-    refusalIndex = result.warnings.length;
     // Deliberately the same sentence the strict validation pass
     // emits later. Saying it here instead means the proved move can
     // ride along with it — that pass runs far from the operands,
     // where they can no longer be probed. It also suppresses the
     // later copy, which declines once a feature-specific warning
     // exists.
-    result.warnings.push(
-      `Feature "${feature.name}": Union produced an open, ` +
-        'non-manifold, or inconsistently oriented result. Adjust ' +
-        'the overlap or placement and try again.'
+    refusalIndex = raiseFeatureWarning(
+      result,
+      feature,
+      'Union produced an open, non-manifold, or inconsistently ' +
+        'oriented result. Adjust the overlap or placement and try again.',
+      'refusal'
     );
   }
   // Naming the move that works is only possible here, where the
@@ -1453,8 +1450,7 @@ function buildBooleanFeature(
       document.units
     );
     if (suggestion) {
-      result.warnings[refusalIndex] =
-        `${result.warnings[refusalIndex]!} ${suggestion}`;
+      amendFeatureWarning(result, refusalIndex, suggestion);
     }
   }
   data.targetBodyIds.forEach((bodyId) =>
@@ -1803,8 +1799,11 @@ function buildPatternFeature(
     // the reported volume and the enclosed mesh agreed, both summing
     // the same list.
     if (removed < shared * 0.5) {
-      result.warnings.push(
-        `Feature "${feature.name}": instances overlap but the merge did not take, so the reported volume counts shared material more than once.`
+      raiseFeatureWarning(
+        result,
+        feature,
+        'instances overlap but the merge did not take, so the reported volume counts shared material more than once.',
+        'advisory'
       );
     }
     result.shapes.set(feature.bodyId, { solids: [fused] });
