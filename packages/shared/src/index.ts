@@ -427,6 +427,20 @@ export type SketchPlaneRef =
       faceReference?: FaceTopologyReferenceV5;
       sourceArea: number;
       sourceCenter: Vector3;
+      /**
+       * The face's area centroid when the sketch was placed, and the marker
+       * that says WHERE its origin sits: present means the rebuild anchors the
+       * frame on the evolved face's area centroid, absent means it anchors on
+       * the vertex mean {@link SketchPlaneRef.sourceCenter} the way every
+       * sketch written before the centroid existed already resolves.
+       *
+       * The distinction is load-bearing rather than historical. The two points
+       * differ by a whole radius on a round face, and the origin is what the
+       * sketch's stored coordinates are measured from, so re-anchoring an
+       * existing sketch would move its geometry. New sketches take the
+       * centroid; documents already saved keep what they were drawn against.
+       */
+      sourceCentroid?: Vector3;
       sourceNormal: Vector3;
       frame: SketchPlaneFrame;
     };
@@ -761,6 +775,25 @@ export type FeatureData =
        * that would go stale when upstream features move the body.
        */
       position: { u: ParamValue; v: ParamValue };
+      /**
+       * Where {@link position} is measured FROM on the resolved entry face:
+       * present means the face's area centroid, absent means the vertex mean
+       * `FaceGeometry.center` that every hole drilled before the centroid
+       * existed was already placed against.
+       *
+       * The presence of the marker selects the anchor, exactly as
+       * `SketchPlaneRef.sourceCentroid` does, and for the same reason: on a
+       * face bounded by one closed circular edge the two points are a whole
+       * radius apart, so re-anchoring an existing hole would move it. New
+       * holes take the centroid; saved documents keep the anchor they were
+       * drilled against.
+       *
+       * Unlike the sketch's marker this carries no snapshot of the point. A
+       * hole deliberately stores no world position — see {@link position} —
+       * because upstream features move the body underneath it, and a value
+       * that is never read back would be exactly that stale world point.
+       */
+      positionAnchor?: 'centroid';
     }
   | {
       featureKind: 'split';
@@ -1095,6 +1128,21 @@ export interface FaceGeometry {
    * persisted topology hashes and refuse edits on documents that already open.
    */
   center: Vector3;
+  /**
+   * The planar face's AREA centroid — the point a user means by "the middle of
+   * this face", and the anchor a sketch attached to the face is placed on.
+   *
+   * Distinct from {@link center} in exactly the cases that matter: a disc
+   * bounded by one closed circular edge has a single seam vertex, so its
+   * vertex mean sits on the rim. Present only for planar faces whose boundary
+   * wires could be walked, which excludes NURBS-backed planes; absent means
+   * "cannot answer", never "same as center".
+   *
+   * Exact for a straight-edged boundary. A curved boundary is inscribed with a
+   * polygon dense relative to its own length, which leaves a residual far below
+   * modelling tolerance but is not bit-stable across kernel versions.
+   */
+  centroid?: Vector3;
   /** Outward unit normal; present for exact planar surfaces. */
   normal?: Vector3;
   /**

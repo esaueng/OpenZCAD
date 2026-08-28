@@ -112,58 +112,108 @@ function currentDigest(): CadDocumentDigest {
   };
 }
 
+/** One referenced planar face, the shape `createCadDocumentDigest` reads. */
+function digestDocument() {
+  const document = createProjectDocument('Digest fixture', toUserId('user_ai'));
+  const bodyId = toBodyId('body_source');
+  document.bodyOrder.push(bodyId);
+  document.derived.bodyRepresentations[bodyId] = {
+    bodyId,
+    name: 'Source',
+    source: 'primitive',
+    mesh: {
+      kind: 'mesh',
+      vertices: Float32Array.from([]),
+      indices: Uint32Array.from([])
+    },
+    faceCount: 1,
+    color: '#888888',
+    exportableStep: true,
+    consumed: false,
+    volume: 1000,
+    bbox: {
+      min: { x: -5, y: -5, z: 0 },
+      max: { x: 5, y: 5, z: 10 }
+    },
+    topology: {
+      faces: [
+        {
+          topologyId: 'face:top',
+          hash: 101,
+          reference: faceReference,
+          triangleStart: 0,
+          triangleCount: 0,
+          geometry: {
+            surfaceType: 'plane',
+            area: 100.123456,
+            center: { x: 0, y: 0, z: 10 },
+            normal: { x: 0, y: 0, z: 1 }
+          }
+        }
+      ],
+      edges: []
+    }
+  };
+  return document;
+}
+
 describe('AI deterministic modeling operation contracts', () => {
   it('publishes exact face references, snapshots, and deterministic attachment frames', () => {
-    const document = createProjectDocument(
-      'Digest fixture',
-      toUserId('user_ai')
-    );
-    const bodyId = toBodyId('body_source');
-    document.bodyOrder.push(bodyId);
-    document.derived.bodyRepresentations[bodyId] = {
-      bodyId,
-      name: 'Source',
-      source: 'primitive',
-      mesh: {
-        kind: 'mesh',
-        vertices: Float32Array.from([]),
-        indices: Uint32Array.from([])
-      },
-      faceCount: 1,
-      color: '#888888',
-      exportableStep: true,
-      consumed: false,
-      volume: 1000,
-      bbox: {
-        min: { x: -5, y: -5, z: 0 },
-        max: { x: 5, y: 5, z: 10 }
-      },
-      topology: {
-        faces: [
-          {
-            topologyId: 'face:top',
-            hash: 101,
-            reference: faceReference,
-            triangleStart: 0,
-            triangleCount: 0,
-            geometry: {
-              surfaceType: 'plane',
-              area: 100.123456,
-              center: { x: 0, y: 0, z: 10 },
-              normal: { x: 0, y: 0, z: 1 }
-            }
-          }
-        ],
-        edges: []
-      }
-    };
-
     const face =
-      createCadDocumentDigest(document).bodies?.[0]?.topology?.faces[0];
+      createCadDocumentDigest(digestDocument()).bodies?.[0]?.topology?.faces[0];
     expect(face?.reference).toEqual(faceReference);
     expect(face?.snapshot?.area).toBe(100.123456);
     expect(face?.area).toBe(100.1235);
     expect(face?.attachmentFrame).toEqual(frame);
+  });
+
+  it('anchors the offered frame on a planar face centroid, and holds a proposal to it', () => {
+    const document = digestDocument();
+    const geometry =
+      document.derived.bodyRepresentations[toBodyId('body_source')]!.topology!
+        .faces[0]!.geometry!;
+    // A disc: `center` is the boundary circle's single seam vertex, so the
+    // frame the assistant is handed has to come from the centroid instead.
+    geometry.center = { x: 5, y: 0, z: 10 };
+    geometry.centroid = { x: 0, y: 0, z: 10 };
+
+    const digest = createCadDocumentDigest(document);
+    const face = digest.bodies?.[0]?.topology?.faces[0];
+    expect(face?.snapshot?.centroid).toEqual({ x: 0, y: 0, z: 10 });
+    expect(face?.attachmentFrame?.origin).toEqual({ x: 0, y: 0, z: 10 });
+
+    const onCentroid = {
+      kind: 'add_face_sketch',
+      name: 'Top profile',
+      localId: null,
+      planeRef: {
+        ...facePlane,
+        sourceArea: geometry.area,
+        sourceCenter: { x: 5, y: 0, z: 10 },
+        sourceCentroid: { x: 0, y: 0, z: 10 }
+      },
+      objects: [circle]
+    };
+    expect(
+      parseCadPatchProposal(proposal([onCentroid]), digest).operations
+    ).toHaveLength(1);
+
+    // Dropping the centroid would place the sketch on the rim instead.
+    expect(() =>
+      parseCadPatchProposal(
+        proposal([
+          {
+            ...onCentroid,
+            planeRef: {
+              ...facePlane,
+              sourceArea: geometry.area,
+              sourceCenter: { x: 5, y: 0, z: 10 }
+            }
+          }
+        ]),
+        digest
+      )
+    ).toThrow(/deterministic attachmentFrame/);
   });
 
   it('keeps JSON-schema operation kinds in parity with the runtime validator', () => {

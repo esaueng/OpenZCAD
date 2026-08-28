@@ -234,6 +234,9 @@ export function resolveSketchBasisAtHistory(
     snapshot: {
       sourceArea: planeRef.sourceArea,
       sourceCenter: planeRef.sourceCenter,
+      ...(planeRef.sourceCentroid
+        ? { sourceCentroid: planeRef.sourceCentroid }
+        : {}),
       sourceNormal: planeRef.sourceNormal,
       frame: planeRef.frame
     },
@@ -417,15 +420,44 @@ export function makeRegionFace(
       if (span >= Math.PI * 2 - 1e-9) {
         // A standalone circle traces as one full-turn piece; the arc
         // constructor degenerates at start == end, so use a circle edge.
+        const counterClockwise = kernel.makeCircleEdge(
+          center.x,
+          center.y,
+          center.z,
+          basis.normal.x,
+          basis.normal.y,
+          basis.normal.z,
+          curve.radius
+        );
+        if (curve.ccw) {
+          edges.push(counterClockwise);
+          continue;
+        }
+        // A hole loop traces clockwise, and the direction has to survive
+        // into the edge: a circle's sense lives in its axis, not in a
+        // separate flag. Extruding a face whose inner wire runs the same
+        // way as its outer one still validates, but leaves the solid's
+        // inner-loop edges mis-oriented, and the next boolean on that body
+        // fails with inconsistent face orientations.
+        //
+        // Flipping the axis alone would also move the seam vertex to the
+        // far side of the circle. That vertex is in the cap face's vertex
+        // mean, which every persisted face reference — and every hole's
+        // (u, v) origin — is measured against, so the seam is pinned to
+        // where the counter-clockwise circle put it.
+        const seam = kernel.evaluateEdgeCurve(counterClockwise, 0);
         edges.push(
-          kernel.makeCircleEdge(
+          kernel.makeCircleEdgeWithRef(
             center.x,
             center.y,
             center.z,
-            basis.normal.x,
-            basis.normal.y,
-            basis.normal.z,
-            curve.radius
+            -basis.normal.x,
+            -basis.normal.y,
+            -basis.normal.z,
+            curve.radius,
+            seam[0]! - center.x,
+            seam[1]! - center.y,
+            seam[2]! - center.z
           )
         );
         continue;

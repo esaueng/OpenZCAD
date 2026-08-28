@@ -161,6 +161,13 @@ export interface ModelingFaceOption {
   label: string;
   surfaceType?: string;
   reference?: FaceTopologyReferenceV5;
+  /**
+   * Whether the face reports an area centroid, which is what a hole drilled
+   * into it is positioned from. The point itself is deliberately not carried:
+   * the rebuild re-derives it from the resolved face, and a stored world
+   * position would go stale the moment an upstream feature moved the body.
+   */
+  hasCentroid?: boolean;
 }
 
 export interface ModelingOperationCapability {
@@ -209,7 +216,8 @@ export function modelingFaceOptions(
     topologyId: face.topologyId,
     label: topologyFaceLabel(face, index),
     surfaceType: face.geometry?.surfaceType,
-    reference: face.reference
+    reference: face.reference,
+    hasCentroid: face.geometry?.centroid !== undefined
   }));
 }
 
@@ -638,7 +646,13 @@ export function buildModelingOperationSubmission(
         position: {
           u: coerceParamValue(state.value.position.u),
           v: coerceParamValue(state.value.position.v)
-        }
+        },
+        // (0, 0) means the middle of the face, which is its area centroid and
+        // not the vertex mean the rebuild anchored on before this marker
+        // existed. A face whose boundary could not be walked reports no
+        // centroid and keeps the old anchor, which the absent marker then
+        // tells the rebuild to reuse.
+        ...(entry!.hasCentroid ? { positionAnchor: 'centroid' as const } : {})
       }
     };
   }

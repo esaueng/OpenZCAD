@@ -60,6 +60,47 @@ describe('faceSketchAttachment', () => {
     expect(result.planeRef.frame.zAxis).toEqual({ x: 0, y: 0, z: 1 });
   });
 
+  it('places the sketch on the face centroid, not on its vertex mean', () => {
+    // A disc: the boundary is one closed circle, so the face's only vertex is
+    // its seam and `center` sits a whole radius off the axis.
+    const result = faceSketchAttachment({
+      bodyId: 'body_disc' as BodyId,
+      pickedHash: 12,
+      face: face({
+        geometry: {
+          surfaceType: 'plane',
+          area: Math.PI * 100,
+          center: { x: 10, y: 0, z: 5 },
+          centroid: { x: 0, y: 0, z: 5 },
+          normal: { x: 0, y: 0, z: 1 }
+        }
+      })
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.planeRef.frame.origin).toEqual({ x: 0, y: 0, z: 5 });
+    // Both points are persisted: the centroid is the anchor, and its presence
+    // is what tells a rebuild to re-anchor there rather than on `sourceCenter`.
+    expect(result.planeRef.sourceCentroid).toEqual({ x: 0, y: 0, z: 5 });
+    expect(result.planeRef.sourceCenter).toEqual({ x: 10, y: 0, z: 5 });
+  });
+
+  it('keeps the old anchor for a face that reports no centroid', () => {
+    // A NURBS-backed plane has no walkable boundary. Claiming a centroid it
+    // does not have would move the sketch; the absent field says so.
+    const result = faceSketchAttachment({
+      bodyId: 'body_box' as BodyId,
+      pickedHash: 12,
+      face: face()
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.planeRef.sourceCentroid).toBeUndefined();
+    expect(result.planeRef.frame.origin).toEqual(result.planeRef.sourceCenter);
+  });
+
   it('refuses a planar face when lineage is absent or stale', () => {
     for (const candidate of [
       face({ reference: undefined }),
