@@ -123,6 +123,15 @@
   border-color: var(--color-border-strong);
 }
 
+/* Both menus take focus themselves when they open, so Escape and the arrow
+   keys land in the menu rather than wherever the pointer left the page. They
+   are tabindex="-1" containers rather than tab stops, and a ring around the
+   whole panel would only compete with the ring on the item the arrows reach. */
+.context-menu:focus,
+.marking-menu:focus {
+  outline: none;
+}
+
 .context-menu {
   position: fixed;
   z-index: var(--z-context-menu);
@@ -153,7 +162,8 @@
   font-size: var(--fs-sm);
 }
 
-.context-menu-item:hover:not(:disabled) {
+.context-menu-item:hover:not(:disabled),
+.context-menu-item:focus-visible {
   color: var(--color-text);
   background: var(--color-surface-hover);
 }
@@ -162,7 +172,8 @@
   color: var(--color-error);
 }
 
-.context-menu-item.danger:hover:not(:disabled) {
+.context-menu-item.danger:hover:not(:disabled),
+.context-menu-item.danger:focus-visible {
   background: rgba(239, 68, 68, 0.1);
 }
 
@@ -309,6 +320,7 @@
 }
 
 .marking-menu-slot:hover:not(:disabled),
+.marking-menu-slot:focus-visible,
 .marking-menu-slot.aimed:not(:disabled) {
   color: var(--color-text);
   border-color: var(--color-accent);
@@ -345,6 +357,7 @@
 }
 
 .marking-menu-slot.danger:hover:not(:disabled),
+.marking-menu-slot.danger:focus-visible,
 .marking-menu-slot.danger.aimed:not(:disabled) {
   color: var(--color-error);
   border-color: var(--color-error);

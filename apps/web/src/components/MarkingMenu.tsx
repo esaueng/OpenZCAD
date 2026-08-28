@@ -1,5 +1,6 @@
 import { useLayoutEffect, useEffect, useRef, useState } from 'react';
 import type { ContextMenuItem } from './ContextMenu';
+import { useMenuKeyboard } from '../lib/useMenuKeyboard';
 import {
   clampMenuOrigin,
   sectorForVector,
@@ -53,6 +54,7 @@ export function MarkingMenu({
   // is laid out against the widest label rather than the hovered one, so the
   // slots never move while the hand is mid-gesture.
   const [pillHalf, setPillHalf] = useState({ width: 0, height: 0 });
+  useMenuKeyboard(ref);
 
   useLayoutEffect(() => {
     const host = measureRef.current;
@@ -160,6 +162,7 @@ export function MarkingMenu({
       className="marking-menu"
       role="menu"
       aria-label="Selection actions"
+      tabIndex={-1}
       style={{ left: origin.x, top: origin.y }}
     >
       <span
