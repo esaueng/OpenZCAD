@@ -1,6 +1,14 @@
 import { describe, expect, it } from 'vitest';
-import type { FaceTopology, Vector3 } from '@openzcad/shared';
-import { resolveOffsetPreviewFace } from './offsetPreview';
+import {
+  toBodyId,
+  toFeatureId,
+  type FaceTopology,
+  type Vector3
+} from '@openzcad/shared';
+import {
+  offsetPreviewRejection,
+  resolveOffsetPreviewFace
+} from './offsetPreview';
 
 const point = (x: number, y: number, z: number): Vector3 => ({ x, y, z });
 
@@ -65,5 +73,54 @@ describe('offset preview face resolution', () => {
     const tilted = plane('tilted', point(0, 0, 14), point(1, 0, 0));
     const wrongHeight = plane('wrong-height', point(0, 0, 13));
     expect(resolveOffsetPreviewFace([tilted, wrongHeight], target, 4)).toBeNull();
+  });
+});
+
+describe('offset preview validation', () => {
+  const bodyId = toBodyId('body_source');
+  const sourceFeatureId = toFeatureId('feat_source');
+  const suppressedFeatureId = toFeatureId('feat_suppressed');
+  const suppression =
+    'Feature "Shared name": Suppressed; skipped during exact rebuild.';
+  const derived = {
+    bodyRepresentations: { [bodyId]: {} },
+    warnings: [suppression],
+    featureWarnings: [
+      {
+        featureId: suppressedFeatureId,
+        featureName: 'Shared name',
+        message: suppression,
+        kind: 'suppressed' as const
+      }
+    ]
+  };
+
+  it('ignores a same-named suppression outside the targeted feature', () => {
+    expect(
+      offsetPreviewRejection({
+        label: 'Resize Cylinder Height',
+        bodyId,
+        validationTargets: [
+          {
+            featureName: 'Shared name',
+            featureId: sourceFeatureId,
+            resultBodyId: bodyId
+          }
+        ],
+        derived,
+        documentMoved: false
+      })
+    ).toBeNull();
+  });
+
+  it('uses structured warning kinds for a generic preview verdict', () => {
+    expect(
+      offsetPreviewRejection({
+        label: 'Shared name',
+        bodyId,
+        derived,
+        documentMoved: false
+      })
+    ).toBeNull();
   });
 });

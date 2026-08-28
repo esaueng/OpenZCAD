@@ -1,5 +1,14 @@
 import { geometryTolerance } from '@openzcad/geometry';
-import type { FaceTopology, Vector3 } from '@openzcad/shared';
+import type {
+  BodyId,
+  FaceTopology,
+  FeatureWarning,
+  Vector3
+} from '@openzcad/shared';
+import type { AffectedFeatureTarget } from '../affectedFeatureTargets';
+import { directEditRejection } from '../directEdit';
+import { validatedFeatureRejection } from '../featureValidation';
+import type { CommandDiagnostic } from './machine';
 
 export interface OffsetPreviewFaceTarget {
   /** World-space point originally picked on the face. */
@@ -8,6 +17,60 @@ export interface OffsetPreviewFaceTarget {
   normal: Vector3;
   /** Frozen measured face center, used only to disambiguate coplanar faces. */
   center?: Vector3;
+}
+
+export interface OffsetPreviewVerdictInput {
+  label: string;
+  bodyId: BodyId;
+  validationTargets?: readonly AffectedFeatureTarget[];
+  derived: {
+    bodyRepresentations: Partial<Record<BodyId, unknown>>;
+    warnings: readonly string[];
+    featureWarnings?: readonly FeatureWarning[];
+  };
+  documentMoved: boolean;
+}
+
+/** Applies the final direct-edit safety verdict to an ephemeral offset preview. */
+export function offsetPreviewRejection(
+  input: OffsetPreviewVerdictInput
+): CommandDiagnostic | null {
+  if (input.validationTargets) {
+    for (const target of input.validationTargets) {
+      const rejection = validatedFeatureRejection({
+        featureName: target.featureName,
+        featureId: target.featureId,
+        warnings: input.derived.warnings,
+        ...(input.derived.featureWarnings
+          ? { featureWarnings: input.derived.featureWarnings }
+          : {}),
+        bodyPresent: Boolean(
+          input.derived.bodyRepresentations[target.resultBodyId]
+        ),
+        documentMoved: input.documentMoved
+      });
+      if (rejection) {
+        return rejection;
+      }
+    }
+    if (input.validationTargets.length === 0 && input.documentMoved) {
+      return {
+        message: 'The document changed while the preview was rebuilding.'
+      };
+    }
+    return null;
+  }
+
+  const message = directEditRejection({
+    label: input.label,
+    warnings: input.derived.warnings,
+    ...(input.derived.featureWarnings
+      ? { featureWarnings: input.derived.featureWarnings }
+      : {}),
+    bodyPresent: Boolean(input.derived.bodyRepresentations[input.bodyId]),
+    documentMoved: input.documentMoved
+  });
+  return message ? { message } : null;
 }
 
 function length(vector: Vector3): number {
