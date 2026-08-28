@@ -46,8 +46,13 @@ export interface ValidatedFeatureCommitOptions {
    * unchanged, so the operation reads as having silently done nothing. The
    * form renders this inline instead of making the reason something you have
    * to go find.
+   *
+   * `null` clears it. A refusal is a property of the attempt in flight, so
+   * every run opens by clearing the sink — without that, a refusal outlived
+   * the success that answered it, and the alert sat above whichever feature
+   * form the user opened next, blaming it for the previous form's problem.
    */
-  onFailure?(message: string): void;
+  onFailure?(message: string | null): void;
 }
 
 export interface ValidatedFeatureTarget {
@@ -307,6 +312,9 @@ export function useValidatedFeatureCommit(
       manager.document.projectId !== base.projectId ||
       manager.document.version !== base.version;
     host.onBusy(true);
+    // A new attempt answers whatever refusal is still on screen, even when it
+    // goes on to fail for a different reason — that reason replaces this.
+    host.onFailure?.(null);
     host.onStatus(
       input.validatingMessage ??
         'Checking geometry…'
