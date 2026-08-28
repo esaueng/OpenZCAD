@@ -234,6 +234,9 @@ export function resolveSketchBasisAtHistory(
     snapshot: {
       sourceArea: planeRef.sourceArea,
       sourceCenter: planeRef.sourceCenter,
+      ...(planeRef.sourceCentroid
+        ? { sourceCentroid: planeRef.sourceCentroid }
+        : {}),
       sourceNormal: planeRef.sourceNormal,
       frame: planeRef.frame
     },

@@ -54,9 +54,20 @@ const SNAPSHOT: FaceAttachmentSnapshot = {
   frame: SNAPSHOT_FRAME
 };
 
+/**
+ * A candidate's plane without spelling out `centroid` at every call site.
+ * Omitting it means "this face reports no area centroid", which is what a
+ * legacy vertex-mean attachment resolves against.
+ */
+type PlaneInput =
+  | (Omit<NonNullable<FaceAttachmentCandidate['plane']>, 'centroid'> & {
+      readonly centroid?: Vector3;
+    })
+  | null;
+
 function candidate(
   witness: FaceWitnessV1,
-  plane: FaceAttachmentCandidate['plane'],
+  plane: PlaneInput,
   options: {
     readonly lineageName?: string;
     readonly lineageSource?: 'semantic' | 'derived';
@@ -69,7 +80,7 @@ function candidate(
     currentHash: topologyHashOfWitness('face', witness),
     witnessVersion: 1,
     witness,
-    plane,
+    plane: plane ? { ...plane, centroid: plane.centroid ?? null } : null,
     ...(withLineage
       ? {
           lineage: {
@@ -313,6 +324,56 @@ describe('face attachment resolver', () => {
     expect(error.reason).toBe('deleted');
     expect(error.message).toContain('lineage no longer exists');
     expect(error.message).toContain('was not used to resolve a face');
+  });
+
+  /**
+   * Which point on the resolved face the frame sits on.
+   *
+   * The two candidates are a whole radius apart on a round face, so this is not
+   * a refinement: re-anchoring an existing sketch would move its geometry. The
+   * snapshot decides, and a sketch written before the centroid existed keeps
+   * resolving against the vertex mean it was drawn against.
+   */
+  describe('origin anchor', () => {
+    const plane = {
+      center: { x: 5, y: 5, z: 10 },
+      centroid: { x: 1, y: 2, z: 10 },
+      normal: { x: 0, y: 0, z: 1 }
+    };
+
+    it('anchors a centroid-placed sketch on the evolved face centroid', () => {
+      const frame = resolveFaceAttachment(
+        input([candidate(SOURCE_WITNESS, plane)], {
+          snapshot: { ...SNAPSHOT, sourceCentroid: { x: 0, y: 0, z: 10 } }
+        })
+      );
+      expectVectorClose(frame.origin, plane.centroid);
+    });
+
+    it('leaves a sketch written before the centroid on the vertex mean', () => {
+      const frame = resolveFaceAttachment(
+        input([candidate(SOURCE_WITNESS, plane)])
+      );
+      expectVectorClose(frame.origin, plane.center);
+    });
+
+    it('refuses to re-anchor when the evolved face reports no centroid', () => {
+      const error = capturedError(() =>
+        resolveFaceAttachment(
+          input(
+            [
+              candidate(SOURCE_WITNESS, {
+                center: plane.center,
+                normal: plane.normal
+              })
+            ],
+            { snapshot: { ...SNAPSHOT, sourceCentroid: { x: 0, y: 0, z: 10 } } }
+          )
+        )
+      );
+      expect(error.reason).toBe('invalid');
+      expect(error.message).toContain('no longer reports an area centroid');
+    });
   });
 });
 
