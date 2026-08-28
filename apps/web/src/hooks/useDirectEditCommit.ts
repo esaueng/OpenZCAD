@@ -101,6 +101,9 @@ export function useDirectEditCommit(
               featureName: target.featureName,
               ...(target.featureId ? { featureId: target.featureId } : {}),
               warnings: derived.warnings,
+              ...(derived.featureWarnings
+                ? { featureWarnings: derived.featureWarnings }
+                : {}),
               bodyPresent: Boolean(
                 derived.bodyRepresentations[target.resultBodyId]
               ),
