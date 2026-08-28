@@ -490,4 +490,248 @@ describe('stored extrude operations', { timeout: 30_000 }, () => {
       'Feature "Extrude": Stored add extrusion no longer overlaps Base Body; operation was not re-inferred.'
     );
   });
+
+  /**
+   * The real app's boss: a sketch genuinely attached to a body face
+   * (planeRef.type === 'face'), grown away from it. The earlier coverage
+   * built a canonical-plane sketch and passed the attachment hint by hand,
+   * which proved the document layer accepts a tangent add without proving
+   * this path ever reaches it.
+   */
+  it('joins a boss grown off a real face-attached sketch', async () => {
+    const base = addPrimitiveFeature(
+      createProjectDocument(
+        'Face boss',
+        toUserId('user_face_attached_boss')
+      ),
+      {
+        name: 'Base',
+        primitiveKind: 'box',
+        dimensions: { width: 20, height: 20, depth: 10 }
+      }
+    );
+    const targetBodyId = base.bodyOrder[0]!;
+    const baseDerived = await kernel.syncDocument(base);
+    const topFace = baseDerived.bodyRepresentations[
+      targetBodyId
+    ]!.topology!.faces.find(
+      (face) => face.reference?.lineageName === 'primitive.box.face.z-max'
+    )!;
+    const geometry = topFace.geometry!;
+    const { document: withSketch, sketchId } = addSketchFeature(
+      { ...base, derived: baseDerived },
+      {
+        name: 'Boss profile',
+        planeRef: {
+          type: 'face',
+          bodyId: targetBodyId,
+          faceHash: topFace.hash,
+          // The app always carries the v5 lineage reference; without it the
+          // rebuild falls back to the stored migration frame and warns.
+          ...(topFace.reference ? { faceReference: topFace.reference } : {}),
+          sourceArea: geometry.area,
+          sourceCenter: geometry.center,
+          sourceNormal: geometry.normal!,
+          frame: {
+            origin: { ...geometry.center },
+            xAxis: { x: 1, y: 0, z: 0 },
+            yAxis: { x: 0, y: 1, z: 0 },
+            zAxis: { ...geometry.normal! }
+          }
+        },
+        objects: [
+          {
+            objectKind: 'circle',
+            radius: 3,
+            centerX: 0,
+            centerY: 0
+          }
+        ]
+      }
+    );
+
+    const resolved = await resolveExtrudeOperation({
+      base: withSketch,
+      input: { name: 'Boss', sketchId, distance: 6 },
+      derive: (document) => kernel.syncDocument(document),
+      faceAttachment: { bodyId: targetBodyId, direction: 'away' }
+    });
+
+    expect(resolved.inference).toMatchObject({
+      operation: 'add',
+      reason: 'onto-face-body',
+      targetBodyId
+    });
+    const result =
+      resolved.derived.bodyRepresentations[
+        resolved.command.payload.ids!.bodyId
+      ];
+    expect(result?.consumed).toBe(false);
+    expect(resolved.derived.warnings).toEqual([]);
+  });
+
+  /**
+   * The same boss, but grown off a body that is itself an extrusion rather
+   * than a primitive. This is what the workspace actually produces — sketch,
+   * extrude, then sketch on the result's face — and it is the shape the
+   * primitive-target coverage above does not reach.
+   */
+  it('joins a boss grown off an extruded body face', async () => {
+    let base = createProjectDocument(
+      'Extruded face boss',
+      toUserId('user_extruded_face_boss')
+    );
+    base = addSketchFeature(base, {
+      name: 'Base profile',
+      plane: 'XY',
+      offset: 0,
+      object: { objectKind: 'circle', radius: 10, centerX: 0, centerY: 0 }
+    }).document;
+    const baseExtrude = extrudeSketch(base, {
+      name: 'Base extrude',
+      sketchId: getLatestSketchId(base)!,
+      distance: 18
+    });
+    const targetBodyId = baseExtrude.bodyId;
+    const targetDerived = await kernel.syncDocument(baseExtrude.document);
+    const faces = targetDerived.bodyRepresentations[
+      targetBodyId
+    ]!.topology!.faces.filter((face) => face.geometry?.surfaceType === 'plane');
+    // The cap the boss grows from: the planar face highest along +Z.
+    const topFace = faces.reduce((best, face) =>
+      (face.geometry!.center.z ?? 0) > (best.geometry!.center.z ?? 0)
+        ? face
+        : best
+    );
+    const geometry = topFace.geometry!;
+    const { document: withSketch, sketchId } = addSketchFeature(
+      { ...baseExtrude.document, derived: targetDerived },
+      {
+        name: 'Boss profile',
+        planeRef: {
+          type: 'face',
+          bodyId: targetBodyId,
+          faceHash: topFace.hash,
+          ...(topFace.reference ? { faceReference: topFace.reference } : {}),
+          sourceArea: geometry.area,
+          sourceCenter: geometry.center,
+          sourceNormal: geometry.normal!,
+          frame: {
+            // The disc's true centre. `geometry.center` is the surface's
+            // reference point and sits on the rim of a round face.
+            origin: { x: 0, y: 0, z: geometry.center.z },
+            xAxis: { x: 1, y: 0, z: 0 },
+            yAxis: { x: 0, y: 1, z: 0 },
+            zAxis: { ...geometry.normal! }
+          }
+        },
+        objects: [
+          { objectKind: 'circle', radius: 3, centerX: 0, centerY: 0 }
+        ]
+      }
+    );
+
+    const resolved = await resolveExtrudeOperation({
+      base: withSketch,
+      input: { name: 'Boss', sketchId, distance: 6 },
+      derive: (document) => kernel.syncDocument(document),
+      faceAttachment: { bodyId: targetBodyId, direction: 'away' }
+    });
+
+    expect(resolved.inference).toMatchObject({
+      operation: 'add',
+      reason: 'onto-face-body',
+      targetBodyId
+    });
+    const result =
+      resolved.derived.bodyRepresentations[
+        resolved.command.payload.ids!.bodyId
+      ];
+    expect(result?.consumed).toBe(false);
+  });
+
+  /**
+   * A boss whose profile hangs off the rim of the face it was sketched on:
+   * part of it sits over the body, part over nothing. It still touches, so it
+   * still joins — this is the shape a user draws when they eyeball a boss
+   * near an edge, and the one that first exposed the silent new-body
+   * fallback in the workspace.
+   */
+  // KNOWN DEFECT, kept as an expected failure so it is tracked rather than
+  // forgotten. A face sketch's basis resolves its origin from the face's
+  // surface reference point, and on a round face that point sits on the rim,
+  // not the centre. Profile coordinates are therefore offset by the rim
+  // distance: the circle below is authored at (9, 0) and lands at (9, 10),
+  // clear of the body, so the add is correctly refused for geometry the user
+  // never asked for. The union logic itself is fine — the two tests above
+  // pass. Same `geometry.center` trap as the sketch-entry framing fix.
+  it.fails('joins a boss whose profile overhangs the face rim', async () => {
+    let base = createProjectDocument(
+      'Overhanging boss',
+      toUserId('user_overhanging_boss')
+    );
+    base = addSketchFeature(base, {
+      name: 'Base profile',
+      plane: 'XY',
+      offset: 0,
+      object: { objectKind: 'circle', radius: 10, centerX: 0, centerY: 0 }
+    }).document;
+    const baseExtrude = extrudeSketch(base, {
+      name: 'Base extrude',
+      sketchId: getLatestSketchId(base)!,
+      distance: 18
+    });
+    const targetBodyId = baseExtrude.bodyId;
+    const targetDerived = await kernel.syncDocument(baseExtrude.document);
+    const topFace = targetDerived.bodyRepresentations[targetBodyId]!
+      .topology!.faces.filter((face) => face.geometry?.surfaceType === 'plane')
+      .reduce((best, face) =>
+        (face.geometry!.center.z ?? 0) > (best.geometry!.center.z ?? 0)
+          ? face
+          : best
+      );
+    const geometry = topFace.geometry!;
+    const { document: withSketch, sketchId } = addSketchFeature(
+      { ...baseExtrude.document, derived: targetDerived },
+      {
+        name: 'Boss profile',
+        planeRef: {
+          type: 'face',
+          bodyId: targetBodyId,
+          faceHash: topFace.hash,
+          ...(topFace.reference ? { faceReference: topFace.reference } : {}),
+          sourceArea: geometry.area,
+          sourceCenter: { x: 0, y: 0, z: geometry.center.z },
+          sourceNormal: geometry.normal!,
+          frame: {
+            // The disc's true centre, so the profile below is placed
+            // relative to the face rather than to a rim reference point.
+            origin: { x: 0, y: 0, z: geometry.center.z },
+            xAxis: { x: 1, y: 0, z: 0 },
+            yAxis: { x: 0, y: 1, z: 0 },
+            zAxis: { ...geometry.normal! }
+          }
+        },
+        // Centre 9 from the axis with radius 4 on a radius-10 face: it
+        // reaches 13, well past the rim.
+        objects: [
+          { objectKind: 'circle', radius: 4, centerX: 9, centerY: 0 }
+        ]
+      }
+    );
+
+    const resolved = await resolveExtrudeOperation({
+      base: withSketch,
+      input: { name: 'Boss', sketchId, distance: 6 },
+      derive: (document) => kernel.syncDocument(document),
+      faceAttachment: { bodyId: targetBodyId, direction: 'away' }
+    });
+
+    expect(resolved.inference.operation).toBe('add');
+    const result =
+      resolved.derived.bodyRepresentations[
+        resolved.command.payload.ids!.bodyId
+      ];
+    expect(result?.consumed).toBe(false);
+  });
 });

@@ -9264,6 +9264,10 @@ export function App() {
       const manager = managerRef.current;
       let payload: ExtrudeInput = input;
       let operationNote = '';
+      // Why the extrusion was not classified, when it was not. Falling back
+      // to a new body is a reasonable recovery, but doing it silently is not:
+      // the user asked for a boss and got a second solid with no explanation.
+      let fallbackReason: string | null = null;
       if (manager) {
         const base = manager.document;
         const sketchNode = listNodesByKind(base, 'sketch').find(
@@ -9291,9 +9295,11 @@ export function App() {
           ) {
             payload = { ...resolved.command.payload, name: input.name };
             operationNote = ` (${resolved.inference.operation})`;
+          } else {
+            fallbackReason = 'the document changed while it ran';
           }
-        } catch {
-          // Fall through to the uninferred command.
+        } catch (error) {
+          fallbackReason = errorMessage(error, 'the exact kernel refused it');
         }
         setBusy(false);
       }
@@ -9303,7 +9309,9 @@ export function App() {
       void executeValidatedDirectEdit(
         command,
         resultBodyId,
-        `Extruded region by ${rounded} ${doc?.units ?? ''}${operationNote}.`,
+        fallbackReason === null
+          ? `Extruded region by ${rounded} ${doc?.units ?? ''}${operationNote}.`
+          : `Extruded region by ${rounded} ${doc?.units ?? ''} as a new body — could not classify it against the model: ${fallbackReason}`,
         rounded,
         () => {
           setSelectedProfiles([]);
