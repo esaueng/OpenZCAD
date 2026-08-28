@@ -78,8 +78,9 @@ function makeOverlay() {
 }
 
 /**
- * Runs the hover ramp to rest. Hover is eased now, so a batch is not visible
- * on the frame the pointer arrives — the render loop steps it.
+ * Runs the eased tiers to rest. Hover and selection both ramp now, so neither
+ * batch is visible on the frame the pointer arrives or the click lands — the
+ * render loop steps them.
  */
 function settle(overlay: ReturnType<typeof makeOverlay>) {
   for (let frame = 0; frame < 60 && overlay.step(16); frame += 1) {
@@ -144,6 +145,7 @@ describe('BodyEdgeOverlay', () => {
     ).toBe(true);
     expect(overlay.selectedEdges.geometry.instanceCount).toBe(3);
     expect(overlay.selectedHiddenEdges.geometry.instanceCount).toBe(3);
+    settle(overlay);
     expect(overlay.selectedEdges.visible).toBe(true);
     expect(overlay.selectedHiddenEdges.visible).toBe(true);
     expect(overlay.selectedHiddenEdges.material.depthFunc).toBe(
@@ -160,6 +162,83 @@ describe('BodyEdgeOverlay', () => {
     expect(overlay.setSelected([selection('edge-b')])).toBe(true);
     expect(overlay.selectedEdges.geometry.instanceCount).toBe(1);
     expect(overlay.setSelected([selection('edge-b')])).toBe(false);
+  });
+
+  it('ramps the selected tier in rather than popping to full width', () => {
+    const overlay = makeOverlay();
+    const idleWidth = overlay.idleEdges.material.linewidth;
+
+    overlay.setSelected([selection('edge-a')]);
+    // The frame the click lands on: geometry is in place, but nothing is drawn
+    // at selection width yet. Popping straight to 4.5 px is the defect.
+    expect(overlay.selectedEdges.geometry.instanceCount).toBeGreaterThan(0);
+    expect(overlay.selectedEdges.material.linewidth).toBe(idleWidth);
+    expect(overlay.selectedEdges.material.opacity).toBe(0);
+
+    overlay.step(16);
+    const midWidth = overlay.selectedEdges.material.linewidth;
+    const midOpacity = overlay.selectedEdges.material.opacity;
+    expect(midWidth).toBeGreaterThan(idleWidth);
+    expect(midOpacity).toBeGreaterThan(0);
+
+    settle(overlay);
+    expect(overlay.selectedEdges.material.linewidth).toBeGreaterThan(midWidth);
+    expect(overlay.selectedEdges.material.opacity).toBe(1);
+    expect(overlay.selectedEdges.visible).toBe(true);
+  });
+
+  it("ramps a selected face's rim in rather than popping to full width", () => {
+    const overlay = makeOverlay();
+    const idleWidth = overlay.idleEdges.material.linewidth;
+
+    overlay.setSelectedFaceBoundary(101);
+    // The rim is the widest tier at 6 px, so landing it in one frame is the
+    // loudest of the three pops.
+    expect(
+      overlay.selectedFaceBoundaryEdges.geometry.instanceCount
+    ).toBeGreaterThan(0);
+    expect(overlay.selectedFaceBoundaryEdges.material.linewidth).toBe(
+      idleWidth
+    );
+    expect(overlay.selectedFaceBoundaryEdges.material.opacity).toBe(0);
+
+    overlay.step(16);
+    const midWidth = overlay.selectedFaceBoundaryEdges.material.linewidth;
+    expect(midWidth).toBeGreaterThan(idleWidth);
+
+    settle(overlay);
+    expect(
+      overlay.selectedFaceBoundaryEdges.material.linewidth
+    ).toBeGreaterThan(midWidth);
+    expect(overlay.selectedFaceBoundaryEdges.material.opacity).toBe(1);
+    expect(overlay.selectedFaceBoundaryEdges.visible).toBe(true);
+
+    overlay.setSelectedFaceBoundary(null);
+    // Same hold as the selected tier: dropping the rim's positions on the
+    // clearing frame would make its fade-out invisible.
+    expect(
+      overlay.selectedFaceBoundaryEdges.geometry.instanceCount
+    ).toBeGreaterThan(0);
+    settle(overlay);
+    expect(overlay.selectedFaceBoundaryEdges.visible).toBe(false);
+    expect(overlay.selectedFaceBoundaryEdges.geometry.instanceCount).toBe(0);
+  });
+
+  it('holds the selected geometry until its fade-out finishes', () => {
+    const overlay = makeOverlay();
+    overlay.setSelected([selection('edge-a')]);
+    settle(overlay);
+
+    overlay.setSelected([]);
+    // Dropping the positions on the clearing frame would make the ramp
+    // invisible — the tier has to outlive the selection it is fading out.
+    expect(overlay.selectedEdges.geometry.instanceCount).toBeGreaterThan(0);
+    expect(overlay.selectedEdges.visible).toBe(true);
+
+    settle(overlay);
+    expect(overlay.selectedEdges.material.opacity).toBe(0);
+    expect(overlay.selectedEdges.visible).toBe(false);
+    expect(overlay.selectedEdges.geometry.instanceCount).toBe(0);
   });
 
   it('does not draw a sentinel for filtered or unknown selections', () => {
@@ -241,6 +320,11 @@ describe('BodyEdgeOverlay', () => {
 
     expect(overlay.setSelectedFaceBoundary(101)).toBe(true);
     overlay.setDisplayMode('shaded');
+    // Both tiers ramp, so settle with an edge selected too — otherwise the
+    // width comparison below reads against an idle-width selected tier and
+    // stops saying anything about the rim being the wider of the two.
+    overlay.setSelected([selection('edge-a')]);
+    settle(overlay);
 
     expect(overlay.selectedFaceBoundaryEdges.visible).toBe(true);
     expect(overlay.selectedFaceBoundaryHiddenEdges.visible).toBe(true);
@@ -288,8 +372,8 @@ describe('BodyEdgeOverlay', () => {
     const overlay = makeOverlay();
     overlay.setSelected([selection('edge-b')]);
     overlay.setHovered(overlay.ownerAtSegment(0));
-    settle(overlay);
     overlay.setSelectedFaceBoundary(101);
+    settle(overlay);
 
     expect(overlay.setXrayEnabled(false)).toBe(true);
     expect(overlay.selectedEdges.visible).toBe(true);
@@ -405,6 +489,7 @@ describe('BodyEdgeOverlay allocation', () => {
 
     expect(instanceBufferFloats(selected)).toBeGreaterThan(before);
     expect(instanceCountOf(selected)).toBe(400 * 7);
+    settle(overlay);
     expect(selected.visible).toBe(true);
   });
 

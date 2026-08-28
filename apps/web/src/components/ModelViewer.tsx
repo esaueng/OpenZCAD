@@ -537,6 +537,8 @@ interface ModelViewerProps {
    * quads at the origin so picking one is a click in the model.
    */
   planePickerArmed: boolean;
+  /** Distance the ghost quads sit along their normals, as typed in the prompt. */
+  planePickerOffset: number;
   /** A ghost plane was clicked. */
   onPickPlane(plane: PlaneId): void;
   /**
@@ -1112,6 +1114,7 @@ export function ModelViewer({
   onSelectRegion,
   onHoverRegion,
   planePickerArmed,
+  planePickerOffset,
   onPickPlane,
   onMeasurePreview,
   regionHandle,
@@ -1239,6 +1242,8 @@ export function ModelViewer({
   onMeasurePreviewRef.current = onMeasurePreview;
   const onPickPlaneRef = useRef(onPickPlane);
   onPickPlaneRef.current = onPickPlane;
+  const planePickerOffsetRef = useRef(planePickerOffset);
+  planePickerOffsetRef.current = planePickerOffset;
   const planePickerRigRef = useRef<ReturnType<
     typeof buildPlanePickerRig
   > | null>(null);
@@ -6226,7 +6231,10 @@ export function ModelViewer({
       // than a backdrop as the camera dollies.
       const planePicker = planePickerRigRef.current;
       if (planePicker) {
+        // Scale first: the offset is expressed in world units and has to be
+        // divided back out of the group's screen-size scale.
         planePicker.setScale(worldPerPixelAt(new THREE.Vector3()));
+        planePicker.setOffset(planePickerOffsetRef.current);
       }
 
       const activeSketchMode = sketchModeRef.current;
@@ -7756,6 +7764,7 @@ export function ModelViewer({
     // The render loop sizes it against the live camera on the next frame;
     // this only keeps the first frame from drawing a unit-sized sliver.
     rig.setScale(0.05);
+    rig.setOffset(planePickerOffsetRef.current);
     context.scene.add(rig.group);
     planePickerRigRef.current = rig;
     context.requestRender();
@@ -7768,6 +7777,18 @@ export function ModelViewer({
       context.requestRender();
     };
   }, [planePickerArmed]);
+
+  // The viewport renders on demand, so a typed offset has to ask for the
+  // frame that shows it; without this the ghosts only move on the next
+  // unrelated invalidation.
+  useEffect(() => {
+    const rig = planePickerRigRef.current;
+    if (!rig) {
+      return;
+    }
+    rig.setOffset(planePickerOffset);
+    contextRef.current?.requestRender();
+  }, [planePickerOffset]);
 
   // In-viewport sketch mode lifecycle: build the plane rig, glide the camera
   // head-on, and recede the solids; restore everything on exit. Keyed on the

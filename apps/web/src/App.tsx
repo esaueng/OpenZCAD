@@ -165,7 +165,11 @@ import {
   localAutosaveFailedStatus,
   reparkFailedAutosave
 } from './lib/localAutosaveFailure';
-import { MAX_SOURCE_IMPORT_BYTES, runStepImport } from './lib/stepImportRun';
+import {
+  MAX_SOURCE_IMPORT_BYTES,
+  MAX_SOURCE_IMPORT_MB,
+  runStepImport
+} from './lib/stepImportRun';
 import {
   inspectShaprPair,
   type ShaprPairInspection
@@ -395,10 +399,7 @@ import { ShortcutsOverlay } from './components/ShortcutsOverlay';
 import { DISPLAY_MODE_LABELS } from './lib/displayMode';
 import { ContextMenu, type ContextMenuState } from './components/ContextMenu';
 import { MarkingMenu } from './components/MarkingMenu';
-import {
-  resolveExtrudeOperation,
-  type ResolvedExtrude
-} from './lib/extrudeInference';
+import { resolveExtrudeOperation } from './lib/extrudeInference';
 import type {
   BodyAppearancePreview,
   FaceResizeCommit,
@@ -1386,6 +1387,17 @@ export function App() {
     baseVersion: number;
   } | null>(null);
   const [sketchConstruction, setSketchConstruction] = useState(false);
+  /**
+   * Offset for the next canonical-plane sketch, as typed. Kept as text so a
+   * half-entered value ("-", "1.") survives a keystroke; the ghost planes and
+   * the sketch itself both read the parsed number, and an unparseable entry
+   * simply means zero rather than blocking the pick.
+   */
+  const [sketchPlaneOffsetText, setSketchPlaneOffsetText] = useState('0');
+  const sketchPlaneOffset = (() => {
+    const parsed = Number(sketchPlaneOffsetText);
+    return Number.isFinite(parsed) ? parsed : 0;
+  })();
   const [sketchDiagnosticPoints, setSketchDiagnosticPoints] = useState<
     { x: number; y: number }[]
   >([]);
@@ -1900,7 +1912,7 @@ export function App() {
    * the file — the document moved out from under it, or the commit lock had
    * been taken by the time it asked. The bytes are deliberately kept: they are
    * exactly what the retry needs, and content addressing makes that retry's
-   * write a no-op instead of another 250 MB.
+   * write a no-op instead of another 128 MB.
    *
    * Remembering them is what keeps the retry's cleanup armed. Without it the
    * retry finds the key already present, concludes it is not its to delete, and
@@ -4514,52 +4526,6 @@ export function App() {
       chosen.length === 1
         ? 'Closed sketch profile selected · drag the arrow to extrude, or type a distance.'
         : `${chosen.length} profiles selected · drag the arrow to extrude them together.`
-    );
-  }
-
-  async function createInferredExtrude(input: ExtrudeInput) {
-    const manager = managerRef.current;
-    if (!manager) {
-      return;
-    }
-    const base = manager.document;
-    setBusy(true);
-    setStatus('Inferring the extrusion operation with the exact kernel…');
-    let resolved: ResolvedExtrude;
-    try {
-      resolved = await resolveExtrudeOperation({
-        base,
-        input,
-        derive: (document) => geometry.syncOnce(document)
-      });
-    } catch (error) {
-      setStatus(errorMessage(error, 'Extrusion inference failed.'));
-      setBusy(false);
-      return;
-    }
-    setBusy(false);
-    if (
-      managerRef.current !== manager ||
-      manager.document.version !== base.version
-    ) {
-      setStatus('The document changed while extrusion inference was running.');
-      return;
-    }
-    const command = commandFactories.extrudeSketch({
-      ...resolved.command.payload,
-      name: input.name
-    });
-    const bodyId = command.payload.ids?.bodyId;
-    if (!bodyId) {
-      setStatus('Extrude could not reserve a result body.');
-      return;
-    }
-    await executeValidatedDirectEdit(
-      command,
-      bodyId,
-      `Created ${resolved.inference.operation} extrusion.`,
-      typeof input.distance === 'number' ? input.distance : 0,
-      finishFeatureCreation
     );
   }
 
@@ -7387,7 +7353,7 @@ export function App() {
 
     if (lowerName.endsWith('.stl')) {
       if (file.size > MAX_SOURCE_IMPORT_BYTES) {
-        setStatus('STL import is limited to 250 MB.');
+        setStatus(`STL import is limited to ${MAX_SOURCE_IMPORT_MB} MB.`);
         return;
       }
       let parsed;
@@ -8046,9 +8012,10 @@ export function App() {
    * the viewport's ghost planes so both produce the same session and status.
    */
   function startSketchOnPlane(plane: PlaneId) {
+    const offset = sketchPlaneOffset;
     dispatchInteraction({
       type: 'enter-sketch',
-      plane: { type: 'canonical', plane, offset: 0 }
+      plane: { type: 'canonical', plane, offset }
     });
     setTool(null);
     setStatus(
@@ -8057,7 +8024,9 @@ export function App() {
       // is derived from the id, so a rename that only edits strings cannot
       // keep it green. Only the "Esc exits" claim goes — the armed Line tool
       // makes it untrue on the first press.
-      `Sketching on the ${plane} plane · Finish Sketch when done.`
+      offset === 0
+        ? `Sketching on the ${plane} plane · Finish Sketch when done.`
+        : `Sketching on the ${plane} plane offset ${offset} ${doc?.units ?? ''} · Finish Sketch when done.`
     );
   }
 
@@ -9301,10 +9270,10 @@ export function App() {
           (candidate) => candidate.sketchId === target.sketchId
         );
         const faceAttachment =
-          sketchNode?.planeRef.type === 'face' && rounded < 0
+          sketchNode?.planeRef.type === 'face' && rounded !== 0
             ? {
                 bodyId: sketchNode.planeRef.bodyId,
-                direction: 'into' as const
+                direction: rounded < 0 ? ('into' as const) : ('away' as const)
               }
             : undefined;
         setBusy(true);
@@ -11949,9 +11918,7 @@ export function App() {
   ];
 
   const directMode =
-    tool === 'sketch' ||
-    tool === 'extrude' ||
-    (tool === 'transform' && movePreview !== null);
+    tool === 'sketch' || (tool === 'transform' && movePreview !== null);
   // The setting is the only gate on the assistant's presence: rendering nothing
   // also means no /api/assistant/status probe, since that fetch lives in the
   // rail's mount effect. A direct-manipulation mode only hides it — the panel
@@ -12525,6 +12492,7 @@ export function App() {
             onSelectRegion={handleSelectRegion}
             onHoverRegion={handleHoverRegion}
             planePickerArmed={!modelingLocked && tool === 'sketch'}
+            planePickerOffset={sketchPlaneOffset}
             onPickPlane={startSketchOnPlane}
             onMeasurePreview={
               modelingLocked && measuring ? previewMeasurement : null
@@ -12902,6 +12870,21 @@ export function App() {
                       plane.
                     </small>
                   </span>
+                  <label className="sketch-plane-offset">
+                    <span>Offset</span>
+                    <input
+                      type="number"
+                      step="any"
+                      value={sketchPlaneOffsetText}
+                      aria-label="Sketch plane offset"
+                      onChange={(event) =>
+                        setSketchPlaneOffsetText(event.target.value)
+                      }
+                    />
+                    <span className="sketch-plane-offset-units">
+                      {doc.units}
+                    </span>
+                  </label>
                   <span className="sketch-plane-buttons">
                     {(['XY', 'XZ', 'YZ'] as const).map((plane) => (
                       <button
@@ -13074,10 +13057,6 @@ export function App() {
                     })
                   )
                 }
-                onCreateSketch={(value) =>
-                  createFeature(commandFactories.addSketch(value))
-                }
-                onCreateExtrude={(value) => void createInferredExtrude(value)}
                 onCreateRevolve={(value) =>
                   createFeature(commandFactories.revolveSketch(value))
                 }
