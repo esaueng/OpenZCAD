@@ -241,6 +241,55 @@ describe('stored extrude operations', { timeout: 30_000 }, () => {
     expect(resolved.command.payload.operation).toBe('cut');
   });
 
+  it('joins a boss grown off the face it was sketched on', async () => {
+    // z 10..14 on a box that ends at z 10: the two meet exactly at the
+    // sketched face and share no volume, so measurement alone says new-body.
+    // Growing away from that face means join, and the exact rebuild has to
+    // accept an add whose operands only touch.
+    const { document: base, targetBodyId } = baseSketchDocument(10);
+    const resolved = await resolveExtrudeOperation({
+      base,
+      input: {
+        name: 'Preview',
+        sketchId: getLatestSketchId(base)!,
+        distance: 4
+      },
+      derive: (document) => kernel.syncDocument(document),
+      faceAttachment: { bodyId: targetBodyId, direction: 'away' }
+    });
+    expect(resolved.inference).toMatchObject({
+      operation: 'add',
+      reason: 'onto-face-body',
+      targetBodyId
+    });
+    expect(resolved.command.payload.operation).toBe('add');
+    // The union is one body, not a pair of lumps: the box plus the boss.
+    const result = resolved.derived.bodyRepresentations[
+      resolved.command.payload.ids!.bodyId
+    ];
+    expect(result?.consumed).toBe(false);
+    expect(result?.volume).toBeCloseTo(20 * 20 * 10 + 4 * 4 * 4, 3);
+    expect(resolved.derived.warnings).toEqual([]);
+  });
+
+  it('still refuses a stored add whose extrusion sits away from its target', async () => {
+    // The hint must not paper over real separation: an offset plane well
+    // clear of the box has nothing to join, and the rebuild says so.
+    const { document: base, targetBodyId } = baseSketchDocument(40);
+    await expect(
+      resolveExtrudeOperation({
+        base,
+        input: {
+          name: 'Preview',
+          sketchId: getLatestSketchId(base)!,
+          distance: 4
+        },
+        derive: (document) => kernel.syncDocument(document),
+        faceAttachment: { bodyId: targetBodyId, direction: 'away' }
+      })
+    ).rejects.toThrow(/did not produce an exact result body/);
+  });
+
   it('keeps the classifier result when the drag overlaps a different body', async () => {
     // The hint only overrides toward the face's own body — an overlap with
     // some other solid keeps the measured operation.

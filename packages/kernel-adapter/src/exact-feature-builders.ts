@@ -44,6 +44,7 @@ import {
   inferenceBodyForShape,
   isFaceConnectedSolid,
   sharedShapeVolume,
+  shapesShareMaterialOrTouch,
   sharedSolidVolume,
   solidMeshIsClosed,
   tessellatedFaceBounds,
@@ -419,15 +420,21 @@ function buildExtrudeFeature(
       feature.bodyId,
       feature.name
     );
-    if (
-      sharedShapeVolume(
-        kernel,
-        target,
-        extrusion,
-        targetBody,
-        extrusionBody
-      ) <= 0
-    ) {
+    // A cut needs shared material — with none there is nothing to remove.
+    // An add only needs contact: a boss extruded off the face it was sketched
+    // on meets its target exactly at that face and shares no volume at all,
+    // which is a union the Union feature already accepts. Testing add by
+    // volume alone refused the commonest way to grow a body.
+    const joined =
+      sharedShapeVolume(kernel, target, extrusion, targetBody, extrusionBody) >
+        0 ||
+      (operation === 'add' &&
+        shapesShareMaterialOrTouch(kernel, target, extrusion));
+    if (!joined) {
+      // Wording unchanged on purpose: `isMeasuredZeroOverlap` in the web
+      // app matches this sentence to tell a measured zero-overlap candidate
+      // from a kernel refusal, and "overlaps" still reads correctly for an
+      // add whose operands do not even touch.
       throw new Error(
         `Stored ${operation} extrusion no longer overlaps ${targetBody.name}; operation was not re-inferred.`
       );
