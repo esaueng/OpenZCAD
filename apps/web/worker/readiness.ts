@@ -39,6 +39,78 @@ interface ProjectMeasurementSchema {
   erasure_triggers: number;
 }
 
+interface ArtifactUploadAccountingSchema {
+  usage_table: number;
+  parts_table: number;
+  session_columns: number;
+  indexes: number;
+  triggers: number;
+}
+
+/** Whether migration 0017 installed every durable upload-accounting guard. */
+export async function isArtifactUploadAccountingReady(
+  db: D1Database | undefined
+): Promise<boolean> {
+  if (!db) return false;
+  try {
+    const schema = await db
+      .prepare(
+        `SELECT
+          EXISTS (
+            SELECT 1 FROM sqlite_schema
+            WHERE type = 'table' AND name = 'artifact_account_usage'
+          ) AS usage_table,
+          EXISTS (
+            SELECT 1 FROM sqlite_schema
+            WHERE type = 'table' AND name = 'artifact_upload_parts'
+          ) AS parts_table,
+          (
+            SELECT COUNT(*) FROM pragma_table_info('upload_sessions')
+            WHERE name IN (
+              'owner_user_id', 'reserved_bytes', 'reservation_state',
+              'multipart_upload_id', 'completion_started_at'
+            )
+          ) AS session_columns,
+          (
+            SELECT COUNT(*) FROM sqlite_schema
+            WHERE type = 'index' AND name IN (
+              'idx_artifact_upload_parts_session',
+              'idx_upload_sessions_owner_expiry'
+            )
+          ) AS indexes,
+          (
+            SELECT COUNT(*) FROM sqlite_schema
+            WHERE type = 'trigger' AND name IN (
+              'artifact_upload_session_before_insert',
+              'artifact_upload_session_after_insert',
+              'artifact_upload_metadata_before_update',
+              'artifact_upload_session_before_delete',
+              'artifact_upload_session_after_delete',
+              'artifact_usage_before_artifact_insert',
+              'artifact_usage_after_artifact_insert',
+              'artifact_usage_after_artifact_delete',
+              'artifact_usage_before_artifact_accounting_update',
+              'artifact_upload_part_before_insert',
+              'artifact_upload_part_after_insert',
+              'artifact_upload_part_before_update',
+              'artifact_upload_part_after_update_bytes',
+              'artifact_upload_part_after_delete'
+            )
+          ) AS triggers`
+      )
+      .first<ArtifactUploadAccountingSchema>();
+    return (
+      schema?.usage_table === 1 &&
+      schema.parts_table === 1 &&
+      schema.session_columns === 5 &&
+      schema.indexes === 2 &&
+      schema.triggers === 14
+    );
+  } catch {
+    return false;
+  }
+}
+
 /** Whether migrations through 0016 installed the erasure fence and write guards. */
 export async function isAccountErasureReady(
   db: D1Database | undefined

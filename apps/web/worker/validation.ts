@@ -369,6 +369,9 @@ export function parseCreateUploadSessionRequest(
     record.metadata === undefined
       ? {}
       : asRecord(record.metadata, '"metadata"');
+  if (Object.hasOwn(metadata, '__openzcadMultipartUploadId')) {
+    throw badRequest('"metadata" contains a reserved field.');
+  }
   if (JSON.stringify(metadata).length > 4_000) {
     throw badRequest('"metadata" is too large.');
   }

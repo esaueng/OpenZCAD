@@ -2130,6 +2130,11 @@ export const ARTIFACT_UPLOAD_PART_BYTES = 16 * 1024 * 1024;
 export const MAX_ARTIFACT_PART_BYTES = 32 * 1024 * 1024;
 /** Ceiling on parts per upload (with 16 MiB parts: 1 GiB). */
 export const MAX_ARTIFACT_UPLOAD_PARTS = 64;
+/** Durable unfinished bytes one multipart upload may reserve. */
+export const MAX_ARTIFACT_UPLOAD_BYTES =
+  ARTIFACT_UPLOAD_PART_BYTES * MAX_ARTIFACT_UPLOAD_PARTS;
+/** Unfinished upload sessions one account may hold at once. */
+export const MAX_ACTIVE_ARTIFACT_UPLOAD_SESSIONS = 16;
 /**
  * Ceiling on finalized artifact bytes per account, attributed to the project
  * owner. Uploads are otherwise unmetered R2 writes on an open-signup beta —
@@ -2139,6 +2144,8 @@ export const MAX_ARTIFACT_UPLOAD_PARTS = 64;
  * import is 128 MB) while bounding abuse.
  */
 export const MAX_ACCOUNT_ARTIFACT_BYTES = 2 * 1024 * 1024 * 1024;
+/** Explicit ceiling on the unfinished portion of account artifact usage. */
+export const MAX_ACCOUNT_RESERVED_ARTIFACT_BYTES = MAX_ACCOUNT_ARTIFACT_BYTES;
 /** Maximum encoded size of a shelf thumbnail that clients automatically load. */
 export const MAX_THUMBNAIL_BYTES = 512 * 1024;
 /** The thumbnail renderer publishes WebP; other image formats are not accepted. */
@@ -2173,6 +2180,8 @@ export interface HealthResponse {
   status: 'ok';
   environment: 'development' | 'beta';
   time: string;
+  /** Whether migration 0017 installed atomic unfinished-upload accounting. */
+  artifactUploadAccountingReady?: boolean;
   /**
    * Whether D1 has every schema object installed by
    * 0010_document_storage_accounting. Absent older Workers are not ready.
@@ -2182,7 +2191,7 @@ export interface HealthResponse {
   projectObjectStorageReady?: boolean;
   /** Whether migration 0015 installed isolated measurement storage and fencing. */
   projectMeasurementStorageReady?: boolean;
-  /** Whether migrations through 0015 installed resumable account-erasure fencing. */
+  /** Whether migrations through 0016 installed resumable account-erasure fencing. */
   accountErasureReady?: boolean;
   /** Whether R2, D1 fencing, and collaboration-room erasure are all ready. */
   projectErasureReady?: boolean;
