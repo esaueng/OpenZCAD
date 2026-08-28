@@ -1,11 +1,11 @@
 # OpenZCAD Roadmap
 
-Status snapshot: 2026-08-19, schema v6. “Working” below means implemented on
+Status snapshot: 2026-08-27, schema v13. “Working” below means implemented on
 the current branch; production enablement is a separate rollout decision.
 
 ## Working now
 
-- Schema-v6 canonical documents with v1–v5 normalization, checkpoints, asset
+- Schema-v13 canonical documents with v1–v12 normalization, checkpoints, asset
   references, command replay, transactions, undo/redo, and local-first autosave.
 - A browser-worker Remus exact adapter with primitives, multi-profile
   sweeps, transforms, booleans, finishing, patterns, mirror-copy, shell, solid
