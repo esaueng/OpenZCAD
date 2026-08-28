@@ -1053,6 +1053,38 @@ function isTextEntryTarget(target: EventTarget | null): boolean {
   );
 }
 
+type ViewRequest = NonNullable<ModelViewerProps['viewRequest']>;
+
+function startRequestedView(
+  context: SceneContext,
+  request: ViewRequest,
+  handled: MutableRefObject<{ context: SceneContext; nonce: number } | null>
+) {
+  if (
+    handled.current?.context === context &&
+    handled.current.nonce === request.nonce
+  ) {
+    return;
+  }
+  handled.current = { context, nonce: request.nonce };
+  // An explicit view selection owns the camera even if it arrives before the
+  // first body. Otherwise that body's automatic fit can cancel this glide.
+  context.hasFitCamera = true;
+  const { camera, controls } = context;
+  const distance = Math.max(camera.position.distanceTo(controls.target), 1);
+  const direction = viewDirectionFor(request.view);
+  context.startCameraTween(
+    {
+      position: controls.target.clone().addScaledVector(direction, distance),
+      target: controls.target.clone(),
+      near: camera.near,
+      far: camera.far
+    },
+    undefined,
+    { ease: viewJumpEase }
+  );
+}
+
 export function ModelViewer({
   bodies,
   sketches,
@@ -1190,6 +1222,12 @@ export function ModelViewer({
   const pointerNavigationRef = useRef(settings.pointerNavigation);
   pointerNavigationRef.current = settings.pointerNavigation;
   const initialViewRef = useRef(initialView);
+  const viewRequestRef = useRef(viewRequest);
+  viewRequestRef.current = viewRequest;
+  const handledViewRequestRef = useRef<{
+    context: SceneContext;
+    nonce: number;
+  } | null>(null);
   const onViewChangeRef = useRef(onViewChange);
   onViewChangeRef.current = onViewChange;
   const onViewSettledRef = useRef(onViewSettled);
@@ -6436,6 +6474,16 @@ export function ModelViewer({
         requestRender();
       }
     }
+    // The React chrome can become actionable before this passive setup owns a
+    // scene context. Replay a view chosen in that window instead of dropping
+    // its one-shot nonce in the earlier request effect.
+    if (viewRequestRef.current) {
+      startRequestedView(
+        context,
+        viewRequestRef.current,
+        handledViewRequestRef
+      );
+    }
     requestRender();
     performance.measure?.('oz:viewer.init', 'oz:viewer.init:begin');
 
@@ -8277,19 +8325,7 @@ export function ModelViewer({
     if (!context || !viewRequest) {
       return;
     }
-    const { camera, controls } = context;
-    const distance = Math.max(camera.position.distanceTo(controls.target), 1);
-    const direction = viewDirectionFor(viewRequest.view);
-    context.startCameraTween(
-      {
-        position: controls.target.clone().addScaledVector(direction, distance),
-        target: controls.target.clone(),
-        near: camera.near,
-        far: camera.far
-      },
-      undefined,
-      { ease: viewJumpEase }
-    );
+    startRequestedView(context, viewRequest, handledViewRequestRef);
   }, [viewRequest]);
 
   // A normal-to-face request uses the exact surface normal for orientation
