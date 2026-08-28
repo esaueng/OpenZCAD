@@ -5,7 +5,9 @@ import { RemusKernel } from '../packages/kernel-adapter/src/remus-runtime';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import {
+  detectReflectionSymmetries,
   measureImportedStep,
+  measureParallelPlaneSpacings,
   measureRuledEdgeSweepDeviation
 } from './support/reconstruction-measurement';
 
@@ -108,6 +110,59 @@ describe('guided-reconstruction measurement tooling', () => {
       rectangularFace!.face
     );
     expect(planarDeviation.maximum).toBeLessThan(1e-8);
+  });
+
+  it('fails closed when measurement work exceeds its fixed limits', () => {
+    const report = measureImportedStep(kernel, syntheticHolderStep(kernel));
+    const rectangularFace = report.inventory.faces.find(
+      (face) =>
+        face.surfaceType === 'plane' &&
+        kernel.getFaceEdges(face.face).length === 4
+    );
+    expect(rectangularFace).toBeDefined();
+
+    expect(() =>
+      measureRuledEdgeSweepDeviation(kernel, rectangularFace!.face, {
+        samplesPerRail: 66
+      })
+    ).toThrow('Edge sweep deviation options are outside their bounds.');
+    expect(() =>
+      measureRuledEdgeSweepDeviation(kernel, rectangularFace!.face, {
+        edgeDeflection: 0.004
+      })
+    ).toThrow('Edge sweep deviation options are outside their bounds.');
+    expect(() =>
+      detectReflectionSymmetries(report.inventory, report.bounds, {
+        maxSymmetries: 33
+      })
+    ).toThrow('Reflection symmetry options are outside their bounds.');
+    expect(() =>
+      detectReflectionSymmetries(report.inventory, report.bounds, {
+        linearTolerance: 0.01
+      })
+    ).toThrow('Reflection symmetry options are outside their bounds.');
+
+    const analyticFace = report.inventory.faces.find((face) => face.analytic);
+    expect(analyticFace).toBeDefined();
+    const oversizedFaces = Array.from({ length: 257 }, (_, index) => ({
+      ...analyticFace!,
+      face: index + 1
+    }));
+    const oversizedInventory = {
+      totalFaces: oversizedFaces.length,
+      analyticFaces: oversizedFaces.length,
+      bySurfaceType: { plane: oversizedFaces.length },
+      faces: oversizedFaces.map((face) => ({
+        ...face,
+        surfaceType: 'plane'
+      }))
+    };
+    expect(() =>
+      detectReflectionSymmetries(oversizedInventory, report.bounds)
+    ).toThrow('256-face pairwise-analysis limit');
+    expect(() =>
+      measureParallelPlaneSpacings(kernel, report.solid, oversizedInventory)
+    ).toThrow('256-face pairwise-analysis limit');
   });
 
   it.skipIf(!HAMMER_HOLDER_STEP)(

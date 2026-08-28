@@ -17,7 +17,23 @@ const ANALYTIC_SURFACE_TYPES = new Set([
 ]);
 const DEFAULT_LINEAR_TOLERANCE = 1e-5;
 const DEFAULT_RELATIVE_TOLERANCE = 1e-6;
+const MIN_LINEAR_TOLERANCE = 1e-9;
+const MAX_LINEAR_TOLERANCE = 1e-3;
+const MIN_RELATIVE_TOLERANCE = 1e-12;
+const MAX_RELATIVE_TOLERANCE = 1e-3;
+const MAX_MEASUREMENT_FACES = 512;
+const MAX_MEASUREMENT_EDGES = 4_096;
+const MAX_FACE_EDGES = 512;
+const MAX_PAIRWISE_ANALYTIC_FACES = 256;
 const MAX_SYMMETRY_CANDIDATES = 256;
+const MAX_REPORTED_SYMMETRIES = 32;
+const MIN_SWEEP_DEFLECTION = 0.005;
+const MAX_SWEEP_DEFLECTION = 1;
+const MAX_SWEEP_RAIL_SAMPLES = 65;
+const MAX_RAIL_TESSELLATION_POINTS = 10_000;
+const MAX_DEVIATION_MESH_POINTS = 12_000;
+const MAX_DEVIATION_MESH_TRIANGLES = 20_000;
+const MAX_DEVIATION_COMPARISONS = 100_000_000;
 
 export interface MeasurementPoint {
   x: number;
@@ -231,7 +247,13 @@ function faceVertices(
 ): readonly MeasurementPoint[] {
   const seen = new Set<number>();
   const vertices: MeasurementPoint[] = [];
-  for (const edge of kernel.getFaceEdges(face)) {
+  const edges = kernel.getFaceEdges(face);
+  if (edges.length > MAX_FACE_EDGES) {
+    throw new Error(
+      `Face ${face} exceeds the ${MAX_FACE_EDGES}-edge measurement limit.`
+    );
+  }
+  for (const edge of edges) {
     for (const vertex of kernel.getEdgeVertexHandles(edge)) {
       if (seen.has(vertex)) continue;
       seen.add(vertex);
@@ -252,7 +274,13 @@ export function measureAnalyticInventory(
   solid: number
 ): AnalyticInventory {
   const bySurfaceType: Record<string, number> = {};
-  const faces = Array.from(kernel.getSolidFaces(solid), (face) => {
+  const faceHandles = Array.from(kernel.getSolidFaces(solid));
+  if (faceHandles.length > MAX_MEASUREMENT_FACES) {
+    throw new Error(
+      `STEP solid exceeds the ${MAX_MEASUREMENT_FACES}-face measurement limit.`
+    );
+  }
+  const faces = faceHandles.map((face) => {
     const geometry = measureFaceGeometry(kernel, face);
     if (!geometry) {
       throw new Error(`Face ${face} could not be measured.`);
@@ -500,8 +528,16 @@ function reflectionCandidates(
     addCandidate(candidates, normal, dot(normal, midpoint), linearTolerance);
   }
   const faces = inventory.faces.filter((face) => face.analytic);
-  for (let first = 0; first < faces.length; first += 1) {
+  if (faces.length > MAX_PAIRWISE_ANALYTIC_FACES) {
+    throw new Error(
+      `Analytic inventory exceeds the ${MAX_PAIRWISE_ANALYTIC_FACES}-face pairwise-analysis limit.`
+    );
+  }
+  candidatePairs: for (let first = 0; first < faces.length; first += 1) {
     for (let second = first + 1; second < faces.length; second += 1) {
+      if (candidates.length >= MAX_SYMMETRY_CANDIDATES) {
+        break candidatePairs;
+      }
       const left = faces[first]!;
       const right = faces[second]!;
       if (
@@ -538,7 +574,25 @@ export function detectReflectionSymmetries(
   const relativeTolerance =
     options.relativeTolerance ?? DEFAULT_RELATIVE_TOLERANCE;
   const maxSymmetries = options.maxSymmetries ?? 8;
+  if (
+    !Number.isFinite(linearTolerance) ||
+    linearTolerance < MIN_LINEAR_TOLERANCE ||
+    linearTolerance > MAX_LINEAR_TOLERANCE ||
+    !Number.isFinite(relativeTolerance) ||
+    relativeTolerance < MIN_RELATIVE_TOLERANCE ||
+    relativeTolerance > MAX_RELATIVE_TOLERANCE ||
+    !Number.isSafeInteger(maxSymmetries) ||
+    maxSymmetries < 1 ||
+    maxSymmetries > MAX_REPORTED_SYMMETRIES
+  ) {
+    throw new Error('Reflection symmetry options are outside their bounds.');
+  }
   const faces = inventory.faces.filter((face) => face.analytic);
+  if (faces.length > MAX_PAIRWISE_ANALYTIC_FACES) {
+    throw new Error(
+      `Analytic inventory exceeds the ${MAX_PAIRWISE_ANALYTIC_FACES}-face pairwise-analysis limit.`
+    );
+  }
   if (faces.length === 0) return [];
   const measurements = reflectionCandidates(
     inventory,
@@ -612,6 +666,26 @@ export function measureParallelPlaneSpacings(
   inventory: AnalyticInventory,
   linearTolerance = DEFAULT_LINEAR_TOLERANCE
 ): readonly ParallelPlaneSpacingMeasurement[] {
+  if (
+    !Number.isFinite(linearTolerance) ||
+    linearTolerance < MIN_LINEAR_TOLERANCE ||
+    linearTolerance > MAX_LINEAR_TOLERANCE
+  ) {
+    throw new Error('Parallel-plane tolerance is outside its bounds.');
+  }
+  if (inventory.totalFaces > MAX_MEASUREMENT_FACES) {
+    throw new Error(
+      `STEP solid exceeds the ${MAX_MEASUREMENT_FACES}-face measurement limit.`
+    );
+  }
+  const planes = inventory.faces.filter(
+    (face) => face.surfaceType === 'plane' && canonicalPlane(face)
+  );
+  if (planes.length > MAX_PAIRWISE_ANALYTIC_FACES) {
+    throw new Error(
+      `Planar inventory exceeds the ${MAX_PAIRWISE_ANALYTIC_FACES}-face pairwise-analysis limit.`
+    );
+  }
   const measurements = new Map<string, ParallelPlaneSpacingMeasurement>();
   for (const pair of queryOpposingPlanarFacePairs(kernel, solid)) {
     measurements.set(pairKey(pair.faceA, pair.faceB), {
@@ -626,9 +700,6 @@ export function measureParallelPlaneSpacings(
       bordersBlend: pair.faceABordersBlend || pair.faceBBordersBlend
     });
   }
-  const planes = inventory.faces.filter(
-    (face) => face.surfaceType === 'plane' && canonicalPlane(face)
-  );
   for (let first = 0; first < planes.length; first += 1) {
     for (let second = first + 1; second < planes.length; second += 1) {
       const left = planes[first]!;
@@ -707,6 +778,15 @@ function orientedEdgeSamples(
   sampleCount: number
 ): readonly MeasurementPoint[] {
   const flat = kernel.sampleEdge(edge, deflection);
+  if (
+    flat.length % 3 !== 0 ||
+    flat.length / 3 > MAX_RAIL_TESSELLATION_POINTS ||
+    !flat.every(Number.isFinite)
+  ) {
+    throw new Error(
+      `Edge sweep rail exceeds the ${MAX_RAIL_TESSELLATION_POINTS}-point tessellation limit or contains invalid coordinates.`
+    );
+  }
   const samples = Array.from(
     { length: Math.floor(flat.length / 3) },
     (_, index) => point(flat, index * 3)
@@ -806,6 +886,13 @@ function directionalDeviation(
   if (samples.length === 0 || triangles.length === 0) {
     throw new Error('Deviation measurement requires non-empty surface meshes.');
   }
+  if (
+    samples.length > Math.floor(MAX_DEVIATION_COMPARISONS / triangles.length)
+  ) {
+    throw new Error(
+      `Deviation measurement exceeds the ${MAX_DEVIATION_COMPARISONS.toLocaleString('en-US')}-comparison work limit.`
+    );
+  }
   let maximumSquared = 0;
   let sumSquared = 0;
   for (const sample of samples) {
@@ -833,8 +920,22 @@ function trianglesFromIndexedMesh(
   points: readonly MeasurementPoint[];
   triangles: readonly MeasurementTriangle[];
 } {
+  const pointCount = positions.length / 3;
+  const triangleCount = indices.length / 3;
+  if (
+    positions.length % 3 !== 0 ||
+    indices.length % 3 !== 0 ||
+    pointCount > MAX_DEVIATION_MESH_POINTS ||
+    triangleCount > MAX_DEVIATION_MESH_TRIANGLES ||
+    !positions.every(Number.isFinite) ||
+    indices.some((index) => index >= pointCount)
+  ) {
+    throw new Error(
+      `Deviation mesh exceeds the ${MAX_DEVIATION_MESH_POINTS}-point/${MAX_DEVIATION_MESH_TRIANGLES}-triangle limits or contains invalid data.`
+    );
+  }
   const points = Array.from(
-    { length: Math.floor(positions.length / 3) },
+    { length: pointCount },
     (_, index) => point(positions, index * 3)
   );
   const triangles: MeasurementTriangle[] = [];
@@ -900,7 +1001,17 @@ export function measureRuledEdgeSweepDeviation(
   const edgeDeflection = options.edgeDeflection ?? 0.01;
   const faceDeflection = options.faceDeflection ?? 0.01;
   const samplesPerRail = options.samplesPerRail ?? 33;
-  if (edgeDeflection <= 0 || faceDeflection <= 0 || samplesPerRail < 3) {
+  if (
+    !Number.isFinite(edgeDeflection) ||
+    edgeDeflection < MIN_SWEEP_DEFLECTION ||
+    edgeDeflection > MAX_SWEEP_DEFLECTION ||
+    !Number.isFinite(faceDeflection) ||
+    faceDeflection < MIN_SWEEP_DEFLECTION ||
+    faceDeflection > MAX_SWEEP_DEFLECTION ||
+    !Number.isSafeInteger(samplesPerRail) ||
+    samplesPerRail < 3 ||
+    samplesPerRail > MAX_SWEEP_RAIL_SAMPLES
+  ) {
     throw new Error('Edge sweep deviation options are outside their bounds.');
   }
   const wire = kernel.getFaceOuterWire(witnessFace);
@@ -970,6 +1081,12 @@ export function measureImportedStep(
     );
   }
   const solid = solids[0]!;
+  const edgeCount = kernel.getSolidEdges(solid).length;
+  if (edgeCount > MAX_MEASUREMENT_EDGES) {
+    throw new Error(
+      `STEP solid exceeds the ${MAX_MEASUREMENT_EDGES}-edge measurement limit.`
+    );
+  }
   const rawBounds = Array.from(kernel.boundingBox(solid));
   if (rawBounds.length !== 6 || !rawBounds.every(Number.isFinite)) {
     throw new Error('Imported STEP returned invalid solid bounds.');
@@ -990,7 +1107,7 @@ export function measureImportedStep(
   return {
     solid,
     faceCount: inventory.totalFaces,
-    edgeCount: kernel.getSolidEdges(solid).length,
+    edgeCount,
     volume: kernel.volume(solid, 0.01),
     validationErrors: kernel.validateSolid(solid),
     bounds,

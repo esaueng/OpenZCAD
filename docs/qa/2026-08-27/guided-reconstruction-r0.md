@@ -6,6 +6,13 @@ STEP remains outside this repository and is supplied only through
 `OPENZCAD_HAMMER_HOLDER_STEP`; CI builds and round-trips a synthetic U-bracket
 with symmetric countersunk holes and a one-sided emboss surrogate.
 
+The work bounds fail closed: 512 faces, 4,096 solid edges, 512 edges per face,
+256 analytic faces in pairwise analysis, 256 symmetry candidates, and 32
+reported symmetries. Edge-sweep diagnostics accept 3–65 rail samples and
+0.005–1 mm tessellation deflection, cap sampled rails/meshes, and refuse any
+directional distance pass above 100,000,000 point-triangle comparisons. Tests
+exercise the option and pairwise-analysis refusal paths.
+
 ## Hammer Holder reproduction
 
 The local witness was measured with the Remus WASM revision pinned by current
