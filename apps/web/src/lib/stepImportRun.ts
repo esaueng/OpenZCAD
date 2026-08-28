@@ -76,6 +76,15 @@ function megabytes(bytes: number): number {
   return Math.round(bytes / (1024 * 1024));
 }
 
+/**
+ * The import ceiling as the user is told it, derived rather than written out.
+ *
+ * The refusal message said 250 MB while `MAX_SOURCE_IMPORT_BYTES` refused at
+ * 128, so a 200 MB file was rejected by a sentence saying it was allowed. The
+ * number had drifted into README.md, architecture.md and a test name too.
+ */
+export const MAX_SOURCE_IMPORT_MB = megabytes(MAX_SOURCE_IMPORT_BYTES);
+
 function storageUnavailableMessage(maxEmbeddedBytes: number): string {
   return `STEP import over ${megabytes(maxEmbeddedBytes)} MB needs browser storage, which is unavailable in this session.`;
 }
@@ -199,7 +208,7 @@ export interface StepImportRunDeps {
   commandFactory?(payload: ImportedStepInput): AnyCommand;
   validatingMessage?: string;
   successMessage?(input: { fileName: string; archived: boolean }): string;
-  /** Overridable so a test need not build a 250 MB file. */
+  /** Overridable so a test need not build a 128 MB file. */
   limits?: { maxSourceBytes?: number; maxEmbeddedBytes?: number };
 }
 
@@ -347,7 +356,7 @@ export async function runStepImport(
   }
 
   // Taken BEFORE anything is written, and HELD across the write: a run that
-  // cannot proceed must not leave up to 250 MB of source bytes behind it.
+  // cannot proceed must not leave up to 128 MB of source bytes behind it.
   // Nothing sweeps unreferenced blobs, so those bytes would be permanent — and
   // their mere presence would then disarm the cleanup of every later refused
   // import of the same file, which sees a key it did not create.
@@ -445,7 +454,8 @@ export async function runStepImport(
       }
     }
     stopIfCancelled();
-    // Measured at about 0.15 s for 250 MB — decode and header scan together —
+    // Measured at about 0.15 s for 250 MB — decode and header scan together;
+    // taken when the ceiling was 250 MB, so it bounds today's 128 MB too —
     // so this reports no fraction. There is nothing to watch.
     progress?.update({ phase: 'reading', fraction: null });
     const stepText = await file.text();
@@ -497,7 +507,7 @@ export async function runStepImport(
         // reach the same verdict, and the parsed source is cached by checksum
         // so it costs no re-parse.
         revalidateOnDocumentMove: true,
-        // Archiving ahead of the rebuild spends a transfer of up to 250 MB on a
+        // Archiving ahead of the rebuild spends a transfer of up to 128 MB on a
         // file the kernel may be about to refuse, and leaves an artifact
         // nothing references. Best-effort: the source stays in the local blob
         // store (or embedded) and rebuilds remain deterministic and offline

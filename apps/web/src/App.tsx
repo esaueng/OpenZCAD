@@ -165,7 +165,11 @@ import {
   localAutosaveFailedStatus,
   reparkFailedAutosave
 } from './lib/localAutosaveFailure';
-import { MAX_SOURCE_IMPORT_BYTES, runStepImport } from './lib/stepImportRun';
+import {
+  MAX_SOURCE_IMPORT_BYTES,
+  MAX_SOURCE_IMPORT_MB,
+  runStepImport
+} from './lib/stepImportRun';
 import {
   inspectShaprPair,
   type ShaprPairInspection
@@ -1900,7 +1904,7 @@ export function App() {
    * the file — the document moved out from under it, or the commit lock had
    * been taken by the time it asked. The bytes are deliberately kept: they are
    * exactly what the retry needs, and content addressing makes that retry's
-   * write a no-op instead of another 250 MB.
+   * write a no-op instead of another 128 MB.
    *
    * Remembering them is what keeps the retry's cleanup armed. Without it the
    * retry finds the key already present, concludes it is not its to delete, and
@@ -7387,7 +7391,7 @@ export function App() {
 
     if (lowerName.endsWith('.stl')) {
       if (file.size > MAX_SOURCE_IMPORT_BYTES) {
-        setStatus('STL import is limited to 250 MB.');
+        setStatus(`STL import is limited to ${MAX_SOURCE_IMPORT_MB} MB.`);
         return;
       }
       let parsed;
