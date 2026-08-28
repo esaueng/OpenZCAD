@@ -317,4 +317,57 @@ describe('modeling operation form contracts', () => {
       input: { faceHashes: [42], faceReferences: [reference], angleDeg: 3 }
     });
   });
+
+  it('marks a new hole as measured from the entry face centroid', () => {
+    const holeState = (faceHash: number) =>
+      ({
+        operation: 'hole',
+        value: {
+          name: 'Bore',
+          targetBodyId: bodyId,
+          faceHash,
+          style: 'simple',
+          diameter: '6',
+          depthMode: 'through',
+          depth: '10',
+          counterboreDiameter: '11',
+          counterboreDepth: '3',
+          countersinkDiameter: '12',
+          countersinkAngleDeg: '90',
+          position: { u: '0', v: '0' }
+        }
+      }) as Parameters<typeof buildModelingOperationSubmission>[0];
+
+    // A face that reports an area centroid anchors the hole on it, so that
+    // (0, 0) means the middle of the face rather than its vertex mean.
+    const centred: BodyTopology = {
+      ...topology,
+      faces: [
+        {
+          ...topology.faces[0]!,
+          geometry: {
+            ...topology.faces[0]!.geometry!,
+            centroid: { x: 4, y: 9, z: 30 }
+          }
+        }
+      ]
+    };
+    expect(
+      buildModelingOperationSubmission(
+        holeState(42),
+        modelingFaceOptions(centred)
+      )
+    ).toMatchObject({
+      operation: 'hole',
+      input: { faceHash: 42, positionAnchor: 'centroid' }
+    });
+
+    // A face that cannot report one keeps the old anchor, and says so by
+    // leaving the marker off — the rebuild reads its absence, not its value.
+    const submission = buildModelingOperationSubmission(
+      holeState(42),
+      modelingFaceOptions(topology)
+    );
+    expect(submission.input).not.toHaveProperty('positionAnchor');
+  });
 });
