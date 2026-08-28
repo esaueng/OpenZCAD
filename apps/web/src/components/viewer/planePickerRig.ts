@@ -48,6 +48,11 @@ export interface PlanePickerRig {
    * gizmos use.
    */
   setScale(worldPerPixel: number): void;
+  /**
+   * Slides each quad along its own normal, so the ghost sits where the sketch
+   * it starts will actually land rather than always at the origin.
+   */
+  setOffset(offset: number): void;
   dispose(): void;
 }
 
@@ -62,6 +67,7 @@ export function buildPlanePickerRig(): PlanePickerRig {
   const meshes = new Map<PlaneId, THREE.Mesh>();
   const materials: THREE.MeshBasicMaterial[] = [];
   const edges: THREE.LineSegments[] = [];
+  const borderByPlane = new Map<PlaneId, THREE.LineSegments>();
 
   for (const plane of PLANE_PICKER_ORDER) {
     const material = new THREE.MeshBasicMaterial({
@@ -99,9 +105,33 @@ export function buildPlanePickerRig(): PlanePickerRig {
     border.renderOrder = VIEWPORT_RENDER_ORDER.SKETCH_CURVE;
     group.add(border);
     edges.push(border);
+    borderByPlane.set(plane, border);
   }
 
   let hovered: PlaneId | null = null;
+  let offsetDistance = 0;
+  // Normals match PLANE_EULER: XY faces +Z, XZ faces -Y, YZ faces +X.
+  const PLANE_NORMAL: Record<PlaneId, THREE.Vector3> = {
+    XY: new THREE.Vector3(0, 0, 1),
+    XZ: new THREE.Vector3(0, -1, 0),
+    YZ: new THREE.Vector3(1, 0, 0)
+  };
+
+  /**
+   * Places each quad at the current offset. The group carries the screen-size
+   * scale, so the world offset is divided back out of the child positions —
+   * and because that scale changes every frame, this has to re-run whenever
+   * either input moves, not once when the offset is set.
+   */
+  const applyOffset = () => {
+    const scale = group.scale.x || 1;
+    for (const [plane, mesh] of meshes) {
+      mesh.position
+        .copy(PLANE_NORMAL[plane])
+        .multiplyScalar(offsetDistance / scale);
+      borderByPlane.get(plane)?.position.copy(mesh.position);
+    }
+  };
 
   return {
     group,
@@ -116,11 +146,16 @@ export function buildPlanePickerRig(): PlanePickerRig {
         material.opacity = id === plane ? HOVER_OPACITY : IDLE_OPACITY;
       }
     },
+    setOffset(offset) {
+      offsetDistance = Number.isFinite(offset) ? offset : 0;
+      applyOffset();
+    },
     setScale(worldPerPixel) {
       // 220 CSS pixels across at any zoom: the quads stay a target, not a
       // backdrop that hides the part behind them.
       const size = Math.max(worldPerPixel * 220, BASE_HALF_EXTENT * 0.05);
       group.scale.setScalar(size);
+      applyOffset();
     },
     dispose() {
       geometry.dispose();

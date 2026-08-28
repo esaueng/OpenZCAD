@@ -201,6 +201,7 @@ interface ViewerShellProps {
   ): void;
   onHoverRegion(region: RegionPickData | null): void;
   planePickerArmed: boolean;
+  planePickerOffset: number;
   onPickPlane(plane: PlaneId): void;
   /** What measuring the hovered target would report; null when measure is off. */
   onMeasurePreview?:
@@ -308,6 +309,7 @@ export function ViewerShell({
   onSelectRegion,
   onHoverRegion,
   planePickerArmed,
+  planePickerOffset,
   onPickPlane,
   onMeasurePreview,
   regionHandle,
@@ -444,6 +446,7 @@ export function ViewerShell({
         onSelectRegion={onSelectRegion}
         onHoverRegion={onHoverRegion}
         planePickerArmed={planePickerArmed}
+        planePickerOffset={planePickerOffset}
         onPickPlane={onPickPlane}
         onMeasurePreview={onMeasurePreview}
         regionHandle={regionHandle}
