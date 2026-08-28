@@ -116,4 +116,70 @@ describe('TopologyPickList', () => {
     expect(onHover).toHaveBeenLastCalledWith(second);
     expect(onSelect).not.toHaveBeenCalled();
   });
+
+  /**
+   * The list is opened from the keyboard with Alt+ArrowDown, and it takes
+   * focus onto its first row. Closing it hides that row — and hiding the
+   * element that holds focus drops focus on the document body, which for a
+   * keyboard user means losing their place in the app. The canvas behind it
+   * is not focusable, so there is nothing for focus to fall back to.
+   */
+  it('gives focus back to whatever had it when a keyboard open closes', () => {
+    const { list } = setup();
+    const opener = document.createElement('button');
+    document.body.appendChild(opener);
+    opener.focus();
+    expect(document.activeElement).toBe(opener);
+
+    const first = candidate('edge-1', 4, 'edge');
+    const second = candidate('edge-2', 9, 'edge');
+    list.show(
+      [
+        { candidate: first, label: 'Part · Edge R4' },
+        { candidate: second, label: 'Part · Edge 2' }
+      ],
+      { clientX: 200, clientY: 220 },
+      true
+    );
+    expect(document.activeElement).not.toBe(opener);
+
+    list.hide();
+    expect(document.activeElement).toBe(opener);
+  });
+
+  it('leaves focus alone when it has already moved elsewhere', () => {
+    // Closing on an outside click while the user has tabbed away must not
+    // haul focus back out of wherever they went.
+    const { list } = setup();
+    const opener = document.createElement('button');
+    const elsewhere = document.createElement('button');
+    document.body.append(opener, elsewhere);
+    opener.focus();
+
+    list.show(
+      [{ candidate: candidate('edge-1', 4, 'edge'), label: 'Part · Edge R4' }],
+      { clientX: 200, clientY: 220 },
+      true
+    );
+    elsewhere.focus();
+    list.hide();
+
+    expect(document.activeElement).toBe(elsewhere);
+  });
+
+  it('moves focus nowhere when the list was opened by pointer', () => {
+    // A pointer open never took focus, so closing must not move it either.
+    const { list } = setup();
+    const opener = document.createElement('button');
+    document.body.appendChild(opener);
+    opener.focus();
+
+    list.show(
+      [{ candidate: candidate('edge-1', 4, 'edge'), label: 'Part · Edge R4' }],
+      { clientX: 200, clientY: 220 }
+    );
+    expect(document.activeElement).toBe(opener);
+    list.hide();
+    expect(document.activeElement).toBe(opener);
+  });
 });

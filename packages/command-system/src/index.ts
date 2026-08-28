@@ -298,8 +298,12 @@ function validateFeatureReorder(
   reordered.splice(payload.toIndex, 0, moved!);
 
   const featurePosition = new Map<string, number>();
+  const sketchProducerPosition = new Map<string, number>();
   reordered.forEach((feature, index) => {
     featurePosition.set(feature.featureId, index);
+    if (feature.data.featureKind === 'sketch') {
+      sketchProducerPosition.set(feature.data.sketchId, index);
+    }
   });
   const bodyProducerPosition = new Map<string, number>();
   for (const body of listNodesByKind(document, 'body')) {
@@ -333,8 +337,82 @@ function validateFeatureReorder(
           `Cannot reorder: "${feature.name}" would run before the feature it depends on.`
         );
       }
+      if ((sketchProducerPosition.get(id) ?? -1) > index) {
+        throw new Error(
+          `Cannot reorder: "${feature.name}" would run before the sketch it uses exists.`
+        );
+      }
     }
   });
+}
+
+/**
+ * Refuses an edit that points a feature at something later in its own history.
+ *
+ * `validateFeatureReorder` above already refuses the arrangement where a
+ * feature "would run before the body it uses exists" — but only when the
+ * arrangement is reached by dragging a row. An edit could reach the identical
+ * arrangement without moving anything, because every per-kind check below asks
+ * whether a referenced body EXISTS and never where it exists. The Inspector's
+ * body picker lists the whole of `bodyOrder`, so retargeting a Move to a
+ * cylinder added after it validated, committed, and synced.
+ *
+ * What that costs is silent: the replay is fail-soft per feature, so the
+ * feature is skipped behind one warning. A transform node carries no `bodyId`,
+ * so the sidebar's failed badge never lights up either — the row looks healthy
+ * while the body sits back at the origin. And the document is now in a state
+ * the reorder gate calls illegal, so unrelated drags start throwing too.
+ *
+ * Applied once, to the whole feature, rather than per kind: the reference set
+ * comes from `collectDataStrings`, so a kind that adds a field is covered by
+ * having added it.
+ */
+function validateFeatureHistoryPosition(
+  document: ProjectDocument,
+  featureId: string
+): void {
+  const ordered = listFeaturesInOrder(document);
+  const index = ordered.findIndex((entry) => entry.featureId === featureId);
+  const feature = ordered[index];
+  if (index === -1 || !feature) {
+    return;
+  }
+  const featurePosition = new Map<string, number>();
+  const sketchProducerPosition = new Map<string, number>();
+  ordered.forEach((entry, at) => {
+    featurePosition.set(entry.featureId, at);
+    if (entry.data.featureKind === 'sketch') {
+      sketchProducerPosition.set(entry.data.sketchId, at);
+    }
+  });
+  const bodyProducerPosition = new Map<string, number>();
+  for (const body of listNodesByKind(document, 'body')) {
+    const producer = featurePosition.get(body.featureId);
+    if (producer !== undefined) {
+      bodyProducerPosition.set(body.bodyId, producer);
+    }
+  }
+  const referenced = new Set<string>();
+  collectDataStrings(feature.data, referenced);
+  for (const id of referenced) {
+    // A body the feature produces itself resolves to its own position, which
+    // is not "later" — that is what keeps a split's second body legal here.
+    if ((bodyProducerPosition.get(id) ?? -1) > index) {
+      throw new Error(
+        `"${feature.name}" would run before the body it uses exists.`
+      );
+    }
+    if (id !== feature.featureId && (featurePosition.get(id) ?? -1) > index) {
+      throw new Error(
+        `"${feature.name}" would run before the feature it depends on.`
+      );
+    }
+    if ((sketchProducerPosition.get(id) ?? -1) > index) {
+      throw new Error(
+        `"${feature.name}" would run before the sketch it uses exists.`
+      );
+    }
+  }
 }
 
 function validateBodyTarget(document: ProjectDocument, bodyId: BodyId): void {
@@ -579,6 +657,7 @@ function validateModelingFeatureUpdate(
 ): void {
   const preview = updateFeature(document, input);
   const feature = findFeature(preview, input.featureId)!;
+  validateFeatureHistoryPosition(preview, input.featureId);
   switch (feature.data.featureKind) {
     case 'extrude':
       validateExtrudeInput(preview, {
