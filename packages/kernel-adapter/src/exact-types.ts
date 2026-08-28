@@ -11,6 +11,7 @@ import type {
   FaceTopologyReferenceV5,
   BodyTopology,
   EdgeReferenceRepair,
+  FeatureWarning,
   SketchId
 } from '@openzcad/shared';
 import type { TriangleMeshClosure } from './boolean-result-validation';
@@ -58,6 +59,13 @@ export interface ExactBuildResult {
    */
   partialRevolveBodies: Set<BodyId>;
   warnings: string[];
+  /**
+   * Who each loop-raised warning belongs to. The strings in `warnings` are
+   * prefixed by feature NAME, which repeats and which reads the same for a
+   * build failure and a deliberate suppression; this is what a commit gate
+   * must decide from instead.
+   */
+  featureWarnings?: FeatureWarning[];
   /**
    * Legacy hash-only edge modifiers whose rebuild proved a v5 reference for
    * every selected edge. Surfaced through DerivedState so the app can persist
