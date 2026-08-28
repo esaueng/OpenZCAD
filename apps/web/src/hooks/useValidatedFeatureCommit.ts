@@ -347,7 +347,11 @@ export function useValidatedFeatureCommit(
       for (const target of input.targets) {
         const rejection = validatedFeatureRejection({
           featureName: target.featureName,
+          ...(target.featureId ? { featureId: target.featureId } : {}),
           warnings: derived.warnings,
+          ...(derived.featureWarnings
+            ? { featureWarnings: derived.featureWarnings }
+            : {}),
           bodyPresent: Boolean(
             derived.bodyRepresentations[target.resultBodyId]
           ),
