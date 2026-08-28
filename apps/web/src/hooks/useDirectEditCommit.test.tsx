@@ -5,7 +5,9 @@ import {
   addPrimitiveFeature,
   createProjectDocument,
   filletEdges,
-  listFeaturesInOrder
+  listFeaturesInOrder,
+  renameNode,
+  setNodeMetadata
 } from '@openzcad/document-core';
 import {
   toUserId,
@@ -206,5 +208,89 @@ describe('direct manipulation commit', () => {
         String(message).includes('Fillet could not be created')
       )
     ).toEqual([]);
+  });
+
+  it('ignores an unrelated suppressed feature with the same name as a validation target', async () => {
+    const { sourceBodyId, sourceFeature, fillet, filletFeature } =
+      filletedCylinder();
+    let document = renameNode(fillet.document, {
+      nodeId: sourceFeature.id,
+      name: 'Shared name'
+    });
+    document = renameNode(document, {
+      nodeId: filletFeature.id,
+      name: 'Shared name'
+    });
+    document = setNodeMetadata(document, {
+      nodeId: filletFeature.id,
+      metadata: { suppressed: true }
+    });
+    const manager = new CommandManager(document);
+    const command = commandFactories.updateFeature(
+      {
+        featureId: sourceFeature.featureId,
+        data: { dimensions: { radius: 6.4 } }
+      },
+      'Resize Cylinder Radius'
+    );
+    const suppression =
+      'Feature "Shared name": Suppressed; skipped during exact rebuild.';
+    const onValidationFailed = vi.fn();
+    const { result } = renderHook(() =>
+      useDirectEditCommit({
+        manager: () => manager,
+        derive: async (
+          candidate: ProjectDocument
+        ): Promise<ProjectDocument['derived']> => ({
+          bodyRepresentations: {
+            [sourceBodyId]: body(sourceBodyId, 'Shared name')
+          },
+          exportableBodyIds: [sourceBodyId],
+          warnings: [suppression],
+          featureWarnings: [
+            {
+              featureId: filletFeature.featureId,
+              featureName: 'Shared name',
+              message: suppression,
+              kind: 'suppressed'
+            }
+          ],
+          updatedAt: candidate.derived.updatedAt
+        }),
+        commit: (candidate) => {
+          manager.execute(candidate);
+          return true;
+        },
+        onValidationStart: vi.fn(),
+        onValidationFailed,
+        onCommitted: vi.fn(),
+        onBusy: vi.fn(),
+        onStatus: vi.fn()
+      })
+    );
+
+    let applied = false;
+    await act(async () => {
+      applied = await result.current.run(
+        command,
+        sourceBodyId,
+        'Adjusted cylinder radius.',
+        6.4,
+        undefined,
+        [
+          {
+            featureName: 'Shared name',
+            featureId: sourceFeature.featureId,
+            resultBodyId: sourceBodyId
+          }
+        ]
+      );
+    });
+
+    expect(applied).toBe(true);
+    expect(onValidationFailed).not.toHaveBeenCalled();
+    expect(listFeaturesInOrder(manager.document)[0]!.data).toMatchObject({
+      dimensions: { radius: 6.4, height: 12 }
+    });
   });
 });
