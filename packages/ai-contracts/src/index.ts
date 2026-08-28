@@ -331,6 +331,8 @@ export interface CadDigestFaceSnapshot {
   surfaceType: string;
   area: number;
   center: Vector3;
+  /** Area centroid of a planar face — where `attachmentFrame` is anchored. */
+  centroid?: Vector3;
   normal?: Vector3;
   radius?: number;
   diameter?: number;
@@ -645,6 +647,7 @@ function compactFace(
         surfaceType: geometry.surfaceType,
         area: geometry.area,
         center: { ...geometry.center },
+        ...(geometry.centroid ? { centroid: { ...geometry.centroid } } : {}),
         ...(geometry.normal ? { normal: { ...geometry.normal } } : {}),
         ...(geometry.radius !== undefined ? { radius: geometry.radius } : {}),
         ...(geometry.diameter !== undefined
@@ -665,9 +668,15 @@ function compactFace(
         ...(geometry.featureType ? { featureType: geometry.featureType } : {})
       }
     : undefined;
+  // Anchored on the area centroid, matching what the app persists and what the
+  // rebuild re-derives; `center` is the vertex mean and only stands in for a
+  // face whose boundary the kernel could not walk.
   const attachmentFrame =
     reference && geometry?.surfaceType === 'plane' && geometry.normal
-      ? deterministicFaceFrame(geometry.center, geometry.normal)
+      ? deterministicFaceFrame(
+          geometry.centroid ?? geometry.center,
+          geometry.normal
+        )
       : null;
   return {
     topologyId: face.topologyId,
@@ -1379,6 +1388,7 @@ const facePlaneRefSchema = {
     faceReference: faceReferenceSchema,
     sourceArea: { type: 'number', minimum: 0 },
     sourceCenter: numberVectorSchema,
+    sourceCentroid: numberVectorSchema,
     sourceNormal: numberVectorSchema,
     frame: sketchFrameSchema
   },
@@ -3041,6 +3051,8 @@ export function parseCadPatchProposal(
           typeof planeRef.sourceArea !== 'number' ||
           planeRef.sourceArea <= 0 ||
           !isNumberVector(planeRef.sourceCenter) ||
+          (planeRef.sourceCentroid !== undefined &&
+            !isNumberVector(planeRef.sourceCentroid)) ||
           !isNumberVector(planeRef.sourceNormal) ||
           !isSketchFrame(planeRef.frame) ||
           !isSketchObjects(operation.objects)
@@ -3638,12 +3650,14 @@ export function validateCadPatchProposalAgainstDigest(
           canonicalJson([
             plane.sourceArea,
             plane.sourceCenter,
+            plane.sourceCentroid ?? null,
             plane.sourceNormal,
             plane.frame
           ]) !==
             canonicalJson([
               snapshot.area,
               snapshot.center,
+              snapshot.centroid ?? null,
               snapshot.normal,
               face.attachmentFrame
             ])
