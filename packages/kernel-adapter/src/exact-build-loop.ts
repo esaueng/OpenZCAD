@@ -7,7 +7,9 @@ import {
 }  from '@openzcad/document-core';
 import {
   isFeatureSuppressed,
+  type FeatureId,
   type FeatureNode,
+  type FeatureWarning,
   type ProjectDocument
 }  from '@openzcad/shared';
 import type {
@@ -112,9 +114,12 @@ export function buildDocumentHistory(
   for (let index = startIndex; index < features.length; index += 1) {
     const feature = features[index]!;
     if (isFeatureSuppressed(feature)) {
-      result.warnings.push(
-        `Feature "${feature.name}": Suppressed; skipped during exact rebuild.`
-      );
+      const message = `Feature "${feature.name}": Suppressed; skipped during exact rebuild.`;
+      result.warnings.push(message);
+      // Suppression is a status, not a failure. It reads identically to the
+      // catch below once it is a string, which is why the attribution has to
+      // be recorded rather than parsed back out.
+      attribute(result, feature, message, 'suppressed');
       onFeature?.(index, result);
       continue;
     }
@@ -123,9 +128,32 @@ export function buildDocumentHistory(
     } catch (error) {
       const reason =
         error instanceof Error ? error.message : 'exact geometry failed';
-      result.warnings.push(`Feature "${feature.name}": ${reason}`);
+      const message = `Feature "${feature.name}": ${reason}`;
+      result.warnings.push(message);
+      attribute(result, feature, message, 'build-failed');
     }
     onFeature?.(index, result);
   }
   return result;
+}
+
+/**
+ * Records who a loop-raised warning belongs to, alongside the string itself.
+ *
+ * The list is session-only — `attachDerivedState` strips it — so it never
+ * reaches a saved or replayed document, and nothing downstream may treat it
+ * as model state.
+ */
+function attribute(
+  result: { warnings: string[]; featureWarnings?: FeatureWarning[] },
+  feature: { featureId: FeatureId; name: string },
+  message: string,
+  kind: FeatureWarning['kind']
+): void {
+  (result.featureWarnings ??= []).push({
+    featureId: feature.featureId,
+    featureName: feature.name,
+    message,
+    kind
+  });
 }

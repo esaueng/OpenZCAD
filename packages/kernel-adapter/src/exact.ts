@@ -1339,6 +1339,9 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
         updatedAt: nowIso(),
         ...(build.referenceRepairs.length > 0
           ? { referenceRepairs: build.referenceRepairs }
+          : {}),
+        ...(build.featureWarnings?.length
+          ? { featureWarnings: build.featureWarnings }
           : {})
       };
     } catch (error) {
