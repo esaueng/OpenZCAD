@@ -5,6 +5,7 @@ import {
   useState,
   type ReactNode
 } from 'react';
+import { useMenuKeyboard } from '../lib/useMenuKeyboard';
 
 export interface ContextMenuItem {
   id: string;
@@ -40,6 +41,7 @@ interface ContextMenuProps {
 export function ContextMenu({ menu, onSelect, onClose }: ContextMenuProps) {
   const ref = useRef<HTMLDivElement | null>(null);
   const [position, setPosition] = useState({ x: menu.x, y: menu.y });
+  useMenuKeyboard(ref);
 
   // Keep the menu inside the window.
   useLayoutEffect(() => {
@@ -79,6 +81,7 @@ export function ContextMenu({ menu, onSelect, onClose }: ContextMenuProps) {
       ref={ref}
       className="context-menu"
       role="menu"
+      tabIndex={-1}
       style={{ left: position.x, top: position.y }}
     >
       {menu.items.map((item) => (

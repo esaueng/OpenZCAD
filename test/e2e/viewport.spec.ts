@@ -2199,6 +2199,69 @@ test('the frozen shadow map thaws for a moving body but not for the camera', asy
   await expect.poll(refreshes).toBeGreaterThan(moved);
 });
 
+/**
+ * The viewer's render loop is on demand: it schedules the next frame only
+ * while something is still moving. That economy is held up by a list of
+ * conditions, and any one of them stuck true pins the loop at full rate with
+ * nothing on screen to show for it — a retired selection highlight whose fade
+ * was killed by a rebuild did exactly that, and left its materials behind too.
+ * Nothing but the frame count can see it: the scene looks correct throughout.
+ */
+test('the render loop stops drawing once the scene is still', async ({
+  page
+}) => {
+  await stubApi(page);
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('Idle Loop');
+  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
+  await page
+    .getByRole('region', { name: 'Feature inspector' })
+    .getByRole('button', { name: /^Create/ })
+    .click();
+  await expect(page.getByRole('button', { name: /^Fillet/ })).toBeEnabled();
+
+  const canvas = page.locator('.viewer-host canvas');
+  const frames = async () =>
+    Number(
+      (await canvas.evaluate(
+        (element) => (element as HTMLElement).dataset.e2eFrames
+      )) ?? '0'
+    );
+
+  const bounds = await canvas.boundingBox();
+  if (!bounds) {
+    throw new Error('viewer canvas not laid out');
+  }
+  const centre = {
+    x: bounds.x + bounds.width / 2,
+    y: bounds.y + bounds.height / 2
+  };
+
+  // Select the body, then deselect it: the highlight that leaves is retired
+  // rather than deleted, and fades out over the following frames.
+  await page.mouse.click(centre.x, centre.y);
+  await page.mouse.click(bounds.x + 12, bounds.y + 12);
+
+  // Then a rebuild, which replaces the bodies and clears the fade set the
+  // retiring highlight was riding.
+  await page.keyboard.press('Control+z');
+  await page.keyboard.press('Control+Shift+z');
+
+  // Everything above settles well inside this; what matters is the count
+  // being equal across the second window, not what it reached.
+  await expect
+    .poll(
+      async () => {
+        const before = await frames();
+        await page.waitForTimeout(600);
+        return (await frames()) - before;
+      },
+      { timeout: 15_000 }
+    )
+    .toBe(0);
+});
+
 test('two fingers pan while a wheel notch still zooms', async ({ page }) => {
   await stubApi(page);
   await page.goto('/');

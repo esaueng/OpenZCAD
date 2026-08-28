@@ -551,9 +551,18 @@ export class SelectionManager {
     // Writing the same cursor every hover frame makes sweeping across a dense
     // edge set flicker between shapes, because each frame's pick can land on
     // a different side of a boundary. Only a real change is worth a write.
-    if (cursor !== this.lastCursor) {
+    //
+    // The canvas is checked as well as the cache, because this is not the only
+    // writer: the viewer sets `grab` over a move handle, and the gesture
+    // router saves and restores the cursor around a captured drag. Trusting
+    // the cache alone made it stale the moment either of those wrote, and the
+    // next hover that agreed with the stale value skipped its write — which is
+    // how a `grab` from a move gizmo survived the pointer moving off onto
+    // empty space, and stayed there offering to drag nothing.
+    const element = this.options.domElement;
+    if (cursor !== this.lastCursor || element.style.cursor !== cursor) {
       this.lastCursor = cursor;
-      this.options.domElement.style.cursor = cursor;
+      element.style.cursor = cursor;
     }
     const emissiveBodyId =
       candidate?.selection?.kind === 'body' ? bodyId : null;
@@ -588,6 +597,18 @@ export class SelectionManager {
         DEFAULT_FADE_TARGET;
       material.opacity = easeToward(material.opacity, target, dtMs);
       if (material.opacity === target) {
+        // A material faded back to full opacity goes back to the opaque pass
+        // once it settles: leaving `transparent` set keeps it in depth-sorted
+        // rendering and risks sorting artifacts. This lived in the viewer's
+        // own copy of this loop, which ran a second time on the same set in
+        // the same frame — so every fade played at double speed, and whether
+        // a material was ever restored to opaque came down to which of the
+        // two passes happened to land it on its target.
+        if (material.userData.restoreOpaque === true) {
+          material.transparent = false;
+          delete material.userData.restoreOpaque;
+          material.needsUpdate = true;
+        }
         this.fadeIns.delete(material);
       }
     }
