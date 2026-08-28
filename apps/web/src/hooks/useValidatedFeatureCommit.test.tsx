@@ -330,8 +330,51 @@ describe('validated STEP import', () => {
     ]);
     // An import has no feature form; its refusal must not land in whichever
     // inspector happens to be open.
-    expect(hostFailure).not.toHaveBeenCalled();
+    // Only ever the run-start clear — never a message. The refusal itself
+    // must not land in whatever feature form happens to be open.
+    expect(hostFailure).not.toHaveBeenCalledWith(expect.any(String));
     expect(onFailure).toHaveBeenCalledWith(DANGLING_REFERENCE_PARSE_ERROR);
+  });
+
+  it('clears the previous refusal when a new run starts', async () => {
+    // A refusal used to be written once and never cleared: no success path
+    // and no new attempt touched it, so the alert sat above whichever
+    // feature form the user opened next, blaming it for the last form's
+    // problem. Every run now opens by answering it.
+    const { manager, ids, command } = importProject();
+    const hostFailure = vi.fn();
+    const { result } = renderHook(() =>
+      useValidatedFeatureCommit({
+        manager: () => manager,
+        derive: async (
+          candidate: ProjectDocument
+        ): Promise<ProjectDocument['derived']> => ({
+          bodyRepresentations: {},
+          exportableBodyIds: [],
+          warnings: [`Feature "Frame": ${DANGLING_REFERENCE_PARSE_ERROR}`],
+          updatedAt: candidate.derived.updatedAt
+        }),
+        commit: () => true,
+        commitTransaction: () => true,
+        onBusy: vi.fn(),
+        onStatus: vi.fn(),
+        onFailure: hostFailure
+      })
+    );
+    await act(async () => {
+      await result.current.run(command, {
+        featureName: 'Frame',
+        resultBodyId: ids.bodyId,
+        successMessage: () => 'unreachable'
+      });
+    });
+    // The clear comes first, before any verdict. With no per-run sink the
+    // refusal then lands here too, replacing the clear rather than merely
+    // following an unanswered one.
+    expect(hostFailure.mock.calls[0]).toEqual([null]);
+    expect(hostFailure).toHaveBeenLastCalledWith(
+      DANGLING_REFERENCE_PARSE_ERROR
+    );
   });
 
   it('commits one history entry with its body and reports success only after it exists', async () => {
@@ -1839,7 +1882,9 @@ describe('the import orchestration, run rather than read', () => {
       });
     });
 
-    expect(hostFailure).not.toHaveBeenCalled();
+    // Only ever the run-start clear — never a message. The refusal itself
+    // must not land in whatever feature form happens to be open.
+    expect(hostFailure).not.toHaveBeenCalledWith(expect.any(String));
   });
 
   it('does not turn a failed cleanup into a second verdict on the import', async () => {

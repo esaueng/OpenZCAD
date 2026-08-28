@@ -1357,6 +1357,12 @@ export function App() {
     useState<SelectionFilter | null>(null);
   // Viewport body selection in pick order; drives boolean/move pre-fills.
   const [selectedBodyIds, setSelectedBodyIds] = useState<BodyId[]>([]);
+  // For readers that outlive the render that captured them — a context-menu
+  // action runs from a closure built when the menu opened, in the same event
+  // that changed the selection, so the state variable is always one commit
+  // behind there.
+  const selectedBodyIdsRef = useRef(selectedBodyIds);
+  selectedBodyIdsRef.current = selectedBodyIds;
   const [selectedSketchProfileId, setSelectedSketchProfileId] =
     useState<SketchId | null>(null);
   const [selectedProfiles, setSelectedProfiles] = useState<RegionPickData[]>(
@@ -2661,7 +2667,25 @@ export function App() {
       await saveLocalProject(remote);
       await saveLastSyncedVersion(remote.projectId, remote.version);
       remoteVersionsRef.current.set(remote.projectId, remote.version);
+      // Checked AGAIN after the two IndexedDB transactions above, the same
+      // way `acceptAccountDocument` re-checks after its own. An edit or a
+      // project switch can land inside those awaits, and the hydrate below
+      // replaces the manager outright — with an edit in flight that is not a
+      // refresh, it is the edit silently gone. The baseline stays adopted
+      // either way: it is durable now, and the controller must agree with it
+      // even when the swap is abandoned, or the next push is fenced against
+      // a version the account no longer holds.
       controller.adoptAccountVersion(remote.projectId, remote.version);
+      const stillLive = managerRef.current?.document;
+      if (
+        cancelled ||
+        !stillLive ||
+        stillLive.projectId !== remote.projectId ||
+        stillLive.version !== current.version ||
+        controller.hasPendingChanges
+      ) {
+        return;
+      }
       hydrateDocument(remote);
       setStatus(`Updated to the version saved on another device.`);
     }
@@ -4546,10 +4570,16 @@ export function App() {
       return;
     }
     setFeatureFormError(null);
+    // Through the ref, not the render's variable: this function is invoked
+    // from context-menu closures captured when the menu opened — in the same
+    // pointer event that changed the selection and armed a handle — so the
+    // captured `interaction` predates both. Reading it live is what lets the
+    // disarm below actually fire for the handle the right-click just armed.
+    const liveInteraction = interactionRef.current;
     // A toolbar command owns the next gesture. Preserve the body selection
     // that pre-fills Move/boolean forms, but disarm any selection-first face or
     // edge handle so two manipulators can never claim the same pointer.
-    if (interaction.mode !== 'idle') {
+    if (liveInteraction.mode !== 'idle') {
       cancelDirectManipulationRef.current?.();
       cylinderRadiusPreview.clear();
       edgePreview.clear();
@@ -4565,8 +4595,8 @@ export function App() {
     if (nextTool === 'extrude') {
       const sketchId =
         (selectedProfiles[0]?.sketchId as SketchId | undefined) ??
-        (interaction.mode === 'sketch' && interaction.session.sketchId
-          ? (interaction.session.sketchId as SketchId)
+        (liveInteraction.mode === 'sketch' && liveInteraction.session.sketchId
+          ? (liveInteraction.session.sketchId as SketchId)
           : null) ??
         selectedSketchProfileId ??
         selectedSketch?.sketchId ??
@@ -4610,7 +4640,9 @@ export function App() {
       // — the one you most likely just made — and changing which body an
       // unselected Move lands on would silently rewrite existing flows.
       const targetBodyId =
-        selectedBodyIds.at(-1) ?? viewerBodies.at(-1)?.bodyId ?? null;
+        selectedBodyIdsRef.current.at(-1) ??
+        viewerBodies.at(-1)?.bodyId ??
+        null;
       if (targetBodyId) {
         setMoveName('Move');
         setSelectedBodyIds([targetBodyId]);
@@ -7298,7 +7330,15 @@ export function App() {
         editDisabledReasonRef.current ?? 'Project editing is unavailable.'
       );
     }
-    return archiveArtifactBody(api, doc.projectId, input, (artifact) => {
+    const owner = doc.projectId;
+    return archiveArtifactBody(api, owner, input, (artifact) => {
+      // The upload can outlive the project it archived for. The artifacts
+      // list is keyed to the OPEN project — the effect that fills it clears
+      // it on every switch — so a late-finishing archive must not prepend
+      // its record into whichever project's File menu is now showing.
+      if (managerRef.current?.document.projectId !== owner) {
+        return;
+      }
       setArtifacts((current) => [
         artifact,
         ...current.filter(
@@ -7313,6 +7353,11 @@ export function App() {
     if (!managerRef.current || !doc || !ensureCanEdit('import geometry')) {
       return;
     }
+    // The manager this import belongs to, by identity rather than by project
+    // id: reopening the same project replaces the manager too, and a mesh
+    // built against the document that was on screen does not belong in the
+    // one that replaced it.
+    const importManager = managerRef.current;
     const contentType = file.type || inferContentType(file.name);
     const lowerName = file.name.toLowerCase();
 
@@ -7366,6 +7411,17 @@ export function App() {
         // Continue with the local import.
       }
 
+      // Between the entry check and here are two awaits, the second an
+      // upload of up to 128 MB. This path shows no busy state and no import
+      // card, so Home and the project shelf stay live throughout — and the
+      // vertices were already scaled by the units of the document that was
+      // open when the file was read, so landing them anywhere else is both
+      // the wrong project and the wrong size. The STEP path is guarded by
+      // `useValidatedFeatureCommit`; this one had nothing.
+      if (managerRef.current !== importManager) {
+        setStatus('The project changed while the import finished.');
+        return;
+      }
       const created = executeCommand(
         commandFactories.importMesh({
           name: parsed.name,
@@ -7828,6 +7884,10 @@ export function App() {
         contentType: info.contentType,
         kind: info.kind,
         body,
+        // The dialog's Cancel is already honoured by the two awaits above;
+        // without it here the archive kept uploading the file the user had
+        // just stopped exporting, and finalized it into the File menu.
+        ...(options?.signal ? { signal: options.signal } : {}),
         metadata: {
           bodyIds: exportBodyIds.join(','),
           documentVersion: doc.version,
@@ -8253,7 +8313,15 @@ export function App() {
             : {})
       };
       dispatchInteraction({ type: 'select-face', target });
-    } else if (interaction.mode !== 'idle' && interaction.mode !== 'sketch') {
+    } else if (
+      interaction.mode !== 'idle' &&
+      interaction.mode !== 'sketch' &&
+      // An edge pick with the machine already holding edges is the additive
+      // case the reducer was written for. Clearing first reset its list to
+      // one on every shift-click, so `selectedEdges` grew to N while the
+      // machine armed its fillet handle for a single edge.
+      !(selection.kind === 'edge' && interaction.mode === 'edges')
+    ) {
       dispatchInteraction({ type: 'clear' });
     }
     if (selection.kind === 'edge') {
@@ -8908,11 +8976,32 @@ export function App() {
       return;
     }
     setSketchSolving(true);
+    const base = doc;
+    const startedSketchId = editingSketchNode.sketchId;
     try {
       const outcome = await geometry.solveSketch(
         doc,
         editingSketchNode.sketchId
       );
+      // The solve ran in the worker against a snapshot, behind a kernel load
+      // that can take seconds. The commands below are built from the document
+      // captured BEFORE the await and applied to the live one — so anything
+      // that moved in between (an entity deleted mid-solve, the sketch
+      // closed, another project opened) turns "apply the solved positions"
+      // into writes against objects that are gone. Refuse rather than guess;
+      // Solve is one click away.
+      const live = managerRef.current?.document;
+      const session = interactionRef.current;
+      if (
+        !live ||
+        live.projectId !== base.projectId ||
+        live.version !== base.version ||
+        session.mode !== 'sketch' ||
+        session.session.sketchId !== startedSketchId
+      ) {
+        setStatus('The sketch changed while the solver ran. Solve again.');
+        return;
+      }
       setSketchSolveStatus({
         label: solveStatusLabel(outcome),
         tone:
@@ -9074,6 +9163,15 @@ export function App() {
         const view = sketchViews.find(
           (candidate) => candidate.sketchId === selected.sketchId
         );
+        if (!view) {
+          // Absence is not deletion. A face-attached sketch drops out of
+          // `sketchViews` transiently whenever its plane cannot be resolved —
+          // which is every rebuild that momentarily has no representation for
+          // the face's body. Dropping the selection here dissolved the user's
+          // profile pick mid-rebuild; keeping it means the remap below runs
+          // when the view comes back.
+          return [selected];
+        }
         const sourceMatches =
           view?.regions.filter(
             (candidate) =>
@@ -10625,7 +10723,12 @@ export function App() {
         area: region.area
       }));
       setSelectedProfiles(highlighted);
-      if (perReference.some((regions) => regions.length === 0)) {
+      // Only with a rendered view to resolve against. A consumed sketch is
+      // hidden by default, and a face-attached one drops out of `sketchViews`
+      // during any rebuild that momentarily cannot resolve its plane — which
+      // made clicking a healthy extrude in the tree announce a broken
+      // reference every time. No view means nothing to accuse, not evidence.
+      if (view && perReference.some((regions) => regions.length === 0)) {
         setStatus(
           'Broken profile reference — edit the source sketch or reselect the extrusion profiles.'
         );
@@ -13530,7 +13633,14 @@ export function App() {
               }}
             />
           )}
-          {accountConflict && (
+          {/* Only for the project on screen. A conflict is raised by async
+              work — a failed push, a freshness poll — that can land after the
+              user has moved to another project, and the dialog's actions
+              hydrate and re-point the autosave controller. Showing project A's
+              conflict over project B lets one click resolve the wrong
+              document. The state is kept, not cleared: reopening A still owes
+              the user the dialog. */}
+          {accountConflict && accountConflict.projectId === doc.projectId && (
             <ProjectConflictDialog
               conflict={accountConflict}
               busy={busy}
