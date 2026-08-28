@@ -8,6 +8,7 @@ import {
 import {
   createProjectDocument,
   getLatestBodyId,
+  listFeaturesInOrder,
   getLatestSketchId,
   getParameterScope,
   normalizeDocument
@@ -1571,5 +1572,65 @@ describe('command-system', () => {
     expect(
       replayedSketch?.kind === 'sketch' ? replayedSketch.constraints : undefined
     ).toHaveLength(0);
+  });
+});
+
+describe('a command that changes nothing', () => {
+  it('does not bump the version, append a revision, or burn an undo slot', () => {
+    // `runTransaction` and `applyDocumentEdit` both refused a no-op; `execute`
+    // did not. `moveFeature` returns its input for an out-of-range index, which
+    // is what ArrowUp on the first row produces — so holding the key appended a
+    // "Reorder" revision, pushed a dead undo entry, and (because the version is
+    // part of the geometry sync key) posted a full WASM rebuild, per press.
+    // About a hundred of them evicted the user's real undo history.
+    const manager = new CommandManager(
+      createProjectDocument('No-op', toUserId('user_noop'))
+    );
+    const box = manager.execute(
+      commandFactories.addPrimitive({
+        name: 'Box',
+        primitiveKind: 'box',
+        dimensions: { width: 1, height: 1, depth: 1 }
+      })
+    );
+    const featureId = listFeaturesInOrder(box)[0]!.featureId;
+    const before = {
+      version: manager.document.version,
+      revisions: manager.document.revisions.length,
+      commandLog: manager.document.commandLog.length,
+      canUndo: manager.canUndo
+    };
+
+    const after = manager.execute(
+      commandFactories.moveFeature({ featureId, toIndex: -1 })
+    );
+
+    expect(after).toBe(box);
+    expect(manager.document.version).toBe(before.version);
+    expect(manager.document.revisions).toHaveLength(before.revisions);
+    expect(manager.document.commandLog).toHaveLength(before.commandLog);
+    expect(manager.canUndo).toBe(before.canUndo);
+  });
+
+  it('still undoes the real edit that preceded it', () => {
+    // The point of the guard: the undo stack keeps pointing at the user's own
+    // work rather than at a stack of dead reorders.
+    const manager = new CommandManager(
+      createProjectDocument('No-op', toUserId('user_noop'))
+    );
+    manager.execute(
+      commandFactories.addPrimitive({
+        name: 'Box',
+        primitiveKind: 'box',
+        dimensions: { width: 1, height: 1, depth: 1 }
+      })
+    );
+    const featureId = listFeaturesInOrder(manager.document)[0]!.featureId;
+    for (let press = 0; press < 20; press += 1) {
+      manager.execute(commandFactories.moveFeature({ featureId, toIndex: -1 }));
+    }
+
+    const undone = manager.undo();
+    expect(listFeaturesInOrder(undone)).toHaveLength(0);
   });
 });
