@@ -93,7 +93,11 @@ export function faceAttachmentCandidatesForShape(
       const plane =
         geometry?.surfaceType.toLowerCase() === 'plane' &&
         geometry.normal !== undefined
-          ? { center: geometry.center, normal: geometry.normal }
+          ? {
+              center: geometry.center,
+              centroid: geometry.centroid ?? null,
+              normal: geometry.normal
+            }
           : null;
       return {
         kind: 'face' as const,

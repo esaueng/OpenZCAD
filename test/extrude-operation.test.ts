@@ -19,8 +19,34 @@ import {
   classifyExtrudeOperation,
   type ExtrudeInferenceBody
 } from '@openzcad/kernel-adapter';
-import { toBodyId, toUserId, type ProjectDocument } from '@openzcad/shared';
+import {
+  toBodyId,
+  toUserId,
+  type BodyId,
+  type FaceTopology,
+  type ProjectDocument,
+  type SketchPlaneRef
+} from '@openzcad/shared';
 import { resolveExtrudeOperation } from '../apps/web/src/lib/extrudeInference';
+import { faceSketchAttachment } from '../apps/web/src/lib/faceSketchAttachment';
+
+/**
+ * The plane ref the workspace itself would persist for a picked face, so these
+ * tests inherit the app's anchor rather than restating one. In particular the
+ * origin lands on the face's area centroid, which on a round face is a whole
+ * radius away from the vertex mean `geometry.center` reports.
+ */
+function planeRefForFace(bodyId: BodyId, face: FaceTopology): SketchPlaneRef {
+  const attachment = faceSketchAttachment({
+    bodyId,
+    pickedHash: face.hash,
+    face
+  });
+  if (!attachment.ok) {
+    throw new Error(`Face is not sketchable: ${attachment.reason}`);
+  }
+  return attachment.planeRef;
+}
 
 function inferenceBody(
   id: string,
@@ -517,28 +543,11 @@ describe('stored extrude operations', { timeout: 30_000 }, () => {
     ]!.topology!.faces.find(
       (face) => face.reference?.lineageName === 'primitive.box.face.z-max'
     )!;
-    const geometry = topFace.geometry!;
     const { document: withSketch, sketchId } = addSketchFeature(
       { ...base, derived: baseDerived },
       {
         name: 'Boss profile',
-        planeRef: {
-          type: 'face',
-          bodyId: targetBodyId,
-          faceHash: topFace.hash,
-          // The app always carries the v5 lineage reference; without it the
-          // rebuild falls back to the stored migration frame and warns.
-          ...(topFace.reference ? { faceReference: topFace.reference } : {}),
-          sourceArea: geometry.area,
-          sourceCenter: geometry.center,
-          sourceNormal: geometry.normal!,
-          frame: {
-            origin: { ...geometry.center },
-            xAxis: { x: 1, y: 0, z: 0 },
-            yAxis: { x: 0, y: 1, z: 0 },
-            zAxis: { ...geometry.normal! }
-          }
-        },
+        planeRef: planeRefForFace(targetBodyId, topFace),
         objects: [
           {
             objectKind: 'circle',
@@ -603,28 +612,20 @@ describe('stored extrude operations', { timeout: 30_000 }, () => {
         ? face
         : best
     );
-    const geometry = topFace.geometry!;
+    const planeRef = planeRefForFace(targetBodyId, topFace);
+    // The disc's own centre, not the rim point `geometry.center` reports:
+    // that one is the cap's single seam vertex, a full radius off the axis.
+    const rim = topFace.geometry!.center;
+    expect(Math.hypot(rim.x, rim.y)).toBeCloseTo(10, 9);
+    const origin = (planeRef as Extract<SketchPlaneRef, { type: 'face' }>)
+      .frame.origin;
+    expect(Math.hypot(origin.x, origin.y)).toBeLessThan(1e-9);
+    expect(origin.z).toBe(18);
     const { document: withSketch, sketchId } = addSketchFeature(
       { ...baseExtrude.document, derived: targetDerived },
       {
         name: 'Boss profile',
-        planeRef: {
-          type: 'face',
-          bodyId: targetBodyId,
-          faceHash: topFace.hash,
-          ...(topFace.reference ? { faceReference: topFace.reference } : {}),
-          sourceArea: geometry.area,
-          sourceCenter: geometry.center,
-          sourceNormal: geometry.normal!,
-          frame: {
-            // The disc's true centre. `geometry.center` is the surface's
-            // reference point and sits on the rim of a round face.
-            origin: { x: 0, y: 0, z: geometry.center.z },
-            xAxis: { x: 1, y: 0, z: 0 },
-            yAxis: { x: 0, y: 1, z: 0 },
-            zAxis: { ...geometry.normal! }
-          }
-        },
+        planeRef,
         objects: [
           { objectKind: 'circle', radius: 3, centerX: 0, centerY: 0 }
         ]
@@ -657,15 +658,7 @@ describe('stored extrude operations', { timeout: 30_000 }, () => {
    * near an edge, and the one that first exposed the silent new-body
    * fallback in the workspace.
    */
-  // KNOWN DEFECT, kept as an expected failure so it is tracked rather than
-  // forgotten. A face sketch's basis resolves its origin from the face's
-  // surface reference point, and on a round face that point sits on the rim,
-  // not the centre. Profile coordinates are therefore offset by the rim
-  // distance: the circle below is authored at (9, 0) and lands at (9, 10),
-  // clear of the body, so the add is correctly refused for geometry the user
-  // never asked for. The union logic itself is fine — the two tests above
-  // pass. Same `geometry.center` trap as the sketch-entry framing fix.
-  it.fails('joins a boss whose profile overhangs the face rim', async () => {
+  it('joins a boss whose profile overhangs the face rim', async () => {
     let base = createProjectDocument(
       'Overhanging boss',
       toUserId('user_overhanging_boss')
@@ -690,28 +683,11 @@ describe('stored extrude operations', { timeout: 30_000 }, () => {
           ? face
           : best
       );
-    const geometry = topFace.geometry!;
     const { document: withSketch, sketchId } = addSketchFeature(
       { ...baseExtrude.document, derived: targetDerived },
       {
         name: 'Boss profile',
-        planeRef: {
-          type: 'face',
-          bodyId: targetBodyId,
-          faceHash: topFace.hash,
-          ...(topFace.reference ? { faceReference: topFace.reference } : {}),
-          sourceArea: geometry.area,
-          sourceCenter: { x: 0, y: 0, z: geometry.center.z },
-          sourceNormal: geometry.normal!,
-          frame: {
-            // The disc's true centre, so the profile below is placed
-            // relative to the face rather than to a rim reference point.
-            origin: { x: 0, y: 0, z: geometry.center.z },
-            xAxis: { x: 1, y: 0, z: 0 },
-            yAxis: { x: 0, y: 1, z: 0 },
-            zAxis: { ...geometry.normal! }
-          }
-        },
+        planeRef: planeRefForFace(targetBodyId, topFace),
         // Centre 9 from the axis with radius 4 on a radius-10 face: it
         // reaches 13, well past the rim.
         objects: [

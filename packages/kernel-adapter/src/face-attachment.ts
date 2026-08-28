@@ -14,6 +14,8 @@ const VECTOR_EPSILON = 1e-12;
 
 export interface ExactPlanarFaceAttachmentData {
   readonly center: Vector3;
+  /** Area centroid; null when the face's boundary could not be walked. */
+  readonly centroid: Vector3 | null;
   readonly normal: Vector3;
 }
 
@@ -36,6 +38,12 @@ export interface FaceAttachmentCandidate extends FaceTopologyResolutionCandidate
 export interface FaceAttachmentSnapshot {
   readonly sourceArea: number;
   readonly sourceCenter: Vector3;
+  /**
+   * Present only for sketches placed on the face's area centroid. Its presence
+   * — not its value — selects which point the rebuilt frame is anchored on;
+   * see `SketchPlaneRef`'s face variant.
+   */
+  readonly sourceCentroid?: Vector3;
   readonly sourceNormal: Vector3;
   readonly frame: SketchPlaneFrame;
 }
@@ -70,6 +78,9 @@ function snapshotDiagnostic(snapshot: FaceAttachmentSnapshot): string {
   const vector = (value: Vector3) => `(${value.x}, ${value.y}, ${value.z})`;
   return (
     `Stored snapshot: area ${snapshot.sourceArea}, center ${vector(snapshot.sourceCenter)}, ` +
+    (snapshot.sourceCentroid
+      ? `centroid ${vector(snapshot.sourceCentroid)}, `
+      : '') +
     `normal ${vector(snapshot.sourceNormal)}. The snapshot orients a resolved frame and was not used to resolve a face.`
   );
 }
@@ -216,17 +227,20 @@ function worldHelperAxis(zAxis: Vector3): Vector3 | null {
  * rule stays underneath for the degenerate cases and for a caller with no seed.
  *
  * Still deterministic, which is what the name promises and what replay needs:
- * the result is a pure function of the resolved center, the resolved normal and
+ * the result is a pure function of the resolved origin, the resolved normal and
  * the persisted frame, all of which live in the document. And it cannot drift,
  * because every rebuild seeds from that same stored snapshot rather than from
  * the previous rebuild's output.
+ *
+ * `origin` is the caller's choice of anchor on the resolved face, not a degree
+ * of freedom this function resolves: see `resolveFaceAttachment`.
  */
 function deterministicFrame(
-  center: Vector3,
+  origin: Vector3,
   rawNormal: Vector3,
   seed?: SketchPlaneFrame
 ): SketchPlaneFrame | null {
-  if (!finiteVector(center)) {
+  if (!finiteVector(origin)) {
     return null;
   }
   const canonical = canonicalNormal(rawNormal);
@@ -260,7 +274,7 @@ function deterministicFrame(
     return null;
   }
   return {
-    origin: { ...center },
+    origin: { ...origin },
     xAxis: cleaned(xAxis),
     yAxis: cleaned(yAxis),
     zAxis
@@ -314,8 +328,21 @@ export function resolveFaceAttachment(
       'the attached face is no longer an exact planar face.'
     );
   }
+  // A centroid-anchored sketch fails closed rather than quietly re-anchoring
+  // on the vertex mean: the two points are a whole radius apart on a round
+  // face, so the silent fallback would move the sketch's geometry.
+  if (input.snapshot.sourceCentroid && !candidate.plane.centroid) {
+    throw failure(
+      input,
+      'invalid',
+      'the attached face no longer reports an area centroid, and this sketch is placed on one.'
+    );
+  }
+  const anchor = input.snapshot.sourceCentroid
+    ? candidate.plane.centroid!
+    : candidate.plane.center;
   const frame = deterministicFrame(
-    candidate.plane.center,
+    anchor,
     candidate.plane.normal,
     input.snapshot.frame
   );
