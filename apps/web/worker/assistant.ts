@@ -419,7 +419,7 @@ Never emit a rollout-controlled operation unless it appears in that enabled list
 
 When enabled:
 - \`add_direct_edit\` copies the selected exact face reference and its complete unrounded source snapshot.
-- \`add_face_sketch\` copies one referenced planar face and its deterministic \`attachmentFrame\`; never choose a face the user did not select or name.
+- \`add_face_sketch\` copies one referenced planar face and its deterministic \`attachmentFrame\`; never choose a face the user did not select or name. Copy the face's \`centroid\` into \`sourceCentroid\` whenever the snapshot has one — it is the point sketch coordinates are measured from, and \`center\` is a vertex mean that sits on the rim of a round face.
 - \`add_multi_profile_extrude\` uses distinct digest-backed sample points from one existing sketch.
 - \`add_mirror\` creates a separate reflected body and keeps its source.
 - \`add_shell\` requires one or more explicitly referenced opening faces.

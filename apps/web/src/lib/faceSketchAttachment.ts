@@ -74,7 +74,15 @@ export function faceSketchAttachment(input: {
 
   const center = cloneVector(geometry.center);
   const normal = cloneVector(geometry.normal);
-  const frame = frameFromFace(center, normal);
+  // The sketch is placed on the middle of the face, which is its area centroid
+  // and not `center` — that one is the mean of the face's vertices, and on a
+  // round face its single seam vertex puts it on the rim. A face whose boundary
+  // could not be walked has no centroid to offer and keeps the old anchor,
+  // which the absent `sourceCentroid` then tells the rebuild to reuse.
+  const centroid = finiteVector(geometry.centroid)
+    ? cloneVector(geometry.centroid)
+    : null;
+  const frame = frameFromFace(centroid ?? center, normal);
   return {
     ok: true,
     planeRef: {
@@ -84,6 +92,7 @@ export function faceSketchAttachment(input: {
       faceReference: reference,
       sourceArea: geometry.area,
       sourceCenter: center,
+      ...(centroid ? { sourceCentroid: centroid } : {}),
       sourceNormal: normal,
       frame: {
         origin: cloneVector(frame.origin),
