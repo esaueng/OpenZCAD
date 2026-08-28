@@ -12,6 +12,7 @@ import {
   measurementsToText,
   MEASUREMENT_LIMIT,
   refreshMeasurements,
+  unitLabel,
   type Measurement,
   type MeasurementDisplayOptions
 } from '../apps/web/src/lib/measurements';
@@ -204,6 +205,12 @@ describe('measurement workbench records', () => {
         .value
     ).toBe('1.000 in');
     expect(measurement.result.value).toBe(25.4);
+  });
+
+  it('uses display abbreviations for every inch dimension label', () => {
+    expect(unitLabel('length', 'inch')).toBe('in');
+    expect(unitLabel('area', 'inch')).toBe('in²');
+    expect(unitLabel('volume', 'inch')).toBe('in³');
   });
 
   it('copies formatted rows with provenance and status', () => {

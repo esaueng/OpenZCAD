@@ -1,4 +1,5 @@
 import {
+  MAX_CHECKPOINT_REASON_LENGTH,
   createId,
   deepClone,
   featureColor,
@@ -2899,6 +2900,17 @@ export function appendRevision(
   document: ProjectDocument,
   reason: string
 ): ProjectDocument {
+  // Clamped because the label is user text: command labels interpolate names
+  // (`Edit ${value.name}`, `Rename to ${payload.name}`), and a long enough one
+  // pushed the revision past the 500-character bound the account enforces on
+  // every write. The rejection is a 400 that no retry can fix, the client maps
+  // an unrecognised failure to `offline`, and so a permanently unsaveable
+  // document presented as a network problem — while `normalizeDocument` quietly
+  // dropped the offending revision on reload, taking that save point with it.
+  const bounded =
+    reason.length > MAX_CHECKPOINT_REASON_LENGTH
+      ? `${reason.slice(0, MAX_CHECKPOINT_REASON_LENGTH - 1)}…`
+      : reason;
   // Shallow copy is sufficient: only `revisions` and `version` change, and the
   // shared sub-objects are never mutated in place (see module invariant).
   return {
@@ -2910,7 +2922,7 @@ export function appendRevision(
       {
         revisionId: toRevisionId(createId('rev')),
         createdAt: nowIso(),
-        reason,
+        reason: bounded,
         commandCount: document.commandLog.length
       }
     ].slice(-MAX_PROJECT_REVISION_RECORDS),

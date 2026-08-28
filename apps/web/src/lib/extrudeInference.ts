@@ -25,15 +25,15 @@ export interface ResolveExtrudeOptions {
   input: ExtrudeInput;
   derive(document: ProjectDocument): Promise<DerivedState>;
   /**
-   * For a sketch attached to a body's face whose extrusion runs into that
-   * body (negative distance along the face's outward normal). Direction
-   * carries the user's intent where volume measurement alone is ambiguous:
-   * a profile overhanging the rim dragged inward partially overlaps — which
-   * reads as "add" — but the gesture means cut. (The mirror case, joining a
-   * boss grown off a face, is blocked at the document layer: a stored add
-   * with zero shared volume is refused by the exact rebuild.)
+   * For a sketch attached to a body's face: which body, and which way the
+   * extrusion runs along that face's outward normal. Direction carries the
+   * user's intent where volume measurement alone cannot. Into the body, a
+   * profile overhanging the rim only partially overlaps — which measures as
+   * "add" — but the gesture means cut. Away from it, a boss meets its target
+   * exactly at the sketched face and shares no volume at all, so the
+   * measurement says new-body while the gesture means join.
    */
-  faceAttachment?: { bodyId: BodyId; direction: 'into' };
+  faceAttachment?: { bodyId: BodyId; direction: 'into' | 'away' };
 }
 
 function withOperation(
@@ -172,12 +172,32 @@ export async function resolveExtrudeOperation(
     liveTargets.length
   );
   const attachment = options.faceAttachment;
-  if (
-    attachment &&
-    inference.operation === 'add' &&
-    inference.targetBodyId === attachment.bodyId
-  ) {
-    inference = { ...inference, operation: 'cut', reason: 'into-face-body' };
+  if (attachment?.direction === 'into') {
+    if (
+      inference.operation === 'add' &&
+      inference.targetBodyId === attachment.bodyId
+    ) {
+      inference = { ...inference, operation: 'cut', reason: 'into-face-body' };
+    }
+  } else if (attachment?.direction === 'away') {
+    // A boss touching only at the sketched face never reaches the candidate
+    // list — tangency fails the bounds test — so the target is taken from the
+    // live bodies directly. The exact rebuild still has the final say: it
+    // refuses an add whose operands do not even touch.
+    if (inference.operation === 'new-body' && inference.reason === 'no-overlap') {
+      const target = liveTargets.find(
+        (candidate) => candidate.bodyId === attachment.bodyId
+      );
+      if (target) {
+        inference = {
+          ...inference,
+          operation: 'add',
+          targetBodyId: target.bodyId,
+          targetBodyName: target.name,
+          reason: 'onto-face-body'
+        };
+      }
+    }
   }
   if (inference.operation === 'new-body') {
     return {
