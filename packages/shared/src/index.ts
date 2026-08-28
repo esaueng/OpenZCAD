@@ -1721,7 +1721,26 @@ export interface FeatureWarning {
   featureName: string;
   /** The full warning text, exactly as it appears in `warnings`. */
   message: string;
-  kind: 'build-failed' | 'suppressed';
+  /**
+   * What the warning means for the operation that raised it.
+   *
+   * - `build-failed`: the builder threw and produced no shape at all.
+   * - `refusal`: a shape WAS produced, and it is the wrong one. A union that
+   *   silently dropped an operand, or came back open and non-manifold, still
+   *   yields a solid — it just is not the solid the user asked for, and the
+   *   product has always refused to commit those.
+   * - `advisory`: the result is real and usable, just approximate. Curves that
+   *   came back faceted, a pattern whose overlapping instances did not merge.
+   *   The user asked for this and got it; refusing would destroy work that
+   *   succeeded.
+   * - `suppressed`: a status. The feature was deliberately skipped.
+   *
+   * Only the first two refuse a commit. The distinction is NOT derivable from
+   * whether a shape was produced — the gate rebuilds a throwaway candidate, so
+   * every non-throwing builder sets a shape by construction. It is a judgement
+   * about the result, and it belongs where the kernel makes it.
+   */
+  kind: 'build-failed' | 'refusal' | 'advisory' | 'suppressed';
 }
 
 export interface DerivedState {
