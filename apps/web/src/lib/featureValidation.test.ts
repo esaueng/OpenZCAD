@@ -146,10 +146,30 @@ describe('a verdict with warning attribution', () => {
     ).toBe('Shell wall thickness exceeds the body.');
   });
 
-  it('still reads a builder warning it has no record for', () => {
-    // Builders push straight onto the string list, so the name match is all
-    // there is for them. That is deliberately unchanged here: telling a
-    // builder advisory from a builder refusal is a separate problem.
+  it('accepts a classified builder advisory for this feature', () => {
+    const mine = toFeatureId('feat_text');
+    const message =
+      'Feature "Text": Curves reached the kernel as polylines.';
+    expect(
+      validatedFeatureRejection({
+        featureName: 'Text',
+        featureId: mine,
+        warnings: [message],
+        featureWarnings: [
+          {
+            featureId: mine,
+            featureName: 'Text',
+            message,
+            kind: 'advisory'
+          }
+        ],
+        bodyPresent: true,
+        documentMoved: false
+      })
+    ).toBeNull();
+  });
+
+  it('still reads an unclassified builder warning fail closed', () => {
     expect(
       validatedFeatureRejection({
         featureName: 'Subtract',
@@ -160,5 +180,28 @@ describe('a verdict with warning attribution', () => {
         documentMoved: false
       })?.message
     ).toBe('Subtract refused: the tools overlap.');
+  });
+
+  it('does not let one advisory hide a duplicate unclassified failure', () => {
+    const mine = toFeatureId('feat_mine');
+    const theirs = toFeatureId('feat_theirs');
+    const message = 'Feature "Pattern": Rebuild returned invalid geometry.';
+    expect(
+      validatedFeatureRejection({
+        featureName: 'Pattern',
+        featureId: mine,
+        warnings: [message, message],
+        featureWarnings: [
+          {
+            featureId: theirs,
+            featureName: 'Pattern',
+            message,
+            kind: 'advisory'
+          }
+        ],
+        bodyPresent: true,
+        documentMoved: false
+      })?.message
+    ).toBe('Rebuild returned invalid geometry.');
   });
 });
