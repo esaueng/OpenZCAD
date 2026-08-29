@@ -156,7 +156,7 @@ through the worker queue and surface a "stop" affordance during long rebuilds.
 
 ### S5. Documentation and pin hygiene (cheap, do immediately)
 
-— done (PR pending)
+— done (PR #141)
 
 - `docs/capability-matrix.md` and `TODO.md` still say Remus mirror "refuses
   dense blended/boolean bodies" — measured false on the current pin
