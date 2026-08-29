@@ -75,13 +75,31 @@ export function refusingWarning(
       'This operation does not produce valid geometry.'
     );
   }
-  // Everything the loop attributed is now accounted for — including a
-  // suppression, which is a status and never a refusal. What is left is
-  // builder-raised, and only the name can speak for it.
-  const accounted = new Set(featureWarnings.map((entry) => entry.message));
+  // Everything the rebuild attributed is now accounted for — including an
+  // advisory or suppression, neither of which refuses. What is left has no
+  // classification, so only its name can speak for it and it fails closed.
+  // Subtract attributed warnings by occurrence, not just by text. Duplicate
+  // feature names can produce byte-identical messages; treating the records as
+  // a set would let one advisory account for every matching string and could
+  // hide an additional, unclassified warning that must still fail closed.
+  const accounted = new Map<string, number>();
+  for (const entry of featureWarnings) {
+    accounted.set(entry.message, (accounted.get(entry.message) ?? 0) + 1);
+  }
   return warningForFeature(
     featureName,
-    warnings.filter((warning) => !accounted.has(warning))
+    warnings.filter((warning) => {
+      const remaining = accounted.get(warning) ?? 0;
+      if (remaining === 0) {
+        return true;
+      }
+      if (remaining === 1) {
+        accounted.delete(warning);
+      } else {
+        accounted.set(warning, remaining - 1);
+      }
+      return false;
+    })
   );
 }
 

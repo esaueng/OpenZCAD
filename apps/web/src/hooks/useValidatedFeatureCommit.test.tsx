@@ -103,6 +103,7 @@ describe('validated feature commit', () => {
       targetBodyIds: [plateId, bossId]
     });
     const resultBodyId = command.payload.ids!.bodyId;
+    const resultFeatureId = command.payload.ids!.featureId;
     const before = structuredClone(manager.document);
     const commit = vi.fn(() => true);
     const onStatus = vi.fn();
@@ -133,6 +134,14 @@ describe('validated feature commit', () => {
           warnings: [
             `Feature "Tangent boss union": ${TANGENT_BOSS_DIAGNOSTIC}`
           ],
+          featureWarnings: [
+            {
+              featureId: resultFeatureId,
+              featureName: 'Tangent boss union',
+              message: `Feature "Tangent boss union": ${TANGENT_BOSS_DIAGNOSTIC}`,
+              kind: 'refusal'
+            }
+          ],
           updatedAt: candidate.derived.updatedAt
         }),
         commit,
@@ -146,6 +155,7 @@ describe('validated feature commit', () => {
     await act(async () => {
       applied = await result.current.run(command, {
         featureName: 'Tangent boss union',
+        featureId: resultFeatureId,
         resultBodyId,
         successMessage: command.label
       });
@@ -156,6 +166,64 @@ describe('validated feature commit', () => {
     expect(manager.document).toEqual(before);
     expect(manager.canUndo).toBe(false);
     expect(onStatus).toHaveBeenLastCalledWith(TANGENT_BOSS_DIAGNOSTIC);
+  });
+
+  it('commits a valid body whose builder raised an advisory warning', async () => {
+    const manager = new CommandManager(
+      createProjectDocument('Advisory', toUserId('user_advisory'))
+    );
+    const command = commandFactories.addPrimitive({
+      name: 'Approximate profile',
+      primitiveKind: 'box',
+      dimensions: { width: 10, height: 10, depth: 10 }
+    });
+    const resultBodyId = command.payload.ids!.bodyId;
+    const resultFeatureId = command.payload.ids!.featureId;
+    const warning =
+      'Feature "Approximate profile": Curves reached the kernel as polylines.';
+    const commit = vi.fn(() => true);
+    const onStatus = vi.fn();
+    const { result } = renderHook(() =>
+      useValidatedFeatureCommit({
+        manager: () => manager,
+        derive: async (
+          candidate: ProjectDocument
+        ): Promise<ProjectDocument['derived']> => ({
+          bodyRepresentations: {
+            [resultBodyId]: bodyRepresentation(resultBodyId)
+          },
+          exportableBodyIds: [resultBodyId],
+          warnings: [warning],
+          featureWarnings: [
+            {
+              featureId: resultFeatureId,
+              featureName: 'Approximate profile',
+              message: warning,
+              kind: 'advisory'
+            }
+          ],
+          updatedAt: candidate.derived.updatedAt
+        }),
+        commit,
+        commitTransaction: () => true,
+        onBusy: vi.fn(),
+        onStatus
+      })
+    );
+
+    let applied: ValidatedFeatureOutcome | undefined;
+    await act(async () => {
+      applied = await result.current.run(command, {
+        featureName: 'Approximate profile',
+        featureId: resultFeatureId,
+        resultBodyId,
+        successMessage: command.label
+      });
+    });
+
+    expect(applied).toBe('committed');
+    expect(commit).toHaveBeenCalledTimes(1);
+    expect(onStatus).toHaveBeenLastCalledWith(command.label);
   });
 
   it('rejects a primitive edit when an affected downstream fillet fails', async () => {
