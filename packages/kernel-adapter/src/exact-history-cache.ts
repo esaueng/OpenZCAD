@@ -188,9 +188,7 @@ export function cloneBuildState(result: ExactBuildResult): ExactBuildResult {
     // which is the common case — falling back to matching feature names, and
     // the gate would go on mistaking a suppression for a failure exactly
     // where it does most of its work.
-    ...(result.featureWarnings
-      ? { featureWarnings: result.featureWarnings.map((entry) => ({ ...entry })) }
-      : {}),
+    featureWarnings: result.featureWarnings.map((entry) => ({ ...entry })),
     referenceRepairs: [...result.referenceRepairs]
   };
 }

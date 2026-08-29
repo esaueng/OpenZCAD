@@ -72,7 +72,9 @@ describe('warning attribution', () => {
     });
     const derived = await adapter.syncDocument(document);
     expect(derived.warnings).toEqual([]);
-    expect(derived.featureWarnings ?? []).toEqual([]);
+    // Presence matters: an empty channel tells the gate that provenance is
+    // complete, rather than making it fall back to parsing display strings.
+    expect(derived.featureWarnings).toEqual([]);
   }, 120_000);
 });
 
@@ -140,20 +142,30 @@ describe('what a builder warning means', () => {
   it('leaves a body-level warning unattributed, so no feature is refused for it', async () => {
     // `Body "<name>" …` warnings describe a body's measured state or the file
     // it was imported from — including invalidity a STEP import deliberately
-    // admits. They are not attributed to a feature, and the gate's name match
-    // looks for `Feature "`, so neither route can refuse a commit for them.
-    const derived = await adapter.syncDocument(
-      addPrimitiveFeature(
-        createProjectDocument('Plain', toUserId('user_a')),
-        {
-          name: 'Block',
-          primitiveKind: 'box',
-          dimensions: { width: 10, height: 10, depth: 10 }
-        }
-      )
-    );
-    for (const entry of derived.featureWarnings ?? []) {
-      expect(entry.message.startsWith('Feature "')).toBe(true);
+    // admits. They stay in the display list but not in the complete feature
+    // provenance channel, so they cannot become a commit refusal.
+    const invalid = vi
+      .spyOn(RemusKernel.prototype, 'validateSolidRelaxed')
+      .mockReturnValue(1);
+    let derived;
+    try {
+      derived = await adapter.syncDocument(
+        addPrimitiveFeature(
+          createProjectDocument('Plain', toUserId('user_a')),
+          {
+            name: 'Block',
+            primitiveKind: 'box',
+            dimensions: { width: 10, height: 10, depth: 10 }
+          }
+        )
+      );
+    } finally {
+      invalid.mockRestore();
     }
+
+    expect(derived.warnings).toEqual([
+      'Body "Block Body" failed exact B-rep validation.'
+    ]);
+    expect(derived.featureWarnings).toEqual([]);
   }, 120_000);
 });

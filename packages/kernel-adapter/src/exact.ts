@@ -40,7 +40,10 @@ import type {
 export type { DxfFaceSelector } from './exact-types';
 import { diagnoseImportedSolid } from './exact-lineage-builders';
 import { measureOwnedFaceGeometry } from './exact-measure';
-import { raiseFeatureWarning } from './exact-feature-warnings';
+import {
+  hasRefusingFeatureWarning,
+  raiseFeatureWarning
+} from './exact-feature-warnings';
 import {
   collectRecognizedImportedFeatures,
   type ImportedRecognitionFaceIdentity
@@ -1277,9 +1280,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
         if (
           requiresStrictUnionValidation &&
           feature !== undefined &&
-          !build.warnings.some((warning) =>
-            warning.startsWith(`Feature "${feature.name}":`)
-          ) &&
+          !hasRefusingFeatureWarning(build, feature.featureId) &&
           (!measured.strictValid ||
             measured.meshClosure === null ||
             !isClosedConsistentlyOrientedMesh(measured.meshClosure))
@@ -1344,9 +1345,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
         ...(build.referenceRepairs.length > 0
           ? { referenceRepairs: build.referenceRepairs }
           : {}),
-        ...(build.featureWarnings?.length
-          ? { featureWarnings: build.featureWarnings }
-          : {})
+        featureWarnings: build.featureWarnings
       };
     } catch (error) {
       this.invalidateHistoryCache();

@@ -146,19 +146,77 @@ describe('a verdict with warning attribution', () => {
     ).toBe('Shell wall thickness exceeds the body.');
   });
 
-  it('still reads a builder warning it has no record for', () => {
-    // Builders push straight onto the string list, so the name match is all
-    // there is for them. That is deliberately unchanged here: telling a
-    // builder advisory from a builder refusal is a separate problem.
+  it('uses a present provenance channel as the complete gate input', () => {
+    // A modern exact rebuild supplies this channel even when it is empty.
+    // Display strings stay visible, but an unclassified string is not proof
+    // that the kernel refused the feature.
     expect(
       validatedFeatureRejection({
         featureName: 'Subtract',
         featureId: toFeatureId('feat_sub'),
         warnings: ['Feature "Subtract": Subtract refused: the tools overlap.'],
-        featureWarnings: [suppressed],
+        featureWarnings: [],
+        bodyPresent: true,
+        documentMoved: false
+      })
+    ).toBeNull();
+  });
+
+  it('accepts a builder advisory and refuses a builder failure', () => {
+    const featureId = toFeatureId('feat_text');
+    const advisory = {
+      featureId,
+      featureName: 'Text',
+      message:
+        'Feature "Text": glyph outlines reached the kernel as polylines.',
+      kind: 'advisory' as const
+    };
+    const refusal = {
+      featureId,
+      featureName: 'Text',
+      message: 'Feature "Text": exact result dropped a requested operand.',
+      kind: 'refusal' as const
+    };
+
+    expect(
+      validatedFeatureRejection({
+        featureName: 'Text',
+        featureId,
+        warnings: [advisory.message],
+        featureWarnings: [advisory],
+        bodyPresent: true,
+        documentMoved: false
+      })
+    ).toBeNull();
+    expect(
+      validatedFeatureRejection({
+        featureName: 'Text',
+        featureId,
+        warnings: [advisory.message, refusal.message],
+        featureWarnings: [advisory, refusal],
         bodyPresent: true,
         documentMoved: false
       })?.message
-    ).toBe('Subtract refused: the tools overlap.');
+    ).toBe('exact result dropped a requested operand.');
+  });
+
+  it('keeps an imported-STEP validation warning visible without refusing it', () => {
+    const warning =
+      'Body "Imported part" imported and rendered, but its STEP solid has ' +
+      'Remus B-rep validity issues. Exact edits or booleans involving the ' +
+      'affected solid may fail.';
+    const warnings = [warning];
+
+    expect(
+      validatedFeatureRejection({
+        featureName: 'Imported part',
+        featureId: toFeatureId('feat_import'),
+        warnings,
+        featureWarnings: [],
+        bodyPresent: true,
+        documentMoved: false
+      })
+    ).toBeNull();
+    expect(warnings).toEqual([warning]);
   });
 });

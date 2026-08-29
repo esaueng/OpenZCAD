@@ -1711,10 +1711,9 @@ export interface EdgeReferenceRepair {
  * those strings therefore refuses an edit because some unrelated feature is
  * suppressed, and mis-attributes a failure whenever a name repeats.
  *
- * This carries the attribution the string cannot. It says who and whether the
- * feature was skipped; it does not yet distinguish a builder's advisory (the
- * body was produced, but approximately) from a refusal, which is why the gate
- * still falls back to the string for warnings raised inside a builder.
+ * This carries the attribution and disposition the string cannot. Builder
+ * advisories and refusals travel through the same user-visible string list;
+ * this record is the commit gate's decision input.
  */
 export interface FeatureWarning {
   featureId: FeatureId;
@@ -1753,7 +1752,10 @@ export interface DerivedState {
    * `attachDerivedState` strips it so it is never persisted or replayed.
    */
   referenceRepairs?: EdgeReferenceRepair[];
-  /** Attribution for `warnings`. Session-only, stripped like the repairs. */
+  /**
+   * Complete feature-warning provenance for this rebuild. Session-only and
+   * stripped like the repairs. Older adapter results may omit it.
+   */
   featureWarnings?: FeatureWarning[];
 }
 

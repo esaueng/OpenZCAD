@@ -47,11 +47,9 @@ export interface ValidatedFeatureVerdictInput {
  * destroy work that succeeded. `refusal` means a shape was produced and is the
  * wrong one, which is what every union check reports.
  *
- * Anything with NO record still falls through to the name match, which refuses.
- * That is the deliberate direction to fail in: a site nobody classified then
- * blocks an edit, which the user sees at once, rather than committing geometry
- * the kernel objected to, which they may not discover until it is a STEP file
- * in someone else's hands.
+ * A present provenance channel is complete, including when it is empty. Only
+ * `build-failed` and `refusal` records may reject a modern rebuild. Results
+ * from an older adapter that lack the channel retain the name-based fallback.
  */
 export function refusingWarning(
   featureName: string,
@@ -75,14 +73,7 @@ export function refusingWarning(
       'This operation does not produce valid geometry.'
     );
   }
-  // Everything the loop attributed is now accounted for — including a
-  // suppression, which is a status and never a refusal. What is left is
-  // builder-raised, and only the name can speak for it.
-  const accounted = new Set(featureWarnings.map((entry) => entry.message));
-  return warningForFeature(
-    featureName,
-    warnings.filter((warning) => !accounted.has(warning))
-  );
+  return null;
 }
 
 /**
