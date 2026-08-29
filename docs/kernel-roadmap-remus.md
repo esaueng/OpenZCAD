@@ -14,7 +14,9 @@ which of those milestones OpenZCAD actually needs first, which defects and gaps
 the app has measured that the kernel program does not yet own, and the
 web-platform and open-source work that belongs to neither existing plan.
 `docs/kernel-roadmap.md` and `docs/kernel-execution-plan.md` are BrepKit-era
-historical records and stay that way; `TODO.md` remains the product roadmap.
+historical records and stay that way; `TODO.md` remains the product roadmap,
+and [cad-feature-roadmap.md](cad-feature-roadmap.md) is the product-level
+feature companion to this document.
 
 ---
 
