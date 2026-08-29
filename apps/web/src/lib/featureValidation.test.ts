@@ -146,62 +146,77 @@ describe('a verdict with warning attribution', () => {
     ).toBe('Shell wall thickness exceeds the body.');
   });
 
-  it('accepts a classified builder advisory for this feature', () => {
-    const mine = toFeatureId('feat_text');
-    const message =
-      'Feature "Text": Curves reached the kernel as polylines.';
+  it('uses a present provenance channel as the complete gate input', () => {
+    // A modern exact rebuild supplies this channel even when it is empty.
+    // Display strings stay visible, but an unclassified string is not proof
+    // that the kernel refused the feature.
     expect(
       validatedFeatureRejection({
-        featureName: 'Text',
-        featureId: mine,
-        warnings: [message],
-        featureWarnings: [
-          {
-            featureId: mine,
-            featureName: 'Text',
-            message,
-            kind: 'advisory'
-          }
-        ],
+        featureName: 'Subtract',
+        featureId: toFeatureId('feat_sub'),
+        warnings: ['Feature "Subtract": Subtract refused: the tools overlap.'],
+        featureWarnings: [],
         bodyPresent: true,
         documentMoved: false
       })
     ).toBeNull();
   });
 
-  it('still reads an unclassified builder warning fail closed', () => {
+  it('accepts a builder advisory and refuses a builder failure', () => {
+    const featureId = toFeatureId('feat_text');
+    const advisory = {
+      featureId,
+      featureName: 'Text',
+      message:
+        'Feature "Text": glyph outlines reached the kernel as polylines.',
+      kind: 'advisory' as const
+    };
+    const refusal = {
+      featureId,
+      featureName: 'Text',
+      message: 'Feature "Text": exact result dropped a requested operand.',
+      kind: 'refusal' as const
+    };
+
     expect(
       validatedFeatureRejection({
-        featureName: 'Subtract',
-        featureId: toFeatureId('feat_sub'),
-        warnings: ['Feature "Subtract": Subtract refused: the tools overlap.'],
-        featureWarnings: [suppressed],
+        featureName: 'Text',
+        featureId,
+        warnings: [advisory.message],
+        featureWarnings: [advisory],
+        bodyPresent: true,
+        documentMoved: false
+      })
+    ).toBeNull();
+    expect(
+      validatedFeatureRejection({
+        featureName: 'Text',
+        featureId,
+        warnings: [advisory.message, refusal.message],
+        featureWarnings: [advisory, refusal],
         bodyPresent: true,
         documentMoved: false
       })?.message
-    ).toBe('Subtract refused: the tools overlap.');
+    ).toBe('exact result dropped a requested operand.');
   });
 
-  it('does not let one advisory hide a duplicate unclassified failure', () => {
-    const mine = toFeatureId('feat_mine');
-    const theirs = toFeatureId('feat_theirs');
-    const message = 'Feature "Pattern": Rebuild returned invalid geometry.';
+  it('keeps an imported-STEP validation warning visible without refusing it', () => {
+    const warning =
+      'Body "Imported part" imported and rendered, but its STEP solid has ' +
+      'Remus B-rep validity issues. Exact edits or booleans involving the ' +
+      'affected solid may fail.';
+    const warnings = [warning];
+
     expect(
       validatedFeatureRejection({
-        featureName: 'Pattern',
-        featureId: mine,
-        warnings: [message, message],
-        featureWarnings: [
-          {
-            featureId: theirs,
-            featureName: 'Pattern',
-            message,
-            kind: 'advisory'
-          }
-        ],
+        featureName: 'Imported part',
+        featureId: toFeatureId('feat_import'),
+        warnings,
+        featureWarnings: [],
         bodyPresent: true,
         documentMoved: false
-      })?.message
-    ).toBe('Rebuild returned invalid geometry.');
+      })
+    ).toBeNull();
+    expect(warnings).toEqual([warning]);
   });
 });

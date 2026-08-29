@@ -103,6 +103,7 @@ describe('refused STEP import', () => {
       validatedFeatureRejection({
         featureName: 'Frame',
         warnings: derived.warnings,
+        featureWarnings: derived.featureWarnings,
         bodyPresent: Boolean(derived.bodyRepresentations[candidate.ids.bodyId]),
         documentMoved: false
       })
@@ -121,6 +122,7 @@ describe('refused STEP import', () => {
       validatedFeatureRejection({
         featureName: 'Shell',
         warnings: derived.warnings,
+        featureWarnings: derived.featureWarnings,
         bodyPresent: false,
         documentMoved: false
       })?.message
@@ -140,6 +142,7 @@ describe('refused STEP import', () => {
       validatedFeatureRejection({
         featureName: 'Box',
         warnings: derived.warnings,
+        featureWarnings: derived.featureWarnings,
         bodyPresent: true,
         documentMoved: false
       })
