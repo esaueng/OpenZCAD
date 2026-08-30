@@ -313,6 +313,7 @@ describe('useCollaboration lease ordering', () => {
     });
     rememberUnresolvedConflict({
       projectId: base.projectId,
+      source: 'room',
       localVersion: local.version,
       remoteVersion: remote.version,
       detectedAt: Date.now()
@@ -419,7 +420,7 @@ describe('useCollaboration lease ordering', () => {
     });
     act(() => socket.receive({ type: 'ack', version: remote.version + 1 }));
     expect(result.current.conflict).toBeNull();
-    expect(readUnresolvedConflict(base.projectId)).toBeNull();
+    expect(readUnresolvedConflict(base.projectId, 'room')).toBeNull();
     unmount();
   });
 });

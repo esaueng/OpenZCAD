@@ -24,9 +24,17 @@ export interface ProjectConflict {
 
 export interface UnresolvedConflictMarker {
   projectId: string;
+  source: ConflictSource;
   localVersion: number;
   remoteVersion: number;
   detectedAt: number;
+  /**
+   * Which sides of THIS divergence have already been preserved as recovery
+   * projects, as `side:version` keys. A conflict is re-raised on every room
+   * frame while it stays unresolved, and a failed resolution can be retried —
+   * without this record each attempt would mint another recovery project.
+   */
+  recoveryCopies?: string[];
 }
 
 export type ConflictResolution = 'use-remote' | 'keep-mine' | 'save-local-copy';
@@ -73,7 +81,18 @@ export class ConflictRecoveryError extends Error {
   }
 }
 
-function markerKey(projectId: string): string {
+/**
+ * One marker per (project, source). The room and the account are independent
+ * version lines that can diverge from the local document at the same time;
+ * a single shared key let each side overwrite the other's recorded versions.
+ * encodeURIComponent escapes ':', so the suffix cannot collide with an id.
+ */
+function markerKey(projectId: string, source: ConflictSource): string {
+  return `${CONFLICT_MARKER_PREFIX}${encodeURIComponent(projectId)}:${source}`;
+}
+
+/** The pre-source key, still read and cleared so old markers cannot strand. */
+function legacyMarkerKey(projectId: string): string {
   return `${CONFLICT_MARKER_PREFIX}${encodeURIComponent(projectId)}`;
 }
 
@@ -87,14 +106,17 @@ export function rememberUnresolvedConflict(
   marker: UnresolvedConflictMarker,
   storage: Storage = localStorage
 ): void {
-  storage.setItem(markerKey(marker.projectId), JSON.stringify(marker));
+  storage.setItem(
+    markerKey(marker.projectId, marker.source),
+    JSON.stringify(marker)
+  );
 }
 
-export function readUnresolvedConflict(
+function parseMarker(
+  value: string | null,
   projectId: string,
-  storage: Storage = localStorage
+  source: ConflictSource
 ): UnresolvedConflictMarker | null {
-  const value = storage.getItem(markerKey(projectId));
   if (!value) {
     return null;
   }
@@ -109,17 +131,45 @@ export function readUnresolvedConflict(
     ) {
       return null;
     }
-    return marker as UnresolvedConflictMarker;
+    return { ...marker, source } as UnresolvedConflictMarker;
   } catch {
     return null;
   }
 }
 
-export function clearUnresolvedConflict(
+export function readUnresolvedConflict(
+  projectId: string,
+  source: ConflictSource,
+  storage: Storage = localStorage
+): UnresolvedConflictMarker | null {
+  return (
+    parseMarker(
+      storage.getItem(markerKey(projectId, source)),
+      projectId,
+      source
+    ) ??
+    parseMarker(storage.getItem(legacyMarkerKey(projectId)), projectId, source)
+  );
+}
+
+/** Whether any source — room, account, or a pre-source marker — is unresolved. */
+export function hasUnresolvedConflict(
   projectId: string,
   storage: Storage = localStorage
+): boolean {
+  return (
+    readUnresolvedConflict(projectId, 'room', storage) !== null ||
+    readUnresolvedConflict(projectId, 'account', storage) !== null
+  );
+}
+
+export function clearUnresolvedConflict(
+  projectId: string,
+  source: ConflictSource,
+  storage: Storage = localStorage
 ): void {
-  storage.removeItem(markerKey(projectId));
+  storage.removeItem(markerKey(projectId, source));
+  storage.removeItem(legacyMarkerKey(projectId));
 }
 
 export function conflictFromDocuments(
@@ -134,11 +184,23 @@ export function conflictFromDocuments(
       'Local and remote documents belong to different projects.'
     );
   }
+  // A conflict is re-detected on every inbound frame while unresolved. Keep
+  // the original detection time and the record of recovery copies already
+  // written for the same divergence; only a new version pair resets them.
+  const existing = readUnresolvedConflict(localDocument.projectId, source);
+  const sameDivergence =
+    existing !== null &&
+    existing.localVersion === localDocument.version &&
+    existing.remoteVersion === remoteDocument.version;
   rememberUnresolvedConflict({
     projectId: localDocument.projectId,
+    source,
     localVersion: localDocument.version,
     remoteVersion: remoteDocument.version,
-    detectedAt
+    detectedAt: sameDivergence ? existing.detectedAt : detectedAt,
+    ...(sameDivergence && existing.recoveryCopies
+      ? { recoveryCopies: existing.recoveryCopies }
+      : {})
   });
   return {
     projectId: localDocument.projectId,
@@ -150,9 +212,25 @@ export function conflictFromDocuments(
 }
 
 /**
+ * Names a recovery project after its source without letting the labels nest:
+ * a copy of "Part (Recovery)" is another "Part (Recovery)", never
+ * "Part (Recovery) (Recovery)".
+ */
+export function recoveryCopyName(
+  name: string,
+  label: 'Recovery' | 'Local copy'
+): string {
+  const stripped = name.replace(/(?:\s*\((?:Recovery|Local copy)\))+$/, '');
+  return `${stripped.trimEnd() || name} (${label})`;
+}
+
+/**
  * Resolve an explicit user choice. Once authorization and version invariants
- * are known to be valid, every path writes the recovery copy before invoking a
- * handler that can replace either side of the conflict.
+ * are known to be valid, the side the user is NOT keeping is written as a
+ * recovery project before invoking a handler that can replace either side of
+ * the conflict — but only once per divergence: the same conflict can be
+ * re-raised by every room frame and a failed handler can be retried, and
+ * neither may mint another copy of a document already preserved.
  */
 export async function resolveProjectConflict(
   conflict: ProjectConflict,
@@ -201,7 +279,35 @@ export async function resolveProjectConflict(
     }
   }
 
-  await handlers.writeRecoveryCopy(structuredClone(conflict.localDocument));
+  // 'keep-mine' discards the remote copy; the other two discard the local one
+  // ('save-local-copy' preserves it via this same write).
+  const losingSide = resolution === 'keep-mine' ? 'remote' : 'local';
+  const losingDocument =
+    losingSide === 'remote' ? conflict.remoteDocument : conflict.localDocument;
+  const copyKey = `${losingSide}:${losingDocument.version}`;
+  const marker = readUnresolvedConflict(conflict.projectId, conflict.source);
+  const markerMatches =
+    marker !== null &&
+    marker.localVersion === conflict.localDocument.version &&
+    marker.remoteVersion === conflict.remoteDocument.version;
+  const alreadyPreserved =
+    markerMatches && (marker.recoveryCopies ?? []).includes(copyKey);
+  if (!alreadyPreserved) {
+    await handlers.writeRecoveryCopy(structuredClone(losingDocument));
+    rememberUnresolvedConflict({
+      projectId: conflict.projectId,
+      source: conflict.source,
+      localVersion: conflict.localDocument.version,
+      remoteVersion: conflict.remoteDocument.version,
+      detectedAt: markerMatches
+        ? marker.detectedAt
+        : (context.now ?? Date.now()),
+      recoveryCopies: [
+        ...(markerMatches ? (marker.recoveryCopies ?? []) : []),
+        copyKey
+      ]
+    });
+  }
 
   if (resolution === 'use-remote') {
     await handlers.useRemoteVersion(structuredClone(conflict.remoteDocument));
