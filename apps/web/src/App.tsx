@@ -686,7 +686,8 @@ import type { AssistantPreviewOutcome } from './components/assistant/AssistantPa
 import {
   clearUnresolvedConflict,
   conflictFromDocuments,
-  readUnresolvedConflict,
+  hasUnresolvedConflict,
+  recoveryCopyName,
   resolveProjectConflict,
   type ConflictResolution,
   type ConflictResolutionHandlers,
@@ -759,6 +760,21 @@ const START_SCREEN_DEMOS =
   (import.meta.env as unknown as { VITE_E2E?: string }).VITE_E2E === '1'
     ? [...DEMO_DEFINITIONS, VISUAL_SELECTION_ACCEPTANCE_DEMO]
     : DEMO_DEFINITIONS;
+
+const DEMO_PROJECT_IDS = new Set<string>(
+  START_SCREEN_DEMOS.map((demo) => demo.projectId)
+);
+
+/**
+ * Counts what the start screen header counts — the user's own projects. The
+ * merged list also carries the demo parts, so status lines built from its raw
+ * length contradicted the header by exactly the demo count.
+ */
+function userProjectCount(projects: readonly { projectId: string }[]): number {
+  return projects.filter(
+    (project) => !DEMO_PROJECT_IDS.has(project.projectId)
+  ).length;
+}
 
 declare global {
   interface Window {
@@ -1003,7 +1019,7 @@ function localRecoveryCopy(
 ): ProjectDocument {
   const copy = structuredClone(source);
   const projectId = toProjectId(`proj_recovery_${crypto.randomUUID()}`);
-  const name = `${source.name} (${label})`;
+  const name = recoveryCopyName(source.name, label);
   copy.projectId = projectId;
   copy.name = name;
   copy.revisions = [];
@@ -1930,15 +1946,25 @@ export function App() {
     // been resolved as a cloud-backed document. Desktop exchanges its native
     // bearer credential for a short-lived, one-use WebSocket ticket.
     session: cloudAvailable && liveCollaborationEnabled ? session : null,
-    onRemoteDocument(remoteDocument) {
+    onRemoteDocument(incomingDocument, context) {
       const current = managerRef.current?.document;
+      // An unsolicited broadcast at or behind the local version is this
+      // client's own work coming back. An adopted document is an explicit
+      // user decision ("Use room version") and must apply even when the room
+      // version is not ahead — silently skipping it left the dialog claiming
+      // success while nothing changed.
       if (
         !current ||
-        current.projectId !== remoteDocument.projectId ||
-        remoteDocument.version <= current.version
+        current.projectId !== incomingDocument.projectId ||
+        (!context?.adopted && incomingDocument.version <= current.version)
       ) {
         return;
       }
+      // Room documents travel without their derived projection. Reattach the
+      // local one when it provably describes the same canonical model, so
+      // adopting a matching document does not blank the viewport while the
+      // kernel rebuilds what it already had.
+      const remoteDocument = withMatchingLocalDerived(incomingDocument, current);
       // The room and the freshness poll are two routes to the same place, so
       // they have to leave the same state behind: without re-baselining here,
       // the next autosave would be fenced against a version this device has
@@ -2189,7 +2215,15 @@ export function App() {
    */
   const accountConflictHandlers: ConflictResolutionHandlers = {
     writeRecoveryCopy: conflictHandlers.writeRecoveryCopy,
-    async useRemoteVersion(remoteDocument) {
+    async useRemoteVersion(incomingDocument) {
+      // Account documents are stored without their derived projection.
+      // Reattach the local one when it provably describes the same canonical
+      // model rather than hydrating a blank viewport.
+      const live = managerRef.current?.document;
+      const remoteDocument =
+        live && live.projectId === incomingDocument.projectId
+          ? withLocalDerived(incomingDocument, live)
+          : incomingDocument;
       await saveLocalProject(remoteDocument);
       remoteVersionsRef.current.set(
         remoteDocument.projectId,
@@ -2267,7 +2301,7 @@ export function App() {
         { role: collaboration.role, lease: null, leasesEnforced: false },
         accountConflictHandlers
       );
-      clearUnresolvedConflict(accountConflict.projectId);
+      clearUnresolvedConflict(accountConflict.projectId, 'account');
     } catch (error) {
       setStatus(errorMessage(error, 'Could not resolve the conflict.'));
     } finally {
@@ -2920,12 +2954,12 @@ export function App() {
         }
         setStatus(
           !bootCloudFunctionsEnabledRef.current
-            ? `Offline mode · ${merged.length} local project(s)`
+            ? `Offline mode · ${userProjectCount(merged)} local project(s)`
             : activeSession && listed.remoteReached
-              ? `Cloud profile ready · ${merged.length} project(s)`
+              ? `Cloud profile ready · ${userProjectCount(merged)} project(s)`
               : health
-                ? `Local workspace · ${merged.length} local project(s)`
-                : `Offline workspace · ${merged.length} local project(s)`
+                ? `Local workspace · ${userProjectCount(merged)} local project(s)`
+                : `Offline workspace · ${userProjectCount(merged)} local project(s)`
         );
       } catch (error) {
         if (!cancelled) {
@@ -5237,7 +5271,9 @@ export function App() {
       setCloudProjectIds(listed.cloudProjectIds);
       setAccountProjectListReached(listed.remoteReached);
       setSettingsMessage('Cloud profile connected.');
-      setStatus(`Cloud profile ready · ${listed.projects.length} project(s)`);
+      setStatus(
+        `Cloud profile ready · ${userProjectCount(listed.projects)} project(s)`
+      );
     } catch {
       if (cloudFunctionsEnabledRef.current) {
         setSettingsMessage(
@@ -6398,8 +6434,8 @@ export function App() {
       setCloudAvailable(listed.remoteReached);
       setStatus(
         session && !listed.remoteReached
-          ? `Cloud projects are temporarily unavailable · ${listed.projects.length} project(s) remain on this device.`
-          : `${listed.projects.length} project(s) available.`
+          ? `Cloud projects are temporarily unavailable · ${userProjectCount(listed.projects)} project(s) remain on this device.`
+          : `${userProjectCount(listed.projects)} project(s) available.`
       );
     } catch (error) {
       setStatus(errorMessage(error, 'Failed to refresh projects.'));
@@ -11956,7 +11992,7 @@ export function App() {
   const conflictedProjectIds = new Set(
     projects
       .map((project) => project.projectId)
-      .filter((projectId) => readUnresolvedConflict(projectId) !== null)
+      .filter((projectId) => hasUnresolvedConflict(projectId))
   );
 
   if (startupState === 'restoring') {
@@ -13989,8 +14025,17 @@ export function App() {
               hydrate and re-point the autosave controller. Showing project A's
               conflict over project B lets one click resolve the wrong
               document. The state is kept, not cleared: reopening A still owes
-              the user the dialog. */}
-          {accountConflict && accountConflict.projectId === doc.projectId && (
+              the user the dialog.
+
+              Never alongside a room conflict. The room and the account are
+              separate version lines, so their dialogs can cite contradictory
+              numbers for the same project; while the room — the live write
+              path — is unresolved, the account dialog waits its turn. The
+              state is kept, so it reappears once the room conflict clears if
+              the account still disagrees. */}
+          {accountConflict &&
+            accountConflict.projectId === doc.projectId &&
+            !collaboration.conflict && (
             <ProjectConflictDialog
               conflict={accountConflict}
               busy={busy}
