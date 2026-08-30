@@ -169,7 +169,7 @@ export const api = {
       method: 'DELETE'
     }),
   testAssistantConnection: () =>
-    requestJson<{ ok: true; latencyMs: number }>(
+    requestJson<{ ok: true; latencyMs: number; requestId: string }>(
       '/api/settings/assistant/test',
       { method: 'POST', body: '{}' }
     ),

@@ -5400,6 +5400,22 @@ export function App() {
       setSettingsMessage(`Connection ready · ${result.latencyMs} ms.`);
     } catch (error) {
       setSettingsMessage(errorMessage(error, 'Connection test failed.'));
+      const current = accountSettingsRef.current;
+      if (current?.credential.lastValidatedAt) {
+        const credential = { ...current.credential };
+        delete credential.lastValidatedAt;
+        const invalidated = { ...current, credential };
+        accountSettingsRef.current = invalidated;
+        setAccountSettings(invalidated);
+      }
+      try {
+        const response = await api.getSettings();
+        accountSettingsRef.current = response;
+        setAccountSettings(response);
+      } catch {
+        // The provider failure remains the actionable message. The local
+        // validation badge already failed closed if settings refresh also did.
+      }
     } finally {
       setSettingsBusy(false);
     }
