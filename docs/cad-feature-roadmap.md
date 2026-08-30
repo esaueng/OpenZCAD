@@ -104,7 +104,7 @@ exposure, not construction:
   ellipse, slot, point. Béziers already exist internally for text glyph
   contours; the region engine handles general curves.
 
-**Disposition (2026-08-30, P1-S1 Slice A): shipped in PR #TBD.** The four
+**Disposition (2026-08-30, P1-S1 Slice A): shipped in PR #142.** The four
 non-dimensional solver-ready constraints now have pick predicates, rail tools,
 undoable command creation, and real-GCS geometric-oracle coverage, including a
 typed unsatisfied conflict result. S-1 remains open for the driving-dimension
