@@ -102,6 +102,15 @@ jobs:
           node-version: 22
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      # The Chromium download is ~30 s per shard on every run; the browser
+      # directory is versioned (chromium-<build>), so restoring a stale cache
+      # after a Playwright bump is safe — the install step then downloads only
+      # the new build. `--with-deps` still runs so OS packages stay covered.
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
+          restore-keys: playwright-${{ runner.os }}-
       - run: pnpm exec playwright install --with-deps chromium
       # The Playwright webServer builds and serves the app inside the job.
       - run: pnpm test:e2e --shard=${{ matrix.shard }}/4
