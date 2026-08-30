@@ -5,10 +5,8 @@
 *CAD application* — features and functions users of parametric MCAD expect —
 to be the best open-source web-based CAD of its kind. The kernel roadmap says
 what the geometry engine must do; this document says what the product must
-let people do with it, benchmarked against the mainstream parametric tools
-(SolidWorks, Onshape, Fusion 360, Shapr3D) and the open-source bar
-(FreeCAD 1.1, which shipped an integrated assembly workbench with joints and
-a datum system in March 2026).
+let people do with it, benchmarked against established parametric and
+open-source CAD workflows.
 
 **Method.** The current-state inventory below was verified against source at
 schema v13 (`packages/shared/src/index.ts`, the forms and interaction machine
@@ -33,7 +31,7 @@ chase every checkbox.
   thicken, fillet, distance-angle chamfer, linear/circular/grid patterns,
   split, hole (simple/counterbore/countersink, face-positioned),
   nine direct-edit operations, STEP and mesh import.
-- **Direct manipulation** at Shapr3D quality of intent: face-offset and
+- **Direct manipulation** with clear design intent: face-offset and
   radius drags, edge-drag fillet/chamfer, region-drag extrude, move/rotate
   gizmo, numeric entry everywhere, selection filters, box select, depth
   cycling, marking menu, Esc ladder.
@@ -122,8 +120,8 @@ edges/cylinders/intersections, points from vertices/centers. This is the
 prerequisite that quietly blocks a dozen other items: revolve about a model
 axis (today the axis is in-sketch horizontal/vertical only), mirror about a
 datum, patterns about an axis, section planes, lofts between angled planes,
-and assembly mates later. FreeCAD 1.1 shipping a datum system is the
-open-source bar here.
+and assembly mates later. Mature open-source CAD systems already provide
+datum systems, so this is part of the expected baseline.
 
 **Feature depth**, in order of user pull:
 
@@ -203,9 +201,8 @@ UI. The kernel's assembly hierarchy/transforms/BOM went Stable on
 - **AS-1. Multi-part documents**: create/switch parts within a project,
   part instances with transforms, a parts browser. This alone covers the
   dominant hobby/prosumer case (print plates, kit layouts).
-- **AS-2. Joints/mates**: start with the modern joint model (Onshape/
-  Fusion-style typed joints: rigid, revolute, slider, cylindrical,
-  ball) rather than legacy mate stacks; degrees-of-freedom drag preview.
+- **AS-2. Joints/mates**: start with typed joints (rigid, revolute, slider,
+  cylindrical, ball) rather than legacy mate stacks; degrees-of-freedom drag preview.
   A kernel 3D-constraint solver is *not* required for the MVP — rigid
   placement plus kinematic drag on typed joints covers most use — but
   full assembly solving should be scoped with the kernel team (the 2D
@@ -227,7 +224,7 @@ UI. The kernel's assembly hierarchy/transforms/BOM went Stable on
 
 - **I-1. Mesh import beyond STL**: 3MF/OBJ/glTF import are already in the
   kernel; the UI accepts only `.shapr,.stl,.step,.stp`.
-- **I-2. Shapr3D semantic replay**: `io-shapr` already parses sketches,
+- **I-2. `.shapr` semantic replay**: `io-shapr` already parses sketches,
   constraints, and a graded operation history but applies only the exact
   STEP body plus a provenance record. Replaying the `proven` subset into
   native features would be a unique migration story; gate it behind the
@@ -247,7 +244,7 @@ UI. The kernel's assembly hierarchy/transforms/BOM went Stable on
 **Platform:**
 
 - **P-1. Touch/tablet interaction pass**: the direct-manipulation model
-  is already touch-shaped (Shapr3D proved the market); audit the gizmos,
+  is already suited to touch; audit the gizmos,
   marking menu, and numeric keypad on pointer-coarse devices.
 - **P-2. Installable PWA** wrapping the existing offline-capable core.
 
@@ -287,7 +284,7 @@ cross-reference [kernel-roadmap-remus.md](kernel-roadmap-remus.md).
 | **2. Feature depth** | F-2 variable fillet; F-3 hole depth; F-4 patterns; S-6/S-7 projection + splines; A-2/A-3 clash + sections; D-4 DXF growth | C4 blends, S1.2 pattern fix, C2 projection, 7.5 clash |
 | **3. Drawings MVP** | D-1 sheets/views/PDF; D-2 dimensions/annotations; D-3 sections/details | HLR is ready today |
 | **4. Assemblies MVP** | AS-1 multi-part; AS-2 joints; AS-3 BOM/exploded; V-2 | kernel assemblies ready; clash for AS-4 |
-| **5. Depth & reach** | F-5 sweep/loft depth; F-7 direct modeling; F-8 imported-feature completion; I-2 Shapr replay; I-3 STEP structure; AS-4/AS-5; P-1/P-2; V-1 | M6, M7, C5, e3b |
+| **5. Depth & reach** | F-5 sweep/loft depth; F-7 direct modeling; F-8 imported-feature completion; I-2 `.shapr` replay; I-3 STEP structure; AS-4/AS-5; P-1/P-2; V-1 | M6, M7, C5, e3b |
 | **Later** | Configurations/design tables (grows out of the parameter system + Tweak mode); surfacing workflows (kernel M4 sheet bodies); sheet metal; simulation hooks | M4 |
 
 Phase 1 is deliberately kernel-independent: it is the largest gap-per-effort

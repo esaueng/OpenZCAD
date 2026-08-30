@@ -328,7 +328,7 @@ selection, rendering) so the kernel work has a consumer the day it lands
 - **O2. Release discipline**: resume CHANGELOG generation (three weeks of
   landed work is undocumented), and run the `update-remus` dispatch on a
   regular cadence so app-side pins don't drift weeks behind kernel fixes —
-  the CATIA `AXIS2_PLACEMENT_3D` fix is already sitting unreleased behind a
+  the `AXIS2_PLACEMENT_3D` fix is already sitting unreleased behind a
   `describe.skip` marked UNSKIP-ON-REMUS-PIN-BUMP.
 - **O3. Refresh the public benchmarks** (measured 2026-08-06, self-flagged
   as stale, and the excluded `intersect(box, sphere)` defect row should be
