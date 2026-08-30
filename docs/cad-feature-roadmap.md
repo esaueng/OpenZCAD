@@ -70,9 +70,11 @@ chase every checkbox.
 ## 2. Sketching to constraint-complete — highest product priority
 
 The solver is ahead of the UI: the GCS layer supports 13 constraint kinds
-(`gcs-sketch.ts`), the schema stores them, but only 6 have tools
-(horizontal, vertical, parallel, tangent, coincident, radius). The fastest
-meaningful win in the entire roadmap is exposure, not construction:
+(`gcs-sketch.ts`) and the schema stores them. Ten now have direct tools
+(horizontal, vertical, parallel, perpendicular, equal, tangent, concentric,
+coincident, midpoint, radius); driving distance and angle still need their
+placement/value flow. The fastest meaningful win in the entire roadmap is
+exposure, not construction:
 
 - **S-1. Expose the seven solver-ready constraints**: perpendicular, equal,
   concentric, midpoint, and — the important three — **driving distance,
@@ -101,6 +103,12 @@ meaningful win in the entire roadmap is exposure, not construction:
 - **S-7. New entity types**: spline (control-point and through-point),
   ellipse, slot, point. Béziers already exist internally for text glyph
   contours; the region engine handles general curves.
+
+**Disposition (2026-08-30, P1-S1 Slice A): shipped in PR #TBD.** The four
+non-dimensional solver-ready constraints now have pick predicates, rail tools,
+undoable command creation, and real-GCS geometric-oracle coverage, including a
+typed unsatisfied conflict result. S-1 remains open for the driving-dimension
+slice; S-2 remains open for persistent annotations.
 
 Everything above is app-side except S-6; the solver, region engine, and
 snapping already carry it.

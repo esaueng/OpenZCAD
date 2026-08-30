@@ -13,13 +13,17 @@ import type {
 } from '@openzcad/shared';
 import type { ProjectDocument } from '@openzcad/shared';
 
-/** Stage-1 constraint tools; the schema's remaining kinds arrive in stage 2. */
+/** Constraint tools whose values need no placement or numeric-entry gesture. */
 export type PendingConstraintKind =
   | 'horizontal'
   | 'vertical'
   | 'parallel'
+  | 'perpendicular'
+  | 'equal'
   | 'tangent'
+  | 'concentric'
   | 'coincident'
+  | 'midpoint'
   | 'radius';
 
 export type ConstraintPick =
@@ -31,8 +35,12 @@ export interface ConstraintToolSpec {
   label: string;
   /** How many picks complete the constraint. */
   picks: 1 | 2;
-  /** Whether the tool consumes whole objects or named points. */
-  pickKind: 'object' | 'point';
+  /** What each pick consumes, in order. */
+  pickKinds:
+    | readonly ['object']
+    | readonly ['object', 'object']
+    | readonly ['point', 'point']
+    | readonly ['point', 'object'];
   /** Instruction shown while the tool is armed. */
   hint: string;
 }
@@ -42,42 +50,70 @@ export const CONSTRAINT_TOOL_SPECS: readonly ConstraintToolSpec[] = [
     kind: 'horizontal',
     label: 'Horizontal',
     picks: 1,
-    pickKind: 'object',
+    pickKinds: ['object'],
     hint: 'Click a line to make it horizontal.'
   },
   {
     kind: 'vertical',
     label: 'Vertical',
     picks: 1,
-    pickKind: 'object',
+    pickKinds: ['object'],
     hint: 'Click a line to make it vertical.'
   },
   {
     kind: 'parallel',
     label: 'Parallel',
     picks: 2,
-    pickKind: 'object',
+    pickKinds: ['object', 'object'],
     hint: 'Click two lines to make them parallel.'
+  },
+  {
+    kind: 'perpendicular',
+    label: 'Perpendicular',
+    picks: 2,
+    pickKinds: ['object', 'object'],
+    hint: 'Click two lines to make them perpendicular.'
+  },
+  {
+    kind: 'equal',
+    label: 'Equal',
+    picks: 2,
+    pickKinds: ['object', 'object'],
+    hint: 'Click two lines for equal length, or two circles/arcs for equal radius.'
   },
   {
     kind: 'tangent',
     label: 'Tangent',
     picks: 2,
-    pickKind: 'object',
+    pickKinds: ['object', 'object'],
     hint: 'Click a line and a circle to make them tangent.'
+  },
+  {
+    kind: 'concentric',
+    label: 'Concentric',
+    picks: 2,
+    pickKinds: ['object', 'object'],
+    hint: 'Click two circles or arcs to share a center.'
   },
   {
     kind: 'coincident',
     label: 'Coincident',
     picks: 2,
-    pickKind: 'point',
+    pickKinds: ['point', 'point'],
     hint: 'Click two snap points (endpoints or centers) to join them.'
+  },
+  {
+    kind: 'midpoint',
+    label: 'Midpoint',
+    picks: 2,
+    pickKinds: ['point', 'object'],
+    hint: 'Click a snap point, then the line whose midpoint it should occupy.'
   },
   {
     kind: 'radius',
     label: 'Radius',
     picks: 1,
-    pickKind: 'object',
+    pickKinds: ['object'],
     hint: 'Click a circle or arc to pin its current radius.'
   }
 ] as const;
@@ -129,8 +165,12 @@ export function refusePick(
   pick: ConstraintPick
 ): string | null {
   const spec = constraintToolSpec(kind);
-  if (pick.kind !== spec.pickKind) {
-    return spec.pickKind === 'point'
+  const expectedPickKind = spec.pickKinds[existing.length];
+  if (!expectedPickKind) {
+    return `${spec.label} already has all of its picks.`;
+  }
+  if (pick.kind !== expectedPickKind) {
+    return expectedPickKind === 'point'
       ? 'Pick a snap point (endpoint or center), not a whole object.'
       : 'Pick an object, not a point.';
   }
@@ -145,9 +185,29 @@ export function refusePick(
     case 'horizontal':
     case 'vertical':
     case 'parallel':
+    case 'perpendicular':
       return data.objectKind === 'line'
         ? null
         : 'This constraint applies to lines.';
+    case 'equal': {
+      if (
+        data.objectKind !== 'line' &&
+        data.objectKind !== 'circle' &&
+        data.objectKind !== 'arc'
+      ) {
+        return 'Equal applies to two lines or two circles/arcs.';
+      }
+      const first = existing[0];
+      if (first) {
+        const firstData = sketchObjectData(document, sketch, first.objectId);
+        const firstIsLine = firstData?.objectKind === 'line';
+        const currentIsLine = data.objectKind === 'line';
+        if (firstData && firstIsLine !== currentIsLine) {
+          return 'Equal needs another line, or another circle/arc.';
+        }
+      }
+      return null;
+    }
     case 'tangent': {
       if (data.objectKind !== 'line' && data.objectKind !== 'circle') {
         return 'Tangent applies to a line and a circle.';
@@ -167,6 +227,10 @@ export function refusePick(
       return data.objectKind === 'circle' || data.objectKind === 'arc'
         ? null
         : 'A radius constraint applies to circles and arcs.';
+    case 'concentric':
+      return data.objectKind === 'circle' || data.objectKind === 'arc'
+        ? null
+        : 'Concentric applies to circles and arcs.';
     case 'coincident': {
       if (data.objectKind === 'line' || data.objectKind === 'arc') {
         return null;
@@ -177,6 +241,25 @@ export function refusePick(
           : 'A circle joins by its center.';
       }
       return 'Coincident applies to line and arc points and circle centers.';
+    }
+    case 'midpoint': {
+      if (existing.length === 0) {
+        if (data.objectKind === 'line' || data.objectKind === 'arc') {
+          return null;
+        }
+        if (data.objectKind === 'circle') {
+          return pick.kind === 'point' && pick.point === 'center'
+            ? null
+            : 'A circle contributes only its center point.';
+        }
+        return 'Midpoint starts from a line/arc point or a circle center.';
+      }
+      if (data.objectKind !== 'line') {
+        return 'The midpoint target must be a line.';
+      }
+      return existing[0]?.objectId === pick.objectId
+        ? 'The point and midpoint target must be different objects.'
+        : null;
     }
   }
 }
@@ -206,7 +289,10 @@ export function buildConstraint(
       };
     }
     case 'parallel':
-    case 'tangent': {
+    case 'perpendicular':
+    case 'equal':
+    case 'tangent':
+    case 'concentric': {
       const a = picks[0]!;
       const b = picks[1]!;
       return {
@@ -244,6 +330,23 @@ export function buildConstraint(
           constraintKind: 'radius',
           objectId: pick.objectId as EntityId,
           value: data.radius
+        }
+      };
+    }
+    case 'midpoint': {
+      const point = picks[0]!;
+      const line = picks[1]!;
+      if (point.kind !== 'point' || line.kind !== 'object') {
+        return { error: 'Midpoint needs a snap point followed by a line.' };
+      }
+      return {
+        data: {
+          constraintKind: 'midpoint',
+          point: {
+            objectId: point.objectId as EntityId,
+            point: point.point
+          },
+          line: line.objectId as EntityId
         }
       };
     }

@@ -8877,8 +8877,9 @@ export function App() {
     }
     const pending = interaction.session.pendingConstraint;
     const spec = constraintToolSpec(pending.kind);
+    const expectedPickKind = spec.pickKinds[pending.picks.length];
     const pick: ConstraintPick | null =
-      spec.pickKind === 'point'
+      expectedPickKind === 'point'
         ? snapPoint
           ? { kind: 'point', ...snapPoint }
           : null
