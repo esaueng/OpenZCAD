@@ -19,10 +19,13 @@ the current branch; production enablement is a separate rollout decision.
   unsupported faces stop the rebuild; legacy attachments use their stored
   migration frame with a warning.
 - Modeling UI and command preflight for mirror, shell opening-face selection,
-  and positive-outward solid offset. Remus mirror refuses dense
-  blended/boolean bodies when the pinned kernel does not preserve measured
-  solid volume. (The OpenCascade convex-planar solid-offset refusal is gone
-  with the kernel — Z5.)
+  and positive-outward solid offset. Dense filleted bodies mirror at preserved
+  volume; the preflight guard remains and refuses only a synthetic broken
+  kernel that changes volume
+  ([real-body regression](test/modeling-operation-preflight.test.ts),
+  [guard regression](packages/kernel-adapter/src/remus-modeling-operations.test.ts)).
+  (The OpenCascade convex-planar solid-offset refusal is gone with the kernel
+  — Z5.)
 - A bounded, kernel-neutral imported-feature recognizer for blind holes,
   counterbores, countersinks, bosses, prismatic pockets, and conical tapers.
   This is a tested read-only proof module, not live product editing yet.
@@ -76,8 +79,12 @@ the current branch; production enablement is a separate rollout decision.
 - Run the collaboration recovery-copy reload E2E against a real beta session
   and verify revocation/lease expiry for the sharing rollout now enabled in
   the checked-in beta configuration.
-- Connect the imported-feature proof query to live kernel face adjacency and add
-  deterministic coordinated edit commands before enabling those UI or AI paths.
+- Complete imported-feature editing by publishing exact straight-edge polygon
+  loops on planar faces, enumerating planar-floor seeds, and adding coordinated
+  boss, pocket-depth, and taper-angle commands before enabling those UI or AI
+  paths. Live adjacency already backs the query
+  ([query](packages/kernel-adapter/src/imported-feature-query.ts),
+  [pocket proof](packages/kernel-adapter/src/imported-feature-recognition.ts)).
 - Extend verified lineage through production boolean post-processing, blends,
   patterns, direct edits, and STEP provenance. Do not substitute nearest-face
   or traversal-order rebinding.

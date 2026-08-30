@@ -1,14 +1,15 @@
 # Capability and gap matrix
 
-Snapshot: 2026-08-04, schema v6. “Exact” means the browser geometry worker
-evaluates the operation through a B-rep kernel. “Implemented behind flags” is
-not a production-availability claim. Approximate previews and isolated proof
-modules are called out explicitly.
+Snapshot: 2026-08-29, schema v13
+([schema constant](../packages/shared/src/index.ts)). “Exact” means the browser
+geometry worker evaluates the operation through a B-rep kernel. “Implemented
+behind flags” is not a production-availability claim. Approximate previews and
+isolated proof modules are called out explicitly.
 
 | Area                    | Current capability                                                                                                                                                                                                       | Status                                  | Explicit limit / release gate                                                                                                                                                                                                                   |
 | ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Canonical model         | Schema-v6 `ProjectDocument`, serialized command history, replay, transactions, undo/redo, and v1–v5 normalization                                                                                                        | Working                                 | Public schema changes remain additive; exact topology references use the schema-v5 contract carried by schema v6                                                                                                                                |
-| Exact geometry          | Remus implements mirror-copy, shell, and sharp positive-outward solid offset for every document, imported STEP included                                                                                                  | Working safe subset                     | Remus mirror refuses dense blended/boolean bodies when the pinned kernel does not preserve measured solid volume. The OpenCascade convex-planar offset limit and its capability fields are deleted (Z5); the reference adapter is corpus-only   |
+| Canonical model         | Schema-v13 `ProjectDocument`, serialized command history, replay, transactions, undo/redo, and v1–v12 normalization ([schema constant](../packages/shared/src/index.ts))                                                 | Working                                 | Public schema changes remain additive; exact topology references use the schema-v5 contract carried by schema v13                                                                                                                               |
+| Exact geometry          | Remus implements mirror-copy, shell, and sharp positive-outward solid offset for every document, imported STEP included                                                                                                  | Working safe subset                     | Dense filleted bodies mirror at preserved volume; the exact-volume guard remains and only a synthetic broken kernel trips it ([real body](../test/modeling-operation-preflight.test.ts), [guard](../packages/kernel-adapter/src/remus-modeling-operations.test.ts)). The OpenCascade convex-planar offset limit and its capability fields are deleted (Z5); the reference adapter is corpus-only |
 | STEP                    | Exact Remus import/export honouring the file's declared units, plus live bounded imported-feature proofs and grouped hole auto-parameterization                                                                          | Partial                                 | Blind/counterbore/countersink proofs have coordinated commands; boss, pocket, and taper proofs remain read-only. Blends on imported bodies fit B-spline bands where a quarter cylinder is exact (K0.4)                                          |
 | Topology identity       | Exact witnesses and semantic lineage for supported primitives, sweeps, and rigid transforms on both kernels                                                                                                              | Working safe subset                     | Boolean post-processing, blends, patterns, direct edits, and STEP provenance stay explicitly hash-only where complete evolution is unavailable                                                                                                  |
 | Face-attached sketches  | Schema-v5 face references resolve an exact planar face at the sketch’s history position on both exact adapters; new UI attachments require a current matching reference; a deterministic frame is rebuilt from that face | Working for current references          | Deleted, ambiguous, non-planar, and unsupported faces stop rebuild. Hash-only faces refuse new sketches. Legacy attachments use the stored migration frame with a warning and can be converted explicitly to a fixed plane                      |
@@ -54,7 +55,7 @@ modules are called out explicitly.
 
 ### Wave 3: modeling contracts
 
-- Schema v6 owns mirror, shell, and solid-offset features. Mirror creates an
+- Schema v13 owns mirror, shell, and solid-offset features. Mirror creates an
   independent body; shell and offset consume their source and own the result.
 - Positive shell thickness is inward while retaining the outer envelope;
   positive solid offset is outward. These unit/sign conventions are public and
