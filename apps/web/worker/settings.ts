@@ -794,6 +794,12 @@ export async function updateAppSettings(
   const nextRevision = current.revision + 1;
   const serialized = JSON.stringify(request.settings);
   const timestamp = nowIso();
+  if (
+    assistantConnectionFingerprint(current.settings) !==
+    assistantConnectionFingerprint(request.settings)
+  ) {
+    await clearAssistantCredentialValidation(userId, env);
+  }
   const result =
     current.revision === 0
       ? await env.DB.prepare(
@@ -817,6 +823,18 @@ export async function updateAppSettings(
     );
   }
   return getAppSettings(userId, env, email);
+}
+
+function assistantConnectionFingerprint(settings: AppSettings): string {
+  const assistant = settings.assistant;
+  return JSON.stringify([
+    assistant.provider,
+    assistant.baseUrl,
+    assistant.model,
+    assistant.reasoningEffort,
+    assistant.maxOutputTokens,
+    assistant.timeoutMs
+  ]);
 }
 
 export function parseAssistantCredential(value: unknown): string {
@@ -883,5 +901,19 @@ export async function markAssistantCredentialValidated(
     'UPDATE user_ai_credentials SET last_validated_at = ? WHERE user_id = ?'
   )
     .bind(nowIso(), userId)
+    .run();
+}
+
+export async function clearAssistantCredentialValidation(
+  userId: UserId,
+  env: CloudflareEnv
+): Promise<void> {
+  if (!env.DB) {
+    return;
+  }
+  await env.DB.prepare(
+    'UPDATE user_ai_credentials SET last_validated_at = NULL WHERE user_id = ?'
+  )
+    .bind(userId)
     .run();
 }

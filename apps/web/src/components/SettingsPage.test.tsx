@@ -8,7 +8,11 @@ import {
   kernelBuildDetail,
   kernelBuildLabel
 } from '../lib/kernelBuild';
-import { toUserId, type HealthResponse } from '@openzcad/shared';
+import {
+  toUserId,
+  type AppSettingsResponse,
+  type HealthResponse
+} from '@openzcad/shared';
 import { SettingsPage } from './SettingsPage';
 import { api } from '../lib/api';
 
@@ -103,6 +107,74 @@ describe('settings assistant section', () => {
     await user.click(toggle);
     expect(onChange).toHaveBeenCalledOnce();
     expect(onChange.mock.calls[0]?.[0].assistant.enabled).toBe(true);
+  });
+
+  function personalAssistantState(
+    lastValidatedAt?: string
+  ): AppSettingsResponse {
+    const settings = defaultAppSettings();
+    settings.assistant.enabled = true;
+    settings.assistant.credentialSource = 'personal';
+    return {
+      settings,
+      revision: 1,
+      synced: true,
+      credential: {
+        stored: true,
+        hint: '••••test',
+        updatedAt: '2026-08-30T12:00:00.000Z',
+        ...(lastValidatedAt ? { lastValidatedAt } : {}),
+        storageAvailable: true
+      },
+      effectiveAssistant: {
+        configured: true,
+        source: 'personal',
+        provider: 'openrouter',
+        model: 'openai/gpt-5.6-sol',
+        reasoningEffort: 'high'
+      }
+    };
+  }
+
+  it('labels an untested saved credential as configured, not ready', () => {
+    const accountState = personalAssistantState();
+    renderSettings(null, {
+      settings: accountState.settings,
+      accountState,
+      initialSection: 'assistant',
+      session: {
+        userId: toUserId('user_ai'),
+        displayName: 'person',
+        email: 'person@example.com',
+        mode: 'email-code'
+      }
+    });
+
+    expect(screen.getByText(/Configured · openai\/gpt-5.6-sol/)).toHaveClass(
+      'settings-state',
+      'warning'
+    );
+    expect(screen.queryByText(/Ready · openai\/gpt-5.6-sol/)).toBeNull();
+  });
+
+  it('labels a credential validated only after a completed test', () => {
+    const accountState = personalAssistantState('2026-08-30T12:01:00.000Z');
+    renderSettings(null, {
+      settings: accountState.settings,
+      accountState,
+      initialSection: 'assistant',
+      session: {
+        userId: toUserId('user_ai'),
+        displayName: 'person',
+        email: 'person@example.com',
+        mode: 'email-code'
+      }
+    });
+
+    expect(screen.getByText(/Validated · openai\/gpt-5.6-sol/)).toHaveClass(
+      'settings-state',
+      'good'
+    );
   });
 });
 
