@@ -97,6 +97,7 @@ export function buildDocumentHistory(
     meshBodies: new Set(),
     partialRevolveBodies: new Set(),
     warnings: [...errors],
+    featureWarnings: [],
     referenceRepairs: []
   };
   const startIndex = resume?.startIndex ?? 0;
@@ -145,12 +146,12 @@ export function buildDocumentHistory(
  * as model state.
  */
 function attribute(
-  result: { warnings: string[]; featureWarnings?: FeatureWarning[] },
+  result: { warnings: string[]; featureWarnings: FeatureWarning[] },
   feature: { featureId: FeatureId; name: string },
   message: string,
   kind: FeatureWarning['kind']
 ): void {
-  (result.featureWarnings ??= []).push({
+  result.featureWarnings.push({
     featureId: feature.featureId,
     featureName: feature.name,
     message,

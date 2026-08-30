@@ -28,7 +28,7 @@ export function raiseFeatureWarning(
   const message = `Feature "${feature.name}": ${reason}`;
   const index = result.warnings.length;
   result.warnings.push(message);
-  (result.featureWarnings ??= []).push({
+  result.featureWarnings.push({
     featureId: feature.featureId,
     featureName: feature.name,
     message,
@@ -58,10 +58,22 @@ export function amendFeatureWarning(
   const amended = `${result.warnings[index]!} ${suffix}`;
   const previous = result.warnings[index]!;
   result.warnings[index] = amended;
-  const record = result.featureWarnings?.find(
+  const record = result.featureWarnings.find(
     (entry) => entry.featureId === featureId && entry.message === previous
   );
   if (record) {
     record.message = amended;
   }
+}
+
+/** Whether this exact feature already raised a genuine commit refusal. */
+export function hasRefusingFeatureWarning(
+  result: Pick<ExactBuildResult, 'featureWarnings'>,
+  featureId: FeatureId
+): boolean {
+  return result.featureWarnings.some(
+    (entry) =>
+      entry.featureId === featureId &&
+      (entry.kind === 'build-failed' || entry.kind === 'refusal')
+  );
 }
