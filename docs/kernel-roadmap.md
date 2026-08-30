@@ -2,7 +2,9 @@
 
 > Historical roadmap snapshot. ADR-020 replaces the production kernel with
 > Remus; names, package paths, issue references, and measurements below record
-> the BrepKit-era work and must not be read as current configuration.
+> the BrepKit-era work and must not be read as current configuration. The
+> current Remus-era kernel roadmap is
+> [kernel-roadmap-remus.md](kernel-roadmap-remus.md).
 
 **Date:** 2026-08-01
 **Scope:** Findings from a full review of BrepKit (v2.129.0, 257k LOC Rust)
