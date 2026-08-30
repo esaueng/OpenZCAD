@@ -810,6 +810,25 @@
   font-size: var(--fs-xs);
 }
 
+.sketch-constraint-edit {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  padding: 2px 4px;
+  color: var(--color-text);
+  border-radius: var(--radius-sm);
+  font-size: var(--fs-xs);
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sketch-constraint-edit:hover,
+.sketch-constraint-edit:focus-visible {
+  color: var(--color-accent-hi);
+  background: var(--color-surface-hover);
+}
+
 .sketch-circle-tool {
   position: relative;
   display: flex;

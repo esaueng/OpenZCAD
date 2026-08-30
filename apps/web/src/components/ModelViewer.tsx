@@ -567,10 +567,12 @@ interface ModelViewerProps {
      * was one with constraint-schema identity (line/arc endpoints, centers).
      * Constraint picking consumes it; plain selection ignores it.
      */
-    snapPoint?: {
+    snapPoint: {
       objectId: string;
       point: 'start' | 'end' | 'center';
-    } | null
+    } | null,
+    /** Client-space click used to place a driving-dimension editor. */
+    clickPoint: { x: number; y: number }
   ): void;
   onSelectSketchProfile(sketchId: string): void;
   onResizePrimitiveFace(commit: FaceResizeCommit): void;
@@ -3626,6 +3628,21 @@ export function ModelViewer({
       slots.sort((left, right) => left.slot - right.slot);
       detail.resolve({ settling: selection.isSettling, slots });
     };
+    /** Read the document-backed sketch objects currently owned by the rig. */
+    const handleE2ESketchState = (event: Event) => {
+      if (!e2eCanvasHooksEnabled) {
+        return;
+      }
+      const detail = (
+        event as CustomEvent<{
+          resolve?: (
+            value: { objects: SketchModeState['objects'] } | null
+          ) => void;
+        }>
+      ).detail;
+      const mode = sketchModeRef.current;
+      detail?.resolve?.(mode ? { objects: mode.objects } : null);
+    };
     if (E2E_CANVAS_HOOKS_ENABLED) {
       renderer.domElement.addEventListener(
         'openzcad:e2e-select-cylinder',
@@ -3674,6 +3691,10 @@ export function ModelViewer({
       renderer.domElement.addEventListener(
         'openzcad:e2e-hover-face-state',
         handleE2EHoverFaceState
+      );
+      renderer.domElement.addEventListener(
+        'openzcad:e2e-sketch-state',
+        handleE2ESketchState
       );
     }
 
@@ -5745,7 +5766,10 @@ export function ModelViewer({
                   point: activeSketchSnap.pointRef
                 }
               : null;
-          onSketchSelectObjectRef.current(objectId, snapPoint);
+          onSketchSelectObjectRef.current(objectId, snapPoint, {
+            x: event.clientX,
+            y: event.clientY
+          });
           if (!objectId) {
             const profile = picker.pick(event)?.region;
             if (profile) {
@@ -6564,6 +6588,10 @@ export function ModelViewer({
       renderer.domElement.removeEventListener(
         'openzcad:e2e-hover-face-state',
         handleE2EHoverFaceState
+      );
+      renderer.domElement.removeEventListener(
+        'openzcad:e2e-sketch-state',
+        handleE2ESketchState
       );
       document.removeEventListener('keydown', handleCapturedEscape, true);
       document.removeEventListener(

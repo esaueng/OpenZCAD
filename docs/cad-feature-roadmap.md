@@ -70,11 +70,10 @@ chase every checkbox.
 ## 2. Sketching to constraint-complete — highest product priority
 
 The solver is ahead of the UI: the GCS layer supports 13 constraint kinds
-(`gcs-sketch.ts`) and the schema stores them. Ten now have direct tools
-(horizontal, vertical, parallel, perpendicular, equal, tangent, concentric,
-coincident, midpoint, radius); driving distance and angle still need their
-placement/value flow. The fastest meaningful win in the entire roadmap is
-exposure, not construction:
+(`gcs-sketch.ts`) and the schema stores the app-facing set. Every schema-backed
+kind now has a direct creation tool: distance and angle use a pick-pair, canvas
+placement, expression-aware value editor, and immediate solve transaction. The
+fastest meaningful win in the entire roadmap was exposure, not construction:
 
 - **S-1. Expose the seven solver-ready constraints**: perpendicular, equal,
   concentric, midpoint, and — the important three — **driving distance,
@@ -107,8 +106,10 @@ exposure, not construction:
 **Disposition (2026-08-30, P1-S1 Slice A): shipped in PR #142.** The four
 non-dimensional solver-ready constraints now have pick predicates, rail tools,
 undoable command creation, and real-GCS geometric-oracle coverage, including a
-typed unsatisfied conflict result. S-1 remains open for the driving-dimension
-slice; S-2 remains open for persistent annotations.
+typed unsatisfied conflict result. The driving-dimension remainder is completed
+by Slice B; S-2 remains open for persistent annotations.
+
+**Disposition (2026-08-30, P1-S1 Slice B):** — done (PR #144); distance/angle placement, expression editing, transactional solve, real-GCS rollback oracles, and Playwright geometry/undo coverage shipped; S-2 persistent graphics remain separate.
 
 Everything above is app-side except S-6; the solver, region engine, and
 snapping already carry it.
@@ -269,8 +270,9 @@ UI. The kernel's assembly hierarchy/transforms/BOM went Stable on
   text, hole, split, draft, thicken, loft/sweep/helical-sweep, sketch
   constraints, save-state restore/branching, and section view. Refresh or
   banner it.
-- `TODO.md` "Later" undersells current standing: sketch constraints are
-  partially shipped (6 of 13 kinds have tools), not absent.
+- The stale `TODO.md` sketch-constraint claim was corrected with P1-S1; direct
+  creation now covers every schema-backed kind. Persistent dimension graphics,
+  status feedback, and entity identity remain tracked above.
 
 ---
 
