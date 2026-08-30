@@ -49,6 +49,14 @@ interface ProjectMeasurementReadinessRow {
   erasure_triggers: number;
 }
 
+const READY_ARTIFACT_UPLOAD_ACCOUNTING_SCHEMA = {
+  usage_table: 1,
+  parts_table: 1,
+  session_columns: 5,
+  indexes: 2,
+  triggers: 14
+};
+
 const READY_STORAGE_ACCOUNTING_SCHEMA: StorageAccountingReadinessRow = {
   projects_document_bytes: 1,
   revisions_document_bytes: 1,
@@ -91,6 +99,9 @@ function storageAccountingDb(
       }
       if (query.includes('idx_project_document_objects_project_state')) {
         return projectObjectRow;
+      }
+      if (query.includes('artifact_account_usage')) {
+        return READY_ARTIFACT_UPLOAD_ACCOUNTING_SCHEMA;
       }
       if (query.includes("pragma_table_info('project_measurements')")) {
         return projectMeasurementRow;
@@ -413,6 +424,7 @@ describe('worker api routes', () => {
     );
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toMatchObject({
+      artifactUploadAccountingReady: false,
       documentStorageAccountingReady: false,
       projectSharingEnabled: false,
       projectEditLeasesEnforced: false,
@@ -2334,6 +2346,7 @@ describe('worker api routes', () => {
         PROJECT_PERSONAL_SYNC_ENABLED: 'true'
       })
     ).json()) as {
+      artifactUploadAccountingReady: boolean;
       documentStorageAccountingReady: boolean;
       projectObjectStorageReady: boolean;
       projectPersonalSyncEnabled: boolean;
@@ -2342,6 +2355,7 @@ describe('worker api routes', () => {
       projectSharingEnabled: boolean;
       projectEditLeasesEnforced: boolean;
     };
+    expect(health.artifactUploadAccountingReady).toBe(true);
     expect(health.documentStorageAccountingReady).toBe(true);
     expect(health.projectObjectStorageReady).toBe(true);
     expect(health.projectPersonalSyncEnabled).toBe(true);

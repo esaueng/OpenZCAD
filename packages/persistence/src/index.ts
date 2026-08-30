@@ -4,7 +4,11 @@ import {
   DEFAULT_PROJECT_ORGANIZATION,
   duplicateProjectName,
   isPurgeDue,
+  MAX_ACTIVE_ARTIFACT_UPLOAD_SESSIONS,
   MAX_ACCOUNT_ARTIFACT_BYTES,
+  MAX_ACCOUNT_RESERVED_ARTIFACT_BYTES,
+  MAX_ARTIFACT_PART_BYTES,
+  MAX_ARTIFACT_UPLOAD_BYTES,
   MAX_PERSISTED_DOCUMENT_BYTES,
   MAX_PROJECT_REVISIONS,
   MAX_ARTIFACT_UPLOAD_PARTS,
@@ -526,6 +530,7 @@ export class InMemoryPersistenceService implements PersistenceService {
   /** In-flight chunked uploads: `${sessionId}:${uploadId}` → part bodies. */
   private readonly multipartParts = new Map<string, Map<number, ArrayBuffer>>();
   private readonly activeMultipartUploads = new Map<string, string>();
+  private readonly completedMultipartUploads = new Map<string, string>();
 
   async requireProjectRead(
     userId: UserId,
@@ -812,9 +817,7 @@ export class InMemoryPersistenceService implements PersistenceService {
   ): Promise<ProjectShareLinkSummary[]> {
     await this.requireProjectOwner(ownerUserId, projectId);
     return Array.from(this.projectShareLinks.values())
-      .filter(
-        (link) => link.projectId === projectId && link.revokedAt === null
-      )
+      .filter((link) => link.projectId === projectId && link.revokedAt === null)
       .sort((left, right) => right.createdAt - left.createdAt)
       .map((link) => ({
         shareLinkId: link.shareLinkId,
@@ -1179,9 +1182,47 @@ export class InMemoryPersistenceService implements PersistenceService {
     return { bytes, count };
   }
 
-  private assertArtifactQuota(ownerUserId: UserId, incomingBytes: number): void {
+  private accountUploadSessions(ownerUserId: UserId): number {
+    const ownedIds = new Set(
+      this.ownedProjects(ownerUserId).map((document) => document.projectId)
+    );
+    let count = 0;
+    for (const upload of this.uploads.values()) {
+      if (ownedIds.has(upload.projectId)) count += 1;
+    }
+    return count;
+  }
+
+  private accountReservedArtifactBytes(ownerUserId: UserId): number {
+    const ownedIds = new Set(
+      this.ownedProjects(ownerUserId).map((document) => document.projectId)
+    );
+    let bytes = 0;
+    for (const [key, parts] of this.multipartParts) {
+      const sessionId = key.slice(0, key.indexOf(':'));
+      const upload = this.uploads.get(sessionId);
+      if (!upload || !ownedIds.has(upload.projectId)) continue;
+      for (const body of parts.values()) bytes += body.byteLength;
+    }
+    return bytes;
+  }
+
+  private assertArtifactQuota(
+    ownerUserId: UserId,
+    incomingBytes: number,
+    reservationCredit = 0
+  ): void {
     const { bytes } = this.accountArtifacts(ownerUserId);
-    if (bytes + incomingBytes > this.artifactLimitBytes) {
+    const reserved = this.accountReservedArtifactBytes(ownerUserId);
+    if (
+      reserved + incomingBytes - reservationCredit >
+        Math.min(
+          this.artifactLimitBytes,
+          MAX_ACCOUNT_RESERVED_ARTIFACT_BYTES
+        ) ||
+      bytes + reserved + incomingBytes - reservationCredit >
+        this.artifactLimitBytes
+    ) {
       throw new ArtifactQuotaError(this.artifactLimitBytes);
     }
   }
@@ -1246,8 +1287,16 @@ export class InMemoryPersistenceService implements PersistenceService {
     request: CreateUploadSessionRequest
   ): Promise<CreateUploadSessionResponse> {
     const access = await this.requireProjectEdit(userId, request.projectId);
-    this.assertArtifactQuota(access.ownerUserId, 1);
     await this.purgeExpiredUploadSessions();
+    this.assertArtifactQuota(access.ownerUserId, 1);
+    if (
+      this.accountUploadSessions(access.ownerUserId) >=
+      MAX_ACTIVE_ARTIFACT_UPLOAD_SESSIONS
+    ) {
+      throw new ArtifactStorageError(
+        'The account has too many active upload sessions.'
+      );
+    }
     const session: UploadSessionRecord = {
       uploadSessionId: toUploadSessionId(`upload_${crypto.randomUUID()}`),
       artifactId: toArtifactId(`artifact_${crypto.randomUUID()}`),
@@ -1295,6 +1344,9 @@ export class InMemoryPersistenceService implements PersistenceService {
     if (activeUploadId) {
       return { uploadId: activeUploadId };
     }
+    if (this.completedMultipartUploads.has(uploadSessionId)) {
+      throw new ArtifactStorageError('Multipart upload is already complete.');
+    }
     const uploadId = `multipart_${crypto.randomUUID()}`;
     this.multipartParts.set(`${uploadSessionId}:${uploadId}`, new Map());
     this.activeMultipartUploads.set(uploadSessionId, uploadId);
@@ -1320,11 +1372,23 @@ export class InMemoryPersistenceService implements PersistenceService {
     ) {
       throw new ArtifactStorageError('Upload part number is out of range.');
     }
+    if (body.byteLength < 1 || body.byteLength > MAX_ARTIFACT_PART_BYTES) {
+      throw new ArtifactStorageError('Upload part is invalid or too large.');
+    }
     const access = await this.requireProjectEdit(userId, upload.projectId);
-    // Approximate: parts already streamed into this session are not summed
-    // here (that would need per-session accounting); the authoritative check
-    // runs against the assembled size at finalize.
-    this.assertArtifactQuota(access.ownerUserId, body.byteLength);
+    const previous = parts.get(partNumber);
+    if (!previous && parts.size >= MAX_ARTIFACT_UPLOAD_PARTS) {
+      throw new ArtifactStorageError('Upload has too many parts.');
+    }
+    const replacementDelta = body.byteLength - (previous?.byteLength ?? 0);
+    const uploadBytes = [...parts.values()].reduce(
+      (total, part) => total + part.byteLength,
+      0
+    );
+    if (uploadBytes + replacementDelta > MAX_ARTIFACT_UPLOAD_BYTES) {
+      throw new ArtifactStorageError('Multipart upload is too large.');
+    }
+    this.assertArtifactQuota(access.ownerUserId, replacementDelta);
     parts.set(partNumber, body);
     return { partNumber, etag: `etag-${partNumber}-${body.byteLength}` };
   }
@@ -1337,7 +1401,13 @@ export class InMemoryPersistenceService implements PersistenceService {
     const upload = this.uploads.get(uploadSessionId);
     const key = `${uploadSessionId}:${request.uploadId}`;
     const parts = this.multipartParts.get(key);
-    if (!upload || !parts) {
+    if (
+      !upload ||
+      !parts ||
+      (this.activeMultipartUploads.get(uploadSessionId) !== request.uploadId &&
+        this.completedMultipartUploads.get(uploadSessionId) !==
+          request.uploadId)
+    ) {
       throw new ArtifactStorageError('Multipart upload was not found.');
     }
     await this.requireProjectEdit(userId, upload.projectId);
@@ -1359,8 +1429,8 @@ export class InMemoryPersistenceService implements PersistenceService {
       offset += buffer.byteLength;
     }
     this.uploadBodies.set(upload.objectKey, assembled.buffer);
-    this.multipartParts.delete(key);
     this.activeMultipartUploads.delete(uploadSessionId);
+    this.completedMultipartUploads.set(uploadSessionId, request.uploadId);
   }
 
   async abortMultipartUpload(
@@ -1370,14 +1440,20 @@ export class InMemoryPersistenceService implements PersistenceService {
   ): Promise<void> {
     const upload = this.uploads.get(uploadSessionId);
     if (!upload) {
-      throw new ArtifactStorageError('Upload session was not found.');
+      return;
     }
     await this.requireProjectEdit(userId, upload.projectId);
-    if (this.activeMultipartUploads.get(uploadSessionId) !== uploadId) {
+    if (
+      this.activeMultipartUploads.get(uploadSessionId) !== uploadId &&
+      this.completedMultipartUploads.get(uploadSessionId) !== uploadId
+    ) {
       return;
     }
     this.multipartParts.delete(`${uploadSessionId}:${uploadId}`);
     this.activeMultipartUploads.delete(uploadSessionId);
+    this.completedMultipartUploads.delete(uploadSessionId);
+    this.uploadBodies.delete(upload.objectKey);
+    this.uploads.delete(uploadSessionId);
   }
 
   async finalizeArtifact(
@@ -1396,14 +1472,36 @@ export class InMemoryPersistenceService implements PersistenceService {
     ) {
       return null;
     }
-    this.uploads.delete(request.uploadSessionId);
+    const completedUploadId = this.completedMultipartUploads.get(
+      request.uploadSessionId
+    );
+    const reservationKey = completedUploadId
+      ? `${request.uploadSessionId}:${completedUploadId}`
+      : null;
+    const reservationCredit = reservationKey
+      ? [...(this.multipartParts.get(reservationKey)?.values() ?? [])].reduce(
+          (total, part) => total + part.byteLength,
+          0
+        )
+      : 0;
     try {
-      this.assertArtifactQuota(access.ownerUserId, body.byteLength);
+      this.assertArtifactQuota(
+        access.ownerUserId,
+        body.byteLength,
+        reservationCredit
+      );
     } catch (error) {
       // The over-quota object must not linger as unaccounted storage.
       this.uploadBodies.delete(upload.objectKey);
+      if (reservationKey) this.multipartParts.delete(reservationKey);
+      this.activeMultipartUploads.delete(request.uploadSessionId);
+      this.completedMultipartUploads.delete(request.uploadSessionId);
+      this.uploads.delete(request.uploadSessionId);
       throw error;
     }
+    this.uploads.delete(request.uploadSessionId);
+    if (reservationKey) this.multipartParts.delete(reservationKey);
+    this.completedMultipartUploads.delete(request.uploadSessionId);
 
     const artifact: ArtifactRecord = {
       artifactId: request.artifactId,
@@ -1529,6 +1627,16 @@ export class InMemoryPersistenceService implements PersistenceService {
       if (session.projectId === projectId) {
         this.uploads.delete(sessionId);
         this.uploadBodies.delete(session.objectKey);
+        const activeUploadId = this.activeMultipartUploads.get(sessionId);
+        const completedUploadId = this.completedMultipartUploads.get(sessionId);
+        if (activeUploadId) {
+          this.multipartParts.delete(`${sessionId}:${activeUploadId}`);
+        }
+        if (completedUploadId) {
+          this.multipartParts.delete(`${sessionId}:${completedUploadId}`);
+        }
+        this.activeMultipartUploads.delete(sessionId);
+        this.completedMultipartUploads.delete(sessionId);
       }
     }
   }
@@ -1566,6 +1674,16 @@ export class InMemoryPersistenceService implements PersistenceService {
       if (Date.parse(session.expiresAt) < now) {
         this.uploads.delete(sessionId);
         this.uploadBodies.delete(session.objectKey);
+        const activeUploadId = this.activeMultipartUploads.get(sessionId);
+        const completedUploadId = this.completedMultipartUploads.get(sessionId);
+        if (activeUploadId) {
+          this.multipartParts.delete(`${sessionId}:${activeUploadId}`);
+        }
+        if (completedUploadId) {
+          this.multipartParts.delete(`${sessionId}:${completedUploadId}`);
+        }
+        this.activeMultipartUploads.delete(sessionId);
+        this.completedMultipartUploads.delete(sessionId);
         purged += 1;
       }
     }

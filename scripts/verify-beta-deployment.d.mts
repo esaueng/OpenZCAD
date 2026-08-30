@@ -1,6 +1,7 @@
 export const REQUIRED_BETA_HEALTH: Readonly<{
   status: 'ok';
   environment: 'beta';
+  artifactUploadAccountingReady: true;
   documentStorageAccountingReady: true;
   projectObjectStorageReady: true;
   projectMeasurementStorageReady: true;

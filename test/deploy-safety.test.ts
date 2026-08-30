@@ -1,5 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
+import ts from 'typescript';
+import { UPLOAD_CLEANUP_CRON } from '../scripts/validate-deployment-config.mjs';
 
 interface PackageJson {
   scripts?: Record<string, string>;
@@ -7,6 +9,14 @@ interface PackageJson {
 
 function packageJson(path: string): PackageJson {
   return JSON.parse(readFileSync(path, 'utf8')) as PackageJson;
+}
+
+function cleanupCrons(path: string): string[] {
+  const parsed = ts.parseConfigFileTextToJson(path, readFileSync(path, 'utf8'));
+  if (parsed.error) throw new Error(`Could not parse ${path}.`);
+  return (
+    (parsed.config as { triggers?: { crons?: string[] } }).triggers?.crons ?? []
+  );
 }
 
 /**
@@ -54,6 +64,7 @@ describe('beta deployment safety', () => {
     );
 
     for (const field of [
+      'artifactUploadAccountingReady',
       'documentStorageAccountingReady',
       'projectObjectStorageReady',
       'projectMeasurementStorageReady',
@@ -64,6 +75,16 @@ describe('beta deployment safety', () => {
       expect(workflow).toContain(`.${field} == true`);
     }
     expect(workflow).toContain('/api/health?cb=');
+  });
+
+  it('runs the same expired-upload cleanup schedule everywhere', () => {
+    for (const path of [
+      'apps/web/wrangler.jsonc',
+      'wrangler.selfhost.example.jsonc',
+      'wrangler.jsonc'
+    ]) {
+      expect(cleanupCrons(path), path).toEqual([UPLOAD_CLEANUP_CRON]);
+    }
   });
 
   it('keeps the root release command delegated to the guarded web script', () => {

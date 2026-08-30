@@ -20,6 +20,7 @@ jobs:
           jq -e '
             .status == "ok" and
             .environment == "beta" and
+            .artifactUploadAccountingReady == true and
             .documentStorageAccountingReady == true and
             .projectObjectStorageReady == true and
             .projectMeasurementStorageReady == true and

@@ -10,6 +10,7 @@ function hostedConfig() {
     name: 'independent-openzcad',
     main: './apps/web/worker/index.ts',
     assets: { binding: 'ASSETS' },
+    triggers: { crons: ['17 * * * *'] },
     vars: {
       ENVIRONMENT: 'beta',
       AUTH_MODE: 'email-code',
