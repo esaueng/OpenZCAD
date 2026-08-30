@@ -109,7 +109,7 @@ undoable command creation, and real-GCS geometric-oracle coverage, including a
 typed unsatisfied conflict result. The driving-dimension remainder is completed
 by Slice B; S-2 remains open for persistent annotations.
 
-**Disposition (2026-08-30, P1-S1 Slice B):** — done (PR #TBD); distance/angle placement, expression editing, transactional solve, real-GCS rollback oracles, and Playwright geometry/undo coverage shipped; S-2 persistent graphics remain separate.
+**Disposition (2026-08-30, P1-S1 Slice B):** — done (PR #144); distance/angle placement, expression editing, transactional solve, real-GCS rollback oracles, and Playwright geometry/undo coverage shipped; S-2 persistent graphics remain separate.
 
 Everything above is app-side except S-6; the solver, region engine, and
 snapping already carry it.
