@@ -3239,6 +3239,154 @@ export function evaluateExpression(
   return result;
 }
 
+/**
+ * The scope variables an expression reads. Functions and constants are
+ * filtered out by name; `isValidParameterName` refuses every one of them, so
+ * a surviving identifier can only be a parameter reference (or a typo).
+ * Unparseable input reads nothing rather than throwing — callers here are
+ * auditing a document, not evaluating it.
+ */
+export function expressionIdentifiers(expression: string): string[] {
+  let tokens: ExpressionToken[];
+  try {
+    tokens = tokenizeExpression(expression);
+  } catch {
+    return [];
+  }
+  const names: string[] = [];
+  for (const token of tokens) {
+    if (token.type === 'identifier' && !RESERVED_IDENTIFIERS.has(token.name)) {
+      names.push(token.name);
+    }
+  }
+  return names;
+}
+
+/** One document node whose stored expressions read a given parameter. */
+export interface ParameterReference {
+  nodeId: EntityId;
+  /** How a refusal names the holder, e.g. `Sketch "Profile"`. */
+  label: string;
+  /** The reading expressions, in document order, deduplicated. */
+  expressions: string[];
+}
+
+/**
+ * Every string primitive nested anywhere in a stored payload.
+ *
+ * Identity-based rather than schema-based, for the reason
+ * `validateFeatureReorder` gives in command-system: `ParamValue` appears at
+ * ~70 sites across feature, sketch-object, and constraint payloads, and a
+ * field-by-field walk would rot the first time a feature kind adds a
+ * dimension. {@link readsParameter} does the discrimination instead.
+ */
+function collectPayloadStrings(value: unknown, into: string[]): void {
+  if (typeof value === 'string') {
+    into.push(value);
+    return;
+  }
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      collectPayloadStrings(item, into);
+    }
+    return;
+  }
+  if (value !== null && typeof value === 'object') {
+    for (const item of Object.values(value)) {
+      collectPayloadStrings(item, into);
+    }
+  }
+}
+
+/**
+ * Whether a stored string is an expression that reads `name` right now.
+ *
+ * Both halves matter. Naming the parameter is not enough: ids, enum
+ * discriminants and font families are strings in the same payloads, and
+ * `body_a-1` or `open-sans` tokenize perfectly well. Requiring the string to
+ * also evaluate against the live scope drops all of them, because their
+ * identifiers are not parameters. What survives is a value the document is
+ * really reading — the thing a delete would strand.
+ */
+function readsParameter(
+  candidate: string,
+  name: string,
+  scope: Record<string, number>
+): boolean {
+  if (!expressionIdentifiers(candidate).includes(name)) {
+    return false;
+  }
+  try {
+    evaluateExpression(candidate, scope);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** How a refusal names the node holding a reference. */
+function referenceLabel(node: DocumentNode): string {
+  const named = node.name.trim();
+  const kind =
+    node.kind === 'sketch-object'
+      ? 'Sketch object'
+      : node.kind.charAt(0).toUpperCase() + node.kind.slice(1);
+  return named ? `${kind} "${named}"` : kind;
+}
+
+/**
+ * Every node still reading `name`, so a caller can refuse to strand them.
+ *
+ * A parameter's own expression is skipped — deleting `w = 2 * w` strands
+ * nothing — but a second parameter written in terms of this one is reported
+ * like any other reader.
+ */
+export function findParameterReferences(
+  document: ProjectDocument,
+  name: string
+): ParameterReference[] {
+  const { scope } = getParameterScope(document);
+  if (scope[name] === undefined) {
+    // An unevaluatable parameter is read by nobody: every expression naming
+    // it already fails, so the delete repairs the document rather than
+    // breaking it.
+    return [];
+  }
+  const references: ParameterReference[] = [];
+  for (const node of Object.values(document.nodes)) {
+    if (node.kind === 'parameter' && node.name === name) {
+      continue;
+    }
+    const candidates: string[] = [];
+    if (node.kind === 'parameter') {
+      candidates.push(node.expression);
+    } else if (node.kind === 'feature' || node.kind === 'sketch-object') {
+      collectPayloadStrings(node.data, candidates);
+    } else if (node.kind === 'sketch') {
+      collectPayloadStrings(node.planeRef, candidates);
+      collectPayloadStrings(node.offset, candidates);
+      collectPayloadStrings(node.constraints, candidates);
+    }
+    const expressions: string[] = [];
+    for (const candidate of candidates) {
+      if (
+        !expressions.includes(candidate) &&
+        readsParameter(candidate, name, scope)
+      ) {
+        expressions.push(candidate);
+      }
+    }
+    if (expressions.length > 0) {
+      references.push({
+        nodeId: node.id,
+        label: referenceLabel(node),
+        expressions
+      });
+    }
+  }
+  return references;
+}
+
 export {
   keyableImportedNodeData,
   keyableImportedNodes

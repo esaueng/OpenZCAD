@@ -48,6 +48,7 @@ import {
   type FeatureUpdateInput,
   filletEdges,
   findFeature,
+  findParameterReferences,
   findSketch,
   getParameterScope,
   type HelicalSweepInput,
@@ -258,6 +259,40 @@ function collectDataStrings(value: unknown, into: Set<string>): void {
       collectDataStrings(item, into);
     }
   }
+}
+
+/**
+ * Refuse a parameter delete that would strand an expression still reading it.
+ *
+ * Deleting is not symmetric with the failures around it. A feature whose
+ * expression breaks reports a build error at its own row and keeps the text
+ * the user typed, so the repair is obvious. A sketch dimension is solved, not
+ * built: the constraint stays in the schema reading a name that no longer
+ * resolves, the solve stops moving the geometry, and nothing on screen says
+ * which parameter went missing. Since the check has to exist for constraints,
+ * it may as well cover every reader — the alternative is a rule the user
+ * cannot predict.
+ *
+ * Validate-only, deliberately: `replayCommands` replays a serialized
+ * `parameter.delete` straight through, so a log written before this guard
+ * existed still replays exactly as it did.
+ */
+function validateParameterDelete(
+  document: ProjectDocument,
+  payload: ParameterDeleteInput
+): void {
+  const references = findParameterReferences(document, payload.name);
+  if (references.length === 0) {
+    return;
+  }
+  const named = references.slice(0, 3).map((reference) => reference.label);
+  const rest = references.length - named.length;
+  const list = rest > 0 ? `${named.join(', ')}, +${rest} more` : named.join(', ');
+  throw new Error(
+    `Cannot delete parameter "${payload.name}": ${references.length} ${
+      references.length === 1 ? 'value' : 'values'
+    } still read it (${list}). Retype those to a number first.`
+  );
 }
 
 /**
@@ -1321,7 +1356,8 @@ export const commandFactories = {
       'parameter.delete',
       `Delete parameter ${payload.name}`,
       payload,
-      (document) => deleteParameter(document, payload)
+      (document) => deleteParameter(document, payload),
+      (document) => validateParameterDelete(document, payload)
     );
   },
   importMesh(payload: ImportedMeshInput): CommandDefinition<ImportedMeshInput> {
