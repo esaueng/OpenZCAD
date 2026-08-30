@@ -16,6 +16,7 @@ import {
   type ProjectDocument,
   type ProjectSummary
 } from '@openzcad/shared';
+import { encryptAssistantCredential } from '../apps/web/worker/settings';
 
 const env = {
   ENVIRONMENT: 'development' as const,
@@ -233,6 +234,14 @@ function patch(path: string, body: unknown): Request {
     method: 'PATCH',
     body: JSON.stringify(body)
   });
+}
+
+function settingsEncryptionSecret(): string {
+  let binary = '';
+  for (let index = 0; index < 32; index += 1) {
+    binary += String.fromCharCode(index + 1);
+  }
+  return btoa(binary);
 }
 
 function put(path: string, body: unknown): Request {
@@ -740,6 +749,182 @@ describe('worker api routes', () => {
         query.includes('UPDATE user_settings')
       )
     ).toBe(true);
+  });
+
+  it('invalidates a completed connection test when connection settings change', async () => {
+    let storedSettings = structuredClone(DEFAULT_APP_SETTINGS);
+    storedSettings.assistant.enabled = true;
+    storedSettings.assistant.credentialSource = 'personal';
+    let storedRevision = 1;
+    let lastValidatedAt: string | null = '2026-08-30T12:00:00.000Z';
+    const prepare = vi.fn((query: string) => {
+      let values: unknown[] = [];
+      const statement = {
+        bind(...next: unknown[]) {
+          values = next;
+          return statement;
+        },
+        async first() {
+          if (query.includes('FROM user_settings')) {
+            return {
+              settings_json: JSON.stringify(storedSettings),
+              revision: storedRevision
+            };
+          }
+          if (query.includes('FROM user_ai_credentials')) {
+            return {
+              ciphertext: 'ciphertext',
+              iv: 'iv',
+              key_version: 1,
+              token_hint: '••••test',
+              updated_at: '2026-08-30T11:00:00.000Z',
+              last_validated_at: lastValidatedAt
+            };
+          }
+          return null;
+        },
+        async run() {
+          if (query.includes('UPDATE user_settings')) {
+            storedSettings = JSON.parse(
+              String(values[0])
+            ) as typeof storedSettings;
+            storedRevision = Number(values[1]);
+            return { meta: { changes: 1 } };
+          }
+          if (query.includes('SET last_validated_at = NULL')) {
+            lastValidatedAt = null;
+            return { meta: { changes: 1 } };
+          }
+          return { meta: { changes: 0 } };
+        }
+      };
+      return statement;
+    });
+    const changed = structuredClone(storedSettings);
+    changed.assistant.model = 'openai/gpt-5.6-terra';
+
+    const response = await worker.fetch(
+      patch('/api/settings', {
+        settings: changed,
+        expectedRevision: 1
+      }),
+      {
+        ...env,
+        DB: { prepare },
+        SETTINGS_ENCRYPTION_KEY: settingsEncryptionSecret()
+      } as never
+    );
+
+    expect(response.status).toBe(200);
+    expect(lastValidatedAt).toBeNull();
+    const payload = (await response.json()) as {
+      revision: number;
+      credential: Record<string, unknown>;
+    };
+    expect(payload).toMatchObject({
+      revision: 2,
+      credential: { stored: true }
+    });
+    expect(payload.credential).not.toHaveProperty('lastValidatedAt');
+    expect(
+      prepare.mock.calls.some(([query]) =>
+        query.includes('SET last_validated_at = NULL')
+      )
+    ).toBe(true);
+  });
+
+  it('returns safe connection diagnostics and clears stale validation', async () => {
+    const secret = settingsEncryptionSecret();
+    const userId = toUserId('user_beta_dev');
+    const token = 'personal-openrouter-key';
+    const encrypted = await encryptAssistantCredential(token, userId, secret);
+    const settings = structuredClone(DEFAULT_APP_SETTINGS);
+    settings.assistant.enabled = true;
+    settings.assistant.credentialSource = 'personal';
+    let lastValidatedAt: string | null = '2026-08-30T12:00:00.000Z';
+    const prepare = vi.fn((query: string) => {
+      const statement = {
+        bind() {
+          return statement;
+        },
+        async first() {
+          if (query.includes('FROM user_settings')) {
+            return {
+              settings_json: JSON.stringify(settings),
+              revision: 1
+            };
+          }
+          if (query.includes('FROM user_ai_credentials')) {
+            return {
+              ...encrypted,
+              key_version: 1,
+              token_hint: '••••-key',
+              updated_at: '2026-08-30T11:00:00.000Z',
+              last_validated_at: lastValidatedAt
+            };
+          }
+          return null;
+        },
+        async run() {
+          if (query.includes('SET last_validated_at = NULL')) {
+            lastValidatedAt = null;
+            return { meta: { changes: 1 } };
+          }
+          return { meta: { changes: 0 } };
+        }
+      };
+      return statement;
+    });
+    const rawProviderMessage = 'provider rejected secret prompt details';
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () =>
+        Response.json(
+          {
+            error: {
+              code: 'no_endpoints',
+              message: rawProviderMessage
+            }
+          },
+          {
+            status: 404,
+            headers: { 'x-request-id': 'openrouter_req_123' }
+          }
+        )
+      )
+    );
+    const consoleError = vi
+      .spyOn(console, 'error')
+      .mockImplementation(() => undefined);
+
+    const response = await worker.fetch(
+      post('/api/settings/assistant/test', {}),
+      {
+        ...env,
+        DB: { prepare },
+        SETTINGS_ENCRYPTION_KEY: secret
+      } as never
+    );
+    const payload = (await response.json()) as Record<string, unknown>;
+
+    expect(response.status).toBe(502);
+    expect(response.headers.get('x-openzcad-request-id')).toBe(
+      payload.requestId
+    );
+    expect(payload).toMatchObject({
+      code: 'AI_NO_ELIGIBLE_ROUTE',
+      providerStatus: 404,
+      providerCode: 'no_endpoints',
+      providerRequestId: 'openrouter_req_123'
+    });
+    expect(payload.error).toContain('OpenRouter found no eligible route');
+    expect(payload.error).toContain(String(payload.requestId));
+    expect(JSON.stringify(payload)).not.toContain(rawProviderMessage);
+    expect(JSON.stringify(consoleError.mock.calls)).not.toContain(
+      rawProviderMessage
+    );
+    expect(JSON.stringify(consoleError.mock.calls)).not.toContain(token);
+    expect(lastValidatedAt).toBeNull();
   });
 
   it('notifies every owned room when the owner disables collaboration', async () => {

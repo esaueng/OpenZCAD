@@ -1388,7 +1388,11 @@ const facePlaneRefSchema = {
     faceReference: faceReferenceSchema,
     sourceArea: { type: 'number', minimum: 0 },
     sourceCenter: numberVectorSchema,
-    sourceCentroid: numberVectorSchema,
+    sourceCentroid: {
+      anyOf: [numberVectorSchema, { type: 'null' }],
+      description:
+        'Copy the digest centroid exactly, or null when the referenced legacy snapshot has none.'
+    },
     sourceNormal: numberVectorSchema,
     frame: sketchFrameSchema
   },
@@ -1399,6 +1403,7 @@ const facePlaneRefSchema = {
     'faceReference',
     'sourceArea',
     'sourceCenter',
+    'sourceCentroid',
     'sourceNormal',
     'frame'
   ]
@@ -1543,9 +1548,15 @@ const directEditOperationSchema = {
         sourceSurfaceType: { type: 'string' },
         sourceArea: { type: 'number', exclusiveMinimum: 0 },
         sourceCenter: numberVectorSchema,
-        sourceDiameter: { type: 'number', exclusiveMinimum: 0 },
-        sourceAxisStart: numberVectorSchema,
-        sourceAxisEnd: numberVectorSchema
+        sourceDiameter: {
+          anyOf: [{ type: 'number', exclusiveMinimum: 0 }, { type: 'null' }]
+        },
+        sourceAxisStart: {
+          anyOf: [numberVectorSchema, { type: 'null' }]
+        },
+        sourceAxisEnd: {
+          anyOf: [numberVectorSchema, { type: 'null' }]
+        }
       },
       required: [
         'kind',
@@ -1553,7 +1564,10 @@ const directEditOperationSchema = {
         'faceReference',
         'sourceSurfaceType',
         'sourceArea',
-        'sourceCenter'
+        'sourceCenter',
+        'sourceDiameter',
+        'sourceAxisStart',
+        'sourceAxisEnd'
       ]
     },
     {
@@ -1594,8 +1608,7 @@ const directEditOperationSchema = {
           type: 'string',
           enum: ['symmetric', 'one-sided-first', 'one-sided-second']
         },
-        distance: scalarSchema,
-        parameterBinding: { type: 'boolean', const: true }
+        distance: scalarSchema
       },
       required: [
         'kind',
@@ -2918,6 +2931,17 @@ export function parseCadPatchProposal(
         );
         assertExistingTopologyBody(operation.targetBodyId, 'add_direct_edit');
         const edit = operation.operation as Record<string, unknown>;
+        if (edit.kind === 'remove-face-feature') {
+          for (const field of [
+            'sourceDiameter',
+            'sourceAxisStart',
+            'sourceAxisEnd'
+          ]) {
+            if (edit[field] === null) {
+              delete edit[field];
+            }
+          }
+        }
         if (
           !Number.isSafeInteger(edit.faceHash) ||
           Number(edit.faceHash) <= 0 ||
@@ -3039,6 +3063,9 @@ export function parseCadPatchProposal(
       }
       case 'add_face_sketch': {
         const planeRef = operation.planeRef as Record<string, unknown> | null;
+        if (planeRef?.sourceCentroid === null) {
+          delete planeRef.sourceCentroid;
+        }
         if (
           typeof operation.name !== 'string' ||
           !planeRef ||
