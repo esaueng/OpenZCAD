@@ -1,10 +1,13 @@
 import { useState } from 'react';
 import {
+  Angle,
+  BetweenHorizontalEnd,
   Check,
   ChevronDown,
   ChevronRight,
   Circle,
   CircleDot,
+  CircleDotDashed,
   Construction,
   Equal,
   Grid3x3,
@@ -73,8 +76,12 @@ const CONSTRAINT_ICONS: Record<SketchConstraintToolKind, typeof Minus> = {
   horizontal: MoveHorizontal,
   vertical: MoveVertical,
   parallel: Equal,
+  perpendicular: Angle,
+  equal: Equal,
   tangent: Tangent,
+  concentric: CircleDotDashed,
   coincident: CircleDot,
+  midpoint: BetweenHorizontalEnd,
   radius: Radius
 };
 
