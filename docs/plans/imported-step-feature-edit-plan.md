@@ -97,8 +97,8 @@ hint for the UI, never authority for geometry. This mirrors how
 
 `resize_blend` v1 supports: a blend band that is a **torus** or **cylinder** face (or a
 G1 chain of them sharing one radius, including full loops), whose two support faces are
-**plane / cylinder / cone** each. That covers the standard convex/concave edge fillets a
-Fusion/Shapr3D/SolidWorks export produces, including the walking-stick-foot class of
+**plane / cylinder / cone** each. That covers the standard convex/concave edge fillets
+commonly found in exported STEP models, including the walking-stick-foot class of
 parts. Spline corner patches at band junctions are v1's hard boundary: a chain whose
 closure touches a freeform patch is refused (`OperationsError::Unsupported`, stable
 reason code), and the UI shows the radius read-only with that reason. `new_radius == 0`
