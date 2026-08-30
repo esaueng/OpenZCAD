@@ -65,6 +65,7 @@ import {
   verifyEmailLogin
 } from './auth';
 import {
+  clearAssistantCredentialValidation,
   deleteAssistantCredential,
   getAppSettings,
   isProjectSharingPreferenceEnabled,
@@ -1028,9 +1029,25 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
         'Save and select a personal AI credential before testing it.'
       );
     }
-    const result = await testAssistantConnection(assistant.runtime, env);
-    await markAssistantCredentialValidated(userId, env);
-    return json(result);
+    try {
+      const result = await testAssistantConnection(assistant.runtime, env);
+      await markAssistantCredentialValidated(userId, env);
+      return json(result, 200, {
+        'x-openzcad-request-id': result.requestId
+      });
+    } catch (error) {
+      try {
+        await clearAssistantCredentialValidation(userId, env);
+      } catch {
+        console.error('Assistant credential validation reset failed:', {
+          requestId:
+            error instanceof HttpAssistantConfigurationError
+              ? error.requestId
+              : null
+        });
+      }
+      throw error;
+    }
   }
 
   if (request.method === 'GET' && pathname === '/api/account/storage') {
@@ -1717,7 +1734,22 @@ async function dispatchApiRequest(
       );
     }
     if (error instanceof HttpAssistantConfigurationError) {
-      return json({ error: error.message }, 502);
+      return json(
+        {
+          error: `${error.message} Reference: ${error.requestId}.`,
+          code: error.code,
+          requestId: error.requestId,
+          ...(error.providerStatus !== undefined
+            ? { providerStatus: error.providerStatus }
+            : {}),
+          ...(error.providerCode ? { providerCode: error.providerCode } : {}),
+          ...(error.providerRequestId
+            ? { providerRequestId: error.providerRequestId }
+            : {})
+        },
+        502,
+        { 'x-openzcad-request-id': error.requestId }
+      );
     }
     if (error instanceof ArtifactQuotaError) {
       return json(

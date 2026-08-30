@@ -656,6 +656,7 @@ export function SettingsPage({
 
   const credential = accountState?.credential;
   const effective = accountState?.effectiveAssistant;
+  const credentialValidated = Boolean(credential?.lastValidatedAt);
 
   return (
     <div
@@ -1545,7 +1546,7 @@ export function SettingsPage({
                   <div className="settings-card-action split">
                     <span
                       className={
-                        effective?.configured
+                        effective?.configured && credentialValidated
                           ? 'settings-state good'
                           : 'settings-state warning'
                       }
@@ -1553,7 +1554,7 @@ export function SettingsPage({
                       {!session
                         ? 'Sign in to use a personal credential'
                         : effective?.configured
-                          ? `Ready · ${effective.model} · ${effective.reasoningEffort}`
+                          ? `${credentialValidated ? 'Validated' : 'Configured'} · ${effective.model} · ${effective.reasoningEffort}${credentialValidated ? '' : ' · run Test connection'}`
                           : 'Personal assistant is not ready'}
                     </span>
                     <span>
