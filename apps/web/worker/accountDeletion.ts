@@ -297,6 +297,9 @@ function profileCleanupStatements(
   if (scope === 'all') {
     statements.push(
       db
+        .prepare(`DELETE FROM artifact_account_usage WHERE owner_user_id = ?`)
+        .bind(userId),
+      db
         .prepare(
           `UPDATE project_access_events SET invitation_id = NULL
            WHERE invitation_id IN (

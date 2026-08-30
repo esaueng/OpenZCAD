@@ -8,6 +8,7 @@ const DEFAULT_DELAY_MS = 5_000;
 export const REQUIRED_BETA_HEALTH = Object.freeze({
   status: 'ok',
   environment: 'beta',
+  artifactUploadAccountingReady: true,
   documentStorageAccountingReady: true,
   projectObjectStorageReady: true,
   projectMeasurementStorageReady: true,

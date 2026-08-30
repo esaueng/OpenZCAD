@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
   isAccountErasureReady,
+  isArtifactUploadAccountingReady,
   isProjectMeasurementStorageReady,
   isProjectObjectStorageReady
 } from '../apps/web/worker/readiness';
@@ -77,6 +78,38 @@ describe('account erasure readiness', () => {
       }))
     } as unknown as D1Database;
     await expect(isAccountErasureReady(db)).resolves.toBe(false);
+  });
+});
+
+describe('artifact upload accounting readiness', () => {
+  const ready = {
+    usage_table: 1,
+    parts_table: 1,
+    session_columns: 5,
+    indexes: 2,
+    triggers: 14
+  };
+
+  it('requires every reservation table, column, index, and trigger', async () => {
+    const first = vi.fn(async () => ready);
+    const prepare = vi.fn((query: string) => ({ first, query }));
+
+    await expect(
+      isArtifactUploadAccountingReady({ prepare } as unknown as D1Database)
+    ).resolves.toBe(true);
+    const query: string | undefined = prepare.mock.calls[0]?.[0];
+    expect(query).toContain('artifact_account_usage');
+    expect(query).toContain('artifact_upload_metadata_before_update');
+    expect(query).toContain('artifact_upload_part_after_delete');
+  });
+
+  it('fails closed for incomplete upload accounting', async () => {
+    const db = {
+      prepare: vi.fn(() => ({
+        first: vi.fn(async () => ({ ...ready, triggers: 13 }))
+      }))
+    } as unknown as D1Database;
+    await expect(isArtifactUploadAccountingReady(db)).resolves.toBe(false);
   });
 });
 

@@ -1,4 +1,5 @@
 export const REQUIRED_SECRETS: readonly string[];
+export const UPLOAD_CLEANUP_CRON: '17 * * * *';
 
 export const OFFICIAL: Readonly<{
   repository: string;

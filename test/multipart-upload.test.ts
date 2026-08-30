@@ -4,7 +4,10 @@ import {
   InMemoryPersistenceService
 } from '@openzcad/persistence';
 import { MAX_ARTIFACT_UPLOAD_PARTS, toUserId } from '@openzcad/shared';
-import { parseCompleteMultipartUploadRequest } from '../apps/web/worker/validation';
+import {
+  parseCompleteMultipartUploadRequest,
+  parseCreateUploadSessionRequest
+} from '../apps/web/worker/validation';
 
 const userId = toUserId('user_multipart');
 
@@ -205,5 +208,17 @@ describe('multipart artifact upload', () => {
         parts: [{ partNumber: 0, etag: 'a' }]
       })
     ).toThrow(/unique integer/);
+  });
+
+  it('keeps the legacy multipart marker out of client metadata', () => {
+    expect(() =>
+      parseCreateUploadSessionRequest({
+        projectId: 'project_a',
+        fileName: 'model.step',
+        contentType: 'model/step',
+        kind: 'step-import',
+        metadata: { __openzcadMultipartUploadId: 'user-controlled' }
+      })
+    ).toThrow(/reserved field/);
   });
 });
