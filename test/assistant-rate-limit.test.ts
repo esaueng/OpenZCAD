@@ -240,6 +240,76 @@ describe('assistant provider usage guard', () => {
     }
   });
 
+  it('exempts self-funded requests from window quotas but not concurrency', async () => {
+    const fixture = assistantGuardD1();
+    const env = {
+      ENVIRONMENT: 'beta' as const,
+      DB: fixture.db,
+      AI_IDENTITY_PEPPER: 'personal-window-test-pepper',
+      AI_RATE_LIMIT_WINDOW_SECONDS: '60',
+      AI_ACCOUNT_RATE_LIMIT_REQUESTS: '2',
+      AI_IP_RATE_LIMIT_REQUESTS: '2',
+      AI_ACCOUNT_COST_LIMIT_UNITS: '5',
+      AI_IP_COST_LIMIT_UNITS: '5'
+    };
+    const userId = toUserId('user_personal_window');
+    const personal = {
+      cost: 4,
+      leaseMs: 30_000,
+      now: 1_000,
+      deploymentFunded: false
+    };
+
+    // Far beyond both the request and cost window limits.
+    for (let attempt = 0; attempt < 6; attempt += 1) {
+      const permit = await acquireAssistantPermit(
+        assistantRequest(),
+        userId,
+        env,
+        personal
+      );
+      expect(permit.allowed).toBe(true);
+      if (permit.allowed) {
+        await permit.release();
+      }
+    }
+
+    // Self-funded traffic must not consume the deployment-funded window.
+    const funded = await acquireAssistantPermit(assistantRequest(), userId, env, {
+      ...personal,
+      deploymentFunded: true
+    });
+    expect(funded.allowed).toBe(true);
+    if (funded.allowed) {
+      await funded.release();
+    }
+
+    // The concurrency lease still applies to self-funded requests.
+    const held = await Promise.all([
+      acquireAssistantPermit(assistantRequest(), userId, env, personal),
+      acquireAssistantPermit(assistantRequest(), userId, env, personal)
+    ]);
+    const overConcurrency = await acquireAssistantPermit(
+      assistantRequest(),
+      userId,
+      env,
+      personal
+    );
+    expect(overConcurrency.allowed).toBe(false);
+    if (!overConcurrency.allowed) {
+      expect(overConcurrency.response.status).toBe(429);
+      await expect(overConcurrency.response.json()).resolves.toMatchObject({
+        code: 'AI_CONCURRENCY_LIMITED'
+      });
+    }
+    for (const permit of held) {
+      expect(permit.allowed).toBe(true);
+      if (permit.allowed) {
+        await permit.release();
+      }
+    }
+  });
+
   it('enforces one aggregate daily deployment budget across accounts', async () => {
     const fixture = assistantGuardD1();
     const env = {
