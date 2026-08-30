@@ -13,6 +13,10 @@
     "enabled": true,
     "head_sampling_rate": 1
   },
+  "triggers": {
+    // Sweep expired D1 upload sessions only after their R2 state is gone.
+    "crons": ["17 * * * *"]
+  },
   "assets": {
     "directory": "./apps/web/dist",
     "binding": "ASSETS",

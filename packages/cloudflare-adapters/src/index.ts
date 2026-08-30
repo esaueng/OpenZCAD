@@ -28,8 +28,11 @@ import {
   applyOrganizationUpdate,
   DEFAULT_PROJECT_ORGANIZATION,
   duplicateProjectName,
+  MAX_ACTIVE_ARTIFACT_UPLOAD_SESSIONS,
   MAX_CLOUD_PROJECT_DOCUMENT_BYTES,
   MAX_ACCOUNT_ARTIFACT_BYTES,
+  MAX_ARTIFACT_PART_BYTES,
+  MAX_ARTIFACT_UPLOAD_BYTES,
   MAX_ARTIFACT_UPLOAD_PARTS,
   MAX_THUMBNAIL_BYTES,
   MAX_PERSISTED_DOCUMENT_BYTES,
@@ -276,6 +279,33 @@ export function projectCollaborationRollout(
       canary,
     canary
   };
+}
+
+type UploadReservationState =
+  'legacy' | 'open' | 'uploading' | 'completing' | 'completed' | 'aborting';
+
+interface DurableUploadSession {
+  uploadSessionId: string;
+  artifactId: string;
+  projectId: string;
+  objectKey: string;
+  fileName: string;
+  contentType: string;
+  kind: ArtifactRecord['kind'];
+  metadata: Record<string, unknown>;
+  ownerUserId: UserId;
+  reservedBytes: number;
+  reservationState: UploadReservationState;
+  multipartUploadId: string | null;
+  completionStartedAt: number | null;
+  expiresAt: string;
+}
+
+interface DurableUploadPart {
+  partNumber: number;
+  bytes: number;
+  etag: string | null;
+  reservationToken: string;
 }
 
 export class D1R2PersistenceService implements PersistenceService {
@@ -1607,31 +1637,62 @@ export class D1R2PersistenceService implements PersistenceService {
   /**
    * Finalized artifact usage attributed to the account owning the projects —
    * the owner bears the R2 storage regardless of which editor uploaded.
-   * Legacy rows with NULL bytes predate accounting and count as zero.
+   * Migration 0017 backfills the durable total; comparing it with the artifact
+   * rows makes drift a refusal instead of an account receiving extra quota.
    */
   private async accountArtifactUsage(
     ownerUserId: UserId
   ): Promise<{ bytes: number; count: number }> {
     const row = await this.env
       .DB!.prepare(
-        `SELECT COALESCE(SUM(a.bytes), 0) AS total, COUNT(*) AS count
-         FROM artifacts a
-         JOIN projects p ON p.id = a.project_id
-         WHERE p.user_id = ?`
+        `SELECT usage.finalized_bytes AS accounted_total,
+                COALESCE((
+                  SELECT SUM(COALESCE(artifacts.bytes, 0))
+                  FROM artifacts
+                  JOIN projects ON projects.id = artifacts.project_id
+                  WHERE projects.user_id = ?
+                ), 0) AS actual_total,
+                (
+                  SELECT COUNT(*)
+                  FROM artifacts
+                  JOIN projects ON projects.id = artifacts.project_id
+                  WHERE projects.user_id = ?
+                ) AS count
+         FROM artifact_account_usage usage
+         WHERE usage.owner_user_id = ?`
       )
-      .bind(ownerUserId)
-      .first<{ total: number; count: number }>();
-    return { bytes: row?.total ?? 0, count: row?.count ?? 0 };
-  }
-
-  private async assertArtifactQuota(
-    ownerUserId: UserId,
-    incomingBytes: number
-  ): Promise<void> {
-    const { bytes } = await this.accountArtifactUsage(ownerUserId);
-    if (bytes + incomingBytes > MAX_ACCOUNT_ARTIFACT_BYTES) {
-      throw new ArtifactQuotaError(MAX_ACCOUNT_ARTIFACT_BYTES);
+      .bind(ownerUserId, ownerUserId, ownerUserId)
+      .first<{
+        accounted_total: number;
+        actual_total: number;
+        count: number;
+      }>();
+    if (!row) {
+      const actual = await this.env
+        .DB!.prepare(
+          `SELECT COUNT(*) AS count
+           FROM artifacts
+           JOIN projects ON projects.id = artifacts.project_id
+           WHERE projects.user_id = ?`
+        )
+        .bind(ownerUserId)
+        .first<{ count: number }>();
+      if ((actual?.count ?? 0) !== 0) {
+        throw new ArtifactStorageError(
+          'Artifact account usage is not initialized.'
+        );
+      }
+      return { bytes: 0, count: 0 };
     }
+    if (
+      !Number.isSafeInteger(row.accounted_total) ||
+      !Number.isSafeInteger(row.actual_total) ||
+      row.accounted_total < 0 ||
+      row.accounted_total !== row.actual_total
+    ) {
+      throw new ArtifactStorageError('Artifact account usage is inconsistent.');
+    }
+    return { bytes: row.accounted_total, count: row.count };
   }
 
   async getStorageUsage(userId: UserId): Promise<AccountStorageUsage> {
@@ -1848,24 +1909,32 @@ export class D1R2PersistenceService implements PersistenceService {
     if (!this.env.ARTIFACTS) {
       throw new ArtifactStorageError();
     }
-    await this.assertArtifactQuota(access.ownerUserId, 1);
     await this.purgeExpiredUploadSessions();
     const session = createUploadSessionRecord(request);
-    await this.env.DB.prepare(
-      `INSERT INTO upload_sessions (id, artifact_id, project_id, object_key, file_name, content_type, kind, metadata_json, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
-    )
-      .bind(
-        session.uploadSessionId,
-        session.artifactId,
-        request.projectId,
-        session.objectKey,
-        session.fileName,
-        session.contentType,
-        session.kind,
-        JSON.stringify(session.metadata),
-        session.expiresAt
+    try {
+      await this.env.DB.prepare(
+        `INSERT INTO upload_sessions
+         (id, artifact_id, project_id, object_key, file_name, content_type,
+          kind, metadata_json, expires_at, owner_user_id, reserved_bytes,
+          reservation_state, multipart_upload_id, completion_started_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 'open', NULL, NULL)`
       )
-      .run();
+        .bind(
+          session.uploadSessionId,
+          session.artifactId,
+          request.projectId,
+          session.objectKey,
+          session.fileName,
+          session.contentType,
+          session.kind,
+          JSON.stringify(session.metadata),
+          session.expiresAt,
+          access.ownerUserId
+        )
+        .run();
+    } catch (error) {
+      throwArtifactAccountingError(error);
+    }
     return { session };
   }
 
@@ -1877,33 +1946,18 @@ export class D1R2PersistenceService implements PersistenceService {
     if (!this.env.DB) {
       return getInMemoryPersistence().putUpload(userId, uploadSessionId, body);
     }
-    const upload = await this.env.DB.prepare(
-      `SELECT project_id, object_key, content_type, expires_at FROM upload_sessions WHERE id = ?`
-    )
-      .bind(uploadSessionId)
-      .first<{
-        project_id: string;
-        object_key: string;
-        content_type: string;
-        expires_at: string;
-      }>();
-    if (!upload) {
+    const upload = await this.requireUploadSession(userId, uploadSessionId);
+    if (
+      upload.reservationState !== 'open' ||
+      upload.multipartUploadId !== null ||
+      upload.reservedBytes !== 0
+    ) {
       throw new ArtifactStorageError(
-        'Upload session was not found or expired.'
+        'Upload session is already using multipart storage.'
       );
     }
-    const access = await this.requireProjectEdit(userId, upload.project_id);
-    if (Date.parse(upload.expires_at) < Date.now()) {
-      throw new ArtifactStorageError(
-        'Upload session was not found or expired.'
-      );
-    }
-    await this.assertArtifactQuota(access.ownerUserId, body.byteLength);
-    if (!this.env.ARTIFACTS) {
-      throw new ArtifactStorageError();
-    }
-    await this.env.ARTIFACTS.put(upload.object_key, body, {
-      httpMetadata: { contentType: upload.content_type }
+    await this.env.ARTIFACTS!.put(upload.objectKey, body, {
+      httpMetadata: { contentType: upload.contentType }
     });
   }
 
@@ -1912,47 +1966,178 @@ export class D1R2PersistenceService implements PersistenceService {
    * part call re-validates: sessions expire mid-upload, and project access
    * can be revoked between parts.
    */
-  private async requireUploadSession(
-    userId: UserId,
+  private async loadUploadSession(
     uploadSessionId: string
-  ): Promise<{
-    objectKey: string;
-    contentType: string;
-    kind: ArtifactRecord['kind'];
-    metadata: Record<string, unknown>;
-    metadataJson: string;
-    ownerUserId: UserId;
-  }> {
+  ): Promise<DurableUploadSession | null> {
     const upload = await this.env
       .DB!.prepare(
-        `SELECT project_id, object_key, content_type, kind, metadata_json, expires_at FROM upload_sessions WHERE id = ?`
+        `SELECT id, artifact_id, project_id, object_key, file_name,
+                content_type, kind, metadata_json, expires_at, owner_user_id,
+                reserved_bytes, reservation_state, multipart_upload_id,
+                completion_started_at
+         FROM upload_sessions WHERE id = ?`
       )
       .bind(uploadSessionId)
       .first<{
+        id: string;
+        artifact_id: string;
         project_id: string;
         object_key: string;
+        file_name: string;
         content_type: string;
         kind: ArtifactRecord['kind'];
         metadata_json: string;
         expires_at: string;
+        owner_user_id: string | null;
+        reserved_bytes: number;
+        reservation_state: string;
+        multipart_upload_id: string | null;
+        completion_started_at: number | null;
       }>();
-    if (!upload || Date.parse(upload.expires_at) < Date.now()) {
+    if (!upload) return null;
+    if (
+      !upload.owner_user_id ||
+      !isUploadReservationState(upload.reservation_state) ||
+      !Number.isSafeInteger(upload.reserved_bytes) ||
+      upload.reserved_bytes < 0 ||
+      (upload.reservation_state === 'open' &&
+        (upload.reserved_bytes !== 0 || upload.multipart_upload_id !== null)) ||
+      (upload.reservation_state === 'legacy' && upload.reserved_bytes !== 0) ||
+      (upload.reservation_state === 'completing' &&
+        (!Number.isSafeInteger(upload.completion_started_at) ||
+          upload.completion_started_at === null ||
+          upload.completion_started_at < 0)) ||
+      (upload.reservation_state !== 'completing' &&
+        upload.completion_started_at !== null) ||
+      (['uploading', 'completing', 'completed'].includes(
+        upload.reservation_state
+      ) &&
+        !upload.multipart_upload_id) ||
+      (upload.reserved_bytes > 0 && !upload.multipart_upload_id)
+    ) {
+      throw new ArtifactStorageError('Upload reservation state is invalid.');
+    }
+    return {
+      uploadSessionId: upload.id,
+      artifactId: upload.artifact_id,
+      projectId: upload.project_id,
+      objectKey: upload.object_key,
+      fileName: upload.file_name,
+      contentType: upload.content_type,
+      kind: upload.kind,
+      metadata: parseStoredUploadMetadata(upload.metadata_json),
+      ownerUserId: toUserId(upload.owner_user_id),
+      reservedBytes: upload.reserved_bytes,
+      reservationState: upload.reservation_state,
+      multipartUploadId: upload.multipart_upload_id,
+      completionStartedAt: upload.completion_started_at,
+      expiresAt: upload.expires_at
+    };
+  }
+
+  private async requireUploadSession(
+    userId: UserId,
+    uploadSessionId: string
+  ): Promise<DurableUploadSession> {
+    const upload = await this.loadUploadSession(uploadSessionId);
+    const expiresAt = upload ? Date.parse(upload.expiresAt) : Number.NaN;
+    if (!upload || !Number.isFinite(expiresAt) || expiresAt < Date.now()) {
       throw new ArtifactStorageError(
         'Upload session was not found or expired.'
       );
     }
-    const access = await this.requireProjectEdit(userId, upload.project_id);
+    const access = await this.requireProjectEdit(userId, upload.projectId);
     if (!this.env.ARTIFACTS) {
       throw new ArtifactStorageError();
     }
-    return {
-      objectKey: upload.object_key,
-      contentType: upload.content_type,
-      kind: upload.kind,
-      metadata: JSON.parse(upload.metadata_json) as Record<string, unknown>,
-      metadataJson: upload.metadata_json,
-      ownerUserId: access.ownerUserId
-    };
+    if (upload.ownerUserId !== access.ownerUserId) {
+      throw new ArtifactStorageError('Upload reservation owner is invalid.');
+    }
+    if (upload.reservationState === 'legacy') {
+      throw new ArtifactStorageError(
+        'Upload session predates durable quota accounting; start a new upload.'
+      );
+    }
+    return upload;
+  }
+
+  private async uploadParts(
+    uploadSessionId: string
+  ): Promise<DurableUploadPart[]> {
+    const rows = await this.env
+      .DB!.prepare(
+        `SELECT part_number, bytes, etag, reservation_token
+         FROM artifact_upload_parts
+         WHERE upload_session_id = ?
+         ORDER BY part_number`
+      )
+      .bind(uploadSessionId)
+      .all<{
+        part_number: number;
+        bytes: number;
+        etag: string | null;
+        reservation_token: string;
+      }>();
+    return (rows.results ?? []).map((row) => ({
+      partNumber: row.part_number,
+      bytes: row.bytes,
+      etag: row.etag,
+      reservationToken: row.reservation_token
+    }));
+  }
+
+  /**
+   * Fences one session in D1, removes its R2 state, then releases its durable
+   * rows. A lost response at either boundary is retryable: `aborting` retains
+   * the reservation, and missing R2 multipart ids are treated as already done.
+   */
+  private async cleanupUploadSession(
+    upload: DurableUploadSession
+  ): Promise<boolean> {
+    if (!this.env.ARTIFACTS) return false;
+    if (upload.reservationState !== 'aborting') {
+      const claimed = await this.env
+        .DB!.prepare(
+          `UPDATE upload_sessions
+         SET reservation_state = 'aborting', completion_started_at = NULL
+         WHERE id = ? AND reservation_state = ?`
+        )
+        .bind(upload.uploadSessionId, upload.reservationState)
+        .run();
+      if (claimed.meta?.changes !== 1) {
+        const current = await this.loadUploadSession(upload.uploadSessionId);
+        if (!current) return false;
+        if (current.reservationState !== 'aborting') return false;
+        upload = current;
+      } else {
+        const current = await this.loadUploadSession(upload.uploadSessionId);
+        if (!current) return false;
+        upload = current;
+      }
+    }
+    if (upload.multipartUploadId) {
+      await abortR2Multipart(
+        this.env.ARTIFACTS,
+        upload.objectKey,
+        upload.multipartUploadId
+      );
+    }
+    await this.env.ARTIFACTS.delete(upload.objectKey);
+    const results = await this.env.DB!.batch([
+      this.env
+        .DB!.prepare(
+          `DELETE FROM artifact_upload_parts WHERE upload_session_id = ?`
+        )
+        .bind(upload.uploadSessionId),
+      this.env
+        .DB!.prepare(
+          `DELETE FROM upload_sessions
+         WHERE id = ? AND reservation_state = 'aborting'`
+        )
+        .bind(upload.uploadSessionId)
+    ]);
+    if (results[1]?.meta?.changes === 1) return true;
+    return (await this.loadUploadSession(upload.uploadSessionId)) === null;
   }
 
   async createMultipartUpload(
@@ -1971,41 +2156,51 @@ export class D1R2PersistenceService implements PersistenceService {
         'Thumbnail artifacts must use single uploads.'
       );
     }
-    const activeUploadId = session.metadata[MULTIPART_UPLOAD_METADATA_KEY];
-    if (typeof activeUploadId === 'string') {
-      return { uploadId: activeUploadId };
+    if (
+      session.multipartUploadId &&
+      ['uploading', 'completing', 'completed'].includes(
+        session.reservationState
+      )
+    ) {
+      return { uploadId: session.multipartUploadId };
+    }
+    if (
+      session.reservationState !== 'open' ||
+      session.multipartUploadId !== null ||
+      session.reservedBytes !== 0
+    ) {
+      throw new ArtifactStorageError('Multipart upload could not be created.');
     }
     const upload = await this.env.ARTIFACTS!.createMultipartUpload(
       session.objectKey,
       { httpMetadata: { contentType: session.contentType } }
     );
-    // Recorded so purgeExpiredUploadSessions can abort an abandoned upload;
-    // R2 keeps incomplete multipart state until an explicit abort.
     let changes: number | undefined;
     try {
       const result = await this.env.DB.prepare(
-        `UPDATE upload_sessions SET metadata_json = ? WHERE id = ? AND metadata_json = ?`
+        `UPDATE upload_sessions
+         SET reservation_state = 'uploading', multipart_upload_id = ?,
+             completion_started_at = NULL
+         WHERE id = ? AND reservation_state = 'open'
+           AND multipart_upload_id IS NULL AND reserved_bytes = 0`
       )
-        .bind(
-          JSON.stringify({
-            ...session.metadata,
-            [MULTIPART_UPLOAD_METADATA_KEY]: upload.uploadId
-          }),
-          uploadSessionId,
-          session.metadataJson
-        )
+        .bind(upload.uploadId, uploadSessionId)
         .run();
       changes = result.meta?.changes;
     } catch (error) {
       await upload.abort().catch(() => undefined);
-      throw error;
+      throwArtifactAccountingError(error);
     }
     if (changes === 0) {
       await upload.abort().catch(() => undefined);
       const current = await this.requireUploadSession(userId, uploadSessionId);
-      const winner = current.metadata[MULTIPART_UPLOAD_METADATA_KEY];
-      if (typeof winner === 'string') {
-        return { uploadId: winner };
+      if (
+        current.multipartUploadId &&
+        ['uploading', 'completing', 'completed'].includes(
+          current.reservationState
+        )
+      ) {
+        return { uploadId: current.multipartUploadId };
       }
       throw new ArtifactStorageError('Multipart upload could not be created.');
     }
@@ -2029,7 +2224,10 @@ export class D1R2PersistenceService implements PersistenceService {
       );
     }
     const session = await this.requireUploadSession(userId, uploadSessionId);
-    if (session.metadata[MULTIPART_UPLOAD_METADATA_KEY] !== uploadId) {
+    if (
+      session.reservationState !== 'uploading' ||
+      session.multipartUploadId !== uploadId
+    ) {
       throw new ArtifactStorageError('Multipart upload was not found.');
     }
     if (
@@ -2039,15 +2237,62 @@ export class D1R2PersistenceService implements PersistenceService {
     ) {
       throw new ArtifactStorageError('Upload part number is out of range.');
     }
-    // Approximate: earlier parts of this session are not summed (that would
-    // need per-session accounting); the authoritative check runs against the
-    // assembled object size at finalize, which also deletes the overage.
-    await this.assertArtifactQuota(session.ownerUserId, body.byteLength);
+    if (body.byteLength < 1 || body.byteLength > MAX_ARTIFACT_PART_BYTES) {
+      throw new ArtifactStorageError('Upload part is invalid or too large.');
+    }
+    const reservationToken = crypto.randomUUID();
+    try {
+      await this.env.DB.prepare(
+        `INSERT INTO artifact_upload_parts
+         (upload_session_id, part_number, bytes, etag, reservation_token)
+         VALUES (?, ?, ?, NULL, ?)
+         ON CONFLICT(upload_session_id, part_number) DO UPDATE SET
+           bytes = excluded.bytes,
+           etag = NULL,
+           reservation_token = excluded.reservation_token`
+      )
+        .bind(uploadSessionId, partNumber, body.byteLength, reservationToken)
+        .run();
+    } catch (error) {
+      throwArtifactAccountingError(error);
+    }
     const upload = this.env.ARTIFACTS!.resumeMultipartUpload(
       session.objectKey,
       uploadId
     );
     const part = await upload.uploadPart(partNumber, body);
+    let recorded: number | undefined;
+    try {
+      const result = await this.env.DB.prepare(
+        `UPDATE artifact_upload_parts
+         SET etag = ?
+         WHERE upload_session_id = ? AND part_number = ? AND bytes = ?
+           AND reservation_token = ?
+           AND EXISTS (
+             SELECT 1 FROM upload_sessions
+             WHERE id = ? AND reservation_state = 'uploading'
+               AND multipart_upload_id = ?
+           )`
+      )
+        .bind(
+          part.etag,
+          uploadSessionId,
+          partNumber,
+          body.byteLength,
+          reservationToken,
+          uploadSessionId,
+          uploadId
+        )
+        .run();
+      recorded = result.meta?.changes;
+    } catch (error) {
+      throwArtifactAccountingError(error);
+    }
+    if (recorded !== 1) {
+      throw new ArtifactStorageError(
+        'Upload part was replaced concurrently; retry the part.'
+      );
+    }
     return { partNumber: part.partNumber, etag: part.etag };
   }
 
@@ -2063,26 +2308,143 @@ export class D1R2PersistenceService implements PersistenceService {
         request
       );
     }
-    const session = await this.requireUploadSession(userId, uploadSessionId);
-    if (session.metadata[MULTIPART_UPLOAD_METADATA_KEY] !== request.uploadId) {
+    let session = await this.requireUploadSession(userId, uploadSessionId);
+    if (
+      session.multipartUploadId !== request.uploadId ||
+      !['uploading', 'completing', 'completed'].includes(
+        session.reservationState
+      )
+    ) {
       throw new ArtifactStorageError('Multipart upload was not found.');
+    }
+    let frozeCompletion = false;
+    if (session.reservationState === 'uploading') {
+      const frozen = await this.env.DB.prepare(
+        `UPDATE upload_sessions
+         SET reservation_state = 'completing', completion_started_at = ?
+         WHERE id = ? AND reservation_state = 'uploading'
+           AND multipart_upload_id = ?`
+      )
+        .bind(Date.now(), uploadSessionId, request.uploadId)
+        .run();
+      frozeCompletion = frozen.meta?.changes === 1;
+      session = await this.requireUploadSession(userId, uploadSessionId);
+    }
+    if (
+      session.multipartUploadId !== request.uploadId ||
+      !['completing', 'completed'].includes(session.reservationState)
+    ) {
+      throw new ArtifactStorageError(
+        'Multipart upload changed while completion was starting.'
+      );
+    }
+    if (session.reservationState === 'completing' && !frozeCompletion) {
+      const stored = await this.env.ARTIFACTS!.head(session.objectKey);
+      if (stored?.size === session.reservedBytes) {
+        await this.env.DB.prepare(
+          `UPDATE upload_sessions
+           SET reservation_state = 'completed', completion_started_at = NULL
+           WHERE id = ? AND reservation_state = 'completing'
+             AND multipart_upload_id = ? AND reserved_bytes = ?`
+        )
+          .bind(uploadSessionId, request.uploadId, session.reservedBytes)
+          .run();
+        return;
+      }
+      if (
+        Date.now() - (session.completionStartedAt ?? Date.now()) <
+        MULTIPART_COMPLETION_LEASE_MS
+      ) {
+        throw new ArtifactStorageError('Multipart completion is in progress.');
+      }
+      const reopened = await this.env.DB.prepare(
+        `UPDATE upload_sessions
+         SET reservation_state = 'uploading', completion_started_at = NULL
+         WHERE id = ? AND reservation_state = 'completing'
+           AND multipart_upload_id = ? AND reserved_bytes = ?
+           AND completion_started_at = ?`
+      )
+        .bind(
+          uploadSessionId,
+          request.uploadId,
+          session.reservedBytes,
+          session.completionStartedAt
+        )
+        .run();
+      if (reopened.meta?.changes !== 1) {
+        throw new ArtifactStorageError(
+          'Multipart completion is already being reconciled.'
+        );
+      }
+      return this.completeMultipartUpload(userId, uploadSessionId, request);
+    }
+    const parts = await this.uploadParts(uploadSessionId);
+    try {
+      assertMultipartCompletionParts(parts, request, session.reservedBytes);
+    } catch (error) {
+      if (frozeCompletion) {
+        await this.env.DB.prepare(
+          `UPDATE upload_sessions
+           SET reservation_state = 'uploading', completion_started_at = NULL
+           WHERE id = ? AND reservation_state = 'completing'
+             AND multipart_upload_id = ?`
+        )
+          .bind(uploadSessionId, request.uploadId)
+          .run();
+      }
+      throw error;
+    }
+    if (session.reservationState === 'completed') {
+      const stored = await this.env.ARTIFACTS!.head(session.objectKey);
+      if (!stored || stored.size !== session.reservedBytes) {
+        throw new ArtifactStorageError(
+          'Completed multipart object does not match its reservation.'
+        );
+      }
+      return;
     }
     const upload = this.env.ARTIFACTS!.resumeMultipartUpload(
       session.objectKey,
       request.uploadId
     );
-    await upload.complete(
-      [...request.parts].sort((a, b) => a.partNumber - b.partNumber)
-    );
-    // The upload is now a plain object; drop the abort marker so purge
-    // treats the session like a completed single PUT.
-    const { [MULTIPART_UPLOAD_METADATA_KEY]: _done, ...metadata } =
-      session.metadata;
-    await this.env.DB.prepare(
-      `UPDATE upload_sessions SET metadata_json = ? WHERE id = ?`
+    try {
+      await upload.complete(
+        [...request.parts].sort((a, b) => a.partNumber - b.partNumber)
+      );
+    } catch (error) {
+      const stored = await this.env.ARTIFACTS!.head(session.objectKey);
+      if (!stored || stored.size !== session.reservedBytes) {
+        await this.env.DB.prepare(
+          `UPDATE upload_sessions
+           SET reservation_state = 'uploading', completion_started_at = NULL
+           WHERE id = ? AND reservation_state = 'completing'
+             AND multipart_upload_id = ? AND reserved_bytes = ?`
+        )
+          .bind(uploadSessionId, request.uploadId, session.reservedBytes)
+          .run();
+        throw error;
+      }
+    }
+    const completed = await this.env.DB.prepare(
+      `UPDATE upload_sessions
+       SET reservation_state = 'completed', completion_started_at = NULL
+       WHERE id = ? AND reservation_state = 'completing'
+         AND multipart_upload_id = ? AND reserved_bytes = ?`
     )
-      .bind(JSON.stringify(metadata), uploadSessionId)
+      .bind(uploadSessionId, request.uploadId, session.reservedBytes)
       .run();
+    if (completed.meta?.changes !== 1) {
+      const current = await this.requireUploadSession(userId, uploadSessionId);
+      if (
+        current.reservationState !== 'completed' ||
+        current.multipartUploadId !== request.uploadId ||
+        current.reservedBytes !== session.reservedBytes
+      ) {
+        throw new ArtifactStorageError(
+          'Multipart completion could not be reconciled.'
+        );
+      }
+    }
   }
 
   async abortMultipartUpload(
@@ -2097,22 +2459,53 @@ export class D1R2PersistenceService implements PersistenceService {
         uploadId
       );
     }
-    const session = await this.requireUploadSession(userId, uploadSessionId);
-    if (session.metadata[MULTIPART_UPLOAD_METADATA_KEY] !== uploadId) {
-      // Unknown or already completed/aborted: nothing to clean up.
+    let session = await this.loadUploadSession(uploadSessionId);
+    if (!session) {
       return;
     }
-    await this.env
-      .ARTIFACTS!.resumeMultipartUpload(session.objectKey, uploadId)
-      .abort()
-      .catch(() => undefined);
-    const { [MULTIPART_UPLOAD_METADATA_KEY]: _gone, ...metadata } =
-      session.metadata;
-    await this.env.DB.prepare(
-      `UPDATE upload_sessions SET metadata_json = ? WHERE id = ?`
-    )
-      .bind(JSON.stringify(metadata), uploadSessionId)
-      .run();
+    const access = await this.requireProjectEdit(userId, session.projectId);
+    if (!this.env.ARTIFACTS) {
+      throw new ArtifactStorageError();
+    }
+    if (
+      session.ownerUserId !== access.ownerUserId ||
+      session.reservationState === 'legacy'
+    ) {
+      throw new ArtifactStorageError('Upload reservation state is invalid.');
+    }
+    if (
+      session.multipartUploadId !== uploadId ||
+      !['uploading', 'completed', 'aborting'].includes(session.reservationState)
+    ) {
+      // Unknown, actively completing, or already-aborted uploads are no-ops.
+      return;
+    }
+    if (session.reservationState !== 'aborting') {
+      const claimed = await this.env.DB.prepare(
+        `UPDATE upload_sessions
+         SET reservation_state = 'aborting', completion_started_at = NULL
+         WHERE id = ? AND reservation_state = ?
+           AND multipart_upload_id = ?`
+      )
+        .bind(uploadSessionId, session.reservationState, uploadId)
+        .run();
+      if (claimed.meta?.changes !== 1) {
+        session = await this.loadUploadSession(uploadSessionId);
+        if (!session) return;
+        if (
+          session.reservationState !== 'aborting' ||
+          session.multipartUploadId !== uploadId
+        ) {
+          return;
+        }
+      }
+    }
+    const current = await this.loadUploadSession(uploadSessionId);
+    if (current && !(await this.cleanupUploadSession(current))) {
+      throw new ArtifactStorageError(
+        'Multipart abort could not be reconciled.'
+      );
+    }
   }
 
   async finalizeArtifact(
@@ -2122,56 +2515,55 @@ export class D1R2PersistenceService implements PersistenceService {
     if (!this.env.DB) {
       return getInMemoryPersistence().finalizeArtifact(userId, request);
     }
-    const access = await this.requireProjectEdit(userId, request.projectId);
-    const upload = await this.env.DB.prepare(
-      `SELECT artifact_id, object_key, project_id, file_name, content_type, kind, metadata_json, expires_at FROM upload_sessions WHERE id = ?`
+    await this.requireProjectEdit(userId, request.projectId);
+    const existingArtifact = await this.env.DB.prepare(
+      `SELECT id, project_id, kind, name, object_key, content_type, bytes,
+              metadata_json, created_at
+       FROM artifacts WHERE id = ? AND project_id = ?`
     )
-      .bind(request.uploadSessionId)
-      .first<{
-        artifact_id: string;
-        object_key: string;
-        project_id: string;
-        file_name: string;
-        content_type: string;
-        kind: ArtifactRecord['kind'];
-        metadata_json: string;
-        expires_at: string;
-      }>();
+      .bind(request.artifactId, request.projectId)
+      .first<ArtifactRow>();
+    if (existingArtifact) return artifactFromRow(existingArtifact);
+
+    const upload = await this.requireUploadSession(
+      userId,
+      request.uploadSessionId
+    );
     if (
-      !upload ||
-      upload.project_id !== request.projectId ||
-      upload.artifact_id !== request.artifactId ||
-      Date.parse(upload.expires_at) < Date.now()
+      upload.projectId !== request.projectId ||
+      upload.artifactId !== request.artifactId ||
+      (upload.reservationState !== 'open' &&
+        upload.reservationState !== 'completed') ||
+      (upload.reservationState === 'open' &&
+        (upload.reservedBytes !== 0 || upload.multipartUploadId !== null)) ||
+      (upload.reservationState === 'completed' &&
+        (!upload.multipartUploadId || upload.reservedBytes < 1))
     ) {
       return null;
     }
-    if (!this.env.ARTIFACTS) {
-      throw new ArtifactStorageError();
-    }
-    const stored = await this.env.ARTIFACTS.head(upload.object_key);
+    const stored = await this.env.ARTIFACTS!.head(upload.objectKey);
     if (!stored) {
       return null;
     }
-    const usage = await this.accountArtifactUsage(access.ownerUserId);
-    if (usage.bytes + stored.size > MAX_ACCOUNT_ARTIFACT_BYTES) {
-      // The assembled object must not linger as unaccounted storage.
-      await this.env.ARTIFACTS.delete(upload.object_key).catch(() => undefined);
-      await this.env.DB.prepare(`DELETE FROM upload_sessions WHERE id = ?`)
-        .bind(request.uploadSessionId)
-        .run();
-      throw new ArtifactQuotaError(MAX_ACCOUNT_ARTIFACT_BYTES);
+    if (
+      upload.reservationState === 'completed' &&
+      stored.size !== upload.reservedBytes
+    ) {
+      throw new ArtifactStorageError(
+        'Completed multipart object does not match its reservation.'
+      );
     }
 
     const artifact: ArtifactRecord = {
       artifactId: request.artifactId,
       projectId: request.projectId,
       kind: upload.kind,
-      name: upload.file_name,
-      objectKey: upload.object_key,
-      contentType: upload.content_type,
+      name: upload.fileName,
+      objectKey: upload.objectKey,
+      contentType: upload.contentType,
       bytes: stored.size,
       createdAt: nowIso(),
-      metadata: JSON.parse(upload.metadata_json) as ArtifactRecord['metadata']
+      metadata: upload.metadata as ArtifactRecord['metadata']
     };
     if (
       artifact.kind === 'thumbnail' &&
@@ -2192,32 +2584,98 @@ export class D1R2PersistenceService implements PersistenceService {
             .all<{ object_key: string }>()
         : { results: [] as Array<{ object_key: string }> };
 
-    const statements = [
-      this.env.DB.prepare(
-        `DELETE FROM upload_sessions WHERE id = ? AND artifact_id = ?`
-      ).bind(request.uploadSessionId, request.artifactId),
-      ...(artifact.kind === 'thumbnail'
+    const validSessionSql = `EXISTS (
+      SELECT 1 FROM upload_sessions
+      WHERE id = ? AND artifact_id = ? AND project_id = ?
+        AND owner_user_id = ?
+        AND (
+          (reservation_state = 'open' AND reserved_bytes = 0
+            AND multipart_upload_id IS NULL
+            AND completion_started_at IS NULL)
+          OR
+          (reservation_state = 'completed' AND reserved_bytes = ?
+            AND multipart_upload_id IS NOT NULL
+            AND completion_started_at IS NULL)
+        )
+    )`;
+    const statements =
+      artifact.kind === 'thumbnail'
         ? [
             this.env.DB.prepare(
-              `DELETE FROM artifacts WHERE project_id = ? AND kind = 'thumbnail'`
-            ).bind(artifact.projectId)
+              `DELETE FROM artifacts
+             WHERE project_id = ? AND kind = 'thumbnail'
+               AND ${validSessionSql}`
+            ).bind(
+              artifact.projectId,
+              request.uploadSessionId,
+              request.artifactId,
+              request.projectId,
+              upload.ownerUserId,
+              artifact.bytes
+            )
           ]
-        : []),
+        : [];
+    const artifactInsertIndex = statements.length;
+    statements.push(
       this.env.DB.prepare(
-        `INSERT INTO artifacts (id, project_id, kind, name, object_key, content_type, bytes, metadata_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        `INSERT INTO artifacts
+         (id, project_id, kind, name, object_key, content_type, bytes,
+          metadata_json, created_at)
+         SELECT ?, project_id, ?, ?, object_key, content_type, ?, ?, ?
+         FROM upload_sessions
+         WHERE id = ? AND artifact_id = ? AND project_id = ?
+           AND owner_user_id = ?
+           AND (
+             (reservation_state = 'open' AND reserved_bytes = 0
+               AND multipart_upload_id IS NULL)
+             OR
+             (reservation_state = 'completed' AND reserved_bytes = ?
+               AND multipart_upload_id IS NOT NULL)
+           )`
       ).bind(
         artifact.artifactId,
-        artifact.projectId,
         artifact.kind,
         artifact.name,
-        artifact.objectKey,
-        artifact.contentType,
         artifact.bytes,
         JSON.stringify(artifact.metadata),
-        artifact.createdAt
+        artifact.createdAt,
+        request.uploadSessionId,
+        request.artifactId,
+        request.projectId,
+        upload.ownerUserId,
+        artifact.bytes
+      ),
+      this.env.DB.prepare(
+        `DELETE FROM artifact_upload_parts
+         WHERE upload_session_id = ?
+           AND EXISTS (SELECT 1 FROM artifacts WHERE id = ?)`
+      ).bind(request.uploadSessionId, request.artifactId),
+      this.env.DB.prepare(
+        `DELETE FROM upload_sessions
+         WHERE id = ? AND artifact_id = ?
+           AND EXISTS (SELECT 1 FROM artifacts WHERE id = ?)`
+      ).bind(request.uploadSessionId, request.artifactId, request.artifactId)
+    );
+    let results: Awaited<ReturnType<D1Database['batch']>>;
+    try {
+      results = await this.env.DB.batch(statements);
+    } catch (error) {
+      const mapped = artifactAccountingError(error);
+      if (mapped instanceof ArtifactQuotaError) {
+        await this.cleanupUploadSession(upload);
+      }
+      throw mapped;
+    }
+    if (results[artifactInsertIndex]?.meta?.changes !== 1) {
+      const existing = await this.env.DB.prepare(
+        `SELECT id, project_id, kind, name, object_key, content_type, bytes,
+                metadata_json, created_at
+         FROM artifacts WHERE id = ? AND project_id = ?`
       )
-    ];
-    await this.env.DB.batch(statements);
+        .bind(request.artifactId, request.projectId)
+        .first<ArtifactRow>();
+      return existing ? artifactFromRow(existing) : null;
+    }
 
     if (artifact.kind === 'thumbnail') {
       await Promise.all(
@@ -2778,9 +3236,7 @@ export class D1R2PersistenceService implements PersistenceService {
     // erasing the same room first) is harmless.
     if (this.env.PROJECT_ROOM) {
       for (const projectId of projectIds) {
-        const response = await this.env.PROJECT_ROOM.getByName(
-          projectId
-        ).fetch(
+        const response = await this.env.PROJECT_ROOM.getByName(projectId).fetch(
           new Request(
             `https://project-room.internal/?projectId=${encodeURIComponent(projectId)}`,
             {
@@ -2796,11 +3252,25 @@ export class D1R2PersistenceService implements PersistenceService {
     }
     const placeholders = projectIds.map(() => '?').join(', ');
     if (this.env.ARTIFACTS) {
+      const uploads = await this.env
+        .DB!.prepare(
+          `SELECT id FROM upload_sessions WHERE project_id IN (${placeholders})`
+        )
+        .bind(...projectIds)
+        .all<{ id: string }>();
+      for (const row of uploads.results ?? []) {
+        const upload = await this.loadUploadSession(row.id);
+        if (upload && !(await this.cleanupUploadSession(upload))) {
+          throw new ArtifactStorageError(
+            `Upload cleanup could not be completed for ${row.id}.`
+          );
+        }
+      }
       const objects = await this.env
         .DB!.prepare(
-          `SELECT object_key FROM artifacts WHERE project_id IN (${placeholders}) UNION SELECT object_key FROM upload_sessions WHERE project_id IN (${placeholders})`
+          `SELECT object_key FROM artifacts WHERE project_id IN (${placeholders})`
         )
-        .bind(...projectIds, ...projectIds)
+        .bind(...projectIds)
         .all<{ object_key: string }>();
       // Keep the database rows when object deletion fails so the operation is
       // visible, retryable, and cannot strand unreferenced user data in R2.
@@ -2939,59 +3409,174 @@ export class D1R2PersistenceService implements PersistenceService {
       return 0;
     }
     const expired = await this.env.DB.prepare(
-      `SELECT id, object_key, metadata_json FROM upload_sessions WHERE expires_at < ? LIMIT 100`
+      `SELECT id FROM upload_sessions
+       WHERE expires_at < ? OR reservation_state = 'legacy'
+       ORDER BY expires_at LIMIT 100`
     )
       .bind(nowIso())
-      .all<{ id: string; object_key: string; metadata_json: string }>();
+      .all<{ id: string }>();
     const rows = expired.results ?? [];
     if (rows.length === 0) {
       return 0;
     }
-    const deletions = await Promise.allSettled(
+    const cleanups = await Promise.allSettled(
       rows.map(async (row) => {
-        let metadata: Record<string, unknown> = {};
-        try {
-          metadata = JSON.parse(row.metadata_json) as Record<string, unknown>;
-        } catch {
-          // Absent or malformed metadata reads as "no multipart in flight".
-        }
-        const multipartUploadId = metadata[MULTIPART_UPLOAD_METADATA_KEY];
-        if (typeof multipartUploadId === 'string') {
-          // Abort is idempotent-ish: a completed upload's id is already
-          // removed from metadata, and aborting an unknown id throws, which
-          // allSettled tolerates without blocking the object delete below.
-          await this.env
-            .ARTIFACTS!.resumeMultipartUpload(row.object_key, multipartUploadId)
-            .abort()
-            .catch(() => undefined);
-        }
-        return this.env.ARTIFACTS!.delete(row.object_key);
+        const upload = await this.loadUploadSession(row.id);
+        return upload ? this.cleanupUploadSession(upload) : false;
       })
     );
-    const deletedRows = rows.filter(
-      (_row, index) => deletions[index]?.status === 'fulfilled'
-    );
-    if (deletedRows.length === 0) {
-      return 0;
+    return cleanups.filter(
+      (cleanup) => cleanup.status === 'fulfilled' && cleanup.value
+    ).length;
+  }
+}
+
+function isUploadReservationState(
+  value: string
+): value is UploadReservationState {
+  return [
+    'legacy',
+    'open',
+    'uploading',
+    'completing',
+    'completed',
+    'aborting'
+  ].includes(value);
+}
+
+function parseStoredUploadMetadata(value: string): Record<string, unknown> {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(value) as unknown;
+  } catch {
+    throw new ArtifactStorageError('Upload metadata is malformed.');
+  }
+  if (
+    !parsed ||
+    typeof parsed !== 'object' ||
+    Array.isArray(parsed) ||
+    Object.hasOwn(parsed, MULTIPART_UPLOAD_METADATA_KEY)
+  ) {
+    throw new ArtifactStorageError('Upload metadata is malformed.');
+  }
+  return parsed as Record<string, unknown>;
+}
+
+function assertMultipartCompletionParts(
+  stored: DurableUploadPart[],
+  request: CompleteMultipartUploadRequest,
+  reservedBytes: number
+): void {
+  if (
+    request.parts.length < 1 ||
+    request.parts.length > MAX_ARTIFACT_UPLOAD_PARTS ||
+    stored.length !== request.parts.length
+  ) {
+    throw new ArtifactStorageError('Multipart part list is incomplete.');
+  }
+  const requested = new Map(
+    request.parts.map((part) => [part.partNumber, part.etag])
+  );
+  let total = 0;
+  for (const part of stored) {
+    if (
+      !Number.isInteger(part.partNumber) ||
+      part.partNumber < 1 ||
+      part.partNumber > MAX_ARTIFACT_UPLOAD_PARTS ||
+      !Number.isSafeInteger(part.bytes) ||
+      part.bytes < 1 ||
+      part.bytes > MAX_ARTIFACT_PART_BYTES ||
+      !part.etag ||
+      requested.get(part.partNumber) !== part.etag
+    ) {
+      throw new ArtifactStorageError('Multipart part is missing or stale.');
     }
-    await this.env.DB.batch(
-      deletedRows.map((row) =>
-        this.env
-          .DB!.prepare(`DELETE FROM upload_sessions WHERE id = ?`)
-          .bind(row.id)
-      )
+    total += part.bytes;
+  }
+  if (
+    requested.size !== stored.length ||
+    total !== reservedBytes ||
+    total > MAX_ARTIFACT_UPLOAD_BYTES
+  ) {
+    throw new ArtifactStorageError(
+      'Multipart reservation does not match its parts.'
     );
-    return deletedRows.length;
   }
 }
 
 /**
- * Session-metadata key holding the R2 multipart upload id while parts are in
- * flight. Written at multipart create, removed at complete, and read by the
- * expired-session purge so an abandoned upload's R2 state is aborted rather
- * than accumulating forever. Never surfaced on finalized artifacts.
+ * Pre-0017 session-metadata key. The migration extracts it into a typed column
+ * and new Workers refuse it in user metadata.
  */
 const MULTIPART_UPLOAD_METADATA_KEY = '__openzcadMultipartUploadId';
+/** Prevents a concurrent retry from stealing completion from a live Worker. */
+const MULTIPART_COMPLETION_LEASE_MS = 60_000;
+
+function artifactAccountingError(error: unknown): Error {
+  const message = error instanceof Error ? error.message : String(error);
+  if (
+    message.includes('artifact_account_quota') ||
+    message.includes('artifact_reserved_byte_limit')
+  ) {
+    return new ArtifactQuotaError(MAX_ACCOUNT_ARTIFACT_BYTES);
+  }
+  if (message.includes('artifact_upload_session_limit')) {
+    return new ArtifactStorageError(
+      `The account cannot hold more than ${MAX_ACTIVE_ARTIFACT_UPLOAD_SESSIONS} active upload sessions.`
+    );
+  }
+  if (message.includes('artifact_upload_part_limit')) {
+    return new ArtifactStorageError(
+      `Multipart uploads cannot exceed ${MAX_ARTIFACT_UPLOAD_PARTS} parts.`
+    );
+  }
+  if (message.includes('artifact_upload_byte_limit')) {
+    return new ArtifactStorageError(
+      `Multipart uploads cannot exceed ${MAX_ARTIFACT_UPLOAD_BYTES} bytes.`
+    );
+  }
+  if (
+    message.includes('artifact_') &&
+    (message.includes('invalid') ||
+      message.includes('required') ||
+      message.includes('not_uploading') ||
+      message.includes('not_released'))
+  ) {
+    return new ArtifactStorageError('Artifact upload accounting was refused.');
+  }
+  return error instanceof Error ? error : new Error(message);
+}
+
+function throwArtifactAccountingError(error: unknown): never {
+  throw artifactAccountingError(error);
+}
+
+function isMissingMultipartUploadError(error: unknown): boolean {
+  if (!error || typeof error !== 'object') return false;
+  const record = error as Record<string, unknown>;
+  if (record.status === 404 || record.statusCode === 404) return true;
+  if (
+    record.code === 'NoSuchUpload' ||
+    record.name === 'NoSuchUpload' ||
+    record.name === 'R2NoSuchUpload'
+  ) {
+    return true;
+  }
+  const message = error instanceof Error ? error.message : '';
+  return /NoSuchUpload|multipart upload (?:was )?not found/i.test(message);
+}
+
+async function abortR2Multipart(
+  bucket: R2Bucket,
+  objectKey: string,
+  uploadId: string
+): Promise<void> {
+  try {
+    await bucket.resumeMultipartUpload(objectKey, uploadId).abort();
+  } catch (error) {
+    if (!isMissingMultipartUploadError(error)) throw error;
+  }
+}
 
 function createUploadSessionRecord(
   request: CreateUploadSessionRequest
