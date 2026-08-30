@@ -421,48 +421,51 @@ export async function acquireAssistantPermit(
       return releasePromise;
     };
 
-    const accountUsage = await consumeUsageBucket(
-      env.DB,
-      accountBucket,
-      windowStart,
-      safeCost
-    );
-    const ipUsage = await consumeUsageBucket(
-      env.DB,
-      ipBucket,
-      windowStart,
-      safeCost
-    );
-    const accountLimited = overUsageLimit(
-      accountUsage,
-      settings.accountRequestLimit,
-      settings.accountCostLimit
-    );
-    const ipLimited = overUsageLimit(
-      ipUsage,
-      settings.ipRequestLimit,
-      settings.ipCostLimit
-    );
-    if (accountLimited || ipLimited) {
-      await release();
-      const requestLimit = accountLimited
-        ? settings.accountRequestLimit
-        : settings.ipRequestLimit;
-      const requestCount = accountLimited
-        ? (accountUsage?.request_count ?? requestLimit + 1)
-        : (ipUsage?.request_count ?? requestLimit + 1);
-      return jsonError(
-        429,
-        'The modeling assistant request limit has been reached.',
-        'AI_RATE_LIMITED',
-        retryAfterSeconds,
-        {
-          limit: requestLimit,
-          remaining: Math.max(0, requestLimit - requestCount)
-        }
-      );
-    }
+    // Window quotas and the daily budget exist to bound deployment spend.
+    // Self-funded requests (a personal provider credential) pay with the
+    // user's own key, so only the concurrency lease and payload caps apply.
     if (options.deploymentFunded !== false) {
+      const accountUsage = await consumeUsageBucket(
+        env.DB,
+        accountBucket,
+        windowStart,
+        safeCost
+      );
+      const ipUsage = await consumeUsageBucket(
+        env.DB,
+        ipBucket,
+        windowStart,
+        safeCost
+      );
+      const accountLimited = overUsageLimit(
+        accountUsage,
+        settings.accountRequestLimit,
+        settings.accountCostLimit
+      );
+      const ipLimited = overUsageLimit(
+        ipUsage,
+        settings.ipRequestLimit,
+        settings.ipCostLimit
+      );
+      if (accountLimited || ipLimited) {
+        await release();
+        const requestLimit = accountLimited
+          ? settings.accountRequestLimit
+          : settings.ipRequestLimit;
+        const requestCount = accountLimited
+          ? (accountUsage?.request_count ?? requestLimit + 1)
+          : (ipUsage?.request_count ?? requestLimit + 1);
+        return jsonError(
+          429,
+          'The modeling assistant request limit has been reached.',
+          'AI_RATE_LIMITED',
+          retryAfterSeconds,
+          {
+            limit: requestLimit,
+            remaining: Math.max(0, requestLimit - requestCount)
+          }
+        );
+      }
       const globalUsage = await consumeGlobalDailyBudget(
         env.DB,
         dayStart,
