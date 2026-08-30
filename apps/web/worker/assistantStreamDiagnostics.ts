@@ -11,7 +11,7 @@ type TerminalEvent =
   | 'response.incomplete'
   | 'error';
 
-type FailureClassification =
+export type AssistantResponseFailureClassification =
   | 'connection_error'
   | 'empty_output'
   | 'invalid_contract'
@@ -40,6 +40,14 @@ interface DiagnosticState {
   terminalStatus?: string;
   upstreamResponseId?: string;
 }
+
+export type AssistantResponseValidation =
+  | { ok: true; upstreamResponseId?: string }
+  | {
+      ok: false;
+      classification: AssistantResponseFailureClassification;
+      upstreamResponseId?: string;
+    };
 
 const encoder = new TextEncoder();
 
@@ -185,7 +193,27 @@ function consumeText(state: DiagnosticState, text: string): void {
   }
 }
 
-function classifyFailure(state: DiagnosticState): FailureClassification | null {
+function createDiagnosticState(): DiagnosticState {
+  return {
+    buffer: '',
+    framingAbandoned: false,
+    captureComplete: true,
+    malformedEvent: false,
+    output: '',
+    outputBytes: 0
+  };
+}
+
+function finishDiagnosticState(state: DiagnosticState): void {
+  if (state.buffer.trim()) {
+    consumeBlock(state, state.buffer);
+    state.buffer = '';
+  }
+}
+
+function classifyFailure(
+  state: DiagnosticState
+): AssistantResponseFailureClassification | null {
   if (state.malformedEvent) {
     return 'protocol_error';
   }
@@ -252,7 +280,7 @@ async function sha256Hex(value: string): Promise<string> {
 async function logFailure(
   state: DiagnosticState,
   context: DiagnosticContext,
-  classification: FailureClassification
+  classification: AssistantResponseFailureClassification
 ): Promise<void> {
   const outputSha256 = state.captureComplete
     ? await sha256Hex(state.output)
@@ -281,14 +309,7 @@ export function observeAssistantResponse(
 ): ReadableStream<Uint8Array> {
   const reader = source.getReader();
   const decoder = new TextDecoder();
-  const state: DiagnosticState = {
-    buffer: '',
-    framingAbandoned: false,
-    captureComplete: true,
-    malformedEvent: false,
-    output: '',
-    outputBytes: 0
-  };
+  const state = createDiagnosticState();
 
   return new ReadableStream<Uint8Array>({
     async pull(controller) {
@@ -300,10 +321,7 @@ export function observeAssistantResponse(
           return;
         }
         consumeText(state, decoder.decode());
-        if (state.buffer.trim()) {
-          consumeBlock(state, state.buffer);
-          state.buffer = '';
-        }
+        finishDiagnosticState(state);
         const classification = classifyFailure(state);
         if (classification) {
           await logFailure(state, context, classification);
@@ -318,4 +336,53 @@ export function observeAssistantResponse(
       return reader.cancel(reason);
     }
   });
+}
+
+/**
+ * Consumes a provider stream and proves it reached a terminal success with one
+ * reply that satisfies the assistant contract. No prompt or output text leaves
+ * this module; callers receive only an allowlisted failure classification and
+ * provider response id.
+ */
+export async function validateAssistantResponse(
+  source: ReadableStream<Uint8Array>
+): Promise<AssistantResponseValidation> {
+  const reader = source.getReader();
+  const decoder = new TextDecoder();
+  const state = createDiagnosticState();
+  try {
+    while (true) {
+      const result = await reader.read();
+      if (result.done) {
+        break;
+      }
+      consumeText(state, decoder.decode(result.value, { stream: true }));
+    }
+    consumeText(state, decoder.decode());
+    finishDiagnosticState(state);
+  } catch {
+    return {
+      ok: false,
+      classification: 'connection_error',
+      ...(state.upstreamResponseId
+        ? { upstreamResponseId: state.upstreamResponseId }
+        : {})
+    };
+  }
+
+  const classification = classifyFailure(state);
+  return classification
+    ? {
+        ok: false,
+        classification,
+        ...(state.upstreamResponseId
+          ? { upstreamResponseId: state.upstreamResponseId }
+          : {})
+      }
+    : {
+        ok: true,
+        ...(state.upstreamResponseId
+          ? { upstreamResponseId: state.upstreamResponseId }
+          : {})
+      };
 }

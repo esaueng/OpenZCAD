@@ -12,7 +12,11 @@ import type {
   AssistantProvider,
   AssistantReasoningEffort
 } from '@openzcad/shared';
-import { observeAssistantResponse } from './assistantStreamDiagnostics';
+import {
+  observeAssistantResponse,
+  validateAssistantResponse,
+  type AssistantResponseFailureClassification
+} from './assistantStreamDiagnostics';
 import { isPrivateHostname } from './privateNetwork';
 
 export const DEFAULT_AI_MODEL = 'gpt-5.6-sol';
@@ -23,6 +27,7 @@ export const DEFAULT_AI_TIMEOUT_MS = 90_000;
 export const DEFAULT_AI_PROVIDER = 'openrouter';
 const OPENAI_RESPONSES_URL = 'https://api.openai.com/v1/responses';
 const OPENROUTER_RESPONSES_URL = 'https://openrouter.ai/api/v1/responses';
+const MAX_PROVIDER_ERROR_BYTES = 16 * 1024;
 
 const CAD_ASSISTANT_INSTRUCTIONS = `You are the design and planning engine for OpenZCAD, a browser-first parametric solid modeler.
 
@@ -445,7 +450,7 @@ function schemaRecord(value: unknown): MutableJsonSchema | undefined {
  * Prompt instructions help the model choose well, but pruning disabled
  * branches prevents a compliant provider from producing them at all.
  */
-function assistantReplySchemaFor(env: CloudflareEnv): unknown {
+export function assistantReplySchemaFor(env: CloudflareEnv): unknown {
   const schema = structuredClone(
     ASSISTANT_REPLY_JSON_SCHEMA
   ) as unknown as MutableJsonSchema;
@@ -588,7 +593,8 @@ function jsonError(
 
 function proposalProviderErrorMessage(
   status: number,
-  usesPersonalConfiguration: boolean
+  usesPersonalConfiguration: boolean,
+  provider: string
 ): string {
   if (status === 401 || status === 403) {
     return usesPersonalConfiguration
@@ -597,6 +603,9 @@ function proposalProviderErrorMessage(
   }
   if (status === 429) {
     return "The AI provider's rate or spending limit was reached. Check provider usage and billing, or try again later.";
+  }
+  if (status === 404 && provider === 'openrouter') {
+    return 'OpenRouter found no eligible route for this model and structured-output request. Check the model and the OpenRouter account privacy and provider-routing settings.';
   }
   if (status === 400 || status === 404 || status === 422) {
     return 'The AI provider rejected the configured model or structured-output request. Check the provider and model, then run Test connection in Settings.';
@@ -607,20 +616,190 @@ function proposalProviderErrorMessage(
   return 'The modeling assistant could not generate a patch.';
 }
 
-function connectionProviderErrorMessage(status: number): string {
+interface ProviderFailureDetails {
+  providerCode?: string;
+  providerRequestId?: string;
+}
+
+interface ConnectionProviderFailure {
+  code: string;
+  message: string;
+}
+
+function safeDiagnosticIdentifier(value: unknown): string | undefined {
+  return typeof value === 'string' && /^[A-Za-z0-9._:-]{1,160}$/.test(value)
+    ? value
+    : undefined;
+}
+
+function safeDiagnosticLabel(value: string): string {
+  return value.replace(/[\r\n\t]/g, ' ').slice(0, 160);
+}
+
+function providerRequestId(response: Response): string | undefined {
+  for (const name of [
+    'x-request-id',
+    'x-openai-request-id',
+    'x-openrouter-request-id'
+  ]) {
+    const value = safeDiagnosticIdentifier(response.headers.get(name));
+    if (value) {
+      return value;
+    }
+  }
+  return undefined;
+}
+
+async function readProviderFailure(
+  response: Response
+): Promise<ProviderFailureDetails> {
+  const headerRequestId = providerRequestId(response);
+  if (!response.body) {
+    return headerRequestId ? { providerRequestId: headerRequestId } : {};
+  }
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let totalBytes = 0;
+  let text = '';
+  try {
+    while (true) {
+      const result = await reader.read();
+      if (result.done) {
+        break;
+      }
+      totalBytes += result.value.byteLength;
+      if (totalBytes > MAX_PROVIDER_ERROR_BYTES) {
+        await reader.cancel();
+        return headerRequestId ? { providerRequestId: headerRequestId } : {};
+      }
+      text += decoder.decode(result.value, { stream: true });
+    }
+    text += decoder.decode();
+  } catch {
+    return headerRequestId ? { providerRequestId: headerRequestId } : {};
+  }
+
+  try {
+    const payload = JSON.parse(text) as unknown;
+    const root = schemaRecord(payload);
+    const error = schemaRecord(root?.error);
+    const providerCode = safeDiagnosticIdentifier(error?.code ?? root?.code);
+    const bodyRequestId = safeDiagnosticIdentifier(
+      error?.request_id ?? root?.request_id
+    );
+    return {
+      ...(providerCode ? { providerCode } : {}),
+      ...((headerRequestId ?? bodyRequestId)
+        ? { providerRequestId: headerRequestId ?? bodyRequestId }
+        : {})
+    };
+  } catch {
+    return headerRequestId ? { providerRequestId: headerRequestId } : {};
+  }
+}
+
+function connectionProviderFailure(
+  status: number,
+  provider: string
+): ConnectionProviderFailure {
   if (status === 401 || status === 403) {
-    return 'The AI provider rejected the saved credential.';
+    return {
+      code: 'AI_CREDENTIAL_REJECTED',
+      message: 'The AI provider rejected the saved credential.'
+    };
+  }
+  if (status === 402) {
+    return {
+      code: 'AI_PAYMENT_REQUIRED',
+      message:
+        'The AI provider requires available credit or billing for this model.'
+    };
   }
   if (status === 429) {
-    return "The AI provider's rate or spending limit was reached. Check provider usage and billing, or try again later.";
+    return {
+      code: 'AI_RATE_LIMITED',
+      message:
+        "The AI provider's rate or spending limit was reached. Check provider usage and billing, or try again later."
+    };
   }
-  if (status === 400 || status === 404 || status === 422) {
-    return 'The AI provider rejected the configured model or structured-output request.';
+  if (status === 404 && provider === 'openrouter') {
+    return {
+      code: 'AI_NO_ELIGIBLE_ROUTE',
+      message:
+        'OpenRouter found no eligible route for this model and structured-output request. Check the model and your OpenRouter privacy and provider-routing settings.'
+    };
+  }
+  if (status === 400 || status === 422) {
+    return {
+      code: 'AI_REQUEST_REJECTED',
+      message: `The AI provider rejected the model or structured-output request (HTTP ${status}).`
+    };
+  }
+  if (status === 404) {
+    return {
+      code: 'AI_MODEL_NOT_FOUND',
+      message:
+        'The AI provider could not find the configured model or endpoint.'
+    };
+  }
+  if (status === 408 || status === 524) {
+    return {
+      code: 'AI_PROVIDER_TIMEOUT',
+      message: 'The AI provider timed out during the connection test.'
+    };
+  }
+  if (status === 413) {
+    return {
+      code: 'AI_REQUEST_TOO_LARGE',
+      message:
+        'The AI provider rejected the structured-output request as too large.'
+    };
   }
   if (status >= 500) {
-    return 'The AI provider is temporarily unavailable. Try again later.';
+    return {
+      code: 'AI_PROVIDER_UNAVAILABLE',
+      message: 'The AI provider is temporarily unavailable. Try again later.'
+    };
   }
-  return `The AI provider rejected the connection test (${status}).`;
+  return {
+    code: 'AI_CONNECTION_REJECTED',
+    message: `The AI provider rejected the connection test (${status}).`
+  };
+}
+
+function connectionStreamFailure(
+  classification: AssistantResponseFailureClassification
+): ConnectionProviderFailure {
+  if (classification === 'provider_incomplete') {
+    return {
+      code: 'AI_RESPONSE_INCOMPLETE',
+      message:
+        'The AI provider reached its output limit before completing the structured connection reply. Increase Output budget or lower Reasoning level.'
+    };
+  }
+  if (
+    classification === 'invalid_contract' ||
+    classification === 'invalid_json' ||
+    classification === 'empty_output' ||
+    classification === 'output_over_limit'
+  ) {
+    return {
+      code: 'AI_RESPONSE_INVALID',
+      message:
+        'The AI provider returned a reply that did not satisfy the OpenZCAD structured-output contract.'
+    };
+  }
+  if (classification === 'provider_failed') {
+    return {
+      code: 'AI_PROVIDER_FAILED',
+      message: 'The AI provider failed while producing the connection reply.'
+    };
+  }
+  return {
+    code: 'AI_STREAM_INVALID',
+    message:
+      'The AI provider stream ended before the connection test completed.'
+  };
 }
 
 function structuredReplyText(env: CloudflareEnv) {
@@ -740,15 +919,17 @@ export async function streamAssistantProposal(
   }
 
   if (!upstream.ok || !upstream.body) {
-    await upstream.body?.cancel();
+    const failure = await readProviderFailure(upstream);
     console.error('AI Responses provider failed:', {
       requestId,
-      provider,
-      model,
-      status: upstream.status
+      provider: safeDiagnosticLabel(provider),
+      model: safeDiagnosticLabel(model),
+      status: upstream.status,
+      providerCode: failure.providerCode ?? null,
+      providerRequestId: failure.providerRequestId ?? null
     });
     return jsonError(
-      proposalProviderErrorMessage(upstream.status, Boolean(runtime)),
+      proposalProviderErrorMessage(upstream.status, Boolean(runtime), provider),
       'AI_UPSTREAM_ERROR',
       502,
       requestId
@@ -772,14 +953,17 @@ export async function streamAssistantProposal(
 export async function testAssistantConnection(
   runtime: AssistantRuntimeConfig,
   env: CloudflareEnv
-): Promise<{ ok: true; latencyMs: number }> {
+): Promise<{ ok: true; latencyMs: number; requestId: string }> {
+  const requestId = crypto.randomUUID();
   const upstreamUrl = upstreamUrlForRuntime(env, runtime, runtime.provider);
   if (!upstreamUrl) {
     throw new HttpAssistantConfigurationError(
-      'An AI endpoint is required for this provider.'
+      'An AI endpoint is required for this provider.',
+      { requestId }
     );
   }
   const startedAt = Date.now();
+  const timeoutSignal = AbortSignal.timeout(runtime.timeoutMs);
   let response: Response;
   try {
     response = await fetch(upstreamUrl, {
@@ -795,14 +979,14 @@ export async function testAssistantConnection(
             }
           : {})
       },
-      signal: AbortSignal.timeout(Math.min(runtime.timeoutMs, 30_000)),
+      signal: timeoutSignal,
       body: JSON.stringify({
         model: runtime.model,
         instructions:
           'Return a short connection confirmation as an OpenZCAD message reply.',
         input: 'Test the configured OpenZCAD AI connection.',
         text: structuredReplyText(env),
-        max_output_tokens: Math.min(runtime.maxOutputTokens, 1_024),
+        max_output_tokens: Math.min(runtime.maxOutputTokens, 4_096),
         store: false,
         stream: true,
         ...reasoningRequest(runtime.reasoningEffort),
@@ -812,18 +996,100 @@ export async function testAssistantConnection(
       })
     });
   } catch {
+    const timedOut = timeoutSignal.aborted;
+    console.error('AI Responses connection request failed:', {
+      requestId,
+      provider: safeDiagnosticLabel(runtime.provider),
+      model: safeDiagnosticLabel(runtime.model),
+      reason: timedOut ? 'timeout' : 'network'
+    });
     throw new HttpAssistantConfigurationError(
-      'The AI provider could not be reached.'
+      timedOut
+        ? 'The AI provider timed out during the connection test.'
+        : 'The AI provider could not be reached.',
+      {
+        code: timedOut ? 'AI_PROVIDER_TIMEOUT' : 'AI_PROVIDER_UNREACHABLE',
+        requestId
+      }
     );
   }
   if (!response.ok) {
-    await response.body?.cancel();
+    const details = await readProviderFailure(response);
+    const failure = connectionProviderFailure(
+      response.status,
+      runtime.provider
+    );
+    console.error('AI Responses connection test rejected:', {
+      requestId,
+      provider: safeDiagnosticLabel(runtime.provider),
+      model: safeDiagnosticLabel(runtime.model),
+      status: response.status,
+      providerCode: details.providerCode ?? null,
+      providerRequestId: details.providerRequestId ?? null
+    });
+    throw new HttpAssistantConfigurationError(failure.message, {
+      code: failure.code,
+      requestId,
+      providerStatus: response.status,
+      ...details
+    });
+  }
+  if (!response.body) {
     throw new HttpAssistantConfigurationError(
-      connectionProviderErrorMessage(response.status)
+      'The AI provider returned an empty connection response.',
+      { code: 'AI_RESPONSE_INVALID', requestId }
     );
   }
-  await response.body?.cancel();
-  return { ok: true, latencyMs: Date.now() - startedAt };
+  const validation = await validateAssistantResponse(response.body);
+  if (!validation.ok) {
+    const failure =
+      validation.classification === 'connection_error' && timeoutSignal.aborted
+        ? {
+            code: 'AI_PROVIDER_TIMEOUT',
+            message: 'The AI provider timed out during the connection test.'
+          }
+        : connectionStreamFailure(validation.classification);
+    console.error('AI Responses connection stream failed:', {
+      requestId,
+      provider: safeDiagnosticLabel(runtime.provider),
+      model: safeDiagnosticLabel(runtime.model),
+      classification: validation.classification,
+      upstreamResponseId: validation.upstreamResponseId ?? null
+    });
+    throw new HttpAssistantConfigurationError(failure.message, {
+      code: failure.code,
+      requestId,
+      ...(validation.upstreamResponseId
+        ? { providerRequestId: validation.upstreamResponseId }
+        : {})
+    });
+  }
+  return { ok: true, latencyMs: Date.now() - startedAt, requestId };
 }
 
-export class HttpAssistantConfigurationError extends Error {}
+interface HttpAssistantConfigurationErrorOptions extends ProviderFailureDetails {
+  code?: string;
+  requestId?: string;
+  providerStatus?: number;
+}
+
+export class HttpAssistantConfigurationError extends Error {
+  readonly code: string;
+  readonly requestId: string;
+  readonly providerStatus?: number;
+  readonly providerCode?: string;
+  readonly providerRequestId?: string;
+
+  constructor(
+    message: string,
+    options: HttpAssistantConfigurationErrorOptions = {}
+  ) {
+    super(message);
+    this.name = 'HttpAssistantConfigurationError';
+    this.code = options.code ?? 'AI_CONFIGURATION_INVALID';
+    this.requestId = options.requestId ?? crypto.randomUUID();
+    this.providerStatus = options.providerStatus;
+    this.providerCode = options.providerCode;
+    this.providerRequestId = options.providerRequestId;
+  }
+}

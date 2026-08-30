@@ -5,6 +5,7 @@ import {
   DEFAULT_AI_PROVIDER,
   DEFAULT_AI_TIMEOUT_MS,
   DEFAULT_OPENROUTER_MODEL,
+  assistantReplySchemaFor,
   getAssistantStatus,
   maxOutputTokensFor,
   streamAssistantProposal,
@@ -33,6 +34,28 @@ const input = {
     warnings: []
   }
 };
+
+function assertStrictObjectSchemas(schema: unknown): void {
+  if (!schema || typeof schema !== 'object') {
+    return;
+  }
+  if (Array.isArray(schema)) {
+    schema.forEach(assertStrictObjectSchemas);
+    return;
+  }
+  const record = schema as Record<string, unknown>;
+  if (record.properties && typeof record.properties === 'object') {
+    const properties = Object.keys(record.properties);
+    const required = Array.isArray(record.required)
+      ? record.required.filter(
+          (value): value is string => typeof value === 'string'
+        )
+      : [];
+    expect(record.additionalProperties).toBe(false);
+    expect([...required].sort()).toEqual([...properties].sort());
+  }
+  Object.values(record).forEach(assertStrictObjectSchemas);
+}
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -1231,7 +1254,8 @@ describe('assistant integration', () => {
         requestId,
         provider: 'openrouter',
         model: 'openai/gpt-5.6-sol',
-        status: 400
+        status: 400,
+        providerCode: 'invalid_prompt'
       })
     );
     const logged = JSON.stringify(consoleError.mock.calls);
@@ -1288,11 +1312,26 @@ describe('assistant integration', () => {
   );
 
   it('tests the structured streaming capability used by proposals', async () => {
+    const output = JSON.stringify({
+      replyKind: 'message',
+      proposal: null,
+      questions: null,
+      message: 'Connection ready.',
+      readings: null
+    });
     const fetchMock = vi.fn(
       async (_input: RequestInfo | URL, _init?: RequestInit) =>
-        new Response('data: {"type":"response.completed"}\n\n', {
-          headers: { 'content-type': 'text/event-stream' }
-        })
+        new Response(
+          `data: ${JSON.stringify({
+            type: 'response.output_text.done',
+            response_id: 'resp_connection_123',
+            text: output
+          })}\n\ndata: ${JSON.stringify({
+            type: 'response.completed',
+            response: { id: 'resp_connection_123' }
+          })}\n\n`,
+          { headers: { 'content-type': 'text/event-stream' } }
+        )
     );
     vi.stubGlobal('fetch', fetchMock);
 
@@ -1334,5 +1373,114 @@ describe('assistant integration', () => {
       }
     });
     expect(request.text.format.schema).toHaveProperty('properties.replyKind');
+  });
+
+  it.each([
+    [404, 'AI_NO_ELIGIBLE_ROUTE', 'OpenRouter found no eligible route'],
+    [400, 'AI_REQUEST_REJECTED', 'HTTP 400'],
+    [422, 'AI_REQUEST_REJECTED', 'HTTP 422'],
+    [402, 'AI_PAYMENT_REQUIRED', 'available credit or billing']
+  ])(
+    'classifies connection rejection %i without exposing provider text',
+    async (status, code, message) => {
+      const secretDetail = 'raw provider detail must stay private';
+      vi.stubGlobal(
+        'fetch',
+        vi.fn(async () =>
+          Response.json(
+            {
+              error: {
+                code: 'no_endpoints',
+                message: secretDetail
+              }
+            },
+            {
+              status,
+              headers: { 'x-request-id': 'req_safe_123' }
+            }
+          )
+        )
+      );
+      const consoleError = vi
+        .spyOn(console, 'error')
+        .mockImplementation(() => undefined);
+
+      const promise = testAssistantConnection(
+        {
+          provider: 'openrouter',
+          apiKey: 'personal-key',
+          model: 'openai/gpt-5.6-sol',
+          reasoningEffort: 'high',
+          maxOutputTokens: 32_000,
+          timeoutMs: 120_000,
+          customInstructions: ''
+        },
+        {}
+      );
+
+      await expect(promise).rejects.toMatchObject({
+        code,
+        providerStatus: status,
+        providerCode: 'no_endpoints',
+        providerRequestId: 'req_safe_123'
+      });
+      await expect(promise).rejects.toThrow(message);
+      const logged = JSON.stringify(consoleError.mock.calls);
+      expect(logged).not.toContain(secretDetail);
+      expect(logged).not.toContain('personal-key');
+    }
+  );
+
+  it('rejects a 200 stream that never produces a valid structured reply', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(
+        async () =>
+          new Response(
+            `data: ${JSON.stringify({
+              type: 'response.output_text.done',
+              text: 'not-json'
+            })}\n\ndata: ${JSON.stringify({ type: 'response.completed' })}\n\n`
+          )
+      )
+    );
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+
+    await expect(
+      testAssistantConnection(
+        {
+          provider: 'openrouter',
+          apiKey: 'personal-key',
+          model: 'openai/gpt-5.6-sol',
+          reasoningEffort: 'high',
+          maxOutputTokens: 32_000,
+          timeoutMs: 120_000,
+          customInstructions: ''
+        },
+        {}
+      )
+    ).rejects.toMatchObject({ code: 'AI_RESPONSE_INVALID' });
+  });
+
+  it('keeps every rollout variant valid for strict structured output', () => {
+    const flags = [
+      'AI_PATCH_DIRECT_EDIT_ENABLED',
+      'AI_PATCH_FACE_SKETCH_ENABLED',
+      'AI_PATCH_MULTI_PROFILE_EXTRUDE_ENABLED',
+      'AI_PATCH_MIRROR_ENABLED',
+      'AI_PATCH_SHELL_ENABLED',
+      'AI_PATCH_SOLID_OFFSET_ENABLED',
+      'AI_PATCH_PARTIAL_REVOLVE_ENABLED'
+    ] as const;
+
+    for (let mask = 0; mask < 1 << flags.length; mask += 1) {
+      const env = Object.fromEntries(
+        flags.map((flag, index) => [
+          flag,
+          mask & (1 << index) ? 'true' : 'false'
+        ])
+      );
+      assertStrictObjectSchemas(assistantReplySchemaFor(env));
+    }
   });
 });
