@@ -187,10 +187,11 @@ interface ViewerShellProps {
   onSketchDrawingChange(drawing: boolean): void;
   onSketchSelectObject(
     objectId: string | null,
-    snapPoint?: {
+    snapPoint: {
       objectId: string;
       point: 'start' | 'end' | 'center';
-    } | null
+    } | null,
+    clickPoint: { x: number; y: number }
   ): void;
   sketchViews: SketchViewData[];
   selectedProfileIds: string[];

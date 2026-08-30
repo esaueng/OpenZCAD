@@ -19,9 +19,11 @@ import {
   MoveVertical,
   Play,
   Radius,
+  Ruler,
   ScanSearch,
   Square,
   Tangent,
+  TriangleRight,
   Trash2,
   Type,
   Waypoints
@@ -39,6 +41,7 @@ import { CONSTRAINT_TOOL_SPECS } from '../lib/sketch/constraints';
 export interface SketchConstraintListItem {
   constraintId: string;
   label: string;
+  editable: boolean;
 }
 
 /** What the solve-status pill shows; null until a solve has run. */
@@ -65,6 +68,10 @@ interface SketchToolRailProps {
   onConstruction(value: boolean): void;
   onSettings(settings: AppSettings['sketching']): void;
   onConstraintTool(kind: SketchConstraintToolKind | null): void;
+  onEditConstraint(
+    constraintId: string,
+    anchor: { x: number; y: number }
+  ): void;
   onDeleteConstraint(constraintId: string): void;
   onSolve(): void;
   onDiagnostics(): void;
@@ -82,7 +89,9 @@ const CONSTRAINT_ICONS: Record<SketchConstraintToolKind, typeof Minus> = {
   concentric: CircleDotDashed,
   coincident: CircleDot,
   midpoint: BetweenHorizontalEnd,
-  radius: Radius
+  radius: Radius,
+  distance: Ruler,
+  angle: TriangleRight
 };
 
 const TOOLS: {
@@ -144,6 +153,7 @@ export function SketchToolRail({
   onConstruction,
   onSettings,
   onConstraintTool,
+  onEditConstraint,
   onDeleteConstraint,
   onSolve,
   onDiagnostics,
@@ -424,9 +434,26 @@ export function SketchToolRail({
                 <fieldset>
                   <legend>Constraints</legend>
                   <ul className="sketch-constraint-list">
-                    {constraints.map(({ constraintId, label }) => (
+                    {constraints.map(({ constraintId, label, editable }) => (
                       <li key={constraintId}>
-                        <span title={label}>{label}</span>
+                        {editable ? (
+                          <button
+                            type="button"
+                            className="sketch-constraint-edit"
+                            title={`Edit constraint: ${label}`}
+                            aria-label={`Edit constraint: ${label}`}
+                            onClick={(event) =>
+                              onEditConstraint(constraintId, {
+                                x: event.clientX,
+                                y: event.clientY
+                              })
+                            }
+                          >
+                            {label}
+                          </button>
+                        ) : (
+                          <span title={label}>{label}</span>
+                        )}
                         <button
                           type="button"
                           className="row-delete"
