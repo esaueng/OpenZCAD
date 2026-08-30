@@ -20,7 +20,7 @@ import {
 
 export interface KeypadRequest {
   /** Which commit path the value feeds (routing is the opener's concern). */
-  kind: 'offset' | 'edge' | 'radius';
+  kind: 'offset' | 'edge' | 'radius' | 'sketch-dimension';
   /** Short label over the value field ('Offset', 'Radius', 'Height'). */
   label: string;
   /** Prefill; may be a typed digit captured mid-gesture. */
@@ -34,6 +34,8 @@ export interface KeypadRequest {
    * Original absolute measurement, used to restore exact-entry cancellation.
    */
   baseline?: number;
+  /** Client-space anchor for a click-placed editor without a live 3D rig. */
+  fixedClientAnchor?: { x: number; y: number };
 }
 
 interface NumericKeypadProps {
@@ -150,7 +152,7 @@ export function NumericKeypad({
     // Position once at the first anchor push, then stay put: a keypad that
     // chases the live preview moves out from under the pointer mid-entry.
     let positioned = false;
-    anchorRef.current = (point) => {
+    const positionAt = (point: { x: number; y: number } | null) => {
       if (positioned || !point) {
         return;
       }
@@ -172,10 +174,21 @@ export function NumericKeypad({
       root.style.top = `${placement.y}px`;
       positioned = true;
     };
+    anchorRef.current = positionAt;
+    if (request.fixedClientAnchor) {
+      const host = root.parentElement;
+      if (host) {
+        const rect = host.getBoundingClientRect();
+        positionAt({
+          x: request.fixedClientAnchor.x - rect.left,
+          y: request.fixedClientAnchor.y - rect.top
+        });
+      }
+    }
     return () => {
       anchorRef.current = null;
     };
-  }, [anchorRef]);
+  }, [anchorRef, request.fixedClientAnchor]);
 
   useEffect(() => {
     inputRef.current?.focus();
