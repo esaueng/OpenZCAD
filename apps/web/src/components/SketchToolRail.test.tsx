@@ -102,6 +102,13 @@ describe('SketchToolRail', () => {
     expect(onConstraintTool).toHaveBeenLastCalledWith(null);
   });
 
+  it('exposes every solver-ready non-dimensional constraint', () => {
+    renderRail();
+    for (const name of ['Perpendicular', 'Equal', 'Concentric', 'Midpoint']) {
+      expect(screen.getByRole('button', { name })).toBeEnabled();
+    }
+  });
+
   it('disables constraining until the sketch node exists', () => {
     renderRail({ canConstrain: false });
     expect(screen.getByRole('button', { name: 'Horizontal' })).toBeDisabled();
