@@ -27,10 +27,18 @@
     padding-inline: 0;
   }
 
-  /* The save chip's label changes with state; a fixed width keeps the row
-     from breathing as it does. */
+  /*
+    Content-sized with a floor, not a fixed width. A fixed 128px was cut for
+    the longest label ("Repair needed", 130px — which it then clipped anyway),
+    so every ordinary state paid for a rare one: "Saved" needs 75px and left
+    53px of dead space at exactly the widths where the bar has none to spare.
+    The floor covers the routine cycle — saving, syncing, saved — so the
+    controls to its right never shift while a save completes; the longer
+    decision states take the extra room only while they are showing.
+  */
   .save-state {
-    width: 128px;
+    width: auto;
+    min-width: 90px;
   }
 
   /* Icon-only from here down, so the label no longer supplies the width —
@@ -68,14 +76,15 @@
   the project name simply is not there. Measured at 768px: brand 139px,
   actions 446px, breadcrumb 0.
 
-  The save chip is the widest thing in the row at 128px and the last one still
-  carrying a label, so it is where the space comes from. Its full sentence
-  stays in the accessible name and the tooltip, exactly as the account and
-  collaboration chips already do above.
+  The save chip is the widest thing in the row (75-130px, depending on state)
+  and the last one still carrying a label, so it is where the space comes
+  from. Its full sentence stays in the accessible name and the tooltip,
+  exactly as the account and collaboration chips already do above.
 */
 @media (max-width: 900px) {
   .save-state {
     width: 28px;
+    min-width: 0;
     justify-content: center;
     gap: 0;
     padding-inline: 0;
