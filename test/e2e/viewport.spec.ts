@@ -244,12 +244,24 @@ test('the viewport scale indicator tracks zoom in document units', async ({
     bounds!.x + bounds!.width / 2,
     bounds!.y + bounds!.height / 2
   );
-  for (let step = 0; step < 8; step += 1) {
-    await page.mouse.wheel(0, -120);
-    await page.waitForTimeout(80);
-  }
-
-  await expect.poll(() => indicator.textContent()).not.toBe(initialLabel);
+  // Wheel inside the poll rather than as one fixed burst up front: on a
+  // loaded 2-core CI runner the camera controls can attach after the
+  // indicator is already visible, and a one-shot burst then lands entirely
+  // on nothing — the label never changes no matter how long the assertion
+  // waits. Each iteration wheels a full batch because the label is quantized
+  // to 1-2-5 steps and a single tick may not cross a boundary.
+  await expect
+    .poll(
+      async () => {
+        for (let step = 0; step < 8; step += 1) {
+          await page.mouse.wheel(0, -120);
+          await page.waitForTimeout(40);
+        }
+        return indicator.textContent();
+      },
+      { timeout: 20_000 }
+    )
+    .not.toBe(initialLabel);
   const zoomedWidth = await rule.evaluate(
     (element) => element.getBoundingClientRect().width
   );
