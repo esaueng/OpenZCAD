@@ -71,15 +71,12 @@
  *      volume and edge-hash pins survive with new values and new owners; see
  *      their notes. K0.4 no longer owns anything in this list.
  *
- *      Not everything the blend work landed is right, and the corpus does not
- *      cover the part that is not: a fillet over a subset of the edges meeting
- *      at a corner builds a B-spline vertex patch that removes far more
- *      material than a rolling ball can (+147% on one corner chain, +259% over
- *      a four-edge perimeter) and tessellates with inconsistent winding. Both
- *      are held failing in `test/exact-kernel-adapter.test.ts`. Fillets where
- *      EVERY edge at a vertex is selected come back as exact spheres and hit
- *      the closed form, which is why this corpus — whose blend scenario
- *      selects four parallel vertical edges — sees none of it.
+ *      The former corner-chain +147%/+259% volume divergences and inconsistent
+ *      winding are fixed and held by positive closed-form and mesh-closure
+ *      regressions in `test/exact-kernel-adapter.test.ts` ("blends a corner
+ *      chain to its closed-form volume" and "tessellates a vertex blend with
+ *      consistent winding"). This corpus's four parallel-edge blend remains a
+ *      separate positive scenario.
  *
  * What remains, in rough order of how much it costs:
  *
