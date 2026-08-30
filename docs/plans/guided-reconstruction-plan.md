@@ -219,8 +219,8 @@ generated U-bracket exercising the same hypothesis kinds).
   witness-only import; undo → exact prior state.
 - **Phase R5 — deferred, needs explicit authorization.** Exact-NURBS sketch
   entities for byte-exact necks/text (the R0 neck experiment did not justify
-  them; a different measured use case is required); Shapr schema-270+ adapters
-  when the format moves; profiles 2+ (revolve-heavy, drafted, multi-body parts)
+  them; a different measured use case is required); `.shapr` schema-270+
+  adapters when the format moves; profiles 2+ (revolve-heavy, drafted, multi-body parts)
   to earn the generality claim.
 
 R0–R2 are independent of each other except R2 using R0's helpers; R3 depends on
