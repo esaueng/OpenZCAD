@@ -1,7 +1,46 @@
-import { test, expect, type Page } from '@playwright/test';
+import { test, expect, type Locator, type Page } from '@playwright/test';
 import { seedDismissedWorkspaceTour } from './openzcad-fixtures';
 import { createProjectDocument } from '@openzcad/document-core';
-import { toUserId } from '@openzcad/shared';
+import { toUserId, type SketchObjectData } from '@openzcad/shared';
+
+interface LiveSketchState {
+  objects: { id: string; data: SketchObjectData }[];
+}
+
+async function readLiveSketch(canvas: Locator): Promise<LiveSketchState> {
+  return canvas.evaluate(
+    (element) =>
+      new Promise<LiveSketchState>((resolve) => {
+        element.dispatchEvent(
+          new CustomEvent('openzcad:e2e-sketch-state', {
+            detail: { resolve }
+          })
+        );
+      })
+  );
+}
+
+function lineAngleDegrees(state: LiveSketchState): number {
+  const lines = state.objects
+    .map(({ data }) => data)
+    .filter(
+      (data): data is Extract<SketchObjectData, { objectKind: 'line' }> =>
+        data.objectKind === 'line'
+    );
+  const [a, b] = lines;
+  if (!a || !b) {
+    throw new Error('Expected two rendered sketch lines.');
+  }
+  const ax = Number(a.x2) - Number(a.x1);
+  const ay = Number(a.y2) - Number(a.y1);
+  const bx = Number(b.x2) - Number(b.x1);
+  const by = Number(b.y2) - Number(b.y1);
+  const cosine = Math.max(
+    -1,
+    Math.min(1, (ax * bx + ay * by) / Math.hypot(ax, ay) / Math.hypot(bx, by))
+  );
+  return (Math.acos(cosine) * 180) / Math.PI;
+}
 
 async function stubApi(page: Page) {
   await seedDismissedWorkspaceTour(page);
@@ -219,6 +258,105 @@ test('keeps a chained line anchored across committed sketch entities', async ({
     'Closed sketch profile selected',
     { timeout: 20_000 }
   );
+});
+
+test('places, retypes, solves, and undoes a driving angle dimension', async ({
+  page
+}) => {
+  test.setTimeout(60_000);
+  await stubApi(page);
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('Driving Angle');
+  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByLabel('New parameter name').fill('angle_target');
+  await page.getByLabel('New parameter expression').fill('60');
+  await page.getByRole('button', { name: 'Add parameter' }).click();
+  await expect(page.getByLabel('Expression for angle_target')).toHaveValue(
+    '60'
+  );
+  await page.getByRole('button', { name: /^Sketch \(S\)/ }).click();
+  await page.getByRole('button', { name: 'Top (XY)' }).click();
+  await expect(
+    page.getByRole('region', { name: 'Editing Sketch: New Sketch operation' })
+  ).toBeVisible();
+  await page.waitForTimeout(800);
+
+  const gridSnap = page.getByRole('checkbox', { name: 'Snap to grid' });
+  if (await gridSnap.isChecked()) {
+    await gridSnap.uncheck();
+  }
+  const canvas = page.locator('.viewer-host canvas');
+  const bounds = await canvas.boundingBox();
+  expect(bounds).not.toBeNull();
+  const p0 = {
+    x: bounds!.x + bounds!.width * 0.22,
+    y: bounds!.y + bounds!.height * 0.62
+  };
+  const p1 = {
+    x: bounds!.x + bounds!.width * 0.4,
+    y: p0.y
+  };
+  const p2 = {
+    x: bounds!.x + bounds!.width * 0.52,
+    y: bounds!.y + bounds!.height * 0.42
+  };
+  await page.mouse.click(p0.x, p0.y);
+  await page.mouse.click(p1.x, p1.y);
+  await page.mouse.click(p2.x, p2.y);
+
+  const sketchTools = page.getByRole('toolbar', { name: 'Sketch tools' });
+  const angleTool = sketchTools.getByRole('button', {
+    name: 'Angle',
+    exact: true
+  });
+  await expect(angleTool).toBeEnabled();
+  await angleTool.click();
+  await page.mouse.click((p0.x + p1.x) / 2, (p0.y + p1.y) / 2);
+  await page.mouse.click((p1.x + p2.x) / 2, (p1.y + p2.y) / 2);
+  await expect(page.getByRole('contentinfo')).toContainText(
+    'Angle: click to place the value.'
+  );
+  await page.mouse.click(p1.x - 20, p1.y - 120);
+
+  const initialEditor = page.getByRole('dialog', { name: 'Angle value' });
+  await expect(initialEditor).toBeVisible();
+  await initialEditor.getByRole('button', { name: 'Apply angle' }).click();
+  await expect(page.getByRole('contentinfo')).toContainText(
+    'Angle dimension added',
+    { timeout: 30_000 }
+  );
+  const baseline = await readLiveSketch(canvas);
+
+  await page.getByRole('button', { name: /^Edit constraint: Angle / }).click();
+  const editor = page.getByRole('dialog', { name: 'Angle value' });
+  const input = editor.getByRole('textbox');
+  await input.fill('angle_target');
+  await editor.getByRole('button', { name: 'Apply angle' }).click();
+  await expect(page.getByRole('contentinfo')).toContainText(
+    'Angle dimension updated',
+    { timeout: 30_000 }
+  );
+
+  const solved = await readLiveSketch(canvas);
+  expect(lineAngleDegrees(solved)).toBeCloseTo(60, 6);
+  expect(solved.objects).not.toEqual(baseline.objects);
+
+  const parameter = page.getByLabel('Expression for angle_target');
+  await parameter.fill('45');
+  await parameter.press('Enter');
+  await expect(page.getByRole('contentinfo')).toContainText(
+    'Parameter angle_target updated',
+    { timeout: 30_000 }
+  );
+  const rebound = await readLiveSketch(canvas);
+  expect(lineAngleDegrees(rebound)).toBeCloseTo(45, 6);
+  expect(rebound.objects).not.toEqual(solved.objects);
+
+  await page.keyboard.press('Control+z');
+  await expect
+    .poll(async () => JSON.stringify((await readLiveSketch(canvas)).objects))
+    .toBe(JSON.stringify(solved.objects));
+  await expect(parameter).toHaveValue('60');
 });
 
 test('clears every transient sketch HUD overlay when finishing a sketch', async ({
