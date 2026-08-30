@@ -71,7 +71,9 @@ export type SketchConstraintToolKind =
   | 'concentric'
   | 'coincident'
   | 'midpoint'
-  | 'radius';
+  | 'radius'
+  | 'distance'
+  | 'angle';
 
 export type SketchConstraintPick =
   | { kind: 'object'; objectId: string }

@@ -13,7 +13,7 @@ import type {
 } from '@openzcad/shared';
 import type { ProjectDocument } from '@openzcad/shared';
 
-/** Constraint tools whose values need no placement or numeric-entry gesture. */
+/** Constraint tools exposed by the sketch rail. */
 export type PendingConstraintKind =
   | 'horizontal'
   | 'vertical'
@@ -24,7 +24,14 @@ export type PendingConstraintKind =
   | 'concentric'
   | 'coincident'
   | 'midpoint'
-  | 'radius';
+  | 'radius'
+  | 'distance'
+  | 'angle';
+
+export type DrivingDimensionKind = Extract<
+  PendingConstraintKind,
+  'distance' | 'angle'
+>;
 
 export type ConstraintPick =
   | { kind: 'object'; objectId: string }
@@ -41,6 +48,8 @@ export interface ConstraintToolSpec {
     | readonly ['object', 'object']
     | readonly ['point', 'point']
     | readonly ['point', 'object'];
+  /** A completed pick sequence waits for a canvas placement before entry. */
+  placement?: true;
   /** Instruction shown while the tool is armed. */
   hint: string;
 }
@@ -115,6 +124,22 @@ export const CONSTRAINT_TOOL_SPECS: readonly ConstraintToolSpec[] = [
     picks: 1,
     pickKinds: ['object'],
     hint: 'Click a circle or arc to pin its current radius.'
+  },
+  {
+    kind: 'distance',
+    label: 'Distance',
+    picks: 2,
+    pickKinds: ['point', 'point'],
+    placement: true,
+    hint: 'Click two endpoints or centers, then place the distance value.'
+  },
+  {
+    kind: 'angle',
+    label: 'Angle',
+    picks: 2,
+    pickKinds: ['object', 'object'],
+    placement: true,
+    hint: 'Click two lines, then place the angle value.'
   }
 ] as const;
 
@@ -261,20 +286,41 @@ export function refusePick(
         ? 'The point and midpoint target must be different objects.'
         : null;
     }
+    case 'distance': {
+      if (data.objectKind === 'line') {
+        return pick.kind === 'point' && pick.point !== 'center'
+          ? null
+          : 'A line contributes its start or end point.';
+      }
+      if (data.objectKind === 'arc') {
+        return null;
+      }
+      if (data.objectKind === 'circle') {
+        return pick.kind === 'point' && pick.point === 'center'
+          ? null
+          : 'A circle contributes only its center point.';
+      }
+      return 'Distance applies to line and arc points and circle centers.';
+    }
+    case 'angle':
+      return data.objectKind === 'line'
+        ? null
+        : 'An angle dimension applies to two lines.';
   }
 }
 
 /**
  * Turn a completed pick sequence into constraint data. Assumes each pick
  * already passed {@link refusePick}; re-validates the count and the one rule
- * that spans picks. A radius constraint pins the object's CURRENT radius
- * value verbatim — an expression stays an expression.
+ * that spans picks. Dimensional callers provide the keypad's normalized raw
+ * value, so named-parameter expressions remain parametric.
  */
 export function buildConstraint(
   document: ProjectDocument,
   sketch: SketchNode,
   kind: PendingConstraintKind,
-  picks: readonly ConstraintPick[]
+  picks: readonly ConstraintPick[],
+  value?: number | string
 ): BuildConstraintResult {
   const spec = constraintToolSpec(kind);
   if (picks.length !== spec.picks) {
@@ -350,7 +396,154 @@ export function buildConstraint(
         }
       };
     }
+    case 'distance': {
+      const a = picks[0]!;
+      const b = picks[1]!;
+      if (a.kind !== 'point' || b.kind !== 'point') {
+        return { error: 'Distance needs two snap points.' };
+      }
+      if (value === undefined) {
+        return { error: 'Distance needs a driving value.' };
+      }
+      return {
+        data: {
+          constraintKind: 'distance',
+          a: { objectId: a.objectId as EntityId, point: a.point },
+          b: { objectId: b.objectId as EntityId, point: b.point },
+          value
+        }
+      };
+    }
+    case 'angle': {
+      const a = picks[0]!;
+      const b = picks[1]!;
+      if (a.kind !== 'object' || b.kind !== 'object') {
+        return { error: 'Angle needs two lines.' };
+      }
+      if (value === undefined) {
+        return { error: 'Angle needs a driving value.' };
+      }
+      return {
+        data: {
+          constraintKind: 'angle',
+          a: a.objectId as EntityId,
+          b: b.objectId as EntityId,
+          valueDeg: value
+        }
+      };
+    }
   }
+}
+
+export type MeasureDimensionResult = { value: number } | { error: string };
+
+type ResolveParam = (value: number | string) => number | undefined;
+
+function pointPosition(
+  document: ProjectDocument,
+  sketch: SketchNode,
+  pick: ConstraintPick,
+  resolve: ResolveParam
+): { x: number; y: number } | null {
+  if (pick.kind !== 'point') {
+    return null;
+  }
+  const data = sketchObjectData(document, sketch, pick.objectId);
+  if (!data) {
+    return null;
+  }
+  if (data.objectKind === 'line') {
+    if (pick.point === 'center') {
+      return null;
+    }
+    const x = resolve(pick.point === 'start' ? data.x1 : data.x2);
+    const y = resolve(pick.point === 'start' ? data.y1 : data.y2);
+    return x === undefined || y === undefined ? null : { x, y };
+  }
+  if (data.objectKind === 'circle') {
+    const x = resolve(data.centerX);
+    const y = resolve(data.centerY);
+    return x === undefined || y === undefined ? null : { x, y };
+  }
+  if (data.objectKind === 'arc') {
+    const centerX = resolve(data.centerX);
+    const centerY = resolve(data.centerY);
+    if (centerX === undefined || centerY === undefined) {
+      return null;
+    }
+    if (pick.point === 'center') {
+      return { x: centerX, y: centerY };
+    }
+    const radius = resolve(data.radius);
+    const angleDeg = resolve(
+      pick.point === 'start' ? data.startAngleDeg : data.endAngleDeg
+    );
+    if (radius === undefined || angleDeg === undefined) {
+      return null;
+    }
+    const angle = (angleDeg * Math.PI) / 180;
+    return {
+      x: centerX + radius * Math.cos(angle),
+      y: centerY + radius * Math.sin(angle)
+    };
+  }
+  return null;
+}
+
+/** Current geometric value used to prefill a newly placed driving dimension. */
+export function measureDrivingDimension(
+  document: ProjectDocument,
+  sketch: SketchNode,
+  kind: DrivingDimensionKind,
+  picks: readonly ConstraintPick[],
+  resolve: ResolveParam
+): MeasureDimensionResult {
+  if (picks.length !== 2) {
+    return {
+      error: `${kind === 'distance' ? 'Distance' : 'Angle'} needs two picks.`
+    };
+  }
+  if (kind === 'distance') {
+    const a = pointPosition(document, sketch, picks[0]!, resolve);
+    const b = pointPosition(document, sketch, picks[1]!, resolve);
+    if (!a || !b) {
+      return { error: 'The selected distance points could not be evaluated.' };
+    }
+    const value = Math.hypot(b.x - a.x, b.y - a.y);
+    return value > 0
+      ? { value }
+      : { error: 'A driving distance needs two distinct points.' };
+  }
+
+  const lineVectors = picks.map((pick) => {
+    if (pick.kind !== 'object') {
+      return null;
+    }
+    const data = sketchObjectData(document, sketch, pick.objectId);
+    if (!data || data.objectKind !== 'line') {
+      return null;
+    }
+    const x1 = resolve(data.x1);
+    const y1 = resolve(data.y1);
+    const x2 = resolve(data.x2);
+    const y2 = resolve(data.y2);
+    return x1 === undefined ||
+      y1 === undefined ||
+      x2 === undefined ||
+      y2 === undefined
+      ? null
+      : { x: x2 - x1, y: y2 - y1 };
+  });
+  const [a, b] = lineVectors;
+  const denominator = a && b ? Math.hypot(a.x, a.y) * Math.hypot(b.x, b.y) : 0;
+  if (!a || !b || denominator === 0) {
+    return { error: 'The selected angle lines could not be evaluated.' };
+  }
+  const cosine = Math.max(
+    -1,
+    Math.min(1, (a.x * b.x + a.y * b.y) / denominator)
+  );
+  return { value: (Math.acos(cosine) * 180) / Math.PI };
 }
 
 /** Compact one-line description for the constraint list. */

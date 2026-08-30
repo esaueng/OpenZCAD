@@ -15,6 +15,7 @@ import {
   buildConstraint,
   CONSTRAINT_TOOL_SPECS,
   describeConstraint,
+  measureDrivingDimension,
   refusePick,
   type PendingConstraintKind,
   type ConstraintPick
@@ -74,16 +75,18 @@ const point = (
 ): ConstraintPick => ({ kind: 'point', objectId, point: pointName });
 
 describe('sketch constraint picking', () => {
-  it('enumerates the four solver-ready non-dimensional tools', () => {
+  it('enumerates the solver-ready constraints and driving dimensions', () => {
     expect(CONSTRAINT_TOOL_SPECS.map(({ kind }) => kind)).toEqual(
       expect.arrayContaining([
         'perpendicular',
         'equal',
         'concentric',
-        'midpoint'
+        'midpoint',
+        'distance',
+        'angle'
       ])
     );
-    expect(CONSTRAINT_TOOL_SPECS).toHaveLength(10);
+    expect(CONSTRAINT_TOOL_SPECS).toHaveLength(12);
   });
 
   it('accepts legal picks and refuses the wrong entity kinds', () => {
@@ -195,6 +198,44 @@ describe('sketch constraint picking', () => {
         line: lineB
       }
     });
+    expect(
+      buildConstraint(
+        document,
+        sketch,
+        'distance',
+        [point(lineA, 'start'), point(lineB, 'end')],
+        'span'
+      )
+    ).toEqual({
+      data: {
+        constraintKind: 'distance',
+        a: { objectId: lineA, point: 'start' },
+        b: { objectId: lineB, point: 'end' },
+        value: 'span'
+      }
+    });
+    expect(
+      buildConstraint(
+        document,
+        sketch,
+        'angle',
+        [object(lineA), object(lineB)],
+        45
+      )
+    ).toEqual({
+      data: {
+        constraintKind: 'angle',
+        a: lineA,
+        b: lineB,
+        valueDeg: 45
+      }
+    });
+    expect(
+      buildConstraint(document, sketch, 'distance', [
+        point(lineA, 'start'),
+        point(lineB, 'end')
+      ])
+    ).toEqual({ error: 'Distance needs a driving value.' });
   });
 
   it('pins both sides of the new tools applicability boundaries', () => {
@@ -268,6 +309,58 @@ describe('sketch constraint picking', () => {
         object(lineA)
       )
     ).toMatch(/different objects/);
+
+    expect(
+      refusePick(document, sketch, 'distance', [], point(lineA, 'start'))
+    ).toBe(null);
+    expect(
+      refusePick(document, sketch, 'distance', [], point(circle, 'center'))
+    ).toBe(null);
+    expect(refusePick(document, sketch, 'distance', [], object(lineA))).toMatch(
+      /snap point/
+    );
+    expect(
+      refusePick(document, sketch, 'distance', [], point(lineA, 'center'))
+    ).toMatch(/start or end/);
+    expect(
+      refusePick(document, sketch, 'distance', [], point(rectangle, 'center'))
+    ).toMatch(/line and arc points/);
+
+    expect(refusePick(document, sketch, 'angle', [], object(lineA))).toBe(null);
+    expect(
+      refusePick(document, sketch, 'angle', [object(lineA)], object(lineB))
+    ).toBe(null);
+    expect(refusePick(document, sketch, 'angle', [], object(circle))).toMatch(
+      /applies to two lines/
+    );
+  });
+
+  it('prefills dimensions from independent closed-form geometry', () => {
+    const { document, sketch, lineA, lineB } = fixture();
+    const resolve = (value: number | string) =>
+      typeof value === 'number' ? value : value === 'r' ? 3 : undefined;
+    expect(
+      measureDrivingDimension(
+        document,
+        sketch,
+        'distance',
+        [point(lineA, 'start'), point(lineB, 'end')],
+        resolve
+      )
+    ).toEqual({ value: Math.hypot(10, 6) });
+    const angle = measureDrivingDimension(
+      document,
+      sketch,
+      'angle',
+      [object(lineA), object(lineB)],
+      resolve
+    );
+    expect(angle).toHaveProperty('value');
+    if ('value' in angle) {
+      const a = Math.atan2(2, 10);
+      const b = Math.atan2(1, 10);
+      expect(angle.value).toBeCloseTo(Math.abs(((a - b) * 180) / Math.PI), 10);
+    }
   });
 
   it('guides tangent to one line plus one circle, in either order', () => {
@@ -322,7 +415,8 @@ describe('sketch constraint picking', () => {
 async function solveWithConstraint(
   objects: SketchObjectData[],
   kind: PendingConstraintKind,
-  picksFor: (ids: string[]) => ConstraintPick[]
+  picksFor: (ids: string[]) => ConstraintPick[],
+  value?: number | string
 ) {
   const { document, sketchId } = addSketchFeature(
     createProjectDocument('Constraint oracle', toUserId('user_oracle')),
@@ -334,7 +428,7 @@ async function solveWithConstraint(
   );
   const sketch = findSketch(document, sketchId)!;
   const ids = sketch.objectIds.map(String);
-  const built = buildConstraint(document, sketch, kind, picksFor(ids));
+  const built = buildConstraint(document, sketch, kind, picksFor(ids), value);
   if ('error' in built) {
     throw new Error(built.error);
   }
@@ -364,6 +458,125 @@ function solvedObject(
 }
 
 describe('solver-ready constraint command oracles', () => {
+  it('solves a driving point distance to the closed-form length', async () => {
+    const outcome = await solveWithConstraint(
+      [
+        { objectKind: 'line', x1: 0, y1: 0, x2: 3, y2: 1 },
+        { objectKind: 'line', x1: 4, y1: 6, x2: 9, y2: 8 }
+      ],
+      'distance',
+      ([a, b]) => [point(a!, 'start'), point(b!, 'end')],
+      12
+    );
+    const a = solvedObject(outcome, 0);
+    const b = solvedObject(outcome, 1);
+    if (a.kind !== 'line' || b.kind !== 'line') {
+      throw new Error('Distance oracle expected two solved lines.');
+    }
+    expect(outcome.converged).toBe(true);
+    expect(outcome.rolledBack).toBe(false);
+    expect(Math.hypot(b.x2 - a.x1, b.y2 - a.y1)).toBeCloseTo(12, 8);
+    expect([a.x1, a.y1, b.x2, b.y2]).not.toEqual([0, 0, 9, 8]);
+  });
+
+  it('solves a driving line angle to the requested degrees', async () => {
+    const outcome = await solveWithConstraint(
+      [
+        { objectKind: 'line', x1: 0, y1: 0, x2: 8, y2: 1 },
+        { objectKind: 'line', x1: 1, y1: 3, x2: 7, y2: 9 }
+      ],
+      'angle',
+      ([a, b]) => [object(a!), object(b!)],
+      60
+    );
+    const a = solvedObject(outcome, 0);
+    const b = solvedObject(outcome, 1);
+    if (a.kind !== 'line' || b.kind !== 'line') {
+      throw new Error('Angle oracle expected two solved lines.');
+    }
+    const ax = a.x2 - a.x1;
+    const ay = a.y2 - a.y1;
+    const bx = b.x2 - b.x1;
+    const by = b.y2 - b.y1;
+    const cosine = Math.max(
+      -1,
+      Math.min(1, (ax * bx + ay * by) / Math.hypot(ax, ay) / Math.hypot(bx, by))
+    );
+    expect(outcome.converged).toBe(true);
+    expect((Math.acos(cosine) * 180) / Math.PI).toBeCloseTo(60, 8);
+    expect([a.x1, a.y1, a.x2, a.y2, b.x1, b.y1, b.x2, b.y2]).not.toEqual([
+      0, 0, 8, 1, 1, 3, 7, 9
+    ]);
+  });
+
+  it('binds a driving dimension to a named parameter', async () => {
+    const { document, sketchId } = addSketchFeature(
+      createProjectDocument('Parameter dimension', toUserId('user_parameter')),
+      {
+        name: 'Parameter profile',
+        planeRef: { type: 'canonical', plane: 'XY', offset: 0 },
+        objects: [
+          { objectKind: 'line', x1: 0, y1: 0, x2: 2, y2: 0 },
+          { objectKind: 'line', x1: 4, y1: 0, x2: 8, y2: 0 }
+        ]
+      }
+    );
+    const parameter = commandFactories.setParameter({
+      name: 'span',
+      expression: '15'
+    });
+    parameter.validate(document);
+    const parameterized = parameter.apply(document);
+    const sketch = findSketch(parameterized, sketchId)!;
+    const [a, b] = sketch.objectIds;
+    const dimension = commandFactories.addSketchConstraint({
+      sketchId,
+      constraint: {
+        constraintKind: 'distance',
+        a: { objectId: a!, point: 'start' },
+        b: { objectId: b!, point: 'end' },
+        value: 'span'
+      }
+    });
+    dimension.validate(parameterized);
+    const constrained = dimension.apply(parameterized);
+    const adapter = await createExactKernelAdapter();
+    try {
+      const outcome = await adapter.solveSketch(constrained, sketchId);
+      const first = solvedObject(outcome, 0);
+      const second = solvedObject(outcome, 1);
+      if (first.kind !== 'line' || second.kind !== 'line') {
+        throw new Error('Parameter oracle expected two solved lines.');
+      }
+      expect(outcome.converged).toBe(true);
+      expect(
+        Math.hypot(second.x2 - first.x1, second.y2 - first.y1)
+      ).toBeCloseTo(15, 8);
+
+      const retarget = commandFactories.setParameter({
+        name: 'span',
+        expression: '6'
+      });
+      retarget.validate(constrained);
+      const retargeted = retarget.apply(constrained);
+      const updated = await adapter.solveSketch(retargeted, sketchId);
+      const updatedFirst = solvedObject(updated, 0);
+      const updatedSecond = solvedObject(updated, 1);
+      if (updatedFirst.kind !== 'line' || updatedSecond.kind !== 'line') {
+        throw new Error('Parameter retarget oracle expected two solved lines.');
+      }
+      expect(updated.converged).toBe(true);
+      expect(
+        Math.hypot(
+          updatedSecond.x2 - updatedFirst.x1,
+          updatedSecond.y2 - updatedFirst.y1
+        )
+      ).toBeCloseTo(6, 8);
+    } finally {
+      adapter.dispose();
+    }
+  });
+
   it('solves perpendicular lines to a right angle', async () => {
     const outcome = await solveWithConstraint(
       [
@@ -461,25 +674,38 @@ describe('solver-ready constraint command oracles', () => {
     expect([pointLine.x2, pointLine.y2]).not.toEqual([2, 8]);
   });
 
-  it('returns typed unsatisfied diagnostics for a conflicting command set', async () => {
+  it('returns typed unsatisfied diagnostics for conflicting driving dimensions', async () => {
     const { document, sketchId } = addSketchFeature(
       createProjectDocument('Constraint conflict', toUserId('user_conflict')),
       {
         name: 'Conflict profile',
         planeRef: { type: 'canonical', plane: 'XY', offset: 0 },
-        objects: [{ objectKind: 'circle', centerX: 0, centerY: 0, radius: 5 }]
+        objects: [
+          { objectKind: 'line', x1: 0, y1: 0, x2: 4, y2: 0 },
+          { objectKind: 'line', x1: 8, y1: 0, x2: 10, y2: 0 }
+        ]
       }
     );
-    const circle = findSketch(document, sketchId)!.objectIds[0]!;
+    const [a, b] = findSketch(document, sketchId)!.objectIds;
     const first = commandFactories.addSketchConstraint({
       sketchId,
-      constraint: { constraintKind: 'radius', objectId: circle, value: 5 }
+      constraint: {
+        constraintKind: 'distance',
+        a: { objectId: a!, point: 'start' },
+        b: { objectId: b!, point: 'end' },
+        value: 8
+      }
     });
     first.validate(document);
     const onceConstrained = first.apply(document);
     const second = commandFactories.addSketchConstraint({
       sketchId,
-      constraint: { constraintKind: 'radius', objectId: circle, value: 10 }
+      constraint: {
+        constraintKind: 'distance',
+        a: { objectId: a!, point: 'start' },
+        b: { objectId: b!, point: 'end' },
+        value: 12
+      }
     });
     second.validate(onceConstrained);
     const conflicted = second.apply(onceConstrained);
