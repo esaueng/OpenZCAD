@@ -41,6 +41,11 @@ export interface ProjectSharingDialogProps {
   client?: ProjectSharingClient;
   shareLinkClient?: ProjectShareLinkClient;
   editorInvitationsEnabled?: boolean;
+  /**
+   * Whether this deployment enforces the project edit lease. Defaults on so a
+   * caller that has no rollout state keeps the strict behavior.
+   */
+  editLeasesEnforced?: boolean;
   onClose(): void;
 }
 
@@ -90,6 +95,7 @@ export function ProjectSharingDialog({
   client = defaultClient,
   shareLinkClient = defaultShareLinkClient,
   editorInvitationsEnabled = true,
+  editLeasesEnforced = true,
   onClose
 }: ProjectSharingDialogProps) {
   const dialogRef = useRef<HTMLDivElement | null>(null);
@@ -167,14 +173,17 @@ export function ProjectSharingDialog({
       resolveProjectConflict(
         conflict,
         resolution,
-        { role, lease },
+        { role, lease, leasesEnforced: editLeasesEnforced },
         conflictHandlers
       )
     );
   };
 
   const leaseIsActive = activeLease(lease, projectId);
-  const canKeepMine = role !== 'viewer' && role !== null && leaseIsActive;
+  const canKeepMine =
+    role !== 'viewer' &&
+    role !== null &&
+    (leaseIsActive || !editLeasesEnforced);
 
   return (
     <div
@@ -285,8 +294,8 @@ export function ProjectSharingDialog({
               </div>
               {!canKeepMine && (
                 <p id="keep-mine-requirement" className="sharing-conflict-note">
-                  Keep my version requires owner or editor access and an active
-                  edit lease.
+                  Keep my version requires owner or editor access
+                  {editLeasesEnforced ? ' and an active edit lease' : ''}.
                 </p>
               )}
             </section>
