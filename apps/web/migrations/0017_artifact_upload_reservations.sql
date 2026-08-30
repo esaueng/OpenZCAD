@@ -87,11 +87,11 @@ SET owner_user_id = (
       FROM projects
       WHERE projects.id = upload_sessions.project_id
     ),
-    multipart_upload_id = CASE
-      WHEN json_type(metadata_json, '$.__openzcadMultipartUploadId') = 'text'
-      THEN json_extract(metadata_json, '$.__openzcadMultipartUploadId')
-      ELSE NULL
-    END,
+    multipart_upload_id = IIF(
+      json_type(metadata_json, '$.__openzcadMultipartUploadId') = 'text',
+      json_extract(metadata_json, '$.__openzcadMultipartUploadId'),
+      NULL
+    ),
     metadata_json = json_remove(
       metadata_json,
       '$.__openzcadMultipartUploadId'
@@ -184,34 +184,32 @@ CREATE INDEX idx_upload_sessions_owner_expiry
 CREATE TRIGGER artifact_upload_session_before_insert
 BEFORE INSERT ON upload_sessions
 BEGIN
-  SELECT CASE
-    WHEN NEW.owner_user_id IS NULL OR length(NEW.owner_user_id) = 0
-      THEN RAISE(ABORT, 'artifact_upload_owner_required')
-    WHEN NEW.reservation_state <> 'open'
+  SELECT RAISE(ABORT, 'artifact_upload_owner_required')
+  WHERE NEW.owner_user_id IS NULL OR length(NEW.owner_user_id) = 0;
+
+  SELECT RAISE(ABORT, 'artifact_upload_initial_state_invalid')
+  WHERE NEW.reservation_state <> 'open'
       OR NEW.reserved_bytes <> 0
       OR NEW.multipart_upload_id IS NOT NULL
-      OR NEW.completion_started_at IS NOT NULL
-      THEN RAISE(ABORT, 'artifact_upload_initial_state_invalid')
-  END;
+      OR NEW.completion_started_at IS NOT NULL;
 
   INSERT OR IGNORE INTO artifact_account_usage (
     owner_user_id, finalized_bytes, reserved_bytes, active_sessions
   ) VALUES (NEW.owner_user_id, 0, 0, 0);
 
-  SELECT CASE
-    WHEN (
+  SELECT RAISE(ABORT, 'artifact_upload_session_limit')
+  WHERE (
       SELECT active_sessions
       FROM artifact_account_usage
       WHERE owner_user_id = NEW.owner_user_id
-    ) >= 16
-      THEN RAISE(ABORT, 'artifact_upload_session_limit')
-    WHEN (
+    ) >= 16;
+
+  SELECT RAISE(ABORT, 'artifact_account_quota')
+  WHERE (
       SELECT finalized_bytes + reserved_bytes
       FROM artifact_account_usage
       WHERE owner_user_id = NEW.owner_user_id
-    ) >= 2147483648
-      THEN RAISE(ABORT, 'artifact_account_quota')
-  END;
+    ) >= 2147483648;
 END;
 
 CREATE TRIGGER artifact_upload_session_after_insert
@@ -260,22 +258,21 @@ END;
 CREATE TRIGGER artifact_usage_before_artifact_insert
 BEFORE INSERT ON artifacts
 BEGIN
-  SELECT CASE
-    WHEN NEW.bytes IS NULL OR typeof(NEW.bytes) <> 'integer' OR NEW.bytes < 0
-      THEN RAISE(ABORT, 'artifact_finalized_bytes_invalid')
-    WHEN NOT EXISTS (
+  SELECT RAISE(ABORT, 'artifact_finalized_bytes_invalid')
+  WHERE NEW.bytes IS NULL OR typeof(NEW.bytes) <> 'integer' OR NEW.bytes < 0;
+
+  SELECT RAISE(ABORT, 'artifact_project_owner_missing')
+  WHERE NOT EXISTS (
       SELECT 1 FROM projects WHERE id = NEW.project_id
-    )
-      THEN RAISE(ABORT, 'artifact_project_owner_missing')
-  END;
+    );
 
   INSERT OR IGNORE INTO artifact_account_usage (
     owner_user_id, finalized_bytes, reserved_bytes, active_sessions
   )
   SELECT user_id, 0, 0, 0 FROM projects WHERE id = NEW.project_id;
 
-  SELECT CASE
-    WHEN (
+  SELECT RAISE(ABORT, 'artifact_account_quota')
+  WHERE (
       SELECT usage.finalized_bytes + usage.reserved_bytes + NEW.bytes
         - COALESCE((
             SELECT sessions.reserved_bytes
@@ -288,9 +285,7 @@ BEGIN
       FROM artifact_account_usage usage
       JOIN projects ON projects.user_id = usage.owner_user_id
       WHERE projects.id = NEW.project_id
-    ) > 2147483648
-      THEN RAISE(ABORT, 'artifact_account_quota')
-  END;
+    ) > 2147483648;
 END;
 
 CREATE TRIGGER artifact_usage_after_artifact_insert
@@ -324,26 +319,28 @@ END;
 CREATE TRIGGER artifact_upload_part_before_insert
 BEFORE INSERT ON artifact_upload_parts
 BEGIN
-  SELECT CASE
-    WHEN NOT EXISTS (
+  SELECT RAISE(ABORT, 'artifact_multipart_not_uploading')
+  WHERE NOT EXISTS (
       SELECT 1
       FROM upload_sessions
       WHERE id = NEW.upload_session_id
         AND reservation_state = 'uploading'
         AND multipart_upload_id IS NOT NULL
         AND owner_user_id IS NOT NULL
-    )
-      THEN RAISE(ABORT, 'artifact_multipart_not_uploading')
-    WHEN (
+    );
+
+  SELECT RAISE(ABORT, 'artifact_upload_part_limit')
+  WHERE (
       SELECT COUNT(*) FROM artifact_upload_parts
       WHERE upload_session_id = NEW.upload_session_id
     ) >= 64 AND NOT EXISTS (
       SELECT 1 FROM artifact_upload_parts
       WHERE upload_session_id = NEW.upload_session_id
         AND part_number = NEW.part_number
-    )
-      THEN RAISE(ABORT, 'artifact_upload_part_limit')
-    WHEN (
+    );
+
+  SELECT RAISE(ABORT, 'artifact_upload_byte_limit')
+  WHERE (
       SELECT reserved_bytes + NEW.bytes - COALESCE((
         SELECT bytes FROM artifact_upload_parts
         WHERE upload_session_id = NEW.upload_session_id
@@ -351,9 +348,10 @@ BEGIN
       ), 0)
       FROM upload_sessions
       WHERE id = NEW.upload_session_id
-    ) > 1073741824
-      THEN RAISE(ABORT, 'artifact_upload_byte_limit')
-    WHEN (
+    ) > 1073741824;
+
+  SELECT RAISE(ABORT, 'artifact_reserved_byte_limit')
+  WHERE (
       SELECT usage.reserved_bytes + NEW.bytes - COALESCE((
         SELECT bytes FROM artifact_upload_parts
         WHERE upload_session_id = NEW.upload_session_id
@@ -363,9 +361,10 @@ BEGIN
       JOIN upload_sessions sessions
         ON sessions.owner_user_id = usage.owner_user_id
       WHERE sessions.id = NEW.upload_session_id
-    ) > 2147483648
-      THEN RAISE(ABORT, 'artifact_reserved_byte_limit')
-    WHEN (
+    ) > 2147483648;
+
+  SELECT RAISE(ABORT, 'artifact_account_quota')
+  WHERE (
       SELECT usage.finalized_bytes + usage.reserved_bytes + NEW.bytes
         - COALESCE((
           SELECT bytes FROM artifact_upload_parts
@@ -376,9 +375,7 @@ BEGIN
       JOIN upload_sessions sessions
         ON sessions.owner_user_id = usage.owner_user_id
       WHERE sessions.id = NEW.upload_session_id
-    ) > 2147483648
-      THEN RAISE(ABORT, 'artifact_account_quota')
-  END;
+    ) > 2147483648;
 END;
 
 CREATE TRIGGER artifact_upload_part_after_insert
@@ -400,45 +397,48 @@ END;
 CREATE TRIGGER artifact_upload_part_before_update
 BEFORE UPDATE ON artifact_upload_parts
 BEGIN
-  SELECT CASE
-    WHEN NEW.upload_session_id <> OLD.upload_session_id
-      OR NEW.part_number <> OLD.part_number
-      THEN RAISE(ABORT, 'artifact_upload_part_identity_immutable')
-    WHEN NOT EXISTS (
+  SELECT RAISE(ABORT, 'artifact_upload_part_identity_immutable')
+  WHERE NEW.upload_session_id <> OLD.upload_session_id
+      OR NEW.part_number <> OLD.part_number;
+
+  SELECT RAISE(ABORT, 'artifact_multipart_not_uploading')
+  WHERE NOT EXISTS (
       SELECT 1
       FROM upload_sessions
       WHERE id = NEW.upload_session_id
         AND reservation_state = 'uploading'
         AND multipart_upload_id IS NOT NULL
-    )
-      THEN RAISE(ABORT, 'artifact_multipart_not_uploading')
-    WHEN NEW.bytes < 1 OR NEW.bytes > 33554432
-      OR length(NEW.reservation_token) = 0
-      THEN RAISE(ABORT, 'artifact_upload_part_invalid')
-    WHEN (
+    );
+
+  SELECT RAISE(ABORT, 'artifact_upload_part_invalid')
+  WHERE NEW.bytes < 1 OR NEW.bytes > 33554432
+      OR length(NEW.reservation_token) = 0;
+
+  SELECT RAISE(ABORT, 'artifact_upload_byte_limit')
+  WHERE (
       SELECT reserved_bytes + NEW.bytes - OLD.bytes
       FROM upload_sessions
       WHERE id = NEW.upload_session_id
-    ) > 1073741824
-      THEN RAISE(ABORT, 'artifact_upload_byte_limit')
-    WHEN (
+    ) > 1073741824;
+
+  SELECT RAISE(ABORT, 'artifact_reserved_byte_limit')
+  WHERE (
       SELECT usage.reserved_bytes + NEW.bytes - OLD.bytes
       FROM artifact_account_usage usage
       JOIN upload_sessions sessions
         ON sessions.owner_user_id = usage.owner_user_id
       WHERE sessions.id = NEW.upload_session_id
-    ) > 2147483648
-      THEN RAISE(ABORT, 'artifact_reserved_byte_limit')
-    WHEN (
+    ) > 2147483648;
+
+  SELECT RAISE(ABORT, 'artifact_account_quota')
+  WHERE (
       SELECT usage.finalized_bytes + usage.reserved_bytes
         + NEW.bytes - OLD.bytes
       FROM artifact_account_usage usage
       JOIN upload_sessions sessions
         ON sessions.owner_user_id = usage.owner_user_id
       WHERE sessions.id = NEW.upload_session_id
-    ) > 2147483648
-      THEN RAISE(ABORT, 'artifact_account_quota')
-  END;
+    ) > 2147483648;
 END;
 
 CREATE TRIGGER artifact_upload_part_after_update_bytes
