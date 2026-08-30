@@ -18,7 +18,7 @@ STEP export is implemented natively in `io-step` as an ISO 10303-21 AP214 writer
 ## Rationale
 
 - A real in-repo kernel makes the core promise of the product — model parametrically, export a true STEP file — hold today, with zero WASM payload and full determinism for replay tests.
-- Faceted B-Rep is valid, importable STEP (FreeCAD/SolidWorks/Fusion read closed solids); the trade-off is planar faces only.
+- Faceted B-Rep is valid, importable STEP that standards-compliant CAD systems read as closed solids; the trade-off is planar faces only.
 - The kernel-adapter seam is unchanged, so an exact WASM adapter can replace the geometry backend to add analytic surfaces, exact curved booleans, and STEP import without touching the document model or UI.
 
 ## Consequences
