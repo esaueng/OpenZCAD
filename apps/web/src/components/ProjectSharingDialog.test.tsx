@@ -389,4 +389,67 @@ describe('ProjectSharingDialog', () => {
       leaseId: 'lease_editor'
     });
   });
+
+  it('keeps Keep my version lease-gated by default when no flag is passed', () => {
+    const base = createProjectDocument('Default enforcement', owner);
+    render(
+      <ProjectSharingDialog
+        projectId={base.projectId}
+        role="editor"
+        collaborationStatus="conflict"
+        lease={null}
+        conflict={{
+          projectId: base.projectId,
+          localDocument: version(base, 2),
+          remoteDocument: version(base, 3),
+          expectedRemoteVersion: 3,
+          source: 'room' as const
+        }}
+        conflictHandlers={recoveryHandlers()}
+        client={client()}
+        onClose={vi.fn()}
+      />
+    );
+
+    expect(
+      screen.getByRole('button', { name: 'Keep my version' })
+    ).toBeDisabled();
+    expect(screen.getByText(/active edit lease/)).toBeInTheDocument();
+  });
+
+  it('lets an editor keep their version without a lease when leases are not enforced', async () => {
+    const base = createProjectDocument('Unenforced leases', owner);
+    const conflict = {
+      projectId: base.projectId,
+      localDocument: version(base, 5),
+      remoteDocument: version(base, 6),
+      expectedRemoteVersion: 6,
+      source: 'room' as const
+    };
+    const calls: string[] = [];
+    const handlers = recoveryHandlers(calls);
+    const user = userEvent.setup();
+    render(
+      <ProjectSharingDialog
+        projectId={base.projectId}
+        role="editor"
+        collaborationStatus="conflict"
+        lease={null}
+        conflict={conflict}
+        conflictHandlers={handlers}
+        client={client()}
+        editLeasesEnforced={false}
+        onClose={vi.fn()}
+      />
+    );
+
+    const keepMine = screen.getByRole('button', { name: 'Keep my version' });
+    expect(keepMine).toBeEnabled();
+    await user.click(keepMine);
+    await waitFor(() => expect(calls).toEqual(['recovery', 'mine']));
+    expect(handlers.keepMyVersion).toHaveBeenCalledWith({
+      document: conflict.localDocument,
+      expectedRemoteVersion: 6
+    });
+  });
 });
