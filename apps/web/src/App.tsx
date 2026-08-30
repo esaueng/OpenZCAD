@@ -13970,6 +13970,7 @@ export function App() {
                 editorInvitationsEnabled={
                   collaborationRollout.editLeasesEnforced
                 }
+                editLeasesEnforced={collaborationRollout.editLeasesEnforced}
                 onClose={() => setSharingOpen(false)}
               />
             )}
