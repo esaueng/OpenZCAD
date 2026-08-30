@@ -60,12 +60,11 @@ export interface ExactBuildResult {
   partialRevolveBodies: Set<BodyId>;
   warnings: string[];
   /**
-   * Who each loop-raised warning belongs to. The strings in `warnings` are
-   * prefixed by feature NAME, which repeats and which reads the same for a
-   * build failure and a deliberate suppression; this is what a commit gate
-   * must decide from instead.
+   * Complete provenance for feature-prefixed warnings. An empty list is
+   * meaningful: it tells the commit gate that any remaining display warning
+   * is not a classified feature failure.
    */
-  featureWarnings?: FeatureWarning[];
+  featureWarnings: FeatureWarning[];
   /**
    * Legacy hash-only edge modifiers whose rebuild proved a v5 reference for
    * every selected edge. Surfaced through DerivedState so the app can persist
