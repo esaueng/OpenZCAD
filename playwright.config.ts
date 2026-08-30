@@ -15,6 +15,13 @@ const PORT = portForCheckout();
 
 export default defineConfig({
   testDir: './test/e2e',
+  // Without this, CI's four-way shard split allocates whole files, and the
+  // suite's sizes make that allocation the wall clock: one run landed
+  // 80/13/57/20 tests per shard with modeling.spec.ts alone at 7.3 minutes,
+  // so the slowest shard ran six times longer than the fastest. Per-test
+  // allocation keeps the shards near even. Tests already run in isolated
+  // browser contexts; nothing in the suite depends on in-file order.
+  fullyParallel: true,
   // Playwright's focus is run-wide, not file-wide, so one `test.only` left in a
   // push turns all four CI shards into a single executed test: three run zero,
   // every shard exits 0, and the `e2e` aggregate — documented below as the one
