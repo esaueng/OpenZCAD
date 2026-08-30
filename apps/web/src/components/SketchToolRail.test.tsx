@@ -25,6 +25,7 @@ function renderRail(
     onConstruction: vi.fn(),
     onSettings: vi.fn(),
     onConstraintTool: vi.fn(),
+    onEditConstraint: vi.fn(),
     onDeleteConstraint: vi.fn(),
     onSolve: vi.fn(),
     onDiagnostics: vi.fn(),
@@ -102,9 +103,16 @@ describe('SketchToolRail', () => {
     expect(onConstraintTool).toHaveBeenLastCalledWith(null);
   });
 
-  it('exposes every solver-ready non-dimensional constraint', () => {
+  it('exposes every solver-ready constraint and driving dimension', () => {
     renderRail();
-    for (const name of ['Perpendicular', 'Equal', 'Concentric', 'Midpoint']) {
+    for (const name of [
+      'Perpendicular',
+      'Equal',
+      'Concentric',
+      'Midpoint',
+      'Distance',
+      'Angle'
+    ]) {
       expect(screen.getByRole('button', { name })).toBeEnabled();
     }
   });
@@ -120,7 +128,13 @@ describe('SketchToolRail', () => {
     const onSolve = vi.fn();
     renderRail({
       onSolve,
-      constraints: [{ constraintId: 'scon_1', label: 'Horizontal · Line' }],
+      constraints: [
+        {
+          constraintId: 'scon_1',
+          label: 'Horizontal · Line',
+          editable: false
+        }
+      ],
       solveStatus: { label: '2 DOF remaining', tone: 'info' }
     });
 
@@ -135,8 +149,16 @@ describe('SketchToolRail', () => {
     renderRail({
       onDeleteConstraint,
       constraints: [
-        { constraintId: 'scon_1', label: 'Horizontal · Line 1' },
-        { constraintId: 'scon_2', label: 'Parallel · Line 1 ∥ Line 2' }
+        {
+          constraintId: 'scon_1',
+          label: 'Horizontal · Line 1',
+          editable: false
+        },
+        {
+          constraintId: 'scon_2',
+          label: 'Parallel · Line 1 ∥ Line 2',
+          editable: false
+        }
       ]
     });
 
@@ -146,5 +168,32 @@ describe('SketchToolRail', () => {
       })
     );
     expect(onDeleteConstraint).toHaveBeenCalledWith('scon_2');
+  });
+
+  it('reopens a driving dimension from the constraint list', async () => {
+    const user = userEvent.setup();
+    const onEditConstraint =
+      vi.fn<(constraintId: string, anchor: { x: number; y: number }) => void>();
+    renderRail({
+      onEditConstraint,
+      constraints: [
+        {
+          constraintId: 'scon_angle',
+          label: 'Angle 45° · Line 1 ∠ Line 2',
+          editable: true
+        }
+      ]
+    });
+
+    await user.click(
+      screen.getByRole('button', {
+        name: 'Edit constraint: Angle 45° · Line 1 ∠ Line 2'
+      })
+    );
+    expect(onEditConstraint).toHaveBeenCalledOnce();
+    const [constraintId, anchor] = onEditConstraint.mock.calls[0]!;
+    expect(constraintId).toBe('scon_angle');
+    expect(Number.isFinite(anchor.x)).toBe(true);
+    expect(Number.isFinite(anchor.y)).toBe(true);
   });
 });

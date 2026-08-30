@@ -139,8 +139,10 @@ import {
   buildConstraint,
   constraintToolSpec,
   describeConstraint,
+  measureDrivingDimension,
   refusePick,
-  type ConstraintPick
+  type ConstraintPick,
+  type DrivingDimensionKind
 } from './lib/sketch/constraints';
 import {
   solveStatusLabel,
@@ -4397,12 +4399,15 @@ export function App() {
   function executeTransaction(
     label: string,
     commands: AnyCommand[],
-    derived?: ProjectDocument['derived']
+    derived?: ProjectDocument['derived'],
+    permission: 'edit' | 'parameters' = 'edit'
   ): boolean {
     if (
       !managerRef.current ||
       commands.length === 0 ||
-      !ensureCanExecute(commands, 'apply this edit')
+      !(permission === 'parameters'
+        ? ensureCanEditParameters('apply this parameter edit')
+        : ensureCanExecute(commands, 'apply this edit'))
     ) {
       return false;
     }
@@ -8479,9 +8484,12 @@ export function App() {
   // state and error stay actionable; Escape, deselection, and commits close it.
   useEffect(() => {
     const open =
-      interaction.mode !== 'idle' &&
-      interaction.mode !== 'sketch' &&
-      (interaction.phase === 'exact-entry' || interaction.phase === 'failed');
+      (interaction.mode === 'sketch' &&
+        keypadRef.current?.kind === 'sketch-dimension') ||
+      (interaction.mode !== 'idle' &&
+        interaction.mode !== 'sketch' &&
+        (interaction.phase === 'exact-entry' ||
+          interaction.phase === 'failed'));
     if (!open) {
       setKeypad(null);
     }
@@ -8819,17 +8827,27 @@ export function App() {
   }
 
   // ---------------------------------------------------------------------
-  // Sketch constraints (stage 1): pick routing, CRUD, and solve-apply.
+  // Sketch constraints: pick routing, driving-value entry, CRUD, and solve.
   // ---------------------------------------------------------------------
   const [sketchSolveStatus, setSketchSolveStatus] =
     useState<SketchSolveStatus | null>(null);
   const [sketchSolving, setSketchSolving] = useState(false);
+  const [sketchDimensionDraft, setSketchDimensionDraft] = useState<{
+    kind: DrivingDimensionKind;
+    picks: ConstraintPick[];
+    documentVersion: number;
+    constraintId?: string;
+  } | null>(null);
   // The pill describes a solve of THIS session's sketch; leaving sketch mode
   // orphans it.
   useEffect(() => {
     if (interaction.mode !== 'sketch') {
       setSketchSolveStatus(null);
       setSketchSolving(false);
+      setSketchDimensionDraft(null);
+      if (keypadRef.current?.kind === 'sketch-dimension') {
+        setKeypad(null);
+      }
     }
   }, [interaction.mode]);
 
@@ -8851,7 +8869,9 @@ export function App() {
     return (editingSketchNode.constraints ?? []).map(
       ({ constraintId, data }) => ({
         constraintId: String(constraintId),
-        label: describeConstraint(data, nameOf)
+        label: describeConstraint(data, nameOf),
+        editable:
+          data.constraintKind === 'distance' || data.constraintKind === 'angle'
       })
     );
   }, [editingSketchNode, doc]);
@@ -8864,7 +8884,8 @@ export function App() {
    */
   function handleSketchConstraintPick(
     objectId: string | null,
-    snapPoint: { objectId: string; point: 'start' | 'end' | 'center' } | null
+    snapPoint: { objectId: string; point: 'start' | 'end' | 'center' } | null,
+    clickPoint: { x: number; y: number }
   ): boolean {
     if (
       interaction.mode !== 'sketch' ||
@@ -8877,6 +8898,34 @@ export function App() {
     }
     const pending = interaction.session.pendingConstraint;
     const spec = constraintToolSpec(pending.kind);
+    if (spec.placement && pending.picks.length === spec.picks) {
+      const measured = measureDrivingDimension(
+        doc,
+        editingSketchNode,
+        pending.kind as DrivingDimensionKind,
+        pending.picks,
+        (value) => evalParamValue(value, parameterScope.scope) ?? undefined
+      );
+      if ('error' in measured) {
+        setStatus(measured.error);
+      } else {
+        setSketchDimensionDraft({
+          kind: pending.kind as DrivingDimensionKind,
+          picks: [...pending.picks],
+          documentVersion: doc.version
+        });
+        setKeypad({
+          kind: 'sketch-dimension',
+          label: spec.label,
+          initial: String(measured.value),
+          unitKind: pending.kind === 'angle' ? 'angle' : 'length',
+          fixedClientAnchor: clickPoint
+        });
+        setStatus(`${spec.label}: enter the driving value.`);
+      }
+      dispatchInteraction({ type: 'sketch-constraint-tool', kind: null });
+      return true;
+    }
     const expectedPickKind = spec.pickKinds[pending.picks.length];
     const pick: ConstraintPick | null =
       expectedPickKind === 'point'
@@ -8902,9 +8951,13 @@ export function App() {
       return true;
     }
     const picks = [...pending.picks, pick];
-    if (picks.length < spec.picks) {
+    if (picks.length < spec.picks || spec.placement) {
       dispatchInteraction({ type: 'sketch-constraint-pick', pick });
-      setStatus(`${spec.label}: pick ${picks.length + 1} of ${spec.picks}.`);
+      setStatus(
+        picks.length < spec.picks
+          ? `${spec.label}: pick ${picks.length + 1} of ${spec.picks}.`
+          : `${spec.label}: click to place the value.`
+      );
       return true;
     }
     const built = buildConstraint(doc, editingSketchNode, pending.kind, picks);
@@ -8926,6 +8979,300 @@ export function App() {
     }
     dispatchInteraction({ type: 'sketch-constraint-tool', kind: null });
     return true;
+  }
+
+  function handleEditSketchDimension(
+    constraintId: string,
+    anchor: { x: number; y: number }
+  ) {
+    const constraint = editingSketchNode?.constraints?.find(
+      (candidate) => String(candidate.constraintId) === constraintId
+    );
+    if (
+      !doc ||
+      !constraint ||
+      (constraint.data.constraintKind !== 'distance' &&
+        constraint.data.constraintKind !== 'angle')
+    ) {
+      setStatus('Only driving dimensions have editable values.');
+      return;
+    }
+    const data = constraint.data;
+    const picks: ConstraintPick[] =
+      data.constraintKind === 'distance'
+        ? [
+            { kind: 'point', ...data.a },
+            { kind: 'point', ...data.b }
+          ]
+        : [
+            { kind: 'object', objectId: String(data.a) },
+            { kind: 'object', objectId: String(data.b) }
+          ];
+    const value =
+      data.constraintKind === 'distance' ? data.value : data.valueDeg;
+    setSketchDimensionDraft({
+      kind: data.constraintKind,
+      picks,
+      documentVersion: doc.version,
+      constraintId
+    });
+    dispatchInteraction({ type: 'sketch-constraint-tool', kind: null });
+    setKeypad({
+      kind: 'sketch-dimension',
+      label: data.constraintKind === 'distance' ? 'Distance' : 'Angle',
+      initial: String(value),
+      unitKind: data.constraintKind === 'angle' ? 'angle' : 'length',
+      fixedClientAnchor: anchor
+    });
+    setStatus(`Edit ${data.constraintKind} driving value.`);
+  }
+
+  async function handleCommitSketchDimension(
+    draft: NonNullable<typeof sketchDimensionDraft>,
+    evaluatedValue: number,
+    raw: string
+  ) {
+    const base = managerRef.current?.document;
+    const session = interactionRef.current;
+    if (!base || session.mode !== 'sketch' || !session.session.sketchId) {
+      setStatus('The sketch dimension is no longer available.');
+      return;
+    }
+    if (base.version !== draft.documentVersion) {
+      setStatus(
+        'The sketch changed while the dimension editor was open. Try again.'
+      );
+      return;
+    }
+    const sketchId = session.session.sketchId as SketchId;
+    const sketch = findSketch(base, sketchId);
+    if (!sketch) {
+      setStatus('The sketch dimension is no longer available.');
+      return;
+    }
+    const storedValue: ParamValue = Number.isFinite(Number(raw))
+      ? evaluatedValue
+      : raw;
+    const built = buildConstraint(
+      base,
+      sketch,
+      draft.kind,
+      draft.picks,
+      storedValue
+    );
+    if ('error' in built) {
+      setStatus(built.error);
+      return;
+    }
+    const spec = constraintToolSpec(draft.kind);
+    const dimensionCommands: AnyCommand[] = [];
+    if (draft.constraintId) {
+      const existing = sketch.constraints?.find(
+        (constraint) => String(constraint.constraintId) === draft.constraintId
+      );
+      if (!existing) {
+        setStatus('The dimension changed before the edit could be applied.');
+        return;
+      }
+      dimensionCommands.push(
+        commandFactories.deleteSketchConstraint(
+          {
+            sketchId,
+            constraintId: existing.constraintId
+          },
+          `Replace ${spec.label.toLowerCase()} dimension`
+        ),
+        commandFactories.addSketchConstraint(
+          {
+            sketchId,
+            constraint: built.data,
+            ids: { constraintId: existing.constraintId }
+          },
+          `Replace ${spec.label.toLowerCase()} dimension`
+        )
+      );
+    } else {
+      dimensionCommands.push(
+        commandFactories.addSketchConstraint(
+          { sketchId, constraint: built.data },
+          `Add ${spec.label.toLowerCase()} dimension`
+        )
+      );
+    }
+
+    let prospective = base;
+    try {
+      for (const command of dimensionCommands) {
+        command.validate(prospective);
+        prospective = command.apply(prospective);
+      }
+    } catch (error) {
+      setStatus(errorMessage(error, `${spec.label} dimension is invalid.`));
+      return;
+    }
+
+    setSketchSolving(true);
+    setStatus(`Solving ${spec.label.toLowerCase()} dimension…`);
+    try {
+      const outcome = await geometry.solveSketch(prospective, sketchId);
+      const live = managerRef.current?.document;
+      const liveSession = interactionRef.current;
+      if (
+        !live ||
+        live.projectId !== base.projectId ||
+        live.version !== base.version ||
+        liveSession.mode !== 'sketch' ||
+        liveSession.session.sketchId !== sketchId
+      ) {
+        setStatus(
+          'The sketch changed while the dimension was solving. Try again.'
+        );
+        return;
+      }
+      setSketchSolveStatus({
+        label: solveStatusLabel(outcome),
+        tone:
+          outcome.classification === 'solved'
+            ? 'ok'
+            : outcome.classification === 'underConstrained'
+              ? 'info'
+              : 'warn'
+      });
+      if (!outcome.converged || outcome.rolledBack) {
+        setStatus(
+          `${spec.label} dimension refused: ${solveStatusLabel(outcome)}; no change was applied.`
+        );
+        return;
+      }
+      const solvedCommands = solvedSketchCommands(
+        prospective,
+        sketchId,
+        outcome
+      );
+      const label = draft.constraintId
+        ? `Edit ${spec.label.toLowerCase()} dimension`
+        : `Add ${spec.label.toLowerCase()} dimension`;
+      if (
+        executeTransaction(label, [...dimensionCommands, ...solvedCommands])
+      ) {
+        setStatus(
+          `${spec.label} dimension ${draft.constraintId ? 'updated' : 'added'} · ${solveStatusLabel(outcome)}.`
+        );
+      }
+    } catch (error) {
+      setSketchSolveStatus({ label: 'Solve failed', tone: 'warn' });
+      setStatus(
+        errorMessage(error, `${spec.label} dimension could not be solved.`)
+      );
+    } finally {
+      setSketchSolving(false);
+    }
+  }
+
+  /**
+   * A named parameter can drive a stored sketch dimension. Apply its scalar
+   * edit and every resulting solved coordinate in one history entry; Tweak
+   * mode is allowed to run exactly this derived parameter transaction. Any
+   * conflicting sketch refuses the whole edit before the live document moves.
+   */
+  async function handleSetParameter(name: string, expression: string) {
+    const manager = managerRef.current;
+    if (!manager || !ensureCanEditParameters('change this parameter')) {
+      return;
+    }
+    const base = manager.document;
+    const parameterCommand = commandFactories.setParameter({
+      name,
+      expression
+    });
+    let prospective: ProjectDocument;
+    try {
+      parameterCommand.validate(base);
+      prospective = parameterCommand.apply(base);
+    } catch (error) {
+      setStatus(errorMessage(error, 'Parameter is invalid.'));
+      return;
+    }
+    const beforeScope = getParameterScope(base).scope;
+    const afterScope = getParameterScope(prospective).scope;
+    const constrainedSketches = listNodesByKind(prospective, 'sketch').filter(
+      (sketch) =>
+        sketch.constraints?.some(({ data }) => {
+          const value =
+            data.constraintKind === 'distance' ||
+            data.constraintKind === 'radius'
+              ? data.value
+              : data.constraintKind === 'angle'
+                ? data.valueDeg
+                : undefined;
+          return (
+            typeof value === 'string' &&
+            evalParamValue(value, beforeScope) !==
+              evalParamValue(value, afterScope)
+          );
+        }) ?? false
+    );
+    if (constrainedSketches.length === 0) {
+      executeCommand(parameterCommand);
+      return;
+    }
+
+    const commands: AnyCommand[] = [parameterCommand];
+    setStatus(`Updating ${name} and solving constrained sketches…`);
+    try {
+      for (const sketch of constrainedSketches) {
+        const outcome = await geometry.solveSketch(
+          prospective,
+          sketch.sketchId
+        );
+        if (!outcome.converged || outcome.rolledBack) {
+          setStatus(
+            `Parameter ${name} refused: ${sketch.name} is ${solveStatusLabel(outcome)}; no change was applied.`
+          );
+          return;
+        }
+        const solvedCommands = solvedSketchCommands(
+          prospective,
+          sketch.sketchId,
+          outcome
+        );
+        for (const command of solvedCommands) {
+          command.validate(prospective);
+          prospective = command.apply(prospective);
+        }
+        commands.push(...solvedCommands);
+      }
+      const live = managerRef.current?.document;
+      if (
+        !live ||
+        live.projectId !== base.projectId ||
+        live.version !== base.version
+      ) {
+        setStatus(
+          'The project changed while constrained sketches were solving. Try again.'
+        );
+        return;
+      }
+      if (
+        executeTransaction(
+          `Set parameter ${name}`,
+          commands,
+          undefined,
+          'parameters'
+        )
+      ) {
+        setStatus(
+          `Parameter ${name} updated · ${constrainedSketches.length} constrained ${constrainedSketches.length === 1 ? 'sketch' : 'sketches'} solved.`
+        );
+      }
+    } catch (error) {
+      setStatus(
+        errorMessage(
+          error,
+          `Parameter ${name} could not solve its constrained sketches.`
+        )
+      );
+    }
   }
 
   function handleDeleteSketchConstraint(constraintId: string) {
@@ -12398,9 +12745,7 @@ export function App() {
                 : null
             }
             onSetParameter={(name, expression) =>
-              executeCommand(
-                commandFactories.setParameter({ name, expression })
-              )
+              void handleSetParameter(name, expression)
             }
             onExportStep={() => void handleExportStep()}
             onOpenMeshExport={() => setMeshExportOpen(true)}
@@ -12432,9 +12777,7 @@ export function App() {
             onToggleFeatureSuppression={handleToggleFeatureSuppression}
             onRollbackAfterFeature={handleRollbackAfterFeature}
             onSetParameter={(name, expression) =>
-              executeCommand(
-                commandFactories.setParameter({ name, expression })
-              )
+              void handleSetParameter(name, expression)
             }
             onDeleteParameter={(name) =>
               executeCommand(commandFactories.deleteParameter({ name }))
@@ -12578,8 +12921,14 @@ export function App() {
             onSketchDrawingChange={(drawing) =>
               dispatchInteraction({ type: 'sketch-drawing', drawing })
             }
-            onSketchSelectObject={(objectId, snapPoint) => {
-              if (handleSketchConstraintPick(objectId, snapPoint ?? null)) {
+            onSketchSelectObject={(objectId, snapPoint, clickPoint) => {
+              if (
+                handleSketchConstraintPick(
+                  objectId,
+                  snapPoint ?? null,
+                  clickPoint
+                )
+              ) {
                 return;
               }
               dispatchInteraction({ type: 'sketch-select-object', objectId });
@@ -12744,6 +13093,7 @@ export function App() {
                         }
                       }}
                       onDeleteConstraint={handleDeleteSketchConstraint}
+                      onEditConstraint={handleEditSketchDimension}
                       onSolve={() => {
                         void handleSolveSketch();
                       }}
@@ -12805,6 +13155,9 @@ export function App() {
                       anchorRef={keypadAnchorRef}
                       onDimensionModeChange={setCylinderDimensionMode}
                       onPreview={(value) => {
+                        if (keypad.kind === 'sketch-dimension') {
+                          return;
+                        }
                         offsetSetterRef.current?.(value);
                         if (keypad.kind === 'radius') {
                           handleCylinderRadiusPreview(value);
@@ -12829,8 +13182,21 @@ export function App() {
                           : null
                       }
                       onCommit={(value, raw) => {
+                        const dimensionDraft = sketchDimensionDraft;
                         setKeypad(null);
                         dispatchInteraction({ type: 'keypad-close' });
+                        setSketchDimensionDraft(null);
+                        if (
+                          keypad.kind === 'sketch-dimension' &&
+                          dimensionDraft
+                        ) {
+                          void handleCommitSketchDimension(
+                            dimensionDraft,
+                            value,
+                            raw
+                          );
+                          return;
+                        }
                         // Expressions stay parametric in the stored feature.
                         const isExpression = !Number.isFinite(Number(raw));
                         if (keypad.kind === 'edge') {
@@ -12851,6 +13217,13 @@ export function App() {
                         }
                       }}
                       onCancel={() => {
+                        if (keypad.kind === 'sketch-dimension') {
+                          setSketchDimensionDraft(null);
+                          dispatchInteraction({ type: 'keypad-close' });
+                          setKeypad(null);
+                          setStatus('Dimension entry canceled.');
+                          return;
+                        }
                         offsetSetterRef.current?.(keypad.baseline ?? 0);
                         if (keypad.kind === 'radius') {
                           handleCylinderRadiusCancel();
