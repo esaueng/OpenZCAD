@@ -79,7 +79,7 @@ p95 1.2 ms) — the coalescing design works where it is applied.
    *out* (`ModelViewer.tsx:6180-6185`), and the x-ray half pops in at full
    opacity (`:6265-6274`).
 
-### Tier 2 — polish gaps vs Shapr3D-class
+### Tier 2 — polish gaps in direct-manipulation workflows
 
 7. **Gizmo rigs pop in/out with zero transition and have no hover
    affordance** — offset/edge/cylinder rigs expose only
