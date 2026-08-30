@@ -60,13 +60,17 @@ export type SketchToolId =
 export type SketchCircleMode =
   'center-radius' | 'two-point-diameter' | 'three-point';
 
-/** Stage-1 constraint tools exposed by the sketch rail. */
+/** Constraint tools exposed by the sketch rail. */
 export type SketchConstraintToolKind =
   | 'horizontal'
   | 'vertical'
   | 'parallel'
+  | 'perpendicular'
+  | 'equal'
   | 'tangent'
+  | 'concentric'
   | 'coincident'
+  | 'midpoint'
   | 'radius';
 
 export type SketchConstraintPick =
