@@ -37,7 +37,15 @@ interface CollaborationOptions {
   enabled: boolean;
   document: ProjectDocument | null;
   session: AuthSession | null;
-  onRemoteDocument(document: ProjectDocument): void;
+  /**
+   * `adopted` marks an explicit user decision ("Use room version") rather than
+   * an unsolicited broadcast — the handler must apply it even when the room
+   * document's version is not ahead of the local one.
+   */
+  onRemoteDocument(
+    document: ProjectDocument,
+    context?: { adopted?: boolean }
+  ): void;
   onConflict(document: ProjectDocument): void;
 }
 
@@ -285,7 +293,7 @@ export function useCollaboration({
       force = false
     ): boolean => {
       const localDocument = documentRef.current;
-      const marker = readUnresolvedConflict(projectId);
+      const marker = readUnresolvedConflict(projectId, 'room');
       if (!localDocument || (!force && !marker && !conflictRef.current)) {
         return false;
       }
@@ -449,7 +457,7 @@ export function useCollaboration({
             leaseIdRef.current = null;
             leaseRef.current = null;
             setLease(null);
-            if (!readUnresolvedConflict(projectId)) {
+            if (!readUnresolvedConflict(projectId, 'room')) {
               setStatus('read-only');
             }
           }
@@ -488,7 +496,10 @@ export function useCollaboration({
           leaseIdRef.current = message.lease.leaseId;
           leaseRef.current = message.lease;
           setLease(message.lease);
-          if (conflictRef.current || readUnresolvedConflict(projectId)) {
+          if (
+            conflictRef.current ||
+            readUnresolvedConflict(projectId, 'room')
+          ) {
             setStatus('conflict');
           } else {
             setStatus('live');
@@ -501,7 +512,7 @@ export function useCollaboration({
           leaseRef.current = null;
           setLease(null);
           setStatus(
-            conflictRef.current || readUnresolvedConflict(projectId)
+            conflictRef.current || readUnresolvedConflict(projectId, 'room')
               ? 'conflict'
               : message.reason === 'read-only'
                 ? 'read-only'
@@ -532,7 +543,7 @@ export function useCollaboration({
             roleRef.current = 'viewer';
             setRole('viewer');
             setStatus(
-              conflictRef.current || readUnresolvedConflict(projectId)
+              conflictRef.current || readUnresolvedConflict(projectId, 'room')
                 ? 'conflict'
                 : 'read-only'
             );
@@ -587,7 +598,7 @@ export function useCollaboration({
           setRoomVersion(message.version);
           if (keepMinePendingRef.current) {
             keepMinePendingRef.current = false;
-            clearUnresolvedConflict(projectId);
+            clearUnresolvedConflict(projectId, 'room');
             conflictRef.current = null;
             setConflict(null);
           }
@@ -698,7 +709,7 @@ export function useCollaboration({
       !enabled ||
       !document ||
       conflictRef.current ||
-      readUnresolvedConflict(document.projectId) ||
+      readUnresolvedConflict(document.projectId, 'room') ||
       lastSentVersionRef.current === document.version
     ) {
       return;
@@ -794,13 +805,13 @@ export function useCollaboration({
         return false;
       }
       const roomDocument = structuredClone(pending.remoteDocument);
-      clearUnresolvedConflict(pending.projectId);
+      clearUnresolvedConflict(pending.projectId, 'room');
       conflictRef.current = null;
       setConflict(null);
       keepMinePendingRef.current = false;
       lastSentVersionRef.current = roomDocument.version;
       documentRef.current = roomDocument;
-      remoteHandlerRef.current(roomDocument);
+      remoteHandlerRef.current(roomDocument, { adopted: true });
       setStatus(roleRef.current === 'viewer' ? 'read-only' : 'live');
       return true;
     },
@@ -904,7 +915,7 @@ export function useCollaboration({
         serverVersionRef.current = message.version;
         baseVersionRef.current = message.version;
         setRoomVersion(message.version);
-        clearUnresolvedConflict(projectId);
+        clearUnresolvedConflict(projectId, 'room');
         conflictRef.current = null;
         setConflict(null);
         setStatus('live');
