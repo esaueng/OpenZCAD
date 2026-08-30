@@ -35,7 +35,7 @@ function handlers(order: string[] = []): ConflictResolutionHandlers {
 }
 
 function accountConflict(): ProjectConflict {
-  clearUnresolvedConflict(base.projectId);
+  clearUnresolvedConflict(base.projectId, 'account');
   return conflictFromDocuments(at(7), at(9), 'account');
 }
 
@@ -46,11 +46,13 @@ describe('a conflict raised by the account rather than a room', () => {
 
   it('leaves a marker so the divergence survives a reload', () => {
     const conflict = accountConflict();
-    expect(readUnresolvedConflict(conflict.projectId)).toMatchObject({
-      localVersion: 7,
-      remoteVersion: 9
-    });
-    clearUnresolvedConflict(conflict.projectId);
+    expect(readUnresolvedConflict(conflict.projectId, 'account')).toMatchObject(
+      {
+        localVersion: 7,
+        remoteVersion: 9
+      }
+    );
+    clearUnresolvedConflict(conflict.projectId, 'account');
   });
 
   it('lets the owner keep their version with no lease in sight', async () => {
@@ -67,7 +69,7 @@ describe('a conflict raised by the account rather than a room', () => {
     expect(order).toEqual(['recovery', 'mine']);
   });
 
-  it('writes the recovery copy before anything else, on every resolution', async () => {
+  it('writes the recovery copy before anything else, once per divergence', async () => {
     for (const resolution of [
       'use-remote',
       'keep-mine',
@@ -145,7 +147,7 @@ describe('a conflict raised by the account rather than a room', () => {
 
 describe('a conflict raised by a room', () => {
   it('still demands a lease when leases are enforced', async () => {
-    clearUnresolvedConflict(base.projectId);
+    clearUnresolvedConflict(base.projectId, 'room');
     const conflict = conflictFromDocuments(at(7), at(9), 'room');
     await expect(
       resolveProjectConflict(
@@ -158,7 +160,7 @@ describe('a conflict raised by a room', () => {
   });
 
   it('demands a lease by default, so an unset flag cannot loosen the rule', async () => {
-    clearUnresolvedConflict(base.projectId);
+    clearUnresolvedConflict(base.projectId, 'room');
     const conflict = conflictFromDocuments(at(7), at(9), 'room');
     await expect(
       resolveProjectConflict(
@@ -171,7 +173,7 @@ describe('a conflict raised by a room', () => {
   });
 
   it('accepts an active lease for this project', async () => {
-    clearUnresolvedConflict(base.projectId);
+    clearUnresolvedConflict(base.projectId, 'room');
     const conflict = conflictFromDocuments(at(7), at(9), 'room');
     const order: string[] = [];
     await resolveProjectConflict(
