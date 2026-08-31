@@ -27,6 +27,8 @@ export const DEFAULT_AI_TIMEOUT_MS = 90_000;
 export const DEFAULT_AI_PROVIDER = 'openrouter';
 const OPENAI_RESPONSES_URL = 'https://api.openai.com/v1/responses';
 const OPENROUTER_RESPONSES_URL = 'https://openrouter.ai/api/v1/responses';
+const OPENROUTER_CHAT_COMPLETIONS_URL =
+  'https://openrouter.ai/api/v1/chat/completions';
 const MAX_PROVIDER_ERROR_BYTES = 16 * 1024;
 
 const CAD_ASSISTANT_INSTRUCTIONS = `You are the design and planning engine for OpenZCAD, a browser-first parametric solid modeler.
@@ -701,6 +703,76 @@ async function readProviderFailure(
   }
 }
 
+async function translateOpenRouterChatCompletion(
+  response: Response
+): Promise<Response> {
+  if (!response.ok) {
+    return response;
+  }
+
+  let payload: unknown;
+  try {
+    payload = await response.json();
+  } catch {
+    payload = undefined;
+  }
+  const root = schemaRecord(payload);
+  const choices = Array.isArray(root?.choices) ? root.choices : [];
+  const choice = schemaRecord(choices[0]);
+  const message = schemaRecord(choice?.message);
+  const content = message?.content;
+  const text =
+    typeof content === 'string'
+      ? content
+      : Array.isArray(content)
+        ? content
+            .map(schemaRecord)
+            .filter(
+              (part): part is MutableJsonSchema =>
+                part?.type === 'text' && typeof part.text === 'string'
+            )
+            .map((part) => part.text as string)
+            .join('')
+        : undefined;
+  const upstreamResponseId = safeDiagnosticIdentifier(root?.id);
+  const finishReason =
+    typeof choice?.finish_reason === 'string'
+      ? choice.finish_reason
+      : undefined;
+  const status =
+    finishReason === 'length'
+      ? 'incomplete'
+      : typeof text === 'string'
+        ? 'completed'
+        : 'failed';
+  const responseSnapshot = {
+    ...(upstreamResponseId ? { id: upstreamResponseId } : {}),
+    status,
+    ...(typeof text === 'string' ? { output_text: text } : {}),
+    ...(status === 'incomplete'
+      ? { incomplete_details: { reason: 'max_output_tokens' } }
+      : {})
+  };
+  const events = [
+    ...(typeof text === 'string'
+      ? [
+          {
+            type: 'response.output_text.done',
+            ...(upstreamResponseId ? { response_id: upstreamResponseId } : {}),
+            text
+          }
+        ]
+      : []),
+    { type: 'response.done', response: responseSnapshot }
+  ];
+  const headers = new Headers(response.headers);
+  headers.set('content-type', 'text/event-stream; charset=utf-8');
+  return new Response(
+    `${events.map((event) => `data: ${JSON.stringify(event)}`).join('\n\n')}\n\n`,
+    { status: 200, headers }
+  );
+}
+
 function connectionProviderFailure(
   status: number,
   provider: string
@@ -816,6 +888,62 @@ function structuredReplyText(env: CloudflareEnv) {
   };
 }
 
+function structuredReplyFormat(env: CloudflareEnv) {
+  const format = structuredReplyText(env).format;
+  return {
+    type: 'json_schema',
+    json_schema: {
+      name: format.name,
+      strict: format.strict,
+      schema: format.schema
+    }
+  };
+}
+
+function openRouterChatMessages(
+  input: ProposalInput,
+  instructions: string
+): unknown[] {
+  const attachments = input.attachments ?? [];
+  return [
+    { role: 'system', content: instructions },
+    ...(input.history ?? []).map((turn) => ({
+      role: turn.role,
+      content: turn.answeredQuestionId
+        ? `[answer to ${turn.answeredQuestionId}] ${turn.text}`
+        : turn.text
+    })),
+    {
+      role: 'user',
+      content: [
+        {
+          type: 'text',
+          text: `CAD request:\n${input.prompt}\n\nCurrent document digest:\n${JSON.stringify(input.digest)}`
+        },
+        ...attachments.map((attachment) => ({
+          type: 'image_url',
+          image_url: {
+            url: `data:${attachment.mediaType};base64,${attachment.dataBase64}`,
+            detail: 'high'
+          }
+        }))
+      ]
+    }
+  ];
+}
+
+function shouldUseOpenRouterSolChatFallback(
+  provider: string,
+  model: string,
+  status: number
+): boolean {
+  return (
+    provider === 'openrouter' &&
+    status === 404 &&
+    (model === 'openai/gpt-5.6-sol' || model === 'openai/gpt-5.6-sol-pro')
+  );
+}
+
 /**
  * OpenRouter uses safety_identifier as a sticky routing key, so a plain retry
  * deterministically lands on the provider that just returned unusable output.
@@ -910,10 +1038,53 @@ export async function streamAssistantProposal(
         ...(safetyIdentifier ? { safety_identifier: safetyIdentifier } : {})
       })
     });
+  const requestOpenRouterChatFallback = () =>
+    fetch(OPENROUTER_CHAT_COMPLETIONS_URL, {
+      method: 'POST',
+      redirect: 'manual',
+      headers,
+      signal: AbortSignal.timeout(runtime?.timeoutMs ?? timeoutFor(env)),
+      body: JSON.stringify({
+        model,
+        messages: openRouterChatMessages(
+          input,
+          requestInstructions(
+            env,
+            runtime,
+            (input.attachments?.length ?? 0) > 0
+          )
+        ),
+        ...reasoningRequest(
+          runtime?.reasoningEffort ??
+            env.AI_REASONING_EFFORT ??
+            DEFAULT_AI_REASONING_EFFORT
+        ),
+        response_format: structuredReplyFormat(env),
+        max_completion_tokens:
+          runtime?.maxOutputTokens ?? maxOutputTokensFor(env),
+        stream: false,
+        provider: { require_parameters: true },
+        ...(safetyIdentifier ? { user: safetyIdentifier } : {})
+      })
+    });
 
   let upstream: Response;
   try {
     upstream = await requestUpstream();
+    if (shouldUseOpenRouterSolChatFallback(provider, model, upstream.status)) {
+      const details = await readProviderFailure(upstream);
+      console.warn('AI Responses route unavailable; using strict fallback:', {
+        requestId,
+        provider: safeDiagnosticLabel(provider),
+        model: safeDiagnosticLabel(model),
+        status: upstream.status,
+        providerCode: details.providerCode ?? null,
+        providerRequestId: details.providerRequestId ?? null
+      });
+      upstream = await translateOpenRouterChatCompletion(
+        await requestOpenRouterChatFallback()
+      );
+    }
   } catch (error) {
     const timedOut =
       error instanceof DOMException &&
@@ -980,21 +1151,21 @@ export async function testAssistantConnection(
   }
   const startedAt = Date.now();
   const timeoutSignal = AbortSignal.timeout(runtime.timeoutMs);
-  let response: Response;
-  try {
-    response = await fetch(upstreamUrl, {
+  const headers = {
+    authorization: `Bearer ${runtime.apiKey}`,
+    'content-type': 'application/json',
+    ...(runtime.provider === 'openrouter'
+      ? {
+          'X-Title': env.AI_APP_NAME ?? 'OpenZCAD',
+          ...(env.AI_SITE_URL ? { 'HTTP-Referer': env.AI_SITE_URL } : {})
+        }
+      : {})
+  };
+  const requestUpstream = () =>
+    fetch(upstreamUrl, {
       method: 'POST',
       redirect: 'manual',
-      headers: {
-        authorization: `Bearer ${runtime.apiKey}`,
-        'content-type': 'application/json',
-        ...(runtime.provider === 'openrouter'
-          ? {
-              'X-Title': env.AI_APP_NAME ?? 'OpenZCAD',
-              ...(env.AI_SITE_URL ? { 'HTTP-Referer': env.AI_SITE_URL } : {})
-            }
-          : {})
-      },
+      headers,
       signal: timeoutSignal,
       body: JSON.stringify({
         model: runtime.model,
@@ -1011,6 +1182,55 @@ export async function testAssistantConnection(
           : {})
       })
     });
+  const requestOpenRouterChatFallback = () =>
+    fetch(OPENROUTER_CHAT_COMPLETIONS_URL, {
+      method: 'POST',
+      redirect: 'manual',
+      headers,
+      signal: timeoutSignal,
+      body: JSON.stringify({
+        model: runtime.model,
+        messages: [
+          {
+            role: 'system',
+            content:
+              'Return a short connection confirmation as an OpenZCAD message reply.'
+          },
+          {
+            role: 'user',
+            content: 'Test the configured OpenZCAD AI connection.'
+          }
+        ],
+        response_format: structuredReplyFormat(env),
+        max_completion_tokens: Math.min(runtime.maxOutputTokens, 4_096),
+        stream: false,
+        ...reasoningRequest(runtime.reasoningEffort),
+        provider: { require_parameters: true }
+      })
+    });
+  let response: Response;
+  try {
+    response = await requestUpstream();
+    if (
+      shouldUseOpenRouterSolChatFallback(
+        runtime.provider,
+        runtime.model,
+        response.status
+      )
+    ) {
+      const details = await readProviderFailure(response);
+      console.warn('AI Responses route unavailable; using strict fallback:', {
+        requestId,
+        provider: safeDiagnosticLabel(runtime.provider),
+        model: safeDiagnosticLabel(runtime.model),
+        status: response.status,
+        providerCode: details.providerCode ?? null,
+        providerRequestId: details.providerRequestId ?? null
+      });
+      response = await translateOpenRouterChatCompletion(
+        await requestOpenRouterChatFallback()
+      );
+    }
   } catch {
     const timedOut = timeoutSignal.aborted;
     console.error('AI Responses connection request failed:', {
