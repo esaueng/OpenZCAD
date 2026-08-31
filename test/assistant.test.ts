@@ -248,16 +248,11 @@ describe('assistant integration', () => {
           new Response(
             `data: ${JSON.stringify({
               type: 'response.content_part.delta',
-              delta: output.slice(0, 20)
+              delta: '',
+              part: { type: 'output_text', text: output.slice(0, 20) }
             })}\n\ndata: ${JSON.stringify({
               type: 'response.content_part.delta',
               delta: output.slice(20)
-            })}\n\ndata: ${JSON.stringify({
-              type: 'response.output_item.done',
-              item: {
-                status: 'completed',
-                content: [{ type: 'output_text', text: output }]
-              }
             })}\n\ndata: ${JSON.stringify({
               type: 'response.done',
               response: { status: 'completed' }
@@ -1115,13 +1110,11 @@ describe('assistant integration', () => {
           new Response(
             `data: ${JSON.stringify({
               type: 'response.content_part.delta',
-              delta: output
+              delta: '',
+              part: { type: 'output_text', text: output.slice(0, 1) }
             })}\n\ndata: ${JSON.stringify({
-              type: 'response.output_item.done',
-              item: {
-                status: 'completed',
-                content: [{ type: 'output_text', text: output }]
-              }
+              type: 'response.content_part.delta',
+              delta: output.slice(1)
             })}\n\ndata: ${JSON.stringify({
               type: 'response.done',
               response: { id: 'resp_openrouter_123', status: 'completed' }
@@ -1323,12 +1316,17 @@ describe('assistant integration', () => {
       async (_input: RequestInfo | URL, _init?: RequestInit) =>
         new Response(
           `data: ${JSON.stringify({
-            type: 'response.output_text.done',
+            type: 'response.content_part.delta',
             response_id: 'resp_connection_123',
-            text: output
+            delta: '',
+            part: { type: 'output_text', text: output.slice(0, 1) }
           })}\n\ndata: ${JSON.stringify({
-            type: 'response.completed',
-            response: { id: 'resp_connection_123' }
+            type: 'response.content_part.delta',
+            response_id: 'resp_connection_123',
+            delta: output.slice(1)
+          })}\n\ndata: ${JSON.stringify({
+            type: 'response.done',
+            response: { id: 'resp_connection_123', status: 'completed' }
           })}\n\n`,
           { headers: { 'content-type': 'text/event-stream' } }
         )
