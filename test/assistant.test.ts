@@ -6,6 +6,7 @@ import {
   DEFAULT_AI_TIMEOUT_MS,
   DEFAULT_OPENROUTER_MODEL,
   assistantReplySchemaFor,
+  assistantSafetyIdentifier,
   getAssistantStatus,
   maxOutputTokensFor,
   streamAssistantProposal,
@@ -445,6 +446,103 @@ describe('assistant integration', () => {
         }))
       })
     ).toThrow('at most 4 images');
+  });
+
+  it('normalizes the retry marker and varies the routing identity for it', () => {
+    const base = { prompt: 'Model this', digest: input.digest };
+    expect(parseAssistantProposalRequest(base).retryAttempt).toBe(0);
+    expect(
+      parseAssistantProposalRequest({ ...base, retryAttempt: 1 }).retryAttempt
+    ).toBe(1);
+    expect(() =>
+      parseAssistantProposalRequest({ ...base, retryAttempt: 2 })
+    ).toThrow('"retryAttempt" must be 0 or 1');
+    expect(() =>
+      parseAssistantProposalRequest({ ...base, retryAttempt: '1' })
+    ).toThrow('"retryAttempt" must be 0 or 1');
+
+    expect(assistantSafetyIdentifier('user_test', 0)).toBe('user_test');
+    expect(assistantSafetyIdentifier('user_test', 1)).toBe('user_test#r1');
+  });
+
+  it('retries invalid structured output once with the retry marker set', async () => {
+    const goodOutput = JSON.stringify({
+      replyKind: 'message',
+      proposal: null,
+      questions: null,
+      message: 'Finished',
+      readings: null
+    });
+    const sse = (output: string) =>
+      new Response(
+        `data: ${JSON.stringify({
+          type: 'response.output_text.delta',
+          delta: output
+        })}\n\ndata: ${JSON.stringify({
+          type: 'response.done',
+          response: { status: 'completed' }
+        })}\n\ndata: [DONE]\n\n`,
+        { headers: { 'content-type': 'text/event-stream' } }
+      );
+    const fetchMock = vi
+      .fn<(input: RequestInfo | URL, init?: RequestInit) => Promise<Response>>()
+      .mockResolvedValueOnce(sse('not json {'))
+      .mockResolvedValueOnce(sse(goodOutput));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(
+      streamAssistantReply({ prompt: input.prompt, digest: input.digest })
+    ).resolves.toEqual({ kind: 'message', message: 'Finished' });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    const attempts = fetchMock.mock.calls.map(
+      ([, init]) =>
+        (JSON.parse(init?.body as string) as { retryAttempt: number })
+          .retryAttempt
+    );
+    expect(attempts).toEqual([0, 1]);
+  });
+
+  it('gives up after the automatic retry also fails', async () => {
+    const badResponse = () =>
+      new Response(
+        `data: ${JSON.stringify({
+          type: 'response.output_text.delta',
+          delta: 'not json {'
+        })}\n\ndata: ${JSON.stringify({
+          type: 'response.done',
+          response: { status: 'completed' }
+        })}\n\ndata: [DONE]\n\n`,
+        { headers: { 'content-type': 'text/event-stream' } }
+      );
+    const fetchMock = vi.fn(async () => badResponse());
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(
+      streamAssistantReply({ prompt: input.prompt, digest: input.digest })
+    ).rejects.toMatchObject({ code: 'AI_INVALID_JSON' });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not retry a deterministic output-budget overrun', async () => {
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(
+          `data: ${JSON.stringify({
+            type: 'response.incomplete',
+            response: {
+              status: 'incomplete',
+              incomplete_details: { reason: 'max_output_tokens' }
+            }
+          })}\n\n`,
+          { headers: { 'content-type': 'text/event-stream' } }
+        )
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(
+      streamAssistantReply({ prompt: input.prompt, digest: input.digest })
+    ).rejects.toMatchObject({ code: 'AI_OUTPUT_INCOMPLETE' });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
   it('sends prior turns and drawings as one multi-part provider input', async () => {
