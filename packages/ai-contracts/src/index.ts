@@ -128,6 +128,15 @@ export type CadPatchOperation =
       expression: string;
     }
   | {
+      kind: 'rename_parameter';
+      name: string;
+      newName: string;
+    }
+  | {
+      kind: 'delete_parameter';
+      name: string;
+    }
+  | {
       kind: 'set_feature_dimension';
       featureId: FeatureId;
       field: string;
@@ -1724,6 +1733,25 @@ export const CAD_PATCH_JSON_SCHEMA = {
             type: 'object',
             additionalProperties: false,
             properties: {
+              kind: { type: 'string', const: 'rename_parameter' },
+              name: { type: 'string' },
+              newName: { type: 'string' }
+            },
+            required: ['kind', 'name', 'newName']
+          },
+          {
+            type: 'object',
+            additionalProperties: false,
+            properties: {
+              kind: { type: 'string', const: 'delete_parameter' },
+              name: { type: 'string' }
+            },
+            required: ['kind', 'name']
+          },
+          {
+            type: 'object',
+            additionalProperties: false,
+            properties: {
               kind: { type: 'string', const: 'set_feature_dimension' },
               featureId: { type: 'string' },
               field: { type: 'string' },
@@ -2758,6 +2786,19 @@ export function parseCadPatchProposal(
           throw new Error('Invalid set_parameter operation.');
         }
         break;
+      case 'rename_parameter':
+        if (
+          typeof operation.name !== 'string' ||
+          typeof operation.newName !== 'string'
+        ) {
+          throw new Error('Invalid rename_parameter operation.');
+        }
+        break;
+      case 'delete_parameter':
+        if (typeof operation.name !== 'string') {
+          throw new Error('Invalid delete_parameter operation.');
+        }
+        break;
       case 'set_feature_dimension':
         if (
           typeof operation.featureId !== 'string' ||
@@ -3366,8 +3407,34 @@ export function validateCadPatchProposalAgainstDigest(
   proposal: CadPatchProposal,
   digest: CadDocumentDigest
 ): CadPatchProposal {
+  // Tracks the parameter set as the proposal would evolve it, so a rename or
+  // delete may target a parameter an earlier operation in the same proposal
+  // introduced or renamed.
+  const parameterNames = new Set(
+    digest.parameters.map((parameter) => parameter.name)
+  );
   for (const operation of proposal.operations) {
     switch (operation.kind) {
+      case 'set_parameter':
+        parameterNames.add(operation.name);
+        break;
+      case 'rename_parameter':
+        if (!parameterNames.has(operation.name)) {
+          throw new Error(
+            `rename_parameter targets unknown parameter "${operation.name}". Refresh the proposal from the current document digest.`
+          );
+        }
+        parameterNames.delete(operation.name);
+        parameterNames.add(operation.newName);
+        break;
+      case 'delete_parameter':
+        if (!parameterNames.has(operation.name)) {
+          throw new Error(
+            `delete_parameter targets unknown parameter "${operation.name}". Refresh the proposal from the current document digest.`
+          );
+        }
+        parameterNames.delete(operation.name);
+        break;
       case 'set_sketch_dimension': {
         const feature = digest.features.find((candidate) => {
           const data = candidate.data as Record<string, unknown> | null;
@@ -3720,6 +3787,10 @@ export function describeCadPatchOperation(
   switch (operation.kind) {
     case 'set_parameter':
       return `Set parameter ${operation.name} to ${operation.expression}`;
+    case 'rename_parameter':
+      return `Rename parameter ${operation.name} to ${operation.newName}`;
+    case 'delete_parameter':
+      return `Delete parameter ${operation.name}`;
     case 'set_feature_dimension':
       return `Set ${operation.field} on ${operation.featureId} to ${String(operation.value)}`;
     case 'set_sketch_dimension':
