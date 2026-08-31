@@ -1141,40 +1141,89 @@ describe('assistant integration', () => {
     });
   });
 
-  it('does not retry an unavailable strict OpenRouter route without schema gating', async () => {
+  it('uses a strict Chat Completions fallback for an unavailable Sol Responses route', async () => {
+    const output = JSON.stringify({
+      replyKind: 'message',
+      proposal: null,
+      questions: null,
+      message: 'Connection ready.',
+      readings: null
+    });
+    let attempt = 0;
     const fetchMock = vi.fn(
-      async (_input: RequestInfo | URL, _init?: RequestInit) =>
-        Response.json(
-          {
-            error: {
-              code: 404,
-              message:
-                'No allowed providers are available for the selected model'
-            }
-          },
-          { status: 404 }
-        )
+      async (_input: RequestInfo | URL, _init?: RequestInit) => {
+        attempt += 1;
+        return attempt === 1
+          ? Response.json(
+              {
+                error: {
+                  code: 404,
+                  message:
+                    'No allowed providers are available for the selected model'
+                }
+              },
+              { status: 404 }
+            )
+          : Response.json({
+              id: 'gen_sol_fallback_123',
+              choices: [
+                {
+                  finish_reason: 'stop',
+                  message: { role: 'assistant', content: output }
+                }
+              ]
+            });
+      }
     );
     vi.stubGlobal('fetch', fetchMock);
-    const consoleError = vi
-      .spyOn(console, 'error')
+    const consoleWarn = vi
+      .spyOn(console, 'warn')
       .mockImplementation(() => undefined);
 
-    const response = await streamAssistantProposal(input, {}, 'user_personal', {
-      provider: 'openrouter',
-      apiKey: 'personal-key',
-      model: 'openai/gpt-5.6-sol',
-      reasoningEffort: 'high',
-      maxOutputTokens: 32_000,
-      timeoutMs: 120_000,
-      customInstructions: ''
-    });
+    const response = await streamAssistantProposal(
+      {
+        ...input,
+        history: [
+          { role: 'assistant', text: 'How thick is the plate?' },
+          { role: 'user', text: '6 mm', answeredQuestionId: 'plate_thickness' }
+        ],
+        attachments: [
+          {
+            id: 'att_sol',
+            mediaType: 'image/png',
+            dataBase64: 'QUJD',
+            label: 'bracket.png'
+          }
+        ]
+      },
+      {},
+      'user_personal',
+      {
+        provider: 'openrouter',
+        apiKey: 'personal-key',
+        model: 'openai/gpt-5.6-sol',
+        reasoningEffort: 'high',
+        maxOutputTokens: 32_000,
+        timeoutMs: 120_000,
+        customInstructions: ''
+      }
+    );
 
-    expect(response.status).toBe(502);
-    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(response.status).toBe(200);
+    const fallbackStream = await response.text();
+    expect(fallbackStream).toContain('response.output_text.done');
+    expect(fallbackStream).toContain('response.done');
+    expect(fallbackStream).toContain('gen_sol_fallback_123');
+    expect(fetchMock).toHaveBeenCalledTimes(2);
     const [strictUrl, strictInit] = fetchMock.mock.calls[0]!;
+    const [fallbackUrl, fallbackInit] = fetchMock.mock.calls[1]!;
     expect(strictUrl).toBe('https://openrouter.ai/api/v1/responses');
+    expect(fallbackUrl).toBe('https://openrouter.ai/api/v1/chat/completions');
     const strictRequest = JSON.parse(strictInit?.body as string) as Record<
+      string,
+      unknown
+    >;
+    const fallbackRequest = JSON.parse(fallbackInit?.body as string) as Record<
       string,
       unknown
     >;
@@ -1190,9 +1239,73 @@ describe('assistant integration', () => {
         }
       }
     });
-    expect(JSON.stringify(consoleError.mock.calls)).not.toContain(
+    expect(fallbackRequest).toMatchObject({
+      model: 'openai/gpt-5.6-sol',
+      max_completion_tokens: 32_000,
+      stream: false,
+      user: 'user_personal',
+      provider: { require_parameters: true },
+      reasoning: { effort: 'high' },
+      response_format: {
+        type: 'json_schema',
+        json_schema: {
+          name: 'openzcad_reply',
+          strict: true
+        }
+      }
+    });
+    expect(fallbackRequest).not.toHaveProperty('max_output_tokens');
+    expect(fallbackRequest).not.toHaveProperty('safety_identifier');
+    expect(fallbackRequest).not.toHaveProperty('text');
+    expect(fallbackRequest.messages).toEqual(
+      expect.arrayContaining([
+        {
+          role: 'user',
+          content: [
+            expect.objectContaining({ type: 'text' }),
+            {
+              type: 'image_url',
+              image_url: {
+                url: 'data:image/png;base64,QUJD',
+                detail: 'high'
+              }
+            }
+          ]
+        }
+      ])
+    );
+    expect(JSON.stringify(consoleWarn.mock.calls)).not.toContain(
       'personal-key'
     );
+  });
+
+  it('does not weaken strict routing for another OpenRouter model', async () => {
+    const fetchMock = vi.fn(async () =>
+      Response.json(
+        {
+          error: {
+            code: 404,
+            message: 'No allowed providers are available for the selected model'
+          }
+        },
+        { status: 404 }
+      )
+    );
+    vi.stubGlobal('fetch', fetchMock);
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+
+    const response = await streamAssistantProposal(input, {}, 'user_test', {
+      provider: 'openrouter',
+      apiKey: 'personal-key',
+      model: 'anthropic/claude-opus-5',
+      reasoningEffort: 'high',
+      maxOutputTokens: 32_000,
+      timeoutMs: 120_000,
+      customInstructions: ''
+    });
+
+    expect(response.status).toBe(502);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
   it('logs only bounded metadata for invalid streamed output', async () => {
@@ -1532,6 +1645,83 @@ describe('assistant integration', () => {
       }
     });
     expect(request.text.format.schema).toHaveProperty('properties.replyKind');
+  });
+
+  it('tests Sol through the strict Chat Completions fallback when its Responses route is unavailable', async () => {
+    const output = JSON.stringify({
+      replyKind: 'message',
+      proposal: null,
+      questions: null,
+      message: 'Connection ready.',
+      readings: null
+    });
+    let attempt = 0;
+    const fetchMock = vi.fn(
+      async (_input: RequestInfo | URL, _init?: RequestInit) => {
+        attempt += 1;
+        return attempt === 1
+          ? Response.json(
+              {
+                error: {
+                  code: 404,
+                  message:
+                    'No allowed providers are available for the selected model'
+                }
+              },
+              { status: 404 }
+            )
+          : Response.json({
+              id: 'gen_connection_fallback_123',
+              choices: [
+                {
+                  finish_reason: 'stop',
+                  message: { role: 'assistant', content: output }
+                }
+              ]
+            });
+      }
+    );
+    vi.stubGlobal('fetch', fetchMock);
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+    await expect(
+      testAssistantConnection(
+        {
+          provider: 'openrouter',
+          apiKey: 'personal-key',
+          model: 'openai/gpt-5.6-sol',
+          reasoningEffort: 'high',
+          maxOutputTokens: 32_000,
+          timeoutMs: 120_000,
+          customInstructions: ''
+        },
+        {}
+      )
+    ).resolves.toMatchObject({ ok: true });
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    const [fallbackUrl, fallbackInit] = fetchMock.mock.calls[1]!;
+    expect(fallbackUrl).toBe('https://openrouter.ai/api/v1/chat/completions');
+    const fallbackRequest = JSON.parse(fallbackInit?.body as string) as Record<
+      string,
+      unknown
+    >;
+    expect(fallbackRequest).toMatchObject({
+      model: 'openai/gpt-5.6-sol',
+      max_completion_tokens: 4_096,
+      stream: false,
+      provider: { require_parameters: true },
+      reasoning: { effort: 'high' },
+      response_format: {
+        type: 'json_schema',
+        json_schema: {
+          name: 'openzcad_reply',
+          strict: true
+        }
+      }
+    });
+    expect(fallbackRequest).not.toHaveProperty('max_output_tokens');
+    expect(fallbackRequest).not.toHaveProperty('text');
   });
 
   it('accepts connection output from complete OpenRouter snapshots', async () => {
