@@ -78,14 +78,17 @@ function eventTextDelta(event: Record<string, unknown>): string | undefined {
   if (event.type !== 'response.content_part.delta') {
     return undefined;
   }
-  const delta = typeof event.delta === 'string' ? event.delta : undefined;
-  if (delta) {
-    return delta;
-  }
   const part =
     event.part && typeof event.part === 'object' && !Array.isArray(event.part)
       ? (event.part as Record<string, unknown>)
       : undefined;
+  if (typeof part?.type === 'string' && part.type !== 'output_text') {
+    return undefined;
+  }
+  const delta = typeof event.delta === 'string' ? event.delta : undefined;
+  if (delta) {
+    return delta;
+  }
   return typeof part?.text === 'string' ? part.text : delta;
 }
 
