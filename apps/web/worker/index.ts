@@ -37,6 +37,7 @@ import {
   deleteAccountData
 } from './accountDeletion';
 import {
+  assistantSafetyIdentifier,
   getAssistantStatus,
   HttpAssistantConfigurationError,
   maxOutputTokensFor,
@@ -884,7 +885,7 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
       response = await streamAssistantProposal(
         payload,
         env,
-        userId,
+        assistantSafetyIdentifier(userId, payload.retryAttempt),
         assistant.runtime ?? undefined
       );
     } catch (error) {

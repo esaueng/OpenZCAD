@@ -81,6 +81,12 @@ export interface AssistantProposalRequest {
   digest: CadDocumentDigest;
   history: AssistantHistoryTurn[];
   attachments: AssistantAttachment[];
+  /**
+   * 1 when the client is automatically retrying a request whose first stream
+   * produced unusable output. Varies the provider sticky-routing key so the
+   * retry can reach a different provider than the one that just failed.
+   */
+  retryAttempt: 0 | 1;
 }
 
 function badRequest(message: string): HttpError {
@@ -580,10 +586,18 @@ export function parseAssistantProposalRequest(
   ) {
     throw badRequest('"digest" is too large.');
   }
+  if (
+    record.retryAttempt !== undefined &&
+    record.retryAttempt !== 0 &&
+    record.retryAttempt !== 1
+  ) {
+    throw badRequest('"retryAttempt" must be 0 or 1.');
+  }
   return {
     prompt,
     digest: digest as unknown as CadDocumentDigest,
     history: parseAssistantHistory(record.history),
-    attachments: parseAssistantAttachments(record.attachments)
+    attachments: parseAssistantAttachments(record.attachments),
+    retryAttempt: record.retryAttempt === 1 ? 1 : 0
   };
 }
