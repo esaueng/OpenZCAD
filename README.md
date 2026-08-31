@@ -4,6 +4,13 @@ OpenZCAD is a browser-first parametric CAD workspace: exact B-rep solid modeling
 
 Use the hosted beta at [zcad.app](https://zcad.app/).
 
+> [!WARNING]
+> OpenZCAD is under active development and should be used at your own risk.
+> Features and behavior may change without notice. Do not rely on the hosted
+> beta as the only copy of important work: cloud projects and account data may
+> be reset, migrated, or not carried forward to a future production release.
+> Keep independent local or exported backups of anything important.
+
 ![OpenZCAD workspace — Mounting Bracket demo](docs/design/readme-mounting-bracket.png)
 
 ## Highlights
