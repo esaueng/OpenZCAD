@@ -119,6 +119,51 @@ describe('assistant integration', () => {
     ).toBe(true);
   });
 
+  it('accepts object deltas and completed output snapshots', () => {
+    const reasoning = readAssistantEvent(
+      {
+        type: 'response.content_part.delta',
+        delta: { type: 'reasoning_text', text: 'private reasoning' }
+      },
+      ''
+    );
+    const delta = readAssistantEvent(
+      {
+        type: 'response.content_part.delta',
+        delta: { type: 'output_text', text: '{"replyKind":' }
+      },
+      reasoning.text
+    );
+    const output = '{"replyKind":"message","message":"Finished"}';
+    const partDone = readAssistantEvent(
+      {
+        type: 'response.content_part.done',
+        part: { type: 'output_text', text: output }
+      },
+      delta.text
+    );
+    const completed = readAssistantEvent(
+      {
+        type: 'response.completed',
+        response: {
+          status: 'completed',
+          output: [
+            {
+              type: 'message',
+              content: [{ type: 'output_text', text: output }]
+            }
+          ]
+        }
+      },
+      ''
+    );
+
+    expect(reasoning.text).toBe('');
+    expect(delta.text).toBe('{"replyKind":');
+    expect(partDone.text).toBe(output);
+    expect(completed).toEqual({ text: output, done: true });
+  });
+
   it('rejects malformed SSE frames as a protocol failure', async () => {
     expect(parseAssistantEventData('{not-json')).toBeNull();
     vi.stubGlobal(
@@ -1487,6 +1532,59 @@ describe('assistant integration', () => {
       }
     });
     expect(request.text.format.schema).toHaveProperty('properties.replyKind');
+  });
+
+  it('accepts connection output from complete OpenRouter snapshots', async () => {
+    const output = JSON.stringify({
+      replyKind: 'message',
+      proposal: null,
+      questions: null,
+      message: 'Connection ready.',
+      readings: null
+    });
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(
+        async () =>
+          new Response(
+            `data: ${JSON.stringify({
+              type: 'response.content_part.delta',
+              delta: { type: 'reasoning_text', text: 'private reasoning' }
+            })}\n\ndata: ${JSON.stringify({
+              type: 'response.content_part.done',
+              part: { type: 'output_text', text: output }
+            })}\n\ndata: ${JSON.stringify({
+              type: 'response.completed',
+              response: {
+                id: 'resp_connection_snapshot_123',
+                status: 'completed',
+                output: [
+                  {
+                    type: 'message',
+                    content: [{ type: 'output_text', text: output }]
+                  }
+                ]
+              }
+            })}\n\ndata: [DONE]\n\n`,
+            { headers: { 'content-type': 'text/event-stream' } }
+          )
+      )
+    );
+
+    await expect(
+      testAssistantConnection(
+        {
+          provider: 'openrouter',
+          apiKey: 'personal-key',
+          model: 'anthropic/claude-opus-5',
+          reasoningEffort: 'high',
+          maxOutputTokens: 90_000,
+          timeoutMs: 300_000,
+          customInstructions: ''
+        },
+        {}
+      )
+    ).resolves.toMatchObject({ ok: true });
   });
 
   it.each([
