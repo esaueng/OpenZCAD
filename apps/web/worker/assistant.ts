@@ -816,6 +816,19 @@ function structuredReplyText(env: CloudflareEnv) {
   };
 }
 
+/**
+ * OpenRouter uses safety_identifier as a sticky routing key, so a plain retry
+ * deterministically lands on the provider that just returned unusable output.
+ * Suffixing the retry keeps the identifier user-derived for abuse tracking
+ * while moving the request to a different routing bucket.
+ */
+export function assistantSafetyIdentifier(
+  userId: string,
+  retryAttempt: 0 | 1
+): string {
+  return retryAttempt === 1 ? `${userId}#r1` : userId;
+}
+
 export async function streamAssistantProposal(
   input: ProposalInput,
   env: CloudflareEnv,
