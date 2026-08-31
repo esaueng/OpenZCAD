@@ -462,6 +462,11 @@ export interface ParameterDeleteInput {
   name: string;
 }
 
+export interface ParameterRenameInput {
+  name: string;
+  newName: string;
+}
+
 export interface ParameterExposeInput {
   name: string;
   exposed: boolean;
@@ -2226,6 +2231,75 @@ export function deleteParameter(
 }
 
 /**
+ * Renames a parameter and rewrites every stored expression that reads it, in
+ * one step, so no reader is ever stranded on the old name.
+ *
+ * Readers are found the way {@link findParameterReferences} finds them: a
+ * string counts only if it both names the parameter and evaluates against the
+ * live scope, which is what keeps ids, enum discriminants, and font families
+ * out of the rewrite. An unevaluatable parameter is therefore read by nobody
+ * and only the node itself is renamed — its readers were already failing and
+ * keep the text the user typed.
+ */
+export function renameParameter(
+  document: ProjectDocument,
+  input: ParameterRenameInput
+): ProjectDocument {
+  const newName = input.newName.trim();
+  if (!isValidParameterName(newName)) {
+    throw new Error(
+      `"${newName}" is not a valid parameter name (letters, digits, underscore; must not be a built-in).`
+    );
+  }
+  const next = cloneDocument(document);
+  const parameter = listParameters(next).find(
+    (entry) => entry.name === input.name
+  );
+  if (!parameter) {
+    throw new Error(`Parameter "${input.name}" not found.`);
+  }
+  if (newName !== input.name) {
+    const collision = listParameters(next).find(
+      (entry) => entry.name === newName
+    );
+    if (collision) {
+      throw new Error(`A parameter named "${newName}" already exists.`);
+    }
+  }
+  const { scope } = getParameterScope(next);
+  const rewrite = (candidate: string): string =>
+    readsParameter(candidate, input.name, scope)
+      ? renameIdentifierInExpression(candidate, input.name, newName)
+      : candidate;
+  for (const node of Object.values(next.nodes)) {
+    if (node.kind === 'parameter') {
+      if (node.name !== input.name) {
+        node.expression = rewrite(node.expression);
+      }
+    } else if (node.kind === 'feature' || node.kind === 'sketch-object') {
+      node.data = rewritePayloadStrings(node.data, rewrite) as typeof node.data;
+    } else if (node.kind === 'sketch') {
+      node.planeRef = rewritePayloadStrings(
+        node.planeRef,
+        rewrite
+      ) as typeof node.planeRef;
+      node.offset = rewritePayloadStrings(
+        node.offset,
+        rewrite
+      ) as typeof node.offset;
+      node.constraints = rewritePayloadStrings(
+        node.constraints,
+        rewrite
+      ) as typeof node.constraints;
+    }
+  }
+  parameter.name = newName;
+  refreshParameterValues(next);
+  next.version += 1;
+  return next;
+}
+
+/**
  * Chooses whether a parameter is offered in Tweak mode and through a share
  * link. Deliberately its own command rather than a field on `setParameter`:
  * Tweak mode admits `parameter.set` so a visitor can turn the published
@@ -3296,6 +3370,66 @@ function collectPayloadStrings(value: unknown, into: string[]): void {
       collectPayloadStrings(item, into);
     }
   }
+}
+
+/**
+ * The mutating twin of {@link collectPayloadStrings}: rewrites every nested
+ * string through `rewrite`, in place for containers. Returns the (possibly
+ * replaced) value because a bare top-level string cannot be swapped in place.
+ */
+function rewritePayloadStrings(
+  value: unknown,
+  rewrite: (candidate: string) => string
+): unknown {
+  if (typeof value === 'string') {
+    return rewrite(value);
+  }
+  if (Array.isArray(value)) {
+    for (let index = 0; index < value.length; index += 1) {
+      value[index] = rewritePayloadStrings(value[index], rewrite);
+    }
+    return value;
+  }
+  if (value !== null && typeof value === 'object') {
+    const record = value as Record<string, unknown>;
+    for (const key of Object.keys(record)) {
+      record[key] = rewritePayloadStrings(record[key], rewrite);
+    }
+  }
+  return value;
+}
+
+/**
+ * Replaces identifier tokens equal to `oldName` with `newName`, leaving
+ * everything else — whitespace, operators, number literals — byte-identical.
+ * Scans numbers before identifiers in the same order as `tokenizeExpression`,
+ * so the `e5` inside `1e5` is an exponent, never a rename candidate.
+ */
+function renameIdentifierInExpression(
+  expression: string,
+  oldName: string,
+  newName: string
+): string {
+  let out = '';
+  let index = 0;
+  while (index < expression.length) {
+    const rest = expression.slice(index);
+    const numberMatch = /^(?:(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?)/.exec(rest);
+    if (numberMatch) {
+      out += numberMatch[0];
+      index += numberMatch[0].length;
+      continue;
+    }
+    const identifierMatch = /^[a-zA-Z_][a-zA-Z0-9_]*/.exec(rest);
+    if (identifierMatch) {
+      out += identifierMatch[0] === oldName ? newName : identifierMatch[0];
+      index += identifierMatch[0].length;
+      continue;
+    }
+    out += expression[index];
+    index += 1;
+  }
+  return out;
 }
 
 /**
