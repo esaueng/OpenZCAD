@@ -74,11 +74,13 @@ import {
   type ParameterDeleteInput,
   type ParameterDescribeInput,
   type ParameterExposeInput,
+  type ParameterRenameInput,
   type ParameterSetInput,
   patternBody,
   type PatternInput,
   type PrimitiveInput,
   renameNode,
+  renameParameter,
   resolveParamValue,
   resolveSketchInput,
   type RevolveInput,
@@ -158,6 +160,7 @@ export type CommandKind =
   | 'parameter.set'
   | 'parameter.expose'
   | 'parameter.describe'
+  | 'parameter.rename'
   | 'parameter.delete'
   | 'import.mesh'
   | 'import.step'
@@ -209,6 +212,7 @@ export type AnyCommand =
   | CommandDefinition<FeatureUpdateInput>
   | CommandDefinition<FeatureDeleteInput>
   | CommandDefinition<ParameterSetInput>
+  | CommandDefinition<ParameterRenameInput>
   | CommandDefinition<ParameterDeleteInput>
   | CommandDefinition<ImportedMeshInput>
   | CommandDefinition<ImportedStepInput>
@@ -1349,6 +1353,16 @@ export const commandFactories = {
       (document) => setParameterDescription(document, payload)
     );
   },
+  renameParameter(
+    payload: ParameterRenameInput
+  ): CommandDefinition<ParameterRenameInput> {
+    return makeCommand(
+      'parameter.rename',
+      `Rename parameter ${payload.name} to ${payload.newName}`,
+      payload,
+      (document) => renameParameter(document, payload)
+    );
+  },
   deleteParameter(
     payload: ParameterDeleteInput
   ): CommandDefinition<ParameterDeleteInput> {
@@ -1450,6 +1464,25 @@ function projectedParameterScope(
     if (operation.kind === 'set_parameter') {
       assertParameterName(operation.name);
       pending.set(operation.name, operation.expression);
+    } else if (operation.kind === 'rename_parameter') {
+      // Project the final name set: expressions elsewhere in the proposal must
+      // read the post-rename name. A dimension bound to the old name before
+      // the rename would be rewritten by the rename itself, but the projection
+      // is order-free, so proposals are told to rename first, then bind.
+      assertParameterName(operation.newName);
+      const pendingExpression = pending.get(operation.name);
+      if (pendingExpression !== undefined) {
+        pending.delete(operation.name);
+        pending.set(operation.newName, pendingExpression);
+      }
+      const renamedValue = scope[operation.name];
+      if (renamedValue !== undefined) {
+        scope[operation.newName] = renamedValue;
+        delete scope[operation.name];
+      }
+    } else if (operation.kind === 'delete_parameter') {
+      pending.delete(operation.name);
+      delete scope[operation.name];
     }
   }
 
@@ -1994,6 +2027,15 @@ export function commandsForCadPatch(
           name: operation.name,
           expression: operation.expression
         });
+      case 'rename_parameter':
+        return commandFactories.renameParameter({
+          name: operation.name,
+          newName: operation.newName
+        });
+      case 'delete_parameter':
+        return commandFactories.deleteParameter({
+          name: operation.name
+        });
       case 'set_sketch_dimension': {
         const sketch = findSketch(document, operation.sketchId);
         const objectId = toEntityId(operation.objectId);
@@ -2421,32 +2463,35 @@ export function commandsForCadPatch(
         }
         if (feature.data.featureKind === 'direct-edit') {
           const edit = feature.data.operation;
+          // The digest shows direct-edit dimensions nested under `operation`,
+          // so models spell the field "operation.offset"; accept that spelling
+          // as the flat name this allowlist uses.
+          const field = operation.field.startsWith('operation.')
+            ? operation.field.slice('operation.'.length)
+            : operation.field;
           const editable =
-            (edit.kind === 'resize-through-hole' &&
-              operation.field === 'diameter') ||
+            (edit.kind === 'resize-through-hole' && field === 'diameter') ||
             (edit.kind === 'resize-imported-blind-hole' &&
-              ['diameter', 'depth'].includes(operation.field)) ||
+              ['diameter', 'depth'].includes(field)) ||
             (edit.kind === 'resize-imported-counterbore' &&
               [
                 'boreDiameter',
                 'counterboreDiameter',
                 'counterboreDepth'
-              ].includes(operation.field)) ||
+              ].includes(field)) ||
             (edit.kind === 'resize-imported-countersink' &&
               ['boreDiameter', 'sinkDiameter', 'angleRadians'].includes(
-                operation.field
+                field
               )) ||
-            (edit.kind === 'set-face-distance' &&
-              operation.field === 'distance') ||
-            (edit.kind === 'resize-cylindrical-face' &&
-              operation.field === 'radius') ||
-            (edit.kind === 'resize-blend' && operation.field === 'newRadius') ||
-            (edit.kind === 'offset-face' && operation.field === 'offset');
+            (edit.kind === 'set-face-distance' && field === 'distance') ||
+            (edit.kind === 'resize-cylindrical-face' && field === 'radius') ||
+            (edit.kind === 'resize-blend' && field === 'newRadius') ||
+            (edit.kind === 'offset-face' && field === 'offset');
           if (editable) {
             return commandFactories.updateFeature({
               featureId: feature.featureId,
               data: {
-                operation: { ...edit, [operation.field]: operation.value }
+                operation: { ...edit, [field]: operation.value }
               }
             });
           }
@@ -2788,6 +2833,9 @@ export function replayCommands(
           next,
           command.payload as ParameterDescribeInput
         );
+        break;
+      case 'parameter.rename':
+        next = renameParameter(next, command.payload as ParameterRenameInput);
         break;
       case 'parameter.delete':
         next = deleteParameter(next, command.payload as ParameterDeleteInput);
