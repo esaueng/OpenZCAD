@@ -189,9 +189,45 @@ export function parseAssistantEventData(
   }
 }
 
+/**
+ * Failures produced by the provider rather than by this request: garbage or
+ * empty structured output, and a stream that died mid-proposal. One automatic
+ * retry absorbs most of them. Deterministic failures — a refused request, an
+ * output-budget overrun — are excluded so a retry never doubles their cost.
+ */
+const RETRYABLE_STREAM_CODES: ReadonlySet<AssistantStreamErrorCode> = new Set([
+  'AI_EMPTY_REPLY',
+  'AI_INVALID_JSON',
+  'AI_INVALID_REPLY',
+  'AI_PROVIDER_STREAM_ERROR',
+  'AI_STREAM_CONNECTION',
+  'AI_STREAM_TRUNCATED'
+]);
+
 export async function streamAssistantReply(
   request: AssistantTurnRequest,
   options: AssistantStreamOptions = {}
+): Promise<AssistantReply> {
+  try {
+    return await streamAssistantReplyAttempt(request, options, 0);
+  } catch (error) {
+    if (
+      !(error instanceof AssistantStreamError) ||
+      !RETRYABLE_STREAM_CODES.has(error.code) ||
+      options.signal?.aborted
+    ) {
+      throw error;
+    }
+    // The retry marker makes the worker vary the provider routing key, so
+    // this attempt can reach a different provider than the one that failed.
+    return streamAssistantReplyAttempt(request, options, 1);
+  }
+}
+
+async function streamAssistantReplyAttempt(
+  request: AssistantTurnRequest,
+  options: AssistantStreamOptions,
+  retryAttempt: 0 | 1
 ): Promise<AssistantReply> {
   const response = await desktopFetch('/api/assistant/proposals', {
     method: 'POST',
@@ -200,7 +236,8 @@ export async function streamAssistantReply(
       prompt: request.prompt,
       digest: request.digest,
       history: request.history ?? [],
-      attachments: request.attachments ?? []
+      attachments: request.attachments ?? [],
+      retryAttempt
     }),
     signal: options.signal
   });
