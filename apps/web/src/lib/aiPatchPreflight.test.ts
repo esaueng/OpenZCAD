@@ -50,7 +50,11 @@ function exactDerived(candidate: ProjectDocument): ProjectDocument['derived'] {
         color: '#fff',
         consumed: false,
         exportableStep: true,
-        mesh: { kind: 'mesh', vertices: new Float32Array(), indices: new Uint32Array() },
+        mesh: {
+          kind: 'mesh',
+          vertices: new Float32Array(),
+          indices: new Uint32Array()
+        },
         faceCount: 6,
         volume: 6000,
         bbox: {
@@ -211,6 +215,46 @@ describe('AI exact patch preflight', () => {
         warnings: ['Existing legacy warning']
       }))
     ).resolves.toBeTruthy();
+  });
+
+  it('rejects a new duplicate of a pre-existing legacy warning', async () => {
+    const base = createProjectDocument('AI', toUserId('user_ai'));
+    const warning = 'Feature "M4 Hole": Direct-edit face is stale.';
+    base.derived.warnings = [warning];
+
+    await expect(
+      preflightCadPatch(base, proposal, async (candidate) => ({
+        ...exactDerived(candidate),
+        warnings: [warning, warning]
+      }))
+    ).rejects.toThrow(/Direct-edit face is stale/);
+  });
+
+  it('rejects only newly attributed blocking warnings', async () => {
+    const base = createProjectDocument('AI', toUserId('user_ai'));
+    const advisory = 'Feature "Exact box": Approximate display mesh.';
+    const refusal = 'Feature "M4 Hole": Direct-edit face is stale.';
+
+    await expect(
+      preflightCadPatch(base, proposal, async (candidate) => ({
+        ...exactDerived(candidate),
+        warnings: [advisory, refusal],
+        featureWarnings: [
+          {
+            featureId: toFeatureId('feat_box'),
+            featureName: 'Exact box',
+            message: advisory,
+            kind: 'advisory'
+          },
+          {
+            featureId: toFeatureId('feat_hole'),
+            featureName: 'M4 Hole',
+            message: refusal,
+            kind: 'build-failed'
+          }
+        ]
+      }))
+    ).rejects.toThrow(/Direct-edit face is stale/);
   });
 
   it('requires verified parameterization recipes to preserve exact geometry', async () => {

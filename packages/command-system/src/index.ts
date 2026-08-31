@@ -7,7 +7,6 @@ import {
   type BodyId,
   type EntityId,
   type ParamValue,
-  type ParametricTransform3D,
   type ProjectDocument,
   type SerializedCommand,
   toSketchConstraintId,
@@ -291,7 +290,8 @@ function validateParameterDelete(
   }
   const named = references.slice(0, 3).map((reference) => reference.label);
   const rest = references.length - named.length;
-  const list = rest > 0 ? `${named.join(', ')}, +${rest} more` : named.join(', ');
+  const list =
+    rest > 0 ? `${named.join(', ')}, +${rest} more` : named.join(', ');
   throw new Error(
     `Cannot delete parameter "${payload.name}": ${references.length} ${
       references.length === 1 ? 'value' : 'values'
@@ -1921,6 +1921,7 @@ export function commandsForCadPatch(
   proposal: CadPatchProposal
 ): AnyCommand[] {
   const scope = new LocalBodyScope(document);
+  let projectedDocument = document;
   const parameterScope = projectedParameterScope(document, proposal);
   proposal.operations.forEach((operation) =>
     assertOperationExpressions(operation, parameterScope)
@@ -1962,14 +1963,14 @@ export function commandsForCadPatch(
       }
       return local;
     }
-    const sketch = findSketch(document, reference as SketchId);
+    const sketch = findSketch(projectedDocument, reference as SketchId);
     if (!sketch) {
       throw new Error(`Sketch ${reference} not found in the document.`);
     }
     const objects: SketchObjectData[] = [];
     const objectIds: EntityId[] = [];
     for (const objectId of sketch.objectIds) {
-      const node = document.nodes[objectId];
+      const node = projectedDocument.nodes[objectId];
       if (node?.kind === 'sketch-object') {
         objects.push(node.data);
         objectIds.push(objectId);
@@ -2014,13 +2015,9 @@ export function commandsForCadPatch(
     };
   };
 
-  // Proposal conversion happens before the transaction runs. Keep the latest
-  // sketch-object payload here so two bindings on one object compose instead
-  // of the later command restoring fields from the original document.
-  const projectedSketchObjects = new Map<string, SketchObjectData>();
-  const projectedTransforms = new Map<string, ParametricTransform3D>();
-
-  return proposal.operations.map((operation) => {
+  const commandForOperation = (
+    operation: CadPatchProposal['operations'][number]
+  ): AnyCommand => {
     switch (operation.kind) {
       case 'set_parameter':
         return commandFactories.setParameter({
@@ -2037,10 +2034,10 @@ export function commandsForCadPatch(
           name: operation.name
         });
       case 'set_sketch_dimension': {
-        const sketch = findSketch(document, operation.sketchId);
+        const sketch = findSketch(projectedDocument, operation.sketchId);
         const objectId = toEntityId(operation.objectId);
         const object = sketch?.objectIds.includes(objectId)
-          ? document.nodes[objectId]
+          ? projectedDocument.nodes[objectId]
           : undefined;
         if (!sketch || !object || object.kind !== 'sketch-object') {
           throw new Error(
@@ -2052,13 +2049,10 @@ export function commandsForCadPatch(
             `${object.data.objectKind} sketch object ${operation.objectId} does not expose an editable ${operation.field} dimension.`
           );
         }
-        const current =
-          projectedSketchObjects.get(operation.objectId) ?? object.data;
         const data = {
-          ...current,
+          ...object.data,
           [operation.field]: operation.value
         };
-        projectedSketchObjects.set(operation.objectId, data);
         return commandFactories.updateSketchObject({
           sketchId: sketch.sketchId,
           objectId,
@@ -2085,7 +2079,7 @@ export function commandsForCadPatch(
           featureId: operation.featureId
         });
       case 'rename_feature': {
-        const feature = findFeature(document, operation.featureId);
+        const feature = findFeature(projectedDocument, operation.featureId);
         if (!feature) {
           throw new Error(`Feature ${operation.featureId} not found.`);
         }
@@ -2365,7 +2359,7 @@ export function commandsForCadPatch(
         });
       }
       case 'set_feature_dimension': {
-        const feature = findFeature(document, operation.featureId);
+        const feature = findFeature(projectedDocument, operation.featureId);
         if (!feature) {
           throw new Error(`Feature ${operation.featureId} not found.`);
         }
@@ -2444,9 +2438,7 @@ export function commandsForCadPatch(
             (group === 'translation' || group === 'rotationDeg') &&
             (axis === 'x' || axis === 'y' || axis === 'z')
           ) {
-            const current =
-              projectedTransforms.get(String(feature.featureId)) ??
-              feature.data.transform;
+            const current = feature.data.transform;
             const transform = {
               ...current,
               [group]: {
@@ -2454,7 +2446,6 @@ export function commandsForCadPatch(
                 [axis]: operation.value
               }
             };
-            projectedTransforms.set(String(feature.featureId), transform);
             return commandFactories.updateFeature({
               featureId: feature.featureId,
               data: { transform }
@@ -2501,7 +2492,22 @@ export function commandsForCadPatch(
         );
       }
     }
-  });
+  };
+
+  // Compile against the document state produced by every earlier operation.
+  // A rename rewrites all current readers, so a later feature edit must copy
+  // that rewritten payload rather than resurrecting names from the original
+  // digest. Applying each command here is side-effect free; the real document
+  // still changes only once, when CommandManager commits the reviewed list as
+  // one transaction.
+  const commands: AnyCommand[] = [];
+  for (const operation of proposal.operations) {
+    const command = commandForOperation(operation);
+    command.validate(projectedDocument);
+    projectedDocument = command.apply(projectedDocument);
+    commands.push(command);
+  }
+  return commands;
 }
 
 /** Bound on stored undo/redo entries so long sessions cannot exhaust memory. */

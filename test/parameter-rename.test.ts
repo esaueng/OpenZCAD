@@ -112,9 +112,9 @@ describe('renameParameter', () => {
     });
     const applied = command.apply(document);
     const replayed = replayCommands(document, [command.serialize()]);
-    expect(
-      listParameters(replayed).map((parameter) => parameter.name)
-    ).toEqual(listParameters(applied).map((parameter) => parameter.name));
+    expect(listParameters(replayed).map((parameter) => parameter.name)).toEqual(
+      listParameters(applied).map((parameter) => parameter.name)
+    );
   });
 });
 
@@ -139,7 +139,10 @@ describe('parameter patch operations', () => {
         }
       ]
     });
-    manager.runTransaction('Apply AI patch', commandsForCadPatch(manager.document, proposal));
+    manager.runTransaction(
+      'Apply AI patch',
+      commandsForCadPatch(manager.document, proposal)
+    );
 
     const names = listParameters(manager.document).map(
       (parameter) => parameter.name
@@ -169,8 +172,92 @@ describe('parameter patch operations', () => {
         { kind: 'delete_parameter', name: 'legacy' }
       ]
     });
-    manager.runTransaction('Apply AI patch', commandsForCadPatch(manager.document, proposal));
+    manager.runTransaction(
+      'Apply AI patch',
+      commandsForCadPatch(manager.document, proposal)
+    );
     expect(listParameters(manager.document)).toHaveLength(0);
+  });
+
+  it('keeps earlier renames when later edits update the same direct feature', () => {
+    let document = createProjectDocument('Hole cleanup', USER, 'mm');
+    document = setParameter(document, {
+      name: 'm4_hole_1_radius',
+      expression: '2.25'
+    });
+    document = setParameter(document, {
+      name: 'm4_hole_1_depth',
+      expression: '8'
+    });
+    document = addPrimitiveFeature(document, {
+      name: 'Plate',
+      primitiveKind: 'box',
+      dimensions: { width: 80, height: 60, depth: 6 }
+    });
+    const plateBodyId = document.bodyOrder.at(-1)!;
+    document = directEditBody(document, {
+      name: 'M4 Hole 1',
+      targetBodyId: plateBodyId,
+      operation: {
+        kind: 'resize-imported-blind-hole',
+        faceHash: 101,
+        sourceOpeningPoint: { x: 10, y: 10, z: 6 },
+        sourceAxisDirection: { x: 0, y: 0, z: -1 },
+        sourceDiameter: 4.5,
+        sourceDepth: 8,
+        diameter: 'm4_hole_1_radius * 2',
+        depth: 'm4_hole_1_depth'
+      }
+    }).document;
+    const hole = listFeaturesInOrder(document).at(-1)!;
+    const proposal = parseCadPatchProposal({
+      proposalId: 'proposal_hole_cleanup',
+      summary: 'Consolidate the M4 hole dimensions.',
+      assumptions: [],
+      preserveGeometry: true,
+      operations: [
+        {
+          kind: 'rename_parameter',
+          name: 'm4_hole_1_radius',
+          newName: 'm4_hole_radius'
+        },
+        {
+          kind: 'rename_parameter',
+          name: 'm4_hole_1_depth',
+          newName: 'm4_hole_depth'
+        },
+        {
+          kind: 'set_feature_dimension',
+          featureId: hole.featureId,
+          field: 'diameter',
+          value: 'm4_hole_radius * 2'
+        },
+        {
+          kind: 'set_feature_dimension',
+          featureId: hole.featureId,
+          field: 'depth',
+          value: 'm4_hole_depth'
+        }
+      ]
+    });
+
+    const manager = new CommandManager(document);
+    manager.runTransaction(
+      'Apply AI patch',
+      commandsForCadPatch(manager.document, proposal)
+    );
+
+    expect(listFeaturesInOrder(manager.document).at(-1)?.data).toMatchObject({
+      featureKind: 'direct-edit',
+      operation: {
+        diameter: 'm4_hole_radius * 2',
+        depth: 'm4_hole_depth'
+      }
+    });
+    expect(listParameters(manager.document).map(({ name }) => name)).toEqual([
+      'm4_hole_radius',
+      'm4_hole_depth'
+    ]);
   });
 
   it('still refuses a delete whose readers were not rebound', () => {
@@ -189,7 +276,10 @@ describe('parameter patch operations', () => {
       operations: [{ kind: 'delete_parameter', name: 'legacy' }]
     });
     expect(() =>
-      manager.runTransaction('Apply AI patch', commandsForCadPatch(manager.document, proposal))
+      manager.runTransaction(
+        'Apply AI patch',
+        commandsForCadPatch(manager.document, proposal)
+      )
     ).toThrow(/still read it/);
   });
 

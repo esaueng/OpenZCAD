@@ -307,8 +307,8 @@ export interface CadPatchProposal {
   summary: string;
   assumptions: string[];
   operations: CadPatchOperation[];
-  /** Local verified recipes may require exact geometry to remain unchanged. */
-  preserveGeometry?: true;
+  /** Requires exact preflight to prove that the current bodies did not move. */
+  preserveGeometry?: boolean;
 }
 
 /**
@@ -1711,6 +1711,11 @@ export const CAD_PATCH_JSON_SCHEMA = {
     proposalId: { type: 'string' },
     summary: { type: 'string' },
     assumptions: { type: 'array', items: { type: 'string' } },
+    preserveGeometry: {
+      type: 'boolean',
+      description:
+        'True only for a naming, binding, or parameter-structure refactor that must leave the current exact bodies unchanged; false when the requested result intentionally changes geometry.'
+    },
     operations: {
       type: 'array',
       minItems: 1,
@@ -2128,7 +2133,13 @@ export const CAD_PATCH_JSON_SCHEMA = {
       }
     }
   },
-  required: ['proposalId', 'summary', 'assumptions', 'operations']
+  required: [
+    'proposalId',
+    'summary',
+    'assumptions',
+    'preserveGeometry',
+    'operations'
+  ]
 } as const;
 
 /**
@@ -2761,7 +2772,7 @@ export function parseCadPatchProposal(
     typeof candidate.proposalId !== 'string' ||
     typeof candidate.summary !== 'string' ||
     (candidate.preserveGeometry !== undefined &&
-      candidate.preserveGeometry !== true) ||
+      typeof candidate.preserveGeometry !== 'boolean') ||
     !Array.isArray(candidate.assumptions) ||
     !candidate.assumptions.every((item) => typeof item === 'string') ||
     !Array.isArray(candidate.operations) ||
