@@ -75,11 +75,54 @@ export interface AssistantStatus {
   reasoningEffort: string;
 }
 
-function eventTextDelta(event: Record<string, unknown>): string | undefined {
-  if (event.type === 'response.output_text.delta') {
-    return typeof event.delta === 'string' ? event.delta : undefined;
+function outputTextFromPart(part: unknown): string | undefined {
+  if (!part || typeof part !== 'object' || Array.isArray(part)) {
+    return undefined;
   }
-  if (event.type !== 'response.content_part.delta') {
+  const value = part as Record<string, unknown>;
+  return value.type === 'output_text' && typeof value.text === 'string'
+    ? value.text
+    : undefined;
+}
+
+function outputTextFromItem(item: unknown): string | undefined {
+  if (!item || typeof item !== 'object' || Array.isArray(item)) {
+    return undefined;
+  }
+  const content = (item as Record<string, unknown>).content;
+  if (!Array.isArray(content)) {
+    return undefined;
+  }
+  const text = content.flatMap((part) => {
+    const value = outputTextFromPart(part);
+    return value === undefined ? [] : [value];
+  });
+  return text.length > 0 ? text.join('') : undefined;
+}
+
+function outputTextFromResponse(response: unknown): string | undefined {
+  if (!response || typeof response !== 'object' || Array.isArray(response)) {
+    return undefined;
+  }
+  const value = response as Record<string, unknown>;
+  if (typeof value.output_text === 'string') {
+    return value.output_text;
+  }
+  if (!Array.isArray(value.output)) {
+    return undefined;
+  }
+  const text = value.output.flatMap((item) => {
+    const itemText = outputTextFromItem(item);
+    return itemText === undefined ? [] : [itemText];
+  });
+  return text.length > 0 ? text.join('') : undefined;
+}
+
+function eventTextDelta(event: Record<string, unknown>): string | undefined {
+  if (
+    event.type !== 'response.output_text.delta' &&
+    event.type !== 'response.content_part.delta'
+  ) {
     return undefined;
   }
   const part =
@@ -89,11 +132,21 @@ function eventTextDelta(event: Record<string, unknown>): string | undefined {
   if (typeof part?.type === 'string' && part.type !== 'output_text') {
     return undefined;
   }
-  const delta = typeof event.delta === 'string' ? event.delta : undefined;
-  if (delta) {
-    return delta;
+  if (typeof event.delta === 'string') {
+    return event.delta || outputTextFromPart(part);
   }
-  return typeof part?.text === 'string' ? part.text : delta;
+  const delta =
+    event.delta &&
+    typeof event.delta === 'object' &&
+    !Array.isArray(event.delta)
+      ? (event.delta as Record<string, unknown>)
+      : undefined;
+  if (typeof delta?.type === 'string' && delta.type !== 'output_text') {
+    return undefined;
+  }
+  return typeof delta?.text === 'string'
+    ? delta.text
+    : outputTextFromPart(part);
 }
 
 export async function loadAssistantStatus(
@@ -125,27 +178,20 @@ export function readAssistantEvent(
   ) {
     return { text: value.text, done: false };
   }
+  if (value.type === 'response.content_part.done') {
+    const text = outputTextFromPart(value.part);
+    if (text !== undefined) {
+      return { text, done: false };
+    }
+  }
   if (
     value.type === 'response.output_item.done' &&
     value.item &&
     typeof value.item === 'object' &&
     !Array.isArray(value.item)
   ) {
-    const item = value.item as Record<string, unknown>;
-    const text = Array.isArray(item.content)
-      ? item.content
-          .flatMap((part) =>
-            part &&
-            typeof part === 'object' &&
-            !Array.isArray(part) &&
-            (part as Record<string, unknown>).type === 'output_text' &&
-            typeof (part as Record<string, unknown>).text === 'string'
-              ? [(part as Record<string, unknown>).text as string]
-              : []
-          )
-          .join('')
-      : '';
-    if (text) {
+    const text = outputTextFromItem(value.item);
+    if (text !== undefined) {
       return { text, done: false };
     }
   }
@@ -189,8 +235,9 @@ export function readAssistantEvent(
       requestId
     );
   }
+  const responseText = outputTextFromResponse(response);
   return {
-    text: currentText,
+    text: responseText ?? currentText,
     done:
       value.type === 'response.completed' ||
       (value.type === 'response.done' && response?.status === 'completed')
