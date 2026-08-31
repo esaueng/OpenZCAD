@@ -1707,6 +1707,10 @@ test('resumes a clarified request from an OpenRouter Responses stream', async ({
       body: `data: ${JSON.stringify({
         type: 'response.content_part.delta',
         delta: '',
+        part: { type: 'reasoning_text', text: 'private reasoning' }
+      })}\n\ndata: ${JSON.stringify({
+        type: 'response.content_part.delta',
+        delta: '',
         part: { type: 'output_text', text: output.slice(0, 50) }
       })}\n\ndata: ${JSON.stringify({
         type: 'response.content_part.delta',
