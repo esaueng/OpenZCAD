@@ -61,8 +61,52 @@ function newExactWarnings(
   base: ProjectDocument,
   derived: ProjectDocument['derived']
 ): string[] {
-  const existing = new Set(base.derived.warnings);
-  return derived.warnings.filter((warning) => !existing.has(warning));
+  if (derived.featureWarnings !== undefined) {
+    const blocking = derived.featureWarnings.filter(
+      (warning) => warning.kind === 'build-failed' || warning.kind === 'refusal'
+    );
+    const existing = new Map<string, number>();
+    for (const warning of base.derived.featureWarnings ?? []) {
+      if (warning.kind !== 'build-failed' && warning.kind !== 'refusal') {
+        continue;
+      }
+      const key = `${warning.featureId}\u0000${warning.kind}\u0000${warning.message}`;
+      existing.set(key, (existing.get(key) ?? 0) + 1);
+    }
+    return blocking.flatMap((warning) => {
+      const key = `${warning.featureId}\u0000${warning.kind}\u0000${warning.message}`;
+      const remaining = existing.get(key) ?? 0;
+      if (remaining === 0) {
+        return [warning.message];
+      }
+      if (remaining === 1) {
+        existing.delete(key);
+      } else {
+        existing.set(key, remaining - 1);
+      }
+      return [];
+    });
+  }
+
+  // Compatibility for stored results from before structured warning
+  // provenance. Subtract by occurrence: a Set would let one pre-existing
+  // warning hide any number of newly failing features with identical text.
+  const existing = new Map<string, number>();
+  for (const warning of base.derived.warnings) {
+    existing.set(warning, (existing.get(warning) ?? 0) + 1);
+  }
+  return derived.warnings.filter((warning) => {
+    const remaining = existing.get(warning) ?? 0;
+    if (remaining === 0) {
+      return true;
+    }
+    if (remaining === 1) {
+      existing.delete(warning);
+    } else {
+      existing.set(warning, remaining - 1);
+    }
+    return false;
+  });
 }
 
 function exactWarningsError(warnings: readonly string[]): Error {
