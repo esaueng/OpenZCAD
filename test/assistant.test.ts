@@ -85,9 +85,17 @@ describe('assistant integration', () => {
   });
 
   it('accepts OpenRouter Responses output and terminal events', () => {
+    const reasoning = readAssistantEvent(
+      {
+        type: 'response.content_part.delta',
+        delta: '',
+        part: { type: 'reasoning_text', text: 'private reasoning' }
+      },
+      ''
+    );
     const delta = readAssistantEvent(
       { type: 'response.content_part.delta', delta: '{"replyKind":' },
-      ''
+      reasoning.text
     );
     const output = '{"replyKind":"message","message":"Finished"}';
     const item = readAssistantEvent(
@@ -101,6 +109,7 @@ describe('assistant integration', () => {
       delta.text
     );
 
+    expect(reasoning.text).toBe('');
     expect(item.text).toBe(output);
     expect(
       readAssistantEvent(
@@ -1209,6 +1218,10 @@ describe('assistant integration', () => {
             `data: ${JSON.stringify({
               type: 'response.content_part.delta',
               delta: '',
+              part: { type: 'reasoning_text', text: 'private reasoning' }
+            })}\n\ndata: ${JSON.stringify({
+              type: 'response.content_part.delta',
+              delta: '',
               part: { type: 'output_text', text: output.slice(0, 1) }
             })}\n\ndata: ${JSON.stringify({
               type: 'response.content_part.delta',
@@ -1414,6 +1427,11 @@ describe('assistant integration', () => {
       async (_input: RequestInfo | URL, _init?: RequestInit) =>
         new Response(
           `data: ${JSON.stringify({
+            type: 'response.content_part.delta',
+            response_id: 'resp_connection_123',
+            delta: '',
+            part: { type: 'reasoning_text', text: 'private reasoning' }
+          })}\n\ndata: ${JSON.stringify({
             type: 'response.content_part.delta',
             response_id: 'resp_connection_123',
             delta: '',
