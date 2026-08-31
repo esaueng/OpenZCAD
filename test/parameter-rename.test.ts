@@ -46,7 +46,7 @@ function documentWithReaders() {
   const created = addSketchFeature(document, {
     name: 'Profile',
     planeRef: { type: 'canonical', plane: 'XY', offset: 0 },
-    objects: [{ objectKind: 'circle', x: 0, y: 0, radius: 'w / 4' }]
+    objects: [{ objectKind: 'circle', centerX: 0, centerY: 0, radius: 'w / 4' }]
   });
   return { document: created.document, sketchId: created.sketchId };
 }
@@ -209,8 +209,8 @@ describe('parameter patch operations', () => {
         faceHash: 1,
         sourceSurfaceType: 'plane',
         sourceArea: 314,
-        sourceCenter: [0, 0, 20],
-        sourceNormal: [0, 0, 1],
+        sourceCenter: { x: 0, y: 0, z: 20 },
+        sourceNormal: { x: 0, y: 0, z: 1 },
         offset: 5
       }
     });
