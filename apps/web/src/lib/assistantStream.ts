@@ -75,6 +75,24 @@ export interface AssistantStatus {
   reasoningEffort: string;
 }
 
+function eventTextDelta(event: Record<string, unknown>): string | undefined {
+  if (event.type === 'response.output_text.delta') {
+    return typeof event.delta === 'string' ? event.delta : undefined;
+  }
+  if (event.type !== 'response.content_part.delta') {
+    return undefined;
+  }
+  const delta = typeof event.delta === 'string' ? event.delta : undefined;
+  if (delta) {
+    return delta;
+  }
+  const part =
+    event.part && typeof event.part === 'object' && !Array.isArray(event.part)
+      ? (event.part as Record<string, unknown>)
+      : undefined;
+  return typeof part?.text === 'string' ? part.text : delta;
+}
+
 export async function loadAssistantStatus(
   signal?: AbortSignal
 ): Promise<AssistantStatus> {
@@ -94,12 +112,9 @@ export function readAssistantEvent(
     return { text: currentText, done: false };
   }
   const value = event as Record<string, unknown>;
-  if (
-    (value.type === 'response.output_text.delta' ||
-      value.type === 'response.content_part.delta') &&
-    typeof value.delta === 'string'
-  ) {
-    return { text: currentText + value.delta, done: false };
+  const delta = eventTextDelta(value);
+  if (delta !== undefined) {
+    return { text: currentText + delta, done: false };
   }
   if (
     value.type === 'response.output_text.done' &&
