@@ -71,6 +71,24 @@ function eventResponseId(event: Record<string, unknown>): string | undefined {
   return safeResponseId(event.response_id) ?? safeResponseId(response?.id);
 }
 
+function eventTextDelta(event: Record<string, unknown>): string | undefined {
+  if (event.type === 'response.output_text.delta') {
+    return typeof event.delta === 'string' ? event.delta : undefined;
+  }
+  if (event.type !== 'response.content_part.delta') {
+    return undefined;
+  }
+  const delta = typeof event.delta === 'string' ? event.delta : undefined;
+  if (delta) {
+    return delta;
+  }
+  const part =
+    event.part && typeof event.part === 'object' && !Array.isArray(event.part)
+      ? (event.part as Record<string, unknown>)
+      : undefined;
+  return typeof part?.text === 'string' ? part.text : delta;
+}
+
 function replaceOutput(state: DiagnosticState, text: string): void {
   state.outputBytes = encoder.encode(text).byteLength;
   state.captureComplete = state.outputBytes <= MAX_CAPTURED_OUTPUT_BYTES;
@@ -94,12 +112,9 @@ function consumeEvent(state: DiagnosticState, event: unknown): void {
   }
   const value = event as Record<string, unknown>;
   state.upstreamResponseId ??= eventResponseId(value);
-  if (
-    (value.type === 'response.output_text.delta' ||
-      value.type === 'response.content_part.delta') &&
-    typeof value.delta === 'string'
-  ) {
-    appendOutput(state, value.delta);
+  const delta = eventTextDelta(value);
+  if (delta !== undefined) {
+    appendOutput(state, delta);
     return;
   }
   if (
