@@ -293,10 +293,15 @@ selection, rendering) so the kernel work has a consumer the day it lands
   parallelism across workers, or wasm-threads behind COOP/COEP — a
   deployment decision with product consequences (cross-origin isolation
   breaks third-party embeds) that should be an ADR before code.
-- **W3. Load and size budgets.** First-load latency is flagged in the
-  capability matrix as unmeasured next to UI startup. Record wasm size per
-  kernel bump (the `report-bundle-sizes` gate covers JS; extend it to the
-  wasm asset), and measure `loading-remus` cold time on target hardware.
+- **W3. Load and size budgets.** The updater and production bundle gate now
+  measure the exact distributed WASM asset in raw, gzip, and Brotli form,
+  enforce staged review/hard limits, and report every pin delta. Measure
+  `loading-remus` cold time on target hardware next; byte size is not a load,
+  compilation, instantiation, or runtime-memory measurement.
+
+  — partial (PR #165): the optimized Remus package reduced the pinned raw
+  asset by 994,223 bytes (11.34%), and the package-size controls are complete;
+  representative cold-load timing remains open.
 - **W4. Execute the ADR-015 measurement list** (cold rebuild, warm hit,
   eviction, retained heap, large-document cloning, STEP first-load — median
   and p95) and adopt performance budget gates (P-Class 8.2) kernel-side so
