@@ -5492,10 +5492,12 @@ describe('exact kernel adapter', { timeout: 30_000 }, () => {
       }
 
       if (withRim !== null) {
-        // One measurement, reused. `volume` at 1e-5 is the expensive call in
-        // this test and it was being made twice on the same solid; under load
-        // the whole test ran to 125s against its 120s budget.
-        const measured = kernel.volume(withRim, 1e-5);
+        // One measurement, reused. The deflection sits at 5e-4mm because the
+        // kernel bounds a non-planar face's tessellation grid at 1M points:
+        // at 1e-5 the rim torus alone exceeds it and `volume` refuses. 5e-5
+        // still resolves the rim's contribution to 4e-7 relative, far inside
+        // the 1e-6 assertion below.
+        const measured = kernel.volume(withRim, 5e-5);
         // It took the whole selection, so the rim has to be rounded — a result
         // that matches the perimeter-only solid means the rim went missing.
         const types = faceTypes(withRim);
