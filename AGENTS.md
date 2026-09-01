@@ -94,13 +94,18 @@ An element styled entirely from a parent, a child, or a wrapper component
 belongs in `UNSTYLED_ALLOWANCES` in that script together with the reason; an
 entry that stops matching fails as stale, so the list cannot quietly rot.
 
-**No status check is required to merge.** The org is on GitHub Free and this
-repo is private, so branch protection and rulesets are unavailable — GitHub
-reports every open PR as mergeable regardless of CI. Two consequences:
+**`main` is protected, but the protection is narrower than the merge gate.**
+The repository is public, so branch protection is available on GitHub Free:
+`main` requires the `validate` and `e2e` check runs to pass before a merge.
+Three gaps remain, so the checks still have to be read by hand:
+`Cloudflare version / verify` is not a required check, `enforce_admins` is
+off (an admin merge bypasses the requirement), and the rule does not require
+the branch to be up to date with `main`. Consequences:
 
-- **Never `gh pr merge --auto` here.** With nothing required, "merge when
-  checks pass" silently means "merge now". Merging before the shards report
-  has already put a red `main` in front of us: #55 went in with three
+- **Never `gh pr merge --auto` here.** Auto-merge fires the moment the
+  *required* checks pass, so it never waits for `Cloudflare version /
+  verify`. Merging before the shards reported has already put a red `main`
+  in front of us once, before protection existed: #55 went in with three
   Playwright shards outstanding, and shard 3 was failing.
 - **Read `gh pr checks` and see `validate`, `e2e`, and `Cloudflare version /
   verify` pass before merging.** `validate` is the slow one at roughly seven
@@ -113,16 +118,18 @@ reports every open PR as mergeable regardless of CI. Two consequences:
   complete within a minute of a push — reading "suite succeeded" as "CI
   succeeded" will call a PR green while `validate` and the shards are still
   running.
-- **Confirm a run exists for the PR's current head at all.** A pull request
-  can sit with no `ci` run against the commit you are about to merge, and the
-  checks list then looks quiet rather than wrong. Two causes have been seen:
-  a PR conflicting with its base has no merge ref for `pull_request` workflows
-  to run against, so none are scheduled until the conflict is resolved (#55
-  sat that way, its only green checks Cloudflare's); and some pushes produce
-  no `synchronize` run even on a mergeable branch (#57's `8aad6c5` and
-  `017b91d` heads got manual dispatches only, while its other heads triggered
-  normally). Absence of red is not green — match a run's `head_sha` to the
-  PR's, and dispatch `ci.yml` manually when none exists.
+- **Confirm a run exists for the PR's current head at all.** Protection
+  blocks the merge while `validate` or `e2e` has not reported, but nothing
+  guards `Cloudflare version / verify` the same way, and a pull request can
+  sit with no `ci` run against the commit you are about to merge. Two causes
+  have been seen: a PR conflicting with its base has no merge ref for
+  `pull_request` workflows to run against, so none are scheduled until the
+  conflict is resolved (#55 sat that way, its only green checks
+  Cloudflare's); and some pushes produce no `synchronize` run even on a
+  mergeable branch (#57's `8aad6c5` and `017b91d` heads got manual dispatches
+  only, while its other heads triggered normally). Absence of red is not
+  green — match a run's `head_sha` to the PR's, and dispatch `ci.yml`
+  manually when none exists.
 - **Do not manually dispatch `Cloudflare version` to fill that gap.** Its
   `upload` job is gated `if: github.event_name != 'pull_request'`, so a
   `workflow_dispatch` runs a real `wrangler versions upload`, which fails on
