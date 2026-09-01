@@ -15,9 +15,12 @@
  *
  * Deliberately narrow. It covers a planar face whose inner bound is a single
  * full circle, which is the signature #115 documents and the one remus's own
- * older exporter produced. A multi-edge inner loop needs the loop's signed area
- * and is reported as UNSCREENED rather than as clean — absence of a finding is
- * only meaningful for the shapes listed in {@link StepInnerLoopScreen.screened}.
+ * older exporter produced. The circle may sit behind the TRIMMED_CURVE wrapper
+ * the current exporter gives every curved edge; the wrapper is seen through,
+ * with its sense flag composed. A multi-edge inner loop needs the loop's
+ * signed area and is reported as UNSCREENED rather than as clean — absence of
+ * a finding is only meaningful for the shapes listed in
+ * {@link StepInnerLoopScreen.screened}.
  */
 
 /** One entity: its type keyword and its raw, comma-separated argument text. */
@@ -160,8 +163,21 @@ export function screenStepInnerLoops(text: string): StepInnerLoopScreen {
       if (edgeSense === null || edge?.type !== 'EDGE_CURVE') continue;
       const edgeArgs = splitArgs(edge.args);
       const curveSense = sense(edgeArgs[4] ?? '');
-      const curve = entities.get(entityRefs(edgeArgs[3] ?? '')[0] ?? -1);
+      let curve = entities.get(entityRefs(edgeArgs[3] ?? '')[0] ?? -1);
       if (curveSense === null || !curve) continue;
+      // The current exporter wraps curved edges in a TRIMMED_CURVE carrying
+      // the edge's parameter authority. The wrapper bounds the parameter
+      // range; the winding still comes from the basis curve, with the trim's
+      // own sense flag composing in.
+      let trimSense = 1;
+      if (curve.type === 'TRIMMED_CURVE') {
+        const trimArgs = splitArgs(curve.args);
+        const senseAgreement = sense(trimArgs[4] ?? '');
+        const basis = entities.get(entityRefs(trimArgs[1] ?? '')[0] ?? -1);
+        if (senseAgreement === null || !basis) continue;
+        trimSense = senseAgreement;
+        curve = basis;
+      }
       if (curve.type !== 'CIRCLE') {
         unscreened += 1;
         continue;
@@ -173,7 +189,7 @@ export function screenStepInnerLoops(text: string): StepInnerLoopScreen {
       // Geometric sense of the circle about the face's outward normal,
       // composed with every orientation flag between the face and the curve.
       const geometric = dot(circleAxis, normal) > 0 ? 1 : -1;
-      if (geometric * boundSense * edgeSense * curveSense > 0) {
+      if (geometric * boundSense * edgeSense * curveSense * trimSense > 0) {
         findings.push({ faceId, normal, circleAxis });
       }
     }

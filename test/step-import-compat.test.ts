@@ -31,7 +31,29 @@ function declareDegrees(step: string): string {
         `${prefix}${(Number(angle) / DEGREE_TO_RADIAN).toPrecision(17)}${suffix}`
     );
 
-  return converted.replace(
+  // A TRIMMED_CURVE's parameter values on a circle are angles, and the kernel
+  // reads them in the file's declared plane-angle unit just like the
+  // CONICAL_SURFACE half-angle. Convert them too, or the declared trims stop
+  // landing on the edge's vertices and the import rightly refuses the edge.
+  const withTrims = converted.replace(
+    /TRIMMED_CURVE\s*\([^;]*\);/gi,
+    (entity) => {
+      const basis = /^\s*TRIMMED_CURVE\s*\(\s*'[^']*'\s*,\s*#(\d+)/i.exec(entity);
+      if (
+        !basis ||
+        !new RegExp(`#${basis[1]}\\s*=\\s*CIRCLE\\s*\\(`, 'i').test(converted)
+      ) {
+        return entity;
+      }
+      return entity.replace(
+        /PARAMETER_VALUE\(\s*([+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:E[+-]?\d+)?)\s*\)/gi,
+        (_match, value: string) =>
+          `PARAMETER_VALUE(${(Number(value) / DEGREE_TO_RADIAN).toPrecision(17)})`
+      );
+    }
+  );
+
+  return withTrims.replace(
     /\nENDSEC;\s*\nEND-ISO-10303-21;/,
     `\n#900001 = PLANE_ANGLE_MEASURE_WITH_UNIT(PLANE_ANGLE_MEASURE(${DEGREE_TO_RADIAN}),#900002);\n#900002 = ( NAMED_UNIT(*) PLANE_ANGLE_UNIT() SI_UNIT($,.RADIAN.) );\nENDSEC;\nEND-ISO-10303-21;`
   );

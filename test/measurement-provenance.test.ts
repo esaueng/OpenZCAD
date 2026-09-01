@@ -14,14 +14,17 @@
  *   box face area              rel = 0            EXACT
  *   cylinder lateral area      rel = 0            EXACT   (closed form)
  *   sphere area                rel = 0            EXACT   (closed form)
- *   cylinder PLANAR cap area   rel = -1.004e-4    SAMPLED <- a planar face!
+ *   cylinder PLANAR cap area   rel = 0            EXACT   (Green's theorem)
+ *   ellipse cap area           rel = -1.004e-4    SAMPLED <- the fallback
  *   any facePerimeter          rel = 0            EXACT
  *
- * The cap is the surprise. "Planar" does not imply "exact": a planar face
- * whose boundary is curved has its area computed from a polygon inscribed in
- * that boundary, so it reads LOW. The error is invariant under both scale and
- * deflection, which is what identifies it as a fixed sample count rather than
- * a tessellation artifact — see the inscribed-polygon test below, which
+ * A planar face whose boundary is made of lines, circles or parabolas
+ * integrates exactly by Green's theorem over the boundary. The sampled class
+ * that remains is the boundary the exact integrator does not cover —
+ * ellipse, hyperbola, NURBS — inscribed with a fixed 256-point polygon, so
+ * it reads LOW. The error is invariant under both scale and deflection,
+ * which is what identifies it as a fixed sample count rather than a
+ * tessellation artifact — see the inscribed-polygon test below, which
  * recovers the sample count from the error itself.
  *
  * This matters beyond a label. `MEASUREMENT_DEFLECTION` is the knob a caller
@@ -54,6 +57,26 @@ function relativeError(value: number, exact: number): number {
   return (value - exact) / exact;
 }
 
+/**
+ * Semi-axes 10·scale by 20·scale, so the exact area is 200*pi*scale^2. The
+ * elliptic cylinder is the one readily built boundary class the kernel's
+ * exact planar integrator does not cover, which keeps the sampled fallback
+ * measurable.
+ */
+const ELLIPTIC_CAP_AREA = 200 * Math.PI;
+
+function ellipticCap(scale: number): number {
+  // A non-uniform transform turns the cylinder's circular cap into an
+  // ellipse (a concrete EdgeCurve::Ellipse, not a NURBS).
+  const scaled = useKernel().copyAndTransformSolid(
+    useKernel().makeCylinder(10 * scale, 20),
+    new Float64Array([1, 0, 0, 0, 0, 2, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1])
+  );
+  return facesOf(scaled).find(
+    (face) => useKernel().getSurfaceType(face) === 'plane'
+  )!;
+}
+
 describe('face area provenance', () => {
   it('is exact for a planar face with straight edges', () => {
     const box = useKernel().makeBox(20, 20, 20);
@@ -84,8 +107,9 @@ describe('face area provenance', () => {
     expect(relativeError(sphereArea, 4 * Math.PI * 100)).toBe(0);
   });
 
-  it('is SAMPLED for a planar face with a curved boundary, and reads low', () => {
-    // The disc cap of a cylinder: planar, and bounded by one circle.
+  it('is EXACT for a planar face bounded by a circle', () => {
+    // The disc cap of a cylinder: planar, bounded by one circle, and
+    // integrated by Green's theorem over the boundary rather than sampled.
     const cylinder = useKernel().makeCylinder(10, 20);
     const cap = facesOf(cylinder).find(
       (face) => useKernel().getSurfaceType(face) === 'plane'
@@ -95,48 +119,51 @@ describe('face area provenance', () => {
       Math.PI * 100
     );
 
+    expect(Math.abs(error)).toBeLessThan(1e-12);
+  }, 120_000);
+
+  it('is SAMPLED for a planar face bounded by an ellipse, and reads low', () => {
+    const error = relativeError(
+      useKernel().faceArea(ellipticCap(1), MEASUREMENT_DEFLECTION),
+      ELLIPTIC_CAP_AREA
+    );
+
     // Inscribed, so under-reported, by ~100 parts per million. That is
-    // visible at four decimal places on a 100 mm disc.
+    // visible at four decimal places on a 100 mm-scale disc.
     expect(error).toBeLessThan(0);
     expect(error).toBeCloseTo(-1.004e-4, 7);
   }, 120_000);
 
   it('samples that boundary a FIXED number of times — deflection buys nothing', () => {
-    const cylinder = useKernel().makeCylinder(10, 20);
-    const cap = facesOf(cylinder).find(
-      (face) => useKernel().getSurfaceType(face) === 'plane'
-    )!;
+    const cap = ellipticCap(1);
 
     // A 500x range of deflection, including one far finer than the app ever
     // asks for. If this were tessellation-bound the error would collapse.
     const errors = [0.5, MEASUREMENT_DEFLECTION, 0.001].map((deflection) =>
-      relativeError(useKernel().faceArea(cap, deflection), Math.PI * 100)
+      relativeError(useKernel().faceArea(cap, deflection), ELLIPTIC_CAP_AREA)
     );
     expect(errors[1]).toBe(errors[0]);
     expect(errors[2]).toBe(errors[0]);
   }, 120_000);
 
   it('is scale-invariant, and the error recovers a 256-point boundary', () => {
-    // Same relative error across four orders of magnitude of radius: the
+    // Same relative error across four orders of magnitude of size: the
     // count is fixed, not chosen from the geometry.
-    const errors = [1, 10, 100, 1000].map((radius) => {
-      const cylinder = useKernel().makeCylinder(radius, 20);
-      const cap = facesOf(cylinder).find(
-        (face) => useKernel().getSurfaceType(face) === 'plane'
-      )!;
-      return relativeError(
-        useKernel().faceArea(cap, MEASUREMENT_DEFLECTION),
-        Math.PI * radius * radius
-      );
-    });
+    const errors = [1, 10, 100, 1000].map((scale) =>
+      relativeError(
+        useKernel().faceArea(ellipticCap(scale), MEASUREMENT_DEFLECTION),
+        ELLIPTIC_CAP_AREA * scale * scale
+      )
+    );
     for (const error of errors) {
       expect(error).toBeCloseTo(errors[0]!, 12);
     }
 
-    // A regular n-gon inscribed in a circle has area ratio
-    // n*sin(2*pi/n)/(2*pi). Solving that against the measured error names
-    // the sample count outright, which is the difference between "some
-    // approximation" and a number a reader can reason about.
+    // A regular n-gon inscribed in an ellipse (uniform in the eccentric
+    // anomaly) keeps area ratio n*sin(2*pi/n)/(2*pi), exactly as for a
+    // circle. Solving that against the measured error names the sample
+    // count outright, which is the difference between "some approximation"
+    // and a number a reader can reason about.
     const ratioFor = (n: number) =>
       (n * Math.sin((2 * Math.PI) / n)) / (2 * Math.PI);
     expect(ratioFor(256) - 1).toBeCloseTo(errors[0]!, 9);
@@ -157,10 +184,11 @@ describe('face perimeter provenance', () => {
     const cap = facesOf(cylinder).find(
       (face) => useKernel().getSurfaceType(face) === 'plane'
     )!;
-    // Exact where the AREA of the same face is not: perimeter sums exact edge
-    // arclength, area inscribes a polygon. So a face can honestly publish an
-    // exact perimeter beside a sampled area, and the ladder must grade the two
-    // fields separately rather than grading the face.
+    // Exact, as is the area of the same face: the perimeter sums exact edge
+    // arclength, and the circle-bounded disc integrates exactly. On a face
+    // whose boundary falls to the sampled path an exact perimeter still sits
+    // beside a sampled area, and the ladder must grade the two fields
+    // separately rather than grading the face.
     expect(
       relativeError(useKernel().facePerimeter(cap), 2 * Math.PI * 10)
     ).toBe(0);
