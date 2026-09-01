@@ -1,7 +1,19 @@
 import { gzipSync } from 'node:zlib';
-import { readFileSync, readdirSync } from 'node:fs';
+import {
+  appendFileSync,
+  readFileSync,
+  readdirSync,
+  writeFileSync
+} from 'node:fs';
 import { extname, join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import {
+  evaluateKernelWasm,
+  KERNEL_WASM_ASSET_PATTERN,
+  KERNEL_WASM_POLICY,
+  kernelPolicyToolchain,
+  measureKernelWasm
+} from './bundle-size-policy.mjs';
 
 const DIST = fileURLToPath(new URL('../apps/web/dist/', import.meta.url));
 const REPORTED_EXTENSIONS = new Set(['.css', '.js', '.mjs', '.wasm']);
@@ -30,12 +42,11 @@ const APPROVED_LAZY_ASSETS = [
     reason: 'PDF parsing worker, loaded only for PDF attachments'
   },
   {
-    pattern: /^assets\/(?:remus|brepkit)_wasm_bg-.*\.wasm$/,
-    // 2026-08-31: raised from 8 MiB for the Remus 2.130 pin — the wasm grew
-    // 8,347,831 → 8,771,141 bytes with the exact planar-boundary integrator
-    // and the edge-domain authority work. The kernel ships as one artifact
-    // the app cannot split, so the raise rides the pin that caused it.
-    maxBytes: 9 * 1024 * 1024,
+    pattern: KERNEL_WASM_ASSET_PATTERN,
+    reviewBytes: KERNEL_WASM_POLICY.rawReviewBytes,
+    maxBytes: KERNEL_WASM_POLICY.rawHardBytes,
+    maxGzipBytes: KERNEL_WASM_POLICY.gzipHardBytes,
+    reviewBrotliBytes: KERNEL_WASM_POLICY.brotliReviewBytes,
     reason: 'Exact geometry kernel, loaded only for non-empty geometry'
   },
   {
@@ -47,7 +58,7 @@ const APPROVED_LAZY_ASSETS = [
 const LAZY_ENTRY_PATTERNS = [
   /^assets\/(?:three|three-addons)-.*\.js$/,
   /^assets\/(?:ViewerShell|partThumbnail|pdf|exact|src)-.*\.js$/,
-  /^assets\/(?:remus|brepkit)_wasm_bg-.*\.wasm$/,
+  KERNEL_WASM_ASSET_PATTERN,
   /^assets\/sqlite3-.*\.wasm$/,
   /^assets\/shaprImportWorker-.*\.js$/
 ];
@@ -65,8 +76,18 @@ function collect(directory) {
 const rows = collect(DIST)
   .map((path) => {
     const contents = readFileSync(path);
+    const file = relative(DIST, path).replaceAll('\\', '/');
+    if (KERNEL_WASM_ASSET_PATTERN.test(file)) {
+      const measurement = measureKernelWasm(contents);
+      return {
+        file,
+        bytes: measurement.rawBytes,
+        gzipBytes: measurement.gzipBytes,
+        brotliBytes: measurement.brotliBytes
+      };
+    }
     return {
-      file: relative(DIST, path).replaceAll('\\', '/'),
+      file,
       bytes: contents.byteLength,
       gzipBytes: gzipSync(contents).byteLength
     };
@@ -85,6 +106,13 @@ const totals = rows.reduce(
 );
 
 const failures = rows.flatMap((row) => {
+  if (KERNEL_WASM_ASSET_PATTERN.test(row.file)) {
+    return evaluateKernelWasm({
+      rawBytes: row.bytes,
+      gzipBytes: row.gzipBytes,
+      brotliBytes: row.brotliBytes
+    }).failures.map((failure) => ({ file: row.file, ...failure }));
+  }
   if (row.bytes <= DEFAULT_RAW_BUDGET) {
     return [];
   }
@@ -102,6 +130,17 @@ const failures = rows.flatMap((row) => {
       reason: exception?.reason ?? 'No approved large-asset exception'
     }
   ];
+});
+
+const warnings = rows.flatMap((row) => {
+  if (!KERNEL_WASM_ASSET_PATTERN.test(row.file)) {
+    return [];
+  }
+  return evaluateKernelWasm({
+    rawBytes: row.bytes,
+    gzipBytes: row.gzipBytes,
+    brotliBytes: row.brotliBytes
+  }).warnings.map((warning) => ({ file: row.file, ...warning }));
 });
 
 const indexHtml = readFileSync(join(DIST, 'index.html'), 'utf8');
@@ -139,8 +178,8 @@ if (
  * This REPORTS and does not gate — the pass/fail decision above is untouched.
  * It exists because a budget with a hard edge and no visible approach tells
  * you nothing until the day it fails, and that day lands on whoever happens
- * to push next rather than on whoever spent the headroom. The kernel wasm
- * sits near its allowance, so the margin is real but finite.
+ * to push next rather than on whoever spent the headroom. The kernel has a
+ * lower review threshold so approaching the hard edge is visible first.
  *
  * Growth is NOT uniform, which is why the raw number is more useful than any
  * rate: measured across one day of pin bumps, defect-fix kernel PRs cost
@@ -162,40 +201,111 @@ const headroom = rows.flatMap((row) => {
     {
       file: row.file,
       bytes: row.bytes,
+      gzipBytes: row.gzipBytes,
+      ...(row.brotliBytes === undefined
+        ? {}
+        : { brotliBytes: row.brotliBytes }),
+      ...(exception.reviewBytes === undefined
+        ? {}
+        : {
+            reviewBytes: exception.reviewBytes,
+            reviewRemainingBytes: exception.reviewBytes - row.bytes
+          }),
       maxBytes: exception.maxBytes,
       remainingBytes: exception.maxBytes - row.bytes,
-      usedPercent: Number(((row.bytes / exception.maxBytes) * 100).toFixed(2))
+      usedPercent: Number(((row.bytes / exception.maxBytes) * 100).toFixed(2)),
+      ...(exception.maxGzipBytes === undefined
+        ? {}
+        : {
+            maxGzipBytes: exception.maxGzipBytes,
+            gzipRemainingBytes: exception.maxGzipBytes - row.gzipBytes
+          }),
+      ...(exception.reviewBrotliBytes === undefined
+        ? {}
+        : {
+            reviewBrotliBytes: exception.reviewBrotliBytes,
+            brotliReviewRemainingBytes:
+              exception.reviewBrotliBytes - row.brotliBytes
+          })
     }
   ];
 });
 
-process.stdout.write(
-  `${JSON.stringify(
-    {
-      budgets: {
-        defaultRawBytes: DEFAULT_RAW_BUDGET,
-        approvedLazyAssets: APPROVED_LAZY_ASSETS.map(
-          ({ pattern, maxBytes, reason }) => ({
-            pattern: pattern.source,
-            maxBytes,
-            reason
-          })
-        )
-      },
-      headroom,
-      initialAssets,
-      provenance: {
-        commit: metadata.commit,
-        remus: metadata.remus
-      },
-      rows,
-      totals,
-      failures
-    },
-    null,
-    2
-  )}\n`
-);
+const report = {
+  budgets: {
+    defaultRawBytes: DEFAULT_RAW_BUDGET,
+    approvedLazyAssets: APPROVED_LAZY_ASSETS.map(
+      ({
+        pattern,
+        reviewBytes,
+        maxBytes,
+        maxGzipBytes,
+        reviewBrotliBytes,
+        reason
+      }) => ({
+        pattern: pattern.source,
+        ...(reviewBytes === undefined ? {} : { reviewBytes }),
+        maxBytes,
+        ...(maxGzipBytes === undefined ? {} : { maxGzipBytes }),
+        ...(reviewBrotliBytes === undefined ? {} : { reviewBrotliBytes }),
+        reason
+      })
+    )
+  },
+  kernelMeasurementToolchain: kernelPolicyToolchain(),
+  headroom,
+  initialAssets,
+  provenance: {
+    commit: metadata.commit,
+    remus: metadata.remus
+  },
+  rows,
+  totals,
+  warnings,
+  failures
+};
+const reportJson = `${JSON.stringify(report, null, 2)}\n`;
+
+process.stdout.write(reportJson);
+
+if (process.env.OPENZCAD_BUNDLE_REPORT_PATH) {
+  writeFileSync(process.env.OPENZCAD_BUNDLE_REPORT_PATH, reportJson);
+}
+
+function annotationEscape(value) {
+  return String(value)
+    .replaceAll('%', '%25')
+    .replaceAll('\r', '%0D')
+    .replaceAll('\n', '%0A');
+}
+
+if (process.env.GITHUB_ACTIONS === 'true') {
+  for (const warning of warnings) {
+    process.stderr.write(
+      `::warning title=Kernel WASM size review::${annotationEscape(`${warning.file}: ${warning.metric} ${warning.bytes} reached review threshold ${warning.budgetBytes}`)}\n`
+    );
+  }
+  for (const failure of failures) {
+    process.stderr.write(
+      `::error title=Bundle size budget exceeded::${annotationEscape(`${failure.file}: ${failure.metric ?? 'raw bytes'} ${failure.bytes ?? 'unknown'} exceeded ${failure.budgetBytes ?? 'its policy'}`)}\n`
+    );
+  }
+}
+
+if (
+  process.env.OPENZCAD_BUNDLE_GITHUB_SUMMARY === '1' &&
+  process.env.GITHUB_STEP_SUMMARY
+) {
+  const kernel = headroom.find(({ file }) =>
+    KERNEL_WASM_ASSET_PATTERN.test(file)
+  );
+  if (kernel) {
+    appendFileSync(
+      process.env.GITHUB_STEP_SUMMARY,
+      `## Kernel WASM size\n\n| Raw | Gzip | Brotli q${KERNEL_WASM_POLICY.brotliQuality} | Raw review | Raw hard | Gzip hard |\n| ---: | ---: | ---: | ---: | ---: | ---: |\n| ${kernel.bytes} B | ${kernel.gzipBytes} B | ${kernel.brotliBytes} B | ${kernel.reviewBytes} B | ${kernel.maxBytes} B | ${kernel.maxGzipBytes} B |\n\nWarnings: ${warnings.length}; failures: ${failures.length}.\n\n`
+    );
+  }
+}
 
 if (CHECK && failures.length > 0) {
   process.exitCode = 1;
