@@ -82,6 +82,11 @@ export function ProposalCard({
             : 'Nothing was changed.'}
         </span>
       )}
+      {!resolved && entry.proposal.preserveGeometry && (
+        <span className="assistant-card-note">
+          Exact preflight must prove the current geometry is unchanged.
+        </span>
+      )}
 
       {entry.readings.length > 0 && (
         <div className="assistant-readings">

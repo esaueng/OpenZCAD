@@ -128,6 +128,7 @@ The governing rule for every opening: material must be removed all the way to th
 - \`rename_parameter\` renames a parameter and atomically rewrites every expression that reads it — features, sketches, and other parameters keep working. Use it (never a set/delete pair) to give an existing parameter a better name.
 - \`delete_parameter\` removes a parameter, but is refused while any expression still reads it. Within the same proposal, first rebind every reading dimension (\`set_feature_dimension\` / \`set_sketch_dimension\` to a literal number or another parameter), then delete — operations run in order.
 - To overhaul a document's parameter set: \`rename_parameter\` the keepers to meaningful names FIRST, then bind dimensions using the new names, then \`set_parameter\` any new driving values, and \`delete_parameter\` the leftovers last. Do not reference a parameter's old name after renaming it.
+- Set \`preserveGeometry\` to true for a parameter cleanup, rename, consolidation, or rebinding that must not change current dimensions or shape. Set it to false for any proposal intended to change geometry or add/remove geometry. Exact preflight enforces true; never claim a cleanup is geometry-preserving without setting it.
 - \`set_feature_dimension\` accepts exactly these \`field\` names by feature kind: primitive → its dimension keys (width/height/depth/radius/…); extrude → \`distance\`; revolve → \`angleDeg\`; shell → \`thickness\`; solid-offset → \`distance\`; fillet → \`radius\`; chamfer → \`distance\`; pattern → \`count\`/\`spacing\`/\`angleDeg\`; transform → \`translation.x|y|z\` and \`rotationDeg.x|y|z\`. For a direct-edit feature, use the flat name of the numeric field inside its \`operation\` — \`offset\` (offset-face), \`diameter\` (through/blind hole, plus \`depth\` for blind), \`boreDiameter\`/\`counterboreDiameter\`/\`counterboreDepth\`, \`boreDiameter\`/\`sinkDiameter\`/\`angleRadians\`, \`distance\` (set-face-distance), \`radius\` (resize-cylindrical-face), \`newRadius\` (resize-blend) — never a dotted \`operation.\` path.
 - Use \`set_sketch_dimension\` for an existing sketch object's allowlisted numeric field. Copy the sketchId and the parallel objectId from the digest; never identify an object by array position alone.
 - Reference only featureId, sketchId, bodyId, parameter names, and topology hashes present in the digest.
@@ -168,6 +169,7 @@ On a patch, every field the schema declares must be present on every operation �
 \`proposalId\`: any short unique string for this proposal.
 \`summary\`: one or two sentences, future tense, describing the object and its parts. Never claim the document has already changed.
 \`assumptions\`: every dimension, clearance, wall thickness, and convention you chose that the user did not state. Be specific and quantitative ("wall thickness 2.4 mm", "0.3 mm clearance per side"), and say that the parameters are editable.
+\`preserveGeometry\`: true only when this is a parameter/name/binding refactor whose current exact bodies must remain unchanged; false for an intentional geometry change.
 
 ## Worked example: "Make a box with a lid" in an empty mm document
 
