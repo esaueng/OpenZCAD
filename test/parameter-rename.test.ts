@@ -9,6 +9,7 @@ import {
   listFeaturesInOrder,
   listParameters,
   renameParameter,
+  resolveParamValue,
   setParameter
 } from '@openzcad/document-core';
 import {
@@ -112,9 +113,9 @@ describe('renameParameter', () => {
     });
     const applied = command.apply(document);
     const replayed = replayCommands(document, [command.serialize()]);
-    expect(
-      listParameters(replayed).map((parameter) => parameter.name)
-    ).toEqual(listParameters(applied).map((parameter) => parameter.name));
+    expect(listParameters(replayed).map((parameter) => parameter.name)).toEqual(
+      listParameters(applied).map((parameter) => parameter.name)
+    );
   });
 });
 
@@ -139,7 +140,10 @@ describe('parameter patch operations', () => {
         }
       ]
     });
-    manager.runTransaction('Apply AI patch', commandsForCadPatch(manager.document, proposal));
+    manager.runTransaction(
+      'Apply AI patch',
+      commandsForCadPatch(manager.document, proposal)
+    );
 
     const names = listParameters(manager.document).map(
       (parameter) => parameter.name
@@ -169,8 +173,304 @@ describe('parameter patch operations', () => {
         { kind: 'delete_parameter', name: 'legacy' }
       ]
     });
-    manager.runTransaction('Apply AI patch', commandsForCadPatch(manager.document, proposal));
+    manager.runTransaction(
+      'Apply AI patch',
+      commandsForCadPatch(manager.document, proposal)
+    );
     expect(listParameters(manager.document)).toHaveLength(0);
+  });
+
+  it('keeps earlier renames when later edits update the same direct feature', () => {
+    let document = createProjectDocument('Hole cleanup', USER, 'mm');
+    document = setParameter(document, {
+      name: 'm4_hole_1_radius',
+      expression: '2.25'
+    });
+    document = setParameter(document, {
+      name: 'm4_hole_1_depth',
+      expression: '8'
+    });
+    document = addPrimitiveFeature(document, {
+      name: 'Plate',
+      primitiveKind: 'box',
+      dimensions: { width: 80, height: 60, depth: 6 }
+    });
+    const plateBodyId = document.bodyOrder.at(-1)!;
+    document = directEditBody(document, {
+      name: 'M4 Hole 1',
+      targetBodyId: plateBodyId,
+      operation: {
+        kind: 'resize-imported-blind-hole',
+        faceHash: 101,
+        sourceOpeningPoint: { x: 10, y: 10, z: 6 },
+        sourceAxisDirection: { x: 0, y: 0, z: -1 },
+        sourceDiameter: 4.5,
+        sourceDepth: 8,
+        diameter: 'm4_hole_1_radius * 2',
+        depth: 'm4_hole_1_depth'
+      }
+    }).document;
+    const hole = listFeaturesInOrder(document).at(-1)!;
+    const proposal = parseCadPatchProposal({
+      proposalId: 'proposal_hole_cleanup',
+      summary: 'Consolidate the M4 hole dimensions.',
+      assumptions: [],
+      preserveGeometry: true,
+      operations: [
+        {
+          kind: 'rename_parameter',
+          name: 'm4_hole_1_radius',
+          newName: 'm4_hole_radius'
+        },
+        {
+          kind: 'rename_parameter',
+          name: 'm4_hole_1_depth',
+          newName: 'm4_hole_depth'
+        },
+        {
+          kind: 'set_feature_dimension',
+          featureId: hole.featureId,
+          field: 'diameter',
+          value: 'm4_hole_radius * 2'
+        },
+        {
+          kind: 'set_feature_dimension',
+          featureId: hole.featureId,
+          field: 'depth',
+          value: 'm4_hole_depth'
+        }
+      ]
+    });
+
+    const manager = new CommandManager(document);
+    manager.runTransaction(
+      'Apply AI patch',
+      commandsForCadPatch(manager.document, proposal)
+    );
+
+    expect(listFeaturesInOrder(manager.document).at(-1)?.data).toMatchObject({
+      featureKind: 'direct-edit',
+      operation: {
+        diameter: 'm4_hole_radius * 2',
+        depth: 'm4_hole_depth'
+      }
+    });
+    expect(listParameters(manager.document).map(({ name }) => name)).toEqual([
+      'm4_hole_radius',
+      'm4_hole_depth'
+    ]);
+  });
+
+  it('consolidates a high-cardinality hole layout without reviving stale parameters', () => {
+    let document = createProjectDocument('M4 hole grid', USER, 'mm');
+    const plateParameters = {
+      plate_width: '120',
+      plate_height: '80',
+      plate_thickness: '6',
+      cutout_width: '40',
+      cutout_height: '24'
+    };
+    for (const [name, expression] of Object.entries(plateParameters)) {
+      document = setParameter(document, { name, expression });
+    }
+    for (let holeNumber = 1; holeNumber <= 8; holeNumber += 1) {
+      const column = (holeNumber - 1) % 4;
+      const row = Math.floor((holeNumber - 1) / 4);
+      for (const [suffix, expression] of Object.entries({
+        radius: '2.25',
+        depth: '8',
+        x: String(15 + column * 30),
+        y: String(20 + row * 40),
+        z: '6'
+      })) {
+        document = setParameter(document, {
+          name: `m4_hole_${holeNumber}_${suffix}`,
+          expression
+        });
+      }
+    }
+    expect(listParameters(document)).toHaveLength(45);
+
+    document = addPrimitiveFeature(document, {
+      name: 'Mounting plate',
+      primitiveKind: 'box',
+      dimensions: {
+        width: 'plate_width',
+        height: 'plate_height',
+        depth: 'plate_thickness'
+      }
+    });
+    const plateBodyId = document.bodyOrder.at(-1)!;
+    for (let holeNumber = 1; holeNumber <= 8; holeNumber += 1) {
+      const column = (holeNumber - 1) % 4;
+      const row = Math.floor((holeNumber - 1) / 4);
+      document = directEditBody(document, {
+        name: `M4 Hole ${holeNumber}`,
+        targetBodyId: plateBodyId,
+        operation: {
+          kind: 'resize-imported-blind-hole',
+          faceHash: 100 + holeNumber,
+          sourceOpeningPoint: {
+            x: 15 + column * 30,
+            y: 20 + row * 40,
+            z: 6
+          },
+          sourceAxisDirection: { x: 0, y: 0, z: -1 },
+          sourceDiameter: 4.5,
+          sourceDepth: 8,
+          diameter: `m4_hole_${holeNumber}_radius * 2`,
+          depth: `m4_hole_${holeNumber}_depth`
+        }
+      }).document;
+    }
+    const holes = listFeaturesInOrder(document).filter(
+      (feature) => feature.data.featureKind === 'direct-edit'
+    );
+    expect(holes).toHaveLength(8);
+
+    const operations: Array<Record<string, unknown>> = [
+      {
+        kind: 'rename_parameter',
+        name: 'm4_hole_1_radius',
+        newName: 'm4_hole_radius'
+      },
+      {
+        kind: 'rename_parameter',
+        name: 'm4_hole_1_depth',
+        newName: 'm4_hole_depth'
+      }
+    ];
+    for (const hole of holes) {
+      operations.push(
+        {
+          kind: 'set_feature_dimension',
+          featureId: hole.featureId,
+          field: 'diameter',
+          value: 'm4_hole_radius * 2'
+        },
+        {
+          kind: 'set_feature_dimension',
+          featureId: hole.featureId,
+          field: 'depth',
+          value: 'm4_hole_depth'
+        }
+      );
+    }
+    for (let holeNumber = 2; holeNumber <= 8; holeNumber += 1) {
+      operations.push(
+        {
+          kind: 'delete_parameter',
+          name: `m4_hole_${holeNumber}_radius`
+        },
+        {
+          kind: 'delete_parameter',
+          name: `m4_hole_${holeNumber}_depth`
+        }
+      );
+    }
+    expect(operations).toHaveLength(32);
+
+    const proposal = parseCadPatchProposal({
+      proposalId: 'proposal_m4_grid_cleanup',
+      summary: 'Consolidate every M4 hole without moving or resizing it.',
+      assumptions: [],
+      preserveGeometry: true,
+      operations
+    });
+    const commands = commandsForCadPatch(document, proposal);
+    expect(commands).toHaveLength(32);
+
+    const manager = new CommandManager(document);
+    manager.runTransaction('Apply AI patch', commands);
+
+    const consolidatedNames = listParameters(manager.document).map(
+      ({ name }) => name
+    );
+    expect(consolidatedNames).toHaveLength(31);
+    expect(consolidatedNames).toEqual(
+      expect.arrayContaining([
+        'm4_hole_radius',
+        'm4_hole_depth',
+        'm4_hole_8_x',
+        'm4_hole_8_y',
+        'm4_hole_8_z',
+        ...Object.keys(plateParameters)
+      ])
+    );
+    expect(
+      consolidatedNames.some((name) =>
+        /^m4_hole_[1-8]_(?:radius|depth)$/.test(name)
+      )
+    ).toBe(false);
+    for (let holeNumber = 1; holeNumber <= 8; holeNumber += 1) {
+      expect(consolidatedNames).toEqual(
+        expect.arrayContaining([
+          `m4_hole_${holeNumber}_x`,
+          `m4_hole_${holeNumber}_y`,
+          `m4_hole_${holeNumber}_z`
+        ])
+      );
+    }
+
+    const expectEveryHoleToResolve = (
+      candidate: typeof manager.document,
+      diameter: number,
+      depth: number
+    ) => {
+      const { scope } = getParameterScope(candidate);
+      const directEdits = listFeaturesInOrder(candidate).filter(
+        (feature) => feature.data.featureKind === 'direct-edit'
+      );
+      expect(directEdits).toHaveLength(8);
+      for (const feature of directEdits) {
+        if (
+          feature.data.featureKind !== 'direct-edit' ||
+          feature.data.operation.kind !== 'resize-imported-blind-hole'
+        ) {
+          throw new Error('Expected a blind-hole direct edit.');
+        }
+        expect(feature.data.operation).toMatchObject({
+          diameter: 'm4_hole_radius * 2',
+          depth: 'm4_hole_depth'
+        });
+        expect(
+          resolveParamValue(feature.data.operation.diameter, scope, 'diameter')
+        ).toBe(diameter);
+        expect(
+          resolveParamValue(feature.data.operation.depth, scope, 'depth')
+        ).toBe(depth);
+      }
+    };
+    expectEveryHoleToResolve(manager.document, 4.5, 8);
+
+    const replayed = replayCommands(
+      document,
+      commands.map((command) => command.serialize())
+    );
+    expectEveryHoleToResolve(replayed, 4.5, 8);
+    expect(listParameters(replayed).map(({ name }) => name)).toEqual(
+      consolidatedNames
+    );
+
+    manager.undo();
+    expect(listParameters(manager.document)).toHaveLength(45);
+    expect(listParameters(manager.document).map(({ name }) => name)).toEqual(
+      expect.arrayContaining(['m4_hole_1_radius', 'm4_hole_8_depth'])
+    );
+    manager.redo();
+    expectEveryHoleToResolve(manager.document, 4.5, 8);
+
+    manager.runTransaction('Resize every M4 hole', [
+      commandFactories.setParameter({
+        name: 'm4_hole_radius',
+        expression: '3'
+      }),
+      commandFactories.setParameter({
+        name: 'm4_hole_depth',
+        expression: '9'
+      })
+    ]);
+    expectEveryHoleToResolve(manager.document, 6, 9);
   });
 
   it('still refuses a delete whose readers were not rebound', () => {
@@ -189,7 +489,10 @@ describe('parameter patch operations', () => {
       operations: [{ kind: 'delete_parameter', name: 'legacy' }]
     });
     expect(() =>
-      manager.runTransaction('Apply AI patch', commandsForCadPatch(manager.document, proposal))
+      manager.runTransaction(
+        'Apply AI patch',
+        commandsForCadPatch(manager.document, proposal)
+      )
     ).toThrow(/still read it/);
   });
 
