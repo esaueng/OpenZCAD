@@ -10,6 +10,6 @@
   },
   "dependencies": {
     "@sqlite.org/sqlite-wasm": "3.53.0-build1",
-    "fflate": "0.8.2"
+    "fflate": "0.8.3"
   }
 }
