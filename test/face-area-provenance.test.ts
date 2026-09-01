@@ -11,6 +11,8 @@ import {
   createExactKernelAdapter,
   type ExactKernelAdapter
 } from '@openzcad/kernel-adapter/exact';
+import { measureAreaProvenance } from '../packages/kernel-adapter/src/exact-measure';
+import { RemusKernel } from '../packages/kernel-adapter/src/remus-runtime';
 
 /**
  * Whether each published face area is exact, decided per face rather than per
@@ -25,6 +27,11 @@ import {
  * The verdict now travels with the geometry so the measurement workbench can
  * stop under-claiming for the exact ones without ever over-claiming for the
  * rest.
+ *
+ * The sampled class shrunk once: planar faces bounded by lines, circles or
+ * parabolas moved from the 256-point inscribed polygon to an exact
+ * Green's-theorem boundary integral (Remus 2.130). What remains sampled is
+ * the boundary the integrator does not cover — ellipse, hyperbola, NURBS.
  */
 
 let adapter: ExactKernelAdapter | null = null;
@@ -110,27 +117,23 @@ describe('a planar face bounded by straight edges', () => {
 });
 
 describe('a planar face bounded by a curve', () => {
-  it('is sampled, and reads LOW when the curve is the outer boundary', async () => {
-    // A cylinder's disc cap: one circular edge, inscribed with a fixed
-    // 256-point polygon that sits inside the true circle.
+  it('is exact when the curve is the outer boundary', async () => {
+    // A cylinder's disc cap: one circular edge, integrated exactly by
+    // Green's theorem over the boundary rather than inscribed as a polygon.
     const body = await bodyOf(
       primitive('cylinder', { radius: 10, height: 20 })
     );
     const caps = facesOf(body, 'plane');
     expect(caps).toHaveLength(2);
     for (const cap of caps) {
-      expect(cap.geometry?.areaProvenance).toBe('sampled');
+      expect(cap.geometry?.areaProvenance).toBe('exact');
       const error =
         ((cap.geometry?.area ?? 0) - Math.PI * 100) / (Math.PI * 100);
-      expect(error).toBeCloseTo(-1.004e-4, 7);
+      expect(Math.abs(error)).toBeLessThan(1e-12);
     }
   }, 120_000);
 
-  it('is sampled, and reads HIGH when the curve is a hole', async () => {
-    // The sign flips with which side the curve bounds. An inscribed hole is
-    // SMALLER than the true one, so it leaves more material behind — which
-    // is worth pinning, because "sampled always under-reports" is the
-    // intuition someone would otherwise carry into a tolerance argument.
+  it('is exact when the curve is a hole', async () => {
     // A box's vertical extent is `depth`, while a cylinder's is `height` —
     // a genuine asymmetry in this schema, and getting it backwards silently
     // produces a 40 mm block that the bore never passes through.
@@ -160,10 +163,54 @@ describe('a planar face bounded by a curve', () => {
     );
     expect(bored.length).toBeGreaterThan(0);
     for (const face of bored) {
-      expect(face.geometry?.areaProvenance).toBe('sampled');
-      expect((face.geometry!.area - exact) / exact).toBeGreaterThan(0);
+      expect(face.geometry?.areaProvenance).toBe('exact');
+      expect(Math.abs((face.geometry!.area - exact) / exact)).toBeLessThan(
+        1e-12
+      );
     }
   }, 180_000);
+
+  it('is sampled when the boundary is an ellipse', () => {
+    // The exact integrator covers lines, circles and parabolas. An ellipse
+    // keeps the fixed 256-point inscribed polygon, so its area must keep
+    // the sampled grade — under-claiming here is the safe direction.
+    const kernel = new RemusKernel();
+    try {
+      const scaled = kernel.copyAndTransformSolid(
+        kernel.makeCylinder(10, 20),
+        new Float64Array([1, 0, 0, 0, 0, 2, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1])
+      );
+      const cap = Array.from(kernel.getSolidFaces(scaled)).find(
+        (face) => kernel.getSurfaceType(face) === 'plane'
+      )!;
+      expect(
+        Array.from(kernel.getFaceEdges(cap)).map((edge) =>
+          kernel.getEdgeCurveType(edge)
+        )
+      ).toContain('ELLIPSE');
+      expect(measureAreaProvenance(kernel, cap, 'plane')).toBe('sampled');
+    } finally {
+      kernel.free();
+    }
+  }, 120_000);
+
+  it('is sampled when a circular boundary is stored as NURBS', () => {
+    // getEdgeCurveType reports the analytic curve a NURBS edge represents,
+    // but the kernel's exact integrator only runs on concrete curves — a
+    // NURBS circle still takes the sampled path, so the provenance must not
+    // upgrade on the detected type alone.
+    const kernel = new RemusKernel();
+    try {
+      const converted = kernel.makeCylinder(10, 20);
+      kernel.convertToBspline(converted);
+      const cap = Array.from(kernel.getSolidFaces(converted)).find(
+        (face) => kernel.getSurfaceType(face) === 'plane'
+      )!;
+      expect(measureAreaProvenance(kernel, cap, 'plane')).toBe('sampled');
+    } finally {
+      kernel.free();
+    }
+  }, 120_000);
 });
 
 describe('analytic curved surfaces', () => {
