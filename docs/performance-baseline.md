@@ -441,6 +441,14 @@ chunks (decimal kB, using Vite's gzip report):
 > non-empty geometry. All reported assets total 13,290,327 bytes raw / 4,241,003
 > bytes gzip for this build.
 
+> **Staged Remus size policy (2026-08-31).** The current OpenZCAD pin
+> `7b4d1551cab995f1c3237a27f81d90c56c375cf3` emits an 8,771,141-byte raw /
+> 2,893,806-byte Node-gzip / 2,008,808-byte Brotli-q11 kernel. The former 9 MiB
+> hard limit is now the mandatory-review threshold; 10 MiB raw and 3.5 MiB
+> gzip are independent hard limits, and 2.5 MiB Brotli remains advisory. The
+> launcher's lazy-asset exclusion is still enforced. See
+> `docs/kernel-wasm-size-policy.md` for measurement and ceiling-raise rules.
+
 The three eager UI assets total about 362.9 kB gzip. PDF worker/runtime assets
 are emitted separately and are loaded only when reference-document support is
 used. Reproduce the complete raw/gzip inventory with `pnpm build:report`; the

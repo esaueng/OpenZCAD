@@ -121,6 +121,65 @@ jobs:
                 '
           )"
 
+          old_wasm="$RUNNER_TEMP/remus-wasm-$old_sha.wasm"
+          new_wasm="$RUNNER_TEMP/remus-wasm-$new_sha.wasm"
+          download_wasm() {
+            local ref="$1"
+            local output="$2"
+            local blob_sha
+            blob_sha="$(
+              gh api \
+                "repos/esaueng/remus/contents/crates/wasm/pkg/remus_wasm_bg.wasm?ref=$ref" \
+                --jq .sha
+            )"
+            gh api "repos/esaueng/remus/git/blobs/$blob_sha" --jq .content \
+              | base64 --decode > "$output"
+          }
+          download_wasm "$old_sha" "$old_wasm"
+          download_wasm "$new_sha" "$new_wasm"
+
+          OLD_WASM="$old_wasm" NEW_WASM="$new_wasm" node --input-type=module <<'NODE' >> "$GITHUB_OUTPUT"
+          import { readFileSync } from 'node:fs';
+          import {
+            evaluateKernelPinGrowth,
+            evaluateKernelWasm,
+            measureKernelWasm
+          } from './scripts/bundle-size-policy.mjs';
+
+          const before = measureKernelWasm(readFileSync(process.env.OLD_WASM));
+          const after = measureKernelWasm(readFileSync(process.env.NEW_WASM));
+          const growth = evaluateKernelPinGrowth(before, after);
+          const policy = evaluateKernelWasm(after);
+          const reviewReasons = [
+            ...growth.triggers,
+            ...policy.warnings.map(({ reason }) => reason)
+          ];
+          const rawDeltaPercent =
+            growth.rawDeltaRatio === null ? 0 : growth.rawDeltaRatio * 100;
+
+          const outputs = {
+            old_raw_bytes: before.rawBytes,
+            new_raw_bytes: after.rawBytes,
+            raw_delta_bytes: growth.rawDeltaBytes,
+            raw_delta_percent: rawDeltaPercent.toFixed(2),
+            old_gzip_bytes: before.gzipBytes,
+            new_gzip_bytes: after.gzipBytes,
+            gzip_delta_bytes: growth.gzipDeltaBytes,
+            old_brotli_bytes: before.brotliBytes,
+            new_brotli_bytes: after.brotliBytes,
+            brotli_delta_bytes: growth.brotliDeltaBytes,
+            size_review_required: reviewReasons.length > 0,
+            size_review_reasons: reviewReasons.join('; ') || 'none',
+            size_budget_failure: policy.failures.length > 0,
+            size_budget_failures:
+              policy.failures.map(({ reason }) => reason).join('; ') || 'none'
+          };
+
+          for (const [key, value] of Object.entries(outputs)) {
+            console.log(`${key}=${value}`);
+          }
+          NODE
+
           {
             echo "changed=true"
             echo "old_sha=$old_sha"
@@ -196,6 +255,20 @@ jobs:
           NEW_SHA: ${{ steps.update.outputs.new_sha }}
           SHORT_SHA: ${{ steps.update.outputs.short_sha }}
           PACKAGE_VERSION: ${{ steps.update.outputs.package_version }}
+          OLD_RAW_BYTES: ${{ steps.update.outputs.old_raw_bytes }}
+          NEW_RAW_BYTES: ${{ steps.update.outputs.new_raw_bytes }}
+          RAW_DELTA_BYTES: ${{ steps.update.outputs.raw_delta_bytes }}
+          RAW_DELTA_PERCENT: ${{ steps.update.outputs.raw_delta_percent }}
+          OLD_GZIP_BYTES: ${{ steps.update.outputs.old_gzip_bytes }}
+          NEW_GZIP_BYTES: ${{ steps.update.outputs.new_gzip_bytes }}
+          GZIP_DELTA_BYTES: ${{ steps.update.outputs.gzip_delta_bytes }}
+          OLD_BROTLI_BYTES: ${{ steps.update.outputs.old_brotli_bytes }}
+          NEW_BROTLI_BYTES: ${{ steps.update.outputs.new_brotli_bytes }}
+          BROTLI_DELTA_BYTES: ${{ steps.update.outputs.brotli_delta_bytes }}
+          SIZE_REVIEW_REQUIRED: ${{ steps.update.outputs.size_review_required }}
+          SIZE_REVIEW_REASONS: ${{ steps.update.outputs.size_review_reasons }}
+          SIZE_BUDGET_FAILURE: ${{ steps.update.outputs.size_budget_failure }}
+          SIZE_BUDGET_FAILURES: ${{ steps.update.outputs.size_budget_failures }}
         run: |
           body_file="$RUNNER_TEMP/remus-update-pr.md"
           compare_url="https://github.com/esaueng/remus/compare/$OLD_SHA...$NEW_SHA"
@@ -207,6 +280,22 @@ jobs:
             echo "- package version: \`$PACKAGE_VERSION\`"
             echo "- compare: $compare_url"
             echo
+            echo '## Kernel WASM size'
+            echo
+            echo '| Metric | Before | After | Delta |'
+            echo '| --- | ---: | ---: | ---: |'
+            echo "| Raw | $OLD_RAW_BYTES B | $NEW_RAW_BYTES B | $RAW_DELTA_BYTES B ($RAW_DELTA_PERCENT%) |"
+            echo "| Node gzip | $OLD_GZIP_BYTES B | $NEW_GZIP_BYTES B | $GZIP_DELTA_BYTES B |"
+            echo "| Brotli q11 | $OLD_BROTLI_BYTES B | $NEW_BROTLI_BYTES B | $BROTLI_DELTA_BYTES B |"
+            echo
+            if [[ "$SIZE_REVIEW_REQUIRED" == 'true' ]]; then
+              echo "> **Kernel-size review required:** $SIZE_REVIEW_REASONS."
+              echo
+            fi
+            if [[ "$SIZE_BUDGET_FAILURE" == 'true' ]]; then
+              echo "> **The package exceeds a hard budget:** $SIZE_BUDGET_FAILURES. CI must remain red; do not raise the budget in this routine pin PR."
+              echo
+            fi
             echo '## Reproducibility'
             echo
             echo 'The manifest tracks `main` only as the updater input. The committed `pnpm-lock.yaml` resolves it to the immutable new commit above, and normal installs continue to use `pnpm install --frozen-lockfile`.'
