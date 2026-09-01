@@ -31,7 +31,11 @@ const APPROVED_LAZY_ASSETS = [
   },
   {
     pattern: /^assets\/(?:remus|brepkit)_wasm_bg-.*\.wasm$/,
-    maxBytes: 8 * 1024 * 1024,
+    // 2026-08-31: raised from 8 MiB for the Remus 2.130 pin — the wasm grew
+    // 8,347,831 → 8,771,141 bytes with the exact planar-boundary integrator
+    // and the edge-domain authority work. The kernel ships as one artifact
+    // the app cannot split, so the raise rides the pin that caused it.
+    maxBytes: 9 * 1024 * 1024,
     reason: 'Exact geometry kernel, loaded only for non-empty geometry'
   },
   {
@@ -136,7 +140,7 @@ if (
  * It exists because a budget with a hard edge and no visible approach tells
  * you nothing until the day it fails, and that day lands on whoever happens
  * to push next rather than on whoever spent the headroom. The kernel wasm
- * sits near its 8 MiB allowance, so the margin is real but finite.
+ * sits near its allowance, so the margin is real but finite.
  *
  * Growth is NOT uniform, which is why the raw number is more useful than any
  * rate: measured across one day of pin bumps, defect-fix kernel PRs cost

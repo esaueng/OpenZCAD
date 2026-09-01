@@ -41,12 +41,21 @@ import {
 export const CLOSED_FORM_SURFACES = new Set(['cylinder', 'sphere', 'cone', 'torus']);
 
 /**
+ * Planar boundary curves the kernel integrates exactly (Green's theorem over
+ * the boundary, inner wires included). Ellipse, hyperbola and NURBS
+ * boundaries keep the fixed 256-sample polygon fallback that no deflection
+ * improves, so they stay 'sampled'.
+ */
+const EXACT_PLANAR_BOUNDARIES = new Set(['LINE', 'CIRCLE', 'PARABOLA']);
+
+/**
  * Whether the face's area is exact.
  *
- * For a plane the answer is decided by its boundary: straight edges give an
- * exact polygon, convex or not, while ANY curve is inscribed with a fixed
- * 256-point polygon that no deflection improves. The check therefore stops at
- * the first curved edge, and only planes pay for it at all.
+ * For a plane the answer is decided by its boundary: lines, circles and
+ * parabolas integrate exactly, convex or not, while anything else is
+ * inscribed with a fixed 256-point polygon. The check therefore stops at the
+ * first boundary curve outside the exact set, and only planes pay for it at
+ * all.
  */
 export function measureAreaProvenance(
   kernel: RemusKernel,
@@ -61,7 +70,13 @@ export function measureAreaProvenance(
   }
   try {
     for (const edge of kernel.getFaceEdges(face)) {
-      if (kernel.getEdgeCurveType(edge) !== 'LINE') {
+      // getEdgeCurveType reports the analytic curve a NURBS edge represents,
+      // but the kernel's exact integrator only runs on concrete curves, so
+      // the storage has to agree before the area is called exact.
+      if (
+        !EXACT_PLANAR_BOUNDARIES.has(kernel.getEdgeCurveType(edge)) ||
+        kernel.getEdgeNurbsData(edge) !== null
+      ) {
         return 'sampled';
       }
     }
