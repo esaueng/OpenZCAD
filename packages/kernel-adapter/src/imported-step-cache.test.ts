@@ -74,6 +74,35 @@ function quantizedNumbers(json: string): number[] {
   return found;
 }
 
+/**
+ * The serialized blob in the same quantized form the fingerprints use.
+ *
+ * Byte equality used to pin the restore cycle as a fixed point. The
+ * edge-authority kernel (Remus 2.130) re-derives a vertex from its carrier
+ * on restore, and that projection can land one ULP off the stored point
+ * without settling — the bracket's vertices[17].point[1] steps
+ * 6.713688410530694e-16 → …695e-16 on every cycle, forever. Drift that a
+ * saved reference or a downstream measurement could notice is drift at the
+ * quantization scale, so that is the form the fixed-point check compares.
+ */
+function quantizedBlob(blob: Uint8Array): unknown {
+  const walk = (value: unknown): unknown => {
+    if (typeof value === 'number') {
+      return Number.isFinite(value) ? quantize(value) : value;
+    }
+    if (Array.isArray(value)) {
+      return value.map(walk);
+    }
+    if (value && typeof value === 'object') {
+      return Object.fromEntries(
+        Object.entries(value).map(([key, entry]) => [key, walk(entry)])
+      );
+    }
+    return value;
+  };
+  return walk(JSON.parse(Buffer.from(blob).toString('utf8')));
+}
+
 function measures(kernel: RemusKernel, solid: number) {
   return {
     volume: kernel.volume(solid, 0.01),
@@ -113,8 +142,8 @@ describe('imported STEP cache round trip', () => {
       expect(quantizedTopology(kernel, second)).toEqual(
         quantizedTopology(kernel, first)
       );
-      expect(kernel.serializeSolid(second)).toEqual(
-        kernel.serializeSolid(first)
+      expect(quantizedBlob(kernel.serializeSolid(second))).toEqual(
+        quantizedBlob(kernel.serializeSolid(first))
       );
     } finally {
       kernel.free();

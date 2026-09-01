@@ -4,7 +4,7 @@
       "status": "imported",
       "warnings": [],
       "bodyCount": 1,
-      "volume": 17491.918534822787,
+      "volume": 17491.91853482272,
       "faceCount": 14,
       "edgeCount": 43,
       "seamEdgeCount": 1,
@@ -88,7 +88,7 @@
       "inspect": {
         "solid": true,
         "valid": true,
-        "volume": 17491.918534822787
+        "volume": 17491.91853482272
       }
     },
     "occt": {
@@ -1942,7 +1942,7 @@
       "status": "imported",
       "warnings": [],
       "bodyCount": 1,
-      "volume": 9522.60692840919,
+      "volume": 9522.606928409188,
       "faceCount": 10,
       "edgeCount": 24,
       "seamEdgeCount": 0,
@@ -1956,25 +1956,25 @@
         "import.step.edge.06078148",
         "import.step.edge.087ec94c",
         "import.step.edge.1301fac4",
-        "import.step.edge.1a71c594",
-        "import.step.edge.22d14548",
         "import.step.edge.26df1c02",
+        "import.step.edge.2a25115c",
         "import.step.edge.33527ab7",
-        "import.step.edge.3b040337",
+        "import.step.edge.457f8d5e",
         "import.step.edge.4657757f",
         "import.step.edge.46eb17e5",
-        "import.step.edge.51f83c2b",
         "import.step.edge.54ef3bb6",
         "import.step.edge.602f734b",
         "import.step.edge.68d07366",
         "import.step.edge.733a4adf",
         "import.step.edge.74e7673a",
+        "import.step.edge.7f59287d",
         "import.step.edge.81cb0e0b",
+        "import.step.edge.823db917",
         "import.step.edge.84bb0dd3",
+        "import.step.edge.8a47b7b5",
         "import.step.edge.8b34cfef",
-        "import.step.edge.984dddfb",
         "import.step.edge.98cfa953",
-        "import.step.edge.b763eece",
+        "import.step.edge.f4436780",
         "import.step.edge.f5a8974b",
         "import.step.edge.fa78910b",
         "import.step.face.070e8904",
@@ -1989,12 +1989,12 @@
         "import.step.face.f02a9058"
       ],
       "faceHashDigest": "b563a24b",
-      "edgeHashDigest": "2cf1303e",
+      "edgeHashDigest": "a2844ab8",
       "bbox": [-4.440892098501e-16, -4.440892098501e-16, 0, 40, 24, 10],
       "roundTrip": {
         "status": "ok",
         "warnings": [],
-        "volumeRelativeDelta": 1.9101800769694584e-16,
+        "volumeRelativeDelta": 0,
         "faceCountDelta": 0,
         "edgeCountDelta": 0,
         "exportedSolidCount": 1,
@@ -2003,7 +2003,7 @@
       "inspect": {
         "solid": true,
         "valid": true,
-        "volume": 9522.60692840919
+        "volume": 9522.606928409188
       }
     },
     "occt": {
