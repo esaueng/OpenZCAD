@@ -449,6 +449,16 @@ chunks (decimal kB, using Vite's gzip report):
 > launcher's lazy-asset exclusion is still enforced. See
 > `docs/kernel-wasm-size-policy.md` for measurement and ceiling-raise rules.
 
+> **Optimized Remus consumer package (PR #165, 2026-09-01).** The official
+> updater advanced the immutable pin from `7b4d1551cab995f1c3237a27f81d90c56c375cf3`
+> to `a36bddacb4fbc39165f08e85b2bff35b4c3381c3`. Its exact-artifact comparison
+> measured 7,776,918 bytes raw / 2,747,755 bytes Node-gzip / 1,955,827 bytes
+> Brotli-q11: reductions of 994,223 bytes (11.34%), 146,051 bytes, and 52,981
+> bytes respectively. A production bundle reproduced all three after the pin;
+> the result remains a lazy worker asset. These byte measurements close the
+> package-size slice, not the separate cold-load, compilation, instantiation,
+> or runtime-memory baselines.
+
 The three eager UI assets total about 362.9 kB gzip. PDF worker/runtime assets
 are emitted separately and are loaded only when reference-document support is
 used. Reproduce the complete raw/gzip inventory with `pnpm build:report`; the
