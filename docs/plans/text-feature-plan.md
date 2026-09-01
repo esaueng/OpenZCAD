@@ -1,6 +1,12 @@
 # Text Feature Plan — Text on 3D Models (Emboss / Engrave)
 
-Status: planned, not started
+> **Historical design record.** The text feature shipped: schema-backed
+> sketch text, seven bundled font families, the `T` sketch-text tool, and
+> emboss/engrave through the ordinary extrude and boolean flows. The kernel
+> named below is the BrepKit-era one; ADR-020 replaced it with Remus. Current
+> status lives in [cad-feature-roadmap.md](../cad-feature-roadmap.md) §1.
+
+Status: shipped (see banner)
 Repos involved: `esaueng/OpenZCAD` (app, most of the work), `esaueng/brepkit` (kernel, small hardening PRs)
 Companion doc: `docs/plans/text-feature-agent-instructions.md` (hand-off prompt for an implementing agent)
 
