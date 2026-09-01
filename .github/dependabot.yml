@@ -11,6 +11,10 @@ updates:
       - dependency-name: typescript
         versions:
           - '>= 7.0.0'
+      # remus-wasm tracks a GitHub branch, so any lockfile regeneration
+      # re-resolves it to main and trips the kernel-pin guard in ci.yml.
+      # Kernel moves land through update-remus.yml instead.
+      - dependency-name: remus-wasm
     groups:
       production-dependencies:
         dependency-type: production
