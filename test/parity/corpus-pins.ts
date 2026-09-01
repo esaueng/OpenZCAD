@@ -619,7 +619,7 @@ export const KERNEL_DELTAS: KernelDeltaPin[] = [
   {
     subject: 'e-analytic-fillet-plate',
     metric: 'edgeHashDigest',
-    remus: '2cf1303e',
+    remus: 'a2844ab8',
     occt: '26f53b2e',
     owner: 'K0.6',
     note:
@@ -645,19 +645,28 @@ export const KERNEL_DELTAS: KernelDeltaPin[] = [
       'since Z3 means corpus-only rather than user-facing. Do not "fix" it ' +
       'here: the quantization is frozen and changing the witness invalidates ' +
       'every persisted reference to a fillet or chamfer edge. That is a ' +
-      'migration with its own plan, not a bug fix.'
+      'migration with its own plan, not a bug fix. ' +
+      'The remus pin bump to 7b4d155 (v2.130, the edge-domain authority ' +
+      'series) moved the digest 2cf1303e to a2844ab8 without changing the ' +
+      'defect class: measured edge-by-edge against the old pin, all 24 edges ' +
+      'keep identical curve types, lengths and endpoints to the ULP, and only ' +
+      'the raw-domain midparam witnesses on the arcs moved — the import now ' +
+      'carries stored parameter authority, so the same untrimmed parameter ' +
+      'names a different point. Endpoints still discriminate, so the witness ' +
+      'set still has no collisions.'
   },
   {
     subject: 'e-analytic-fillet-plate',
     metric: 'lineageNames',
-    remus: '34 names · 1de5dda1',
+    remus: '34 names · 58ff7db9',
     occt: '34 names · fa33bc13',
     owner: 'K0.6',
     note:
       IMPORT_NAME_NOTE +
       ' Both kernels name all 34 faces and edges — the counts agree — and the ' +
       'sets differ because of the edge hashes above. Retires with the ' +
-      'edgeHashDigest pin.'
+      'edgeHashDigest pin. The remus pin bump to 7b4d155 (v2.130) moved the ' +
+      'digest 1de5dda1 to 58ff7db9 with the edge witnesses it restates.'
   },
 
   // --- (f) hostile ---------------------------------------------------------
@@ -838,7 +847,7 @@ export const REFERENCE_DEVIATIONS: ReferenceDeviationPin[] = [
       40 * 24 * 10 +
       Math.PI * 36 * 20 -
       (Math.PI * 36 - (36 * Math.acos(0.5) - 3 * Math.sqrt(27))) * 10,
-    reported: 10951.579362034887,
+    reported: 10951.590467118496,
     owner: 'K0.5',
     note:
       'THE SOLID IS EXACT; THE MEASUREMENT IS NEARLY SO. This pin has now ' +
@@ -894,7 +903,15 @@ export const REFERENCE_DEVIATIONS: ReferenceDeviationPin[] = [
       'The remus pin bump to bea7d4c moved the reading from 10951.56548068038 ' +
       '(-4.70e-5, 47x above the bar) to 10951.579362034887 (-1.27e-6, 1.27x ' +
       'above it), and the round-trip delta improved 6x — same inscribed-mesh ' +
-      'signature, much smaller residual. Close, but the bar is the bar.'
+      'signature, much smaller residual. Close, but the bar is the bar. ' +
+      'The remus pin bump to 7b4d155 (v2.130) moved the reading again, from ' +
+      '10951.579362034887 to 10951.590467118496 — the deviation from the ' +
+      'closed form went from -4.57e-5 to -4.47e-5, still the same ' +
+      'inscribed-mesh signature and still ~45x above the bar, while the ' +
+      'round-trip delta grew from 2.5e-7 to 7.6e-7. The kernel now bounds ' +
+      'every tessellation grid at 1M points and shares the seam-crossing ' +
+      'vertex of a holed periodic wall, so the mesh the volume integrates ' +
+      'off is not the old one; nothing about the body changed.'
   },
   {
     subject: 'boss-crossing-a-wall',
