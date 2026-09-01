@@ -68,7 +68,7 @@ Boundaries that hold everywhere:
 - The browser document/history model is the source of truth; meshes are disposable projections.
 - Geometry and exports run in the browser worker, never in the Cloudflare Worker.
 - Topology fingerprints are content-addressed and stable across rebuilds — checked in `test/kernel-seam.test.ts`, and against the OpenCascade reference in bulk by the parity corpus — and resolution is fail-closed at every call site. Documents saved by the pre-fingerprint OpenCascade scheme are rejected with a re-select diagnostic rather than reinterpreted.
-- Schema-v1 through schema-v7 documents migrate to additive schema v8 on load.
+- Schema-v1 through schema-v12 documents migrate to additive schema v13 on load.
 
 See [architecture.md](architecture.md) and the decision records in [docs/adrs](docs/adrs).
 The current implementation status and explicitly unshipped gaps are tracked in
