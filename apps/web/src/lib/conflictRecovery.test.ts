@@ -224,12 +224,77 @@ describe('collaboration conflict recovery', () => {
       expect.objectContaining({ version: 5 })
     );
 
-    // A NEW divergence starts a new preservation record.
+    // A NEW divergence citing the SAME local document does not copy it again:
+    // the copy on disk is of this exact state, whatever the room moved to.
     const moved = conflictFromDocuments(version(base, 4), version(base, 6));
     await expect(
       resolveProjectConflict(moved, 'use-remote', context, failing)
     ).rejects.toThrow('the room moved');
+    expect(failing.writeRecoveryCopy).toHaveBeenCalledTimes(2);
+
+    // A local document not yet preserved is.
+    const edited = conflictFromDocuments(version(base, 7), version(base, 6));
+    await expect(
+      resolveProjectConflict(edited, 'use-remote', context, failing)
+    ).rejects.toThrow('the room moved');
     expect(failing.writeRecoveryCopy).toHaveBeenCalledTimes(3);
+    expect(failing.writeRecoveryCopy).toHaveBeenLastCalledWith(
+      expect.objectContaining({ version: 7 })
+    );
+  });
+
+  // The room and the account are separate version lines that raise the same
+  // divergence with the roles swapped — 9-vs-27 in one, 27-vs-9 in the other.
+  // A record scoped to the version pair copied the losing side again on every
+  // hop between them, which is how one project grew nine recovery projects in
+  // a minute.
+  it('copies a document once across both remotes and every version pair', async () => {
+    const base = createProjectDocument('Conflict', owner);
+    const context = {
+      role: 'owner' as const,
+      lease: null,
+      leasesEnforced: false
+    };
+    const device = version(base, 27);
+    const account = version(base, 9);
+
+    const room = handlers();
+    await resolveProjectConflict(
+      conflictFromDocuments(account, device, 'room'),
+      'use-remote',
+      context,
+      room
+    );
+    expect(room.writeRecoveryCopy).toHaveBeenCalledTimes(1);
+    expect(room.writeRecoveryCopy).toHaveBeenCalledWith(
+      expect.objectContaining({ version: 9 })
+    );
+
+    // The device now holds 27; the account still says 9 and raises the same
+    // two documents the other way round. Keeping 27 would copy 9 — which the
+    // room resolution above already preserved.
+    const viaAccount = handlers();
+    await resolveProjectConflict(
+      conflictFromDocuments(device, account, 'account'),
+      'keep-mine',
+      context,
+      viaAccount
+    );
+    expect(viaAccount.writeRecoveryCopy).not.toHaveBeenCalled();
+    expect(viaAccount.keepMyVersion).toHaveBeenCalledTimes(1);
+
+    // Clearing the marker — what a completed resolution does — does not
+    // forget which documents were preserved.
+    clearUnresolvedConflict(base.projectId, 'account');
+    clearUnresolvedConflict(base.projectId, 'room');
+    const again = handlers();
+    await resolveProjectConflict(
+      conflictFromDocuments(device, account, 'account'),
+      'keep-mine',
+      context,
+      again
+    );
+    expect(again.writeRecoveryCopy).not.toHaveBeenCalled();
   });
 
   it('never nests recovery labels in project names', () => {

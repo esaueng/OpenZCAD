@@ -1,11 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import {
   adoptProjectDocument,
+  appendRevision,
   createProjectDocument
 } from '@openzcad/document-core';
 import { toUserId, type ProjectDocument } from '@openzcad/shared';
 import {
   chooseProjectDocument,
+  projectDescendsFrom,
   projectMatchesInterruptedAdoption,
   projectsHaveSameCanonicalContent,
   selectProjectDocument
@@ -161,5 +163,54 @@ describe('selectProjectDocument', () => {
     // Safe, but lossy — which is why callers that can act on divergence are
     // told to use chooseProjectDocument instead.
     expect(selectProjectDocument(at(7), at(9), 4)?.version).toBe(7);
+  });
+});
+
+describe('descent between the two copies', () => {
+  // The live room hands a device documents at versions the account has never
+  // seen; the next device to extend that document reaches the account with
+  // this one's last revision in its history. Version fences alone call that
+  // a divergence, and it used to be asked about — with the same work on both
+  // sides of the question.
+  it('takes the account copy that was built on top of this device’s', () => {
+    const local = appendRevision(appendRevision(base, 'edit'), 'edit');
+    const remote = appendRevision(local, 'edit on another device');
+
+    expect(chooseProjectDocument(local, remote, base.version)).toMatchObject({
+      choice: 'remote',
+      document: remote
+    });
+    // Losing the baseline does not lose the proof.
+    expect(chooseProjectDocument(local, remote, null)).toMatchObject({
+      choice: 'remote'
+    });
+  });
+
+  it('pushes this device’s copy when it was built on top of the account’s', () => {
+    const remote = appendRevision(base, 'edit on another device');
+    const local = appendRevision(appendRevision(remote, 'edit'), 'edit');
+
+    expect(chooseProjectDocument(local, remote, base.version)).toMatchObject({
+      choice: 'local',
+      document: local
+    });
+  });
+
+  it('still asks when neither copy descends from the other', () => {
+    const local = appendRevision(base, 'edit here');
+    const remote = appendRevision(base, 'edit there');
+
+    expect(chooseProjectDocument(local, remote, base.version)).toMatchObject({
+      choice: 'diverged'
+    });
+    expect(projectDescendsFrom(local, remote)).toBe(false);
+    expect(projectDescendsFrom(remote, local)).toBe(false);
+  });
+
+  it('never takes a lower version as a descendant, whatever its history says', () => {
+    const remote = appendRevision(base, 'edit');
+    const rewound = { ...remote, version: base.version };
+
+    expect(projectDescendsFrom(rewound, base)).toBe(false);
   });
 });

@@ -5,6 +5,9 @@ import type {
 } from '@openzcad/shared';
 
 const CONFLICT_MARKER_PREFIX = 'openzcad-unresolved-project-conflict:';
+const RECOVERY_LEDGER_PREFIX = 'openzcad-recovery-copies:';
+/** Enough for any realistic run of resolutions; the ledger is a dedupe, not a history. */
+const RECOVERY_LEDGER_LIMIT = 32;
 
 /**
  * Where the divergent copy came from. The resolutions are identical either
@@ -172,6 +175,66 @@ export function clearUnresolvedConflict(
   storage.removeItem(legacyMarkerKey(projectId));
 }
 
+function ledgerKey(projectId: string): string {
+  return `${RECOVERY_LEDGER_PREFIX}${encodeURIComponent(projectId)}`;
+}
+
+/**
+ * Identifies a document state closely enough to know a recovery copy of it
+ * already exists: the same version reached by the same last revision is the
+ * same lineage state, whichever remote cited it and in however many version
+ * pairs. Revision ids are minted per edit, so two documents can only share
+ * one by descent.
+ */
+export function recoveryCopyKey(document: ProjectDocument): string {
+  return `${document.version}:${document.revisions.at(-1)?.revisionId ?? 'none'}`;
+}
+
+/**
+ * Which document states of a project already have a recovery project. Kept
+ * apart from the conflict marker on purpose: the marker is rewritten for
+ * every new version pair, and the room and the account each raise the same
+ * divergence with the roles swapped — so a record scoped to one pair let the
+ * losing side be copied again on every hop between the two dialogs.
+ */
+export function readRecoveryLedger(
+  projectId: string,
+  storage: Storage = localStorage
+): string[] {
+  try {
+    const parsed: unknown = JSON.parse(
+      storage.getItem(ledgerKey(projectId)) ?? '[]'
+    );
+    return Array.isArray(parsed)
+      ? parsed.filter((entry): entry is string => typeof entry === 'string')
+      : [];
+  } catch {
+    return [];
+  }
+}
+
+export function rememberRecoveryCopy(
+  projectId: string,
+  copyKey: string,
+  storage: Storage = localStorage
+): void {
+  const ledger = readRecoveryLedger(projectId, storage).filter(
+    (entry) => entry !== copyKey
+  );
+  ledger.push(copyKey);
+  storage.setItem(
+    ledgerKey(projectId),
+    JSON.stringify(ledger.slice(-RECOVERY_LEDGER_LIMIT))
+  );
+}
+
+export function clearRecoveryLedger(
+  projectId: string,
+  storage: Storage = localStorage
+): void {
+  storage.removeItem(ledgerKey(projectId));
+}
+
 export function conflictFromDocuments(
   localDocument: ProjectDocument,
   remoteDocument: ProjectDocument,
@@ -284,16 +347,18 @@ export async function resolveProjectConflict(
   const losingSide = resolution === 'keep-mine' ? 'remote' : 'local';
   const losingDocument =
     losingSide === 'remote' ? conflict.remoteDocument : conflict.localDocument;
-  const copyKey = `${losingSide}:${losingDocument.version}`;
+  const copyKey = recoveryCopyKey(losingDocument);
   const marker = readUnresolvedConflict(conflict.projectId, conflict.source);
   const markerMatches =
     marker !== null &&
     marker.localVersion === conflict.localDocument.version &&
     marker.remoteVersion === conflict.remoteDocument.version;
   const alreadyPreserved =
-    markerMatches && (marker.recoveryCopies ?? []).includes(copyKey);
+    (markerMatches && (marker.recoveryCopies ?? []).includes(copyKey)) ||
+    readRecoveryLedger(conflict.projectId).includes(copyKey);
   if (!alreadyPreserved) {
     await handlers.writeRecoveryCopy(structuredClone(losingDocument));
+    rememberRecoveryCopy(conflict.projectId, copyKey);
     rememberUnresolvedConflict({
       projectId: conflict.projectId,
       source: conflict.source,
