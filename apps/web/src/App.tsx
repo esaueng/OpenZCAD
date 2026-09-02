@@ -420,6 +420,7 @@ import { ShortcutsOverlay } from './components/ShortcutsOverlay';
 import { DISPLAY_MODE_LABELS } from './lib/displayMode';
 import { ContextMenu, type ContextMenuState } from './components/ContextMenu';
 import { MarkingMenu } from './components/MarkingMenu';
+import type { BodyFeatureIds } from '@openzcad/document-core';
 import { resolveExtrudeOperation } from './lib/extrudeInference';
 import { previewExtrudeInput } from './lib/extrudePreview';
 import type {
@@ -861,6 +862,18 @@ interface OffsetPreviewCandidate {
   baseProjectId: ProjectDocument['projectId'];
   baseVersion: number;
   validationTargets?: AffectedFeatureTarget[];
+}
+
+/** An edge blend rebuilt for preview, with the feature its verdict judges. */
+interface EdgePreviewCandidate {
+  document: ProjectDocument;
+  size: number;
+  label: string;
+  /** False for a removal, whose whole point is that the body goes away. */
+  judge: boolean;
+  target?: AffectedFeatureTarget;
+  baseProjectId: ProjectDocument['projectId'];
+  baseVersion: number;
 }
 
 /** A region extrude rebuilt for preview, with the context its verdict needs. */
@@ -1927,7 +1940,7 @@ export function App() {
           return;
         }
         if (preview.derived.rejection) {
-          reportOffsetPreviewFailure(
+          reportPreviewFailure(
             preview.derived.rejection.message,
             preview.document.offset
           );
@@ -1938,13 +1951,13 @@ export function App() {
           derived: preview.derived.derived
         });
         setRenderedOffsetPreview(preview.document.offset);
-        recoverOffsetPreviewInteraction();
+        recoverPreviewInteraction();
         // Once a gesture has gone slow, the chip says "catching up" only
         // while the hand is actually ahead of the published geometry.
         setPreviewDeferred(offsetPreview.degraded && offsetPreview.lagging);
       },
       onFailure: ({ error, value }) =>
-        reportOffsetPreviewFailure(
+        reportPreviewFailure(
           errorMessage(error, 'Exact offset preview failed.'),
           value
         ),
@@ -2027,7 +2040,7 @@ export function App() {
           return;
         }
         if (preview.derived.rejection) {
-          reportRegionPreviewFailure(
+          reportPreviewFailure(
             preview.derived.rejection.message,
             preview.document.distance
           );
@@ -2037,13 +2050,13 @@ export function App() {
           ...preview.document.document,
           derived: preview.derived.derived
         });
-        recoverRegionPreviewInteraction();
+        recoverPreviewInteraction();
         setPreviewDeferred(
           regionExtrudePreview.degraded && regionExtrudePreview.lagging
         );
       },
       onFailure: ({ error, value }) =>
-        reportRegionPreviewFailure(
+        reportPreviewFailure(
           errorMessage(error, 'Exact extrude preview failed.'),
           value
         ),
@@ -10394,28 +10407,98 @@ export function App() {
    * gesture if the kernel gets slow.
    */
   const edgePreview = useRef(
-    new LivePreview<ProjectDocument, ProjectDocument['derived']>({
+    new LivePreview<EdgePreviewCandidate, OffsetPreviewResult>({
       build: (size) => {
         const base = managerRef.current?.document;
         const command = base ? buildEdgeModifierCommand(size, base) : null;
-        return command && base ? command.apply(base) : null;
+        if (!command || !base) {
+          return null;
+        }
+        const current = interactionRef.current;
+        // Removing a fillet consumes its body on purpose; only a blend that
+        // is meant to produce a body is judged on producing one.
+        let target: AffectedFeatureTarget | null = null;
+        if (current.mode === 'face' && current.op === 'edit-fillet') {
+          target = editFilletPreviewTarget(
+            base,
+            current.target.filletFeatureId
+          );
+        } else if (current.mode === 'edges') {
+          // Fillet and chamfer payloads both reserve their result ids up
+          // front; the structural read keeps this independent of which one.
+          const payload = command.payload as {
+            ids?: BodyFeatureIds;
+            name?: string;
+            edgeHashes?: readonly number[];
+          };
+          if (payload.edgeHashes && payload.ids?.bodyId && payload.ids.featureId) {
+            target = {
+              featureId: payload.ids.featureId,
+              featureName: payload.name ?? command.label,
+              resultBodyId: payload.ids.bodyId
+            };
+          }
+        }
+        return {
+          document: command.apply(base),
+          size,
+          label: command.label,
+          judge: target !== null && size > 1e-9,
+          ...(target ? { target } : {}),
+          baseProjectId: base.projectId,
+          baseVersion: base.version
+        };
       },
-      derive: (document) => geometry.syncOnce(document),
+      derive: async (candidate) => {
+        const derived = await geometry.syncOnce(candidate.document);
+        if (!candidate.judge || !candidate.target) {
+          return { derived, rejection: null };
+        }
+        const live = managerRef.current;
+        const documentMoved =
+          !live ||
+          live.document.projectId !== candidate.baseProjectId ||
+          live.document.version !== candidate.baseVersion;
+        const rejection = offsetPreviewRejection({
+          label: candidate.label,
+          bodyId: candidate.target.resultBodyId,
+          validationTargets: [candidate.target],
+          derived,
+          documentMoved
+        });
+        return { derived, rejection };
+      },
       publish: (preview) => {
         if (!preview) {
           setPreviewDoc(null);
           setPreviewBlendFaces([]);
           return;
         }
-        setPreviewDoc({ ...preview.document, derived: preview.derived });
+        if (preview.derived.rejection) {
+          reportPreviewFailure(
+            preview.derived.rejection.message,
+            preview.document.size
+          );
+          return;
+        }
+        setPreviewDoc({
+          ...preview.document.document,
+          derived: preview.derived.derived
+        });
         const current = interactionRef.current;
         const base = managerRef.current?.document;
         setPreviewBlendFaces(
           current.mode === 'edges' && current.op === 'fillet' && base
-            ? newBlendFaceSelections(base, preview.derived)
+            ? newBlendFaceSelections(base, preview.derived.derived)
             : []
         );
+        recoverPreviewInteraction();
       },
+      onFailure: ({ error, value }) =>
+        reportPreviewFailure(
+          errorMessage(error, 'Exact blend preview failed.'),
+          value
+        ),
       acceptValue: (size) => {
         const current = interactionRef.current;
         return (
@@ -10427,6 +10510,28 @@ export function App() {
       }
     })
   ).current;
+
+  /** The fillet feature an edit-fillet preview is judged by, if it is live. */
+  function editFilletPreviewTarget(
+    base: ProjectDocument,
+    filletFeatureId: FeatureId | undefined
+  ): AffectedFeatureTarget | null {
+    const feature: FeatureNode | null = filletFeatureId
+      ? (findFeature(base, filletFeatureId) ?? null)
+      : null;
+    if (!feature || feature.data.featureKind !== 'fillet') {
+      return null;
+    }
+    const resultBodyId: BodyId | undefined = feature.bodyId;
+    if (!resultBodyId) {
+      return null;
+    }
+    return {
+      featureId: feature.featureId,
+      featureName: feature.name,
+      resultBodyId
+    };
+  }
 
   function buildEdgeModifierCommand(
     size: ParamValue,
@@ -10841,58 +10946,37 @@ export function App() {
     });
   }
 
-  function reportOffsetPreviewFailure(message: string, value: number) {
-    const current = interactionRef.current;
-    if (current.mode !== 'face' || current.op !== 'offset-face') {
+  /**
+   * A value the kernel refuses while the hand is still moving.
+   *
+   * The model is not touched: whatever exact preview last succeeded stays on
+   * screen, so the shape never jumps back to the pre-drag state under a
+   * pointer that is still down. The handle keeps tracking, the chip turns to
+   * its warning state, and one plain sentence lands in the tool card, which
+   * owns the diagnostic — the status line does not repeat it. The next value
+   * that builds recovers all of it (see `recoverPreviewInteraction`).
+   */
+  function reportPreviewFailure(message: string, value: number) {
+    if (!isOperationState(interactionRef.current)) {
       return;
     }
-    setPreviewDoc(null);
-    setRenderedOffsetPreview(null);
     dispatchInteraction({
       type: 'validation-failed',
       diagnostic: { message },
       value
     });
-    setStatus(`Offset preview refused: ${message}`);
     recordDirectEditOutcome('preview-failed', { value, message });
   }
 
-  function recoverOffsetPreviewInteraction() {
+  /** The first buildable value after a refusal re-arms the live gesture. */
+  function recoverPreviewInteraction() {
     const current = interactionRef.current;
-    if (
-      current.mode !== 'face' ||
-      current.op !== 'offset-face' ||
-      current.phase !== 'failed'
-    ) {
+    if (!isOperationState(current) || current.phase !== 'failed') {
       return;
     }
     dispatchInteraction({ type: 'recover' });
     dispatchInteraction({
-      type: keypadRef.current?.kind === 'offset' ? 'keypad-open' : 'drag-engage'
-    });
-  }
-
-  function reportRegionPreviewFailure(message: string, value: number) {
-    if (interactionRef.current.mode !== 'region') {
-      return;
-    }
-    setPreviewDoc(null);
-    dispatchInteraction({
-      type: 'validation-failed',
-      diagnostic: { message },
-      value
-    });
-    setStatus(`Extrude preview refused: ${message}`);
-  }
-
-  function recoverRegionPreviewInteraction() {
-    const current = interactionRef.current;
-    if (current.mode !== 'region' || current.phase !== 'failed') {
-      return;
-    }
-    dispatchInteraction({ type: 'recover' });
-    dispatchInteraction({
-      type: keypadRef.current?.kind === 'offset' ? 'keypad-open' : 'drag-engage'
+      type: keypadRef.current ? 'keypad-open' : 'drag-engage'
     });
   }
 
@@ -10906,7 +10990,7 @@ export function App() {
       if (Math.abs(offset) <= 1e-9) {
         regionExtrudePreview.clear();
         setPreviewDeferred(false);
-        recoverRegionPreviewInteraction();
+        recoverPreviewInteraction();
         return;
       }
       regionExtrudePreview.request(offset);
@@ -10923,7 +11007,7 @@ export function App() {
     if (Math.abs(offset) <= 1e-9) {
       offsetPreview.clear();
       setPreviewDeferred(false);
-      recoverOffsetPreviewInteraction();
+      recoverPreviewInteraction();
       return;
     }
     offsetPreview.request(offset);
@@ -11099,7 +11183,7 @@ export function App() {
       return false;
     }
     if (plan.preflightRejection) {
-      reportOffsetPreviewFailure(plan.preflightRejection, offset);
+      reportPreviewFailure(plan.preflightRejection, offset);
       return false;
     }
     offsetPreview.clear();
@@ -13183,10 +13267,7 @@ export function App() {
             onOffsetCommit={handleOffsetCommit}
             onOffsetCancel={handleOffsetCancel}
             offsetPreviewInvalid={
-              (interaction.mode === 'face' &&
-                interaction.op === 'offset-face' &&
-                interaction.phase === 'failed') ||
-              (interaction.mode === 'region' && interaction.phase === 'failed')
+              isOperationState(interaction) && interaction.phase === 'failed'
             }
             previewDeferred={previewDeferred}
             onOpenOffsetKeypad={handleOpenOffsetKeypad}

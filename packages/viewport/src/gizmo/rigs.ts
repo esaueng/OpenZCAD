@@ -617,11 +617,16 @@ export function buildEdgeRadiusHandle(params: {
   addHandleParts(group, [sphere, ring, hit]);
 
   const presence = createRigPresence([group, worldGroup]);
+  let warned = false;
+  // Warning wins over hover, as on the offset rig: a radius the kernel refuses
+  // must not read as merely interactive while the hand is still on it.
   const paintParts = () => {
-    const color = new THREE.Color(HANDLE_COLOR).lerp(
-      new THREE.Color(HANDLE_HOT_COLOR),
-      presence.hotness()
-    );
+    const color = warned
+      ? new THREE.Color(HANDLE_WARNING_COLOR)
+      : new THREE.Color(HANDLE_COLOR).lerp(
+          new THREE.Color(HANDLE_HOT_COLOR),
+          presence.hotness()
+        );
     for (const part of [sphere, ring]) {
       if (
         part.material instanceof THREE.MeshBasicMaterial &&
@@ -661,6 +666,11 @@ export function buildEdgeRadiusHandle(params: {
     },
     value() {
       return current;
+    },
+    setWarning(warning) {
+      warned = warning;
+      paintParts();
+      group.userData.previewWarning = warning;
     },
     chipAnchor() {
       return origin.clone();

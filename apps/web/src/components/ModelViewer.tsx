@@ -4386,8 +4386,9 @@ export function ModelViewer({
       }
       chip.dataset.variant =
         rig?.kind === 'cylinder-radius' ? 'dimension' : 'default';
-      const offsetWarning =
-        rig?.kind === 'offset-face' && offsetPreviewInvalidRef.current;
+      // Any armed rig can hold a refused value: the flag is the operation's
+      // failed phase, whichever handle is driving it.
+      const offsetWarning = offsetPreviewInvalidRef.current;
       // A refused value outranks a deferred one: both are true while a slow
       // gesture drifts out of range, and the refusal is the actionable half.
       chip.dataset.state = offsetWarning
@@ -7611,6 +7612,7 @@ export function ModelViewer({
 
   useEffect(() => {
     offsetRigRef.current?.setWarning?.(offsetPreviewInvalid);
+    edgeRigRef.current?.setWarning?.(offsetPreviewInvalid);
     contextRef.current?.requestRender();
   }, [offsetPreviewInvalid]);
 
@@ -7653,6 +7655,7 @@ export function ModelViewer({
     }
     const rig = buildEdgeRadiusHandle(placement);
     rig.setValue(edgeHandle.initialValue ?? 0);
+    rig.setWarning?.(offsetPreviewInvalidRef.current);
     context.scene.add(rig.group);
     edgeRigRef.current = rig;
     context.requestRender();
