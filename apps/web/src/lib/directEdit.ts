@@ -11,6 +11,17 @@
 import { refusingWarning } from './featureValidation';
 import type { FeatureWarning } from '@openzcad/shared';
 
+/**
+ * Said up front, on the handle, when an offset is about to be pinned by
+ * geometry alone. A hash-only face — the result of a boolean, a pattern, a
+ * shell, or an imported body — has no name a rebuild can find again, so the
+ * edit applies now but drops out with a diagnostic the moment an earlier
+ * feature changes that face. Saying so before the drag beats explaining it
+ * after the model has quietly lost the edit.
+ */
+export const UNSTABLE_FACE_OFFSET_REASON =
+  'Anchored by geometry only: this face has no identity a rebuild can find again, so the offset will not follow later changes to earlier features and will need re-picking if they move it.';
+
 export interface DirectEditVerdictInput {
   /** The feature label, as it appears in a derived warning's prefix. */
   label: string;
