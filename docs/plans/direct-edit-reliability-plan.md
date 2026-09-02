@@ -335,10 +335,13 @@ in those two files; the extraction should land with `--max-warnings 0`.
 untouched since 2026-08-31 while the direct-manipulation region took most
 of twenty commits in the same window. It now lives in
 `hooks/useMeasurementWorkbench.ts`, destructured back into App under the
-same identifiers so the rest of the file is unchanged. The next quiet
-candidates by the same map are the settings/cloud-settings session
-(`endCloudSettingsSession`, `openSettings`, `closeSettings`; ~5,500–6,100)
-and the sketch-editing handlers (~9,300–9,900); the direct-manipulation
+same identifiers so the rest of the file is unchanged. The second slice followed the
+same day: settings persistence and the cloud-settings autosave — the device
+write, theme and density, the controller and its session connect/update/end
+— moved into `hooks/useAppSettingsSync.ts`; the account session itself
+stays in App and hands the hook the refs and setters it used to reach
+directly (−140 lines; App at 14,206). The next quiet candidate by the same
+map is the sketch-editing handlers (~9,300–9,900); the direct-manipulation
 region should wait until the other sessions stop landing there daily.
 
 ## Metrics
