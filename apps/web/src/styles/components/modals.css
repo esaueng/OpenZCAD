@@ -67,6 +67,12 @@
   border-color: var(--color-border-strong);
 }
 
+.conflict-dialog-note {
+  margin: 0;
+  color: var(--color-text-muted);
+  font-size: var(--fs-xs);
+}
+
 .cloud-deletion-dialog {
   width: min(560px, 100%);
   display: grid;
@@ -1037,34 +1043,6 @@
   margin: 0;
   color: var(--color-text-muted);
   font-size: var(--fs-mini);
-}
-
-.sharing-conflict {
-  padding: var(--sp-2) var(--sp-2) var(--sp-3);
-  border: 1px solid color-mix(in srgb, var(--color-warning) 35%, transparent);
-  border-radius: var(--radius-md);
-  background: color-mix(in srgb, var(--color-warning) 6%, transparent);
-}
-
-.sharing-conflict h3 {
-  margin: 0 0 var(--sp-1);
-  color: var(--color-warning);
-  font-size: var(--fs-sm);
-  font-weight: var(--fw-medium);
-}
-
-.sharing-conflict p {
-  color: var(--color-text-muted);
-  font-size: var(--fs-xs);
-  line-height: 1.5;
-}
-
-.sharing-conflict .conflict-dialog-actions {
-  margin-top: var(--sp-2);
-}
-
-.sharing-conflict-note {
-  margin-top: var(--sp-2);
 }
 
 .shortcuts-grid {

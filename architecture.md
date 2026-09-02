@@ -72,9 +72,15 @@ clean project change releases it, while another editor can take over after TTL.
 The client strips derived meshes before transmission, debounces edits, and uses
 the authenticated HTTP snapshot path above 900 KB. An unresolved conflict
 blocks autosend and survives dialog close/reload through a small sentinel while
-the full divergent document remains in IndexedDB. Every resolution first saves
-a recovery project. “Keep my version” additionally requires this client's
-unexpired lease and the exact expected room version. Sharing and lease
+the full divergent document remains in IndexedDB. Room and account conflicts
+share one dialog (`ProjectConflictDialog`), never the sharing menu. Every
+resolution first saves a recovery project — once per document state, whichever
+remote cites it. “Keep this device’s version” on a room conflict additionally
+requires this client's unexpired lease and the exact expected room version.
+The room's version line is transport, not the account's fence: a document
+adopted from the room keeps the account baseline it had, and a fenced 409 is
+reconciled by baseline and revision descent before it becomes a conflict
+dialog. Sharing and lease
 enforcement are enabled in the checked-in beta configuration
 (`wrangler.jsonc`) and off in the development one. See
 [ADR-019](docs/adrs/ADR-019-durable-collaboration-authorization.md).
