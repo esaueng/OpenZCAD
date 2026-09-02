@@ -221,3 +221,92 @@ test('clears the paused-preview chip when a degraded gesture is canceled', async
     .toBeCloseTo(28, 4);
   expect(consoleErrors).toEqual([]);
 });
+
+test('streams an exact extrude preview while a region drag is held', async ({
+  page
+}) => {
+  test.setTimeout(process.env.CI ? 240_000 : 120_000);
+  await stubApi(page);
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  const consoleErrors: string[] = [];
+  page.on('console', (message) => {
+    if (message.type() === 'error') {
+      consoleErrors.push(message.text());
+    }
+  });
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('Region Live Preview');
+  await page.getByRole('button', { name: 'Create project' }).click();
+
+  const canvas = page.locator('.viewer-host canvas');
+  await expect(canvas).toBeVisible({ timeout: 120_000 });
+  await page.getByRole('button', { name: /^Sketch \(S\)/ }).click();
+  await page.getByRole('button', { name: 'Top (XY)' }).click();
+  await expect(
+    page.getByRole('region', { name: 'Editing Sketch: New Sketch operation' })
+  ).toBeVisible();
+  // Let the sketch-entry glide land before drawing on the plane.
+  await page.waitForTimeout(1000);
+
+  const bounds = await canvas.boundingBox();
+  expect(bounds).not.toBeNull();
+  const corner = {
+    x: bounds!.x + bounds!.width * 0.45,
+    y: bounds!.y + bounds!.height * 0.45
+  };
+  const sketchTools = page.getByRole('toolbar', { name: 'Sketch tools' });
+  await sketchTools.getByRole('button', { name: /^Rectangle/ }).click();
+  await page.mouse.move(corner.x, corner.y);
+  await page.mouse.down();
+  await page.mouse.move(corner.x + 120, corner.y + 90, { steps: 6 });
+  await page.mouse.up();
+  await expect(page.getByRole('contentinfo')).toContainText(
+    'Sketch 01 started.'
+  );
+
+  await sketchTools.getByRole('button', { name: 'Extrude' }).click();
+  await expect(page.getByRole('contentinfo')).toContainText(
+    'Closed sketch profile selected'
+  );
+  const chip = page.getByTestId('direct-manipulation-value');
+  await expect(chip).toHaveText('+0 mm');
+  // Nothing solid exists yet: the sketch is the only thing on screen.
+  await expect(canvas).toHaveAttribute('data-e2e-rendered-bodies', '0');
+
+  await expect
+    .poll(() => canvas.getAttribute('data-e2e-handle-x'), {
+      timeout: PREVIEW_BUDGET_MS
+    })
+    .not.toBeNull();
+  const handle = await canvas.evaluate((element) => ({
+    x: Number(element.dataset.e2eHandleX),
+    y: Number(element.dataset.e2eHandleY),
+    dx: Number(element.dataset.e2eHandleDx),
+    dy: Number(element.dataset.e2eHandleDy),
+    pixelsPerUnit: Number(element.dataset.e2eHandlePixelsPerUnit)
+  }));
+  expect(Object.values(handle).every(Number.isFinite)).toBe(true);
+  const start = { x: bounds!.x + handle.x, y: bounds!.y + handle.y };
+
+  await page.mouse.move(start.x, start.y);
+  await page.mouse.down();
+  await page.mouse.move(
+    start.x + handle.dx * handle.pixelsPerUnit * 12,
+    start.y + handle.dy * handle.pixelsPerUnit * 12,
+    { steps: 4 }
+  );
+  // The exact solid lands while the button is still down — the geometry
+  // follows the hand instead of appearing on release.
+  await expect(canvas).toHaveAttribute('data-e2e-rendered-bodies', '1', {
+    timeout: PREVIEW_BUDGET_MS
+  });
+  await expect(chip).toHaveText(/^\+\d+(\.\d+)? mm$/);
+
+  await page.mouse.up();
+  await expect(page.getByRole('contentinfo')).toContainText(
+    /Extruded region by \d+(\.\d+)? mm/,
+    { timeout: PREVIEW_BUDGET_MS }
+  );
+  await expect(canvas).toHaveAttribute('data-e2e-rendered-bodies', '1');
+  expect(consoleErrors).toEqual([]);
+});

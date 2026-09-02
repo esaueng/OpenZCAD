@@ -362,3 +362,59 @@ describe('degrading', () => {
     expect(degrades).toEqual([]);
   });
 });
+
+describe('lagging', () => {
+  it('is true while the newest request has not been published', async () => {
+    const first = deferred();
+    let call = 0;
+    const { preview } = makePreview({
+      derive: () => {
+        call += 1;
+        return call === 1 ? first.promise : Promise.resolve('derived');
+      }
+    });
+    expect(preview.lagging).toBe(false);
+
+    preview.request(1);
+    expect(preview.lagging).toBe(true);
+    first.resolve('derived');
+    await settle();
+    // The only requested value has landed: the geometry matches the hand.
+    expect(preview.lagging).toBe(false);
+  });
+
+  it('stays true across superseded values until the newest lands', async () => {
+    const first = deferred();
+    const second = deferred();
+    let call = 0;
+    const { preview, published } = makePreview({
+      derive: () => {
+        call += 1;
+        return call === 1
+          ? first.promise
+          : call === 2
+            ? second.promise
+            : Promise.resolve('derived');
+      }
+    });
+    preview.request(1);
+    preview.request(2);
+    first.resolve('derived');
+    await settle();
+    // Value 1 was dropped as stale; value 2 is in flight, so still behind.
+    expect(published).toEqual([]);
+    expect(preview.lagging).toBe(true);
+    second.resolve('derived');
+    await settle();
+    expect(published.map((doc) => doc?.value)).toEqual([2]);
+    expect(preview.lagging).toBe(false);
+  });
+
+  it('clears when the gesture ends', () => {
+    const { preview } = makePreview({ derive: () => deferred().promise });
+    preview.request(1);
+    expect(preview.lagging).toBe(true);
+    preview.clear();
+    expect(preview.lagging).toBe(false);
+  });
+});
