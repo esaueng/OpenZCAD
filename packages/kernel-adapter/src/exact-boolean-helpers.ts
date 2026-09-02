@@ -204,9 +204,20 @@ export function unifyBooleanFaces(kernel: RemusKernel, solid: number): number {
   return solid;
 }
 
+/**
+ * Unification is accepted only on both halves of the union gate: a strict
+ * topological solid AND a closed viewport projection. Merging the wall pieces
+ * of a boss standing on a shaft's base can hand back a solid that still
+ * validates while its tessellation is open along the merged notch; accepting
+ * it on validation alone sent a perfectly good raw union to the strict pass
+ * as "open, non-manifold, or inconsistently oriented".
+ */
 export function unifyUnionFaces(kernel: RemusKernel, solid: number): number {
-  return selectSafelyUnifiedSolid(kernel, solid, (candidate) =>
-    isStrictBooleanSolid(kernel, candidate)
+  return selectSafelyUnifiedSolid(
+    kernel,
+    solid,
+    (candidate) =>
+      isStrictBooleanSolid(kernel, candidate) && solidMeshIsClosed(kernel, candidate)
   );
 }
 
