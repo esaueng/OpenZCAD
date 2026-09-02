@@ -5446,8 +5446,21 @@ export function ModelViewer({
         // alignment centers when one is being moved.
         const movingBodyId =
           activeMove.target === 'sketch' ? null : activeMove.bodyId;
-        moveSnaps = collectMoveSnaps(movingBodyId);
-        moveCenterTargets = collectCenterAlignTargets(movingBodyId);
+        // Measured, not assumed: this walk is the pre-drag stall the feel
+        // plan's row 2.2 exists for, so its cost is visible to the probe.
+        timed('move.snapCollect', () => {
+          moveSnaps = collectMoveSnaps(movingBodyId);
+          moveCenterTargets = collectCenterAlignTargets(movingBodyId);
+        });
+        if (import.meta.env.OZ_PERF === '1') {
+          const scope = window as typeof window & {
+            __ozMoveSnapCandidates?: { snaps: number; centers: number };
+          };
+          scope.__ozMoveSnapCandidates = {
+            snaps: moveSnaps.length,
+            centers: moveCenterTargets.length
+          };
+        }
         const pivot = moveGizmoGroup.position.clone();
         const worldPerPixel = worldPerPixelAt(pivot);
         const gizmoScale =
@@ -7530,6 +7543,25 @@ export function ModelViewer({
       (context.moveGizmoGroup.userData.focus as MoveGizmoFocus | undefined) ??
         null
     );
+    if (E2E_CANVAS_HOOKS_ENABLED) {
+      // Where the centre handle sits on screen, so a probe can press it
+      // instead of guessing at pixels — the same reason the offset rig
+      // publishes its handle position.
+      const host = context.renderer.domElement;
+      const screen = projectToScreen(
+        context.moveGizmoGroup.position,
+        context.activeCamera,
+        host.clientWidth,
+        host.clientHeight
+      );
+      if (screen) {
+        host.dataset.e2eMoveGizmoX = String(screen.x);
+        host.dataset.e2eMoveGizmoY = String(screen.y);
+      } else {
+        delete host.dataset.e2eMoveGizmoX;
+        delete host.dataset.e2eMoveGizmoY;
+      }
+    }
   }, [movePreview, moveCommitHold, bodies, sketchViews]);
 
   useEffect(() => {

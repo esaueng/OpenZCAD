@@ -35,7 +35,7 @@ Branch `claude/3d-modeling-interface-refinement-e7b650`.
 | 4 navigation preference in Settings | **done** — Viewport › Scroll wheel: detect / mouse / trackpad |
 | 2.3 window-resize coalescing | **done** — one render per frame instead of one per event |
 | 2.1 defer the workspace-session write | **done** — the pivot report is deferred off the press frame |
-| 2.2 precompute move snap candidates | **not started** |
+| 2.2 precompute move snap candidates | **closed by measurement (2026-09-02)** — `oz:move.snapCollect` wraps the pointerdown walk; 200 candidates + 42 centres from the Heat Sink cost ~1.0 ms (`move drag snap collection probe`). Revisit when a document reaches ~10k candidates; the probe reports the count |
 | 5.2 cache the canvas rect for picking | **done** — one layout read per event, not per raycast |
 | 5.3 callout layout thrash | **done** — all rects read before any margin is written |
 | 5.1 BVH / prefilter for picking | **not started** — needs a dependency decision, and the headed numbers do not currently justify it |
