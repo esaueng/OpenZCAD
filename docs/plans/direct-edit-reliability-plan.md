@@ -310,7 +310,16 @@ p95 285 ms) is the kernel, not the UI. Row 3 landed the same day as
 `HoverDwell` in `packages/viewport`: a change of hover target is committed
 only after it has held for 60 ms — shorter than the hover fade, so a boundary
 flicker is absorbed before either fade shows — while entering geometry and
-staying put commit at once. Rows 4 and 5 stay open and stay gated on
+staying put commit at once. Row 4 was measured the same
+day: the pointerdown snap-candidate walk that the 2026-08-12 plan proposed
+to precompute costs **~1.0 ms** for 200 snap candidates and 42 face centres
+(a box moved against the Heat Sink, the busiest edge set among the demos;
+`move drag snap collection probe`, 0.9–1.1 ms over three runs). That is not
+a stall worth a cache and an invalidation contract; it becomes one at
+roughly a hundred times the edges — an imported assembly — and the probe
+now reports `snapCollect.collectMs` and the candidate counts so that
+threshold is watched rather than guessed. Row 4 is closed by measurement
+for the models the product ships today. Row 5 stays open and stays gated on
 headed numbers.
 
 Structural prerequisite, tracked here because every Phase C row is cheaper
