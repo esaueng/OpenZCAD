@@ -25,6 +25,7 @@ import {
 } from '../lib/projectSharing';
 import type { CollaborationStatus } from '../lib/useCollaboration';
 import { useModalFocus } from '../lib/useModalFocus';
+import { StableLabel } from './StableLabel';
 
 const defaultClient = createProjectSharingClient();
 const defaultShareLinkClient = createProjectShareLinkClient();
@@ -572,7 +573,9 @@ export function ProjectSharingDialog({
                       className="sharing-share-copy"
                       onClick={() => void copyShareLink(createdShareLinkUrl)}
                     >
-                      {shareLinkCopied ? 'Copied' : 'Copy'}
+                      <StableLabel reserve={['Copied', 'Copy']} align="center">
+                        {shareLinkCopied ? 'Copied' : 'Copy'}
+                      </StableLabel>
                     </button>
                     <p className="sharing-share-once">
                       Copy it now — this link is shown only once.

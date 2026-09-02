@@ -7,6 +7,7 @@ import {
   importOverallFraction,
   type ImportRunState
 } from '../lib/importProgress';
+import { StableLabel } from './StableLabel';
 
 interface ImportProgressCardProps {
   /** The import to report, or null when there is none. */
@@ -197,7 +198,9 @@ export function ImportProgressCard({
           title="Stop the import. Nothing will be added to your model."
           onClick={onCancel}
         >
-          {cancelling ? 'Cancelling…' : 'Cancel'}
+          <StableLabel reserve={['Cancelling…', 'Cancel']} align="center">
+            {cancelling ? 'Cancelling…' : 'Cancel'}
+          </StableLabel>
         </button>
       )}
     </section>

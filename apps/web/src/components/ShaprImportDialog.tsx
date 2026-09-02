@@ -3,6 +3,7 @@ import { useRef } from 'react';
 
 import type { ShaprPairInspection } from '../lib/shaprImportWorkerClient';
 import { useModalFocus } from '../lib/useModalFocus';
+import { StableLabel } from './StableLabel';
 
 export type ShaprImportDialogPhase = 'parsing' | 'preview' | 'applying';
 
@@ -174,7 +175,9 @@ export function ShaprImportDialog({
             disabled={phase === 'applying'}
             onClick={onCancel}
           >
-            {phase === 'parsing' ? 'Cancel preview' : 'Cancel'}
+            <StableLabel reserve={['Cancel preview', 'Cancel']}>
+              {phase === 'parsing' ? 'Cancel preview' : 'Cancel'}
+            </StableLabel>
           </button>
           <button
             type="button"
@@ -182,9 +185,11 @@ export function ShaprImportDialog({
             disabled={phase !== 'preview' || !inspection}
             onClick={onApply}
           >
-            {phase === 'applying' ? (
-              <LoaderCircle size={13} className="spin" aria-hidden="true" />
-            ) : null}
+            <span className="icon-slot" aria-hidden="true">
+              {phase === 'applying' ? (
+                <LoaderCircle size={13} className="spin" />
+              ) : null}
+            </span>
             Import exact STEP + evidence
           </button>
         </div>

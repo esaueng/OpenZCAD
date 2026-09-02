@@ -266,13 +266,15 @@ export function NumericKeypad({
       </div>
       {/* A converted or computed value is shown in the document's own units,
           so a value typed in some other unit is never committed unseen. */}
-      {evaluation.isExpression || evaluation.typedUnit ? (
-        <div className="keypad-expr-preview">
-          {evaluation.ok && evaluation.value !== undefined
+      {/* Always present so typing an operator does not push the number grid
+          and the Commit button down under the pointer. */}
+      <div className="keypad-expr-preview">
+        {evaluation.isExpression || evaluation.typedUnit
+          ? evaluation.ok && evaluation.value !== undefined
             ? `= ${Math.round((evaluation.displayValue ?? evaluation.value) * 1000) / 1000} ${units}`
-            : (evaluation.error ?? 'invalid')}
-        </div>
-      ) : null}
+            : (evaluation.error ?? 'invalid')
+          : ''}
+      </div>
       {commitDisabled && commitDisabledReason ? (
         <div className="keypad-warning" role="alert">
           {commitDisabledReason}
