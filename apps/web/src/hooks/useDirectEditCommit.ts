@@ -4,7 +4,10 @@ import type { AnyCommand, CommandManager } from '@openzcad/command-system';
 import { directEditRejection } from '../lib/directEdit';
 import { errorMessage } from '../lib/errors';
 import type { CommandDiagnostic } from '../lib/interaction/machine';
-import { validatedFeatureRejection } from '../lib/featureValidation';
+import {
+  splitRefusal,
+  validatedFeatureRejection
+} from '../lib/featureValidation';
 import type { ValidatedFeatureTarget } from './useValidatedFeatureCommit';
 
 export interface DirectEditCommitOptions {
@@ -148,7 +151,7 @@ export function useDirectEditCommit(
             bodyPresent: Boolean(derived.bodyRepresentations[targetBodyId]),
             documentMoved
           });
-          rejection = message ? { message } : null;
+          rejection = message ? splitRefusal(message) : null;
         }
         // Reported rather than thrown: a refusal is an answer, and rebuilding
         // it from an Error's message would drop the feature it names — which
