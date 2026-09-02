@@ -21,78 +21,44 @@
     grid-template-columns: var(--sidebar-col-w) minmax(320px, 1fr);
   }
 
-  .topbar .topbar-action:not(.save-state) {
-    font-size: 0;
-    gap: 0;
-    padding-inline: 0;
+  /* The action row becomes four 28px icon squares in one step: the save
+     icon already changes glyph and colour with its state, and the live
+     count moves onto a badge. The labels stay in the accessible names and
+     tooltips. */
+  .topbar-actions {
+    gap: 4px;
   }
 
-  /*
-    Content-sized with a floor, not a fixed width. A fixed 128px was cut for
-    the longest label ("Repair needed", 130px — which it then clipped anyway),
-    so every ordinary state paid for a rare one: "Saved" needs 75px and left
-    53px of dead space at exactly the widths where the bar has none to spare.
-    The floor covers the routine cycle — saving, syncing, saved — so the
-    controls to its right never shift while a save completes; the longer
-    decision states take the extra room only while they are showing.
-  */
-  .save-state {
-    width: auto;
-    min-width: 90px;
-  }
-
-  /* Icon-only from here down, so the label no longer supplies the width —
-     hold the same 28px hit target the other icon controls have. */
+  .account-state,
+  .save-state,
+  .collaboration-state,
   .file-menu > summary,
   .topbar-actions .settings-action {
     width: 28px;
-    min-width: 0;
+    height: 28px;
     min-height: 28px;
     padding: 0;
-    justify-content: center;
+    gap: 0;
+    font-size: 0;
+    background: var(--color-surface-2);
+    border-color: var(--color-border);
+  }
+
+  .topbar-actions .file-menu {
+    margin-left: 0;
+  }
+
+  .topbar-actions .file-menu::before {
+    display: none;
+  }
+
+  .live-badge {
+    display: grid;
+    font-size: 9.5px;
   }
 
   .shortcuts-grid {
     grid-template-columns: 1fr;
-  }
-}
-
-/* The mode switch takes room out of the middle of the bar, so the two status
-   chips drop to their icons here rather than at 620px — the project name is
-   worth more than the chips’ words. */
-@media (max-width: 1000px) {
-  .account-state,
-  .collaboration-state {
-    width: 28px;
-    min-width: 0;
-    justify-content: center;
-    gap: 0;
-    padding-inline: 0;
-    font-size: 0;
-  }
-}
-
-/*
-  Below this the document name is gone, not shrunk.
-
-  `.topbar-actions` is `flex: 0 0 auto`, so the breadcrumb absorbs every pixel
-  of shrinkage and hits zero with `overflow: hidden` — no ellipsis, no cue,
-  the project name simply is not there. Measured at 768px: brand 139px,
-  actions 446px, breadcrumb 0.
-
-  The save chip is the widest thing in the row (75-130px, depending on state)
-  and the last one still carrying a label, so it is where the space comes
-  from. Its full sentence stays in the accessible name and the tooltip,
-  exactly as the account and collaboration chips already do above.
-*/
-@media (max-width: 900px) {
-  .save-state {
-    width: 28px;
-    min-width: 0;
-    justify-content: center;
-    gap: 0;
-    padding-inline: 0;
-    font-size: 0;
   }
 }
 
