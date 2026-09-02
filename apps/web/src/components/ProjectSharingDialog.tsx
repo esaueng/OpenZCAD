@@ -14,12 +14,6 @@ import {
   type ProjectShareLinkClient
 } from '../lib/projectShareClient';
 import {
-  resolveProjectConflict,
-  type ProjectConflict,
-  type ConflictResolution,
-  type ConflictResolutionHandlers
-} from '../lib/conflictRecovery';
-import {
   createProjectSharingClient,
   type ProjectSharingClient
 } from '../lib/projectSharing';
@@ -36,16 +30,9 @@ export interface ProjectSharingDialogProps {
   lease: ProjectEditLease | null;
   liveMembers?: readonly CollaborationMember[];
   currentUserId?: UserId | null;
-  conflict?: ProjectConflict | null;
-  conflictHandlers?: ConflictResolutionHandlers;
   client?: ProjectSharingClient;
   shareLinkClient?: ProjectShareLinkClient;
   editorInvitationsEnabled?: boolean;
-  /**
-   * Whether this deployment enforces the project edit lease. Defaults on so a
-   * caller that has no rollout state keeps the strict behavior.
-   */
-  editLeasesEnforced?: boolean;
   onClose(): void;
 }
 
@@ -82,7 +69,12 @@ function activeLease(
   );
 }
 
-/** Owner sharing controls, live role/lease state, and recovery-first conflict UX. */
+/**
+ * Owner sharing controls and live role/lease state. Deliberately not where a
+ * divergence gets resolved: that is `ProjectConflictDialog`, whichever side
+ * raised it — a menu about who can see a project is the wrong place to be
+ * asked which copy of it to keep.
+ */
 export function ProjectSharingDialog({
   projectId,
   role,
@@ -90,12 +82,9 @@ export function ProjectSharingDialog({
   lease,
   liveMembers = [],
   currentUserId = null,
-  conflict = null,
-  conflictHandlers,
   client = defaultClient,
   shareLinkClient = defaultShareLinkClient,
   editorInvitationsEnabled = true,
-  editLeasesEnforced = true,
   onClose
 }: ProjectSharingDialogProps) {
   const dialogRef = useRef<HTMLDivElement | null>(null);
@@ -165,25 +154,7 @@ export function ProjectSharingDialog({
     }
   };
 
-  const resolve = async (resolution: ConflictResolution) => {
-    if (!conflict || !conflictHandlers) {
-      return;
-    }
-    await mutate(`conflict:${resolution}`, () =>
-      resolveProjectConflict(
-        conflict,
-        resolution,
-        { role, lease, leasesEnforced: editLeasesEnforced },
-        conflictHandlers
-      )
-    );
-  };
-
   const leaseIsActive = activeLease(lease, projectId);
-  const canKeepMine =
-    role !== 'viewer' &&
-    role !== null &&
-    (leaseIsActive || !editLeasesEnforced);
 
   return (
     <div
@@ -254,52 +225,6 @@ export function ProjectSharingDialog({
           >
             {error ?? (busy ? 'Working…' : null)}
           </p>
-
-          {conflict && (
-            <section
-              className="sharing-section sharing-conflict"
-              aria-labelledby="conflict-recovery-title"
-            >
-              <h3 id="conflict-recovery-title">Resolve local changes</h3>
-              <p>
-                Local version {conflict.localDocument.version} differs from room
-                version {conflict.expectedRemoteVersion}. Your local document
-                remains unresolved if this dialog is closed.
-              </p>
-              <div className="conflict-dialog-actions">
-                <button
-                  type="button"
-                  disabled={!conflictHandlers || busy !== null}
-                  onClick={() => void resolve('use-remote')}
-                >
-                  Use room version
-                </button>
-                <button
-                  type="button"
-                  disabled={!conflictHandlers || !canKeepMine || busy !== null}
-                  aria-describedby={
-                    !canKeepMine ? 'keep-mine-requirement' : undefined
-                  }
-                  onClick={() => void resolve('keep-mine')}
-                >
-                  Keep my version
-                </button>
-                <button
-                  type="button"
-                  disabled={!conflictHandlers || busy !== null}
-                  onClick={() => void resolve('save-local-copy')}
-                >
-                  Save local as a copy
-                </button>
-              </div>
-              {!canKeepMine && (
-                <p id="keep-mine-requirement" className="sharing-conflict-note">
-                  Keep my version requires owner or editor access
-                  {editLeasesEnforced ? ' and an active edit lease' : ''}.
-                </p>
-              )}
-            </section>
-          )}
 
           {role === 'owner' ? (
             <>
