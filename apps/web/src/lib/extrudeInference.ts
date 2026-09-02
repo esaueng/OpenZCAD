@@ -36,7 +36,8 @@ export interface ResolveExtrudeOptions {
   faceAttachment?: { bodyId: BodyId; direction: 'into' | 'away' };
 }
 
-function withOperation(
+/** Rewrites an extrude input's stored operation without touching the rest. */
+export function withOperation(
   input: ExtrudeInput,
   operation: 'new-body' | 'add' | 'cut',
   targetBodyId?: BodyId

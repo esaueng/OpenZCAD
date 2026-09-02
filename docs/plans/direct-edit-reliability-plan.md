@@ -21,12 +21,12 @@ Verified against source on `main` at `7bfd3b00`.
    (`apps/web/src/lib/interaction/capabilities.ts:134`) offers *Offset Face*
    for every planar face with a hash — it does not consider whether the face
    has a schema-v5 lineage reference, nor what borders it.
-2. **Drag.** The viewport rig tracks the pointer and publishes a preview every
-   150 ms (`ModelViewer.tsx:5192`). `LivePreview` stops after one rebuild
-   slower than 400 ms because `continueAfterSlow` is false for offset
-   (`App.tsx:1847`, `lib/livePreview.ts:129`); the handle keeps moving, the
-   geometry does not, and the chip reads `paused`. Only cylinder radius keeps
-   previewing.
+2. **Drag.** The viewport rig tracks the pointer and hands every applied
+   value to `LivePreview`, which keeps one rebuild in flight and drops the
+   values the hand has moved past. (Until B4 landed it published at most every
+   150 ms and stopped for the rest of the gesture after one rebuild slower than
+   400 ms, leaving the handle moving and the geometry frozen with the chip
+   reading `paused`.)
 3. **Plan.** `buildOffsetEditPlan` (`App.tsx:10751`) turns a cap drag on a
    primitive cylinder into a parametric height edit; every other planar face
    becomes a generic `offset-face` direct edit carrying `sourceArea`,
@@ -169,10 +169,15 @@ Ordered by expected leverage; each item retires pins and states which.
   path for hash-only edits the way `staleDirectEditFaceRepair` does. The
   full fix is the lineage bridge (kernel roadmap C1); this item makes the
   limitation visible in the meantime.
-- **B4. Preview continuity (class P).** Enable `continueAfterSlow` for offset
-  with a throttled rebuild cadence, keep the transform-proxy ghost tracking
-  the hand unconditionally, and show the "kernel is behind" state on the
-  chip without stopping. Reuse the commit-time rebuild when the last
+- **B4. Preview continuity (class P).** *Landed in part:* offset and edge
+  drags no longer wait on a 150 ms cadence — every applied value reaches the
+  previewer, which keeps one rebuild in flight and drops superseded values;
+  offset keeps previewing after a slow frame (`continueAfterSlow`), and the
+  chip's `deferred` state now means "the hand is ahead of the published
+  geometry" (`LivePreview.lagging`) rather than "stopped". A region extrude
+  streams an exact preview whose add/cut follows the drag direction, and its
+  rig sweeps the profile every frame so the volume tracks the hand between
+  kernel results. *Still open:* reuse the commit-time rebuild when the last
   preview's document version matches, so a preview that passed cannot be
   followed by a `documentMoved` refusal for the same value.
 - **B5. One refusal surface (class U).** A refusal is shown once, at the
