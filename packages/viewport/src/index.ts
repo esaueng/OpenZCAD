@@ -45,6 +45,7 @@ export * from './selection/analyticCylinderGhost';
 // on it, and the move/rotate handle geometry, snapping, and focus.
 export * from './gizmo/DragRig';
 export * from './gizmo/rigs';
+export * from './gizmo/faceSweepProfile';
 export * from './gizmo/move';
 export * from './gizmo/centerAlign';
 export * from './gizmo/moveTransform';

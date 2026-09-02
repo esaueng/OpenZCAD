@@ -28,6 +28,7 @@ import {
   buildCylinderRadiusHandle,
   buildEdgeRadiusHandle,
   buildOffsetFaceHandle,
+  faceSweepProfile,
   bodiesInBox,
   boxSelectMode,
   cycleDepthPick,
@@ -7602,15 +7603,27 @@ export function ModelViewer({
       context.requestRender();
       return;
     }
-    // Ghost geometry: the face's world-space triangle range.
+    // The ghost is the volume the face sweeps, not a flat copy left behind:
+    // it tracks the hand every frame, and the exact solid replaces the scene
+    // underneath it at whatever rate the kernel rebuilds. A face whose
+    // triangles do not close into an outline keeps the flat ghost.
     const body = bodies.find(
       (candidate) => candidate.bodyId === offsetHandle.bodyId
     );
     const face = body?.topology?.faces.find(
       (candidate) => candidate.topologyId === offsetHandle.topologyId
     );
+    const sweep =
+      body && face
+        ? faceSweepProfile(
+            body.mesh.vertices,
+            body.mesh.indices,
+            face.triangleStart,
+            face.triangleCount
+          )
+        : null;
     let ghostGeometry: THREE.BufferGeometry | null = null;
-    if (body && face) {
+    if (body && face && !sweep) {
       ghostGeometry = new THREE.BufferGeometry();
       ghostGeometry.setAttribute(
         'position',
@@ -7628,7 +7641,8 @@ export function ModelViewer({
     }
     const rig = buildOffsetFaceHandle({
       ...offsetHandlePlacement(offsetHandle.point, offsetHandle.normal),
-      ghostGeometry
+      ghostGeometry,
+      ...(sweep ? { sweep } : {})
     });
     rig.setValue(offsetHandle.initialValue ?? 0);
     rig.setWarning?.(offsetPreviewInvalidRef.current);
