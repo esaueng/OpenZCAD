@@ -151,7 +151,11 @@ interface ViewerShellProps {
   onOffsetCancel(): void;
   offsetPreviewInvalid: boolean;
   previewDeferred: boolean;
-  onOpenOffsetKeypad(currentOffset: number, totalBaseline?: number): void;
+  onOpenOffsetKeypad(
+    currentOffset: number,
+    totalBaseline?: number,
+    totalSense?: 1 | -1
+  ): void;
   keypadAnchorRef: MutableRefObject<
     ((point: { x: number; y: number } | null) => void) | null
   >;

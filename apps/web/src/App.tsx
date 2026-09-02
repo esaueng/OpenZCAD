@@ -91,6 +91,7 @@ import type {
   FeatureNode,
   FaceGeometry,
   ParamValue,
+  FaceTopology,
   ProjectCheckpoint,
   PlaneId,
   ProjectDocument,
@@ -388,6 +389,7 @@ import {
   faceOffsetBaseline,
   planFaceOffset
 } from './lib/interaction/faceOffsetPlan';
+import { extrudeCapAncestor } from './lib/interaction/extrudeCapAncestry';
 import { updateProfileSelection } from './lib/profileSelection';
 import {
   isEntityWideProfileSource,
@@ -445,6 +447,19 @@ import type { MovePreview, MoveSnap, SectionPlaneId } from '@openzcad/viewport';
  * can leave one focused after the user clicks a face in the viewport; let the
  * face shortcut through in that specific case without touching its value.
  */
+/** The FaceTarget fields that make a far-cap pick an edit of its extrude. */
+function extrudeCapTargetFields(
+  document: ProjectDocument | null,
+  bodyId: string,
+  reference: FaceTopology['reference'],
+  faceHash: number
+): Pick<FaceTarget, 'extrudeFeatureId'> {
+  const extrude = document
+    ? extrudeCapAncestor(document, bodyId as BodyId, reference, faceHash)
+    : null;
+  return extrude ? { extrudeFeatureId: extrude.feature.featureId } : {};
+}
+
 function focusedControlOwnsSpace(target: HTMLElement | null): boolean {
   if (!target) {
     return false;
@@ -8724,6 +8739,14 @@ export function App() {
             }
           : {}),
         ...(removableImportedBlend ? { canRemoveFaceFeature: true } : {}),
+        ...(faceTopology && selection.hash !== undefined
+          ? extrudeCapTargetFields(
+              doc,
+              selection.bodyId,
+              faceTopology.reference,
+              selection.hash
+            )
+          : {}),
         ...(radialFrame && geometry?.radius !== undefined
           ? {
               radius: geometry.radius,
@@ -10209,9 +10232,62 @@ export function App() {
         () => {
           setSelectedProfiles([]);
           setRevertPill({ sketchId: target.sketchId as SketchId });
+          armExtrudeCapHandle(resultBodyId);
         }
       );
     })();
+  }
+
+  /**
+   * The extrude stays open after it lands. The region it was armed on is
+   * consumed by the feature, so the handle moves to the far cap of the new
+   * solid, where a drag or a typed value edits the stored distance through
+   * the same face-offset planner the cap would take if picked by hand.
+   */
+  function armExtrudeCapHandle(bodyId: BodyId) {
+    const document = managerRef.current?.document;
+    const faces =
+      document?.derived.bodyRepresentations[bodyId]?.topology?.faces ?? [];
+    for (const face of faces) {
+      const geometry = face.geometry;
+      if (
+        !document ||
+        geometry?.surfaceType !== 'plane' ||
+        !geometry.normal ||
+        !face.reference
+      ) {
+        continue;
+      }
+      const extrudeFields = extrudeCapTargetFields(
+        document,
+        bodyId,
+        face.reference,
+        face.hash
+      );
+      if (!extrudeFields.extrudeFeatureId) {
+        continue;
+      }
+      const point = geometry.centroid ?? geometry.center;
+      const target: FaceTarget = {
+        bodyId,
+        topologyId: face.topologyId,
+        hash: face.hash,
+        reference: face.reference,
+        point: [point.x, point.y, point.z],
+        normal: [geometry.normal.x, geometry.normal.y, geometry.normal.z],
+        surfaceCenter: [
+          geometry.center.x,
+          geometry.center.y,
+          geometry.center.z
+        ],
+        surfaceType: 'planar',
+        ...extrudeFields
+      };
+      // The body the commit selected stays the selection: the chip keeps
+      // reading the new solid's size while the handle waits on its cap.
+      dispatchInteraction({ type: 'select-face', target });
+      return;
+    }
   }
 
   /** Armed edge handle; memoized for the same rig-stability reason as faces. */
@@ -10274,7 +10350,7 @@ export function App() {
     if (target.surfaceType !== 'planar') {
       return null;
     }
-    const totalBaseline =
+    const total =
       doc && target.hash !== undefined
         ? faceOffsetBaseline(
             doc,
@@ -10301,7 +10377,9 @@ export function App() {
         offsetPreviewValueRef.current ??
         interaction.lastValue ??
         0,
-      ...(totalBaseline === undefined ? {} : { totalBaseline })
+      ...(total === undefined
+        ? {}
+        : { totalBaseline: total.total, totalSense: total.sense })
     };
   }, [doc, interaction, renderedOffsetPreview]);
 
@@ -11036,7 +11114,8 @@ export function App() {
   /** Chip tapped: open the anchored keypad prefilled with the drag value. */
   function handleOpenOffsetKeypad(
     currentOffset: number,
-    totalBaseline?: number
+    totalBaseline?: number,
+    totalSense: 1 | -1 = 1
   ) {
     if (interaction.mode !== 'face' && interaction.mode !== 'region') {
       return;
@@ -11053,11 +11132,13 @@ export function App() {
       initial:
         totalBaseline !== undefined || currentOffset !== 0
           ? String(
-              Math.round(((totalBaseline ?? 0) + currentOffset) * 100) / 100
+              Math.round(
+                ((totalBaseline ?? 0) + totalSense * currentOffset) * 100
+              ) / 100
             )
           : '',
       unitKind: 'length',
-      ...(totalBaseline === undefined ? {} : { totalBaseline })
+      ...(totalBaseline === undefined ? {} : { totalBaseline, totalSense })
     });
   }
 
@@ -11277,6 +11358,17 @@ export function App() {
           base,
           plan.primitive.featureId
         ),
+        ...(plan.preflightRejection
+          ? { preflightRejection: plan.preflightRejection }
+          : {})
+      };
+    }
+    if (plan.kind === 'extrude-distance') {
+      return {
+        command: plan.command,
+        bodyId,
+        successMessage: `${plan.feature.name} distance set to ${formatNumber(plan.value)} ${base.units}.`,
+        validationTargets: affectedFeatureTargets(base, plan.feature.featureId),
         ...(plan.preflightRejection
           ? { preflightRejection: plan.preflightRejection }
           : {})

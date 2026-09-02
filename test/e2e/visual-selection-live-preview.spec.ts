@@ -47,10 +47,12 @@ async function armTopCapOffset(page: Page) {
               detail: {
                 surface: 'wall',
                 select: false,
-                resolve: (geometry: {
-                  axisStart?: { x: number; y: number; z: number };
-                  axisEnd?: { x: number; y: number; z: number };
-                } | null) => {
+                resolve: (
+                  geometry: {
+                    axisStart?: { x: number; y: number; z: number };
+                    axisEnd?: { x: number; y: number; z: number };
+                  } | null
+                ) => {
                   if (!geometry?.axisStart || !geometry.axisEnd) {
                     resolve(null);
                     return;
@@ -203,7 +205,9 @@ test('streams exact planar previews and restores invalid or canceled offsets', a
     .poll(readAxisLength, { timeout: PREVIEW_BUDGET_MS })
     .toBeCloseTo(35.7, 4);
   await expect(canvas).toHaveAttribute('data-e2e-selected-face', /.+/);
-  await expect(keypad.getByRole('button', { name: 'Apply total' })).toBeEnabled();
+  await expect(
+    keypad.getByRole('button', { name: 'Apply total' })
+  ).toBeEnabled();
   await expect(page.getByRole('button', { name: 'History 1' })).toBeVisible();
   await keypad.getByRole('button', { name: 'Apply total' }).click();
   await expect(page.getByRole('contentinfo')).toContainText(
@@ -340,5 +344,51 @@ test('streams an exact extrude preview while a region drag is held', async ({
     { timeout: PREVIEW_BUDGET_MS }
   );
   await expect(canvas).toHaveAttribute('data-e2e-rendered-bodies', '1');
+
+  // The extrude stays open: the handle moves to the new cap, the chip reads
+  // the stored distance, and the card still says Extrude.
+  await expect(chip).toHaveText(/^Total \d+(\.\d+)? mm$/);
+  await expect(
+    page.getByRole('region', { name: 'Extrude operation' })
+  ).toBeVisible();
+  const before = Number((await chip.textContent())!.match(/[\d.]+/)![0]);
+  await expect
+    .poll(() => canvas.getAttribute('data-e2e-handle-x'), {
+      timeout: PREVIEW_BUDGET_MS
+    })
+    .not.toBeNull();
+  const capHandle = await canvas.evaluate((element) => ({
+    x: Number(element.dataset.e2eHandleX),
+    y: Number(element.dataset.e2eHandleY),
+    dx: Number(element.dataset.e2eHandleDx),
+    dy: Number(element.dataset.e2eHandleDy),
+    pixelsPerUnit: Number(element.dataset.e2eHandlePixelsPerUnit)
+  }));
+  expect(Object.values(capHandle).every(Number.isFinite)).toBe(true);
+  const capStart = { x: bounds!.x + capHandle.x, y: bounds!.y + capHandle.y };
+  await page.mouse.move(capStart.x, capStart.y);
+  await page.mouse.down();
+  await page.mouse.move(
+    capStart.x + capHandle.dx * capHandle.pixelsPerUnit * 6,
+    capStart.y + capHandle.dy * capHandle.pixelsPerUnit * 6,
+    { steps: 4 }
+  );
+  await page.mouse.up();
+  // A second drag edits the same feature's distance rather than adding a
+  // second extrude or a local push/pull.
+  await expect(page.getByRole('contentinfo')).toContainText(
+    /Extrude distance set to \d+(\.\d+)? mm/,
+    { timeout: PREVIEW_BUDGET_MS }
+  );
+  const after = Number(
+    (await page.getByRole('contentinfo').textContent())!.match(
+      /distance set to ([\d.]+)/
+    )![1]
+  );
+  expect(after).toBeGreaterThan(before);
+  await expect(canvas).toHaveAttribute('data-e2e-rendered-bodies', '1');
+  await expect(
+    page.locator('.feature-row-main', { hasText: 'Extrude' })
+  ).toHaveCount(1);
   expect(consoleErrors).toEqual([]);
 });
