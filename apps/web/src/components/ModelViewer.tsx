@@ -2453,6 +2453,82 @@ export function ModelViewer({
      * can request a measured cylinder wall/cap selection so browser tests use
      * exact topology metadata instead of guessing a screen coordinate.
      */
+    /**
+     * Selects a planar face by its outward normal, the way a click on it
+     * would. Face-attached sketch coverage needs this because which face is
+     * under a given canvas pixel depends on the camera the test happens to
+     * have, and the point of that coverage is the face's lineage, not where
+     * it appears on screen.
+     */
+    const handleE2EPlanarFaceSelection = (event: Event) => {
+      if (!e2eCanvasHooksEnabled) {
+        return;
+      }
+      const detail = (
+        event as CustomEvent<{
+          bodyId?: string;
+          normal: { x: number; y: number; z: number };
+          select?: boolean;
+          resolve?: (
+            face: { hasReference: boolean; lineageName?: string } | null
+          ) => void;
+        }>
+      ).detail;
+      const wanted = detail?.normal
+        ? new THREE.Vector3(detail.normal.x, detail.normal.y, detail.normal.z)
+        : null;
+      if (!wanted || wanted.lengthSq() < 1e-12) {
+        detail?.resolve?.(null);
+        return;
+      }
+      wanted.normalize();
+      const body = bodiesRef.current.find(
+        (candidate) =>
+          !candidate.consumed &&
+          (!detail?.bodyId || candidate.bodyId === detail.bodyId)
+      );
+      const face = body?.topology?.faces.find((candidate) => {
+        const normal = candidate.geometry?.normal;
+        return (
+          candidate.geometry?.surfaceType === 'plane' &&
+          normal !== undefined &&
+          new THREE.Vector3(normal.x, normal.y, normal.z)
+            .normalize()
+            .distanceTo(wanted) < 1e-6
+        );
+      });
+      if (!body || !face?.geometry?.normal) {
+        detail?.resolve?.(null);
+        return;
+      }
+      if (detail?.select !== false) {
+        const anchor = face.geometry.centroid ?? face.geometry.center;
+        onSelectTopologyRef.current(
+          {
+            bodyId: body.bodyId,
+            kind: 'face',
+            topologyId: face.topologyId,
+            hash: face.hash
+          },
+          false,
+          {
+            point: { x: anchor.x, y: anchor.y, z: anchor.z },
+            normal: {
+              x: face.geometry.normal.x,
+              y: face.geometry.normal.y,
+              z: face.geometry.normal.z
+            }
+          }
+        );
+      }
+      detail?.resolve?.({
+        hasReference:
+          face.reference !== undefined &&
+          face.reference.currentHash === face.hash,
+        ...(face.reference ? { lineageName: face.reference.lineageName } : {})
+      });
+    };
+
     const handleE2ECylinderSelection = (event: Event) => {
       if (!e2eCanvasHooksEnabled) {
         return;
@@ -3645,6 +3721,10 @@ export function ModelViewer({
       renderer.domElement.addEventListener(
         'openzcad:e2e-select-cylinder',
         handleE2ECylinderSelection
+      );
+      renderer.domElement.addEventListener(
+        'openzcad:e2e-select-planar-face',
+        handleE2EPlanarFaceSelection
       );
       renderer.domElement.addEventListener(
         'openzcad:e2e-select-edge',
@@ -6534,6 +6614,10 @@ export function ModelViewer({
       renderer.domElement.removeEventListener(
         'openzcad:e2e-select-cylinder',
         handleE2ECylinderSelection
+      );
+      renderer.domElement.removeEventListener(
+        'openzcad:e2e-select-planar-face',
+        handleE2EPlanarFaceSelection
       );
       renderer.domElement.removeEventListener(
         'openzcad:e2e-select-edge',

@@ -97,9 +97,11 @@ export function ToolCard({
               aria-label={
                 action.disabledReason
                   ? `${action.label}: ${action.disabledReason}`
-                  : action.label
+                  : action.note
+                    ? `${action.label}: ${action.note}`
+                    : action.label
               }
-              title={action.disabledReason}
+              title={action.disabledReason ?? action.note}
               className={action.active ? 'active' : undefined}
               disabled={!action.enabled || model.phase === 'validating'}
               onClick={() => onAction?.(action.id)}

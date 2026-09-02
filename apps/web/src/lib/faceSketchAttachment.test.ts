@@ -54,6 +54,8 @@ describe('faceSketchAttachment', () => {
 
     expect(result.ok).toBe(true);
     if (!result.ok) return;
+    expect(result.attachment).toBe('associative');
+    if (result.attachment !== 'associative') return;
     expect(result.planeRef.faceReference).toBe(reference);
     expect(result.planeRef.faceHash).toBe(12);
     expect(result.planeRef.frame.origin).toEqual({ x: 0, y: 0, z: 5 });
@@ -78,7 +80,7 @@ describe('faceSketchAttachment', () => {
     });
 
     expect(result.ok).toBe(true);
-    if (!result.ok) return;
+    if (!result.ok || result.attachment !== 'associative') return;
     expect(result.planeRef.frame.origin).toEqual({ x: 0, y: 0, z: 5 });
     // Both points are persisted: the centroid is the anchor, and its presence
     // is what tells a rebuild to re-anchor there rather than on `sourceCenter`.
@@ -96,23 +98,32 @@ describe('faceSketchAttachment', () => {
     });
 
     expect(result.ok).toBe(true);
-    if (!result.ok) return;
+    if (!result.ok || result.attachment !== 'associative') return;
     expect(result.planeRef.sourceCentroid).toBeUndefined();
     expect(result.planeRef.frame.origin).toEqual(result.planeRef.sourceCenter);
   });
 
-  it('refuses a planar face when lineage is absent or stale', () => {
+  it('places the sketch on a fixed frame when lineage is absent or stale', () => {
     for (const candidate of [
       face({ reference: undefined }),
       face({ reference: { ...reference, currentHash: 99 } })
     ]) {
-      expect(
-        faceSketchAttachment({
-          bodyId: 'body_box' as BodyId,
-          pickedHash: 12,
-          face: candidate
-        })
-      ).toEqual({ ok: false, reason: UNSTABLE_FACE_SKETCH_REASON });
+      const result = faceSketchAttachment({
+        bodyId: 'body_box' as BodyId,
+        pickedHash: 12,
+        face: candidate
+      });
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      // Not associative: nothing in the plane names the face, so a rebuild
+      // that moves the face leaves the sketch where it was drawn — and the
+      // note is how the user is told.
+      expect(result.attachment).toBe('fixed');
+      expect(result.planeRef.type).toBe('frame');
+      if (result.attachment !== 'fixed') return;
+      expect(result.note).toBe(UNSTABLE_FACE_SKETCH_REASON);
+      expect(result.planeRef.frame.origin).toEqual({ x: 0, y: 0, z: 5 });
+      expect(result.planeRef.frame.zAxis).toEqual({ x: 0, y: 0, z: 1 });
     }
   });
 
