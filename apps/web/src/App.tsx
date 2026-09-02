@@ -10283,13 +10283,8 @@ export function App() {
         surfaceType: 'planar',
         ...extrudeFields
       };
-      setSelectedTopology({
-        bodyId,
-        kind: 'face',
-        topologyId: face.topologyId,
-        hash: face.hash,
-        reference: face.reference
-      });
+      // The body the commit selected stays the selection: the chip keeps
+      // reading the new solid's size while the handle waits on its cap.
       dispatchInteraction({ type: 'select-face', target });
       return;
     }
