@@ -437,6 +437,7 @@
 
 .start-shelf-count {
   min-width: 16px;
+  font-variant-numeric: tabular-nums;
   padding: 0 4px;
   color: var(--color-text-subtle);
   background: var(--color-surface-2);

@@ -3,6 +3,7 @@ import { useRef } from 'react';
 
 import type { ShaprPairInspection } from '../lib/shaprImportWorkerClient';
 import { useModalFocus } from '../lib/useModalFocus';
+import { StableLabel } from './StableLabel';
 
 export type ShaprImportDialogPhase = 'parsing' | 'preview' | 'applying';
 
@@ -174,7 +175,9 @@ export function ShaprImportDialog({
             disabled={phase === 'applying'}
             onClick={onCancel}
           >
-            {phase === 'parsing' ? 'Cancel preview' : 'Cancel'}
+            <StableLabel reserve={['Cancel preview', 'Cancel']}>
+              {phase === 'parsing' ? 'Cancel preview' : 'Cancel'}
+            </StableLabel>
           </button>
           <button
             type="button"
