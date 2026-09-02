@@ -90,6 +90,12 @@ passes only because widening operand A does not re-fingerprint B's cap; the
 genuinely brittle variant is already pinned in
 `test/direct-edit-face-repair.test.ts`.
 
+All three shape pins from this run were retired the same day by B1: the
+blended-plate rows now match their oracle exactly because the corpus routes an
+`offset-face` replay through `planFaceOffset`, the same planner the app uses,
+and a face that resolves back to a box or cylinder primitive edits that
+primitive's dimension instead.
+
 ## Phase A — Measure (this PR)
 
 ### A1. Interaction diagnostics log
@@ -148,15 +154,44 @@ and timings.
 
 Ordered by expected leverage; each item retires pins and states which.
 
-- **B1. Prismatic fallback for `offset-face` (class K).** When `pushPullFace`
-  is refused, build the tool from the face itself: extrude the face's exact
-  outer and inner loops by `offset` and fuse (outward) or cut (inward), then
-  apply the same closure, volume, and census gates. The adapter already
-  builds its own tools for through-hole resizes and feature removal; this
-  extends that pattern to the most common gesture. Fail closed only when the
-  fallback also fails, and say which construction was tried in the kernel
-  detail. Kernel dependencies: none. Retires the class-S shape pins by
-  moving the blend faces with the offset face — the volume oracle decides.
+- **B1. Parametric routing for `offset-face` (class S). Landed 2026-09-01.**
+  Specified as a prismatic fallback in the kernel adapter: when `pushPullFace`
+  is refused, build the tool from the face's own loops and fuse or cut. The
+  measurement says that is the wrong fix. `pushPullFace` is not refused on a
+  blended box — it commits, and what it commits already *is* that prism, over
+  the trimmed face outline, with the blend rim left standing. The gap is
+  semantic, not a missing construction: nothing about the face alone says
+  whether "raise the top" means move this surface or make the block thicker.
+  Only history knows.
+
+  So B1 landed as routing, in three pieces:
+
+  - `rederiveBoxModifierLineage` in the kernel adapter republishes
+    `modifier.box.face.<axis>-<min|max>` for the six axis-aligned sides a
+    filleted or chamfered box keeps, the box counterpart of the cylinder
+    modifier roles. Before this those faces carried no reference at all.
+  - `primitiveBoxFaceAncestor` resolves such a face back to the box primitive
+    it descends from, walking only an uninterrupted fillet/chamfer chain and
+    proving identity by role rather than geometry, exactly as
+    `primitiveCylinderHeightAncestor` does.
+  - `planFaceOffset` turns a picked face plus an offset into either a
+    primitive dimension edit or the generic push/pull, and is shared by
+    `App.tsx` and the corpus replay, so a fixture measures the gesture the
+    product performs rather than a corpus-local guess.
+
+  Covers: the max sides of a box primitive, through fillet and chamfer
+  chains, plus the cylinder top cap that already routed this way. Does not
+  cover: min sides (the box grows from its minimum corner, so moving one
+  would have to move the body too), and faces on boolean, imported, or
+  otherwise unresolvable bodies. Those keep the local push/pull, with the
+  prism semantics intact, and closing *that* class is the kernel M6
+  tangent-propagation ask, not an app-side fallback. Kernel dependencies:
+  none. Retired all three class-S shape pins
+  (`box-all-edges-filleted-top-offset`,
+  `box-all-edges-chamfered-top-offset`,
+  `box-filleted-top-offset-inward-past-blend`); each now matches its volume
+  oracle. Tests: `test/box-face-dimension-drag.test.ts`,
+  `test/box-modifier-lineage.test.ts`.
 - **B2. Upstream the residual kernel cases (class K).** Every fixture still
   refused after B1 becomes a reproduction bundle in `esaueng/remus`, one per
   session, per the kernel roadmap's S1 playbook — starting with the negative
@@ -212,11 +247,11 @@ in those two files; the extraction should land with `--max-warnings 0`.
 
 ## Risks and open questions
 
-- The fallback in B1 changes which exact surfaces a successful offset
-  produces (a fused prism can leave seam edges `pushPullFace` would have
-  merged). It must publish the same topology witnesses or the edit becomes a
-  new brittleness source; the corpus's replay-after-upstream-edit scenario is
-  the guard.
+- B1 changes what a drag on a routed face *records*: a dimension edit on the
+  primitive rather than a direct-edit feature in history. That is the point,
+  but it means the same gesture writes different history depending on
+  lineage, and a face that stops resolving silently reverts to the push/pull
+  semantics. The corpus route column and the ancestry tests are the guard.
 - The log records documents; a document with a large native sketch-text
   history can approach the byte cap and evict earlier refusals. Acceptable for
   a bounded local buffer, but the export should say how many entries were
