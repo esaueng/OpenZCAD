@@ -9,10 +9,7 @@ import type { RemusKernel } from './remus-runtime';
 import type { Vec3 } from '@openzcad/geometry';
 import type { FaceAreaProvenance, FaceGeometry } from '@openzcad/shared';
 import { MEASUREMENT_DEFLECTION } from './exact-witnesses';
-import {
-  faceVertexCentroid,
-  isBlendFace
-} from './exact-brep';
+import { faceVertexCentroid, isBlendFace } from './exact-brep';
 import { planarFaceCentroid } from './exact-face-centroid';
 import {
   DIRECT_EDIT_TOLERANCE,
@@ -38,7 +35,12 @@ import {
  * unclassified rather than guessed at, because a surface class this build has
  * not been measured on must not be advertised as exact.
  */
-export const CLOSED_FORM_SURFACES = new Set(['cylinder', 'sphere', 'cone', 'torus']);
+export const CLOSED_FORM_SURFACES = new Set([
+  'cylinder',
+  'sphere',
+  'cone',
+  'torus'
+]);
 
 /**
  * Planar boundary curves the kernel integrates exactly (Green's theorem over
@@ -534,12 +536,17 @@ export interface BlendRegionSnapshot extends BlendCarrierSnapshot {
   faceCount: number;
 }
 
-/** Re-prove a recorded blend seed, its carrier, region, and source radius. */
+/**
+ * Re-prove a recorded blend seed, its carrier, and region — and, when a
+ * source radius is given, that the band still has it. A lineage-resolved
+ * seed passes no radius: its identity is proven by role, and the band's
+ * current radius is what the edit then works from.
+ */
 export function requireBlendRegion(
   kernel: RemusKernel,
   solid: number,
   face: number,
-  sourceRadius: number
+  sourceRadius?: number
 ): BlendRegionSnapshot {
   const geometry = measureOwnedFaceGeometry(kernel, solid, face);
   const carrier = blendCarrierSnapshot(geometry);
@@ -554,8 +561,9 @@ export function requireBlendRegion(
     );
   }
   if (
+    sourceRadius !== undefined &&
     Math.abs(carrier.radius - sourceRadius) >
-    Math.max(sourceRadius * 1e-5, 1e-9)
+      Math.max(sourceRadius * 1e-5, 1e-9)
   ) {
     throw new Error(
       'The selected blend no longer matches its recorded radius.'
