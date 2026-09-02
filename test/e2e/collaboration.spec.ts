@@ -190,7 +190,7 @@ test('keeps a shared-project viewer visibly read-only', async ({ page }) => {
   const sharingButton = page.getByRole('button', {
     name: 'Open project sharing'
   });
-  await expect(sharingButton).toContainText('read-only');
+  await expect(sharingButton).toContainText('Read-only');
   // A viewer is held in View mode — `viewMode` is true whenever there is a
   // buildModeDisabledReason, and being a viewer is one — so the whole Feature
   // tools rail is gone rather than present-but-disabled. This assertion used
