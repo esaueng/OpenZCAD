@@ -354,18 +354,20 @@ export function ExportDialog({
           )}
         </section>
 
-        {error ? (
-          <p className="export-dialog-error" role="alert">
-            {error}
-          </p>
-        ) : null}
-
-        {phase !== 'idle' && progress ? (
-          <p className="export-dialog-progress" role="status">
-            <LoaderCircle size={13} className="spin" aria-hidden="true" />
-            {PROGRESS_LABELS[progress]}
-          </p>
-        ) : null}
+        {/* One slot with a reserved line: a progress or error row that
+            appeared here pushed the buttons down under the pointer. */}
+        <div className="export-dialog-status">
+          {error ? (
+            <p className="export-dialog-error" role="alert">
+              {error}
+            </p>
+          ) : phase !== 'idle' && progress ? (
+            <p className="export-dialog-progress" role="status">
+              <LoaderCircle size={13} className="spin" aria-hidden="true" />
+              {PROGRESS_LABELS[progress]}
+            </p>
+          ) : null}
+        </div>
 
         <div className="export-dialog-actions">
           <button type="button" className="secondary" onClick={cancelAndClose}>

@@ -377,7 +377,9 @@ export function TopBar({
             title="Import and export"
           >
             <FolderOpen size={14} aria-hidden="true" />
-            File{artifacts.length > 0 ? ` ${artifacts.length}` : ''}
+            <StableLabel reserve={['File', 'File 99']}>
+              File{artifacts.length > 0 ? ` ${artifacts.length}` : ''}
+            </StableLabel>
           </summary>
           <div className="topbar-menu-panel">
             <label

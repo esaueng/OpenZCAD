@@ -955,7 +955,6 @@ export function ModelingOperationsForm({
           {validationReason}
         </p>
       ) : null}
-      {preflightMessage(effectivePreflight)}
       <div className="form-actions">
         <button
           type="submit"
@@ -974,6 +973,9 @@ export function ModelingOperationsForm({
           </button>
         ) : null}
       </div>
+      {/* Below the actions on purpose: it appears in answer to the button,
+          and above it the button moved under the pointer that pressed it. */}
+      {preflightMessage(effectivePreflight)}
     </form>
   );
 }
