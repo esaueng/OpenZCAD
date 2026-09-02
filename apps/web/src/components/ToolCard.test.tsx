@@ -59,7 +59,8 @@ describe('ToolCard', () => {
           phase: 'failed',
           error: {
             message: 'Fillet could not be created on 1 selected edge.',
-            detail: 'Feature "Lower rim fillet": BRepFilletAPI reported 0 faces.',
+            detail:
+              'Feature "Lower rim fillet": BRepFilletAPI reported 0 faces.',
             culprit: {
               featureId: 'feat_lower_rim',
               featureName: 'Lower rim fillet'
@@ -81,6 +82,27 @@ describe('ToolCard', () => {
       screen.getByRole('button', { name: 'Edit Lower rim fillet' })
     );
     expect(onEditCulprit).toHaveBeenCalledWith('feat_lower_rim');
+  });
+
+  it('offers to keep the last value that built after a refusal', async () => {
+    // Releasing on a refused value leaves the model at the last passing
+    // preview; the card can commit that instead of sending the hand back.
+    const keep = vi.fn();
+    render(
+      <ToolCard
+        model={{
+          icon: 'offset-face',
+          title: 'Offset Face',
+          hint: 'Adjust the value and try again.',
+          phase: 'failed',
+          error: { message: 'The offset removed the whole body.' }
+        }}
+        keepLastValid={{ label: 'Keep 8.4 mm', keep }}
+        onClose={vi.fn()}
+      />
+    );
+    await userEvent.click(screen.getByRole('button', { name: 'Keep 8.4 mm' }));
+    expect(keep).toHaveBeenCalledTimes(1);
   });
 
   it('states a refusal plainly when nothing names a way out', async () => {
