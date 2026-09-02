@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { toFeatureId } from '@openzcad/shared';
 import {
+  splitRefusal,
   validatedFeatureRejection,
   warningForFeature
 } from './featureValidation';
@@ -23,6 +24,50 @@ describe('validated feature warnings', () => {
     );
   });
 
+  it('shows the sentence before a newline and keeps the rest as detail', () => {
+    expect(
+      splitRefusal(
+        'This offset was refused and the body left unchanged.\n5 source faces (2 curved) became 80 result faces (0 curved)'
+      )
+    ).toEqual({
+      message: 'This offset was refused and the body left unchanged.',
+      detail: '5 source faces (2 curved) became 80 result faces (0 curved)'
+    });
+    expect(splitRefusal('Radius must be greater than zero.')).toEqual({
+      message: 'Radius must be greater than zero.'
+    });
+    // A trailing newline with nothing after it is not a detail.
+    expect(splitRefusal('Nothing more to say.\n  ')).toEqual({
+      message: 'Nothing more to say.'
+    });
+  });
+
+  it('carries kernel detail on a refused feature without putting it in the sentence', () => {
+    const rejection = validatedFeatureRejection({
+      featureName: 'Deepen bore',
+      featureId: toFeatureId('feature_bore'),
+      warnings: [
+        'Feature "Deepen bore": This offset was refused.\n5 source faces became 80 result faces'
+      ],
+      featureWarnings: [
+        {
+          featureId: toFeatureId('feature_bore'),
+          featureName: 'Deepen bore',
+          message:
+            'Feature "Deepen bore": This offset was refused.\n5 source faces became 80 result faces',
+          kind: 'refusal'
+        }
+      ],
+      bodyPresent: true,
+      documentMoved: false
+    });
+    expect(rejection).toMatchObject({
+      message: 'This offset was refused.',
+      detail: '5 source faces became 80 result faces',
+      culprit: { featureId: 'feature_bore', featureName: 'Deepen bore' }
+    });
+  });
+
   it('rejects the kernel warning before committing', () => {
     expect(
       validatedFeatureRejection({
@@ -39,14 +84,14 @@ describe('validated feature warnings', () => {
   });
 
   it('rejects a missing result and a stale document', () => {
-    expect(
-      validatedFeatureRejection({ ...safe, bodyPresent: false })
-    ).toEqual({ message: 'The operation did not produce its result body.' });
-    expect(
-      validatedFeatureRejection({ ...safe, documentMoved: true })
-    ).toEqual({
-      message: 'The document changed while the operation validated.'
+    expect(validatedFeatureRejection({ ...safe, bodyPresent: false })).toEqual({
+      message: 'The operation did not produce its result body.'
     });
+    expect(validatedFeatureRejection({ ...safe, documentMoved: true })).toEqual(
+      {
+        message: 'The document changed while the operation validated.'
+      }
+    );
   });
 
   it('accepts a warning-free current result', () => {
@@ -135,8 +180,7 @@ describe('a verdict with warning attribution', () => {
           {
             featureId: mine,
             featureName: 'Shell',
-            message:
-              'Feature "Shell": Shell wall thickness exceeds the body.',
+            message: 'Feature "Shell": Shell wall thickness exceeds the body.',
             kind: 'build-failed'
           }
         ],

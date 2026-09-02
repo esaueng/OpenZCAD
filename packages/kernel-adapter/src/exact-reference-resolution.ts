@@ -72,7 +72,9 @@ export function resolveFeatureFaces(
         throw new Error(`${label} face is stale: ${resolution.message}`);
       }
       if (typeof resolution.candidate.value !== 'number') {
-        throw new Error(`${label} face resolved without a kernel handle.`);
+        throw new Error(
+          `${label} face could not be found on the rebuilt body.`
+        );
       }
       return resolution.candidate.value;
     }
@@ -203,7 +205,9 @@ export function resolveEdgeModifierEdges(
         throw new Error(`Edge modifier edge is stale: ${resolution.message}`);
       }
       if (typeof resolution.candidate.value !== 'number') {
-        throw new Error('Edge modifier edge resolved without a kernel handle.');
+        throw new Error(
+          'Edge modifier edge could not be found on the rebuilt body.'
+        );
       }
       return resolution.candidate.value;
     }

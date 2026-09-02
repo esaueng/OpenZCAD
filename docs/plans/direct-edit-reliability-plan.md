@@ -255,10 +255,17 @@ Ordered by expected leverage; each item retires pins and states which.
   missing), so an oversize fillet reads "Try a smaller radius" at the handle
   instead of silently dropping the blend. The first value that builds again
   recovers the gesture in place. This is spec S2 of the reference-CAD
-  interaction document. *Still open:* an action on the card — open the named
-  feature, undo, or retry at the last accepted value — beyond the existing
-  `Edit <Feature>`; and rewriting the kernel-adapter refusal strings that
-  reach users so none mention censuses, facets, or handles.
+  interaction document. *Closed 2026-09-02, wording:* a
+  refusal string may carry kernel detail after its first newline; the web
+  layer shows the sentence before it on the card and the rest behind
+  "Details" (`splitRefusal` in `lib/featureValidation.ts`), and the
+  kernel-adapter strings that reach users were rewritten to that shape — no
+  censuses, facets, handles, or "the kernel returned" before the newline,
+  the face counts after it. *Still open:* an action on the card beyond
+  `Edit <Feature>` — retry at the last accepted value, which #180's
+  keep-the-last-valid-preview behaviour has made mostly moot, and undo,
+  which has nothing to undo after a refusal. Both wait for a measured need
+  from the interaction log rather than a guess.
 
 ## Phase C — Feel
 

@@ -1,24 +1,17 @@
-import {
-  type FaceEvolutionPayloadV1
-}  from './remus-runtime';
+import { type FaceEvolutionPayloadV1 } from './remus-runtime';
 import {
   findSketch,
   listFeaturesInOrder,
   resolveParamValue
-}  from '@openzcad/document-core';
-import {
-  geometryTolerance
-}  from '@openzcad/geometry';
+} from '@openzcad/document-core';
+import { geometryTolerance } from '@openzcad/geometry';
 import {
   FULL_REVOLVE_ANGLE_DEG,
   UNIT_TO_MM,
   type FeatureNode,
   type ParamValue
-}  from '@openzcad/shared';
-import type {
-  ExactShape,
-  ImportedStepDiagnostics
-}  from './exact-types';
+} from '@openzcad/shared';
+import type { ExactShape, ImportedStepDiagnostics } from './exact-types';
 import {
   diagnoseImportedSolid,
   modifierChainRootPrimitive,
@@ -26,18 +19,13 @@ import {
   rederiveCylinderModifierLineage,
   rederivePrimitiveDirectEditLineage,
   topologyCandidatesForSolid
-}  from './exact-lineage-builders';
-import {
-  measureFaceGeometry
-}  from './exact-measure';
-import {
-  drillHole,
-  tryExactCoaxialCylinderCut
-}  from './exact-cylinder-ops';
+} from './exact-lineage-builders';
+import { measureFaceGeometry } from './exact-measure';
+import { drillHole, tryExactCoaxialCylinderCut } from './exact-cylinder-ops';
 import {
   applyEdgeModifier,
   edgeModifierFailureMessage
-}  from './exact-edge-modifiers';
+} from './exact-edge-modifiers';
 import {
   collapseShape,
   exactUnionOffsetSuggestion,
@@ -51,15 +39,15 @@ import {
   tessellatedFaceBounds,
   unifyBooleanFaces,
   type UnionFuseOperand
-}  from './exact-boolean-helpers';
+} from './exact-boolean-helpers';
 import {
   amendFeatureWarning,
   raiseFeatureWarning
-}  from './exact-feature-warnings';
+} from './exact-feature-warnings';
 import {
   resolveEdgeModifierEdges,
   resolveFeatureFaces
-}  from './exact-reference-resolution';
+} from './exact-reference-resolution';
 import {
   bodyName,
   copyShape,
@@ -69,13 +57,9 @@ import {
   importStepWithOwnBudget,
   inheritMeshOrigin,
   resolveParametricPoint
-}  from './exact-shape-utils';
-import {
-  MEASUREMENT_DEFLECTION
-}  from './exact-witnesses';
-import {
-  isBlendFace
-}  from './exact-brep';
+} from './exact-shape-utils';
+import { MEASUREMENT_DEFLECTION } from './exact-witnesses';
+import { isBlendFace } from './exact-brep';
 import {
   DIRECT_EDIT_TOLERANCE,
   GEOMETRY_EPSILON,
@@ -88,27 +72,22 @@ import {
   subtract,
   transformMatrix,
   uniformScaleMatrix
-}  from './exact-math';
+} from './exact-math';
 import {
   booleanFacetFallbackWarning,
   censusOfSolids,
   droppedUnionOperandWarning
-}  from './boolean-result-validation';
-import {
-  importedMeshStl,
-  meshBooleanUnsupportedError
-}  from './imported-mesh';
+} from './boolean-result-validation';
+import { importedMeshStl, meshBooleanUnsupportedError } from './imported-mesh';
 import {
   extrudeVolumeTolerance,
   type ExtrudeInferenceBody
-}  from './extrude-inference';
-import {
-  createRemusModelingOperations
-}  from './remus-modeling-operations';
+} from './extrude-inference';
+import { createRemusModelingOperations } from './remus-modeling-operations';
 import {
   analyzeUnionConnectivity,
   disconnectedUnionWarning
-}  from './union-connectivity';
+} from './union-connectivity';
 import {
   remusHashOnlyLineage,
   createRemusImportedStepLineage,
@@ -116,7 +95,7 @@ import {
   deriveRemusBooleanCarrierLineage,
   mergeRemusLineageStates,
   type RemusLineageState
-}  from './remus-lineage';
+} from './remus-lineage';
 
 /**
  * An operand's lineage together with the exact witnesses of its faces as they
@@ -144,7 +123,7 @@ function booleanOperandLineage(
 import {
   classifyImportedSolid,
   importedStepNoSolidError
-}  from './imported-step-validation';
+} from './imported-step-validation';
 import {
   resolveRevolveAngleDeg,
   buildPrimitive,
@@ -153,14 +132,9 @@ import {
   buildProfileSweep,
   buildHelicalSweep,
   resolveSketchBasisAtHistory
-}  from './exact-profile-builders';
-import {
-  applyDirectEdit
-}  from './exact-direct-edit-ops';
-import type {
-  FeatureBuildContext,
-  FeatureDataOf
-}  from './exact-build-loop';
+} from './exact-profile-builders';
+import { applyDirectEdit } from './exact-direct-edit-ops';
+import type { FeatureBuildContext, FeatureDataOf } from './exact-build-loop';
 
 /**
  * A confirmed subtract must remove a material share of the volume its tools
@@ -170,7 +144,6 @@ import type {
  * guard exists to catch.
  */
 const MINIMUM_SUBTRACT_REMOVAL_RATIO = 0.5;
-
 
 function buildSketchFeature(
   ctx: FeatureBuildContext,
@@ -184,13 +157,7 @@ function buildSketchFeature(
   }
   result.sketchBases.set(
     sketch.sketchId,
-    resolveSketchBasisAtHistory(
-      kernel,
-      document,
-      sketch,
-      result,
-      scope
-    )
+    resolveSketchBasisAtHistory(kernel, document, sketch, result, scope)
   );
 }
 
@@ -204,10 +171,7 @@ function buildImportedMeshFeature(
     // The kernel's own STL importer owns vertex welding and shell
     // orientation, so the document's triangle soup goes back through
     // it rather than being re-derived here.
-    const solid = importMeshSolid(
-      kernel,
-      importedMeshStl(data)
-    );
+    const solid = importMeshSolid(kernel, importedMeshStl(data));
     result.meshBodies.add(feature.bodyId);
     result.shapes.set(feature.bodyId, {
       solids: [solid],
@@ -254,24 +218,27 @@ function buildImportedStepFeature(
   feature: FeatureNode,
   data: FeatureDataOf<'imported-step'>
 ): void {
-  const { kernel, document, result, importSources, pinnedImports, importedSteps } = ctx;
+  const {
+    kernel,
+    document,
+    result,
+    importSources,
+    pinnedImports,
+    importedSteps
+  } = ctx;
   if (feature.bodyId) {
     const checksum =
       data.stepText === undefined
         ? data.stepSourceRef?.checksumSha256
         : undefined;
-    const cached = checksum
-      ? importedSteps?.lookup(checksum)
-      : undefined;
+    const cached = checksum ? importedSteps?.lookup(checksum) : undefined;
     let solids: number[];
     let acceptedDeclaredIndices: number[];
     let diagnostics: ImportedStepDiagnostics;
     if (cached) {
       // The checksum determines the result, so restoring is exact.
       // Only the handles are new — they belong to this kernel.
-      solids = cached.solids.map((blob) =>
-        kernel.deserializeSolid(blob)
-      );
+      solids = cached.solids.map((blob) => kernel.deserializeSolid(blob));
       acceptedDeclaredIndices = cached.acceptedDeclaredIndices;
       diagnostics = cached.diagnostics;
     } else {
@@ -290,9 +257,7 @@ function buildImportedStepFeature(
         }
         sourceBytes = resolved;
       }
-      const declared = Array.from(
-        importStepWithOwnBudget(kernel, sourceBytes)
-      );
+      const declared = Array.from(importStepWithOwnBudget(kernel, sourceBytes));
       if (declared.length === 0) {
         throw new Error('STEP file contains no solids.');
       }
@@ -303,9 +268,7 @@ function buildImportedStepFeature(
       // that vanishes silently is the worst failure mode the parity
       // corpus records.
       const verdicts = declared.map((solid, index) =>
-        classifyImportedSolid(
-          diagnoseImportedSolid(kernel, solid, index + 1)
-        )
+        classifyImportedSolid(diagnoseImportedSolid(kernel, solid, index + 1))
       );
       solids = declared.filter(
         (_, index) => verdicts[index]!.kind !== 'not-a-solid'
@@ -363,10 +326,7 @@ function buildImportedStepFeature(
     const documentScale = 1 / UNIT_TO_MM[document.units];
     if (documentScale !== 1) {
       solids = solids.map((solid) =>
-        kernel.copyAndTransformSolid(
-          solid,
-          uniformScaleMatrix(documentScale)
-        )
+        kernel.copyAndTransformSolid(solid, uniformScaleMatrix(documentScale))
       );
     }
     result.importedStepDiagnostics.set(feature.bodyId, diagnostics);
@@ -374,9 +334,7 @@ function buildImportedStepFeature(
       solids,
       lineage: createRemusImportedStepLineage(
         feature.featureId,
-        solids.flatMap((solid) =>
-          topologyCandidatesForSolid(kernel, solid)
-        )
+        solids.flatMap((solid) => topologyCandidatesForSolid(kernel, solid))
       )
     });
   }
@@ -388,10 +346,7 @@ function buildPrimitiveFeature(
 ): void {
   const { kernel, scope, result } = ctx;
   if (feature.bodyId) {
-    result.shapes.set(
-      feature.bodyId,
-      buildPrimitive(kernel, feature, scope)
-    );
+    result.shapes.set(feature.bodyId, buildPrimitive(kernel, feature, scope));
   }
 }
 
@@ -408,8 +363,7 @@ function buildExtrudeFeature(
       feature,
       scope,
       result.sketchBases,
-      (message) =>
-        raiseFeatureWarning(result, feature, message, 'advisory')
+      (message) => raiseFeatureWarning(result, feature, message, 'advisory')
     );
     const operation = data.operation ?? 'new-body';
     if (operation === 'new-body') {
@@ -418,9 +372,7 @@ function buildExtrudeFeature(
     }
     const targetBodyId = data.targetBodyId;
     if (!targetBodyId) {
-      throw new Error(
-        `Stored ${operation} extrusion has no target body.`
-      );
+      throw new Error(`Stored ${operation} extrusion has no target body.`);
     }
     if (result.consumed.has(targetBodyId)) {
       throw new Error(
@@ -428,9 +380,7 @@ function buildExtrudeFeature(
       );
     }
     if (result.meshBodies.has(targetBodyId)) {
-      throw meshBooleanUnsupportedError(
-        bodyName(document, targetBodyId)
-      );
+      throw meshBooleanUnsupportedError(bodyName(document, targetBodyId));
     }
     const target = result.shapes.get(targetBodyId);
     if (!target) {
@@ -475,17 +425,11 @@ function buildExtrudeFeature(
     const extrusionSolid = collapseShape(kernel, extrusion);
     const solid =
       operation === 'add'
-        ? fuseUniformSolid(kernel, [
-            ...target.solids,
-            ...extrusion.solids
-          ])
+        ? fuseUniformSolid(kernel, [...target.solids, ...extrusion.solids])
         : unifyBooleanFaces(
             kernel,
-            tryExactCoaxialCylinderCut(
-              kernel,
-              targetSolid,
-              extrusionSolid
-            ) ?? kernel.cut(targetSolid, extrusionSolid)
+            tryExactCoaxialCylinderCut(kernel, targetSolid, extrusionSolid) ??
+              kernel.cut(targetSolid, extrusionSolid)
           );
     // An add only needs the two to meet. Shared volume cannot answer that —
     // a boss grown off the face it was sketched on meets its target exactly
@@ -519,8 +463,7 @@ function buildExtrudeFeature(
     };
     if (
       operation === 'cut' &&
-      resultBody.volume <=
-        extrudeVolumeTolerance(targetBody, extrusionBody)
+      resultBody.volume <= extrudeVolumeTolerance(targetBody, extrusionBody)
     ) {
       throw new Error(
         `Stored cut extrusion would remove all of ${targetBody.name}; operation was not changed.`
@@ -556,14 +499,10 @@ function buildRevolveFeature(
         feature,
         scope,
         result.sketchBases,
-        (message) =>
-          raiseFeatureWarning(result, feature, message, 'advisory')
+        (message) => raiseFeatureWarning(result, feature, message, 'advisory')
       )
     );
-    if (
-      resolveRevolveAngleDeg(data.angleDeg, scope) <
-      FULL_REVOLVE_ANGLE_DEG
-    ) {
+    if (resolveRevolveAngleDeg(data.angleDeg, scope) < FULL_REVOLVE_ANGLE_DEG) {
       result.partialRevolveBodies.add(feature.bodyId);
     }
   }
@@ -583,8 +522,7 @@ function buildLoftFeature(
         feature,
         scope,
         result.sketchBases,
-        (message) =>
-          raiseFeatureWarning(result, feature, message, 'advisory')
+        (message) => raiseFeatureWarning(result, feature, message, 'advisory')
       )
     );
   }
@@ -604,8 +542,7 @@ function buildSweepFeature(
         feature,
         scope,
         result.sketchBases,
-        (message) =>
-          raiseFeatureWarning(result, feature, message, 'advisory')
+        (message) => raiseFeatureWarning(result, feature, message, 'advisory')
       )
     );
   }
@@ -625,8 +562,7 @@ function buildHelicalSweepFeature(
         feature,
         scope,
         result.sketchBases,
-        (message) =>
-          raiseFeatureWarning(result, feature, message, 'advisory')
+        (message) => raiseFeatureWarning(result, feature, message, 'advisory')
       )
     );
   }
@@ -646,16 +582,10 @@ function buildTransformFeature(
   const rotation = data.transform.rotationDeg;
   const scaleFactor =
     data.transform.scale !== undefined
-      ? resolveParamValue(
-          data.transform.scale,
-          scope,
-          'scale'
-        )
+      ? resolveParamValue(data.transform.scale, scope, 'scale')
       : 1;
   if (!Number.isFinite(scaleFactor) || scaleFactor <= 0) {
-    throw new Error(
-      'Transform scale must resolve to a positive number.'
-    );
+    throw new Error('Transform scale must resolve to a positive number.');
   }
   result.shapes.set(
     data.targetBodyId,
@@ -705,9 +635,7 @@ function buildMirrorFeature(
     z: resolveParamValue(rawNormal.z, scope, 'mirror normal Z')
   });
   if (!planeNormal) {
-    throw new Error(
-      'Mirror plane normal must be finite and non-zero.'
-    );
+    throw new Error('Mirror plane normal must be finite and non-zero.');
   }
   const operations = createRemusModelingOperations(kernel);
   result.shapes.set(feature.bodyId, {
@@ -719,11 +647,7 @@ function buildMirrorFeature(
       'The pinned bridge does not expose a complete reflected topology relation.'
     )
   });
-  inheritMeshOrigin(
-    result,
-    data.targetBodyId,
-    feature.bodyId
-  );
+  inheritMeshOrigin(result, data.targetBodyId, feature.bodyId);
 }
 
 function buildHoleFeature(
@@ -750,16 +674,11 @@ function buildHoleFeature(
     kernel,
     shape,
     [data.faceHash],
-    data.faceReference
-      ? [data.faceReference]
-      : undefined,
+    data.faceReference ? [data.faceReference] : undefined,
     'Hole'
   );
   const geometry = measureFaceGeometry(kernel, faces[0]!);
-  if (
-    geometry?.surfaceType !== 'plane' ||
-    geometry.normal === undefined
-  ) {
+  if (geometry?.surfaceType !== 'plane' || geometry.normal === undefined) {
     throw new Error(
       'A hole needs a planar entry face with an analytic normal.'
     );
@@ -772,21 +691,11 @@ function buildHoleFeature(
     throw new Error('Hole entry face normal is degenerate.');
   }
   const reference =
-    Math.abs(zAxis.z) < 0.9
-      ? { x: 0, y: 0, z: 1 }
-      : { x: 1, y: 0, z: 0 };
+    Math.abs(zAxis.z) < 0.9 ? { x: 0, y: 0, z: 1 } : { x: 1, y: 0, z: 0 };
   const xAxis = normalized(cross(reference, zAxis))!;
   const yAxis = cross(zAxis, xAxis);
-  const u = resolveParamValue(
-    data.position.u,
-    scope,
-    'hole position U'
-  );
-  const v = resolveParamValue(
-    data.position.v,
-    scope,
-    'hole position V'
-  );
+  const u = resolveParamValue(data.position.u, scope, 'hole position U');
+  const v = resolveParamValue(data.position.v, scope, 'hole position V');
   // Which point (u, v) is measured from is versioned by the marker's
   // presence, never by what this build can compute: `center` is the mean of
   // the face's VERTICES, so on a face bounded by one closed circular edge it
@@ -809,11 +718,7 @@ function buildHoleFeature(
     y: -zAxis.y,
     z: -zAxis.z
   };
-  const diameter = resolveParamValue(
-    data.diameter,
-    scope,
-    'hole diameter'
-  );
+  const diameter = resolveParamValue(data.diameter, scope, 'hole diameter');
   if (!(diameter > 0)) {
     throw new Error('Hole diameter must be greater than zero.');
   }
@@ -843,11 +748,7 @@ function buildHoleFeature(
     if (data.depth === undefined) {
       throw new Error('A blind hole needs a depth.');
     }
-    depth = resolveParamValue(
-      data.depth,
-      scope,
-      'hole depth'
-    );
+    depth = resolveParamValue(data.depth, scope, 'hole depth');
     if (!(depth > 0)) {
       throw new Error('Hole depth must be greater than zero.');
     }
@@ -864,9 +765,7 @@ function buildHoleFeature(
     value: ParamValue | undefined,
     label: string
   ): number | undefined =>
-    value === undefined
-      ? undefined
-      : resolveParamValue(value, scope, label);
+    value === undefined ? undefined : resolveParamValue(value, scope, label);
   const countersinkAngleDeg = resolveOptional(
     data.countersinkAngleDeg,
     'countersink angle'
@@ -882,9 +781,7 @@ function buildHoleFeature(
     depth,
     style,
     counterboreRadius:
-      counterboreDiameter === undefined
-        ? undefined
-        : counterboreDiameter / 2,
+      counterboreDiameter === undefined ? undefined : counterboreDiameter / 2,
     counterboreDepth: resolveOptional(
       data.counterboreDepth,
       'counterbore depth'
@@ -901,8 +798,7 @@ function buildHoleFeature(
         ? undefined
         : (countersinkAngleDeg * Math.PI) / 180,
     entryExtension: extension,
-    exitExtension:
-      data.depthMode === 'through' ? extension : 0
+    exitExtension: data.depthMode === 'through' ? extension : 0
   });
   result.consumed.add(data.targetBodyId);
   result.shapes.set(feature.bodyId, {
@@ -912,11 +808,7 @@ function buildHoleFeature(
       'The compound cut does not report face ancestry through the bore.'
     )
   });
-  inheritMeshOrigin(
-    result,
-    data.targetBodyId,
-    feature.bodyId
-  );
+  inheritMeshOrigin(result, data.targetBodyId, feature.bodyId);
 }
 
 function buildSplitFeature(
@@ -945,9 +837,7 @@ function buildSplitFeature(
     z: resolveParamValue(rawNormal.z, scope, 'split normal Z')
   });
   if (!planeNormal) {
-    throw new Error(
-      'Split plane normal must be finite and non-zero.'
-    );
+    throw new Error('Split plane normal must be finite and non-zero.');
   }
   // A multi-solid target is fused first: the kernel splits one
   // solid, and each half must again be one body's worth of solids.
@@ -980,16 +870,8 @@ function buildSplitFeature(
     lineage: remusHashOnlyLineage('split', lineageNote)
   });
   result.consumed.add(data.targetBodyId);
-  inheritMeshOrigin(
-    result,
-    data.targetBodyId,
-    feature.bodyId
-  );
-  inheritMeshOrigin(
-    result,
-    data.targetBodyId,
-    data.secondBodyId
-  );
+  inheritMeshOrigin(result, data.targetBodyId, feature.bodyId);
+  inheritMeshOrigin(result, data.targetBodyId, data.secondBodyId);
 }
 
 function buildShellFeature(
@@ -1012,11 +894,7 @@ function buildShellFeature(
     data.openingFaceReferences,
     'Shell opening'
   );
-  const thickness = resolveParamValue(
-    data.thickness,
-    scope,
-    'shell thickness'
-  );
+  const thickness = resolveParamValue(data.thickness, scope, 'shell thickness');
   const solid = createRemusModelingOperations(kernel).shell({
     targetSolid: target.solids[0]!,
     thickness,
@@ -1030,11 +908,7 @@ function buildShellFeature(
       'The pinned bridge does not expose removed, offset, and generated face relations.'
     )
   });
-  inheritMeshOrigin(
-    result,
-    data.targetBodyId,
-    feature.bodyId
-  );
+  inheritMeshOrigin(result, data.targetBodyId, feature.bodyId);
 }
 
 function buildSolidOffsetFeature(
@@ -1067,11 +941,7 @@ function buildSolidOffsetFeature(
       'The pinned bridge does not expose a complete offset topology relation.'
     )
   });
-  inheritMeshOrigin(
-    result,
-    data.targetBodyId,
-    feature.bodyId
-  );
+  inheritMeshOrigin(result, data.targetBodyId, feature.bodyId);
 }
 
 function buildDraftFeature(
@@ -1104,11 +974,7 @@ function buildDraftFeature(
     scope,
     'draft neutral point'
   );
-  const angleDegrees = resolveParamValue(
-    data.angleDeg,
-    scope,
-    'draft angle'
-  );
+  const angleDegrees = resolveParamValue(data.angleDeg, scope, 'draft angle');
   const solid = createRemusModelingOperations(kernel).draft({
     targetSolid: target.solids[0]!,
     faces,
@@ -1124,11 +990,7 @@ function buildDraftFeature(
       'Draft topology has no verified output evolution relation.'
     )
   });
-  inheritMeshOrigin(
-    result,
-    data.targetBodyId,
-    feature.bodyId
-  );
+  inheritMeshOrigin(result, data.targetBodyId, feature.bodyId);
 }
 
 function buildThickenFeature(
@@ -1148,9 +1010,7 @@ function buildThickenFeature(
     kernel,
     target,
     [data.faceHash],
-    data.faceReference
-      ? [data.faceReference]
-      : undefined,
+    data.faceReference ? [data.faceReference] : undefined,
     'Thicken'
   );
   const thickness = resolveParamValue(
@@ -1170,11 +1030,7 @@ function buildThickenFeature(
       'Thicken topology has no verified output evolution relation.'
     )
   });
-  inheritMeshOrigin(
-    result,
-    data.targetBodyId,
-    feature.bodyId
-  );
+  inheritMeshOrigin(result, data.targetBodyId, feature.bodyId);
 }
 
 function buildBooleanFeature(
@@ -1190,9 +1046,7 @@ function buildBooleanFeature(
     result.meshBodies.has(bodyId)
   );
   if (meshOperand !== undefined) {
-    throw meshBooleanUnsupportedError(
-      bodyName(document, meshOperand)
-    );
+    throw meshBooleanUnsupportedError(bodyName(document, meshOperand));
   }
   const operands = data.targetBodyIds.map((bodyId) => {
     const shape = result.shapes.get(bodyId);
@@ -1218,34 +1072,32 @@ function buildBooleanFeature(
   // non-manifold, nor be offered a move-to-overlap suggestion.
   let unionDisconnected = false;
   if (data.operation === 'union') {
-    const unionOperands = data.targetBodyIds.flatMap(
-      (bodyId, operandIndex) =>
-        operands[operandIndex]!.solids.map((candidate) => {
-          const bounds = kernel.boundingBox(candidate);
-          return {
-            solid: candidate,
-            name: bodyName(document, bodyId),
-            bounds: {
-              min: {
-                x: bounds[0]!,
-                y: bounds[1]!,
-                z: bounds[2]!
-              },
-              max: {
-                x: bounds[3]!,
-                y: bounds[4]!,
-                z: bounds[5]!
-              }
+    const unionOperands = data.targetBodyIds.flatMap((bodyId, operandIndex) =>
+      operands[operandIndex]!.solids.map((candidate) => {
+        const bounds = kernel.boundingBox(candidate);
+        return {
+          solid: candidate,
+          name: bodyName(document, bodyId),
+          bounds: {
+            min: {
+              x: bounds[0]!,
+              y: bounds[1]!,
+              z: bounds[2]!
+            },
+            max: {
+              x: bounds[3]!,
+              y: bounds[4]!,
+              z: bounds[5]!
             }
-          };
-        })
+          }
+        };
+      })
     );
     unionFuseOperands = unionOperands;
     const unionSolids = unionOperands.map((operand) => operand.solid);
     const connectivity = analyzeUnionConnectivity(
       unionOperands,
-      (left, right) =>
-        kernel.solidToSolidDistance(left, right)[0] ?? NaN,
+      (left, right) => kernel.solidToSolidDistance(left, right)[0] ?? NaN,
       (left, right) => {
         try {
           if (
@@ -1270,8 +1122,7 @@ function buildBooleanFeature(
               (contact) =>
                 typeof contact === 'object' &&
                 contact !== null &&
-                (contact as { aabbOverlap?: unknown }).aabbOverlap ===
-                  true
+                (contact as { aabbOverlap?: unknown }).aabbOverlap === true
             )
           );
         } catch {
@@ -1291,11 +1142,7 @@ function buildBooleanFeature(
         for (const face of kernel.getSolidFaces(operand.solid)) {
           if (kernel.getSurfaceType(face) === 'plane') continue;
           const faceBounds = tessellatedFaceBounds(kernel, face);
-          for (
-            let axisIndex = 0;
-            axisIndex < axes.length;
-            axisIndex++
-          ) {
+          for (let axisIndex = 0; axisIndex < axes.length; axisIndex++) {
             const axis = axes[axisIndex]!;
             const scale = Math.max(
               1,
@@ -1304,16 +1151,14 @@ function buildBooleanFeature(
             );
             const tolerance = geometryTolerance(scale);
             if (
-              Math.abs(
-                faceBounds[axisIndex]! - operand.bounds.min[axis]
-              ) <= tolerance
+              Math.abs(faceBounds[axisIndex]! - operand.bounds.min[axis]) <=
+              tolerance
             ) {
               curvedExtents.min[axis] = true;
             }
             if (
-              Math.abs(
-                faceBounds[axisIndex + 3]! - operand.bounds.max[axis]
-              ) <= tolerance
+              Math.abs(faceBounds[axisIndex + 3]! - operand.bounds.max[axis]) <=
+              tolerance
             ) {
               curvedExtents.max[axis] = true;
             }
@@ -1343,10 +1188,7 @@ function buildBooleanFeature(
     if (droppedOperand) {
       raiseFeatureWarning(result, feature, droppedOperand, 'refusal');
     }
-    if (
-      !connectivity.connected &&
-      !isFaceConnectedSolid(kernel, solid)
-    ) {
+    if (!connectivity.connected && !isFaceConnectedSolid(kernel, solid)) {
       unionDisconnected = true;
       raiseFeatureWarning(
         result,
@@ -1370,10 +1212,7 @@ function buildBooleanFeature(
       if (subtracting) {
         try {
           sharedWithTools += kernel.volume(
-            kernel.intersect(
-              kernel.copySolid(solid),
-              kernel.copySolid(tool)
-            ),
+            kernel.intersect(kernel.copySolid(solid), kernel.copySolid(tool)),
             MEASUREMENT_DEFLECTION
           );
         } catch {
@@ -1404,15 +1243,11 @@ function buildBooleanFeature(
     // target and tools visible and exportable instead.
     if (subtracting && sharedWithTools > GEOMETRY_EPSILON) {
       const removed =
-        volumeBeforeCut -
-        kernel.volume(solid, MEASUREMENT_DEFLECTION);
-      const minimumRemoved =
-        sharedWithTools * MINIMUM_SUBTRACT_REMOVAL_RATIO;
+        volumeBeforeCut - kernel.volume(solid, MEASUREMENT_DEFLECTION);
+      const minimumRemoved = sharedWithTools * MINIMUM_SUBTRACT_REMOVAL_RATIO;
       if (removed < minimumRemoved) {
         const toolSubject =
-          operands.length === 2
-            ? 'the tool overlaps'
-            : 'the tools overlap';
+          operands.length === 2 ? 'the tool overlaps' : 'the tools overlap';
         throw new Error(
           `Subtract refused: ${toolSubject} the target by ` +
             `${formatMeasuredVolume(sharedWithTools)} ${document.units}³, ` +
@@ -1426,10 +1261,13 @@ function buildBooleanFeature(
   }
   // The face-count census. Mesh closure, validation and volume all
   // pass on a silently faceted boolean result; the faces do not.
-  const facetFallback = booleanFacetFallbackWarning({
-    operands: operandCensus,
-    result: censusOfSolids(kernel, [solid])
-  });
+  const facetFallback = booleanFacetFallbackWarning(
+    {
+      operands: operandCensus,
+      result: censusOfSolids(kernel, [solid])
+    },
+    data.operation
+  );
   // A tangency the fuse cannot resolve exactly does not always come
   // back faceted. Kernels differ on which way they fail it: one
   // drops to facets, another returns a body that is not a valid
@@ -1439,8 +1277,7 @@ function buildBooleanFeature(
   const unionNotSolid =
     unionFuseOperands !== null &&
     !unionDisconnected &&
-    (kernel.validateSolid(solid) !== 0 ||
-      !solidMeshIsClosed(kernel, solid));
+    (kernel.validateSolid(solid) !== 0 || !solidMeshIsClosed(kernel, solid));
   // Which warning the proved move belongs to.
   //
   // This used to be the index of the feature's FIRST warning, on the
@@ -1490,9 +1327,7 @@ function buildBooleanFeature(
       amendFeatureWarning(result, refusalIndex, feature.featureId, suggestion);
     }
   }
-  data.targetBodyIds.forEach((bodyId) =>
-    result.consumed.add(bodyId)
-  );
+  data.targetBodyIds.forEach((bodyId) => result.consumed.add(bodyId));
   result.shapes.set(feature.bodyId, {
     solids: [solid],
     lineage: deriveRemusBooleanCarrierLineage({
@@ -1517,18 +1352,15 @@ function buildEdgeModifierFeature(
     throw new Error('Edge modifier target is unavailable.');
   }
   const target = collapseShape(kernel, storedTarget);
-  const { handles: selected, repairedReferences } =
-    resolveEdgeModifierEdges(
-      kernel,
-      storedTarget,
-      target,
-      data.edgeHashes,
-      data.edgeReferences
-    );
+  const { handles: selected, repairedReferences } = resolveEdgeModifierEdges(
+    kernel,
+    storedTarget,
+    target,
+    data.edgeHashes,
+    data.edgeReferences
+  );
   const size = resolveParamValue(
-    data.featureKind === 'fillet'
-      ? data.radius
-      : data.distance,
+    data.featureKind === 'fillet' ? data.radius : data.distance,
     scope,
     data.featureKind === 'fillet' ? 'radius' : 'distance'
   );
@@ -1536,15 +1368,8 @@ function buildEdgeModifierFeature(
     throw new Error('Edge modifier size must be greater than zero.');
   }
   let chamferAngleRadians: number | undefined;
-  if (
-    data.featureKind === 'chamfer' &&
-    data.angleDeg !== undefined
-  ) {
-    const angleDeg = resolveParamValue(
-      data.angleDeg,
-      scope,
-      'angle'
-    );
+  if (data.featureKind === 'chamfer' && data.angleDeg !== undefined) {
+    const angleDeg = resolveParamValue(data.angleDeg, scope, 'angle');
     // The kernel rejects angles at or past 90°; 45° exactly is the
     // symmetric chamfer, but an explicit 45 is honored as stored.
     if (!(angleDeg > 0 && angleDeg < 90)) {
@@ -1584,10 +1409,7 @@ function buildEdgeModifierFeature(
       )
     );
   }
-  const rootPrimitive = modifierChainRootPrimitive(
-    document,
-    data.targetBodyId
-  );
+  const rootPrimitive = modifierChainRootPrimitive(document, data.targetBodyId);
   const primitiveFallbackLineage =
     rootPrimitive === 'cylinder'
       ? rederiveCylinderModifierLineage(kernel, modified, feature)
@@ -1602,10 +1424,7 @@ function buildEdgeModifierFeature(
         sourceSolid: target,
         resultSolid: modified,
         sourceCandidates,
-        resultCandidates: topologyCandidatesForSolid(
-          kernel,
-          modified
-        ),
+        resultCandidates: topologyCandidatesForSolid(kernel, modified),
         sourceLineage: storedTarget.lineage,
         generatedBlendFaces: new Set(
           Array.from(kernel.getSolidFaces(modified)).filter((face) =>
@@ -1614,10 +1433,9 @@ function buildEdgeModifierFeature(
         )
       })
     : null;
-  const verifiedLineages = [
-    primitiveFallbackLineage,
-    evolutionLineage
-  ].filter((lineage): lineage is RemusLineageState => !!lineage);
+  const verifiedLineages = [primitiveFallbackLineage, evolutionLineage].filter(
+    (lineage): lineage is RemusLineageState => !!lineage
+  );
   const verifiedLineage = mergeRemusLineageStates(verifiedLineages);
   result.consumed.add(data.targetBodyId);
   result.shapes.set(feature.bodyId, {
@@ -1632,11 +1450,7 @@ function buildEdgeModifierFeature(
             'No generated face passed the construction-history, exact support-witness, and uniqueness checks.'
           )
   });
-  inheritMeshOrigin(
-    result,
-    data.targetBodyId,
-    feature.bodyId
-  );
+  inheritMeshOrigin(result, data.targetBodyId, feature.bodyId);
   // Only a feature that actually rebuilt earns a repair: a thrown
   // modifier above skips this, and the legacy selection stays as it
   // was for the user to fix.
@@ -1661,9 +1475,7 @@ function buildPatternFeature(
   if (!target) {
     throw new Error('Pattern target is unavailable.');
   }
-  const count = Math.round(
-    resolveParamValue(data.count, scope, 'count')
-  );
+  const count = Math.round(resolveParamValue(data.count, scope, 'count'));
   if (count < 2 || count > 100) {
     throw new Error('Pattern count must be between 2 and 100.');
   }
@@ -1672,17 +1484,10 @@ function buildPatternFeature(
   const count2 =
     data.patternKind === 'grid'
       ? Math.round(
-          resolveParamValue(
-            data.count2 ?? data.count,
-            scope,
-            'count 2'
-          )
+          resolveParamValue(data.count2 ?? data.count, scope, 'count 2')
         )
       : 1;
-  if (
-    data.patternKind === 'grid' &&
-    (count2 < 2 || count2 > 100)
-  ) {
+  if (data.patternKind === 'grid' && (count2 < 2 || count2 > 100)) {
     throw new Error('Pattern count must be between 2 and 100.');
   }
   const totalInstances = count * count2;
@@ -1695,11 +1500,7 @@ function buildPatternFeature(
       : axisDirection(data.axis);
   const solids = [...target.solids];
   if (data.patternKind === 'linear') {
-    const spacing = resolveParamValue(
-      data.spacing,
-      scope,
-      'spacing'
-    );
+    const spacing = resolveParamValue(data.spacing, scope, 'spacing');
     if (Math.abs(spacing) <= GEOMETRY_EPSILON) {
       throw new Error('Pattern spacing cannot be zero.');
     }
@@ -1719,11 +1520,7 @@ function buildPatternFeature(
       solids.push(...instance.solids);
     }
   } else if (data.patternKind === 'grid') {
-    const spacing = resolveParamValue(
-      data.spacing,
-      scope,
-      'spacing'
-    );
+    const spacing = resolveParamValue(data.spacing, scope, 'spacing');
     const spacing2 = resolveParamValue(
       data.spacing2 ?? data.spacing,
       scope,
@@ -1750,15 +1547,9 @@ function buildPatternFeature(
           target,
           transformMatrix(
             {
-              x:
-                direction.x * spacing * ix +
-                direction2.x * spacing2 * iy,
-              y:
-                direction.y * spacing * ix +
-                direction2.y * spacing2 * iy,
-              z:
-                direction.z * spacing * ix +
-                direction2.z * spacing2 * iy
+              x: direction.x * spacing * ix + direction2.x * spacing2 * iy,
+              y: direction.y * spacing * ix + direction2.y * spacing2 * iy,
+              z: direction.z * spacing * ix + direction2.z * spacing2 * iy
             },
             { x: 0, y: 0, z: 0 }
           )
@@ -1767,11 +1558,7 @@ function buildPatternFeature(
       }
     }
   } else {
-    const angle = resolveParamValue(
-      data.angleDeg,
-      scope,
-      'pattern angle'
-    );
+    const angle = resolveParamValue(data.angleDeg, scope, 'pattern angle');
     if (Math.abs(angle) <= GEOMETRY_EPSILON) {
       throw new Error('Pattern angle cannot be zero.');
     }
@@ -1815,8 +1602,7 @@ function buildPatternFeature(
       0
     );
     const fused = fuseUniformSolid(kernel, solids);
-    const removed =
-      summed - kernel.volume(fused, MEASUREMENT_DEFLECTION);
+    const removed = summed - kernel.volume(fused, MEASUREMENT_DEFLECTION);
     // The fuse is NOT guaranteed to merge. On shallow overlaps it
     // returns the operands essentially untouched — measured on three
     // r5 h10 cylinders, by overlap depth (2r - d):
@@ -1859,11 +1645,7 @@ function buildPatternFeature(
   // the failure that cancelled the pattern, and the target vanished from the
   // viewport, the parts list and the STEP scope with nothing replacing it.
   result.consumed.add(data.targetBodyId);
-  inheritMeshOrigin(
-    result,
-    data.targetBodyId,
-    feature.bodyId
-  );
+  inheritMeshOrigin(result, data.targetBodyId, feature.bodyId);
 }
 
 /** Per-feature-kind dispatch: one builder owns each history feature. */
@@ -1872,69 +1654,69 @@ export function buildFeature(
   feature: FeatureNode
 ): void {
   switch (feature.data.featureKind) {
-        case 'sketch':
-          buildSketchFeature(ctx, feature, feature.data);
-          break;
-        case 'imported-mesh':
-          buildImportedMeshFeature(ctx, feature, feature.data);
-          break;
-        case 'direct-edit':
-          buildDirectEditFeature(ctx, feature, feature.data);
-          break;
-        case 'imported-step':
-          buildImportedStepFeature(ctx, feature, feature.data);
-          break;
-        case 'primitive':
-          buildPrimitiveFeature(ctx, feature);
-          break;
-        case 'extrude':
-          buildExtrudeFeature(ctx, feature, feature.data);
-          break;
-        case 'revolve':
-          buildRevolveFeature(ctx, feature, feature.data);
-          break;
-        case 'loft':
-          buildLoftFeature(ctx, feature);
-          break;
-        case 'sweep':
-          buildSweepFeature(ctx, feature);
-          break;
-        case 'helical-sweep':
-          buildHelicalSweepFeature(ctx, feature);
-          break;
-        case 'transform':
-          buildTransformFeature(ctx, feature, feature.data);
-          break;
-        case 'mirror':
-          buildMirrorFeature(ctx, feature, feature.data);
-          break;
-        case 'hole':
-          buildHoleFeature(ctx, feature, feature.data);
-          break;
-        case 'split':
-          buildSplitFeature(ctx, feature, feature.data);
-          break;
-        case 'shell':
-          buildShellFeature(ctx, feature, feature.data);
-          break;
-        case 'solid-offset':
-          buildSolidOffsetFeature(ctx, feature, feature.data);
-          break;
-        case 'draft':
-          buildDraftFeature(ctx, feature, feature.data);
-          break;
-        case 'thicken':
-          buildThickenFeature(ctx, feature, feature.data);
-          break;
-        case 'boolean':
-          buildBooleanFeature(ctx, feature, feature.data);
-          break;
-        case 'fillet':
-        case 'chamfer':
-          buildEdgeModifierFeature(ctx, feature, feature.data);
-          break;
-        case 'pattern':
-          buildPatternFeature(ctx, feature, feature.data);
-          break;
+    case 'sketch':
+      buildSketchFeature(ctx, feature, feature.data);
+      break;
+    case 'imported-mesh':
+      buildImportedMeshFeature(ctx, feature, feature.data);
+      break;
+    case 'direct-edit':
+      buildDirectEditFeature(ctx, feature, feature.data);
+      break;
+    case 'imported-step':
+      buildImportedStepFeature(ctx, feature, feature.data);
+      break;
+    case 'primitive':
+      buildPrimitiveFeature(ctx, feature);
+      break;
+    case 'extrude':
+      buildExtrudeFeature(ctx, feature, feature.data);
+      break;
+    case 'revolve':
+      buildRevolveFeature(ctx, feature, feature.data);
+      break;
+    case 'loft':
+      buildLoftFeature(ctx, feature);
+      break;
+    case 'sweep':
+      buildSweepFeature(ctx, feature);
+      break;
+    case 'helical-sweep':
+      buildHelicalSweepFeature(ctx, feature);
+      break;
+    case 'transform':
+      buildTransformFeature(ctx, feature, feature.data);
+      break;
+    case 'mirror':
+      buildMirrorFeature(ctx, feature, feature.data);
+      break;
+    case 'hole':
+      buildHoleFeature(ctx, feature, feature.data);
+      break;
+    case 'split':
+      buildSplitFeature(ctx, feature, feature.data);
+      break;
+    case 'shell':
+      buildShellFeature(ctx, feature, feature.data);
+      break;
+    case 'solid-offset':
+      buildSolidOffsetFeature(ctx, feature, feature.data);
+      break;
+    case 'draft':
+      buildDraftFeature(ctx, feature, feature.data);
+      break;
+    case 'thicken':
+      buildThickenFeature(ctx, feature, feature.data);
+      break;
+    case 'boolean':
+      buildBooleanFeature(ctx, feature, feature.data);
+      break;
+    case 'fillet':
+    case 'chamfer':
+      buildEdgeModifierFeature(ctx, feature, feature.data);
+      break;
+    case 'pattern':
+      buildPatternFeature(ctx, feature, feature.data);
+      break;
   }
 }
