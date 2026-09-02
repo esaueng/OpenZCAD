@@ -245,6 +245,14 @@ Ordered by expected leverage; each item retires pins and states which.
   feature ids and could neither hit the worker cache nor be reused. *Still
   open:* a swept proxy for the offset face between exact frames (the region
   rig has one; offset needs face boundary loops).
+- **B4 addendum (2026-09-02).** The edge (fillet/chamfer) preview still had
+  the fail-soft stop: one slow frame and it dropped every later value for the
+  gesture. That is what made `visual-selection-fillet-edit.spec.ts` flaky on
+  the slowest e2e shard — a slow first rebuild degraded the gesture, the
+  oversize radius typed next was silently discarded, and the card waited in
+  exact-entry for a refusal that could never come. Edge previews now continue
+  after a slow frame like offset and region extrude do, report the lag on the
+  chip, and release it on cancel; a forced-degrade E2E pins it.
 - **B5. One refusal surface (class U).** *Landed in part (2026-09-02):* a
   value refused while the hand is moving no longer snaps the shape back to
   the pre-drag state — the last exact preview that built stays on screen,

@@ -354,9 +354,7 @@ import {
   sameCylinderAxis,
   supportsRadialCylinderPreview
 } from './lib/interaction/cylinderRadius';
-import {
-  primitiveCylinderRadiusAncestor
-} from './lib/interaction/cylinderPrimitiveAncestry';
+import { primitiveCylinderRadiusAncestor } from './lib/interaction/cylinderPrimitiveAncestry';
 import {
   offsetPreviewRejection,
   resolveOffsetPreviewFace
@@ -787,9 +785,8 @@ const DEMO_PROJECT_IDS = new Set<string>(
  * length contradicted the header by exactly the demo count.
  */
 function userProjectCount(projects: readonly { projectId: string }[]): number {
-  return projects.filter(
-    (project) => !DEMO_PROJECT_IDS.has(project.projectId)
-  ).length;
+  return projects.filter((project) => !DEMO_PROJECT_IDS.has(project.projectId))
+    .length;
 }
 
 declare global {
@@ -2239,7 +2236,10 @@ export function App() {
       // local one when it provably describes the same canonical model, so
       // adopting a matching document does not blank the viewport while the
       // kernel rebuilds what it already had.
-      const remoteDocument = withMatchingLocalDerived(incomingDocument, current);
+      const remoteDocument = withMatchingLocalDerived(
+        incomingDocument,
+        current
+      );
       // A room version is not an account version. The room stores whatever
       // version its clients commit and never writes the account's record, so
       // baselining the account on this number fenced the next push against a
@@ -2266,7 +2266,10 @@ export function App() {
         remoteVersionsRef.current.get(remoteDocument.projectId) ??
         null;
       if (controller && accountVersion !== null) {
-        controller.adoptAccountVersion(remoteDocument.projectId, accountVersion);
+        controller.adoptAccountVersion(
+          remoteDocument.projectId,
+          accountVersion
+        );
       }
       hydrateDocument(remoteDocument, {
         restoreView: false,
@@ -7740,9 +7743,7 @@ export function App() {
     }
   }
 
-  async function archiveArtifact(
-    input: ArchiveArtifactInput
-  ): Promise<string> {
+  async function archiveArtifact(input: ArchiveArtifactInput): Promise<string> {
     if (!doc) {
       throw new Error('No project is open.');
     }
@@ -10016,7 +10017,6 @@ export function App() {
     });
   }, [sketchViews]);
 
-
   /** After a region extrude, offer a one-click edit of its source sketch. */
   const [revertPill, setRevertPill] = useState<{ sketchId: SketchId } | null>(
     null
@@ -10539,8 +10539,10 @@ export function App() {
 
   /**
    * Live fillet/chamfer preview while the radius handle drags. One rebuild
-   * in flight, newest value wins, and it gives up for the rest of the
-   * gesture if the kernel gets slow.
+   * in flight, newest value wins. A slow kernel makes the preview late, not
+   * absent: it used to give up for the rest of the gesture after one slow
+   * frame, which also swallowed every later value — including the oversize
+   * radius whose refusal the card was waiting to show.
    */
   const edgePreview = useRef(
     new LivePreview<EdgePreviewCandidate, OffsetPreviewResult>({
@@ -10567,7 +10569,11 @@ export function App() {
             name?: string;
             edgeHashes?: readonly number[];
           };
-          if (payload.edgeHashes && payload.ids?.bodyId && payload.ids.featureId) {
+          if (
+            payload.edgeHashes &&
+            payload.ids?.bodyId &&
+            payload.ids.featureId
+          ) {
             target = {
               featureId: payload.ids.featureId,
               featureName: payload.name ?? command.label,
@@ -10629,6 +10635,7 @@ export function App() {
             : []
         );
         recoverPreviewInteraction();
+        setPreviewDeferred(edgePreview.degraded && edgePreview.lagging);
       },
       onFailure: ({ error, value }) =>
         reportPreviewFailure(
@@ -10643,7 +10650,12 @@ export function App() {
             ? size >= 0
             : size > 0)
         );
-      }
+      },
+      continueAfterSlow: true,
+      ...(E2E_SLOW_FRAME_MS === undefined
+        ? {}
+        : { slowFrameMs: E2E_SLOW_FRAME_MS }),
+      onDegrade: () => setPreviewDeferred(true)
     })
   ).current;
 
@@ -10827,6 +10839,9 @@ export function App() {
 
   function handleEdgeCancel() {
     edgePreview.clear();
+    // clear() re-arms the slow-frame guard, so the chip must stop reporting a
+    // late preview too — the same latch the offset cancel already releases.
+    setPreviewDeferred(false);
   }
 
   function filletRemovalTargets(
@@ -12348,7 +12363,7 @@ export function App() {
                 (interaction.mode === 'face' &&
                   interaction.op === 'edit-fillet'))
             ) {
-              edgePreview.clear();
+              handleEdgeCancel();
             }
             if (!cancelledPointer) {
               // Read the rung before climbing it. Escape out of a sketch left
@@ -12658,24 +12673,24 @@ export function App() {
         (tool === 'sketch'
           ? 'Drag to draw · R rectangle · C circle · P polygon · Enter finishes'
           : tool === 'fillet' || tool === 'chamfer'
-              ? selectedEdges.length > 0
-                ? `${selectedEdges.length} edge${selectedEdges.length === 1 ? '' : 's'} selected · Shift+Click adjusts · Enter creates`
-                : 'Click edges with Shift or choose Select all edges · Esc cancels'
-              : tool
-                ? 'Enter creates · Esc cancels'
-                : selectedBodyIds.length >= 2
-                  ? `${selectedBodyIds.length} bodies picked — U union · X subtract · I intersect`
-                  : selectedTopology?.kind === 'face'
-                    ? 'Face selected — Space faces it head-on'
-                    : selectedTopology?.kind === 'edge'
-                      ? // Neither tool has a shortcut, so the rail is the only
-                        // route: name it the way the rail names itself.
-                        'Edge selected — Fillet or Chamfer in Feature tools'
-                      : selectedFeature
-                        ? 'Edit in the panel · Del deletes · Esc closes'
-                        : viewerBodies.length > 0
-                          ? 'Click a body, face, or edge · Shift+Click adds to selection'
-                          : 'Ctrl+K commands · ? shortcuts'));
+            ? selectedEdges.length > 0
+              ? `${selectedEdges.length} edge${selectedEdges.length === 1 ? '' : 's'} selected · Shift+Click adjusts · Enter creates`
+              : 'Click edges with Shift or choose Select all edges · Esc cancels'
+            : tool
+              ? 'Enter creates · Esc cancels'
+              : selectedBodyIds.length >= 2
+                ? `${selectedBodyIds.length} bodies picked — U union · X subtract · I intersect`
+                : selectedTopology?.kind === 'face'
+                  ? 'Face selected — Space faces it head-on'
+                  : selectedTopology?.kind === 'edge'
+                    ? // Neither tool has a shortcut, so the rail is the only
+                      // route: name it the way the rail names itself.
+                      'Edge selected — Fillet or Chamfer in Feature tools'
+                    : selectedFeature
+                      ? 'Edit in the panel · Del deletes · Esc closes'
+                      : viewerBodies.length > 0
+                        ? 'Click a body, face, or edge · Shift+Click adds to selection'
+                        : 'Ctrl+K commands · ? shortcuts'));
 
   const paletteCommands: PaletteCommand[] = [
     // Modeling tools leave the palette entirely in the reading workspaces
@@ -13239,10 +13254,7 @@ export function App() {
             onCycleDisplayMode={cycleDisplayMode}
             onToggleProjection={toggleProjection}
           />
-        ) : interaction.mode ===
-          'sketch' ? // The sketch session brings its own tool rail; the modeling palette
-        // stayed mounted and live beside it once the plane was picked.
-        null : tool === 'sketch' ? (
+        ) : interaction.mode === 'sketch' ? null : tool === 'sketch' ? ( // stayed mounted and live beside it once the plane was picked. // The sketch session brings its own tool rail; the modeling palette
           <div className="direct-mode-strip">
             <PenLine size={16} aria-hidden="true" />
             <strong>Editing Sketch: {editingSketchName}</strong>
@@ -13597,7 +13609,7 @@ export function App() {
                       ) {
                         cancelDirectManipulationRef.current?.();
                         if (interaction.mode === 'edges') {
-                          edgePreview.clear();
+                          handleEdgeCancel();
                         }
                       }
                       dispatchInteraction({
@@ -14443,9 +14455,7 @@ export function App() {
               onPreview={handlePreviewPatch}
               collapsed={assistantCollapsed}
               onCollapsedChange={setAssistantCollapsed}
-              confirmDestructive={
-                appSettings.general.confirmDestructiveActions
-              }
+              confirmDestructive={appSettings.general.confirmDestructiveActions}
               hidden={assistantHidden}
             />
           </ErrorBoundary>
@@ -14560,26 +14570,26 @@ export function App() {
           {collaboration.conflict &&
             collaboration.conflict.projectId === doc.projectId &&
             dismissedRoomConflict !== roomConflictKey && (
-            <ProjectConflictDialog
-              conflict={collaboration.conflict}
-              busy={busy}
-              keepMineDisabledReason={roomKeepMineDisabledReason}
-              onResolve={(resolution) => void resolveRoomConflict(resolution)}
-              onClose={() => setDismissedRoomConflict(roomConflictKey)}
-            />
-          )}
+              <ProjectConflictDialog
+                conflict={collaboration.conflict}
+                busy={busy}
+                keepMineDisabledReason={roomKeepMineDisabledReason}
+                onResolve={(resolution) => void resolveRoomConflict(resolution)}
+                onClose={() => setDismissedRoomConflict(roomConflictKey)}
+              />
+            )}
           {accountConflict &&
             accountConflict.projectId === doc.projectId &&
             !collaboration.conflict && (
-            <ProjectConflictDialog
-              conflict={accountConflict}
-              busy={busy}
-              onResolve={(resolution) =>
-                void resolveAccountConflict(resolution)
-              }
-              onClose={() => setAccountConflict(null)}
-            />
-          )}
+              <ProjectConflictDialog
+                conflict={accountConflict}
+                busy={busy}
+                onResolve={(resolution) =>
+                  void resolveAccountConflict(resolution)
+                }
+                onClose={() => setAccountConflict(null)}
+              />
+            )}
           {meshExportOpen && doc && exportBodyIds.length > 0 && (
             <ExportDialog
               scopeLabel={
