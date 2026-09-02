@@ -30,6 +30,11 @@ async function readLiveCamera(canvas: Locator): Promise<CameraPose> {
   );
 }
 
+async function waitForZoomToSettle(canvas: Locator): Promise<void> {
+  await expect(canvas).toHaveAttribute('data-e2e-zoom-active', 'true');
+  await expect(canvas).toHaveAttribute('data-e2e-zoom-active', 'false');
+}
+
 /**
  * Standard views live behind the viewer rail's flyout rather than each having
  * a button of their own — the orientation cube is the primary way to navigate.
@@ -380,19 +385,7 @@ test('the wheel zooms toward the pointer, and the preference turns it off', asyn
     y: box!.y + box!.height * 0.3
   };
 
-  const target = async () =>
-    page.evaluate(() => {
-      const raw = localStorage.getItem('openzcad-workspace-session:v1');
-      const views = raw
-        ? (
-            JSON.parse(raw) as {
-              views?: Record<string, { camera: { target: number[] } }>;
-            }
-          ).views
-        : undefined;
-      const view = views ? Object.values(views)[0] : undefined;
-      return view ? view.camera.target : null;
-    });
+  const target = async () => (await readLiveCamera(canvas)).target;
 
   const wheelAtCursor = async () => {
     await page.mouse.move(cursor.x, cursor.y);
@@ -400,19 +393,16 @@ test('the wheel zooms toward the pointer, and the preference turns it off', asyn
       await page.mouse.wheel(0, -120);
       await page.waitForTimeout(80);
     }
-    await page.waitForTimeout(400);
+    await waitForZoomToSettle(canvas);
   };
 
-  await expect.poll(target).not.toBeNull();
   const before = await target();
-  expect(before).not.toBeNull();
   await wheelAtCursor();
   const after = await target();
-  expect(after).not.toBeNull();
   const travelled = Math.hypot(
-    after![0]! - before![0]!,
-    after![1]! - before![1]!,
-    after![2]! - before![2]!
+    after[0]! - before[0]!,
+    after[1]! - before[1]!,
+    after[2]! - before[2]!
   );
   expect(travelled).toBeGreaterThan(0.5);
 
@@ -430,9 +420,9 @@ test('the wheel zooms toward the pointer, and the preference turns it off', asyn
   await wheelAtCursor();
   const afterCentre = await target();
   const centreTravel = Math.hypot(
-    afterCentre![0]! - beforeCentre![0]!,
-    afterCentre![1]! - beforeCentre![1]!,
-    afterCentre![2]! - beforeCentre![2]!
+    afterCentre[0]! - beforeCentre[0]!,
+    afterCentre[1]! - beforeCentre[1]!,
+    afterCentre[2]! - beforeCentre[2]!
   );
   expect(centreTravel).toBeLessThan(0.01);
 });
@@ -561,31 +551,13 @@ test('clicking geometry re-pivots the orbit without moving the view', async ({
     .click();
   await expectBodyCount(page, 1);
 
-  const view = async () =>
-    page.evaluate(() => {
-      const raw = localStorage.getItem('openzcad-workspace-session:v1');
-      const views = raw
-        ? (
-            JSON.parse(raw) as {
-              views?: Record<
-                string,
-                { camera: { position: number[]; target: number[] } }
-              >;
-            }
-          ).views
-        : undefined;
-      const first = views ? Object.values(views)[0] : undefined;
-      return first ? first.camera : null;
-    });
-
   const canvas = page.locator('.viewer-host canvas');
   const box = await canvas.boundingBox();
   // Nudge the camera so a pose is recorded before the click.
   await page.mouse.move(box!.x + box!.width * 0.5, box!.y + box!.height * 0.5);
   await page.mouse.wheel(0, -120);
-  await page.waitForTimeout(400);
-  const before = await view();
-  expect(before).not.toBeNull();
+  await waitForZoomToSettle(canvas);
+  const before = await readLiveCamera(canvas);
 
   // Click the solid off-centre, where the pivot has real depth to gain.
   await page.mouse.click(
@@ -594,19 +566,18 @@ test('clicking geometry re-pivots the orbit without moving the view', async ({
   );
   // The pivot only moves for a real hit, so prove the click landed first.
   await expect(page.locator('.selection-chip')).toBeVisible();
-  await page.waitForTimeout(500);
-  const after = await view();
+  const after = await readLiveCamera(canvas);
 
   // The camera itself must not have moved: re-pivoting is meant to be
   // invisible until the user actually orbits.
   for (const axis of [0, 1, 2]) {
-    expect(after!.position[axis]!).toBeCloseTo(before!.position[axis]!, 3);
+    expect(after.position[axis]!).toBeCloseTo(before.position[axis]!, 3);
   }
   // The pivot should have travelled toward the surface under the cursor.
   const pivotTravel = Math.hypot(
-    after!.target[0]! - before!.target[0]!,
-    after!.target[1]! - before!.target[1]!,
-    after!.target[2]! - before!.target[2]!
+    after.target[0]! - before.target[0]!,
+    after.target[1]! - before.target[1]!,
+    after.target[2]! - before.target[2]!
   );
   expect(pivotTravel).toBeGreaterThan(0.1);
 });
