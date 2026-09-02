@@ -68,6 +68,7 @@ interface TopBarProps {
   onOpenMeshExport(): void;
   onArchiveLocalSources(): void;
   onExportDiagnostics(): void;
+  onExportInteractionLog(): void;
   onRenameProject(name: string): void;
   onGoHome(): void;
   onOpenSharing(): void;
@@ -130,6 +131,7 @@ export function TopBar({
   onOpenMeshExport,
   onArchiveLocalSources,
   onExportDiagnostics,
+  onExportInteractionLog,
   onRenameProject,
   onGoHome,
   onOpenSharing,
@@ -424,6 +426,16 @@ export function TopBar({
               <Download size={13} aria-hidden="true" />
               <span>Export diagnostics</span>
               <small>sanitized JSON</small>
+            </button>
+            <button
+              type="button"
+              className="topbar-menu-item"
+              title="Export the on-device log of direct-edit attempts and refusals for troubleshooting"
+              onClick={onExportInteractionLog}
+            >
+              <Download size={13} aria-hidden="true" />
+              <span>Export interaction log</span>
+              <small>direct edits</small>
             </button>
             <div className="topbar-menu-sep" />
             <strong className="topbar-menu-label">
