@@ -206,11 +206,21 @@ Ordered by expected leverage; each item retires pins and states which.
   result stay hash-only. For those, *Sketch* is no longer refused: the sketch
   lands on a fixed frame coincident with the face and the tool card, the
   status line and the capability note all say so
-  (`UNSTABLE_FACE_SKETCH_REASON`). *Still open:* surface the same fact on
-  the offset handle as a hint, prefer lineage references over the area pin
-  wherever a reference exists, and record a repair path for hash-only edits
-  the way `staleDirectEditFaceRepair` does. The full fix for boolean and
-  add/cut faces is the lineage bridge (kernel roadmap C1).
+  (`UNSTABLE_FACE_SKETCH_REASON`). *Closed 2026-09-02:* the offset action and
+  the armed tool-card hint now say up front when a face is anchored by
+  geometry alone (`UNSTABLE_FACE_OFFSET_REASON`, keyed off the same
+  `reference.currentHash === hash` test that gates the sketch note), so the
+  brittleness is stated before the drag rather than discovered at the next
+  upstream edit; the interaction log already records each attempt's lineage
+  class, so the export will show how often that note is being ignored. The
+  repair path exists (`staleDirectEditFaceRepair` re-pins a broken offset,
+  radius, or diameter edit around a re-picked face). *Still open:* the
+  kernel's direct-edit ops pin recorded geometry even when lineage resolved
+  the face — `resize-cylindrical-face` on radius and axis
+  (`exact-direct-edit-ops.ts:1235-1252`) and `resize-blend` on carrier
+  centre and axis (`:1146-1155`) — while `offset-face` already skips its area
+  pin for a lineage-resolved face. Relaxing those the same way is the next
+  slice, one op per change with a replay-after-upstream-edit test each.
 - **B4. Preview continuity (class P).** *Landed in part:* offset and edge
   drags no longer wait on a 150 ms cadence — every applied value reaches the
   previewer, which keeps one rebuild in flight and drops superseded values;

@@ -16,6 +16,7 @@ import type {
   SketchPlaneRef,
   TopologySelection
 } from '@openzcad/shared';
+import { UNSTABLE_FACE_OFFSET_REASON } from '../directEdit';
 import { UNSTABLE_FACE_SKETCH_REASON } from '../faceSketchAttachment';
 
 const faceReference: FaceTopologyReferenceV5 = {
@@ -238,9 +239,10 @@ describe('interactionReducer', () => {
       kind: 'parallel'
     });
     expect(state.mode === 'sketch' && state.session.tool).toBe('select');
-    expect(
-      state.mode === 'sketch' && state.session.pendingConstraint
-    ).toEqual({ kind: 'parallel', picks: [] });
+    expect(state.mode === 'sketch' && state.session.pendingConstraint).toEqual({
+      kind: 'parallel',
+      picks: []
+    });
     state = interactionReducer(state, {
       type: 'sketch-constraint-pick',
       pick: { kind: 'object', objectId: 'ent_a' }
@@ -404,6 +406,25 @@ describe('toolCardFor', () => {
     ).toBe('Extrude');
   });
 
+  it('says on the armed offset hint when the face is anchored by geometry alone', () => {
+    const hashOnly = toolCardFor(
+      interactionReducer(IDLE, {
+        type: 'select-face',
+        target: face({ reference: undefined })
+      })
+    );
+    expect(hashOnly?.hint).toContain(UNSTABLE_FACE_OFFSET_REASON);
+    expect(
+      hashOnly?.actions?.find((action) => action.id === 'offset-face')?.note
+    ).toBe(UNSTABLE_FACE_OFFSET_REASON);
+
+    const referenced = toolCardFor(
+      interactionReducer(IDLE, { type: 'select-face', target: face() })
+    );
+    expect(referenced?.hint).not.toContain(UNSTABLE_FACE_OFFSET_REASON);
+    expect(referenced?.hint).toContain('Space faces it head-on');
+  });
+
   it('keeps sketch offered on a hash-only planar face and says how it will be placed', () => {
     const card = toolCardFor(
       interactionReducer(IDLE, {
@@ -532,7 +553,11 @@ describe('radialFaceOperationName', () => {
     // labelled Diameter. Naming the object leaves nothing to disagree with.
     expect(
       radialFaceOperationName(
-        face({ surfaceType: 'cylindrical', radius: 4, featureType: 'through-hole' })
+        face({
+          surfaceType: 'cylindrical',
+          radius: 4,
+          featureType: 'through-hole'
+        })
       )
     ).toBe('Resize Hole');
     expect(
