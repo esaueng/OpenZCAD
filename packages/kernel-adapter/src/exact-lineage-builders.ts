@@ -437,10 +437,15 @@ export function rederivePrimitiveDirectEditLineage(
  * else in the producer chain (booleans, patterns, transforms with their own
  * result bodies) keeps the modifier hash-only.
  */
-export function modifierChainRootsAtCylinder(
+/**
+ * The primitive kind an uninterrupted fillet/chamfer chain descends from, or
+ * null when the chain crosses any other feature. Only these two primitives
+ * have a modifier role vocabulary to republish.
+ */
+export function modifierChainRootPrimitive(
   document: ProjectDocument,
   targetBodyId: BodyId
-): boolean {
+): 'box' | 'cylinder' | null {
   const features = listFeaturesInOrder(document);
   const producerByBodyId = new Map(
     features.flatMap((feature) =>
@@ -453,20 +458,143 @@ export function modifierChainRootsAtCylinder(
     seen.add(bodyId);
     const producer = producerByBodyId.get(bodyId);
     if (!producer) {
-      return false;
+      return null;
     }
     if (producer.data.featureKind === 'primitive') {
-      return producer.data.primitiveKind === 'cylinder';
+      return producer.data.primitiveKind === 'cylinder' ||
+        producer.data.primitiveKind === 'box'
+        ? producer.data.primitiveKind
+        : null;
     }
     if (
       producer.data.featureKind !== 'fillet' &&
       producer.data.featureKind !== 'chamfer'
     ) {
-      return false;
+      return null;
     }
     bodyId = producer.data.targetBodyId;
   }
-  return false;
+  return null;
+}
+
+export function modifierChainRootsAtCylinder(
+  document: ProjectDocument,
+  targetBodyId: BodyId
+): boolean {
+  return modifierChainRootPrimitive(document, targetBodyId) === 'cylinder';
+}
+
+const BOX_AXES = ['x', 'y', 'z'] as const;
+const BOX_MODIFIER_SURFACES = new Set([
+  'plane',
+  'cylinder',
+  'torus',
+  'cone',
+  'sphere'
+]);
+
+/**
+ * The box counterpart of {@link rederiveCylinderModifierLineage}: a filleted
+ * or chamfered box keeps six axis-aligned planar faces on its bounding box,
+ * one per side, and those are the faces a dimension edit moves. Publishing
+ * `modifier.box.face.<axis>-<min|max>` for them is what lets a face drag on
+ * the modified body resolve back to the primitive dimension instead of
+ * push-pulling the trimmed remainder and leaving a step in the blend rim.
+ *
+ * Blend and chamfer faces get no role here: chamfer planes are tilted off the
+ * axes and blends are not planar, so neither can match a side predicate. A
+ * side with no unique planar face — a fillet wide enough to consume it —
+ * publishes nothing for that side; a foreign surface type returns null and
+ * the body stays hash-only.
+ */
+export function rederiveBoxModifierLineage(
+  kernel: RemusKernel,
+  solid: number,
+  feature: FeatureNode
+): RemusLineageState | null {
+  if (
+    feature.data.featureKind !== 'fillet' &&
+    feature.data.featureKind !== 'chamfer'
+  ) {
+    return null;
+  }
+  const operation = feature.data.featureKind;
+  const faces = topologyCandidatesForSolid(kernel, solid).filter(
+    (candidate) => candidate.kind === 'face'
+  );
+  const witnessOf = (candidate: RemusTopologyCandidate): FaceWitnessV1 =>
+    candidate.witness as FaceWitnessV1;
+  if (
+    faces.some(
+      (candidate) => !BOX_MODIFIER_SURFACES.has(witnessOf(candidate).surfaceType)
+    )
+  ) {
+    return null;
+  }
+  const boundsValues = Array.from(kernel.boundingBox(solid));
+  const min = quantizedPoint({
+    x: boundsValues[0]!,
+    y: boundsValues[1]!,
+    z: boundsValues[2]!
+  });
+  const max = quantizedPoint({
+    x: boundsValues[3]!,
+    y: boundsValues[4]!,
+    z: boundsValues[5]!
+  });
+  if (BOX_AXES.some((_axis, index) => min[index]! >= max[index]!)) {
+    return null;
+  }
+
+  const assignments: RemusSemanticAssignment[] = [];
+  const diagnostics: RemusLineageState[] = [];
+  const sideFace = (
+    candidate: RemusTopologyCandidate,
+    axisIndex: number,
+    bound: number
+  ): boolean => {
+    const witness = witnessOf(candidate);
+    if (witness.surfaceType !== 'plane' || witness.analytic.kind !== 'plane') {
+      return false;
+    }
+    // The witness normal is canonicalised (it may point either way) and
+    // quantized (not unit length), so axis alignment is "only this component
+    // is non-zero", and the side is read from the centroid sitting on the
+    // bound rather than from the normal's sign.
+    const normal = witness.analytic.normal;
+    return (
+      normal.every((component, index) =>
+        index === axisIndex ? component !== 0 : component === 0
+      ) &&
+      witness.centroid !== null &&
+      witness.centroid[axisIndex] === bound
+    );
+  };
+  for (const [axisIndex, axis] of BOX_AXES.entries()) {
+    for (const side of ['min', 'max'] as const) {
+      const bound = side === 'min' ? min[axisIndex]! : max[axisIndex]!;
+      const lineageName = `modifier.box.face.${axis}-${side}`;
+      if (!faces.some((candidate) => sideFace(candidate, axisIndex, bound))) {
+        continue;
+      }
+      addUniqueSemanticAssignment(
+        faces,
+        'face',
+        lineageName,
+        (candidate) => sideFace(candidate, axisIndex, bound),
+        assignments,
+        diagnostics,
+        operation
+      );
+    }
+  }
+  if (assignments.length === 0) {
+    return null;
+  }
+  return mergeRemusLineageStates([
+    createRemusSemanticLineage(feature.featureId, operation, assignments),
+    ...diagnostics
+  ]);
 }
 
 /**

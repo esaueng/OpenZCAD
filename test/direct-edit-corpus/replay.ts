@@ -27,7 +27,15 @@ import type {
   DirectEditFixture,
   DirectEditFixtureEdge
 } from '../../apps/web/src/lib/directEditFixture';
+import { planFaceOffset } from '../../apps/web/src/lib/interaction/faceOffsetPlan';
 import { resolveFixtureEdges, resolveFixtureFace } from './resolve';
+
+/**
+ * Which way the app sent a face offset: to the primitive dimension the face
+ * rides on, or to the generic exact push/pull. Only an `offset-face` fixture
+ * has a route; a fillet or chamfer replay is not a routing decision at all.
+ */
+export type FaceOffsetRoute = 'primitive-dimension' | 'direct-edit';
 
 export interface ReplayResult {
   outcome: 'committed' | 'refused';
@@ -36,6 +44,7 @@ export interface ReplayResult {
   volumeBefore: number;
   volumeAfter?: number;
   warnings: string[];
+  route?: FaceOffsetRoute;
 }
 
 const FILLET_FEATURE_NAME = 'Fillet edges';
@@ -53,6 +62,12 @@ function referenceFor<T>(
   hasReference: boolean
 ): T | undefined {
   return hasReference ? resolved : undefined;
+}
+
+/** The same face with its v5 reference dropped, for a hash-only replay. */
+function withoutReference(face: FaceTopology): FaceTopology {
+  const { reference: _reference, ...rest } = face;
+  return rest;
 }
 
 function edgeReferences(
@@ -100,8 +115,9 @@ export async function replayFixture(
   }
   const volumeBefore = body.volume;
 
-  const { command, featureName, resultBodyId, gate } = buildCommand(
+  const { command, featureName, resultBodyId, gate, route } = buildCommand(
     fixture,
+    document,
     body,
     targetBodyId
   );
@@ -134,7 +150,8 @@ export async function replayFixture(
     ...(message === null ? {} : { message }),
     volumeBefore,
     ...(resultBody ? { volumeAfter: resultBody.volume } : {}),
-    warnings: after.warnings
+    warnings: after.warnings,
+    ...(route ? { route } : {})
   };
 }
 
@@ -147,10 +164,12 @@ interface BuiltCommand {
   featureName: string;
   resultBodyId: BodyId;
   gate: 'direct-edit' | 'feature';
+  route?: FaceOffsetRoute;
 }
 
 function buildCommand(
   fixture: DirectEditFixture,
+  document: ProjectDocument,
   body: Parameters<typeof resolveFixtureFace>[0],
   targetBodyId: BodyId
 ): BuiltCommand {
@@ -163,25 +182,42 @@ function buildCommand(
       if (geometry.normal === undefined) {
         throw new Error('An offset needs an exact planar normal.');
       }
+      // The app's own routing decision, not a corpus-local reimplementation,
+      // so a fixture measures the gesture the product actually performs. A
+      // capture that recorded a hash-only pick still replays hash-only, which
+      // is what keeps it on the local push/pull the class was captured for.
       const reference = referenceFor(face.reference, recorded.hasReference);
+      const faceForPlan: FaceTopology = reference
+        ? face
+        : withoutReference(face);
+      const plan = planFaceOffset({
+        document,
+        bodyId: targetBodyId,
+        face: faceForPlan,
+        faceHash: face.hash,
+        offset: edit.value
+      });
+      if (!plan) {
+        throw new Error(
+          `Fixture "${fixture.name}": the planner refused the pick — a planar ` +
+            'face and a non-zero offset are both required.'
+        );
+      }
+      if (plan.kind === 'primitive-dimension') {
+        return {
+          command: plan.command,
+          featureName: plan.primitive.name,
+          resultBodyId: targetBodyId,
+          gate: 'feature',
+          route: 'primitive-dimension'
+        };
+      }
       return {
-        command: commandFactories.directEditBody({
-          name: DIRECT_EDIT_FEATURE_NAME,
-          targetBodyId,
-          operation: {
-            kind: 'offset-face',
-            faceHash: face.hash,
-            ...(reference ? { faceReference: reference } : {}),
-            sourceSurfaceType: 'plane',
-            sourceArea: geometry.area,
-            sourceCenter: geometry.center,
-            sourceNormal: geometry.normal,
-            offset: edit.value
-          }
-        }),
+        command: plan.command,
         featureName: DIRECT_EDIT_FEATURE_NAME,
         resultBodyId: targetBodyId,
-        gate: 'direct-edit'
+        gate: 'direct-edit',
+        route: 'direct-edit'
       };
     }
     case 'resize-cylinder-radius': {

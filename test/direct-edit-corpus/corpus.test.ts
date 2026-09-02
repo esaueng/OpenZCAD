@@ -46,6 +46,14 @@ function pinFor(name: string) {
 }
 
 /**
+ * Which way the app routed the gesture. A wrong volume means something very
+ * different depending on the route, so every failure message carries it.
+ */
+function routeOf(result: ReplayResult): string {
+  return `route: ${result.route ?? 'n/a'}`;
+}
+
+/**
  * Both directions. A pinned fixture must still refuse with the pinned
  * sentence; an unpinned one must commit, and an offset must move volume the
  * way its sign says.
@@ -55,14 +63,16 @@ function assertOutcome(fixture: DirectEditFixture, result: ReplayResult): void {
   if (pin) {
     expect(
       result.outcome,
-      `${fixture.name} is pinned as refused (${pin.owner}); it now commits — retire the pin`
+      `${fixture.name} is pinned as refused (${pin.owner}); it now commits — ` +
+        `retire the pin (${routeOf(result)})`
     ).toBe('refused');
     expect(result.message).toContain(pin.message);
     return;
   }
   expect(
     result.outcome,
-    `${fixture.name} refused with: ${result.message ?? '(no message)'}`
+    `${fixture.name} refused with: ${result.message ?? '(no message)'} ` +
+      `(${routeOf(result)})`
   ).toBe('committed');
   if (fixture.edit.op === 'offset-face') {
     expect(result.volumeAfter).toBeDefined();
@@ -122,18 +132,21 @@ async function assertShape(
   if (pin) {
     expect(
       observedDelta,
-      `${scenario.name} is pinned at ${pin.observedVolumeDelta} (${pin.owner})`
+      `${scenario.name} is pinned at ${pin.observedVolumeDelta} ` +
+        `(${pin.owner}, ${routeOf(result)})`
     ).toBeCloseTo(pin.observedVolumeDelta, 3);
     expect(expectedDelta).toBeCloseTo(pin.expectedVolumeDelta, 3);
     expect(
       Math.abs(observedDelta - expectedDelta),
-      `${scenario.name} now matches its oracle — retire the shape pin`
+      `${scenario.name} now matches its oracle — retire the shape pin ` +
+        `(${routeOf(result)})`
     ).toBeGreaterThan(1e-3);
     return;
   }
   expect(
     observedDelta,
-    `${scenario.name}: the edit moved ${observedDelta} mm3, the rebuilt part ${expectedDelta}`
+    `${scenario.name}: the edit moved ${observedDelta} mm3, the rebuilt part ` +
+      `${expectedDelta} (${routeOf(result)})`
   ).toBeCloseTo(expectedDelta, 3);
 }
 
