@@ -539,6 +539,8 @@ export interface ToolCardAction {
   active: boolean;
   enabled: boolean;
   disabledReason?: string;
+  /** Shown as the action's title while it stays enabled. */
+  note?: string;
 }
 
 export interface ToolCardModel {
@@ -742,6 +744,7 @@ export function toolCardFor(state: InteractionState): ToolCardModel | null {
         ...(capability.disabledReason
           ? { disabledReason: capability.disabledReason }
           : {}),
+        ...(capability.note ? { note: capability.note } : {}),
         active:
           (state.op === 'offset-face' && capability.action === 'offset-face') ||
           (state.op === 'resize-cylinder-radius' &&
@@ -783,6 +786,7 @@ export function toolCardFor(state: InteractionState): ToolCardModel | null {
         ...(capability.disabledReason
           ? { disabledReason: capability.disabledReason }
           : {}),
+        ...(capability.note ? { note: capability.note } : {}),
         active: capability.action === state.op
       }));
       return {

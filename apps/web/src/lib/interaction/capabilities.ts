@@ -29,6 +29,12 @@ export interface SelectionCapability {
   label: string;
   enabled: boolean;
   disabledReason?: string;
+  /**
+   * Something the user should know before choosing an enabled action — how a
+   * sketch on a hash-only face is placed, for instance. Shown as the action's
+   * title; never a reason to grey it out.
+   */
+  note?: string;
   valueKind?: SelectionValueKind;
   previewKind: SelectionPreviewKind;
   preferred: boolean;
@@ -71,21 +77,6 @@ function enabled(
   };
 }
 
-function disabled(
-  action: SelectionActionId,
-  label: string,
-  disabledReason: string
-): SelectionCapability {
-  return {
-    action,
-    label,
-    enabled: false,
-    disabledReason,
-    previewKind: 'none',
-    preferred: false
-  };
-}
-
 /**
  * Returns actions in their UI order. Unsupported actions are omitted unless a
  * disabled reason is useful to the person holding the current selection.
@@ -125,10 +116,15 @@ export function selectionCapabilities(
         return [];
       }
       if (target.surfaceType === 'planar' && target.hash !== undefined) {
+        // A face without current lineage still takes a sketch: it lands on a
+        // fixed plane coincident with the face, and the note says so up front.
         const sketchCapability =
           target.reference?.currentHash === target.hash
             ? enabled('sketch-on-face', 'Sketch', undefined, 'none')
-            : disabled('sketch-on-face', 'Sketch', UNSTABLE_FACE_SKETCH_REASON);
+            : {
+                ...enabled('sketch-on-face', 'Sketch', undefined, 'none'),
+                note: UNSTABLE_FACE_SKETCH_REASON
+              };
         return [
           enabled(
             'offset-face',

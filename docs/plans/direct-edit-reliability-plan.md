@@ -196,14 +196,21 @@ Ordered by expected leverage; each item retires pins and states which.
   refused after B1 becomes a reproduction bundle in `esaueng/remus`, one per
   session, per the kernel roadmap's S1 playbook — starting with the negative
   cap offset (S1.3).
-- **B3. Brittleness before the drag (class L).** `selectionCapabilities`
-  already knows when a face has no current reference (it disables *Sketch*
-  for that reason); surface the same fact on the offset handle as a hint
-  rather than a refusal on the next replay. Prefer lineage references over
-  the area pin for identity wherever a reference exists, and record a repair
-  path for hash-only edits the way `staleDirectEditFaceRepair` does. The
-  full fix is the lineage bridge (kernel roadmap C1); this item makes the
-  limitation visible in the meantime.
+- **B3. Brittleness before the drag (class L).** *Landed in part (2026-09-01):*
+  the region extrude path — the one every UI extrude takes — now names its
+  side walls after the sketch segments that drew them (`sweep.face.side.
+  region.<token>.<objectId>.<segment>`), so a sketch on the wall of a
+  drag-extruded plate attaches associatively and survives a resize of the
+  source rectangle (`test/region-extrude-lineage.test.ts`). A wall drawn by
+  two pieces of one segment, a bezier wall, and every face of an add/cut
+  result stay hash-only. For those, *Sketch* is no longer refused: the sketch
+  lands on a fixed frame coincident with the face and the tool card, the
+  status line and the capability note all say so
+  (`UNSTABLE_FACE_SKETCH_REASON`). *Still open:* surface the same fact on
+  the offset handle as a hint, prefer lineage references over the area pin
+  wherever a reference exists, and record a repair path for hash-only edits
+  the way `staleDirectEditFaceRepair` does. The full fix for boolean and
+  add/cut faces is the lineage bridge (kernel roadmap C1).
 - **B4. Preview continuity (class P).** *Landed in part:* offset and edge
   drags no longer wait on a 150 ms cadence — every applied value reaches the
   previewer, which keeps one rebuild in flight and drops superseded values;
