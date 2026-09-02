@@ -3,6 +3,8 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { RemusKernel } from '../packages/kernel-adapter/src/remus-runtime';
+import { unifyUnionFaces } from '../packages/kernel-adapter/src/exact-boolean-helpers';
+import { transformMatrix } from '../packages/kernel-adapter/src/exact-math';
 import {
   addPrimitiveFeature,
   addSketchFeature,
@@ -1481,6 +1483,42 @@ describe('exact kernel adapter', { timeout: 30_000 }, () => {
         solid: true,
         valid: true
       });
+    }
+  });
+
+  it('keeps the raw union when face unification opens its mesh', () => {
+    const kernel = new RemusKernel();
+    const left = kernel.makeBox(10, 10, 10);
+    const right = kernel.makeBox(10, 10, 10);
+    kernel.transformSolid(
+      right,
+      transformMatrix({ x: 5, y: 0, z: 0 }, { x: 0, y: 0, z: 0 })
+    );
+    const raw = kernel.fuseAll(Uint32Array.from([left, right]));
+    // A healthy unification is still adopted: the merged copy is a new solid.
+    expect(unifyUnionFaces(kernel, raw)).not.toBe(raw);
+
+    // The same operands, but every solid other than the raw union projects
+    // to a single open triangle — what a unification that merged a wall
+    // across a base notch looks like to the viewport. Validation alone still
+    // passes it; the gate must decline it and keep the raw union.
+    const original = RemusKernel.prototype.tessellateSolidGroupedBinary;
+    const spy = vi
+      .spyOn(RemusKernel.prototype, 'tessellateSolidGroupedBinary')
+      .mockImplementation(function (this: RemusKernel, solid, ...rest) {
+        if (solid === raw) {
+          return original.call(this, solid, ...rest);
+        }
+        return {
+          positions: new Float32Array([0, 0, 0, 1, 0, 0, 0, 1, 0]),
+          indices: new Uint32Array([0, 1, 2]),
+          free() {}
+        } as ReturnType<RemusKernel['tessellateSolidGroupedBinary']>;
+      });
+    try {
+      expect(unifyUnionFaces(kernel, raw)).toBe(raw);
+    } finally {
+      spy.mockRestore();
     }
   });
 
