@@ -503,13 +503,14 @@ export function TopBar({
           </div>
         </details>
         <button
-          className="icon-button"
+          className="secondary topbar-action settings-action"
           type="button"
           title="Settings (Ctrl+,)"
           aria-label="Open settings"
           onClick={onOpenSettings}
         >
-          <SettingsIcon size={15} aria-hidden="true" />
+          <SettingsIcon size={14} aria-hidden="true" />
+          Settings
         </button>
       </div>
     </header>
