@@ -1508,6 +1508,8 @@ export function ModelViewer({
     const cameraRig = new CameraController({
       host,
       domElement: renderer.domElement,
+      // The viewer rail and orientation widget are siblings of this host.
+      wheelElement: host.parentElement ?? host,
       requestRender: () => requestRender(),
       onViewChange: (view) => onViewChangeRef.current(view),
       onViewSettled: (view) => onViewSettledRef.current(view),
