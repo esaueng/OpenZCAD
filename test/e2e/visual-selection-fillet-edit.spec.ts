@@ -272,6 +272,28 @@ test('previews and reverses a box fillet backed by verified evolution lineage', 
     })
     .toBeCloseTo(2, 6);
   await expect(page.getByRole('button', { name: 'History 2' })).toBeVisible();
+
+  // A radius the kernel cannot build on this box is refused at the handle:
+  // the cause lands in the tool card in the kernel's plain words, the chip
+  // turns to its warning state, and the last radius that built stays on
+  // screen instead of the blend vanishing.
+  await keypad.getByRole('textbox').fill('12');
+  await expect(editFillet).toContainText('Try a smaller radius', {
+    timeout: 30_000
+  });
+  await expect(editFillet).toContainText('Failed');
+  await expect(chip).toHaveAttribute('data-state', 'warning');
+  expect((await readBlend(canvas))?.blendRadius ?? null).toBeCloseTo(2, 6);
+  await expect(keypad.getByRole('button', { name: 'Apply radius' })).toBeDisabled();
+  // The next radius that builds recovers the gesture where it stood.
+  await keypad.getByRole('textbox').fill('3');
+  await expect
+    .poll(async () => (await readBlend(canvas))?.blendRadius ?? null, {
+      timeout: 30_000
+    })
+    .toBeCloseTo(3, 6);
+  await expect(chip).not.toHaveAttribute('data-state', 'warning');
+  await expect(editFillet).not.toContainText('Try a smaller radius');
   await page.keyboard.press('Escape');
   await expect
     .poll(async () => (await readBlend(canvas))?.blendRadius ?? null)

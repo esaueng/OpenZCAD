@@ -124,3 +124,61 @@ describe('offset preview validation', () => {
     ).toBeNull();
   });
 });
+
+describe('offsetPreviewRejection for a blend preview', () => {
+  it('names the kernel refusal without the feature prefix when the blend fails to build', () => {
+    const rejection = offsetPreviewRejection({
+      label: 'Fillet edges',
+      bodyId: toBodyId('body_result'),
+      validationTargets: [
+        {
+          featureId: toFeatureId('feat_fillet'),
+          featureName: 'Fillet',
+          resultBodyId: toBodyId('body_result')
+        }
+      ],
+      derived: {
+        bodyRepresentations: {},
+        warnings: [
+          'Feature "Fillet": Fillet could not be created on 1 selected edge with radius 12. Try a smaller radius.'
+        ],
+        featureWarnings: [
+          {
+            featureId: toFeatureId('feat_fillet'),
+            featureName: 'Fillet',
+            message:
+              'Feature "Fillet": Fillet could not be created on 1 selected edge with radius 12. Try a smaller radius.',
+            kind: 'build-failed'
+          }
+        ]
+      },
+      documentMoved: false
+    });
+    expect(rejection?.message).toBe(
+      'Fillet could not be created on 1 selected edge with radius 12. Try a smaller radius.'
+    );
+    expect(rejection?.culprit).toMatchObject({ featureName: 'Fillet' });
+  });
+
+  it('passes a blend whose result body is present and unwarned', () => {
+    expect(
+      offsetPreviewRejection({
+        label: 'Fillet edges',
+        bodyId: toBodyId('body_result'),
+        validationTargets: [
+          {
+            featureId: toFeatureId('feat_fillet'),
+            featureName: 'Fillet',
+            resultBodyId: toBodyId('body_result')
+          }
+        ],
+        derived: {
+          bodyRepresentations: { [toBodyId('body_result')]: {} },
+          warnings: [],
+          featureWarnings: []
+        },
+        documentMoved: false
+      })
+    ).toBeNull();
+  });
+});
