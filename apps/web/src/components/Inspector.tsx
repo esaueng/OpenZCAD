@@ -1326,10 +1326,14 @@ export function Inspector(props: InspectorProps) {
       </>
     );
     deleteAction = {
+      // Under a command title ("Offset Face"), "Delete feature" reads as
+      // discarding the command; name the feature it would actually remove.
       label:
         selectedFeature.data.featureKind === 'imported-step'
           ? 'Delete imported body'
-          : 'Delete feature',
+          : inferredUnderCommand
+            ? `Delete ${selectedFeature.name}`
+            : 'Delete feature',
       run: () => props.onDeleteFeature(selectedFeature)
     };
   }

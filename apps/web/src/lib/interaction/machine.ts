@@ -436,9 +436,7 @@ export function interactionReducer(
           // its pick sequence.
           tool: 'select',
           drawing: false,
-          pendingConstraint: event.kind
-            ? { kind: event.kind, picks: [] }
-            : null
+          pendingConstraint: event.kind ? { kind: event.kind, picks: [] } : null
         }
       };
     case 'sketch-constraint-pick':
@@ -753,6 +751,12 @@ export function toolCardFor(state: InteractionState): ToolCardModel | null {
           (state.op === 'remove-face-feature' &&
             capability.action === 'remove-face-feature')
       }));
+      // A hash-only face carries the anchoring note on its offset action;
+      // the hint repeats it because the action row is where notes hide and
+      // the hint is what the eye is on while the handle is armed.
+      const offsetNote = capabilities.find(
+        (capability) => capability.action === 'offset-face'
+      )?.note;
       const hint =
         state.op === 'edit-fillet'
           ? 'Drag the radial handle or tap R to edit · set R0 to remove.'
@@ -760,7 +764,9 @@ export function toolCardFor(state: InteractionState): ToolCardModel | null {
             ? `R${state.target.blendRadius ?? '?'} is read-only; this imported blend can be removed.`
             : state.op === 'resize-cylinder-radius'
               ? 'Drag the radial handle or tap the value to set the radius.'
-              : 'Drag the arrow to offset the face, or tap the value to type · Space faces it head-on.';
+              : offsetNote
+                ? `Drag the arrow to offset the face, or tap the value to type. ${offsetNote}`
+                : 'Drag the arrow to offset the face, or tap the value to type · Space faces it head-on.';
       // Single-capability faces suppress the action row: one button that only
       // restates the title is noise on a card meant to stay out of the way.
       const alwaysShowActions =

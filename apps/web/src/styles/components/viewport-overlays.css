@@ -110,7 +110,7 @@
   align-items: center;
   justify-content: center;
   border-radius: 999px;
-  color: var(--color-text);
+  color: var(--color-viewport-text);
   background: rgba(17, 24, 33, 0.72);
   border: var(--border-thin);
   transition:
@@ -119,6 +119,7 @@
 }
 
 .orientation-roll:hover {
+  color: var(--color-text);
   background: var(--color-surface-hover);
   border-color: var(--color-border-strong);
 }
@@ -233,7 +234,7 @@
   border: 1px solid var(--color-border-strong);
   border-radius: 999px;
   background: rgba(11, 15, 20, 0.94);
-  color: var(--color-text);
+  color: var(--color-viewport-text);
   white-space: nowrap;
   line-height: var(--lh-tight);
   pointer-events: none;
