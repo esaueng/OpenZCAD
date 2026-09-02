@@ -219,6 +219,52 @@ test('streams exact planar previews and restores invalid or canceled offsets', a
   expect(consoleErrors).toEqual([]);
 });
 
+test('keeps the last value that built when a drag is released on a refusal', async ({
+  page
+}) => {
+  test.setTimeout(process.env.CI ? 240_000 : 120_000);
+  const { chip, readAxisLength, handle, start, consoleErrors } =
+    await armTopCapOffset(page);
+
+  await page.mouse.move(start.x, start.y);
+  await page.mouse.down();
+  await page.mouse.move(
+    start.x + handle.dx * handle.pixelsPerUnit * 5,
+    start.y + handle.dy * handle.pixelsPerUnit * 5,
+    { steps: 2 }
+  );
+  await expect
+    .poll(readAxisLength, { timeout: PREVIEW_BUDGET_MS })
+    .toBeGreaterThan(28.5);
+  const lastValid = (await readAxisLength())!;
+  // Past the cylinder's own height the offset would remove the body.
+  await page.mouse.move(
+    start.x - handle.dx * handle.pixelsPerUnit * 40,
+    start.y - handle.dy * handle.pixelsPerUnit * 40,
+    { steps: 1 }
+  );
+  await expect(chip).toHaveAttribute('data-state', 'warning', {
+    timeout: PREVIEW_BUDGET_MS
+  });
+  await page.mouse.up();
+  const card = page.getByRole('region', { name: 'Offset Face operation' });
+  await expect(card).toContainText('Failed');
+  // The model still shows the last value that built, and the card offers to
+  // keep it instead of sending the hand back to find it.
+  expect(await readAxisLength()).toBeCloseTo(lastValid, 4);
+  await card.getByRole('button', { name: /^Keep / }).click();
+  await expect(page.getByRole('contentinfo')).toContainText(
+    /Cylinder height set to \d+(\.\d+)? mm\./,
+    { timeout: PREVIEW_BUDGET_MS }
+  );
+  await expect
+    .poll(readAxisLength, { timeout: PREVIEW_BUDGET_MS })
+    .toBeCloseTo(lastValid, 2);
+  // The kept value edits the cylinder's height; no second feature appears.
+  await expect(page.getByRole('button', { name: 'History 1' })).toBeVisible();
+  expect(consoleErrors).toEqual([]);
+});
+
 test('clears the paused-preview chip when a degraded gesture is canceled', async ({
   page
 }) => {

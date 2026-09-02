@@ -31,6 +31,12 @@ interface ToolCardProps {
   onAction?(action: SelectionActionId): void;
   /** Opens the existing feature a refusal named, so the way out is a button. */
   onEditCulprit?(featureId: string): void;
+  /**
+   * Commits the value the last passing preview showed. After a refusal at
+   * release the model on screen is already that value; this keeps it rather
+   * than sending the hand back to find it.
+   */
+  keepLastValid?: { label: string; keep(): void };
   onClose(): void;
 }
 
@@ -43,6 +49,7 @@ export function ToolCard({
   model,
   onAction,
   onEditCulprit,
+  keepLastValid,
   onClose
 }: ToolCardProps) {
   const Icon = ICONS[model.icon];
@@ -77,6 +84,15 @@ export function ToolCard({
                 onClick={() => onEditCulprit(model.error!.culprit!.featureId)}
               >
                 Edit {model.error.culprit.featureName}
+              </button>
+            ) : null}
+            {keepLastValid ? (
+              <button
+                type="button"
+                className="tool-card-recovery"
+                onClick={keepLastValid.keep}
+              >
+                {keepLastValid.label}
               </button>
             ) : null}
             {model.error.detail ? (
