@@ -152,12 +152,14 @@ const OPERATION_CAPABILITIES: Readonly<
     reason:
       'Pattern instances may be fused when they overlap, so the result faces have no complete output relation to the source body.'
   },
-  boolean: {
-    status: 'unsupported',
-    fallback: 'hash-only',
-    reason:
-      'The production boolean result may be face-unified after the kernel operation, so no unverified history payload is accepted.'
-  },
+  /**
+   * Derived by unique analytic carrier (ADR-013, boolean row): a result face
+   * inherits an operand face's identity only when both are the sole faces on
+   * one quantized plane or cylinder, measured after production unification.
+   * No kernel history payload is consumed; shared or split carriers stay
+   * hash-only with a diagnostic.
+   */
+  boolean: { status: 'derived' },
   fillet: { status: 'derived' },
   chamfer: {
     status: 'unsupported',
