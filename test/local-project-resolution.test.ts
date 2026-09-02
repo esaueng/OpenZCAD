@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
+  appendRevision,
+  createCheckpoint,
   createProjectDocument,
   duplicateProjectDocument,
   withoutDerivedProjection
@@ -45,6 +47,45 @@ describe('local-first project resolution', () => {
     remote.derived.bodyRepresentations = {};
 
     expect(withMatchingLocalDerived(remote, local)).toBe(remote);
+  });
+
+  // The account answers a manual save or a keep-mine with the document it was
+  // sent plus a checkpoint, at the same version. Nothing the kernel reads has
+  // changed, so the meshes on screen still describe it — and dropping them
+  // used to blank the viewport, because a same-version echo posts no rebuild.
+  it('keeps this device’s meshes across a checkpoint-only save echo', () => {
+    const local = createProjectDocument('Bracket', toUserId('user_test'));
+    const bodyRepresentations = {
+      body_live: { name: 'Live body' }
+    } as unknown as typeof local.derived.bodyRepresentations;
+    local.derived.bodyRepresentations = bodyRepresentations;
+    local.derived.exportableBodyIds = [toBodyId('body_live')];
+    const echo = createCheckpoint(
+      withoutDerivedProjection(local),
+      'Kept this device’s version'
+    );
+    expect(echo.version).toBe(local.version);
+    expect(echo.checkpoints.length).toBe(local.checkpoints.length + 1);
+
+    const shown = withMatchingLocalDerived(echo, local);
+
+    expect(shown.derived.bodyRepresentations).toBe(bodyRepresentations);
+    expect(shown.derived.exportableBodyIds).toEqual([toBodyId('body_live')]);
+    expect(shown.checkpoints).toBe(echo.checkpoints);
+  });
+
+  it('keeps the meshes across a revision that changed nothing the kernel reads', () => {
+    const local = createProjectDocument('Bracket', toUserId('user_test'));
+    const bodyRepresentations = {
+      body_live: { name: 'Live body' }
+    } as unknown as typeof local.derived.bodyRepresentations;
+    local.derived.bodyRepresentations = bodyRepresentations;
+    const echo = appendRevision(withoutDerivedProjection(local), 'Manual save');
+    expect(echo.version).toBe(local.version + 1);
+
+    expect(withMatchingLocalDerived(echo, local).derived.bodyRepresentations).toBe(
+      bodyRepresentations
+    );
   });
 
   it('uses the newer remote copy and supports one-sided availability', () => {
