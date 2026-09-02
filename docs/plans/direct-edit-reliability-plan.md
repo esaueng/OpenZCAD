@@ -220,10 +220,14 @@ Ordered by expected leverage; each item retires pins and states which.
   `offset-face`; under lineage the edit follows a taller cylinder and a
   re-sized source, and is a quiet no-op when the source already reaches the
   stored radius, while the reference-free edit still fails closed
-  (`test/direct-edit-lineage-pins.test.ts`). *Still open:* `resize-blend`
-  pins carrier centre and axis the same way (`exact-direct-edit-ops.ts`, the
-  `recordedCenter` / `recordedAxis` checks); same treatment, same test
-  shape, next.
+  (`test/direct-edit-lineage-pins.test.ts`). *Closed 2026-09-02 for
+  `resize-blend`* the same way: recorded radius, carrier centre and axis
+  pin only a hash-resolved seed; a lineage-resolved band — an imported blend
+  keeps its `import.step.face.*` role through a rigid transform — follows a
+  moved body and resizes from its current radius, and is a quiet no-op when
+  the band already sits at the stored radius. That closes the pin side of
+  B3; what remains of class L is the lineage bridge itself (kernel roadmap
+  C1), which decides how many faces resolve by role in the first place.
 - **B4. Preview continuity (class P).** *Landed in part:* offset and edge
   drags no longer wait on a 150 ms cadence — every applied value reaches the
   previewer, which keeps one rebuild in flight and drops superseded values;
