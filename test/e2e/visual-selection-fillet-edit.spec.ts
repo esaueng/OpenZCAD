@@ -284,7 +284,9 @@ test('previews and reverses a box fillet backed by verified evolution lineage', 
   await expect(editFillet).toContainText('Failed');
   await expect(chip).toHaveAttribute('data-state', 'warning');
   expect((await readBlend(canvas))?.blendRadius ?? null).toBeCloseTo(2, 6);
-  await expect(keypad.getByRole('button', { name: 'Apply radius' })).toBeDisabled();
+  await expect(
+    keypad.getByRole('button', { name: 'Apply radius' })
+  ).toBeDisabled();
   // The next radius that builds recovers the gesture where it stood.
   await keypad.getByRole('textbox').fill('3');
   await expect
@@ -413,4 +415,89 @@ test('resizes an imported analytic blend twice without reselection', async ({
   expect(consoleErrors.filter((message) => !message.includes('404'))).toEqual(
     []
   );
+});
+
+test('still refuses an oversize radius after a slow blend preview', async ({
+  page
+}) => {
+  test.setTimeout(process.env.CI ? 240_000 : 120_000);
+  // Every rebuild counts as slow, so the first exact preview degrades the
+  // gesture on purpose. The edge preview used to stop consuming values after
+  // that, which swallowed the oversize radius and left the Edit Fillet card
+  // waiting in exact-entry until the assertion timed out — the shape of the
+  // shard-4 flake this pins. Same steps as the first test, slow.
+  await page.addInitScript(() => {
+    window.__openzcadE2ESlowFrameMs = 0;
+  });
+  await stubApi(page);
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('Slow blend refusal');
+  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
+  await page
+    .getByRole('region', { name: 'Feature inspector' })
+    .getByRole('button', { name: /^Create/ })
+    .click();
+  const canvas = page.locator('.viewer-host canvas');
+  await expect
+    .poll(
+      () =>
+        canvas.evaluate(
+          (element) =>
+            new Promise<boolean>((resolve) => {
+              element.dispatchEvent(
+                new CustomEvent('openzcad:e2e-select-edge', {
+                  detail: {
+                    resolve: (selection: unknown) => resolve(selection !== null)
+                  }
+                })
+              );
+            })
+        ),
+      { timeout: 30_000 }
+    )
+    .toBe(true);
+
+  const chip = page.getByTestId('direct-manipulation-value');
+  await chip.click();
+  let keypad = page.getByRole('dialog', { name: 'Radius value' });
+  await keypad.getByRole('textbox').fill('1');
+  await keypad.getByRole('button', { name: 'Apply radius' }).click();
+  await expect(page.getByRole('button', { name: 'History 2' })).toBeVisible();
+  await expect
+    .poll(async () => (await readBlend(canvas))?.blendRadius ?? null, {
+      timeout: 30_000
+    })
+    .toBeCloseTo(1, 6);
+  // Selecting the new blend face arms Edit Fillet, as the first test does.
+  expect(await readBlend(canvas, true)).not.toBeNull();
+
+  const editFillet = page.getByRole('region', {
+    name: 'Edit Fillet operation'
+  });
+  await expect(editFillet).toBeVisible();
+  await chip.click();
+  keypad = page.getByRole('dialog', { name: 'Radius value' });
+  await keypad.getByRole('textbox').fill('2');
+  await expect
+    .poll(async () => (await readBlend(canvas))?.blendRadius ?? null, {
+      timeout: 30_000
+    })
+    .toBeCloseTo(2, 6);
+
+  // The gesture is degraded now. Before the fix nothing after this line could
+  // pass: the next value was dropped and no refusal ever reached the card.
+  await keypad.getByRole('textbox').fill('12');
+  await expect(editFillet).toContainText('Try a smaller radius', {
+    timeout: 30_000
+  });
+  await expect(chip).toHaveAttribute('data-state', 'warning');
+  expect((await readBlend(canvas))?.blendRadius ?? null).toBeCloseTo(2, 6);
+  await keypad.getByRole('textbox').fill('3');
+  await expect
+    .poll(async () => (await readBlend(canvas))?.blendRadius ?? null, {
+      timeout: 30_000
+    })
+    .toBeCloseTo(3, 6);
+  await expect(chip).not.toHaveAttribute('data-state', 'warning');
 });
