@@ -235,6 +235,17 @@ const MEASUREMENT_NOTE =
 // Remus vs OpenCascade
 // ---------------------------------------------------------------------------
 
+const BOOLEAN_CARRIER_NOTE =
+  'Remus carries face identity through a boolean (ADR-013, ' +
+  '`deriveRemusBooleanCarrierLineage`): a result face inherits an operand ' +
+  "face's name when it is the only named source and the only result face " +
+  'on one quantized plane or cylinder, and nothing is guessed on a shared or ' +
+  'split carrier. The OpenCascade reference adapter still publishes every ' +
+  'boolean result hash-only, so Remus is the better side of this pin. It ' +
+  'retires when `occt-lineage.ts` derives the same carrier subset. ' +
+  'boss-crossing-a-wall carries the same divergence, subsumed by its status ' +
+  'pin.';
+
 export const KERNEL_DELTAS: KernelDeltaPin[] = [
   {
     subject: 'boss-crossing-a-wall',
@@ -828,6 +839,77 @@ export const KERNEL_DELTAS: KernelDeltaPin[] = [
     note:
       'Edge counterpart of the fingerprint divergence above; same cause and ' +
       'same expected retirement.'
+  },
+
+  // --- boolean carrier lineage (ADR-013, Remus only) ----------------------
+  {
+    subject: 'boolean-with-import',
+    metric: 'witnessedFaces',
+    remus: 7,
+    occt: 0,
+    owner: 'K0.6',
+    note:
+      BOOLEAN_CARRIER_NOTE +
+      ' All seven result faces name: the six imported plate faces and the ' +
+      "bore wall. The tool's caps lie clear of the plate, so no carrier is " +
+      'shared.'
+  },
+  {
+    subject: 'boolean-with-import',
+    metric: 'lineageNames',
+    remus:
+      'boolean.face.operand.0.import.step.face.0c7f072b,boolean.face.operand.0.import.step.face.426c91a5,boolean.face.operand.0.import.step.face.58bf7705,boolean.face.operand.0.import.step.face.62e02c7d,boolean.face.operand.0.import.step.face.ac22b2bd,boolean.face.operand.0.import.step.face.d3a10e97,boolean.face.operand.1.primitive.cylinder.face.wall',
+    occt: 'none',
+    owner: 'K0.6',
+    note:
+      BOOLEAN_CARRIER_NOTE +
+      ' The name set behind the witnessedFaces pin above.'
+  },
+  {
+    subject: 'pattern-boolean-with-import',
+    metric: 'witnessedFaces',
+    remus: 6,
+    occt: 0,
+    owner: 'K0.6',
+    note:
+      BOOLEAN_CARRIER_NOTE +
+      ' The six imported plate faces name. The three bore walls come from ' +
+      'the pattern body, which publishes no references at all (pattern ' +
+      'lineage is hash-only), so there is nothing for them to inherit.'
+  },
+  {
+    subject: 'pattern-boolean-with-import',
+    metric: 'lineageNames',
+    remus:
+      'boolean.face.operand.0.import.step.face.0c7f072b,boolean.face.operand.0.import.step.face.426c91a5,boolean.face.operand.0.import.step.face.58bf7705,boolean.face.operand.0.import.step.face.62e02c7d,boolean.face.operand.0.import.step.face.ac22b2bd,boolean.face.operand.0.import.step.face.d3a10e97',
+    occt: 'none',
+    owner: 'K0.6',
+    note:
+      BOOLEAN_CARRIER_NOTE +
+      ' The name set behind the witnessedFaces pin above.'
+  },
+  {
+    subject: 'boolean-on-nurbs-import',
+    metric: 'witnessedFaces',
+    remus: 7,
+    occt: 0,
+    owner: 'K0.6',
+    note:
+      BOOLEAN_CARRIER_NOTE +
+      ' Six imported faces and the bore wall name; the three B-spline ' +
+      'corner faces have no analytic carrier and stay hash-only on both ' +
+      'kernels.'
+  },
+  {
+    subject: 'boolean-on-nurbs-import',
+    metric: 'lineageNames',
+    remus:
+      'boolean.face.operand.0.import.step.face.0d79d62e,boolean.face.operand.0.import.step.face.22899036,boolean.face.operand.0.import.step.face.32f720ef,boolean.face.operand.0.import.step.face.6c9068cb,boolean.face.operand.0.import.step.face.c4a2df82,boolean.face.operand.0.import.step.face.e37774ee,boolean.face.operand.1.primitive.cylinder.face.wall',
+    occt: 'none',
+    owner: 'K0.6',
+    note:
+      BOOLEAN_CARRIER_NOTE +
+      ' The name set behind the witnessedFaces pin above.'
   }
 ];
 
