@@ -21,7 +21,8 @@ import type {
 }  from './exact-types';
 import {
   diagnoseImportedSolid,
-  modifierChainRootsAtCylinder,
+  modifierChainRootPrimitive,
+  rederiveBoxModifierLineage,
   rederiveCylinderModifierLineage,
   rederivePrimitiveDirectEditLineage,
   topologyCandidatesForSolid
@@ -1546,12 +1547,16 @@ function buildEdgeModifierFeature(
       )
     );
   }
-  const cylinderFallbackLineage = modifierChainRootsAtCylinder(
+  const rootPrimitive = modifierChainRootPrimitive(
     document,
     data.targetBodyId
-  )
-    ? rederiveCylinderModifierLineage(kernel, modified, feature)
-    : null;
+  );
+  const primitiveFallbackLineage =
+    rootPrimitive === 'cylinder'
+      ? rederiveCylinderModifierLineage(kernel, modified, feature)
+      : rootPrimitive === 'box'
+        ? rederiveBoxModifierLineage(kernel, modified, feature)
+        : null;
   const evolutionLineage = evolution
     ? createRemusModifierEvolutionLineage({
         producingFeatureId: feature.featureId,
@@ -1573,7 +1578,7 @@ function buildEdgeModifierFeature(
       })
     : null;
   const verifiedLineages = [
-    cylinderFallbackLineage,
+    primitiveFallbackLineage,
     evolutionLineage
   ].filter((lineage): lineage is RemusLineageState => !!lineage);
   const verifiedLineage = mergeRemusLineageStates(verifiedLineages);

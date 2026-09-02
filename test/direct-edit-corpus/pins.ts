@@ -31,10 +31,10 @@
  * -24 offset through a 24 mm plate — so an empty list here means no refusal
  * class reproduces, not that nothing is being watched.
  *
- * Committing is not the same as being right. Three of those seven commit the
- * WRONG solid, and they are pinned in SHAPE_PINS below. The first entry in
- * this list is expected to arrive with the first capture dropped into
- * `fixtures/`.
+ * Committing is not the same as being right. Three of those seven committed
+ * the WRONG solid and were pinned in SHAPE_PINS below; B1 retired all three
+ * (see that list's note). The first entry in this list is expected to arrive
+ * with the first capture dropped into `fixtures/`.
  */
 
 export interface RefusalPin {
@@ -77,33 +77,29 @@ export interface ShapePin {
 }
 
 /**
- * All three entries are one defect, measured three ways: an offset on a face
- * bordered by blends adds or removes a PRISM over that face's own outline
- * (37 x 7 = 259 mm2) instead of moving the cap and re-blending. The kernel
- * reports the operation as a boolean — a -24 offset through a 24 mm plate
- * comes back "empty result: Cut of identical solids" — and the deltas below
- * are 259 x offset to the last digit on two of the three.
+ * ---------------------------------------------------------------------------
+ * This list is EMPTY because its three entries were REPAIRED, not deleted
+ * ---------------------------------------------------------------------------
  *
- * The blend rim is left standing, so the committed part is a plate with a
- * rectangular pocket or boss, not a thicker plate. Nothing refuses.
+ * The first recording (2026-09-01) carried three shape pins, all one defect
+ * measured three ways: an offset on a face bordered by blends added or removed
+ * a PRISM over that face's own outline (37 x 7 = 259 mm2) instead of moving the
+ * side and re-blending, leaving the blend rim standing as a ledge around a
+ * boss or a pocket. The deltas were 259 x offset to the last digit on two of
+ * the three (1294.9973 / 1295 / -777 against oracles of 1990.3054 / 1977.5 /
+ * -1194.1315).
+ *
+ * B1 retired all three the same day. The fix was not a kernel one: the raw op
+ * already IS a prism, so the gap was semantic, and the routing now sends a
+ * face that resolves back to a box or cylinder primitive to that primitive's
+ * dimension (`planFaceOffset`, shared by the app and this replay). All three
+ * scenarios now match their volume oracle exactly, because the oracle rebuilds
+ * through the same dimension the drag edits.
+ *
+ * The prism behaviour has not gone away — it is simply no longer reachable
+ * from a face with a primitive chain. A min side, a boolean result, an
+ * imported body, or any face whose lineage does not resolve still takes the
+ * local push/pull, and that is the class the kernel M6 tangent-propagation ask
+ * owns. A shape pin returning here is expected to be one of those.
  */
-export const SHAPE_PINS: ShapePin[] = [
-  {
-    fixture: 'box-all-edges-filleted-top-offset',
-    observedVolumeDelta: 1294.9973,
-    expectedVolumeDelta: 1990.3054,
-    owner: 'direct-edit-reliability-plan.md B1 (prismatic fallback)'
-  },
-  {
-    fixture: 'box-all-edges-chamfered-top-offset',
-    observedVolumeDelta: 1295,
-    expectedVolumeDelta: 1977.5,
-    owner: 'direct-edit-reliability-plan.md B1 (prismatic fallback)'
-  },
-  {
-    fixture: 'box-filleted-top-offset-inward-past-blend',
-    observedVolumeDelta: -777,
-    expectedVolumeDelta: -1194.1315,
-    owner: 'direct-edit-reliability-plan.md B1 (prismatic fallback)'
-  }
-];
+export const SHAPE_PINS: ShapePin[] = [];
