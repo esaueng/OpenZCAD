@@ -6214,10 +6214,6 @@ export function ModelViewer({
     // beneath). The host wrapper sees the event whichever layer was hit.
     host.addEventListener('contextmenu', handleContextMenu);
 
-    const handleWheel = () => {
-      cameraRig.cancelTween();
-    };
-
     renderer.domElement.addEventListener(
       'pointermove',
       handlePointerMove,
@@ -6237,9 +6233,6 @@ export function ModelViewer({
     renderer.domElement.addEventListener('pointerleave', handlePointerLeave);
     renderer.domElement.addEventListener('dblclick', handleDoubleClick);
     renderer.domElement.addEventListener('contextmenu', handleContextMenu);
-    renderer.domElement.addEventListener('wheel', handleWheel, {
-      passive: true
-    });
 
     const lastQuaternion = new THREE.Quaternion();
     /**
@@ -6270,6 +6263,7 @@ export function ModelViewer({
       }
       // Camera glide first so controls and the ortho mirror see the result.
       const tweening = cameraRig.stepTween(now);
+      const zooming = cameraRig.stepZoom(now);
       const controlsChanged = cameraRig.stepOrbit(now);
       const dragEvent = pendingDragEvent;
       pendingDragEvent = null;
@@ -6431,6 +6425,26 @@ export function ModelViewer({
       } else {
         renderer.render(scene, context.activeCamera);
       }
+      if (e2eCanvasHooksEnabled) {
+        const distance = context.activeCamera.position.distanceTo(
+          context.controls.target
+        );
+        renderer.domElement.dataset.e2eCameraDistance = String(distance);
+        renderer.domElement.dataset.e2eOrthographicZoom = String(
+          orthographic.zoom
+        );
+        renderer.domElement.dataset.e2eZoomActive = String(zooming);
+        renderer.domElement.dispatchEvent(
+          new CustomEvent('openzcad:e2e-camera-frame', {
+            detail: {
+              at: now,
+              distance,
+              orthographicZoom: orthographic.zoom,
+              zooming
+            }
+          })
+        );
+      }
       if (import.meta.env.OZ_PERF === '1') {
         mark('viewer.frame', {
           frameMs:
@@ -6487,6 +6501,7 @@ export function ModelViewer({
       const hoverAnimating = selection.isSettling;
       if (
         tweening ||
+        zooming ||
         controlsChanged ||
         hoverAnimating ||
         edgesAnimating ||
@@ -6602,7 +6617,6 @@ export function ModelViewer({
       renderer.domElement.removeEventListener('dblclick', handleDoubleClick);
       renderer.domElement.removeEventListener('contextmenu', handleContextMenu);
       host.removeEventListener('contextmenu', handleContextMenu);
-      renderer.domElement.removeEventListener('wheel', handleWheel);
       discardCylinderRadiusProxy();
       // Hover slots are children of body objects, but their buffers and
       // materials belong to SelectionManager. Detach them before the body
