@@ -85,9 +85,7 @@ describe('booleanFacetFallbackWarning', () => {
       operands: { faces: 6, curvedFaces: 2 },
       result: { faces: 193, curvedFaces: 0 }
     });
-    expect(warning).toContain(
-      'faceted approximation instead of exact surfaces'
-    );
+    expect(warning).toContain('could only be built as an approximation');
     expect(warning).toContain('6 operand faces (2 curved)');
     expect(warning).toContain('193 result faces (0 curved)');
   });
@@ -97,9 +95,7 @@ describe('booleanFacetFallbackWarning', () => {
       operands: { faces: 8, curvedFaces: 2 },
       result: { faces: 10, curvedFaces: 0 }
     });
-    expect(warning).toContain(
-      'replaced every curved surface with planar faces'
-    );
+    expect(warning).toContain('replaced every curved surface with flat faces');
   });
 
   it('flags an explosion even when nothing curved was involved', () => {
@@ -148,7 +144,7 @@ describe('directEditFacetFallbackWarning', () => {
         result: { faces: 96, curvedFaces: 0 }
       })
     ).toBe(
-      'Offset face refused: the kernel returned a faceted approximation instead of exact surfaces: 5 source faces (2 curved) became 96 result faces (0 curved). The original body was left unchanged.'
+      "This offset could only be built by replacing the body's exact surfaces with flat triangles, so it was refused and the body left unchanged.\n5 source faces (2 curved) became 96 result faces (0 curved)"
     );
   });
 
@@ -158,6 +154,88 @@ describe('directEditFacetFallbackWarning', () => {
         operands: { faces: 5, curvedFaces: 2 },
         result: { faces: 64, curvedFaces: 1 }
       })
-    ).toContain('faceted approximation instead of exact surfaces');
+    ).toContain('could only be built by replacing');
+  });
+});
+
+/**
+ * The card shows the text before the first newline and hides the rest behind a
+ * disclosure, so a refusal that leads with face counts reaches the user as
+ * kernel bookkeeping instead of as something to act on.
+ */
+describe('facet refusal detail split', () => {
+  const bothSignals = {
+    operands: { faces: 6, curvedFaces: 2 },
+    result: { faces: 193, curvedFaces: 0 }
+  };
+  const curvatureOnly = {
+    operands: { faces: 8, curvedFaces: 2 },
+    result: { faces: 10, curvedFaces: 0 }
+  };
+  const explodedOnly = {
+    operands: { faces: 30, curvedFaces: 0 },
+    result: { faces: 400, curvedFaces: 0 }
+  };
+
+  function split(warning: string | null): {
+    sentence: string;
+    detail: string;
+  } {
+    expect(warning).not.toBeNull();
+    const boundary = warning!.indexOf('\n');
+    expect(boundary).toBeGreaterThan(0);
+    return {
+      sentence: warning!.slice(0, boundary),
+      detail: warning!.slice(boundary + 1)
+    };
+  }
+
+  it.each([
+    ['both signals', bothSignals],
+    ['lost curvature only', curvatureOnly],
+    ['exploded only', explodedOnly]
+  ])('keeps the census out of the %s boolean sentence', (_name, census) => {
+    const { sentence, detail } = split(
+      booleanFacetFallbackWarning(census, 'union')
+    );
+    expect(sentence).not.toMatch(/\d/);
+    expect(sentence).toContain('This union');
+    expect(detail).toBe(
+      `${census.operands.faces} operand faces (${census.operands.curvedFaces} curved) became ` +
+        `${census.result.faces} result faces (${census.result.curvedFaces} curved)`
+    );
+  });
+
+  it('keeps the census out of the offset refusal sentence', () => {
+    const census = {
+      operands: { faces: 5, curvedFaces: 2 },
+      result: { faces: 96, curvedFaces: 0 }
+    };
+    const { sentence, detail } = split(directEditFacetFallbackWarning(census));
+    expect(sentence).not.toMatch(/\d/);
+    expect(detail).toBe(
+      '5 source faces (2 curved) became 96 result faces (0 curved)'
+    );
+  });
+
+  it('names the operation it was given, and stays neutral without one', () => {
+    expect(booleanFacetFallbackWarning(bothSignals, 'subtract')).toContain(
+      'This subtract'
+    );
+    expect(booleanFacetFallbackWarning(bothSignals, 'intersect')).toContain(
+      'This intersection'
+    );
+    expect(booleanFacetFallbackWarning(bothSignals)).toContain(
+      'This boolean operation'
+    );
+  });
+
+  it('does not tell a subtract to subtract instead', () => {
+    expect(booleanFacetFallbackWarning(bothSignals, 'union')).toContain(
+      'or subtract instead'
+    );
+    expect(booleanFacetFallbackWarning(bothSignals, 'subtract')).not.toContain(
+      'subtract instead'
+    );
   });
 });

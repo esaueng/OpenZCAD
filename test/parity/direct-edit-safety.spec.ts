@@ -316,7 +316,7 @@ describe(
       }
 
       expect(after.warnings).toContain(
-        'Feature "Deepen blind bore": Offset face refused: the kernel returned a faceted approximation instead of exact surfaces: 5 source faces (2 curved) became 6 result faces (0 curved). The original body was left unchanged.'
+        'Feature "Deepen blind bore": This offset could only be built by replacing the body\'s exact surfaces with flat triangles, so it was refused and the body left unchanged.\n5 source faces (2 curved) became 6 result faces (0 curved)'
       );
       const preserved = bodyOf(after, bodyId);
       expect(preserved.volume).toBeCloseTo(before.volume, 6);
