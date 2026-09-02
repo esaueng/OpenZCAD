@@ -93,20 +93,22 @@ function shareLinkClient(): ProjectShareLinkClient {
   return {
     createProjectShareLink: vi.fn(
       async (projectId: string, mode: 'tweak' | 'view') => {
-        const shareLink = {
-          shareLinkId: `share_${links.length + 1}`,
-          projectId,
-          mode,
-          createdAt: 1_700_000_000,
-          revokedAt: null
-        };
+      const shareLink = {
+        shareLinkId: `share_${links.length + 1}`,
+        projectId,
+        mode,
+        createdAt: 1_700_000_000,
+        revokedAt: null
+      };
         links.push(shareLink);
         return { shareLink, token: 'a'.repeat(43) };
       }
     ),
     listProjectShareLinks: vi.fn(async () => [...links]),
     revokeProjectShareLink: vi.fn(async (_projectId, shareLinkId: string) => {
-      const index = links.findIndex((link) => link.shareLinkId === shareLinkId);
+      const index = links.findIndex(
+        (link) => link.shareLinkId === shareLinkId
+      );
       if (index >= 0) {
         links.splice(index, 1);
       }
