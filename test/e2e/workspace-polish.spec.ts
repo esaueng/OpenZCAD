@@ -229,6 +229,9 @@ test('keeps a chained line anchored across committed sketch entities', async ({
   await expect(
     page.getByRole('region', { name: 'Editing Sketch: New Sketch operation' })
   ).toBeVisible();
+  // The sketch rail owns the session: the modeling palette must not stay
+  // mounted and live beside it.
+  await expect(page.getByRole('button', { name: /^Box \(B\)/ })).toHaveCount(0);
   // Screen-space clicks must wait until the head-on entry tween settles.
   await page.waitForTimeout(800);
 

@@ -36,6 +36,7 @@ import type {
   SketchToolId
 } from '../lib/interaction/machine';
 import { CONSTRAINT_TOOL_SPECS } from '../lib/sketch/constraints';
+import { StableLabel } from './StableLabel';
 
 /** One row of the palette's constraint list, pre-rendered by App. */
 export interface SketchConstraintListItem {
@@ -136,6 +137,13 @@ const CIRCLE_LABELS: Record<SketchCircleMode, string> = {
 };
 
 /** Dedicated sketch toolbar and contextual palette for in-viewport sketching. */
+const SOLVE_LABEL_RESERVE = [
+  'Fully constrained',
+  '99 DOF remaining',
+  'Over-constrained',
+  'Constraints conflict'
+];
+
 export function SketchToolRail({
   tool,
   circleMode,
@@ -279,17 +287,21 @@ export function SketchToolRail({
           onClick={onSolve}
         >
           <Play size={14} aria-hidden="true" />
-          {solving ? 'Solving…' : 'Solve'}
+          <StableLabel reserve={['Solving…', 'Solve']}>
+            {solving ? 'Solving…' : 'Solve'}
+          </StableLabel>
         </button>
-        {solveStatus ? (
-          <span
-            className="sketch-solve-pill"
-            data-tone={solveStatus.tone}
-            role="status"
-          >
-            {solveStatus.label}
-          </span>
-        ) : null}
+        {/* Always in the rail: the rail is centred, so a pill that came and
+            went re-centred every sketch tool button with it. */}
+        <span
+          className={`sketch-solve-pill${solveStatus ? '' : ' empty'}`}
+          data-tone={solveStatus?.tone}
+          role="status"
+        >
+          <StableLabel reserve={SOLVE_LABEL_RESERVE} align="center">
+            {solveStatus?.label ?? ''}
+          </StableLabel>
+        </span>
         <span className="sketch-rail-divider" aria-hidden="true" />
         <button
           type="button"

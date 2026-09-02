@@ -373,6 +373,10 @@
   font-size: var(--fs-sm);
 }
 
+.export-dialog-status {
+  min-height: 20px;
+}
+
 .export-dialog-actions {
   display: flex;
   justify-content: flex-end;
