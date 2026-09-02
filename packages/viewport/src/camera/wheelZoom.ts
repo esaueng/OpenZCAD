@@ -6,6 +6,12 @@ const WHEEL_DELTA_SCALE = 0.01;
 const PINCH_DELTA_MULTIPLIER = 10;
 const ZOOM_TIME_CONSTANT_MS = 45;
 const MAX_ZOOM_LOG_RATE_PER_SECOND = 3;
+/**
+ * Reduced motion drops the easing, not the bound. Landing a whole burst in
+ * one frame is exactly the discontinuity this module exists to prevent, so
+ * that path ramps at a constant, faster rate and stops dead with no tail.
+ */
+const REDUCED_MOTION_LOG_RATE_PER_SECOND = 6;
 const MAX_FRAME_STEP_MS = 50;
 const DEFAULT_FRAME_STEP_MS = 1000 / 60;
 const SETTLED_LOG_EPSILON = 1e-4;
@@ -72,12 +78,14 @@ export function wheelDeltaToLogScale(input: WheelZoomDelta): number {
 /**
  * Consumes a pending logarithmic distance change without making behavior
  * depend on the display refresh rate. The rate cap prevents a batched pinch
- * or accelerated wheel spin from becoming one oversized rendered step.
+ * or accelerated wheel spin from becoming one oversized rendered step, in
+ * both motion modes; reduced motion only swaps the eased approach for a
+ * linear ramp.
  */
 export function advanceWheelZoom(
   pendingLogScale: number,
   elapsedMs: number | null,
-  immediate: boolean
+  reducedMotion: boolean
 ): ZoomStep {
   if (!Number.isFinite(pendingLogScale)) {
     return { appliedLogScale: 0, remainingLogScale: 0 };
@@ -85,17 +93,19 @@ export function advanceWheelZoom(
   if (Math.abs(pendingLogScale) <= SETTLED_LOG_EPSILON) {
     return { appliedLogScale: pendingLogScale, remainingLogScale: 0 };
   }
-  if (immediate) {
-    return { appliedLogScale: pendingLogScale, remainingLogScale: 0 };
-  }
 
   const frameMs = Math.min(
     Math.max(elapsedMs ?? DEFAULT_FRAME_STEP_MS, 0),
     MAX_FRAME_STEP_MS
   );
-  const alpha = 1 - Math.exp(-frameMs / ZOOM_TIME_CONSTANT_MS);
+  const alpha = reducedMotion
+    ? 1
+    : 1 - Math.exp(-frameMs / ZOOM_TIME_CONSTANT_MS);
   const requested = pendingLogScale * alpha;
-  const maximum = MAX_ZOOM_LOG_RATE_PER_SECOND * (frameMs / 1000);
+  const rate = reducedMotion
+    ? REDUCED_MOTION_LOG_RATE_PER_SECOND
+    : MAX_ZOOM_LOG_RATE_PER_SECOND;
+  const maximum = rate * (frameMs / 1000);
   const appliedLogScale = THREE.MathUtils.clamp(requested, -maximum, maximum);
   const remainingLogScale = pendingLogScale - appliedLogScale;
   if (Math.abs(remainingLogScale) <= SETTLED_LOG_EPSILON) {
