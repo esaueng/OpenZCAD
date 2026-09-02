@@ -1,5 +1,6 @@
 import type { FeatureId, FeatureWarning } from '@openzcad/shared';
 import type { CommandDiagnostic } from './interaction/machine';
+import { plainRefusal } from './refusalLanguage';
 
 /**
  * A refusal in the two pieces the card shows: the sentence a person reads,
@@ -9,18 +10,13 @@ import type { CommandDiagnostic } from './interaction/machine';
  * numbers worth keeping — face counts, what became what — and as a plain
  * sentence otherwise. Splitting here, once, is what lets every adapter string
  * lead with the cause without the card ever having to guess where the prose
- * ends and the census begins.
+ * ends and the census begins. A sentence the kernel itself wrote is put into
+ * plain words on the same pass, and kept as detail (`refusalLanguage.ts`).
  */
 export function splitRefusal(
   text: string
 ): Pick<CommandDiagnostic, 'message' | 'detail'> {
-  const separator = text.indexOf('\n');
-  if (separator < 0) {
-    return { message: text.trim() };
-  }
-  const message = text.slice(0, separator).trim();
-  const detail = text.slice(separator + 1).trim();
-  return detail ? { message, detail } : { message };
+  return plainRefusal(text);
 }
 
 /** Returns a kernel warning attributed to one named feature, without its prefix. */

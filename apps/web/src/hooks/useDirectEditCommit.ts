@@ -174,7 +174,7 @@ export function useDirectEditCommit(
         // looking at; echoing it into the workspace status line as well is how
         // the same failure used to appear twice, and how one copy went stale
         // while the other moved on.
-        host.onValidationFailed({ message }, submittedValue);
+        host.onValidationFailed(splitRefusal(message), submittedValue);
         return false;
       } finally {
         inFlight.current = false;
