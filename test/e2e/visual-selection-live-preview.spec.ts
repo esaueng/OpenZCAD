@@ -111,11 +111,11 @@ test('streams exact planar previews and restores invalid or canceled offsets', a
     .poll(readAxisLength, { timeout: PREVIEW_BUDGET_MS })
     .toBeCloseTo(30, 4);
   // A second pointer value after the first exact frame must replace it rather
-  // than leaving the coalescer stuck on the first sample. Offset-face runs with
-  // continueAfterSlow false, so a rebuild over the slow-frame budget instead
-  // pauses previewing for the rest of the gesture and says so on the chip --
-  // routine on the 2-core CI runners. Both outcomes are correct; silently
-  // holding the first sample is the regression worth catching.
+  // than leaving the coalescer stuck on the first sample. Offset-face keeps
+  // previewing after a slow frame, but the chip reports the lag as deferred
+  // and the second sample may land late -- routine on the 2-core CI runners.
+  // Both outcomes are correct; silently holding the first sample is the
+  // regression worth catching.
   await page.mouse.move(
     start.x + handle.dx * handle.pixelsPerUnit * 5,
     start.y + handle.dy * handle.pixelsPerUnit * 5,
