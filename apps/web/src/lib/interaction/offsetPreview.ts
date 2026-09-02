@@ -7,7 +7,7 @@ import type {
 } from '@openzcad/shared';
 import type { AffectedFeatureTarget } from '../affectedFeatureTargets';
 import { directEditRejection } from '../directEdit';
-import { validatedFeatureRejection } from '../featureValidation';
+import { splitRefusal, validatedFeatureRejection } from '../featureValidation';
 import type { CommandDiagnostic } from './machine';
 
 export interface OffsetPreviewFaceTarget {
@@ -70,7 +70,7 @@ export function offsetPreviewRejection(
     bodyPresent: Boolean(input.derived.bodyRepresentations[input.bodyId]),
     documentMoved: input.documentMoved
   });
-  return message ? { message } : null;
+  return message ? splitRefusal(message) : null;
 }
 
 function length(vector: Vector3): number {
@@ -79,7 +79,10 @@ function length(vector: Vector3): number {
 
 function normalized(vector: Vector3): Vector3 | null {
   const magnitude = length(vector);
-  if (!Number.isFinite(magnitude) || magnitude <= geometryTolerance(magnitude)) {
+  if (
+    !Number.isFinite(magnitude) ||
+    magnitude <= geometryTolerance(magnitude)
+  ) {
     return null;
   }
   return {
@@ -102,11 +105,7 @@ function translated(point: Vector3, normal: Vector3, offset: number): Vector3 {
 }
 
 function distance(left: Vector3, right: Vector3): number {
-  return Math.hypot(
-    left.x - right.x,
-    left.y - right.y,
-    left.z - right.z
-  );
+  return Math.hypot(left.x - right.x, left.y - right.y, left.z - right.z);
 }
 
 /**

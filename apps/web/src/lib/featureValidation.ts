@@ -1,6 +1,28 @@
 import type { FeatureId, FeatureWarning } from '@openzcad/shared';
 import type { CommandDiagnostic } from './interaction/machine';
 
+/**
+ * A refusal in the two pieces the card shows: the sentence a person reads,
+ * and the machinery behind a disclosure.
+ *
+ * The kernel adapter writes a refusal as `<sentence>\n<detail>` when it has
+ * numbers worth keeping — face counts, what became what — and as a plain
+ * sentence otherwise. Splitting here, once, is what lets every adapter string
+ * lead with the cause without the card ever having to guess where the prose
+ * ends and the census begins.
+ */
+export function splitRefusal(
+  text: string
+): Pick<CommandDiagnostic, 'message' | 'detail'> {
+  const separator = text.indexOf('\n');
+  if (separator < 0) {
+    return { message: text.trim() };
+  }
+  const message = text.slice(0, separator).trim();
+  const detail = text.slice(separator + 1).trim();
+  return detail ? { message, detail } : { message };
+}
+
 /** Returns a kernel warning attributed to one named feature, without its prefix. */
 export function warningForFeature(
   featureName: string,
@@ -95,7 +117,7 @@ export function validatedFeatureRejection(
   );
   if (warning) {
     return {
-      message: warning,
+      ...splitRefusal(warning),
       ...(input.featureId
         ? {
             culprit: {
