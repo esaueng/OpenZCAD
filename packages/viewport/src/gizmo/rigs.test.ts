@@ -7,7 +7,8 @@ import {
   buildEdgeRadiusHandle,
   buildOffsetFaceHandle,
   edgeHandlePlacement,
-  offsetHandlePlacement
+  offsetHandlePlacement,
+  sweepGhostLayout
 } from './rigs';
 
 function offsetRig(direction = { x: 0, y: 0, z: 1 }): DragRig {
@@ -350,5 +351,67 @@ describe('offset rig entrance and hover', () => {
     settle(rig);
     // Hover must not soften a value the kernel will reject.
     expect(arrowColor(rig)).toBe(HANDLE_WARNING_COLOR);
+  });
+});
+
+describe('the swept-volume ghost', () => {
+  const square = [
+    { x: 0, y: 0, z: 0 },
+    { x: 2, y: 0, z: 0 },
+    { x: 2, y: 2, z: 0 },
+    { x: 0, y: 2, z: 0 }
+  ];
+  const cap = {
+    positions: new Float32Array(square.flatMap((p) => [p.x, p.y, p.z])),
+    indices: [0, 1, 2, 0, 2, 3]
+  };
+
+  it('lays out a base copy, a moving copy, and one wall quad per loop edge', () => {
+    const layout = sweepGhostLayout({ cap, loops: [square] });
+    // 4 cap vertices twice, 4 ring vertices twice.
+    expect(layout.base.length).toBe(16 * 3);
+    // Two caps of 2 triangles, plus 4 wall quads of 2 triangles.
+    expect(layout.indices.length).toBe((2 + 2 + 8) * 3);
+    expect(layout.moving).toHaveLength(8);
+    for (const { top, base } of layout.moving) {
+      expect(Array.from(layout.base.slice(top * 3, top * 3 + 3))).toEqual(
+        Array.from(layout.base.slice(base * 3, base * 3 + 3))
+      );
+    }
+  });
+
+  it('skips degenerate loops instead of emitting walls for them', () => {
+    const layout = sweepGhostLayout({ cap, loops: [square, [square[0]!]] });
+    expect(layout.indices.length).toBe((2 + 2 + 8) * 3);
+  });
+
+  it('extrudes the moving half by the value every time it is set', () => {
+    const rig = buildOffsetFaceHandle({
+      origin: { x: 1, y: 1, z: 0 },
+      direction: { x: 0, y: 0, z: 1 },
+      ghostGeometry: null,
+      sweep: { cap, loops: [square] }
+    });
+    const ghost = rig.worldGroup.children.find(
+      (child) => child instanceof THREE.Mesh && child.frustumCulled === false
+    ) as THREE.Mesh<THREE.BufferGeometry, THREE.MeshBasicMaterial>;
+    expect(ghost).toBeDefined();
+    expect(ghost.visible).toBe(false);
+
+    rig.setValue(3);
+    expect(ghost.visible).toBe(true);
+    const positions = ghost.geometry.getAttribute('position');
+    // Base cap stays on the plane; the moving cap and ring sit at z = 3.
+    expect(positions.getZ(0)).toBe(0);
+    expect(positions.getZ(4)).toBeCloseTo(3, 6);
+    expect(positions.getZ(8)).toBe(0);
+    expect(positions.getZ(12)).toBeCloseTo(3, 6);
+
+    rig.setValue(-2);
+    expect(positions.getZ(4)).toBeCloseTo(-2, 6);
+    expect(positions.getX(4)).toBe(0);
+
+    rig.setValue(0);
+    expect(ghost.visible).toBe(false);
   });
 });

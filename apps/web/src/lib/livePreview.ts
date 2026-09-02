@@ -6,9 +6,11 @@
  * the wait. Every intermediate value is dropped on purpose: they describe a
  * pointer position the user has already moved past.
  *
- * When a rebuild is slow enough to feel bad, the previewer degrades for the
- * rest of the gesture rather than queueing frames the user will never see.
- * Dragging still works; it just commits on release without a live preview.
+ * When a rebuild is slow enough to feel bad, the previewer reports it once.
+ * A consumer that opts out of `continueAfterSlow` then stops previewing for
+ * the rest of the gesture; one that opts in keeps rebuilding at whatever rate
+ * the kernel allows, and `lagging` says whether the geometry is behind the
+ * hand. Dragging works either way; release commits the final value.
  */
 
 /** A rebuild slower than this ends live preview for the current gesture. */
@@ -62,6 +64,8 @@ export class LivePreview<TDocument, TDerived> {
   private slow = false;
   /** True once something has been published and not yet cleared. */
   private active = false;
+  /** Token of the newest value that has reached publish(). */
+  private publishedToken = 0;
 
   constructor(options: LivePreviewOptions<TDocument, TDerived>) {
     this.options = options;
@@ -70,6 +74,15 @@ export class LivePreview<TDocument, TDerived> {
   /** True once a rebuild was slow enough to give up previewing this gesture. */
   get degraded(): boolean {
     return this.slow;
+  }
+
+  /**
+   * True while the newest requested value has not been published yet — the
+   * hand is ahead of the geometry. Whoever shows the value can say so, and
+   * stop saying so the moment the kernel catches up.
+   */
+  get lagging(): boolean {
+    return this.active && this.token !== this.publishedToken;
   }
 
   /** Queues a scalar when it satisfies this previewer's value policy. */
@@ -113,6 +126,7 @@ export class LivePreview<TDocument, TDerived> {
           if (token !== this.token || !this.active) {
             continue;
           }
+          this.publishedToken = token;
           this.options.publish({ document, derived });
         } catch (error) {
           // An invalid value skips this frame, but an interested interaction
@@ -144,6 +158,7 @@ export class LivePreview<TDocument, TDerived> {
     this.token += 1;
     this.pending = null;
     this.slow = false;
+    this.publishedToken = this.token;
     if (this.active) {
       this.active = false;
       this.options.publish(null);
