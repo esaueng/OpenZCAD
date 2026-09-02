@@ -43,9 +43,12 @@
 
   /* Icon-only from here down, so the label no longer supplies the width —
      hold the same 28px hit target the other icon controls have. */
-  .file-menu > summary {
+  .file-menu > summary,
+  .topbar-actions .settings-action {
     width: 28px;
+    min-width: 0;
     min-height: 28px;
+    padding: 0;
     justify-content: center;
   }
 
@@ -61,6 +64,7 @@
   .account-state,
   .collaboration-state {
     width: 28px;
+    min-width: 0;
     justify-content: center;
     gap: 0;
     padding-inline: 0;
