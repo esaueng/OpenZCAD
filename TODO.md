@@ -3,6 +3,11 @@
 Status snapshot: 2026-08-27, schema v13. “Working” below means implemented on
 the current branch; production enablement is a separate rollout decision.
 
+Forward-looking work is sequenced in [docs/cad-feature-roadmap.md](docs/cad-feature-roadmap.md)
+(product) and [docs/kernel-roadmap-remus.md](docs/kernel-roadmap-remus.md)
+(kernel); this file records what is working and the release gates in front of
+it. When the two disagree, the dated roadmaps win.
+
 ## Working now
 
 - Schema-v13 canonical documents with v1–v12 normalization, checkpoints, asset

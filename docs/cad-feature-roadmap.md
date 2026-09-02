@@ -263,10 +263,11 @@ UI. The kernel's assembly hierarchy/transforms/BOM went Stable on
 
 - `docs/plans/text-feature-plan.md` says "planned, not started" — the
   text feature is fully shipped (schema, 7 font families, `T` tool).
+  — done (2026-09-01): historical-record banner added.
 - `docs/capability-matrix.md` is at schema v6 / 2026-08-04 and predates
   text, hole, split, draft, thicken, loft/sweep/helical-sweep, sketch
   constraints, save-state restore/branching, and section view. Refresh or
-  banner it.
+  banner it. — done (2026-09-01): refreshed to schema v13.
 - The stale `TODO.md` sketch-constraint claim was corrected with P1-S1; direct
   creation now covers every schema-backed kind. Persistent dimension graphics,
   status feedback, and entity identity remain tracked above.
