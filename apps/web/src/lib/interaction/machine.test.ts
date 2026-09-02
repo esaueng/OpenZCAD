@@ -366,6 +366,23 @@ describe('escape chain', () => {
 });
 
 describe('toolCardFor', () => {
+  it('names a far-cap offset after the extrude it edits', () => {
+    const state = interactionReducer(IDLE, {
+      type: 'select-face',
+      target: face({ extrudeFeatureId: 'feature_boss' })
+    });
+    expect(state.mode === 'face' && state.op).toBe('offset-face');
+    const card = toolCardFor(state);
+    expect(card?.title).toBe('Extrude');
+    expect(card?.icon).toBe('extrude');
+    expect(card?.hint).toMatch(/depth/);
+    expect(
+      toolCardFor(
+        interactionReducer(IDLE, { type: 'select-face', target: face() })
+      )?.title
+    ).toBe('Offset Face');
+  });
+
   it('describes each mode', () => {
     expect(toolCardFor(IDLE)).toBeNull();
     const faceCard = toolCardFor(
