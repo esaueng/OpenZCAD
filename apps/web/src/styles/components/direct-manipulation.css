@@ -27,15 +27,18 @@
 /* A face pick opens the inspector at the same moment it raises this card, so
    centring on the whole shell put the card's close button over the panel
    title at every width under ~1600px. With a panel docked, the card centres
-   on the room between the tool palette and the panel, and its hint copy gives
-   way before either does. 170px is the palette's footprint incl. its gap. */
+   on the room between the tool palette and the panel. Its width is fixed,
+   not content-sized: the hint and phase pill change on every phase, and a
+   centred card that grew with them moved both edges each time. The hint copy
+   truncates instead. 170px is the palette's footprint incl. its gap. */
 .viewer-area.has-inspector .tool-card {
   --tool-card-room: calc(100% - 170px - var(--context-w) - 30px);
   left: calc(170px + var(--tool-card-room) / 2);
-  max-width: max(280px, var(--tool-card-room));
+  width: max(280px, min(680px, var(--tool-card-room)));
 }
 
 .viewer-area.has-inspector .tool-card-copy {
+  flex: 1 1 auto;
   min-width: 0;
 }
 
