@@ -1,5 +1,5 @@
 import { geometryTolerance } from '@openzcad/geometry';
-import type { UnitSystem } from '@openzcad/shared';
+import type { BooleanOperation, UnitSystem } from '@openzcad/shared';
 import type { UnionBounds } from './union-connectivity';
 
 export interface TriangleMeshClosure {
@@ -207,7 +207,26 @@ export interface BooleanFaceCensus {
 const FACET_FALLBACK_FACTOR = 4;
 const FACET_FALLBACK_SLACK = 32;
 
-const FACET_FALLBACK_LEAD = 'The boolean returned a faceted approximation';
+/**
+ * How to name the operation to the person who asked for it.
+ *
+ * The census runs on every boolean, so the subject cannot be hardcoded to a
+ * union; a caller that knows which operation it ran passes it, and one that
+ * does not (the offset probe, which only tests the return for null) gets the
+ * neutral phrasing.
+ */
+function facetFallbackSubject(operation: BooleanOperation | undefined): string {
+  switch (operation) {
+    case 'union':
+      return 'This union';
+    case 'subtract':
+      return 'This subtract';
+    case 'intersect':
+      return 'This intersection';
+    default:
+      return 'This boolean operation';
+  }
+}
 
 /**
  * What to say when no specific remedy has been proved.
@@ -219,12 +238,19 @@ const FACET_FALLBACK_LEAD = 'The boolean returned a faceted approximation';
  * appends a concrete move only when it has fused that exact move and measured
  * the result exact; this text covers the rest without pretending to a
  * diagnosis, and points at the operation that is known to stay exact on the
- * same operands.
+ * same operands — which is only advice worth giving when the failing operation
+ * is not already that one.
  */
-const FACET_FALLBACK_REMEDY =
-  'The result is watertight, but its curved surfaces are now planar facets and will ' +
-  'export that way. Repositioning the overlap sometimes clears it; otherwise keep the ' +
-  'bodies separate, or subtract instead — the same operands still cut exactly.';
+function facetFallbackRemedy(operation: BooleanOperation | undefined): string {
+  const alternative =
+    operation === 'subtract' || operation === 'intersect'
+      ? '.'
+      : ', or subtract instead — the same operands still cut exactly.';
+  return (
+    'Repositioning the overlap sometimes clears it; otherwise keep the bodies ' +
+    `separate${alternative}`
+  );
+}
 
 interface FacetFallbackSignal {
   lostCurvature: boolean;
@@ -290,26 +316,34 @@ function faceCensusDetail(
  * count is normal for a genuinely complicated result. Together they are not.
  */
 export function booleanFacetFallbackWarning(
-  census: BooleanFaceCensus
+  census: BooleanFaceCensus,
+  operation?: BooleanOperation
 ): string | null {
   const signal = facetFallbackSignal(census);
   if (!signal) {
     return null;
   }
+  // Everything before the first newline is the sentence shown on the tool
+  // card; the face counts belong behind its detail disclosure.
   const detail = faceCensusDetail(census, 'operand');
+  const subject = facetFallbackSubject(operation);
+  const remedy = facetFallbackRemedy(operation);
   if (signal.lostCurvature && signal.exploded) {
-    return `${FACET_FALLBACK_LEAD} instead of exact surfaces: ${detail}. ${FACET_FALLBACK_REMEDY}`;
+    return (
+      `${subject} could only be built as an approximation: its curved ` +
+      `surfaces are now flat and would export that way. ${remedy}\n${detail}`
+    );
   }
   if (signal.lostCurvature) {
     // Same fallback, caught by the curvature test alone because a smaller
     // round operand facets into too few faces to trip the count test. It
     // earns the same remedy: without one this reads as a property of the
     // result rather than as something the user can act on.
-    return `The boolean replaced every curved surface with planar faces: ${detail}. ${FACET_FALLBACK_REMEDY}`;
+    return `${subject} replaced every curved surface with flat faces. ${remedy}\n${detail}`;
   }
   return (
-    `The boolean produced far more faces than its operands: ${detail}. ` +
-    'This is usually a sliver or near-tangent contact being approximated.'
+    `${subject} produced far more faces than its operands — usually a ` +
+    `sliver or near-tangent contact being approximated.\n${detail}`
   );
 }
 
@@ -327,8 +361,9 @@ export function directEditFacetFallbackWarning(
     return null;
   }
   return (
-    'Offset face refused: the kernel returned a faceted approximation instead of exact surfaces: ' +
-    `${faceCensusDetail(census, 'source')}. The original body was left unchanged.`
+    "This offset could only be built by replacing the body's exact surfaces " +
+    'with flat triangles, so it was refused and the body left unchanged.\n' +
+    faceCensusDetail(census, 'source')
   );
 }
 

@@ -118,7 +118,9 @@ export function resolveDirectEditFace(
     throw new Error(`Direct-edit face is stale: ${resolution.message}`);
   }
   if (typeof resolution.candidate.value !== 'number') {
-    throw new Error('Direct-edit face resolved without a kernel handle.');
+    throw new Error(
+      'The selected face could not be found on the rebuilt body.'
+    );
   }
   return { face: resolution.candidate.value, viaLineage: true };
 }
@@ -264,8 +266,8 @@ export function resizeThroughHole(
   if (!atRadius(radius)) {
     throw new Error(
       atRadius(geometry.radius)
-        ? `The kernel left the hole at its original diameter instead of resizing it to ${diameter}.`
-        : `The kernel returned no analytic bore at diameter ${diameter} — the wall came back as a mesh approximation.`
+        ? `The hole kept its original diameter instead of resizing to Ø${diameter}.`
+        : `The hole could not be resized to Ø${diameter} exactly; its wall would become an approximation.`
     );
   }
   return { solid: output, changed: true };
@@ -554,7 +556,7 @@ function fillImportedHole(
   }
   if (kernel.getSolidFaces(filled).length >= facesBefore) {
     throw new Error(
-      'Filling the imported hole fell back to a faceted mesh boolean, so its exact feature cannot be resized.'
+      'This imported hole cannot be resized exactly: filling it would need an approximate operation.'
     );
   }
   return filled;
@@ -1203,7 +1205,7 @@ export function applyDirectEdit(
       });
       if (matching.length === 0) {
         throw new Error(
-          `The kernel returned no analytic blend at radius ${newRadius}.`
+          `The blend could not be rebuilt exactly at radius ${newRadius}.`
         );
       }
       if (matching.length === 1 && producingFeatureId) {
@@ -1316,8 +1318,8 @@ export function applyDirectEdit(
   if (!atRadius(newRadius)) {
     throw new Error(
       atRadius(geometry.radius)
-        ? `The kernel left the face at its original size instead of resizing it to radius ${newRadius}.`
-        : `The kernel returned no analytic cylinder at radius ${newRadius} — the wall came back as a mesh approximation.`
+        ? `The wall kept its original radius instead of resizing to ${newRadius}.`
+        : `The wall could not be resized to radius ${newRadius} exactly; it would become an approximation.`
     );
   }
   return { solids: [output] };
