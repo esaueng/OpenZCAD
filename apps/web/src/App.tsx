@@ -31,7 +31,8 @@ import {
   Spline,
   Trash2,
   TriangleRight,
-  Upload
+  Upload,
+  X
 } from 'lucide-react';
 import {
   CommandManager,
@@ -12906,7 +12907,10 @@ export function App() {
             onCycleDisplayMode={cycleDisplayMode}
             onToggleProjection={toggleProjection}
           />
-        ) : tool === 'sketch' ? (
+        ) : interaction.mode ===
+          'sketch' ? // The sketch session brings its own tool rail; the modeling palette
+        // stayed mounted and live beside it once the plane was picked.
+        null : tool === 'sketch' ? (
           <div className="direct-mode-strip">
             <PenLine size={16} aria-hidden="true" />
             <strong>Editing Sketch: {editingSketchName}</strong>
@@ -13655,49 +13659,73 @@ export function App() {
             resetKey={`${doc.projectId}:${doc.version}`}
           >
             {modelingOperation ? (
-              <ModelingOperationsForm
-                key={modelingOperation}
-                operation={modelingOperation}
-                scope={parameterScope.scope}
-                bodies={bodyOptions}
-                faceOptions={modelingOperationFaces}
-                profileOptions={modelingProfileOptions}
-                pathOptions={modelingPathOptions}
-                initialTarget={modelingTargetBodyId ?? undefined}
-                unsupportedReason={modelingUnsupportedReason ?? undefined}
-                onPreflight={preflightModelingSubmission}
-                onSubmit={submitModelingOperation}
-                onCancel={cancelPanel}
-                onTargetBodyChange={(bodyId) => {
-                  modelingPreflightRef.current = null;
-                  setModelingTargetBodyId(bodyId);
-                  setSelectedBodyIds([bodyId]);
-                  setSelectedTopology(null);
-                }}
-                onOpeningFaceSelectionChange={(hashes) => {
-                  const selectedHash = hashes.at(-1);
-                  const face = modelingTargetBody?.topology?.faces.find(
-                    (candidate) => candidate.hash === selectedHash
-                  );
-                  setSelectedTopology(
-                    selectedHash !== undefined && face && modelingTargetBodyId
-                      ? {
-                          kind: 'face',
-                          bodyId: modelingTargetBodyId,
-                          topologyId: face.topologyId,
-                          hash: face.hash,
-                          reference: face.reference
-                        }
-                      : null
-                  );
-                }}
-                onRequestOpeningFaceSelection={() => {
-                  setManualSelectionFilter('face');
-                  setStatus(
-                    `${TOOL_META[modelingOperation].label}: pick an exact face, then select it in the face list.`
-                  );
-                }}
-              />
+              // The same panel chrome the Inspector draws for its own forms:
+              // bare in `.inspector-float`, this form sat straight on the
+              // viewport under the orientation widget and the utility rail.
+              <section className="inspector" aria-label="Feature inspector">
+                <div className="panel-header">
+                  <div className="panel-title-row">
+                    <h2>{TOOL_META[modelingOperation].label}</h2>
+                    <span className="panel-eyebrow">New feature</span>
+                    <button
+                      type="button"
+                      className="icon-button panel-close"
+                      title="Close (Esc)"
+                      aria-label="Close panel"
+                      onClick={cancelPanel}
+                    >
+                      <X size={14} aria-hidden="true" />
+                    </button>
+                  </div>
+                </div>
+                <div className="panel-body">
+                  <ModelingOperationsForm
+                    key={modelingOperation}
+                    operation={modelingOperation}
+                    scope={parameterScope.scope}
+                    bodies={bodyOptions}
+                    faceOptions={modelingOperationFaces}
+                    profileOptions={modelingProfileOptions}
+                    pathOptions={modelingPathOptions}
+                    initialTarget={modelingTargetBodyId ?? undefined}
+                    unsupportedReason={modelingUnsupportedReason ?? undefined}
+                    onPreflight={preflightModelingSubmission}
+                    onSubmit={submitModelingOperation}
+                    onCancel={cancelPanel}
+                    onTargetBodyChange={(bodyId) => {
+                      modelingPreflightRef.current = null;
+                      setModelingTargetBodyId(bodyId);
+                      setSelectedBodyIds([bodyId]);
+                      setSelectedTopology(null);
+                    }}
+                    onOpeningFaceSelectionChange={(hashes) => {
+                      const selectedHash = hashes.at(-1);
+                      const face = modelingTargetBody?.topology?.faces.find(
+                        (candidate) => candidate.hash === selectedHash
+                      );
+                      setSelectedTopology(
+                        selectedHash !== undefined &&
+                          face &&
+                          modelingTargetBodyId
+                          ? {
+                              kind: 'face',
+                              bodyId: modelingTargetBodyId,
+                              topologyId: face.topologyId,
+                              hash: face.hash,
+                              reference: face.reference
+                            }
+                          : null
+                      );
+                    }}
+                    onRequestOpeningFaceSelection={() => {
+                      setManualSelectionFilter('face');
+                      setStatus(
+                        `${TOOL_META[modelingOperation].label}: pick an exact face, then select it in the face list.`
+                      );
+                    }}
+                  />
+                </div>
+              </section>
             ) : (
               <Inspector
                 tool={tool}

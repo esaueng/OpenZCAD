@@ -24,6 +24,26 @@
   animation: tool-card-in 140ms ease-out;
 }
 
+/* A face pick opens the inspector at the same moment it raises this card, so
+   centring on the whole shell put the card's close button over the panel
+   title at every width under ~1600px. With a panel docked, the card centres
+   on the room between the tool palette and the panel, and its hint copy gives
+   way before either does. 170px is the palette's footprint incl. its gap. */
+.viewer-area.has-inspector .tool-card {
+  --tool-card-room: calc(100% - 170px - var(--context-w) - 30px);
+  left: calc(170px + var(--tool-card-room) / 2);
+  max-width: max(280px, var(--tool-card-room));
+}
+
+.viewer-area.has-inspector .tool-card-copy {
+  min-width: 0;
+}
+
+.viewer-area.has-inspector .tool-card-copy > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 @keyframes tool-card-in {
   from {
     opacity: 0;
@@ -509,7 +529,7 @@
   top: 50%;
   left: calc(100% + 4px);
   padding: 2px 5px;
-  color: var(--color-text);
+  color: var(--color-viewport-text);
   content: attr(data-label);
   background: rgba(12, 17, 23, 0.9);
   border: 1px solid rgba(125, 211, 252, 0.34);
@@ -661,7 +681,7 @@
   bottom: 14px;
   z-index: calc(var(--z-viewer-overlay) + 1);
   padding: 4px 7px;
-  color: var(--color-text-subtle);
+  color: var(--color-viewport-text-muted);
   background: rgba(12, 17, 23, 0.82);
   border: 1px solid var(--color-border);
   border-radius: var(--radius-sm);

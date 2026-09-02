@@ -1330,9 +1330,12 @@ test('preflights and splits a box into two live half bodies', async ({
   ).toBeVisible();
 
   await page.getByRole('button', { name: /^Split/ }).click();
+  // Scoped to the inspector on purpose: the modeling-operation forms used to
+  // render bare in the float, with no panel around them.
+  await expect(inspector.getByRole('heading', { name: 'Split' })).toBeVisible();
   // The default plane sits on the box's x=0 face, which the kernel refuses
   // (the plane must cross the interior); move it to a quarter of the width.
-  await page
+  await inspector
     .getByRole('group', { name: 'Plane origin' })
     .getByLabel('X')
     .fill('5');
