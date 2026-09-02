@@ -485,17 +485,91 @@ test('move drag probe', async ({ page }) => {
   const frames = await frameSamples(page, startedAt);
   const commits = await reactCommits(page);
   const applies = await dragApplies(page);
+  // The snap-candidate walk runs inside pointerdown; its duration is the
+  // pre-drag stall the feel plan's row 2.2 is about, so it is reported here
+  // rather than inferred from frame times.
+  const snapCollect = await page.evaluate(() => {
+    const entries = performance
+      .getEntriesByType('measure')
+      .filter((entry) => entry.name === 'oz:move.snapCollect');
+    const scope = window as typeof window & {
+      __ozMoveSnapCandidates?: { snaps: number; centers: number };
+    };
+    return {
+      collectMs: entries.map((entry) => Math.round(entry.duration * 100) / 100),
+      candidates: scope.__ozMoveSnapCandidates ?? null
+    };
+  });
   reportFrames(
     'MOVE_DRAG_PERF',
     {
       demo: 'Heat Sink',
       pointerMoves: 60,
       reactCommits: commits,
-      dragApplies: applies
+      dragApplies: applies,
+      snapCollect
     },
     frames
   );
   expect(frames.length).toBeGreaterThan(5);
+});
+
+/**
+ * The pointerdown snap-candidate walk with something to walk. The move probe
+ * above moves the demo's only body, so every other body contributes nothing
+ * and the walk measures zero. Here a box is added and moved instead, so the
+ * Heat Sink — the busiest edge set among the demos — is the snap source.
+ */
+test('move drag snap collection probe', async ({ page }) => {
+  const { bounds } = await openHeatSink(page);
+  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
+  await page
+    .getByRole('region', { name: 'Feature inspector' })
+    .getByRole('button', { name: /^Create/ })
+    .click();
+  await page.waitForTimeout(600);
+  const moveButton = page.getByRole('button', { name: /^Move/ });
+  if (!(await moveButton.isEnabled().catch(() => false))) {
+    test.skip(true, 'Move tool is unavailable for the new box.');
+  }
+  await moveButton.click();
+  await page.waitForTimeout(400);
+  const handle = await page.evaluate(() => {
+    const canvas = document.querySelector<HTMLCanvasElement>(
+      '.viewer-host canvas'
+    );
+    const x = Number(canvas?.dataset.e2eMoveGizmoX);
+    const y = Number(canvas?.dataset.e2eMoveGizmoY);
+    return Number.isFinite(x) && Number.isFinite(y) ? { x, y } : null;
+  });
+  expect(handle, 'the move gizmo must publish its centre').not.toBeNull();
+  const center = { x: bounds.x + handle!.x, y: bounds.y + handle!.y };
+  await page.evaluate(() => performance.clearMeasures('oz:move.snapCollect'));
+  await page.mouse.move(center.x, center.y);
+  await page.mouse.down();
+  for (let index = 1; index <= 20; index += 1) {
+    await page.mouse.move(center.x + index * 0.8, center.y, { steps: 1 });
+    await page.waitForTimeout(10);
+  }
+  await page.mouse.up();
+  await page.keyboard.press('Escape');
+  const snapCollect = await page.evaluate(() => {
+    const entries = performance
+      .getEntriesByType('measure')
+      .filter((entry) => entry.name === 'oz:move.snapCollect');
+    const scope = window as typeof window & {
+      __ozMoveSnapCandidates?: { snaps: number; centers: number };
+    };
+    return {
+      collectMs: entries.map((entry) => Math.round(entry.duration * 100) / 100),
+      candidates: scope.__ozMoveSnapCandidates ?? null
+    };
+  });
+  console.log(
+    'MOVE_SNAP_COLLECT_PERF',
+    JSON.stringify({ demo: 'Heat Sink + box', snapCollect }, null, 2)
+  );
+  expect(snapCollect.collectMs.length).toBeGreaterThan(0);
 });
 
 /**
