@@ -404,25 +404,22 @@ describe('toolCardFor', () => {
     ).toBe('Extrude');
   });
 
-  it('exposes why sketch is unavailable on a hash-only planar face', () => {
+  it('keeps sketch offered on a hash-only planar face and says how it will be placed', () => {
     const card = toolCardFor(
       interactionReducer(IDLE, {
         type: 'select-face',
         target: face({ reference: undefined })
       })
     );
-    expect(
-      card?.actions?.find((action) => action.id === 'sketch-on-face')
-    ).toMatchObject({
-      enabled: false
-    });
+    const sketch = card?.actions?.find(
+      (action) => action.id === 'sketch-on-face'
+    );
+    expect(sketch).toMatchObject({ enabled: true });
+    expect(sketch?.disabledReason).toBeUndefined();
     // Compare against the constant, not a phrase from it: the wording is
     // user-facing copy and has already been rewritten once underneath these
     // assertions.
-    expect(
-      card?.actions?.find((action) => action.id === 'sketch-on-face')
-        ?.disabledReason
-    ).toBe(UNSTABLE_FACE_SKETCH_REASON);
+    expect(sketch?.note).toBe(UNSTABLE_FACE_SKETCH_REASON);
   });
 });
 

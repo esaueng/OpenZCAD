@@ -8388,7 +8388,11 @@ export function App() {
     // Escape returns to selection and only the second leaves. The live hint
     // beside this message already names the rung you are actually on, and two
     // contradictory promises on one status bar is worse than one honest one.
-    setStatus('Sketching on the selected face · Finish Sketch when done.');
+    setStatus(
+      attachment.attachment === 'fixed'
+        ? `Sketching on a fixed plane at the selected face · ${attachment.note} Finish Sketch when done.`
+        : 'Sketching on the selected face · Finish Sketch when done.'
+    );
     return true;
   }
 

@@ -47,7 +47,7 @@ describe('selectionCapabilities', () => {
     expect(cylindrical.some((c) => c.action === 'export-face-dxf')).toBe(false);
   });
 
-  it('keeps offset available but disables sketch for a hash-only planar face', () => {
+  it('keeps sketch available on a hash-only planar face, with the fixed-plane note', () => {
     const capabilities = selectionCapabilities({
       kind: 'face',
       target: { surfaceType: 'planar', hash: 12 }
@@ -58,15 +58,43 @@ describe('selectionCapabilities', () => {
     });
     expect(capabilities[1]).toMatchObject({
       action: 'sketch-on-face',
-      enabled: false
+      enabled: true
     });
+    expect(capabilities[1]?.disabledReason).toBeUndefined();
     // Compare against the constant, not a phrase from it: the wording is
     // user-facing copy and has already been rewritten once underneath these
     // assertions.
-    expect(capabilities[1]?.disabledReason).toBe(UNSTABLE_FACE_SKETCH_REASON);
-    expect(capabilities[1]?.disabledReason).toMatch(
-      /sketch on a principal plane/i
-    );
+    expect(capabilities[1]?.note).toBe(UNSTABLE_FACE_SKETCH_REASON);
+    expect(capabilities[1]?.note).toMatch(/fixed plane/i);
+  });
+
+  it('carries no note when the face has current lineage', () => {
+    const capabilities = selectionCapabilities({
+      kind: 'face',
+      target: {
+        surfaceType: 'planar',
+        hash: 12,
+        reference: {
+          kind: 'face',
+          producingFeatureId: 'feature_box' as never,
+          lineageName: 'primitive.box.face.z-max',
+          currentHash: 12,
+          witnessVersion: 1,
+          witness: {
+            surfaceType: 'plane',
+            perimeter: 40,
+            centroid: [0, 0, 5],
+            analytic: { kind: 'plane', normal: [0, 0, 1], offset: 5 },
+            closure: { u: 'open', v: 'open' }
+          }
+        }
+      }
+    });
+    expect(capabilities[1]).toMatchObject({
+      action: 'sketch-on-face',
+      enabled: true
+    });
+    expect(capabilities[1]?.note).toBeUndefined();
   });
 
   it('offers radial resize only for a measurable cylindrical face', () => {
