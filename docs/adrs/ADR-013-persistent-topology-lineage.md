@@ -273,7 +273,12 @@ sketches consume this subset at their history position as specified by
 [ADR-014](ADR-014-true-face-attachment.md).
 
 Boolean and blend propagation may ship only for transitions that pass the
-exact checks above. Current boolean post-processing, blends, patterns,
+exact checks above. The boolean analytic subset shipped on 2026-09-02: a
+result face inherits an operand face's identity when it is the only named
+operand face and the only result face on one quantized plane or cylinder,
+re-verified against the operand's own exact witness; for an add/cut extrude
+the tool cap coincident with the target plane yields to the target face by
+construction. Shared and split carriers publish diagnostics, not names. Current boolean post-processing, blends, patterns,
 direct-edit output, and imported STEP provenance remain explicitly `no lineage
 
 - hash fallback only` where complete evolution is not available. Unsupported

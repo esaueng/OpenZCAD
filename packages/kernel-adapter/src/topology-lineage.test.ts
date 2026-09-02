@@ -281,7 +281,7 @@ describe('ADR-013 evolution verification', () => {
    * boring: the point is that a future entry cannot move here without someone
    * changing a test, which is the check the old arrangement lacked.
    */
-  it.each(['boolean', 'chamfer', 'pattern'] as const)(
+  it.each(['chamfer', 'pattern'] as const)(
     'reports %s as hash-only, matching what the adapter actually produces',
     (operation) => {
       expect(topologyLineageCapability(operation)).toMatchObject({
@@ -306,6 +306,9 @@ describe('ADR-013 evolution verification', () => {
       status: 'derived'
     });
     expect(topologyLineageCapability('fillet')).toEqual({ status: 'derived' });
+    // Carrier-derived since the boolean bridge's analytic subset landed;
+    // pinned by `test/boolean-carrier-lineage.test.ts`.
+    expect(topologyLineageCapability('boolean')).toEqual({ status: 'derived' });
   });
 });
 

@@ -113,9 +113,34 @@ import {
   remusHashOnlyLineage,
   createRemusImportedStepLineage,
   createRemusModifierEvolutionLineage,
+  deriveRemusBooleanCarrierLineage,
   mergeRemusLineageStates,
   type RemusLineageState
 }  from './remus-lineage';
+
+/**
+ * An operand's lineage together with the exact witnesses of its faces as they
+ * stand right now. Measured before the boolean runs, because the carrier rule
+ * re-verifies every operand reference against its own face and must not be
+ * fooled by a reference the operand's own build had already invalidated.
+ */
+function booleanOperandLineage(
+  kernel: FeatureBuildContext['kernel'],
+  shape: ExactShape,
+  role?: 'target' | 'tool'
+): {
+  lineage: RemusLineageState | undefined;
+  candidates: ReturnType<typeof topologyCandidatesForSolid>;
+  role?: 'target' | 'tool';
+} {
+  return {
+    lineage: shape.lineage,
+    candidates: shape.solids.flatMap((solid) =>
+      topologyCandidatesForSolid(kernel, solid)
+    ),
+    ...(role ? { role } : {})
+  };
+}
 import {
   classifyImportedSolid,
   importedStepNoSolidError
@@ -442,6 +467,10 @@ function buildExtrudeFeature(
         `Stored ${operation} extrusion no longer overlaps ${targetBody.name}; operation was not re-inferred.`
       );
     }
+    const operandLineage = [
+      booleanOperandLineage(kernel, target, 'target'),
+      booleanOperandLineage(kernel, extrusion, 'tool')
+    ];
     const targetSolid = collapseShape(kernel, target);
     const extrusionSolid = collapseShape(kernel, extrusion);
     const solid =
@@ -500,10 +529,14 @@ function buildExtrudeFeature(
     result.consumed.add(targetBodyId);
     result.shapes.set(feature.bodyId, {
       solids: [solid],
-      lineage: remusHashOnlyLineage(
-        'boolean',
-        `The stored extrusion ${operation} does not expose a verified output topology relation.`
-      )
+      // The target's faces and the tool's own caps and walls keep their
+      // identity wherever the carrier rule can prove it, so a sketch on the
+      // boss, or on the plate beside it, still has a face to attach to.
+      lineage: deriveRemusBooleanCarrierLineage({
+        producingFeatureId: feature.featureId,
+        operands: operandLineage,
+        resultCandidates: topologyCandidatesForSolid(kernel, solid)
+      })
     });
   }
 }
@@ -1168,6 +1201,9 @@ function buildBooleanFeature(
     }
     return shape;
   });
+  const operandLineage = operands.map((shape) =>
+    booleanOperandLineage(kernel, shape)
+  );
   // Census the operands before the boolean consumes them. A faceted
   // fallback is only visible as a change in face count and surface
   // type, so both sides have to be measured.
@@ -1459,10 +1495,11 @@ function buildBooleanFeature(
   );
   result.shapes.set(feature.bodyId, {
     solids: [solid],
-    lineage: remusHashOnlyLineage(
-      'boolean',
-      'The production boolean result may be face-unified after the kernel operation, so no unverified history payload is accepted.'
-    )
+    lineage: deriveRemusBooleanCarrierLineage({
+      producingFeatureId: feature.featureId,
+      operands: operandLineage,
+      resultCandidates: topologyCandidatesForSolid(kernel, solid)
+    })
   });
 }
 

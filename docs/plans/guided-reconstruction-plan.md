@@ -124,7 +124,7 @@ makes kernel booleans against the source infeasible (work limits). Therefore:
 
 ### Topology discipline
 
-Mirror/boolean/hole/direct-edit outputs are hash-only lineage in the current
+Mirror/hole/direct-edit outputs (and boolean faces on shared or split carriers) are hash-only lineage in the current
 capability table (`packages/document-core` topology-lineage). A parameter
 change rebuilds them fresh. Anything the user later attaches must bind to the
 reconstruction's own semantic names where available, otherwise post-rebuild
