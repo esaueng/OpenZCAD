@@ -226,6 +226,13 @@ import {
 } from './lib/model';
 import { useDocumentFonts } from './lib/textFonts';
 import { createProjectDiagnosticBundle } from './lib/projectDiagnostics';
+import type { DirectEditFixtureOutcome } from './lib/directEditFixture';
+import {
+  buildDirectEditFixture,
+  createInteractionDiagnosticBundle,
+  listInteractionDiagnostics,
+  recordInteractionDiagnostic
+} from './lib/interactionDiagnostics';
 import { KERNEL_BUILD } from './lib/kernelBuild';
 import {
   SHORTCUT_TO_TOOL,
@@ -395,7 +402,10 @@ import {
   type LabelSegment
 } from './lib/topologyLabels';
 import type { FeatureSelectionSource } from './lib/inspectorHeading';
-import type { CommandDiagnostic } from './lib/interaction/machine';
+import type {
+  CommandDiagnostic,
+  InteractionState
+} from './lib/interaction/machine';
 import { resolveFace } from './lib/topologyResolution';
 import { objectPolylines } from './lib/objectPolyline';
 import type { RegionPickData } from './components/viewer/regionOverlay';
@@ -1579,6 +1589,85 @@ export function App() {
    * handle keeps moving; the geometry does not, and the value chip says so.
    */
   const [previewDeferred, setPreviewDeferred] = useState(false);
+  const previewDeferredRef = useRef(previewDeferred);
+  previewDeferredRef.current = previewDeferred;
+  /**
+   * Pre-edit snapshot for the interaction diagnostics log. The commit advances
+   * the document and `commit-complete` resets the machine before `onCommitted`
+   * runs, so both are captured when validation starts.
+   */
+  const pendingDirectEditRef = useRef<{
+    document: ProjectDocument;
+    interaction: InteractionState;
+    value: number;
+    startedAt: number;
+  } | null>(null);
+
+  /** Appends one direct-edit outcome to the on-device log; never throws. */
+  function recordDirectEditOutcome(
+    outcome: DirectEditFixtureOutcome,
+    input: {
+      interaction?: InteractionState;
+      document?: ProjectDocument;
+      value: number;
+      message?: string;
+      detail?: string;
+      validateMs?: number;
+    }
+  ) {
+    const interaction = input.interaction ?? interactionRef.current;
+    const document = input.document ?? managerRef.current?.document;
+    if (!document) {
+      return;
+    }
+    const pick =
+      interaction.mode === 'face'
+        ? {
+            op: interaction.op,
+            targetBodyId: interaction.target.bodyId,
+            face: {
+              topologyId: interaction.target.topologyId,
+              ...(interaction.target.hash !== undefined
+                ? { hash: interaction.target.hash }
+                : {}),
+              hasReference: interaction.target.reference !== undefined
+            }
+          }
+        : interaction.mode === 'edges' && interaction.edges[0]
+          ? {
+              op: interaction.op,
+              targetBodyId: interaction.edges[0].bodyId,
+              edges: interaction.edges.map((edge) => ({
+                ...(edge.topologyId !== undefined
+                  ? { topologyId: edge.topologyId }
+                  : {}),
+                ...(edge.hash !== undefined ? { hash: edge.hash } : {}),
+                hasReference: edge.reference !== undefined
+              }))
+            }
+          : null;
+    if (!pick) {
+      return;
+    }
+    void recordInteractionDiagnostic(
+      buildDirectEditFixture({
+        document,
+        derived: document.derived,
+        ...pick,
+        value: input.value,
+        outcome,
+        ...(input.message ? { message: input.message } : {}),
+        ...(input.detail ? { detail: input.detail } : {}),
+        timings: {
+          degraded: previewDeferredRef.current,
+          ...(input.validateMs !== undefined
+            ? { validateMs: input.validateMs }
+            : {})
+        },
+        kernel: KERNEL_BUILD
+      })
+    );
+  }
   /** Signed offset represented by the currently published previewDoc. */
   const [renderedOffsetPreview, setRenderedOffsetPreview] = useState<
     number | null
@@ -1848,10 +1937,14 @@ export function App() {
       ...(E2E_SLOW_FRAME_MS === undefined
         ? {}
         : { slowFrameMs: E2E_SLOW_FRAME_MS }),
-      onDegrade: () => setPreviewDeferred(true)
+      onDegrade: () => {
+        setPreviewDeferred(true);
+        recordDirectEditOutcome('preview-degraded', {
+          value: offsetPreviewValueRef.current ?? 0
+        });
+      }
     })
   ).current;
-
 
   const { run: executeValidatedDirectEdit } = useDirectEditCommit({
     manager: () => managerRef.current,
@@ -1864,9 +1957,32 @@ export function App() {
       commandOwnsDiagnosticRef.current = isOperationState(
         interactionRef.current
       );
+      const document = managerRef.current?.document;
+      pendingDirectEditRef.current = document
+        ? {
+            document,
+            interaction: interactionRef.current,
+            value,
+            startedAt: performance.now()
+          }
+        : null;
       dispatchInteraction({ type: 'validation-start', value });
     },
     onValidationFailed: (diagnostic, value) => {
+      const pending = pendingDirectEditRef.current;
+      pendingDirectEditRef.current = null;
+      recordDirectEditOutcome('refused', {
+        ...(pending
+          ? {
+              interaction: pending.interaction,
+              document: pending.document,
+              validateMs: performance.now() - pending.startedAt
+            }
+          : {}),
+        value,
+        message: diagnostic.message,
+        ...(diagnostic.detail ? { detail: diagnostic.detail } : {})
+      });
       cylinderRadiusPreview.clear();
       offsetPreview.clear();
       setPreviewDeferred(false);
@@ -1881,6 +1997,16 @@ export function App() {
       }
     },
     onCommitted: (bodyId) => {
+      const pending = pendingDirectEditRef.current;
+      pendingDirectEditRef.current = null;
+      if (pending) {
+        recordDirectEditOutcome('committed', {
+          interaction: pending.interaction,
+          document: pending.document,
+          value: pending.value,
+          validateMs: performance.now() - pending.startedAt
+        });
+      }
       cylinderRadiusPreview.clear();
       offsetPreview.clear();
       setPreviewDeferred(false);
@@ -7979,6 +8105,30 @@ export function App() {
     }
   }
 
+  async function handleExportInteractionLog() {
+    try {
+      const entries = await listInteractionDiagnostics();
+      if (entries.length === 0) {
+        setStatus(
+          'No direct-edit attempts have been recorded on this device yet.'
+        );
+        return;
+      }
+      const bundle = createInteractionDiagnosticBundle(entries, KERNEL_BUILD);
+      const fileName = `openzcad-interaction-log-${bundle.capturedAt.slice(0, 10)}.json`;
+      downloadText(
+        fileName,
+        `${JSON.stringify(bundle, null, 2)}\n`,
+        'application/json'
+      );
+      setStatus(
+        `Exported ${bundle.summary.total} recorded direct-edit attempts (${bundle.summary.byOutcome.refused} refused) to ${fileName}.`
+      );
+    } catch (error) {
+      setStatus(errorMessage(error, 'Interaction log export failed.'));
+    }
+  }
+
   desktopMenuHandlerRef.current = (command) => {
     switch (command) {
       case 'open-model':
@@ -10569,6 +10719,7 @@ export function App() {
       value
     });
     setStatus(`Offset preview refused: ${message}`);
+    recordDirectEditOutcome('preview-failed', { value, message });
   }
 
   function recoverOffsetPreviewInteraction() {
@@ -12716,6 +12867,7 @@ export function App() {
           onOpenMeshExport={() => setMeshExportOpen(true)}
           onArchiveLocalSources={() => void handleArchiveLocalSources()}
           onExportDiagnostics={handleExportDiagnostics}
+          onExportInteractionLog={() => void handleExportInteractionLog()}
           onRenameProject={(name) =>
             executeCommand(
               commandFactories.renameNode({ nodeId: doc.rootNodeId, name }),
