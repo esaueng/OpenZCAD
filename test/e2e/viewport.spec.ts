@@ -437,6 +437,115 @@ test('the wheel zooms toward the pointer, and the preference turns it off', asyn
   expect(centreTravel).toBeLessThan(0.01);
 });
 
+test('a batched trackpad pinch renders as bounded zoom steps', async ({
+  page
+}) => {
+  await stubApi(page);
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('Smooth Zoom Part');
+  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
+  await page
+    .getByRole('region', { name: 'Feature inspector' })
+    .getByRole('button', { name: /^Create/ })
+    .click();
+  await expectBodyCount(page, 1);
+
+  const canvas = page.locator('.viewer-host canvas');
+  await expect(canvas).toHaveAttribute('data-e2e-camera-distance', /.+/);
+  await page.getByRole('button', { name: 'Fit' }).click();
+  await page.waitForTimeout(600);
+
+  await canvas.evaluate((element) => {
+    type ZoomFrame = {
+      at: number;
+      distance: number;
+      orthographicZoom: number;
+      zooming: boolean;
+    };
+    const instrumented = element as HTMLCanvasElement & {
+      __zoomFrames?: ZoomFrame[];
+    };
+    instrumented.__zoomFrames = [
+      {
+        at: performance.now(),
+        distance: Number(element.dataset.e2eCameraDistance),
+        orthographicZoom: Number(element.dataset.e2eOrthographicZoom),
+        zooming: false
+      }
+    ];
+    element.addEventListener('openzcad:e2e-camera-frame', (event) => {
+      instrumented.__zoomFrames!.push((event as CustomEvent<ZoomFrame>).detail);
+    });
+
+    const rect = element.getBoundingClientRect();
+    for (let packet = 0; packet < 12; packet += 1) {
+      element.dispatchEvent(
+        new WheelEvent('wheel', {
+          bubbles: true,
+          cancelable: true,
+          clientX: rect.left + rect.width * 0.7,
+          clientY: rect.top + rect.height * 0.35,
+          ctrlKey: true,
+          deltaMode: WheelEvent.DOM_DELTA_PIXEL,
+          deltaY: -2
+        })
+      );
+    }
+  });
+
+  await expect
+    .poll(() =>
+      canvas.evaluate((element) => {
+        const frames = (
+          element as HTMLCanvasElement & {
+            __zoomFrames?: Array<{ zooming: boolean }>;
+          }
+        ).__zoomFrames;
+        const active = frames?.findIndex((frame) => frame.zooming) ?? -1;
+        return (
+          active >= 0 &&
+          frames!.slice(active + 1).some((frame) => !frame.zooming)
+        );
+      })
+    )
+    .toBe(true);
+
+  const frames = await canvas.evaluate((element) =>
+    (
+      element as HTMLCanvasElement & {
+        __zoomFrames: Array<{
+          at: number;
+          distance: number;
+          zooming: boolean;
+        }>;
+      }
+    ).__zoomFrames.filter(
+      (frame, index, all) =>
+        index === 0 || frame.distance !== all[index - 1]!.distance
+    )
+  );
+  expect(frames.length).toBeGreaterThan(4);
+
+  const initialDistance = frames[0]!.distance;
+  const finalDistance = frames.at(-1)!.distance;
+  const cumulativeLogStep = Math.abs(Math.log(finalDistance / initialDistance));
+  // Twelve tiny pinch packets retain their existing adaptive scale; only
+  // their presentation is spread across bounded rendered frames.
+  expect(cumulativeLogStep).toBeGreaterThan(0.12);
+  expect(cumulativeLogStep).toBeLessThan(0.14);
+  for (let index = 1; index < frames.length; index += 1) {
+    const previous = frames[index - 1]!;
+    const current = frames[index]!;
+    expect(current.distance).toBeLessThan(previous.distance);
+    const elapsedSeconds = (current.at - previous.at) / 1000;
+    const boundedFrameSeconds =
+      index === 1 ? 1 / 60 : Math.min(Math.max(elapsedSeconds, 0), 0.05);
+    const logStep = Math.abs(Math.log(current.distance / previous.distance));
+    expect(logStep).toBeLessThanOrEqual(3 * boundedFrameSeconds + 0.001);
+  }
+});
+
 test('clicking geometry re-pivots the orbit without moving the view', async ({
   page
 }) => {
