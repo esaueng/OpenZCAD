@@ -253,6 +253,17 @@ Ordered by expected leverage; each item retires pins and states which.
   exact-entry for a refusal that could never come. Edge previews now continue
   after a slow frame like offset and region extrude do, report the lag on the
   chip, and release it on cancel; a forced-degrade E2E pins it.
+- **U addendum (2026-09-02): picks are not refused while a rebuild echoes.**
+  Selecting a face or edge during a rebuild used to be dropped with "Exact
+  geometry is still rebuilding. Topology actions are temporarily
+  unavailable." — including in the one-message window between a result
+  landing on screen and the worker's `ready` state, which is how the
+  imported-blend E2E flaked (1 in 6 locally, status line captured). A pick of
+  topology that resolves in the derived state the viewer is drawing is now a
+  selection like any other; commands that later capture it re-check
+  readiness and re-resolve the topology themselves. Only a pick that resolves
+  nowhere is refused, and starting a sketch on a face — a pick that is itself
+  a command — still waits.
 - **B5. One refusal surface (class U).** *Landed in part (2026-09-02):* a
   value refused while the hand is moving no longer snaps the shape back to
   the pre-drag state — the last exact preview that built stays on screen,
