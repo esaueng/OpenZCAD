@@ -212,9 +212,15 @@ Ordered by expected leverage; each item retires pins and states which.
   geometry" (`LivePreview.lagging`) rather than "stopped". A region extrude
   streams an exact preview whose add/cut follows the drag direction, and its
   rig sweeps the profile every frame so the volume tracks the hand between
-  kernel results. *Still open:* reuse the commit-time rebuild when the last
-  preview's document version matches, so a preview that passed cannot be
-  followed by a `documentMoved` refusal for the same value.
+  kernel results. *Closed 2026-09-02:* releasing the handle at the value the
+  last passing preview showed commits that preview's own command with its
+  own rebuild (`useDirectEditCommit.run(..., precomputed)`), reused only
+  while the document is still the project and version the preview measured —
+  so a preview that passed is never followed by a second wait, or a
+  `documentMoved` refusal, for the same value. A fresh plan would carry new
+  feature ids and could neither hit the worker cache nor be reused. *Still
+  open:* a swept proxy for the offset face between exact frames (the region
+  rig has one; offset needs face boundary loops).
 - **B5. One refusal surface (class U).** A refusal is shown once, at the
   handle, as `CommandDiagnostic` already models it: one plain sentence, the
   kernel text behind a disclosure, and an action — open the named feature,
