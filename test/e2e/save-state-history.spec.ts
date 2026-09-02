@@ -61,6 +61,13 @@ async function projectSavedWithOneBodyThenTwo(page: Page, name: string) {
 
   await page.keyboard.press('ControlOrMeta+s');
   await expect(revisionRow(page, 'Manual save')).toBeVisible();
+  // The account echoes the save back at the same version with a checkpoint
+  // appended, and the box's meshes have to survive that echo. Dropped, with
+  // no rebuild posted for an unchanged version, the box read as failed and the
+  // viewport stayed blank until a reload.
+  await expectSaveSettled(page);
+  await expect(page.locator('.feature-flag.error')).toHaveCount(0);
+  await expect(page.getByText('No bodies yet')).toHaveCount(0);
 
   await addPrimitive(page, /^Cylinder/);
   await expectBodyCount(page, 2);
