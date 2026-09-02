@@ -382,7 +382,8 @@ import {
   isOperationState,
   radialFaceOperationName,
   toolCardFor,
-  type FaceTarget
+  type FaceTarget,
+  type RegionTarget
 } from './lib/interaction/machine';
 import { updateProfileSelection } from './lib/profileSelection';
 import {
@@ -418,6 +419,7 @@ import { DISPLAY_MODE_LABELS } from './lib/displayMode';
 import { ContextMenu, type ContextMenuState } from './components/ContextMenu';
 import { MarkingMenu } from './components/MarkingMenu';
 import { resolveExtrudeOperation } from './lib/extrudeInference';
+import { previewExtrudeInput } from './lib/extrudePreview';
 import type {
   BodyAppearancePreview,
   FaceResizeCommit,
@@ -857,6 +859,16 @@ interface OffsetPreviewCandidate {
   baseProjectId: ProjectDocument['projectId'];
   baseVersion: number;
   validationTargets?: AffectedFeatureTarget[];
+}
+
+/** A region extrude rebuilt for preview, with the context its verdict needs. */
+interface RegionExtrudePreviewCandidate {
+  document: ProjectDocument;
+  distance: number;
+  resultBodyId: BodyId;
+  label: string;
+  baseProjectId: ProjectDocument['projectId'];
+  baseVersion: number;
 }
 
 interface OffsetPreviewResult {
@@ -1925,6 +1937,9 @@ export function App() {
         });
         setRenderedOffsetPreview(preview.document.offset);
         recoverOffsetPreviewInteraction();
+        // Once a gesture has gone slow, the chip says "catching up" only
+        // while the hand is actually ahead of the published geometry.
+        setPreviewDeferred(offsetPreview.degraded && offsetPreview.lagging);
       },
       onFailure: ({ error, value }) =>
         reportOffsetPreviewFailure(
@@ -1933,7 +1948,10 @@ export function App() {
         ),
       acceptValue: (offset) =>
         Number.isFinite(offset) && Math.abs(offset) > 1e-9,
-      continueAfterSlow: false,
+      // A slow rebuild no longer freezes the preview for the rest of the
+      // gesture: the exact solid keeps following the hand at whatever rate
+      // the kernel manages, and the chip reports when it is behind.
+      continueAfterSlow: true,
       ...(E2E_SLOW_FRAME_MS === undefined
         ? {}
         : { slowFrameMs: E2E_SLOW_FRAME_MS }),
@@ -1943,6 +1961,97 @@ export function App() {
           value: offsetPreviewValueRef.current ?? 0
         });
       }
+    })
+  ).current;
+
+  /**
+   * Exact extrude preview for a region drag. The drag direction decides what
+   * is shown — into the face's body cuts, away from it adds, a free plane
+   * grows a new body — because that is the intent the hand expresses. The
+   * commit still runs the full exact classification, so the stored operation
+   * is decided by measurement; this only picks the shape shown while the
+   * pointer is moving.
+   */
+  const regionExtrudePreview = useRef(
+    new LivePreview<RegionExtrudePreviewCandidate, OffsetPreviewResult>({
+      build: (distance) => {
+        const base = managerRef.current?.document;
+        const current = interactionRef.current;
+        if (!base || current.mode !== 'region') {
+          return null;
+        }
+        const sketchNode = listNodesByKind(base, 'sketch').find(
+          (candidate) => candidate.sketchId === current.target.sketchId
+        );
+        const command = commandFactories.extrudeSketch(
+          previewExtrudeInput(
+            regionExtrudeInputFor(current.target, distance),
+            sketchNode?.planeRef,
+            distance
+          )
+        );
+        const resultBodyId = command.payload.ids?.bodyId;
+        if (!resultBodyId) {
+          return null;
+        }
+        command.validate(base);
+        return {
+          document: command.apply(base),
+          distance,
+          resultBodyId,
+          label: command.label,
+          baseProjectId: base.projectId,
+          baseVersion: base.version
+        };
+      },
+      derive: async (candidate) => {
+        const derived = await geometry.syncOnce(candidate.document);
+        const live = managerRef.current;
+        const documentMoved =
+          !live ||
+          live.document.projectId !== candidate.baseProjectId ||
+          live.document.version !== candidate.baseVersion;
+        const rejection = offsetPreviewRejection({
+          label: candidate.label,
+          bodyId: candidate.resultBodyId,
+          derived,
+          documentMoved
+        });
+        return { derived, rejection };
+      },
+      publish: (preview) => {
+        if (!preview) {
+          setPreviewDoc(null);
+          return;
+        }
+        if (preview.derived.rejection) {
+          reportRegionPreviewFailure(
+            preview.derived.rejection.message,
+            preview.document.distance
+          );
+          return;
+        }
+        setPreviewDoc({
+          ...preview.document.document,
+          derived: preview.derived.derived
+        });
+        recoverRegionPreviewInteraction();
+        setPreviewDeferred(
+          regionExtrudePreview.degraded && regionExtrudePreview.lagging
+        );
+      },
+      onFailure: ({ error, value }) =>
+        reportRegionPreviewFailure(
+          errorMessage(error, 'Exact extrude preview failed.'),
+          value
+        ),
+      acceptValue: (distance) =>
+        Number.isFinite(distance) && Math.abs(distance) > 1e-9,
+      continueAfterSlow: true,
+      ...(E2E_SLOW_FRAME_MS === undefined
+        ? {}
+        : { slowFrameMs: E2E_SLOW_FRAME_MS }),
+      onDegrade: () => setPreviewDeferred(true)
     })
   ).current;
 
@@ -1985,6 +2094,7 @@ export function App() {
       });
       cylinderRadiusPreview.clear();
       offsetPreview.clear();
+      regionExtrudePreview.clear();
       setPreviewDeferred(false);
       offsetPreviewValueRef.current = null;
       dispatchInteraction({
@@ -2009,6 +2119,7 @@ export function App() {
       }
       cylinderRadiusPreview.clear();
       offsetPreview.clear();
+      regionExtrudePreview.clear();
       setPreviewDeferred(false);
       offsetPreviewValueRef.current = null;
       dispatchInteraction({ type: 'commit-complete' });
@@ -8718,6 +8829,15 @@ export function App() {
     offsetPreviewValueRef.current = null;
   }, [offsetInteractionKey, offsetPreview]);
 
+  const regionInteractionKey =
+    interaction.mode === 'region'
+      ? `${interaction.target.sketchId}:${interaction.target.regionFingerprint}`
+      : null;
+  useEffect(() => {
+    regionExtrudePreview.clear();
+    setPreviewDeferred(false);
+  }, [regionInteractionKey, regionExtrudePreview]);
+
   /**
    * The sketch plane basis is memoized on the session's plane reference
    * alone: it must keep its identity across entity commits, or the viewport
@@ -9820,19 +9940,19 @@ export function App() {
     };
   }, [interaction]);
 
-  /** Region-extrude drag released (or exact entry): commit the feature. */
-  function handleRegionExtrudeCommit(distance: number, exact?: ParamValue) {
-    if (interaction.mode !== 'region') {
-      return;
-    }
-    const target = interaction.target;
-    const rounded = Math.round(distance * 1000) / 1000;
-    if (rounded === 0) {
-      return;
-    }
+  /**
+   * The extrude a region gesture describes, before its operation is decided.
+   * Shared by the live preview and the commit so both build the same profile
+   * set from the same selection.
+   */
+  function regionExtrudeInputFor(
+    target: RegionTarget,
+    distance: ParamValue
+  ): ExtrudeInput {
+    const selected = selectedProfilesRef.current;
     const profiles =
-      selectedProfiles.length > 0
-        ? selectedProfiles
+      selected.length > 0
+        ? selected
         : [
             {
               sketchId: target.sketchId,
@@ -9852,12 +9972,27 @@ export function App() {
               area: target.area
             }
           ];
-    const input: ExtrudeInput = {
+    return {
       name: 'Extrude',
       sketchId: target.sketchId as SketchId,
-      distance: exact ?? rounded,
+      distance,
       profiles: profileReferencesForSelection(profiles, entityWideProfileSource)
     };
+  }
+
+  /** Region-extrude drag released (or exact entry): commit the feature. */
+  function handleRegionExtrudeCommit(distance: number, exact?: ParamValue) {
+    if (interaction.mode !== 'region') {
+      return;
+    }
+    const target = interaction.target;
+    const rounded = Math.round(distance * 1000) / 1000;
+    if (rounded === 0) {
+      return;
+    }
+    regionExtrudePreview.clear();
+    setPreviewDeferred(false);
+    const input = regionExtrudeInputFor(target, exact ?? rounded);
     void (async () => {
       // The drag direction decided the volume; the kernel's exact overlap
       // classification decides add / cut / new-body — the same inference the
@@ -10737,8 +10872,46 @@ export function App() {
     });
   }
 
+  function reportRegionPreviewFailure(message: string, value: number) {
+    if (interactionRef.current.mode !== 'region') {
+      return;
+    }
+    setPreviewDoc(null);
+    dispatchInteraction({
+      type: 'validation-failed',
+      diagnostic: { message },
+      value
+    });
+    setStatus(`Extrude preview refused: ${message}`);
+  }
+
+  function recoverRegionPreviewInteraction() {
+    const current = interactionRef.current;
+    if (current.mode !== 'region' || current.phase !== 'failed') {
+      return;
+    }
+    dispatchInteraction({ type: 'recover' });
+    dispatchInteraction({
+      type: keypadRef.current?.kind === 'offset' ? 'keypad-open' : 'drag-engage'
+    });
+  }
+
   function handleOffsetPreview(offset: number) {
     const current = interactionRef.current;
+    // The arrow rig is shared: in region mode its value is an extrude height.
+    if (current.mode === 'region') {
+      if (current.phase === 'validating') {
+        return;
+      }
+      if (Math.abs(offset) <= 1e-9) {
+        regionExtrudePreview.clear();
+        setPreviewDeferred(false);
+        recoverRegionPreviewInteraction();
+        return;
+      }
+      regionExtrudePreview.request(offset);
+      return;
+    }
     if (
       current.mode !== 'face' ||
       current.op !== 'offset-face' ||
@@ -10757,6 +10930,7 @@ export function App() {
   }
 
   function handleOffsetCancel() {
+    regionExtrudePreview.clear();
     offsetPreview.clear();
     // clear() re-arms the slow-frame guard, so the chip must stop reporting a
     // paused preview too. Commit and validation failure already do this; a
@@ -10769,6 +10943,8 @@ export function App() {
       // Re-selecting the same semantic target resets the existing lifecycle
       // to armed, including a failed value, without adding a machine state.
       dispatchInteraction({ type: 'select-face', target: current.target });
+    } else if (current.mode === 'region') {
+      dispatchInteraction({ type: 'select-region', target: current.target });
     }
   }
 
@@ -13091,9 +13267,10 @@ export function App() {
             onOffsetCommit={handleOffsetCommit}
             onOffsetCancel={handleOffsetCancel}
             offsetPreviewInvalid={
-              interaction.mode === 'face' &&
-              interaction.op === 'offset-face' &&
-              interaction.phase === 'failed'
+              (interaction.mode === 'face' &&
+                interaction.op === 'offset-face' &&
+                interaction.phase === 'failed') ||
+              (interaction.mode === 'region' && interaction.phase === 'failed')
             }
             previewDeferred={previewDeferred}
             onOpenOffsetKeypad={handleOpenOffsetKeypad}
