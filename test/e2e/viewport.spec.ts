@@ -2418,22 +2418,7 @@ test('two fingers pan while a wheel notch still zooms', async ({ page }) => {
   };
   await page.mouse.move(centre.x, centre.y);
 
-  const pose = async () =>
-    page.evaluate(() => {
-      const raw = localStorage.getItem('openzcad-workspace-session:v1');
-      const views = raw
-        ? (
-            JSON.parse(raw) as {
-              views?: Record<
-                string,
-                { camera: { position: number[]; target: number[] } }
-              >;
-            }
-          ).views
-        : undefined;
-      const first = views ? Object.values(views)[0] : undefined;
-      return first ? first.camera : null;
-    });
+  const pose = async () => readLiveCamera(canvas);
   const distance = (camera: { position: number[]; target: number[] }) =>
     Math.hypot(
       camera.position[0]! - camera.target[0]!,
@@ -2441,19 +2426,14 @@ test('two fingers pan while a wheel notch still zooms', async ({ page }) => {
       camera.position[2]! - camera.target[2]!
     );
 
-  // Nothing is persisted until the camera first moves, so establish a stored
-  // pose before comparing against one.
+  // Establish a non-default radius, then compare the live camera only after
+  // the bounded zoom has rendered its final frame.
   await canvas.dispatchEvent('wheel', { deltaY: 120, deltaMode: 0 });
-  await expect.poll(async () => (await pose()) !== null).toBe(true);
-  // The zoom notch glides out on damping before its settled pose is stored;
-  // the worst-case durable write trails the release by just under a second,
-  // so wait out that horizon before taking the pan baseline.
-  await page.waitForTimeout(1000);
+  await waitForZoomToSettle(canvas);
 
   // Fine, two-axis deltas are a trackpad swipe: the framing moves, the
   // distance to it does not.
   const beforePan = await pose();
-  expect(beforePan).not.toBeNull();
   for (let step = 0; step < 12; step += 1) {
     await canvas.dispatchEvent('wheel', {
       deltaX: 6,
@@ -2464,31 +2444,24 @@ test('two fingers pan while a wheel notch still zooms', async ({ page }) => {
   await expect
     .poll(async () => {
       const now = await pose();
-      return now
-        ? Math.hypot(
-            now.target[0]! - beforePan!.target[0]!,
-            now.target[1]! - beforePan!.target[1]!,
-            now.target[2]! - beforePan!.target[2]!
-          )
-        : 0;
+      return Math.hypot(
+        now.target[0]! - beforePan.target[0]!,
+        now.target[1]! - beforePan.target[1]!,
+        now.target[2]! - beforePan.target[2]!
+      );
     })
     .toBeGreaterThan(0.5);
-  // Panning preserves the orbit radius at every step, but the stored pose
-  // lags the gesture; let the swipe's own settled write land before reading.
-  await page.waitForTimeout(1000);
-  const afterPan = (await pose())!;
-  expect(distance(afterPan)).toBeCloseTo(distance(beforePan!), 3);
+  const afterPan = await pose();
+  expect(distance(afterPan)).toBeCloseTo(distance(beforePan), 3);
 
   // A notch is still a zoom: the distance changes.
   for (let step = 0; step < 3; step += 1) {
     await canvas.dispatchEvent('wheel', { deltaY: 120, deltaMode: 0 });
   }
-  await expect
-    .poll(async () => {
-      const now = await pose();
-      return now ? Math.abs(distance(now) - distance(afterPan)) : 0;
-    })
-    .toBeGreaterThan(0.5);
+  await waitForZoomToSettle(canvas);
+  expect(Math.abs(distance(await pose()) - distance(afterPan))).toBeGreaterThan(
+    0.5
+  );
 });
 
 test('pressing to orbit writes no storage on the press frame', async ({
