@@ -427,6 +427,9 @@
 }
 
 .view-mode-rail-foot {
+  /* Room for the two-line lock notice, so swapping it for the one-line
+     "Show all" button does not resize the scrolling list above. */
+  min-height: calc(2 * var(--lh-tight) * var(--fs-mini) + 13px);
   padding: 6px 10px 7px;
   border-top: var(--border-thin);
   color: var(--color-text-subtle);
@@ -558,7 +561,9 @@
 }
 
 .measurement-dock-instruction {
-  min-height: 32px;
+  /* Two lines: the longest instruction wraps at the dock's narrowest width,
+     and one reserved line let a mode change shift the list below. */
+  min-height: calc(2 * var(--lh-normal) * var(--fs-xs) + 14px);
   margin: 0;
   padding: 7px 10px;
   color: var(--color-text-subtle);

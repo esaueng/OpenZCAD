@@ -5,6 +5,7 @@ import {
   WORKSPACE_TOUR_STEPS,
   type WorkspaceTourSignals
 } from '../lib/workspaceTour';
+import { StableLabel } from './StableLabel';
 
 interface WorkspaceTourProps extends WorkspaceTourSignals {
   /** Fired on skip AND on finishing the last step — either way it is over. */
@@ -105,7 +106,9 @@ export function WorkspaceTour({
           className="workspace-tour-next"
           onClick={() => setIndex((current) => current + 1)}
         >
-          {last ? 'Finish' : 'Next'}
+          <StableLabel reserve={['Finish', 'Next']} align="center">
+            {last ? 'Finish' : 'Next'}
+          </StableLabel>
         </button>
       </footer>
     </section>

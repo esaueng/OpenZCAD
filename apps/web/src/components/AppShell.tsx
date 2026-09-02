@@ -92,7 +92,7 @@ export function AppShell({
       >
         {sidebar}
         {sidebarDocked && sidebarResizer}
-        <div className="viewer-area">
+        <div className={`viewer-area${inspector ? ' has-inspector' : ''}`}>
           {viewer}
           {toolBar && <div className="palette-float">{toolBar}</div>}
           {inspector && <div className="inspector-float">{inspector}</div>}

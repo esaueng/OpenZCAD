@@ -12,6 +12,7 @@
 @import './components/topbar.css';
 @import './components/tool-palette.css';
 @import './components/buttons.css';
+@import './components/stable-label.css';
 @import './components/sidebar.css';
 @import './components/viewer.css';
 @import './components/sketch-mode.css';

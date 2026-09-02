@@ -7162,6 +7162,9 @@ export function ModelViewer({
               valueButton.addEventListener('click', () => {
                 const input = document.createElement('input');
                 input.className = 'callout-input';
+                // Same width as the value it replaces, so the pill does not
+                // jump the instant it is clicked.
+                input.style.width = `${Math.ceil(valueButton.getBoundingClientRect().width)}px`;
                 input.value = String(rounded);
                 input.inputMode = 'decimal';
                 input.setAttribute(

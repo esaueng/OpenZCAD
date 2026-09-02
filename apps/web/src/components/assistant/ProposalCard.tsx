@@ -15,6 +15,7 @@ import {
   summarizeOperations
 } from '../../lib/assistant/describe';
 import { RichText } from './RichText';
+import { StableLabel } from '../StableLabel';
 
 interface ProposalCardProps {
   entry: AssistantProposalEntry;
@@ -191,7 +192,9 @@ export function ProposalCard({
             ) : (
               <Eye size={13} aria-hidden="true" />
             )}
-            {previewing ? 'Hide preview' : 'Preview'}
+            <StableLabel reserve={['Hide preview', 'Preview']}>
+              {previewing ? 'Hide preview' : 'Preview'}
+            </StableLabel>
           </button>
           <button
             type="button"
@@ -208,7 +211,9 @@ export function ProposalCard({
             ) : (
               <Check size={13} aria-hidden="true" />
             )}
-            {applying ? 'Applying…' : 'Apply'}
+            <StableLabel reserve={['Applying…', 'Apply']}>
+              {applying ? 'Applying…' : 'Apply'}
+            </StableLabel>
           </button>
           <button type="button" disabled={busy} onClick={onReject}>
             <X size={13} aria-hidden="true" />
