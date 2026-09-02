@@ -4,12 +4,12 @@
  * spinning the wheel compounds each notch harder so crossing a large model
  * takes a flick instead of thirty clicks.
  *
- * OrbitControls reads `zoomSpeed` fresh on every wheel event, so the whole
- * mechanism is a per-event modulation of that one property. Recent wheel
- * input accumulates into a momentum that decays exponentially with the time
- * since the previous event; the multiplier is computed from the momentum
- * *carried into* the event, so an isolated tick — however hard — always
- * lands at the base speed and only sustained spinning accelerates.
+ * The camera controller applies the returned speed to each packet's exact
+ * logarithmic scale before queuing it for the render loop. Recent wheel input
+ * accumulates into a momentum that decays exponentially with the time since
+ * the previous event; the multiplier is computed from the momentum *carried
+ * into* the event, so an isolated tick — however hard — always lands at the
+ * base speed and only sustained spinning accelerates.
  */
 
 /** OrbitControls' stock speed; a lone wheel notch behaves exactly as before. */
@@ -38,16 +38,26 @@ export function initialZoomDynamics(): ZoomDynamicsState {
   return { momentum: 0, lastEventAt: Number.NEGATIVE_INFINITY };
 }
 
+/** Normalises line and page deltas to the pixel units OrbitControls uses. */
+export function normalizedWheelDelta(
+  deltaY: number,
+  deltaMode: number
+): number {
+  return deltaMode === 1
+    ? deltaY * 16
+    : deltaMode === 2
+      ? deltaY * 100
+      : deltaY;
+}
+
 /** Normalises a wheel event's deltaY into notches, matching OrbitControls. */
 export function wheelNotches(deltaY: number, deltaMode: number): number {
-  const pixels =
-    deltaMode === 1 ? deltaY * 16 : deltaMode === 2 ? deltaY * 100 : deltaY;
-  return Math.abs(pixels) / WHEEL_NOTCH_PX;
+  return Math.abs(normalizedWheelDelta(deltaY, deltaMode)) / WHEEL_NOTCH_PX;
 }
 
 /**
- * Advances the momentum for one wheel event and returns the `zoomSpeed` to
- * present to OrbitControls for it. Mutates nothing; callers own the state.
+ * Advances the momentum for one wheel event and returns its scale multiplier.
+ * Mutates nothing; callers own the state.
  */
 export function stepZoomDynamics(
   state: ZoomDynamicsState,
@@ -60,8 +70,7 @@ export function stepZoomDynamics(
       ? state.momentum * Math.exp(-dt / ZOOM_ACCEL_TAU_MS)
       : state.momentum;
   const speed =
-    ZOOM_BASE_SPEED *
-    Math.min(1 + ZOOM_ACCEL_GAIN * carried, ZOOM_ACCEL_MAX);
+    ZOOM_BASE_SPEED * Math.min(1 + ZOOM_ACCEL_GAIN * carried, ZOOM_ACCEL_MAX);
   return {
     state: { momentum: carried + notches, lastEventAt: now },
     speed
