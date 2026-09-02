@@ -378,6 +378,7 @@ import {
   interactionReducer,
   commandSessionFor,
   isOperationState,
+  isStaleSelectionError,
   radialFaceOperationName,
   toolCardFor,
   type FaceTarget,
@@ -1726,6 +1727,12 @@ export function App() {
   const [renderedOffsetPreview, setRenderedOffsetPreview] = useState<
     number | null
   >(null);
+  /**
+   * The value of the last preview the kernel accepted for the running
+   * command, whatever the handle has done since. A refusal at release leaves
+   * this on screen as the model's state, and the card offers to keep it.
+   */
+  const [lastValidPreview, setLastValidPreview] = useState<number | null>(null);
   /** New exact blend faces, computed once when an edge-fillet preview lands. */
   const [previewBlendFaces, setPreviewBlendFaces] = useState<
     TopologySelection[]
@@ -1986,6 +1993,7 @@ export function App() {
           derived: preview.derived.derived
         });
         setRenderedOffsetPreview(preview.document.offset);
+        setLastValidPreview(preview.document.offset);
         recoverPreviewInteraction();
         // Once a gesture has gone slow, the chip says "catching up" only
         // while the hand is actually ahead of the published geometry.
@@ -2085,6 +2093,7 @@ export function App() {
           ...preview.document.document,
           derived: preview.derived.derived
         });
+        setLastValidPreview(preview.document.distance);
         recoverPreviewInteraction();
         setPreviewDeferred(
           regionExtrudePreview.degraded && regionExtrudePreview.lagging
@@ -2172,6 +2181,7 @@ export function App() {
       regionExtrudePreview.clear();
       setPreviewDeferred(false);
       offsetPreviewValueRef.current = null;
+      setLastValidPreview(null);
       dispatchInteraction({ type: 'commit-complete' });
       setSelectedTopology(null);
       setSelectedEdges([]);
@@ -8995,6 +9005,7 @@ export function App() {
   useEffect(() => {
     if (!edgePreviewInteraction) {
       edgePreview.clear();
+      setLastValidPreview(null);
     }
   }, [edgePreviewInteraction]);
 
@@ -9006,6 +9017,7 @@ export function App() {
     offsetPreview.clear();
     setPreviewDeferred(false);
     offsetPreviewValueRef.current = null;
+    setLastValidPreview(null);
   }, [offsetInteractionKey, offsetPreview]);
 
   const regionInteractionKey =
@@ -9015,6 +9027,7 @@ export function App() {
   useEffect(() => {
     regionExtrudePreview.clear();
     setPreviewDeferred(false);
+    setLastValidPreview(null);
   }, [regionInteractionKey, regionExtrudePreview]);
 
   /**
@@ -10712,6 +10725,7 @@ export function App() {
             ? newBlendFaceSelections(base, preview.derived.derived)
             : []
         );
+        setLastValidPreview(preview.document.size);
         recoverPreviewInteraction();
         setPreviewDeferred(edgePreview.degraded && edgePreview.lagging);
       },
@@ -10920,6 +10934,7 @@ export function App() {
     // clear() re-arms the slow-frame guard, so the chip must stop reporting a
     // late preview too — the same latch the offset cancel already releases.
     setPreviewDeferred(false);
+    setLastValidPreview(null);
   }
 
   function filletRemovalTargets(
@@ -11254,6 +11269,7 @@ export function App() {
     setPreviewDeferred(false);
     offsetPreviewValueRef.current = null;
     setRenderedOffsetPreview(null);
+    setLastValidPreview(null);
     const current = interactionRef.current;
     if (current.mode === 'face' && current.op === 'offset-face') {
       // Re-selecting the same semantic target resets the existing lifecycle
@@ -11400,7 +11416,11 @@ export function App() {
    * Face-offset commit as a validated direct edit. `exact` preserves a typed
    * expression as the stored parametric value; plain drags store the number.
    */
-  function handleOffsetCommit(offset: number, exact?: ParamValue): boolean {
+  function handleOffsetCommit(
+    offset: number,
+    exact?: ParamValue,
+    options?: { keepingLastValid?: boolean }
+  ): boolean {
     // The arrow rig is shared: in region mode its drag is an extrude height.
     if (interaction.mode === 'region') {
       handleRegionExtrudeCommit(offset, exact);
@@ -11413,7 +11433,9 @@ export function App() {
     if (!requireExactGeometryReady()) {
       return false;
     }
-    if (current.phase === 'failed') {
+    // A refused value is not committed from a failed card; the value the
+    // last passing preview showed is, and validation judges it again.
+    if (current.phase === 'failed' && !options?.keepingLastValid) {
       setStatus(
         current.error?.message ?? 'The current offset preview is invalid.'
       );
@@ -11599,6 +11621,43 @@ export function App() {
    * so this is routing rather than new attribution: clear the failed command
    * and select that feature exactly as clicking it in the tree would.
    */
+  /**
+   * The way out of a refusal at release: commit the value the last passing
+   * preview showed, which is what the model on screen already is. Validation
+   * runs again on the way in, reusing that preview's rebuild when it still
+   * matches the document.
+   */
+  const keepLastValid =
+    isOperationState(interaction) &&
+    interaction.phase === 'failed' &&
+    lastValidPreview !== null &&
+    !isStaleSelectionError(interaction.error) &&
+    (interaction.mode === 'region' ||
+      interaction.mode === 'edges' ||
+      (interaction.mode === 'face' &&
+        (interaction.op === 'offset-face' || interaction.op === 'edit-fillet')))
+      ? {
+          label:
+            `Keep ${formatNumber(lastValidPreview)} ${doc?.units ?? ''}`.trim(),
+          keep: () => {
+            if (interaction.mode === 'edges' || interaction.mode === 'face') {
+              if (
+                interaction.mode === 'face' &&
+                interaction.op === 'offset-face'
+              ) {
+                handleOffsetCommit(lastValidPreview, undefined, {
+                  keepingLastValid: true
+                });
+              } else {
+                handleEdgeCommit(lastValidPreview);
+              }
+            } else {
+              handleRegionExtrudeCommit(lastValidPreview);
+            }
+          }
+        }
+      : null;
+
   function handleEditCulpritFeature(featureId: string) {
     const node = doc
       ? Object.values(doc.nodes).find(
@@ -13693,6 +13752,7 @@ export function App() {
                     model={contextualToolCard}
                     onAction={handleSelectionAction}
                     onEditCulprit={handleEditCulpritFeature}
+                    {...(keepLastValid ? { keepLastValid } : {})}
                     onClose={() => {
                       if (
                         interaction.mode !== 'idle' &&
