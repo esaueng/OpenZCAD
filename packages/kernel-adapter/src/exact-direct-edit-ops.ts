@@ -1125,35 +1125,43 @@ export function applyDirectEdit(
   }
 
   if (operation.kind === 'resize-blend') {
+    // The recorded radius, carrier centre and axis prove that a hash-resolved
+    // seed is the band the user picked. Under a lineage-resolved seed identity
+    // is already proven by role, and those pins would only refuse the
+    // upstream edits — a moved body, an earlier resize of the same band —
+    // that "set this blend to radius R" is defined to survive; the band's
+    // current radius is then what the kernel resizes from.
     const snapshot = requireBlendRegion(
       kernel,
       solid,
       face,
-      operation.recordedRadius
+      viaLineage ? undefined : operation.recordedRadius
     );
     if (snapshot.surfaceClass !== operation.surfaceClass) {
       throw new Error(
         `The selected face is no longer an analytic ${operation.surfaceClass} blend.`
       );
     }
-    const radiusTolerance = Math.max(operation.recordedRadius * 1e-5, 1e-9);
-    const carrierTolerance = Math.max(operation.recordedRadius * 1e-5, 1e-6);
-    if (
-      length(subtract(snapshot.center, operation.recordedCenter)) >
-      carrierTolerance
-    ) {
-      throw new Error(
-        'The selected blend no longer matches its recorded carrier center.'
-      );
-    }
-    const recordedAxis = normalized(operation.recordedAxis);
-    if (
-      !recordedAxis ||
-      Math.abs(dot(snapshot.axis, recordedAxis)) < 1 - 1e-6
-    ) {
-      throw new Error(
-        'The selected blend no longer matches its recorded carrier axis.'
-      );
+    const radiusTolerance = Math.max(snapshot.radius * 1e-5, 1e-9);
+    if (!viaLineage) {
+      const carrierTolerance = Math.max(operation.recordedRadius * 1e-5, 1e-6);
+      if (
+        length(subtract(snapshot.center, operation.recordedCenter)) >
+        carrierTolerance
+      ) {
+        throw new Error(
+          'The selected blend no longer matches its recorded carrier center.'
+        );
+      }
+      const recordedAxis = normalized(operation.recordedAxis);
+      if (
+        !recordedAxis ||
+        Math.abs(dot(snapshot.axis, recordedAxis)) < 1 - 1e-6
+      ) {
+        throw new Error(
+          'The selected blend no longer matches its recorded carrier axis.'
+        );
+      }
     }
     const newRadius = resolveParamValue(
       operation.newRadius,
@@ -1164,17 +1172,15 @@ export function applyDirectEdit(
       throw new Error('Blend radius must be zero or greater.');
     }
     if (Math.abs(newRadius - snapshot.radius) <= radiusTolerance) {
-      if (operation.parameterBinding) {
+      // A binding may start at the recorded radius, and an upstream edit may
+      // already have brought a lineage-resolved band to the stored one; only
+      // a gesture that lands on the current radius is a no-op worth refusing.
+      if (operation.parameterBinding || viaLineage) {
         return target;
       }
       throw new Error('Blend radius must differ from its current radius.');
     }
-    const output = kernel.resizeBlend(
-      solid,
-      face,
-      operation.recordedRadius,
-      newRadius
-    );
+    const output = kernel.resizeBlend(solid, face, snapshot.radius, newRadius);
     if (kernel.validateSolid(output) !== 0) {
       throw new Error(
         `Resizing the blend to radius ${newRadius} does not produce a valid solid.`
