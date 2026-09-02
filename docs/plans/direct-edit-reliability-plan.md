@@ -228,13 +228,20 @@ Ordered by expected leverage; each item retires pins and states which.
   feature ids and could neither hit the worker cache nor be reused. *Still
   open:* a swept proxy for the offset face between exact frames (the region
   rig has one; offset needs face boundary loops).
-- **B5. One refusal surface (class U).** A refusal is shown once, at the
-  handle, as `CommandDiagnostic` already models it: one plain sentence, the
-  kernel text behind a disclosure, and an action — open the named feature,
-  undo, or retry at the last accepted value. Retire the status-bar echo for
-  owned commands (the code already tracks ownership with
-  `commandOwnsDiagnosticRef`). Rewrite the kernel-adapter refusal strings
-  that reach users so none mention censuses, facets, or handles.
+- **B5. One refusal surface (class U).** *Landed in part (2026-09-02):* a
+  value refused while the hand is moving no longer snaps the shape back to
+  the pre-drag state — the last exact preview that built stays on screen,
+  the handle keeps tracking, the chip and the rig turn to their warning
+  state (edge rigs included), and the tool card carries the one sentence; the
+  status line no longer echoes it. Blend previews are now judged the way
+  offsets are (`build-failed` on the previewed feature, or its result body
+  missing), so an oversize fillet reads "Try a smaller radius" at the handle
+  instead of silently dropping the blend. The first value that builds again
+  recovers the gesture in place. This is spec S2 of the reference-CAD
+  interaction document. *Still open:* an action on the card — open the named
+  feature, undo, or retry at the last accepted value — beyond the existing
+  `Edit <Feature>`; and rewriting the kernel-adapter refusal strings that
+  reach users so none mention censuses, facets, or handles.
 
 ## Phase C — Feel
 
