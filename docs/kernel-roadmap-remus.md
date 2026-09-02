@@ -179,9 +179,16 @@ Ordered by product pull, not kernel-internal convenience.
 
 ### C1. The lineage bridge — biggest single capability multiplier
 
-Everything needed to convert the 11 hash-only lineage classes into tracked
-lineage. ADR-013 already specifies the contract (five bridge requirements);
-the kernel's RFC 0003 stack means most of the machinery exists. Remaining:
+Everything needed to convert the remaining hash-only lineage classes into
+tracked lineage. ADR-013 already specifies the contract (five bridge
+requirements); the kernel's RFC 0003 stack means most of the machinery exists.
+*Landed 2026-09-02 without a kernel bridge:* booleans and add/cut extrudes
+publish carrier-derived lineage — a result face inherits an operand face's
+identity when both are the only faces on one quantized plane or cylinder
+(`deriveRemusBooleanCarrierLineage`, `test/boolean-carrier-lineage.test.ts`);
+a tool cap on the target's own plane yields to the target face by
+construction. Shared carriers (flush caps fused into one) and split faces (a
+slot through a top) still need the history path below. Remaining:
 
 - **Kernel:** evolution through the production post-processing path — either
   `unifyFacesWithEvolution` or journaled unify (ADR-013 item 2; for two
