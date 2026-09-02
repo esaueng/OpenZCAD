@@ -857,7 +857,10 @@ interface OffsetPreviewCandidate {
   document: ProjectDocument;
   offset: number;
   bodyId: BodyId;
+  /** The very command the preview applied, so a commit can reuse its ids. */
+  command: AnyCommand;
   label: string;
+  successMessage: string;
   baseProjectId: ProjectDocument['projectId'];
   baseVersion: number;
   validationTargets?: AffectedFeatureTarget[];
@@ -871,6 +874,16 @@ interface RegionExtrudePreviewCandidate {
   label: string;
   baseProjectId: ProjectDocument['projectId'];
   baseVersion: number;
+}
+
+/**
+ * The last exact offset preview that passed, kept so releasing the handle at
+ * that value commits the same command with the same rebuild instead of
+ * waiting for — and possibly being refused by — a second one.
+ */
+interface ReusableOffsetPreview {
+  candidate: OffsetPreviewCandidate;
+  derived: ProjectDocument['derived'];
 }
 
 interface OffsetPreviewResult {
@@ -1598,6 +1611,7 @@ export function App() {
   keypadRef.current = keypad;
   /** Latest pointer/entry value stays transient until an exact frame lands. */
   const offsetPreviewValueRef = useRef<number | null>(null);
+  const reusableOffsetPreviewRef = useRef<ReusableOffsetPreview | null>(null);
   /**
    * True once a gesture's rebuilds became too slow to keep previewing. The
    * handle keeps moving; the geometry does not, and the value chip says so.
@@ -1893,7 +1907,9 @@ export function App() {
               document: plan.command.apply(base),
               offset,
               bodyId: plan.bodyId,
+              command: plan.command,
               label: plan.command.label,
+              successMessage: plan.successMessage,
               baseProjectId: base.projectId,
               baseVersion: base.version,
               ...(plan.validationTargets
@@ -1922,17 +1938,23 @@ export function App() {
       },
       publish: (preview) => {
         if (!preview) {
+          reusableOffsetPreviewRef.current = null;
           setPreviewDoc(null);
           setRenderedOffsetPreview(null);
           return;
         }
         if (preview.derived.rejection) {
+          reusableOffsetPreviewRef.current = null;
           reportOffsetPreviewFailure(
             preview.derived.rejection.message,
             preview.document.offset
           );
           return;
         }
+        reusableOffsetPreviewRef.current = {
+          candidate: preview.document,
+          derived: preview.derived.derived
+        };
         setPreviewDoc({
           ...preview.document.document,
           derived: preview.derived.derived
@@ -11102,15 +11124,36 @@ export function App() {
       reportOffsetPreviewFailure(plan.preflightRejection, offset);
       return false;
     }
+    // Releasing at the value the last passing preview showed commits that
+    // preview's own command and rebuild. A fresh plan would carry new feature
+    // ids, so it could neither hit the worker cache nor be reused here.
+    const reusable = reusableOffsetPreviewRef.current;
+    const live = managerRef.current?.document;
+    const reuse =
+      exact === undefined &&
+      reusable !== null &&
+      live !== undefined &&
+      reusable.candidate.offset === offset &&
+      reusable.candidate.baseProjectId === live.projectId &&
+      reusable.candidate.baseVersion === live.version
+        ? reusable
+        : null;
     offsetPreview.clear();
     offsetPreviewValueRef.current = null;
     void executeValidatedDirectEdit(
-      plan.command,
-      plan.bodyId,
-      plan.successMessage,
+      reuse ? reuse.candidate.command : plan.command,
+      reuse ? reuse.candidate.bodyId : plan.bodyId,
+      reuse ? reuse.candidate.successMessage : plan.successMessage,
       offset,
       undefined,
-      plan.validationTargets
+      reuse ? reuse.candidate.validationTargets : plan.validationTargets,
+      reuse
+        ? {
+            baseProjectId: reuse.candidate.baseProjectId,
+            baseVersion: reuse.candidate.baseVersion,
+            derived: reuse.derived
+          }
+        : undefined
     );
     return true;
   }

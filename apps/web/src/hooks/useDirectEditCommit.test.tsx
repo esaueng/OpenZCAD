@@ -25,7 +25,11 @@ function body(bodyId: BodyId, name: string): BodyRepresentation {
     color: '#56b4e9',
     consumed: false,
     exportableStep: true,
-    mesh: { kind: 'mesh', vertices: Float32Array.from([]), indices: Uint32Array.from([]) },
+    mesh: {
+      kind: 'mesh',
+      vertices: Float32Array.from([]),
+      indices: Uint32Array.from([])
+    },
     faceCount: 3,
     volume: 1,
     bbox: {
@@ -123,6 +127,94 @@ describe('direct manipulation commit', () => {
     });
   });
 
+  it('reuses a preview rebuild only while the document is the one it measured', async () => {
+    const { sourceBodyId, sourceFeature, fillet } = filletedCylinder();
+    const manager = new CommandManager(fillet.document);
+    const command = commandFactories.updateFeature(
+      {
+        featureId: sourceFeature.featureId,
+        data: { dimensions: { radius: 6.4 } }
+      },
+      'Resize Cylinder Radius'
+    );
+    const derivedFor = (
+      candidate: ProjectDocument
+    ): ProjectDocument['derived'] => ({
+      bodyRepresentations: {
+        [sourceBodyId]: body(sourceBodyId, 'Cylinder'),
+        [fillet.bodyId]: body(fillet.bodyId, 'Two rim fillet')
+      },
+      exportableBodyIds: [fillet.bodyId],
+      warnings: [],
+      updatedAt: candidate.derived.updatedAt
+    });
+    const derive = vi.fn(async (candidate: ProjectDocument) =>
+      derivedFor(candidate)
+    );
+    const { result } = renderHook(() =>
+      useDirectEditCommit({
+        manager: () => manager,
+        derive,
+        commit: (candidate) => {
+          manager.execute(candidate);
+          return true;
+        },
+        onValidationStart: vi.fn(),
+        onValidationFailed: vi.fn(),
+        onCommitted: vi.fn(),
+        onBusy: vi.fn(),
+        onStatus: vi.fn()
+      })
+    );
+
+    // Same project and version as the preview measured: no second rebuild.
+    const precomputed = {
+      baseProjectId: manager.document.projectId,
+      baseVersion: manager.document.version,
+      derived: derivedFor(manager.document)
+    };
+    let applied = false;
+    await act(async () => {
+      applied = await result.current.run(
+        command,
+        fillet.bodyId,
+        'Adjusted cylinder radius.',
+        6.4,
+        undefined,
+        undefined,
+        precomputed
+      );
+    });
+    expect(applied).toBe(true);
+    expect(derive).not.toHaveBeenCalled();
+
+    // The document moved on since the preview: the stale rebuild is ignored
+    // and the commit is measured afresh.
+    manager.undo();
+    manager.execute(
+      commandFactories.updateFeature(
+        {
+          featureId: sourceFeature.featureId,
+          data: { dimensions: { height: 14 } }
+        },
+        'Resize Cylinder Height'
+      )
+    );
+    await act(async () => {
+      applied = await result.current.run(
+        command,
+        fillet.bodyId,
+        'Adjusted cylinder radius.',
+        6.4,
+        undefined,
+        undefined,
+        precomputed
+      );
+    });
+    expect(applied).toBe(true);
+    expect(derive).toHaveBeenCalledTimes(1);
+  });
+
   it('reports a downstream blend failure without changing document history', async () => {
     const { sourceBodyId, sourceFeature, fillet, filletFeature } =
       filletedCylinder();
@@ -204,9 +296,11 @@ describe('direct manipulation commit', () => {
     // handle that caused it, and the status line is not handed a second copy
     // that can go stale while the value moves on.
     expect(
-      onStatus.mock.calls.flat().filter((message) =>
-        String(message).includes('Fillet could not be created')
-      )
+      onStatus.mock.calls
+        .flat()
+        .filter((message) =>
+          String(message).includes('Fillet could not be created')
+        )
     ).toEqual([]);
   });
 
