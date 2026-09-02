@@ -8561,6 +8561,27 @@ export function App() {
     return true;
   }
 
+  /** Whether a face or edge pick names topology the current derived state holds. */
+  function selectionResolvesInDerived(
+    document: ProjectDocument,
+    selection: TopologySelection
+  ): boolean {
+    const topology =
+      document.derived.bodyRepresentations[selection.bodyId]?.topology;
+    if (!topology) {
+      return false;
+    }
+    const matches = (candidate: { topologyId: string; hash: number }) =>
+      (selection.topologyId !== undefined &&
+        candidate.topologyId === selection.topologyId) ||
+      (selection.hash !== undefined && candidate.hash === selection.hash);
+    return selection.kind === 'face'
+      ? topology.faces.some(matches)
+      : selection.kind === 'edge'
+        ? topology.edges.some(matches)
+        : false;
+  }
+
   function handleSelectTopologyFromViewer(
     selection: TopologySelection | null,
     additive: boolean,
@@ -8585,7 +8606,18 @@ export function App() {
       }
       return;
     }
-    if (selection.kind !== 'body' && !exactGeometryReady) {
+    // A rebuild in flight does not make what is on screen unpickable. The
+    // viewer draws `doc.derived`, so a face or edge that resolves there is a
+    // real pick of real geometry; selecting it is viewport state, and every
+    // command that later captures it re-checks readiness and re-resolves the
+    // topology itself. Only a pick that resolves nowhere is refused — that is
+    // a stale hit, not a slow one. Starting a sketch on the face is the one
+    // pick that is itself a command, so it keeps waiting for the rebuild.
+    if (
+      selection.kind !== 'body' &&
+      !exactGeometryReady &&
+      (tool === 'sketch' || !selectionResolvesInDerived(doc, selection))
+    ) {
       setStatus(
         'Exact geometry is still rebuilding. Topology actions are temporarily unavailable.'
       );
