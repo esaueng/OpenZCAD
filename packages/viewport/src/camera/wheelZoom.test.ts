@@ -8,16 +8,27 @@ import {
   wheelDeltaToLogScale
 } from './wheelZoom';
 
-function settleAt(frameMs: number, impulse: number): number {
+const REFRESH_RATES_HZ = [30, 60, 120];
+
+/** Drains one impulse at a fixed frame period and returns every step taken. */
+function drainAt(
+  frameMs: number,
+  impulse: number,
+  reducedMotion = false
+): number[] {
   let pending = impulse;
-  let applied = 0;
+  const steps: number[] = [];
   for (let frame = 0; frame < 240 && pending !== 0; frame += 1) {
-    const step = advanceWheelZoom(pending, frameMs, false);
-    applied += step.appliedLogScale;
+    const step = advanceWheelZoom(pending, frameMs, reducedMotion);
+    steps.push(step.appliedLogScale);
     pending = step.remainingLogScale;
   }
   expect(pending).toBe(0);
-  return applied;
+  return steps;
+}
+
+function settleAt(frameMs: number, impulse: number): number {
+  return drainAt(frameMs, impulse).reduce((sum, step) => sum + step, 0);
 }
 
 describe('wheel zoom', () => {
@@ -77,11 +88,48 @@ describe('wheel zoom', () => {
     const smooth = advanceWheelZoom(0.8, 1000 / 60, false);
     expect(Math.abs(smooth.appliedLogScale)).toBeLessThanOrEqual(0.05 + 1e-12);
     expect(smooth.remainingLogScale).toBeGreaterThan(0);
-    expect(advanceWheelZoom(-0.8, 1000 / 60, true)).toEqual({
-      appliedLogScale: -0.8,
-      remainingLogScale: 0
-    });
   });
+
+  it.each(REFRESH_RATES_HZ)(
+    'bounds every rendered step at %d Hz and still lands exactly',
+    (hz) => {
+      const frameMs = 1000 / hz;
+      const impulse = -0.8;
+      const steps = drainAt(frameMs, impulse);
+      const perFrameCap = 3 * (frameMs / 1000) + 1e-12;
+      expect(steps.length).toBeGreaterThan(1);
+      for (const step of steps) {
+        // Monotonic: no step ever moves against the burst.
+        expect(step).toBeLessThanOrEqual(0);
+        expect(Math.abs(step)).toBeLessThanOrEqual(perFrameCap);
+      }
+      expect(steps.reduce((sum, step) => sum + step, 0)).toBeCloseTo(
+        impulse,
+        12
+      );
+    }
+  );
+
+  it.each(REFRESH_RATES_HZ)(
+    'reduced motion ramps at a constant bounded rate at %d Hz',
+    (hz) => {
+      const frameMs = 1000 / hz;
+      const impulse = 0.8;
+      const steps = drainAt(frameMs, impulse, true);
+      const perFrameCap = 6 * (frameMs / 1000);
+      // A burst never lands in one frame: that was the original defect.
+      expect(steps.length).toBe(Math.ceil(impulse / perFrameCap));
+      for (const step of steps.slice(0, -1)) {
+        expect(step).toBeCloseTo(perFrameCap, 12);
+      }
+      expect(steps.at(-1)).toBeGreaterThan(0);
+      expect(steps.at(-1)).toBeLessThanOrEqual(perFrameCap + 1e-12);
+      expect(steps.reduce((sum, step) => sum + step, 0)).toBeCloseTo(
+        impulse,
+        12
+      );
+    }
+  );
 
   it('keeps a perspective pointer anchor fixed while changing distance', () => {
     const camera = new THREE.PerspectiveCamera(45, 16 / 9, 0.1, 4000);
