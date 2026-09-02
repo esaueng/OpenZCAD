@@ -36,7 +36,7 @@ let adapter: ExactKernelAdapter;
 
 beforeAll(async () => {
   adapter = await createExactKernelAdapter();
-}, 30_000);
+}, 60_000);
 
 afterAll(() => {
   adapter.dispose();
@@ -121,7 +121,9 @@ const boss: SketchObjectData = {
   centerY: 12
 };
 
-describe('boolean carrier lineage', () => {
+// The 2-core CI runners rebuild these solids several times slower than a
+// workstation; the budget is per test, not per file.
+describe('boolean carrier lineage', { timeout: 120_000 }, () => {
   it('keeps the plate and the boss named through an add extrude', async () => {
     const { document: base, plateId } = plateDocument();
     const { document, bodyId } = toolOnTop(base, plateId, boss, 8, 'add');
@@ -136,20 +138,19 @@ describe('boolean carrier lineage', () => {
     for (const face of faces) {
       expect(face.reference?.currentHash).toBe(face.hash);
     }
-    const plateFeature = listFeaturesInOrder(document).find(
-      (feature) => feature.name === 'Plate'
-    )!;
+    // Names carry the operand's slot in the command, never a document id:
+    // the same history rebuilt in another document reads the same.
     const [top] = planarFace(faces, { x: 0, y: 0, z: 1 }, DEPTH);
     expect(top?.reference?.lineageName).toBe(
-      `boolean.face.${plateFeature.featureId}.primitive.box.face.z-max`
+      'boolean.face.target.primitive.box.face.z-max'
     );
     const [cap] = planarFace(faces, { x: 0, y: 0, z: 1 }, DEPTH + 8);
     expect(cap?.reference?.lineageName).toMatch(
-      /^boolean\.face\.feat_[^.]+\.sweep\.face\.cap\.end\.region\./
+      /^boolean\.face\.tool\.sweep\.face\.cap\.end\.region\./
     );
     const [wall] = planarFace(faces, { x: 0, y: -1, z: 0 }, -9);
     expect(wall?.reference?.lineageName).toMatch(
-      /^boolean\.face\.feat_[^.]+\.sweep\.face\.side\.region\./
+      /^boolean\.face\.tool\.sweep\.face\.side\.region\./
     );
   });
 
@@ -271,9 +272,13 @@ describe('boolean carrier lineage', () => {
     const faces = facesOf(derived, bodyId);
     // Unique carriers: the plate's far end, the post's top.
     const [plateEnd] = planarFace(faces, { x: 1, y: 0, z: 0 }, WIDTH);
-    expect(plateEnd?.reference?.lineageName).toMatch(/primitive\.box\.face\.x-max$/);
+    expect(plateEnd?.reference?.lineageName).toBe(
+      'boolean.face.operand.0.primitive.box.face.x-max'
+    );
     const [postTop] = planarFace(faces, { x: 0, y: 0, z: 1 }, 30);
-    expect(postTop?.reference?.lineageName).toMatch(/primitive\.box\.face\.z-max$/);
+    expect(postTop?.reference?.lineageName).toBe(
+      'boolean.face.operand.1.primitive.box.face.z-max'
+    );
     // Shared carriers: both boxes stand on y = 0 and on z = 0, so the fused
     // faces there have two named sources and get no name.
     const [front] = planarFace(faces, { x: 0, y: -1, z: 0 }, 0);

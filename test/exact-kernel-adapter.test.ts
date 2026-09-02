@@ -1203,14 +1203,38 @@ describe('exact kernel adapter', { timeout: 30_000 }, () => {
     // Coplanar boolean fragments inflate this to fourteen faces and render
     // false seams in the shaded-with-edges viewport.
     expect(body?.faceCount).toBe(8);
-    expect(body?.topology?.lineageDiagnostics).toContainEqual(
+    // Boolean lineage is carrier-derived (ADR-013's analytic subset, see
+    // test/boolean-carrier-lineage.test.ts). The two plates share the x = 0,
+    // x = 40 and y = 30 planes, so the three fused faces there have two named
+    // sources each and stay hash-only, with a diagnostic per carrier; every
+    // other face is the only one on its plane and keeps its operand's name.
+    const diagnostics = body?.topology?.lineageDiagnostics ?? [];
+    expect(
+      diagnostics.filter(
+        (entry) =>
+          entry.kind === 'face' &&
+          /shared by 2 named operand faces/.test(entry.message)
+      )
+    ).toHaveLength(3);
+    expect(diagnostics).not.toContainEqual(
       expect.objectContaining({ kind: 'body', status: 'hash-only' })
     );
+    const faces = body?.topology?.faces ?? [];
+    const named = faces.filter((face) => face.reference !== undefined);
+    expect(named).toHaveLength(5);
+    const front = faces.find(
+      (face) =>
+        face.geometry?.surfaceType === 'plane' &&
+        Math.abs((face.geometry.normal?.y ?? 0) + 1) < 1e-9 &&
+        Math.abs(face.geometry.center.y) < 1e-9
+    );
+    // The base plate is the union's first operand.
+    expect(front?.reference?.lineageName).toBe(
+      'boolean.face.operand.0.primitive.box.face.y-min'
+    );
+    // Edges are not carried through a boolean.
     expect(
-      [
-        ...(body?.topology?.faces ?? []),
-        ...(body?.topology?.edges ?? [])
-      ].every((entry) => entry.reference === undefined)
+      (body?.topology?.edges ?? []).every((edge) => edge.reference === undefined)
     ).toBe(true);
 
     const step = await adapter.exportStep(document, [resultId]);
