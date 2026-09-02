@@ -130,7 +130,7 @@
   grid-auto-flow: column;
   grid-auto-columns: max-content;
   align-items: center;
-  gap: var(--sp-2);
+  gap: 2px;
   margin-left: auto;
 }
 
@@ -184,40 +184,6 @@
   align-items: center;
   gap: 6px;
   list-style: none;
-}
-
-.file-menu > summary {
-  width: auto;
-  gap: 5px;
-  padding: 0 8px;
-  font-size: var(--fs-xs);
-}
-
-/* One size for the whole action row: the chips read as a set, and a set
-   with three widths reads as three misaligned buttons. Sized for the widest
-   routine label ("Local only"); the rare decision states may still grow.
-   Kept at single-class specificity so the narrow-screen rules, which
-   collapse these to 28px icons, still win. */
-.account-state,
-.save-state,
-.collaboration-state,
-.file-menu > summary {
-  width: auto;
-  min-width: 110px;
-  min-height: 30px;
-  justify-content: center;
-}
-
-/* `.secondary` is imported after this sheet, so the settings chip needs the
-   extra specificity to take the row's size over the generic button's. */
-.topbar-actions .settings-action {
-  width: auto;
-  min-width: 110px;
-  min-height: 30px;
-  gap: 5px;
-  padding: 0 8px;
-  justify-content: center;
-  font-size: var(--fs-xs);
 }
 
 .artifact-menu > summary::-webkit-details-marker,
@@ -430,6 +396,106 @@
 .collaboration-state.oversize {
   color: var(--color-warning);
 }
+
+/* ── Action row: a quiet toolbar ──
+   Icon + label sitting directly on the bar, no chip boxes. Save and
+   collaboration are readouts and lean on colour (green live, amber when
+   something needs a look); File and Settings are commands in full text
+   colour. Hover brings a surface back so the targets still read as buttons.
+   Below 1120px the row collapses to 28px icon squares (responsive.css).
+   Declared after every per-chip rule above so single-class specificity
+   wins here; the settings chip carries `.topbar-actions` because
+   `.secondary` is imported after this sheet. */
+.account-state,
+.save-state,
+.collaboration-state,
+.file-menu > summary,
+.topbar-actions .settings-action {
+  width: auto;
+  min-width: 0;
+  height: 24px;
+  min-height: 24px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  padding: 0 7px;
+  color: var(--color-text-muted);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  font-family: var(--font-ui);
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-medium);
+  white-space: nowrap;
+}
+
+.file-menu > summary,
+.topbar-actions .settings-action {
+  color: var(--color-text);
+}
+
+.save-state:hover:not(:disabled),
+.save-state:focus-visible,
+.collaboration-state:hover:not(:disabled),
+.collaboration-state:focus-visible,
+.file-menu > summary:hover,
+.file-menu[open] > summary,
+.topbar-actions .settings-action:hover {
+  background: var(--color-surface-2);
+  border-color: var(--color-border);
+}
+
+/* The decision states keep their colour; on a borderless item the coloured
+   border they used to draw would read as a chip popping into existence. */
+.save-state.is-conflict,
+.save-state.is-repair,
+.save-state.is-refused,
+.save-state.is-local-source,
+.save-state.is-device-failed {
+  border-color: transparent;
+}
+
+/* Hairline between the two readouts and the two commands. */
+.topbar-actions .file-menu {
+  margin-left: 8px;
+}
+
+.topbar-actions .file-menu::before {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: -5px;
+  width: 1px;
+  height: 14px;
+  background: var(--color-border);
+  transform: translateY(-50%);
+}
+
+/* Live count for the icon-only row; the label carries it everywhere else. */
+.collaboration-state {
+  position: relative;
+}
+
+.live-badge {
+  display: none;
+  position: absolute;
+  top: -5px;
+  right: -5px;
+  min-width: 14px;
+  height: 14px;
+  padding: 0 3px;
+  place-items: center;
+  border-radius: 999px;
+  color: var(--color-on-accent);
+  background: var(--color-success);
+  box-shadow: 0 0 0 2px var(--color-surface);
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  font-weight: var(--fw-medium);
+  line-height: 1;
+}
+
 
 .spin {
   animation: spin 0.9s linear infinite;
