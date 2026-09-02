@@ -240,8 +240,13 @@ describe('a verdict with warning attribution', () => {
         featureWarnings: [advisory, refusal],
         bodyPresent: true,
         documentMoved: false
-      })?.message
-    ).toBe('exact result dropped a requested operand.');
+      })
+    ).toMatchObject({
+      // The builder's own words lead only when a person wrote them; a
+      // kernel-style sentence is put plainly and kept as detail.
+      message: 'The exact kernel could not build this result.',
+      detail: 'exact result dropped a requested operand.'
+    });
   });
 
   it('keeps an imported-STEP validation warning visible without refusing it', () => {
