@@ -139,7 +139,7 @@ export function StatusBar({
         >
           <span>
             <b>warnings</b>
-            {warningCount}
+            <StableLabel reserve={['99']}>{warningCount}</StableLabel>
           </span>
           <span
             title={`${workspaceSummary} · rev ${documentVersion ?? '—'}`}
