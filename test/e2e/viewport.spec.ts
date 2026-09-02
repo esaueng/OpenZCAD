@@ -427,6 +427,54 @@ test('the wheel zooms toward the pointer, and the preference turns it off', asyn
   expect(centreTravel).toBeLessThan(0.01);
 });
 
+test('a wheel notch over viewport chrome zooms without scrolling the page', async ({
+  page
+}) => {
+  await stubApi(page);
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('Contained Wheel Part');
+  await page.getByRole('button', { name: 'Create project' }).click();
+
+  const canvas = page.locator('.viewer-host canvas');
+  const railButton = page.getByRole('button', { name: 'Fit view (F)' });
+  await expect(canvas).toHaveAttribute('data-e2e-camera-distance', /.+/);
+  await expect(railButton).toBeVisible({ timeout: 30_000 });
+
+  // Make the browser page scrollable so an unhandled wheel event has a visible
+  // default action. The production shell normally sits at scrollTop 0, where
+  // the same leak presents as elastic/rubber-band movement instead.
+  await page.evaluate(() => {
+    document.documentElement.style.overflowY = 'auto';
+    document.body.style.minHeight = '200vh';
+    window.scrollTo(0, 160);
+  });
+  await expect.poll(() => page.evaluate(() => window.scrollY)).toBe(160);
+
+  const before = await readLiveCamera(canvas);
+  const buttonBox = await railButton.boundingBox();
+  expect(buttonBox).not.toBeNull();
+  await page.mouse.move(
+    buttonBox!.x + buttonBox!.width / 2,
+    buttonBox!.y + buttonBox!.height / 2
+  );
+  await page.mouse.wheel(0, -120);
+  await waitForZoomToSettle(canvas);
+
+  const after = await readLiveCamera(canvas);
+  const beforeDistance = Math.hypot(
+    before.position[0]! - before.target[0]!,
+    before.position[1]! - before.target[1]!,
+    before.position[2]! - before.target[2]!
+  );
+  const afterDistance = Math.hypot(
+    after.position[0]! - after.target[0]!,
+    after.position[1]! - after.target[1]!,
+    after.position[2]! - after.target[2]!
+  );
+  expect(afterDistance).toBeLessThan(beforeDistance);
+  expect(await page.evaluate(() => window.scrollY)).toBe(160);
+});
+
 test('a batched trackpad pinch renders as bounded zoom steps', async ({
   page
 }) => {
