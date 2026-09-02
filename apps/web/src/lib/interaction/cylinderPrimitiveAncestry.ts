@@ -10,6 +10,8 @@ import {
 
 /** Primitive dimension a face drag on a derived body can still drive. */
 type CylinderDimension = 'radius' | 'height';
+type BoxDimension = 'width' | 'height' | 'depth';
+type BoxAxis = 'x' | 'y' | 'z';
 
 /**
  * The top cap under both lineage vocabularies that can name one: a bare
@@ -21,7 +23,7 @@ const TOP_CAP_LINEAGE_NAMES = new Set([
   'modifier.cylinder.face.cap.end'
 ]);
 
-interface CylinderPrimitiveChain {
+interface PrimitiveChain {
   primitive: FeatureNode;
   /** Features whose lineage may legitimately name a face on the picked body. */
   publishers: Set<FeatureId>;
@@ -44,11 +46,12 @@ interface CylinderPrimitiveChain {
  * an absolute-radius wall resize above all — remains a hard boundary,
  * because its recorded measurements pin the pre-edit geometry.
  */
-function cylinderPrimitiveChain(
+function primitiveChain(
   document: ProjectDocument,
   selectedBodyId: BodyId,
-  dimension: CylinderDimension
-): CylinderPrimitiveChain | null {
+  primitiveKind: 'cylinder' | 'box',
+  dimension: CylinderDimension | BoxDimension
+): PrimitiveChain | null {
   const features = listFeaturesInOrder(document);
   const producerByBodyId = new Map(
     features.flatMap((feature) =>
@@ -70,7 +73,7 @@ function cylinderPrimitiveChain(
     publishers.add(producer.featureId);
     if (
       producer.data.featureKind === 'primitive' &&
-      producer.data.primitiveKind === 'cylinder' &&
+      producer.data.primitiveKind === primitiveKind &&
       typeof producer.data.dimensions[dimension] === 'number'
     ) {
       primitive = producer;
@@ -120,8 +123,10 @@ export function primitiveCylinderRadiusAncestor(
   document: ProjectDocument,
   selectedBodyId: BodyId
 ): FeatureNode | null {
-  return cylinderPrimitiveChain(document, selectedBodyId, 'radius')?.primitive
-    ?? null;
+  return (
+    primitiveChain(document, selectedBodyId, 'cylinder', 'radius')?.primitive ??
+    null
+  );
 }
 
 /**
@@ -157,8 +162,60 @@ export function primitiveCylinderHeightAncestor(
   ) {
     return null;
   }
-  const chain = cylinderPrimitiveChain(document, selectedBodyId, 'height');
+  const chain = primitiveChain(document, selectedBodyId, 'cylinder', 'height');
   return chain?.publishers.has(faceReference.producingFeatureId)
     ? chain.primitive
+    : null;
+}
+
+/** `makeBox(width, height, depth)` lays those along x, y, z in that order. */
+const BOX_DIMENSION_BY_AXIS: Record<BoxAxis, BoxDimension> = {
+  x: 'width',
+  y: 'height',
+  z: 'depth'
+};
+
+/**
+ * Both vocabularies that name a box side: the primitive's own roles and the
+ * roles the kernel republishes for a filleted or chamfered box.
+ */
+const BOX_SIDE_LINEAGE =
+  /^(?:primitive|modifier)\.box\.face\.([xyz])-(min|max)$/;
+
+export interface BoxFaceAncestor {
+  primitive: FeatureNode;
+  dimension: BoxDimension;
+  axis: BoxAxis;
+  side: 'min' | 'max';
+}
+
+/**
+ * The box primitive whose side a planar face drag should resize.
+ *
+ * Same contract as {@link primitiveCylinderHeightAncestor}: identity is
+ * proven by a v5 role published by a feature in the walked chain, never by
+ * geometry. The box is anchored at its minimum corner, so only a `max` side
+ * moves under a pure dimension edit; the caller decides what a `min` side
+ * falls back to.
+ */
+export function primitiveBoxFaceAncestor(
+  document: ProjectDocument,
+  selectedBodyId: BodyId,
+  faceReference: FaceTopologyReferenceV5 | undefined,
+  faceHash: number
+): BoxFaceAncestor | null {
+  if (!faceReference || faceReference.currentHash !== faceHash) {
+    return null;
+  }
+  const match = BOX_SIDE_LINEAGE.exec(faceReference.lineageName);
+  if (!match) {
+    return null;
+  }
+  const axis = match[1] as BoxAxis;
+  const side = match[2] as 'min' | 'max';
+  const dimension = BOX_DIMENSION_BY_AXIS[axis];
+  const chain = primitiveChain(document, selectedBodyId, 'box', dimension);
+  return chain?.publishers.has(faceReference.producingFeatureId)
+    ? { primitive: chain.primitive, dimension, axis, side }
     : null;
 }
