@@ -89,7 +89,6 @@ import type {
   FeatureId,
   FeatureNode,
   FaceGeometry,
-  FaceTopology,
   ParamValue,
   ProjectCheckpoint,
   PlaneId,
@@ -355,7 +354,6 @@ import {
   supportsRadialCylinderPreview
 } from './lib/interaction/cylinderRadius';
 import {
-  primitiveCylinderHeightAncestor,
   primitiveCylinderRadiusAncestor
 } from './lib/interaction/cylinderPrimitiveAncestry';
 import {
@@ -384,6 +382,10 @@ import {
   toolCardFor,
   type FaceTarget
 } from './lib/interaction/machine';
+import {
+  faceOffsetBaseline,
+  planFaceOffset
+} from './lib/interaction/faceOffsetPlan';
 import { updateProfileSelection } from './lib/profileSelection';
 import {
   isEntityWideProfileSource,
@@ -9984,20 +9986,14 @@ export function App() {
     if (target.surfaceType !== 'planar') {
       return null;
     }
-    const primitive =
+    const totalBaseline =
       doc && target.hash !== undefined
-        ? primitiveCylinderHeightAncestor(
+        ? faceOffsetBaseline(
             doc,
             target.bodyId as BodyId,
-            target.reference,
+            { reference: target.reference },
             target.hash
           )
-        : null;
-    const totalBaseline =
-      primitive?.data.featureKind === 'primitive' &&
-      primitive.data.primitiveKind === 'cylinder' &&
-      typeof primitive.data.dimensions.height === 'number'
-        ? primitive.data.dimensions.height
         : undefined;
     return {
       bodyId: target.bodyId,
@@ -10841,64 +10837,6 @@ export function App() {
    * regenerates at the new rim, which is what keeping the modifier in history
    * is for. Anything unproven stays on the generic offset.
    */
-  function buildCylinderHeightCommand(
-    face: FaceTopology,
-    faceHash: number,
-    bodyId: BodyId,
-    offset: number,
-    exact?: ParamValue,
-    baseDocument?: ProjectDocument
-  ): {
-    command: AnyCommand;
-    sourceFeatureId: FeatureId;
-    height: number;
-  } | null {
-    const base = baseDocument ?? managerRef.current?.document;
-    if (!base || Math.abs(offset) <= 1e-9) {
-      return null;
-    }
-    const primitive = primitiveCylinderHeightAncestor(
-      base,
-      bodyId,
-      face.reference,
-      faceHash
-    );
-    const dimensions =
-      primitive?.data.featureKind === 'primitive'
-        ? primitive.data.dimensions
-        : null;
-    // The ancestry only resolves against a numeric height; narrowing here
-    // keeps that guarantee visible instead of casting it away.
-    if (!primitive || !dimensions || typeof dimensions.height !== 'number') {
-      return null;
-    }
-    // The drag was measured along the cap's outward normal, which is the
-    // primitive's own axis direction whatever rigid placement it sits under,
-    // so the gesture is a signed delta on the stored height. `offset` is the
-    // evaluated distance even when `exact` is a typed expression; composing
-    // keeps that expression live in the document.
-    const height = dimensions.height + offset;
-    return {
-      command: commandFactories.updateFeature(
-        {
-          featureId: primitive.featureId,
-          data: {
-            dimensions: {
-              ...dimensions,
-              height:
-                typeof exact === 'string'
-                  ? `${dimensions.height} + (${exact})`
-                  : Math.round(height * 1000) / 1000
-            }
-          }
-        },
-        'Resize Cylinder Height'
-      ),
-      sourceFeatureId: primitive.featureId,
-      height
-    };
-  }
-
   function buildOffsetEditPlan(
     offset: number,
     exact?: ParamValue,
@@ -10911,67 +10849,41 @@ export function App() {
     }
     const target = current.target;
     const bodyId = target.bodyId as BodyId;
-    const faceTopology = base.derived.bodyRepresentations[
-      bodyId
-    ]?.topology?.faces.find(
-      (face) =>
-        face.topologyId === target.topologyId ||
-        (target.hash !== undefined && face.hash === target.hash)
+    const face = base.derived.bodyRepresentations[bodyId]?.topology?.faces.find(
+      (candidate) =>
+        candidate.topologyId === target.topologyId ||
+        (target.hash !== undefined && candidate.hash === target.hash)
     );
-    const geometry = faceTopology?.geometry;
-    if (
-      !faceTopology ||
-      geometry?.surfaceType !== 'plane' ||
-      target.hash === undefined
-    ) {
+    if (!face || target.hash === undefined) {
       return null;
     }
-    const heightPlan = buildCylinderHeightCommand(
-      faceTopology,
-      target.hash,
+    const plan = planFaceOffset({
+      document: base,
       bodyId,
+      face,
+      faceHash: target.hash,
       offset,
-      exact,
-      base
-    );
-    if (heightPlan) {
+      ...(exact === undefined ? {} : { exact })
+    });
+    if (!plan) {
+      return null;
+    }
+    if (plan.kind === 'primitive-dimension') {
       return {
-        command: heightPlan.command,
+        command: plan.command,
         bodyId,
-        successMessage: `Cylinder height set to ${formatNumber(heightPlan.height)} ${base.units}.`,
+        successMessage: `${plan.primitive.name} ${plan.dimension} set to ${formatNumber(plan.value)} ${base.units}.`,
         validationTargets: affectedFeatureTargets(
           base,
-          heightPlan.sourceFeatureId
+          plan.primitive.featureId
         ),
-        ...(heightPlan.height <= 0
-          ? {
-              preflightRejection:
-                'That distance would leave the cylinder with no height.'
-            }
+        ...(plan.preflightRejection
+          ? { preflightRejection: plan.preflightRejection }
           : {})
       };
     }
     return {
-      command: commandFactories.directEditBody({
-        name: 'Offset face',
-        targetBodyId: bodyId,
-        operation: {
-          kind: 'offset-face',
-          faceHash: target.hash,
-          ...(faceTopology.reference
-            ? { faceReference: faceTopology.reference }
-            : {}),
-          sourceSurfaceType: 'plane',
-          sourceArea: geometry.area,
-          sourceCenter: geometry.center,
-          sourceNormal: {
-            x: target.normal[0],
-            y: target.normal[1],
-            z: target.normal[2]
-          },
-          offset: exact ?? Math.round(offset * 1000) / 1000
-        }
-      }),
+      command: plan.command,
       bodyId,
       successMessage: `Offset face by ${Math.round(offset * 100) / 100} ${base.units}.`
     };
