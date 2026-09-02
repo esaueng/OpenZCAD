@@ -125,7 +125,19 @@ const CLOUD_SAVE_LABEL_RESERVE = saveStateLabels([
   'offline'
 ]);
 const DEVICE_SAVE_LABEL_RESERVE = saveStateLabels(['saving', 'local']);
-const COLLABORATION_LABEL_RESERVE = ['9 live', 'offline'];
+const COLLABORATION_LABEL_RESERVE = ['9 live', 'Offline'];
+/** Every room status as words, so no raw identifier ever reaches the bar. */
+const COLLABORATION_LABELS: Record<CollaborationStatus, string> = {
+  connecting: 'Connecting…',
+  live: 'Live',
+  offline: 'Offline',
+  conflict: 'Conflict',
+  oversize: 'Local only',
+  rejected: 'Not shared',
+  'read-only': 'Read-only',
+  'lease-denied': 'Edit locked',
+  'update-required': 'Update required'
+};
 const ACCOUNT_LABEL_RESERVE = ['Checking', 'Signed out'];
 
 export function TopBar({
@@ -212,6 +224,10 @@ export function TopBar({
     canExport
       ? `Export ${exportScope ?? 'all bodies'} as ${format}`
       : 'Create a body before exporting';
+  const collaborationLabel =
+    collaborationStatus === 'live'
+      ? `${collaboratorCount} live`
+      : COLLABORATION_LABELS[collaborationStatus];
   const accountLabel =
     accountState === 'checking'
       ? 'Checking'
@@ -365,7 +381,7 @@ export function TopBar({
           <button
             type="button"
             className={`collaboration-state ${collaborationStatus}`}
-            title={`Project sharing · collaboration: ${collaborationStatus}`}
+            title={`Project sharing · ${collaborationLabel}`}
             aria-label="Open project sharing"
             disabled={!projectName || !session}
             onClick={onOpenSharing}
@@ -379,17 +395,7 @@ export function TopBar({
               </span>
             ) : null}
             <StableLabel reserve={COLLABORATION_LABEL_RESERVE} align="center">
-              {collaborationStatus === 'live'
-                ? `${collaboratorCount} live`
-                : collaborationStatus === 'conflict'
-                  ? 'Conflict'
-                  : collaborationStatus === 'oversize'
-                    ? 'Local only'
-                    : collaborationStatus === 'rejected'
-                      ? 'Not shared'
-                      : collaborationStatus === 'update-required'
-                        ? 'Update required'
-                        : collaborationStatus}
+              {collaborationLabel}
             </StableLabel>
           </button>
         ) : null}
