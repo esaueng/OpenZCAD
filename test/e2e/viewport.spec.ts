@@ -30,6 +30,11 @@ async function readLiveCamera(canvas: Locator): Promise<CameraPose> {
   );
 }
 
+async function waitForZoomToSettle(canvas: Locator): Promise<void> {
+  await expect(canvas).toHaveAttribute('data-e2e-zoom-active', 'true');
+  await expect(canvas).toHaveAttribute('data-e2e-zoom-active', 'false');
+}
+
 /**
  * Standard views live behind the viewer rail's flyout rather than each having
  * a button of their own — the orientation cube is the primary way to navigate.
@@ -380,19 +385,7 @@ test('the wheel zooms toward the pointer, and the preference turns it off', asyn
     y: box!.y + box!.height * 0.3
   };
 
-  const target = async () =>
-    page.evaluate(() => {
-      const raw = localStorage.getItem('openzcad-workspace-session:v1');
-      const views = raw
-        ? (
-            JSON.parse(raw) as {
-              views?: Record<string, { camera: { target: number[] } }>;
-            }
-          ).views
-        : undefined;
-      const view = views ? Object.values(views)[0] : undefined;
-      return view ? view.camera.target : null;
-    });
+  const target = async () => (await readLiveCamera(canvas)).target;
 
   const wheelAtCursor = async () => {
     await page.mouse.move(cursor.x, cursor.y);
@@ -400,19 +393,16 @@ test('the wheel zooms toward the pointer, and the preference turns it off', asyn
       await page.mouse.wheel(0, -120);
       await page.waitForTimeout(80);
     }
-    await page.waitForTimeout(400);
+    await waitForZoomToSettle(canvas);
   };
 
-  await expect.poll(target).not.toBeNull();
   const before = await target();
-  expect(before).not.toBeNull();
   await wheelAtCursor();
   const after = await target();
-  expect(after).not.toBeNull();
   const travelled = Math.hypot(
-    after![0]! - before![0]!,
-    after![1]! - before![1]!,
-    after![2]! - before![2]!
+    after[0]! - before[0]!,
+    after[1]! - before[1]!,
+    after[2]! - before[2]!
   );
   expect(travelled).toBeGreaterThan(0.5);
 
@@ -430,11 +420,120 @@ test('the wheel zooms toward the pointer, and the preference turns it off', asyn
   await wheelAtCursor();
   const afterCentre = await target();
   const centreTravel = Math.hypot(
-    afterCentre![0]! - beforeCentre![0]!,
-    afterCentre![1]! - beforeCentre![1]!,
-    afterCentre![2]! - beforeCentre![2]!
+    afterCentre[0]! - beforeCentre[0]!,
+    afterCentre[1]! - beforeCentre[1]!,
+    afterCentre[2]! - beforeCentre[2]!
   );
   expect(centreTravel).toBeLessThan(0.01);
+});
+
+test('a batched trackpad pinch renders as bounded zoom steps', async ({
+  page
+}) => {
+  await stubApi(page);
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('Smooth Zoom Part');
+  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
+  await page
+    .getByRole('region', { name: 'Feature inspector' })
+    .getByRole('button', { name: /^Create/ })
+    .click();
+  await expectBodyCount(page, 1);
+
+  const canvas = page.locator('.viewer-host canvas');
+  await expect(canvas).toHaveAttribute('data-e2e-camera-distance', /.+/);
+  await page.getByRole('button', { name: 'Fit' }).click();
+  await page.waitForTimeout(600);
+
+  await canvas.evaluate((element) => {
+    type ZoomFrame = {
+      at: number;
+      distance: number;
+      orthographicZoom: number;
+      zooming: boolean;
+    };
+    const instrumented = element as HTMLCanvasElement & {
+      __zoomFrames?: ZoomFrame[];
+    };
+    instrumented.__zoomFrames = [
+      {
+        at: performance.now(),
+        distance: Number(element.dataset.e2eCameraDistance),
+        orthographicZoom: Number(element.dataset.e2eOrthographicZoom),
+        zooming: false
+      }
+    ];
+    element.addEventListener('openzcad:e2e-camera-frame', (event) => {
+      instrumented.__zoomFrames!.push((event as CustomEvent<ZoomFrame>).detail);
+    });
+
+    const rect = element.getBoundingClientRect();
+    for (let packet = 0; packet < 12; packet += 1) {
+      element.dispatchEvent(
+        new WheelEvent('wheel', {
+          bubbles: true,
+          cancelable: true,
+          clientX: rect.left + rect.width * 0.7,
+          clientY: rect.top + rect.height * 0.35,
+          ctrlKey: true,
+          deltaMode: WheelEvent.DOM_DELTA_PIXEL,
+          deltaY: -2
+        })
+      );
+    }
+  });
+
+  await expect
+    .poll(() =>
+      canvas.evaluate((element) => {
+        const frames = (
+          element as HTMLCanvasElement & {
+            __zoomFrames?: Array<{ zooming: boolean }>;
+          }
+        ).__zoomFrames;
+        const active = frames?.findIndex((frame) => frame.zooming) ?? -1;
+        return (
+          active >= 0 &&
+          frames!.slice(active + 1).some((frame) => !frame.zooming)
+        );
+      })
+    )
+    .toBe(true);
+
+  const frames = await canvas.evaluate((element) =>
+    (
+      element as HTMLCanvasElement & {
+        __zoomFrames: Array<{
+          at: number;
+          distance: number;
+          zooming: boolean;
+        }>;
+      }
+    ).__zoomFrames.filter(
+      (frame, index, all) =>
+        index === 0 || frame.distance !== all[index - 1]!.distance
+    )
+  );
+  expect(frames.length).toBeGreaterThan(4);
+
+  const initialDistance = frames[0]!.distance;
+  const finalDistance = frames.at(-1)!.distance;
+  const cumulativeLogStep = Math.abs(Math.log(finalDistance / initialDistance));
+  // Twelve tiny pinch packets retain their existing adaptive scale; only
+  // their presentation is spread across bounded rendered frames.
+  expect(cumulativeLogStep).toBeGreaterThan(0.12);
+  expect(cumulativeLogStep).toBeLessThan(0.14);
+  for (let index = 1; index < frames.length; index += 1) {
+    const previous = frames[index - 1]!;
+    const current = frames[index]!;
+    expect(current.distance).toBeLessThan(previous.distance);
+    const elapsedSeconds = (current.at - previous.at) / 1000;
+    const boundedFrameSeconds =
+      index === 1 ? 1 / 60 : Math.min(Math.max(elapsedSeconds, 0), 0.05);
+    const logStep = Math.abs(Math.log(current.distance / previous.distance));
+    expect(logStep).toBeLessThanOrEqual(3 * boundedFrameSeconds + 0.001);
+  }
 });
 
 test('clicking geometry re-pivots the orbit without moving the view', async ({
@@ -452,31 +551,13 @@ test('clicking geometry re-pivots the orbit without moving the view', async ({
     .click();
   await expectBodyCount(page, 1);
 
-  const view = async () =>
-    page.evaluate(() => {
-      const raw = localStorage.getItem('openzcad-workspace-session:v1');
-      const views = raw
-        ? (
-            JSON.parse(raw) as {
-              views?: Record<
-                string,
-                { camera: { position: number[]; target: number[] } }
-              >;
-            }
-          ).views
-        : undefined;
-      const first = views ? Object.values(views)[0] : undefined;
-      return first ? first.camera : null;
-    });
-
   const canvas = page.locator('.viewer-host canvas');
   const box = await canvas.boundingBox();
   // Nudge the camera so a pose is recorded before the click.
   await page.mouse.move(box!.x + box!.width * 0.5, box!.y + box!.height * 0.5);
   await page.mouse.wheel(0, -120);
-  await page.waitForTimeout(400);
-  const before = await view();
-  expect(before).not.toBeNull();
+  await waitForZoomToSettle(canvas);
+  const before = await readLiveCamera(canvas);
 
   // Click the solid off-centre, where the pivot has real depth to gain.
   await page.mouse.click(
@@ -485,19 +566,18 @@ test('clicking geometry re-pivots the orbit without moving the view', async ({
   );
   // The pivot only moves for a real hit, so prove the click landed first.
   await expect(page.locator('.selection-chip')).toBeVisible();
-  await page.waitForTimeout(500);
-  const after = await view();
+  const after = await readLiveCamera(canvas);
 
   // The camera itself must not have moved: re-pivoting is meant to be
   // invisible until the user actually orbits.
   for (const axis of [0, 1, 2]) {
-    expect(after!.position[axis]!).toBeCloseTo(before!.position[axis]!, 3);
+    expect(after.position[axis]!).toBeCloseTo(before.position[axis]!, 3);
   }
   // The pivot should have travelled toward the surface under the cursor.
   const pivotTravel = Math.hypot(
-    after!.target[0]! - before!.target[0]!,
-    after!.target[1]! - before!.target[1]!,
-    after!.target[2]! - before!.target[2]!
+    after.target[0]! - before.target[0]!,
+    after.target[1]! - before.target[1]!,
+    after.target[2]! - before.target[2]!
   );
   expect(pivotTravel).toBeGreaterThan(0.1);
 });
@@ -2338,22 +2418,7 @@ test('two fingers pan while a wheel notch still zooms', async ({ page }) => {
   };
   await page.mouse.move(centre.x, centre.y);
 
-  const pose = async () =>
-    page.evaluate(() => {
-      const raw = localStorage.getItem('openzcad-workspace-session:v1');
-      const views = raw
-        ? (
-            JSON.parse(raw) as {
-              views?: Record<
-                string,
-                { camera: { position: number[]; target: number[] } }
-              >;
-            }
-          ).views
-        : undefined;
-      const first = views ? Object.values(views)[0] : undefined;
-      return first ? first.camera : null;
-    });
+  const pose = async () => readLiveCamera(canvas);
   const distance = (camera: { position: number[]; target: number[] }) =>
     Math.hypot(
       camera.position[0]! - camera.target[0]!,
@@ -2361,19 +2426,14 @@ test('two fingers pan while a wheel notch still zooms', async ({ page }) => {
       camera.position[2]! - camera.target[2]!
     );
 
-  // Nothing is persisted until the camera first moves, so establish a stored
-  // pose before comparing against one.
+  // Establish a non-default radius, then compare the live camera only after
+  // the bounded zoom has rendered its final frame.
   await canvas.dispatchEvent('wheel', { deltaY: 120, deltaMode: 0 });
-  await expect.poll(async () => (await pose()) !== null).toBe(true);
-  // The zoom notch glides out on damping before its settled pose is stored;
-  // the worst-case durable write trails the release by just under a second,
-  // so wait out that horizon before taking the pan baseline.
-  await page.waitForTimeout(1000);
+  await waitForZoomToSettle(canvas);
 
   // Fine, two-axis deltas are a trackpad swipe: the framing moves, the
   // distance to it does not.
   const beforePan = await pose();
-  expect(beforePan).not.toBeNull();
   for (let step = 0; step < 12; step += 1) {
     await canvas.dispatchEvent('wheel', {
       deltaX: 6,
@@ -2384,31 +2444,24 @@ test('two fingers pan while a wheel notch still zooms', async ({ page }) => {
   await expect
     .poll(async () => {
       const now = await pose();
-      return now
-        ? Math.hypot(
-            now.target[0]! - beforePan!.target[0]!,
-            now.target[1]! - beforePan!.target[1]!,
-            now.target[2]! - beforePan!.target[2]!
-          )
-        : 0;
+      return Math.hypot(
+        now.target[0]! - beforePan.target[0]!,
+        now.target[1]! - beforePan.target[1]!,
+        now.target[2]! - beforePan.target[2]!
+      );
     })
     .toBeGreaterThan(0.5);
-  // Panning preserves the orbit radius at every step, but the stored pose
-  // lags the gesture; let the swipe's own settled write land before reading.
-  await page.waitForTimeout(1000);
-  const afterPan = (await pose())!;
-  expect(distance(afterPan)).toBeCloseTo(distance(beforePan!), 3);
+  const afterPan = await pose();
+  expect(distance(afterPan)).toBeCloseTo(distance(beforePan), 3);
 
   // A notch is still a zoom: the distance changes.
   for (let step = 0; step < 3; step += 1) {
     await canvas.dispatchEvent('wheel', { deltaY: 120, deltaMode: 0 });
   }
-  await expect
-    .poll(async () => {
-      const now = await pose();
-      return now ? Math.abs(distance(now) - distance(afterPan)) : 0;
-    })
-    .toBeGreaterThan(0.5);
+  await waitForZoomToSettle(canvas);
+  expect(Math.abs(distance(await pose()) - distance(afterPan))).toBeGreaterThan(
+    0.5
+  );
 });
 
 test('pressing to orbit writes no storage on the press frame', async ({

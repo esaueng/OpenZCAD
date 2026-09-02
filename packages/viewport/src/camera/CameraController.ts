@@ -20,9 +20,14 @@ import {
   initialZoomDynamics,
   stepZoomDynamics,
   wheelNotches,
-  ZOOM_BASE_SPEED,
   type ZoomDynamicsState
 } from './zoomDynamics';
+import {
+  advanceWheelZoom,
+  applyAnchoredZoom,
+  createZoomProjectionScratch,
+  wheelDeltaToLogScale
+} from './wheelZoom';
 
 /** A durable camera pose: what a reload restores. */
 export interface ViewportCameraState {
@@ -133,6 +138,12 @@ export class CameraController {
   private externalOrbitActive = false;
   private disposed = false;
   private zoomDynamics: ZoomDynamicsState = initialZoomDynamics();
+  private pendingZoomLogScale = 0;
+  private zoomLastStepAt: number | null = null;
+  private readonly zoomPointerNdc = new THREE.Vector2();
+  private readonly zoomScratch = createZoomProjectionScratch();
+  private readonly controlRoot: Node;
+  private controlKeyActive = false;
 
   constructor(options: CameraControllerOptions) {
     this.options = options;
@@ -167,6 +178,15 @@ export class CameraController {
     this.active = this.perspective;
     this.orbit = this.createOrbit(this.perspective);
     this.orbit.target.set(0, 0, 0);
+    this.controlRoot = options.domElement.getRootNode();
+    this.controlRoot.addEventListener('keydown', this.handleControlKeyDown, {
+      passive: true,
+      capture: true
+    });
+    this.controlRoot.addEventListener('keyup', this.handleControlKeyUp, {
+      passive: true,
+      capture: true
+    });
     // Capture phase so this runs before OrbitControls' own pointerdown
     // handler reads the button mapping for the gesture.
     this.options.domElement.addEventListener(
@@ -174,21 +194,28 @@ export class CameraController {
       this.applyRightButtonModifier,
       true
     );
-    // Capture phase, so the speed is in place before OrbitControls' own
-    // wheel handler reads it for the same event.
-    this.options.domElement.addEventListener(
-      'wheel',
-      this.applyDynamicZoomSpeed,
-      { capture: true, passive: false }
-    );
+    // Capture phase, so OrbitControls cannot apply a jump before the bounded
+    // frame loop has recorded the same wheel intent and final scale.
+    this.options.domElement.addEventListener('wheel', this.handleWheel, {
+      capture: true,
+      passive: false
+    });
   }
 
-  /**
-   * Velocity-adaptive zoom: OrbitControls re-reads `zoomSpeed` on every
-   * wheel event, so modulating it here makes fast wheel spins compound
-   * while a lone deliberate notch keeps its stock fine step.
-   */
-  private applyDynamicZoomSpeed = (event: WheelEvent) => {
+  private handleControlKeyDown = (event: Event) => {
+    if (event instanceof KeyboardEvent && event.key === 'Control') {
+      this.controlKeyActive = true;
+    }
+  };
+
+  private handleControlKeyUp = (event: Event) => {
+    if (event instanceof KeyboardEvent && event.key === 'Control') {
+      this.controlKeyActive = false;
+    }
+  };
+
+  /** Queues zoom packets while preserving the existing trackpad-pan path. */
+  private handleWheel = (event: WheelEvent) => {
     const intent = wheelIntent(
       {
         deltaX: event.deltaX,
@@ -203,9 +230,8 @@ export class CameraController {
       // only ever dollies, so leaving it to run would zoom as well as pan.
       event.preventDefault();
       event.stopImmediatePropagation();
-      // Suppressing the event also suppresses the viewport's own wheel
-      // listener, which is what normally ends a glide when the user takes
-      // over. A pan is the user taking over.
+      // A pan is the user taking over from any queued zoom or command glide.
+      this.cancelZoom();
       this.cancelTween();
       // Content follows the fingers, the way a document does: a swipe that
       // scrolls a page down moves the model down.
@@ -217,13 +243,49 @@ export class CameraController {
       this.options.requestRender();
       return;
     }
+    if (
+      this.disposed ||
+      !this.orbit.enabled ||
+      !this.orbit.enableZoom ||
+      this.gestureActive ||
+      event.buttons !== 0
+    ) {
+      return;
+    }
     const { state, speed } = stepZoomDynamics(
       this.zoomDynamics,
       performance.now(),
       wheelNotches(event.deltaY, event.deltaMode)
     );
     this.zoomDynamics = state;
-    this.orbit.zoomSpeed = speed;
+    const impulse = wheelDeltaToLogScale({
+      deltaY: event.deltaY,
+      deltaMode: event.deltaMode,
+      ctrlKey: event.ctrlKey,
+      controlKeyActive: this.controlKeyActive,
+      zoomSpeed: speed
+    });
+    if (impulse === 0) {
+      return;
+    }
+    const rect = this.options.domElement.getBoundingClientRect();
+    if (rect.width <= 0 || rect.height <= 0) {
+      return;
+    }
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    this.zoomPointerNdc.set(
+      ((event.clientX - rect.left) / rect.width) * 2 - 1,
+      -((event.clientY - rect.top) / rect.height) * 2 + 1
+    );
+    this.pendingZoomLogScale += impulse;
+    this.orbitGlideEndsAt = null;
+    if (this.settleTimeout !== null) {
+      window.clearTimeout(this.settleTimeout);
+      this.settleTimeout = null;
+    }
+    this.cancelTween();
+    this.options.requestRender();
   };
 
   /**
@@ -238,12 +300,6 @@ export class CameraController {
    * → present rotate so the flip lands back on pan.
    */
   private applyRightButtonModifier = (event: PointerEvent) => {
-    // A touch pinch reads `zoomSpeed` too, and every pinch begins with a
-    // pointerdown; don't let it inherit the multiplier left behind by the
-    // last wheel spin. (This must NOT live on the orbit 'start' event —
-    // OrbitControls fires 'start' between our wheel listener and its own
-    // dolly, which would erase the per-event speed before it is used.)
-    this.orbit.zoomSpeed = ZOOM_BASE_SPEED;
     if (event.button !== 2) {
       return;
     }
@@ -294,6 +350,7 @@ export class CameraController {
 
   /** Restores tight tracking; a grab mid-glide folds the residue into it. */
   private beginGesture = () => {
+    this.cancelZoom();
     this.gestureActive = true;
     this.orbitGlideEndsAt = null;
     if (this.settleTimeout !== null) {
@@ -338,7 +395,12 @@ export class CameraController {
     }
     this.settleTimeout = window.setTimeout(() => {
       this.settleTimeout = null;
-      if (this.gestureActive || this.tween || this.disposed) {
+      if (
+        this.gestureActive ||
+        this.tween ||
+        this.pendingZoomLogScale !== 0 ||
+        this.disposed
+      ) {
         return;
       }
       this.orbitGlideEndsAt = null;
@@ -410,6 +472,7 @@ export class CameraController {
     // camera's `up` once (see the constructor). Mid-glide that up is the
     // slerped tween frame, not world up; cancel first so the snapshot — and
     // every orbit after it — stays on the world axis.
+    this.cancelZoom();
     this.cancelTween();
     this.mode = mode;
     if (mode === 'orthographic') {
@@ -449,6 +512,7 @@ export class CameraController {
     onComplete?: () => void,
     glide?: CameraGlideStyle
   ) {
+    this.cancelZoom();
     // Consume leftover damping inertia so the glide starts from rest.
     this.orbitGlideEndsAt = null;
     this.orbit.dampingFactor = DRAG_DAMPING;
@@ -510,6 +574,11 @@ export class CameraController {
       this.tween = null;
       this.restoreWorldUp();
     }
+  }
+
+  private cancelZoom() {
+    this.pendingZoomLogScale = 0;
+    this.zoomLastStepAt = null;
   }
 
   /**
@@ -603,12 +672,46 @@ export class CameraController {
     return changed;
   }
 
+  /** Advances accumulated wheel or pinch input by one rendered frame. */
+  stepZoom(now: number): boolean {
+    if (this.disposed || this.pendingZoomLogScale === 0) {
+      return false;
+    }
+    const elapsed =
+      this.zoomLastStepAt === null ? null : now - this.zoomLastStepAt;
+    this.zoomLastStepAt = now;
+    const step = advanceWheelZoom(
+      this.pendingZoomLogScale,
+      elapsed,
+      this.options.reducedMotion()
+    );
+    this.pendingZoomLogScale = step.remainingLogScale;
+    const applied = applyAnchoredZoom(
+      this.active,
+      this.orbit.target,
+      this.zoomPointerNdc,
+      step.appliedLogScale,
+      this.options.zoomToCursor(),
+      this.zoomScratch
+    );
+    if (!applied) {
+      this.cancelZoom();
+      return false;
+    }
+    if (this.pendingZoomLogScale === 0) {
+      this.zoomLastStepAt = null;
+      return false;
+    }
+    return true;
+  }
+
   /**
    * Re-pivots the orbit onto a picked point's depth. The camera does not
    * move and does not turn, so nothing on screen shifts; only the centre of
    * the next rotation changes.
    */
   pivotOn(point: THREE.Vector3) {
+    this.cancelZoom();
     const forward = new THREE.Vector3();
     this.active.getWorldDirection(forward);
     const pivot = orbitPivotForPoint(this.active.position, forward, point);
@@ -630,6 +733,7 @@ export class CameraController {
    * because it builds fresh controls.
    */
   refreshNavigationPreferences() {
+    this.cancelZoom();
     this.orbit.zoomToCursor = this.options.zoomToCursor();
     this.applyPointerBindings(this.orbit);
   }
@@ -736,6 +840,7 @@ export class CameraController {
    * for, so a saved ortho framing survives the switch exactly.
    */
   restore(state: ViewportCameraState, projection: ProjectionMode) {
+    this.cancelZoom();
     this.perspective.position.fromArray(state.position);
     this.orbit.target.fromArray(state.target);
     this.perspective.lookAt(this.orbit.target);
@@ -789,11 +894,16 @@ export class CameraController {
       this.applyRightButtonModifier,
       true
     );
-    this.options.domElement.removeEventListener(
-      'wheel',
-      this.applyDynamicZoomSpeed,
-      { capture: true }
-    );
+    this.options.domElement.removeEventListener('wheel', this.handleWheel, {
+      capture: true
+    });
+    this.controlRoot.removeEventListener('keydown', this.handleControlKeyDown, {
+      capture: true
+    });
+    this.controlRoot.removeEventListener('keyup', this.handleControlKeyUp, {
+      capture: true
+    });
+    this.cancelZoom();
     this.gestureActive = false;
     this.externalOrbitActive = false;
     this.orbitGlideEndsAt = null;
