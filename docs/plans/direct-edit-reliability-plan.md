@@ -278,6 +278,22 @@ rows, in the order they should land:
 4. Precomputed move-snap candidates.
 5. BVH or prefilter for picking, only if headed numbers justify it.
 
+**Measured 2026-09-02** (`OZ_PERF=1 pnpm exec playwright test
+interaction-probe --workers=1`, Linux, headless SwiftShader; not comparable
+to the Mac numbers in `docs/performance-baseline.md`, comparable to itself):
+React commits per gesture are already at the floor the 2026-08-12 plan aimed
+for — hover sweep 0 over 121 moves, move drag 2 over 60, coalesced drag 2
+over 120, preview drag 10 over 50 (one per published exact frame, which is
+the design). Rows 1 and 2 therefore have no remaining per-move state write
+to remove; they are closed by measurement. Cylinder-radius input-to-frame
+p50 1.4 ms / p95 1.8 ms; the frame interval during that drag (p50 100 ms,
+p95 285 ms) is the kernel, not the UI. Row 3 landed the same day as
+`HoverDwell` in `packages/viewport`: a change of hover target is committed
+only after it has held for 60 ms — shorter than the hover fade, so a boundary
+flicker is absorbed before either fade shows — while entering geometry and
+staying put commit at once. Rows 4 and 5 stay open and stay gated on
+headed numbers.
+
 Structural prerequisite, tracked here because every Phase C row is cheaper
 after it: extract gesture controllers out of `App.tsx` (14,100 lines, 243
 hooks in one component) and `ModelViewer.tsx` (8,451 lines) into the

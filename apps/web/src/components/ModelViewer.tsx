@@ -16,6 +16,7 @@ import {
   CSS2DRenderer
 } from 'three/examples/jsm/renderers/CSS2DRenderer.js';
 import {
+  HoverDwell,
   MOVE_AXIS_COLORS,
   MOVE_AXIS_VECTORS,
   RightClickGestureTracker,
@@ -193,6 +194,26 @@ import {
   topologySelectionLabel,
   type LabelSegment
 } from '../lib/topologyLabels';
+
+/**
+ * What makes two hover picks "the same target" for the dwell: the topology
+ * or region under the pointer, never the hit point, so a pointer sliding
+ * along one face keeps its highlight while a boundary flicker is absorbed.
+ */
+function hoverKeyOf(candidate: PickCandidate | null): string | null {
+  if (!candidate) {
+    return null;
+  }
+  const selection = candidate.selection;
+  return [
+    candidate.kind,
+    selection?.bodyId ?? '',
+    selection?.topologyId ?? '',
+    candidate.sketchId ?? '',
+    candidate.region?.profileId ?? '',
+    candidate.region?.regionFingerprint ?? ''
+  ].join(':');
+}
 
 export interface FaceResizeCommit {
   bodyId: TopologySelection['bodyId'];
@@ -834,12 +855,7 @@ function updateMeasurementCallouts(
     ? projectToScreen(bounds.center, camera, viewportWidth, viewportHeight)
     : null;
   const radius = bounds
-    ? projectedWorldSizePx(
-        camera,
-        bounds.center,
-        bounds.radius,
-        viewportHeight
-      )
+    ? projectedWorldSizePx(camera, bounds.center, bounds.radius, viewportHeight)
     : 0;
   // Every read happens before any write so a frame with N callouts costs
   // one reflow, not N.
@@ -1179,6 +1195,8 @@ export function ModelViewer({
   onBoxSelectRef.current = onBoxSelect;
   const onResizePrimitiveFaceRef = useRef(onResizePrimitiveFace);
   onResizePrimitiveFaceRef.current = onResizePrimitiveFace;
+  /** Hover hysteresis; shared by the pointer frame and the body rebuild that clears hover. */
+  const hoverDwellRef = useRef(new HoverDwell<PickCandidate>(hoverKeyOf));
   const onSelectSketchProfileRef = useRef(onSelectSketchProfile);
   onSelectSketchProfileRef.current = onSelectSketchProfile;
   const movePreviewRef = useRef(movePreview);
@@ -1344,10 +1362,7 @@ export function ModelViewer({
     measurementBoundsRef.current = box
       ? {
           center: box.getCenter(new THREE.Vector3()),
-          radius: Math.max(
-            box.getSize(new THREE.Vector3()).length() / 2,
-            1e-6
-          )
+          radius: Math.max(box.getSize(new THREE.Vector3()).length() / 2, 1e-6)
         }
       : null;
   }, [bodies]);
@@ -1609,8 +1624,7 @@ export function ModelViewer({
       domElement: renderer.domElement,
       requestRender: () => requestRender(),
       bodies: () => bodiesRef.current,
-      isEditableBody: (bodyId: string) =>
-        editableBodyIdsRef.current.has(bodyId)
+      isEditableBody: (bodyId: string) => editableBodyIdsRef.current.has(bodyId)
     });
 
     // Pointer capture, orbit parking, drag cursor, and click-vs-drag for
@@ -2797,7 +2811,8 @@ export function ModelViewer({
         const first = triangle * 3;
         const points = Array.from(
           body.mesh.indices.subarray(first, first + 3),
-          (index) => new THREE.Vector3().fromArray(body.mesh.vertices, index * 3)
+          (index) =>
+            new THREE.Vector3().fromArray(body.mesh.vertices, index * 3)
         );
         const candidateNormal = normalForTriangle(body, triangle);
         if (points.length !== 3 || !candidateNormal) {
@@ -3965,7 +3980,9 @@ export function ModelViewer({
     }
 
     let hoveredProfileId: string | null = null;
+    /** Applies a hover now and tells the dwell that is what is on screen. */
     function applyHover(result: PickCandidate | null) {
+      hoverDwellRef.current.reset(result);
       selection.applyHover(result);
       const nextProfileId = result?.region?.profileId ?? null;
       if (nextProfileId !== hoveredProfileId) {
@@ -4091,8 +4108,16 @@ export function ModelViewer({
       }
       planePickerRigRef.current?.setHover(null);
       // `applyHover` owns the cursor here, including clearing it over empty
-      // space, now that it no longer skips a write on a stale cache.
-      applyHover(solid);
+      // space, now that it no longer skips a write on a stale cache. A change
+      // of target waits out the dwell first; while it waits, the same event
+      // is re-queued so a pointer that has stopped moving still settles.
+      const verdict = hoverDwellRef.current.propose(solid, performance.now());
+      if (verdict.commit) {
+        applyHover(verdict.candidate);
+      } else if (verdict.pending) {
+        pendingHoverEvent = event;
+        requestRender();
+      }
       updateMeasurePreview(event);
     }
 
@@ -6907,6 +6932,7 @@ export function ModelViewer({
       // The manager owns hover-slot geometry even while the slots are
       // parented under bodies, so it must detach them before body disposal.
       context.selection.resetForRebuild();
+      hoverDwellRef.current.reset();
       // Same reasoning as the highlight dropped rather than retired below:
       // the bodies these were fading against are about to be disposed. Their
       // fade also died with the set `resetForRebuild` just cleared.
@@ -7899,9 +7925,7 @@ export function ModelViewer({
       ghostGeometry: null,
       sweep: {
         cap: { positions, indices },
-        loops: [region.outer, ...region.holes].map((loop) =>
-          loop.map(toWorld)
-        )
+        loops: [region.outer, ...region.holes].map((loop) => loop.map(toWorld))
       }
     });
     rig.setValue(regionHandle.initialValue ?? 0);
@@ -8382,7 +8406,6 @@ export function ModelViewer({
     context.requestRender();
   }, [bodies.length, sketches, sketchViews]);
 
-
   useEffect(() => {
     const context = contextRef.current;
     if (context) {
@@ -8492,7 +8515,11 @@ export function ModelViewer({
     }
     const center =
       faceTrianglesCentroid(points) ??
-      new THREE.Vector3(geometry.center.x, geometry.center.y, geometry.center.z);
+      new THREE.Vector3(
+        geometry.center.x,
+        geometry.center.y,
+        geometry.center.z
+      );
     const pose = computeNormalToFacePose(
       context.camera,
       points,
