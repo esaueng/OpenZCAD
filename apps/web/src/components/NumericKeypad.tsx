@@ -30,6 +30,8 @@ export interface KeypadRequest {
   dimensionMode?: DimensionMode;
   /** Total extent whose entered value normalizes to a signed offset. */
   totalBaseline?: number;
+  /** -1 when the handle's drag subtracts from that total; default +1. */
+  totalSense?: 1 | -1;
   /**
    * Original absolute measurement, used to restore exact-entry cancellation.
    */
@@ -99,6 +101,14 @@ function dockedPanelBands(host: HTMLElement): KeypadExclusion[] {
  * companion of every drag handle. One instance serves offsets, radii,
  * extrude heights, and sketch dimensions.
  */
+/** The signed drag value a typed total stands for. */
+function offsetFromTotal(
+  total: number,
+  request: Pick<KeypadRequest, 'totalBaseline' | 'totalSense'>
+): number {
+  return (total - (request.totalBaseline ?? 0)) * (request.totalSense ?? 1);
+}
+
 export function NumericKeypad({
   request,
   units,
@@ -133,14 +143,16 @@ export function NumericKeypad({
   const normalizedValue =
     evaluation.value === undefined
       ? undefined
-      : evaluation.value - (request.totalBaseline ?? 0);
+      : offsetFromTotal(evaluation.value, request);
   const normalizedRaw =
     evaluation.normalizedRaw === undefined
       ? undefined
       : request.totalBaseline === undefined
         ? evaluation.normalizedRaw
         : evaluation.isExpression
-          ? `(${evaluation.normalizedRaw}) - ${request.totalBaseline}`
+          ? (request.totalSense ?? 1) === 1
+            ? `(${evaluation.normalizedRaw}) - ${request.totalBaseline}`
+            : `${request.totalBaseline} - (${evaluation.normalizedRaw})`
           : String(normalizedValue);
 
   // Imperative anchoring: the viewport's render loop pushes screen points.
@@ -205,7 +217,7 @@ export function NumericKeypad({
     setValue(next);
     const result = evaluateKeypadInput(next, entryUnit, units, scope, nextMode);
     if (result.ok && result.value !== undefined) {
-      onPreview(result.value - (request.totalBaseline ?? 0));
+      onPreview(offsetFromTotal(result.value, request));
     }
     // Keep the value field focused so Enter/Escape always land on the pad.
     inputRef.current?.focus();
@@ -323,7 +335,7 @@ export function NumericKeypad({
                 dimensionMode
               );
               if (result.ok && result.value !== undefined) {
-                onPreview(result.value - (request.totalBaseline ?? 0));
+                onPreview(offsetFromTotal(result.value, request));
               }
             }}
           >

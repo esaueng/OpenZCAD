@@ -10,6 +10,7 @@ import {
   primitiveBoxFaceAncestor,
   primitiveCylinderHeightAncestor
 } from './cylinderPrimitiveAncestry';
+import { extrudeCapAncestor } from './extrudeCapAncestry';
 
 /**
  * What a planar face offset turns into.
@@ -17,8 +18,11 @@ import {
  * A face that resolves back to a primitive side by lineage becomes an edit
  * of that primitive's dimension — the modifiers downstream regenerate at the
  * new extent, which is what "make it taller" means once the rim carries a
- * blend. Everything unproven becomes the generic exact push/pull, which is
- * still exact, just local to the picked face.
+ * blend. The far cap of an extrude likewise becomes an edit of its stored
+ * distance, which is what keeps the extrude open after it lands: the same
+ * handle keeps driving the same feature. Everything unproven becomes the
+ * generic exact push/pull, which is still exact, just local to the picked
+ * face.
  */
 export type FaceOffsetPlan =
   | {
@@ -30,7 +34,22 @@ export type FaceOffsetPlan =
       value: number;
       preflightRejection?: string;
     }
+  | {
+      kind: 'extrude-distance';
+      command: AnyCommand;
+      feature: FeatureNode;
+      /** The signed distance after the edit, evaluated. */
+      value: number;
+      preflightRejection?: string;
+    }
   | { kind: 'direct-edit'; command: AnyCommand };
+
+/** What the handle's "Total" readout adds the drag to, and in which sense. */
+export interface FaceOffsetTotal {
+  total: number;
+  /** +1 when the drag adds to the total, -1 when it subtracts. */
+  sense: 1 | -1;
+}
 
 export interface FaceOffsetPlanInput {
   document: ProjectDocument;
@@ -106,6 +125,42 @@ export function planFaceOffset(
     return null;
   }
 
+  const extrude = extrudeCapAncestor(
+    document,
+    bodyId,
+    face.reference,
+    faceHash
+  );
+  if (extrude) {
+    const { feature, distance, sense } = extrude;
+    const value = distance + sense * offset;
+    return {
+      kind: 'extrude-distance',
+      command: commandFactories.updateFeature(
+        {
+          featureId: feature.featureId,
+          data: {
+            distance:
+              typeof exact === 'string'
+                ? `${distance} ${sense === 1 ? '+' : '-'} (${exact})`
+                : Math.round(value * 1000) / 1000
+          }
+        },
+        `Edit ${feature.name}`
+      ),
+      feature,
+      value,
+      // Through zero the extrusion would flip to the other side of its
+      // sketch, which is a different operation, not a shorter one.
+      ...(value * distance <= 0
+        ? {
+            preflightRejection:
+              'That distance would leave the extrusion with no depth.'
+          }
+        : {})
+    };
+  }
+
   const cylinder = primitiveCylinderHeightAncestor(
     document,
     bodyId,
@@ -166,15 +221,24 @@ export function planFaceOffset(
 }
 
 /**
- * The primitive dimension a face offset would edit, for the handle's
- * "Total …" readout; undefined when the offset is a local push/pull.
+ * The stored value a face offset would edit, for the handle's "Total …"
+ * readout; undefined when the offset is a local push/pull.
  */
 export function faceOffsetBaseline(
   document: ProjectDocument,
   bodyId: BodyId,
   face: Pick<FaceTopology, 'reference'>,
   faceHash: number
-): number | undefined {
+): FaceOffsetTotal | undefined {
+  const extrude = extrudeCapAncestor(
+    document,
+    bodyId,
+    face.reference,
+    faceHash
+  );
+  if (extrude) {
+    return { total: extrude.distance, sense: extrude.sense };
+  }
   const cylinder = primitiveCylinderHeightAncestor(
     document,
     bodyId,
@@ -199,5 +263,5 @@ export function faceOffsetBaseline(
     return undefined;
   }
   const value = primitive.node.data.dimensions[primitive.dimension];
-  return typeof value === 'number' ? value : undefined;
+  return typeof value === 'number' ? { total: value, sense: 1 } : undefined;
 }
