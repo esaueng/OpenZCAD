@@ -96,6 +96,8 @@ export interface CameraControllerOptions {
   host: HTMLElement;
   /** The element OrbitControls binds its pointer listeners to. */
   domElement: HTMLElement;
+  /** Boundary containing the canvas and any viewport chrome layered over it. */
+  wheelElement?: HTMLElement;
   /** Invalidates the viewport so the render loop draws another frame. */
   requestRender(): void;
   /** Immediate in-memory pose sink, including gesture-time camera changes. */
@@ -143,6 +145,7 @@ export class CameraController {
   private readonly zoomPointerNdc = new THREE.Vector2();
   private readonly zoomScratch = createZoomProjectionScratch();
   private readonly controlRoot: Node;
+  private readonly wheelElement: HTMLElement;
   private controlKeyActive = false;
 
   constructor(options: CameraControllerOptions) {
@@ -179,6 +182,7 @@ export class CameraController {
     this.orbit = this.createOrbit(this.perspective);
     this.orbit.target.set(0, 0, 0);
     this.controlRoot = options.domElement.getRootNode();
+    this.wheelElement = options.wheelElement ?? options.host;
     this.controlRoot.addEventListener('keydown', this.handleControlKeyDown, {
       passive: true,
       capture: true
@@ -194,9 +198,9 @@ export class CameraController {
       this.applyRightButtonModifier,
       true
     );
-    // Capture phase, so OrbitControls cannot apply a jump before the bounded
-    // frame loop has recorded the same wheel intent and final scale.
-    this.options.domElement.addEventListener('wheel', this.handleWheel, {
+    // Own wheel input at the outer viewport boundary so chrome layered beside
+    // the canvas cannot leak a notch into page scrolling or bypass the camera.
+    this.wheelElement.addEventListener('wheel', this.handleWheel, {
       capture: true,
       passive: false
     });
@@ -894,7 +898,7 @@ export class CameraController {
       this.applyRightButtonModifier,
       true
     );
-    this.options.domElement.removeEventListener('wheel', this.handleWheel, {
+    this.wheelElement.removeEventListener('wheel', this.handleWheel, {
       capture: true
     });
     this.controlRoot.removeEventListener('keydown', this.handleControlKeyDown, {
