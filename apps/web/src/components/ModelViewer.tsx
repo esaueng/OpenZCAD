@@ -231,6 +231,8 @@ export interface OffsetHandleTarget {
   initialValue?: number;
   /** Primitive height when this offset is really an overall-height edit. */
   totalBaseline?: number;
+  /** -1 when a drag along the handle subtracts from that total; default +1. */
+  totalSense?: 1 | -1;
 }
 
 /** An explicit cylindrical-wall radius handle with an immutable world axis. */
@@ -494,7 +496,11 @@ interface ModelViewerProps {
    */
   previewDeferred: boolean;
   /** Value chip tapped: open exact entry prefilled with the current offset. */
-  onOpenOffsetKeypad(currentOffset: number, totalBaseline?: number): void;
+  onOpenOffsetKeypad(
+    currentOffset: number,
+    totalBaseline?: number,
+    totalSense?: 1 | -1
+  ): void;
   /** Imperative sink receiving the chip anchor in host pixels each frame. */
   keypadAnchorRef: MutableRefObject<
     ((point: { x: number; y: number } | null) => void) | null
@@ -2377,7 +2383,8 @@ export function ModelViewer({
       if (offsetRig) {
         onOpenOffsetKeypadRef.current(
           offsetRig.value(),
-          offsetHandleRef.current?.totalBaseline
+          offsetHandleRef.current?.totalBaseline,
+          offsetHandleRef.current?.totalSense
         );
         return true;
       }
@@ -4252,10 +4259,11 @@ export function ModelViewer({
           text = `${label ? `${label} · ` : ''}${prefix} ${value} ${unitsRef.current}`;
         } else {
           const totalBaseline = offsetHandleRef.current?.totalBaseline;
+          const totalSense = offsetHandleRef.current?.totalSense ?? 1;
           text =
             totalBaseline === undefined
               ? `${value >= 0 ? '+' : ''}${value} ${unitsRef.current}`
-              : `Total ${formatNumber(totalBaseline + rawValue)} ${unitsRef.current}`;
+              : `Total ${formatNumber(totalBaseline + totalSense * rawValue)} ${unitsRef.current}`;
           if (offsetPreviewInvalidRef.current) {
             text = `⚠ ${text}`;
           }

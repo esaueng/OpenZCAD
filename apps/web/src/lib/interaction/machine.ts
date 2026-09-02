@@ -34,6 +34,12 @@ export interface FaceTarget extends FaceCapabilityTarget {
   diameter?: number;
   /** Latest replayable edit that owns an imported blend band. */
   directEditFeatureId?: string;
+  /**
+   * The one-sided extrude whose far cap this face is. Its drags edit that
+   * feature's distance, and the card says Extrude rather than Offset Face:
+   * this is how an extrude stays open after it lands.
+   */
+  extrudeFeatureId?: string;
   blendSurfaceClass?: 'torus' | 'cylinder';
   blendCenter?: [number, number, number];
   blendAxis?: [number, number, number];
@@ -622,11 +628,13 @@ function commandIdentityFor(state: InteractionState): CommandIdentity | null {
             title: radialFaceOperationName(state.target)
           };
         case 'offset-face':
-          return {
-            id: 'offset-face',
-            icon: 'offset-face',
-            title: 'Offset Face'
-          };
+          return state.target.extrudeFeatureId
+            ? { id: 'offset-face', icon: 'extrude', title: 'Extrude' }
+            : {
+                id: 'offset-face',
+                icon: 'offset-face',
+                title: 'Offset Face'
+              };
       }
       break;
     case 'edges':
@@ -764,9 +772,11 @@ export function toolCardFor(state: InteractionState): ToolCardModel | null {
             ? `R${state.target.blendRadius ?? '?'} is read-only; this imported blend can be removed.`
             : state.op === 'resize-cylinder-radius'
               ? 'Drag the radial handle or tap the value to set the radius.'
-              : offsetNote
-                ? `Drag the arrow to offset the face, or tap the value to type. ${offsetNote}`
-                : 'Drag the arrow to offset the face, or tap the value to type · Space faces it head-on.';
+              : state.target.extrudeFeatureId
+                ? 'Drag the arrow to change the depth, or tap the value to type · click empty space to finish.'
+                : offsetNote
+                  ? `Drag the arrow to offset the face, or tap the value to type. ${offsetNote}`
+                  : 'Drag the arrow to offset the face, or tap the value to type · Space faces it head-on.';
       // Single-capability faces suppress the action row: one button that only
       // restates the title is noise on a card meant to stay out of the way.
       const alwaysShowActions =
