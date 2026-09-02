@@ -214,13 +214,16 @@ Ordered by expected leverage; each item retires pins and states which.
   upstream edit; the interaction log already records each attempt's lineage
   class, so the export will show how often that note is being ignored. The
   repair path exists (`staleDirectEditFaceRepair` re-pins a broken offset,
-  radius, or diameter edit around a re-picked face). *Still open:* the
-  kernel's direct-edit ops pin recorded geometry even when lineage resolved
-  the face — `resize-cylindrical-face` on radius and axis
-  (`exact-direct-edit-ops.ts:1235-1252`) and `resize-blend` on carrier
-  centre and axis (`:1146-1155`) — while `offset-face` already skips its area
-  pin for a lineage-resolved face. Relaxing those the same way is the next
-  slice, one op per change with a replay-after-upstream-edit test each.
+  radius, or diameter edit around a re-picked face). *Closed 2026-09-02 for
+  `resize-cylindrical-face`:* the recorded radius and axis pins now apply
+  only to a hash-resolved wall, as the area pin already did for
+  `offset-face`; under lineage the edit follows a taller cylinder and a
+  re-sized source, and is a quiet no-op when the source already reaches the
+  stored radius, while the reference-free edit still fails closed
+  (`test/direct-edit-lineage-pins.test.ts`). *Still open:* `resize-blend`
+  pins carrier centre and axis the same way (`exact-direct-edit-ops.ts`, the
+  `recordedCenter` / `recordedAxis` checks); same treatment, same test
+  shape, next.
 - **B4. Preview continuity (class P).** *Landed in part:* offset and edge
   drags no longer wait on a 150 ms cadence — every applied value reaches the
   previewer, which keeps one rebuild in flight and drops superseded values;
