@@ -185,9 +185,11 @@ export function ShaprImportDialog({
             disabled={phase !== 'preview' || !inspection}
             onClick={onApply}
           >
-            {phase === 'applying' ? (
-              <LoaderCircle size={13} className="spin" aria-hidden="true" />
-            ) : null}
+            <span className="icon-slot" aria-hidden="true">
+              {phase === 'applying' ? (
+                <LoaderCircle size={13} className="spin" />
+              ) : null}
+            </span>
             Import exact STEP + evidence
           </button>
         </div>
