@@ -16,8 +16,8 @@ Branch `claude/3d-modeling-interface-refinement-e7b650`.
 | 0.3 baseline captured | **done** — `docs/performance-baseline.md` Wave 4 |
 | 1.1 memoize viewport array props | **done** — `17b7364`, move drag 121 → 61 rendered frames |
 | 1.2 move drag off workspace state | **done** — `1034669`, 61 → 2 React commits |
-| 1.2 extrude drag | **partly done** — the region rig now sweeps its profile every frame and an exact extrude preview streams at the kernel's rate (see `docs/plans/direct-edit-reliability-plan.md`, B4); the per-move App state write is still open |
-| 1.2 cylinder-radius Inspector throttle | **not started** |
+| 1.2 extrude drag | **done by measurement (2026-09-02)** — the region rig sweeps its profile every frame and an exact extrude preview streams at the kernel's rate (see `docs/plans/direct-edit-reliability-plan.md`, B4); the interaction probe shows 10 React commits over a 50-move preview drag, one per published exact frame, so there is no per-move state write left to remove |
+| 1.2 cylinder-radius Inspector throttle | **closed by measurement (2026-09-02)** — the cylinder-radius probe reports input-to-frame p50 1.4 ms / p95 1.8 ms and the drag-coalescing probe 2 React commits over 120 moves; no per-move Inspector render remains to throttle |
 | 1.3 rAF-coalesce drag handlers | **done** — `0a0a5d5`, 120 events → 1 apply |
 | 1.4 in-place preview geometry | **dropped** — the real-GPU measurement came back; the stall does not exist there (preview drag p95 25 ms). See the box in 1.4 |
 | 3.1 motion vocabulary | **done** — `packages/viewport/src/motion.ts` + `--dur-slow` |
@@ -25,7 +25,7 @@ Branch `claude/3d-modeling-interface-refinement-e7b650`.
 | 3.3 selection symmetry | **done** — fade-out on deselect, x-ray and preview halves rise with their twins |
 | 3.5 chip/keypad transitions | **done** — colour and elevation over `--dur-fast`, `transform` excluded |
 | 3.2 cursor hysteresis | **done** — the cursor is only written when it changes |
-| 3.2 hover dwell | **not started** — a dwell before re-committing preselection is still open; the cursor no longer strobes, the highlight can |
+| 3.2 hover dwell | **done (2026-09-02)** — `HoverDwell` in `packages/viewport`: a change of target commits only after holding 60 ms, shorter than the hover fade; entering geometry and staying put commit at once |
 | 3.3 face hover cross-fade | **done** — an outgoing pair carries the leaving face at its current opacity |
 | 3.4 gizmo entrance + hover affordance | **done** — shared rig presence controller; offset rig adopts it |
 | 3.4 cylinder and edge rigs | **done** — both adopt the shared controller |
