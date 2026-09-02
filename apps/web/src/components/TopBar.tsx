@@ -371,6 +371,13 @@ export function TopBar({
             onClick={onOpenSharing}
           >
             <Users size={13} aria-hidden="true" />
+            {collaborationStatus === 'live' ? (
+              // Only drawn once the row has collapsed to icons; the label
+              // carries the count everywhere else.
+              <span className="live-badge" aria-hidden="true">
+                {collaboratorCount}
+              </span>
+            ) : null}
             <StableLabel reserve={COLLABORATION_LABEL_RESERVE} align="center">
               {collaborationStatus === 'live'
                 ? `${collaboratorCount} live`
