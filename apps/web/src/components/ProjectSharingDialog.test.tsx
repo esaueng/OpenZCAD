@@ -99,22 +99,20 @@ function shareLinkClient(): ProjectShareLinkClient {
   return {
     createProjectShareLink: vi.fn(
       async (projectId: string, mode: 'tweak' | 'view') => {
-      const shareLink = {
-        shareLinkId: `share_${links.length + 1}`,
-        projectId,
-        mode,
-        createdAt: 1_700_000_000,
-        revokedAt: null
-      };
+        const shareLink = {
+          shareLinkId: `share_${links.length + 1}`,
+          projectId,
+          mode,
+          createdAt: 1_700_000_000,
+          revokedAt: null
+        };
         links.push(shareLink);
         return { shareLink, token: 'a'.repeat(43) };
       }
     ),
     listProjectShareLinks: vi.fn(async () => [...links]),
     revokeProjectShareLink: vi.fn(async (_projectId, shareLinkId: string) => {
-      const index = links.findIndex(
-        (link) => link.shareLinkId === shareLinkId
-      );
+      const index = links.findIndex((link) => link.shareLinkId === shareLinkId);
       if (index >= 0) {
         links.splice(index, 1);
       }
@@ -141,6 +139,65 @@ function recoveryHandlers(calls: string[] = []): ConflictResolutionHandlers {
 }
 
 describe('ProjectSharingDialog', () => {
+  it('hydrates owner data without flashing the action status row', async () => {
+    const sharingClient = client();
+    vi.mocked(sharingClient.getProjectSharing).mockImplementation(
+      () => new Promise<ProjectSharingResponse>(() => undefined)
+    );
+    const base = createProjectDocument('Quiet hydration', owner);
+    render(
+      <ProjectSharingDialog
+        projectId={base.projectId}
+        role="owner"
+        collaborationStatus="live"
+        lease={null}
+        client={sharingClient}
+        shareLinkClient={shareLinkClient()}
+        onClose={vi.fn()}
+      />
+    );
+
+    await waitFor(() =>
+      expect(sharingClient.getProjectSharing).toHaveBeenCalledWith(
+        base.projectId
+      )
+    );
+    expect(screen.queryByText('Working…')).not.toBeInTheDocument();
+    expect(
+      screen.getByRole('dialog', { name: 'Project sharing' })
+    ).toHaveAttribute('aria-busy', 'true');
+    expect(screen.getByRole('button', { name: 'Send invite' })).toBeDisabled();
+  });
+
+  it('shows progress for an explicit sharing action', async () => {
+    const sharingClient = client();
+    vi.mocked(sharingClient.createInvitation).mockImplementation(
+      () => new Promise<CreateProjectInvitationResponse>(() => undefined)
+    );
+    const base = createProjectDocument('Action progress', owner);
+    const user = userEvent.setup();
+    render(
+      <ProjectSharingDialog
+        projectId={base.projectId}
+        role="owner"
+        collaborationStatus="live"
+        lease={null}
+        client={sharingClient}
+        shareLinkClient={shareLinkClient()}
+        onClose={vi.fn()}
+      />
+    );
+
+    await screen.findByText('member@example.com');
+    await user.type(screen.getByLabelText('Email'), 'new@example.com');
+    await user.click(screen.getByRole('button', { name: 'Send invite' }));
+
+    expect(await screen.findByText('Working…')).toBeVisible();
+    expect(
+      screen.getByRole('dialog', { name: 'Project sharing' })
+    ).toHaveAttribute('aria-busy', 'true');
+  });
+
   it('labels every live session belonging to the signed-in user', () => {
     const base = createProjectDocument('Shared sessions', owner);
     render(
