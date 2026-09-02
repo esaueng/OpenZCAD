@@ -7,14 +7,11 @@ import {
 } from 'lucide-react';
 import type { MeshQualityReport } from '@openzcad/kernel-adapter/exact';
 import { useModalFocus } from '../lib/useModalFocus';
+import { StableLabel } from './StableLabel';
 
 /** Worker export formats this dialog can request; `stl` is ASCII. */
 export type MeshExportDialogFormat =
-  | '3mf'
-  | 'stl-binary'
-  | 'stl'
-  | 'obj'
-  | 'glb';
+  '3mf' | 'stl-binary' | 'stl' | 'obj' | 'glb';
 
 const FORMAT_LABELS: Record<MeshExportDialogFormat, string> = {
   '3mf': '3MF',
@@ -320,14 +317,14 @@ export function ExportDialog({
               disabled={deflection === null || phase !== 'idle'}
               onClick={() => void runQualityCheck()}
             >
-              {phase === 'checking' ? (
-                <LoaderCircle
-                  size={13}
-                  className="spin"
-                  aria-hidden="true"
-                />
-              ) : null}
-              {report && !staleReport ? 'Re-check' : 'Check watertightness'}
+              <span className="icon-slot" aria-hidden="true">
+                {phase === 'checking' ? (
+                  <LoaderCircle size={13} className="spin" />
+                ) : null}
+              </span>
+              <StableLabel reserve={['Re-check', 'Check watertightness']}>
+                {report && !staleReport ? 'Re-check' : 'Check watertightness'}
+              </StableLabel>
             </button>
           </header>
           {report && !staleReport ? (
@@ -372,7 +369,9 @@ export function ExportDialog({
 
         <div className="export-dialog-actions">
           <button type="button" className="secondary" onClick={cancelAndClose}>
-            {phase === 'exporting' ? 'Cancel export' : 'Cancel'}
+            <StableLabel reserve={['Cancel export', 'Cancel']}>
+              {phase === 'exporting' ? 'Cancel export' : 'Cancel'}
+            </StableLabel>
           </button>
           <button
             type="button"

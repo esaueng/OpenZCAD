@@ -36,6 +36,7 @@ import type {
   SketchToolId
 } from '../lib/interaction/machine';
 import { CONSTRAINT_TOOL_SPECS } from '../lib/sketch/constraints';
+import { StableLabel } from './StableLabel';
 
 /** One row of the palette's constraint list, pre-rendered by App. */
 export interface SketchConstraintListItem {
@@ -279,7 +280,9 @@ export function SketchToolRail({
           onClick={onSolve}
         >
           <Play size={14} aria-hidden="true" />
-          {solving ? 'Solving…' : 'Solve'}
+          <StableLabel reserve={['Solving…', 'Solve']}>
+            {solving ? 'Solving…' : 'Solve'}
+          </StableLabel>
         </button>
         {solveStatus ? (
           <span

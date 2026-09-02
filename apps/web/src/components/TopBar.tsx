@@ -21,6 +21,7 @@ import type { WorkspaceMode } from '../lib/panelState';
 import type { CollaborationStatus } from '../lib/useCollaboration';
 import type { WorkspaceSaveState } from '../lib/cloudProjectAutosave';
 import { WORKSPACE_SAVE_STATE_PRESENTATION } from '../lib/workspaceSaveStatePresentation';
+import { StableLabel } from './StableLabel';
 
 /**
  * What the save button says, per state. Every one of these except `saving`
@@ -106,6 +107,18 @@ const WORKSPACE_MODE_OPTIONS: ReadonlyArray<{
     Icon: Box
   }
 ];
+
+/**
+ * Labels the chips cycle through in ordinary use. Each chip reserves the
+ * widest of these so a save, a sync or a presence change never resizes it;
+ * the rare decision states (conflict, repair, update required) may still
+ * take extra room while they show, as they demand a look anyway.
+ */
+const SAVE_STATE_LABEL_RESERVE = (
+  ['saving', 'syncing', 'synced', 'local', 'offline'] as const
+).map((state) => WORKSPACE_SAVE_STATE_PRESENTATION[state].topBarLabel);
+const COLLABORATION_LABEL_RESERVE = ['99 live', 'Not shared', 'Offline'];
+const ACCOUNT_LABEL_RESERVE = ['Checking', 'Signed out', 'Unavailable'];
 
 export function TopBar({
   projectName,
@@ -236,7 +249,9 @@ export function TopBar({
               onClick={() => onWorkspaceMode(mode)}
             >
               <Icon size={13} aria-hidden="true" />
-              <span className="mode-switch-label">{label}</span>
+              <span className="mode-switch-label">
+                <StableLabel reserve={[label]}>{label}</StableLabel>
+              </span>
             </button>
           );
         })}
@@ -303,7 +318,9 @@ export function TopBar({
             ) : (
               <CloudOff size={13} aria-hidden="true" />
             )}
-            {accountLabel}
+            <StableLabel reserve={ACCOUNT_LABEL_RESERVE}>
+              {accountLabel}
+            </StableLabel>
           </span>
         )}
         <button
@@ -325,7 +342,9 @@ export function TopBar({
           ) : (
             <CloudOff size={14} aria-hidden="true" />
           )}
-          {WORKSPACE_SAVE_STATE_PRESENTATION[saveState].topBarLabel}
+          <StableLabel reserve={SAVE_STATE_LABEL_RESERVE}>
+            {WORKSPACE_SAVE_STATE_PRESENTATION[saveState].topBarLabel}
+          </StableLabel>
         </button>
         {projectSharingEnabled ? (
           <button
@@ -337,17 +356,19 @@ export function TopBar({
             onClick={onOpenSharing}
           >
             <Users size={13} aria-hidden="true" />
-            {collaborationStatus === 'live'
-              ? `${collaboratorCount} live`
-              : collaborationStatus === 'conflict'
-                ? 'Conflict'
-                : collaborationStatus === 'oversize'
-                  ? 'Local only'
-                  : collaborationStatus === 'rejected'
-                    ? 'Not shared'
-                    : collaborationStatus === 'update-required'
-                      ? 'Update required'
-                      : collaborationStatus}
+            <StableLabel reserve={COLLABORATION_LABEL_RESERVE}>
+              {collaborationStatus === 'live'
+                ? `${collaboratorCount} live`
+                : collaborationStatus === 'conflict'
+                  ? 'Conflict'
+                  : collaborationStatus === 'oversize'
+                    ? 'Local only'
+                    : collaborationStatus === 'rejected'
+                      ? 'Not shared'
+                      : collaborationStatus === 'update-required'
+                        ? 'Update required'
+                        : collaborationStatus}
+            </StableLabel>
           </button>
         ) : null}
         <details ref={fileMenuRef} className="topbar-menu file-menu">
