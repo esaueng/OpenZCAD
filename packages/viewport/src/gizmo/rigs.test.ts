@@ -415,3 +415,33 @@ describe('the swept-volume ghost', () => {
     expect(ghost.visible).toBe(false);
   });
 });
+
+describe('the edge-radius rig', () => {
+  it('paints a refused radius as a warning, even while hovered', () => {
+    const rig = buildEdgeRadiusHandle({
+      origin: { x: 0, y: 0, z: 0 },
+      direction: { x: 0, y: 0, z: 1 }
+    });
+    const sphere = rig.group.children.find(
+      (child) =>
+        child instanceof THREE.Mesh &&
+        child.geometry instanceof THREE.SphereGeometry &&
+        child.userData.directHandle !== true
+    ) as THREE.Mesh<THREE.BufferGeometry, THREE.MeshBasicMaterial>;
+    expect(sphere).toBeDefined();
+
+    rig.setHot?.(true);
+    rig.step?.(1000);
+    rig.setWarning?.(true);
+    expect(sphere.material.color.getHex()).toBe(HANDLE_WARNING_COLOR);
+    expect(rig.group.userData.previewWarning).toBe(true);
+    // Hover ticks must not soften a refused value back to the hot colour.
+    rig.step?.(16);
+    expect(sphere.material.color.getHex()).toBe(HANDLE_WARNING_COLOR);
+
+    rig.setWarning?.(false);
+    rig.step?.(1000);
+    expect(sphere.material.color.getHex()).not.toBe(HANDLE_WARNING_COLOR);
+    expect(rig.group.userData.previewWarning).toBe(false);
+  });
+});

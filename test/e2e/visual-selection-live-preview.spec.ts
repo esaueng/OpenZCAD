@@ -139,6 +139,38 @@ test('streams exact planar previews and restores invalid or canceled offsets', a
   ).toContainText('Dragging');
   await expect(page.getByRole('button', { name: 'History 1' })).toBeVisible();
 
+  // Still holding the button, drive the total below zero. The kernel refuses
+  // it: the handle keeps tracking and the chip turns to its warning state,
+  // but the shape stays at the last value that built — it must not snap back
+  // to the 28 mm the drag started from under a pointer that is still down.
+  const lastValid = await readAxisLength();
+  expect(lastValid).not.toBeNull();
+  expect(lastValid!).toBeGreaterThan(28.5);
+  await page.mouse.move(
+    start.x - handle.dx * handle.pixelsPerUnit * 40,
+    start.y - handle.dy * handle.pixelsPerUnit * 40,
+    { steps: 1 }
+  );
+  await expect(chip).toHaveAttribute('data-state', 'warning', {
+    timeout: PREVIEW_BUDGET_MS
+  });
+  await expect(
+    page.getByRole('region', { name: 'Offset Face operation' })
+  ).toContainText('Failed');
+  expect(await readAxisLength()).toBeCloseTo(lastValid!, 4);
+  // A value that builds again recovers the gesture in place.
+  await page.mouse.move(
+    start.x + handle.dx * handle.pixelsPerUnit * 4,
+    start.y + handle.dy * handle.pixelsPerUnit * 4,
+    { steps: 1 }
+  );
+  await expect(chip).not.toHaveAttribute('data-state', 'warning', {
+    timeout: PREVIEW_BUDGET_MS
+  });
+  await expect(
+    page.getByRole('region', { name: 'Offset Face operation' })
+  ).toContainText('Dragging');
+
   await page.keyboard.press('Escape');
   await page.mouse.up();
   await expect
