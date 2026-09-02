@@ -31,6 +31,18 @@ export interface DirectEditCommitOptions {
   onStatus(message: string): void;
 }
 
+/**
+ * A rebuild the live preview already ran for this exact command. Reused only
+ * when the document is still the one it was computed against, so a preview
+ * that passed is never followed by a second wait — or a different answer —
+ * for the same value on release.
+ */
+export interface PrecomputedDirectEditDerived {
+  baseProjectId: ProjectDocument['projectId'];
+  baseVersion: number;
+  derived: ProjectDocument['derived'];
+}
+
 export interface DirectEditCommit {
   /**
    * Validates a direct edit against the exact kernel and commits it only if
@@ -42,7 +54,8 @@ export interface DirectEditCommit {
     successMessage: string,
     submittedValue?: number,
     onSuccess?: () => void,
-    validationTargets?: readonly ValidatedFeatureTarget[]
+    validationTargets?: readonly ValidatedFeatureTarget[],
+    precomputed?: PrecomputedDirectEditDerived
   ): Promise<boolean>;
 }
 
@@ -73,7 +86,8 @@ export function useDirectEditCommit(
       successMessage,
       submittedValue = 0,
       onSuccess,
-      validationTargets
+      validationTargets,
+      precomputed
     ) {
       const host = optionsRef.current;
       const manager = host.manager();
@@ -88,7 +102,13 @@ export function useDirectEditCommit(
       try {
         command.validate(current);
         const preview = command.apply(current);
-        const derived = await host.derive(preview);
+        const reusable =
+          precomputed !== undefined &&
+          precomputed.baseProjectId === current.projectId &&
+          precomputed.baseVersion === current.version;
+        const derived = reusable
+          ? precomputed.derived
+          : await host.derive(preview);
         const live = host.manager();
         const documentMoved =
           live !== manager ||
