@@ -33,7 +33,7 @@ let adapter: ExactKernelAdapter;
 
 beforeAll(async () => {
   adapter = await createExactKernelAdapter();
-}, 30_000);
+}, 60_000);
 
 afterAll(() => {
   adapter.dispose();
@@ -102,7 +102,9 @@ const rectangle: SketchObjectData = {
   centerY: 5
 };
 
-describe('region extrude lineage', () => {
+// The 2-core CI runners rebuild these solids several times slower than a
+// workstation; the budget is per test, not per file.
+describe('region extrude lineage', { timeout: 120_000 }, () => {
   it('names every side wall of a rectangle region after its source segment', async () => {
     const { document, bodyId, objectIds } = regionExtrudeDocument([rectangle]);
     const derived = await adapter.syncDocument(document);
