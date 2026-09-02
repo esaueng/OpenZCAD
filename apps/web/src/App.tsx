@@ -710,6 +710,7 @@ import {
   affectedFeatureTargets,
   type AffectedFeatureTarget
 } from './lib/affectedFeatureTargets';
+import { splitRefusal } from './lib/featureValidation';
 import { useCollaboration } from './lib/useCollaboration';
 import { preflightCadPatch } from './lib/aiPatchPreflight';
 import type { AssistantPreviewOutcome } from './components/assistant/AssistantPanel';
@@ -10635,7 +10636,7 @@ export function App() {
     }
     dispatchInteraction({
       type: 'validation-failed',
-      diagnostic: { message },
+      diagnostic: splitRefusal(message),
       value
     });
     recordDirectEditOutcome('preview-failed', { value, message });
