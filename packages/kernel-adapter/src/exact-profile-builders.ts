@@ -8,8 +8,10 @@ import {
 } from '@openzcad/document-core';
 import {
   frameForPlaneRef,
+  geometryTolerance,
   mergeAdjacentProfiles,
   type PlaneBasis,
+  type RegionCurve,
   type SketchRegion,
   type Vec2Like,
   type Vec3
@@ -17,6 +19,7 @@ import {
 import {
   FULL_REVOLVE_ANGLE_DEG,
   MAX_HELICAL_SWEEP_TURNS,
+  type FaceWitnessV1,
   type FeatureNode,
   type ProjectDocument,
   type SketchId,
@@ -35,6 +38,7 @@ import {
   buildExtrudeLineage,
   buildPrimitiveLineage,
   buildRevolveLineage,
+  cylinderCarrier,
   planeCarrier,
   topologyCandidatesForSolid
 } from './exact-lineage-builders';
@@ -45,10 +49,13 @@ import {
 } from './exact-shape-utils';
 import {
   GEOMETRY_EPSILON,
+  cross,
   normalized,
   pointOnPlane,
   profilePoints,
-  shiftBasisAlongNormal
+  scale,
+  shiftBasisAlongNormal,
+  subtract
 } from './exact-math';
 import {
   connectedRegionGroups,
@@ -523,6 +530,156 @@ export function makeRegionFace(
   return kernel.addHolesToFace(face, Uint32Array.from(holeWires));
 }
 
+/**
+ * Which segment of its source object a boundary line lies on. A side face
+ * swept from that line is then named by the object's own structure — a
+ * rectangle or polygon side keeps its index through a resize, the same rule
+ * the whole-object sweep uses — instead of by its position in the traced
+ * loop, which the arrangement is free to start anywhere. Null when the object
+ * has no segment list or the line sits on none of its segments.
+ */
+function sourceSegmentIndex(
+  curve: Extract<RegionCurve, { kind: 'line' }>,
+  data: SketchObjectData | undefined,
+  scope: Record<string, number>
+): number | null {
+  if (
+    !data ||
+    (data.objectKind !== 'rectangle' && data.objectKind !== 'polygon')
+  ) {
+    return null;
+  }
+  let points: Vec2Like[];
+  try {
+    points = profilePoints(data, scope);
+  } catch {
+    return null;
+  }
+  const extent = Math.max(
+    1,
+    ...points.flatMap((point) => [Math.abs(point.x), Math.abs(point.y)])
+  );
+  const tolerance = geometryTolerance(extent);
+  for (let index = 0; index < points.length; index += 1) {
+    const start = points[index]!;
+    const end = points[(index + 1) % points.length]!;
+    const dx = end.x - start.x;
+    const dy = end.y - start.y;
+    const length = Math.hypot(dx, dy);
+    if (length <= tolerance) {
+      continue;
+    }
+    const onSegment = (point: Vec2Like): boolean => {
+      const offAxis =
+        Math.abs(dx * (point.y - start.y) - dy * (point.x - start.x)) / length;
+      if (offAxis > tolerance) {
+        return false;
+      }
+      const along =
+        ((point.x - start.x) * dx + (point.y - start.y) * dy) / (length * length);
+      const slack = tolerance / length;
+      return along >= -slack && along <= 1 + slack;
+    };
+    if (onSegment(curve.a) && onSegment(curve.b)) {
+      return index;
+    }
+  }
+  return null;
+}
+
+/**
+ * Names the side faces of a region sweep after the sketch entities that drew
+ * them. Every boundary curve of a region carries the id of the object it came
+ * from, and a side face is exactly that curve swept along the normal: a line
+ * becomes a plane carrier, an arc a cylinder carrier. Without this every side
+ * of a region-extruded body is hash-only, so nothing can be attached to it —
+ * a sketch on the front of a drag-extruded plate was refused for that reason.
+ *
+ * Fails closed the way the rest of the lineage does: a curve that cannot be
+ * placed on its object, a bezier (no analytic carrier), or one segment drawn
+ * as two separate pieces of boundary all stay hash-only rather than guessed.
+ */
+function addRegionSideRoles(input: {
+  candidates: ReturnType<typeof topologyCandidatesForSolid>;
+  region: SketchRegion;
+  token: string;
+  basis: PlaneBasis;
+  totalDistance: number;
+  objectsById: ReadonlyMap<string, SketchObjectData>;
+  scope: Record<string, number>;
+  assignments: RemusSemanticAssignment[];
+  diagnostics: RemusLineageState[];
+}) {
+  const { basis } = input;
+  const sweep = scale(basis.normal, input.totalDistance);
+  const roles = new Map<string, Array<FaceWitnessV1['analytic'] | null>>();
+  const propose = (name: string, carrier: FaceWitnessV1['analytic'] | null) => {
+    roles.set(name, [...(roles.get(name) ?? []), carrier]);
+  };
+  for (const loop of [input.region.outer, ...input.region.holes]) {
+    for (const curve of loop.curves) {
+      const data = input.objectsById.get(curve.sourceObjectId);
+      const prefix = `sweep.face.side.region.${input.token}.${curve.sourceObjectId}`;
+      if (curve.kind === 'line') {
+        const index = sourceSegmentIndex(curve, data, input.scope);
+        const key =
+          index !== null ? `${index}` : data?.objectKind === 'line' ? 'line' : null;
+        if (key === null) {
+          input.diagnostics.push(
+            remusHashOnlyLineage(
+              'sweep',
+              `Selected-region side ${prefix} lies on no segment of its source object.`
+            )
+          );
+          continue;
+        }
+        const start = planePoint3(basis, curve.a);
+        const end = planePoint3(basis, curve.b);
+        propose(
+          `${prefix}.${key}`,
+          planeCarrier(cross(subtract(end, start), sweep), start)
+        );
+        continue;
+      }
+      if (curve.kind === 'arc') {
+        propose(
+          `${prefix}.${data?.objectKind === 'circle' ? 'circle' : 'arc'}`,
+          cylinderCarrier(
+            planePoint3(basis, curve.center),
+            basis.normal,
+            curve.radius
+          )
+        );
+        continue;
+      }
+      input.diagnostics.push(
+        remusHashOnlyLineage(
+          'sweep',
+          `Selected-region side ${prefix} is a bezier with no analytic carrier.`
+        )
+      );
+    }
+  }
+  for (const [name, carriers] of roles) {
+    if (carriers.length !== 1) {
+      input.diagnostics.push(
+        remusHashOnlyLineage(
+          'sweep',
+          `Semantic role ${name} is drawn by ${carriers.length} pieces of boundary.`
+        )
+      );
+      continue;
+    }
+    addFaceCarrierRole(
+      input.candidates,
+      carriers[0]!,
+      name,
+      input.assignments,
+      input.diagnostics
+    );
+  }
+}
+
 /** Extrude one or more explicitly selected bounded sketch cells. */
 export function buildRegionExtrude(
   kernel: RemusKernel,
@@ -556,13 +713,17 @@ export function buildRegionExtrude(
   }
   const groups = connectedRegionGroups(regions);
   const lineages: RemusLineageState[] = [];
+  const objectsById = new Map(
+    sketch.objectIds.flatMap((objectId) => {
+      const node = document.nodes[objectId];
+      return node?.kind === 'sketch-object'
+        ? [[objectId, node.data] as const]
+        : [];
+    })
+  );
   const solids = groups.map((group) => {
-    const face = makeRegionFace(
-      kernel,
-      mergeAdjacentProfiles(group),
-      extrudeBasis,
-      warn
-    );
+    const merged = mergeAdjacentProfiles(group);
+    const face = makeRegionFace(kernel, merged, extrudeBasis, warn);
     const solid = kernel.extrude(
       face,
       extrudeBasis.normal.x,
@@ -604,12 +765,17 @@ export function buildRegionExtrude(
         assignments,
         diagnostics
       );
-      diagnostics.push(
-        remusHashOnlyLineage(
-          'sweep',
-          `Selected-region side topology ${token} has no one-to-one semantic curve mapping.`
-        )
-      );
+      addRegionSideRoles({
+        candidates,
+        region: merged,
+        token,
+        basis: extrudeBasis,
+        totalDistance,
+        objectsById,
+        scope,
+        assignments,
+        diagnostics
+      });
     }
     lineages.push(
       mergeRemusLineageStates([

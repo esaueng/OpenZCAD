@@ -3663,3 +3663,111 @@ test('an archive that outlives its project stays out of the next project’s Fil
     page.locator('details.file-menu summary')
   ).not.toContainText('File 1');
 });
+
+test('sketches on the wall of a drag-style extrusion and on a hash-only face', async ({
+  page
+}) => {
+  test.setTimeout(90_000);
+  await stubApi(page);
+  await page.setViewportSize({ width: 1280, height: 720 });
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('Sketch On Generated Face');
+  await page.getByRole('button', { name: 'Create project' }).click();
+
+  const canvas = page.locator('.viewer-host canvas');
+  await expect(canvas).toBeVisible({ timeout: 120_000 });
+  await page.getByRole('button', { name: /^Sketch \(S\)/ }).click();
+  await page.getByRole('button', { name: 'Top (XY)' }).click();
+  await expect(
+    page.getByRole('region', { name: 'Editing Sketch: New Sketch operation' })
+  ).toBeVisible();
+  await page.waitForTimeout(800);
+
+  const bounds = await canvas.boundingBox();
+  expect(bounds).not.toBeNull();
+  const corner = {
+    x: bounds!.x + bounds!.width * 0.45,
+    y: bounds!.y + bounds!.height * 0.45
+  };
+  const sketchTools = page.getByRole('toolbar', { name: 'Sketch tools' });
+  await sketchTools.getByRole('button', { name: /^Rectangle/ }).click();
+  await page.mouse.move(corner.x, corner.y);
+  await page.mouse.down();
+  await page.mouse.move(corner.x + 120, corner.y + 60, { steps: 6 });
+  await page.mouse.up();
+  await expect(page.getByRole('contentinfo')).toContainText(
+    'Sketch 01 started.'
+  );
+
+  // The region path is the one every UI extrude takes; it used to name only
+  // the two caps, which is why a sketch on a side wall was refused.
+  await sketchTools.getByRole('button', { name: 'Extrude' }).click();
+  await expect(page.getByRole('contentinfo')).toContainText(
+    'Closed sketch profile selected'
+  );
+  await page.getByTestId('direct-manipulation-value').click();
+  const heightKeypad = page.getByRole('dialog', { name: 'Height value' });
+  await heightKeypad.getByRole('textbox').fill('24');
+  await heightKeypad.getByRole('button', { name: 'Apply height' }).click();
+  await expect(page.getByRole('contentinfo')).toContainText(
+    'Extruded region by 24 mm (new-body)',
+    { timeout: 20_000 }
+  );
+
+  const selectWall = (normal: { x: number; y: number; z: number }) =>
+    canvas.evaluate(
+      (element, wanted) =>
+        new Promise<{ hasReference: boolean; lineageName?: string } | null>(
+          (resolve) => {
+            element.dispatchEvent(
+              new CustomEvent('openzcad:e2e-select-planar-face', {
+                detail: { normal: wanted, resolve }
+              })
+            );
+          }
+        ),
+      normal
+    );
+
+  // A side wall of the extrusion carries lineage named after the rectangle
+  // segment that drew it, so Sketch attaches associatively.
+  await page.getByRole('button', { name: /^Sketch \(S\)/ }).click();
+  const wall = await selectWall({ x: 0, y: -1, z: 0 });
+  expect(wall?.hasReference).toBe(true);
+  expect(wall?.lineageName).toMatch(/^sweep\.face\.side\.region\./);
+  await expect(page.getByRole('contentinfo')).toContainText(
+    'Sketching on the selected face'
+  );
+  await expect(
+    page.getByRole('region', { name: 'Editing Sketch: New Sketch operation' })
+  ).toBeVisible();
+  await page.keyboard.press('Escape');
+  await page.keyboard.press('Escape');
+  await expect(page.getByRole('contentinfo')).toContainText('Sketch closed');
+
+  // Fuse a box into the plate: every face of a boolean result is hash-only.
+  // That must not end the task — the sketch lands on a fixed plane at the
+  // face, and the status says so instead of refusing.
+  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
+  const inspector = page.getByRole('region', { name: 'Feature inspector' });
+  await inspector.getByRole('button', { name: /^Create/ }).click();
+  await expect(page.getByRole('contentinfo')).toContainText('Add box');
+  await page.getByRole('button', { name: /^Union \(U\)/ }).click();
+  await inspector.locator('.pick-row', { hasText: 'Extrude Body' }).click();
+  await inspector.locator('.pick-row', { hasText: 'Box Body' }).click();
+  await inspector.getByRole('button', { name: /^Create/ }).click();
+  const union = page.locator('.feature-row', { hasText: 'Union' });
+  await expect(union).toBeVisible({ timeout: 20_000 });
+  await expect(union.getByTitle('Feature failed to build')).toHaveCount(0);
+
+  await page.getByRole('button', { name: /^Sketch \(S\)/ }).click();
+  const fused = await selectWall({ x: 0, y: 0, z: 1 });
+  expect(fused).not.toBeNull();
+  expect(fused?.hasReference).toBe(false);
+  await expect(page.getByRole('contentinfo')).toContainText(
+    'Sketching on a fixed plane at the selected face'
+  );
+  await expect(
+    page.getByRole('region', { name: 'Editing Sketch: New Sketch operation' })
+  ).toBeVisible();
+});
