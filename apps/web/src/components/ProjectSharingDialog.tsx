@@ -99,31 +99,43 @@ export function ProjectSharingDialog({
   const [email, setEmail] = useState('');
   const [inviteRole, setInviteRole] = useState<ProjectMemberRole>('viewer');
   const [invitationSentTo, setInvitationSentTo] = useState<string | null>(null);
+  const [hydrating, setHydrating] = useState(role === 'owner');
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   useModalFocus(dialogRef, { autoFocus: true });
 
-  const refresh = useCallback(async () => {
-    if (role !== 'owner') {
-      setSharing(null);
-      setShareLinks([]);
-      return;
-    }
-    setBusy('loading');
-    setError(null);
-    try {
-      const [nextSharing, nextShareLinks] = await Promise.all([
-        client.getProjectSharing(projectId),
-        shareLinkClient.listProjectShareLinks(projectId)
-      ]);
-      setSharing(nextSharing);
-      setShareLinks(nextShareLinks);
-    } catch (caught) {
-      setError(errorMessage(caught));
-    } finally {
-      setBusy(null);
-    }
-  }, [client, shareLinkClient, projectId, role]);
+  const refresh = useCallback(
+    async (source: 'hydrate' | 'action' = 'action') => {
+      const isHydration = source === 'hydrate';
+      if (role !== 'owner') {
+        setSharing(null);
+        setShareLinks([]);
+        if (isHydration) {
+          setHydrating(false);
+        }
+        return;
+      }
+      if (isHydration) {
+        setHydrating(true);
+      }
+      setError(null);
+      try {
+        const [nextSharing, nextShareLinks] = await Promise.all([
+          client.getProjectSharing(projectId),
+          shareLinkClient.listProjectShareLinks(projectId)
+        ]);
+        setSharing(nextSharing);
+        setShareLinks(nextShareLinks);
+      } catch (caught) {
+        setError(errorMessage(caught));
+      } finally {
+        if (isHydration) {
+          setHydrating(false);
+        }
+      }
+    },
+    [client, shareLinkClient, projectId, role]
+  );
 
   const copyShareLink = async (url: string) => {
     try {
@@ -140,7 +152,9 @@ export function ProjectSharingDialog({
   };
 
   useEffect(() => {
-    void refresh();
+    // Initial hydration guards the controls without inserting a transient
+    // action-status row after the dialog has already painted.
+    void refresh('hydrate');
   }, [refresh]);
 
   const mutate = async (key: string, action: () => Promise<void>) => {
@@ -156,6 +170,7 @@ export function ProjectSharingDialog({
   };
 
   const leaseIsActive = activeLease(lease, projectId);
+  const interactionBusy = hydrating || busy !== null;
 
   return (
     <div
@@ -172,6 +187,7 @@ export function ProjectSharingDialog({
         role="dialog"
         aria-modal="true"
         aria-labelledby="project-sharing-title"
+        aria-busy={interactionBusy}
         tabIndex={-1}
         onKeyDown={(event) => {
           if (event.key === 'Escape') {
@@ -276,7 +292,7 @@ export function ProjectSharingDialog({
                   <button
                     type="submit"
                     className="primary"
-                    disabled={busy !== null}
+                    disabled={interactionBusy}
                   >
                     Send invite
                   </button>
@@ -350,7 +366,7 @@ export function ProjectSharingDialog({
                           className="sharing-role-select"
                           aria-label={`Role for ${member.email ?? member.userId}`}
                           value={member.role}
-                          disabled={busy !== null}
+                          disabled={interactionBusy}
                           onChange={(event) =>
                             void mutate(`member:${member.userId}`, async () => {
                               await client.updateMemberRole(
@@ -374,7 +390,7 @@ export function ProjectSharingDialog({
                           type="button"
                           className="sharing-row-action"
                           aria-label={`Remove ${member.email ?? member.userId}`}
-                          disabled={busy !== null}
+                          disabled={interactionBusy}
                           onClick={() =>
                             void mutate(`remove:${member.userId}`, async () => {
                               await client.removeMember(
@@ -426,7 +442,7 @@ export function ProjectSharingDialog({
                           type="button"
                           className="sharing-row-action"
                           aria-label={`Revoke invitation for ${invitation.email}`}
-                          disabled={busy !== null}
+                          disabled={interactionBusy}
                           onClick={() =>
                             void mutate(
                               `revoke:${invitation.invitationId}`,
@@ -465,7 +481,7 @@ export function ProjectSharingDialog({
                 <button
                   type="button"
                   className="primary sharing-share-create"
-                  disabled={busy !== null}
+                  disabled={interactionBusy}
                   onClick={() =>
                     void mutate('share-link:create', async () => {
                       setCreatedShareLinkUrl(null);
@@ -527,7 +543,7 @@ export function ProjectSharingDialog({
                           aria-label={`Revoke share link created ${createdLabel(
                             shareLink.createdAt
                           )}`}
-                          disabled={busy !== null}
+                          disabled={interactionBusy}
                           onClick={() =>
                             void mutate(
                               `share-link:revoke:${shareLink.shareLinkId}`,
