@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { createProjectDocument } from '@openzcad/document-core';
 import { toUserId, type ProjectDocument } from '@openzcad/shared';
 import {
+  clearRecoveryLedger,
   clearUnresolvedConflict,
   conflictFromDocuments,
   readUnresolvedConflict,
@@ -36,6 +37,7 @@ function handlers(order: string[] = []): ConflictResolutionHandlers {
 
 function accountConflict(): ProjectConflict {
   clearUnresolvedConflict(base.projectId, 'account');
+  clearRecoveryLedger(base.projectId);
   return conflictFromDocuments(at(7), at(9), 'account');
 }
 
