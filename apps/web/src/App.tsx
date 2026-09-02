@@ -2240,21 +2240,19 @@ export function App() {
       // adopting a matching document does not blank the viewport while the
       // kernel rebuilds what it already had.
       const remoteDocument = withMatchingLocalDerived(incomingDocument, current);
-      // The room and the freshness poll are two routes to the same place, so
-      // they have to leave the same state behind: without re-baselining here,
-      // the next autosave would be fenced against a version this device has
-      // already moved past and would report a conflict that does not exist.
-      remoteVersionsRef.current.set(
-        remoteDocument.projectId,
-        remoteDocument.version
-      );
+      // A room version is not an account version. The room stores whatever
+      // version its clients commit and never writes the account's record, so
+      // baselining the account on this number fenced the next push against a
+      // version the account had never seen — a 409, and a "changed in two
+      // places" dialog for a document that only ever moved on one side. The
+      // account baseline stays what the account last acknowledged; the adopted
+      // document is ahead of it and goes up as an ordinary fenced write, and
+      // `raiseAccountConflict` reads the lineage if the account moved too. The
+      // controller is re-pointed at that baseline so a halt from an earlier
+      // fence does not hold the push back.
       void (async () => {
         try {
           await saveLocalProject(remoteDocument);
-          await saveLastSyncedVersion(
-            remoteDocument.projectId,
-            remoteDocument.version
-          );
         } catch {
           setSaveState('offline');
           setStatus(
@@ -2262,10 +2260,14 @@ export function App() {
           );
         }
       })();
-      cloudProjectAutosaveRef.current?.adoptAccountVersion(
-        remoteDocument.projectId,
-        remoteDocument.version
-      );
+      const controller = cloudProjectAutosaveRef.current;
+      const accountVersion =
+        controller?.syncedVersion ??
+        remoteVersionsRef.current.get(remoteDocument.projectId) ??
+        null;
+      if (controller && accountVersion !== null) {
+        controller.adoptAccountVersion(remoteDocument.projectId, accountVersion);
+      }
       hydrateDocument(remoteDocument, {
         restoreView: false,
         rememberProject: false
@@ -2547,10 +2549,7 @@ export function App() {
       }
       await saveLocalProject(restored);
       await saveLastSyncedVersion(restored.projectId, restored.version);
-      if (managerRef.current) {
-        managerRef.current.document = restored;
-      }
-      setDoc(restored);
+      showAccountEcho(restored);
       cloudProjectAutosaveRef.current?.adoptAccountVersion(
         restored.projectId,
         restored.version
@@ -2584,11 +2583,51 @@ export function App() {
     }
   }
 
-  useEffect(() => {
-    if (collaboration.conflict) {
-      setSharingOpen(true);
+  /**
+   * The room's counterpart to `resolveAccountConflict`: the same three
+   * resolutions and the same dialog, with the room's lease rules in the
+   * context. The hook clears its own marker on the ack or the adoption.
+   */
+  async function resolveRoomConflict(resolution: ConflictResolution) {
+    const conflict = collaboration.conflict;
+    if (!conflict) {
+      return;
     }
-  }, [collaboration.conflict]);
+    setBusy(true);
+    try {
+      await resolveProjectConflict(
+        conflict,
+        resolution,
+        {
+          role: collaboration.role,
+          lease: collaboration.lease,
+          leasesEnforced: collaborationRollout.editLeasesEnforced
+        },
+        conflictHandlers
+      );
+    } catch (error) {
+      setStatus(errorMessage(error, 'Could not resolve the conflict.'));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  // "Decide later" on a room conflict. The hook re-raises the conflict on
+  // every room frame while it is unresolved, so the dismissal is keyed to the
+  // exact divergence: a new version pair is a new question and shows again.
+  const [dismissedRoomConflict, setDismissedRoomConflict] = useState<
+    string | null
+  >(null);
+  const roomConflictKey = collaboration.conflict
+    ? `${collaboration.conflict.projectId}:${collaboration.conflict.localDocument.version}:${collaboration.conflict.expectedRemoteVersion}`
+    : null;
+  const roomKeepMineDisabledReason: string | null = !collaboration.conflict
+    ? null
+    : collaboration.role === 'viewer'
+      ? 'Viewers cannot replace the live version.'
+      : collaborationRollout.editLeasesEnforced && !activeCollaborationLease
+        ? 'Keeping this device’s version requires an active edit lease.'
+        : null;
 
   useEffect(() => {
     savePanelState(panelState);
@@ -6094,6 +6133,25 @@ export function App() {
     return withMatchingLocalDerived(remote, local);
   }
 
+  /**
+   * Puts a document the account echoed back after a save on screen. A
+   * checkpoint-only save keeps the version, and the geometry sync dedupes on
+   * version — so an echo that could not reuse this device's meshes has to
+   * invalidate first, or the viewport stays blank until a reload rebuilds it.
+   */
+  function showAccountEcho(echo: ProjectDocument) {
+    if (managerRef.current) {
+      managerRef.current.document = echo;
+    }
+    if (
+      echo.bodyOrder.length > 0 &&
+      Object.keys(echo.derived.bodyRepresentations).length === 0
+    ) {
+      geometry.invalidate();
+    }
+    setDoc(echo);
+  }
+
   /** Stores a document that the account has acknowledged on every local path. */
   async function acceptAccountDocument(
     remote: ProjectDocument,
@@ -6127,8 +6185,7 @@ export function App() {
         );
         return merged;
       }
-      managerRef.current.document = merged;
-      setDoc(merged);
+      showAccountEcho(merged);
       setCloudAvailable(true);
       setSaveState('synced');
       cloudProjectAutosaveRef.current?.adoptAccountVersion(
@@ -7204,17 +7261,11 @@ export function App() {
         ? 'This project changed elsewhere. Your work is saved on this device.'
         : `This project changed elsewhere (account version ${accountVersion}). Your work is saved on this device.`
     );
-    void api
-      .loadProject(projectId)
-      .then((remote) => {
-        accountDocumentUnavailableProjectIdRef.current = null;
-        setCloudAvailable(true);
-        cloudProjectAutosaveRef.current?.haltForConflict(projectId);
-        setAccountConflict(
-          conflictFromDocuments(localDocument, remote, 'account')
-        );
-      })
-      .catch((error) => {
+    void (async () => {
+      let remote: ProjectDocument;
+      try {
+        remote = await api.loadProject(projectId);
+      } catch (error) {
         if (isProjectDocumentUnavailableError(error)) {
           accountDocumentUnavailableProjectIdRef.current = projectId;
           setCloudAvailable(false);
@@ -7227,7 +7278,72 @@ export function App() {
         setStatus(
           `${errorMessage(error, 'Could not load the account copy.')} Your work remains saved on this device.`
         );
-      });
+        return;
+      }
+      accountDocumentUnavailableProjectIdRef.current = null;
+      setCloudAvailable(true);
+      remoteVersionsRef.current.set(projectId, remote.version);
+      // A fenced 409 says the numbers disagree, not that the work does. The
+      // room hands this device documents at versions the account has never
+      // seen, so read the baseline and the lineage before asking: only a
+      // divergence — both sides moved, neither descending from the other —
+      // is the user's decision to make.
+      const lastSyncedVersion = await loadLastSyncedVersion(projectId).catch(
+        () => null
+      );
+      const outcome = chooseProjectDocument(
+        localDocument,
+        remote,
+        lastSyncedVersion
+      );
+      if (outcome.choice === 'remote') {
+        await acceptAccountDocument(outcome.document, localDocument);
+        setSaveState('synced');
+        setStatus(
+          outcome.document.version === localDocument.version
+            ? 'Your account already holds this version.'
+            : 'Opened the newer copy from your account.'
+        );
+        return;
+      }
+      if (outcome.choice === 'local') {
+        try {
+          const candidate = {
+            ...outcome.document,
+            ownerUserId: remote.ownerUserId
+          };
+          const saved = await api.saveProjectDocument({
+            projectId: candidate.projectId,
+            expectedVersion: remote.version,
+            document: withoutDerivedProjection(candidate)
+          });
+          await acceptAccountDocument(
+            {
+              ...candidate,
+              version: saved.version,
+              derived: { ...candidate.derived, updatedAt: saved.updatedAt }
+            },
+            localDocument
+          );
+          setSaveState('synced');
+          setStatus('Synced with your account.');
+          return;
+        } catch (error) {
+          if (!(error instanceof ApiError && error.status === 409)) {
+            setStatus(
+              `${errorMessage(error, 'Could not sync with your account.')} Your work remains saved on this device.`
+            );
+            return;
+          }
+          // The account moved again under the push: a divergence after all.
+          remote = await api.loadProject(projectId).catch(() => remote);
+        }
+      }
+      cloudProjectAutosaveRef.current?.haltForConflict(projectId);
+      setAccountConflict(
+        conflictFromDocuments(localDocument, remote, 'account')
+      );
+    })();
   }
 
   async function retryUnavailableAccountProject(
@@ -7489,10 +7605,7 @@ export function App() {
       const restored = withLocalDerived(saved, doc);
       await saveLocalProject(restored);
       await saveLastSyncedVersion(restored.projectId, restored.version);
-      if (managerRef.current) {
-        managerRef.current.document = restored;
-      }
-      setDoc(restored);
+      showAccountEcho(restored);
       setCloudAvailable(true);
       setSaveState('synced');
       cloudProjectAutosaveRef.current?.adoptAccountVersion(
@@ -14414,12 +14527,9 @@ export function App() {
                 lease={collaboration.lease}
                 liveMembers={collaboration.members}
                 currentUserId={session?.userId}
-                conflict={collaboration.conflict}
-                conflictHandlers={conflictHandlers}
                 editorInvitationsEnabled={
                   collaborationRollout.editLeasesEnforced
                 }
-                editLeasesEnforced={collaborationRollout.editLeasesEnforced}
                 onClose={() => setSharingOpen(false)}
               />
             )}
@@ -14447,6 +14557,17 @@ export function App() {
               path — is unresolved, the account dialog waits its turn. The
               state is kept, so it reappears once the room conflict clears if
               the account still disagrees. */}
+          {collaboration.conflict &&
+            collaboration.conflict.projectId === doc.projectId &&
+            dismissedRoomConflict !== roomConflictKey && (
+            <ProjectConflictDialog
+              conflict={collaboration.conflict}
+              busy={busy}
+              keepMineDisabledReason={roomKeepMineDisabledReason}
+              onResolve={(resolution) => void resolveRoomConflict(resolution)}
+              onClose={() => setDismissedRoomConflict(roomConflictKey)}
+            />
+          )}
           {accountConflict &&
             accountConflict.projectId === doc.projectId &&
             !collaboration.conflict && (
