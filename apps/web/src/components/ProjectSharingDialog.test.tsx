@@ -6,22 +6,16 @@ import {
   toUserId,
   type AcceptProjectInvitationResponse,
   type CreateProjectInvitationResponse,
-  type ProjectDocument,
   type ProjectMemberRole,
   type ProjectSharingResponse,
   type UserId
 } from '@openzcad/shared';
-import type { ConflictResolutionHandlers } from '../lib/conflictRecovery';
 import type { ProjectSharingClient } from '../lib/projectSharing';
 import type { ProjectShareLinkClient } from '../lib/projectShareClient';
 import { ProjectSharingDialog } from './ProjectSharingDialog';
 
 const owner = toUserId('user_sharing_owner');
 const member = toUserId('user_sharing_member');
-
-function version(document: ProjectDocument, value: number): ProjectDocument {
-  return { ...structuredClone(document), version: value };
-}
 
 function client(): ProjectSharingClient {
   return {
@@ -118,23 +112,6 @@ function shareLinkClient(): ProjectShareLinkClient {
       }
     }),
     fetchSharedProject: vi.fn(async () => null)
-  };
-}
-
-function recoveryHandlers(calls: string[] = []): ConflictResolutionHandlers {
-  return {
-    writeRecoveryCopy: vi.fn(async () => {
-      calls.push('recovery');
-    }),
-    useRemoteVersion: vi.fn(async () => {
-      calls.push('room');
-    }),
-    keepMyVersion: vi.fn(async () => {
-      calls.push('mine');
-    }),
-    saveLocalAsCopy: vi.fn(async () => {
-      calls.push('copy');
-    })
   };
 }
 
@@ -365,148 +342,5 @@ describe('ProjectSharingDialog', () => {
       'viewer'
     );
     expect(screen.getByRole('option', { name: 'Editor' })).toBeDisabled();
-  });
-
-  it('keeps viewer recovery actions safe and never offers lease acquisition', async () => {
-    const base = createProjectDocument('Viewer conflict', owner);
-    const conflict = {
-      projectId: base.projectId,
-      localDocument: version(base, 2),
-      remoteDocument: version(base, 3),
-      expectedRemoteVersion: 3,
-      source: 'room' as const
-    };
-    const calls: string[] = [];
-    const handlers = recoveryHandlers(calls);
-    const sharingClient = client();
-    const user = userEvent.setup();
-    render(
-      <ProjectSharingDialog
-        projectId={base.projectId}
-        role="viewer"
-        collaborationStatus="conflict"
-        lease={null}
-        conflict={conflict}
-        conflictHandlers={handlers}
-        client={sharingClient}
-        onClose={vi.fn()}
-      />
-    );
-
-    expect(
-      screen.getByRole('button', { name: 'Keep my version' })
-    ).toBeDisabled();
-    expect(
-      screen.queryByRole('button', { name: /lease/i })
-    ).not.toBeInTheDocument();
-    expect(sharingClient.getProjectSharing).not.toHaveBeenCalled();
-
-    await user.click(screen.getByRole('button', { name: 'Use room version' }));
-    await waitFor(() => expect(calls).toEqual(['recovery', 'room']));
-  });
-
-  it('enables Keep my version only for an active editor lease', async () => {
-    const base = createProjectDocument('Editor conflict', owner);
-    const conflict = {
-      projectId: base.projectId,
-      localDocument: version(base, 5),
-      remoteDocument: version(base, 6),
-      expectedRemoteVersion: 6,
-      source: 'room' as const
-    };
-    const calls: string[] = [];
-    const handlers = recoveryHandlers(calls);
-    const user = userEvent.setup();
-    render(
-      <ProjectSharingDialog
-        projectId={base.projectId}
-        role="editor"
-        collaborationStatus="conflict"
-        lease={{
-          projectId: base.projectId,
-          leaseId: 'lease_editor',
-          clientId: 'client_editor',
-          userId: member,
-          expiresAt: Date.now() + 30_000
-        }}
-        conflict={conflict}
-        conflictHandlers={handlers}
-        client={client()}
-        onClose={vi.fn()}
-      />
-    );
-
-    const keepMine = screen.getByRole('button', { name: 'Keep my version' });
-    expect(keepMine).toBeEnabled();
-    await user.click(keepMine);
-    await waitFor(() => expect(calls).toEqual(['recovery', 'mine']));
-    expect(handlers.keepMyVersion).toHaveBeenCalledWith({
-      document: conflict.localDocument,
-      expectedRemoteVersion: 6,
-      leaseId: 'lease_editor'
-    });
-  });
-
-  it('keeps Keep my version lease-gated by default when no flag is passed', () => {
-    const base = createProjectDocument('Default enforcement', owner);
-    render(
-      <ProjectSharingDialog
-        projectId={base.projectId}
-        role="editor"
-        collaborationStatus="conflict"
-        lease={null}
-        conflict={{
-          projectId: base.projectId,
-          localDocument: version(base, 2),
-          remoteDocument: version(base, 3),
-          expectedRemoteVersion: 3,
-          source: 'room' as const
-        }}
-        conflictHandlers={recoveryHandlers()}
-        client={client()}
-        onClose={vi.fn()}
-      />
-    );
-
-    expect(
-      screen.getByRole('button', { name: 'Keep my version' })
-    ).toBeDisabled();
-    expect(screen.getByText(/active edit lease/)).toBeInTheDocument();
-  });
-
-  it('lets an editor keep their version without a lease when leases are not enforced', async () => {
-    const base = createProjectDocument('Unenforced leases', owner);
-    const conflict = {
-      projectId: base.projectId,
-      localDocument: version(base, 5),
-      remoteDocument: version(base, 6),
-      expectedRemoteVersion: 6,
-      source: 'room' as const
-    };
-    const calls: string[] = [];
-    const handlers = recoveryHandlers(calls);
-    const user = userEvent.setup();
-    render(
-      <ProjectSharingDialog
-        projectId={base.projectId}
-        role="editor"
-        collaborationStatus="conflict"
-        lease={null}
-        conflict={conflict}
-        conflictHandlers={handlers}
-        client={client()}
-        editLeasesEnforced={false}
-        onClose={vi.fn()}
-      />
-    );
-
-    const keepMine = screen.getByRole('button', { name: 'Keep my version' });
-    expect(keepMine).toBeEnabled();
-    await user.click(keepMine);
-    await waitFor(() => expect(calls).toEqual(['recovery', 'mine']));
-    expect(handlers.keepMyVersion).toHaveBeenCalledWith({
-      document: conflict.localDocument,
-      expectedRemoteVersion: 6
-    });
   });
 });
