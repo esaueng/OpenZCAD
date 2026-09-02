@@ -122,7 +122,6 @@ import {
   TRASH_RETENTION_DAYS
 } from '@openzcad/shared';
 import type {
-  AppSettings,
   AppSettingsResponse,
   AuthConfigResponse,
   AuthSession,
@@ -200,7 +199,6 @@ import {
   cloudFunctionsAreEnabled,
   setCloudFunctionsEnabled
 } from './lib/cloudMode';
-import { CloudSettingsAutosave } from './lib/cloudSettingsAutosave';
 import {
   CloudProjectAutosave,
   currentVersionOf,
@@ -704,6 +702,7 @@ import { errorMessage } from './lib/errors';
 import { describeSyncFailure, type SyncEntry } from './lib/syncRun';
 import { useGeometryWorker } from './hooks/useGeometryWorker';
 import { useProjectView } from './hooks/useProjectView';
+import { useAppSettingsSync } from './hooks/useAppSettingsSync';
 import { useDirectEditCommit } from './hooks/useDirectEditCommit';
 import { useMeasurementWorkbench } from './hooks/useMeasurementWorkbench';
 import { useValidatedFeatureCommit } from './hooks/useValidatedFeatureCommit';
@@ -740,8 +739,6 @@ import {
 } from './lib/workspaceSession';
 import {
   defaultAppSettings,
-  loadLocalAppSettingsRecord,
-  resolvedAppTheme,
   saveLocalAppSettings,
   shouldAdoptAccountSettings
 } from './lib/appSettings';
@@ -1198,31 +1195,36 @@ export function App() {
   const acceptPendingInvitationRef = useRef<(token: string) => Promise<void>>(
     async () => undefined
   );
-  /**
-   * What was on this device at mount, read once. The account fetch resolves
-   * long after the settings-persistence effect has already written to storage,
-   * so re-reading it there would always look locally-edited.
-   */
-  const bootSettingsRef = useRef(loadLocalAppSettingsRecord());
-  const [appSettings, setAppSettings] = useState<AppSettings>(
-    () => bootSettingsRef.current?.settings ?? defaultAppSettings()
-  );
-  const appSettingsRef = useRef(appSettings);
-  appSettingsRef.current = appSettings;
   const [cloudFunctionsEnabled, setCloudFunctionsEnabledState] = useState(
     cloudFunctionsAreEnabled
   );
   const cloudFunctionsEnabledRef = useRef(cloudFunctionsEnabled);
   cloudFunctionsEnabledRef.current = cloudFunctionsEnabled;
   const bootCloudFunctionsEnabledRef = useRef(cloudFunctionsEnabled);
-  /**
-   * The account revision `appSettings` is in step with, or null once edited
-   * here without being saved. Persisted with the settings so a reload can tell
-   * an unsaved local change from a stale cache of the account copy.
-   */
-  const syncedRevisionRef = useRef<number | null>(
-    bootSettingsRef.current?.syncedRevision ?? null
-  );
+  // The callbacks read refs and setters declared further down; they only run
+  // from effects and handlers, long after this render has declared them.
+  const {
+    bootSettingsRef,
+    appSettings,
+    setAppSettings,
+    appSettingsRef,
+    syncedRevisionRef,
+    cloudSettingsAutosaveRef,
+    handleAppSettingsChange,
+    commitPanelWidth,
+    endCloudSettingsAutosave,
+    syncCloudSettingsSession
+  } = useAppSettingsSync({
+    api,
+    isCloudEnabled: () => cloudFunctionsEnabledRef.current,
+    hasAccountSession: () =>
+      Boolean(sessionRef.current && accountSettingsRef.current),
+    onAccountSettings: (response) => {
+      accountSettingsRef.current = response;
+      setAccountSettings(response);
+    },
+    setSettingsMessage: (message) => setSettingsMessage(message)
+  });
   // The active-project pointer is synchronous knowledge. Reading it lazily
   // lets the first render choose a stable restore surface instead of mounting
   // the launcher while IndexedDB and the optional cloud copy are still loading.
@@ -1353,9 +1355,7 @@ export function App() {
   const [desktopAuthorizationCode, setDesktopAuthorizationCode] = useState('');
   const [desktopAuthorizationApproved, setDesktopAuthorizationApproved] =
     useState(false);
-  const cloudSettingsAutosaveRef = useRef<CloudSettingsAutosave | null>(null);
   const cloudProjectAutosaveRef = useRef<CloudProjectAutosave | null>(null);
-  const cloudSettingsSessionUserRef = useRef<string | null>(null);
   const [projects, setProjects] = useState<ProjectSummary[]>([]);
   const [artifacts, setArtifacts] = useState<ArtifactRecord[]>([]);
   /**
@@ -2643,13 +2643,6 @@ export function App() {
   }, [panelState]);
 
   useEffect(() => {
-    saveLocalAppSettings(appSettings, syncedRevisionRef.current);
-    globalThis.document.documentElement.dataset.density =
-      appSettings.appearance.density;
-    globalThis.document.documentElement.dataset.reducedMotion = appSettings
-      .appearance.reducedMotion
-      ? 'true'
-      : 'false';
     setViewerSettings((current) => ({
       ...current,
       reducedMotion: appSettings.appearance.reducedMotion,
@@ -2658,80 +2651,6 @@ export function App() {
       pointerNavigation: appSettings.viewport.pointerNavigation
     }));
   }, [appSettings]);
-
-  useEffect(() => {
-    // Resolves the theme setting to the palette actually painted. 'system'
-    // tracks the host's preference live, so an OS appearance change mid-
-    // session re-themes the chrome without a reload; an explicit choice
-    // needs no listener. The 3D viewport keeps its dark stage either way —
-    // only the chrome tokens switch (see theme/tokens.css).
-    const root = globalThis.document.documentElement;
-    const theme = appSettings.appearance.theme;
-    if (theme !== 'system') {
-      root.dataset.theme = theme;
-      return;
-    }
-    const media = globalThis.matchMedia?.('(prefers-color-scheme: light)');
-    if (!media) {
-      root.dataset.theme = 'dark';
-      return;
-    }
-    const apply = () => {
-      root.dataset.theme = resolvedAppTheme('system', media.matches);
-    };
-    apply();
-    media.addEventListener('change', apply);
-    return () => media.removeEventListener('change', apply);
-  }, [appSettings.appearance.theme]);
-
-  useEffect(() => {
-    const controller = new CloudSettingsAutosave({
-      initialSettings: appSettingsRef.current,
-      initialSyncedRevision: syncedRevisionRef.current,
-      api,
-      onAccountSettings(response) {
-        accountSettingsRef.current = response;
-        setAccountSettings(response);
-      },
-      onLocalSettings(settings, syncedRevision) {
-        syncedRevisionRef.current = syncedRevision;
-        saveLocalAppSettings(settings, syncedRevision);
-      },
-      onStatus(status) {
-        switch (status.state) {
-          case 'pending':
-            setSettingsMessage(
-              'Saved on this device · saving to cloud profile…'
-            );
-            break;
-          case 'offline':
-            setSettingsMessage(
-              'Saved on this device · cloud sync paused until you are online.'
-            );
-            break;
-          case 'saved':
-            setSettingsMessage('Saved to this device and cloud profile.');
-            break;
-          case 'error':
-            setSettingsMessage(
-              errorMessage(
-                status.error,
-                'Cloud autosave failed · changes remain saved on this device.'
-              )
-            );
-            break;
-        }
-      }
-    });
-    cloudSettingsAutosaveRef.current = controller;
-    return () => {
-      controller.dispose();
-      if (cloudSettingsAutosaveRef.current === controller) {
-        cloudSettingsAutosaveRef.current = null;
-      }
-      cloudSettingsSessionUserRef.current = null;
-    };
-  }, []);
 
   useEffect(() => {
     const controller = new CloudProjectAutosave({
@@ -3041,28 +2960,16 @@ export function App() {
   }, [cloudFunctionsEnabled, doc?.projectId, session]);
 
   useEffect(() => {
-    const controller = cloudSettingsAutosaveRef.current;
-    const userId = session?.userId ?? null;
-    if (!controller) {
-      return;
-    }
-    if (!cloudFunctionsEnabled || !userId || !accountSettings) {
-      if (cloudSettingsSessionUserRef.current !== null) {
-        controller.endSession();
-        cloudSettingsSessionUserRef.current = null;
-      }
-      return;
-    }
-    if (cloudSettingsSessionUserRef.current !== userId) {
-      if (cloudSettingsSessionUserRef.current !== null) {
-        controller.endSession();
-      }
-      controller.connectSession(userId, accountSettings);
-      cloudSettingsSessionUserRef.current = userId;
-      return;
-    }
-    controller.updateAccountSettings(accountSettings);
-  }, [accountSettings, cloudFunctionsEnabled, session]);
+    syncCloudSettingsSession(
+      cloudFunctionsEnabled ? (session?.userId ?? null) : null,
+      accountSettings
+    );
+  }, [
+    accountSettings,
+    cloudFunctionsEnabled,
+    session,
+    syncCloudSettingsSession
+  ]);
 
   useEffect(() => {
     let cancelled = false;
@@ -4980,27 +4887,6 @@ export function App() {
     );
   }
 
-  function handleAppSettingsChange(next: AppSettings) {
-    appSettingsRef.current = next;
-    setAppSettings(next);
-    const controller = cloudSettingsAutosaveRef.current;
-    if (cloudFunctionsEnabledRef.current && controller) {
-      controller.schedule(next);
-    } else {
-      syncedRevisionRef.current = null;
-      saveLocalAppSettings(next, null);
-    }
-    if (
-      cloudFunctionsEnabledRef.current &&
-      sessionRef.current &&
-      accountSettingsRef.current
-    ) {
-      setSettingsMessage('Saved on this device · saving to cloud profile…');
-    } else {
-      setSettingsMessage('Saved on this device.');
-    }
-  }
-
   function handleCloudFunctionsEnabledChange(next: boolean) {
     if (next === cloudFunctionsEnabledRef.current) {
       return;
@@ -5020,8 +4906,7 @@ export function App() {
 
     cloudProjectAutosaveRef.current?.configure({ enabled: false });
     cloudProjectAutosaveRef.current?.closeProject();
-    cloudSettingsAutosaveRef.current?.endSession();
-    cloudSettingsSessionUserRef.current = null;
+    endCloudSettingsAutosave();
     remoteVersionsRef.current.clear();
     accountDocumentUnavailableProjectIdRef.current = null;
     sessionRef.current = null;
@@ -5053,32 +4938,8 @@ export function App() {
       .catch(() => undefined);
   }
 
-  /**
-   * Keeps a resized panel. It goes down the same road as every other
-   * preference: the device copy is written immediately, and a signed-in session
-   * syncs it to the account profile, so the width follows the person rather
-   * than the browser they set it in.
-   */
-  function commitPanelWidth(panel: 'sidebar' | 'assistant', width: number) {
-    const current = appSettingsRef.current;
-    const saved = savedPanelWidths(current);
-    if (saved[panel] === width) {
-      return;
-    }
-    handleAppSettingsChange({
-      ...current,
-      layout: {
-        sidebarWidth: panel === 'sidebar' ? width : saved.sidebar,
-        assistantWidth: panel === 'assistant' ? width : saved.assistant
-      }
-    });
-  }
-
   function endCloudSettingsSession() {
-    if (cloudSettingsSessionUserRef.current !== null) {
-      cloudSettingsAutosaveRef.current?.endSession();
-      cloudSettingsSessionUserRef.current = null;
-    }
+    endCloudSettingsAutosave();
     // The next session on this device may be a different account; it must not
     // reconcile against this account's sync baselines.
     void clearAllLastSyncedVersions().catch(() => {
@@ -5455,8 +5316,7 @@ export function App() {
       const listed = await loadProjectSummaries(false);
       remoteVersionsRef.current.clear();
       accountDocumentUnavailableProjectIdRef.current = null;
-      cloudSettingsAutosaveRef.current?.endSession();
-      cloudSettingsSessionUserRef.current = null;
+      endCloudSettingsAutosave();
       // The next sign-in on this device may be a different account. Awaited so
       // it cannot be cut short by whatever navigation follows sign-out, and a
       // failure is reported rather than left for a later reconciliation to
