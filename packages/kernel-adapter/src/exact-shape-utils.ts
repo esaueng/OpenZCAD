@@ -29,7 +29,6 @@ import { GEOMETRY_EPSILON } from './exact-math';
 export /** Sewing gap for imported meshes, relative to the mesh's largest extent. */
 const MESH_SEW_TOLERANCE_RATIO = 1e-6;
 
-
 export function formatMeasuredVolume(value: number): string {
   const magnitude = Math.abs(value);
   if (magnitude !== 0 && (magnitude < 0.001 || magnitude >= 1_000_000)) {
@@ -69,7 +68,7 @@ export function validateGeneratedSolid(
   label: string
 ): number {
   if (!Number.isSafeInteger(solid) || solid < 0) {
-    throw new Error(`${label} did not return a solid handle.`);
+    throw new Error(`${label} produced no solid.`);
   }
   if (kernel.validateSolid(solid) !== 0) {
     throw new Error(`${label} did not produce a valid closed solid.`);
@@ -319,7 +318,8 @@ export function importStepWithOwnBudget(
  * slicers prefer; `obj` and `glb` serve DCC and web/AR consumers, each as
  * one merged mesh.
  */
-export type MeshExportFormat = 'stl-ascii' | 'stl-binary' | '3mf' | 'obj' | 'glb';
+export type MeshExportFormat =
+  'stl-ascii' | 'stl-binary' | '3mf' | 'obj' | 'glb';
 
 /** Per-body watertightness verdict from the kernel's welded-mesh counter. */
 export interface BodyMeshQuality {

@@ -56,7 +56,7 @@ const NORMAL_PROJECTED_RADIUS_PX = 240;
 
 /** The two message shapes `booleanFacetFallbackWarning` can produce. */
 const FACET_CENSUS_MESSAGE =
-  /faceted approximation instead of exact surfaces|replaced every curved surface with planar faces|produced far more faces than its operands/;
+  /could only be built as an approximation|replaced every curved surface with flat faces|produced far more faces than its operands/;
 
 /**
  * The boolean face census either fires or it does not, and today's answer is
@@ -1301,7 +1301,7 @@ describe('exact kernel adapter', { timeout: 30_000 }, () => {
     expect(result?.exportableStep).toBe(true);
     expect(derived.warnings).toContainEqual(
       expect.stringContaining(
-        'The result is watertight, but its curved surfaces are now planar facets and will export that way.'
+        'Repositioning the overlap sometimes clears it; otherwise keep the bodies separate, or subtract instead — the same operands still cut exactly.'
       )
     );
     // Remus now returns the approximation instead of failing the fuse. Keep
@@ -2178,7 +2178,7 @@ describe('exact kernel adapter', { timeout: 30_000 }, () => {
     }
 
     expect(after.warnings).toContain(
-      'Feature "Deepen blind bore": Offset face refused: the kernel returned a faceted approximation instead of exact surfaces: 5 source faces (2 curved) became 6 result faces (0 curved). The original body was left unchanged.'
+      'Feature "Deepen blind bore": This offset could only be built by replacing the body\'s exact surfaces with flat triangles, so it was refused and the body left unchanged.\n5 source faces (2 curved) became 6 result faces (0 curved)'
     );
     const preservedBody = after.bodyRepresentations[bodyId]!;
     expect(preservedBody.volume).toBeCloseTo(exactBody.volume, 6);
@@ -4013,9 +4013,7 @@ describe('exact kernel adapter', { timeout: 30_000 }, () => {
       ) ?? [];
     expect(resizedRegion).toHaveLength(3);
     expect(
-      new Set(
-        resizedRegion.map((face) => face.geometry?.blendRegionKey)
-      ).size
+      new Set(resizedRegion.map((face) => face.geometry?.blendRegionKey)).size
     ).toBe(1);
     expect(
       firstBody?.topology?.faces.filter(
@@ -5903,9 +5901,10 @@ describe('exact kernel adapter', { timeout: 30_000 }, () => {
       });
       const derived = await cachingAdapter.syncDocument(withSecond.document);
       expect(derived.warnings).toEqual([]);
-      expect(
-        derived.bodyRepresentations[firstBodyId]?.volume
-      ).toBeCloseTo(1000, 4);
+      expect(derived.bodyRepresentations[firstBodyId]?.volume).toBeCloseTo(
+        1000,
+        4
+      );
       expect(
         derived.bodyRepresentations[withSecond.bodyId]?.volume
       ).toBeCloseTo(8000, 4);
@@ -5954,9 +5953,9 @@ describe('exact kernel adapter', { timeout: 30_000 }, () => {
     const through = drill({});
     const throughDerived = await adapter.syncDocument(through.document);
     expect(throughDerived.warnings).toEqual([]);
-    expect(
-      throughDerived.bodyRepresentations[sourceBodyId]?.consumed
-    ).toBe(true);
+    expect(throughDerived.bodyRepresentations[sourceBodyId]?.consumed).toBe(
+      true
+    );
     expect(
       throughDerived.bodyRepresentations[through.bodyId]?.volume
     ).toBeCloseTo(8000 - Math.PI * 9 * 20, 4);
@@ -5976,9 +5975,7 @@ describe('exact kernel adapter', { timeout: 30_000 }, () => {
       counterboreDiameter: 10,
       counterboreDepth: 3
     });
-    const counterboreDerived = await adapter.syncDocument(
-      counterbore.document
-    );
+    const counterboreDerived = await adapter.syncDocument(counterbore.document);
     expect(counterboreDerived.warnings).toEqual([]);
     expect(
       counterboreDerived.bodyRepresentations[counterbore.bodyId]?.volume
@@ -5991,9 +5988,7 @@ describe('exact kernel adapter', { timeout: 30_000 }, () => {
       countersinkDiameter: 12,
       countersinkAngleDeg: 90
     });
-    const countersinkDerived = await adapter.syncDocument(
-      countersink.document
-    );
+    const countersinkDerived = await adapter.syncDocument(countersink.document);
     expect(countersinkDerived.warnings).toEqual([]);
     expect(
       countersinkDerived.bodyRepresentations[countersink.bodyId]?.volume

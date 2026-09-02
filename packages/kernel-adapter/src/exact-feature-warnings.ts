@@ -48,6 +48,10 @@ export function raiseFeatureWarning(
  *
  * Feature identity is part of the lookup because names and warning text may
  * both repeat; text alone can amend another feature's record.
+ *
+ * A warning may carry technical detail after its first newline, which the app
+ * collapses behind a disclosure. The remedy is the part the user acts on, so
+ * it joins the sentence before that newline rather than the hidden tail.
  */
 export function amendFeatureWarning(
   result: ExactBuildResult,
@@ -55,8 +59,12 @@ export function amendFeatureWarning(
   featureId: FeatureId,
   suffix: string
 ): void {
-  const amended = `${result.warnings[index]!} ${suffix}`;
   const previous = result.warnings[index]!;
+  const detailStart = previous.indexOf('\n');
+  const amended =
+    detailStart === -1
+      ? `${previous} ${suffix}`
+      : `${previous.slice(0, detailStart)} ${suffix}${previous.slice(detailStart)}`;
   result.warnings[index] = amended;
   const record = result.featureWarnings.find(
     (entry) => entry.featureId === featureId && entry.message === previous

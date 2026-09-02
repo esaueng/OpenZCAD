@@ -6,14 +6,8 @@
  */
 import type { RemusKernel } from './remus-runtime';
 import type { Vec2, Vec3 } from '@openzcad/geometry';
-import {
-  measureFaceGeometry,
-  type ThroughHoleGeometry
-} from './exact-measure';
-import {
-  readAnalyticCylinder,
-  type AnalyticCylinder
-} from './exact-brep';
+import { measureFaceGeometry, type ThroughHoleGeometry } from './exact-measure';
+import { readAnalyticCylinder, type AnalyticCylinder } from './exact-brep';
 import {
   ANALYTIC_MATCH_EPSILON,
   GEOMETRY_EPSILON,
@@ -285,7 +279,7 @@ export function fillThroughHole(
   }
   if (kernel.getSolidFaces(filled).length >= facesBefore) {
     throw new Error(
-      "Filling the through-hole fell back to a faceted mesh boolean, which would replace the body's exact surfaces with triangles."
+      "This through-hole could only be filled by replacing the body's exact surfaces with flat triangles, so it was refused."
     );
   }
   return filled;
@@ -381,7 +375,10 @@ export function drillHole(
       spec.entryExtension + sinkDepth
     );
     tools.push(
-      kernel.copyAndTransformSolid(cone, coordinateFrameMatrix(start, spec.axis))
+      kernel.copyAndTransformSolid(
+        cone,
+        coordinateFrameMatrix(start, spec.axis)
+      )
     );
   }
 
@@ -401,7 +398,7 @@ export function drillHole(
   // hundreds of triangles; a real hole adds at most a few faces per style.
   if (kernel.getSolidFaces(cut).length > facesBefore + 8) {
     throw new Error(
-      'The hole cut fell back to a faceted mesh boolean, which would replace exact surfaces with triangles.'
+      'This hole could only be cut by replacing exact surfaces with flat triangles, so it was refused.'
     );
   }
   const bores = coaxialCylinderRadii(

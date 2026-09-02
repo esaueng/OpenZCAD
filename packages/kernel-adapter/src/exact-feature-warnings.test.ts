@@ -56,6 +56,37 @@ describe('feature warning amendments', () => {
       result.warnings
     );
   });
+
+  it('appends the remedy to the sentence, not to the hidden detail', () => {
+    const result = emptyBuildResult();
+    const feature = {
+      featureId: toFeatureId('feat_union'),
+      name: 'Union'
+    };
+    const index = raiseFeatureWarning(
+      result,
+      feature,
+      'This union could only be built as an approximation.\n' +
+        '6 operand faces (2 curved) became 193 result faces (0 curved)',
+      'refusal'
+    );
+
+    amendFeatureWarning(
+      result,
+      index,
+      feature.featureId,
+      'Moving Cylinder +1 mm in Z clears it.'
+    );
+
+    expect(result.warnings).toEqual([
+      'Feature "Union": This union could only be built as an approximation. ' +
+        'Moving Cylinder +1 mm in Z clears it.\n' +
+        '6 operand faces (2 curved) became 193 result faces (0 curved)'
+    ]);
+    expect(result.featureWarnings?.map((entry) => entry.message)).toEqual(
+      result.warnings
+    );
+  });
 });
 
 describe('feature warning identity', () => {
