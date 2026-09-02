@@ -16,7 +16,7 @@ Branch `claude/3d-modeling-interface-refinement-e7b650`.
 | 0.3 baseline captured | **done** — `docs/performance-baseline.md` Wave 4 |
 | 1.1 memoize viewport array props | **done** — `17b7364`, move drag 121 → 61 rendered frames |
 | 1.2 move drag off workspace state | **done** — `1034669`, 61 → 2 React commits |
-| 1.2 extrude drag | **not started** — see note below |
+| 1.2 extrude drag | **partly done** — the region rig now sweeps its profile every frame and an exact extrude preview streams at the kernel's rate (see `docs/plans/direct-edit-reliability-plan.md`, B4); the per-move App state write is still open |
 | 1.2 cylinder-radius Inspector throttle | **not started** |
 | 1.3 rAF-coalesce drag handlers | **done** — `0a0a5d5`, 120 events → 1 apply |
 | 1.4 in-place preview geometry | **dropped** — the real-GPU measurement came back; the stall does not exist there (preview drag p95 25 ms). See the box in 1.4 |

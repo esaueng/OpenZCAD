@@ -1875,7 +1875,6 @@ export function ModelViewer({
       directionY: number;
       pixelsPerUnit: number;
       initialOffset: number;
-      lastPreviewAt: number;
     } | null = null;
     /** Immutable radius-edit snapshot captured when the handle engages. */
     let cylinderRadiusDrag: {
@@ -2031,7 +2030,6 @@ export function ModelViewer({
       directionY: number;
       pixelsPerUnit: number;
       initialValue: number;
-      lastPreviewAt: number;
     } | null = null;
     const hud = new HudLayer(host);
     const dragHud = hud.create('direct-edit-hud');
@@ -4318,7 +4316,7 @@ export function ModelViewer({
           ? 'deferred'
           : 'ready';
       chip.title = previewDeferredRef.current
-        ? 'Preview paused — the shape updates when you release.'
+        ? 'Preview is catching up — the shape follows as fast as the kernel can rebuild it.'
         : '';
       chip.setAttribute('aria-invalid', String(offsetWarning));
       hud.showAt(chip, screen.x, screen.y);
@@ -5111,14 +5109,11 @@ export function ModelViewer({
             : Math.round(raw * 10) / 10;
           if (value !== rig.value()) {
             rig.setValue(value);
-            // Kernel previews are expensive; stream at a bounded cadence and
-            // let App coalesce.
-            const now = performance.now();
-            if (
-              now - edgeDrag.lastPreviewAt > 150 &&
-              (value > 0 || edgeHandleRef.current?.allowRemoval)
-            ) {
-              edgeDrag.lastPreviewAt = now;
+            // Every applied value goes to the previewer. It keeps one rebuild
+            // in flight and drops superseded values, so the geometry follows
+            // the hand at whatever rate the kernel can rebuild — no fixed
+            // cadence sits between the two.
+            if (value > 0 || edgeHandleRef.current?.allowRemoval) {
               onEdgeRadiusPreviewRef.current(value);
             }
             requestRender();
@@ -5186,13 +5181,10 @@ export function ModelViewer({
             : Math.round(raw / snap) * snap;
           if (Math.abs(value - rig.value()) > 1e-9) {
             rig.setValue(value);
-            // Exact push/pull is bounded to the same cadence as edge blends;
-            // the app-side LivePreview still coalesces any overlap.
-            const now = performance.now();
-            if (now - offsetDrag.lastPreviewAt > 150) {
-              offsetDrag.lastPreviewAt = now;
-              onOffsetPreviewRef.current(value);
-            }
+            // Every applied value reaches the previewer; it keeps a single
+            // rebuild in flight and drops superseded values, so the exact
+            // solid follows the hand at the kernel's own rate.
+            onOffsetPreviewRef.current(value);
           }
           renderer.domElement.style.cursor = 'grabbing';
           requestRender();
@@ -5507,8 +5499,7 @@ export function ModelViewer({
             directionX: screen.directionX,
             directionY: screen.directionY,
             pixelsPerUnit: screen.pixelsPerUnit,
-            initialOffset: armedRig.value(),
-            lastPreviewAt: 0
+            initialOffset: armedRig.value()
           };
           offsetDragActiveRef.current = true;
           onDirectManipulationChangeRef.current(true);
@@ -5537,8 +5528,7 @@ export function ModelViewer({
             // The radial direction only signs the drag; the head-on scale
             // keeps radius sensitivity predictable at every view angle.
             pixelsPerUnit: screen.fallbackPixelsPerUnit,
-            initialValue: armedEdgeRig.value(),
-            lastPreviewAt: 0
+            initialValue: armedEdgeRig.value()
           };
           edgeDragActiveRef.current = true;
           onDirectManipulationChangeRef.current(true);
@@ -6856,6 +6846,11 @@ export function ModelViewer({
       } else {
         delete context.renderer.domElement.dataset.e2ePreviewBlendCount;
       }
+      // What the viewport is actually drawing, preview documents included —
+      // the only way a test can see an exact preview land mid-gesture.
+      context.renderer.domElement.dataset.e2eRenderedBodies = String(
+        bodies.length
+      );
     }
     const edgeResolution = context.fatLineResolution();
 
@@ -7797,30 +7792,25 @@ export function ModelViewer({
       region.holes,
       basis
     );
-    const ghostGeometry = new THREE.BufferGeometry();
-    ghostGeometry.setAttribute(
-      'position',
-      new THREE.BufferAttribute(positions, 3)
-    );
-    ghostGeometry.setIndex(indices);
-    const origin = {
-      x:
-        basis.origin.x +
-        basis.u.x * regionHandle.samplePoint.x +
-        basis.v.x * regionHandle.samplePoint.y,
-      y:
-        basis.origin.y +
-        basis.u.y * regionHandle.samplePoint.x +
-        basis.v.y * regionHandle.samplePoint.y,
-      z:
-        basis.origin.z +
-        basis.u.z * regionHandle.samplePoint.x +
-        basis.v.z * regionHandle.samplePoint.y
-    };
+    const toWorld = (point: { x: number; y: number }) => ({
+      x: basis.origin.x + basis.u.x * point.x + basis.v.x * point.y,
+      y: basis.origin.y + basis.u.y * point.x + basis.v.y * point.y,
+      z: basis.origin.z + basis.u.z * point.x + basis.v.z * point.y
+    });
+    const origin = toWorld(regionHandle.samplePoint);
+    // The ghost is the swept volume, not the flat region: it tracks the hand
+    // every frame, and the exact solid replaces the scene underneath it at
+    // whatever rate the kernel rebuilds.
     const rig = buildOffsetFaceHandle({
       origin,
       direction: basis.normal,
-      ghostGeometry
+      ghostGeometry: null,
+      sweep: {
+        cap: { positions, indices },
+        loops: [region.outer, ...region.holes].map((loop) =>
+          loop.map(toWorld)
+        )
+      }
     });
     rig.setValue(regionHandle.initialValue ?? 0);
     context.scene.add(rig.group);

@@ -190,6 +190,124 @@ export interface OffsetFaceRigParams {
   direction: HandleVec3;
   /** World-space triangles of the face, kept as the original-position reference. */
   ghostGeometry: THREE.BufferGeometry | null;
+  /**
+   * A profile to sweep along the drag direction instead of a flat ghost. The
+   * rig extrudes it by the current value every frame, so the volume the
+   * gesture adds or removes tracks the hand while the exact kernel catches up.
+   */
+  sweep?: SweepGhostParams;
+}
+
+export interface SweepGhostParams {
+  /** World-space cap triangulation lying on the profile's plane. */
+  cap: { positions: ArrayLike<number>; indices: ArrayLike<number> };
+  /**
+   * World-space boundary loops — outer first, then holes — each an ordered
+   * closed polyline without a repeated end point. They become the walls.
+   */
+  loops: HandleVec3[][];
+}
+
+/**
+ * Pure: vertex layout for a swept profile. Base copies first, then every
+ * vertex again for the moving end, so an update only rewrites the top half.
+ */
+export function sweepGhostLayout(params: SweepGhostParams): {
+  base: Float32Array;
+  indices: number[];
+  /** For each moving vertex, its index and the index of the base vertex it follows. */
+  moving: Array<{ top: number; base: number }>;
+} {
+  const capCount = Math.floor(params.cap.positions.length / 3);
+  const ringTotal = params.loops.reduce((sum, loop) => sum + loop.length, 0);
+  const vertexCount = capCount * 2 + ringTotal * 2;
+  const base = new Float32Array(vertexCount * 3);
+  const indices: number[] = [];
+  const moving: Array<{ top: number; base: number }> = [];
+
+  for (let i = 0; i < capCount * 3; i += 1) {
+    base[i] = params.cap.positions[i] ?? 0;
+    base[capCount * 3 + i] = params.cap.positions[i] ?? 0;
+  }
+  for (let i = 0; i < capCount; i += 1) {
+    moving.push({ top: capCount + i, base: i });
+  }
+  for (let i = 0; i < params.cap.indices.length; i += 1) {
+    indices.push(params.cap.indices[i] ?? 0);
+  }
+  for (let i = 0; i < params.cap.indices.length; i += 1) {
+    indices.push((params.cap.indices[i] ?? 0) + capCount);
+  }
+
+  let cursor = capCount * 2;
+  for (const loop of params.loops) {
+    const count = loop.length;
+    if (count < 2) {
+      continue;
+    }
+    for (let k = 0; k < count; k += 1) {
+      const point = loop[k]!;
+      const baseIndex = cursor + k;
+      const topIndex = cursor + count + k;
+      base[baseIndex * 3] = point.x;
+      base[baseIndex * 3 + 1] = point.y;
+      base[baseIndex * 3 + 2] = point.z;
+      base[topIndex * 3] = point.x;
+      base[topIndex * 3 + 1] = point.y;
+      base[topIndex * 3 + 2] = point.z;
+      moving.push({ top: topIndex, base: baseIndex });
+    }
+    for (let k = 0; k < count; k += 1) {
+      const a = cursor + k;
+      const b = cursor + ((k + 1) % count);
+      const c = cursor + count + k;
+      const d = cursor + count + ((k + 1) % count);
+      indices.push(a, b, d, a, d, c);
+    }
+    cursor += count * 2;
+  }
+  return { base, indices, moving };
+}
+
+function createSweepGhost(
+  params: SweepGhostParams,
+  direction: THREE.Vector3
+): {
+  mesh: THREE.Mesh<THREE.BufferGeometry, THREE.MeshBasicMaterial>;
+  update(value: number): void;
+} {
+  const layout = sweepGhostLayout(params);
+  const positions = new Float32Array(layout.base);
+  const attribute = new THREE.BufferAttribute(positions, 3);
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute('position', attribute);
+  geometry.setIndex(layout.indices);
+  const mesh = new THREE.Mesh(
+    geometry,
+    new THREE.MeshBasicMaterial({
+      color: ANALYTIC_GHOST_COLOR,
+      transparent: true,
+      opacity: GHOST_OPACITY,
+      depthTest: false,
+      side: THREE.DoubleSide
+    })
+  );
+  // The bounding sphere would need recomputing every frame; the ghost is
+  // small and short-lived, so skip culling instead.
+  mesh.frustumCulled = false;
+  mesh.renderOrder = 28;
+  mesh.visible = false;
+  return {
+    mesh,
+    update(value: number) {
+      for (const { top, base } of layout.moving) {
+        positions[top * 3] = layout.base[base * 3]! + direction.x * value;
+        positions[top * 3 + 1] = layout.base[base * 3 + 1]! + direction.y * value;
+        positions[top * 3 + 2] = layout.base[base * 3 + 2]! + direction.z * value;
+      }
+      attribute.needsUpdate = true;
+    }
+  };
 }
 
 /**
@@ -226,6 +344,11 @@ export function buildOffsetFaceHandle(params: OffsetFaceRigParams): DragRig {
   });
   dimension.object.visible = false;
   worldGroup.add(dimension.object);
+
+  const sweep = params.sweep ? createSweepGhost(params.sweep, direction) : null;
+  if (sweep) {
+    worldGroup.add(sweep.mesh);
+  }
 
   let ghost: THREE.Mesh<THREE.BufferGeometry, THREE.MeshBasicMaterial> | null =
     null;
@@ -305,6 +428,12 @@ export function buildOffsetFaceHandle(params: OffsetFaceRigParams): DragRig {
       }
       if (ghost) {
         ghost.visible = engaged;
+      }
+      if (sweep) {
+        sweep.mesh.visible = engaged;
+        if (engaged) {
+          sweep.update(value);
+        }
       }
     },
     value() {
