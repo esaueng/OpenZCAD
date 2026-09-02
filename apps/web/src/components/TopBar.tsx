@@ -109,16 +109,24 @@ const WORKSPACE_MODE_OPTIONS: ReadonlyArray<{
 ];
 
 /**
- * Labels the chips cycle through in ordinary use. Each chip reserves the
- * widest of these so a save, a sync or a presence change never resizes it;
- * the rare decision states (conflict, repair, update required) may still
- * take extra room while they show, as they demand a look anyway.
+ * Labels a chip cycles through in ordinary use. Each chip reserves the widest
+ * of these so a save, a sync or a presence change never resizes it — and no
+ * more, so the chip stays as narrow as its own cycle allows. The rare
+ * decision states (conflict, repair, update required) may still take extra
+ * room while they show, as they demand a look anyway.
  */
-const SAVE_STATE_LABEL_RESERVE = (
-  ['saving', 'syncing', 'synced', 'local', 'offline'] as const
-).map((state) => WORKSPACE_SAVE_STATE_PRESENTATION[state].topBarLabel);
-const COLLABORATION_LABEL_RESERVE = ['99 live', 'Not shared', 'Offline'];
-const ACCOUNT_LABEL_RESERVE = ['Checking', 'Signed out', 'Unavailable'];
+const saveStateLabels = (states: readonly WorkspaceSaveState[]) =>
+  states.map((state) => WORKSPACE_SAVE_STATE_PRESENTATION[state].topBarLabel);
+/** Signed in: the account round-trip. Signed out: device saves only. */
+const CLOUD_SAVE_LABEL_RESERVE = saveStateLabels([
+  'saving',
+  'syncing',
+  'synced',
+  'offline'
+]);
+const DEVICE_SAVE_LABEL_RESERVE = saveStateLabels(['saving', 'local']);
+const COLLABORATION_LABEL_RESERVE = ['9 live', 'offline'];
+const ACCOUNT_LABEL_RESERVE = ['Checking', 'Signed out'];
 
 export function TopBar({
   projectName,
@@ -318,7 +326,7 @@ export function TopBar({
             ) : (
               <CloudOff size={13} aria-hidden="true" />
             )}
-            <StableLabel reserve={ACCOUNT_LABEL_RESERVE}>
+            <StableLabel reserve={ACCOUNT_LABEL_RESERVE} align="center">
               {accountLabel}
             </StableLabel>
           </span>
@@ -342,7 +350,14 @@ export function TopBar({
           ) : (
             <CloudOff size={14} aria-hidden="true" />
           )}
-          <StableLabel reserve={SAVE_STATE_LABEL_RESERVE}>
+          <StableLabel
+            reserve={
+              accountState === 'signed-in'
+                ? CLOUD_SAVE_LABEL_RESERVE
+                : DEVICE_SAVE_LABEL_RESERVE
+            }
+            align="center"
+          >
             {WORKSPACE_SAVE_STATE_PRESENTATION[saveState].topBarLabel}
           </StableLabel>
         </button>
@@ -356,7 +371,7 @@ export function TopBar({
             onClick={onOpenSharing}
           >
             <Users size={13} aria-hidden="true" />
-            <StableLabel reserve={COLLABORATION_LABEL_RESERVE}>
+            <StableLabel reserve={COLLABORATION_LABEL_RESERVE} align="center">
               {collaborationStatus === 'live'
                 ? `${collaboratorCount} live`
                 : collaborationStatus === 'conflict'
@@ -377,9 +392,7 @@ export function TopBar({
             title="Import and export"
           >
             <FolderOpen size={14} aria-hidden="true" />
-            <StableLabel reserve={['File', 'File 99']}>
-              File{artifacts.length > 0 ? ` ${artifacts.length}` : ''}
-            </StableLabel>
+            File{artifacts.length > 0 ? ` ${artifacts.length}` : ''}
           </summary>
           <div className="topbar-menu-panel">
             <label
@@ -490,13 +503,14 @@ export function TopBar({
           </div>
         </details>
         <button
-          className="icon-button"
+          className="secondary topbar-action settings-action"
           type="button"
           title="Settings (Ctrl+,)"
           aria-label="Open settings"
           onClick={onOpenSettings}
         >
-          <SettingsIcon size={15} aria-hidden="true" />
+          <SettingsIcon size={14} aria-hidden="true" />
+          Settings
         </button>
       </div>
     </header>
