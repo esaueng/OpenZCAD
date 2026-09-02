@@ -73,6 +73,15 @@ the user just put it.
   click-versus-drag, and `preventDefault`, which only works during dispatch.
 - **A drag position is absolute, not path-integrated.** The newest event is
   the only one carrying information, which is what makes coalescing safe.
+- **Exact previews run at the kernel's rate, not a timer's.** Every applied
+  drag value goes to its `LivePreview`, which keeps a single rebuild in
+  flight and drops the values the hand has already moved past. A fixed
+  cadence between the two only adds latency; the reference CAD rebuilds
+  the solid on every pointer event. Where a rebuild cannot keep up, the rig's
+  own geometry — the swept profile of an extrude — tracks the hand, and the
+  exact result replaces the scene without a positional tween. A slow frame
+  is reported once so the chip can say the geometry is catching up; it never
+  stops the preview.
 - **Wheel intent is classified, not assumed** (`input/wheelGesture.ts`): a
   pinch sets `ctrlKey` and always zooms; line and page deltas come only from a
   wheel; a horizontal component and sub-notch pixel deltas come from a
