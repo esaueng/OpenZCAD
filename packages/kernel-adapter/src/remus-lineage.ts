@@ -211,11 +211,15 @@ export function deriveRemusBooleanCarrierLineage(input: {
   }>;
   readonly resultCandidates: readonly RemusTopologyCandidate[];
 }): RemusLineageState {
-  const sources = new Map<
-    string,
-    Array<{ reference: FaceTopologyReferenceV5; role: 'target' | 'tool' | undefined }>
-  >();
-  for (const operand of input.operands) {
+  type SourceEntry = {
+    reference: FaceTopologyReferenceV5;
+    role: 'target' | 'tool' | undefined;
+    /** Operand slot in the command, so the name never carries a document id. */
+    slot: string;
+  };
+  const sources = new Map<string, SourceEntry[]>();
+  input.operands.forEach((operand, index) => {
+    const slot = operand.role ?? `operand.${index}`;
     const byHandle = new Map(
       operand.candidates
         .filter((candidate) => candidate.kind === 'face')
@@ -231,24 +235,21 @@ export function deriveRemusBooleanCarrierLineage(input: {
       }
       sources.set(key, [
         ...(sources.get(key) ?? []),
-        { reference, role: operand.role }
+        { reference, role: operand.role, slot }
       ]);
     }
-  }
+  });
   const toolCapOnTargetPlane = (
-    entries: ReadonlyArray<{
-      reference: FaceTopologyReferenceV5;
-      role: 'target' | 'tool' | undefined;
-    }>
-  ): FaceTopologyReferenceV5[] => {
+    entries: ReadonlyArray<SourceEntry>
+  ): SourceEntry[] => {
     const targets = entries.filter((entry) => entry.role === 'target');
     const toolCaps = entries.filter(
       (entry) =>
         entry.role === 'tool' && /\.face\.cap\.(start|end)\b/.test(entry.reference.lineageName)
     );
     return targets.length === 1 && targets.length + toolCaps.length === entries.length
-      ? [targets[0]!.reference]
-      : entries.map((entry) => entry.reference);
+      ? [targets[0]!]
+      : [...entries];
   };
   const results = new Map<string, RemusTopologyCandidate[]>();
   for (const candidate of input.resultCandidates) {
@@ -268,18 +269,18 @@ export function deriveRemusBooleanCarrierLineage(input: {
     if (!entries) {
       continue;
     }
-    const references = toolCapOnTargetPlane(entries);
-    if (references.length !== 1) {
+    const sourcesOnCarrier = toolCapOnTargetPlane(entries);
+    if (sourcesOnCarrier.length !== 1) {
       diagnostics.push({
         code: 'boolean-shared-carrier',
         operation: 'boolean',
         topologyKind: 'face',
         resultHandles: candidates.map((candidate) => candidate.handle),
-        message: `Boolean result carrier ${key} is shared by ${references.length} named operand faces.`
+        message: `Boolean result carrier ${key} is shared by ${sourcesOnCarrier.length} named operand faces.`
       });
       continue;
     }
-    const reference = references[0]!;
+    const { reference, slot } = sourcesOnCarrier[0]!;
     if (candidates.length !== 1) {
       diagnostics.push({
         code: 'boolean-split-carrier',
@@ -293,7 +294,7 @@ export function deriveRemusBooleanCarrierLineage(input: {
     }
     assignments.push({
       ...candidates[0]!,
-      lineageName: `boolean.face.${reference.producingFeatureId}.${reference.lineageName}`
+      lineageName: `boolean.face.${slot}.${reference.lineageName}`
     });
   }
   const state = createRemusSemanticLineage(
