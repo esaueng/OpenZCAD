@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { FaceTopologyReferenceV5, FeatureId } from '@openzcad/shared';
+import { UNSTABLE_FACE_OFFSET_REASON } from '../directEdit';
 import { UNSTABLE_FACE_SKETCH_REASON } from '../faceSketchAttachment';
 import { preferredCapability, selectionCapabilities } from './capabilities';
 
@@ -37,9 +38,9 @@ describe('selectionCapabilities', () => {
       kind: 'face',
       target: { surfaceType: 'planar', hash: 12 }
     });
-    expect(planar.some((c) => c.action === 'export-face-dxf' && c.enabled)).toBe(
-      true
-    );
+    expect(
+      planar.some((c) => c.action === 'export-face-dxf' && c.enabled)
+    ).toBe(true);
     const cylindrical = selectionCapabilities({
       kind: 'face',
       target: { surfaceType: 'cylindrical', hash: 12, radius: 3 }
@@ -95,6 +96,34 @@ describe('selectionCapabilities', () => {
       enabled: true
     });
     expect(capabilities[1]?.note).toBeUndefined();
+  });
+
+  it('warns on the offset action when the face is anchored by geometry alone', () => {
+    const hashOnly = selectionCapabilities({
+      kind: 'face',
+      target: { surfaceType: 'planar', hash: 12 }
+    });
+    const offset = hashOnly.find((c) => c.action === 'offset-face');
+    expect(offset).toMatchObject({ enabled: true, preferred: true });
+    expect(offset?.note).toBe(UNSTABLE_FACE_OFFSET_REASON);
+
+    // A reference whose hash no longer matches the live face is as unstable
+    // as no reference at all.
+    const stale = selectionCapabilities({
+      kind: 'face',
+      target: { surfaceType: 'planar', hash: 12, reference: reference(99) }
+    });
+    expect(stale.find((c) => c.action === 'offset-face')?.note).toBe(
+      UNSTABLE_FACE_OFFSET_REASON
+    );
+
+    const current = selectionCapabilities({
+      kind: 'face',
+      target: { surfaceType: 'planar', hash: 12, reference: reference(12) }
+    });
+    expect(
+      current.find((c) => c.action === 'offset-face')?.note
+    ).toBeUndefined();
   });
 
   it('offers radial resize only for a measurable cylindrical face', () => {

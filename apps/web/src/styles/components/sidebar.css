@@ -63,7 +63,11 @@
 }
 
 .section-count {
+  min-width: 2.5ch;
   padding: 0 5px;
+  box-sizing: content-box;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
   color: var(--color-text-muted);
   background: var(--color-surface-2);
   border-radius: 999px;

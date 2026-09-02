@@ -5,6 +5,7 @@ import type {
   ToolCardModel
 } from '../lib/interaction/machine';
 import type { SelectionActionId } from '../lib/interaction/capabilities';
+import { StableLabel } from './StableLabel';
 
 const ICONS: Record<ToolCardIcon, typeof MoveUpRight> = {
   'offset-face': MoveUpRight,
@@ -21,6 +22,9 @@ const PHASE_LABELS: Record<OperationPhase, string> = {
   validating: 'Validating',
   failed: 'Failed'
 };
+// The card is centred on the viewport, so a pill that grew with its label
+// moved both of the card's edges on every phase change.
+const PHASE_LABEL_RESERVE = Object.values(PHASE_LABELS);
 
 interface ToolCardProps {
   model: ToolCardModel;
@@ -57,7 +61,9 @@ export function ToolCard({
           {model.title}
           {model.phase ? (
             <span className={`tool-card-phase pill-${model.phase}`}>
-              {PHASE_LABELS[model.phase]}
+              <StableLabel reserve={PHASE_LABEL_RESERVE} align="center">
+                {PHASE_LABELS[model.phase]}
+              </StableLabel>
             </span>
           ) : null}
         </strong>

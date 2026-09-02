@@ -7,6 +7,7 @@
  */
 
 import type { FaceTopologyReferenceV5, FeatureId } from '@openzcad/shared';
+import { UNSTABLE_FACE_OFFSET_REASON } from '../directEdit';
 import { UNSTABLE_FACE_SKETCH_REASON } from '../faceSketchAttachment';
 
 export type SelectionActionId =
@@ -118,21 +119,36 @@ export function selectionCapabilities(
       if (target.surfaceType === 'planar' && target.hash !== undefined) {
         // A face without current lineage still takes a sketch: it lands on a
         // fixed plane coincident with the face, and the note says so up front.
-        const sketchCapability =
-          target.reference?.currentHash === target.hash
-            ? enabled('sketch-on-face', 'Sketch', undefined, 'none')
-            : {
-                ...enabled('sketch-on-face', 'Sketch', undefined, 'none'),
-                note: UNSTABLE_FACE_SKETCH_REASON
-              };
+        const stableIdentity = target.reference?.currentHash === target.hash;
+        const sketchCapability = stableIdentity
+          ? enabled('sketch-on-face', 'Sketch', undefined, 'none')
+          : {
+              ...enabled('sketch-on-face', 'Sketch', undefined, 'none'),
+              note: UNSTABLE_FACE_SKETCH_REASON
+            };
+        // The offset is never refused for want of identity — the kernel pins
+        // it by area and orientation instead — but that pin is what breaks
+        // under the next upstream edit, so the same fact is said here first.
+        const offsetCapability = stableIdentity
+          ? enabled(
+              'offset-face',
+              'Offset Face',
+              'distance',
+              'transform-proxy',
+              true
+            )
+          : {
+              ...enabled(
+                'offset-face',
+                'Offset Face',
+                'distance',
+                'transform-proxy',
+                true
+              ),
+              note: UNSTABLE_FACE_OFFSET_REASON
+            };
         return [
-          enabled(
-            'offset-face',
-            'Offset Face',
-            'distance',
-            'transform-proxy',
-            true
-          ),
+          offsetCapability,
           sketchCapability,
           // A planar outline is exactly what a laser cutter consumes; the
           // export never mutates the body, so no geometry gate applies.

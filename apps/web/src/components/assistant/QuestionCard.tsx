@@ -6,6 +6,7 @@ import {
   type AssistantQuestionsEntry
 } from '../../lib/assistant/conversation';
 import { RichText } from './RichText';
+import { StableLabel } from '../StableLabel';
 
 interface QuestionCardProps {
   entry: AssistantQuestionsEntry;
@@ -48,7 +49,9 @@ export function QuestionCard({
     <div className={`assistant-card questions${entry.sent ? ' sent' : ''}`}>
       <span className="assistant-card-label">
         <CircleHelp size={13} aria-hidden="true" />
-        {entry.sent ? 'Asked' : 'Needs an answer'}
+        <StableLabel reserve={['Asked', 'Needs an answer']}>
+          {entry.sent ? 'Asked' : 'Needs an answer'}
+        </StableLabel>
         {!entry.sent && (
           <span className="assistant-progress-pill">
             {answered} of {total}

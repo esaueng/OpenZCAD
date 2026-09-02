@@ -1,0 +1,42 @@
+/* ── Stable label ──
+   A label slot that reserves the width of the longest label it can show.
+   The reservation is a pseudo-element reading `data-reserve`, so the DOM
+   text stays the visible label alone. Used by StableLabel.tsx. ── */
+
+.stable-label {
+  display: inline-grid;
+  justify-items: start;
+  align-items: center;
+}
+
+.stable-label-center {
+  justify-items: center;
+}
+
+.stable-label-text,
+.stable-label::after {
+  grid-area: 1 / 1;
+  white-space: nowrap;
+}
+
+.stable-label::after {
+  content: attr(data-reserve);
+  visibility: hidden;
+  pointer-events: none;
+}
+
+/* A control that only shows a spinner while busy keeps the icon's room
+   either way, so its label does not slide when the spinner arrives. */
+.icon-slot {
+  display: inline-grid;
+  place-items: center;
+  width: 13px;
+  height: 13px;
+  flex: 0 0 auto;
+}
+
+/* The active mode is set in medium weight; the ghost is set the same way so
+   the segmented control does not resize when the mode changes. */
+.mode-switch-option .stable-label::after {
+  font-weight: var(--fw-medium);
+}

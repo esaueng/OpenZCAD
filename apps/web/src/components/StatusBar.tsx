@@ -7,6 +7,7 @@ import {
 import { StatusActivityLog, type StatusTone } from './StatusActivityLog';
 import type { WorkspaceSaveState } from '../lib/cloudProjectAutosave';
 import { WORKSPACE_SAVE_STATE_PRESENTATION } from '../lib/workspaceSaveStatePresentation';
+import { StableLabel } from './StableLabel';
 
 interface StatusBarProps {
   status: string;
@@ -26,6 +27,11 @@ interface StatusBarProps {
   /** Null clears the manual choice and hands the filter back to the tool. */
   onSelectionFilter(filter: SelectionFilter | null): void;
 }
+
+/** The states a save cycles through; the readout holds the widest of them. */
+const SYNC_LABEL_RESERVE = (
+  ['saving', 'syncing', 'synced', 'local', 'offline'] as const
+).map((state) => WORKSPACE_SAVE_STATE_PRESENTATION[state].statusBarLabel);
 
 export function StatusBar({
   status,
@@ -133,14 +139,14 @@ export function StatusBar({
         >
           <span>
             <b>warnings</b>
-            {warningCount}
+            <StableLabel reserve={['99']}>{warningCount}</StableLabel>
           </span>
           <span
             title={`${workspaceSummary} · rev ${documentVersion ?? '—'}`}
             aria-label={`${workspaceSummary}. Sync ${syncLabel}.`}
           >
             <b>sync</b>
-            {syncLabel}
+            <StableLabel reserve={SYNC_LABEL_RESERVE}>{syncLabel}</StableLabel>
           </span>
         </div>
       </footer>
