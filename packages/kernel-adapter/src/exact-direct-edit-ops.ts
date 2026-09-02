@@ -1233,29 +1233,44 @@ export function applyDirectEdit(
     throw new Error('The selected face is no longer cylindrical.');
   }
   const radiusTolerance = Math.max(operation.sourceRadius * 1e-5, 1e-9);
-  if (Math.abs(geometry.radius - operation.sourceRadius) > radiusTolerance) {
-    throw new Error('The selected face no longer matches its recorded radius.');
-  }
   const axisTolerance = Math.max(
     geometry.axialLength * 1e-5,
     geometry.radius * 1e-5,
     1e-6
   );
-  const nearlyEqual = (a: Vec3, b: Vec3): boolean =>
-    Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z) <= axisTolerance;
-  const sameAxis =
-    (nearlyEqual(geometry.axisStart, operation.sourceAxisStart) &&
-      nearlyEqual(geometry.axisEnd, operation.sourceAxisEnd)) ||
-    (nearlyEqual(geometry.axisStart, operation.sourceAxisEnd) &&
-      nearlyEqual(geometry.axisEnd, operation.sourceAxisStart));
-  if (!sameAxis) {
-    throw new Error('The selected face no longer matches its recorded axis.');
+  // The recorded radius and axis prove that a hash-resolved face is really
+  // the wall the user picked. Under a lineage-resolved face identity is
+  // already proven by role, and those pins would only forbid the upstream
+  // edits — a taller cylinder, a moved body, a re-sized source radius — that
+  // "set this wall to radius R" is defined to survive.
+  if (!viaLineage) {
+    if (Math.abs(geometry.radius - operation.sourceRadius) > radiusTolerance) {
+      throw new Error(
+        'The selected face no longer matches its recorded radius.'
+      );
+    }
+    const nearlyEqual = (a: Vec3, b: Vec3): boolean =>
+      Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z) <= axisTolerance;
+    const sameAxis =
+      (nearlyEqual(geometry.axisStart, operation.sourceAxisStart) &&
+        nearlyEqual(geometry.axisEnd, operation.sourceAxisEnd)) ||
+      (nearlyEqual(geometry.axisStart, operation.sourceAxisEnd) &&
+        nearlyEqual(geometry.axisEnd, operation.sourceAxisStart));
+    if (!sameAxis) {
+      throw new Error('The selected face no longer matches its recorded axis.');
+    }
   }
   const newRadius = resolveParamValue(operation.radius, scope, 'radius');
   if (!Number.isFinite(newRadius) || newRadius <= GEOMETRY_EPSILON) {
     throw new Error('Radius must be greater than zero.');
   }
   if (Math.abs(newRadius - geometry.radius) <= radiusTolerance) {
+    // A gesture that lands on the current radius is a no-op the user should
+    // hear about; an upstream edit that happens to bring the wall to the
+    // stored radius has simply already done this feature's work.
+    if (viaLineage) {
+      return target;
+    }
     throw new Error('Radius must differ from the current radius.');
   }
   const axisVector = {
