@@ -1469,12 +1469,45 @@ export function projectMatchesInterruptedAdoption(
   });
 }
 
-/** Reuses derived geometry only when it describes the same canonical model. */
+/**
+ * What an exact rebuild actually reads. `version`, `revisions`, `checkpoints`
+ * and `commandLog` are bookkeeping about how the nodes came to be: a
+ * checkpoint-only save (manual save, keep-mine) appends to them without
+ * changing a single feature, and the kernel would build the identical model.
+ */
+function rebuildInputs(document: ProjectDocument): unknown {
+  const {
+    ownerUserId: _ownerUserId,
+    version: _version,
+    derived: _derived,
+    revisions: _revisions,
+    checkpoints: _checkpoints,
+    commandLog: _commandLog,
+    ...inputs
+  } = document;
+  return inputs;
+}
+
+/** Whether two documents would rebuild to the same geometry. */
+export function projectsHaveSameRebuildInputs(
+  left: ProjectDocument,
+  right: ProjectDocument
+): boolean {
+  return jsonValuesEqual(rebuildInputs(left), rebuildInputs(right));
+}
+
+/**
+ * Reuses derived geometry only when it describes the same model. Judged on
+ * rebuild inputs rather than full canonical content: the account echoes every
+ * save back with a checkpoint appended and the version unchanged, and a
+ * comparison that counted the checkpoint dropped the meshes on every save —
+ * with nothing to rebuild them, because the geometry sync dedupes on version.
+ */
 export function withMatchingLocalDerived(
   remote: ProjectDocument,
   local: ProjectDocument
 ): ProjectDocument {
-  if (!projectMatchesInterruptedAdoption(local, remote)) {
+  if (!projectsHaveSameRebuildInputs(local, remote)) {
     return remote;
   }
   return {
@@ -1509,7 +1542,7 @@ export function chooseProjectDocument(
     const localMoved = local.version !== lastSyncedVersion;
     const remoteMoved = remote.version !== lastSyncedVersion;
     if (localMoved && remoteMoved) {
-      return { choice: 'diverged', local, remote };
+      return descentChoice(local, remote);
     }
     if (localMoved) {
       return { choice: 'local', document: local };
@@ -1524,6 +1557,53 @@ export function chooseProjectDocument(
   // Clearing browser storage loses the only proof of which copy moved. Treat
   // different canonical documents as divergent regardless of their version
   // numbers; guessing here is the silent-data-loss path ADR-016 forbids.
+  return descentChoice(local, remote);
+}
+
+/**
+ * Whether `candidate` carries `ancestor`'s latest revision *behind* its own
+ * — proof that it was built on top of that document, so taking it loses
+ * nothing the ancestor holds. Revision ids are minted per edit; two documents
+ * share one only by descent. Sharing the latest revision is not descent: the
+ * same lineage state at two version numbers is an inconsistency, and a bare
+ * version lead never proves anything. History is bounded, so an ancestor far
+ * enough back falls out of the window and this says false; the caller then
+ * stays conservative.
+ */
+export function projectDescendsFrom(
+  candidate: ProjectDocument,
+  ancestor: ProjectDocument
+): boolean {
+  const latest = ancestor.revisions.at(-1)?.revisionId;
+  if (latest === undefined || candidate.version <= ancestor.version) {
+    return false;
+  }
+  const index = candidate.revisions.findIndex(
+    (revision) => revision.revisionId === latest
+  );
+  return index >= 0 && index < candidate.revisions.length - 1;
+}
+
+/**
+ * Both copies moved — but one may have moved *through* the other. A document
+ * adopted from the live room and extended on another device reaches the
+ * account with this device's last revision in its history, and the account
+ * fence alone would call that a divergence. Descent is proof, not a guess:
+ * everything on the losing side is inside the winner's lineage. Mutual descent
+ * (a merged document) proves nothing and stays a divergence.
+ */
+function descentChoice(
+  local: ProjectDocument,
+  remote: ProjectDocument
+): ProjectOpenChoice {
+  const remoteDescends = projectDescendsFrom(remote, local);
+  const localDescends = projectDescendsFrom(local, remote);
+  if (remoteDescends && !localDescends) {
+    return { choice: 'remote', document: remote };
+  }
+  if (localDescends && !remoteDescends) {
+    return { choice: 'local', document: local };
+  }
   return { choice: 'diverged', local, remote };
 }
 
