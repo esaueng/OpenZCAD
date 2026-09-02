@@ -14,6 +14,9 @@
   --color-text: #e6edf3;
   --color-text-muted: #8b949e;
   --color-text-subtle: #828d99;
+  --color-text-dim: #6e7681;
+  --color-surface-1: var(--color-surface);
+  --color-surface-raised: var(--color-surface-hover);
 
   /* ── Semantic ─────────────────────────────────────────── */
   --color-accent: #4da3ff;
@@ -28,6 +31,11 @@
   --color-error-text: #fca5a5;
   --color-success: #22c55e;
   --color-viewport-bg: #070b10;
+  /* Overlays drawn on the viewport's dark stage (orientation widget, scale
+     bar, pick lists, callouts) keep light text in every theme — the light
+     theme repaints the chrome, not the canvas. Never use --color-text there. */
+  --color-viewport-text: #e6edf3;
+  --color-viewport-text-muted: #8b949e;
 
   /* ── Viewport selection & manipulation ────────────────── */
   --color-select: #4da3ff;      /* selected geometry */
@@ -55,7 +63,10 @@
   --fs-xl: 22px;
 
   --fw-regular: 400;
+  --fw-normal: 400;
   --fw-medium: 500;
+  --fw-semibold: 600;
+  --fw-bold: 700;
 
   --lh-tight: 1.35;
   --lh-normal: 1.5;
@@ -147,6 +158,7 @@
     palette does not depend on which surface a label happens to land on.
   */
   --color-text-subtle: #5e6773;
+  --color-text-dim: #7a8390;
 
   /* Semantic — deeper hues, so text and borders clear the light ground. */
   --color-accent: #1c64c2;
