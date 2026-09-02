@@ -379,7 +379,6 @@
   border: var(--border-thin);
   border-radius: var(--radius-md);
   cursor: pointer;
-  text-transform: capitalize;
 }
 
 .collaboration-state:disabled {
