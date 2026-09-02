@@ -32,7 +32,9 @@ export type RemusLineageDiagnosticCode =
   | 'transform-split'
   | 'transform-merge'
   | 'invalid-transform'
-  | 'invalid-evolution-payload';
+  | 'invalid-evolution-payload'
+  | 'boolean-shared-carrier'
+  | 'boolean-split-carrier';
 
 export interface RemusLineageDiagnostic {
   readonly code: RemusLineageDiagnosticCode;
@@ -104,6 +106,7 @@ export function createRemusSemanticLineage(
     | 'primitive'
     | 'sweep'
     | 'imported-step'
+    | 'boolean'
     | 'fillet'
     | 'chamfer'
     | 'direct-edit',
@@ -159,6 +162,146 @@ export function createRemusSemanticLineage(
       state.faceReferences.set(assignment.handle, reference);
     }
   }
+  return state;
+}
+
+/** The quantized analytic surface a face lies on, as a comparable key. */
+function analyticCarrierKey(witness: FaceWitnessV1): string | null {
+  const analytic = witness.analytic;
+  if (analytic.kind === 'plane') {
+    return `plane:${analytic.normal.join(',')}:${analytic.offset}`;
+  }
+  if (analytic.kind === 'cylinder') {
+    return `cylinder:${analytic.axis.join(',')}:${analytic.axisFoot.join(',')}:${analytic.radius}`;
+  }
+  return null;
+}
+
+/**
+ * Boolean lineage by unique analytic carrier — the subset ADR-013's boolean
+ * row allows: "analytic results may be derived only when exact carrier
+ * grouping is unique". A result face inherits an operand face's identity when
+ * that face is the only named operand face on the same quantized plane or
+ * cylinder AND the only result face on it. A carrier two operand faces share
+ * (flush caps fused into one), or one the boolean cut into several result
+ * faces (a slot through a top), publishes nothing and says why. New faces
+ * with no named source — the walls a tool leaves inside a pocket come from
+ * the tool's own lineage, so they usually do have one — stay hash-only.
+ *
+ * The operand references are re-verified against the operand's own exact
+ * witnesses before they are trusted, so a stale reference cannot propagate.
+ * Edges are not carried: a boolean rewrites too many of them for a carrier
+ * rule to be honest, and nothing downstream attaches to a boolean's edges
+ * by name yet.
+ */
+export function deriveRemusBooleanCarrierLineage(input: {
+  readonly producingFeatureId: FeatureId;
+  readonly operands: ReadonlyArray<{
+    readonly lineage: RemusLineageState | undefined;
+    readonly candidates: readonly RemusTopologyCandidate[];
+    /**
+     * For an add/cut extrude: which operand is the body being edited and
+     * which is the swept tool. A tool cap that lies on the target's own plane
+     * is the attachment face by construction — it is fused into (or cut out
+     * of) the target and never survives as itself — so on that one carrier
+     * the target face is the identity the result carries. This is read from
+     * the operation's structure, never from where the faces ended up.
+     */
+    readonly role?: 'target' | 'tool';
+  }>;
+  readonly resultCandidates: readonly RemusTopologyCandidate[];
+}): RemusLineageState {
+  const sources = new Map<
+    string,
+    Array<{ reference: FaceTopologyReferenceV5; role: 'target' | 'tool' | undefined }>
+  >();
+  for (const operand of input.operands) {
+    const byHandle = new Map(
+      operand.candidates
+        .filter((candidate) => candidate.kind === 'face')
+        .map((candidate) => [candidate.handle, candidate] as const)
+    );
+    for (const [handle, reference] of operand.lineage?.faceReferences ?? []) {
+      if (!referenceMatchesCandidate(reference, byHandle.get(handle))) {
+        continue;
+      }
+      const key = analyticCarrierKey(reference.witness);
+      if (key === null) {
+        continue;
+      }
+      sources.set(key, [
+        ...(sources.get(key) ?? []),
+        { reference, role: operand.role }
+      ]);
+    }
+  }
+  const toolCapOnTargetPlane = (
+    entries: ReadonlyArray<{
+      reference: FaceTopologyReferenceV5;
+      role: 'target' | 'tool' | undefined;
+    }>
+  ): FaceTopologyReferenceV5[] => {
+    const targets = entries.filter((entry) => entry.role === 'target');
+    const toolCaps = entries.filter(
+      (entry) =>
+        entry.role === 'tool' && /\.face\.cap\.(start|end)\b/.test(entry.reference.lineageName)
+    );
+    return targets.length === 1 && targets.length + toolCaps.length === entries.length
+      ? [targets[0]!.reference]
+      : entries.map((entry) => entry.reference);
+  };
+  const results = new Map<string, RemusTopologyCandidate[]>();
+  for (const candidate of input.resultCandidates) {
+    if (candidate.kind !== 'face') {
+      continue;
+    }
+    const key = analyticCarrierKey(candidate.witness as FaceWitnessV1);
+    if (key === null) {
+      continue;
+    }
+    results.set(key, [...(results.get(key) ?? []), candidate]);
+  }
+  const assignments: RemusSemanticAssignment[] = [];
+  const diagnostics: RemusLineageDiagnostic[] = [];
+  for (const [key, candidates] of results) {
+    const entries = sources.get(key);
+    if (!entries) {
+      continue;
+    }
+    const references = toolCapOnTargetPlane(entries);
+    if (references.length !== 1) {
+      diagnostics.push({
+        code: 'boolean-shared-carrier',
+        operation: 'boolean',
+        topologyKind: 'face',
+        resultHandles: candidates.map((candidate) => candidate.handle),
+        message: `Boolean result carrier ${key} is shared by ${references.length} named operand faces.`
+      });
+      continue;
+    }
+    const reference = references[0]!;
+    if (candidates.length !== 1) {
+      diagnostics.push({
+        code: 'boolean-split-carrier',
+        operation: 'boolean',
+        topologyKind: 'face',
+        lineageName: reference.lineageName,
+        resultHandles: candidates.map((candidate) => candidate.handle),
+        message: `Boolean split lineage ${reference.lineageName} into ${candidates.length} result faces.`
+      });
+      continue;
+    }
+    assignments.push({
+      ...candidates[0]!,
+      lineageName: `boolean.face.${reference.producingFeatureId}.${reference.lineageName}`
+    });
+  }
+  const state = createRemusSemanticLineage(
+    input.producingFeatureId,
+    'boolean',
+    assignments
+  );
+  state.diagnostics.push(...diagnostics);
   return state;
 }
 
