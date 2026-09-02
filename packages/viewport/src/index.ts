@@ -64,3 +64,4 @@ export * from './scene/objects';
 export * from './labels/dimensionLabel';
 export * from './labels/calloutLayout';
 export * from './annotation/dimensionGraphic';
+export * from './selection/hoverDwell';
