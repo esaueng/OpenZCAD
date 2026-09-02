@@ -188,9 +188,35 @@
 
 .file-menu > summary {
   width: auto;
-  min-height: 26px;
   gap: 5px;
-  padding: 3px 8px;
+  padding: 0 8px;
+  font-size: var(--fs-xs);
+}
+
+/* One size for the whole action row: the chips read as a set, and a set
+   with three widths reads as three misaligned buttons. Sized for the widest
+   routine label ("Local only"); the rare decision states may still grow.
+   Kept at single-class specificity so the narrow-screen rules, which
+   collapse these to 28px icons, still win. */
+.account-state,
+.save-state,
+.collaboration-state,
+.file-menu > summary {
+  width: auto;
+  min-width: 110px;
+  min-height: 30px;
+  justify-content: center;
+}
+
+/* `.secondary` is imported after this sheet, so the settings chip needs the
+   extra specificity to take the row's size over the generic button's. */
+.topbar-actions .settings-action {
+  width: auto;
+  min-width: 110px;
+  min-height: 30px;
+  gap: 5px;
+  padding: 0 8px;
+  justify-content: center;
   font-size: var(--fs-xs);
 }
 
