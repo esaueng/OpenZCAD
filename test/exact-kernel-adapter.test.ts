@@ -1246,35 +1246,38 @@ describe('exact kernel adapter', { timeout: 30_000 }, () => {
     });
   });
 
-  it('labels a shallow circular union when Remus returns a mesh fallback', async () => {
+  it('labels a spherical union when Remus returns a mesh fallback', async () => {
+    // A shallow parallel-cylinder overlap used to be this test's fallback
+    // case; the kernel now builds that one exactly. A sphere pressed into a
+    // cylinder's side still has no exact section, so it is the case that
+    // proves the labeling of a mesh fallback.
     const withCylinder = addPrimitiveFeature(
-      createProjectDocument('Shallow circular union', toUserId('user_exact')),
+      createProjectDocument('Spherical union', toUserId('user_exact')),
       {
         name: 'Cylinder',
         primitiveKind: 'cylinder',
-        dimensions: { radius: 20, height: 40 }
+        dimensions: { radius: 15, height: 60 }
       }
     );
     const cylinderId = withCylinder.bodyOrder.at(-1)!;
-    const { document: withSketch, sketchId } = addSketchFeature(withCylinder, {
-      name: 'Offset circle',
-      planeRef: { type: 'canonical', plane: 'XY', offset: 39.999 },
-      objects: [{ objectKind: 'circle', radius: 25, centerX: 10, centerY: 0 }]
+    const withSphere = addPrimitiveFeature(withCylinder, {
+      name: 'Sphere',
+      primitiveKind: 'sphere',
+      dimensions: { radius: 7.5 }
     });
-    const { document: withExtrude, bodyId: extrudeId } = extrudeSketch(
-      withSketch,
-      {
-        name: 'Circular extrude',
-        sketchId,
-        distance: 20
-      }
-    );
-    const manager = new CommandManager(withExtrude);
+    const sphereId = withSphere.bodyOrder.at(-1)!;
+    const positioned = transformBody(withSphere, {
+      name: 'Seat the sphere on the wall',
+      targetBodyId: sphereId,
+      translation: { x: 15, y: 0, z: 30 },
+      rotationDeg: { x: 0, y: 0, z: 0 }
+    }).document;
+    const manager = new CommandManager(positioned);
     const document = manager.execute(
       commandFactories.booleanBodies({
-        name: 'Shallow circular union',
+        name: 'Spherical union',
         operation: 'union',
-        targetBodyIds: [cylinderId, extrudeId]
+        targetBodyIds: [cylinderId, sphereId]
       })
     );
 
@@ -1282,11 +1285,12 @@ describe('exact kernel adapter', { timeout: 30_000 }, () => {
     const resultId = document.bodyOrder.at(-1)!;
     const result = derived.bodyRepresentations[resultId];
     expect(result).toBeDefined();
-    expect(result?.faceCount).toBe(193);
+    // A faceted fallback: far more faces than the two operands' six, all flat.
+    expect(result?.faceCount).toBeGreaterThan(100);
     expect(
       derived.warnings.some(
         (warning) =>
-          warning.startsWith('Feature "Shallow circular union":') &&
+          warning.startsWith('Feature "Spherical union":') &&
           FACET_CENSUS_MESSAGE.test(warning)
       )
     ).toBe(true);
@@ -1310,7 +1314,7 @@ describe('exact kernel adapter', { timeout: 30_000 }, () => {
     // that user-visible change explicit: the operands are consumed, but the
     // result is labeled before it can be mistaken for exact analytic output.
     expect(derived.bodyRepresentations[cylinderId]?.consumed).toBe(true);
-    expect(derived.bodyRepresentations[extrudeId]?.consumed).toBe(true);
+    expect(derived.bodyRepresentations[sphereId]?.consumed).toBe(true);
     // Runs in under a second locally but has tripped the 5 s default on slow
     // CI runners; give it the same headroom as the other kernel-heavy tests.
   }, 30_000);
