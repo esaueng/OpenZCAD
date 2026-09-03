@@ -2533,6 +2533,16 @@ export class CommandManager {
     return this.redoStack.length > 0;
   }
 
+  /** Label of the command the next undo would revert, or null when there is none. */
+  get undoLabel(): string | null {
+    return this.undoStack.at(-1)?.command.label ?? null;
+  }
+
+  /** Label of the command the next redo would reapply, or null when there is none. */
+  get redoLabel(): string | null {
+    return this.redoStack.at(-1)?.command.label ?? null;
+  }
+
   execute(command: AnyCommand): ProjectDocument {
     command.validate(this.document);
     const previous = this.document;

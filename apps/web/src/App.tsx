@@ -368,6 +368,7 @@ import {
   resolveImportedBlendFace
 } from './lib/interaction/filletFaceEdit';
 import { ToolCard } from './components/ToolCard';
+import { ToastHost } from './components/Toast';
 import { NumericKeypad, type KeypadRequest } from './components/NumericKeypad';
 import type { DimensionMode } from './lib/keypad';
 import {
@@ -710,6 +711,12 @@ import {
   affectedFeatureTargets,
   type AffectedFeatureTarget
 } from './lib/affectedFeatureTargets';
+import {
+  countLabel,
+  deleteFeatureToastMessage,
+  type ToastAction,
+  type ToastModel
+} from './lib/toasts';
 import { splitRefusal } from './lib/featureValidation';
 import { useCollaboration } from './lib/useCollaboration';
 import { preflightCadPatch } from './lib/aiPatchPreflight';
@@ -1490,6 +1497,17 @@ export function App() {
   const [status, setStatus] = useState(
     cloudFunctionsEnabled ? 'Checking beta API...' : 'Offline workspace'
   );
+  // The status line is the log; a toast is the notice. Only actions whose
+  // outcome is otherwise invisible in the viewport raise one.
+  const [toast, setToast] = useState<ToastModel | null>(null);
+  const toastIdRef = useRef(0);
+  const announce = useCallback((message: string, action?: ToastAction) => {
+    toastIdRef.current += 1;
+    setToast({ id: toastIdRef.current, message, action });
+  }, []);
+  const dismissToast = useCallback((id: number) => {
+    setToast((current) => (current?.id === id ? null : current));
+  }, []);
   const [busy, setBusy] = useState(false);
   /**
    * The import the progress card is reporting, or null for none. The card
@@ -6643,6 +6661,7 @@ export function App() {
     if (!managerRef.current || !ensureCanEdit('undo')) {
       return;
     }
+    const label = managerRef.current.undoLabel;
     setDoc(managerRef.current.undo());
     // An assistant preview was preflighted against the document this rewind
     // just replaced; keeping it would render geometry from a lineage that no
@@ -6651,19 +6670,22 @@ export function App() {
     setMoveCommitHold(null);
     setTool(null);
     clearSelection();
-    setStatus('Undo');
+    setToast(null);
+    setStatus(label ? `Undo ${label}` : 'Undo');
   }
 
   function handleRedo() {
     if (!managerRef.current || !ensureCanEdit('redo')) {
       return;
     }
+    const label = managerRef.current.redoLabel;
     setDoc(managerRef.current.redo());
     setPreviewDoc(null);
     setMoveCommitHold(null);
     setTool(null);
     clearSelection();
-    setStatus('Redo');
+    setToast(null);
+    setStatus(label ? `Redo ${label}` : 'Redo');
   }
 
   /**
@@ -7652,11 +7674,13 @@ export function App() {
       } catch {
         // The local download has already completed successfully.
       }
+      const bodies = countLabel(exportBodyIds.length, 'body', 'bodies');
       setStatus(
         result.warnings.length > 0
-          ? `Exported STEP with ${result.warnings.length} warning(s).`
-          : `Exported ${exportBodyIds.length} body(ies) to ${stem}.step${archived ? ' and archived it' : ''}.`
+          ? `Exported STEP with ${countLabel(result.warnings.length, 'warning', 'warnings')}.`
+          : `Exported ${bodies} to ${stem}.step${archived ? ' and archived it' : ''}.`
       );
+      announce(`Exported ${stem}.step (${bodies})`);
     } catch (error) {
       setStatus(errorMessage(error, 'STEP export failed.'));
     }
@@ -7742,9 +7766,11 @@ export function App() {
     } catch {
       // The local download has already completed successfully.
     }
+    const bodies = countLabel(exportBodyIds.length, 'body', 'bodies');
     setStatus(
-      `Exported ${exportBodyIds.length} body(ies) to ${fileName}${archived ? ' and archived it' : ''}.`
+      `Exported ${bodies} to ${fileName}${archived ? ' and archived it' : ''}.`
     );
+    announce(`Exported ${fileName} (${bodies})`);
   }
 
   function handleCheckMeshQuality(
@@ -11264,12 +11290,21 @@ export function App() {
   }
 
   function handleDeleteFeature(featureId: FeatureId, name: string) {
+    // Counted before the delete: afterwards the source is gone and the walk
+    // has nothing to start from.
+    const dependents = doc
+      ? affectedFeatureTargets(doc, featureId).slice(1)
+      : [];
     if (
       executeCommand(
         commandFactories.deleteFeature({ featureId }, `Delete ${name}`)
       )
     ) {
       clearSelection();
+      announce(deleteFeatureToastMessage(name, dependents.length), {
+        label: 'Undo',
+        run: handleUndo
+      });
     }
   }
 
@@ -13571,6 +13606,11 @@ export function App() {
                 }
               />
             )}
+          <ToastHost
+            toast={toast}
+            onDismiss={dismissToast}
+            aboveViewBar={viewMode}
+          />
         </ErrorBoundary>
       }
       inspector={
