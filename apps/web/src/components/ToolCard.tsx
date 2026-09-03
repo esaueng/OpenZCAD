@@ -65,12 +65,17 @@ export function ToolCard({
       </span>
       <span className="tool-card-copy">
         <strong>
-          {model.title}
+          <span className="tool-card-title">{model.title}</span>
           {model.phase ? (
             <span className={`tool-card-phase pill-${model.phase}`}>
               <StableLabel reserve={PHASE_LABEL_RESERVE} align="center">
                 {PHASE_LABELS[model.phase]}
               </StableLabel>
+            </span>
+          ) : null}
+          {model.badge ? (
+            <span className="tool-card-badge" title={model.badge.detail}>
+              {model.badge.label}
             </span>
           ) : null}
         </strong>
