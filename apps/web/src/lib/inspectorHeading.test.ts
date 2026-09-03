@@ -17,18 +17,35 @@ describe('inspector heading', () => {
     ).toEqual({ eyebrow: 'Direct edit', title: 'Offset face', demoted: false });
   });
 
-  it('lets the running command name the panel over an inferred feature', () => {
-    // The recorded defect: filleting an edge on a body whose last operation
-    // was an offset titled the panel "Offset face" while the command card
-    // said "Fillet".
+  it('names a demoted feature panel after the selected object', () => {
     const heading = inspectorHeadingForFeature({
       ...offsetFace,
+      selectionLabel: 'Front face',
+      selectionBodyName: 'Bracket',
       featureSelectionSource: 'inferred',
       commandSession: { title: 'Fillet' }
     });
-    expect(heading.title).toBe('Fillet');
+    expect(heading).toEqual({
+      eyebrow: 'Bracket',
+      title: 'Front face',
+      demoted: true
+    });
     expect(heading.title).not.toBe(offsetFace.featureName);
-    expect(heading.demoted).toBe(true);
+    expect(heading.title).not.toBe('Fillet');
+  });
+
+  it('falls back to the defining feature when no selection label is available', () => {
+    expect(
+      inspectorHeadingForFeature({
+        ...offsetFace,
+        featureSelectionSource: 'inferred',
+        commandSession: { title: 'Fillet' }
+      })
+    ).toEqual({
+      eyebrow: 'Direct edit',
+      title: 'Offset face',
+      demoted: true
+    });
   });
 
   it('keeps an inferred feature as the subject when no command is running', () => {
