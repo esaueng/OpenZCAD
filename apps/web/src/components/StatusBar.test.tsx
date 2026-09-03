@@ -1,7 +1,8 @@
-import { render, screen, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { StatusBar } from './StatusBar';
+import { STATUS_LIFETIME_MS } from '../lib/statusLifetime';
 
 const defaultProps = {
   status: 'Workspace ready.',
@@ -142,5 +143,86 @@ describe('StatusBar announcements', () => {
     });
     expect(button).toBeVisible();
     expect(screen.getByText('Workspace ready.')).not.toHaveAttribute('tabindex');
+  });
+});
+
+describe('StatusBar lifetime', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-09-02T12:00:00Z'));
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('lets an informational message go after its lifetime, keeping it in the log', () => {
+    render(
+      <StatusBar {...defaultProps} status="Add box" statusAt={Date.now()} />
+    );
+    expect(screen.getByText('Add box')).toBeVisible();
+
+    act(() => {
+      vi.advanceTimersByTime(STATUS_LIFETIME_MS);
+    });
+    const trigger = screen.getByRole('button', { name: /activity log/ });
+    expect(trigger.querySelector('[aria-live]')).toBeEmptyDOMElement();
+    expect(trigger).toHaveAttribute('aria-label', 'Open activity log.');
+    expect(trigger).toHaveClass('quiet');
+
+    fireEvent.click(trigger);
+    const log = screen.getByRole('region', { name: 'Activity log' });
+    expect(within(log).getByText('Add box')).toBeVisible();
+  });
+
+  it('keeps mode text and a message with no timestamp for as long as they are set', () => {
+    const { rerender } = render(
+      <StatusBar
+        {...defaultProps}
+        status="Sketching on the XY plane"
+        statusAt={Date.now()}
+        statusSticky
+      />
+    );
+    act(() => {
+      vi.advanceTimersByTime(STATUS_LIFETIME_MS * 3);
+    });
+    expect(screen.getByText('Sketching on the XY plane')).toBeVisible();
+
+    rerender(<StatusBar {...defaultProps} status="Workspace ready." />);
+    act(() => {
+      vi.advanceTimersByTime(STATUS_LIFETIME_MS * 3);
+    });
+    expect(screen.getByText('Workspace ready.')).toBeVisible();
+  });
+
+  it('shows a new message in full after an old one has gone quiet', () => {
+    const { rerender } = render(
+      <StatusBar {...defaultProps} status="Add box" statusAt={Date.now()} />
+    );
+    act(() => {
+      vi.advanceTimersByTime(STATUS_LIFETIME_MS);
+    });
+    expect(screen.queryByText('Add box')).toBeNull();
+
+    rerender(
+      <StatusBar
+        {...defaultProps}
+        status="Face selected"
+        statusAt={Date.now()}
+        tone="warning"
+      />
+    );
+    expect(screen.getByText('Face selected')).toBeVisible();
+    expect(screen.getByRole('button', { name: /activity log/ })).toHaveClass(
+      'warning'
+    );
+  });
+
+  it('retires a message at once when its timestamp is zeroed', () => {
+    const { rerender } = render(
+      <StatusBar {...defaultProps} status="Add box" statusAt={Date.now()} />
+    );
+    rerender(<StatusBar {...defaultProps} status="Add box" statusAt={0} />);
+    expect(screen.queryByText('Add box')).toBeNull();
   });
 });
