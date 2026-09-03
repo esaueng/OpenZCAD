@@ -8415,11 +8415,14 @@ export function App() {
         : null
     );
     inferFeatureNodeFor(bodyIds.length === 1 ? (bodyIds[0] as BodyId) : null);
-    setStatus(
-      bodyIds.length === 0
-        ? 'Nothing in the box. Selection cleared.'
-        : `${bodyIds.length} ${bodyIds.length === 1 ? 'body' : 'bodies'} selected.`
-    );
+    // An empty sweep says nothing: the chip clearing is the feedback, and a
+    // message here outlived the gesture and read as a complaint about a click
+    // that had merely wobbled.
+    if (bodyIds.length > 0) {
+      setStatus(
+        `${bodyIds.length} ${bodyIds.length === 1 ? 'body' : 'bodies'} selected.`
+      );
+    }
   }
 
   function handleClearSelectedEdges() {
