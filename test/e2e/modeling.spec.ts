@@ -204,12 +204,16 @@ test('resizes a cylinder wall concentrically with one undoable radius edit', asy
   await expect(radiusOperation).toContainText('Dragging');
   await page.keyboard.press('Escape');
   await expect(page.getByTestId('direct-manipulation-value')).toHaveText('Ø 36 mm');
-  await expect(page.getByLabel('Radius', { exact: true })).toHaveValue('18');
   await expect(canvas).not.toHaveAttribute(
     'data-e2e-cylinder-proxy-radius',
     /.+/
   );
   await page.mouse.up();
+  await expect(inspector.getByLabel('Radius', { exact: true })).toHaveCount(0);
+  await inspector.getByRole('button', { name: 'Edit' }).click();
+  await expect(inspector.getByLabel('Radius', { exact: true })).toHaveValue(
+    '18'
+  );
 
   await selectCylinderSurface('cap');
   await expect(
@@ -271,10 +275,13 @@ test('resizes a literal box by dragging an exact face', async ({ page }) => {
   await page.mouse.up();
 
   await expect(page.getByRole('contentinfo')).toContainText('Resize Box');
+  const inspector = page.getByRole('region', { name: 'Feature inspector' });
+  await expect(inspector.getByLabel('Width (X)')).toHaveCount(0);
+  await inspector.getByRole('button', { name: 'Edit' }).click();
   const dimensions = await Promise.all([
-    page.getByLabel('Width (X)').inputValue(),
-    page.getByLabel('Depth (Y)').inputValue(),
-    page.getByLabel('Height (Z)').inputValue()
+    inspector.getByLabel('Width (X)').inputValue(),
+    inspector.getByLabel('Depth (Y)').inputValue(),
+    inspector.getByLabel('Height (Z)').inputValue()
   ]);
   expect(dimensions).not.toEqual(['40', '18', '24']);
 });

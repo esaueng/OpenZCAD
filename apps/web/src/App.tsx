@@ -12064,7 +12064,7 @@ export function App() {
             }
             return;
           }
-          if (selectedFeature) {
+          if (selectedFeature && featureSelectionSource !== 'inferred') {
             event.preventDefault();
             handleDeleteFeature(
               selectedFeature.featureId,
@@ -14110,6 +14110,9 @@ export function App() {
                 }
                 onResizeThroughHole={handleResizeThroughHole}
                 onRemoveFaceFeature={handleRemoveFaceFeature}
+                onPinFeature={(feature) =>
+                  selectFeatureNode(feature.id, 'pinned')
+                }
                 onDeleteFeature={(feature) =>
                   handleDeleteFeature(feature.featureId, feature.name)
                 }
