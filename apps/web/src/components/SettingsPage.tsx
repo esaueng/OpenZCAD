@@ -982,7 +982,7 @@ export function SettingsPage({
               </SettingRow>
               <SettingRow
                 title="Scroll wheel"
-                description="Two fingers on a trackpad pan and a pinch zooms; a wheel notch zooms. Detection reads each scroll on its own — set it explicitly if your device is read wrongly."
+                description="A wheel notch zooms; two fingers on a trackpad pan and a pinch zooms. Detection zooms on any vertical scroll until a diagonal swipe or a pinch proves a trackpad, then remembers it — set it explicitly if your device is read wrongly."
                 scope="Navigation"
               >
                 <select

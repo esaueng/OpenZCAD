@@ -58,8 +58,7 @@ function createController(reducedMotion = true) {
   const wheelListener = (
     host.addEventListener as unknown as ReturnType<typeof vi.fn>
   ).mock.calls.find((call) => call[0] === 'wheel')?.[1] as
-    | ((event: FakeWheelEvent) => void)
-    | undefined;
+    ((event: FakeWheelEvent) => void) | undefined;
   /** Delivers one wheel packet the way the capture listener receives it. */
   const wheel = (overrides: Partial<FakeWheelEvent> = {}): FakeWheelEvent => {
     const event: FakeWheelEvent = {
@@ -99,7 +98,9 @@ function isolatedNotchClock() {
 }
 
 function orbitDistance(controller: CameraController): number {
-  return controller.activeCamera.position.distanceTo(controller.controls.target);
+  return controller.activeCamera.position.distanceTo(
+    controller.controls.target
+  );
 }
 
 /** Steps the zoom until it settles, returning the distance after each frame. */
@@ -318,6 +319,82 @@ describe('CameraController external orbit lifecycle', () => {
     expect(onViewChange).toHaveBeenCalledTimes(changesAtDispose);
     expect(onViewSettled).toHaveBeenCalledTimes(settlesAtDispose);
     expect(() => controller.dispose()).not.toThrow();
+  });
+});
+
+describe('CameraController wheel device detection', () => {
+  it('zooms an accelerated slow notch instead of panning it', () => {
+    const clock = isolatedNotchClock();
+    const { controller, wheel, onViewChange } = createController();
+    const target = controller.controls.target.clone();
+    const distance = orbitDistance(controller);
+    clock.next();
+    // macOS acceleration: a slow wheel notch reaches the page as a few
+    // pixels, finer than the old classifier's notch threshold.
+    const event = wheel({ deltaY: -4 });
+    expect(event.preventDefault).toHaveBeenCalledTimes(1);
+    // No pan: the target stays put and nothing was published synchronously.
+    expect(controller.controls.target).toEqual(target);
+    expect(onViewChange).not.toHaveBeenCalled();
+    // A zoom was queued instead, and it moves the camera in.
+    controller.stepZoom(1_000);
+    expect(orbitDistance(controller)).toBeLessThan(distance);
+    clock.restore();
+    controller.dispose();
+  });
+
+  it('pans a remembered trackpad and reports a newly proved one', () => {
+    const memory = { read: vi.fn(() => null), write: vi.fn() };
+    const onWheelDeviceLearned = vi.fn();
+    const host = fakeElement(800, 600);
+    const controller = new CameraController({
+      host,
+      domElement: fakeElement(800, 600),
+      requestRender: vi.fn(),
+      onViewChange: vi.fn(),
+      onViewSettled: vi.fn(),
+      reducedMotion: () => true,
+      zoomToCursor: () => true,
+      middleDrag: () => 'pan',
+      wheelDeviceMemory: memory,
+      onWheelDeviceLearned
+    });
+    const listener = (
+      host.addEventListener as unknown as ReturnType<typeof vi.fn>
+    ).mock.calls.find((call) => call[0] === 'wheel')?.[1] as (
+      event: FakeWheelEvent
+    ) => void;
+    const packet = (overrides: Partial<FakeWheelEvent>): FakeWheelEvent => ({
+      deltaX: 0,
+      deltaY: 0,
+      deltaMode: 0,
+      ctrlKey: false,
+      buttons: 0,
+      clientX: 400,
+      clientY: 300,
+      preventDefault: vi.fn(),
+      stopImmediatePropagation: vi.fn(),
+      ...overrides
+    });
+    expect(memory.read).toHaveBeenCalledTimes(1);
+
+    let at = 0;
+    vi.spyOn(performance, 'now').mockImplementation(() => at);
+    // A diagonal swipe proves the trackpad once, and only once.
+    listener(packet({ deltaX: 2, deltaY: -9 }));
+    at += 16;
+    listener(packet({ deltaX: 1, deltaY: -12 }));
+    expect(memory.write).toHaveBeenCalledTimes(1);
+    expect(memory.write).toHaveBeenCalledWith('trackpad');
+    expect(onWheelDeviceLearned).toHaveBeenCalledTimes(1);
+
+    // The next gesture pans on vertical motion rather than zooming.
+    at += 1_000;
+    const target = controller.controls.target.clone();
+    listener(packet({ deltaY: -6 }));
+    expect(controller.controls.target).not.toEqual(target);
+    expect(controller.stepZoom(at)).toBe(false);
+    controller.dispose();
   });
 });
 
