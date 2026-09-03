@@ -1451,10 +1451,12 @@ test('dragging a box selects several bodies at once', async ({ page }) => {
   await sweep(0.85, 0.05, 0.01, 0.95);
   await expect(status).toContainText('2 bodies selected');
 
-  // A window sweep over empty sky takes nothing, and says so rather than
-  // silently leaving the previous selection in place.
+  // A window sweep over empty sky takes nothing: the selection goes, its chip
+  // with it, and the status line does not complain about the gesture.
   await sweep(0.6, 0.04, 0.72, 0.14);
-  await expect(status).toContainText('Nothing in the box');
+  await expect(page.locator('.selection-chip')).toHaveCount(0);
+  await expect(status).not.toContainText('Nothing in the box');
+  await expect(status).toContainText('2 bodies selected');
 });
 
 test('box selection releases the previous direct-edit target', async ({
@@ -1564,9 +1566,10 @@ test('box selection releases the previous direct-edit target', async ({
   await page.mouse.move(drag.to.x, drag.to.y);
   await page.mouse.up();
 
-  await expect(status).toContainText('Nothing in the box');
-  await expect(status).not.toContainText('push or pull');
+  // The empty sweep is silent; the released handle's hint going with the
+  // chip is what proves the direct-edit target let go.
   await expect(page.locator('.selection-chip')).toHaveCount(0);
+  await expect(status).not.toContainText('push or pull');
 });
 
 test('the status bar names the rung of the Esc ladder you are on', async ({
