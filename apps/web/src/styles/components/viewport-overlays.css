@@ -112,16 +112,18 @@
   border-radius: 999px;
   color: var(--color-viewport-text);
   background: rgba(17, 24, 33, 0.72);
-  border: var(--border-thin);
+  border: 1px solid var(--color-viewport-border);
   transition:
-    background var(--dur-fast) ease,
-    border-color var(--dur-fast) ease;
+    background var(--dur-fast) var(--ease-out),
+    border-color var(--dur-fast) var(--ease-out);
 }
 
+/* Stays on the dark stage when hovered: the chrome's hover surface is light
+   in the light theme and flipped this button white against the canvas. */
 .orientation-roll:hover {
-  color: var(--color-text);
-  background: var(--color-surface-hover);
-  border-color: var(--color-border-strong);
+  color: var(--color-viewport-text);
+  background: rgba(230, 237, 243, 0.16);
+  border-color: var(--color-viewport-text-muted);
 }
 
 /* Both menus take focus themselves when they open, so Escape and the arrow
@@ -231,7 +233,7 @@
   gap: 8px;
   max-width: 240px;
   padding: 5px 14px 5px 8px;
-  border: 1px solid var(--color-border-strong);
+  border: 1px solid var(--color-viewport-border);
   border-radius: 999px;
   background: rgba(11, 15, 20, 0.94);
   color: var(--color-viewport-text);
