@@ -12,8 +12,11 @@
   left: 50%;
   z-index: calc(var(--z-inspector-float) + 1);
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 10px;
+  box-sizing: border-box;
+  max-width: calc(100% - 20px);
   padding: 7px 8px 7px 12px;
   color: var(--color-text);
   background: var(--color-surface-2);
@@ -33,18 +36,31 @@
    truncates instead. 170px is the palette's footprint incl. its gap. */
 .viewer-area.has-inspector .tool-card {
   --tool-card-room: calc(100% - 170px - var(--context-w) - 30px);
-  left: calc(170px + var(--tool-card-room) / 2);
+  left: max(170px, calc(170px + var(--tool-card-room) / 2));
   width: max(280px, min(680px, var(--tool-card-room)));
 }
 
 .viewer-area.has-inspector .tool-card-copy {
-  flex: 1 1 auto;
+  flex: 1 1 0;
   min-width: 0;
 }
 
-.viewer-area.has-inspector .tool-card-copy > span {
+.viewer-area.has-inspector .tool-card-copy > span,
+.viewer-area.has-inspector .tool-card-copy > small {
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+/* `--tool-card-room` falls below 400px when this container is below 930px.
+   Give the action tabs their own row there so they cannot push through the
+   fixed-width card or cover its copy. */
+@container viewer-area (max-width: 929px) {
+  .viewer-area.has-inspector .tool-card-submode {
+    order: 1;
+    flex: 0 0 100%;
+    justify-content: center;
+  }
 }
 
 @keyframes tool-card-in {
@@ -85,10 +101,17 @@
 
 .tool-card-copy strong {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 8px;
   font-size: var(--fs-sm);
   font-weight: 600;
+}
+
+.tool-card-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 /* Explicit command-state pill so armed/dragging/validating/failed read at a
@@ -121,6 +144,18 @@
   color: var(--color-error);
   background: rgba(239, 68, 68, 0.1);
   border-color: rgba(239, 68, 68, 0.45);
+}
+
+.tool-card-badge {
+  flex: 0 0 auto;
+  padding: 1px 7px;
+  color: var(--color-preview);
+  font-size: var(--fs-xs);
+  font-weight: var(--fw-medium);
+  background: color-mix(in srgb, var(--color-preview) 10%, transparent);
+  border: 1px solid color-mix(in srgb, var(--color-preview) 45%, transparent);
+  border-radius: 999px;
+  cursor: help;
 }
 
 .tool-card-copy small {

@@ -78,6 +78,11 @@
     width: var(--assistant-col-w);
     z-index: var(--z-assistant-float);
   }
+
+  /* There is no useful corner left beside a full-width inspector here. */
+  .viewer-area.has-inspector .viewer-rail-stack {
+    display: none;
+  }
 }
 
 @media (max-width: 620px) {
