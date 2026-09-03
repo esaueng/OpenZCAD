@@ -21,7 +21,8 @@ import type {
   SelectionFilter,
   SketchOverlay,
   ViewerSettings,
-  ViewTarget
+  ViewTarget,
+  WheelDevice
 } from '@openzcad/viewport';
 import { ViewerToolbar } from './ViewerToolbar';
 import { OrientationWidget } from './OrientationWidget';
@@ -136,6 +137,7 @@ interface ViewerShellProps {
   initialView: ViewportCameraState | null;
   onViewChange(view: ViewportCameraState): void;
   onViewSettled(view: ViewportCameraState): void;
+  onWheelDeviceLearned?(device: WheelDevice): void;
   orientationRef: MutableRefObject<((axes: AxisProjection) => void) | null>;
   selectionFilter: SelectionFilter;
   onBoxSelect(bodyIds: string[]): void;
@@ -274,6 +276,7 @@ export function ViewerShell({
   initialView,
   onViewChange,
   onViewSettled,
+  onWheelDeviceLearned,
   orientationRef,
   onSelectTopology,
   onSelectEdgeChain,
@@ -408,6 +411,7 @@ export function ViewerShell({
         initialView={initialView}
         onViewChange={onViewChange}
         onViewSettled={onViewSettled}
+        onWheelDeviceLearned={onWheelDeviceLearned}
         orientationRef={orientationRef}
         orientationDragRef={orientationDragRef}
         scaleIndicatorRef={scaleIndicatorRef}
