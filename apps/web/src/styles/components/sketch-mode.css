@@ -371,7 +371,7 @@
   padding: 12px;
   color: var(--color-viewport-text-muted);
   background: rgba(17, 24, 33, 0.95);
-  border: var(--border-thin);
+  border: 1px solid var(--color-viewport-border);
   border-radius: var(--radius-lg);
   box-shadow: 0 14px 34px rgba(0, 0, 0, 0.38);
   backdrop-filter: blur(10px);
