@@ -30,7 +30,7 @@
   background: var(--color-surface);
   border: var(--border-strong);
   border-radius: var(--radius-lg);
-  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.55);
+  box-shadow: var(--shadow-3);
 }
 
 .conflict-dialog h2 {
@@ -82,7 +82,7 @@
   background: var(--color-surface);
   border: 1px solid color-mix(in srgb, var(--color-error) 55%, transparent);
   border-radius: var(--radius-lg);
-  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.55);
+  box-shadow: var(--shadow-3);
 }
 
 .cloud-deletion-dialog > header {
@@ -172,7 +172,7 @@
   background: var(--color-surface);
   border: 1px solid var(--color-border);
   border-radius: var(--radius-lg);
-  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.55);
+  box-shadow: var(--shadow-3);
 }
 
 .save-revision-dialog h2 {
@@ -223,7 +223,7 @@
   background: var(--color-surface);
   border: var(--border-strong);
   border-radius: var(--radius-lg);
-  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.55);
+  box-shadow: var(--shadow-3);
 }
 
 .export-dialog h2 {
@@ -408,7 +408,7 @@
   background: var(--color-surface);
   border: var(--border-strong);
   border-radius: var(--radius-lg);
-  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.55);
+  box-shadow: var(--shadow-3);
 }
 
 .shapr-import-dialog header h2 {
@@ -567,7 +567,7 @@
   background: var(--color-surface);
   border: var(--border-strong);
   border-radius: var(--radius-lg);
-  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.55);
+  box-shadow: var(--shadow-3);
   overflow: hidden;
 }
 
@@ -668,7 +668,7 @@
   background: var(--color-surface);
   border: var(--border-strong);
   border-radius: var(--radius-lg);
-  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.55);
+  box-shadow: var(--shadow-3);
   overflow: hidden;
 }
 

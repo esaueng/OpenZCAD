@@ -62,4 +62,27 @@ describe('viewport overlay text tokens', () => {
     }
     expect(offenders).toEqual([]);
   });
+
+  it('never draws a themed border on a hard-coded dark stage', () => {
+    // --color-border is a light grey in the light theme; on a dark overlay it
+    // read as a pale ring. Overlays take their border from the viewport set.
+    const offenders: string[] = [];
+    for (const sheet of OVERLAY_SHEETS) {
+      const css = readFileSync(
+        resolve(__dirname, '../styles/components', sheet),
+        'utf8'
+      );
+      for (const { selector, body } of ruleBlocks(css)) {
+        if (!DARK_STAGE.test(body)) continue;
+        if (
+          /border(-color)?:\s*(var\(--border-(thin|strong)\)|1px solid var\(--color-border)/m.test(
+            body
+          )
+        ) {
+          offenders.push(`${sheet}: ${selector}`);
+        }
+      }
+    }
+    expect(offenders).toEqual([]);
+  });
 });
