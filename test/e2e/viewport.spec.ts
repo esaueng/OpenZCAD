@@ -1452,11 +1452,17 @@ test('dragging a box selects several bodies at once', async ({ page }) => {
   await expect(status).toContainText('2 bodies selected');
 
   // A window sweep over empty sky takes nothing: the selection goes, its chip
-  // with it, and the status line does not complain about the gesture.
+  // with it, and the status line does not complain about the gesture. The
+  // sweep is also a change of selection, which retires the message that
+  // described the two bodies — the composed contract is silence, not the
+  // stale count. The pause matters: a retire inside the 300 ms settle window
+  // is read as a pick handler's retire-then-set and deliberately ignored, so
+  // the sweep has to arrive after it to retire deterministically.
+  await page.waitForTimeout(400);
   await sweep(0.6, 0.04, 0.72, 0.14);
   await expect(page.locator('.selection-chip')).toHaveCount(0);
   await expect(status).not.toContainText('Nothing in the box');
-  await expect(status).toContainText('2 bodies selected');
+  await expect(status).not.toContainText('2 bodies selected');
 });
 
 test('box selection releases the previous direct-edit target', async ({
