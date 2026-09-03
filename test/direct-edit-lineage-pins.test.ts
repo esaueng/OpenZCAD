@@ -175,7 +175,10 @@ describe('resize-blend under lineage', { timeout: 120_000 }, () => {
    * moved body — which is exactly when the recorded carrier centre would
    * otherwise refuse the next move.
    */
-  async function movedImportedBlend(options: { withReference: boolean }) {
+  async function movedImportedBlend(options: {
+    withReference: boolean;
+    newRadius?: number;
+  }) {
     const source = addPrimitiveFeature(
       createProjectDocument('Blend source', user),
       {
@@ -264,7 +267,7 @@ describe('resize-blend under lineage', { timeout: 120_000 }, () => {
         recordedRadius: geometry.blendRadius!,
         recordedCenter: center,
         recordedAxis: axis,
-        newRadius: 2
+        newRadius: options.newRadius ?? 2
       }
     }).document;
     const resized = await adapter.syncDocument(edited);
@@ -298,6 +301,19 @@ describe('resize-blend under lineage', { timeout: 120_000 }, () => {
     const after = await adapter.syncDocument(movedTo(document, 9));
     expect(after.warnings).toEqual([]);
     // A translation changes no volume: the blend is still resized to 2.
+    expect(after.bodyRepresentations[bodyId]!.volume).toBeCloseTo(
+      resizedVolume,
+      6
+    );
+  });
+
+  it('stays a quiet no-op after the body moves when the blend is already at the stored radius', async () => {
+    const { document, bodyId, resizedVolume } = await movedImportedBlend({
+      withReference: true,
+      newRadius: 3
+    });
+    const after = await adapter.syncDocument(movedTo(document, 9));
+    expect(after.warnings).toEqual([]);
     expect(after.bodyRepresentations[bodyId]!.volume).toBeCloseTo(
       resizedVolume,
       6
