@@ -28,6 +28,8 @@
 .row-rollback,
 .row-visibility,
 .selection-chip-clear,
+.toast-action,
+.toast-dismiss,
 .save-state {
   transition:
     background-color var(--dur-fast) var(--ease-out),
@@ -179,17 +181,18 @@ textarea {
   transform: translateY(0);
 }
 
-/* Status bar flashes subtly when the status text changes (class toggle
-   is handled in JS; the animation alone keeps it readable). */
-@keyframes oz-status-pulse {
-  0% {
-    color: var(--color-accent-hi);
-  }
-  100% {
-    color: inherit;
-  }
+/* A toast pops in like the selection chip beside it and fades on the way
+   out; the component keeps it mounted for the fade (useDelayedUnmount). */
+.toast {
+  animation: oz-pop var(--dur-base) var(--ease-out);
 }
 
-.status-pulse {
-  animation: oz-status-pulse 600ms var(--ease-out);
+.toast.closing {
+  animation: oz-fade-out var(--dur-fast) var(--ease-out) forwards;
+}
+
+@keyframes oz-fade-out {
+  to {
+    opacity: 0;
+  }
 }
