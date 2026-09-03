@@ -2717,6 +2717,34 @@ test('models a parametric part and exports a true STEP file', async ({
   await expect(paramInput).toHaveValue('30');
 });
 
+test('keeps parameter names visible in the 252px Build sidebar', async ({
+  page
+}) => {
+  await stubApi(page);
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto('/');
+  await page
+    .getByRole('button', { name: /^Open demo: Mounting Bracket/ })
+    .click();
+
+  const workspace = page.locator('.workspace');
+  await workspace.evaluate((element) => {
+    (element as HTMLElement).style.setProperty('--sidebar-w', '252px');
+  });
+
+  const parameterName = page.locator('.param-name', {
+    hasText: 'mount_inset'
+  });
+  await expect(parameterName).toHaveText('mount_inset');
+  await expect
+    .poll(() =>
+      parameterName.evaluate(
+        (element) => element.scrollWidth <= element.clientWidth
+      )
+    )
+    .toBe(true);
+});
+
 test('exports a 3MF package through the mesh export dialog', async ({
   page
 }) => {
