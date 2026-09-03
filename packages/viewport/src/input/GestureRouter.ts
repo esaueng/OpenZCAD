@@ -1,5 +1,13 @@
-/** Pixels a press may travel and still count as a click rather than a drag. */
-export const CLICK_THRESHOLD_PX = 5;
+/**
+ * Pixels a press may travel and still count as a click rather than a drag.
+ *
+ * One number for every gesture the viewport classifies — box select and the
+ * right-button tracker read it too — so a click is the same size everywhere.
+ * Six because a click with a little hand movement measured 4–5 px in the
+ * browser, and at 4 that jitter became an empty box select that cleared the
+ * selection out from under the user.
+ */
+export const CLICK_THRESHOLD_PX = 6;
 
 /**
  * A pointer press the viewport is tracking.
