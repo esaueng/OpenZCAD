@@ -559,13 +559,13 @@
 .panel-overflow-menu {
   position: absolute;
   right: 0;
-  z-index: var(--z-popover, 40);
+  z-index: var(--z-popover);
   min-width: 176px;
   padding: 4px;
   background: var(--color-surface);
   border: var(--border-thin);
   border-radius: var(--radius-md);
-  box-shadow: var(--shadow-popover, 0 8px 24px rgba(0, 0, 0, 0.35));
+  box-shadow: var(--shadow-popover);
 }
 
 .panel-overflow-item {
