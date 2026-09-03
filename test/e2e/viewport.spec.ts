@@ -2511,7 +2511,14 @@ test('two fingers pan while a wheel notch still zooms', async ({ page }) => {
   const afterPan = await pose();
   expect(distance(afterPan)).toBeCloseTo(distance(beforePan), 3);
 
-  // A notch is still a zoom: the distance changes.
+  // The swipe proved a trackpad, so vertical motion now pans from here on —
+  // that is the remembered device doing its job, not a regression. A
+  // line-mode delta is the one thing a trackpad cannot produce, so it proves
+  // a wheel again, and the pixel notches that follow zoom once more. The
+  // pause ends the pan burst first: inside one gesture the first intent
+  // holds, whatever the later events prove.
+  await page.waitForTimeout(250);
+  await canvas.dispatchEvent('wheel', { deltaY: 1, deltaMode: 1 });
   for (let step = 0; step < 3; step += 1) {
     await canvas.dispatchEvent('wheel', { deltaY: 120, deltaMode: 0 });
   }
