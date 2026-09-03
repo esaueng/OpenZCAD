@@ -36,6 +36,12 @@
   text-overflow: ellipsis;
 }
 
+/* Nothing to report: the dot and the caret stay so the log is still there
+   to open, but they no longer claim attention. */
+.status-state.quiet {
+  color: var(--color-text-subtle);
+}
+
 .status-state:hover,
 .status-state.open {
   color: var(--color-accent-hi);

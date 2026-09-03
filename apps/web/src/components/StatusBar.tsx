@@ -1,4 +1,4 @@
-import { useCallback, useId, useRef, useState } from 'react';
+import { useCallback, useEffect, useId, useRef, useState } from 'react';
 import {
   SELECTION_FILTERS,
   SELECTION_FILTER_LABELS,
@@ -8,9 +8,17 @@ import { StatusActivityLog, type StatusTone } from './StatusActivityLog';
 import type { WorkspaceSaveState } from '../lib/cloudProjectAutosave';
 import { WORKSPACE_SAVE_STATE_PRESENTATION } from '../lib/workspaceSaveStatePresentation';
 import { StableLabel } from './StableLabel';
+import { statusExpiresAt } from '../lib/statusLifetime';
 
 interface StatusBarProps {
   status: string;
+  /**
+   * When the message was set. Omitted, the message never expires — the
+   * legacy contract, kept for surfaces that only ever show mode text.
+   */
+  statusAt?: number;
+  /** Mode text the user is still in; it stays until replaced. */
+  statusSticky?: boolean;
   tone: StatusTone;
   /** Context-sensitive next-step hint, e.g. shortcuts for the selection. */
   hint: string | null;
@@ -35,6 +43,8 @@ const SYNC_LABEL_RESERVE = (
 
 export function StatusBar({
   status,
+  statusAt,
+  statusSticky,
   tone,
   hint,
   projectName,
@@ -49,6 +59,29 @@ export function StatusBar({
 }: StatusBarProps) {
   const logPanelId = useId();
   const [logOpen, setLogOpen] = useState(false);
+  // The bar goes quiet once an informational message has had its lifetime:
+  // what it reported is over, and left up it reads as a complaint about the
+  // next thing the user does. The log keeps every message regardless.
+  const expiresAt =
+    statusAt === undefined
+      ? null
+      : statusExpiresAt({ at: statusAt, sticky: statusSticky ?? false });
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (expiresAt === null) {
+      return;
+    }
+    const remaining = expiresAt - Date.now();
+    if (remaining <= 0) {
+      setNow(Date.now());
+      return;
+    }
+    const timer = window.setTimeout(() => setNow(Date.now()), remaining);
+    return () => window.clearTimeout(timer);
+  }, [expiresAt]);
+  const quiet = expiresAt !== null && now >= expiresAt;
+  const shownStatus = quiet ? '' : status;
+  const shownTone = quiet ? 'ready' : tone;
   const statusButtonRef = useRef<HTMLButtonElement | null>(null);
   const featureLabel = `${featureCount} ${featureCount === 1 ? 'feature' : 'features'}`;
   const bodyLabel = `${bodyCount} ${bodyCount === 1 ? 'body' : 'bodies'}`;
@@ -67,11 +100,17 @@ export function StatusBar({
         <button
           ref={statusButtonRef}
           type="button"
-          className={`status-state ${tone === 'ready' ? '' : tone}${
+          className={`status-state ${shownTone === 'ready' ? '' : shownTone}${
             logOpen ? ' open' : ''
-          }`}
-          title={`${status} — View activity log`}
-          aria-label={`${logOpen ? 'Close' : 'Open'} activity log. Current status: ${status}`}
+          }${quiet ? ' quiet' : ''}`}
+          title={
+            quiet ? 'View activity log' : `${status} — View activity log`
+          }
+          aria-label={
+            quiet
+              ? `${logOpen ? 'Close' : 'Open'} activity log.`
+              : `${logOpen ? 'Close' : 'Open'} activity log. Current status: ${status}`
+          }
           aria-expanded={logOpen}
           aria-controls={logPanelId}
           onClick={() => setLogOpen((open) => !open)}
@@ -87,7 +126,7 @@ export function StatusBar({
               `aria-atomic` so a changed message is read whole rather than
               diffed word by word. */}
           <span aria-live="polite" aria-atomic="true">
-            {status}
+            {shownStatus}
           </span>
           <span className="status-log-caret" aria-hidden="true">
             {logOpen ? '▾' : '▴'}
