@@ -17,14 +17,11 @@ describe('CommandManager undo and redo labels', () => {
     expect(manager.redoLabel).toBeNull();
 
     manager.execute(
-      commandFactories.addPrimitive(
-        {
-          name: 'Box',
-          primitiveKind: 'box',
-          dimensions: { width: 10, height: 10, depth: 10 }
-        },
-        'Add box'
-      )
+      commandFactories.addPrimitive({
+        name: 'Box',
+        primitiveKind: 'box',
+        dimensions: { width: 10, height: 10, depth: 10 }
+      })
     );
     expect(manager.undoLabel).toBe('Add box');
     expect(manager.redoLabel).toBeNull();
