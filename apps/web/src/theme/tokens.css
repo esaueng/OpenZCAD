@@ -36,6 +36,9 @@
      theme repaints the chrome, not the canvas. Never use --color-text there. */
   --color-viewport-text: #e6edf3;
   --color-viewport-text-muted: #8b949e;
+  /* Borders on those same overlays: --color-border re-themes to a light grey
+     and drew a pale ring round the dark rotate-view button in light theme. */
+  --color-viewport-border: rgba(230, 237, 243, 0.18);
 
   /* ── Viewport selection & manipulation ────────────────── */
   --color-select: #4da3ff;      /* selected geometry */
@@ -91,6 +94,15 @@
   --border-thin: 1px solid var(--color-border);
   --border-strong: 1px solid var(--color-border-strong);
 
+  /* ── Elevation ────────────────────────────────────────── */
+  /* Three steps: a chip or card resting on a panel, a menu or popover
+     floating over the workspace, a dialog over its scrim. The same values in
+     both themes; the light chrome never repaints its shadows. */
+  --shadow-1: 0 2px 8px rgba(0, 0, 0, 0.25);
+  --shadow-2: 0 8px 24px rgba(0, 0, 0, 0.35);
+  --shadow-3: 0 18px 48px rgba(0, 0, 0, 0.55);
+  --shadow-popover: var(--shadow-2);
+
   /* ── Layout dimensions ────────────────────────────────── */
   --topbar-h: 44px;
   --toolbar-h: 48px;
@@ -114,9 +126,14 @@
   /* ── Z-index scale ────────────────────────────────────── */
   --z-viewer-overlay: 2;
   --z-inspector-float: 5;
-  /* Above the assistant dock (6 when it floats on a narrow screen), so the
-     seam between the panels stays grabbable whichever way they are laid out. */
+  /* The assistant dock when it floats over the viewport on a narrow screen. */
+  --z-assistant-float: 6;
+  /* Above the floating assistant dock, so the seam between the panels stays
+     grabbable whichever way they are laid out. */
   --z-panel-resizer: 7;
+  /* Menus that open from a panel (the inspector overflow): over every
+     workspace surface, under a dialog's scrim. */
+  --z-popover: 40;
   --z-modal: 50;
   --z-context-menu: 60;
   --z-start-screen: 100;
