@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import * as THREE from 'three';
+import { CLICK_THRESHOLD_PX } from '../input/GestureRouter';
 import {
+  BOX_SELECT_MIN_PX,
   bodiesInBox,
   boxSelectMode,
   isBoxSelectDrag,
@@ -74,6 +76,17 @@ describe('the drag direction chooses the rule', () => {
 describe('a drag has to be a rectangle', () => {
   it('ignores a drag that barely moved', () => {
     expect(isBoxSelectDrag(rectFromDrag(50, 50, 52, 51))).toBe(false);
+  });
+
+  it('draws the click line where every other gesture does', () => {
+    // A click with a little hand movement measures 4–5 px; that is a click.
+    expect(BOX_SELECT_MIN_PX).toBe(CLICK_THRESHOLD_PX);
+    expect(
+      isBoxSelectDrag(rectFromDrag(50, 50, 50 + CLICK_THRESHOLD_PX - 1, 50))
+    ).toBe(false);
+    expect(
+      isBoxSelectDrag(rectFromDrag(50, 50, 50 + CLICK_THRESHOLD_PX, 50))
+    ).toBe(true);
   });
 
   it('accepts a drag that is long in only one direction', () => {

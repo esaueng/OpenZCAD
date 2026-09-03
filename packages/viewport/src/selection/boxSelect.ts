@@ -1,3 +1,4 @@
+import { CLICK_THRESHOLD_PX } from '../input/GestureRouter';
 import * as THREE from 'three';
 
 /**
@@ -59,8 +60,11 @@ export function rectFromDrag(
   };
 }
 
-/** Pixels a drag must cover before it counts as a rectangle at all. */
-export const BOX_SELECT_MIN_PX = 4;
+/**
+ * Pixels a drag must cover before it counts as a rectangle at all: the same
+ * distance that separates a click from a drag anywhere else in the viewport.
+ */
+export const BOX_SELECT_MIN_PX = CLICK_THRESHOLD_PX;
 
 export function isBoxSelectDrag(rect: ScreenRect): boolean {
   return (

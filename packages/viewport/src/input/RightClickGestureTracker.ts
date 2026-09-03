@@ -1,4 +1,6 @@
-const RIGHT_DRAG_THRESHOLD_PX = 5;
+import { CLICK_THRESHOLD_PX } from './GestureRouter';
+
+const RIGHT_DRAG_THRESHOLD_PX = CLICK_THRESHOLD_PX;
 
 interface ActiveRightClickGesture {
   pointerId: number;
