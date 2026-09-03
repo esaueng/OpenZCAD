@@ -263,6 +263,10 @@
   bottom: 52px;
 }
 
+.toast.above-view-bar {
+  bottom: 88px;
+}
+
 /* ── The parts rail ──────────────────────────────────────── */
 
 /*
