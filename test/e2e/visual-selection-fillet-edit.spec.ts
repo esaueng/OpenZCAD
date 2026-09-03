@@ -365,18 +365,15 @@ test('resizes an imported analytic blend twice without reselection', async ({
   expect((await readBlend(canvas))?.producingFeatureId).toBeTruthy();
   expect(await readBlend(canvas, true)).not.toBeNull();
 
-  const selected = page.getByRole('region', {
-    name: 'Selected face properties'
-  });
-  await expect(selected).toContainText('Imported blend');
-  await expect(selected).toContainText('fillet radius');
-  await expect(selected).toContainText('R 3 mm');
-  await expect(selected).toContainText(
-    'This analytic STEP blend can be resized by the exact kernel.'
-  );
+  const inspector = page.getByRole('region', { name: 'Feature inspector' });
+  await expect(inspector.getByRole('heading')).toHaveText('Blend face R3');
+  await expect(inspector).toContainText('Measurements');
+  await expect(inspector).toContainText('Defined by remus_solid');
+  await expect(inspector.getByRole('button', { name: 'Edit' })).toBeVisible();
+  await expect(inspector.getByLabel('More actions')).toHaveCount(0);
   await expect(
-    selected.getByRole('button', { name: 'Remove selected feature' })
-  ).toBeVisible();
+    page.getByRole('region', { name: 'Selected face properties' })
+  ).toHaveCount(0);
   const editFillet = page.getByRole('region', {
     name: 'Edit Fillet operation'
   });
