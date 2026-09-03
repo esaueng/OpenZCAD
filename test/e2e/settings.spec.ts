@@ -96,7 +96,7 @@ test('keeps the top-bar order fixed and dismisses the file menu outside', async 
   await expect(topbar).not.toContainText('E2E user');
   await expect(actionSlots.nth(1)).toHaveAttribute(
     'aria-label',
-    'Open project sharing'
+    'Open project sharing · Offline'
   );
   await expect(actionSlots.nth(2)).toHaveClass(/file-menu/);
   await expect(actionSlots.nth(3)).toHaveAttribute(
@@ -128,7 +128,7 @@ test('keeps the top-bar order fixed and dismisses the file menu outside', async 
   );
 });
 
-test('keeps the narrow top bar’s action slots side by side', async ({
+test('collapses the top-bar actions at 1120px without overflow or lost labels', async ({
   page
 }) => {
   await stubApi(page);
@@ -142,12 +142,24 @@ test('keeps the narrow top bar’s action slots side by side', async ({
   });
   await expect(actions.locator(':scope > *')).toHaveCount(4);
 
-  // One width inside each top-bar breakpoint. Signed in the row carries four
-  // controls, so any rule that pins a five-track grid template hands every
-  // control the previous one's track: the collaboration chip lands on top of
-  // the save chip's label and its click target, and the row goes on claiming
-  // a track nothing sits in.
-  for (const width of [1100, 982, 880, 600]) {
+  const saveAction = actions.locator('.save-state');
+  await expect(saveAction).toHaveAttribute('aria-label', /\S/);
+  await expect(saveAction).toHaveAccessibleName(/\S/);
+  await expect(
+    actions.getByRole('button', {
+      name: 'Open project sharing · Offline'
+    })
+  ).toBeVisible();
+  await expect(actions.getByLabel('Import and export')).toBeVisible();
+  await expect(
+    actions.getByRole('button', { name: 'Open settings' })
+  ).toBeVisible();
+
+  // Exercise both sides of the exact collapse point, then narrower layouts.
+  // Signed in the row carries four controls, so every direct child must own
+  // exactly its content width without overlapping a neighbour or escaping the
+  // bar. At 1120px and below, all four become 28px icon squares at once.
+  for (const width of [1121, 1120, 982, 600]) {
     await page.setViewportSize({ width, height: 800 });
     await expect
       .poll(
@@ -170,12 +182,21 @@ test('keeps the narrow top bar’s action slots side by side', async ({
             const row = group.getBoundingClientRect();
             return {
               overlap: Math.round(Math.max(0, overlap)),
-              unclaimedWidth: Math.round(row.width - (last.right - first.left))
+              unclaimedWidth: Math.round(row.width - (last.right - first.left)),
+              overflow: Math.round(
+                Math.max(0, -row.left, row.right - window.innerWidth)
+              ),
+              compact: slots.every((slot) => Math.abs(slot.width - 28) < 0.1)
             };
           }),
         { message: `top bar action row at ${width}px` }
       )
-      .toEqual({ overlap: 0, unclaimedWidth: 0 });
+      .toEqual({
+        overlap: 0,
+        unclaimedWidth: 0,
+        overflow: 0,
+        compact: width <= 1120
+      });
   }
 });
 
