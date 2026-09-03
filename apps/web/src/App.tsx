@@ -369,6 +369,10 @@ import {
 } from './lib/interaction/filletFaceEdit';
 import { ToolCard } from './components/ToolCard';
 import { ToastHost } from './components/Toast';
+import {
+  retireStatus,
+  type StatusEntry
+} from './lib/statusLifetime';
 import { NumericKeypad, type KeypadRequest } from './components/NumericKeypad';
 import type { DimensionMode } from './lib/keypad';
 import {
@@ -1410,6 +1414,7 @@ export function App() {
   }
   /** The feature that currently defines a picked body, if there is one. */
   function inferFeatureNodeFor(bodyId: BodyId | null) {
+    retireStatusMessage();
     selectFeatureNode(bodyId ? featureNodeIdForBody(bodyId) : null, 'inferred');
   }
   const [selectedTopology, setSelectedTopology] =
@@ -1494,8 +1499,25 @@ export function App() {
    * so that arming Fillet does not silently undo a filter set on purpose.
    */
   const selectionFilter = effectiveSelectionFilter(manualSelectionFilter, tool);
-  const [status, setStatus] = useState(
-    cloudFunctionsEnabled ? 'Checking beta API...' : 'Offline workspace'
+  const [statusEntry, setStatusEntry] = useState<StatusEntry>(() => ({
+    text: cloudFunctionsEnabled ? 'Checking beta API...' : 'Offline workspace',
+    at: Date.now(),
+    sticky: false
+  }));
+  const status = statusEntry.text;
+  /**
+   * Informational messages expire (lib/statusLifetime); `sticky` is for text
+   * that describes a mode the user is still in, such as sketching on a plane.
+   */
+  const setStatus = useCallback(
+    (text: string, options?: { sticky?: boolean }) => {
+      setStatusEntry({
+        text,
+        at: Date.now(),
+        sticky: options?.sticky ?? false
+      });
+    },
+    []
   );
   // The status line is the log; a toast is the notice. Only actions whose
   // outcome is otherwise invisible in the viewport raise one.
@@ -1507,6 +1529,10 @@ export function App() {
   }, []);
   const dismissToast = useCallback((id: number) => {
     setToast((current) => (current?.id === id ? null : current));
+  }, []);
+  /** A change of selection or command retires the message it interrupts. */
+  const retireStatusMessage = useCallback(() => {
+    setStatusEntry((current) => retireStatus(current, Date.now()));
   }, []);
   const [busy, setBusy] = useState(false);
   /**
@@ -4406,7 +4432,9 @@ export function App() {
     if (nextTool === 'sketch') {
       clearSelection();
       setTool('sketch');
-      setStatus('Sketch mode: draw one closed profile on the selected plane.');
+      setStatus('Sketch mode: draw one closed profile on the selected plane.', {
+        sticky: true
+      });
       return;
     }
     if (nextTool === 'extrude') {
@@ -4660,6 +4688,7 @@ export function App() {
   }
 
   function clearSelection() {
+    retireStatusMessage();
     if (
       interaction.mode === 'face' &&
       interaction.op === 'resize-cylinder-radius'
@@ -7954,7 +7983,8 @@ export function App() {
       // makes it untrue on the first press.
       offset === 0
         ? `Sketching on the ${plane} plane · Finish Sketch when done.`
-        : `Sketching on the ${plane} plane offset ${offset} ${doc?.units ?? ''} · Finish Sketch when done.`
+        : `Sketching on the ${plane} plane offset ${offset} ${doc?.units ?? ''} · Finish Sketch when done.`,
+      { sticky: true }
     );
   }
 
@@ -7987,7 +8017,8 @@ export function App() {
     setStatus(
       attachment.attachment === 'fixed'
         ? `Sketching on a fixed plane at the selected face · ${attachment.note} Finish Sketch when done.`
-        : 'Sketching on the selected face · Finish Sketch when done.'
+        : 'Sketching on the selected face · Finish Sketch when done.',
+      { sticky: true }
     );
     return true;
   }
@@ -8089,7 +8120,9 @@ export function App() {
         startSketchOnFace(target);
         return;
       }
-      setStatus('Pick a planar face to sketch on, or choose a plane.');
+      setStatus('Pick a planar face to sketch on, or choose a plane.', {
+        sticky: true
+      });
       return;
     }
     // Selection-first direct manipulation: a face click arms its drag handle.
@@ -14088,6 +14121,8 @@ export function App() {
       statusBar={
         <StatusBar
           status={visibleStatus}
+          statusAt={statusEntry.at}
+          statusSticky={statusEntry.sticky || !exactGeometryReady}
           tone={tone}
           hint={hint}
           projectName={doc.name}
