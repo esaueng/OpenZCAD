@@ -96,11 +96,24 @@ describe('a linear pattern whose instances overlap', () => {
     120_000
   );
 
-  it.each([9, 6, 3, 0.5])(
+  /**
+   * Face counts are a measurement pin, not a construction claim: each wall
+   * arc sits on its own cylinder's axis, so the merged union's wall cannot be
+   * one face, and how it splits is the kernel's call. The eca4fd4 pin
+   * (remus#198/#200 seam/band discipline) moved the linear row from 6 faces
+   * at every spacing to the values below; the volume assertions above are the
+   * ones that prove material is still reported once.
+   */
+  it.each([
+    [9, 14],
+    [6, 13],
+    [3, 13],
+    [0.5, 13]
+  ])(
     'merges overlapping cylinders at spacing %s without a warning',
-    async (spacing) => {
+    async (spacing, faces) => {
       const result = await patterned(spacing);
-      expect(result.faces).toBe(6);
+      expect(result.faces).toBe(faces);
       expect(result.warnings).toEqual([]);
     },
     120_000

@@ -200,29 +200,27 @@ describe('edge-to-vertex incidence', { timeout: 60_000 }, () => {
 
   it('quantizes distinct vertices together once a part is small enough', () => {
     // `UnitSystem` includes metres, so a part a couple of microns across is
-    // representable and its fillet is smaller still. At that size the 1e-6
-    // quantum stops being a rounding step and becomes a feature-sized grid.
+    // representable. At that size the 1e-6 quantum stops being a rounding
+    // step and becomes a feature-sized grid.
+    //
+    // The vehicle changed with the eca4fd4 pin: it used to be a 2e-6 box with
+    // a 3e-7 fillet, whose sixteen vertices merged into eight keys. remus#181
+    // made the blend fail closed below tolerance (`trimming-failure: blend`),
+    // so the geometry that carried the argument can no longer be built. A
+    // 4e-7 box still builds and makes the same point with no feature at all:
     const kernel = new RemusKernel();
-    const box = kernel.makeBox(2e-6, 2e-6, 1e-6);
-    const filleted = kernel.fillet(
-      box,
-      Uint32Array.from(verticalEdgesOf(kernel, box)),
-      3e-7
-    );
-    const vertices = Array.from(kernel.getSolidVertices(filleted));
-    expect(vertices).toHaveLength(16);
+    const box = kernel.makeBox(4e-7, 4e-7, 4e-7);
+    const vertices = Array.from(kernel.getSolidVertices(box));
+    expect(vertices).toHaveLength(8);
 
-    const byKey = new Map<string, number[]>();
-    for (const vertex of vertices) {
-      const key = quantizedKey(Array.from(kernel.getVertexPosition(vertex)));
-      byKey.set(key, [...(byKey.get(key) ?? []), vertex]);
-    }
-    // Sixteen distinct kernel vertices, eight quantized keys: every fillet
-    // corner merges with its partner. A run walked on those keys would jump
-    // between the two ends of a fillet band.
-    const merged = [...byKey.values()].filter((group) => group.length > 1);
-    expect(merged).toHaveLength(8);
-    expect(merged.flat()).toHaveLength(16);
+    const keys = new Set(
+      vertices.map((vertex) =>
+        quantizedKey(Array.from(kernel.getVertexPosition(vertex)))
+      )
+    );
+    // Eight distinct kernel vertices, ONE quantized key: a run walked on
+    // positions alone could not tell any two corners apart.
+    expect(keys.size).toBe(1);
   });
 
   it('is safe on the sizes the corpus actually contains, which is the trap', () => {

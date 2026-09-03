@@ -1246,7 +1246,11 @@ describe('exact kernel adapter', { timeout: 30_000 }, () => {
     });
   });
 
-  it('labels a shallow circular union when Remus returns a mesh fallback', async () => {
+  it('keeps a shallow circular union exact — the fallback it pinned is gone', async () => {
+    // This scenario fell back to a 193-face mesh until the eca4fd4 pin
+    // (remus#198/#200); it now unions exactly: 9 analytic faces, no warning.
+    // Kept as an exactness pin so the fallback labeling below cannot quietly
+    // come back as this body's answer.
     const withCylinder = addPrimitiveFeature(
       createProjectDocument('Shallow circular union', toUserId('user_exact')),
       {
@@ -1282,11 +1286,67 @@ describe('exact kernel adapter', { timeout: 30_000 }, () => {
     const resultId = document.bodyOrder.at(-1)!;
     const result = derived.bodyRepresentations[resultId];
     expect(result).toBeDefined();
-    expect(result?.faceCount).toBe(193);
+    expect(result?.faceCount).toBe(9);
+    expect(derived.warnings).toEqual([]);
+    expect(
+      result?.topology?.faces.some(
+        (face) => face.geometry?.surfaceType === 'cylinder'
+      )
+    ).toBe(true);
+    expect(
+      isClosedConsistentlyOrientedMesh(
+        inspectTriangleMeshClosure(result!.mesh.vertices, result!.mesh.indices)
+      )
+    ).toBe(true);
+    expect(result?.exportableStep).toBe(true);
+    expect(derived.bodyRepresentations[cylinderId]?.consumed).toBe(true);
+    expect(derived.bodyRepresentations[extrudeId]?.consumed).toBe(true);
+  }, 30_000);
+
+  it('labels a union Remus still returns as a mesh fallback', async () => {
+    // A sphere met by an off-axis post is the remaining general-position
+    // fallback on this kernel: exact surface intersection is not attempted,
+    // and the result is a tessellation. The labeling contract that matters
+    // is unchanged: the operands are consumed, and the result carries the
+    // census warning before it can be mistaken for exact analytic output.
+    const withBall = addPrimitiveFeature(
+      createProjectDocument('Offset post union', toUserId('user_exact')),
+      {
+        name: 'Ball',
+        primitiveKind: 'sphere',
+        dimensions: { radius: 15 }
+      }
+    );
+    const ballId = withBall.bodyOrder.at(-1)!;
+    const withPost = addPrimitiveFeature(withBall, {
+      name: 'Post',
+      primitiveKind: 'cylinder',
+      dimensions: { radius: 4, height: 40 }
+    });
+    const postId = withPost.bodyOrder.at(-1)!;
+    const placed = transformBody(withPost, {
+      name: 'Place post',
+      targetBodyId: postId,
+      translation: { x: 10, y: 3, z: -20 }
+    });
+    const manager = new CommandManager(placed.document);
+    const document = manager.execute(
+      commandFactories.booleanBodies({
+        name: 'Offset post union',
+        operation: 'union',
+        targetBodyIds: [ballId, postId]
+      })
+    );
+
+    const derived = await adapter.syncDocument(document);
+    const resultId = document.bodyOrder.at(-1)!;
+    const result = derived.bodyRepresentations[resultId];
+    expect(result).toBeDefined();
+    expect(result?.faceCount).toBeGreaterThan(100);
     expect(
       derived.warnings.some(
         (warning) =>
-          warning.startsWith('Feature "Shallow circular union":') &&
+          warning.startsWith('Feature "Offset post union":') &&
           FACET_CENSUS_MESSAGE.test(warning)
       )
     ).toBe(true);
@@ -1306,13 +1366,10 @@ describe('exact kernel adapter', { timeout: 30_000 }, () => {
         'Repositioning the overlap sometimes clears it; otherwise keep the bodies separate, or subtract instead — the same operands still cut exactly.'
       )
     );
-    // Remus now returns the approximation instead of failing the fuse. Keep
-    // that user-visible change explicit: the operands are consumed, but the
-    // result is labeled before it can be mistaken for exact analytic output.
-    expect(derived.bodyRepresentations[cylinderId]?.consumed).toBe(true);
-    expect(derived.bodyRepresentations[extrudeId]?.consumed).toBe(true);
-    // Runs in under a second locally but has tripped the 5 s default on slow
-    // CI runners; give it the same headroom as the other kernel-heavy tests.
+    expect(derived.bodyRepresentations[ballId]?.consumed).toBe(true);
+    expect(derived.bodyRepresentations[postId]?.consumed).toBe(true);
+    // The fallback meshes at display deflection; pin only that it faceted
+    // rather than the triangle count, which moves with the tessellator.
   }, 30_000);
 
   it('keeps a face-contact cylinder and circular-extrude union closed', async () => {
