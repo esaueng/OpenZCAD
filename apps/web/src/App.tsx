@@ -436,7 +436,12 @@ import type {
   SketchOverlay,
   ViewTarget
 } from '@openzcad/viewport/types';
-import type { MovePreview, MoveSnap, SectionPlaneId } from '@openzcad/viewport';
+import type {
+  MovePreview,
+  MoveSnap,
+  SectionPlaneId,
+  WheelDevice
+} from '@openzcad/viewport';
 
 /**
  * Space activates focused buttons and belongs in free-text fields. Numeric and
@@ -4146,6 +4151,19 @@ export function App() {
 
   function handleViewportSettled(camera: ViewportCameraState) {
     persistCameraPose(doc?.projectId ?? null, camera);
+  }
+
+  /**
+   * Auto-detection only ever flips on a diagonal swipe, a pinch, or a
+   * line-mode wheel, so this is rare; it names the setting because a
+   * misread device is otherwise invisible to fix.
+   */
+  function handleWheelDeviceLearned(device: WheelDevice) {
+    setStatus(
+      device === 'trackpad'
+        ? 'Trackpad detected: two fingers pan, pinch to zoom. Scroll wheel is under Settings › Viewport.'
+        : 'Mouse wheel detected: scroll to zoom. Scroll wheel is under Settings › Viewport.'
+    );
   }
 
   /**
@@ -13010,6 +13028,7 @@ export function App() {
             initialView={initialView}
             onViewChange={handleViewportChange}
             onViewSettled={handleViewportSettled}
+            onWheelDeviceLearned={handleWheelDeviceLearned}
             onMovePreviewChange={handleMovePreviewChange}
             moveValuesSetterRef={moveValuesSetterRef}
             offsetHandle={modelingLocked ? null : offsetHandleTarget}

@@ -15,7 +15,11 @@ import {
   type MiddleDragAction
 } from '../input/bindings';
 import type { ProjectionMode } from '../types';
-import { wheelIntent, type PointerNavigationMode } from '../input/wheelGesture';
+import {
+  WheelGestureClassifier,
+  type PointerNavigationMode,
+  type WheelDevice
+} from '../input/wheelGesture';
 import {
   initialZoomDynamics,
   stepZoomDynamics,
@@ -115,6 +119,16 @@ export interface CameraControllerOptions {
   middleDrag(): MiddleDragAction;
   /** How to read a wheel event: auto-detect, or force one device's meaning. */
   pointerNavigation?(): PointerNavigationMode;
+  /**
+   * Where auto-detection keeps the device it has proved, so a trackpad
+   * user is misread at most once per browser rather than once per visit.
+   */
+  wheelDeviceMemory?: {
+    read(): WheelDevice | null;
+    write(device: WheelDevice): void;
+  };
+  /** Called once each time auto-detection proves a different device. */
+  onWheelDeviceLearned?(device: WheelDevice): void;
 }
 
 /**
@@ -146,10 +160,14 @@ export class CameraController {
   private readonly zoomScratch = createZoomProjectionScratch();
   private readonly controlRoot: Node;
   private readonly wheelElement: HTMLElement;
+  private readonly wheelGesture: WheelGestureClassifier;
   private controlKeyActive = false;
 
   constructor(options: CameraControllerOptions) {
     this.options = options;
+    this.wheelGesture = new WheelGestureClassifier({
+      device: options.wheelDeviceMemory?.read() ?? null
+    });
     const aspect = this.aspect();
 
     this.perspective = new THREE.PerspectiveCamera(45, aspect, 0.1, 4000);
@@ -220,15 +238,21 @@ export class CameraController {
 
   /** Queues zoom packets while preserving the existing trackpad-pan path. */
   private handleWheel = (event: WheelEvent) => {
-    const intent = wheelIntent(
+    const { intent, learned } = this.wheelGesture.classify(
       {
         deltaX: event.deltaX,
         deltaY: event.deltaY,
         deltaMode: event.deltaMode,
-        ctrlKey: event.ctrlKey
+        ctrlKey: event.ctrlKey,
+        controlKeyHeld: this.controlKeyActive
       },
-      this.options.pointerNavigation?.() ?? 'auto'
+      this.options.pointerNavigation?.() ?? 'auto',
+      performance.now()
     );
+    if (learned !== null) {
+      this.options.wheelDeviceMemory?.write(learned);
+      this.options.onWheelDeviceLearned?.(learned);
+    }
     if (intent === 'pan') {
       // Take the event away from OrbitControls entirely: its wheel handler
       // only ever dollies, so leaving it to run would zoom as well as pan.
