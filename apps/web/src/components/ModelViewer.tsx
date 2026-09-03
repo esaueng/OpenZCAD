@@ -129,7 +129,8 @@ import {
   SKETCH_GLIDE_MS,
   sketchGlideEase,
   viewJumpEase,
-  type CameraGlideStyle
+  type CameraGlideStyle,
+  type WheelDevice
 } from '@openzcad/viewport';
 import type {
   BodyRepresentation,
@@ -188,6 +189,10 @@ import type { PlaneBasis } from '@openzcad/geometry';
 import type { ParamValue, PlaneId, SketchObjectData } from '@openzcad/shared';
 import { buildPlanePickerRig } from './viewer/planePickerRig';
 import { evalParamValue } from '../lib/model';
+import {
+  readWheelDeviceMemory,
+  writeWheelDeviceMemory
+} from '../lib/wheelDeviceMemory';
 import {
   edgeLabel,
   faceLabelSegments,
@@ -455,6 +460,8 @@ interface ModelViewerProps {
   onViewChange(view: ViewportCameraState): void;
   /** Final camera pose emitted after navigation or a camera glide settles. */
   onViewSettled(view: ViewportCameraState): void;
+  /** Scroll-wheel auto-detection just proved a different pointing device. */
+  onWheelDeviceLearned?(device: WheelDevice): void;
   /** Imperative sink for per-frame axis projections (no React re-render). */
   orientationRef: MutableRefObject<((axes: AxisProjection) => void) | null>;
   /** Imperative bridge from the SVG view cube into the live camera rig. */
@@ -1133,6 +1140,7 @@ export function ModelViewer({
   initialView,
   onViewChange,
   onViewSettled,
+  onWheelDeviceLearned,
   orientationRef,
   orientationDragRef,
   scaleIndicatorRef,
@@ -1259,6 +1267,8 @@ export function ModelViewer({
   onViewChangeRef.current = onViewChange;
   const onViewSettledRef = useRef(onViewSettled);
   onViewSettledRef.current = onViewSettled;
+  const onWheelDeviceLearnedRef = useRef(onWheelDeviceLearned);
+  onWheelDeviceLearnedRef.current = onWheelDeviceLearned;
   const onOffsetCommitRef = useRef(onOffsetCommit);
   onOffsetCommitRef.current = onOffsetCommit;
   const onOffsetPreviewRef = useRef(onOffsetPreview);
@@ -1543,7 +1553,13 @@ export function ModelViewer({
       // Panning is what every other CAD tool puts on the middle drag; the
       // OrbitControls default of zoom is the odd one out.
       middleDrag: () => middleDragRef.current ?? 'pan',
-      pointerNavigation: () => pointerNavigationRef.current ?? 'auto'
+      pointerNavigation: () => pointerNavigationRef.current ?? 'auto',
+      wheelDeviceMemory: {
+        read: readWheelDeviceMemory,
+        write: writeWheelDeviceMemory
+      },
+      onWheelDeviceLearned: (device) =>
+        onWheelDeviceLearnedRef.current?.(device)
     });
     const camera = cameraRig.perspective;
     const orthographic = cameraRig.orthographic;
