@@ -14,8 +14,12 @@ import {
 const owner = toUserId('user_owner');
 const base = createProjectDocument('Bracket', owner);
 
+/**
+ * A distinct model per version: recovery copies are keyed on what a rebuild
+ * reads, so two versions of unchanged content would leave nothing to copy.
+ */
 function at(version: number): ProjectDocument {
-  return { ...base, version };
+  return { ...base, version, name: `${base.name} v${version}` };
 }
 
 function handlers(order: string[] = []): ConflictResolutionHandlers {
@@ -108,7 +112,8 @@ describe('a conflict raised by the account rather than a room', () => {
       recovery
     );
     expect(recovery.keepMyVersion).toHaveBeenCalledWith(
-      expect.objectContaining({ expectedRemoteVersion: 9 })
+      expect.objectContaining({ expectedRemoteVersion: 9 }),
+      expect.objectContaining({ recoveryCopy: 'written' })
     );
   });
 
