@@ -707,7 +707,7 @@ export function StartScreen({
           <div className="start-launch-copy">
             <h2 id="start-launch-title">
               <Plus size={16} aria-hidden="true" />
-              New part
+              New project
             </h2>
             <p>
               Name it, choose its units, and start modelling. The name and units
