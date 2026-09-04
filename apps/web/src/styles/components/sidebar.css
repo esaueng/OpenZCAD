@@ -90,7 +90,7 @@
 .param-add {
   display: grid;
   /* name · expression · value · curation toggle · delete */
-  grid-template-columns: minmax(0, 1fr) 76px auto 20px 20px;
+  grid-template-columns: minmax(0, 1fr) 76px minmax(0, max-content) 20px 20px;
   align-items: center;
   gap: 6px;
 }
@@ -125,6 +125,14 @@
 
 .param-value.error {
   color: var(--color-error);
+}
+
+.param-expose {
+  grid-column: 4;
+}
+
+.param-row .row-delete {
+  grid-column: 5;
 }
 
 /* An exposed parameter and the gloss beneath it read as one entry, so the
