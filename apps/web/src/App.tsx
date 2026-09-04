@@ -735,6 +735,7 @@ import {
   conflictFromDocuments,
   hasUnresolvedConflict,
   recoveryCopyName,
+  recoveryCopyNote,
   resolveProjectConflict,
   type ConflictResolution,
   type ConflictResolutionHandlers,
@@ -2540,22 +2541,26 @@ export function App() {
         )
       );
     },
-    useRemoteVersion(remoteDocument) {
+    useRemoteVersion(remoteDocument, outcome) {
       if (!collaboration.useRemoteVersion(remoteDocument.version)) {
         throw new Error(
           'The room version changed before recovery could complete.'
         );
       }
       setStatus(
-        'Using the current room version; a local recovery copy was saved.'
+        `Using the current room version; ${recoveryCopyNote(outcome)}.`
       );
     },
     async keepMyVersion({ expectedRemoteVersion }) {
       await collaboration.keepLocalVersion(expectedRemoteVersion);
       setStatus('Submitting the preserved local version to the room.');
     },
-    saveLocalAsCopy() {
-      setStatus('Saved the divergent document as a local recovery project.');
+    saveLocalAsCopy(_document, outcome) {
+      setStatus(
+        outcome.recoveryCopy === 'already-preserved'
+          ? 'This version already has a local recovery project.'
+          : 'Saved the divergent document as a local recovery project.'
+      );
     }
   };
 
@@ -2567,7 +2572,7 @@ export function App() {
    */
   const accountConflictHandlers: ConflictResolutionHandlers = {
     writeRecoveryCopy: conflictHandlers.writeRecoveryCopy,
-    async useRemoteVersion(incomingDocument) {
+    async useRemoteVersion(incomingDocument, outcome) {
       // Account documents are stored without their derived projection.
       // Reattach the local one when it provably describes the same canonical
       // model rather than hydrating a blank viewport.
@@ -2592,10 +2597,10 @@ export function App() {
       hydrateDocument(remoteDocument, { restoreView: false });
       setAccountConflict(null);
       setStatus(
-        'Using the version from your account; a local recovery copy was saved.'
+        `Using the version from your account; ${recoveryCopyNote(outcome)}.`
       );
     },
-    async keepMyVersion({ document, expectedRemoteVersion }) {
+    async keepMyVersion({ document, expectedRemoteVersion }, outcome) {
       const saved = await api.saveRevision({
         projectId: document.projectId,
         reason: 'Kept this device’s version',
@@ -2619,7 +2624,7 @@ export function App() {
           restored.version
         );
         setAccountConflict(null);
-        setStatus('Kept this device’s version; a recovery copy was saved.');
+        setStatus(`Kept this device’s version; ${recoveryCopyNote(outcome)}.`);
         return;
       }
       await saveLocalProject(restored);
@@ -2631,10 +2636,14 @@ export function App() {
       );
       setAccountConflict(null);
       setSaveState('synced');
-      setStatus('Kept this device’s version; a recovery copy was saved.');
+      setStatus(`Kept this device’s version; ${recoveryCopyNote(outcome)}.`);
     },
-    saveLocalAsCopy() {
-      setStatus('Saved the divergent document as a local recovery project.');
+    saveLocalAsCopy(_document, outcome) {
+      setStatus(
+        outcome.recoveryCopy === 'already-preserved'
+          ? 'This version already has a local recovery project.'
+          : 'Saved the divergent document as a local recovery project.'
+      );
     }
   };
 
