@@ -1475,7 +1475,7 @@ export function projectMatchesInterruptedAdoption(
  * checkpoint-only save (manual save, keep-mine) appends to them without
  * changing a single feature, and the kernel would build the identical model.
  */
-function rebuildInputs(document: ProjectDocument): unknown {
+export function projectRebuildInputs(document: ProjectDocument): unknown {
   const {
     ownerUserId: _ownerUserId,
     version: _version,
@@ -1493,7 +1493,10 @@ export function projectsHaveSameRebuildInputs(
   left: ProjectDocument,
   right: ProjectDocument
 ): boolean {
-  return jsonValuesEqual(rebuildInputs(left), rebuildInputs(right));
+  return jsonValuesEqual(
+    projectRebuildInputs(left),
+    projectRebuildInputs(right)
+  );
 }
 
 /**

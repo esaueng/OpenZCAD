@@ -3,6 +3,7 @@ import type {
   ProjectDocument,
   ProjectEditLease
 } from '@openzcad/shared';
+import { projectRebuildInputs } from './localProjectStore';
 
 const CONFLICT_MARKER_PREFIX = 'openzcad-unresolved-project-conflict:';
 const RECOVERY_LEDGER_PREFIX = 'openzcad-recovery-copies:';
@@ -42,20 +43,38 @@ export interface UnresolvedConflictMarker {
 
 export type ConflictResolution = 'use-remote' | 'keep-mine' | 'save-local-copy';
 
+/**
+ * What became of the side the user did not keep. Handlers receive it so the
+ * status they show can say what actually happened instead of always claiming
+ * a copy was saved.
+ */
+export interface ConflictResolutionOutcome {
+  recoveryCopy: 'written' | 'already-preserved' | 'nothing-to-preserve';
+}
+
 export interface ConflictRecoveryCopyWriter {
   /** Persist the untouched divergent document before any resolution mutates state. */
   writeRecoveryCopy(document: ProjectDocument): Promise<void>;
 }
 
 export interface ConflictResolutionHandlers extends ConflictRecoveryCopyWriter {
-  useRemoteVersion(document: ProjectDocument): Promise<void> | void;
-  keepMyVersion(input: {
-    document: ProjectDocument;
-    expectedRemoteVersion: number;
-    /** Absent outside a room, where nothing hands out leases. */
-    leaseId?: string;
-  }): Promise<void> | void;
-  saveLocalAsCopy(document: ProjectDocument): Promise<void> | void;
+  useRemoteVersion(
+    document: ProjectDocument,
+    outcome: ConflictResolutionOutcome
+  ): Promise<void> | void;
+  keepMyVersion(
+    input: {
+      document: ProjectDocument;
+      expectedRemoteVersion: number;
+      /** Absent outside a room, where nothing hands out leases. */
+      leaseId?: string;
+    },
+    outcome: ConflictResolutionOutcome
+  ): Promise<void> | void;
+  saveLocalAsCopy(
+    document: ProjectDocument,
+    outcome: ConflictResolutionOutcome
+  ): Promise<void> | void;
 }
 
 export interface ConflictResolutionContext {
@@ -179,15 +198,44 @@ function ledgerKey(projectId: string): string {
   return `${RECOVERY_LEDGER_PREFIX}${encodeURIComponent(projectId)}`;
 }
 
+/** JSON with object keys in sorted order, so equal values print equally. */
+function canonicalJson(value: unknown): string {
+  if (Array.isArray(value)) {
+    return `[${value.map(canonicalJson).join(',')}]`;
+  }
+  if (value !== null && typeof value === 'object') {
+    const record = value as Record<string, unknown>;
+    return `{${Object.keys(record)
+      .filter((key) => record[key] !== undefined)
+      .sort()
+      .map((key) => `${JSON.stringify(key)}:${canonicalJson(record[key])}`)
+      .join(',')}}`;
+  }
+  return JSON.stringify(value) ?? 'null';
+}
+
+/** 64-bit FNV-1a over the text, as hex. A dedupe key, not a security hash. */
+function fnv1a64(text: string): string {
+  let hash = 0xcbf29ce484222325n;
+  for (let index = 0; index < text.length; index += 1) {
+    hash ^= BigInt(text.charCodeAt(index));
+    hash = (hash * 0x100000001b3n) & 0xffffffffffffffffn;
+  }
+  return hash.toString(16).padStart(16, '0');
+}
+
 /**
- * Identifies a document state closely enough to know a recovery copy of it
- * already exists: the same version reached by the same last revision is the
- * same lineage state, whichever remote cited it and in however many version
- * pairs. Revision ids are minted per edit, so two documents can only share
- * one by descent.
+ * Identifies what a recovery copy would preserve: the document's rebuild
+ * inputs, and nothing about how it got there. Keying on the version and last
+ * revision looked equivalent but was not — a keep-mine is a fenced write that
+ * mints a new version of the same model, and the room and the account each
+ * cite that new version in their next dialog, so the same model came back
+ * under a fresh key on every hop and every hop wrote another copy. Two
+ * documents that would rebuild to the same geometry, name and parameters
+ * are the same thing to recover, whatever their bookkeeping says.
  */
 export function recoveryCopyKey(document: ProjectDocument): string {
-  return `${document.version}:${document.revisions.at(-1)?.revisionId ?? 'none'}`;
+  return `content:${fnv1a64(canonicalJson(projectRebuildInputs(document)))}`;
 }
 
 /**
@@ -291,16 +339,19 @@ export function recoveryCopyName(
  * Resolve an explicit user choice. Once authorization and version invariants
  * are known to be valid, the side the user is NOT keeping is written as a
  * recovery project before invoking a handler that can replace either side of
- * the conflict — but only once per divergence: the same conflict can be
- * re-raised by every room frame and a failed handler can be retried, and
- * neither may mint another copy of a document already preserved.
+ * the conflict — but only when there is something to preserve: not when the
+ * two sides would rebuild to the same model, and not when that model already
+ * has a recovery project. The same conflict can be re-raised by every room
+ * frame, a failed handler can be retried, and the room and the account can
+ * pass one divergence back and forth under new version numbers; none of
+ * those may mint another copy.
  */
 export async function resolveProjectConflict(
   conflict: ProjectConflict,
   resolution: ConflictResolution,
   context: ConflictResolutionContext,
   handlers: ConflictResolutionHandlers
-): Promise<void> {
+): Promise<ConflictResolutionOutcome> {
   if (
     conflict.projectId !== conflict.localDocument.projectId ||
     conflict.projectId !== conflict.remoteDocument.projectId
@@ -347,16 +398,30 @@ export async function resolveProjectConflict(
   const losingSide = resolution === 'keep-mine' ? 'remote' : 'local';
   const losingDocument =
     losingSide === 'remote' ? conflict.remoteDocument : conflict.localDocument;
+  const winningDocument =
+    losingSide === 'remote' ? conflict.localDocument : conflict.remoteDocument;
   const copyKey = recoveryCopyKey(losingDocument);
   const marker = readUnresolvedConflict(conflict.projectId, conflict.source);
   const markerMatches =
     marker !== null &&
     marker.localVersion === conflict.localDocument.version &&
     marker.remoteVersion === conflict.remoteDocument.version;
+  // An explicit "save a local copy" is honoured even when the two sides match:
+  // the user asked for the project, not for a judgement about its contents.
+  const nothingToPreserve =
+    resolution !== 'save-local-copy' &&
+    copyKey === recoveryCopyKey(winningDocument);
   const alreadyPreserved =
     (markerMatches && (marker.recoveryCopies ?? []).includes(copyKey)) ||
     readRecoveryLedger(conflict.projectId).includes(copyKey);
-  if (!alreadyPreserved) {
+  const outcome: ConflictResolutionOutcome = {
+    recoveryCopy: nothingToPreserve
+      ? 'nothing-to-preserve'
+      : alreadyPreserved
+        ? 'already-preserved'
+        : 'written'
+  };
+  if (outcome.recoveryCopy === 'written') {
     await handlers.writeRecoveryCopy(structuredClone(losingDocument));
     rememberRecoveryCopy(conflict.projectId, copyKey);
     rememberUnresolvedConflict({
@@ -375,15 +440,40 @@ export async function resolveProjectConflict(
   }
 
   if (resolution === 'use-remote') {
-    await handlers.useRemoteVersion(structuredClone(conflict.remoteDocument));
+    await handlers.useRemoteVersion(
+      structuredClone(conflict.remoteDocument),
+      outcome
+    );
   } else if (resolution === 'keep-mine') {
-    await handlers.keepMyVersion({
-      document: structuredClone(conflict.localDocument),
-      expectedRemoteVersion: conflict.expectedRemoteVersion,
-      ...(context.lease ? { leaseId: context.lease.leaseId } : {})
-    });
+    await handlers.keepMyVersion(
+      {
+        document: structuredClone(conflict.localDocument),
+        expectedRemoteVersion: conflict.expectedRemoteVersion,
+        ...(context.lease ? { leaseId: context.lease.leaseId } : {})
+      },
+      outcome
+    );
   } else {
-    await handlers.saveLocalAsCopy(structuredClone(conflict.localDocument));
-    await handlers.useRemoteVersion(structuredClone(conflict.remoteDocument));
+    await handlers.saveLocalAsCopy(
+      structuredClone(conflict.localDocument),
+      outcome
+    );
+    await handlers.useRemoteVersion(
+      structuredClone(conflict.remoteDocument),
+      outcome
+    );
+  }
+  return outcome;
+}
+
+/** The clause a status line appends after naming the version that was kept. */
+export function recoveryCopyNote(outcome: ConflictResolutionOutcome): string {
+  switch (outcome.recoveryCopy) {
+    case 'written':
+      return 'a local recovery copy was saved';
+    case 'already-preserved':
+      return 'the other version already had a recovery copy';
+    case 'nothing-to-preserve':
+      return 'both versions held the same model, so nothing was discarded';
   }
 }
