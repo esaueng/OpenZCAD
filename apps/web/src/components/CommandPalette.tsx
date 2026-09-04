@@ -10,6 +10,8 @@ export interface PaletteCommand {
   label: string;
   /** Group caption shown right-aligned (e.g. "Tool", "View", "File"). */
   group: string;
+  /** Additional search terms reserved for command-specific aliases. */
+  keywords?: string[];
   shortcut?: string;
   icon?: ReactNode;
   /** Non-null disables the row and explains why. */
@@ -22,13 +24,55 @@ interface CommandPaletteProps {
   onClose(): void;
 }
 
-function matches(command: PaletteCommand, query: string): boolean {
-  const haystack = `${command.label} ${command.group}`.toLowerCase();
-  return query
-    .toLowerCase()
-    .split(/\s+/)
-    .filter(Boolean)
-    .every((token) => haystack.includes(token));
+function wordStartsWith(value: string, token: string): boolean {
+  return value.split(/\s+/).some((word) => word.startsWith(token));
+}
+
+function tokenScore(command: PaletteCommand, token: string): number {
+  const label = command.label.toLowerCase();
+  if (label.startsWith(token)) {
+    return 4;
+  }
+  if (wordStartsWith(label, token)) {
+    return 3;
+  }
+  if (label.includes(token)) {
+    return 2;
+  }
+  return wordStartsWith(command.group.toLowerCase(), token) ? 1 : 0;
+}
+
+function rankedCommands(
+  commands: PaletteCommand[],
+  query: string
+): PaletteCommand[] {
+  const tokens = query.toLowerCase().split(/\s+/).filter(Boolean);
+  if (tokens.length === 0) {
+    return commands;
+  }
+
+  const ranked = commands.flatMap((command, sourceIndex) => {
+    const scores = tokens.map((token) => tokenScore(command, token));
+    return scores.every((score) => score > 0)
+      ? [
+          {
+            command,
+            hasLabelMatch: scores.some((score) => score > 1),
+            score: scores.reduce((sum, score) => sum + score, 0),
+            sourceIndex
+          }
+        ]
+      : [];
+  });
+  const hasLabelMatch = ranked.some((entry) => entry.hasLabelMatch);
+
+  return ranked
+    .filter((entry) => !hasLabelMatch || entry.hasLabelMatch)
+    .sort(
+      (left, right) =>
+        right.score - left.score || left.sourceIndex - right.sourceIndex
+    )
+    .map(({ command }) => command);
 }
 
 /**
@@ -48,7 +92,7 @@ export function CommandPalette({ commands, onClose }: CommandPaletteProps) {
   useModalFocus(dialogRef, { autoFocus: true, initialFocusRef: searchRef });
 
   const visible = useMemo(
-    () => commands.filter((command) => matches(command, query)),
+    () => rankedCommands(commands, query),
     [commands, query]
   );
   // View mode hands the palette no modeling commands, so the examples have to
