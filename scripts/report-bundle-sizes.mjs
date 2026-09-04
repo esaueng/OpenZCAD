@@ -10,6 +10,7 @@ import { fileURLToPath } from 'node:url';
 import {
   evaluateKernelWasm,
   KERNEL_WASM_ASSET_PATTERN,
+  TRANSLATOR_WASM_ASSET_PATTERN,
   KERNEL_WASM_POLICY,
   kernelPolicyToolchain,
   measureKernelWasm
@@ -50,6 +51,12 @@ const APPROVED_LAZY_ASSETS = [
     reason: 'Exact geometry kernel, loaded only for non-empty geometry'
   },
   {
+    pattern: TRANSLATOR_WASM_ASSET_PATTERN,
+    maxBytes: 4 * 1024 * 1024,
+    reason:
+      'Remus file-format translators, loaded only around an import or export'
+  },
+  {
     pattern: /^assets\/sqlite3-.*\.wasm$/,
     maxBytes: 1024 * 1024,
     reason: 'SQLite parser, loaded only in a one-shot Shapr3D import worker'
@@ -59,6 +66,7 @@ const LAZY_ENTRY_PATTERNS = [
   /^assets\/(?:three|three-addons)-.*\.js$/,
   /^assets\/(?:ViewerShell|partThumbnail|pdf|exact|src)-.*\.js$/,
   KERNEL_WASM_ASSET_PATTERN,
+  TRANSLATOR_WASM_ASSET_PATTERN,
   /^assets\/sqlite3-.*\.wasm$/,
   /^assets\/shaprImportWorker-.*\.js$/
 ];

@@ -1,8 +1,18 @@
 import { readFileSync } from 'node:fs';
 
 import { drillHole } from '../packages/kernel-adapter/src/exact-cylinder-ops';
-import { RemusKernel } from '../packages/kernel-adapter/src/remus-runtime';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import {
+  RemusKernel,
+  loadRemusTranslators,
+  remusTranslators
+} from '../packages/kernel-adapter/src/remus-runtime';
+import { afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+
+// `measureImportedStep` parses on the synchronous path, so the translator
+// module must be resident before the first case runs.
+beforeAll(async () => {
+  await loadRemusTranslators();
+});
 
 import {
   detectReflectionSymmetries,
@@ -55,7 +65,9 @@ function syntheticHolderStep(kernel: RemusKernel): Uint8Array {
   const emboss = translated(kernel, kernel.makeBox(0.4, 6, 4), 8, 14, 7);
   holder = kernel.fuse(holder, emboss);
   expect(kernel.validateSolid(holder)).toBe(0);
-  return kernel.exportStep(holder);
+  return remusTranslators().exportStep(
+    kernel.serializeSolids(Uint32Array.of(holder))
+  );
 }
 
 describe('guided-reconstruction measurement tooling', () => {

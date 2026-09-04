@@ -84,11 +84,24 @@ async function remusBuildInfo(): Promise<{
     )
   ]);
   const packageJson = JSON.parse(packageText) as { version?: unknown };
-  const commit = lockfile.match(
-    /https:\/\/codeload\.github\.com\/esaueng\/remus\/tar\.gz\/([0-9a-f]{40})#path:\/crates\/wasm\/pkg/
-  )?.[1];
-  if (typeof packageJson.version !== 'string' || !commit) {
-    throw new Error('Unable to resolve the pinned Remus build identity.');
+  // The kernel and translator packages must come from one Remus commit: the
+  // arena document format they exchange is versioned by that commit.
+  const commits = new Set(
+    [
+      ...lockfile.matchAll(
+        /https:\/\/codeload\.github\.com\/esaueng\/remus\/tar\.gz\/([0-9a-f]{40})#path:\/crates\/wasm(?:-io)?\/pkg/g
+      )
+    ].map((match) => match[1]!)
+  );
+  const [commit] = commits;
+  if (
+    typeof packageJson.version !== 'string' ||
+    commits.size !== 1 ||
+    !commit
+  ) {
+    throw new Error(
+      `Unable to resolve one pinned Remus build identity (found ${commits.size} commits).`
+    );
   }
   return { version: packageJson.version, commit };
 }
@@ -290,8 +303,9 @@ export default defineConfig(async ({ command, isPreview, mode }) => {
       'import.meta.env.OZ_REMUS_COMMIT': JSON.stringify(remus.commit)
     },
     optimizeDeps: {
-      // The exact CAD kernel ships as WebAssembly and must remain a runtime asset.
-      exclude: ['remus-wasm', '@sqlite.org/sqlite-wasm']
+      // The exact CAD kernel and its file-format translators ship as
+      // WebAssembly and must remain runtime assets.
+      exclude: ['remus-wasm', 'remus-wasm-io', '@sqlite.org/sqlite-wasm']
     },
     worker: {
       format: 'es' as const,

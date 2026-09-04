@@ -15,6 +15,13 @@ kB.
 | Brotli review      |         2.5 MiB (2,621,440 bytes) | Warning; mandatory kernel-size review |
 | Per-pin raw growth | More than 256 KiB or more than 3% | Mandatory kernel-size review          |
 
+The policy covers the kernel asset (`assets/remus_wasm_bg-*.wasm`) only. The
+file-format translators ship as the separate `remus-wasm-io` package and
+asset (`assets/remus_wasm_io_bg-*.wasm`), fetched lazily around an import or
+export; they are an approved lazy asset with their own raw budget in
+`scripts/report-bundle-sizes.mjs` and do not count against the kernel
+thresholds ([ADR-023](adrs/ADR-023-remus-translator-module.md)).
+
 The raw and gzip hard limits are independent: staying below one does not
 excuse exceeding the other. Review thresholds are deliberately advisory in
 the checker so an acknowledged roadmap increment can proceed without changing
