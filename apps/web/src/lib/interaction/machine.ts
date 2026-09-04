@@ -551,6 +551,8 @@ export interface ToolCardModel {
   icon: ToolCardIcon;
   title: string;
   actions?: ToolCardAction[];
+  /** Compact disclosure for context that would make the live hint overflow. */
+  badge?: { label: string; detail: string };
   hint: string;
   phase?: OperationPhase;
   error?: CommandDiagnostic;
@@ -759,9 +761,8 @@ export function toolCardFor(state: InteractionState): ToolCardModel | null {
           (state.op === 'remove-face-feature' &&
             capability.action === 'remove-face-feature')
       }));
-      // A hash-only face carries the anchoring note on its offset action;
-      // the hint repeats it because the action row is where notes hide and
-      // the hint is what the eye is on while the handle is armed.
+      // A hash-only face carries the anchoring note on its offset action. Keep
+      // the live hint short and put that durable caveat behind a named chip.
       const offsetNote = capabilities.find(
         (capability) => capability.action === 'offset-face'
       )?.note;
@@ -774,9 +775,7 @@ export function toolCardFor(state: InteractionState): ToolCardModel | null {
               ? 'Drag the radial handle or tap the value to set the radius.'
               : state.target.extrudeFeatureId
                 ? 'Drag the arrow to change the depth, or tap the value to type · click empty space to finish.'
-                : offsetNote
-                  ? `Drag the arrow to offset the face, or tap the value to type. ${offsetNote}`
-                  : 'Drag the arrow to offset the face, or tap the value to type · Space faces it head-on.';
+                : 'Drag the arrow to offset the face, or tap the value to type · Space faces it head-on.';
       // Single-capability faces suppress the action row: one button that only
       // restates the title is noise on a card meant to stay out of the way.
       const alwaysShowActions =
@@ -785,6 +784,14 @@ export function toolCardFor(state: InteractionState): ToolCardModel | null {
         icon,
         title,
         ...(alwaysShowActions || actions.length > 1 ? { actions } : {}),
+        ...(offsetNote
+          ? {
+              badge: {
+                label: 'Geometry-anchored',
+                detail: offsetNote
+              }
+            }
+          : {}),
         ...lifecycleHint(state, hint)
       };
     }
