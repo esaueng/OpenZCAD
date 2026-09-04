@@ -826,6 +826,46 @@ describe('cloudflare adapters', () => {
     expect(run).toHaveBeenCalledTimes(1);
   });
 
+  it('stores an adopted project under its device edit time, not the sync time', async () => {
+    const userId = toUserId('user_adopt_owner');
+    const source: ProjectDocument = {
+      ...createProjectDocument('Bracket', userId),
+      derived: {
+        bodyRepresentations: {},
+        exportableBodyIds: [],
+        warnings: [],
+        updatedAt: '2026-01-01T00:00:00.000Z'
+      }
+    };
+    const inserts: unknown[][] = [];
+    const prepare = vi.fn((query: string) => ({
+      bind: (...bindings: unknown[]) => ({
+        first: async () => null,
+        run: async () => {
+          if (query.includes('INSERT INTO projects')) {
+            inserts.push(bindings);
+          }
+          return { success: true };
+        }
+      })
+    }));
+    const service = new D1R2PersistenceService({
+      DB: { prepare } as unknown as D1Database
+    });
+
+    const created = await service.createProject(userId, {
+      name: source.name,
+      document: source
+    });
+
+    expect(created.project.updatedAt).toBe('2026-01-01T00:00:00.000Z');
+    expect(created.document.derived.updatedAt).toBe(
+      '2026-01-01T00:00:00.000Z'
+    );
+    expect(inserts).toHaveLength(1);
+    expect(inserts[0]).toContain('2026-01-01T00:00:00.000Z');
+  });
+
   it('destroys a purged project together with everything hanging off it', async () => {
     const statements: string[] = [];
     const all = vi.fn(async () => ({ results: [{ id: 'proj_expired' }] }));
