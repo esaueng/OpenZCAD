@@ -155,12 +155,14 @@
   display: grid;
   align-content: start;
   gap: var(--sp-6);
-  /* Wide enough for five tiles, narrow enough that they never stretch into
-     billboards on a 4K display. */
-  width: min(1180px, 100%);
+  /* The body is the scroll container, so it has to span the full width or
+     the scrollbar sits at the edge of the column instead of the window. The
+     column is centred by padding: wide enough for five tiles, narrow enough
+     that they never stretch into billboards on a 4K display. */
+  width: 100%;
   min-width: 0;
-  margin: 0 auto;
-  padding: var(--sp-5) var(--sp-5) var(--sp-6);
+  padding: var(--sp-5) max(var(--sp-5), calc((100% - 1180px) / 2 + var(--sp-5)))
+    var(--sp-6);
   overflow-x: hidden;
   overflow-y: auto;
 }

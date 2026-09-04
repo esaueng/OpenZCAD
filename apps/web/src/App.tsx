@@ -2510,6 +2510,22 @@ export function App() {
     async writeRecoveryCopy(source) {
       const copy = localRecoveryCopy(source, 'Recovery');
       await saveLocalProject(copy);
+      // The shelf never loads a document to draw a card, so a copy saved
+      // without a preview would stay a placeholder until it is opened. Seed it
+      // now, while the meshes are in memory; a failure here must not undo the
+      // recovery itself.
+      await Promise.all([
+        import('./lib/recoveryCopyThumbnail'),
+        import('./lib/partThumbnail')
+      ])
+        .then(([{ seedRecoveryCopyThumbnail }, { renderPartThumbnail }]) =>
+          seedRecoveryCopyThumbnail(source, copy, {
+            loadCached: loadProjectThumbnail,
+            save: saveProjectThumbnail,
+            render: renderPartThumbnail
+          })
+        )
+        .catch(() => undefined);
       setProjects((current) =>
         mergeProjectSummaries(
           [
