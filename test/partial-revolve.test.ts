@@ -575,10 +575,17 @@ describe('partial revolve and edge modifiers', () => {
       })
     );
 
-    // Every wedge edge refuses. The volume-envelope guard below the kernel
-    // catches the two that once returned a doubled body instead.
+    // Every wedge edge used to refuse, with the volume-envelope guard below
+    // the kernel catching the two that once returned a doubled body. Since
+    // Remus c557ef5 the outer end-cap edge at the start angle rounds
+    // correctly, so that one succeeds and the other eleven refuse; the
+    // doubled-wedge test below keeps any success plausibly sized.
+    const accepted = edges.filter((_, index) => outcomes[index]!.length === 0);
+    expect(
+      accepted.map((edge) => ({ curve: edge.curve?.type, points: edge.points }))
+    ).toEqual([{ curve: 'LINE', points: [3, 0, 0, 3, 0, -1] }]);
     const refused = outcomes.filter((warnings) => warnings.length === 1);
-    expect(refused).toHaveLength(12);
+    expect(refused).toHaveLength(11);
     // Every refusal still names the wedge. In particular none says "try a
     // smaller radius", which is false at every radius here, and none says the
     // edge no longer exists, which it does.
