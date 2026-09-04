@@ -54,6 +54,20 @@ describe('adoptProjectDocument', () => {
     expect(adopted.revisions).toEqual(local.revisions);
   });
 
+  it('keeps the device edit time so a save to the account does not reorder the shelf', () => {
+    const local: ProjectDocument = {
+      ...localDocument(),
+      derived: {
+        bodyRepresentations: {},
+        exportableBodyIds: [],
+        warnings: [],
+        updatedAt: '2026-01-01T00:00:00.000Z'
+      }
+    };
+    const adopted = adoptProjectDocument(local, owner);
+    expect(adopted.derived.updatedAt).toBe('2026-01-01T00:00:00.000Z');
+  });
+
   it('renames the project and its root node together', () => {
     const adopted = adoptProjectDocument(localDocument(), owner, 'Renamed');
     expect(adopted.name).toBe('Renamed');
