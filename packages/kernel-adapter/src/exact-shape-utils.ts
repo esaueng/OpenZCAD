@@ -4,6 +4,7 @@
  * validation, mesh import, and small formatting/metadata readers.
  */
 import type { RemusKernel } from './remus-runtime';
+import { remusTranslators } from './remus-runtime';
 import type { Vec3 } from '@openzcad/geometry';
 import type {
   BodyId,
@@ -215,7 +216,9 @@ export function projectRemusLineageDiagnostic(
  * fails by name instead of publishing a body whose geometry silently drifted.
  */
 export function importMeshSolid(kernel: RemusKernel, stlText: string): number {
-  const imported = kernel.importStl(new TextEncoder().encode(stlText));
+  const imported = kernel.deserializeSolid(
+    remusTranslators().importStl(new TextEncoder().encode(stlText))
+  );
   const faces = kernel.getSolidFaces(imported);
   if (faces.length < 2) {
     throw new Error(
@@ -234,12 +237,7 @@ export function importMeshSolid(kernel: RemusKernel, stlText: string): number {
   let repaired: number;
   try {
     const sewn = kernel.sewFaces(faces, scale * MESH_SEW_TOLERANCE_RATIO);
-    const healed = kernel.runHealPipeline(sewn, ['unify_same_domain']) as
-      string | { solid?: number };
-    const parsed = (
-      typeof healed === 'string' ? JSON.parse(healed) : healed
-    ) as { solid?: number };
-    repaired = typeof parsed.solid === 'number' ? parsed.solid : sewn;
+    repaired = unifySewnMesh(kernel, sewn);
   } catch (error) {
     const detail =
       error instanceof Error ? error.message : 'unknown kernel error';
@@ -266,6 +264,32 @@ export function importMeshSolid(kernel: RemusKernel, stlText: string): number {
     );
   }
   return repaired;
+}
+
+/**
+ * Merge the same-domain faces of a sewn mesh.
+ *
+ * The kernel's heal pipeline refuses to return any result its validators
+ * reject, and an open mesh — a sheet of triangles with boundary edges — can
+ * never validate as a closed solid. For one, the merge is a refused nicety
+ * and the sewn faces stand; the size guard in the caller still applies. A
+ * closed mesh whose unify is refused is a real repair failure and stays one.
+ */
+function unifySewnMesh(kernel: RemusKernel, sewn: number): number {
+  const openShell = kernel.validateSolid(sewn) !== 0;
+  try {
+    const healed = kernel.runHealPipeline(sewn, ['unify_same_domain']) as
+      string | { solid?: number };
+    const parsed = (
+      typeof healed === 'string' ? JSON.parse(healed) : healed
+    ) as { solid?: number };
+    return typeof parsed.solid === 'number' ? parsed.solid : sewn;
+  } catch (error) {
+    if (openShell) {
+      return sewn;
+    }
+    throw error;
+  }
 }
 
 export function bodyName(document: ProjectDocument, bodyId: BodyId): string {
@@ -303,12 +327,23 @@ export function decodeText(bytes: Uint8Array): string {
 /**
  * Keep Remus's hostile-input budgets for every source. A locally selected
  * file can later be shared or restored, so its origin does not make it trusted.
+ *
+ * The translator parses in its own scratch topology and hands back an arena
+ * document; a file with no solids hands back no bytes, which is the empty
+ * handle list rather than a document to restore.
  */
 export function importStepWithOwnBudget(
   kernel: RemusKernel,
   bytes: Uint8Array
 ): Uint32Array {
-  return kernel.importStep(bytes, 128 * 1024 * 1024, 2_000_000);
+  const solids = remusTranslators().importStep(
+    bytes,
+    128 * 1024 * 1024,
+    2_000_000
+  );
+  return solids.length === 0
+    ? new Uint32Array()
+    : kernel.deserializeSolids(solids);
 }
 
 /**

@@ -69,11 +69,13 @@ jobs:
           import { readFileSync } from 'node:fs';
 
           const lockfile = readFileSync('pnpm-lock.yaml', 'utf8');
-          const pattern = /https:\/\/codeload\.github\.com\/esaueng\/remus\/tar\.gz\/([0-9a-f]{40})#path:\/crates\/wasm\/pkg/g;
+          // The kernel and translator packages must resolve to the same
+          // commit: the arena document format they exchange is versioned by it.
+          const pattern = /https:\/\/codeload\.github\.com\/esaueng\/remus\/tar\.gz\/([0-9a-f]{40})#path:\/crates\/wasm(?:-io)?\/pkg/g;
           const shas = [...new Set([...lockfile.matchAll(pattern)].map((match) => match[1]))];
 
           if (shas.length !== 1) {
-            console.error(`Expected one immutable Remus SHA in pnpm-lock.yaml, found ${shas.length}.`);
+            console.error(`Expected one immutable Remus SHA across both packages in pnpm-lock.yaml, found ${shas.length}.`);
             process.exit(1);
           }
 
@@ -83,7 +85,7 @@ jobs:
 
           old_sha="$(extract_remus_sha)"
 
-          pnpm update remus-wasm --filter @openzcad/kernel-adapter --lockfile-only
+          pnpm update remus-wasm remus-wasm-io --filter @openzcad/kernel-adapter --lockfile-only
 
           new_sha="$(extract_remus_sha)"
           upstream_sha="$(gh api repos/esaueng/remus/commits/main --jq .sha)"
@@ -123,22 +125,29 @@ jobs:
 
           old_wasm="$RUNNER_TEMP/remus-wasm-$old_sha.wasm"
           new_wasm="$RUNNER_TEMP/remus-wasm-$new_sha.wasm"
+          old_io_wasm="$RUNNER_TEMP/remus-wasm-io-$old_sha.wasm"
+          new_io_wasm="$RUNNER_TEMP/remus-wasm-io-$new_sha.wasm"
           download_wasm() {
             local ref="$1"
-            local output="$2"
+            local path="$2"
+            local output="$3"
             local blob_sha
             blob_sha="$(
               gh api \
-                "repos/esaueng/remus/contents/crates/wasm/pkg/remus_wasm_bg.wasm?ref=$ref" \
+                "repos/esaueng/remus/contents/$path?ref=$ref" \
                 --jq .sha
             )"
             gh api "repos/esaueng/remus/git/blobs/$blob_sha" --jq .content \
               | base64 --decode > "$output"
           }
-          download_wasm "$old_sha" "$old_wasm"
-          download_wasm "$new_sha" "$new_wasm"
+          download_wasm "$old_sha" crates/wasm/pkg/remus_wasm_bg.wasm "$old_wasm"
+          download_wasm "$new_sha" crates/wasm/pkg/remus_wasm_bg.wasm "$new_wasm"
+          # The translator module is informational: it loads lazily and sits
+          # outside the kernel size policy. An old pin may predate it.
+          download_wasm "$old_sha" crates/wasm-io/pkg/remus_wasm_io_bg.wasm "$old_io_wasm" 2>/dev/null || : > "$old_io_wasm"
+          download_wasm "$new_sha" crates/wasm-io/pkg/remus_wasm_io_bg.wasm "$new_io_wasm"
 
-          OLD_WASM="$old_wasm" NEW_WASM="$new_wasm" node --input-type=module <<'NODE' >> "$GITHUB_OUTPUT"
+          OLD_WASM="$old_wasm" NEW_WASM="$new_wasm" OLD_IO_WASM="$old_io_wasm" NEW_IO_WASM="$new_io_wasm" node --input-type=module <<'NODE' >> "$GITHUB_OUTPUT"
           import { readFileSync } from 'node:fs';
           import {
             evaluateKernelPinGrowth,
@@ -148,6 +157,9 @@ jobs:
 
           const before = measureKernelWasm(readFileSync(process.env.OLD_WASM));
           const after = measureKernelWasm(readFileSync(process.env.NEW_WASM));
+          const oldIo = readFileSync(process.env.OLD_IO_WASM);
+          const ioBefore = oldIo.byteLength === 0 ? null : measureKernelWasm(oldIo);
+          const ioAfter = measureKernelWasm(readFileSync(process.env.NEW_IO_WASM));
           const growth = evaluateKernelPinGrowth(before, after);
           const policy = evaluateKernelWasm(after);
           const reviewReasons = [
@@ -168,6 +180,10 @@ jobs:
             old_brotli_bytes: before.brotliBytes,
             new_brotli_bytes: after.brotliBytes,
             brotli_delta_bytes: growth.brotliDeltaBytes,
+            old_io_raw_bytes: ioBefore?.rawBytes ?? 'none',
+            new_io_raw_bytes: ioAfter.rawBytes,
+            old_io_gzip_bytes: ioBefore?.gzipBytes ?? 'none',
+            new_io_gzip_bytes: ioAfter.gzipBytes,
             size_review_required: reviewReasons.length > 0,
             size_review_reasons: reviewReasons.join('; ') || 'none',
             size_budget_failure: policy.failures.length > 0,
@@ -265,6 +281,10 @@ jobs:
           OLD_BROTLI_BYTES: ${{ steps.update.outputs.old_brotli_bytes }}
           NEW_BROTLI_BYTES: ${{ steps.update.outputs.new_brotli_bytes }}
           BROTLI_DELTA_BYTES: ${{ steps.update.outputs.brotli_delta_bytes }}
+          OLD_IO_RAW_BYTES: ${{ steps.update.outputs.old_io_raw_bytes }}
+          NEW_IO_RAW_BYTES: ${{ steps.update.outputs.new_io_raw_bytes }}
+          OLD_IO_GZIP_BYTES: ${{ steps.update.outputs.old_io_gzip_bytes }}
+          NEW_IO_GZIP_BYTES: ${{ steps.update.outputs.new_io_gzip_bytes }}
           SIZE_REVIEW_REQUIRED: ${{ steps.update.outputs.size_review_required }}
           SIZE_REVIEW_REASONS: ${{ steps.update.outputs.size_review_reasons }}
           SIZE_BUDGET_FAILURE: ${{ steps.update.outputs.size_budget_failure }}
@@ -276,7 +296,7 @@ jobs:
           {
             echo '## Summary'
             echo
-            echo "- update \`remus-wasm\` from \`$OLD_SHA\` to \`$NEW_SHA\`"
+            echo "- update \`remus-wasm\` and \`remus-wasm-io\` from \`$OLD_SHA\` to \`$NEW_SHA\`"
             echo "- package version: \`$PACKAGE_VERSION\`"
             echo "- compare: $compare_url"
             echo
@@ -287,6 +307,13 @@ jobs:
             echo "| Raw | $OLD_RAW_BYTES B | $NEW_RAW_BYTES B | $RAW_DELTA_BYTES B ($RAW_DELTA_PERCENT%) |"
             echo "| Node gzip | $OLD_GZIP_BYTES B | $NEW_GZIP_BYTES B | $GZIP_DELTA_BYTES B |"
             echo "| Brotli q11 | $OLD_BROTLI_BYTES B | $NEW_BROTLI_BYTES B | $BROTLI_DELTA_BYTES B |"
+            echo
+            echo '## Translator WASM size (lazy, outside the kernel policy)'
+            echo
+            echo '| Metric | Before | After |'
+            echo '| --- | ---: | ---: |'
+            echo "| Raw | $OLD_IO_RAW_BYTES B | $NEW_IO_RAW_BYTES B |"
+            echo "| Node gzip | $OLD_IO_GZIP_BYTES B | $NEW_IO_GZIP_BYTES B |"
             echo
             if [[ "$SIZE_REVIEW_REQUIRED" == 'true' ]]; then
               echo "> **Kernel-size review required:** $SIZE_REVIEW_REASONS."
