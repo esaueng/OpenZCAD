@@ -23,12 +23,15 @@ the plans cannot rot.
   contract tests inside the same change.
 - **Never mix kernel and app changes in one commit stream.** One PR per repo
   per item.
-- **Kernel pin updates** reach OpenZCAD only through the manual
+- **Kernel pin updates** normally reach OpenZCAD through the manual
   `update-remus.yml` dispatch (lockfile-only diff, `automation/remus-*`
   branch). Never hand-edit the resolved SHA in `pnpm-lock.yaml`; CI's
-  unannounced-kernel-bump guard will reject it. A kernel fix is not "done"
-  for the product until a pin bump lands with the full CI matrix green,
-  including `pnpm test:parity-corpus`.
+  unannounced-kernel-bump guard will reject it. When a consumer change
+  cannot build against the old kernel, move the pin in that PR and apply
+  the `kernel-bump` label: the guard accepts a labelled bump on any branch
+  and the full CI matrix still runs. A kernel fix is not "done" for the
+  product until a pin bump lands with the full CI matrix green, including
+  `pnpm test:parity-corpus`.
 
 ## Picking an item
 
@@ -68,14 +71,14 @@ the plans cannot rot.
   closed-form volume/area, inclusion–exclusion, pinned counts. "Two numbers
   agree" is not an oracle when both come from the same integrator — the
   corpus docs explain why.
-- **Merge gate (OpenZCAD):** no status check is *required* by GitHub here,
+- **Merge gate (OpenZCAD):** no status check is _required_ by GitHub here,
   so per `CLAUDE.md` you must read the check runs yourself — `validate`,
   the `e2e` aggregate, and `Cloudflare version / verify` green on the PR's
   actual head SHA, with a run confirmed to exist for that SHA. Never
   auto-merge; never dispatch `apple-silicon` or `Cloudflare version`
   manually; `pnpm deploy:beta` is never a validation step.
 - Existing pins are law: the parity corpus (`test/parity/`), kernel-seam
-  pins, and `corpus-pins.ts` fail on both unpinned divergence *and* repaired
+  pins, and `corpus-pins.ts` fail on both unpinned divergence _and_ repaired
   divergence — when your change fixes a pinned defect, retire the pin in the
   same PR, with the fix as evidence.
 
@@ -88,6 +91,7 @@ roadmap entry before coding, and put that derivation in your PR description.
 ### K-S5 — Doc and pin hygiene (OpenZCAD, S)
 
 Fix the measured-stale claims:
+
 1. `docs/capability-matrix.md` and `TODO.md` — remove/replace the "Remus
    mirror refuses dense blended/boolean bodies" claim; the tessellation fix
    made mirror volume reflection-equivariant
@@ -104,20 +108,21 @@ Fix the measured-stale claims:
 4. `docs/capability-matrix.md` header — either refresh to schema v13 or add
    a dated "superseded by TODO.md + roadmaps" banner like the BrepKit-era
    docs carry.
-Acceptance: docs-only diff; `pnpm test` and `pnpm test:parity-corpus` green
-(pin-hygiene tests validate comment/pin consistency); every corrected claim
-cites its evidence file inline.
+   Acceptance: docs-only diff; `pnpm test` and `pnpm test:parity-corpus` green
+   (pin-hygiene tests validate comment/pin consistency); every corrected claim
+   cites its evidence file inline.
 
 ### K-S1 — Silent-wrongness defect, one per session (remus, M each)
 
 Pick ONE of the six defects in kernel-roadmap §S1. For each, the shape is:
+
 1. **Reproduce in remus** from the OpenZCAD evidence: pattern overlap →
    `test/overlapping-pattern.test.ts:89` (spacings 3 and 0.5); pushPullFace
    top-cap → the sweep in `docs/kernel-execution-plan.md` §Z6 (r10 h30,
    negative offsets, 65 planar faces); T-vertex cut → same section
    (wall/r_out 0.018–0.088 band); operand drop → the tangent-boss case in
    `boolean-result-validation.ts` docs. Encode the repro as a versioned
-   reproduction bundle (`remus_wasm::repro`) — expected *failures* are
+   reproduction bundle (`remus_wasm::repro`) — expected _failures_ are
    first-class there.
 2. **Fix or refuse.** Exact result where the geometry admits one; otherwise
    a typed refusal naming the configuration. Never a silent wrong solid.
@@ -130,9 +135,9 @@ Pick ONE of the six defects in kernel-roadmap §S1. For each, the shape is:
    blocked (`tryExactCoaxialCylinderCut` / `tryExactAnalyticCylinderCapOffset`
    for their two defects), keep the old workaround test as a kernel
    regression.
-Acceptance: the repro bundle fails on baseline and passes on the fix; both
-sides of every declared boundary tested; no other census row moved
-unexplained.
+   Acceptance: the repro bundle fails on baseline and passes on the fix; both
+   sides of every declared boundary tested; no other census row moved
+   unexplained.
 
 ### P1-S1/S2 — Sketch dimensions and remaining constraints (OpenZCAD, L, splittable)
 
@@ -141,6 +146,7 @@ The solver already supports all 13 constraint kinds
 `packages/shared/src/index.ts:485-509`). The UI exposes 6
 (`apps/web/src/lib/sketch/constraints.ts:40-83`, `CONSTRAINT_TOOL_SPECS`).
 Split into landable slices:
+
 1. **Slice A — non-dimensional constraints** (perpendicular, equal,
    concentric, midpoint): add tool specs following the existing six exactly
    (icon, applicability predicate, command). No schema change.
@@ -157,15 +163,15 @@ Split into landable slices:
    over/under-constrained tone, conflict list naming removable constraints
    (surface `gcsSolveDetailed` diagnostics truthfully — no rounding a
    failure into a warning).
-Constraints that will bite: constraints attach to line/arc/circle only —
-rectangles/polygons/text have no point identity (that is item S-4, a schema
-decision; do NOT bolt it into these slices). Keep every mutation one
-undoable transaction; keep Tweak-mode read paths working.
-Acceptance per slice: unit tests through the command system (add constraint
-→ solve → geometry moved as specified; conflicting set → typed diagnostic);
-Playwright e2e for the placement gesture (Slice B: draw two lines, dimension
-the angle, retype value, geometry updates, undo restores); `pnpm test` +
-e2e shard green.
+   Constraints that will bite: constraints attach to line/arc/circle only —
+   rectangles/polygons/text have no point identity (that is item S-4, a schema
+   decision; do NOT bolt it into these slices). Keep every mutation one
+   undoable transaction; keep Tweak-mode read paths working.
+   Acceptance per slice: unit tests through the command system (add constraint
+   → solve → geometry moved as specified; conflicting set → typed diagnostic);
+   Playwright e2e for the placement gesture (Slice B: draw two lines, dimension
+   the angle, retype value, geometry updates, undo restores); `pnpm test` +
+   e2e shard green.
 
 ### P1-R1 — Datum planes/axes/points (OpenZCAD, design doc FIRST)
 
@@ -246,7 +252,7 @@ typed refusal, not a hang.
 
 ## What you must never do
 
-Never merge on a passing check *suite* alone; never `gh pr merge --auto`;
+Never merge on a passing check _suite_ alone; never `gh pr merge --auto`;
 never dispatch `apple-silicon` unless the maintainer asked; never run
 `pnpm deploy:beta`; never hand-edit the kernel pin; never delete or bypass
 the parity corpus, the distrust harness, or a workaround whose blocking
