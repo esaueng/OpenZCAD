@@ -152,6 +152,8 @@ export interface InspectorCallbacks {
     selection: TopologySelection,
     geometry: FaceGeometry
   ): void;
+  /** Pins an inferred feature so its editable form becomes the panel subject. */
+  onPinFeature(feature: FeatureNode): void;
   onDeleteFeature(feature: FeatureNode): void;
   /** Include/exclude one declared solid of an imported-step feature. */
   onToggleImportedSolid(featureId: FeatureId, solidIndex: number): void;
@@ -754,6 +756,7 @@ export function Inspector(props: InspectorProps) {
   let eyebrow = '';
   let title = '';
   let body: ReactNode = null;
+  let objectReadout = false;
   /**
    * The panel's destructive action, when it has one.
    *
@@ -890,13 +893,30 @@ export function Inspector(props: InspectorProps) {
       );
     }
   } else if (selectedFeature) {
+    const selectionLabel =
+      selectedTopology?.kind === 'edge'
+        ? edgeLabel(
+            selectedBody ?? undefined,
+            selectedTopology.hash,
+            selectedTopology.topologyId
+          )
+        : selectedTopology?.kind === 'face'
+          ? faceLabel(
+              selectedBody ?? undefined,
+              selectedTopology.hash,
+              selectedTopology.topologyId
+            )
+          : selectedBody?.name;
     const heading = inspectorHeadingForFeature({
       featureName: selectedFeature.name,
       featureKindLabel: FEATURE_KIND_LABELS[selectedFeature.featureKind],
+      ...(selectionLabel ? { selectionLabel } : {}),
+      ...(selectedBody ? { selectionBodyName: selectedBody.name } : {}),
       featureSelectionSource,
       commandSession
     });
     const inferredUnderCommand = heading.demoted;
+    objectReadout = inferredUnderCommand;
     eyebrow = heading.eyebrow;
     title = heading.title;
     const editKey = `edit-${selectedFeature.id}`;
@@ -1255,7 +1275,7 @@ export function Inspector(props: InspectorProps) {
       );
     }
 
-    body = (
+    const featurePanel = (
       <>
         {selectedTopology?.kind === 'edge' && (
           <>
@@ -1279,9 +1299,6 @@ export function Inspector(props: InspectorProps) {
             </div>
           </>
         )}
-        {inferredUnderCommand && form ? (
-          <h3 className="section-title">Defined by {selectedFeature.name}</h3>
-        ) : null}
         {form}
         {selectedTopology?.kind === 'face' &&
           selectedBody?.source === 'imported-step' && (
@@ -1325,17 +1342,34 @@ export function Inspector(props: InspectorProps) {
         )}
       </>
     );
-    deleteAction = {
-      // Under a command title ("Offset Face"), "Delete feature" reads as
-      // discarding the command; name the feature it would actually remove.
-      label:
-        selectedFeature.data.featureKind === 'imported-step'
-          ? 'Delete imported body'
-          : inferredUnderCommand
-            ? `Delete ${selectedFeature.name}`
+    body = inferredUnderCommand ? (
+      <>
+        {selectedBody && <BodyStats body={selectedBody} units={units} />}
+        <div className="object-definition-row">
+          <span>
+            <b>Defined by</b> {selectedFeature.name}
+          </span>
+          <button
+            type="button"
+            className="secondary"
+            onClick={() => props.onPinFeature(selectedFeature)}
+          >
+            Edit
+          </button>
+        </div>
+      </>
+    ) : (
+      featurePanel
+    );
+    if (!inferredUnderCommand) {
+      deleteAction = {
+        label:
+          selectedFeature.data.featureKind === 'imported-step'
+            ? 'Delete imported body'
             : 'Delete feature',
-      run: () => props.onDeleteFeature(selectedFeature)
-    };
+        run: () => props.onDeleteFeature(selectedFeature)
+      };
+    }
   }
 
   if (!body) {
@@ -1344,7 +1378,7 @@ export function Inspector(props: InspectorProps) {
 
   return (
     <section
-      className="inspector"
+      className={`inspector${objectReadout ? ' object-readout' : ''}`}
       aria-label="Feature inspector"
       ref={panelRef}
       // An edit panel no longer holds the keyboard through a focused field, so

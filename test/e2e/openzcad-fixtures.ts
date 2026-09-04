@@ -357,6 +357,10 @@ export async function stubAnonymousApi(page: Page) {
  * survives that close, and Shift+left click must then add instead of replace.
  */
 export async function shiftSelectTwoVisibleBoxEdges(page: Page) {
+  // Edge picks only become meaningful after the exact body projection lands.
+  await expect(page.getByRole('button', { name: /^Fillet/ })).toBeEnabled({
+    timeout: 30_000
+  });
   await page.getByRole('button', { name: 'Edge', exact: true }).click();
   const canvas = page.locator('.viewer-host canvas');
   const bounds = await canvas.boundingBox();
@@ -388,9 +392,6 @@ export async function shiftSelectTwoVisibleBoxEdges(page: Page) {
 
   await expect(status).toContainText('2 exact edges selected');
   await expect(page.locator('.selection-chip-label')).toHaveText('2 edges');
-  await expect(
-    page.getByRole('heading', { name: '2 selected edges' })
-  ).toBeVisible();
 }
 
 /** A pointer-down anchor for a horizontal drag across bare viewport canvas. */
