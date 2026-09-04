@@ -2,7 +2,7 @@
    Split out of app.css; the cascade still depends on the import order
    in app.css, so this file is not free to move. ── */
 
-/* ── StartScreen ─────────────────────────────────────────── */
+/* ── Startup splash ──────────────────────────────────────── */
 
 .startup-screen {
   position: absolute;
@@ -38,23 +38,29 @@
   text-transform: none;
 }
 
+/* ── StartScreen ─────────────────────────────────────────── */
+
 /* A full application surface, not a centred card: a slim chrome header, a
    scrolling body of sections, and a status footer. The header and footer are
-   fixed rows so only the parts grid scrolls. */
+   fixed rows so only the body scrolls. */
 .start-screen {
   position: absolute;
   inset: 0;
   z-index: var(--z-start-screen);
   display: grid;
+  /* minmax(0, …) so the body can shrink below its content's natural width:
+     a grid track defaults to min-content, which on a phone let the toolbar
+     hold the whole page wider than the screen. */
+  grid-template-columns: minmax(0, 1fr);
   grid-template-rows: var(--topbar-h) 1fr var(--statusbar-h);
   background: var(--color-bg);
   overflow: hidden;
 }
 
 /* Blueprint drafting-sheet atmosphere: a fine grid under a wide accent wash.
-   Both are anchored to the top, where the content is, so the glow reads as light
-   falling across the sheet rather than a blob hovering in the empty middle, and
-   the grid fades out before the status footer. */
+   Both are anchored to the top, where the launch panel is, so the glow reads
+   as light falling across the sheet rather than a blob hovering in the empty
+   middle, and the grid fades out before the status footer. */
 .start-screen::before {
   content: '';
   position: absolute;
@@ -62,16 +68,16 @@
   pointer-events: none;
   background:
     radial-gradient(
-      120% 60% at 50% 0%,
+      90% 50% at 50% 0%,
       var(--color-accent-dim),
-      transparent 65%
+      transparent 70%
     ),
-    linear-gradient(color-mix(in srgb, var(--color-accent) 6%, transparent) 1px, transparent 1px) 0 0 / 42px
+    linear-gradient(color-mix(in srgb, var(--color-accent) 5%, transparent) 1px, transparent 1px) 0 0 / 42px
       42px,
-    linear-gradient(90deg, color-mix(in srgb, var(--color-accent) 6%, transparent) 1px, transparent 1px) 0 0 /
+    linear-gradient(90deg, color-mix(in srgb, var(--color-accent) 5%, transparent) 1px, transparent 1px) 0 0 /
       42px 42px;
-  -webkit-mask-image: linear-gradient(#000, #000 45%, transparent 92%);
-  mask-image: linear-gradient(#000, #000 45%, transparent 92%);
+  -webkit-mask-image: linear-gradient(#000, #000 40%, transparent 90%);
+  mask-image: linear-gradient(#000, #000 40%, transparent 90%);
 }
 
 .start-header,
@@ -81,7 +87,7 @@
   display: flex;
   align-items: center;
   gap: var(--sp-3);
-  padding: 0 var(--sp-5);
+  padding: 0 var(--sp-4);
   background: var(--color-surface);
 }
 
@@ -93,9 +99,17 @@
   border-top: var(--border-thin);
 }
 
-.start-header svg:first-child {
-  width: 22px;
-  height: 22px;
+/* Mirrors the workspace top bar's identity cluster so leaving a part and
+   arriving here reads as the same application, not a different site. */
+.start-brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.start-brand > svg {
+  width: 20px;
+  height: 20px;
   flex: none;
   color: var(--color-accent);
 }
@@ -107,14 +121,32 @@
   letter-spacing: 0.01em;
 }
 
+.start-beta {
+  display: inline-flex;
+  align-items: center;
+  min-height: 16px;
+  padding: 0 5px;
+  color: var(--color-accent);
+  background: var(--color-accent-dim);
+  border: 1px solid var(--color-accent-border);
+  border-radius: var(--radius-sm);
+  font-family: var(--font-mono);
+  font-size: var(--fs-mini);
+  line-height: 1;
+  text-transform: uppercase;
+}
+
 .start-tagline {
   padding-left: var(--sp-3);
   border-left: var(--border-thin);
   color: var(--color-text-subtle);
-  font-family: var(--font-mono);
-  font-size: var(--fs-mini);
-  letter-spacing: 0.18em;
-  text-transform: uppercase;
+  font-size: var(--fs-sm);
+}
+
+.start-settings-button {
+  margin-left: auto;
+  background: var(--color-surface-2);
+  border: var(--border-thin);
 }
 
 .start-body {
@@ -122,38 +154,134 @@
   z-index: 1;
   display: grid;
   align-content: start;
-  gap: var(--sp-5);
-  /* Wide enough for eight tiles, narrow enough that they never stretch into
+  gap: var(--sp-6);
+  /* Wide enough for five tiles, narrow enough that they never stretch into
      billboards on a 4K display. */
   width: min(1180px, 100%);
+  min-width: 0;
   margin: 0 auto;
-  padding: var(--sp-5) var(--sp-5) var(--sp-4);
+  padding: var(--sp-5) var(--sp-5) var(--sp-6);
+  overflow-x: hidden;
   overflow-y: auto;
 }
+
+/* ── Launch panel ────────────────────────────────────────── */
+
+/* The one thing a visitor most often came to do sits first and full width:
+   a name, its units, and a single button, rather than a form squeezed into a
+   tile-shaped slot in the grid it then had to share space with. */
+.start-launch {
+  display: grid;
+  grid-template-columns: minmax(200px, 1fr) minmax(0, 2fr);
+  gap: var(--sp-5);
+  align-items: center;
+  padding: var(--sp-4) var(--sp-5);
+  background: color-mix(in srgb, var(--color-surface) 88%, transparent);
+  border: 1px solid var(--color-accent-border);
+  border-radius: var(--radius-lg);
+  box-shadow: 0 12px 40px -20px rgba(0, 0, 0, 0.6);
+}
+
+.start-launch-copy {
+  display: grid;
+  gap: 4px;
+}
+
+.start-launch-copy h2 {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  margin: 0;
+  color: var(--color-text);
+  font-size: var(--fs-lg);
+  font-weight: var(--fw-medium);
+}
+
+.start-launch-copy h2 svg {
+  color: var(--color-accent);
+}
+
+.start-launch-copy p {
+  margin: 0;
+  color: var(--color-text-subtle);
+  font-size: var(--fs-sm);
+  line-height: 1.45;
+}
+
+.start-launch-form {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 150px auto;
+  gap: var(--sp-3);
+  align-items: end;
+}
+
+.start-field {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.start-field-label {
+  color: var(--color-text-subtle);
+  font-family: var(--font-mono);
+  font-size: var(--fs-mini);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.start-field input,
+.start-field select {
+  width: 100%;
+  min-height: 32px;
+  background: var(--color-surface-2);
+}
+
+.start-field-name input {
+  font-size: var(--fs-md);
+}
+
+.start-launch-submit {
+  min-height: 32px;
+  padding: 0 var(--sp-4);
+  white-space: nowrap;
+}
+
+.start-launch-error {
+  grid-column: 1 / -1;
+}
+
+/* ── Section toolbar ─────────────────────────────────────── */
 
 .start-section {
   display: grid;
   gap: var(--sp-3);
 }
 
-.start-section-head {
+/* Title, shelf tabs and search on one line: the parts you own are the page,
+   so the controls that narrow them stay beside their heading rather than on
+   a second row that pushes the grid down. */
+.start-toolbar {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: var(--sp-3);
-  /* The search field is taller than the eyebrow, so the head keeps a constant
-     height whether or not a section has one — the parts and demos eyebrows stay
-     on the same rhythm. */
-  min-height: 30px;
+  gap: var(--sp-3) var(--sp-4);
+  min-height: 32px;
 }
 
-.start-section h2 {
+.start-toolbar-title {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--sp-1) var(--sp-2);
+  min-width: 0;
+}
+
+.start-toolbar h2 {
   margin: 0;
-  color: var(--color-text-subtle);
-  font-family: var(--font-mono);
-  font-size: var(--fs-mini);
-  font-weight: var(--fw-regular);
-  letter-spacing: var(--ls-eyebrow);
-  text-transform: uppercase;
+  color: var(--color-text);
+  font-size: var(--fs-lg);
+  font-weight: var(--fw-medium);
+  white-space: nowrap;
 }
 
 .start-section-note {
@@ -169,7 +297,7 @@
   display: flex;
   align-items: center;
   margin-left: auto;
-  width: min(240px, 40%);
+  width: min(260px, 100%);
 }
 
 .start-search > svg {
@@ -181,6 +309,7 @@
 
 .start-search input {
   width: 100%;
+  min-height: 30px;
   padding-left: 27px;
   padding-right: 26px;
   background: var(--color-surface);
@@ -227,181 +356,34 @@
   color: var(--color-accent-hi);
 }
 
-/* ── Part tiles ──────────────────────────────────────────── */
-
-.start-tile-grid {
+/* An empty shelf explains itself in the space the tiles would have taken,
+   so the page never collapses to a heading with nothing under it. */
+.start-empty {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(196px, 1fr));
-  gap: var(--sp-3);
-}
-
-.start-tile {
-  display: grid;
-  gap: var(--sp-2);
-  padding: var(--sp-3);
-  background: var(--color-surface);
-  border: var(--border-thin);
-  border-radius: var(--radius-md);
-  text-align: left;
-}
-
-/* The tile is a container, not a control: the open action fills it, and the
-   pin / reorder / menu affordances sit on top. Nesting those inside the open
-   button would be invalid markup and would make every one of them also open
-   the part. */
-.start-tile-project {
-  position: relative;
-  gap: 0;
-  padding: 0;
-  color: var(--color-text-muted);
-}
-
-.start-tile-open {
-  display: grid;
-  grid-template-rows: auto 1fr auto;
+  justify-items: center;
   gap: 6px;
-  padding: var(--sp-3);
-  border-radius: inherit;
-  color: inherit;
-  text-align: left;
-}
-
-.start-tile-project:has(.start-tile-open:hover:not(:disabled)),
-.start-tile-project:has(.start-tile-open:focus-visible),
-.start-tile-project.is-drop-target {
-  color: var(--color-text);
-  background: var(--color-surface-hover);
-  border-color: var(--color-accent-border);
-}
-
-.start-tile-open:focus-visible {
-  outline: none;
-}
-
-/* A pinned part keeps a permanent marker so its position reads as deliberate
-   rather than as wherever the sort happened to leave it. */
-.start-tile-project.is-pinned {
-  border-color: var(--color-accent-border);
-}
-
-.start-tile-project.is-dragging {
-  opacity: 0.45;
-}
-
-.start-tile-project.is-drop-target {
-  outline: 2px dashed var(--color-accent);
-  outline-offset: -2px;
-}
-
-/* ── Tile actions ────────────────────────────────────────── */
-
-.start-tile-actions {
-  position: absolute;
-  top: 6px;
-  right: 6px;
-  display: flex;
-  gap: 2px;
-  opacity: 0;
-  transition: opacity var(--dur-fast) var(--ease-out);
-}
-
-/* Hidden until the tile is under the pointer or holds focus, so a wall of
-   tiles stays a wall of parts — but never hidden from the keyboard, and never
-   hidden while it is the thing you are using. */
-.start-tile-project:hover .start-tile-actions,
-.start-tile-project:focus-within .start-tile-actions,
-.start-tile-project.is-pinned .start-tile-actions {
-  opacity: 1;
-}
-
-.start-tile-action {
-  display: grid;
-  place-items: center;
-  width: 24px;
-  height: 24px;
+  padding: var(--sp-6) var(--sp-4);
   color: var(--color-text-subtle);
-  background: var(--color-surface-2);
-  border: var(--border-thin);
-  border-radius: var(--radius-sm);
-}
-
-.start-tile-action:hover:not(:disabled) {
-  color: var(--color-text);
-  background: var(--color-surface-hover);
-  border-color: var(--color-border-strong);
-}
-
-.start-tile-action[aria-pressed='true'] {
-  color: var(--color-accent);
-  border-color: var(--color-accent-border);
-}
-
-.start-tile-grip {
-  cursor: grab;
-}
-
-.start-tile-grip:active {
-  cursor: grabbing;
-}
-
-.start-tile-menu {
-  position: absolute;
-  top: 32px;
-  right: 6px;
-  z-index: 2;
-  display: grid;
-  min-width: 168px;
-  padding: 4px;
-  background: var(--color-surface-2);
-  border: var(--border-thin);
-  border-color: var(--color-border-strong);
-  border-radius: var(--radius-md);
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
-}
-
-.start-tile-menu button,
-.start-tile-footer button {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 6px 8px;
-  color: var(--color-text-muted);
-  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--color-surface) 60%, transparent);
+  border: 1px dashed var(--color-border-strong);
+  border-radius: var(--radius-lg);
   font-size: var(--fs-sm);
-  text-align: left;
+  text-align: center;
 }
 
-.start-tile-menu button:hover:not(:disabled),
-.start-tile-footer button:hover:not(:disabled) {
+.start-empty-mark svg {
+  width: 32px;
+  height: 32px;
+  color: var(--color-border-strong);
+}
+
+.start-empty strong {
   color: var(--color-text);
-  background: var(--color-surface-hover);
-}
-
-.start-tile-menu button.is-destructive,
-.start-tile-footer button.is-destructive,
-.start-shelf-action.is-destructive {
-  color: var(--color-error);
-}
-
-.start-tile-footer {
-  display: flex;
-  gap: var(--sp-2);
-  padding: 0 var(--sp-3) var(--sp-3);
-}
-
-.start-tile-footer button {
-  flex: 1;
-  justify-content: center;
-  border: var(--border-thin);
+  font-size: var(--fs-md);
+  font-weight: var(--fw-medium);
 }
 
 /* ── Shelf tabs ──────────────────────────────────────────── */
-
-.start-shelf-bar {
-  display: flex;
-  align-items: center;
-  gap: var(--sp-3);
-}
 
 .start-shelf-tabs {
   display: flex;
@@ -416,14 +398,11 @@
   display: flex;
   align-items: center;
   gap: 6px;
-  min-height: 24px;
+  min-height: 26px;
   padding: 0 10px;
-  color: var(--color-text-subtle);
+  color: var(--color-text-muted);
   border-radius: var(--radius-sm);
-  font-family: var(--font-mono);
-  font-size: var(--fs-mini);
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
+  font-size: var(--fs-sm);
 }
 
 .start-shelf-tabs button:hover {
@@ -436,20 +415,35 @@
 }
 
 .start-shelf-count {
-  min-width: 16px;
-  font-variant-numeric: tabular-nums;
-  padding: 0 4px;
+  min-width: 18px;
+  padding: 0 5px;
   color: var(--color-text-subtle);
   background: var(--color-surface-2);
-  border-radius: var(--radius-sm);
+  border-radius: 999px;
+  font-family: var(--font-mono);
   font-size: var(--fs-mini);
+  font-variant-numeric: tabular-nums;
   text-align: center;
+}
+
+.start-shelf-tabs button.is-active .start-shelf-count {
+  color: var(--color-accent);
+  background: var(--color-accent-dim);
+}
+
+.start-shelf-bar {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  padding: var(--sp-2) var(--sp-3);
+  background: var(--color-surface);
+  border: var(--border-thin);
+  border-radius: var(--radius-md);
 }
 
 .start-shelf-hint {
   color: var(--color-text-subtle);
-  font-family: var(--font-mono);
-  font-size: var(--fs-mini);
+  font-size: var(--fs-sm);
 }
 
 .start-shelf-action {
@@ -462,12 +456,19 @@
   border: var(--border-thin);
   border-radius: var(--radius-md);
   font-size: var(--fs-sm);
+  white-space: nowrap;
 }
 
 .start-shelf-action:hover:not(:disabled) {
   background: var(--color-surface-hover);
   border-color: var(--color-border-strong);
 }
+
+.start-shelf-action.is-destructive {
+  color: var(--color-error);
+}
+
+/* ── Cloud status bars ───────────────────────────────────── */
 
 /*
  * The offer to upload device-only work. It reads as information rather than a
@@ -478,7 +479,6 @@
   display: flex;
   align-items: center;
   gap: var(--sp-2);
-  margin-bottom: var(--sp-3);
   padding: var(--sp-2) var(--sp-3);
   background: var(--color-surface);
   border: var(--border-thin);
@@ -491,61 +491,6 @@
   color: var(--color-warning);
 }
 
-.start-tile-thumb {
-  position: relative;
-  display: grid;
-  place-items: center;
-  height: 84px;
-  padding: var(--sp-2);
-  /* The tile preview is a viewport, so it carries the viewport's background. */
-  background: var(--color-viewport-bg);
-  border: 1px solid var(--color-surface-2);
-  border-radius: var(--radius-sm);
-  color: var(--color-border-strong);
-  overflow: hidden;
-}
-
-/*
- * Sits over the preview rather than in the grid flow, so a part that is only on
- * this device is marked without the thumbnail being resized around the mark.
- */
-.start-tile-badge {
-  position: absolute;
-  top: 4px;
-  right: 4px;
-  display: inline-flex;
-  padding: 3px;
-  background: var(--color-surface);
-  border: var(--border-thin);
-  border-radius: var(--radius-sm);
-  color: var(--color-text-subtle);
-}
-
-/* The thumbnail's own svg rule fills the tile; the badge icon must not. */
-.start-tile-badge svg {
-  width: 12px;
-  height: 12px;
-}
-
-/* Device-only is an ordinary state; an unreconciled divergence is not. */
-.start-tile-badge.is-conflict {
-  color: var(--color-warning);
-  border-color: currentcolor;
-}
-
-.start-tile-badge.is-sync-syncing {
-  color: var(--color-accent);
-}
-
-.start-tile-badge.is-sync-synced {
-  color: var(--color-success);
-}
-
-.start-tile-badge.is-sync-failed {
-  color: var(--color-error);
-  border-color: currentcolor;
-}
-
 /*
  * The adopt bar's live sibling: while a save-all run is on screen it takes the
  * bar's slot, and it keeps the failures readable after the run finishes.
@@ -554,7 +499,6 @@
   display: flex;
   flex-direction: column;
   gap: var(--sp-2);
-  margin-bottom: var(--sp-3);
   padding: var(--sp-2) var(--sp-3);
   background: var(--color-surface);
   border: var(--border-thin);
@@ -666,6 +610,88 @@
   }
 }
 
+/* ── Part tiles ──────────────────────────────────────────── */
+
+.start-tile-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(208px, 1fr));
+  gap: var(--sp-3);
+}
+
+.start-tile {
+  display: grid;
+  background: var(--color-surface);
+  border: var(--border-thin);
+  border-radius: var(--radius-lg);
+  text-align: left;
+}
+
+/* The tile is a container, not a control: the open action fills it, and the
+   pin / reorder / menu affordances sit on top. Nesting those inside the open
+   button would be invalid markup and would make every one of them also open
+   the part. */
+.start-tile-project {
+  position: relative;
+  color: var(--color-text-muted);
+}
+
+.start-tile-open {
+  display: grid;
+  grid-template-rows: auto 1fr;
+  gap: 0;
+  padding: 0;
+  border-radius: inherit;
+  color: inherit;
+  text-align: left;
+}
+
+.start-tile-project:has(.start-tile-open:hover:not(:disabled)),
+.start-tile-project:has(.start-tile-open:focus-visible),
+.start-tile-project.is-drop-target {
+  color: var(--color-text);
+  border-color: var(--color-accent-border);
+}
+
+.start-tile-project:has(.start-tile-open:focus-visible) {
+  box-shadow: 0 0 0 2px var(--color-accent-dim);
+}
+
+.start-tile-open:focus-visible {
+  outline: none;
+}
+
+/* A pinned part keeps a permanent marker so its position reads as deliberate
+   rather than as wherever the sort happened to leave it. */
+.start-tile-project.is-pinned {
+  border-color: var(--color-accent-border);
+}
+
+.start-tile-project.is-dragging {
+  opacity: 0.45;
+}
+
+.start-tile-project.is-drop-target {
+  outline: 2px dashed var(--color-accent);
+  outline-offset: -2px;
+}
+
+/* The preview is the tile: a viewport-coloured pane at a fixed aspect so a
+   row of parts lines up whether or not each one has rendered yet. */
+.start-tile-thumb {
+  position: relative;
+  display: grid;
+  place-items: center;
+  aspect-ratio: 16 / 10;
+  padding: var(--sp-3);
+  background: var(--color-viewport-bg);
+  border-bottom: var(--border-thin);
+  /* Clips the preview to the tile's corners itself: an overflow clip on the
+     tile would also cut off the actions menu that hangs below its buttons. */
+  border-radius: calc(var(--radius-lg) - 1px) calc(var(--radius-lg) - 1px) 0 0;
+  color: var(--color-border-strong);
+  overflow: hidden;
+}
+
 .start-tile-thumb svg {
   width: 100%;
   height: 100%;
@@ -692,7 +718,55 @@
   color: var(--color-accent);
 }
 
+/*
+ * Sits over the preview rather than in the grid flow, so a part that is only on
+ * this device is marked without the thumbnail being resized around the mark.
+ */
+.start-tile-badge {
+  position: absolute;
+  top: 6px;
+  left: 6px;
+  display: inline-flex;
+  padding: 3px;
+  background: var(--color-surface);
+  border: var(--border-thin);
+  border-radius: var(--radius-sm);
+  color: var(--color-text-subtle);
+}
+
+/* The thumbnail's own svg rule fills the tile; the badge icon must not. */
+.start-tile-badge svg {
+  width: 12px;
+  height: 12px;
+}
+
+/* Device-only is an ordinary state; an unreconciled divergence is not. */
+.start-tile-badge.is-conflict {
+  color: var(--color-warning);
+  border-color: currentcolor;
+}
+
+.start-tile-badge.is-sync-syncing {
+  color: var(--color-accent);
+}
+
+.start-tile-badge.is-sync-synced {
+  color: var(--color-success);
+}
+
+.start-tile-badge.is-sync-failed {
+  color: var(--color-error);
+  border-color: currentcolor;
+}
+
+.start-tile-body {
+  display: grid;
+  gap: 3px;
+  padding: 9px var(--sp-3) 10px;
+}
+
 .start-tile-name {
+  color: var(--color-text);
   font-size: var(--fs-base);
   font-weight: var(--fw-medium);
   overflow: hidden;
@@ -701,32 +775,135 @@
 }
 
 .start-tile-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-2);
+  color: var(--color-text-subtle);
+  font-size: var(--fs-xs);
+}
+
+.start-tile-meta time {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.start-tile-rev {
+  flex: none;
   color: var(--color-text-subtle);
   font-family: var(--font-mono);
   font-size: var(--fs-mini);
+  font-variant-numeric: tabular-nums;
 }
 
-/* The create tile is a dashed peer of the parts rather than a separate panel,
-   so "make a new one" sits in the same plane as "open an old one". */
-.start-tile-new {
-  align-content: start;
+.start-tile-purge {
+  color: var(--color-warning);
+  font-size: var(--fs-xs);
+}
+
+/* ── Tile actions ────────────────────────────────────────── */
+
+.start-tile-actions {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  display: flex;
+  gap: 2px;
+  opacity: 0;
+  transition: opacity var(--dur-fast) var(--ease-out);
+}
+
+/* Hidden until the tile is under the pointer or holds focus, so a wall of
+   tiles stays a wall of parts — but never hidden from the keyboard, and never
+   hidden while it is the thing you are using. */
+.start-tile-project:hover .start-tile-actions,
+.start-tile-project:focus-within .start-tile-actions,
+.start-tile-project.is-pinned .start-tile-actions {
+  opacity: 1;
+}
+
+.start-tile-action {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  color: var(--color-text-subtle);
+  background: var(--color-surface);
+  border: var(--border-thin);
+  border-radius: var(--radius-sm);
+}
+
+.start-tile-action:hover:not(:disabled) {
+  color: var(--color-text);
+  background: var(--color-surface-hover);
+  border-color: var(--color-border-strong);
+}
+
+.start-tile-action[aria-pressed='true'] {
+  color: var(--color-accent);
+  border-color: var(--color-accent-border);
+}
+
+.start-tile-grip {
+  cursor: grab;
+}
+
+.start-tile-grip:active {
+  cursor: grabbing;
+}
+
+.start-tile-menu {
+  position: absolute;
+  top: 32px;
+  right: 6px;
+  z-index: 2;
+  display: grid;
+  min-width: 168px;
+  padding: 4px;
   background: var(--color-surface-2);
-  border: 1px dashed var(--color-accent-border);
+  border: var(--border-thin);
+  border-color: var(--color-border-strong);
+  border-radius: var(--radius-md);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
 }
 
-.start-tile-new-head {
+.start-tile-menu button,
+.start-tile-footer button {
   display: flex;
   align-items: center;
-  gap: 7px;
-  color: var(--color-accent);
-  font-size: var(--fs-base);
-  font-weight: var(--fw-medium);
+  gap: 8px;
+  padding: 6px 8px;
+  color: var(--color-text-muted);
+  border-radius: var(--radius-sm);
+  font-size: var(--fs-sm);
+  text-align: left;
 }
 
-.start-tile-new input,
-.start-tile-new select {
-  width: 100%;
+.start-tile-menu button:hover:not(:disabled),
+.start-tile-footer button:hover:not(:disabled) {
+  color: var(--color-text);
+  background: var(--color-surface-hover);
 }
+
+.start-tile-menu button.is-destructive,
+.start-tile-footer button.is-destructive {
+  color: var(--color-error);
+}
+
+.start-tile-footer {
+  display: flex;
+  gap: var(--sp-2);
+  padding: 0 var(--sp-3) var(--sp-3);
+}
+
+.start-tile-footer button {
+  flex: 1;
+  justify-content: center;
+  border: var(--border-thin);
+}
+
+/* ── Expand and footer ───────────────────────────────────── */
 
 .start-expand {
   justify-self: start;
@@ -739,9 +916,7 @@
   background: transparent;
   border: var(--border-thin);
   border-radius: var(--radius-md);
-  font-family: var(--font-mono);
-  font-size: var(--fs-mini);
-  letter-spacing: 0.04em;
+  font-size: var(--fs-sm);
 }
 
 .start-expand:hover {
@@ -764,8 +939,26 @@
   font-size: var(--fs-xs);
 }
 
-.start-settings-button {
-  margin-left: auto;
-  background: var(--color-surface-2);
-  border: var(--border-thin);
+/* ── Narrow layouts ──────────────────────────────────────── */
+
+@media (max-width: 860px) {
+  .start-launch {
+    grid-template-columns: minmax(0, 1fr);
+    gap: var(--sp-3);
+  }
+}
+
+@media (max-width: 560px) {
+  .start-launch-form {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .start-tagline {
+    display: none;
+  }
+
+  .start-search {
+    margin-left: 0;
+    width: 100%;
+  }
 }
