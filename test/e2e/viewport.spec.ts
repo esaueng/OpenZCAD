@@ -293,7 +293,6 @@ test('Space centres and faces an exact planar selection head-on', async ({
   await expect(cylinderFeature).toBeVisible();
   await cylinderFeature.click();
   const radiusInput = inspector.getByLabel('Radius', { exact: true });
-  const radiusBefore = await radiusInput.inputValue();
   await radiusInput.click();
   await expect(radiusInput).toBeFocused();
 
@@ -312,9 +311,12 @@ test('Space centres and faces an exact planar selection head-on', async ({
   await expect(
     faceOperation.getByRole('tab', { name: 'Sketch' })
   ).toBeVisible();
-  // The viewport pick does not steal focus from the inspector. Space still
-  // needs to work here without replacing the selected expression value.
-  await expect(radiusInput).toBeFocused();
+  // The viewport pick demotes its inferred feature to an object readout. Space
+  // still belongs to the selected face without an editable field retaining it.
+  await expect(radiusInput).toHaveCount(0);
+  await expect(
+    inspector.getByRole('heading', { name: 'Bottom face' })
+  ).toBeVisible();
 
   const cameraPose = async () =>
     page.evaluate((storageKey) => {
@@ -349,7 +351,6 @@ test('Space centres and faces an exact planar selection head-on', async ({
   expect(Math.abs(direction[0]! / distance)).toBeLessThan(0.001);
   expect(Math.abs(direction[1]! / distance)).toBeLessThan(0.001);
 
-  await expect(radiusInput).toHaveValue(radiusBefore);
   await expect(faceOperation).toBeVisible();
   await expect(page.locator('.selection-chip')).toContainText(/face/i);
   await expect(
