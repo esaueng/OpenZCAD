@@ -41,7 +41,7 @@ function renderStartScreen(
       onDeleteForever={vi.fn()}
       onEmptyTrash={vi.fn()}
       loadThumbnail={vi.fn().mockResolvedValue(undefined)}
-      backfillThumbnail={vi.fn().mockResolvedValue(undefined)}
+      publishThumbnail={vi.fn().mockResolvedValue(undefined)}
       {...overrides}
     />
   );
@@ -185,23 +185,23 @@ describe('StartScreen collapsed project grid', () => {
       revisionCount: index + 1,
       updatedAt: '2026-08-04T12:00:00.000Z'
     }));
-    const backfillThumbnail = vi
+    const publishThumbnail = vi
       .fn<(project: ProjectSummary) => Promise<string | null | undefined>>()
       .mockResolvedValue(undefined);
 
     renderStartScreen({
       projects,
       signedIn: false,
-      backfillThumbnail
+      publishThumbnail
     });
 
-    await waitFor(() => expect(backfillThumbnail).toHaveBeenCalledTimes(10));
+    await waitFor(() => expect(publishThumbnail).toHaveBeenCalledTimes(10));
     expect(
-      backfillThumbnail.mock.calls.map(([project]) => project.name)
+      publishThumbnail.mock.calls.map(([project]) => project.name)
     ).toEqual(projects.slice(0, 10).map((project) => project.name));
 
     fireEvent.click(screen.getByRole('button', { name: 'Show 16 more parts' }));
 
-    await waitFor(() => expect(backfillThumbnail).toHaveBeenCalledTimes(26));
+    await waitFor(() => expect(publishThumbnail).toHaveBeenCalledTimes(26));
   });
 });
