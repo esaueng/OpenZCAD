@@ -4,6 +4,7 @@
  * validation, mesh import, and small formatting/metadata readers.
  */
 import type { RemusKernel } from './remus-runtime';
+import { remusTranslators } from './remus-runtime';
 import type { Vec3 } from '@openzcad/geometry';
 import type {
   BodyId,
@@ -215,7 +216,9 @@ export function projectRemusLineageDiagnostic(
  * fails by name instead of publishing a body whose geometry silently drifted.
  */
 export function importMeshSolid(kernel: RemusKernel, stlText: string): number {
-  const imported = kernel.importStl(new TextEncoder().encode(stlText));
+  const imported = kernel.deserializeSolid(
+    remusTranslators().importStl(new TextEncoder().encode(stlText))
+  );
   const faces = kernel.getSolidFaces(imported);
   if (faces.length < 2) {
     throw new Error(
@@ -303,12 +306,23 @@ export function decodeText(bytes: Uint8Array): string {
 /**
  * Keep Remus's hostile-input budgets for every source. A locally selected
  * file can later be shared or restored, so its origin does not make it trusted.
+ *
+ * The translator parses in its own scratch topology and hands back an arena
+ * document; a file with no solids hands back no bytes, which is the empty
+ * handle list rather than a document to restore.
  */
 export function importStepWithOwnBudget(
   kernel: RemusKernel,
   bytes: Uint8Array
 ): Uint32Array {
-  return kernel.importStep(bytes, 128 * 1024 * 1024, 2_000_000);
+  const solids = remusTranslators().importStep(
+    bytes,
+    128 * 1024 * 1024,
+    2_000_000
+  );
+  return solids.length === 0
+    ? new Uint32Array()
+    : kernel.deserializeSolids(solids);
 }
 
 /**
