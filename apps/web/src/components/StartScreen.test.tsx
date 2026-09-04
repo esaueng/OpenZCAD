@@ -2,7 +2,7 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import type { ComponentProps } from 'react';
 import { describe, expect, it, vi } from 'vitest';
 import { toProjectId, type ProjectSummary } from '@openzcad/shared';
-import { StartScreen } from './StartScreen';
+import { formatLastEdited, StartScreen } from './StartScreen';
 
 const localProject: ProjectSummary = {
   projectId: toProjectId('project_local'),
@@ -81,18 +81,46 @@ describe('StartScreen new part suggestion', () => {
 });
 
 describe('StartScreen project timestamps', () => {
-  it('shows the local date and time each project was last edited', () => {
+  it('shows the local date for a project edited more than a week ago', () => {
     renderStartScreen();
 
     const date = new Date(localProject.updatedAt);
-    const timestamp = screen.getByText(
-      `${date.toLocaleDateString()} ${date.toLocaleTimeString(undefined, {
-        hour: 'numeric',
-        minute: '2-digit'
-      })}`
-    );
+    const timestamp = screen.getByText(date.toLocaleDateString());
 
     expect(timestamp).toHaveAttribute('datetime', localProject.updatedAt);
+    expect(timestamp).toHaveAttribute(
+      'title',
+      `Last edited ${date.toLocaleDateString()} ${date.toLocaleTimeString(
+        undefined,
+        { hour: 'numeric', minute: '2-digit' }
+      )}`
+    );
+  });
+
+  it('shortens recent edits to the time, the day or the date', () => {
+    const now = new Date(2026, 8, 4, 15, 30);
+    const time = (date: Date) =>
+      date.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+
+    const today = new Date(2026, 8, 4, 12, 21);
+    expect(formatLastEdited(today.toISOString(), now)).toBe(
+      `Today ${time(today)}`
+    );
+
+    const yesterday = new Date(2026, 8, 3, 23, 5);
+    expect(formatLastEdited(yesterday.toISOString(), now)).toBe(
+      `Yesterday ${time(yesterday)}`
+    );
+
+    const thisWeek = new Date(2026, 8, 1, 9, 0);
+    expect(formatLastEdited(thisWeek.toISOString(), now)).toBe(
+      `${thisWeek.toLocaleDateString(undefined, { weekday: 'short' })} ${time(thisWeek)}`
+    );
+
+    const lastMonth = new Date(2026, 7, 4, 9, 0);
+    expect(formatLastEdited(lastMonth.toISOString(), now)).toBe(
+      lastMonth.toLocaleDateString()
+    );
   });
 });
 
@@ -129,7 +157,7 @@ describe('StartScreen cloud project status', () => {
 });
 
 describe('StartScreen collapsed project grid', () => {
-  it('shows nine saved projects before moving the rest behind the expand control', () => {
+  it('shows ten saved projects before moving the rest behind the expand control', () => {
     const projects = Array.from({ length: 26 }, (_, index) => ({
       projectId: toProjectId(`project_${index + 1}`),
       name: `Part ${index + 1}`,
@@ -139,10 +167,10 @@ describe('StartScreen collapsed project grid', () => {
 
     renderStartScreen({ projects, signedIn: false });
 
-    expect(screen.getByText('Part 9')).toBeInTheDocument();
-    expect(screen.queryByText('Part 10')).toBeNull();
+    expect(screen.getByText('Part 10')).toBeInTheDocument();
+    expect(screen.queryByText('Part 11')).toBeNull();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Show 17 more parts' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Show 16 more parts' }));
 
     expect(screen.getByText('Part 26')).toBeInTheDocument();
     expect(
@@ -150,7 +178,7 @@ describe('StartScreen collapsed project grid', () => {
     ).toBeInTheDocument();
   });
 
-  it('bounds cold-cache thumbnail backfill to the visible nine tiles', async () => {
+  it('bounds cold-cache thumbnail backfill to the visible ten tiles', async () => {
     const projects = Array.from({ length: 26 }, (_, index) => ({
       projectId: toProjectId(`bounded_project_${index + 1}`),
       name: `Part ${index + 1}`,
@@ -167,12 +195,12 @@ describe('StartScreen collapsed project grid', () => {
       backfillThumbnail
     });
 
-    await waitFor(() => expect(backfillThumbnail).toHaveBeenCalledTimes(9));
+    await waitFor(() => expect(backfillThumbnail).toHaveBeenCalledTimes(10));
     expect(
       backfillThumbnail.mock.calls.map(([project]) => project.name)
-    ).toEqual(projects.slice(0, 9).map((project) => project.name));
+    ).toEqual(projects.slice(0, 10).map((project) => project.name));
 
-    fireEvent.click(screen.getByRole('button', { name: 'Show 17 more parts' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Show 16 more parts' }));
 
     await waitFor(() => expect(backfillThumbnail).toHaveBeenCalledTimes(26));
   });
