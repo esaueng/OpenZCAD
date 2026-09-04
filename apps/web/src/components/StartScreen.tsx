@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import {
   Archive,
   ArchiveRestore,
+  ArrowRight,
   Check,
   ChevronDown,
   CloudOff,
@@ -98,19 +99,56 @@ interface StartScreenProps {
 }
 
 /**
- * How many saved parts a shelf shows before it has to be expanded. Nine parts
- * plus the create tile fills two five-column rows at the wide desktop layout,
- * which is enough to recognise recent work without the demos below being
- * pushed too far down. Shelves without a create tile get its slot back.
+ * How many saved parts a shelf shows before it has to be expanded. Ten parts
+ * fills two five-column rows at the wide desktop layout, which is enough to
+ * recognise recent work without the demos below being pushed too far down.
  */
-const COLLAPSED_PROJECT_LIMIT = 9;
+const COLLAPSED_PROJECT_LIMIT = 10;
 
-function formatLastEdited(updatedAt: string): string {
-  const date = new Date(updatedAt);
-  return `${date.toLocaleDateString()} ${date.toLocaleTimeString(undefined, {
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+function formatTime(date: Date): string {
+  return date.toLocaleTimeString(undefined, {
     hour: 'numeric',
     minute: '2-digit'
-  })}`;
+  });
+}
+
+/**
+ * The full local date and time, for the tooltip and for anything that needs
+ * the exact moment rather than the shelf's shorthand.
+ */
+export function formatLastEditedExact(updatedAt: string): string {
+  const date = new Date(updatedAt);
+  return `${date.toLocaleDateString()} ${formatTime(date)}`;
+}
+
+/**
+ * The shelf's shorthand for when a part was last edited: the time alone for
+ * today, the weekday within the last week, and the date beyond that. Recency
+ * is what a shelf is for — "Tue 4:05 PM" places a part in the week at a
+ * glance where a full date makes every tile read the same.
+ */
+export function formatLastEdited(
+  updatedAt: string,
+  now: Date = new Date()
+): string {
+  const date = new Date(updatedAt);
+  const startOfToday = new Date(now);
+  startOfToday.setHours(0, 0, 0, 0);
+  const dayOffset = Math.floor(
+    (startOfToday.getTime() - date.getTime()) / DAY_MS
+  );
+  if (date.getTime() >= startOfToday.getTime() && date.getTime() <= now.getTime()) {
+    return `Today ${formatTime(date)}`;
+  }
+  if (dayOffset === 0) {
+    return `Yesterday ${formatTime(date)}`;
+  }
+  if (dayOffset > 0 && dayOffset < 6) {
+    return `${date.toLocaleDateString(undefined, { weekday: 'short' })} ${formatTime(date)}`;
+  }
+  return date.toLocaleDateString();
 }
 
 const SHELVES: ReadonlyArray<{
@@ -217,13 +255,13 @@ export function StartScreen({
   // A query is already a narrowing, so it shows every match and retires the
   // expand toggle — being told "3 of 40 match" and *still* having to expand to
   // see the third one would be absurd.
-  const collapsedLimit =
-    shelf === 'active' ? COLLAPSED_PROJECT_LIMIT : COLLAPSED_PROJECT_LIMIT + 1;
-  const overflowCount = search ? 0 : matchingProjects.length - collapsedLimit;
+  const overflowCount = search
+    ? 0
+    : matchingProjects.length - COLLAPSED_PROJECT_LIMIT;
   const visibleProjects =
     expanded || overflowCount <= 0
       ? matchingProjects
-      : matchingProjects.slice(0, collapsedLimit);
+      : matchingProjects.slice(0, COLLAPSED_PROJECT_LIMIT);
 
   // Dragging reorders positions within a shelf, which only means anything when
   // every position is on screen and in its stored order.
@@ -361,21 +399,25 @@ export function StartScreen({
             )
           )}
         </span>
-        <strong className="start-tile-name">{project.name}</strong>
-        <small className="start-tile-meta">
-          rev {project.revisionCount} ·{' '}
-          <time dateTime={project.updatedAt}>
-            {formatLastEdited(project.updatedAt)}
-          </time>
+        <span className="start-tile-body">
+          <strong className="start-tile-name">{project.name}</strong>
+          <small className="start-tile-meta">
+            <time
+              dateTime={project.updatedAt}
+              title={`Last edited ${formatLastEditedExact(project.updatedAt)}`}
+            >
+              {formatLastEdited(project.updatedAt)}
+            </time>
+            <span className="start-tile-rev">rev {project.revisionCount}</span>
+          </small>
           {trashed && (
-            <>
-              {' · '}
+            <small className="start-tile-purge">
               {daysLeft === 0
-                ? 'deleting shortly'
-                : `deletes in ${daysLeft} ${daysLeft === 1 ? 'day' : 'days'}`}
-            </>
+                ? 'Deleting shortly'
+                : `Deletes in ${daysLeft} ${daysLeft === 1 ? 'day' : 'days'}`}
+            </small>
           )}
-        </small>
+        </span>
       </>
     );
 
@@ -634,12 +676,21 @@ export function StartScreen({
   const shelfLabel =
     SHELVES.find((entry) => entry.status === shelf) ?? SHELVES[0]!;
 
+  function createPart() {
+    if (canCreate) {
+      onCreate(trimmedName, units);
+    }
+  }
+
   return (
     <div className="start-screen">
       <header className="start-header">
-        <BrandMark />
-        <h1 className="start-header-name">OpenZCAD</h1>
-        <span className="start-tagline">parametric cad in the browser</span>
+        <div className="start-brand">
+          <BrandMark />
+          <h1 className="start-header-name">OpenZCAD</h1>
+          <span className="start-beta">beta</span>
+        </div>
+        <span className="start-tagline">Parametric CAD in the browser</span>
         <button
           className="start-settings-button icon-button"
           type="button"
@@ -652,18 +703,119 @@ export function StartScreen({
       </header>
 
       <div className="start-body">
-        <section className="start-section">
-          <div className="start-section-head">
-            <h2>Your parts</h2>
-            <span className="start-section-note">
-              {shelfProjects.length === 0
-                ? shelfLabel.empty
-                : search
-                  ? `${matchingProjects.length} of ${shelfProjects.length} match`
-                  : `${shelfProjects.length} ${
-                      shelfProjects.length === 1 ? 'project' : 'projects'
-                    }`}
-            </span>
+        <section className="start-launch" aria-labelledby="start-launch-title">
+          <div className="start-launch-copy">
+            <h2 id="start-launch-title">
+              <Plus size={16} aria-hidden="true" />
+              New project
+            </h2>
+            <p>
+              Name it, choose its units, and start modelling. The name and units
+              can be changed later.
+            </p>
+          </div>
+          <form
+            className="start-launch-form"
+            onSubmit={(event) => {
+              event.preventDefault();
+              createPart();
+            }}
+            onKeyDown={(event) => {
+              // Enter creates from any field, including the units select.
+              if (
+                event.key === 'Enter' &&
+                !(event.target instanceof HTMLButtonElement)
+              ) {
+                event.preventDefault();
+                createPart();
+              }
+            }}
+          >
+            <label className="start-field start-field-name">
+              <span className="start-field-label">Name</span>
+              <input
+                value={name}
+                aria-label="Project name"
+                autoFocus
+                aria-invalid={nameTooLong || undefined}
+                aria-describedby={
+                  nameTooLong ? 'project-name-error' : undefined
+                }
+                onChange={(event) => setName(event.target.value)}
+              />
+            </label>
+            <label className="start-field start-field-units">
+              <span className="start-field-label">Units</span>
+              <select
+                value={units}
+                aria-label="Unit system"
+                onChange={(event) =>
+                  setUnits(event.target.value as UnitSystem)
+                }
+              >
+                <option value="mm">Millimeters</option>
+                <option value="cm">Centimeters</option>
+                <option value="m">Meters</option>
+                <option value="inch">Inches</option>
+              </select>
+            </label>
+            <button
+              type="submit"
+              className="primary start-launch-submit"
+              disabled={!canCreate}
+            >
+              Create project
+            </button>
+            {nameTooLong && (
+              <small
+                id="project-name-error"
+                className="field-error start-launch-error"
+                role="alert"
+              >
+                Project name must be at most {MAX_PROJECT_NAME_LENGTH}{' '}
+                characters.
+              </small>
+            )}
+          </form>
+        </section>
+
+        <section className="start-section" aria-labelledby="start-parts-title">
+          <div className="start-toolbar">
+            <div className="start-toolbar-title">
+              <h2 id="start-parts-title">Your parts</h2>
+              <span className="start-section-note">
+                {shelfProjects.length === 0
+                  ? shelfLabel.empty
+                  : search
+                    ? `${matchingProjects.length} of ${shelfProjects.length} match`
+                    : `${shelfProjects.length} ${
+                        shelfProjects.length === 1 ? 'project' : 'projects'
+                      }`}
+              </span>
+            </div>
+
+            <div className="start-shelf-tabs" role="tablist">
+              {SHELVES.map((entry) => (
+                <button
+                  key={entry.status}
+                  type="button"
+                  role="tab"
+                  aria-selected={shelf === entry.status}
+                  className={shelf === entry.status ? 'is-active' : undefined}
+                  onClick={() => {
+                    setShelf(entry.status);
+                    setExpanded(false);
+                    setOpenMenu(null);
+                  }}
+                >
+                  {entry.label}
+                  <span className="start-shelf-count">
+                    {shelfCount(entry.status)}
+                  </span>
+                </button>
+              ))}
+            </div>
+
             {userProjects.length > 0 && (
               <div className="start-search">
                 <Search size={13} aria-hidden="true" />
@@ -697,48 +849,23 @@ export function StartScreen({
             )}
           </div>
 
-          <div className="start-shelf-bar">
-            <div className="start-shelf-tabs" role="tablist">
-              {SHELVES.map((entry) => (
-                <button
-                  key={entry.status}
-                  type="button"
-                  role="tab"
-                  aria-selected={shelf === entry.status}
-                  className={shelf === entry.status ? 'is-active' : undefined}
-                  onClick={() => {
-                    setShelf(entry.status);
-                    setExpanded(false);
-                    setOpenMenu(null);
-                  }}
-                >
-                  {entry.label}
-                  <span className="start-shelf-count">
-                    {shelfCount(entry.status)}
-                  </span>
-                </button>
-              ))}
+          {shelf === 'deleted' && shelfProjects.length > 0 && (
+            <div className="start-shelf-bar">
+              <span className="start-shelf-hint">
+                Deleted parts are kept for {TRASH_RETENTION_DAYS} days, then
+                destroyed.
+              </span>
+              <button
+                type="button"
+                className="start-shelf-action is-destructive"
+                disabled={busy}
+                onClick={() => onEmptyTrash(shelfProjects)}
+              >
+                <Trash2 size={13} aria-hidden="true" />
+                Empty trash
+              </button>
             </div>
-
-            {shelf === 'deleted' && (
-              <>
-                <span className="start-shelf-hint">
-                  deleted parts are kept for {TRASH_RETENTION_DAYS} days
-                </span>
-                {shelfProjects.length > 0 && (
-                  <button
-                    type="button"
-                    className="start-shelf-action is-destructive"
-                    disabled={busy}
-                    onClick={() => onEmptyTrash(shelfProjects)}
-                  >
-                    <Trash2 size={13} aria-hidden="true" />
-                    Empty trash
-                  </button>
-                )}
-              </>
-            )}
-          </div>
+          )}
 
           {syncRun && syncTotals ? (
             <div className="start-sync-panel" role="status" aria-live="polite">
@@ -861,86 +988,44 @@ export function StartScreen({
             )
           )}
 
-          <div className="start-tile-grid">
-            {shelf === 'active' && (
-              <form
-                className="start-tile start-tile-new"
-                onSubmit={(event) => {
-                  event.preventDefault();
-                  if (canCreate) {
-                    onCreate(trimmedName, units);
-                  }
-                }}
-                onKeyDown={(event) => {
-                  // Enter creates from any field, including the units select.
-                  if (
-                    event.key === 'Enter' &&
-                    !(event.target instanceof HTMLButtonElement)
-                  ) {
-                    event.preventDefault();
-                    if (canCreate) {
-                      onCreate(trimmedName, units);
-                    }
-                  }
-                }}
-              >
-                <span className="start-tile-new-head">
-                  <Plus size={15} aria-hidden="true" />
-                  New part
-                </span>
-                <input
-                  value={name}
-                  aria-label="Project name"
-                  autoFocus
-                  aria-invalid={nameTooLong || undefined}
-                  aria-describedby={
-                    nameTooLong ? 'project-name-error' : undefined
-                  }
-                  onChange={(event) => setName(event.target.value)}
-                />
-                {nameTooLong && (
-                  <small
-                    id="project-name-error"
-                    className="field-error"
-                    role="alert"
-                  >
-                    Project name must be at most {MAX_PROJECT_NAME_LENGTH}{' '}
-                    characters.
-                  </small>
-                )}
-                <select
-                  value={units}
-                  aria-label="Unit system"
-                  onChange={(event) =>
-                    setUnits(event.target.value as UnitSystem)
-                  }
-                >
-                  <option value="mm">Millimeters</option>
-                  <option value="cm">Centimeters</option>
-                  <option value="m">Meters</option>
-                  <option value="inch">Inches</option>
-                </select>
-                <button
-                  type="submit"
-                  className="primary wide"
-                  disabled={!canCreate}
-                >
-                  Create project
-                </button>
-              </form>
-            )}
+          {visibleProjects.length > 0 && (
+            <div className="start-tile-grid">
+              {visibleProjects.map((project, index) =>
+                renderProjectTile(project, index)
+              )}
+            </div>
+          )}
 
-            {visibleProjects.map((project, index) =>
-              renderProjectTile(project, index)
-            )}
-          </div>
-
-          {shelf !== 'active' && shelfProjects.length === 0 && (
-            <p className="start-no-matches" role="status">
-              {shelf === 'archived'
-                ? 'Nothing archived. Archive a part to keep it without it crowding the grid.'
-                : `Nothing in the recycle bin. Deleted parts wait here for ${TRASH_RETENTION_DAYS} days before they are destroyed.`}
-            </p>
+          {shelfProjects.length === 0 && (
+            <div className="start-empty" role="status">
+              <span className="start-empty-mark" aria-hidden="true">
+                <BrandMark />
+              </span>
+              {shelf === 'active' ? (
+                <>
+                  <strong>No parts yet</strong>
+                  <span>
+                    Create one above, or open a demo below to see a part walk
+                    through its revisions.
+                  </span>
+                </>
+              ) : shelf === 'archived' ? (
+                <>
+                  <strong>Nothing archived.</strong>
+                  <span>
+                    Archive a part to keep it without it crowding the grid.
+                  </span>
+                </>
+              ) : (
+                <>
+                  <strong>Nothing in the recycle bin.</strong>
+                  <span>
+                    Deleted parts wait here for {TRASH_RETENTION_DAYS} days
+                    before they are destroyed.
+                  </span>
+                </>
+              )}
+            </div>
           )}
 
           {search &&
@@ -975,12 +1060,14 @@ export function StartScreen({
           )}
         </section>
 
-        <section className="start-section">
-          <div className="start-section-head">
-            <h2>Design revision demos</h2>
-            <span className="start-section-note">
-              walk a part through revisions A → C
-            </span>
+        <section className="start-section" aria-labelledby="start-demos-title">
+          <div className="start-toolbar">
+            <div className="start-toolbar-title">
+              <h2 id="start-demos-title">Learn by example</h2>
+              <span className="start-section-note">
+                each demo walks a part through revisions A → C
+              </span>
+            </div>
           </div>
           <div className="demo-list">
             {demos.map((demo) => (
@@ -996,16 +1083,30 @@ export function StartScreen({
                 onClick={() => onOpenDemo(demo)}
               >
                 <span className="demo-card-head">
-                  <GraduationCap size={14} aria-hidden="true" />
-                  <strong>{demo.name.replace('Demo · ', '')}</strong>
+                  <span className="demo-card-icon">
+                    <GraduationCap size={15} aria-hidden="true" />
+                  </span>
+                  <span className="demo-card-title">
+                    <strong>{demo.name.replace('Demo · ', '')}</strong>
+                    <span className="demo-card-tagline">{demo.tagline}</span>
+                  </span>
                 </span>
-                <span className="demo-card-tagline">{demo.tagline}</span>
                 <span className="demo-card-revs">
-                  {demo.revisions.map((revision) => (
-                    <span key={revision} className="demo-rev">
-                      {revision}
-                    </span>
-                  ))}
+                  {demo.revisions.map((revision) => {
+                    const [letter, ...rest] = revision.split(' — ');
+                    return (
+                      <span key={revision} className="demo-rev">
+                        <span className="demo-rev-letter">{letter}</span>
+                        <span className="demo-rev-label">
+                          {rest.join(' — ') || revision}
+                        </span>
+                      </span>
+                    );
+                  })}
+                </span>
+                <span className="demo-card-cta">
+                  Open demo
+                  <ArrowRight size={13} aria-hidden="true" />
                 </span>
               </button>
             ))}
