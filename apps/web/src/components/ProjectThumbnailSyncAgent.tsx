@@ -9,9 +9,11 @@ import {
   uploadCloudThumbnail,
   type ThumbnailCloudTransport
 } from '../lib/cloudThumbnail';
-import { renderPartThumbnail } from '../lib/partThumbnail';
-
-const THUMBNAIL_REFRESH_MS = 4000;
+import { queuePartThumbnail, renderThumbnailFrame } from '../lib/partThumbnail';
+import {
+  sharedThumbnailCapture,
+  type ThumbnailCapture
+} from '../lib/projectThumbnailCapture';
 
 interface ProjectThumbnailSyncAgentProps {
   projectId: ProjectId;
@@ -30,12 +32,17 @@ interface ProjectThumbnailSyncAgentProps {
       updatedAt: string;
     }
   ): Promise<void>;
+  /** Injected by tests; the app stages into the shared instance. */
+  capture?: ThumbnailCapture;
 }
 
 /**
- * Refreshes the shelf projection while the document meshes are already in
- * memory. Kept behind a workspace-only lazy boundary so cloud preview support
- * adds no weight to the launcher that displays the cards.
+ * Stages the shelf projection while the document meshes are already in
+ * memory, and publishes each captured card to the account. The capture itself
+ * lives in {@link sharedThumbnailCapture} so App's leave paths can flush it
+ * whether or not this agent is mounted — it is not, during every rebuild.
+ * Kept behind a workspace-only lazy boundary so cloud preview support adds no
+ * weight to the launcher that displays the cards.
  */
 export function ProjectThumbnailSyncAgent({
   projectId,
@@ -45,60 +52,55 @@ export function ProjectThumbnailSyncAgent({
   publishToCloud,
   transport,
   loadThumbnail,
-  saveThumbnail
+  saveThumbnail,
+  capture = sharedThumbnailCapture
 }: ProjectThumbnailSyncAgentProps) {
   useEffect(() => {
-    let cancelled = false;
-    const timer = setTimeout(() => {
-      void (async () => {
-        const cached = await loadThumbnail(projectId).catch(() => null);
-        if (cancelled) {
-          return;
-        }
-        let source = cached?.version === version ? cached.source : undefined;
-        if (source === undefined) {
-          source = await renderPartThumbnail(
-            Object.values(bodyRepresentations).filter((body) => !body.consumed)
-          ).catch(() => null);
-        }
-        if (cancelled) {
-          return;
-        }
-        if (cached?.version !== version) {
-          await saveThumbnail(projectId, { source, version, updatedAt }).catch(
-            () => undefined
-          );
-        }
-        if (
-          !source ||
-          !publishToCloud ||
-          (cached?.version === version && cached.artifactId)
-        ) {
-          return;
-        }
-        const artifactId = await uploadCloudThumbnail(transport, {
-          projectId,
-          version,
-          updatedAt,
-          source
-        }).catch(() => null);
-        if (cancelled || !artifactId) {
-          return;
-        }
-        await saveThumbnail(projectId, {
-          source,
-          artifactId,
-          version,
-          updatedAt
-        }).catch(() => undefined);
-      })();
-    }, THUMBNAIL_REFRESH_MS);
-    return () => {
-      cancelled = true;
-      clearTimeout(timer);
-    };
+    const unsubscribe = capture.subscribe((captured) => {
+      if (
+        captured.projectId !== projectId ||
+        captured.version !== version ||
+        !captured.source ||
+        !publishToCloud ||
+        captured.artifactId
+      ) {
+        return;
+      }
+      const source = captured.source;
+      // Deliberately not cancelled on unmount: the leave flush notifies while
+      // this agent is still mounted and the upload must outlive it. The
+      // record is keyed by version, so a late write cannot mislabel anything.
+      void uploadCloudThumbnail(transport, {
+        projectId,
+        version,
+        updatedAt,
+        source
+      })
+        .then((artifactId) =>
+          saveThumbnail(projectId, { source, artifactId, version, updatedAt })
+        )
+        .catch(() => undefined);
+    });
+    capture.stage(
+      {
+        projectId,
+        version,
+        updatedAt,
+        bodies: Object.values(bodyRepresentations).filter(
+          (body) => !body.consumed
+        )
+      },
+      {
+        render: renderThumbnailFrame,
+        load: loadThumbnail,
+        save: saveThumbnail,
+        queue: queuePartThumbnail
+      }
+    );
+    return unsubscribe;
   }, [
     bodyRepresentations,
+    capture,
     loadThumbnail,
     projectId,
     publishToCloud,

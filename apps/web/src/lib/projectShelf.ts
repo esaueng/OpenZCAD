@@ -8,6 +8,61 @@ import {
 import type { ProjectThumbnailRecord } from './localProjectStore';
 
 /**
+ * Whether a device record was rendered from the version a listing describes.
+ * The one rule shared by every consumer of the thumbnail store — the shelf
+ * loader, the cloud publisher, and the workspace capture — so "is this record
+ * current" cannot drift into three answers again. A listing that predates
+ * `documentVersion` cannot be checked and counts as described.
+ *
+ * | consumer  | question                              | uses               |
+ * |-----------|---------------------------------------|--------------------|
+ * | loader    | may I *show* this record?             | cachedThumbnailSource (tolerates stale images) |
+ * | publisher | may I *publish* this record?          | this, strictly     |
+ * | capture   | is this version already on disk?      | this, strictly     |
+ */
+export function thumbnailRecordDescribes(
+  record: Pick<ProjectThumbnailRecord, 'version'> | null,
+  project: Pick<ProjectSummary, 'documentVersion'>
+): boolean {
+  return (
+    record !== null &&
+    (project.documentVersion === undefined ||
+      record.version === project.documentVersion)
+  );
+}
+
+/**
+ * The shelf's preview source: this device's record, upgraded by the account's
+ * artifact when the listing names one the record does not carry. Reads a
+ * small image and nothing else — never the project document, which for a
+ * large import is the load that once took the start screen down.
+ *
+ * The account copy only ever upgrades a card. When it cannot be fetched (a
+ * listing one refresh stale points at a thumbnail the Worker has already
+ * superseded and deleted, or the device is offline) the device image is still
+ * the part, and a placeholder would be strictly worse than a stale picture.
+ */
+export async function resolveShelfThumbnail(
+  project: ProjectSummary,
+  host: {
+    loadCached(projectId: string): Promise<ProjectThumbnailRecord | null>;
+    download(artifactId: string): Promise<string>;
+  }
+): Promise<string | null | undefined> {
+  const cached = await host.loadCached(project.projectId).catch(() => null);
+  const cachedSource = cachedThumbnailSource(cached, project);
+  if (cachedSource !== undefined || !project.thumbnailArtifactId) {
+    return cachedSource;
+  }
+  const cloud = await host
+    .download(project.thumbnailArtifactId)
+    .catch(() => undefined);
+  // A cached null is not a fallback here: the account holds an image, so the
+  // part has geometry, and "No geometry" would be wrong. Placeholder instead.
+  return cloud ?? (cached?.source || undefined);
+}
+
+/**
  * What this device's cached preview may still say about the project the shelf
  * is listing: the source to show, or undefined for "ask the backfill".
  *
