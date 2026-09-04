@@ -12,6 +12,15 @@ const WASM_HEADER = Uint8Array.from([
 export const KERNEL_WASM_ASSET_PATTERN =
   /^assets\/(?:remus|brepkit)_wasm_bg-.*\.wasm$/;
 
+/**
+ * The file-format translator module (STEP, IGES, STL, 3MF, OBJ, PLY, glTF),
+ * fetched only around an import or export. It is outside the kernel policy
+ * above by construction; `report-bundle-sizes.mjs` holds its lazy-asset
+ * budget.
+ */
+export const TRANSLATOR_WASM_ASSET_PATTERN =
+  /^assets\/remus_wasm_io_bg-.*\.wasm$/;
+
 export const KERNEL_WASM_POLICY = Object.freeze({
   rawReviewBytes: 9 * MIB,
   rawHardBytes: 10 * MIB,
