@@ -2,6 +2,9 @@ name: ci
 
 on:
   pull_request:
+    # `labeled`/`unlabeled` re-run the kernel-bump guard below when the
+    # `kernel-bump` label is applied or removed, without needing a push.
+    types: [opened, synchronize, reopened, labeled, unlabeled]
   workflow_dispatch:
 
 concurrency:
@@ -26,11 +29,17 @@ jobs:
       # parity-tested review; a dependency bump that carries one along bypasses
       # all of it. A `dependabot.yml` ignore entry does not help — Dependabot
       # never proposes this update, it falls out of re-resolution.
+      #
+      # A bump is announced either by landing on the updater's
+      # `automation/remus-*` branch or by carrying the `kernel-bump` label:
+      # consumer changes that cannot build against the old kernel have to move
+      # the pin in the same PR, and the label says so on purpose.
       - name: Refuse an unannounced geometry kernel bump
         if: github.event_name == 'pull_request'
         env:
           BASE_REF: ${{ github.base_ref }}
           HEAD_REF: ${{ github.head_ref }}
+          ANNOUNCED: ${{ contains(github.event.pull_request.labels.*.name, 'kernel-bump') }}
         run: |
           # One commit of the base branch is all the comparison needs; the
           # default checkout is shallow and does not carry it.
@@ -62,8 +71,10 @@ jobs:
             echo "Kernel pin unchanged at $head."
           elif [[ "$HEAD_REF" == automation/remus-* ]]; then
             echo "Kernel moved $base -> $head on the updater branch, as intended."
+          elif [[ "$ANNOUNCED" == "true" ]]; then
+            echo "Kernel moved $base -> $head, announced with the kernel-bump label."
           else
-            echo "::error title=Unannounced kernel bump::pnpm-lock.yaml moves the Remus kernel $base -> $head on a branch that is not automation/remus-*. Any lockfile regeneration re-resolves the #main specifier; land kernel changes through update-remus.yml so they get their own parity-tested review."
+            echo "::error title=Unannounced kernel bump::pnpm-lock.yaml moves the Remus kernel $base -> $head on a branch that is not automation/remus-* and the PR has no kernel-bump label. Any lockfile regeneration re-resolves the #main specifier; land kernel changes through update-remus.yml, or add the kernel-bump label when the consumer change itself needs the new kernel."
             exit 1
           fi
       - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6
