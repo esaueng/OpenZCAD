@@ -764,12 +764,9 @@ export function adoptProjectDocument(
   if (rootNode?.kind === 'project') {
     copy.nodes[copy.rootNodeId] = { ...rootNode, name };
   }
-  const adopted: ProjectDocument = {
-    ...copy,
-    ownerUserId,
-    name,
-    derived: { ...copy.derived, updatedAt: nowIso() }
-  };
+  // Adoption is a change of home, not an edit: `updatedAt` stays the device's
+  // last edit so the shelf keeps its order after a bulk save to the account.
+  const adopted: ProjectDocument = { ...copy, ownerUserId, name };
   // A document with no revision at all cannot carry a checkpoint. That should
   // not happen, but adoption is a rescue path for documents this code has never
   // seen, so it declines to be the thing that refuses them.

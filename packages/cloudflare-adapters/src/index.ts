@@ -3122,7 +3122,10 @@ export class D1R2PersistenceService implements PersistenceService {
     organization: ProjectOrganization = DEFAULT_PROJECT_ORGANIZATION
   ): Promise<ProjectSummary> {
     this.assertDocumentCanBeStored(document);
-    const updatedAt = nowIso();
+    // The row's edit time is the document's, not the insert's: a fresh document
+    // carries "now" already, and an adopted one must keep its device edit time
+    // or saving to the account reorders the shelf.
+    const updatedAt = document.derived.updatedAt;
     if (this.projectStorageBucket()) {
       const write = await this.putProjectStorageObjects(document);
       const envelope = projectObjectEnvelope(document, write.objectId);
