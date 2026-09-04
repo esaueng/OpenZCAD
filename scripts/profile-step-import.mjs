@@ -49,13 +49,27 @@ const REMUS_PACKAGE_JSON = path.join(
   repoRoot,
   'packages/kernel-adapter/node_modules/remus-wasm/package.json'
 );
+// STEP parsing lives in the translator module; the kernel only restores the
+// arena document it hands back.
+const REMUS_IO_PACKAGE_JSON = path.join(
+  repoRoot,
+  'packages/kernel-adapter/node_modules/remus-wasm-io/package.json'
+);
+
+function nodeEntry(packageJson, name) {
+  const manifest = JSON.parse(fs.readFileSync(packageJson, 'utf8'));
+  if (typeof manifest.main !== 'string' || manifest.main.length === 0) {
+    throw new Error(`${name} does not declare a Node entry point.`);
+  }
+  return path.join(path.dirname(packageJson), manifest.main);
+}
 
 function remusNodeEntry() {
-  const manifest = JSON.parse(fs.readFileSync(REMUS_PACKAGE_JSON, 'utf8'));
-  if (typeof manifest.main !== 'string' || manifest.main.length === 0) {
-    throw new Error('remus-wasm does not declare a Node entry point.');
-  }
-  return path.join(path.dirname(REMUS_PACKAGE_JSON), manifest.main);
+  return nodeEntry(REMUS_PACKAGE_JSON, 'remus-wasm');
+}
+
+function remusIoNodeEntry() {
+  return nodeEntry(REMUS_IO_PACKAGE_JSON, 'remus-wasm-io');
 }
 
 // Matches the app's display tessellation for a bracket-sized (~60 mm) part:
@@ -195,8 +209,10 @@ function runChild(filePath, withMesh) {
   };
   const require = createRequire(import.meta.url);
   let remus;
+  let remusIo;
   try {
     remus = require(remusNodeEntry());
+    remusIo = require(remusIoNodeEntry());
   } finally {
     WebAssembly.Instance = OriginalInstance;
   }
@@ -205,12 +221,15 @@ function runChild(filePath, withMesh) {
 
   const bytes = fs.readFileSync(filePath);
   const kernel = new remus.BrepKernel();
+  const io = new remusIo.RemusIo();
+  const importStep = (...budget) =>
+    kernel.deserializeSolids(io.importStep(bytes, ...budget));
   result.wasmMemBaseBytes = memBytes();
 
   let handles = null;
   const start = performance.now();
   try {
-    handles = kernel.importStep(bytes);
+    handles = importStep();
   } catch (error) {
     result.error = String(error?.message ?? error);
     const panic = remus.lastPanicMessage?.();
@@ -221,7 +240,7 @@ function runChild(filePath, withMesh) {
     // Learn whether the wasm API accepts budgets above the production
     // defaults (docs say "tighten", implying a clamp — verify it).
     try {
-      handles = kernel.importStep(bytes, bytes.length, 100_000_000);
+      handles = importStep(bytes.length, 100_000_000);
       result.budget = 'raised';
       result.error = null;
     } catch (retryError) {

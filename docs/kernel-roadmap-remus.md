@@ -87,7 +87,7 @@ a P-Class issue yet. Each deserves an upstream reproduction bundle and a fix
 5. **Fillet failure modes that don't fail**: returning the input handle as
    if success, and (historically) a volume-doubled solid from the
    partial-revolve blender. The v2 transacted wrappers largely close this;
-   finish the migration so *no* public mutating path can return the input
+   finish the migration so _no_ public mutating path can return the input
    handle on failure.
 6. **Cross-drilled bodies render differently than they measure** — at equal
    radii the viewport shows no hole while volume says there is one; at
@@ -101,8 +101,8 @@ their tests surviving as kernel regressions.
 
 ### S2. Exact measurement — a new kernel ask, not in the P-Class program
 
-`volume()` integrates a tessellation clamped to `diag * 5e-5` of the *whole
-solid*, so an identical 2 mm fillet measures 0.2% over on a 20 mm block and
+`volume()` integrates a tessellation clamped to `diag * 5e-5` of the _whole
+solid_, so an identical 2 mm fillet measures 0.2% over on a 20 mm block and
 3.5% over on a 2 m beam, silently (`test/filleted-body-volume.test.ts`, both
 `it.fails`). `faceArea` on a plane with a curved boundary is a fixed 256-point
 inscribed polygon at every deflection. Consequences ripple everywhere: the
@@ -182,7 +182,7 @@ Ordered by product pull, not kernel-internal convenience.
 Everything needed to convert the remaining hash-only lineage classes into
 tracked lineage. ADR-013 already specifies the contract (five bridge
 requirements); the kernel's RFC 0003 stack means most of the machinery exists.
-*Landed 2026-09-02 without a kernel bridge:* booleans and add/cut extrudes
+_Landed 2026-09-02 without a kernel bridge:_ booleans and add/cut extrudes
 publish carrier-derived lineage — a result face inherits an operand face's
 identity when both are the only faces on one quantized plane or cylinder
 (`deriveRemusBooleanCarrierLineage`, `test/boolean-carrier-lineage.test.ts`);
@@ -208,16 +208,16 @@ slot through a top) still need the history path below. Remaining:
 
 Each of these replaces a measured workaround:
 
-| Ask | Retires |
-| --- | --- |
-| Trimmed edge parameter domain (P-Class 2.0 makes this real) | `getEdgeCurveParameters` returning the untrimmed period; the frozen-witness arc displacement pin; curvature-based arc reconstruction |
-| Face material-sense query (bore vs. boss) | Multiple `classifyPoint` probes per through-hole classification (`getShapeOrientation` returns `forward` for every face) |
-| Ordered wire traversal — **already bound** (`getFaceOuterWire`, `isEdgeForwardInWire`, `isWireClosed`), adopt in the adapter | `chainWireLoop`'s tolerance-matched endpoint walk on a proof path whose contract forbids geometric guessing |
-| Per-edge convexity/tangency classification | `adjacencyRelation`'s radial-sense inference with a `'convex'` fallback |
-| Distinct identity for sphere patches (and analytic params for sphere/cone/torus in ADR-011 signatures) | The live product limit that a face pick on an imported sphere cannot be stored |
-| Seam-edge representation parity (sphere: 32 of 32 edges classified as seams, so no feature edges draw) | The largest surviving corpus divergence class |
-| `maxFilletRadius(solid, edges)` | The 3-rung retry ladder that re-runs failed fillets to phrase an error |
-| Batched `classifyPoint` + mesh-deviation metric | ~4.5 ms/probe × 40k probes (~3 uninterruptible minutes) in the reconstruction contract |
+| Ask                                                                                                                          | Retires                                                                                                                              |
+| ---------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
+| Trimmed edge parameter domain (P-Class 2.0 makes this real)                                                                  | `getEdgeCurveParameters` returning the untrimmed period; the frozen-witness arc displacement pin; curvature-based arc reconstruction |
+| Face material-sense query (bore vs. boss)                                                                                    | Multiple `classifyPoint` probes per through-hole classification (`getShapeOrientation` returns `forward` for every face)             |
+| Ordered wire traversal — **already bound** (`getFaceOuterWire`, `isEdgeForwardInWire`, `isWireClosed`), adopt in the adapter | `chainWireLoop`'s tolerance-matched endpoint walk on a proof path whose contract forbids geometric guessing                          |
+| Per-edge convexity/tangency classification                                                                                   | `adjacencyRelation`'s radial-sense inference with a `'convex'` fallback                                                              |
+| Distinct identity for sphere patches (and analytic params for sphere/cone/torus in ADR-011 signatures)                       | The live product limit that a face pick on an imported sphere cannot be stored                                                       |
+| Seam-edge representation parity (sphere: 32 of 32 edges classified as seams, so no feature edges draw)                       | The largest surviving corpus divergence class                                                                                        |
+| `maxFilletRadius(solid, edges)`                                                                                              | The 3-rung retry ladder that re-runs failed fillets to phrase an error                                                               |
+| Batched `classifyPoint` + mesh-deviation metric                                                                              | ~4.5 ms/probe × 40k probes (~3 uninterruptible minutes) in the reconstruction contract                                               |
 
 ### C3. General curved booleans (P-Class M2) — the load-bearing wall
 
@@ -227,7 +227,7 @@ items wearing a boolean badge); then 2.2 sphere-sphere and 2.3 Steinmetz
 (cheap exact arms); then **2.4 quadric×quadric with NURBS seams** — this is
 the item that fixes the census fallback rows, the torus tube-band gap behind
 S1.6, and feeds every blend/direct-edit milestone; then 2.5 NURBS×NURBS,
-which is the *imported-body ∪ imported-body* case — the workflow a
+which is the _imported-body ∪ imported-body_ case — the workflow a
 STEP-centric product lives on; 2.6 scale bands throughout.
 
 ### C4. Blend depth (P-Class M5, subset)
@@ -309,6 +309,11 @@ selection, rendering) so the kernel work has a consumer the day it lands
   — partial (PR #165): the optimized Remus package reduced the pinned raw
   asset by 994,223 bytes (11.34%), and the package-size controls are complete;
   representative cold-load timing remains open.
+
+  — the translators moved out of the kernel module (ADR-023): the kernel
+  asset carries no STEP/IGES/mesh readers or writers, which ship as the lazy
+  `remus-wasm-io` asset instead. Cold-load timing still open.
+
 - **W4. Execute the ADR-015 measurement list** (cold rebuild, warm hit,
   eviction, retained heap, large-document cloning, STEP first-load — median
   and p95) and adopt performance budget gates (P-Class 8.2) kernel-side so
@@ -358,22 +363,22 @@ selection, rendering) so the kernel work has a consumer the day it lands
 Dependency-driven; phases overlap where lanes are disjoint. Kernel items name
 their P-Class issue where one exists.
 
-| Order | Item | Track | Where | Effort | Depends on |
-| --- | --- | --- | --- | --- | --- |
-| 1 | Doc/pin hygiene (S5) | S | both | S | — |
-| 2 | Silent-wrongness defects: pattern overlap, pushPull cap, T-vertex cut, operand drop (S1; touches 2.7) | S | kernel | M–L | — |
-| 3 | Cancellation + budgets (S3 / 2.8) | S/W | kernel + worker | M | — |
-| 4 | `approx_census` in CI; fuzz gaps (S4) | S | kernel | S–M | — |
-| 5 | Exact measurement integrator (S2) | S | kernel | M | — |
-| 6 | M2 booleans: 2.1 → 2.2 → 2.3 → 2.4 → 2.5 → 2.6 (C3) | C | kernel | L (serial) | 2 |
-| 7 | Lineage bridge: unify-evolution + adapter adoption (C1) | C | kernel + adapter | L (parallel lanes) | — (pattern class waits on 2) |
-| 8 | Topology query surface (C2) | C | kernel + adapter | M | — |
-| 9 | Differential harness + real-model corpus (S4 / 8.1, 8.5) | S | both | M–L | after 2.4 per kernel plan |
-| 10 | Sketch constraints, sections, mass properties, HLR export (C6) | C | app | M–L | — |
-| 11 | Blend depth subset (C4 / M5) + imported-feature completion (C5) | C | kernel + app | L | 6 |
-| 12 | Parallel tessellation + threading ADR (W2) | W | kernel + app | M | 9 guarding |
-| 13 | Publish Remus + release cadence (O1–O2) | O | kernel | M | maintainer decision |
-| 14 | Direct modeling (M6) and body taxonomy (M4) per product pull (C7) | C | kernel + app | XL | 6, 7 |
+| Order | Item                                                                                                  | Track | Where            | Effort             | Depends on                   |
+| ----- | ----------------------------------------------------------------------------------------------------- | ----- | ---------------- | ------------------ | ---------------------------- |
+| 1     | Doc/pin hygiene (S5)                                                                                  | S     | both             | S                  | —                            |
+| 2     | Silent-wrongness defects: pattern overlap, pushPull cap, T-vertex cut, operand drop (S1; touches 2.7) | S     | kernel           | M–L                | —                            |
+| 3     | Cancellation + budgets (S3 / 2.8)                                                                     | S/W   | kernel + worker  | M                  | —                            |
+| 4     | `approx_census` in CI; fuzz gaps (S4)                                                                 | S     | kernel           | S–M                | —                            |
+| 5     | Exact measurement integrator (S2)                                                                     | S     | kernel           | M                  | —                            |
+| 6     | M2 booleans: 2.1 → 2.2 → 2.3 → 2.4 → 2.5 → 2.6 (C3)                                                   | C     | kernel           | L (serial)         | 2                            |
+| 7     | Lineage bridge: unify-evolution + adapter adoption (C1)                                               | C     | kernel + adapter | L (parallel lanes) | — (pattern class waits on 2) |
+| 8     | Topology query surface (C2)                                                                           | C     | kernel + adapter | M                  | —                            |
+| 9     | Differential harness + real-model corpus (S4 / 8.1, 8.5)                                              | S     | both             | M–L                | after 2.4 per kernel plan    |
+| 10    | Sketch constraints, sections, mass properties, HLR export (C6)                                        | C     | app              | M–L                | —                            |
+| 11    | Blend depth subset (C4 / M5) + imported-feature completion (C5)                                       | C     | kernel + app     | L                  | 6                            |
+| 12    | Parallel tessellation + threading ADR (W2)                                                            | W     | kernel + app     | M                  | 9 guarding                   |
+| 13    | Publish Remus + release cadence (O1–O2)                                                               | O     | kernel           | M                  | maintainer decision          |
+| 14    | Direct modeling (M6) and body taxonomy (M4) per product pull (C7)                                     | C     | kernel + app     | XL                 | 6, 7                         |
 
 The first five rows are the stability program and are deliberately in front of
 every capability row: the single-kernel architecture means a silent kernel

@@ -53,6 +53,7 @@ React workspace (apps/web)
   ├─ Three.js viewport                            (disposable projection)
   └─ geometry Web Worker
        └─ remus-wasm  — the exact B-rep kernel, for every document
+       └─ remus-wasm-io  — its file-format translators, loaded only around import/export
                            including STEP imports
 
 Cloudflare Worker (beta orchestration only)

@@ -1,8 +1,17 @@
 import { readFileSync } from 'node:fs';
 
 import { drillHole } from '../packages/kernel-adapter/src/exact-cylinder-ops';
-import { RemusKernel } from '../packages/kernel-adapter/src/remus-runtime';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import {
+  RemusKernel,
+  loadRemusTranslators
+} from '../packages/kernel-adapter/src/remus-runtime';
+import { afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+
+// `measureImportedStep` parses on the synchronous path, so the translator
+// module must be resident before the first case runs.
+beforeAll(async () => {
+  await loadRemusTranslators();
+});
 
 import {
   detectReflectionSymmetries,
