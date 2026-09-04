@@ -78,6 +78,9 @@ export function ParameterRow({
   }
 
   const describable = onDescribe && parameter.exposed === true;
+  const formattedValue = value === undefined ? 'err' : formatNumber(value);
+  const showValue =
+    value === undefined || formattedValue !== parameter.expression.trim();
   return (
     <div className={describable ? 'param-entry' : undefined}>
     <div
@@ -112,11 +115,13 @@ export function ParameterRow({
           }
         }}
       />
-      <span
-        className={`param-value mono ${value === undefined ? 'error' : ''}`}
-      >
-        {value === undefined ? 'err' : formatNumber(value)}
-      </span>
+      {showValue && (
+        <span
+          className={`param-value mono ${value === undefined ? 'error' : ''}`}
+        >
+          {formattedValue}
+        </span>
+      )}
       {onExpose && (
         <button
           type="button"
