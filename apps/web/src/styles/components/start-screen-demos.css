@@ -2,12 +2,9 @@
    Split out of app.css; the cascade still depends on the import order
    in app.css, so this file is not free to move. ── */
 
-/* ── Start screen demo cards ─────────────────────────────── */
-
 /* Demos sit below the parts grid as a single row: still reachable, no longer
    outranking the parts you actually own. Column flow keeps them on one line for
-   any number of demos, and the rev chips wrap inside a card rather than pushing
-   a card onto a second row. */
+   any number of demos; the revision walk stacks inside each card. */
 .demo-list {
   display: grid;
   grid-auto-flow: column;
@@ -17,13 +14,14 @@
 
 .demo-card {
   display: grid;
+  grid-template-rows: auto 1fr auto;
   min-width: 0;
-  gap: 5px;
-  padding: 9px 11px;
+  gap: var(--sp-3);
+  padding: var(--sp-3) var(--sp-4);
   color: var(--color-text-muted);
-  background: var(--color-surface-2);
+  background: var(--color-surface);
   border: var(--border-thin);
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-lg);
   text-align: left;
   transition:
     background-color var(--dur-fast) var(--ease-out),
@@ -35,7 +33,6 @@
 .demo-card:hover:not(:disabled),
 .demo-card:focus-visible {
   color: var(--color-text);
-  background: var(--color-surface-hover);
   border-color: var(--color-accent-border);
   box-shadow: 0 4px 18px rgba(0, 0, 0, 0.3);
   transform: translateY(-1px);
@@ -47,48 +44,112 @@
 }
 
 .demo-card-head {
-  display: inline-flex;
-  align-items: center;
-  gap: 7px;
-  color: var(--color-text);
-  font-size: var(--fs-sm);
-  font-weight: var(--fw-medium);
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  min-width: 0;
 }
 
-.demo-card-head svg {
+.demo-card-icon {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 30px;
+  height: 30px;
   color: var(--color-accent);
+  background: var(--color-accent-dim);
+  border: 1px solid var(--color-accent-border);
+  border-radius: var(--radius-md);
+}
+
+.demo-card-title {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.demo-card-title strong {
+  color: var(--color-text);
+  font-size: var(--fs-md);
+  font-weight: var(--fw-medium);
 }
 
 .demo-card-tagline {
   color: var(--color-text-subtle);
-  font-size: var(--fs-xs);
+  font-size: var(--fs-sm);
+  line-height: 1.4;
 }
 
+/* The three revisions read as a walk, top to bottom, with the connecting line
+   drawn between the letters rather than as three disconnected chips. */
 .demo-card-revs {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
+  position: relative;
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+}
+
+.demo-card-revs::before {
+  content: '';
+  position: absolute;
+  top: 10px;
+  bottom: 10px;
+  left: 9px;
+  width: 1px;
+  background: var(--color-border);
 }
 
 .demo-rev {
-  padding: 1px 6px;
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-width: 0;
+  font-size: var(--fs-sm);
+}
+
+.demo-rev-letter {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 19px;
+  height: 19px;
   color: var(--color-accent);
-  background: var(--color-accent-dim);
+  background: var(--color-surface);
   border: 1px solid var(--color-accent-border);
   border-radius: 999px;
   font-family: var(--font-mono);
   font-size: var(--fs-mini);
+}
+
+.demo-rev-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-@media (max-width: 620px) {
+.demo-card-cta {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--color-accent);
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-medium);
+}
+
+.demo-card:hover:not(:disabled) .demo-card-cta {
+  color: var(--color-accent-hi);
+}
+
+@media (max-width: 720px) {
   .demo-list {
     grid-auto-flow: row;
     grid-auto-columns: auto;
     grid-template-columns: minmax(0, 1fr);
   }
 
-  .demo-card-head,
+  .demo-card-title,
   .demo-card-tagline {
     min-width: 0;
     overflow-wrap: anywhere;
