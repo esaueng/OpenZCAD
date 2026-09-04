@@ -1,5 +1,6 @@
 import type { ArtifactId, ProjectId, ProjectSummary } from '@openzcad/shared';
 import type { ProjectThumbnailRecord } from './localProjectStore';
+import { thumbnailRecordDescribes } from './projectShelf';
 
 interface ThumbnailBackfillHost {
   loadCached(projectId: string): Promise<ProjectThumbnailRecord | null>;
@@ -26,20 +27,20 @@ export interface ProjectThumbnailBackfillResult {
 }
 
 /**
- * Fills one missing shelf preview from the cheapest available source.
+ * Publishes one device preview to the account when the listing has none.
  *
- * Only cached preview artifacts are consulted. The project shelf is also the
- * recovery surface for malformed or very large documents, so a cache miss
- * must never load or rebuild project-controlled geometry automatically.
+ * Only cached preview records are consulted; this never renders. The project
+ * shelf is also the recovery surface for malformed or very large documents,
+ * so a cache miss must never load or rebuild project-controlled geometry
+ * automatically. Capturing a card is the open workspace's job — see
+ * `projectThumbnailCapture`, which writes on every leave.
  */
 export async function backfillProjectThumbnail(
   project: ProjectSummary,
   host: ThumbnailBackfillHost
 ): Promise<ProjectThumbnailBackfillResult> {
   const cached = await host.loadCached(project.projectId);
-  const cachedMatchesProject =
-    project.documentVersion === undefined ||
-    cached?.version === project.documentVersion;
+  const cachedMatchesProject = thumbnailRecordDescribes(cached, project);
   const source = cachedMatchesProject ? cached?.source : undefined;
   if (source === undefined) {
     return { source: undefined };
