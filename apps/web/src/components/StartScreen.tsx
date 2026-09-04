@@ -95,7 +95,7 @@ interface StartScreenProps {
    * for the tiles on screen, so an unexpanded shelf pays for nine parts rather
    * than every part the device holds.
    */
-  backfillThumbnail(project: ProjectSummary): Promise<string | null | undefined>;
+  publishThumbnail(project: ProjectSummary): Promise<string | null | undefined>;
 }
 
 /**
@@ -187,7 +187,7 @@ export function StartScreen({
   onDeleteForever,
   onEmptyTrash,
   loadThumbnail,
-  backfillThumbnail
+  publishThumbnail
 }: StartScreenProps) {
   const [name, setName] = useState(generateCutePartName);
   const [units, setUnits] = useState<UnitSystem>(defaultUnits);
@@ -337,7 +337,7 @@ export function StartScreen({
           <PartThumbnail
             project={project}
             loadThumbnail={loadThumbnail}
-            backfillThumbnail={backfillThumbnail}
+            publishThumbnail={publishThumbnail}
           />
           {syncEntry && !trashed ? (
             <span
