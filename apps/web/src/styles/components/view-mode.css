@@ -77,7 +77,7 @@
 /* Tweak shows neither the curation toggle nor delete: the row gives both
    slots back to the name and the expression. */
 .tweak-panel .param-row {
-  grid-template-columns: minmax(0, 1fr) 76px auto;
+  grid-template-columns: minmax(0, 1fr) 76px minmax(0, max-content);
 }
 
 /* Read, not edited: in Tweak the gloss is prose under the control, and it is
