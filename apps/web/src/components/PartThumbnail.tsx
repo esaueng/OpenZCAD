@@ -11,13 +11,13 @@ interface PartThumbnailProps {
    */
   loadThumbnail(project: ProjectSummary): Promise<string | null | undefined>;
   /**
-   * Produces the preview a cold cache could not supply, for the tiles a viewer
-   * is actually looking at. Every project predates the cache, so without this
-   * a shelf shows nothing but placeholders until each part is opened again —
-   * which for sixty parts is never. Undefined when there is nothing to render
-   * from, which leaves the placeholder standing.
+   * Publishes this device's preview to the account when the listing has none,
+   * and answers a miss from the same cache. It does not render either: the
+   * shelf never draws a card (see `loadThumbnail`), so a project with no
+   * record stays a placeholder until the workspace writes one — which it now
+   * does on every leave, not only after an idle pause.
    */
-  backfillThumbnail(project: ProjectSummary): Promise<string | null | undefined>;
+  publishThumbnail(project: ProjectSummary): Promise<string | null | undefined>;
 }
 
 interface ThumbnailResult {
@@ -35,7 +35,7 @@ function thumbnailFor(
   cacheKey: string,
   project: ProjectSummary,
   loadThumbnail: PartThumbnailProps['loadThumbnail'],
-  backfillThumbnail: PartThumbnailProps['backfillThumbnail']
+  publishThumbnail: PartThumbnailProps['publishThumbnail']
 ): Promise<string | null | undefined> {
   const cached = thumbnailPromises.get(cacheKey);
   if (cached) {
@@ -48,17 +48,17 @@ function thumbnailFor(
   }
   const pending = loadThumbnail(project)
     .then((source) => {
-      // Only a cache miss reaches the backfill. A cached null is an answer —
+      // Only a cache miss reaches the publisher. A cached null is an answer —
       // the part is genuinely empty — and re-deriving it every visit would
       // undo the caching this store exists for.
       if (source === undefined) {
-        return backfillThumbnail(project);
+        return publishThumbnail(project);
       }
       // A device preview still needs publishing when the account has no
-      // artifact. Show it immediately while the same bounded queue fills the
-      // cross-device cache in the background.
+      // artifact. Show it immediately while the upload fills the cross-device
+      // cache in the background.
       if (source && !project.thumbnailArtifactId) {
-        void backfillThumbnail(project).catch(() => undefined);
+        void publishThumbnail(project).catch(() => undefined);
       }
       return source;
     })
@@ -101,27 +101,24 @@ function ThumbnailPlaceholder({ empty }: { empty: boolean }) {
 export function PartThumbnail({
   project,
   loadThumbnail,
-  backfillThumbnail
+  publishThumbnail
 }: PartThumbnailProps) {
   const cacheKey = `${project.projectId}:${project.updatedAt}:${project.thumbnailArtifactId ?? ''}`;
   const [result, setResult] = useState<ThumbnailResult | null>(null);
 
   useEffect(() => {
     let active = true;
-    void thumbnailFor(
-      cacheKey,
-      project,
-      loadThumbnail,
-      backfillThumbnail
-    ).then((source) => {
-      if (active) {
-        setResult({ key: cacheKey, source });
+    void thumbnailFor(cacheKey, project, loadThumbnail, publishThumbnail).then(
+      (source) => {
+        if (active) {
+          setResult({ key: cacheKey, source });
+        }
       }
-    });
+    );
     return () => {
       active = false;
     };
-  }, [backfillThumbnail, cacheKey, loadThumbnail, project]);
+  }, [publishThumbnail, cacheKey, loadThumbnail, project]);
 
   if (result?.key === cacheKey) {
     if (result.source) {

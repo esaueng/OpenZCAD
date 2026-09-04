@@ -704,9 +704,10 @@ import {
 } from './lib/localProjectStore';
 import {
   applyLocalProjectOrganizations,
-  cachedThumbnailSource,
-  mergeProjectSummaries
+  mergeProjectSummaries,
+  resolveShelfThumbnail
 } from './lib/projectShelf';
+import { sharedThumbnailCapture } from './lib/projectThumbnailCapture';
 import { LivePreview } from './lib/livePreview';
 import { errorMessage } from './lib/errors';
 import { describeSyncFailure, type SyncEntry } from './lib/syncRun';
@@ -1622,19 +1623,15 @@ export function App() {
    * A project with no published preview simply shows the placeholder.
    */
   const loadThumbnail = useCallback(
-    async (project: ProjectSummary): Promise<string | null | undefined> => {
-      const cached = await loadProjectThumbnail(project.projectId).catch(
-        () => null
-      );
-      const cachedSource = cachedThumbnailSource(cached, project);
-      if (cachedSource !== undefined || !project.thumbnailArtifactId) {
-        return cachedSource;
-      }
-      const { downloadCloudThumbnail } = await import('./lib/cloudThumbnail');
-      return downloadCloudThumbnail(project.thumbnailArtifactId).catch(
-        () => undefined
-      );
-    },
+    (project: ProjectSummary): Promise<string | null | undefined> =>
+      resolveShelfThumbnail(project, {
+        loadCached: loadProjectThumbnail,
+        download: async (artifactId) => {
+          const { downloadCloudThumbnail } =
+            await import('./lib/cloudThumbnail');
+          return downloadCloudThumbnail(artifactId);
+        }
+      }),
     []
   );
   const [fitSignal, setFitSignal] = useState(0);
@@ -1858,48 +1855,46 @@ export function App() {
   /**
    * Publishes a device-cached preview when the account has no artifact. A cache
    * miss stays a placeholder so the recovery shelf never loads project data.
+   * Nothing here renders, so nothing here goes through the render queue: an
+   * upload parked in that queue once stalled every capture behind it.
    */
-  const backfillThumbnail = useCallback(
+  const publishThumbnail = useCallback(
     async (project: ProjectSummary): Promise<string | null | undefined> => {
-      const [thumbnail, backfill] = await Promise.all([
-        import('./lib/partThumbnail'),
-        import('./lib/projectThumbnailBackfill')
-      ]);
-      return thumbnail.queuePartThumbnail(async () => {
-        const runtime = thumbnailBackfillRuntimeRef.current;
-        const cloudBacked =
-          Boolean(thumbnailAccountUserId && accountProjectListReached) &&
-          runtime.cloudProjectIds.has(project.projectId);
-        const result = await backfill.backfillProjectThumbnail(project, {
-          loadCached: (projectId) =>
-            loadProjectThumbnail(projectId).catch(() => null),
-          ...(cloudBacked
-            ? {
-                publish: async (input: {
-                  projectId: ProjectDocument['projectId'];
-                  source: string;
-                  version: number;
-                  updatedAt: string;
-                }) => {
-                  const { uploadCloudThumbnail } =
-                    await import('./lib/cloudThumbnail');
-                  return uploadCloudThumbnail(api, input);
-                }
+      const { backfillProjectThumbnail } =
+        await import('./lib/projectThumbnailBackfill');
+      const runtime = thumbnailBackfillRuntimeRef.current;
+      const cloudBacked =
+        Boolean(thumbnailAccountUserId && accountProjectListReached) &&
+        runtime.cloudProjectIds.has(project.projectId);
+      const result = await backfillProjectThumbnail(project, {
+        loadCached: (projectId) =>
+          loadProjectThumbnail(projectId).catch(() => null),
+        ...(cloudBacked
+          ? {
+              publish: async (input: {
+                projectId: ProjectDocument['projectId'];
+                source: string;
+                version: number;
+                updatedAt: string;
+              }) => {
+                const { uploadCloudThumbnail } =
+                  await import('./lib/cloudThumbnail');
+                return uploadCloudThumbnail(api, input);
               }
-            : {}),
-          save: saveProjectThumbnail
-        });
-        if (result.artifactId) {
-          setProjects((current) =>
-            current.map((candidate) =>
-              candidate.projectId === project.projectId
-                ? { ...candidate, thumbnailArtifactId: result.artifactId }
-                : candidate
-            )
-          );
-        }
-        return result.source;
+            }
+          : {}),
+        save: saveProjectThumbnail
       });
+      if (result.artifactId) {
+        setProjects((current) =>
+          current.map((candidate) =>
+            candidate.projectId === project.projectId
+              ? { ...candidate, thumbnailArtifactId: result.artifactId }
+              : candidate
+          )
+        );
+      }
+      return result.source;
     },
     [accountProjectListReached, thumbnailAccountUserId]
   );
@@ -2908,6 +2903,10 @@ export function App() {
         .then(() =>
           cloudProjectAutosaveRef.current?.flushPending({ keepalive: true })
         );
+      // Independent of the document write and synchronous inside: the card
+      // for whatever geometry was last ready, so a tab discarded from the
+      // background still lists with a picture.
+      void sharedThumbnailCapture.flush();
     };
     const onVisibilityChange = () => {
       if (globalThis.document.visibilityState === 'hidden') {
@@ -6009,6 +6008,8 @@ export function App() {
     setBusy(true);
     try {
       await flushPendingLocalSave();
+      await sharedThumbnailCapture.flush();
+      sharedThumbnailCapture.discard();
       if (
         accountDocumentUnavailableProjectIdRef.current !== null &&
         accountDocumentUnavailableProjectIdRef.current !== projectId
@@ -6268,6 +6269,11 @@ export function App() {
   async function handleGoHome() {
     await flushPendingLocalSave();
     await cloudProjectAutosaveRef.current?.flushPending();
+    // The card is written before the shelf that shows it is listed. Then
+    // forgotten: a project trashed from that shelf must not get its record
+    // written back by a later flush.
+    await sharedThumbnailCapture.flush();
+    sharedThumbnailCapture.discard();
     if (shareSessionRef.current) {
       // Leaving the shared session drops it: the shelf that follows is this
       // device's own projects, and the link in the URL has been consumed.
@@ -12294,7 +12300,7 @@ export function App() {
           }
           onEmptyTrash={(trashed) => void handleEmptyTrash(trashed)}
           loadThumbnail={loadThumbnail}
-          backfillThumbnail={backfillThumbnail}
+          publishThumbnail={publishThumbnail}
         />
         {settingsOverlay}
       </>
