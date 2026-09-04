@@ -163,6 +163,30 @@ describe('imported meshes on the exact kernel', { timeout: 30_000 }, () => {
     expect(offsetBody.bbox.max).toEqual({ x: 11, y: 21, z: 31 });
   });
 
+  it('imports an open triangle sheet as a body even though it cannot be unified', async () => {
+    // Two triangles spanning 20x20 in the XY plane: the shape the STL import
+    // e2e measures. The kernel refuses to hand back a unified result for an
+    // open shell, so the sewn triangles must stand rather than the import
+    // failing by name.
+    const { document, bodyId } = importMeshBody(
+      createProjectDocument('Sheet part', user),
+      {
+        name: 'Imported sheet',
+        artifactId: 'artifact_sheet',
+        sourceName: 'sheet.stl',
+        vertices: [0, 0, 0, 20, 0, 0, 20, 20, 0, 0, 20, 0],
+        indices: [0, 1, 2, 0, 2, 3],
+        triangleCount: 2
+      }
+    );
+    const state = await adapter.syncDocument(document);
+    expect(state.warnings).toEqual([]);
+    const body = state.bodyRepresentations[bodyId]!;
+    expect(body.bbox.min).toEqual({ x: 0, y: 0, z: 0 });
+    expect(body.bbox.max).toEqual({ x: 20, y: 20, z: 0 });
+    expect(body.topology!.faces).toHaveLength(2);
+  });
+
   it('keeps mesh-reference body semantics and hash-only lineage', async () => {
     const { document, bodyId } = meshDocument();
     const body = Object.values(document.nodes).find(
