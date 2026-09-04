@@ -1,4 +1,4 @@
-import { RemusKernel } from './remus-runtime';
+import { RemusKernel, loadRemusTranslators } from './remus-runtime';
 import {
   findSketch,
   getParameterScope,
@@ -1173,6 +1173,11 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
 
   async syncDocument(document: ProjectDocument): Promise<DerivedState> {
     const { sources, pinned } = await this.prefetchImportSources(document);
+    // Feature builders run synchronously inside the build loop, so a document
+    // with file-backed features needs the translator module resident first.
+    if (documentNeedsTranslators(document)) {
+      await loadRemusTranslators();
+    }
     // The history kernel outlives this call on purpose — its checkpoints are
     // what the next sync restores. On ANY throw the whole cache is dropped:
     // a failed sync must never leave a table the next sync would trust.
@@ -1423,6 +1428,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     document: ProjectDocument,
     bodyIds: BodyId[]
   ): Promise<string> {
+    const io = await loadRemusTranslators();
     return this.withExportBuild(document, (kernel, build) => {
       const exportSolids = this.exportSolidsFor(
         kernel,
@@ -1431,10 +1437,12 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
         bodyIds
       );
       // Never fuse: a boolean union changes the geometry (overlaps merge,
-      // coincident faces weld). The kernel writes each body as its own
-      // MANIFOLD_SOLID_BREP inside one shape representation, so they stay
-      // distinct through a round trip.
-      return decodeText(kernel.exportStepMulti(new Uint32Array(exportSolids)));
+      // coincident faces weld). Every root of the arena document becomes its
+      // own MANIFOLD_SOLID_BREP inside one shape representation, so the
+      // bodies stay distinct through a round trip.
+      return decodeText(
+        io.exportStep(kernel.serializeSolids(new Uint32Array(exportSolids)))
+      );
     });
   }
 
@@ -1471,6 +1479,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     bodyIds: BodyId[],
     deflection: number = STL_EXPORT_DEFLECTION
   ): Promise<string> {
+    const io = await loadRemusTranslators();
     return this.withExportBuild(document, (kernel, build) => {
       const exportSolids = this.exportSolidsFor(
         kernel,
@@ -1479,7 +1488,12 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
         bodyIds
       );
       if (exportSolids.length === 1) {
-        return decodeText(kernel.exportStlAscii(exportSolids[0]!, deflection));
+        return decodeText(
+          io.exportStlAscii(
+            kernel.serializeSolids(new Uint32Array(exportSolids)),
+            deflection
+          )
+        );
       }
       // Several consumers stop at the first `solid` block, so a multi-body
       // export must be one block containing every body's facets.
@@ -1513,6 +1527,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
         await this.exportStl(document, bodyIds, deflection)
       );
     }
+    const io = await loadRemusTranslators();
     return this.withExportBuild(document, (kernel, build) => {
       const exportSolids = this.exportSolidsFor(
         kernel,
@@ -1520,20 +1535,20 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
         document,
         bodyIds
       );
-      const handles = new Uint32Array(exportSolids);
-      // Every writer takes the whole solid list: bodies stay distinct
+      const bodies = kernel.serializeSolids(new Uint32Array(exportSolids));
+      // Every writer takes the whole arena document: bodies stay distinct
       // objects in the 3MF package and merge into one facet stream for the
       // mesh formats — the shapes their consumers expect. wasm-bindgen
       // copies the Vec<u8> into a fresh, never-shared buffer, so the
       // narrowing holds.
       const bytes =
         format === '3mf'
-          ? kernel.export3mfMulti(handles, deflection)
+          ? io.export3mf(bodies, deflection)
           : format === 'obj'
-            ? kernel.exportObjMulti(handles, deflection)
+            ? io.exportObj(bodies, deflection)
             : format === 'glb'
-              ? kernel.exportGlbMulti(handles, deflection)
-              : kernel.exportStlMulti(handles, deflection);
+              ? io.exportGlb(bodies, deflection)
+              : io.exportStl(bodies, deflection);
       return bytes as Uint8Array<ArrayBuffer>;
     });
   }
@@ -1673,6 +1688,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     volume: number;
     reason?: string;
   }> {
+    await loadRemusTranslators();
     const kernel = new RemusKernel();
     try {
       const bytes =
@@ -1745,6 +1761,15 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
  * implementation, in `test/parity/occt-reference/`, and nothing in the shipped
  * app can reach it.
  */
+/** Features whose builders parse a file through the translator module. */
+function documentNeedsTranslators(document: ProjectDocument): boolean {
+  return listNodesByKind(document, 'feature').some(
+    (feature) =>
+      feature.featureKind === 'imported-step' ||
+      feature.featureKind === 'imported-mesh'
+  );
+}
+
 export async function createExactKernelAdapter(
   options: ExactKernelAdapterOptions = {}
 ): Promise<ExactKernelAdapter> {
