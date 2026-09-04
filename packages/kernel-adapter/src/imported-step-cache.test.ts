@@ -1,6 +1,10 @@
 import { readFileSync } from 'node:fs';
-import { describe, expect, it } from 'vitest';
-import { RemusKernel } from './remus-runtime';
+import { beforeAll, describe, expect, it } from 'vitest';
+import {
+  RemusKernel,
+  loadRemusTranslators,
+  remusTranslators
+} from './remus-runtime';
 import { GEOMETRY_LINEAR_TOLERANCE } from '@openzcad/geometry';
 
 /**
@@ -16,12 +20,18 @@ const SOURCE = new Uint8Array(
   )
 );
 
+beforeAll(async () => {
+  await loadRemusTranslators();
+});
+
 function importSolids(kernel: RemusKernel, bytes: Uint8Array): number[] {
   return Array.from(
-    kernel.importStep(
-      bytes,
-      bytes.byteLength,
-      Math.max(2_000_000, Math.ceil(bytes.byteLength / 16))
+    kernel.deserializeSolids(
+      remusTranslators().importStep(
+        bytes,
+        bytes.byteLength,
+        Math.max(2_000_000, Math.ceil(bytes.byteLength / 16))
+      )
     )
   );
 }

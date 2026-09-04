@@ -25,13 +25,19 @@ const workspaceAliases = Object.fromEntries(
 
 /**
  * Kernel overlay for the parity harness: point REMUS_WASM_PKG at a local
- * remus `crates/wasm/pkg` build to run every kernel test against it
+ * remus `crates/wasm/pkg` build (and REMUS_WASM_IO_PKG at its
+ * `crates/wasm-io/pkg` translator build) to run every kernel test against it
  * without touching package.json or the lockfile. `remus-runtime.ts` is the
- * runtime seam, so one package alias swaps the kernel completely.
+ * runtime seam, so the package aliases swap the kernel completely.
  */
-const remusOverlay = process.env.REMUS_WASM_PKG
-  ? { 'remus-wasm': process.env.REMUS_WASM_PKG }
-  : {};
+const remusOverlay = {
+  ...(process.env.REMUS_WASM_PKG
+    ? { 'remus-wasm': process.env.REMUS_WASM_PKG }
+    : {}),
+  ...(process.env.REMUS_WASM_IO_PKG
+    ? { 'remus-wasm-io': process.env.REMUS_WASM_IO_PKG }
+    : {})
+};
 
 export default defineConfig({
   test: {

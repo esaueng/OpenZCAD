@@ -2,7 +2,7 @@
  * What an import is doing, in the four words the progress card shows.
  *
  * An import is a sequence of phases, three of which can report real progress
- * and one of which cannot: `kernel.importStep` is a single synchronous call
+ * and one of which cannot: the translator's `importStep` is a single synchronous call
  * into wasm, so its disposable worker can be terminated but cannot post a
  * percentage or heartbeat while it runs. The whole point of the shape below
  * is to carry that distinction — {@link ImportRunProgress.fraction} is `null`
@@ -190,10 +190,7 @@ export function coalesceImportProgress(
  * which is why {@link StepImportRunDeps} takes it as optional.
  */
 export interface ImportProgressSink {
-  start(input: {
-    fileName: string;
-    phases: readonly ImportPhase[];
-  }): void;
+  start(input: { fileName: string; phases: readonly ImportPhase[] }): void;
   update(progress: ImportRunProgress): void;
   /** Terminal. Nothing is emitted for this run afterwards. */
   finish(outcome: ImportRunOutcome): void;
