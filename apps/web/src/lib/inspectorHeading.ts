@@ -8,6 +8,10 @@ export interface InspectorHeadingInput {
   featureName: string;
   /** Feature-kind eyebrow used when the feature is the panel's subject. */
   featureKindLabel: string;
+  /** D5 topology label for the viewport object under the running command. */
+  selectionLabel?: string;
+  /** Body that owns the viewport object under the running command. */
+  selectionBodyName?: string;
   featureSelectionSource: FeatureSelectionSource | null;
   commandSession: Pick<CommandSession, 'title'> | null;
 }
@@ -30,8 +34,8 @@ export interface InspectorHeading {
  * "show me this feature" — the user named it, so it names the panel. A
  * viewport pick asks "what is this shape", and the answer is the feature that
  * currently defines the picked body, which is not the command the pick just
- * armed. Titling the panel with that inferred feature is how a fillet in
- * progress used to be labelled with an unrelated earlier offset.
+ * armed. The object keeps its topology name while the defining feature is
+ * demoted to provenance that can be pinned explicitly for editing.
  */
 export function inspectorHeadingForFeature(
   input: InspectorHeadingInput
@@ -41,8 +45,8 @@ export function inspectorHeadingForFeature(
     input.commandSession !== null;
   return demoted
     ? {
-        eyebrow: 'Active command',
-        title: input.commandSession?.title ?? '',
+        eyebrow: input.selectionBodyName ?? input.featureKindLabel,
+        title: input.selectionLabel ?? input.featureName,
         demoted: true
       }
     : {
