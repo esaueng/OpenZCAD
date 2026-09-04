@@ -352,6 +352,7 @@ export function TopBar({
           type="button"
           disabled={!projectName}
           onClick={onSave}
+          aria-label={WORKSPACE_SAVE_STATE_PRESENTATION[saveState].topBarLabel}
           title={`${WORKSPACE_SAVE_STATE_PRESENTATION[saveState].title} Click to save a revision (Ctrl+S), or Ctrl+Shift+S to name it.`}
         >
           {saveState === 'saving' || saveState === 'syncing' ? (
@@ -382,7 +383,7 @@ export function TopBar({
             type="button"
             className={`collaboration-state ${collaborationStatus}`}
             title={`Project sharing · ${collaborationLabel}`}
-            aria-label="Open project sharing"
+            aria-label={`Open project sharing · ${collaborationLabel}`}
             disabled={!projectName || !session}
             onClick={onOpenSharing}
           >
@@ -403,6 +404,11 @@ export function TopBar({
           <summary
             className="secondary topbar-action"
             title="Import and export"
+            aria-label={`Import and export${
+              artifacts.length > 0
+                ? ` · ${artifacts.length} stored ${artifacts.length === 1 ? 'file' : 'files'}`
+                : ''
+            }`}
           >
             <FolderOpen size={14} aria-hidden="true" />
             File{artifacts.length > 0 ? ` ${artifacts.length}` : ''}
