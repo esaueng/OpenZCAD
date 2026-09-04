@@ -1,6 +1,11 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { toArtifactId, type ProjectSummary } from '@openzcad/shared';
-import { cachedThumbnailSource, mergeProjectSummaries } from './projectShelf';
+import {
+  cachedThumbnailSource,
+  mergeProjectSummaries,
+  resolveShelfThumbnail,
+  thumbnailRecordDescribes
+} from './projectShelf';
 import type { ProjectThumbnailRecord } from './localProjectStore';
 
 const LISTED = '2026-08-07T12:25:30.000Z';
@@ -101,5 +106,84 @@ describe('mergeProjectSummaries', () => {
 
     expect(merged?.thumbnailArtifactId).toBe('artifact_cloud_thumbnail');
     expect(merged?.updatedAt).toBe(LISTED);
+  });
+});
+
+describe('thumbnailRecordDescribes', () => {
+  it('matches a record rendered from the listed version', () => {
+    expect(
+      thumbnailRecordDescribes(record('data:x', LISTED), {
+        documentVersion: 1
+      })
+    ).toBe(true);
+    expect(
+      thumbnailRecordDescribes(record('data:x', LISTED), {
+        documentVersion: 2
+      })
+    ).toBe(false);
+  });
+
+  it('cannot fault a listing whose version is unknown', () => {
+    expect(thumbnailRecordDescribes(record(null, LISTED), {})).toBe(true);
+    expect(thumbnailRecordDescribes(null, {})).toBe(false);
+  });
+});
+
+describe('resolveShelfThumbnail', () => {
+  const artifactId = toArtifactId('artifact_listed');
+
+  it('shows the device image when the account copy cannot be fetched', async () => {
+    // A listing one refresh stale names a thumbnail the Worker has already
+    // superseded and deleted. The device image is still the part.
+    const source = await resolveShelfThumbnail(
+      { ...summary(LISTED), thumbnailArtifactId: artifactId },
+      {
+        loadCached: async () => ({
+          ...record('data:image/webp;base64,DEVICE', LISTED),
+          artifactId: toArtifactId('artifact_superseded')
+        }),
+        download: async () => {
+          throw new Error('404');
+        }
+      }
+    );
+    expect(source).toBe('data:image/webp;base64,DEVICE');
+  });
+
+  it('prefers the account image when it does arrive', async () => {
+    const source = await resolveShelfThumbnail(
+      { ...summary(LISTED), thumbnailArtifactId: artifactId },
+      {
+        loadCached: async () => ({
+          ...record('data:image/webp;base64,DEVICE', LISTED),
+          artifactId: toArtifactId('artifact_superseded')
+        }),
+        download: async () => 'data:image/webp;base64,CLOUD'
+      }
+    );
+    expect(source).toBe('data:image/webp;base64,CLOUD');
+  });
+
+  it('never answers "no geometry" for a part the account has a picture of', async () => {
+    const source = await resolveShelfThumbnail(
+      { ...summary(LISTED), thumbnailArtifactId: artifactId },
+      {
+        loadCached: async () => record(null, LISTED),
+        download: async () => {
+          throw new Error('offline');
+        }
+      }
+    );
+    expect(source).toBeUndefined();
+  });
+
+  it('does not touch the network for a device-only project', async () => {
+    const download = vi.fn();
+    const source = await resolveShelfThumbnail(summary(LISTED), {
+      loadCached: async () => record('data:image/webp;base64,DEVICE', EARLIER),
+      download
+    });
+    expect(source).toBe('data:image/webp;base64,DEVICE');
+    expect(download).not.toHaveBeenCalled();
   });
 });

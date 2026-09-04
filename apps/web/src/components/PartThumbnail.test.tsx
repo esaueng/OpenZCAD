@@ -18,13 +18,13 @@ describe('PartThumbnail', () => {
       thumbnailArtifactId: toArtifactId('artifact_cached')
     });
     const loadThumbnail = vi.fn().mockResolvedValue('data:image/webp;base64,AA');
-    const backfillThumbnail = vi.fn();
+    const publishThumbnail = vi.fn();
 
     render(
       <PartThumbnail
         project={project}
         loadThumbnail={loadThumbnail}
-        backfillThumbnail={backfillThumbnail}
+        publishThumbnail={publishThumbnail}
       />
     );
 
@@ -32,19 +32,19 @@ describe('PartThumbnail', () => {
     expect(image).toHaveAttribute('src', 'data:image/webp;base64,AA');
     expect(loadThumbnail).toHaveBeenCalledTimes(1);
     expect(loadThumbnail).toHaveBeenCalledWith(project);
-    expect(backfillThumbnail).not.toHaveBeenCalled();
+    expect(publishThumbnail).not.toHaveBeenCalled();
   });
 
   it('publishes a device-only cached image in the background', async () => {
     const project = summary();
     const loadThumbnail = vi.fn().mockResolvedValue('data:image/webp;base64,AA');
-    const backfillThumbnail = vi.fn().mockResolvedValue(undefined);
+    const publishThumbnail = vi.fn().mockResolvedValue(undefined);
 
     render(
       <PartThumbnail
         project={project}
         loadThumbnail={loadThumbnail}
-        backfillThumbnail={backfillThumbnail}
+        publishThumbnail={publishThumbnail}
       />
     );
 
@@ -52,7 +52,7 @@ describe('PartThumbnail', () => {
       await screen.findByRole('presentation', { hidden: true })
     ).toHaveAttribute('src', 'data:image/webp;base64,AA');
     await waitFor(() =>
-      expect(backfillThumbnail).toHaveBeenCalledWith(project)
+      expect(publishThumbnail).toHaveBeenCalledWith(project)
     );
   });
 
@@ -61,7 +61,7 @@ describe('PartThumbnail', () => {
     // no cached image has to be able to ask for one or it never gets a picture.
     const project = summary();
     const loadThumbnail = vi.fn().mockResolvedValue(undefined);
-    const backfillThumbnail = vi
+    const publishThumbnail = vi
       .fn()
       .mockResolvedValue('data:image/webp;base64,BB');
 
@@ -69,61 +69,61 @@ describe('PartThumbnail', () => {
       <PartThumbnail
         project={project}
         loadThumbnail={loadThumbnail}
-        backfillThumbnail={backfillThumbnail}
+        publishThumbnail={publishThumbnail}
       />
     );
 
     const image = await screen.findByRole('presentation', { hidden: true });
     expect(image).toHaveAttribute('src', 'data:image/webp;base64,BB');
-    expect(backfillThumbnail).toHaveBeenCalledWith(project);
+    expect(publishThumbnail).toHaveBeenCalledWith(project);
   });
 
   it('falls back to the placeholder when there is nothing to render from', async () => {
     // The case that keeps a project too large to open reachable: nothing this
     // device holds, and no attempt to fetch it, so the shelf still paints.
     const loadThumbnail = vi.fn().mockResolvedValue(undefined);
-    const backfillThumbnail = vi.fn().mockResolvedValue(undefined);
+    const publishThumbnail = vi.fn().mockResolvedValue(undefined);
 
     render(
       <PartThumbnail
         project={summary()}
         loadThumbnail={loadThumbnail}
-        backfillThumbnail={backfillThumbnail}
+        publishThumbnail={publishThumbnail}
       />
     );
 
-    await waitFor(() => expect(backfillThumbnail).toHaveBeenCalled());
+    await waitFor(() => expect(publishThumbnail).toHaveBeenCalled());
     expect(screen.queryByRole('img')).toBeNull();
     expect(screen.queryByText('No geometry')).toBeNull();
   });
 
   it('reports a genuinely empty part differently from a missing preview', async () => {
     const loadThumbnail = vi.fn().mockResolvedValue(null);
-    const backfillThumbnail = vi.fn();
+    const publishThumbnail = vi.fn();
 
     render(
       <PartThumbnail
         project={summary()}
         loadThumbnail={loadThumbnail}
-        backfillThumbnail={backfillThumbnail}
+        publishThumbnail={publishThumbnail}
       />
     );
 
     expect(await screen.findByText('No geometry')).toBeVisible();
     // A cached "empty" is an answer, not a miss — re-deriving it every visit
     // would defeat the cache for exactly the parts that render to nothing.
-    expect(backfillThumbnail).not.toHaveBeenCalled();
+    expect(publishThumbnail).not.toHaveBeenCalled();
   });
 
   it('survives a rejected read without throwing', async () => {
     const loadThumbnail = vi.fn().mockRejectedValue(new Error('idb closed'));
-    const backfillThumbnail = vi.fn();
+    const publishThumbnail = vi.fn();
 
     render(
       <PartThumbnail
         project={summary()}
         loadThumbnail={loadThumbnail}
-        backfillThumbnail={backfillThumbnail}
+        publishThumbnail={publishThumbnail}
       />
     );
 
@@ -133,7 +133,7 @@ describe('PartThumbnail', () => {
 
   it('survives a rejected backfill without throwing', async () => {
     const loadThumbnail = vi.fn().mockResolvedValue(undefined);
-    const backfillThumbnail = vi
+    const publishThumbnail = vi
       .fn()
       .mockRejectedValue(new Error('no webgl context'));
 
@@ -141,11 +141,11 @@ describe('PartThumbnail', () => {
       <PartThumbnail
         project={summary()}
         loadThumbnail={loadThumbnail}
-        backfillThumbnail={backfillThumbnail}
+        publishThumbnail={publishThumbnail}
       />
     );
 
-    await waitFor(() => expect(backfillThumbnail).toHaveBeenCalled());
+    await waitFor(() => expect(publishThumbnail).toHaveBeenCalled());
     expect(screen.queryByRole('img')).toBeNull();
   });
 
@@ -155,15 +155,15 @@ describe('PartThumbnail', () => {
       .fn()
       .mockResolvedValueOnce(undefined)
       .mockResolvedValueOnce('data:image/webp;base64,CC');
-    const backfillThumbnail = vi.fn().mockResolvedValue(undefined);
+    const publishThumbnail = vi.fn().mockResolvedValue(undefined);
     const { rerender } = render(
       <PartThumbnail
         project={project}
         loadThumbnail={loadThumbnail}
-        backfillThumbnail={backfillThumbnail}
+        publishThumbnail={publishThumbnail}
       />
     );
-    await waitFor(() => expect(backfillThumbnail).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(publishThumbnail).toHaveBeenCalledTimes(1));
 
     rerender(
       <PartThumbnail
@@ -172,7 +172,7 @@ describe('PartThumbnail', () => {
           thumbnailArtifactId: toArtifactId('artifact_thumbnail')
         }}
         loadThumbnail={loadThumbnail}
-        backfillThumbnail={backfillThumbnail}
+        publishThumbnail={publishThumbnail}
       />
     );
 
