@@ -423,14 +423,18 @@ describe('toolCardFor', () => {
     ).toBe('Extrude');
   });
 
-  it('says on the armed offset hint when the face is anchored by geometry alone', () => {
+  it('discloses geometry-only anchoring without lengthening the live hint', () => {
     const hashOnly = toolCardFor(
       interactionReducer(IDLE, {
         type: 'select-face',
         target: face({ reference: undefined })
       })
     );
-    expect(hashOnly?.hint).toContain(UNSTABLE_FACE_OFFSET_REASON);
+    expect(hashOnly?.hint).not.toContain(UNSTABLE_FACE_OFFSET_REASON);
+    expect(hashOnly?.badge).toEqual({
+      label: 'Geometry-anchored',
+      detail: UNSTABLE_FACE_OFFSET_REASON
+    });
     expect(
       hashOnly?.actions?.find((action) => action.id === 'offset-face')?.note
     ).toBe(UNSTABLE_FACE_OFFSET_REASON);
@@ -439,6 +443,7 @@ describe('toolCardFor', () => {
       interactionReducer(IDLE, { type: 'select-face', target: face() })
     );
     expect(referenced?.hint).not.toContain(UNSTABLE_FACE_OFFSET_REASON);
+    expect(referenced?.badge).toBeUndefined();
     expect(referenced?.hint).toContain('Space faces it head-on');
   });
 

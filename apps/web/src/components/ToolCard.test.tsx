@@ -4,6 +4,30 @@ import { describe, expect, it, vi } from 'vitest';
 import { ToolCard } from './ToolCard';
 
 describe('ToolCard', () => {
+  it('keeps a geometry caveat out of the hint and exposes it from a badge', () => {
+    render(
+      <ToolCard
+        model={{
+          icon: 'offset-face',
+          title: 'Offset Face',
+          hint: 'Drag the arrow to offset the face.',
+          badge: {
+            label: 'Geometry-anchored',
+            detail: 'This face will need re-picking if earlier geometry moves.'
+          }
+        }}
+        onClose={vi.fn()}
+      />
+    );
+
+    expect(screen.getByText('Drag the arrow to offset the face.')).toBeTruthy();
+    expect(screen.queryByText(/need re-picking/)).toBeNull();
+    expect(screen.getByText('Geometry-anchored')).toHaveAttribute(
+      'title',
+      'This face will need re-picking if earlier geometry moves.'
+    );
+  });
+
   it('renders an unavailable face-sketch action with its exact reason', async () => {
     const onAction = vi.fn();
     render(

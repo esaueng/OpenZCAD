@@ -83,6 +83,20 @@
   position: static;
 }
 
+/* The inspector occupies the top-right corner without resizing the canvas.
+   Move the cube with that dock so its faces remain visible and clickable. */
+.viewer-area.has-inspector .viewer-rail-stack {
+  right: calc(var(--context-w) + 20px);
+}
+
+/* Once the tool card wraps its actions, the strip across the top is occupied.
+   Keep the cube below it in the same constrained container range. */
+@container viewer-area (max-width: 929px) {
+  .viewer-area.has-inspector .viewer-rail-stack {
+    top: 150px;
+  }
+}
+
 /* Utility rail: viewport state as icons, centred on the right edge so it
    clears the orientation widget instead of stacking under it. */
 .viewer-rail {
