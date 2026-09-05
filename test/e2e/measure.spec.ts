@@ -75,6 +75,28 @@ async function locateEdge(page: Page) {
   return found!;
 }
 
+test('mobile measurement actions stay clear of the viewport ruler', async ({ page }) => {
+  await createBox(page, 'QA mobile measurement layout');
+  await switchWorkspace(page, 'View');
+  await armMeasure(page);
+  const edge = await locateEdge(page);
+  await page.mouse.click(edge.x, edge.y);
+  const workbench = page.getByLabel('Measurement workbench');
+  await expect(workbench.getByRole('listitem')).toHaveCount(1);
+  for (const width of [390, 320]) {
+    await page.setViewportSize({ width, height: 844 });
+    const ruler = page.getByTestId('viewport-scale-indicator');
+    await expect(ruler).toBeVisible();
+    await expect(workbench.getByRole('button', { name: 'Copy all' })).toBeVisible();
+    await expect.poll(async () => {
+      const scale = await ruler.boundingBox();
+      const dock = await workbench.boundingBox();
+      return scale !== null && dock !== null && scale.y >= 0 &&
+        scale.y + scale.height + 4 <= dock.y;
+    }).toBe(true);
+  }
+});
+
 test('measuring in View leaves the Build selection untouched', async ({
   page
 }) => {

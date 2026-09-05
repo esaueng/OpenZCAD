@@ -1533,6 +1533,23 @@ export function projectsHaveSameRebuildInputs(
   );
 }
 
+/** A metadata-only room update is safe only if it retains all local history. */
+export function projectPreservesLocalWork(
+  local: ProjectDocument,
+  remote: ProjectDocument
+): boolean {
+  return (
+    projectsHaveSameRebuildInputs(local, remote) &&
+    (['revisions', 'checkpoints', 'commandLog'] as const).every(
+      (key) =>
+        local[key].length <= remote[key].length &&
+        local[key].every((entry, index) =>
+          jsonValuesEqual(entry, remote[key][index])
+        )
+    )
+  );
+}
+
 /**
  * Reuses derived geometry only when it describes the same model. Judged on
  * rebuild inputs rather than full canonical content: the account echoes every
