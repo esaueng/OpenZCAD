@@ -130,6 +130,22 @@ const DATABASE_VERSION = LOCAL_PROJECT_DATABASE_VERSION;
 
 interface ProjectMetaRecord extends ProjectOrganization {
   projectId: string;
+  /**
+   * Present while a change made on this device has not reached the account.
+   * Set by every local organisation write, cleared once the account has the
+   * same row; the listing's reconcile lets the account win when it is absent.
+   */
+  mirrorPending?: true;
+}
+
+function organizationOf(record: ProjectMetaRecord): ProjectOrganization {
+  return {
+    status: record.status,
+    pinned: record.pinned,
+    sortOrder: record.sortOrder,
+    ...(record.deletedAt ? { deletedAt: record.deletedAt } : {}),
+    ...(record.archivedAt ? { archivedAt: record.archivedAt } : {})
+  };
 }
 
 /**
@@ -932,9 +948,7 @@ export function loadLocalSaveState(
  * Key-only, so a project with dense imported geometry costs the same as any
  * other to ask about.
  */
-export function listLocalSaveStateIds(
-  projectId: string
-): Promise<Set<string>> {
+export function listLocalSaveStateIds(projectId: string): Promise<Set<string>> {
   return transactionScope(
     'readonly',
     async (store) => {
@@ -944,8 +958,9 @@ export function listLocalSaveStateIds(
       return new Set(
         keys
           .map((key) => (Array.isArray(key) ? key[1] : undefined))
-          .filter((checkpointId): checkpointId is string =>
-            typeof checkpointId === 'string'
+          .filter(
+            (checkpointId): checkpointId is string =>
+              typeof checkpointId === 'string'
           )
       );
     },
@@ -996,29 +1011,48 @@ export function restoreDuplicateDerivedProjection(
 
 export function saveLocalProjectOrganization(
   projectId: string,
-  organization: ProjectOrganization
+  organization: ProjectOrganization,
+  options: { mirrorPending?: boolean } = {}
 ): Promise<void> {
+  const record: ProjectMetaRecord = {
+    ...organizationOf({ ...organization, projectId }),
+    projectId,
+    ...(options.mirrorPending ? { mirrorPending: true } : {})
+  };
   return transaction(
     'readwrite',
-    (store) => store.put({ ...organization, projectId }),
+    (store) => store.put(record),
     META_STORE_NAME
   ).then(() => undefined);
+}
+
+function listLocalProjectMetaRecords(): Promise<ProjectMetaRecord[]> {
+  return transaction<ProjectMetaRecord[]>(
+    'readonly',
+    (store) => store.getAll() as IDBRequest<ProjectMetaRecord[]>,
+    META_STORE_NAME
+  );
 }
 
 export function listLocalProjectOrganizations(): Promise<
   Map<string, ProjectOrganization>
 > {
-  return transaction<ProjectMetaRecord[]>(
-    'readonly',
-    (store) => store.getAll() as IDBRequest<ProjectMetaRecord[]>,
-    META_STORE_NAME
-  ).then(
+  return listLocalProjectMetaRecords().then(
     (records) =>
       new Map(
-        records.map(({ projectId, ...organization }) => [
-          projectId,
-          organization
-        ])
+        records.map((record) => [record.projectId, organizationOf(record)])
+      )
+  );
+}
+
+/** Projects whose device-side shelf state has not reached the account yet. */
+export function listPendingOrganizationMirrors(): Promise<Set<string>> {
+  return listLocalProjectMetaRecords().then(
+    (records) =>
+      new Set(
+        records
+          .filter((record) => record.mirrorPending)
+          .map((record) => record.projectId)
       )
   );
 }
