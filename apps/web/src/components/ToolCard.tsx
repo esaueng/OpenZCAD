@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react';
 import { Circle, Layers3, MoveUpRight, PenLine, Spline, X } from 'lucide-react';
 import type {
   OperationPhase,
@@ -28,6 +29,8 @@ const PHASE_LABEL_RESERVE = Object.values(PHASE_LABELS);
 
 interface ToolCardProps {
   model: ToolCardModel;
+  children?: ReactNode;
+  cancelableWhileValidating?: boolean;
   onAction?(action: SelectionActionId): void;
   /** Opens the existing feature a refusal named, so the way out is a button. */
   onEditCulprit?(featureId: string): void;
@@ -47,6 +50,8 @@ interface ToolCardProps {
  */
 export function ToolCard({
   model,
+  children,
+  cancelableWhileValidating = false,
   onAction,
   onEditCulprit,
   keepLastValid,
@@ -142,11 +147,12 @@ export function ToolCard({
         type="button"
         className="tool-card-close"
         aria-label={`Dismiss ${model.title}`}
-        disabled={model.phase === 'validating'}
+        disabled={model.phase === 'validating' && !cancelableWhileValidating}
         onClick={onClose}
       >
         <X size={14} aria-hidden="true" />
       </button>
+      {children}
     </div>
   );
 }

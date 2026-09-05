@@ -103,8 +103,30 @@ it does not establish whether the discrepancy is in volume integration or the
 boolean geometry. Increasing tolerance globally is not justified. The fixed-plane
 face-sketch retry and original browser inference data remain unavailable.
 
-Next isolate negative sweep cutting and the subsequent arm union in
-Remus with input/output detailed reports and face/wire orientation metadata.
-Do not bypass strict validation or claim that a direction reversal fixes all
-failures. Native kernel comparison, actual browser-document export, original H3 inference state,
-exact hole positioning and final STEP round-trip are still gaps.
+An additional diagnostic probe of this same pinned WASM consumer intercepted raw
+Cut, Fuse and unification calls. The negative raw Cut already has eight bad
+shared-edge senses; unification leaves it unchanged. Raw first-arm Fuse has ten
+bad senses after the negative opening and six after the positive opening.
+Unification worsens those to fifteen and eleven respectively; the application's
+safe-unify path correctly discards the worse candidate.
+
+Serialized planar wires isolate two subsequent native regression targets:
+
+- The negative rectangular cutter's six stored outer-wire windings oppose
+  their stored surface normals; the positive cutter's align. Both pass the
+  operations validator, which omits the outer-wire/surface orientation check.
+  At the pinned source, inspect `crates/operations/src/extrude.rs:1080` and
+  `crates/check/src/validate/face.rs:23`. Test both profile windings and both
+  sweep directions, including the subsequent Cut, before changing emission.
+- On the strictly valid positive-opening path, the arm's planar wires align,
+  but all six bad raw Fuse edges touch split portions of the existing reversed
+  opening wall at X = 23. Investigate reversed-plane splitting/assembly.
+  `crates/operations/src/boolean/mod.rs:4391` documents this sensitivity and
+  contains a narrowly used normalization helper; it is not evidence that
+  applying normalization globally is safe.
+
+These external diagnostic observations guide the next kernel regression; they
+are not additional passing feature tests. Do not bypass strict validation or
+claim that a direction reversal fixes all failures. Native Rust comparison,
+actual browser-document export, original H3 inference state, exact hole
+positioning and final STEP round-trip remain gaps.
