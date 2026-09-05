@@ -900,6 +900,12 @@
     width: auto;
     max-height: 40%;
   }
+
+  /* Reserve the dock's maximum height, including when its result list grows. */
+  .viewer-shell:has(.measurement-dock) .viewport-scale-indicator {
+    bottom: calc(40% + 60px);
+    left: 10px;
+  }
 }
 
 /*
