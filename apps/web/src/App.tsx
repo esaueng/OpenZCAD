@@ -145,11 +145,15 @@ import {
   type ConstraintPick,
   type DrivingDimensionKind
 } from './lib/sketch/constraints';
+import { sketchDimensionAnnotations } from './lib/sketch/dimensionAnnotations';
 import {
   solveStatusLabel,
   solvedSketchCommands
 } from './lib/sketch/applySolve';
 import { sketchContentFramePoints } from './lib/sketch/session';
+import { resolveHoleFacePick, type HoleFacePick } from './lib/holeFacePick';
+import { exactEntryShortcut, isTypingTarget } from './lib/exactEntryShortcut';
+import { DeferredExactEntry } from './lib/deferredExactEntry';
 import type { SketchSolveStatus } from './components/SketchToolRail';
 import { ApiError, api, isProjectDocumentUnavailableError } from './lib/api';
 import {
@@ -424,8 +428,12 @@ import { DISPLAY_MODE_LABELS } from './lib/displayMode';
 import { ContextMenu, type ContextMenuState } from './components/ContextMenu';
 import { MarkingMenu } from './components/MarkingMenu';
 import type { BodyFeatureIds } from '@openzcad/document-core';
-import { resolveExtrudeOperation } from './lib/extrudeInference';
-import { previewExtrudeInput } from './lib/extrudePreview';
+import {
+  resolveExtrudeOperation,
+  resolveCurrentExtrude
+} from './lib/extrudeInference';
+import { isExtrudeSessionCurrent } from './lib/extrudeSession';
+import { ExtrudeControls } from './components/ExtrudeControls';
 import type {
   BodyAppearancePreview,
   FaceResizeCommit,
@@ -895,6 +903,12 @@ interface EdgePreviewCandidate {
 /** A region extrude rebuilt for preview, with the context its verdict needs. */
 interface RegionExtrudePreviewCandidate {
   document: ProjectDocument;
+  base: ProjectDocument;
+  input: ExtrudeInput;
+  choice: NonNullable<Parameters<typeof resolveExtrudeOperation>[0]['choice']>;
+  faceAttachment?: Parameters<
+    typeof resolveExtrudeOperation
+  >[0]['faceAttachment'];
   distance: number;
   resultBodyId: BodyId;
   label: string;
@@ -1401,6 +1415,11 @@ export function App() {
    */
   const [faceRepair, setFaceRepair] =
     useState<StaleDirectEditFaceRepair | null>(null);
+  const [holeFacePickTarget, setHoleFacePickTarget] = useState<BodyId | null>(
+    null
+  );
+  const [viewportHoleFacePick, setViewportHoleFacePick] =
+    useState<HoleFacePick | null>(null);
   /** Null means the active tool decides what picking is narrowed to. */
   const [manualSelectionFilter, setManualSelectionFilter] =
     useState<SelectionFilter | null>(null);
@@ -1444,6 +1463,12 @@ export function App() {
   const [tool, setTool] = useState<ToolId | null>(null);
   const [modelingTargetBodyId, setModelingTargetBodyId] =
     useState<BodyId | null>(null);
+  useEffect(() => {
+    if (tool !== 'hole') {
+      setHoleFacePickTarget(null);
+      setViewportHoleFacePick(null);
+    }
+  }, [tool]);
   const modelingPreflightRef = useRef<{
     signature: string;
     command: AnyCommand;
@@ -1626,6 +1651,8 @@ export function App() {
   // `idle` render it was constructed during.
   const interactionRef = useRef(interaction);
   interactionRef.current = interaction;
+  const toolRef = useRef(tool);
+  toolRef.current = tool;
   /** Open exact-value entry (anchored keypad) for the armed handle. */
   const [keypad, setKeypad] = useState<KeypadRequest | null>(null);
   const keypadRef = useRef(keypad);
@@ -1758,6 +1785,44 @@ export function App() {
   const openExactEntryRef = useRef<(() => boolean) | null>(null);
   const contextMenuActionsRef = useRef<Record<string, () => void>>({});
   const managerRef = useRef<CommandManager | null>(null);
+  const workspaceModeRef = useRef<WorkspaceMode | null>(null);
+  const exactEntryInputEnabledRef = useRef(false);
+  const exactEntryQueue = useRef(
+    new DeferredExactEntry<{
+      interaction: InteractionState;
+      manager: CommandManager | null;
+      version: number | undefined;
+      tool: ToolId | null;
+      workspaceMode: WorkspaceMode;
+    }>({
+      isCurrent: (owner) =>
+        owner.interaction === interactionRef.current &&
+        owner.manager === managerRef.current &&
+        owner.version === managerRef.current?.document.version &&
+        owner.tool === toolRef.current &&
+        owner.workspaceMode === workspaceModeRef.current &&
+        workspaceModeRef.current === 'build' &&
+        exactEntryInputEnabledRef.current &&
+        keypadRef.current === null &&
+        !isTypingTarget(document.activeElement as HTMLElement | null),
+      sameOwner: (left, right) =>
+        left.interaction === right.interaction &&
+        left.manager === right.manager &&
+        left.version === right.version &&
+        left.tool === right.tool &&
+        left.workspaceMode === right.workspaceMode,
+      open: () => openExactEntryRef.current?.() === true,
+      seed: (initial) =>
+        setKeypad((current) =>
+          current ? { ...current, initial, selectInitial: false } : current
+        ),
+      schedule: (retry) => {
+        const frame = requestAnimationFrame(retry);
+        return () => cancelAnimationFrame(frame);
+      }
+    })
+  ).current;
+  useEffect(() => () => exactEntryQueue.cancel(), [exactEntryQueue]);
   const geometry = useGeometryWorker({
     manager: () => managerRef.current,
     onDerived: (derived) => {
@@ -2015,15 +2080,15 @@ export function App() {
   ).current;
 
   /**
-   * Exact extrude preview for a region drag. The drag direction decides what
-   * is shown — into the face's body cuts, away from it adds, a free plane
-   * grows a new body — because that is the intent the hand expresses. The
-   * commit still runs the full exact classification, so the stored operation
-   * is decided by measurement; this only picks the shape shown while the
-   * pointer is moving.
+   * Preview and commit resolve the same command choice. Automatic uses exact
+   * overlap; an explicit operation never falls back to another operation.
    */
+  const regionExtrudeCommitRequest = useRef(0);
   const regionExtrudePreview = useRef(
-    new LivePreview<RegionExtrudePreviewCandidate, OffsetPreviewResult>({
+    new LivePreview<
+      RegionExtrudePreviewCandidate,
+      OffsetPreviewResult & { document: ProjectDocument }
+    >({
       build: (distance) => {
         const base = managerRef.current?.document;
         const current = interactionRef.current;
@@ -2034,11 +2099,7 @@ export function App() {
           (candidate) => candidate.sketchId === current.target.sketchId
         );
         const command = commandFactories.extrudeSketch(
-          previewExtrudeInput(
-            regionExtrudeInputFor(current.target, distance),
-            sketchNode?.planeRef,
-            distance
-          )
+          regionExtrudeInputFor(current.target, distance)
         );
         const resultBodyId = command.payload.ids?.bodyId;
         if (!resultBodyId) {
@@ -2047,6 +2108,18 @@ export function App() {
         command.validate(base);
         return {
           document: command.apply(base),
+          base,
+          input: command.payload,
+          choice: current.extrudeChoice ?? { operation: 'automatic' },
+          ...(sketchNode?.planeRef.type === 'face'
+            ? {
+                faceAttachment: {
+                  bodyId: sketchNode.planeRef.bodyId,
+                  direction:
+                    distance < 0 ? ('into' as const) : ('away' as const)
+                }
+              }
+            : {}),
           distance,
           resultBodyId,
           label: command.label,
@@ -2055,7 +2128,16 @@ export function App() {
         };
       },
       derive: async (candidate) => {
-        const derived = await geometry.syncOnce(candidate.document);
+        const resolved = await resolveExtrudeOperation({
+          base: candidate.base,
+          input: candidate.input,
+          choice: candidate.choice,
+          derive: (document) => geometry.syncOnce(document),
+          ...(candidate.faceAttachment
+            ? { faceAttachment: candidate.faceAttachment }
+            : {})
+        });
+        const derived = resolved.derived;
         const live = managerRef.current;
         const documentMoved =
           !live ||
@@ -2067,7 +2149,7 @@ export function App() {
           derived,
           documentMoved
         });
-        return { derived, rejection };
+        return { derived, rejection, document: resolved.document };
       },
       publish: (preview) => {
         if (!preview) {
@@ -2082,7 +2164,7 @@ export function App() {
           return;
         }
         setPreviewDoc({
-          ...preview.document.document,
+          ...preview.derived.document,
           derived: preview.derived.derived
         });
         setLastValidPreview(preview.document.distance);
@@ -2350,6 +2432,7 @@ export function App() {
   // sketches, the inspector. Tweak differs from View in one thing only: the
   // parameter guard below lets `parameter.set` commands through.
   const modelingLocked = viewMode || tweakMode;
+  workspaceModeRef.current = resolvedWorkspaceMode;
   // Conditions that lock the document whatever workspace is showing. Tweak's
   // parameter edits answer to these too: a second tab or a read-only
   // collaboration seat locks parameters as firmly as features.
@@ -4420,6 +4503,10 @@ export function App() {
       return;
     }
     setFeatureFormError(null);
+    setHoleFacePickTarget(null);
+    setViewportHoleFacePick(null);
+    setRevertPill(null);
+    exactEntryQueue.cancel();
     // Through the ref, not the render's variable: this function is invoked
     // from context-menu closures captured when the menu opened — in the same
     // pointer event that changed the selection and armed a handle — so the
@@ -4532,7 +4619,10 @@ export function App() {
   }
 
   function cancelPanel() {
+    exactEntryQueue.cancel();
     setFeatureFormError(null);
+    setHoleFacePickTarget(null);
+    setViewportHoleFacePick(null);
     const selectionReturn = extrudeSelectionReturnRef.current;
     setPreviewDoc(null);
     setSelectedProfiles(selectionReturn?.profiles ?? []);
@@ -8094,10 +8184,38 @@ export function App() {
     if (!doc) {
       return;
     }
+    exactEntryQueue.cancel();
     // An armed face re-pick owns the click outright: the pick answers "which
     // face should this broken edit use", never a selection or a drag handle.
     if (faceRepair) {
       handleFaceRepairPick(selection);
+      return;
+    }
+    if (tool === 'hole' && holeFacePickTarget) {
+      if (!exactGeometryReady) {
+        setStatus(
+          'Hole: wait for exact geometry to finish rebuilding, then pick the entry face.'
+        );
+        return;
+      }
+      const picked = resolveHoleFacePick(
+        holeFacePickTarget,
+        selection,
+        representations[holeFacePickTarget]?.topology
+      );
+      if (!picked.ok) {
+        setStatus(picked.reason);
+        return;
+      }
+      modelingPreflightRef.current = null;
+      setViewportHoleFacePick(picked.pick);
+      setSelectedTopology(picked.selection);
+      setSelectedBodyIds([holeFacePickTarget]);
+      setSelectedEdges([]);
+      setHoleFacePickTarget(null);
+      setStatus(
+        'Hole entry face selected · adjust the hole and check the exact result.'
+      );
       return;
     }
     // The pick detail (click point + normal) anchors selection-first drag
@@ -8553,12 +8671,16 @@ export function App() {
 
   const regionInteractionKey =
     interaction.mode === 'region'
-      ? `${interaction.target.sketchId}:${interaction.target.regionFingerprint}`
+      ? `${interaction.target.sketchId}:${interaction.target.regionFingerprint}:${JSON.stringify(interaction.extrudeChoice)}`
       : null;
   useEffect(() => {
     regionExtrudePreview.clear();
     setPreviewDeferred(false);
     setLastValidPreview(null);
+    const current = interactionRef.current;
+    if (current.mode === 'region' && current.lastValue) {
+      regionExtrudePreview.request(current.lastValue);
+    }
   }, [regionInteractionKey, regionExtrudePreview]);
 
   /**
@@ -8666,6 +8788,12 @@ export function App() {
       profiles,
       selectedObjectId: session.selectedObjectId,
       parameterScope: parameterScope.scope,
+      dimensions: sketchDimensionAnnotations(
+        objects,
+        sketch?.constraints ?? [],
+        (value) => evalParamValue(value, parameterScope.scope) ?? undefined,
+        doc.units
+      ),
       diagnosticPoints: sketchDiagnosticPoints
     };
   }, [
@@ -9702,9 +9830,27 @@ export function App() {
     };
   }
 
+  function cancelPendingRegionExtrusion(): boolean {
+    const current = interactionRef.current;
+    if (current.mode !== 'region' || current.phase !== 'validating')
+      return false;
+    // Invalidate before scheduling React updates: a worker reply can arrive
+    // before the cleared interaction has rendered.
+    regionExtrudeCommitRequest.current += 1;
+    regionExtrudePreview.clear();
+    setPreviewDeferred(false);
+    setLastValidPreview(null);
+    setKeypad(null);
+    setBusy(false);
+    dispatchInteraction({ type: 'escape' });
+    setSelectedProfiles([]);
+    setStatus('Extrude canceled · the model is unchanged.');
+    return true;
+  }
+
   /** Region-extrude drag released (or exact entry): commit the feature. */
   function handleRegionExtrudeCommit(distance: number, exact?: ParamValue) {
-    if (interaction.mode !== 'region') {
+    if (interaction.mode !== 'region' || interaction.phase === 'validating') {
       return;
     }
     const target = interaction.target;
@@ -9715,70 +9861,87 @@ export function App() {
     regionExtrudePreview.clear();
     setPreviewDeferred(false);
     const input = regionExtrudeInputFor(target, exact ?? rounded);
+    const choice = interaction.extrudeChoice ?? {
+      operation: 'automatic' as const
+    };
+    const session = interaction;
+    const selected = selectedProfilesRef.current;
+    const request = ++regionExtrudeCommitRequest.current;
     void (async () => {
-      // The drag direction decided the volume; the kernel's exact overlap
-      // classification decides add / cut / new-body — the same inference the
-      // Extrude form runs, so a drag into a body cuts it instead of leaving
-      // a coincident second solid. Unclassifiable (kernel busy, document
-      // changed mid-flight) falls back to a plain new body.
       const manager = managerRef.current;
-      let payload: ExtrudeInput = input;
-      let operationNote = '';
-      // Why the extrusion was not classified, when it was not. Falling back
-      // to a new body is a reasonable recovery, but doing it silently is not:
-      // the user asked for a boss and got a second solid with no explanation.
-      let fallbackReason: string | null = null;
-      if (manager) {
-        const base = manager.document;
-        const sketchNode = listNodesByKind(base, 'sketch').find(
-          (candidate) => candidate.sketchId === target.sketchId
+      if (!manager) return;
+      const base = manager.document;
+      const isCurrent = () =>
+        request === regionExtrudeCommitRequest.current &&
+        managerRef.current === manager &&
+        manager.document.projectId === base.projectId &&
+        manager.document.version === base.version &&
+        isExtrudeSessionCurrent(
+          session,
+          interactionRef.current,
+          selected,
+          selectedProfilesRef.current
         );
-        const faceAttachment =
-          sketchNode?.planeRef.type === 'face' && rounded !== 0
-            ? {
-                bodyId: sketchNode.planeRef.bodyId,
-                direction: rounded < 0 ? ('into' as const) : ('away' as const)
-              }
-            : undefined;
-        setBusy(true);
-        setStatus('Classifying the extrusion against the model…');
-        try {
-          const resolved = await resolveExtrudeOperation({
+      const sketchNode = listNodesByKind(base, 'sketch').find(
+        (candidate) => candidate.sketchId === target.sketchId
+      );
+      const faceAttachment =
+        sketchNode?.planeRef.type === 'face'
+          ? {
+              bodyId: sketchNode.planeRef.bodyId,
+              direction: rounded < 0 ? ('into' as const) : ('away' as const)
+            }
+          : undefined;
+      setBusy(true);
+      dispatchInteraction({ type: 'validation-start', value: rounded });
+      setStatus(
+        choice.operation === 'automatic'
+          ? 'Classifying the extrusion against the model…'
+          : 'Checking the selected extrusion…'
+      );
+      try {
+        const resolved = await resolveCurrentExtrude(
+          {
             base,
             input,
+            choice,
             derive: (document) => geometry.syncOnce(document),
             ...(faceAttachment ? { faceAttachment } : {})
-          });
-          if (
-            managerRef.current === manager &&
-            manager.document.version === base.version
-          ) {
-            payload = { ...resolved.command.payload, name: input.name };
-            operationNote = ` (${resolved.inference.operation})`;
-          } else {
-            fallbackReason = 'the document changed while it ran';
+          },
+          isCurrent
+        );
+        if (!resolved) return;
+        const command = resolved.command;
+        const resultBodyId = command.payload.ids?.bodyId;
+        if (!resultBodyId)
+          throw new Error('Extrude could not reserve a result body.');
+        await executeValidatedDirectEdit(
+          command,
+          resultBodyId,
+          `Extruded region by ${rounded} ${doc?.units ?? ''} (${resolved.inference.operation}).`,
+          rounded,
+          () => {
+            setSelectedProfiles([]);
+            setRevertPill({ sketchId: target.sketchId as SketchId });
+            armExtrudeCapHandle(resultBodyId);
+          },
+          undefined,
+          {
+            baseProjectId: base.projectId,
+            baseVersion: base.version,
+            derived: resolved.derived
           }
-        } catch (error) {
-          fallbackReason = errorMessage(error, 'the exact kernel refused it');
+        );
+      } catch (error) {
+        if (isCurrent()) {
+          reportPreviewFailure(
+            errorMessage(error, 'The selected extrusion could not be created.'),
+            rounded
+          );
         }
-        setBusy(false);
+      } finally {
+        if (request === regionExtrudeCommitRequest.current) setBusy(false);
       }
-      const command = commandFactories.extrudeSketch(payload);
-      const resultBodyId =
-        command.payload.ids?.bodyId ?? (target.sketchId as unknown as BodyId);
-      void executeValidatedDirectEdit(
-        command,
-        resultBodyId,
-        fallbackReason === null
-          ? `Extruded region by ${rounded} ${doc?.units ?? ''}${operationNote}.`
-          : `Extruded region by ${rounded} ${doc?.units ?? ''} as a new body — could not classify it against the model: ${fallbackReason}`,
-        rounded,
-        () => {
-          setSelectedProfiles([]);
-          setRevertPill({ sketchId: target.sketchId as SketchId });
-          armExtrudeCapHandle(resultBodyId);
-        }
-      );
     })();
   }
 
@@ -10440,12 +10603,12 @@ export function App() {
   }
 
   /** Edge chip tapped: exact entry for the blend radius/distance. */
-  function handleOpenEdgeKeypad(currentSize: number) {
+  function handleOpenEdgeKeypad(currentSize: number): boolean {
     if (
       interaction.mode !== 'edges' &&
       !(interaction.mode === 'face' && interaction.op === 'edit-fillet')
     ) {
-      return;
+      return false;
     }
     dispatchInteraction({ type: 'keypad-open' });
     setKeypad({
@@ -10458,6 +10621,7 @@ export function App() {
         currentSize > 0 ? String(Math.round(currentSize * 100) / 100) : '',
       unitKind: 'length'
     });
+    return true;
   }
 
   function handleEdgeCancel() {
@@ -10677,9 +10841,12 @@ export function App() {
     currentOffset: number,
     totalBaseline?: number,
     totalSense: 1 | -1 = 1
-  ) {
-    if (interaction.mode !== 'face' && interaction.mode !== 'region') {
-      return;
+  ): boolean {
+    if (
+      interaction.mode !== 'region' &&
+      !(interaction.mode === 'face' && interaction.op === 'offset-face')
+    ) {
+      return false;
     }
     dispatchInteraction({ type: 'keypad-open' });
     setKeypad({
@@ -10701,17 +10868,18 @@ export function App() {
       unitKind: 'length',
       ...(totalBaseline === undefined ? {} : { totalBaseline, totalSense })
     });
+    return true;
   }
 
   function handleOpenCylinderRadiusKeypad(
     radius: number,
     dimensionMode: DimensionMode
-  ) {
+  ): boolean {
     if (
       interaction.mode !== 'face' ||
       interaction.op !== 'resize-cylinder-radius'
     ) {
-      return;
+      return false;
     }
     dispatchInteraction({ type: 'keypad-open' });
     setKeypad({
@@ -10722,6 +10890,7 @@ export function App() {
       dimensionMode,
       baseline: interaction.target.radius
     });
+    return true;
   }
 
   /**
@@ -11802,6 +11971,8 @@ export function App() {
    */
   const workspaceInputEnabled =
     !settingsOpen && !sharingOpen && !pendingShaprImport;
+  exactEntryInputEnabledRef.current =
+    workspaceInputEnabled && !paletteOpen && !shortcutsOpen && !namingSave;
 
   // Workspace keyboard map (ignored while typing in a field). The ref must be
   // refreshed before paint: a keydown arriving between a commit and a passive
@@ -11855,11 +12026,8 @@ export function App() {
         return;
       }
       const target = event.target as HTMLElement | null;
-      const typing =
-        target &&
-        (target.tagName === 'INPUT' ||
-          target.tagName === 'SELECT' ||
-          target.tagName === 'TEXTAREA');
+      const typing = isTypingTarget(target);
+      if (event.key === 'Escape') exactEntryQueue.cancel();
       if (meta && event.key.toLowerCase() === 'k') {
         event.preventDefault();
         setShortcutsOpen(false);
@@ -11872,6 +12040,12 @@ export function App() {
           setPaletteOpen(false);
           setShortcutsOpen(false);
         }
+        return;
+      }
+      if (event.key === 'Escape' && tool === 'hole' && holeFacePickTarget) {
+        event.preventDefault();
+        setHoleFacePickTarget(null);
+        setStatus('Hole face picking canceled · hole settings preserved.');
         return;
       }
 
@@ -11995,22 +12169,33 @@ export function App() {
         }
         return;
       }
-      // Enter is the keyboard half of drag-or-type. Every armed handle can be
-      // dragged or tapped to type an exact value; without this the typing half
-      // needed a pointer, which is not a contract at all.
-      if (
-        event.key === 'Enter' &&
-        isOperationState(interaction) &&
-        interaction.phase === 'armed' &&
-        !keypad
-      ) {
-        if (openExactEntryRef.current?.() === true) {
-          event.preventDefault();
-          return;
-        }
+      const exactEntry = exactEntryShortcut(
+        interaction,
+        event,
+        typing,
+        keypad !== null,
+        modelingLocked
+      );
+      if (exactEntry) {
+        event.preventDefault();
+        exactEntryQueue.push(
+          {
+            interaction,
+            manager: managerRef.current,
+            version: managerRef.current?.document.version,
+            tool,
+            workspaceMode: resolvedWorkspaceMode
+          },
+          exactEntry.initial
+        );
+        return;
       }
       switch (event.key) {
         case 'Escape':
+          if (cancelPendingRegionExtrusion()) {
+            event.preventDefault();
+            return;
+          }
           if (modelingLocked && measuring) {
             event.preventDefault();
             if (measurementDraft) {
@@ -13160,6 +13345,7 @@ export function App() {
             }
             sketchMode={modelingLocked ? null : sketchModeState}
             onSketchCommit={handleSketchCommit}
+            onEditSketchDimension={handleEditSketchDimension}
             onSketchDrawingChange={(drawing) =>
               dispatchInteraction({ type: 'sketch-drawing', drawing })
             }
@@ -13291,10 +13477,40 @@ export function App() {
                 <>
                   <ToolCard
                     model={contextualToolCard}
+                    cancelableWhileValidating={interaction.mode === 'region'}
+                    children={
+                      interaction.mode === 'region' ? (
+                        <ExtrudeControls
+                          choice={
+                            interaction.extrudeChoice ?? {
+                              operation: 'automatic'
+                            }
+                          }
+                          bodies={doc.bodyOrder.flatMap((bodyId) => {
+                            const body =
+                              doc.derived.bodyRepresentations[bodyId];
+                            return body && !body.consumed
+                              ? [{ bodyId, name: body.name }]
+                              : [];
+                          })}
+                          disabled={busy || interaction.phase === 'validating'}
+                          onChange={(choice) =>
+                            dispatchInteraction({
+                              type: 'set-extrude-choice',
+                              choice
+                            })
+                          }
+                          onDistance={() =>
+                            handleOpenOffsetKeypad(interaction.lastValue ?? 0)
+                          }
+                        />
+                      ) : undefined
+                    }
                     onAction={handleSelectionAction}
                     onEditCulprit={handleEditCulpritFeature}
                     {...(keepLastValid ? { keepLastValid } : {})}
                     onClose={() => {
+                      if (cancelPendingRegionExtrusion()) return;
                       if (
                         interaction.mode !== 'idle' &&
                         interaction.mode !== 'sketch' &&
@@ -13728,17 +13944,22 @@ export function App() {
                     profileOptions={modelingProfileOptions}
                     pathOptions={modelingPathOptions}
                     initialTarget={modelingTargetBodyId ?? undefined}
+                    viewportHoleFacePick={viewportHoleFacePick}
                     unsupportedReason={modelingUnsupportedReason ?? undefined}
                     onPreflight={preflightModelingSubmission}
                     onSubmit={submitModelingOperation}
                     onCancel={cancelPanel}
                     onTargetBodyChange={(bodyId) => {
                       modelingPreflightRef.current = null;
+                      setHoleFacePickTarget(null);
+                      setViewportHoleFacePick(null);
                       setModelingTargetBodyId(bodyId);
                       setSelectedBodyIds([bodyId]);
                       setSelectedTopology(null);
                     }}
                     onOpeningFaceSelectionChange={(hashes) => {
+                      setHoleFacePickTarget(null);
+                      setViewportHoleFacePick(null);
                       const selectedHash = hashes.at(-1);
                       const face = modelingTargetBody?.topology?.faces.find(
                         (candidate) => candidate.hash === selectedHash
@@ -13759,6 +13980,16 @@ export function App() {
                     }}
                     onRequestOpeningFaceSelection={() => {
                       setManualSelectionFilter('face');
+                      if (
+                        modelingOperation === 'hole' &&
+                        modelingTargetBodyId
+                      ) {
+                        setHoleFacePickTarget(modelingTargetBodyId);
+                        setStatus(
+                          'Hole: pick a planar entry face on the target body. Esc cancels face picking.'
+                        );
+                        return;
+                      }
                       setStatus(
                         `${TOOL_META[modelingOperation].label}: pick an exact face, then select it in the face list.`
                       );
