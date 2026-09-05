@@ -3,6 +3,7 @@ import type {
   SketchObjectData,
   SketchPointRef
 } from '@openzcad/shared';
+import { formatNumber } from '../model';
 
 type Point = { x: number; y: number };
 type Resolve = (value: number | string) => number | undefined;
@@ -55,7 +56,7 @@ export function sketchDimensionAnnotations(
     };
   };
   const format = (raw: number | string, value: number, suffix: string) =>
-    `${typeof raw === 'string' ? `${raw} = ` : ''}${Number(value.toFixed(3))}${suffix}`;
+    `${typeof raw === 'string' ? `${raw} = ` : ''}${formatNumber(value)}${suffix}`;
   const result: SketchDimensionAnnotation[] = [];
   for (const constraint of constraints) {
     const data = constraint.data;
