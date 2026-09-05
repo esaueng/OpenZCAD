@@ -1,6 +1,8 @@
 import { useEffect, useRef, type MutableRefObject } from 'react';
 import * as THREE from 'three';
 import { mark, measure, timed } from '../lib/perf';
+import { buildSketchDimensions } from './viewer/sketchDimensions';
+import type { SketchDimensionAnnotation } from '../lib/sketch/dimensionAnnotations';
 import {
   disposeRetiringOverlays,
   disposeSettledOverlays,
@@ -297,6 +299,7 @@ export interface SketchModeState {
   parameterScope: Record<string, number>;
   /** Plane-local endpoints highlighted by Profile diagnostics on request. */
   diagnosticPoints: { x: number; y: number }[];
+  dimensions: SketchDimensionAnnotation[];
 }
 
 /** Sketch curves + detected regions, rendered when direct manipulation is on. */
@@ -592,6 +595,7 @@ interface ModelViewerProps {
   sketchMode: SketchModeState | null;
   /** A drawing gesture completed an entity. */
   onSketchCommit(object: SketchObjectData): void;
+  onEditSketchDimension(id: string, anchor: { x: number; y: number }): void;
   /** Mirrors chain/drag liveness into the interaction machine. */
   onSketchDrawingChange(drawing: boolean): void;
   /** Selects a committed entity for exact-value editing. */
@@ -1185,6 +1189,7 @@ export function ModelViewer({
   regionHandle,
   sketchMode,
   onSketchCommit,
+  onEditSketchDimension,
   onSketchDrawingChange,
   onSketchSelectObject,
   onSelectSketchProfile,
@@ -1327,6 +1332,11 @@ export function ModelViewer({
   const profilePickTargetsRef = useRef<ProfilePickTarget[]>([]);
   /** Group holding region-detected sketch rendering (curves + fills). */
   const regionGroupRef = useRef<THREE.Group | null>(null);
+  const sketchDimensionsRef = useRef<ReturnType<
+    typeof buildSketchDimensions
+  > | null>(null);
+  const editSketchDimensionRef = useRef(onEditSketchDimension);
+  editSketchDimensionRef.current = onEditSketchDimension;
   /** Separate from direct-edit overlays so body rebuilds do not erase it. */
   const measurementGroupRef = useRef<THREE.Group | null>(null);
   /**
@@ -6481,6 +6491,9 @@ export function ModelViewer({
       // pixel without rotating anything, and a rotation guard would leave the
       // arrowheads frozen at their pre-zoom size. The loop is already
       // on-demand, so this costs nothing on a still frame.
+      sketchDimensionsRef.current?.update(
+        (point) => moveGizmoWorldScale(worldPerPixelAt(point)) * 0.55
+      );
       for (const entry of measurementDimensionsRef.current) {
         entry.graphic.update(
           entry.start,
@@ -8065,6 +8078,27 @@ export function ModelViewer({
   // frame rides a ref for the same reason: the entry glide wants the frame
   // as it was at entry, not a re-run per sketch edit.
   const sketchBasis = sketchMode?.basis ?? null;
+  const sketchDimensions = sketchMode?.dimensions;
+  useEffect(() => {
+    const context = contextRef.current;
+    if (!context || !sketchBasis || !sketchDimensions) return;
+    const overlay = buildSketchDimensions(
+      sketchDimensions,
+      sketchBasis,
+      context.fatLineResolution(),
+      (id, anchor) => editSketchDimensionRef.current(id, anchor)
+    );
+    context.scene.add(overlay.group);
+    sketchDimensionsRef.current = overlay;
+    context.requestRender();
+    return () => {
+      context.scene.remove(overlay.group);
+      overlay.dispose();
+      if (sketchDimensionsRef.current === overlay)
+        sketchDimensionsRef.current = null;
+      context.requestRender();
+    };
+  }, [sketchBasis, sketchDimensions]);
   const sketchEntryFrameRef = useRef<SketchEntryFrame | null>(null);
   sketchEntryFrameRef.current = sketchMode?.frame ?? null;
   useEffect(() => {

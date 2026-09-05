@@ -144,6 +144,7 @@ import {
   type ConstraintPick,
   type DrivingDimensionKind
 } from './lib/sketch/constraints';
+import { sketchDimensionAnnotations } from './lib/sketch/dimensionAnnotations';
 import {
   solveStatusLabel,
   solvedSketchCommands
@@ -8784,6 +8785,12 @@ export function App() {
       profiles,
       selectedObjectId: session.selectedObjectId,
       parameterScope: parameterScope.scope,
+      dimensions: sketchDimensionAnnotations(
+        objects,
+        sketch?.constraints ?? [],
+        (value) => evalParamValue(value, parameterScope.scope) ?? undefined,
+        doc.units
+      ),
       diagnosticPoints: sketchDiagnosticPoints
     };
   }, [
@@ -13335,6 +13342,7 @@ export function App() {
             }
             sketchMode={modelingLocked ? null : sketchModeState}
             onSketchCommit={handleSketchCommit}
+            onEditSketchDimension={handleEditSketchDimension}
             onSketchDrawingChange={(drawing) =>
               dispatchInteraction({ type: 'sketch-drawing', drawing })
             }
