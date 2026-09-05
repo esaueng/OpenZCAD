@@ -6,8 +6,8 @@ import { describe, expect, it } from 'vitest';
 
 const workflow = readFileSync('.github/workflows/trusted-pr.yml', 'utf8');
 
-function stepScript(name: string): string {
-  const step = workflow.slice(workflow.indexOf(`- name: ${name}`));
+function stepScript(name: string, source = workflow): string {
+  const step = source.slice(source.indexOf(`- name: ${name}`));
   const lines = step
     .slice(step.indexOf('run: |\n') + 'run: |\n'.length)
     .split('\n');
@@ -30,7 +30,7 @@ const trustedEvent = {
   REF: 'refs/pull/123/merge'
 };
 
-function route(overrides: Record<string, string>): string {
+function route(overrides: Partial<typeof trustedEvent>): string {
   const directory = mkdtempSync(join(tmpdir(), 'trusted-pr-policy-'));
   try {
     const output = join(directory, 'output');
@@ -136,5 +136,40 @@ describe('immutable trusted PR policy', () => {
       }
     );
     expect(result.status).toBe(1);
+  });
+});
+
+describe('required validation gate', () => {
+  const ci = readFileSync('.github/workflows/ci.yml', 'utf8');
+
+  it('pins runner policy independently of PR edits and retains both dependencies', () => {
+    expect(ci).toMatch(
+      /uses: esaueng\/OpenZCAD\/\.github\/workflows\/trusted-pr\.yml@[0-9a-f]{40}\n/
+    );
+    expect(ci).not.toMatch(/secrets: inherit|runs-on:.*ci-small/);
+    expect(ci).toContain('needs: [quality, validation]\n    if: always()');
+  });
+
+  it.each([
+    ['success', 'success', 0],
+    ['failure', 'success', 1],
+    ['cancelled', 'success', 1],
+    ['skipped', 'success', 1],
+    ['success', 'failure', 1],
+    ['success', 'cancelled', 1],
+    ['success', 'skipped', 1]
+  ])('requires quality %s and validation %s', (quality, validation, status) => {
+    const result = spawnSync(
+      'bash',
+      ['-e', '-c', stepScript('Require all validation checks', ci)],
+      {
+        env: {
+          ...process.env,
+          QUALITY_RESULT: String(quality),
+          VALIDATION_RESULT: String(validation)
+        }
+      }
+    );
+    expect(result.status).toBe(status);
   });
 });
