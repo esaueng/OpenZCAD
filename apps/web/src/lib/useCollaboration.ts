@@ -20,6 +20,7 @@ import {
   isDesktopApp
 } from './desktopBridge';
 import { cloudFunctionsAreEnabled } from './cloudMode';
+import { projectPreservesLocalWork } from './localProjectStore';
 
 export type CollaborationStatus =
   | 'connecting'
@@ -260,6 +261,41 @@ export function useCollaboration({
   const userId = session?.userId ?? null;
   const displayName = session?.displayName ?? null;
 
+  const reconcileMatchingRoomDocument = useCallback(
+    (remote: ProjectDocument): boolean => {
+      const local = documentRef.current;
+      if (
+        !local ||
+        local.projectId !== remote.projectId ||
+        remote.schemaVersion > PROJECT_DOCUMENT_SCHEMA_VERSION ||
+        !projectPreservesLocalWork(local, remote)
+      ) {
+        return false;
+      }
+      // Matching geometry alone is insufficient: distinct checkpoints/history
+      // are user work too. The remote must retain every local history entry.
+      clearUnresolvedConflict(local.projectId, 'room');
+      conflictRef.current = null;
+      setConflict(null);
+      keepMinePendingRef.current = false;
+      lastSentVersionRef.current = remote.version;
+      baseVersionRef.current = remote.version;
+      serverVersionRef.current = remote.version;
+      setRoomVersion(remote.version);
+      documentRef.current = remote;
+      remoteHandlerRef.current(remote, { adopted: true });
+      setStatus(
+        roleRef.current === 'viewer'
+          ? 'read-only'
+          : leaseRef.current
+            ? 'live'
+            : 'lease-denied'
+      );
+      return true;
+    },
+    []
+  );
+
   useEffect(() => {
     if (!enabled || !projectId || !userId || !displayName) {
       setStatus('offline');
@@ -296,6 +332,9 @@ export function useCollaboration({
       const marker = readUnresolvedConflict(projectId, 'room');
       if (!localDocument || (!force && !marker && !conflictRef.current)) {
         return false;
+      }
+      if (reconcileMatchingRoomDocument(roomDocument)) {
+        return true;
       }
       let pending: ProjectConflict;
       try {
@@ -377,6 +416,7 @@ export function useCollaboration({
             }
             if (!response.ok || message.type === 'conflict') {
               if (message.type === 'conflict') {
+                if (reconcileMatchingRoomDocument(message.document)) return;
                 serverVersionRef.current = message.document.version;
                 setRoomVersion(message.document.version);
                 retainConflict(message.document, true);
@@ -702,7 +742,7 @@ export function useCollaboration({
       setRole(null);
       setMembers([]);
     };
-  }, [displayName, enabled, projectId, userId]);
+  }, [displayName, enabled, projectId, userId, reconcileMatchingRoomDocument]);
 
   useEffect(() => {
     if (
@@ -757,6 +797,7 @@ export function useCollaboration({
             }
             if (!response.ok || message.type === 'conflict') {
               if (message.type === 'conflict') {
+                if (reconcileMatchingRoomDocument(message.document)) return;
                 serverVersionRef.current = message.document.version;
                 setRoomVersion(message.document.version);
                 let pending: ProjectConflict;
@@ -791,7 +832,12 @@ export function useCollaboration({
       lastSentVersionRef.current = document.version;
     }, 500);
     return () => window.clearTimeout(timeout);
-  }, [document?.projectId, document?.version, enabled]);
+  }, [
+    document?.projectId,
+    document?.version,
+    enabled,
+    reconcileMatchingRoomDocument
+  ]);
 
   const useRemoteVersion = useCallback(
     (expectedRemoteVersion: number): boolean => {
@@ -889,6 +935,7 @@ export function useCollaboration({
           throw new Error('The room returned an unreadable response.');
         }
         if (message.type === 'conflict') {
+          if (reconcileMatchingRoomDocument(message.document)) return;
           serverVersionRef.current = message.document.version;
           setRoomVersion(message.document.version);
           let next: ProjectConflict;
@@ -927,7 +974,7 @@ export function useCollaboration({
         keepMinePendingRef.current = false;
       }
     },
-    [projectId]
+    [projectId, reconcileMatchingRoomDocument]
   );
 
   return {

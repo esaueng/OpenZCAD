@@ -93,6 +93,140 @@ afterEach(() => {
 });
 
 describe('useCollaboration lease ordering', () => {
+  it.each([true, false])(
+    'preserves named checkpoint history when the remote contains it: %s',
+    (remoteHasCheckpoint) => {
+      vi.stubGlobal('WebSocket', FakeWebSocket);
+      const owner = toUserId('user_checkpoint_owner');
+      const base = createProjectDocument('QA checkpoint', owner);
+      const saved = structuredClone(base);
+      saved.checkpoints.push({
+        ...base.checkpoints[0]!,
+        reason: 'QA named save'
+      });
+      const local = remoteHasCheckpoint ? base : saved;
+      const remote = remoteHasCheckpoint ? saved : base;
+      const onRemoteDocument = vi.fn();
+      const { result, unmount } = renderHook(() =>
+        useCollaboration({
+          enabled: true,
+          document: local,
+          session: session(owner),
+          onRemoteDocument,
+          onConflict: vi.fn()
+        })
+      );
+      act(() => {
+        FakeWebSocket.instances[0]!.open();
+        FakeWebSocket.instances[0]!.receive({
+          type: 'conflict',
+          document: remote
+        });
+      });
+      if (remoteHasCheckpoint) {
+        expect(result.current.conflict).toBeNull();
+        expect(onRemoteDocument).toHaveBeenCalledWith(remote, {
+          adopted: true
+        });
+      } else {
+        expect(result.current.conflict).not.toBeNull();
+        expect(onRemoteDocument).not.toHaveBeenCalled();
+      }
+      unmount();
+      localStorage.clear();
+    }
+  );
+  it.each(['state', 'conflict', 'document'] as const)(
+    'reconciles a matching %s frame and clears only the room marker',
+    (type) => {
+      vi.stubGlobal('WebSocket', FakeWebSocket);
+      const owner = toUserId('user_matching_owner');
+      const local = createProjectDocument('QA Matching', owner);
+      const remote = structuredClone(local);
+      remote.version += 2;
+      remote.derived.updatedAt += 100;
+      for (const source of ['room', 'account'] as const) {
+        rememberUnresolvedConflict({
+          projectId: local.projectId,
+          source,
+          localVersion: local.version,
+          remoteVersion: remote.version,
+          detectedAt: Date.now()
+        });
+      }
+      const onRemoteDocument = vi.fn();
+      const onConflict = vi.fn();
+      const { result, unmount } = renderHook(() =>
+        useCollaboration({
+          enabled: true,
+          document: local,
+          session: session(owner),
+          onRemoteDocument,
+          onConflict
+        })
+      );
+      const socket = FakeWebSocket.instances[0]!;
+      act(() => {
+        socket.open();
+        socket.receive({
+          type: 'state',
+          document: null,
+          members: [],
+          role: 'viewer',
+          lease: null
+        });
+        socket.receive(
+          type === 'state'
+            ? {
+                type,
+                document: remote,
+                members: [],
+                role: 'viewer',
+                lease: null
+              }
+            : type === 'document'
+              ? { type, document: remote, clientId: 'other' }
+              : { type, document: remote }
+        );
+      });
+      expect(result.current.conflict).toBeNull();
+      expect(result.current.status).toBe('read-only');
+      expect(onConflict).not.toHaveBeenCalled();
+      expect(onRemoteDocument).toHaveBeenCalledWith(remote, { adopted: true });
+      expect(readUnresolvedConflict(local.projectId, 'room')).toBeNull();
+      expect(readUnresolvedConflict(local.projectId, 'account')).not.toBeNull();
+      unmount();
+      localStorage.clear();
+    }
+  );
+
+  it('does not treat an equal version with different model content as matching', () => {
+    vi.stubGlobal('WebSocket', FakeWebSocket);
+    const owner = toUserId('user_equal_version');
+    const local = createProjectDocument('Local name', owner);
+    const remote = { ...local, name: 'Remote name' };
+    const onRemoteDocument = vi.fn();
+    const { result, unmount } = renderHook(() =>
+      useCollaboration({
+        enabled: true,
+        document: local,
+        session: session(owner),
+        onRemoteDocument,
+        onConflict: vi.fn()
+      })
+    );
+    act(() => {
+      FakeWebSocket.instances[0]!.open();
+      FakeWebSocket.instances[0]!.receive({
+        type: 'conflict',
+        document: remote
+      });
+    });
+    expect(result.current.conflict?.remoteDocument.name).toBe('Remote name');
+    expect(onRemoteDocument).not.toHaveBeenCalled();
+    unmount();
+    localStorage.clear();
+  });
   it('does not open a room while cloud functions are disabled', () => {
     vi.stubGlobal('WebSocket', FakeWebSocket);
     const owner = toUserId('user_offline_owner');
