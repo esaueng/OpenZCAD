@@ -4,6 +4,7 @@ interface ErrorBoundaryProps {
   children: ReactNode;
   label: string;
   resetKey?: string | number;
+  fallback?: ReactNode;
 }
 
 interface ErrorBoundaryState {
@@ -33,6 +34,9 @@ export class ErrorBoundary extends Component<
   override render() {
     if (!this.state.failed) {
       return this.props.children;
+    }
+    if (this.props.fallback !== undefined) {
+      return this.props.fallback;
     }
     return (
       <section className="error-boundary" role="alert">
