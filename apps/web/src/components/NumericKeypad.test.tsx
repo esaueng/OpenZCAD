@@ -1,5 +1,6 @@
 import { fireEvent, render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
+import { useLayoutEffect } from 'react';
 import { NumericKeypad, type KeypadRequest } from './NumericKeypad';
 
 function setup(initial: string, selectInitial?: boolean) {
@@ -31,6 +32,43 @@ function setup(initial: string, selectInitial?: boolean) {
 }
 
 describe('numeric entry first character', () => {
+  it('positions and focuses the input before the parent layout phase even before an anchor frame', () => {
+    const observed = vi.fn();
+    function Parent() {
+      useLayoutEffect(() => {
+        const input = document.querySelector<HTMLInputElement>('.keypad-value');
+        const keypad = document.querySelector<HTMLElement>('.numeric-keypad');
+        observed(
+          document.activeElement === input,
+          keypad?.style.visibility,
+          input?.selectionStart,
+          input?.selectionEnd
+        );
+      }, []);
+      return (
+        <div style={{ width: 1000, height: 800 }}>
+          <NumericKeypad
+            request={{
+              kind: 'offset',
+              label: 'Height',
+              initial: '1',
+              unitKind: 'length',
+              selectInitial: false
+            }}
+            units="mm"
+            scope={{}}
+            anchorRef={{ current: null }}
+            onPreview={() => undefined}
+            onCommit={() => undefined}
+            onCancel={() => undefined}
+          />
+        </div>
+      );
+    }
+    render(<Parent />);
+    expect(observed).toHaveBeenCalledExactlyOnceWith(true, 'visible', 1, 1);
+  });
+
   it('keeps the caret after a captured digit and previews that digit once', () => {
     const { input, onPreview, onCommit } = setup('1', false);
     expect(input).toHaveFocus();
