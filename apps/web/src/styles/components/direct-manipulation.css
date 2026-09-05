@@ -1366,3 +1366,22 @@
 .sketch-solve-pill.empty {
   visibility: hidden;
 }
+
+.extrude-controls {
+  display: flex;
+  flex: 0 0 100%;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: 8px;
+}
+
+.extrude-controls .field {
+  flex: 1 1 100px;
+  min-width: 0;
+  margin: 0;
+}
+
+.extrude-controls select {
+  width: 100%;
+  min-width: 0;
+}
