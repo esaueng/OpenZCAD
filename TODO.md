@@ -101,8 +101,10 @@ it. When the two disagree, the dated roadmaps win.
 - Add multi-profile editing refinements and the remaining sketch-constraint UX
   only through deterministic commands. Direct tools now cover every
   schema-backed constraint kind; distance and angle creation/editing solve as
-  one undoable transaction. Persistent graphics, conflict feedback, and point
-  identity for rectangles/polygons remain roadmap items. (Partial revolve
+  one undoable transaction. Persistent distance/angle annotations now reopen
+  the driving-value editor on the canvas. Radius annotations, saved placement,
+  driven dimensions, conflict feedback, and point identity for rectangles/polygons
+  remain roadmap items. (Partial revolve
   shipped: the revolve form exposes `angleDeg` and
   `test/partial-revolve.test.ts` pins it. Two-sided extrude shipped the same
   way: `backDistance` on the extrude command and form, mutually exclusive with
