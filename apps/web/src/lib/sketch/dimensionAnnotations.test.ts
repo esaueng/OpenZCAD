@@ -64,6 +64,15 @@ describe('persistent sketch dimensions', () => {
     );
     expect(annotation?.id).toBe(constraints[0]!.constraintId);
     expect(annotation?.label).toBe('length = 5 mm');
+    expect(
+      sketchDimensionAnnotations(
+        entries,
+        constraints,
+        (value) => (value === 'length' ? 0.0001 : resolve(value)),
+        'mm'
+      )[0]?.label
+    ).toBe('length = 1.000e-4 mm');
+
     expect(annotation?.span?.start.x).toBeCloseTo(-0.6, 12);
     expect(annotation?.span?.start.y).toBeCloseTo(0.45, 12);
     expect(annotation?.span?.end.x).toBeCloseTo(2.4, 12);
