@@ -27,13 +27,30 @@ export interface ThumbnailCloudTransport {
   uploadArtifact(uploadUrl: string, body: Blob): Promise<void>;
 }
 
-/** Converts a canvas data URL into the original compact image bytes. */
-export async function thumbnailSourceBlob(source: string): Promise<Blob> {
-  const response = await fetch(source);
-  if (!response.ok) {
-    throw new Error('Thumbnail image could not be read.');
+/**
+ * Converts a canvas data URL into the original compact image bytes.
+ *
+ * Decoded here rather than fetched: the app's Content-Security-Policy limits
+ * `connect-src` to its own origin, so `fetch('data:…')` is refused in the
+ * browser while it succeeds in Node. Every thumbnail upload failed that way
+ * for nine days without a single request leaving the page.
+ */
+export function thumbnailSourceBlob(source: string): Promise<Blob> {
+  const match = /^data:([^;,]*)((?:;[^;,]*)*?)(;base64)?,(.*)$/s.exec(source);
+  if (!match) {
+    return Promise.reject(new Error('Thumbnail image could not be read.'));
   }
-  return response.blob();
+  const type = match[1] ?? '';
+  const base64 = match[3] !== undefined;
+  const payload = match[4] ?? '';
+  try {
+    const bytes = base64
+      ? Uint8Array.from(atob(payload), (char) => char.charCodeAt(0))
+      : new TextEncoder().encode(decodeURIComponent(payload));
+    return Promise.resolve(new Blob([bytes], { type: type || 'image/webp' }));
+  } catch {
+    return Promise.reject(new Error('Thumbnail image could not be read.'));
+  }
 }
 
 /** Converts downloaded private image bytes into a source `<img>` can render. */
