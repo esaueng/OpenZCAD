@@ -200,13 +200,36 @@ export function NumericKeypad({
           y: request.fixedClientAnchor.y - rect.top
         });
       }
+    } else {
+      const host = root.parentElement;
+      if (host) {
+        const rect = host.getBoundingClientRect();
+        const chip = host.querySelector<HTMLElement>('.handle-value-chip');
+        const chipRect = chip?.getBoundingClientRect();
+        const visibleChip =
+          chip &&
+          chipRect &&
+          chipRect.width > 0 &&
+          chipRect.height > 0 &&
+          getComputedStyle(chip).visibility !== 'hidden';
+        if (visibleChip) {
+          positionAt({
+            x: chipRect.left + chipRect.width / 2 - rect.left,
+            y: chipRect.top - rect.top
+          });
+        } else {
+          // Focus cannot land in a hidden input while the rig's first frame is pending.
+          positionAt({ x: host.clientWidth / 2, y: host.clientHeight / 2 });
+          positioned = false;
+        }
+      }
     }
     return () => {
       anchorRef.current = null;
     };
   }, [anchorRef, request.fixedClientAnchor]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     inputRef.current?.focus();
     if (selectInitial.current) inputRef.current?.select();
     else {

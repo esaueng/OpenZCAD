@@ -1422,8 +1422,27 @@ test('preflights and drills a through hole into the top face', async ({
   ).toHaveValue('5');
   await entry.getByRole('button', { name: 'Pick faces in viewport' }).click();
   const canvas = page.locator('.viewer-host canvas');
-  await canvas.dispatchEvent('openzcad:e2e-select-planar-face', {
-    detail: { normal: { x: 0, y: 0, z: 1 } }
+  const topFace = (select: boolean) =>
+    canvas.evaluate(
+      (element, shouldSelect) =>
+        new Promise<{ lineageName?: string } | null>((resolve) => {
+          element.dispatchEvent(
+            new CustomEvent('openzcad:e2e-select-planar-face', {
+              detail: {
+                normal: { x: 0, y: 0, z: 1 },
+                select: shouldSelect,
+                resolve
+              }
+            })
+          );
+        }),
+      select
+    );
+  await expect
+    .poll(() => topFace(false))
+    .toMatchObject({ lineageName: 'primitive.box.face.z-max' });
+  expect(await topFace(true)).toMatchObject({
+    lineageName: 'primitive.box.face.z-max'
   });
   await expect(
     entry.getByRole('button', { name: /Plane face box.*z max/ })
