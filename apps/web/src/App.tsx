@@ -9003,7 +9003,7 @@ export function App() {
     useState<SketchSolveStatus | null>(null);
   const [sketchSolving, setSketchSolving] = useState(false);
   const [sketchDimensionDraft, setSketchDimensionDraft] = useState<{
-    kind: DrivingDimensionKind;
+    kind: DrivingDimensionKind | 'radius';
     picks: ConstraintPick[];
     documentVersion: number;
     constraintId?: string;
@@ -9041,7 +9041,9 @@ export function App() {
         constraintId: String(constraintId),
         label: describeConstraint(data, nameOf),
         editable:
-          data.constraintKind === 'distance' || data.constraintKind === 'angle'
+          data.constraintKind === 'distance' ||
+          data.constraintKind === 'angle' ||
+          data.constraintKind === 'radius'
       })
     );
   }, [editingSketchNode, doc]);
@@ -9162,7 +9164,8 @@ export function App() {
       !doc ||
       !constraint ||
       (constraint.data.constraintKind !== 'distance' &&
-        constraint.data.constraintKind !== 'angle')
+        constraint.data.constraintKind !== 'angle' &&
+        constraint.data.constraintKind !== 'radius')
     ) {
       setStatus('Only driving dimensions have editable values.');
       return;
@@ -9174,12 +9177,13 @@ export function App() {
             { kind: 'point', ...data.a },
             { kind: 'point', ...data.b }
           ]
-        : [
-            { kind: 'object', objectId: String(data.a) },
-            { kind: 'object', objectId: String(data.b) }
-          ];
-    const value =
-      data.constraintKind === 'distance' ? data.value : data.valueDeg;
+        : data.constraintKind === 'radius'
+          ? [{ kind: 'object', objectId: String(data.objectId) }]
+          : [
+              { kind: 'object', objectId: String(data.a) },
+              { kind: 'object', objectId: String(data.b) }
+            ];
+    const value = data.constraintKind === 'angle' ? data.valueDeg : data.value;
     setSketchDimensionDraft({
       kind: data.constraintKind,
       picks,
@@ -9189,7 +9193,7 @@ export function App() {
     dispatchInteraction({ type: 'sketch-constraint-tool', kind: null });
     setKeypad({
       kind: 'sketch-dimension',
-      label: data.constraintKind === 'distance' ? 'Distance' : 'Angle',
+      label: constraintToolSpec(data.constraintKind).label,
       initial: String(value),
       unitKind: data.constraintKind === 'angle' ? 'angle' : 'length',
       fixedClientAnchor: anchor
