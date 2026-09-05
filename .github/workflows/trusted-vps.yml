@@ -1,0 +1,44 @@
+name: Trusted VPS checks
+on:
+  workflow_dispatch:
+  push:
+    branches: [codex/trusted-vps-ci]
+permissions:
+  contents: read
+concurrency:
+  group: trusted-vps-${{ github.repository }}-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  verify:
+    if: github.event_name != 'pull_request'
+    runs-on:
+      group: ci-trusted-main
+      labels: ci-small
+    timeout-minutes: 30
+    steps:
+      - name: Verify runner boundary
+        run: |
+          test "$(id -u)" != 0
+          test ! -w /opt/ci-runner/bin/Runner.Listener
+          test ! -w /etc/systemd/system/ci-runner.service
+          docker info --format '{{json .SecurityOptions}}' | grep -q rootless
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 22
+      - name: Enable package manager shims
+        run: |
+          mkdir -p "$HOME/.local/bin"
+          corepack enable --install-directory "$HOME/.local/bin"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      - name: Install
+        run: /usr/bin/time -v corepack pnpm install --frozen-lockfile
+      - name: Representative checks
+        run: |
+          corepack pnpm lint
+          corepack pnpm typecheck
+      - name: Disk usage
+        if: always()
+        run: df -h /srv/ci; du -sh "$GITHUB_WORKSPACE" "$HOME"
