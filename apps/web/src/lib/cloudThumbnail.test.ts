@@ -1,12 +1,46 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   MAX_THUMBNAIL_BYTES,
   toArtifactId,
   toProjectId
 } from '@openzcad/shared';
-import { downloadCloudThumbnail, uploadCloudThumbnail } from './cloudThumbnail';
+import {
+  downloadCloudThumbnail,
+  thumbnailSourceBlob,
+  uploadCloudThumbnail
+} from './cloudThumbnail';
 
 describe('cloud thumbnails', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  // The app's CSP refuses `fetch('data:…')`, which Node's fetch accepts, so
+  // the upload path must never touch fetch to read its own image bytes.
+  it('reads the image bytes without fetching the data URL', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockRejectedValue(new TypeError('Failed to fetch'))
+    );
+
+    const blob = await thumbnailSourceBlob(
+      'data:image/webp;base64,cHJldmlldw=='
+    );
+
+    expect(blob.type).toBe('image/webp');
+    expect(await blob.text()).toBe('preview');
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it('rejects a source that is not a data URL', async () => {
+    await expect(
+      thumbnailSourceBlob('https://example.com/x.webp')
+    ).rejects.toThrow('could not be read');
+    await expect(
+      thumbnailSourceBlob('data:image/webp;base64,%%%')
+    ).rejects.toThrow('could not be read');
+  });
+
   it('downloads image bytes as a reusable data URL', async () => {
     const source = await downloadCloudThumbnail(
       'artifact_thumbnail',
