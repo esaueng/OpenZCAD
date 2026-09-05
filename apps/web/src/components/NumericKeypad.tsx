@@ -25,6 +25,8 @@ export interface KeypadRequest {
   label: string;
   /** Prefill; may be a typed digit captured mid-gesture. */
   initial: string;
+  /** Captured first keys continue at the caret; measured prefills select all. */
+  selectInitial?: boolean;
   unitKind: 'length' | 'angle';
   /** Radial display/entry notation; committed values are always radii. */
   dimensionMode?: DimensionMode;
@@ -133,6 +135,8 @@ export function NumericKeypad({
     : request.label;
   const rootRef = useRef<HTMLDivElement | null>(null);
   const inputRef = useRef<HTMLInputElement | null>(null);
+  const selectInitial = useRef(request.selectInitial ?? true);
+  const initialPreviewed = useRef(false);
   const evaluation = evaluateKeypadInput(
     value,
     entryUnit,
@@ -204,8 +208,19 @@ export function NumericKeypad({
 
   useEffect(() => {
     inputRef.current?.focus();
-    inputRef.current?.select();
+    if (selectInitial.current) inputRef.current?.select();
+    else {
+      const input = inputRef.current;
+      input?.setSelectionRange(input.value.length, input.value.length);
+    }
   }, []);
+
+  useEffect(() => {
+    if (selectInitial.current || initialPreviewed.current) return;
+    initialPreviewed.current = true;
+    if (evaluation.ok && normalizedValue !== undefined)
+      onPreview(normalizedValue);
+  }, [evaluation.ok, normalizedValue, onPreview]);
 
   const previewIfValid = (next: string, requestedMode = dimensionMode) => {
     const typedMode = dimensionModeForInput(next);
