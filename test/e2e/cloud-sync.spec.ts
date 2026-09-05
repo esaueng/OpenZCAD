@@ -308,6 +308,77 @@ async function renameProject(page: Page, name: string): Promise<void> {
   ).toContainText(name);
 }
 
+for (const action of ['edit', 'leave', 'switch'] as const) {
+  test(`preserves the active workspace after a pending manual save and ${action}`, async ({
+    page
+  }) => {
+    const api = new SharedCloudProjectApi();
+    await api.install(page);
+    await page.goto('/');
+    await page.getByLabel('Project name').fill('Pending save');
+    await page.getByRole('button', { name: 'Create project' }).click();
+    await expect(
+      page.getByRole('button', { name: 'Saved', exact: true })
+    ).toBeVisible();
+
+    let release!: () => void;
+    let received!: () => void;
+    const responseGate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const requestReceived = new Promise<void>((resolve) => {
+      received = resolve;
+    });
+    await page.route('**/api/projects/*/revisions', async (route) => {
+      if (route.request().method() !== 'POST') return route.fallback();
+      const { document } = route.request().postDataJSON() as {
+        document: ProjectDocument;
+      };
+      received();
+      await responseGate;
+      await route.fulfill({ json: document });
+    });
+    await page.keyboard.press('ControlOrMeta+s');
+    await requestReceived;
+
+    try {
+      if (action === 'edit') {
+        await renameProject(page, 'Newer edit');
+      } else {
+        await page.getByTitle('Back to projects').click();
+        await expect(
+          page.getByRole('button', { name: 'Create project' })
+        ).toBeVisible();
+        if (action === 'switch') {
+          await page.getByLabel('Project name').fill('Different project');
+          await page.getByRole('button', { name: 'Create project' }).click();
+          await expect(
+            page.getByRole('button', { name: 'Rename project' })
+          ).toContainText('Different project');
+        }
+      }
+    } finally {
+      release();
+    }
+    // Let the response and the following IndexedDB writes finish before asserting.
+    await page.waitForTimeout(1000);
+    if (action === 'leave') {
+      await expect(
+        page.getByRole('button', { name: 'Create project' })
+      ).toBeVisible();
+      await expect(
+        page.getByRole('button', { name: 'Rename project' })
+      ).toHaveCount(0);
+    } else {
+      const expected = action === 'edit' ? 'Newer edit' : 'Different project';
+      await expect(
+        page.getByRole('button', { name: 'Rename project' })
+      ).toContainText(expected);
+      await expect.poll(() => storedProjectNames(page)).toContain(expected);
+    }
+  });
+}
+
 /** The names this device has actually committed to IndexedDB. */
 async function storedProjectNames(page: Page): Promise<string[]> {
   return page.evaluate(
