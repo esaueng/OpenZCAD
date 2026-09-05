@@ -190,6 +190,7 @@ interface ViewerShellProps {
   onDirectManipulationChange(dragging: boolean): void;
   sketchMode: SketchModeState | null;
   onSketchCommit(object: SketchObjectData): void;
+  onEditSketchDimension(id: string, anchor: { x: number; y: number }): void;
   onSketchDrawingChange(drawing: boolean): void;
   onSketchSelectObject(
     objectId: string | null,
@@ -309,6 +310,7 @@ export function ViewerShell({
   onDirectManipulationChange,
   sketchMode,
   onSketchCommit,
+  onEditSketchDimension,
   onSketchDrawingChange,
   onSketchSelectObject,
   sketchViews,
@@ -447,6 +449,7 @@ export function ViewerShell({
         onDirectManipulationChange={onDirectManipulationChange}
         sketchMode={sketchMode}
         onSketchCommit={onSketchCommit}
+        onEditSketchDimension={onEditSketchDimension}
         onSketchDrawingChange={onSketchDrawingChange}
         onSketchSelectObject={onSketchSelectObject}
         sketchViews={sketchViews}
