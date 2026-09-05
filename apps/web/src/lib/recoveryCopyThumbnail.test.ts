@@ -1,5 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
-import { createProjectDocument } from '@openzcad/document-core';
+import {
+  addPrimitiveFeature,
+  createProjectDocument,
+  withoutDerivedProjection
+} from '@openzcad/document-core';
 import {
   toArtifactId,
   toBodyId,
@@ -75,7 +79,54 @@ describe('seedRecoveryCopyThumbnail', () => {
     });
   });
 
-  it('records an empty part when nothing can be rendered', async () => {
+  it('records an empty part when it has no features and nothing to draw', async () => {
+    const { source, copy } = documents();
+    copy.derived.bodyRepresentations = {};
+    const save = vi.fn().mockResolvedValue(undefined);
+
+    await seedRecoveryCopyThumbnail(source, copy, {
+      loadCached: vi.fn().mockRejectedValue(new Error('no store')),
+      save,
+      render: vi.fn().mockResolvedValue(null)
+    });
+
+    expect(save).toHaveBeenCalledWith('proj_recovery_copy', {
+      source: null,
+      version: 7,
+      updatedAt: '2026-09-04T16:00:00.000Z'
+    });
+  });
+
+  // "Keep mine" clones the account copy, which is stored without its
+  // projection: features, no meshes. A null record keyed to that version would
+  // read "No geometry" on the shelf and block the workspace's own capture from
+  // ever replacing it, so the copy must list as a placeholder instead.
+  it('leaves a copy with features but no meshes unwritten', async () => {
+    const built = addPrimitiveFeature(
+      createProjectDocument('Conflict', owner),
+      {
+        name: 'Box',
+        primitiveKind: 'box',
+        dimensions: { width: 10, height: 10, depth: 10 }
+      }
+    );
+    const source = withoutDerivedProjection(built);
+    const copy = structuredClone(source);
+    copy.projectId = toProjectId('proj_recovery_copy');
+    const save = vi.fn().mockResolvedValue(undefined);
+    const render = vi.fn().mockResolvedValue(null);
+
+    await seedRecoveryCopyThumbnail(source, copy, {
+      loadCached: vi.fn().mockResolvedValue(null),
+      save,
+      render
+    });
+
+    expect(render).not.toHaveBeenCalled();
+    expect(save).not.toHaveBeenCalled();
+  });
+
+  it('leaves the copy unwritten when the render fails', async () => {
     const { source, copy } = documents();
     const save = vi.fn().mockResolvedValue(undefined);
 
@@ -85,10 +136,6 @@ describe('seedRecoveryCopyThumbnail', () => {
       render: vi.fn().mockRejectedValue(new Error('no webgl'))
     });
 
-    expect(save).toHaveBeenCalledWith('proj_recovery_copy', {
-      source: null,
-      version: 7,
-      updatedAt: '2026-09-04T16:00:00.000Z'
-    });
+    expect(save).not.toHaveBeenCalled();
   });
 });
