@@ -19,8 +19,10 @@ import {
  *
  *   lens(d) = 2 r^2 acos(d / 2r) - (d/2) sqrt(4 r^2 - d^2),  d < 2r
  *
- * so three in a row remove two adjacent lenses, plus the first-to-third lens
- * once 2d < 2r.
+ * For three collinear, equally spaced cylinders, every point shared by the
+ * outer pair is also in the middle cylinder. Inclusion-exclusion therefore
+ * cancels the outer-pair lens against the triple intersection, leaving only
+ * the two adjacent lenses to subtract.
  */
 describe('a linear pattern whose instances overlap', () => {
   let adapter: ExactKernelAdapter;
@@ -36,9 +38,7 @@ describe('a linear pattern whose instances overlap', () => {
       : 2 * RADIUS * RADIUS * Math.acos(d / (2 * RADIUS)) -
         (d / 2) * Math.sqrt(4 * RADIUS * RADIUS - d * d);
 
-  /** Three in a row: two adjacent overlaps, plus first-to-third if it reaches. */
-  const trueUnion = (d: number) =>
-    3 * ONE - 2 * lens(d) * HEIGHT - lens(2 * d) * HEIGHT;
+  const trueUnion = (d: number) => 3 * ONE - 2 * lens(d) * HEIGHT;
 
   const patterned = async (spacing: number) => {
     adapter ??= await createExactKernelAdapter();
@@ -76,17 +76,7 @@ describe('a linear pattern whose instances overlap', () => {
     expect(warnings).toEqual([]);
   }, 120_000);
 
-  it.each([9, 6])(
-    'reports the material once at spacing %s',
-    async (spacing) => {
-      const { volume } = await patterned(spacing);
-      const expected = trueUnion(spacing);
-      expect(Math.abs(volume - expected) / expected).toBeLessThan(1e-3);
-    },
-    120_000
-  );
-
-  it.fails.each([3, 0.5])(
+  it.each([9, 6, 3, 0.5])(
     'reports the material once at spacing %s',
     async (spacing) => {
       const { volume } = await patterned(spacing);
