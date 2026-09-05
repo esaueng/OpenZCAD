@@ -30,7 +30,9 @@ import {
   putSourceBlobIfAbsent,
   releaseSourceBlobClaim,
   saveLocalProject,
-  saveLocalProjectOrganization
+  saveLocalProjectOrganization,
+  listLocalProjectOrganizations,
+  listPendingOrganizationMirrors
 } from './localProjectStore';
 
 const DATABASE_NAME = 'openzcad-v2';
@@ -690,6 +692,35 @@ describe('listLocalProjects', () => {
     });
   });
 
+  it('tracks which shelf changes have not reached the account', async () => {
+    await saveLocalProjectOrganization(
+      'proj-a',
+      { status: 'deleted', pinned: false, sortOrder: 1 },
+      { mirrorPending: true }
+    );
+    await saveLocalProjectOrganization('proj-b', {
+      status: 'archived',
+      pinned: true,
+      sortOrder: 2
+    });
+
+    expect([...(await listPendingOrganizationMirrors())]).toEqual(['proj-a']);
+    // The flag is bookkeeping, not shelf state: readers never see it.
+    expect((await listLocalProjectOrganizations()).get('proj-a')).toEqual({
+      status: 'deleted',
+      pinned: false,
+      sortOrder: 1
+    });
+
+    await saveLocalProjectOrganization('proj-a', {
+      status: 'deleted',
+      pinned: false,
+      sortOrder: 1
+    });
+
+    expect((await listPendingOrganizationMirrors()).size).toBe(0);
+  });
+
   it('leaves organization undefined when the device has never organised it', async () => {
     await saveLocalProject(projectDocument('Bracket', 'proj-a'));
 
@@ -1050,7 +1081,9 @@ describe('save states on the device', () => {
   it('reports a save this device never had, rather than inventing one', async () => {
     await saveLocalProject(projectDocument('Bracket', 'proj-a'));
 
-    expect(await loadLocalSaveState('proj-a', 'checkpoint_elsewhere')).toBeNull();
+    expect(
+      await loadLocalSaveState('proj-a', 'checkpoint_elsewhere')
+    ).toBeNull();
   });
 
   it('takes a project’s save states with the project when it is deleted', async () => {
