@@ -1,3 +1,4 @@
+import { listFeaturesInOrder } from '@openzcad/document-core';
 import type { BodyRepresentation, ProjectDocument } from '@openzcad/shared';
 import type { ProjectThumbnailRecord } from './localProjectStore';
 
@@ -20,9 +21,15 @@ interface RecoveryCopyThumbnailHost {
  * in memory: the source's cached image is reused when it matches the version
  * being cloned, and otherwise the copy's own derived bodies are rendered.
  *
- * The record is keyed on the copy's document version, which is what the
- * shelf's backfill compares against; the cloud artifact id is deliberately
- * not carried over, because it belongs to the source project.
+ * The record is keyed on the copy's document version, the version the
+ * workspace's capture treats as already drawn. That is why a copy that
+ * cannot be drawn gets no record rather than a null one: "Keep mine" clones
+ * the account copy, which travels without its projection, so it has features
+ * but no meshes. A null keyed to its version would list as "No geometry" and
+ * stop the capture from ever replacing it; no record lists as a placeholder
+ * and is written the first time the copy is opened and left. The cloud
+ * artifact id is deliberately not carried over, because it belongs to the
+ * source project.
  */
 export async function seedRecoveryCopyThumbnail(
   source: ProjectDocument,
@@ -30,16 +37,26 @@ export async function seedRecoveryCopyThumbnail(
   host: RecoveryCopyThumbnailHost
 ): Promise<void> {
   const cached = await host.loadCached(source.projectId).catch(() => null);
-  const image =
-    cached && cached.version === source.version && cached.source
-      ? cached.source
-      : await host
-          .render(
-            Object.values(copy.derived.bodyRepresentations).filter(
-              (body) => !body.consumed
-            )
-          )
-          .catch(() => null);
+  if (cached && cached.version === source.version && cached.source) {
+    await host.save(copy.projectId, {
+      source: cached.source,
+      version: copy.version,
+      updatedAt: copy.derived.updatedAt
+    });
+    return;
+  }
+  const bodies = Object.values(copy.derived.bodyRepresentations).filter(
+    (body) => !body.consumed
+  );
+  if (bodies.length === 0 && listFeaturesInOrder(copy).length > 0) {
+    return;
+  }
+  let image: string | null;
+  try {
+    image = await host.render(bodies);
+  } catch {
+    return;
+  }
   await host.save(copy.projectId, {
     source: image,
     version: copy.version,
