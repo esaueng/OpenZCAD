@@ -16,6 +16,7 @@ interface ExprInputProps {
    * `useFieldAutoFocus`.
    */
   autoFocus?: boolean;
+  error?: string;
 }
 
 /**
@@ -30,13 +31,16 @@ export function ExprInput({
   onChange,
   placeholder,
   optional,
-  autoFocus
+  autoFocus,
+  error
 }: ExprInputProps) {
   const id = useId();
   const mayAutoFocus = useFieldAutoFocus(autoFocus);
   const preview = previewExpression(value, scope);
-  const showError = !preview.ok && !(optional && value.trim().length === 0);
+  const showError =
+    Boolean(error) || (!preview.ok && !(optional && value.trim().length === 0));
   const isPlainNumber = /^\s*-?(?:\d+\.?\d*|\.\d+)\s*$/.test(value);
+  const showPreview = !isPlainNumber || showError;
 
   return (
     <label className="field expr-field" htmlFor={id}>
@@ -56,17 +60,17 @@ export function ExprInput({
           // type. Point the name at the label text and let the preview be a
           // description that announces itself when it changes.
           aria-labelledby={`${id}-label`}
-          aria-describedby={isPlainNumber ? undefined : `${id}-preview`}
+          aria-describedby={showPreview ? `${id}-preview` : undefined}
           aria-invalid={showError || undefined}
           onFocus={(event) => event.currentTarget.select()}
           onChange={(event) => onChange(event.target.value)}
         />
-        {!isPlainNumber && (
+        {showPreview && (
           <small
             id={`${id}-preview`}
             className={`expr-preview ${showError ? 'error' : ''}`}
           >
-            {preview.text}
+            {error ?? preview.text}
           </small>
         )}
       </div>
