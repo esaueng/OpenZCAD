@@ -25,6 +25,8 @@ export interface KeypadRequest {
   label: string;
   /** Prefill; may be a typed digit captured mid-gesture. */
   initial: string;
+  /** Captured first keys continue at the caret; measured prefills select all. */
+  selectInitial?: boolean;
   unitKind: 'length' | 'angle';
   /** Radial display/entry notation; committed values are always radii. */
   dimensionMode?: DimensionMode;
@@ -133,6 +135,8 @@ export function NumericKeypad({
     : request.label;
   const rootRef = useRef<HTMLDivElement | null>(null);
   const inputRef = useRef<HTMLInputElement | null>(null);
+  const selectInitial = useRef(request.selectInitial ?? true);
+  const initialPreviewed = useRef(false);
   const evaluation = evaluateKeypadInput(
     value,
     entryUnit,
@@ -196,16 +200,53 @@ export function NumericKeypad({
           y: request.fixedClientAnchor.y - rect.top
         });
       }
+    } else {
+      const host = root.parentElement;
+      if (host) {
+        const chip = host.querySelector<HTMLElement>('.handle-value-chip');
+        const chipRect = chip?.getBoundingClientRect();
+        const chipAnchor = {
+          x: Number.parseFloat(chip?.style.left ?? ''),
+          y: Number.parseFloat(chip?.style.top ?? '')
+        };
+        const visibleChip =
+          chip &&
+          chipRect &&
+          chipRect.width > 0 &&
+          chipRect.height > 0 &&
+          getComputedStyle(chip).visibility !== 'hidden' &&
+          Number.isFinite(chipAnchor.x) &&
+          Number.isFinite(chipAnchor.y);
+        if (visibleChip) {
+          // CSS moves the chip away from this anchor; its painted box is not the rig's point.
+          positionAt(chipAnchor);
+        } else {
+          // Focus cannot land in a hidden input while the rig's first frame is pending.
+          positionAt({ x: host.clientWidth / 2, y: host.clientHeight / 2 });
+          positioned = false;
+        }
+      }
     }
     return () => {
       anchorRef.current = null;
     };
   }, [anchorRef, request.fixedClientAnchor]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     inputRef.current?.focus();
-    inputRef.current?.select();
+    if (selectInitial.current) inputRef.current?.select();
+    else {
+      const input = inputRef.current;
+      input?.setSelectionRange(input.value.length, input.value.length);
+    }
   }, []);
+
+  useEffect(() => {
+    if (selectInitial.current || initialPreviewed.current) return;
+    initialPreviewed.current = true;
+    if (evaluation.ok && normalizedValue !== undefined)
+      onPreview(normalizedValue);
+  }, [evaluation.ok, normalizedValue, onPreview]);
 
   const previewIfValid = (next: string, requestedMode = dimensionMode) => {
     const typedMode = dimensionModeForInput(next);
