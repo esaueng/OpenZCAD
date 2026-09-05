@@ -109,6 +109,16 @@ by Slice B; S-2 remains open for persistent annotations.
 
 **Disposition (2026-08-30, P1-S1 Slice B):** — done (PR #144); distance/angle placement, expression editing, transactional solve, real-GCS rollback oracles, and Playwright geometry/undo coverage shipped; S-2 persistent graphics remain separate.
 
+**Disposition (2026-09-05, P1-S2 Slice C): — partial:** distance and angle
+constraints now render persistent, clickable driving-target annotations during
+sketch editing. Labels retain named expressions and follow parameter changes,
+undo, and sketch re-entry; edits use the existing solve transaction. Distance
+spans reuse the viewport dimension graphic; angles use in-plane arcs. Radius
+annotations, persisted label placement, and driven/reference dimensions remain
+open (the current schema stores driving constraints only). Evidence:
+`apps/web/src/lib/sketch/dimensionAnnotations.test.ts` and the driving-angle
+scenario in `test/e2e/workspace-polish.spec.ts`.
+
 Everything above is app-side except S-6; the solver, region engine, and
 snapping already carry it.
 
