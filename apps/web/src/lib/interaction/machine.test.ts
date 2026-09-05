@@ -343,10 +343,10 @@ describe('escape chain', () => {
     expect(escapeTarget(state)).toBe('exit-sketch');
   });
 
-  it('keeps validating operations locked and recovers failed values first', () => {
+  it('keeps validating face operations locked and recovers failed values first', () => {
     let state = interactionReducer(IDLE, {
-      type: 'select-region',
-      target: region
+      type: 'select-face',
+      target: face()
     });
     state = interactionReducer(state, {
       type: 'validation-start',
@@ -360,8 +360,8 @@ describe('escape chain', () => {
     });
     expect(escapeTarget(state)).toBe('recover-failure');
     state = interactionReducer(state, { type: 'escape' });
-    expect(state.mode === 'region' && state.phase).toBe('armed');
-    expect(state.mode === 'region' && state.lastValue).toBe(24);
+    expect(state.mode === 'face' && state.phase).toBe('armed');
+    expect(state.mode === 'face' && state.lastValue).toBe(24);
   });
 });
 
@@ -597,5 +597,44 @@ describe('radialFaceOperationName', () => {
     expect(
       radialFaceOperationName(face({ surfaceType: 'cylindrical', radius: 4 }))
     ).toBe('Resize Cylinder');
+  });
+});
+
+describe('extrusion intent lifecycle', () => {
+  it('keeps an explicit Cut while adding profiles and retrying, then resets for a different sketch', () => {
+    let state = interactionReducer(IDLE, {
+      type: 'select-region',
+      target: region
+    });
+    state = interactionReducer(state, {
+      type: 'set-extrude-choice',
+      choice: { operation: 'cut' }
+    });
+    state = interactionReducer(state, {
+      type: 'select-region',
+      target: { ...region, regionFingerprint: 12345 }
+    });
+    expect(state).toMatchObject({ extrudeChoice: { operation: 'cut' } });
+    state = interactionReducer(state, { type: 'validation-start', value: -8 });
+    expect(
+      interactionReducer(state, {
+        type: 'set-extrude-choice',
+        choice: { operation: 'add' }
+      })
+    ).toBe(state);
+    state = interactionReducer(state, {
+      type: 'validation-failed',
+      diagnostic: { message: 'No intersection' }
+    });
+    state = interactionReducer(state, { type: 'recover' });
+    expect(state).toMatchObject({
+      extrudeChoice: { operation: 'cut' },
+      lastValue: -8
+    });
+    state = interactionReducer(state, {
+      type: 'select-region',
+      target: { ...region, sketchId: 'another-sketch' }
+    });
+    expect(state).not.toHaveProperty('extrudeChoice');
   });
 });

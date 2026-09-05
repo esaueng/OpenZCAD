@@ -1,6 +1,8 @@
 import { useEffect, useRef, type MutableRefObject } from 'react';
 import * as THREE from 'three';
 import { mark, measure, timed } from '../lib/perf';
+import { buildSketchDimensions } from './viewer/sketchDimensions';
+import type { SketchDimensionAnnotation } from '../lib/sketch/dimensionAnnotations';
 import {
   disposeRetiringOverlays,
   disposeSettledOverlays,
@@ -297,6 +299,7 @@ export interface SketchModeState {
   parameterScope: Record<string, number>;
   /** Plane-local endpoints highlighted by Profile diagnostics on request. */
   diagnosticPoints: { x: number; y: number }[];
+  dimensions: SketchDimensionAnnotation[];
 }
 
 /** Sketch curves + detected regions, rendered when direct manipulation is on. */
@@ -508,7 +511,7 @@ interface ModelViewerProps {
     currentOffset: number,
     totalBaseline?: number,
     totalSense?: 1 | -1
-  ): void;
+  ): boolean;
   /** Imperative sink receiving the chip anchor in host pixels each frame. */
   keypadAnchorRef: MutableRefObject<
     ((point: { x: number; y: number } | null) => void) | null
@@ -534,7 +537,7 @@ interface ModelViewerProps {
   onOpenCylinderRadiusKeypad(
     radius: number,
     dimensionMode: DimensionMode
-  ): void;
+  ): boolean;
   /** Escape reaches the active imperative pointer session through this ref. */
   cancelDirectManipulationRef: MutableRefObject<(() => boolean) | null>;
   /**
@@ -552,7 +555,7 @@ interface ModelViewerProps {
   /** Restores the base document after a canceled/no-op edge-radius gesture. */
   onEdgeCancel(): void;
   /** Edge value chip tapped: open exact entry for the radius/distance. */
-  onOpenEdgeKeypad(currentSize: number): void;
+  onOpenEdgeKeypad(currentSize: number): boolean;
   /** Semantic lifecycle signal for direct-manipulation drags. */
   onDirectManipulationChange(dragging: boolean): void;
   /** Region-detected sketch rendering (curves + orange hover fills). */
@@ -592,6 +595,7 @@ interface ModelViewerProps {
   sketchMode: SketchModeState | null;
   /** A drawing gesture completed an entity. */
   onSketchCommit(object: SketchObjectData): void;
+  onEditSketchDimension(id: string, anchor: { x: number; y: number }): void;
   /** Mirrors chain/drag liveness into the interaction machine. */
   onSketchDrawingChange(drawing: boolean): void;
   /** Selects a committed entity for exact-value editing. */
@@ -1185,6 +1189,7 @@ export function ModelViewer({
   regionHandle,
   sketchMode,
   onSketchCommit,
+  onEditSketchDimension,
   onSketchDrawingChange,
   onSketchSelectObject,
   onSelectSketchProfile,
@@ -1327,6 +1332,11 @@ export function ModelViewer({
   const profilePickTargetsRef = useRef<ProfilePickTarget[]>([]);
   /** Group holding region-detected sketch rendering (curves + fills). */
   const regionGroupRef = useRef<THREE.Group | null>(null);
+  const sketchDimensionsRef = useRef<ReturnType<
+    typeof buildSketchDimensions
+  > | null>(null);
+  const editSketchDimensionRef = useRef(onEditSketchDimension);
+  editSketchDimensionRef.current = onEditSketchDimension;
   /** Separate from direct-edit overlays so body rebuilds do not erase it. */
   const measurementGroupRef = useRef<THREE.Group | null>(null);
   /**
@@ -2389,25 +2399,28 @@ export function ModelViewer({
     dimensionPrefix.addEventListener('click', toggleCylinderDimensionMode);
     const openExactEntry = () => {
       const cylinderRig = cylinderRadiusRigRef.current;
-      if (cylinderRig) {
+      if (
+        cylinderRig &&
         onOpenCylinderRadiusKeypadRef.current(
           cylinderRig.value(),
           cylinderDimensionModeRef.current
-        );
+        )
+      ) {
         return true;
       }
       const offsetRig = offsetRigRef.current;
-      if (offsetRig) {
+      if (
+        offsetRig &&
         onOpenOffsetKeypadRef.current(
           offsetRig.value(),
           offsetHandleRef.current?.totalBaseline,
           offsetHandleRef.current?.totalSense
-        );
+        )
+      ) {
         return true;
       }
       const edgeRig = edgeRigRef.current;
-      if (edgeRig) {
-        onOpenEdgeKeypadRef.current(edgeRig.value());
+      if (edgeRig && onOpenEdgeKeypadRef.current(edgeRig.value())) {
         return true;
       }
       return false;
@@ -6478,6 +6491,9 @@ export function ModelViewer({
       // pixel without rotating anything, and a rotation guard would leave the
       // arrowheads frozen at their pre-zoom size. The loop is already
       // on-demand, so this costs nothing on a still frame.
+      sketchDimensionsRef.current?.update(
+        (point) => moveGizmoWorldScale(worldPerPixelAt(point)) * 0.55
+      );
       for (const entry of measurementDimensionsRef.current) {
         entry.graphic.update(
           entry.start,
@@ -8062,6 +8078,27 @@ export function ModelViewer({
   // frame rides a ref for the same reason: the entry glide wants the frame
   // as it was at entry, not a re-run per sketch edit.
   const sketchBasis = sketchMode?.basis ?? null;
+  const sketchDimensions = sketchMode?.dimensions;
+  useEffect(() => {
+    const context = contextRef.current;
+    if (!context || !sketchBasis || !sketchDimensions) return;
+    const overlay = buildSketchDimensions(
+      sketchDimensions,
+      sketchBasis,
+      context.fatLineResolution(),
+      (id, anchor) => editSketchDimensionRef.current(id, anchor)
+    );
+    context.scene.add(overlay.group);
+    sketchDimensionsRef.current = overlay;
+    context.requestRender();
+    return () => {
+      context.scene.remove(overlay.group);
+      overlay.dispose();
+      if (sketchDimensionsRef.current === overlay)
+        sketchDimensionsRef.current = null;
+      context.requestRender();
+    };
+  }, [sketchBasis, sketchDimensions]);
   const sketchEntryFrameRef = useRef<SketchEntryFrame | null>(null);
   sketchEntryFrameRef.current = sketchMode?.frame ?? null;
   useEffect(() => {
