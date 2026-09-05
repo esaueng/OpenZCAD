@@ -5,7 +5,12 @@ describe('workflow runner policy', () => {
   it('keeps ordinary workflows hosted with restricted VPS workflows', () => {
     const workflowDirectory = '.github/workflows';
     const expectedRunners: Record<string, string[]> = {
-      'ci.yml': ['ubuntu-latest', 'ubuntu-latest', 'ubuntu-latest'],
+      'ci.yml': [
+        'ubuntu-latest',
+        'ubuntu-latest',
+        'ubuntu-latest',
+        'ubuntu-latest'
+      ],
       'cloudflare.yml': ['ubuntu-latest', 'ubuntu-latest'],
       'macos-desktop.yml': ['macos-26'],
       'production-health.yml': ['ubuntu-latest'],
