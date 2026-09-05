@@ -7050,9 +7050,11 @@ export function App() {
    * default keeps Ctrl+S a reflex.
    */
   async function handleSave(reason: string = DEFAULT_SAVE_REASON) {
-    if (!doc) {
+    const savingManager = managerRef.current;
+    if (!doc || !savingManager) {
       return;
     }
+    const isCurrentProject = () => managerRef.current === savingManager;
     if (shareSessionRef.current) {
       setStatus(
         'This is a shared link session — Make a copy to keep the model.'
@@ -7062,6 +7064,9 @@ export function App() {
     try {
       setSaveState('saving');
       await saveLocalProject(doc);
+      if (!isCurrentProject()) {
+        return;
+      }
       if (accountDocumentUnavailableProjectIdRef.current === doc.projectId) {
         await retryUnavailableAccountProject(doc);
         return;
@@ -7078,16 +7083,15 @@ export function App() {
         // nothing to offer exactly where they are needed most, and would drop
         // a name the user had just typed.
         const marked = createCheckpoint(doc, reason);
-        const live = managerRef.current?.document;
-        if (
-          !live ||
-          (live.projectId === doc.projectId && live.version === doc.version)
-        ) {
+        if (savingManager.document.version === doc.version) {
           await saveLocalProject(marked);
-          if (managerRef.current) {
-            managerRef.current.document = marked;
+          if (!isCurrentProject()) {
+            return;
           }
-          setDoc(marked);
+          if (savingManager.document.version === doc.version) {
+            savingManager.document = marked;
+            setDoc(marked);
+          }
         }
         setCloudAvailable(false);
         setSaveState('local');
@@ -7098,6 +7102,9 @@ export function App() {
       // the checkpoint for the version fence, and the loser reports a conflict
       // that does not exist. Drain it first; a manual save is worth the wait.
       await cloudProjectAutosaveRef.current?.flushPending();
+      if (!isCurrentProject()) {
+        return;
+      }
       const saved = await api.saveRevision({
         projectId: doc.projectId,
         reason,
@@ -7106,17 +7113,16 @@ export function App() {
         document: withoutDerivedProjection(doc)
       });
       remoteVersionsRef.current.set(saved.projectId, saved.version);
-      const live = managerRef.current?.document;
-      if (
-        live &&
-        (live.projectId !== doc.projectId || live.version !== doc.version)
-      ) {
+      await saveLastSyncedVersion(saved.projectId, saved.version);
+      if (!isCurrentProject()) {
+        return;
+      }
+      if (savingManager.document.version !== doc.version) {
         // Edits landed while the revision round-tripped. The account holds
         // the pre-edit snapshot this handler sent; adopting its echo would
         // erase those edits from the canonical document while their undo
         // entries survive. Record the account version so the next autosave
         // fences correctly and let it carry the newer edits up.
-        await saveLastSyncedVersion(saved.projectId, saved.version);
         setCloudAvailable(true);
         cloudProjectAutosaveRef.current?.adoptAccountVersion(
           saved.projectId,
@@ -7125,18 +7131,26 @@ export function App() {
         setStatus('Saved revision.');
         return;
       }
-      const restored = withLocalDerived(saved, doc);
+      const restored = withLocalDerived(saved, savingManager.document);
       await saveLocalProject(restored);
-      await saveLastSyncedVersion(restored.projectId, restored.version);
-      showAccountEcho(restored);
+      // Navigation or another edit can also happen during the device write.
+      if (!isCurrentProject()) {
+        return;
+      }
+      if (savingManager.document.version === doc.version) {
+        showAccountEcho(restored);
+        setSaveState('synced');
+      }
       setCloudAvailable(true);
-      setSaveState('synced');
       cloudProjectAutosaveRef.current?.adoptAccountVersion(
         restored.projectId,
         restored.version
       );
       setStatus('Saved revision.');
     } catch (error) {
+      if (!isCurrentProject()) {
+        return;
+      }
       if (error instanceof ApiError && error.status === 401) {
         remoteVersionsRef.current.clear();
         endCloudSettingsSession();
