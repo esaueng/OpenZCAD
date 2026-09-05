@@ -508,7 +508,7 @@ interface ModelViewerProps {
     currentOffset: number,
     totalBaseline?: number,
     totalSense?: 1 | -1
-  ): void;
+  ): boolean;
   /** Imperative sink receiving the chip anchor in host pixels each frame. */
   keypadAnchorRef: MutableRefObject<
     ((point: { x: number; y: number } | null) => void) | null
@@ -534,7 +534,7 @@ interface ModelViewerProps {
   onOpenCylinderRadiusKeypad(
     radius: number,
     dimensionMode: DimensionMode
-  ): void;
+  ): boolean;
   /** Escape reaches the active imperative pointer session through this ref. */
   cancelDirectManipulationRef: MutableRefObject<(() => boolean) | null>;
   /**
@@ -552,7 +552,7 @@ interface ModelViewerProps {
   /** Restores the base document after a canceled/no-op edge-radius gesture. */
   onEdgeCancel(): void;
   /** Edge value chip tapped: open exact entry for the radius/distance. */
-  onOpenEdgeKeypad(currentSize: number): void;
+  onOpenEdgeKeypad(currentSize: number): boolean;
   /** Semantic lifecycle signal for direct-manipulation drags. */
   onDirectManipulationChange(dragging: boolean): void;
   /** Region-detected sketch rendering (curves + orange hover fills). */
@@ -2389,25 +2389,28 @@ export function ModelViewer({
     dimensionPrefix.addEventListener('click', toggleCylinderDimensionMode);
     const openExactEntry = () => {
       const cylinderRig = cylinderRadiusRigRef.current;
-      if (cylinderRig) {
+      if (
+        cylinderRig &&
         onOpenCylinderRadiusKeypadRef.current(
           cylinderRig.value(),
           cylinderDimensionModeRef.current
-        );
+        )
+      ) {
         return true;
       }
       const offsetRig = offsetRigRef.current;
-      if (offsetRig) {
+      if (
+        offsetRig &&
         onOpenOffsetKeypadRef.current(
           offsetRig.value(),
           offsetHandleRef.current?.totalBaseline,
           offsetHandleRef.current?.totalSense
-        );
+        )
+      ) {
         return true;
       }
       const edgeRig = edgeRigRef.current;
-      if (edgeRig) {
-        onOpenEdgeKeypadRef.current(edgeRig.value());
+      if (edgeRig && onOpenEdgeKeypadRef.current(edgeRig.value())) {
         return true;
       }
       return false;

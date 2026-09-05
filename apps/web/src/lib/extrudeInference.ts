@@ -16,11 +16,19 @@ export interface ResolvedExtrude {
   command: ExtrudeCommand;
   document: ProjectDocument;
   derived: DerivedState;
-  inference: ExtrudeOperationInference;
+  inference: Omit<ExtrudeOperationInference, 'reason'> & {
+    reason: ExtrudeOperationInference['reason'] | 'explicit';
+  };
   baseVersion: number;
 }
 
+export type ExtrudeChoice =
+  | { operation: 'automatic' }
+  | { operation: 'new-body' }
+  | { operation: 'add' | 'cut'; targetBodyId?: BodyId };
+
 export interface ResolveExtrudeOptions {
+  choice?: ExtrudeChoice;
   base: ProjectDocument;
   input: ExtrudeInput;
   derive(document: ProjectDocument): Promise<DerivedState>;
@@ -92,6 +100,49 @@ export async function resolveExtrudeOperation(
   const resultBodyId = reserved.ids?.bodyId;
   if (!resultBodyId) {
     throw new Error('Extrude could not reserve a result body.');
+  }
+
+  const choice = options.choice;
+  if (choice && choice.operation !== 'automatic') {
+    const targetBodyId =
+      choice.operation === 'new-body' ? undefined : choice.targetBodyId;
+    if (choice.operation !== 'new-body' && !targetBodyId) {
+      throw new Error(
+        `Select a target body for ${choice.operation === 'cut' ? 'Cut' : 'Add'}.`
+      );
+    }
+    if (targetBodyId) {
+      const target = options.base.derived.bodyRepresentations[targetBodyId];
+      if (!target || target.consumed) {
+        throw new Error(
+          'The selected extrusion target is no longer available. Select a target body.'
+        );
+      }
+    }
+    const command = commandFactories.extrudeSketch(
+      withOperation(reserved, choice.operation, targetBodyId)
+    );
+    command.validate(options.base);
+    const document = command.apply(options.base);
+    const derived = await options.derive(document);
+    if (!derived.bodyRepresentations[resultBodyId]) {
+      throw new Error(
+        derived.warnings.at(-1) ??
+          'The selected extrusion operation did not produce an exact result body.'
+      );
+    }
+    return {
+      command,
+      document,
+      derived,
+      baseVersion: options.base.version,
+      inference: {
+        operation: choice.operation,
+        ...(targetBodyId ? { targetBodyId } : {}),
+        reason: 'explicit',
+        tolerance: 0
+      }
+    };
   }
 
   const newBodyCommand = commandFactories.extrudeSketch(
@@ -185,7 +236,10 @@ export async function resolveExtrudeOperation(
     // list — tangency fails the bounds test — so the target is taken from the
     // live bodies directly. The exact rebuild still has the final say: it
     // refuses an add whose operands do not even touch.
-    if (inference.operation === 'new-body' && inference.reason === 'no-overlap') {
+    if (
+      inference.operation === 'new-body' &&
+      inference.reason === 'no-overlap'
+    ) {
       const target = liveTargets.find(
         (candidate) => candidate.bodyId === attachment.bodyId
       );
@@ -236,4 +290,19 @@ export async function resolveExtrudeOperation(
     inference,
     baseVersion: options.base.version
   };
+}
+
+/** A discarded command must not publish a late result or refusal. */
+export async function resolveCurrentExtrude(
+  options: ResolveExtrudeOptions,
+  isCurrent: () => boolean
+): Promise<ResolvedExtrude | null> {
+  if (!isCurrent()) return null;
+  try {
+    const resolved = await resolveExtrudeOperation(options);
+    return isCurrent() ? resolved : null;
+  } catch (error) {
+    if (!isCurrent()) return null;
+    throw error;
+  }
 }

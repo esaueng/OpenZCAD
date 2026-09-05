@@ -1,3 +1,4 @@
+import type { ExtrudeChoice } from '../extrudeInference';
 import type { SketchPlaneRef, TopologySelection } from '@openzcad/shared';
 import {
   preferredCapability,
@@ -156,6 +157,7 @@ export type InteractionState =
   | ({
       mode: 'region';
       target: RegionTarget;
+      extrudeChoice?: ExtrudeChoice;
     } & OperationLifecycle)
   | { mode: 'sketch'; session: SketchSessionState };
 
@@ -163,6 +165,7 @@ export type InteractionEvent =
   | { type: 'select-face'; target: FaceTarget }
   | { type: 'select-edge'; selection: TopologySelection; additive: boolean }
   | { type: 'select-region'; target: RegionTarget }
+  | { type: 'set-extrude-choice'; choice: ExtrudeChoice }
   | { type: 'drag-engage' }
   | { type: 'drag-release' }
   | { type: 'set-edge-op'; op: 'fillet' | 'chamfer' }
@@ -245,7 +248,7 @@ export function escapeTarget(
       : 'exit-sketch';
   }
   if (state.phase === 'validating') {
-    return 'none';
+    return state.mode === 'region' ? 'clear-selection' : 'none';
   }
   if (state.phase === 'exact-entry') {
     return 'close-keypad';
@@ -333,9 +336,17 @@ export function interactionReducer(
       return {
         mode: 'region',
         target: event.target,
+        ...(state.mode === 'region' &&
+        state.target.sketchId === event.target.sketchId
+          ? { extrudeChoice: state.extrudeChoice }
+          : {}),
         ...ARMED
       };
     }
+    case 'set-extrude-choice':
+      return state.mode === 'region' && state.phase !== 'validating'
+        ? { ...state, extrudeChoice: event.choice, phase: 'armed', error: null }
+        : state;
     case 'drag-engage':
       return isOperationState(state) && state.phase !== 'validating'
         ? { ...state, phase: 'dragging', error: null }

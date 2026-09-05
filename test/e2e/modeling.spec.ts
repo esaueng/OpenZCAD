@@ -102,7 +102,9 @@ test('resizes a cylinder wall concentrically with one undoable radius edit', asy
     name: 'Resize Cylinder operation'
   });
   await expect(radiusOperation).toBeVisible();
-  await expect(page.getByTestId('direct-manipulation-value')).toHaveText('Ø 28 mm');
+  await expect(page.getByTestId('direct-manipulation-value')).toHaveText(
+    'Ø 28 mm'
+  );
   await expect(page.getByRole('region', { name: '3D viewport' })).toContainText(
     'Cylindrical face Ø28'
   );
@@ -200,10 +202,14 @@ test('resizes a cylinder wall concentrically with one undoable radius edit', asy
     cancelStart.y + cancelHandle.dy * cancelHandle.pixelsPerUnit * 2,
     { steps: 6 }
   );
-  await expect(page.getByTestId('direct-manipulation-value')).toHaveText('Ø 40 mm');
+  await expect(page.getByTestId('direct-manipulation-value')).toHaveText(
+    'Ø 40 mm'
+  );
   await expect(radiusOperation).toContainText('Dragging');
   await page.keyboard.press('Escape');
-  await expect(page.getByTestId('direct-manipulation-value')).toHaveText('Ø 36 mm');
+  await expect(page.getByTestId('direct-manipulation-value')).toHaveText(
+    'Ø 36 mm'
+  );
   await expect(canvas).not.toHaveAttribute(
     'data-e2e-cylinder-proxy-radius',
     /.+/
@@ -919,6 +925,22 @@ test('infers and stores an additive extrude from exact overlap', async ({
     { timeout: 20_000 }
   );
 
+  // A boolean extrusion offers its source sketch while idle. That shortcut
+  // used to outrank the next command's plane picker until the page reloaded.
+  await page.keyboard.press('Escape');
+  await expect(
+    page.getByRole('button', { name: 'Edit Sketch', exact: true })
+  ).toBeVisible();
+  await page.keyboard.press('s');
+  await expect(
+    page.getByText('Pick a sketch plane', { exact: true })
+  ).toBeVisible();
+  await expect(page.getByLabel('Sketch plane offset')).toBeVisible();
+  await expect(
+    page.getByRole('button', { name: 'Edit Sketch', exact: true })
+  ).toHaveCount(0);
+  await page.keyboard.press('Escape');
+
   const extrudeFeature = page.getByRole('button', {
     name: 'Extrude',
     exact: true
@@ -1071,7 +1093,9 @@ test('radius drag resizes an offset-and-filleted cylinder as one body', async ({
     start.y + handle.dy * handle.pixelsPerUnit * 4,
     { steps: 8 }
   );
-  await expect(page.getByTestId('direct-manipulation-value')).toHaveText('Ø 36 mm');
+  await expect(page.getByTestId('direct-manipulation-value')).toHaveText(
+    'Ø 36 mm'
+  );
   await page.mouse.up();
   await expect(page.getByRole('contentinfo')).toContainText(
     'Adjusted cylinder diameter to Ø 36 mm.'
@@ -1389,7 +1413,27 @@ test('preflights and drills a through hole into the top face', async ({
 
   await page.getByRole('button', { name: /^Hole/ }).click();
   const entry = page.getByRole('group', { name: 'Entry face' });
-  await entry.getByRole('button', { name: /Plane face box.*z max/ }).click();
+  await page.getByRole('textbox', { name: 'Diameter', exact: true }).fill('5');
+  await entry.getByRole('button', { name: 'Pick faces in viewport' }).click();
+  await page.keyboard.press('Escape');
+  await expect(entry).toBeVisible();
+  await expect(
+    page.getByRole('textbox', { name: 'Diameter', exact: true })
+  ).toHaveValue('5');
+  await entry.getByRole('button', { name: 'Pick faces in viewport' }).click();
+  const canvas = page.locator('.viewer-host canvas');
+  await canvas.dispatchEvent('openzcad:e2e-select-planar-face', {
+    detail: { normal: { x: 0, y: 0, z: 1 } }
+  });
+  await expect(
+    entry.getByRole('button', { name: /Plane face box.*z max/ })
+  ).toHaveAttribute('aria-pressed', 'true');
+  await expect(
+    page.getByRole('region', { name: 'Offset Face operation' })
+  ).toHaveCount(0);
+  await expect(
+    page.getByRole('textbox', { name: 'Diameter', exact: true })
+  ).toHaveValue('5');
   await page.getByRole('button', { name: 'Check exact result' }).click();
   await expect(
     page.getByRole('status').filter({ hasText: 'Exact preflight passed' })
@@ -3697,9 +3741,9 @@ test('an archive that outlives its project stays out of the next project’s Fil
   // not happen is its record landing in THIS project's File menu.
   await expect.poll(() => finalized, { timeout: 15_000 }).toBe(1);
   await page.waitForTimeout(1000);
-  await expect(
-    page.locator('details.file-menu summary')
-  ).not.toContainText('File 1');
+  await expect(page.locator('details.file-menu summary')).not.toContainText(
+    'File 1'
+  );
 });
 
 test('sketches on the wall of a drag-style extrusion and on a hash-only face', async ({
