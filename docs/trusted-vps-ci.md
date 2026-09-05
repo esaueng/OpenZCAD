@@ -18,3 +18,6 @@ sandbox. Deployment credentials must not be passed to this workflow.
 Rollback: disable this additive workflow or remove its runner-group allowlist
 entry. Existing hosted CI remains intact. Heavy browser/geometry suites are not
 claimed to fit until separately measured. No deployment is part of this check.
+
+Docker runs rootless. Individual container cgroup limits are unavailable; the
+host CI slice bounds combined execution to one CPU and 3 GiB memory.
