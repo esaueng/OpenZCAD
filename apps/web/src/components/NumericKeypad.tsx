@@ -203,20 +203,23 @@ export function NumericKeypad({
     } else {
       const host = root.parentElement;
       if (host) {
-        const rect = host.getBoundingClientRect();
         const chip = host.querySelector<HTMLElement>('.handle-value-chip');
         const chipRect = chip?.getBoundingClientRect();
+        const chipAnchor = {
+          x: Number.parseFloat(chip?.style.left ?? ''),
+          y: Number.parseFloat(chip?.style.top ?? '')
+        };
         const visibleChip =
           chip &&
           chipRect &&
           chipRect.width > 0 &&
           chipRect.height > 0 &&
-          getComputedStyle(chip).visibility !== 'hidden';
+          getComputedStyle(chip).visibility !== 'hidden' &&
+          Number.isFinite(chipAnchor.x) &&
+          Number.isFinite(chipAnchor.y);
         if (visibleChip) {
-          positionAt({
-            x: chipRect.left + chipRect.width / 2 - rect.left,
-            y: chipRect.top - rect.top
-          });
+          // CSS moves the chip away from this anchor; its painted box is not the rig's point.
+          positionAt(chipAnchor);
         } else {
           // Focus cannot land in a hidden input while the rig's first frame is pending.
           positionAt({ x: host.clientWidth / 2, y: host.clientHeight / 2 });
