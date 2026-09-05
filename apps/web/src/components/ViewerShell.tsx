@@ -157,7 +157,7 @@ interface ViewerShellProps {
     currentOffset: number,
     totalBaseline?: number,
     totalSense?: 1 | -1
-  ): void;
+  ): boolean;
   keypadAnchorRef: MutableRefObject<
     ((point: { x: number; y: number } | null) => void) | null
   >;
@@ -179,17 +179,18 @@ interface ViewerShellProps {
   onOpenCylinderRadiusKeypad(
     radius: number,
     dimensionMode: DimensionMode
-  ): void;
+  ): boolean;
   cancelDirectManipulationRef: MutableRefObject<(() => boolean) | null>;
   openExactEntryRef: MutableRefObject<(() => boolean) | null>;
   edgeHandle: EdgeHandleTarget | null;
   onEdgeRadiusPreview(size: number): void;
   onEdgeCommit(size: number): void;
   onEdgeCancel(): void;
-  onOpenEdgeKeypad(currentSize: number): void;
+  onOpenEdgeKeypad(currentSize: number): boolean;
   onDirectManipulationChange(dragging: boolean): void;
   sketchMode: SketchModeState | null;
   onSketchCommit(object: SketchObjectData): void;
+  onEditSketchDimension(id: string, anchor: { x: number; y: number }): void;
   onSketchDrawingChange(drawing: boolean): void;
   onSketchSelectObject(
     objectId: string | null,
@@ -309,6 +310,7 @@ export function ViewerShell({
   onDirectManipulationChange,
   sketchMode,
   onSketchCommit,
+  onEditSketchDimension,
   onSketchDrawingChange,
   onSketchSelectObject,
   sketchViews,
@@ -447,6 +449,7 @@ export function ViewerShell({
         onDirectManipulationChange={onDirectManipulationChange}
         sketchMode={sketchMode}
         onSketchCommit={onSketchCommit}
+        onEditSketchDimension={onEditSketchDimension}
         onSketchDrawingChange={onSketchDrawingChange}
         onSketchSelectObject={onSketchSelectObject}
         sketchViews={sketchViews}

@@ -137,9 +137,10 @@ test('round-trips diameter entry and edits a cylinder cap by total height', asyn
     page.getByRole('region', { name: 'Resize Cylinder operation' })
   ).toBeVisible();
   await awaitArmedHandle();
-  await page.keyboard.press('Enter');
+  await page.keyboard.type('10');
   const typedKeypad = page.getByRole('dialog', { name: 'Diameter value' });
   await expect(typedKeypad).toBeVisible();
+  await expect(typedKeypad.getByRole('textbox')).toHaveValue('10');
 
   // A unit typed into the field beats the entry chip, and the converted value
   // is shown in the document's units before it can be committed unseen.
@@ -153,9 +154,10 @@ test('round-trips diameter entry and edits a cylinder cap by total height', asyn
     page.getByRole('region', { name: 'Offset Face operation' })
   ).toBeVisible();
   await awaitArmedHandle();
-  await page.keyboard.press('Enter');
+  await page.keyboard.type('-.5');
   const offsetKeypad = page.getByRole('dialog', { name: 'Offset value' });
   await expect(offsetKeypad).toBeVisible();
+  await expect(offsetKeypad.getByRole('textbox')).toHaveValue('-.5');
   await page.keyboard.press('Escape');
   await expect(offsetKeypad).toBeHidden();
 
@@ -186,6 +188,34 @@ test('round-trips diameter entry and edits a cylinder cap by total height', asyn
     filletKeypad.getByRole('button', { name: 'Apply radius' })
   ).toHaveText(/Apply radius/);
   await page.keyboard.press('Escape');
+
+  await page.getByRole('button', { name: 'View', exact: true }).click();
+  await selectCylinderSurface('cap');
+  await page.keyboard.press('1');
+  await expect
+    .poll(
+      async () =>
+        page.evaluate(() => {
+          const raw = localStorage.getItem('openzcad-workspace-session:v1');
+          const session = raw
+            ? (JSON.parse(raw) as {
+                views?: Record<
+                  string,
+                  { camera: { position: number[]; target: number[] } }
+                >;
+              })
+            : null;
+          const camera = Object.values(session?.views ?? {})[0]?.camera;
+          if (!camera) return false;
+          const [x, y, z] = camera.position.map(
+            (value, index) => value - camera.target[index]!
+          );
+          return Math.abs(x!) < 0.1 && y! < -1 && Math.abs(z!) < 0.1;
+        }),
+      { timeout: 15_000 }
+    )
+    .toBe(true);
+  await expect(page.locator('.numeric-keypad')).toHaveCount(0);
 
   expect(consoleErrors).toEqual([]);
 });

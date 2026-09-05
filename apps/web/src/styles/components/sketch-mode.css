@@ -496,3 +496,21 @@
   background: rgba(8, 18, 30, 0.95);
   border-color: rgba(124, 192, 255, 0.7);
 }
+
+.sketch-dimension-label {
+  pointer-events: auto;
+  padding: 4px 8px;
+  color: var(--color-text);
+  background: var(--color-surface-2);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-sm);
+  font-size: var(--fs-xs);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.sketch-dimension-label:focus-visible {
+  outline: 2px solid var(--color-text);
+  outline-offset: 2px;
+}
