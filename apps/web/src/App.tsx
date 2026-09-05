@@ -369,10 +369,7 @@ import {
 } from './lib/interaction/filletFaceEdit';
 import { ToolCard } from './components/ToolCard';
 import { ToastHost } from './components/Toast';
-import {
-  retireStatus,
-  type StatusEntry
-} from './lib/statusLifetime';
+import { retireStatus, type StatusEntry } from './lib/statusLifetime';
 import { NumericKeypad, type KeypadRequest } from './components/NumericKeypad';
 import type { DimensionMode } from './lib/keypad';
 import {
@@ -696,12 +693,14 @@ import {
   purgeExpiredLocalProjects,
   restoreDuplicateDerivedProjection,
   saveLastSyncedVersion,
+  listPendingOrganizationMirrors,
   saveLocalProjectOrganization,
   saveProjectMeasurements,
   saveProjectThumbnail,
   saveLocalProject,
   withMatchingLocalDerived
 } from './lib/localProjectStore';
+import { reconcileRemoteOrganizations } from './lib/projectOrganizationMirror';
 import {
   applyLocalProjectOrganizations,
   mergeProjectSummaries,
@@ -982,16 +981,35 @@ async function loadProjectSummaries(signedIn: boolean): Promise<{
       }
       return fallback;
     };
-  const [local, localOrganizations, remote] = await Promise.all([
-    listLocalProjects().catch(unavailableAs<ProjectSummary[]>([])),
-    listLocalProjectOrganizations().catch(
-      unavailableAs(new Map<string, ProjectOrganization>())
-    ),
-    signedIn ? api.listProjects().catch(() => null) : Promise.resolve(null)
-  ]);
+  const [local, localOrganizations, pendingMirrors, remote] = await Promise.all(
+    [
+      listLocalProjects().catch(unavailableAs<ProjectSummary[]>([])),
+      listLocalProjectOrganizations().catch(
+        unavailableAs(new Map<string, ProjectOrganization>())
+      ),
+      listPendingOrganizationMirrors().catch(unavailableAs(new Set<string>())),
+      signedIn ? api.listProjects().catch(() => null) : Promise.resolve(null)
+    ]
+  );
   const remoteProjects = remote?.projects ?? [];
   const mirrorFailures = remote
-    ? await reconcileRemoteOrganizations(localOrganizations, remoteProjects)
+    ? await reconcileRemoteOrganizations(
+        localOrganizations,
+        pendingMirrors,
+        remoteProjects,
+        {
+          saveLocal: saveLocalProjectOrganization,
+          updateRemote: (projectId, organization) =>
+            api
+              .updateProject({
+                projectId: toProjectId(projectId),
+                status: organization.status,
+                pinned: organization.pinned,
+                sortOrder: organization.sortOrder
+              })
+              .then(() => undefined)
+        }
+      )
     : new Set<string>();
   // While signed in but offline, defer irreversible local purging until the
   // cloud copy can be reconciled. Otherwise a failed mirror could later make
@@ -1016,62 +1034,6 @@ async function loadProjectSummaries(signedIn: boolean): Promise<{
     remoteReached: Boolean(remote),
     cloudProjectIds: remoteIds
   };
-}
-
-function sameWritableOrganization(
-  left: ProjectOrganization,
-  right: ProjectOrganization
-): boolean {
-  return (
-    left.status === right.status &&
-    left.pinned === right.pinned &&
-    left.sortOrder === right.sortOrder
-  );
-}
-
-/**
- * Adopts account metadata only when this device has none. Once the device has
- * organised a project, its copy stays authoritative and any failed account
- * mirror is retried on the next successful listing.
- */
-async function reconcileRemoteOrganizations(
-  local: ReadonlyMap<string, ProjectOrganization>,
-  remote: ProjectSummary[]
-): Promise<Set<string>> {
-  const mirrorFailures = new Set<string>();
-  await Promise.all(
-    remote.map(async (project) => {
-      const localOrganization = local.get(project.projectId);
-      if (!localOrganization) {
-        if (project.organization) {
-          await saveLocalProjectOrganization(
-            project.projectId,
-            project.organization
-          ).catch(() => undefined);
-        }
-        return;
-      }
-      if (
-        sameWritableOrganization(
-          localOrganization,
-          projectOrganization(project)
-        )
-      ) {
-        return;
-      }
-      try {
-        await api.updateProject({
-          projectId: toProjectId(project.projectId),
-          status: localOrganization.status,
-          pinned: localOrganization.pinned,
-          sortOrder: localOrganization.sortOrder
-        });
-      } catch {
-        mirrorFailures.add(project.projectId);
-      }
-    })
-  );
-  return mirrorFailures;
 }
 
 function localRecoveryCopy(
@@ -6319,9 +6281,13 @@ export function App() {
     projectId: string,
     organization: ProjectOrganization
   ): Promise<void> {
-    // The device copy is authoritative. Do not claim success unless it is
-    // durable locally; a failed account mirror is retried during discovery.
-    await saveLocalProjectOrganization(projectId, organization);
+    // Durable locally first, flagged as not yet mirrored: the listing's
+    // reconcile pushes a flagged row and adopts the account's otherwise, so
+    // the flag is what keeps a change alive across a failed mirror without
+    // letting this device overrule every other one forever.
+    await saveLocalProjectOrganization(projectId, organization, {
+      mirrorPending: true
+    });
     setProjects((current) =>
       current
         .map((project) =>
@@ -6341,6 +6307,7 @@ export function App() {
         pinned: organization.pinned,
         sortOrder: organization.sortOrder
       })
+      .then(() => saveLocalProjectOrganization(projectId, organization))
       .catch(() => undefined);
   }
 
@@ -6397,7 +6364,9 @@ export function App() {
     try {
       await Promise.all(
         [...organizations].map(([projectId, organization]) =>
-          saveLocalProjectOrganization(projectId, organization)
+          saveLocalProjectOrganization(projectId, organization, {
+            mirrorPending: true
+          })
         )
       );
       setProjects((current) =>
@@ -6411,6 +6380,13 @@ export function App() {
       if (session) {
         await api
           .reorderProjects({ projectIds: projectIds.map(toProjectId) })
+          .then(() =>
+            Promise.all(
+              [...organizations].map(([projectId, organization]) =>
+                saveLocalProjectOrganization(projectId, organization)
+              )
+            )
+          )
           .catch(() => undefined);
       }
     } catch (error) {
@@ -6517,9 +6493,9 @@ export function App() {
         sortOrder: projectOrganization(project).sortOrder
       };
       await saveLocalProject(copy);
-      await saveLocalProjectOrganization(copy.projectId, organization).catch(
-        () => undefined
-      );
+      await saveLocalProjectOrganization(copy.projectId, organization, {
+        mirrorPending: true
+      }).catch(() => undefined);
       setProjects((current) =>
         [...current, summarizeLocalDocument(copy, organization)].sort(
           compareProjectSummaries
