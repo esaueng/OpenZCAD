@@ -148,3 +148,25 @@ describe('ToolCard', () => {
     expect(screen.queryByText('Details')).toBeNull();
   });
 });
+
+describe('pending extrusion cancellation', () => {
+  it('keeps Dismiss available while a cancellable extrusion is validating', async () => {
+    const onClose = vi.fn();
+    render(
+      <ToolCard
+        model={{
+          icon: 'extrude',
+          title: 'Extrude',
+          hint: 'Checking geometry…',
+          phase: 'validating'
+        }}
+        cancelableWhileValidating
+        onClose={onClose}
+      />
+    );
+    await userEvent
+      .setup()
+      .click(screen.getByRole('button', { name: 'Dismiss Extrude' }));
+    expect(onClose).toHaveBeenCalledOnce();
+  });
+});

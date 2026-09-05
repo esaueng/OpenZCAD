@@ -1,7 +1,14 @@
-import { useRef, useState, type FormEvent, type ReactNode } from 'react';
+import {
+  useEffect,
+  useRef,
+  useState,
+  type FormEvent,
+  type ReactNode
+} from 'react';
 import type { BodyId } from '@openzcad/shared';
 import { ExprInput } from '../ExprInput';
 import type { BodyOption } from './FeatureForms';
+import type { HoleFacePick } from '../../lib/holeFacePick';
 import {
   buildModelingOperationSubmission,
   modelingFormValidationReason,
@@ -37,6 +44,7 @@ export interface ModelingOperationsFormProps {
   pathOptions?: ModelingPathOption[];
   initialTarget?: BodyId;
   initial?: ModelingOperationFormState;
+  viewportHoleFacePick?: HoleFacePick | null;
   unsupportedReason?: string;
   onPreflight(
     submission: ModelingOperationSubmission
@@ -311,6 +319,7 @@ export function ModelingOperationsForm({
   pathOptions = [],
   initialTarget,
   initial,
+  viewportHoleFacePick,
   unsupportedReason,
   onPreflight,
   onSubmit,
@@ -328,6 +337,38 @@ export function ModelingOperationsForm({
     status: 'idle'
   });
   const preflightEpoch = useRef(0);
+  const consumedHoleFacePick = useRef<HoleFacePick | null>(null);
+  const holeTarget =
+    state.operation === 'hole' ? state.value.targetBodyId : null;
+  useEffect(() => {
+    if (
+      !viewportHoleFacePick ||
+      consumedHoleFacePick.current === viewportHoleFacePick
+    )
+      return;
+    consumedHoleFacePick.current = viewportHoleFacePick;
+    if (
+      holeTarget !== viewportHoleFacePick.bodyId ||
+      !faceOptions.some(
+        (face) =>
+          face.hash === viewportHoleFacePick.hash &&
+          face.surfaceType === 'plane'
+      )
+    )
+      return;
+    // A pick changes the exact command even if an earlier preflight is still running.
+    preflightEpoch.current += 1;
+    setPreflight({ status: 'idle' });
+    setState((current) =>
+      current.operation === 'hole' &&
+      current.value.targetBodyId === viewportHoleFacePick.bodyId
+        ? {
+            ...current,
+            value: { ...current.value, faceHash: viewportHoleFacePick.hash }
+          }
+        : current
+    );
+  }, [viewportHoleFacePick, holeTarget, faceOptions]);
   const effectivePreflight: ExactPreflightState = unsupportedReason
     ? { status: 'refused', reason: unsupportedReason }
     : preflight;
@@ -359,6 +400,14 @@ export function ModelingOperationsForm({
       replaceState({
         ...state,
         value: { ...state.value, targetBodyId, faceHashes: [] }
+      });
+      return;
+    }
+    if (state.operation === 'hole') {
+      onOpeningFaceSelectionChange?.([]);
+      replaceState({
+        ...state,
+        value: { ...state.value, targetBodyId, faceHash: null }
       });
       return;
     }
@@ -796,9 +845,7 @@ export function ModelingOperationsForm({
                   value: {
                     ...state.value,
                     style: event.target.value as
-                      | 'simple'
-                      | 'counterbore'
-                      | 'countersink'
+                      'simple' | 'counterbore' | 'countersink'
                   }
                 })
               }
