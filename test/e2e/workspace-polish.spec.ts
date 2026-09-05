@@ -433,7 +433,12 @@ test('places, retypes, solves, and undoes a driving angle dimension', async ({
   );
   const baseline = await readLiveSketch(canvas);
 
-  await page.getByRole('button', { name: /^Edit constraint: Angle / }).click();
+  const canvasDimension = page.getByRole('button', {
+    name: /^Edit driving angle:/
+  });
+  await expect(canvasDimension).toBeVisible();
+  await expect(canvasDimension).toContainText('Driving');
+  await canvasDimension.click();
   const editor = page.getByRole('dialog', { name: 'Angle value' });
   const input = editor.getByRole('textbox');
   await input.fill('angle_target');
@@ -445,6 +450,7 @@ test('places, retypes, solves, and undoes a driving angle dimension', async ({
 
   const solved = await readLiveSketch(canvas);
   expect(lineAngleDegrees(solved)).toBeCloseTo(60, 6);
+  await expect(canvasDimension).toContainText('angle_target = 60°');
   expect(solved.objects).not.toEqual(baseline.objects);
 
   const parameter = page.getByLabel('Expression for angle_target');
@@ -456,6 +462,7 @@ test('places, retypes, solves, and undoes a driving angle dimension', async ({
   );
   const rebound = await readLiveSketch(canvas);
   expect(lineAngleDegrees(rebound)).toBeCloseTo(45, 6);
+  await expect(canvasDimension).toContainText('angle_target = 45°');
   expect(rebound.objects).not.toEqual(solved.objects);
 
   await page.keyboard.press('Control+z');
@@ -463,6 +470,19 @@ test('places, retypes, solves, and undoes a driving angle dimension', async ({
     .poll(async () => JSON.stringify((await readLiveSketch(canvas)).objects))
     .toBe(JSON.stringify(solved.objects));
   await expect(parameter).toHaveValue('60');
+  await expect(canvasDimension).toContainText('angle_target = 60°');
+  await page.keyboard.press('Control+z');
+  await expect
+    .poll(async () => JSON.stringify((await readLiveSketch(canvas)).objects))
+    .toBe(JSON.stringify(baseline.objects));
+  await expect(canvasDimension).not.toContainText('angle_target');
+  await page.keyboard.press('Control+Shift+z');
+  await expect(canvasDimension).toContainText('angle_target = 60°');
+  await page.screenshot({ path: '/tmp/openzcad-sketch-driving-dimension.png' });
+  await page
+    .getByRole('button', { name: 'Finish Sketch', exact: true })
+    .click();
+  await expect(canvasDimension).toHaveCount(0);
 });
 
 test('clears every transient sketch HUD overlay when finishing a sketch', async ({
