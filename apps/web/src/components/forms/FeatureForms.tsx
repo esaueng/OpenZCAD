@@ -221,8 +221,37 @@ export function PrimitiveForm({
     setValues(documentValues);
   }
 
+  const dimensionErrors = Object.fromEntries(
+    fields.map((field) => {
+      const preview = previewExpression(values[field.key] ?? '', scope);
+      const allowsZero = kind === 'cone' && field.key !== 'height';
+      const invalid =
+        preview.ok &&
+        (preview.value === undefined ||
+          !Number.isFinite(preview.value) ||
+          (allowsZero ? preview.value < 0 : preview.value <= 0));
+      return [
+        field.key,
+        invalid
+          ? allowsZero
+            ? 'Must be zero or greater.'
+            : 'Must be greater than zero.'
+          : undefined
+      ];
+    })
+  );
+  if (
+    kind === 'cone' &&
+    previewExpression(values.bottomRadius ?? '', scope).value === 0 &&
+    previewExpression(values.topRadius ?? '', scope).value === 0
+  ) {
+    dimensionErrors.bottomRadius =
+      'At least one radius must be greater than zero.';
+  }
   const canSubmit =
-    name.trim().length > 0 && fieldsValid(scope, Object.values(values));
+    name.trim().length > 0 &&
+    fieldsValid(scope, Object.values(values)) &&
+    Object.values(dimensionErrors).every((error) => !error);
 
   return (
     <FormShell
@@ -250,6 +279,7 @@ export function PrimitiveForm({
           value={values[field.key] ?? ''}
           scope={scope}
           autoFocus={index === 0}
+          error={dimensionErrors[field.key]}
           onChange={(value) =>
             setValues((current) => ({ ...current, [field.key]: value }))
           }

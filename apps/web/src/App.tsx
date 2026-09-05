@@ -11,6 +11,7 @@ import {
   type ChangeEvent,
   type ComponentProps
 } from 'react';
+import { ExportDialogBoundary } from './components/ExportDialogBoundary';
 import {
   Camera,
   Combine,
@@ -650,9 +651,11 @@ function ProjectSharingDialog(
 
 function ExportDialog(props: ComponentProps<typeof LazyExportDialog>) {
   return (
-    <Suspense fallback={null}>
-      <LazyExportDialog {...props} />
-    </Suspense>
+    <ExportDialogBoundary onClose={props.onClose}>
+      <Suspense fallback={null}>
+        <LazyExportDialog {...props} />
+      </Suspense>
+    </ExportDialogBoundary>
   );
 }
 
