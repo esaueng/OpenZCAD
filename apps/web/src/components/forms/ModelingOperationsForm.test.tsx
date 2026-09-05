@@ -1,4 +1,10 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import {
+  act,
+  fireEvent,
+  render,
+  screen,
+  waitFor
+} from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { toBodyId, toSketchId } from '@openzcad/shared';
 import type { BodyOption } from './FeatureForms';
@@ -20,6 +26,109 @@ const faces: ModelingFaceOption[] = [
 ];
 
 describe('Modeling operations form', () => {
+  it('consumes a viewport Hole pick without losing edited fields or accepting an older preflight', async () => {
+    let resolvePreflight: ((value: { status: 'ready' }) => void) | undefined;
+    const onPreflight = vi.fn(
+      (_submission: ModelingOperationSubmission) =>
+        new Promise<{ status: 'ready' }>((resolve) => {
+          resolvePreflight = resolve;
+        })
+    );
+    const extraFace = {
+      ...faces[0]!,
+      hash: 43,
+      topologyId: 'face:43',
+      label: 'Second plane'
+    };
+    const props = {
+      operation: 'hole' as const,
+      scope: {},
+      bodies,
+      faceOptions: [...faces, extraFace],
+      onPreflight,
+      onSubmit: vi.fn()
+    };
+    const view = render(<ModelingOperationsForm {...props} />);
+    fireEvent.click(screen.getByRole('button', { name: faces[0]!.label }));
+    fireEvent.change(screen.getByLabelText('Diameter'), {
+      target: { value: '5' }
+    });
+    fireEvent.change(screen.getByLabelText('Style'), {
+      target: { value: 'countersink' }
+    });
+    fireEvent.change(screen.getByLabelText('Countersink diameter'), {
+      target: { value: '9' }
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Check exact result' }));
+    expect(screen.getByRole('status')).toHaveTextContent(
+      'Checking the exact kernel result'
+    );
+
+    view.rerender(
+      <ModelingOperationsForm
+        {...props}
+        viewportHoleFacePick={{ bodyId, hash: 43 }}
+      />
+    );
+    expect(
+      screen.getByRole('button', { name: `1 ${extraFace.label}` })
+    ).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByLabelText('Diameter')).toHaveValue('5');
+    expect(screen.getByLabelText('Style')).toHaveValue('countersink');
+    expect(screen.getByLabelText('Countersink diameter')).toHaveValue('9');
+    await act(async () => {
+      resolvePreflight?.({ status: 'ready' });
+    });
+    await waitFor(() =>
+      expect(
+        screen.getByRole('button', { name: 'Check exact result' })
+      ).toBeEnabled()
+    );
+    expect(screen.queryByRole('button', { name: 'Create hole' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Check exact result' }));
+    expect(onPreflight.mock.calls[1]?.[0]).toMatchObject({
+      operation: 'hole',
+      input: {
+        faceHash: 43,
+        diameter: 5,
+        style: 'countersink',
+        countersinkDiameter: 9
+      }
+    });
+  });
+
+  it('ignores a stale viewport pick for another Hole target and clears the old entry on target change', () => {
+    const otherBodyId = toBodyId('other_body');
+    const props = {
+      operation: 'hole' as const,
+      scope: {},
+      bodies: [
+        ...bodies,
+        { bodyId: otherBodyId, name: 'Other body', consumed: false }
+      ],
+      faceOptions: faces,
+      onPreflight: vi.fn(),
+      onSubmit: vi.fn()
+    };
+    const view = render(<ModelingOperationsForm {...props} />);
+    fireEvent.click(screen.getByRole('button', { name: faces[0]!.label }));
+    fireEvent.change(screen.getByLabelText('Target body'), {
+      target: { value: otherBodyId }
+    });
+    view.rerender(
+      <ModelingOperationsForm
+        {...props}
+        viewportHoleFacePick={{ bodyId, hash: 42 }}
+      />
+    );
+    expect(
+      screen.getByRole('button', { name: faces[0]!.label })
+    ).toHaveAttribute('aria-pressed', 'false');
+    expect(
+      screen.getByRole('button', { name: 'Check exact result' })
+    ).toBeDisabled();
+  });
+
   it('announces pending and ready preflight before submitting a typed shell', async () => {
     let resolvePreflight: ((value: { status: 'ready' }) => void) | undefined;
     const onPreflight = vi.fn(
