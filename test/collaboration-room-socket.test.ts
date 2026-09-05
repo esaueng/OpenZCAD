@@ -108,6 +108,42 @@ function deeplyNestedDocumentFrame(depth: number, clientId = 'client_ws') {
 }
 
 describe('collaboration room socket handling', () => {
+  it('broadcasts an accepted reconnect document to existing peers', async () => {
+    const { context, values } = createRoomContext();
+    const base = createProjectDocument('Reconnect room', toUserId('user_room'));
+    const room = new ProjectCollaborationRoom(context, {});
+    const existing = await openSocket(room, base.projectId);
+    await existing.receive(hello(base, 'existing'));
+    existing.sent.length = 0;
+
+    const reconnecting = await openSocket(room, base.projectId);
+    const edited = addPrimitiveFeature(base, {
+      name: 'Offline edit',
+      primitiveKind: 'box',
+      dimensions: { width: 1, height: 1, depth: 1 }
+    });
+    await reconnecting.receive(hello(edited, 'reconnecting'));
+
+    expect(values.get('room:latest')).toMatchObject({
+      version: edited.version
+    });
+    expect(
+      existing.frames().filter((frame) => frame.type === 'document')
+    ).toEqual([
+      { type: 'document', clientId: 'reconnecting', document: edited }
+    ]);
+    expect(reconnecting.frames()).toContainEqual({
+      type: 'ack',
+      version: edited.version
+    });
+
+    existing.sent.length = 0;
+    await reconnecting.receive(hello(edited, 'reconnecting'));
+    expect(
+      existing.frames().filter((frame) => frame.type === 'document')
+    ).toEqual([]);
+  });
+
   it('closes sockets and deletes every stored value during internal erasure', async () => {
     const { context, values } = createRoomContext();
     const base = createProjectDocument('Erased room', toUserId('user_room'));

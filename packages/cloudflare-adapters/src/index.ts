@@ -4426,7 +4426,7 @@ export class ProjectCollaborationRoom extends DurableObject {
           message.clientId,
           message.document,
           message.baseVersion,
-          false,
+          true,
           message.leaseId
         );
       }
