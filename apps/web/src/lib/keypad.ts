@@ -153,6 +153,8 @@ export function typedUnitValue(raw: string): TypedUnitValue | undefined {
 }
 export type DimensionMode = 'diameter' | 'radius';
 
+const DIMENSION_PREFIX = /^(Ø|⌀|R(?=$|[\s\d.(+-]))\s*/iu;
+
 export interface KeypadEvaluation {
   ok: boolean;
   /** Value converted into document units and normalized to radius when radial. */
@@ -181,12 +183,9 @@ export function evaluateKeypadInput(
   scope: Record<string, number>,
   dimensionMode?: DimensionMode
 ): KeypadEvaluation {
-  const explicitMode = dimensionModeForInput(raw);
+  const explicitMode = dimensionModeForInput(raw, scope);
   const effectiveMode = explicitMode ?? dimensionMode;
-  const trimmed = raw
-    .trim()
-    .replace(/^(?:Ø|⌀|R)\s*/iu, '')
-    .trim();
+  const trimmed = stripDimensionPrefix(raw, scope);
   if (trimmed.length === 0) {
     return { ok: false, isExpression: false, error: 'required' };
   }
@@ -241,24 +240,36 @@ export function evaluateKeypadInput(
 }
 
 /** Explicit Ø/R typed into the field wins over the current keypad mode. */
-export function dimensionModeForInput(raw: string): DimensionMode | undefined {
-  const prefix = raw
-    .trim()
-    .match(/^(Ø|⌀|R)\s*/iu)?.[1]
-    ?.toUpperCase();
+export function dimensionModeForInput(
+  raw: string,
+  scope: Record<string, number> = {}
+): DimensionMode | undefined {
+  const input = raw.trim();
+  const identifier = input.match(/^[a-z_][a-z0-9_]*/iu)?.[0];
+  // A parameter named r or r2 wins over the otherwise ambiguous R shorthand.
+  if (identifier && Object.hasOwn(scope, identifier)) return undefined;
+  const prefix = input.match(DIMENSION_PREFIX)?.[1]?.toUpperCase();
   return prefix === 'R' ? 'radius' : prefix ? 'diameter' : undefined;
+}
+
+function stripDimensionPrefix(
+  raw: string,
+  scope: Record<string, number>
+): string {
+  const input = raw.trim();
+  return dimensionModeForInput(input, scope)
+    ? input.replace(DIMENSION_PREFIX, '').trim()
+    : input;
 }
 
 /** Switch entry notation without changing the radius the field represents. */
 export function convertDimensionInput(
   raw: string,
   from: DimensionMode,
-  to: DimensionMode
+  to: DimensionMode,
+  scope: Record<string, number> = {}
 ): string {
-  const value = raw
-    .trim()
-    .replace(/^(?:Ø|⌀|R)\s*/iu, '')
-    .trim();
+  const value = stripDimensionPrefix(raw, scope);
   if (!value || from === to) {
     return value;
   }

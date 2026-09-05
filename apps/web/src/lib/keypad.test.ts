@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   appendKeypadKey,
   convertDimensionInput,
+  dimensionModeForInput,
   evaluateKeypadInput,
   keypadClampPosition,
   typedUnitValue
@@ -215,5 +216,24 @@ describe('keypadClampPosition around docked panels', () => {
     expect(keypadClampPosition({ x: 820, y: 200 }, SIZE, VIEWPORT)).toEqual(
       keypadClampPosition({ x: 820, y: 200 }, SIZE, VIEWPORT, [])
     );
+  });
+});
+
+
+describe('radial notation and parameter names', () => {
+  it.each(['radius_target', 'radius', 'r', 'r2', 'R2'])('preserves the parameter %s', (name) => {
+    const scope = { [name]: 7 };
+    expect(dimensionModeForInput(name, scope)).toBeUndefined();
+    expect(evaluateKeypadInput(name, 'mm', 'mm', scope)).toMatchObject({ ok: true, value: 7, normalizedRaw: name });
+    expect(evaluateKeypadInput(`${name} + 1`, 'mm', 'mm', scope, 'diameter')).toMatchObject({ ok: true, value: 4, normalizedRaw: `(${name} + 1) / 2` });
+    expect(convertDimensionInput(name, 'radius', 'diameter', scope)).toBe(`2 * (${name})`);
+  });
+  it.each(['R7', 'r7', 'R 7', 'R (3 + 4)'])('retains explicit radius notation %s', (raw) => {
+    expect(dimensionModeForInput(raw)).toBe('radius');
+    expect(evaluateKeypadInput(raw, 'mm', 'mm', {})).toMatchObject({ ok: true, value: 7 });
+  });
+  it('does not switch an unknown identifier to radius mode', () => {
+    expect(dimensionModeForInput('radius_target')).toBeUndefined();
+    expect(evaluateKeypadInput('radius_target', 'mm', 'mm', {}).error).toContain('radius_target');
   });
 });
