@@ -371,9 +371,9 @@
   position: absolute;
   z-index: calc(var(--z-viewer-overlay) + 1);
   padding: 4px 10px;
-  color: #14202e;
-  background: rgba(250, 252, 255, 0.97);
-  border: 1px solid rgba(20, 32, 46, 0.25);
+  color: var(--color-text);
+  background: var(--color-surface-2);
+  border: 1px solid var(--color-accent-border);
   border-radius: 999px;
   box-shadow: 0 8px 22px rgba(0, 0, 0, 0.35);
   font-family: var(--font-mono);
@@ -389,8 +389,11 @@
   animation: oz-fade var(--dur-fast) var(--ease-out);
 }
 
+/* The only light surface on a dark viewport pulled the eye harder than the
+   value it labels; it now matches the value chip and lifts on hover. */
 .handle-label-chip:hover {
-  background: #ffffff;
+  background: var(--color-surface-hover);
+  border-color: var(--color-accent-hi);
 }
 
 /* Floating exact-value keypad anchored at the point of action. */
