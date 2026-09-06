@@ -1,0 +1,466 @@
+/* ── Workspace column (experiments.workspaceColumn) ──
+   The single-column layout: one floating column over the viewport carries
+   the mode's tools and the model browser; the status bar is replaced by a
+   readout overlay. Everything here restyles components that keep their
+   classic rules for the docked layout, so it stays after them in the
+   cascade and before view-mode.css, which subtracts from both. ── */
+
+.workspace-column-float {
+  position: absolute;
+  top: 10px;
+  left: 10px;
+  bottom: 10px;
+  z-index: var(--z-inspector-float);
+  width: min(var(--sidebar-w), calc(100% - 20px));
+  display: flex;
+  pointer-events: none;
+}
+
+.workspace-column-float > * {
+  pointer-events: auto;
+}
+
+.workspace-column {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--color-surface);
+  border: var(--border-thin);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-2);
+  overflow: hidden;
+}
+
+.workspace-column-header {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 38px;
+  padding: 0 8px 0 12px;
+  border-bottom: var(--border-thin);
+  color: var(--color-text-muted);
+  font-size: var(--fs-sm);
+}
+
+.workspace-column-header strong {
+  color: var(--color-text);
+  font-weight: var(--fw-medium);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workspace-column-header .sketch-mark {
+  color: var(--color-warning);
+  flex: 0 0 auto;
+}
+
+.workspace-column-header .spacer {
+  flex: 1;
+}
+
+.workspace-column-search {
+  flex: 1;
+  min-width: 0;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 -2px 0 -4px;
+  padding: 0 9px;
+  color: var(--color-text-subtle);
+  background: var(--color-bg);
+  border: var(--border-thin);
+  border-radius: var(--radius-md);
+  font-size: var(--fs-sm);
+  text-align: left;
+}
+
+.workspace-column-search span {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workspace-column-search:hover {
+  color: var(--color-text);
+  border-color: var(--color-border-strong);
+}
+
+.workspace-column-finish {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  padding: 0 9px 0 7px;
+  color: var(--color-on-accent);
+  background: var(--color-accent);
+  border-radius: var(--radius-md);
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-medium);
+  white-space: nowrap;
+}
+
+.workspace-column-finish:hover {
+  background: var(--color-accent-hi);
+}
+
+.workspace-column-tools {
+  flex: 0 1 auto;
+  /* Twenty-eight tools do not fit above the browser at every height: the
+     section scrolls on its own past this share of the column, so the
+     browser keeps a floor of space for the tree and the history. */
+  max-height: 48%;
+  min-height: 0;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  border-bottom: var(--border-thin);
+}
+
+.workspace-column-browser {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.workspace-column-browser .sidebar.column {
+  flex: 1;
+  border-right: 0;
+}
+
+/* ── Feature palette in the column: labelled, three across ── */
+
+.tool-palette.column {
+  max-height: none;
+  padding: 0;
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  overflow: visible;
+}
+
+@supports (animation-timeline: scroll()) {
+  .tool-palette.column {
+    animation: none;
+  }
+}
+
+.tool-palette.column .palette-group {
+  padding: 0 6px 6px;
+}
+
+.tool-palette.column .palette-group + .palette-group {
+  border-top: var(--border-thin);
+}
+
+.tool-palette.column .palette-group-label {
+  padding: 8px 4px 4px;
+}
+
+.tool-palette.column .palette-grid {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.tool-palette.column .palette-item {
+  min-height: 40px;
+  flex-direction: column;
+  gap: 2px;
+  padding: 4px 1px;
+}
+
+.palette-item-label {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 9.5px;
+  line-height: 1;
+  letter-spacing: -0.01em;
+}
+
+/* ── Sketch rail in the column ── */
+
+.sketch-rail.column {
+  position: static;
+  max-width: none;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 4px;
+  padding: 6px;
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+  transform: none;
+  animation: none;
+}
+
+.sketch-rail.column .sketch-rail-group-label {
+  padding: 6px 4px 0;
+}
+
+.sketch-rail-group {
+  display: grid;
+  gap: 2px;
+}
+
+.sketch-rail-group.draw {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.sketch-rail-group.draw > button,
+.sketch-rail-group.draw .sketch-circle-tool > button:first-child {
+  min-height: 46px;
+  flex-direction: column;
+  justify-content: center;
+  gap: 3px;
+  padding: 5px 2px;
+  font-size: 10px;
+}
+
+.sketch-rail-group.draw button kbd {
+  display: none;
+}
+
+.sketch-rail-group.draw .sketch-circle-tool {
+  display: flex;
+  min-width: 0;
+}
+
+.sketch-rail-group.draw .sketch-circle-tool > button:first-child {
+  flex: 1;
+  min-width: 0;
+}
+
+.sketch-rail-group.constrain {
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+}
+
+.sketch-rail-group.constrain > button {
+  justify-content: center;
+  padding: 5px 0;
+}
+
+.sketch-rail-group.solve {
+  grid-template-columns: max-content minmax(0, 1fr);
+  align-items: center;
+  gap: 6px;
+  padding-top: 2px;
+}
+
+.sketch-rail-group.solve .sketch-solve-pill {
+  justify-self: start;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.sketch-rail-group.utility {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  padding-top: 4px;
+  border-top: var(--border-thin);
+}
+
+.sketch-rail-group.utility > button {
+  flex-direction: column;
+  justify-content: center;
+  gap: 3px;
+  padding: 5px 2px;
+  font-size: 10px;
+}
+
+/* The sketch settings ride in the column instead of floating. */
+.sketch-palette.column {
+  position: static;
+  width: auto;
+  border: 0;
+  border-top: var(--border-thin);
+  border-radius: 0;
+  box-shadow: none;
+  backdrop-filter: none;
+  background: transparent;
+  animation: none;
+}
+
+.sketch-palette.column.collapsed {
+  width: auto;
+}
+
+/* ── Browser in the column ── */
+
+.sidebar.column .sidebar-section.grow {
+  flex: 1;
+}
+
+/* Collapsed History: the scrub strip in the header, name and position after it. */
+.sidebar.column .sidebar-section.collapsed .section-title {
+  gap: 8px;
+}
+
+.history-scrub {
+  position: relative;
+  flex: 1 1 auto;
+  min-width: 48px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 2px;
+  padding: 0 2px;
+}
+
+/* One connector behind the whole strip rather than one per gap: the dots
+   squash together as the history grows and per-dot connectors would not. */
+.history-scrub::before {
+  content: '';
+  position: absolute;
+  left: 4px;
+  right: 4px;
+  top: 50%;
+  height: 1px;
+  background: var(--color-border-strong);
+}
+
+.history-scrub-dot {
+  position: relative;
+  flex: 0 1 7px;
+  min-width: 3px;
+  height: 7px;
+  border-radius: 999px;
+  background: var(--color-text-muted);
+  border: 1.5px solid var(--color-text-muted);
+  box-sizing: border-box;
+}
+
+.history-scrub-dot.consumed {
+  background: var(--color-surface);
+  border-color: var(--color-text-subtle);
+}
+
+.history-scrub-dot.active {
+  flex-basis: 9px;
+  min-width: 9px;
+  height: 9px;
+  background: var(--color-accent);
+  border-color: var(--color-accent);
+  box-shadow: 0 0 0 2px var(--color-accent-dim);
+}
+
+.history-scrub-name {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 45%;
+  color: var(--color-text);
+  font-family: var(--font-ui);
+  font-size: var(--fs-xs);
+  font-weight: var(--fw-regular);
+  letter-spacing: 0;
+  text-transform: none;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.history-scrub-position {
+  flex: 0 0 auto;
+  color: var(--color-text-subtle);
+  font-size: var(--fs-mini);
+}
+
+/* ── Viewport furniture in the column layout ── */
+
+/* The status bar's jobs, over the viewport, on one line right of the scale
+   bar: the readout first, the message centred in what is left, and the
+   right-hand end kept clear for the viewer's grid readout and the cube. */
+.workspace-readout {
+  position: absolute;
+  left: calc(var(--sidebar-w) + 22px + 150px);
+  right: 12px;
+  bottom: 10px;
+  z-index: var(--z-viewer-overlay);
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr) 200px;
+  align-items: end;
+  gap: 16px;
+  pointer-events: none;
+}
+
+.workspace-readout-hint {
+  grid-column: 2;
+  min-width: 0;
+  color: var(--color-viewport-text-muted);
+  font-size: var(--fs-sm);
+  text-align: center;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workspace-readout-hint.warning {
+  color: var(--color-warning);
+}
+
+.workspace-readout-hint.running {
+  color: var(--color-accent-hi);
+}
+
+.workspace-readout-meta {
+  grid-column: 1;
+  display: flex;
+  gap: 12px;
+  padding-bottom: 1px;
+  color: var(--color-viewport-text-muted);
+  font-size: var(--fs-mini);
+  white-space: nowrap;
+}
+
+.workspace-readout-sync {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.workspace-readout-sync i {
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: var(--color-success);
+}
+
+.workspace-readout-sync.saving i,
+.workspace-readout-sync.syncing i {
+  background: var(--color-accent);
+}
+
+.workspace-readout-sync.local i,
+.workspace-readout-sync.offline i {
+  background: var(--color-warning);
+}
+
+/* The cube moves to the bottom corner: the top-right belongs to the dock. */
+.workspace.column-layout .viewer-rail-stack,
+.workspace.column-layout .viewer-area.has-inspector .viewer-rail-stack {
+  top: auto;
+  right: 12px;
+  bottom: 34px;
+}
+
+/* The tool card centres on the room between the column and the dock. */
+.workspace.column-layout .tool-card {
+  --tool-card-room: calc(100% - var(--sidebar-w) - 40px);
+  left: calc(var(--sidebar-w) + 20px + var(--tool-card-room) / 2);
+}
+
+.workspace.column-layout .viewer-area.has-inspector .tool-card {
+  --tool-card-room: calc(100% - var(--sidebar-w) - var(--context-w) - 50px);
+  left: calc(var(--sidebar-w) + 20px + var(--tool-card-room) / 2);
+  width: max(280px, min(680px, var(--tool-card-room)));
+}
+
+/* The scale bar sits under the column otherwise. */
+.workspace.column-layout .viewport-scale-indicator {
+  left: calc(var(--sidebar-w) + 22px);
+}
