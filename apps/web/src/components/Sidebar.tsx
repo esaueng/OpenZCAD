@@ -374,8 +374,8 @@ export function Sidebar({
         </div>
         {parameters.length === 0 && (
           <p className="muted sidebar-hint">
-            Name a value here (e.g. <span className="mono">w = 30</span>), then
-            use it in any feature field.
+            Name a value (<span className="mono">w = 30</span>) and use it in
+            any feature field.
           </p>
         )}
       </SidebarSection>
