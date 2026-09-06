@@ -115,14 +115,7 @@
 }
 
 .workspace-column-tools {
-  flex: 0 1 auto;
-  /* Twenty-eight tools do not fit above the browser at every height: the
-     section scrolls on its own past this share of the column, so the
-     browser keeps a floor of space for the tree and the history. */
-  max-height: 48%;
-  min-height: 0;
-  overflow-y: auto;
-  scrollbar-width: thin;
+  flex: 0 0 auto;
   border-bottom: var(--border-thin);
 }
 
@@ -154,7 +147,10 @@
   }
 }
 
-/* ── Feature palette in the column: labelled, three across ── */
+/* ── Feature palette in the column: icons only, six across ──
+   Twenty-eight labelled tools did not fit above the browser at any height
+   and gave the column a second scrollbar. Icons at six across put every tool
+   above the fold; the names stay in the tooltips and the command search. */
 
 .tool-palette.column {
   max-height: none;
@@ -180,27 +176,16 @@
 }
 
 .tool-palette.column .palette-group-label {
-  padding: 8px 4px 4px;
+  padding: 7px 4px 3px;
 }
 
 .tool-palette.column .palette-grid {
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(6, minmax(0, 1fr));
 }
 
 .tool-palette.column .palette-item {
-  min-height: 40px;
-  flex-direction: column;
-  gap: 2px;
-  padding: 4px 1px;
-}
-
-.palette-item-label {
-  max-width: 100%;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  font-size: 9.5px;
-  line-height: 1;
-  letter-spacing: -0.01em;
+  min-height: 32px;
+  padding: 4px;
 }
 
 /* ── Sketch rail in the column ── */
@@ -460,6 +445,25 @@
 .workspace-readout-sync.local i,
 .workspace-readout-sync.offline i {
   background: var(--color-warning);
+}
+
+/* One home per fact. The dock header already names the selection, so the
+   selection chip stands down while the dock is up; when it does show, it sits
+   above the readout line instead of on it. The utility rail leaves the dock's
+   corner for the bottom cluster. */
+.workspace.column-layout .viewer-area.has-inspector .selection-chip {
+  display: none;
+}
+
+.workspace.column-layout .selection-chip {
+  bottom: 36px;
+}
+
+.workspace.column-layout .viewer-rail {
+  top: auto;
+  right: 12px;
+  bottom: 132px;
+  transform: none;
 }
 
 /* The cube moves to the bottom corner: the top-right belongs to the dock. */
