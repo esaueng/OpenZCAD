@@ -514,20 +514,21 @@
   bottom: 36px;
 }
 
-/* The utility rail stands on the right edge just under the top bar, as
-   placed on the design canvas: above the assistant tab, clear of the corner
-   stack. With a dock open it steps left of the dock. */
+/* The viewer bar (undo/redo and the viewport toggles) sits bottom-centre
+   over the viewport, above the hint line, centred on the canvas rather than
+   the window: the column takes the left edge, and a docked inspector takes
+   the right. */
 .workspace.column-layout .viewer-rail {
-  top: 46px;
-  right: 34px;
-  bottom: auto;
-  left: auto;
-  flex-direction: column;
-  transform: none;
+  top: auto;
+  right: auto;
+  bottom: 72px;
+  left: calc(var(--column-w) + (100% - var(--column-w)) / 2);
+  flex-direction: row;
+  transform: translateX(-50%);
 }
 
 .workspace.column-layout .viewer-area.has-inspector .viewer-rail {
-  right: calc(var(--context-w) + 24px);
+  left: calc(var(--column-w) + (100% - var(--column-w) - var(--context-w)) / 2);
 }
 
 /* The bottom-right corner holds the cube with undo/redo and, under it, the
