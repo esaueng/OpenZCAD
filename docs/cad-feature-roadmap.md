@@ -77,12 +77,12 @@ fastest meaningful win in the entire roadmap was exposure, not construction:
   concentric, midpoint, and — the important three — **driving distance,
   angle, and radius dimensions** placed as on-canvas annotations. A
   dimension you can click and retype on the sketch is the core parametric
-  gesture in every mainstream tool; today numbers live only in the entity
-  editor and constraint list.
+  gesture in every mainstream tool. Driving distance/angle creation and
+  on-canvas distance/angle/radius editing now ship; see the dispositions below.
 - **S-2. Dimension display**: witness lines/arrows already exist
-  (`dimensionGraphic.ts`, used by drag rigs); reuse them for persistent
-  sketch dimensions, driven-vs-driving state, and expression binding
-  (a dimension bound to a named parameter).
+  (`dimensionGraphic.ts`, used by drag rigs) and now render persistent
+  distance/angle/radius driving annotations with expression binding and
+  click-to-edit. Saved label placement and driven/reference dimensions remain.
 - **S-3. Constraint status**: a DOF/under-over-constrained badge beyond
   the current solve-status tone; on-hover highlight of constrained
   entities; conflict diagnostics naming the removable constraint.
@@ -117,6 +117,18 @@ spans reuse the viewport dimension graphic; angles use in-plane arcs. Radius
 annotations, persisted label placement, and driven/reference dimensions remain
 open (the current schema stores driving constraints only). Evidence:
 `apps/web/src/lib/sketch/dimensionAnnotations.test.ts` and the driving-angle
+scenario in `test/e2e/workspace-polish.spec.ts`.
+
+**Disposition (2026-09-05, P1-S2 radius follow-up): — partial:** circle and arc
+radius constraints now have persistent `R` annotations and can be edited from
+the canvas or constraint list with expressions. The existing radius-pinning
+creation gesture is unchanged. Editing and parameter updates solve through the
+existing undoable transaction; conflicting constraints refuse the edit. Arc
+leaders follow the bounded counter-clockwise sweep. Unconstrained coordinates
+remain free for the solver to move; no center constraint is added implicitly.
+Radius annotation coverage is complete; saved placement and driven/reference
+dimensions remain open. Evidence: `test/sketch-radius-dimension.test.ts`,
+`apps/web/src/lib/sketch/dimensionAnnotations.test.ts`, and the canvas-radius
 scenario in `test/e2e/workspace-polish.spec.ts`.
 
 Everything above is app-side except S-6; the solver, region engine, and

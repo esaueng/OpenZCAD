@@ -101,8 +101,8 @@ it. When the two disagree, the dated roadmaps win.
 - Add multi-profile editing refinements and the remaining sketch-constraint UX
   only through deterministic commands. Direct tools now cover every
   schema-backed constraint kind; distance and angle creation/editing solve as
-  one undoable transaction. Persistent distance/angle annotations now reopen
-  the driving-value editor on the canvas. Radius annotations, saved placement,
+  one undoable transaction. Persistent distance/angle/radius annotations reopen
+  the driving-value editor on the canvas. Saved placement,
   driven dimensions, conflict feedback, and point identity for rectangles/polygons
   remain roadmap items. (Partial revolve
   shipped: the revolve form exposes `angleDeg` and

@@ -249,7 +249,7 @@ export function NumericKeypad({
   }, [evaluation.ok, normalizedValue, onPreview]);
 
   const previewIfValid = (next: string, requestedMode = dimensionMode) => {
-    const typedMode = dimensionModeForInput(next);
+    const typedMode = dimensionModeForInput(next, scope);
     const nextMode = typedMode ?? requestedMode;
     if (typedMode && typedMode !== dimensionMode) {
       setDimensionMode(typedMode);
@@ -279,7 +279,7 @@ export function NumericKeypad({
     if (!dimensionMode || nextMode === dimensionMode) {
       return;
     }
-    const next = convertDimensionInput(value, dimensionMode, nextMode);
+    const next = convertDimensionInput(value, dimensionMode, nextMode, scope);
     setDimensionMode(nextMode);
     onDimensionModeChange?.(nextMode);
     previewIfValid(next, nextMode);
