@@ -81,6 +81,7 @@ function SidebarSection({
   count,
   open,
   className,
+  summary,
   onToggle,
   children
 }: {
@@ -89,9 +90,16 @@ function SidebarSection({
   count: number | null;
   open: boolean;
   className?: string;
+  /**
+   * What the header shows instead of the count while collapsed — the
+   * history scrub strip, which says where in the history the model sits and
+   * not just how long the history is.
+   */
+  summary?: ReactNode;
   onToggle(id: SidebarSectionId): void;
   children: ReactNode;
 }) {
+  const showSummary = !open && summary !== undefined;
   return (
     <section
       className={`sidebar-section${className ? ` ${className}` : ''}${open ? '' : ' collapsed'}`}
@@ -109,7 +117,8 @@ function SidebarSection({
           <ChevronRight size={12} aria-hidden="true" />
         )}
         <span>{title}</span>
-        {count !== null && count > 0 && (
+        {showSummary && summary}
+        {!showSummary && count !== null && count > 0 && (
           <small className="section-count">{count}</small>
         )}
       </button>
@@ -156,6 +165,12 @@ interface SidebarProps {
   onBranchCheckpoint(checkpoint: ProjectCheckpoint): void;
   panelState: PanelState;
   onToggleSection(id: SidebarSectionId): void;
+  /**
+   * `column` is the workspace column's browser: no "Model" caption (the
+   * column has its own header) and a collapsed History that reads as a scrub
+   * strip — one dot per feature, the current one lit, its name beside it.
+   */
+  variant?: 'dock' | 'column';
 }
 
 /** Body kind icons mirror the feature icons so the two lists read as one. */
@@ -209,7 +224,8 @@ export function Sidebar({
   onRestoreCheckpoint,
   onBranchCheckpoint,
   panelState,
-  onToggleSection
+  onToggleSection,
+  variant = 'dock'
 }: SidebarProps) {
   // Drag-to-reorder state for the history timeline (StartScreen's pattern).
   const [dragFeatureId, setDragFeatureId] = useState<string | null>(null);
@@ -268,7 +284,9 @@ export function Sidebar({
             type="button"
             className={`row-visibility ${hidden ? 'is-hidden' : ''}`}
             title={hidden ? `Show body ${body.name}` : `Hide body ${body.name}`}
-            aria-label={hidden ? `Show body ${body.name}` : `Hide body ${body.name}`}
+            aria-label={
+              hidden ? `Show body ${body.name}` : `Hide body ${body.name}`
+            }
             aria-pressed={hidden}
             onClick={() => onToggleBodyVisibility(body.bodyId)}
           >
@@ -291,9 +309,47 @@ export function Sidebar({
         .slice(index + 1)
         .every((candidate) => isFeatureRollbackSuppressed(candidate))
   );
+  // The feature the scrub strip points at: the selected one, else the last
+  // one still in the build (the rollback marker), else the newest.
+  const activeFeatureIndex =
+    features.length === 0
+      ? -1
+      : selectedFeatureNodeId !== null &&
+          features.some((feature) => feature.id === selectedFeatureNodeId)
+        ? features.findIndex((feature) => feature.id === selectedFeatureNodeId)
+        : rollbackMarkerIndex >= 0
+          ? rollbackMarkerIndex
+          : features.length - 1;
+  const activeFeature =
+    activeFeatureIndex >= 0 ? features[activeFeatureIndex] : undefined;
+  const historyScrub =
+    variant === 'column' && activeFeature ? (
+      <>
+        <span className="history-scrub" aria-hidden="true">
+          {features.map((feature, index) => {
+            const body = feature.bodyId
+              ? representations[feature.bodyId]
+              : undefined;
+            return (
+              <i
+                key={feature.id}
+                className={`history-scrub-dot${index === activeFeatureIndex ? ' active' : ''}${body?.consumed ? ' consumed' : ''}`}
+              />
+            );
+          })}
+        </span>
+        <span className="history-scrub-name">{activeFeature.name}</span>
+        <small className="history-scrub-position mono">
+          {activeFeatureIndex + 1}/{features.length}
+        </small>
+      </>
+    ) : undefined;
   return (
-    <aside className="sidebar" aria-label="Model browser">
-      <div className="sidebar-label">Model</div>
+    <aside
+      className={`sidebar${variant === 'column' ? ' column' : ''}`}
+      aria-label="Model browser"
+    >
+      {variant !== 'column' && <div className="sidebar-label">Model</div>}
       <SidebarSection
         id="parameters"
         title="Parameters"
@@ -371,6 +427,7 @@ export function Sidebar({
         count={features.length}
         open={panelState.sidebarSections.history}
         className="grow"
+        {...(historyScrub !== undefined ? { summary: historyScrub } : {})}
         onToggle={onToggleSection}
       >
         <div className="feature-list">
@@ -535,7 +592,9 @@ export function Sidebar({
                   <button
                     type="button"
                     className={`row-visibility ${hidden ? 'is-hidden' : ''}`}
-                    title={hidden ? `Show ${feature.name}` : `Hide ${feature.name}`}
+                    title={
+                      hidden ? `Show ${feature.name}` : `Hide ${feature.name}`
+                    }
                     aria-label={
                       hidden ? `Show ${feature.name}` : `Hide ${feature.name}`
                     }

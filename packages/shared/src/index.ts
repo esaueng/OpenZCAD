@@ -2348,6 +2348,12 @@ export interface AppSettings {
   experiments: {
     /** Selection-first direct manipulation: click geometry, drag handles. */
     directManipulation: boolean;
+    /**
+     * The single-column workspace: tools, model browser and history in one
+     * floating column, the properties dock only while something is selected,
+     * no status bar. Off until the layout has settled.
+     */
+    workspaceColumn: boolean;
   };
 }
 
@@ -2436,7 +2442,8 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
     customInstructions: ''
   },
   experiments: {
-    directManipulation: true
+    directManipulation: true,
+    workspaceColumn: false
   }
 };
 
