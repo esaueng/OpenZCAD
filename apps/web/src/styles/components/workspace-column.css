@@ -115,14 +115,7 @@
 }
 
 .workspace-column-tools {
-  flex: 0 1 auto;
-  /* Twenty-eight tools do not fit above the browser at every height: the
-     section scrolls on its own past this share of the column, so the
-     browser keeps a floor of space for the tree and the history. */
-  max-height: 48%;
-  min-height: 0;
-  overflow-y: auto;
-  scrollbar-width: thin;
+  flex: 0 0 auto;
   border-bottom: var(--border-thin);
 }
 
@@ -138,7 +131,26 @@
   border-right: 0;
 }
 
-/* ── Feature palette in the column: labelled, three across ── */
+/* The docked assistant keeps its column. `.workspace.no-sidebar` (view-mode
+   .css, later in the cascade) collapses the template to one column, which
+   View mode can afford because it never docks the assistant; here the panel
+   wrapped onto a second row under the viewport. Three classes outrank it. */
+.workspace.column-layout.with-assistant {
+  --sidebar-col-w: 0px;
+  grid-template-columns: minmax(280px, 1fr) var(--assistant-col-w);
+}
+
+@media (max-width: 820px) {
+  /* The dock floats over the viewport at this width (responsive.css). */
+  .workspace.column-layout.with-assistant {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* ── Feature palette in the column: icons only, six across ──
+   Twenty-eight labelled tools did not fit above the browser at any height
+   and gave the column a second scrollbar. Icons at six across put every tool
+   above the fold; the names stay in the tooltips and the command search. */
 
 .tool-palette.column {
   max-height: none;
@@ -164,27 +176,16 @@
 }
 
 .tool-palette.column .palette-group-label {
-  padding: 8px 4px 4px;
+  padding: 7px 4px 3px;
 }
 
 .tool-palette.column .palette-grid {
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(6, minmax(0, 1fr));
 }
 
 .tool-palette.column .palette-item {
-  min-height: 40px;
-  flex-direction: column;
-  gap: 2px;
-  padding: 4px 1px;
-}
-
-.palette-item-label {
-  max-width: 100%;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  font-size: 9.5px;
-  line-height: 1;
-  letter-spacing: -0.01em;
+  min-height: 32px;
+  padding: 4px;
 }
 
 /* ── Sketch rail in the column ── */
@@ -394,15 +395,62 @@
   pointer-events: none;
 }
 
+/* The message is the activity log's handle, as the status bar's was. */
 .workspace-readout-hint {
   grid-column: 2;
   min-width: 0;
+  justify-self: center;
+  max-width: 100%;
+  padding: 2px 8px;
   color: var(--color-viewport-text-muted);
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
   font-size: var(--fs-sm);
   text-align: center;
+  pointer-events: auto;
+}
+
+.workspace-readout-hint > span {
+  display: block;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.workspace-readout-hint.empty {
+  /* Nothing to say: a 26px target that still opens the log on hover. */
+  min-width: 26px;
+  opacity: 0.5;
+}
+
+.workspace-readout-hint:hover,
+.workspace-readout-hint[aria-expanded='true'] {
+  color: var(--color-accent-hi);
+  background: color-mix(in srgb, var(--color-surface) 70%, transparent);
+  border-color: var(--color-viewport-border);
+}
+
+.workspace-readout-filter {
+  padding: 0 4px;
+  color: var(--color-viewport-text-muted);
+  border-radius: var(--radius-sm);
+  font: inherit;
+  pointer-events: auto;
+}
+
+.workspace-readout-filter.automatic {
+  color: var(--color-accent-hi);
+}
+
+.workspace-readout-filter:hover {
+  color: var(--color-text);
+  background: color-mix(in srgb, var(--color-surface) 70%, transparent);
+}
+
+/* The log panel rose above a status bar; there is none here. It is portaled
+   out of the workspace, so the layout is read off the root. */
+:root:has(.workspace.column-layout) .status-log-panel {
+  bottom: 0;
 }
 
 .workspace-readout-hint.warning {
@@ -444,6 +492,25 @@
 .workspace-readout-sync.local i,
 .workspace-readout-sync.offline i {
   background: var(--color-warning);
+}
+
+/* One home per fact. The dock header already names the selection, so the
+   selection chip stands down while the dock is up; when it does show, it sits
+   above the readout line instead of on it. The utility rail leaves the dock's
+   corner for the bottom cluster. */
+.workspace.column-layout .viewer-area.has-inspector .selection-chip {
+  display: none;
+}
+
+.workspace.column-layout .selection-chip {
+  bottom: 36px;
+}
+
+.workspace.column-layout .viewer-rail {
+  top: auto;
+  right: 12px;
+  bottom: 132px;
+  transform: none;
 }
 
 /* The cube moves to the bottom corner: the top-right belongs to the dock. */

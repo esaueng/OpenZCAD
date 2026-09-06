@@ -12092,6 +12092,15 @@ export function App() {
         return;
       }
 
+      if (meta && !event.shiftKey && event.key.toLowerCase() === 'j') {
+        event.preventDefault();
+        setPanelState((current) => ({
+          ...current,
+          assistantCollapsed: !current.assistantCollapsed
+        }));
+        return;
+      }
+
       if (meta && event.shiftKey && event.key.toLowerCase() === 'm') {
         event.preventDefault();
         // Cycle View → Tweak → Build, skipping whatever the project locks.
@@ -14594,6 +14603,10 @@ export function App() {
             tone={tone}
             hint={hint}
             saveState={presentedSaveState}
+            muted={contextualToolCard !== null && !hideSketchToolCard}
+            selectionFilter={selectionFilter}
+            selectionFilterIsAutomatic={manualSelectionFilter === null}
+            onSelectionFilter={setManualSelectionFilter}
             snap={
               interaction.mode === 'sketch'
                 ? {
