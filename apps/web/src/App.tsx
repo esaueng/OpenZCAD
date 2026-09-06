@@ -1,3 +1,8 @@
+import { buildMeasurementRecord } from './lib/measurementRecord';
+import {
+  loadProjectBackupFiles,
+  saveImportedProject
+} from './lib/localProjectStore';
 import {
   lazy,
   Suspense,
@@ -1951,6 +1956,9 @@ export function App() {
    */
   const [syncRun, setSyncRun] = useState<SyncEntry[] | null>(null);
   const viewNonceRef = useRef(0);
+  const projectImportInputRef = useRef<HTMLInputElement | null>(null);
+  const projectTransferRef = useRef(false);
+  const [projectTransferBusy, setProjectTransferBusy] = useState(false);
   const importInputRef = useRef<HTMLInputElement | null>(null);
   const pendingLocalSaveRef = useRef<ProjectDocument | null>(null);
   const localSaveTimeoutRef = useRef<number | null>(null);
@@ -3423,16 +3431,23 @@ export function App() {
   }, [doc?.projectId, doc?.checkpoints.length, session, cloudProjectIds]);
 
   useEffect(() => {
-    if (!doc || !session || !cloudProjectIds.has(doc.projectId)) {
+    if (!doc) {
       setArtifacts([]);
       return;
     }
     let cancelled = false;
-    void api
-      .listArtifacts(doc.projectId)
-      .then((response) => {
+    void Promise.all([
+      loadProjectBackupFiles(doc.projectId),
+      session && cloudProjectIds.has(doc.projectId)
+        ? api.listArtifacts(doc.projectId)
+        : Promise.resolve({ artifacts: [] })
+    ])
+      .then(([local, response]) => {
         if (!cancelled) {
-          setArtifacts(response.artifacts);
+          setArtifacts([
+            ...local.map((file) => file.artifact),
+            ...response.artifacts
+          ]);
         }
       })
       .catch(() => {
@@ -7808,6 +7823,101 @@ export function App() {
       );
     } catch (error) {
       setStatus(errorMessage(error, 'DXF export failed.'));
+    }
+  }
+
+  async function handleExportProject() {
+    if (!doc || projectTransferRef.current) return;
+    projectTransferRef.current = true;
+    setProjectTransferBusy(true);
+    const snapshot = doc;
+    try {
+      setStatus('Preparing complete project backup…');
+      const { createProjectBackup, downloadBackupFile } =
+        await import('./lib/projectBackupTransfer');
+      const text = await createProjectBackup(
+        snapshot,
+        cloudProjectIds.has(snapshot.projectId),
+        measurementHydratedProjectId === snapshot.projectId
+          ? buildMeasurementRecord(
+              snapshot.projectId,
+              measurements,
+              measurementDisplay,
+              new Date().toISOString()
+            )
+          : undefined
+      );
+      downloadBackupFile(
+        `${exportFileStem(snapshot.name)}.openzcad`,
+        new Blob([text], { type: 'application/json' })
+      );
+      setStatus(`Exported complete project ${snapshot.name}.`);
+    } catch (error) {
+      setStatus(
+        `Project export failed: ${errorMessage(error, 'Unable to create backup.')}`
+      );
+    } finally {
+      projectTransferRef.current = false;
+      setProjectTransferBusy(false);
+    }
+  }
+
+  async function handleImportProject(file: File) {
+    if (projectTransferRef.current) return;
+    projectTransferRef.current = true;
+    setProjectTransferBusy(true);
+    setBusy(true);
+    const origin = managerRef.current;
+    try {
+      const {
+        MAX_PROJECT_BACKUP_BYTES,
+        importProjectCopy,
+        parseProjectBackup
+      } = await import('./lib/projectBackup');
+      if (file.size > MAX_PROJECT_BACKUP_BYTES)
+        throw new Error('Project backup exceeds the 256 MB limit.');
+      const backup = importProjectCopy(
+        await parseProjectBackup(await file.text()),
+        session?.userId ?? localUserId
+      );
+      await saveImportedProject(backup);
+      if (managerRef.current === origin) {
+        await flushPendingLocalSave();
+        if (managerRef.current === origin) {
+          setShareSession(null);
+          shareSessionRef.current = null;
+          clearProjectShareFragment();
+          hydrateDocument(backup.document);
+          handleWorkspaceMode('build');
+        }
+      }
+      setProjects((current) =>
+        [
+          ...current,
+          summarizeLocalDocument(backup.document, DEFAULT_PROJECT_ORGANIZATION)
+        ].sort(compareProjectSummaries)
+      );
+      setStatus(
+        `Imported ${backup.document.name} as a separate local project.`
+      );
+    } catch (error) {
+      setStatus(
+        `Project import failed: ${errorMessage(error, 'Unable to read backup.')}`
+      );
+    } finally {
+      projectTransferRef.current = false;
+      setProjectTransferBusy(false);
+      setBusy(false);
+    }
+  }
+
+  async function handleDownloadProjectArtifact(artifact: ArtifactRecord) {
+    try {
+      const { downloadProjectArtifact } =
+        await import('./lib/projectBackupTransfer');
+      await downloadProjectArtifact(artifact);
+    } catch (error) {
+      setStatus(errorMessage(error, 'File download failed.'));
     }
   }
 
@@ -12556,6 +12666,7 @@ export function App() {
     return (
       <>
         <StartScreen
+          onImportProject={(file) => void handleImportProject(file)}
           projects={projects}
           status={status}
           busy={busy}
@@ -12802,6 +12913,26 @@ export function App() {
       shortcut: 'Ctrl+Shift+S',
       icon: <Save size={16} aria-hidden="true" />,
       run: openSaveNameDialog
+    },
+    {
+      id: 'file-export-project',
+      label: 'Export project',
+      group: 'File',
+      icon: <Download size={16} aria-hidden="true" />,
+      disabledReason: projectTransferBusy
+        ? 'Project transfer in progress'
+        : null,
+      run: () => void handleExportProject()
+    },
+    {
+      id: 'file-import-project',
+      label: 'Import project',
+      group: 'File',
+      icon: <Upload size={16} aria-hidden="true" />,
+      disabledReason: projectTransferBusy
+        ? 'Project transfer in progress'
+        : null,
+      run: () => projectImportInputRef.current?.click()
     },
     {
       id: 'file-export-step',
@@ -13347,6 +13478,12 @@ export function App() {
       }
       topBar={
         <TopBar
+          projectTransferBusy={projectTransferBusy}
+          onImportProject={(file) => void handleImportProject(file)}
+          onExportProject={() => void handleExportProject()}
+          onDownloadArtifact={(artifact) =>
+            void handleDownloadProjectArtifact(artifact)
+          }
           projectName={doc.name}
           units={doc.units}
           canExport={exportBodyIds.length > 0}
@@ -14639,6 +14776,17 @@ export function App() {
       }
       overlays={
         <>
+          <input
+            ref={projectImportInputRef}
+            type="file"
+            accept=".openzcad"
+            hidden
+            onChange={(event) => {
+              const file = event.currentTarget.files?.[0];
+              event.currentTarget.value = '';
+              if (file) void handleImportProject(file);
+            }}
+          />
           <input
             ref={importInputRef}
             type="file"
