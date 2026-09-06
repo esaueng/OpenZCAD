@@ -1412,6 +1412,8 @@ export function ModelViewer({
     awaitingSecondPoint: boolean;
     pointerId: number | null;
     moved: boolean;
+    /** Where a line-tool press landed, so a drag can draw press-to-release. */
+    pressPoint: SketchPoint | null;
   }>({
     chainAnchor: null,
     dragStart: null,
@@ -1421,7 +1423,8 @@ export function ModelViewer({
     circleSecond: null,
     awaitingSecondPoint: false,
     pointerId: null,
-    moved: false
+    moved: false,
+    pressPoint: null
   });
   const sketchDimLabelRef = useRef<HTMLDivElement | null>(null);
   /** Entity-snap candidates from committed sketch objects + cursor marker. */
@@ -5583,6 +5586,12 @@ export function ModelViewer({
         ) {
           gesture.pointerId = event.pointerId;
           gesture.moved = false;
+          gesture.pressPoint = point;
+          // Park the camera for the press: a drawing tool's drag is a stroke,
+          // never an orbit. Rectangle and circle already claim the pointer
+          // this way; the click-placed tools left it to the controls, so a
+          // slightly moving press swung the view off the sketch plane.
+          gestures.capture(event, null);
           event.preventDefault();
         }
         gestures.begin(event);
@@ -6007,7 +6016,26 @@ export function ModelViewer({
           requestRender();
           return;
         }
+        if (mode.tool === 'line' && point && moved && gesture.pressPoint) {
+          // Press-and-drag draws one segment from the press to the release,
+          // continuing a chain when one is open. Same locking as a click.
+          const anchor = gesture.chainAnchor ?? gesture.pressPoint;
+          const locked =
+            mode.inferenceEnabled && !event.shiftKey
+              ? axisLockPoint(anchor, point)
+              : { point, lockedAxis: null };
+          const object = lineObjectFromPoints(anchor, locked.point);
+          if (object) {
+            finishSketchNumericEntry();
+            onSketchCommitRef.current(object);
+            gesture.chainAnchor = locked.point;
+            onSketchDrawingChangeRef.current(true);
+          }
+          gesture.pressPoint = null;
+          requestRender();
+        }
         if (mode.tool === 'line' && point && !moved) {
+          gesture.pressPoint = null;
           if (!gesture.chainAnchor) {
             finishSketchNumericEntry();
             gesture.chainAnchor = point;
@@ -8120,7 +8148,8 @@ export function ModelViewer({
       circleSecond: null,
       awaitingSecondPoint: false,
       pointerId: null,
-      moved: false
+      moved: false,
+      pressPoint: null
     };
     // Save the pose to restore, then glide head-on to the plane.
     const returnPose = {
