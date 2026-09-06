@@ -14,6 +14,11 @@ interface WorkspaceReadoutProps {
   saveState: WorkspaceSaveState;
   /** Sketch snap spacing, shown while a sketch is open; null hides it. */
   snap: { spacing: number; units: string; enabled: boolean } | null;
+  /**
+   * A tool card is up and carries the message itself; the readout keeps
+   * only the corner facts so the same sentence is not on screen twice.
+   */
+  muted?: boolean;
 }
 
 /**
@@ -28,7 +33,8 @@ export function WorkspaceReadout({
   tone,
   hint,
   saveState,
-  snap
+  snap,
+  muted = false
 }: WorkspaceReadoutProps) {
   // Same lifetime rule as the status bar: an informational message goes
   // quiet once it has had its time, and the hint takes the slot back.
@@ -55,7 +61,7 @@ export function WorkspaceReadout({
   const sync = WORKSPACE_SAVE_STATE_PRESENTATION[saveState];
   return (
     <div className="workspace-readout">
-      {message && (
+      {message && !muted && (
         <div
           className={`workspace-readout-hint ${messageTone}`}
           role="status"
