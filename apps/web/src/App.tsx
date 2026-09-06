@@ -14,6 +14,7 @@ import {
 import { ExportDialogBoundary } from './components/ExportDialogBoundary';
 import {
   Camera,
+  Check,
   Combine,
   Crosshair,
   Download,
@@ -26,6 +27,7 @@ import {
   PenLine,
   Move3d,
   Save,
+  Search,
   Settings as SettingsIcon,
   Scissors,
   SlidersHorizontal,
@@ -247,6 +249,8 @@ import {
   type ToolId
 } from './lib/tools';
 import { AppShell } from './components/AppShell';
+import { WorkspaceColumn } from './components/WorkspaceColumn';
+import { WorkspaceReadout } from './components/WorkspaceReadout';
 import { PanelResizer } from './components/PanelResizer';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { TopBar } from './components/TopBar';
@@ -2432,6 +2436,10 @@ export function App() {
   // sketches, the inspector. Tweak differs from View in one thing only: the
   // parameter guard below lets `parameter.set` commands through.
   const modelingLocked = viewMode || tweakMode;
+  // The experimental single-column layout; View and Tweak keep their own
+  // shells, which already subtract from the classic one.
+  const columnLayout =
+    appSettings.experiments.workspaceColumn && !modelingLocked;
   workspaceModeRef.current = resolvedWorkspaceMode;
   // Conditions that lock the document whatever workspace is showing. Tweak's
   // parameter edits answer to these too: a second tab or a read-only
@@ -12802,6 +12810,11 @@ export function App() {
     baseToolCard && interaction.mode === 'sketch'
       ? { ...baseToolCard, title: `Editing Sketch: ${editingSketchName}` }
       : baseToolCard;
+  // The column's header already names the sketch and carries Finish, so the
+  // card would say the same thing twice over the viewport. Only the card is
+  // dropped: the entity editor, keypad and rail render in the same branch
+  // and must stay.
+  const hideSketchToolCard = columnLayout && interaction.mode === 'sketch';
   const inspectorActive =
     !modelingLocked &&
     !directMode &&
@@ -13021,6 +13034,187 @@ export function App() {
     });
   }
 
+  // The sketch rail floats over the viewport in the classic layout and sits
+  // in the column otherwise; one element, placed by `columnLayout`.
+  const sketchRail =
+    interaction.mode === 'sketch' ? (
+      <SketchToolRail
+        tool={interaction.session.tool}
+        circleMode={interaction.session.circleMode}
+        construction={sketchConstruction}
+        settings={appSettings.sketching}
+        units={doc.units}
+        paletteVisible={selectedSketchEntity === null}
+        canConstrain={Boolean(interaction.session.sketchId)}
+        pendingConstraint={interaction.session.pendingConstraint}
+        constraints={sketchConstraintItems}
+        solveStatus={sketchSolveStatus}
+        solving={sketchSolving}
+        onConstraintTool={(kind) => {
+          dispatchInteraction({
+            type: 'sketch-constraint-tool',
+            kind
+          });
+          if (kind) {
+            setStatus(constraintToolSpec(kind).hint);
+          }
+        }}
+        onDeleteConstraint={handleDeleteSketchConstraint}
+        onEditConstraint={handleEditSketchDimension}
+        onSolve={() => {
+          void handleSolveSketch();
+        }}
+        onTool={(sketchTool) =>
+          dispatchInteraction({
+            type: 'sketch-tool',
+            tool: sketchTool
+          })
+        }
+        onCircleMode={(mode) =>
+          dispatchInteraction({
+            type: 'sketch-circle-mode',
+            mode
+          })
+        }
+        onConstruction={setSketchConstruction}
+        onSettings={(sketching) => {
+          const current = appSettingsRef.current;
+          handleAppSettingsChange({ ...current, sketching });
+        }}
+        onDiagnostics={showProfileDiagnostics}
+        onExtrude={() => {
+          if (interaction.session.sketchId) {
+            startExtrude(interaction.session.sketchId as SketchId);
+          } else {
+            setStatus('Close a profile before starting Extrude.');
+          }
+        }}
+        onExit={() => {
+          dispatchInteraction({ type: 'exit-sketch' });
+          setStatus(`${editingSketchName} finished · sketch edits preserved.`);
+        }}
+        variant={columnLayout ? 'column' : 'float'}
+      />
+    ) : null;
+  const modelBrowser = (
+    <Sidebar
+      parameters={parameters}
+      parameterValues={parameterScope.scope}
+      features={features}
+      representations={representations}
+      selectedFeatureNodeId={selectedFeatureNodeId}
+      hiddenBodyIds={hiddenBodyIds}
+      hiddenSketchIds={hiddenSketchIds}
+      warnings={warnings}
+      checkpoints={doc?.checkpoints ?? []}
+      documentVersion={doc?.version ?? 0}
+      restorableCheckpointIds={restorableCheckpointIds}
+      onSelectFeature={handleSelectFeatureFromTree}
+      onSelectBody={handleSelectBodyFromTree}
+      selectedBodyIds={selectedBodyIds}
+      onToggleBodyVisibility={toggleBodyVisibility}
+      onToggleSketchVisibility={toggleSketchVisibility}
+      onFeatureContextMenu={handleFeatureContextMenu}
+      onToggleFeatureSuppression={handleToggleFeatureSuppression}
+      onRollbackAfterFeature={handleRollbackAfterFeature}
+      onSetParameter={(name, expression) =>
+        void handleSetParameter(name, expression)
+      }
+      onDeleteParameter={(name) =>
+        executeCommand(commandFactories.deleteParameter({ name }))
+      }
+      onExposeParameter={(name, exposed) =>
+        executeCommand(commandFactories.setParameterExposed({ name, exposed }))
+      }
+      onDescribeParameter={(name, description) =>
+        executeCommand(
+          commandFactories.setParameterDescription({ name, description })
+        )
+      }
+      exposedParameterNames={exposedParameterNames}
+      onDeleteFeature={handleDeleteFeature}
+      onReorderFeature={handleReorderFeature}
+      onRestoreCheckpoint={(checkpoint) =>
+        void handleRestoreSaveState(checkpoint)
+      }
+      onBranchCheckpoint={(checkpoint) =>
+        void handleBranchSaveState(checkpoint)
+      }
+      panelState={panelState}
+      onToggleSection={(id: SidebarSectionId) =>
+        setPanelState((current) => {
+          const next = toggleSidebarSection(current, id);
+          // Opening History in the column folds the tree above it so the
+          // list gets the column's height; the tree reopens on its own row.
+          if (
+            columnLayout &&
+            id === 'history' &&
+            next.sidebarSections.history
+          ) {
+            return {
+              ...next,
+              sidebarSections: {
+                ...next.sidebarSections,
+                parameters: false,
+                bodies: false
+              }
+            };
+          }
+          return next;
+        })
+      }
+      variant={columnLayout ? 'column' : 'dock'}
+    />
+  );
+  const columnHeader =
+    interaction.mode === 'sketch' ? (
+      <>
+        <PenLine size={14} aria-hidden="true" className="sketch-mark" />
+        <strong>{editingSketchName}</strong>
+        <span className="spacer" />
+        <button
+          type="button"
+          className="workspace-column-finish"
+          title="Finish Sketch"
+          onClick={() => {
+            dispatchInteraction({ type: 'exit-sketch' });
+            setStatus(
+              `${editingSketchName} finished · sketch edits preserved.`
+            );
+          }}
+        >
+          <Check size={14} aria-hidden="true" />
+          Finish
+        </button>
+      </>
+    ) : (
+      <button
+        type="button"
+        className="workspace-column-search"
+        title="Search commands (Ctrl+K)"
+        onClick={() => setPaletteOpen(true)}
+      >
+        <Search size={14} aria-hidden="true" />
+        <span>Search commands</span>
+        <kbd>⌘K</kbd>
+      </button>
+    );
+  // Direct-mode strips (plane picking, direct extrude) keep floating over
+  // the viewport; the column shows the palette so the tool can be changed.
+  const columnTools =
+    interaction.mode === 'sketch' ? (
+      sketchRail
+    ) : (
+      <ToolBar
+        variant="column"
+        activeTool={tool}
+        availability={availability}
+        onLaunchTool={launchTool}
+        onOpenSearch={() => setPaletteOpen(true)}
+        open
+        onOpenChange={() => {}}
+      />
+    );
   return (
     <AppShell
       workspaceRef={workspaceRef}
@@ -13150,7 +13344,7 @@ export function App() {
               Drag across the plane for a positive or negative distance
             </span>
           </div>
-        ) : (
+        ) : columnLayout ? null : (
           <ToolBar
             activeTool={tool}
             availability={availability}
@@ -13187,57 +13381,12 @@ export function App() {
                 : null
             }
           />
+        ) : columnLayout ? (
+          <WorkspaceColumn header={columnHeader} tools={columnTools}>
+            {modelBrowser}
+          </WorkspaceColumn>
         ) : (
-          <Sidebar
-            parameters={parameters}
-            parameterValues={parameterScope.scope}
-            features={features}
-            representations={representations}
-            selectedFeatureNodeId={selectedFeatureNodeId}
-            hiddenBodyIds={hiddenBodyIds}
-            hiddenSketchIds={hiddenSketchIds}
-            warnings={warnings}
-            checkpoints={doc?.checkpoints ?? []}
-            documentVersion={doc?.version ?? 0}
-            restorableCheckpointIds={restorableCheckpointIds}
-            onSelectFeature={handleSelectFeatureFromTree}
-            onSelectBody={handleSelectBodyFromTree}
-            selectedBodyIds={selectedBodyIds}
-            onToggleBodyVisibility={toggleBodyVisibility}
-            onToggleSketchVisibility={toggleSketchVisibility}
-            onFeatureContextMenu={handleFeatureContextMenu}
-            onToggleFeatureSuppression={handleToggleFeatureSuppression}
-            onRollbackAfterFeature={handleRollbackAfterFeature}
-            onSetParameter={(name, expression) =>
-              void handleSetParameter(name, expression)
-            }
-            onDeleteParameter={(name) =>
-              executeCommand(commandFactories.deleteParameter({ name }))
-            }
-            onExposeParameter={(name, exposed) =>
-              executeCommand(
-                commandFactories.setParameterExposed({ name, exposed })
-              )
-            }
-            onDescribeParameter={(name, description) =>
-              executeCommand(
-                commandFactories.setParameterDescription({ name, description })
-              )
-            }
-            exposedParameterNames={exposedParameterNames}
-            onDeleteFeature={handleDeleteFeature}
-            onReorderFeature={handleReorderFeature}
-            onRestoreCheckpoint={(checkpoint) =>
-              void handleRestoreSaveState(checkpoint)
-            }
-            onBranchCheckpoint={(checkpoint) =>
-              void handleBranchSaveState(checkpoint)
-            }
-            panelState={panelState}
-            onToggleSection={(id: SidebarSectionId) =>
-              setPanelState((current) => toggleSidebarSection(current, id))
-            }
-          />
+          modelBrowser
         )
       }
       viewer={
@@ -13479,122 +13628,65 @@ export function App() {
                 </>
               ) : contextualToolCard ? (
                 <>
-                  <ToolCard
-                    model={contextualToolCard}
-                    cancelableWhileValidating={interaction.mode === 'region'}
-                    children={
-                      interaction.mode === 'region' ? (
-                        <ExtrudeControls
-                          choice={
-                            interaction.extrudeChoice ?? {
-                              operation: 'automatic'
+                  {!hideSketchToolCard && (
+                    <ToolCard
+                      model={contextualToolCard}
+                      cancelableWhileValidating={interaction.mode === 'region'}
+                      children={
+                        interaction.mode === 'region' ? (
+                          <ExtrudeControls
+                            choice={
+                              interaction.extrudeChoice ?? {
+                                operation: 'automatic'
+                              }
                             }
-                          }
-                          bodies={doc.bodyOrder.flatMap((bodyId) => {
-                            const body =
-                              doc.derived.bodyRepresentations[bodyId];
-                            return body && !body.consumed
-                              ? [{ bodyId, name: body.name }]
-                              : [];
-                          })}
-                          disabled={busy || interaction.phase === 'validating'}
-                          onChange={(choice) =>
-                            dispatchInteraction({
-                              type: 'set-extrude-choice',
-                              choice
-                            })
-                          }
-                          onDistance={() =>
-                            handleOpenOffsetKeypad(interaction.lastValue ?? 0)
-                          }
-                        />
-                      ) : undefined
-                    }
-                    onAction={handleSelectionAction}
-                    onEditCulprit={handleEditCulpritFeature}
-                    {...(keepLastValid ? { keepLastValid } : {})}
-                    onClose={() => {
-                      if (cancelPendingRegionExtrusion()) return;
-                      if (
-                        interaction.mode !== 'idle' &&
-                        interaction.mode !== 'sketch' &&
-                        interaction.phase === 'dragging'
-                      ) {
-                        cancelDirectManipulationRef.current?.();
-                        if (interaction.mode === 'edges') {
-                          handleEdgeCancel();
-                        }
+                            bodies={doc.bodyOrder.flatMap((bodyId) => {
+                              const body =
+                                doc.derived.bodyRepresentations[bodyId];
+                              return body && !body.consumed
+                                ? [{ bodyId, name: body.name }]
+                                : [];
+                            })}
+                            disabled={
+                              busy || interaction.phase === 'validating'
+                            }
+                            onChange={(choice) =>
+                              dispatchInteraction({
+                                type: 'set-extrude-choice',
+                                choice
+                              })
+                            }
+                            onDistance={() =>
+                              handleOpenOffsetKeypad(interaction.lastValue ?? 0)
+                            }
+                          />
+                        ) : undefined
                       }
-                      dispatchInteraction({
-                        type:
-                          interaction.mode === 'sketch'
-                            ? 'exit-sketch'
-                            : 'clear'
-                      });
-                    }}
-                  />
-                  {interaction.mode === 'sketch' && (
-                    <SketchToolRail
-                      tool={interaction.session.tool}
-                      circleMode={interaction.session.circleMode}
-                      construction={sketchConstruction}
-                      settings={appSettings.sketching}
-                      units={doc.units}
-                      paletteVisible={selectedSketchEntity === null}
-                      canConstrain={Boolean(interaction.session.sketchId)}
-                      pendingConstraint={interaction.session.pendingConstraint}
-                      constraints={sketchConstraintItems}
-                      solveStatus={sketchSolveStatus}
-                      solving={sketchSolving}
-                      onConstraintTool={(kind) => {
+                      onAction={handleSelectionAction}
+                      onEditCulprit={handleEditCulpritFeature}
+                      {...(keepLastValid ? { keepLastValid } : {})}
+                      onClose={() => {
+                        if (cancelPendingRegionExtrusion()) return;
+                        if (
+                          interaction.mode !== 'idle' &&
+                          interaction.mode !== 'sketch' &&
+                          interaction.phase === 'dragging'
+                        ) {
+                          cancelDirectManipulationRef.current?.();
+                          if (interaction.mode === 'edges') {
+                            handleEdgeCancel();
+                          }
+                        }
                         dispatchInteraction({
-                          type: 'sketch-constraint-tool',
-                          kind
+                          type:
+                            interaction.mode === 'sketch'
+                              ? 'exit-sketch'
+                              : 'clear'
                         });
-                        if (kind) {
-                          setStatus(constraintToolSpec(kind).hint);
-                        }
-                      }}
-                      onDeleteConstraint={handleDeleteSketchConstraint}
-                      onEditConstraint={handleEditSketchDimension}
-                      onSolve={() => {
-                        void handleSolveSketch();
-                      }}
-                      onTool={(sketchTool) =>
-                        dispatchInteraction({
-                          type: 'sketch-tool',
-                          tool: sketchTool
-                        })
-                      }
-                      onCircleMode={(mode) =>
-                        dispatchInteraction({
-                          type: 'sketch-circle-mode',
-                          mode
-                        })
-                      }
-                      onConstruction={setSketchConstruction}
-                      onSettings={(sketching) => {
-                        const current = appSettingsRef.current;
-                        handleAppSettingsChange({ ...current, sketching });
-                      }}
-                      onDiagnostics={showProfileDiagnostics}
-                      onExtrude={() => {
-                        if (interaction.session.sketchId) {
-                          startExtrude(
-                            interaction.session.sketchId as SketchId
-                          );
-                        } else {
-                          setStatus('Close a profile before starting Extrude.');
-                        }
-                      }}
-                      onExit={() => {
-                        dispatchInteraction({ type: 'exit-sketch' });
-                        setStatus(
-                          `${editingSketchName} finished · sketch edits preserved.`
-                        );
                       }}
                     />
                   )}
+                  {!columnLayout && sketchRail}
                   {interaction.mode === 'sketch' && selectedSketchEntity && (
                     <SketchEntityEditor
                       key={selectedSketchEntity.id}
@@ -14399,6 +14491,28 @@ export function App() {
       }
       assistantHidden={assistantHidden}
       assistantCollapsed={assistantCollapsed}
+      layout={columnLayout ? 'column' : 'classic'}
+      readout={
+        columnLayout ? (
+          <WorkspaceReadout
+            status={visibleStatus}
+            statusAt={statusEntry.at}
+            statusSticky={statusEntry.sticky || !exactGeometryReady}
+            tone={tone}
+            hint={hint}
+            saveState={presentedSaveState}
+            snap={
+              interaction.mode === 'sketch'
+                ? {
+                    spacing: appSettings.sketching.linearSnap,
+                    units: doc.units,
+                    enabled: appSettings.sketching.snapEnabled
+                  }
+                : null
+            }
+          />
+        ) : null
+      }
       statusBar={
         <StatusBar
           status={visibleStatus}
