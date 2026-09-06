@@ -514,21 +514,20 @@
   bottom: 36px;
 }
 
-/* The utility rail sits bottom-centre over the viewport, above the hint —
-   the same place View mode keeps its bar — so the corner holds only the
-   cube and the scale. Centred on the canvas, not the window: the column
-   takes the left edge. */
+/* The utility rail stands on the right edge just under the top bar, as
+   placed on the design canvas: above the assistant tab, clear of the corner
+   stack. With a dock open it steps left of the dock. */
 .workspace.column-layout .viewer-rail {
-  top: auto;
-  right: auto;
-  bottom: 72px;
-  left: calc(var(--column-w) + (100% - var(--column-w)) / 2);
-  flex-direction: row;
-  transform: translateX(-50%);
+  top: 46px;
+  right: 34px;
+  bottom: auto;
+  left: auto;
+  flex-direction: column;
+  transform: none;
 }
 
 .workspace.column-layout .viewer-area.has-inspector .viewer-rail {
-  left: calc(var(--column-w) + (100% - var(--column-w) - var(--context-w)) / 2);
+  right: calc(var(--context-w) + 24px);
 }
 
 /* The bottom-right corner holds the cube with undo/redo and, under it, the
