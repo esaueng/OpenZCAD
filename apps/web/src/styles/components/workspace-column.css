@@ -5,13 +5,19 @@
    classic rules for the docked layout, so it stays after them in the
    cascade and before view-mode.css, which subtracts from both. ── */
 
+/* `--column-w` is what the column is drawn at: the stored sidebar width,
+   capped as the window narrows, without touching the preference itself. */
+.workspace.column-layout {
+  --column-w: var(--sidebar-w);
+}
+
 .workspace-column-float {
   position: absolute;
   top: 10px;
   left: 10px;
   bottom: 10px;
   z-index: var(--z-inspector-float);
-  width: min(var(--sidebar-w), calc(100% - 20px));
+  width: min(var(--column-w), calc(100% - 20px));
   display: flex;
   pointer-events: none;
 }
@@ -377,7 +383,7 @@
    right-hand end kept clear for the viewer's grid readout and the cube. */
 .workspace-readout {
   position: absolute;
-  left: calc(var(--sidebar-w) + 22px + 150px);
+  left: calc(var(--column-w) + 22px + 150px);
   right: 12px;
   bottom: 10px;
   z-index: var(--z-viewer-overlay);
@@ -450,17 +456,92 @@
 
 /* The tool card centres on the room between the column and the dock. */
 .workspace.column-layout .tool-card {
-  --tool-card-room: calc(100% - var(--sidebar-w) - 40px);
-  left: calc(var(--sidebar-w) + 20px + var(--tool-card-room) / 2);
+  --tool-card-room: calc(100% - var(--column-w) - 40px);
+  left: calc(var(--column-w) + 20px + var(--tool-card-room) / 2);
 }
 
 .workspace.column-layout .viewer-area.has-inspector .tool-card {
-  --tool-card-room: calc(100% - var(--sidebar-w) - var(--context-w) - 50px);
-  left: calc(var(--sidebar-w) + 20px + var(--tool-card-room) / 2);
+  --tool-card-room: calc(100% - var(--column-w) - var(--context-w) - 50px);
+  left: calc(var(--column-w) + 20px + var(--tool-card-room) / 2);
   width: max(280px, min(680px, var(--tool-card-room)));
 }
 
 /* The scale bar sits under the column otherwise. */
 .workspace.column-layout .viewport-scale-indicator {
-  left: calc(var(--sidebar-w) + 22px);
+  left: calc(var(--column-w) + 22px);
+}
+
+/* ── The live dimension at the cursor ── */
+
+/* The classic amber tag becomes the value cluster: preview-teal ring so it
+   reads as the in-flight geometry's own label, with the key legend under it.
+   Typing swaps the legend for the commit keys. */
+.workspace.column-layout .sketch-dim-label {
+  padding: 4px 8px;
+  color: var(--color-text);
+  background: var(--color-surface-2);
+  border: 1px solid var(--color-preview);
+  border-radius: var(--radius-md);
+  box-shadow:
+    0 0 0 2px color-mix(in srgb, var(--color-preview) 18%, transparent),
+    0 8px 24px rgba(0, 0, 0, 0.35);
+  font-size: var(--fs-sm);
+}
+
+.workspace.column-layout .sketch-dim-label::after {
+  content: 'Type a value · Enter places · Shift no snaps';
+  display: block;
+  margin-top: 3px;
+  color: var(--color-text-subtle);
+  font-family: var(--font-ui);
+  font-size: var(--fs-mini);
+}
+
+.workspace.column-layout .sketch-dim-label[data-editing='true'] {
+  border-color: var(--color-accent);
+  box-shadow:
+    0 0 0 2px var(--color-accent-dim),
+    0 8px 24px rgba(0, 0, 0, 0.35);
+}
+
+.workspace.column-layout .sketch-dim-label[data-editing='true']::after {
+  content: 'Enter places · Backspace edits · Esc cancels';
+}
+
+/* ── Narrow windows ── */
+
+/* Same steps as the docked sidebar: labels go first, then width. */
+@media (max-width: 1120px) {
+  .workspace.column-layout {
+    --column-w: min(var(--sidebar-w), 232px);
+  }
+
+  .tool-palette.column .palette-item-label,
+  .sketch-rail-group.draw > button > span:not(.sketch-circle-tool),
+  .sketch-rail-group.utility > button {
+    font-size: 0;
+  }
+
+  .tool-palette.column .palette-item,
+  .sketch-rail-group.draw > button,
+  .sketch-rail-group.draw .sketch-circle-tool > button:first-child,
+  .sketch-rail-group.utility > button {
+    min-height: 32px;
+    gap: 0;
+  }
+}
+
+@media (max-width: 820px) {
+  .workspace.column-layout {
+    --column-w: min(var(--sidebar-w), 200px);
+  }
+
+  .tool-palette.column .palette-grid,
+  .sketch-rail-group.draw {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .workspace.column-layout .workspace-readout {
+    grid-template-columns: max-content minmax(0, 1fr);
+  }
 }
