@@ -309,6 +309,10 @@ export function normalizeAppSettings(value: unknown): AppSettings {
       directManipulation: boolean(
         experiments.directManipulation,
         defaults.experiments.directManipulation
+      ),
+      workspaceColumn: boolean(
+        experiments.workspaceColumn,
+        defaults.experiments.workspaceColumn
       )
     }
   };

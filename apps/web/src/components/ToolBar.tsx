@@ -16,6 +16,11 @@ interface ToolBarProps {
   /** Collapsed to a single handle, so the viewport's left edge is usable. */
   open: boolean;
   onOpenChange(open: boolean): void;
+  /**
+   * `column` renders the groups labelled, for the workspace column, with no
+   * search head or collapse — the column's own header does both jobs.
+   */
+  variant?: 'float' | 'column';
 }
 
 /**
@@ -30,8 +35,52 @@ export function ToolBar({
   onLaunchTool,
   onOpenSearch,
   open,
-  onOpenChange
+  onOpenChange,
+  variant = 'float'
 }: ToolBarProps) {
+  const groups = TOOL_GROUPS.map((group) => (
+    <div
+      key={group.id}
+      role="group"
+      aria-label={group.label}
+      className="palette-group"
+    >
+      <div className="palette-group-label" aria-hidden="true">
+        {group.label}
+      </div>
+      <div className="palette-grid">
+        {group.tools.map((tool) => {
+          const meta = TOOL_META[tool];
+          return (
+            <button
+              key={tool}
+              type="button"
+              className={`palette-item ${activeTool === tool ? 'active' : ''}`}
+              disabled={toolDisabledReason(tool, availability) !== null}
+              title={toolTitle(tool, availability)}
+              aria-label={toolTitle(tool, availability)}
+              aria-pressed={activeTool === tool}
+              onClick={() => onLaunchTool(tool)}
+            >
+              {meta.icon}
+              {variant === 'column' && (
+                <span className="palette-item-label">{meta.label}</span>
+              )}
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  ));
+  if (variant === 'column') {
+    // The column's header carries the search and there is nothing to
+    // collapse: the column itself is the frame.
+    return (
+      <nav className="tool-palette column" aria-label="Feature tools">
+        {groups}
+      </nav>
+    );
+  }
   if (!open) {
     return (
       <button
@@ -70,37 +119,7 @@ export function ToolBar({
           <PanelLeftClose size={14} aria-hidden="true" />
         </button>
       </div>
-      {TOOL_GROUPS.map((group) => (
-        <div
-          key={group.id}
-          role="group"
-          aria-label={group.label}
-          className="palette-group"
-        >
-          <div className="palette-group-label" aria-hidden="true">
-            {group.label}
-          </div>
-          <div className="palette-grid">
-            {group.tools.map((tool) => {
-              const meta = TOOL_META[tool];
-              return (
-                <button
-                  key={tool}
-                  type="button"
-                  className={`palette-item ${activeTool === tool ? 'active' : ''}`}
-                  disabled={toolDisabledReason(tool, availability) !== null}
-                  title={toolTitle(tool, availability)}
-                  aria-label={toolTitle(tool, availability)}
-                  aria-pressed={activeTool === tool}
-                  onClick={() => onLaunchTool(tool)}
-                >
-                  {meta.icon}
-                </button>
-              );
-            })}
-          </div>
-        </div>
-      ))}
+      {groups}
     </nav>
   );
 }
