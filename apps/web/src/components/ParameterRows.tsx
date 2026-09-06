@@ -83,83 +83,83 @@ export function ParameterRow({
     value === undefined || formattedValue !== parameter.expression.trim();
   return (
     <div className={describable ? 'param-entry' : undefined}>
-    <div
-      className="param-row"
-      title={`${parameter.name} = ${parameter.expression}`}
-    >
-      <span className="param-name mono">{parameter.name}</span>
-      <input
-        className="mono"
-        value={expression}
-        spellCheck={false}
-        aria-label={`Expression for ${parameter.name}`}
-        onChange={(event) => {
-          changedByUser.current = true;
-          setExpression(event.target.value);
-        }}
-        onFocus={() => {
-          changedByUser.current = false;
-          setEditing(true);
-        }}
-        onBlur={() => {
-          setEditing(false);
-          commit();
-        }}
-        onKeyDown={(event) => {
-          if (event.key === 'Enter') {
-            event.currentTarget.blur();
-          }
-          if (event.key === 'Escape') {
+      <div
+        className="param-row"
+        title={`${parameter.name} = ${parameter.expression}`}
+      >
+        <span className="param-name mono">{parameter.name}</span>
+        <input
+          className="mono"
+          value={expression}
+          spellCheck={false}
+          aria-label={`Expression for ${parameter.name}`}
+          onChange={(event) => {
+            changedByUser.current = true;
+            setExpression(event.target.value);
+          }}
+          onFocus={() => {
             changedByUser.current = false;
-            setExpression(parameter.expression);
-          }
-        }}
-      />
-      {showValue && (
-        <span
-          className={`param-value mono ${value === undefined ? 'error' : ''}`}
-        >
-          {formattedValue}
-        </span>
+            setEditing(true);
+          }}
+          onBlur={() => {
+            setEditing(false);
+            commit();
+          }}
+          onKeyDown={(event) => {
+            if (event.key === 'Enter') {
+              event.currentTarget.blur();
+            }
+            if (event.key === 'Escape') {
+              changedByUser.current = false;
+              setExpression(parameter.expression);
+            }
+          }}
+        />
+        {showValue && (
+          <span
+            className={`param-value mono ${value === undefined ? 'error' : ''}`}
+          >
+            {formattedValue}
+          </span>
+        )}
+        {onExpose && (
+          <button
+            type="button"
+            className={`param-expose${exposedInTweak ? ' on' : ''}`}
+            aria-pressed={exposedInTweak ?? false}
+            title={
+              exposedInTweak
+                ? `${parameter.name} is offered in Tweak mode and share links`
+                : `${parameter.name} is hidden from Tweak mode and share links`
+            }
+            aria-label={`${exposedInTweak ? 'Hide' : 'Show'} ${parameter.name} in Tweak mode`}
+            onClick={() => onExpose(parameter.name, !exposedInTweak)}
+          >
+            {exposedInTweak ? (
+              <Eye size={12} aria-hidden="true" />
+            ) : (
+              <EyeOff size={12} aria-hidden="true" />
+            )}
+          </button>
+        )}
+        {onDelete && (
+          <button
+            type="button"
+            className="row-delete"
+            title={`Delete parameter ${parameter.name}`}
+            aria-label={`Delete parameter ${parameter.name}`}
+            onClick={() => onDelete(parameter.name)}
+          >
+            <Trash2 size={12} aria-hidden="true" />
+          </button>
+        )}
+      </div>
+      {describable && (
+        <ParameterDescriptionField
+          parameter={parameter}
+          onDescribe={onDescribe}
+        />
       )}
-      {onExpose && (
-        <button
-          type="button"
-          className={`param-expose${exposedInTweak ? ' on' : ''}`}
-          aria-pressed={exposedInTweak ?? false}
-          title={
-            exposedInTweak
-              ? `${parameter.name} is offered in Tweak mode and share links`
-              : `${parameter.name} is hidden from Tweak mode and share links`
-          }
-          aria-label={`${exposedInTweak ? 'Hide' : 'Show'} ${parameter.name} in Tweak mode`}
-          onClick={() => onExpose(parameter.name, !exposedInTweak)}
-        >
-          {exposedInTweak ? (
-            <Eye size={12} aria-hidden="true" />
-          ) : (
-            <EyeOff size={12} aria-hidden="true" />
-          )}
-        </button>
-      )}
-      {onDelete && (
-        <button
-          type="button"
-          className="row-delete"
-          title={`Delete parameter ${parameter.name}`}
-          aria-label={`Delete parameter ${parameter.name}`}
-          onClick={() => onDelete(parameter.name)}
-        >
-          <Trash2 size={12} aria-hidden="true" />
-        </button>
-      )}
-    </div>
-    {describable && (
-      <ParameterDescriptionField
-        parameter={parameter}
-        onDescribe={onDescribe}
-      />
-    )}
     </div>
   );
 }

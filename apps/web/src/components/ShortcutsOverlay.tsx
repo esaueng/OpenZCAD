@@ -52,25 +52,27 @@ export function ShortcutsOverlay({ onClose }: ShortcutsOverlayProps) {
           </button>
         </div>
         <div className="shortcuts-grid">
-          {[...KEYBOARD_CONTROL_GROUPS, ...POINTER_CONTROL_GROUPS].map((group) => (
-            <section key={group.title}>
-              <h3 className="section-title">{group.title}</h3>
-              <dl>
-                {group.items.map((item) => (
-                  <div key={item.id} className="shortcut-row">
-                    <dt>
-                      <span className="shortcut-key-sequence">
-                        {item.keys.map((key) => (
-                          <kbd key={key}>{key}</kbd>
-                        ))}
-                      </span>
-                    </dt>
-                    <dd>{item.action}</dd>
-                  </div>
-                ))}
-              </dl>
-            </section>
-          ))}
+          {[...KEYBOARD_CONTROL_GROUPS, ...POINTER_CONTROL_GROUPS].map(
+            (group) => (
+              <section key={group.title}>
+                <h3 className="section-title">{group.title}</h3>
+                <dl>
+                  {group.items.map((item) => (
+                    <div key={item.id} className="shortcut-row">
+                      <dt>
+                        <span className="shortcut-key-sequence">
+                          {item.keys.map((key) => (
+                            <kbd key={key}>{key}</kbd>
+                          ))}
+                        </span>
+                      </dt>
+                      <dd>{item.action}</dd>
+                    </div>
+                  ))}
+                </dl>
+              </section>
+            )
+          )}
         </div>
       </div>
     </div>

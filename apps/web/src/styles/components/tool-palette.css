@@ -27,94 +27,8 @@
   transform: translateX(-50%);
 }
 
-.tool-palette {
-  max-height: 100%;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  padding: 6px;
-  background: var(--color-surface);
-  border: var(--border-thin);
-  border-radius: var(--radius-md);
-  overflow-y: auto;
-  scrollbar-width: none;
-}
-
 .tool-palette::-webkit-scrollbar {
   display: none;
-}
-
-/*
- * Say when there is more below.
- *
- * The palette scrolls, but with the scrollbar hidden nothing showed that it
- * had to: measured at 1280x720 it overflows by 70px, and the two tools that
- * fall past the fold — Linear and Circular pattern — do not peek even
- * partially, so the list looks complete and simply is not. Restoring a
- * classic scrollbar would cost ~15px of a 58px icon column on Windows and
- * Linux, so the hint is a fade instead, and it appears only while something
- * is actually cut off.
- */
-@supports (animation-timeline: scroll()) {
-  .tool-palette {
-    animation: palette-overflow-fade linear;
-    animation-timeline: scroll(self block);
-  }
-
-  @keyframes palette-overflow-fade {
-    from {
-      mask-image: linear-gradient(
-        to bottom,
-        #000 calc(100% - 18px),
-        transparent
-      );
-    }
-    to {
-      mask-image: linear-gradient(to bottom, #000 100%, #000 100%);
-    }
-  }
-}
-
-.palette-head {
-  display: flex;
-  align-items: center;
-  gap: 2px;
-}
-
-.palette-head .palette-search {
-  flex: 1;
-}
-
-.palette-collapse {
-  width: 26px;
-  height: 26px;
-  display: grid;
-  place-items: center;
-  color: var(--color-text-subtle);
-  border: 1px solid transparent;
-  border-radius: var(--radius-sm);
-}
-
-.palette-collapse:hover {
-  color: var(--color-text);
-  background: var(--color-surface-hover);
-  border-color: var(--color-border-strong);
-}
-
-.palette-handle {
-  width: 30px;
-  height: 30px;
-  display: grid;
-  place-items: center;
-  color: var(--color-text-muted);
-  background: var(--color-surface);
-  border: var(--border-thin);
-  border-radius: var(--radius-md);
-}
-
-.palette-handle:hover {
-  color: var(--color-accent);
-  border-color: var(--color-accent-border);
 }
 
 .palette-group {
@@ -165,17 +79,6 @@
   transition: color var(--dur-fast) var(--ease-out);
 }
 
-.palette-label {
-  min-width: 0;
-  flex: 1;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.palette-item kbd {
-  opacity: 0.8;
-}
-
 .palette-item:hover:not(:disabled) {
   color: var(--color-text);
   background: var(--color-surface-hover);
@@ -193,25 +96,6 @@
 
 .palette-item.active svg {
   color: var(--color-accent);
-}
-
-.palette-search {
-  justify-content: flex-start;
-  color: var(--color-text-subtle);
-}
-
-/* Search is the only row still carrying a label; drop it when the viewport
-   gets tight, its tooltip carries the name. */
-@media (max-width: 1280px), (max-height: 760px) {
-  .tool-palette .palette-label,
-  .palette-item kbd {
-    display: none;
-  }
-
-  .palette-search {
-    justify-content: center;
-    padding: 6px;
-  }
 }
 
 .direct-mode-strip {
@@ -244,4 +128,3 @@
   color: var(--color-text-subtle);
   font-size: var(--fs-xs);
 }
-

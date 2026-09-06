@@ -1,10 +1,5 @@
 import { useEffect, useRef, useState, type PointerEvent } from 'react';
-import {
-  hexToHsv,
-  hsvToHex,
-  normalizeHex,
-  type HsvColor
-} from '../lib/color';
+import { hexToHsv, hsvToHex, normalizeHex, type HsvColor } from '../lib/color';
 
 /**
  * In-app HSV color picker: saturation/value pad, hue slider, hex entry, and

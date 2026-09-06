@@ -72,10 +72,17 @@
       var(--color-accent-dim),
       transparent 70%
     ),
-    linear-gradient(color-mix(in srgb, var(--color-accent) 5%, transparent) 1px, transparent 1px) 0 0 / 42px
-      42px,
-    linear-gradient(90deg, color-mix(in srgb, var(--color-accent) 5%, transparent) 1px, transparent 1px) 0 0 /
-      42px 42px;
+    linear-gradient(
+        color-mix(in srgb, var(--color-accent) 5%, transparent) 1px,
+        transparent 1px
+      )
+      0 0 / 42px 42px,
+    linear-gradient(
+        90deg,
+        color-mix(in srgb, var(--color-accent) 5%, transparent) 1px,
+        transparent 1px
+      )
+      0 0 / 42px 42px;
   -webkit-mask-image: linear-gradient(#000, #000 40%, transparent 90%);
   mask-image: linear-gradient(#000, #000 40%, transparent 90%);
 }

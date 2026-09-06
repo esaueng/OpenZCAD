@@ -370,11 +370,7 @@ export function parseUpdateAppSettingsRequest(
         directManipulation:
           typeof experiments.directManipulation === 'boolean'
             ? experiments.directManipulation
-            : true,
-        workspaceColumn:
-          typeof experiments.workspaceColumn === 'boolean'
-            ? experiments.workspaceColumn
-            : false
+            : true
       }
     }
   };

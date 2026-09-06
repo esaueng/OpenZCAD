@@ -36,7 +36,9 @@ describe('ProjectConflictDialog', () => {
       screen.getByRole('dialog', { name: 'This project changed in two places' })
     ).toBeInTheDocument();
     expect(
-      screen.getByText(/version 27 on this device and version 9 in your account/)
+      screen.getByText(
+        /version 27 on this device and version 9 in your account/
+      )
     ).toBeInTheDocument();
 
     await user.click(

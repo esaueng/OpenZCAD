@@ -85,7 +85,10 @@ export function ContextMenu({ menu, onSelect, onClose }: ContextMenuProps) {
       style={{ left: position.x, top: position.y }}
     >
       {menu.items.map((item) => (
-        <div key={item.id} className={item.section ? 'context-menu-section' : undefined}>
+        <div
+          key={item.id}
+          className={item.section ? 'context-menu-section' : undefined}
+        >
           <button
             type="button"
             role="menuitem"
@@ -96,7 +99,9 @@ export function ContextMenu({ menu, onSelect, onClose }: ContextMenuProps) {
               onClose();
             }}
           >
-            {item.icon && <span className="context-menu-icon">{item.icon}</span>}
+            {item.icon && (
+              <span className="context-menu-icon">{item.icon}</span>
+            )}
             <span className="context-menu-label">{item.label}</span>
             {item.shortcut && <kbd>{item.shortcut}</kbd>}
           </button>

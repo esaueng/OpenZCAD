@@ -1,10 +1,4 @@
-import {
-  Check,
-  Layers3,
-  MousePointer2,
-  Move3d,
-  X
-} from 'lucide-react';
+import { Check, Layers3, MousePointer2, Move3d, X } from 'lucide-react';
 import { useEffect, useState, type MutableRefObject } from 'react';
 
 interface ProfileQuickActionProps {
@@ -51,7 +45,6 @@ export function ProfileQuickAction({
     </div>
   );
 }
-
 
 export interface MoveOverlayValues {
   translation: { x: number; y: number; z: number };

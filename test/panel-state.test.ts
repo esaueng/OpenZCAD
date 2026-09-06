@@ -30,7 +30,6 @@ afterEach(() => {
 describe('workspace panel state', () => {
   it('starts with every panel open', () => {
     const state = defaultPanelState();
-    expect(state.toolPaletteOpen).toBe(true);
     for (const id of SIDEBAR_SECTION_IDS) {
       expect(state.sidebarSections[id]).toBe(true);
     }
@@ -47,20 +46,15 @@ describe('workspace panel state', () => {
     const collapsed = toggleSidebarSection(defaultPanelState(), 'history');
     expect(collapsed.sidebarSections.history).toBe(false);
     expect(collapsed.sidebarSections.parameters).toBe(true);
-    expect(collapsed.toolPaletteOpen).toBe(true);
     expect(
       toggleSidebarSection(collapsed, 'history').sidebarSections.history
     ).toBe(true);
   });
 
   it('round-trips through device storage', () => {
-    const state = toggleSidebarSection(
-      { ...defaultPanelState(), toolPaletteOpen: false },
-      'diagnostics'
-    );
+    const state = toggleSidebarSection(defaultPanelState(), 'diagnostics');
     expect(savePanelState(state)).toBe(true);
     const loaded = loadPanelState();
-    expect(loaded.toolPaletteOpen).toBe(false);
     expect(loaded.sidebarSections.diagnostics).toBe(false);
     expect(loaded.sidebarSections.history).toBe(true);
   });
@@ -145,6 +139,7 @@ describe('workspace panel state', () => {
 
   it('ignores unknown sections and wrong types', () => {
     const normalized = normalizePanelState({
+      // A field from before the tool palette moved into the column: ignored.
       toolPaletteOpen: 'yes',
       sidebarSections: {
         history: false,
@@ -152,7 +147,6 @@ describe('workspace panel state', () => {
         somethingElse: false
       }
     });
-    expect(normalized.toolPaletteOpen).toBe(true);
     expect(normalized.sidebarSections.history).toBe(false);
     expect(normalized.sidebarSections.parameters).toBe(true);
     expect(Object.keys(normalized.sidebarSections).sort()).toEqual(

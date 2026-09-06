@@ -325,7 +325,7 @@ test('streams an exact extrude preview while a region drag is held', async ({
   await page.getByRole('button', { name: /^Sketch \(S\)/ }).click();
   await page.getByRole('button', { name: 'Top (XY)' }).click();
   await expect(
-    page.getByRole('region', { name: 'Editing Sketch: New Sketch operation' })
+    page.getByRole('toolbar', { name: 'Sketch tools' })
   ).toBeVisible();
   // Let the sketch-entry glide land before drawing on the plane.
   await page.waitForTimeout(1000);
