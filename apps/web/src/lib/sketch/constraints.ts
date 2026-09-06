@@ -377,7 +377,7 @@ export function buildConstraint(
         data: {
           constraintKind: 'radius',
           objectId: pick.objectId as EntityId,
-          value: data.radius
+          value: value ?? data.radius
         }
       };
     }
