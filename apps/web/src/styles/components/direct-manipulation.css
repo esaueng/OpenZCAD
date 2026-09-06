@@ -1101,12 +1101,19 @@
   }
 }
 
-.sketch-entity-editor {
+/* The editor and its constraints card stack in the top-right; the stack
+   carries the float so the form's box stays the form's own. */
+.sketch-entity-dock {
   position: absolute;
   top: 124px;
   right: 14px;
   z-index: calc(var(--z-inspector-float) + 1);
   width: min(290px, calc(100% - 28px));
+  display: grid;
+  gap: 8px;
+}
+
+.sketch-entity-editor {
   padding: 12px;
   color: var(--color-text);
   background: var(--color-surface-2);
@@ -1157,13 +1164,22 @@
 }
 
 /* Constraints from the selected entity: a row of tools it can start, then
-   the constraints that already hold it. */
+   the constraints that already hold it. Its own card under the editor. */
 .sketch-entity-constraints {
   display: grid;
   gap: 6px;
-  margin: 2px 0 10px;
-  padding-top: 8px;
-  border-top: 1px solid var(--color-border);
+  padding: 10px 12px 12px;
+  color: var(--color-text);
+  background: var(--color-surface-2);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-md);
+  box-shadow: 0 14px 34px rgba(0, 0, 0, 0.4);
+}
+
+.sketch-entity-constraints .eyebrow {
+  color: var(--color-text-dim);
+  font-size: var(--fs-mini);
+  text-transform: uppercase;
 }
 
 .sketch-entity-constraint-tools {
@@ -1262,12 +1278,15 @@
     overflow-x: auto;
   }
 
-  .sketch-entity-editor {
+  .sketch-entity-dock {
     top: auto;
     right: 10px;
     bottom: 54px;
     left: 10px;
     width: auto;
+  }
+
+  .sketch-entity-editor {
     max-height: 44vh;
     overflow-y: auto;
   }
