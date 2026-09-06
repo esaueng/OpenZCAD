@@ -14604,6 +14604,9 @@ export function App() {
             hint={hint}
             saveState={presentedSaveState}
             muted={contextualToolCard !== null && !hideSketchToolCard}
+            selectionFilter={selectionFilter}
+            selectionFilterIsAutomatic={manualSelectionFilter === null}
+            onSelectionFilter={setManualSelectionFilter}
             snap={
               interaction.mode === 'sketch'
                 ? {
