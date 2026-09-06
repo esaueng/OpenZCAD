@@ -173,8 +173,7 @@ function samePick(a: ConstraintPick, b: ConstraintPick): boolean {
 }
 
 export type BuildConstraintResult =
-  | { data: SketchConstraintData }
-  | { error: string };
+  { data: SketchConstraintData } | { error: string };
 
 /**
  * Validate one pick against the armed tool, before it is accepted into the
@@ -368,7 +367,10 @@ export function buildConstraint(
     case 'radius': {
       const pick = picks[0]!;
       const data = sketchObjectData(document, sketch, pick.objectId);
-      if (!data || (data.objectKind !== 'circle' && data.objectKind !== 'arc')) {
+      if (
+        !data ||
+        (data.objectKind !== 'circle' && data.objectKind !== 'arc')
+      ) {
         return { error: 'A radius constraint applies to circles and arcs.' };
       }
       return {
@@ -576,4 +578,95 @@ export function describeConstraint(
     case 'angle':
       return `Angle ${String(data.valueDeg)}° · ${nameOf(data.a)} ∠ ${nameOf(data.b)}`;
   }
+}
+
+/**
+ * The constraint tools the selection dock offers for one selected object:
+ * those whose FIRST pick is that object. Point-first tools (coincident,
+ * midpoint, distance) stay on the rail, where the pick sequence starts from
+ * a snap point rather than from the selection.
+ */
+export function constraintToolsForObject(
+  objectKind: SketchObjectData['objectKind']
+): readonly ConstraintToolSpec[] {
+  const kinds: readonly PendingConstraintKind[] =
+    objectKind === 'line'
+      ? [
+          'horizontal',
+          'vertical',
+          'parallel',
+          'perpendicular',
+          'equal',
+          'tangent',
+          'angle'
+        ]
+      : objectKind === 'circle'
+        ? ['equal', 'tangent', 'concentric', 'radius']
+        : objectKind === 'arc'
+          ? ['equal', 'concentric', 'radius']
+          : [];
+  return kinds.map(constraintToolSpec);
+}
+
+/** True when the constraint mentions the object, as a whole or by a point. */
+export function constraintReferencesObject(
+  data: SketchConstraintData,
+  objectId: string
+): boolean {
+  const refs = (value: unknown): string | null =>
+    typeof value === 'string'
+      ? value
+      : value && typeof value === 'object' && 'objectId' in value
+        ? String((value as SketchPointRef).objectId)
+        : null;
+  switch (data.constraintKind) {
+    case 'horizontal':
+    case 'vertical':
+    case 'radius':
+      return data.objectId === objectId;
+    case 'midpoint':
+      return refs(data.point) === objectId || data.line === objectId;
+    default:
+      return refs(data.a) === objectId || refs(data.b) === objectId;
+  }
+}
+
+export type SelectionConstraintPlan =
+  | { action: 'refuse'; reason: string }
+  /** Single-pick tool: the constraint is complete. */
+  | { action: 'add'; data: SketchConstraintData; label: string }
+  /** Two-pick tool: arm it with the selection already taken as pick 1. */
+  | { action: 'arm'; pick: ConstraintPick; label: string; picks: 2 };
+
+/**
+ * What choosing a constraint tool from the selection dock should do: the
+ * selected object is pick 1, so a single-pick tool finishes at once and a
+ * two-pick tool arms with only the second pick left. Refusals are the same
+ * ones the rail's picking gives.
+ */
+export function planConstraintFromSelection(
+  document: ProjectDocument,
+  sketch: SketchNode,
+  kind: PendingConstraintKind,
+  objectId: string
+): SelectionConstraintPlan {
+  const spec = constraintToolSpec(kind);
+  if (spec.pickKinds[0] !== 'object') {
+    return {
+      action: 'refuse',
+      reason: `${spec.label} starts from a snap point: use the rail. ${spec.hint}`
+    };
+  }
+  const pick: ConstraintPick = { kind: 'object', objectId };
+  const refusal = refusePick(document, sketch, kind, [], pick);
+  if (refusal) {
+    return { action: 'refuse', reason: refusal };
+  }
+  if (spec.picks === 1) {
+    const built = buildConstraint(document, sketch, kind, [pick]);
+    return 'error' in built
+      ? { action: 'refuse', reason: built.error }
+      : { action: 'add', data: built.data, label: spec.label };
+  }
+  return { action: 'arm', pick, label: spec.label, picks: 2 };
 }
