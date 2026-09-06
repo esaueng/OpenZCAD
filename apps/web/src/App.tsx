@@ -373,6 +373,7 @@ import {
   supportsRadialCylinderPreview
 } from './lib/interaction/cylinderRadius';
 import { primitiveCylinderRadiusAncestor } from './lib/interaction/cylinderPrimitiveAncestry';
+import { commandPromptText } from './lib/interaction/prompt';
 import {
   offsetPreviewRejection,
   resolveOffsetPreviewFace
@@ -12998,6 +12999,57 @@ export function App() {
   // dropped: the entity editor, keypad and rail render in the same branch
   // and must stay.
   const hideSketchToolCard = interaction.mode === 'sketch';
+
+  // View mode writes its own hints rather than filtering the build chain below.
+  // Selecting a cylinder still arms the radius interaction even with its handle
+  // disarmed, and "drag the radial handle" is a promise View mode cannot keep.
+  const viewModeHint = measuring
+    ? measurementDraft
+      ? `${measurementDraft.label} selected · pick the second target · Esc cancels`
+      : measurementMode === 'smart'
+        ? 'Smart measure · pick geometry · Shift+Click totals edges · M exits'
+        : measurementMode === 'distance'
+          ? 'Distance · pick the first target · centers resolve automatically'
+          : 'Angle · pick a straight edge or measured face direction'
+    : selectedTopology?.kind === 'face'
+      ? 'Face selected — Space faces it head-on'
+      : viewerBodies.length > 0
+        ? 'Click a body, face, or edge · Measure records what you pick'
+        : 'Ctrl+K commands · ? shortcuts';
+  const tweakModeHint = measuring
+    ? viewModeHint
+    : parameters.length > 0
+      ? 'Edit a parameter and press Enter · the model rebuilds exactly'
+      : 'This model has no parameters · Build mode is where they are defined';
+  const workspacePrompt = viewMode
+    ? viewModeHint
+    : tweakMode
+      ? tweakModeHint
+      : (commandPromptText(
+          interaction,
+          tool !== null || selectedFeatureNodeId !== null
+        ) ??
+        (tool === 'sketch'
+          ? 'Drag to draw · R rectangle · C circle · P polygon · Enter finishes'
+          : tool === 'fillet' || tool === 'chamfer'
+            ? selectedEdges.length > 0
+              ? `${selectedEdges.length} edge${selectedEdges.length === 1 ? '' : 's'} selected · Shift+Click adjusts · Enter creates`
+              : 'Click edges with Shift or choose Select all edges · Esc cancels'
+            : tool
+              ? 'Enter creates · Esc cancels'
+              : selectedBodyIds.length >= 2
+                ? `${selectedBodyIds.length} bodies picked — U union · X subtract · I intersect`
+                : selectedTopology?.kind === 'face'
+                  ? 'Face selected — Space faces it head-on'
+                  : selectedTopology?.kind === 'edge'
+                    ? // Neither tool has a shortcut, so the rail is the only
+                      // route: name it the way the rail names itself.
+                      'Edge selected — Fillet or Chamfer in Feature tools'
+                    : selectedFeature
+                      ? 'Edit in the panel · Del deletes · Esc closes'
+                      : viewerBodies.length > 0
+                        ? 'Click a body, face, or edge · Shift+Click adds to selection'
+                        : 'Ctrl+K commands · ? shortcuts'));
   const inspectorActive =
     !modelingLocked &&
     !directMode &&
@@ -13349,6 +13401,7 @@ export function App() {
           type="button"
           className="workspace-column-finish"
           title="Finish Sketch"
+          aria-label="Finish Sketch"
           onClick={() => {
             dispatchInteraction({ type: 'exit-sketch' });
             setStatus(
@@ -13365,6 +13418,7 @@ export function App() {
         type="button"
         className="workspace-column-search"
         title="Search commands (Ctrl+K)"
+        aria-label="Search commands (Ctrl+K)"
         onClick={() => setPaletteOpen(true)}
       >
         <Search size={14} aria-hidden="true" />
@@ -13613,9 +13667,9 @@ export function App() {
             moveCommitHold={moveCommitHold}
             appearancePreview={bodyAppearancePreview}
             hideViewerToolbar={false}
-            dockLayout={!modelingLocked}
+            dockLayout={!tweakMode}
             dockExtras={
-              !modelingLocked ? (
+              !tweakMode ? (
                 <ViewportDockExtras
                   selectionFilter={selectionFilter}
                   selectionFilterIsAutomatic={manualSelectionFilter === null}
@@ -14685,6 +14739,13 @@ export function App() {
             muted={contextualToolCard !== null && !hideSketchToolCard}
             logOpen={activityLogOpen}
             onToggleLog={() => setActivityLogOpen((open) => !open)}
+            prompt={workspacePrompt}
+            projectName={doc.name}
+            featureCount={features.length}
+            bodyCount={viewerBodies.length}
+            warningCount={warnings.length}
+            documentVersion={doc.version}
+            saveState={presentedSaveState}
           />
           <StatusActivityLog
             id={activityLogId}

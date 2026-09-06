@@ -1,5 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
-import { stubApi } from './openzcad-fixtures';
+import { locateEdge, setSelectionFilter, stubApi } from './openzcad-fixtures';
 
 /**
  * Measuring must not change what is selected.
@@ -47,35 +47,9 @@ async function armMeasure(page: Page) {
  * the sidebar, so the same fraction lands on different geometry than it does in
  * Build. This hook projects the real display polyline through the live camera.
  */
-async function locateEdge(page: Page) {
-  const canvas = page.locator('.viewer-host canvas');
-  let found: { x: number; y: number; topologyId: string } | null = null;
-  await expect
-    .poll(
-      async () => {
-        found = await canvas.evaluate(
-          (element) =>
-            new Promise<{
-              x: number;
-              y: number;
-              topologyId: string;
-            } | null>((resolve) => {
-              element.dispatchEvent(
-                new CustomEvent('openzcad:e2e-locate-edge', {
-                  detail: { resolve }
-                })
-              );
-            })
-        );
-        return found !== null;
-      },
-      { message: 'the body should expose a pickable edge', timeout: 20_000 }
-    )
-    .toBe(true);
-  return found!;
-}
-
-test('mobile measurement actions stay clear of the viewport ruler', async ({ page }) => {
+test('mobile measurement actions stay clear of the viewport ruler', async ({
+  page
+}) => {
   await createBox(page, 'QA mobile measurement layout');
   await switchWorkspace(page, 'View');
   await armMeasure(page);
@@ -87,13 +61,25 @@ test('mobile measurement actions stay clear of the viewport ruler', async ({ pag
     await page.setViewportSize({ width, height: 844 });
     const ruler = page.getByTestId('viewport-scale-indicator');
     await expect(ruler).toBeVisible();
-    await expect(workbench.getByRole('button', { name: 'Copy all' })).toBeVisible();
-    await expect.poll(async () => {
-      const scale = await ruler.boundingBox();
-      const dock = await workbench.boundingBox();
-      return scale !== null && dock !== null && scale.y >= 0 &&
-        scale.y + scale.height + 4 <= dock.y;
-    }).toBe(true);
+    await expect(
+      workbench.getByRole('button', { name: 'Copy all' })
+    ).toBeVisible();
+    // The ruler lives in the viewport dock under the workbench's sheet; what
+    // has to hold is that neither covers the other.
+    await expect
+      .poll(async () => {
+        const scale = await ruler.boundingBox();
+        const dock = await workbench.boundingBox();
+        return (
+          scale !== null &&
+          dock !== null &&
+          scale.y >= 0 &&
+          scale.y + scale.height <= 844 &&
+          (scale.y + scale.height + 4 <= dock.y ||
+            scale.y >= dock.y + dock.height + 4)
+        );
+      })
+      .toBe(true);
   }
 });
 
@@ -104,7 +90,7 @@ test('measuring in View leaves the Build selection untouched', async ({
   const status = page.getByRole('contentinfo');
 
   // Select an edge while modelling, the way someone would before a fillet.
-  await page.getByRole('button', { name: 'Edge', exact: true }).click();
+  await setSelectionFilter(page, 'Edge');
   const buildEdge = await locateEdge(page);
   await page.mouse.click(buildEdge.x, buildEdge.y);
   await expect(status).toContainText('1 exact edge selected');
@@ -169,7 +155,7 @@ test('measuring an edge records it without selecting it', async ({ page }) => {
   await armMeasure(page);
   // Narrow to edges: a face is under the pointer too, and Smart mode would
   // happily measure that instead.
-  await page.getByRole('button', { name: 'Edge', exact: true }).click();
+  await setSelectionFilter(page, 'Edge');
 
   const edge = await locateEdge(page);
   await page.mouse.click(edge.x, edge.y);
@@ -238,7 +224,7 @@ test('a hover on an edge snaps to a named point', async ({ page }) => {
 
   await switchWorkspace(page, 'View');
   await armMeasure(page);
-  await page.getByRole('button', { name: 'Edge', exact: true }).click();
+  await setSelectionFilter(page, 'Edge');
 
   // The locator hands back a point on a real edge, confirmed pickable through
   // the live camera — which is also within snap range of that edge's own
@@ -265,7 +251,7 @@ test('a measurement survives a reload', async ({ page }) => {
 
   await switchWorkspace(page, 'View');
   await armMeasure(page);
-  await page.getByRole('button', { name: 'Edge', exact: true }).click();
+  await setSelectionFilter(page, 'Edge');
 
   const edge = await locateEdge(page);
   await page.mouse.click(edge.x, edge.y);
@@ -297,7 +283,7 @@ test('measurements stay with their own project across a switch', async ({
   await createBox(page, 'Measured First Project');
   await switchWorkspace(page, 'View');
   await armMeasure(page);
-  await page.getByRole('button', { name: 'Edge', exact: true }).click();
+  await setSelectionFilter(page, 'Edge');
   const edge = await locateEdge(page);
   await page.mouse.click(edge.x, edge.y);
 

@@ -544,11 +544,12 @@ test('command palette and shortcut overlay behave as modal dialogs', async ({
     'aria-selected',
     'true'
   );
-  await expect(page.getByLabel('Search commands')).toHaveAttribute(
+  const paletteInput = page.getByRole('textbox', { name: 'Search commands' });
+  await expect(paletteInput).toHaveAttribute(
     'aria-activedescendant',
     /command-palette-option-\d+/
   );
-  await expect(page.getByLabel('Search commands')).toBeFocused();
+  await expect(paletteInput).toBeFocused();
   await page.keyboard.press('Escape');
   await expect(paletteTrigger).toBeFocused();
 
