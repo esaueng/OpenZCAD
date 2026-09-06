@@ -57,7 +57,7 @@ test('keeps undo and redo in the quick-actions rail', async ({ page }) => {
   // toolbar itself on a budget sized for a chunk load; every assertion after
   // this keeps the strict default, and a rail that never arrives fails as a
   // missing rail rather than as an enabled-versus-disabled mismatch.
-  const rail = page.getByRole('toolbar', { name: 'Quick actions' });
+  const rail = page.getByRole('toolbar', { name: 'Viewer bar' });
   await expect(rail).toBeVisible({ timeout: 30_000 });
 
   // Worth asserting only once the workspace is up — before that the top bar
@@ -176,9 +176,7 @@ test('choosing Move from an edge right-click disarms the fillet handle it just a
   await expect(menu).toBeHidden();
 
   // One manipulator owns the pointer: the gizmo is up, the handle is gone.
-  await expect(
-    page.getByRole('form', { name: 'Move controls' })
-  ).toBeVisible();
+  await expect(page.getByRole('form', { name: 'Move controls' })).toBeVisible();
   await expect(
     page.getByRole('region', { name: 'Fillet operation' })
   ).toHaveCount(0);
@@ -1953,10 +1951,7 @@ test('section view cycles planes, offers an offset slider, and cuts nothing from
   // Off → XY, with the offset slider sliding out beside the rail.
   await sectionButton.click();
   await expect(sectionButton).toHaveAttribute('aria-pressed', 'true');
-  await expect(sectionButton).toHaveAttribute(
-    'aria-label',
-    /now: XY plane/
-  );
+  await expect(sectionButton).toHaveAttribute('aria-label', /now: XY plane/);
   const slider = page.getByRole('slider', { name: 'Section plane offset' });
   await expect(slider).toBeVisible();
   await slider.focus();
