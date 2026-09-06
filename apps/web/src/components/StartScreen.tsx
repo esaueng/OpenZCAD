@@ -1,3 +1,4 @@
+import { ProjectImportButton } from './ProjectImportButton';
 import { useEffect, useRef, useState } from 'react';
 import {
   Archive,
@@ -44,6 +45,7 @@ interface StartScreenProps {
   busy: boolean;
   demos: DemoDefinition[];
   defaultUnits: UnitSystem;
+  onImportProject?(file: File): void;
   onCreate(name: string, units: UnitSystem): void;
   onOpen(projectId: string): void;
   onOpenDemo(definition: DemoDefinition): void;
@@ -139,7 +141,10 @@ export function formatLastEdited(
   const dayOffset = Math.floor(
     (startOfToday.getTime() - date.getTime()) / DAY_MS
   );
-  if (date.getTime() >= startOfToday.getTime() && date.getTime() <= now.getTime()) {
+  if (
+    date.getTime() >= startOfToday.getTime() &&
+    date.getTime() <= now.getTime()
+  ) {
     return `Today ${formatTime(date)}`;
   }
   if (dayOffset === 0) {
@@ -167,6 +172,7 @@ export function StartScreen({
   busy,
   demos,
   defaultUnits,
+  onImportProject,
   onCreate,
   onOpen,
   onOpenDemo,
@@ -690,6 +696,13 @@ export function StartScreen({
           <h1 className="start-header-name">OpenZCAD</h1>
           <span className="start-beta">beta</span>
         </div>
+        {onImportProject && (
+          <ProjectImportButton
+            onImport={onImportProject}
+            disabled={busy}
+            className="secondary"
+          />
+        )}
         <span className="start-tagline">Parametric CAD in the browser</span>
         <button
           className="start-settings-button icon-button"
@@ -749,9 +762,7 @@ export function StartScreen({
               <select
                 value={units}
                 aria-label="Unit system"
-                onChange={(event) =>
-                  setUnits(event.target.value as UnitSystem)
-                }
+                onChange={(event) => setUnits(event.target.value as UnitSystem)}
               >
                 <option value="mm">Millimeters</option>
                 <option value="cm">Centimeters</option>
