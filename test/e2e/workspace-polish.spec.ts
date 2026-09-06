@@ -46,7 +46,11 @@ async function stubApi(page: Page) {
   await seedDismissedWorkspaceTour(page);
   await page.route('**/api/health', (route) =>
     route.fulfill({
-      json: { status: 'ok', environment: 'beta', time: new Date().toISOString() }
+      json: {
+        status: 'ok',
+        environment: 'beta',
+        time: new Date().toISOString()
+      }
     })
   );
   await page.route('**/api/projects', (route) => {
@@ -150,13 +154,11 @@ test('exposes the full measurement workbench in View mode', async ({
   await expect(
     workbench.getByRole('button', { name: 'Distance' })
   ).toBeVisible();
-  await expect(
-    workbench.getByRole('button', { name: 'Angle' })
-  ).toBeVisible();
+  await expect(workbench.getByRole('button', { name: 'Angle' })).toBeVisible();
   await expect(workbench.getByLabel('Measurement units')).toHaveValue('mm');
-  await expect(
-    workbench.getByLabel('Measurement decimal places')
-  ).toHaveValue('2');
+  await expect(workbench.getByLabel('Measurement decimal places')).toHaveValue(
+    '2'
+  );
   await expect(
     workbench.getByRole('group', { name: 'Radial display' })
   ).toBeVisible();
@@ -178,9 +180,10 @@ test('lists bodies in the model browser and selects them from the tree', async (
   await bodies.getByRole('button', { name: /^Box/ }).click();
   const chip = page.locator('.selection-chip');
   await expect(chip).toContainText('Box');
-  await expect(
-    bodies.getByRole('button', { name: /^Box/ })
-  ).toHaveAttribute('aria-pressed', 'true');
+  await expect(bodies.getByRole('button', { name: /^Box/ })).toHaveAttribute(
+    'aria-pressed',
+    'true'
+  );
 
   // The visibility eye hides the body and the history eye restores it.
   await bodies.getByRole('button', { name: 'Hide body Box' }).click();
@@ -307,10 +310,9 @@ test('fits the face tool card and orientation cube beside the inspector', async 
     geometry.copyIntersectsSubmode,
     JSON.stringify(geometry, null, 2)
   ).toBe(false);
-  expect(
-    geometry.cubeIntersectsCard,
-    JSON.stringify(geometry, null, 2)
-  ).toBe(false);
+  expect(geometry.cubeIntersectsCard, JSON.stringify(geometry, null, 2)).toBe(
+    false
+  );
   expect(
     geometry.cubeIntersectsInspector,
     JSON.stringify(geometry, null, 2)
@@ -330,7 +332,7 @@ test('keeps a chained line anchored across committed sketch entities', async ({
   await page.getByRole('button', { name: /^Sketch \(S\)/ }).click();
   await page.getByRole('button', { name: 'Top (XY)' }).click();
   await expect(
-    page.getByRole('region', { name: 'Editing Sketch: New Sketch operation' })
+    page.getByRole('toolbar', { name: 'Sketch tools' })
   ).toBeVisible();
   // The sketch rail owns the session: the modeling palette must not stay
   // mounted and live beside it.
@@ -383,10 +385,16 @@ test('places, retypes, solves, and undoes a driving angle dimension', async ({
   await page.getByRole('button', { name: /^Sketch \(S\)/ }).click();
   await page.getByRole('button', { name: 'Top (XY)' }).click();
   await expect(
-    page.getByRole('region', { name: 'Editing Sketch: New Sketch operation' })
+    page.getByRole('toolbar', { name: 'Sketch tools' })
   ).toBeVisible();
   await page.waitForTimeout(800);
 
+  // The sketch settings are a disclosure under the tools, closed to begin with.
+  if (
+    !(await page.getByRole('checkbox', { name: 'Snap to grid' }).isVisible())
+  ) {
+    await page.getByRole('button', { name: /Sketch palette/ }).click();
+  }
   const gridSnap = page.getByRole('checkbox', { name: 'Snap to grid' });
   if (await gridSnap.isChecked()) {
     await gridSnap.uncheck();
@@ -503,6 +511,12 @@ test('edits a canvas radius with expressions, refuses zero, and undoes the solve
   const rail = page.getByRole('toolbar', { name: 'Sketch tools' });
   await expect(rail).toBeVisible();
   await page.waitForTimeout(800);
+  // The sketch settings are a disclosure under the tools, closed to begin with.
+  if (
+    !(await page.getByRole('checkbox', { name: 'Snap to grid' }).isVisible())
+  ) {
+    await page.getByRole('button', { name: /Sketch palette/ }).click();
+  }
   const gridSnap = page.getByRole('checkbox', { name: 'Snap to grid' });
   if (await gridSnap.isChecked()) await gridSnap.uncheck();
   await rail.getByRole('button', { name: /^Circle/ }).click();
@@ -578,10 +592,16 @@ test('clears every transient sketch HUD overlay when finishing a sketch', async 
   await page.getByRole('button', { name: /^Sketch \(S\)/ }).click();
   await page.getByRole('button', { name: 'Top (XY)' }).click();
   await expect(
-    page.getByRole('region', { name: 'Editing Sketch: New Sketch operation' })
+    page.getByRole('toolbar', { name: 'Sketch tools' })
   ).toBeVisible();
   await page.waitForTimeout(800);
 
+  // The sketch settings are a disclosure under the tools, closed to begin with.
+  if (
+    !(await page.getByRole('checkbox', { name: 'Snap to grid' }).isVisible())
+  ) {
+    await page.getByRole('button', { name: /Sketch palette/ }).click();
+  }
   const gridSnap = page.getByRole('checkbox', { name: 'Snap to grid' });
   if (await gridSnap.isChecked()) {
     await gridSnap.uncheck();
@@ -607,9 +627,9 @@ test('clears every transient sketch HUD overlay when finishing a sketch', async 
     .getByRole('toolbar', { name: 'Sketch tools' })
     .getByRole('button', { name: 'Finish Sketch' })
     .click();
-  await expect(
-    page.getByRole('toolbar', { name: 'Sketch tools' })
-  ).toHaveCount(0);
+  await expect(page.getByRole('toolbar', { name: 'Sketch tools' })).toHaveCount(
+    0
+  );
   await expect(marker).toBeHidden();
   await expect(page.locator('.sketch-dim-label')).toBeHidden();
   await expect(page.locator('.sketch-center-target')).toBeHidden();

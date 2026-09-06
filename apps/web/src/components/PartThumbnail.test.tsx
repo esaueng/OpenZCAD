@@ -17,7 +17,9 @@ describe('PartThumbnail', () => {
     const project = summary({
       thumbnailArtifactId: toArtifactId('artifact_cached')
     });
-    const loadThumbnail = vi.fn().mockResolvedValue('data:image/webp;base64,AA');
+    const loadThumbnail = vi
+      .fn()
+      .mockResolvedValue('data:image/webp;base64,AA');
     const publishThumbnail = vi.fn();
 
     render(
@@ -37,7 +39,9 @@ describe('PartThumbnail', () => {
 
   it('publishes a device-only cached image in the background', async () => {
     const project = summary();
-    const loadThumbnail = vi.fn().mockResolvedValue('data:image/webp;base64,AA');
+    const loadThumbnail = vi
+      .fn()
+      .mockResolvedValue('data:image/webp;base64,AA');
     const publishThumbnail = vi.fn().mockResolvedValue(undefined);
 
     render(
@@ -51,9 +55,7 @@ describe('PartThumbnail', () => {
     expect(
       await screen.findByRole('presentation', { hidden: true })
     ).toHaveAttribute('src', 'data:image/webp;base64,AA');
-    await waitFor(() =>
-      expect(publishThumbnail).toHaveBeenCalledWith(project)
-    );
+    await waitFor(() => expect(publishThumbnail).toHaveBeenCalledWith(project));
   });
 
   it('renders a preview the cold cache had to produce', async () => {

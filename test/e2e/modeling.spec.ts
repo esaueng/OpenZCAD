@@ -868,7 +868,7 @@ test('resolves a negative free-plane extrude preview', async ({ page }) => {
   await page.getByRole('button', { name: /^Sketch \(S\)/ }).click();
   await page.getByRole('button', { name: 'Top (XY)' }).click();
   await expect(
-    page.getByRole('region', { name: 'Editing Sketch: New Sketch operation' })
+    page.getByRole('toolbar', { name: 'Sketch tools' })
   ).toBeVisible();
   await page.waitForTimeout(800);
 
@@ -3813,7 +3813,7 @@ test('sketches on the wall of a drag-style extrusion and on a hash-only face', a
   await page.getByRole('button', { name: /^Sketch \(S\)/ }).click();
   await page.getByRole('button', { name: 'Top (XY)' }).click();
   await expect(
-    page.getByRole('region', { name: 'Editing Sketch: New Sketch operation' })
+    page.getByRole('toolbar', { name: 'Sketch tools' })
   ).toBeVisible();
   await page.waitForTimeout(800);
 
@@ -3873,7 +3873,7 @@ test('sketches on the wall of a drag-style extrusion and on a hash-only face', a
     'Sketching on the selected face'
   );
   await expect(
-    page.getByRole('region', { name: 'Editing Sketch: New Sketch operation' })
+    page.getByRole('toolbar', { name: 'Sketch tools' })
   ).toBeVisible();
   await page.keyboard.press('Escape');
   await page.keyboard.press('Escape');
@@ -3902,6 +3902,6 @@ test('sketches on the wall of a drag-style extrusion and on a hash-only face', a
     'Sketching on a fixed plane at the selected face'
   );
   await expect(
-    page.getByRole('region', { name: 'Editing Sketch: New Sketch operation' })
+    page.getByRole('toolbar', { name: 'Sketch tools' })
   ).toBeVisible();
 });

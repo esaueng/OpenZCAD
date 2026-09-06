@@ -746,49 +746,6 @@
   pointer-events: none;
 }
 
-/* Sketch drawing tools, floating under the tool card. */
-.sketch-rail {
-  position: absolute;
-  top: 72px;
-  left: 50%;
-  z-index: calc(var(--z-inspector-float) + 1);
-  display: flex;
-  /* Never wider than the viewer: an overflowing centered rail slides its
-     left edge under the sidebar, whose panels then intercept every click on
-     the leftmost tools. Wrapping to a second row is the honest fallback. */
-  flex-wrap: wrap;
-  max-width: calc(100% - 16px);
-  gap: 4px;
-  align-items: center;
-  justify-content: center;
-  padding: 5px;
-  background: var(--color-surface-2);
-  border: 1px solid var(--color-border-strong);
-  border-radius: var(--radius-md);
-  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.4);
-  transform: translateX(-50%);
-  /* Entering a sketch glides the camera for most of a second; chrome that
-     snaps in on the first frame arrives before the move it belongs to. The
-     base duration lands it inside that flight, so the mode switch and the
-     camera read as one gesture. Same reason the tool card fades. */
-  animation: sketch-chrome-in var(--dur-base) var(--ease-out);
-}
-
-@keyframes sketch-chrome-in {
-  from {
-    opacity: 0;
-    transform: translateX(-50%) translateY(-6px);
-  }
-  to {
-    opacity: 1;
-    transform: translateX(-50%) translateY(0);
-  }
-}
-
-[data-reduced-motion='true'] .sketch-rail {
-  animation: none;
-}
-
 .sketch-rail-group-label {
   padding: 0 4px 0 2px;
   color: var(--color-text-subtle);
@@ -828,17 +785,6 @@
   font-size: 10px;
   background: rgba(0, 0, 0, 0.35);
   border-radius: 3px;
-}
-
-.sketch-rail-divider {
-  width: 1px;
-  height: 18px;
-  margin: 0 3px;
-  background: var(--color-border-strong);
-}
-
-.sketch-rail .sketch-rail-exit {
-  color: var(--color-accent-hi);
 }
 
 /* Solve-status pill: inline in the rail, tone-tinted, never positioned. */
@@ -957,40 +903,6 @@
 .sketch-circle-menu small {
   color: var(--color-text-subtle);
   font-size: var(--fs-mini);
-}
-
-.sketch-palette {
-  position: absolute;
-  top: 124px;
-  right: 14px;
-  z-index: calc(var(--z-inspector-float) + 1);
-  width: 238px;
-  color: var(--color-text-muted);
-  background: color-mix(in srgb, var(--color-surface-2) 94%, transparent);
-  border: 1px solid var(--color-border-strong);
-  border-radius: var(--radius-md);
-  box-shadow: 0 14px 34px rgba(0, 0, 0, 0.4);
-  backdrop-filter: blur(12px);
-  /* Arrives with the rail and the camera, for the same reason. No transform
-     of its own to preserve, so it only fades. */
-  animation: sketch-palette-in var(--dur-base) var(--ease-out);
-}
-
-@keyframes sketch-palette-in {
-  from {
-    opacity: 0;
-  }
-  to {
-    opacity: 1;
-  }
-}
-
-[data-reduced-motion='true'] .sketch-palette {
-  animation: none;
-}
-
-.sketch-palette.collapsed {
-  width: auto;
 }
 
 .sketch-palette-header {
