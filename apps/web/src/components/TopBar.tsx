@@ -1,3 +1,4 @@
+import { ProjectImportButton } from './ProjectImportButton';
 import { type ChangeEvent, useEffect, useRef, useState } from 'react';
 import {
   Box,
@@ -64,6 +65,10 @@ interface TopBarProps {
   onWorkspaceMode(mode: WorkspaceMode): void;
   onSave(): void;
   onImportFiles(files: File[]): void;
+  projectTransferBusy?: boolean;
+  onImportProject?(file: File): void;
+  onExportProject?(): void;
+  onDownloadArtifact?(artifact: ArtifactRecord): void;
   onExportStep(): void;
   /** Opens the mesh export dialog (3MF / STL with quality control). */
   onOpenMeshExport(): void;
@@ -160,6 +165,10 @@ export function TopBar({
   onWorkspaceMode,
   onSave,
   onImportFiles,
+  projectTransferBusy,
+  onImportProject,
+  onExportProject,
+  onDownloadArtifact,
   onExportStep,
   onOpenMeshExport,
   onArchiveLocalSources,
@@ -414,6 +423,25 @@ export function TopBar({
             File{artifacts.length > 0 ? ` ${artifacts.length}` : ''}
           </summary>
           <div className="topbar-menu-panel">
+            {onImportProject && (
+              <ProjectImportButton
+                onImport={onImportProject}
+                disabled={projectTransferBusy}
+              />
+            )}
+            {onExportProject && (
+              <button
+                type="button"
+                className="topbar-menu-item"
+                disabled={!projectName || projectTransferBusy}
+                onClick={onExportProject}
+              >
+                <Download size={13} aria-hidden="true" />
+                <span>Export project</span>
+                <small>complete backup</small>
+              </button>
+            )}
+            <div className="topbar-menu-sep" />
             <label
               className="topbar-menu-item"
               title="Import STEP, STL, or a paired Shapr3D project and STEP"
@@ -508,6 +536,14 @@ export function TopBar({
                   className="topbar-menu-item"
                   href={`/api/artifacts/${artifact.artifactId}/download`}
                   download={artifact.name}
+                  onClick={
+                    onDownloadArtifact
+                      ? (event) => {
+                          event.preventDefault();
+                          onDownloadArtifact(artifact);
+                        }
+                      : undefined
+                  }
                 >
                   <Download size={13} aria-hidden="true" />
                   <span>{artifact.name}</span>
