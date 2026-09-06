@@ -402,10 +402,13 @@
   pointer-events: none;
 }
 
-/* The message, the activity log's handle, leads the line. */
+/* The message, the activity log's handle, leads the line — short: it
+   truncates past a few words and keeps the full text in its tooltip, so it
+   never runs under the viewer bar. */
 .workspace-readout-hint {
   flex: 0 1 auto;
   min-width: 0;
+  max-width: 260px;
   padding: 2px 8px;
   margin-left: -8px;
   color: var(--color-text-subtle);
