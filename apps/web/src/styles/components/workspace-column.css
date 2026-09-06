@@ -413,7 +413,8 @@
 .workspace-readout {
   position: absolute;
   left: calc(var(--column-w) + 14px);
-  right: 12px;
+  /* Stops short of the centred viewer bar, whatever the column's width. */
+  right: calc(50% + 134px);
   bottom: 10px;
   z-index: var(--z-viewer-overlay);
   display: flex;
@@ -507,15 +508,11 @@
   top: auto;
   right: auto;
   bottom: 0;
-  left: calc(var(--column-w) + (100% - var(--column-w)) / 2);
+  left: 50%;
   flex-direction: row;
   border-bottom: 0;
   border-radius: var(--radius-md) var(--radius-md) 0 0;
   transform: translateX(-50%);
-}
-
-.workspace.column-layout .viewer-area.has-inspector .viewer-rail {
-  left: calc(var(--column-w) + (100% - var(--column-w) - var(--context-w)) / 2);
 }
 
 /* The bottom-right corner holds the cube with undo/redo and, under it, the
@@ -523,8 +520,8 @@
 .workspace.column-layout .viewer-rail-stack,
 .workspace.column-layout .viewer-area.has-inspector .viewer-rail-stack {
   top: auto;
-  right: 8px;
-  bottom: 6px;
+  right: 2px;
+  bottom: 0;
 }
 
 /* The tool card centres on the room between the column and the dock. */
@@ -539,17 +536,13 @@
   width: max(280px, min(680px, var(--tool-card-room)));
 }
 
-/* The scale bar sits on the bottom line just right of the viewer bar. */
+/* The viewer bar is dead centre; the scale bar sits midway between the
+   bar's right edge (bar ≈ 244px wide) and the cube (≈ 170px, in the corner). */
 .workspace.column-layout .viewport-scale-indicator {
-  left: calc(var(--column-w) + (100% - var(--column-w)) / 2 + 140px);
+  left: calc(50% + 122px + (50% - 122px - 176px) / 2);
   right: auto;
   bottom: 8px;
-}
-
-.workspace.column-layout .viewer-area.has-inspector .viewport-scale-indicator {
-  left: calc(
-    var(--column-w) + (100% - var(--column-w) - var(--context-w)) / 2 + 140px
-  );
+  transform: translateX(-50%);
 }
 
 /* ── The live dimension at the cursor ── */
