@@ -110,6 +110,7 @@ export function AppShell({
           {column && sidebar && (
             <div className="workspace-column-float">{sidebar}</div>
           )}
+          {column && sidebar && sidebarResizer}
           {toolBar && <div className="palette-float">{toolBar}</div>}
           {inspector && <div className="inspector-float">{inspector}</div>}
           {column && readout}

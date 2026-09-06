@@ -119,7 +119,9 @@ export function ViewerToolbar({
   }
 
   return (
-    <div className="viewer-rail" role="toolbar" aria-label="Quick actions">
+    // The viewer bar: undo/redo and the viewport toggles. Still `.viewer-rail`
+    // in the stylesheets; the name is what people call it.
+    <div className="viewer-rail" role="toolbar" aria-label="Viewer bar">
       <button
         type="button"
         className="rail-button"
