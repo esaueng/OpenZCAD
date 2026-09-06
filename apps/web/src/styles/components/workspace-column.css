@@ -5,6 +5,12 @@
    classic rules for the docked layout, so it stays after them in the
    cascade and before view-mode.css, which subtracts from both. ── */
 
+/* No status bar means no status row: the shell grid otherwise kept its
+   30px track and drew an empty strip under the viewport. */
+.app-shell.column-layout {
+  grid-template-rows: var(--topbar-h) minmax(0, 1fr);
+}
+
 /* `--column-w` is what the column is drawn at: the stored sidebar width,
    capped as the window narrows, without touching the preference itself. */
 .workspace.column-layout {
@@ -508,17 +514,24 @@
   bottom: 36px;
 }
 
+/* The utility rail stands on the right edge just under the top bar, as
+   placed on the design canvas: above the assistant tab, clear of the corner
+   stack. With a dock open it steps left of the dock. */
 .workspace.column-layout .viewer-rail {
-  top: auto;
-  right: 12px;
-  bottom: 214px;
-  flex-direction: row;
+  top: 46px;
+  right: 34px;
+  bottom: auto;
+  left: auto;
+  flex-direction: column;
   transform: none;
 }
 
-/* The bottom-right corner is one column of viewport furniture: the utility
-   rail as a row, the cube with undo/redo, the scale bar under the cube. It
-   stays clear of the assistant tab at mid-height and of the dock at the top. */
+.workspace.column-layout .viewer-area.has-inspector .viewer-rail {
+  right: calc(var(--context-w) + 24px);
+}
+
+/* The bottom-right corner holds the cube with undo/redo and, under it, the
+   scale bar; clear of the assistant tab at mid-height and the dock on top. */
 .workspace.column-layout .viewer-rail-stack,
 .workspace.column-layout .viewer-area.has-inspector .viewer-rail-stack {
   top: auto;
