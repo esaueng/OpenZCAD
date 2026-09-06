@@ -13,9 +13,9 @@
 
 .workspace-column-float {
   position: absolute;
-  top: 10px;
-  left: 10px;
-  bottom: 10px;
+  top: 0;
+  left: 0;
+  bottom: 0;
   z-index: var(--z-inspector-float);
   width: min(var(--column-w), calc(100% - 20px));
   display: flex;
@@ -34,7 +34,8 @@
   flex-direction: column;
   background: var(--color-surface);
   border: var(--border-thin);
-  border-radius: var(--radius-lg);
+  border-left: 0;
+  border-radius: 0 var(--radius-lg) var(--radius-lg) 0;
   box-shadow: var(--shadow-2);
   overflow: hidden;
 }
@@ -168,7 +169,7 @@
 }
 
 .tool-palette.column .palette-group {
-  padding: 0 6px 6px;
+  padding: 0 6px 3px;
 }
 
 .tool-palette.column .palette-group + .palette-group {
@@ -176,16 +177,17 @@
 }
 
 .tool-palette.column .palette-group-label {
-  padding: 7px 4px 3px;
+  padding: 5px 4px 1px;
 }
 
 .tool-palette.column .palette-grid {
   grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 0;
 }
 
 .tool-palette.column .palette-item {
-  min-height: 32px;
-  padding: 4px;
+  min-height: 28px;
+  padding: 3px;
 }
 
 /* ── Sketch rail in the column ── */
@@ -384,12 +386,12 @@
    right-hand end kept clear for the viewer's grid readout and the cube. */
 .workspace-readout {
   position: absolute;
-  left: calc(var(--column-w) + 22px + 150px);
+  left: calc(var(--column-w) + 14px);
   right: 12px;
   bottom: 10px;
   z-index: var(--z-viewer-overlay);
   display: grid;
-  grid-template-columns: max-content minmax(0, 1fr) 200px;
+  grid-template-columns: max-content minmax(0, 1fr) 190px;
   align-items: end;
   gap: 16px;
   pointer-events: none;
@@ -402,10 +404,10 @@
   justify-self: center;
   max-width: 100%;
   padding: 2px 8px;
-  color: var(--color-viewport-text-muted);
+  color: var(--color-text-subtle);
   border: 1px solid transparent;
   border-radius: var(--radius-sm);
-  font-size: var(--fs-sm);
+  font-size: var(--fs-xs);
   text-align: center;
   pointer-events: auto;
 }
@@ -509,16 +511,19 @@
 .workspace.column-layout .viewer-rail {
   top: auto;
   right: 12px;
-  bottom: 132px;
+  bottom: 214px;
+  flex-direction: row;
   transform: none;
 }
 
-/* The cube moves to the bottom corner: the top-right belongs to the dock. */
+/* The bottom-right corner is one column of viewport furniture: the utility
+   rail as a row, the cube with undo/redo, the scale bar under the cube. It
+   stays clear of the assistant tab at mid-height and of the dock at the top. */
 .workspace.column-layout .viewer-rail-stack,
 .workspace.column-layout .viewer-area.has-inspector .viewer-rail-stack {
   top: auto;
   right: 12px;
-  bottom: 34px;
+  bottom: 62px;
 }
 
 /* The tool card centres on the room between the column and the dock. */
@@ -533,9 +538,11 @@
   width: max(280px, min(680px, var(--tool-card-room)));
 }
 
-/* The scale bar sits under the column otherwise. */
+/* The scale bar reads with the cube: under it, right-aligned. */
 .workspace.column-layout .viewport-scale-indicator {
-  left: calc(var(--column-w) + 22px);
+  left: auto;
+  right: 12px;
+  bottom: 10px;
 }
 
 /* ── The live dimension at the cursor ── */
