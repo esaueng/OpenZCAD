@@ -4,6 +4,16 @@ import { createRef } from 'react';
 import { describe, expect, it, vi } from 'vitest';
 import { ViewportDockExtras, WorkspaceReadout } from './WorkspaceReadout';
 
+const SUMMARY = {
+  prompt: 'Click a body, face, or edge · Shift+Click adds to selection',
+  projectName: 'Bracket',
+  featureCount: 2,
+  bodyCount: 1,
+  warningCount: 0,
+  documentVersion: 3,
+  saveState: 'synced' as const
+};
+
 describe('WorkspaceReadout', () => {
   it('shows the live status as a toast that opens the activity log', async () => {
     const user = userEvent.setup();
@@ -15,11 +25,22 @@ describe('WorkspaceReadout', () => {
         tone="ready"
         logOpen={false}
         onToggleLog={onToggleLog}
+        {...SUMMARY}
       />
     );
     expect(screen.getByRole('status')).toHaveTextContent('Fillet added');
     await user.click(screen.getByRole('button', { name: /Open activity log/ }));
     expect(onToggleLog).toHaveBeenCalledTimes(1);
+    // The summary the status bar carried for assistive tech is still there.
+    expect(
+      screen.getByRole('group', { name: 'Workspace status' })
+    ).toHaveTextContent('sync');
+    expect(
+      screen.getByLabelText('Bracket · 2 features · 1 body. Sync Synced.')
+    ).toBeInTheDocument();
+    expect(screen.getByRole('contentinfo')).toHaveTextContent(
+      'Shift+Click adds to selection'
+    );
   });
 
   it('hides while a tool card carries the message, or with none, but stays the landmark', () => {
@@ -30,6 +51,7 @@ describe('WorkspaceReadout', () => {
         muted
         logOpen={false}
         onToggleLog={vi.fn()}
+        {...SUMMARY}
       />
     );
     // Still in the tree as the contentinfo landmark, only hidden.
@@ -40,6 +62,7 @@ describe('WorkspaceReadout', () => {
         tone="ready"
         logOpen={false}
         onToggleLog={vi.fn()}
+        {...SUMMARY}
       />
     );
     expect(screen.getByRole('contentinfo')).toHaveClass('hidden');
