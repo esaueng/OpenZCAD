@@ -14739,7 +14739,6 @@ export function App() {
             statusSticky={statusEntry.sticky || !exactGeometryReady}
             tone={tone}
             hint={hint}
-            saveState={presentedSaveState}
             muted={contextualToolCard !== null && !hideSketchToolCard}
             selectionFilter={selectionFilter}
             selectionFilterIsAutomatic={manualSelectionFilter === null}
