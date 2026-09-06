@@ -485,6 +485,89 @@ test('places, retypes, solves, and undoes a driving angle dimension', async ({
   await expect(canvasDimension).toHaveCount(0);
 });
 
+test('edits a canvas radius with expressions, refuses zero, and undoes the solve', async ({
+  page
+}) => {
+  test.setTimeout(60_000);
+  const pageErrors: string[] = [];
+  page.on('pageerror', (error) => pageErrors.push(error.message));
+  await stubApi(page);
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('Driving Radius');
+  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByLabel('New parameter name').fill('radius_target');
+  await page.getByLabel('New parameter expression').fill('7');
+  await page.getByRole('button', { name: 'Add parameter' }).click();
+  await page.getByRole('button', { name: /^Sketch \(S\)/ }).click();
+  await page.getByRole('button', { name: 'Top (XY)' }).click();
+  const rail = page.getByRole('toolbar', { name: 'Sketch tools' });
+  await expect(rail).toBeVisible();
+  await page.waitForTimeout(800);
+  const gridSnap = page.getByRole('checkbox', { name: 'Snap to grid' });
+  if (await gridSnap.isChecked()) await gridSnap.uncheck();
+  await rail.getByRole('button', { name: /^Circle/ }).click();
+  const canvas = page.locator('.viewer-host canvas');
+  const bounds = await canvas.boundingBox();
+  expect(bounds).not.toBeNull();
+  const center = {
+    x: bounds!.x + bounds!.width * 0.35,
+    y: bounds!.y + bounds!.height * 0.65
+  };
+  await page.mouse.move(center.x, center.y);
+  await page.mouse.down();
+  await page.mouse.move(center.x + 72, center.y, { steps: 6 });
+  await page.mouse.up();
+  await expect(
+    page.locator('.feature-row-main', { hasText: 'Sketch 01' })
+  ).toBeVisible();
+  await rail.getByRole('button', { name: 'Radius', exact: true }).click();
+  await page.mouse.click(center.x + 72, center.y);
+  const label = page.getByRole('button', { name: /^Edit driving radius:/ });
+  await expect(label).toBeVisible();
+  const baseline = await readLiveSketch(canvas);
+  const constraintId = await label.getAttribute('data-constraint-id');
+  await label.click();
+  const editor = page.getByRole('dialog', { name: 'Radius value' });
+  await editor.getByRole('textbox').fill('radius_target');
+  await editor.getByRole('button', { name: 'Apply radius' }).click();
+  await expect(label).toContainText('R radius_target = 7 mm');
+  await expect(label).toHaveAttribute('data-constraint-id', constraintId!);
+  const solved = await readLiveSketch(canvas);
+  const radial = solved.objects[0]!.data;
+  expect(radial.objectKind).toBe('circle');
+  if (radial.objectKind !== 'circle') throw new Error('Expected a circle');
+  expect(Number(radial.radius)).toBeCloseTo(7, 8);
+  const parameter = page.getByLabel('Expression for radius_target');
+  await parameter.fill('9');
+  await parameter.press('Enter');
+  await expect(label).toContainText('R radius_target = 9 mm');
+  const rebound = (await readLiveSketch(canvas)).objects[0]!.data;
+  if (rebound.objectKind !== 'circle') throw new Error('Expected a circle');
+  expect(Number(rebound.radius)).toBeCloseTo(9, 8);
+  await page.keyboard.press('Control+z');
+  await expect(label).toContainText('R radius_target = 7 mm');
+  await page.keyboard.press('Control+z');
+  await expect
+    .poll(async () => JSON.stringify((await readLiveSketch(canvas)).objects))
+    .toBe(JSON.stringify(baseline.objects));
+  await page.keyboard.press('Control+Shift+z');
+  await expect(label).toContainText('R radius_target = 7 mm');
+  await label.click();
+  await editor.getByRole('textbox').fill('0');
+  await editor.getByRole('button', { name: 'Apply radius' }).click();
+  await expect(page.getByRole('contentinfo')).toContainText(
+    'Radius must be a positive number'
+  );
+  expect((await readLiveSketch(canvas)).objects).toEqual(solved.objects);
+  await expect(label).toContainText('R radius_target = 7 mm');
+  await page.screenshot({ path: '/tmp/openzcad-sketch-radius.png' });
+  await rail
+    .getByRole('button', { name: 'Finish Sketch', exact: true })
+    .click();
+  await expect(label).toHaveCount(0);
+  expect(pageErrors).toEqual([]);
+});
+
 test('clears every transient sketch HUD overlay when finishing a sketch', async ({
   page
 }) => {
