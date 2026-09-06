@@ -2,7 +2,10 @@ import { render } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 import { AppShell } from './AppShell';
 
-function renderShell(inspector: React.ReactNode | null) {
+function renderShell(
+  inspector: React.ReactNode | null,
+  layout: 'classic' | 'column' = 'classic'
+) {
   return render(
     <AppShell
       topBar={<header>top</header>}
@@ -13,7 +16,10 @@ function renderShell(inspector: React.ReactNode | null) {
       assistant={null}
       sidebarWidth={252}
       assistantWidth={360}
+      sidebarResizer={<div className="sidebar-resizer">grip</div>}
       statusBar={<footer>status</footer>}
+      layout={layout}
+      readout={<output>readout</output>}
     />
   );
 }
@@ -33,5 +39,34 @@ describe('AppShell inspector flag', () => {
     const area = container.querySelector('.viewer-area');
     expect(area?.classList.contains('has-inspector')).toBe(false);
     expect(container.querySelector('.inspector-float')).toBeNull();
+  });
+});
+
+describe('AppShell column layout', () => {
+  it('floats the sidebar over the viewport and drops the status bar', () => {
+    const { container } = renderShell(null, 'column');
+    const workspace = container.querySelector('.workspace');
+    expect(workspace?.classList.contains('column-layout')).toBe(true);
+    // The grid no longer reserves a column for it, so the viewport is full width.
+    expect(workspace?.classList.contains('no-sidebar')).toBe(true);
+    expect(
+      container.querySelector('.viewer-area .workspace-column-float nav')
+    ).toHaveTextContent('sidebar');
+    expect(container.querySelector('.sidebar-resizer')).toBeNull();
+    expect(container.querySelector('footer')).toBeNull();
+    expect(container.querySelector('.viewer-area output')).toHaveTextContent(
+      'readout'
+    );
+  });
+
+  it('keeps the classic layout docked', () => {
+    const { container } = renderShell(null);
+    const workspace = container.querySelector('.workspace');
+    expect(workspace?.classList.contains('column-layout')).toBe(false);
+    expect(workspace?.classList.contains('no-sidebar')).toBe(false);
+    expect(container.querySelector('.workspace-column-float')).toBeNull();
+    expect(container.querySelector('.sidebar-resizer')).not.toBeNull();
+    expect(container.querySelector('footer')).toHaveTextContent('status');
+    expect(container.querySelector('output')).toBeNull();
   });
 });

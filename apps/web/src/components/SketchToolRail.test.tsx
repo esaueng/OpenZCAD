@@ -196,4 +196,26 @@ describe('SketchToolRail', () => {
     expect(Number.isFinite(anchor.x)).toBe(true);
     expect(Number.isFinite(anchor.y)).toBe(true);
   });
+
+  it('lays the same tools out as a column with the settings folded away', () => {
+    const { container } = renderRail({ variant: 'column' });
+    const rail = screen.getByRole('toolbar', { name: 'Sketch tools' });
+    expect(rail.classList.contains('column')).toBe(true);
+    expect(rail.querySelector('.sketch-rail-group.draw')).not.toBeNull();
+    expect(rail.querySelector('.sketch-rail-group.constrain')).not.toBeNull();
+    // Every draw tool is still there, by the same names the float uses.
+    expect(screen.getByRole('button', { name: /^Line/ })).toBeInTheDocument();
+    expect(
+      screen.getByRole('button', { name: 'Circle: Center Circle' })
+    ).toBeInTheDocument();
+    // Finish belongs to the column header, not the rail.
+    expect(
+      screen.queryByRole('button', { name: 'Finish Sketch' })
+    ).not.toBeInTheDocument();
+    // The settings start folded: they are a disclosure here, not a palette.
+    expect(
+      container.querySelector('.sketch-palette.column.collapsed')
+    ).not.toBeNull();
+    expect(screen.queryByLabelText('Snap to grid')).not.toBeInTheDocument();
+  });
 });

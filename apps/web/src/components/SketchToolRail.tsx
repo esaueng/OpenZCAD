@@ -78,6 +78,13 @@ interface SketchToolRailProps {
   onDiagnostics(): void;
   onExtrude(): void;
   onExit(): void;
+  /**
+   * `column` lays the same tools out for the workspace column: a labelled
+   * draw grid, then the constraints, then the utilities, with the sketch
+   * settings as a disclosure beneath instead of a floating palette. Finish is
+   * left to the column header.
+   */
+  variant?: 'float' | 'column';
 }
 
 const CONSTRAINT_ICONS: Record<SketchConstraintToolKind, typeof Minus> = {
@@ -166,184 +173,202 @@ export function SketchToolRail({
   onSolve,
   onDiagnostics,
   onExtrude,
-  onExit
+  onExit,
+  variant = 'float'
 }: SketchToolRailProps) {
+  const column = variant === 'column';
   const [circleMenuOpen, setCircleMenuOpen] = useState(false);
-  const [paletteOpen, setPaletteOpen] = useState(true);
+  // The floating palette opens with the sketch; folded into the column it is
+  // a settings disclosure and stays closed until asked for.
+  const [paletteOpen, setPaletteOpen] = useState(!column);
   const patchSettings = (patch: Partial<AppSettings['sketching']>) =>
     onSettings({ ...settings, ...patch });
 
-  return (
+  // The same buttons serve both layouts; only their grouping differs, so each
+  // block is rendered once here and placed below.
+  const drawTools = (
     <>
-      <div className="sketch-rail" role="toolbar" aria-label="Sketch tools">
-        <span className="sketch-rail-group-label">Draw</span>
-        {TOOLS.slice(0, 3).map(({ id, label, keyHint, icon: Icon }) => (
+      {TOOLS.slice(0, 3).map(({ id, label, keyHint, icon: Icon }) => (
+        <button
+          key={id}
+          type="button"
+          className={tool === id ? 'active' : undefined}
+          aria-pressed={tool === id}
+          title={`${label} (${keyHint})`}
+          onClick={() => onTool(id)}
+        >
+          <Icon size={14} aria-hidden="true" />
+          {label}
+          <kbd>{keyHint}</kbd>
+        </button>
+      ))}
+      <span className="sketch-circle-tool">
+        <button
+          type="button"
+          className={tool === 'circle' ? 'active' : undefined}
+          aria-pressed={tool === 'circle'}
+          aria-label={`Circle: ${CIRCLE_LABELS[circleMode]}`}
+          title={`${CIRCLE_LABELS[circleMode]} (C)`}
+          onClick={() => onTool('circle')}
+        >
+          <Circle size={14} aria-hidden="true" />
+          Circle
+          <kbd>C</kbd>
+        </button>
+        <button
+          type="button"
+          className="sketch-circle-chevron"
+          aria-label="Choose circle type"
+          aria-expanded={circleMenuOpen}
+          onClick={() => setCircleMenuOpen((open) => !open)}
+        >
+          <ChevronDown size={12} aria-hidden="true" />
+        </button>
+        {circleMenuOpen ? (
+          <span className="sketch-circle-menu" role="menu">
+            {CIRCLE_MODES.map(({ mode, label, detail }) => (
+              <button
+                key={mode}
+                type="button"
+                role="menuitemradio"
+                aria-checked={circleMode === mode}
+                className={circleMode === mode ? 'active' : undefined}
+                onClick={() => {
+                  onCircleMode(mode);
+                  setCircleMenuOpen(false);
+                }}
+              >
+                <Circle size={14} aria-hidden="true" />
+                <span>
+                  <strong>{label}</strong>
+                  <small>{detail}</small>
+                </span>
+              </button>
+            ))}
+          </span>
+        ) : null}
+      </span>
+      {TOOLS.slice(3).map(({ id, label, keyHint, icon: Icon }) => (
+        <button
+          key={id}
+          type="button"
+          className={tool === id ? 'active' : undefined}
+          aria-pressed={tool === id}
+          title={`${label} (${keyHint})`}
+          onClick={() => onTool(id)}
+        >
+          <Icon size={14} aria-hidden="true" />
+          {label}
+          <kbd>{keyHint}</kbd>
+        </button>
+      ))}
+    </>
+  );
+  const constraintTools = (
+    <>
+      {CONSTRAINT_TOOL_SPECS.map(({ kind, label, hint }) => {
+        const Icon = CONSTRAINT_ICONS[kind];
+        const active = pendingConstraint?.kind === kind;
+        return (
+          // Icon-only on purpose: five labelled buttons made the rail wider
+          // than the viewer, sliding its left edge under the sidebar where
+          // the parameter form intercepted every click on the Select tool.
           <button
-            key={id}
+            key={kind}
             type="button"
-            className={tool === id ? 'active' : undefined}
-            aria-pressed={tool === id}
-            title={`${label} (${keyHint})`}
-            onClick={() => onTool(id)}
+            className={active ? 'active' : undefined}
+            aria-pressed={active}
+            aria-label={label}
+            disabled={!canConstrain}
+            title={
+              canConstrain ? `${label} — ${hint}` : 'Draw an entity first.'
+            }
+            onClick={() => onConstraintTool(active ? null : kind)}
           >
             <Icon size={14} aria-hidden="true" />
-            {label}
-            <kbd>{keyHint}</kbd>
           </button>
-        ))}
-        <span className="sketch-circle-tool">
-          <button
-            type="button"
-            className={tool === 'circle' ? 'active' : undefined}
-            aria-pressed={tool === 'circle'}
-            aria-label={`Circle: ${CIRCLE_LABELS[circleMode]}`}
-            title={`${CIRCLE_LABELS[circleMode]} (C)`}
-            onClick={() => onTool('circle')}
-          >
-            <Circle size={14} aria-hidden="true" />
-            Circle
-            <kbd>C</kbd>
-          </button>
-          <button
-            type="button"
-            className="sketch-circle-chevron"
-            aria-label="Choose circle type"
-            aria-expanded={circleMenuOpen}
-            onClick={() => setCircleMenuOpen((open) => !open)}
-          >
-            <ChevronDown size={12} aria-hidden="true" />
-          </button>
-          {circleMenuOpen ? (
-            <span className="sketch-circle-menu" role="menu">
-              {CIRCLE_MODES.map(({ mode, label, detail }) => (
-                <button
-                  key={mode}
-                  type="button"
-                  role="menuitemradio"
-                  aria-checked={circleMode === mode}
-                  className={circleMode === mode ? 'active' : undefined}
-                  onClick={() => {
-                    onCircleMode(mode);
-                    setCircleMenuOpen(false);
-                  }}
-                >
-                  <Circle size={14} aria-hidden="true" />
-                  <span>
-                    <strong>{label}</strong>
-                    <small>{detail}</small>
-                  </span>
-                </button>
-              ))}
-            </span>
-          ) : null}
-        </span>
-        {TOOLS.slice(3).map(({ id, label, keyHint, icon: Icon }) => (
-          <button
-            key={id}
-            type="button"
-            className={tool === id ? 'active' : undefined}
-            aria-pressed={tool === id}
-            title={`${label} (${keyHint})`}
-            onClick={() => onTool(id)}
-          >
-            <Icon size={14} aria-hidden="true" />
-            {label}
-            <kbd>{keyHint}</kbd>
-          </button>
-        ))}
-        <span className="sketch-rail-divider" aria-hidden="true" />
-        <span className="sketch-rail-group-label">Constrain</span>
-        {CONSTRAINT_TOOL_SPECS.map(({ kind, label, hint }) => {
-          const Icon = CONSTRAINT_ICONS[kind];
-          const active = pendingConstraint?.kind === kind;
-          return (
-            // Icon-only on purpose: five labelled buttons made the rail wider
-            // than the viewer, sliding its left edge under the sidebar where
-            // the parameter form intercepted every click on the Select tool.
-            <button
-              key={kind}
-              type="button"
-              className={active ? 'active' : undefined}
-              aria-pressed={active}
-              aria-label={label}
-              disabled={!canConstrain}
-              title={
-                canConstrain ? `${label} — ${hint}` : 'Draw an entity first.'
-              }
-              onClick={() => onConstraintTool(active ? null : kind)}
-            >
-              <Icon size={14} aria-hidden="true" />
-            </button>
-          );
-        })}
-        <button
-          type="button"
-          disabled={!canConstrain || constraints.length === 0 || solving}
-          title={
-            constraints.length === 0
-              ? 'Add a constraint first.'
-              : 'Solve the sketch constraints and apply the result.'
-          }
-          onClick={onSolve}
-        >
-          <Play size={14} aria-hidden="true" />
-          <StableLabel reserve={['Solving…', 'Solve']}>
-            {solving ? 'Solving…' : 'Solve'}
-          </StableLabel>
-        </button>
-        {/* Always in the rail: the rail is centred, so a pill that came and
-            went re-centred every sketch tool button with it. */}
-        <span
-          className={`sketch-solve-pill${solveStatus ? '' : ' empty'}`}
-          data-tone={solveStatus?.tone}
-          role="status"
-        >
-          <StableLabel reserve={SOLVE_LABEL_RESERVE} align="center">
-            {solveStatus?.label ?? ''}
-          </StableLabel>
-        </span>
-        <span className="sketch-rail-divider" aria-hidden="true" />
-        <button
-          type="button"
-          className={construction ? 'active' : undefined}
-          aria-pressed={construction}
-          title="Toggle construction geometry"
-          onClick={() => onConstruction(!construction)}
-        >
-          <Construction size={14} aria-hidden="true" />
-          Construction
-        </button>
-        <button
-          type="button"
-          title="Find open endpoints and invalid profile geometry"
-          onClick={onDiagnostics}
-        >
-          <ScanSearch size={14} aria-hidden="true" />
-          Diagnostics
-        </button>
-        <button
-          type="button"
-          title="Extrude valid profiles"
-          onClick={onExtrude}
-        >
-          <Layers3 size={14} aria-hidden="true" />
-          Extrude
-        </button>
-        <span className="sketch-rail-divider" aria-hidden="true" />
-        <button
-          type="button"
-          className="sketch-rail-exit"
-          title="Finish Sketch"
-          onClick={onExit}
-        >
-          <Check size={14} aria-hidden="true" />
-          Finish Sketch
-        </button>
-      </div>
-
+        );
+      })}
+    </>
+  );
+  const solveButton = (
+    <>
+      <button
+        type="button"
+        disabled={!canConstrain || constraints.length === 0 || solving}
+        title={
+          constraints.length === 0
+            ? 'Add a constraint first.'
+            : 'Solve the sketch constraints and apply the result.'
+        }
+        onClick={onSolve}
+      >
+        <Play size={14} aria-hidden="true" />
+        <StableLabel reserve={['Solving…', 'Solve']}>
+          {solving ? 'Solving…' : 'Solve'}
+        </StableLabel>
+      </button>
+    </>
+  );
+  const solvePill = (
+    <>
+      {/* Always in the rail: the rail is centred, so a pill that came and
+          went re-centred every sketch tool button with it. */}
+      <span
+        className={`sketch-solve-pill${solveStatus ? '' : ' empty'}`}
+        data-tone={solveStatus?.tone}
+        role="status"
+      >
+        <StableLabel reserve={SOLVE_LABEL_RESERVE} align="center">
+          {solveStatus?.label ?? ''}
+        </StableLabel>
+      </span>
+    </>
+  );
+  const utilityTools = (
+    <>
+      <button
+        type="button"
+        className={construction ? 'active' : undefined}
+        aria-pressed={construction}
+        title="Toggle construction geometry"
+        onClick={() => onConstruction(!construction)}
+      >
+        <Construction size={14} aria-hidden="true" />
+        Construction
+      </button>
+      <button
+        type="button"
+        title="Find open endpoints and invalid profile geometry"
+        onClick={onDiagnostics}
+      >
+        <ScanSearch size={14} aria-hidden="true" />
+        Diagnostics
+      </button>
+      <button type="button" title="Extrude valid profiles" onClick={onExtrude}>
+        <Layers3 size={14} aria-hidden="true" />
+        Extrude
+      </button>
+    </>
+  );
+  const exitButton = (
+    <>
+      <button
+        type="button"
+        className="sketch-rail-exit"
+        title="Finish Sketch"
+        onClick={onExit}
+      >
+        <Check size={14} aria-hidden="true" />
+        Finish Sketch
+      </button>
+    </>
+  );
+  const palette = (
+    <>
       {paletteVisible ? (
         <aside
-          className={`sketch-palette${paletteOpen ? '' : ' collapsed'}`}
+          className={`sketch-palette${paletteOpen ? '' : ' collapsed'}${column ? ' column' : ''}`}
           aria-label="Sketch palette"
         >
           <button
@@ -488,6 +513,47 @@ export function SketchToolRail({
           ) : null}
         </aside>
       ) : null}
+    </>
+  );
+
+  if (column) {
+    return (
+      <>
+        <div
+          className="sketch-rail column"
+          role="toolbar"
+          aria-label="Sketch tools"
+        >
+          <div className="sketch-rail-group draw">{drawTools}</div>
+          <span className="sketch-rail-group-label">Constrain</span>
+          <div className="sketch-rail-group constrain">{constraintTools}</div>
+          <div className="sketch-rail-group solve">
+            {solveButton}
+            {solvePill}
+          </div>
+          <div className="sketch-rail-group utility">{utilityTools}</div>
+        </div>
+        {palette}
+      </>
+    );
+  }
+
+  return (
+    <>
+      <div className="sketch-rail" role="toolbar" aria-label="Sketch tools">
+        <span className="sketch-rail-group-label">Draw</span>
+        {drawTools}
+        <span className="sketch-rail-divider" aria-hidden="true" />
+        <span className="sketch-rail-group-label">Constrain</span>
+        {constraintTools}
+        {solveButton}
+        {solvePill}
+        <span className="sketch-rail-divider" aria-hidden="true" />
+        {utilityTools}
+        <span className="sketch-rail-divider" aria-hidden="true" />
+        {exitButton}
+      </div>
+      {palette}
     </>
   );
 }
