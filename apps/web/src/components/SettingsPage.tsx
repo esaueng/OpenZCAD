@@ -1215,6 +1215,24 @@ export function SettingsPage({
                   }
                 />
               </SettingRow>
+              <SettingRow
+                title="Workspace column (experimental)"
+                description="One floating column for tools, the model browser and history; the properties dock appears only while something is selected, and the status bar goes."
+                scope="This device"
+              >
+                <Toggle
+                  checked={settings.experiments.workspaceColumn}
+                  label="Workspace column"
+                  onChange={(workspaceColumn) =>
+                    patch({
+                      experiments: {
+                        ...settings.experiments,
+                        workspaceColumn
+                      }
+                    })
+                  }
+                />
+              </SettingRow>
             </Section>
           )}
 
