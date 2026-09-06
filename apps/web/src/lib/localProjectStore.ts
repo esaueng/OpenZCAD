@@ -1,3 +1,4 @@
+import type { BackupFile, ProjectBackup } from './projectBackup';
 import {
   isPurgeDue,
   MAX_LOCAL_CHECKPOINT_DOCUMENTS,
@@ -20,6 +21,8 @@ import {
   LOCAL_PROJECT_DATABASE_VERSION,
   LOCAL_PROJECT_DOCUMENT_STORE
 } from './localProjectSchema';
+
+const BACKUP_STORE_NAME = 'projectBackupFiles';
 
 const DATABASE_NAME = LOCAL_PROJECT_DATABASE_NAME;
 const STORE_NAME = LOCAL_PROJECT_DOCUMENT_STORE;
@@ -205,6 +208,8 @@ export function isLocalStorageBlockedError(
 }
 
 function createExpectedStores(database: IDBDatabase): void {
+  if (!database.objectStoreNames.contains(BACKUP_STORE_NAME))
+    database.createObjectStore(BACKUP_STORE_NAME);
   if (!database.objectStoreNames.contains(STORE_NAME)) {
     database.createObjectStore(STORE_NAME, { keyPath: 'projectId' });
   }
@@ -1226,6 +1231,7 @@ export function deleteLocalProject(projectId: string): Promise<void> {
   // an orphaned record would surface under a DIFFERENT project that later
   // claimed the same id.
   const storeNames = [
+    BACKUP_STORE_NAME,
     STORE_NAME,
     META_STORE_NAME,
     SYNC_STORE_NAME,
@@ -1680,4 +1686,59 @@ export function selectProjectDocument(
     default:
       return outcome.document;
   }
+}
+
+export function loadProjectBackupFiles(
+  projectId: string
+): Promise<BackupFile[]> {
+  return transaction<BackupFile[] | undefined>(
+    'readonly',
+    (store) => store.get(projectId) as IDBRequest<BackupFile[] | undefined>,
+    BACKUP_STORE_NAME
+  ).then((files) => files ?? []);
+}
+
+/** All companion data commits with the new document so a failed import has no partial project. */
+export async function saveImportedProject(
+  backup: ProjectBackup
+): Promise<void> {
+  const { backupFileBytes } = await import('./projectBackup');
+  const sources = (backup.sources ?? []).map((source) => ({
+    checksumSha256: source.sha256,
+    logicalBytes: source.logicalBytes,
+    body: new Blob([backupFileBytes(source)]),
+    createdAt: new Date().toISOString()
+  }));
+  await scopedTransaction(
+    'readwrite',
+    [
+      STORE_NAME,
+      SUMMARY_STORE_NAME,
+      CHECKPOINT_STORE_NAME,
+      BLOB_STORE_NAME,
+      BACKUP_STORE_NAME,
+      MEASUREMENT_STORE_NAME
+    ],
+    async (store) => {
+      const document = backup.document;
+      if (await settled(store(STORE_NAME).count(document.projectId)))
+        throw new Error('Imported project already exists.');
+      store(STORE_NAME).put(document);
+      store(SUMMARY_STORE_NAME).put(summarizeProjectDocument(document));
+      store(BACKUP_STORE_NAME).put(backup.files, document.projectId);
+      for (const source of sources) store(BLOB_STORE_NAME).put(source);
+      for (const state of backup.saveStates ?? []) {
+        const checkpoint = document.checkpoints.find(
+          (entry) => entry.checkpointId === state.checkpointId
+        )!;
+        store(CHECKPOINT_STORE_NAME).put({
+          ...checkpoint,
+          projectId: document.projectId,
+          document: withoutDerivedProjection(state.document)
+        });
+      }
+      if (backup.measurements)
+        store(MEASUREMENT_STORE_NAME).put(backup.measurements);
+    }
+  );
 }
