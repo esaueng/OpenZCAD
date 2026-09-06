@@ -271,7 +271,6 @@ import { ViewModeRail } from './components/ViewModeRail';
 import { Sidebar } from './components/Sidebar';
 import { TweakPanel } from './components/TweakPanel';
 import { WorkspaceTour } from './components/WorkspaceTour';
-import { StatusBar } from './components/StatusBar';
 import { StartScreen } from './components/StartScreen';
 import { StartupScreen } from './components/StartupScreen';
 import type { AuthConfigStatus } from './components/SettingsPage';
@@ -367,7 +366,6 @@ import {
 import { composeMoveTransform } from '@openzcad/viewport/move-transform';
 import { SELECTION_FILTERS } from '@openzcad/viewport/types';
 import { effectiveSelectionFilter } from './lib/selectionFilter';
-import { commandPromptText } from './lib/interaction/prompt';
 import {
   cylinderRadialFrame,
   isValidCylinderRadius,
@@ -2452,10 +2450,6 @@ export function App() {
   // sketches, the inspector. Tweak differs from View in one thing only: the
   // parameter guard below lets `parameter.set` commands through.
   const modelingLocked = viewMode || tweakMode;
-  // The experimental single-column layout; View and Tweak keep their own
-  // shells, which already subtract from the classic one.
-  const columnLayout =
-    appSettings.experiments.workspaceColumn && !modelingLocked;
   // The activity log in the column layout: opened from the dock's button or
   // the toast; the panel itself is App's so both can reach it.
   const [activityLogOpen, setActivityLogOpen] = useState(false);
@@ -12749,54 +12743,6 @@ export function App() {
   // View mode writes its own hints rather than filtering the build chain below.
   // Selecting a cylinder still arms the radius interaction even with its handle
   // disarmed, and "drag the radial handle" is a promise View mode cannot keep.
-  const viewModeHint = measuring
-    ? measurementDraft
-      ? `${measurementDraft.label} selected · pick the second target · Esc cancels`
-      : measurementMode === 'smart'
-        ? 'Smart measure · pick geometry · Shift+Click totals edges · M exits'
-        : measurementMode === 'distance'
-          ? 'Distance · pick the first target · centers resolve automatically'
-          : 'Angle · pick a straight edge or measured face direction'
-    : selectedTopology?.kind === 'face'
-      ? 'Face selected — Space faces it head-on'
-      : viewerBodies.length > 0
-        ? 'Click a body, face, or edge · Measure records what you pick'
-        : 'Ctrl+K commands · ? shortcuts';
-  const tweakModeHint = measuring
-    ? viewModeHint
-    : parameters.length > 0
-      ? 'Edit a parameter and press Enter · the model rebuilds exactly'
-      : 'This model has no parameters · Build mode is where they are defined';
-  const hint = viewMode
-    ? viewModeHint
-    : tweakMode
-      ? tweakModeHint
-      : (commandPromptText(
-          interaction,
-          tool !== null || selectedFeatureNodeId !== null
-        ) ??
-        (tool === 'sketch'
-          ? 'Drag to draw · R rectangle · C circle · P polygon · Enter finishes'
-          : tool === 'fillet' || tool === 'chamfer'
-            ? selectedEdges.length > 0
-              ? `${selectedEdges.length} edge${selectedEdges.length === 1 ? '' : 's'} selected · Shift+Click adjusts · Enter creates`
-              : 'Click edges with Shift or choose Select all edges · Esc cancels'
-            : tool
-              ? 'Enter creates · Esc cancels'
-              : selectedBodyIds.length >= 2
-                ? `${selectedBodyIds.length} bodies picked — U union · X subtract · I intersect`
-                : selectedTopology?.kind === 'face'
-                  ? 'Face selected — Space faces it head-on'
-                  : selectedTopology?.kind === 'edge'
-                    ? // Neither tool has a shortcut, so the rail is the only
-                      // route: name it the way the rail names itself.
-                      'Edge selected — Fillet or Chamfer in Feature tools'
-                    : selectedFeature
-                      ? 'Edit in the panel · Del deletes · Esc closes'
-                      : viewerBodies.length > 0
-                        ? 'Click a body, face, or edge · Shift+Click adds to selection'
-                        : 'Ctrl+K commands · ? shortcuts'));
-
   const paletteCommands: PaletteCommand[] = [
     // Modeling tools leave the palette entirely in the reading workspaces
     // rather than appearing greyed out: a list of things you cannot do is
@@ -13051,7 +12997,7 @@ export function App() {
   // card would say the same thing twice over the viewport. Only the card is
   // dropped: the entity editor, keypad and rail render in the same branch
   // and must stay.
-  const hideSketchToolCard = columnLayout && interaction.mode === 'sketch';
+  const hideSketchToolCard = interaction.mode === 'sketch';
   const inspectorActive =
     !modelingLocked &&
     !directMode &&
@@ -13272,7 +13218,7 @@ export function App() {
   }
 
   // The sketch rail floats over the viewport in the classic layout and sits
-  // in the column otherwise; one element, placed by `columnLayout`.
+  // in the column.
   const sketchRail =
     interaction.mode === 'sketch' ? (
       <SketchToolRail
@@ -13281,7 +13227,7 @@ export function App() {
         construction={sketchConstruction}
         settings={appSettings.sketching}
         units={doc.units}
-        paletteVisible={columnLayout || selectedSketchEntity === null}
+        paletteVisible
         canConstrain={Boolean(interaction.session.sketchId)}
         pendingConstraint={interaction.session.pendingConstraint}
         constraints={sketchConstraintItems}
@@ -13326,11 +13272,6 @@ export function App() {
             setStatus('Close a profile before starting Extrude.');
           }
         }}
-        onExit={() => {
-          dispatchInteraction({ type: 'exit-sketch' });
-          setStatus(`${editingSketchName} finished · sketch edits preserved.`);
-        }}
-        variant={columnLayout ? 'column' : 'float'}
       />
     ) : null;
   const modelBrowser = (
@@ -13383,11 +13324,7 @@ export function App() {
           const next = toggleSidebarSection(current, id);
           // Opening History in the column folds the tree above it so the
           // list gets the column's height; the tree reopens on its own row.
-          if (
-            columnLayout &&
-            id === 'history' &&
-            next.sidebarSections.history
-          ) {
+          if (id === 'history' && next.sidebarSections.history) {
             return {
               ...next,
               sidebarSections: {
@@ -13400,7 +13337,6 @@ export function App() {
           return next;
         })
       }
-      variant={columnLayout ? 'column' : 'dock'}
     />
   );
   const columnHeader =
@@ -13443,13 +13379,9 @@ export function App() {
       sketchRail
     ) : (
       <ToolBar
-        variant="column"
         activeTool={tool}
         availability={availability}
         onLaunchTool={launchTool}
-        onOpenSearch={() => setPaletteOpen(true)}
-        open
-        onOpenChange={() => {}}
       />
     );
   return (
@@ -13587,18 +13519,7 @@ export function App() {
               Drag across the plane for a positive or negative distance
             </span>
           </div>
-        ) : columnLayout ? null : (
-          <ToolBar
-            activeTool={tool}
-            availability={availability}
-            onLaunchTool={launchTool}
-            onOpenSearch={() => setPaletteOpen(true)}
-            open={panelState.toolPaletteOpen}
-            onOpenChange={(toolPaletteOpen) =>
-              setPanelState((current) => ({ ...current, toolPaletteOpen }))
-            }
-          />
-        )
+        ) : null
       }
       sidebar={
         viewMode ? null : tweakMode ? (
@@ -13624,12 +13545,10 @@ export function App() {
                 : null
             }
           />
-        ) : columnLayout ? (
+        ) : (
           <WorkspaceColumn header={columnHeader} tools={columnTools}>
             {modelBrowser}
           </WorkspaceColumn>
-        ) : (
-          modelBrowser
         )
       }
       viewer={
@@ -13694,9 +13613,9 @@ export function App() {
             moveCommitHold={moveCommitHold}
             appearancePreview={bodyAppearancePreview}
             hideViewerToolbar={false}
-            dockLayout={columnLayout}
+            dockLayout={!modelingLocked}
             dockExtras={
-              columnLayout ? (
+              !modelingLocked ? (
                 <ViewportDockExtras
                   selectionFilter={selectionFilter}
                   selectionFilterIsAutomatic={manualSelectionFilter === null}
@@ -13930,11 +13849,12 @@ export function App() {
                       onAction={handleSelectionAction}
                       onEditCulprit={handleEditCulpritFeature}
                       {...(keepLastValid ? { keepLastValid } : {})}
+                      // Never up in sketch mode (the column header names the
+                      // sketch), so a close is always a clear.
                       onClose={() => {
                         if (cancelPendingRegionExtrusion()) return;
                         if (
                           interaction.mode !== 'idle' &&
-                          interaction.mode !== 'sketch' &&
                           interaction.phase === 'dragging'
                         ) {
                           cancelDirectManipulationRef.current?.();
@@ -13942,16 +13862,10 @@ export function App() {
                             handleEdgeCancel();
                           }
                         }
-                        dispatchInteraction({
-                          type:
-                            interaction.mode === 'sketch'
-                              ? 'exit-sketch'
-                              : 'clear'
-                        });
+                        dispatchInteraction({ type: 'clear' });
                       }}
                     />
                   )}
-                  {!columnLayout && sketchRail}
                   {interaction.mode === 'sketch' && selectedSketchEntity && (
                     <SketchEntityEditor
                       key={selectedSketchEntity.id}
@@ -14761,52 +14675,31 @@ export function App() {
       }
       assistantHidden={assistantHidden}
       assistantCollapsed={assistantCollapsed}
-      layout={columnLayout ? 'column' : 'classic'}
       readout={
-        columnLayout ? (
-          <>
-            <WorkspaceReadout
-              status={visibleStatus}
-              statusAt={statusEntry.at}
-              statusSticky={statusEntry.sticky || !exactGeometryReady}
-              tone={tone}
-              muted={contextualToolCard !== null && !hideSketchToolCard}
-              logOpen={activityLogOpen}
-              onToggleLog={() => setActivityLogOpen((open) => !open)}
-            />
-            <StatusActivityLog
-              id={activityLogId}
-              open={activityLogOpen}
-              status={visibleStatus}
-              tone={tone}
-              triggerRef={activityLogTriggerRef}
-              onClose={(restoreFocus) => {
-                setActivityLogOpen(false);
-                if (restoreFocus) {
-                  activityLogTriggerRef.current?.focus();
-                }
-              }}
-            />
-          </>
-        ) : null
-      }
-      statusBar={
-        <StatusBar
-          status={visibleStatus}
-          statusAt={statusEntry.at}
-          statusSticky={statusEntry.sticky || !exactGeometryReady}
-          tone={tone}
-          hint={hint}
-          projectName={doc.name}
-          bodyCount={viewerBodies.length}
-          featureCount={features.length}
-          warningCount={warnings.length}
-          documentVersion={doc.version}
-          saveState={presentedSaveState}
-          selectionFilter={selectionFilter}
-          selectionFilterIsAutomatic={manualSelectionFilter === null}
-          onSelectionFilter={setManualSelectionFilter}
-        />
+        <>
+          <WorkspaceReadout
+            status={visibleStatus}
+            statusAt={statusEntry.at}
+            statusSticky={statusEntry.sticky || !exactGeometryReady}
+            tone={tone}
+            muted={contextualToolCard !== null && !hideSketchToolCard}
+            logOpen={activityLogOpen}
+            onToggleLog={() => setActivityLogOpen((open) => !open)}
+          />
+          <StatusActivityLog
+            id={activityLogId}
+            open={activityLogOpen}
+            status={visibleStatus}
+            tone={tone}
+            triggerRef={activityLogTriggerRef}
+            onClose={(restoreFocus) => {
+              setActivityLogOpen(false);
+              if (restoreFocus) {
+                activityLogTriggerRef.current?.focus();
+              }
+            }}
+          />
+        </>
       }
       overlays={
         <>

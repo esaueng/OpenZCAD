@@ -122,8 +122,7 @@ export function ImportProgressCard({
   // superseded rebuild, or a cancel leaves it exactly where it stopped, which
   // says the file was stored and read and something later is what stopped it.
   const bodyLanded =
-    outcome !== null &&
-    (outcome.tone === 'ok' || outcome.action === 'archive');
+    outcome !== null && (outcome.tone === 'ok' || outcome.action === 'archive');
   const fraction = bodyLanded
     ? 1
     : importOverallFraction(run.phases, run.progress);
@@ -143,7 +142,11 @@ export function ImportProgressCard({
     <section className="import-card" aria-label="File import">
       <div className="import-card-head">
         <span className="import-card-glyph" aria-hidden="true">
-          {outcome ? <i className={`import-dot ${outcome.tone}`} /> : <i className="import-spin" />}
+          {outcome ? (
+            <i className={`import-dot ${outcome.tone}`} />
+          ) : (
+            <i className="import-spin" />
+          )}
         </span>
         <span className="import-card-name" title={run.fileName}>
           {run.fileName}
@@ -153,9 +156,7 @@ export function ImportProgressCard({
           className="import-card-close"
           // While the import is running this hides the card and nothing else.
           title={
-            outcome
-              ? 'Dismiss'
-              : 'Hide this card. The import keeps running.'
+            outcome ? 'Dismiss' : 'Hide this card. The import keeps running.'
           }
           aria-label={
             outcome ? 'Dismiss import status' : 'Hide import progress'

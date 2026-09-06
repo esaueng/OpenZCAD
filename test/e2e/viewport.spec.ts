@@ -203,7 +203,7 @@ test('P toggles the camera projection', async ({ page }) => {
   await expect(orthoButton).toHaveAttribute('aria-pressed', 'false');
   await page.keyboard.press('p');
   await expect(orthoButton).toHaveAttribute('aria-pressed', 'true');
-  await expect(page.locator('.status-bar')).toContainText(
+  await expect(page.getByRole('contentinfo')).toContainText(
     'Projection: orthographic'
   );
   await orthoButton.click();
@@ -1153,13 +1153,15 @@ test('double-clicking a face selects its whole body', async ({ page }) => {
   await expectBodyCount(page, 1);
   await page.keyboard.press('Escape');
 
-  const filters = page.getByRole('group', { name: 'Selection filter' });
-  const faceFilter = filters.getByRole('button', {
-    name: 'Face',
-    exact: true
-  });
-  await faceFilter.click();
-  await expect(faceFilter).toHaveAttribute('aria-pressed', 'true');
+  // The dock's filter chip cycles; click until it reads Face.
+  const filterChip = page.getByRole('button', { name: /^Selection filter:/ });
+  for (let step = 0; step < 8; step += 1) {
+    if ((await filterChip.getAttribute('aria-label'))?.includes(': Face')) {
+      break;
+    }
+    await filterChip.click();
+  }
+  await expect(filterChip).toHaveAttribute('aria-label', /: Face/);
 
   const canvas = page.locator('.viewer-host canvas');
   const bounds = await canvas.boundingBox();
@@ -1184,7 +1186,7 @@ test('double-clicking a face selects its whole body', async ({ page }) => {
     clientY: spot.y
   });
   await expect(label).toHaveText('Box Body');
-  await expect(faceFilter).toHaveAttribute('aria-pressed', 'true');
+  await expect(filterChip).toHaveAttribute('aria-label', /: Face/);
 });
 
 test('double-clicking a filleted rim takes the whole run of edges', async ({
@@ -1314,10 +1316,8 @@ test('the selection filter changes what a click takes', async ({ page }) => {
   await expectBodyCount(page, 1);
   await page.keyboard.press('Escape');
 
-  const filters = page.getByRole('group', { name: 'Selection filter' });
-  await expect(
-    filters.getByRole('button', { name: 'Any', exact: true })
-  ).toHaveAttribute('aria-pressed', 'true');
+  const filterChip = page.getByRole('button', { name: /^Selection filter:/ });
+  await expect(filterChip).toHaveAttribute('aria-label', /: Any/);
 
   const canvas = page.locator('.viewer-host canvas');
   const bounds = await canvas.boundingBox();
@@ -1335,30 +1335,36 @@ test('the selection filter changes what a click takes', async ({ page }) => {
   await expect(label).toContainText('face');
 
   // Narrowing to bodies resolves the same click to the whole solid instead.
-  await filters.getByRole('button', { name: 'Body', exact: true }).click();
+  // The dock's chip cycles the filter; step it round to Body.
+  const cycleTo = async (name: string) => {
+    for (let step = 0; step < 8; step += 1) {
+      if ((await filterChip.getAttribute('aria-label'))?.includes(name)) {
+        return;
+      }
+      await filterChip.click();
+    }
+  };
+  await cycleTo(': Body');
   await page.mouse.click(spot.x, spot.y);
   await expect(label).toHaveText('Box Body');
 
-  // Clicking the active chip hands the filter back rather than re-asserting.
-  await filters.getByRole('button', { name: 'Body', exact: true }).click();
-  await expect(
-    filters.getByRole('button', { name: 'Any', exact: true })
-  ).toHaveAttribute('aria-pressed', 'true');
+  // Round again to Any before the keyboard check below.
+  await cycleTo(': Any');
+  await expect(filterChip).toHaveAttribute('aria-label', /: Any/);
 
   // Q steps one along from the filter in force. Pressed here, with nothing
   // focused, it moves off Any rather than reasserting it.
   await page.keyboard.press('q');
-  await expect(
-    filters.getByRole('button', { name: 'Body', exact: true })
-  ).toHaveAttribute('aria-pressed', 'true');
-  await filters.getByRole('button', { name: 'Body', exact: true }).click();
+  await expect(filterChip).toHaveAttribute('aria-label', /: Body/);
+  // Round the cycle to hand the filter back to the tool.
+  await cycleTo(': Any');
+  await expect(filterChip).toHaveClass(/automatic/);
 
   // Arming Fillet narrows to edges on its own, and shows that the choice is
   // the tool's rather than the user's.
   await page.getByRole('button', { name: /^Fillet/ }).click();
-  const edgeChip = filters.getByRole('button', { name: 'Edge', exact: true });
-  await expect(edgeChip).toHaveAttribute('aria-pressed', 'true');
-  await expect(edgeChip).toHaveClass(/automatic/);
+  await expect(filterChip).toHaveAttribute('aria-label', /: Edge/);
+  await expect(filterChip).toHaveClass(/automatic/);
 });
 
 test('dragging a box selects several bodies at once', async ({ page }) => {

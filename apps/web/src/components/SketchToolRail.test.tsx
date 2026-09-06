@@ -30,7 +30,6 @@ function renderRail(
     onSolve: vi.fn(),
     onDiagnostics: vi.fn(),
     onExtrude: vi.fn(),
-    onExit: vi.fn(),
     ...overrides
   };
   return { ...render(<SketchToolRail {...props} />), props };
@@ -59,6 +58,8 @@ describe('SketchToolRail', () => {
     const user = userEvent.setup();
     const onSettings = vi.fn();
     renderRail({ onSettings });
+    // The settings are a disclosure under the tools, closed to begin with.
+    await user.click(screen.getByRole('button', { name: /Sketch palette/ }));
 
     await user.click(screen.getByLabelText('Snap to grid'));
     expect(onSettings).toHaveBeenLastCalledWith(
@@ -72,15 +73,6 @@ describe('SketchToolRail', () => {
         geometrySnapEnabled: false
       })
     );
-  });
-
-  it('keeps Finish Sketch permanently available', async () => {
-    const user = userEvent.setup();
-    const onExit = vi.fn();
-    renderRail({ onExit });
-
-    await user.click(screen.getByRole('button', { name: 'Finish Sketch' }));
-    expect(onExit).toHaveBeenCalledOnce();
   });
 
   it('arms a constraint tool and disarms it on a second click', async () => {
@@ -161,6 +153,7 @@ describe('SketchToolRail', () => {
         }
       ]
     });
+    await user.click(screen.getByRole('button', { name: /Sketch palette/ }));
 
     await user.click(
       screen.getByRole('button', {
@@ -184,6 +177,7 @@ describe('SketchToolRail', () => {
         }
       ]
     });
+    await user.click(screen.getByRole('button', { name: /Sketch palette/ }));
 
     await user.click(
       screen.getByRole('button', {
@@ -197,10 +191,9 @@ describe('SketchToolRail', () => {
     expect(Number.isFinite(anchor.y)).toBe(true);
   });
 
-  it('lays the same tools out as a column with the settings folded away', () => {
-    const { container } = renderRail({ variant: 'column' });
+  it('lays the tools out as a column with the settings folded away', () => {
+    const { container } = renderRail();
     const rail = screen.getByRole('toolbar', { name: 'Sketch tools' });
-    expect(rail.classList.contains('column')).toBe(true);
     expect(rail.querySelector('.sketch-rail-group.draw')).not.toBeNull();
     expect(rail.querySelector('.sketch-rail-group.constrain')).not.toBeNull();
     // Every draw tool is still there, by the same names the float uses.
@@ -213,9 +206,7 @@ describe('SketchToolRail', () => {
       screen.queryByRole('button', { name: 'Finish Sketch' })
     ).not.toBeInTheDocument();
     // The settings start folded: they are a disclosure here, not a palette.
-    expect(
-      container.querySelector('.sketch-palette.column.collapsed')
-    ).not.toBeNull();
+    expect(container.querySelector('.sketch-palette.collapsed')).not.toBeNull();
     expect(screen.queryByLabelText('Snap to grid')).not.toBeInTheDocument();
   });
 });

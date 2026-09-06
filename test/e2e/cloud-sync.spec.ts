@@ -786,7 +786,8 @@ test('syncs across two devices and preserves the losing side of a conflict', asy
       name: 'This project changed in two places'
     });
     await expect(conflict).toBeVisible({ timeout: SYNC_BUDGET_MS });
-    await expect(pageB.locator('.status-groups')).toContainText('syncConflict');
+    // The top bar's save state is the one sync readout now.
+    await expect(pageB.locator('.save-state')).toContainText('Conflict');
     // A lower overlay may mount after async conflict detection. The account
     // dialog remains painted above it and must not become inert just because
     // the lower overlay registered its focus trap later.
