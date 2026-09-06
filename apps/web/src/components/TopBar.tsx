@@ -420,7 +420,13 @@ export function TopBar({
             }`}
           >
             <FolderOpen size={14} aria-hidden="true" />
-            File{artifacts.length > 0 ? ` ${artifacts.length}` : ''}
+            File
+            {artifacts.length > 0 ? (
+              <>
+                {' '}
+                <span className="file-menu-count">{artifacts.length}</span>
+              </>
+            ) : null}
           </summary>
           <div className="topbar-menu-panel">
             {onImportProject && (
