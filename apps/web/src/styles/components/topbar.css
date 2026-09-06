@@ -46,6 +46,22 @@
   text-transform: uppercase;
 }
 
+/* Stored-file count on the File menu: a badge, so it does not read as part
+   of the word. */
+.file-menu-count {
+  display: inline-grid;
+  place-items: center;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  color: var(--color-text-muted);
+  background: var(--color-surface-2);
+  border-radius: 999px;
+  font-family: var(--font-mono);
+  font-size: var(--fs-mini);
+  line-height: 1;
+}
+
 .topbar-divider {
   width: 1px;
   height: 20px;
@@ -494,7 +510,6 @@
   font-weight: var(--fw-medium);
   line-height: 1;
 }
-
 
 .spin {
   animation: spin 0.9s linear infinite;
