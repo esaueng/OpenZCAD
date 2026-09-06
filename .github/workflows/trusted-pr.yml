@@ -1,0 +1,119 @@
+name: Trusted PR quality
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  select:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      trusted: ${{ steps.policy.outputs.trusted }}
+    steps:
+      # This policy runs before checkout, from the caller's immutable workflow pin.
+      - name: Select trusted PRs
+        id: policy
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          REPOSITORY: ${{ github.repository }}
+          HEAD_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name }}
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+          ACTOR: ${{ github.actor }}
+          TRIGGERING_ACTOR: ${{ github.triggering_actor }}
+          REF: ${{ github.ref }}
+        run: |
+          trusted=false
+          if [[ "$EVENT_NAME" == pull_request &&
+                "$REPOSITORY" == esaueng/OpenZCAD &&
+                "$HEAD_REPOSITORY" == "$REPOSITORY" &&
+                "$PR_AUTHOR" == petergstfsn &&
+                "$ACTOR" == petergstfsn &&
+                "$TRIGGERING_ACTOR" == petergstfsn &&
+                "$REF" =~ ^refs/pull/[0-9]+/merge$ ]]; then
+            trusted=true
+          fi
+          echo "trusted=$trusted" >> "$GITHUB_OUTPUT"
+
+  vps:
+    needs: select
+    if: needs.select.outputs.trusted == 'true'
+    runs-on:
+      group: ci-trusted-main
+      labels: ci-small
+    timeout-minutes: 15
+    steps:
+      - name: Verify runner boundary
+        run: |
+          test "$(id -u)" != 0
+          test ! -w /opt/ci-runner/bin/Runner.Listener
+          test ! -w /etc/systemd/system/ci-runner.service
+          docker info --format '{{json .SecurityOptions}}' | grep -q rootless
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 22
+      - name: Enable package manager shims
+        run: |
+          mkdir -p "$HOME/.local/bin"
+          corepack enable --install-directory "$HOME/.local/bin"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      - name: Install and measure lightweight checks
+        run: |
+          SECONDS=0
+          corepack pnpm install --frozen-lockfile
+          echo "Install: ${SECONDS}s" >> "$GITHUB_STEP_SUMMARY"
+          SECONDS=0
+          corepack pnpm lint
+          echo "Lint: ${SECONDS}s" >> "$GITHUB_STEP_SUMMARY"
+          SECONDS=0
+          corepack pnpm typecheck
+          echo "Typecheck: ${SECONDS}s" >> "$GITHUB_STEP_SUMMARY"
+
+  hosted:
+    needs: select
+    if: needs.select.outputs.trusted == 'false'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6
+        with:
+          version: 10.8.0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm lint
+      - run: pnpm typecheck
+
+  complete:
+    needs: [select, vps, hosted]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Require the selected checks to succeed
+        env:
+          SELECT_RESULT: ${{ needs.select.result }}
+          TRUSTED: ${{ needs.select.outputs.trusted }}
+          VPS_RESULT: ${{ needs.vps.result }}
+          HOSTED_RESULT: ${{ needs.hosted.result }}
+        run: |
+          test "$SELECT_RESULT" = success
+          if [[ "$TRUSTED" == true ]]; then
+            test "$VPS_RESULT" = success
+            test "$HOSTED_RESULT" = skipped
+          elif [[ "$TRUSTED" == false ]]; then
+            test "$HOSTED_RESULT" = success
+            test "$VPS_RESULT" = skipped
+          else
+            exit 1
+          fi
