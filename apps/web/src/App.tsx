@@ -258,7 +258,11 @@ import {
 } from './lib/tools';
 import { AppShell } from './components/AppShell';
 import { WorkspaceColumn } from './components/WorkspaceColumn';
-import { WorkspaceReadout } from './components/WorkspaceReadout';
+import {
+  ViewportDockExtras,
+  WorkspaceReadout
+} from './components/WorkspaceReadout';
+import { StatusActivityLog } from './components/StatusActivityLog';
 import { PanelResizer } from './components/PanelResizer';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { TopBar } from './components/TopBar';
@@ -2452,6 +2456,11 @@ export function App() {
   // shells, which already subtract from the classic one.
   const columnLayout =
     appSettings.experiments.workspaceColumn && !modelingLocked;
+  // The activity log in the column layout: opened from the dock's button or
+  // the toast; the panel itself is App's so both can reach it.
+  const [activityLogOpen, setActivityLogOpen] = useState(false);
+  const activityLogTriggerRef = useRef<HTMLButtonElement | null>(null);
+  const activityLogId = 'workspace-activity-log';
   workspaceModeRef.current = resolvedWorkspaceMode;
   // Conditions that lock the document whatever workspace is showing. Tweak's
   // parameter edits answer to these too: a second tab or a read-only
@@ -13685,6 +13694,28 @@ export function App() {
             moveCommitHold={moveCommitHold}
             appearancePreview={bodyAppearancePreview}
             hideViewerToolbar={false}
+            dockLayout={columnLayout}
+            dockExtras={
+              columnLayout ? (
+                <ViewportDockExtras
+                  selectionFilter={selectionFilter}
+                  selectionFilterIsAutomatic={manualSelectionFilter === null}
+                  onSelectionFilter={setManualSelectionFilter}
+                  snap={
+                    interaction.mode === 'sketch'
+                      ? {
+                          spacing: appSettings.sketching.linearSnap,
+                          units: doc.units,
+                          enabled: appSettings.sketching.snapEnabled
+                        }
+                      : null
+                  }
+                  logOpen={activityLogOpen}
+                  onToggleLog={() => setActivityLogOpen((open) => !open)}
+                  logTriggerRef={activityLogTriggerRef}
+                />
+              ) : null
+            }
             viewMode={modelingLocked}
             selectionChip={selectionChip}
             onClearSelection={clearSelection}
@@ -14733,26 +14764,30 @@ export function App() {
       layout={columnLayout ? 'column' : 'classic'}
       readout={
         columnLayout ? (
-          <WorkspaceReadout
-            status={visibleStatus}
-            statusAt={statusEntry.at}
-            statusSticky={statusEntry.sticky || !exactGeometryReady}
-            tone={tone}
-            hint={hint}
-            muted={contextualToolCard !== null && !hideSketchToolCard}
-            selectionFilter={selectionFilter}
-            selectionFilterIsAutomatic={manualSelectionFilter === null}
-            onSelectionFilter={setManualSelectionFilter}
-            snap={
-              interaction.mode === 'sketch'
-                ? {
-                    spacing: appSettings.sketching.linearSnap,
-                    units: doc.units,
-                    enabled: appSettings.sketching.snapEnabled
-                  }
-                : null
-            }
-          />
+          <>
+            <WorkspaceReadout
+              status={visibleStatus}
+              statusAt={statusEntry.at}
+              statusSticky={statusEntry.sticky || !exactGeometryReady}
+              tone={tone}
+              muted={contextualToolCard !== null && !hideSketchToolCard}
+              logOpen={activityLogOpen}
+              onToggleLog={() => setActivityLogOpen((open) => !open)}
+            />
+            <StatusActivityLog
+              id={activityLogId}
+              open={activityLogOpen}
+              status={visibleStatus}
+              tone={tone}
+              triggerRef={activityLogTriggerRef}
+              onClose={(restoreFocus) => {
+                setActivityLogOpen(false);
+                if (restoreFocus) {
+                  activityLogTriggerRef.current?.focus();
+                }
+              }}
+            />
+          </>
         ) : null
       }
       statusBar={

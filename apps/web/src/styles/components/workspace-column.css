@@ -407,112 +407,146 @@
 
 /* ── Viewport furniture in the column layout ── */
 
-/* The status bar's jobs, over the viewport, on one line right of the scale
-   bar: the readout first, the message centred in what is left, and the
-   right-hand end kept clear for the viewer's grid readout and the cube. */
-.workspace-readout {
+/* ── The dock and the toast ──
+   One centred bar at the foot of the canvas holds the viewer bar, the
+   selection filter, the sketch snap, the activity log and the scale. What
+   the status bar used to say arrives as a toast above it and goes quiet
+   on its own. Square-ish corners: it is furniture, not a pill. */
+.viewport-dock {
   position: absolute;
-  left: calc(var(--column-w) + 14px);
-  /* Stops short of the centred viewer bar, whatever the column's width. */
-  right: calc(50% + 134px);
-  bottom: 10px;
+  left: 50%;
+  bottom: 8px;
   z-index: var(--z-viewer-overlay);
   display: flex;
   align-items: center;
-  gap: 14px;
-  pointer-events: none;
+  gap: 6px;
+  height: 40px;
+  padding: 0 8px;
+  background: var(--color-surface);
+  border: var(--border-strong);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-2);
+  transform: translateX(-50%);
 }
 
-/* The message, the activity log's handle, leads the line — short: it
-   truncates past a few words and keeps the full text in its tooltip, so it
-   never runs under the viewer bar. */
-.workspace-readout-hint {
-  flex: 0 1 auto;
-  min-width: 0;
-  max-width: 260px;
-  padding: 2px 8px;
-  margin-left: -8px;
-  color: var(--color-text-subtle);
+/* Inside the dock the viewer bar is a row of buttons, nothing more. */
+.viewport-dock .viewer-rail {
+  position: static;
+  flex-direction: row;
+  padding: 0;
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  transform: none;
+}
+
+.viewport-dock-divider {
+  width: 1px;
+  height: 20px;
+  background: var(--color-border);
+}
+
+.viewport-dock-filter,
+.viewport-dock-snap {
+  display: inline-flex;
+  align-items: center;
+  height: 26px;
+  padding: 0 9px;
+  color: var(--color-text-muted);
+  background: var(--color-bg);
+  border: var(--border-thin);
+  border-radius: var(--radius-sm);
+  font-size: var(--fs-mini);
+  white-space: nowrap;
+}
+
+.viewport-dock-filter.automatic {
+  color: var(--color-accent-hi);
+}
+
+.viewport-dock-filter:hover {
+  color: var(--color-text);
+  border-color: var(--color-border-strong);
+}
+
+.viewport-dock-log {
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  color: var(--color-text-muted);
   border: 1px solid transparent;
   border-radius: var(--radius-sm);
-  font-size: var(--fs-xs);
-  text-align: left;
-  pointer-events: auto;
 }
 
-.workspace-readout-hint > span {
-  display: block;
+.viewport-dock-log:hover,
+.viewport-dock-log[aria-expanded='true'] {
+  color: var(--color-text);
+  background: var(--color-surface-hover);
+  border-color: var(--color-border-strong);
+}
+
+/* The scale bar as the dock's last segment. */
+.viewport-dock .viewport-scale-indicator {
+  position: static;
+  margin-left: 2px;
+  transform: none;
+}
+
+/* The toast: the live message, centred above the dock. */
+.workspace-toast {
+  position: absolute;
+  left: 50%;
+  bottom: 58px;
+  z-index: var(--z-viewer-overlay);
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  max-width: min(560px, calc(100% - 40px));
+  height: 28px;
+  padding: 0 12px;
+  color: var(--color-text-muted);
+  background: color-mix(in srgb, var(--color-surface-2) 94%, transparent);
+  border: var(--border-thin);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-2);
+  font-size: var(--fs-xs);
+  transform: translateX(-50%);
+  animation: oz-fade var(--dur-fast) var(--ease-out);
+}
+
+.workspace-toast > span {
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.workspace-readout-hint.empty {
-  /* Nothing to say: a 26px target that still opens the log on hover. */
-  min-width: 26px;
-  opacity: 0.5;
+.workspace-toast > i {
+  width: 6px;
+  height: 6px;
+  flex: 0 0 auto;
+  border-radius: 999px;
+  background: var(--color-success);
 }
 
-.workspace-readout-hint:hover,
-.workspace-readout-hint[aria-expanded='true'] {
-  color: var(--color-accent-hi);
-  background: color-mix(in srgb, var(--color-surface) 70%, transparent);
-  border-color: var(--color-viewport-border);
+.workspace-toast.warning > i {
+  background: var(--color-warning);
 }
 
-.workspace-readout-filter {
-  padding: 0 4px;
-  color: var(--color-viewport-text-muted);
-  border-radius: var(--radius-sm);
-  font: inherit;
-  pointer-events: auto;
+.workspace-toast.running > i {
+  background: var(--color-accent);
 }
 
-.workspace-readout-filter.automatic {
-  color: var(--color-accent-hi);
-}
-
-.workspace-readout-filter:hover {
+.workspace-toast:hover {
   color: var(--color-text);
-  background: color-mix(in srgb, var(--color-surface) 70%, transparent);
+  border-color: var(--color-border-strong);
 }
 
 /* The log panel rose above a status bar; there is none here. It is portaled
    out of the workspace, so the layout is read off the root. */
 :root:has(.workspace.column-layout) .status-log-panel {
   bottom: 0;
-}
-
-.workspace-readout-hint.warning {
-  color: var(--color-warning);
-}
-
-.workspace-readout-hint.running {
-  color: var(--color-accent-hi);
-}
-
-.workspace-readout-meta {
-  flex: 0 0 auto;
-  display: flex;
-  gap: 12px;
-  padding-bottom: 1px;
-  color: var(--color-viewport-text-muted);
-  font-size: var(--fs-mini);
-  white-space: nowrap;
-}
-
-/* The viewer bar (undo/redo and the viewport toggles) sits against the
-   bottom edge, centred on the canvas rather than the window: the column
-   takes the left edge, and a docked inspector takes the right. */
-.workspace.column-layout .viewer-rail {
-  top: auto;
-  right: auto;
-  bottom: 0;
-  left: 50%;
-  flex-direction: row;
-  border-bottom: 0;
-  border-radius: var(--radius-md) var(--radius-md) 0 0;
-  transform: translateX(-50%);
 }
 
 /* The bottom-right corner holds the cube with undo/redo and, under it, the
@@ -534,15 +568,6 @@
   --tool-card-room: calc(100% - var(--column-w) - var(--context-w) - 50px);
   left: calc(var(--column-w) + 20px + var(--tool-card-room) / 2);
   width: max(280px, min(680px, var(--tool-card-room)));
-}
-
-/* The viewer bar is dead centre; the scale bar sits midway between the
-   bar's right edge (bar ≈ 244px wide) and the cube (≈ 170px, in the corner). */
-.workspace.column-layout .viewport-scale-indicator {
-  left: calc(50% + 122px + (50% - 122px - 176px) / 2);
-  right: auto;
-  bottom: 8px;
-  transform: translateX(-50%);
 }
 
 /* ── The live dimension at the cursor ── */
@@ -613,9 +638,5 @@
   .tool-palette.column .palette-grid,
   .sketch-rail-group.draw {
     grid-template-columns: repeat(3, minmax(0, 1fr));
-  }
-
-  .workspace.column-layout .workspace-readout {
-    right: 200px;
   }
 }

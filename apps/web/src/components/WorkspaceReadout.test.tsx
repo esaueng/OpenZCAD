@@ -1,58 +1,64 @@
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { createRef } from 'react';
 import { describe, expect, it, vi } from 'vitest';
-import { WorkspaceReadout } from './WorkspaceReadout';
+import { ViewportDockExtras, WorkspaceReadout } from './WorkspaceReadout';
 
 describe('WorkspaceReadout', () => {
-  it('shows the live status, and the hint once it goes quiet', () => {
+  it('shows the live status as a toast that opens the activity log', async () => {
+    const user = userEvent.setup();
+    const onToggleLog = vi.fn();
     render(
       <WorkspaceReadout
         status="Fillet added"
         statusAt={Date.now()}
         tone="ready"
-        hint="Click a face"
-        snap={null}
-        selectionFilter="any"
-        selectionFilterIsAutomatic={false}
-        onSelectionFilter={vi.fn()}
+        logOpen={false}
+        onToggleLog={onToggleLog}
       />
     );
     expect(screen.getByRole('status')).toHaveTextContent('Fillet added');
-    // The message opens the activity log, as the status bar's did.
-    expect(
-      screen.getByRole('button', { name: /Open activity log/ })
-    ).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: /Open activity log/ }));
+    expect(onToggleLog).toHaveBeenCalledTimes(1);
   });
 
-  it('keeps only the corner facts while a tool card carries the message', () => {
-    render(
+  it('shows nothing while a tool card carries the message, or with none', () => {
+    const { rerender } = render(
       <WorkspaceReadout
         status="The resulting body wouldn't be valid."
         tone="warning"
-        hint="Try another value"
-        snap={{ spacing: 1, units: 'mm', enabled: true }}
         muted
-        selectionFilter="any"
-        selectionFilterIsAutomatic={false}
-        onSelectionFilter={vi.fn()}
+        logOpen={false}
+        onToggleLog={vi.fn()}
       />
     );
-    expect(screen.getByRole('status')).toHaveTextContent('');
-    expect(screen.getByText('Snap 1 mm')).toBeInTheDocument();
-  });
-
-  it('cycles the selection filter from the corner', async () => {
-    const user = userEvent.setup();
-    const onSelectionFilter = vi.fn();
-    render(
+    expect(screen.queryByRole('status')).not.toBeInTheDocument();
+    rerender(
       <WorkspaceReadout
         status=""
         tone="ready"
-        hint={null}
-        snap={null}
+        logOpen={false}
+        onToggleLog={vi.fn()}
+      />
+    );
+    expect(screen.queryByRole('status')).not.toBeInTheDocument();
+  });
+});
+
+describe('ViewportDockExtras', () => {
+  it('cycles the selection filter and opens the log from the dock', async () => {
+    const user = userEvent.setup();
+    const onSelectionFilter = vi.fn();
+    const onToggleLog = vi.fn();
+    render(
+      <ViewportDockExtras
         selectionFilter="any"
         selectionFilterIsAutomatic
         onSelectionFilter={onSelectionFilter}
+        snap={{ spacing: 1, units: 'mm', enabled: true }}
+        logOpen={false}
+        onToggleLog={onToggleLog}
+        logTriggerRef={createRef<HTMLButtonElement>()}
       />
     );
     await user.click(
@@ -60,5 +66,8 @@ describe('WorkspaceReadout', () => {
     );
     expect(onSelectionFilter).toHaveBeenCalledTimes(1);
     expect(onSelectionFilter.mock.calls[0]?.[0]).not.toBe('any');
+    expect(screen.getByText('Snap 1 mm')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Open activity log' }));
+    expect(onToggleLog).toHaveBeenCalledTimes(1);
   });
 });
