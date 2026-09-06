@@ -63,9 +63,6 @@ export function ToolBar({
               onClick={() => onLaunchTool(tool)}
             >
               {meta.icon}
-              {variant === 'column' && (
-                <span className="palette-item-label">{meta.label}</span>
-              )}
             </button>
           );
         })}
