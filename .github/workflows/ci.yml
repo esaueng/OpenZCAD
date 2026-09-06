@@ -15,7 +15,11 @@ permissions:
   contents: read
 
 jobs:
-  validate:
+  quality:
+    # Runner access is granted only to this reviewed immutable workflow version.
+    uses: esaueng/OpenZCAD/.github/workflows/trusted-pr.yml@b6184e96475fa47be22e72750e16cf439459d5b4
+
+  validation:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -85,8 +89,6 @@ jobs:
           node-version: 22
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      - run: pnpm lint
-      - run: pnpm typecheck
       # The root command runs both the Node and web Vitest projects.
       - run: pnpm test
       # Keep exact Remus/OpenCascade STEP parity in the critical beta gate.
@@ -103,6 +105,21 @@ jobs:
           name: bundle-size-report
           path: ${{ runner.temp }}/bundle-size-report.json
           if-no-files-found: warn
+
+  # Keep the existing required check fail-closed across both execution paths.
+  validate:
+    needs: [quality, validation]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Require all validation checks
+        env:
+          QUALITY_RESULT: ${{ needs.quality.result }}
+          VALIDATION_RESULT: ${{ needs.validation.result }}
+        run: |
+          test "$QUALITY_RESULT" = success
+          test "$VALIDATION_RESULT" = success
 
   e2e-tests:
     runs-on: ubuntu-latest
