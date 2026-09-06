@@ -140,9 +140,12 @@ import {
 } from '@openzcad/shared';
 import {
   buildConstraint,
+  constraintReferencesObject,
+  constraintToolsForObject,
   constraintToolSpec,
   describeConstraint,
   measureDrivingDimension,
+  planConstraintFromSelection,
   refusePick,
   type ConstraintPick,
   type DrivingDimensionKind
@@ -391,7 +394,8 @@ import {
   radialFaceOperationName,
   toolCardFor,
   type FaceTarget,
-  type RegionTarget
+  type RegionTarget,
+  type SketchConstraintToolKind
 } from './lib/interaction/machine';
 import {
   faceOffsetBaseline,
@@ -9059,6 +9063,90 @@ export function App() {
     );
   }, [editingSketchNode, doc]);
 
+  /** The selected entity's own constraints, for the entity editor's list. */
+  const selectedEntityConstraints = useMemo(() => {
+    if (!editingSketchNode || !doc || !selectedSketchEntity) {
+      return [];
+    }
+    const nameOf = (objectId: EntityId) => {
+      const node = doc.nodes[objectId];
+      return node?.kind === 'sketch-object'
+        ? node.name || node.data.objectKind
+        : 'entity';
+    };
+    return (editingSketchNode.constraints ?? [])
+      .filter(({ data }) =>
+        constraintReferencesObject(data, selectedSketchEntity.id)
+      )
+      .map(({ constraintId, data }) => ({
+        constraintId: String(constraintId),
+        kind: data.constraintKind,
+        label: describeConstraint(data, nameOf),
+        editable:
+          data.constraintKind === 'distance' || data.constraintKind === 'angle'
+      }));
+  }, [editingSketchNode, doc, selectedSketchEntity]);
+
+  const selectedEntityConstraintTools = useMemo(() => {
+    if (!selectedSketchEntity || interaction.mode !== 'sketch') {
+      return [];
+    }
+    const armed = interaction.session.pendingConstraint?.kind ?? null;
+    return constraintToolsForObject(selectedSketchEntity.data.objectKind).map(
+      ({ kind, label }) => ({ kind, label, armed: armed === kind })
+    );
+  }, [selectedSketchEntity, interaction]);
+
+  /**
+   * A constraint tool chosen from the entity editor: the selection is pick 1,
+   * so single-pick tools finish here and two-pick tools arm with one pick
+   * left. Choosing the armed tool again disarms it, as on the rail.
+   */
+  function handleSelectionConstraintTool(kind: SketchConstraintToolKind) {
+    if (
+      interaction.mode !== 'sketch' ||
+      !doc ||
+      !editingSketchNode ||
+      !selectedSketchEntity
+    ) {
+      return;
+    }
+    if (interaction.session.pendingConstraint?.kind === kind) {
+      dispatchInteraction({ type: 'sketch-constraint-tool', kind: null });
+      return;
+    }
+    const plan = planConstraintFromSelection(
+      doc,
+      editingSketchNode,
+      kind,
+      selectedSketchEntity.id
+    );
+    if (plan.action === 'refuse') {
+      setStatus(plan.reason);
+      return;
+    }
+    if (plan.action === 'add') {
+      if (
+        executeCommand(
+          commandFactories.addSketchConstraint(
+            {
+              sketchId: editingSketchNode.sketchId,
+              constraint: plan.data
+            },
+            `Add ${plan.label.toLowerCase()} constraint`
+          )
+        )
+      ) {
+        setSketchSolveStatus(null);
+        setStatus(`${plan.label} constraint added · Solve applies it.`);
+      }
+      return;
+    }
+    dispatchInteraction({ type: 'sketch-constraint-tool', kind });
+    dispatchInteraction({ type: 'sketch-constraint-pick', pick: plan.pick });
+    setStatus(`${plan.label}: pick 2 of 2.`);
+  }
+
   /**
    * Routes a sketch click while a constraint tool is armed. Returns true
    * when the click was consumed — an armed tool never falls through to
@@ -13044,7 +13132,7 @@ export function App() {
         construction={sketchConstruction}
         settings={appSettings.sketching}
         units={doc.units}
-        paletteVisible={selectedSketchEntity === null}
+        paletteVisible={columnLayout || selectedSketchEntity === null}
         canConstrain={Boolean(interaction.session.sketchId)}
         pendingConstraint={interaction.session.pendingConstraint}
         constraints={sketchConstraintItems}
@@ -13694,6 +13782,11 @@ export function App() {
                       scope={parameterScope.scope}
                       onApply={handleUpdateSketchEntity}
                       onDelete={handleDeleteSketchEntity}
+                      constraints={selectedEntityConstraints}
+                      constraintTools={selectedEntityConstraintTools}
+                      onConstraintTool={handleSelectionConstraintTool}
+                      onEditConstraint={handleEditSketchDimension}
+                      onDeleteConstraint={handleDeleteSketchConstraint}
                       onClose={() =>
                         dispatchInteraction({
                           type: 'sketch-select-object',
