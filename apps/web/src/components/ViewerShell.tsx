@@ -116,6 +116,13 @@ interface ViewerShellProps {
   /** Drag-phase body appearance patch; forwarded to the viewer's material. */
   appearancePreview: BodyAppearancePreview | null;
   modeOverlay?: ReactNode;
+  /**
+   * The column layout's dock: one centred bar holding the viewer bar, the
+   * caller's extras (selection filter, snap, activity log) and the scale.
+   * Off, the bar and the scale keep their classic floating spots.
+   */
+  dockLayout?: boolean;
+  dockExtras?: ReactNode;
   hideViewerToolbar?: boolean;
   /**
    * View mode drops the utility rail — its controls move to the floating view
@@ -266,6 +273,8 @@ export function ViewerShell({
   appearancePreview,
   modeOverlay,
   hideViewerToolbar = false,
+  dockLayout = false,
+  dockExtras = null,
   viewMode = false,
   selectionChip,
   onClearSelection,
@@ -359,6 +368,24 @@ export function ViewerShell({
     setLiveDiameter(label, radius === null ? null : radius * 2);
   };
 
+  const viewerToolbar = (
+    <ViewerToolbar
+      settings={settings}
+      projection={projection}
+      canUndo={canUndo}
+      canRedo={canRedo}
+      onUndo={onUndo}
+      onRedo={onRedo}
+      onToggleGrid={onToggleGrid}
+      onFit={onFit}
+      onView={onView}
+      onCycleDisplayMode={onCycleDisplayMode}
+      onToggleProjection={onToggleProjection}
+      sectionRange={sectionRange}
+      onCycleSection={onCycleSection}
+      onSectionOffset={onSectionOffset}
+    />
+  );
   return (
     <section
       className={`viewer-shell${viewMode ? ' view-mode' : ''}`}
@@ -481,25 +508,18 @@ export function ViewerShell({
               onDragEnd={() => orientationDragRef.current?.end()}
             />
           </div>
-          {!viewMode && (
-            <ViewerToolbar
-              settings={settings}
-              projection={projection}
-              canUndo={canUndo}
-              canRedo={canRedo}
-              onUndo={onUndo}
-              onRedo={onRedo}
-              onToggleGrid={onToggleGrid}
-              onFit={onFit}
-              onView={onView}
-              onCycleDisplayMode={onCycleDisplayMode}
-              onToggleProjection={onToggleProjection}
-              sectionRange={sectionRange}
-              onCycleSection={onCycleSection}
-              onSectionOffset={onSectionOffset}
-            />
-          )}
+          {!viewMode && !dockLayout && viewerToolbar}
         </>
+      )}
+      {dockLayout && !hideViewerToolbar && (
+        <div className="viewport-dock" role="group" aria-label="Viewport dock">
+          {!viewMode && viewerToolbar}
+          {dockExtras}
+          <ViewportScaleIndicator
+            scaleSinkRef={scaleIndicatorRef}
+            units={units}
+          />
+        </div>
       )}
       {selectionChip && (
         <div className="selection-chip" role="status">
@@ -523,7 +543,12 @@ export function ViewerShell({
         </div>
       )}
       {modeOverlay}
-      <ViewportScaleIndicator scaleSinkRef={scaleIndicatorRef} units={units} />
+      {(!dockLayout || hideViewerToolbar) && (
+        <ViewportScaleIndicator
+          scaleSinkRef={scaleIndicatorRef}
+          units={units}
+        />
+      )}
     </section>
   );
 }
