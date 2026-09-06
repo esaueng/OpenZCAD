@@ -4,13 +4,14 @@ import type {
   SketchPointRef
 } from '@openzcad/shared';
 import { formatNumber } from '../model';
+import { boundedArcSweepDegrees } from '@openzcad/geometry';
 
 type Point = { x: number; y: number };
 type Resolve = (value: number | string) => number | undefined;
 
 export interface SketchDimensionAnnotation {
   id: string;
-  kind: 'distance' | 'angle';
+  kind: 'distance' | 'angle' | 'radius';
   label: string;
   anchor: Point;
   span?: { start: Point; end: Point };
@@ -60,7 +61,53 @@ export function sketchDimensionAnnotations(
   const result: SketchDimensionAnnotation[] = [];
   for (const constraint of constraints) {
     const data = constraint.data;
-    if (data.constraintKind === 'distance') {
+    if (data.constraintKind === 'radius') {
+      const object = byId.get(data.objectId);
+      if (
+        !object ||
+        (object.objectKind !== 'circle' && object.objectKind !== 'arc')
+      )
+        continue;
+      const center = point({ objectId: data.objectId, point: 'center' });
+      const radius = scalar(object.radius);
+      const target = scalar(data.value);
+      if (
+        !center ||
+        radius === undefined ||
+        radius <= 0 ||
+        target === undefined ||
+        target <= 0
+      )
+        continue;
+      let angleDeg = 45;
+      if (object.objectKind === 'arc') {
+        const start = scalar(object.startAngleDeg);
+        const end = scalar(object.endAngleDeg);
+        if (start === undefined || end === undefined) continue;
+        try {
+          angleDeg = start + boundedArcSweepDegrees(start, end) / 2;
+        } catch {
+          continue;
+        }
+      }
+      const angle = (angleDeg * Math.PI) / 180;
+      const end = {
+        x: center.x + radius * Math.cos(angle),
+        y: center.y + radius * Math.sin(angle)
+      };
+      if (!Number.isFinite(end.x) || !Number.isFinite(end.y)) continue;
+      result.push({
+        id: constraint.constraintId,
+        kind: 'radius',
+        label: `R ${format(data.value, target, ` ${units}`)}`,
+        anchor: {
+          x: center.x + (end.x - center.x) * 0.6,
+          y: center.y + (end.y - center.y) * 0.6
+        },
+        span: { start: center, end },
+        lines: []
+      });
+    } else if (data.constraintKind === 'distance') {
       const a = point(data.a);
       const b = point(data.b);
       const target = scalar(data.value);
