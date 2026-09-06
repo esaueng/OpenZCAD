@@ -12802,14 +12802,15 @@ export function App() {
           (sketch) => sketch.sketchId === interaction.session.sketchId
         )?.name ?? 'Sketch')
       : 'New Sketch';
-  // The column's header already names the sketch and carries Finish, so the
-  // card would say the same thing twice over the viewport.
   const contextualToolCard =
     baseToolCard && interaction.mode === 'sketch'
-      ? columnLayout
-        ? null
-        : { ...baseToolCard, title: `Editing Sketch: ${editingSketchName}` }
+      ? { ...baseToolCard, title: `Editing Sketch: ${editingSketchName}` }
       : baseToolCard;
+  // The column's header already names the sketch and carries Finish, so the
+  // card would say the same thing twice over the viewport. Only the card is
+  // dropped: the entity editor, keypad and rail render in the same branch
+  // and must stay.
+  const hideSketchToolCard = columnLayout && interaction.mode === 'sketch';
   const inspectorActive =
     !modelingLocked &&
     !directMode &&
@@ -13623,60 +13624,64 @@ export function App() {
                 </>
               ) : contextualToolCard ? (
                 <>
-                  <ToolCard
-                    model={contextualToolCard}
-                    cancelableWhileValidating={interaction.mode === 'region'}
-                    children={
-                      interaction.mode === 'region' ? (
-                        <ExtrudeControls
-                          choice={
-                            interaction.extrudeChoice ?? {
-                              operation: 'automatic'
+                  {!hideSketchToolCard && (
+                    <ToolCard
+                      model={contextualToolCard}
+                      cancelableWhileValidating={interaction.mode === 'region'}
+                      children={
+                        interaction.mode === 'region' ? (
+                          <ExtrudeControls
+                            choice={
+                              interaction.extrudeChoice ?? {
+                                operation: 'automatic'
+                              }
                             }
-                          }
-                          bodies={doc.bodyOrder.flatMap((bodyId) => {
-                            const body =
-                              doc.derived.bodyRepresentations[bodyId];
-                            return body && !body.consumed
-                              ? [{ bodyId, name: body.name }]
-                              : [];
-                          })}
-                          disabled={busy || interaction.phase === 'validating'}
-                          onChange={(choice) =>
-                            dispatchInteraction({
-                              type: 'set-extrude-choice',
-                              choice
-                            })
-                          }
-                          onDistance={() =>
-                            handleOpenOffsetKeypad(interaction.lastValue ?? 0)
-                          }
-                        />
-                      ) : undefined
-                    }
-                    onAction={handleSelectionAction}
-                    onEditCulprit={handleEditCulpritFeature}
-                    {...(keepLastValid ? { keepLastValid } : {})}
-                    onClose={() => {
-                      if (cancelPendingRegionExtrusion()) return;
-                      if (
-                        interaction.mode !== 'idle' &&
-                        interaction.mode !== 'sketch' &&
-                        interaction.phase === 'dragging'
-                      ) {
-                        cancelDirectManipulationRef.current?.();
-                        if (interaction.mode === 'edges') {
-                          handleEdgeCancel();
-                        }
+                            bodies={doc.bodyOrder.flatMap((bodyId) => {
+                              const body =
+                                doc.derived.bodyRepresentations[bodyId];
+                              return body && !body.consumed
+                                ? [{ bodyId, name: body.name }]
+                                : [];
+                            })}
+                            disabled={
+                              busy || interaction.phase === 'validating'
+                            }
+                            onChange={(choice) =>
+                              dispatchInteraction({
+                                type: 'set-extrude-choice',
+                                choice
+                              })
+                            }
+                            onDistance={() =>
+                              handleOpenOffsetKeypad(interaction.lastValue ?? 0)
+                            }
+                          />
+                        ) : undefined
                       }
-                      dispatchInteraction({
-                        type:
-                          interaction.mode === 'sketch'
-                            ? 'exit-sketch'
-                            : 'clear'
-                      });
-                    }}
-                  />
+                      onAction={handleSelectionAction}
+                      onEditCulprit={handleEditCulpritFeature}
+                      {...(keepLastValid ? { keepLastValid } : {})}
+                      onClose={() => {
+                        if (cancelPendingRegionExtrusion()) return;
+                        if (
+                          interaction.mode !== 'idle' &&
+                          interaction.mode !== 'sketch' &&
+                          interaction.phase === 'dragging'
+                        ) {
+                          cancelDirectManipulationRef.current?.();
+                          if (interaction.mode === 'edges') {
+                            handleEdgeCancel();
+                          }
+                        }
+                        dispatchInteraction({
+                          type:
+                            interaction.mode === 'sketch'
+                              ? 'exit-sketch'
+                              : 'clear'
+                        });
+                      }}
+                    />
+                  )}
                   {!columnLayout && sketchRail}
                   {interaction.mode === 'sketch' && selectedSketchEntity && (
                     <SketchEntityEditor
