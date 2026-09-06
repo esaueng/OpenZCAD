@@ -523,8 +523,8 @@
 .workspace.column-layout .viewer-rail-stack,
 .workspace.column-layout .viewer-area.has-inspector .viewer-rail-stack {
   top: auto;
-  right: 12px;
-  bottom: 62px;
+  right: 8px;
+  bottom: 6px;
 }
 
 /* The tool card centres on the room between the column and the dock. */
@@ -539,11 +539,17 @@
   width: max(280px, min(680px, var(--tool-card-room)));
 }
 
-/* The scale bar reads with the cube: under it, right-aligned. */
+/* The scale bar sits on the bottom line just right of the viewer bar. */
 .workspace.column-layout .viewport-scale-indicator {
-  left: auto;
-  right: 12px;
-  bottom: 10px;
+  left: calc(var(--column-w) + (100% - var(--column-w)) / 2 + 140px);
+  right: auto;
+  bottom: 8px;
+}
+
+.workspace.column-layout .viewer-area.has-inspector .viewport-scale-indicator {
+  left: calc(
+    var(--column-w) + (100% - var(--column-w) - var(--context-w)) / 2 + 140px
+  );
 }
 
 /* ── The live dimension at the cursor ── */
