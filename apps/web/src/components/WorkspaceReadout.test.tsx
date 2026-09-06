@@ -11,7 +11,6 @@ describe('WorkspaceReadout', () => {
         statusAt={Date.now()}
         tone="ready"
         hint="Click a face"
-        saveState="synced"
         snap={null}
         selectionFilter="any"
         selectionFilterIsAutomatic={false}
@@ -31,7 +30,6 @@ describe('WorkspaceReadout', () => {
         status="The resulting body wouldn't be valid."
         tone="warning"
         hint="Try another value"
-        saveState="synced"
         snap={{ spacing: 1, units: 'mm', enabled: true }}
         muted
         selectionFilter="any"
@@ -51,7 +49,6 @@ describe('WorkspaceReadout', () => {
         status=""
         tone="ready"
         hint={null}
-        saveState="synced"
         snap={null}
         selectionFilter="any"
         selectionFilterIsAutomatic
