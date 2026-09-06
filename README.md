@@ -315,3 +315,18 @@ save states; failed downloads stop export rather than create a partial backup.
 Previously pruned save states retain their history records but cannot regain
 snapshot contents that no longer exist. Account permissions, shelf placement,
 viewport preferences, and the transient undo/redo stack are not transferred.
+
+### Public liveness endpoint
+
+`GET /healthz` returns HTTP 200 with JSON `status: "ok"` and a service name.
+`HEAD /healthz` returns the same headers without a body; other methods return
+405 with `Allow: GET, HEAD`. Responses use `Cache-Control: no-store`.
+This endpoint requires no application credentials and performs no storage or
+upstream requests. It reports Worker liveness, not dependency readiness or
+browser geometry/solver health. Existing health endpoints keep their behavior.
+
+Cloudflare Access, WAF, and bot challenges run before the Worker. If a monitor
+receives a login redirect or challenge, configure a narrowly scoped exception
+for GET/HEAD on the exact `/healthz` path and the intended app hostname, then
+verify the JSON response from the monitor's network. Repository changes alone
+do not alter those dashboard policies.
