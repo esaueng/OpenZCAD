@@ -32,6 +32,26 @@
   pointer-events: auto;
 }
 
+/* The splitter sits on the column's right edge; the column keeps the
+   stored sidebar width, so the classic drag logic applies unchanged. */
+.workspace.column-layout .sidebar-resizer {
+  left: min(var(--column-w), calc(100% - 20px));
+  z-index: calc(var(--z-inspector-float) + 1);
+}
+
+/* No scrollbars in the column: content clips sideways and scrolls
+   vertically on the wheel without a visible bar. */
+.workspace-column,
+.workspace-column-tools,
+.workspace-column-browser .sidebar.column {
+  overflow-x: hidden;
+  scrollbar-width: none;
+}
+
+.workspace-column-browser .sidebar.column::-webkit-scrollbar {
+  display: none;
+}
+
 .workspace-column {
   flex: 1;
   min-width: 0;
