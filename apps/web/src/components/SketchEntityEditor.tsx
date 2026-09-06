@@ -5,10 +5,28 @@ import {
   MAX_SKETCH_POLYGON_SIDES,
   type SketchObjectData
 } from '@openzcad/shared';
+import type { SketchConstraintToolKind } from '../lib/interaction/machine';
+import { CONSTRAINT_ICONS } from './constraintIcons';
 import { Trash2, X } from 'lucide-react';
 import { ExprInput } from './ExprInput';
 import { previewExpression } from '../lib/model';
 import { TextObjectFields, type TextAttributes } from './TextObjectFields';
+
+/** One constraint the selected entity takes part in. */
+export interface EntityConstraintItem {
+  constraintId: string;
+  kind: SketchConstraintToolKind;
+  label: string;
+  /** Driving dimensions open the keypad; the rest only delete. */
+  editable: boolean;
+}
+
+/** A constraint tool the entity can start, with whether it is armed now. */
+export interface EntityConstraintTool {
+  kind: SketchConstraintToolKind;
+  label: string;
+  armed: boolean;
+}
 
 interface SketchEntityEditorProps {
   data: SketchObjectData;
@@ -16,6 +34,18 @@ interface SketchEntityEditorProps {
   onApply(data: SketchObjectData): void;
   onDelete(): void;
   onClose(): void;
+  /**
+   * The constraints section: what the entity is already held by, and what
+   * can be added from it. Absent, the editor is the plain value form.
+   */
+  constraints?: EntityConstraintItem[];
+  constraintTools?: EntityConstraintTool[];
+  onConstraintTool?(kind: SketchConstraintToolKind): void;
+  onEditConstraint?(
+    constraintId: string,
+    anchor: { x: number; y: number }
+  ): void;
+  onDeleteConstraint?(constraintId: string): void;
 }
 
 interface FieldDefinition {
@@ -216,7 +246,12 @@ export function SketchEntityEditor({
   scope,
   onApply,
   onDelete,
-  onClose
+  onClose,
+  constraints,
+  constraintTools,
+  onConstraintTool,
+  onEditConstraint,
+  onDeleteConstraint
 }: SketchEntityEditorProps) {
   const [values, setValues] = useState(() => initialValues(data));
   const [textAttrs, setTextAttrs] = useState<TextAttributes | null>(() =>
@@ -284,6 +319,72 @@ export function SketchEntityEditor({
         <p className="form-error" role="alert">
           {semanticError ?? 'Fix invalid values before applying this edit.'}
         </p>
+      )}
+      {constraintTools && constraintTools.length > 0 && (
+        <section className="sketch-entity-constraints" aria-label="Constraints">
+          <span className="eyebrow">Constraints</span>
+          <div
+            className="sketch-entity-constraint-tools"
+            role="group"
+            aria-label="Add a constraint from this entity"
+          >
+            {constraintTools.map(({ kind, label, armed }) => {
+              const Icon = CONSTRAINT_ICONS[kind];
+              return (
+                <button
+                  key={kind}
+                  type="button"
+                  className={armed ? 'active' : undefined}
+                  aria-pressed={armed}
+                  aria-label={label}
+                  title={label}
+                  onClick={() => onConstraintTool?.(kind)}
+                >
+                  <Icon size={14} aria-hidden="true" />
+                </button>
+              );
+            })}
+          </div>
+          {constraints && constraints.length > 0 && (
+            <ul className="sketch-constraint-list">
+              {constraints.map(({ constraintId, kind, label, editable }) => {
+                const Icon = CONSTRAINT_ICONS[kind];
+                return (
+                  <li key={constraintId}>
+                    <Icon size={12} aria-hidden="true" />
+                    {editable ? (
+                      <button
+                        type="button"
+                        className="sketch-constraint-edit"
+                        title={`Edit constraint: ${label}`}
+                        aria-label={`Edit constraint: ${label}`}
+                        onClick={(event) =>
+                          onEditConstraint?.(constraintId, {
+                            x: event.clientX,
+                            y: event.clientY
+                          })
+                        }
+                      >
+                        {label}
+                      </button>
+                    ) : (
+                      <span title={label}>{label}</span>
+                    )}
+                    <button
+                      type="button"
+                      className="row-delete"
+                      title={`Delete constraint: ${label}`}
+                      aria-label={`Delete constraint: ${label}`}
+                      onClick={() => onDeleteConstraint?.(constraintId)}
+                    >
+                      <Trash2 size={12} aria-hidden="true" />
+                    </button>
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+        </section>
       )}
       <footer>
         <button type="button" className="secondary danger" onClick={onDelete}>

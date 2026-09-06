@@ -170,6 +170,7 @@ import {
   circlePreviewPoints,
   centerInferenceSegments,
   collectSketchSnapTargets,
+  angleForInProgress,
   dimensionForInProgress,
   lineObjectFromPoints,
   nearestCenterGuideTarget,
@@ -5015,7 +5016,8 @@ export function ModelViewer({
         }
         positionSketchDimLabel(
           event,
-          dimensionForInProgress('line', gesture.chainAnchor, locked.point)
+          `${dimensionForInProgress('line', gesture.chainAnchor, locked.point)} ${unitsRef.current} · ${angleForInProgress(gesture.chainAnchor, locked.point)}°`,
+          false
         );
         requestRender();
         return;
