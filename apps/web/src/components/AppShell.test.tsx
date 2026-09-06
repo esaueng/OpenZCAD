@@ -56,7 +56,10 @@ describe('AppShell column layout', () => {
     expect(
       container.querySelector('.viewer-area .workspace-column-float nav')
     ).toHaveTextContent('sidebar');
-    expect(container.querySelector('.sidebar-resizer')).toBeNull();
+    // The splitter follows the column so its width stays adjustable.
+    expect(
+      container.querySelector('.viewer-area .sidebar-resizer')
+    ).not.toBeNull();
     expect(container.querySelector('footer')).toBeNull();
     expect(container.querySelector('.viewer-area output')).toHaveTextContent(
       'readout'
