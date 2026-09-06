@@ -4,9 +4,7 @@ import {
   SELECTION_FILTER_LABELS,
   type SelectionFilter
 } from '@openzcad/viewport/types';
-import type { WorkspaceSaveState } from '../lib/cloudProjectAutosave';
 import { statusExpiresAt } from '../lib/statusLifetime';
-import { WORKSPACE_SAVE_STATE_PRESENTATION } from '../lib/workspaceSaveStatePresentation';
 import { StatusActivityLog, type StatusTone } from './StatusActivityLog';
 
 interface WorkspaceReadoutProps {
@@ -16,7 +14,6 @@ interface WorkspaceReadoutProps {
   tone: StatusTone;
   /** Context-sensitive next step, shown once the status has expired. */
   hint: string | null;
-  saveState: WorkspaceSaveState;
   /** Sketch snap spacing, shown while a sketch is open; null hides it. */
   snap: { spacing: number; units: string; enabled: boolean } | null;
   /**
@@ -31,9 +28,10 @@ interface WorkspaceReadoutProps {
 }
 
 /**
- * What the status bar said, without the bar: the live message (or the hint
- * once it has expired) bottom-centre over the viewport, and the sync state
- * with the sketch snap as a one-line readout in the corner.
+ * What the status bar said, without the bar: one line at the bottom-left of
+ * the viewport — the live message (or the hint once it has expired), which
+ * also opens the activity log, then the selection filter and the sketch
+ * snap. Sync state is not repeated here: the top bar already carries it.
  */
 export function WorkspaceReadout({
   status,
@@ -41,7 +39,6 @@ export function WorkspaceReadout({
   statusSticky,
   tone,
   hint,
-  saveState,
   snap,
   muted = false,
   selectionFilter,
@@ -74,7 +71,6 @@ export function WorkspaceReadout({
   const quiet = expiresAt !== null && now >= expiresAt;
   const message = quiet || status === '' ? hint : status;
   const messageTone = quiet || status === '' ? 'ready' : tone;
-  const sync = WORKSPACE_SAVE_STATE_PRESENTATION[saveState];
   const filterIndex = SELECTION_FILTERS.indexOf(selectionFilter);
   const nextFilter =
     SELECTION_FILTERS[(filterIndex + 1) % SELECTION_FILTERS.length]!;
@@ -113,10 +109,6 @@ export function WorkspaceReadout({
             {snap.enabled ? `Snap ${snap.spacing} ${snap.units}` : 'Snap off'}
           </span>
         )}
-        <span className={`workspace-readout-sync ${saveState}`}>
-          <i aria-hidden="true" />
-          {sync.statusBarLabel}
-        </span>
       </div>
       <StatusActivityLog
         id={logId}

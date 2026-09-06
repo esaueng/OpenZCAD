@@ -392,34 +392,27 @@
    right-hand end kept clear for the viewer's grid readout and the cube. */
 .workspace-readout {
   position: absolute;
-  top: 12px;
   left: calc(var(--column-w) + 14px);
   right: 12px;
   bottom: 10px;
   z-index: var(--z-viewer-overlay);
-  display: grid;
-  grid-template-columns: max-content minmax(0, 1fr) 190px;
-  grid-template-rows: auto minmax(0, 1fr) auto;
-  gap: 16px;
+  display: flex;
+  align-items: center;
+  gap: 14px;
   pointer-events: none;
 }
 
-/* The message rides top-centre, the slot a tool card takes when one is up
-   (the message mutes then), so the bottom of the canvas stays clear. It is
-   still the activity log's handle. */
+/* The message, the activity log's handle, leads the line. */
 .workspace-readout-hint {
-  grid-column: 2;
-  grid-row: 1;
-  justify-self: center;
-  align-self: start;
+  flex: 0 1 auto;
   min-width: 0;
-  max-width: 100%;
   padding: 2px 8px;
+  margin-left: -8px;
   color: var(--color-text-subtle);
   border: 1px solid transparent;
   border-radius: var(--radius-sm);
   font-size: var(--fs-xs);
-  text-align: center;
+  text-align: left;
   pointer-events: auto;
 }
 
@@ -475,9 +468,7 @@
 }
 
 .workspace-readout-meta {
-  grid-column: 1;
-  grid-row: 3;
-  align-self: end;
+  flex: 0 0 auto;
   display: flex;
   gap: 12px;
   padding-bottom: 1px;
@@ -486,45 +477,9 @@
   white-space: nowrap;
 }
 
-.workspace-readout-sync {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-}
-
-.workspace-readout-sync i {
-  width: 6px;
-  height: 6px;
-  border-radius: 999px;
-  background: var(--color-success);
-}
-
-.workspace-readout-sync.saving i,
-.workspace-readout-sync.syncing i {
-  background: var(--color-accent);
-}
-
-.workspace-readout-sync.local i,
-.workspace-readout-sync.offline i {
-  background: var(--color-warning);
-}
-
-/* One home per fact. The dock header already names the selection, so the
-   selection chip stands down while the dock is up; when it does show, it sits
-   above the readout line instead of on it. The utility rail leaves the dock's
-   corner for the bottom cluster. */
-.workspace.column-layout .viewer-area.has-inspector .selection-chip {
-  display: none;
-}
-
-.workspace.column-layout .selection-chip {
-  bottom: 36px;
-}
-
 /* The viewer bar (undo/redo and the viewport toggles) sits against the
    bottom edge, centred on the canvas rather than the window: the column
-   takes the left edge, and a docked inspector takes the right. The hint
-   line moves up to sit above it. */
+   takes the left edge, and a docked inspector takes the right. */
 .workspace.column-layout .viewer-rail {
   top: auto;
   right: auto;
@@ -639,6 +594,6 @@
   }
 
   .workspace.column-layout .workspace-readout {
-    grid-template-columns: max-content minmax(0, 1fr);
+    right: 200px;
   }
 }
