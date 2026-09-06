@@ -292,6 +292,39 @@ test('resizes a literal box by dragging an exact face', async ({ page }) => {
   expect(dimensions).not.toEqual(['40', '18', '24']);
 });
 
+test('a press-and-drag with the Line tool draws a segment instead of orbiting', async ({
+  page
+}) => {
+  await stubApi(page);
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('Drag Line Part');
+  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: /^Sketch \(S\)/ }).click();
+  await page.getByRole('button', { name: 'Top (XY)' }).click();
+  const sketchTools = page.getByRole('toolbar', { name: 'Sketch tools' });
+  await sketchTools.getByRole('button', { name: /^Line/ }).click();
+  const canvas = page.locator('.viewer-host canvas');
+  const bounds = await canvas.boundingBox();
+  expect(bounds).not.toBeNull();
+  const start = {
+    x: bounds!.x + bounds!.width * 0.45,
+    y: bounds!.y + bounds!.height * 0.55
+  };
+  // A stroke, not two clicks: the press lands the first point, the release
+  // the second. Before the fix the controls took the drag as an orbit and no
+  // line was drawn.
+  await page.mouse.move(start.x, start.y);
+  await page.mouse.down();
+  for (let step = 1; step <= 8; step += 1) {
+    await page.mouse.move(start.x + step * 20, start.y - step * 10);
+  }
+  await page.mouse.up();
+  await expect(
+    page.locator('.feature-row-main', { hasText: 'Sketch' })
+  ).toBeVisible();
+  await expect(page.getByRole('contentinfo')).toContainText('Sketch 01');
+});
+
 test('switches a planar-face selection into an editable arc sketch', async ({
   page
 }) => {

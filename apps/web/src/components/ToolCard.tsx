@@ -116,7 +116,9 @@ export function ToolCard({
             ) : null}
           </span>
         ) : null}
-        <small aria-live="polite">{model.hint}</small>
+        {/* The diagnostic is the message; the phase hint under it said the
+            same thing a second time ("adjust the value") on every refusal. */}
+        {model.error ? null : <small aria-live="polite">{model.hint}</small>}
       </span>
       {model.actions && model.actions.length > 1 ? (
         <span className="tool-card-submode" role="tablist">
