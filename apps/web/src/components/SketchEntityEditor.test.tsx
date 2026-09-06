@@ -312,4 +312,75 @@ describe('textObjectFromPoint', () => {
     );
     expect(object.objectKind === 'text' && object.size).toBeGreaterThan(0);
   });
+
+  it('offers constraint tools from the entity and lists what holds it', async () => {
+    const user = userEvent.setup();
+    const onConstraintTool = vi.fn();
+    const onDeleteConstraint = vi.fn();
+    const onEditConstraint = vi.fn();
+    render(
+      <SketchEntityEditor
+        data={{ objectKind: 'line', x1: 0, y1: 0, x2: 10, y2: 0 }}
+        scope={{}}
+        onApply={vi.fn()}
+        onDelete={vi.fn()}
+        onClose={vi.fn()}
+        constraintTools={[
+          { kind: 'horizontal', label: 'Horizontal', armed: false },
+          { kind: 'tangent', label: 'Tangent', armed: true }
+        ]}
+        constraints={[
+          {
+            constraintId: 'c1',
+            kind: 'tangent',
+            label: 'Tangent · line ○ circle',
+            editable: false
+          },
+          {
+            constraintId: 'c2',
+            kind: 'distance',
+            label: 'Distance 12 mm',
+            editable: true
+          }
+        ]}
+        onConstraintTool={onConstraintTool}
+        onEditConstraint={onEditConstraint}
+        onDeleteConstraint={onDeleteConstraint}
+      />
+    );
+    expect(
+      screen.getByRole('button', { name: 'Tangent', pressed: true })
+    ).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Horizontal' }));
+    expect(onConstraintTool).toHaveBeenCalledWith('horizontal');
+    await user.click(
+      screen.getByRole('button', {
+        name: 'Delete constraint: Tangent · line ○ circle'
+      })
+    );
+    expect(onDeleteConstraint).toHaveBeenCalledWith('c1');
+    await user.click(
+      screen.getByRole('button', { name: 'Edit constraint: Distance 12 mm' })
+    );
+    expect(onEditConstraint).toHaveBeenCalledTimes(1);
+    const [constraintId, anchor] = onEditConstraint.mock.calls[0] as [
+      string,
+      { x: number; y: number }
+    ];
+    expect(constraintId).toBe('c2');
+    expect(typeof anchor.x).toBe('number');
+  });
+
+  it('stays a plain value form without constraint tools', () => {
+    render(
+      <SketchEntityEditor
+        data={TEXT_OBJECT}
+        scope={{}}
+        onApply={vi.fn()}
+        onDelete={vi.fn()}
+        onClose={vi.fn()}
+      />
+    );
+    expect(screen.queryByLabelText('Constraints')).not.toBeInTheDocument();
+  });
 });
