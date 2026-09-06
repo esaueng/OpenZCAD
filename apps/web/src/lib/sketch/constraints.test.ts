@@ -14,8 +14,11 @@ import {
 import {
   buildConstraint,
   CONSTRAINT_TOOL_SPECS,
+  constraintReferencesObject,
+  constraintToolsForObject,
   describeConstraint,
   measureDrivingDimension,
+  planConstraintFromSelection,
   refusePick,
   type PendingConstraintKind,
   type ConstraintPick
@@ -722,5 +725,118 @@ describe('solver-ready constraint command oracles', () => {
     } finally {
       adapter.dispose();
     }
+  });
+});
+
+describe('constraints from the selection dock', () => {
+  it('offers only the tools whose first pick is the selected object', () => {
+    expect(constraintToolsForObject('line').map(({ kind }) => kind)).toEqual([
+      'horizontal',
+      'vertical',
+      'parallel',
+      'perpendicular',
+      'equal',
+      'tangent',
+      'angle'
+    ]);
+    expect(constraintToolsForObject('circle').map(({ kind }) => kind)).toEqual([
+      'equal',
+      'tangent',
+      'concentric',
+      'radius'
+    ]);
+    expect(constraintToolsForObject('arc').map(({ kind }) => kind)).toEqual([
+      'equal',
+      'concentric',
+      'radius'
+    ]);
+    expect(constraintToolsForObject('rectangle')).toEqual([]);
+    expect(constraintToolsForObject('text')).toEqual([]);
+  });
+
+  it('finishes a single-pick tool from the selection at once', () => {
+    const { document, sketch, lineA } = fixture();
+    const plan = planConstraintFromSelection(
+      document,
+      sketch,
+      'horizontal',
+      lineA
+    );
+    expect(plan).toEqual({
+      action: 'add',
+      label: 'Horizontal',
+      data: { constraintKind: 'horizontal', objectId: lineA }
+    });
+  });
+
+  it('arms a two-pick tool with the selection already taken as pick 1', () => {
+    const { document, sketch, circle } = fixture();
+    expect(
+      planConstraintFromSelection(document, sketch, 'tangent', circle)
+    ).toEqual({
+      action: 'arm',
+      label: 'Tangent',
+      picks: 2,
+      pick: { kind: 'object', objectId: circle }
+    });
+  });
+
+  it("refuses with the rail's own reasons", () => {
+    const { document, sketch, circle, lineA } = fixture();
+    const horizontalCircle = planConstraintFromSelection(
+      document,
+      sketch,
+      'horizontal',
+      circle
+    );
+    expect(horizontalCircle.action).toBe('refuse');
+    // Point-first tools never start from a whole-object selection.
+    const midpoint = planConstraintFromSelection(
+      document,
+      sketch,
+      'midpoint',
+      lineA
+    );
+    expect(midpoint.action).toBe('refuse');
+  });
+
+  it('finds the constraints that mention an object, as a whole or by a point', () => {
+    const { lineA, lineB, circle } = fixture();
+    expect(
+      constraintReferencesObject(
+        { constraintKind: 'horizontal', objectId: lineA as EntityId },
+        lineA
+      )
+    ).toBe(true);
+    expect(
+      constraintReferencesObject(
+        {
+          constraintKind: 'tangent',
+          a: lineA as EntityId,
+          b: circle as EntityId
+        },
+        circle
+      )
+    ).toBe(true);
+    expect(
+      constraintReferencesObject(
+        {
+          constraintKind: 'coincident',
+          a: { objectId: lineA as EntityId, point: 'end' },
+          b: { objectId: lineB as EntityId, point: 'start' }
+        },
+        lineB
+      )
+    ).toBe(true);
+    expect(
+      constraintReferencesObject(
+        {
+          constraintKind: 'midpoint',
+          point: { objectId: circle as EntityId, point: 'center' },
+          line: lineA as EntityId
+        },
+        lineB
+      )
+    ).toBe(false);
   });
 });
