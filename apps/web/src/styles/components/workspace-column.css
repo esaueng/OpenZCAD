@@ -514,17 +514,23 @@
   bottom: 36px;
 }
 
-/* The viewer bar (undo/redo and the viewport toggles) sits bottom-centre
-   over the viewport, above the hint line, centred on the canvas rather than
-   the window: the column takes the left edge, and a docked inspector takes
-   the right. */
+/* The viewer bar (undo/redo and the viewport toggles) sits against the
+   bottom edge, centred on the canvas rather than the window: the column
+   takes the left edge, and a docked inspector takes the right. The hint
+   line moves up to sit above it. */
 .workspace.column-layout .viewer-rail {
   top: auto;
   right: auto;
-  bottom: 72px;
+  bottom: 0;
   left: calc(var(--column-w) + (100% - var(--column-w)) / 2);
   flex-direction: row;
+  border-bottom: 0;
+  border-radius: var(--radius-md) var(--radius-md) 0 0;
   transform: translateX(-50%);
+}
+
+.workspace.column-layout .workspace-readout-hint {
+  margin-bottom: 26px;
 }
 
 .workspace.column-layout .viewer-area.has-inspector .viewer-rail {
