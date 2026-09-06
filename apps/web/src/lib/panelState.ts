@@ -9,11 +9,7 @@
 export const PANEL_STATE_STORAGE_KEY = 'openzcad-panel-state:v1';
 
 export type SidebarSectionId =
-  | 'parameters'
-  | 'bodies'
-  | 'history'
-  | 'revisions'
-  | 'diagnostics';
+  'parameters' | 'bodies' | 'history' | 'revisions' | 'diagnostics';
 
 export const SIDEBAR_SECTION_IDS: readonly SidebarSectionId[] = [
   'parameters',
@@ -42,7 +38,6 @@ export type WorkspaceMode = 'view' | 'tweak' | 'build';
 export interface PanelState {
   /** Section id to open/closed. Absent means open. */
   sidebarSections: Record<SidebarSectionId, boolean>;
-  toolPaletteOpen: boolean;
   /**
    * Remembered per device for the same reason panel collapse is: someone who
    * opens the app to read drawings should not have to strip the modeling UI
@@ -82,7 +77,6 @@ export const DEFAULT_PANEL_STATE: PanelState = {
     revisions: true,
     diagnostics: true
   },
-  toolPaletteOpen: true,
   workspaceMode: 'build',
   viewModeRailOpen: true,
   assistantCollapsed: true,
@@ -92,7 +86,6 @@ export const DEFAULT_PANEL_STATE: PanelState = {
 function copyDefaults(): PanelState {
   return {
     sidebarSections: { ...DEFAULT_PANEL_STATE.sidebarSections },
-    toolPaletteOpen: DEFAULT_PANEL_STATE.toolPaletteOpen,
     workspaceMode: DEFAULT_PANEL_STATE.workspaceMode,
     viewModeRailOpen: DEFAULT_PANEL_STATE.viewModeRailOpen,
     assistantCollapsed: DEFAULT_PANEL_STATE.assistantCollapsed,
@@ -106,9 +99,6 @@ export function normalizePanelState(value: unknown): PanelState {
     return state;
   }
   const root = value as Record<string, unknown>;
-  if (typeof root.toolPaletteOpen === 'boolean') {
-    state.toolPaletteOpen = root.toolPaletteOpen;
-  }
   if (typeof root.assistantCollapsed === 'boolean') {
     state.assistantCollapsed = root.assistantCollapsed;
   }
@@ -140,7 +130,9 @@ export function normalizePanelState(value: unknown): PanelState {
 export function loadPanelState(): PanelState {
   try {
     const raw = window.localStorage.getItem(PANEL_STATE_STORAGE_KEY);
-    return raw ? normalizePanelState(JSON.parse(raw) as unknown) : copyDefaults();
+    return raw
+      ? normalizePanelState(JSON.parse(raw) as unknown)
+      : copyDefaults();
   } catch {
     return copyDefaults();
   }

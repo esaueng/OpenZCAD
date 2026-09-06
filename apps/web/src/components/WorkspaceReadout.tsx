@@ -52,23 +52,28 @@ export function WorkspaceReadout({
   }, [expiresAt]);
   const quiet = expiresAt !== null && now >= expiresAt;
   const shown = !quiet && !muted && status !== '';
-  if (!shown) {
-    return null;
-  }
+  // Always in the tree, as the page's contentinfo landmark: what the status
+  // bar used to be for assistive tech and for the specs that read it. Only
+  // its visibility changes.
   return (
-    <button
-      type="button"
-      className={`workspace-toast ${tone}`}
-      title="Activity log"
-      aria-label={`${logOpen ? 'Close' : 'Open'} activity log. Current status: ${status}`}
-      aria-expanded={logOpen}
-      onClick={onToggleLog}
+    <footer
+      className={`workspace-toast ${tone}${shown ? '' : ' hidden'}`}
+      role="contentinfo"
     >
-      <i aria-hidden="true" />
-      <span role="status" aria-live="polite" aria-atomic="true">
-        {status}
-      </span>
-    </button>
+      <button
+        type="button"
+        className="workspace-toast-body"
+        title="Activity log"
+        aria-label={`${logOpen ? 'Close' : 'Open'} activity log. Current status: ${status}`}
+        aria-expanded={logOpen}
+        onClick={onToggleLog}
+      >
+        <i aria-hidden="true" />
+        <span role="status" aria-live="polite" aria-atomic="true">
+          {status}
+        </span>
+      </button>
+    </footer>
   );
 }
 
@@ -99,6 +104,9 @@ export function ViewportDockExtras({
   const filterIndex = SELECTION_FILTERS.indexOf(selectionFilter);
   const nextFilter =
     SELECTION_FILTERS[(filterIndex + 1) % SELECTION_FILTERS.length]!;
+  // The cycle ends by handing the filter back to the tool (null), as the
+  // status bar's chips did when their active one was clicked again.
+  const handsBack = filterIndex === SELECTION_FILTERS.length - 1;
   return (
     <>
       <span className="viewport-dock-divider" aria-hidden="true" />
@@ -108,10 +116,12 @@ export function ViewportDockExtras({
         title={
           selectionFilterIsAutomatic
             ? `Selecting ${SELECTION_FILTER_LABELS[selectionFilter].toLowerCase()} — chosen by the active tool · Q cycles`
-            : `Selecting ${SELECTION_FILTER_LABELS[selectionFilter].toLowerCase()} · click or Q for ${SELECTION_FILTER_LABELS[nextFilter].toLowerCase()}`
+            : handsBack
+              ? `Selecting ${SELECTION_FILTER_LABELS[selectionFilter].toLowerCase()} · click to hand the filter back to the tool`
+              : `Selecting ${SELECTION_FILTER_LABELS[selectionFilter].toLowerCase()} · click or Q for ${SELECTION_FILTER_LABELS[nextFilter].toLowerCase()}`
         }
         aria-label={`Selection filter: ${SELECTION_FILTER_LABELS[selectionFilter]}. Cycle.`}
-        onClick={() => onSelectionFilter(nextFilter)}
+        onClick={() => onSelectionFilter(handsBack ? null : nextFilter)}
       >
         select {SELECTION_FILTER_LABELS[selectionFilter]}
       </button>

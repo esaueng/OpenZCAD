@@ -22,7 +22,7 @@ describe('WorkspaceReadout', () => {
     expect(onToggleLog).toHaveBeenCalledTimes(1);
   });
 
-  it('shows nothing while a tool card carries the message, or with none', () => {
+  it('hides while a tool card carries the message, or with none, but stays the landmark', () => {
     const { rerender } = render(
       <WorkspaceReadout
         status="The resulting body wouldn't be valid."
@@ -32,7 +32,8 @@ describe('WorkspaceReadout', () => {
         onToggleLog={vi.fn()}
       />
     );
-    expect(screen.queryByRole('status')).not.toBeInTheDocument();
+    // Still in the tree as the contentinfo landmark, only hidden.
+    expect(screen.getByRole('contentinfo')).toHaveClass('hidden');
     rerender(
       <WorkspaceReadout
         status=""
@@ -41,7 +42,7 @@ describe('WorkspaceReadout', () => {
         onToggleLog={vi.fn()}
       />
     );
-    expect(screen.queryByRole('status')).not.toBeInTheDocument();
+    expect(screen.getByRole('contentinfo')).toHaveClass('hidden');
   });
 });
 
@@ -69,5 +70,25 @@ describe('ViewportDockExtras', () => {
     expect(screen.getByText('Snap 1 mm')).toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: 'Open activity log' }));
     expect(onToggleLog).toHaveBeenCalledTimes(1);
+  });
+
+  it('hands the filter back to the tool at the end of the cycle', async () => {
+    const user = userEvent.setup();
+    const onSelectionFilter = vi.fn();
+    render(
+      <ViewportDockExtras
+        selectionFilter="sketch"
+        selectionFilterIsAutomatic={false}
+        onSelectionFilter={onSelectionFilter}
+        snap={null}
+        logOpen={false}
+        onToggleLog={vi.fn()}
+        logTriggerRef={createRef<HTMLButtonElement>()}
+      />
+    );
+    await user.click(
+      screen.getByRole('button', { name: /Selection filter: Sketch/ })
+    );
+    expect(onSelectionFilter).toHaveBeenCalledWith(null);
   });
 });

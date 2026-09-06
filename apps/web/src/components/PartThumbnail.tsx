@@ -26,10 +26,7 @@ interface ThumbnailResult {
   source: string | null | undefined;
 }
 
-const thumbnailPromises = new Map<
-  string,
-  Promise<string | null | undefined>
->();
+const thumbnailPromises = new Map<string, Promise<string | null | undefined>>();
 
 function thumbnailFor(
   cacheKey: string,

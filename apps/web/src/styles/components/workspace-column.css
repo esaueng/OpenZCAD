@@ -5,12 +5,6 @@
    classic rules for the docked layout, so it stays after them in the
    cascade and before view-mode.css, which subtracts from both. ── */
 
-/* No status bar means no status row: the shell grid otherwise kept its
-   30px track and drew an empty strip under the viewport. */
-.app-shell.column-layout {
-  grid-template-rows: var(--topbar-h) minmax(0, 1fr);
-}
-
 /* `--column-w` is what the column is drawn at: the stored sidebar width,
    capped as the window narrows, without touching the preference itself. */
 .workspace.column-layout {
@@ -43,12 +37,12 @@
    vertically on the wheel without a visible bar. */
 .workspace-column,
 .workspace-column-tools,
-.workspace-column-browser .sidebar.column {
+.workspace-column-browser .sidebar {
   overflow-x: hidden;
   scrollbar-width: none;
 }
 
-.workspace-column-browser .sidebar.column::-webkit-scrollbar {
+.workspace-column-browser .sidebar::-webkit-scrollbar {
   display: none;
 }
 
@@ -153,9 +147,18 @@
   flex-direction: column;
 }
 
-.workspace-column-browser .sidebar.column {
+.workspace-column-browser .sidebar {
   flex: 1;
   border-right: 0;
+}
+
+/* Tweak's parameter panel floats in the column's place, framed the same way. */
+.workspace-column-float > .sidebar {
+  flex: 1;
+  min-width: 0;
+  border-right: var(--border-thin);
+  border-radius: 0 var(--radius-lg) var(--radius-lg) 0;
+  box-shadow: var(--shadow-2);
 }
 
 /* The docked assistant keeps its column. `.workspace.no-sidebar` (view-mode
@@ -179,7 +182,7 @@
    and gave the column a second scrollbar. Icons at six across put every tool
    above the fold; the names stay in the tooltips and the command search. */
 
-.tool-palette.column {
+.tool-palette {
   max-height: none;
   padding: 0;
   background: transparent;
@@ -189,36 +192,36 @@
 }
 
 @supports (animation-timeline: scroll()) {
-  .tool-palette.column {
+  .tool-palette {
     animation: none;
   }
 }
 
-.tool-palette.column .palette-group {
+.tool-palette .palette-group {
   padding: 0 6px 3px;
 }
 
-.tool-palette.column .palette-group + .palette-group {
+.tool-palette .palette-group + .palette-group {
   border-top: var(--border-thin);
 }
 
-.tool-palette.column .palette-group-label {
+.tool-palette .palette-group-label {
   padding: 5px 4px 1px;
 }
 
-.tool-palette.column .palette-grid {
+.tool-palette .palette-grid {
   grid-template-columns: repeat(6, minmax(0, 1fr));
   gap: 0;
 }
 
-.tool-palette.column .palette-item {
+.tool-palette .palette-item {
   min-height: 28px;
   padding: 3px;
 }
 
 /* ── Sketch rail in the column ── */
 
-.sketch-rail.column {
+.sketch-rail {
   position: static;
   max-width: none;
   display: flex;
@@ -234,7 +237,7 @@
   animation: none;
 }
 
-.sketch-rail.column .sketch-rail-group-label {
+.sketch-rail .sketch-rail-group-label {
   padding: 6px 4px 0;
 }
 
@@ -309,7 +312,7 @@
 }
 
 /* The sketch settings ride in the column instead of floating. */
-.sketch-palette.column {
+.sketch-palette {
   position: static;
   width: auto;
   border: 0;
@@ -321,18 +324,18 @@
   animation: none;
 }
 
-.sketch-palette.column.collapsed {
+.sketch-palette.collapsed {
   width: auto;
 }
 
 /* ── Browser in the column ── */
 
-.sidebar.column .sidebar-section.grow {
+.sidebar .sidebar-section.grow {
   flex: 1;
 }
 
 /* Collapsed History: the scrub strip in the header, name and position after it. */
-.sidebar.column .sidebar-section.collapsed .section-title {
+.sidebar .sidebar-section.collapsed .section-title {
   gap: 8px;
 }
 
@@ -493,16 +496,29 @@
   transform: none;
 }
 
-/* The toast: the live message, centred above the dock. */
+/* The toast: the live message, centred above the dock. The footer is the
+   page's contentinfo landmark and stays in the tree; only the visual hides
+   when there is nothing to say. */
 .workspace-toast {
   position: absolute;
   left: 50%;
   bottom: 58px;
   z-index: var(--z-viewer-overlay);
+  max-width: min(560px, calc(100% - 40px));
+  transform: translateX(-50%);
+  transition: opacity var(--dur-fast) var(--ease-out);
+}
+
+.workspace-toast.hidden {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.workspace-toast-body {
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  max-width: min(560px, calc(100% - 40px));
+  max-width: 100%;
   height: 28px;
   padding: 0 12px;
   color: var(--color-text-muted);
@@ -511,18 +527,17 @@
   border-radius: var(--radius-md);
   box-shadow: var(--shadow-2);
   font-size: var(--fs-xs);
-  transform: translateX(-50%);
   animation: oz-fade var(--dur-fast) var(--ease-out);
 }
 
-.workspace-toast > span {
+.workspace-toast-body > span {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.workspace-toast > i {
+.workspace-toast-body > i {
   width: 6px;
   height: 6px;
   flex: 0 0 auto;
@@ -530,23 +545,17 @@
   background: var(--color-success);
 }
 
-.workspace-toast.warning > i {
+.workspace-toast.warning .workspace-toast-body > i {
   background: var(--color-warning);
 }
 
-.workspace-toast.running > i {
+.workspace-toast.running .workspace-toast-body > i {
   background: var(--color-accent);
 }
 
-.workspace-toast:hover {
+.workspace-toast-body:hover {
   color: var(--color-text);
   border-color: var(--color-border-strong);
-}
-
-/* The log panel rose above a status bar; there is none here. It is portaled
-   out of the workspace, so the layout is read off the root. */
-:root:has(.workspace.column-layout) .status-log-panel {
-  bottom: 0;
 }
 
 /* The bottom-right corner holds the cube with undo/redo and, under it, the
@@ -615,13 +624,13 @@
     --column-w: min(var(--sidebar-w), 232px);
   }
 
-  .tool-palette.column .palette-item-label,
+  .tool-palette .palette-item-label,
   .sketch-rail-group.draw > button > span:not(.sketch-circle-tool),
   .sketch-rail-group.utility > button {
     font-size: 0;
   }
 
-  .tool-palette.column .palette-item,
+  .tool-palette .palette-item,
   .sketch-rail-group.draw > button,
   .sketch-rail-group.draw .sketch-circle-tool > button:first-child,
   .sketch-rail-group.utility > button {
@@ -635,7 +644,7 @@
     --column-w: min(var(--sidebar-w), 200px);
   }
 
-  .tool-palette.column .palette-grid,
+  .tool-palette .palette-grid,
   .sketch-rail-group.draw {
     grid-template-columns: repeat(3, minmax(0, 1fr));
   }

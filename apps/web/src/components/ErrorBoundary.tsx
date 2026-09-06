@@ -41,7 +41,9 @@ export class ErrorBoundary extends Component<
     return (
       <section className="error-boundary" role="alert">
         <strong>{this.props.label} could not be rendered.</strong>
-        <span>Your document is still available. Reload to recover this panel.</span>
+        <span>
+          Your document is still available. Reload to recover this panel.
+        </span>
         <button type="button" onClick={() => window.location.reload()}>
           Reload workspace
         </button>

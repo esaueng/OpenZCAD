@@ -19,25 +19,23 @@ function renderDialog(overrides: Partial<ExportDialogProps> = {}) {
     ],
     onClose: vi.fn(),
     onExport: vi.fn(async () => undefined),
-    onCheckQuality: vi.fn(
-      async (): Promise<MeshQualityReport> => ({
-        watertight: true,
-        bodies: [
-          {
-            bodyId: toBodyId('body_a'),
-            boundaryEdges: 0,
-            nonManifoldEdges: 0,
-            watertight: true
-          },
-          {
-            bodyId: toBodyId('body_b'),
-            boundaryEdges: 3,
-            nonManifoldEdges: 1,
-            watertight: false
-          }
-        ]
-      })
-    ),
+    onCheckQuality: vi.fn(async (): Promise<MeshQualityReport> => ({
+      watertight: true,
+      bodies: [
+        {
+          bodyId: toBodyId('body_a'),
+          boundaryEdges: 0,
+          nonManifoldEdges: 0,
+          watertight: true
+        },
+        {
+          bodyId: toBodyId('body_b'),
+          boundaryEdges: 3,
+          nonManifoldEdges: 1,
+          watertight: false
+        }
+      ]
+    })),
     ...overrides
   };
   render(<ExportDialog {...props} />);
@@ -73,7 +71,11 @@ describe('ExportDialog', () => {
     await user.click(screen.getByRole('button', { name: /Export STL/ }));
 
     await waitFor(() =>
-      expect(props.onExport).toHaveBeenCalledWith('stl-binary', 0.02, exportOptions())
+      expect(props.onExport).toHaveBeenCalledWith(
+        'stl-binary',
+        0.02,
+        exportOptions()
+      )
     );
   });
 
@@ -84,7 +86,9 @@ describe('ExportDialog', () => {
     await user.click(screen.getByRole('radio', { name: /glTF \(GLB\)/ }));
     await user.click(screen.getByRole('button', { name: /Export glTF/ }));
 
-    await waitFor(() => expect(props.onExport).toHaveBeenCalledWith('glb', 0.08, exportOptions()));
+    await waitFor(() =>
+      expect(props.onExport).toHaveBeenCalledWith('glb', 0.08, exportOptions())
+    );
     expect(screen.queryByRole('radio', { name: /OBJ/ })).not.toBeNull();
   });
 
@@ -117,16 +121,11 @@ describe('ExportDialog', () => {
     );
 
     await waitFor(() =>
-      expect(props.onCheckQuality).toHaveBeenCalledWith(
-        0.08,
-        exportOptions()
-      )
+      expect(props.onCheckQuality).toHaveBeenCalledWith(0.08, exportOptions())
     );
     expect(screen.getByText('Base')).toBeInTheDocument();
     expect(screen.getByText('Boss')).toBeInTheDocument();
-    expect(
-      screen.getByText(/3 open, 1 non-manifold edge/)
-    ).toBeInTheDocument();
+    expect(screen.getByText(/3 open, 1 non-manifold edge/)).toBeInTheDocument();
   });
 
   it('marks a report stale when the quality changes and shows export errors', async () => {
