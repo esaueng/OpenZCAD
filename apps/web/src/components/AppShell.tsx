@@ -94,7 +94,7 @@ export function AppShell({
     '--assistant-w': `${assistantWidth}px`
   } as CSSProperties;
   return (
-    <div className="app-shell">
+    <div className={`app-shell${column ? ' column-layout' : ''}`}>
       {topBar}
       <main
         ref={workspaceRef}
