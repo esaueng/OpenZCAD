@@ -6,7 +6,7 @@
  * object's string, family and style, none of which are expression fields.
  * Rebuilding a fresh object literal per kind silently dropped them.
  */
-import { render, screen } from '@testing-library/react';
+import { render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 import type { SketchObjectData } from '@openzcad/shared';
@@ -349,9 +349,11 @@ describe('textObjectFromPoint', () => {
       />
     );
     expect(
-      screen.getByRole('button', { name: 'Tangent', pressed: true })
+      screen.getByRole('button', { name: 'Tangent constraint', pressed: true })
     ).toBeInTheDocument();
-    await user.click(screen.getByRole('button', { name: 'Horizontal' }));
+    await user.click(
+      screen.getByRole('button', { name: 'Horizontal constraint' })
+    );
     expect(onConstraintTool).toHaveBeenCalledWith('horizontal');
     await user.click(
       screen.getByRole('button', {
@@ -382,5 +384,32 @@ describe('textObjectFromPoint', () => {
       />
     );
     expect(screen.queryByLabelText('Constraints')).not.toBeInTheDocument();
+  });
+
+  it('keeps the constraint tools out of the form so field labels stay unique', () => {
+    render(
+      <SketchEntityEditor
+        data={{
+          objectKind: 'arc',
+          radius: 5,
+          centerX: 0,
+          centerY: 0,
+          startAngleDeg: 0,
+          endAngleDeg: 90
+        }}
+        scope={{}}
+        onApply={vi.fn()}
+        onDelete={vi.fn()}
+        onClose={vi.fn()}
+        constraintTools={[{ kind: 'radius', label: 'Radius', armed: false }]}
+        constraints={[]}
+        onConstraintTool={vi.fn()}
+      />
+    );
+    const form = screen.getByRole('form', { name: 'Edit arc' });
+    expect(within(form).getAllByLabelText(/radius/i)).toHaveLength(1);
+    expect(
+      screen.getByRole('button', { name: 'Radius constraint' })
+    ).toBeInTheDocument();
   });
 });

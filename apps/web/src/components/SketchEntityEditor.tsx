@@ -279,47 +279,61 @@ export function SketchEntityEditor({
     }
   }
 
+  // The constraints are a sibling card, not part of the form: the form's
+  // label space belongs to its value fields, and a "Radius" tool inside it
+  // would answer for the Radius field.
   return (
-    <form
-      className="sketch-entity-editor"
-      aria-label={`Edit ${data.objectKind}`}
-      onSubmit={submit}
-    >
-      <header>
-        <div>
-          <span className="eyebrow">Sketch entity</span>
-          <strong>{data.objectKind}</strong>
+    <div className="sketch-entity-dock">
+      <form
+        className="sketch-entity-editor"
+        aria-label={`Edit ${data.objectKind}`}
+        onSubmit={submit}
+      >
+        <header>
+          <div>
+            <span className="eyebrow">Sketch entity</span>
+            <strong>{data.objectKind}</strong>
+          </div>
+          <button
+            type="button"
+            className="icon-button"
+            aria-label="Close entity editor"
+            onClick={onClose}
+          >
+            <X size={14} aria-hidden="true" />
+          </button>
+        </header>
+        {textAttrs && (
+          <TextObjectFields value={textAttrs} onChange={setTextAttrs} />
+        )}
+        <div className="sketch-entity-fields">
+          {fields.map(({ key, label }) => (
+            <ExprInput
+              key={key}
+              label={label}
+              value={values[key] ?? ''}
+              scope={scope}
+              onChange={(value) =>
+                setValues((current) => ({ ...current, [key]: value }))
+              }
+            />
+          ))}
         </div>
-        <button
-          type="button"
-          className="icon-button"
-          aria-label="Close entity editor"
-          onClick={onClose}
-        >
-          <X size={14} aria-hidden="true" />
-        </button>
-      </header>
-      {textAttrs && (
-        <TextObjectFields value={textAttrs} onChange={setTextAttrs} />
-      )}
-      <div className="sketch-entity-fields">
-        {fields.map(({ key, label }) => (
-          <ExprInput
-            key={key}
-            label={label}
-            value={values[key] ?? ''}
-            scope={scope}
-            onChange={(value) =>
-              setValues((current) => ({ ...current, [key]: value }))
-            }
-          />
-        ))}
-      </div>
-      {!valid && (
-        <p className="form-error" role="alert">
-          {semanticError ?? 'Fix invalid values before applying this edit.'}
-        </p>
-      )}
+        {!valid && (
+          <p className="form-error" role="alert">
+            {semanticError ?? 'Fix invalid values before applying this edit.'}
+          </p>
+        )}
+        <footer>
+          <button type="button" className="secondary danger" onClick={onDelete}>
+            <Trash2 size={13} aria-hidden="true" />
+            Delete
+          </button>
+          <button type="submit" className="primary" disabled={!valid}>
+            Apply
+          </button>
+        </footer>
+      </form>
       {constraintTools && constraintTools.length > 0 && (
         <section className="sketch-entity-constraints" aria-label="Constraints">
           <span className="eyebrow">Constraints</span>
@@ -336,8 +350,8 @@ export function SketchEntityEditor({
                   type="button"
                   className={armed ? 'active' : undefined}
                   aria-pressed={armed}
-                  aria-label={label}
-                  title={label}
+                  aria-label={`${label} constraint`}
+                  title={`${label} constraint`}
                   onClick={() => onConstraintTool?.(kind)}
                 >
                   <Icon size={14} aria-hidden="true" />
@@ -386,15 +400,6 @@ export function SketchEntityEditor({
           )}
         </section>
       )}
-      <footer>
-        <button type="button" className="secondary danger" onClick={onDelete}>
-          <Trash2 size={13} aria-hidden="true" />
-          Delete
-        </button>
-        <button type="submit" className="primary" disabled={!valid}>
-          Apply
-        </button>
-      </footer>
-    </form>
+    </div>
   );
 }
