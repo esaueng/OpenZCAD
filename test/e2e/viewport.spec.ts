@@ -3,6 +3,8 @@ import {
   expect,
   bareCanvasDrags,
   expectBodyCount,
+  locateEdge,
+  setSelectionFilter,
   stubApi,
   WORKSPACE_SESSION_STORAGE_KEY
 } from './openzcad-fixtures';
@@ -150,17 +152,9 @@ test('choosing Move from an edge right-click disarms the fillet handle it just a
     .click();
   await expect(page.getByRole('button', { name: /^Fillet/ })).toBeEnabled();
 
-  const canvas = page.locator('.viewer-host canvas');
-  const bounds = await canvas.boundingBox();
-  if (!bounds) {
-    throw new Error('viewer canvas not laid out');
-  }
-  // The same visible box edge the shift-select fixture clicks.
-  await page.getByRole('button', { name: 'Edge', exact: true }).click();
-  await canvas.click({
-    button: 'right',
-    position: { x: bounds.width * 0.578, y: bounds.height * 0.29 }
-  });
+  await setSelectionFilter(page, 'Edge');
+  const edge = await locateEdge(page);
+  await page.mouse.click(edge.x, edge.y, { button: 'right' });
 
   const menu = page.locator('.marking-menu');
   await expect(menu).toBeVisible();

@@ -423,12 +423,7 @@ export function Sidebar({
         <div className="feature-list">
           {features.length === 0 && (
             <p className="muted sidebar-hint">
-              {/* Names the rail, and deliberately does not say where it is:
-                  it sits right of this panel on a wide screen, but under
-                  620px the workspace stacks into one column (responsive.css)
-                  and the rail lands below instead. "Above" was wrong at every
-                  width; a direction would be wrong at one of them. */}
-              No features yet. Pick a tool from the Feature tools rail.
+              No features yet. Pick a tool above to start.
             </p>
           )}
           {features.map((feature, index) => {

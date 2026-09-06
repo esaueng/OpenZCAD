@@ -86,7 +86,13 @@ function dockedPanelBands(host: HTMLElement): KeypadExclusion[] {
     return [];
   }
   const hostRect = host.getBoundingClientRect();
-  return ['.inspector-float', '.palette-float'].flatMap((selector) => {
+  // The column on the left, the inspector on the right, and any direct-mode
+  // strip; the keypad keeps clear of all three.
+  return [
+    '.inspector-float',
+    '.palette-float',
+    '.workspace-column-float'
+  ].flatMap((selector) => {
     const panel = area.querySelector(selector);
     if (!panel) {
       return [];

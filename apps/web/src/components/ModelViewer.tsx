@@ -3334,6 +3334,8 @@ export function ModelViewer({
       const detail = (
         event as CustomEvent<{
           bodyId?: string;
+          /** Edges already taken, so a second call finds a different one. */
+          excludeTopologyIds?: string[];
           resolve?: (
             value: { x: number; y: number; topologyId: string } | null
           ) => void;
@@ -3348,7 +3350,9 @@ export function ModelViewer({
           (!detail.bodyId || candidate.bodyId === detail.bodyId)
       );
       const edges = (body?.topology?.edges ?? []).filter(
-        (edge) => edge.displayRole !== 'seam'
+        (edge) =>
+          edge.displayRole !== 'seam' &&
+          !detail.excludeTopologyIds?.includes(edge.topologyId)
       );
       const rect = renderer.domElement.getBoundingClientRect();
       const sample = new THREE.Vector3();
