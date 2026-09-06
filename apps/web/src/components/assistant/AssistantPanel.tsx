@@ -15,7 +15,7 @@ import {
   ArrowUp,
   ImageIcon,
   Paperclip,
-  PanelRightClose,
+  ChevronRight,
   RotateCcw,
   Sparkles,
   Square,
@@ -957,16 +957,19 @@ export function AssistantPanel({
             <Trash2 size={13} aria-hidden="true" />
           </button>
         )}
-        <button
-          type="button"
-          className="assistant-icon-button"
-          title="Collapse the assistant"
-          aria-label="Collapse the assistant"
-          onClick={() => onCollapsedChange(true)}
-        >
-          <PanelRightClose size={14} aria-hidden="true" />
-        </button>
       </header>
+      {/* The same tab that opened the dock, riding on its seam: open and
+          close are one gesture in one place. */}
+      <button
+        type="button"
+        className="assistant-seam"
+        title="Collapse the assistant (⌘J)"
+        aria-label="Collapse the assistant"
+        onClick={() => onCollapsedChange(true)}
+      >
+        <ChevronRight size={14} aria-hidden="true" />
+        <span className="assistant-launcher-word">Assistant</span>
+      </button>
 
       <div
         className="assistant-thread"

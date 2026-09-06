@@ -117,42 +117,101 @@
   border-color: var(--color-border-strong);
 }
 
-/* ── Collapsed launcher ─────────────────────────────────────
-   Fixed to the viewport rather than placed in the workspace grid: a collapse
-   gives the dock's whole column back, so there is no column left to sit in.
-   It rides just above the status bar in the corner the dock came from. */
-.assistant-launcher {
+/* ── Collapsed launcher: a tab on the seam ───────────────────
+   Fixed to the window's right edge at mid-height, where the dock opens
+   from. Collapsing gives the dock's whole column back, and the tab is the
+   only thing left: 26px, off the canvas' working area. */
+.assistant-launcher,
+.assistant-seam {
   position: fixed;
-  right: 14px;
-  bottom: calc(var(--statusbar-h) + 14px);
+  right: 0;
+  top: 50%;
   z-index: var(--z-inspector-float);
-  height: 46px;
-  min-width: 46px;
-  display: inline-flex;
+  width: 26px;
+  height: 128px;
+  display: flex;
+  flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 0;
-  padding: 0 13px;
-  color: var(--color-on-accent);
-  background: var(--color-accent);
-  border: 1px solid var(--color-accent-hi);
-  border-radius: 999px;
-  font-size: var(--fs-sm);
-  box-shadow:
-    0 8px 22px rgba(0, 0, 0, 0.45),
-    0 0 0 4px color-mix(in srgb, var(--color-accent) 10%, transparent);
+  gap: 8px;
+  padding: 0;
+  color: var(--color-text-muted);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border-strong);
+  border-right: 0;
+  border-radius: var(--radius-lg) 0 0 var(--radius-lg);
+  box-shadow: -6px 0 18px rgba(0, 0, 0, 0.3);
+  transform: translateY(-50%);
   cursor: pointer;
   transition:
-    background-color var(--dur-fast) var(--ease-out),
-    box-shadow var(--dur-base) var(--ease-out),
-    transform var(--dur-base) var(--ease-out);
+    color var(--dur-fast) var(--ease-out),
+    background-color var(--dur-fast) var(--ease-out);
+}
+
+.assistant-launcher {
   animation: assistant-launcher-in var(--dur-base) var(--ease-out);
 }
 
 @keyframes assistant-launcher-in {
   from {
     opacity: 0;
-    transform: scale(0.86) translateY(6px);
+    transform: translateY(-50%) translateX(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(-50%);
+  }
+}
+
+.assistant-launcher:hover,
+.assistant-launcher:focus-visible,
+.assistant-seam:hover,
+.assistant-seam:focus-visible {
+  color: var(--color-text);
+  background: var(--color-surface-hover);
+  outline: none;
+}
+
+/* On the open dock the tab sits on the seam, just outside the panel. */
+.assistant-seam {
+  position: absolute;
+  right: 100%;
+  border-right: 0;
+}
+
+.assistant-launcher-word {
+  writing-mode: vertical-rl;
+  transform: rotate(180deg);
+  color: var(--color-text-subtle);
+  font-size: var(--fs-mini);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+/* Replies that landed behind the closed dock: one dot, the count in the name. */
+.assistant-launcher-badge {
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  background: var(--color-accent);
+  box-shadow: 0 0 0 2px var(--color-accent-dim);
+}
+
+.assistant-launcher.unread {
+  border-color: var(--color-accent-border);
+}
+
+/* The dock arrives with a short slide; closing is a cut, as with every
+   other panel here. */
+.assistant-panel {
+  animation: assistant-dock-in var(--dur-base) var(--ease-out);
+}
+
+@keyframes assistant-dock-in {
+  from {
+    opacity: 0;
+    transform: translateX(16px);
   }
   to {
     opacity: 1;
@@ -160,75 +219,19 @@
   }
 }
 
-.assistant-launcher:hover {
-  background: var(--color-accent-hi);
-  transform: translateY(-1px);
-  box-shadow:
-    0 10px 26px rgba(0, 0, 0, 0.5),
-    0 0 0 5px color-mix(in srgb, var(--color-accent) 16%, transparent);
-}
-
-.assistant-launcher:active {
-  transform: translateY(0);
-}
-
-/*
-  Idle, this is a single mark in the corner — the smallest thing that still says
-  the assistant is here. The word only unfolds under the pointer or keyboard
-  focus, so the viewport keeps the space the rest of the time.
-*/
-.assistant-launcher-word {
-  max-width: 0;
-  overflow: hidden;
-  font-weight: var(--fw-medium);
-  letter-spacing: 0.01em;
-  white-space: nowrap;
-  opacity: 0;
-  transition:
-    max-width var(--dur-base) var(--ease-out),
-    margin-left var(--dur-base) var(--ease-out),
-    opacity var(--dur-fast) var(--ease-out);
-}
-
-.assistant-launcher:hover .assistant-launcher-word,
-.assistant-launcher:focus-visible .assistant-launcher-word,
-.assistant-launcher.working .assistant-launcher-word {
-  max-width: 100px;
-  margin-left: 8px;
-  opacity: 1;
-}
-
-/* Replies that landed behind the closed dock, counted in the corner of the mark. */
-.assistant-launcher-badge {
-  position: absolute;
-  top: -4px;
-  right: -4px;
-  min-width: 20px;
-  height: 20px;
-  display: grid;
-  place-items: center;
-  padding: 0 4px;
-  color: var(--color-accent-hi);
-  background: var(--color-bg);
-  border: 1px solid var(--color-accent-hi);
-  border-radius: 999px;
-  font-family: var(--font-mono);
-  font-size: var(--fs-mini);
-}
-
-.assistant-launcher.unread {
-  box-shadow:
-    0 6px 20px rgba(0, 0, 0, 0.45),
-    0 0 0 5px color-mix(in srgb, var(--color-accent) 22%, transparent);
+[data-reduced-motion='true'] .assistant-panel,
+[data-reduced-motion='true'] .assistant-launcher {
+  animation: none;
 }
 
 /* Something is still streaming behind the closed dock. */
 .assistant-launcher.working::before {
   content: '';
   position: absolute;
-  inset: -4px;
+  inset: -3px 0 -3px -3px;
   border: 1px solid var(--color-accent-hi);
-  border-radius: 999px;
+  border-right: 0;
+  border-radius: var(--radius-lg) 0 0 var(--radius-lg);
   animation: assistant-pulse 1.8s var(--ease-out) infinite;
 }
 

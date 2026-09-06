@@ -1,4 +1,4 @@
-import { Sparkles } from 'lucide-react';
+import { ChevronLeft } from 'lucide-react';
 
 interface AssistantLauncherProps {
   /** Turns that landed while the dock was closed. */
@@ -12,13 +12,10 @@ interface AssistantLauncherProps {
 }
 
 /**
- * The assistant when the dock is closed: one mark in the corner of the
- * viewport.
- *
- * Collapsing has to give the modeling space back completely — the panel's
- * column, not just its contents — so what is left is deliberately the smallest
- * thing that can still say "there is a conversation here, and it moved while
- * you were away".
+ * The assistant when the dock is closed: a tab on the right edge, where the
+ * dock will open from. It sits at the seam rather than over the canvas, so
+ * the modeling space is given back completely and the handle is always in
+ * the one place the panel can appear.
  */
 export function AssistantLauncher({
   unread,
@@ -40,16 +37,14 @@ export function AssistantLauncher({
         unread > 0 ? ' unread' : ''
       }${hidden ? ' assistant-off-screen' : ''}`}
       onClick={onOpen}
-      title={preview ? `${label}\n\n${preview}` : label}
+      title={`${preview ? `${label}\n\n${preview}` : label} (⌘J)`}
       aria-label={label}
       aria-hidden={hidden || undefined}
     >
-      <Sparkles size={20} aria-hidden="true" />
+      <ChevronLeft size={14} aria-hidden="true" />
       <span className="assistant-launcher-word">Assistant</span>
       {unread > 0 && (
-        <span className="assistant-launcher-badge" aria-hidden="true">
-          {unread > 9 ? '9+' : unread}
-        </span>
+        <span className="assistant-launcher-badge" aria-hidden="true" />
       )}
     </button>
   );
