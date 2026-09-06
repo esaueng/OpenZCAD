@@ -395,15 +395,62 @@
   pointer-events: none;
 }
 
+/* The message is the activity log's handle, as the status bar's was. */
 .workspace-readout-hint {
   grid-column: 2;
   min-width: 0;
+  justify-self: center;
+  max-width: 100%;
+  padding: 2px 8px;
   color: var(--color-viewport-text-muted);
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
   font-size: var(--fs-sm);
   text-align: center;
+  pointer-events: auto;
+}
+
+.workspace-readout-hint > span {
+  display: block;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.workspace-readout-hint.empty {
+  /* Nothing to say: a 26px target that still opens the log on hover. */
+  min-width: 26px;
+  opacity: 0.5;
+}
+
+.workspace-readout-hint:hover,
+.workspace-readout-hint[aria-expanded='true'] {
+  color: var(--color-accent-hi);
+  background: color-mix(in srgb, var(--color-surface) 70%, transparent);
+  border-color: var(--color-viewport-border);
+}
+
+.workspace-readout-filter {
+  padding: 0 4px;
+  color: var(--color-viewport-text-muted);
+  border-radius: var(--radius-sm);
+  font: inherit;
+  pointer-events: auto;
+}
+
+.workspace-readout-filter.automatic {
+  color: var(--color-accent-hi);
+}
+
+.workspace-readout-filter:hover {
+  color: var(--color-text);
+  background: color-mix(in srgb, var(--color-surface) 70%, transparent);
+}
+
+/* The log panel rose above a status bar; there is none here. It is portaled
+   out of the workspace, so the layout is read off the root. */
+:root:has(.workspace.column-layout) .status-log-panel {
+  bottom: 0;
 }
 
 .workspace-readout-hint.warning {
