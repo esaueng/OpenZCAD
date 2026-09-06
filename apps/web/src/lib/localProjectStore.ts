@@ -1,17 +1,29 @@
 import type { ProjectDocument, ProjectSummary } from '@openzcad/shared';
 
+import type { BackupFile, ProjectBackup } from './projectBackup';
+
 const DATABASE_NAME = 'openzcad-v2';
 const STORE_NAME = 'projects';
 
 function openDatabase(): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
-    const request = indexedDB.open(DATABASE_NAME, 1);
+    const request = indexedDB.open(DATABASE_NAME, 2);
     request.onupgradeneeded = () => {
+      if (!request.result.objectStoreNames.contains('backupFiles')) {
+        request.result.createObjectStore('backupFiles');
+      }
       if (!request.result.objectStoreNames.contains(STORE_NAME)) {
         request.result.createObjectStore(STORE_NAME, { keyPath: 'projectId' });
       }
     };
-    request.onsuccess = () => resolve(request.result);
+    request.onsuccess = () => {
+      request.result.onversionchange = () => request.result.close();
+      resolve(request.result);
+    };
+    request.onblocked = () =>
+      reject(
+        new Error('Close other OpenZCAD tabs and retry the project transfer.')
+      );
     request.onerror = () =>
       reject(request.error ?? new Error('IndexedDB unavailable.'));
   });
@@ -92,4 +104,73 @@ export function selectProjectDocument(
     return local.version > remote.version ? local : remote;
   }
   return local.derived.updatedAt > remote.derived.updatedAt ? local : remote;
+}
+
+export async function saveImportedProject(
+  backup: ProjectBackup
+): Promise<void> {
+  const database = await openDatabase();
+  return new Promise((resolve, reject) => {
+    const tx = database.transaction([STORE_NAME, 'backupFiles'], 'readwrite');
+    tx.objectStore(STORE_NAME).put(backup.document);
+    tx.objectStore('backupFiles').put(backup.files, backup.document.projectId);
+    tx.oncomplete = () => {
+      database.close();
+      resolve();
+    };
+    tx.onabort = tx.onerror = () => {
+      database.close();
+      reject(tx.error ?? new Error('Project import storage failed.'));
+    };
+  });
+}
+
+export async function loadProjectBackupFiles(
+  projectId: string
+): Promise<BackupFile[]> {
+  const database = await openDatabase();
+  return new Promise((resolve, reject) => {
+    const tx = database.transaction('backupFiles', 'readonly');
+    const request = tx.objectStore('backupFiles').get(projectId);
+    tx.oncomplete = () => {
+      database.close();
+      resolve((request.result as BackupFile[] | undefined) ?? []);
+    };
+    tx.onabort = tx.onerror = () => {
+      database.close();
+      reject(tx.error ?? new Error('Project files could not be read.'));
+    };
+  });
+}
+
+export async function rememberRemoteProject(projectId: string): Promise<void> {
+  const database = await openDatabase();
+  return new Promise((resolve, reject) => {
+    const tx = database.transaction('backupFiles', 'readwrite');
+    tx.objectStore('backupFiles').put(true, `remote:${projectId}`);
+    tx.oncomplete = () => {
+      database.close();
+      resolve();
+    };
+    tx.onabort = tx.onerror = () => {
+      database.close();
+      reject(tx.error ?? new Error('Could not remember cloud project.'));
+    };
+  });
+}
+
+export async function isRemoteProject(projectId: string): Promise<boolean> {
+  const database = await openDatabase();
+  return new Promise((resolve, reject) => {
+    const tx = database.transaction('backupFiles', 'readonly');
+    const request = tx.objectStore('backupFiles').get(`remote:${projectId}`);
+    tx.oncomplete = () => {
+      database.close();
+      resolve(request.result === true);
+    };
+    tx.onabort = tx.onerror = () => {
+      database.close();
+      reject(tx.error ?? new Error('Could not read project origin.'));
+    };
+  });
 }

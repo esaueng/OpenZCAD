@@ -1,3 +1,4 @@
+import { ProjectImportButton } from './ProjectImportButton';
 import { type ChangeEvent, useEffect, useRef, useState } from 'react';
 import {
   Check,
@@ -30,6 +31,10 @@ interface TopBarProps {
   session: AuthSession | null;
   collaborationStatus: CollaborationStatus;
   collaboratorCount: number;
+  projectTransferBusy?: boolean;
+  onImportProject(file: File): void;
+  onExportProject(): void;
+  onDownloadArtifact(artifact: ArtifactRecord): void;
   onUndo(): void;
   onRedo(): void;
   onSave(): void;
@@ -52,6 +57,10 @@ export function TopBar({
   session,
   collaborationStatus,
   collaboratorCount,
+  projectTransferBusy,
+  onImportProject,
+  onExportProject,
+  onDownloadArtifact,
   onUndo,
   onRedo,
   onSave,
@@ -178,7 +187,25 @@ export function TopBar({
           File{artifacts.length > 0 ? ` ${artifacts.length}` : ''}
         </summary>
         <div className="topbar-menu-panel">
-          <label className="topbar-menu-item" title="Import an editable STEP solid or STL mesh">
+          <ProjectImportButton
+            onImport={onImportProject}
+            disabled={projectTransferBusy}
+          />
+          <button
+            type="button"
+            className="topbar-menu-item"
+            disabled={!projectName || projectTransferBusy}
+            onClick={onExportProject}
+          >
+            <Download size={13} aria-hidden="true" />
+            <span>Export project</span>
+            <small>complete backup</small>
+          </button>
+          <div className="topbar-menu-sep" />
+          <label
+            className="topbar-menu-item"
+            title="Import an editable STEP solid or STL mesh"
+          >
             <Upload size={13} aria-hidden="true" />
             <span>Import STEP or STL…</span>
             <input
@@ -227,11 +254,11 @@ export function TopBar({
             </span>
           ) : (
             artifacts.map((artifact) => (
-              <a
+              <button
                 key={artifact.artifactId}
                 className="topbar-menu-item"
-                href={`/api/artifacts/${artifact.artifactId}/download`}
-                download={artifact.name}
+                type="button"
+                onClick={() => onDownloadArtifact(artifact)}
               >
                 <Download size={13} aria-hidden="true" />
                 <span>{artifact.name}</span>
@@ -240,7 +267,7 @@ export function TopBar({
                     ? artifact.kind
                     : `${artifact.kind} · ${Math.max(1, Math.round(artifact.bytes / 1024))} KB`}
                 </small>
-              </a>
+              </button>
             ))
           )}
         </div>

@@ -1,3 +1,4 @@
+import { ProjectImportButton } from './ProjectImportButton';
 import { useEffect, useState } from 'react';
 import { FolderOpen, GraduationCap, Plus, Settings } from 'lucide-react';
 import {
@@ -14,6 +15,7 @@ interface StartScreenProps {
   busy: boolean;
   demos: DemoDefinition[];
   defaultUnits: UnitSystem;
+  onImportProject(file: File): void;
   onCreate(name: string, units: UnitSystem): void;
   onOpen(projectId: string): void;
   onOpenDemo(definition: DemoDefinition): void;
@@ -26,6 +28,7 @@ export function StartScreen({
   busy,
   demos,
   defaultUnits,
+  onImportProject,
   onCreate,
   onOpen,
   onOpenDemo,
@@ -129,7 +132,11 @@ export function StartScreen({
               onChange={(event) => setName(event.target.value)}
             />
             {nameTooLong && (
-              <small id="project-name-error" className="field-error" role="alert">
+              <small
+                id="project-name-error"
+                className="field-error"
+                role="alert"
+              >
                 Project name must be at most {MAX_PROJECT_NAME_LENGTH}{' '}
                 characters.
               </small>
@@ -148,15 +155,17 @@ export function StartScreen({
               <option value="inch">Inches</option>
             </select>
           </div>
-          <button
-            type="submit"
-            className="primary wide"
-            disabled={!canCreate}
-          >
+          <button type="submit" className="primary wide" disabled={!canCreate}>
             <Plus size={15} aria-hidden="true" />
             Create project
           </button>
         </form>
+
+        <ProjectImportButton
+          onImport={onImportProject}
+          disabled={busy}
+          className="secondary wide"
+        />
 
         {userProjects.length > 0 && (
           <div className="start-section">

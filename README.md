@@ -166,3 +166,22 @@ Cloud settings, personal credentials, projects, artifacts, and collaboration req
 4. Persistent naming resilient to upstream topology changes.
 5. Broader AI patch operations as each feature gains a deterministic command contract.
 6. Exact-kernel caching, loading UX, and finer worker bundle splitting.
+
+## Project backups
+
+Use **File → Export project** to download an `.openzcad` backup of the whole
+open project, regardless of the selected body. It contains all model nodes,
+parameters, sketches, embedded STEP/STL geometry sources, feature order,
+command history, revision/checkpoint records, and archived file contents.
+Cloud-backed projects require access to their archived files; an unavailable
+file stops export rather than producing a partial backup.
+
+Use **Import project…** on the project screen or in the File menu to open a
+backup as a separate local project. The original project is preserved. Imported
+files remain downloadable under **Stored files**, including after an offline
+reload, and are included when exporting the imported project again.
+
+Backups use a versioned JSON container with SHA-256 file checksums and a 256 MB
+limit. Account preferences, collaboration access, viewport preferences, and the
+in-memory undo/redo stack are not part of the saved project document. Import
+does not publish the project to the cloud.
