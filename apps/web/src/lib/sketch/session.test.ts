@@ -11,6 +11,7 @@ import {
   circlePreviewPoints,
   centerInferenceSegments,
   collectSketchSnapTargets,
+  angleForInProgress,
   dimensionForInProgress,
   frameFromFace,
   lineObjectFromPoints,
@@ -246,6 +247,17 @@ describe('dimensionForInProgress', () => {
     expect(dimensionForInProgress('line', { x: 0, y: 0 }, { x: 3, y: 4 })).toBe(
       '5'
     );
+  });
+});
+
+describe('angleForInProgress', () => {
+  it('measures counter-clockwise from +X, wrapped to [0, 360)', () => {
+    expect(angleForInProgress({ x: 0, y: 0 }, { x: 3, y: 4 })).toBe(53.1);
+    expect(angleForInProgress({ x: 0, y: 0 }, { x: -1, y: 0 })).toBe(180);
+    expect(angleForInProgress({ x: 0, y: 0 }, { x: 0, y: -2 })).toBe(270);
+    expect(angleForInProgress({ x: 5, y: 5 }, { x: 9, y: 5 })).toBe(0);
+    // A hair below the +X axis rounds to 360, which must read as 0.
+    expect(angleForInProgress({ x: 0, y: 0 }, { x: 1000, y: -0.5 })).toBe(0);
   });
 });
 

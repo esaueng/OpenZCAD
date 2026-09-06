@@ -472,6 +472,22 @@ export function dimensionForInProgress(
   return `${round(Math.hypot(dx, dy))}`;
 }
 
+/**
+ * Direction of an in-progress line from its anchor, in degrees
+ * counter-clockwise from +X in [0, 360), to one decimal. Shown beside the
+ * length so a typed length and a watched angle place a line exactly.
+ */
+export function angleForInProgress(
+  start: SketchPoint,
+  current: SketchPoint
+): number {
+  const degrees =
+    (Math.atan2(current.y - start.y, current.x - start.x) * 180) / Math.PI;
+  const wrapped = ((degrees % 360) + 360) % 360;
+  const rounded = Math.round(wrapped * 10) / 10;
+  return rounded === 360 ? 0 : rounded;
+}
+
 // ---------------------------------------------------------------------------
 // Entity snapping (endpoint / midpoint / center)
 // ---------------------------------------------------------------------------
