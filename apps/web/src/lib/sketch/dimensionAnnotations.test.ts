@@ -177,4 +177,94 @@ describe('persistent sketch dimensions', () => {
       )
     ).toEqual([]);
   });
+  it('draws a circle radius from its center to its actual rim, while labeling the driving target', () => {
+    const { entries, constraints } = fixture(
+      [{ objectKind: 'circle', centerX: 10, centerY: 20, radius: 4 }],
+      (sketch) => ({
+        constraintKind: 'radius',
+        objectId: sketch.objectIds[0]!,
+        value: 'length'
+      })
+    );
+    const [annotation] = sketchDimensionAnnotations(
+      entries,
+      constraints,
+      resolve,
+      'in'
+    );
+    expect(annotation?.kind).toBe('radius');
+    expect(annotation?.label).toBe('R length = 5 in');
+    expect(annotation?.span?.start).toEqual({ x: 10, y: 20 });
+    expect(annotation?.span?.end.x).toBeCloseTo(10 + 4 / Math.sqrt(2), 12);
+    expect(annotation?.span?.end.y).toBeCloseTo(20 + 4 / Math.sqrt(2), 12);
+    expect(annotation?.id).toBe(constraints[0]!.constraintId);
+    expect(
+      sketchDimensionAnnotations(entries, constraints, () => undefined, 'mm')
+    ).toEqual([]);
+    expect(sketchDimensionAnnotations([], constraints, resolve, 'mm')).toEqual(
+      []
+    );
+  });
+
+  it('places an arc radius on the counter-clockwise sweep across zero degrees', () => {
+    const { entries, constraints } = fixture(
+      [
+        {
+          objectKind: 'arc',
+          centerX: 2,
+          centerY: 3,
+          radius: 5,
+          startAngleDeg: 300,
+          endAngleDeg: 60
+        }
+      ],
+      (sketch) => ({
+        constraintKind: 'radius',
+        objectId: sketch.objectIds[0]!,
+        value: 5
+      })
+    );
+    const [annotation] = sketchDimensionAnnotations(
+      entries,
+      constraints,
+      resolve,
+      'mm'
+    );
+    expect(annotation?.span?.end.x).toBeCloseTo(7, 12);
+    expect(annotation?.span?.end.y).toBeCloseTo(3, 12);
+    for (const [startAngleDeg, endAngleDeg] of [
+      [0, 0],
+      [0, 720],
+      [NaN, 60]
+    ]) {
+      expect(
+        sketchDimensionAnnotations(
+          [
+            {
+              ...entries[0]!,
+              data: {
+                objectKind: 'arc',
+                centerX: 2,
+                centerY: 3,
+                radius: 5,
+                startAngleDeg: startAngleDeg!,
+                endAngleDeg: endAngleDeg!
+              }
+            }
+          ],
+          constraints,
+          resolve,
+          'mm'
+        )
+      ).toEqual([]);
+    }
+    expect(
+      sketchDimensionAnnotations(
+        [{ ...entries[0]!, data: line }],
+        constraints,
+        resolve,
+        'mm'
+      )
+    ).toEqual([]);
+  });
 });
