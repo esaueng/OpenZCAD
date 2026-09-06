@@ -392,22 +392,27 @@
    right-hand end kept clear for the viewer's grid readout and the cube. */
 .workspace-readout {
   position: absolute;
+  top: 12px;
   left: calc(var(--column-w) + 14px);
   right: 12px;
   bottom: 10px;
   z-index: var(--z-viewer-overlay);
   display: grid;
   grid-template-columns: max-content minmax(0, 1fr) 190px;
-  align-items: end;
+  grid-template-rows: auto minmax(0, 1fr) auto;
   gap: 16px;
   pointer-events: none;
 }
 
-/* The message is the activity log's handle, as the status bar's was. */
+/* The message rides top-centre, the slot a tool card takes when one is up
+   (the message mutes then), so the bottom of the canvas stays clear. It is
+   still the activity log's handle. */
 .workspace-readout-hint {
   grid-column: 2;
-  min-width: 0;
+  grid-row: 1;
   justify-self: center;
+  align-self: start;
+  min-width: 0;
   max-width: 100%;
   padding: 2px 8px;
   color: var(--color-text-subtle);
@@ -471,6 +476,8 @@
 
 .workspace-readout-meta {
   grid-column: 1;
+  grid-row: 3;
+  align-self: end;
   display: flex;
   gap: 12px;
   padding-bottom: 1px;
@@ -527,10 +534,6 @@
   border-bottom: 0;
   border-radius: var(--radius-md) var(--radius-md) 0 0;
   transform: translateX(-50%);
-}
-
-.workspace.column-layout .workspace-readout-hint {
-  margin-bottom: 26px;
 }
 
 .workspace.column-layout .viewer-area.has-inspector .viewer-rail {
