@@ -294,3 +294,24 @@ Current assistant limitations and gates:
 ## License
 
 Apache License 2.0 — see [LICENSE](LICENSE). Copyright 2026 Esau Engineering LLC. See [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md) for bundled dependency and font notices.
+
+## Project backups
+
+Use **File → Export project** to download an `.openzcad` backup of the entire
+open project, independently of the selected body. The backup contains the
+editable model, parameters, sketches, feature and command history, checkpoint
+records, retained restorable save states, STEP source blobs, measurements, and
+archived files. Display meshes rebuild from the model when it opens.
+
+Use **Import project…** on the project screen or in the File menu to create a
+separate local project. Its original remains unchanged. Sources, save states,
+measurements, and archived files commit together; imported files remain
+available under **Stored files** after an offline reload. The copy can later be
+saved to your account using the existing project controls.
+
+Backups use a versioned JSON container with SHA-256 checksums and a 256 MB
+limit. Cloud-backed projects need access to their archived files and retained
+save states; failed downloads stop export rather than create a partial backup.
+Previously pruned save states retain their history records but cannot regain
+snapshot contents that no longer exist. Account permissions, shelf placement,
+viewport preferences, and the transient undo/redo stack are not transferred.
