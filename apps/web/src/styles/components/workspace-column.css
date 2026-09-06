@@ -415,11 +415,22 @@
    selection filter, the sketch snap, the activity log and the scale. What
    the status bar used to say arrives as a toast above it and goes quiet
    on its own. Square-ish corners: it is furniture, not a pill. */
-.viewport-dock {
+.viewport-dock-lane {
   position: absolute;
-  left: 50%;
+  /* Symmetric insets keep the lane's centre on the viewport's centre; when
+     the dock outgrows the lane it starts at the column's edge instead of
+     sliding under it. */
+  left: calc(var(--column-w) + 12px);
+  right: calc(var(--column-w) + 12px);
   bottom: 8px;
   z-index: var(--z-viewer-overlay);
+  display: flex;
+  justify-content: safe center;
+  pointer-events: none;
+}
+
+.viewport-dock {
+  flex: 0 0 auto;
   display: flex;
   align-items: center;
   gap: 6px;
@@ -429,7 +440,7 @@
   border: var(--border-strong);
   border-radius: var(--radius-md);
   box-shadow: var(--shadow-2);
-  transform: translateX(-50%);
+  pointer-events: auto;
 }
 
 /* Inside the dock the viewer bar is a row of buttons, nothing more. */
@@ -501,12 +512,20 @@
    when there is nothing to say. */
 .workspace-toast {
   position: absolute;
-  left: 50%;
+  /* The same lane as the dock: centred on the viewport, never under the
+     column. */
+  left: calc(var(--column-w) + 12px);
+  right: calc(var(--column-w) + 12px);
   bottom: 58px;
   z-index: var(--z-viewer-overlay);
-  max-width: min(560px, calc(100% - 40px));
-  transform: translateX(-50%);
+  display: flex;
+  justify-content: safe center;
+  pointer-events: none;
   transition: opacity var(--dur-fast) var(--ease-out);
+}
+
+.workspace-toast:not(.hidden) .workspace-toast-body {
+  pointer-events: auto;
 }
 
 .workspace-toast.hidden {
@@ -514,11 +533,21 @@
   pointer-events: none;
 }
 
+/* The selection chip sits on the dock's shoulder, and the toast steps up
+   over it while it is there, so neither covers the dock's buttons. */
+.workspace.column-layout .selection-chip {
+  bottom: 56px;
+}
+
+.workspace.column-layout .viewer-area:has(.selection-chip) .workspace-toast {
+  bottom: 92px;
+}
+
 .workspace-toast-body {
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  max-width: 100%;
+  max-width: min(560px, 100%);
   height: 28px;
   padding: 0 12px;
   color: var(--color-text-muted);
@@ -551,6 +580,16 @@
 
 .workspace-toast.running .workspace-toast-body > i {
   background: var(--color-accent);
+}
+
+/* Off-screen but present: the workspace summary for assistive tech. */
+.workspace-status-summary {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
 }
 
 .workspace-toast-body:hover {
@@ -648,4 +687,39 @@
   .sketch-rail-group.draw {
     grid-template-columns: repeat(3, minmax(0, 1fr));
   }
+}
+
+/* A phone width has room for the viewer bar and the filter chip; the snap
+   readout and the scale bar are the first to go, and the dock hugs its
+   remaining contents. */
+@media (max-width: 520px) {
+  .viewport-dock-lane,
+  .workspace-toast {
+    left: 8px;
+    right: 8px;
+  }
+
+  .viewport-dock {
+    gap: 4px;
+    padding: 0 6px;
+  }
+
+  .viewport-dock .viewport-dock-snap,
+  .viewport-dock:has(.viewer-rail) .viewport-scale-indicator {
+    display: none;
+  }
+
+  /* The dock spans a phone's width, so the cube steps up above it. */
+  .workspace.column-layout .viewer-rail-stack,
+  .workspace.column-layout .viewer-area.has-inspector .viewer-rail-stack {
+    bottom: 52px;
+  }
+}
+
+/* View mode's tool strip used to sit where the dock is now; it takes the
+   top of the viewport, beside the column. */
+.workspace.column-layout .palette-float:has(.view-mode-bar) {
+  top: 10px;
+  bottom: auto;
+  align-items: flex-start;
 }

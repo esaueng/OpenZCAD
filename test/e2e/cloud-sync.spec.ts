@@ -12,7 +12,13 @@ import {
   type UnitSystem
 } from '@openzcad/shared';
 import type { StoredMeasurementRecord } from '../../apps/web/src/lib/measurementRecord';
-import { createProject, expect, stubApi, test } from './openzcad-fixtures';
+import {
+  createProject,
+  expect,
+  setSelectionFilter,
+  stubApi,
+  test
+} from './openzcad-fixtures';
 
 // Cross-tab IndexedDB sync settles much more slowly on the 2-core CI runners
 // than on a workstation; assertion budgets scale up there and stay tight
@@ -671,7 +677,7 @@ test('syncs View measurements to a second device without changing the CAD docume
 
     await switchWorkspace(pageA, 'View');
     await armMeasure(pageA);
-    await pageA.getByRole('button', { name: 'Edge', exact: true }).click();
+    await setSelectionFilter(pageA, 'Edge');
     const edge = await locateEdge(pageA);
     await pageA.mouse.click(edge.x, edge.y);
     const measured = await pageA

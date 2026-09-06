@@ -378,10 +378,8 @@ test('switches a planar-face selection into an editable arc sketch', async ({
   ).toHaveAttribute('aria-selected', 'true');
   await offsetCard.getByRole('tab', { name: 'Sketch' }).click();
 
-  await expect(
-    page.getByRole('region', { name: 'Sketch operation' })
-  ).toBeVisible();
   const sketchTools = page.getByRole('toolbar', { name: 'Sketch tools' });
+  await expect(sketchTools).toBeVisible();
   await sketchTools.getByRole('button', { name: /^Arc/ }).click();
   const sketchBounds = await canvas.boundingBox();
   expect(sketchBounds).not.toBeNull();
@@ -577,7 +575,7 @@ test('keeps face sketching available after a primitive direct edit', async ({
   await expect(sketchAction).toBeEnabled();
   await sketchAction.click();
   await expect(
-    page.getByRole('region', { name: 'Sketch operation' })
+    page.getByRole('toolbar', { name: 'Sketch tools' })
   ).toBeVisible();
   await expect(page.getByRole('contentinfo')).toContainText('warnings0');
   expect(consoleErrors).toEqual([]);
@@ -3180,8 +3178,7 @@ test('each sketch plane label names the plane it actually opens', async ({
     // Finish rather than Escape: leaving an empty sketch by Escape parks the
     // workspace in a state where the plane prompt will not re-open.
     await page
-      .getByRole('toolbar', { name: 'Sketch tools' })
-      .getByRole('button', { name: /Finish Sketch/ })
+      .getByRole('button', { name: 'Finish Sketch', exact: true })
       .click();
     await expect(
       page.getByRole('toolbar', { name: 'Sketch tools' })
