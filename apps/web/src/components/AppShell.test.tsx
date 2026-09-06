@@ -45,6 +45,10 @@ describe('AppShell inspector flag', () => {
 describe('AppShell column layout', () => {
   it('floats the sidebar over the viewport and drops the status bar', () => {
     const { container } = renderShell(null, 'column');
+    // The shell drops the status row with the bar, or a blank strip stays.
+    expect(
+      container.querySelector('.app-shell')?.classList.contains('column-layout')
+    ).toBe(true);
     const workspace = container.querySelector('.workspace');
     expect(workspace?.classList.contains('column-layout')).toBe(true);
     // The grid no longer reserves a column for it, so the viewport is full width.
@@ -61,6 +65,9 @@ describe('AppShell column layout', () => {
 
   it('keeps the classic layout docked', () => {
     const { container } = renderShell(null);
+    expect(
+      container.querySelector('.app-shell')?.classList.contains('column-layout')
+    ).toBe(false);
     const workspace = container.querySelector('.workspace');
     expect(workspace?.classList.contains('column-layout')).toBe(false);
     expect(workspace?.classList.contains('no-sidebar')).toBe(false);
