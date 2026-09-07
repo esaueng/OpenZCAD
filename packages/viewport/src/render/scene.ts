@@ -15,6 +15,21 @@ import { VIEW_DIRECTIONS } from '../camera/views';
 const CAD_CREASE_ANGLE = THREE.MathUtils.degToRad(30);
 const DOT_EPSILON = 1e-10;
 
+interface ExactSmoothingLayout {
+  sourceIndices: Uint32Array;
+  sourceVertexCount: number;
+  faceRanges: number[];
+  renderSources: Uint32Array;
+  normalSums: Float64Array;
+}
+
+// One layout per installed geometry; topology changes release it with that
+// geometry. Mesh-only inputs retain the angle-dependent crease algorithm.
+const exactSmoothingLayouts = new WeakMap<
+  THREE.BufferGeometry,
+  ExactSmoothingLayout
+>();
+
 interface MeshFace {
   normal: THREE.Vector3;
   cornerAngles: [number, number, number];
@@ -190,6 +205,7 @@ function geometryFromMesh(
   const normals: number[] = [];
   const indices: number[] = [];
   const outputIndexByGroup = new Map<number, number>();
+  const renderSources: number[] = [];
   for (
     let cornerIndex = 0;
     cornerIndex < sourceIndices.length;
@@ -201,6 +217,7 @@ function geometryFromMesh(
       outputIndex = vertices.length / 3;
       outputIndexByGroup.set(root, outputIndex);
       const sourceIndex = sourceIndices[cornerIndex]!;
+      renderSources.push(sourceIndex);
       vertices.push(
         sourcePositions[sourceIndex * 3]!,
         sourcePositions[sourceIndex * 3 + 1]!,
@@ -219,6 +236,28 @@ function geometryFromMesh(
   );
   geometry.setAttribute('normal', new THREE.Float32BufferAttribute(normals, 3));
   geometry.setIndex(indices);
+  const layoutBytes =
+    sourceIndices.length * 4 +
+    renderSources.length * 4 +
+    vertices.length * 8 +
+    (topology?.faces.length ?? 0) * 16;
+  if (
+    topology &&
+    triangleCount > 0 &&
+    layoutBytes <= 1024 * 1024 &&
+    topologyFaceByTriangle.every((face) => face >= 0)
+  ) {
+    exactSmoothingLayouts.set(geometry, {
+      sourceIndices: Uint32Array.from(sourceIndices),
+      sourceVertexCount: sourcePositions.length,
+      faceRanges: topology.faces.flatMap((face) => [
+        face.triangleStart,
+        face.triangleCount
+      ]),
+      renderSources: Uint32Array.from(renderSources),
+      normalSums: new Float64Array(vertices.length)
+    });
+  }
   return geometry;
 }
 
@@ -424,6 +463,158 @@ export function createObjectForBody(
     mesh.add(edges);
   }
   return mesh;
+}
+
+/** A worker message clones unchanged bodies; compare without serializing mesh arrays. */
+export function sameBodyProjection(
+  previous: BodyRepresentation,
+  next: BodyRepresentation
+): boolean {
+  return equalProjectionValue(previous, next);
+}
+
+function equalProjectionValue(left: unknown, right: unknown): boolean {
+  if (left === right) return true;
+  if (!left || !right || typeof left !== 'object' || typeof right !== 'object')
+    return false;
+  if (ArrayBuffer.isView(left) || ArrayBuffer.isView(right)) {
+    if (
+      !(left instanceof Float32Array || left instanceof Uint32Array) ||
+      !(right instanceof Float32Array || right instanceof Uint32Array) ||
+      left.constructor !== right.constructor ||
+      left.length !== right.length
+    )
+      return false;
+    for (let i = 0; i < left.length; i += 1)
+      if (left[i] !== right[i]) return false;
+    return true;
+  }
+  if (Array.isArray(left) || Array.isArray(right)) {
+    return (
+      Array.isArray(left) &&
+      Array.isArray(right) &&
+      left.length === right.length &&
+      left.every((value, i) => equalProjectionValue(value, right[i]))
+    );
+  }
+  const a = left as Record<string, unknown>;
+  const b = right as Record<string, unknown>;
+  const keys = Object.keys(a);
+  return (
+    keys.length === Object.keys(b).length &&
+    keys.every(
+      (key) => Object.hasOwn(b, key) && equalProjectionValue(a[key], b[key])
+    )
+  );
+}
+
+/**
+ * Reuses an exact body's GPU buffers only when triangle connectivity and face
+ * partitions are unchanged. Those define the original smoothing groups;
+ * positions and angle-weighted normals are recomputed without rebuilding them.
+ * False leaves the object untouched so the caller can replace it normally.
+ */
+export function updateObjectForBody(
+  object: THREE.Object3D,
+  body: BodyRepresentation
+): boolean {
+  if (
+    !(object instanceof THREE.Mesh) ||
+    !(object.material instanceof THREE.MeshPhongMaterial) ||
+    !body.topology?.edges.length
+  )
+    return false;
+  const geometry = object.geometry as THREE.BufferGeometry;
+  const layout = exactSmoothingLayouts.get(geometry);
+  const source = body.mesh;
+  const ranges = body.topology.faces.flatMap((face) => [
+    face.triangleStart,
+    face.triangleCount
+  ]);
+  if (
+    !layout ||
+    source.vertices.length !== layout.sourceVertexCount ||
+    source.indices.length !== layout.sourceIndices.length ||
+    ranges.length !== layout.faceRanges.length ||
+    ranges.some((value, i) => value !== layout.faceRanges[i])
+  )
+    return false;
+  for (let i = 0; i < source.indices.length; i += 1) {
+    if (source.indices[i] !== layout.sourceIndices[i]) return false;
+  }
+  const position = geometry.getAttribute('position') as THREE.BufferAttribute;
+  const normal = geometry.getAttribute('normal') as THREE.BufferAttribute;
+  const renderIndices = geometry.getIndex()!;
+  const sums = layout.normalSums;
+  sums.fill(0);
+  const vertices = source.vertices;
+  for (let i = 0; i < layout.renderSources.length; i += 1) {
+    const sourceIndex = layout.renderSources[i]! * 3;
+    position.setXYZ(
+      i,
+      vertices[sourceIndex]!,
+      vertices[sourceIndex + 1]!,
+      vertices[sourceIndex + 2]!
+    );
+  }
+  for (let i = 0; i < source.indices.length; i += 3) {
+    const a = source.indices[i]! * 3;
+    const b = source.indices[i + 1]! * 3;
+    const c = source.indices[i + 2]! * 3;
+    const ux = vertices[b]! - vertices[a]!;
+    const uy = vertices[b + 1]! - vertices[a + 1]!;
+    const uz = vertices[b + 2]! - vertices[a + 2]!;
+    const vx = vertices[c]! - vertices[a]!;
+    const vy = vertices[c + 1]! - vertices[a + 1]!;
+    const vz = vertices[c + 2]! - vertices[a + 2]!;
+    const nx = uy * vz - uz * vy;
+    const ny = uz * vx - ux * vz;
+    const nz = ux * vy - uy * vx;
+    const area = Math.hypot(nx, ny, nz);
+    const divisor = area || 1;
+    const dot = ux * vx + uy * vy + uz * vz;
+    for (let corner = 0; corner < 3; corner += 1) {
+      const cornerDot =
+        corner === 0
+          ? dot
+          : corner === 1
+            ? ux * ux + uy * uy + uz * uz - dot
+            : vx * vx + vy * vy + vz * vz - dot;
+      const weight = Math.atan2(area, cornerDot) / divisor;
+      const target = renderIndices.getX(i + corner) * 3;
+      sums[target] = sums[target]! + nx * weight;
+      sums[target + 1] = sums[target + 1]! + ny * weight;
+      sums[target + 2] = sums[target + 2]! + nz * weight;
+    }
+  }
+  for (let i = 0; i < normal.count; i += 1) {
+    const x = sums[i * 3]!;
+    const y = sums[i * 3 + 1]!;
+    const z = sums[i * 3 + 2]!;
+    const length = Math.hypot(x, y, z) || 1;
+    normal.setXYZ(i, x / length, y / length, z / length);
+  }
+  position.needsUpdate = true;
+  normal.needsUpdate = true;
+  geometry.computeBoundingBox();
+  geometry.computeBoundingSphere();
+  // Kernel vertices are already in world space; a completed drag must not
+  // apply its disposable radius/move transform a second time.
+  object.position.set(0, 0, 0);
+  object.quaternion.identity();
+  object.scale.set(1, 1, 1);
+  object.matrixAutoUpdate = true;
+  object.updateMatrix();
+  object.matrixWorldNeedsUpdate = true;
+  object.name = body.name;
+  object.material.color.set(body.color);
+  const opacity = body.opacity ?? 1;
+  if (object.material.transparent !== opacity < 1)
+    object.material.needsUpdate = true;
+  object.material.opacity = opacity;
+  object.material.transparent = opacity < 1;
+  object.material.depthWrite = opacity >= 1;
+  return true;
 }
 
 /**
@@ -652,9 +843,7 @@ export function updateStudioGrid(
   } else {
     return;
   }
-  const level = Math.log10(
-    Math.max(viewExtent, 1e-9) / GRID_CELLS_PER_VIEW
-  );
+  const level = Math.log10(Math.max(viewExtent, 1e-9) / GRID_CELLS_PER_VIEW);
   const levelFloor = Math.floor(level);
   const fadeRadius = viewExtent * 2.5;
   const material = grid.material as THREE.ShaderMaterial;
@@ -734,9 +923,7 @@ export function updateAxesGizmo(group: THREE.Group, camera: THREE.Camera) {
     new THREE.Vector3().sub(camera.getWorldPosition(new THREE.Vector3()))
   );
   for (const child of group.children) {
-    const direction = child.userData.axisDirection as
-      | THREE.Vector3
-      | undefined;
+    const direction = child.userData.axisDirection as THREE.Vector3 | undefined;
     if (!direction) {
       continue;
     }

@@ -3,8 +3,9 @@
  *
  * A drag emits values far faster than the exact kernel can rebuild, so only
  * one rebuild is ever in flight and only the newest requested value survives
- * the wait. Every intermediate value is dropped on purpose: they describe a
- * pointer position the user has already moved past.
+ * the wait. Progressive consumers can present completed work from the same
+ * gesture while its next value is pending. Queued intermediate values are
+ * dropped because they describe positions the pointer has already passed.
  *
  * When a rebuild is slow enough to feel bad, the previewer reports it once.
  * A consumer that opts out of `continueAfterSlow` then stops previewing for
@@ -27,8 +28,7 @@ export interface LivePreviewOptions<TDocument, TDerived> {
   publish(preview: { document: TDocument; derived: TDerived } | null): void;
   /**
    * Reports a current build/derive failure to interaction UI. Superseded
-   * failures are intentionally silent for the same reason superseded geometry
-   * is: neither describes the value the user is holding now.
+   * failures stay silent because they do not describe the current request.
    */
   onFailure?(failure: { error: unknown; value: number }): void;
   /**
@@ -39,6 +39,13 @@ export interface LivePreviewOptions<TDocument, TDerived> {
    */
   onDegrade?(): void;
   slowFrameMs?: number;
+  /** Advance within a gesture even when the pointer has requested a newer value. */
+  publishIntermediate?: boolean;
+  isCurrent?(document: TDocument): boolean;
+  /** Minimum spacing between exact builds; zero preserves existing consumers. */
+  minIntervalMs?: number;
+  /** Last measured viewport installation cost, without a React state update. */
+  presentationTimeMs?(): number;
   /**
    * Keep consuming the latest coalesced value after a slow frame. Appropriate
    * for simple primitive edits whose visible dimension must catch up to the
@@ -60,6 +67,10 @@ export class LivePreview<TDocument, TDerived> {
   /** Increments per request; a result from any older pointer value is stale. */
   private token = 0;
   private inFlight = false;
+  private generation = 0;
+  private timer: ReturnType<typeof setTimeout> | null = null;
+  private nextStartAt = 0;
+  private lastValue: number | null = null;
   private pending: { value: number; token: number } | null = null;
   private slow = false;
   /** True once something has been published and not yet cleared. */
@@ -91,63 +102,102 @@ export class LivePreview<TDocument, TDerived> {
     if ((this.slow && !this.options.continueAfterSlow) || !accepted) {
       return;
     }
+    if (
+      this.options.publishIntermediate &&
+      this.active &&
+      this.lastValue === value
+    ) {
+      return;
+    }
+    this.lastValue = value;
     this.pending = { value, token: ++this.token };
     this.active = true;
     if (!this.inFlight) {
+      this.schedule();
+    }
+  }
+
+  private now() {
+    return this.options.now?.() ?? performance.now();
+  }
+
+  private schedule() {
+    if (this.inFlight || this.timer !== null || !this.pending) return;
+    const delay = this.nextStartAt - this.now();
+    if (delay > 0) {
+      this.timer = setTimeout(() => {
+        this.timer = null;
+        this.schedule();
+      }, delay);
+    } else {
       void this.run();
     }
   }
 
   private async run() {
+    const request = this.pending;
+    if (!request) return;
+    this.pending = null;
     this.inFlight = true;
-    const now = this.options.now ?? (() => performance.now());
-    const slowFrameMs = this.options.slowFrameMs ?? DEFAULT_SLOW_FRAME_MS;
+    const generation = this.generation;
+    const started = this.now();
+    let document: TDocument | null = null;
+    const current = () =>
+      this.active &&
+      generation === this.generation &&
+      (!document || (this.options.isCurrent?.(document) ?? true));
     try {
-      while (this.pending !== null) {
-        const { value, token } = this.pending;
-        this.pending = null;
-        let document: TDocument | null;
-        try {
-          document = this.options.build(value);
-        } catch (error) {
-          if (token === this.token && this.active) {
-            this.options.onFailure?.({ error, value });
-          }
-          continue;
-        }
-        if (!document) {
-          break;
-        }
-        const started = now();
-        try {
-          const derived = await this.options.derive(document);
-          // A newer pointer value arrived, or the gesture ended, while we
-          // waited. Never flash this obsolete geometry before the next build.
-          if (token !== this.token || !this.active) {
-            continue;
-          }
-          this.publishedToken = token;
-          this.options.publish({ document, derived });
-        } catch (error) {
-          // An invalid value skips this frame, but an interested interaction
-          // may still render why it failed and prevent that value committing.
-          if (token === this.token && this.active) {
-            this.options.onFailure?.({ error, value });
-          }
-        }
-        if (now() - started > slowFrameMs) {
-          if (!this.slow) {
-            this.options.onDegrade?.();
-          }
-          this.slow = true;
-          if (!this.options.continueAfterSlow) {
-            break;
-          }
-        }
+      document = this.options.build(request.value);
+      if (!document) return;
+      const derived = await this.options.derive(document);
+      if (
+        current() &&
+        (this.options.publishIntermediate || request.token === this.token)
+      ) {
+        this.publishedToken = request.token;
+        this.options.publish({ document, derived });
+      }
+    } catch (error) {
+      // An older failure must not reject the value now under the pointer.
+      if (current() && request.token === this.token) {
+        this.options.onFailure?.({ error, value: request.value });
       }
     } finally {
+      if (current()) {
+        const elapsed = this.now() - started;
+        const interval = this.options.minIntervalMs ?? 0;
+        // Reserve idle time for input and drawing instead of saturating the
+        // worker. Presentation is measured by the previous installed frame.
+        this.nextStartAt =
+          interval > 0
+            ? started +
+              Math.max(
+                interval,
+                2 * (elapsed + (this.options.presentationTimeMs?.() ?? 0))
+              )
+            : 0;
+        if (elapsed > (this.options.slowFrameMs ?? DEFAULT_SLOW_FRAME_MS)) {
+          if (!this.slow) this.options.onDegrade?.();
+          this.slow = true;
+          if (!this.options.continueAfterSlow) this.pending = null;
+        }
+      }
       this.inFlight = false;
+      this.schedule();
     }
+  }
+
+  /** Invalidate work while retaining the displayed result during final validation. */
+  stop() {
+    this.generation += 1;
+    this.token += 1;
+    this.pending = null;
+    if (this.timer !== null) clearTimeout(this.timer);
+    this.timer = null;
+    this.nextStartAt = 0;
+    this.lastValue = null;
+    this.slow = false;
+    this.publishedToken = this.token;
   }
 
   /**
@@ -155,10 +205,7 @@ export class LivePreview<TDocument, TDerived> {
    * preview, and re-arms the slow-path guard for the next gesture.
    */
   clear() {
-    this.token += 1;
-    this.pending = null;
-    this.slow = false;
-    this.publishedToken = this.token;
+    this.stop();
     if (this.active) {
       this.active = false;
       this.options.publish(null);
