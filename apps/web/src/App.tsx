@@ -892,6 +892,7 @@ interface OffsetEditPlan {
 }
 
 interface OffsetPreviewCandidate {
+  selectionKey: string;
   document: ProjectDocument;
   offset: number;
   bodyId: BodyId;
@@ -903,6 +904,11 @@ interface OffsetPreviewCandidate {
   baseVersion: number;
   validationTargets?: AffectedFeatureTarget[];
 }
+
+type RadiusPreviewCandidate = Omit<
+  OffsetPreviewCandidate,
+  'offset' | 'successMessage'
+> & { radius: number };
 
 /** An edge blend rebuilt for preview, with the feature its verdict judges. */
 interface EdgePreviewCandidate {
@@ -1985,18 +1991,88 @@ export function App() {
    * the claim exists to prevent.
    */
   const projectOwnershipSettledRef = useRef<Promise<void> | null>(null);
+  const previewPresentationMs = useRef(0);
+  const reusableRadiusPreview = useRef<{
+    candidate: RadiusPreviewCandidate;
+    derived: ProjectDocument['derived'];
+  } | null>(null);
+  function previewBaseIsCurrent(candidate: {
+    baseProjectId: ProjectDocument['projectId'];
+    baseVersion: number;
+  }) {
+    const base = managerRef.current?.document;
+    return (
+      base?.projectId === candidate.baseProjectId &&
+      base.version === candidate.baseVersion
+    );
+  }
+  function previewSelectionIsCurrent(
+    candidate: OffsetPreviewCandidate | RadiusPreviewCandidate
+  ) {
+    const current = interactionRef.current;
+    return (
+      previewBaseIsCurrent(candidate) &&
+      current.mode === 'face' &&
+      candidate.selectionKey ===
+        `${current.op}:${current.target.bodyId}:${current.target.topologyId}`
+    );
+  }
   const cylinderRadiusPreview = useRef(
-    new LivePreview<ProjectDocument, ProjectDocument['derived']>({
+    new LivePreview<RadiusPreviewCandidate, ProjectDocument['derived']>({
       build: (radius) => {
         const plan = buildCylinderRadiusCommand(radius);
         const base = managerRef.current?.document;
-        return plan && base ? plan.command.apply(base) : null;
+        const current = interactionRef.current;
+        if (!plan || !base || current.mode !== 'face') return null;
+        return {
+          selectionKey: `${current.op}:${current.target.bodyId}:${current.target.topologyId}`,
+          document: plan.command.apply(base),
+          command: plan.command,
+          radius,
+          bodyId: current.target.bodyId as BodyId,
+          label: plan.command.label,
+          baseProjectId: base.projectId,
+          baseVersion: base.version,
+          ...(plan.sourceFeatureId
+            ? {
+                validationTargets: affectedFeatureTargets(
+                  base,
+                  plan.sourceFeatureId
+                )
+              }
+            : {})
+        };
       },
-      derive: (document) => geometry.syncOnce(document),
-      publish: (preview) =>
+      derive: async (candidate) => {
+        const derived = await geometry.syncOnce(candidate.document);
+        const rejection = offsetPreviewRejection({
+          ...candidate,
+          derived,
+          documentMoved: !previewBaseIsCurrent(candidate)
+        });
+        if (rejection) throw new Error(rejection.message);
+        return derived;
+      },
+      isCurrent: previewSelectionIsCurrent,
+      publish: (preview) => {
+        if (preview) recoverPreviewInteraction();
+        reusableRadiusPreview.current = preview
+          ? { candidate: preview.document, derived: preview.derived }
+          : null;
         setPreviewDoc(
-          preview ? { ...preview.document, derived: preview.derived } : null
+          preview
+            ? { ...preview.document.document, derived: preview.derived }
+            : null
+        );
+      },
+      onFailure: ({ error, value }) =>
+        reportPreviewFailure(
+          errorMessage(error, 'Exact radius preview failed.'),
+          value
         ),
+      publishIntermediate: true,
+      minIntervalMs: 100,
+      presentationTimeMs: () => previewPresentationMs.current,
       continueAfterSlow: true
     })
   ).current;
@@ -2011,8 +2087,10 @@ export function App() {
       build: (offset) => {
         const base = managerRef.current?.document;
         const plan = base ? buildOffsetEditPlan(offset, undefined, base) : null;
-        return base && plan
+        const current = interactionRef.current;
+        return base && plan && current.mode === 'face'
           ? {
+              selectionKey: `${current.op}:${current.target.bodyId}:${current.target.topologyId}`,
               document: plan.command.apply(base),
               offset,
               bodyId: plan.bodyId,
@@ -2043,8 +2121,13 @@ export function App() {
           derived,
           documentMoved
         });
+        if (rejection) throw new Error(rejection.message);
         return { derived, rejection };
       },
+      isCurrent: previewSelectionIsCurrent,
+      publishIntermediate: true,
+      minIntervalMs: 100,
+      presentationTimeMs: () => previewPresentationMs.current,
       publish: (preview) => {
         if (!preview) {
           reusableOffsetPreviewRef.current = null;
@@ -2212,6 +2295,8 @@ export function App() {
     derive: (document) => geometry.syncOnce(document),
     commit: (command, derived) => executeCommand(command, derived),
     onValidationStart: (value) => {
+      cylinderRadiusPreview.stop();
+      offsetPreview.stop();
       // Recorded before the dispatch, while the machine still holds the state
       // the reducer will test: a command that owns this run will render its own
       // rejection, so the status line must not print a second copy.
@@ -8784,6 +8869,14 @@ export function App() {
     }
   }, [edgePreviewInteraction]);
 
+  useEffect(
+    () => () => {
+      cylinderRadiusPreview.clear();
+      offsetPreview.clear();
+    },
+    [doc?.projectId, doc?.version, cylinderRadiusPreview, offsetPreview]
+  );
+
   const offsetInteractionKey =
     interaction.mode === 'face' && interaction.op === 'offset-face'
       ? `${interaction.target.bodyId}:${interaction.target.topologyId}`
@@ -10368,7 +10461,8 @@ export function App() {
       : null;
   useEffect(() => {
     setCylinderDimensionMode('diameter');
-  }, [cylinderSelectionKey]);
+    cylinderRadiusPreview.clear();
+  }, [cylinderSelectionKey, cylinderRadiusPreview]);
 
   function buildCylinderRadiusCommand(
     radius: ParamValue
@@ -10482,6 +10576,7 @@ export function App() {
     const current = interactionRef.current;
     if (
       current.mode !== 'face' ||
+      current.phase === 'validating' ||
       current.op !== 'resize-cylinder-radius' ||
       current.target.radius === undefined ||
       !isValidCylinderRadius(radius, current.target.radius)
@@ -10520,8 +10615,15 @@ export function App() {
       setStatus('Radius is too small to form valid geometry at this scale.');
       return false;
     }
+    const reusable = reusableRadiusPreview.current;
+    const reuse =
+      exact === undefined &&
+      reusable?.candidate.radius === radius &&
+      previewSelectionIsCurrent(reusable.candidate)
+        ? reusable
+        : null;
     void executeValidatedDirectEdit(
-      plan.command,
+      reuse?.candidate.command ?? plan.command,
       current.target.bodyId as BodyId,
       `Adjusted cylinder ${cylinderDimensionMode === 'diameter' ? 'diameter' : 'radius'} to ${cylinderDimensionMode === 'diameter' ? 'Ø' : 'R'} ${formatNumber(cylinderDimensionMode === 'diameter' ? radius * 2 : radius)} ${doc?.units ?? ''}.`,
       radius,
@@ -10531,6 +10633,13 @@ export function App() {
             managerRef.current!.document,
             plan.sourceFeatureId
           )
+        : undefined,
+      reuse
+        ? {
+            baseProjectId: reuse.candidate.baseProjectId,
+            baseVersion: reuse.candidate.baseVersion,
+            derived: reuse.derived
+          }
         : undefined
     );
     return true;
@@ -11376,10 +11485,11 @@ export function App() {
       live !== undefined &&
       reusable.candidate.offset === offset &&
       reusable.candidate.baseProjectId === live.projectId &&
-      reusable.candidate.baseVersion === live.version
+      reusable.candidate.baseVersion === live.version &&
+      previewSelectionIsCurrent(reusable.candidate)
         ? reusable
         : null;
-    offsetPreview.clear();
+    offsetPreview.stop();
     offsetPreviewValueRef.current = null;
     void executeValidatedDirectEdit(
       reuse ? reuse.candidate.command : plan.command,
@@ -13699,6 +13809,9 @@ export function App() {
             initialView={initialView}
             onViewChange={handleViewportChange}
             onViewSettled={handleViewportSettled}
+            onGeometryPresented={(ms) => {
+              previewPresentationMs.current = ms;
+            }}
             onWheelDeviceLearned={handleWheelDeviceLearned}
             onMovePreviewChange={handleMovePreviewChange}
             moveValuesSetterRef={moveValuesSetterRef}

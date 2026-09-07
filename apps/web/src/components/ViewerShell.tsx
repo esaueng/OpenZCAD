@@ -144,6 +144,7 @@ interface ViewerShellProps {
   initialView: ViewportCameraState | null;
   onViewChange(view: ViewportCameraState): void;
   onViewSettled(view: ViewportCameraState): void;
+  onGeometryPresented?(durationMs: number): void;
   onWheelDeviceLearned?(device: WheelDevice): void;
   orientationRef: MutableRefObject<((axes: AxisProjection) => void) | null>;
   selectionFilter: SelectionFilter;
@@ -286,6 +287,7 @@ export function ViewerShell({
   initialView,
   onViewChange,
   onViewSettled,
+  onGeometryPresented,
   onWheelDeviceLearned,
   orientationRef,
   onSelectTopology,
@@ -440,6 +442,7 @@ export function ViewerShell({
         initialView={initialView}
         onViewChange={onViewChange}
         onViewSettled={onViewSettled}
+        onGeometryPresented={onGeometryPresented}
         onWheelDeviceLearned={onWheelDeviceLearned}
         orientationRef={orientationRef}
         orientationDragRef={orientationDragRef}
