@@ -156,7 +156,7 @@ interface ViewerShellProps {
     detail?: PickDetail
   ): void;
   offsetHandle: OffsetHandleTarget | null;
-  onOffsetPreview(offset: number): void;
+  onOffsetPreview(offset: number, exactGeometry?: boolean): void;
   onOffsetCommit(offset: number): boolean;
   onOffsetCancel(): void;
   offsetPreviewInvalid: boolean;
