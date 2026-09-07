@@ -1,16 +1,21 @@
 import type { Page } from '@playwright/test';
-import { expect, test, stubApi } from './openzcad-fixtures';
+import {
+  expect,
+  test,
+  stubApi,
+  expectConsumedBodyCount
+} from './openzcad-fixtures';
 
 // Streamed preview frames arrive much later on the 2-core CI runners under
 // SwiftShader than on a workstation. Budgets are upper bounds, not waits.
 const PREVIEW_BUDGET_MS = process.env.CI ? 60_000 : 30_000;
 
 /**
- * Builds the cylinder, selects its top cap, and returns the handles both specs
- * drag. Extracted so the deterministic deferred-preview case does not repeat
- * eighty lines of setup.
+ * Chamfers keep this fixture on the exact-preview path. Plain and rounded
+ * cylinders use a viewport preview and rebuild only on release; their drag
+ * behavior is covered separately in cylinder-preview.spec.ts.
  */
-async function armTopCapOffset(page: Page) {
+async function armChamferedTopCapOffset(page: Page) {
   await stubApi(page);
   await page.setViewportSize({ width: 1440, height: 1000 });
   const consoleErrors: string[] = [];
@@ -27,6 +32,12 @@ async function armTopCapOffset(page: Page) {
   await inspector.getByLabel('Radius', { exact: true }).fill('14');
   await inspector.getByLabel('Height', { exact: true }).fill('28');
   await inspector.getByRole('button', { name: /^Create/ }).click();
+  await page.getByRole('button', { name: /^Chamfer/ }).click();
+  await inspector.getByRole('button', { name: 'Select all 2 edges' }).click();
+  await inspector.getByLabel('Distance', { exact: true }).fill('1');
+  await inspector.getByRole('button', { name: /^Create/ }).click();
+  await expectConsumedBodyCount(page, 1);
+  await expect(page.locator('.body-row', { hasText: 'Chamfer' })).toBeVisible();
 
   const canvas = page.locator('.viewer-host canvas');
   await expect(canvas).toBeVisible({ timeout: 120_000 });
@@ -57,12 +68,14 @@ async function armTopCapOffset(page: Page) {
                     resolve(null);
                     return;
                   }
+                  // The straight wall excludes the two 1 mm chamfer rims.
                   resolve(
-                    Math.hypot(
-                      geometry.axisEnd.x - geometry.axisStart.x,
-                      geometry.axisEnd.y - geometry.axisStart.y,
-                      geometry.axisEnd.z - geometry.axisStart.z
-                    )
+                    2 +
+                      Math.hypot(
+                        geometry.axisEnd.x - geometry.axisStart.x,
+                        geometry.axisEnd.y - geometry.axisStart.y,
+                        geometry.axisEnd.z - geometry.axisStart.z
+                      )
                   );
                 }
               }
@@ -101,7 +114,7 @@ test('streams exact planar previews and restores invalid or canceled offsets', a
 }) => {
   test.setTimeout(process.env.CI ? 240_000 : 120_000);
   const { canvas, chip, readAxisLength, handle, start, consoleErrors } =
-    await armTopCapOffset(page);
+    await armChamferedTopCapOffset(page);
   await page.mouse.move(start.x, start.y);
   await page.mouse.down();
   await page.mouse.move(
@@ -139,7 +152,7 @@ test('streams exact planar previews and restores invalid or canceled offsets', a
   await expect(
     page.getByRole('region', { name: 'Offset Face operation' })
   ).toContainText('Dragging');
-  await expect(page.getByRole('button', { name: 'History 1' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'History 2' })).toBeVisible();
 
   // Still holding the button, drive the total below zero. The kernel refuses
   // it: the handle keeps tracking and the chip turns to its warning state,
@@ -196,7 +209,7 @@ test('streams exact planar previews and restores invalid or canceled offsets', a
   await expect(keypad).toBeHidden();
   await expect(chip).toHaveText('Total 28 mm');
   await expect(chip).toHaveAttribute('data-state', 'ready');
-  await expect(page.getByRole('button', { name: 'History 1' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'History 2' })).toBeVisible();
 
   await chip.click();
   keypad = page.getByRole('dialog', { name: 'Total value' });
@@ -208,7 +221,7 @@ test('streams exact planar previews and restores invalid or canceled offsets', a
   await expect(
     keypad.getByRole('button', { name: 'Apply total' })
   ).toBeEnabled();
-  await expect(page.getByRole('button', { name: 'History 1' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'History 2' })).toBeVisible();
   await keypad.getByRole('button', { name: 'Apply total' }).click();
   await expect(page.getByRole('contentinfo')).toContainText(
     'Cylinder height set to 35.7 mm.'
@@ -224,7 +237,7 @@ test('keeps the last value that built when a drag is released on a refusal', asy
 }) => {
   test.setTimeout(process.env.CI ? 240_000 : 120_000);
   const { chip, readAxisLength, handle, start, consoleErrors } =
-    await armTopCapOffset(page);
+    await armChamferedTopCapOffset(page);
 
   await page.mouse.move(start.x, start.y);
   await page.mouse.down();
@@ -260,8 +273,8 @@ test('keeps the last value that built when a drag is released on a refusal', asy
   await expect
     .poll(readAxisLength, { timeout: PREVIEW_BUDGET_MS })
     .toBeCloseTo(lastValid, 2);
-  // The kept value edits the cylinder's height; no second feature appears.
-  await expect(page.getByRole('button', { name: 'History 1' })).toBeVisible();
+  // The kept value edits the cylinder's height; no additional feature appears.
+  await expect(page.getByRole('button', { name: 'History 2' })).toBeVisible();
   expect(consoleErrors).toEqual([]);
 });
 
@@ -277,7 +290,7 @@ test('clears the paused-preview chip when a degraded gesture is canceled', async
     window.__openzcadE2ESlowFrameMs = 0;
   });
   const { chip, readAxisLength, handle, start, consoleErrors } =
-    await armTopCapOffset(page);
+    await armChamferedTopCapOffset(page);
 
   await page.mouse.move(start.x, start.y);
   await page.mouse.down();
