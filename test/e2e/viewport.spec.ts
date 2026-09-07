@@ -228,6 +228,16 @@ test('the viewport scale indicator tracks zoom in document units', async ({
   );
 
   const initialLabel = await indicator.textContent();
+  const dock = page.locator('.viewport-dock');
+  const control = dock.getByRole('button').first();
+  const initialDock = await dock.boundingBox();
+  const initialControl = await control.boundingBox();
+  expect(initialDock).not.toBeNull();
+  expect(initialControl).not.toBeNull();
+  const expectStableDock = async () => {
+    expect(await dock.boundingBox()).toEqual(initialDock);
+    expect(await control.boundingBox()).toEqual(initialControl);
+  };
   const initialWidth = await rule.evaluate(
     (element) => element.getBoundingClientRect().width
   );
@@ -253,6 +263,7 @@ test('the viewport scale indicator tracks zoom in document units', async ({
         for (let step = 0; step < 8; step += 1) {
           await page.mouse.wheel(0, -120);
           await page.waitForTimeout(40);
+          await expectStableDock();
         }
         return indicator.textContent();
       },
@@ -264,6 +275,20 @@ test('the viewport scale indicator tracks zoom in document units', async ({
   );
   expect(zoomedWidth).toBeGreaterThanOrEqual(80);
   expect(zoomedWidth).toBeLessThanOrEqual(200.1);
+  const zoomedLabel = await indicator.textContent();
+  await expect
+    .poll(
+      async () => {
+        for (let step = 0; step < 8; step += 1) {
+          await page.mouse.wheel(0, 120);
+          await page.waitForTimeout(40);
+          await expectStableDock();
+        }
+        return indicator.textContent();
+      },
+      { timeout: 20_000 }
+    )
+    .not.toBe(zoomedLabel);
 });
 
 test('Space centres and faces an exact planar selection head-on', async ({
