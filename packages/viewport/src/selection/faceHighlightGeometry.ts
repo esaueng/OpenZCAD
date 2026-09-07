@@ -2,6 +2,16 @@ import * as THREE from 'three';
 import type { FaceTopology } from '@openzcad/shared';
 import { forEachMesh } from '../pick/meshes';
 
+class FaceHighlightGeometry extends THREE.BufferGeometry {
+  override dispose() {
+    // Three releases every attached attribute on disposal. These two belong
+    // to the body, which continues drawing after a hover or selection ends.
+    this.deleteAttribute('position');
+    this.deleteAttribute('normal');
+    super.dispose();
+  }
+}
+
 /**
  * Builds one face-only index slice over the body's installed render buffers.
  * Sharing the position and normal attributes keeps selection shading identical
@@ -40,7 +50,7 @@ export function createFaceHighlightGeometry(
     return null;
   }
 
-  const geometry = new THREE.BufferGeometry();
+  const geometry = new FaceHighlightGeometry();
   geometry.setAttribute('position', position);
   geometry.setAttribute('normal', normal);
   geometry.setIndex(
