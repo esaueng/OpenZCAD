@@ -71,6 +71,9 @@ import {
   createFatLineMaterial,
   createGradientBackdrop,
   createObjectForBody,
+  updateObjectForBody,
+  sameBodyProjection,
+  disposeObject,
   createShadowCatcher,
   createStudioEnvironment,
   createStudioGrid,
@@ -464,6 +467,7 @@ interface ModelViewerProps {
   onViewChange(view: ViewportCameraState): void;
   /** Final camera pose emitted after navigation or a camera glide settles. */
   onViewSettled(view: ViewportCameraState): void;
+  onGeometryPresented?(durationMs: number): void;
   /** Scroll-wheel auto-detection just proved a different pointing device. */
   onWheelDeviceLearned?(device: WheelDevice): void;
   /** Imperative sink for per-frame axis projections (no React re-render). */
@@ -1145,6 +1149,7 @@ export function ModelViewer({
   initialView,
   onViewChange,
   onViewSettled,
+  onGeometryPresented,
   onWheelDeviceLearned,
   orientationRef,
   orientationDragRef,
@@ -1271,6 +1276,8 @@ export function ModelViewer({
   } | null>(null);
   const onViewChangeRef = useRef(onViewChange);
   onViewChangeRef.current = onViewChange;
+  const onGeometryPresentedRef = useRef(onGeometryPresented);
+  onGeometryPresentedRef.current = onGeometryPresented;
   const onViewSettledRef = useRef(onViewSettled);
   onViewSettledRef.current = onViewSettled;
   const onWheelDeviceLearnedRef = useRef(onWheelDeviceLearned);
@@ -6647,7 +6654,9 @@ export function ModelViewer({
               ? null
               : Math.max(now - lastPerfFrameAt, 0),
           drawCalls: renderer.info.render.calls,
-          triangles: renderer.info.render.triangles
+          triangles: renderer.info.render.triangles,
+          geometries: renderer.info.memory.geometries,
+          textures: renderer.info.memory.textures
         });
         lastPerfFrameAt = now;
       }
@@ -7018,6 +7027,7 @@ export function ModelViewer({
       return;
     }
 
+    const installationStarted = performance.now();
     const bodiesChanged = context.renderedBodies !== bodies;
     const xrayEnabled = sketchMode === null;
     context.selection.setXrayEnabled(xrayEnabled);
@@ -7034,9 +7044,15 @@ export function ModelViewer({
       // the bodies these were fading against are about to be disposed. Their
       // fade also died with the set `resetForRebuild` just cleared.
       disposeRetiringOverlays(retiringOverlaysRef.current);
-      clearGroup(context.bodyGroup);
-      context.objectsByBodyId.clear();
-      context.edgeOverlaysByBodyId.clear();
+      const liveIds = new Set(bodies.map((body) => body.bodyId));
+      for (const [id, object] of context.objectsByBodyId) {
+        if (!liveIds.has(id as BodyRepresentation['bodyId'])) {
+          context.bodyGroup.remove(object);
+          disposeObject(object);
+          context.objectsByBodyId.delete(id);
+          context.edgeOverlaysByBodyId.delete(id);
+        }
+      }
     }
     clearGroup(context.overlayGroup);
     context.dimensionLabels.clear();
@@ -7064,16 +7080,42 @@ export function ModelViewer({
     }
     const edgeResolution = context.fatLineResolution();
 
+    const previousBodies = new Map(
+      context.renderedBodies?.map((body) => [body.bodyId, body])
+    );
     for (const body of bodies) {
-      const object = bodiesChanged
-        ? createObjectForBody(body, edgeResolution)
-        : context.objectsByBodyId.get(body.bodyId);
-      if (!object) {
-        continue;
+      let object = context.objectsByBodyId.get(body.bodyId);
+      const previous = previousBodies.get(body.bodyId);
+      const bodyChanged =
+        bodiesChanged && (!previous || !sameBodyProjection(previous, body));
+      if (bodyChanged && object) {
+        // Highlight attributes alias the installed mesh. Detach before changing
+        // buffers so old face ranges can never pick or shade the new topology.
+        for (const name of [
+          'body-selection-overlay',
+          'body-preview-face-overlay'
+        ]) {
+          const overlay = object.getObjectByName(name);
+          if (overlay instanceof THREE.Group) {
+            const group = overlay as unknown as THREE.Group;
+            clearGroup(group);
+            object.remove(group);
+          }
+        }
+        const edges = context.edgeOverlaysByBodyId.get(body.bodyId);
+        if (edges) {
+          object.remove(edges);
+          disposeObject(edges);
+          context.edgeOverlaysByBodyId.delete(body.bodyId);
+        }
+        if (!updateObjectForBody(object, body)) {
+          context.bodyGroup.remove(object);
+          disposeObject(object);
+          object = undefined;
+        }
       }
-      if (bodiesChanged) {
-        object.userData.bodyId = body.bodyId;
-      }
+      if (!object) object = createObjectForBody(body, edgeResolution);
+      object.userData.bodyId = body.bodyId;
       const previousSelectionOverlay = object.getObjectByName(
         'body-selection-overlay'
       );
@@ -7112,7 +7154,7 @@ export function ModelViewer({
       });
 
       let edgeOverlay = context.edgeOverlaysByBodyId.get(body.bodyId);
-      if (bodiesChanged) {
+      if (!edgeOverlay) {
         edgeOverlay = createBodyEdgeOverlay(body, edgeResolution);
         edgeOverlay.setDisplayMode(displayModeRef.current);
         object.add(edgeOverlay);
@@ -7499,6 +7541,7 @@ export function ModelViewer({
     context.requestRender();
     if (bodiesChanged) {
       performance.measure?.('oz:viewer.bodies', 'oz:viewer.bodies:begin');
+      onGeometryPresentedRef.current?.(performance.now() - installationStarted);
     }
   }, [
     bodies,
