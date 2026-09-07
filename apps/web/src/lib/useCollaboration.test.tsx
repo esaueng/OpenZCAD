@@ -8,6 +8,7 @@ import {
   toUserId,
   type AuthSession,
   type CollaborationServerMessage,
+  type ProjectDocument,
   type ProjectEditLease
 } from '@openzcad/shared';
 import {
@@ -87,12 +88,259 @@ function session(userId: string): AuthSession {
 }
 
 afterEach(() => {
+  vi.useRealTimers();
   vi.unstubAllGlobals();
   FakeWebSocket.instances = [];
   sessionStorage.clear();
 });
 
 describe('useCollaboration lease ordering', () => {
+  function connectedOwner(base: ProjectDocument) {
+    vi.useFakeTimers();
+    vi.stubGlobal('WebSocket', FakeWebSocket);
+    const onRemoteDocument = vi.fn();
+    const onConflict = vi.fn();
+    const hook = renderHook(
+      ({ document }: { document: ProjectDocument }) =>
+        useCollaboration({
+          enabled: true,
+          document,
+          session: session(base.ownerUserId),
+          onRemoteDocument,
+          onConflict
+        }),
+      { initialProps: { document: base } }
+    );
+    const socket = FakeWebSocket.instances[0]!;
+    act(() => socket.open());
+    act(() =>
+      socket.receive({
+        type: 'state',
+        members: [],
+        document: base,
+        role: 'owner',
+        lease: null
+      })
+    );
+    const lease: ProjectEditLease = {
+      leaseId: 'lease_local',
+      projectId: base.projectId,
+      clientId: socket.frames()[0]!.clientId as string,
+      userId: base.ownerUserId,
+      expiresAt: Date.now() + 30_000
+    };
+    act(() => socket.receive({ type: 'lease-granted', lease }));
+    act(() => socket.receive({ type: 'ack', version: base.version }));
+    return { ...hook, socket, lease, onRemoteDocument, onConflict };
+  }
+
+  it('waits for an acknowledgement before sending subsequent edits against the accepted base', () => {
+    const base = createProjectDocument('Queued edits', toUserId('user_queued'));
+    const { socket, rerender, unmount } = connectedOwner(base);
+    const first = addPrimitiveFeature(base, {
+      name: 'Box',
+      primitiveKind: 'box',
+      dimensions: { width: 1, height: 1, depth: 1 }
+    });
+    const second = addPrimitiveFeature(first, {
+      name: 'Sphere',
+      primitiveKind: 'sphere',
+      dimensions: { radius: 2 }
+    });
+    rerender({ document: first });
+    act(() => {
+      vi.advanceTimersByTime(500);
+    });
+    rerender({ document: second });
+    act(() => {
+      vi.advanceTimersByTime(500);
+    });
+    expect(
+      socket.frames().filter((frame) => frame.type === 'document')
+    ).toHaveLength(2);
+    act(() => socket.receive({ type: 'ack', version: first.version }));
+    expect(socket.frames().at(-1)).toMatchObject({
+      type: 'document',
+      baseVersion: first.version,
+      document: { version: second.version }
+    });
+    unmount();
+  });
+
+  it.each([false, true])(
+    'adopts a merged acknowledgement only if it cannot discard newer local edits: %s',
+    (editedAgain) => {
+      const base = createProjectDocument(
+        'Merged edits',
+        toUserId('user_merged')
+      );
+      const {
+        result,
+        socket,
+        rerender,
+        unmount,
+        onRemoteDocument,
+        onConflict
+      } = connectedOwner(base);
+      const first = addPrimitiveFeature(base, {
+        name: 'Box',
+        primitiveKind: 'box',
+        dimensions: { width: 1, height: 1, depth: 1 }
+      });
+      const merged = addPrimitiveFeature(first, {
+        name: 'Remote sphere',
+        primitiveKind: 'sphere',
+        dimensions: { radius: 2 }
+      });
+      const newerLocal = addPrimitiveFeature(first, {
+        name: 'Local cylinder',
+        primitiveKind: 'cylinder',
+        dimensions: { radius: 1, height: 2 }
+      });
+      rerender({ document: first });
+      act(() => {
+        vi.advanceTimersByTime(500);
+      });
+      if (editedAgain) rerender({ document: newerLocal });
+      act(() =>
+        socket.receive({
+          type: 'ack',
+          version: merged.version,
+          document: merged
+        })
+      );
+      if (editedAgain) {
+        expect(onRemoteDocument).not.toHaveBeenCalled();
+        expect(onConflict).toHaveBeenCalledWith(merged);
+        expect(result.current.conflict?.localDocument.featureOrder).toEqual(
+          newerLocal.featureOrder
+        );
+      } else {
+        expect(onRemoteDocument).toHaveBeenCalledWith(merged);
+        expect(onConflict).not.toHaveBeenCalled();
+      }
+      unmount();
+    }
+  );
+
+  it('resubmits its unchanged local document after reconnecting with a fresh lease', () => {
+    const base = createProjectDocument(
+      'Reconnected',
+      toUserId('user_reconnected')
+    );
+    const { socket, unmount, lease } = connectedOwner(base);
+    act(() => socket.close());
+    act(() => {
+      vi.advanceTimersByTime(1500);
+    });
+    const replacement = FakeWebSocket.instances.at(-1)!;
+    expect(replacement).not.toBe(socket);
+    act(() => replacement.open());
+    act(() =>
+      replacement.receive({
+        type: 'state',
+        members: [],
+        document: base,
+        role: 'owner',
+        lease: null
+      })
+    );
+    act(() => replacement.receive({ type: 'lease-granted', lease }));
+    expect(replacement.frames().at(-1)).toMatchObject({
+      type: 'document',
+      document: { version: base.version }
+    });
+    unmount();
+  });
+
+  it.each([false, true])(
+    'keeps concurrent edits based on the acknowledged room version (in flight: %s)',
+    (inFlight) => {
+      vi.useFakeTimers();
+      vi.stubGlobal('WebSocket', FakeWebSocket);
+      const owner = toUserId('user_concurrent');
+      const base = createProjectDocument('Two browsers', owner);
+      const local = addPrimitiveFeature(base, {
+        name: 'Local box',
+        primitiveKind: 'box',
+        dimensions: { width: 1, height: 1, depth: 1 }
+      });
+      const remote = addPrimitiveFeature(base, {
+        name: 'Remote sphere',
+        primitiveKind: 'sphere',
+        dimensions: { radius: 2 }
+      });
+      const onRemoteDocument = vi.fn();
+      const onConflict = vi.fn();
+      const { result, rerender, unmount } = renderHook(
+        ({ document }: { document: ProjectDocument }) =>
+          useCollaboration({
+            enabled: true,
+            document,
+            session: session(owner),
+            onRemoteDocument,
+            onConflict
+          }),
+        { initialProps: { document: base } }
+      );
+      const socket = FakeWebSocket.instances[0]!;
+      act(() => socket.open());
+      act(() =>
+        socket.receive({
+          type: 'state',
+          members: [],
+          document: base,
+          role: 'owner',
+          lease: null
+        })
+      );
+      act(() =>
+        socket.receive({
+          type: 'lease-granted',
+          lease: {
+            leaseId: 'lease_local',
+            projectId: base.projectId,
+            clientId: socket.frames()[0]!.clientId as string,
+            userId: owner,
+            expiresAt: Date.now() + 30_000
+          }
+        })
+      );
+      act(() => socket.receive({ type: 'ack', version: base.version }));
+      rerender({ document: local });
+      if (inFlight)
+        act(() => {
+          vi.advanceTimersByTime(500);
+        });
+      act(() =>
+        socket.receive({
+          type: 'document',
+          clientId: 'other-browser',
+          document: remote
+        })
+      );
+      expect(onRemoteDocument).not.toHaveBeenCalled();
+      expect(onConflict).not.toHaveBeenCalled();
+      act(() => {
+        vi.advanceTimersByTime(500);
+      });
+      const submissions = socket
+        .frames()
+        .filter(
+          (frame) =>
+            frame.type === 'document' &&
+            (frame.document as ProjectDocument).version === local.version
+        );
+      expect(submissions).toHaveLength(1);
+      expect(submissions[0]).toMatchObject({
+        baseVersion: base.version,
+        document: { featureOrder: local.featureOrder }
+      });
+      expect(result.current.lease).not.toBeNull();
+      unmount();
+    }
+  );
+
   it.each([true, false])(
     'preserves named checkpoint history when the remote contains it: %s',
     (remoteHasCheckpoint) => {
