@@ -227,32 +227,34 @@ test('the viewport scale indicator tracks zoom in document units', async ({
     /^Viewport scale at the camera focus plane: .+ mm$/
   );
 
+  const canvas = page.locator('.viewer-host canvas');
+  await expect(canvas).toHaveAttribute('data-e2e-camera-distance', /.+/);
   const initialLabel = await indicator.textContent();
+  const dock = page.locator('.viewport-dock');
+  const control = dock.getByRole('button').first();
+  const initialDock = await dock.boundingBox();
+  const initialControl = await control.boundingBox();
+  expect(initialDock).not.toBeNull();
+  expect(initialControl).not.toBeNull();
+  const expectStableDock = async () => {
+    expect(await dock.boundingBox()).toEqual(initialDock);
+    expect(await control.boundingBox()).toEqual(initialControl);
+  };
   const initialWidth = await rule.evaluate(
     (element) => element.getBoundingClientRect().width
   );
   expect(initialWidth).toBeGreaterThanOrEqual(80);
   expect(initialWidth).toBeLessThanOrEqual(200.1);
 
-  const canvas = page.locator('.viewer-host canvas');
-  const bounds = await canvas.boundingBox();
-  expect(bounds).not.toBeNull();
-  await page.mouse.move(
-    bounds!.x + bounds!.width / 2,
-    bounds!.y + bounds!.height / 2
-  );
-  // Wheel inside the poll rather than as one fixed burst up front: on a
-  // loaded 2-core CI runner the camera controls can attach after the
-  // indicator is already visible, and a one-shot burst then lands entirely
-  // on nothing — the label never changes no matter how long the assertion
-  // waits. Each iteration wheels a full batch because the label is quantized
-  // to 1-2-5 steps and a single tick may not cross a boundary.
+  // Dispatch explicit wheel notches to the canvas so this layout regression
+  // does not depend on native compositor input delivery on loaded CI hosts.
   await expect
     .poll(
       async () => {
         for (let step = 0; step < 8; step += 1) {
-          await page.mouse.wheel(0, -120);
+          await canvas.dispatchEvent('wheel', { deltaY: 3, deltaMode: 1 });
           await page.waitForTimeout(40);
+          await expectStableDock();
         }
         return indicator.textContent();
       },
@@ -264,6 +266,20 @@ test('the viewport scale indicator tracks zoom in document units', async ({
   );
   expect(zoomedWidth).toBeGreaterThanOrEqual(80);
   expect(zoomedWidth).toBeLessThanOrEqual(200.1);
+  const zoomedLabel = await indicator.textContent();
+  await expect
+    .poll(
+      async () => {
+        for (let step = 0; step < 8; step += 1) {
+          await canvas.dispatchEvent('wheel', { deltaY: -3, deltaMode: 1 });
+          await page.waitForTimeout(40);
+          await expectStableDock();
+        }
+        return indicator.textContent();
+      },
+      { timeout: 20_000 }
+    )
+    .not.toBe(zoomedLabel);
 });
 
 test('Space centres and faces an exact planar selection head-on', async ({
