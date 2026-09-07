@@ -1,6 +1,6 @@
 # OpenZCAD
 
-OpenZCAD is a browser-first parametric CAD workspace: exact B-rep solid modeling, a replayable feature history, and direct on-model manipulation, with no desktop install. The canonical project document stores named parameters, sketches, and an ordered command history, and a WebAssembly solid kernel rebuilds exact geometry in a background worker.
+OpenZCAD is a browser-first parametric CAD workspace: exact B-rep solid modeling, a replayable feature history, and direct on-model manipulation, with no desktop install. The canonical project document stores named parameters, sketches, and an ordered command history, and a WebAssembly solid kernel rebuilds exact geometry in a background worker. Projects live on your device first; an optional account adds cloud projects, sharing, and live collaboration.
 
 Use the hosted beta at [zcad.app](https://zcad.app/).
 
@@ -15,15 +15,17 @@ Use the hosted beta at [zcad.app](https://zcad.app/).
 
 ## Highlights
 
-**Exact parametric modeling.** Primitives, multi-profile sketch/extrude, revolve, booleans, transforms, mirror-copy, shell, solid offset, fillet, chamfer, and linear/circular patterns, built on the [Remus](https://github.com/esaueng/remus) exact kernel. New face-attached sketches re-resolve an exact lineage reference at their history position instead of freezing a viewport plane. Parametric expressions, ordered feature history with editing and deletion, deterministic replay, transactions, and undo/redo.
+**Exact parametric modeling.** Primitives, multi-profile sketch/extrude, revolve, booleans, transforms, mirror-copy, shell, solid offset, fillet, chamfer, and linear/circular patterns, built on the [Remus](https://github.com/esaueng/remus) exact kernel. Sketches carry lines, arcs, circles, rectangles, polygons, and text set in bundled font files. New face-attached sketches re-resolve an exact lineage reference at their history position instead of freezing a viewport plane. Parametric expressions, ordered feature history with editing and deletion, deterministic replay, transactions, and undo/redo.
 
-**Direct manipulation.** Model directly on the geometry: drag a face to offset it, drag a sketch region into a solid, drag an edge to grow a fillet or chamfer, move/rotate bodies with a snapping gizmo — every drag pairs with exact numeric entry. In-viewport sketching includes snapping, live dimensions, direct tools for every schema-backed constraint kind, and placed driving distance/angle dimensions whose values accept named-parameter expressions. The workspace also includes box select, selection filters, a marking menu, an Esc ladder, and a live orientation widget with perspective/orthographic switching.
+**Direct manipulation.** Model directly on the geometry: drag a face to offset it, drag a sketch region into a solid, drag an edge to grow a fillet or chamfer, move/rotate bodies with a snapping gizmo — every drag pairs with exact numeric entry. In-viewport sketching includes snapping, live dimensions, direct tools for every schema-backed constraint kind, and placed driving distance/angle dimensions whose values accept named-parameter expressions. Box select, selection filters, a marking menu, and an Esc ladder round out the interaction model.
+
+**One column, one canvas.** The workspace is a single resizable column beside a full-width viewport: an icon tool grid on top (solids, sketch, modify, finish and repeat), then Parameters, Bodies, History, Revisions, and Diagnostics. The bottom of the canvas is one dock — viewer bar, selection filter, snap, the activity log, and the scale bar — with status delivered as a toast above it and the orientation cube, with perspective/orthographic switching, in the corner. Three top-bar modes subtract chrome as the job gets smaller: **Build** is the full modeling workspace, **Tweak** exposes only the parameters, and **View** is a clean deck for looking. Once enabled in Settings, the AI assistant sits behind an edge tab on the right seam (`⌘J`); `⌘K` opens the command palette and `⌘,` the Settings overlay, which leaves in-flight work intact.
 
 **One kernel, one topology language.** Remus builds every document, imported STEP included. OpenCascade is gone from the adapter and survives only as the parity corpus's reference implementation under `test/parity/occt-reference`, which never ships. Remus publishes exact topology witnesses and a safe subset of semantic lineage ([ADR-011](docs/adrs/ADR-011-unified-topology-identity.md), [ADR-013](docs/adrs/ADR-013-persistent-topology-lineage.md), [ADR-020](docs/adrs/ADR-020-remus-browser-kernel.md)). Primitive, sweep, and supported rigid-transform identities can survive upstream edits. Boolean, blend, pattern, direct-edit, and STEP provenance remain hash-only where complete evolution is not proved, and every ambiguous or unsupported resolution fails closed.
 
 **Import and export.** Editable STEP import is stored in replayable document history and rebuilt exactly, honouring the file's own declared length and plane-angle units. Selecting an exact imported face shows its surface type and area; the shipped direct-edit subset includes validated through-hole and cylindrical-face edits. A bounded exact recognizer includes blind-hole, counterbore, countersink, boss, pocket, and taper detectors; the live imported-body pass publishes non-overlapping revolution proofs, including counterbores with a conical entry chamfer. Auto-parameterize coordinates the three hole families; the other proof families remain read-only. STEP export preserves distinct solids as a compound; STL export is always millimetres. STL imports become mesh bodies. All geometry and exports run in the browser worker.
 
-**Local-first, optionally cloud.** IndexedDB autosave works with no account; when local and cloud copies diverge, OpenZCAD preserves both and asks which one to keep instead of guessing from versions or timestamps. Optional passwordless profiles unlock cloud projects, synced settings, and live per-project collaboration with owner/editor/viewer roles and one project-wide edit lease. Conflict recovery always writes a local recovery project before choosing the room version, keeping the leased local version, or saving the local version as a copy. The checked-in beta configuration enables sharing and lease enforcement for authenticated accounts; the local development configuration keeps them off.
+**Local-first, optionally cloud.** IndexedDB autosave works with no account, and **File → Export project** writes a complete `.openzcad` backup at any time (see [Project backups](#project-backups)). When local and cloud copies diverge, OpenZCAD preserves both and asks which one to keep instead of guessing from versions or timestamps. Optional passwordless profiles unlock cloud projects, synced settings, project shelves that pin, reorder, archive, and recycle across devices, and live per-project collaboration with owner/editor/viewer roles and one project-wide edit lease. Owners can mint revocable share links that let anyone open the model, adjust its parameters, and export without an account. Conflict recovery always writes a local recovery project before choosing the room version, keeping the leased local version, or saving the local version as a copy. Account settings show storage in use and can erase account data on request. The checked-in beta configuration enables sharing and lease enforcement for authenticated accounts; the local development configuration keeps them off.
 
 <p align="center">
   <img src="docs/design/readme-pipe-flange.png" width="49%" alt="Pipe Flange demo — revolved flange with a patterned bolt circle" />
@@ -43,6 +45,27 @@ pnpm dev:web
 Open the URL Vite prints. Three built-in demos (Mounting Bracket, Pipe Flange, Heat Sink) are available from the start screen.
 
 Settings are available from the start screen, the workspace gear, the command palette, or `Ctrl/Cmd+,` — the Settings page overlays the workspace, so any in-flight work survives it.
+
+## Project backups
+
+Use **File → Export project** to download an `.openzcad` backup of the entire
+open project, independently of the selected body. The backup contains the
+editable model, parameters, sketches, feature and command history, checkpoint
+records, retained restorable save states, STEP source blobs, measurements, and
+archived files. Display meshes rebuild from the model when it opens.
+
+Use **Import project…** on the project screen or in the File menu to create a
+separate local project. Its original remains unchanged. Sources, save states,
+measurements, and archived files commit together; imported files remain
+available under **Stored files** after an offline reload. The copy can later be
+saved to your account using the existing project controls.
+
+Backups use a versioned JSON container with SHA-256 checksums and a 256 MB
+limit. Cloud-backed projects need access to their archived files and retained
+save states; failed downloads stop export rather than create a partial backup.
+Previously pruned save states retain their history records but cannot regain
+snapshot contents that no longer exist. Account permissions, shelf placement,
+viewport preferences, and the transient undo/redo stack are not transferred.
 
 ## Architecture
 
@@ -106,8 +129,11 @@ identifiers into a self-hosting configuration.
 `apps/desktop` is a Tauri 2 shell for Apple Silicon that bundles the same web
 workspace; geometry still runs in the browser workers, and the Rust host stays
 narrow — native menus, user-picked CAD files, exports, and window-state
-restoration. It needs macOS 14+, Xcode Command Line Tools, and stable Rust with
-the `aarch64-apple-darwin` target:
+restoration. The desktop app signs in through the browser: it starts a
+short-lived sign-in attempt, the browser approves it, and the app exchanges it
+for refreshable access tokens, so no password or session cookie ever passes
+through the native shell. It needs macOS 14+, Xcode Command Line Tools, and
+stable Rust with the `aarch64-apple-darwin` target:
 
 ```bash
 pnpm dev:desktop      # tauri dev against the local workspace
@@ -186,7 +212,7 @@ artifact storage, collaboration, and optional server-side AI.
    for the authenticated two-device canary. It covers the D1/R2 pointer check,
    reload, conflict recovery, and any collaboration rollout.
 
-### Health check
+### Health and liveness checks
 
 `GET /api/health` is public and returns JSON only; it is safe to poll without
 credentials and never returns configuration secrets. A healthy running service
@@ -209,36 +235,65 @@ reported status.
 The repository's scheduled `Production health` workflow checks the hosted beta
 with this same contract once per day and can also be run manually.
 
+For uptime monitors that only need to know the Worker is alive, `GET /healthz`
+returns HTTP 200 with JSON `status: "ok"` and a service name. `HEAD /healthz`
+returns the same headers without a body; other methods return 405 with
+`Allow: GET, HEAD`. Responses use `Cache-Control: no-store`. The endpoint
+requires no credentials and performs no storage or upstream requests, so it
+reports Worker liveness only, never dependency readiness or browser
+geometry/solver health.
+
+Cloudflare Access, WAF, and bot challenges run before the Worker. If a monitor
+receives a login redirect or challenge, configure a narrowly scoped exception
+for GET/HEAD on the exact `/healthz` path and the intended app hostname, then
+verify the JSON response from the monitor's network. Repository changes alone
+do not alter those dashboard policies.
+
 ## API surface
 
 ```text
-GET  /api/health                      GET       /api/assistant/status
-GET  /api/auth/config                 POST      /api/assistant/proposals    (SSE)
-POST /api/auth/email/start            GET|PATCH /api/settings
-POST /api/auth/email/verify           PUT|DELETE /api/settings/assistant-credential
-POST /api/auth/logout                 POST      /api/settings/assistant/test
-GET  /api/session                     POST      /api/uploads
+GET|HEAD /healthz                     (liveness only)
+GET  /api/health                      (readiness)
+GET  /api/auth/config                 POST /api/auth/email/start
+GET  /api/session                     POST /api/auth/email/verify
+GET  /api/auth/desktop/config         POST /api/auth/logout
+POST /api/auth/desktop/start | approve | exchange | refresh | logout
+GET|PATCH /api/settings               PUT|DELETE /api/settings/assistant-credential
+POST /api/settings/assistant/test
+GET  /api/assistant/status            POST /api/assistant/proposals    (SSE)
+GET  /api/account/storage             GET  /api/account/deletion-preview
+POST /api/account/delete-data
 GET  /api/collaboration/config       (authenticated account capabilities)
-GET|POST /api/projects                PUT       /api/uploads/:id/content
-GET  /api/projects/:id                POST      /api/artifacts/finalize
-POST /api/projects/:id/revisions      GET       /api/projects/:id/artifacts
+GET|POST /api/projects                POST /api/projects/reorder | purge
+GET|PATCH|DELETE /api/projects/:id    POST /api/projects/:id/duplicate
+PUT  /api/projects/:id/document
+GET|POST /api/projects/:id/revisions  GET  /api/projects/:id/revisions/:revisionId
+GET|PUT|DELETE /api/projects/:id/measurements
 GET  /api/projects/:id/collaboration  (WebSocket upgrade)
 POST /api/projects/:id/collaboration  (oversize snapshot recovery)
 POST /api/projects/:id/collaboration/ticket
-GET  /api/projects/:id/sharing       POST /api/projects/:id/invitations
-PATCH|DELETE /api/projects/:id/members/:userId
+GET  /api/projects/:id/sharing        POST /api/projects/:id/invitations
 DELETE /api/projects/:id/invitations/:invitationId
+PATCH|DELETE /api/projects/:id/members/:userId
+GET|POST /api/projects/:id/share-links
+DELETE /api/projects/:id/share-links/:shareLinkId
+GET  /api/share/:token                GET  /api/share/:token/assets/:assetId
 POST /api/project-invitations/accept
-GET  /api/artifacts/:id               GET       /api/artifacts/:id/download
+POST /api/uploads                     PUT  /api/uploads/:id/content
+POST|DELETE /api/uploads/:id/multipart
+PUT  /api/uploads/:id/parts/:n        POST /api/uploads/:id/multipart/complete
+POST /api/artifacts/finalize          POST /api/imports/finalize
+GET  /api/projects/:id/artifacts      GET  /api/artifacts/:id
+GET  /api/artifacts/:id/download
 ```
 
-Cloud settings, personal credentials, projects, artifacts, and collaboration require an email-code session; the assistant also serves local-only users. The native app exchanges its fixed-origin bearer request for a short-lived, one-use collaboration ticket before opening a WebSocket, so bearer credentials never enter browser code. Artifacts require an uploaded R2 object before finalization.
+Cloud settings, personal credentials, projects, artifacts, and collaboration require an email-code session; the assistant also serves local-only users, and share-link reads under `/api/share` need no session at all. The native app exchanges its fixed-origin bearer request for a short-lived, one-use collaboration ticket before opening a WebSocket, so bearer credentials never enter browser code. Artifacts require an uploaded R2 object before finalization; large uploads go through the multipart routes.
 
 ## AI assistant (experimental)
 
 An optional side panel turns plain-language requests into reviewable document patches. It is experimental and entirely optional — the workspace is fully functional without it. Provider-backed requests stay dormant until a provider key is configured; verified local recipes remain available without one.
 
-The dock collapses to a launcher in the bottom-right corner of the viewport, which gives its whole column back to the model; the conversation keeps running behind it, and the launcher counts any reply that lands while it is closed. Each project's thread — what was asked, what the assistant asked back, and which proposals were applied or rejected — is kept on the device and read back when the project reopens, so the scrollback is a record rather than a session.
+The assistant docks behind an edge tab on the right seam of the viewport (`⌘J`), so a closed panel gives its whole width back to the model; the conversation keeps running behind it, and the tab counts any reply that lands while it is closed. Each project's thread — what was asked, what the assistant asked back, and which proposals were applied or rejected — is kept on the device and read back when the project reopens, so the scrollback is a record rather than a session.
 
 The assistant streams proposals through the OpenAI Responses API. It sees compact feature history, live exact-topology summaries, and the active selection, so "fillet all edges" resolves stable edge fingerprints without manual picking. Output is constrained to a strict CAD patch schema; you preview, apply, or reject, and apply is one normal undoable transaction. PDF and image drawings can be attached as references. The AI can only propose a small allowlisted command patch — it cannot directly mutate a document, viewport, or kernel.
 
@@ -294,39 +349,3 @@ Current assistant limitations and gates:
 ## License
 
 Apache License 2.0 — see [LICENSE](LICENSE). Copyright 2026 Esau Engineering LLC. See [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md) for bundled dependency and font notices.
-
-## Project backups
-
-Use **File → Export project** to download an `.openzcad` backup of the entire
-open project, independently of the selected body. The backup contains the
-editable model, parameters, sketches, feature and command history, checkpoint
-records, retained restorable save states, STEP source blobs, measurements, and
-archived files. Display meshes rebuild from the model when it opens.
-
-Use **Import project…** on the project screen or in the File menu to create a
-separate local project. Its original remains unchanged. Sources, save states,
-measurements, and archived files commit together; imported files remain
-available under **Stored files** after an offline reload. The copy can later be
-saved to your account using the existing project controls.
-
-Backups use a versioned JSON container with SHA-256 checksums and a 256 MB
-limit. Cloud-backed projects need access to their archived files and retained
-save states; failed downloads stop export rather than create a partial backup.
-Previously pruned save states retain their history records but cannot regain
-snapshot contents that no longer exist. Account permissions, shelf placement,
-viewport preferences, and the transient undo/redo stack are not transferred.
-
-### Public liveness endpoint
-
-`GET /healthz` returns HTTP 200 with JSON `status: "ok"` and a service name.
-`HEAD /healthz` returns the same headers without a body; other methods return
-405 with `Allow: GET, HEAD`. Responses use `Cache-Control: no-store`.
-This endpoint requires no application credentials and performs no storage or
-upstream requests. It reports Worker liveness, not dependency readiness or
-browser geometry/solver health. Existing health endpoints keep their behavior.
-
-Cloudflare Access, WAF, and bot challenges run before the Worker. If a monitor
-receives a login redirect or challenge, configure a narrowly scoped exception
-for GET/HEAD on the exact `/healthz` path and the intended app hostname, then
-verify the JSON response from the monitor's network. Repository changes alone
-do not alter those dashboard policies.
