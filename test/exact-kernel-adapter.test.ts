@@ -1246,11 +1246,10 @@ describe('exact kernel adapter', { timeout: 30_000 }, () => {
     });
   });
 
-  it('labels a spherical union when Remus returns a mesh fallback', async () => {
-    // A shallow parallel-cylinder overlap used to be this test's fallback
-    // case; the kernel now builds that one exactly. A sphere pressed into a
-    // cylinder's side still has no exact section, so it is the case that
-    // proves the labeling of a mesh fallback.
+  it('refuses a spherical union with open or inconsistently oriented geometry', async () => {
+    // This contact used to return a closed faceted approximation. The pinned
+    // kernel now retains analytic faces but opens their tessellation; a solid
+    // validation flag alone must not let it through the commit gate.
     const withCylinder = addPrimitiveFeature(
       createProjectDocument('Spherical union', toUserId('user_exact')),
       {
@@ -1285,38 +1284,35 @@ describe('exact kernel adapter', { timeout: 30_000 }, () => {
     const resultId = document.bodyOrder.at(-1)!;
     const result = derived.bodyRepresentations[resultId];
     expect(result).toBeDefined();
-    // A faceted fallback: far more faces than the two operands' six, all flat.
-    expect(result?.faceCount).toBeGreaterThan(100);
-    expect(
-      derived.warnings.some(
-        (warning) =>
-          warning.startsWith('Feature "Spherical union":') &&
-          FACET_CENSUS_MESSAGE.test(warning)
-      )
-    ).toBe(true);
-    expect(
-      result?.topology?.faces.every(
-        (face) => face.geometry?.surfaceType === 'plane'
-      )
-    ).toBe(true);
-    expect(
-      isClosedConsistentlyOrientedMesh(
-        inspectTriangleMeshClosure(result!.mesh.vertices, result!.mesh.indices)
-      )
-    ).toBe(true);
-    expect(result?.exportableStep).toBe(true);
-    expect(derived.warnings).toContainEqual(
-      expect.stringContaining(
-        'Repositioning the overlap sometimes clears it; otherwise keep the bodies separate, or subtract instead — the same operands still cut exactly.'
-      )
+    const closure = inspectTriangleMeshClosure(
+      result!.mesh.vertices,
+      result!.mesh.indices
     );
-    // Remus now returns the approximation instead of failing the fuse. Keep
-    // that user-visible change explicit: the operands are consumed, but the
-    // result is labeled before it can be mistaken for exact analytic output.
-    expect(derived.bodyRepresentations[cylinderId]?.consumed).toBe(true);
-    expect(derived.bodyRepresentations[sphereId]?.consumed).toBe(true);
-    // Runs in under a second locally but has tripped the 5 s default on slow
-    // CI runners; give it the same headroom as the other kernel-heavy tests.
+    expect(result?.faceCount).toBe(5);
+    expect(
+      result?.topology?.faces.map((face) => face.geometry?.surfaceType)
+    ).toEqual(['plane', 'cylinder', 'plane', 'sphere', 'sphere']);
+    expect(closure.triangles).toBeGreaterThan(0);
+    expect(closure.boundaryEdges).toBeGreaterThan(0);
+    expect(closure.inconsistentWindingEdges).toBeGreaterThan(0);
+    expect(isClosedConsistentlyOrientedMesh(closure)).toBe(false);
+    const union = listFeaturesInOrder(document).at(-1)!;
+    expect(derived.featureWarnings).toHaveLength(1);
+    expect(derived.featureWarnings?.[0]).toMatchObject({
+      featureId: union.featureId,
+      featureName: 'Spherical union',
+      kind: 'refusal'
+    });
+    expect(derived.featureWarnings?.[0]?.message).toContain(
+      'Union produced an open, non-manifold, or inconsistently oriented result.'
+    );
+    expect(derived.warnings).toEqual(
+      derived.featureWarnings!.map((warning) => warning.message)
+    );
+    expect(
+      derived.warnings.some((warning) => FACET_CENSUS_MESSAGE.test(warning))
+    ).toBe(false);
+    // Refusal-remedy probes rebuild candidates and need the kernel test budget.
   }, 30_000);
 
   it('keeps a face-contact cylinder and circular-extrude union closed', async () => {
