@@ -370,9 +370,13 @@ import {
   cylinderRadialFrame,
   isValidCylinderRadius,
   sameCylinderAxis,
-  supportsRadialCylinderPreview
+  supportsRadialCylinderPreview,
+  cylinderPreviewProfile
 } from './lib/interaction/cylinderRadius';
-import { primitiveCylinderRadiusAncestor } from './lib/interaction/cylinderPrimitiveAncestry';
+import {
+  primitiveCylinderRadiusAncestor,
+  primitiveCylinderHeightAncestor
+} from './lib/interaction/cylinderPrimitiveAncestry';
 import { commandPromptText } from './lib/interaction/prompt';
 import {
   offsetPreviewRejection,
@@ -3588,7 +3592,10 @@ export function App() {
   // worker, so the faces this document names have to be parsed here too.
   const textFontsVersion = useDocumentFonts(doc ?? null);
 
-  const representations = doc?.derived.bodyRepresentations ?? {};
+  const representations = useMemo(
+    () => doc?.derived.bodyRepresentations ?? {},
+    [doc?.derived.bodyRepresentations]
+  );
   const renderedRepresentations =
     previewDoc?.derived.bodyRepresentations ?? representations;
   /**
@@ -10373,7 +10380,19 @@ export function App() {
             target.hash
           )
         : undefined;
+    const profile =
+      doc &&
+      target.hash !== undefined &&
+      primitiveCylinderHeightAncestor(
+        doc,
+        target.bodyId as BodyId,
+        target.reference,
+        target.hash
+      )
+        ? cylinderPreviewProfile(representations[target.bodyId as BodyId])
+        : null;
     return {
+      ...(profile ? { profilePreview: profile } : {}),
       bodyId: target.bodyId,
       topologyId: target.topologyId,
       point: {
@@ -10395,7 +10414,7 @@ export function App() {
         ? {}
         : { totalBaseline: total.total, totalSense: total.sense })
     };
-  }, [doc, interaction, renderedOffsetPreview]);
+  }, [doc, interaction, renderedOffsetPreview, representations]);
 
   const cylinderRadiusHandleTarget = useMemo(() => {
     if (
@@ -10414,7 +10433,25 @@ export function App() {
     ) {
       return null;
     }
+    const profile =
+      doc && primitiveCylinderRadiusAncestor(doc, target.bodyId as BodyId)
+        ? cylinderPreviewProfile(representations[target.bodyId as BodyId])
+        : null;
     return {
+      ...(profile &&
+      target.concavity === 'boss' &&
+      sameCylinderAxis(
+        profile.axisStart,
+        profile.axisEnd,
+        {
+          x: target.axisStart[0],
+          y: target.axisStart[1],
+          z: target.axisStart[2]
+        },
+        { x: target.axisEnd[0], y: target.axisEnd[1], z: target.axisEnd[2] }
+      )
+        ? { profilePreview: profile }
+        : {}),
       bodyId: target.bodyId,
       topologyId: target.topologyId,
       point: {
@@ -10454,7 +10491,7 @@ export function App() {
           }
         )
     };
-  }, [interaction, representations]);
+  }, [doc, interaction, representations]);
   const cylinderSelectionKey =
     interaction.mode === 'face' && interaction.op === 'resize-cylinder-radius'
       ? `${interaction.target.bodyId}:${interaction.target.topologyId}`
@@ -11250,7 +11287,7 @@ export function App() {
     });
   }
 
-  function handleOffsetPreview(offset: number) {
+  function handleOffsetPreview(offset: number, exactGeometry = true) {
     const current = interactionRef.current;
     // The arrow rig is shared: in region mode its value is an extrude height.
     if (current.mode === 'region') {
@@ -11274,6 +11311,12 @@ export function App() {
       return;
     }
     offsetPreviewValueRef.current = offset;
+    if (!exactGeometry) {
+      offsetPreview.clear();
+      setPreviewDeferred(false);
+      recoverPreviewInteraction();
+      return;
+    }
     if (Math.abs(offset) <= 1e-9) {
       offsetPreview.clear();
       setPreviewDeferred(false);
