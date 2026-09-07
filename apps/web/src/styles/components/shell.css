@@ -12,7 +12,7 @@
      width would set the shell's width and everything inside it would
      overflow a narrow viewport rather than shrink to fit. */
   grid-template-columns: minmax(0, 1fr);
-  grid-template-rows: var(--topbar-h) minmax(0, 1fr) var(--statusbar-h);
+  grid-template-rows: var(--topbar-h) minmax(0, 1fr);
   background: var(--color-bg);
 }
 

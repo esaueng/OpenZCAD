@@ -300,7 +300,9 @@ describe('OrientationWidget pointer lifecycle', () => {
           target: group.querySelector<SVGPolygonElement>('.cube-corner-hit')
         }))
         .filter(
-          (pair): pair is { drawn: SVGPolygonElement; target: SVGPolygonElement } =>
+          (
+            pair
+          ): pair is { drawn: SVGPolygonElement; target: SVGPolygonElement } =>
             pair.drawn !== null &&
             pair.target !== null &&
             pair.target.style.display !== 'none'

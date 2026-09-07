@@ -8,9 +8,7 @@ import {
   type ImportRunState
 } from '../lib/importProgress';
 
-function running(
-  overrides: Partial<ImportRunState> = {}
-): ImportRunState {
+function running(overrides: Partial<ImportRunState> = {}): ImportRunState {
   return {
     id: 'run-1',
     fileName: 'assembly.step',

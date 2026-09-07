@@ -69,7 +69,10 @@ function usePreviewFontFaces(): void {
 }
 
 /** `regular | bold | italic | boldItalic` from two independent toggles. */
-export function styleFromToggles(bold: boolean, italic: boolean): TextFontStyle {
+export function styleFromToggles(
+  bold: boolean,
+  italic: boolean
+): TextFontStyle {
   if (bold && italic) {
     return 'boldItalic';
   }
@@ -109,16 +112,16 @@ export function TextObjectFields({ value, onChange }: TextObjectFieldsProps) {
           type="text"
           value={value.text}
           spellCheck={false}
-          onChange={(event) =>
-            onChange({ ...value, text: event.target.value })
-          }
+          onChange={(event) => onChange({ ...value, text: event.target.value })}
         />
       </label>
       <label className="field">
         <span>Font</span>
         <select
           value={value.fontFamily}
-          style={{ fontFamily: `"${previewFamily(value.fontFamily)}", inherit` }}
+          style={{
+            fontFamily: `"${previewFamily(value.fontFamily)}", inherit`
+          }}
           onChange={(event) =>
             onChange({ ...value, fontFamily: event.target.value })
           }
@@ -136,7 +139,11 @@ export function TextObjectFields({ value, onChange }: TextObjectFieldsProps) {
       </label>
       <div className="field">
         <span>Style</span>
-        <div className="text-style-toggles" role="group" aria-label="Font style">
+        <div
+          className="text-style-toggles"
+          role="group"
+          aria-label="Font style"
+        >
           <button
             type="button"
             className={bold ? 'toggle active' : 'toggle'}
@@ -157,9 +164,10 @@ export function TextObjectFields({ value, onChange }: TextObjectFieldsProps) {
       </div>
       {substituted && (
         <p className="field-hint">
-          {familyLabel} has no {value.fontStyle === 'boldItalic' ? 'bold italic' : value.fontStyle} face — using{' '}
-          {resolved}. Styles are real font files; there is no synthetic bold or
-          italic.
+          {familyLabel} has no{' '}
+          {value.fontStyle === 'boldItalic' ? 'bold italic' : value.fontStyle}{' '}
+          face — using {resolved}. Styles are real font files; there is no
+          synthetic bold or italic.
         </p>
       )}
       {findFontFace(value.fontFamily, value.fontStyle) === undefined &&

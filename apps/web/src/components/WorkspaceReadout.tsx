@@ -5,7 +5,9 @@ import {
   SELECTION_FILTER_LABELS,
   type SelectionFilter
 } from '@openzcad/viewport/types';
+import type { WorkspaceSaveState } from '../lib/cloudProjectAutosave';
 import { statusExpiresAt } from '../lib/statusLifetime';
+import { WORKSPACE_SAVE_STATE_PRESENTATION } from '../lib/workspaceSaveStatePresentation';
 import type { StatusTone } from './StatusActivityLog';
 
 interface WorkspaceReadoutProps {
@@ -17,6 +19,23 @@ interface WorkspaceReadoutProps {
   muted?: boolean;
   logOpen: boolean;
   onToggleLog(): void;
+  /**
+   * The context-sensitive next-step line the status bar showed beside the
+   * message: what a click takes, what Escape does next. The tool card and the
+   * selection dock carry it visually now; it stays here for assistive tech.
+   */
+  prompt: string | null;
+  /**
+   * The workspace summary the status bar carried for assistive tech: project,
+   * feature and body counts, warnings and sync state. Kept as an
+   * off-screen group so screen readers (and the specs) still have it.
+   */
+  projectName: string | null;
+  featureCount: number;
+  bodyCount: number;
+  warningCount: number;
+  documentVersion: number | null;
+  saveState: WorkspaceSaveState;
 }
 
 /**
@@ -31,7 +50,14 @@ export function WorkspaceReadout({
   tone,
   muted = false,
   logOpen,
-  onToggleLog
+  onToggleLog,
+  prompt,
+  projectName,
+  featureCount,
+  bodyCount,
+  warningCount,
+  documentVersion,
+  saveState
 }: WorkspaceReadoutProps) {
   const expiresAt =
     statusAt === undefined
@@ -52,23 +78,56 @@ export function WorkspaceReadout({
   }, [expiresAt]);
   const quiet = expiresAt !== null && now >= expiresAt;
   const shown = !quiet && !muted && status !== '';
-  if (!shown) {
-    return null;
-  }
+  // A retired or expired message leaves the bar reading as nothing happening.
+  const shownStatus = quiet ? '' : status;
+  const featureLabel = `${featureCount} ${featureCount === 1 ? 'feature' : 'features'}`;
+  const bodyLabel = `${bodyCount} ${bodyCount === 1 ? 'body' : 'bodies'}`;
+  const workspaceSummary = `${projectName ?? 'Project'} · ${featureLabel} · ${bodyLabel}`;
+  const syncLabel = WORKSPACE_SAVE_STATE_PRESENTATION[saveState].statusBarLabel;
+  // Always in the tree, as the page's contentinfo landmark: what the status
+  // bar used to be for assistive tech and for the specs that read it. Only
+  // its visibility changes.
   return (
-    <button
-      type="button"
-      className={`workspace-toast ${tone}`}
-      title="Activity log"
-      aria-label={`${logOpen ? 'Close' : 'Open'} activity log. Current status: ${status}`}
-      aria-expanded={logOpen}
-      onClick={onToggleLog}
+    <footer
+      className={`workspace-toast ${tone}${shown ? '' : ' hidden'}`}
+      role="contentinfo"
     >
-      <i aria-hidden="true" />
-      <span role="status" aria-live="polite" aria-atomic="true">
-        {status}
-      </span>
-    </button>
+      <button
+        type="button"
+        className={`workspace-toast-body${quiet ? ' quiet' : ''}`}
+        title={quiet ? 'View activity log' : `${status} — View activity log`}
+        aria-label={
+          quiet || status === ''
+            ? `${logOpen ? 'Close' : 'Open'} activity log.`
+            : `${logOpen ? 'Close' : 'Open'} activity log. Current status: ${status}`
+        }
+        aria-expanded={logOpen}
+        onClick={onToggleLog}
+      >
+        <i aria-hidden="true" />
+        <span role="status" aria-live="polite" aria-atomic="true">
+          {shownStatus}
+        </span>
+      </button>
+      <div
+        className="workspace-status-summary"
+        role="group"
+        aria-label="Workspace status"
+      >
+        {prompt && <span>{prompt}</span>}
+        <span>
+          <b>warnings</b>
+          {warningCount}
+        </span>
+        <span
+          title={`${workspaceSummary} · rev ${documentVersion ?? '—'}`}
+          aria-label={`${workspaceSummary}. Sync ${syncLabel}.`}
+        >
+          <b>sync</b>
+          {syncLabel}
+        </span>
+      </div>
+    </footer>
   );
 }
 
@@ -99,6 +158,9 @@ export function ViewportDockExtras({
   const filterIndex = SELECTION_FILTERS.indexOf(selectionFilter);
   const nextFilter =
     SELECTION_FILTERS[(filterIndex + 1) % SELECTION_FILTERS.length]!;
+  // The cycle ends by handing the filter back to the tool (null), as the
+  // status bar's chips did when their active one was clicked again.
+  const handsBack = filterIndex === SELECTION_FILTERS.length - 1;
   return (
     <>
       <span className="viewport-dock-divider" aria-hidden="true" />
@@ -108,10 +170,12 @@ export function ViewportDockExtras({
         title={
           selectionFilterIsAutomatic
             ? `Selecting ${SELECTION_FILTER_LABELS[selectionFilter].toLowerCase()} — chosen by the active tool · Q cycles`
-            : `Selecting ${SELECTION_FILTER_LABELS[selectionFilter].toLowerCase()} · click or Q for ${SELECTION_FILTER_LABELS[nextFilter].toLowerCase()}`
+            : handsBack
+              ? `Selecting ${SELECTION_FILTER_LABELS[selectionFilter].toLowerCase()} · click to hand the filter back to the tool`
+              : `Selecting ${SELECTION_FILTER_LABELS[selectionFilter].toLowerCase()} · click or Q for ${SELECTION_FILTER_LABELS[nextFilter].toLowerCase()}`
         }
         aria-label={`Selection filter: ${SELECTION_FILTER_LABELS[selectionFilter]}. Cycle.`}
-        onClick={() => onSelectionFilter(nextFilter)}
+        onClick={() => onSelectionFilter(handsBack ? null : nextFilter)}
       >
         select {SELECTION_FILTER_LABELS[selectionFilter]}
       </button>

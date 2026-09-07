@@ -46,7 +46,11 @@ async function stubApi(page: Page) {
   await seedDismissedWorkspaceTour(page);
   await page.route('**/api/health', (route) =>
     route.fulfill({
-      json: { status: 'ok', environment: 'beta', time: new Date().toISOString() }
+      json: {
+        status: 'ok',
+        environment: 'beta',
+        time: new Date().toISOString()
+      }
     })
   );
   await page.route('**/api/projects', (route) => {
@@ -150,13 +154,11 @@ test('exposes the full measurement workbench in View mode', async ({
   await expect(
     workbench.getByRole('button', { name: 'Distance' })
   ).toBeVisible();
-  await expect(
-    workbench.getByRole('button', { name: 'Angle' })
-  ).toBeVisible();
+  await expect(workbench.getByRole('button', { name: 'Angle' })).toBeVisible();
   await expect(workbench.getByLabel('Measurement units')).toHaveValue('mm');
-  await expect(
-    workbench.getByLabel('Measurement decimal places')
-  ).toHaveValue('2');
+  await expect(workbench.getByLabel('Measurement decimal places')).toHaveValue(
+    '2'
+  );
   await expect(
     workbench.getByRole('group', { name: 'Radial display' })
   ).toBeVisible();
@@ -178,9 +180,10 @@ test('lists bodies in the model browser and selects them from the tree', async (
   await bodies.getByRole('button', { name: /^Box/ }).click();
   const chip = page.locator('.selection-chip');
   await expect(chip).toContainText('Box');
-  await expect(
-    bodies.getByRole('button', { name: /^Box/ })
-  ).toHaveAttribute('aria-pressed', 'true');
+  await expect(bodies.getByRole('button', { name: /^Box/ })).toHaveAttribute(
+    'aria-pressed',
+    'true'
+  );
 
   // The visibility eye hides the body and the history eye restores it.
   await bodies.getByRole('button', { name: 'Hide body Box' }).click();
@@ -307,10 +310,9 @@ test('fits the face tool card and orientation cube beside the inspector', async 
     geometry.copyIntersectsSubmode,
     JSON.stringify(geometry, null, 2)
   ).toBe(false);
-  expect(
-    geometry.cubeIntersectsCard,
-    JSON.stringify(geometry, null, 2)
-  ).toBe(false);
+  expect(geometry.cubeIntersectsCard, JSON.stringify(geometry, null, 2)).toBe(
+    false
+  );
   expect(
     geometry.cubeIntersectsInspector,
     JSON.stringify(geometry, null, 2)
@@ -330,7 +332,7 @@ test('keeps a chained line anchored across committed sketch entities', async ({
   await page.getByRole('button', { name: /^Sketch \(S\)/ }).click();
   await page.getByRole('button', { name: 'Top (XY)' }).click();
   await expect(
-    page.getByRole('region', { name: 'Editing Sketch: New Sketch operation' })
+    page.getByRole('toolbar', { name: 'Sketch tools' })
   ).toBeVisible();
   // The sketch rail owns the session: the modeling palette must not stay
   // mounted and live beside it.
@@ -383,10 +385,16 @@ test('places, retypes, solves, and undoes a driving angle dimension', async ({
   await page.getByRole('button', { name: /^Sketch \(S\)/ }).click();
   await page.getByRole('button', { name: 'Top (XY)' }).click();
   await expect(
-    page.getByRole('region', { name: 'Editing Sketch: New Sketch operation' })
+    page.getByRole('toolbar', { name: 'Sketch tools' })
   ).toBeVisible();
   await page.waitForTimeout(800);
 
+  // The sketch settings are a disclosure under the tools, closed to begin with.
+  if (
+    !(await page.getByRole('checkbox', { name: 'Snap to grid' }).isVisible())
+  ) {
+    await page.getByRole('button', { name: /Sketch palette/ }).click();
+  }
   const gridSnap = page.getByRole('checkbox', { name: 'Snap to grid' });
   if (await gridSnap.isChecked()) {
     await gridSnap.uncheck();
@@ -503,6 +511,12 @@ test('edits a canvas radius with expressions, refuses zero, and undoes the solve
   const rail = page.getByRole('toolbar', { name: 'Sketch tools' });
   await expect(rail).toBeVisible();
   await page.waitForTimeout(800);
+  // The sketch settings are a disclosure under the tools, closed to begin with.
+  if (
+    !(await page.getByRole('checkbox', { name: 'Snap to grid' }).isVisible())
+  ) {
+    await page.getByRole('button', { name: /Sketch palette/ }).click();
+  }
   const gridSnap = page.getByRole('checkbox', { name: 'Snap to grid' });
   if (await gridSnap.isChecked()) await gridSnap.uncheck();
   await rail.getByRole('button', { name: /^Circle/ }).click();
@@ -561,7 +575,7 @@ test('edits a canvas radius with expressions, refuses zero, and undoes the solve
   expect((await readLiveSketch(canvas)).objects).toEqual(solved.objects);
   await expect(label).toContainText('R radius_target = 7 mm');
   await page.screenshot({ path: '/tmp/openzcad-sketch-radius.png' });
-  await rail
+  await page
     .getByRole('button', { name: 'Finish Sketch', exact: true })
     .click();
   await expect(label).toHaveCount(0);
@@ -578,10 +592,16 @@ test('clears every transient sketch HUD overlay when finishing a sketch', async 
   await page.getByRole('button', { name: /^Sketch \(S\)/ }).click();
   await page.getByRole('button', { name: 'Top (XY)' }).click();
   await expect(
-    page.getByRole('region', { name: 'Editing Sketch: New Sketch operation' })
+    page.getByRole('toolbar', { name: 'Sketch tools' })
   ).toBeVisible();
   await page.waitForTimeout(800);
 
+  // The sketch settings are a disclosure under the tools, closed to begin with.
+  if (
+    !(await page.getByRole('checkbox', { name: 'Snap to grid' }).isVisible())
+  ) {
+    await page.getByRole('button', { name: /Sketch palette/ }).click();
+  }
   const gridSnap = page.getByRole('checkbox', { name: 'Snap to grid' });
   if (await gridSnap.isChecked()) {
     await gridSnap.uncheck();
@@ -601,15 +621,14 @@ test('clears every transient sketch HUD overlay when finishing a sketch', async 
   await expect(marker).toHaveAttribute('data-kind', 'vertical');
   await expect(marker).toHaveAttribute('data-label', 'Vertical');
 
-  // Scoped to the rail: the sketch status names this control, and the
-  // activity-log button folds the status into its own accessible name.
+  // Exact: the sketch status names this control, and the activity-log button
+  // folds the status into its own accessible name.
   await page
-    .getByRole('toolbar', { name: 'Sketch tools' })
-    .getByRole('button', { name: 'Finish Sketch' })
+    .getByRole('button', { name: 'Finish Sketch', exact: true })
     .click();
-  await expect(
-    page.getByRole('toolbar', { name: 'Sketch tools' })
-  ).toHaveCount(0);
+  await expect(page.getByRole('toolbar', { name: 'Sketch tools' })).toHaveCount(
+    0
+  );
   await expect(marker).toBeHidden();
   await expect(page.locator('.sketch-dim-label')).toBeHidden();
   await expect(page.locator('.sketch-center-target')).toBeHidden();
@@ -623,7 +642,7 @@ test('snaps sketch drawing to existing endpoints', async ({ page }) => {
   const card = page.getByRole('region', { name: 'Offset Face operation' });
   await card.getByRole('tab', { name: 'Sketch' }).click();
   await expect(
-    page.getByRole('region', { name: 'Sketch operation' })
+    page.getByRole('toolbar', { name: 'Sketch tools' })
   ).toBeVisible();
   // Screen-space clicks must wait until the head-on entry tween settles.
   await page.waitForTimeout(800);
@@ -658,7 +677,7 @@ test('snaps sketch drawing to existing endpoints', async ({ page }) => {
   await expect(marker).toBeHidden();
 });
 
-test('empty-state copy names the rail the tools are actually in', async ({
+test('empty-state copy points at the tools above the history', async ({
   page
 }) => {
   await stubApi(page);
@@ -668,16 +687,17 @@ test('empty-state copy names the rail the tools are actually in', async ({
 
   // Several sections carry a .sidebar-hint; match the History one by text.
   const hint = page.locator('.sidebar-hint', { hasText: 'No features yet' });
-  await expect(hint).toContainText('Feature tools rail');
-  // "above" was the original wording and is wrong at every width: the rail is
-  // right of the panel on a wide screen and below it under 620px.
-  await expect(hint).not.toContainText('above');
+  await expect(hint).toContainText('Pick a tool above');
 
-  // The name it points at has to be the rail's own accessible name, or the
-  // instruction names something the user cannot find.
-  await expect(
-    page.getByRole('navigation', { name: 'Feature tools' })
-  ).toBeVisible();
+  // "Above" has to be literally true: the tool palette is the column's first
+  // section, over the history at every width.
+  const tools = page.getByRole('navigation', { name: 'Feature tools' });
+  await expect(tools).toBeVisible();
+  const toolsBounds = await tools.boundingBox();
+  const hintBounds = await hint.boundingBox();
+  expect(toolsBounds!.y + toolsBounds!.height).toBeLessThanOrEqual(
+    hintBounds!.y + 0.5
+  );
 
   // Selecting an edge points at the same place, and neither tool it names has
   // a keyboard shortcut, so the rail is the only route.

@@ -165,12 +165,6 @@ interface SidebarProps {
   onBranchCheckpoint(checkpoint: ProjectCheckpoint): void;
   panelState: PanelState;
   onToggleSection(id: SidebarSectionId): void;
-  /**
-   * `column` is the workspace column's browser: no "Model" caption (the
-   * column has its own header) and a collapsed History that reads as a scrub
-   * strip — one dot per feature, the current one lit, its name beside it.
-   */
-  variant?: 'dock' | 'column';
 }
 
 /** Body kind icons mirror the feature icons so the two lists read as one. */
@@ -224,8 +218,7 @@ export function Sidebar({
   onRestoreCheckpoint,
   onBranchCheckpoint,
   panelState,
-  onToggleSection,
-  variant = 'dock'
+  onToggleSection
 }: SidebarProps) {
   // Drag-to-reorder state for the history timeline (StartScreen's pattern).
   const [dragFeatureId, setDragFeatureId] = useState<string | null>(null);
@@ -322,34 +315,31 @@ export function Sidebar({
           : features.length - 1;
   const activeFeature =
     activeFeatureIndex >= 0 ? features[activeFeatureIndex] : undefined;
-  const historyScrub =
-    variant === 'column' && activeFeature ? (
-      <>
-        <span className="history-scrub" aria-hidden="true">
-          {features.map((feature, index) => {
-            const body = feature.bodyId
-              ? representations[feature.bodyId]
-              : undefined;
-            return (
-              <i
-                key={feature.id}
-                className={`history-scrub-dot${index === activeFeatureIndex ? ' active' : ''}${body?.consumed ? ' consumed' : ''}`}
-              />
-            );
-          })}
-        </span>
-        <span className="history-scrub-name">{activeFeature.name}</span>
-        <small className="history-scrub-position mono">
-          {activeFeatureIndex + 1}/{features.length}
-        </small>
-      </>
-    ) : undefined;
+  // Collapsed, History reads as a scrub strip: one dot per feature, the
+  // current one lit, its name and position beside it.
+  const historyScrub = activeFeature ? (
+    <>
+      <span className="history-scrub" aria-hidden="true">
+        {features.map((feature, index) => {
+          const body = feature.bodyId
+            ? representations[feature.bodyId]
+            : undefined;
+          return (
+            <i
+              key={feature.id}
+              className={`history-scrub-dot${index === activeFeatureIndex ? ' active' : ''}${body?.consumed ? ' consumed' : ''}`}
+            />
+          );
+        })}
+      </span>
+      <span className="history-scrub-name">{activeFeature.name}</span>
+      <small className="history-scrub-position mono">
+        {activeFeatureIndex + 1}/{features.length}
+      </small>
+    </>
+  ) : undefined;
   return (
-    <aside
-      className={`sidebar${variant === 'column' ? ' column' : ''}`}
-      aria-label="Model browser"
-    >
-      {variant !== 'column' && <div className="sidebar-label">Model</div>}
+    <aside className="sidebar" aria-label="Model browser">
       <SidebarSection
         id="parameters"
         title="Parameters"
@@ -433,12 +423,7 @@ export function Sidebar({
         <div className="feature-list">
           {features.length === 0 && (
             <p className="muted sidebar-hint">
-              {/* Names the rail, and deliberately does not say where it is:
-                  it sits right of this panel on a wide screen, but under
-                  620px the workspace stacks into one column (responsive.css)
-                  and the rail lands below instead. "Above" was wrong at every
-                  width; a direction would be wrong at one of them. */}
-              No features yet. Pick a tool from the Feature tools rail.
+              No features yet. Pick a tool above to start.
             </p>
           )}
           {features.map((feature, index) => {

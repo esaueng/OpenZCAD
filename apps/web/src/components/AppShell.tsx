@@ -2,11 +2,11 @@ import type { CSSProperties, ReactNode, Ref } from 'react';
 
 interface AppShellProps {
   topBar: ReactNode;
-  /** Floating tool palette (or a mode strip while a direct mode is active). */
+  /** Floating strip over the viewport: a direct-mode strip, or View's bar. */
   toolBar: ReactNode;
   /**
-   * Feature tree and parameters; null removes the column, which is what View
-   * mode does — there is no history to browse when nothing can be edited.
+   * The workspace column, floating over the viewport's left edge; null
+   * removes it, which is what View mode does.
    */
   sidebar: ReactNode | null;
   viewer: ReactNode;
@@ -37,28 +37,18 @@ interface AppShellProps {
    * for the duration of the gesture instead of re-rendering the editor.
    */
   workspaceRef?: Ref<HTMLElement>;
-  /**
-   * Splitters for the two docked panels. They are absolutely positioned over
-   * the seam, which also keeps them out of the grid's column count.
-   */
+  /** Splitters: the column's right edge and the assistant's left edge. */
   sidebarResizer?: ReactNode;
   assistantResizer?: ReactNode;
-  statusBar: ReactNode;
-  overlays?: ReactNode;
-  /**
-   * `column` is the experimental single-column workspace: the sidebar floats
-   * over the viewport instead of taking a grid column, the tool palette slot
-   * is unused (the column carries the tools), and the status bar is replaced
-   * by `readout`, an overlay in the viewer area.
-   */
-  layout?: 'classic' | 'column';
+  /** The status toast and the activity log, over the viewport. */
   readout?: ReactNode;
+  overlays?: ReactNode;
 }
 
 /**
- * Workspace layout frame: TopBar / [Sidebar | Viewer | Assistant] / StatusBar.
- * The tool palette and the inspector float over the viewer like CAD dialogs,
- * so the viewport keeps its full size while modeling.
+ * Workspace layout frame: TopBar / [Viewer | Assistant]. The column, the
+ * inspector and the dock float over the viewer like CAD dialogs, so the
+ * viewport keeps its full size while modeling; there is no status bar.
  */
 export function AppShell({
   topBar,
@@ -74,18 +64,12 @@ export function AppShell({
   workspaceRef,
   sidebarResizer,
   assistantResizer,
-  statusBar,
-  overlays,
-  layout = 'classic',
-  readout
+  readout,
+  overlays
 }: AppShellProps) {
   const assistantDocked = Boolean(
     assistant && !assistantHidden && !assistantCollapsed
   );
-  const column = layout === 'column';
-  // A floating column is not a docked sidebar: the grid gives the viewport
-  // the whole width and the column sits over it.
-  const sidebarDocked = Boolean(sidebar) && !column;
   // The widths are custom properties rather than track sizes so the stylesheet
   // keeps the last word: it caps them against the window, and the narrow-screen
   // rules can ignore them entirely when the workspace stacks.
@@ -94,31 +78,26 @@ export function AppShell({
     '--assistant-w': `${assistantWidth}px`
   } as CSSProperties;
   return (
-    <div className={`app-shell${column ? ' column-layout' : ''}`}>
+    <div className="app-shell column-layout">
       {topBar}
       <main
         ref={workspaceRef}
-        className={`workspace${assistantDocked ? ' with-assistant' : ''}${
-          sidebarDocked ? '' : ' no-sidebar'
-        }${column ? ' column-layout' : ''}`}
+        className={`workspace no-sidebar column-layout${
+          assistantDocked ? ' with-assistant' : ''
+        }`}
         style={widths}
       >
-        {sidebarDocked && sidebar}
-        {sidebarDocked && sidebarResizer}
         <div className={`viewer-area${inspector ? ' has-inspector' : ''}`}>
           {viewer}
-          {column && sidebar && (
-            <div className="workspace-column-float">{sidebar}</div>
-          )}
-          {column && sidebar && sidebarResizer}
+          {sidebar && <div className="workspace-column-float">{sidebar}</div>}
+          {sidebar && sidebarResizer}
           {toolBar && <div className="palette-float">{toolBar}</div>}
           {inspector && <div className="inspector-float">{inspector}</div>}
-          {column && readout}
+          {readout}
         </div>
         {assistant}
         {assistantDocked && assistantResizer}
       </main>
-      {!column && statusBar}
       {overlays}
     </div>
   );

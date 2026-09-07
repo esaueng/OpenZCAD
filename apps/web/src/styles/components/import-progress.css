@@ -6,7 +6,7 @@
 .import-card {
   position: fixed;
   right: var(--sp-3);
-  bottom: calc(var(--statusbar-h) + var(--sp-3));
+  bottom: 64px;
   z-index: var(--z-modal);
   width: 300px;
   max-width: calc(100vw - var(--sp-5));

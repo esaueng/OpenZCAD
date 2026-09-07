@@ -245,7 +245,7 @@ test('keeps every workspace surface inside a narrow viewport', async ({
     '.sidebar',
     '.viewer-area',
     '.assistant-panel',
-    '.status-bar'
+    '.viewport-dock'
   ];
   // What has to hold is where these surfaces come to rest. The dock opens with
   // a 200 ms slide from `translateX(12px)`, which deliberately starts it past
@@ -264,23 +264,18 @@ test('keeps every workspace surface inside a narrow viewport', async ({
     ).toBeLessThanOrEqual(390.5);
   }
 
+  // The column floats over the viewport at every width; on a phone it must
+  // still fit, leaving canvas beside it.
   const sidebarBounds = await page.locator('.sidebar').boundingBox();
   const viewerBounds = await page.locator('.viewer-area').boundingBox();
-  expect(viewerBounds!.y).toBeGreaterThanOrEqual(
-    sidebarBounds!.y + sidebarBounds!.height - 0.5
+  expect(sidebarBounds!.x + sidebarBounds!.width).toBeLessThan(
+    viewerBounds!.x + viewerBounds!.width - 100
   );
-  await expect(page.locator('.status-groups')).toBeHidden();
-  await expect(page.locator('.status-filters > b')).toBeHidden();
-  const statusStateBounds = await page.locator('.status-state').boundingBox();
-  const statusFilterBounds = await page
-    .locator('.status-filters')
-    .boundingBox();
-  expect(statusStateBounds).not.toBeNull();
-  expect(statusFilterBounds).not.toBeNull();
-  expect(statusStateBounds!.x).toBeGreaterThanOrEqual(0);
-  expect(statusFilterBounds!.x + statusFilterBounds!.width).toBeLessThanOrEqual(
-    390.5
-  );
+  // The dock has to fit a phone width whole: it is the only bottom chrome.
+  const dockBounds = await page.locator('.viewport-dock').boundingBox();
+  expect(dockBounds).not.toBeNull();
+  expect(dockBounds!.x).toBeGreaterThanOrEqual(0);
+  expect(dockBounds!.x + dockBounds!.width).toBeLessThanOrEqual(390.5);
   await expect(page.locator('.viewer-rail-stack')).toBeVisible();
 
   const overflowingTopbarChildren = await page.locator('.topbar').evaluate(
@@ -549,11 +544,12 @@ test('command palette and shortcut overlay behave as modal dialogs', async ({
     'aria-selected',
     'true'
   );
-  await expect(page.getByLabel('Search commands')).toHaveAttribute(
+  const paletteInput = page.getByRole('textbox', { name: 'Search commands' });
+  await expect(paletteInput).toHaveAttribute(
     'aria-activedescendant',
     /command-palette-option-\d+/
   );
-  await expect(page.getByLabel('Search commands')).toBeFocused();
+  await expect(paletteInput).toBeFocused();
   await page.keyboard.press('Escape');
   await expect(paletteTrigger).toBeFocused();
 

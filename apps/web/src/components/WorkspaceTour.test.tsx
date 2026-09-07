@@ -6,7 +6,9 @@ const idle = { featureCount: 0, hasSelection: false, exportSeen: false };
 
 describe('WorkspaceTour', () => {
   it('opens on the create step and auto-advances as work happens', () => {
-    const { rerender } = render(<WorkspaceTour {...idle} onDismiss={vi.fn()} />);
+    const { rerender } = render(
+      <WorkspaceTour {...idle} onDismiss={vi.fn()} />
+    );
     expect(screen.getByText('Create your first feature')).toBeTruthy();
 
     rerender(<WorkspaceTour {...idle} featureCount={1} onDismiss={vi.fn()} />);
@@ -57,7 +59,9 @@ describe('WorkspaceTour', () => {
     palette.className = 'tool-palette';
     document.body.appendChild(palette);
     try {
-      const { unmount } = render(<WorkspaceTour {...idle} onDismiss={vi.fn()} />);
+      const { unmount } = render(
+        <WorkspaceTour {...idle} onDismiss={vi.fn()} />
+      );
       expect(palette.classList.contains('tour-target')).toBe(true);
       unmount();
       expect(palette.classList.contains('tour-target')).toBe(false);

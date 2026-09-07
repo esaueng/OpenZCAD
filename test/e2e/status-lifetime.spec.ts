@@ -19,7 +19,7 @@ test('status messages are retired by the next selection and expire on their own'
   await page.getByRole('button', { name: /^Box \(B\)/ }).click();
   await inspector.getByRole('button', { name: 'Create', exact: true }).click();
 
-  const statusButton = page.locator('.status-state');
+  const statusButton = page.locator('.workspace-toast-body');
   await expect(statusButton).toContainText('Add box');
 
   // Selecting the body retires the command message; the pick's own message
@@ -32,8 +32,14 @@ test('status messages are retired by the next selection and expire on their own'
   await expect(statusButton).toHaveClass(/quiet/, {
     timeout: STATUS_LIFETIME_MS + 5_000
   });
-  await expect(statusButton).toHaveAttribute('aria-label', 'Open activity log.');
-  await statusButton.click();
+  await expect(statusButton).toHaveAttribute(
+    'aria-label',
+    'Open activity log.'
+  );
+  // Quiet, the toast is out of the way; the dock's log button still opens it.
+  await page
+    .getByRole('button', { name: 'Open activity log', exact: true })
+    .click();
   await expect(
     page.getByRole('region', { name: 'Activity log' })
   ).toContainText('Add box');

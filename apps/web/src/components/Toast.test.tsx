@@ -1,7 +1,11 @@
 import { act, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ToastHost } from './Toast';
-import { TOAST_EXIT_MS, TOAST_LIFETIME_MS, type ToastModel } from '../lib/toasts';
+import {
+  TOAST_EXIT_MS,
+  TOAST_LIFETIME_MS,
+  type ToastModel
+} from '../lib/toasts';
 
 function toast(overrides: Partial<ToastModel> = {}): ToastModel {
   return { id: 1, message: 'Deleted Boss', ...overrides };
