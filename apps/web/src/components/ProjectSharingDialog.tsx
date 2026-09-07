@@ -534,8 +534,7 @@ export function ProjectSharingDialog({
                           Anyone with the link
                         </span>
                         <span className="sharing-kind">
-                          {shareLink.mode} ·{' '}
-                          {createdLabel(shareLink.createdAt)}
+                          {shareLink.mode} · {createdLabel(shareLink.createdAt)}
                         </span>
                         <button
                           type="button"

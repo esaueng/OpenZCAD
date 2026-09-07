@@ -27,7 +27,9 @@ test('deleting a history feature raises an undoable toast that counts its depend
     { timeout: 60_000 }
   );
   const summary = page.getByRole('group', { name: 'Workspace status' });
-  await expect(summary.getByLabel(/ · 16 features · 1 body\. Sync /)).toBeVisible();
+  await expect(
+    summary.getByLabel(/ · 16 features · 1 body\. Sync /)
+  ).toBeVisible();
 
   const bossRow = page.locator('.feature-row', { hasText: 'Boss' }).first();
   await bossRow.hover();
@@ -43,7 +45,9 @@ test('deleting a history feature raises an undoable toast that counts its depend
 
   await toast.getByRole('button', { name: 'Undo' }).click();
   await expect(toast).toHaveCount(0);
-  await expect(summary.getByLabel(/ · 16 features · 1 body\. Sync /)).toBeVisible({
+  await expect(
+    summary.getByLabel(/ · 16 features · 1 body\. Sync /)
+  ).toBeVisible({
     timeout: 60_000
   });
   await expect(status).toContainText('Undo Delete Boss');

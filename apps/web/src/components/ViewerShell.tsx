@@ -512,13 +512,19 @@ export function ViewerShell({
         </>
       )}
       {dockLayout && !hideViewerToolbar && (
-        <div className="viewport-dock" role="group" aria-label="Viewport dock">
-          {!viewMode && viewerToolbar}
-          {dockExtras}
-          <ViewportScaleIndicator
-            scaleSinkRef={scaleIndicatorRef}
-            units={units}
-          />
+        <div className="viewport-dock-lane">
+          <div
+            className="viewport-dock"
+            role="group"
+            aria-label="Viewport dock"
+          >
+            {!viewMode && viewerToolbar}
+            {dockExtras}
+            <ViewportScaleIndicator
+              scaleSinkRef={scaleIndicatorRef}
+              units={units}
+            />
+          </div>
         </div>
       )}
       {selectionChip && (

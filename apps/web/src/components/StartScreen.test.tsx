@@ -100,7 +100,10 @@ describe('StartScreen project timestamps', () => {
   it('shortens recent edits to the time, the day or the date', () => {
     const now = new Date(2026, 8, 4, 15, 30);
     const time = (date: Date) =>
-      date.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+      date.toLocaleTimeString(undefined, {
+        hour: 'numeric',
+        minute: '2-digit'
+      });
 
     const today = new Date(2026, 8, 4, 12, 21);
     expect(formatLastEdited(today.toISOString(), now)).toBe(

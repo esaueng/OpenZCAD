@@ -117,7 +117,10 @@ export function ProjectConflictDialog({
           </button>
         </div>
         {keepMineDisabledReason !== null && (
-          <p id="project-conflict-keep-mine-note" className="conflict-dialog-note">
+          <p
+            id="project-conflict-keep-mine-note"
+            className="conflict-dialog-note"
+          >
             {keepMineDisabledReason}
           </p>
         )}

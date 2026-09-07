@@ -76,8 +76,7 @@ export const SETTINGS_SECTIONS: readonly SettingsSectionMeta[] = [
       'Linear snap',
       'Snap tolerance',
       'Angular snap',
-      'Direct manipulation (experimental)',
-      'Workspace column (experimental)'
+      'Direct manipulation (experimental)'
     ]
   },
   {

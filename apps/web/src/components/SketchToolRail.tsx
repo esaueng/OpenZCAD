@@ -1,6 +1,5 @@
 import { useState } from 'react';
 import {
-  Check,
   ChevronDown,
   ChevronRight,
   Circle,
@@ -67,14 +66,6 @@ interface SketchToolRailProps {
   onSolve(): void;
   onDiagnostics(): void;
   onExtrude(): void;
-  onExit(): void;
-  /**
-   * `column` lays the same tools out for the workspace column: a labelled
-   * draw grid, then the constraints, then the utilities, with the sketch
-   * settings as a disclosure beneath instead of a floating palette. Finish is
-   * left to the column header.
-   */
-  variant?: 'float' | 'column';
 }
 
 const TOOLS: {
@@ -147,15 +138,11 @@ export function SketchToolRail({
   onDeleteConstraint,
   onSolve,
   onDiagnostics,
-  onExtrude,
-  onExit,
-  variant = 'float'
+  onExtrude
 }: SketchToolRailProps) {
-  const column = variant === 'column';
   const [circleMenuOpen, setCircleMenuOpen] = useState(false);
-  // The floating palette opens with the sketch; folded into the column it is
-  // a settings disclosure and stays closed until asked for.
-  const [paletteOpen, setPaletteOpen] = useState(!column);
+  // The sketch settings are a disclosure under the tools; closed until asked.
+  const [paletteOpen, setPaletteOpen] = useState(false);
   const patchSettings = (patch: Partial<AppSettings['sketching']>) =>
     onSettings({ ...settings, ...patch });
 
@@ -326,24 +313,11 @@ export function SketchToolRail({
       </button>
     </>
   );
-  const exitButton = (
-    <>
-      <button
-        type="button"
-        className="sketch-rail-exit"
-        title="Finish Sketch"
-        onClick={onExit}
-      >
-        <Check size={14} aria-hidden="true" />
-        Finish Sketch
-      </button>
-    </>
-  );
   const palette = (
     <>
       {paletteVisible ? (
         <aside
-          className={`sketch-palette${paletteOpen ? '' : ' collapsed'}${column ? ' column' : ''}`}
+          className={`sketch-palette${paletteOpen ? '' : ' collapsed'}`}
           aria-label="Sketch palette"
         >
           <button
@@ -491,42 +465,17 @@ export function SketchToolRail({
     </>
   );
 
-  if (column) {
-    return (
-      <>
-        <div
-          className="sketch-rail column"
-          role="toolbar"
-          aria-label="Sketch tools"
-        >
-          <div className="sketch-rail-group draw">{drawTools}</div>
-          <span className="sketch-rail-group-label">Constrain</span>
-          <div className="sketch-rail-group constrain">{constraintTools}</div>
-          <div className="sketch-rail-group solve">
-            {solveButton}
-            {solvePill}
-          </div>
-          <div className="sketch-rail-group utility">{utilityTools}</div>
-        </div>
-        {palette}
-      </>
-    );
-  }
-
   return (
     <>
       <div className="sketch-rail" role="toolbar" aria-label="Sketch tools">
-        <span className="sketch-rail-group-label">Draw</span>
-        {drawTools}
-        <span className="sketch-rail-divider" aria-hidden="true" />
+        <div className="sketch-rail-group draw">{drawTools}</div>
         <span className="sketch-rail-group-label">Constrain</span>
-        {constraintTools}
-        {solveButton}
-        {solvePill}
-        <span className="sketch-rail-divider" aria-hidden="true" />
-        {utilityTools}
-        <span className="sketch-rail-divider" aria-hidden="true" />
-        {exitButton}
+        <div className="sketch-rail-group constrain">{constraintTools}</div>
+        <div className="sketch-rail-group solve">
+          {solveButton}
+          {solvePill}
+        </div>
+        <div className="sketch-rail-group utility">{utilityTools}</div>
       </div>
       {palette}
     </>
