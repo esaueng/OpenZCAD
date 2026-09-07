@@ -503,6 +503,9 @@
 /* The scale bar as the dock's last segment. */
 .viewport-dock .viewport-scale-indicator {
   position: static;
+  /* Reserve the ruler's maximum width so zoom never moves dock controls. */
+  flex: 0 0 200px;
+  width: 200px;
   margin-left: 2px;
   transform: none;
 }
