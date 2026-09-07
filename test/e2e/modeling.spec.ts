@@ -1312,10 +1312,18 @@ for (const modifier of [
       await expect(page.getByTestId('direct-manipulation-value')).toHaveText(
         'Ø 12.8 mm'
       );
-      await expect(canvas).not.toHaveAttribute(
-        'data-e2e-cylinder-proxy-radius',
-        /.+/
-      );
+      if (modifier.label === 'Fillet') {
+        await expect
+          .poll(async () =>
+            Number(await canvas.getAttribute('data-e2e-cylinder-proxy-radius'))
+          )
+          .toBeCloseTo(6.4, 5);
+      } else {
+        await expect(canvas).not.toHaveAttribute(
+          'data-e2e-cylinder-proxy-radius',
+          /.+/
+        );
+      }
       await page.mouse.up();
     } finally {
       await page.keyboard.up('Shift');
