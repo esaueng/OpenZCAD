@@ -114,7 +114,11 @@ export function MeasurementDock({
         ) : null}
       </header>
 
-      <div className="measurement-mode-tabs" role="group" aria-label="Measurement type">
+      <div
+        className="measurement-mode-tabs"
+        role="group"
+        aria-label="Measurement type"
+      >
         {(Object.keys(MODE_LABELS) as MeasurementMode[]).map((candidate) => (
           <button
             type="button"
@@ -160,10 +164,16 @@ export function MeasurementDock({
             ))}
           </select>
         </label>
-        <div className="measurement-radial-toggle" role="group" aria-label="Radial display">
+        <div
+          className="measurement-radial-toggle"
+          role="group"
+          aria-label="Radial display"
+        >
           <button
             type="button"
-            className={display.radialDisplay === 'diameter' ? 'active' : undefined}
+            className={
+              display.radialDisplay === 'diameter' ? 'active' : undefined
+            }
             aria-pressed={display.radialDisplay === 'diameter'}
             onClick={() => onRadialDisplay('diameter')}
             title="Show diameters"
@@ -172,7 +182,9 @@ export function MeasurementDock({
           </button>
           <button
             type="button"
-            className={display.radialDisplay === 'radius' ? 'active' : undefined}
+            className={
+              display.radialDisplay === 'radius' ? 'active' : undefined
+            }
             aria-pressed={display.radialDisplay === 'radius'}
             onClick={() => onRadialDisplay('radius')}
             title="Show radii"
@@ -250,31 +262,52 @@ export function MeasurementDock({
                       aria-pressed={activeMeasurementId === entry.id}
                     >
                       <span className="measurement-row-heading">
-                        <span className="measurement-row-label" title={entry.label}>
+                        <span
+                          className="measurement-row-label"
+                          title={entry.label}
+                        >
                           {entry.label}
                         </span>
-                        <span className={`measurement-quality ${entry.quality}`}>
+                        <span
+                          className={`measurement-quality ${entry.quality}`}
+                        >
                           {formatted.quality}
                         </span>
                         {entry.status !== 'current' ? (
-                          <span className={`measurement-status ${entry.status}`}>
+                          <span
+                            className={`measurement-status ${entry.status}`}
+                          >
                             {entry.status}
                           </span>
                         ) : null}
                       </span>
-                      <span className="measurement-row-value">{formatted.value}</span>
+                      <span className="measurement-row-value">
+                        {formatted.value}
+                      </span>
                       {formatted.detail ? (
-                        <small className="measurement-row-note">{formatted.detail}</small>
+                        <small className="measurement-row-note">
+                          {formatted.detail}
+                        </small>
                       ) : null}
                       {entry.note ? (
-                        <small className="measurement-row-user-note">{entry.note}</small>
+                        <small className="measurement-row-user-note">
+                          {entry.note}
+                        </small>
                       ) : null}
                     </button>
                     <span className="measurement-row-actions">
                       <button
                         type="button"
-                        title={entry.visible ? 'Hide viewport annotation' : 'Show viewport annotation'}
-                        aria-label={entry.visible ? `Hide ${entry.label}` : `Show ${entry.label}`}
+                        title={
+                          entry.visible
+                            ? 'Hide viewport annotation'
+                            : 'Show viewport annotation'
+                        }
+                        aria-label={
+                          entry.visible
+                            ? `Hide ${entry.label}`
+                            : `Show ${entry.label}`
+                        }
                         onClick={() => onToggleVisibility(entry.id)}
                       >
                         {entry.visible ? (
@@ -322,7 +355,11 @@ export function MeasurementDock({
             <ClipboardCopy size={12} aria-hidden="true" />
             Copy all
           </button>
-          <button type="button" onClick={onExport} title="Download structured CSV">
+          <button
+            type="button"
+            onClick={onExport}
+            title="Download structured CSV"
+          >
             <Download size={12} aria-hidden="true" />
             CSV
           </button>

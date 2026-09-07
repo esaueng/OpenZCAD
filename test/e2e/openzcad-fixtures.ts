@@ -356,36 +356,84 @@ export async function stubAnonymousApi(page: Page) {
  * viewport, so close it before reaching the second edge. Selection deliberately
  * survives that close, and Shift+left click must then add instead of replace.
  */
+/**
+ * Sets the selection filter through the dock chip, which cycles rather than
+ * offering one button per kind: click until its label names the wanted kind.
+ */
+export async function setSelectionFilter(
+  page: Page,
+  label: 'Any' | 'Body' | 'Face' | 'Edge' | 'Vertex' | 'Sketch'
+) {
+  const chip = page.getByRole('button', { name: /^Selection filter:/ });
+  const wanted = new RegExp(`: ${label}\\.`);
+  await expect(chip).toBeVisible();
+  for (let attempt = 0; attempt < 8; attempt += 1) {
+    const current = (await chip.getAttribute('aria-label')) ?? '';
+    if (wanted.test(current)) {
+      return;
+    }
+    await chip.click();
+    // The label is React state: wait for the step to land before reading it
+    // again, or a fast second click skips past the wanted kind.
+    await expect(chip).not.toHaveAttribute('aria-label', current);
+  }
+  await expect(chip).toHaveAttribute('aria-label', wanted);
+}
+
+/**
+ * Asks the viewer for a screen point that a click proves to pick an edge of
+ * the first live body: the box sits wherever the camera framed it, so a fixed
+ * canvas fraction is not a place an edge can be relied on to be.
+ */
+export async function locateEdge(
+  page: Page,
+  options: { exclude?: string[] } = {}
+) {
+  const canvas = page.locator('.viewer-host canvas');
+  let found: { x: number; y: number; topologyId: string } | null = null;
+  await expect
+    .poll(
+      async () => {
+        found = await canvas.evaluate(
+          (element, excludeTopologyIds) =>
+            new Promise<{
+              x: number;
+              y: number;
+              topologyId: string;
+            } | null>((resolve) => {
+              element.dispatchEvent(
+                new CustomEvent('openzcad:e2e-locate-edge', {
+                  detail: { resolve, excludeTopologyIds }
+                })
+              );
+            }),
+          options.exclude ?? []
+        );
+        return found !== null;
+      },
+      { message: 'the body should expose a pickable edge', timeout: 20_000 }
+    )
+    .toBe(true);
+  return found!;
+}
+
 export async function shiftSelectTwoVisibleBoxEdges(page: Page) {
   // Edge picks only become meaningful after the exact body projection lands.
   await expect(page.getByRole('button', { name: /^Fillet/ })).toBeEnabled({
     timeout: 30_000
   });
-  await page.getByRole('button', { name: 'Edge', exact: true }).click();
-  const canvas = page.locator('.viewer-host canvas');
-  const bounds = await canvas.boundingBox();
-  if (!bounds) {
-    throw new Error('viewer canvas not laid out');
-  }
+  await setSelectionFilter(page, 'Edge');
 
-  await canvas.click({
-    position: {
-      x: bounds.width * 0.578,
-      y: bounds.height * 0.29
-    }
-  });
+  const first = await locateEdge(page);
+  await page.mouse.click(first.x, first.y);
   const status = page.getByRole('contentinfo');
   await expect(status).toContainText('1 exact edge selected');
 
   await page.getByRole('button', { name: 'Close panel' }).click();
+  const second = await locateEdge(page, { exclude: [first.topologyId] });
   await page.keyboard.down('Shift');
   try {
-    await canvas.click({
-      position: {
-        x: bounds.width * 0.393,
-        y: bounds.height * 0.26
-      }
-    });
+    await page.mouse.click(second.x, second.y);
   } finally {
     await page.keyboard.up('Shift');
   }

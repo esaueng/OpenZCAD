@@ -62,13 +62,12 @@ function renderSidebar(
     onBranchCheckpoint: vi.fn(),
     panelState,
     onToggleSection: vi.fn(),
-    variant: 'column',
     ...overrides
   };
   return { ...render(<Sidebar {...props} />), props };
 }
 
-describe('Sidebar column variant', () => {
+describe('Sidebar', () => {
   it('collapses History into a scrub strip that names the newest feature', () => {
     const { container } = renderSidebar();
     const header = screen.getByTitle('Expand History');
@@ -103,15 +102,6 @@ describe('Sidebar column variant', () => {
     expect(dots[0]?.classList.contains('consumed')).toBe(true);
     expect(dots[1]?.classList.contains('active')).toBe(true);
     expect(screen.getByTitle('Expand History')).toHaveTextContent('Feature 2');
-  });
-
-  it('keeps the docked layout as it was', () => {
-    const { container } = renderSidebar({ variant: 'dock' });
-    expect(container.querySelector('.history-scrub')).toBeNull();
-    expect(container.querySelector('.sidebar-label')).toHaveTextContent(
-      'Model'
-    );
-    expect(screen.getByTitle('Expand History')).toHaveTextContent('3');
   });
 
   it('opens the list from the strip', async () => {

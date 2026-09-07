@@ -33,10 +33,7 @@ export interface ExportDialogBody {
  * file being written.
  */
 export type ExportProgress =
-  | 'preparing'
-  | 'loading-kernel'
-  | 'building'
-  | 'saving';
+  'preparing' | 'loading-kernel' | 'building' | 'saving';
 
 const PROGRESS_LABELS: Record<ExportProgress, string> = {
   preparing: 'Preparing…',
@@ -154,7 +151,11 @@ export function ExportDialog({
     parsedCustom >= CUSTOM_DEFLECTION_MIN &&
     parsedCustom <= CUSTOM_DEFLECTION_MAX;
   const deflection =
-    preset === 'custom' ? (customValid ? parsedCustom : null) : presetDeflection!;
+    preset === 'custom'
+      ? customValid
+        ? parsedCustom
+        : null
+      : presetDeflection!;
 
   const bodyName = (bodyId: string) =>
     bodies.find((body) => body.bodyId === bodyId)?.name ?? bodyId;

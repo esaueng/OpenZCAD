@@ -12,7 +12,13 @@ import {
   type UnitSystem
 } from '@openzcad/shared';
 import type { StoredMeasurementRecord } from '../../apps/web/src/lib/measurementRecord';
-import { createProject, expect, stubApi, test } from './openzcad-fixtures';
+import {
+  createProject,
+  expect,
+  setSelectionFilter,
+  stubApi,
+  test
+} from './openzcad-fixtures';
 
 // Cross-tab IndexedDB sync settles much more slowly on the 2-core CI runners
 // than on a workstation; assertion budgets scale up there and stay tight
@@ -671,7 +677,7 @@ test('syncs View measurements to a second device without changing the CAD docume
 
     await switchWorkspace(pageA, 'View');
     await armMeasure(pageA);
-    await pageA.getByRole('button', { name: 'Edge', exact: true }).click();
+    await setSelectionFilter(pageA, 'Edge');
     const edge = await locateEdge(pageA);
     await pageA.mouse.click(edge.x, edge.y);
     const measured = await pageA
@@ -786,7 +792,8 @@ test('syncs across two devices and preserves the losing side of a conflict', asy
       name: 'This project changed in two places'
     });
     await expect(conflict).toBeVisible({ timeout: SYNC_BUDGET_MS });
-    await expect(pageB.locator('.status-groups')).toContainText('syncConflict');
+    // The top bar's save state is the one sync readout now.
+    await expect(pageB.locator('.save-state')).toContainText('Conflict');
     // A lower overlay may mount after async conflict detection. The account
     // dialog remains painted above it and must not become inert just because
     // the lower overlay registered its focus trap later.
