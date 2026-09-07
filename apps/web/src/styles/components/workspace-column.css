@@ -54,8 +54,9 @@
   flex-direction: column;
   background: var(--color-surface);
   border: var(--border-thin);
+  border-top: 0;
   border-left: 0;
-  border-radius: 0 var(--radius-lg) var(--radius-lg) 0;
+  border-radius: 0 0 var(--radius-lg) 0;
   box-shadow: var(--shadow-2);
   overflow: hidden;
 }
@@ -157,7 +158,7 @@
   flex: 1;
   min-width: 0;
   border-right: var(--border-thin);
-  border-radius: 0 var(--radius-lg) var(--radius-lg) 0;
+  border-radius: 0 0 var(--radius-lg) 0;
   box-shadow: var(--shadow-2);
 }
 
