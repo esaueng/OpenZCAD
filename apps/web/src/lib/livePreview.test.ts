@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { LivePreview } from './livePreview';
 
 interface Doc {
@@ -416,5 +416,203 @@ describe('lagging', () => {
     expect(preview.lagging).toBe(true);
     preview.clear();
     expect(preview.lagging).toBe(false);
+  });
+});
+
+describe('bounded progressive gestures', () => {
+  it('advances during continuous input with one rebuild and one pending value', async () => {
+    vi.useFakeTimers();
+    try {
+      const published: number[] = [];
+      let running = 0;
+      let peak = 0;
+      let builds = 0;
+      const preview = new LivePreview<Doc, string>({
+        build: (value) => ({ value }),
+        derive: async () => {
+          builds += 1;
+          peak = Math.max(peak, ++running);
+          await new Promise((resolve) => setTimeout(resolve, 40));
+          running -= 1;
+          return 'derived';
+        },
+        publish: (value) => {
+          if (value) published.push(value.document.value);
+        },
+        publishIntermediate: true,
+        minIntervalMs: 100,
+        now: () => Date.now()
+      });
+      for (let value = 1; value <= 50; value += 1) {
+        preview.request(value);
+        await vi.advanceTimersByTimeAsync(16);
+      }
+      expect(published.length).toBeGreaterThanOrEqual(7);
+      expect(builds).toBeLessThanOrEqual(9);
+      expect(peak).toBe(1);
+      await vi.advanceTimersByTimeAsync(200);
+      expect(published.at(-1)).toBe(50);
+      expect(preview.lagging).toBe(false);
+      const idleBuilds = builds;
+      preview.request(50);
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(builds).toBe(idleBuilds);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('budgets measured installation time along with rebuild time', async () => {
+    vi.useFakeTimers();
+    try {
+      const starts: number[] = [];
+      const preview = new LivePreview<Doc, string>({
+        build: (value) => {
+          starts.push(Date.now());
+          return { value };
+        },
+        derive: async () => {
+          await new Promise((resolve) => setTimeout(resolve, 80));
+          return 'derived';
+        },
+        publish: () => undefined,
+        publishIntermediate: true,
+        minIntervalMs: 100,
+        presentationTimeMs: () => 30,
+        now: () => Date.now()
+      });
+      preview.request(1);
+      preview.request(2);
+      await vi.advanceTimersByTimeAsync(219);
+      expect(starts).toHaveLength(1);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(starts[1]! - starts[0]!).toBe(220);
+      preview.clear();
+      await vi.runAllTimersAsync();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('rejects old generations even when a new gesture has already started', async () => {
+    const first = deferred();
+    const published: (number | null)[] = [];
+    const preview = new LivePreview<Doc, string>({
+      build: (value) => ({ value }),
+      derive: (doc) =>
+        doc.value === 1 ? first.promise : Promise.resolve('new'),
+      publish: (value) => published.push(value?.document.value ?? null),
+      publishIntermediate: true
+    });
+    preview.request(1);
+    preview.clear();
+    preview.request(2);
+    first.resolve('old');
+    await settle();
+    expect(published).toEqual([null, 2]);
+  });
+
+  it('retains the displayed result on release but cancels pending previews', async () => {
+    vi.useFakeTimers();
+    try {
+      const published: (number | null)[] = [];
+      const built: number[] = [];
+      const preview = new LivePreview<Doc, string>({
+        build: (value) => {
+          built.push(value);
+          return { value };
+        },
+        derive: () => Promise.resolve('derived'),
+        publish: (value) => published.push(value?.document.value ?? null),
+        publishIntermediate: true,
+        minIntervalMs: 100,
+        now: () => Date.now()
+      });
+      preview.request(1);
+      await vi.advanceTimersByTimeAsync(0);
+      preview.request(2);
+      preview.stop();
+      await vi.advanceTimersByTimeAsync(500);
+      expect(built).toEqual([1]);
+      expect(published).toEqual([1]);
+      preview.clear();
+      expect(published).toEqual([1, null]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('does not replace the retained preview when an in-flight build finishes after release', async () => {
+    const running = deferred();
+    const published: (number | null)[] = [];
+    const preview = new LivePreview<Doc, string>({
+      build: (value) => ({ value }),
+      derive: (doc) =>
+        doc.value === 1 ? Promise.resolve('first') : running.promise,
+      publish: (value) => published.push(value?.document.value ?? null),
+      publishIntermediate: true
+    });
+    preview.request(1);
+    await settle();
+    preview.request(2);
+    preview.stop();
+    running.resolve('late');
+    await settle();
+    expect(published).toEqual([1]);
+    expect(preview.lagging).toBe(false);
+    preview.clear();
+    expect(published).toEqual([1, null]);
+  });
+
+  it('does not publish after its source document changes', async () => {
+    const first = deferred();
+    let current = true;
+    const published: unknown[] = [];
+    const preview = new LivePreview<Doc, string>({
+      build: (value) => ({ value }),
+      derive: () => first.promise,
+      isCurrent: () => current,
+      publish: (value) => published.push(value),
+      publishIntermediate: true
+    });
+    preview.request(1);
+    current = false;
+    first.resolve('derived');
+    await settle();
+    expect(published).toEqual([]);
+    preview.clear();
+  });
+
+  it('handles reversals by request order and keeps superseded failures silent', async () => {
+    const first = deferred();
+    const second = deferred();
+    const values: number[] = [];
+    const failures: unknown[] = [];
+    let builds = 0;
+    const preview = new LivePreview<Doc, string>({
+      build: (value) => ({ value }),
+      derive: () =>
+        ++builds === 1
+          ? first.promise
+          : builds === 2
+            ? second.promise
+            : Promise.resolve('derived'),
+      publish: (value) => {
+        if (value) values.push(value.document.value);
+      },
+      onFailure: (failure) => failures.push(failure),
+      publishIntermediate: true
+    });
+    preview.request(20);
+    preview.request(10);
+    first.resolve('derived');
+    await settle();
+    expect(values).toEqual([20]);
+    expect(preview.lagging).toBe(true);
+    preview.request(5);
+    second.reject(new Error('superseded refusal'));
+    await settle();
+    expect(values).toEqual([20, 5]);
+    expect(failures).toEqual([]);
   });
 });
