@@ -37,12 +37,21 @@ jobs:
           fi
           echo "trusted=$trusted" >> "$GITHUB_OUTPUT"
 
-  vps:
+  route:
     needs: select
     if: needs.select.outputs.trusted == 'true'
+    permissions:
+      id-token: write
+    uses: esaueng/remus/.github/workflows/select-runner.yml@d7168a6576f078f6128191f5b37ac38068c8f0af
+    with:
+      enabled: ${{ vars.CI_FLEET_ENABLED == 'true' }}
+
+  vps:
+    needs: [select, route]
+    if: needs.select.outputs.trusted == 'true' && needs.route.outputs.target != 'github-hosted'
     runs-on:
       group: ci-trusted-main
-      labels: ci-small
+      labels: ${{ needs.route.outputs.target }}
     timeout-minutes: 15
     steps:
       - name: Verify runner boundary
@@ -75,8 +84,8 @@ jobs:
           echo "Typecheck: ${SECONDS}s" >> "$GITHUB_STEP_SUMMARY"
 
   hosted:
-    needs: select
-    if: needs.select.outputs.trusted == 'false'
+    needs: [select, route]
+    if: always() && !cancelled() && needs.select.result == 'success' && (needs.select.outputs.trusted == 'false' || needs.route.outputs.target == 'github-hosted')
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -95,7 +104,7 @@ jobs:
       - run: pnpm typecheck
 
   complete:
-    needs: [select, vps, hosted]
+    needs: [select, route, vps, hosted]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -103,15 +112,20 @@ jobs:
       - name: Require the selected checks to succeed
         env:
           SELECT_RESULT: ${{ needs.select.result }}
+          ROUTE_RESULT: ${{ needs.route.result }}
+          TARGET: ${{ needs.route.outputs.target }}
           TRUSTED: ${{ needs.select.outputs.trusted }}
           VPS_RESULT: ${{ needs.vps.result }}
           HOSTED_RESULT: ${{ needs.hosted.result }}
         run: |
           test "$SELECT_RESULT" = success
           if [[ "$TRUSTED" == true ]]; then
+            test "$ROUTE_RESULT" = success
+          fi
+          if [[ "$TRUSTED" == true && "$TARGET" != github-hosted ]]; then
             test "$VPS_RESULT" = success
             test "$HOSTED_RESULT" = skipped
-          elif [[ "$TRUSTED" == false ]]; then
+          elif [[ "$TRUSTED" == false || "$TARGET" == github-hosted ]]; then
             test "$HOSTED_RESULT" = success
             test "$VPS_RESULT" = skipped
           else

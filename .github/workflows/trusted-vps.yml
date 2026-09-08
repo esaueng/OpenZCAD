@@ -1,4 +1,4 @@
-name: Trusted VPS checks
+name: Trusted fleet checks
 on:
   workflow_dispatch:
   push:
@@ -9,11 +9,19 @@ concurrency:
   group: trusted-vps-${{ github.repository }}-${{ github.ref }}
   cancel-in-progress: false
 jobs:
+  route:
+    if: github.repository == 'esaueng/OpenZCAD' && github.ref == 'refs/heads/main' && github.ref_protected && github.event_name != 'pull_request'
+    permissions:
+      id-token: write
+    uses: esaueng/remus/.github/workflows/select-runner.yml@d7168a6576f078f6128191f5b37ac38068c8f0af
+    with:
+      enabled: ${{ vars.CI_FLEET_ENABLED == 'true' }}
   verify:
-    if: github.event_name != 'pull_request'
+    needs: route
+    if: needs.route.outputs.target != 'github-hosted'
     runs-on:
       group: ci-trusted-main
-      labels: ci-small
+      labels: ${{ needs.route.outputs.target }}
     timeout-minutes: 30
     steps:
       - name: Verify runner boundary
@@ -42,3 +50,30 @@ jobs:
       - name: Disk usage
         if: always()
         run: df -h /srv/ci; du -sh "$GITHUB_WORKSPACE" "$HOME"
+
+  hosted:
+    needs: route
+    if: needs.route.outputs.target == 'github-hosted'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 22
+      - name: Enable package manager shims
+        run: |
+          mkdir -p "$HOME/.local/bin"
+          corepack enable --install-directory "$HOME/.local/bin"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      - name: Install
+        run: /usr/bin/time -v corepack pnpm install --frozen-lockfile
+      - name: Representative checks
+        run: |
+          corepack pnpm lint
+          corepack pnpm typecheck
+      - name: Disk usage
+        if: always()
+        run: df -h /; du -sh "$GITHUB_WORKSPACE" "$HOME"
