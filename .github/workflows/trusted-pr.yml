@@ -37,20 +37,67 @@ jobs:
           fi
           echo "trusted=$trusted" >> "$GITHUB_OUTPUT"
 
-  vps:
+  route:
     needs: select
-    if: needs.select.outputs.trusted == 'true'
+    if: needs.select.outputs.trusted == 'true' && vars.CI_FLEET_ENABLED == 'true'
+    permissions:
+      id-token: write
+    uses: esaueng/remus/.github/workflows/select-runner.yml@8cf263108cef108a72156268f0de2db019127de2
+    with:
+      enabled: true
+
+  vps:
+    needs: [select, route]
+    if: needs.select.outputs.trusted == 'true' && (needs.route.outputs.target == 'ci-server-jane' || needs.route.outputs.target == 'ci-server-john')
     runs-on:
       group: ci-trusted-main
-      labels: ci-small
+      labels: ${{ needs.route.outputs.target }}
     timeout-minutes: 15
     steps:
-      - name: Verify runner boundary
+      - name: Verify runner isolation and fresh storage
+        if: runner.environment == 'self-hosted'
         run: |
+          set -euo pipefail
+          case "$RUNNER_NAME" in
+            ci-vm-1441561|ci-server-jane|ci-server-john)
+              CI_USER=ci-runner CI_STORAGE=/srv/ci CI_SLICE=ci.slice
+              CI_DOCKER=ci-docker CI_MEMORY=3221225472 CI_CPUS=1
+              CARGO_BUILD_JOBS=1 RUST_TEST_THREADS=1 ;;
+            ci-server-jane-1|ci-server-jane-2)
+              slot=${RUNNER_NAME##*-}
+              CI_USER=ci-slot$slot CI_STORAGE=/srv/ci-slot$slot CI_SLICE=cislot$slot.slice
+              CI_DOCKER=ci-slot$slot-docker CI_MEMORY=6442450944 CI_CPUS=6
+              CARGO_BUILD_JOBS=3 RUST_TEST_THREADS=6 ;;
+            *) echo 'Unknown trusted runner' >&2; exit 1 ;;
+          esac
+          CI_CGROUP=/sys/fs/cgroup/$CI_SLICE
+          test "$(id -un)" = "$CI_USER"
           test "$(id -u)" != 0
-          test ! -w /opt/ci-runner/bin/Runner.Listener
-          test ! -w /etc/systemd/system/ci-runner.service
-          docker info --format '{{json .SecurityOptions}}' | grep -q rootless
+          test "$HOME" = "$CI_STORAGE/home"
+          test -f "/opt/$CI_USER/bin/Runner.Listener"
+          test -f "/etc/systemd/system/$CI_USER.service"
+          test ! -w "/opt/$CI_USER/bin/Runner.Listener"
+          test ! -w "/etc/systemd/system/$CI_USER.service"
+          test "$(awk '/^NoNewPrivs:/ {print $2}' /proc/self/status)" = 1
+          test ! -e "$HOME/.app-ci-sentinel"
+          test ! -e "$CI_STORAGE/work/.app-ci-sentinel"
+          touch "$HOME/.app-ci-sentinel" "$CI_STORAGE/work/.app-ci-sentinel"
+          test "$DOCKER_HOST" = "unix:///run/$CI_DOCKER/docker.sock"
+          docker info --format '{{json .SecurityOptions}}' | jq -e 'index("name=rootless") != null'
+          test -z "$(docker ps --all --quiet)"
+          test -z "$(docker image ls --quiet)"
+          test "$(cat "$CI_CGROUP/memory.max")" = "$CI_MEMORY"
+          test "$(cat "$CI_CGROUP/memory.swap.max")" = 0
+          awk -v cpus="$CI_CPUS" '{exit !($1 == $2 * cpus)}' "$CI_CGROUP/cpu.max"
+          grep -Fx "0::/$CI_SLICE/$CI_USER.service" /proc/self/cgroup
+          case ",$(findmnt -n -o OPTIONS --mountpoint "$CI_STORAGE")," in
+            *,nosuid,*) ;; *) exit 1 ;; esac
+          {
+            echo "CI_CGROUP=$CI_CGROUP"
+            echo "CI_STORAGE=$CI_STORAGE"
+            echo "CARGO_BUILD_JOBS=$CARGO_BUILD_JOBS"
+            echo "RUST_TEST_THREADS=$RUST_TEST_THREADS"
+          } >> "$GITHUB_ENV"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
@@ -75,8 +122,8 @@ jobs:
           echo "Typecheck: ${SECONDS}s" >> "$GITHUB_STEP_SUMMARY"
 
   hosted:
-    needs: select
-    if: needs.select.outputs.trusted == 'false'
+    needs: [select, route]
+    if: always() && !cancelled() && needs.select.result == 'success' && (needs.select.outputs.trusted == 'false' || (needs.route.outputs.target != 'ci-server-jane' && needs.route.outputs.target != 'ci-server-john'))
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -95,7 +142,7 @@ jobs:
       - run: pnpm typecheck
 
   complete:
-    needs: [select, vps, hosted]
+    needs: [select, route, vps, hosted]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -103,15 +150,18 @@ jobs:
       - name: Require the selected checks to succeed
         env:
           SELECT_RESULT: ${{ needs.select.result }}
+          ROUTE_RESULT: ${{ needs.route.result }}
+          TARGET: ${{ needs.route.outputs.target }}
           TRUSTED: ${{ needs.select.outputs.trusted }}
           VPS_RESULT: ${{ needs.vps.result }}
           HOSTED_RESULT: ${{ needs.hosted.result }}
         run: |
           test "$SELECT_RESULT" = success
-          if [[ "$TRUSTED" == true ]]; then
+          if [[ "$TRUSTED" == true && ( "$TARGET" == ci-server-jane || "$TARGET" == ci-server-john ) ]]; then
+            test "$ROUTE_RESULT" = success
             test "$VPS_RESULT" = success
             test "$HOSTED_RESULT" = skipped
-          elif [[ "$TRUSTED" == false ]]; then
+          elif [[ "$TRUSTED" == false || ( "$TRUSTED" == true && "$TARGET" != ci-server-jane && "$TARGET" != ci-server-john ) ]]; then
             test "$HOSTED_RESULT" = success
             test "$VPS_RESULT" = skipped
           else
