@@ -753,6 +753,7 @@ export async function buildDemoDocument(
   const rootNode = document.nodes[document.rootNodeId];
   return {
     ...document,
+    editHistory: undefined,
     projectId: definition.projectId,
     nodes:
       rootNode?.kind === 'project'

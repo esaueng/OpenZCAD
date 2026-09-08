@@ -176,3 +176,24 @@ describe('R2 project object projection', () => {
     ).rejects.toThrow(/invalid envelope/);
   });
 });
+
+it('keeps imported payloads reachable through durable redo after they leave the current model', async () => {
+  const original = importedDocument();
+  const manager = new CommandManager(original);
+  while (manager.canUndo) manager.undo();
+  expect(manager.document.bodyOrder).toHaveLength(0);
+  const prepared = await prepareProjectStorageSnapshot(manager.document);
+  expect(prepared.assets.map((asset) => asset.kind).sort()).toEqual([
+    'mesh-payload',
+    'step-source'
+  ]);
+  const hydrated = await hydrateProjectStorageSnapshot(
+    prepared.snapshot,
+    original.projectId,
+    (reference) => assetLoader(prepared, reference)
+  );
+  const reopened = new CommandManager(hydrated);
+  while (reopened.canRedo) reopened.redo();
+  expect(reopened.document.nodes).toEqual(original.nodes);
+  expect(reopened.document.commandLog).toEqual(original.commandLog);
+});

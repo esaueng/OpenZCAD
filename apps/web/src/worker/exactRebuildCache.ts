@@ -42,6 +42,7 @@ function stableJson(value: unknown): string {
 export function canonicalProjectContentKey(document: ProjectDocument): string {
   const {
     derived: _derived,
+    editHistory: _editHistory,
     version: _version,
     revisions: _revisions,
     checkpoints: _checkpoints,

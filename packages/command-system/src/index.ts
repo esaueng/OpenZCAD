@@ -1,5 +1,7 @@
 import {
   createId,
+  assertDocumentHistory,
+  type UserId,
   deepClone,
   nowIso,
   toEntityId,
@@ -15,6 +17,10 @@ import {
   type SketchProfileReference
 } from '@openzcad/shared';
 import {
+  archiveHistorySources,
+  applyDocumentChanges,
+  recordDocumentEdit,
+  normalizeDocumentHistory,
   addPrimitiveFeature,
   addSketchConstraint,
   addSketchFeature,
@@ -175,12 +181,6 @@ export interface CommandDefinition<TPayload> {
   validate(document: ProjectDocument): void;
   apply(document: ProjectDocument): ProjectDocument;
   serialize(): SerializedCommand<TPayload>;
-}
-
-interface HistoryEntry {
-  /** Document state to restore when this entry is popped. */
-  snapshot: ProjectDocument;
-  command: SerializedCommand;
 }
 
 export type AnyCommand =
@@ -2510,37 +2510,33 @@ export function commandsForCadPatch(
   return commands;
 }
 
-/** Bound on stored undo/redo entries so long sessions cannot exhaust memory. */
-const MAX_HISTORY_DEPTH = 100;
-
-/**
- * Owns the current document and its undo/redo history.
- *
- * Documents are immutable values (every document-core operation clones before
- * mutating), so history entries hold plain references instead of deep copies.
- */
+/** Owns the canonical document, including its durable undo/redo position. */
 export class CommandManager {
-  private undoStack: HistoryEntry[] = [];
-  private redoStack: HistoryEntry[] = [];
+  constructor(
+    public document: ProjectDocument,
+    private readonly actorUserId: UserId = document.ownerUserId
+  ) {
+    assertDocumentHistory(document);
+  }
 
-  constructor(public document: ProjectDocument) {}
-
+  private get history() {
+    return this.document.editHistory?.actorUserId === this.actorUserId
+      ? this.document.editHistory
+      : undefined;
+  }
   get canUndo(): boolean {
-    return this.undoStack.length > 0;
+    return (this.history?.cursor ?? 0) > 0;
   }
-
   get canRedo(): boolean {
-    return this.redoStack.length > 0;
+    return !!this.history && this.history.cursor < this.history.entries.length;
   }
-
-  /** Label of the command the next undo would revert, or null when there is none. */
   get undoLabel(): string | null {
-    return this.undoStack.at(-1)?.command.label ?? null;
+    return (
+      this.history?.entries[(this.history?.cursor ?? 0) - 1]?.label ?? null
+    );
   }
-
-  /** Label of the command the next redo would reapply, or null when there is none. */
   get redoLabel(): string | null {
-    return this.redoStack.at(-1)?.command.label ?? null;
+    return this.history?.entries[this.history.cursor]?.label ?? null;
   }
 
   execute(command: AnyCommand): ProjectDocument {
@@ -2559,9 +2555,12 @@ export class CommandManager {
     }
     next.commandLog.push(command.serialize());
     next = appendRevision(next, command.label);
-    this.pushUndo({ snapshot: previous, command: command.serialize() });
-    this.redoStack = [];
-    this.document = next;
+    this.document = recordDocumentEdit(
+      previous,
+      next,
+      command.label,
+      this.actorUserId
+    );
     return this.document;
   }
 
@@ -2574,45 +2573,52 @@ export class CommandManager {
    * Executes a document normalization — a repair the rebuild proved, not a
    * user edit. It persists like any command (log entry, revision, version
    * bump) but creates no history entry, so undo/redo keep targeting the
-   * user's own actions. Interleaving stays consistent because history
-   * entries restore whole-document snapshots; a normalization undone as part
-   * of a snapshot swap is simply re-proven and reapplied by the next rebuild.
+   * user's own actions. Adjacent history endpoints absorb the repair so later
+   * undo/redo still matches the document.
    */
   normalize(command: AnyCommand): ProjectDocument {
     command.validate(this.document);
     let next = command.apply(this.document);
     next.commandLog.push(command.serialize());
     next = appendRevision(next, command.label);
-    this.document = next;
+    this.document = normalizeDocumentHistory(this.document, next);
+    return this.document;
+  }
+
+  archiveSource(featureId: string, artifactId: string): ProjectDocument {
+    const next = archiveHistorySources(this.document, {
+      featureId,
+      artifactId
+    });
+    if (next !== this.document)
+      this.document = appendRevision(next, 'Archive imported source');
     return this.document;
   }
 
   undo(): ProjectDocument {
-    const entry = this.undoStack.pop();
-    if (!entry) {
-      return this.document;
-    }
-    const current = this.document;
-    this.redoStack.push({ snapshot: current, command: entry.command });
-    this.document = restoreHistorySnapshot(
-      current,
-      entry.snapshot,
-      `Undo ${entry.command.label}`
-    );
-    return this.document;
+    return this.moveHistory('undo');
+  }
+  redo(): ProjectDocument {
+    return this.moveHistory('redo');
   }
 
-  redo(): ProjectDocument {
-    const entry = this.redoStack.pop();
-    if (!entry) {
-      return this.document;
-    }
-    const current = this.document;
-    this.undoStack.push({ snapshot: current, command: entry.command });
-    this.document = restoreHistorySnapshot(
-      current,
-      entry.snapshot,
-      `Redo ${entry.command.label}`
+  private moveHistory(direction: 'undo' | 'redo'): ProjectDocument {
+    const history = this.history;
+    const entry =
+      history?.entries[
+        direction === 'undo' ? history.cursor - 1 : history.cursor
+      ];
+    if (!history || !entry) return this.document;
+    const next = applyDocumentChanges(this.document, entry.changes, direction);
+    this.document = appendRevision(
+      {
+        ...next,
+        editHistory: {
+          ...history,
+          cursor: history.cursor + (direction === 'undo' ? -1 : 1)
+        }
+      },
+      `${direction === 'undo' ? 'Undo' : 'Redo'} ${entry.label}`
     );
     return this.document;
   }
@@ -2631,18 +2637,7 @@ export class CommandManager {
     }
     next.commandLog.push(...serialized);
     next = appendRevision(next, label);
-    this.pushUndo({
-      snapshot: previous,
-      command: {
-        kind: 'transaction',
-        label,
-        payload: serialized,
-        replayVersion: 1,
-        timestamp: nowIso()
-      }
-    });
-    this.redoStack = [];
-    this.document = next;
+    this.document = recordDocumentEdit(previous, next, label, this.actorUserId);
     return this.document;
   }
 
@@ -2654,9 +2649,8 @@ export class CommandManager {
    * document, so there is nothing to validate against the current one and
    * nothing worth writing to `commandLog` — a log entry carrying an entire
    * document would be replayed on every future rebuild and would dwarf the
-   * history it sits in. The undo entry is a plain snapshot swap, which is what
-   * every other entry already is, so undoing a restore returns the document the
-   * user was looking at before it.
+   * history it sits in. Exact before/after values restore the model the user
+   * was looking at before it.
    *
    * `next` must already carry its own forward revision (see
    * `restoreFromSaveState`); this method does not append one, so the label here
@@ -2666,49 +2660,14 @@ export class CommandManager {
     if (next === this.document) {
       return this.document;
     }
-    this.pushUndo({
-      snapshot: this.document,
-      command: {
-        kind: 'document.replace',
-        label,
-        payload: null,
-        replayVersion: 1,
-        timestamp: nowIso()
-      }
-    });
-    this.redoStack = [];
-    this.document = next;
+    this.document = recordDocumentEdit(
+      this.document,
+      next,
+      label,
+      this.actorUserId
+    );
     return this.document;
   }
-
-  private pushUndo(entry: HistoryEntry): void {
-    this.undoStack.push(entry);
-    if (this.undoStack.length > MAX_HISTORY_DEPTH) {
-      this.undoStack.shift();
-    }
-  }
-}
-
-/**
- * Restores a model snapshot without rewinding the document's durable timeline.
- * Collaboration treats `version` as a monotonic room clock, while checkpoints
- * are save points rather than undoable model state. Preserve both collections
- * and record Undo/Redo as new forward revisions.
- */
-function restoreHistorySnapshot(
-  current: ProjectDocument,
-  snapshot: ProjectDocument,
-  reason: string
-): ProjectDocument {
-  return appendRevision(
-    {
-      ...snapshot,
-      version: current.version,
-      revisions: current.revisions,
-      checkpoints: current.checkpoints
-    },
-    reason
-  );
 }
 
 export function replayCommands(

@@ -1,3 +1,4 @@
+import { documentNodesWithHistory } from '@openzcad/shared';
 import type { StoredMeasurementRecord } from './measurementRecord';
 import { withoutDerivedProjection } from '@openzcad/document-core';
 import type { ArtifactRecord, ProjectDocument } from '@openzcad/shared';
@@ -116,7 +117,7 @@ export async function createProjectBackup(
     snapshot,
     ...backup.saveStates!.map((state) => state.document)
   ]) {
-    for (const node of Object.values(candidate.nodes)) {
+    for (const node of documentNodesWithHistory(candidate)) {
       if (
         node.kind !== 'feature' ||
         node.data.featureKind !== 'imported-step' ||
