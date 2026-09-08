@@ -85,10 +85,18 @@ jobs:
 
           old_sha="$(extract_remus_sha)"
 
+          upstream_sha="$(gh api repos/esaueng/remus/commits/main --jq .sha)"
+          # A consumer may pin an upstream PR fix before it reaches main.
+          # Never replace that fix with a main commit that does not contain it.
+          comparison="$(gh api "repos/esaueng/remus/compare/$old_sha...$upstream_sha" --jq .status)"
+          case "$comparison" in
+            ahead|identical) ;;
+            *) echo "::error title=Kernel fix not on main::Current Remus pin is not an ancestor of upstream main. Merge the upstream fix before updating."; exit 1 ;;
+          esac
+          node scripts/pin-remus.mjs "$upstream_sha"
           pnpm update remus-wasm remus-wasm-io --filter @openzcad/kernel-adapter --lockfile-only
 
           new_sha="$(extract_remus_sha)"
-          upstream_sha="$(gh api repos/esaueng/remus/commits/main --jq .sha)"
 
           if [[ "$new_sha" != "$upstream_sha" ]]; then
             echo "::error title=Stale Remus resolution::pnpm resolved $new_sha but esaueng/remus main is $upstream_sha. Refusing to open a PR."
@@ -101,9 +109,9 @@ jobs:
             exit 0
           fi
 
-          unexpected_paths="$(git diff --name-only | grep -v '^pnpm-lock.yaml$' || true)"
+          unexpected_paths="$(git diff --name-only | grep -Ev '^(packages/kernel-adapter/package\.json|pnpm-lock\.yaml)$' || true)"
           if [[ -n "$unexpected_paths" ]]; then
-            echo "::error title=Unexpected updater diff::The targeted update changed files other than pnpm-lock.yaml: $unexpected_paths"
+            echo "::error title=Unexpected updater diff::The targeted update changed files outside the kernel manifest and lockfile: $unexpected_paths"
             exit 1
           fi
 
@@ -250,10 +258,10 @@ jobs:
           git config user.name "$bot_login"
           git config user.email "$bot_id+$bot_login@users.noreply.github.com"
           git switch -c "$branch"
-          git add -- pnpm-lock.yaml
+          git add -- packages/kernel-adapter/package.json pnpm-lock.yaml
 
-          if [[ "$(git diff --cached --name-only)" != 'pnpm-lock.yaml' ]]; then
-            echo "::error title=Unexpected staged files::Only pnpm-lock.yaml may be committed by this workflow."
+          if [[ "$(git diff --cached --name-only)" != $'packages/kernel-adapter/package.json\npnpm-lock.yaml' ]]; then
+            echo "::error title=Unexpected staged files::Only the kernel manifest and pnpm-lock.yaml may be committed by this workflow."
             exit 1
           fi
 
@@ -325,11 +333,11 @@ jobs:
             fi
             echo '## Reproducibility'
             echo
-            echo 'The manifest tracks `main` only as the updater input. The committed `pnpm-lock.yaml` resolves it to the immutable new commit above, and normal installs continue to use `pnpm install --frozen-lockfile`.'
+            echo 'Both package specifiers and pnpm-lock.yaml pin the immutable commit above. The updater requires upstream main to contain the previous pin, and normal installs use pnpm install --frozen-lockfile.'
             echo
             echo '## Automation and verification'
             echo
-            echo '- Detected by the manual Remus updater using only the targeted lockfile-only pnpm update.'
+            echo '- Detected by the manual Remus updater with a targeted manifest pin and lockfile-only pnpm update.'
             echo '- Duplicate update PRs are prevented by the workflow concurrency group and the open `automation/remus-*` PR check.'
             echo '- This GitHub App-authored PR triggers the repository pull-request CI, including lint, typecheck, web tests, parity corpus, build, and Playwright.'
             echo '- No deployment, publication, merge, or auto-merge was performed.'

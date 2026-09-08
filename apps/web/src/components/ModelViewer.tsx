@@ -2809,6 +2809,7 @@ export function ModelViewer({
       const detail = (
         event as CustomEvent<{
           select?: boolean;
+          inspectOnly?: boolean;
           blendRadius?: number;
           resolve?: (
             value: {
@@ -2816,7 +2817,7 @@ export function ModelViewer({
               blendRadius: number;
               producingFeatureId?: string;
               lineageName?: string;
-              point: { x: number; y: number; z: number };
+              point?: { x: number; y: number; z: number };
               x?: number;
               y?: number;
             } | null
@@ -2841,6 +2842,23 @@ export function ModelViewer({
       const face = candidate?.face;
       if (!body || !face?.geometry || face.geometry.blendRadius === undefined) {
         detail?.resolve?.(null);
+        return;
+      }
+      const metadata = {
+        topologyId: face.topologyId,
+        blendRadius: face.geometry.blendRadius,
+        ...(face.reference?.producingFeatureId
+          ? { producingFeatureId: String(face.reference.producingFeatureId) }
+          : {}),
+        ...(face.reference?.lineageName
+          ? { lineageName: face.reference.lineageName }
+          : {})
+      };
+      // Radius polling reads the displayed topology. Finding a clickable
+      // pixel raycasts the whole body for each candidate triangle and is
+      // reserved for selection and screenshot probes that need that pixel.
+      if (detail?.inspectOnly) {
+        detail.resolve?.(metadata);
         return;
       }
       const rect = renderer.domElement.getBoundingClientRect();
@@ -2910,18 +2928,9 @@ export function ModelViewer({
         );
       }
       detail?.resolve?.({
-        topologyId: face.topologyId,
-        blendRadius: face.geometry.blendRadius,
+        ...metadata,
         point: { x: point.x, y: point.y, z: point.z },
-        ...(screen ? { x: screen.x, y: screen.y } : {}),
-        ...(face.reference?.producingFeatureId
-          ? {
-              producingFeatureId: String(face.reference.producingFeatureId)
-            }
-          : {}),
-        ...(face.reference?.lineageName
-          ? { lineageName: face.reference.lineageName }
-          : {})
+        ...(screen ? { x: screen.x, y: screen.y } : {})
       });
     };
     /** Exact boss/bore selection plus a pixel known to lie on the far wall. */
