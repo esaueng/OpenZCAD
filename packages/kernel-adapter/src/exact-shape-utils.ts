@@ -136,7 +136,8 @@ export function copyShape(
 export function copyShapeWithVerifiedLineage(
   kernel: RemusKernel,
   shape: ExactShape,
-  matrix: Float64Array
+  matrix: Float64Array,
+  allowUniformScale = false
 ): ExactShape {
   const solids: number[] = [];
   if (!shape.lineage) {
@@ -172,7 +173,8 @@ export function copyShapeWithVerifiedLineage(
     return propagateRemusRigidTransformLineage(
       source,
       topologyCandidatesForSolid(kernel, resultSolid),
-      Array.from(matrix)
+      Array.from(matrix),
+      allowUniformScale
     );
   });
   return { solids, lineage: mergeRemusLineageStates(lineages) };

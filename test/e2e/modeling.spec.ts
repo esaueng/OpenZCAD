@@ -227,14 +227,14 @@ test('resizes a cylinder wall concentrically with one undoable radius edit', asy
   ).toBeVisible();
   await expect(radiusOperation).toHaveCount(0);
   await page.getByTestId('direct-manipulation-value').click();
-  const offsetKeypad = page.getByRole('dialog', { name: 'Offset value' });
-  await offsetKeypad.getByRole('textbox').fill('-4.5');
-  await offsetKeypad.getByRole('button', { name: 'Apply offset' }).click();
+  const offsetKeypad = page.getByRole('dialog', { name: 'Total value' });
+  await offsetKeypad.getByRole('textbox').fill('23.5');
+  await offsetKeypad.getByRole('button', { name: 'Apply total' }).click();
   await expect(page.getByRole('contentinfo')).toContainText(
-    'Offset face by -4.5 mm.'
+    'Cylinder height set to 23.5 mm.'
   );
   await expect(
-    page.locator('.feature-row-main', { hasText: 'Offset face' })
+    page.locator('.feature-row-main', { hasText: 'Move Cylinder Base' })
   ).toBeVisible();
   await expect(page.locator('.panel-body')).toContainText('36 × 36 × 23.5 mm');
   expect(consoleErrors).toEqual([]);
@@ -1033,7 +1033,7 @@ test('fillets all twelve edges of a box in one exact feature', async ({
   expect(consoleErrors).toEqual([]);
 });
 
-test('radius drag resizes an offset-and-filleted cylinder as one body', async ({
+test('radius drag resizes a cylinder after bottom adjustment and filleting', async ({
   page
 }) => {
   test.setTimeout(90_000);
@@ -1053,6 +1053,7 @@ test('radius drag resizes an offset-and-filleted cylinder as one body', async ({
   // Stated rather than inherited: this test drags the radius by a fixed screen
   // distance and asserts where it lands, so it owns its starting size.
   await inspector.getByLabel('Radius', { exact: true }).fill('14');
+  await inspector.getByLabel('Height', { exact: true }).fill('28');
   await inspector.getByRole('button', { name: /^Create/ }).click();
   await expect(page.getByRole('button', { name: /^Fillet/ })).toBeEnabled();
 
@@ -1067,34 +1068,29 @@ test('radius drag resizes an offset-and-filleted cylinder as one body', async ({
     }, surface);
   };
 
-  // A cap offset, recorded exactly as the direct-manipulation flow records
-  // it — the in-chain direct edit that used to force every later radius
-  // change onto the single-face path.
+  // The base shift must remain transparent to later source-radius edits.
   await selectCylinderSurface('cap');
   await expect(
     page.getByRole('region', { name: 'Offset Face operation' })
   ).toBeVisible();
   await page.getByTestId('direct-manipulation-value').click();
-  const offsetKeypad = page.getByRole('dialog', { name: 'Offset value' });
-  await offsetKeypad.getByRole('textbox').fill('4');
-  await offsetKeypad.getByRole('button', { name: 'Apply offset' }).click();
+  const offsetKeypad = page.getByRole('dialog', { name: 'Total value' });
+  await offsetKeypad.getByRole('textbox').fill('32');
+  await offsetKeypad.getByRole('button', { name: 'Apply total' }).click();
   await expect(page.getByRole('contentinfo')).toContainText(
-    'Offset face by 4 mm.'
+    'Cylinder height set to 32 mm.'
   );
 
   await page.getByRole('button', { name: /^Fillet/ }).click();
   await inspector.getByRole('button', { name: 'Select all 2 edges' }).click();
   await inspector.getByLabel('Radius', { exact: true }).fill('1');
   await inspector.getByRole('button', { name: /^Create/ }).click();
-  const offsetRow = page.locator('.feature-row', { hasText: 'Offset face' });
+  const offsetRow = page.locator('.feature-row', { hasText: 'Move Cylinder Base' });
   const fillet = page.locator('.feature-row', { hasText: /^Fillet/ });
   await expect(fillet).toBeVisible();
   await expect(page.getByRole('contentinfo')).toContainText('warnings0');
 
-  // Drag the wall. The parametric ancestry now crosses the referenced cap
-  // offset, so this must edit the Cylinder's radius parameter — one body —
-  // instead of appending a Resize Cylinder direct edit that would
-  // move the wall and leave the offset cap behind.
+  // A wall drag must still edit the source radius and regenerate both rims.
   // The prior exact projection remains visible while the filleted revision
   // rebuilds. Wait for the revision barrier so the e2e hook cannot select the
   // stale pre-fillet cylinder that topology actions must reject.
@@ -1141,7 +1137,7 @@ test('radius drag resizes an offset-and-filleted cylinder as one body', async ({
   await expect(offsetRow.getByTitle('Feature failed to build')).toHaveCount(0);
   await expect(fillet.getByTitle('Feature failed to build')).toHaveCount(0);
   await page
-    .locator('.feature-row-main', { hasText: 'Cylinder' })
+    .getByRole('button', { name: 'Cylinder', exact: true })
     .evaluate((element) => (element as HTMLButtonElement).click());
   await expect(page.getByLabel('Radius', { exact: true })).toHaveValue('18');
   expect(consoleErrors).toEqual([]);

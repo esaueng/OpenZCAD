@@ -132,6 +132,7 @@ import {
 } from '@openzcad/geometry';
 
 export type CommandKind =
+  | 'transaction'
   | 'primitive.add'
   | 'sketch.add'
   | 'sketch.update'
@@ -178,12 +179,14 @@ export interface CommandDefinition<TPayload> {
   label: string;
   replayVersion: number;
   payload: TPayload;
+  readonly commands?: readonly AnyCommand[];
   validate(document: ProjectDocument): void;
   apply(document: ProjectDocument): ProjectDocument;
   serialize(): SerializedCommand<TPayload>;
 }
 
 export type AnyCommand =
+  | CommandDefinition<SerializedCommand[]>
   | CommandDefinition<PrimitiveInput>
   | CommandDefinition<SketchInput>
   | CommandDefinition<SketchUpdateInput>
@@ -243,6 +246,39 @@ function makeCommand<TPayload>(
       };
     }
   };
+}
+
+/** Keeps validation and preview atomic while persisting ordinary replay commands. */
+export function composeCommands(
+  label: string,
+  commands: readonly AnyCommand[]
+): AnyCommand {
+  const apply = (document: ProjectDocument): ProjectDocument => {
+    let next = document;
+    for (const command of commands) {
+      command.validate(next);
+      next = command.apply(next);
+    }
+    return next;
+  };
+  return {
+    ...makeCommand(
+      'transaction',
+      label,
+      commands.flatMap(serializedLeaves),
+      apply
+    ),
+    commands,
+    validate(document) {
+      apply(document);
+    }
+  };
+}
+
+function serializedLeaves(command: AnyCommand): SerializedCommand[] {
+  return command.commands
+    ? command.commands.flatMap(serializedLeaves)
+    : [command.serialize()];
 }
 
 /** Every string primitive nested anywhere in a feature's data payload. */
@@ -2553,7 +2589,7 @@ export class CommandManager {
     if (next === this.document) {
       return this.document;
     }
-    next.commandLog.push(command.serialize());
+    next.commandLog.push(...serializedLeaves(command));
     next = appendRevision(next, command.label);
     this.document = recordDocumentEdit(
       previous,
@@ -2579,7 +2615,7 @@ export class CommandManager {
   normalize(command: AnyCommand): ProjectDocument {
     command.validate(this.document);
     let next = command.apply(this.document);
-    next.commandLog.push(command.serialize());
+    next.commandLog.push(...serializedLeaves(command));
     next = appendRevision(next, command.label);
     this.document = normalizeDocumentHistory(this.document, next);
     return this.document;
@@ -2630,7 +2666,7 @@ export class CommandManager {
     for (const command of commands) {
       command.validate(next);
       next = command.apply(next);
-      serialized.push(command.serialize());
+      serialized.push(...serializedLeaves(command));
     }
     if (next === this.document) {
       return this.document;
@@ -2678,7 +2714,13 @@ export function replayCommands(
   next.commandLog = [];
   next.revisions = initialDocument.revisions.slice(0, 1);
 
-  for (const command of serializedCommands) {
+  const leaves = (commands: SerializedCommand[]): SerializedCommand[] =>
+    commands.flatMap((command) =>
+      command.kind === 'transaction'
+        ? leaves(command.payload as SerializedCommand[])
+        : [command]
+    );
+  for (const command of leaves(serializedCommands)) {
     switch (command.kind) {
       case 'primitive.add':
         next = addPrimitiveFeature(next, command.payload as PrimitiveInput);

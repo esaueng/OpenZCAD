@@ -664,6 +664,20 @@ function matrixIsRigid(matrix: readonly number[]): boolean {
   return Math.abs(determinant - 1) <= MATRIX_EPSILON;
 }
 
+/** Uniform positive scale preserves analytic carriers; shear and reflection do not. */
+function matrixUniformScale(matrix: readonly number[]): number | null {
+  const scale = Math.hypot(
+    matrix[0] ?? NaN,
+    matrix[4] ?? NaN,
+    matrix[8] ?? NaN
+  );
+  if (!Number.isFinite(scale) || scale <= 0) return null;
+  const rigid = [...matrix];
+  for (const index of [0, 1, 2, 4, 5, 6, 8, 9, 10])
+    rigid[index] = rigid[index]! / scale;
+  return matrixIsRigid(rigid) ? scale : null;
+}
+
 function transformCoordinatePoint(
   point: QuantizedTopologyPoint,
   matrix: readonly number[]
@@ -710,22 +724,27 @@ function rotateDirection(
   const x = direction[0] / DIRECTION_SCALE;
   const y = direction[1] / DIRECTION_SCALE;
   const z = direction[2] / DIRECTION_SCALE;
+  const scale = Math.hypot(matrix[0]!, matrix[4]!, matrix[8]!);
   return canonicalDirection([
     Math.round(
-      (matrix[0]! * x + matrix[1]! * y + matrix[2]! * z) * DIRECTION_SCALE
+      ((matrix[0]! * x + matrix[1]! * y + matrix[2]! * z) / scale) *
+        DIRECTION_SCALE
     ),
     Math.round(
-      (matrix[4]! * x + matrix[5]! * y + matrix[6]! * z) * DIRECTION_SCALE
+      ((matrix[4]! * x + matrix[5]! * y + matrix[6]! * z) / scale) *
+        DIRECTION_SCALE
     ),
     Math.round(
-      (matrix[8]! * x + matrix[9]! * y + matrix[10]! * z) * DIRECTION_SCALE
+      ((matrix[8]! * x + matrix[9]! * y + matrix[10]! * z) / scale) *
+        DIRECTION_SCALE
     )
   ]);
 }
 
 function transformFaceWitness(
   witness: FaceWitnessV1,
-  matrix: readonly number[]
+  matrix: readonly number[],
+  scale: number
 ): FaceWitnessV1 {
   let analytic: FaceWitnessV1['analytic'];
   switch (witness.analytic.kind) {
@@ -741,7 +760,7 @@ function transformFaceWitness(
           (rotated.direction[1] / DIRECTION_SCALE) * matrix[7]! +
           (rotated.direction[2] / DIRECTION_SCALE) * matrix[11]!);
       const rawOffset =
-        witness.analytic.offset +
+        Math.round(witness.analytic.offset * scale) +
         Math.round(translationDot / GEOMETRY_LINEAR_TOLERANCE);
       analytic = {
         kind: 'plane',
@@ -774,13 +793,14 @@ function transformFaceWitness(
             movedFoot[2] - (alongNumerator * axis[2]) / DIRECTION_SCALE ** 2
           )
         ],
-        radius: witness.analytic.radius
+        radius: Math.round(witness.analytic.radius * scale)
       };
       break;
     }
   }
   return {
     ...witness,
+    perimeter: Math.round(witness.perimeter * scale),
     centroid: witness.centroid
       ? transformCoordinatePoint(witness.centroid, matrix)
       : null,
@@ -793,16 +813,16 @@ export function transformRemusWitness(
   witness: TopologyWitnessV1,
   matrix: readonly number[]
 ): TopologyWitnessV1 | null {
-  if (!matrixIsRigid(matrix)) {
-    return null;
-  }
+  const scale = matrixUniformScale(matrix);
+  if (scale === null) return null;
   if (kind === 'face') {
-    return transformFaceWitness(witness as FaceWitnessV1, matrix);
+    return transformFaceWitness(witness as FaceWitnessV1, matrix, scale);
   }
   const edge = witness as EdgeWitnessV1;
   if (edge.closed) {
     return {
       ...edge,
+      length: Math.round(edge.length * scale),
       center: transformCoordinatePoint(edge.center, matrix),
       axis: edge.axis ? rotateDirection(edge.axis, matrix).direction : null
     };
@@ -820,6 +840,7 @@ export function transformRemusWitness(
     }) as [QuantizedTopologyPoint, QuantizedTopologyPoint];
   return {
     ...edge,
+    length: Math.round(edge.length * scale),
     endpoints,
     midpoint: transformCoordinatePoint(edge.midpoint, matrix)
   };
@@ -850,15 +871,20 @@ function transformedReference(
 export function propagateRemusRigidTransformLineage(
   source: RemusLineageState,
   results: readonly RemusTopologyCandidate[],
-  matrix: readonly number[]
+  matrix: readonly number[],
+  allowUniformScale = false
 ): RemusLineageState {
   const output = emptyLineageState();
   output.diagnostics.push(...source.diagnostics);
-  if (!matrixIsRigid(matrix)) {
+  if (
+    matrixUniformScale(matrix) === null ||
+    (!allowUniformScale && !matrixIsRigid(matrix))
+  ) {
     output.diagnostics.push({
       code: 'invalid-transform',
       operation: 'rigid-transform',
-      message: 'Transform lineage requires a finite, right-handed rigid matrix.'
+      message:
+        'Transform lineage requires a finite, right-handed rigid or uniform-scale matrix.'
     });
     return output;
   }
