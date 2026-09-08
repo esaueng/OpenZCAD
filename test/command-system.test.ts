@@ -2,6 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
   CommandManager,
   commandFactories,
+  composeCommands,
   commandsForCadPatch,
   replayCommands
 } from '@openzcad/command-system';
@@ -1080,7 +1081,10 @@ describe('command-system', () => {
       manager.execute(
         commandFactories.updateFeature({
           featureId: fillet.featureId,
-          data: { featureKind: 'fillet', targetBodyId: toBodyId('body_missing') }
+          data: {
+            featureKind: 'fillet',
+            targetBodyId: toBodyId('body_missing')
+          }
         })
       )
     ).toThrow(/Target body body_missing not found/);
@@ -1792,5 +1796,76 @@ describe('a command that changes nothing', () => {
 
     const undone = manager.undo();
     expect(listFeaturesInOrder(undone)).toHaveLength(0);
+  });
+});
+
+describe('composed commands', () => {
+  it('validates dependencies atomically and persists replayable leaf operations', () => {
+    const base = createProjectDocument(
+      'Compound edit',
+      toUserId('user_compound_edit')
+    );
+    const create = commandFactories.addPrimitive({
+      name: 'Cylinder',
+      primitiveKind: 'cylinder',
+      dimensions: { radius: 10, height: 20 }
+    });
+    const preview = create.apply(base);
+    const bodyId = preview.bodyOrder[0]!;
+    const featureId = listFeaturesInOrder(preview)[0]!.featureId;
+    const resize = commandFactories.updateFeature({
+      featureId,
+      data: { dimensions: { radius: 10, height: 25 } }
+    });
+    const move = commandFactories.transformBody({
+      name: 'Base shift',
+      targetBodyId: bodyId,
+      translation: { x: 0, y: 0, z: -5 }
+    });
+    const command = composeCommands('Resize from bottom', [
+      create,
+      composeCommands('Place', [resize, move])
+    ]);
+    const manager = new CommandManager(base);
+    command.validate(base);
+    expect(base.bodyOrder).toEqual([]);
+    manager.execute(command);
+    expect(manager.document.commandLog.map((c) => c.kind)).toEqual([
+      'primitive.add',
+      'feature.update',
+      'feature.transform'
+    ]);
+    const replay = replayCommands(base, manager.document.commandLog);
+    expect(replay.nodes).toEqual(manager.document.nodes);
+    expect(replayCommands(base, [command.serialize()]).nodes).toEqual(
+      manager.document.nodes
+    );
+    manager.undo();
+    expect(manager.document.bodyOrder).toEqual([]);
+    manager.redo();
+    expect(manager.document.nodes).toEqual(replay.nodes);
+  });
+
+  it('leaves document and undo history untouched when a later operation fails', () => {
+    const base = createProjectDocument(
+      'Rejected compound edit',
+      toUserId('user_compound_refusal')
+    );
+    const manager = new CommandManager(base);
+    const create = commandFactories.addPrimitive({
+      name: 'Cylinder',
+      primitiveKind: 'cylinder',
+      dimensions: { radius: 10, height: 20 }
+    });
+    const invalid = commandFactories.transformBody({
+      name: 'Missing target',
+      targetBodyId: toBodyId('body_missing'),
+      translation: { x: 0, y: 0, z: -5 }
+    });
+    expect(() =>
+      manager.execute(composeCommands('Invalid move', [create, invalid]))
+    ).toThrow('not found');
+    expect(manager.document).toBe(base);
+    expect(manager.undoLabel).toBeNull();
   });
 });

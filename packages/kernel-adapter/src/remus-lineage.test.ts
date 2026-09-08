@@ -524,6 +524,82 @@ describe('Remus rigid-transform lineage', () => {
     ).toBe(true);
   });
 
+  it('scales lengths and analytic carriers without scaling their unit directions', () => {
+    const matrix = [3, 0, 0, 7, 0, 3, 0, -2, 0, 0, 3, 5, 0, 0, 0, 1];
+    const plane = transformRemusWitness(
+      'face',
+      OPPOSITE_FACE,
+      matrix
+    ) as FaceWitnessV1;
+    expect(plane.perimeter).toBe(OPPOSITE_FACE.perimeter * 3);
+    expect(plane.analytic).toEqual({
+      kind: 'plane',
+      normal: [0, 0, 1_000_000_000],
+      offset: 5_000_030
+    });
+    const cylinder: FaceWitnessV1 = {
+      ...FACE,
+      analytic: {
+        kind: 'cylinder',
+        axis: [0, 0, 1_000_000_000],
+        axisFoot: [0, 0, 0],
+        radius: 2_000_000
+      }
+    };
+    expect(
+      (transformRemusWitness('face', cylinder, matrix) as FaceWitnessV1)
+        .analytic
+    ).toEqual({
+      kind: 'cylinder',
+      axis: [0, 0, 1_000_000_000],
+      axisFoot: [7_000_000, -2_000_000, 0],
+      radius: 6_000_000
+    });
+    const edge = transformRemusWitness('edge', EDGE, matrix) as EdgeWitnessV1;
+    expect(edge.length).toBe(EDGE.length * 3);
+    expect(
+      transformRemusWitness(
+        'face',
+        FACE,
+        [-1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]
+      )
+    ).toBeNull();
+    expect(
+      transformRemusWitness(
+        'face',
+        FACE,
+        [1, 0.1, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]
+      )
+    ).toBeNull();
+  });
+
+  it('requires an explicit opt-in before carrying identity through uniform scale', () => {
+    const source: RemusLineageState = {
+      faceReferences: new Map([[1, faceReference()]]),
+      edgeReferences: new Map(),
+      diagnostics: []
+    };
+    const matrix = [3, 0, 0, 0, 0, 3, 0, 0, 0, 0, 3, 0, 0, 0, 0, 1];
+    const witness: FaceWitnessV1 = {
+      ...FACE,
+      centroid: [15, 15, 0],
+      perimeter: 120
+    };
+    const candidates = [{ handle: 2, kind: 'face' as const, witness }];
+    expect(
+      propagateRemusRigidTransformLineage(source, candidates, matrix)
+        .faceReferences.size
+    ).toBe(0);
+    expect(
+      propagateRemusRigidTransformLineage(
+        source,
+        candidates,
+        matrix,
+        true
+      ).faceReferences.get(2)?.lineageName
+    ).toBe('primitive.box.face.z-min');
+  });
+
   it('rejects a non-rigid transform without publishing references', () => {
     const result = propagateRemusRigidTransformLineage(
       {

@@ -375,6 +375,7 @@ import {
 } from './lib/interaction/cylinderRadius';
 import {
   primitiveCylinderRadiusAncestor,
+  primitiveCylinderScale,
   primitiveCylinderHeightAncestor
 } from './lib/interaction/cylinderPrimitiveAncestry';
 import { commandPromptText } from './lib/interaction/prompt';
@@ -10564,6 +10565,13 @@ export function App() {
       target.bodyId as BodyId
     );
     if (primitive?.data.featureKind === 'primitive') {
+      const scale = primitiveCylinderScale(base, target.bodyId as BodyId) ?? 1;
+      const localRadius =
+        typeof radius === 'number'
+          ? radius / scale
+          : scale === 1
+            ? radius
+            : `(${radius}) / ${scale}`;
       return {
         command: commandFactories.updateFeature(
           {
@@ -10571,7 +10579,7 @@ export function App() {
             data: {
               dimensions: {
                 ...primitive.data.dimensions,
-                radius
+                radius: localRadius
               }
             }
           },
@@ -11411,7 +11419,7 @@ export function App() {
    * Once the rim is filleted the blend belongs to the edge, so offsetting the
    * flat remainder alone leaves a step where the part should simply have
    * grown. Retarget the drag onto the primitive's height whenever the picked
-   * face is provably its top cap; the wall stretches and the fillet
+   * face is provably either cap; the wall stretches and the fillet
    * regenerates at the new rim, which is what keeping the modifier in history
    * is for. Anything unproven stays on the generic offset.
    */
@@ -11452,7 +11460,7 @@ export function App() {
         bodyId,
         successMessage: `${plan.primitive.name} ${plan.dimension} set to ${formatNumber(plan.value)} ${base.units}.`,
         validationTargets: affectedFeatureTargets(
-          base,
+          plan.command.commands ? plan.command.apply(base) : base,
           plan.primitive.featureId
         ),
         ...(plan.preflightRejection
