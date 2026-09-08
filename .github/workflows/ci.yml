@@ -20,7 +20,7 @@ jobs:
       contents: read
       id-token: write
     # Runner access is granted only to this reviewed immutable workflow version.
-    uses: esaueng/OpenZCAD/.github/workflows/trusted-pr.yml@2223f378351d3d5241415bb1a51b0d4dd19920d4
+    uses: esaueng/OpenZCAD/.github/workflows/trusted-pr.yml@8d3f450d5aaa514e306747e90f6ce138fa096eb1
 
   validation:
     runs-on: ubuntu-latest
