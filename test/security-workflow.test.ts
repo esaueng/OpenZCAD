@@ -15,7 +15,7 @@ describe('workflow runner policy', () => {
       'macos-desktop.yml': ['macos-26'],
       'production-health.yml': ['ubuntu-latest'],
       'update-remus.yml': ['ubuntu-latest'],
-      'trusted-vps.yml': [],
+      'trusted-vps.yml': ['ubuntu-latest'],
       'trusted-pr.yml': ['ubuntu-latest', 'ubuntu-latest', 'ubuntu-latest']
     };
     const workflowPaths = readdirSync(workflowDirectory)
@@ -35,7 +35,7 @@ describe('workflow runner policy', () => {
       expect(runners).toEqual(expectedRunners[workflowPath]);
       if (workflowPath === 'trusted-vps.yml') {
         expect(workflow).toMatch(
-          /runs-on:\n +group: ci-trusted-main\n +labels: ci-small/
+          /runs-on:\n +group: ci-trusted-main\n +labels: \$\{\{ needs\.route\.outputs\.target \}\}/
         );
         expect(workflow).toContain('persist-credentials: false');
         expect(workflow).not.toMatch(

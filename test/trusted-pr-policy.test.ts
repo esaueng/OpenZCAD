@@ -80,7 +80,7 @@ describe('immutable trusted PR policy', () => {
       workflow.indexOf('actions/checkout@')
     );
     expect(workflow).toContain('group: ci-trusted-main');
-    expect(workflow).toContain('labels: ci-small');
+    expect(workflow).toContain('labels: ${{ needs.route.outputs.target }}');
     expect(workflow).toContain("if: needs.select.outputs.trusted == 'true'");
     expect(workflow).toContain('permissions:\n  contents: read');
     expect(workflow).not.toMatch(
@@ -112,6 +112,8 @@ describe('immutable trusted PR policy', () => {
             ...process.env,
             SELECT_RESULT: 'success',
             TRUSTED: String(trusted),
+            ROUTE_RESULT: 'success',
+            TARGET: 'ci-server-jane',
             VPS_RESULT: String(vps),
             HOSTED_RESULT: String(hosted)
           }
@@ -130,6 +132,8 @@ describe('immutable trusted PR policy', () => {
           ...process.env,
           SELECT_RESULT: 'failure',
           TRUSTED: 'true',
+          ROUTE_RESULT: 'success',
+          TARGET: 'ci-server-jane',
           VPS_RESULT: 'success',
           HOSTED_RESULT: 'skipped'
         }
