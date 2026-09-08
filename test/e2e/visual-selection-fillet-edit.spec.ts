@@ -24,7 +24,11 @@ function readBlend(
       new Promise<BlendResult | null>((resolve) => {
         element.dispatchEvent(
           new CustomEvent('openzcad:e2e-select-blend', {
-            detail: { select: shouldSelect, resolve }
+            detail: {
+              select: shouldSelect,
+              inspectOnly: !shouldSelect,
+              resolve
+            }
           })
         );
       }),
@@ -70,6 +74,7 @@ test('creates, re-edits twice, and removes a selected history fillet', async ({
   await stubApi(page);
   await page.setViewportSize({ width: 1440, height: 1000 });
   const consoleErrors: string[] = [];
+  page.on('pageerror', (error) => consoleErrors.push(error.message));
   page.on('console', (message) => {
     if (message.type() === 'error') {
       consoleErrors.push(message.text());
@@ -138,6 +143,30 @@ test('creates, re-edits twice, and removes a selected history fillet', async ({
       timeout: 30_000
     })
     .toBeCloseTo(1, 6);
+  // A radius query must not search for clickable pixels. Repeating the old
+  // triangle-by-triangle raycast here exhausted the CI budget during re-edit.
+  const probes = await canvas.evaluate((element) => {
+    const started = performance.now();
+    const values: (BlendResult | null)[] = [];
+    for (let index = 0; index < 20; index += 1) {
+      element.dispatchEvent(
+        new CustomEvent('openzcad:e2e-select-blend', {
+          detail: {
+            inspectOnly: true,
+            select: false,
+            resolve: (value: BlendResult | null) => values.push(value)
+          }
+        })
+      );
+    }
+    return { values, elapsedMs: performance.now() - started };
+  });
+  expect(probes.values).toHaveLength(20);
+  for (const value of probes.values) {
+    expect(value?.blendRadius).toBeCloseTo(1, 6);
+    expect(value?.producingFeatureId).toBeTruthy();
+  }
+  expect(probes.elapsedMs).toBeLessThan(250);
   expect((await readBlend(canvas))?.producingFeatureId).toBeTruthy();
   const selectedLineage = (await readBlend(canvas))?.lineageName;
   expect(selectedLineage).toMatch(/^modifier\.fillet\.face\.band-between\./);
