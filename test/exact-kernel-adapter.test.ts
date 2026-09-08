@@ -1246,11 +1246,9 @@ describe('exact kernel adapter', { timeout: 30_000 }, () => {
     });
   });
 
-  it('labels a spherical union when Remus returns a mesh fallback', async () => {
-    // A shallow parallel-cylinder overlap used to be this test's fallback
-    // case; the kernel now builds that one exactly. A sphere pressed into a
-    // cylinder's side still has no exact section, so it is the case that
-    // proves the labeling of a mesh fallback.
+  it('keeps a spherical union analytic, closed, and STEP-exportable', async () => {
+    // This intersection crosses the cylinder seam. Off-curve seam samples
+    // used to make the spherical mesher abandon its shared boundary.
     const withCylinder = addPrimitiveFeature(
       createProjectDocument('Spherical union', toUserId('user_exact')),
       {
@@ -1285,38 +1283,54 @@ describe('exact kernel adapter', { timeout: 30_000 }, () => {
     const resultId = document.bodyOrder.at(-1)!;
     const result = derived.bodyRepresentations[resultId];
     expect(result).toBeDefined();
-    // A faceted fallback: far more faces than the two operands' six, all flat.
-    expect(result?.faceCount).toBeGreaterThan(100);
+    expect(derived.warnings).toEqual([]);
+    expect(result?.faceCount).toBe(5);
     expect(
-      derived.warnings.some(
-        (warning) =>
-          warning.startsWith('Feature "Spherical union":') &&
-          FACET_CENSUS_MESSAGE.test(warning)
-      )
-    ).toBe(true);
-    expect(
-      result?.topology?.faces.every(
-        (face) => face.geometry?.surfaceType === 'plane'
-      )
-    ).toBe(true);
+      result?.topology?.faces.map((face) => face.geometry?.surfaceType)
+    ).toEqual(expect.arrayContaining(['cylinder', 'sphere']));
+    // Independent integration of the two circular cross-sections gives
+    // 43,378.348 mm³; the measurement mesh must stay within 0.5 mm³.
+    expect(result?.volume).toBeCloseTo(43_378.348, 0);
     expect(
       isClosedConsistentlyOrientedMesh(
         inspectTriangleMeshClosure(result!.mesh.vertices, result!.mesh.indices)
       )
     ).toBe(true);
     expect(result?.exportableStep).toBe(true);
-    expect(derived.warnings).toContainEqual(
-      expect.stringContaining(
-        'Repositioning the overlap sometimes clears it; otherwise keep the bodies separate, or subtract instead — the same operands still cut exactly.'
-      )
-    );
-    // Remus now returns the approximation instead of failing the fuse. Keep
-    // that user-visible change explicit: the operands are consumed, but the
-    // result is labeled before it can be mistaken for exact analytic output.
     expect(derived.bodyRepresentations[cylinderId]?.consumed).toBe(true);
     expect(derived.bodyRepresentations[sphereId]?.consumed).toBe(true);
-    // Runs in under a second locally but has tripped the 5 s default on slow
-    // CI runners; give it the same headroom as the other kernel-heavy tests.
+    const step = await adapter.exportStep(document, [resultId]);
+    const inspection = await adapter.inspectStep(step);
+    expect(inspection).toMatchObject({ solid: true, valid: true });
+    expect(inspection.volume).toBeCloseTo(43_378.348, 0);
+    const roundTrip = importStepBody(
+      createProjectDocument(
+        'Spherical union round trip',
+        toUserId('user_exact')
+      ),
+      {
+        name: 'Union',
+        artifactId: 'artifact_union',
+        sourceName: 'union.step',
+        stepText: step
+      }
+    ).document;
+    const imported = await adapter.syncDocument(roundTrip);
+    const importedBody = imported.bodyRepresentations[roundTrip.bodyOrder[0]!]!;
+    expect(imported.warnings).toEqual([]);
+    expect(importedBody.volume).toBeCloseTo(43_378.348, 0);
+    expect(
+      importedBody.topology?.faces.map((face) => face.geometry?.surfaceType)
+    ).toEqual(expect.arrayContaining(['cylinder', 'sphere']));
+    expect(
+      isClosedConsistentlyOrientedMesh(
+        inspectTriangleMeshClosure(
+          importedBody.mesh.vertices,
+          importedBody.mesh.indices
+        )
+      )
+    ).toBe(true);
+    // Keep the existing kernel-heavy budget for the export/import round trip.
   }, 30_000);
 
   it('keeps a face-contact cylinder and circular-extrude union closed', async () => {

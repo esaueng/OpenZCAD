@@ -628,6 +628,11 @@ test('accepts exact visual selection and direct editing on the seeded boss', asy
     }, REPUBLISH)
     .toBeLessThan(20);
   const firstPreviewDiameter = firstPreview!.geometry.diameter!;
+  // Retained buffers expose the new topology before the next animation frame
+  // paints the chip. Judge the visible value once that frame has landed.
+  await expect
+    .poll(async () => readChipValue(await chip.innerText()), REPUBLISH)
+    .toBeCloseTo(firstPreviewDiameter, 3);
   const firstDraggedValue = readChipValue(await chip.innerText());
   expect(firstDraggedValue).toBeLessThan(20);
   expect(firstPreviewDiameter).toBeCloseTo(firstDraggedValue, 3);
@@ -658,6 +663,9 @@ test('accepts exact visual selection and direct editing on the seeded boss', asy
     }, REPUBLISH)
     .toBeLessThan(firstPreviewDiameter);
   const secondPreviewDiameter = secondPreview!.geometry.diameter!;
+  await expect
+    .poll(async () => readChipValue(await chip.innerText()), REPUBLISH)
+    .toBeCloseTo(secondPreviewDiameter, 3);
   const secondDraggedValue = readChipValue(await chip.innerText());
   expect(secondDraggedValue).toBeLessThan(firstDraggedValue);
   expect(secondPreviewDiameter).toBeCloseTo(secondDraggedValue, 3);

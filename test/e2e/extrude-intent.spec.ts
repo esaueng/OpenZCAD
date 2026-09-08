@@ -183,6 +183,11 @@ test('cuts two native profiles with explicit intent and retains it through undo 
   await page.getByRole('button', { name: 'Redo', exact: true }).click();
   await extrusion.click();
   await expect(page.getByLabel('Stored extrude operation')).toHaveValue('cut');
+  // Redo renders before its debounced device write. Reopen the saved result,
+  // rather than racing that write and occasionally loading the pre-redo model.
+  await expect(
+    page.getByRole('group', { name: 'Workspace status' })
+  ).not.toContainText('Saving');
   await page.reload();
   await expect(canvas).toHaveAttribute('data-e2e-rendered-bodies', '1', {
     timeout: 30_000

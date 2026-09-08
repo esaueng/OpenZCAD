@@ -1,4 +1,5 @@
 import type { BodyRepresentation, Vector3 } from '@openzcad/shared';
+import type { CylinderPreviewProfile } from '@openzcad/viewport';
 import { geometryTolerance } from '@openzcad/geometry';
 
 const SNAP_MIN_PIXELS = 8;
@@ -32,11 +33,7 @@ function dot(left: Vector3, right: Vector3): number {
 }
 
 function pointDistance(left: Vector3, right: Vector3): number {
-  return Math.hypot(
-    left.x - right.x,
-    left.y - right.y,
-    left.z - right.z
-  );
+  return Math.hypot(left.x - right.x, left.y - right.y, left.z - right.z);
 }
 
 /**
@@ -183,8 +180,7 @@ export function cylinderRadialFrame(
     axisDirection,
     radialDirection,
     radiusAtHit,
-    concavity:
-      dot(surfaceNormal, radialDirection) < 0 ? 'hole' : 'boss'
+    concavity: dot(surfaceNormal, radialDirection) < 0 ? 'hole' : 'boss'
   };
 }
 
@@ -272,4 +268,85 @@ export function radiusToDiameter(radius: number): number {
 
 export function diameterToRadius(diameter: number): number {
   return diameter / 2;
+}
+
+/** Recognized round-rim profile; history eligibility is checked by the caller. */
+export function cylinderPreviewProfile(
+  body: BodyRepresentation | undefined
+): CylinderPreviewProfile | null {
+  const faces = body?.topology?.faces;
+  if (!faces || faces.length < 3 || faces.length > 5) return null;
+  const walls = faces.filter(
+    (face) => face.geometry?.surfaceType === 'cylinder'
+  );
+  const wall = walls[0]?.geometry;
+  if (walls.length !== 1 || !wall?.axisStart || !wall.axisEnd || !wall.radius)
+    return null;
+  const { axisStart, axisEnd, radius } = wall;
+  const difference = {
+    x: axisEnd.x - axisStart.x,
+    y: axisEnd.y - axisStart.y,
+    z: axisEnd.z - axisStart.z
+  };
+  const span = length(difference);
+  const tolerance = Math.max(radius, span, 1) * 1e-6;
+  const axis = normalized(difference);
+  if (
+    !axis ||
+    !Number.isFinite(span) ||
+    span <= tolerance ||
+    !Number.isFinite(radius) ||
+    radius <= tolerance
+  )
+    return null;
+  let caps = 0;
+  let coreRadius = radius;
+  const rims = new Set<number>();
+  for (const face of faces) {
+    const geometry = face.geometry;
+    if (geometry === wall) continue;
+    if (geometry?.surfaceType === 'plane' && geometry.normal) {
+      const normal = normalized(geometry.normal);
+      if (!normal || Math.abs(dot(normal, axis)) < 1 - 1e-6) return null;
+      caps += 1;
+    } else if (
+      geometry?.surfaceType === 'torus' &&
+      geometry.featureType === 'blend' &&
+      geometry.torusCenter &&
+      geometry.majorRadius &&
+      geometry.minorRadius
+    ) {
+      const center = {
+        x: geometry.torusCenter.x - axisStart.x,
+        y: geometry.torusCenter.y - axisStart.y,
+        z: geometry.torusCenter.z - axisStart.z
+      };
+      const axial = dot(center, axis);
+      const end =
+        Math.abs(axial) <= tolerance
+          ? 0
+          : Math.abs(axial - span) <= tolerance
+            ? 1
+            : null;
+      const radial = {
+        x: center.x - axis.x * axial,
+        y: center.y - axis.y * axial,
+        z: center.z - axis.z * axial
+      };
+      if (
+        end === null ||
+        rims.has(end) ||
+        length(radial) > tolerance ||
+        !Number.isFinite(geometry.majorRadius + geometry.minorRadius) ||
+        Math.abs(geometry.majorRadius + geometry.minorRadius - radius) >
+          tolerance ||
+        geometry.majorRadius <= tolerance ||
+        geometry.minorRadius <= tolerance
+      )
+        return null;
+      rims.add(end);
+      coreRadius = Math.min(coreRadius, geometry.majorRadius);
+    } else return null;
+  }
+  return caps === 2 ? { axisStart, axisEnd, radius, coreRadius } : null;
 }
