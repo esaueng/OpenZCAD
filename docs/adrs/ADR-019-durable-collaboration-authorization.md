@@ -29,19 +29,27 @@ acquisition or renewal, so revocation takes effect without waiting for a new
 connection.
 
 The room persists the latest canonical document, bounded prior snapshots, and
-the active edit lease through Durable Object storage. D1 membership is not
+the active edit leases through Durable Object storage. D1 membership is not
 copied into room storage: two durable authorization sources could disagree
 after role change or revocation. Live presence is connection state and is not
 durable membership. The existing SQLite-backed Durable Object class and
 migration already cover this storage, so this decision needs no new Durable
 Object migration.
 
-One project-wide lease is bound to project, user, client, and a server-time
-expiry. Its TTL is 30 seconds and the client renews every 10 seconds. A clean
-project change releases it. An abrupt disconnect deliberately leaves it until
-expiry, allowing the same client to reconnect while guaranteeing another
-editor can take over after the bounded TTL. A revoked editor loses a held lease
-on the next renewal and cannot reacquire it or use the HTTP fallback.
+One editing account may hold multiple per-browser leases for the project.
+Each lease has its own token bound to project, user, client, and a server-time
+expiry. Its TTL is 30 seconds and the client renews every 10 seconds. Releasing
+or expiring one browser does not revoke another browser on that account.
+Other accounts wait until all active leases expire or are released. Revoking
+an editor invalidates all of that account’s leases. Each write still requires
+its own matching lease on both WebSocket and HTTP fallback paths.
+
+The stored lease retains its original fields, with an optional
+`additionalLeases` array for the other browsers. Existing single-lease records
+load without a migration. Document writes remain serialized in the room and
+use the acknowledged common base to merge independent edits; incompatible
+edits go through explicit conflict recovery. A client with a submission in
+flight queues subsequent edits rather than claiming a newer base prematurely.
 
 Cloudflare Access is not the product identity boundary. ADR-012 superseded that
 part of ADR-007, so accepting an unverified `Cf-Access-Jwt-Assertion` would add

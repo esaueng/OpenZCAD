@@ -9,7 +9,8 @@ import {
   radiusToDiameter,
   sameCylinderAxis,
   signedRadialDelta,
-  supportsRadialCylinderPreview
+  supportsRadialCylinderPreview,
+  cylinderPreviewProfile
 } from './cylinderRadius';
 import type { BodyRepresentation, FaceTopology } from '@openzcad/shared';
 
@@ -18,7 +19,11 @@ function bodyWithFaces(faces: FaceTopology[]): BodyRepresentation {
     bodyId: 'body-1' as BodyRepresentation['bodyId'],
     name: 'Cylinder Body',
     source: 'primitive',
-    mesh: { kind: 'mesh', vertices: Float32Array.from([]), indices: Uint32Array.from([]) },
+    mesh: {
+      kind: 'mesh',
+      vertices: Float32Array.from([]),
+      indices: Uint32Array.from([])
+    },
     faceCount: faces.length,
     color: '#ffffff',
     exportableStep: true,
@@ -139,12 +144,8 @@ describe('cylinder radius drag math', () => {
   it('remaps a regenerated face only when its world-space axis is invariant', () => {
     const start = { x: 125, y: -42, z: 8 };
     const end = { x: 141, y: -30, z: 28 };
-    expect(
-      sameCylinderAxis(start, end, { ...start }, { ...end })
-    ).toBe(true);
-    expect(
-      sameCylinderAxis(start, end, { ...end }, { ...start })
-    ).toBe(true);
+    expect(sameCylinderAxis(start, end, { ...start }, { ...end })).toBe(true);
+    expect(sameCylinderAxis(start, end, { ...end }, { ...start })).toBe(true);
     expect(
       sameCylinderAxis(
         start,
@@ -194,5 +195,82 @@ describe('cylinder radius drag math', () => {
         axisEnd
       )
     ).toBe(false);
+  });
+});
+
+describe('round rim cylinder preview eligibility', () => {
+  const profile = {
+    axisStart: { x: 0, y: 0, z: 2 },
+    axisEnd: { x: 0, y: 0, z: 20 },
+    radius: 28,
+    coreRadius: 26
+  };
+  function body(
+    geometries: Partial<NonNullable<FaceTopology['geometry']>>[]
+  ): BodyRepresentation {
+    return {
+      topology: { faces: geometries.map((geometry) => ({ geometry })) }
+    } as BodyRepresentation;
+  }
+  const surfaces: Partial<NonNullable<FaceTopology['geometry']>>[] = [
+    { surfaceType: 'cylinder', ...profile },
+    { surfaceType: 'plane', normal: { x: 0, y: 0, z: -1 } },
+    { surfaceType: 'plane', normal: { x: 0, y: 0, z: 1 } },
+    ...[2, 20].map(
+      (z) =>
+        ({
+          surfaceType: 'torus',
+          featureType: 'blend',
+          torusCenter: { x: 0, y: 0, z },
+          majorRadius: 26,
+          minorRadius: 2
+        }) as NonNullable<FaceTopology['geometry']>
+    )
+  ];
+
+  it('recognizes only coaxial full cylinder caps and round rims', () => {
+    expect(cylinderPreviewProfile(body(surfaces))).toEqual(profile);
+    expect(cylinderPreviewProfile(body(surfaces.slice(0, 4)))).toEqual(profile);
+    expect(
+      cylinderPreviewProfile(
+        body([
+          ...surfaces.slice(0, 4),
+          { ...surfaces[4], majorRadius: 25, minorRadius: 3 }
+        ])
+      )
+    ).toEqual({ ...profile, coreRadius: 25 });
+    expect(cylinderPreviewProfile(body(surfaces.slice(0, 3)))).toEqual({
+      ...profile,
+      coreRadius: 28
+    });
+    for (const replacement of [
+      { surfaceType: 'unknown' },
+      { ...surfaces[3], torusCenter: { x: 1, y: 0, z: 2 } },
+      { ...surfaces[3], majorRadius: 20 },
+      { ...surfaces[3], torusCenter: { x: 0, y: 0, z: 10 } },
+      surfaces[4]
+    ]) {
+      expect(
+        cylinderPreviewProfile(
+          body([
+            ...surfaces.slice(0, 3),
+            replacement as NonNullable<FaceTopology['geometry']>,
+            surfaces[4]!
+          ])
+        )
+      ).toBeNull();
+    }
+    expect(
+      cylinderPreviewProfile(body([surfaces[0]!, surfaces[0]!, surfaces[2]!]))
+    ).toBeNull();
+    expect(
+      cylinderPreviewProfile(
+        body([
+          surfaces[0]!,
+          { surfaceType: 'plane', normal: { x: 1, y: 0, z: 0 } },
+          surfaces[2]!
+        ])
+      )
+    ).toBeNull();
   });
 });

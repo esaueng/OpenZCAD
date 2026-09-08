@@ -5,12 +5,8 @@ describe('workflow runner policy', () => {
   it('keeps ordinary workflows hosted with a restricted trusted workflow', () => {
     const workflowDirectory = '.github/workflows';
     const expectedRunners: Record<string, string[]> = {
-      'ci.yml': [
-        'ubuntu-latest',
-        'ubuntu-latest',
-        'ubuntu-latest',
-        'ubuntu-latest'
-      ],
+      'ci.yml': [],
+      'fleet-ci.yml': Array(5).fill('*fleet-runner'),
       'cloudflare.yml': ['ubuntu-latest', 'ubuntu-latest'],
       'macos-desktop.yml': ['macos-26'],
       'production-health.yml': ['ubuntu-latest'],
