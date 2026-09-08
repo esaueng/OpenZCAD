@@ -54,7 +54,7 @@ function route(overrides: Partial<typeof trustedEvent>): string {
 }
 
 describe('immutable trusted PR policy', () => {
-  it("routes the owner's same-repository PR to the VPS", () => {
+  it("allows the owner's same-repository PR into fleet selection", () => {
     expect(route({})).toBe('trusted=true');
   });
 
@@ -80,7 +80,7 @@ describe('immutable trusted PR policy', () => {
       workflow.indexOf('actions/checkout@')
     );
     expect(workflow).toContain('group: ci-trusted-main');
-    expect(workflow).toContain('labels: ci-small');
+    expect(workflow).toContain('labels: ${{ needs.route.outputs.target }}');
     expect(workflow).toContain("if: needs.select.outputs.trusted == 'true'");
     expect(workflow).toContain('permissions:\n  contents: read');
     expect(workflow).not.toMatch(
@@ -112,6 +112,8 @@ describe('immutable trusted PR policy', () => {
             ...process.env,
             SELECT_RESULT: 'success',
             TRUSTED: String(trusted),
+            ROUTE_RESULT: 'success',
+            TARGET: 'ci-server-jane',
             VPS_RESULT: String(vps),
             HOSTED_RESULT: String(hosted)
           }
@@ -120,6 +122,27 @@ describe('immutable trusted PR policy', () => {
       expect(result.status).toBe(status);
     }
   );
+
+  it.each(['', 'github-hosted', 'unexpected-label'])(
+    'requires hosted success when the route is unavailable or disabled: %s',
+    (target) => {
+      for (const hosted of ['success', 'failure', 'skipped', 'cancelled']) {
+        const result = spawnSync('bash', ['-e', '-c', stepScript('Require the selected checks to succeed')], {
+          env: { ...process.env, SELECT_RESULT: 'success', TRUSTED: 'true',
+            ROUTE_RESULT: 'skipped', TARGET: target, VPS_RESULT: 'skipped', HOSTED_RESULT: hosted }
+        });
+        expect(result.status).toBe(hosted === 'success' ? 0 : 1);
+      }
+    }
+  );
+
+  it('requires the verified slot profile and explicit fleet activation', () => {
+    expect(workflow).toContain("vars.CI_FLEET_ENABLED == 'true'");
+    expect(workflow).toContain('ci-server-jane-1|ci-server-jane-2)');
+    expect(workflow).toContain('test -f "/opt/$CI_USER/bin/Runner.Listener"');
+    expect(workflow).toContain('CI_MEMORY=6442450944 CI_CPUS=6');
+    expect(workflow).toContain('CI_STORAGE=/srv/ci-slot$slot');
+  });
 
   it('fails when routing failed even if a worker succeeded', () => {
     const result = spawnSync(
@@ -130,6 +153,8 @@ describe('immutable trusted PR policy', () => {
           ...process.env,
           SELECT_RESULT: 'failure',
           TRUSTED: 'true',
+          ROUTE_RESULT: 'success',
+          TARGET: 'ci-server-jane',
           VPS_RESULT: 'success',
           HOSTED_RESULT: 'skipped'
         }

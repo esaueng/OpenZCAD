@@ -16,14 +16,19 @@ permissions:
 
 jobs:
   quality:
+    permissions:
+      contents: read
+      id-token: write
     # Runner access is granted only to this reviewed immutable workflow version.
-    uses: esaueng/OpenZCAD/.github/workflows/trusted-pr.yml@b6184e96475fa47be22e72750e16cf439459d5b4
+    uses: esaueng/OpenZCAD/.github/workflows/trusted-pr.yml@8d3f450d5aaa514e306747e90f6ce138fa096eb1
 
   validation:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Verify trusted fleet routing
+        run: python3 scripts/test-fleet-routing.py
       # The geometry kernel is a production dependency on a moving branch
       # (`github:esaueng/remus#main`), so ANY lockfile regeneration re-resolves
       # it. That is not hypothetical: `ca0f83bf` ("bump @cloudflare/vite-plugin")
