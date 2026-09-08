@@ -73,7 +73,7 @@ The checked-in beta configuration enables sharing, personal sync, and edit
 lease enforcement for every authenticated account. After deployment, verify
 `GET /api/collaboration/config` reports all three capabilities enabled with
 `canary: false` for multiple unrelated signed-in emails. Verify invitation
-acceptance, viewer read-only behavior, one editor lease at a time, revocation,
+acceptance, viewer read-only behavior, one editing account at a time with concurrent same-account browsers, revocation,
 conflict recovery, reconnect, and two-device owner sync.
 
 Rollback requires setting all three global flags to `false` and redeploying.
