@@ -165,13 +165,14 @@ describe('immutable trusted PR policy', () => {
 });
 
 describe('required validation gate', () => {
-  const ci = readFileSync('.github/workflows/ci.yml', 'utf8');
+  const caller = readFileSync('.github/workflows/ci.yml', 'utf8');
+  const ci = readFileSync('.github/workflows/fleet-ci.yml', 'utf8');
 
   it('pins runner policy independently of PR edits and retains both dependencies', () => {
-    expect(ci).toMatch(
-      /uses: esaueng\/OpenZCAD\/\.github\/workflows\/trusted-pr\.yml@[0-9a-f]{40}\n/
+    expect(caller).toMatch(
+      /uses: esaueng\/OpenZCAD\/\.github\/workflows\/fleet-ci\.yml@[0-9a-f]{40}\n/
     );
-    expect(ci).not.toMatch(/secrets: inherit|runs-on:.*ci-small/);
+    expect(caller).not.toMatch(/secrets: inherit|runs-on:/);
     expect(ci).toContain('needs: [quality, validation]\n    if: always()');
   });
 
