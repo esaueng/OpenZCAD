@@ -2706,7 +2706,7 @@ export function ModelViewer({
       const detail = (
         event as CustomEvent<{
           bodyId?: string;
-          surface?: 'wall' | 'cap' | 'top-cap';
+          surface?: 'wall' | 'cap' | 'top-cap' | 'bottom-cap';
           select?: boolean;
           resolve?: (
             geometry: Pick<
@@ -2728,9 +2728,13 @@ export function ModelViewer({
       );
       const faces = body?.topology?.faces ?? [];
       const face =
-        detail?.surface === 'top-cap'
+        detail?.surface === 'top-cap' || detail?.surface === 'bottom-cap'
           ? faces.find((candidate) =>
-              candidate.reference?.lineageName.endsWith('.face.cap.end')
+              candidate.reference?.lineageName.endsWith(
+                detail?.surface === 'bottom-cap'
+                  ? '.face.cap.start'
+                  : '.face.cap.end'
+              )
             )
           : detail?.surface === 'cap'
             ? faces.find(
@@ -4536,9 +4540,10 @@ export function ModelViewer({
       } else if (e2eCanvasHooksEnabled && rig?.kind === 'offset-face') {
         const scale =
           (rig.group.userData.gizmoScale as number | undefined) ?? 1;
+        // The negative arrow stays clear of the value chip at the positive end.
         const hitCenter = rig.group.position
           .clone()
-          .addScaledVector(rig.direction, 0.7 * scale);
+          .addScaledVector(rig.direction, -0.7 * scale);
         const hitScreen = projectToScreen(
           hitCenter,
           context.activeCamera,

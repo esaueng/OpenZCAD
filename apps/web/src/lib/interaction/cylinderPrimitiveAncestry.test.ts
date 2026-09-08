@@ -250,13 +250,10 @@ describe('cylinder height ancestry', () => {
     ).toBe(sourceFeatureId(cylinder));
   });
 
-  it('leaves every face that is not the axial-maximum cap alone', () => {
+  it('leaves every face that is not a cylinder cap alone', () => {
     const { fillet, filletFeatureId } = filletedCylinder();
 
     for (const lineageName of [
-      // The primitive grows from its base, so a start-cap drag would have to
-      // move the body too and stays on the generic offset.
-      'modifier.cylinder.face.cap.start',
       'modifier.cylinder.face.wall',
       'modifier.cylinder.face.blend.end',
       'primitive.box.face.z-max'

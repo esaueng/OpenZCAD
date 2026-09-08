@@ -1,4 +1,8 @@
-import { listFeaturesInOrder } from '@openzcad/document-core';
+import {
+  getParameterScope,
+  listFeaturesInOrder,
+  resolveParamValue
+} from '@openzcad/document-core';
 import {
   isFeatureSuppressed,
   type BodyId,
@@ -13,20 +17,14 @@ type CylinderDimension = 'radius' | 'height';
 type BoxDimension = 'width' | 'height' | 'depth';
 type BoxAxis = 'x' | 'y' | 'z';
 
-/**
- * The top cap under both lineage vocabularies that can name one: a bare
- * cylinder primitive's own roles, and the roles the kernel republishes for a
- * filleted or chamfered cylinder. Both call the axial maximum `cap.end`.
- */
-const TOP_CAP_LINEAGE_NAMES = new Set([
-  'primitive.cylinder.face.cap.end',
-  'modifier.cylinder.face.cap.end'
-]);
+const CAP_LINEAGE =
+  /^(?:primitive|modifier)\.cylinder\.face\.cap\.(start|end)$/;
 
 interface PrimitiveChain {
   primitive: FeatureNode;
   /** Features whose lineage may legitimately name a face on the picked body. */
   publishers: Set<FeatureId>;
+  scale: number;
 }
 
 /**
@@ -115,7 +113,38 @@ function primitiveChain(
       feature.data.operation.faceReference
     );
   });
-  return hasBlockingDirectEdit ? null : { primitive, publishers };
+  if (hasBlockingDirectEdit) return null;
+  let scale = 1;
+  const { scope } = getParameterScope(document);
+  for (const [index, feature] of features.entries()) {
+    if (
+      isFeatureSuppressed(feature) ||
+      feature.data.featureKind !== 'transform' ||
+      !ancestryBodyIds.has(feature.data.targetBodyId)
+    )
+      continue;
+    const producer = producerByBodyId.get(feature.data.targetBodyId);
+    const consumerIndex =
+      consumerIndexByBodyId.get(feature.data.targetBodyId) ?? features.length;
+    if (
+      !producer ||
+      index <= features.indexOf(producer) ||
+      index >= consumerIndex
+    )
+      continue;
+    try {
+      scale *= resolveParamValue(
+        feature.data.transform.scale ?? 1,
+        scope,
+        'scale'
+      );
+    } catch {
+      return null;
+    }
+  }
+  return Number.isFinite(scale) && scale > 0
+    ? { primitive, publishers, scale }
+    : null;
 }
 
 /** The primitive a cylindrical wall drag should resize instead of the body. */
@@ -129,43 +158,57 @@ export function primitiveCylinderRadiusAncestor(
   );
 }
 
-/**
- * The primitive a top-cap offset should grow instead of push-pulling the cap.
- *
- * Offsetting the cap of a filleted cylinder is not what the gesture means:
- * the blend belongs to the rim, so pushing only the flat remainder leaves a
- * step where the part should simply have become taller. Growing the
- * primitive instead extends the wall and regenerates the fillet at the new
- * rim, which is the whole point of keeping the modifier in history.
- *
- * Identity is proven by role, not geometry. Only a v5 reference naming the
- * axial-maximum cap qualifies, and only when the feature that published that
- * name is one of the features in the walked chain — lineage names are scoped
- * by their producing feature, so a same-named role from anywhere else is not
- * evidence about this face. Everything unproven falls back to the generic
- * offset, which is still exact, just local.
- *
- * Deliberately one-sided: the primitive grows from its base along its axis,
- * so only the far cap moves under a height edit. A start-cap drag has to move
- * the body as well and keeps the existing offset path.
- */
+export interface CylinderCapAncestor {
+  primitive: FeatureNode;
+  side: 'start' | 'end';
+  /** Converts stored primitive dimensions to distances in the selected body's frame. */
+  scale: number;
+}
+
+/** Both caps drive the source primitive; the start cap also needs a base shift. */
+export function primitiveCylinderCapAncestor(
+  document: ProjectDocument,
+  selectedBodyId: BodyId,
+  faceReference: FaceTopologyReferenceV5 | undefined,
+  faceHash: number
+): CylinderCapAncestor | null {
+  if (!faceReference || faceReference.currentHash !== faceHash) return null;
+  const match = CAP_LINEAGE.exec(faceReference.lineageName);
+  if (!match) return null;
+  const chain = primitiveChain(document, selectedBodyId, 'cylinder', 'height');
+  return chain?.publishers.has(faceReference.producingFeatureId)
+    ? {
+        primitive: chain.primitive,
+        side: match[1] as 'start' | 'end',
+        scale: chain.scale
+      }
+    : null;
+}
+
 export function primitiveCylinderHeightAncestor(
   document: ProjectDocument,
   selectedBodyId: BodyId,
   faceReference: FaceTopologyReferenceV5 | undefined,
   faceHash: number
 ): FeatureNode | null {
-  if (
-    !faceReference ||
-    faceReference.currentHash !== faceHash ||
-    !TOP_CAP_LINEAGE_NAMES.has(faceReference.lineageName)
-  ) {
-    return null;
-  }
-  const chain = primitiveChain(document, selectedBodyId, 'cylinder', 'height');
-  return chain?.publishers.has(faceReference.producingFeatureId)
-    ? chain.primitive
-    : null;
+  return (
+    primitiveCylinderCapAncestor(
+      document,
+      selectedBodyId,
+      faceReference,
+      faceHash
+    )?.primitive ?? null
+  );
+}
+
+export function primitiveCylinderScale(
+  document: ProjectDocument,
+  selectedBodyId: BodyId
+): number | null {
+  return (
+    primitiveChain(document, selectedBodyId, 'cylinder', 'radius')?.scale ??
+    null
+  );
 }
 
 /** `makeBox(width, height, depth)` lays those along x, y, z in that order. */
