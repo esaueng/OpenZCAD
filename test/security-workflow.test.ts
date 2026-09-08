@@ -2,7 +2,7 @@ import { readdirSync, readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 
 describe('workflow runner policy', () => {
-  it('keeps ordinary workflows hosted with restricted VPS workflows', () => {
+  it('keeps ordinary workflows hosted with a restricted trusted workflow', () => {
     const workflowDirectory = '.github/workflows';
     const expectedRunners: Record<string, string[]> = {
       'ci.yml': [
@@ -33,15 +33,21 @@ describe('workflow runner policy', () => {
       ].map((match) => match[1]);
 
       expect(runners).toEqual(expectedRunners[workflowPath]);
-      if (workflowPath === 'trusted-vps.yml') {
+      if (workflowPath === 'trusted-pr.yml') {
         expect(workflow).toMatch(
           /runs-on:\n +group: ci-trusted-main\n +labels: \$\{\{ needs\.route\.outputs\.target \}\}/
         );
         expect(workflow).toContain('persist-credentials: false');
         expect(workflow).not.toMatch(
-          /workflow_call|workflow_run|pull_request_target|secrets\./
+          /workflow_run|pull_request_target|secrets\./
         );
         expect(workflow).not.toMatch(/^[ \t]+pull_request[ \t]*:/m);
+      }
+      if (workflowPath === 'trusted-vps.yml') {
+        expect(workflow).toContain('workflow_dispatch:');
+        expect(workflow).not.toMatch(
+          /ci-trusted-main|self-hosted|actions\/checkout|workflow_call|workflow_run|pull_request|secrets\./
+        );
       }
     }
   });
