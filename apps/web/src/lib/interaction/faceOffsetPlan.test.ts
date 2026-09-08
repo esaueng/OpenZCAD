@@ -5,7 +5,11 @@ import {
   createProjectDocument,
   extrudeSketch,
   findSketch,
-  listFeaturesInOrder
+  listFeaturesInOrder,
+  transformBody,
+  setParameter,
+  getParameterScope,
+  resolveParamValue
 } from '@openzcad/document-core';
 import {
   toUserId,
@@ -228,5 +232,103 @@ describe('planFaceOffset on an extrude far cap', () => {
       offset: 1
     });
     expect(plan?.kind).toBe('direct-edit');
+  });
+});
+
+describe('bottom cylinder dimension plans', () => {
+  it('keeps typed offsets live in both height and base placement through a scale', () => {
+    const base = addPrimitiveFeature(
+      createProjectDocument('Bottom expression', user),
+      {
+        name: 'Cylinder',
+        primitiveKind: 'cylinder',
+        dimensions: { radius: 10, height: 20 }
+      }
+    );
+    const bodyId = base.bodyOrder[0]!;
+    const feature = listFeaturesInOrder(base)[0]!;
+    const placed = transformBody(base, {
+      name: 'Scaled',
+      targetBodyId: bodyId,
+      translation: { x: 0, y: 0, z: 0 },
+      scale: 2
+    }).document;
+    const document = setParameter(placed, { name: 'travel', expression: '4' });
+    const face = capFace(
+      feature.featureId,
+      -1,
+      'primitive.cylinder.face.cap.start'
+    );
+    expect(faceOffsetBaseline(document, bodyId, face, CAP_HASH)?.total).toBe(
+      40
+    );
+    const plan = planFaceOffset({
+      document,
+      bodyId,
+      face,
+      faceHash: CAP_HASH,
+      offset: 4,
+      exact: 'travel'
+    })!;
+    expect(plan.kind).toBe('primitive-dimension');
+    const candidate = plan.command.apply(document);
+    const movedParameter = setParameter(candidate, {
+      name: 'travel',
+      expression: '8'
+    });
+    const { scope } = getParameterScope(movedParameter);
+    const features = listFeaturesInOrder(movedParameter);
+    const primitive = features[0]!;
+    const placement = features[1]!;
+    expect(primitive.data.featureKind).toBe('primitive');
+    expect(placement.data.featureKind).toBe('transform');
+    if (
+      primitive.data.featureKind !== 'primitive' ||
+      placement.data.featureKind !== 'transform'
+    )
+      throw new Error('Missing source edits');
+    const height = resolveParamValue(
+      primitive.data.dimensions.height!,
+      scope,
+      'height'
+    );
+    const shift = resolveParamValue(
+      placement.data.transform.translation.z,
+      scope,
+      'shift'
+    );
+    expect(height).toBe(24);
+    expect(shift).toBe(-4);
+    expect((height + shift) * 2).toBe(40);
+  });
+
+  it('rejects zero height before adding a base transform', () => {
+    const document = addPrimitiveFeature(
+      createProjectDocument('Short cylinder', user),
+      {
+        name: 'Cylinder',
+        primitiveKind: 'cylinder',
+        dimensions: { radius: 10, height: 20 }
+      }
+    );
+    const feature = listFeaturesInOrder(document)[0]!;
+    const face = capFace(
+      feature.featureId,
+      -1,
+      'primitive.cylinder.face.cap.start'
+    );
+    const plan = planFaceOffset({
+      document,
+      bodyId: document.bodyOrder[0]!,
+      face,
+      faceHash: CAP_HASH,
+      offset: -20
+    });
+    expect(plan?.kind).toBe('primitive-dimension');
+    if (plan?.kind !== 'primitive-dimension')
+      throw new Error('Missing dimension plan');
+    expect(plan.preflightRejection).toContain('no height');
+    expect(plan.command.commands).toBeUndefined();
+    expect(listFeaturesInOrder(document)).toHaveLength(1);
   });
 });
