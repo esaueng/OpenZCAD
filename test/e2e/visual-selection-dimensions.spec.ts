@@ -155,7 +155,7 @@ test('round-trips diameter entry and edits a cylinder cap by total height', asyn
   ).toBeVisible();
   await awaitArmedHandle();
   await page.keyboard.type('-.5');
-  const offsetKeypad = page.getByRole('dialog', { name: 'Offset value' });
+  const offsetKeypad = page.getByRole('dialog', { name: 'Total value' });
   await expect(offsetKeypad).toBeVisible();
   await expect(offsetKeypad.getByRole('textbox')).toHaveValue('-.5');
   await page.keyboard.press('Escape');
