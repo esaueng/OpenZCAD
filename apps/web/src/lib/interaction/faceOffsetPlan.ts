@@ -1,4 +1,10 @@
-import { commandFactories, type AnyCommand } from '@openzcad/command-system';
+import { listFeaturesInOrder } from '@openzcad/document-core';
+import {
+  commandFactories,
+  composeCommands,
+  type AnyCommand
+} from '@openzcad/command-system';
+import { isFeatureSuppressed } from '@openzcad/shared';
 import type {
   BodyId,
   FaceTopology,
@@ -8,7 +14,7 @@ import type {
 } from '@openzcad/shared';
 import {
   primitiveBoxFaceAncestor,
-  primitiveCylinderHeightAncestor
+  primitiveCylinderCapAncestor
 } from './cylinderPrimitiveAncestry';
 import { extrudeCapAncestor } from './extrudeCapAncestry';
 
@@ -70,7 +76,8 @@ function dimensionEdit(
   offset: number,
   exact: ParamValue | undefined,
   label: string,
-  emptyMessage: string
+  emptyMessage: string,
+  roundDimension = true
 ): FaceOffsetPlan | null {
   if (primitive.data.featureKind !== 'primitive') {
     return null;
@@ -98,7 +105,9 @@ function dimensionEdit(
             [dimension]:
               typeof exact === 'string'
                 ? `${current} + (${exact})`
-                : Math.round(value * 1000) / 1000
+                : roundDimension
+                  ? Math.round(value * 1000) / 1000
+                  : value
           }
         }
       },
@@ -161,21 +170,91 @@ export function planFaceOffset(
     };
   }
 
-  const cylinder = primitiveCylinderHeightAncestor(
+  const cylinder = primitiveCylinderCapAncestor(
     document,
     bodyId,
     face.reference,
     faceHash
   );
   if (cylinder) {
-    return dimensionEdit(
-      cylinder,
+    const localOffset = Math.round(offset * 1000) / 1000 / cylinder.scale;
+    const localExact =
+      typeof exact === 'string' && cylinder.scale !== 1
+        ? `(${exact}) / ${cylinder.scale}`
+        : exact;
+    const plan = dimensionEdit(
+      cylinder.primitive,
       'height',
-      offset,
-      exact,
+      localOffset,
+      localExact,
       'Resize Cylinder Height',
-      'That distance would leave the cylinder with no height.'
+      'That distance would leave the cylinder with no height.',
+      false
     );
+    if (plan?.kind === 'primitive-dimension') {
+      if (cylinder.side === 'start' && !plan.preflightRejection) {
+        const primitive = cylinder.primitive;
+        if (!primitive.bodyId) return null;
+        const features = listFeaturesInOrder(document);
+        const index = features.findIndex(
+          (feature) => feature.featureId === primitive.featureId
+        );
+        const placement = features[index + 1];
+        const shift: ParamValue =
+          typeof localExact === 'string' ? `-(${localExact})` : -localOffset;
+        const commands = [plan.command];
+        // A local shift before every modifier and placement keeps the far cap
+        // fixed even when the body has subsequently been rotated or scaled.
+        if (
+          placement &&
+          !isFeatureSuppressed(placement) &&
+          placement.data.featureKind === 'transform' &&
+          placement.data.targetBodyId === primitive.bodyId &&
+          (placement.data.transform.scale ?? 1) === 1 &&
+          Object.values(placement.data.transform.rotationDeg).every(
+            (value) => value === 0
+          )
+        ) {
+          const transform = placement.data.transform;
+          const z = transform.translation.z;
+          commands.push(
+            commandFactories.updateFeature(
+              {
+                featureId: placement.featureId,
+                data: {
+                  transform: {
+                    ...transform,
+                    translation: {
+                      ...transform.translation,
+                      z:
+                        typeof z === 'number' && typeof shift === 'number'
+                          ? z + shift
+                          : `(${z}) + (${shift})`
+                    }
+                  }
+                }
+              },
+              'Move Cylinder Base'
+            )
+          );
+        } else {
+          const move = commandFactories.transformBody({
+            name: 'Move Cylinder Base',
+            targetBodyId: primitive.bodyId,
+            translation: { x: 0, y: 0, z: shift }
+          });
+          commands.push(
+            move,
+            commandFactories.moveFeature({
+              featureId: move.payload.ids!.featureId,
+              toIndex: index + 1
+            })
+          );
+        }
+        plan.command = composeCommands('Resize Cylinder Height', commands);
+      }
+      return { ...plan, value: plan.value * cylinder.scale };
+    }
   }
 
   const box = primitiveBoxFaceAncestor(
@@ -239,15 +318,15 @@ export function faceOffsetBaseline(
   if (extrude) {
     return { total: extrude.distance, sense: extrude.sense };
   }
-  const cylinder = primitiveCylinderHeightAncestor(
+  const cylinder = primitiveCylinderCapAncestor(
     document,
     bodyId,
     face.reference,
     faceHash
   );
   const primitive =
-    cylinder?.data.featureKind === 'primitive'
-      ? { node: cylinder, dimension: 'height' }
+    cylinder?.primitive.data.featureKind === 'primitive'
+      ? { node: cylinder.primitive, dimension: 'height' }
       : (() => {
           const box = primitiveBoxFaceAncestor(
             document,
@@ -263,5 +342,7 @@ export function faceOffsetBaseline(
     return undefined;
   }
   const value = primitive.node.data.dimensions[primitive.dimension];
-  return typeof value === 'number' ? { total: value, sense: 1 } : undefined;
+  return typeof value === 'number'
+    ? { total: value * (cylinder?.scale ?? 1), sense: 1 }
+    : undefined;
 }
