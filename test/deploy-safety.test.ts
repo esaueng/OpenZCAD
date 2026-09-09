@@ -46,10 +46,12 @@ describe('beta deployment safety', () => {
     ];
 
     expect(command).toBeDefined();
-    expect(command).toContain('wrangler d1 migrations apply');
+    expect(command).toContain(
+      'node ../../scripts/apply-beta-migrations.mjs && wrangler deploy'
+    );
     expect(command).toContain('wrangler deploy');
     expect(command).toContain('verify-beta-deployment.mjs');
-    expect(command!.indexOf('wrangler d1 migrations apply')).toBeLessThan(
+    expect(command!.indexOf('apply-beta-migrations.mjs')).toBeLessThan(
       command!.indexOf('wrangler deploy')
     );
     expect(command!.indexOf('wrangler deploy')).toBeLessThan(
