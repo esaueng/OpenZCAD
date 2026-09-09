@@ -1,3 +1,5 @@
+import { edgeModifierCommand } from './lib/edgeModifierEdit';
+import type { EdgeModifierFormValue } from './components/forms/FeatureForms';
 import { documentNodesWithHistory } from '@openzcad/shared';
 import { useWorkspaceResume } from './hooks/useWorkspaceResume';
 import { ResumeSessionDialog } from './components/ResumeSessionDialog';
@@ -2465,6 +2467,118 @@ export function App() {
     onFailure: setFeatureFormError
   });
   const executeValidatedFeature = validatedFeature.run;
+  const edgeFormCandidate = useRef<{
+    command: AnyCommand;
+    bodyId: BodyId;
+  } | null>(null);
+  const edgeFormPreview = useRef(
+    new LivePreview<ProjectDocument, ProjectDocument['derived']>({
+      build: () => {
+        const candidate = edgeFormCandidate.current;
+        const base = managerRef.current?.document;
+        if (!candidate || !base) return null;
+        candidate.command.validate(base);
+        return candidate.command.apply(base);
+      },
+      derive: (document) => geometry.syncOnce(document),
+      publish: (preview) => {
+        const bodyId = edgeFormCandidate.current?.bodyId;
+        const warning = preview?.derived.warnings[0];
+        const valid =
+          preview &&
+          bodyId &&
+          preview.derived.bodyRepresentations[bodyId] &&
+          !warning;
+        setPreviewDoc(
+          valid ? { ...preview.document, derived: preview.derived } : null
+        );
+        if (preview) {
+          setStatus(
+            warning ??
+              (valid
+                ? 'Preview · Apply to save the exact result.'
+                : 'This size did not produce a valid body.')
+          );
+        }
+      },
+      onFailure: ({ error }) => {
+        setPreviewDoc(null);
+        setStatus(errorMessage(error, 'Unable to preview this size.'));
+      },
+      // The form stays open after release, so its latest value must catch up.
+      continueAfterSlow: true
+    })
+  ).current;
+
+  useEffect(() => {
+    edgeFormPreview.clear();
+    edgeFormCandidate.current = null;
+    return () => edgeFormPreview.clear();
+  }, [
+    edgeFormPreview,
+    doc?.projectId,
+    doc?.version,
+    tool,
+    selectedFeatureNodeId
+  ]);
+
+  function previewEdgeForm(
+    feature: FeatureNode | null,
+    kind: 'fillet' | 'chamfer',
+    value: EdgeModifierFormValue | null
+  ) {
+    if (!value || busy) {
+      edgeFormPreview.clear();
+      return;
+    }
+    try {
+      const command = edgeModifierCommand(feature, kind, value);
+      const bodyId =
+        feature?.bodyId ??
+        ('ids' in command.payload ? command.payload.ids?.bodyId : undefined);
+      if (!bodyId || !managerRef.current) return;
+      command.validate(managerRef.current.document);
+      edgeFormCandidate.current = { command, bodyId };
+      edgeFormPreview.request(
+        resolveParamValue(
+          value.size,
+          getParameterScope(managerRef.current.document).scope
+        )
+      );
+    } catch (error) {
+      edgeFormPreview.clear();
+      setStatus(errorMessage(error, 'Unable to preview this size.'));
+    }
+  }
+
+  function applyEdgeForm(
+    feature: FeatureNode | null,
+    kind: 'fillet' | 'chamfer',
+    value: EdgeModifierFormValue
+  ) {
+    if (busy) return;
+    const command = edgeModifierCommand(feature, kind, value);
+    const bodyId =
+      feature?.bodyId ??
+      ('ids' in command.payload ? command.payload.ids?.bodyId : undefined);
+    if (!bodyId || !doc) return;
+    edgeFormPreview.clear();
+    void executeValidatedFeature(command, {
+      featureName: value.name,
+      resultBodyId: bodyId,
+      ...(feature
+        ? {
+            targets: affectedFeatureTargets(doc, feature.featureId).map(
+              (target, index) =>
+                index === 0 ? { ...target, featureName: value.name } : target
+            )
+          }
+        : {}),
+      successMessage: `${value.name} applied.`,
+      ...(!feature ? { onSuccess: finishFeatureCreation } : {})
+    });
+  }
+
   /**
    * Checksums of imports between their blob write and their commit decision.
    * Content addressing puts a re-import of the same file on the same key, so
@@ -4822,6 +4936,7 @@ export function App() {
   }
 
   function cancelPanel() {
+    edgeFormPreview.clear();
     exactEntryQueue.cancel();
     setFeatureFormError(null);
     setHoleFacePickTarget(null);
@@ -14657,12 +14772,9 @@ export function App() {
                     })
                   )
                 }
+                onPreviewEdgeModifier={previewEdgeForm}
                 onCreateEdgeModifier={(kind, value) =>
-                  createFeature(
-                    kind === 'fillet'
-                      ? commandFactories.filletEdges(value)
-                      : commandFactories.chamferEdges(value)
-                  )
+                  applyEdgeForm(null, kind, value)
                 }
                 onCreatePattern={(value) =>
                   createFeature(commandFactories.patternBody(value))
@@ -14891,40 +15003,7 @@ export function App() {
                     )
                   )
                 }
-                onApplyEdgeModifier={(feature, kind, value) =>
-                  executeCommand(
-                    commandFactories.updateFeature(
-                      {
-                        featureId: feature.featureId,
-                        name: value.name,
-                        data:
-                          kind === 'fillet'
-                            ? {
-                                featureKind: 'fillet',
-                                targetBodyId: value.targetBodyId,
-                                edgeHashes: value.edgeHashes,
-                                ...(value.edgeReferences
-                                  ? { edgeReferences: value.edgeReferences }
-                                  : {}),
-                                radius: value.size
-                              }
-                            : {
-                                featureKind: 'chamfer',
-                                targetBodyId: value.targetBodyId,
-                                edgeHashes: value.edgeHashes,
-                                ...(value.edgeReferences
-                                  ? { edgeReferences: value.edgeReferences }
-                                  : {}),
-                                distance: value.size,
-                                ...(value.angleDeg !== undefined
-                                  ? { angleDeg: value.angleDeg }
-                                  : {})
-                              }
-                      },
-                      `Edit ${value.name}`
-                    )
-                  )
-                }
+                onApplyEdgeModifier={applyEdgeForm}
                 onApplyPattern={(feature, value) =>
                   executeCommand(
                     commandFactories.updateFeature(

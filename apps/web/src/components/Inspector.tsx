@@ -96,6 +96,11 @@ export interface InspectorCallbacks {
     kind: 'fillet' | 'chamfer',
     value: EdgeModifierFormValue
   ): void;
+  onPreviewEdgeModifier(
+    feature: FeatureNode | null,
+    kind: 'fillet' | 'chamfer',
+    value: EdgeModifierFormValue | null
+  ): void;
   onSelectAllEdges(body: BodyRepresentation): void;
   onClearSelectedEdges(): void;
   onCreatePattern(value: PatternFormValue): void;
@@ -865,6 +870,7 @@ export function Inspector(props: InspectorProps) {
           onClearEdges={props.onClearSelectedEdges}
           submitLabel="Create"
           onSubmit={(value) => props.onCreateEdgeModifier(tool, value)}
+          onPreview={(value) => props.onPreviewEdgeModifier(null, tool, value)}
           onCancel={props.onCancel}
         />
       );
@@ -1100,6 +1106,9 @@ export function Inspector(props: InspectorProps) {
           submitLabel="Apply"
           onSubmit={(value) =>
             props.onApplyEdgeModifier(selectedFeature, data.featureKind, value)
+          }
+          onPreview={(value) =>
+            props.onPreviewEdgeModifier(selectedFeature, data.featureKind, value)
           }
           onCancel={props.onCancel}
         />

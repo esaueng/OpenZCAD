@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { coerceParamValue } from '@openzcad/document-core';
 import {
   FULL_REVOLVE_ANGLE_DEG,
@@ -18,11 +18,13 @@ import {
   type SketchObjectKind
 } from '@openzcad/shared';
 import { ExprInput } from '../ExprInput';
+import { edgeModifierSliderRange } from '../../lib/edgeModifierEdit';
 import { useFieldAutoFocus } from './fieldAutoFocus';
 import { TextObjectFields, type TextAttributes } from '../TextObjectFields';
 import {
   PLANE_LABELS,
   REVOLVE_AXIS_LABELS,
+  evalParamValue,
   paramValueText,
   previewExpression
 } from '../../lib/model';
@@ -1274,6 +1276,7 @@ interface EdgeModifierFormProps {
   initial?: { name: string; size: ParamValue; angleDeg?: ParamValue };
   submitLabel: string;
   onSubmit(value: EdgeModifierFormValue): void;
+  onPreview?(value: EdgeModifierFormValue | null): void;
   onCancel?: () => void;
 }
 
@@ -1289,6 +1292,7 @@ export function EdgeModifierForm({
   initial,
   submitLabel,
   onSubmit,
+  onPreview,
   onCancel
 }: EdgeModifierFormProps) {
   const [name, setName] = useState(
@@ -1298,14 +1302,57 @@ export function EdgeModifierForm({
   const [angle, setAngle] = useState(
     initial?.angleDeg !== undefined ? paramValueText(initial.angleDeg) : ''
   );
+  const numericSize = evalParamValue(coerceParamValue(size), scope);
+  const [sliderRange] = useState(() =>
+    edgeModifierSliderRange(evalParamValue(initial?.size ?? 2, scope) ?? 2)
+  );
+  const previewCallback = useRef(onPreview);
+  previewCallback.current = onPreview;
+  const edgeSelectionKey = edgeHashes.join(',');
+  useEffect(
+    () => () => previewCallback.current?.(null),
+    [targetBodyId, edgeSelectionKey]
+  );
   const canSubmit =
     name.trim().length > 0 &&
     Boolean(targetBodyId) &&
     edgeHashes.length > 0 &&
     fieldsValid(scope, [size]) &&
-    (kind === 'fillet' ||
-      angle.trim() === '' ||
-      fieldsValid(scope, [angle]));
+    numericSize !== null &&
+    numericSize > 0 &&
+    (kind === 'fillet' || angle.trim() === '' || fieldsValid(scope, [angle]));
+
+  function formValue(
+    nextSize: string,
+    nextAngle: string
+  ): EdgeModifierFormValue {
+    return {
+      name: name.trim(),
+      targetBodyId: targetBodyId!,
+      edgeHashes,
+      ...(edgeReferences ? { edgeReferences } : {}),
+      size: coerceParamValue(nextSize),
+      // `updateFeature` patches keys and cannot delete one, so blanking
+      // the field on a chamfer that stored an angle submits the
+      // geometrically identical explicit 45 instead of silently keeping
+      // the old angle.
+      ...(kind === 'chamfer' && nextAngle.trim() !== ''
+        ? { angleDeg: coerceParamValue(nextAngle) }
+        : kind === 'chamfer' && initial?.angleDeg !== undefined
+          ? { angleDeg: 45 }
+          : {})
+    };
+  }
+
+  function changeSize(next: string) {
+    setSize(next);
+    const numeric = evalParamValue(coerceParamValue(next), scope);
+    onPreview?.(
+      targetBodyId && edgeHashes.length > 0 && numeric !== null && numeric > 0
+        ? formValue(next, angle)
+        : null
+    );
+  }
 
   return (
     <FormShell
@@ -1313,24 +1360,7 @@ export function EdgeModifierForm({
       onName={setName}
       submitLabel={submitLabel}
       canSubmit={canSubmit}
-      onSubmit={() =>
-        onSubmit({
-          name: name.trim(),
-          targetBodyId: targetBodyId!,
-          edgeHashes,
-          ...(edgeReferences ? { edgeReferences } : {}),
-          size: coerceParamValue(size),
-          // `updateFeature` patches keys and cannot delete one, so blanking
-          // the field on a chamfer that stored an angle submits the
-          // geometrically identical explicit 45 instead of silently keeping
-          // the old angle.
-          ...(kind === 'chamfer' && angle.trim() !== ''
-            ? { angleDeg: coerceParamValue(angle) }
-            : kind === 'chamfer' && initial?.angleDeg !== undefined
-              ? { angleDeg: 45 }
-              : {})
-        })
-      }
+      onSubmit={() => onSubmit(formValue(size, angle))}
       onCancel={onCancel}
     >
       <div className="selection-summary">
@@ -1370,15 +1400,41 @@ export function EdgeModifierForm({
         value={size}
         scope={scope}
         autoFocus
-        onChange={setSize}
+        onChange={changeSize}
       />
+      <input
+        className="edge-size-slider"
+        type="range"
+        aria-label={
+          kind === 'fillet' ? 'Fillet radius slider' : 'Chamfer distance slider'
+        }
+        {...sliderRange}
+        max={Math.max(sliderRange.max, numericSize ?? 0)}
+        value={numericSize ?? sliderRange.min}
+        disabled={!targetBodyId || edgeHashes.length === 0}
+        onChange={(event) => changeSize(event.currentTarget.value)}
+      />
+      <p className="muted edge-selection-hint">
+        Drag to preview. {submitLabel} saves the exact result.
+      </p>
       {kind === 'chamfer' ? (
         <ExprInput
           label="Angle° (blank = 45)"
           value={angle}
           scope={scope}
           optional
-          onChange={setAngle}
+          onChange={(next) => {
+            setAngle(next);
+            onPreview?.(
+              targetBodyId &&
+                edgeHashes.length > 0 &&
+                numericSize !== null &&
+                numericSize > 0 &&
+                (next.trim() === '' || fieldsValid(scope, [next]))
+                ? formValue(size, next)
+                : null
+            );
+          }}
         />
       ) : null}
     </FormShell>
