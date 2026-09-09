@@ -539,23 +539,31 @@ test('accepts exact visual selection and direct editing on the seeded boss', asy
 
   // The reference opens with a real lower-rim fillet. Remove that downstream
   // history feature before the bore edit, then recreate a rim fillet below.
-  // A face pick only infers that defining feature: the inspector must stay an
-  // object readout until Edit explicitly pins the history node.
+  // The bore must not offer the unrelated lower-rim feature as its editor.
+  // Deleting that fillet requires explicitly selecting its History entry.
   expect((await readBlend(canvas, 2))?.blendRadius).toBeCloseTo(2, 6);
   const inspector = page.getByRole('region', { name: 'Feature inspector' });
   await expect(
     inspector.getByRole('heading', { name: 'Through hole Ø20' })
   ).toBeVisible();
   await expect(inspector.getByText('Measurements')).toBeVisible();
-  await expect(inspector.getByText('Defined by')).toBeVisible();
-  await expect(inspector.getByText('Lower rim fillet')).toBeVisible();
+  await expect(inspector).toContainText(
+    'does not identify one editable history feature'
+  );
+  await expect(inspector.getByText('Lower rim fillet')).toHaveCount(0);
+  await expect(
+    inspector.getByRole('button', { name: 'Edit', exact: true })
+  ).toHaveCount(0);
   await expect(inspector.getByLabel('Radius')).toHaveCount(0);
   await expect(inspector.getByLabel('More actions')).toHaveCount(0);
 
   await page.keyboard.press('Delete');
   expect((await readBlend(canvas, 2))?.blendRadius).toBeCloseTo(2, 6);
 
-  await inspector.getByRole('button', { name: 'Edit' }).click();
+  await page
+    .locator('.feature-row', { hasText: 'Lower rim fillet' })
+    .locator('.feature-row-main')
+    .click();
   await expect(inspector.getByLabel('Radius')).toHaveValue('fillet_r');
   await inspector.getByLabel('More actions').click();
   await inspector.getByRole('button', { name: 'Delete feature' }).click();
