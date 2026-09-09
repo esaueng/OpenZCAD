@@ -1,3 +1,5 @@
+import { edgeModifierCommand } from './lib/edgeModifierEdit';
+import type { EdgeModifierFormValue } from './components/forms/FeatureForms';
 import { documentNodesWithHistory } from '@openzcad/shared';
 import { useWorkspaceResume } from './hooks/useWorkspaceResume';
 import { ResumeSessionDialog } from './components/ResumeSessionDialog';
@@ -370,6 +372,12 @@ import { composeMoveTransform } from '@openzcad/viewport/move-transform';
 import { SELECTION_FILTERS } from '@openzcad/viewport/types';
 import { effectiveSelectionFilter } from './lib/selectionFilter';
 import {
+  bodyFeature,
+  resolveSelectionTopology,
+  selectionFeature,
+  selectionSetFeature
+} from './lib/selectionFeature';
+import {
   cylinderRadialFrame,
   isValidCylinderRadius,
   sameCylinderAxis,
@@ -389,7 +397,6 @@ import {
 import {
   blendRadialDirection,
   canRemoveImportedBlendFace,
-  editableFilletFeature,
   importedBlendSnapshot,
   newBlendFaceSelections,
   resolveFilletBlendFace,
@@ -1405,20 +1412,12 @@ export function App() {
   const [namingSave, setNamingSave] = useState(false);
   // Named `doc` (not `document`) so the global DOM document is never shadowed.
   const [doc, setDoc] = useState<ProjectDocument | null>(null);
-  /**
-   * The feature the inspector is showing, and how it got there.
-   *
-   * A history-tree click *pins* a feature: the user asked for that feature, so
-   * it names the panel. A viewport pick *infers* the feature that currently
-   * defines the picked body — an answer to "what made this shape", which is
-   * not the command the pick just armed. Keeping the provenance is what stops
-   * the panel from titling itself after an unrelated earlier operation.
-   */
+  /** History pins a feature; viewport ownership is re-resolved after rebuilds. */
   const [selectedFeatureNode, setSelectedFeatureNode] = useState<{
     id: string;
     source: FeatureSelectionSource;
   } | null>(null);
-  const selectedFeatureNodeId = selectedFeatureNode?.id ?? null;
+  const requestedFeatureNodeId = selectedFeatureNode?.id ?? null;
   const featureSelectionSource = selectedFeatureNode?.source ?? null;
   function selectFeatureNode(
     id: string | null,
@@ -1435,7 +1434,7 @@ export function App() {
           : null
     );
   }
-  /** The feature that currently defines a picked body, if there is one. */
+  /** Body picks retain a publisher; sub-shape picks resolve their own owner below. */
   function inferFeatureNodeFor(bodyId: BodyId | null) {
     retireStatusMessage();
     selectFeatureNode(bodyId ? featureNodeIdForBody(bodyId) : null, 'inferred');
@@ -2441,7 +2440,7 @@ export function App() {
       offsetPreviewValueRef.current = null;
       setLastValidPreview(null);
       dispatchInteraction({ type: 'commit-complete' });
-      setSelectedTopology(null);
+      setSelectedTopology({ bodyId, kind: 'body' });
       setSelectedEdges([]);
       setSelectedBodyIds([bodyId]);
       inferFeatureNodeFor(bodyId);
@@ -2465,6 +2464,118 @@ export function App() {
     onFailure: setFeatureFormError
   });
   const executeValidatedFeature = validatedFeature.run;
+  const edgeFormCandidate = useRef<{
+    command: AnyCommand;
+    bodyId: BodyId;
+  } | null>(null);
+  const edgeFormPreview = useRef(
+    new LivePreview<ProjectDocument, ProjectDocument['derived']>({
+      build: () => {
+        const candidate = edgeFormCandidate.current;
+        const base = managerRef.current?.document;
+        if (!candidate || !base) return null;
+        candidate.command.validate(base);
+        return candidate.command.apply(base);
+      },
+      derive: (document) => geometry.syncOnce(document),
+      publish: (preview) => {
+        const bodyId = edgeFormCandidate.current?.bodyId;
+        const warning = preview?.derived.warnings[0];
+        const valid =
+          preview &&
+          bodyId &&
+          preview.derived.bodyRepresentations[bodyId] &&
+          !warning;
+        setPreviewDoc(
+          valid ? { ...preview.document, derived: preview.derived } : null
+        );
+        if (preview) {
+          setStatus(
+            warning ??
+              (valid
+                ? 'Preview · Apply to save the exact result.'
+                : 'This size did not produce a valid body.')
+          );
+        }
+      },
+      onFailure: ({ error }) => {
+        setPreviewDoc(null);
+        setStatus(errorMessage(error, 'Unable to preview this size.'));
+      },
+      // The form stays open after release, so its latest value must catch up.
+      continueAfterSlow: true
+    })
+  ).current;
+
+  useEffect(() => {
+    edgeFormPreview.clear();
+    edgeFormCandidate.current = null;
+    return () => edgeFormPreview.clear();
+  }, [
+    edgeFormPreview,
+    doc?.projectId,
+    doc?.version,
+    tool,
+    requestedFeatureNodeId
+  ]);
+
+  function previewEdgeForm(
+    feature: FeatureNode | null,
+    kind: 'fillet' | 'chamfer',
+    value: EdgeModifierFormValue | null
+  ) {
+    if (!value || busy) {
+      edgeFormPreview.clear();
+      return;
+    }
+    try {
+      const command = edgeModifierCommand(feature, kind, value);
+      const bodyId =
+        feature?.bodyId ??
+        ('ids' in command.payload ? command.payload.ids?.bodyId : undefined);
+      if (!bodyId || !managerRef.current) return;
+      command.validate(managerRef.current.document);
+      edgeFormCandidate.current = { command, bodyId };
+      edgeFormPreview.request(
+        resolveParamValue(
+          value.size,
+          getParameterScope(managerRef.current.document).scope
+        )
+      );
+    } catch (error) {
+      edgeFormPreview.clear();
+      setStatus(errorMessage(error, 'Unable to preview this size.'));
+    }
+  }
+
+  function applyEdgeForm(
+    feature: FeatureNode | null,
+    kind: 'fillet' | 'chamfer',
+    value: EdgeModifierFormValue
+  ) {
+    if (busy) return;
+    const command = edgeModifierCommand(feature, kind, value);
+    const bodyId =
+      feature?.bodyId ??
+      ('ids' in command.payload ? command.payload.ids?.bodyId : undefined);
+    if (!bodyId || !doc) return;
+    edgeFormPreview.clear();
+    void executeValidatedFeature(command, {
+      featureName: value.name,
+      resultBodyId: bodyId,
+      ...(feature
+        ? {
+            targets: affectedFeatureTargets(doc, feature.featureId).map(
+              (target, index) =>
+                index === 0 ? { ...target, featureName: value.name } : target
+            )
+          }
+        : {}),
+      successMessage: `${value.name} applied.`,
+      ...(!feature ? { onSuccess: finishFeatureCreation } : {})
+    });
+  }
+
   /**
    * Checksums of imports between their blob write and their commit decision.
    * Content addressing puts a re-import of the same file on the same key, so
@@ -3682,9 +3793,14 @@ export function App() {
    * fixed axis for cylinder radii.
    */
   const renderedSelectedTopology = useMemo<TopologySelection | null>(() => {
-    if (selectedTopology?.kind !== 'face') {
-      return selectedTopology;
+    if (selectedTopology) {
+      const resolved = resolveSelectionTopology(
+        renderedRepresentations[selectedTopology.bodyId],
+        selectedTopology
+      );
+      if (resolved) return resolved;
     }
+    if (selectedTopology?.kind !== 'face') return null;
     const body = renderedRepresentations[selectedTopology.bodyId];
     const faces = body?.topology?.faces ?? [];
     if (
@@ -3718,20 +3834,6 @@ export function App() {
         };
       }
       return null;
-    }
-    const exact = faces.find(
-      (face) =>
-        face.topologyId === selectedTopology.topologyId ||
-        (selectedTopology.hash !== undefined &&
-          face.hash === selectedTopology.hash)
-    );
-    if (exact) {
-      return {
-        bodyId: selectedTopology.bodyId,
-        kind: 'face',
-        topologyId: exact.topologyId,
-        hash: exact.hash
-      };
     }
     if (
       interaction.mode === 'face' &&
@@ -3780,7 +3882,7 @@ export function App() {
       !interaction.target.axisStart ||
       !interaction.target.axisEnd
     ) {
-      return selectedTopology;
+      return null;
     }
     const axisStart = {
       x: interaction.target.axisStart[0],
@@ -3792,7 +3894,7 @@ export function App() {
       y: interaction.target.axisEnd[1],
       z: interaction.target.axisEnd[2]
     };
-    const regenerated = faces.find((face) => {
+    const candidates = faces.filter((face) => {
       const geometry = face.geometry;
       return (
         geometry?.surfaceType === 'cylinder' &&
@@ -3806,6 +3908,7 @@ export function App() {
         )
       );
     });
+    const regenerated = candidates.length === 1 ? candidates[0] : null;
     return regenerated
       ? {
           bodyId: selectedTopology.bodyId,
@@ -3813,7 +3916,7 @@ export function App() {
           topologyId: regenerated.topologyId,
           hash: regenerated.hash
         }
-      : selectedTopology;
+      : null;
   }, [
     interaction,
     representations,
@@ -3953,12 +4056,43 @@ export function App() {
   }, [doc]);
 
   const selectedFeature = useMemo<FeatureNode | null>(() => {
-    if (!doc || !selectedFeatureNodeId) {
-      return null;
+    if (!doc || !requestedFeatureNodeId) return null;
+    if (featureSelectionSource === 'inferred') {
+      if (!exactGeometryReady) return null;
+      return selectionSetFeature(
+        doc,
+        representations,
+        selectedEdges.length > 0
+          ? selectedEdges
+          : selectedTopology
+            ? [selectedTopology]
+            : []
+      );
     }
-    const node = doc.nodes[selectedFeatureNodeId];
+    const node = doc.nodes[requestedFeatureNodeId];
     return node?.kind === 'feature' ? node : null;
-  }, [doc, selectedFeatureNodeId]);
+  }, [
+    doc,
+    requestedFeatureNodeId,
+    featureSelectionSource,
+    exactGeometryReady,
+    representations,
+    selectedEdges,
+    selectedTopology
+  ]);
+  const selectedFeatureNodeId = selectedFeature?.id ?? null;
+  function validateSelectionEdit(): boolean {
+    if (
+      managerRef.current?.document.version !== doc?.version ||
+      !requireExactGeometryReady()
+    ) {
+      setStatus(
+        'The model changed. Select the feature again before editing it.'
+      );
+      return false;
+    }
+    return true;
+  }
 
   const selectedSketch = useMemo<SketchNode | null>(() => {
     if (
@@ -3982,6 +4116,7 @@ export function App() {
   }, [doc, selectedSketch]);
 
   const selectedFeatureBodyId =
+    (featureSelectionSource === 'inferred' ? selectedTopology?.bodyId : null) ??
     selectedFeature?.bodyId ??
     (selectedFeature?.data.featureKind === 'transform' ||
     selectedFeature?.data.featureKind === 'direct-edit'
@@ -4010,16 +4145,28 @@ export function App() {
       selectedEdges[0]?.bodyId ??
       selectedTopology?.bodyId ??
       selectedBodyIds.at(-1);
+    // A creation preview consumes its input and publishes a new body. The
+    // form must keep the committed input identity, or its key changes and
+    // remounts with the default size while the user is entering a value.
+    const committedBodies = Object.values(representations).filter(
+      (body) => !body.consumed && !hiddenBodyIds.has(body.bodyId)
+    );
     if (candidateId) {
-      const candidate = viewerBodies.find(
+      const candidate = committedBodies.find(
         (body) => body.bodyId === candidateId
       );
       if (candidate) {
         return candidate;
       }
     }
-    return viewerBodies.length === 1 ? viewerBodies[0]! : null;
-  }, [selectedBodyIds, selectedEdges, selectedTopology, viewerBodies]);
+    return committedBodies.length === 1 ? committedBodies[0]! : null;
+  }, [
+    selectedBodyIds,
+    selectedEdges,
+    selectedTopology,
+    representations,
+    hiddenBodyIds
+  ]);
 
   const exportBodyIds = useMemo<BodyId[]>(() => {
     if (!doc) {
@@ -4822,6 +4969,7 @@ export function App() {
   }
 
   function cancelPanel() {
+    edgeFormPreview.clear();
     exactEntryQueue.cancel();
     setFeatureFormError(null);
     setHoleFacePickTarget(null);
@@ -8371,27 +8519,7 @@ export function App() {
   }, []);
 
   function featureNodeIdForBody(bodyId: BodyId): string | null {
-    if (!doc) {
-      return null;
-    }
-    // Transform and direct-edit features keep BodyId stable. Walk history
-    // backwards so the inspector follows the operation that currently defines
-    // the selected body instead of jumping back to its original primitive.
-    for (let index = features.length - 1; index >= 0; index -= 1) {
-      const feature = features[index]!;
-      if (feature.bodyId === bodyId) {
-        return feature.id;
-      }
-      const data = feature.data;
-      if (
-        (data.featureKind === 'transform' ||
-          data.featureKind === 'direct-edit') &&
-        data.targetBodyId === bodyId
-      ) {
-        return feature.id;
-      }
-    }
-    return null;
+    return doc ? (bodyFeature(doc, bodyId)?.id ?? null) : null;
   }
 
   function handleSelectSketchProfile(sketchId: string) {
@@ -8613,11 +8741,7 @@ export function App() {
       const surface = geometry?.surfaceType;
       const filletFeature =
         faceTopology && geometry?.featureType === 'blend'
-          ? editableFilletFeature(
-              doc,
-              faceTopology,
-              representations[selection.bodyId]?.topology?.faces ?? []
-            )
+          ? selectionFeature(doc, representations[selection.bodyId], selection)
           : null;
       const sourceFeature = features.find(
         (feature) => feature.bodyId === selection.bodyId
@@ -11847,7 +11971,10 @@ export function App() {
     // topology selection while leaving the machine armed would leave a command
     // running against geometry the panel no longer shows.
     dispatchInteraction({ type: 'clear' });
-    const next = selectedFeatureNodeId === nodeId ? null : nodeId;
+    const next =
+      featureSelectionSource === 'pinned' && selectedFeatureNodeId === nodeId
+        ? null
+        : nodeId;
     selectFeatureNode(next, 'pinned');
     const node = next && doc ? doc.nodes[next] : undefined;
     const bodyId = node?.kind === 'feature' ? node.bodyId : undefined;
@@ -12169,9 +12296,11 @@ export function App() {
     }
     // Adopt the clicked geometry as the selection so actions target it.
     handleSelectTopologyFromViewer(selection, false);
-    const nodeId = featureNodeIdForBody(selection.bodyId);
-    const node = nodeId ? doc.nodes[nodeId] : undefined;
-    const feature = node?.kind === 'feature' ? node : null;
+    const feature = selectionFeature(
+      doc,
+      representations[selection.bodyId],
+      selection
+    );
     const edge = selection.kind === 'edge';
     openContextMenu(
       x,
@@ -12256,7 +12385,10 @@ export function App() {
                   danger: true,
                   section: true
                 },
-                run: () => handleDeleteFeature(feature.featureId, feature.name)
+                run: () => {
+                  if (validateSelectionEdit())
+                    handleDeleteFeature(feature.featureId, feature.name);
+                }
               }
             ]
           : [])
@@ -12750,7 +12882,14 @@ export function App() {
             }
             return;
           }
-          if (selectedFeature && featureSelectionSource !== 'inferred') {
+          if (
+            selectedFeature &&
+            (featureSelectionSource !== 'inferred' ||
+              (!tool &&
+                !commandSession &&
+                selectedTopology?.kind !== 'body')) &&
+            validateSelectionEdit()
+          ) {
             event.preventDefault();
             handleDeleteFeature(
               selectedFeature.featureId,
@@ -13307,7 +13446,7 @@ export function App() {
   const inspectorActive =
     !modelingLocked &&
     !directMode &&
-    (tool !== null || selectedFeature !== null);
+    (tool !== null || selectedFeature !== null || selectedTopology !== null);
   const modelingOperation: ModelingOperationKind | null =
     tool === 'mirror' ||
     tool === 'split' ||
@@ -14594,6 +14733,8 @@ export function App() {
                 tool={tool}
                 commitError={featureFormError}
                 selectedFeature={selectedFeature}
+                documentVersion={doc.version}
+                onValidateSelection={validateSelectionEdit}
                 selectedSketch={selectedSketch}
                 selectedSketchObject={selectedSketchObject}
                 selectedBody={selectedBody}
@@ -14657,12 +14798,9 @@ export function App() {
                     })
                   )
                 }
+                onPreviewEdgeModifier={previewEdgeForm}
                 onCreateEdgeModifier={(kind, value) =>
-                  createFeature(
-                    kind === 'fillet'
-                      ? commandFactories.filletEdges(value)
-                      : commandFactories.chamferEdges(value)
-                  )
+                  applyEdgeForm(null, kind, value)
                 }
                 onCreatePattern={(value) =>
                   createFeature(commandFactories.patternBody(value))
@@ -14891,40 +15029,7 @@ export function App() {
                     )
                   )
                 }
-                onApplyEdgeModifier={(feature, kind, value) =>
-                  executeCommand(
-                    commandFactories.updateFeature(
-                      {
-                        featureId: feature.featureId,
-                        name: value.name,
-                        data:
-                          kind === 'fillet'
-                            ? {
-                                featureKind: 'fillet',
-                                targetBodyId: value.targetBodyId,
-                                edgeHashes: value.edgeHashes,
-                                ...(value.edgeReferences
-                                  ? { edgeReferences: value.edgeReferences }
-                                  : {}),
-                                radius: value.size
-                              }
-                            : {
-                                featureKind: 'chamfer',
-                                targetBodyId: value.targetBodyId,
-                                edgeHashes: value.edgeHashes,
-                                ...(value.edgeReferences
-                                  ? { edgeReferences: value.edgeReferences }
-                                  : {}),
-                                distance: value.size,
-                                ...(value.angleDeg !== undefined
-                                  ? { angleDeg: value.angleDeg }
-                                  : {})
-                              }
-                      },
-                      `Edit ${value.name}`
-                    )
-                  )
-                }
+                onApplyEdgeModifier={applyEdgeForm}
                 onApplyPattern={(feature, value) =>
                   executeCommand(
                     commandFactories.updateFeature(
@@ -14958,7 +15063,7 @@ export function App() {
                 onResizeThroughHole={handleResizeThroughHole}
                 onRemoveFaceFeature={handleRemoveFaceFeature}
                 onPinFeature={(feature) =>
-                  selectFeatureNode(feature.id, 'pinned')
+                  handleSelectFeatureFromTree(feature.id)
                 }
                 onDeleteFeature={(feature) =>
                   handleDeleteFeature(feature.featureId, feature.name)
