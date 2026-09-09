@@ -332,23 +332,8 @@ export function drillHole(
     y: spec.surfacePoint.y + spec.axis.y * (spec.depth + spec.exitExtension),
     z: spec.surfacePoint.z + spec.axis.z * (spec.depth + spec.exitExtension)
   };
-  const tools = [cylinderAlongAxis(kernel, start, boreEnd, spec.radius)];
-  if (spec.style === 'counterbore') {
-    if (
-      spec.counterboreRadius === undefined ||
-      spec.counterboreDepth === undefined
-    ) {
-      throw new Error('A counterbore needs its diameter and depth.');
-    }
-    const counterboreEnd = {
-      x: spec.surfacePoint.x + spec.axis.x * spec.counterboreDepth,
-      y: spec.surfacePoint.y + spec.axis.y * spec.counterboreDepth,
-      z: spec.surfacePoint.z + spec.axis.z * spec.counterboreDepth
-    };
-    tools.push(
-      cylinderAlongAxis(kernel, start, counterboreEnd, spec.counterboreRadius)
-    );
-  } else if (spec.style === 'countersink') {
+  let tools: number[];
+  if (spec.style === 'countersink') {
     if (
       spec.countersinkRadius === undefined ||
       spec.countersinkAngle === undefined
@@ -366,23 +351,61 @@ export function drillHole(
       );
     }
     // The cone keeps its own taper through the entry overshoot, so the
-    // countersink meets the surface at exactly the requested diameter.
+    // countersink meets the surface at exactly the requested diameter. One
+    // revolved radial section stands in for the bore-and-cone tool pair:
+    // Remus's exact engine declines that pair on some bodies and its compound
+    // pass then falls back to a mesh boolean, while the revolved equivalent
+    // keeps true analytic faces everywhere.
     const entryRadius =
       spec.countersinkRadius + spec.entryExtension * halfTangent;
-    const cone = kernel.makeCone(
-      entryRadius,
-      spec.radius,
-      spec.entryExtension + sinkDepth
-    );
-    tools.push(
-      kernel.copyAndTransformSolid(
-        cone,
-        coordinateFrameMatrix(start, spec.axis)
+    const total = spec.entryExtension + spec.depth + spec.exitExtension;
+    tools = [
+      revolveRadialProfile(
+        kernel,
+        [
+          { x: 0, y: 0 },
+          { x: entryRadius, y: 0 },
+          { x: spec.radius, y: spec.entryExtension + sinkDepth },
+          { x: spec.radius, y: total },
+          { x: 0, y: total }
+        ],
+        {
+          origin: start,
+          axis: spec.axis,
+          radius: spec.radius,
+          axialMin: 0,
+          axialMax: total
+        }
       )
-    );
+    ];
+  } else {
+    tools = [cylinderAlongAxis(kernel, start, boreEnd, spec.radius)];
+    if (spec.style === 'counterbore') {
+      if (
+        spec.counterboreRadius === undefined ||
+        spec.counterboreDepth === undefined
+      ) {
+        throw new Error('A counterbore needs its diameter and depth.');
+      }
+      const counterboreEnd = {
+        x: spec.surfacePoint.x + spec.axis.x * spec.counterboreDepth,
+        y: spec.surfacePoint.y + spec.axis.y * spec.counterboreDepth,
+        z: spec.surfacePoint.z + spec.axis.z * spec.counterboreDepth
+      };
+      tools.push(
+        cylinderAlongAxis(kernel, start, counterboreEnd, spec.counterboreRadius)
+      );
+    }
   }
 
-  const cut = kernel.compoundCut(solid, Uint32Array.from(tools));
+  // Cut one tool at a time. The kernel's compound pass falls back to a mesh
+  // boolean when a tool pair trips its exact assembly, while each tool still
+  // cuts exactly on its own. The face-count proof below still catches any
+  // per-step fallback.
+  let cut = solid;
+  for (const tool of tools) {
+    cut = kernel.cut(cut, tool);
+  }
   kernel.unifyFaces(cut);
   if (kernel.validateSolid(cut) !== 0) {
     throw new Error('The hole cut did not produce a valid solid.');

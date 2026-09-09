@@ -221,16 +221,6 @@ const IMPORT_NAME_NOTE =
   'separately because it is the metric that says what BREAKS — these are the ' +
   'identities a saved selection is stored against.';
 
-const MEASUREMENT_NOTE =
-  "Remus's volume() integrates a tessellation at MEASUREMENT_DEFLECTION " +
-  '(0.08) while OCCT uses exact BRepGProp, so a body with a curved wall can ' +
-  'carry a small residue. This is a measurement gap, not a geometry gap: the ' +
-  'B-rep is correct and the meshes agree. Note the residue is NOT simply ' +
-  'proportional to curved-wall area, and it is not signed one way — the ' +
-  'plain-bore scenarios that once read 1.88e-5 high now hit the closed form ' +
-  'to 1e-12, while the blended plates below still read low. Treat each ' +
-  'entry as its own measurement rather than as an instance of a rule.';
-
 // ---------------------------------------------------------------------------
 // Remus vs OpenCascade
 // ---------------------------------------------------------------------------
@@ -262,8 +252,19 @@ export const KERNEL_DELTAS: KernelDeltaPin[] = [
       'curved-planar path, so the fuse now returns 9 planes and 2 cylinders ' +
       'with a bounding box that reaches its exact extent, and the SOLID ' +
       'matches the closed form to 6e-15. What survives is a measurement ' +
-      'defect rather than a geometry one — see the reference deviation. ' +
-      'Closing the OCCT side still needs consistent groups.'
+      'defect rather than a geometry one — retired with the reference ' +
+      'deviation below when the integrator reached the closed form. ' +
+      'Closing the OCCT side still needs consistent groups. ' +
+      'The remus pin bump to 9e0f6c1 (v2.130) moved the body across the ' +
+      'd/R = 1/2 cliff recorded in the retired volume pin: the fuse now ' +
+      'leaves the boss wall unsplit — 8 planes + 1 cylinder, 9 faces — and ' +
+      'the round-trip volume delta dropped to 5e-16, so the app-facing ' +
+      'volume reads the closed form exactly. The retired pin also carried ' +
+      'the twice-wrong mechanism history and the warning that which side ' +
+      'of the cliff a platform lands on is architecture- and ' +
+      'scale-dependent (Linux at 1000x reproduced macOS at 1x); that ' +
+      'history lives in git, and mesh watertightness remains the only ' +
+      'witness on either side of the cliff.'
   },
   // --- (a) exports ---------------------------------------------------------
   {
@@ -613,22 +614,6 @@ export const KERNEL_DELTAS: KernelDeltaPin[] = [
   },
   {
     subject: 'e-analytic-fillet-plate',
-    metric: 'volume',
-    remus: 9522.606928409188,
-    occt: 9522.743338823155,
-    owner: 'remus-measurement',
-    note:
-      MEASUREMENT_NOTE +
-      ' New measurement, only possible because K0.1 taught Remus to read ' +
-      'SURFACE_CURVE: this OCCT-authored file used to be refused outright. ' +
-      'Remus now reads it 1.43e-5 relative LOW against the closed-form ' +
-      '9522.7433388, which OCCT hits to 1e-12. Four quarter-cylinder bands. ' +
-      'The plain-bore scenarios that used to sit beside this one have since ' +
-      'converged on the closed form exactly, so this residue is specific to ' +
-      'the blended bands rather than a general curved-wall effect.'
-  },
-  {
-    subject: 'e-analytic-fillet-plate',
     metric: 'edgeHashDigest',
     remus: 'a2844ab8',
     occt: '26f53b2e',
@@ -733,26 +718,6 @@ export const KERNEL_DELTAS: KernelDeltaPin[] = [
   },
 
   // --- import-modeling scenarios ------------------------------------------
-  {
-    subject: 'fillet-on-import',
-    metric: 'volume',
-    remus: 9522.60692840917,
-    occt: 9522.74333882308,
-    owner: 'remus-measurement',
-    note:
-      MEASUREMENT_NOTE +
-      ' This pin used to read 9518.3321434 and belong to K0.4: Remus fitted ' +
-      'the four corner bands as B-splines just inside the true quarter ' +
-      'cylinder and lost 4.4 mm3 (4.63e-4 relative). The bands are now exact ' +
-      'cylinders — the surfaceTypes and faceHashDigest pins that recorded ' +
-      'that gap are retired — and what is left is 1.43e-5, the residue the ' +
-      'other blended plates in this corpus carry. ' +
-      'The reassignment is corroborated rather than assumed: Remus now ' +
-      'reads this scenario within 2e-15 relative of its own import of ' +
-      'e-analytic-fillet-plate (9522.6069284092), the OCCT-authored file of ' +
-      'the same nominal shape, so the blend and the import agree on the ' +
-      'geometry and only the integrator is short.'
-  },
   {
     subject: 'fillet-on-import',
     metric: 'witnessedFaces',
@@ -924,79 +889,6 @@ export const KERNEL_DELTAS: KernelDeltaPin[] = [
 export const REFERENCE_DEVIATIONS: ReferenceDeviationPin[] = [
   {
     subject: 'boss-crossing-a-wall',
-    kernel: 'remus',
-    referenceMm3:
-      40 * 24 * 10 +
-      Math.PI * 36 * 20 -
-      (Math.PI * 36 - (36 * Math.acos(0.5) - 3 * Math.sqrt(27))) * 10,
-    reported: 10951.590467118496,
-    owner: 'K0.5',
-    note:
-      'THE SOLID IS EXACT; THE MEASUREMENT IS NEARLY SO. This pin has now ' +
-      'survived two kernel fixes by CHANGING CHARACTER rather than going ' +
-      'away, and the shape of the remaining error has flipped, so read the ' +
-      'sign before assuming which defect you are looking at. ' +
-      'historical BrepKit #55 restored the geometry: before it, 57 faces, ALL PLANES, ' +
-      'every analytic surface destroyed, x-min reading -2.996917 where the ' +
-      'construction says exactly -3. After it, 11 faces (9 planes + 2 ' +
-      'CYLINDERS) and x-min exactly -3. On the raw kernel massProperties ' +
-      'returns 10952.079901041969 against the closed form ' +
-      '10952.079901041901 — agreement to 6e-15. The body has been right ' +
-      'since then; only the app-facing route was not. ' +
-      'historical BrepKit #64 then fixed that route, moving it from ' +
-      '10984.864189375206 (+0.299% over) to 10951.844000782583 ' +
-      '(-0.00215% under). Version 3.2.22 now reads 10951.56548068038 ' +
-      '(-0.00470% under): a larger residual, but the same inscribed-mesh ' +
-      'signature rather than the old folded-surface overcount. ' +
-      'The old error ADDED material, because `tessellate_solid` sampled a ' +
-      "closed circular rim from the curve's intrinsic parameter origin " +
-      "instead of the edge's seam vertex, so the boundary walk read 2.5 " +
-      'turns for a band that goes round once and the CDT folded triangles ' +
-      'back over the cylinder — a mesh still closed and 2-manifold while ' +
-      'enclosing some space twice. That is fixed. What remains REMOVES ' +
-      'material, which is the ordinary inscribed-mesh signature, the same ' +
-      'class as test/filleted-body-volume.test.ts (a filleted box reads ' +
-      '-4.2e-6 to -1.7e-5 on the same route). So this is no longer a ' +
-      'special defect of this body; it is the general tessellated-volume ' +
-      'residual, and it should be retired by whatever fixes THAT. ' +
-      'THE MECHANISM HERE HAS BEEN WRONG TWICE, which is why the history ' +
-      'stays. (1) historical BrepKit #55 filed it as "the notched-wall detector ' +
-      'declines and the area route credits the whole cylinder". ' +
-      '(2) historical BrepKit #64 refuted that — the detector is RIGHT to decline, ' +
-      'both faces genuinely are UV rectangles, and the exact integral was ' +
-      'never wrong. Do not trust a confident-sounding third account either. ' +
-      'ALSO, AND SEPARATELY: this body sits exactly on a cliff at ' +
-      'd/R = 1/2. Past it the FUSE never splits the boss wall against the ' +
-      'plate, leaving one face of exactly 2*pi*R*H and carrying the buried ' +
-      'portion as an interior sheet. On that side the body has 10 faces, ' +
-      'not the 11 recorded here, and the tab/ring split does not exist. ' +
-      'Which side it lands on is decided by architecture AND by model ' +
-      'scale — Linux at 1000x reproduces what macOS reports at 1x — so the ' +
-      "11-face reading is this platform's answer, not the body's. " +
-      'validate_solid and BOTH measurement routes call it fine on both ' +
-      'sides; mesh watertightness is the only witness. historical BrepKit #64 pins that ' +
-      'cliff but does not fix it. ' +
-      'Switching the adapter to massProperties is still NOT an obvious ' +
-      'fix — that route has its own open defect, reading a quadric sector ' +
-      'wider than pi as its own complement (4.3% light). ' +
-      'Retire this pin when the app-facing volume reaches the closed form ' +
-      '(the corpus bar is 1e-6), not before. Exact tangency is separate and ' +
-      'still falls back at 0.02%. ' +
-      'The remus pin bump to bea7d4c moved the reading from 10951.56548068038 ' +
-      '(-4.70e-5, 47x above the bar) to 10951.579362034887 (-1.27e-6, 1.27x ' +
-      'above it), and the round-trip delta improved 6x — same inscribed-mesh ' +
-      'signature, much smaller residual. Close, but the bar is the bar. ' +
-      'The remus pin bump to 7b4d155 (v2.130) moved the reading again, from ' +
-      '10951.579362034887 to 10951.590467118496 — the deviation from the ' +
-      'closed form went from -4.57e-5 to -4.47e-5, still the same ' +
-      'inscribed-mesh signature and still ~45x above the bar, while the ' +
-      'round-trip delta grew from 2.5e-7 to 7.6e-7. The kernel now bounds ' +
-      'every tessellation grid at 1M points and shares the seam-crossing ' +
-      'vertex of a holed periodic wall, so the mesh the volume integrates ' +
-      'off is not the old one; nothing about the body changed.'
-  },
-  {
-    subject: 'boss-crossing-a-wall',
     kernel: 'occt',
     referenceMm3:
       40 * 24 * 10 +
@@ -1065,36 +957,12 @@ export const REFERENCE_DEVIATIONS: ReferenceDeviationPin[] = [
       'the file; OCCT is 0.42% below it with no arithmetic that explains ' +
       'the number.'
   },
-  {
-    subject: 'e-analytic-fillet-plate',
-    kernel: 'remus',
-    referenceMm3: 40 * 24 * 10 - 4 * (1 - Math.PI / 4) * 9 * 10,
-    reported: 9522.606928409188,
-    owner: 'remus-measurement',
-    note:
-      MEASUREMENT_NOTE +
-      ' This pin used to read "refused": Remus could not open an ' +
-      'OpenCascade-authored file at all. It now reads the file 1.43e-5 ' +
-      'relative low, which is the deflection residue on four ' +
-      'quarter-cylinder bands and nothing more — OCCT hits the arithmetic ' +
-      'to 1e-12 on the same file.'
-  },
-  {
-    subject: 'fillet-on-import',
-    kernel: 'remus',
-    referenceMm3: 40 * 24 * 10 - 4 * (1 - Math.PI / 4) * 9 * 10,
-    reported: 9522.60692840917,
-    owner: 'remus-measurement',
-    note:
-      MEASUREMENT_NOTE +
-      ' Was 9518.3321434 under K0.4 — B-spline corner bands sitting inside ' +
-      'the true quarter cylinder, 4.63e-4 relative low. The bands are exact ' +
-      'cylinders now and the deviation from the arithmetic fell 32x, to ' +
-      '1.43e-5, which is the same residue e-analytic-fillet-plate carries. ' +
-      'This entry is the one that says the ' +
-      'move is an improvement rather than a different answer: it is measured ' +
-      "against the scenario's own construction, not against OCCT."
-  },
+  // e-analytic-fillet-plate and fillet-on-import used to pin 1.43e-5-low
+  // remus volumes here (and boss-crossing-a-wall its inscribed-mesh
+  // residual); the remus pin bump to 9e0f6c1 (v2.130) fixed the integrator's
+  // per-solid deflection clamp and all three now read their closed forms
+  // inside the corpus bar, so their REFERENCE_DEVIATIONS entries are gone
+  // rather than advanced. Their measurement history stays in git.
   {
     subject: 'boolean-on-nurbs-import',
     kernel: 'occt',
