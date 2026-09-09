@@ -199,8 +199,54 @@ describe('Remus modifier evolution lineage', () => {
     expect(reference?.lineageName).toContain(
       'primitive.box.face.z-max|primitive.box.face.z-min'
     );
-    expect(result.faceReferences.has(11)).toBe(false);
-    expect(result.faceReferences.has(12)).toBe(false);
+    expect(result.faceReferences.get(11)?.producingFeatureId).toBe(FEATURE_ID);
+    expect(result.faceReferences.get(12)?.producingFeatureId).toBe(FEATURE_ID);
+  });
+
+  it('retains an earlier blend only through unique unchanged construction ancestry', () => {
+    const original = input([13]);
+    const prior = createRemusSemanticLineage(FEATURE_ID, 'fillet', [
+      {
+        handle: 1,
+        kind: 'face',
+        witness: FACE,
+        lineageName: 'modifier.fillet.face.band-between.a|b'
+      }
+    ]);
+    const inherited = createRemusModifierEvolutionLineage({
+      ...original,
+      sourceLineage: prior
+    });
+    expect(inherited.faceReferences.get(11)?.producingFeatureId).toBe(
+      FEATURE_ID
+    );
+    const changed = createRemusModifierEvolutionLineage({
+      ...original,
+      sourceLineage: prior,
+      resultCandidates: original.resultCandidates.map((candidate) =>
+        candidate.handle === 11
+          ? {
+              ...candidate,
+              witness: { ...FACE, perimeter: FACE.perimeter + 1 }
+            }
+          : candidate
+      )
+    });
+    expect(changed.faceReferences.has(11)).toBe(false);
+    const split = createRemusModifierEvolutionLineage({
+      ...original,
+      sourceLineage: prior,
+      payload: {
+        ...original.payload,
+        evolution: {
+          ...original.payload.evolution,
+          modified: [{ source: 1, results: [11, 12] }],
+          deleted: [2]
+        }
+      }
+    });
+    expect(split.faceReferences.has(11)).toBe(false);
+    expect(split.faceReferences.has(12)).toBe(false);
   });
 
   it('rejects duplicate generated geometry instead of guessing a band', () => {

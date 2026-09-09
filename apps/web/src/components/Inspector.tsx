@@ -174,6 +174,8 @@ export interface InspectorCallbacks {
 interface InspectorProps extends InspectorCallbacks {
   tool: ToolId | null;
   selectedFeature: FeatureNode | null;
+  documentVersion?: number;
+  onValidateSelection?(): boolean;
   /** Sketch node backing the selected sketch feature, when applicable. */
   selectedSketch: SketchNode | null;
   selectedSketchObject: SketchObjectData | null;
@@ -921,11 +923,14 @@ export function Inspector(props: InspectorProps) {
       featureSelectionSource,
       commandSession
     });
-    const inferredUnderCommand = heading.demoted;
+    const inferredUnderCommand =
+      heading.demoted ||
+      (featureSelectionSource === 'inferred' &&
+        selectedTopology?.kind === 'body');
     objectReadout = inferredUnderCommand;
     eyebrow = heading.eyebrow;
     title = heading.title;
-    const editKey = `edit-${selectedFeature.id}`;
+    const editKey = `edit-${selectedFeature.id}-${props.documentVersion ?? 0}`;
     const data = selectedFeature.data;
     let form: ReactNode = null;
 
@@ -1376,11 +1381,52 @@ export function Inspector(props: InspectorProps) {
           selectedFeature.data.featureKind === 'imported-step'
             ? 'Delete imported body'
             : 'Delete feature',
-        run: () => props.onDeleteFeature(selectedFeature)
+        run: () => {
+          if (props.onValidateSelection?.() !== false)
+            props.onDeleteFeature(selectedFeature);
+        }
       };
     }
   }
 
+  if (!body && selectedTopology && selectedBody) {
+    eyebrow = selectedBody.name;
+    title =
+      selectedTopology.kind === 'face'
+        ? faceLabel(
+            selectedBody,
+            selectedTopology.hash,
+            selectedTopology.topologyId
+          )
+        : selectedTopology.kind === 'edge'
+          ? edgeLabel(
+              selectedBody,
+              selectedTopology.hash,
+              selectedTopology.topologyId
+            )
+          : 'Body';
+    body = (
+      <>
+        <p>
+          This selection does not identify one editable history feature. Select
+          a feature in History to edit it.
+        </p>
+        {!commandSession &&
+          selectedTopology.kind === 'face' &&
+          selectedBody.source === 'imported-step' && (
+            <FaceDirectEdit
+              body={selectedBody}
+              selection={selectedTopology}
+              scope={scope}
+              units={units}
+              onResizeThroughHole={props.onResizeThroughHole}
+              onRemoveFaceFeature={props.onRemoveFaceFeature}
+            />
+          )}
+        <BodyStats body={selectedBody} units={units} />
+      </>
+    );
+  }
   if (!body) {
     return null;
   }
@@ -1389,6 +1435,12 @@ export function Inspector(props: InspectorProps) {
     <section
       className={`inspector${objectReadout ? ' object-readout' : ''}`}
       aria-label="Feature inspector"
+      onSubmitCapture={(event) => {
+        if (!tool && props.onValidateSelection?.() === false) {
+          event.preventDefault();
+          event.stopPropagation();
+        }
+      }}
       ref={panelRef}
       // An edit panel no longer holds the keyboard through a focused field, so
       // it holds it here instead. A section is not an input, so the workspace
