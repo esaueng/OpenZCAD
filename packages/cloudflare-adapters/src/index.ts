@@ -1,3 +1,4 @@
+import { isDocumentHistory } from '@openzcad/shared';
 import { DurableObject } from 'cloudflare:workers';
 import {
   ArtifactQuotaError,
@@ -5276,6 +5277,9 @@ function checkClientDocument(value: unknown): CollaborationRejection | null {
   if (
     typeof value.schemaVersion !== 'number' ||
     value.schemaVersion > PROJECT_DOCUMENT_SCHEMA_VERSION ||
+    (value.editHistory !== undefined &&
+      (value.schemaVersion !== PROJECT_DOCUMENT_SCHEMA_VERSION ||
+        !isDocumentHistory(value.editHistory, String(value.projectId)))) ||
     !Array.isArray(value.revisions) ||
     !value.revisions.every(isRevisionRecord) ||
     !Array.isArray(value.checkpoints) ||

@@ -1,9 +1,10 @@
+import { documentNodesWithHistory } from '@openzcad/shared';
 import type { ProjectDocument } from '@openzcad/shared';
 
 /** Every source checksum the document's imports need in order to rebuild. */
 export function importSourceChecksums(document: ProjectDocument): Set<string> {
   const checksums = new Set<string>();
-  for (const node of Object.values(document.nodes)) {
+  for (const node of documentNodesWithHistory(document)) {
     if (node.kind !== 'feature' || node.data.featureKind !== 'imported-step') {
       continue;
     }
@@ -31,12 +32,9 @@ export interface SourceBlobClaim {
  * reference. A day comfortably outlasts a real 250 MB rebuild while ensuring a
  * tab closed mid-import cannot make the blob permanently unreclaimable.
  *
- * After expiry, persisted project documents become the durable protection. One
- * limit remains deliberate: undo/redo stacks live only in tab memory, so a STEP
- * import committed and then undone is not visible to the device-wide document
- * scan. The ownership rule in `settleImportSource` still permits cleanup only
- * from the tab that created or remembered abandoning the key; widening cleanup
- * beyond that would trade a bounded leak for cross-tab data loss.
+ * After expiry, persisted documents and their durable undo/redo references
+ * protect source bytes. Cleanup still belongs to the tab that created or
+ * remembered abandoning the key, avoiding cross-tab data loss.
  */
 export const SOURCE_BLOB_CLAIM_TTL_MS = 24 * 60 * 60 * 1000;
 

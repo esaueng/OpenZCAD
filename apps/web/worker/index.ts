@@ -1,4 +1,9 @@
 import {
+  loadWorkspaceSessions,
+  parseWorkspaceSession,
+  saveWorkspaceSession
+} from './workspaceSessions';
+import {
   ProjectCollaborationRoom,
   ProjectObjectStorageError,
   createPersistenceService,
@@ -186,6 +191,8 @@ const PROJECT_DUPLICATE_ROUTE = /^\/api\/projects\/([^/]+)\/duplicate$/;
 const PROJECT_REVISIONS_ROUTE = /^\/api\/projects\/([^/]+)\/revisions$/;
 const PROJECT_REVISION_ROUTE = /^\/api\/projects\/([^/]+)\/revisions\/([^/]+)$/;
 const PROJECT_DOCUMENT_ROUTE = /^\/api\/projects\/([^/]+)\/document$/;
+const WORKSPACE_SESSIONS_ROUTE =
+  /^\/api\/projects\/([^/]+)\/workspace-sessions$/;
 const PROJECT_MEASUREMENTS_ROUTE = /^\/api\/projects\/([^/]+)\/measurements$/;
 const PROJECT_COLLABORATION_ROUTE = /^\/api\/projects\/([^/]+)\/collaboration$/;
 const PROJECT_COLLABORATION_TICKET_ROUTE =
@@ -594,6 +601,7 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
   }
 
   const collaborationMatch = PROJECT_COLLABORATION_ROUTE.exec(pathname);
+  const workspaceSessionsMatch = WORKSPACE_SESSIONS_ROUTE.exec(pathname);
   const measurementsMatch = PROJECT_MEASUREMENTS_ROUTE.exec(pathname);
   const collaborationTicketMatch =
     PROJECT_COLLABORATION_TICKET_ROUTE.exec(pathname);
@@ -1395,6 +1403,26 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
   }
 
   const projectMatch = PROJECT_ROUTE.exec(pathname);
+  if (
+    workspaceSessionsMatch &&
+    (request.method === 'GET' || request.method === 'PUT')
+  ) {
+    const projectId = workspaceSessionsMatch[1]!;
+    await persistence.requireProjectRead(userId, projectId);
+    if (!env.DB)
+      return json({ error: 'Workspace session storage is unavailable.' }, 503);
+    if (request.method === 'GET')
+      return json({
+        sessions: await loadWorkspaceSessions(env.DB, userId, projectId)
+      });
+    const input = parseWorkspaceSession(
+      await readJsonBody(request, 32_768),
+      projectId
+    );
+    await saveWorkspaceSession(env.DB, userId, input);
+    return new Response(null, { status: 204 });
+  }
+
   if (request.method === 'GET' && measurementsMatch) {
     const projectId = measurementsMatch[1]!;
     await persistence.requireProjectRead(userId, projectId);

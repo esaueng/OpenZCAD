@@ -1,3 +1,4 @@
+import { assertDocumentHistory } from '@openzcad/shared';
 import {
   MAX_ARTIFACT_UPLOAD_PARTS,
   MAX_CHECKPOINT_REASON_LENGTH,
@@ -286,6 +287,19 @@ function parseProjectDocument(
     throw badRequest(
       `"document.schemaVersion" is newer than this deployment supports (${PROJECT_DOCUMENT_SCHEMA_VERSION}). Reload to update.`
     );
+  }
+  if (
+    record.editHistory !== undefined &&
+    record.schemaVersion !== PROJECT_DOCUMENT_SCHEMA_VERSION
+  ) {
+    throw badRequest(
+      'Reload to update before saving a project with undo history.'
+    );
+  }
+  try {
+    assertDocumentHistory(value as ProjectDocument);
+  } catch {
+    throw badRequest('Invalid or unsupported project undo history.');
   }
   return value as ProjectDocument;
 }
