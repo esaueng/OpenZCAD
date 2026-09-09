@@ -397,8 +397,12 @@ test('resizes an imported analytic blend twice without reselection', async ({
   const inspector = page.getByRole('region', { name: 'Feature inspector' });
   await expect(inspector.getByRole('heading')).toHaveText('Blend face R3');
   await expect(inspector).toContainText('Measurements');
-  await expect(inspector).toContainText('Defined by remus_solid');
-  await expect(inspector.getByRole('button', { name: 'Edit' })).toBeVisible();
+  await expect(inspector).toContainText(
+    'does not identify one editable history feature'
+  );
+  await expect(
+    inspector.getByRole('button', { name: 'Edit', exact: true })
+  ).toHaveCount(0);
   await expect(inspector.getByLabel('More actions')).toHaveCount(0);
   await expect(
     page.getByRole('region', { name: 'Selected face properties' })
