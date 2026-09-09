@@ -137,6 +137,35 @@ function assertNoReservedReference(value: unknown): void {
   }
 }
 
+/** History holds exact value fragments, including imports no longer in the model. */
+async function visitHistoryPayloads(
+  value: unknown,
+  step: (payload: Record<string, unknown>) => Promise<void>,
+  mesh: (payload: Record<string, unknown>) => Promise<void>
+): Promise<void> {
+  if (Array.isArray(value)) {
+    for (const entry of value) await visitHistoryPayloads(entry, step, mesh);
+  } else if (isRecord(value)) {
+    if (Object.hasOwn(value, 'stepText')) await step(value);
+    if (
+      (Object.hasOwn(value, 'vertices') && Object.hasOwn(value, 'indices')) ||
+      Object.hasOwn(value, MESH_PAYLOAD_REFERENCE_KEY)
+    )
+      await mesh(value);
+    for (const [key, child] of Object.entries(value)) {
+      if (
+        ![
+          'stepText',
+          'vertices',
+          'indices',
+          MESH_PAYLOAD_REFERENCE_KEY
+        ].includes(key)
+      )
+        await visitHistoryPayloads(child, step, mesh);
+    }
+  }
+}
+
 /**
  * Builds the private R2 representation of a browser document.
  *
@@ -256,6 +285,12 @@ export async function prepareProjectStorageSnapshot(
       }
     }
   }
+
+  await visitHistoryPayloads(
+    projected.editHistory,
+    externalizeStep,
+    externalizeMesh
+  );
 
   const snapshot: ProjectStorageSnapshot = {
     format: PROJECT_OBJECT_STORAGE_FORMAT,
@@ -392,6 +427,8 @@ export async function hydrateProjectStorageSnapshot(
       }
     }
   }
+
+  await visitHistoryPayloads(document.editHistory, hydrateStep, hydrateMesh);
 
   if (document.projectId !== expectedProjectId) {
     throw new ProjectObjectStorageError(

@@ -1,3 +1,10 @@
+export {
+  archiveHistorySources,
+  applyDocumentChanges,
+  recordDocumentEdit,
+  normalizeDocumentHistory
+} from './document-history';
+import { assertDocumentHistory } from '@openzcad/shared';
 import {
   MAX_CHECKPOINT_REASON_LENGTH,
   createId,
@@ -585,6 +592,7 @@ export function createProjectDocument(
  * pre-parametric document does not crash newer code paths.
  */
 export function normalizeDocument(document: ProjectDocument): ProjectDocument {
+  assertDocumentHistory(document);
   const revisions = Array.isArray(document.revisions)
     ? document.revisions
         .filter(isRevisionRecord)
@@ -655,9 +663,13 @@ export function cloneDocument(document: ProjectDocument): ProjectDocument {
   // and nothing mutates it in place — `attachDerivedState` replaces the whole
   // field. It also carries every body's mesh arrays, so deep-copying it here
   // was the single largest main-thread allocation per command and multiplied
-  // through all 100 undo snapshots. Share it by reference and clone the rest.
-  const { derived, ...content } = document;
-  return { ...deepClone(content), derived };
+  // through history. Derived state and immutable undo entries share references.
+  const { derived, editHistory, ...content } = document;
+  return {
+    ...deepClone(content),
+    derived,
+    ...(editHistory ? { editHistory } : {})
+  };
 }
 
 /**
@@ -674,6 +686,7 @@ export function duplicateProjectDocument(
   branchedFrom?: ProjectBranchPoint
 ): ProjectDocument {
   const copy = cloneDocument(normalizeDocument(source));
+  delete copy.editHistory;
   const projectId = toProjectId(createId('proj'));
   const rootNode = copy.nodes[copy.rootNodeId];
   if (rootNode?.kind === 'project') {
@@ -766,7 +779,14 @@ export function adoptProjectDocument(
   }
   // Adoption is a change of home, not an edit: `updatedAt` stays the device's
   // last edit so the shelf keeps its order after a bulk save to the account.
-  const adopted: ProjectDocument = { ...copy, ownerUserId, name };
+  const adopted: ProjectDocument = {
+    ...copy,
+    ownerUserId,
+    name,
+    ...(copy.editHistory
+      ? { editHistory: { ...copy.editHistory, actorUserId: ownerUserId } }
+      : {})
+  };
   // A document with no revision at all cannot carry a checkpoint. That should
   // not happen, but adoption is a rescue path for documents this code has never
   // seen, so it declines to be the thing that refuses them.
