@@ -62,8 +62,7 @@ describe('live imported-feature recognition query', () => {
       'countersink',
       {
         kind: 'countersink',
-        boreDiameter: 5,
-        totalDepth: 6
+        boreDiameter: 5
       }
     ]
   ] as const)('publishes a non-overlapping %s proof', (style, expected) => {
@@ -96,6 +95,9 @@ describe('live imported-feature recognition query', () => {
     if (style === 'countersink' && recognized[0]?.kind === 'countersink') {
       expect(recognized[0].sinkDiameter).toBeCloseTo(10, 10);
       expect(recognized[0].angleRadians).toBeCloseTo(Math.PI / 2, 10);
+      // The revolved-proof cone measures its axis coordinates one ulp off
+      // the makeCone construction, so the depth asserts close, not exact.
+      expect(recognized[0].totalDepth).toBeCloseTo(6, 10);
     }
     const axisDirection =
       recognized[0] && 'axisDirection' in recognized[0]
