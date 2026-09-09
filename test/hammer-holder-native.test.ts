@@ -115,13 +115,13 @@ describe(
         },
         firstArm: {
           faces: 21,
-          volume: 35775.471735205,
+          volume: 35776.00421470196,
           height: 58,
           badEdges: 10
         },
         secondArm: {
           faces: 34,
-          volume: 52318.94347041,
+          volume: 52320.008429403926,
           height: 58,
           badEdges: 12
         }
@@ -272,7 +272,7 @@ describe(
   'native holder bore inference measurement baseline',
   { timeout: 120_000 },
   () => {
-    it('exposes the union-volume increase that turns enclosed bore tools into Add', async () => {
+    it('infers Cut for a bore tool wholly inside the target, at an exact union', async () => {
       const stage = createNativeHolderStages().secondArm;
       const body = bodyOf(await adapter.syncDocument(stage.document), stage);
       const plate = filletEdges(stage.document, {
@@ -329,7 +329,8 @@ describe(
       });
       expect(measurements.map((measurement) => measurement.operation)).toEqual([
         'new-body',
-        'add'
+        'add',
+        'cut'
       ]);
       expect(
         measurements.every((measurement) => measurement.warnings.length === 0)
@@ -338,16 +339,17 @@ describe(
       const unionVolume = measurements[1]!.volume;
       const targetVolume = bodyOf(base.derived, plate).volume;
       expect(toolVolume).toBeCloseTo(2 * Math.PI * 2.5 ** 2 * 8, 6);
-      expect(targetVolume).toBeCloseTo(52260.790324680485, 4);
-      // Both cylinders lie inside the untouched bridge. Their union should not
-      // add volume; record the measured discrepancy without calling it exact.
-      expect(unionVolume - targetVolume).toBeCloseTo(1.275608840745, 4);
-      expect(unionVolume - targetVolume).toBeGreaterThan(
-        resolved.inference.tolerance
-      );
+      expect(targetVolume).toBeCloseTo(52262.06593352125, 4);
+      // Both cylinders lie inside the untouched bridge. The union measures the
+      // target exactly — an enclosed tool adds nothing — so the classifier's
+      // enclosure rule has the final say and the bores infer Cut. When the
+      // measurement still carried tessellation error, the union read 1.2756
+      // mm3 ABOVE the target and the same gesture inferred Add instead; that
+      // misclassification is what an exact union measurement buys back.
+      expect(unionVolume).toBeCloseTo(targetVolume, 6);
       expect(resolved.inference).toMatchObject({
-        operation: 'add',
-        reason: 'partial-overlap',
+        operation: 'cut',
+        reason: 'enclosed',
         targetBodyId: plate.bodyId
       });
       expect(resolved.inference.sharedVolume).toBeCloseTo(

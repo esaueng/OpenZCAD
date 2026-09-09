@@ -14,8 +14,9 @@ import {
 } from '@openzcad/kernel-adapter/exact';
 
 /**
- * A filleted body is the one ordinary shape whose volume is not exact, and the
- * size of the error is set by dimensions the fillet has nothing to do with.
+ * A filleted body was the one ordinary shape whose volume was not exact, and
+ * the size of the error was set by dimensions the fillet had nothing to do
+ * with.
  *
  * PRODUCT-level: everything goes through `syncDocument`, so `volume` is the
  * number the UI prints. Every expectation is a closed form written out in this
@@ -36,42 +37,19 @@ import {
  *   two boxes fused                 rel = 0          EXACT
  *   box + FILLET r2                 rel = -4.197e-6          <- 7 faces, cyl+plane
  *
- * The error is scale-INVARIANT under similarity — identically -4.197e-6 at
- * S = 0.2, 2, 20 and 200 — so it is not the absolute-length defect class this
- * project keeps finding. It is the mirror image of it: something relative to
- * the wrong length.
- *
- * That "wrong length" is the whole part. Hold the fillet fixed (r = 2 on a
- * z-edge of a W x 20 x 20 block, so the filleted edge is geometrically
- * IDENTICAL in every row) and stretch W:
- *
- *   width      removed      exact        over
- *      20    17.201651    17.168147     0.1952 %
- *     200    17.356369    17.168147     1.0963 %
- *    2000    17.763456    17.168147     3.4675 %
- *
- * The same 2 mm fillet measures 0.2 % over on a 20 mm block and 3.5 % over on
- * a 2 m beam. Nothing about the fillet changed.
- *
- * The likely mechanism, from Remus's own source rather than inferred here:
- * `measure/volume.rs::volume_tessellation_deflection` clamps the caller's
- * deflection to `diag * 5e-5`, where `diag` is the bounding-box diagonal of
- * the WHOLE SOLID. Tessellation error on a face is governed by that face's own
- * curvature radius, not by how large the rest of the part is, so tying the two
- * together makes a small feature measure worse the bigger its neighbours get.
- * OpenZCAD's side of it is `MEASUREMENT_DEFLECTION = 0.08` in
+ * The old error was scale-INVARIANT under similarity — identically -4.197e-6
+ * at S = 0.2, 2, 20 and 200 — and it grew with the whole part: the same 2 mm
+ * fillet measured 0.2 % over on a 20 mm block and 3.5 % over on a 2 m beam,
+ * because `measure/volume.rs::volume_tessellation_deflection` clamped the
+ * caller's deflection to the WHOLE SOLID's bounding-box diagonal. OpenZCAD's
+ * side of it was `MEASUREMENT_DEFLECTION = 0.08` in
  * `packages/kernel-adapter/src/exact.ts`, one hardcoded figure passed to every
  * `kernel.volume` call and shared in spirit with `STL_EXPORT_DEFLECTION`.
  *
- * Severity, stated honestly rather than at its most alarming: at BODY level
- * this is small — 4.2e-6 on the cube, 7.4e-7 on the 2 m beam, because the
- * fillet is a small part of a large part. It matters at FEATURE level, where
- * it is percent-scale; it matters for anything summing many fillets; and it
- * matters because it breaks a property users assume without checking, that
- * editing one dimension does not change the measured contribution of a feature
- * elsewhere on the part.
- *
- * And it is silent: no warning fires at any of these sizes.
+ * Remus fixed that class of defect: every case below now reads its closed
+ * form, including the fillet, at every part size. The file keeps measuring
+ * exactly that — a regression here is a kernel change to re-litigate, not a
+ * baseline to advance.
  */
 describe('a filleted body', () => {
   let adapter: ExactKernelAdapter;
@@ -153,7 +131,7 @@ describe('a filleted body', () => {
   const filletCut = (r: number, length: number) =>
     r * r * (1 - Math.PI / 4) * length;
 
-  it.fails(
+  it(
     'measures exactly, as every other analytic body does',
     async () => {
       adapter ??= await createExactKernelAdapter();
@@ -165,19 +143,17 @@ describe('a filleted body', () => {
     120_000
   );
 
-  it('instead reads 4.2e-6 low, and the fillet itself 0.2% over', async () => {
-    // The companion to the pin above. It records the specific wrong values so
-    // a change that merely perturbs them is distinguishable from one that
-    // fixes the defect.
+  it('reads the closed form, and the fillet removes exactly its prism', async () => {
+    // The companion to the pin above. It records the specific values so a
+    // change that merely perturbs them is distinguishable from one that
+    // regresses the exactness the kernel now delivers.
     adapter ??= await createExactKernelAdapter();
     const doc = await breakOriginEdge(box(20, 20, 20), 'fillet', 2);
     const { volume, faces, surfaces, warnings } = await measure(doc);
     const exact = 8000 - filletCut(2, 20);
-    expect(volume).toBeCloseTo(7982.79834915, 7);
-    expect(volume).toBeLessThan(exact);
-    expect((volume - exact) / exact).toBeCloseTo(-4.197e-6, 9);
-    // Over-removed, i.e. the fillet arc is inscribed rather than exact.
-    expect(8000 - volume).toBeGreaterThan(filletCut(2, 20));
+    expect(volume).toBeCloseTo(exact, 9);
+    // The fillet removes its full prism, neither more nor less.
+    expect(8000 - volume).toBeCloseTo(filletCut(2, 20), 9);
     // Seven faces, cylinder + plane — the same shape of body as the bored box
     // below, which is exact.
     expect(faces).toBe(7);
@@ -185,7 +161,7 @@ describe('a filleted body', () => {
     expect(warnings).toEqual([]);
   }, 120_000);
 
-  it.fails(
+  it(
     'measures a fillet the same wherever else the part grows',
     async () => {
       // The sharp one. The filleted edge is IDENTICAL in both rows: same
@@ -207,23 +183,16 @@ describe('a filleted body', () => {
     120_000
   );
 
-  it.each([
-    [20, 17.20165085, 0.1952],
-    [200, 17.356369039, 1.0963],
-    [2000, 17.763455517, 3.4675]
-  ])(
-    'instead over-removes by more as the far dimension reaches %s',
-    async (width, removed, overPercent) => {
+  it.each([20, 200, 2000])(
+    'removes exactly the fillet prism as the far dimension reaches %s',
+    async (width) => {
       adapter ??= await createExactKernelAdapter();
       const { volume, warnings } = await measure(
         await breakOriginEdge(box(width, 20, 20), 'fillet', 2)
       );
       const exact = filletCut(2, 20);
-      expect(width * 400 - volume).toBeCloseTo(removed, 6);
-      expect(((width * 400 - volume) / exact - 1) * 100).toBeCloseTo(
-        overPercent,
-        3
-      );
+      expect(width * 400 - volume).toBeCloseTo(exact, 9);
+      expect(((width * 400 - volume) / exact - 1) * 100).toBeCloseTo(0, 6);
       expect(warnings).toEqual([]);
     },
     120_000
