@@ -141,6 +141,54 @@ function makeProps(
 }
 
 describe('Inspector feature provenance', () => {
+  it('keeps unresolved geometry inspectable without offering feature edits or deletion', () => {
+    render(
+      <Inspector
+        {...makeProps({ selectedFeature: null, commandSession: null })}
+      />
+    );
+    const inspector = screen.getByRole('region', { name: 'Feature inspector' });
+    expect(
+      within(inspector).getByRole('heading', { level: 2 })
+    ).toHaveTextContent('Front face');
+    expect(inspector).toHaveTextContent(
+      'does not identify one editable history feature'
+    );
+    expect(inspector).toHaveTextContent('120 mm³');
+    expect(
+      within(inspector).queryByLabelText('Radius')
+    ).not.toBeInTheDocument();
+    expect(
+      within(inspector).queryByLabelText('More actions')
+    ).not.toBeInTheDocument();
+  });
+
+  it('rejects stale Apply and Delete actions', () => {
+    const props = makeProps({
+      commandSession: null,
+      onValidateSelection: () => false
+    });
+    render(<Inspector {...props} />);
+    fireEvent.change(screen.getByLabelText('Radius'), {
+      target: { value: '3' }
+    });
+    fireEvent.click(screen.getByRole('button', { name: /Apply/ }));
+    expect(props.onApplyEdgeModifier).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByLabelText('More actions'));
+    fireEvent.click(screen.getByRole('button', { name: /Delete feature/ }));
+    expect(props.onDeleteFeature).not.toHaveBeenCalled();
+  });
+
+  it('resets a form to committed values after undo, redo or a document update', () => {
+    const props = makeProps({ commandSession: null, documentVersion: 1 });
+    const { rerender } = render(<Inspector {...props} />);
+    fireEvent.change(screen.getByLabelText('Radius'), {
+      target: { value: '9' }
+    });
+    rerender(<Inspector {...props} documentVersion={2} />);
+    expect(screen.getByLabelText('Radius')).toHaveValue('2');
+  });
+
   it('renders a demoted inferred feature as a read-only object panel', () => {
     const onPinFeature = vi.fn();
     render(<Inspector {...makeProps({ onPinFeature })} />);

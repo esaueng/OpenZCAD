@@ -1843,9 +1843,12 @@ test('a shortcut still fires when a panel opened because you selected something'
   await expect(page.locator('.body-row')).toHaveCount(1);
   await page.keyboard.press('Escape');
 
-  // Selecting a body opens the same form for a different reason. Nobody asked
-  // to type here, and the documented shortcuts have to keep working.
+  // A body pick shows its definition first; opening that feature's editor
+  // must preserve workspace shortcuts instead of focusing a dimension field.
   await page.getByRole('button', { name: /^Box Body/ }).click();
+  await expect(inspector.getByLabel('Width (X)')).toHaveCount(0);
+  await expect(inspector.getByText('Defined by')).toBeVisible();
+  await inspector.getByRole('button', { name: 'Edit', exact: true }).click();
   const width = inspector.getByLabel('Width (X)');
   await expect(width).toBeVisible();
   await expect(width).not.toBeFocused();
