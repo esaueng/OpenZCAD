@@ -603,12 +603,7 @@ export function createRemusModifierEvolutionLineage(input: {
         : [];
     });
     const identities = references.map(supportIdentity).sort();
-    if (
-      identities.length !== 2 ||
-      new Set(identities).size !== 2 ||
-      new Set(references.map((reference) => reference.producingFeatureId))
-        .size !== 1
-    ) {
+    if (identities.length !== 2 || new Set(identities).size !== 2) {
       continue;
     }
     assignments.push({
@@ -617,11 +612,35 @@ export function createRemusModifierEvolutionLineage(input: {
     });
   }
 
-  return createRemusSemanticLineage(
+  const state = createRemusSemanticLineage(
     input.producingFeatureId,
     input.operation,
     assignments
   );
+  const sourceIdentityCounts = new Map<string, number>();
+  const identityKey = (reference: FaceTopologyReferenceV5) =>
+    `${reference.producingFeatureId}:${reference.lineageName}`;
+  for (const reference of input.sourceLineage?.faceReferences.values() ?? []) {
+    const key = identityKey(reference);
+    sourceIdentityCounts.set(key, (sourceIdentityCounts.get(key) ?? 0) + 1);
+  }
+  // A later modifier must not steal an unchanged face from its original
+  // feature. Construction history and the unchanged witness must both agree.
+  for (const relation of input.payload.evolution.modified) {
+    if (relation.results.length !== 1) continue;
+    const handle = relation.results[0]!;
+    const reference = input.sourceLineage?.faceReferences.get(relation.source);
+    const candidate = resultFaces.get(handle);
+    if (
+      !referenceMatchesCandidate(reference, sourceFaces.get(relation.source)) ||
+      !candidate ||
+      !referenceMatchesCandidate(reference, candidate)
+    )
+      continue;
+    if (sourceIdentityCounts.get(identityKey(reference)) !== 1) continue;
+    state.faceReferences.set(handle, { ...reference });
+  }
+  return state;
 }
 
 function matrixIsRigid(matrix: readonly number[]): boolean {
