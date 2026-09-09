@@ -158,6 +158,8 @@ test('resizes a cylinder wall concentrically with one undoable radius edit', asy
   );
   await expect(page.getByRole('button', { name: 'Undo' })).toBeEnabled();
   await expect(page.getByRole('button', { name: 'History 1' })).toBeVisible();
+  await expect(page.locator('.panel-body')).toContainText('Defined by');
+  await page.getByRole('button', { name: 'Edit', exact: true }).click();
   await expect(page.getByLabel('Radius', { exact: true })).toHaveValue('18');
   await expect(page.getByLabel('Height', { exact: true })).toHaveValue('28');
   await expect(page.locator('.panel-body')).toContainText('36 × 36 × 28 mm');

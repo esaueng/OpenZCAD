@@ -211,9 +211,8 @@ describe('fillet result lineage', { timeout: 60_000 }, () => {
       (candidate) => candidate.reference
     );
     const filletFeature = listFeaturesInOrder(filleted.document).at(-1)!;
-    // The blend carries its evolution name; the six planar sides carry the
-    // republished box roles that let a face drag on the filleted body resolve
-    // back to the primitive dimension. Every reference is the fillet's own.
+    // Unchanged sides retain their primitive owner; trimmed sides retain
+    // the modifier roles used by dimension ancestry. The new band owns itself.
     const blends = referencedFaces.filter(
       (candidate) => candidate.geometry?.featureType === 'blend'
     );
@@ -222,18 +221,30 @@ describe('fillet result lineage', { timeout: 60_000 }, () => {
       (candidate) => candidate.geometry?.featureType !== 'blend'
     );
     expect(
-      sides.map((candidate) => candidate.reference?.lineageName).sort()
+      sides
+        .map((candidate) =>
+          candidate.reference!.lineageName.replace(
+            /^(primitive|modifier)\./,
+            ''
+          )
+        )
+        .sort()
     ).toEqual(
       ['x', 'y', 'z'].flatMap((axis) => [
-        `modifier.box.face.${axis}-max`,
-        `modifier.box.face.${axis}-min`
+        `box.face.${axis}-max`,
+        `box.face.${axis}-min`
       ])
     );
+    const primitiveId = withBox.featureOrder[0]!;
     expect(
-      referencedFaces.every(
-        (candidate) =>
-          candidate.reference?.producingFeatureId === filletFeature.featureId
-      )
-    ).toBe(true);
+      sides.filter((face) => face.reference!.producingFeatureId === primitiveId)
+    ).toHaveLength(2);
+    for (const face of referencedFaces) {
+      expect(face.reference!.producingFeatureId).toBe(
+        face.reference!.lineageName.startsWith('primitive.')
+          ? primitiveId
+          : filletFeature.featureId
+      );
+    }
   });
 });
