@@ -549,14 +549,14 @@ test('accepts exact visual selection and direct editing on the seeded boss', asy
   await expect(inspector.getByText('Measurements')).toBeVisible();
   await expect(inspector.getByText('Defined by')).toBeVisible();
   await expect(inspector.getByText('Lower rim fillet')).toBeVisible();
-  await expect(inspector.getByLabel('Radius')).toHaveCount(0);
+  await expect(inspector.getByLabel('Radius', { exact: true })).toHaveCount(0);
   await expect(inspector.getByLabel('More actions')).toHaveCount(0);
 
   await page.keyboard.press('Delete');
   expect((await readBlend(canvas, 2))?.blendRadius).toBeCloseTo(2, 6);
 
   await inspector.getByRole('button', { name: 'Edit' }).click();
-  await expect(inspector.getByLabel('Radius')).toHaveValue('fillet_r');
+  await expect(inspector.getByLabel('Radius', { exact: true })).toHaveValue('fillet_r');
   await inspector.getByLabel('More actions').click();
   await inspector.getByRole('button', { name: 'Delete feature' }).click();
   await expect(status).not.toContainText(REBUILDING, { timeout: 60_000 });
