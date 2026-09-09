@@ -201,7 +201,7 @@ describe('fillet radius slider', () => {
     const slider = screen.getByRole('slider', { name: 'Fillet radius slider' });
     fireEvent.change(slider, { target: { value: '3' } });
     fireEvent.change(slider, { target: { value: '4' } });
-    expect(screen.getByRole('textbox', { name: 'Radius' }).value).toBe('4');
+    expect(screen.getByRole('textbox', { name: 'Radius' })).toHaveValue('4');
     expect(props.onPreviewEdgeModifier).toHaveBeenLastCalledWith(
       feature,
       'fillet',
@@ -229,8 +229,8 @@ describe('fillet radius slider', () => {
       target: { value: 'r * 2' }
     });
     expect(
-      screen.getByRole('slider', { name: 'Fillet radius slider' }).value
-    ).toBe('4');
+      screen.getByRole('slider', { name: 'Fillet radius slider' })
+    ).toHaveValue('4');
     expect(props.onPreviewEdgeModifier).toHaveBeenLastCalledWith(
       feature,
       'fillet',
@@ -255,6 +255,6 @@ describe('fillet radius slider', () => {
       'fillet',
       null
     );
-    expect(screen.getByRole('button', { name: /Apply/ }).disabled).toBe(true);
+    expect(screen.getByRole('button', { name: /Apply/ })).toBeDisabled();
   });
 });
