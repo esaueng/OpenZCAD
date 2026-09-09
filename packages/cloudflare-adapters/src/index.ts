@@ -1,3 +1,4 @@
+import { isDocumentHistory } from '@openzcad/shared';
 import { DurableObject } from 'cloudflare:workers';
 import {
   ArtifactQuotaError,
@@ -3866,6 +3867,10 @@ const MAX_CLIENT_DOCUMENT_VALUES = 500_000;
 const MAX_SNAPSHOT_PAYLOAD_BYTES = 1_600_000;
 const PROJECT_EDIT_LEASE_TTL_MS = 30_000;
 
+interface StoredProjectEditLeases extends ProjectEditLease {
+  additionalLeases?: ProjectEditLease[];
+}
+
 interface CollaborationSocketTicket {
   projectId: string;
   userId: UserId;
@@ -3986,7 +3991,7 @@ export class ProjectCollaborationRoom extends DurableObject {
       role: SharedProjectAccessRole;
     }
   >();
-  private editLease: ProjectEditLease | null = null;
+  private editLeases: ProjectEditLease[] = [];
   private leaseQueue: Promise<void> = Promise.resolve();
   private ticketQueue: Promise<void> = Promise.resolve();
   private latestDocument: ProjectDocument | null = null;
@@ -4010,17 +4015,18 @@ export class ProjectCollaborationRoom extends DurableObject {
           ROOM_LATEST_KEY
         )) ?? null;
       const storedLease =
-        (await this.roomContext.storage.get<ProjectEditLease>(
+        await this.roomContext.storage.get<StoredProjectEditLeases>(
           ROOM_EDIT_LEASE_KEY
-        )) ?? null;
-      if (
-        storedLease &&
-        storedLease.projectId === this.projectId &&
-        storedLease.expiresAt > Date.now()
-      ) {
-        this.editLease = storedLease;
-      } else if (storedLease) {
-        await this.roomContext.storage.delete(ROOM_EDIT_LEASE_KEY);
+        );
+      if (storedLease) {
+        const { additionalLeases = [], ...first } = storedLease;
+        const active = [first, ...additionalLeases].filter(
+          (lease) =>
+            lease.projectId === this.projectId &&
+            lease.userId === first.userId &&
+            lease.expiresAt > Date.now()
+        );
+        await this.persistEditLeases(active);
       }
       const history = await Promise.all(
         (meta.historyVersions ?? []).map((version) =>
@@ -4178,7 +4184,7 @@ export class ProjectCollaborationRoom extends DurableObject {
       }
       this.sockets.clear();
       this.presence.clear();
-      this.editLease = null;
+      this.editLeases = [];
       this.latestDocument = null;
       this.documentHistory.clear();
       this.projectId = null;
@@ -4435,7 +4441,11 @@ export class ProjectCollaborationRoom extends DurableObject {
         members: this.members(),
         document: this.latestDocument,
         role,
-        lease: this.editLease
+        lease:
+          this.editLeases.find(
+            (lease) =>
+              lease.userId === userId && lease.clientId === message.clientId
+          ) ?? null
       });
       await this.broadcastPresence();
       return;
@@ -4538,6 +4548,12 @@ export class ProjectCollaborationRoom extends DurableObject {
     const base =
       baseVersion === null ? undefined : this.documentHistory.get(baseVersion);
     const resolution = resolveCollaborationDocument(latest, document, base);
+    if (resolution.kind === 'same') {
+      // A newly joined browser still needs confirmation of its merge base,
+      // even when another browser already supplied this exact snapshot.
+      this.send(socket, ackFor(resolution.document, document));
+      return;
+    }
     if (resolution.kind === 'accept') {
       const oversize = checkPersistedSize(resolution.document);
       if (oversize) {
@@ -4595,14 +4611,34 @@ export class ProjectCollaborationRoom extends DurableObject {
     return result;
   }
 
-  private async expireEditLease(now = Date.now()): Promise<void> {
-    if (!this.editLease || this.editLease.expiresAt > now) {
-      return;
+  private async persistEditLeases(leases: ProjectEditLease[]): Promise<void> {
+    const [first, ...additionalLeases] = leases;
+    if (first) {
+      // Keep the original single-lease shape readable during rolling updates.
+      await this.roomContext.storage.put(ROOM_EDIT_LEASE_KEY, {
+        ...first,
+        ...(additionalLeases.length ? { additionalLeases } : {})
+      } satisfies StoredProjectEditLeases);
+    } else {
+      await this.roomContext.storage.delete(ROOM_EDIT_LEASE_KEY);
     }
-    const expired = this.editLease;
-    await this.roomContext.storage.delete(ROOM_EDIT_LEASE_KEY);
-    this.editLease = null;
-    this.notifyLeaseHolder(expired, 'expired');
+    this.editLeases = leases;
+  }
+
+  private async revokeEditLeases(
+    matches: (lease: ProjectEditLease) => boolean,
+    reason: 'expired' | 'released' | 'role-changed'
+  ): Promise<void> {
+    const lost = this.editLeases.filter(matches);
+    if (!lost.length) return;
+    await this.persistEditLeases(
+      this.editLeases.filter((lease) => !lost.includes(lease))
+    );
+    for (const lease of lost) this.notifyLeaseHolder(lease, reason);
+  }
+
+  private async expireEditLease(now = Date.now()): Promise<void> {
+    await this.revokeEditLeases((lease) => lease.expiresAt <= now, 'expired');
   }
 
   private async acquireEditLease(
@@ -4615,30 +4651,28 @@ export class ProjectCollaborationRoom extends DurableObject {
     }
   ): Promise<void> {
     if (!(await this.membershipStillAllowsAuthoring(connection))) {
-      if (
-        this.editLease?.userId === connection.userId &&
-        this.editLease.clientId === connection.clientId
-      ) {
-        await this.roomContext.storage.delete(ROOM_EDIT_LEASE_KEY);
-        this.editLease = null;
-      }
+      await this.revokeEditLeases(
+        (lease) => lease.userId === connection.userId,
+        'role-changed'
+      );
       this.send(socket, { type: 'lease-denied', reason: 'read-only' });
       return;
     }
     await this.expireEditLease();
-    const current = this.editLease;
-    if (
-      current &&
-      (current.userId !== connection.userId ||
-        current.clientId !== connection.clientId)
-    ) {
+    const competing = this.editLeases.filter(
+      (lease) => lease.userId !== connection.userId
+    );
+    if (competing.length) {
       this.send(socket, {
         type: 'lease-denied',
         reason: 'held',
-        expiresAt: current.expiresAt
+        expiresAt: Math.max(...competing.map((lease) => lease.expiresAt))
       });
       return;
     }
+    const current = this.editLeases.find(
+      (lease) => lease.clientId === connection.clientId
+    );
     const lease: ProjectEditLease = {
       leaseId: current?.leaseId ?? `lease_${crypto.randomUUID()}`,
       projectId: this.projectId!,
@@ -4646,8 +4680,10 @@ export class ProjectCollaborationRoom extends DurableObject {
       userId: connection.userId,
       expiresAt: Date.now() + PROJECT_EDIT_LEASE_TTL_MS
     };
-    await this.roomContext.storage.put(ROOM_EDIT_LEASE_KEY, lease);
-    this.editLease = lease;
+    await this.persistEditLeases([
+      ...this.editLeases.filter((candidate) => candidate !== current),
+      lease
+    ]);
     this.send(socket, { type: 'lease-granted', lease });
   }
 
@@ -4663,35 +4699,31 @@ export class ProjectCollaborationRoom extends DurableObject {
   ): Promise<void> {
     await this.expireEditLease();
     if (!(await this.membershipStillAllowsAuthoring(connection))) {
-      if (
-        this.editLease?.clientId === connection.clientId &&
-        this.editLease.userId === connection.userId
-      ) {
-        const lost = this.editLease;
-        await this.roomContext.storage.delete(ROOM_EDIT_LEASE_KEY);
-        this.editLease = null;
-        this.notifyLeaseHolder(lost, 'role-changed');
-      } else {
-        this.send(socket, { type: 'lease-lost', reason: 'role-changed' });
-      }
+      await this.revokeEditLeases(
+        (lease) => lease.userId === connection.userId,
+        'role-changed'
+      );
+      this.send(socket, { type: 'lease-lost', reason: 'role-changed' });
       return;
     }
-    if (
-      !this.editLease ||
-      this.editLease.leaseId !== leaseId ||
-      this.editLease.clientId !== connection.clientId ||
-      this.editLease.userId !== connection.userId ||
-      this.editLease.projectId !== this.projectId
-    ) {
+    const current = this.activeLease(
+      connection.userId,
+      connection.clientId,
+      leaseId
+    );
+    if (!current) {
       this.send(socket, { type: 'lease-lost', reason: 'invalid' });
       return;
     }
     const lease = {
-      ...this.editLease,
+      ...current,
       expiresAt: Date.now() + PROJECT_EDIT_LEASE_TTL_MS
     };
-    await this.roomContext.storage.put(ROOM_EDIT_LEASE_KEY, lease);
-    this.editLease = lease;
+    await this.persistEditLeases(
+      this.editLeases.map((candidate) =>
+        candidate === current ? lease : candidate
+      )
+    );
     this.send(socket, { type: 'lease-granted', lease });
   }
 
@@ -4701,19 +4733,32 @@ export class ProjectCollaborationRoom extends DurableObject {
     leaseId: string
   ): Promise<void> {
     await this.expireEditLease();
-    if (
-      !this.editLease ||
-      this.editLease.leaseId !== leaseId ||
-      this.editLease.clientId !== connection.clientId ||
-      this.editLease.userId !== connection.userId
-    ) {
+    const current = this.activeLease(
+      connection.userId,
+      connection.clientId,
+      leaseId
+    );
+    if (!current) {
       this.send(socket, { type: 'lease-lost', reason: 'invalid' });
       return;
     }
-    const released = this.editLease;
-    await this.roomContext.storage.delete(ROOM_EDIT_LEASE_KEY);
-    this.editLease = null;
-    this.notifyLeaseHolder(released, 'released');
+    await this.revokeEditLeases((lease) => lease === current, 'released');
+  }
+
+  private activeLease(
+    userId: UserId,
+    clientId: string,
+    leaseId: string | undefined
+  ): ProjectEditLease | undefined {
+    return this.editLeases.find(
+      (lease) =>
+        leaseId &&
+        lease.expiresAt > Date.now() &&
+        lease.leaseId === leaseId &&
+        lease.projectId === this.projectId &&
+        lease.clientId === clientId &&
+        lease.userId === userId
+    );
   }
 
   private matchesActiveLease(
@@ -4721,15 +4766,7 @@ export class ProjectCollaborationRoom extends DurableObject {
     clientId: string,
     leaseId: string | undefined
   ): boolean {
-    return Boolean(
-      leaseId &&
-      this.editLease &&
-      this.editLease.expiresAt > Date.now() &&
-      this.editLease.leaseId === leaseId &&
-      this.editLease.projectId === this.projectId &&
-      this.editLease.clientId === clientId &&
-      this.editLease.userId === userId
-    );
+    return Boolean(this.activeLease(userId, clientId, leaseId));
   }
 
   private async currentConnectionRole(connection: {
@@ -4846,12 +4883,7 @@ export class ProjectCollaborationRoom extends DurableObject {
     await this.enqueueLeaseOperation(async () => {
       let removed = false;
       if (ownerDisabled) {
-        if (this.editLease) {
-          const lost = this.editLease;
-          await this.roomContext.storage.delete(ROOM_EDIT_LEASE_KEY);
-          this.editLease = null;
-          this.notifyLeaseHolder(lost, 'role-changed');
-        }
+        await this.revokeEditLeases(() => true, 'role-changed');
         for (const [socket, connection] of this.sockets) {
           if (connection.role === 'owner') {
             continue;
@@ -4865,14 +4897,11 @@ export class ProjectCollaborationRoom extends DurableObject {
         await this.broadcastPresence();
         return;
       }
-      if (
-        this.editLease?.userId === userId &&
-        (role === null || role === 'viewer')
-      ) {
-        const lost = this.editLease;
-        await this.roomContext.storage.delete(ROOM_EDIT_LEASE_KEY);
-        this.editLease = null;
-        this.notifyLeaseHolder(lost, 'role-changed');
+      if (role === null || role === 'viewer') {
+        await this.revokeEditLeases(
+          (lease) => lease.userId === userId,
+          'role-changed'
+        );
       }
       for (const [socket, connection] of this.sockets) {
         if (connection.userId !== userId) {
@@ -5158,7 +5187,7 @@ export class ProjectCollaborationRoom extends DurableObject {
   async snapshot() {
     return {
       members: Array.from(this.presence.entries()),
-      lease: this.editLease
+      lease: this.editLeases[0] ?? null
     };
   }
 }
@@ -5248,6 +5277,9 @@ function checkClientDocument(value: unknown): CollaborationRejection | null {
   if (
     typeof value.schemaVersion !== 'number' ||
     value.schemaVersion > PROJECT_DOCUMENT_SCHEMA_VERSION ||
+    (value.editHistory !== undefined &&
+      (value.schemaVersion !== PROJECT_DOCUMENT_SCHEMA_VERSION ||
+        !isDocumentHistory(value.editHistory, String(value.projectId)))) ||
     !Array.isArray(value.revisions) ||
     !value.revisions.every(isRevisionRecord) ||
     !Array.isArray(value.checkpoints) ||

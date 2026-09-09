@@ -573,7 +573,7 @@ function buildTransformFeature(
   feature: FeatureNode,
   data: FeatureDataOf<'transform'>
 ): void {
-  const { kernel, scope, result } = ctx;
+  const { kernel, document, scope, result } = ctx;
   const target = result.shapes.get(data.targetBodyId);
   if (!target) {
     throw new Error('Transform target is unavailable.');
@@ -604,7 +604,9 @@ function buildTransformFeature(
           z: resolveParamValue(rotation.z, scope, 'rotate Z')
         },
         scaleFactor
-      )
+      ),
+      // Only cylinder dimension planning converts world distances through scale.
+      modifierChainRootPrimitive(document, data.targetBodyId) === 'cylinder'
     )
   );
 }

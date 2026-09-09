@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   PROJECT_DOCUMENT_SCHEMA_VERSION,
+  isDocumentHistory,
   type AuthSession,
   type CollaborationMember,
   type CollaborationServerMessage,
@@ -101,7 +102,9 @@ function isRoomDocument(
     isRecord(value) &&
     value.projectId === projectId &&
     typeof value.version === 'number' &&
-    typeof value.schemaVersion === 'number'
+    typeof value.schemaVersion === 'number' &&
+    (value.editHistory === undefined ||
+      isDocumentHistory(value.editHistory, projectId))
   );
 }
 
@@ -253,6 +256,7 @@ export function useCollaboration({
   const leaseRef = useRef<ProjectEditLease | null>(null);
   const conflictRef = useRef<ProjectConflict | null>(null);
   const keepMinePendingRef = useRef(false);
+  const sendCurrentDocumentRef = useRef<(() => void) | null>(null);
   documentRef.current = document;
   remoteHandlerRef.current = onRemoteDocument;
   conflictHandlerRef.current = onConflict;
@@ -322,6 +326,7 @@ export function useCollaboration({
     let reconnectTimer: number | undefined;
     let leaseRetryTimer: number | undefined;
     let reconnectAttempt = 0;
+    let pendingDocument: ProjectDocument | null = null;
     const id = clientId();
 
     const retainConflict = (
@@ -361,6 +366,42 @@ export function useCollaboration({
       return true;
     };
 
+    const acknowledge = (
+      message: Extract<CollaborationServerMessage, { type: 'ack' }>
+    ) => {
+      const submitted = pendingDocument;
+      pendingDocument = null;
+      const local = documentRef.current;
+      serverVersionRef.current = message.version;
+      setRoomVersion(message.version);
+      // A merge acknowledges the submitted snapshot, not edits made while it
+      // was in flight. Preserve those newer edits for explicit reconciliation.
+      if (
+        message.document &&
+        submitted &&
+        local &&
+        !projectPreservesLocalWork(local, submitted)
+      ) {
+        retainConflict(message.document, true);
+        return;
+      }
+      lastSentVersionRef.current = message.version;
+      baseVersionRef.current = message.version;
+      if (keepMinePendingRef.current) {
+        keepMinePendingRef.current = false;
+        clearUnresolvedConflict(projectId, 'room');
+        conflictRef.current = null;
+        setConflict(null);
+      }
+      if (conflictRef.current) return;
+      setStatus('live');
+      if (message.document) {
+        documentRef.current = message.document;
+        remoteHandlerRef.current(message.document);
+      }
+      sendCurrentDocumentRef.current?.();
+    };
+
     const sendDocument = (
       socket: WebSocket,
       type: 'hello' | 'document'
@@ -383,11 +424,17 @@ export function useCollaboration({
       }
       if (
         conflictRef.current ||
+        readUnresolvedConflict(projectId, 'room') ||
         roleRef.current === 'viewer' ||
-        !leaseIdRef.current
+        !leaseIdRef.current ||
+        pendingDocument ||
+        (lastSentVersionRef.current === current.version &&
+          baseVersionRef.current === current.version)
       ) {
         return false;
       }
+      pendingDocument = current;
+      lastSentVersionRef.current = current.version;
       if (new TextEncoder().encode(payload).byteLength > MAX_MESSAGE_BYTES) {
         setStatus('oversize');
         void desktopFetch(`/api/projects/${projectId}/collaboration`, {
@@ -401,47 +448,50 @@ export function useCollaboration({
           })
         })
           .then(async (response) => {
+            if (disposed || socketRef.current !== socket) return;
             const message = parseServerMessage(
               await response.text(),
               projectId
             );
+            if (disposed || socketRef.current !== socket) return;
             if (!message) {
+              pendingDocument = null;
               console.error('Collaboration returned an unreadable response.');
               return;
             }
+            if (message.type === 'ack' && response.ok) {
+              acknowledge(message);
+              return;
+            }
+            pendingDocument = null;
             const rejected = rejectionStatus(message);
             if (rejected) {
               setStatus(rejected);
               return;
             }
-            if (!response.ok || message.type === 'conflict') {
-              if (message.type === 'conflict') {
-                if (reconcileMatchingRoomDocument(message.document)) return;
-                serverVersionRef.current = message.document.version;
-                setRoomVersion(message.document.version);
-                retainConflict(message.document, true);
-              }
-              setStatus('conflict');
-              return;
+            if (message.type === 'conflict') {
+              serverVersionRef.current = message.document.version;
+              setRoomVersion(message.document.version);
+              retainConflict(message.document, true);
             }
-            if (message.type === 'ack') {
-              lastSentVersionRef.current = message.version;
-              serverVersionRef.current = message.version;
-              baseVersionRef.current = message.version;
-              if (message.document) {
-                remoteHandlerRef.current(message.document);
-              }
-            } else {
-              lastSentVersionRef.current = current.version;
-            }
-            setStatus('live');
           })
-          .catch(() => setStatus('offline'));
+          .catch(() => {
+            if (disposed || socketRef.current !== socket) return;
+            pendingDocument = null;
+            setStatus('offline');
+          });
         return false;
       }
       socket.send(payload);
       lastSentVersionRef.current = current.version;
       return true;
+    };
+
+    sendCurrentDocumentRef.current = () => {
+      const socket = socketRef.current;
+      if (!disposed && socket?.readyState === WebSocket.OPEN) {
+        sendDocument(socket, 'document');
+      }
     };
 
     const scheduleReconnect = () => {
@@ -470,6 +520,8 @@ export function useCollaboration({
       socketRef.current = socket;
       socket.addEventListener('open', () => {
         reconnectAttempt = 0;
+        pendingDocument = null;
+        lastSentVersionRef.current = null;
         leaseIdRef.current = null;
         leaseRef.current = null;
         setLease(null);
@@ -603,22 +655,27 @@ export function useCollaboration({
             return;
           }
           const local = documentRef.current;
-          // Work this client never managed to submit is work the room has
-          // never seen — an editor can edit without holding the lease, and
-          // then has nowhere to send it. Letting a broadcast replace it is how
-          // the losing side disappears without anyone being asked, so the
-          // divergence goes to the conflict flow instead. Only a broadcast
-          // that is genuinely ahead can do that damage; one at or behind the
-          // local version is this client's own work coming back to it.
-          const divergesFromRoom =
-            local !== null &&
-            local.projectId === message.document.projectId &&
-            lastSentVersionRef.current !== local.version &&
-            message.document.version > local.version;
           serverVersionRef.current = message.document.version;
           setRoomVersion(message.document.version);
-          if (divergesFromRoom) {
-            retainConflict(message.document, true);
+          // Even equal version numbers can be independent edits. Keep the
+          // original merge base until the room acknowledges our submission.
+          const hasLocalEdits =
+            local &&
+            local.projectId === projectId &&
+            local.version !== baseVersionRef.current &&
+            !projectPreservesLocalWork(local, message.document);
+          if (hasLocalEdits) {
+            if (
+              leaseRef.current &&
+              leaseRef.current.expiresAt > Date.now() &&
+              baseVersionRef.current !== null &&
+              !conflictRef.current &&
+              roleRef.current !== 'viewer'
+            ) {
+              sendDocument(socket, 'document');
+            } else {
+              retainConflict(message.document, true);
+            }
             return;
           }
           lastSentVersionRef.current = message.document.version;
@@ -632,25 +689,11 @@ export function useCollaboration({
           return;
         }
         if (message.type === 'ack') {
-          lastSentVersionRef.current = message.version;
-          serverVersionRef.current = message.version;
-          baseVersionRef.current = message.version;
-          setRoomVersion(message.version);
-          if (keepMinePendingRef.current) {
-            keepMinePendingRef.current = false;
-            clearUnresolvedConflict(projectId, 'room');
-            conflictRef.current = null;
-            setConflict(null);
-          }
-          setStatus('live');
-          // Present only when the server merged our submission into something
-          // else; adopting it is what keeps this client from diverging.
-          if (message.document) {
-            remoteHandlerRef.current(message.document);
-          }
+          acknowledge(message);
           return;
         }
         if (message.type === 'conflict') {
+          pendingDocument = null;
           if (rejectsNewerSchema(message.document)) {
             return;
           }
@@ -663,6 +706,7 @@ export function useCollaboration({
         }
         const rejected = rejectionStatus(message);
         if (rejected) {
+          pendingDocument = null;
           setStatus(rejected);
         }
       });
@@ -713,6 +757,7 @@ export function useCollaboration({
     }, 10_000);
     return () => {
       disposed = true;
+      sendCurrentDocumentRef.current = null;
       if (reconnectTimer !== undefined) {
         window.clearTimeout(reconnectTimer);
       }
@@ -755,81 +800,7 @@ export function useCollaboration({
       return;
     }
     const timeout = window.setTimeout(() => {
-      const socket = socketRef.current;
-      if (!socket || socket.readyState !== WebSocket.OPEN) {
-        return;
-      }
-      if (roleRef.current === 'viewer' || !leaseIdRef.current) {
-        return;
-      }
-      const payload = JSON.stringify({
-        type: 'document',
-        clientId: clientId(),
-        baseVersion: baseVersionRef.current,
-        document: collaborationDocument(document),
-        leaseId: leaseIdRef.current
-      });
-      if (new TextEncoder().encode(payload).byteLength > MAX_MESSAGE_BYTES) {
-        setStatus('oversize');
-        void desktopFetch(`/api/projects/${document.projectId}/collaboration`, {
-          method: 'POST',
-          headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({
-            clientId: clientId(),
-            baseVersion: baseVersionRef.current,
-            document: collaborationDocument(document),
-            leaseId: leaseIdRef.current
-          })
-        })
-          .then(async (response) => {
-            const message = parseServerMessage(
-              await response.text(),
-              document.projectId
-            );
-            if (!message) {
-              console.error('Collaboration returned an unreadable response.');
-              return;
-            }
-            const rejected = rejectionStatus(message);
-            if (rejected) {
-              setStatus(rejected);
-              return;
-            }
-            if (!response.ok || message.type === 'conflict') {
-              if (message.type === 'conflict') {
-                if (reconcileMatchingRoomDocument(message.document)) return;
-                serverVersionRef.current = message.document.version;
-                setRoomVersion(message.document.version);
-                let pending: ProjectConflict;
-                try {
-                  pending = conflictFromDocuments(document, message.document);
-                } catch {
-                  return;
-                }
-                conflictRef.current = pending;
-                setConflict(pending);
-                conflictHandlerRef.current(message.document);
-              }
-              setStatus('conflict');
-              return;
-            }
-            if (message.type === 'ack') {
-              lastSentVersionRef.current = message.version;
-              serverVersionRef.current = message.version;
-              baseVersionRef.current = message.version;
-              if (message.document) {
-                remoteHandlerRef.current(message.document);
-              }
-            } else {
-              lastSentVersionRef.current = document.version;
-            }
-            setStatus('live');
-          })
-          .catch(() => setStatus('offline'));
-        return;
-      }
-      socket.send(payload);
-      lastSentVersionRef.current = document.version;
+      sendCurrentDocumentRef.current?.();
     }, 500);
     return () => window.clearTimeout(timeout);
   }, [
@@ -856,6 +827,7 @@ export function useCollaboration({
       setConflict(null);
       keepMinePendingRef.current = false;
       lastSentVersionRef.current = roomDocument.version;
+      baseVersionRef.current = roomDocument.version;
       documentRef.current = roomDocument;
       remoteHandlerRef.current(roomDocument, { adopted: true });
       setStatus(roleRef.current === 'viewer' ? 'read-only' : 'live');

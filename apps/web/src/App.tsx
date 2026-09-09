@@ -1,3 +1,6 @@
+import { documentNodesWithHistory } from '@openzcad/shared';
+import { useWorkspaceResume } from './hooks/useWorkspaceResume';
+import { ResumeSessionDialog } from './components/ResumeSessionDialog';
 import { buildMeasurementRecord } from './lib/measurementRecord';
 import {
   loadProjectBackupFiles,
@@ -65,6 +68,7 @@ import {
   listExposedParameters,
   listParameters,
   normalizeDocument,
+  normalizeDocumentHistory,
   repairedDirectEditOperation,
   resolveParamValue,
   restoreFromSaveState,
@@ -137,7 +141,6 @@ import type {
   ProjectCollaborationCapabilitiesResponse
 } from '@openzcad/shared';
 import {
-  toArtifactId,
   toShaprImportId,
   toSketchConstraintId,
   toUserId,
@@ -375,6 +378,7 @@ import {
 } from './lib/interaction/cylinderRadius';
 import {
   primitiveCylinderRadiusAncestor,
+  primitiveCylinderScale,
   primitiveCylinderHeightAncestor
 } from './lib/interaction/cylinderPrimitiveAncestry';
 import { commandPromptText } from './lib/interaction/prompt';
@@ -1087,6 +1091,13 @@ function localRecoveryCopy(
   const projectId = toProjectId(`proj_recovery_${crypto.randomUUID()}`);
   const name = recoveryCopyName(source.name, label);
   copy.projectId = projectId;
+  if (copy.editHistory) {
+    copy.editHistory.projectId = projectId;
+    for (const historical of documentNodesWithHistory(copy)) {
+      if (historical.kind === 'project') historical.projectId = projectId;
+    }
+  }
+  const beforeRename = structuredClone(copy);
   copy.name = name;
   copy.revisions = [];
   copy.checkpoints = [];
@@ -1097,7 +1108,7 @@ function localRecoveryCopy(
     root.name = name;
     root.revisionId = null;
   }
-  return copy;
+  return normalizeDocumentHistory(beforeRename, copy);
 }
 
 function resolvedSketchPlaneBasis(
@@ -1609,6 +1620,8 @@ export function App() {
     hiddenBodyIds,
     setHiddenBodyIds,
     restore: restoreProjectView,
+    apply: applyProjectView,
+    snapshot: projectViewSnapshot,
     onCameraChange: updateCameraPose,
     onCameraSettled: persistCameraPose,
     forget: forgetProjectView
@@ -1627,6 +1640,69 @@ export function App() {
     DISABLED_COLLABORATION_ROLLOUT
   );
   const [session, setSession] = useState<AuthSession | null>(null);
+  const [resumeViewGeneration, setResumeViewGeneration] = useState(0);
+  const workspaceResume = useWorkspaceResume({
+    projectId: doc?.projectId ?? null,
+    userId:
+      cloudAvailable && cloudFunctionsEnabled
+        ? (session?.userId ?? null)
+        : null,
+    documentVersion: doc?.version ?? 0,
+    synced: saveState === 'synced',
+    getState() {
+      const view = doc ? projectViewSnapshot() : null;
+      if (!view) return null;
+      return {
+        ...view,
+        selectedBodyIds,
+        workspaceMode: panelState.workspaceMode,
+        panels: {
+          sidebarSections: panelState.sidebarSections,
+          assistantCollapsed: panelState.assistantCollapsed,
+          viewModeRailOpen: panelState.viewModeRailOpen
+        }
+      };
+    },
+    applyState(state) {
+      if (!doc) return;
+      const visibleIds = new Set(doc.bodyOrder);
+      applyProjectView({
+        ...state,
+        hiddenBodyIds: state.hiddenBodyIds.filter((id) =>
+          visibleIds.has(id as BodyId)
+        )
+      });
+      setSelectedBodyIds(
+        state.selectedBodyIds.filter((id) =>
+          visibleIds.has(id as BodyId)
+        ) as BodyId[]
+      );
+      setPanelState((current) => ({
+        ...current,
+        workspaceMode: state.workspaceMode,
+        sidebarSections: {
+          ...current.sidebarSections,
+          ...state.panels.sidebarSections
+        },
+        assistantCollapsed:
+          window.innerWidth < 900 || state.panels.assistantCollapsed,
+        viewModeRailOpen: state.panels.viewModeRailOpen
+      }));
+      setResumeViewGeneration((value) => value + 1);
+    },
+    resetView() {
+      forgetProjectView();
+      setHiddenBodyIds(new Set());
+      setSelectedBodyIds([]);
+      setProjection(appSettings.viewport.defaultProjection);
+      setViewerSettings((current) => ({
+        ...current,
+        showGrid: appSettings.viewport.showGrid,
+        displayMode: appSettings.viewport.displayMode
+      }));
+      setResumeViewGeneration((value) => value + 1);
+    }
+  });
   const sessionRef = useRef(session);
   sessionRef.current = session;
   /**
@@ -3033,7 +3109,8 @@ export function App() {
     setTourProjectId((previous) =>
       previous === current.projectId
         ? previous
-        : listFeaturesInOrder(current).length === 0
+        : listFeaturesInOrder(current).length === 0 &&
+            (current.editHistory?.entries.length ?? 0) === 0
           ? current.projectId
           : null
     );
@@ -4278,7 +4355,10 @@ export function App() {
     if (rememberProject) {
       rememberActiveProject(normalized.projectId);
     }
-    managerRef.current = new CommandManager(normalized);
+    managerRef.current = new CommandManager(
+      normalized,
+      session?.userId ?? normalized.ownerUserId
+    );
     geometry.invalidate();
     setDoc(normalized);
     setPreviewDoc(null);
@@ -6932,7 +7012,12 @@ export function App() {
       return;
     }
     const label = managerRef.current.undoLabel;
-    setDoc(managerRef.current.undo());
+    try {
+      setDoc(managerRef.current.undo());
+    } catch (error) {
+      setStatus(errorMessage(error, 'Undo history could not be restored.'));
+      return;
+    }
     // An assistant preview was preflighted against the document this rewind
     // just replaced; keeping it would render geometry from a lineage that no
     // longer exists.
@@ -6949,7 +7034,12 @@ export function App() {
       return;
     }
     const label = managerRef.current.redoLabel;
-    setDoc(managerRef.current.redo());
+    try {
+      setDoc(managerRef.current.redo());
+    } catch (error) {
+      setStatus(errorMessage(error, 'Redo history could not be restored.'));
+      return;
+    }
     setPreviewDoc(null);
     setMoveCommitHold(null);
     setTool(null);
@@ -7840,18 +7930,22 @@ export function App() {
     ) {
       return;
     }
+    const originatingManager = managerRef.current;
     setStatus(`Archiving ${localOnlySources.length} local import source(s)…`);
     const result = await archiveLocalOnlyImportSources({
       document: doc,
       loadSourceBytes: loadSourceBlob,
       archive: (input) => archiveArtifact(input),
-      applyArtifactId: (featureId, artifactId) =>
-        executeCommand(
-          commandFactories.updateFeature(
-            { featureId, data: { artifactId: toArtifactId(artifactId) } },
-            'Archive import source'
-          )
+      applyArtifactId: (featureId, artifactId) => {
+        if (
+          !originatingManager ||
+          managerRef.current !== originatingManager ||
+          !ensureCanEdit('archive import sources')
         )
+          return false;
+        setDoc(originatingManager.archiveSource(featureId, artifactId));
+        return true;
+      }
     });
     const notes: string[] = [];
     if (result.archived.length > 0) {
@@ -10564,6 +10658,13 @@ export function App() {
       target.bodyId as BodyId
     );
     if (primitive?.data.featureKind === 'primitive') {
+      const scale = primitiveCylinderScale(base, target.bodyId as BodyId) ?? 1;
+      const localRadius =
+        typeof radius === 'number'
+          ? radius / scale
+          : scale === 1
+            ? radius
+            : `(${radius}) / ${scale}`;
       return {
         command: commandFactories.updateFeature(
           {
@@ -10571,7 +10672,7 @@ export function App() {
             data: {
               dimensions: {
                 ...primitive.data.dimensions,
-                radius
+                radius: localRadius
               }
             }
           },
@@ -11411,7 +11512,7 @@ export function App() {
    * Once the rim is filleted the blend belongs to the edge, so offsetting the
    * flat remainder alone leaves a step where the part should simply have
    * grown. Retarget the drag onto the primitive's height whenever the picked
-   * face is provably its top cap; the wall stretches and the fillet
+   * face is provably either cap; the wall stretches and the fillet
    * regenerates at the new rim, which is what keeping the modifier in history
    * is for. Anything unproven stays on the generic offset.
    */
@@ -11452,7 +11553,7 @@ export function App() {
         bodyId,
         successMessage: `${plan.primitive.name} ${plan.dimension} set to ${formatNumber(plan.value)} ${base.units}.`,
         validationTargets: affectedFeatureTargets(
-          base,
+          plan.command.commands ? plan.command.apply(base) : base,
           plan.primitive.featureId
         ),
         ...(plan.preflightRejection
@@ -13849,6 +13950,7 @@ export function App() {
             canRedo={!modelingLocked && (managerRef.current?.canRedo ?? false)}
             onUndo={handleUndo}
             onRedo={handleRedo}
+            key={`workspace-view-${resumeViewGeneration}`}
             initialView={initialView}
             onViewChange={handleViewportChange}
             onViewSettled={handleViewportSettled}
@@ -14920,6 +15022,30 @@ export function App() {
       }
       overlays={
         <>
+          {doc.editHistory && doc.editHistory.trimmed > 0 && (
+            <div className="toast" role="status">
+              Older undo steps were removed to keep history within its storage
+              limit.
+            </div>
+          )}
+          {workspaceResume.status === 'offline' && (
+            <div className="toast" role="status">
+              Session sync is pending. It will retry while this project is open.
+            </div>
+          )}
+
+          {workspaceResume.candidate && (
+            <ResumeSessionDialog
+              session={workspaceResume.candidate}
+              alsoOpen={
+                collaboration.members.filter(
+                  (member) => member.userId === session?.userId
+                ).length > 1
+              }
+              onChoose={workspaceResume.choose}
+            />
+          )}
+
           <input
             ref={projectImportInputRef}
             type="file"

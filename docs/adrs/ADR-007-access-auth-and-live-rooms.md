@@ -4,7 +4,7 @@
 
 Superseded in part by [ADR-012](ADR-012-email-code-identity.md). The live-room
 design remains current and has been extended with owner/editor/viewer roles,
-sharing invitations, one persisted project edit lease, and explicit conflict
+sharing invitations, persisted per-browser edit leases for one account, and explicit conflict
 recovery. The Cloudflare Access identity decision does not remain current.
 
 ## Decision
@@ -16,7 +16,7 @@ email codes and opaque sessions. Local development still uses the explicit
 `AUTH_LEGACY_OWNER_EMAIL` maps historical projects to a verified email without
 rewriting stored documents.
 
-Route each authenticated project WebSocket through one Durable Object. The room tracks presence and the latest canonical document, broadcasts only newer versions, and reports same-version divergent snapshots as conflicts. Every message is authorized against the current project role. Owner/editor writes require the one project-wide lease when enforcement is enabled; the lease is persisted before grant and bound to project, client, user, and expiry. Viewers never acquire a lease.
+Route each authenticated project WebSocket through one Durable Object. The room tracks presence and the latest canonical document, broadcasts only newer versions, and reports same-version divergent snapshots as conflicts. Every message is authorized against the current project role. Owner/editor writes require a per-browser lease when enforcement is enabled; multiple browsers on the same account may hold leases concurrently, while other accounts wait. Each lease is persisted before grant and bound to project, client, user, and expiry. Viewers never acquire a lease.
 
 Clients preserve unresolved local divergence in IndexedDB and retain a small
 reload sentinel instead of entering an autosend loop. Before choosing the room
