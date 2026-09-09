@@ -1,3 +1,6 @@
+export * from './workspace-resume';
+export * from './document-history';
+import type { DocumentHistory } from './document-history';
 export type Brand<T, Name extends string> = T & { readonly __brand: Name };
 
 export type ProjectId = Brand<string, 'ProjectId'>;
@@ -14,7 +17,7 @@ export type AssetId = Brand<string, 'AssetId'>;
 export type SketchConstraintId = Brand<string, 'SketchConstraintId'>;
 export type ShaprImportId = Brand<string, 'ShaprImportId'>;
 
-export const PROJECT_DOCUMENT_SCHEMA_VERSION = 13 as const;
+export const PROJECT_DOCUMENT_SCHEMA_VERSION = 14 as const;
 export type ProjectDocumentSchemaVersion =
   typeof PROJECT_DOCUMENT_SCHEMA_VERSION;
 
@@ -1760,6 +1763,7 @@ export interface DerivedState {
 }
 
 export interface ProjectDocument {
+  editHistory?: DocumentHistory;
   schemaVersion: ProjectDocumentSchemaVersion;
   projectId: ProjectId;
   ownerUserId: UserId;

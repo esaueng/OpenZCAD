@@ -109,7 +109,7 @@ describe('complete project backups', () => {
       backup.version = 99 as 1;
     },
     (backup: ProjectBackup) => {
-      backup.document.schemaVersion = 99 as 13;
+      backup.document.schemaVersion = 99 as 14;
     },
     (backup: ProjectBackup) => {
       delete backup.document.nodes[backup.document.rootNodeId];

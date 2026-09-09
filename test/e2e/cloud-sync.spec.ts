@@ -8,6 +8,7 @@ import {
   toProjectId,
   toUserId,
   type ProjectDocument,
+  type ProjectWorkspaceSession,
   type SaveProjectDocumentRequest,
   type UnitSystem
 } from '@openzcad/shared';
@@ -34,6 +35,7 @@ function projectIdFrom(url: string): string {
 
 class SharedCloudProjectApi {
   project: ProjectDocument | null = null;
+  sessions: ProjectWorkspaceSession[] = [];
   measurement: { revision: number; record: StoredMeasurementRecord } | null =
     null;
   documentUnavailable = false;
@@ -235,6 +237,18 @@ class SharedCloudProjectApi {
         });
       }
       return route.fulfill({ json: this.project });
+    });
+    await page.route('**/api/projects/*/workspace-sessions', async (route) => {
+      if (route.request().method() === 'GET')
+        return route.fulfill({ json: { sessions: this.sessions } });
+      const record = route.request().postDataJSON() as ProjectWorkspaceSession;
+      this.sessions = [
+        { ...record, updatedAt: new Date().toISOString() },
+        ...this.sessions.filter(
+          (session) => session.sessionId !== record.sessionId
+        )
+      ];
+      return route.fulfill({ status: 204 });
     });
     await page.route('**/api/account/storage', (route) =>
       route.fulfill({
@@ -816,8 +830,140 @@ test('syncs across two devices and preserves the losing side of a conflict', asy
         hasText: 'Device B unsent edit (Recovery)'
       })
     ).toBeVisible();
+    await pageB
+      .locator('.start-tile-open', {
+        hasText: 'Device B unsent edit (Recovery)'
+      })
+      .click();
+    await expect(
+      pageB.getByRole('button', { name: 'Undo', exact: true })
+    ).toBeEnabled();
+    await pageB.getByRole('button', { name: 'Undo', exact: true }).click();
+    await expect(
+      pageB.getByRole('button', { name: 'Rename project' })
+    ).toContainText('Shared Bracket from A');
+    await pageB.getByRole('button', { name: 'Redo', exact: true }).click();
+    await expect(
+      pageB.getByRole('button', { name: 'Rename project' })
+    ).toContainText('Device B unsent edit (Recovery)');
   } finally {
     await deviceA.close();
     await deviceB.close();
+  }
+});
+
+test('resumes a workspace on another device and carries undo and redo back across devices', async ({
+  browser
+}) => {
+  test.setTimeout(90_000);
+  const cloud = new SharedCloudProjectApi();
+  const deviceA = await browser.newContext();
+  const deviceB = await browser.newContext({
+    viewport: { width: 900, height: 800 }
+  });
+  const a = await deviceA.newPage();
+  const b = await deviceB.newPage();
+  try {
+    await cloud.install(a);
+    await cloud.install(b);
+    await a.goto('/');
+    await a.getByLabel('Project name').fill('History handoff');
+    await a.getByRole('button', { name: 'Create project' }).click();
+    await a.getByRole('button', { name: /^Box \(B\)/ }).click();
+    await a
+      .getByRole('region', { name: 'Feature inspector' })
+      .getByRole('button', { name: /^Create/ })
+      .click();
+    await expect
+      .poll(() => cloud.project?.bodyOrder.length, { timeout: SYNC_BUDGET_MS })
+      .toBe(1);
+    await expect
+      .poll(() => cloud.sessions.length, { timeout: SYNC_BUDGET_MS })
+      .toBeGreaterThan(0);
+    await a.getByRole('button', { name: /^Orthographic projection/ }).click();
+    await expect
+      .poll(() => cloud.sessions[0]?.state.projection, {
+        timeout: SYNC_BUDGET_MS
+      })
+      .toBe('orthographic');
+    const before = structuredClone(cloud.project!);
+    const camera = structuredClone(cloud.sessions[0]!.state.camera);
+    await b.goto('/');
+    await b.locator('.start-tile-open', { hasText: 'History handoff' }).click();
+    await expect(
+      b.getByRole('dialog', { name: 'Resume where you left off?' })
+    ).toBeVisible();
+    await b.screenshot({ path: 'output/playwright/resume-session.png' });
+    await b
+      .getByRole('button', { name: 'Resume session', exact: true })
+      .click();
+    await expect(
+      b.getByRole('dialog', { name: 'Resume where you left off?' })
+    ).toHaveCount(0);
+    const restored = await b.evaluate((projectId) => {
+      const stored = JSON.parse(
+        localStorage.getItem('openzcad-workspace-session:v1') ?? '{}'
+      ) as {
+        views?: Record<
+          string,
+          { camera: ProjectWorkspaceSession['state']['camera'] }
+        >;
+      };
+      return stored.views?.[projectId]?.camera;
+    }, before.projectId);
+    for (let axis = 0; axis < 3; axis++) {
+      expect(restored!.position[axis]).toBeCloseTo(camera.position[axis]!, 8);
+      expect(restored!.target[axis]).toBeCloseTo(camera.target[axis]!, 8);
+    }
+    expect(restored!.orthographicZoom).toBe(camera.orthographicZoom);
+    expect(restored!.orthographicHalfHeight).toBeCloseTo(
+      camera.orthographicHalfHeight!,
+      8
+    );
+    await expect(
+      b.getByRole('button', { name: 'Undo', exact: true })
+    ).toBeEnabled();
+    await b.getByRole('button', { name: 'Undo', exact: true }).click();
+    await expect
+      .poll(() => cloud.project?.bodyOrder.length, { timeout: SYNC_BUDGET_MS })
+      .toBe(0);
+    expect(cloud.project!.version).toBeGreaterThan(before.version);
+    await expect
+      .poll(() => cloud.sessions[0]?.documentVersion, {
+        timeout: SYNC_BUDGET_MS
+      })
+      .toBe(cloud.project!.version);
+    await a.reload();
+    const prompt = a.getByRole('dialog', {
+      name: 'Resume where you left off?'
+    });
+    await expect(prompt).toBeVisible({ timeout: SYNC_BUDGET_MS });
+    await a.getByRole('button', { name: 'Open with default view' }).click();
+    await expect(
+      a.getByRole('region', { name: 'Getting started' })
+    ).toHaveCount(0);
+    await expect(
+      a.getByRole('button', { name: 'Redo', exact: true })
+    ).toBeEnabled();
+    await a.getByRole('button', { name: 'Redo', exact: true }).click();
+    await expect
+      .poll(() => cloud.project?.bodyOrder.length, { timeout: SYNC_BUDGET_MS })
+      .toBe(1);
+    await expect
+      .poll(() => cloud.sessions[0]?.documentVersion, {
+        timeout: SYNC_BUDGET_MS
+      })
+      .toBe(cloud.project!.version);
+    await b.reload();
+    await expect(
+      b.getByRole('dialog', { name: 'Resume where you left off?' })
+    ).toBeVisible();
+    await b.getByRole('button', { name: 'Open with default view' }).click();
+    await expect(
+      b.getByRole('button', { name: 'Undo', exact: true })
+    ).toBeEnabled();
+    expect(cloud.project!.nodes).toEqual(before.nodes);
+  } finally {
+    await Promise.all([deviceA.close(), deviceB.close()]);
   }
 });

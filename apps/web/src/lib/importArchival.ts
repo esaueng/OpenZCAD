@@ -1,4 +1,4 @@
-import { listFeaturesInOrder } from '@openzcad/document-core';
+import { documentNodesWithHistory } from '@openzcad/shared';
 import type { FeatureId, ProjectDocument } from '@openzcad/shared';
 import { importSourceChecksums } from './sourceBlobClaims';
 
@@ -45,7 +45,8 @@ export function listLocalOnlyImportSources(
   document: ProjectDocument
 ): LocalOnlyImportSource[] {
   const sources: LocalOnlyImportSource[] = [];
-  for (const feature of listFeaturesInOrder(document)) {
+  for (const feature of documentNodesWithHistory(document)) {
+    if (feature.kind !== 'feature') continue;
     if (feature.data.featureKind !== 'imported-step') {
       continue;
     }
@@ -62,7 +63,11 @@ export function listLocalOnlyImportSources(
       checksumSha256
     });
   }
-  return sources;
+  return [
+    ...new Map(
+      sources.map((source) => [source.checksumSha256, source])
+    ).values()
+  ];
 }
 
 /** Answers whether any import is still working with a checksum's bytes. */

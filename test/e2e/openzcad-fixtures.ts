@@ -257,6 +257,13 @@ export async function stubApi(
       }
     });
   });
+  // The static preview has no session service; handoff behavior has its own
+  // shared two-device API fixture in cloud-sync.spec.ts.
+  await page.route('**/api/projects/*/workspace-sessions', (route) =>
+    route.request().method() === 'GET'
+      ? route.fulfill({ json: { sessions: [] } })
+      : route.fulfill({ status: 204 })
+  );
   await page.route('**/api/account/storage', (route) =>
     route.fulfill({
       json: {
