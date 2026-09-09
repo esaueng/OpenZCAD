@@ -4,7 +4,7 @@ OpenZCAD is a local-first parametric CAD system. The canonical `ProjectDocument`
 
 ## Layers
 
-- `shared`: branded IDs and schema-v13 contracts for nodes, revisions, checkpoints, assets, additive schema-v5 topology lineage, collaboration messages, modeling features, and API payloads.
+- `shared`: branded IDs and schema-v14 contracts for nodes, revisions, checkpoints, assets, additive schema-v5 topology lineage, collaboration messages, modeling features, and API payloads.
 - `document-core`: immutable document operations, feature ordering, parameter expression evaluation, editable STEP features, finishing/pattern/modeling features, v1–v12 normalization, and checkpoint creation.
 - `command-system`: pre-assigned deterministic IDs, validation, transactions, replay, and bounded undo/redo. It also converts reviewed `CadPatchProposal` operations into ordinary commands.
 - `ai-contracts`: compact document digests, the strict JSON Schema sent to the model, runtime proposal validation, and the allowlisted patch operation types.

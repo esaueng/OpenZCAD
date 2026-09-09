@@ -54,6 +54,10 @@ function packedMeshOf(data: Record<string, unknown>): PackedMesh | null {
  * touch would be paying twice for the same bytes.
  */
 export function documentForWorker(document: ProjectDocument): ProjectDocument {
+  if (document.editHistory) {
+    const { editHistory: _history, ...model } = document;
+    document = model;
+  }
   let nodes: Record<string, unknown> | null = null;
   for (const [id, node] of Object.entries(
     document.nodes as unknown as Record<string, unknown>

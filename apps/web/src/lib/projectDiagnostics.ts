@@ -121,6 +121,8 @@ export function createProjectDiagnosticBundle(
     }
   };
 
+  delete diagnosticDocument.editHistory;
+
   const bodies = document.bodyOrder.flatMap((bodyId) => {
     const body = document.derived.bodyRepresentations[bodyId];
     if (!body) {

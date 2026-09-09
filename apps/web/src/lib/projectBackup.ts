@@ -1,4 +1,9 @@
 import {
+  documentNodesWithHistory,
+  documentAssetsWithHistory,
+  assertDocumentHistory
+} from '@openzcad/shared';
+import {
   normalizeDocument,
   withoutDerivedProjection
 } from '@openzcad/document-core';
@@ -40,6 +45,7 @@ function record(value: unknown): Record<string, unknown> {
 
 function validateDocument(value: unknown): asserts value is ProjectDocument {
   const doc = record(value);
+  assertDocumentHistory(value as ProjectDocument);
   if (
     !Number.isInteger(doc.schemaVersion) ||
     Number(doc.schemaVersion) < 4 ||
@@ -249,7 +255,7 @@ export async function parseProjectBackup(text: string): Promise<ProjectBackup> {
     documents.push(state.document);
   }
   for (const document of documents) {
-    for (const node of Object.values(document.nodes)) {
+    for (const node of documentNodesWithHistory(document)) {
       if (
         node.kind === 'feature' &&
         node.data.featureKind === 'imported-step' &&
@@ -268,7 +274,7 @@ export async function parseProjectBackup(text: string): Promise<ProjectBackup> {
           throw new Error('Invalid STEP source length.');
       }
     }
-    for (const asset of Object.values(document.assets)) {
+    for (const asset of documentAssetsWithHistory(document)) {
       if (
         (!asset.artifactId || !ids.has(asset.artifactId)) &&
         (!asset.checksum || !sourceIds.has(asset.checksum))
@@ -303,9 +309,17 @@ export function importProjectCopy(
   ]) {
     const normalized = withoutDerivedProjection(normalizeDocument(document));
     Object.assign(document, normalized, { projectId, ownerUserId });
+    if (document.editHistory) {
+      document.editHistory.projectId = projectId;
+      document.editHistory.actorUserId = ownerUserId;
+      for (const historical of documentNodesWithHistory(document)) {
+        if (historical.kind === 'project') historical.projectId = projectId;
+      }
+    }
     const root = document.nodes[document.rootNodeId];
     if (root?.kind === 'project') root.projectId = projectId;
-    for (const asset of Object.values(document.assets)) asset.storage = 'local';
+    for (const asset of documentAssetsWithHistory(document))
+      asset.storage = 'local';
   }
   for (const file of copy.files) {
     file.artifact.projectId = projectId;

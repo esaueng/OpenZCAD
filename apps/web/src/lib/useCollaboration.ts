@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   PROJECT_DOCUMENT_SCHEMA_VERSION,
+  isDocumentHistory,
   type AuthSession,
   type CollaborationMember,
   type CollaborationServerMessage,
@@ -101,7 +102,9 @@ function isRoomDocument(
     isRecord(value) &&
     value.projectId === projectId &&
     typeof value.version === 'number' &&
-    typeof value.schemaVersion === 'number'
+    typeof value.schemaVersion === 'number' &&
+    (value.editHistory === undefined ||
+      isDocumentHistory(value.editHistory, projectId))
   );
 }
 

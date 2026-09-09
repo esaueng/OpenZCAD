@@ -11,7 +11,11 @@ import type {
   ViewerSettings,
   ViewportCameraState
 } from '@openzcad/viewport';
-import { loadProjectView, saveProjectView } from '../lib/workspaceSession';
+import {
+  loadProjectView,
+  saveProjectView,
+  type ProjectViewState
+} from '../lib/workspaceSession';
 
 /** What a project falls back to when it has no remembered view. */
 export interface ProjectViewDefaults {
@@ -39,6 +43,8 @@ export interface ProjectView {
   onCameraChange(projectId: string | null, camera: ViewportCameraState): void;
   /** The viewport pose settled; persist the final pose against this project. */
   onCameraSettled(projectId: string | null, camera: ViewportCameraState): void;
+  apply(view: ProjectViewState): void;
+  snapshot(): ProjectViewState | null;
   /** Closing a project: drop the remembered pose so the next one refits. */
   forget(): void;
 }
@@ -139,6 +145,24 @@ export function useProjectView(projectId: string | null): ProjectView {
       if (id) {
         persist(id, camera);
       }
+    },
+    snapshot() {
+      return cameraRef.current
+        ? {
+            camera: cameraRef.current,
+            projection,
+            settings,
+            hiddenBodyIds: [...hiddenBodyIds]
+          }
+        : null;
+    },
+    apply(view) {
+      cameraRef.current = view.camera;
+      setInitialView(view.camera);
+      setProjection(view.projection);
+      setSettings((current) => ({ ...current, ...view.settings }));
+      setHiddenBodyIds(new Set(view.hiddenBodyIds));
+      if (projectId) saveProjectView(projectId, view);
     },
     forget() {
       cameraRef.current = null;

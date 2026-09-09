@@ -1,6 +1,6 @@
 # OpenZCAD Roadmap
 
-Status snapshot: 2026-08-27, schema v13. “Working” below means implemented on
+Status snapshot: 2026-08-27, schema v14. “Working” below means implemented on
 the current branch; production enablement is a separate rollout decision.
 
 Forward-looking work is sequenced in [docs/cad-feature-roadmap.md](docs/cad-feature-roadmap.md)
