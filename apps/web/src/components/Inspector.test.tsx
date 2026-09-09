@@ -128,6 +128,7 @@ function makeProps(
     onApplyBoolean: vi.fn(),
     onApplyTransform: vi.fn(),
     onApplyEdgeModifier: vi.fn(),
+    onPreviewEdgeModifier: vi.fn(),
     onApplyPattern: vi.fn(),
     onResizeThroughHole: vi.fn(),
     onRemoveFaceFeature: vi.fn(),
@@ -141,6 +142,54 @@ function makeProps(
 }
 
 describe('Inspector feature provenance', () => {
+  it('keeps unresolved geometry inspectable without offering feature edits or deletion', () => {
+    render(
+      <Inspector
+        {...makeProps({ selectedFeature: null, commandSession: null })}
+      />
+    );
+    const inspector = screen.getByRole('region', { name: 'Feature inspector' });
+    expect(
+      within(inspector).getByRole('heading', { level: 2 })
+    ).toHaveTextContent('Front face');
+    expect(inspector).toHaveTextContent(
+      'does not identify one editable history feature'
+    );
+    expect(inspector).toHaveTextContent('120 mm³');
+    expect(
+      within(inspector).queryByLabelText('Radius')
+    ).not.toBeInTheDocument();
+    expect(
+      within(inspector).queryByLabelText('More actions')
+    ).not.toBeInTheDocument();
+  });
+
+  it('rejects stale Apply and Delete actions', () => {
+    const props = makeProps({
+      commandSession: null,
+      onValidateSelection: () => false
+    });
+    render(<Inspector {...props} />);
+    fireEvent.change(screen.getByLabelText('Radius'), {
+      target: { value: '3' }
+    });
+    fireEvent.click(screen.getByRole('button', { name: /Apply/ }));
+    expect(props.onApplyEdgeModifier).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByLabelText('More actions'));
+    fireEvent.click(screen.getByRole('button', { name: /Delete feature/ }));
+    expect(props.onDeleteFeature).not.toHaveBeenCalled();
+  });
+
+  it('resets a form to committed values after undo, redo or a document update', () => {
+    const props = makeProps({ commandSession: null, documentVersion: 1 });
+    const { rerender } = render(<Inspector {...props} />);
+    fireEvent.change(screen.getByLabelText('Radius'), {
+      target: { value: '9' }
+    });
+    rerender(<Inspector {...props} documentVersion={2} />);
+    expect(screen.getByLabelText('Radius')).toHaveValue('2');
+  });
+
   it('renders a demoted inferred feature as a read-only object panel', () => {
     const onPinFeature = vi.fn();
     render(<Inspector {...makeProps({ onPinFeature })} />);
@@ -187,5 +236,73 @@ describe('Inspector feature provenance', () => {
     expect(
       within(inspector).getByRole('button', { name: /Delete feature/ })
     ).toBeVisible();
+  });
+});
+
+describe('fillet radius slider', () => {
+  it('previews the latest size without applying until submitted', () => {
+    const props = makeProps({
+      selectedFeature: feature,
+      featureSelectionSource: 'pinned'
+    });
+    render(<Inspector {...props} />);
+    const slider = screen.getByRole('slider', { name: 'Fillet radius slider' });
+    fireEvent.change(slider, { target: { value: '3' } });
+    fireEvent.change(slider, { target: { value: '4' } });
+    expect(screen.getByRole('textbox', { name: 'Radius' })).toHaveValue('4');
+    expect(props.onPreviewEdgeModifier).toHaveBeenLastCalledWith(
+      feature,
+      'fillet',
+      expect.objectContaining({ size: 4, edgeHashes: [11] })
+    );
+    expect(props.onApplyEdgeModifier).not.toHaveBeenCalled();
+    fireEvent.submit(
+      screen.getByRole('button', { name: /Apply/ }).closest('form')!
+    );
+    expect(props.onApplyEdgeModifier).toHaveBeenCalledExactlyOnceWith(
+      feature,
+      'fillet',
+      expect.objectContaining({ size: 4 })
+    );
+  });
+
+  it('keeps expressions until the user moves the slider and cancels without saving', () => {
+    const props = makeProps({
+      selectedFeature: feature,
+      featureSelectionSource: 'pinned',
+      scope: { r: 2 }
+    });
+    render(<Inspector {...props} />);
+    fireEvent.change(screen.getByRole('textbox', { name: 'Radius' }), {
+      target: { value: 'r * 2' }
+    });
+    expect(
+      screen.getByRole('slider', { name: 'Fillet radius slider' })
+    ).toHaveValue('4');
+    expect(props.onPreviewEdgeModifier).toHaveBeenLastCalledWith(
+      feature,
+      'fillet',
+      expect.objectContaining({ size: 'r * 2' })
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(props.onCancel).toHaveBeenCalledOnce();
+    expect(props.onApplyEdgeModifier).not.toHaveBeenCalled();
+  });
+
+  it('clears a preview and disables Apply for a nonpositive radius', () => {
+    const props = makeProps({
+      selectedFeature: feature,
+      featureSelectionSource: 'pinned'
+    });
+    render(<Inspector {...props} />);
+    fireEvent.change(screen.getByRole('textbox', { name: 'Radius' }), {
+      target: { value: '0' }
+    });
+    expect(props.onPreviewEdgeModifier).toHaveBeenLastCalledWith(
+      feature,
+      'fillet',
+      null
+    );
+    expect(screen.getByRole('button', { name: /Apply/ })).toBeDisabled();
   });
 });
