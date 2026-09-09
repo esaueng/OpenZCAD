@@ -4124,16 +4124,28 @@ export function App() {
       selectedEdges[0]?.bodyId ??
       selectedTopology?.bodyId ??
       selectedBodyIds.at(-1);
+    // A creation preview consumes its input and publishes a new body. The
+    // form must keep the committed input identity, or its key changes and
+    // remounts with the default size while the user is entering a value.
+    const committedBodies = Object.values(representations).filter(
+      (body) => !body.consumed && !hiddenBodyIds.has(body.bodyId)
+    );
     if (candidateId) {
-      const candidate = viewerBodies.find(
+      const candidate = committedBodies.find(
         (body) => body.bodyId === candidateId
       );
       if (candidate) {
         return candidate;
       }
     }
-    return viewerBodies.length === 1 ? viewerBodies[0]! : null;
-  }, [selectedBodyIds, selectedEdges, selectedTopology, viewerBodies]);
+    return committedBodies.length === 1 ? committedBodies[0]! : null;
+  }, [
+    selectedBodyIds,
+    selectedEdges,
+    selectedTopology,
+    representations,
+    hiddenBodyIds
+  ]);
 
   const exportBodyIds = useMemo<BodyId[]>(() => {
     if (!doc) {
