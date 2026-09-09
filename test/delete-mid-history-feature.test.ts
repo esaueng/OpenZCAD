@@ -180,25 +180,23 @@ describe('deleting a feature from the middle of the history', () => {
     it('carries the fillet through the intact history', async () => {
       const { volumes, warnings } = await read(await fusedAndFilleted());
       expect(volumes.slice(0, 3)).toEqual([8000, 1000, 9000]);
-      // The fillet does not land on the closed form — see
-      // test/filleted-body-volume.test.ts, where that is pinned as its own
-      // defect. What matters here is that it lands at ALL, and on the right
-      // body, so this asserts the neighbourhood rather than the exact value.
-      expect(volumes[3]!).toBeGreaterThan(9000 - CUT - 0.1);
-      expect(volumes[3]!).toBeLessThan(9000 - CUT + 0.1);
+      // The fillet lands on its closed form — see
+      // test/filleted-body-volume.test.ts, which guards that exactness — and
+      // on the right body, the big box's far edge.
+      expect(volumes[3]!).toBeCloseTo(9000 - CUT, 6);
       expect(warnings).toEqual([]);
     }, 120_000);
 
     it('re-lands the fillet on the rebuilt body when the transform goes', async () => {
       // Every stage downstream recomputes: the union drops to 8000, and the
       // fillet finds its edge again on the rebuilt body rather than failing.
-      // 7982.798 is the filleted-20-box reading, which is what says the
-      // fillet landed on the SAME edge of a now-different body.
+      // 8000 - CUT is the exact filleted-20-box reading, which is what says
+      // the fillet landed on the SAME edge of a now-different body.
       const { volumes, warnings } = await read(
         drop(await fusedAndFilleted(), 'Stack')
       );
       expect(volumes.slice(0, 3)).toEqual([8000, 1000, 8000]);
-      expect(volumes[3]!).toBeCloseTo(7982.79834915, 6);
+      expect(volumes[3]!).toBeCloseTo(8000 - CUT, 6);
       expect(warnings).toEqual([]);
     }, 120_000);
 
