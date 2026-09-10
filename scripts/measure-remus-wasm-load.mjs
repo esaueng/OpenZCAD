@@ -417,6 +417,8 @@ export async function runBenchmark(args) {
   const artifact = resolveKernelArtifact(args.dist);
   const server = await startServer(artifact);
   const samples = [];
+  const loadAverageBefore = os.loadavg();
+  const freeMemoryBeforeBytes = os.freemem();
   try {
     for (let index = 0; index < args.runs; index += 1) {
       process.stderr.write(`sample ${index + 1}/${args.runs}\r`);
@@ -446,6 +448,10 @@ export async function runBenchmark(args) {
       cpuModel: os.cpus()[0]?.model.trim() ?? null,
       logicalCpuCount: os.cpus().length,
       totalMemoryBytes: os.totalmem(),
+      freeMemoryBeforeBytes,
+      freeMemoryAfterBytes: os.freemem(),
+      loadAverageBefore,
+      loadAverageAfter: os.loadavg(),
       cpuGovernor: cpuGovernor(),
       node: process.versions.node,
       browser: first.browserVersion,
