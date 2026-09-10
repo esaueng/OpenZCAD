@@ -1,3 +1,5 @@
+import { featureHistory, featureResultBodyIds } from './lib/featureHistory';
+import { FeatureBuildError } from './lib/featureValidation';
 import { edgeModifierCommand } from './lib/edgeModifierEdit';
 import type { EdgeModifierFormValue } from './components/forms/FeatureForms';
 import { documentNodesWithHistory } from '@openzcad/shared';
@@ -464,7 +466,15 @@ import {
   resolveCurrentExtrude
 } from './lib/extrudeInference';
 import { isExtrudeSessionCurrent } from './lib/extrudeSession';
-import { ExtrudeControls } from './components/ExtrudeControls';
+import {
+  ExtrudeForm,
+  type ExtrudeFormValue
+} from './components/forms/ExtrudeForm';
+import {
+  extrudeEditCommand,
+  extrudeEditTargets,
+  extrudePreviewError
+} from './lib/extrudeEditing';
 import type {
   BodyAppearancePreview,
   FaceResizeCommit,
@@ -543,6 +553,32 @@ const LazyMeasurementDock = lazy(() =>
     default: module.MeasurementDock
   }))
 );
+const LazyFeatureHistoryPanel = lazy(() =>
+  import('./components/FeatureHistoryPanel').then((module) => ({
+    default: module.FeatureHistoryPanel
+  }))
+);
+const LazySketchWorkflow = lazy(() =>
+  import('./components/SketchWorkflow').then((module) => ({
+    default: module.SketchWorkflow
+  }))
+);
+function FeatureHistoryPanel(
+  props: ComponentProps<typeof LazyFeatureHistoryPanel>
+) {
+  return (
+    <Suspense fallback={null}>
+      <LazyFeatureHistoryPanel {...props} />
+    </Suspense>
+  );
+}
+function SketchWorkflow(props: ComponentProps<typeof LazySketchWorkflow>) {
+  return (
+    <Suspense fallback={null}>
+      <LazySketchWorkflow {...props} />
+    </Suspense>
+  );
+}
 const LazySketchToolRail = lazy(() =>
   import('./components/SketchToolRail').then((module) => ({
     default: module.SketchToolRail
@@ -1524,6 +1560,7 @@ export function App() {
     const parsed = Number(sketchPlaneOffsetText);
     return Number.isFinite(parsed) ? parsed : 0;
   })();
+  const [sketchEditError, setSketchEditError] = useState<string | null>(null);
   const [sketchDiagnosticPoints, setSketchDiagnosticPoints] = useState<
     { x: number; y: number }[]
   >([]);
@@ -2265,6 +2302,11 @@ export function App() {
    * overlap; an explicit operation never falls back to another operation.
    */
   const regionExtrudeCommitRequest = useRef(0);
+  const regionExtrudeSettings = useRef<ExtrudeFormValue | null>(null);
+  const regionDistanceSetter = useRef<((value: ParamValue) => void) | null>(
+    null
+  );
+  const extrudeEditRequest = useRef(0);
   const regionExtrudePreview = useRef(
     new LivePreview<
       RegionExtrudePreviewCandidate,
@@ -2291,7 +2333,8 @@ export function App() {
           document: command.apply(base),
           base,
           input: command.payload,
-          choice: current.extrudeChoice ?? { operation: 'automatic' },
+          choice: regionExtrudeSettings.current?.choice ??
+            current.extrudeChoice ?? { operation: 'automatic' },
           ...(sketchNode?.planeRef.type === 'face'
             ? {
                 faceAttachment: {
@@ -2452,6 +2495,37 @@ export function App() {
   // reservation it took back to the run that adopts it: two callbacks pulled
   // out separately could be wired from different hook instances, and a
   // reservation the run does not recognise degrades in silence.
+  const [historyFailure, setHistoryFailure] = useState<{
+    projectId: string;
+    version: number;
+    error: FeatureBuildError;
+  } | null>(null);
+  function recordHistoryFailure(
+    error: FeatureBuildError,
+    base?: ProjectDocument
+  ) {
+    const current = managerRef.current?.document;
+    if (
+      !current ||
+      !error.featureId ||
+      (base &&
+        (base.projectId !== current.projectId ||
+          base.version !== current.version)) ||
+      !listFeaturesInOrder(current).some(
+        (feature) => feature.featureId === error.featureId
+      )
+    )
+      return;
+    setHistoryFailure({
+      projectId: current.projectId,
+      version: current.version,
+      error
+    });
+    setPanelState((state) => ({
+      ...state,
+      sidebarSections: { ...state.sidebarSections, history: true }
+    }));
+  }
   const validatedFeature = useValidatedFeatureCommit({
     manager: () => managerRef.current,
     derive: (document) => geometry.syncOnce(document),
@@ -2461,12 +2535,14 @@ export function App() {
       executeTransaction(label, commands, derived ?? undefined),
     onBusy: setBusy,
     onStatus: setStatus,
-    onFailure: setFeatureFormError
+    onFailure: setFeatureFormError,
+    onRejection: recordHistoryFailure
   });
   const executeValidatedFeature = validatedFeature.run;
   const edgeFormCandidate = useRef<{
     command: AnyCommand;
     bodyId: BodyId;
+    extrude?: FeatureId;
   } | null>(null);
   const edgeFormPreview = useRef(
     new LivePreview<ProjectDocument, ProjectDocument['derived']>({
@@ -2480,7 +2556,11 @@ export function App() {
       derive: (document) => geometry.syncOnce(document),
       publish: (preview) => {
         const bodyId = edgeFormCandidate.current?.bodyId;
-        const warning = preview?.derived.warnings[0];
+        const extrude = edgeFormCandidate.current?.extrude;
+        const warning =
+          preview && extrude
+            ? extrudePreviewError(preview.document, extrude, preview.derived)
+            : preview?.derived.warnings[0];
         const valid =
           preview &&
           bodyId &&
@@ -2490,6 +2570,12 @@ export function App() {
           valid ? { ...preview.document, derived: preview.derived } : null
         );
         if (preview) {
+          if (edgeFormCandidate.current?.extrude) {
+            setFeatureFormError(
+              warning ??
+                (valid ? null : 'This extrusion did not produce a valid body.')
+            );
+          }
           setStatus(
             warning ??
               (valid
@@ -2500,7 +2586,9 @@ export function App() {
       },
       onFailure: ({ error }) => {
         setPreviewDoc(null);
-        setStatus(errorMessage(error, 'Unable to preview this size.'));
+        const message = errorMessage(error, 'Unable to preview this size.');
+        if (edgeFormCandidate.current?.extrude) setFeatureFormError(message);
+        setStatus(message);
       },
       // The form stays open after release, so its latest value must catch up.
       continueAfterSlow: true
@@ -2546,6 +2634,48 @@ export function App() {
       edgeFormPreview.clear();
       setStatus(errorMessage(error, 'Unable to preview this size.'));
     }
+  }
+
+  function previewExtrudeForm(
+    feature: FeatureNode,
+    value: ExtrudeFormValue | null
+  ) {
+    edgeFormPreview.clear();
+    setFeatureFormError(null);
+    if (!value || busy || !feature.bodyId || !managerRef.current) return;
+    try {
+      const command = extrudeEditCommand(feature, value);
+      command.validate(managerRef.current.document);
+      edgeFormCandidate.current = {
+        command,
+        bodyId: feature.bodyId,
+        extrude: feature.featureId
+      };
+      edgeFormPreview.request(
+        Math.abs(resolveParamValue(value.distance, parameterScope.scope))
+      );
+    } catch (error) {
+      setFeatureFormError(
+        errorMessage(error, 'Unable to preview this extrusion.')
+      );
+    }
+  }
+
+  function applyExtrudeForm(feature: FeatureNode, value: ExtrudeFormValue) {
+    if (busy || !feature.bodyId || !doc) return;
+    edgeFormPreview.clear();
+    const request = ++extrudeEditRequest.current;
+    void executeValidatedFeature(extrudeEditCommand(feature, value), {
+      featureName: value.name,
+      featureId: feature.featureId,
+      resultBodyId: feature.bodyId,
+      targets: affectedFeatureTargets(doc, feature.featureId).map(
+        (target, index) =>
+          index === 0 ? { ...target, featureName: value.name } : target
+      ),
+      successMessage: `Edit ${value.name}`,
+      cancelled: () => request !== extrudeEditRequest.current
+    });
   }
 
   function applyEdgeForm(
@@ -4094,6 +4224,12 @@ export function App() {
     return true;
   }
 
+  const availableExtrudeTargets = useMemo(
+    () =>
+      doc && selectedFeature ? extrudeEditTargets(doc, selectedFeature) : [],
+    [doc, selectedFeature]
+  );
+
   const selectedSketch = useMemo<SketchNode | null>(() => {
     if (
       !doc ||
@@ -4969,6 +5105,7 @@ export function App() {
   }
 
   function cancelPanel() {
+    extrudeEditRequest.current += 1;
     edgeFormPreview.clear();
     exactEntryQueue.cancel();
     setFeatureFormError(null);
@@ -9113,6 +9250,15 @@ export function App() {
     setLastValidPreview(null);
   }, [offsetInteractionKey, offsetPreview]);
 
+  const regionSketchKey =
+    interaction.mode === 'region' ? interaction.target.sketchId : null;
+  useEffect(() => {
+    regionExtrudeSettings.current = null;
+  }, [regionSketchKey]);
+  useEffect(() => {
+    extrudeEditRequest.current += 1;
+  }, [requestedFeatureNodeId, doc?.projectId]);
+
   const regionInteractionKey =
     interaction.mode === 'region'
       ? `${interaction.target.sketchId}:${interaction.target.regionFingerprint}:${JSON.stringify(interaction.extrudeChoice)}`
@@ -9122,8 +9268,18 @@ export function App() {
     setPreviewDeferred(false);
     setLastValidPreview(null);
     const current = interactionRef.current;
-    if (current.mode === 'region' && current.lastValue) {
-      regionExtrudePreview.request(current.lastValue);
+    if (current.mode === 'region') {
+      const distance =
+        regionExtrudeSettings.current?.distance ?? current.lastValue;
+      if (distance) {
+        try {
+          regionExtrudePreview.request(
+            resolveParamValue(distance, parameterScopeRef.current.scope)
+          );
+        } catch {
+          // Incomplete expressions keep the form open without a preview.
+        }
+      }
     }
   }, [regionInteractionKey, regionExtrudePreview]);
 
@@ -9345,15 +9501,11 @@ export function App() {
       setStatus('The active sketch is unavailable.');
       return;
     }
-    const objects = sketch.objectIds.flatMap((objectId) => {
-      const node = doc.nodes[objectId];
-      return node?.kind === 'sketch-object'
-        ? [{ id: objectId, data: node.data }]
-        : [];
-    });
-    const analysis = computeSketchProfileAnalysis(objects, (value) =>
-      resolveParamValue(value, parameterScope.scope, 'sketch dimension')
-    );
+    const analysis = sketchOverview.analysis;
+    if (!analysis) {
+      setStatus(sketchOverview.error ?? 'The sketch could not be analyzed.');
+      return;
+    }
     const actionable = analysis.diagnostics.filter(
       (diagnostic) =>
         diagnostic.severity !== 'info' || diagnostic.code === 'open-endpoint'
@@ -9387,34 +9539,93 @@ export function App() {
     );
   }
 
-  function handleUpdateSketchEntity(data: SketchObjectData) {
+  async function commitSketchEdit(
+    base: ProjectDocument,
+    sketchId: SketchId,
+    commands: AnyCommand[],
+    label: string,
+    objectId?: string
+  ) {
+    const { checkSketchEdit } = await import('./lib/sketch/editing');
+    const derived = await checkSketchEdit(
+      base,
+      sketchId,
+      commands,
+      (document) => geometry.syncOnce(document)
+    );
+    const live = managerRef.current?.document;
+    const current = interactionRef.current;
     if (
-      interaction.mode !== 'sketch' ||
-      !interaction.session.sketchId ||
-      !interaction.session.selectedObjectId
+      !live ||
+      live.projectId !== base.projectId ||
+      live.version !== base.version ||
+      current.mode !== 'sketch' ||
+      current.session.sketchId !== sketchId ||
+      (objectId !== undefined && current.session.selectedObjectId !== objectId)
     ) {
-      return;
+      return false;
     }
-    const selectedNode =
-      doc?.nodes[interaction.session.selectedObjectId as EntityId];
+    return executeTransaction(label, commands, derived);
+  }
+
+  async function handleUpdateSketchEntity(data: SketchObjectData) {
+    const base = managerRef.current?.document;
+    const current = interactionRef.current;
+    if (
+      !base ||
+      current.mode !== 'sketch' ||
+      !current.session.sketchId ||
+      !current.session.selectedObjectId ||
+      sketchSolving ||
+      busy
+    )
+      return;
+    const sketchId = current.session.sketchId as SketchId;
+    const objectId = current.session.selectedObjectId as EntityId;
+    const selected = base.nodes[objectId];
     const nextData =
-      selectedNode?.kind === 'sketch-object' && selectedNode.data.construction
+      selected?.kind === 'sketch-object' && selected.data.construction
         ? { ...data, construction: true }
         : data;
+    setSketchSolving(true);
+    setSketchEditError(null);
     setSketchDiagnosticPoints([]);
-    if (
-      executeCommand(
-        commandFactories.updateSketchObject(
-          {
-            sketchId: interaction.session.sketchId as SketchId,
-            objectId: interaction.session.selectedObjectId as EntityId,
-            data: nextData
-          },
-          `Edit ${data.objectKind}`
+    try {
+      const { sketchEntityEditCommands } = await import('./lib/sketch/editing');
+      const commands = await sketchEntityEditCommands(
+        base,
+        sketchId,
+        objectId,
+        nextData,
+        (document, id) => geometry.solveSketch(document, id)
+      );
+      if (
+        await commitSketchEdit(
+          base,
+          sketchId,
+          commands,
+          `Edit ${data.objectKind}`,
+          objectId
         )
+      ) {
+        setStatus(`Updated ${data.objectKind} geometry.`);
+        setSketchSolveStatus(null);
+      }
+    } catch (error) {
+      if (error instanceof FeatureBuildError) recordHistoryFailure(error, base);
+      const message = errorMessage(
+        error,
+        'The sketch edit could not be applied.'
+      );
+      if (
+        interactionRef.current.mode === 'sketch' &&
+        interactionRef.current.session.sketchId === sketchId &&
+        interactionRef.current.session.selectedObjectId === objectId
       )
-    ) {
-      setStatus(`Updated ${data.objectKind} geometry.`);
+        setSketchEditError(message);
+      setStatus(message);
+    } finally {
+      setSketchSolving(false);
     }
   }
 
@@ -9446,8 +9657,31 @@ export function App() {
   // ---------------------------------------------------------------------
   // Sketch constraints: pick routing, driving-value entry, CRUD, and solve.
   // ---------------------------------------------------------------------
-  const [sketchSolveStatus, setSketchSolveStatus] =
-    useState<SketchSolveStatus | null>(null);
+  const [sketchSolveSnapshot, setSketchSolveSnapshot] = useState<{
+    version: number;
+    sketchId: string | null;
+    status: SketchSolveStatus;
+  } | null>(null);
+  function setSketchSolveStatus(status: SketchSolveStatus | null) {
+    setSketchSolveSnapshot(
+      status
+        ? {
+            version: managerRef.current?.document.version ?? 0,
+            sketchId:
+              interactionRef.current.mode === 'sketch'
+                ? interactionRef.current.session.sketchId
+                : null,
+            status
+          }
+        : null
+    );
+  }
+  const sketchSolveStatus =
+    sketchSolveSnapshot?.version === doc?.version &&
+    interaction.mode === 'sketch' &&
+    sketchSolveSnapshot?.sketchId === interaction.session.sketchId
+      ? sketchSolveSnapshot.status
+      : null;
   const [sketchSolving, setSketchSolving] = useState(false);
   const [sketchDimensionDraft, setSketchDimensionDraft] = useState<{
     kind: DrivingDimensionKind | 'radius';
@@ -9472,6 +9706,36 @@ export function App() {
     interaction.mode === 'sketch' && interaction.session.sketchId && doc
       ? (findSketch(doc, interaction.session.sketchId as SketchId) ?? null)
       : null;
+
+  const sketchOverview = useMemo(() => {
+    const objects =
+      editingSketchNode?.objectIds.flatMap((id) => {
+        const node = doc?.nodes[id];
+        return node?.kind === 'sketch-object'
+          ? [{ id, data: node.data, label: node.name || node.data.objectKind }]
+          : [];
+      }) ?? [];
+    try {
+      return {
+        objects,
+        analysis: computeSketchProfileAnalysis(objects, (value) =>
+          resolveParamValue(value, parameterScope.scope, 'sketch dimension')
+        ),
+        error: null
+      };
+    } catch (error) {
+      return {
+        objects,
+        analysis: null,
+        error: errorMessage(error, 'Unable to analyze this sketch.')
+      };
+    }
+  }, [editingSketchNode, doc, parameterScope.scope]);
+
+  useEffect(() => {
+    setSketchDiagnosticPoints([]);
+    setSketchEditError(null);
+  }, [doc?.version, editingSketchNode?.sketchId]);
 
   const sketchConstraintItems = useMemo(() => {
     if (!editingSketchNode || !doc) {
@@ -9515,7 +9779,9 @@ export function App() {
         kind: data.constraintKind,
         label: describeConstraint(data, nameOf),
         editable:
-          data.constraintKind === 'distance' || data.constraintKind === 'angle'
+          data.constraintKind === 'distance' ||
+          data.constraintKind === 'angle' ||
+          data.constraintKind === 'radius'
       }));
   }, [editingSketchNode, doc, selectedSketchEntity]);
 
@@ -9812,11 +10078,13 @@ export function App() {
         prospective = command.apply(prospective);
       }
     } catch (error) {
+      if (error instanceof FeatureBuildError) recordHistoryFailure(error, base);
       setStatus(errorMessage(error, `${spec.label} dimension is invalid.`));
       return;
     }
 
     setSketchSolving(true);
+    setSketchEditError(null);
     setStatus(`Solving ${spec.label.toLowerCase()} dimension…`);
     try {
       const outcome = await geometry.solveSketch(prospective, sketchId);
@@ -9844,6 +10112,9 @@ export function App() {
               : 'warn'
       });
       if (!outcome.converged || outcome.rolledBack) {
+        setSketchEditError(
+          `${spec.label} dimension conflicts with existing constraints. Edit or remove a conflicting constraint; no change was applied.`
+        );
         setStatus(
           `${spec.label} dimension refused: ${solveStatusLabel(outcome)}; no change was applied.`
         );
@@ -9858,14 +10129,27 @@ export function App() {
         ? `Edit ${spec.label.toLowerCase()} dimension`
         : `Add ${spec.label.toLowerCase()} dimension`;
       if (
-        executeTransaction(label, [...dimensionCommands, ...solvedCommands])
+        await commitSketchEdit(
+          base,
+          sketchId,
+          [...dimensionCommands, ...solvedCommands],
+          label
+        )
       ) {
+        setSketchSolveStatus({
+          label: solveStatusLabel(outcome),
+          tone: outcome.classification === 'solved' ? 'ok' : 'info'
+        });
         setStatus(
           `${spec.label} dimension ${draft.constraintId ? 'updated' : 'added'} · ${solveStatusLabel(outcome)}.`
         );
       }
     } catch (error) {
+      if (error instanceof FeatureBuildError) recordHistoryFailure(error, base);
       setSketchSolveStatus({ label: 'Solve failed', tone: 'warn' });
+      setSketchEditError(
+        errorMessage(error, 'The sketch could not be solved.')
+      );
       setStatus(
         errorMessage(error, `${spec.label} dimension could not be solved.`)
       );
@@ -10001,6 +10285,7 @@ export function App() {
   }
 
   async function handleSolveSketch() {
+    setSketchEditError(null);
     if (!doc || !editingSketchNode || sketchSolving) {
       return;
     }
@@ -10041,6 +10326,9 @@ export function App() {
               : 'warn'
       });
       if (!outcome.converged || outcome.rolledBack) {
+        setSketchEditError(
+          'Constraints did not solve. Edit or remove a conflicting constraint; no geometry was changed.'
+        );
         setStatus('Constraints did not solve; sketch geometry left unchanged.');
         return;
       }
@@ -10053,13 +10341,23 @@ export function App() {
         setStatus('Sketch already satisfies its constraints.');
         return;
       }
-      if (executeTransaction('Solve sketch', commands)) {
+      if (
+        await commitSketchEdit(base, startedSketchId, commands, 'Solve sketch')
+      ) {
+        setSketchSolveStatus({
+          label: solveStatusLabel(outcome),
+          tone: outcome.classification === 'solved' ? 'ok' : 'info'
+        });
         setStatus(
           `Solved sketch · ${commands.length} ${commands.length === 1 ? 'entity' : 'entities'} updated · ${solveStatusLabel(outcome)}.`
         );
       }
     } catch (error) {
+      if (error instanceof FeatureBuildError) recordHistoryFailure(error, base);
       setSketchSolveStatus({ label: 'Solve failed', tone: 'warn' });
+      setSketchEditError(
+        errorMessage(error, 'The sketch could not be solved.')
+      );
       setStatus(
         error instanceof Error
           ? `Sketch solve failed: ${error.message}`
@@ -10355,9 +10653,11 @@ export function App() {
             }
           ];
     return {
-      name: 'Extrude',
+      name: regionExtrudeSettings.current?.name ?? 'Extrude',
       sketchId: target.sketchId as SketchId,
       distance,
+      symmetric: regionExtrudeSettings.current?.symmetric ?? false,
+      backDistance: regionExtrudeSettings.current?.backDistance ?? 0,
       profiles: profileReferencesForSelection(profiles, entityWideProfileSource)
     };
   }
@@ -10380,7 +10680,7 @@ export function App() {
     return true;
   }
 
-  /** Region-extrude drag released (or exact entry): commit the feature. */
+  /** Confirm the region extrusion from the shared editor or numeric keypad. */
   function handleRegionExtrudeCommit(distance: number, exact?: ParamValue) {
     if (interaction.mode !== 'region' || interaction.phase === 'validating') {
       return;
@@ -10393,9 +10693,10 @@ export function App() {
     regionExtrudePreview.clear();
     setPreviewDeferred(false);
     const input = regionExtrudeInputFor(target, exact ?? rounded);
-    const choice = interaction.extrudeChoice ?? {
-      operation: 'automatic' as const
-    };
+    const choice = regionExtrudeSettings.current?.choice ??
+      interaction.extrudeChoice ?? {
+        operation: 'automatic' as const
+      };
     const session = interaction;
     const selected = selectedProfilesRef.current;
     const request = ++regionExtrudeCommitRequest.current;
@@ -11963,7 +12264,14 @@ export function App() {
     handleSelectFeatureFromTree(node.id);
   }
 
-  function handleSelectFeatureFromTree(nodeId: string) {
+  function handleOpenHistoryFeature(nodeId: string) {
+    setFeatureFormError(null);
+    setSketchEditError(null);
+    handleSelectFeatureFromTree(nodeId, false);
+  }
+
+  function handleSelectFeatureFromTree(nodeId: string, toggle = true) {
+    extrudeEditRequest.current += 1;
     setTool(null);
     setSelectedTopology(null);
     setSelectedEdges([]);
@@ -11972,12 +12280,14 @@ export function App() {
     // running against geometry the panel no longer shows.
     dispatchInteraction({ type: 'clear' });
     const next =
-      featureSelectionSource === 'pinned' && selectedFeatureNodeId === nodeId
+      toggle &&
+      featureSelectionSource === 'pinned' &&
+      selectedFeatureNodeId === nodeId
         ? null
         : nodeId;
     selectFeatureNode(next, 'pinned');
     const node = next && doc ? doc.nodes[next] : undefined;
-    const bodyId = node?.kind === 'feature' ? node.bodyId : undefined;
+
     const sourceSketchId =
       node?.kind === 'feature' &&
       (node.data.featureKind === 'sketch' ||
@@ -12057,12 +12367,22 @@ export function App() {
     } else {
       setSelectedProfiles([]);
     }
-    const representation = bodyId
-      ? doc?.derived.bodyRepresentations[bodyId]
-      : undefined;
-    setSelectedBodyIds(
-      bodyId && representation && !representation.consumed ? [bodyId] : []
-    );
+    const visible = (id: BodyId) => {
+      const result = doc?.derived.bodyRepresentations[id];
+      return result && !result.consumed && !hiddenBodyIds.has(id);
+    };
+    const direct =
+      node?.kind === 'feature'
+        ? featureResultBodyIds(node).filter(visible)
+        : [];
+    const descendants =
+      node?.kind === 'feature' && doc
+        ? featureHistory(doc)
+            .downstream(node.featureId)
+            .flatMap(featureResultBodyIds)
+            .filter(visible)
+        : [];
+    setSelectedBodyIds([...new Set(direct.length ? direct : descendants)]);
   }
 
   function handleSelectBodyFromTree(bodyId: BodyId, additive: boolean) {
@@ -12134,9 +12454,7 @@ export function App() {
   function handleDeleteFeature(featureId: FeatureId, name: string) {
     // Counted before the delete: afterwards the source is gone and the walk
     // has nothing to start from.
-    const dependents = doc
-      ? affectedFeatureTargets(doc, featureId).slice(1)
-      : [];
+    const dependents = doc ? featureHistory(doc).downstream(featureId) : [];
     if (
       executeCommand(
         commandFactories.deleteFeature({ featureId }, `Delete ${name}`)
@@ -12180,6 +12498,28 @@ export function App() {
     );
   }
 
+  function handleResumeHistory() {
+    const commands = features
+      .filter(isFeatureRollbackSuppressed)
+      .map((feature) =>
+        commandFactories.setNodeMetadata(
+          {
+            nodeId: feature.id,
+            metadata: { [FEATURE_ROLLBACK_SUPPRESSED_METADATA_KEY]: null }
+          },
+          `Resume ${feature.name}`
+        )
+      );
+    if (
+      commands.length &&
+      executeTransaction('Resume full history', commands)
+    ) {
+      announce(
+        'Full history resumed. Manually suppressed features remain suppressed.'
+      );
+    }
+  }
+
   function handleRollbackAfterFeature(featureId: FeatureId, name: string) {
     const markerIndex = features.findIndex(
       (feature) => feature.featureId === featureId
@@ -12213,7 +12553,9 @@ export function App() {
       setStatus(`History is already rolled back after ${name}.`);
       return;
     }
-    executeTransaction(`Roll back after ${name}`, commands);
+    if (executeTransaction(`Roll back after ${name}`, commands)) {
+      announce(`History rolled back after ${name}. Later features are paused.`);
+    }
   }
 
   function openContextMenu(
@@ -13664,9 +14006,63 @@ export function App() {
 
   // The sketch rail floats over the viewport in the classic layout and sits
   // in the column.
+  const sketchOverviewPlane =
+    editingSketchNode?.planeRef ??
+    (interaction.mode === 'sketch' ? interaction.session.plane : null);
   const sketchRail =
     interaction.mode === 'sketch' ? (
       <SketchToolRail
+        workflow={
+          <SketchWorkflow
+            plane={
+              sketchOverviewPlane?.type === 'canonical'
+                ? `${sketchOverviewPlane.plane} plane`
+                : sketchOverviewPlane?.type === 'face'
+                  ? 'Attached face'
+                  : 'Sketch plane'
+            }
+            tool={
+              interaction.session.pendingConstraint
+                ? `${constraintToolSpec(interaction.session.pendingConstraint.kind).label}: ${interaction.session.pendingConstraint.picks.length}/${constraintToolSpec(interaction.session.pendingConstraint.kind).picks} selected`
+                : interaction.session.tool
+            }
+            objects={sketchOverview.objects}
+            selectedId={interaction.session.selectedObjectId}
+            analysis={sketchOverview.analysis}
+            analysisError={sketchOverview.error}
+            geometrySnaps={appSettings.sketching.geometrySnapEnabled}
+            gridSnaps={appSettings.sketching.snapEnabled}
+            busy={sketchSolving || busy}
+            error={
+              interaction.session.selectedObjectId ? null : sketchEditError
+            }
+            onSelect={(objectId) => {
+              setSketchEditError(null);
+              dispatchInteraction({ type: 'sketch-select-object', objectId });
+            }}
+            onGeometrySnaps={() =>
+              handleAppSettingsChange({
+                ...appSettingsRef.current,
+                sketching: {
+                  ...appSettingsRef.current.sketching,
+                  geometrySnapEnabled:
+                    !appSettingsRef.current.sketching.geometrySnapEnabled
+                }
+              })
+            }
+            onGridSnaps={() =>
+              handleAppSettingsChange({
+                ...appSettingsRef.current,
+                sketching: {
+                  ...appSettingsRef.current.sketching,
+                  snapEnabled: !appSettingsRef.current.sketching.snapEnabled
+                }
+              })
+            }
+            onDiagnose={showProfileDiagnostics}
+          />
+        }
+        canExtrude={Boolean(sketchOverview.analysis?.profiles.length)}
         tool={interaction.session.tool}
         circleMode={interaction.session.circleMode}
         construction={sketchConstruction}
@@ -13729,6 +14125,21 @@ export function App() {
       hiddenBodyIds={hiddenBodyIds}
       hiddenSketchIds={hiddenSketchIds}
       warnings={warnings}
+      historyDetails={
+        <FeatureHistoryPanel
+          document={doc}
+          selectedId={selectedFeatureNodeId}
+          failure={
+            historyFailure?.projectId === doc.projectId &&
+            historyFailure.version === doc.version
+              ? historyFailure.error
+              : null
+          }
+          onSelect={handleOpenHistoryFeature}
+          onResumeHistory={handleResumeHistory}
+          onDismissFailure={() => setHistoryFailure(null)}
+        />
+      }
       checkpoints={doc?.checkpoints ?? []}
       documentVersion={doc?.version ?? 0}
       restorableCheckpointIds={restorableCheckpointIds}
@@ -13797,6 +14208,9 @@ export function App() {
           aria-label="Finish Sketch"
           onClick={() => {
             dispatchInteraction({ type: 'exit-sketch' });
+            setTool(null);
+            setSketchEditError(null);
+            setSketchDiagnosticPoints([]);
             setStatus(
               `${editingSketchName} finished · sketch edits preserved.`
             );
@@ -14101,7 +14515,17 @@ export function App() {
             moveValuesSetterRef={moveValuesSetterRef}
             offsetHandle={modelingLocked ? null : offsetHandleTarget}
             onOffsetPreview={handleOffsetPreview}
-            onOffsetCommit={handleOffsetCommit}
+            onOffsetCommit={(value) => {
+              if (interactionRef.current.mode === 'region') {
+                regionDistanceSetter.current?.(Math.round(value * 1000) / 1000);
+                dispatchInteraction({ type: 'drag-release' });
+                setStatus(
+                  'Extrude preview · adjust the settings, then Create to save.'
+                );
+                return true;
+              }
+              return handleOffsetCommit(value);
+            }}
             onOffsetCancel={handleOffsetCancel}
             offsetPreviewInvalid={
               isOperationState(interaction) && interaction.phase === 'failed'
@@ -14269,12 +14693,17 @@ export function App() {
                       cancelableWhileValidating={interaction.mode === 'region'}
                       children={
                         interaction.mode === 'region' ? (
-                          <ExtrudeControls
-                            choice={
-                              interaction.extrudeChoice ?? {
-                                operation: 'automatic'
-                              }
-                            }
+                          <ExtrudeForm
+                            key={`extrude-${interaction.target.sketchId}`}
+                            creating
+                            initial={{
+                              name: 'Extrude',
+                              sketchId: interaction.target.sketchId as SketchId,
+                              distance: 0
+                            }}
+                            sketches={sketchOptions}
+                            scope={parameterScope.scope}
+                            profileCount={Math.max(1, selectedProfiles.length)}
                             bodies={doc.bodyOrder.flatMap((bodyId) => {
                               const body =
                                 doc.derived.bodyRepresentations[bodyId];
@@ -14285,14 +14714,56 @@ export function App() {
                             disabled={
                               busy || interaction.phase === 'validating'
                             }
-                            onChange={(choice) =>
+                            submitLabel="Create"
+                            distanceSetterRef={regionDistanceSetter}
+                            onDraft={(value) => {
+                              regionExtrudeSettings.current = value;
                               dispatchInteraction({
                                 type: 'set-extrude-choice',
-                                choice
-                              })
-                            }
-                            onDistance={() =>
-                              handleOpenOffsetKeypad(interaction.lastValue ?? 0)
+                                choice: value.choice
+                              });
+                            }}
+                            onPreview={(value) => {
+                              regionExtrudePreview.clear();
+                              setLastValidPreview(null);
+                              if (!value) return;
+                              offsetSetterRef.current?.(
+                                resolveParamValue(
+                                  value.distance,
+                                  parameterScope.scope
+                                )
+                              );
+                              dispatchInteraction({
+                                type: 'set-extrude-choice',
+                                choice: value.choice
+                              });
+                              regionExtrudePreview.request(
+                                resolveParamValue(
+                                  value.distance,
+                                  parameterScope.scope
+                                )
+                              );
+                            }}
+                            onSubmit={(value) => {
+                              regionExtrudeSettings.current = value;
+                              handleRegionExtrudeCommit(
+                                resolveParamValue(
+                                  value.distance,
+                                  parameterScope.scope
+                                ),
+                                value.distance
+                              );
+                            }}
+                            onCancel={() => {
+                              if (cancelPendingRegionExtrusion()) return;
+                              regionExtrudePreview.clear();
+                              dispatchInteraction({ type: 'clear' });
+                              cancelPanel();
+                            }}
+                            onDistance={(value) =>
+                              handleOpenOffsetKeypad(
+                                resolveParamValue(value, parameterScope.scope)
+                              )
                             }
                           />
                         ) : undefined
@@ -14319,10 +14790,14 @@ export function App() {
                   )}
                   {interaction.mode === 'sketch' && selectedSketchEntity && (
                     <SketchEntityEditor
-                      key={selectedSketchEntity.id}
+                      key={`${selectedSketchEntity.id}:${doc.version}`}
+                      disabled={sketchSolving || busy}
+                      error={sketchEditError}
                       data={selectedSketchEntity.data}
                       scope={parameterScope.scope}
-                      onApply={handleUpdateSketchEntity}
+                      onApply={(data) => {
+                        void handleUpdateSketchEntity(data);
+                      }}
                       onDelete={handleDeleteSketchEntity}
                       constraints={selectedEntityConstraints}
                       constraintTools={selectedEntityConstraintTools}
@@ -14918,6 +15393,8 @@ export function App() {
                   }
                   const sketch = findSketch(doc, feature.data.sketchId);
                   if (sketch) {
+                    selectFeatureNode(null, 'pinned');
+                    setTool(null);
                     dispatchInteraction({
                       type: 'enter-sketch',
                       plane: sketch.planeRef,
@@ -14931,36 +15408,10 @@ export function App() {
                     );
                   }
                 }}
-                onApplyExtrude={(feature, value) => {
-                  if (
-                    feature.data.featureKind !== 'extrude' ||
-                    value.sketchId !== feature.data.sketchId
-                  ) {
-                    setStatus(
-                      'Changing an Extrude source sketch requires profile reselection.'
-                    );
-                    return;
-                  }
-                  executeCommand(
-                    commandFactories.updateFeature(
-                      {
-                        featureId: feature.featureId,
-                        name: value.name,
-                        data: {
-                          ...feature.data,
-                          distance: value.distance,
-                          // Stored explicitly on edits: updateFeature patches
-                          // keys and cannot delete one, so unchecking must
-                          // write false rather than omit the key — and a
-                          // cleared back distance writes the explicit 0.
-                          symmetric: value.symmetric === true,
-                          backDistance: value.backDistance ?? 0
-                        }
-                      },
-                      `Edit ${value.name}`
-                    )
-                  );
-                }}
+                extrudeBusy={busy}
+                onApplyExtrude={applyExtrudeForm}
+                onPreviewExtrude={previewExtrudeForm}
+                extrudeTargets={availableExtrudeTargets}
                 onApplyRevolve={(feature, value) =>
                   executeCommand(
                     commandFactories.updateFeature(

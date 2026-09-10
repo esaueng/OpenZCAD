@@ -138,6 +138,7 @@ interface SidebarProps {
   /** Sketches currently hidden — consumed by default, or by the eye toggle. */
   hiddenSketchIds: ReadonlySet<string>;
   warnings: string[];
+  historyDetails?: ReactNode;
   checkpoints: ProjectCheckpoint[];
   /** The open document's version, to mark the save point it sits on. */
   documentVersion: number;
@@ -198,6 +199,7 @@ export function Sidebar({
   hiddenBodyIds,
   hiddenSketchIds,
   warnings,
+  historyDetails,
   checkpoints,
   documentVersion,
   restorableCheckpointIds,
@@ -420,6 +422,7 @@ export function Sidebar({
         {...(historyScrub !== undefined ? { summary: historyScrub } : {})}
         onToggle={onToggleSection}
       >
+        {historyDetails}
         <div className="feature-list">
           {features.length === 0 && (
             <p className="muted sidebar-hint">
