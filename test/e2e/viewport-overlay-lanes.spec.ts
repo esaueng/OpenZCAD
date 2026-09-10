@@ -66,6 +66,36 @@ test('viewport dock and toast clear the column at phone width', async ({
   const toastBox = await toast.boundingBox();
   expect(toastBox).not.toBeNull();
   expect(toastBox!.x).toBeGreaterThanOrEqual(right);
+
+  // Clearing the column is not enough on its own: 378px of dock into the
+  // 194px that is left ran four of its ten buttons off the right edge
+  // instead. The dock keeps to the lane and scrolls.
+  const dockPill = page.locator('.viewport-dock');
+  const pillBox = await dockPill.boundingBox();
+  expect(pillBox).not.toBeNull();
+  expect(pillBox!.x + pillBox!.width).toBeLessThanOrEqual(390);
+
+  const reach = await dockPill.evaluate((el) => {
+    const buttons = [...el.querySelectorAll('button')];
+    const start = el.scrollLeft;
+    const visible = () => {
+      const clip = el.getBoundingClientRect();
+      return buttons
+        .filter((button) => {
+          const r = button.getBoundingClientRect();
+          return r.left >= clip.left - 0.5 && r.right <= clip.right + 0.5;
+        })
+        .map((button) => button.getAttribute('aria-label') ?? '');
+    };
+    el.scrollLeft = 0;
+    const reachable = new Set(visible());
+    el.scrollLeft = el.scrollWidth;
+    visible().forEach((label) => reachable.add(label));
+    el.scrollLeft = start;
+    return { total: buttons.length, reachable: reachable.size };
+  });
+  expect(reach.total).toBeGreaterThan(0);
+  expect(reach.reachable).toBe(reach.total);
 });
 
 test('orientation cube labels keep viewport text in both themes', async ({
