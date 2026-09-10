@@ -162,8 +162,8 @@ export function Tooltip({
       if (event.key !== 'Escape') {
         return;
       }
-      event.preventDefault();
-      event.stopPropagation();
+      // Escape still belongs to the workspace's command ladder. Closing help
+      // must not consume the same key that cancels the active CAD operation.
       dismissedRef.current = true;
       closeTooltip();
     };
