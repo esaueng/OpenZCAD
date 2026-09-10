@@ -16,6 +16,7 @@
     "build:desktop": "pnpm --filter @openzcad/desktop build",
     "build:desktop:app": "pnpm --filter @openzcad/desktop build:app",
     "build:report": "pnpm --filter @openzcad/web build && node scripts/report-bundle-sizes.mjs",
+    "perf:remus-wasm": "node scripts/measure-remus-wasm-load.mjs",
     "typecheck": "pnpm exec tsc -p tsconfig.json --noEmit",
     "test": "vitest run && pnpm --filter @openzcad/web test",
     "test:coverage": "vitest run --coverage",
