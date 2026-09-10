@@ -34,6 +34,8 @@ Use the hosted beta at [zcad.app](https://zcad.app/).
 
 ## Quick start
 
+See [Contributing](CONTRIBUTING.md) for development and pull request guidance, and [Security](SECURITY.md) for vulnerability reporting.
+
 Requires Node.js 20.19+ on the 20.x line, or Node.js 22.12+, and pnpm 10.
 
 ```bash
@@ -152,7 +154,7 @@ Interaction and startup performance are measured, not guessed — see [docs/perf
 OZ_PERF=1 pnpm exec playwright test interaction-probe
 ```
 
-The exact adapter and Remus WASM load lazily inside the geometry worker on the first non-empty rebuild or export. The manifest follows Remus `main`, while `pnpm-lock.yaml` freezes one immutable source commit for reproducible installs. OpenCascade is no longer part of the adapter at all, so neither its ~22 MB WASM nor any code that reaches it is emitted into the bundle. Canonical rebuild results use a worker-local LRU capped at 8 entries and 32 MiB, with at most 4 distinct loads in flight. Cache hits are structured-cloned and exports remain uncached caller-owned work. See [ADR-015](docs/adrs/ADR-015-bounded-exact-rebuild-cache.md) and the measured bundle inventory in [docs/performance-baseline.md](docs/performance-baseline.md).
+The exact adapter and Remus WASM load lazily inside the geometry worker on the first non-empty rebuild or export. The kernel-adapter manifest pins the Remus WASM packages to immutable source commits, and `pnpm-lock.yaml` records their resolved dependencies for reproducible installs. The Remus update workflow proposes pin updates through pull requests. OpenCascade is no longer part of the adapter at all, so neither its ~22 MB WASM nor any code that reaches it is emitted into the bundle. Canonical rebuild results use a worker-local LRU capped at 8 entries and 32 MiB, with at most 4 distinct loads in flight. Cache hits are structured-cloned and exports remain uncached caller-owned work. See [ADR-015](docs/adrs/ADR-015-bounded-exact-rebuild-cache.md) and the measured bundle inventory in [docs/performance-baseline.md](docs/performance-baseline.md).
 
 ## Deploying to Cloudflare
 
