@@ -94,3 +94,34 @@ if both fail it still refuses. Dense-pattern warnings use the multiplicity bound
 on pairwise overlap. The vertex-identity regression scales an ordinary exact
 fillet to microscopic size because direct sub-tolerance fillet construction now
 refuses; it does not claim that construction is supported.
+
+## Browser rebuild diagnostics
+
+The workspace status and activity log identify the current source-loading,
+history feature, checkpoint or body-measurement stage. Completed stages carry
+elapsed milliseconds through request-tagged worker state messages. The browser
+console retains each completion under `[geometry rebuild]`, including timings
+that React may batch out of the visible status log. These diagnostics remain
+session-local and are not added to the document or uploaded as telemetry.
+
+Progress is emitted only at real operation boundaries. It refreshes the worker
+silence watchdog while a multi-feature build advances, but does not fabricate
+heartbeats during a blocked synchronous kernel call. Observer failures cannot
+alter the geometry result. A started stage without a corresponding completion
+identifies where to investigate next; it does not alone prove that operation
+will never finish.
+
+Initial-render background work is bounded: automatic planar-distance trial
+edits and optional mass properties run only for bodies with at most 64 faces.
+Consumed history bodies do not run imported-feature recognition. Complex bodies
+still receive their exact mesh, face/edge topology, volume and validation;
+live complex imports retain hole recognition. They omit unproven planar-distance
+suggestions and optional centre-of-mass/inertia data. This is a background-work
+limit, not a claim that the kernel cannot perform those operations on demand.
+
+The hammer trace completed all 17 construction features in 327.9 seconds, then
+blocked in planar-distance trial edits during source measurement. With trial
+edits bounded, source mass properties took another 35.6 seconds. Applying both
+background limits reduced the full original-source adapter sync to 15.8 seconds.
+The opt-in `test/hammer-holder-measurement.test.ts` covers that complete source
+measurement path; the synthetic 66-face prism regression runs in ordinary CI.

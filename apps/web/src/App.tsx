@@ -1,3 +1,4 @@
+import { rebuildProgressLabel } from './lib/rebuildProgressLabel';
 import { featureHistory, featureResultBodyIds } from './lib/featureHistory';
 import { FeatureBuildError } from './lib/featureValidation';
 import { edgeModifierCommand } from './lib/edgeModifierEdit';
@@ -13465,6 +13466,10 @@ export function App() {
     ready: 'Exact geometry ready',
     failed: 'Exact geometry failed'
   };
+  const progressLabel =
+    geometry.state.phase === 'rebuilding'
+      ? rebuildProgressLabel(geometry.state.progress)
+      : null;
   const staleProjectionLabel =
     Object.keys(representations).length > 0
       ? 'showing the last valid projection as stale'
@@ -13476,7 +13481,7 @@ export function App() {
           ? 'Waiting for exact geometry for this revision'
           : geometry.state.phase === 'failed' && geometry.state.error
             ? `Exact geometry failed: ${geometry.state.error}`
-            : geometryPhaseLabel[geometry.state.phase]
+            : progressLabel ?? geometryPhaseLabel[geometry.state.phase]
       } · ${staleProjectionLabel}`;
   const tone: 'ready' | 'warning' | 'running' =
     geometry.state.phase === 'failed'

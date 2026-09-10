@@ -86,7 +86,9 @@ export function buildDocumentHistory(
   /** Parsed imported-STEP results shared across rebuilds, keyed by checksum. */
   importedSteps?: ImportedStepStore,
   /** Runs after every feature index this call executed, failed included. */
-  onFeature?: (index: number, result: ExactBuildResult) => void
+  onFeature?: (index: number, result: ExactBuildResult) => void,
+  /** Diagnostic hook before synchronous feature work begins. */
+  onFeatureStart?: (index: number) => void
 ): ExactBuildResult {
   const { scope, errors } = getParameterScope(document);
   const result: ExactBuildResult = resume?.initial ?? {
@@ -114,6 +116,7 @@ export function buildDocumentHistory(
 
   for (let index = startIndex; index < features.length; index += 1) {
     const feature = features[index]!;
+    onFeatureStart?.(index);
     if (isFeatureSuppressed(feature)) {
       const message = `Feature "${feature.name}": Suppressed; skipped during exact rebuild.`;
       result.warnings.push(message);
