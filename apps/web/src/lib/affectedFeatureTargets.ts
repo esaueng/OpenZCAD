@@ -41,19 +41,30 @@ export function affectedFeatureTargets(
     source?.data.featureKind === 'direct-edit'
       ? source.data.targetBodyId
       : undefined);
-  if (sourceIndex < 0 || !source || !sourceBodyId || isFeatureSuppressed(source)) {
+  const sourceSketchId =
+    source?.data.featureKind === 'sketch' ? source.data.sketchId : undefined;
+  if (
+    sourceIndex < 0 ||
+    !source ||
+    (!sourceBodyId && !sourceSketchId) ||
+    isFeatureSuppressed(source)
+  ) {
     return [];
   }
 
-  const affectedBodies = new Set<BodyId>([sourceBodyId]);
-  const affectedSketches = new Set<SketchId>();
-  const targets: AffectedFeatureTarget[] = [
-    {
-      featureName: source.name,
-      featureId: source.featureId,
-      resultBodyId: sourceBodyId
-    }
-  ];
+  const affectedBodies = new Set<BodyId>(sourceBodyId ? [sourceBodyId] : []);
+  const affectedSketches = new Set<SketchId>(
+    sourceSketchId ? [sourceSketchId] : []
+  );
+  const targets: AffectedFeatureTarget[] = sourceBodyId
+    ? [
+        {
+          featureName: source.name,
+          featureId: source.featureId,
+          resultBodyId: sourceBodyId
+        }
+      ]
+    : [];
 
   for (const feature of features.slice(sourceIndex + 1)) {
     if (isFeatureSuppressed(feature)) {

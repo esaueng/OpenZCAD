@@ -1312,6 +1312,17 @@ export function Inspector(props: InspectorProps) {
             </div>
           </>
         )}
+        {data.featureKind === 'sketch' &&
+          selectedSketch &&
+          selectedSketchObject?.objectKind !== 'text' && (
+            <button
+              type="button"
+              className="secondary"
+              onClick={() => props.onEditSketchInViewport(selectedFeature)}
+            >
+              Edit sketch in viewport
+            </button>
+          )}
         {form}
         {selectedTopology?.kind === 'face' &&
           selectedBody?.source === 'imported-step' && (
