@@ -303,6 +303,8 @@ export interface HelicalSweepInput {
 }
 
 export interface BooleanInput {
+  /** Zero passes through the first operand unchanged; omitted means active. */
+  activeWhen?: ParamValue;
   name: string;
   operation: BooleanOperation;
   targetBodyIds: BodyId[];
@@ -1619,6 +1621,9 @@ export function booleanBodies(
     featureKind: 'boolean',
     data: {
       featureKind: 'boolean',
+      ...(input.activeWhen !== undefined
+        ? { activeWhen: input.activeWhen }
+        : {}),
       operation: input.operation,
       targetBodyIds: input.targetBodyIds
     }
@@ -3103,6 +3108,36 @@ const EXPRESSION_FUNCTIONS: Record<
   string,
   { arity: 'unary' | 'variadic'; apply: (args: number[]) => number }
 > = {
+  require_min: {
+    arity: 'variadic',
+    apply: (args) => {
+      const [value, minimum] = args;
+      if (args.length !== 2 || !args.every(Number.isFinite)) {
+        throw new Error('require_min needs a finite value and minimum.');
+      }
+      if (value! < minimum!) {
+        throw new Error(`Parameter value ${value} must be at least ${minimum}.`);
+      }
+      return value!;
+    }
+  },
+  require_one_of: {
+    arity: 'variadic',
+    apply: (args) => {
+      const [value, ...supported] = args;
+      if (supported.length === 0 || !args.every(Number.isFinite)) {
+        throw new Error(
+          'require_one_of needs a finite value and at least one supported value.'
+        );
+      }
+      if (!supported.includes(value!)) {
+        throw new Error(
+          `Parameter value ${value} is unsupported; supported values: ${supported.join(', ')}.`
+        );
+      }
+      return value!;
+    }
+  },
   abs: { arity: 'unary', apply: ([a]) => Math.abs(a!) },
   sqrt: { arity: 'unary', apply: ([a]) => Math.sqrt(a!) },
   floor: { arity: 'unary', apply: ([a]) => Math.floor(a!) },
@@ -3194,7 +3229,7 @@ function tokenizeExpression(expression: string): ExpressionToken[] {
 
 /**
  * Evaluates a parameter expression supporting numbers, scope variables, the
- * `pi` constant, function calls (abs, sqrt, floor, ceil, round, min, max,
+ * `pi` constant, function calls (abs, sqrt, floor, ceil, round, min, max, require_min, require_one_of,
  * and degree-based sin/cos/tan), `+ - * / ^`, unary minus, and parentheses.
  * Implemented as a small recursive-descent parser so untrusted expressions
  * are never executed as JavaScript. Throws on syntax errors and unknown

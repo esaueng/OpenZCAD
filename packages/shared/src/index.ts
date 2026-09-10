@@ -739,6 +739,8 @@ export type FeatureData =
     }
   | {
       featureKind: 'boolean';
+      /** Zero returns the first operand unchanged; omitted means active. */
+      activeWhen?: ParamValue;
       operation: BooleanOperation;
       targetBodyIds: BodyId[];
     }

@@ -2676,15 +2676,16 @@ test('models a parametric part and exports a true STEP file', async ({
   );
   await page.keyboard.press('Escape'); // back to the tool launcher
 
-  // Second body and a subtract that consumes both inputs. Radius 14 is set
-  // here rather than taken from the form: the faceted-cut finding asserted
-  // below is a property of a cylinder wider than the box is deep, and the
-  // shipped default is now 6, which cuts cleanly.
+  // Second body and a subtract that consumes both inputs. The shipped default
+  // radius 6 is kept: it cuts cleanly inside the 18-deep box. Remus B21
+  // refuses severing cuts instead of silently approximating them, so the old
+  // r=14 setup (28-diameter cylinder centred at y=9 spans y −5..23 and severs
+  // the box) now fails the build rather than warning about facets.
   await page.getByRole('button', { name: /^Cylinder \(C\)/ }).click();
   await page
     .getByRole('region', { name: 'Feature inspector' })
     .getByLabel('Radius', { exact: true })
-    .fill('14');
+    .fill('6');
   await page
     .getByRole('region', { name: 'Feature inspector' })
     .getByRole('button', { name: /^Create/ })
@@ -2719,18 +2720,10 @@ test('models a parametric part and exports a true STEP file', async ({
       .locator('.feature-row', { hasText: 'Subtract' })
       .getByTitle('Feature failed to build')
   ).toHaveCount(0);
-  // One warning, and it is a true finding rather than noise. The cylinder is
-  // r=14 centred at y=9 in a box only 18 deep, so its circle spans y −5..23 and
-  // severs the box outright. The kernel does not answer that cut with exact
-  // surfaces: measured at the binding, 9 operand faces (1 curved) become 46
-  // result faces with **0 curved** — the cylindrical wall comes back as planar
-  // facets. The boolean face census reports exactly that, which is what it was
-  // added for. The build still succeeds and the volume and STEP export below
-  // still hold, which is precisely why nothing caught it before.
-  //
-  // Asserting the specific message rather than a count: a second, different
-  // warning appearing here should still fail this test.
-  await expect(page.getByRole('contentinfo')).toContainText('warnings1');
+  // Clean exact cut: the r=6 tool stays inside the box depth, so no
+  // faceted-fallback warning is expected. Severing-cut refusal under Remus
+  // B21 is covered by kernel unit tests, not by this happy-path export test.
+  await expect(page.getByRole('contentinfo')).toContainText('warnings0');
 
   // Export STEP and verify the download is a real ISO 10303-21 file. Import
   // and export live inside the collapsed File menu, so open it first: a

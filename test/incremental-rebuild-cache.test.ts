@@ -5,6 +5,7 @@ import {
   createProjectDocument,
   extrudeSketch,
   findSketch,
+  importStepBody,
   listFeaturesInOrder,
   patternBody,
   setNodeMetadata,
@@ -251,7 +252,7 @@ describe('incremental prefix rebuild cache', { timeout: 120_000 }, () => {
     }
   });
 
-  it('rebuilds from scratch when the parameter scope changes', async () => {
+  it('conservatively replays non-import features when the parameter scope changes', async () => {
     const events: RebuildCacheEvent[] = [];
     const adapter = await createExactKernelAdapter({
       onRebuildCacheEvent: (event) => events.push(event)
@@ -261,7 +262,7 @@ describe('incremental prefix rebuild cache', { timeout: 120_000 }, () => {
       await adapter.syncDocument(document);
 
       // No feature changed, but any expression may reference any parameter
-      // by name, so the scope digest treats the table as global input.
+      // by name, so non-import feature digests retain the full scope.
       const withParam = setParameter(document, { name: 'w', expression: '12' });
       const derived = await adapter.syncDocument(withParam);
       expect(events.at(-1)).toEqual({
@@ -274,6 +275,56 @@ describe('incremental prefix rebuild cache', { timeout: 120_000 }, () => {
       expect(normalized(derived)).toEqual(
         normalized(await freshDerived(withParam))
       );
+    } finally {
+      adapter.dispose();
+    }
+  });
+
+  it('retains STEP imports across parameter edits while replaying dependent geometry', async () => {
+    const events: RebuildCacheEvent[] = [];
+    const adapter = await createExactKernelAdapter({
+      onRebuildCacheEvent: (event) => events.push(event)
+    });
+    try {
+      const seed = addPrimitiveFeature(
+        createProjectDocument('Seed', toUserId('user_cache')),
+        { name: 'Box', primitiveKind: 'box', dimensions: { width: 10, height: 8, depth: 6 } }
+      );
+      const stepText = await adapter.exportStep(seed, seed.bodyOrder);
+      let document = createProjectDocument('Imported edits', toUserId('user_cache'));
+      for (const name of ['Source', 'Copy']) {
+        document = importStepBody(document, {
+          name, artifactId: name, sourceName: 'box.step', stepText
+        }).document;
+      }
+      document = setParameter(document, { name: 'width', expression: '46' });
+      document = setParameter(document, { name: 'shift', expression: '(width - 46) / 2' });
+      document = transformBody(document, {
+        name: 'Move', targetBodyId: document.bodyOrder[1]!,
+        translation: { x: 'shift', y: 0, z: 0 }
+      }).document;
+      await adapter.syncDocument(document);
+      for (const width of [50, 46, 50]) {
+        document = setParameter(document, { name: 'width', expression: String(width) });
+        const derived = await adapter.syncDocument(document);
+        expect(events.at(-1)).toMatchObject({ kind: 'prefix-restore', restored: 2, replayed: 1 });
+        expect(normalized(derived)).toEqual(normalized(await freshDerived(document)));
+      }
+
+      // Global warnings are seeded before feature execution: they must not
+      // be hidden inside a restored checkpoint when the error set changes.
+      const broken = setParameter(document, { name: 'broken', expression: 'missing' });
+      const failed = await adapter.syncDocument(broken);
+      expect(events.at(-1)).toMatchObject({ kind: 'full-rebuild', restored: 0 });
+      expect(normalized(failed)).toEqual(normalized(await freshDerived(broken)));
+      const repaired = await adapter.syncDocument(document);
+      expect(events.at(-1)).toMatchObject({ kind: 'full-rebuild', restored: 0 });
+      expect(normalized(repaired)).toEqual(normalized(await freshDerived(document)));
+
+      const inches: ProjectDocument = { ...document, units: 'inch' };
+      const rescaled = await adapter.syncDocument(inches);
+      expect(events.at(-1)).toMatchObject({ kind: 'full-rebuild', restored: 0 });
+      expect(normalized(rescaled)).toEqual(normalized(await freshDerived(inches)));
     } finally {
       adapter.dispose();
     }

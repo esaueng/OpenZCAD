@@ -92,6 +92,43 @@ describe('geometry worker rebuild coordination', () => {
     expect(createExactKernelAdapter).not.toHaveBeenCalled();
   });
 
+  it('tags rebuild progress with the request identity', async () => {
+    const progress = {
+      stage: 'feature' as const,
+      name: 'Box',
+      index: 1,
+      total: 1,
+      status: 'started' as const
+    };
+    const { scope } = await installWorker(
+      async (_document, onProgress?: (event: typeof progress) => void) => {
+        onProgress?.(progress);
+        return derived('done');
+      }
+    );
+    const document = addPrimitiveFeature(
+      createProjectDocument('Progress', toUserId('user')),
+      {
+        name: 'Box',
+        primitiveKind: 'box',
+        dimensions: { width: 1, height: 1, depth: 1 }
+      }
+    );
+    post(scope, { type: 'sync', document, requestId: 'progress-request' });
+    await vi.waitFor(() =>
+      expect(scope.postMessage).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: 'state',
+          phase: 'rebuilding',
+          projectId: document.projectId,
+          version: document.version,
+          requestId: 'progress-request',
+          progress
+        })
+      )
+    );
+  });
+
   it('executes identical explicit syncs once and clones cached results', async () => {
     const first = deferred<ProjectDocument['derived']>();
     const syncDocument = vi.fn(() => first.promise);
