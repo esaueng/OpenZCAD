@@ -385,6 +385,83 @@ describe('useGeometryWorker', () => {
       expect(result.current.state.phase).toBe('ready');
     });
 
+    it.each([false, true])(
+      'allows a six-minute exact rebuild (request tagged: %s)',
+      (tagged) => {
+        vi.useFakeTimers();
+        installWorker();
+        const document = createProjectDocument(
+          'Long exact build',
+          toUserId('user')
+        );
+        const onError = vi.fn();
+        const { result } = renderHook(() =>
+          useGeometryWorker({
+            manager: () => null,
+            onDerived: vi.fn(),
+            onError
+          })
+        );
+        const worker = FakeWorker.instances[0]!;
+        result.current.sync(document);
+        act(() => {
+          worker.emit({
+            type: 'state',
+            phase: 'rebuilding',
+            stale: true,
+            projectId: document.projectId,
+            version: document.version,
+            ...(tagged ? { requestId: 'long-export' } : {})
+          });
+          vi.advanceTimersByTime(6 * 60_000);
+        });
+        expect(worker.terminate).not.toHaveBeenCalled();
+        expect(FakeWorker.instances).toHaveLength(1);
+        expect(onError).not.toHaveBeenCalled();
+        act(() => {
+          worker.emit({
+            type: 'state',
+            phase: 'ready',
+            stale: false,
+            projectId: document.projectId,
+            version: document.version
+          });
+        });
+        expect(result.current.isReadyFor(document)).toBe(true);
+      }
+    );
+
+    it('still replaces a rebuild that exceeds the bounded silence budget', () => {
+      vi.useFakeTimers();
+      installWorker();
+      const document = createProjectDocument('Stalled build', toUserId('user'));
+      const onError = vi.fn();
+      const { result } = renderHook(() =>
+        useGeometryWorker({
+          manager: () => null,
+          onDerived: vi.fn(),
+          onError
+        })
+      );
+      const worker = FakeWorker.instances[0]!;
+      result.current.sync(document);
+      act(() => {
+        worker.emit({
+          type: 'state',
+          phase: 'rebuilding',
+          stale: true,
+          projectId: document.projectId,
+          version: document.version
+        });
+        vi.advanceTimersByTime(15 * 60_000 + 1_000);
+      });
+      expect(worker.terminate).toHaveBeenCalledOnce();
+      expect(FakeWorker.instances).toHaveLength(2);
+      expect(onError).toHaveBeenCalledWith(
+        expect.stringContaining('stopped responding')
+      );
+    });
+
     it('leaves an unarmed worker alone when no work was ever posted', () => {
       vi.useFakeTimers();
       installWorker();
@@ -495,7 +572,7 @@ describe('useGeometryWorker', () => {
 
       // Past even the extended budget with no message at all, it respawns.
       act(() => {
-        vi.advanceTimersByTime(70_000);
+        vi.advanceTimersByTime(14 * 60_000 + 1_000);
       });
       expect(FakeWorker.instances).toHaveLength(2);
     });

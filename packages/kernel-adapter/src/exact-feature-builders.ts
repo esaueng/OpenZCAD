@@ -1057,6 +1057,15 @@ function buildBooleanFeature(
     }
     return shape;
   });
+  if (
+    data.activeWhen !== undefined &&
+    resolveParamValue(data.activeWhen, ctx.scope, 'boolean activation') === 0
+  ) {
+    result.shapes.set(feature.bodyId, operands[0]!);
+    data.targetBodyIds.forEach((bodyId) => result.consumed.add(bodyId));
+    inheritMeshOrigin(result, data.targetBodyIds[0]!, feature.bodyId);
+    return;
+  }
   const operandLineage = operands.map((shape) =>
     booleanOperandLineage(kernel, shape)
   );
@@ -1618,17 +1627,18 @@ function buildPatternFeature(
     // removed a real share of the material the instances are KNOWN
     // to share, which was measured on the way in.
     //
-    // Half is a deliberately loose bar. The pairwise total
-    // overstates the true correction wherever three instances meet,
-    // so a correct merge can legitimately remove less than all of
-    // it; nothing near a working fuse removes under half.
+    // At a point covered by k of n instances, the pairwise sum counts
+    // k*(k-1)/2 copies while union removes k-1. Thus 2*shared/n is a
+    // rigorous lower bound on material removed, including dense circular
+    // patterns where three or more instances overlap. Half the pair sum
+    // is not a valid bound when n > 4 and can warn on an exact union.
     //
     // The body still stands either way — the instances are real and
     // the user asked for them. Silence is the only outcome ruled
     // out, because this defect survived precisely by being silent:
     // the reported volume and the enclosed mesh agreed, both summing
     // the same list.
-    if (removed < shared * 0.5) {
+    if (removed < (2 * shared) / solids.length - summed * 1e-8) {
       raiseFeatureWarning(
         result,
         feature,
