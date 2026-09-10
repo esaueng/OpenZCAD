@@ -804,7 +804,7 @@ test('extrudes and edits one of multiple closed sketch regions', async ({
 
   await sketchTools.getByRole('button', { name: 'Extrude' }).click();
   // Extrude stays in place: every valid profile is selected and armed on the
-  // drag-arrow rig — there is no create form. The e2e-only canvas hook then
+  // drag-arrow rig alongside the shared editor. The e2e-only canvas hook then
   // narrows the selection the way a click on a region would, so this
   // lifecycle test cannot race the camera glide on slower machines, and the
   // value chip's keypad commits an exact height.
@@ -817,6 +817,19 @@ test('extrudes and edits one of multiple closed sketch regions', async ({
   await expect(page.getByRole('contentinfo')).toContainText(
     'Closed sketch profile selected'
   );
+  // The chip remains reachable when an off-centre profile projects beneath
+  // the taller Extrude editor.
+  await expect
+    .poll(async () => {
+      const chip = await page
+        .getByTestId('direct-manipulation-value')
+        .boundingBox();
+      const card = await page
+        .getByRole('region', { name: 'Extrude operation', exact: true })
+        .boundingBox();
+      return chip && card ? chip.x + chip.width - card.x : Infinity;
+    })
+    .toBeLessThan(0);
   await page.getByTestId('direct-manipulation-value').click();
   const heightKeypad = page.getByRole('dialog', { name: 'Height value' });
   await heightKeypad.getByRole('textbox').fill('24');
