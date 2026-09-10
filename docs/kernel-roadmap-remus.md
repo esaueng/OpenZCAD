@@ -312,7 +312,16 @@ selection, rendering) so the kernel work has a consumer the day it lands
 
   — the translators moved out of the kernel module (ADR-023): the kernel
   asset carries no STEP/IGES/mesh readers or writers, which ship as the lazy
-  `remus-wasm-io` asset instead. Cold-load timing still open.
+  `remus-wasm-io` asset instead.
+
+  — partial (2026-09-09): a reproducible 20-sample Chromium harness now
+  measures the exact production-emitted kernel asset on an x86-64 desktop,
+  separating browser-cache-cold load, compile, instantiate, retained-memory
+  lower bounds, and a cache-warm repeat with median/p95 reporting. The loaded
+  host, headless/stub-import method, unavailable whole-page memory API, and
+  single desktop class do not justify a new latency or memory gate. Real
+  worker `loading-remus` timing and a constrained/mobile-class baseline remain
+  open; see `docs/performance-baseline.md`.
 
 - **W4. Execute the ADR-015 measurement list** (cold rebuild, warm hit,
   eviction, retained heap, large-document cloning, STEP first-load — median
