@@ -80,6 +80,14 @@ heartbeats; the previous two-minute budget repeatedly killed this valid replay.
 Startup and kernel-loading budgets remain unchanged. Browser assistant
 interaction and production deployment are not verified by this test.
 
+Parameter edits preserve unchanged STEP-import checkpoints before the first
+parameter-dependent feature. For this recipe, that retains the original source
+and negative-side source copy; the first displacement and the remaining suffix
+still replay. Other feature kinds conservatively depend on the complete resolved
+parameter scope. Unit changes and changes to parameter errors invalidate the
+whole history. This avoids redundant imports but does not remove the cost of
+the exact Boolean operations or cache the complete recipe for every width.
+
 The paired Remus packages are pinned to
 `9bee897f296171c09c99797b63eaa3afcd16f3f7` (2.130.20), from
 [Remus #374](https://github.com/esaueng/remus/pull/374) and its prerequisite stack.
