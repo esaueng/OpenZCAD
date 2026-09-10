@@ -1,0 +1,289 @@
+/* ── Activity pill ──
+   One line in the lane above the viewport dock for any job that moves a
+   file: import, export, backup. It shares the lane with the status toast
+   and takes it over while it is up, so nothing else describes the same job
+   from a different corner. Not a modal: the workspace stays live while an
+   import rebuilds. ── */
+
+.activity-lane {
+  position: absolute;
+  left: calc(var(--column-w) + 12px);
+  right: calc(var(--column-w) + 12px);
+  bottom: 58px;
+  z-index: calc(var(--z-viewer-overlay) + 1);
+  display: flex;
+  justify-content: safe center;
+  pointer-events: none;
+}
+
+.activity-lane:empty {
+  display: none;
+}
+
+/* The lane and the status toast are the same slot. While a pill is up the
+   toast steps aside; its message is still in the activity log. */
+.viewer-area:has(.activity-pill) .workspace-toast {
+  opacity: 0;
+  pointer-events: none;
+}
+
+/* The undo toast keeps its place by moving up one row. */
+.viewer-area:has(.activity-pill) .toast {
+  bottom: 100px;
+}
+
+/* The selection chip lifts the lane the way it lifts the toast. */
+.workspace.column-layout .viewer-area:has(.selection-chip) .activity-lane {
+  bottom: 92px;
+}
+
+.activity-pill {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  max-width: min(720px, 100%);
+  height: 32px;
+  padding: 0 6px 0 12px;
+  color: var(--color-text);
+  background: var(--color-surface);
+  border: var(--border-strong);
+  border-radius: 6px;
+  box-shadow: var(--shadow-2);
+  font-size: var(--fs-sm);
+  white-space: nowrap;
+  overflow: hidden;
+  pointer-events: auto;
+  animation: oz-fade var(--dur-fast) var(--ease-out);
+}
+
+.activity-pill-glyph {
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  width: 12px;
+  height: 12px;
+}
+
+.activity-pill-text {
+  display: inline-flex;
+  align-items: baseline;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.activity-pill-verb {
+  flex: 0 0 auto;
+  color: var(--color-text-muted);
+  white-space: pre;
+}
+
+.activity-pill-name {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 260px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-weight: var(--fw-medium);
+}
+
+.activity-pill-detail {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--color-text-muted);
+}
+
+.activity-pill-detail::before {
+  content: '·';
+  margin: 0 8px;
+  color: var(--color-text-subtle);
+}
+
+.activity-pill-detail.warning {
+  color: var(--color-warning);
+}
+
+.activity-pill-detail.error {
+  color: var(--color-error);
+}
+
+.activity-pill-detail.cancelled {
+  color: var(--color-text-subtle);
+}
+
+.activity-pill-time {
+  flex: 0 0 auto;
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text-subtle);
+}
+
+.activity-pill-sep {
+  flex: 0 0 auto;
+  width: 1px;
+  height: 16px;
+  margin-left: 2px;
+  background: var(--color-border);
+}
+
+.activity-pill-action,
+.activity-pill-cancel {
+  flex: 0 0 auto;
+  padding: 3px 8px;
+  border-radius: var(--radius-sm);
+  font-size: var(--fs-xs);
+}
+
+.activity-pill-action {
+  color: var(--color-accent-hi);
+  background: var(--color-accent-dim);
+  border: 1px solid var(--color-accent-border);
+}
+
+.activity-pill-action:hover {
+  background: color-mix(in srgb, var(--color-accent) 22%, transparent);
+}
+
+/* Deliberately the quieter of the two: it throws work away, so it should not
+   be the thing the eye lands on while a run is going normally. */
+.activity-pill-cancel {
+  color: var(--color-text-muted);
+  background: transparent;
+  border: 1px solid transparent;
+}
+
+.activity-pill-cancel:hover:not(:disabled) {
+  color: var(--color-error);
+  border-color: color-mix(in srgb, var(--color-error) 55%, transparent);
+  background: color-mix(in srgb, var(--color-error) 12%, transparent);
+}
+
+.activity-pill-cancel:disabled {
+  color: var(--color-text-subtle);
+  cursor: default;
+}
+
+.activity-pill-close {
+  flex: 0 0 auto;
+  width: 20px;
+  height: 20px;
+  display: grid;
+  place-items: center;
+  color: var(--color-text-subtle);
+  border-radius: var(--radius-sm);
+}
+
+.activity-pill-close:hover {
+  color: var(--color-text);
+  background: var(--color-surface-hover);
+}
+
+/* The bar is the pill's bottom edge. It fills while progress is knowable,
+   and holds still with a moving stripe while the kernel is inside its
+   blocking wasm call — a bar that crept to 90% and sat there would be
+   inventing the number. */
+.activity-pill-bar {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 2px;
+  background: var(--color-surface-hover);
+}
+
+.activity-pill-bar > i {
+  display: block;
+  height: 100%;
+  background: var(--color-accent);
+  transition: width var(--dur-base) linear;
+}
+
+.activity-pill-bar.indeterminate > i {
+  background: repeating-linear-gradient(
+    115deg,
+    var(--color-accent) 0 6px,
+    color-mix(in srgb, var(--color-accent) 30%, transparent) 6px 14px
+  );
+  background-size: 200% 100%;
+  animation: activity-pill-stripe 900ms linear infinite;
+}
+
+.activity-pill-bar.ok > i {
+  background: var(--color-success);
+}
+
+.activity-pill-bar.warning > i {
+  background: var(--color-warning);
+}
+
+.activity-pill-bar.error > i {
+  background: var(--color-error);
+}
+
+/* A cancel is not a fault, so it drains of colour rather than turning amber. */
+.activity-pill-bar.cancelled > i {
+  background: var(--color-border-strong);
+}
+
+@keyframes activity-pill-stripe {
+  to {
+    background-position: -28px 0;
+  }
+}
+
+.activity-spin {
+  width: 12px;
+  height: 12px;
+  border: 1.5px solid var(--color-accent-dim);
+  border-top-color: var(--color-accent);
+  border-radius: 50%;
+  animation: activity-pill-spin 800ms linear infinite;
+}
+
+@keyframes activity-pill-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.activity-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--color-success);
+}
+
+.activity-dot.warning {
+  background: var(--color-warning);
+}
+
+.activity-dot.error {
+  background: var(--color-error);
+}
+
+.activity-dot.cancelled {
+  background: var(--color-text-subtle);
+}
+
+/* The spinner and the stripe are the only proof the pill is live while the
+   worker is blocked, so the reduced-motion fallback keeps a visible state
+   rather than removing the distinction entirely. */
+@media (prefers-reduced-motion: reduce) {
+  .activity-pill {
+    animation: none;
+  }
+
+  .activity-pill-bar.indeterminate > i {
+    animation: none;
+    background: var(--color-accent-dim);
+  }
+
+  .activity-spin {
+    animation: none;
+    border-color: var(--color-accent);
+    border-top-color: var(--color-accent-dim);
+  }
+}

@@ -72,7 +72,11 @@ function bodyRepresentation(
     color: '#56b4e9',
     consumed: false,
     exportableStep: true,
-    mesh: { kind: 'mesh', vertices: Float32Array.from([]), indices: Uint32Array.from([]) },
+    mesh: {
+      kind: 'mesh',
+      vertices: Float32Array.from([]),
+      indices: Uint32Array.from([])
+    },
     faceCount: 6,
     volume: 6000,
     bbox: { min: { x: 0, y: 0, z: 0 }, max: { x: 10, y: 20, z: 30 } }
@@ -122,7 +126,11 @@ describe('validated feature commit', () => {
               color: '#ff7452',
               consumed: false,
               exportableStep: true,
-              mesh: { kind: 'mesh', vertices: new Float32Array(), indices: new Uint32Array() },
+              mesh: {
+                kind: 'mesh',
+                vertices: new Float32Array(),
+                indices: new Uint32Array()
+              },
               faceCount: 6,
               volume: 19_200,
               bbox: {
@@ -276,7 +284,11 @@ describe('validated feature commit', () => {
               color: '#56b4e9',
               consumed: false,
               exportableStep: true,
-              mesh: { kind: 'mesh', vertices: new Float32Array(), indices: new Uint32Array() },
+              mesh: {
+                kind: 'mesh',
+                vertices: new Float32Array(),
+                indices: new Uint32Array()
+              },
               faceCount: 3,
               volume: Math.PI * 0.5 ** 2 * 12,
               bbox: {
@@ -2787,7 +2799,10 @@ describe('what an import reports while it runs', () => {
     const sink = {
       phases: [] as ImportPhase[],
       updates: [] as ImportRunProgress[],
-      started: null as { fileName: string; phases: readonly ImportPhase[] } | null,
+      started: null as {
+        fileName: string;
+        phases: readonly ImportPhase[];
+      } | null,
       ended: null as ImportRunOutcome | null,
       start(input: { fileName: string; phases: readonly ImportPhase[] }) {
         sink.started = input;
@@ -2911,7 +2926,11 @@ describe('what an import reports while it runs', () => {
       });
     });
 
-    expect(progress.ended).toEqual({ tone: 'ok', message: 'Imported — 1 body' });
+    expect(progress.ended).toEqual({
+      tone: 'ok',
+      message: '1 body',
+      landed: true
+    });
   });
 
   /**
@@ -2935,7 +2954,8 @@ describe('what an import reports while it runs', () => {
 
     expect(progress.ended).toEqual({
       tone: 'warning',
-      message: 'Imported, but saved on this device only',
+      message: 'saved on this device only',
+      landed: true,
       action: 'archive'
     });
   });
@@ -3225,7 +3245,9 @@ describe('cancelling an import', () => {
       });
     });
 
-    expect(endings).toEqual([{ tone: 'cancelled', message: 'Import cancelled' }]);
+    expect(endings).toEqual([
+      { tone: 'cancelled', message: 'nothing was added' }
+    ]);
   });
 
   /**

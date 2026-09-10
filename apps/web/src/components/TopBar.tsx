@@ -417,10 +417,17 @@ export function TopBar({
               artifacts.length > 0
                 ? ` · ${artifacts.length} stored ${artifacts.length === 1 ? 'file' : 'files'}`
                 : ''
+            }${
+              localOnlySourceCount > 0
+                ? ` · ${localOnlySourceCount} import ${localOnlySourceCount === 1 ? 'source needs' : 'sources need'} archiving`
+                : ''
             }`}
           >
             <FolderOpen size={14} aria-hidden="true" />
             File
+            {localOnlySourceCount > 0 ? (
+              <i className="file-menu-attention" aria-hidden="true" />
+            ) : null}
             {artifacts.length > 0 ? (
               <>
                 {' '}
@@ -429,31 +436,14 @@ export function TopBar({
             ) : null}
           </summary>
           <div className="topbar-menu-panel">
-            {onImportProject && (
-              <ProjectImportButton
-                onImport={onImportProject}
-                disabled={projectTransferBusy}
-              />
-            )}
-            {onExportProject && (
-              <button
-                type="button"
-                className="topbar-menu-item"
-                disabled={!projectName || projectTransferBusy}
-                onClick={onExportProject}
-              >
-                <Download size={13} aria-hidden="true" />
-                <span>Export project</span>
-                <small>complete backup</small>
-              </button>
-            )}
-            <div className="topbar-menu-sep" />
+            <strong className="topbar-menu-label">Import</strong>
             <label
               className="topbar-menu-item"
               title="Import STEP, STL, or a paired Shapr3D project and STEP"
             >
               <Upload size={13} aria-hidden="true" />
               <span>Import CAD files…</span>
+              <small>STEP · STL</small>
               <input
                 type="file"
                 aria-label="Import STEP or STL…"
@@ -469,6 +459,14 @@ export function TopBar({
                 }}
               />
             </label>
+            {onImportProject && (
+              <ProjectImportButton
+                onImport={onImportProject}
+                disabled={projectTransferBusy}
+                hint=".openzcad backup"
+              />
+            )}
+            <strong className="topbar-menu-label">Export</strong>
             <button
               type="button"
               className="topbar-menu-item"
@@ -484,48 +482,50 @@ export function TopBar({
               type="button"
               className="topbar-menu-item"
               disabled={!canExport}
-              title={exportTitle('3MF or STL')}
+              title={exportTitle('3MF, STL, OBJ or glTF')}
               onClick={onOpenMeshExport}
             >
               <Download size={13} aria-hidden="true" />
               <span>Export Mesh…</span>
-              <small>3MF · STL</small>
+              <small>3MF · STL · OBJ · glTF</small>
             </button>
-            {localOnlySourceCount > 0 ? (
+            {onExportProject && (
               <button
                 type="button"
                 className="topbar-menu-item"
-                title="Upload import sources that exist only on this device so other devices can rebuild this project"
-                onClick={onArchiveLocalSources}
+                disabled={!projectName || projectTransferBusy}
+                onClick={onExportProject}
               >
-                <Upload size={13} aria-hidden="true" />
-                <span>Archive local sources</span>
-                <small>
-                  {localOnlySourceCount} file
-                  {localOnlySourceCount === 1 ? '' : 's'}
-                </small>
+                <Download size={13} aria-hidden="true" />
+                <span>Export project</span>
+                <small>complete .openzcad backup</small>
               </button>
+            )}
+            {localOnlySourceCount > 0 ? (
+              <>
+                <div className="topbar-menu-sep" />
+                <button
+                  type="button"
+                  className="topbar-menu-item"
+                  title="Upload import sources that exist only on this device so other devices can rebuild this project"
+                  onClick={onArchiveLocalSources}
+                >
+                  <Upload size={13} aria-hidden="true" />
+                  <span>
+                    Archive local sources
+                    <span className="topbar-menu-badge">
+                      {localOnlySourceCount} file
+                      {localOnlySourceCount === 1 ? '' : 's'}
+                    </span>
+                  </span>
+                  <small>
+                    {localOnlySourceCount === 1
+                      ? 'one import exists only on this device'
+                      : 'these imports exist only on this device'}
+                  </small>
+                </button>
+              </>
             ) : null}
-            <button
-              type="button"
-              className="topbar-menu-item"
-              title="Export a sanitized feature-history snapshot for troubleshooting"
-              onClick={onExportDiagnostics}
-            >
-              <Download size={13} aria-hidden="true" />
-              <span>Export diagnostics</span>
-              <small>sanitized JSON</small>
-            </button>
-            <button
-              type="button"
-              className="topbar-menu-item"
-              title="Export the on-device log of direct-edit attempts and refusals for troubleshooting"
-              onClick={onExportInteractionLog}
-            >
-              <Download size={13} aria-hidden="true" />
-              <span>Export interaction log</span>
-              <small>direct edits</small>
-            </button>
             <div className="topbar-menu-sep" />
             <strong className="topbar-menu-label">
               <Files size={12} aria-hidden="true" />
@@ -561,6 +561,28 @@ export function TopBar({
                 </a>
               ))
             )}
+            <div className="topbar-menu-sep" />
+            <strong className="topbar-menu-label">Troubleshooting</strong>
+            <button
+              type="button"
+              className="topbar-menu-item"
+              title="Export a sanitized feature-history snapshot for troubleshooting"
+              onClick={onExportDiagnostics}
+            >
+              <Download size={13} aria-hidden="true" />
+              <span>Export diagnostics</span>
+              <small>sanitized JSON</small>
+            </button>
+            <button
+              type="button"
+              className="topbar-menu-item"
+              title="Export the on-device log of direct-edit attempts and refusals for troubleshooting"
+              onClick={onExportInteractionLog}
+            >
+              <Download size={13} aria-hidden="true" />
+              <span>Export interaction log</span>
+              <small>direct edits</small>
+            </button>
           </div>
         </details>
         <button
