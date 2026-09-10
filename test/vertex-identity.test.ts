@@ -203,11 +203,20 @@ describe('edge-to-vertex incidence', { timeout: 60_000 }, () => {
     // representable and its fillet is smaller still. At that size the 1e-6
     // quantum stops being a rounding step and becomes a feature-sized grid.
     const kernel = new RemusKernel();
-    const box = kernel.makeBox(2e-6, 2e-6, 1e-6);
+    // Construct at ordinary scale, then scale the exact carrier geometry.
+    // The new fillet cascade refuses sub-tolerance construction; this test
+    // isolates vertex identity, not microscopic fillet solver support.
+    const box = kernel.makeBox(2, 2, 1);
     const filleted = kernel.fillet(
       box,
       Uint32Array.from(verticalEdgesOf(kernel, box)),
-      3e-7
+      0.3
+    );
+    kernel.transformSolid(
+      filleted,
+      new Float64Array([
+        1e-6, 0, 0, 0, 0, 1e-6, 0, 0, 0, 0, 1e-6, 0, 0, 0, 0, 1
+      ])
     );
     const vertices = Array.from(kernel.getSolidVertices(filleted));
     expect(vertices).toHaveLength(16);

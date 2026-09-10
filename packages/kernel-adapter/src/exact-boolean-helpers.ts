@@ -265,6 +265,39 @@ export function tessellatedFaceBounds(
   }
 }
 
+function exactSharedSolidVolume(
+  kernel: RemusKernel,
+  left: number,
+  right: number
+): number {
+  try {
+    const common = kernel.booleanWithQuality('intersect', left, right, true);
+    if (common.quality !== 'exact')
+      throw new Error('Overlap measurement requires exact geometry.');
+    return kernel.volume(common.solid, MEASUREMENT_DEFLECTION);
+  } catch (intersectionError) {
+    // An empty intersection can be refused by the single-solid API. A
+    // successful exact union supplies the same measure by inclusion-exclusion;
+    // failure of both constructions remains a refusal, never guessed zero.
+    const union = kernel.booleanWithQuality('fuse', left, right, true);
+    if (union.quality !== 'exact') throw intersectionError;
+    const a = kernel.volume(left, MEASUREMENT_DEFLECTION);
+    const b = kernel.volume(right, MEASUREMENT_DEFLECTION);
+    const common = a + b - kernel.volume(union.solid, MEASUREMENT_DEFLECTION);
+    const tolerance = Math.max(a, b) * 1e-8;
+    if (
+      !Number.isFinite(common) ||
+      common < -tolerance ||
+      common > Math.min(a, b) + tolerance
+    ) {
+      throw new Error('Exact union produced an inconsistent overlap volume.', {
+        cause: intersectionError
+      });
+    }
+    return Math.max(0, Math.min(common, a, b));
+  }
+}
+
 /**
  * How much interior volume these solids share, summed over every pair.
  *
@@ -325,10 +358,7 @@ export function sharedSolidVolume(kernel: RemusKernel, solids: number[]): number
       }
       let shared: number;
       try {
-        shared = kernel.volume(
-          kernel.intersect(solids[left]!, solids[right]!),
-          MEASUREMENT_DEFLECTION
-        );
+        shared = exactSharedSolidVolume(kernel, solids[left]!, solids[right]!);
       } catch {
         // A refused intersection is not evidence of disjointness. The boxes
         // already say these two could share volume, so fail toward fusing: a
@@ -470,10 +500,7 @@ export function sharedShapeVolume(
       try {
         total += Math.max(
           0,
-          kernel.volume(
-            kernel.intersect(leftSolid, rightSolid),
-            MEASUREMENT_DEFLECTION
-          )
+          exactSharedSolidVolume(kernel, leftSolid, rightSolid)
         );
       } catch (error) {
         throw new Error(

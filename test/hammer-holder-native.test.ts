@@ -117,13 +117,13 @@ describe(
           faces: 21,
           volume: 35776.00421470196,
           height: 58,
-          badEdges: 10
+          badEdges: 6
         },
         secondArm: {
           faces: 34,
           volume: 52320.008429403926,
           height: 58,
-          badEdges: 12
+          badEdges: 4
         }
       };
       for (const name of Object.keys(stages) as (keyof typeof stages)[]) {
@@ -165,7 +165,7 @@ describe(
       }
     });
 
-    it('isolates opening sweep direction without pretending it repairs the later Add', () => {
+    it('rebuilds the positive opening and first arm with strict orientation', () => {
       for (const direction of ['negative', 'positive'] as const) {
         const tool = inspect(createHolderOpeningTool(direction));
         expect(tool.report.issues, direction).toEqual([]);
@@ -180,12 +180,8 @@ describe(
       expect(positive.bounds).toEqual(negative.bounds);
       expect(positive.volume).toBeCloseTo(negative.volume, 6);
       expect(positive.faces).toBe(negative.faces);
-      expect(inspect(positiveStages.firstArm).report.issues).toEqual([
-        {
-          severity: 'error',
-          description: '6 shared edges have inconsistent face orientations'
-        }
-      ]);
+      expect(inspect(positiveStages.firstArm).report.issues).toEqual([]);
+      expect(inspect(positiveStages.firstArm).strict).toBe(0);
     });
 
     it('refuses Mirror at the invalid input boundary and preserves the source', async () => {
