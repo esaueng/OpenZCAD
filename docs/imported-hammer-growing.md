@@ -34,3 +34,12 @@ volume uses tessellation for NURBS surfaces and is not an exact identity oracle
 across different face partitions. Source payloads and generated backups stay outside
 Git. Automatic recognition and preparation from an arbitrary imported STEP are
 not implemented by this fixture-specific generator.
+
+After the first successful exact rebuild, changing `opening_width` displays a
+viewport-only preview using the cached end meshes and an axially stretched bridge.
+The viewport labels it “Width preview · exact geometry pending”. Exact union and
+validation continue in the worker; the preview supplies no exact topology and is
+never saved as document geometry or passed to exports. Rapid changes are always
+computed from the last validated width, and returning to that width restores the
+validated display. Invalid widths, structural edits and rebuild failures disable
+the preview. Initial project loading still requires an exact rebuild.
