@@ -27,10 +27,10 @@ export interface ExportDialogBody {
 }
 
 /**
- * Coarse stages of a running export or printability check, narrated in the
- * dialog. The caller maps the geometry worker's request states onto these;
- * `saving` is the caller's own stage between receiving the payload and the
- * file being written.
+ * Coarse stages of a running printability check, narrated in the dialog.
+ * The caller maps the geometry worker's request states onto these. (An
+ * export itself reports through the activity pill once this dialog hands it
+ * over, so `saving` is only ever narrated by the host.)
  */
 export type ExportProgress =
   'preparing' | 'loading-kernel' | 'building' | 'saving';
@@ -97,18 +97,11 @@ export interface ExportDialogProps {
   bodies: ExportDialogBody[];
   onClose(): void;
   /**
-   * Resolves when the file is saved (or the save dialog is cancelled).
-   * Aborting the signal must abandon the export — reject with an
-   * `AbortError`-named error or resolve without saving anything.
+   * Starts the export. The dialog closes at once: progress, cancel and the
+   * outcome are the host's to report, in the activity pill, so the workspace
+   * is live while the mesh builds.
    */
-  onExport(
-    format: MeshExportDialogFormat,
-    deflection: number,
-    options: {
-      signal: AbortSignal;
-      onProgress(progress: ExportProgress): void;
-    }
-  ): Promise<void>;
+  onExport(format: MeshExportDialogFormat, deflection: number): void;
   onCheckQuality(
     deflection: number,
     options?: { onProgress?(progress: ExportProgress): void }
@@ -133,9 +126,8 @@ export function ExportDialog({
   const [format, setFormat] = useState<MeshExportDialogFormat>('3mf');
   const [preset, setPreset] = useState<QualityPresetId>('standard');
   const [customDeflection, setCustomDeflection] = useState('0.05');
-  const [phase, setPhase] = useState<'idle' | 'checking' | 'exporting'>('idle');
+  const [phase, setPhase] = useState<'idle' | 'checking'>('idle');
   const [progress, setProgress] = useState<ExportProgress | null>(null);
-  const exportAbortRef = useRef<AbortController | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [report, setReport] = useState<{
     deflection: number;
@@ -186,44 +178,11 @@ export function ExportDialog({
     }
   }
 
-  async function runExport() {
+  function runExport() {
     if (deflection === null || phase !== 'idle') {
       return;
     }
-    const controller = new AbortController();
-    exportAbortRef.current = controller;
-    setPhase('exporting');
-    setProgress('preparing');
-    setError(null);
-    try {
-      await onExport(format, deflection, {
-        signal: controller.signal,
-        onProgress: setProgress
-      });
-      onClose();
-    } catch (exportError) {
-      if (controller.signal.aborted) {
-        return; // Cancelled from this dialog; it is already closing.
-      }
-      setPhase('idle');
-      setProgress(null);
-      setError(
-        exportError instanceof Error
-          ? exportError.message
-          : 'The export failed.'
-      );
-    } finally {
-      exportAbortRef.current = null;
-    }
-  }
-
-  /**
-   * Closing while an export runs must also stop it: without the abort, the
-   * work kept going and a save-file prompt appeared long after the dialog
-   * was gone.
-   */
-  function cancelAndClose() {
-    exportAbortRef.current?.abort();
+    onExport(format, deflection);
     onClose();
   }
 
@@ -238,7 +197,7 @@ export function ExportDialog({
         onKeyDown={(event) => {
           if (event.key === 'Escape') {
             event.stopPropagation();
-            cancelAndClose();
+            onClose();
           }
         }}
       >
@@ -371,22 +330,16 @@ export function ExportDialog({
         </div>
 
         <div className="export-dialog-actions">
-          <button type="button" className="secondary" onClick={cancelAndClose}>
-            <StableLabel reserve={['Cancel export', 'Cancel']}>
-              {phase === 'exporting' ? 'Cancel export' : 'Cancel'}
-            </StableLabel>
+          <button type="button" className="secondary" onClick={onClose}>
+            Cancel
           </button>
           <button
             type="button"
             className="primary"
             disabled={deflection === null || phase !== 'idle'}
-            onClick={() => void runExport()}
+            onClick={runExport}
           >
-            {phase === 'exporting' ? (
-              <LoaderCircle size={13} className="spin" aria-hidden="true" />
-            ) : (
-              <Download size={13} aria-hidden="true" />
-            )}
+            <Download size={13} aria-hidden="true" />
             Export {FORMAT_LABELS[format]}
           </button>
         </div>

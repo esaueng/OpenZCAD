@@ -284,6 +284,41 @@
   text-transform: uppercase;
 }
 
+.topbar-menu-label + .topbar-menu-item {
+  margin-top: 0;
+}
+
+.topbar-menu-item + .topbar-menu-label {
+  margin-top: 6px;
+}
+
+/* The count of imports that exist only on this device: amber, because the
+   project is not portable until they are uploaded. */
+.topbar-menu-badge {
+  display: inline-block;
+  margin-left: 8px;
+  padding: 0 5px;
+  color: var(--color-warning);
+  background: color-mix(in srgb, var(--color-warning) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--color-warning) 40%, transparent);
+  border-radius: var(--radius-sm);
+  font-family: var(--font-mono);
+  font-size: var(--fs-mini);
+  line-height: 16px;
+  vertical-align: 1px;
+}
+
+/* The same amber, on the File button, so the menu need not be open to
+   know something in it wants attention. */
+.file-menu-attention {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  margin-left: 5px;
+  border-radius: 999px;
+  background: var(--color-warning);
+}
+
 .topbar-menu-empty {
   display: block;
   padding: 2px 8px 6px;

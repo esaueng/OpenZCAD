@@ -31,7 +31,7 @@
 @import './components/settings.css';
 @import './components/direct-manipulation.css';
 @import './components/tour.css';
-@import './components/import-progress.css';
+@import './components/activity-pill.css';
 @import './components/workspace-column.css';
 /* Last: View mode subtracts from the layouts every file above establishes. */
 @import './components/view-mode.css';
