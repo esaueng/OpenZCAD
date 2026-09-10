@@ -31,6 +31,8 @@ export interface EntityConstraintTool {
 interface SketchEntityEditorProps {
   data: SketchObjectData;
   scope: Record<string, number>;
+  disabled?: boolean;
+  error?: string | null;
   onApply(data: SketchObjectData): void;
   onDelete(): void;
   onClose(): void;
@@ -244,6 +246,8 @@ function geometryError(
 export function SketchEntityEditor({
   data,
   scope,
+  disabled = false,
+  error,
   onApply,
   onDelete,
   onClose,
@@ -274,7 +278,7 @@ export function SketchEntityEditor({
 
   function submit(event: FormEvent) {
     event.preventDefault();
-    if (valid) {
+    if (valid && !disabled) {
       onApply(nextData(data, values, textAttrs));
     }
   }
@@ -303,40 +307,58 @@ export function SketchEntityEditor({
             <X size={14} aria-hidden="true" />
           </button>
         </header>
-        {textAttrs && (
-          <TextObjectFields value={textAttrs} onChange={setTextAttrs} />
-        )}
-        <div className="sketch-entity-fields">
-          {fields.map(({ key, label }) => (
-            <ExprInput
-              key={key}
-              label={label}
-              value={values[key] ?? ''}
-              scope={scope}
-              onChange={(value) =>
-                setValues((current) => ({ ...current, [key]: value }))
-              }
-            />
-          ))}
-        </div>
-        {!valid && (
-          <p className="form-error" role="alert">
-            {semanticError ?? 'Fix invalid values before applying this edit.'}
-          </p>
-        )}
-        <footer>
-          <button type="button" className="secondary danger" onClick={onDelete}>
-            <Trash2 size={13} aria-hidden="true" />
-            Delete
-          </button>
-          <button type="submit" className="primary" disabled={!valid}>
-            Apply
-          </button>
-        </footer>
+        <fieldset disabled={disabled} className="sketch-entity-values">
+          {textAttrs && (
+            <TextObjectFields value={textAttrs} onChange={setTextAttrs} />
+          )}
+          <div className="sketch-entity-fields">
+            {fields.map(({ key, label }) => (
+              <ExprInput
+                key={key}
+                label={label}
+                value={values[key] ?? ''}
+                scope={scope}
+                onChange={(value) =>
+                  setValues((current) => ({ ...current, [key]: value }))
+                }
+              />
+            ))}
+          </div>
+          {!valid && (
+            <p className="form-error" role="alert">
+              {semanticError ?? 'Fix invalid values before applying this edit.'}
+            </p>
+          )}
+          <footer>
+            <button
+              type="button"
+              className="secondary danger"
+              disabled={disabled}
+              onClick={onDelete}
+            >
+              <Trash2 size={13} aria-hidden="true" />
+              Delete
+            </button>
+            <button
+              type="submit"
+              className="primary"
+              disabled={!valid || disabled}
+            >
+              Apply
+            </button>
+          </footer>
+        </fieldset>
+        {error && <p role="alert">{error}</p>}
       </form>
       {constraintTools && constraintTools.length > 0 && (
         <section className="sketch-entity-constraints" aria-label="Constraints">
           <span className="eyebrow">Constraints</span>
+          {Boolean(constraints?.length) && (
+            <p className="muted">
+              These constraints control this geometry. Edit a driving dimension
+              below to change its constrained size.
+            </p>
+          )}
           <div
             className="sketch-entity-constraint-tools"
             role="group"
