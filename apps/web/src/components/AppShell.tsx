@@ -1,4 +1,18 @@
-import type { CSSProperties, ReactNode, Ref } from 'react';
+import {
+  lazy,
+  Suspense,
+  type CSSProperties,
+  type ReactNode,
+  type Ref
+} from 'react';
+
+// Off the entry chunk, which has no room left; it mounts long before anyone
+// could have started dragging a file toward the window.
+const LazyFileDropTarget = lazy(() =>
+  import('./FileDropTarget').then((module) => ({
+    default: module.FileDropTarget
+  }))
+);
 
 interface AppShellProps {
   topBar: ReactNode;
@@ -43,6 +57,11 @@ interface AppShellProps {
   /** The status toast and the activity log, over the viewport. */
   readout?: ReactNode;
   overlays?: ReactNode;
+  /**
+   * Files dropped on the viewer area from outside the page. Absent, the
+   * area is not a drop target and the browser keeps its default.
+   */
+  onDropFiles?(files: File[]): void;
 }
 
 /**
@@ -65,7 +84,8 @@ export function AppShell({
   sidebarResizer,
   assistantResizer,
   readout,
-  overlays
+  overlays,
+  onDropFiles
 }: AppShellProps) {
   const assistantDocked = Boolean(
     assistant && !assistantHidden && !assistantCollapsed
@@ -94,6 +114,11 @@ export function AppShell({
           {toolBar && <div className="palette-float">{toolBar}</div>}
           {inspector && <div className="inspector-float">{inspector}</div>}
           {readout}
+          {onDropFiles && (
+            <Suspense fallback={null}>
+              <LazyFileDropTarget onDrop={onDropFiles} />
+            </Suspense>
+          )}
         </div>
         {assistant}
         {assistantDocked && assistantResizer}
