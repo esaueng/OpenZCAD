@@ -514,3 +514,59 @@
   outline: 2px solid var(--color-text);
   outline-offset: 2px;
 }
+
+.sketch-workflow {
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+  font-size: var(--fs-xs);
+  border-bottom: var(--border-thin);
+}
+.sketch-workflow p {
+  margin: 0;
+}
+.sketch-workflow-context,
+.sketch-workflow-snaps {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+}
+.sketch-workflow-context span {
+  text-transform: capitalize;
+  color: var(--color-text-muted);
+}
+.sketch-workflow-snaps button {
+  padding: 5px;
+  font-size: inherit;
+}
+.sketch-workflow-snaps button[aria-pressed='true'] {
+  color: var(--color-accent);
+  background: var(--color-accent-dim);
+}
+.sketch-workflow-problems summary {
+  cursor: pointer;
+  color: var(--color-warning);
+}
+.sketch-workflow-problems ul {
+  padding-left: 16px;
+}
+.sketch-workflow-problems li button {
+  text-align: left;
+  font-size: inherit;
+}
+.workspace-column-tools:has(.sketch-workflow) {
+  overflow-y: auto;
+  max-height: 65vh;
+}
+
+.sketch-workflow-readiness {
+  font-weight: var(--fw-medium);
+}
+
+.sketch-entity-values {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  min-width: 0;
+}

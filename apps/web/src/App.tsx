@@ -262,6 +262,11 @@ import {
   type ToolId
 } from './lib/tools';
 import { AppShell } from './components/AppShell';
+import { SketchWorkflow } from './components/SketchWorkflow';
+import {
+  checkSketchEdit,
+  sketchEntityEditCommands
+} from './lib/sketch/editing';
 import { WorkspaceColumn } from './components/WorkspaceColumn';
 import {
   ViewportDockExtras,
@@ -1532,6 +1537,7 @@ export function App() {
     const parsed = Number(sketchPlaneOffsetText);
     return Number.isFinite(parsed) ? parsed : 0;
   })();
+  const [sketchEditError, setSketchEditError] = useState<string | null>(null);
   const [sketchDiagnosticPoints, setSketchDiagnosticPoints] = useState<
     { x: number; y: number }[]
   >([]);
@@ -9440,15 +9446,11 @@ export function App() {
       setStatus('The active sketch is unavailable.');
       return;
     }
-    const objects = sketch.objectIds.flatMap((objectId) => {
-      const node = doc.nodes[objectId];
-      return node?.kind === 'sketch-object'
-        ? [{ id: objectId, data: node.data }]
-        : [];
-    });
-    const analysis = computeSketchProfileAnalysis(objects, (value) =>
-      resolveParamValue(value, parameterScope.scope, 'sketch dimension')
-    );
+    const analysis = sketchOverview.analysis;
+    if (!analysis) {
+      setStatus(sketchOverview.error ?? 'The sketch could not be analyzed.');
+      return;
+    }
     const actionable = analysis.diagnostics.filter(
       (diagnostic) =>
         diagnostic.severity !== 'info' || diagnostic.code === 'open-endpoint'
@@ -9482,34 +9484,90 @@ export function App() {
     );
   }
 
-  function handleUpdateSketchEntity(data: SketchObjectData) {
+  async function commitSketchEdit(
+    base: ProjectDocument,
+    sketchId: SketchId,
+    commands: AnyCommand[],
+    label: string,
+    objectId?: string
+  ) {
+    const derived = await checkSketchEdit(
+      base,
+      sketchId,
+      commands,
+      (document) => geometry.syncOnce(document)
+    );
+    const live = managerRef.current?.document;
+    const current = interactionRef.current;
     if (
-      interaction.mode !== 'sketch' ||
-      !interaction.session.sketchId ||
-      !interaction.session.selectedObjectId
+      !live ||
+      live.projectId !== base.projectId ||
+      live.version !== base.version ||
+      current.mode !== 'sketch' ||
+      current.session.sketchId !== sketchId ||
+      (objectId !== undefined && current.session.selectedObjectId !== objectId)
     ) {
-      return;
+      return false;
     }
-    const selectedNode =
-      doc?.nodes[interaction.session.selectedObjectId as EntityId];
+    return executeTransaction(label, commands, derived);
+  }
+
+  async function handleUpdateSketchEntity(data: SketchObjectData) {
+    const base = managerRef.current?.document;
+    const current = interactionRef.current;
+    if (
+      !base ||
+      current.mode !== 'sketch' ||
+      !current.session.sketchId ||
+      !current.session.selectedObjectId ||
+      sketchSolving ||
+      busy
+    )
+      return;
+    const sketchId = current.session.sketchId as SketchId;
+    const objectId = current.session.selectedObjectId as EntityId;
+    const selected = base.nodes[objectId];
     const nextData =
-      selectedNode?.kind === 'sketch-object' && selectedNode.data.construction
+      selected?.kind === 'sketch-object' && selected.data.construction
         ? { ...data, construction: true }
         : data;
+    setSketchSolving(true);
+    setSketchEditError(null);
     setSketchDiagnosticPoints([]);
-    if (
-      executeCommand(
-        commandFactories.updateSketchObject(
-          {
-            sketchId: interaction.session.sketchId as SketchId,
-            objectId: interaction.session.selectedObjectId as EntityId,
-            data: nextData
-          },
-          `Edit ${data.objectKind}`
+    try {
+      const commands = await sketchEntityEditCommands(
+        base,
+        sketchId,
+        objectId,
+        nextData,
+        (document, id) => geometry.solveSketch(document, id)
+      );
+      if (
+        await commitSketchEdit(
+          base,
+          sketchId,
+          commands,
+          `Edit ${data.objectKind}`,
+          objectId
         )
+      ) {
+        setStatus(`Updated ${data.objectKind} geometry.`);
+        setSketchSolveStatus(null);
+      }
+    } catch (error) {
+      const message = errorMessage(
+        error,
+        'The sketch edit could not be applied.'
+      );
+      if (
+        interactionRef.current.mode === 'sketch' &&
+        interactionRef.current.session.sketchId === sketchId &&
+        interactionRef.current.session.selectedObjectId === objectId
       )
-    ) {
-      setStatus(`Updated ${data.objectKind} geometry.`);
+        setSketchEditError(message);
+      setStatus(message);
+    } finally {
+      setSketchSolving(false);
     }
   }
 
@@ -9541,8 +9599,31 @@ export function App() {
   // ---------------------------------------------------------------------
   // Sketch constraints: pick routing, driving-value entry, CRUD, and solve.
   // ---------------------------------------------------------------------
-  const [sketchSolveStatus, setSketchSolveStatus] =
-    useState<SketchSolveStatus | null>(null);
+  const [sketchSolveSnapshot, setSketchSolveSnapshot] = useState<{
+    version: number;
+    sketchId: string | null;
+    status: SketchSolveStatus;
+  } | null>(null);
+  function setSketchSolveStatus(status: SketchSolveStatus | null) {
+    setSketchSolveSnapshot(
+      status
+        ? {
+            version: managerRef.current?.document.version ?? 0,
+            sketchId:
+              interactionRef.current.mode === 'sketch'
+                ? interactionRef.current.session.sketchId
+                : null,
+            status
+          }
+        : null
+    );
+  }
+  const sketchSolveStatus =
+    sketchSolveSnapshot?.version === doc?.version &&
+    interaction.mode === 'sketch' &&
+    sketchSolveSnapshot?.sketchId === interaction.session.sketchId
+      ? sketchSolveSnapshot.status
+      : null;
   const [sketchSolving, setSketchSolving] = useState(false);
   const [sketchDimensionDraft, setSketchDimensionDraft] = useState<{
     kind: DrivingDimensionKind | 'radius';
@@ -9567,6 +9648,36 @@ export function App() {
     interaction.mode === 'sketch' && interaction.session.sketchId && doc
       ? (findSketch(doc, interaction.session.sketchId as SketchId) ?? null)
       : null;
+
+  const sketchOverview = useMemo(() => {
+    const objects =
+      editingSketchNode?.objectIds.flatMap((id) => {
+        const node = doc?.nodes[id];
+        return node?.kind === 'sketch-object'
+          ? [{ id, data: node.data, label: node.name || node.data.objectKind }]
+          : [];
+      }) ?? [];
+    try {
+      return {
+        objects,
+        analysis: computeSketchProfileAnalysis(objects, (value) =>
+          resolveParamValue(value, parameterScope.scope, 'sketch dimension')
+        ),
+        error: null
+      };
+    } catch (error) {
+      return {
+        objects,
+        analysis: null,
+        error: errorMessage(error, 'Unable to analyze this sketch.')
+      };
+    }
+  }, [editingSketchNode, doc, parameterScope.scope]);
+
+  useEffect(() => {
+    setSketchDiagnosticPoints([]);
+    setSketchEditError(null);
+  }, [doc?.version, editingSketchNode?.sketchId]);
 
   const sketchConstraintItems = useMemo(() => {
     if (!editingSketchNode || !doc) {
@@ -9610,7 +9721,9 @@ export function App() {
         kind: data.constraintKind,
         label: describeConstraint(data, nameOf),
         editable:
-          data.constraintKind === 'distance' || data.constraintKind === 'angle'
+          data.constraintKind === 'distance' ||
+          data.constraintKind === 'angle' ||
+          data.constraintKind === 'radius'
       }));
   }, [editingSketchNode, doc, selectedSketchEntity]);
 
@@ -9912,6 +10025,7 @@ export function App() {
     }
 
     setSketchSolving(true);
+    setSketchEditError(null);
     setStatus(`Solving ${spec.label.toLowerCase()} dimension…`);
     try {
       const outcome = await geometry.solveSketch(prospective, sketchId);
@@ -9939,6 +10053,9 @@ export function App() {
               : 'warn'
       });
       if (!outcome.converged || outcome.rolledBack) {
+        setSketchEditError(
+          `${spec.label} dimension conflicts with existing constraints. Edit or remove a conflicting constraint; no change was applied.`
+        );
         setStatus(
           `${spec.label} dimension refused: ${solveStatusLabel(outcome)}; no change was applied.`
         );
@@ -9953,14 +10070,26 @@ export function App() {
         ? `Edit ${spec.label.toLowerCase()} dimension`
         : `Add ${spec.label.toLowerCase()} dimension`;
       if (
-        executeTransaction(label, [...dimensionCommands, ...solvedCommands])
+        await commitSketchEdit(
+          base,
+          sketchId,
+          [...dimensionCommands, ...solvedCommands],
+          label
+        )
       ) {
+        setSketchSolveStatus({
+          label: solveStatusLabel(outcome),
+          tone: outcome.classification === 'solved' ? 'ok' : 'info'
+        });
         setStatus(
           `${spec.label} dimension ${draft.constraintId ? 'updated' : 'added'} · ${solveStatusLabel(outcome)}.`
         );
       }
     } catch (error) {
       setSketchSolveStatus({ label: 'Solve failed', tone: 'warn' });
+      setSketchEditError(
+        errorMessage(error, 'The sketch could not be solved.')
+      );
       setStatus(
         errorMessage(error, `${spec.label} dimension could not be solved.`)
       );
@@ -10096,6 +10225,7 @@ export function App() {
   }
 
   async function handleSolveSketch() {
+    setSketchEditError(null);
     if (!doc || !editingSketchNode || sketchSolving) {
       return;
     }
@@ -10136,6 +10266,9 @@ export function App() {
               : 'warn'
       });
       if (!outcome.converged || outcome.rolledBack) {
+        setSketchEditError(
+          'Constraints did not solve. Edit or remove a conflicting constraint; no geometry was changed.'
+        );
         setStatus('Constraints did not solve; sketch geometry left unchanged.');
         return;
       }
@@ -10148,13 +10281,22 @@ export function App() {
         setStatus('Sketch already satisfies its constraints.');
         return;
       }
-      if (executeTransaction('Solve sketch', commands)) {
+      if (
+        await commitSketchEdit(base, startedSketchId, commands, 'Solve sketch')
+      ) {
+        setSketchSolveStatus({
+          label: solveStatusLabel(outcome),
+          tone: outcome.classification === 'solved' ? 'ok' : 'info'
+        });
         setStatus(
           `Solved sketch · ${commands.length} ${commands.length === 1 ? 'entity' : 'entities'} updated · ${solveStatusLabel(outcome)}.`
         );
       }
     } catch (error) {
       setSketchSolveStatus({ label: 'Solve failed', tone: 'warn' });
+      setSketchEditError(
+        errorMessage(error, 'The sketch could not be solved.')
+      );
       setStatus(
         error instanceof Error
           ? `Sketch solve failed: ${error.message}`
@@ -13763,9 +13905,63 @@ export function App() {
 
   // The sketch rail floats over the viewport in the classic layout and sits
   // in the column.
+  const sketchOverviewPlane =
+    editingSketchNode?.planeRef ??
+    (interaction.mode === 'sketch' ? interaction.session.plane : null);
   const sketchRail =
     interaction.mode === 'sketch' ? (
       <SketchToolRail
+        workflow={
+          <SketchWorkflow
+            plane={
+              sketchOverviewPlane?.type === 'canonical'
+                ? `${sketchOverviewPlane.plane} plane`
+                : sketchOverviewPlane?.type === 'face'
+                  ? 'Attached face'
+                  : 'Sketch plane'
+            }
+            tool={
+              interaction.session.pendingConstraint
+                ? `${constraintToolSpec(interaction.session.pendingConstraint.kind).label}: ${interaction.session.pendingConstraint.picks.length}/${constraintToolSpec(interaction.session.pendingConstraint.kind).picks} selected`
+                : interaction.session.tool
+            }
+            objects={sketchOverview.objects}
+            selectedId={interaction.session.selectedObjectId}
+            analysis={sketchOverview.analysis}
+            analysisError={sketchOverview.error}
+            geometrySnaps={appSettings.sketching.geometrySnapEnabled}
+            gridSnaps={appSettings.sketching.snapEnabled}
+            busy={sketchSolving || busy}
+            error={
+              interaction.session.selectedObjectId ? null : sketchEditError
+            }
+            onSelect={(objectId) => {
+              setSketchEditError(null);
+              dispatchInteraction({ type: 'sketch-select-object', objectId });
+            }}
+            onGeometrySnaps={() =>
+              handleAppSettingsChange({
+                ...appSettingsRef.current,
+                sketching: {
+                  ...appSettingsRef.current.sketching,
+                  geometrySnapEnabled:
+                    !appSettingsRef.current.sketching.geometrySnapEnabled
+                }
+              })
+            }
+            onGridSnaps={() =>
+              handleAppSettingsChange({
+                ...appSettingsRef.current,
+                sketching: {
+                  ...appSettingsRef.current.sketching,
+                  snapEnabled: !appSettingsRef.current.sketching.snapEnabled
+                }
+              })
+            }
+            onDiagnose={showProfileDiagnostics}
+          />
+        }
+        canExtrude={Boolean(sketchOverview.analysis?.profiles.length)}
         tool={interaction.session.tool}
         circleMode={interaction.session.circleMode}
         construction={sketchConstruction}
@@ -13896,6 +14092,9 @@ export function App() {
           aria-label="Finish Sketch"
           onClick={() => {
             dispatchInteraction({ type: 'exit-sketch' });
+            setTool(null);
+            setSketchEditError(null);
+            setSketchDiagnosticPoints([]);
             setStatus(
               `${editingSketchName} finished · sketch edits preserved.`
             );
@@ -14475,10 +14674,14 @@ export function App() {
                   )}
                   {interaction.mode === 'sketch' && selectedSketchEntity && (
                     <SketchEntityEditor
-                      key={selectedSketchEntity.id}
+                      key={`${selectedSketchEntity.id}:${doc.version}`}
+                      disabled={sketchSolving || busy}
+                      error={sketchEditError}
                       data={selectedSketchEntity.data}
                       scope={parameterScope.scope}
-                      onApply={handleUpdateSketchEntity}
+                      onApply={(data) => {
+                        void handleUpdateSketchEntity(data);
+                      }}
                       onDelete={handleDeleteSketchEntity}
                       constraints={selectedEntityConstraints}
                       constraintTools={selectedEntityConstraintTools}
@@ -15074,6 +15277,8 @@ export function App() {
                   }
                   const sketch = findSketch(doc, feature.data.sketchId);
                   if (sketch) {
+                    selectFeatureNode(null, 'pinned');
+                    setTool(null);
                     dispatchInteraction({
                       type: 'enter-sketch',
                       plane: sketch.planeRef,
