@@ -178,46 +178,158 @@
   }
 }
 
-/* ── Feature palette in the column: icons only, six across ──
-   Twenty-eight labelled tools did not fit above the browser at any height
-   and gave the column a second scrollbar. Icons at six across put every tool
-   above the fold; the names stay in the tooltips and the command search. */
+/* ── Feature tools in the column: named tiles, five folds ──
+   Each group is a fold: open, its tools are tiles two across — icon, name,
+   shortcut — and folded, the same tools are one row of icons. Names on the
+   tiles because twenty-eight bare glyphs were not learnable; the fold is
+   how the column's height stays the user's to spend. ── */
 
 .tool-palette {
-  max-height: none;
-  padding: 0;
-  background: transparent;
-  border: 0;
-  border-radius: 0;
-  overflow: visible;
+  padding: 1px 0 2px;
 }
 
-@supports (animation-timeline: scroll()) {
-  .tool-palette {
-    animation: none;
-  }
+.tool-group {
+  padding: 2px 6px 5px;
 }
 
-.tool-palette .palette-group {
-  padding: 0 6px 3px;
-}
-
-.tool-palette .palette-group + .palette-group {
+.tool-group + .tool-group {
   border-top: var(--border-thin);
 }
 
-.tool-palette .palette-group-label {
-  padding: 5px 4px 1px;
+/* The fold's header row: the toggle, and — folded — the icon strip beside
+   it. A strip too wide for the row (Edges & faces at the default width)
+   wraps under the toggle; folding still costs one row, not two. */
+.tool-group-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0 4px;
 }
 
-.tool-palette .palette-grid {
-  grid-template-columns: repeat(6, minmax(0, 1fr));
-  gap: 0;
+/* The toggle is the browser's section title: mono eyebrow, chevron. */
+.tool-group-toggle {
+  flex: 1 1 auto;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 24px;
+  padding: 0 2px;
+  color: var(--color-text-subtle);
+  font-family: var(--font-mono);
+  font-size: var(--fs-mini);
+  letter-spacing: var(--ls-eyebrow);
+  text-transform: uppercase;
+  text-align: left;
 }
 
-.tool-palette .palette-item {
-  min-height: 28px;
-  padding: 3px;
+.tool-group-toggle:hover {
+  color: var(--color-text);
+}
+
+.tool-group-toggle svg {
+  flex: 0 0 auto;
+}
+
+.tool-tiles {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1px 2px;
+  padding-top: 1px;
+}
+
+.tool-group-strip {
+  flex: 0 0 auto;
+  margin-left: auto;
+  display: flex;
+  gap: 1px;
+}
+
+.tool-tile {
+  min-width: 0;
+  height: 26px;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 0 5px 0 6px;
+  color: var(--color-text-muted);
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  font-size: var(--fs-sm);
+  text-align: left;
+  white-space: nowrap;
+}
+
+.tool-tile.compact {
+  width: 22px;
+  height: 24px;
+  justify-content: center;
+  padding: 0;
+}
+
+.tool-tile svg {
+  flex: 0 0 auto;
+  color: var(--color-text-subtle);
+}
+
+.tool-tile-label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tool-tile kbd {
+  flex: 0 0 auto;
+  min-width: 15px;
+  padding: 0 3px;
+  box-sizing: border-box;
+  color: var(--color-text-dim);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  line-height: 14px;
+  text-align: center;
+}
+
+.tool-tile:hover:not(:disabled) {
+  color: var(--color-text);
+  background: var(--color-surface-hover);
+}
+
+.tool-tile:hover:not(:disabled) svg {
+  color: var(--color-accent);
+}
+
+.tool-tile.active {
+  color: var(--color-text);
+  background: var(--color-accent-dim);
+  border-color: var(--color-accent-border);
+}
+
+.tool-tile.active svg {
+  color: var(--color-accent);
+}
+
+/* A tool that cannot run yet stays in its place, quieter; the tooltip says
+   why. Hiding it would move every other tile as the model changes. */
+.tool-tile:disabled {
+  color: var(--color-text-dim);
+}
+
+.tool-tile:disabled svg {
+  color: var(--color-text-dim);
+  opacity: 0.6;
+}
+
+.tool-tile:disabled kbd {
+  opacity: 0.5;
+}
+
+.tool-tile:focus-visible,
+.tool-group-toggle:focus-visible {
+  outline: 1px solid var(--color-accent);
+  outline-offset: -1px;
 }
 
 /* ── Sketch rail in the column ── */
@@ -674,13 +786,11 @@
     --column-w: min(var(--sidebar-w), 232px);
   }
 
-  .tool-palette .palette-item-label,
   .sketch-rail-group.draw > button > span:not(.sketch-circle-tool),
   .sketch-rail-group.utility > button {
     font-size: 0;
   }
 
-  .tool-palette .palette-item,
   .sketch-rail-group.draw > button,
   .sketch-rail-group.draw .sketch-circle-tool > button:first-child,
   .sketch-rail-group.utility > button {
@@ -694,9 +804,13 @@
     --column-w: min(var(--sidebar-w), 200px);
   }
 
-  .tool-palette .palette-grid,
   .sketch-rail-group.draw {
     grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  /* The tile keeps its name; the shortcut badge is the first thing to go. */
+  .tool-tile kbd {
+    display: none;
   }
 }
 

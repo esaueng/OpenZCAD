@@ -1,8 +1,9 @@
-/* ── Floating tool palette and direct-mode strips ──
+/* ── Direct-mode strips and their float ──
    Split out of app.css; the cascade still depends on the import order
-   in app.css, so this file is not free to move. ── */
+   in app.css, so this file is not free to move. The feature tools
+   themselves live in the workspace column (workspace-column.css). ── */
 
-/* ── Floating tool palette (left edge of the viewport) ───── */
+/* ── Float over the viewport's left edge ───── */
 
 .palette-float {
   position: absolute;
@@ -25,77 +26,6 @@
   right: auto;
   bottom: auto;
   transform: translateX(-50%);
-}
-
-.tool-palette::-webkit-scrollbar {
-  display: none;
-}
-
-.palette-group {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-
-.palette-group-label {
-  padding: 6px 6px 1px;
-  color: var(--color-text-subtle);
-  font-size: var(--fs-mini);
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  white-space: nowrap;
-}
-
-/* Icon grid: four tools per row keeps all 28 above the fold where the old
-   one-per-row list overflowed every common viewport height. */
-.palette-grid {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(30px, 1fr));
-  gap: 2px;
-}
-
-.palette-item {
-  min-height: 30px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-  padding: 4px;
-  color: var(--color-text-muted);
-  border: 1px solid transparent;
-  border-radius: var(--radius-sm);
-  font-size: var(--fs-sm);
-  text-align: left;
-  white-space: nowrap;
-  transition:
-    background var(--dur-fast) var(--ease-out),
-    color var(--dur-fast) var(--ease-out),
-    border-color var(--dur-fast) var(--ease-out);
-}
-
-.palette-item svg {
-  color: var(--color-text-subtle);
-  flex: 0 0 auto;
-  transition: color var(--dur-fast) var(--ease-out);
-}
-
-.palette-item:hover:not(:disabled) {
-  color: var(--color-text);
-  background: var(--color-surface-hover);
-}
-
-.palette-item:hover:not(:disabled) svg {
-  color: var(--color-accent);
-}
-
-.palette-item.active {
-  color: var(--color-text);
-  background: var(--color-accent-dim);
-  border-color: var(--color-accent);
-}
-
-.palette-item.active svg {
-  color: var(--color-accent);
 }
 
 .direct-mode-strip {
