@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 import { ToolCard } from './ToolCard';
@@ -22,9 +22,11 @@ describe('ToolCard', () => {
 
     expect(screen.getByText('Drag the arrow to offset the face.')).toBeTruthy();
     expect(screen.queryByText(/need re-picking/)).toBeNull();
-    expect(screen.getByText('Geometry-anchored')).toHaveAttribute(
-      'title',
-      'This face will need re-picking if earlier geometry moves.'
+    const badge = screen.getByText('Geometry-anchored');
+    expect(badge).not.toHaveAttribute('title');
+    fireEvent.focus(badge);
+    expect(screen.getByRole('tooltip')).toHaveTextContent(
+      'Geometry-anchoredThis face will need re-picking if earlier geometry moves.'
     );
   });
 
