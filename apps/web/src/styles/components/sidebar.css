@@ -429,3 +429,34 @@
     opacity: 1;
   }
 }
+
+.feature-history-panel {
+  padding: 10px 12px;
+  border-bottom: var(--border-thin);
+  font-size: var(--fs-xs);
+  display: grid;
+  gap: 10px;
+}
+.feature-history-panel p {
+  margin: 5px 0;
+  overflow-wrap: anywhere;
+}
+.feature-history-panel ul {
+  margin: 5px 0;
+  padding-left: 15px;
+  max-height: 120px;
+  overflow-y: auto;
+}
+.feature-history-panel button {
+  font-size: inherit;
+  padding: 4px 6px;
+  text-align: left;
+}
+.feature-history-panel summary {
+  cursor: pointer;
+  margin-top: 8px;
+}
+.feature-history-failure {
+  border-left: 2px solid var(--color-warning);
+  padding-left: 8px;
+}

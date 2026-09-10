@@ -1,3 +1,4 @@
+import type { ExtrudeFormValue } from './forms/ExtrudeForm';
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { unitLabel } from '../lib/measurements';
 import { MoreHorizontal, Trash2, X } from 'lucide-react';
@@ -114,16 +115,10 @@ export interface InspectorCallbacks {
   onApplyTextSketch(feature: FeatureNode, value: TextSketchFormValue): void;
   /** Re-enters viewport sketch mode for the feature's sketch. */
   onEditSketchInViewport(feature: FeatureNode): void;
-  onApplyExtrude(
-    feature: FeatureNode,
-    value: {
-      name: string;
-      sketchId: SketchId;
-      distance: ParamValue;
-      symmetric?: boolean;
-      backDistance?: ParamValue;
-    }
-  ): void;
+  onApplyExtrude(feature: FeatureNode, value: ExtrudeFormValue): void;
+  onPreviewExtrude(feature: FeatureNode, value: ExtrudeFormValue | null): void;
+  extrudeBusy?: boolean;
+  extrudeTargets: { bodyId: BodyId; name: string }[];
   onApplyRevolve(
     feature: FeatureNode,
     value: {
@@ -1030,9 +1025,13 @@ export function Inspector(props: InspectorProps) {
             ...(data.backDistance !== undefined
               ? { backDistance: data.backDistance }
               : {}),
-            operation: data.operation
+            operation: data.operation,
+            targetBodyId: data.targetBodyId
           }}
           submitLabel="Apply"
+          disabled={props.extrudeBusy}
+          bodies={props.extrudeTargets}
+          onPreview={(value) => props.onPreviewExtrude(selectedFeature, value)}
           onSubmit={(value) => props.onApplyExtrude(selectedFeature, value)}
           onCancel={props.onCancel}
         />
@@ -1313,6 +1312,17 @@ export function Inspector(props: InspectorProps) {
             </div>
           </>
         )}
+        {data.featureKind === 'sketch' &&
+          selectedSketch &&
+          selectedSketchObject?.objectKind !== 'text' && (
+            <button
+              type="button"
+              className="secondary"
+              onClick={() => props.onEditSketchInViewport(selectedFeature)}
+            >
+              Edit sketch in viewport
+            </button>
+          )}
         {form}
         {selectedTopology?.kind === 'face' &&
           selectedBody?.source === 'imported-step' && (

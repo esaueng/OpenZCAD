@@ -1,6 +1,6 @@
+import { FeatureBuildError } from '../lib/featureValidation';
 import { useRef } from 'react';
-import type {
-  FeatureId, BodyId, ProjectDocument } from '@openzcad/shared';
+import type { FeatureId, BodyId, ProjectDocument } from '@openzcad/shared';
 import { CommandManager, type AnyCommand } from '@openzcad/command-system';
 import { errorMessage } from '../lib/errors';
 import { validatedFeatureRejection } from '../lib/featureValidation';
@@ -53,6 +53,7 @@ export interface ValidatedFeatureCommitOptions {
    * form the user opened next, blaming it for the previous form's problem.
    */
   onFailure?(message: string | null): void;
+  onRejection?(error: FeatureBuildError): void;
 }
 
 export interface ValidatedFeatureTarget {
@@ -315,10 +316,7 @@ export function useValidatedFeatureCommit(
     // A new attempt answers whatever refusal is still on screen, even when it
     // goes on to fail for a different reason — that reason replaces this.
     host.onFailure?.(null);
-    host.onStatus(
-      input.validatingMessage ??
-        'Checking geometry…'
-    );
+    host.onStatus(input.validatingMessage ?? 'Checking geometry…');
     try {
       let derived: ProjectDocument['derived'];
       let documentMoved: boolean;
@@ -366,7 +364,11 @@ export function useValidatedFeatureCommit(
           documentMoved
         });
         if (rejection) {
-          throw new Error(rejection.message);
+          throw new FeatureBuildError(
+            rejection.message,
+            target.featureId,
+            target.featureName
+          );
         }
       }
       if (input.targets.length === 0 && documentMoved) {
@@ -430,6 +432,8 @@ export function useValidatedFeatureCommit(
       if (input.cancelled?.() || input.signal?.aborted) {
         return 'cancelled';
       }
+      if (error instanceof FeatureBuildError && !documentMovedFrom(current))
+        host.onRejection?.(error);
       const message = errorMessage(error, 'Operation was not applied.');
       host.onStatus(message);
       if (input.onFailure) {

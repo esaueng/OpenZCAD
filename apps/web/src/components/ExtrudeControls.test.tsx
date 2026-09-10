@@ -19,7 +19,6 @@ describe('ExtrudeControls', () => {
         bodies={bodies}
         disabled={false}
         onChange={onChange}
-        onDistance={vi.fn()}
       />
     );
     await user.selectOptions(screen.getByLabelText('Extrude operation'), 'cut');
@@ -30,7 +29,6 @@ describe('ExtrudeControls', () => {
         bodies={bodies}
         disabled={false}
         onChange={onChange}
-        onDistance={vi.fn()}
       />
     );
     expect(screen.getByText('Select a target before applying.')).toBeVisible();
@@ -53,7 +51,6 @@ describe('ExtrudeControls', () => {
         bodies={[bodies[0]!]}
         disabled={false}
         onChange={onChange}
-        onDistance={vi.fn()}
       />
     );
     await user.selectOptions(screen.getByLabelText('Extrude operation'), 'add');
@@ -67,7 +64,6 @@ describe('ExtrudeControls', () => {
         bodies={bodies}
         disabled={false}
         onChange={onChange}
-        onDistance={vi.fn()}
       />
     );
     await user.selectOptions(
@@ -77,18 +73,16 @@ describe('ExtrudeControls', () => {
     expect(onChange).toHaveBeenLastCalledWith({ operation: 'new-body' });
   });
 
-  it('locks operation, target and distance during validation', () => {
+  it('locks operation and target during validation', () => {
     render(
       <ExtrudeControls
         choice={{ operation: 'cut', targetBodyId: bodies[0]!.bodyId }}
         bodies={bodies}
         disabled
         onChange={vi.fn()}
-        onDistance={vi.fn()}
       />
     );
     expect(screen.getByLabelText('Extrude operation')).toBeDisabled();
     expect(screen.getByLabelText('Extrude target body')).toBeDisabled();
-    expect(screen.getByRole('button', { name: 'Distance…' })).toBeDisabled();
   });
 });
