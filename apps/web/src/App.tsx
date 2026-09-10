@@ -1,3 +1,5 @@
+import { featureHistory, featureResultBodyIds } from './lib/featureHistory';
+import { FeatureBuildError } from './lib/featureValidation';
 import { edgeModifierCommand } from './lib/edgeModifierEdit';
 import type { EdgeModifierFormValue } from './components/forms/FeatureForms';
 import { documentNodesWithHistory } from '@openzcad/shared';
@@ -262,11 +264,6 @@ import {
   type ToolId
 } from './lib/tools';
 import { AppShell } from './components/AppShell';
-import { SketchWorkflow } from './components/SketchWorkflow';
-import {
-  checkSketchEdit,
-  sketchEntityEditCommands
-} from './lib/sketch/editing';
 import { WorkspaceColumn } from './components/WorkspaceColumn';
 import {
   ViewportDockExtras,
@@ -556,6 +553,32 @@ const LazyMeasurementDock = lazy(() =>
     default: module.MeasurementDock
   }))
 );
+const LazyFeatureHistoryPanel = lazy(() =>
+  import('./components/FeatureHistoryPanel').then((module) => ({
+    default: module.FeatureHistoryPanel
+  }))
+);
+const LazySketchWorkflow = lazy(() =>
+  import('./components/SketchWorkflow').then((module) => ({
+    default: module.SketchWorkflow
+  }))
+);
+function FeatureHistoryPanel(
+  props: ComponentProps<typeof LazyFeatureHistoryPanel>
+) {
+  return (
+    <Suspense fallback={null}>
+      <LazyFeatureHistoryPanel {...props} />
+    </Suspense>
+  );
+}
+function SketchWorkflow(props: ComponentProps<typeof LazySketchWorkflow>) {
+  return (
+    <Suspense fallback={null}>
+      <LazySketchWorkflow {...props} />
+    </Suspense>
+  );
+}
 const LazySketchToolRail = lazy(() =>
   import('./components/SketchToolRail').then((module) => ({
     default: module.SketchToolRail
@@ -2472,6 +2495,37 @@ export function App() {
   // reservation it took back to the run that adopts it: two callbacks pulled
   // out separately could be wired from different hook instances, and a
   // reservation the run does not recognise degrades in silence.
+  const [historyFailure, setHistoryFailure] = useState<{
+    projectId: string;
+    version: number;
+    error: FeatureBuildError;
+  } | null>(null);
+  function recordHistoryFailure(
+    error: FeatureBuildError,
+    base?: ProjectDocument
+  ) {
+    const current = managerRef.current?.document;
+    if (
+      !current ||
+      !error.featureId ||
+      (base &&
+        (base.projectId !== current.projectId ||
+          base.version !== current.version)) ||
+      !listFeaturesInOrder(current).some(
+        (feature) => feature.featureId === error.featureId
+      )
+    )
+      return;
+    setHistoryFailure({
+      projectId: current.projectId,
+      version: current.version,
+      error
+    });
+    setPanelState((state) => ({
+      ...state,
+      sidebarSections: { ...state.sidebarSections, history: true }
+    }));
+  }
   const validatedFeature = useValidatedFeatureCommit({
     manager: () => managerRef.current,
     derive: (document) => geometry.syncOnce(document),
@@ -2481,7 +2535,8 @@ export function App() {
       executeTransaction(label, commands, derived ?? undefined),
     onBusy: setBusy,
     onStatus: setStatus,
-    onFailure: setFeatureFormError
+    onFailure: setFeatureFormError,
+    onRejection: recordHistoryFailure
   });
   const executeValidatedFeature = validatedFeature.run;
   const edgeFormCandidate = useRef<{
@@ -9491,6 +9546,7 @@ export function App() {
     label: string,
     objectId?: string
   ) {
+    const { checkSketchEdit } = await import('./lib/sketch/editing');
     const derived = await checkSketchEdit(
       base,
       sketchId,
@@ -9535,6 +9591,7 @@ export function App() {
     setSketchEditError(null);
     setSketchDiagnosticPoints([]);
     try {
+      const { sketchEntityEditCommands } = await import('./lib/sketch/editing');
       const commands = await sketchEntityEditCommands(
         base,
         sketchId,
@@ -9555,6 +9612,7 @@ export function App() {
         setSketchSolveStatus(null);
       }
     } catch (error) {
+      if (error instanceof FeatureBuildError) recordHistoryFailure(error, base);
       const message = errorMessage(
         error,
         'The sketch edit could not be applied.'
@@ -10020,6 +10078,7 @@ export function App() {
         prospective = command.apply(prospective);
       }
     } catch (error) {
+      if (error instanceof FeatureBuildError) recordHistoryFailure(error, base);
       setStatus(errorMessage(error, `${spec.label} dimension is invalid.`));
       return;
     }
@@ -10086,6 +10145,7 @@ export function App() {
         );
       }
     } catch (error) {
+      if (error instanceof FeatureBuildError) recordHistoryFailure(error, base);
       setSketchSolveStatus({ label: 'Solve failed', tone: 'warn' });
       setSketchEditError(
         errorMessage(error, 'The sketch could not be solved.')
@@ -10293,6 +10353,7 @@ export function App() {
         );
       }
     } catch (error) {
+      if (error instanceof FeatureBuildError) recordHistoryFailure(error, base);
       setSketchSolveStatus({ label: 'Solve failed', tone: 'warn' });
       setSketchEditError(
         errorMessage(error, 'The sketch could not be solved.')
@@ -12203,7 +12264,13 @@ export function App() {
     handleSelectFeatureFromTree(node.id);
   }
 
-  function handleSelectFeatureFromTree(nodeId: string) {
+  function handleOpenHistoryFeature(nodeId: string) {
+    setFeatureFormError(null);
+    setSketchEditError(null);
+    handleSelectFeatureFromTree(nodeId, false);
+  }
+
+  function handleSelectFeatureFromTree(nodeId: string, toggle = true) {
     extrudeEditRequest.current += 1;
     setTool(null);
     setSelectedTopology(null);
@@ -12213,12 +12280,14 @@ export function App() {
     // running against geometry the panel no longer shows.
     dispatchInteraction({ type: 'clear' });
     const next =
-      featureSelectionSource === 'pinned' && selectedFeatureNodeId === nodeId
+      toggle &&
+      featureSelectionSource === 'pinned' &&
+      selectedFeatureNodeId === nodeId
         ? null
         : nodeId;
     selectFeatureNode(next, 'pinned');
     const node = next && doc ? doc.nodes[next] : undefined;
-    const bodyId = node?.kind === 'feature' ? node.bodyId : undefined;
+
     const sourceSketchId =
       node?.kind === 'feature' &&
       (node.data.featureKind === 'sketch' ||
@@ -12298,12 +12367,22 @@ export function App() {
     } else {
       setSelectedProfiles([]);
     }
-    const representation = bodyId
-      ? doc?.derived.bodyRepresentations[bodyId]
-      : undefined;
-    setSelectedBodyIds(
-      bodyId && representation && !representation.consumed ? [bodyId] : []
-    );
+    const visible = (id: BodyId) => {
+      const result = doc?.derived.bodyRepresentations[id];
+      return result && !result.consumed && !hiddenBodyIds.has(id);
+    };
+    const direct =
+      node?.kind === 'feature'
+        ? featureResultBodyIds(node).filter(visible)
+        : [];
+    const descendants =
+      node?.kind === 'feature' && doc
+        ? featureHistory(doc)
+            .downstream(node.featureId)
+            .flatMap(featureResultBodyIds)
+            .filter(visible)
+        : [];
+    setSelectedBodyIds([...new Set(direct.length ? direct : descendants)]);
   }
 
   function handleSelectBodyFromTree(bodyId: BodyId, additive: boolean) {
@@ -12375,9 +12454,7 @@ export function App() {
   function handleDeleteFeature(featureId: FeatureId, name: string) {
     // Counted before the delete: afterwards the source is gone and the walk
     // has nothing to start from.
-    const dependents = doc
-      ? affectedFeatureTargets(doc, featureId).slice(1)
-      : [];
+    const dependents = doc ? featureHistory(doc).downstream(featureId) : [];
     if (
       executeCommand(
         commandFactories.deleteFeature({ featureId }, `Delete ${name}`)
@@ -12421,6 +12498,28 @@ export function App() {
     );
   }
 
+  function handleResumeHistory() {
+    const commands = features
+      .filter(isFeatureRollbackSuppressed)
+      .map((feature) =>
+        commandFactories.setNodeMetadata(
+          {
+            nodeId: feature.id,
+            metadata: { [FEATURE_ROLLBACK_SUPPRESSED_METADATA_KEY]: null }
+          },
+          `Resume ${feature.name}`
+        )
+      );
+    if (
+      commands.length &&
+      executeTransaction('Resume full history', commands)
+    ) {
+      announce(
+        'Full history resumed. Manually suppressed features remain suppressed.'
+      );
+    }
+  }
+
   function handleRollbackAfterFeature(featureId: FeatureId, name: string) {
     const markerIndex = features.findIndex(
       (feature) => feature.featureId === featureId
@@ -12454,7 +12553,9 @@ export function App() {
       setStatus(`History is already rolled back after ${name}.`);
       return;
     }
-    executeTransaction(`Roll back after ${name}`, commands);
+    if (executeTransaction(`Roll back after ${name}`, commands)) {
+      announce(`History rolled back after ${name}. Later features are paused.`);
+    }
   }
 
   function openContextMenu(
@@ -14024,6 +14125,21 @@ export function App() {
       hiddenBodyIds={hiddenBodyIds}
       hiddenSketchIds={hiddenSketchIds}
       warnings={warnings}
+      historyDetails={
+        <FeatureHistoryPanel
+          document={doc}
+          selectedId={selectedFeatureNodeId}
+          failure={
+            historyFailure?.projectId === doc.projectId &&
+            historyFailure.version === doc.version
+              ? historyFailure.error
+              : null
+          }
+          onSelect={handleOpenHistoryFeature}
+          onResumeHistory={handleResumeHistory}
+          onDismissFailure={() => setHistoryFailure(null)}
+        />
+      }
       checkpoints={doc?.checkpoints ?? []}
       documentVersion={doc?.version ?? 0}
       restorableCheckpointIds={restorableCheckpointIds}

@@ -13,7 +13,10 @@ import type {
   SketchObjectData
 } from '@openzcad/shared';
 import { affectedFeatureTargets } from '../affectedFeatureTargets';
-import { validatedFeatureRejection } from '../featureValidation';
+import {
+  FeatureBuildError,
+  validatedFeatureRejection
+} from '../featureValidation';
 import { solvedSketchCommands, solveStatusLabel } from './applySolve';
 
 function apply(document: ProjectDocument, commands: AnyCommand[]) {
@@ -50,8 +53,10 @@ export async function checkSketchEdit(
       documentMoved: false
     });
     if (refusal)
-      throw new Error(
-        `${target.featureName}: ${refusal.message} The sketch edit was not saved.`
+      throw new FeatureBuildError(
+        `${target.featureName}: ${refusal.message} The sketch edit was not saved.`,
+        target.featureId,
+        target.featureName
       );
   }
   return derived;
