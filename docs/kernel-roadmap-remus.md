@@ -76,6 +76,11 @@ a P-Class issue yet. Each deserves an upstream reproduction bundle and a fix
    (`test/overlapping-pattern.test.ts:89`, held `it.fails`). Not in the
    P-Class program at all. File and fix upstream: fuse instances or refuse
    typed on measured overlap.
+   — done (PR #228, 2026-09-05): the pinned kernel fuses overlapping
+   instances; `test/overlapping-pattern.test.ts` now pins six faces and no
+   warnings at four spacings (9, 6, 3, 0.5) as a positive test, and the
+   held `it.fails` pin is retired. Pattern provenance through the fused
+   instances (C1) is still open.
 3. **`pushPullFace` with a negative offset on a cylinder's top cap** either
    trips the kernel's own volume gate or silently returns 65+ planar faces
    and no cylinder; the bottom cap is exact in both signs. Blocks retiring
@@ -196,8 +201,15 @@ slot through a top) still need the history path below. Remaining:
   shipped unified union has 6). Real evolution records for offset and direct
   edits (today explicit barriers), and edge/vertex provenance beyond the
   boolean path (both are the kernel's own declared remainder). Pattern
-  provenance through instance fusing (depends on S1.2). Fillet provenance
-  from construction history rather than normal+centroid matching.
+  provenance through instance fusing (S1.2 is fixed; the provenance half
+  remains). Fillet provenance from construction history rather than
+  normal+centroid matching.
+  — partial upstream (remus #338, merged 2026-09-09): persistent edit and
+  healing history now journals moves, surface replacement, cylindrical
+  blend radius edits, planar draft, defeature and healing, so the
+  "explicit barriers" for direct edits are gone kernel-side. Not yet in the
+  OpenZCAD pin (`a4582cf1`, package 2.130.11 predates it); the adapter
+  adoption lane below is unblocked at the next pin bump.
 - **Adapter:** adopt `*WithEntityEvolution` / journaled variants under the
   ADR-013 verification gate, class by class, in the order boolean → pattern
   → chamfer → shell/solid-offset → direct edits. Each class that flips makes
