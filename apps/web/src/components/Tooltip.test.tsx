@@ -36,9 +36,12 @@ describe('Tooltip', () => {
   });
 
   it('opens immediately from keyboard focus and closes on Escape', () => {
+    const onKeyDown = vi.fn();
     render(
       <Tooltip label="Fit view" shortcut="F">
-        <button type="button">Fit</button>
+        <button type="button" onKeyDown={onKeyDown}>
+          Fit
+        </button>
       </Tooltip>
     );
     const trigger = screen.getByRole('button', { name: 'Fit' });
@@ -46,9 +49,10 @@ describe('Tooltip', () => {
     fireEvent.focus(trigger);
     expect(screen.getByRole('tooltip')).toHaveTextContent('Fit viewF');
 
-    fireEvent.keyDown(window, { key: 'Escape' });
+    fireEvent.keyDown(trigger, { key: 'Escape' });
     expect(screen.queryByRole('tooltip')).toBeNull();
     expect(trigger).not.toHaveAttribute('aria-describedby');
+    expect(onKeyDown).toHaveBeenCalledOnce();
   });
 
   it('opens a sibling instantly during the 200 ms hand-off window', () => {
