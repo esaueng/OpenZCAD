@@ -706,8 +706,31 @@
 @media (max-width: 520px) {
   .viewport-dock-lane,
   .workspace-toast {
-    left: 8px;
+    /* Only the right inset tightens. The column still floats over the left
+       edge at these widths — nothing collapses it — so pinning `left` to the
+       window put 172px of a 374px dock, and the front of every toast, under
+       the column at 390px. */
+    left: calc(var(--column-w) + 8px);
     right: 8px;
+  }
+
+  /* Above this branch the dock is wider than its lane and spills over bare
+     canvas on purpose, which costs nothing. Here there is no bare canvas to
+     spill into: 378px of controls into a 194px lane at 390px ran four of the
+     dock's ten buttons past the window's right edge. The dock keeps to the
+     lane and scrolls its own contents instead, so every control stays
+     reachable. It has to be the scroller rather than the lane, which is
+     `pointer-events: none` and so is never hit-tested — a wheel or a drag
+     over the dock would never reach it. The bar is hidden; the dock's own
+     edge is the affordance, as it is for the column's browser. */
+  .viewport-dock {
+    max-width: 100%;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+
+  .viewport-dock::-webkit-scrollbar {
+    display: none;
   }
 
   .viewport-dock {
