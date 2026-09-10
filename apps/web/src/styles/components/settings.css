@@ -64,7 +64,35 @@
   white-space: nowrap;
 }
 
-.settings-topbar .primary,
+/* Mirrors `.topbar-actions .settings-action` in topbar.css so the way out
+   of Settings is the same control as the way in. */
+.settings-back-action {
+  width: auto;
+  min-width: 0;
+  height: 24px;
+  min-height: 24px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  padding: 0 7px;
+  color: var(--color-text);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  font-family: var(--font-ui);
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-medium);
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.settings-back-action:hover,
+.settings-back-action:focus-visible {
+  background: var(--color-surface-2);
+  border-color: var(--color-border);
+}
+
 .settings-topbar .secondary,
 .settings-card-action .secondary,
 .settings-token-control .secondary,
@@ -703,7 +731,7 @@
     display: none;
   }
 
-  .settings-topbar .primary {
+  .settings-back-action {
     margin-left: auto;
   }
 
@@ -800,7 +828,7 @@
     min-width: 0;
   }
 
-  .settings-topbar .primary {
+  .settings-back-action {
     font-size: 0;
   }
 }
