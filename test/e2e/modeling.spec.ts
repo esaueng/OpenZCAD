@@ -2969,8 +2969,13 @@ test('rejects a disconnected Union and succeeds after the gap is closed', async 
   await inspector.getByRole('button', { name: /^Apply/ }).click();
 
   await page.getByRole('button', { name: /^Union \(U\)/ }).click();
+  // A history-selected in-place edit now retains its result body as the
+  // next command's selection. Verify that handoff, then add the other body.
+  await expect(
+    inspector.locator('.pick-row', { hasText: 'Upper Body' })
+  ).toHaveClass(/selected/);
   await inspector.locator('.pick-row', { hasText: 'Lower Body' }).click();
-  await inspector.locator('.pick-row', { hasText: 'Upper Body' }).click();
+  await expect(inspector.locator('.pick-row.selected')).toHaveCount(2);
   await inspector.getByRole('button', { name: /^Create/ }).click();
 
   const union = page.locator('.feature-row', { hasText: 'Union' });
