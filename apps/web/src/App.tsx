@@ -277,7 +277,6 @@ import { TopBar } from './components/TopBar';
 import { ViewModeRail } from './components/ViewModeRail';
 import { Sidebar } from './components/Sidebar';
 import { TweakPanel } from './components/TweakPanel';
-import { WorkspaceTour } from './components/WorkspaceTour';
 import { StartScreen } from './components/StartScreen';
 import { StartupScreen } from './components/StartupScreen';
 import type { AuthConfigStatus } from './components/SettingsPage';
@@ -601,6 +600,12 @@ const LazyToolBar = lazy(() =>
     default: module.ToolBar
   }))
 );
+// The first-model tour shows once per device; nobody else pays for it.
+const LazyWorkspaceTour = lazy(() =>
+  import('./components/WorkspaceTour').then((module) => ({
+    default: module.WorkspaceTour
+  }))
+);
 const LazySketchToolRail = lazy(() =>
   import('./components/SketchToolRail').then((module) => ({
     default: module.SketchToolRail
@@ -713,6 +718,14 @@ function ToolBar(props: ComponentProps<typeof LazyToolBar>) {
   return (
     <Suspense fallback={null}>
       <LazyToolBar {...props} />
+    </Suspense>
+  );
+}
+
+function WorkspaceTour(props: ComponentProps<typeof LazyWorkspaceTour>) {
+  return (
+    <Suspense fallback={null}>
+      <LazyWorkspaceTour {...props} />
     </Suspense>
   );
 }
