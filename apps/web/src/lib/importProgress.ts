@@ -10,14 +10,61 @@
  * the bar still rather than inventing a number for it.
  */
 
-export type ImportPhase = 'saving' | 'reading' | 'building' | 'archiving';
+export type ImportPhase =
+  | 'saving'
+  | 'reading'
+  | 'building'
+  | 'archiving'
+  | 'preparing'
+  | 'loading-kernel'
+  | 'writing';
+
+/**
+ * What a run is: the verb the pill conjugates around the file name. Every
+ * kind shares the phases, the bar and the endings; only the words differ.
+ */
+export type JobKind = 'import' | 'export' | 'restore' | 'backup';
+
+/** The verb in each of the forms the pill uses. */
+export const JOB_WORDS: Record<
+  JobKind,
+  { running: string; done: string; refused: string; cancelled: string }
+> = {
+  import: {
+    running: 'Importing',
+    done: 'Imported',
+    refused: 'Not imported',
+    cancelled: 'Import cancelled'
+  },
+  export: {
+    running: 'Exporting',
+    done: 'Exported',
+    refused: 'Not exported',
+    cancelled: 'Export cancelled'
+  },
+  restore: {
+    running: 'Restoring',
+    done: 'Restored',
+    refused: 'Not restored',
+    cancelled: 'Restore cancelled'
+  },
+  backup: {
+    running: 'Backing up',
+    done: 'Backed up',
+    refused: 'Not backed up',
+    cancelled: 'Backup cancelled'
+  }
+};
 
 /** Plain words, not internals. The user does not care which kernel it is. */
 export const IMPORT_PHASE_LABEL: Record<ImportPhase, string> = {
   saving: 'Saving to this device',
   reading: 'Reading the file',
   building: 'Building geometry',
-  archiving: 'Archiving the original'
+  archiving: 'Archiving a copy',
+  preparing: 'Preparing',
+  'loading-kernel': 'Loading the geometry kernel',
+  writing: 'Writing the file'
 };
 
 /**
@@ -35,12 +82,18 @@ export const IMPORT_PHASE_LABEL: Record<ImportPhase, string> = {
  *  - `building` — 283 MB in about 7 s, from `scripts/profile-step-import.mjs`.
  *  - `archiving` — network, so the least certain of the four by far. Anywhere
  *    from 20 (fast link) to 100 (slow link) would be defensible.
+ *  - `preparing`, `loading-kernel`, `writing` — export-side phases, sized by
+ *    feel rather than measurement: a kernel load is a one-off of a few
+ *    seconds, the write is a save dialog the user drives.
  */
 const PHASE_WEIGHT: Record<ImportPhase, number> = {
   saving: 8,
   reading: 1,
   building: 25,
-  archiving: 40
+  archiving: 40,
+  preparing: 1,
+  'loading-kernel': 6,
+  writing: 3
 };
 
 export interface ImportRunProgress {
@@ -66,8 +119,18 @@ export function importOutcomeIsQuiet(outcome: ImportRunOutcome): boolean {
 
 export interface ImportRunOutcome {
   tone: ImportOutcomeTone;
-  /** One line. The status bar carries the longer version. */
+  /**
+   * The detail after the verb and the file name — "1 body", "saved on this
+   * device only", "the file was refused". One clause; the activity log
+   * carries the longer version.
+   */
   message: string;
+  /**
+   * The file arrived — a body landed, a download was written — whatever else
+   * went wrong around it. Decides the verb ("Imported" against "Not
+   * imported") and whether the bar completes. Absent means it did not.
+   */
+  landed?: boolean;
   /**
    * The only action an ending ever offers: the body imported but its source
    * never reached the cloud, so the project is not portable yet.
@@ -76,9 +139,13 @@ export interface ImportRunOutcome {
 }
 
 export interface ImportRunState {
-  /** New per run, so a second import replaces the card rather than merging. */
+  /** New per run, so a second import replaces the pill rather than merging. */
   id: string;
+  kind: JobKind;
   fileName: string;
+  /** Whether the pill offers Cancel: a restore that is already writing the
+   * project cannot stop halfway, so it offers none. */
+  cancellable: boolean;
   /** The phases THIS run will pass through — a storage-denied session has no
    * `saving` phase at all, and the bar must divide over what will happen. */
   phases: readonly ImportPhase[];
@@ -95,7 +162,7 @@ export interface ImportRunState {
 }
 
 /**
- * How long an import must run before the card appears.
+ * How long a run must go on before the pill appears.
  *
  * Deliberately measured from the start of the run rather than projected from
  * the file size: a projection would be wrong for a slow disk or a cold kernel,
@@ -104,7 +171,7 @@ export interface ImportRunState {
  */
 export const IMPORT_CARD_DELAY_MS = 600;
 
-/** How long a successful card stays up before it takes itself away. */
+/** How long a quiet ending stays up before the pill takes itself away. */
 export const IMPORT_CARD_SUCCESS_LINGER_MS = 4000;
 
 function clamp01(value: number): number {
@@ -185,12 +252,19 @@ export function coalesceImportProgress(
 }
 
 /**
- * What an import reports as it goes. Presentation only: every method here may
+ * What a run reports as it goes. Presentation only: every method here may
  * be dropped without changing what lands in the document or on the device,
  * which is why {@link StepImportRunDeps} takes it as optional.
  */
 export interface ImportProgressSink {
-  start(input: { fileName: string; phases: readonly ImportPhase[] }): void;
+  /** `kind` defaults to `import`, the one caller that predates the others. */
+  start(input: {
+    fileName: string;
+    phases: readonly ImportPhase[];
+    kind?: JobKind;
+    /** Defaults to true. */
+    cancellable?: boolean;
+  }): void;
   update(progress: ImportRunProgress): void;
   /** Terminal. Nothing is emitted for this run afterwards. */
   finish(outcome: ImportRunOutcome): void;
