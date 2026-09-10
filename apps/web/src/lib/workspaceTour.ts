@@ -37,7 +37,7 @@ export const WORKSPACE_TOUR_STEPS: readonly WorkspaceTourStep[] = [
   {
     id: 'create',
     title: 'Create your first feature',
-    body: 'Pick a tool from the Feature tools rail — a Box is one click, or press B. Hover any tool for its name and shortcut.',
+    body: 'Pick a tool from the Feature tools list — a Box is one click, or press B. Every tile shows its name and shortcut; fold a group to keep only its icons.',
     targetSelector: '.tool-palette',
     isComplete: (signals) => signals.featureCount > 0
   },
