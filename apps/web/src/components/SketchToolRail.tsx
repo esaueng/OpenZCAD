@@ -26,6 +26,7 @@ import type {
 import { CONSTRAINT_TOOL_SPECS } from '../lib/sketch/constraints';
 import { CONSTRAINT_ICONS } from './constraintIcons';
 import { StableLabel } from './StableLabel';
+import { Tooltip } from './Tooltip';
 
 /** One row of the palette's constraint list, pre-rendered by App. */
 export interface SketchConstraintListItem {
@@ -151,32 +152,37 @@ export function SketchToolRail({
   const drawTools = (
     <>
       {TOOLS.slice(0, 3).map(({ id, label, keyHint, icon: Icon }) => (
-        <button
-          key={id}
-          type="button"
-          className={tool === id ? 'active' : undefined}
-          aria-pressed={tool === id}
-          title={`${label} (${keyHint})`}
-          onClick={() => onTool(id)}
-        >
-          <Icon size={14} aria-hidden="true" />
-          {label}
-          <kbd>{keyHint}</kbd>
-        </button>
+        <Tooltip key={id} label={label} shortcut={keyHint}>
+          <button
+            type="button"
+            className={tool === id ? 'active' : undefined}
+            aria-pressed={tool === id}
+            onClick={() => onTool(id)}
+          >
+            <Icon size={14} aria-hidden="true" />
+            {label}
+            <kbd>{keyHint}</kbd>
+          </button>
+        </Tooltip>
       ))}
       <span className="sketch-circle-tool">
-        <button
-          type="button"
-          className={tool === 'circle' ? 'active' : undefined}
-          aria-pressed={tool === 'circle'}
-          aria-label={`Circle: ${CIRCLE_LABELS[circleMode]}`}
-          title={`${CIRCLE_LABELS[circleMode]} (C)`}
-          onClick={() => onTool('circle')}
+        <Tooltip
+          label={CIRCLE_LABELS[circleMode]}
+          shortcut="C"
+          description="Choose the circle type from the adjacent menu"
         >
-          <Circle size={14} aria-hidden="true" />
-          Circle
-          <kbd>C</kbd>
-        </button>
+          <button
+            type="button"
+            className={tool === 'circle' ? 'active' : undefined}
+            aria-pressed={tool === 'circle'}
+            aria-label={`Circle: ${CIRCLE_LABELS[circleMode]}`}
+            onClick={() => onTool('circle')}
+          >
+            <Circle size={14} aria-hidden="true" />
+            Circle
+            <kbd>C</kbd>
+          </button>
+        </Tooltip>
         <button
           type="button"
           className="sketch-circle-chevron"
@@ -211,18 +217,18 @@ export function SketchToolRail({
         ) : null}
       </span>
       {TOOLS.slice(3).map(({ id, label, keyHint, icon: Icon }) => (
-        <button
-          key={id}
-          type="button"
-          className={tool === id ? 'active' : undefined}
-          aria-pressed={tool === id}
-          title={`${label} (${keyHint})`}
-          onClick={() => onTool(id)}
-        >
-          <Icon size={14} aria-hidden="true" />
-          {label}
-          <kbd>{keyHint}</kbd>
-        </button>
+        <Tooltip key={id} label={label} shortcut={keyHint}>
+          <button
+            type="button"
+            className={tool === id ? 'active' : undefined}
+            aria-pressed={tool === id}
+            onClick={() => onTool(id)}
+          >
+            <Icon size={14} aria-hidden="true" />
+            {label}
+            <kbd>{keyHint}</kbd>
+          </button>
+        </Tooltip>
       ))}
     </>
   );
@@ -235,41 +241,47 @@ export function SketchToolRail({
           // Icon-only on purpose: five labelled buttons made the rail wider
           // than the viewer, sliding its left edge under the sidebar where
           // the parameter form intercepted every click on the Select tool.
-          <button
+          <Tooltip
             key={kind}
-            type="button"
-            className={active ? 'active' : undefined}
-            aria-pressed={active}
-            aria-label={label}
-            disabled={!canConstrain}
-            title={
-              canConstrain ? `${label} — ${hint}` : 'Draw an entity first.'
-            }
-            onClick={() => onConstraintTool(active ? null : kind)}
+            label={label}
+            description={canConstrain ? hint : 'Draw an entity first.'}
           >
-            <Icon size={14} aria-hidden="true" />
-          </button>
+            <button
+              type="button"
+              className={active ? 'active' : undefined}
+              aria-pressed={active}
+              aria-label={label}
+              disabled={!canConstrain}
+              onClick={() => onConstraintTool(active ? null : kind)}
+            >
+              <Icon size={14} aria-hidden="true" />
+            </button>
+          </Tooltip>
         );
       })}
     </>
   );
   const solveButton = (
     <>
-      <button
-        type="button"
-        disabled={!canConstrain || constraints.length === 0 || solving}
-        title={
+      <Tooltip
+        label={solving ? 'Solving…' : 'Solve'}
+        description={
           constraints.length === 0
             ? 'Add a constraint first.'
             : 'Solve the sketch constraints and apply the result.'
         }
-        onClick={onSolve}
       >
-        <Play size={14} aria-hidden="true" />
-        <StableLabel reserve={['Solving…', 'Solve']}>
-          {solving ? 'Solving…' : 'Solve'}
-        </StableLabel>
-      </button>
+        <button
+          type="button"
+          disabled={!canConstrain || constraints.length === 0 || solving}
+          onClick={onSolve}
+        >
+          <Play size={14} aria-hidden="true" />
+          <StableLabel reserve={['Solving…', 'Solve']}>
+            {solving ? 'Solving…' : 'Solve'}
+          </StableLabel>
+        </button>
+      </Tooltip>
     </>
   );
   const solvePill = (
@@ -289,28 +301,32 @@ export function SketchToolRail({
   );
   const utilityTools = (
     <>
-      <button
-        type="button"
-        className={construction ? 'active' : undefined}
-        aria-pressed={construction}
-        title="Toggle construction geometry"
-        onClick={() => onConstruction(!construction)}
+      <Tooltip label="Construction" description="Toggle construction geometry">
+        <button
+          type="button"
+          className={construction ? 'active' : undefined}
+          aria-pressed={construction}
+          onClick={() => onConstruction(!construction)}
+        >
+          <Construction size={14} aria-hidden="true" />
+          Construction
+        </button>
+      </Tooltip>
+      <Tooltip
+        label="Diagnostics"
+        description="Find open endpoints and invalid profile geometry"
       >
-        <Construction size={14} aria-hidden="true" />
-        Construction
-      </button>
-      <button
-        type="button"
-        title="Find open endpoints and invalid profile geometry"
-        onClick={onDiagnostics}
-      >
-        <ScanSearch size={14} aria-hidden="true" />
-        Diagnostics
-      </button>
-      <button type="button" title="Extrude valid profiles" onClick={onExtrude}>
-        <Layers3 size={14} aria-hidden="true" />
-        Extrude
-      </button>
+        <button type="button" onClick={onDiagnostics}>
+          <ScanSearch size={14} aria-hidden="true" />
+          Diagnostics
+        </button>
+      </Tooltip>
+      <Tooltip label="Extrude" description="Extrude valid profiles">
+        <button type="button" onClick={onExtrude}>
+          <Layers3 size={14} aria-hidden="true" />
+          Extrude
+        </button>
+      </Tooltip>
     </>
   );
   const palette = (
@@ -423,32 +439,36 @@ export function SketchToolRail({
                     {constraints.map(({ constraintId, label, editable }) => (
                       <li key={constraintId}>
                         {editable ? (
+                          <Tooltip label={`Edit constraint: ${label}`}>
+                            <button
+                              type="button"
+                              className="sketch-constraint-edit"
+                              aria-label={`Edit constraint: ${label}`}
+                              onClick={(event) =>
+                                onEditConstraint(constraintId, {
+                                  x: event.clientX,
+                                  y: event.clientY
+                                })
+                              }
+                            >
+                              {label}
+                            </button>
+                          </Tooltip>
+                        ) : (
+                          <Tooltip label={label}>
+                            <span>{label}</span>
+                          </Tooltip>
+                        )}
+                        <Tooltip label={`Delete constraint: ${label}`}>
                           <button
                             type="button"
-                            className="sketch-constraint-edit"
-                            title={`Edit constraint: ${label}`}
-                            aria-label={`Edit constraint: ${label}`}
-                            onClick={(event) =>
-                              onEditConstraint(constraintId, {
-                                x: event.clientX,
-                                y: event.clientY
-                              })
-                            }
+                            className="row-delete"
+                            aria-label={`Delete constraint: ${label}`}
+                            onClick={() => onDeleteConstraint(constraintId)}
                           >
-                            {label}
+                            <Trash2 size={12} aria-hidden="true" />
                           </button>
-                        ) : (
-                          <span title={label}>{label}</span>
-                        )}
-                        <button
-                          type="button"
-                          className="row-delete"
-                          title={`Delete constraint: ${label}`}
-                          aria-label={`Delete constraint: ${label}`}
-                          onClick={() => onDeleteConstraint(constraintId)}
-                        >
-                          <Trash2 size={12} aria-hidden="true" />
-                        </button>
+                        </Tooltip>
                       </li>
                     ))}
                   </ul>
