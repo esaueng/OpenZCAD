@@ -97,15 +97,15 @@ export function keypadClampPosition(
   };
 }
 
-export type KeypadUnit = 'mm' | 'cm' | 'm' | 'deg';
+/** Every document unit, plus the one angles use. */
+export type KeypadUnit = UnitSystem | 'deg';
 
 /**
  * Units a value may name for itself, e.g. `25 mm` or `1 in`.
  *
  * A typed suffix beats the selected chip, which is the point: the chips cover
  * the document's own units, and this is how a value in some other unit gets
- * entered without changing them. Inch is reachable only this way — there is no
- * inch chip, so an inch document could not otherwise be typed into in inches.
+ * entered without changing them.
  */
 const TYPED_UNITS: Record<string, UnitSystem> = {
   mm: 'mm',
