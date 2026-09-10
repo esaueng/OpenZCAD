@@ -1,3 +1,4 @@
+import type { growingHolderPreview } from './lib/growingHolderPreview';
 import { rebuildProgressLabel } from './lib/rebuildProgressLabel';
 import { featureHistory, featureResultBodyIds } from './lib/featureHistory';
 import { FeatureBuildError } from './lib/featureValidation';
@@ -1976,12 +1977,33 @@ export function App() {
     })
   ).current;
   useEffect(() => () => exactEntryQueue.cancel(), [exactEntryQueue]);
+  const [parameterPreviewBase, setParameterPreviewBase] =
+    useState<ProjectDocument | null>(null);
+  const [makeParameterPreview, setMakeParameterPreview] = useState<
+    typeof growingHolderPreview | null
+  >(null);
+  useEffect(() => {
+    if (!parameterPreviewBase || makeParameterPreview) return;
+    let disposed = false;
+    void import('./lib/growingHolderPreview')
+      .then((module) => {
+        if (!disposed) setMakeParameterPreview(() => module.growingHolderPreview);
+      })
+      .catch(() => {
+        // Exact rebuilding remains available without a preview.
+      });
+    return () => {
+      disposed = true;
+    };
+  }, [parameterPreviewBase, makeParameterPreview]);
   const geometry = useGeometryWorker({
     manager: () => managerRef.current,
     onDerived: (derived) => {
       const manager = managerRef.current;
       if (manager) {
-        setDoc(manager.commitDerivedState(derived));
+        const validated = manager.commitDerivedState(derived);
+        setParameterPreviewBase(derived.warnings.length ? null : validated);
+        setDoc(validated);
         // Fresh meshes now reflect the document (worker results are dropped
         // unless their version matches), so any held Move pose must release
         // in this same batch — one render later would double-transform.
@@ -4118,6 +4140,16 @@ export function App() {
   // document swap, again when the worker result landed) for identical
   // geometry.
   const liveBodyRepresentations = doc?.derived.bodyRepresentations ?? null;
+  const parameterPreview = useMemo(
+    () =>
+      !previewDoc && !exactGeometryReady && geometry.state.phase !== 'failed'
+        ? makeParameterPreview?.(parameterPreviewBase, doc) ?? null
+        : null,
+    [
+      makeParameterPreview, parameterPreviewBase, doc, previewDoc,
+      exactGeometryReady, geometry.state.phase
+    ]
+  );
   const viewerBodies = useMemo<BodyRepresentation[]>(
     () =>
       (previewDoc
@@ -13471,7 +13503,9 @@ export function App() {
       ? rebuildProgressLabel(geometry.state.progress)
       : null;
   const staleProjectionLabel =
-    Object.keys(representations).length > 0
+    parameterPreview
+      ? 'Width preview · exact geometry pending'
+      : Object.keys(representations).length > 0
       ? 'showing the last valid projection as stale'
       : 'no exact projection is available yet';
   const visibleStatus = exactGeometryReady
@@ -14444,7 +14478,7 @@ export function App() {
         >
           <ViewerShell
             projectId={doc.projectId}
-            bodies={viewerBodies}
+            bodies={parameterPreview?.filter(body => !hiddenBodyIds.has(body.bodyId)) ?? viewerBodies}
             measurementAnnotations={measurementAnnotations}
             measurementCloudSync={[
               doc.projectId,
@@ -14480,9 +14514,9 @@ export function App() {
             }
             sketches={viewerSketches}
             selectedBodyIds={selectedBodyIds}
-            selectedTopology={renderedSelectedTopology}
+            selectedTopology={parameterPreview ? null : renderedSelectedTopology}
             previewFaceHighlights={previewBlendFaces}
-            selectedEdges={selectedEdges}
+            selectedEdges={parameterPreview ? [] : selectedEdges}
             pickListEnabled={appSettings.experiments.directManipulation}
             settings={viewerSettings}
             fitSignal={fitSignal}
@@ -14494,7 +14528,7 @@ export function App() {
             // the viewer only builds a manipulator when it is given a target,
             // so view mode keeps orbit, pan and picking while no gesture can
             // reach the document.
-            editableBodyIds={viewerEditableBodyIds}
+            editableBodyIds={parameterPreview ? [] : viewerEditableBodyIds}
             movePreview={movePreview}
             moveCommitHold={moveCommitHold}
             appearancePreview={bodyAppearancePreview}
