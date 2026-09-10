@@ -212,7 +212,7 @@ describe('an inch document', () => {
     const { input, onCommit } = renderInch('0.25');
     fireEvent.click(screen.getByRole('radio', { name: 'mm' }));
     fireEvent.keyDown(input, { key: 'Enter' });
-    expect(onCommit.mock.calls[0][0]).toBeCloseTo(0.25 / 25.4, 8);
+    expect(onCommit.mock.calls[0]?.[0]).toBeCloseTo(0.25 / 25.4, 8);
   });
 });
 
