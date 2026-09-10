@@ -1,5 +1,9 @@
 # Imported hammer opening recipe
 
+For the holder that grows with the opening and moves the mounting holes with
+the arms, see [the growing-holder construction](imported-hammer-growing.md).
+This page describes the older fixed-outside-width recipe.
+
 The AI patch operation `add_imported_opening_recipe` compiles a measured opening
 edit into ordinary document history. It retains the imported STEP geometry and
 uses Remus exact booleans. It does not infer regions or restore the original CAD
