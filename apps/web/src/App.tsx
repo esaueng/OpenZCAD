@@ -8110,6 +8110,23 @@ export function App() {
     setPendingShaprImport(null);
   }
 
+  /**
+   * Files dropped on the viewport. A backup restores as its own project, so
+   * it travels alone; anything else is the File menu's import, same rules.
+   */
+  async function handleDroppedFiles(files: File[]) {
+    const backups = files.filter((file) => /\.openzcad$/i.test(file.name));
+    if (backups.length === 0) {
+      await handleImportFiles(files);
+      return;
+    }
+    if (files.length !== 1) {
+      setStatus('Drop one .openzcad backup on its own.');
+      return;
+    }
+    await handleImportProject(backups[0]!);
+  }
+
   async function handleImportFiles(files: File[]) {
     const shaprFiles = files.filter((file) => /\.shapr$/i.test(file.name));
     if (shaprFiles.length === 0) {
@@ -14427,6 +14444,7 @@ export function App() {
   return (
     <AppShell
       workspaceRef={workspaceRef}
+      onDropFiles={(files) => void handleDroppedFiles(files)}
       sidebarWidth={sidebarWidth}
       assistantWidth={assistantWidth}
       sidebarResizer={

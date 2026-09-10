@@ -757,3 +757,48 @@
   bottom: auto;
   align-items: flex-start;
 }
+
+/* ── Drop to import ──
+   Lights the whole stage while a file from the desktop is over it. Not a
+   dialog and not a card: the drop runs the same import the File menu does.
+   Click-through, so the drag events keep reaching the viewer area beneath
+   and the overlay cannot flicker itself off. ── */
+.file-drop-target {
+  display: none;
+  position: absolute;
+  inset: 10px;
+  z-index: var(--z-panel-resizer);
+  place-items: center;
+  border: 1.5px dashed var(--color-accent-border);
+  border-radius: var(--radius-lg);
+  background: color-mix(in srgb, var(--color-accent) 6%, transparent);
+  pointer-events: none;
+}
+
+.file-drop-target.active {
+  display: grid;
+  place-items: center;
+  animation: oz-fade var(--dur-fast) var(--ease-out);
+}
+
+.file-drop-target > div {
+  display: grid;
+  gap: 4px;
+  padding: 14px 22px;
+  text-align: center;
+  color: var(--color-text);
+  background: color-mix(in srgb, var(--color-surface) 92%, transparent);
+  border: var(--border-strong);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-2);
+}
+
+.file-drop-target strong {
+  font-size: var(--fs-md);
+  font-weight: var(--fw-medium);
+}
+
+.file-drop-target span {
+  color: var(--color-text-muted);
+  font-size: var(--fs-sm);
+}
