@@ -151,3 +151,81 @@ describe('numeric entry first character', () => {
     expect(onPreview).not.toHaveBeenCalled();
   });
 });
+
+describe('an inch document', () => {
+  function renderInch(initial: string) {
+    const onCommit = vi.fn();
+    const request: KeypadRequest = {
+      kind: 'radius',
+      label: 'Radius',
+      initial,
+      unitKind: 'length',
+      selectInitial: false
+    };
+    render(
+      <NumericKeypad
+        request={request}
+        units="inch"
+        scope={{}}
+        anchorRef={{ current: null }}
+        onPreview={vi.fn()}
+        onCommit={onCommit}
+        onCancel={() => undefined}
+      />
+    );
+    return {
+      input: screen.getByRole<HTMLInputElement>('textbox'),
+      onCommit
+    };
+  }
+
+  /*
+    App.tsx prefills every keypad with a value already in document units, so
+    the opening chip has to be that unit. It used to open on `mm` with no inch
+    chip to move to, which silently divided a prefilled inch value by 25.4 —
+    0.25 in committed as 0.00984 in.
+  */
+  it('commits a prefilled value unchanged instead of reading it as millimetres', () => {
+    const { input, onCommit } = renderInch('0.25');
+    fireEvent.keyDown(input, { key: 'Enter' });
+    expect(onCommit).toHaveBeenCalledWith(0.25, '0.25');
+  });
+
+  it('opens on its own unit and offers it as a chip', () => {
+    renderInch('0.25');
+    const chips = screen
+      .getByRole('radiogroup', { name: 'Entry unit' })
+      .querySelectorAll('button');
+    expect([...chips].map((chip) => chip.textContent)).toEqual([
+      'mm',
+      'cm',
+      'm',
+      'in'
+    ]);
+    expect(screen.getByRole('radio', { name: 'in' })).toHaveAttribute(
+      'aria-checked',
+      'true'
+    );
+  });
+
+  it('still rescales when the user picks a different chip', () => {
+    const { input, onCommit } = renderInch('0.25');
+    fireEvent.click(screen.getByRole('radio', { name: 'mm' }));
+    fireEvent.keyDown(input, { key: 'Enter' });
+    expect(onCommit.mock.calls[0]?.[0]).toBeCloseTo(0.25 / 25.4, 8);
+  });
+});
+
+describe('a millimetre document', () => {
+  it('keeps its three chips, so the inch chip is not shown where it means nothing', () => {
+    setup('10', false);
+    const chips = screen
+      .getByRole('radiogroup', { name: 'Entry unit' })
+      .querySelectorAll('button');
+    expect([...chips].map((chip) => chip.textContent)).toEqual([
+      'mm',
+      'cm',
+      'm'
+    ]);
+  });
+});

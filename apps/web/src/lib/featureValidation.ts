@@ -132,3 +132,15 @@ export function validatedFeatureRejection(
   }
   return null;
 }
+
+/** Keeps exact failure attribution intact while crossing async edit boundaries. */
+export class FeatureBuildError extends Error {
+  constructor(
+    message: string,
+    public readonly featureId: FeatureId | undefined,
+    public readonly featureName: string
+  ) {
+    super(message);
+    this.name = 'FeatureBuildError';
+  }
+}

@@ -124,6 +124,8 @@ function makeProps(
     onApplyTextSketch: vi.fn(),
     onEditSketchInViewport: vi.fn(),
     onApplyExtrude: vi.fn(),
+    onPreviewExtrude: vi.fn(),
+    extrudeTargets: [],
     onApplyRevolve: vi.fn(),
     onApplyBoolean: vi.fn(),
     onApplyTransform: vi.fn(),

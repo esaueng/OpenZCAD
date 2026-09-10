@@ -107,6 +107,7 @@ describe('validated feature commit', () => {
     const before = structuredClone(manager.document);
     const commit = vi.fn(() => true);
     const onStatus = vi.fn();
+    const onRejection = vi.fn();
     const { result } = renderHook(() =>
       useValidatedFeatureCommit({
         manager: () => manager,
@@ -147,7 +148,8 @@ describe('validated feature commit', () => {
         commit,
         commitTransaction: () => true,
         onBusy: vi.fn(),
-        onStatus
+        onStatus,
+        onRejection
       })
     );
 
@@ -162,6 +164,12 @@ describe('validated feature commit', () => {
     });
 
     expect(applied).toBe('rejected');
+    expect(onRejection).toHaveBeenCalledWith(
+      expect.objectContaining({
+        featureId: resultFeatureId,
+        featureName: 'Tangent boss union'
+      })
+    );
     expect(commit).not.toHaveBeenCalled();
     expect(manager.document).toEqual(before);
     expect(manager.canUndo).toBe(false);
@@ -3356,4 +3364,62 @@ describe('cancelling an import', () => {
       'Frame.step was not imported: you cancelled it.'
     );
   });
+});
+
+it('does not publish a repair target from a rebuild of an older document version', async () => {
+  const document = addPrimitiveFeature(
+    createProjectDocument('Stale repair', toUserId('user_test')),
+    {
+      name: 'Plate',
+      primitiveKind: 'box',
+      dimensions: { width: 10, height: 4, depth: 5 }
+    }
+  );
+  const feature = listFeaturesInOrder(document)[0]!;
+  const manager = new CommandManager(document);
+  const onRejection = vi.fn();
+  const commit = vi.fn(() => true);
+  const { result } = renderHook(() =>
+    useValidatedFeatureCommit({
+      manager: () => manager,
+      derive: async (candidate) => {
+        manager.execute(
+          commandFactories.setParameter({ name: 'other_edit', expression: '1' })
+        );
+        return {
+          ...candidate.derived,
+          warnings: ['Feature "Plate": Invalid geometry.'],
+          featureWarnings: [
+            {
+              featureId: feature.featureId,
+              featureName: feature.name,
+              message: 'Feature "Plate": Invalid geometry.',
+              kind: 'build-failed' as const
+            }
+          ]
+        };
+      },
+      commit,
+      commitTransaction: () => true,
+      onBusy: vi.fn(),
+      onStatus: vi.fn(),
+      onRejection
+    })
+  );
+  await act(async () => {
+    await result.current.run(
+      commandFactories.updateFeature({
+        featureId: feature.featureId,
+        data: { dimensions: { width: 12, height: 4, depth: 5 } }
+      }),
+      {
+        featureId: feature.featureId,
+        featureName: feature.name,
+        resultBodyId: feature.bodyId!,
+        successMessage: 'Updated'
+      }
+    );
+  });
+  expect(commit).not.toHaveBeenCalled();
+  expect(onRejection).not.toHaveBeenCalled();
 });
