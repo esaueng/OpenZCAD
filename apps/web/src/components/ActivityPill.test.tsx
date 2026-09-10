@@ -1,6 +1,6 @@
 import { act, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { ImportProgressCard, elapsedLabel } from './ImportProgressCard';
+import { ActivityPill, elapsedLabel } from './ActivityPill';
 import {
   IMPORT_CARD_DELAY_MS,
   IMPORT_CARD_SUCCESS_LINGER_MS,
@@ -11,7 +11,9 @@ import {
 function running(overrides: Partial<ImportRunState> = {}): ImportRunState {
   return {
     id: 'run-1',
+    kind: 'import',
     fileName: 'assembly.step',
+    cancellable: true,
     phases: ['saving', 'reading', 'building', 'archiving'],
     progress: { phase: 'saving', fraction: 0.5 },
     cancelRequested: false,
@@ -20,16 +22,19 @@ function running(overrides: Partial<ImportRunState> = {}): ImportRunState {
   };
 }
 
-function settled(outcome: ImportRunOutcome): ImportRunState {
-  return running({ outcome });
+function settled(
+  outcome: ImportRunOutcome,
+  overrides: Partial<ImportRunState> = {}
+): ImportRunState {
+  return running({ outcome, ...overrides });
 }
 
-function renderCard(run: ImportRunState | null) {
+function renderPill(run: ImportRunState | null) {
   const onDismiss = vi.fn();
   const onArchiveNow = vi.fn();
   const onCancel = vi.fn();
   const view = render(
-    <ImportProgressCard
+    <ActivityPill
       run={run}
       onDismiss={onDismiss}
       onArchiveNow={onArchiveNow}
@@ -39,7 +44,7 @@ function renderCard(run: ImportRunState | null) {
   return { ...view, onDismiss, onArchiveNow, onCancel };
 }
 
-/** Advances past the appearance threshold, ticking the card's own interval. */
+/** Advances past the appearance threshold, ticking the pill's own interval. */
 function passDelay() {
   act(() => {
     vi.advanceTimersByTime(IMPORT_CARD_DELAY_MS + 100);
@@ -47,14 +52,26 @@ function passDelay() {
 }
 
 function bar(): HTMLElement {
-  const element = document.querySelector('.import-card-bar');
+  const element = document.querySelector('.activity-pill-bar');
   if (!(element instanceof HTMLElement)) {
-    throw new Error('The card rendered no bar.');
+    throw new Error('The pill rendered no bar.');
   }
   return element;
 }
 
-describe('ImportProgressCard', () => {
+function barWidth(): number {
+  return Number.parseInt(
+    (bar().firstElementChild as HTMLElement).style.width,
+    10
+  );
+}
+
+/** The announced line: verb, file name and detail, without the clock. */
+function announced(): string {
+  return document.querySelector('[aria-live="polite"]')?.textContent ?? '';
+}
+
+describe('ActivityPill', () => {
   beforeEach(() => {
     vi.useFakeTimers();
   });
@@ -63,18 +80,18 @@ describe('ImportProgressCard', () => {
     vi.useRealTimers();
   });
 
-  it('renders nothing when no import is running', () => {
-    renderCard(null);
+  it('renders nothing when nothing is running', () => {
+    renderPill(null);
     expect(screen.queryByLabelText('File import')).toBeNull();
   });
 
   /**
-   * A panel that flashes on screen for a third of a second and vanishes reads
+   * A pill that flashes on screen for a third of a second and vanishes reads
    * as a glitch, not as feedback. Small imports finish inside this window and
    * must never produce one.
    */
-  it('stays hidden until the import has run long enough to be worth a panel', () => {
-    renderCard(running());
+  it('stays hidden until the run has gone on long enough to be worth a pill', () => {
+    renderPill(running());
     act(() => {
       vi.advanceTimersByTime(IMPORT_CARD_DELAY_MS - 200);
     });
@@ -88,20 +105,37 @@ describe('ImportProgressCard', () => {
    * without archiving its source, still has something the user needs to see.
    */
   it('appears immediately for an ending that needs attention', () => {
-    renderCard(settled({ tone: 'error', message: 'Not imported — refused' }));
-    expect(screen.getByText('Not imported — refused')).toBeTruthy();
+    renderPill(settled({ tone: 'error', message: 'the file was refused' }));
+    expect(announced()).toBe('Not imported assembly.stepthe file was refused');
   });
 
   it('stays hidden for a quiet success inside the delay window', () => {
-    renderCard(settled({ tone: 'ok', message: 'Imported — 1 body' }));
+    const { onDismiss } = renderPill(
+      settled({ tone: 'ok', message: '1 body', landed: true })
+    );
     expect(screen.queryByLabelText('File import')).toBeNull();
+    // The run state clears at once, and the host is told nothing was shown.
+    expect(onDismiss).toHaveBeenCalledWith(false);
   });
 
-  it('names the file and the phase in plain words', () => {
-    renderCard(running());
+  it('reads verb, file and phase as one line', () => {
+    renderPill(running());
     passDelay();
-    expect(screen.getByText('assembly.step')).toBeTruthy();
-    expect(screen.getByText('Saving to this device')).toBeTruthy();
+    expect(announced()).toBe('Importing assembly.stepSaving to this device');
+  });
+
+  it('conjugates the verb for the kind of run', () => {
+    renderPill(
+      running({
+        kind: 'export',
+        fileName: 'bracket.step',
+        phases: ['building', 'writing', 'archiving'],
+        progress: { phase: 'building', fraction: null }
+      })
+    );
+    passDelay();
+    expect(announced()).toBe('Exporting bracket.stepBuilding geometry');
+    expect(screen.getByLabelText('File export')).toBeTruthy();
   });
 
   /**
@@ -110,11 +144,11 @@ describe('ImportProgressCard', () => {
    * striping, rather than by filling to a number nobody measured.
    */
   it('holds and stripes the bar for a phase that cannot report', () => {
-    renderCard(running({ progress: { phase: 'building', fraction: null } }));
+    renderPill(running({ progress: { phase: 'building', fraction: null } }));
     passDelay();
     expect(bar().className).toContain('indeterminate');
-    expect(screen.getByText('Building geometry')).toBeTruthy();
-    const parked = (bar().firstElementChild as HTMLElement).style.width;
+    expect(announced()).toContain('Building geometry');
+    const parked = barWidth();
 
     // Ten seconds of the kernel working and the clock ticking. The bar must
     // not have crept a single percent, because nothing measured one.
@@ -122,33 +156,26 @@ describe('ImportProgressCard', () => {
       vi.advanceTimersByTime(10_000);
     });
     expect(screen.getByText('11 s')).toBeTruthy();
-    expect((bar().firstElementChild as HTMLElement).style.width).toBe(parked);
+    expect(barWidth()).toBe(parked);
     expect(bar().className).toContain('indeterminate');
   });
 
   it('fills the bar as a measurable phase advances', () => {
-    const { rerender, onDismiss, onArchiveNow } = renderCard(
+    const { rerender, onDismiss, onArchiveNow } = renderPill(
       running({ progress: { phase: 'archiving', fraction: 0.25 } })
     );
     passDelay();
-    const quarter = Number.parseInt(
-      (bar().firstElementChild as HTMLElement).style.width,
-      10
-    );
+    const quarter = barWidth();
     rerender(
-      <ImportProgressCard
+      <ActivityPill
         run={running({ progress: { phase: 'archiving', fraction: 0.75 } })}
         onDismiss={onDismiss}
         onArchiveNow={onArchiveNow}
         onCancel={vi.fn()}
       />
     );
-    const threeQuarters = Number.parseInt(
-      (bar().firstElementChild as HTMLElement).style.width,
-      10
-    );
     expect(bar().className).not.toContain('indeterminate');
-    expect(threeQuarters).toBeGreaterThan(quarter);
+    expect(barWidth()).toBeGreaterThan(quarter);
   });
 
   /**
@@ -157,34 +184,45 @@ describe('ImportProgressCard', () => {
    * read, and the geometry is what failed.
    */
   it('leaves the bar where a refusal stopped it', () => {
-    renderCard(
-      settled({ tone: 'error', message: 'Not imported — no closed solids' })
-    );
-    const width = Number.parseInt(
-      (bar().firstElementChild as HTMLElement).style.width,
-      10
-    );
-    expect(width).toBeGreaterThan(0);
-    expect(width).toBeLessThan(100);
+    renderPill(settled({ tone: 'error', message: 'no closed solids' }));
+    expect(barWidth()).toBeGreaterThan(0);
+    expect(barWidth()).toBeLessThan(100);
     expect(bar().className).toContain('error');
   });
 
-  it('completes the bar when a body actually landed', () => {
-    renderCard(
+  it('completes the bar when the file actually landed', () => {
+    renderPill(
       settled({
         tone: 'warning',
-        message: 'Imported, but saved on this device only',
+        message: 'saved on this device only',
+        landed: true,
         action: 'archive'
       })
     );
-    expect((bar().firstElementChild as HTMLElement).style.width).toBe('100%');
+    expect(barWidth()).toBe(100);
+    expect(announced()).toBe('Imported assembly.stepsaved on this device only');
+  });
+
+  /** An amber ending that landed nothing is a refusal, and says so. */
+  it('says "not imported" for a warning that landed nothing', () => {
+    renderPill(
+      settled({
+        tone: 'warning',
+        message: 'the model kept changing while it rebuilt'
+      })
+    );
+    expect(announced()).toBe(
+      'Not imported assembly.stepthe model kept changing while it rebuilt'
+    );
+    expect(barWidth()).toBeLessThan(100);
   });
 
   it('offers the archive retry only for the ending that leaves work to do', () => {
-    const { onArchiveNow } = renderCard(
+    const { onArchiveNow } = renderPill(
       settled({
         tone: 'warning',
-        message: 'Imported, but saved on this device only',
+        message: 'saved on this device only',
+        landed: true,
         action: 'archive'
       })
     );
@@ -193,43 +231,54 @@ describe('ImportProgressCard', () => {
   });
 
   it('offers no action for a refusal, which leaves nothing to retry', () => {
-    renderCard(settled({ tone: 'error', message: 'Not imported' }));
+    renderPill(settled({ tone: 'error', message: 'refused' }));
     expect(screen.queryByRole('button', { name: 'Archive now' })).toBeNull();
   });
 
-  it('offers to hide, not to cancel, while the import is running', () => {
-    const { onDismiss } = renderCard(running());
+  /**
+   * A running pill has no ✕: hiding it would hide the only cancel, and the
+   * ✕ next to a Cancel read as a second, gentler cancel. Its ending clears
+   * itself or waits to be dismissed, which is when the ✕ appears.
+   */
+  it('offers dismiss only for an ending that waits to be seen', () => {
+    const { rerender, onDismiss, onArchiveNow } = renderPill(running());
     passDelay();
-    const button = screen.getByRole('button', {
-      name: 'Hide import progress'
-    });
-    expect(button.getAttribute('title')).toContain('keeps running');
-    button.click();
-    expect(onDismiss).toHaveBeenCalledTimes(1);
-  });
-
-  it('takes a successful card away on its own', () => {
-    const { rerender, onDismiss, onArchiveNow } = renderCard(running());
-    passDelay();
+    expect(screen.queryByRole('button', { name: /Dismiss/ })).toBeNull();
     rerender(
-      <ImportProgressCard
-        run={settled({ tone: 'ok', message: 'Imported — 1 body' })}
+      <ActivityPill
+        run={settled({ tone: 'error', message: 'refused' })}
         onDismiss={onDismiss}
         onArchiveNow={onArchiveNow}
         onCancel={vi.fn()}
       />
     );
-    expect(screen.getByText('Imported — 1 body')).toBeTruthy();
+    screen.getByRole('button', { name: 'Dismiss import status' }).click();
+    expect(onDismiss).toHaveBeenCalledTimes(1);
+  });
+
+  it('takes a successful pill away on its own', () => {
+    const { rerender, onDismiss, onArchiveNow } = renderPill(running());
+    passDelay();
+    rerender(
+      <ActivityPill
+        run={settled({ tone: 'ok', message: '1 body', landed: true })}
+        onDismiss={onDismiss}
+        onArchiveNow={onArchiveNow}
+        onCancel={vi.fn()}
+      />
+    );
+    expect(announced()).toBe('Imported assembly.step1 body');
     expect(onDismiss).not.toHaveBeenCalled();
     act(() => {
       vi.advanceTimersByTime(IMPORT_CARD_SUCCESS_LINGER_MS + 50);
     });
     expect(onDismiss).toHaveBeenCalledTimes(1);
+    expect(onDismiss).toHaveBeenCalledWith(true);
   });
 
   it('leaves an ending that needs attention on screen', () => {
-    const { onDismiss } = renderCard(
-      settled({ tone: 'error', message: 'Not imported' })
+    const { onDismiss } = renderPill(
+      settled({ tone: 'error', message: 'refused' })
     );
     act(() => {
       vi.advanceTimersByTime(IMPORT_CARD_SUCCESS_LINGER_MS * 4);
@@ -239,23 +288,29 @@ describe('ImportProgressCard', () => {
 
   /**
    * The clock is read by a screen reader only if it sits in a live region.
-   * At ten ticks a second that would be unusable, so only the phase is live.
+   * At ten ticks a second that would be unusable, so the clock is a sibling
+   * of the announced line.
    */
-  it('announces the phase without announcing every clock tick', () => {
-    renderCard(running());
+  it('announces the line without announcing every clock tick', () => {
+    renderPill(running());
     passDelay();
-    const live = document.querySelector('[aria-live="polite"]');
-    expect(live?.textContent).toBe('Saving to this device');
+    expect(announced()).not.toMatch(/\d s$/);
+    expect(screen.getByText('0.7 s')).toBeTruthy();
   });
 
-  it('restarts the clock when a second import replaces the first', () => {
-    const { rerender, onDismiss, onArchiveNow } = renderCard(running());
+  it('stops the clock once the run has ended', () => {
+    renderPill(settled({ tone: 'error', message: 'refused' }));
+    expect(document.querySelector('.activity-pill-time')).toBeNull();
+  });
+
+  it('restarts the clock when a second run replaces the first', () => {
+    const { rerender, onDismiss, onArchiveNow } = renderPill(running());
     act(() => {
       vi.advanceTimersByTime(20_000);
     });
     expect(screen.getByText('20 s')).toBeTruthy();
     rerender(
-      <ImportProgressCard
+      <ActivityPill
         run={running({ id: 'run-2', fileName: 'bracket.step' })}
         onDismiss={onDismiss}
         onArchiveNow={onArchiveNow}
@@ -269,7 +324,7 @@ describe('ImportProgressCard', () => {
   });
 });
 
-describe('cancelling, from the card', () => {
+describe('cancelling, from the pill', () => {
   beforeEach(() => {
     vi.useFakeTimers();
   });
@@ -279,12 +334,12 @@ describe('cancelling, from the card', () => {
   });
 
   it('offers cancel while running and not after it has ended', () => {
-    const { rerender, onDismiss, onArchiveNow } = renderCard(running());
+    const { rerender, onDismiss, onArchiveNow } = renderPill(running());
     passDelay();
     expect(screen.getByRole('button', { name: 'Cancel' })).toBeTruthy();
     rerender(
-      <ImportProgressCard
-        run={settled({ tone: 'ok', message: 'Imported — 1 body' })}
+      <ActivityPill
+        run={settled({ tone: 'ok', message: '1 body', landed: true })}
         onDismiss={onDismiss}
         onArchiveNow={onArchiveNow}
         onCancel={vi.fn()}
@@ -293,56 +348,43 @@ describe('cancelling, from the card', () => {
     expect(screen.queryByRole('button', { name: 'Cancel' })).toBeNull();
   });
 
-  /**
-   * Cancel and hide want opposite things — one throws away minutes of work,
-   * the other just clears the panel — so they are separate controls. Merging
-   * them onto the ✕ would put the destructive one under an accidental click.
-   */
-  it('keeps cancel off the hide control', () => {
-    const { onDismiss, onCancel } = renderCard(running());
+  /** A restore mid-write cannot stop halfway, so it offers no cancel. */
+  it('offers no cancel for a run that cannot stop', () => {
+    renderPill(
+      running({
+        kind: 'restore',
+        cancellable: false,
+        fileName: 'bracket.openzcad',
+        phases: ['reading', 'saving'],
+        progress: { phase: 'reading', fraction: null }
+      })
+    );
     passDelay();
-    screen.getByRole('button', { name: 'Hide import progress' }).click();
-    expect(onDismiss).toHaveBeenCalledTimes(1);
-    expect(onCancel).not.toHaveBeenCalled();
+    expect(screen.queryByRole('button', { name: 'Cancel' })).toBeNull();
+    expect(announced()).toBe('Restoring bracket.openzcadReading the file');
   });
 
   it('asks to cancel exactly once per press', () => {
-    const { onCancel } = renderCard(running());
+    const { onCancel } = renderPill(running());
     passDelay();
     screen.getByRole('button', { name: 'Cancel' }).click();
     expect(onCancel).toHaveBeenCalledTimes(1);
   });
 
   it('acknowledges cancellation while the rebuild worker terminates', () => {
-    renderCard(
+    renderPill(
       running({
         progress: { phase: 'building', fraction: null },
         cancelRequested: true
       })
     );
     passDelay();
-    expect(document.querySelector('[aria-live]')?.textContent).toBe(
-      'Cancelling…'
-    );
+    expect(announced()).toBe('Importing assembly.stepCancelling…');
     expect(screen.queryByText('Building geometry')).toBeNull();
   });
 
-  it('says plainly it is cancelling in a phase that can stop promptly', () => {
-    renderCard(
-      running({
-        progress: { phase: 'saving', fraction: 0.4 },
-        cancelRequested: true
-      })
-    );
-    passDelay();
-    // Scoped to the announced line: the button also reads "Cancelling…".
-    expect(document.querySelector('[aria-live]')?.textContent).toBe(
-      'Cancelling…'
-    );
-  });
-
   it('cannot be pressed twice while it is taking effect', () => {
-    const { onCancel } = renderCard(running({ cancelRequested: true }));
+    const { onCancel } = renderPill(running({ cancelRequested: true }));
     passDelay();
     const button = screen.getByRole('button', { name: 'Cancelling…' });
     expect(button.hasAttribute('disabled')).toBe(true);
@@ -350,19 +392,19 @@ describe('cancelling, from the card', () => {
     expect(onCancel).not.toHaveBeenCalled();
   });
 
-  /** A cancel is not a fault, so the card clears itself like a success does. */
-  it('takes a cancelled card away on its own', () => {
-    const { rerender, onDismiss, onArchiveNow } = renderCard(running());
+  /** A cancel is not a fault, so the pill clears itself like a success does. */
+  it('takes a cancelled pill away on its own', () => {
+    const { rerender, onDismiss, onArchiveNow } = renderPill(running());
     passDelay();
     rerender(
-      <ImportProgressCard
-        run={settled({ tone: 'cancelled', message: 'Import cancelled' })}
+      <ActivityPill
+        run={settled({ tone: 'cancelled', message: 'nothing was added' })}
         onDismiss={onDismiss}
         onArchiveNow={onArchiveNow}
         onCancel={vi.fn()}
       />
     );
-    expect(screen.getByText('Import cancelled')).toBeTruthy();
+    expect(announced()).toBe('Import cancelled assembly.stepnothing was added');
     expect(onDismiss).not.toHaveBeenCalled();
     act(() => {
       vi.advanceTimersByTime(IMPORT_CARD_SUCCESS_LINGER_MS + 50);
@@ -377,31 +419,30 @@ describe('cancelling, from the card', () => {
   it('leaves the bar where the cancel stopped it', () => {
     // Visible first, then settled: a quiet ending reached inside the delay
     // window shows nothing at all, which is a separate rule tested below.
-    const { rerender, onDismiss, onArchiveNow } = renderCard(running());
+    const { rerender, onDismiss, onArchiveNow } = renderPill(running());
     passDelay();
     rerender(
-      <ImportProgressCard
-        run={settled({ tone: 'cancelled', message: 'Import cancelled' })}
+      <ActivityPill
+        run={settled({ tone: 'cancelled', message: 'nothing was added' })}
         onDismiss={onDismiss}
         onArchiveNow={onArchiveNow}
         onCancel={vi.fn()}
       />
     );
-    const width = Number.parseInt(
-      (bar().firstElementChild as HTMLElement).style.width,
-      10
-    );
-    expect(width).toBeLessThan(100);
+    expect(barWidth()).toBeLessThan(100);
     expect(bar().className).toContain('cancelled');
   });
 
   /**
-   * A cancel that lands before the card was ever worth showing shows nothing:
-   * the user pressed nothing, because there was no card to press.
+   * A cancel that lands before the pill was ever worth showing shows nothing:
+   * the user pressed nothing, because there was no pill to press.
    */
   it('shows nothing for a cancel reached inside the delay window', () => {
-    renderCard(settled({ tone: 'cancelled', message: 'Import cancelled' }));
+    const { onDismiss } = renderPill(
+      settled({ tone: 'cancelled', message: 'nothing was added' })
+    );
     expect(screen.queryByLabelText('File import')).toBeNull();
+    expect(onDismiss).toHaveBeenCalledWith(false);
   });
 });
 
