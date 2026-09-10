@@ -703,9 +703,10 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     const features = listFeaturesInOrder(document);
     const cachingEnabled = features.length <= this.maxHistoryCheckpoints;
     const scopeKey = cachingEnabled ? historyScopeDigest(document) : null;
+    const scope = cachingEnabled ? getParameterScope(document).scope : undefined;
     const digests = cachingEnabled
       ? features.map((feature, index) =>
-          historyFeatureDigest(document, feature, index)
+          historyFeatureDigest(document, feature, index, scope)
         )
       : [];
 
