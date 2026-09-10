@@ -1,6 +1,8 @@
 # UI refinement plan — plan of record (2026-09-02)
 
-Status: not started. Source: the 2026-09-02 UI refinement audit of the web app
+Status: in progress (2026-09-10): branches 1–9 and 13 shipped, 10 is
+partial, 11, 12 and 14 are open — see the per-row markers in the branch
+table. Source: the 2026-09-02 UI refinement audit of the web app
 (browser pass at 1440/1024/900 px in both themes, plus a static pass over the 25
 stylesheets and 82 components), reconciled against the code on `main` at
 `699d98bd`. Line references are a snapshot; verify before relying on one.
@@ -30,12 +32,12 @@ can be wrong about the cause.
   entry label is `Delete <name>`, but `handleUndo` overwrites the status with the
   bare word `Undo` (`App.tsx:6654`).
 - Every unclaimed left press on the canvas starts a box select
-  (`ModelViewer.tsx:5504-5700`); at release a rect under 4 px in *both* axes
+  (`ModelViewer.tsx:5504-5700`); at release a rect under 4 px in _both_ axes
   becomes a click (`boxSelect.ts:63-70`). The gesture router's own click
   threshold is 5 px (`GestureRouter.ts:2`). The e2e at `viewport.spec.ts:1457`
   asserts the "Nothing in the box" text.
 - The inspector's "Offset Face / Active command" header is deliberate
-  (`inspectorHeading.ts`, coherence D3): an inferred feature is *demoted* under
+  (`inspectorHeading.ts`, coherence D3): an inferred feature is _demoted_ under
   a running command. What was not finished is the body: the demoted feature's
   full `EdgeModifierForm` still renders (`Inspector.tsx:1061-1085`) with Apply,
   Cancel and `Delete <feature>` in the overflow (`:1328-1338`).
@@ -98,22 +100,22 @@ One branch per row, each independently shippable and green on
 `pnpm lint && pnpm typecheck && pnpm test && pnpm build && pnpm test:e2e`.
 Sizes are working days for one person including tests and the browser check.
 
-| # | Branch | Closes | Size |
-| --- | --- | --- | --- |
-| 1 | `toast-and-undoable-delete` | delete guard, export feedback, undo label | 1.5 |
-| 2 | `click-threshold` | box-select jitter | 0.5 |
-| 3 | `status-lifetime` | stale status bar | 1 |
-| 4 | `tokens-additive` | shadow/z tokens, undefined-token test, viewport border token | 0.5 |
-| 5 | `inspector-object-panel` | face pick shows fillet editor | 1.5 |
-| 6 | `param-row-names` | clipped parameter names | 0.5 |
-| 7 | `tool-card-fit` | hint overflow, 280 px clamp, cube under panel | 1 |
-| 8 | `palette-tooltips` | native title tooltips, ⌘K/Ctrl+K | 1.5 |
-| 9 | `palette-ranking` | "fil" lists the File group; orange reasons | 0.5 |
-| 10 | `sketch-chrome` | repro orbit, normal-to-sketch, palette default, Finish, hints, guides | 2 |
-| 11 | `motion-pass` | dialog entrance, exits, hover transitions, focus rings | 1.5 |
-| 12 | `copy-and-icons` | casing, spelling, glyphs, Hole form labels | 1 |
-| 13 | `start-screen-layout` | cramped new-part tile | 1 |
-| 14 | `token-sweep` | rgba literals, eyebrow/pill/menu/close classes, palette class collision, disabled state | 2 |
+| #   | Branch                      | Closes                                                                                  | Size | Status                                                                                                                                                                                                                                                                                                         |
+| --- | --------------------------- | --------------------------------------------------------------------------------------- | ---- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1   | `toast-and-undoable-delete` | delete guard, export feedback, undo label                                               | 1.5  | done (PR #206)                                                                                                                                                                                                                                                                                                 |
+| 2   | `click-threshold`           | box-select jitter                                                                       | 0.5  | done (PR #207)                                                                                                                                                                                                                                                                                                 |
+| 3   | `status-lifetime`           | stale status bar                                                                        | 1    | done (PR #246: status is a toast in `WorkspaceReadout`, 8 s lifetime, sticky mode text)                                                                                                                                                                                                                        |
+| 4   | `tokens-additive`           | shadow/z tokens, undefined-token test, viewport border token                            | 0.5  | done (PR #209)                                                                                                                                                                                                                                                                                                 |
+| 5   | `inspector-object-panel`    | face pick shows fillet editor                                                           | 1.5  | done (PR #216)                                                                                                                                                                                                                                                                                                 |
+| 6   | `param-row-names`           | clipped parameter names                                                                 | 0.5  | done (PR #213)                                                                                                                                                                                                                                                                                                 |
+| 7   | `tool-card-fit`             | hint overflow, 280 px clamp, cube under panel                                           | 1    | done (PR #215)                                                                                                                                                                                                                                                                                                 |
+| 8   | `palette-tooltips`          | native title tooltips, ⌘K/Ctrl+K                                                        | 1.5  | done (PR #268)                                                                                                                                                                                                                                                                                                 |
+| 9   | `palette-ranking`           | "fil" lists the File group; orange reasons                                              | 0.5  | done (PR #214)                                                                                                                                                                                                                                                                                                 |
+| 10  | `sketch-chrome`             | repro orbit, normal-to-sketch, palette default, Finish, hints, guides                   | 2    | partial: the orbit repro confirmed the defect and PR #241 fixed it (Line-tool drag captures the pointer); normal-to-sketch, palette default, Finish placement, hints and guides remain open. The column workspace (PR #246) replaced the rail this row was written against, so re-verify each item there first |
+| 11  | `motion-pass`               | dialog entrance, exits, hover transitions, focus rings                                  | 1.5  | open                                                                                                                                                                                                                                                                                                           |
+| 12  | `copy-and-icons`            | casing, spelling, glyphs, Hole form labels                                              | 1    | open                                                                                                                                                                                                                                                                                                           |
+| 13  | `start-screen-layout`       | cramped new-part tile                                                                   | 1    | done (PR #221: single-row new-part panel, tile grid)                                                                                                                                                                                                                                                           |
+| 14  | `token-sweep`               | rgba literals, eyebrow/pill/menu/close classes, palette class collision, disabled state | 2    | open                                                                                                                                                                                                                                                                                                           |
 
 Order: 1 → 2 → 3 → 4, then 5–9 in any order, 10 after the repro, 11 and 12
 any time after 4, 13 whenever, 14 last. Branches 1–3 all touch the selection
@@ -145,7 +147,7 @@ and status paths in `App.tsx`; keep them serial.
 
 - One exported `CLICK_THRESHOLD_PX = 6` in `packages/viewport/src/input`;
   `boxSelect.ts` and `GestureRouter.ts` both read it. `isBoxSelectDrag`
-  requires the threshold in *either* axis as today.
+  requires the threshold in _either_ axis as today.
 - `handleBoxSelectFromViewer` (`App.tsx:8357`): an empty sweep clears
   selection and status silently. Update `viewport.spec.ts:1454-1457` to
   assert the chip is gone rather than the text; `boxSelect.test.ts:74-92`
@@ -181,7 +183,7 @@ and status paths in `App.tsx`; keep them serial.
   overflow menu must clear a dialog; `--z-assistant-float: 6`;
   `--color-viewport-border: rgba(230,237,243,0.18)` for overlay borders.
 - Replace only the seven duplicated modal shadows (`modals.css:33, 85, 175,
-  226, 411, 570, 671`), `inspector.css:562/568`, `responsive.css:79`, and the
+226, 411, 570, 671`), `inspector.css:562/568`, `responsive.css:79`, and the
   orientation-roll border (`viewport-overlays.css:104`). Everything else
   waits for branch 14.
 - New test `theme/tokens-defined.test.ts`: every `var(--x…)` in
@@ -282,7 +284,7 @@ and status paths in `App.tsx`; keep them serial.
   opacity 0.82 → 0.55, unchanged under `data-engaged`.
 - Do not dim the sidebar in this branch; that is a coherence phase 6 call.
 - Tests: `SketchToolRail.test.tsx` (`keeps Finish Sketch permanently
-  available` still passes, palette default collapsed, normal-to-sketch
+available` still passes, palette default collapsed, normal-to-sketch
   calls the prop); `prompt.test` for the hint source; e2e
   `modeling.spec.ts:709-713` waits for `.sketch-palette` — it still mounts
   collapsed, so assert the aside rather than its content.
