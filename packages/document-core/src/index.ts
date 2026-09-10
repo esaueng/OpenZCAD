@@ -3108,6 +3108,19 @@ const EXPRESSION_FUNCTIONS: Record<
   string,
   { arity: 'unary' | 'variadic'; apply: (args: number[]) => number }
 > = {
+  require_min: {
+    arity: 'variadic',
+    apply: (args) => {
+      const [value, minimum] = args;
+      if (args.length !== 2 || !args.every(Number.isFinite)) {
+        throw new Error('require_min needs a finite value and minimum.');
+      }
+      if (value! < minimum!) {
+        throw new Error(`Parameter value ${value} must be at least ${minimum}.`);
+      }
+      return value!;
+    }
+  },
   require_one_of: {
     arity: 'variadic',
     apply: (args) => {
@@ -3216,7 +3229,7 @@ function tokenizeExpression(expression: string): ExpressionToken[] {
 
 /**
  * Evaluates a parameter expression supporting numbers, scope variables, the
- * `pi` constant, function calls (abs, sqrt, floor, ceil, round, min, max, require_one_of,
+ * `pi` constant, function calls (abs, sqrt, floor, ceil, round, min, max, require_min, require_one_of,
  * and degree-based sin/cos/tan), `+ - * / ^`, unary minus, and parentheses.
  * Implemented as a small recursive-descent parser so untrusted expressions
  * are never executed as JavaScript. Throws on syntax errors and unknown
