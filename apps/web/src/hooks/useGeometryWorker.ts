@@ -33,7 +33,9 @@ interface PendingRequest<T> {
  *
  * `starting` must hand off to a kernel or rebuild phase quickly; the kernel
  * budget absorbs a slow first fetch of the multi-megabyte wasm; `rebuilding`
- * is unbounded legitimate work, so its budget is the most generous.
+ * includes synchronous WASM booleans that cannot emit heartbeats. The imported
+ * hammer replay takes about six minutes locally, so allow fifteen minutes
+ * of silence here. This is still bounded crash recovery, not a progress claim.
  */
 const RESPAWN_BUDGET_MS: Record<
   'starting' | 'loading-remus' | 'rebuilding',
@@ -41,7 +43,7 @@ const RESPAWN_BUDGET_MS: Record<
 > = {
   starting: 15_000,
   'loading-remus': 90_000,
-  rebuilding: 120_000
+  rebuilding: 15 * 60_000
 };
 
 /** How often the watchdog samples worker silence. */
