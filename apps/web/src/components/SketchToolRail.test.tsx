@@ -36,6 +36,22 @@ function renderRail(
 }
 
 describe('SketchToolRail', () => {
+  it('preserves extrusion readiness and solving guards with tooltips', async () => {
+    const user = userEvent.setup();
+    const { props, rerender } = renderRail({ canExtrude: false });
+    const extrude = screen.getByRole('button', { name: /Extrude/ });
+    expect(extrude).toBeDisabled();
+    await user.click(extrude);
+    expect(props.onExtrude).not.toHaveBeenCalled();
+    rerender(<SketchToolRail {...props} canExtrude solving />);
+    expect(extrude).toBeDisabled();
+    rerender(<SketchToolRail {...props} canExtrude solving={false} />);
+    expect(extrude).toBeEnabled();
+    expect(extrude).not.toHaveAttribute('title');
+    await user.click(extrude);
+    expect(props.onExtrude).toHaveBeenCalledOnce();
+  });
+
   it('selects a circle construction mode from the shared flyout', async () => {
     const user = userEvent.setup();
     const onCircleMode = vi.fn();

@@ -6,7 +6,7 @@ interface ExtrudeControlsProps {
   bodies: { bodyId: BodyId; name: string }[];
   disabled: boolean;
   onChange(choice: ExtrudeChoice): void;
-  onDistance(): void;
+  allowAutomatic?: boolean;
 }
 
 export function ExtrudeControls({
@@ -14,7 +14,7 @@ export function ExtrudeControls({
   bodies,
   disabled,
   onChange,
-  onDistance
+  allowAutomatic = true
 }: ExtrudeControlsProps) {
   const needsTarget = choice.operation === 'add' || choice.operation === 'cut';
   return (
@@ -22,7 +22,9 @@ export function ExtrudeControls({
       <label className="field">
         <span>Operation</span>
         <select
-          aria-label="Extrude operation"
+          aria-label={
+            allowAutomatic ? 'Extrude operation' : 'Stored extrude operation'
+          }
           value={choice.operation}
           disabled={disabled}
           onChange={(event) => {
@@ -41,7 +43,7 @@ export function ExtrudeControls({
             );
           }}
         >
-          <option value="automatic">Automatic</option>
+          {allowAutomatic && <option value="automatic">Automatic</option>}
           <option value="new-body">New Body</option>
           <option value="add">Add</option>
           <option value="cut">Cut</option>
@@ -72,9 +74,6 @@ export function ExtrudeControls({
           </select>
         </label>
       )}
-      <button type="button" disabled={disabled} onClick={onDistance}>
-        Distance…
-      </button>
       {needsTarget && !choice.targetBodyId && (
         <span className="muted">Select a target before applying.</span>
       )}
