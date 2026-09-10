@@ -7,6 +7,7 @@ import type {
 } from '../lib/interaction/machine';
 import type { SelectionActionId } from '../lib/interaction/capabilities';
 import { StableLabel } from './StableLabel';
+import { Tooltip } from './Tooltip';
 
 const ICONS: Record<ToolCardIcon, typeof MoveUpRight> = {
   'offset-face': MoveUpRight,
@@ -79,9 +80,11 @@ export function ToolCard({
             </span>
           ) : null}
           {model.badge ? (
-            <span className="tool-card-badge" title={model.badge.detail}>
-              {model.badge.label}
-            </span>
+            <Tooltip label={model.badge.label} description={model.badge.detail}>
+              <span className="tool-card-badge" tabIndex={0}>
+                {model.badge.label}
+              </span>
+            </Tooltip>
           ) : null}
         </strong>
         {model.error ? (
