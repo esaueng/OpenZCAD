@@ -46,7 +46,7 @@ test('a missing export chunk leaves the workspace usable without reload', async 
     .click();
   await expect(page.getByRole('button', { name: /^Fillet/ })).toBeEnabled();
   await page.getByText('File', { exact: true }).click();
-  await page.getByRole('button', { name: 'Export Mesh… 3MF · STL' }).click();
+  await page.getByRole('button', { name: /Export Mesh/ }).click();
   const unavailable = page.getByRole('dialog', { name: 'Export unavailable' });
   await expect(unavailable).toBeVisible();
   await expect(

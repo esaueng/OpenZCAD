@@ -4,11 +4,14 @@ import { Upload } from 'lucide-react';
 export function ProjectImportButton({
   onImport,
   disabled = false,
-  className = 'topbar-menu-item'
+  className = 'topbar-menu-item',
+  hint
 }: {
   onImport(file: File): void;
   disabled?: boolean;
   className?: string;
+  /** A second line under the label, for the menu's format column. */
+  hint?: string;
 }) {
   const input = useRef<HTMLInputElement>(null);
   return (
@@ -20,7 +23,8 @@ export function ProjectImportButton({
         onClick={() => input.current?.click()}
       >
         <Upload size={14} aria-hidden="true" />
-        Import project…
+        <span>Import project…</span>
+        {hint ? <small>{hint}</small> : null}
       </button>
       <input
         ref={input}
