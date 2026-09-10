@@ -1,3 +1,11 @@
+import {
+  rebuildReporter,
+  type RebuildProgressListener
+} from './rebuild-progress';
+export type {
+  RebuildProgress,
+  RebuildProgressListener
+} from './rebuild-progress';
 import { RemusKernel, loadRemusTranslators } from './remus-runtime';
 import {
   findSketch,
@@ -137,7 +145,13 @@ import {
 } from './exact-face-distance';
 
 const STL_EXPORT_DEFLECTION = 0.08;
-const MAX_PLANAR_FACE_PAIR_QUERY_FACES = 512;
+// Background discovery runs real trial edits before the first render. Keep
+// it bounded to small solids; complex imports retain measured geometry and
+// hole recognition, but do not advertise unproven planar-distance edits.
+const MAX_PLANAR_FACE_PAIR_QUERY_FACES = 64;
+// Optional moments can take minutes on freeform imported faces. Absence is
+// already part of the mass-property contract; never substitute approximate data.
+const MAX_BACKGROUND_MASS_PROPERTY_FACES = 64;
 const MAX_PROVEN_FACE_DISTANCE_PAIRS = 30;
 
 function reflectPoint(
@@ -406,7 +420,10 @@ function provenOpposingPlanarFacePairs(
 }
 export interface ExactKernelAdapter {
   readonly kind: 'remus';
-  syncDocument(document: ProjectDocument): Promise<DerivedState>;
+  syncDocument(
+    document: ProjectDocument,
+    onProgress?: RebuildProgressListener
+  ): Promise<DerivedState>;
   exportStep(document: ProjectDocument, bodyIds: BodyId[]): Promise<string>;
   /**
    * DXF R12 outline of one PLANAR face, in millimetres — the laser-cutting
@@ -675,7 +692,8 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
   private buildWithHistoryCache(
     document: ProjectDocument,
     importSources: ReadonlyMap<string, Uint8Array>,
-    pinnedImports: ReadonlySet<string>
+    pinnedImports: ReadonlySet<string>,
+    onProgress?: RebuildProgressListener
   ): {
     kernel: RemusKernel;
     build: ExactBuildResult;
@@ -740,16 +758,33 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     }
     const activeKernel = kernel;
 
-    const onFeature = cachingEnabled
-      ? (index: number, result: ExactBuildResult) => {
-          const checkpointId = activeKernel.checkpoint();
-          this.historyCheckpoints.push({
-            digest: digests[index]!,
-            checkpointId,
-            snapshot: cloneBuildState(result)
-          });
-        }
-      : undefined;
+    const report = rebuildReporter(onProgress);
+    let featureDone: (() => void) | undefined;
+    const onFeatureStart = (index: number) => {
+      featureDone = report(
+        'feature',
+        features[index]!.name,
+        index + 1,
+        features.length
+      );
+    };
+    const onFeature = (index: number, result: ExactBuildResult) => {
+      featureDone?.();
+      if (!cachingEnabled) return;
+      const done = report(
+        'checkpoint',
+        features[index]!.name,
+        index + 1,
+        features.length
+      );
+      const checkpointId = activeKernel.checkpoint();
+      this.historyCheckpoints.push({
+        digest: digests[index]!,
+        checkpointId,
+        snapshot: cloneBuildState(result)
+      });
+      done();
+    };
 
     const build = buildDocumentHistory(
       activeKernel,
@@ -758,7 +793,8 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
       pinnedImports,
       initial ? { startIndex, initial } : undefined,
       this.importedSteps,
-      onFeature
+      onFeature,
+      onFeatureStart
     );
     // The cache event is emitted by syncDocument AFTER the measure pass, so
     // it can carry the measure-reuse counts alongside the replay counts.
@@ -877,7 +913,8 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     kernel: RemusKernel,
     shape: ExactShape,
     strictBooleanValidation = false,
-    recognizeImportedFeatures = false
+    recognizeImportedFeatures = false,
+    onStage?: (name: string) => () => void
   ): MeasuredShape {
     if (shape.solids.length === 0) {
       throw new Error('Exact body contains no solids.');
@@ -939,6 +976,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
           nextVertexId += 1;
         }
       }
+      const meshDone = onStage?.('Display mesh and face topology');
       const mesh = kernel.tessellateSolidGroupedBinary(
         solid,
         displayTessellation.linearDeflection,
@@ -1010,6 +1048,8 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
       } finally {
         mesh.free();
       }
+      meshDone?.();
+      const recognitionDone = onStage?.('Imported feature recognition');
       let claimedFaceHashes = new Set<number>();
       if (recognizeImportedFeatures) {
         const recognized = collectRecognizedImportedFeatures(
@@ -1024,6 +1064,8 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
             recognized.flatMap((feature) => feature.participatingFaceHashes)
           );
         }
+        recognitionDone?.();
+        const pairsDone = onStage?.('Planar distance edit proofs');
         // Replay collapses a body before direct edit, so a proof against only
         // one member of a multi-solid body would authorize different topology.
         const pairs =
@@ -1040,8 +1082,12 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
           topology.opposingPlanarFacePairs ??= [];
           topology.opposingPlanarFacePairs.push(...pairs);
         }
+        pairsDone?.();
+      } else {
+        recognitionDone?.();
       }
 
+      const edgesDone = onStage?.('Edge topology');
       // Use the kernel's adaptive exact-curve sampler with the same chordal and
       // angular limits as the shaded mesh. This keeps circular outlines closed
       // and prevents a smooth edge from visibly drifting away from its surface.
@@ -1115,6 +1161,8 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
         edgeLines.free();
       }
 
+      edgesDone?.();
+      const volumeDone = onStage?.('Volume and validation');
       bbox.min.x = Math.min(bbox.min.x, bounds[0]!);
       bbox.min.y = Math.min(bbox.min.y, bounds[1]!);
       bbox.min.z = Math.min(bbox.min.z, bounds[2]!);
@@ -1126,6 +1174,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
       if (strictBooleanValidation) {
         strictValid = kernel.validateSolid(solid) === 0 && strictValid;
       }
+      volumeDone?.();
     }
 
     if (lineageDiagnostics.length > 0) {
@@ -1153,10 +1202,13 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     // recover principal axes, and a body made of several solids that reported
     // the moments of one of them would be worse than reporting none. Absent
     // is a state consumers already have to render.
+    const massDone = onStage?.('Mass properties');
     const massProperties =
-      shape.solids.length === 1
+      shape.solids.length === 1 &&
+      topology.faces.length <= MAX_BACKGROUND_MASS_PROPERTY_FACES
         ? readBodyMassProperties(kernel, shape.solids[0]!)
         : null;
+    massDone?.();
     return {
       vertices,
       indices,
@@ -1171,22 +1223,31 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     };
   }
 
-  async syncDocument(document: ProjectDocument): Promise<DerivedState> {
+  async syncDocument(
+    document: ProjectDocument,
+    onProgress?: RebuildProgressListener
+  ): Promise<DerivedState> {
+    const report = rebuildReporter(onProgress);
+    const sourcesDone = report('sources', 'Loading imported sources');
     const { sources, pinned } = await this.prefetchImportSources(document);
     // Feature builders run synchronously inside the build loop, so a document
     // with file-backed features needs the translator module resident first.
     if (documentNeedsTranslators(document)) {
       await loadRemusTranslators();
     }
+    sourcesDone();
     // The history kernel outlives this call on purpose — its checkpoints are
     // what the next sync restores. On ANY throw the whole cache is dropped:
     // a failed sync must never leave a table the next sync would trust.
     try {
+      const historyDone = report('history', 'Building history');
       const { kernel, build, replayed, restored } = this.buildWithHistoryCache(
         document,
         sources,
-        pinned
+        pinned,
+        onProgress
       );
+      historyDone();
       const bodies = listNodesByKind(document, 'body');
       const features = new Map(
         listNodesByKind(document, 'feature').map((feature) => [
@@ -1213,13 +1274,20 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
         if (!body || !shape) {
           continue;
         }
+        const measurementDone = report(
+          'measurement',
+          body.name,
+          document.bodyOrder.indexOf(bodyId) + 1,
+          document.bodyOrder.length
+        );
         const feature = features.get(body.featureId);
         const consumed = build.consumed.has(bodyId);
         const requiresStrictUnionValidation =
           !consumed &&
           feature?.data.featureKind === 'boolean' &&
           feature.data.operation === 'union';
-        const recognizeImportedFeatures = importedBodyIds.has(bodyId);
+        const recognizeImportedFeatures =
+          !consumed && importedBodyIds.has(bodyId);
         // Tessellation dominates a sync once the prefix cache removed the
         // replay cost, so an unchanged body serves its previous measurement.
         // Handle identity is the key (see MeasuredBodyCacheEntry); the
@@ -1242,7 +1310,14 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
             kernel,
             shape,
             requiresStrictUnionValidation,
-            recognizeImportedFeatures
+            recognizeImportedFeatures,
+            (part) =>
+              report(
+                'measurement',
+                `${body.name}: ${part}`,
+                document.bodyOrder.indexOf(bodyId) + 1,
+                document.bodyOrder.length
+              )
           );
           remeasured += 1;
           this.storeMeasuredShape(bodyId, {
@@ -1254,6 +1329,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
             measured
           });
         }
+        measurementDone();
         if (!measured.valid) {
           build.warnings.push(
             `Body "${body.name}" failed exact B-rep validation.`

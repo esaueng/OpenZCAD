@@ -303,6 +303,16 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
       worker.onmessage = (event: MessageEvent<GeometryWorkerResult>) => {
         lastWorkerMessageAt = Date.now();
         if (event.data.type === 'state') {
+          if (event.data.progress?.status === 'completed') {
+            // Keep each timing even when React batches adjacent phase updates.
+            // Session-local only: no document contents or telemetry upload.
+            console.debug('[geometry rebuild]', JSON.stringify({
+              projectId: event.data.projectId,
+              version: event.data.version,
+              requestId: event.data.requestId,
+              ...event.data.progress
+            }));
+          }
           if (!event.data.requestId) {
             livePhase = event.data.phase;
             if (event.data.phase === 'ready' || event.data.phase === 'failed') {
