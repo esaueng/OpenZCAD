@@ -3,7 +3,7 @@
   "formatVersion": 1,
   "generatedAt": "2026-09-10T02:10:28.240Z",
   "provenance": {
-    "openzcadCommit": "8aae8de2fd182501a7fe40ec56bc6ccb64cdb04d",
+    "openzcadCommit": "87ad1d754d32c03976861e3035f3fdfeb1af4851",
     "remusCommit": "dab1e0b43a05998f3e17baf2e96145adf220060a",
     "remusVersion": "2.130.1",
     "assetPath": "assets/remus_wasm_bg-BgEHvaI6.wasm",
