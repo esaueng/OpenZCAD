@@ -274,7 +274,6 @@ import { StatusActivityLog } from './components/StatusActivityLog';
 import { PanelResizer } from './components/PanelResizer';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { TopBar } from './components/TopBar';
-import { ToolBar } from './components/ToolBar';
 import { ViewModeRail } from './components/ViewModeRail';
 import { Sidebar } from './components/Sidebar';
 import { TweakPanel } from './components/TweakPanel';
@@ -591,6 +590,14 @@ function SketchWorkflow(props: ComponentProps<typeof LazySketchWorkflow>) {
     </Suspense>
   );
 }
+// The feature tools are the first thing the column shows, but their chunk
+// is small and fetched with the workspace: keeping the component out of the
+// entry chunk is what keeps that chunk under its budget.
+const LazyToolBar = lazy(() =>
+  import('./components/ToolBar').then((module) => ({
+    default: module.ToolBar
+  }))
+);
 const LazySketchToolRail = lazy(() =>
   import('./components/SketchToolRail').then((module) => ({
     default: module.SketchToolRail
@@ -701,6 +708,14 @@ function MeasurementDock(props: ComponentProps<typeof LazyMeasurementDock>) {
   return (
     <Suspense fallback={null}>
       <LazyMeasurementDock {...props} />
+    </Suspense>
+  );
+}
+
+function ToolBar(props: ComponentProps<typeof LazyToolBar>) {
+  return (
+    <Suspense fallback={null}>
+      <LazyToolBar {...props} />
     </Suspense>
   );
 }
@@ -867,6 +882,7 @@ import {
   loadPanelState,
   savePanelState,
   toggleSidebarSection,
+  toggleToolGroup,
   type PanelState,
   type SidebarSectionId,
   type WorkspaceMode
@@ -2008,7 +2024,8 @@ export function App() {
     let disposed = false;
     void import('./lib/growingHolderPreview')
       .then((module) => {
-        if (!disposed) setMakeParameterPreview(() => module.growingHolderPreview);
+        if (!disposed)
+          setMakeParameterPreview(() => module.growingHolderPreview);
       })
       .catch(() => {
         // Exact rebuilding remains available without a preview.
@@ -4164,11 +4181,15 @@ export function App() {
   const parameterPreview = useMemo(
     () =>
       !previewDoc && !exactGeometryReady && geometry.state.phase !== 'failed'
-        ? makeParameterPreview?.(parameterPreviewBase, doc) ?? null
+        ? (makeParameterPreview?.(parameterPreviewBase, doc) ?? null)
         : null,
     [
-      makeParameterPreview, parameterPreviewBase, doc, previewDoc,
-      exactGeometryReady, geometry.state.phase
+      makeParameterPreview,
+      parameterPreviewBase,
+      doc,
+      previewDoc,
+      exactGeometryReady,
+      geometry.state.phase
     ]
   );
   const viewerBodies = useMemo<BodyRepresentation[]>(
@@ -14441,7 +14462,11 @@ export function App() {
       <ToolBar
         activeTool={tool}
         availability={availability}
+        openGroups={panelState.toolGroups}
         onLaunchTool={launchTool}
+        onToggleGroup={(group) =>
+          setPanelState((current) => toggleToolGroup(current, group))
+        }
       />
     );
   return (

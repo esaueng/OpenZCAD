@@ -7,7 +7,8 @@ import {
   PANEL_STATE_STORAGE_KEY,
   savePanelState,
   SIDEBAR_SECTION_IDS,
-  toggleSidebarSection
+  toggleSidebarSection,
+  toggleToolGroup
 } from '../apps/web/src/lib/panelState';
 
 function installLocalStorage(): void {
@@ -49,6 +50,22 @@ describe('workspace panel state', () => {
     expect(
       toggleSidebarSection(collapsed, 'history').sidebarSections.history
     ).toBe(true);
+  });
+
+  it('folds one tool group without touching the others', () => {
+    // Open to begin with: the names on the tiles are what make the tools
+    // learnable, and folding is a choice someone makes for column height.
+    const state = defaultPanelState();
+    expect(state.toolGroups.bodies).toBe(true);
+    const folded = toggleToolGroup(state, 'bodies');
+    expect(folded.toolGroups.bodies).toBe(false);
+    expect(folded.toolGroups.create).toBe(true);
+    expect(savePanelState(folded)).toBe(true);
+    expect(loadPanelState().toolGroups.bodies).toBe(false);
+    expect(
+      normalizePanelState({ toolGroups: { bodies: 'no', pattern: false } })
+        .toolGroups
+    ).toEqual({ ...state.toolGroups, pattern: false });
   });
 
   it('round-trips through device storage', () => {
