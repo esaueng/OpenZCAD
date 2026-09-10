@@ -1,3 +1,4 @@
+import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import {
   test,
@@ -2377,6 +2378,43 @@ test('grounds all cylinder edges onto its two visible rims', async ({
   await expect(fillet).toBeVisible();
   await expect(fillet.getByTitle('Feature failed to build')).toHaveCount(0);
   await expect(page.getByRole('contentinfo')).toContainText('warnings0');
+});
+
+test('drops a STEP file on the viewport to import it', async ({ page }) => {
+  // The drop runs the same import the File menu's hidden input does; what
+  // this proves is the viewer area accepting a desktop file at all, and
+  // that the overlay it raises comes down again once the file has landed.
+  test.setTimeout(90_000);
+  await stubApi(page);
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('Dropped Solid');
+  await page.getByRole('button', { name: 'Create project' }).click();
+  await expect(page.getByRole('region', { name: '3D viewport' })).toBeVisible();
+
+  const step = await readFile(
+    fileURLToPath(
+      new URL('../parity/corpus/a-export-box.step', import.meta.url)
+    ),
+    'utf8'
+  );
+  const transfer = await page.evaluateHandle((text) => {
+    const data = new DataTransfer();
+    data.items.add(
+      new File([text], 'a-export-box.step', { type: 'model/step' })
+    );
+    return data;
+  }, step);
+  const area = page.locator('.viewer-area');
+  await area.dispatchEvent('dragenter', { dataTransfer: transfer });
+  await expect(page.locator('.file-drop-target')).toHaveClass(/active/);
+  await area.dispatchEvent('drop', { dataTransfer: transfer });
+  await expect(page.locator('.file-drop-target')).not.toHaveClass(/active/);
+
+  // Named from the file's PRODUCT entity, like a menu import.
+  await expect(
+    page.locator('.feature-row', { hasText: 'brepkit_solid' })
+  ).toBeVisible({ timeout: 60_000 });
+  await expectBodyCount(page, 1);
 });
 
 test('imports a STEP solid, fillets it, and re-exports it', async ({
