@@ -622,6 +622,13 @@
   width: max(280px, min(680px, var(--tool-card-room)));
 }
 
+/* The Extrude editor occupies the right edge; the compact card's centering
+   rule would otherwise place this taller form over the region drag handle. */
+.workspace.column-layout .viewer-area .tool-card:has(.extrude-form) {
+  left: auto;
+  width: 310px;
+}
+
 /* ── The live dimension at the cursor ── */
 
 /* The classic amber tag becomes the value cluster: preview-teal ring so it
