@@ -404,7 +404,6 @@ import {
   resolveFilletBlendFace,
   resolveImportedBlendFace
 } from './lib/interaction/filletFaceEdit';
-import { ToolCard } from './components/ToolCard';
 import { Tooltip } from './components/Tooltip';
 import { ToastHost } from './components/Toast';
 import { commandPaletteShortcut } from './lib/platformShortcut';
@@ -555,6 +554,19 @@ const LazyMeasurementDock = lazy(() =>
     default: module.MeasurementDock
   }))
 );
+// Operation help is only needed after the user starts a modeling action.
+const LazyToolCard = lazy(() =>
+  import('./components/ToolCard').then((module) => ({
+    default: module.ToolCard
+  }))
+);
+function ToolCard(props: ComponentProps<typeof LazyToolCard>) {
+  return (
+    <Suspense fallback={null}>
+      <LazyToolCard {...props} />
+    </Suspense>
+  );
+}
 const LazyFeatureHistoryPanel = lazy(() =>
   import('./components/FeatureHistoryPanel').then((module) => ({
     default: module.FeatureHistoryPanel
