@@ -19,6 +19,7 @@ import type {
 import {
   buildFeature
 }  from './exact-feature-builders';
+import type { StrictUnionVerdict } from './exact-boolean-helpers';
 
 /**
  * A parsed STEP import held for reuse: the kernel's serialised solids plus the
@@ -64,6 +65,13 @@ export interface FeatureBuildContext {
   importSources: ReadonlyMap<string, Uint8Array>;
   pinnedImports: ReadonlySet<string>;
   importedSteps?: ImportedStepStore;
+  /**
+   * Strict verdicts the union gate established on the solids it produced,
+   * keyed by kernel handle, for the measurement pass of the same sync. Scoped
+   * to one sync: handles are never mutated in place after their feature ran,
+   * and the map is dropped before the next sync builds anything.
+   */
+  strictVerdicts?: Map<number, StrictUnionVerdict>;
 }
 
 /** The narrowed data payload for one feature kind (or a union of kinds). */
@@ -88,7 +96,9 @@ export function buildDocumentHistory(
   /** Runs after every feature index this call executed, failed included. */
   onFeature?: (index: number, result: ExactBuildResult) => void,
   /** Diagnostic hook before synchronous feature work begins. */
-  onFeatureStart?: (index: number) => void
+  onFeatureStart?: (index: number) => void,
+  /** Receives the union gate's verdicts; see {@link FeatureBuildContext}. */
+  strictVerdicts?: Map<number, StrictUnionVerdict>
 ): ExactBuildResult {
   const { scope, errors } = getParameterScope(document);
   const result: ExactBuildResult = resume?.initial ?? {
@@ -111,7 +121,8 @@ export function buildDocumentHistory(
     result,
     importSources,
     pinnedImports,
-    importedSteps
+    importedSteps,
+    strictVerdicts
   };
 
   for (let index = startIndex; index < features.length; index += 1) {

@@ -28,6 +28,10 @@ import {
   transformMatrix
 } from './exact-math';
 
+const IDENTITY_MATRIX = new Float64Array([
+  1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1
+]);
+
 export interface UnionFuseOperand {
   solid: number;
   name: string;
@@ -224,6 +228,121 @@ export function unifyUnionFaces(kernel: RemusKernel, solid: number): number {
 export function fuseUniformSolid(kernel: RemusKernel, solids: number[]): number {
   const fused = kernel.fuseAll(Uint32Array.from(solids));
   return unifyUnionFaces(kernel, fused);
+}
+
+/**
+ * What the union gate learned about a solid while producing it, so the
+ * later checks on the same handle (the union refusal, the strict measurement
+ * pass) reuse the verdict instead of validating a NURBS-heavy body again.
+ *
+ * `meshClosed` is left undefined when it was never needed: a solid whose
+ * strict validation already failed is refused without tessellating it.
+ */
+export interface StrictUnionVerdict {
+  /** Strict `validateSolid` error count of exactly this handle. */
+  strictErrors: number;
+  /** Whether its display projection was closed and consistently oriented. */
+  meshClosed?: boolean;
+}
+
+/** A union result together with the verdict its gate established. */
+export interface UnifiedUnion {
+  solid: number;
+  verdict: StrictUnionVerdict;
+}
+
+/** The JSON `unifyFacesChecked` returns. */
+interface UnifyFacesChecked {
+  facesMerged: number;
+  inputErrors: number;
+  resultErrors: number;
+  reverted: boolean;
+}
+
+/** The binding is typed `any` and returns a JSON string; check every field. */
+function parseUnifyFacesChecked(raw: unknown): UnifyFacesChecked {
+  const parsed: unknown = typeof raw === 'string' ? JSON.parse(raw) : raw;
+  if (!parsed || typeof parsed !== 'object') {
+    throw new Error('unifyFacesChecked returned no report.');
+  }
+  const record = parsed as Record<string, unknown>;
+  const count = (key: string): number => {
+    const value = record[key];
+    if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) {
+      throw new Error(`unifyFacesChecked report is missing "${key}".`);
+    }
+    return value;
+  };
+  return {
+    facesMerged: count('facesMerged'),
+    inputErrors: count('inputErrors'),
+    resultErrors: count('resultErrors'),
+    reverted: record.reverted === true
+  };
+}
+
+/**
+ * `unifyUnionFaces` that keeps the strict verdicts the kernel produces on the
+ * way: `unifyFacesChecked` validates the raw solid before merging and the
+ * candidate after, and reports both, so accepting or refusing the candidate
+ * needs no further `validateSolid` call. Same acceptance rule as
+ * `unifyUnionFaces`: strict solid AND closed display projection, otherwise
+ * the raw union stands.
+ */
+export function unifyUnionFacesChecked(
+  kernel: RemusKernel,
+  rawSolid: number
+): UnifiedUnion {
+  let report: UnifyFacesChecked | null = null;
+  let candidate: number | null = null;
+  try {
+    candidate = kernel.copyAndTransformSolid(rawSolid, IDENTITY_MATRIX);
+    report = parseUnifyFacesChecked(kernel.unifyFacesChecked(candidate));
+  } catch {
+    // Healing failed on the copy; the raw result is untouched. Its verdict is
+    // established below like any other.
+  }
+  // A candidate that merged nothing, or whose merge the kernel rolled back,
+  // is the raw solid again; keep the original handle and its verdict.
+  if (
+    report &&
+    candidate !== null &&
+    !report.reverted &&
+    report.facesMerged > 0 &&
+    report.resultErrors === 0 &&
+    solidMeshIsClosed(kernel, candidate)
+  ) {
+    return { solid: candidate, verdict: { strictErrors: 0, meshClosed: true } };
+  }
+  // The candidate was a copy of the raw solid, so the kernel's verdict on its
+  // input is the verdict on the raw solid.
+  const strictErrors = report ? report.inputErrors : kernel.validateSolid(rawSolid);
+  return {
+    solid: rawSolid,
+    verdict: {
+      strictErrors,
+      ...(strictErrors === 0
+        ? { meshClosed: solidMeshIsClosed(kernel, rawSolid) }
+        : {})
+    }
+  };
+}
+
+/** `fuseUniformSolid` that returns the gate's verdict with the solid. */
+export function fuseUniformSolidChecked(
+  kernel: RemusKernel,
+  solids: number[]
+): UnifiedUnion {
+  return unifyUnionFacesChecked(kernel, kernel.fuseAll(Uint32Array.from(solids)));
+}
+
+/**
+ * Whether a union verdict means the body is not an acceptable solid: the
+ * same question `validateSolid(...) !== 0 || !solidMeshIsClosed(...)` asks,
+ * answered from what the gate already measured.
+ */
+export function verdictRefusesUnion(verdict: StrictUnionVerdict): boolean {
+  return verdict.strictErrors !== 0 || verdict.meshClosed !== true;
 }
 
 /**

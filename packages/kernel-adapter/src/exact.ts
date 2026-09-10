@@ -110,6 +110,7 @@ import {
 } from './exact-history-cache';
 export type { RebuildCacheEvent };
 import { readBodyMassProperties } from './body-properties';
+import type { StrictUnionVerdict } from './exact-boolean-helpers';
 import {
   inspectTriangleMeshClosure,
   isClosedConsistentlyOrientedMesh
@@ -693,7 +694,8 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     document: ProjectDocument,
     importSources: ReadonlyMap<string, Uint8Array>,
     pinnedImports: ReadonlySet<string>,
-    onProgress?: RebuildProgressListener
+    onProgress?: RebuildProgressListener,
+    strictVerdicts?: Map<number, StrictUnionVerdict>
   ): {
     kernel: RemusKernel;
     build: ExactBuildResult;
@@ -795,7 +797,8 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
       initial ? { startIndex, initial } : undefined,
       this.importedSteps,
       onFeature,
-      onFeatureStart
+      onFeatureStart,
+      strictVerdicts
     );
     // The cache event is emitted by syncDocument AFTER the measure pass, so
     // it can carry the measure-reuse counts alongside the replay counts.
@@ -915,7 +918,14 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     shape: ExactShape,
     strictBooleanValidation = false,
     recognizeImportedFeatures = false,
-    onStage?: (name: string) => () => void
+    onStage?: (name: string) => () => void,
+    /**
+     * Strict verdicts the union gate established earlier in this sync, keyed
+     * by handle; a hit replaces the strict `validateSolid` call.
+     */
+    strictVerdicts?: ReadonlyMap<number, StrictUnionVerdict>,
+    /** Consumed bodies are hidden, so their mass properties are not read. */
+    consumed = false
   ): MeasuredShape {
     if (shape.solids.length === 0) {
       throw new Error('Exact body contains no solids.');
@@ -1173,7 +1183,13 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
       volume += kernel.volume(solid, MEASUREMENT_DEFLECTION);
       valid = valid && kernel.validateSolidRelaxed(solid) === 0;
       if (strictBooleanValidation) {
-        strictValid = kernel.validateSolid(solid) === 0 && strictValid;
+        // The union gate validated this very handle moments ago; nothing
+        // mutates a handle in place after its feature ran, so its verdict is
+        // the verdict. Anything without one is validated here as before.
+        const verdict = strictVerdicts?.get(solid);
+        const strictErrors =
+          verdict !== undefined ? verdict.strictErrors : kernel.validateSolid(solid);
+        strictValid = strictErrors === 0 && strictValid;
       }
       volumeDone?.();
     }
@@ -1204,7 +1220,10 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     // the moments of one of them would be worse than reporting none. Absent
     // is a state consumers already have to render.
     const massDone = onStage?.('Mass properties');
+    // Consumed operands are not displayed and nothing reads their mass; on a
+    // NURBS-heavy import the integration cost 15 s per rebuild for nothing.
     const massProperties =
+      !consumed &&
       shape.solids.length === 1 &&
       topology.faces.length <= MAX_BACKGROUND_MASS_PROPERTY_FACES
         ? readBodyMassProperties(kernel, shape.solids[0]!)
@@ -1242,11 +1261,15 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     // a failed sync must never leave a table the next sync would trust.
     try {
       const historyDone = report('history', 'Building history');
+      // One map per sync: the union gate writes the strict verdicts of the
+      // handles it produced, the measurement pass below reads them.
+      const strictVerdicts = new Map<number, StrictUnionVerdict>();
       const { kernel, build, replayed, restored } = this.buildWithHistoryCache(
         document,
         sources,
         pinned,
-        onProgress
+        onProgress,
+        strictVerdicts
       );
       historyDone();
       const bodies = listNodesByKind(document, 'body');
@@ -1318,7 +1341,9 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
                 `${body.name}: ${part}`,
                 document.bodyOrder.indexOf(bodyId) + 1,
                 document.bodyOrder.length
-              )
+              ),
+            strictVerdicts,
+            consumed
           );
           remeasured += 1;
           this.storeMeasuredShape(bodyId, {

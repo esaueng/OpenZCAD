@@ -38,6 +38,9 @@ import {
   solidMeshIsClosed,
   tessellatedFaceBounds,
   unifyBooleanFaces,
+  fuseUniformSolidChecked,
+  verdictRefusesUnion,
+  type StrictUnionVerdict,
   type UnionFuseOperand
 } from './exact-boolean-helpers';
 import {
@@ -1078,6 +1081,9 @@ function buildBooleanFeature(
   );
   let solid: number;
   let unionFuseOperands: UnionFuseOperand[] | null = null;
+  // The union gate's strict verdict on `solid`, reused by the refusal below
+  // and by the measurement pass instead of validating the same handle again.
+  let unionVerdict: StrictUnionVerdict | null = null;
   // A disconnected union is a different complaint with its own
   // remedy and its own warning; it must not also be reported as
   // non-manifold, nor be offered a move-to-overlap suggestion.
@@ -1106,42 +1112,19 @@ function buildBooleanFeature(
     );
     unionFuseOperands = unionOperands;
     const unionSolids = unionOperands.map((operand) => operand.solid);
+    // No `exactOverlap` fallback: Remus's distance query returns zero for
+    // penetrating and for face-touching solids alike, so a positive distance
+    // is already proof of separation. The fallback existed for kernels that
+    // report penetration depth, and on two arms whose boxes overlap without
+    // touching it cost a full GFA intersection (14 s in WASM) to confirm what
+    // the distance had said.
     const connectivity = analyzeUnionConnectivity(
       unionOperands,
-      (left, right) => kernel.solidToSolidDistance(left, right)[0] ?? NaN,
-      (left, right) => {
-        try {
-          if (
-            kernel.volume(
-              kernel.intersect(left, right),
-              MEASUREMENT_DEFLECTION
-            ) > 0
-          ) {
-            return true;
-          }
-        } catch {
-          // Face contact has no shared volume, so fall through to
-          // the kernel's same-domain contact query.
-        }
-        try {
-          const contacts = JSON.parse(
-            kernel.detectCoincidentFaces(left, right)
-          ) as unknown;
-          return (
-            Array.isArray(contacts) &&
-            contacts.some(
-              (contact) =>
-                typeof contact === 'object' &&
-                contact !== null &&
-                (contact as { aabbOverlap?: unknown }).aabbOverlap === true
-            )
-          );
-        } catch {
-          return false;
-        }
-      }
+      (left, right) => kernel.solidToSolidDistance(left, right)[0] ?? NaN
     );
-    solid = fuseUniformSolid(kernel, unionSolids);
+    const unified = fuseUniformSolidChecked(kernel, unionSolids);
+    solid = unified.solid;
+    unionVerdict = unified.verdict;
     const resultBounds = kernel.boundingBox(solid);
     const droppedOperand = droppedUnionOperandWarning({
       operands: unionOperands.map((operand) => {
@@ -1288,7 +1271,12 @@ function buildBooleanFeature(
   const unionNotSolid =
     unionFuseOperands !== null &&
     !unionDisconnected &&
-    (kernel.validateSolid(solid) !== 0 || !solidMeshIsClosed(kernel, solid));
+    (unionVerdict
+      ? verdictRefusesUnion(unionVerdict)
+      : kernel.validateSolid(solid) !== 0 || !solidMeshIsClosed(kernel, solid));
+  if (unionVerdict) {
+    ctx.strictVerdicts?.set(solid, unionVerdict);
+  }
   // Which warning the proved move belongs to.
   //
   // This used to be the index of the feature's FIRST warning, on the

@@ -1541,9 +1541,22 @@ describe('exact kernel adapter', { timeout: 30_000 }, () => {
   });
 
   it('attributes a strict Union validation failure to the feature', async () => {
+    // The union gate reads its strict verdict from `unifyFacesChecked` (the
+    // kernel validates the raw solid and the unified candidate inside it);
+    // `validateSolid` stays mocked for any path that still asks it directly.
     const validate = vi
       .spyOn(RemusKernel.prototype, 'validateSolid')
       .mockReturnValue(1);
+    const unifyChecked = vi
+      .spyOn(RemusKernel.prototype, 'unifyFacesChecked')
+      .mockReturnValue(
+        JSON.stringify({
+          facesMerged: 0,
+          inputErrors: 1,
+          resultErrors: 1,
+          reverted: false
+        })
+      );
     try {
       const withFirst = addPrimitiveFeature(
         createProjectDocument('Rejected union', toUserId('user_exact')),
@@ -1580,6 +1593,7 @@ describe('exact kernel adapter', { timeout: 30_000 }, () => {
         'Feature "Rejected union": Union produced an open, non-manifold, or inconsistently oriented result. Adjust the overlap or placement and try again.'
       );
     } finally {
+      unifyChecked.mockRestore();
       validate.mockRestore();
     }
   });
