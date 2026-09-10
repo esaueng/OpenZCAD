@@ -65,7 +65,22 @@ interface NumericKeypadProps {
   onCancel(): void;
 }
 
-const LENGTH_UNITS: KeypadUnit[] = ['mm', 'cm', 'm'];
+const METRIC_UNITS: KeypadUnit[] = ['mm', 'cm', 'm'];
+
+/**
+ * The chips a length entry offers: the metric three, plus the document's own
+ * unit when it is not already one of them.
+ *
+ * An inch document used to get the metric three and open on `mm`, while the
+ * field beside them was prefilled in inches — so committing the prefilled
+ * value without editing divided it by 25.4.
+ */
+function lengthUnitsFor(units: UnitSystem): KeypadUnit[] {
+  return METRIC_UNITS.includes(units) ? METRIC_UNITS : [...METRIC_UNITS, units];
+}
+
+/** Chips read as a drawing would label them, not as the enum spells them. */
+const UNIT_LABELS: Partial<Record<KeypadUnit, string>> = { inch: 'in' };
 const PAD_KEYS = [
   ['7', '8', '9', '/'],
   ['4', '5', '6', '*'],
@@ -131,8 +146,10 @@ export function NumericKeypad({
 }: NumericKeypadProps) {
   const [value, setValue] = useState(request.initial);
   const [dimensionMode, setDimensionMode] = useState(request.dimensionMode);
+  // The document's own unit, always: every prefill in App.tsx is a value in
+  // document units, so any other starting chip rescales it behind the user.
   const [entryUnit, setEntryUnit] = useState<KeypadUnit>(
-    request.unitKind === 'angle' ? 'deg' : units === 'inch' ? 'mm' : units
+    request.unitKind === 'angle' ? 'deg' : units
   );
   const label = dimensionMode
     ? dimensionMode === 'diameter'
@@ -362,7 +379,7 @@ export function NumericKeypad({
       <div className="keypad-units" role="radiogroup" aria-label="Entry unit">
         {(request.unitKind === 'angle'
           ? (['deg'] as KeypadUnit[])
-          : LENGTH_UNITS
+          : lengthUnitsFor(units)
         ).map((unit) => (
           <button
             key={unit}
@@ -386,7 +403,7 @@ export function NumericKeypad({
               }
             }}
           >
-            {unit}
+            {UNIT_LABELS[unit] ?? unit}
           </button>
         ))}
       </div>
