@@ -8,6 +8,7 @@ import type {
   createExactKernelAdapter,
   DxfFaceSelector,
   MeshQualityReport,
+  RebuildProgress,
   SketchSolveOutcome
 } from '@openzcad/kernel-adapter/exact';
 import {
@@ -85,6 +86,7 @@ export interface GeometryWorkerState {
   /** The UI should retain its last valid projection but not treat it as exact. */
   stale: boolean;
   error?: string;
+  progress?: RebuildProgress;
 }
 
 /**
@@ -422,7 +424,13 @@ async function execute(job: GeometryWorkerJob): Promise<void> {
               throw new Error('Superseded geometry broadcast.');
             }
             post(stateFor('rebuilding', request, { stale: true }));
-            return exact.syncDocument(document);
+            return exact.syncDocument(document, (progress) => {
+              if (!broadcastGate.isCurrent(job.broadcastToken)) return;
+              post({
+                ...stateFor('rebuilding', request, { stale: true }),
+                progress
+              });
+            });
           }
         );
     if (!broadcastGate.isCurrent(job.broadcastToken)) {
