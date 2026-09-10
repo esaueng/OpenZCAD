@@ -398,6 +398,14 @@ test('streams an exact extrude preview while a region drag is held', async ({
   await expect(chip).toHaveText(/^\+\d+(\.\d+)? mm$/);
 
   await page.mouse.up();
+  // Release is a draft: inspect or change its intent before confirming.
+  await expect(
+    page.locator('.feature-row-main', { hasText: 'Extrude' })
+  ).toHaveCount(0);
+  await page
+    .getByRole('form', { name: 'Extrude settings' })
+    .getByRole('button', { name: 'Create', exact: true })
+    .click();
   await expect(page.getByRole('contentinfo')).toContainText(
     /Extruded region by \d+(\.\d+)? mm/,
     { timeout: PREVIEW_BUDGET_MS }

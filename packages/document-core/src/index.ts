@@ -2630,6 +2630,16 @@ export function updateFeature(
       }
     }
   }
+  // New Body has no dependency on the previous Add/Cut target. Undefined
+  // patch values are normally ignored, so clear this semantic dependency here.
+  if (
+    feature.data.featureKind === 'extrude' &&
+    input.data &&
+    'operation' in input.data &&
+    input.data.operation === 'new-body'
+  ) {
+    delete feature.data.targetBodyId;
+  }
   next.version += 1;
   return next;
 }

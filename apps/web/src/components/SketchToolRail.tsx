@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, type ReactNode } from 'react';
 import {
   ChevronDown,
   ChevronRight,
@@ -41,6 +41,8 @@ export interface SketchSolveStatus {
 }
 
 interface SketchToolRailProps {
+  workflow?: ReactNode;
+  canExtrude?: boolean;
   tool: SketchToolId;
   circleMode: SketchCircleMode;
   construction: boolean;
@@ -118,6 +120,8 @@ const SOLVE_LABEL_RESERVE = [
 ];
 
 export function SketchToolRail({
+  workflow,
+  canExtrude = true,
   tool,
   circleMode,
   construction,
@@ -307,7 +311,16 @@ export function SketchToolRail({
         <ScanSearch size={14} aria-hidden="true" />
         Diagnostics
       </button>
-      <button type="button" title="Extrude valid profiles" onClick={onExtrude}>
+      <button
+        type="button"
+        title={
+          canExtrude
+            ? 'Extrude valid profiles'
+            : 'Close a profile before extruding.'
+        }
+        disabled={!canExtrude || solving}
+        onClick={onExtrude}
+      >
         <Layers3 size={14} aria-hidden="true" />
         Extrude
       </button>
@@ -467,6 +480,7 @@ export function SketchToolRail({
 
   return (
     <>
+      {workflow}
       <div className="sketch-rail" role="toolbar" aria-label="Sketch tools">
         <div className="sketch-rail-group draw">{drawTools}</div>
         <span className="sketch-rail-group-label">Constrain</span>
