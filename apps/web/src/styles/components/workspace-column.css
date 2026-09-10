@@ -699,7 +699,11 @@
 @media (max-width: 520px) {
   .viewport-dock-lane,
   .workspace-toast {
-    left: 8px;
+    /* Only the right inset tightens. The column still floats over the left
+       edge at these widths — nothing collapses it — so pinning `left` to the
+       window put 172px of a 374px dock, and the front of every toast, under
+       the column at 390px. */
+    left: calc(var(--column-w) + 8px);
     right: 8px;
   }
 
