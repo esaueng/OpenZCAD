@@ -41,6 +41,25 @@ for (const width of [1440, 1024]) {
     // And it still fits on screen once it has been pushed clear.
     expect(box!.x + box!.width).toBeLessThanOrEqual(width);
     await expect(tour).toContainText('Create your first feature');
+
+    // Clearing the column sideways is only half of it. The card outranks the
+    // dock (--z-inspector-float over --z-viewer-overlay), so any vertical
+    // overlap silently eats dock buttons: at `bottom: 14px` it covered four of
+    // ten, and pushing it clear of the column took that to seven — including
+    // the projection toggle cloud-sync.spec.ts clicks, which timed out on it.
+    const obscured = await page.locator('.viewport-dock').evaluate((dock) =>
+      [...dock.querySelectorAll('button')]
+        .filter((button) => {
+          const r = button.getBoundingClientRect();
+          const top = document.elementFromPoint(
+            r.x + r.width / 2,
+            r.y + r.height / 2
+          );
+          return !!top && top !== button && !button.contains(top);
+        })
+        .map((button) => button.getAttribute('aria-label') ?? '')
+    );
+    expect(obscured).toEqual([]);
   });
 }
 
