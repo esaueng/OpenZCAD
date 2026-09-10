@@ -1,4 +1,4 @@
-import { render, screen, fireEvent } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { WorkspaceTour } from './WorkspaceTour';
 
@@ -52,6 +52,23 @@ describe('WorkspaceTour', () => {
     render(<WorkspaceTour {...idle} onDismiss={onDismiss} />);
     fireEvent.click(screen.getByRole('button', { name: 'Skip the tour' }));
     expect(onDismiss).toHaveBeenCalledTimes(1);
+  });
+
+  it('outlines a target that mounts after the step starts', async () => {
+    // The tool palette is a lazy chunk: it lands a moment after the tour.
+    const { unmount } = render(<WorkspaceTour {...idle} onDismiss={vi.fn()} />);
+    const palette = document.createElement('nav');
+    palette.className = 'tool-palette';
+    document.body.appendChild(palette);
+    try {
+      await waitFor(() =>
+        expect(palette.classList.contains('tour-target')).toBe(true)
+      );
+      unmount();
+      expect(palette.classList.contains('tour-target')).toBe(false);
+    } finally {
+      palette.remove();
+    }
   });
 
   it('outlines the chrome region the current step points at', () => {
