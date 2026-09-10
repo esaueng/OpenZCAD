@@ -708,3 +708,86 @@ test('empty-state copy points at the tools above the history', async ({
     .click();
   await expect(hint).toHaveCount(0);
 });
+
+test('shows profile readiness and preserves exact entity edits through extrude and undo', async ({
+  page
+}) => {
+  test.setTimeout(60_000);
+  const pageErrors: string[] = [];
+  page.on('pageerror', (error) => pageErrors.push(error.message));
+  await stubApi(page);
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('Predictable plate');
+  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: /^Sketch \(S\)/ }).click();
+  await page.getByRole('button', { name: 'Top (XY)' }).click();
+  const overview = page.getByRole('region', { name: 'Sketch overview' });
+  await expect(overview).toContainText('Draw a closed outline');
+  await expect(overview).toContainText('XY plane');
+  const rail = page.getByRole('toolbar', { name: 'Sketch tools' });
+  await expect(
+    rail.getByRole('button', { name: 'Extrude', exact: true })
+  ).toBeDisabled();
+  await page.waitForTimeout(800);
+  const canvas = page.locator('.viewer-host canvas');
+  const bounds = (await canvas.boundingBox())!;
+  const corner = {
+    x: bounds.x + bounds.width * 0.5,
+    y: bounds.y + bounds.height * 0.6
+  };
+  await rail.getByRole('button', { name: /^Rectangle/ }).click();
+  await page.mouse.click(corner.x, corner.y);
+  await page.mouse.move(corner.x + 120, corner.y - 80, { steps: 5 });
+  await page.keyboard.type('40');
+  await page.keyboard.press('Tab');
+  await page.keyboard.type('20');
+  await page.keyboard.press('Enter');
+  await expect(overview).toContainText('1 closed profile ready to extrude');
+  const first = (await readLiveSketch(canvas)).objects[0]!;
+  await overview.getByLabel('Selected geometry').selectOption(first.id);
+  const editor = page.getByRole('form', { name: 'Edit rectangle' });
+  await expect(editor.getByLabel('Width', { exact: true })).toHaveValue('40');
+  await editor.getByLabel('Width', { exact: true }).fill('50');
+  await editor.getByRole('button', { name: 'Apply', exact: true }).click();
+  await expect
+    .poll(async () => (await readLiveSketch(canvas)).objects[0]!.data)
+    .toMatchObject({ width: 50, height: 20 });
+  await page.keyboard.press('Control+z');
+  await expect(editor.getByLabel('Width', { exact: true })).toHaveValue('40');
+  await page.keyboard.press('Control+Shift+z');
+  await expect(editor.getByLabel('Width', { exact: true })).toHaveValue('50');
+  await rail.getByRole('button', { name: 'Extrude', exact: true }).click();
+  await page.getByTestId('direct-manipulation-value').click();
+  const keypad = page.getByRole('dialog', { name: 'Height value' });
+  await keypad.getByRole('textbox').fill('4');
+  await keypad.getByRole('button', { name: 'Apply height' }).click();
+  await expect(page.getByRole('contentinfo')).toContainText(
+    'Extruded region by 4 mm'
+  );
+  await page.keyboard.press('Escape');
+  await page.getByRole('button', { name: 'Sketch 01', exact: true }).click();
+  await page
+    .getByRole('button', { name: 'Edit sketch in viewport', exact: true })
+    .click();
+  await expect(
+    page.getByRole('region', { name: 'Feature inspector' })
+  ).toHaveCount(0);
+  await overview.getByLabel('Selected geometry').selectOption(first.id);
+  await editor.getByLabel('Width', { exact: true }).fill('60');
+  await editor.getByRole('button', { name: 'Apply', exact: true }).click();
+  await expect
+    .poll(async () => (await readLiveSketch(canvas)).objects[0]!.data)
+    .toMatchObject({ width: 60, height: 20 });
+  await expect(overview).toContainText('1 closed profile ready to extrude');
+  await page.screenshot({
+    path: test.info().outputPath('sketch-overview.png')
+  });
+  await page
+    .getByRole('button', { name: 'Finish Sketch', exact: true })
+    .click();
+  await expect(overview).toHaveCount(0);
+  await expect(page.getByText('Editing Sketch:', { exact: false })).toHaveCount(
+    0
+  );
+  expect(pageErrors).toEqual([]);
+});
