@@ -74,8 +74,11 @@ OPENZCAD_HAMMER_STEP="$HAMMER_STEP" OPENZCAD_HAMMER_WIDTH=50 \
 Both values pass strict solid validation, mesh closure, opening-wall dimensions,
 fixed bounds and bore checks, STEP round-trip, backup parsing and undo/redo.
 The 50 mm WASM replay takes roughly six minutes on the development machine;
-interactive latency remains a limitation. Browser assistant interaction and
-production deployment are not verified by this test.
+interactive latency remains a limitation. The browser rebuild watchdog allows
+fifteen minutes of silence because synchronous WASM operations cannot emit
+heartbeats; the previous two-minute budget repeatedly killed this valid replay.
+Startup and kernel-loading budgets remain unchanged. Browser assistant
+interaction and production deployment are not verified by this test.
 
 The paired Remus packages are pinned to
 `9bee897f296171c09c99797b63eaa3afcd16f3f7` (2.130.20), from
