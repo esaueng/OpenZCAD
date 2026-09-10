@@ -29,8 +29,29 @@ function blend(canvas: Locator, radius: number, pixel = false) {
   );
 }
 
+function planarFace(
+  canvas: Locator,
+  normal: { x: number; y: number; z: number },
+  select = true
+) {
+  return canvas.evaluate(
+    (element, request) =>
+      new Promise<{
+        hasReference: boolean;
+        lineageName?: string;
+      } | null>((resolve) => {
+        element.dispatchEvent(
+          new CustomEvent('openzcad:e2e-select-planar-face', {
+            detail: { normal: request.normal, select: request.select, resolve }
+          })
+        );
+      }),
+    { normal, select }
+  );
+}
+
 for (const filter of ['Face', 'Any'] as const) {
-  test(`clicking either blend with ${filter} selection edits its feature and preserves the other rim`, async ({
+  test(`viewport faces and blends with ${filter} selection edit their owning features`, async ({
     page
   }) => {
     test.setTimeout(120_000);
@@ -84,6 +105,31 @@ for (const filter of ['Face', 'Any'] as const) {
     expect(topOwner).toBeTruthy();
     expect(bottomOwner).toBeTruthy();
     expect(topOwner).not.toBe(bottomOwner);
+
+    await expect
+      .poll(() => planarFace(canvas, { x: 0, y: 0, z: 1 }, false))
+      .toMatchObject({
+        hasReference: true,
+        lineageName: 'modifier.cylinder.face.cap.end'
+      });
+    await planarFace(canvas, { x: 0, y: 0, z: 1 });
+    await expect(inspector.getByLabel('Radius', { exact: true })).toHaveValue(
+      '46'
+    );
+    await expect(inspector.getByLabel('Height', { exact: true })).toHaveValue(
+      '33'
+    );
+    await expect(page.locator('.feature-row').first()).toHaveClass(/selected/);
+    await inspector.getByLabel('Radius', { exact: true }).fill('48');
+    await inspector.getByRole('button', { name: /^Apply/ }).click();
+    await expect(page.getByRole('contentinfo')).toContainText('Edit Cylinder');
+    await expect
+      .poll(async () => (await blend(canvas, 3))?.producingFeatureId, {
+        timeout: 30_000
+      })
+      .toBe(topOwner);
+    expect((await blend(canvas, 4))?.producingFeatureId).toBe(bottomOwner);
+
     async function clickBlend(
       radius: number,
       button: 'left' | 'right' = 'left'
