@@ -1,0 +1,672 @@
+{
+  "format": "openzcad-remus-wasm-load-baseline",
+  "formatVersion": 1,
+  "generatedAt": "2026-09-10T02:10:28.240Z",
+  "provenance": {
+    "openzcadCommit": "8aae8de2339edd69897c06e5c41dec2f547e2066",
+    "remusCommit": "a4582cf1ca71b84f7ea9a5144d084ed4b2dde4a2",
+    "remusVersion": "2.130.1",
+    "assetPath": "assets/remus_wasm_bg-BgEHvaI6.wasm",
+    "assetSha256": "f7c39447756746eea5f963dc974635aabef20a526c328881a6568d52d5fe0819",
+    "rawBytes": 8146512,
+    "gzipBytes": 2845435,
+    "brotliBytes": 2005289
+  },
+  "environment": {
+    "os": "linux 7.1.5-76070105-generic",
+    "architecture": "x64",
+    "cpuModel": "AMD Ryzen 9 5900XT 16-Core Processor",
+    "logicalCpuCount": 32,
+    "totalMemoryBytes": 33555755008,
+    "freeMemoryBeforeBytes": 26317111296,
+    "freeMemoryAfterBytes": 25357545472,
+    "loadAverageBefore": [24.01, 16.24, 7.66],
+    "loadAverageAfter": [29.2, 17.61, 8.2],
+    "cpuGovernor": "powersave",
+    "node": "24.14.0",
+    "browser": "151.0.7922.34",
+    "userAgent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.7922.34 Safari/537.36",
+    "headless": true,
+    "crossOriginIsolated": true
+  },
+  "protocol": {
+    "runs": 20,
+    "statistics": "midpoint median; nearest-rank p95",
+    "cold": "fresh Chromium process, empty browser cache, fetch cache mode default",
+    "warm": "same Chromium process after releasing the cold instance, fetch cache mode default",
+    "retainedMemory": "post-GC delta while retaining asset bytes, compiled module, and instance",
+    "imports": "signature-compatible no-op function imports; wasm-bindgen start and kernel construction are excluded"
+  },
+  "summary": {
+    "cold": {
+      "loadMs": {
+        "median": 91.46999996900558,
+        "p95": 166.13500010967255
+      },
+      "compileMs": {
+        "median": 20.730000019073486,
+        "p95": 29.5349999666214
+      },
+      "instantiateMs": {
+        "median": 0.8675000071525574,
+        "p95": 0.9150000810623169
+      },
+      "retainedUserAgentBytes": {
+        "median": null,
+        "p95": null
+      },
+      "retainedJsHeapBytes": {
+        "median": 282104,
+        "p95": 282104
+      },
+      "retainedPayloadFloorBytes": {
+        "median": 9457232,
+        "p95": 9457232
+      },
+      "wasmLinearBytes": {
+        "median": 1310720,
+        "p95": 1310720
+      },
+      "networkRequests": {
+        "median": 1,
+        "p95": 1
+      }
+    },
+    "warm": {
+      "loadMs": {
+        "median": 77.97500002384186,
+        "p95": 111.80499994754791
+      },
+      "compileMs": {
+        "median": 17.787500023841858,
+        "p95": 26.68999993801117
+      },
+      "instantiateMs": {
+        "median": 0.7524999976158142,
+        "p95": 0.8799999952316284
+      },
+      "retainedUserAgentBytes": {
+        "median": null,
+        "p95": null
+      },
+      "retainedJsHeapBytes": {
+        "median": 186040,
+        "p95": 186040
+      },
+      "retainedPayloadFloorBytes": {
+        "median": 9457232,
+        "p95": 9457232
+      },
+      "wasmLinearBytes": {
+        "median": 1310720,
+        "p95": 1310720
+      },
+      "networkRequests": {
+        "median": 0,
+        "p95": 0
+      }
+    }
+  },
+  "samples": [
+    {
+      "cold": {
+        "loadMs": 73.20500004291534,
+        "compileMs": 11.485000014305115,
+        "instantiateMs": 0.7350000143051147,
+        "retainedPayloadFloorBytes": 9457232,
+        "wasmLinearBytes": 1310720,
+        "transferBytes": 8146812,
+        "decodedBodyBytes": 8146512,
+        "networkRequests": 1,
+        "retainedUserAgentBytes": null,
+        "retainedJsHeapBytes": 282104,
+        "memoryMeasurementError": "Failed to execute 'measureUserAgentSpecificMemory' on 'Performance': performance.measureUserAgentSpecificMemory is not available."
+      },
+      "warm": {
+        "loadMs": 58.355000019073486,
+        "compileMs": 15.289999961853027,
+        "instantiateMs": 0.5850000381469727,
+        "retainedPayloadFloorBytes": 9457232,
+        "wasmLinearBytes": 1310720,
+        "transferBytes": 0,
+        "decodedBodyBytes": 8146512,
+        "networkRequests": 0,
+        "retainedUserAgentBytes": null,
+        "retainedJsHeapBytes": 186040,
+        "memoryMeasurementError": "Failed to execute 'measureUserAgentSpecificMemory' on 'Performance': performance.measureUserAgentSpecificMemory is not available."
+      }
+    },
+    {
+      "cold": {
+        "loadMs": 76.2150000333786,
+        "compileMs": 12.860000014305115,
+        "instantiateMs": 0.7200000286102295,
+        "retainedPayloadFloorBytes": 9457232,
+        "wasmLinearBytes": 1310720,
+        "transferBytes": 8146812,
+        "decodedBodyBytes": 8146512,
+        "networkRequests": 1,
+        "retainedUserAgentBytes": null,
+        "retainedJsHeapBytes": 282104,
+        "memoryMeasurementError": "Failed to execute 'measureUserAgentSpecificMemory' on 'Performance': performance.measureUserAgentSpecificMemory is not available."
+      },
+      "warm": {
+        "loadMs": 69.47000002861023,
+        "compileMs": 18.335000038146973,
+        "instantiateMs": 0.5950000286102295,
+        "retainedPayloadFloorBytes": 9457232,
+        "wasmLinearBytes": 1310720,
+        "transferBytes": 0,
+        "decodedBodyBytes": 8146512,
+        "networkRequests": 0,
+        "retainedUserAgentBytes": null,
+        "retainedJsHeapBytes": 186040,
+        "memoryMeasurementError": "Failed to execute 'measureUserAgentSpecificMemory' on 'Performance': performance.measureUserAgentSpecificMemory is not available."
+      }
+    },
+    {
+      "cold": {
+        "loadMs": 85.01499998569489,
+        "compileMs": 14.230000019073486,
+        "instantiateMs": 0.7050000429153442,
+        "retainedPayloadFloorBytes": 9457232,
+        "wasmLinearBytes": 1310720,
+        "transferBytes": 8146812,
+        "decodedBodyBytes": 8146512,
+        "networkRequests": 1,
+        "retainedUserAgentBytes": null,
+        "retainedJsHeapBytes": 282104,
+        "memoryMeasurementError": "Failed to execute 'measureUserAgentSpecificMemory' on 'Performance': performance.measureUserAgentSpecificMemory is not available."
+      },
+      "warm": {
+        "loadMs": 58.77999997138977,
+        "compileMs": 15.765000104904175,
+        "instantiateMs": 0.6599999666213989,
+        "retainedPayloadFloorBytes": 9457232,
+        "wasmLinearBytes": 1310720,
+        "transferBytes": 0,
+        "decodedBodyBytes": 8146512,
+        "networkRequests": 0,
+        "retainedUserAgentBytes": null,
+        "retainedJsHeapBytes": 186040,
+        "memoryMeasurementError": "Failed to execute 'measureUserAgentSpecificMemory' on 'Performance': performance.measureUserAgentSpecificMemory is not available."
+      }
+    },
+    {
+      "cold": {
+        "loadMs": 71.18999993801117,
+        "compileMs": 14.15500009059906,
+        "instantiateMs": 0.7999999523162842,
+        "retainedPayloadFloorBytes": 9457232,
+        "wasmLinearBytes": 1310720,
+        "transferBytes": 8146812,
+        "decodedBodyBytes": 8146512,
+        "networkRequests": 1,
+        "retainedUserAgentBytes": null,
+        "retainedJsHeapBytes": 282104,
+        "memoryMeasurementError": "Failed to execute 'measureUserAgentSpecificMemory' on 'Performance': performance.measureUserAgentSpecificMemory is not available."
+      },
+      "warm": {
+        "loadMs": 52.05499994754791,
+        "compileMs": 12.980000019073486,
+        "instantiateMs": 0.7050000429153442,
+        "retainedPayloadFloorBytes": 9457232,
+        "wasmLinearBytes": 1310720,
+        "transferBytes": 0,
+        "decodedBodyBytes": 8146512,
+        "networkRequests": 0,
+        "retainedUserAgentBytes": null,
+        "retainedJsHeapBytes": 186040,
+        "memoryMeasurementError": "Failed to execute 'measureUserAgentSpecificMemory' on 'Performance': performance.measureUserAgentSpecificMemory is not available."
+      }
+    },
+    {
+      "cold": {
+        "loadMs": 64.48500001430511,
+        "compileMs": 14.865000009536743,
+        "instantiateMs": 0.6749999523162842,
+        "retainedPayloadFloorBytes": 9457232,
+        "wasmLinearBytes": 1310720,
+        "transferBytes": 8146812,
+        "decodedBodyBytes": 8146512,
+        "networkRequests": 1,
+        "retainedUserAgentBytes": null,
+        "retainedJsHeapBytes": 282104,
+        "memoryMeasurementError": "Failed to execute 'measureUserAgentSpecificMemory' on 'Performance': performance.measureUserAgentSpecificMemory is not available."
+      },
+      "warm": {
+        "loadMs": 61.56500005722046,
+        "compileMs": 25.97000002861023,
+        "instantiateMs": 0.6449999809265137,
+        "retainedPayloadFloorBytes": 9457232,
+        "wasmLinearBytes": 1310720,
+        "transferBytes": 0,
+        "decodedBodyBytes": 8146512,
+        "networkRequests": 0,
+        "retainedUserAgentBytes": null,
+        "retainedJsHeapBytes": 186040,
+        "memoryMeasurementError": "Failed to execute 'measureUserAgentSpecificMemory' on 'Performance': performance.measureUserAgentSpecificMemory is not available."
+      }
+    },
+    {
+      "cold": {
+        "loadMs": 161.625,
+        "compileMs": 23.490000009536743,
+        "instantiateMs": 0.8350000381469727,
+        "retainedPayloadFloorBytes": 9457232,
+        "wasmLinearBytes": 1310720,
+        "transferBytes": 8146812,
+        "decodedBodyBytes": 8146512,
+        "networkRequests": 1,
+        "retainedUserAgentBytes": null,
+        "retainedJsHeapBytes": 282104,
+        "memoryMeasurementError": "Failed to execute 'measureUserAgentSpecificMemory' on 'Performance': performance.measureUserAgentSpecificMemory is not available."
+      },
+      "warm": {
+        "loadMs": 103.77999997138977,
+        "compileMs": 23.325000047683716,
+        "instantiateMs": 0.8149999380111694,
+        "retainedPayloadFloorBytes": 9457232,
+        "wasmLinearBytes": 1310720,
+        "transferBytes": 0,
+        "decodedBodyBytes": 8146512,
+        "networkRequests": 0,
+        "retainedUserAgentBytes": null,
+        "retainedJsHeapBytes": 186040,
+        "memoryMeasurementError": "Failed to execute 'measureUserAgentSpecificMemory' on 'Performance': performance.measureUserAgentSpecificMemory is not available."
+      }
+    },
+    {
+      "cold": {
+        "loadMs": 166.77999997138977,
+        "compileMs": 46.78500008583069,
+        "instantiateMs": 0.8500000238418579,
+        "retainedPayloadFloorBytes": 9457232,
+        "wasmLinearBytes": 1310720,
+        "transferBytes": 8146812,
+        "decodedBodyBytes": 8146512,
+        "networkRequests": 1,
+        "retainedUserAgentBytes": null,
+        "retainedJsHeapBytes": 282104,
+        "memoryMeasurementError": "Failed to execute 'measureUserAgentSpecificMemory' on 'Performance': performance.measureUserAgentSpecificMemory is not available."
+      },
+      "warm": {
+        "loadMs": 154.10000002384186,
+        "compileMs": 26.68999993801117,
+        "instantiateMs": 2.3299999237060547,
+        "retainedPayloadFloorBytes": 9457232,
+        "wasmLinearBytes": 1310720,
+        "transferBytes": 0,
+        "decodedBodyBytes": 8146512,
+        "networkRequests": 0,
+        "retainedUserAgentBytes": null,
+        "retainedJsHeapBytes": 186040,
+        "memoryMeasurementError": "Failed to execute 'measureUserAgentSpecificMemory' on 'Performance': performance.measureUserAgentSpecificMemory is not available."
+      }
+    },
+    {
+      "cold": {
+        "loadMs": 166.13500010967255,
+        "compileMs": 29.194999933242798,
+        "instantiateMs": 0.8599998950958252,
+        "retainedPayloadFloorBytes": 9457232,
+        "wasmLinearBytes": 1310720,
+        "transferBytes": 8146812,
+        "decodedBodyBytes": 8146512,
+        "networkRequests": 1,
+        "retainedUserAgentBytes": null,
+        "retainedJsHeapBytes": 282104,
+        "memoryMeasurementError": "Failed to execute 'measureUserAgentSpecificMemory' on 'Performance': performance.measureUserAgentSpecificMemory is not available."
+      },
+      "warm": {
+        "loadMs": 111.80499994754791,
+        "compileMs": 18.430000066757202,
+        "instantiateMs": 0.8050000667572021,
+        "retainedPayloadFloorBytes": 9457232,
+        "wasmLinearBytes": 1310720,
+        "transferBytes": 0,
+        "decodedBodyBytes": 8146512,
+        "networkRequests": 0,
+        "retainedUserAgentBytes": null,
+        "retainedJsHeapBytes": 186040,
+        "memoryMeasurementError": "Failed to execute 'measureUserAgentSpecificMemory' on 'Performance': performance.measureUserAgentSpecificMemory is not available."
+      }
+    },
+    {
+      "cold": {
+        "loadMs": 104.44500005245209,
+        "compileMs": 27.774999976158142,
+        "instantiateMs": 0.9099999666213989,
+        "retainedPayloadFloorBytes": 9457232,
+        "wasmLinearBytes": 1310720,
+        "transferBytes": 8146812,
+        "decodedBodyBytes": 8146512,
+        "networkRequests": 1,
+        "retainedUserAgentBytes": null,
+        "retainedJsHeapBytes": 282104,
+        "memoryMeasurementError": "Failed to execute 'measureUserAgentSpecificMemory' on 'Performance': performance.measureUserAgentSpecificMemory is not available."
+      },
+      "warm": {
+        "loadMs": 81.33000004291534,
+        "compileMs": 22.22499990463257,
+        "instantiateMs": 0.7300000190734863,
+        "retainedPayloadFloorBytes": 9457232,
+        "wasmLinearBytes": 1310720,
+        "transferBytes": 0,
+        "decodedBodyBytes": 8146512,
+        "networkRequests": 0,
+        "retainedUserAgentBytes": null,
+        "retainedJsHeapBytes": 186040,
+        "memoryMeasurementError": "Failed to execute 'measureUserAgentSpecificMemory' on 'Performance': performance.measureUserAgentSpecificMemory is not available."
+      }
+    },
+    {
+      "cold": {
+        "loadMs": 138.80999994277954,
+        "compileMs": 20.880000114440918,
+        "instantiateMs": 0.9149999618530273,
+        "retainedPayloadFloorBytes": 9457232,
+        "wasmLinearBytes": 1310720,
+        "transferBytes": 8146812,
+        "decodedBodyBytes": 8146512,
+        "networkRequests": 1,
+        "retainedUserAgentBytes": null,
+        "retainedJsHeapBytes": 282104,
+        "memoryMeasurementError": "Failed to execute 'measureUserAgentSpecificMemory' on 'Performance': performance.measureUserAgentSpecificMemory is not available."
+      },
+      "warm": {
+        "loadMs": 78.16000008583069,
+        "compileMs": 15.745000004768372,
+        "instantiateMs": 0.7549999952316284,
+        "retainedPayloadFloorBytes": 9457232,
+        "wasmLinearBytes": 1310720,
+        "transferBytes": 0,
+        "decodedBodyBytes": 8146512,
+        "networkRequests": 0,
+        "retainedUserAgentBytes": null,
+        "retainedJsHeapBytes": 186040,
+        "memoryMeasurementError": "Failed to execute 'measureUserAgentSpecificMemory' on 'Performance': performance.measureUserAgentSpecificMemory is not available."
+      }
+    },
+    {
+      "cold": {
+        "loadMs": 100.37000000476837,
+        "compileMs": 25.139999985694885,
+        "instantiateMs": 0.8250000476837158,
+        "retainedPayloadFloorBytes": 9457232,
+        "wasmLinearBytes": 1310720,
+        "transferBytes": 8146812,
+        "decodedBodyBytes": 8146512,
+        "networkRequests": 1,
+        "retainedUserAgentBytes": null,
+        "retainedJsHeapBytes": 282104,
+        "memoryMeasurementError": "Failed to execute 'measureUserAgentSpecificMemory' on 'Performance': performance.measureUserAgentSpecificMemory is not available."
+      },
+      "warm": {
+        "loadMs": 83.30999994277954,
+        "compileMs": 27.455000042915344,
+        "instantiateMs": 0.8799999952316284,
+        "retainedPayloadFloorBytes": 9457232,
+        "wasmLinearBytes": 1310720,
+        "transferBytes": 0,
+        "decodedBodyBytes": 8146512,
+        "networkRequests": 0,
+        "retainedUserAgentBytes": null,
+        "retainedJsHeapBytes": 186040,
+        "memoryMeasurementError": "Failed to execute 'measureUserAgentSpecificMemory' on 'Performance': performance.measureUserAgentSpecificMemory is not available."
+      }
+    },
+    {
+      "cold": {
+        "loadMs": 108.5349999666214,
+        "compileMs": 24.305000066757202,
+        "instantiateMs": 0.9049999713897705,
+        "retainedPayloadFloorBytes": 9457232,
+        "wasmLinearBytes": 1310720,
+        "transferBytes": 8146812,
+        "decodedBodyBytes": 8146512,
+        "networkRequests": 1,
+        "retainedUserAgentBytes": null,
+        "retainedJsHeapBytes": 282104,
+        "memoryMeasurementError": "Failed to execute 'measureUserAgentSpecificMemory' on 'Performance': performance.measureUserAgentSpecificMemory is not available."
+      },
+      "warm": {
+        "loadMs": 101.20500004291534,
+        "compileMs": 17.240000009536743,
+        "instantiateMs": 0.7649999856948853,
+        "retainedPayloadFloorBytes": 9457232,
+        "wasmLinearBytes": 1310720,
+        "transferBytes": 0,
+        "decodedBodyBytes": 8146512,
+        "networkRequests": 0,
+        "retainedUserAgentBytes": null,
+        "retainedJsHeapBytes": 186040,
+        "memoryMeasurementError": "Failed to execute 'measureUserAgentSpecificMemory' on 'Performance': performance.measureUserAgentSpecificMemory is not available."
+      }
+    },
+    {
+      "cold": {
+        "loadMs": 80.44000005722046,
+        "compileMs": 20.579999923706055,
+        "instantiateMs": 0.934999942779541,
+        "retainedPayloadFloorBytes": 9457232,
+        "wasmLinearBytes": 1310720,
+        "transferBytes": 8146812,
+        "decodedBodyBytes": 8146512,
+        "networkRequests": 1,
+        "retainedUserAgentBytes": null,
+        "retainedJsHeapBytes": 282104,
+        "memoryMeasurementError": "Failed to execute 'measureUserAgentSpecificMemory' on 'Performance': performance.measureUserAgentSpecificMemory is not available."
+      },
+      "warm": {
+        "loadMs": 75.72500002384186,
+        "compileMs": 15.870000004768372,
+        "instantiateMs": 0.7800000905990601,
+        "retainedPayloadFloorBytes": 9457232,
+        "wasmLinearBytes": 1310720,
+        "transferBytes": 0,
+        "decodedBodyBytes": 8146512,
+        "networkRequests": 0,
+        "retainedUserAgentBytes": null,
+        "retainedJsHeapBytes": 186040,
+        "memoryMeasurementError": "Failed to execute 'measureUserAgentSpecificMemory' on 'Performance': performance.measureUserAgentSpecificMemory is not available."
+      }
+    },
+    {
+      "cold": {
+        "loadMs": 101.06500005722046,
+        "compileMs": 29.5349999666214,
+        "instantiateMs": 0.8900001049041748,
+        "retainedPayloadFloorBytes": 9457232,
+        "wasmLinearBytes": 1310720,
+        "transferBytes": 8146812,
+        "decodedBodyBytes": 8146512,
+        "networkRequests": 1,
+        "retainedUserAgentBytes": null,
+        "retainedJsHeapBytes": 282104,
+        "memoryMeasurementError": "Failed to execute 'measureUserAgentSpecificMemory' on 'Performance': performance.measureUserAgentSpecificMemory is not available."
+      },
+      "warm": {
+        "loadMs": 85.47000002861023,
+        "compileMs": 19.084999918937683,
+        "instantiateMs": 0.7699999809265137,
+        "retainedPayloadFloorBytes": 9457232,
+        "wasmLinearBytes": 1310720,
+        "transferBytes": 0,
+        "decodedBodyBytes": 8146512,
+        "networkRequests": 0,
+        "retainedUserAgentBytes": null,
+        "retainedJsHeapBytes": 186040,
+        "memoryMeasurementError": "Failed to execute 'measureUserAgentSpecificMemory' on 'Performance': performance.measureUserAgentSpecificMemory is not available."
+      }
+    },
+    {
+      "cold": {
+        "loadMs": 97.92499995231628,
+        "compileMs": 25.62000000476837,
+        "instantiateMs": 0.8899999856948853,
+        "retainedPayloadFloorBytes": 9457232,
+        "wasmLinearBytes": 1310720,
+        "transferBytes": 8146812,
+        "decodedBodyBytes": 8146512,
+        "networkRequests": 1,
+        "retainedUserAgentBytes": null,
+        "retainedJsHeapBytes": 282104,
+        "memoryMeasurementError": "Failed to execute 'measureUserAgentSpecificMemory' on 'Performance': performance.measureUserAgentSpecificMemory is not available."
+      },
+      "warm": {
+        "loadMs": 84.5349999666214,
+        "compileMs": 12.409999966621399,
+        "instantiateMs": 0.5499999523162842,
+        "retainedPayloadFloorBytes": 9457232,
+        "wasmLinearBytes": 1310720,
+        "transferBytes": 0,
+        "decodedBodyBytes": 8146512,
+        "networkRequests": 0,
+        "retainedUserAgentBytes": null,
+        "retainedJsHeapBytes": 186040,
+        "memoryMeasurementError": "Failed to execute 'measureUserAgentSpecificMemory' on 'Performance': performance.measureUserAgentSpecificMemory is not available."
+      }
+    },
+    {
+      "cold": {
+        "loadMs": 80.76999998092651,
+        "compileMs": 14.434999942779541,
+        "instantiateMs": 0.875,
+        "retainedPayloadFloorBytes": 9457232,
+        "wasmLinearBytes": 1310720,
+        "transferBytes": 8146812,
+        "decodedBodyBytes": 8146512,
+        "networkRequests": 1,
+        "retainedUserAgentBytes": null,
+        "retainedJsHeapBytes": 282104,
+        "memoryMeasurementError": "Failed to execute 'measureUserAgentSpecificMemory' on 'Performance': performance.measureUserAgentSpecificMemory is not available."
+      },
+      "warm": {
+        "loadMs": 77.78999996185303,
+        "compileMs": 19.305000066757202,
+        "instantiateMs": 0.7799999713897705,
+        "retainedPayloadFloorBytes": 9457232,
+        "wasmLinearBytes": 1310720,
+        "transferBytes": 0,
+        "decodedBodyBytes": 8146512,
+        "networkRequests": 0,
+        "retainedUserAgentBytes": null,
+        "retainedJsHeapBytes": 186040,
+        "memoryMeasurementError": "Failed to execute 'measureUserAgentSpecificMemory' on 'Performance': performance.measureUserAgentSpecificMemory is not available."
+      }
+    },
+    {
+      "cold": {
+        "loadMs": 101.19999992847443,
+        "compileMs": 22.68499994277954,
+        "instantiateMs": 0.9150000810623169,
+        "retainedPayloadFloorBytes": 9457232,
+        "wasmLinearBytes": 1310720,
+        "transferBytes": 8146812,
+        "decodedBodyBytes": 8146512,
+        "networkRequests": 1,
+        "retainedUserAgentBytes": null,
+        "retainedJsHeapBytes": 282104,
+        "memoryMeasurementError": "Failed to execute 'measureUserAgentSpecificMemory' on 'Performance': performance.measureUserAgentSpecificMemory is not available."
+      },
+      "warm": {
+        "loadMs": 80.09999990463257,
+        "compileMs": 21.50499999523163,
+        "instantiateMs": 0.75,
+        "retainedPayloadFloorBytes": 9457232,
+        "wasmLinearBytes": 1310720,
+        "transferBytes": 0,
+        "decodedBodyBytes": 8146512,
+        "networkRequests": 0,
+        "retainedUserAgentBytes": null,
+        "retainedJsHeapBytes": 186040,
+        "memoryMeasurementError": "Failed to execute 'measureUserAgentSpecificMemory' on 'Performance': performance.measureUserAgentSpecificMemory is not available."
+      }
+    },
+    {
+      "cold": {
+        "loadMs": 66.84500002861023,
+        "compileMs": 15.375,
+        "instantiateMs": 0.8600000143051147,
+        "retainedPayloadFloorBytes": 9457232,
+        "wasmLinearBytes": 1310720,
+        "transferBytes": 8146812,
+        "decodedBodyBytes": 8146512,
+        "networkRequests": 1,
+        "retainedUserAgentBytes": null,
+        "retainedJsHeapBytes": 282104,
+        "memoryMeasurementError": "Failed to execute 'measureUserAgentSpecificMemory' on 'Performance': performance.measureUserAgentSpecificMemory is not available."
+      },
+      "warm": {
+        "loadMs": 59.4099999666214,
+        "compileMs": 12.259999990463257,
+        "instantiateMs": 0.7450000047683716,
+        "retainedPayloadFloorBytes": 9457232,
+        "wasmLinearBytes": 1310720,
+        "transferBytes": 0,
+        "decodedBodyBytes": 8146512,
+        "networkRequests": 0,
+        "retainedUserAgentBytes": null,
+        "retainedJsHeapBytes": 186040,
+        "memoryMeasurementError": "Failed to execute 'measureUserAgentSpecificMemory' on 'Performance': performance.measureUserAgentSpecificMemory is not available."
+      }
+    },
+    {
+      "cold": {
+        "loadMs": 56.22500002384186,
+        "compileMs": 9.745000004768372,
+        "instantiateMs": 0.9099999666213989,
+        "retainedPayloadFloorBytes": 9457232,
+        "wasmLinearBytes": 1310720,
+        "transferBytes": 8146812,
+        "decodedBodyBytes": 8146512,
+        "networkRequests": 1,
+        "retainedUserAgentBytes": null,
+        "retainedJsHeapBytes": 282104,
+        "memoryMeasurementError": "Failed to execute 'measureUserAgentSpecificMemory' on 'Performance': performance.measureUserAgentSpecificMemory is not available."
+      },
+      "warm": {
+        "loadMs": 54.32000005245209,
+        "compileMs": 8.714999914169312,
+        "instantiateMs": 0.75,
+        "retainedPayloadFloorBytes": 9457232,
+        "wasmLinearBytes": 1310720,
+        "transferBytes": 0,
+        "decodedBodyBytes": 8146512,
+        "networkRequests": 0,
+        "retainedUserAgentBytes": null,
+        "retainedJsHeapBytes": 186040,
+        "memoryMeasurementError": "Failed to execute 'measureUserAgentSpecificMemory' on 'Performance': performance.measureUserAgentSpecificMemory is not available."
+      }
+    },
+    {
+      "cold": {
+        "loadMs": 82.09499990940094,
+        "compileMs": 20.209999918937683,
+        "instantiateMs": 0.9099999666213989,
+        "retainedPayloadFloorBytes": 9457232,
+        "wasmLinearBytes": 1310720,
+        "transferBytes": 8146812,
+        "decodedBodyBytes": 8146512,
+        "networkRequests": 1,
+        "retainedUserAgentBytes": null,
+        "retainedJsHeapBytes": 282104,
+        "memoryMeasurementError": "Failed to execute 'measureUserAgentSpecificMemory' on 'Performance': performance.measureUserAgentSpecificMemory is not available."
+      },
+      "warm": {
+        "loadMs": 74.7849999666214,
+        "compileMs": 11.475000023841858,
+        "instantiateMs": 0.8000000715255737,
+        "retainedPayloadFloorBytes": 9457232,
+        "wasmLinearBytes": 1310720,
+        "transferBytes": 0,
+        "decodedBodyBytes": 8146512,
+        "networkRequests": 0,
+        "retainedUserAgentBytes": null,
+        "retainedJsHeapBytes": 186040,
+        "memoryMeasurementError": "Failed to execute 'measureUserAgentSpecificMemory' on 'Performance': performance.measureUserAgentSpecificMemory is not available."
+      }
+    }
+  ]
+}
