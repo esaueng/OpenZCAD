@@ -1,3 +1,5 @@
+import { importedOpeningCommand } from './imported-opening';
+export { importedOpeningCommand } from './imported-opening';
 import {
   createId,
   assertDocumentHistory,
@@ -1625,6 +1627,13 @@ function assertOperationExpressions(
 
   switch (operation.kind) {
     // set_parameter is already resolved and checked by projectedParameterScope.
+    case 'add_imported_opening_recipe':
+      assertEvaluableExpression(scope, 'opening width', operation.width);
+      evaluateExpression(
+        `require_one_of((${operation.width}), ${operation.sourceWidth}, ${operation.editedWidth})`,
+        scope
+      );
+      break;
     case 'set_feature_dimension':
       assertEvaluableExpression(
         scope,
@@ -2214,6 +2223,16 @@ export function commandsForCadPatch(
           angleDeg: operation.angleDeg ?? undefined,
           ids
         });
+      }
+      case 'add_imported_opening_recipe': {
+        const targetBodyId = resolveBody(operation.targetBodyId);
+        const compiled = importedOpeningCommand(projectedDocument, {
+          ...operation,
+          targetBodyId
+        });
+        scope.declare(operation.localId, compiled.bodyId);
+        scope.consume([targetBodyId], 'opening recipe');
+        return compiled.command;
       }
       case 'add_boolean': {
         const targetBodyIds = operation.targetBodyIds.map(resolveBody);

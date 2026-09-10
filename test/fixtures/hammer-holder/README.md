@@ -36,14 +36,18 @@ probe, not the precisely located pair of mounting holes.
 
 ## Current observations, not support claims
 
+Current regression pin: Remus `9bee897f296171c09c99797b63eaa3afcd16f3f7`
+(2.130.20). Earlier raw-kernel probes below describe the historical consumer
+and have not all been repeated on this pin.
+
 Run `pnpm exec vitest run test/hammer-holder-native.test.ts`.
 
-| Stage          | Faces | Strict errors | Relaxed errors | Detailed strict diagnostic                          |
-| -------------- | ----: | ------------: | -------------: | --------------------------------------------------- |
-| Plate          |     6 |             0 |              0 | None                                                |
-| Opening cut -8 |    10 |             1 |              0 | 8 shared edges have inconsistent face orientations  |
-| First arm Add  |    21 |             1 |              0 | 10 shared edges have inconsistent face orientations |
-| Second arm Add |    34 |             1 |              0 | 12 shared edges have inconsistent face orientations |
+| Stage          | Faces | Strict errors | Relaxed errors | Detailed strict diagnostic                         |
+| -------------- | ----: | ------------: | -------------: | -------------------------------------------------- |
+| Plate          |     6 |             0 |              0 | None                                               |
+| Opening cut -8 |    10 |             1 |              0 | 8 shared edges have inconsistent face orientations |
+| First arm Add  |    21 |             1 |              0 | 6 shared edges have inconsistent face orientations |
+| Second arm Add |    34 |             1 |              0 | 4 shared edges have inconsistent face orientations |
 
 All four stages have one shell and no build warnings. Independently tessellated
 at 0.08 mm, all have zero boundary, non-manifold or inconsistent-winding mesh
@@ -59,8 +63,9 @@ Both standalone opening tools (negative and positive sweeps) pass strict
 validation, so the earliest orientation failure is introduced by the Cut.
 A controlled equivalent opening swept +8 from Z = 0 has strict error count zero
 and the same bounds, face count and volume. That isolates a direction-dependent
-opening defect. It does not repair the whole holder: adding the first arm still
-introduces six inconsistent-orientation edges, and the second arm reports 12.
+opening defect. On the current pin, adding the first arm on this positive-opening path also
+passes strict validation. The negative-opening path still fails as recorded
+in the table; this is not a complete native-holder support claim.
 
 The tests also reproduce and guard recovery at these refusal boundaries:
 
