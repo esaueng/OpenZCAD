@@ -1,0 +1,59 @@
+/* Portal-mounted help shared by the icon palettes and viewport controls. */
+.tooltip {
+  position: fixed;
+  z-index: var(--z-context-menu);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  max-width: min(320px, calc(100vw - 16px));
+  padding: 6px 8px;
+  color: var(--color-text);
+  background: var(--color-surface-2);
+  border: var(--border-strong);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-popover);
+  font-size: var(--fs-xs);
+  line-height: var(--lh-tight);
+  pointer-events: none;
+  white-space: nowrap;
+  transform: translateX(-50%);
+  animation: tooltip-in var(--dur-fast) var(--ease-out);
+}
+
+.tooltip[data-placement='above'] {
+  transform: translate(-50%, -100%);
+}
+
+.tooltip-label {
+  font-weight: var(--fw-medium);
+}
+
+.tooltip kbd {
+  padding: 1px 4px;
+  color: var(--color-text-muted);
+  background: var(--color-bg);
+  border: var(--border-thin);
+  border-radius: var(--radius-sm);
+  font-family: var(--font-mono);
+  font-size: var(--fs-mini);
+}
+
+.tooltip-description {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--color-text-subtle);
+  text-overflow: ellipsis;
+}
+
+@keyframes tooltip-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+[data-reduced-motion='true'] .tooltip {
+  animation: none;
+}

@@ -9,6 +9,7 @@ import type {
 } from '@openzcad/viewport';
 import { AxisTriadIcon, DisplayModeIcon } from './ViewerRailIcons';
 import { DISPLAY_MODE_LABELS } from '../lib/displayMode';
+import { Tooltip } from './Tooltip';
 
 /**
  * Every standard view, in reading order down the flyout. Back, left and
@@ -122,67 +123,81 @@ export function ViewerToolbar({
     // The viewer bar: undo/redo and the viewport toggles. Still `.viewer-rail`
     // in the stylesheets; the name is what people call it.
     <div className="viewer-rail" role="toolbar" aria-label="Viewer bar">
-      <button
-        type="button"
-        className="rail-button"
-        onClick={onUndo}
-        title="Undo (Ctrl+Z)"
-        aria-label="Undo"
-        disabled={!canUndo}
-      >
-        <Undo2 size={15} aria-hidden="true" />
-      </button>
-      <button
-        type="button"
-        className="rail-button"
-        onClick={onRedo}
-        title="Redo (Ctrl+Shift+Z)"
-        aria-label="Redo"
-        disabled={!canRedo}
-      >
-        <Redo2 size={15} aria-hidden="true" />
-      </button>
-      <span className="rail-divider" aria-hidden="true" />
-      <button
-        type="button"
-        className="rail-button"
-        onClick={onFit}
-        title="Fit view (F) — double-click the viewport also fits"
-        aria-label="Fit view (F)"
-      >
-        <Maximize2 size={15} aria-hidden="true" />
-      </button>
-      <button
-        type="button"
-        className={`rail-button ${settings.showGrid ? 'active' : ''}`}
-        onClick={onToggleGrid}
-        title="Toggle grid (G)"
-        aria-label="Toggle grid (G)"
-        aria-pressed={settings.showGrid}
-      >
-        <Grid3x3 size={15} aria-hidden="true" />
-      </button>
-      <button
-        type="button"
-        className={`rail-button ${projection === 'orthographic' ? 'active' : ''}`}
-        onClick={onToggleProjection}
-        title={`Projection (P) — now: ${projection}`}
-        aria-label={`Orthographic projection (P) — now: ${projection}`}
-        aria-pressed={projection === 'orthographic'}
-      >
-        <Camera size={15} aria-hidden="true" />
-      </button>
-      <div className="rail-views-anchor">
+      <Tooltip label="Undo" shortcut="Ctrl+Z">
         <button
           type="button"
-          className={`rail-button ${settings.sectionView ? 'active' : ''}`}
-          onClick={onCycleSection}
-          title={`Section view — now: ${sectionLabel}`}
-          aria-label={`Section view — now: ${sectionLabel}`}
-          aria-pressed={settings.sectionView !== undefined}
+          className="rail-button"
+          onClick={onUndo}
+          aria-label="Undo"
+          disabled={!canUndo}
         >
-          <Slice size={15} aria-hidden="true" />
+          <Undo2 size={15} aria-hidden="true" />
         </button>
+      </Tooltip>
+      <Tooltip label="Redo" shortcut="Ctrl+Shift+Z">
+        <button
+          type="button"
+          className="rail-button"
+          onClick={onRedo}
+          aria-label="Redo"
+          disabled={!canRedo}
+        >
+          <Redo2 size={15} aria-hidden="true" />
+        </button>
+      </Tooltip>
+      <span className="rail-divider" aria-hidden="true" />
+      <Tooltip
+        label="Fit view"
+        shortcut="F"
+        description="Double-click the viewport to fit"
+      >
+        <button
+          type="button"
+          className="rail-button"
+          onClick={onFit}
+          aria-label="Fit view (F)"
+        >
+          <Maximize2 size={15} aria-hidden="true" />
+        </button>
+      </Tooltip>
+      <Tooltip label="Toggle grid" shortcut="G">
+        <button
+          type="button"
+          className={`rail-button ${settings.showGrid ? 'active' : ''}`}
+          onClick={onToggleGrid}
+          aria-label="Toggle grid (G)"
+          aria-pressed={settings.showGrid}
+        >
+          <Grid3x3 size={15} aria-hidden="true" />
+        </button>
+      </Tooltip>
+      <Tooltip
+        label="Projection"
+        shortcut="P"
+        description={`Now: ${projection}`}
+      >
+        <button
+          type="button"
+          className={`rail-button ${projection === 'orthographic' ? 'active' : ''}`}
+          onClick={onToggleProjection}
+          aria-label={`Orthographic projection (P) — now: ${projection}`}
+          aria-pressed={projection === 'orthographic'}
+        >
+          <Camera size={15} aria-hidden="true" />
+        </button>
+      </Tooltip>
+      <div className="rail-views-anchor">
+        <Tooltip label="Section view" description={`Now: ${sectionLabel}`}>
+          <button
+            type="button"
+            className={`rail-button ${settings.sectionView ? 'active' : ''}`}
+            onClick={onCycleSection}
+            aria-label={`Section view — now: ${sectionLabel}`}
+            aria-pressed={settings.sectionView !== undefined}
+          >
+            <Slice size={15} aria-hidden="true" />
+          </button>
+        </Tooltip>
         {settings.sectionView && sectionRange && (
           <div
             className="rail-section-panel"
@@ -202,30 +217,36 @@ export function ViewerToolbar({
           </div>
         )}
       </div>
-      <button
-        type="button"
-        className="rail-button"
-        onClick={onCycleDisplayMode}
-        title={`Display mode (W) — now: ${displayModeLabel}`}
-        aria-label={`Display mode (W) — now: ${displayModeLabel}`}
+      <Tooltip
+        label="Display mode"
+        shortcut="W"
+        description={`Now: ${displayModeLabel}`}
       >
-        <DisplayModeIcon mode={settings.displayMode} />
-      </button>
-      <span className="rail-divider" aria-hidden="true" />
-      <div className="rail-views-anchor" ref={anchorRef}>
         <button
           type="button"
-          ref={triggerRef}
-          className={`rail-button ${viewsOpen ? 'open' : ''}`}
-          onClick={() => setViewsOpen((open) => !open)}
-          title="Standard views"
-          aria-label="Standard views"
-          aria-haspopup="true"
-          aria-expanded={viewsOpen}
-          aria-controls={viewsOpen ? panelId : undefined}
+          className="rail-button"
+          onClick={onCycleDisplayMode}
+          aria-label={`Display mode (W) — now: ${displayModeLabel}`}
         >
-          <AxisTriadIcon />
+          <DisplayModeIcon mode={settings.displayMode} />
         </button>
+      </Tooltip>
+      <span className="rail-divider" aria-hidden="true" />
+      <div className="rail-views-anchor" ref={anchorRef}>
+        <Tooltip label="Standard views">
+          <button
+            type="button"
+            ref={triggerRef}
+            className={`rail-button ${viewsOpen ? 'open' : ''}`}
+            onClick={() => setViewsOpen((open) => !open)}
+            aria-label="Standard views"
+            aria-haspopup="true"
+            aria-expanded={viewsOpen}
+            aria-controls={viewsOpen ? panelId : undefined}
+          >
+            <AxisTriadIcon />
+          </button>
+        </Tooltip>
         {viewsOpen && (
           <div
             className="rail-views-panel"
@@ -234,18 +255,22 @@ export function ViewerToolbar({
             aria-label="Standard views"
           >
             {VIEWS.map((view) => (
-              <button
+              <Tooltip
                 key={view.id}
-                type="button"
-                className={view.id === 'iso' ? 'rail-view-wide' : undefined}
-                onClick={() => selectView(view.id)}
-                title={viewTitle(view)}
-                // The visible text is just the view name; the accessible name
-                // keeps the "<View> view (n)" wording used everywhere else.
-                aria-label={viewTitle(view)}
+                label={`${VIEW_LABELS[view.id]} view`}
+                shortcut={view.shortcut}
               >
-                {VIEW_LABELS[view.id]}
-              </button>
+                <button
+                  type="button"
+                  className={view.id === 'iso' ? 'rail-view-wide' : undefined}
+                  onClick={() => selectView(view.id)}
+                  // The visible text is just the view name; the accessible
+                  // name keeps the "<View> view (n)" wording used elsewhere.
+                  aria-label={viewTitle(view)}
+                >
+                  {VIEW_LABELS[view.id]}
+                </button>
+              </Tooltip>
             ))}
           </div>
         )}

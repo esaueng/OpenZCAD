@@ -403,7 +403,9 @@ import {
   resolveImportedBlendFace
 } from './lib/interaction/filletFaceEdit';
 import { ToolCard } from './components/ToolCard';
+import { Tooltip } from './components/Tooltip';
 import { ToastHost } from './components/Toast';
+import { commandPaletteShortcut } from './lib/platformShortcut';
 import { retireStatus, type StatusEntry } from './lib/statusLifetime';
 import { NumericKeypad, type KeypadRequest } from './components/NumericKeypad';
 import type { DimensionMode } from './lib/keypad';
@@ -13784,6 +13786,7 @@ export function App() {
       }
     />
   );
+  const commandPaletteKey = commandPaletteShortcut();
   const columnHeader =
     interaction.mode === 'sketch' ? (
       <>
@@ -13807,17 +13810,22 @@ export function App() {
         </button>
       </>
     ) : (
-      <button
-        type="button"
-        className="workspace-column-search"
-        title="Search commands (Ctrl+K)"
-        aria-label="Search commands (Ctrl+K)"
-        onClick={() => setPaletteOpen(true)}
+      <Tooltip
+        label="Search commands"
+        shortcut={commandPaletteKey.glyph}
+        description="Open the command palette"
       >
-        <Search size={14} aria-hidden="true" />
-        <span>Search commands</span>
-        <kbd>⌘K</kbd>
-      </button>
+        <button
+          type="button"
+          className="workspace-column-search"
+          aria-label={`Search commands (${commandPaletteKey.accessible})`}
+          onClick={() => setPaletteOpen(true)}
+        >
+          <Search size={14} aria-hidden="true" />
+          <span>Search commands</span>
+          <kbd>{commandPaletteKey.glyph}</kbd>
+        </button>
+      </Tooltip>
     );
   // Direct-mode strips (plane picking, direct extrude) keep floating over
   // the viewport; the column shows the palette so the tool can be changed.

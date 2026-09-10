@@ -6,6 +6,7 @@ import {
   type ToolAvailability,
   type ToolId
 } from '../lib/tools';
+import { Tooltip } from './Tooltip';
 
 interface ToolBarProps {
   activeTool: ToolId | null;
@@ -39,19 +40,26 @@ export function ToolBar({
           <div className="palette-grid">
             {group.tools.map((tool) => {
               const meta = TOOL_META[tool];
+              const disabledReason = toolDisabledReason(tool, availability);
+              const accessibleName = toolTitle(tool, availability);
               return (
-                <button
+                <Tooltip
                   key={tool}
-                  type="button"
-                  className={`palette-item ${activeTool === tool ? 'active' : ''}`}
-                  disabled={toolDisabledReason(tool, availability) !== null}
-                  title={toolTitle(tool, availability)}
-                  aria-label={toolTitle(tool, availability)}
-                  aria-pressed={activeTool === tool}
-                  onClick={() => onLaunchTool(tool)}
+                  label={meta.label}
+                  shortcut={meta.shortcut}
+                  description={disabledReason ?? meta.hint}
                 >
-                  {meta.icon}
-                </button>
+                  <button
+                    type="button"
+                    className={`palette-item ${activeTool === tool ? 'active' : ''}`}
+                    disabled={disabledReason !== null}
+                    aria-label={accessibleName}
+                    aria-pressed={activeTool === tool}
+                    onClick={() => onLaunchTool(tool)}
+                  >
+                    {meta.icon}
+                  </button>
+                </Tooltip>
               );
             })}
           </div>
