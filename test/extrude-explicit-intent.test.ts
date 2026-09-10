@@ -1,4 +1,10 @@
 import {
+  extrudeEditCommand,
+  extrudeEditTargets,
+  extrudePreviewError
+} from '../apps/web/src/lib/extrudeEditing';
+import { commandFactories, CommandManager } from '@openzcad/command-system';
+import {
   IDLE,
   interactionReducer,
   type InteractionState
@@ -122,6 +128,135 @@ describe('explicit extrusion intent', { timeout: 30_000 }, () => {
         (body) => !body.consumed
       )
     ).toHaveLength(2);
+  });
+
+  it('edits Cut to New Body and back without stale targets, preserving profiles and undo', async () => {
+    const { base, targetBodyId, input } = await plateWithBores();
+    const cut = await resolveExtrudeOperation({
+      base,
+      input,
+      choice: { operation: 'cut', targetBodyId },
+      derive: (d) => kernel.syncDocument(d)
+    });
+    const document = { ...cut.document, derived: cut.derived };
+    const feature = listFeaturesInOrder(document).at(-1)!;
+    expect(
+      extrudeEditTargets(document, feature).map((body) => body.bodyId)
+    ).toEqual([targetBodyId]);
+    const manager = new CommandManager(document);
+    const edit = extrudeEditCommand(feature, {
+      name: 'Separate bores',
+      sketchId: input.sketchId,
+      distance: -8,
+      symmetric: false,
+      backDistance: 0,
+      choice: { operation: 'new-body' }
+    });
+    edit.validate(document);
+    manager.execute(edit);
+    const changed = listFeaturesInOrder(manager.document).at(-1)!;
+    expect(changed.data).toMatchObject({
+      operation: 'new-body',
+      profiles:
+        feature.data.featureKind === 'extrude' ? feature.data.profiles : []
+    });
+    expect(changed.data).not.toHaveProperty('targetBodyId');
+    const rebuilt = await kernel.syncDocument(manager.document);
+    expect(rebuilt.warnings).toEqual([]);
+    expect(
+      Object.values(rebuilt.bodyRepresentations).filter(
+        (body) => !body.consumed
+      )
+    ).toHaveLength(2);
+    manager.undo();
+    expect(listFeaturesInOrder(manager.document).at(-1)?.data).toMatchObject({
+      operation: 'cut',
+      targetBodyId
+    });
+    manager.redo();
+    expect(
+      listFeaturesInOrder(manager.document).at(-1)?.data
+    ).not.toHaveProperty('targetBodyId');
+    const restore = extrudeEditCommand(changed, {
+      name: 'Bores',
+      sketchId: input.sketchId,
+      distance: -8,
+      symmetric: false,
+      backDistance: 0,
+      choice: { operation: 'cut', targetBodyId }
+    });
+    restore.validate(manager.document);
+    manager.execute(restore);
+    const replay = await kernel.syncDocument(manager.document);
+    expect(replay.warnings).toEqual([]);
+    expect(replay.bodyRepresentations[feature.bodyId!]?.volume).toBeCloseTo(
+      74 * 53 * 8 - 2 * Math.PI * 2.5 ** 2 * 8,
+      1
+    );
+  });
+
+  it('retains moved bodies but excludes self and downstream bodies as extrusion targets', async () => {
+    const { base, input, targetBodyId } = await plateWithBores();
+    const moved = commandFactories
+      .transformBody({
+        name: 'Move plate',
+        targetBodyId,
+        translation: { x: 1, y: 0, z: 0 }
+      })
+      .apply(base);
+    const created = await resolveExtrudeOperation({
+      base: moved,
+      input,
+      choice: { operation: 'new-body' },
+      derive: (d) => kernel.syncDocument(d)
+    });
+    const feature = listFeaturesInOrder(created.document).at(-1)!;
+    const later = commandFactories
+      .addPrimitive({
+        name: 'Later body',
+        primitiveKind: 'box',
+        dimensions: { width: 1, height: 1, depth: 1 }
+      })
+      .apply(created.document);
+    expect(
+      extrudeEditTargets(later, feature).map((body) => body.bodyId)
+    ).toEqual([base.bodyOrder[0]]);
+  });
+
+  it('excludes suppressed producers and bodies consumed before the edited feature', async () => {
+    const { base, input, targetBodyId } = await plateWithBores();
+    const cut = await resolveExtrudeOperation({
+      base,
+      input,
+      choice: { operation: 'cut', targetBodyId },
+      derive: (d) => kernel.syncDocument(d)
+    });
+    const later = await resolveExtrudeOperation({
+      base: cut.document,
+      input,
+      choice: { operation: 'new-body' },
+      derive: (d) => kernel.syncDocument(d)
+    });
+    const feature = listFeaturesInOrder(later.document).at(-1)!;
+    expect(
+      extrudeEditTargets(later.document, feature).map((body) => body.bodyId)
+    ).toEqual([listFeaturesInOrder(cut.document).at(-1)!.bodyId]);
+    const suppressed = structuredClone(later.document);
+    const producer = listFeaturesInOrder(suppressed).find(
+      (entry) =>
+        entry.featureId === listFeaturesInOrder(cut.document).at(-1)!.featureId
+    )!;
+    producer.metadata = { ...producer.metadata, suppressed: true };
+    expect(
+      extrudeEditTargets(suppressed, feature).map((body) => body.bodyId)
+    ).toEqual([targetBodyId]);
+    const rebuilt = await kernel.syncDocument(suppressed);
+    expect(
+      rebuilt.featureWarnings?.some((warning) => warning.kind === 'suppressed')
+    ).toBe(true);
+    expect(
+      extrudePreviewError(suppressed, feature.featureId, rebuilt)
+    ).toBeNull();
   });
 
   it('refuses missing and unavailable targets before any geometry call, without substituting Add', async () => {

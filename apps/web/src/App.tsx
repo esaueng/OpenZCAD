@@ -464,7 +464,15 @@ import {
   resolveCurrentExtrude
 } from './lib/extrudeInference';
 import { isExtrudeSessionCurrent } from './lib/extrudeSession';
-import { ExtrudeControls } from './components/ExtrudeControls';
+import {
+  ExtrudeForm,
+  type ExtrudeFormValue
+} from './components/forms/ExtrudeForm';
+import {
+  extrudeEditCommand,
+  extrudeEditTargets,
+  extrudePreviewError
+} from './lib/extrudeEditing';
 import type {
   BodyAppearancePreview,
   FaceResizeCommit,
@@ -2265,6 +2273,11 @@ export function App() {
    * overlap; an explicit operation never falls back to another operation.
    */
   const regionExtrudeCommitRequest = useRef(0);
+  const regionExtrudeSettings = useRef<ExtrudeFormValue | null>(null);
+  const regionDistanceSetter = useRef<((value: ParamValue) => void) | null>(
+    null
+  );
+  const extrudeEditRequest = useRef(0);
   const regionExtrudePreview = useRef(
     new LivePreview<
       RegionExtrudePreviewCandidate,
@@ -2291,7 +2304,8 @@ export function App() {
           document: command.apply(base),
           base,
           input: command.payload,
-          choice: current.extrudeChoice ?? { operation: 'automatic' },
+          choice: regionExtrudeSettings.current?.choice ??
+            current.extrudeChoice ?? { operation: 'automatic' },
           ...(sketchNode?.planeRef.type === 'face'
             ? {
                 faceAttachment: {
@@ -2467,6 +2481,7 @@ export function App() {
   const edgeFormCandidate = useRef<{
     command: AnyCommand;
     bodyId: BodyId;
+    extrude?: FeatureId;
   } | null>(null);
   const edgeFormPreview = useRef(
     new LivePreview<ProjectDocument, ProjectDocument['derived']>({
@@ -2480,7 +2495,11 @@ export function App() {
       derive: (document) => geometry.syncOnce(document),
       publish: (preview) => {
         const bodyId = edgeFormCandidate.current?.bodyId;
-        const warning = preview?.derived.warnings[0];
+        const extrude = edgeFormCandidate.current?.extrude;
+        const warning =
+          preview && extrude
+            ? extrudePreviewError(preview.document, extrude, preview.derived)
+            : preview?.derived.warnings[0];
         const valid =
           preview &&
           bodyId &&
@@ -2490,6 +2509,12 @@ export function App() {
           valid ? { ...preview.document, derived: preview.derived } : null
         );
         if (preview) {
+          if (edgeFormCandidate.current?.extrude) {
+            setFeatureFormError(
+              warning ??
+                (valid ? null : 'This extrusion did not produce a valid body.')
+            );
+          }
           setStatus(
             warning ??
               (valid
@@ -2500,7 +2525,9 @@ export function App() {
       },
       onFailure: ({ error }) => {
         setPreviewDoc(null);
-        setStatus(errorMessage(error, 'Unable to preview this size.'));
+        const message = errorMessage(error, 'Unable to preview this size.');
+        if (edgeFormCandidate.current?.extrude) setFeatureFormError(message);
+        setStatus(message);
       },
       // The form stays open after release, so its latest value must catch up.
       continueAfterSlow: true
@@ -2546,6 +2573,48 @@ export function App() {
       edgeFormPreview.clear();
       setStatus(errorMessage(error, 'Unable to preview this size.'));
     }
+  }
+
+  function previewExtrudeForm(
+    feature: FeatureNode,
+    value: ExtrudeFormValue | null
+  ) {
+    edgeFormPreview.clear();
+    setFeatureFormError(null);
+    if (!value || busy || !feature.bodyId || !managerRef.current) return;
+    try {
+      const command = extrudeEditCommand(feature, value);
+      command.validate(managerRef.current.document);
+      edgeFormCandidate.current = {
+        command,
+        bodyId: feature.bodyId,
+        extrude: feature.featureId
+      };
+      edgeFormPreview.request(
+        Math.abs(resolveParamValue(value.distance, parameterScope.scope))
+      );
+    } catch (error) {
+      setFeatureFormError(
+        errorMessage(error, 'Unable to preview this extrusion.')
+      );
+    }
+  }
+
+  function applyExtrudeForm(feature: FeatureNode, value: ExtrudeFormValue) {
+    if (busy || !feature.bodyId || !doc) return;
+    edgeFormPreview.clear();
+    const request = ++extrudeEditRequest.current;
+    void executeValidatedFeature(extrudeEditCommand(feature, value), {
+      featureName: value.name,
+      featureId: feature.featureId,
+      resultBodyId: feature.bodyId,
+      targets: affectedFeatureTargets(doc, feature.featureId).map(
+        (target, index) =>
+          index === 0 ? { ...target, featureName: value.name } : target
+      ),
+      successMessage: `Edit ${value.name}`,
+      cancelled: () => request !== extrudeEditRequest.current
+    });
   }
 
   function applyEdgeForm(
@@ -4094,6 +4163,12 @@ export function App() {
     return true;
   }
 
+  const availableExtrudeTargets = useMemo(
+    () =>
+      doc && selectedFeature ? extrudeEditTargets(doc, selectedFeature) : [],
+    [doc, selectedFeature]
+  );
+
   const selectedSketch = useMemo<SketchNode | null>(() => {
     if (
       !doc ||
@@ -4969,6 +5044,7 @@ export function App() {
   }
 
   function cancelPanel() {
+    extrudeEditRequest.current += 1;
     edgeFormPreview.clear();
     exactEntryQueue.cancel();
     setFeatureFormError(null);
@@ -9113,6 +9189,15 @@ export function App() {
     setLastValidPreview(null);
   }, [offsetInteractionKey, offsetPreview]);
 
+  const regionSketchKey =
+    interaction.mode === 'region' ? interaction.target.sketchId : null;
+  useEffect(() => {
+    regionExtrudeSettings.current = null;
+  }, [regionSketchKey]);
+  useEffect(() => {
+    extrudeEditRequest.current += 1;
+  }, [requestedFeatureNodeId, doc?.projectId]);
+
   const regionInteractionKey =
     interaction.mode === 'region'
       ? `${interaction.target.sketchId}:${interaction.target.regionFingerprint}:${JSON.stringify(interaction.extrudeChoice)}`
@@ -9122,8 +9207,18 @@ export function App() {
     setPreviewDeferred(false);
     setLastValidPreview(null);
     const current = interactionRef.current;
-    if (current.mode === 'region' && current.lastValue) {
-      regionExtrudePreview.request(current.lastValue);
+    if (current.mode === 'region') {
+      const distance =
+        regionExtrudeSettings.current?.distance ?? current.lastValue;
+      if (distance) {
+        try {
+          regionExtrudePreview.request(
+            resolveParamValue(distance, parameterScopeRef.current.scope)
+          );
+        } catch {
+          // Incomplete expressions keep the form open without a preview.
+        }
+      }
     }
   }, [regionInteractionKey, regionExtrudePreview]);
 
@@ -10355,9 +10450,11 @@ export function App() {
             }
           ];
     return {
-      name: 'Extrude',
+      name: regionExtrudeSettings.current?.name ?? 'Extrude',
       sketchId: target.sketchId as SketchId,
       distance,
+      symmetric: regionExtrudeSettings.current?.symmetric ?? false,
+      backDistance: regionExtrudeSettings.current?.backDistance ?? 0,
       profiles: profileReferencesForSelection(profiles, entityWideProfileSource)
     };
   }
@@ -10380,7 +10477,7 @@ export function App() {
     return true;
   }
 
-  /** Region-extrude drag released (or exact entry): commit the feature. */
+  /** Confirm the region extrusion from the shared editor or numeric keypad. */
   function handleRegionExtrudeCommit(distance: number, exact?: ParamValue) {
     if (interaction.mode !== 'region' || interaction.phase === 'validating') {
       return;
@@ -10393,9 +10490,10 @@ export function App() {
     regionExtrudePreview.clear();
     setPreviewDeferred(false);
     const input = regionExtrudeInputFor(target, exact ?? rounded);
-    const choice = interaction.extrudeChoice ?? {
-      operation: 'automatic' as const
-    };
+    const choice = regionExtrudeSettings.current?.choice ??
+      interaction.extrudeChoice ?? {
+        operation: 'automatic' as const
+      };
     const session = interaction;
     const selected = selectedProfilesRef.current;
     const request = ++regionExtrudeCommitRequest.current;
@@ -11964,6 +12062,7 @@ export function App() {
   }
 
   function handleSelectFeatureFromTree(nodeId: string) {
+    extrudeEditRequest.current += 1;
     setTool(null);
     setSelectedTopology(null);
     setSelectedEdges([]);
@@ -14101,7 +14200,17 @@ export function App() {
             moveValuesSetterRef={moveValuesSetterRef}
             offsetHandle={modelingLocked ? null : offsetHandleTarget}
             onOffsetPreview={handleOffsetPreview}
-            onOffsetCommit={handleOffsetCommit}
+            onOffsetCommit={(value) => {
+              if (interactionRef.current.mode === 'region') {
+                regionDistanceSetter.current?.(Math.round(value * 1000) / 1000);
+                dispatchInteraction({ type: 'drag-release' });
+                setStatus(
+                  'Extrude preview · adjust the settings, then Create to save.'
+                );
+                return true;
+              }
+              return handleOffsetCommit(value);
+            }}
             onOffsetCancel={handleOffsetCancel}
             offsetPreviewInvalid={
               isOperationState(interaction) && interaction.phase === 'failed'
@@ -14269,12 +14378,17 @@ export function App() {
                       cancelableWhileValidating={interaction.mode === 'region'}
                       children={
                         interaction.mode === 'region' ? (
-                          <ExtrudeControls
-                            choice={
-                              interaction.extrudeChoice ?? {
-                                operation: 'automatic'
-                              }
-                            }
+                          <ExtrudeForm
+                            key={`extrude-${interaction.target.sketchId}`}
+                            creating
+                            initial={{
+                              name: 'Extrude',
+                              sketchId: interaction.target.sketchId as SketchId,
+                              distance: 0
+                            }}
+                            sketches={sketchOptions}
+                            scope={parameterScope.scope}
+                            profileCount={Math.max(1, selectedProfiles.length)}
                             bodies={doc.bodyOrder.flatMap((bodyId) => {
                               const body =
                                 doc.derived.bodyRepresentations[bodyId];
@@ -14285,14 +14399,56 @@ export function App() {
                             disabled={
                               busy || interaction.phase === 'validating'
                             }
-                            onChange={(choice) =>
+                            submitLabel="Create"
+                            distanceSetterRef={regionDistanceSetter}
+                            onDraft={(value) => {
+                              regionExtrudeSettings.current = value;
                               dispatchInteraction({
                                 type: 'set-extrude-choice',
-                                choice
-                              })
-                            }
-                            onDistance={() =>
-                              handleOpenOffsetKeypad(interaction.lastValue ?? 0)
+                                choice: value.choice
+                              });
+                            }}
+                            onPreview={(value) => {
+                              regionExtrudePreview.clear();
+                              setLastValidPreview(null);
+                              if (!value) return;
+                              offsetSetterRef.current?.(
+                                resolveParamValue(
+                                  value.distance,
+                                  parameterScope.scope
+                                )
+                              );
+                              dispatchInteraction({
+                                type: 'set-extrude-choice',
+                                choice: value.choice
+                              });
+                              regionExtrudePreview.request(
+                                resolveParamValue(
+                                  value.distance,
+                                  parameterScope.scope
+                                )
+                              );
+                            }}
+                            onSubmit={(value) => {
+                              regionExtrudeSettings.current = value;
+                              handleRegionExtrudeCommit(
+                                resolveParamValue(
+                                  value.distance,
+                                  parameterScope.scope
+                                ),
+                                value.distance
+                              );
+                            }}
+                            onCancel={() => {
+                              if (cancelPendingRegionExtrusion()) return;
+                              regionExtrudePreview.clear();
+                              dispatchInteraction({ type: 'clear' });
+                              cancelPanel();
+                            }}
+                            onDistance={(value) =>
+                              handleOpenOffsetKeypad(
+                                resolveParamValue(value, parameterScope.scope)
+                              )
                             }
                           />
                         ) : undefined
@@ -14931,36 +15087,10 @@ export function App() {
                     );
                   }
                 }}
-                onApplyExtrude={(feature, value) => {
-                  if (
-                    feature.data.featureKind !== 'extrude' ||
-                    value.sketchId !== feature.data.sketchId
-                  ) {
-                    setStatus(
-                      'Changing an Extrude source sketch requires profile reselection.'
-                    );
-                    return;
-                  }
-                  executeCommand(
-                    commandFactories.updateFeature(
-                      {
-                        featureId: feature.featureId,
-                        name: value.name,
-                        data: {
-                          ...feature.data,
-                          distance: value.distance,
-                          // Stored explicitly on edits: updateFeature patches
-                          // keys and cannot delete one, so unchecking must
-                          // write false rather than omit the key — and a
-                          // cleared back distance writes the explicit 0.
-                          symmetric: value.symmetric === true,
-                          backDistance: value.backDistance ?? 0
-                        }
-                      },
-                      `Edit ${value.name}`
-                    )
-                  );
-                }}
+                extrudeBusy={busy}
+                onApplyExtrude={applyExtrudeForm}
+                onPreviewExtrude={previewExtrudeForm}
+                extrudeTargets={availableExtrudeTargets}
                 onApplyRevolve={(feature, value) =>
                   executeCommand(
                     commandFactories.updateFeature(
