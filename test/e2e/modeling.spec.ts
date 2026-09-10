@@ -1100,7 +1100,9 @@ test('radius drag resizes a cylinder after bottom adjustment and filleting', asy
   await inspector.getByRole('button', { name: 'Select all 2 edges' }).click();
   await inspector.getByLabel('Radius', { exact: true }).fill('1');
   await inspector.getByRole('button', { name: /^Create/ }).click();
-  const offsetRow = page.locator('.feature-row', { hasText: 'Move Cylinder Base' });
+  const offsetRow = page.locator('.feature-row', {
+    hasText: 'Move Cylinder Base'
+  });
   const fillet = page.locator('.feature-row', { hasText: /^Fillet/ });
   await expect(fillet).toBeVisible();
   await expect(page.getByRole('contentinfo')).toContainText('warnings0');
@@ -3687,9 +3689,12 @@ test('cancelling an export stops its archive upload', async ({ page }) => {
   await downloadPromise;
   await uploadReached;
 
-  // Cancel while the archive is mid-upload — the window the dialog's own
-  // "Cancel export" label is offered for.
-  await dialog.getByRole('button', { name: /Cancel export/ }).click();
+  // Cancel while the archive is mid-upload. The dialog closed when the
+  // export started; the run is the activity pill's now, and so is Cancel.
+  await page
+    .getByRole('region', { name: 'File export' })
+    .getByRole('button', { name: 'Cancel' })
+    .click();
   releaseUpload?.();
 
   // Nothing is finalized, so nothing appears in the File menu's stored files.
