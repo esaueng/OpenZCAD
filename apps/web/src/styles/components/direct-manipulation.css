@@ -1361,3 +1361,48 @@
   width: 100%;
   min-width: 0;
 }
+
+.extrude-form fieldset {
+  display: grid;
+  gap: 10px;
+  margin: 0;
+  padding: 0;
+  min-width: 0;
+  border: 0;
+}
+
+.extrude-form .field,
+.extrude-form .muted {
+  margin: 0;
+}
+
+.extrude-form .extrude-symmetry {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.extrude-symmetry input {
+  width: auto;
+}
+
+.tool-card:has(.extrude-form) {
+  left: auto;
+  right: 14px;
+  transform: none;
+  animation: none;
+  width: 310px;
+  max-height: calc(100% - 100px);
+  overflow-y: auto;
+}
+
+.tool-card .extrude-form {
+  flex: 1 0 100%;
+  min-width: 0;
+}
+
+.tool-card:has(.extrude-form) .tool-card-copy {
+  flex: 1;
+  min-width: 0;
+  white-space: normal;
+}

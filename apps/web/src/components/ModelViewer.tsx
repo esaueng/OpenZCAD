@@ -4486,13 +4486,15 @@ export function ModelViewer({
       if (rig?.kind === 'offset-face') {
         const inspector = renderer.domElement
           .closest('.viewer-area')
-          ?.querySelector<HTMLElement>('.inspector-float');
+          ?.querySelector<HTMLElement>(
+            '.inspector-float, .tool-card:has(.extrude-form)'
+          );
         if (inspector) {
           const hostRect = renderer.domElement.getBoundingClientRect();
           const inspectorLeft =
             inspector.getBoundingClientRect().left - hostRect.left;
-          // A top-cap anchor can project underneath the floating inspector on
-          // wide viewports. Keep the chip and the keypad anchor on the visible
+          // A cap or region anchor can project underneath its floating editor.
+          // Keep the chip and the keypad anchor on the visible
           // side of that boundary so exact entry remains reachable.
           screen = {
             ...screen,
