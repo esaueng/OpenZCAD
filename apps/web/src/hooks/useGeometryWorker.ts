@@ -33,7 +33,9 @@ interface PendingRequest<T> {
  *
  * `starting` must hand off to a kernel or rebuild phase quickly; the kernel
  * budget absorbs a slow first fetch of the multi-megabyte wasm; `rebuilding`
- * is unbounded legitimate work, so its budget is the most generous.
+ * includes synchronous WASM booleans that cannot emit heartbeats. The imported
+ * hammer replay takes about six minutes locally, so allow fifteen minutes
+ * of silence here. This is still bounded crash recovery, not a progress claim.
  */
 const RESPAWN_BUDGET_MS: Record<
   'starting' | 'loading-remus' | 'rebuilding',
@@ -41,7 +43,7 @@ const RESPAWN_BUDGET_MS: Record<
 > = {
   starting: 15_000,
   'loading-remus': 90_000,
-  rebuilding: 120_000
+  rebuilding: 15 * 60_000
 };
 
 /** How often the watchdog samples worker silence. */
@@ -301,6 +303,16 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
       worker.onmessage = (event: MessageEvent<GeometryWorkerResult>) => {
         lastWorkerMessageAt = Date.now();
         if (event.data.type === 'state') {
+          if (event.data.progress?.status === 'completed') {
+            // Keep each timing even when React batches adjacent phase updates.
+            // Session-local only: no document contents or telemetry upload.
+            console.debug('[geometry rebuild]', JSON.stringify({
+              projectId: event.data.projectId,
+              version: event.data.version,
+              requestId: event.data.requestId,
+              ...event.data.progress
+            }));
+          }
           if (!event.data.requestId) {
             livePhase = event.data.phase;
             if (event.data.phase === 'ready' || event.data.phase === 'failed') {

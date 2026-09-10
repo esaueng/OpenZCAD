@@ -89,7 +89,7 @@ function collectSketchIds(value: unknown, into: Set<string>): void {
 
 /**
  * Everything outside a feature's own node that `build` reads for it and that
- * is not already part of the scope digest: the referenced sketch nodes
+ * is not already part of the scope digest: the parameter values and referenced sketch nodes
  * (objects, constraints, and the plane ref that may attach to an upstream
  * face). Upstream body state needs no digesting — it is determined by the
  * earlier features, whose own digests guard it.
@@ -97,7 +97,8 @@ function collectSketchIds(value: unknown, into: Set<string>): void {
 export function historyFeatureDigest(
   document: ProjectDocument,
   feature: FeatureNode,
-  index: number
+  index: number,
+  scope: Record<string, number> = getParameterScope(document).scope
 ): string {
   const sketchIds = new Set<string>();
   collectSketchIds(feature.data, sketchIds);
@@ -129,24 +130,26 @@ export function historyFeatureDigest(
         feature.data
       )
     },
-    sketches
+    sketches,
+    // STEP imports read their payload, selection and document units, but
+    // never the parameter scope. Preserve these expensive checkpoints when
+    // a downstream dimension changes. All other builders conservatively
+    // depend on the entire resolved scope, including transitive parameters.
+    scope: feature.data.featureKind === 'imported-step' ? undefined : scope
   });
 }
 
 /**
- * Anything that feeds every feature equally: the resolved parameter scope
- * (any expression may reference any parameter by name), the scope errors
+ * Anything that feeds every feature equally: the scope errors
  * (seeded into warnings before the first feature), the unit system, and the
  * one module-level build mode (`setBezierProfileEdges` flips how text
- * profiles convert without touching the document). Digesting the RESOLVED
- * scope rather than the parameter table means a no-op table edit —
- * reordering, renaming with references updated — still hits the cache.
+ * profiles convert without touching the document). Parameter values belong
+ * in feature digests so parameter-independent imports can survive an edit.
  */
 export function historyScopeDigest(document: ProjectDocument): string {
-  const { scope, errors } = getParameterScope(document);
+  const { errors } = getParameterScope(document);
   return stableJson({
     units: document.units,
-    scope,
     errors,
     bezierProfileEdges: bezierProfileEdgesEnabled()
   });

@@ -215,6 +215,17 @@ export type CadPatchOperation =
       angleDeg?: ParamValue | null;
     }
   | {
+      kind: 'add_imported_opening_recipe';
+      editedWidth: number;
+      name: string;
+      localId?: LocalBodyId;
+      targetBodyId: BodyRef;
+      sourceWidth: number;
+      width: ParamValue;
+      axis: 'x' | 'y' | 'z';
+      regions: [{ min: Vector3; max: Vector3 }, { min: Vector3; max: Vector3 }];
+    }
+  | {
       kind: 'add_boolean';
       name: string;
       localId?: LocalBodyId;
@@ -1089,6 +1100,7 @@ export function groundCadPatchProposalToSelection(
       referencesSelectedBody &&
       selectedBodyId &&
       (operation.kind === 'add_transform' ||
+        operation.kind === 'add_imported_opening_recipe' ||
         operation.kind === 'add_pattern') &&
       !isLocalBodyRef(operation.targetBodyId) &&
       operation.targetBodyId !== selectedBodyId
@@ -1685,6 +1697,7 @@ export const AI_CAD_OPERATION_CAPABILITIES = {
   set_feature_dimension: { enabled: true, reason: null },
   set_sketch_dimension: { enabled: true, reason: null },
   add_transform: { enabled: true, reason: null },
+  add_imported_opening_recipe: { enabled: true, reason: null },
   add_direct_edit: { enabled: true, reason: null },
   add_face_sketch: { enabled: true, reason: null },
   add_multi_profile_extrude: { enabled: true, reason: null },
@@ -1904,6 +1917,47 @@ export const CAD_PATCH_JSON_SCHEMA = {
               'sketchId',
               'axis',
               'angleDeg'
+            ]
+          },
+          {
+            type: 'object',
+            additionalProperties: false,
+            description:
+              'Explicit localized opening recipe for an unmodified imported STEP. Two nonoverlapping coordinate regions, negative then positive, retain their intersection with the original source translated by +/- (width-sourceWidth)/2 and reattach to the unchanged outside. Requires measured regions and exact preflight; not general face-distance recognition. Use a named parameter for width. Only sourceWidth and the explicitly tested editedWidth are supported, not the interval between them. Exact preflight must qualify the edited result.',
+            properties: {
+              kind: { type: 'string', const: 'add_imported_opening_recipe' },
+              name: { type: 'string' },
+              localId: localIdSchema,
+              targetBodyId: bodyRefSchema,
+              sourceWidth: { type: 'number', exclusiveMinimum: 0 },
+              editedWidth: { type: 'number', exclusiveMinimum: 0 },
+              width: scalarSchema,
+              axis: { type: 'string', enum: ['x', 'y', 'z'] },
+              regions: {
+                type: 'array',
+                minItems: 2,
+                maxItems: 2,
+                items: {
+                  type: 'object',
+                  additionalProperties: false,
+                  properties: {
+                    min: numberVectorSchema,
+                    max: numberVectorSchema
+                  },
+                  required: ['min', 'max']
+                }
+              }
+            },
+            required: [
+              'kind',
+              'name',
+              'localId',
+              'targetBodyId',
+              'sourceWidth',
+              'editedWidth',
+              'width',
+              'axis',
+              'regions'
             ]
           },
           {
@@ -2918,6 +2972,61 @@ export function parseCadPatchProposal(
         }
         declareBodyLocalId(operation, declared, declaredBodies);
         break;
+      case 'add_imported_opening_recipe':
+        if (
+          candidate.operations.filter(
+            (op: unknown) =>
+              op &&
+              typeof op === 'object' &&
+              'kind' in op &&
+              op.kind === 'add_imported_opening_recipe'
+          ).length > 1
+        )
+          throw new Error(
+            'Only one imported opening recipe is allowed per proposal.'
+          );
+        if (
+          typeof operation.name !== 'string' ||
+          typeof operation.targetBodyId !== 'string' ||
+          typeof operation.sourceWidth !== 'number' ||
+          !Number.isFinite(operation.sourceWidth) ||
+          operation.sourceWidth <= 0 ||
+          typeof operation.editedWidth !== 'number' ||
+          !Number.isFinite(operation.editedWidth) ||
+          operation.editedWidth <= operation.sourceWidth ||
+          !['x', 'y', 'z'].includes(String(operation.axis)) ||
+          !(
+            typeof operation.width === 'string' ||
+            (typeof operation.width === 'number' &&
+              Number.isFinite(operation.width))
+          ) ||
+          !Array.isArray(operation.regions) ||
+          operation.regions.length !== 2 ||
+          !operation.regions.every((region: unknown) => {
+            if (
+              region === null ||
+              typeof region !== 'object' ||
+              !('min' in region) ||
+              !('max' in region)
+            )
+              return false;
+            const { min, max } = region;
+            return (
+              isNumberVector(min) &&
+              isNumberVector(max) &&
+              (['x', 'y', 'z'] as const).every((axis) => min[axis] < max[axis])
+            );
+          })
+        ) {
+          throw new Error('Invalid add_imported_opening_recipe operation.');
+        }
+        requireBodyRef(
+          operation.targetBodyId,
+          declaredBodies,
+          'add_imported_opening_recipe targetBodyId'
+        );
+        declareBodyLocalId(operation, declared, declaredBodies);
+        break;
       case 'add_boolean':
         if (
           typeof operation.name !== 'string' ||
@@ -3820,6 +3929,8 @@ export function describeCadPatchOperation(
       return operation.angleDeg === undefined || operation.angleDeg === null
         ? `Revolve ${operation.sketchId} around its ${operation.axis} axis`
         : `Revolve ${operation.sketchId} ${String(operation.angleDeg)}° around its ${operation.axis} axis`;
+    case 'add_imported_opening_recipe':
+      return `Create localized opening ${String(operation.width)} from ${operation.sourceWidth} on ${operation.targetBodyId}`;
     case 'add_boolean':
       return `${operation.operation} ${operation.targetBodyIds.length} bodies as ${operation.name}`;
     case 'add_transform':
