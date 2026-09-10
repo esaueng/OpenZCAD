@@ -266,38 +266,42 @@ function importRunOutcome(input: {
   rejection: string | null;
   thrown: string | null;
 }): ImportRunOutcome {
+  // Each message is the clause the pill prints after the verb and the file
+  // name: "Imported bracket.step · 1 body", "Not imported bracket.step · the
+  // file was refused". The verb itself comes from the tone.
   switch (input.outcome) {
     case 'cancelled':
-      return { tone: 'cancelled', message: 'Import cancelled' };
+      return { tone: 'cancelled', message: 'nothing was added' };
     case 'committed':
       // Two different endings, and the difference matters: an import whose
       // source never reached the cloud is a project no other device can
-      // rebuild. That is worth an amber card and a button, not a tick.
+      // rebuild. That is worth an amber pill and a button, not a tick.
       return input.archived
-        ? { tone: 'ok', message: 'Imported — 1 body' }
+        ? { tone: 'ok', message: '1 body', landed: true }
         : {
             tone: 'warning',
-            message: 'Imported, but saved on this device only',
+            message: 'saved on this device only',
+            landed: true,
             action: 'archive'
           };
     case 'rejected':
       return {
         tone: 'error',
-        message: input.rejection ?? 'Not imported — the file was refused'
+        message: input.rejection ?? 'the file was refused'
       };
     case 'superseded':
       // Says nothing against the file, so it is amber rather than red.
       return {
         tone: 'warning',
-        message: 'Not imported — the model kept changing while it rebuilt'
+        message: 'the model kept changing while it rebuilt'
       };
     case 'busy':
       return {
         tone: 'warning',
-        message: 'Not imported — another exact operation was still running'
+        message: 'another exact operation was still running'
       };
     default:
-      return { tone: 'error', message: input.thrown ?? 'Import failed' };
+      return { tone: 'error', message: input.thrown ?? 'the import failed' };
   }
 }
 
@@ -388,7 +392,7 @@ export async function runStepImport(
     'archiving'
   ];
   progress?.start({ fileName: file.name, phases });
-  /** The kernel's own words, kept for the card's one failure line. */
+  /** The kernel's own words, kept for the pill's one failure line. */
   let rejection: string | null = null;
   const signal = deps.signal;
   const stopIfCancelled = (): void => {
