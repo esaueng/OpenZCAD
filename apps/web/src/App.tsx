@@ -189,7 +189,6 @@ import {
   type ImportProgressSink,
   type ImportRunState
 } from './lib/importProgress';
-import { ImportProgressCard } from './components/ImportProgressCard';
 import {
   localAutosaveFailedStatus,
   reparkFailedAutosave
@@ -632,6 +631,13 @@ const LazyProjectSharingDialog = lazy(() =>
 const LazyExportDialog = lazy(() =>
   import('./components/ExportDialog').then((module) => ({
     default: module.ExportDialog
+  }))
+);
+// Off the entry chunk: nothing shows for the first 600 ms of a run anyway,
+// and most sessions never move a file at all.
+const LazyActivityPill = lazy(() =>
+  import('./components/ActivityPill').then((module) => ({
+    default: module.ActivityPill
   }))
 );
 const LazyShaprImportDialog = lazy(() =>
@@ -1632,7 +1638,19 @@ export function App() {
    * successful import in an effect keyed on this, so an identity that changed
    * every render would restart that timer on every render.
    */
-  const dismissImportRun = useCallback(() => setImportRun(null), []);
+  const dismissImportRun = useCallback((shown: boolean) => {
+    setImportRun(null);
+    if (!shown) {
+      return;
+    }
+    // The pill hid the status toast for the length of the run. Whatever the
+    // run wrote there — its own success line, most often — is already in the
+    // activity log, and reappearing for the tail of its lifetime would be
+    // the same news told twice.
+    setStatusEntry((current) =>
+      retireStatus(current, Number.POSITIVE_INFINITY)
+    );
+  }, []);
   // `handleArchiveLocalSources` is a hoisted declaration further down the
   // component and closes over state that moves; reached through a ref so the
   // card's callback can stay stable without capturing a stale one.
@@ -8063,10 +8081,12 @@ export function App() {
       )
     );
     return {
-      start: ({ fileName, phases }) =>
+      start: ({ fileName, phases, kind, cancellable }) =>
         setImportRun({
           id: importRunId,
+          kind: kind ?? 'import',
           fileName,
+          cancellable: cancellable ?? true,
           phases,
           progress: { phase: phases[0] ?? 'building', fraction: null },
           cancelRequested: false,
@@ -8353,6 +8373,15 @@ export function App() {
     projectTransferRef.current = true;
     setProjectTransferBusy(true);
     const snapshot = doc;
+    const fileName = `${exportFileStem(snapshot.name)}.openzcad`;
+    const sink = createImportProgressSink();
+    sink.start({
+      kind: 'backup',
+      fileName,
+      cancellable: false,
+      phases: ['preparing', 'writing']
+    });
+    sink.update({ phase: 'preparing', fraction: null });
     try {
       setStatus('Preparing complete project backup…');
       const { createProjectBackup, downloadBackupFile } =
@@ -8369,15 +8398,17 @@ export function App() {
             )
           : undefined
       );
+      sink.update({ phase: 'writing', fraction: null });
       downloadBackupFile(
-        `${exportFileStem(snapshot.name)}.openzcad`,
+        fileName,
         new Blob([text], { type: 'application/json' })
       );
       setStatus(`Exported complete project ${snapshot.name}.`);
+      sink.finish({ tone: 'ok', message: 'complete project', landed: true });
     } catch (error) {
-      setStatus(
-        `Project export failed: ${errorMessage(error, 'Unable to create backup.')}`
-      );
+      const message = errorMessage(error, 'Unable to create backup.');
+      setStatus(`Project export failed: ${message}`);
+      sink.finish({ tone: 'error', message });
     } finally {
       projectTransferRef.current = false;
       setProjectTransferBusy(false);
@@ -8390,6 +8421,14 @@ export function App() {
     setProjectTransferBusy(true);
     setBusy(true);
     const origin = managerRef.current;
+    const sink = createImportProgressSink();
+    sink.start({
+      kind: 'restore',
+      fileName: file.name,
+      cancellable: false,
+      phases: ['reading', 'saving']
+    });
+    sink.update({ phase: 'reading', fraction: null });
     try {
       const {
         MAX_PROJECT_BACKUP_BYTES,
@@ -8402,6 +8441,7 @@ export function App() {
         await parseProjectBackup(await file.text()),
         session?.userId ?? localUserId
       );
+      sink.update({ phase: 'saving', fraction: null });
       await saveImportedProject(backup);
       if (managerRef.current === origin) {
         await flushPendingLocalSave();
@@ -8422,10 +8462,15 @@ export function App() {
       setStatus(
         `Imported ${backup.document.name} as a separate local project.`
       );
+      sink.finish({
+        tone: 'ok',
+        message: `opened as ${backup.document.name}`,
+        landed: true
+      });
     } catch (error) {
-      setStatus(
-        `Project import failed: ${errorMessage(error, 'Unable to read backup.')}`
-      );
+      const message = errorMessage(error, 'Unable to read backup.');
+      setStatus(`Project import failed: ${message}`);
+      sink.finish({ tone: 'error', message });
     } finally {
       projectTransferRef.current = false;
       setProjectTransferBusy(false);
@@ -8443,139 +8488,215 @@ export function App() {
     }
   }
 
-  async function handleExportStep() {
+  /**
+   * One export, reported in the activity pill from the kernel call to the
+   * archive. `produce` builds the file; the save prompt and the archive are
+   * shared. Cancel aborts whichever of the three is running; a save prompt
+   * the user dismisses ends the run quietly, because that is a cancel too.
+   */
+  async function runExportJob(input: {
+    fileName: string;
+    label: string;
+    kind: ArtifactKind;
+    contentType: string;
+    metadata: Record<string, string | number>;
+    produce(options: {
+      signal: AbortSignal;
+      onState(state: GeometryWorkerState): void;
+    }): Promise<{ body: Blob; save(): Promise<boolean>; warnings: number }>;
+  }) {
     if (!doc || exportBodyIds.length === 0) {
       setStatus('Create a body before exporting.');
       return;
     }
-    const stem = exportFileStem(doc.name);
+    const sink = createImportProgressSink();
+    const abort = startImportAbort();
+    const { signal } = abort;
+    sink.start({
+      kind: 'export',
+      fileName: input.fileName,
+      phases: [
+        'preparing',
+        'loading-kernel',
+        'building',
+        'writing',
+        'archiving'
+      ]
+    });
+    setStatus(`Exporting ${input.label}…`);
+    const cancelled = () => {
+      setStatus(`${input.label} export cancelled.`);
+      sink.finish({ tone: 'cancelled', message: 'nothing was written' });
+      finishImportAbort(abort);
+    };
     try {
-      setStatus('Exporting exact STEP…');
-      const result = await geometry.exportModel('step', doc, exportBodyIds);
-      if (!('text' in result)) {
-        throw new Error('The STEP export returned no text.');
-      }
-      const fileName = `${stem}.step`;
-      const contentType = 'model/step';
-      const saved = await saveCadTextFile(fileName, 'step', result.text);
-      if (!saved) {
-        setStatus('STEP export cancelled.');
+      const produced = await input.produce({
+        signal,
+        onState: (state) => {
+          const progress = exportProgressFor(state);
+          if (progress) {
+            sink.update({
+              phase: progress === 'saving' ? 'writing' : progress,
+              fraction: null
+            });
+          }
+        }
+      });
+      // The result can win the race against a cancel click; the user asked to
+      // stop, so no save prompt may appear.
+      if (signal.aborted) {
+        cancelled();
         return;
       }
+      sink.update({ phase: 'writing', fraction: null });
+      const saved = await produced.save();
+      if (!saved || signal.aborted) {
+        cancelled();
+        return;
+      }
+      sink.update({ phase: 'archiving', fraction: null });
       let archived = false;
       try {
         await archiveArtifact({
-          fileName,
-          contentType,
-          kind: 'step-export',
-          body: new Blob([result.text], { type: contentType }),
-          metadata: {
-            bodyIds: exportBodyIds.join(','),
-            documentVersion: doc.version,
-            units: doc.units
-          }
+          fileName: input.fileName,
+          contentType: input.contentType,
+          kind: input.kind,
+          body: produced.body,
+          // Cancel is honoured by the two awaits above; without it here the
+          // archive kept uploading the file the user had just stopped
+          // exporting, and finalized it into the File menu.
+          signal,
+          metadata: input.metadata
         });
         archived = true;
       } catch {
         // The local download has already completed successfully.
       }
+      if (signal.aborted) {
+        // The file is on disk; only the copy was stopped.
+        setStatus(`${input.fileName} was saved; its archive was cancelled.`);
+        sink.finish({
+          tone: 'cancelled',
+          message: 'saved, archive cancelled',
+          landed: true
+        });
+        return;
+      }
       const bodies = countLabel(exportBodyIds.length, 'body', 'bodies');
       setStatus(
-        result.warnings.length > 0
-          ? `Exported STEP with ${countLabel(result.warnings.length, 'warning', 'warnings')}.`
-          : `Exported ${bodies} to ${stem}.step${archived ? ' and archived it' : ''}.`
+        produced.warnings > 0
+          ? `Exported ${input.label} with ${countLabel(produced.warnings, 'warning', 'warnings')}.`
+          : `Exported ${bodies} to ${input.fileName}${archived ? ' and archived it' : ''}.`
       );
-      announce(`Exported ${stem}.step (${bodies})`);
+      // A missing archive is only worth amber where one was on offer: a
+      // signed-out or local-only session was never going to keep a copy,
+      // and flagging every export there would teach people to dismiss it.
+      const archiveExpected =
+        Boolean(session) && cloudProjectIds.has(doc.projectId);
+      sink.finish(
+        archived || !archiveExpected
+          ? { tone: 'ok', message: bodies, landed: true }
+          : {
+              tone: 'warning',
+              message: `${bodies} · not archived to the cloud`,
+              landed: true
+            }
+      );
     } catch (error) {
-      setStatus(errorMessage(error, 'STEP export failed.'));
+      if (signal.aborted) {
+        cancelled();
+        return;
+      }
+      const message = errorMessage(error, `${input.label} export failed.`);
+      setStatus(message);
+      sink.finish({ tone: 'error', message });
+    } finally {
+      finishImportAbort(abort);
     }
   }
 
-  /**
-   * Mesh export from the dialog. Throws on failure so the dialog can show
-   * the error in place; a cancelled save dialog resolves quietly.
-   */
-  async function handleExportMesh(
-    format: MeshExportDialogFormat,
-    deflection: number,
-    options?: {
-      signal?: AbortSignal;
-      onProgress?(progress: ExportProgress): void;
+  async function handleExportStep() {
+    if (!doc || exportBodyIds.length === 0) {
+      setStatus('Create a body before exporting.');
+      return;
     }
+    const fileName = `${exportFileStem(doc.name)}.step`;
+    const contentType = 'model/step';
+    await runExportJob({
+      fileName,
+      label: 'STEP',
+      kind: 'step-export',
+      contentType,
+      metadata: {
+        bodyIds: exportBodyIds.join(','),
+        documentVersion: doc.version,
+        units: doc.units
+      },
+      produce: async (options) => {
+        const result = await geometry.exportModel(
+          'step',
+          doc,
+          exportBodyIds,
+          options
+        );
+        if (!('text' in result)) {
+          throw new Error('The STEP export returned no text.');
+        }
+        return {
+          body: new Blob([result.text], { type: contentType }),
+          save: () => saveCadTextFile(fileName, 'step', result.text),
+          warnings: result.warnings.length
+        };
+      }
+    });
+  }
+
+  /**
+   * Mesh export, handed over by the dialog the moment the user chooses a
+   * format. From here it is the activity pill's run: progress, cancel and
+   * the outcome all report there, and the workspace stays live meanwhile.
+   */
+  function handleExportMesh(
+    format: MeshExportDialogFormat,
+    deflection: number
   ) {
     if (!doc || exportBodyIds.length === 0) {
-      throw new Error('Create a body before exporting.');
+      setStatus('Create a body before exporting.');
+      return;
     }
     const info = MESH_EXPORT_FILE_INFO[format];
-    const stem = exportFileStem(doc.name);
-    const fileName = `${stem}.${info.extension}`;
-    setStatus(`Exporting ${info.label}…`);
-    let result: Awaited<ReturnType<typeof geometry.exportModel>>;
-    try {
-      result = await geometry.exportModel(format, doc, exportBodyIds, {
-        deflection,
-        ...(options?.signal ? { signal: options.signal } : {}),
-        onState: (state) => {
-          const progress = exportProgressFor(state);
-          if (progress) {
-            options?.onProgress?.(progress);
-          }
-        }
-      });
-    } catch (error) {
-      if (options?.signal?.aborted) {
-        setStatus(`${info.label} export cancelled.`);
+    const fileName = `${exportFileStem(doc.name)}.${info.extension}`;
+    void runExportJob({
+      fileName,
+      label: info.label,
+      kind: info.kind,
+      contentType: info.contentType,
+      metadata: {
+        bodyIds: exportBodyIds.join(','),
+        documentVersion: doc.version,
+        units: doc.units,
+        format,
+        deflectionMm: deflection
+      },
+      produce: async (options) => {
+        const result = await geometry.exportModel(format, doc, exportBodyIds, {
+          deflection,
+          ...options
+        });
+        return 'data' in result
+          ? {
+              body: new Blob([result.data], { type: info.contentType }),
+              save: () =>
+                saveCadBinaryFile(fileName, info.binaryFormat, result.data),
+              warnings: result.warnings.length
+            }
+          : {
+              body: new Blob([result.text], { type: info.contentType }),
+              save: () => saveCadTextFile(fileName, 'stl', result.text),
+              warnings: result.warnings.length
+            };
       }
-      throw error;
-    }
-    // The result can win the race against a cancel click; the user asked to
-    // stop, so no save prompt may appear.
-    if (options?.signal?.aborted) {
-      setStatus(`${info.label} export cancelled.`);
-      return;
-    }
-    options?.onProgress?.('saving');
-    let body: Blob;
-    let saved: boolean;
-    if ('data' in result) {
-      body = new Blob([result.data], { type: info.contentType });
-      saved = await saveCadBinaryFile(fileName, info.binaryFormat, result.data);
-    } else {
-      body = new Blob([result.text], { type: info.contentType });
-      saved = await saveCadTextFile(fileName, 'stl', result.text);
-    }
-    if (!saved) {
-      setStatus(`${info.label} export cancelled.`);
-      return;
-    }
-    let archived = false;
-    try {
-      await archiveArtifact({
-        fileName,
-        contentType: info.contentType,
-        kind: info.kind,
-        body,
-        // The dialog's Cancel is already honoured by the two awaits above;
-        // without it here the archive kept uploading the file the user had
-        // just stopped exporting, and finalized it into the File menu.
-        ...(options?.signal ? { signal: options.signal } : {}),
-        metadata: {
-          bodyIds: exportBodyIds.join(','),
-          documentVersion: doc.version,
-          units: doc.units,
-          format,
-          deflectionMm: deflection
-        }
-      });
-      archived = true;
-    } catch {
-      // The local download has already completed successfully.
-    }
-    const bodies = countLabel(exportBodyIds.length, 'body', 'bodies');
-    setStatus(
-      `Exported ${bodies} to ${fileName}${archived ? ' and archived it' : ''}.`
-    );
-    announce(`Exported ${fileName} (${bodies})`);
+    });
   }
 
   function handleCheckMeshQuality(
@@ -13502,10 +13623,9 @@ export function App() {
     geometry.state.phase === 'rebuilding'
       ? rebuildProgressLabel(geometry.state.progress)
       : null;
-  const staleProjectionLabel =
-    parameterPreview
-      ? 'Width preview · exact geometry pending'
-      : Object.keys(representations).length > 0
+  const staleProjectionLabel = parameterPreview
+    ? 'Width preview · exact geometry pending'
+    : Object.keys(representations).length > 0
       ? 'showing the last valid projection as stale'
       : 'no exact projection is available yet';
   const visibleStatus = exactGeometryReady
@@ -13515,7 +13635,7 @@ export function App() {
           ? 'Waiting for exact geometry for this revision'
           : geometry.state.phase === 'failed' && geometry.state.error
             ? `Exact geometry failed: ${geometry.state.error}`
-            : progressLabel ?? geometryPhaseLabel[geometry.state.phase]
+            : (progressLabel ?? geometryPhaseLabel[geometry.state.phase])
       } · ${staleProjectionLabel}`;
   const tone: 'ready' | 'warning' | 'running' =
     geometry.state.phase === 'failed'
@@ -14478,7 +14598,11 @@ export function App() {
         >
           <ViewerShell
             projectId={doc.projectId}
-            bodies={parameterPreview?.filter(body => !hiddenBodyIds.has(body.bodyId)) ?? viewerBodies}
+            bodies={
+              parameterPreview?.filter(
+                (body) => !hiddenBodyIds.has(body.bodyId)
+              ) ?? viewerBodies
+            }
             measurementAnnotations={measurementAnnotations}
             measurementCloudSync={[
               doc.projectId,
@@ -14514,7 +14638,9 @@ export function App() {
             }
             sketches={viewerSketches}
             selectedBodyIds={selectedBodyIds}
-            selectedTopology={parameterPreview ? null : renderedSelectedTopology}
+            selectedTopology={
+              parameterPreview ? null : renderedSelectedTopology
+            }
             previewFaceHighlights={previewBlendFaces}
             selectedEdges={parameterPreview ? [] : selectedEdges}
             pickListEnabled={appSettings.experiments.directManipulation}
@@ -15604,6 +15730,20 @@ export function App() {
       assistantCollapsed={assistantCollapsed}
       readout={
         <>
+          {/* The same lane as the status toast, and in front of it: while a
+              file is moving, the pill is the one notice about it. */}
+          <div className="activity-lane">
+            {importRun && (
+              <Suspense fallback={null}>
+                <LazyActivityPill
+                  run={importRun}
+                  onCancel={cancelImportRun}
+                  onDismiss={dismissImportRun}
+                  onArchiveNow={archiveImportSourcesFromCard}
+                />
+              </Suspense>
+            )}
+          </div>
           <WorkspaceReadout
             status={visibleStatus}
             statusAt={statusEntry.at}
@@ -15685,12 +15825,6 @@ export function App() {
                 void handleImportFiles(files);
               }
             }}
-          />
-          <ImportProgressCard
-            run={importRun}
-            onCancel={cancelImportRun}
-            onDismiss={dismissImportRun}
-            onArchiveNow={archiveImportSourcesFromCard}
           />
           {paletteOpen && (
             <CommandPalette
