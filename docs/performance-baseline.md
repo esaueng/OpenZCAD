@@ -459,6 +459,84 @@ chunks (decimal kB, using Vite's gzip report):
 > package-size slice, not the separate cold-load, compilation, instantiation,
 > or runtime-memory baselines.
 
+## W3 exact Remus WASM browser baseline (2026-09-09)
+
+This baseline measures the exact hashed kernel asset emitted by a production
+OpenZCAD build, not a rebuilt or package-local substitute. The harness resolves
+the single kernel WASM path through `build-meta.json`, refuses missing or
+ambiguous provenance, verifies the WASM header, and records the asset SHA-256.
+Reproduce it from a clean checkout with a Chromium installation available to
+Playwright:
+
+```bash
+pnpm install --frozen-lockfile
+OPENZCAD_BUILD_COMMIT="$(git rev-parse HEAD)" pnpm build
+pnpm perf:remus-wasm -- --runs 20 --out remus-wasm-load-baseline.json
+```
+
+Each sample launches a fresh persistent Chromium profile. The cold phase
+fetches and materializes the raw asset through an empty browser cache, compiles
+it with `WebAssembly.compile`, and instantiates the compiled module. The warm
+phase releases that instance, forces garbage collection, and repeats in the
+same browser process; all 20 warm fetches were browser-cache hits with zero
+transfer bytes and zero server requests. Median is the midpoint of the two
+central samples and p95 uses nearest rank. The retained JSON report contains
+every raw sample:
+[`docs/qa/2026-09-09/remus-wasm-load-baseline.json`](qa/2026-09-09/remus-wasm-load-baseline.json).
+
+Provenance: OpenZCAD `8aae8de2fd182501a7fe40ec56bc6ccb64cdb04d`,
+Remus `a4582cf1ca71b84f7ea9a5144d084ed4b2dde4a2` (`remus-wasm`
+2.130.1), emitted asset `assets/remus_wasm_bg-BgEHvaI6.wasm`, SHA-256
+`f7c39447756746eea5f963dc974635aabef20a526c328881a6568d52d5fe0819`.
+The asset is 8,146,512 bytes raw, 2,845,435 bytes Node-gzip, and 2,005,289
+bytes Brotli-q11.
+
+| Exact emitted kernel metric | Cold median |  Cold p95 | Warm median |  Warm p95 |
+| --------------------------- | ----------: | --------: | ----------: | --------: |
+| Load + byte materialization |    91.47 ms | 166.14 ms |    77.98 ms | 111.80 ms |
+| Compile                     |    20.73 ms |  29.53 ms |    17.79 ms |  26.69 ms |
+| Instantiate compiled module |     0.87 ms |   0.92 ms |     0.75 ms |   0.88 ms |
+| Initial WASM linear memory  |    1.25 MiB |  1.25 MiB |    1.25 MiB |  1.25 MiB |
+| Retained payload floor      |    9.02 MiB |  9.02 MiB |    9.02 MiB |  9.02 MiB |
+| Post-GC JS-heap delta       |    0.27 MiB |  0.27 MiB |    0.18 MiB |  0.18 MiB |
+
+The retained payload floor is the raw `ArrayBuffer` plus exported initial WASM
+linear memory. It deliberately excludes compiled-code/native engine overhead,
+so it is a lower bound rather than a total-process-memory claim. Chromium
+151.0.7922.34 reported `measureUserAgentSpecificMemory` as unavailable even in
+the cross-origin-isolated harness; the JSON retains that failure and the
+separate CDP JS-heap delta instead of substituting an estimate.
+
+### Environment and limits
+
+The target was a desktop-class AMD Ryzen 9 5900XT (16 cores / 32 logical CPUs),
+32 GB RAM, x86-64 Pop!_OS Linux kernel 7.1.5, Node 24.14.0, and Playwright
+headless Chromium 151.0.7922.34. The CPU governor reported `powersave`. Other
+concurrent work kept the one-minute load average between 24.01 and 29.20 during
+the retained run, so these are loaded-host observations, not idle-machine
+ceilings. Chromium profiles used `/dev/shm` because the host filesystem had
+less than 1 GiB free.
+
+The loopback server removes WAN, TLS, CDN, and content-encoding variance, so
+`load` measures browser receipt and raw-byte materialization rather than user
+download time. The harness uses signature-compatible no-op function imports to
+isolate module instantiation; it does not call `__wbindgen_start`, construct a
+`BrepKernel`, run inside the geometry worker, or measure the end-to-end
+`loading-remus` UI phase. Headless Chromium is representative of the desktop
+V8/WebAssembly engine but not mobile-class or constrained hardware. Those
+boundaries keep this result to the W3 exact-asset slice; W4 cold rebuild, warm
+cache hit, eviction, large-document clone, STEP first-load, and retained worker
+heap remain open.
+
+### Budget disposition
+
+No new latency or retained-memory gate is justified by this one loaded desktop
+baseline. The existing deterministic raw/gzip hard limits remain the only hard
+WASM gates, and exact build provenance remains a harness precondition. A timing
+or memory gate needs matched quiet-host repeats on at least one desktop and one
+constrained/mobile-class target, using the real worker/glue startup path; until
+then this report is a comparison baseline, not pass/fail policy.
+
 The three eager UI assets total about 362.9 kB gzip. PDF worker/runtime assets
 are emitted separately and are loaded only when reference-document support is
 used. Reproduce the complete raw/gzip inventory with `pnpm build:report`; the
