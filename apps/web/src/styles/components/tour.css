@@ -5,9 +5,13 @@
 
 .workspace-tour {
   position: absolute;
-  /* Clear of the floating tool palette on the left and the status bar hint
-     text below; the assistant launcher owns the opposite corner. */
-  left: 178px;
+  /* The same lane the dock and the toast use: the column floats over the
+     viewport's left edge, so the card has to start from the column's width,
+     not from the window. The old fixed 178px was measured against the
+     floating tool palette and the status bar hint, neither of which the
+     column layout still renders, and it left a quarter of the card — the
+     whole of its first word — behind the column at every desktop width. */
+  left: calc(var(--column-w, 0px) + 12px);
   bottom: 14px;
   z-index: var(--z-inspector-float);
   width: 296px;
