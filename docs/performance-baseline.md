@@ -484,7 +484,7 @@ central samples and p95 uses nearest rank. The retained JSON report contains
 every raw sample:
 [`docs/qa/2026-09-09/remus-wasm-load-baseline.json`](qa/2026-09-09/remus-wasm-load-baseline.json).
 
-Provenance: OpenZCAD `8aae8de2fd182501a7fe40ec56bc6ccb64cdb04d`,
+Provenance: OpenZCAD `8aae8de2339edd69897c06e5c41dec2f547e2066`,
 Remus `a4582cf1ca71b84f7ea9a5144d084ed4b2dde4a2` (`remus-wasm`
 2.130.1), emitted asset `assets/remus_wasm_bg-BgEHvaI6.wasm`, SHA-256
 `f7c39447756746eea5f963dc974635aabef20a526c328881a6568d52d5fe0819`.
