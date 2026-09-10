@@ -672,9 +672,15 @@ export function SettingsPage({
         <span className="settings-save-message" aria-live="polite">
           {message}
         </span>
-        <button className="primary" type="button" onClick={onClose}>
+        <button
+          className="settings-back-action"
+          type="button"
+          aria-label="Back to workspace"
+          title="Back to workspace"
+          onClick={onClose}
+        >
           <ChevronLeft size={14} aria-hidden="true" />
-          Back to workspace
+          Back
         </button>
       </header>
 
