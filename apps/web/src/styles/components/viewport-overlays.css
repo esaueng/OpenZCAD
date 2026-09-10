@@ -84,7 +84,11 @@
 }
 
 .cube-face-label {
-  fill: var(--color-text);
+  /* Drawn on the viewport's dark stage, which never re-themes — so this is
+     --color-viewport-text, not --color-text. Under the light chrome
+     --color-text resolves to #1a2330 and the face labels fell to 1.25:1
+     against #070b10. */
+  fill: var(--color-viewport-text);
   font-size: 9px;
   font-weight: var(--fw-medium);
   letter-spacing: 0.02em;
