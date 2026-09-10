@@ -454,10 +454,7 @@ import type {
 import { resolveFace } from './lib/topologyResolution';
 import { objectPolylines } from './lib/objectPolyline';
 import type { RegionPickData } from './components/viewer/regionOverlay';
-import {
-  CommandPalette,
-  type PaletteCommand
-} from './components/CommandPalette';
+import type { PaletteCommand } from './components/CommandPalette';
 import { ShortcutsOverlay } from './components/ShortcutsOverlay';
 import { DISPLAY_MODE_LABELS } from './lib/displayMode';
 import { ContextMenu, type ContextMenuState } from './components/ContextMenu';
@@ -638,6 +635,12 @@ const LazyExportDialog = lazy(() =>
 const LazyActivityPill = lazy(() =>
   import('./components/ActivityPill').then((module) => ({
     default: module.ActivityPill
+  }))
+);
+// Opened by ⌘K, never at boot; the entry chunk has no room for it.
+const LazyCommandPalette = lazy(() =>
+  import('./components/CommandPalette').then((module) => ({
+    default: module.CommandPalette
   }))
 );
 const LazyShaprImportDialog = lazy(() =>
@@ -15845,10 +15848,12 @@ export function App() {
             }}
           />
           {paletteOpen && (
-            <CommandPalette
-              commands={paletteCommands}
-              onClose={() => setPaletteOpen(false)}
-            />
+            <Suspense fallback={null}>
+              <LazyCommandPalette
+                commands={paletteCommands}
+                onClose={() => setPaletteOpen(false)}
+              />
+            </Suspense>
           )}
           {shortcutsOpen && (
             <ShortcutsOverlay onClose={() => setShortcutsOpen(false)} />
