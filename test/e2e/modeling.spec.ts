@@ -1436,7 +1436,7 @@ test('preflights and splits a box into two live half bodies', async ({
   await page.locator('.consumed-toggle').click();
   await expect(page.locator('.body-row.consumed')).toContainText('Box Body');
   await expect(
-    page.locator('.body-row', { hasText: 'Split (back)' })
+    page.locator('.body-row', { hasText: 'Box Body (back)' })
   ).toBeVisible();
   await expectBodyCount(page, 2);
   await expect(page.getByRole('contentinfo')).toContainText('warnings0');
