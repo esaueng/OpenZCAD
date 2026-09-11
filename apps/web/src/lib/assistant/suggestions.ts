@@ -19,7 +19,11 @@ export interface AssistantSuggestionContext {
   topologyKind: 'body' | 'face' | 'edge' | null;
   selectedBodyCount: number;
   autoParameterizeProposal?: CadPatchProposal | null;
+  /** The app's measured growing-holder recipe for an imported body, if any. */
+  growingHolderProposal?: CadPatchProposal | null;
 }
+
+export const GROWING_HOLDER_SUGGESTION_LABEL = 'Parameterize the opening';
 
 const dimensions = (
   values: Partial<
@@ -189,15 +193,26 @@ const prompt = (id: string, label: string): AssistantSuggestion => ({
 export function assistantSuggestions(
   context: AssistantSuggestionContext
 ): AssistantSuggestion[] {
-  const autoParameterize = context.autoParameterizeProposal
-    ? [
-        {
-          id: 'verified-auto-parameterize',
-          label: AUTO_PARAMETERIZE_SUGGESTION_LABEL,
-          proposal: context.autoParameterizeProposal
-        }
-      ]
-    : [];
+  const autoParameterize = [
+    ...(context.growingHolderProposal
+      ? [
+          {
+            id: 'verified-growing-holder',
+            label: GROWING_HOLDER_SUGGESTION_LABEL,
+            proposal: context.growingHolderProposal
+          }
+        ]
+      : []),
+    ...(context.autoParameterizeProposal
+      ? [
+          {
+            id: 'verified-auto-parameterize',
+            label: AUTO_PARAMETERIZE_SUGGESTION_LABEL,
+            proposal: context.autoParameterizeProposal
+          }
+        ]
+      : [])
+  ];
   if (context.topologyKind === 'edge') {
     return [
       prompt('selected-edge-fillet', 'Fillet the selected edges by 2 mm'),

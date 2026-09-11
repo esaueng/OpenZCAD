@@ -19,6 +19,7 @@ import {
   RemusKernel,
   loadRemusTranslators
 } from '../packages/kernel-adapter/src/remus-runtime';
+import { recognizeOpening } from '../packages/kernel-adapter/src/opening-recognition';
 import { buildDocumentHistory } from '../packages/kernel-adapter/src/exact-build-loop';
 import { inspectTriangleMeshClosure } from '../packages/kernel-adapter/src/boolean-result-validation';
 import { parseProjectBackup } from '../apps/web/src/lib/projectBackup';
@@ -86,8 +87,53 @@ it.skipIf(!sourcePath)(
           )
         }
       );
+      // Recognition measures the same recipe the hand-authored fixture
+      // carries: every value below comes from the exact solid, none from
+      // this file.
+      const recognized = recognizeOpening(kernel, source!);
+      expect(recognized.status).toBe('recognized');
+      if (recognized.status !== 'recognized') throw new Error('unreachable');
+      const { section: measuredSection, ...measured } = recognized.opening;
+      const { section: expectedSection, ...expected } = hammerRecipe(
+        imported.bodyId
+      );
+      expect(measured).toEqual({
+        axis: expected.axis,
+        envelope: expected.envelope,
+        cuts: expected.cuts,
+        center: expected.center,
+        sourceOpening: expected.sourceOpening,
+        minimumOpening: expected.minimumOpening
+      });
+      // Lines compare regardless of direction; arcs must match exactly.
+      const profileKeys = (section: typeof measuredSection) =>
+        section
+          .map((o) =>
+            o.objectKind === 'line'
+              ? [
+                  [o.x1, o.y1],
+                  [o.x2, o.y2]
+                ]
+                  .map((p) => p.join(','))
+                  .sort()
+                  .join(' ')
+              : JSON.stringify(o)
+          )
+          .sort();
+      expect(profileKeys(measuredSection)).toEqual(profileKeys(expectedSection));
+      expect(recognized.evidence).toMatchObject({
+        candidate: { innerFaces: [-12, 34], opening: 46 },
+        straightRun: [-4.5, 26.5],
+        sectionEdges: 6
+      });
       const manager = new CommandManager(imported.document);
-      const recipe = hammerRecipe(imported.bodyId);
+      const recipe = {
+        version: 1 as const,
+        name: 'Hammer opening',
+        targetBodyId: imported.bodyId,
+        parameter: 'opening_width',
+        ...recognized.opening
+      };
       const compiled = growingHolderCommand(manager.document, recipe);
       manager.execute(compiled.command);
       expect(growingHolderHistories(manager.document)).toHaveLength(1);

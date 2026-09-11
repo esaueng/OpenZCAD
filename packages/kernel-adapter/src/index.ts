@@ -10,6 +10,8 @@
 export * from './topology-lineage';
 export * from './face-attachment';
 export * from './extrude-inference';
+export * from './opening-recognition';
+export * from './reconstruction-measurement';
 
 export {
   importedMeshStl,
