@@ -54,17 +54,39 @@ export function WorkspaceTour({
   // the targets (tool palette, sidebar) are other components' roots, and
   // threading a "tour is pointing at you" prop through each of them would
   // couple them all to a card that exists for one session on one device.
+  // The tool palette arrives in its own chunk after the workspace paints,
+  // so the target may not exist when the step starts: watch the document
+  // until it does rather than pointing at nothing.
   useEffect(() => {
     const selector = step?.targetSelector;
     if (!selector) {
       return;
     }
-    const target = globalThis.document.querySelector(selector);
-    if (!(target instanceof HTMLElement)) {
-      return;
+    const doc = globalThis.document;
+    let target: HTMLElement | null = null;
+    let observer: MutationObserver | null = null;
+    const outline = () => {
+      const found = doc.querySelector(selector);
+      if (!(found instanceof HTMLElement)) {
+        return false;
+      }
+      target = found;
+      target.classList.add('tour-target');
+      return true;
+    };
+    if (!outline() && typeof MutationObserver === 'function') {
+      observer = new MutationObserver(() => {
+        if (outline()) {
+          observer?.disconnect();
+          observer = null;
+        }
+      });
+      observer.observe(doc.body, { childList: true, subtree: true });
     }
-    target.classList.add('tour-target');
-    return () => target.classList.remove('tour-target');
+    return () => {
+      observer?.disconnect();
+      target?.classList.remove('tour-target');
+    };
   }, [step]);
 
   if (finished || !step) {

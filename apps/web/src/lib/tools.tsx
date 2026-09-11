@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react';
 import {
+  ArrowUpFromLine,
   Box,
   Combine,
   Cone,
@@ -12,14 +13,19 @@ import {
   Grid3x3,
   Layers,
   Move3d,
+  Orbit,
   PanelTopOpen,
   PenLine,
+  Pyramid,
+  Radius,
   RotateCw,
   Scaling,
   Scissors,
   Shapes,
   Slice,
   Spline,
+  SquareStack,
+  Tornado,
   Torus,
   TriangleRight
 } from 'lucide-react';
@@ -54,10 +60,22 @@ export type ToolId =
   | 'circular-pattern'
   | 'grid-pattern';
 
-export type ToolGroup = 'solid' | 'sketch' | 'modify' | 'finish';
+/**
+ * The five groups of the feature tools, in workflow order: make something,
+ * turn a sketch into a solid, finish its edges and faces, work on whole
+ * bodies, repeat. Each group is a fold in the workspace column.
+ */
+export type ToolGroup =
+  'create' | 'from-sketch' | 'edges-faces' | 'bodies' | 'pattern';
 
 export interface ToolMeta {
   label: string;
+  /**
+   * The name on the tool's tile, where the group header already carries
+   * the context: "Linear" under Pattern says what "Linear pattern" says in
+   * the command search. Absent means the label is short enough as it is.
+   */
+  short?: string;
   icon: ReactNode;
   group: ToolGroup;
   /** Single-key shortcut, if the tool has one. */
@@ -76,224 +94,239 @@ export const PRIMITIVE_TOOLS: ToolId[] = [
 
 const icon = (node: ReactNode) => node;
 
+// Every tool has its own glyph: the tile shows a name beside it, but a
+// folded group shows the icon alone, and two tools sharing one icon read as
+// the same tool.
 export const TOOL_META: Record<ToolId, ToolMeta> = {
+  sketch: {
+    label: 'Sketch',
+    icon: icon(<PenLine size={16} aria-hidden="true" />),
+    group: 'create',
+    shortcut: 'S',
+    hint: 'Draw a 2D profile on a plane'
+  },
   box: {
     label: 'Box',
     icon: icon(<Box size={16} aria-hidden="true" />),
-    group: 'solid',
+    group: 'create',
     shortcut: 'B',
     hint: 'Rectangular solid'
   },
   cylinder: {
     label: 'Cylinder',
     icon: icon(<Cylinder size={16} aria-hidden="true" />),
-    group: 'solid',
+    group: 'create',
     shortcut: 'C',
     hint: 'Circular solid'
   },
   sphere: {
     label: 'Sphere',
     icon: icon(<Globe size={16} aria-hidden="true" />),
-    group: 'solid',
+    group: 'create',
     hint: 'Ball solid'
   },
   cone: {
     label: 'Cone',
     icon: icon(<Cone size={16} aria-hidden="true" />),
-    group: 'solid',
+    group: 'create',
     hint: 'Tapered solid'
   },
   torus: {
     label: 'Torus',
     icon: icon(<Torus size={16} aria-hidden="true" />),
-    group: 'solid',
+    group: 'create',
     hint: 'Ring solid'
-  },
-  sketch: {
-    label: 'Sketch',
-    icon: icon(<PenLine size={16} aria-hidden="true" />),
-    group: 'sketch',
-    shortcut: 'S',
-    hint: 'Draw a 2D profile on a plane'
   },
   extrude: {
     label: 'Extrude',
-    icon: icon(<Layers size={16} aria-hidden="true" />),
-    group: 'sketch',
+    icon: icon(<ArrowUpFromLine size={16} aria-hidden="true" />),
+    group: 'from-sketch',
     shortcut: 'E',
     hint: 'Push a sketch into a solid'
   },
   revolve: {
     label: 'Revolve',
     icon: icon(<RotateCw size={16} aria-hidden="true" />),
-    group: 'sketch',
+    group: 'from-sketch',
     shortcut: 'R',
     hint: 'Spin a sketch around an axis'
   },
   loft: {
     label: 'Loft',
     icon: icon(<Layers size={16} aria-hidden="true" />),
-    group: 'sketch',
+    group: 'from-sketch',
     hint: 'Blend through two or more closed sketch profiles'
   },
   sweep: {
     label: 'Sweep',
     icon: icon(<Spline size={16} aria-hidden="true" />),
-    group: 'sketch',
+    group: 'from-sketch',
     hint: 'Carry a closed profile along a sketch path'
   },
   'helical-sweep': {
     label: 'Helical sweep',
-    icon: icon(<RotateCw size={16} aria-hidden="true" />),
-    group: 'sketch',
+    short: 'Helical',
+    icon: icon(<Tornado size={16} aria-hidden="true" />),
+    group: 'from-sketch',
     hint: 'Carry a closed profile around a parametric helix'
   },
-  union: {
-    label: 'Union',
-    icon: icon(<Combine size={16} aria-hidden="true" />),
-    group: 'modify',
-    shortcut: 'U',
-    hint: 'Merge bodies into one'
+  fillet: {
+    label: 'Fillet',
+    icon: icon(<Radius size={16} aria-hidden="true" />),
+    group: 'edges-faces',
+    hint: 'Pick an edge, then set its radius'
   },
-  subtract: {
-    label: 'Subtract',
-    icon: icon(<Scissors size={16} aria-hidden="true" />),
-    group: 'modify',
-    shortcut: 'X',
-    hint: 'Cut bodies out of a base body'
+  chamfer: {
+    label: 'Chamfer',
+    icon: icon(<TriangleRight size={16} aria-hidden="true" />),
+    group: 'edges-faces',
+    hint: 'Pick an edge, then set its distance'
   },
-  intersect: {
-    label: 'Intersect',
-    icon: icon(<Shapes size={16} aria-hidden="true" />),
-    group: 'modify',
-    shortcut: 'I',
-    hint: 'Keep only the overlap of bodies'
+  hole: {
+    label: 'Hole',
+    icon: icon(<Drill size={16} aria-hidden="true" />),
+    group: 'edges-faces',
+    hint: 'Drill a simple, counterbore, or countersink hole into a face'
+  },
+  shell: {
+    label: 'Shell',
+    icon: icon(<PanelTopOpen size={16} aria-hidden="true" />),
+    group: 'edges-faces',
+    hint: 'Open selected faces and add an inward wall thickness'
+  },
+  draft: {
+    label: 'Draft',
+    icon: icon(<Pyramid size={16} aria-hidden="true" />),
+    group: 'edges-faces',
+    hint: 'Taper selected faces along a pull direction'
+  },
+  thicken: {
+    label: 'Thicken',
+    icon: icon(<SquareStack size={16} aria-hidden="true" />),
+    group: 'edges-faces',
+    hint: 'Turn one exact face into a solid wall'
+  },
+  'solid-offset': {
+    label: 'Solid offset',
+    short: 'Offset',
+    icon: icon(<Expand size={16} aria-hidden="true" />),
+    group: 'edges-faces',
+    hint: 'Offset every face outward with sharp joins'
   },
   transform: {
     label: 'Move',
     icon: icon(<Move3d size={16} aria-hidden="true" />),
-    group: 'modify',
+    group: 'bodies',
     shortcut: 'M',
     hint: 'Translate or rotate a body'
   },
   scale: {
     label: 'Scale',
     icon: icon(<Scaling size={16} aria-hidden="true" />),
-    group: 'modify',
+    group: 'bodies',
     hint: 'Uniformly resize a body about the origin'
   },
   mirror: {
     label: 'Mirror',
     icon: icon(<FlipHorizontal2 size={16} aria-hidden="true" />),
-    group: 'modify',
+    group: 'bodies',
     hint: 'Create a separate reflected copy of a body'
   },
   split: {
     label: 'Split',
     icon: icon(<Slice size={16} aria-hidden="true" />),
-    group: 'modify',
+    group: 'bodies',
     hint: 'Cut a body into two along a plane'
   },
-  shell: {
-    label: 'Shell',
-    icon: icon(<PanelTopOpen size={16} aria-hidden="true" />),
-    group: 'finish',
-    hint: 'Open selected faces and add an inward wall thickness'
+  union: {
+    label: 'Union',
+    icon: icon(<Combine size={16} aria-hidden="true" />),
+    group: 'bodies',
+    shortcut: 'U',
+    hint: 'Merge bodies into one'
   },
-  'solid-offset': {
-    label: 'Solid offset',
-    icon: icon(<Expand size={16} aria-hidden="true" />),
-    group: 'finish',
-    hint: 'Offset every face outward with sharp joins'
+  subtract: {
+    label: 'Subtract',
+    icon: icon(<Scissors size={16} aria-hidden="true" />),
+    group: 'bodies',
+    shortcut: 'X',
+    hint: 'Cut bodies out of a base body'
   },
-  draft: {
-    label: 'Draft',
-    icon: icon(<TriangleRight size={16} aria-hidden="true" />),
-    group: 'finish',
-    hint: 'Taper selected faces along a pull direction'
-  },
-  thicken: {
-    label: 'Thicken',
-    icon: icon(<PanelTopOpen size={16} aria-hidden="true" />),
-    group: 'finish',
-    hint: 'Turn one exact face into a solid wall'
-  },
-  hole: {
-    label: 'Hole',
-    icon: icon(<Drill size={16} aria-hidden="true" />),
-    group: 'finish',
-    hint: 'Drill a simple, counterbore, or countersink hole into a face'
-  },
-  fillet: {
-    label: 'Fillet',
-    icon: icon(<Spline size={16} aria-hidden="true" />),
-    group: 'finish',
-    hint: 'Pick an edge, then set its radius'
-  },
-  chamfer: {
-    label: 'Chamfer',
-    icon: icon(<TriangleRight size={16} aria-hidden="true" />),
-    group: 'finish',
-    hint: 'Pick an edge, then set its distance'
+  intersect: {
+    label: 'Intersect',
+    icon: icon(<Shapes size={16} aria-hidden="true" />),
+    group: 'bodies',
+    shortcut: 'I',
+    hint: 'Keep only the overlap of bodies'
   },
   'linear-pattern': {
     label: 'Linear pattern',
+    short: 'Linear',
     icon: icon(<CopyPlus size={16} aria-hidden="true" />),
-    group: 'finish',
+    group: 'pattern',
     hint: 'Repeat a body along an axis'
   },
   'circular-pattern': {
     label: 'Circular pattern',
-    icon: icon(<RotateCw size={16} aria-hidden="true" />),
-    group: 'finish',
+    short: 'Circular',
+    icon: icon(<Orbit size={16} aria-hidden="true" />),
+    group: 'pattern',
     hint: 'Repeat a body around an axis'
   },
   'grid-pattern': {
     label: 'Grid pattern',
+    short: 'Grid',
     icon: icon(<Grid3x3 size={16} aria-hidden="true" />),
-    group: 'finish',
+    group: 'pattern',
     hint: 'Repeat a body along two directions'
   }
 };
 
 export const TOOL_GROUPS: { id: ToolGroup; label: string; tools: ToolId[] }[] =
   [
-    { id: 'solid', label: 'Solids', tools: PRIMITIVE_TOOLS },
+    { id: 'create', label: 'Create', tools: ['sketch', ...PRIMITIVE_TOOLS] },
     {
-      id: 'sketch',
-      label: 'Sketch',
-      tools: ['sketch', 'extrude', 'revolve', 'loft', 'sweep', 'helical-sweep']
+      id: 'from-sketch',
+      label: 'From sketch',
+      tools: ['extrude', 'revolve', 'loft', 'sweep', 'helical-sweep']
     },
     {
-      id: 'modify',
-      label: 'Modify',
+      id: 'edges-faces',
+      label: 'Edges & faces',
       tools: [
-        'union',
-        'subtract',
-        'intersect',
+        'fillet',
+        'chamfer',
+        'hole',
+        'shell',
+        'draft',
+        'thicken',
+        'solid-offset'
+      ]
+    },
+    {
+      id: 'bodies',
+      label: 'Bodies',
+      tools: [
         'transform',
         'scale',
         'mirror',
-        'split'
+        'split',
+        'union',
+        'subtract',
+        'intersect'
       ]
     },
     {
-      id: 'finish',
-      label: 'Finish & repeat',
-      tools: [
-        'shell',
-        'solid-offset',
-        'draft',
-        'thicken',
-        'hole',
-        'fillet',
-        'chamfer',
-        'linear-pattern',
-        'circular-pattern',
-        'grid-pattern'
-      ]
+      id: 'pattern',
+      label: 'Pattern',
+      tools: ['linear-pattern', 'circular-pattern', 'grid-pattern']
     }
   ];
+
+/** Every group id, in the order the palette shows them. */
+export const TOOL_GROUP_IDS: readonly ToolGroup[] = TOOL_GROUPS.map(
+  (group) => group.id
+);
 
 export interface ToolAvailability {
   /** Central collaboration/lease refusal applied to every mutating tool. */
