@@ -182,6 +182,7 @@ import {
   STALE_CHUNK_MESSAGE
 } from './lib/staleChunk';
 import { watchBuildVersion } from './lib/buildVersionWatch';
+import { commandOutcomeMessage } from './lib/commandOutcome';
 import { exactEntryShortcut, isTypingTarget } from './lib/exactEntryShortcut';
 import { DeferredExactEntry } from './lib/deferredExactEntry';
 import type { SketchSolveStatus } from './components/SketchToolRail';
@@ -4960,7 +4961,7 @@ export function App() {
         setMoveCommitHold(null);
       }
       setDoc(next);
-      setStatus(command.label);
+      setStatus(commandOutcomeMessage(command.label));
       return true;
     } catch (error) {
       setStatus(errorMessage(error, 'Command failed.'));
@@ -4991,7 +4992,7 @@ export function App() {
         setMoveCommitHold(null);
       }
       setDoc(next);
-      setStatus(label);
+      setStatus(commandOutcomeMessage(label));
       return true;
     } catch (error) {
       setStatus(errorMessage(error, 'Edit failed.'));
@@ -14190,7 +14191,10 @@ export function App() {
   const modelingTargetBody = modelingTargetBodyId
     ? representations[modelingTargetBodyId]
     : undefined;
-  const modelingFaces = modelingFaceOptions(modelingTargetBody?.topology);
+  const modelingFaces = modelingFaceOptions(
+    modelingTargetBody?.topology,
+    modelingTargetBody
+  );
   const modelingOperationFaces =
     modelingOperation === 'draft' || modelingOperation === 'hole'
       ? modelingFaces.filter((face) => face.surfaceType === 'plane')

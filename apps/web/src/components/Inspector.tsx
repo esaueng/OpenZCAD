@@ -1,5 +1,5 @@
 import type { ExtrudeFormValue } from './forms/ExtrudeForm';
-import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { Fragment, useEffect, useRef, useState, type ReactNode } from 'react';
 import { unitLabel } from '../lib/measurements';
 import { MoreHorizontal, Trash2, X } from 'lucide-react';
 import { coerceParamValue } from '@openzcad/document-core';
@@ -46,7 +46,7 @@ import {
   formatNumber,
   previewExpression
 } from '../lib/model';
-import { edgeLabel, faceLabel } from '../lib/topologyLabels';
+import { edgeLabel, edgeLength, faceLabel } from '../lib/topologyLabels';
 import type { CommandSession } from '../lib/interaction/machine';
 import {
   inspectorHeadingForFeature,
@@ -245,6 +245,70 @@ function SketchAttachmentSummary({
           </div>
         </>
       ) : null}
+    </div>
+  );
+}
+
+/**
+ * What the picked face or edge measures. The panel used to answer a face
+ * pick with the body's volume and face count, and left the face's own area
+ * to the chip at the bottom of the viewport.
+ */
+function TopologyMeasurements({
+  body,
+  selection,
+  units
+}: {
+  body: BodyRepresentation | undefined;
+  selection: TopologySelection;
+  units: UnitSystem;
+}) {
+  const rows: [string, string][] = [];
+  if (selection.kind === 'edge') {
+    const length = edgeLength(body, selection.hash, selection.topologyId);
+    if (length !== null) {
+      rows.push([
+        'length',
+        `${formatNumber(length)} ${unitLabel('length', units)}`
+      ]);
+    }
+  } else if (selection.kind === 'face') {
+    const face = body?.topology?.faces.find(
+      (candidate) =>
+        (selection.topologyId !== undefined &&
+          candidate.topologyId === selection.topologyId) ||
+        (selection.hash !== undefined && candidate.hash === selection.hash)
+    );
+    const geometry = face?.geometry;
+    if (geometry) {
+      rows.push([
+        'area',
+        `${formatNumber(geometry.area)} ${unitLabel('area', units)}`
+      ]);
+      rows.push(['surface', geometry.surfaceType]);
+      if (geometry.diameter !== undefined) {
+        rows.push([
+          'diameter',
+          `${formatNumber(geometry.diameter)} ${unitLabel('length', units)}`
+        ]);
+      }
+      if (geometry.normal) {
+        rows.push([
+          'normal',
+          `${formatNumber(geometry.normal.x)}, ${formatNumber(geometry.normal.y)}, ${formatNumber(geometry.normal.z)}`
+        ]);
+      }
+    }
+  }
+  if (rows.length === 0) return null;
+  return (
+    <div className="kv-grid topology-measurements">
+      {rows.map(([key, value]) => (
+        <Fragment key={key}>
+          <b>{key}</b>
+          <span>{value}</span>
+        </Fragment>
+      ))}
     </div>
   );
 }
@@ -1112,7 +1176,11 @@ export function Inspector(props: InspectorProps) {
             props.onApplyEdgeModifier(selectedFeature, data.featureKind, value)
           }
           onPreview={(value) =>
-            props.onPreviewEdgeModifier(selectedFeature, data.featureKind, value)
+            props.onPreviewEdgeModifier(
+              selectedFeature,
+              data.featureKind,
+              value
+            )
           }
           onCancel={props.onCancel}
         />
@@ -1362,12 +1430,25 @@ export function Inspector(props: InspectorProps) {
                     selectedTopology.topologyId
                   )}
             </span>
+            <TopologyMeasurements
+              body={selectedBody ?? undefined}
+              selection={selectedTopology}
+              units={units}
+            />
           </div>
         )}
       </>
     );
     body = inferredUnderCommand ? (
       <>
+        {selectedTopology && selectedTopology.kind !== 'body' ? (
+          // The heading names the face or edge; this is what it measures.
+          <TopologyMeasurements
+            body={selectedBody ?? undefined}
+            selection={selectedTopology}
+            units={units}
+          />
+        ) : null}
         {selectedBody && <BodyStats body={selectedBody} units={units} />}
         <div className="object-definition-row">
           <span>

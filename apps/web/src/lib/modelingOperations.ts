@@ -14,12 +14,14 @@ import {
 import {
   MAX_HELICAL_SWEEP_TURNS,
   type BodyId,
+  type BodyRepresentation,
   type BodyTopology,
   type FaceTopologyReferenceV5,
   type SketchPathReference,
   type SketchSectionReference
 } from '@openzcad/shared';
 import { evalParamValue, previewExpression } from './model';
+import { faceLabel } from './topologyLabels';
 
 export type ModelingOperationKind =
   | 'mirror'
@@ -158,7 +160,10 @@ export type ModelingOperationSubmission =
 export interface ModelingFaceOption {
   hash: number;
   topologyId: string;
+  /** What the viewport calls the face: "Top face", "Through hole ⌀6". */
   label: string;
+  /** The carrier, lineage and fingerprint, for a tooltip. */
+  detail?: string;
   surfaceType?: string;
   reference?: FaceTopologyReferenceV5;
   /**
@@ -208,17 +213,51 @@ export function topologyFaceLabel(
   return `${carrier} ${identity} · #${hash}`;
 }
 
+/**
+ * The faces a form can pick from, named the way the viewport names them.
+ *
+ * The list used to read "Plane face modifier · box · face · z max · #f5741e9d"
+ * while the hover label on the same face said "Top face" — the one name the
+ * user could match up was the one the list did not show. With a body to
+ * resolve against, the viewport's name leads and the lineage moves to the
+ * tooltip; two faces that share a name get an ordinal so they stay apart.
+ */
 export function modelingFaceOptions(
-  topology: BodyTopology | undefined
+  topology: BodyTopology | undefined,
+  body?: BodyRepresentation
 ): ModelingFaceOption[] {
-  return (topology?.faces ?? []).map((face, index) => ({
-    hash: face.hash,
-    topologyId: face.topologyId,
-    label: topologyFaceLabel(face, index),
-    surfaceType: face.geometry?.surfaceType,
-    reference: face.reference,
-    hasCentroid: face.geometry?.centroid !== undefined
-  }));
+  const faces = topology?.faces ?? [];
+  const names = body
+    ? faces.map((face) => faceLabel(body, face.hash, face.topologyId))
+    : null;
+  const counts = new Map<string, number>();
+  for (const name of names ?? []) {
+    counts.set(name, (counts.get(name) ?? 0) + 1);
+  }
+  const seen = new Map<string, number>();
+  return faces.map((face, index) => {
+    const detail = topologyFaceLabel(face, index);
+    let label = detail;
+    if (names) {
+      const name = names[index]!;
+      if ((counts.get(name) ?? 0) > 1) {
+        const ordinal = (seen.get(name) ?? 0) + 1;
+        seen.set(name, ordinal);
+        label = `${name} (${ordinal})`;
+      } else {
+        label = name;
+      }
+    }
+    return {
+      hash: face.hash,
+      topologyId: face.topologyId,
+      label,
+      ...(names ? { detail } : {}),
+      surfaceType: face.geometry?.surfaceType,
+      reference: face.reference,
+      hasCentroid: face.geometry?.centroid !== undefined
+    };
+  });
 }
 
 export function modelingOperationDisabledReason(
