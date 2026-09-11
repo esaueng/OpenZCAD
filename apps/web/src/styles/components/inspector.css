@@ -474,6 +474,39 @@
   font-weight: var(--fw-regular);
 }
 
+/* Mirror and Split: the three principal planes as one-click choices above
+   the numeric plane fields. */
+.plane-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.plane-chip {
+  padding: 4px 9px;
+  color: var(--color-text-muted);
+  background: var(--color-surface-2);
+  border: var(--border-thin);
+  border-radius: 999px;
+  font-size: var(--fs-xs);
+}
+
+.plane-chip:hover {
+  color: var(--color-text);
+}
+
+.plane-chip[aria-pressed='true'] {
+  color: var(--color-accent);
+  background: var(--color-accent-dim);
+  border-color: var(--color-accent-border);
+}
+
+/* The picked face or edge measured, under its name. */
+.topology-measurements {
+  grid-column: 1 / -1;
+  margin-top: 6px;
+}
+
 .topology-selection {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr);

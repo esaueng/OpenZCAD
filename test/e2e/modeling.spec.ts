@@ -1497,7 +1497,7 @@ test('preflights and drills a through hole into the top face', async ({
     lineageName: 'primitive.box.face.z-max'
   });
   await expect(
-    entry.getByRole('button', { name: /Plane face box.*z max/ })
+    entry.getByRole('button', { name: /Top face/ })
   ).toHaveAttribute('aria-pressed', 'true');
   await expect(
     page.getByRole('region', { name: 'Offset Face operation' })
@@ -1542,7 +1542,7 @@ test('preflights and creates an exact open-top shell', async ({ page }) => {
 
   await page.getByRole('button', { name: /^Shell/ }).click();
   const openings = page.getByRole('group', { name: 'Opening faces' });
-  await openings.getByRole('button', { name: /Plane face box.*z max/ }).click();
+  await openings.getByRole('button', { name: /Top face/ }).click();
   await page.getByRole('button', { name: 'Check exact result' }).click();
   await expect(
     page.getByRole('status').filter({ hasText: 'Exact preflight passed' })
@@ -3941,7 +3941,7 @@ test('sketches on the wall of a drag-style extrusion and on a hash-only face', a
   await page.getByRole('button', { name: /^Box \(B\)/ }).click();
   const inspector = page.getByRole('region', { name: 'Feature inspector' });
   await inspector.getByRole('button', { name: /^Create/ }).click();
-  await expect(page.getByRole('contentinfo')).toContainText('Add box');
+  await expect(page.getByRole('contentinfo')).toContainText('Added box.');
   await page.getByRole('button', { name: /^Union \(U\)/ }).click();
   await inspector.locator('.pick-row', { hasText: 'Extrude Body' }).click();
   await inspector.locator('.pick-row', { hasText: 'Box Body' }).click();
