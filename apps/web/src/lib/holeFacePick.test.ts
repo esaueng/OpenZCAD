@@ -4,7 +4,7 @@ import {
   type BodyTopology,
   type TopologySelection
 } from '@openzcad/shared';
-import { resolveHoleFacePick } from './holeFacePick';
+import { resolveFormFacePick, resolveHoleFacePick } from './holeFacePick';
 
 const bodyId = toBodyId('plate');
 const selection: TopologySelection = {
@@ -74,4 +74,52 @@ describe('Hole viewport face picking', () => {
       if (!result.ok) expect(result.reason).toContain(reason);
     }
   );
+});
+
+describe('Form viewport face picking for shell, draft and thicken', () => {
+  const cylinderTopology: BodyTopology = {
+    ...topology,
+    faces: [
+      {
+        ...topology.faces[0]!,
+        geometry: {
+          surfaceType: 'cylinder',
+          area: 100,
+          center: { x: 0, y: 0, z: 0 }
+        }
+      }
+    ]
+  };
+
+  it('lets shell and thicken take any exact face, planar or not', () => {
+    for (const operation of ['shell', 'thicken'] as const) {
+      expect(
+        resolveFormFacePick(operation, bodyId, selection, cylinderTopology)
+      ).toMatchObject({ ok: true, pick: { bodyId, hash: 42 } });
+    }
+  });
+
+  it('keeps draft on planar faces and names the operation in its refusal', () => {
+    const result = resolveFormFacePick(
+      'draft',
+      bodyId,
+      selection,
+      cylinderTopology
+    );
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.reason).toMatch(/^Draft: only planar faces/);
+  });
+
+  it('refuses a pick on another body for every face-collecting form', () => {
+    for (const operation of ['hole', 'shell', 'draft', 'thicken'] as const) {
+      const result = resolveFormFacePick(
+        operation,
+        bodyId,
+        { ...selection, bodyId: toBodyId('other') },
+        topology
+      );
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.reason).toContain('current target body');
+    }
+  });
 });
