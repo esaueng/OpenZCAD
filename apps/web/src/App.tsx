@@ -9067,7 +9067,14 @@ export function App() {
     pendingBlendRearmRef.current = null;
     const pick = newBlendFacePick(pending.bodyId, pending.before, faces);
     if (pick) {
+      // The pick is the app's, not the user's: it must not retire the
+      // commit's own message ("Filleted 2 edges at 1 mm.") the way a real
+      // pick retires whatever it interrupts.
+      const outcome = statusEntry;
       handleSelectTopologyFromViewer(pick.selection, false, pick.detail);
+      if (!outcome.sticky) {
+        setStatusEntry(outcome);
+      }
     }
     // handleSelectTopologyFromViewer is a per-render closure over the same
     // state this effect already lists.
