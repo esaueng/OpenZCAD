@@ -26,6 +26,22 @@ bridge, the two moves and the union rebuild. No STEP payload is re-cut by
 hand. When the import is a content-addressed source reference the second
 reference shares its bytes; an embedded `stepText` import is copied.
 
+`recognizeOpening` in `packages/kernel-adapter/src/opening-recognition.ts`
+measures that recipe from the exact solid. It pairs planar faces that look at
+each other along a world axis and proves the gap between them empty, confirms
+the center with a reflection plane, finds the longest run between the inner
+faces over which the set of crossing faces is constant and every one of them
+is invariant along the axis (planes parallel to it, cylinders along it), and
+then proves the run by intersecting the solid with a slab between the cuts:
+one planar end face at each cut, identical exact profiles on both, nothing
+else that is not straight. On the hammer it returns exactly the hand-authored
+recipe: cuts at -4 and 26, center 11, opening 46, minimum 16.1 and the
+six-object section. Two equal openings are reported as ambiguous with their
+candidate face pairs for a guided selection; a solid with no facing pair, no
+confirming symmetry, no straight run, a hollow or curved-edged section is
+refused with the reason. The kernel's `section` query is deliberately not
+used: on NURBS-bearing solids it reports silhouettes, not cross-sections.
+
 The union feature carries the recipe as JSON under the
 `openzcad.growingHolderRecipe` metadata key. `growingHolderHistories` reads it
 back and verifies every implied feature against what the compiler emits; a
