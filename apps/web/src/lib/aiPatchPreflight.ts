@@ -43,17 +43,15 @@ export function exactPatchTargets(
       payload.ids && typeof payload.ids === 'object'
         ? (payload.ids as Record<string, unknown>)
         : null;
-    const bodyId = ids?.bodyId ?? payload.targetBodyId;
-    if (typeof bodyId !== 'string') {
-      return [];
-    }
-    return [
-      {
-        featureName:
-          typeof payload.name === 'string' ? payload.name : command.label,
-        resultBodyId: bodyId as BodyId
-      }
-    ];
+    const featureName =
+      typeof payload.name === 'string' ? payload.name : command.label;
+    // A split mints two result bodies; both halves must survive the build.
+    return [ids?.bodyId ?? payload.targetBodyId, ids?.secondBodyId].flatMap(
+      (bodyId) =>
+        typeof bodyId === 'string'
+          ? [{ featureName, resultBodyId: bodyId as BodyId }]
+          : []
+    );
   });
 }
 

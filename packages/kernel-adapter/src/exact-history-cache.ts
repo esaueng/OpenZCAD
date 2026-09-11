@@ -132,11 +132,43 @@ export function historyFeatureDigest(
     },
     sketches,
     // STEP imports read their payload, selection and document units, but
-    // never the parameter scope. Preserve these expensive checkpoints when
-    // a downstream dimension changes. All other builders conservatively
-    // depend on the entire resolved scope, including transitive parameters.
-    scope: feature.data.featureKind === 'imported-step' ? undefined : scope
+    // never the parameter scope, and a split whose plane is all literals reads
+    // nothing from it either. Preserve those expensive checkpoints when a
+    // downstream dimension changes. All other builders conservatively depend
+    // on the entire resolved scope, including transitive parameters.
+    scope: readsParameterScope(feature) ? scope : undefined
   });
+}
+
+/**
+ * Whether building this feature can read a parameter value. Only the kinds
+ * whose every parametric field is visible right here are exempted when those
+ * fields are all literals; anything touching a sketch, a face reference or a
+ * derived profile stays conservative.
+ */
+function readsParameterScope(feature: FeatureNode): boolean {
+  const { data } = feature;
+  const literal = (value: unknown) => typeof value === 'number';
+  const literalVector = (value: { x: unknown; y: unknown; z: unknown }) =>
+    literal(value.x) && literal(value.y) && literal(value.z);
+  switch (data.featureKind) {
+    case 'imported-step':
+      return false;
+    case 'split':
+      return !literalVector(data.plane.origin) || !literalVector(data.plane.normal);
+    case 'primitive':
+      return !Object.values(data.dimensions).every(literal);
+    case 'transform':
+      return (
+        !literalVector(data.transform.translation) ||
+        !literalVector(data.transform.rotationDeg) ||
+        !(data.transform.scale === undefined || literal(data.transform.scale))
+      );
+    case 'boolean':
+      return !(data.activeWhen === undefined || literal(data.activeWhen));
+    default:
+      return true;
+  }
 }
 
 /**
