@@ -552,17 +552,33 @@
 .sketch-workflow-context,
 .sketch-workflow-snaps {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
   gap: 6px;
+  min-width: 0;
+}
+.sketch-workflow-context strong,
+.sketch-workflow-context span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .sketch-workflow-context span {
   text-transform: capitalize;
   color: var(--color-text-muted);
 }
+/* Two toggles share the row when the column is wide and stack when it is
+   not; at 180px they used to spill past the column's clipped edge. */
 .sketch-workflow-snaps button {
+  flex: 1 1 auto;
+  min-width: 0;
   padding: 5px;
   font-size: inherit;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .sketch-workflow-snaps button[aria-pressed='true'] {
   color: var(--color-accent);
