@@ -137,8 +137,29 @@
 }
 
 .workspace-column-tools {
-  flex: 0 0 auto;
+  /* The tools never take more than half the column: with every group open
+     they ran to ~600px and left the model browser a 130px keyhole on a
+     900px window. Past the cap they scroll on the wheel, bar hidden. */
+  flex: 0 1 auto;
+  max-height: 55%;
+  overflow-y: auto;
   border-bottom: var(--border-thin);
+  container-type: inline-size;
+}
+
+/* A narrow column (the resizer allows 180px) cannot fit icon, name and
+   shortcut badge on one tile: the badge ate the name, so "Sketch" read
+   "Sk…". Below ~224px the badge goes (the tooltip and ⌘K still show it)
+   and the tile tightens so every name fits two across. */
+@container (max-width: 224px) {
+  .tool-tile kbd {
+    display: none;
+  }
+
+  .tool-tile {
+    gap: 4px;
+    padding: 0 3px 0 4px;
+  }
 }
 
 .workspace-column-browser {
@@ -406,8 +427,16 @@
 .sketch-rail-group.solve .sketch-solve-pill {
   justify-self: start;
   min-width: 0;
+  /* The pill reserves its widest reading so it never jitters; at a narrow
+     column that reservation is wider than the cell, so it is capped here. */
+  max-width: 100%;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.sketch-rail-group.solve .sketch-solve-pill .stable-label {
+  max-width: 100%;
+  overflow: hidden;
 }
 
 .sketch-rail-group.utility {
@@ -720,6 +749,15 @@
   top: auto;
   right: 2px;
   bottom: 0;
+}
+
+/* The sketch grid readout used to sit on the orientation cube: both were
+   pinned to the bottom-right corner. It moves to the bottom-left, beside
+   the column, where nothing else lives in sketch mode. */
+.workspace.column-layout .sketch-grid-indicator {
+  right: auto;
+  left: calc(var(--column-w) + 12px);
+  bottom: 12px;
 }
 
 /* The tool card centres on the room between the column and the dock. */
