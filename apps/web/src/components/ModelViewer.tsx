@@ -1064,8 +1064,10 @@ function stepRetiringRigs(retiring: DragRig[], dtMs: number): boolean {
   let animating = false;
   for (let index = retiring.length - 1; index >= 0; index -= 1) {
     const rig = retiring[index]!;
-    rig.step?.(dtMs);
-    if (rig.isGone?.()) {
+    const moved = rig.step?.(dtMs) ?? false;
+    // A leaving rig that reports no motion will never report gone either;
+    // holding it would pin the loop and leave a half-faded ghost on screen.
+    if (rig.isGone?.() || !moved) {
       rig.dispose();
       retiring.splice(index, 1);
     } else {
@@ -1370,6 +1372,15 @@ export function ModelViewer({
    * and stay stepped, until they report themselves gone.
    */
   const retiringRigsRef = useRef<DragRig[]>([]);
+  /**
+   * The region (extrude) rig, tracked apart from `offsetRigRef` so the effect
+   * that owns it can find a leftover. Its cleanup is skipped while a drag is
+   * running, and the live preview changes `sketchViews` on every drag frame,
+   * so a rig installed before the drag has no cleanup left by the time the
+   * handle goes away — the swept ghost then outlived cancel, undo and mode
+   * switches until a reload.
+   */
+  const regionRigRef = useRef<DragRig | null>(null);
   const measurementDimensionsRef = useRef<
     {
       graphic: DimensionGraphic;
@@ -6980,6 +6991,11 @@ export function ModelViewer({
       environment.dispose();
       clearGroup(axes); // the triad is three fat lines now, not one helper
       cameraRig.dispose();
+      // Rigs still fading out have no render loop left to finish them.
+      for (const rig of retiringRigsRef.current) {
+        rig.dispose();
+      }
+      retiringRigsRef.current = [];
       renderer.dispose();
       host.removeChild(renderer.domElement);
       host.removeChild(labelRenderer.domElement);
@@ -8189,6 +8205,17 @@ export function ModelViewer({
     if (!context || !group || offsetDragActiveRef.current) {
       return;
     }
+    // Whatever the previous run left behind goes first, whether or not a
+    // new handle follows; a cleanup skipped mid-drag is settled here.
+    const leftover = regionRigRef.current;
+    if (leftover) {
+      leftover.dispose();
+      regionRigRef.current = null;
+      if (offsetRigRef.current === leftover) {
+        offsetRigRef.current = null;
+      }
+      context.requestRender();
+    }
     if (!regionHandle) {
       return;
     }
@@ -8240,6 +8267,7 @@ export function ModelViewer({
     context.scene.add(rig.group);
     context.scene.add(rig.worldGroup);
     offsetRigRef.current = rig;
+    regionRigRef.current = rig;
     context.requestRender();
     return () => {
       if (mesh) {
@@ -8251,6 +8279,9 @@ export function ModelViewer({
         rig.dispose();
         if (offsetRigRef.current === rig) {
           offsetRigRef.current = null;
+        }
+        if (regionRigRef.current === rig) {
+          regionRigRef.current = null;
         }
       }
       context.requestRender();
