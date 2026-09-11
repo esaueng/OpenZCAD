@@ -12,7 +12,6 @@ import '@fontsource/ibm-plex-sans/latin-500.css';
 import '@fontsource/ibm-plex-mono/latin-400.css';
 import '@fontsource/ibm-plex-mono/latin-500.css';
 import { mark } from './lib/perf';
-import { reloadForStaleChunk } from './lib/lazyWithReload';
 import './theme/tokens.css';
 import './styles/app.css';
 
@@ -43,14 +42,6 @@ if (import.meta.env.VITE_E2E === '1') {
     };
   });
 }
-
-// Vite raises this when a dynamic import's preloaded dependency is gone —
-// the shape a deploy leaves behind for a tab that outlived it.
-window.addEventListener('vite:preloadError', (event) => {
-  if (reloadForStaleChunk()) {
-    event.preventDefault();
-  }
-});
 
 mark('bundle.evaluated');
 
