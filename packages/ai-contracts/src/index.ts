@@ -239,6 +239,19 @@ export type CadPatchOperation =
       opening: RecognizedOpening;
     }
   | {
+      /**
+       * Drive the two mirrored through bores of a growing holder by one
+       * parameter. `holes` are the app's own measurements of the bores on
+       * the carved end bodies and must be copied verbatim; compilation
+       * refuses any value the document does not measure.
+       */
+      kind: 'add_growing_holder_hole_control';
+      name: string;
+      targetBodyId: BodyRef;
+      parameter: string;
+      holes: GrowingHolderHoleReference[];
+    }
+  | {
       kind: 'add_imported_opening_recipe';
       editedWidth: number;
       name: string;
@@ -352,6 +365,16 @@ export interface CadPatchProposal {
  * first body is the base) and makes plural references such as "these edges"
  * deterministic.
  */
+/** One measured through bore on a growing holder's carved end body. */
+export interface GrowingHolderHoleReference {
+  bodyId: string;
+  faceHash: number;
+  faceReference: FaceTopologyReferenceV5;
+  sourceDiameter: number;
+  sourceAxisStart: Vector3;
+  sourceAxisEnd: Vector3;
+}
+
 export interface CadSelectionContext {
   featureIds: readonly FeatureId[];
   bodyIds: readonly string[];
@@ -1784,6 +1807,7 @@ export const AI_CAD_OPERATION_CAPABILITIES = {
   add_transform: { enabled: true, reason: null },
   add_imported_opening_recipe: { enabled: true, reason: null },
   add_growing_holder_recipe: { enabled: true, reason: null },
+  add_growing_holder_hole_control: { enabled: true, reason: null },
   add_direct_edit: { enabled: true, reason: null },
   add_face_sketch: { enabled: true, reason: null },
   add_multi_profile_extrude: { enabled: true, reason: null },
@@ -2022,6 +2046,44 @@ export const CAD_PATCH_JSON_SCHEMA = {
               opening: recognizedOpeningSchema
             },
             required: ['kind', 'name', 'localId', 'targetBodyId', 'parameter', 'opening']
+          },
+          {
+            type: 'object',
+            additionalProperties: false,
+            description:
+              'Drive the two mirrored mounting bores of a growing holder by one parameter. `holes` must be the app\'s own measurements copied verbatim; never author them.',
+            properties: {
+              kind: { type: 'string', const: 'add_growing_holder_hole_control' },
+              name: { type: 'string' },
+              targetBodyId: existingBodyRefSchema,
+              parameter: { type: 'string' },
+              holes: {
+                type: 'array',
+                minItems: 2,
+                maxItems: 2,
+                items: {
+                  type: 'object',
+                  additionalProperties: false,
+                  properties: {
+                    bodyId: { type: 'string' },
+                    faceHash: { type: 'integer' },
+                    faceReference: faceReferenceSchema,
+                    sourceDiameter: { type: 'number' },
+                    sourceAxisStart: numberVectorSchema,
+                    sourceAxisEnd: numberVectorSchema
+                  },
+                  required: [
+                    'bodyId',
+                    'faceHash',
+                    'faceReference',
+                    'sourceDiameter',
+                    'sourceAxisStart',
+                    'sourceAxisEnd'
+                  ]
+                }
+              }
+            },
+            required: ['kind', 'name', 'targetBodyId', 'parameter', 'holes']
           },
           {
             type: 'object',
@@ -3137,6 +3199,37 @@ export function parseCadPatchProposal(
         );
         declareBodyLocalId(operation, declared, declaredBodies);
         break;
+      case 'add_growing_holder_hole_control':
+        if (
+          typeof operation.name !== 'string' ||
+          typeof operation.targetBodyId !== 'string' ||
+          isLocalBodyRef(operation.targetBodyId) ||
+          typeof operation.parameter !== 'string' ||
+          !isValidParameterName(operation.parameter) ||
+          !Array.isArray(operation.holes) ||
+          operation.holes.length !== 2 ||
+          !operation.holes.every(
+            (hole: unknown) =>
+              !!hole &&
+              typeof hole === 'object' &&
+              typeof (hole as { bodyId?: unknown }).bodyId === 'string' &&
+              Number.isSafeInteger((hole as { faceHash?: unknown }).faceHash) &&
+              isFaceReference((hole as { faceReference?: unknown }).faceReference) &&
+              (hole as { faceReference: FaceTopologyReferenceV5 }).faceReference
+                .currentHash === (hole as { faceHash: number }).faceHash &&
+              isFiniteNumber((hole as { sourceDiameter?: unknown }).sourceDiameter) &&
+              isNumberVector((hole as { sourceAxisStart?: unknown }).sourceAxisStart) &&
+              isNumberVector((hole as { sourceAxisEnd?: unknown }).sourceAxisEnd)
+          )
+        ) {
+          throw new Error('Invalid add_growing_holder_hole_control operation.');
+        }
+        requireBodyRef(
+          operation.targetBodyId,
+          declaredBodies,
+          'add_growing_holder_hole_control targetBodyId'
+        );
+        break;
       case 'add_imported_opening_recipe':
         if (
           candidate.operations.filter(
@@ -3773,6 +3866,18 @@ export function validateCadPatchProposalAgainstDigest(
         }
         break;
       }
+      case 'add_growing_holder_hole_control': {
+        const body = digest.bodies?.find(
+          (candidate) =>
+            candidate.bodyId === operation.targetBodyId && !candidate.consumed
+        );
+        if (!body) {
+          throw new Error(
+            `add_growing_holder_hole_control targets body ${operation.targetBodyId}, which is not live in the current document digest.`
+          );
+        }
+        break;
+      }
       case 'add_growing_holder_recipe': {
         const measured = exactDigestRecognizedOpening(
           digest,
@@ -4127,6 +4232,8 @@ export function describeCadPatchOperation(
       return operation.angleDeg === undefined || operation.angleDeg === null
         ? `Revolve ${operation.sketchId} around its ${operation.axis} axis`
         : `Revolve ${operation.sketchId} ${String(operation.angleDeg)}° around its ${operation.axis} axis`;
+    case 'add_growing_holder_hole_control':
+      return `Drive the two measured ${operation.holes[0]?.sourceDiameter ?? '?'} bores of ${operation.targetBodyId} with parameter ${operation.parameter}`;
     case 'add_growing_holder_recipe':
       return `Grow the measured ${operation.opening.sourceOpening} opening of ${operation.targetBodyId} along ${operation.opening.axis} with parameter ${operation.parameter}`;
     case 'add_imported_opening_recipe':

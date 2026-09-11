@@ -10,8 +10,11 @@ import {
 import {
   CommandManager,
   growingHolderCommand,
-  growingHolderHistories
+  growingHolderHistories,
+  growingHolderHoleCommand,
+  matchGrowingHolderHoles
 } from '@openzcad/command-system';
+import { createExactKernelAdapter } from '@openzcad/kernel-adapter/exact';
 import { toUserId } from '@openzcad/shared';
 import { hammerRecipe } from '../packages/command-system/src/growing-holder.test';
 import { sanitizeStepHeaderPrivacy } from '@openzcad/io-step';
@@ -137,10 +140,50 @@ it.skipIf(!sourcePath)(
       const compiled = growingHolderCommand(manager.document, recipe);
       manager.execute(compiled.command);
       expect(growingHolderHistories(manager.document)).toHaveLength(1);
-      const document = setParameter(manager.document, {
-        name: 'opening_width',
-        expression: String(width)
-      });
+      // The mounting bores: both Ø5 through the base, countersunk to Ø9,
+      // measured on the carved ends and driven by one parameter. Widening
+      // runs the cutter through the countersink, which keeps its diameter.
+      const adapter = await createExactKernelAdapter();
+      let grown: typeof manager.document;
+      try {
+        grown = {
+          ...manager.document,
+          derived: await adapter.syncDocument(manager.document)
+        };
+      } finally {
+        adapter.dispose();
+      }
+      expect(grown.derived.warnings).toEqual([]);
+      const history = growingHolderHistories(grown)[0]!;
+      const match = matchGrowingHolderHoles(grown, history);
+      expect(match.status).toBe('matched');
+      if (match.status !== 'matched') throw new Error('unreachable');
+      expect(match.pair.diameter).toBe(5);
+      manager.execute(growingHolderHoleCommand(grown, match.pair).command);
+      // Shrinking is refused on this part: the kernel returns the untouched
+      // body for a ring fused onto a coaxial bore and degrades the fill to a
+      // mesh, and the feature reports it instead of pretending.
+      const shrunk = buildDocumentHistory(
+        kernel,
+        setParameter(manager.document, {
+          name: 'hole_diameter',
+          expression: '4'
+        })
+      );
+      expect(
+        shrunk.warnings.map((w) => JSON.stringify(w))
+      ).toHaveLength(2);
+      expect(JSON.stringify(shrunk.warnings)).toMatch(
+        /kept its original diameter instead of resizing to Ø4/
+      );
+      const holeDiameter = 6;
+      const document = setParameter(
+        setParameter(manager.document, {
+          name: 'hole_diameter',
+          expression: String(holeDiameter)
+        }),
+        { name: 'opening_width', expression: String(width) }
+      );
       const joined = { bodyId: compiled.bodyId };
       const built = buildDocumentHistory(kernel, document);
       expect(built.warnings).toEqual([]);
@@ -193,13 +236,21 @@ it.skipIf(!sourcePath)(
             type: string;
             radius?: number;
             origin?: number[];
+            axis?: number[];
           }
       );
+      // The bores run along z at y = 49.5; the part's R3 blends do not.
       const holes = surfaces
         .filter(
-          (s) => s.type === 'cylinder' && Math.abs((s.radius ?? 0) - 2.5) < 1e-7
+          (s) =>
+            s.type === 'cylinder' &&
+            Math.abs((s.radius ?? 0) - holeDiameter / 2) < 1e-7 &&
+            Math.abs(Math.abs(s.axis?.[2] ?? 0) - 1) < 1e-7 &&
+            Math.abs((s.origin?.[1] ?? 0) - 49.5) < 1e-6
         )
         .sort((a, b) => a.origin![0]! - b.origin![0]!);
+      // The Ø9 countersinks survive as cones whatever the bore does.
+      expect(surfaces.filter((s) => s.type === 'cone').length).toBeGreaterThanOrEqual(2);
       expect(holes).toHaveLength(2);
       expect(holes[0]!.origin![0]).toBeCloseTo(11 - (width - 6) / 2, 6);
       expect(holes[1]!.origin![0]).toBeCloseTo(11 + (width - 6) / 2, 6);
@@ -231,12 +282,13 @@ it.skipIf(!sourcePath)(
       expect(kernel.validateSolid(restored[0]!)).toBe(0);
       const volume = kernel.volume(solid, 0.01);
       expect(volume).toBeGreaterThan(0);
-      // Tessellated volume of a NURBS-faced body shifts by ~1e-7 relative
-      // when the round trip repartitions its faces; this is not an exact
+      // Tessellated volume of a NURBS-faced body shifts by a few 1e-6
+      // relative when the round trip repartitions its faces (more once the
+      // widened bores cut into the countersinks); this is not an exact
       // identity oracle (see docs/imported-hammer-growing.md).
       expect(
         Math.abs(kernel.volume(restored[0]!, 0.01) - volume) / volume
-      ).toBeLessThan(1e-6);
+      ).toBeLessThan(1e-5);
     } finally {
       kernel.free();
     }
