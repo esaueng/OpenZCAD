@@ -93,9 +93,14 @@ whole history. This avoids redundant imports but does not remove the cost of
 the exact Boolean operations or cache the complete recipe for every width.
 
 The paired Remus packages are pinned to
-`9bee897f296171c09c99797b63eaa3afcd16f3f7` (2.130.20), from
-[Remus #374](https://github.com/esaueng/remus/pull/374) and its prerequisite stack.
-Release integration must account for that dependency. The next kernel target is
+`f19685684714003255f9a98e8e6a885d1419e5dd` (2.130.14), a commit on Remus `main`
+whose committed packages were built by the Remus refresh pipeline
+([Remus #393](https://github.com/esaueng/remus/pull/393)) after
+[Remus #374](https://github.com/esaueng/remus/pull/374),
+[#382](https://github.com/esaueng/remus/pull/382) and
+[#389](https://github.com/esaueng/remus/pull/389) merged. Remus refreshes its
+committed packages through a pull request after every push to `main`; pin only
+commits on `main` so the OpenZCAD updater workflow can advance the pin. The next kernel target is
 the 48 mm left shifted intersection, followed by qualifying additional widths.
 General region recognition and the other independent dimensions remain future
 work.
