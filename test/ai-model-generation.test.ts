@@ -185,12 +185,12 @@ describe('AI-generated box with a lid', () => {
       (body) => !body.consumed
     );
     expect(live.map((body) => body.name).sort()).toEqual([
-      'Box Body',
-      'Lid Body'
+      'Box Outer Body',
+      'Lid Blank Body'
     ]);
 
-    const box = live.find((body) => body.name === 'Box Body')!;
-    const lid = live.find((body) => body.name === 'Lid Body')!;
+    const box = live.find((body) => body.name === 'Box Outer Body')!;
+    const lid = live.find((body) => body.name === 'Lid Blank Body')!;
 
     // Hollow: the box is its walls and floor, not a solid block.
     const solidBlock = BOX_LEN * BOX_WID * BOX_HT;
@@ -228,8 +228,8 @@ describe('AI-generated box with a lid', () => {
     const live = Object.values(derived.bodyRepresentations).filter(
       (body) => !body.consumed
     );
-    const box = live.find((body) => body.name === 'Box Body')!;
-    const lid = live.find((body) => body.name === 'Lid Body')!;
+    const box = live.find((body) => body.name === 'Box Outer Body')!;
+    const lid = live.find((body) => body.name === 'Lid Blank Body')!;
 
     // The lid's outer envelope is one rim wall plus one clearance larger than
     // the box on each side. Equal sizes would be an interference fit.
@@ -258,12 +258,12 @@ describe('AI-generated box with a lid', () => {
     const bodies = digest.bodies ?? [];
     const live = bodies.filter((body) => !body.consumed);
     expect(live.map((body) => body.name).sort()).toEqual([
-      'Box Body',
-      'Lid Body'
+      'Box Outer Body',
+      'Lid Blank Body'
     ]);
     expect(bodies.filter((body) => body.consumed)).toHaveLength(4);
 
-    const lid = live.find((body) => body.name === 'Lid Body')!;
+    const lid = live.find((body) => body.name === 'Lid Blank Body')!;
     expect(lid.bbox.min.x).toBeGreaterThan(0);
   });
 
