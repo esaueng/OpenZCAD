@@ -36,8 +36,8 @@ probe, not the precisely located pair of mounting holes.
 
 ## Current observations, not support claims
 
-Current regression pin: Remus `9bee897f296171c09c99797b63eaa3afcd16f3f7`
-(2.130.20). Earlier raw-kernel probes below describe the historical consumer
+Current regression pin: Remus `e3d6e38324c7d13d3076d847024e3e7583108315`
+(2.130.14, on Remus `main`). Earlier raw-kernel probes below describe the historical consumer
 and have not all been repeated on this pin.
 
 Run `pnpm exec vitest run test/hammer-holder-native.test.ts`.
