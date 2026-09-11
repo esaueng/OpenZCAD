@@ -929,6 +929,13 @@ export function BooleanForm({
           })}
         </div>
       </div>
+      {selected.length < 2 ? (
+        <p className="muted" aria-live="polite">
+          {selected.length === 0
+            ? 'Pick two bodies from the list, or click them in the viewport before opening the tool.'
+            : 'One body picked · pick at least one more to combine.'}
+        </p>
+      ) : null}
       {operation === 'subtract' && (
         <p className="muted">Bodies 2+ are subtracted from body 1.</p>
       )}

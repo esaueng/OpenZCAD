@@ -20,12 +20,12 @@ test('status messages are retired by the next selection and expire on their own'
   await inspector.getByRole('button', { name: 'Create', exact: true }).click();
 
   const statusButton = page.locator('.workspace-toast-body');
-  await expect(statusButton).toContainText('Add box');
+  await expect(statusButton).toContainText('Added box.');
 
   // Selecting the body retires the command message; the pick's own message
   // takes its place rather than sitting beside a stale one.
   await page.locator('.body-row-main').first().click();
-  await expect(statusButton).not.toContainText('Add box');
+  await expect(statusButton).not.toContainText('Added box.');
 
   // Left alone, an informational message goes quiet after its lifetime and
   // the bar reads as nothing happening, but the log still has it.
@@ -42,7 +42,7 @@ test('status messages are retired by the next selection and expire on their own'
     .click();
   await expect(
     page.getByRole('region', { name: 'Activity log' })
-  ).toContainText('Add box');
+  ).toContainText('Added box.');
   await page.keyboard.press('Escape');
 
   // Mode text describes where the user still is, so it never expires.

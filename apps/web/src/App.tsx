@@ -183,6 +183,7 @@ import {
   STALE_CHUNK_MESSAGE
 } from './lib/staleChunk';
 import { watchBuildVersion } from './lib/buildVersionWatch';
+import { commandOutcomeMessage } from './lib/commandOutcome';
 import { primitiveDimensionLabel } from './lib/primitiveDimensionLabel';
 import { newBlendFacePick } from './lib/blendRearm';
 import { exactEntryShortcut, isTypingTarget } from './lib/exactEntryShortcut';
@@ -4976,7 +4977,7 @@ export function App() {
         setMoveCommitHold(null);
       }
       setDoc(next);
-      setStatus(command.label);
+      setStatus(commandOutcomeMessage(command.label));
       return true;
     } catch (error) {
       setStatus(errorMessage(error, 'Command failed.'));
@@ -5007,7 +5008,7 @@ export function App() {
         setMoveCommitHold(null);
       }
       setDoc(next);
-      setStatus(label);
+      setStatus(commandOutcomeMessage(label));
       return true;
     } catch (error) {
       setStatus(errorMessage(error, 'Edit failed.'));
@@ -9066,7 +9067,14 @@ export function App() {
     pendingBlendRearmRef.current = null;
     const pick = newBlendFacePick(pending.bodyId, pending.before, faces);
     if (pick) {
+      // The pick is the app's, not the user's: it must not retire the
+      // commit's own message ("Filleted 2 edges at 1 mm.") the way a real
+      // pick retires whatever it interrupts.
+      const outcome = statusEntry;
       handleSelectTopologyFromViewer(pick.selection, false, pick.detail);
+      if (!outcome.sticky) {
+        setStatusEntry(outcome);
+      }
     }
     // handleSelectTopologyFromViewer is a per-render closure over the same
     // state this effect already lists.
@@ -14239,7 +14247,10 @@ export function App() {
   const modelingTargetBody = modelingTargetBodyId
     ? representations[modelingTargetBodyId]
     : undefined;
-  const modelingFaces = modelingFaceOptions(modelingTargetBody?.topology);
+  const modelingFaces = modelingFaceOptions(
+    modelingTargetBody?.topology,
+    modelingTargetBody
+  );
   const modelingOperationFaces =
     modelingOperation === 'draft' || modelingOperation === 'hole'
       ? modelingFaces.filter((face) => face.surfaceType === 'plane')
