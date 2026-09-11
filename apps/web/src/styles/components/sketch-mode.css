@@ -381,6 +381,30 @@
   color: var(--color-accent);
 }
 
+/* The Move panel wears the same chrome as every other command panel: the
+   inspector's header row (title, eyebrow, close) and its Primary · Cancel
+   footer. It used to be the one panel with its own header and a reversed
+   button order. */
+.move-controller .panel-header {
+  margin: -12px -12px 10px;
+  padding: 10px 12px 9px;
+}
+
+.move-controller .panel-title-row h2 {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--fs-md);
+}
+
+.move-controller .panel-title-row h2 svg {
+  color: var(--color-accent);
+}
+
+.move-controller .form-actions {
+  margin-top: 10px;
+}
+
 .extrude-controller > p {
   margin: -2px 0 10px;
   color: var(--color-text-subtle);
