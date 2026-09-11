@@ -798,7 +798,7 @@ test('extrudes and edits one of multiple closed sketch regions', async ({
     await page.mouse.move(center.x + 38, center.y, { steps: 6 });
     await page.mouse.up();
     await expect(page.getByRole('contentinfo')).toContainText(
-      index === 0 ? 'Sketch 01 started.' : 'Add circle'
+      index === 0 ? 'Sketch 01 started.' : 'Added circle.'
     );
     await expect.poll(detectedRegions).toBe(index + 1);
   }
