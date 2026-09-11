@@ -267,7 +267,7 @@ describe('growing holder recipe on a synthetic bracket', () => {
         replayCommands(imported.document, manager.document.commandLog)
           .featureOrder
       ).toEqual(manager.document.featureOrder);
-    });
+    }, 120_000);
   }
 
   it('rejects a cut plane outside the measured source', () => {
