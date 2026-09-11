@@ -1,5 +1,6 @@
 import {
   findSketch,
+  isValidParameterName,
   listFeaturesInOrder,
   listParameters
 } from '@openzcad/document-core';
@@ -23,7 +24,9 @@ import type {
   OpposingPlanarFacePair,
   PrimitiveKind,
   ProjectDocument,
+  OpeningRecognition,
   RecognizedImportedFeature,
+  RecognizedOpening,
   RevolveAxis,
   SketchId,
   SketchPlaneFrame,
@@ -35,6 +38,12 @@ import type {
   Vector3
 } from '@openzcad/shared';
 import { isSketchDimensionField } from './sketch-dimensions';
+export {
+  createGrowingHolderProposal,
+  growingHolderProposalTarget,
+  GROWING_HOLDER_PARAMETER,
+  type GrowingHolderProposalTarget
+} from './growing-holder-proposal';
 
 export {
   isSketchDimensionField,
@@ -215,6 +224,21 @@ export type CadPatchOperation =
       angleDeg?: ParamValue | null;
     }
   | {
+      /**
+       * Grow a measured opening: the app measured `opening` on the target
+       * imported body (`recognizedOpening` in the digest) and the operation
+       * must copy it verbatim. It authors nothing: the compiler carves the
+       * ends from the import, rebuilds the straight section and drives it by
+       * `parameter`.
+       */
+      kind: 'add_growing_holder_recipe';
+      name: string;
+      localId?: LocalBodyId;
+      targetBodyId: BodyRef;
+      parameter: string;
+      opening: RecognizedOpening;
+    }
+  | {
       kind: 'add_imported_opening_recipe';
       editedWidth: number;
       name: string;
@@ -383,6 +407,11 @@ export interface CadDigestBodyTopology {
   recognizedImportedFeatures?: RecognizedImportedFeature[];
   /** Planar dimensions that already passed a changed-value exact rebuild. */
   opposingPlanarFacePairs?: OpposingPlanarFacePair[];
+  /**
+   * The measured straight-section opening of an imported body, or why there
+   * is none. `add_growing_holder_recipe` copies a recognized value verbatim.
+   */
+  recognizedOpening?: OpeningRecognition;
   faces: Array<{
     topologyId: string;
     hash: number;
@@ -869,6 +898,9 @@ export function createCadDocumentDigest(
               )
           }
         : {}),
+      ...(body.topology.recognizedOpening
+        ? { recognizedOpening: body.topology.recognizedOpening }
+        : {}),
       faces,
       edges
     });
@@ -1101,6 +1133,7 @@ export function groundCadPatchProposalToSelection(
       selectedBodyId &&
       (operation.kind === 'add_transform' ||
         operation.kind === 'add_imported_opening_recipe' ||
+        operation.kind === 'add_growing_holder_recipe' ||
         operation.kind === 'add_pattern') &&
       !isLocalBodyRef(operation.targetBodyId) &&
       operation.targetBodyId !== selectedBodyId
@@ -1286,6 +1319,58 @@ const numberVectorSchema = {
     z: { type: 'number' }
   },
   required: ['x', 'y', 'z']
+} as const;
+
+const sectionObjectSchema = {
+  anyOf: [
+    {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        objectKind: { type: 'string', const: 'line' },
+        x1: { type: 'number' },
+        y1: { type: 'number' },
+        x2: { type: 'number' },
+        y2: { type: 'number' }
+      },
+      required: ['objectKind', 'x1', 'y1', 'x2', 'y2']
+    },
+    {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        objectKind: { type: 'string', const: 'arc' },
+        centerX: { type: 'number' },
+        centerY: { type: 'number' },
+        radius: { type: 'number' },
+        startAngleDeg: { type: 'number' },
+        endAngleDeg: { type: 'number' }
+      },
+      required: ['objectKind', 'centerX', 'centerY', 'radius', 'startAngleDeg', 'endAngleDeg']
+    }
+  ]
+} as const;
+
+const recognizedOpeningSchema = {
+  type: 'object',
+  additionalProperties: false,
+  description:
+    'A measured opening copied verbatim from the digest body\'s recognizedOpening.opening. Never invent or edit any field.',
+  properties: {
+    axis: { type: 'string', enum: ['x', 'y', 'z'] },
+    envelope: {
+      type: 'object',
+      additionalProperties: false,
+      properties: { min: numberVectorSchema, max: numberVectorSchema },
+      required: ['min', 'max']
+    },
+    cuts: { type: 'array', minItems: 2, maxItems: 2, items: { type: 'number' } },
+    center: { type: 'number' },
+    sourceOpening: { type: 'number' },
+    minimumOpening: { type: 'number' },
+    section: { type: 'array', minItems: 2, items: sectionObjectSchema }
+  },
+  required: ['axis', 'envelope', 'cuts', 'center', 'sourceOpening', 'minimumOpening', 'section']
 } as const;
 
 const faceReferenceSchema = {
@@ -1698,6 +1783,7 @@ export const AI_CAD_OPERATION_CAPABILITIES = {
   set_sketch_dimension: { enabled: true, reason: null },
   add_transform: { enabled: true, reason: null },
   add_imported_opening_recipe: { enabled: true, reason: null },
+  add_growing_holder_recipe: { enabled: true, reason: null },
   add_direct_edit: { enabled: true, reason: null },
   add_face_sketch: { enabled: true, reason: null },
   add_multi_profile_extrude: { enabled: true, reason: null },
@@ -1918,6 +2004,24 @@ export const CAD_PATCH_JSON_SCHEMA = {
               'axis',
               'angleDeg'
             ]
+          },
+          {
+            type: 'object',
+            additionalProperties: false,
+            description:
+              'Grow the measured opening of an unmodified imported STEP body. Copy the body\'s digest `recognizedOpening.opening` verbatim into `opening` when its status is "recognized"; never author cuts, envelope or section values. The compiler carves both ends from the import, rebuilds the straight section at a length driven by `parameter`, and joins them; overall size follows the opening.',
+            properties: {
+              kind: { type: 'string', const: 'add_growing_holder_recipe' },
+              name: { type: 'string' },
+              localId: localIdSchema,
+              targetBodyId: existingBodyRefSchema,
+              parameter: {
+                type: 'string',
+                description: 'Parameter name that drives the opening, e.g. "opening_width".'
+              },
+              opening: recognizedOpeningSchema
+            },
+            required: ['kind', 'name', 'localId', 'targetBodyId', 'parameter', 'opening']
           },
           {
             type: 'object',
@@ -2579,6 +2683,45 @@ function isVector(value: unknown): boolean {
   return isScalar(vector.x) && isScalar(vector.y) && isScalar(vector.z);
 }
 
+const isFiniteNumber = (value: unknown): value is number =>
+  typeof value === 'number' && Number.isFinite(value);
+
+/** Structural check of a measured opening; the digest binding proves provenance. */
+function isRecognizedOpening(value: unknown): value is RecognizedOpening {
+  if (!value || typeof value !== 'object') return false;
+  const opening = value as Record<string, unknown>;
+  const envelope = opening.envelope as Record<string, unknown> | undefined;
+  return (
+    ['x', 'y', 'z'].includes(String(opening.axis)) &&
+    !!envelope &&
+    isNumberVector(envelope.min) &&
+    isNumberVector(envelope.max) &&
+    Array.isArray(opening.cuts) &&
+    opening.cuts.length === 2 &&
+    opening.cuts.every(isFiniteNumber) &&
+    isFiniteNumber(opening.center) &&
+    isFiniteNumber(opening.sourceOpening) &&
+    isFiniteNumber(opening.minimumOpening) &&
+    Array.isArray(opening.section) &&
+    opening.section.length >= 2 &&
+    opening.section.every((object) => {
+      if (!object || typeof object !== 'object') return false;
+      const data = object as Record<string, unknown>;
+      const fields =
+        data.objectKind === 'line'
+          ? ['x1', 'y1', 'x2', 'y2']
+          : data.objectKind === 'arc'
+            ? ['centerX', 'centerY', 'radius', 'startAngleDeg', 'endAngleDeg']
+            : null;
+      return (
+        fields !== null &&
+        Object.keys(data).length === fields.length + 1 &&
+        fields.every((field) => isFiniteNumber(data[field]))
+      );
+    })
+  );
+}
+
 function isNumberVector(value: unknown): value is Vector3 {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
     return false;
@@ -2970,6 +3113,28 @@ export function parseCadPatchProposal(
             'add_revolve angleDeg must be greater than 0 and at most 360.'
           );
         }
+        declareBodyLocalId(operation, declared, declaredBodies);
+        break;
+      case 'add_growing_holder_recipe':
+        if (
+          typeof operation.name !== 'string' ||
+          typeof operation.targetBodyId !== 'string' ||
+          isLocalBodyRef(operation.targetBodyId) ||
+          typeof operation.parameter !== 'string' ||
+          !isValidParameterName(operation.parameter) ||
+          !isRecognizedOpening(operation.opening)
+        ) {
+          throw new Error('Invalid add_growing_holder_recipe operation.');
+        }
+        requireBodyRef(
+          operation.targetBodyId,
+          declaredBodies,
+          'add_growing_holder_recipe targetBodyId'
+        );
+        assertExistingTopologyBody(
+          operation.targetBodyId,
+          'add_growing_holder_recipe'
+        );
         declareBodyLocalId(operation, declared, declaredBodies);
         break;
       case 'add_imported_opening_recipe':
@@ -3518,6 +3683,27 @@ function exactDigestImportedFeature(
   return feature;
 }
 
+function exactDigestRecognizedOpening(
+  digest: CadDocumentDigest,
+  bodyId: string
+): RecognizedOpening {
+  const body = digest.bodies?.find(
+    (candidate) => candidate.bodyId === bodyId && !candidate.consumed
+  );
+  const recognition = body?.topology?.recognizedOpening;
+  if (!recognition) {
+    throw new Error(
+      `add_growing_holder_recipe targets body ${bodyId}, whose opening has not been measured. Refresh the proposal from the current document digest.`
+    );
+  }
+  if (recognition.status !== 'recognized') {
+    throw new Error(
+      `add_growing_holder_recipe targets body ${bodyId}, whose opening is not a recognized measurement (${recognition.reason}).`
+    );
+  }
+  return recognition.opening;
+}
+
 /**
  * Binds topology-dependent operations to the exact digest that prompted the
  * assistant. Structural parsing alone cannot distinguish a copied lineage
@@ -3583,6 +3769,18 @@ export function validateCadPatchProposalAgainstDigest(
         ) {
           throw new Error(
             `set_sketch_dimension contains a stale or unavailable field for object ${operation.objectId}. Refresh the proposal from the current document digest.`
+          );
+        }
+        break;
+      }
+      case 'add_growing_holder_recipe': {
+        const measured = exactDigestRecognizedOpening(
+          digest,
+          operation.targetBodyId
+        );
+        if (canonicalJson(measured) !== canonicalJson(operation.opening)) {
+          throw new Error(
+            'add_growing_holder_recipe opening does not exactly match the current measured opening. Refresh the proposal from the current document digest.'
           );
         }
         break;
@@ -3929,6 +4127,8 @@ export function describeCadPatchOperation(
       return operation.angleDeg === undefined || operation.angleDeg === null
         ? `Revolve ${operation.sketchId} around its ${operation.axis} axis`
         : `Revolve ${operation.sketchId} ${String(operation.angleDeg)}° around its ${operation.axis} axis`;
+    case 'add_growing_holder_recipe':
+      return `Grow the measured ${operation.opening.sourceOpening} opening of ${operation.targetBodyId} along ${operation.opening.axis} with parameter ${operation.parameter}`;
     case 'add_imported_opening_recipe':
       return `Create localized opening ${String(operation.width)} from ${operation.sourceWidth} on ${operation.targetBodyId}`;
     case 'add_boolean':
