@@ -1,4 +1,5 @@
 import { importedOpeningCommand } from './imported-opening';
+import { growingHolderCommand } from './growing-holder';
 export { importedOpeningCommand } from './imported-opening';
 export {
   GROWING_HOLDER_RECIPE_METADATA_KEY,
@@ -2235,6 +2236,19 @@ export function commandsForCadPatch(
           angleDeg: operation.angleDeg ?? undefined,
           ids
         });
+      }
+      case 'add_growing_holder_recipe': {
+        const targetBodyId = resolveBody(operation.targetBodyId);
+        const compiled = growingHolderCommand(projectedDocument, {
+          version: 1,
+          name: operation.name,
+          targetBodyId,
+          parameter: operation.parameter,
+          ...operation.opening
+        });
+        scope.declare(operation.localId, compiled.bodyId);
+        scope.consume([targetBodyId], 'growing holder recipe');
+        return compiled.command;
       }
       case 'add_imported_opening_recipe': {
         const targetBodyId = resolveBody(operation.targetBodyId);
