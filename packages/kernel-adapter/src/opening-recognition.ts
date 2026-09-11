@@ -6,7 +6,13 @@
  * resemblance. Unsupported or ambiguous geometry is refused with a reason —
  * a caller must never assume editability from a candidate list.
  */
-import type { SketchObjectData, Vector3 } from '@openzcad/shared';
+import type {
+  OpeningAxis,
+  OpeningCandidate,
+  OpeningRecognition,
+  SketchObjectData,
+  Vector3
+} from '@openzcad/shared';
 import type { RemusKernel } from './remus-runtime';
 import {
   detectReflectionSymmetries,
@@ -16,42 +22,13 @@ import {
   type MeasurementPoint
 } from './reconstruction-measurement';
 
-export type OpeningAxis = 'x' | 'y' | 'z';
-
-/** Everything the compiler's recipe needs except a name and a body id. */
-export interface RecognizedOpening {
-  axis: OpeningAxis;
-  envelope: { min: Vector3; max: Vector3 };
-  cuts: [number, number];
-  center: number;
-  sourceOpening: number;
-  minimumOpening: number;
-  section: SketchObjectData[];
-}
-
-export interface OpeningCandidate {
-  axis: OpeningAxis;
-  faceA: number;
-  faceB: number;
-  opening: number;
-  /** Coordinates of the two inner faces along the axis, negative side first. */
-  innerFaces: [number, number];
-  overlapArea: number;
-}
-
-export interface OpeningEvidence {
-  candidate: OpeningCandidate;
-  /** Offset of the reflection plane that confirmed the center, and its coverage. */
-  symmetry: { planeOffset: number; analyticCoverage: number };
-  /** Longest interval between the inner faces whose section never changes. */
-  straightRun: [number, number];
-  sectionEdges: number;
-}
-
-export type OpeningRecognition =
-  | { status: 'recognized'; opening: RecognizedOpening; evidence: OpeningEvidence }
-  | { status: 'ambiguous'; reason: string; candidates: OpeningCandidate[] }
-  | { status: 'unsupported'; reason: string };
+export type {
+  OpeningAxis,
+  OpeningCandidate,
+  OpeningEvidence,
+  OpeningRecognition,
+  RecognizedOpening
+} from '@openzcad/shared';
 
 export interface OpeningRecognitionOptions {
   /** Restrict candidates to one axis (a guided selection). */
@@ -73,6 +50,8 @@ const MIN_BRIDGE = 0.1;
 /** Two candidates this close in overlap area are indistinguishable. */
 const AMBIGUITY_RATIO = 0.9;
 const MAX_SECTION_EDGES = 64;
+/** Candidate pairs reported for a guided selection. */
+const MAX_CANDIDATES = 8;
 /** Edge sampling deflection for face extents; coarse is enough for bounds. */
 const EXTENT_DEFLECTION = 0.05;
 /** Sketch-plane bases, kept identical to `PLANE_BASES` in @openzcad/geometry. */
@@ -477,7 +456,7 @@ export function recognizeOpening(
     return {
       status: 'ambiguous',
       reason: 'More than one opening has a comparable facing area; select the intended pair of inner faces.',
-      candidates
+      candidates: candidates.slice(0, MAX_CANDIDATES)
     };
   const candidate = best!;
   const { axis } = candidate;
