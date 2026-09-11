@@ -264,7 +264,10 @@ async function setupRoundedCylinder(page: Page, bottomView: boolean) {
   await inspector.getByRole('button', { name: /^Create/ }).click();
   await expect(page.locator('.feature-row')).toHaveCount(2);
   await expectConsumedBodyCount(page, 1);
-  await expect(page.locator('.body-row', { hasText: 'Fillet' })).toBeVisible();
+  // The body keeps its own name through the fillet; only History says Fillet.
+  await expect(
+    page.locator('.body-row', { hasText: 'Cylinder Body' })
+  ).toBeVisible();
   if (bottomView) {
     await page
       .getByRole('button', {
