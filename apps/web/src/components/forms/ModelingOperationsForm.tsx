@@ -8,10 +8,10 @@ import {
 import type { BodyId } from '@openzcad/shared';
 import { ExprInput } from '../ExprInput';
 import type { BodyOption } from './FeatureForms';
-import type { HoleFacePick } from '../../lib/holeFacePick';
+import type { FormFacePick } from '../../lib/holeFacePick';
 import {
   buildModelingOperationSubmission,
-  modelingFormValidationReason,
+  modelingFormValidation,
   type ExactPreflightResult,
   type ExactPreflightState,
   type ModelingFaceOption,
@@ -44,7 +44,12 @@ export interface ModelingOperationsFormProps {
   pathOptions?: ModelingPathOption[];
   initialTarget?: BodyId;
   initial?: ModelingOperationFormState;
-  viewportHoleFacePick?: HoleFacePick | null;
+  /**
+   * The latest face the user clicked in the viewport while this form was
+   * open. A new object per click: shell and draft toggle the face in their
+   * list, hole and thicken replace their single face.
+   */
+  viewportFacePick?: FormFacePick | null;
   unsupportedReason?: string;
   onPreflight(
     submission: ModelingOperationSubmission
@@ -216,6 +221,43 @@ function VectorFields({
   );
 }
 
+/** The state on a new target body with every face field cleared. */
+function withTargetBody(
+  state: ModelingOperationFormState,
+  targetBodyId: BodyId
+): ModelingOperationFormState {
+  switch (state.operation) {
+    case 'shell':
+      return {
+        ...state,
+        value: { ...state.value, targetBodyId, openingFaceHashes: [] }
+      };
+    case 'draft':
+      return {
+        ...state,
+        value: { ...state.value, targetBodyId, faceHashes: [] }
+      };
+    case 'hole':
+      return {
+        ...state,
+        value: { ...state.value, targetBodyId, faceHash: null }
+      };
+    case 'thicken':
+      return {
+        ...state,
+        value: { ...state.value, targetBodyId, faceHash: null }
+      };
+    default:
+      return state;
+  }
+}
+
+function toggleHash(hashes: readonly number[], hash: number): number[] {
+  return hashes.includes(hash)
+    ? hashes.filter((candidate) => candidate !== hash)
+    : [...hashes, hash];
+}
+
 function FacePicker({
   legend,
   options,
@@ -319,7 +361,7 @@ export function ModelingOperationsForm({
   pathOptions = [],
   initialTarget,
   initial,
-  viewportHoleFacePick,
+  viewportFacePick,
   unsupportedReason,
   onPreflight,
   onSubmit,
@@ -337,43 +379,77 @@ export function ModelingOperationsForm({
     status: 'idle'
   });
   const preflightEpoch = useRef(0);
-  const consumedHoleFacePick = useRef<HoleFacePick | null>(null);
-  const holeTarget =
-    state.operation === 'hole' ? state.value.targetBodyId : null;
+  const consumedFacePick = useRef<FormFacePick | null>(null);
+  const pickTarget =
+    state.operation === 'hole' ||
+    state.operation === 'shell' ||
+    state.operation === 'draft' ||
+    state.operation === 'thicken'
+      ? state.value.targetBodyId
+      : null;
   useEffect(() => {
-    if (
-      !viewportHoleFacePick ||
-      consumedHoleFacePick.current === viewportHoleFacePick
-    )
+    if (!viewportFacePick || consumedFacePick.current === viewportFacePick)
       return;
-    consumedHoleFacePick.current = viewportHoleFacePick;
+    consumedFacePick.current = viewportFacePick;
+    // A pick on another live body arrives together with a new `initialTarget`:
+    // the workspace retargeted the form, so the form follows and starts its
+    // face fields over on that body instead of dropping the pick.
+    const retargeted =
+      pickTarget !== viewportFacePick.bodyId &&
+      initialTarget === viewportFacePick.bodyId;
     if (
-      holeTarget !== viewportHoleFacePick.bodyId ||
-      !faceOptions.some(
-        (face) =>
-          face.hash === viewportHoleFacePick.hash &&
-          face.surfaceType === 'plane'
-      )
+      (pickTarget !== viewportFacePick.bodyId && !retargeted) ||
+      !faceOptions.some((face) => face.hash === viewportFacePick.hash)
     )
       return;
     // A pick changes the exact command even if an earlier preflight is still running.
     preflightEpoch.current += 1;
     setPreflight({ status: 'idle' });
-    setState((current) =>
-      current.operation === 'hole' &&
-      current.value.targetBodyId === viewportHoleFacePick.bodyId
-        ? {
-            ...current,
-            value: { ...current.value, faceHash: viewportHoleFacePick.hash }
-          }
-        : current
-    );
-  }, [viewportHoleFacePick, holeTarget, faceOptions]);
+    setState((previous): ModelingOperationFormState => {
+      const { bodyId, hash } = viewportFacePick;
+      const current = retargeted ? withTargetBody(previous, bodyId) : previous;
+      switch (current.operation) {
+        case 'shell':
+          return current.value.targetBodyId === bodyId
+            ? {
+                ...current,
+                value: {
+                  ...current.value,
+                  openingFaceHashes: toggleHash(
+                    current.value.openingFaceHashes,
+                    hash
+                  )
+                }
+              }
+            : current;
+        case 'draft':
+          return current.value.targetBodyId === bodyId
+            ? {
+                ...current,
+                value: {
+                  ...current.value,
+                  faceHashes: toggleHash(current.value.faceHashes, hash)
+                }
+              }
+            : current;
+        case 'hole':
+          return current.value.targetBodyId === bodyId
+            ? { ...current, value: { ...current.value, faceHash: hash } }
+            : current;
+        case 'thicken':
+          return current.value.targetBodyId === bodyId
+            ? { ...current, value: { ...current.value, faceHash: hash } }
+            : current;
+        default:
+          return current;
+      }
+    });
+  }, [viewportFacePick, pickTarget, initialTarget, faceOptions]);
   const effectivePreflight: ExactPreflightState = unsupportedReason
     ? { status: 'refused', reason: unsupportedReason }
     : preflight;
-  const validationReason = modelingFormValidationReason(state, scope);
-  const canCheck = validationReason === null && unsupportedReason === undefined;
+  const validation = modelingFormValidation(state, scope);
+  const canCheck = validation === null && unsupportedReason === undefined;
 
   const replaceState = (next: ModelingOperationFormState) => {
     preflightEpoch.current += 1;
@@ -997,9 +1073,14 @@ export function ModelingOperationsForm({
         </>
       ) : null}
 
-      {validationReason ? (
-        <p className="field-error" aria-live="polite">
-          {validationReason}
+      {validation ? (
+        // Something still to choose is a next step, not a mistake: it reads
+        // as a hint until the user has typed a value that does not resolve.
+        <p
+          className={validation.kind === 'missing' ? 'muted' : 'field-error'}
+          aria-live="polite"
+        >
+          {validation.reason}
         </p>
       ) : null}
       <div className="form-actions">
