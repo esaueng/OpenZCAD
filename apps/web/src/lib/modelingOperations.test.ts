@@ -10,6 +10,7 @@ import {
 import {
   buildModelingOperationSubmission,
   modelingFaceOptions,
+  modelingFormValidation,
   modelingFormValidationReason,
   modelingOperationDisabledReason
 } from './modelingOperations';
@@ -102,6 +103,41 @@ describe('modeling operation form contracts', () => {
         thickness: 'wall / 2'
       }
     });
+  });
+
+  it('tells a missing choice apart from a value that does not resolve', () => {
+    expect(
+      modelingFormValidation(
+        {
+          operation: 'thicken',
+          value: {
+            name: 'Thicken',
+            targetBodyId: bodyId,
+            faceHash: null,
+            thickness: '2'
+          }
+        },
+        {}
+      )
+    ).toEqual({
+      kind: 'missing',
+      reason:
+        'Click the face to thicken in the viewport, or select it in the list.'
+    });
+    expect(
+      modelingFormValidation(
+        {
+          operation: 'thicken',
+          value: {
+            name: 'Thicken',
+            targetBodyId: bodyId,
+            faceHash: 42,
+            thickness: 'wall'
+          }
+        },
+        {}
+      )
+    ).toMatchObject({ kind: 'invalid' });
   });
 
   it('validates positive values and a non-zero mirror normal', () => {
