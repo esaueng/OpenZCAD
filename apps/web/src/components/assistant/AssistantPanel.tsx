@@ -23,6 +23,7 @@ import {
   X
 } from 'lucide-react';
 import {
+  createGrowingHolderProposal,
   createCadDocumentDigest,
   MAX_ASSISTANT_ATTACHMENTS,
   parseCadPatchProposal,
@@ -292,15 +293,20 @@ export function AssistantPanel({
     () => groupThreadByDay(entries, Date.now()),
     [entries]
   );
+  const growingHolderProposal = useMemo(
+    () => createGrowingHolderProposal(doc, selection),
+    [doc, selection]
+  );
   const suggestions = useMemo(
     () =>
       assistantSuggestions({
         bodyCount: doc.bodyOrder.length,
         topologyKind: sharedTopologyKind(selection),
         selectedBodyCount: selection.bodyIds.length,
-        autoParameterizeProposal
+        autoParameterizeProposal,
+        growingHolderProposal
       }),
-    [autoParameterizeProposal, doc.bodyOrder.length, selection]
+    [autoParameterizeProposal, doc.bodyOrder.length, growingHolderProposal, selection]
   );
   const autoParameterizeSuggestion = useMemo(
     () =>
