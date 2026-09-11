@@ -56,6 +56,7 @@ import {
   collectRecognizedImportedFeatures,
   type ImportedRecognitionFaceIdentity
 } from './imported-feature-query';
+import { recognizeOpening } from './opening-recognition';
 import { collapseShape } from './exact-boolean-helpers';
 import {
   bodyOpacityFromMetadata,
@@ -1066,6 +1067,21 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
           );
         }
         recognitionDone?.();
+        // The opening measurement is one bounded pass over the inventory plus
+        // one exact slab intersection; a refusal is published with its reason
+        // so the assistant can say why the body cannot be grown.
+        if (shape.solids.length === 1) {
+          const openingDone = onStage?.('Opening recognition');
+          try {
+            topology.recognizedOpening = recognizeOpening(kernel, solid);
+          } catch (error) {
+            topology.recognizedOpening = {
+              status: 'unsupported',
+              reason: `Opening recognition failed: ${(error as Error).message}`
+            };
+          }
+          openingDone?.();
+        }
         const pairsDone = onStage?.('Planar distance edit proofs');
         // Replay collapses a body before direct edit, so a proof against only
         // one member of a multi-solid body would authorize different topology.
