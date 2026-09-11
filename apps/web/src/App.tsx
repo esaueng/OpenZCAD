@@ -176,7 +176,11 @@ import {
   type FacePickOperation,
   type FormFacePick
 } from './lib/holeFacePick';
-import { lazyWithReload } from './lib/lazyWithReload';
+import {
+  lazyWithStaleChunkNotice,
+  onStaleChunk,
+  STALE_CHUNK_MESSAGE
+} from './lib/staleChunk';
 import { watchBuildVersion } from './lib/buildVersionWatch';
 import { exactEntryShortcut, isTypingTarget } from './lib/exactEntryShortcut';
 import { DeferredExactEntry } from './lib/deferredExactEntry';
@@ -542,23 +546,23 @@ function focusedControlOwnsSpace(target: HTMLElement | null): boolean {
   return false;
 }
 
-const LazyViewerShell = lazyWithReload(() =>
+const LazyViewerShell = lazyWithStaleChunkNotice(() =>
   import('./components/ViewerShell').then((module) => ({
     default: module.ViewerShell
   }))
 );
-const LazyViewModeBar = lazyWithReload(() =>
+const LazyViewModeBar = lazyWithStaleChunkNotice(() =>
   import('./components/ViewModeBar').then((module) => ({
     default: module.ViewModeBar
   }))
 );
-const LazyMeasurementDock = lazyWithReload(() =>
+const LazyMeasurementDock = lazyWithStaleChunkNotice(() =>
   import('./components/MeasurementDock').then((module) => ({
     default: module.MeasurementDock
   }))
 );
 // Operation help is only needed after the user starts a modeling action.
-const LazyToolCard = lazyWithReload(() =>
+const LazyToolCard = lazyWithStaleChunkNotice(() =>
   import('./components/ToolCard').then((module) => ({
     default: module.ToolCard
   }))
@@ -570,12 +574,12 @@ function ToolCard(props: ComponentProps<typeof LazyToolCard>) {
     </Suspense>
   );
 }
-const LazyFeatureHistoryPanel = lazyWithReload(() =>
+const LazyFeatureHistoryPanel = lazyWithStaleChunkNotice(() =>
   import('./components/FeatureHistoryPanel').then((module) => ({
     default: module.FeatureHistoryPanel
   }))
 );
-const LazySketchWorkflow = lazyWithReload(() =>
+const LazySketchWorkflow = lazyWithStaleChunkNotice(() =>
   import('./components/SketchWorkflow').then((module) => ({
     default: module.SketchWorkflow
   }))
@@ -599,28 +603,28 @@ function SketchWorkflow(props: ComponentProps<typeof LazySketchWorkflow>) {
 // The feature tools are the first thing the column shows, but their chunk
 // is small and fetched with the workspace: keeping the component out of the
 // entry chunk is what keeps that chunk under its budget.
-const LazyToolBar = lazyWithReload(() =>
+const LazyToolBar = lazyWithStaleChunkNotice(() =>
   import('./components/ToolBar').then((module) => ({
     default: module.ToolBar
   }))
 );
 // The first-model tour shows once per device; nobody else pays for it.
-const LazyWorkspaceTour = lazyWithReload(() =>
+const LazyWorkspaceTour = lazyWithStaleChunkNotice(() =>
   import('./components/WorkspaceTour').then((module) => ({
     default: module.WorkspaceTour
   }))
 );
-const LazySketchToolRail = lazyWithReload(() =>
+const LazySketchToolRail = lazyWithStaleChunkNotice(() =>
   import('./components/SketchToolRail').then((module) => ({
     default: module.SketchToolRail
   }))
 );
-const LazySketchEntityEditor = lazyWithReload(() =>
+const LazySketchEntityEditor = lazyWithStaleChunkNotice(() =>
   import('./components/SketchEntityEditor').then((module) => ({
     default: module.SketchEntityEditor
   }))
 );
-const LazyAssistantPanel = lazyWithReload(() =>
+const LazyAssistantPanel = lazyWithStaleChunkNotice(() =>
   import('./components/assistant/AssistantPanel').then((module) => ({
     default: module.AssistantPanel
   }))
@@ -634,35 +638,35 @@ const LazyAssistantPanel = lazyWithReload(() =>
  * weight in the launcher chunk — before a project is even open — for the sake
  * of a click that may never come.
  */
-const LazySettingsPage = lazyWithReload(() =>
+const LazySettingsPage = lazyWithStaleChunkNotice(() =>
   import('./components/SettingsPage').then((module) => ({
     default: module.SettingsPage
   }))
 );
-const LazyProjectSharingDialog = lazyWithReload(() =>
+const LazyProjectSharingDialog = lazyWithStaleChunkNotice(() =>
   import('./components/ProjectSharingDialog').then((module) => ({
     default: module.ProjectSharingDialog
   }))
 );
-const LazyExportDialog = lazyWithReload(() =>
+const LazyExportDialog = lazyWithStaleChunkNotice(() =>
   import('./components/ExportDialog').then((module) => ({
     default: module.ExportDialog
   }))
 );
 // Off the entry chunk: nothing shows for the first 600 ms of a run anyway,
 // and most sessions never move a file at all.
-const LazyActivityPill = lazyWithReload(() =>
+const LazyActivityPill = lazyWithStaleChunkNotice(() =>
   import('./components/ActivityPill').then((module) => ({
     default: module.ActivityPill
   }))
 );
 // Opened by ⌘K, never at boot; the entry chunk has no room for it.
-const LazyCommandPalette = lazyWithReload(() =>
+const LazyCommandPalette = lazyWithStaleChunkNotice(() =>
   import('./components/CommandPalette').then((module) => ({
     default: module.CommandPalette
   }))
 );
-const LazyShaprImportDialog = lazyWithReload(() =>
+const LazyShaprImportDialog = lazyWithStaleChunkNotice(() =>
   import('./components/ShaprImportDialog').then((module) => ({
     default: module.ShaprImportDialog
   }))
@@ -675,12 +679,12 @@ const LazyShaprImportDialog = lazyWithReload(() =>
  * and the field library behind them were the largest workspace-only weight
  * left in the launcher chunk.
  */
-const LazyInspector = lazyWithReload(() =>
+const LazyInspector = lazyWithStaleChunkNotice(() =>
   import('./components/Inspector').then((module) => ({
     default: module.Inspector
   }))
 );
-const LazyModelingOperationsForm = lazyWithReload(() =>
+const LazyModelingOperationsForm = lazyWithStaleChunkNotice(() =>
   import('./components/forms/ModelingOperationsForm').then((module) => ({
     default: module.ModelingOperationsForm
   }))
@@ -1661,19 +1665,27 @@ export function App() {
   const dismissToast = useCallback((id: number) => {
     setToast((current) => (current?.id === id ? null : current));
   }, []);
-  // A deploy while this tab is open renames every chunk; the notice lands
-  // before a lazy panel can fail to load, and the reload is the user's call.
-  useEffect(
-    () =>
-      watchBuildVersion({
-        onNewVersion: () =>
-          announce('A newer OpenZCAD build is available.', {
-            label: 'Reload',
-            run: () => window.location.reload()
-          })
-      }),
-    [announce]
-  );
+  // A deploy while this tab is open renames every chunk. The version watch
+  // usually notices first; if a panel's chunk goes missing before it does,
+  // the same notice lands beside the panel's own fallback. The reload is
+  // the user's call either way: the workspace may hold unsaved edits.
+  useEffect(() => {
+    const reloadNotice = {
+      label: 'Reload',
+      run: () => window.location.reload()
+    };
+    const stopWatch = watchBuildVersion({
+      onNewVersion: () =>
+        announce('A newer OpenZCAD build is available.', reloadNotice)
+    });
+    const stopStale = onStaleChunk(() =>
+      announce(STALE_CHUNK_MESSAGE, reloadNotice)
+    );
+    return () => {
+      stopWatch();
+      stopStale();
+    };
+  }, [announce]);
   /** A change of selection or command retires the message it interrupts. */
   const retireStatusMessage = useCallback(() => {
     setStatusEntry((current) => retireStatus(current, Date.now()));
