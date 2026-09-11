@@ -1,7 +1,9 @@
 # Guided Parametric Reconstruction Plan
 
-Status: approved plan of record (2026-08-25); Phase R0 implemented 2026-08-27;
-R1 and later phases not started.
+Status: approved plan of record (2026-08-25); Phase R0 implemented 2026-08-27.
+R1–R4 are superseded for the hammer profile by
+[the STEP-to-parameter hammer holder plan](step-parameter-hammer-holder-plan.md)
+(2026-09-11); R0 stays in use and R5 stays deferred.
 Scope decision: build the reusable guided-reconstruction **framework** now, with
 the hammer holder (46 mm) as its first profile. Generality is NOT claimed until
 at least two further, structurally different parts pass the same validation
