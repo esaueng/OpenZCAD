@@ -67,7 +67,7 @@ describe('Modeling operations form', () => {
     view.rerender(
       <ModelingOperationsForm
         {...props}
-        viewportHoleFacePick={{ bodyId, hash: 43 }}
+        viewportFacePick={{ bodyId, hash: 43 }}
       />
     );
     expect(
@@ -118,7 +118,7 @@ describe('Modeling operations form', () => {
     view.rerender(
       <ModelingOperationsForm
         {...props}
-        viewportHoleFacePick={{ bodyId, hash: 42 }}
+        viewportFacePick={{ bodyId, hash: 42 }}
       />
     );
     expect(
@@ -127,6 +127,130 @@ describe('Modeling operations form', () => {
     expect(
       screen.getByRole('button', { name: 'Check exact result' })
     ).toBeDisabled();
+  });
+
+  it('toggles shell opening faces from viewport picks and replaces a thicken face', () => {
+    const extraFace = {
+      ...faces[0]!,
+      hash: 43,
+      topologyId: 'face:43',
+      label: 'Second plane'
+    };
+    const shellProps = {
+      operation: 'shell' as const,
+      scope: {},
+      bodies,
+      faceOptions: [...faces, extraFace],
+      onPreflight: vi.fn(),
+      onSubmit: vi.fn()
+    };
+    const view = render(<ModelingOperationsForm {...shellProps} />);
+    view.rerender(
+      <ModelingOperationsForm
+        {...shellProps}
+        viewportFacePick={{ bodyId, hash: 42 }}
+      />
+    );
+    view.rerender(
+      <ModelingOperationsForm
+        {...shellProps}
+        viewportFacePick={{ bodyId, hash: 43 }}
+      />
+    );
+    expect(
+      screen.getByRole('button', { name: `1 ${faces[0]!.label}` })
+    ).toHaveAttribute('aria-pressed', 'true');
+    expect(
+      screen.getByRole('button', { name: `2 ${extraFace.label}` })
+    ).toHaveAttribute('aria-pressed', 'true');
+    // A second click on a face already in the list takes it out again.
+    view.rerender(
+      <ModelingOperationsForm
+        {...shellProps}
+        viewportFacePick={{ bodyId, hash: 42 }}
+      />
+    );
+    expect(
+      screen.getByRole('button', { name: faces[0]!.label })
+    ).toHaveAttribute('aria-pressed', 'false');
+    expect(
+      screen.getByRole('button', { name: `1 ${extraFace.label}` })
+    ).toHaveAttribute('aria-pressed', 'true');
+    view.unmount();
+
+    const thickenProps = { ...shellProps, operation: 'thicken' as const };
+    const thicken = render(<ModelingOperationsForm {...thickenProps} />);
+    thicken.rerender(
+      <ModelingOperationsForm
+        {...thickenProps}
+        viewportFacePick={{ bodyId, hash: 42 }}
+      />
+    );
+    thicken.rerender(
+      <ModelingOperationsForm
+        {...thickenProps}
+        viewportFacePick={{ bodyId, hash: 43 }}
+      />
+    );
+    expect(
+      screen.getByRole('button', { name: faces[0]!.label })
+    ).toHaveAttribute('aria-pressed', 'false');
+    expect(
+      screen.getByRole('button', { name: `1 ${extraFace.label}` })
+    ).toHaveAttribute('aria-pressed', 'true');
+  });
+
+  it('follows a viewport pick onto another body when the workspace retargets it', () => {
+    const otherBodyId = toBodyId('other_body');
+    const props = {
+      operation: 'shell' as const,
+      scope: {},
+      bodies: [
+        ...bodies,
+        { bodyId: otherBodyId, name: 'Other body', consumed: false }
+      ],
+      faceOptions: faces,
+      onPreflight: vi.fn(),
+      onSubmit: vi.fn()
+    };
+    const view = render(<ModelingOperationsForm {...props} />);
+    expect(screen.getByLabelText('Target body')).toHaveValue(bodyId);
+    view.rerender(
+      <ModelingOperationsForm
+        {...props}
+        initialTarget={otherBodyId}
+        viewportFacePick={{ bodyId: otherBodyId, hash: 42 }}
+      />
+    );
+    expect(screen.getByLabelText('Target body')).toHaveValue(otherBodyId);
+    expect(
+      screen.getByRole('button', { name: `1 ${faces[0]!.label}` })
+    ).toHaveAttribute('aria-pressed', 'true');
+  });
+
+  it('shows a face still to pick as a hint, and a bad value as an error', () => {
+    render(
+      <ModelingOperationsForm
+        operation="hole"
+        scope={{}}
+        bodies={bodies}
+        faceOptions={faces}
+        onPreflight={vi.fn()}
+        onSubmit={vi.fn()}
+      />
+    );
+    const hint = screen.getByText(/Click a flat face in the viewport/);
+    expect(hint).toHaveClass('muted');
+    expect(hint).not.toHaveClass('field-error');
+    expect(screen.queryByRole('alert')).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: faces[0]!.label }));
+    fireEvent.change(screen.getByLabelText('Diameter'), {
+      target: { value: '-3' }
+    });
+    expect(
+      screen.getByText('Hole diameter must resolve to a positive value.')
+    ).toHaveClass('field-error');
   });
 
   it('announces pending and ready preflight before submitting a typed shell', async () => {
