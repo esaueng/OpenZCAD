@@ -1122,6 +1122,12 @@ interface EdgeModifierFormProps {
   submitLabel: string;
   onSubmit(value: EdgeModifierFormValue): void;
   onPreview?(value: EdgeModifierFormValue | null): void;
+  /**
+   * The size the form currently proposes, reported whenever it or the
+   * picked edges change — including the initial one, which `onPreview`
+   * never sends. The viewport handle shows it so the two never disagree.
+   */
+  onSizeChange?(size: number | null): void;
   onCancel?: () => void;
 }
 
@@ -1138,6 +1144,7 @@ export function EdgeModifierForm({
   submitLabel,
   onSubmit,
   onPreview,
+  onSizeChange,
   onCancel
 }: EdgeModifierFormProps) {
   const [name, setName] = useState(
@@ -1154,6 +1161,16 @@ export function EdgeModifierForm({
   const previewCallback = useRef(onPreview);
   previewCallback.current = onPreview;
   const edgeSelectionKey = edgeHashes.join(',');
+  const sizeCallback = useRef(onSizeChange);
+  sizeCallback.current = onSizeChange;
+  useEffect(() => {
+    sizeCallback.current?.(
+      targetBodyId && edgeHashes.length > 0 && numericSize !== null
+        ? numericSize
+        : null
+    );
+  }, [targetBodyId, edgeSelectionKey, numericSize, edgeHashes.length]);
+  useEffect(() => () => sizeCallback.current?.(null), []);
   useEffect(
     () => () => previewCallback.current?.(null),
     [targetBodyId, edgeSelectionKey]
@@ -1520,9 +1537,7 @@ export function PatternForm({
               <span>Axis 2</span>
               <select
                 value={axis2}
-                onChange={(event) =>
-                  setAxis2(event.target.value as AxisId)
-                }
+                onChange={(event) => setAxis2(event.target.value as AxisId)}
               >
                 <option value="x">X</option>
                 <option value="y">Y</option>
