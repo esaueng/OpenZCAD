@@ -302,6 +302,30 @@ function nonZeroVector(
   );
 }
 
+/**
+ * Why the form cannot be checked yet. `missing` means the user has not
+ * chosen something (a body, a face, a profile) and reads as a next step;
+ * `invalid` means a value they typed does not resolve and reads as an error.
+ */
+export interface ModelingFormValidation {
+  kind: 'missing' | 'invalid';
+  reason: string;
+}
+
+const MISSING_INPUT_PATTERN = /^(Select|Choose|Click|Name is required)/;
+
+export function modelingFormValidation(
+  state: ModelingOperationFormState,
+  scope: Record<string, number>
+): ModelingFormValidation | null {
+  const reason = modelingFormValidationReason(state, scope);
+  if (reason === null) return null;
+  return {
+    kind: MISSING_INPUT_PATTERN.test(reason) ? 'missing' : 'invalid',
+    reason
+  };
+}
+
 export function modelingFormValidationReason(
   state: ModelingOperationFormState,
   scope: Record<string, number>
@@ -360,11 +384,13 @@ export function modelingFormValidationReason(
       if (!positiveExpression(scope, state.value.thickness)) {
         return 'Shell thickness must resolve to a positive value.';
       }
-      return state.value.openingFaceHashes.length > 0 &&
-        new Set(state.value.openingFaceHashes).size ===
-          state.value.openingFaceHashes.length
+      if (state.value.openingFaceHashes.length === 0) {
+        return 'Click the faces to open in the viewport, or select them in the list.';
+      }
+      return new Set(state.value.openingFaceHashes).size ===
+        state.value.openingFaceHashes.length
         ? null
-        : 'Select at least one unique opening face.';
+        : 'Opening faces must be unique.';
     case 'solid-offset':
       if (state.value.targetBodyId === '') return 'Select a target body.';
       return positiveExpression(scope, state.value.distance)
@@ -373,7 +399,7 @@ export function modelingFormValidationReason(
     case 'draft': {
       if (state.value.targetBodyId === '') return 'Select a target body.';
       if (state.value.faceHashes.length === 0) {
-        return 'Select at least one draft face.';
+        return 'Click the flat faces to draft in the viewport, or select them in the list.';
       }
       const expressions = [
         ...Object.values(state.value.pullDirection),
@@ -392,7 +418,9 @@ export function modelingFormValidationReason(
     }
     case 'hole': {
       if (state.value.targetBodyId === '') return 'Select a target body.';
-      if (state.value.faceHash === null) return 'Select the entry face.';
+      if (state.value.faceHash === null) {
+        return 'Click a flat face in the viewport to drill, or select it in the list.';
+      }
       const expressions = [
         state.value.diameter,
         ...Object.values(state.value.position),
@@ -449,7 +477,9 @@ export function modelingFormValidationReason(
     }
     case 'thicken':
       if (state.value.targetBodyId === '') return 'Select a target body.';
-      if (state.value.faceHash === null) return 'Select one face to thicken.';
+      if (state.value.faceHash === null) {
+        return 'Click the face to thicken in the viewport, or select it in the list.';
+      }
       return nonZeroExpression(scope, state.value.thickness)
         ? null
         : 'Thicken distance must be non-zero.';
