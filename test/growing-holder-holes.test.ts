@@ -95,7 +95,7 @@ describe('growing-holder mounting-hole control', { timeout: 300_000 }, () => {
     holder = await grownHolder(false);
     countersunk = await grownHolder(true);
     holderBodyId = holder.derived.exportableBodyIds[0]!;
-  });
+  }, 300_000);
   afterAll(() => {
     adapter.dispose();
   });
