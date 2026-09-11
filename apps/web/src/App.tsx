@@ -170,7 +170,13 @@ import {
   solvedSketchCommands
 } from './lib/sketch/applySolve';
 import { sketchContentFramePoints } from './lib/sketch/session';
-import { resolveHoleFacePick, type HoleFacePick } from './lib/holeFacePick';
+import {
+  modelingOperationNeedsPlanarFaces,
+  modelingOperationPicksFaces,
+  resolveFormFacePick,
+  type FacePickOperation,
+  type FormFacePick
+} from './lib/holeFacePick';
 import { exactEntryShortcut, isTypingTarget } from './lib/exactEntryShortcut';
 import { DeferredExactEntry } from './lib/deferredExactEntry';
 import type { SketchSolveStatus } from './components/SketchToolRail';
@@ -1541,11 +1547,11 @@ export function App() {
    */
   const [faceRepair, setFaceRepair] =
     useState<StaleDirectEditFaceRepair | null>(null);
-  const [holeFacePickTarget, setHoleFacePickTarget] = useState<BodyId | null>(
+  const [formFacePickTarget, setFormFacePickTarget] = useState<BodyId | null>(
     null
   );
-  const [viewportHoleFacePick, setViewportHoleFacePick] =
-    useState<HoleFacePick | null>(null);
+  const [viewportFormFacePick, setViewportFormFacePick] =
+    useState<FormFacePick | null>(null);
   /** Null means the active tool decides what picking is narrowed to. */
   const [manualSelectionFilter, setManualSelectionFilter] =
     useState<SelectionFilter | null>(null);
@@ -1590,9 +1596,9 @@ export function App() {
   const [modelingTargetBodyId, setModelingTargetBodyId] =
     useState<BodyId | null>(null);
   useEffect(() => {
-    if (tool !== 'hole') {
-      setHoleFacePickTarget(null);
-      setViewportHoleFacePick(null);
+    if (!modelingOperationPicksFaces(tool)) {
+      setFormFacePickTarget(null);
+      setViewportFormFacePick(null);
     }
   }, [tool]);
   const modelingPreflightRef = useRef<{
@@ -5091,8 +5097,8 @@ export function App() {
       return;
     }
     setFeatureFormError(null);
-    setHoleFacePickTarget(null);
-    setViewportHoleFacePick(null);
+    setFormFacePickTarget(null);
+    setViewportFormFacePick(null);
     setRevertPill(null);
     exactEntryQueue.cancel();
     // Through the ref, not the render's variable: this function is invoked
@@ -5195,15 +5201,47 @@ export function App() {
       nextTool === 'draft' ||
       nextTool === 'thicken'
     ) {
-      setModelingTargetBodyId(
-        selectedTopology?.bodyId ??
-          selectedBodyIds.at(-1) ??
-          viewerBodies[0]?.bodyId ??
-          null
-      );
+      const targetBodyId = defaultModelingTargetBody(nextTool);
+      setModelingTargetBodyId(targetBodyId);
+      // A face already picked on that body is the answer to the form's first
+      // question, so it lands in the face field instead of being thrown away.
+      const seeded =
+        modelingOperationPicksFaces(nextTool) &&
+        targetBodyId &&
+        selectedTopology?.kind === 'face'
+          ? resolveFormFacePick(
+              nextTool,
+              targetBodyId,
+              selectedTopology,
+              representations[targetBodyId]?.topology
+            )
+          : null;
+      setViewportFormFacePick(seeded?.ok ? seeded.pick : null);
+      setFormFacePickTarget(null);
     }
     // Selection is kept on purpose: booleans/move/fillet pre-fill from it.
     setTool(nextTool);
+  }
+
+  /**
+   * Which body a modeling form opens on: the body under the current
+   * selection, else the newest live body that can actually take the
+   * operation (a planar face for hole and draft). Bodies are listed in
+   * document order, so "first" was whichever body happened to be oldest —
+   * on a box-plus-sphere model that opened Hole on the sphere with a refusal
+   * already showing.
+   */
+  function defaultModelingTargetBody(operation: ToolId): BodyId | null {
+    const preferred = selectedTopology?.bodyId ?? selectedBodyIds.at(-1);
+    if (preferred && !representations[preferred]?.consumed) return preferred;
+    const live = viewerBodies.map((body) => body.bodyId);
+    const suits = (bodyId: BodyId) =>
+      !modelingOperationPicksFaces(operation) ||
+      !modelingOperationNeedsPlanarFaces(operation) ||
+      (representations[bodyId]?.topology?.faces ?? []).some(
+        (face) => face.geometry?.surfaceType === 'plane'
+      );
+    return [...live].reverse().find(suits) ?? live.at(-1) ?? null;
   }
 
   function cancelPanel() {
@@ -5211,8 +5249,8 @@ export function App() {
     edgeFormPreview.clear();
     exactEntryQueue.cancel();
     setFeatureFormError(null);
-    setHoleFacePickTarget(null);
-    setViewportHoleFacePick(null);
+    setFormFacePickTarget(null);
+    setViewportFormFacePick(null);
     const selectionReturn = extrudeSelectionReturnRef.current;
     setPreviewDoc(null);
     setSelectedProfiles(selectionReturn?.profiles ?? []);
@@ -8975,6 +9013,65 @@ export function App() {
         : false;
   }
 
+  function handleFormFacePick(
+    operation: FacePickOperation,
+    selection: TopologySelection | null
+  ) {
+    const label = TOOL_META[operation].label;
+    if (!selection) {
+      // Empty canvas: nothing to add, and the form keeps what it has.
+      return;
+    }
+    if (!exactGeometryReady) {
+      setStatus(
+        `${label}: wait for exact geometry to finish rebuilding, then pick the face.`
+      );
+      return;
+    }
+    let targetBodyId = modelingTargetBodyId;
+    if (selection.bodyId !== targetBodyId) {
+      // A pick on another live body retargets the form to it rather than
+      // refusing; the face list and picks start over on the new body.
+      if (representations[selection.bodyId]?.consumed) {
+        setStatus(`${label}: that body was combined into a later feature.`);
+        return;
+      }
+      targetBodyId = selection.bodyId;
+      modelingPreflightRef.current = null;
+      setModelingTargetBodyId(targetBodyId);
+      setSelectedBodyIds([targetBodyId]);
+      if (selection.kind !== 'face') {
+        setSelectedTopology(null);
+        setStatus(
+          `${label}: target body changed to ${representations[targetBodyId]?.name ?? 'the picked body'}.`
+        );
+        return;
+      }
+    }
+    if (!targetBodyId) return;
+    const picked = resolveFormFacePick(
+      operation,
+      targetBodyId,
+      selection,
+      representations[targetBodyId]?.topology
+    );
+    if (!picked.ok) {
+      setStatus(picked.reason);
+      return;
+    }
+    modelingPreflightRef.current = null;
+    setViewportFormFacePick(picked.pick);
+    setSelectedTopology(picked.selection);
+    setSelectedBodyIds([targetBodyId]);
+    setSelectedEdges([]);
+    setFormFacePickTarget(null);
+    setStatus(
+      operation === 'hole'
+        ? 'Hole entry face selected · adjust the hole and check the exact result.'
+        : `${label}: face picked · click more faces to add or remove them, then check the exact result.`
+    );
+  }
+
   function handleSelectTopologyFromViewer(
     selection: TopologySelection | null,
     additive: boolean,
@@ -8990,31 +9087,11 @@ export function App() {
       handleFaceRepairPick(selection);
       return;
     }
-    if (tool === 'hole' && holeFacePickTarget) {
-      if (!exactGeometryReady) {
-        setStatus(
-          'Hole: wait for exact geometry to finish rebuilding, then pick the entry face.'
-        );
-        return;
-      }
-      const picked = resolveHoleFacePick(
-        holeFacePickTarget,
-        selection,
-        representations[holeFacePickTarget]?.topology
-      );
-      if (!picked.ok) {
-        setStatus(picked.reason);
-        return;
-      }
-      modelingPreflightRef.current = null;
-      setViewportHoleFacePick(picked.pick);
-      setSelectedTopology(picked.selection);
-      setSelectedBodyIds([holeFacePickTarget]);
-      setSelectedEdges([]);
-      setHoleFacePickTarget(null);
-      setStatus(
-        'Hole entry face selected · adjust the hole and check the exact result.'
-      );
+    // A form that collects faces owns every viewport pick while it is open:
+    // the click fills its face field instead of arming a drag handle and
+    // replacing the form with the Offset Face card.
+    if (modelingOperationPicksFaces(tool) && modelingTargetBodyId) {
+      handleFormFacePick(tool, selection);
       return;
     }
     // The pick detail (click point + normal) anchors selection-first drag
@@ -13215,10 +13292,12 @@ export function App() {
         }
         return;
       }
-      if (event.key === 'Escape' && tool === 'hole' && holeFacePickTarget) {
+      if (event.key === 'Escape' && formFacePickTarget) {
         event.preventDefault();
-        setHoleFacePickTarget(null);
-        setStatus('Hole face picking canceled · hole settings preserved.');
+        setFormFacePickTarget(null);
+        setStatus(
+          `${TOOL_META[tool ?? 'hole'].label}: face picking canceled · settings preserved.`
+        );
         return;
       }
 
@@ -15394,22 +15473,22 @@ export function App() {
                     profileOptions={modelingProfileOptions}
                     pathOptions={modelingPathOptions}
                     initialTarget={modelingTargetBodyId ?? undefined}
-                    viewportHoleFacePick={viewportHoleFacePick}
+                    viewportFacePick={viewportFormFacePick}
                     unsupportedReason={modelingUnsupportedReason ?? undefined}
                     onPreflight={preflightModelingSubmission}
                     onSubmit={submitModelingOperation}
                     onCancel={cancelPanel}
                     onTargetBodyChange={(bodyId) => {
                       modelingPreflightRef.current = null;
-                      setHoleFacePickTarget(null);
-                      setViewportHoleFacePick(null);
+                      setFormFacePickTarget(null);
+                      setViewportFormFacePick(null);
                       setModelingTargetBodyId(bodyId);
                       setSelectedBodyIds([bodyId]);
                       setSelectedTopology(null);
                     }}
                     onOpeningFaceSelectionChange={(hashes) => {
-                      setHoleFacePickTarget(null);
-                      setViewportHoleFacePick(null);
+                      setFormFacePickTarget(null);
+                      setViewportFormFacePick(null);
                       const selectedHash = hashes.at(-1);
                       const face = modelingTargetBody?.topology?.faces.find(
                         (candidate) => candidate.hash === selectedHash
@@ -15431,12 +15510,14 @@ export function App() {
                     onRequestOpeningFaceSelection={() => {
                       setManualSelectionFilter('face');
                       if (
-                        modelingOperation === 'hole' &&
+                        modelingOperationPicksFaces(modelingOperation) &&
                         modelingTargetBodyId
                       ) {
-                        setHoleFacePickTarget(modelingTargetBodyId);
+                        setFormFacePickTarget(modelingTargetBodyId);
                         setStatus(
-                          'Hole: pick a planar entry face on the target body. Esc cancels face picking.'
+                          modelingOperationNeedsPlanarFaces(modelingOperation)
+                            ? `${TOOL_META[modelingOperation].label}: click a flat face on the target body. Esc cancels face picking.`
+                            : `${TOOL_META[modelingOperation].label}: click faces on the target body to add or remove them. Esc cancels face picking.`
                         );
                         return;
                       }
