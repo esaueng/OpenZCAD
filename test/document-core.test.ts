@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
   MAX_CHECKPOINT_REASON_LENGTH,
-  isRevisionRecord
+  isRevisionRecord,
+  type BodyId
 } from '@openzcad/shared';
 import {
   addPrimitiveFeature,
@@ -13,6 +14,8 @@ import {
   attachDerivedState,
   deleteSketchConstraint,
   booleanBodies,
+  filletEdges,
+  mirrorBody,
   createCheckpoint,
   createProjectDocument,
   deleteSketchObject,
@@ -512,6 +515,51 @@ describe('feature editing', () => {
     }
   });
 
+  it('keeps a body named after what the user made, not after the last feature', () => {
+    let document = createProjectDocument('Naming doc', user());
+    document = addPrimitiveFeature(document, {
+      name: 'Box',
+      primitiveKind: 'box',
+      dimensions: { width: 20, height: 20, depth: 20 }
+    });
+    document = addPrimitiveFeature(document, {
+      name: 'Sphere',
+      primitiveKind: 'sphere',
+      dimensions: { radius: 6 }
+    });
+    const [boxId, sphereId] = document.bodyOrder as [BodyId, BodyId];
+    const bodyNameOf = (doc: typeof document, bodyId: BodyId) =>
+      Object.values(doc.nodes).find(
+        (node) => node.kind === 'body' && node.bodyId === bodyId
+      )?.name;
+
+    const rounded = filletEdges(document, {
+      name: 'Fillet edges',
+      targetBodyId: boxId,
+      edgeHashes: [1],
+      size: 2
+    });
+    expect(bodyNameOf(rounded.document, rounded.bodyId)).toBe('Box Body');
+
+    const mirrored = mirrorBody(rounded.document, {
+      name: 'Mirror',
+      targetBodyId: rounded.bodyId,
+      plane: { origin: { x: 0, y: 0, z: 0 }, normal: { x: 1, y: 0, z: 0 } }
+    });
+    // The source stays; the copy needs a name of its own.
+    expect(bodyNameOf(mirrored.document, mirrored.bodyId)).toBe(
+      'Box Body mirror'
+    );
+
+    const merged = booleanBodies(mirrored.document, {
+      name: 'Union',
+      operation: 'union',
+      targetBodyIds: [rounded.bodyId, sphereId]
+    });
+    // The result is the base body with the others merged in.
+    expect(bodyNameOf(merged.document, merged.bodyId)).toBe('Box Body');
+  });
+
   it('split mints two bodies, deletes with both, and locks its body wiring', () => {
     let document = createProjectDocument('Split doc', user());
     document = addPrimitiveFeature(document, {
@@ -535,10 +583,18 @@ describe('feature editing', () => {
       (node) => node.kind === 'body'
     );
     expect(bodies).toHaveLength(3);
-    // The second half is named after the first so the tree reads as a pair.
+    // Both halves keep the source body's name so the tree reads as a pair;
+    // the feature is the thing called "Halved".
     expect(
-      bodies.find((node) => node.kind === 'body' && node.bodyId === split.secondBodyId)?.name
-    ).toBe('Halved (back)');
+      bodies.find(
+        (node) => node.kind === 'body' && node.bodyId === split.bodyId
+      )?.name
+    ).toBe('Box Body');
+    expect(
+      bodies.find(
+        (node) => node.kind === 'body' && node.bodyId === split.secondBodyId
+      )?.name
+    ).toBe('Box Body (back)');
 
     const feature = listFeaturesInOrder(document).at(-1)!;
     // `secondBodyId` is body wiring, not a parameter; a patch cannot move it.
@@ -815,7 +871,13 @@ describe('cloneDocument derived sharing', () => {
           { objectKind: 'line', x1: 0, y1: 0, x2: 10, y2: 2 },
           { objectKind: 'line', x1: 0, y1: 5, x2: 10, y2: 8 },
           { objectKind: 'circle', radius: 4, centerX: 20, centerY: 0 },
-          { objectKind: 'rectangle', width: 8, height: 4, centerX: 0, centerY: 0 }
+          {
+            objectKind: 'rectangle',
+            width: 8,
+            height: 4,
+            centerX: 0,
+            centerY: 0
+          }
         ]
       });
       const sketch = findSketch(document, sketchId)!;
@@ -831,8 +893,7 @@ describe('cloneDocument derived sharing', () => {
     }
 
     it('adds, validates, and deletes constraints', () => {
-      const { document, sketchId, lineA, lineB, circle } =
-        sketchWithGeometry();
+      const { document, sketchId, lineA, lineB, circle } = sketchWithGeometry();
       const added = addSketchConstraint(document, {
         sketchId,
         constraint: { constraintKind: 'parallel', a: lineA, b: lineB }
@@ -875,8 +936,7 @@ describe('cloneDocument derived sharing', () => {
     });
 
     it('refuses points an object does not expose and mixed equals', () => {
-      const { document, sketchId, lineA, lineB, circle } =
-        sketchWithGeometry();
+      const { document, sketchId, lineA, lineB, circle } = sketchWithGeometry();
       expect(() =>
         addSketchConstraint(document, {
           sketchId,
@@ -941,8 +1001,7 @@ describe('cloneDocument derived sharing', () => {
     });
 
     it('drops constraints referencing a deleted object', () => {
-      const { document, sketchId, lineA, lineB, circle } =
-        sketchWithGeometry();
+      const { document, sketchId, lineA, lineB, circle } = sketchWithGeometry();
       let next = addSketchConstraint(document, {
         sketchId,
         constraint: { constraintKind: 'parallel', a: lineA, b: lineB }
@@ -999,7 +1058,11 @@ describe('restoring a save state', () => {
       primitiveKind: 'sphere',
       dimensions: { radius: 4 }
     });
-    return { firstSave, secondSave, current: appendRevision(edited, 'Added sphere') };
+    return {
+      firstSave,
+      secondSave,
+      current: appendRevision(edited, 'Added sphere')
+    };
   }
 
   it('brings back the model the save state held', () => {
@@ -1082,7 +1145,12 @@ describe('branching a project', () => {
       revisionId: toRevisionId('rev_first'),
       reason: 'Before the fillets'
     });
-    const branch = duplicateProjectDocument(source, 'Bracket (copy)', user(), origin);
+    const branch = duplicateProjectDocument(
+      source,
+      'Bracket (copy)',
+      user(),
+      origin
+    );
 
     expect(branch.branchedFrom).toEqual(origin);
     expect(branch.projectId).not.toBe(source.projectId);
