@@ -4,12 +4,33 @@ This prepared-project construction changes the outside width together with the
 opening. It supersedes the fixed-outside-width trimming recipe for this use case;
 it does not change existing saved projects or the legacy assistant operation.
 
-The source is cut once at x = -4 and x = 26 mm. The two exact end pieces retain
-their arms, lettering, fillets, through holes and countersinks. Their sanitized
-STEP payloads are embedded in the prepared project. An ordinary sketch and
-extrusion rebuild the measured straight section between them: y = 39.5–59.5,
-z = 4.5–12.5, with R3 upper corners. Both ends move symmetrically about x = 11.
-The final Boolean joins the ends to the bridge. The original source is untouched.
+The construction is compiled from a measured recipe by
+`growingHolderCommand` in `packages/command-system/src/growing-holder.ts`. A
+`GrowingHolderRecipe` names the imported body, the opening axis, the source
+envelope, the two cut coordinates (x = -4 and x = 26 mm here), the symmetry
+center (x = 11), the measured opening (46), the parameter, the minimum opening
+and the section profile (y = 39.5–59.5, z = 4.5–12.5 with R3 upper corners).
+Nothing is inferred: the recipe is produced by measurement or, until
+recognition exists, written by hand.
+
+The compiler emits ordinary history. Each end is the exact intersection of the
+source with a box mask outside its cut plane — the positive end from a second
+reference to the same import, because a Boolean consumes its operands and the
+kernel's plane split cannot cross the section's cylindrical corners. The two
+ends retain their arms, lettering, fillets, through holes and countersinks. An
+ordinary sketch and extrusion rebuild the straight section at the parametric
+length; both ends move symmetrically about the center; the final union joins
+them. The end carving reads no parameter, so its rebuild checkpoints survive
+every opening edit (`readsParameterScope` in the history cache); only the
+bridge, the two moves and the union rebuild. No STEP payload is re-cut by
+hand. When the import is a content-addressed source reference the second
+reference shares its bytes; an embedded `stepText` import is copied.
+
+The union feature carries the recipe as JSON under the
+`openzcad.growingHolderRecipe` metadata key. `growingHolderHistories` reads it
+back and verifies every implied feature against what the compiler emits; a
+history edited by hand is not claimed, so nothing downstream assumes its
+geometry.
 
 For opening `w`, outside width is `w + 28` and hole-center spacing is `w - 6`.
 Through holes remain Ø5; the larger mounting recesses are Ø9. The expression
@@ -19,7 +40,10 @@ through holes. There is no fixed upper limit; non-finite values are rejected and
 exact geometry validation still applies. This clearance rule is geometric, not
 a structural load rating.
 
-Generate and validate the private project with:
+A redistributable synthetic U-bracket exercises the same construction in CI
+(`test/growing-holder-recipe.test.ts`) in its source orientation and rotated
+so the opening runs along y and along z. Generate and validate the private
+project with:
 
 ```sh
 OPENZCAD_HAMMER_STEP="$HAMMER_STEP" OPENZCAD_HAMMER_WIDTH=55 \
@@ -36,7 +60,9 @@ Git. Automatic recognition and preparation from an arbitrary imported STEP are
 not implemented by this fixture-specific generator.
 
 After the first successful exact rebuild, changing `opening_width` displays a
-viewport-only preview using the cached end meshes and an axially stretched bridge.
+viewport-only preview using the cached end meshes and an axially stretched
+bridge. The preview finds the recipe through `growingHolderHistories`, so it
+follows the recipe's axis, cuts and minimum instead of a fixed feature shape.
 The viewport labels it “Width preview · exact geometry pending”. Exact union and
 validation continue in the worker; the preview supplies no exact topology and is
 never saved as document geometry or passed to exports. Rapid changes are always

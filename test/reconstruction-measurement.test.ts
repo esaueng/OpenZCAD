@@ -1,10 +1,8 @@
 import { readFileSync } from 'node:fs';
 
-import { drillHole } from '../packages/kernel-adapter/src/exact-cylinder-ops';
 import {
   RemusKernel,
-  loadRemusTranslators,
-  remusTranslators
+  loadRemusTranslators
 } from '../packages/kernel-adapter/src/remus-runtime';
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
@@ -20,55 +18,9 @@ import {
   measureRuledEdgeSweepDeviation,
   type AnalyticInventory
 } from './support/reconstruction-measurement';
+import { syntheticHolderStep } from './support/synthetic-holder';
 
 const HAMMER_HOLDER_STEP = process.env.OPENZCAD_HAMMER_HOLDER_STEP;
-
-function translation(x: number, y: number, z: number): Float64Array {
-  return new Float64Array([1, 0, 0, x, 0, 1, 0, y, 0, 0, 1, z, 0, 0, 0, 1]);
-}
-
-function translated(
-  kernel: RemusKernel,
-  solid: number,
-  x: number,
-  y: number,
-  z: number
-): number {
-  return kernel.copyAndTransformSolid(solid, translation(x, y, z));
-}
-
-function syntheticHolderStep(kernel: RemusKernel): Uint8Array {
-  const sideProfile = kernel.makePolygon(
-    new Float64Array([
-      0, 0, 0, 60, 0, 0, 60, 32, 0, 52, 32, 0, 52, 8, 0, 8, 8, 0, 8, 32, 0, 0,
-      32, 0
-    ])
-  );
-  let holder = kernel.extrude(sideProfile, 0, 0, 1, 20);
-  for (const x of [4, 56]) {
-    holder = drillHole(kernel, holder, {
-      surfacePoint: { x, y: 19, z: 20 },
-      axis: { x: 0, y: 0, z: -1 },
-      radius: 2.5,
-      depth: 20,
-      style: 'countersink',
-      countersinkRadius: 4.5,
-      countersinkAngle: Math.PI / 2,
-      entryExtension: 0.2,
-      exitExtension: 0.2
-    });
-  }
-
-  // An analytic one-sided boss stands in for the embossed text. It makes the
-  // model only partially symmetric without smuggling a proprietary glyph or
-  // a free-form surface into the repository.
-  const emboss = translated(kernel, kernel.makeBox(0.4, 6, 4), 8, 14, 7);
-  holder = kernel.fuse(holder, emboss);
-  expect(kernel.validateSolid(holder)).toBe(0);
-  return remusTranslators().exportStep(
-    kernel.serializeSolids(Uint32Array.of(holder))
-  );
-}
 
 describe('guided-reconstruction measurement tooling', () => {
   let kernel: RemusKernel;

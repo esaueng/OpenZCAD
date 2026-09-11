@@ -1,66 +1,71 @@
 import { describe, expect, it } from 'vitest';
 import {
-  addSketchFeature,
-  booleanBodies,
-  createProjectDocument,
-  extrudeSketch,
-  importStepBody,
-  setParameter,
-  transformBody,
-  findFeature,
-  findSketch
-} from '@openzcad/document-core';
+  CommandManager,
+  commandFactories,
+  growingHolderCommand,
+  growingHolderHistories,
+  type GrowingHolderRecipe
+} from '@openzcad/command-system';
+import { createProjectDocument, setParameter } from '@openzcad/document-core';
 import {
   toUserId,
   type BodyId,
-  type BodyRepresentation
+  type BodyRepresentation,
+  type ProjectDocument
 } from '@openzcad/shared';
 import { growingHolderPreview } from './growingHolderPreview';
 
-function fixture() {
-  const w = 'require_min(opening_width, 16.1)';
-  let doc = setParameter(
-    createProjectDocument('Preview test', toUserId('test')),
-    { name: 'opening_width', expression: '46' }
-  );
-  const left = importStepBody(doc, {
-    name: 'Left',
-    artifactId: 'left',
-    sourceName: 'left.step',
-    stepText: 'test source'
-  });
-  const right = importStepBody(left.document, {
-    name: 'Right',
-    artifactId: 'right',
-    sourceName: 'right.step',
-    stepText: 'test source'
-  });
-  const sketch = addSketchFeature(right.document, {
-    name: 'Section',
-    planeRef: { type: 'canonical', plane: 'YZ', offset: `19 - (${w}) / 2` },
-    objects: [{ objectKind: 'line', x1: 0, y1: 0, x2: 1, y2: 0 }]
-  });
-  const bridge = extrudeSketch(sketch.document, {
-    name: 'Bridge',
-    sketchId: sketch.sketchId,
-    distance: `(${w}) - 16`
-  });
-  const movedLeft = transformBody(bridge.document, {
-    name: 'Move left',
-    targetBodyId: left.bodyId,
-    translation: { x: `(46 - (${w})) / 2`, y: 0, z: 0 }
-  });
-  const movedRight = transformBody(movedLeft.document, {
-    name: 'Move right',
-    targetBodyId: right.bodyId,
-    translation: { x: `((${w}) - 46) / 2`, y: 0, z: 0 }
-  });
-  const union = booleanBodies(movedRight.document, {
+/** A 30 mm straight section between two 22 mm ends, opening 46, along `axis`. */
+function recipe(
+  targetBodyId: BodyId,
+  axis: GrowingHolderRecipe['axis'] = 'x'
+): GrowingHolderRecipe {
+  return {
+    version: 1,
     name: 'Holder',
-    operation: 'union',
-    targetBodyIds: [left.bodyId, bridge.bodyId, right.bodyId]
-  });
-  doc = union.document;
+    targetBodyId,
+    axis,
+    envelope: {
+      min: { x: -26, y: -26, z: -26 },
+      max: { x: 48, y: 48, z: 48 }
+    },
+    cuts: [-4, 26],
+    center: 11,
+    sourceOpening: 46,
+    parameter: 'opening_width',
+    minimumOpening: 16.1,
+    section: [
+      { objectKind: 'line', x1: 0, y1: 0, x2: 1, y2: 0 },
+      { objectKind: 'line', x1: 1, y1: 0, x2: 0, y2: 1 },
+      { objectKind: 'line', x1: 0, y1: 1, x2: 0, y2: 0 }
+    ]
+  };
+}
+
+function fixture(axis: GrowingHolderRecipe['axis'] = 'x') {
+  const manager = new CommandManager(
+    createProjectDocument('Preview test', toUserId('test'))
+  );
+  manager.execute(
+    commandFactories.importStep({
+      name: 'Source',
+      artifactId: 'source',
+      sourceName: 'source.step',
+      stepText: 'test source'
+    })
+  );
+  const compiled = growingHolderCommand(
+    manager.document,
+    recipe(manager.document.bodyOrder[0]!, axis)
+  );
+  manager.execute(compiled.command);
+  const doc = manager.document;
+  const history = growingHolderHistories(doc)[0]!;
+  const point = (along: number, other: number) => {
+    const p = [other, other, other];
+    p[history.plan.axisIndex] = along;
+    return p;
+  };
   const representation = (
     bodyId: BodyId,
     min: number,
@@ -75,87 +80,131 @@ function fixture() {
     exportableStep: true,
     faceCount: 1,
     volume: 123,
-    bbox: { min: { x: min, y: 0, z: 0 }, max: { x: max, y: 1, z: 0 } },
+    bbox: {
+      min: { x: min, y: 0, z: 0 },
+      max: { x: max, y: 1, z: 0 }
+    },
     mesh: {
       kind: 'mesh',
-      vertices: Float32Array.of(min, 0, 0, max, 0, 0, min, 1, 0),
+      vertices: Float32Array.from([
+        ...point(min, 0),
+        ...point(max, 0),
+        ...point(min, 1)
+      ]),
       indices: Uint32Array.of(0, 1, 2)
     }
   });
   doc.derived.bodyRepresentations = {
-    [left.bodyId]: representation(left.bodyId, -26, -4, true),
-    [bridge.bodyId]: representation(bridge.bodyId, -4, 26, true),
-    [right.bodyId]: representation(right.bodyId, 26, 48, true),
-    [union.bodyId]: representation(union.bodyId, -26, 48, false)
+    [compiled.negativeEndBodyId]: representation(
+      compiled.negativeEndBodyId,
+      -26,
+      -4,
+      true
+    ),
+    [compiled.bridgeBodyId]: representation(compiled.bridgeBodyId, -4, 26, true),
+    [compiled.positiveEndBodyId]: representation(
+      compiled.positiveEndBodyId,
+      26,
+      48,
+      true
+    ),
+    [compiled.bodyId]: representation(compiled.bodyId, -26, 48, false)
   };
-  return { doc, sketchId: sketch.sketchId };
+  return { doc, compiled, history };
 }
 
-const changeWidth = (doc: ReturnType<typeof fixture>['doc'], width: number) =>
+const changeWidth = (doc: ProjectDocument, width: number) =>
   setParameter(doc, { name: 'opening_width', expression: String(width) });
+
+const axisValues = (
+  preview: BodyRepresentation,
+  axisIndex: number
+): number[] =>
+  Array.from(preview.mesh.vertices).filter((_, i) => i % 3 === axisIndex);
 
 describe('disposable growing holder preview', () => {
   it('moves intact ends and stretches the bridge without publishing topology or mutating exact state', () => {
-    const { doc } = fixture();
+    const { doc, compiled } = fixture();
     const original = structuredClone(doc);
-    const next = changeWidth(doc, 56);
-    const preview = growingHolderPreview(doc, next)!;
+    const next = changeWidth(doc, 50);
+    const preview = growingHolderPreview(doc, next);
     expect(preview).toHaveLength(1);
-    expect(
-      Array.from(preview[0]!.mesh.vertices).filter((_, i) => i % 3 === 0)
-    ).toEqual([-31, -9, -31, -9, 31, -9, 31, 53, 31]);
-    expect(Array.from(preview[0]!.mesh.indices)).toEqual([
+    expect(preview![0]!.bodyId).toBe(compiled.bodyId);
+    // Ends translate by ∓2; the bridge stretches from 30 to 34 about x = -6.
+    expect(axisValues(preview![0]!, 0)).toEqual([
+      -28, -6, -28, -6, 28, -6, 28, 50, 28
+    ]);
+    expect(Array.from(preview![0]!.mesh.indices)).toEqual([
       0, 1, 2, 3, 4, 5, 6, 7, 8
     ]);
-    expect(preview[0]!.bbox).toEqual({
-      min: { x: -31, y: 0, z: 0 },
-      max: { x: 53, y: 1, z: 0 }
+    expect(preview![0]!.bbox).toEqual({
+      min: { x: -28, y: 0, z: 0 },
+      max: { x: 50, y: 1, z: 1 }
     });
-    expect(preview[0]!.exportableStep).toBe(false);
-    expect(preview[0]!.topology).toBeUndefined();
-    expect(preview[0]!.massProperties).toBeUndefined();
+    expect(preview![0]!.exportableStep).toBe(false);
+    expect(preview![0]!.topology).toBeUndefined();
+    expect(preview![0]!.massProperties).toBeUndefined();
     expect(doc).toEqual(original);
     expect(next.derived.bodyRepresentations).toEqual(
       original.derived.bodyRepresentations
     );
   });
 
+  it('follows the recipe axis instead of assuming x', () => {
+    const { doc } = fixture('z');
+    const preview = growingHolderPreview(doc, changeWidth(doc, 50))![0]!;
+    expect(axisValues(preview, 2)).toEqual([-28, -6, -28, -6, 28, -6, 28, 50, 28]);
+    expect(preview.bbox.min.z).toBe(-28);
+    expect(preview.bbox.max.z).toBe(50);
+  });
+
   it('uses the validated baseline for rapid edits, shrink and undo', () => {
     const { doc } = fixture();
-    let next = changeWidth(doc, 1000);
-    next = changeWidth(next, 20);
-    expect(growingHolderPreview(doc, next)![0]!.bbox.min.x).toBe(-13);
-    expect(growingHolderPreview(doc, next)![0]!.bbox.max.x).toBe(35);
+    const next = changeWidth(doc, 50);
+    expect(growingHolderPreview(doc, changeWidth(next, 20))![0]!.bbox.min.x).toBe(-13);
+    expect(growingHolderPreview(doc, changeWidth(next, 20))![0]!.bbox.max.x).toBe(35);
     expect(growingHolderPreview(doc, changeWidth(next, 46))).toBeNull();
     expect(
-      growingHolderPreview(doc, changeWidth(next, 16.1))![0]!.bbox.max.x
-    ).toBeCloseTo(33.05, 4);
+      growingHolderPreview(doc, changeWidth(next, 16.1))![0]!.bbox.min.x
+    ).toBeCloseTo(-11.05, 9);
   });
 
   it('fails closed without a valid baseline, with invalid parameters or unrelated edits', () => {
-    const { doc, sketchId } = fixture();
+    const { doc, history } = fixture();
     expect(growingHolderPreview(null, changeWidth(doc, 50))).toBeNull();
-    for (const width of [10, 16, NaN, Infinity])
+    for (const width of [16, 0, -5, Number.NaN])
       expect(growingHolderPreview(doc, changeWidth(doc, width))).toBeNull();
-    const other = changeWidth(doc, 50);
-    other.projectId = createProjectDocument(
-      'Other',
-      toUserId('test')
-    ).projectId;
+    const other = setParameter(doc, { name: 'unrelated', expression: '3' });
     expect(growingHolderPreview(doc, other)).toBeNull();
-    const edited = changeWidth(doc, 50);
-    findSketch(edited, sketchId)!.planeRef = {
-      type: 'canonical',
-      plane: 'XY',
-      offset: 0
+    const edited = new CommandManager(doc);
+    edited.execute(
+      commandFactories.updateFeature({
+        featureId: history.bridge.featureId,
+        data: { distance: '30' }
+      })
+    );
+    expect(
+      growingHolderPreview(edited.document, changeWidth(edited.document, 50))
+    ).toBeNull();
+    const suppressed = new CommandManager(doc);
+    suppressed.execute(
+      commandFactories.setNodeMetadata({
+        nodeId: history.negativeMove.id,
+        metadata: { suppressed: true }
+      })
+    );
+    expect(
+      growingHolderPreview(
+        suppressed.document,
+        changeWidth(suppressed.document, 50)
+      )
+    ).toBeNull();
+    const warned = { ...doc, derived: { ...doc.derived, warnings: ['x'] } };
+    expect(growingHolderPreview(warned, changeWidth(warned, 50))).toBeNull();
+    const unbuilt = {
+      ...doc,
+      derived: { ...doc.derived, bodyRepresentations: {} }
     };
-    expect(growingHolderPreview(doc, edited)).toBeNull();
-    const suppressed = changeWidth(doc, 50);
-    findFeature(suppressed, suppressed.featureOrder[0]!)!.metadata = {
-      suppressed: true
-    };
-    expect(growingHolderPreview(doc, suppressed)).toBeNull();
-    doc.derived.warnings = ['Exact rebuild failed'];
-    expect(growingHolderPreview(doc, changeWidth(doc, 50))).toBeNull();
+    expect(growingHolderPreview(unbuilt, changeWidth(unbuilt, 50))).toBeNull();
   });
 });
