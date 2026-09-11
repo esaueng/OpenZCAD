@@ -6,6 +6,8 @@
  * also keeps it off the settings sync path, where every field has to survive the
  * worker's strict parser.
  */
+import type { ToolGroup } from './tools';
+
 export const PANEL_STATE_STORAGE_KEY = 'openzcad-panel-state:v1';
 
 export type SidebarSectionId =
@@ -67,6 +69,13 @@ export interface PanelState {
    * on their next fresh project.
    */
   workspaceTourDismissed: boolean;
+  /**
+   * Which feature-tool groups are unfolded to named tiles; a folded group
+   * shows its tools as one row of icons. Open to begin with — the names are
+   * what make the tools learnable — and remembered because folding is how
+   * someone gives the model browser more of the column.
+   */
+  toolGroups: Record<ToolGroup, boolean>;
 }
 
 export const DEFAULT_PANEL_STATE: PanelState = {
@@ -80,8 +89,19 @@ export const DEFAULT_PANEL_STATE: PanelState = {
   workspaceMode: 'build',
   viewModeRailOpen: true,
   assistantCollapsed: true,
-  workspaceTourDismissed: false
+  workspaceTourDismissed: false,
+  toolGroups: {
+    create: true,
+    'from-sketch': true,
+    'edges-faces': true,
+    bodies: true,
+    pattern: true
+  }
 };
+
+export const TOOL_GROUP_KEYS = Object.keys(
+  DEFAULT_PANEL_STATE.toolGroups
+) as readonly ToolGroup[];
 
 function copyDefaults(): PanelState {
   return {
@@ -89,7 +109,8 @@ function copyDefaults(): PanelState {
     workspaceMode: DEFAULT_PANEL_STATE.workspaceMode,
     viewModeRailOpen: DEFAULT_PANEL_STATE.viewModeRailOpen,
     assistantCollapsed: DEFAULT_PANEL_STATE.assistantCollapsed,
-    workspaceTourDismissed: DEFAULT_PANEL_STATE.workspaceTourDismissed
+    workspaceTourDismissed: DEFAULT_PANEL_STATE.workspaceTourDismissed,
+    toolGroups: { ...DEFAULT_PANEL_STATE.toolGroups }
   };
 }
 
@@ -121,6 +142,15 @@ export function normalizePanelState(value: unknown): PanelState {
       const open = (sections as Record<string, unknown>)[id];
       if (typeof open === 'boolean') {
         state.sidebarSections[id] = open;
+      }
+    }
+  }
+  const groups = root.toolGroups;
+  if (groups && typeof groups === 'object' && !Array.isArray(groups)) {
+    for (const id of TOOL_GROUP_KEYS) {
+      const open = (groups as Record<string, unknown>)[id];
+      if (typeof open === 'boolean') {
+        state.toolGroups[id] = open;
       }
     }
   }
@@ -160,6 +190,13 @@ export function toggleSidebarSection(
       ...state.sidebarSections,
       [id]: !state.sidebarSections[id]
     }
+  };
+}
+
+export function toggleToolGroup(state: PanelState, id: ToolGroup): PanelState {
+  return {
+    ...state,
+    toolGroups: { ...state.toolGroups, [id]: !state.toolGroups[id] }
   };
 }
 
