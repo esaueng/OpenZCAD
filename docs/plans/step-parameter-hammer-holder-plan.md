@@ -58,6 +58,15 @@ the same PR that lands Phase 2 so there is one plan of record.
   assistant recognition of this example remain unfinished. The assistant's only
   recipe operation, `add_imported_opening_recipe`, compiles the older
   fixed-outside-width recipe qualified at 46 and 50 mm only.
+- **Phase 0 done (PR #282, 2026-09-11):** the pin is Remus `main` f1968568
+  (2.130.14) and the docs agree with the lockfile.
+- **Phase 2 (PR 2):** `growingHolderCommand` compiles a measured recipe into
+  history and the preview reads the recipe back; see
+  `docs/imported-hammer-growing.md`. Two findings shape Phase 3: the kernel's
+  plane `split` cannot cross the section's cylindrical corners, so the ends are
+  carved with box-mask intersections from two references to the import; and
+  `split`'s volume-conservation check also fails on the synthetic bracket in
+  every orientation, so `split` is not usable for recognition probes either.
 
 ## Parameter contract
 
@@ -140,14 +149,14 @@ recipe descriptor as input**; it does not infer anything from the solid.
    bridge sketch and extrusion, two symmetric moves, one union) plus the
    `opening_width` and derived `overall_width` parameters. Separate
    measurement, proposal, compilation, and exact execution.
-3. Decide end-piece persistence, and record the decision in the docs. Options:
-   (a) store the two cut ends through the existing blob-store and R2 archival
-   path of `stepImportRun.ts`, with the ≤12 MB embedded fallback; or
-   (b) add a derived "split imported body at plane" feature that recuts the
-   original source at rebuild, relying on the unchanged-prefix checkpoint cache.
-   Option (b) keeps one source of truth and satisfies step 5 by construction;
-   option (a) is cheaper per rebuild. Whichever is chosen, no STEP payload
-   enters Git and header privacy sanitization applies.
+3. End-piece persistence, decided: the ends are derived at rebuild from the
+   original import (option b), as box-mask intersections rather than plane
+   splits, because the kernel split cannot cross curved section faces. The
+   positive end needs a second reference to the import; production imports are
+   content-addressed source references, so that duplicates a reference, not the
+   bytes. The carving features read no parameter and keep their checkpoints
+   across opening edits. No STEP payload enters Git and header privacy
+   sanitization applies.
 4. Perform exact splitting and construction inside the browser geometry
    worker. Keep feature intent and history in the document model.
 5. Preserve original source data and stable semantic references. Rebuilding
