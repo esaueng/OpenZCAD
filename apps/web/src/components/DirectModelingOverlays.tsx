@@ -181,14 +181,22 @@ export function MoveOverlay({
           }
         }}
       >
-        <div className="extrude-controller-header">
-          <span>
-            <Move3d size={16} aria-hidden="true" />
-            Move / Rotate
-          </span>
-          <button type="button" aria-label="Cancel move" onClick={onCancel}>
-            <X size={15} aria-hidden="true" />
-          </button>
+        <div className="panel-header">
+          <div className="panel-title-row">
+            <h2>
+              <Move3d size={16} aria-hidden="true" />
+              Move / Rotate
+            </h2>
+            <span className="panel-eyebrow">Direct edit</span>
+            <button
+              type="button"
+              className="icon-button panel-close"
+              aria-label="Cancel move"
+              onClick={onCancel}
+            >
+              <X size={14} aria-hidden="true" />
+            </button>
+          </div>
         </div>
         {name !== undefined && onName ? (
           <label className="field move-name">
@@ -263,13 +271,12 @@ export function MoveOverlay({
             </label>
           ))}
         </div>
-        <div className="extrude-actions">
+        <div className="form-actions">
+          <button type="submit" className="primary" disabled={!dirty}>
+            Apply move
+          </button>
           <button type="button" className="secondary" onClick={onCancel}>
             Cancel
-          </button>
-          <button type="submit" className="primary" disabled={!dirty}>
-            <Check size={15} aria-hidden="true" />
-            Apply move
           </button>
         </div>
       </form>
