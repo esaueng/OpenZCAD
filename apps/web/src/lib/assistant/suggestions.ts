@@ -21,9 +21,13 @@ export interface AssistantSuggestionContext {
   autoParameterizeProposal?: CadPatchProposal | null;
   /** The app's measured growing-holder recipe for an imported body, if any. */
   growingHolderProposal?: CadPatchProposal | null;
+  /** The app's measured mounting-bore control for a grown holder, if any. */
+  growingHolderHoleProposal?: CadPatchProposal | null;
 }
 
 export const GROWING_HOLDER_SUGGESTION_LABEL = 'Parameterize the opening';
+export const GROWING_HOLDER_HOLES_SUGGESTION_LABEL =
+  'Parameterize the mounting holes';
 
 const dimensions = (
   values: Partial<
@@ -200,6 +204,15 @@ export function assistantSuggestions(
             id: 'verified-growing-holder',
             label: GROWING_HOLDER_SUGGESTION_LABEL,
             proposal: context.growingHolderProposal
+          }
+        ]
+      : []),
+    ...(context.growingHolderHoleProposal
+      ? [
+          {
+            id: 'verified-growing-holder-holes',
+            label: GROWING_HOLDER_HOLES_SUGGESTION_LABEL,
+            proposal: context.growingHolderHoleProposal
           }
         ]
       : []),

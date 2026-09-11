@@ -26,7 +26,16 @@ export function translated(
  * without smuggling a proprietary glyph or a free-form surface into Git.
  * Requires the translators to be loaded (`loadRemusTranslators`).
  */
-export function syntheticHolderSolid(kernel: RemusKernel): number {
+export interface SyntheticHolderOptions {
+  /** Countersink the mounting bores (default). Plain bores otherwise. */
+  countersink?: boolean;
+}
+
+export function syntheticHolderSolid(
+  kernel: RemusKernel,
+  options: SyntheticHolderOptions = {}
+): number {
+  const countersink = options.countersink ?? true;
   const sideProfile = kernel.makePolygon(
     new Float64Array([
       0, 0, 0, 60, 0, 0, 60, 32, 0, 52, 32, 0, 52, 8, 0, 8, 8, 0, 8, 32, 0, 0,
@@ -40,11 +49,15 @@ export function syntheticHolderSolid(kernel: RemusKernel): number {
       axis: { x: 0, y: 0, z: -1 },
       radius: 2.5,
       depth: 20,
-      style: 'countersink',
-      countersinkRadius: 4.5,
-      countersinkAngle: Math.PI / 2,
       entryExtension: 0.2,
-      exitExtension: 0.2
+      exitExtension: 0.2,
+      ...(countersink
+        ? {
+            style: 'countersink' as const,
+            countersinkRadius: 4.5,
+            countersinkAngle: Math.PI / 2
+          }
+        : { style: 'simple' as const })
     });
   }
   const emboss = translated(kernel, kernel.makeBox(0.4, 6, 4), 8, 14, 7);

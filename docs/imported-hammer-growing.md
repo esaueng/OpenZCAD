@@ -58,6 +58,35 @@ by `AI_PATCH_GROWING_HOLDER_ENABLED`; the verified suggestion needs no flag.
 New proposals use this operation; `add_imported_opening_recipe` remains only
 for the older fixed-outside-width recipe.
 
+## Mounting holes
+
+`matchGrowingHolderHoles` finds the two through bores that mirror each other
+about the center on the carved ends — measured from the ends' derived
+topology, perpendicular to the opening — and `growingHolderHoleCommand`
+drives both by one parameter (`hole_diameter`) with a through-hole resize on
+each end, placed in history right after the end is carved and before it
+moves. The edit therefore resolves against geometry that never changes with
+the opening, and the bores stay aligned with their arms at every width. The
+assistant operation `add_growing_holder_hole_control` carries the measured
+bores verbatim and compilation refuses any value the document does not
+measure; the app offers it as the verified suggestion "Parameterize the
+mounting holes" once a holder exists and has no control yet.
+
+The Ø9 countersink keeps its diameter. Widening the bore runs the cutter
+through the whole extent of the body along the bore axis when the short
+cutter is refused (its end cap would lie inside the cone), so the countersink
+gets shallower; shrinking adds a ring inside the bore and leaves the
+countersink alone. Two kernel limits remain and both surface as feature
+warnings rather than wrong geometry: the kernel refuses to widen a countersink
+that breaks out of a face (the synthetic bracket's does; the hammer's does
+not), and on the hammer it cannot shrink at all — a ring fused onto the
+coaxial bore comes back as the untouched body and filling the bore degrades
+to a mesh, so "The hole kept its original diameter" is reported. The
+synthetic bracket shrinks fine.
+The opening's minimum is unchanged by the bore size: the ends meet at their
+cut faces before the bores can reach each other, so there is no coupled
+clearance limit to recompute.
+
 The union feature carries the recipe as JSON under the
 `openzcad.growingHolderRecipe` metadata key. `growingHolderHistories` reads it
 back and verifies every implied feature against what the compiler emits; a
