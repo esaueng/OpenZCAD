@@ -191,6 +191,7 @@ interface ViewerShellProps {
   cancelDirectManipulationRef: MutableRefObject<(() => boolean) | null>;
   openExactEntryRef: MutableRefObject<(() => boolean) | null>;
   edgeHandle: EdgeHandleTarget | null;
+  edgeHandleValue?: number | null;
   onEdgeRadiusPreview(size: number): void;
   onEdgeCommit(size: number): void;
   onEdgeCancel(): void;
@@ -314,6 +315,7 @@ export function ViewerShell({
   cancelDirectManipulationRef,
   openExactEntryRef,
   edgeHandle,
+  edgeHandleValue = null,
   onEdgeRadiusPreview,
   onEdgeCommit,
   onEdgeCancel,
@@ -472,6 +474,7 @@ export function ViewerShell({
         cancelDirectManipulationRef={cancelDirectManipulationRef}
         openExactEntryRef={openExactEntryRef}
         edgeHandle={edgeHandle}
+        edgeHandleValue={edgeHandleValue}
         onEdgeRadiusPreview={onEdgeRadiusPreview}
         onEdgeCommit={onEdgeCommit}
         onEdgeCancel={onEdgeCancel}
