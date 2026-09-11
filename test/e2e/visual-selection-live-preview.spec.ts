@@ -37,7 +37,9 @@ async function armChamferedTopCapOffset(page: Page) {
   await inspector.getByLabel('Distance', { exact: true }).fill('1');
   await inspector.getByRole('button', { name: /^Create/ }).click();
   await expectConsumedBodyCount(page, 1);
-  await expect(page.locator('.body-row', { hasText: 'Chamfer' })).toBeVisible();
+  await expect(
+    page.locator('.body-row', { hasText: 'Cylinder Body' })
+  ).toBeVisible();
 
   const canvas = page.locator('.viewer-host canvas');
   await expect(canvas).toBeVisible({ timeout: 120_000 });
