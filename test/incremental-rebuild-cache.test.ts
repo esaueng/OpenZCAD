@@ -252,7 +252,7 @@ describe('incremental prefix rebuild cache', { timeout: 120_000 }, () => {
     }
   });
 
-  it('conservatively replays non-import features when the parameter scope changes', async () => {
+  it('replays sketch-bearing features when the parameter scope changes and keeps literal-only ones', async () => {
     const events: RebuildCacheEvent[] = [];
     const adapter = await createExactKernelAdapter({
       onRebuildCacheEvent: (event) => events.push(event)
@@ -261,16 +261,17 @@ describe('incremental prefix rebuild cache', { timeout: 120_000 }, () => {
       const { document } = chainDocument();
       await adapter.syncDocument(document);
 
-      // No feature changed, but any expression may reference any parameter
-      // by name, so non-import feature digests retain the full scope.
+      // No feature changed. The literal box and its literal move read no
+      // parameter, so their checkpoints survive; the sketch, extrusion and
+      // pattern may reference any parameter by name, so they replay.
       const withParam = setParameter(document, { name: 'w', expression: '12' });
       const derived = await adapter.syncDocument(withParam);
       expect(events.at(-1)).toEqual({
-        kind: 'full-rebuild',
-        replayed: 5,
-        restored: 0,
-        remeasured: 3,
-        reusedMeasurements: 0
+        kind: 'prefix-restore',
+        replayed: 3,
+        restored: 2,
+        remeasured: 2,
+        reusedMeasurements: 1
       });
       expect(normalized(derived)).toEqual(
         normalized(await freshDerived(withParam))
