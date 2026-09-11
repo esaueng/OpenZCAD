@@ -1374,8 +1374,55 @@ export interface BodyTopology {
   recognizedImportedFeatures?: RecognizedImportedFeature[];
   /** Bounded imported-body dimensions with a successful changed-value proof. */
   opposingPlanarFacePairs?: OpposingPlanarFacePair[];
+  /**
+   * The body's symmetric straight-section opening, measured by the kernel
+   * adapter for imported single-solid bodies. A recognized value is the
+   * measured recipe the growing-holder compiler consumes; anything else says
+   * why the body cannot be grown that way.
+   */
+  recognizedOpening?: OpeningRecognition;
   lineageDiagnostics?: TopologyLineageDiagnostic[];
 }
+
+export type OpeningAxis = 'x' | 'y' | 'z';
+
+/** Everything a growing-holder recipe needs except a name, body and parameter. */
+export interface RecognizedOpening {
+  axis: OpeningAxis;
+  envelope: { min: Vector3; max: Vector3 };
+  /** Coordinates along `axis` of the two cuts bounding the straight section. */
+  cuts: [number, number];
+  /** Coordinate along `axis` the two ends move symmetrically about. */
+  center: number;
+  sourceOpening: number;
+  minimumOpening: number;
+  /** Closed numeric line/arc profile of the straight section, in the sketch frame. */
+  section: SketchObjectData[];
+}
+
+export interface OpeningCandidate {
+  axis: OpeningAxis;
+  faceA: number;
+  faceB: number;
+  opening: number;
+  /** Coordinates of the two inner faces along the axis, negative side first. */
+  innerFaces: [number, number];
+  overlapArea: number;
+}
+
+export interface OpeningEvidence {
+  candidate: OpeningCandidate;
+  /** Offset of the reflection plane that confirmed the center, and its coverage. */
+  symmetry: { planeOffset: number; analyticCoverage: number };
+  /** Longest interval between the inner faces whose section never changes. */
+  straightRun: [number, number];
+  sectionEdges: number;
+}
+
+export type OpeningRecognition =
+  | { status: 'recognized'; opening: RecognizedOpening; evidence: OpeningEvidence }
+  | { status: 'ambiguous'; reason: string; candidates: OpeningCandidate[] }
+  | { status: 'unsupported'; reason: string };
 
 export interface TopologyLineageDiagnostic {
   kind: 'edge' | 'face' | 'body';
