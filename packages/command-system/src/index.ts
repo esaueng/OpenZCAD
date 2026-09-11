@@ -1,5 +1,17 @@
 import { importedOpeningCommand } from './imported-opening';
 export { importedOpeningCommand } from './imported-opening';
+export {
+  GROWING_HOLDER_RECIPE_METADATA_KEY,
+  growingHolderCommand,
+  growingHolderHistories,
+  growingHolderPlan,
+  validateGrowingHolderRecipe,
+  type GrowingHolderCompilation,
+  type GrowingHolderHistory,
+  type GrowingHolderPlan,
+  type GrowingHolderRecipe,
+  type OpeningAxis
+} from './growing-holder';
 import {
   createId,
   assertDocumentHistory,
