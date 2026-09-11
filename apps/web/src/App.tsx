@@ -102,6 +102,7 @@ import type {
   AccountDeletionScope,
   ArtifactRecord,
   BodyId,
+  BodyTopology,
   BodyRepresentation,
   EntityId,
   FeatureId,
@@ -182,6 +183,8 @@ import {
   STALE_CHUNK_MESSAGE
 } from './lib/staleChunk';
 import { watchBuildVersion } from './lib/buildVersionWatch';
+import { primitiveDimensionLabel } from './lib/primitiveDimensionLabel';
+import { newBlendFacePick } from './lib/blendRearm';
 import { exactEntryShortcut, isTypingTarget } from './lib/exactEntryShortcut';
 import { DeferredExactEntry } from './lib/deferredExactEntry';
 import type { SketchSolveStatus } from './components/SketchToolRail';
@@ -1600,6 +1603,17 @@ export function App() {
   const [tool, setTool] = useState<ToolId | null>(null);
   const [modelingTargetBodyId, setModelingTargetBodyId] =
     useState<BodyId | null>(null);
+  /** The fillet/chamfer form's current size, mirrored onto the edge handle. */
+  const [edgeFormSize, setEdgeFormSize] = useState<number | null>(null);
+  /**
+   * A fillet that just landed from an edge drag: its new blend face is picked
+   * on the next topology so the radius stays live instead of the gesture
+   * ending with nothing to grab.
+   */
+  const pendingBlendRearmRef = useRef<{
+    bodyId: BodyId;
+    before: BodyTopology['faces'] | undefined;
+  } | null>(null);
   useEffect(() => {
     if (!modelingOperationPicksFaces(tool)) {
       setFormFacePickTarget(null);
@@ -2734,6 +2748,7 @@ export function App() {
   ) {
     if (!value || busy) {
       edgeFormPreview.clear();
+      setEdgeFormSize(null);
       return;
     }
     try {
@@ -2744,12 +2759,12 @@ export function App() {
       if (!bodyId || !managerRef.current) return;
       command.validate(managerRef.current.document);
       edgeFormCandidate.current = { command, bodyId };
-      edgeFormPreview.request(
-        resolveParamValue(
-          value.size,
-          getParameterScope(managerRef.current.document).scope
-        )
+      const size = resolveParamValue(
+        value.size,
+        getParameterScope(managerRef.current.document).scope
       );
+      setEdgeFormSize(size);
+      edgeFormPreview.request(size);
     } catch (error) {
       edgeFormPreview.clear();
       setStatus(errorMessage(error, 'Unable to preview this size.'));
@@ -2810,6 +2825,7 @@ export function App() {
       ('ids' in command.payload ? command.payload.ids?.bodyId : undefined);
     if (!bodyId || !doc) return;
     edgeFormPreview.clear();
+    setEdgeFormSize(null);
     void executeValidatedFeature(command, {
       featureName: value.name,
       resultBodyId: bodyId,
@@ -5273,6 +5289,7 @@ export function App() {
   function cancelPanel() {
     extrudeEditRequest.current += 1;
     edgeFormPreview.clear();
+    setEdgeFormSize(null);
     exactEntryQueue.cancel();
     setFeatureFormError(null);
     setFormFacePickTarget(null);
@@ -9039,6 +9056,23 @@ export function App() {
         : false;
   }
 
+  // The blend face a drag-committed fillet produced is picked as soon as the
+  // rebuilt topology arrives, which re-arms the radius handle on it.
+  useEffect(() => {
+    const pending = pendingBlendRearmRef.current;
+    if (!pending || !exactGeometryReady) return;
+    const faces = representations[pending.bodyId]?.topology?.faces;
+    if (!faces || faces === pending.before) return;
+    pendingBlendRearmRef.current = null;
+    const pick = newBlendFacePick(pending.bodyId, pending.before, faces);
+    if (pick) {
+      handleSelectTopologyFromViewer(pick.selection, false, pick.detail);
+    }
+    // handleSelectTopologyFromViewer is a per-render closure over the same
+    // state this effect already lists.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [representations, exactGeometryReady]);
+
   function handleFormFacePick(
     operation: FacePickOperation,
     selection: TopologySelection | null
@@ -11805,11 +11839,21 @@ export function App() {
     const op = interaction.op;
     const resultBodyId =
       command.payload.ids?.bodyId ?? command.payload.targetBodyId;
+    const facesBefore =
+      representations[command.payload.targetBodyId]?.topology?.faces;
     void executeValidatedDirectEdit(
       command,
       resultBodyId,
       `${op === 'fillet' ? 'Filleted' : 'Chamfered'} ${command.payload.edgeHashes.length} edge${command.payload.edgeHashes.length === 1 ? '' : 's'} at ${rounded} ${doc?.units ?? ''}.`,
-      rounded
+      rounded,
+      op === 'fillet'
+        ? () => {
+            pendingBlendRearmRef.current = {
+              bodyId: resultBodyId,
+              before: facesBefore
+            };
+          }
+        : undefined
     );
   }
 
@@ -12301,7 +12345,12 @@ export function App() {
       return {
         command: plan.command,
         bodyId,
-        successMessage: `${plan.primitive.name} ${plan.dimension} set to ${formatNumber(plan.value)} ${base.units}.`,
+        successMessage: `${plan.primitive.name} ${primitiveDimensionLabel(
+          plan.primitive.data.featureKind === 'primitive'
+            ? plan.primitive.data.primitiveKind
+            : undefined,
+          plan.dimension
+        ).toLowerCase()} set to ${formatNumber(plan.value)} ${base.units}.`,
         validationTargets: affectedFeatureTargets(
           plan.command.commands ? plan.command.apply(base) : base,
           plan.primitive.featureId
@@ -14895,6 +14944,7 @@ export function App() {
             cancelDirectManipulationRef={cancelDirectManipulationRef}
             openExactEntryRef={openExactEntryRef}
             edgeHandle={modelingLocked ? null : edgeHandleTarget}
+            edgeHandleValue={edgeFormSize}
             onEdgeRadiusPreview={(size) => edgePreview.request(size)}
             onEdgeCommit={handleEdgeCommit}
             onEdgeCancel={handleEdgeCancel}
@@ -15625,6 +15675,7 @@ export function App() {
                   )
                 }
                 onPreviewEdgeModifier={previewEdgeForm}
+                onEdgeModifierSize={setEdgeFormSize}
                 onCreateEdgeModifier={(kind, value) =>
                   applyEdgeForm(null, kind, value)
                 }
