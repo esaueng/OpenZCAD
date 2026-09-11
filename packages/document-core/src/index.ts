@@ -861,6 +861,22 @@ export function findBodyNode(
   );
 }
 
+/**
+ * The name a body keeps through the features that reshape it. A fillet, a
+ * hole or a pattern does not turn "Box Body" into a body called "Hole": the
+ * feature is named in History, the body stays the thing the user made. Only
+ * a body with no single source (a primitive, an extrude, a loft) takes its
+ * name from its feature.
+ */
+export function derivedBodyName(
+  document: ProjectDocument,
+  sourceBodyId: BodyId | undefined,
+  fallback: string
+): string {
+  const source = sourceBodyId ? findBodyNode(document, sourceBodyId) : null;
+  return source?.name ?? fallback;
+}
+
 export function listFeaturesInOrder(document: ProjectDocument): FeatureNode[] {
   const features = listNodesByKind(document, 'feature');
   const byId = new Map(features.map((feature) => [feature.featureId, feature]));
@@ -1350,9 +1366,7 @@ function validateSketchConstraint(
         'circle'
       ]);
       if ((a === 'line') === (b === 'line')) {
-        throw new Error(
-          'A tangent constraint pairs one line with one circle.'
-        );
+        throw new Error('A tangent constraint pairs one line with one circle.');
       }
       break;
     }
@@ -1379,7 +1393,10 @@ function validateSketchConstraint(
     case 'angle':
       requireConstrainableObject(document, sketch, data.a, ['line']);
       requireConstrainableObject(document, sketch, data.b, ['line']);
-      if (typeof data.valueDeg === 'number' && !Number.isFinite(data.valueDeg)) {
+      if (
+        typeof data.valueDeg === 'number' &&
+        !Number.isFinite(data.valueDeg)
+      ) {
         throw new Error('Angle must be a finite number of degrees.');
       }
       break;
@@ -1632,7 +1649,13 @@ export function booleanBodies(
   next.nodes[bodyNodeId] = {
     id: bodyNodeId,
     kind: 'body',
-    name: `${input.name} Body`,
+    // The result is still the base body with the others merged in or cut
+    // away, so it keeps the base body's name.
+    name: derivedBodyName(
+      document,
+      input.targetBodyIds[0],
+      `${input.name} Body`
+    ),
     parentId: next.activePartId,
     revisionId: null,
     bodyId,
@@ -1765,10 +1788,16 @@ function addBodyResultFeature(
     featureKind,
     data
   };
+  const sourceBodyId = 'targetBodyId' in data ? data.targetBodyId : undefined;
   next.nodes[bodyNodeId] = {
     id: bodyNodeId,
     kind: 'body',
-    name,
+    // A mirror leaves its source in place, so the copy needs a name of its
+    // own; every other kind replaces its source and keeps the source's name.
+    name:
+      featureKind === 'mirror'
+        ? `${derivedBodyName(document, sourceBodyId, name)} mirror`
+        : derivedBodyName(document, sourceBodyId, name),
     parentId: next.activePartId,
     revisionId: null,
     bodyId,
@@ -1831,11 +1860,12 @@ export function addSplitFeature(
     exportableStep: true,
     metadata: { color: featureColor('split') }
   });
-  next.nodes[bodyNodeId] = bodyNode(bodyNodeId, bodyId, input.name);
+  const sourceName = derivedBodyName(document, input.targetBodyId, input.name);
+  next.nodes[bodyNodeId] = bodyNode(bodyNodeId, bodyId, sourceName);
   next.nodes[ids.secondBodyNodeId] = bodyNode(
     ids.secondBodyNodeId,
     ids.secondBodyId,
-    `${input.name} (back)`
+    `${sourceName} (back)`
   );
   next.featureOrder.push(featureId);
   next.bodyOrder.push(bodyId, ids.secondBodyId);
@@ -2712,7 +2742,10 @@ export function staleDirectEditFaceRepair(
     .find((entry) => entry.startsWith(prefix))
     ?.slice(prefix.length)
     .trim();
-  if (!warning || !STALE_FACE_WARNINGS.some((pattern) => pattern.test(warning))) {
+  if (
+    !warning ||
+    !STALE_FACE_WARNINGS.some((pattern) => pattern.test(warning))
+  ) {
     return null;
   }
   return {
@@ -2822,9 +2855,7 @@ export function repairedDirectEditOperation(
         !geometry.axisStart ||
         !geometry.axisEnd
       ) {
-        throw new Error(
-          'Pick a through-hole wall to repair this hole resize.'
-        );
+        throw new Error('Pick a through-hole wall to repair this hole resize.');
       }
       return {
         kind: 'resize-through-hole',
@@ -3116,7 +3147,9 @@ const EXPRESSION_FUNCTIONS: Record<
         throw new Error('require_min needs a finite value and minimum.');
       }
       if (value! < minimum!) {
-        throw new Error(`Parameter value ${value} must be at least ${minimum}.`);
+        throw new Error(
+          `Parameter value ${value} must be at least ${minimum}.`
+        );
       }
       return value!;
     }
