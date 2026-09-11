@@ -42,6 +42,22 @@ confirming symmetry, no straight run, a hollow or curved-edged section is
 refused with the reason. The kernel's `section` query is deliberately not
 used: on NURBS-bearing solids it reports silhouettes, not cross-sections.
 
+The kernel adapter runs `recognizeOpening` for every live single-solid
+imported body during the exact sync and publishes the result as
+`topology.recognizedOpening`, so the assistant digest carries either the
+measured recipe or the reason there is none. The assistant operation
+`add_growing_holder_recipe` names the target body and the parameter and
+copies that `opening` verbatim; `validateCadPatchProposalAgainstDigest`
+refuses any value that is not byte-identical to the digest's measurement, the
+same binding direct edits have to their imported-feature proofs. The app also
+offers the measured recipe as the verified suggestion "Parameterize the
+opening" (`createGrowingHolderProposal`), which bypasses the provider and
+passes the same exact preflight before it can be applied as one undoable
+transaction. For assistant-authored proposals the operation is rollout-gated
+by `AI_PATCH_GROWING_HOLDER_ENABLED`; the verified suggestion needs no flag.
+New proposals use this operation; `add_imported_opening_recipe` remains only
+for the older fixed-outside-width recipe.
+
 The union feature carries the recipe as JSON under the
 `openzcad.growingHolderRecipe` metadata key. `growingHolderHistories` reads it
 back and verifies every implied feature against what the compiler emits; a
