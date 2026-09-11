@@ -1,4 +1,5 @@
 import { Component, type ErrorInfo, type ReactNode } from 'react';
+import { isChunkLoadError, STALE_CHUNK_MESSAGE } from '../lib/staleChunk';
 
 interface ErrorBoundaryProps {
   children: ReactNode;
@@ -9,6 +10,7 @@ interface ErrorBoundaryProps {
 
 interface ErrorBoundaryState {
   failed: boolean;
+  staleChunk?: boolean;
 }
 
 export class ErrorBoundary extends Component<
@@ -17,8 +19,8 @@ export class ErrorBoundary extends Component<
 > {
   override state: ErrorBoundaryState = { failed: false };
 
-  static getDerivedStateFromError(): ErrorBoundaryState {
-    return { failed: true };
+  static getDerivedStateFromError(error: unknown): ErrorBoundaryState {
+    return { failed: true, staleChunk: isChunkLoadError(error) };
   }
 
   override componentDidCatch(error: Error, info: ErrorInfo) {
@@ -42,7 +44,9 @@ export class ErrorBoundary extends Component<
       <section className="error-boundary" role="alert">
         <strong>{this.props.label} could not be rendered.</strong>
         <span>
-          Your document is still available. Reload to recover this panel.
+          {this.state.staleChunk
+            ? STALE_CHUNK_MESSAGE
+            : 'Your document is still available. Reload to recover this panel.'}
         </span>
         <button type="button" onClick={() => window.location.reload()}>
           Reload workspace
