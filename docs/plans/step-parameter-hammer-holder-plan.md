@@ -60,7 +60,13 @@ the same PR that lands Phase 2 so there is one plan of record.
   fixed-outside-width recipe qualified at 46 and 50 mm only.
 - **Phase 0 done (PR #282, 2026-09-11):** the pin is Remus `main` f1968568
   (2.130.14) and the docs agree with the lockfile.
-- **Phase 3 (PR 3):** `recognizeOpening` produces the recipe from the solid;
+- **Phase 4 (PR 4):** recognition runs in the worker for imported bodies and
+  lands in the digest; `add_growing_holder_recipe` carries the target body,
+  the parameter and the measured opening, validated byte-for-byte against the
+  digest; the app offers it as the verified suggestion "Parameterize the
+  opening"; text on attachments is declared content, not instruction. Face
+  highlighting of the affected regions (step 4) is not done yet.
+- **Phase 3 (PR 3, merged as #284):** `recognizeOpening` produces the recipe from the solid;
   on the hammer it equals the hand-authored one exactly, and the synthetic
   bracket is recognized in all three placements, with a pocket splitting the
   run and an E-shape reported as ambiguous. The kernel `section` query

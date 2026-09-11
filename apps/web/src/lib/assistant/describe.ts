@@ -88,6 +88,8 @@ export function describeOperation(operation: CadPatchOperation): string {
       ].filter(Boolean);
       return `${operation.name} — ${describeBodyRef(operation.targetBodyId)}: ${moves.length > 0 ? moves.join(', ') : 'no change'}`;
     }
+    case 'add_growing_holder_recipe':
+      return `${operation.name} — grow the measured ${value(operation.opening.sourceOpening)} opening of ${describeBodyRef(operation.targetBodyId)} along ${operation.opening.axis}, driven by ${operation.parameter}`;
     case 'add_direct_edit':
       return `${operation.name} — ${operation.operation.kind.replaceAll('-', ' ')} on ${describeBodyRef(operation.targetBodyId)}`;
     case 'add_edge_modifier':
