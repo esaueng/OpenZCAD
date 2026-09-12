@@ -90,4 +90,31 @@ describe('finish tool selection order', () => {
       })
     ).toBeNull();
   });
+
+  it('gates profile tools on closed profiles, not on any sketch', () => {
+    const openOnly = {
+      sketchCount: 1,
+      closedProfileSketchCount: 0,
+      liveBodyCount: 0,
+      exactGeometryReady: true,
+      hasEdgeSelected: false
+    };
+    expect(toolDisabledReason('extrude', openOnly)).toBe(
+      'Close a sketch profile first'
+    );
+    expect(toolDisabledReason('revolve', openOnly)).toBe(
+      'Close a sketch profile first'
+    );
+    expect(toolDisabledReason('sweep', openOnly)).toBe(
+      'Create a closed sketch profile first'
+    );
+    // Moving an open chain is still a real operation.
+    expect(toolDisabledReason('transform', openOnly)).toBeNull();
+    expect(
+      toolDisabledReason('extrude', {
+        ...openOnly,
+        closedProfileSketchCount: 1
+      })
+    ).toBeNull();
+  });
 });
