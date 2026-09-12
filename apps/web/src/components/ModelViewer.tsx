@@ -3596,6 +3596,10 @@ export function ModelViewer({
       const detail = (
         event as CustomEvent<{
           resolve?: (value: {
+            sectionCaps: {
+              triangles: number;
+              bounds: { min: number[]; max: number[] };
+            }[];
             bodyFaces: {
               depthTest: boolean;
               depthWrite: boolean;
@@ -3673,7 +3677,26 @@ export function ModelViewer({
         });
         return states;
       };
+      const sectionCaps: {
+        triangles: number;
+        bounds: { min: number[]; max: number[] };
+      }[] = [];
+      bodyGroup.traverse((child) => {
+        if (
+          child.userData.sectionCap !== true ||
+          !(child instanceof THREE.Mesh)
+        )
+          return;
+        const geometry = child.geometry as THREE.BufferGeometry;
+        geometry.computeBoundingBox();
+        const bounds = geometry.boundingBox!;
+        sectionCaps.push({
+          triangles: geometry.getAttribute('position').count / 3,
+          bounds: { min: bounds.min.toArray(), max: bounds.max.toArray() }
+        });
+      });
       detail.resolve({
+        sectionCaps,
         bodyFaces,
         bodyEdges: lineStates(bodyGroup),
         sketchLines: lineStates(regionGroup)

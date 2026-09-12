@@ -14,11 +14,13 @@ export interface DirectEditDirection {
 }
 
 /**
- * Lit body meshes only. Overlay meshes (hover fills, region shading, gizmo
+ * Authoritative body meshes only; display-only section caps have no topology.
+ * Overlay meshes (hover fills, region shading, gizmo
  * handles) use basic materials and must never pick up emissive highlighting.
  */
 export function isViewerMesh(object: THREE.Object3D): object is ViewerMesh {
   return (
+    object.userData.sectionCap !== true &&
     object instanceof THREE.Mesh &&
     (object.material instanceof THREE.MeshStandardMaterial ||
       object.material instanceof THREE.MeshPhongMaterial)
