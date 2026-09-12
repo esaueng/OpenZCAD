@@ -135,3 +135,13 @@ are not additional passing feature tests. Do not bypass strict validation or
 claim that a direction reversal fixes all failures. Native Rust comparison,
 actual browser-document export, original H3 inference state, exact hole
 positioning and final STEP round-trip remain gaps.
+
+## Synthetic holder STEP fixtures
+
+`synthetic-holder.step` (Ø5 countersunk bores) and `synthetic-holder-open.step`
+(no bores) are the kernel's own export of `test/support/synthetic-holder.ts`.
+`test/synthetic-holder-fixtures.test.ts` fails when they drift from the
+builder; regenerate with `OPENZCAD_WRITE_HOLDER_FIXTURES=1` on that test.
+`test/e2e/growing-holder.spec.ts` drives the fresh-import-to-export
+walkthrough of the growing-holder plan on them, so the private hammer never
+enters CI.
