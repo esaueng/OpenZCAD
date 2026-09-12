@@ -1520,6 +1520,35 @@ test('preflights and drills a through hole into the top face', async ({
   await expect(page.locator('.body-row.consumed')).toContainText('Box Body');
   await expectBodyCount(page, 1);
   await expect(page.getByRole('contentinfo')).toContainText('warnings0');
+
+  // A hole is editable after creation: its row reopens the same form,
+  // prefilled, and Apply patches the feature instead of adding another.
+  await page.locator('.feature-row-main', { hasText: 'Hole' }).click();
+  const inspector = page.getByRole('region', { name: 'Feature inspector' });
+  const volumeBefore = await inspector.getByText(/mm³/).first().textContent();
+  await inspector.getByRole('button', { name: 'Edit hole' }).click();
+  await expect(
+    page.getByRole('textbox', { name: 'Diameter', exact: true })
+  ).toHaveValue('5');
+  await expect(entry.getByRole('button', { name: /Top face/ })).toHaveAttribute(
+    'aria-pressed',
+    'true'
+  );
+  await page.getByRole('textbox', { name: 'Diameter', exact: true }).fill('8');
+  await page.getByRole('button', { name: 'Check exact result' }).click();
+  await expect(
+    page.getByRole('status').filter({ hasText: 'Exact preflight passed' })
+  ).toBeVisible({ timeout: 20_000 });
+  await page.getByRole('button', { name: 'Create hole' }).click();
+  await expect(page.getByRole('contentinfo')).toContainText('Edited Hole.');
+  await expect(page.locator('.feature-row', { hasText: /^Hole/ })).toHaveCount(
+    1
+  );
+  await expectBodyCount(page, 1);
+  await page.locator('.feature-row-main', { hasText: 'Hole' }).click();
+  const volumeAfter = await inspector.getByText(/mm³/).first().textContent();
+  expect(volumeAfter).not.toEqual(volumeBefore);
+  await expect(page.getByRole('contentinfo')).toContainText('warnings0');
   expect(consoleErrors).toEqual([]);
 });
 
