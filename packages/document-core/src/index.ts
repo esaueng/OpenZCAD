@@ -2675,6 +2675,20 @@ export function updateFeature(
   ) {
     delete feature.data.targetBodyId;
   }
+  // A fillet or chamfer whose edge set changes cannot keep references that
+  // only covered the previous set: the commit refuses a partial list, and a
+  // hash-only selection resolves by fingerprint until the lineage proves a
+  // fresh list. Clear them unless the patch supplies the matching list.
+  if (
+    (feature.data.featureKind === 'fillet' ||
+      feature.data.featureKind === 'chamfer') &&
+    input.data &&
+    'edgeHashes' in input.data &&
+    input.data.edgeHashes !== undefined &&
+    input.data.edgeReferences === undefined
+  ) {
+    delete feature.data.edgeReferences;
+  }
   next.version += 1;
   return next;
 }

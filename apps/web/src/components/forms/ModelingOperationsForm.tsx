@@ -44,6 +44,8 @@ export interface ModelingOperationsFormProps {
   pathOptions?: ModelingPathOption[];
   initialTarget?: BodyId;
   initial?: ModelingOperationFormState;
+  /** The form reopens an existing feature; the submit reads Apply, not Create. */
+  editing?: boolean;
   /**
    * The latest face the user clicked in the viewport while this form was
    * open. A new object per click: shell and draft toggle the face in their
@@ -408,6 +410,7 @@ export function ModelingOperationsForm({
   profileOptions = [],
   pathOptions = [],
   initialTarget,
+  editing = false,
   initial,
   viewportFacePick,
   unsupportedReason,
@@ -581,7 +584,7 @@ export function ModelingOperationsForm({
     effectivePreflight.status === 'pending'
       ? 'Checking exact result…'
       : effectivePreflight.status === 'ready'
-        ? `Create ${OPERATION_LABELS[operation].toLowerCase()}`
+        ? `${editing ? 'Apply' : 'Create'} ${OPERATION_LABELS[operation].toLowerCase()}`
         : effectivePreflight.status === 'refused'
           ? 'Recheck exact result'
           : 'Check exact result';
