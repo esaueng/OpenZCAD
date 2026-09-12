@@ -31,7 +31,35 @@ declares are not needed. R0's measurement probes remain in use. R5 and the
 `.shapr` evidence path stay deferred. Update the older plan's status line in
 the same PR that lands Phase 2 so there is one plan of record.
 
-## Current position (verified 2026-09-11)
+## Current disposition (2026-09-12, OpenZCAD `28d1551f`)
+
+— partial: the supported holder workflow is merged; full production acceptance
+and expansion remain. The [supported-controls guide](../growing-holder-guide.md)
+is shipped. The dated investigation notes below preserve earlier findings and
+are not the current work queue.
+
+| Deliverable | Merged evidence | Remainder |
+| --- | --- | --- |
+| Phase 0: pin provenance | #282, both packages at `f1968568` (2.130.14) | Future pins need their own validation. |
+| Phase 1: performance | #296 records improved warm rebuilds | First edit after reload measured 18–31 s; broader kernel performance work remains. |
+| Phase 2: production recipe and preview | #283 | Supported descriptor families only. |
+| Phase 3: recognition | #284 | Off-axis rotation refuses; guided selection fallback remains unqualified here. |
+| Phase 4: assistant flow | #286 | Affected-region highlighting remains. |
+| Phase 5: bore and height controls | #288 and #293 | Geometry-dependent refusal limits remain; height is not offered on the drilled CI bracket. |
+| Phase 6: preview lifecycle | #296 | Bore changes remain exact-only; no universal sub-100 ms claim. |
+| Phase 7: acceptance | #300; browser synthetic import-to-export plus Vitest backup/STEP/STL coverage | Other units, ambiguous drawings and worker interruption remain open. |
+| Phase 8: release and expansion | #300 ships the guide | Complete private-source walkthrough on the deployed release and further holder families remain unverified here. |
+
+Evidence: `test/e2e/growing-holder.spec.ts`,
+`test/growing-holder-recipe.test.ts`, `test/growing-holder-holes.test.ts`,
+`test/synthetic-holder-fixtures.test.ts`, and the recorded local browser
+walkthrough below. Automated synthetic acceptance is not live-site acceptance
+of the private source.
+
+## Investigation and delivery record (2026-09-11–12)
+
+The first six bullets describe the pre-#282 baseline; subsequent entries
+record how it was superseded.
 
 - The prepared growing-holder project works. Opening changes move intact arms
   and mounting holes together, preserving arm thickness, hole sizes, lettering,
@@ -116,11 +144,13 @@ the same PR that lands Phase 2 so there is one plan of record.
   with a circular bore loop cannot be split by a plane, so the drilled bracket
   has no height in CI; the hole-free bracket and the hammer do.
 - **Phase 5, hole diameter (PR 5, merged as #288):** both mirrored bores are driven by one
-  parameter through the existing through-hole resize on the carved ends;
+  parameter through the existing through-hole resize; the later browser
+  follow-up moved its references to the unmoving import before each carve;
   widening a countersunk bore runs the cutter through the countersink, which
   keeps its Ø9; the minimum opening is independent of the bore. On the
   hammer the kernel refuses to shrink the bore (coaxial fuse returns the
-  untouched body) and reports it; the bracket shrinks. Height remains open.
+  untouched body) and reports it; the bracket shrinks. Height subsequently
+  landed in #293, with the limits recorded above.
 - **Phase 4 (PR 4, merged as #286):** recognition runs in the worker for imported bodies and
   lands in the digest; `add_growing_holder_recipe` carries the target body,
   the parameter and the measured opening, validated byte-for-byte against the
@@ -425,7 +455,9 @@ productionization (Phase 2) then proceed independently. Recognition (3) depends
 on the descriptor interface from 2; the assistant flow (4) depends on 3; hole
 and height controls each need their own exact proof before combined acceptance.
 
-PR sequence: 0. Remus re-pin to merged `main` plus doc correction.
+Original PR sequence (implementation status is in the table above):
+
+0. Remus re-pin to merged `main` plus doc correction.
 
 1. Validated Remus performance integration (may be several narrow pins).
 2. Descriptor-to-history growing-holder compiler, end-piece persistence, and
@@ -438,7 +470,8 @@ PR sequence: 0. Remus re-pin to merged `main` plus doc correction.
 8. Production acceptance and user documentation.
 
 Every PR branches from `origin/main`, never from a stale local `main` or an
-existing feature worktree. The immediate OpenZCAD tasks are PR 0 and PR 2. The
-primary next milestone is a fresh STEP import becoming an opening-width
-parameter through the assistant, without the prepared project. Do not delay
-that milestone to attempt universal feature-tree reconstruction.
+existing feature worktree. PR 0 and PR 2 are complete, and fresh-import
+parameterization now ships for the supported family. Next acceptance work is
+the remaining Phase 7 cases and the full private-source walkthrough on the
+deployed release (Phase 8); investigate cold first-edit latency separately.
+Do not expand to universal feature-tree reconstruction to close these rows.

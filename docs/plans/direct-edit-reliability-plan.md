@@ -1,9 +1,14 @@
 # Direct-edit reliability plan
 
-**Status: Phase A in progress (2026-09-01).** Phase A ships the measurement
-instruments — a local interaction diagnostics log and a replayable refusal
-corpus — before any behaviour changes. Later phases are gated on what those
-instruments record.
+**Status: partial (reconciled 2026-09-12).** Phase A instrumentation landed
+in #170. Phase B routing, lineage pins, preview continuity and refusal wording
+have subsequent deliveries (#172, #177, #178, #181, #187 and #189), with
+scope and remaining cases recorded in their entries below. Phase C has
+measurement-based closures and hover dwell (#192); its headed picking gate
+remains open. This plan is no longer waiting to start Phase A. Original source
+snapshots and measurements below retain their dates; the newer interaction
+queue is in [the September 12 review](../reviews/design-review-2026-09-12.md#9-roadmap).
+No fresh interaction-log session or broad kernel qualification is claimed.
 
 Goal: make direct manipulation — drag a face to offset it, drag an edge to
 fillet or chamfer, resize a cylinder — succeed on the geometry people actually
