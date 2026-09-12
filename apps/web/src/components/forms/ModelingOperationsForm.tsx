@@ -430,6 +430,7 @@ export function ModelingOperationsForm({
     status: 'idle'
   });
   const preflightEpoch = useRef(0);
+  const checkedSubmission = useRef<string | null>(null);
   const consumedFacePick = useRef<FormFacePick | null>(null);
   const pickTarget =
     state.operation === 'hole' ||
@@ -563,8 +564,13 @@ export function ModelingOperationsForm({
     const epoch = ++preflightEpoch.current;
     setPreflight({ status: 'pending' });
     try {
-      const result = await onPreflight(submission());
-      if (preflightEpoch.current === epoch) setPreflight(result);
+      const candidate = submission();
+      const result = await onPreflight(candidate);
+      if (preflightEpoch.current === epoch) {
+        checkedSubmission.current =
+          result.status === 'ready' ? JSON.stringify(candidate) : null;
+        setPreflight(result);
+      }
     } catch (error) {
       if (preflightEpoch.current === epoch) {
         setPreflight({
@@ -577,8 +583,28 @@ export function ModelingOperationsForm({
   };
   const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    if (effectivePreflight.status === 'ready') onSubmit(submission());
-    else void runPreflight();
+    if (!canCheck) return;
+    if (effectivePreflight.status !== 'ready') {
+      void runPreflight();
+      return;
+    }
+    try {
+      const candidate = submission();
+      if (checkedSubmission.current !== JSON.stringify(candidate)) {
+        throw new Error(
+          'The selected references changed. Recheck the exact result.'
+        );
+      }
+      onSubmit(candidate);
+    } catch (error) {
+      setPreflight({
+        status: 'refused',
+        reason:
+          error instanceof Error
+            ? error.message
+            : 'Selected references are unavailable.'
+      });
+    }
   };
   const buttonLabel =
     effectivePreflight.status === 'pending'
