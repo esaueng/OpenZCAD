@@ -704,7 +704,9 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     const features = listFeaturesInOrder(document);
     const cachingEnabled = features.length <= this.maxHistoryCheckpoints;
     const scopeKey = cachingEnabled ? historyScopeDigest(document) : null;
-    const scope = cachingEnabled ? getParameterScope(document).scope : undefined;
+    const scope = cachingEnabled
+      ? getParameterScope(document).scope
+      : undefined;
     const digests = cachingEnabled
       ? features.map((feature, index) =>
           historyFeatureDigest(document, feature, index, scope)
@@ -1069,8 +1071,11 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
         recognitionDone?.();
         // The opening measurement is one bounded pass over the inventory plus
         // one exact slab intersection; a refusal is published with its reason
-        // so the assistant can say why the body cannot be grown.
-        if (shape.solids.length === 1) {
+        // so the assistant can say why the body cannot be grown. Only a live
+        // imported body can be offered for growing, so the consumed source
+        // references a holder carves its pieces from are not measured: on the
+        // hammer that was four recognitions per rebuild, most of its latency.
+        if (recognizeImportedFeatures && shape.solids.length === 1) {
           const openingDone = onStage?.('Opening recognition');
           try {
             topology.recognizedOpening = recognizeOpening(kernel, solid);

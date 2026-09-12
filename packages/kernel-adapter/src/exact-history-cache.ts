@@ -16,15 +16,12 @@
  * its checkpoints one bug away from corruption.
  */
 import {
+  expressionIdentifiers,
   findSketch,
   getParameterScope,
   keyableImportedNodeData
 } from '@openzcad/document-core';
-import type {
-  FeatureNode,
-  ProjectDocument,
-  SketchId
-} from '@openzcad/shared';
+import type { FeatureNode, ProjectDocument, SketchId } from '@openzcad/shared';
 import type { BodyId } from '@openzcad/shared';
 import type {
   ExactBuildResult,
@@ -126,18 +123,63 @@ export function historyFeatureDigest(
     index,
     feature: {
       ...feature,
-      data: keyableImportedNodeData(
-        feature.data
-      )
+      data: keyableImportedNodeData(feature.data)
     },
     sketches,
     // STEP imports read their payload, selection and document units, but
     // never the parameter scope, and a split whose plane is all literals reads
     // nothing from it either. Preserve those expensive checkpoints when a
-    // downstream dimension changes. All other builders conservatively depend
-    // on the entire resolved scope, including transitive parameters.
-    scope: readsParameterScope(feature) ? scope : undefined
+    // downstream dimension changes. A direct edit reads exactly the resolved
+    // values its own expressions name. All other builders conservatively
+    // depend on the entire resolved scope, including transitive parameters.
+    scope: digestScope(feature, scope)
   });
+}
+
+/**
+ * The part of the resolved scope a feature's build can read: nothing for a
+ * literal-only feature, the named values for one whose expressions are all
+ * visible right here, and the whole scope otherwise. Resolved values already
+ * carry their transitive dependencies, so naming just the referenced
+ * parameters keeps the digest exactly as change-sensitive as the build.
+ */
+function digestScope(
+  feature: FeatureNode,
+  scope: Record<string, number>
+): Record<string, number | null> | undefined {
+  const expressions = directEditExpressions(feature);
+  if (expressions) {
+    const names = [
+      ...new Set(
+        expressions.flatMap((expression) => expressionIdentifiers(expression))
+      )
+    ].sort();
+    if (!names.length) return undefined;
+    return Object.fromEntries(names.map((name) => [name, scope[name] ?? null]));
+  }
+  return readsParameterScope(feature) ? scope : undefined;
+}
+
+/**
+ * Every string a direct edit stores, wherever it sits in the operation. Null
+ * for any other feature kind. Enumerating the parametric fields by name was
+ * tried first and missed one (`newRadius`), which silently served a stale
+ * blend after its parameter moved; reading every string instead can only
+ * over-include (a surface class such as "torus" digests as a parameter that
+ * does not exist), never miss an expression.
+ */
+function directEditExpressions(feature: FeatureNode): string[] | null {
+  const { data } = feature;
+  if (data.featureKind !== 'direct-edit') return null;
+  const strings: string[] = [];
+  const visit = (value: unknown) => {
+    if (typeof value === 'string') strings.push(value);
+    else if (Array.isArray(value)) value.forEach(visit);
+    else if (value && typeof value === 'object')
+      Object.values(value as Record<string, unknown>).forEach(visit);
+  };
+  visit(data.operation);
+  return strings;
 }
 
 /**
@@ -155,7 +197,9 @@ function readsParameterScope(feature: FeatureNode): boolean {
     case 'imported-step':
       return false;
     case 'split':
-      return !literalVector(data.plane.origin) || !literalVector(data.plane.normal);
+      return (
+        !literalVector(data.plane.origin) || !literalVector(data.plane.normal)
+      );
     case 'primitive':
       return !Object.values(data.dimensions).every(literal);
     case 'transform':

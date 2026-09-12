@@ -101,7 +101,12 @@ function fixture(axis: GrowingHolderRecipe['axis'] = 'x') {
       -4,
       true
     ),
-    [compiled.bridgeBodyId]: representation(compiled.bridgeBodyId, -4, 26, true),
+    [compiled.bridgeBodyId]: representation(
+      compiled.bridgeBodyId,
+      -4,
+      26,
+      true
+    ),
     [compiled.positiveEndBodyId]: representation(
       compiled.positiveEndBodyId,
       26,
@@ -116,10 +121,7 @@ function fixture(axis: GrowingHolderRecipe['axis'] = 'x') {
 const changeWidth = (doc: ProjectDocument, width: number) =>
   setParameter(doc, { name: 'opening_width', expression: String(width) });
 
-const axisValues = (
-  preview: BodyRepresentation,
-  axisIndex: number
-): number[] =>
+const axisValues = (preview: BodyRepresentation, axisIndex: number): number[] =>
   Array.from(preview.mesh.vertices).filter((_, i) => i % 3 === axisIndex);
 
 describe('disposable growing holder preview', () => {
@@ -182,7 +184,12 @@ describe('disposable growing holder preview', () => {
     const doc = manager.document;
     expect(growingHolderHistories(doc)).toHaveLength(1);
     // One triangle per part; each part's x and z tell where it lives.
-    const part = (bodyId: BodyId, x: number, z: number, consumed = true): BodyRepresentation => ({
+    const part = (
+      bodyId: BodyId,
+      x: number,
+      z: number,
+      consumed = true
+    ): BodyRepresentation => ({
       bodyId,
       name: 'Body',
       source: 'boolean',
@@ -209,7 +216,10 @@ describe('disposable growing holder preview', () => {
       [b.positiveUpper!]: part(b.positiveUpper!, 40, 30),
       [compiled.bodyId]: part(compiled.bodyId, 0, 0, false)
     };
-    const taller = setParameter(doc, { name: 'holder_height', expression: '46' });
+    const taller = setParameter(doc, {
+      name: 'holder_height',
+      expression: '46'
+    });
     const preview = growingHolderPreview(doc, taller)![0]!;
     const zs = axisValues(preview, 2);
     const xs = axisValues(preview, 0);
@@ -220,20 +230,47 @@ describe('disposable growing holder preview', () => {
     expect(zs.slice(3, 6)).toEqual([20, 20, 24]);
     expect(zs.slice(6, 9)).toEqual([36, 36, 37]);
     expect(zs.slice(9, 12)).toEqual([5, 5, 6]);
-    expect(xs.every((x, i) => x === [-20, -20, -20, -20, -20, -20, -20, -20, -20, -4, -4, -4, 40, 40, 40, 40, 40, 40, 40, 40, 40][i])).toBe(true);
+    expect(
+      xs.every(
+        (x, i) =>
+          x ===
+          [
+            -20, -20, -20, -20, -20, -20, -20, -20, -20, -4, -4, -4, 40, 40, 40,
+            40, 40, 40, 40, 40, 40
+          ][i]
+      )
+    ).toBe(true);
     // Width and height together: ends shift by ∓2 as well.
-    const both = setParameter(taller, { name: 'opening_width', expression: '50' });
+    const both = setParameter(taller, {
+      name: 'opening_width',
+      expression: '50'
+    });
     const combined = growingHolderPreview(doc, both)![0]!;
-    expect(axisValues(combined, 0).slice(0, 9).every((x) => x === -22)).toBe(true);
-    expect(axisValues(combined, 0).slice(12).every((x) => x === 42)).toBe(true);
+    expect(
+      axisValues(combined, 0)
+        .slice(0, 9)
+        .every((x) => x === -22)
+    ).toBe(true);
+    expect(
+      axisValues(combined, 0)
+        .slice(12)
+        .every((x) => x === 42)
+    ).toBe(true);
     expect(axisValues(combined, 2).slice(6, 9)).toEqual([36, 36, 37]);
-    expect(growingHolderPreview(doc, setParameter(doc, { name: 'holder_height', expression: '38' }))).toBeNull();
+    expect(
+      growingHolderPreview(
+        doc,
+        setParameter(doc, { name: 'holder_height', expression: '38' })
+      )
+    ).toBeNull();
   });
 
   it('follows the recipe axis instead of assuming x', () => {
     const { doc } = fixture('z');
     const preview = growingHolderPreview(doc, changeWidth(doc, 50))![0]!;
-    expect(axisValues(preview, 2)).toEqual([-28, -6, -28, -6, 28, -6, 28, 50, 28]);
+    expect(axisValues(preview, 2)).toEqual([
+      -28, -6, -28, -6, 28, -6, 28, 50, 28
+    ]);
     expect(preview.bbox.min.z).toBe(-28);
     expect(preview.bbox.max.z).toBe(50);
   });
@@ -241,12 +278,46 @@ describe('disposable growing holder preview', () => {
   it('uses the validated baseline for rapid edits, shrink and undo', () => {
     const { doc } = fixture();
     const next = changeWidth(doc, 50);
-    expect(growingHolderPreview(doc, changeWidth(next, 20))![0]!.bbox.min.x).toBe(-13);
-    expect(growingHolderPreview(doc, changeWidth(next, 20))![0]!.bbox.max.x).toBe(35);
+    expect(
+      growingHolderPreview(doc, changeWidth(next, 20))![0]!.bbox.min.x
+    ).toBe(-13);
+    expect(
+      growingHolderPreview(doc, changeWidth(next, 20))![0]!.bbox.max.x
+    ).toBe(35);
     expect(growingHolderPreview(doc, changeWidth(next, 46))).toBeNull();
     expect(
       growingHolderPreview(doc, changeWidth(next, 16.1))![0]!.bbox.min.x
     ).toBeCloseTo(-11.05, 9);
+  });
+
+  it('keeps an edit that also changes a non-control parameter on the exact path', () => {
+    const { doc } = fixture();
+    const withBore = setParameter(doc, {
+      name: 'hole_diameter',
+      expression: '5'
+    });
+    // A bore edit alone has no approximation.
+    expect(
+      growingHolderPreview(
+        withBore,
+        setParameter(withBore, { name: 'hole_diameter', expression: '6' })
+      )
+    ).toBeNull();
+    // Neither does a width edit that lands together with one before the
+    // baseline is revalidated.
+    expect(
+      growingHolderPreview(
+        withBore,
+        setParameter(changeWidth(withBore, 50), {
+          name: 'hole_diameter',
+          expression: '6'
+        })
+      )
+    ).toBeNull();
+    // The width alone still previews from that baseline.
+    expect(
+      growingHolderPreview(withBore, changeWidth(withBore, 50))
+    ).toHaveLength(1);
   });
 
   it('fails closed without a valid baseline, with invalid parameters or unrelated edits', () => {

@@ -1,4 +1,5 @@
 import type { growingHolderPreview } from './lib/growingHolderPreview';
+import { mergePreviewBodies } from './lib/previewBodies';
 import { rebuildProgressLabel } from './lib/rebuildProgressLabel';
 import { featureHistory, featureResultBodyIds } from './lib/featureHistory';
 import { FeatureBuildError } from './lib/featureValidation';
@@ -4268,6 +4269,20 @@ export function App() {
       renderedRepresentations,
       hiddenBodyIds
     ]
+  );
+  /**
+   * A parameter preview stands in for its own result body only; hidden
+   * bodies stay hidden and every other part keeps its exact geometry.
+   */
+  const previewedViewerBodies = useMemo<BodyRepresentation[]>(
+    () =>
+      parameterPreview
+        ? mergePreviewBodies(
+            viewerBodies,
+            parameterPreview.filter((body) => !hiddenBodyIds.has(body.bodyId))
+          )
+        : viewerBodies,
+    [parameterPreview, viewerBodies, hiddenBodyIds]
   );
 
   /**
@@ -13843,7 +13858,7 @@ export function App() {
       ? rebuildProgressLabel(geometry.state.progress)
       : null;
   const staleProjectionLabel = parameterPreview
-    ? 'Width preview · exact geometry pending'
+    ? 'Parameter preview · exact geometry pending'
     : Object.keys(representations).length > 0
       ? 'showing the last valid projection as stale'
       : 'no exact projection is available yet';
@@ -14825,11 +14840,7 @@ export function App() {
         >
           <ViewerShell
             projectId={doc.projectId}
-            bodies={
-              parameterPreview?.filter(
-                (body) => !hiddenBodyIds.has(body.bodyId)
-              ) ?? viewerBodies
-            }
+            bodies={previewedViewerBodies}
             measurementAnnotations={measurementAnnotations}
             measurementCloudSync={[
               doc.projectId,
