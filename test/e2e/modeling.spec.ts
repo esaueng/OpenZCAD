@@ -1496,9 +1496,10 @@ test('preflights and drills a through hole into the top face', async ({
   expect(await topFace(true)).toMatchObject({
     lineageName: 'primitive.box.face.z-max'
   });
-  await expect(
-    entry.getByRole('button', { name: /Top face/ })
-  ).toHaveAttribute('aria-pressed', 'true');
+  await expect(entry.getByRole('button', { name: /Top face/ })).toHaveAttribute(
+    'aria-pressed',
+    'true'
+  );
   await expect(
     page.getByRole('region', { name: 'Offset Face operation' })
   ).toHaveCount(0);
@@ -3960,4 +3961,55 @@ test('sketches on the wall of a drag-style extrusion and on a hash-only face', a
   await expect(
     page.getByRole('toolbar', { name: 'Sketch tools' })
   ).toBeVisible();
+});
+
+test('a refused boolean never lands in history and says why in the form', async ({
+  page
+}) => {
+  await stubApi(page);
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('Refused Boolean');
+  await page.getByRole('button', { name: 'Create project' }).click();
+  const inspector = page.getByRole('region', { name: 'Feature inspector' });
+
+  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
+  await inspector.getByRole('button', { name: /^Create/ }).click();
+  await expect(page.getByRole('button', { name: /^Fillet/ })).toBeEnabled();
+  await page.getByRole('button', { name: /^Cylinder \(C\)/ }).click();
+  await inspector.getByRole('button', { name: /^Create/ }).click();
+  await expectBodyCount(page, 2);
+
+  // Move the cylinder clear of the box: intersecting disjoint solids is an
+  // empty result the kernel refuses. Only Union used to be validated before
+  // commit; a refused Subtract or Intersect landed in history as "added"
+  // with the model unchanged.
+  await page
+    .locator('.body-row', { hasText: 'Cylinder Body' })
+    .getByRole('button')
+    .first()
+    .click();
+  await page.keyboard.press('m');
+  const overlay = page.getByRole('form', { name: 'Move controls' });
+  await overlay.getByLabel('Move X in mm').fill('300');
+  await overlay.getByRole('button', { name: /Apply move/ }).click();
+  await expect(overlay).toBeHidden();
+
+  await page.keyboard.press('Escape');
+  await page.keyboard.press('i');
+  await expect(inspector).toContainText('Intersect');
+  await inspector.locator('.pick-row', { hasText: 'Box Body' }).click();
+  await inspector.locator('.pick-row', { hasText: 'Cylinder Body' }).click();
+  const featureRows = page.locator('.feature-row');
+  const before = await featureRows.count();
+  await inspector.getByRole('button', { name: /^Create/ }).click();
+
+  // The refusal is explained where the user is looking, nothing is committed,
+  // and the model keeps both bodies.
+  await expect(inspector.getByRole('alert')).toBeVisible();
+  await expect(featureRows).toHaveCount(before);
+  await expect(
+    page.locator('.feature-row', { hasText: 'Intersect' })
+  ).toHaveCount(0);
+  await expect(page.getByRole('contentinfo')).toContainText('warnings0');
+  await expectBodyCount(page, 2);
 });
