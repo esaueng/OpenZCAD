@@ -33,6 +33,16 @@ the plans cannot rot.
   product until a pin bump lands with the full CI matrix green, including
   `pnpm test:parity-corpus`.
 
+## Reconciled entry points (2026-09-12)
+
+The playbooks below were written for the original roadmap. K-S5's original
+app hygiene and P1-S1 Slices A/B have shipped. S-2 persistent driving
+annotations, including radius, have shipped; saved placement and
+driven/reference dimensions remain, and solve feedback is still open.
+Read each roadmap's dated disposition before reusing a playbook; do not
+reimplement a completed slice. The holder workflow has its own current
+[disposition table](step-parameter-hammer-holder-plan.md#current-disposition-2026-09-12-openzcad-28d1551f).
+
 ## Picking an item
 
 1. Check open PRs in the repo you'd touch (`list_pull_requests` / the PR
@@ -71,8 +81,9 @@ the plans cannot rot.
   closed-form volume/area, inclusion–exclusion, pinned counts. "Two numbers
   agree" is not an oracle when both come from the same integrator — the
   corpus docs explain why.
-- **Merge gate (OpenZCAD):** no status check is _required_ by GitHub here,
-  so per `CLAUDE.md` you must read the check runs yourself — `validate`,
+- **Merge gate (OpenZCAD):** follow the current root `AGENTS.md` and verify
+  live protection settings before a merge; the original claim that no checks
+  are required is obsolete. Read the check runs yourself — `validate`,
   the `e2e` aggregate, and `Cloudflare version / verify` green on the PR's
   actual head SHA, with a run confirmed to exist for that SHA. Never
   auto-merge; never dispatch `apple-silicon` or `Cloudflare version`
@@ -142,10 +153,10 @@ Pick ONE of the six defects in kernel-roadmap §S1. For each, the shape is:
 ### P1-S1/S2 — Sketch dimensions and remaining constraints (OpenZCAD, L, splittable)
 
 The solver already supports all 13 constraint kinds
-(`packages/kernel-adapter/src/gcs-sketch.ts:232-370`; schema
-`packages/shared/src/index.ts:485-509`). The UI exposes 6
-(`apps/web/src/lib/sketch/constraints.ts:40-83`, `CONSTRAINT_TOOL_SPECS`).
-Split into landable slices:
+(`packages/kernel-adapter/src/gcs-sketch.ts`; schema
+`packages/shared/src/index.ts`). The UI now exposes every schema-backed kind
+(`apps/web/src/lib/sketch/constraints.ts`, `CONSTRAINT_TOOL_SPECS`).
+Original slice definitions (A/B and driving annotation rendering are shipped):
 
 1. **Slice A — non-dimensional constraints** (perpendicular, equal,
    concentric, midpoint): add tool specs following the existing six exactly
@@ -157,7 +168,7 @@ Split into landable slices:
    expressions and bind to named parameters.
 3. **Slice C — on-canvas rendering**: persistent dimension annotations
    reusing `packages/viewport/src/annotation/dimensionGraphic.ts` (today
-   consumed only by drag rigs and the tape); driven-vs-driving visual state;
+   also used by persistent driving annotations); driven-vs-driving visual state;
    hit-testing to reopen the editor.
 4. **Slice D — solve feedback**: DOF badge from `gcsDof`,
    over/under-constrained tone, conflict list naming removable constraints
