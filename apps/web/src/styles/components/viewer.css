@@ -200,6 +200,15 @@
   grid-column: 1 / -1;
 }
 
+/* While a drag handle shows its value chip, the callout naming the picked
+   face would sit on top of it (both anchor near the top of the body). The
+   callout is a CSS2D label whose inline transform the renderer owns every
+   frame, and the e2e suite reads it as the viewport's readiness signal, so
+   it neither moves by transform nor hides: a margin lifts it clear. */
+.viewer-shell:has(.handle-value-chip:not([hidden])) .selection-callout {
+  margin-top: -30px;
+}
+
 .selection-callout {
   white-space: nowrap;
   padding: 3px 7px;
