@@ -893,10 +893,12 @@ import {
   modelingFaceOptions,
   type EditableModelingFeatureData,
   modelingFeatureIsEditable,
+  modelingFeatureEditReferences,
   modelingFeatureUpdate,
   modelingFormStateFromFeature,
   modelingOperationDisabledReason,
   type ModelingOperationKind,
+  type ModelingOperationFormState,
   type ModelingOperationSubmission,
   type ModelingPathOption,
   type ModelingProfileOption
@@ -5403,10 +5405,11 @@ export function App() {
     launchTool(data.featureKind);
     // launchTool seeds the target from the selection; the edit targets the
     // feature's own (consumed) source body and its stored entry face.
-    setModelingTargetBodyId(data.targetBodyId);
+    const targetBodyId = 'targetBodyId' in data ? data.targetBodyId : null;
+    setModelingTargetBodyId(targetBodyId);
     setViewportFormFacePick(null);
     setFormFacePickTarget(null);
-    setSelectedBodyIds([data.targetBodyId]);
+    setSelectedBodyIds(targetBodyId ? [targetBodyId] : []);
     setModelingEditFeature(feature);
   }
 
@@ -10892,7 +10895,7 @@ export function App() {
    * detected closed regions, lifted by the shared plane resolution. The
    * sketch being edited in-session is skipped (its rig renders live).
    */
-  const sketchViews = useMemo(() => {
+  const availableSketchViews = useMemo(() => {
     if (!doc) {
       return [];
     }
@@ -10905,7 +10908,11 @@ export function App() {
         interaction.session.sketchId === sketch.sketchId;
       // Consumed sketches auto-hide (Shapr-style); the history row's eye
       // overrides either way. The in-session sketch always renders its rig.
-      if (hiddenSketchIds.has(sketch.sketchId) && !active) {
+      if (
+        hiddenSketchIds.has(sketch.sketchId) &&
+        !active &&
+        !modelingEditFeature
+      ) {
         return [];
       }
       const selected =
@@ -10997,8 +11004,17 @@ export function App() {
     // after this memo last ran has to re-run it or the glyph stays a
     // diagnostic until something unrelated invalidates the memo.
     textFontsVersion,
-    hiddenSketchIds
+    hiddenSketchIds,
+    modelingEditFeature
   ]);
+  // Editing needs hidden source profiles; visibility remains a viewport concern.
+  const sketchViews = useMemo(
+    () =>
+      availableSketchViews.filter(
+        (view) => view.active || !hiddenSketchIds.has(view.sketchId)
+      ),
+    [availableSketchViews, hiddenSketchIds]
+  );
 
   useEffect(() => {
     setSelectedProfiles((current) => {
@@ -14349,8 +14365,26 @@ export function App() {
     tool === 'thicken'
       ? tool
       : null;
-  const modelingProfileOptions: ModelingProfileOption[] = sketchViews.flatMap(
-    (view) =>
+  const modelingEditSketchIds =
+    doc && modelingEditFeature
+      ? new Set(
+          listNodesByKind(doc, 'feature').flatMap((feature) =>
+            feature.data.featureKind === 'sketch' &&
+            !isFeatureSuppressed(feature) &&
+            doc.featureOrder.indexOf(feature.featureId) >= 0 &&
+            doc.featureOrder.indexOf(feature.featureId) <
+              doc.featureOrder.indexOf(modelingEditFeature.featureId)
+              ? [feature.data.sketchId]
+              : []
+          )
+        )
+      : null;
+  const modelingProfileOptions: ModelingProfileOption[] = availableSketchViews
+    .filter(
+      (view) =>
+        !modelingEditSketchIds || modelingEditSketchIds.has(view.sketchId)
+    )
+    .flatMap((view) =>
       view.regions.flatMap((region, index) => {
         const sketchName =
           sketchOptions.find((option) => option.sketchId === view.sketchId)
@@ -14379,15 +14413,20 @@ export function App() {
               }
             ];
       })
-  );
+    );
   const modelingPathOptions: ModelingPathOption[] = doc
     ? sketchOptions.flatMap((option) => {
         const sketch = findSketch(doc, option.sketchId);
-        if (!sketch) return [];
+        if (
+          !sketch ||
+          (modelingEditSketchIds && !modelingEditSketchIds.has(option.sketchId))
+        )
+          return [];
         const entityIds = sketch.objectIds.filter((entityId) => {
           const node = doc.nodes[entityId];
           return (
             node?.kind === 'sketch-object' &&
+            !node.data.construction &&
             (node.data.objectKind === 'line' || node.data.objectKind === 'arc')
           );
         });
@@ -14402,6 +14441,36 @@ export function App() {
             ];
       })
     : [];
+  let modelingEditInitial: ModelingOperationFormState | undefined;
+  let modelingEditReferenceError: string | undefined;
+  let modelingFormProfiles = modelingProfileOptions;
+  let modelingFormPaths = modelingPathOptions;
+  if (
+    modelingEditFeature &&
+    modelingFeatureIsEditable(modelingEditFeature.data.featureKind)
+  ) {
+    const data = modelingEditFeature.data as EditableModelingFeatureData;
+    try {
+      modelingEditInitial = modelingFormStateFromFeature(
+        modelingEditFeature.name,
+        data,
+        modelingProfileOptions,
+        modelingPathOptions
+      );
+      const references = modelingFeatureEditReferences(
+        data,
+        modelingProfileOptions,
+        modelingPathOptions
+      );
+      modelingFormProfiles = references.profiles;
+      modelingFormPaths = references.paths;
+    } catch (error) {
+      modelingEditReferenceError = errorMessage(
+        error,
+        'Saved sketch references are unavailable.'
+      );
+    }
+  }
   const modelingTargetBody = modelingTargetBodyId
     ? representations[modelingTargetBodyId]
     : undefined;
@@ -15736,80 +15805,76 @@ export function App() {
                   </div>
                 </div>
                 <div className="panel-body">
-                  <ModelingOperationsForm
-                    key={`${modelingOperation}:${modelingEditFeature?.featureId ?? 'new'}`}
-                    operation={modelingOperation}
-                    editing={modelingEditFeature !== null}
-                    initial={
-                      modelingEditFeature &&
-                      modelingFeatureIsEditable(
-                        modelingEditFeature.data.featureKind
-                      )
-                        ? modelingFormStateFromFeature(
-                            modelingEditFeature.name,
-                            modelingEditFeature.data as EditableModelingFeatureData
-                          )
-                        : undefined
-                    }
-                    scope={parameterScope.scope}
-                    bodies={bodyOptions}
-                    faceOptions={modelingOperationFaces}
-                    profileOptions={modelingProfileOptions}
-                    pathOptions={modelingPathOptions}
-                    initialTarget={modelingTargetBodyId ?? undefined}
-                    viewportFacePick={viewportFormFacePick}
-                    unsupportedReason={modelingUnsupportedReason ?? undefined}
-                    onPreflight={preflightModelingSubmission}
-                    onSubmit={submitModelingOperation}
-                    onCancel={cancelPanel}
-                    onTargetBodyChange={(bodyId) => {
-                      modelingPreflightRef.current = null;
-                      setFormFacePickTarget(null);
-                      setViewportFormFacePick(null);
-                      setModelingTargetBodyId(bodyId);
-                      setSelectedBodyIds([bodyId]);
-                      setSelectedTopology(null);
-                    }}
-                    onOpeningFaceSelectionChange={(hashes) => {
-                      setFormFacePickTarget(null);
-                      setViewportFormFacePick(null);
-                      const selectedHash = hashes.at(-1);
-                      const face = modelingTargetBody?.topology?.faces.find(
-                        (candidate) => candidate.hash === selectedHash
-                      );
-                      setSelectedTopology(
-                        selectedHash !== undefined &&
-                          face &&
-                          modelingTargetBodyId
-                          ? {
-                              kind: 'face',
-                              bodyId: modelingTargetBodyId,
-                              topologyId: face.topologyId,
-                              hash: face.hash,
-                              reference: face.reference
-                            }
-                          : null
-                      );
-                    }}
-                    onRequestOpeningFaceSelection={() => {
-                      setManualSelectionFilter('face');
-                      if (
-                        modelingOperationPicksFaces(modelingOperation) &&
-                        modelingTargetBodyId
-                      ) {
-                        setFormFacePickTarget(modelingTargetBodyId);
-                        setStatus(
-                          modelingOperationNeedsPlanarFaces(modelingOperation)
-                            ? `${TOOL_META[modelingOperation].label}: click a flat face on the target body. Esc cancels face picking.`
-                            : `${TOOL_META[modelingOperation].label}: click faces on the target body to add or remove them. Esc cancels face picking.`
+                  {modelingEditReferenceError ? (
+                    <p role="alert" className="field-error">
+                      {modelingEditReferenceError}
+                    </p>
+                  ) : (
+                    <ModelingOperationsForm
+                      key={`${modelingOperation}:${modelingEditFeature?.featureId ?? 'new'}`}
+                      operation={modelingOperation}
+                      editing={modelingEditFeature !== null}
+                      initial={modelingEditInitial}
+                      scope={parameterScope.scope}
+                      bodies={bodyOptions}
+                      faceOptions={modelingOperationFaces}
+                      profileOptions={modelingFormProfiles}
+                      pathOptions={modelingFormPaths}
+                      initialTarget={modelingTargetBodyId ?? undefined}
+                      viewportFacePick={viewportFormFacePick}
+                      unsupportedReason={modelingUnsupportedReason ?? undefined}
+                      onPreflight={preflightModelingSubmission}
+                      onSubmit={submitModelingOperation}
+                      onCancel={cancelPanel}
+                      onTargetBodyChange={(bodyId) => {
+                        modelingPreflightRef.current = null;
+                        setFormFacePickTarget(null);
+                        setViewportFormFacePick(null);
+                        setModelingTargetBodyId(bodyId);
+                        setSelectedBodyIds([bodyId]);
+                        setSelectedTopology(null);
+                      }}
+                      onOpeningFaceSelectionChange={(hashes) => {
+                        setFormFacePickTarget(null);
+                        setViewportFormFacePick(null);
+                        const selectedHash = hashes.at(-1);
+                        const face = modelingTargetBody?.topology?.faces.find(
+                          (candidate) => candidate.hash === selectedHash
                         );
-                        return;
-                      }
-                      setStatus(
-                        `${TOOL_META[modelingOperation].label}: pick an exact face, then select it in the face list.`
-                      );
-                    }}
-                  />
+                        setSelectedTopology(
+                          selectedHash !== undefined &&
+                            face &&
+                            modelingTargetBodyId
+                            ? {
+                                kind: 'face',
+                                bodyId: modelingTargetBodyId,
+                                topologyId: face.topologyId,
+                                hash: face.hash,
+                                reference: face.reference
+                              }
+                            : null
+                        );
+                      }}
+                      onRequestOpeningFaceSelection={() => {
+                        setManualSelectionFilter('face');
+                        if (
+                          modelingOperationPicksFaces(modelingOperation) &&
+                          modelingTargetBodyId
+                        ) {
+                          setFormFacePickTarget(modelingTargetBodyId);
+                          setStatus(
+                            modelingOperationNeedsPlanarFaces(modelingOperation)
+                              ? `${TOOL_META[modelingOperation].label}: click a flat face on the target body. Esc cancels face picking.`
+                              : `${TOOL_META[modelingOperation].label}: click faces on the target body to add or remove them. Esc cancels face picking.`
+                          );
+                          return;
+                        }
+                        setStatus(
+                          `${TOOL_META[modelingOperation].label}: pick an exact face, then select it in the face list.`
+                        );
+                      }}
+                    />
+                  )}
                 </div>
               </section>
             ) : (

@@ -163,8 +163,7 @@ export type ModelingOperationSubmission =
   | { operation: 'thicken'; input: ThickenInput };
 
 /** The feature kinds whose creation form can reopen an existing feature. */
-export type EditableModelingKind =
-  'hole' | 'mirror' | 'split' | 'shell' | 'solid-offset' | 'draft' | 'thicken';
+export type EditableModelingKind = ModelingOperationKind;
 
 const EDITABLE_MODELING_KINDS: readonly FeatureKind[] = [
   'hole',
@@ -173,7 +172,10 @@ const EDITABLE_MODELING_KINDS: readonly FeatureKind[] = [
   'shell',
   'solid-offset',
   'draft',
-  'thicken'
+  'thicken',
+  'loft',
+  'sweep',
+  'helical-sweep'
 ];
 
 export function modelingFeatureIsEditable(
@@ -200,20 +202,171 @@ const vectorText = (value: {
   z: String(value.z)
 });
 
+function sameEntitySet(a: readonly string[], b: readonly string[]): boolean {
+  const sortedA = [...a].sort();
+  const sortedB = [...b].sort();
+  return (
+    sortedA.length === sortedB.length &&
+    sortedA.every((id, index) => id === sortedB[index])
+  );
+}
+
+function resolveProfileOption(
+  section: SketchSectionReference,
+  options: readonly ModelingProfileOption[]
+): ModelingProfileOption {
+  const reference = section.profile;
+  if (reference.all === true) {
+    throw new Error(
+      'Entity-wide profiles cannot be edited as a single section.'
+    );
+  }
+  const candidates = options.filter(
+    (option) =>
+      option.section.sketchId === section.sketchId &&
+      option.section.profile.all !== true
+  );
+  // A present but ambiguous identity must never fall through to another tier.
+  const identities = candidates.filter(
+    ({ section: { profile } }) =>
+      profile.all !== true &&
+      (reference.profileId
+        ? profile.profileId === reference.profileId
+        : profile.regionFingerprint === reference.regionFingerprint &&
+          profile.sourceArea === reference.sourceArea &&
+          profile.samplePoint.x === reference.samplePoint.x &&
+          profile.samplePoint.y === reference.samplePoint.y &&
+          (!reference.sourceEntityIds?.length ||
+            sameEntitySet(
+              reference.sourceEntityIds,
+              profile.sourceEntityIds ?? []
+            )))
+  );
+  if (identities.length === 1) return identities[0]!;
+  if (identities.length === 0 && reference.sourceEntityIds?.length) {
+    // Coordinates and profile ids change when a sketch dimension changes.
+    // Only a unique authored entity set can recover that selection here;
+    // never guess by nearest point, area, or the first dropdown option.
+    const entities = candidates.filter(({ section: { profile } }) =>
+      sameEntitySet(reference.sourceEntityIds!, profile.sourceEntityIds ?? [])
+    );
+    if (entities.length === 1) return entities[0]!;
+  }
+  throw new Error(
+    'Saved profile no longer resolves uniquely in its sketch. Repair the sketch before editing this feature.'
+  );
+}
+
+function resolvePathOption(
+  path: SketchPathReference,
+  options: readonly ModelingPathOption[]
+): ModelingPathOption {
+  const matches = options.filter(
+    (option) =>
+      option.path.sketchId === path.sketchId &&
+      path.entityIds.length > 0 &&
+      new Set(path.entityIds).size === path.entityIds.length &&
+      path.entityIds.every(
+        (id) =>
+          option.path.entityIds.filter((candidate) => candidate === id)
+            .length === 1
+      )
+  );
+  if (matches.length !== 1)
+    throw new Error(
+      'Saved path entities no longer resolve uniquely in their sketch. Repair the path before editing this feature.'
+    );
+  return matches[0]!;
+}
+
+/** Bind the form to live identities while retaining the authored references.
+ * A sweep may use only a subset of a sketch, in a different order. Keeping
+ * that path in its selected option prevents a no-op edit from widening it.
+ */
+export function modelingFeatureEditReferences(
+  data: EditableModelingFeatureData,
+  profiles: readonly ModelingProfileOption[],
+  paths: readonly ModelingPathOption[]
+): { profiles: ModelingProfileOption[]; paths: ModelingPathOption[] } {
+  const sections =
+    data.featureKind === 'loft'
+      ? data.sections
+      : data.featureKind === 'sweep' || data.featureKind === 'helical-sweep'
+        ? [data.profile]
+        : [];
+  const savedSections = new Map<string, SketchSectionReference>();
+  for (const section of sections) {
+    const option = resolveProfileOption(section, profiles);
+    if (savedSections.has(option.id))
+      throw new Error(
+        'Saved loft sections resolve to the same profile. Repair the sections before editing.'
+      );
+    savedSections.set(option.id, section);
+  }
+  const path =
+    data.featureKind === 'sweep' ? resolvePathOption(data.path, paths) : null;
+  return {
+    profiles: profiles.map((option) => ({
+      ...option,
+      section: savedSections.get(option.id) ?? option.section
+    })),
+    paths: paths.map((option) =>
+      data.featureKind === 'sweep' && option.id === path?.id
+        ? { ...option, path: data.path }
+        : option
+    )
+  };
+}
+
 /**
  * Editing a modeling feature reuses its creation form. The stored data is
  * lifted back into the form's string fields here (expressions as written);
  * the reverse trip happens through the same submission the creation path
  * builds, then {@link modelingFeatureUpdate} turns it into an
- * `updateFeature` patch. Loft, sweep and helical sweep reference sketch
- * profiles by option ids the form derives from the live sketch views, so
- * they are not lifted yet.
+ * `updateFeature` patch. Profile selections must resolve uniquely against
+ * the current sketch options before the form opens.
  */
 export function modelingFormStateFromFeature(
   name: string,
-  data: EditableModelingFeatureData
+  data: EditableModelingFeatureData,
+  profiles: readonly ModelingProfileOption[] = [],
+  paths: readonly ModelingPathOption[] = []
 ): ModelingOperationFormState {
   switch (data.featureKind) {
+    case 'loft':
+      return {
+        operation: 'loft',
+        value: {
+          name,
+          sectionIds: data.sections.map(
+            (section) => resolveProfileOption(section, profiles).id
+          ),
+          mode: data.mode
+        }
+      };
+    case 'sweep':
+      return {
+        operation: 'sweep',
+        value: {
+          name,
+          profileId: resolveProfileOption(data.profile, profiles).id,
+          pathId: resolvePathOption(data.path, paths).id,
+          mode: data.mode
+        }
+      };
+    case 'helical-sweep':
+      return {
+        operation: 'helical-sweep',
+        value: {
+          name,
+          profileId: resolveProfileOption(data.profile, profiles).id,
+          axisOrigin: vectorText(data.axisOrigin),
+          axisDirection: vectorText(data.axisDirection),
+          radius: String(data.radius),
+          pitch: String(data.pitch),
+          turns: String(data.turns)
+        }
+      };
     case 'hole':
       return {
         operation: 'hole',
@@ -302,6 +455,36 @@ export function modelingFeatureUpdate(
   submission: ModelingOperationSubmission
 ): FeatureUpdateInput | null {
   switch (submission.operation) {
+    case 'loft': {
+      const { name, sections, mode } = submission.input;
+      return { featureId, name, data: { featureKind: 'loft', sections, mode } };
+    }
+    case 'sweep': {
+      const { name, profile, path, mode } = submission.input;
+      return {
+        featureId,
+        name,
+        data: { featureKind: 'sweep', profile, path, mode }
+      };
+    }
+    case 'helical-sweep': {
+      const { name, profile, axisOrigin, axisDirection, radius, pitch, turns } =
+        submission.input;
+      return {
+        featureId,
+        name,
+        data: {
+          featureKind: 'helical-sweep',
+          profile,
+          axisOrigin,
+          axisDirection,
+          radius,
+          pitch,
+          turns
+        }
+      };
+    }
+
     case 'hole': {
       const {
         name,
@@ -705,18 +888,20 @@ function requireProfile(
   id: string,
   profiles: readonly ModelingProfileOption[]
 ): SketchSectionReference {
-  const option = profiles.find((candidate) => candidate.id === id);
-  if (!option) throw new Error('Selected profile is no longer available.');
-  return option.section;
+  const matches = profiles.filter((candidate) => candidate.id === id);
+  if (matches.length !== 1)
+    throw new Error('Selected profile no longer resolves uniquely.');
+  return matches[0]!.section;
 }
 
 function requirePath(
   id: string,
   paths: readonly ModelingPathOption[]
 ): SketchPathReference {
-  const option = paths.find((candidate) => candidate.id === id);
-  if (!option) throw new Error('Selected path is no longer available.');
-  return option.path;
+  const matches = paths.filter((candidate) => candidate.id === id);
+  if (matches.length !== 1)
+    throw new Error('Selected path no longer resolves uniquely.');
+  return matches[0]!.path;
 }
 
 function requireFaces(
