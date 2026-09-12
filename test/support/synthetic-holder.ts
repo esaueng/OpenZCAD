@@ -70,8 +70,13 @@ export function syntheticHolderSolid(
   return holder;
 }
 
-export function syntheticHolderStep(kernel: RemusKernel): Uint8Array {
+export function syntheticHolderStep(
+  kernel: RemusKernel,
+  options: SyntheticHolderOptions = {}
+): Uint8Array {
   return remusTranslators().exportStep(
-    kernel.serializeSolids(Uint32Array.of(syntheticHolderSolid(kernel)))
+    kernel.serializeSolids(
+      Uint32Array.of(syntheticHolderSolid(kernel, options))
+    )
   );
 }
