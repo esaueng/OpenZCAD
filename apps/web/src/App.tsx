@@ -1650,7 +1650,14 @@ export function App() {
    * What picking is narrowed to right now. A manual choice outranks the tool's
    * so that arming Fillet does not silently undo a filter set on purpose.
    */
-  const selectionFilter = effectiveSelectionFilter(manualSelectionFilter, tool);
+  // Plane picking needs faces whatever was narrowed by hand — an Edge filter
+  // left over from a fillet silently swallowed every face click while the
+  // prompt still said "click a planar face". The manual choice survives and
+  // takes over again once the sketch has a plane.
+  const selectionFilter =
+    tool === 'sketch'
+      ? 'face'
+      : effectiveSelectionFilter(manualSelectionFilter, tool);
   const [statusEntry, setStatusEntry] = useState<StatusEntry>(() => ({
     text: cloudFunctionsEnabled ? 'Checking beta API...' : 'Offline workspace',
     at: Date.now(),

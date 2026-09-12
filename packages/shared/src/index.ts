@@ -1441,7 +1441,11 @@ export interface OpeningEvidence {
 }
 
 export type OpeningRecognition =
-  | { status: 'recognized'; opening: RecognizedOpening; evidence: OpeningEvidence }
+  | {
+      status: 'recognized';
+      opening: RecognizedOpening;
+      evidence: OpeningEvidence;
+    }
   | { status: 'ambiguous'; reason: string; candidates: OpeningCandidate[] }
   | { status: 'unsupported'; reason: string };
 
@@ -2484,7 +2488,7 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
   },
   sketching: {
     gridVisible: true,
-    snapEnabled: false,
+    snapEnabled: true,
     geometrySnapEnabled: true,
     inferenceEnabled: true,
     linearSnap: 1,
