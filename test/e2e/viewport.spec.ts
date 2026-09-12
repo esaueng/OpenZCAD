@@ -1964,6 +1964,27 @@ test('section view cycles planes, offers an offset slider, and cuts nothing from
     page.locator('.feature-row-main', { hasText: 'Box' })
   ).toBeVisible();
 
+  const caps = () =>
+    page.locator('.viewer-host canvas').evaluate(
+      (canvas) =>
+        new Promise<
+          { triangles: number; bounds: { min: number[]; max: number[] } }[]
+        >((resolve) => {
+          canvas.dispatchEvent(
+            new CustomEvent('openzcad:e2e-render-policy', {
+              detail: {
+                resolve: (state: {
+                  sectionCaps: {
+                    triangles: number;
+                    bounds: { min: number[]; max: number[] };
+                  }[];
+                }) => resolve(state.sectionCaps)
+              }
+            })
+          );
+        })
+    );
+  expect(await caps()).toEqual([]);
   const sectionButton = page.getByRole('button', { name: /^Section view/ });
   await expect(sectionButton).toHaveAttribute('aria-pressed', 'false');
 
@@ -1973,8 +1994,19 @@ test('section view cycles planes, offers an offset slider, and cuts nothing from
   await expect(sectionButton).toHaveAttribute('aria-label', /now: XY plane/);
   const slider = page.getByRole('slider', { name: 'Section plane offset' });
   await expect(slider).toBeVisible();
+  await expect.poll(async () => (await caps()).length).toBe(1);
+  const first = (await caps())[0]!;
+  expect(first.triangles).toBeGreaterThanOrEqual(2);
+  expect(first.bounds.min[2]).toBeCloseTo(Number(await slider.inputValue()));
+  expect(first.bounds.max[2]).toBeCloseTo(first.bounds.min[2]!);
   await slider.focus();
   await page.keyboard.press('ArrowLeft');
+
+  const movedOffset = Number(await slider.inputValue());
+  expect(movedOffset).not.toBe(first.bounds.min[2]);
+  await expect
+    .poll(async () => (await caps())[0]?.bounds.min[2])
+    .toBeCloseTo(movedOffset);
 
   // XY → XZ → YZ → off; the cut is display-only, so the feature tree and
   // the body list never change while cycling.
@@ -1985,6 +2017,7 @@ test('section view cycles planes, offers an offset slider, and cuts nothing from
   await sectionButton.click();
   await expect(sectionButton).toHaveAttribute('aria-pressed', 'false');
   await expect(slider).toHaveCount(0);
+  expect(await caps()).toEqual([]);
   await expect(
     page.locator('.feature-row-main', { hasText: 'Box' })
   ).toBeVisible();
