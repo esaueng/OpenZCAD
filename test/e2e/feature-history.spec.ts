@@ -143,3 +143,24 @@ test('names a deleted sketch input and restores the dependent model with undo', 
   ).toBeVisible();
   await expect(details.getByText(/An input sketch is missing/)).toHaveCount(0);
 });
+
+test('undo inside a text field edits the text, not the document', async ({
+  page
+}) => {
+  await stubApi(page);
+  await page.goto('/');
+  await page.getByRole('button', { name: /Heat Sink/ }).click();
+  await expectBodyCount(page, 1);
+  const rows = page.locator('.feature-row');
+  const featureCount = await rows.count();
+  expect(featureCount).toBeGreaterThan(0);
+  const name = page.getByRole('textbox', { name: 'New parameter name' });
+  await name.click();
+  await name.pressSequentially('abc');
+  await expect(name).toHaveValue('abc');
+  await page.keyboard.press('ControlOrMeta+z');
+  // The document is untouched: same history, no "Undo …" outcome.
+  await expect(rows).toHaveCount(featureCount);
+  await expect(page.getByRole('contentinfo')).not.toContainText(/Undo /);
+  await expectBodyCount(page, 1);
+});
