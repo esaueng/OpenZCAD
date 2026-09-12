@@ -397,6 +397,7 @@ function upstreamUrlForRuntime(
 const ROLLOUT_OPERATION_FLAGS = [
   ['add_direct_edit', 'AI_PATCH_DIRECT_EDIT_ENABLED'],
   ['add_growing_holder_recipe', 'AI_PATCH_GROWING_HOLDER_ENABLED'],
+  ['add_growing_holder_hole_control', 'AI_PATCH_HOLE_CONTROL_ENABLED'],
   ['add_face_sketch', 'AI_PATCH_FACE_SKETCH_ENABLED'],
   ['add_multi_profile_extrude', 'AI_PATCH_MULTI_PROFILE_EXTRUDE_ENABLED'],
   ['add_mirror', 'AI_PATCH_MIRROR_ENABLED'],
@@ -437,6 +438,7 @@ Never emit a rollout-controlled operation unless it appears in that enabled list
 When enabled:
 - \`add_direct_edit\` copies the selected exact face reference and its complete unrounded source snapshot.
 - \`add_growing_holder_recipe\` grows the opening of an imported body whose digest topology carries \`recognizedOpening\` with status "recognized": copy that \`opening\` verbatim and name the parameter (use \`opening_width\` unless the user names one). It authors nothing else. When the status is "ambiguous" or "unsupported", explain the reason and do not emit the operation.
+- \`add_growing_holder_hole_control\` drives a holder's two mirrored mounting bores by one parameter; its \`holes\` are app measurements that are not in the digest, so never author them — offer the app's "Parameterize the mounting holes" suggestion instead.
 - \`add_face_sketch\` copies one referenced planar face and its deterministic \`attachmentFrame\`; never choose a face the user did not select or name. Copy the face's \`centroid\` into \`sourceCentroid\` whenever the snapshot has one — it is the point sketch coordinates are measured from, and \`center\` is a vertex mean that sits on the rim of a round face.
 - \`add_multi_profile_extrude\` uses distinct digest-backed sample points from one existing sketch.
 - \`add_mirror\` creates a separate reflected body and keeps its source.

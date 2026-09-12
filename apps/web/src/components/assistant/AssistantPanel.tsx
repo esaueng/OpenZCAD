@@ -30,6 +30,7 @@ import {
   type CadPatchProposal,
   type CadSelectionContext
 } from '@openzcad/ai-contracts';
+import { createGrowingHolderHoleProposal } from '@openzcad/command-system';
 import type { ProjectDocument } from '@openzcad/shared';
 import {
   loadAssistantStatus,
@@ -297,6 +298,10 @@ export function AssistantPanel({
     () => createGrowingHolderProposal(doc, selection),
     [doc, selection]
   );
+  const growingHolderHoleProposal = useMemo(
+    () => createGrowingHolderHoleProposal(doc, selection),
+    [doc, selection]
+  );
   const suggestions = useMemo(
     () =>
       assistantSuggestions({
@@ -304,9 +309,16 @@ export function AssistantPanel({
         topologyKind: sharedTopologyKind(selection),
         selectedBodyCount: selection.bodyIds.length,
         autoParameterizeProposal,
-        growingHolderProposal
+        growingHolderProposal,
+        growingHolderHoleProposal
       }),
-    [autoParameterizeProposal, doc.bodyOrder.length, growingHolderProposal, selection]
+    [
+      autoParameterizeProposal,
+      doc.bodyOrder.length,
+      growingHolderHoleProposal,
+      growingHolderProposal,
+      selection
+    ]
   );
   const autoParameterizeSuggestion = useMemo(
     () =>
