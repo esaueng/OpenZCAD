@@ -103,7 +103,7 @@ describe(
   'reconstructed native Hammer Holder diagnostic baseline',
   { timeout: 120_000 },
   () => {
-    it('locates the first strict orientation failure at the opening, despite closed meshes', () => {
+    it('builds every stage strictly valid now that a negative sweep keeps its orientation', () => {
       const stages = createNativeHolderStages();
       const expected = {
         plate: { faces: 6, volume: 74 * 53 * 8, height: 8, badEdges: 0 },
@@ -111,19 +111,19 @@ describe(
           faces: 10,
           volume: (74 * 53 - 46 * 33) * 8,
           height: 8,
-          badEdges: 8
+          badEdges: 0
         },
         firstArm: {
-          faces: 21,
+          faces: 17,
           volume: 35776.00421470196,
           height: 58,
-          badEdges: 6
+          badEdges: 0
         },
         secondArm: {
-          faces: 34,
+          faces: 24,
           volume: 52320.008429403926,
           height: 58,
-          badEdges: 4
+          badEdges: 0
         }
       };
       for (const name of Object.keys(stages) as (keyof typeof stages)[]) {
@@ -184,7 +184,9 @@ describe(
       expect(inspect(positiveStages.firstArm).strict).toBe(0);
     });
 
-    it('refuses Mirror at the invalid input boundary and preserves the source', async () => {
+    it('mirrors the first arm now that its input is a valid closed solid', async () => {
+      // Before the negative-sweep fix this was a refusal boundary: the
+      // opening cut left the arm inside-out and Mirror rejected its input.
       const stage = createNativeHolderStages().firstArm;
       const mirrored = mirrorBody(stage.document, {
         name: 'Mirror',
@@ -192,15 +194,13 @@ describe(
         plane: { origin: { x: 0, y: 0, z: 0 }, normal: { x: 1, y: 0, z: 0 } }
       });
       const result = await adapter.syncDocument(mirrored.document);
-      expect(result.warnings).toContain(
-        'Feature "Mirror": Target solid is not a valid closed solid.'
-      );
-      expect(result.bodyRepresentations[mirrored.bodyId]).toBeUndefined();
+      expect(result.warnings).toEqual([]);
+      expect(result.bodyRepresentations[mirrored.bodyId]?.faceCount).toBe(17);
       expect(bodyOf(result, stage).consumed).toBe(false);
       expect(result.exportableBodyIds).toContain(stage.bodyId);
     });
 
-    it('retains the working plate fillet while preserving input after refused arm fillets and holes', async () => {
+    it('fillets the plate and drills it after refused arm fillets, preserving input at each refusal', async () => {
       const stage = createNativeHolderStages().secondArm;
       const body = bodyOf(await adapter.syncDocument(stage.document), stage);
       const armEdge = edgeAt(body, 35, 37);
@@ -220,7 +220,25 @@ describe(
         expect(result.bodyRepresentations[fillet.bodyId]).toBeUndefined();
         expect(bodyOf(result, stage).consumed).toBe(false);
       }
-      const plateEdge = edgeAt(body, 30, 37, 8);
+      // On the valid body the top plate edge under the arm foot is the next
+      // refusal boundary: the blend would end where the arm wall rises. (The
+      // inside-out body used to accept it, as a fragment of the real edge.)
+      const topPlateEdge = edgeAt(body, 30, 37, 8);
+      const refusedTop = await adapter.syncDocument(
+        filletEdges(stage.document, {
+          name: 'Plate fillet',
+          targetBodyId: stage.bodyId,
+          edgeHashes: [topPlateEdge.hash],
+          size: 3
+        }).document
+      );
+      expect(refusedTop.warnings).toEqual([
+        expect.stringContaining(
+          'Fillet could not be created on 1 selected edge with radius 3.'
+        )
+      ]);
+      expect(bodyOf(refusedTop, stage).consumed).toBe(false);
+      const plateEdge = edgeAt(body, 30, 37, 0);
       const fillet = filletEdges(stage.document, {
         name: 'Plate fillet',
         targetBodyId: stage.bodyId,
@@ -229,18 +247,23 @@ describe(
       });
       const filleted = await adapter.syncDocument(fillet.document);
       expect(filleted.warnings).toEqual([]);
-      expect(bodyOf(filleted, fillet).faceCount).toBe(36);
+      expect(bodyOf(filleted, fillet).faceCount).toBe(25);
       expect(bodyOf(filleted, stage).consumed).toBe(true);
 
-      // The observed Hole attempt followed the successful plate-edge fillet.
+      // The observed Hole attempts followed the plate-edge fillet. On the
+      // inside-out body both refused ("The hole cut did not produce a valid
+      // solid."); on the valid body the unified 1760 mm² top face drills.
       const top = bodyOf(filleted, fillet).topology?.faces.find(
         (face) =>
           face.geometry?.surfaceType === 'plane' &&
           Math.abs(face.geometry.center.z - 8) < 1e-6 &&
-          Math.abs(face.geometry.area - 420) < 1e-6
+          Math.abs(face.geometry.area - 1760) < 1e-6
       );
       expect(top).toBeDefined();
-      for (const style of ['simple', 'countersink'] as const) {
+      for (const [style, faces] of [
+        ['simple', 27],
+        ['countersink', 28]
+      ] as const) {
         const hole = holeBody(fillet.document, {
           name: 'Hole',
           targetBodyId: fillet.bodyId,
@@ -254,11 +277,9 @@ describe(
             : {})
         });
         const result = await adapter.syncDocument(hole.document);
-        expect(result.warnings).toContain(
-          'Feature "Hole": The hole cut did not produce a valid solid.'
-        );
-        expect(result.bodyRepresentations[hole.bodyId]).toBeUndefined();
-        expect(bodyOf(result, fillet).consumed).toBe(false);
+        expect(result.warnings).toEqual([]);
+        expect(bodyOf(result, hole).faceCount).toBe(faces);
+        expect(bodyOf(result, fillet).consumed).toBe(true);
       }
     });
   }
@@ -274,7 +295,7 @@ describe(
       const plate = filletEdges(stage.document, {
         name: 'Plate fillet',
         targetBodyId: stage.bodyId,
-        edgeHashes: [edgeAt(body, 30, 37, 8).hash],
+        edgeHashes: [edgeAt(body, 30, 37, 0).hash],
         size: 3
       });
       const sketch = addSketchFeature(plate.document, {
@@ -335,7 +356,7 @@ describe(
       const unionVolume = measurements[1]!.volume;
       const targetVolume = bodyOf(base.derived, plate).volume;
       expect(toolVolume).toBeCloseTo(2 * Math.PI * 2.5 ** 2 * 8, 6);
-      expect(targetVolume).toBeCloseTo(52262.06593352125, 4);
+      expect(targetVolume).toBeCloseTo(52217.64335334451, 4);
       // Both cylinders lie inside the untouched bridge. The union measures the
       // target exactly — an enclosed tool adds nothing — so the classifier's
       // enclosure rule has the final say and the bores infer Cut. When the
