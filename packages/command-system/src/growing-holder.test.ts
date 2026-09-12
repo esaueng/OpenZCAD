@@ -126,10 +126,10 @@ describe('growing holder recipe compiler', () => {
     const features = listFeaturesInOrder(doc);
     expect(features.map((f) => f.data.featureKind)).toEqual([
       'imported-step',
-      'imported-step',
       'primitive',
       'transform',
       'boolean',
+      'imported-step',
       'primitive',
       'transform',
       'boolean',
@@ -142,10 +142,10 @@ describe('growing holder recipe compiler', () => {
     expect(getParameterScope(doc).scope.opening_width).toBe(46);
     const [
       source,
-      copy,
       negativeMask,
       placeNegative,
       negativeEnd,
+      copy,
       positiveMask,
       placePositive,
       positiveEnd,
@@ -212,7 +212,11 @@ describe('growing holder recipe compiler', () => {
       resultBodyId: compiled.bodyId
     });
     expect(histories[0]!.union.featureId).toBe(union!.featureId);
-    expect(histories[0]!.sourceCopy.featureId).toBe(copy!.featureId);
+    expect(histories[0]!.bodies).toEqual({
+      negativeEnd: compiled.negativeEndBodyId,
+      bridge: compiled.bridgeBodyId,
+      positiveEnd: compiled.positiveEndBodyId
+    });
 
     const replayed = replayCommands(root, doc.commandLog);
     expect(replayed.featureOrder).toEqual(doc.featureOrder);
