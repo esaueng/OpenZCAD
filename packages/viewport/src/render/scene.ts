@@ -387,6 +387,19 @@ export function syncFatLineResolution(
   });
 }
 
+const OPAQUE_BODY_STENCIL = 1;
+
+// Construction decorations stay at the world origin, but must not paint over
+// solids that cross the axes or XY plane. Opaque faces mark their visible
+// samples before the transparent decoration pass. Read only that bit.
+const DECORATION_STENCIL_TEST = {
+  stencilWrite: true,
+  stencilRef: 0,
+  stencilFunc: THREE.EqualStencilFunc,
+  stencilFuncMask: OPAQUE_BODY_STENCIL,
+  stencilWriteMask: 0
+};
+
 /**
  * Classic CAD body material. Phong gives planar faces an even technical shade
  * and broad highlights on curves without environment-map reflections crawling
@@ -404,6 +417,10 @@ export function createBodyMaterial(body: BodyRepresentation) {
     // Translucent walls must not write depth or back faces and interior
     // features hidden behind them would be culled instead of showing through.
     depthWrite: !translucent,
+    stencilWrite: !translucent,
+    stencilRef: OPAQUE_BODY_STENCIL,
+    stencilWriteMask: OPAQUE_BODY_STENCIL,
+    stencilZPass: THREE.ReplaceStencilOp,
     // Push only the disposable face rasterization back by the smallest
     // practical depth-buffer bias. GL line materials ignore polygonOffset;
     // keeping the bias on the faces lets depth-tested edge/sketch overlays sit
@@ -614,6 +631,7 @@ export function updateObjectForBody(
   object.material.opacity = opacity;
   object.material.transparent = opacity < 1;
   object.material.depthWrite = opacity >= 1;
+  object.material.stencilWrite = opacity >= 1;
   return true;
 }
 
@@ -733,6 +751,7 @@ const GRID_CELLS_PER_VIEW = 60;
 export function createStudioGrid(): THREE.Mesh {
   const geometry = new THREE.PlaneGeometry(2, 2);
   const material = new THREE.ShaderMaterial({
+    ...DECORATION_STENCIL_TEST,
     transparent: true,
     depthWrite: false,
     side: THREE.DoubleSide,
@@ -896,6 +915,7 @@ export function createAxesGizmo(resolution?: FatLineResolution): THREE.Group {
       opacity: 0.9,
       resolution
     });
+    Object.assign(line.material, DECORATION_STENCIL_TEST);
     line.raycast = () => undefined;
     // Draw after the grid plane. Distance sorting puts these quads at their
     // distant midpoints — behind everything — and lets the grid's translucent
@@ -944,7 +964,13 @@ export function updateAxesGizmo(group: THREE.Group, camera: THREE.Camera) {
 export function createShadowCatcher(): THREE.Mesh {
   const mesh = new THREE.Mesh(
     new THREE.PlaneGeometry(1400, 1400),
-    new THREE.ShadowMaterial({ color: '#000000', opacity: 0.55 })
+    new THREE.ShadowMaterial({
+      ...DECORATION_STENCIL_TEST,
+      color: '#000000',
+      opacity: 0.55,
+      // An invisible floor must not occlude later transparent geometry.
+      depthWrite: false
+    })
   );
   mesh.position.z = -0.05;
   mesh.receiveShadow = true;
