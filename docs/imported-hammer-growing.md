@@ -58,6 +58,30 @@ by `AI_PATCH_GROWING_HOLDER_ENABLED`; the verified suggestion needs no flag.
 New proposals use this operation; `add_imported_opening_recipe` remains only
 for the older fixed-outside-width recipe.
 
+## Arm height
+
+The recipe may carry an arm-height control (`height`). Along the axis the
+arms extend on (the axis, other than the opening's, that the inner faces
+span more), the recognizer looks for straight runs on each end above the
+bridge section with the same rule as the width — a constant, axis-invariant
+set of crossing faces — and takes the longest run both ends share, proving it
+with an arm-limited slab per end. On the hammer the lettered inner face
+leaves only the gaps between letters straight; the widest, z ≈ 24.7–26.1, is
+shared with the plain right arm, so growing the height widens that letter
+gap and moves everything above it up rigidly. Each glyph stays exact. The
+proposal declares this.
+
+With a height the compiler carves four pieces instead of two — lower and
+upper on each side, from four references to the import — rebuilds each arm's
+section between the height cuts at the parametric length beside the width
+bridge, moves the upper pieces by the height change on top of their side's
+width shift, and joins seven operands. Lower pieces keep the base and the
+mounting bores, so the hole control targets them unchanged. The minimum
+height is where the arm bridge would vanish: on the hammer about 1.2 mm of
+shortening. The drilled synthetic bracket gets no height, with the reason
+recorded: the kernel cannot split a planar face that carries a circular bore
+loop, so the arm slab refuses; the bracket without bores measures and grows.
+
 ## Mounting holes
 
 `matchGrowingHolderHoles` finds the two through bores that mirror each other

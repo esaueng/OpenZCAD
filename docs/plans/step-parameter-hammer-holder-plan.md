@@ -60,7 +60,15 @@ the same PR that lands Phase 2 so there is one plan of record.
   fixed-outside-width recipe qualified at 46 and 50 mm only.
 - **Phase 0 done (PR #282, 2026-09-11):** the pin is Remus `main` f1968568
   (2.130.14) and the docs agree with the lockfile.
-- **Phase 5, hole diameter (PR 5):** both mirrored bores are driven by one
+- **Phase 5, height (PR 6):** the recipe carries an optional arm-height
+  control measured by the same straight-run rule along the arms; on the
+  hammer the only straight run on the lettered arm is a gap between letters,
+  so height grows there (decision: option 1, the letter gap widens, glyphs
+  stay exact, declared in the proposal). Four pieces, seven operands; the
+  hole control targets the lower pieces. Kernel limit recorded: a planar face
+  with a circular bore loop cannot be split by a plane, so the drilled bracket
+  has no height in CI; the hole-free bracket and the hammer do.
+- **Phase 5, hole diameter (PR 5, merged as #288):** both mirrored bores are driven by one
   parameter through the existing through-hole resize on the carved ends;
   widening a countersunk bore runs the cutter through the countersink, which
   keeps its Ø9; the minimum opening is independent of the bore. On the
@@ -271,14 +279,15 @@ Hole diameter (done in PR 5):
 - The opening minimum does not depend on the bore: the ends meet at their cut
   faces before the bores can touch, so no coupled limit exists to recompute.
 
-Height:
-- Identify a safe straight arm section between the base and the hook curl,
-  excluding the lettering on the left inner face. Preserve the base, and
-  translate the upper end while adjusting only that section.
-- Establish geometric limits for shortening. Preserve lettering and blends
-  rather than stretching the entire mesh or scaling the whole body.
-- Refuse unsupported shapes or ranges instead of silently deforming protected
-  details.
+Height (done in PR 6):
+- The straight arm section is found by the same rule as the bridge, above the
+  bridge section and shared by both ends; on the lettered arm that is the
+  widest gap between two letters (option 1, chosen 2026-09-11). Glyphs,
+  blends and the hook stay exact; the letter gap widens with the height.
+- Shortening is limited by the arm bridge vanishing; the exact rebuild
+  refuses anything the kernel cannot build.
+- Parts with no shared straight run get no height control and the reason is
+  published with the recognition.
 
 Composition:
 - Establish a deterministic construction order and semantic references so hole
