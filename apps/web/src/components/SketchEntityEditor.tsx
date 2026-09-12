@@ -107,11 +107,40 @@ const FIELDS: Record<SketchObjectData['objectKind'], FieldDefinition[]> = {
   ]
 };
 
+/**
+ * A dragged entity lands on a double — 41.808471716162806 — and the raw
+ * string clipped in a 128 px field says nothing an engineer can use. The
+ * field shows the document's working precision instead; expressions are
+ * shown as written. `rawValues` keeps what the document holds so a field
+ * the user never touched is written back unchanged (see `nextData`).
+ */
+export const SKETCH_FIELD_DECIMALS = 3;
+
+function fieldText(raw: string | number | undefined, fallback?: string) {
+  if (raw === undefined) return fallback ?? '';
+  if (typeof raw === 'number') {
+    if (!Number.isFinite(raw)) return String(raw);
+    const scale = 10 ** SKETCH_FIELD_DECIMALS;
+    return String(Math.round(raw * scale) / scale);
+  }
+  return raw;
+}
+
 function initialValues(data: SketchObjectData): Record<string, string> {
   return Object.fromEntries(
     FIELDS[data.objectKind].map(({ key, fallback }) => {
       const raw = (data as unknown as Record<string, string | number>)[key];
-      return [key, raw === undefined ? (fallback ?? '') : String(raw)];
+      return [key, fieldText(raw, fallback)];
+    })
+  );
+}
+
+/** The raw document values behind `initialValues`, keyed the same way. */
+function rawValues(data: SketchObjectData): Record<string, string | number> {
+  return Object.fromEntries(
+    FIELDS[data.objectKind].flatMap(({ key }) => {
+      const raw = (data as unknown as Record<string, string | number>)[key];
+      return raw === undefined ? [] : [[key, raw]];
     })
   );
 }
@@ -121,7 +150,14 @@ function nextData(
   values: Record<string, string>,
   text: TextAttributes | null
 ): SketchObjectData {
-  const value = (key: string) => coerceParamValue(values[key] ?? '');
+  const raw = rawValues(data);
+  // A field still showing the rounded display of its own value keeps the
+  // exact value: rounding every untouched coordinate on Apply would nudge
+  // geometry the user never meant to change.
+  const value = (key: string) =>
+    raw[key] !== undefined && values[key] === fieldText(raw[key])
+      ? raw[key]
+      : coerceParamValue(values[key] ?? '');
   const kind = data.objectKind;
   switch (kind) {
     case 'text':

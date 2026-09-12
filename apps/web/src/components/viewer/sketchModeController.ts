@@ -183,6 +183,38 @@ export function buildSketchModeRig(
   originMarker.name = 'sketch-origin';
   originMarker.renderOrder = VIEWPORT_RENDER_ORDER.ACTIVE_SKETCH;
   group.add(originMarker);
+  // The sketch's own axes. A face sketch's frame is not screen-aligned — on
+  // a top face "X" in the entity editor can run down the screen — and the
+  // grid gives no hint, so the u and v directions are drawn from the origin
+  // in the axis colours, two grid steps long, and rebuilt with the grid.
+  const axesGroup = new THREE.Group();
+  axesGroup.name = 'sketch-axes';
+  axesGroup.renderOrder = VIEWPORT_RENDER_ORDER.ACTIVE_SKETCH;
+  group.add(axesGroup);
+  const rebuildAxes = (spacing: number) => {
+    disposeChildren(axesGroup);
+    const length = spacing * 2;
+    for (const [point, color] of [
+      [{ x: length, y: 0 }, 0xff6b6b],
+      [{ x: 0, y: length }, 0x51cf66]
+    ] as const) {
+      const geometry = new THREE.BufferGeometry().setFromPoints([
+        origin,
+        liftPoint(basis, point)
+      ]);
+      const axis = new THREE.Line(
+        geometry,
+        new THREE.LineBasicMaterial({
+          color,
+          depthTest: false,
+          transparent: true,
+          opacity: 0.9
+        })
+      );
+      axis.renderOrder = VIEWPORT_RENDER_ORDER.ACTIVE_SKETCH;
+      axesGroup.add(axis);
+    }
+  };
 
   const committedGroup = new THREE.Group();
   committedGroup.name = 'sketch-committed';
@@ -342,6 +374,7 @@ export function buildSketchModeRig(
       const spacing = adaptiveGridSpacing(worldPerPixel);
       if (Math.abs(spacing - activeGridSpacing) > activeGridSpacing * 1e-9) {
         rebuildGrid(spacing);
+        rebuildAxes(spacing);
       }
       gridGroup.visible = visible;
       return spacing;
