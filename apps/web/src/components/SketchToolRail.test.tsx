@@ -77,15 +77,19 @@ describe('SketchToolRail', () => {
     // The settings are a disclosure under the tools, closed to begin with.
     await user.click(screen.getByRole('button', { name: /Sketch palette/ }));
 
+    // Grid snapping starts on, so the first click turns it off and leaves
+    // geometry snapping alone.
     await user.click(screen.getByLabelText('Snap to grid'));
     expect(onSettings).toHaveBeenLastCalledWith(
-      expect.objectContaining({ snapEnabled: true, geometrySnapEnabled: true })
+      expect.objectContaining({ snapEnabled: false, geometrySnapEnabled: true })
     );
 
+    // The rail is uncontrolled here, so the second toggle patches the
+    // original settings: geometry off, grid still at its default.
     await user.click(screen.getByLabelText('Geometry snaps'));
     expect(onSettings).toHaveBeenLastCalledWith(
       expect.objectContaining({
-        snapEnabled: false,
+        snapEnabled: true,
         geometrySnapEnabled: false
       })
     );

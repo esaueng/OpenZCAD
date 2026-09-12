@@ -182,14 +182,14 @@ describe('model viewer mesh classification', () => {
     configureEdgeRaycasting(raycaster);
 
     // Line2 answers within (linewidth + threshold) / 2 CSS px, so this 2 px
-    // line has a 5 px pick radius. The radius is the point of the test: at the
-    // original threshold it was 3 px here and 2.7 px for a real idle edge,
-    // which is inside the jitter of an ordinary click — edges read as
-    // unpickable by hand even though picking worked.
-    raycaster.setFromCamera(new THREE.Vector2(0, (4.9 * 2) / 1000), camera);
+    // line has an 8 px pick radius. The radius is the point of the test: at
+    // the original threshold it was 3 px here and 2.7 px for a real idle
+    // edge, inside the jitter of an ordinary click; at 8 it was 5 px and a
+    // first click on a visible edge still landed on the face behind it.
+    raycaster.setFromCamera(new THREE.Vector2(0, (7.9 * 2) / 1000), camera);
     expect(raycaster.intersectObject(edge)).toHaveLength(1);
 
-    raycaster.setFromCamera(new THREE.Vector2(0, (5.1 * 2) / 1000), camera);
+    raycaster.setFromCamera(new THREE.Vector2(0, (8.1 * 2) / 1000), camera);
     expect(raycaster.intersectObject(edge)).toHaveLength(0);
   });
 
@@ -210,10 +210,11 @@ describe('model viewer mesh classification', () => {
     const raycaster = new THREE.Raycaster();
     configureEdgeRaycasting(raycaster);
 
-    // A pointer 4 px off an edge as it renders must still take it. Measured in
-    // the browser, the shipped bands were 3–5 px wide end to end at the old
-    // threshold, which is what made edge selection feel impossible by hand.
-    raycaster.setFromCamera(new THREE.Vector2(0, (4 * 2) / 1000), camera);
+    // A pointer 7 px off an edge as it renders must still take it: the band
+    // desktop CAD gives an edge. Measured in the browser, the shipped bands
+    // were 3–5 px wide end to end at the first threshold, which is what made
+    // edge selection feel impossible by hand.
+    raycaster.setFromCamera(new THREE.Vector2(0, (7 * 2) / 1000), camera);
     expect(raycaster.intersectObject(edge)).toHaveLength(1);
   });
 
@@ -633,10 +634,14 @@ describe('face triangle centroid', () => {
         discCenter.clone(),
         discCenter
           .clone()
-          .add(new THREE.Vector3(Math.cos(a0) * radius, Math.sin(a0) * radius, 0)),
+          .add(
+            new THREE.Vector3(Math.cos(a0) * radius, Math.sin(a0) * radius, 0)
+          ),
         discCenter
           .clone()
-          .add(new THREE.Vector3(Math.cos(a1) * radius, Math.sin(a1) * radius, 0))
+          .add(
+            new THREE.Vector3(Math.cos(a1) * radius, Math.sin(a1) * radius, 0)
+          )
       );
     }
     const centroid = faceTrianglesCentroid(corners);
