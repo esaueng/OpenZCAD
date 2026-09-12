@@ -1168,11 +1168,17 @@ export function Inspector(props: InspectorProps) {
       // two, so the added hashes resolve by fingerprint while the stored
       // references keep naming the original edges, and a hash the kernel
       // cannot find is refused by the validated commit rather than guessed.
-      const pickedEdgeHashes = selectedEdges.flatMap((edge) =>
-        edge.bodyId === selectedFeature.bodyId && edge.hash !== undefined
-          ? [edge.hash]
-          : []
-      );
+      // Only a feature pinned from its history row takes picks: a blend
+      // clicked in the viewport to *find* its fillet is an inferred
+      // selection, and that picked blend edge must not join the set.
+      const pickedEdgeHashes =
+        featureSelectionSource === 'pinned'
+          ? selectedEdges.flatMap((edge) =>
+              edge.bodyId === selectedFeature.bodyId && edge.hash !== undefined
+                ? [edge.hash]
+                : []
+            )
+          : [];
       const addedEdgeHashes = pickedEdgeHashes.filter(
         (hash) => !data.edgeHashes.includes(hash)
       );
