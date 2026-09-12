@@ -13432,6 +13432,12 @@ export function App() {
       const historyKey =
         meta &&
         (event.key.toLowerCase() === 'z' || event.key.toLowerCase() === 'y');
+      if (historyKey && typing) {
+        // Inside a text field the shortcut belongs to the field: undoing
+        // the document while the user is retyping an expression would
+        // rewind modeling work and leave the half-typed text in place.
+        return;
+      }
       if (historyKey && modelingLocked) {
         // Undo stays locked in Tweak too: history snapshots restore whole
         // documents, so an undo here could quietly revert modeling work.
