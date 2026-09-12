@@ -332,6 +332,17 @@ export interface ToolAvailability {
   /** Central collaboration/lease refusal applied to every mutating tool. */
   editDisabledReason?: string | null;
   sketchCount: number;
+  /**
+   * Sketches with at least one closed region. A sketch that is only an open
+   * chain can be moved but not extruded, revolved, lofted or swept; leaving
+   * those tiles lit on it hands the user a refusal instead of a hint.
+   * Defaults to `sketchCount` for callers that have not analysed profiles.
+   */
+  closedProfileSketchCount?: number;
+  /**
+   * Bodies committed to the document. A preview in flight is not one of
+   * them: a Fillet tile that lights up on a ghost body refuses the click.
+   */
   liveBodyCount: number;
   /** Exact projection matches the visible project/version (not stale). */
   exactGeometryReady: boolean;
@@ -362,16 +373,16 @@ export function toolDisabledReason(
   ) {
     return 'Waiting for exact geometry';
   }
-  if ((tool === 'extrude' || tool === 'revolve') && avail.sketchCount === 0) {
-    return 'Create a sketch first';
+  const closedProfiles = avail.closedProfileSketchCount ?? avail.sketchCount;
+  if ((tool === 'extrude' || tool === 'revolve') && closedProfiles === 0) {
+    return avail.sketchCount === 0
+      ? 'Create a sketch first'
+      : 'Close a sketch profile first';
   }
-  if (tool === 'loft' && avail.sketchCount < 2) {
+  if (tool === 'loft' && closedProfiles < 2) {
     return 'Create at least two closed sketch profiles';
   }
-  if (
-    (tool === 'sweep' || tool === 'helical-sweep') &&
-    avail.sketchCount === 0
-  ) {
+  if ((tool === 'sweep' || tool === 'helical-sweep') && closedProfiles === 0) {
     return 'Create a closed sketch profile first';
   }
   if (
