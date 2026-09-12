@@ -162,71 +162,175 @@ export type ModelingOperationSubmission =
   | { operation: 'draft'; input: DraftInput }
   | { operation: 'thicken'; input: ThickenInput };
 
+/** The feature kinds whose creation form can reopen an existing feature. */
+export type EditableModelingKind =
+  'hole' | 'mirror' | 'split' | 'shell' | 'solid-offset' | 'draft' | 'thicken';
+
+const EDITABLE_MODELING_KINDS: readonly FeatureKind[] = [
+  'hole',
+  'mirror',
+  'split',
+  'shell',
+  'solid-offset',
+  'draft',
+  'thicken'
+];
+
+export function modelingFeatureIsEditable(
+  kind: FeatureKind
+): kind is EditableModelingKind {
+  return EDITABLE_MODELING_KINDS.includes(kind);
+}
+
+export type EditableModelingFeatureData = Extract<
+  FeatureNode['data'],
+  { featureKind: EditableModelingKind }
+>;
+
+const text = (value: ParamValue | undefined, fallback: string): string =>
+  value === undefined ? fallback : String(value);
+
+const vectorText = (value: {
+  x: ParamValue;
+  y: ParamValue;
+  z: ParamValue;
+}): { x: string; y: string; z: string } => ({
+  x: String(value.x),
+  y: String(value.y),
+  z: String(value.z)
+});
+
 /**
  * Editing a modeling feature reuses its creation form. The stored data is
- * lifted back into the form's string fields here; the reverse trip happens
- * through the same submission the creation path builds, then
- * {@link modelingFeatureUpdate} turns it into an `updateFeature` patch.
- * Only kinds listed here have an editor; the rest still fall through to the
- * read-only inspector until they are added.
+ * lifted back into the form's string fields here (expressions as written);
+ * the reverse trip happens through the same submission the creation path
+ * builds, then {@link modelingFeatureUpdate} turns it into an
+ * `updateFeature` patch. Loft, sweep and helical sweep reference sketch
+ * profiles by option ids the form derives from the live sketch views, so
+ * they are not lifted yet.
  */
 export function modelingFormStateFromFeature(
   name: string,
-  data: Extract<FeatureNode['data'], { featureKind: 'hole' }>
+  data: EditableModelingFeatureData
 ): ModelingOperationFormState {
-  const text = (value: ParamValue | undefined, fallback: string) =>
-    value === undefined ? fallback : String(value);
-  return {
-    operation: 'hole',
-    value: {
-      name,
-      targetBodyId: data.targetBodyId,
-      faceHash: data.faceHash,
-      style: data.style,
-      diameter: text(data.diameter, '6'),
-      depthMode: data.depthMode,
-      depth: text(data.depth, '10'),
-      counterboreDiameter: text(data.counterboreDiameter, '11'),
-      counterboreDepth: text(data.counterboreDepth, '3'),
-      countersinkDiameter: text(data.countersinkDiameter, '12'),
-      countersinkAngleDeg: text(data.countersinkAngleDeg, '90'),
-      position: {
-        u: text(data.position.u, '0'),
-        v: text(data.position.v, '0')
-      }
-    }
-  };
-}
-
-/** The kinds `modelingFormStateFromFeature` can lift. */
-export function modelingFeatureIsEditable(kind: FeatureKind): kind is 'hole' {
-  return kind === 'hole';
+  switch (data.featureKind) {
+    case 'hole':
+      return {
+        operation: 'hole',
+        value: {
+          name,
+          targetBodyId: data.targetBodyId,
+          faceHash: data.faceHash,
+          style: data.style,
+          diameter: text(data.diameter, '6'),
+          depthMode: data.depthMode,
+          depth: text(data.depth, '10'),
+          counterboreDiameter: text(data.counterboreDiameter, '11'),
+          counterboreDepth: text(data.counterboreDepth, '3'),
+          countersinkDiameter: text(data.countersinkDiameter, '12'),
+          countersinkAngleDeg: text(data.countersinkAngleDeg, '90'),
+          position: {
+            u: text(data.position.u, '0'),
+            v: text(data.position.v, '0')
+          }
+        }
+      };
+    case 'mirror':
+    case 'split':
+      return {
+        operation: data.featureKind,
+        value: {
+          name,
+          targetBodyId: data.targetBodyId,
+          origin: vectorText(data.plane.origin),
+          normal: vectorText(data.plane.normal)
+        }
+      };
+    case 'shell':
+      return {
+        operation: 'shell',
+        value: {
+          name,
+          targetBodyId: data.targetBodyId,
+          thickness: text(data.thickness, '2'),
+          openingFaceHashes: [...data.openingFaceHashes]
+        }
+      };
+    case 'solid-offset':
+      return {
+        operation: 'solid-offset',
+        value: {
+          name,
+          targetBodyId: data.targetBodyId,
+          distance: text(data.distance, '1')
+        }
+      };
+    case 'draft':
+      return {
+        operation: 'draft',
+        value: {
+          name,
+          targetBodyId: data.targetBodyId,
+          faceHashes: [...data.faceHashes],
+          pullDirection: vectorText(data.pullDirection),
+          neutralPoint: vectorText(data.neutralPoint),
+          angleDeg: text(data.angleDeg, '3')
+        }
+      };
+    case 'thicken':
+      return {
+        operation: 'thicken',
+        value: {
+          name,
+          targetBodyId: data.targetBodyId,
+          faceHash: data.faceHash,
+          thickness: text(data.thickness, '2')
+        }
+      };
+  }
 }
 
 /**
  * The `updateFeature` payload for a submission made while editing. The
- * data keys are exactly what the creation command stores
- * (`holeBody` spreads the input minus name and ids), so a round trip
- * through the form leaves an untouched feature unchanged.
+ * data keys are exactly what each creation command stores (the builders
+ * spread the input minus name and ids), so a round trip through the form
+ * leaves an untouched feature unchanged. `positionAnchor` is left out of a
+ * hole: it is not a patchable key, and re-anchoring would move the hole.
  */
 export function modelingFeatureUpdate(
   featureId: FeatureId,
   submission: ModelingOperationSubmission
 ): FeatureUpdateInput | null {
-  if (submission.operation !== 'hole') return null;
-  // `positionAnchor` is not a patchable key: the anchor a hole was created
-  // with is fixed for its life, since re-anchoring would move the hole.
-  const {
-    name,
-    ids: _ids,
-    positionAnchor: _anchor,
-    ...parameters
-  } = submission.input;
-  return {
-    featureId,
-    name,
-    data: { featureKind: 'hole', ...parameters }
-  };
+  switch (submission.operation) {
+    case 'hole': {
+      const {
+        name,
+        ids: _ids,
+        positionAnchor: _anchor,
+        ...parameters
+      } = submission.input;
+      return {
+        featureId,
+        name,
+        data: { featureKind: 'hole', ...parameters }
+      };
+    }
+    case 'mirror':
+    case 'split':
+    case 'shell':
+    case 'solid-offset':
+    case 'draft':
+    case 'thicken': {
+      const { name, ids: _ids, ...parameters } = submission.input;
+      return {
+        featureId,
+        name,
+        data: { featureKind: submission.operation, ...parameters }
+      };
+    }
+    default:
+      return null;
+  }
 }
 
 export interface ModelingFaceOption {

@@ -40,6 +40,7 @@ import {
   type TransformFormValue
 } from './forms/FeatureForms';
 import { PRIMITIVE_TOOLS, TOOL_META, type ToolId } from '../lib/tools';
+import { modelingFeatureIsEditable } from '../lib/modelingOperations';
 import {
   evalParamValue,
   FEATURE_KIND_LABELS,
@@ -116,7 +117,7 @@ export interface InspectorCallbacks {
   onApplyTextSketch(feature: FeatureNode, value: TextSketchFormValue): void;
   /** Re-enters viewport sketch mode for the feature's sketch. */
   onEditSketchInViewport(feature: FeatureNode): void;
-  /** Reopens a modeling feature (today: Hole) in its creation form. */
+  /** Reopens a modeling feature in its creation form. */
   onEditModelingFeature?(feature: FeatureNode): void;
   onApplyExtrude(feature: FeatureNode, value: ExtrudeFormValue): void;
   onPreviewExtrude(feature: FeatureNode, value: ExtrudeFormValue | null): void;
@@ -1395,15 +1396,16 @@ export function Inspector(props: InspectorProps) {
               Edit sketch in viewport
             </button>
           )}
-        {data.featureKind === 'hole' && props.onEditModelingFeature && (
-          <button
-            type="button"
-            className="secondary"
-            onClick={() => props.onEditModelingFeature?.(selectedFeature)}
-          >
-            Edit hole
-          </button>
-        )}
+        {modelingFeatureIsEditable(data.featureKind) &&
+          props.onEditModelingFeature && (
+            <button
+              type="button"
+              className="secondary"
+              onClick={() => props.onEditModelingFeature?.(selectedFeature)}
+            >
+              Edit {TOOL_META[data.featureKind].label.toLowerCase()}
+            </button>
+          )}
         {form}
         {selectedTopology?.kind === 'face' &&
           selectedBody?.source === 'imported-step' && (
