@@ -49,6 +49,41 @@ async function applyEdit(
 }
 
 describe('SketchEntityEditor', () => {
+  it('shows dragged coordinates at working precision and writes back the exact ones untouched', async () => {
+    const onApply = vi.fn();
+    const user = userEvent.setup();
+    render(
+      <SketchEntityEditor
+        data={{
+          objectKind: 'rectangle',
+          width: 41.808471716162806,
+          height: 26.130294953253244,
+          centerX: 20.904235858081403,
+          centerY: 13.065147476626622
+        }}
+        scope={{}}
+        onApply={onApply}
+        onDelete={vi.fn()}
+        onClose={vi.fn()}
+      />
+    );
+    expect(screen.getByLabelText('Width')).toHaveValue('41.808');
+    expect(screen.getByLabelText('Center Y')).toHaveValue('13.065');
+    const width = screen.getByLabelText('Width');
+    await user.clear(width);
+    await user.type(width, '80');
+    await user.click(screen.getByRole('button', { name: /apply/i }));
+    expect(onApply).toHaveBeenCalledTimes(1);
+    // The edited field takes the typed value; the fields left alone keep
+    // the document's exact doubles rather than their rounded display.
+    expect(onApply.mock.calls[0]![0]).toMatchObject({
+      width: 80,
+      height: 26.130294953253244,
+      centerX: 20.904235858081403,
+      centerY: 13.065147476626622
+    });
+  });
+
   it('keeps a circle construction after its radius is edited', async () => {
     const applied = await applyEdit(
       {

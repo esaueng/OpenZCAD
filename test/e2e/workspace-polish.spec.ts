@@ -646,6 +646,11 @@ test('snaps sketch drawing to existing endpoints', async ({ page }) => {
   ).toBeVisible();
   // Screen-space clicks must wait until the head-on entry tween settles.
   await page.waitForTimeout(800);
+  // Grid snapping is on by default and would move the endpoint off the
+  // release point; this test is about geometry snapping, so turn it off.
+  await page.getByRole('button', { name: /Sketch palette/ }).click();
+  await page.getByLabel('Snap to grid').uncheck();
+  await page.getByRole('button', { name: /Sketch palette/ }).click();
 
   const canvas = page.locator('.viewer-host canvas');
   const bounds = await canvas.boundingBox();
