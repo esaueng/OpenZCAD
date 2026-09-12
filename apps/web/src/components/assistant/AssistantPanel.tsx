@@ -320,11 +320,9 @@ export function AssistantPanel({
       selection
     ]
   );
-  const autoParameterizeSuggestion = useMemo(
-    () =>
-      suggestions.find(
-        (suggestion) => suggestion.id === 'verified-auto-parameterize'
-      ),
+  /** Every app-measured recipe stays one click away once a thread exists. */
+  const verifiedSuggestions = useMemo(
+    () => suggestions.filter((suggestion) => suggestion.proposal),
     [suggestions]
   );
   const verifiedPrompt = useMemo(
@@ -1116,18 +1114,20 @@ export function AssistantPanel({
             ))}
           </div>
         )}
-        {entries.length > 0 && autoParameterizeSuggestion && (
-          <button
-            type="button"
-            className="assistant-verified-action"
-            disabled={thinking || applyingEntryId !== null}
-            onClick={() => applySuggestion(autoParameterizeSuggestion)}
-          >
-            <Sparkles size={12} aria-hidden="true" />
-            <span>{autoParameterizeSuggestion.label}</span>
-            <span className="assistant-suggestion-badge">Verified</span>
-          </button>
-        )}
+        {entries.length > 0 &&
+          verifiedSuggestions.map((suggestion) => (
+            <button
+              key={suggestion.id}
+              type="button"
+              className="assistant-verified-action"
+              disabled={thinking || applyingEntryId !== null}
+              onClick={() => applySuggestion(suggestion)}
+            >
+              <Sparkles size={12} aria-hidden="true" />
+              <span>{suggestion.label}</span>
+              <span className="assistant-suggestion-badge">Verified</span>
+            </button>
+          ))}
         <div className="assistant-prompt">
           <button
             type="button"

@@ -39,10 +39,18 @@ const AXES = ['x', 'y', 'z'] as const;
 const TOLERANCE = 1e-6;
 const near = (a: number, b: number) => Math.abs(a - b) <= TOLERANCE;
 
+/**
+ * The through bores of one side, measured on the import reference that side's
+ * base piece is carved from. That body never moves, so its faces keep their
+ * hashes at every opening and height, while the carved pieces' derived
+ * geometry is the moved one.
+ */
 function endHoles(
   document: ProjectDocument,
   bodyId: BodyId,
-  axis: OpeningAxis
+  axis: OpeningAxis,
+  side: 'negative' | 'positive',
+  cut: number
 ): GrowingHolderHole[] {
   const faces = document.derived.bodyRepresentations[bodyId]?.topology?.faces ?? [];
   return faces.flatMap((face) => {
@@ -55,6 +63,11 @@ function endHoles(
       !face.reference ||
       face.reference.currentHash !== face.hash
     )
+      return [];
+    // Only the bore that survives this side's carve.
+    const along = Math.max(geometry.axisStart[axis], geometry.axisEnd[axis]);
+    const alongMin = Math.min(geometry.axisStart[axis], geometry.axisEnd[axis]);
+    if (side === 'negative' ? along > cut + TOLERANCE : alongMin < cut - TOLERANCE)
       return [];
     const direction = {
       x: geometry.axisEnd.x - geometry.axisStart.x,
@@ -109,9 +122,24 @@ export function matchGrowingHolderHoles(
   document: ProjectDocument,
   history: GrowingHolderHistory
 ): GrowingHolderHoleMatch {
-  const { axis, center } = history.recipe;
-  const negatives = endHoles(document, history.negativeEndBodyId, axis);
-  const positives = endHoles(document, history.positiveEndBodyId, axis);
+  const { axis, center, cuts } = history.recipe;
+  const baseKeys = history.recipe.height
+    ? (['negativeLower', 'positiveLower'] as const)
+    : (['negativeEnd', 'positiveEnd'] as const);
+  const negatives = endHoles(
+    document,
+    history.pieceSources[baseKeys[0]]!,
+    axis,
+    'negative',
+    cuts[0]
+  );
+  const positives = endHoles(
+    document,
+    history.pieceSources[baseKeys[1]]!,
+    axis,
+    'positive',
+    cuts[1]
+  );
   if (!negatives.length || !positives.length)
     return {
       status: 'unsupported',
@@ -136,16 +164,16 @@ export function matchGrowingHolderHoles(
   return { status: 'matched', pair: pairs[0]! };
 }
 
-/** The resize edits an existing hole control placed on a holder's ends. */
+/** The resize edits an existing hole control placed on a holder's source references. */
 export function growingHolderHoleControls(
   document: ProjectDocument,
   history: GrowingHolderHistory
 ): FeatureNode[] {
-  const ends = new Set([history.negativeEndBodyId, history.positiveEndBodyId]);
+  const sources = new Set(Object.values(history.pieceSources));
   return listFeaturesInOrder(document).filter(
     (feature) =>
       feature.data.featureKind === 'direct-edit' &&
-      ends.has(feature.data.targetBodyId) &&
+      sources.has(feature.data.targetBodyId) &&
       feature.data.operation.kind === 'resize-through-hole'
   );
 }
@@ -156,11 +184,12 @@ export interface GrowingHolderHoleCompilation {
 }
 
 /**
- * Drive both mirrored bores by one parameter. Each end receives a
- * through-hole resize bound to the parameter, placed in history right after
- * the end is carved and before it moves, so the edit resolves against
- * geometry that never changes with the opening. The larger countersink stays
- * as it is: widening the bore shortens it, and shrinking the bore leaves it.
+ * Drive both mirrored bores by one parameter. Each side's import reference
+ * receives a through-hole resize bound to the parameter, placed in history
+ * right before that side's base piece is carved, so the edit resolves against
+ * the never-moving import at every opening and height. The larger countersink
+ * stays as it is: widening the bore shortens it, and shrinking the bore leaves
+ * it.
  */
 export function growingHolderHoleCommand(
   document: ProjectDocument,
@@ -191,6 +220,8 @@ export function growingHolderHoleCommand(
   };
   if (carveIndex.negative < 0 || carveIndex.positive < 0)
     throw new Error('The holder history no longer carves its ends.');
+  if (carveIndex.positive < carveIndex.negative)
+    throw new Error('The holder history carves its ends out of order.');
   const edits = (['negative', 'positive'] as const).map((side) => {
     const hole = pair[side];
     const ids = createFeatureOnlyIds();
@@ -214,21 +245,20 @@ export function growingHolderHoleCommand(
     );
     return { side, ids };
   });
-  // Both edits append at the end; move each to just after its carve. The
-  // negative move shifts the positive carve by one.
+  // Both edits append at the end; move each to just before its side's carve.
+  // The negative move shifts the positive carve by one.
   const negativeEdit = edits[0]!;
   const positiveEdit = edits[1]!;
   commands.push(
     commandFactories.moveFeature({
       featureId: negativeEdit.ids.featureId,
-      toIndex: carveIndex.negative + 1
+      toIndex: carveIndex.negative
     })
   );
   commands.push(
     commandFactories.moveFeature({
       featureId: positiveEdit.ids.featureId,
-      toIndex:
-        carveIndex.positive + (carveIndex.positive > carveIndex.negative ? 2 : 1)
+      toIndex: carveIndex.positive + 1
     })
   );
   return { command: composeCommands(name, commands), parameter };

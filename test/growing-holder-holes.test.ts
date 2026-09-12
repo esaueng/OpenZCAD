@@ -106,8 +106,10 @@ describe('growing-holder mounting-hole control', { timeout: 300_000 }, () => {
     expect(match.status).toBe('matched');
     if (match.status !== 'matched') return;
     expect(match.pair.diameter).toBe(5);
-    expect(match.pair.negative.bodyId).toBe(history.negativeEndBodyId);
-    expect(match.pair.positive.bodyId).toBe(history.positiveEndBodyId);
+    // Measured on the import references, which never move.
+    expect(match.pair.negative.bodyId).toBe(history.pieceSources.negativeEnd);
+    expect(match.pair.positive.bodyId).toBe(history.pieceSources.positiveEnd);
+    expect(match.pair.negative.bodyId).toBe(holder.bodyOrder[0]);
     expect(match.pair.negative.sourceAxisStart.x).toBe(4);
     expect(match.pair.positive.sourceAxisStart.x).toBe(56);
   });
@@ -131,12 +133,11 @@ describe('growing-holder mounting-hole control', { timeout: 300_000 }, () => {
     const history = growingHolderHistories(preflight.candidate)[0]!;
     const controls = growingHolderHoleControls(preflight.candidate, history);
     expect(controls).toHaveLength(2);
-    // Each resize sits right after its end is carved and before it moves.
+    // Each resize sits right before its side's base piece is carved.
     const order = preflight.candidate.featureOrder;
     const at = (featureId: string) => order.indexOf(featureId as never);
-    expect(at(controls[0]!.featureId)).toBe(at(history.negativeEnd.featureId) + 1);
-    expect(at(controls[1]!.featureId)).toBe(at(history.positiveEnd.featureId) + 1);
-    expect(at(controls[1]!.featureId)).toBeLessThan(at(history.negativeMove.featureId));
+    expect(at(controls[0]!.featureId)).toBe(at(history.negativeEnd.featureId) - 1);
+    expect(at(controls[1]!.featureId)).toBe(at(history.positiveEnd.featureId) - 1);
     // A second offer is withheld once the control exists.
     expect(createGrowingHolderHoleProposal(preflight.candidate, selectionOf())).toBeNull();
 
@@ -189,6 +190,29 @@ describe('growing-holder mounting-hole control', { timeout: 300_000 }, () => {
     );
     expect(widened.warnings).toHaveLength(2);
     expect(widened.warnings[0]).toMatch(/does not fit this body/);
+  });
+
+  it('binds at any opening, not only the source width', async () => {
+    // The browser failure: a proposal made after the opening was edited.
+    const grown = setParameter(holder, { name: 'opening_width', expression: '60' });
+    const document = { ...grown, derived: await adapter.syncDocument(grown) };
+    const proposal = createGrowingHolderHoleProposal(document, selectionOf());
+    expect(proposal).not.toBeNull();
+    const preflight = await preflightCadPatch(document, proposal!, (candidate) =>
+      adapter.syncDocument(candidate)
+    );
+    expect(preflight.candidate.derived.warnings).toEqual([]);
+    const widened = await adapter.syncDocument(
+      setParameter(preflight.candidate, { name: 'hole_diameter', expression: '6' })
+    );
+    expect(widened.warnings).toEqual([]);
+    const holes = holeDiameters(
+      { ...preflight.candidate, derived: widened },
+      widened.exportableBodyIds[0]!
+    );
+    expect(holes.map((h) => h.diameter)).toEqual([6, 6]);
+    expect(holes[0]!.x).toBeCloseTo(30 - 30 - 4, 6);
+    expect(holes[1]!.x).toBeCloseTo(30 + 30 + 4, 6);
   });
 
   it('refuses bores the document did not measure', () => {

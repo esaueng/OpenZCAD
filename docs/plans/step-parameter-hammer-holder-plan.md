@@ -60,6 +60,22 @@ the same PR that lands Phase 2 so there is one plan of record.
   fixed-outside-width recipe qualified at 46 and 50 mm only.
 - **Phase 0 done (PR #282, 2026-09-11):** the pin is Remus `main` f1968568
   (2.130.14) and the docs agree with the lockfile.
+- **Browser walkthrough (2026-09-11, local dev server, PR 6 head):** fresh
+  import of the private STEP through the file input → recognition ran in the
+  worker during the sync → the assistant offered "Parameterize the opening"
+  (Verified) → the proposal card showed the measured recipe with the
+  letter-gap height note and an exact preview → Apply produced one body with
+  29 features and the parameters opening_width 46 and holder_height 58 →
+  editing to 55 and 64 previewed within a second and rebuilt exactly with no
+  warnings → a reload restored both values and the body. The assistant needs
+  the device setting on and cloud functions enabled; the local API answers
+  401/503, which the verified path does not use. The mounting-hole
+  suggestion first failed exact preflight at width 55 ("Selected face no
+  longer matches its recorded hole axis"): the control measured the bores
+  on the carved ends, whose faces had moved. It now measures and edits them
+  on the never-moving import references right before each side's carve; the
+  retry applied at 55/64 and widening hole_diameter to 6 rebuilt with no
+  warnings. Not yet exercised in the browser: export, undo/redo.
 - **Phase 5, height (PR 6):** the recipe carries an optional arm-height
   control measured by the same straight-run rule along the arms; on the
   hammer the only straight run on the lettered arm is a gap between letters,

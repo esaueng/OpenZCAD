@@ -599,6 +599,10 @@ export interface GrowingHolderHistory {
   resultBodyId: BodyId;
   /** Every piece and bridge body by layout key. */
   bodies: Record<string, BodyId>;
+  /** The import reference each piece was carved from, by piece key. */
+  pieceSources: Record<string, BodyId>;
+  /** The intersect feature of each piece, by piece key. */
+  pieceFeatures: Record<string, FeatureNode>;
 }
 
 function parseRecipe(value: unknown): GrowingHolderRecipe | null {
@@ -738,6 +742,7 @@ export function growingHolderHistories(
     if (!live(source) || source.data.featureKind !== 'imported-step') continue;
     let intact = true;
     const pieceFeatures: Record<string, FeatureNode> = {};
+    const pieceSources: Record<string, BodyId> = {};
     plan.pieces.forEach((piece, index) => {
       if (!intact) return;
       const carved = carvedPiece(bodies[piece.key]!, piece.mask);
@@ -745,6 +750,7 @@ export function growingHolderHistories(
         intact = false;
         return;
       }
+      pieceSources[piece.key] = carved.sourceBody;
       if (index === 0) {
         if (carved.sourceBody !== recipe.targetBodyId) intact = false;
       } else {
@@ -835,7 +841,9 @@ export function growingHolderHistories(
       positiveEndBodyId: bodies[baseKeys[1]]!,
       bridgeBodyId: bodies.bridge!,
       resultBodyId: union.bodyId,
-      bodies
+      bodies,
+      pieceSources,
+      pieceFeatures
     });
   }
   return histories;
