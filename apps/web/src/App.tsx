@@ -891,6 +891,7 @@ import {
 } from './lib/conflictRecovery';
 import {
   modelingFaceOptions,
+  type EditableModelingFeatureData,
   modelingFeatureIsEditable,
   modelingFeatureUpdate,
   modelingFormStateFromFeature,
@@ -5398,9 +5399,8 @@ export function App() {
   /** Opens a history feature in the modeling form it was created with. */
   function openModelingFeatureEditor(feature: FeatureNode) {
     if (!modelingFeatureIsEditable(feature.data.featureKind)) return;
-    if (feature.data.featureKind !== 'hole') return;
-    const data = feature.data;
-    launchTool('hole');
+    const data = feature.data as EditableModelingFeatureData;
+    launchTool(data.featureKind);
     // launchTool seeds the target from the selection; the edit targets the
     // feature's own (consumed) source body and its stored entry face.
     setModelingTargetBodyId(data.targetBodyId);
@@ -15728,10 +15728,13 @@ export function App() {
                     key={`${modelingOperation}:${modelingEditFeature?.featureId ?? 'new'}`}
                     operation={modelingOperation}
                     initial={
-                      modelingEditFeature?.data.featureKind === 'hole'
+                      modelingEditFeature &&
+                      modelingFeatureIsEditable(
+                        modelingEditFeature.data.featureKind
+                      )
                         ? modelingFormStateFromFeature(
                             modelingEditFeature.name,
-                            modelingEditFeature.data
+                            modelingEditFeature.data as EditableModelingFeatureData
                           )
                         : undefined
                     }
