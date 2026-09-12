@@ -60,7 +60,13 @@ the same PR that lands Phase 2 so there is one plan of record.
   fixed-outside-width recipe qualified at 46 and 50 mm only.
 - **Phase 0 done (PR #282, 2026-09-11):** the pin is Remus `main` f1968568
   (2.130.14) and the docs agree with the lockfile.
-- **Phase 4 (PR 4):** recognition runs in the worker for imported bodies and
+- **Phase 5, hole diameter (PR 5):** both mirrored bores are driven by one
+  parameter through the existing through-hole resize on the carved ends;
+  widening a countersunk bore runs the cutter through the countersink, which
+  keeps its Ø9; the minimum opening is independent of the bore. On the
+  hammer the kernel refuses to shrink the bore (coaxial fuse returns the
+  untouched body) and reports it; the bracket shrinks. Height remains open.
+- **Phase 4 (PR 4, merged as #286):** recognition runs in the worker for imported bodies and
   lands in the digest; `add_growing_holder_recipe` carries the target body,
   the parameter and the measured opening, validated byte-for-byte against the
   digest; the app offers it as the verified suggestion "Parameterize the
@@ -253,16 +259,17 @@ apply → edit opening_width, with no manual preparation.
 Owner: Remus edit capabilities and OpenZCAD feature compilation. Hole first,
 because most of it already exists.
 
-Hole diameter:
-- Apply the existing ADR-010 direct-edit through-hole resize (fail-closed
-  geometric fingerprints) to each retained end piece, grouped as one
-  `hole_diameter` control. Only if that path refuses on this geometry does
-  a new Remus capability get scoped.
-- Hold the Ø9 countersink diameter fixed per the contract; validate
-  through-hole continuity, countersink compatibility, wall thickness, and
-  collision clearance.
-- Recompute the opening minimum from the new bore envelope and the 0.5 mm wall
-  rule; reject widths that the new minimum forbids.
+Hole diameter (done in PR 5):
+- The existing ADR-010 direct-edit through-hole resize is applied to each
+  retained end piece, grouped as one `hole_diameter` control. The resize
+  gained one fallback: when the short cutter is refused, the cutter runs
+  through the body's extent along the bore axis, which is what keeps a
+  countersink's diameter fixed while its depth changes.
+- Validity is proved by the exact rebuild; the kernel refuses a widening it
+  cannot cut (a countersink that breaks out of a face) and the feature
+  reports it.
+- The opening minimum does not depend on the bore: the ends meet at their cut
+  faces before the bores can touch, so no coupled limit exists to recompute.
 
 Height:
 - Identify a safe straight arm section between the base and the hook curl,
