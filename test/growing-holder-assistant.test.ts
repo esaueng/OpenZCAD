@@ -67,7 +67,7 @@ describe('growing-holder assistant proposal', { timeout: 300_000 }, () => {
     } finally {
       kernel.free();
     }
-  });
+  }, 300_000);
   afterAll(() => {
     adapter.dispose();
   });
