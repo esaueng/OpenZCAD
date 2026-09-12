@@ -411,3 +411,64 @@ describe('Modeling operations form', () => {
     expect(screen.queryByRole('button', { name: 'Create hole' })).toBeNull();
   });
 });
+
+it.each(['removed', 'changed'] as const)(
+  'refuses Apply when a checked profile is %s while the editor is open',
+  async (change) => {
+    const profile = {
+      id: 'profile',
+      label: 'Selected profile',
+      section: {
+        sketchId: toSketchId('sketch_selected'),
+        profile: {
+          profileId: 'profile_a',
+          regionFingerprint: 1,
+          sourceArea: 4,
+          samplePoint: { x: 0, y: 0 }
+        }
+      }
+    };
+    const props = {
+      operation: 'helical-sweep' as const,
+      editing: true,
+      bodies: [],
+      scope: {},
+      profileOptions: [profile],
+      onPreflight: vi.fn(async () => ({ status: 'ready' as const })),
+      onSubmit: vi.fn()
+    };
+    const view = render(<ModelingOperationsForm {...props} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Check exact result' }));
+    await screen.findByRole('button', { name: 'Apply helical sweep' });
+    view.rerender(
+      <ModelingOperationsForm
+        {...props}
+        profileOptions={
+          change === 'removed'
+            ? []
+            : [
+                {
+                  ...profile,
+                  section: {
+                    ...profile.section,
+                    profile: {
+                      ...profile.section.profile,
+                      profileId: 'profile_b'
+                    }
+                  }
+                }
+              ]
+        }
+      />
+    );
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Apply helical sweep' })
+    );
+    expect(props.onSubmit).not.toHaveBeenCalled();
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      change === 'removed'
+        ? 'Selected profile no longer resolves uniquely'
+        : 'selected references changed'
+    );
+  }
+);
