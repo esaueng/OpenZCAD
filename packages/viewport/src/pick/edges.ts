@@ -29,12 +29,13 @@ export function idleEdgeColor(edge: THREE.Object3D): number {
  * At the original padding of 4 an idle edge answered within (1.4 + 4) / 2 ≈
  * 2.7 px. That is inside the jitter of an ordinary mouse drag-and-release, so
  * edges read as unpickable in hand testing even though picking worked: a
- * measured horizontal sweep found bands only 3–5 px wide. Padding 8 gives
- * (1.4 + 8) / 2 ≈ 4.7 px, comparable to desktop CAD, while staying far enough
- * below the face it bounds that surfaces are still easy to hit away from
- * their boundary.
+ * measured horizontal sweep found bands only 3–5 px wide. Padding 8 gave
+ * (1.4 + 8) / 2 ≈ 4.7 px, and in the September 2026 review a first click on a
+ * visible edge still landed on the face behind it. Padding 14 gives ≈ 7.7 px,
+ * the band desktop CAD uses, while staying far enough below the face it
+ * bounds that surfaces are still easy to hit away from their boundary.
  */
-const EDGE_PICK_PADDING_PX = 8;
+const EDGE_PICK_PADDING_PX = 14;
 
 /**
  * Edge and face intersections for the same topological boundary can differ by
