@@ -891,6 +891,9 @@ import {
 } from './lib/conflictRecovery';
 import {
   modelingFaceOptions,
+  modelingFeatureIsEditable,
+  modelingFeatureUpdate,
+  modelingFormStateFromFeature,
   modelingOperationDisabledReason,
   type ModelingOperationKind,
   type ModelingOperationSubmission,
@@ -1606,6 +1609,13 @@ export function App() {
   const [tool, setTool] = useState<ToolId | null>(null);
   const [modelingTargetBodyId, setModelingTargetBodyId] =
     useState<BodyId | null>(null);
+  /**
+   * The feature a modeling form is editing, when it was opened from a
+   * history row rather than a tool tile. Null while creating. The form is
+   * the same one; only the command it commits differs.
+   */
+  const [modelingEditFeature, setModelingEditFeature] =
+    useState<FeatureNode | null>(null);
   /** The fillet/chamfer form's current size, mirrored onto the edge handle. */
   const [edgeFormSize, setEdgeFormSize] = useState<number | null>(null);
   /**
@@ -5385,6 +5395,21 @@ export function App() {
    * on a box-plus-sphere model that opened Hole on the sphere with a refusal
    * already showing.
    */
+  /** Opens a history feature in the modeling form it was created with. */
+  function openModelingFeatureEditor(feature: FeatureNode) {
+    if (!modelingFeatureIsEditable(feature.data.featureKind)) return;
+    if (feature.data.featureKind !== 'hole') return;
+    const data = feature.data;
+    launchTool('hole');
+    // launchTool seeds the target from the selection; the edit targets the
+    // feature's own (consumed) source body and its stored entry face.
+    setModelingTargetBodyId(data.targetBodyId);
+    setViewportFormFacePick(null);
+    setFormFacePickTarget(null);
+    setSelectedBodyIds([data.targetBodyId]);
+    setModelingEditFeature(feature);
+  }
+
   function defaultModelingTargetBody(operation: ToolId): BodyId | null {
     const preferred = selectedTopology?.bodyId ?? selectedBodyIds.at(-1);
     if (preferred && !representations[preferred]?.consumed) return preferred;
@@ -5407,6 +5432,7 @@ export function App() {
     setEdgeFormSize(null);
     exactEntryQueue.cancel();
     setFeatureFormError(null);
+    setModelingEditFeature(null);
     setFormFacePickTarget(null);
     setViewportFormFacePick(null);
     const selectionReturn = extrudeSelectionReturnRef.current;
@@ -14431,7 +14457,15 @@ export function App() {
     const current = manager.document;
     const signature = JSON.stringify(submission);
     try {
-      const command = commandForModelingSubmission(submission);
+      const editUpdate = modelingEditFeature
+        ? modelingFeatureUpdate(modelingEditFeature.featureId, submission)
+        : null;
+      const command = editUpdate
+        ? commandFactories.updateFeature(
+            editUpdate,
+            `Edit ${submission.input.name}`
+          )
+        : commandForModelingSubmission(submission);
       command.validate(current);
       const candidate = command.apply(current);
       const derived = await geometry.syncOnce(candidate);
@@ -14462,7 +14496,9 @@ export function App() {
           ids?: { bodyId?: BodyId };
         }
       ).ids;
-      const resultBodyId = ids?.bodyId;
+      const resultBodyId = editUpdate
+        ? modelingEditFeature?.bodyId
+        : ids?.bodyId;
       if (!resultBodyId || !derived.bodyRepresentations[resultBodyId]) {
         throw new Error(
           `${submission.input.name} did not produce its expected exact result body.`
@@ -14508,11 +14544,25 @@ export function App() {
       );
       return;
     }
+    const editing = modelingEditFeature;
     void executeValidatedFeature(approved.command, {
       featureName: approved.featureName,
       resultBodyId: approved.resultBodyId,
+      ...(editing && doc
+        ? {
+            targets: affectedFeatureTargets(doc, editing.featureId).map(
+              (target, index) =>
+                index === 0
+                  ? { ...target, featureName: approved.featureName }
+                  : target
+            )
+          }
+        : {}),
       successMessage: commandOutcomeMessage(approved.command.label),
-      onSuccess: finishFeatureCreation
+      onSuccess: () => {
+        setModelingEditFeature(null);
+        finishFeatureCreation();
+      }
     });
   }
 
@@ -15653,8 +15703,15 @@ export function App() {
               <section className="inspector" aria-label="Feature inspector">
                 <div className="panel-header">
                   <div className="panel-title-row">
-                    <h2>{TOOL_META[modelingOperation].label}</h2>
-                    <span className="panel-eyebrow">New feature</span>
+                    <h2>
+                      {modelingEditFeature?.name ??
+                        TOOL_META[modelingOperation].label}
+                    </h2>
+                    <span className="panel-eyebrow">
+                      {modelingEditFeature
+                        ? TOOL_META[modelingOperation].label
+                        : 'New feature'}
+                    </span>
                     <button
                       type="button"
                       className="icon-button panel-close"
@@ -15668,8 +15725,16 @@ export function App() {
                 </div>
                 <div className="panel-body">
                   <ModelingOperationsForm
-                    key={modelingOperation}
+                    key={`${modelingOperation}:${modelingEditFeature?.featureId ?? 'new'}`}
                     operation={modelingOperation}
+                    initial={
+                      modelingEditFeature?.data.featureKind === 'hole'
+                        ? modelingFormStateFromFeature(
+                            modelingEditFeature.name,
+                            modelingEditFeature.data
+                          )
+                        : undefined
+                    }
                     scope={parameterScope.scope}
                     bodies={bodyOptions}
                     faceOptions={modelingOperationFaces}
@@ -15918,6 +15983,7 @@ export function App() {
                   }
                   executeTransaction(`Edit ${value.name}`, commands);
                 }}
+                onEditModelingFeature={openModelingFeatureEditor}
                 onEditSketchInViewport={(feature) => {
                   if (feature.data.featureKind !== 'sketch' || !doc) {
                     return;
