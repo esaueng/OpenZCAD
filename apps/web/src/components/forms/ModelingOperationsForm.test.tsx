@@ -389,4 +389,25 @@ describe('Modeling operations form', () => {
       }
     });
   });
+
+  it('reads Apply instead of Create while editing an existing feature', async () => {
+    const onPreflight = vi.fn(async () => ({ status: 'ready' as const }));
+    render(
+      <ModelingOperationsForm
+        operation="hole"
+        editing
+        scope={{}}
+        bodies={bodies}
+        faceOptions={faces}
+        onPreflight={onPreflight}
+        onSubmit={vi.fn()}
+      />
+    );
+    fireEvent.click(screen.getByRole('button', { name: faces[0]!.label }));
+    fireEvent.click(screen.getByRole('button', { name: 'Check exact result' }));
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Apply hole' })).toBeVisible()
+    );
+    expect(screen.queryByRole('button', { name: 'Create hole' })).toBeNull();
+  });
 });
