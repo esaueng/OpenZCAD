@@ -71,6 +71,49 @@ describe('editing a modeling feature through its creation form', () => {
       }
     );
     expect(modelingFeatureIsEditable('hole')).toBe(true);
-    expect(modelingFeatureIsEditable('shell')).toBe(false);
+    expect(modelingFeatureIsEditable('loft')).toBe(false);
+  });
+
+  it('lifts and patches the plane and face kinds through the same seam', () => {
+    expect(
+      modelingFormStateFromFeature('Mirror', {
+        featureKind: 'mirror',
+        targetBodyId: 'body_arm' as never,
+        plane: {
+          origin: { x: 0, y: 'w / 2', z: 0 },
+          normal: { x: 1, y: 0, z: 0 }
+        }
+      })
+    ).toEqual({
+      operation: 'mirror',
+      value: {
+        name: 'Mirror',
+        targetBodyId: 'body_arm',
+        origin: { x: '0', y: 'w / 2', z: '0' },
+        normal: { x: '1', y: '0', z: '0' }
+      }
+    });
+    expect(
+      modelingFeatureUpdate('feat_shell' as FeatureId, {
+        operation: 'shell',
+        input: {
+          name: 'Shell',
+          targetBodyId: 'body_cup' as never,
+          openingFaceHashes: [7, 9],
+          thickness: 1.5
+        }
+      })
+    ).toEqual({
+      featureId: 'feat_shell',
+      name: 'Shell',
+      data: {
+        featureKind: 'shell',
+        targetBodyId: 'body_cup',
+        openingFaceHashes: [7, 9],
+        thickness: 1.5
+      }
+    });
+    expect(modelingFeatureIsEditable('mirror')).toBe(true);
+    expect(modelingFeatureIsEditable('loft')).toBe(false);
   });
 });
