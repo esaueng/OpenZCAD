@@ -5289,6 +5289,9 @@ export function App() {
 
   function cancelPanel() {
     extrudeEditRequest.current += 1;
+    // The mode hint the panel set ("Move/Rotate: drag the arrows…") describes
+    // a state the user has just left; it must not outlive the panel.
+    retireStatusMessage();
     edgeFormPreview.clear();
     setEdgeFormSize(null);
     exactEntryQueue.cancel();

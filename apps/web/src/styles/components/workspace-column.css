@@ -145,6 +145,18 @@
   overflow-y: auto;
   border-bottom: var(--border-thin);
   container-type: inline-size;
+  /* The bar is hidden, so the fold itself has to say there is more: a
+     shadow at whichever edge has content beyond it, drawn by the scroll
+     position alone (the classic local-attachment gradient pair). */
+  background:
+    linear-gradient(var(--color-surface) 30%, transparent) top / 100% 14px
+      no-repeat local,
+    linear-gradient(transparent, var(--color-surface) 70%) bottom / 100% 14px
+      no-repeat local,
+    linear-gradient(rgba(0, 0, 0, 0.35), transparent) top / 100% 10px no-repeat
+      scroll,
+    linear-gradient(transparent, rgba(0, 0, 0, 0.35)) bottom / 100% 10px
+      no-repeat scroll;
 }
 
 /* A narrow column (the resizer allows 180px) cannot fit icon, name and
@@ -159,6 +171,13 @@
   .tool-tile {
     gap: 4px;
     padding: 0 3px 0 4px;
+    /* One size down: at the 180px minimum "Intersect" was a pixel short
+       on the beta's font rendering. */
+    font-size: var(--fs-xs);
+  }
+
+  .tool-tile-label {
+    letter-spacing: -0.02em;
   }
 }
 
