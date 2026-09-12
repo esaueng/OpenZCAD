@@ -5050,6 +5050,53 @@ export function App() {
     return false;
   }
 
+  /**
+   * Creates a body feature through the exact rebuild instead of committing
+   * first and finding out from Diagnostics. Only union used to take this
+   * path; a refused subtract, pattern, revolve or move landed in history as
+   * "… added." with the model unchanged and one raw kernel sentence in the
+   * sidebar. `resultBodyId` is the reserved result body, or the body a
+   * transform moves in place; without one there is nothing to validate
+   * against and the plain commit is the honest fallback.
+   */
+  function createValidatedFeature(
+    command: AnyCommand,
+    featureName: string,
+    resultBodyId: BodyId | undefined
+  ): void {
+    if (!resultBodyId) {
+      createFeature(command);
+      return;
+    }
+    void executeValidatedFeature(command, {
+      featureName,
+      resultBodyId,
+      successMessage: command.label,
+      onSuccess: finishFeatureCreation
+    });
+  }
+
+  /** The edit counterpart of {@link createValidatedFeature}. */
+  function applyValidatedFeature(
+    command: AnyCommand,
+    feature: FeatureNode,
+    featureName: string,
+    resultBodyId: BodyId | undefined = feature.bodyId
+  ): void {
+    if (!doc || !resultBodyId) {
+      executeCommand(command);
+      return;
+    }
+    void executeValidatedFeature(command, {
+      featureName,
+      resultBodyId,
+      targets: affectedFeatureTargets(doc, feature.featureId).map(
+        (target, index) => (index === 0 ? { ...target, featureName } : target)
+      ),
+      successMessage: command.label
+    });
+  }
+
   const extrudeSelectionReturnRef = useRef<{
     profiles: RegionPickData[];
     sketchId: SketchId | null;
@@ -15671,29 +15718,24 @@ export function App() {
                     })
                   )
                 }
-                onCreateRevolve={(value) =>
-                  createFeature(commandFactories.revolveSketch(value))
-                }
+                onCreateRevolve={(value) => {
+                  const command = commandFactories.revolveSketch(value);
+                  createValidatedFeature(
+                    command,
+                    value.name,
+                    command.payload.ids?.bodyId
+                  );
+                }}
                 onCreateBoolean={(value) => {
                   const command = commandFactories.booleanBodies(value);
-                  if (value.operation !== 'union') {
-                    createFeature(command);
-                    return;
-                  }
-                  const resultBodyId = command.payload.ids?.bodyId;
-                  if (!resultBodyId) {
-                    setStatus('Union could not reserve a result body.');
-                    return;
-                  }
-                  void executeValidatedFeature(command, {
-                    featureName: value.name,
-                    resultBodyId,
-                    successMessage: command.label,
-                    onSuccess: finishFeatureCreation
-                  });
+                  createValidatedFeature(
+                    command,
+                    value.name,
+                    command.payload.ids?.bodyId
+                  );
                 }}
                 onCreateTransform={(value) =>
-                  createFeature(
+                  createValidatedFeature(
                     commandFactories.transformBody({
                       name: value.name,
                       targetBodyId: value.targetBodyId,
@@ -15702,7 +15744,9 @@ export function App() {
                       ...(value.scale !== undefined
                         ? { scale: value.scale }
                         : {})
-                    })
+                    }),
+                    value.name,
+                    value.targetBodyId
                   )
                 }
                 onPreviewEdgeModifier={previewEdgeForm}
@@ -15710,9 +15754,14 @@ export function App() {
                 onCreateEdgeModifier={(kind, value) =>
                   applyEdgeForm(null, kind, value)
                 }
-                onCreatePattern={(value) =>
-                  createFeature(commandFactories.patternBody(value))
-                }
+                onCreatePattern={(value) => {
+                  const command = commandFactories.patternBody(value);
+                  createValidatedFeature(
+                    command,
+                    value.name,
+                    command.payload.ids?.bodyId
+                  );
+                }}
                 onApplyPrimitive={(feature, name, dimensions) => {
                   const command = commandFactories.updateFeature(
                     {
@@ -15846,7 +15895,7 @@ export function App() {
                 onPreviewExtrude={previewExtrudeForm}
                 extrudeTargets={availableExtrudeTargets}
                 onApplyRevolve={(feature, value) =>
-                  executeCommand(
+                  applyValidatedFeature(
                     commandFactories.updateFeature(
                       {
                         featureId: feature.featureId,
@@ -15859,7 +15908,9 @@ export function App() {
                         }
                       },
                       `Edit ${value.name}`
-                    )
+                    ),
+                    feature,
+                    value.name
                   )
                 }
                 onApplyBoolean={(feature, value) => {
@@ -15875,22 +15926,10 @@ export function App() {
                     },
                     `Edit ${value.name}`
                   );
-                  if (value.operation !== 'union') {
-                    executeCommand(command);
-                    return;
-                  }
-                  if (!feature.bodyId) {
-                    setStatus('Boolean feature has no result body.');
-                    return;
-                  }
-                  void executeValidatedFeature(command, {
-                    featureName: value.name,
-                    resultBodyId: feature.bodyId,
-                    successMessage: command.label
-                  });
+                  applyValidatedFeature(command, feature, value.name);
                 }}
                 onApplyTransform={(feature, value) =>
-                  executeCommand(
+                  applyValidatedFeature(
                     commandFactories.updateFeature(
                       {
                         featureId: feature.featureId,
@@ -15910,12 +15949,15 @@ export function App() {
                         }
                       },
                       `Edit ${value.name}`
-                    )
+                    ),
+                    feature,
+                    value.name,
+                    value.targetBodyId
                   )
                 }
                 onApplyEdgeModifier={applyEdgeForm}
                 onApplyPattern={(feature, value) =>
-                  executeCommand(
+                  applyValidatedFeature(
                     commandFactories.updateFeature(
                       {
                         featureId: feature.featureId,
@@ -15941,7 +15983,9 @@ export function App() {
                         }
                       },
                       `Edit ${value.name}`
-                    )
+                    ),
+                    feature,
+                    value.name
                   )
                 }
                 onResizeThroughHole={handleResizeThroughHole}
