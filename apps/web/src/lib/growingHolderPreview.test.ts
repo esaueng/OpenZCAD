@@ -150,6 +150,86 @@ describe('disposable growing holder preview', () => {
     );
   });
 
+  it('moves upper pieces and stretches arm bridges when the height changes', () => {
+    const manager = new CommandManager(
+      createProjectDocument('Preview test', toUserId('test'))
+    );
+    manager.execute(
+      commandFactories.importStep({
+        name: 'Source',
+        artifactId: 'source',
+        sourceName: 'source.step',
+        stepText: 'test source'
+      })
+    );
+    const section = [
+      { objectKind: 'line', x1: 0, y1: 0, x2: 1, y2: 0 },
+      { objectKind: 'line', x1: 1, y1: 0, x2: 0, y2: 1 },
+      { objectKind: 'line', x1: 0, y1: 1, x2: 0, y2: 0 }
+    ] as const;
+    const compiled = growingHolderCommand(manager.document, {
+      ...recipe(manager.document.bodyOrder[0]!),
+      height: {
+        axis: 'z',
+        cuts: [20, 22],
+        sourceHeight: 40,
+        parameter: 'holder_height',
+        minimumHeight: 38.1,
+        sections: { negative: [...section], positive: [...section] }
+      }
+    });
+    manager.execute(compiled.command);
+    const doc = manager.document;
+    expect(growingHolderHistories(doc)).toHaveLength(1);
+    // One triangle per part; each part's x and z tell where it lives.
+    const part = (bodyId: BodyId, x: number, z: number, consumed = true): BodyRepresentation => ({
+      bodyId,
+      name: 'Body',
+      source: 'boolean',
+      color: '#ff8800',
+      consumed,
+      exportableStep: true,
+      faceCount: 1,
+      volume: 1,
+      bbox: { min: { x, y: 0, z }, max: { x, y: 1, z } },
+      mesh: {
+        kind: 'mesh',
+        vertices: Float32Array.of(x, 0, z, x, 1, z, x, 0, z + 1),
+        indices: Uint32Array.of(0, 1, 2)
+      }
+    });
+    const b = compiled.bodies;
+    doc.derived.bodyRepresentations = {
+      [b.negativeLower!]: part(b.negativeLower!, -20, 10),
+      [b.negativeArm!]: part(b.negativeArm!, -20, 20),
+      [b.negativeUpper!]: part(b.negativeUpper!, -20, 30),
+      [b.bridge!]: part(b.bridge!, -4, 5),
+      [b.positiveLower!]: part(b.positiveLower!, 40, 10),
+      [b.positiveArm!]: part(b.positiveArm!, 40, 20),
+      [b.positiveUpper!]: part(b.positiveUpper!, 40, 30),
+      [compiled.bodyId]: part(compiled.bodyId, 0, 0, false)
+    };
+    const taller = setParameter(doc, { name: 'holder_height', expression: '46' });
+    const preview = growingHolderPreview(doc, taller)![0]!;
+    const zs = axisValues(preview, 2);
+    const xs = axisValues(preview, 0);
+    // Lower pieces and the width bridge stay; upper pieces rise by 6; arm
+    // bridges stretch from 2 to 8 about z = 20 (their third vertex at z + 1
+    // lands at 20 + 4); nothing moves in x at the source opening.
+    expect(zs.slice(0, 3)).toEqual([10, 10, 11]);
+    expect(zs.slice(3, 6)).toEqual([20, 20, 24]);
+    expect(zs.slice(6, 9)).toEqual([36, 36, 37]);
+    expect(zs.slice(9, 12)).toEqual([5, 5, 6]);
+    expect(xs.every((x, i) => x === [-20, -20, -20, -20, -20, -20, -20, -20, -20, -4, -4, -4, 40, 40, 40, 40, 40, 40, 40, 40, 40][i])).toBe(true);
+    // Width and height together: ends shift by ∓2 as well.
+    const both = setParameter(taller, { name: 'opening_width', expression: '50' });
+    const combined = growingHolderPreview(doc, both)![0]!;
+    expect(axisValues(combined, 0).slice(0, 9).every((x) => x === -22)).toBe(true);
+    expect(axisValues(combined, 0).slice(12).every((x) => x === 42)).toBe(true);
+    expect(axisValues(combined, 2).slice(6, 9)).toEqual([36, 36, 37]);
+    expect(growingHolderPreview(doc, setParameter(doc, { name: 'holder_height', expression: '38' }))).toBeNull();
+  });
+
   it('follows the recipe axis instead of assuming x', () => {
     const { doc } = fixture('z');
     const preview = growingHolderPreview(doc, changeWidth(doc, 50))![0]!;
