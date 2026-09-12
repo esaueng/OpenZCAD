@@ -4,6 +4,7 @@ import {
   toEntityId,
   toFeatureId,
   toSketchId,
+  type BodyRepresentation,
   type BodyTopology,
   type FaceTopologyReferenceV5
 } from '@openzcad/shared';
@@ -45,7 +46,8 @@ const topology: BodyTopology = {
       geometry: {
         surfaceType: 'plane',
         area: 200,
-        center: { x: 5, y: 10, z: 30 }
+        center: { x: 5, y: 10, z: 30 },
+        normal: { x: 0, y: 0, z: 1 }
       }
     }
   ],
@@ -80,6 +82,13 @@ describe('modeling operation form contracts', () => {
   it('projects semantic topology labels and complete shell references', () => {
     const faces = modelingFaceOptions(topology);
     expect(faces[0]?.label).toBe('Plane face box · face · z max · #0000002a');
+    // With a body to resolve against, the viewport's name leads and the
+    // lineage moves to the tooltip.
+    const named = modelingFaceOptions(topology, {
+      topology
+    } as unknown as BodyRepresentation);
+    expect(named[0]?.label).toBe('Top face');
+    expect(named[0]?.detail).toBe('Plane face box · face · z max · #0000002a');
     expect(
       buildModelingOperationSubmission(
         {

@@ -252,6 +252,53 @@ function withTargetBody(
   }
 }
 
+/**
+ * The principal planes as one-click choices, named as the sketch plane
+ * picker names them. Mirror and Split used to offer six number fields and
+ * nothing else; the numbers stay for the rare custom plane.
+ */
+const PRINCIPAL_PLANES: readonly {
+  label: string;
+  normal: { x: string; y: string; z: string };
+}[] = [
+  { label: 'Top (XY)', normal: { x: '0', y: '0', z: '1' } },
+  { label: 'Front (XZ)', normal: { x: '0', y: '1', z: '0' } },
+  { label: 'Right (YZ)', normal: { x: '1', y: '0', z: '0' } }
+];
+
+function PlaneChips({
+  normal,
+  onChoose
+}: {
+  normal: { x: string; y: string; z: string };
+  onChoose(normal: { x: string; y: string; z: string }): void;
+}) {
+  return (
+    <div className="field">
+      <span>Plane</span>
+      <div className="plane-chips" role="group" aria-label="Principal planes">
+        {PRINCIPAL_PLANES.map((plane) => {
+          const active =
+            Number(normal.x) === Number(plane.normal.x) &&
+            Number(normal.y) === Number(plane.normal.y) &&
+            Number(normal.z) === Number(plane.normal.z);
+          return (
+            <button
+              key={plane.label}
+              type="button"
+              className="plane-chip"
+              aria-pressed={active}
+              onClick={() => onChoose({ ...plane.normal })}
+            >
+              {plane.label}
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 function toggleHash(hashes: readonly number[], hash: number): number[] {
   return hashes.includes(hash)
     ? hashes.filter((candidate) => candidate !== hash)
@@ -297,6 +344,7 @@ function FacePicker({
               type="button"
               className={`pick-row${active ? ' selected' : ''}`}
               aria-pressed={active}
+              title={face.detail}
               onClick={() => {
                 if (!multiple) {
                   onChange(active ? [] : [face.hash]);
@@ -779,6 +827,12 @@ export function ModelingOperationsForm({
 
       {state.operation === 'mirror' || state.operation === 'split' ? (
         <>
+          <PlaneChips
+            normal={state.value.normal}
+            onChoose={(normal) =>
+              replaceState({ ...state, value: { ...state.value, normal } })
+            }
+          />
           <VectorFields
             legend="Plane origin"
             value={state.value.origin}
