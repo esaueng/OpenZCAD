@@ -57,6 +57,23 @@
     font-size: 9.5px;
   }
 
+  /* The stored-file count gets the same treatment as the live count. Inside
+     a 28px square there is no room for a number beside the glyph: it kept
+     its own font size while the summary went to `font-size: 0`, so the chip
+     grew past the square and shoved the folder icon off centre. */
+  .file-menu-count {
+    position: absolute;
+    top: -5px;
+    right: -5px;
+    min-width: 14px;
+    height: 14px;
+    padding: 0 3px;
+    color: var(--color-text);
+    background: var(--color-surface-hover);
+    box-shadow: 0 0 0 2px var(--color-surface);
+    font-size: 9.5px;
+  }
+
   .shortcuts-grid {
     grid-template-columns: 1fr;
   }
