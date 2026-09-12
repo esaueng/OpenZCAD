@@ -4013,3 +4013,45 @@ test('a refused boolean never lands in history and says why in the form', async 
   await expect(page.getByRole('contentinfo')).toContainText('warnings0');
   await expectBodyCount(page, 2);
 });
+
+test('an open sketch chain does not light the profile tools', async ({
+  page
+}) => {
+  await stubApi(page);
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('Open Chain Part');
+  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: /^Sketch \(S\)/ }).click();
+  await page.getByRole('button', { name: 'Top (XY)' }).click();
+  const sketchTools = page.getByRole('toolbar', { name: 'Sketch tools' });
+  await sketchTools.getByRole('button', { name: /^Line/ }).click();
+  const canvas = page.locator('.viewer-host canvas');
+  const bounds = await canvas.boundingBox();
+  expect(bounds).not.toBeNull();
+  const start = {
+    x: bounds!.x + bounds!.width * 0.45,
+    y: bounds!.y + bounds!.height * 0.55
+  };
+  await page.mouse.move(start.x, start.y);
+  await page.mouse.down();
+  for (let step = 1; step <= 8; step += 1) {
+    await page.mouse.move(start.x + step * 20, start.y - step * 10);
+  }
+  await page.mouse.up();
+  await expect(
+    page.locator('.feature-row-main', { hasText: 'Sketch' })
+  ).toBeVisible();
+  await page.getByRole('button', { name: 'Finish Sketch' }).click();
+
+  // One line is a sketch, but not a profile: the tiles say what is missing
+  // instead of opening a form that refuses.
+  const extrude = page.getByRole('button', { name: /^Extrude \(E\)/ });
+  await expect(extrude).toBeDisabled();
+  await expect(extrude).toHaveAccessibleName(
+    'Extrude (E) — Close a sketch profile first'
+  );
+  await expect(
+    page.getByRole('button', { name: /^Revolve \(R\)/ })
+  ).toBeDisabled();
+  await expect(page.getByRole('button', { name: /^Move \(M\)/ })).toBeEnabled();
+});
