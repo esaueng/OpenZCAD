@@ -187,6 +187,7 @@ test('parameterizes a fresh holder import: opening, mounting holes, edits, reloa
   expect(consoleErrors.filter((message) => !message.includes('404'))).toEqual(
     []
   );
+  expect(consoleErrors).toHaveLength(2);
 });
 
 test('offers and grows the arm height on a holder whose arms are solid', async ({
