@@ -42,6 +42,8 @@ describe('createBodyMaterial', () => {
     expect(material.opacity).toBe(1);
     expect(material.depthWrite).toBe(true);
     expect(material.color.getHexString()).toBe('4da3ff');
+    expect(material.stencilWrite).toBe(true);
+    expect(material.stencilZPass).toBe(THREE.ReplaceStencilOp);
   });
 
   it('treats an explicit opacity of 1 as opaque', () => {
@@ -55,6 +57,7 @@ describe('createBodyMaterial', () => {
     expect(material.transparent).toBe(true);
     expect(material.opacity).toBe(0.45);
     expect(material.depthWrite).toBe(false);
+    expect(material.stencilWrite).toBe(false);
   });
 });
 

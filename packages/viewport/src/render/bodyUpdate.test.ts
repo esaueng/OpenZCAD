@@ -57,6 +57,19 @@ function expectSameGeometry(a: THREE.BufferGeometry, b: THREE.BufferGeometry) {
 }
 
 describe('retained exact body buffers', () => {
+  it('updates ground occlusion when a reused body changes opacity', () => {
+    const body = cylinder();
+    const object = createObjectForBody(body) as THREE.Mesh<
+      THREE.BufferGeometry,
+      THREE.MeshPhongMaterial
+    >;
+    for (const opacity of [0.4, 1, 0, 1]) {
+      expect(updateObjectForBody(object, { ...body, opacity })).toBe(true);
+      expect(object.material.stencilWrite).toBe(opacity === 1);
+      expect(object.material.depthWrite).toBe(opacity === 1);
+    }
+    disposeObject(object);
+  });
   it('matches fresh smoothing after radius, height, and nonuniform deformations', () => {
     const object = createObjectForBody(cylinder()) as THREE.Mesh;
     const geometry = object.geometry;
