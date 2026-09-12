@@ -185,6 +185,7 @@ import {
 } from './lib/staleChunk';
 import { watchBuildVersion } from './lib/buildVersionWatch';
 import { commandOutcomeMessage } from './lib/commandOutcome';
+import { presentedDiagnostics } from './lib/diagnosticsRows';
 import { primitiveDimensionLabel } from './lib/primitiveDimensionLabel';
 import { newBlendFacePick } from './lib/blendRearm';
 import { exactEntryShortcut, isTypingTarget } from './lib/exactEntryShortcut';
@@ -4233,6 +4234,14 @@ export function App() {
   // viewport shows previewDoc's bodies, so showing the live document's warnings
   // would hide exactly the problems the preview exists to reveal.
   const warnings = (previewDoc ?? doc)?.derived.warnings ?? [];
+  const diagnostics = useMemo(
+    () =>
+      presentedDiagnostics(
+        warnings,
+        (previewDoc ?? doc)?.derived.featureWarnings
+      ),
+    [warnings, previewDoc, doc]
+  );
 
   // Keyed on the derived body table, not the whole document: commands clone
   // the document but share `derived` by reference, so keying on `doc` gave
@@ -5071,7 +5080,7 @@ export function App() {
     void executeValidatedFeature(command, {
       featureName,
       resultBodyId,
-      successMessage: command.label,
+      successMessage: commandOutcomeMessage(command.label),
       onSuccess: finishFeatureCreation
     });
   }
@@ -5093,7 +5102,7 @@ export function App() {
       targets: affectedFeatureTargets(doc, feature.featureId).map(
         (target, index) => (index === 0 ? { ...target, featureName } : target)
       ),
-      successMessage: command.label
+      successMessage: commandOutcomeMessage(command.label)
     });
   }
 
@@ -12649,7 +12658,7 @@ export function App() {
       featureName: feature.name,
       resultBodyId: feature.bodyId,
       targets: affectedFeatureTargets(doc, feature.featureId),
-      successMessage: command.label
+      successMessage: commandOutcomeMessage(command.label)
     });
   }
 
@@ -14462,7 +14471,7 @@ export function App() {
     void executeValidatedFeature(approved.command, {
       featureName: approved.featureName,
       resultBodyId: approved.resultBodyId,
-      successMessage: approved.command.label,
+      successMessage: commandOutcomeMessage(approved.command.label),
       onSuccess: finishFeatureCreation
     });
   }
@@ -14587,7 +14596,7 @@ export function App() {
       selectedFeatureNodeId={selectedFeatureNodeId}
       hiddenBodyIds={hiddenBodyIds}
       hiddenSketchIds={hiddenSketchIds}
-      warnings={warnings}
+      warnings={diagnostics}
       historyDetails={
         <FeatureHistoryPanel
           document={doc}
@@ -15782,7 +15791,7 @@ export function App() {
                       (target, index) =>
                         index === 0 ? { ...target, featureName: name } : target
                     ),
-                    successMessage: command.label
+                    successMessage: commandOutcomeMessage(command.label)
                   });
                 }}
                 onApplySketch={(feature, value) => {
@@ -16048,7 +16057,7 @@ export function App() {
             projectName={doc.name}
             featureCount={features.length}
             bodyCount={viewerBodies.length}
-            warningCount={warnings.length}
+            warningCount={diagnostics.length}
             documentVersion={doc.version}
             saveState={presentedSaveState}
           />
