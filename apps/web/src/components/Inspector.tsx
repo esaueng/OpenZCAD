@@ -116,6 +116,8 @@ export interface InspectorCallbacks {
   onApplyTextSketch(feature: FeatureNode, value: TextSketchFormValue): void;
   /** Re-enters viewport sketch mode for the feature's sketch. */
   onEditSketchInViewport(feature: FeatureNode): void;
+  /** Reopens a modeling feature (today: Hole) in its creation form. */
+  onEditModelingFeature?(feature: FeatureNode): void;
   onApplyExtrude(feature: FeatureNode, value: ExtrudeFormValue): void;
   onPreviewExtrude(feature: FeatureNode, value: ExtrudeFormValue | null): void;
   extrudeBusy?: boolean;
@@ -1393,6 +1395,15 @@ export function Inspector(props: InspectorProps) {
               Edit sketch in viewport
             </button>
           )}
+        {data.featureKind === 'hole' && props.onEditModelingFeature && (
+          <button
+            type="button"
+            className="secondary"
+            onClick={() => props.onEditModelingFeature?.(selectedFeature)}
+          >
+            Edit hole
+          </button>
+        )}
         {form}
         {selectedTopology?.kind === 'face' &&
           selectedBody?.source === 'imported-step' && (
