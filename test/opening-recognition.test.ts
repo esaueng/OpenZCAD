@@ -5,7 +5,8 @@ import {
 } from '../packages/document-core/src/index';
 import {
   CommandManager,
-  growingHolderCommand
+  growingHolderCommand,
+  recipeFromRecognizedOpening
 } from '../packages/command-system/src/index';
 import { toUserId, type SketchObjectData } from '../packages/shared/src/index';
 import { buildDocumentHistory } from '../packages/kernel-adapter/src/exact-build-loop';
@@ -141,13 +142,14 @@ describe('opening recognition', () => {
       // and grown, without any hand-written value.
       const imported = importedDocument(kernel, solid);
       const manager = new CommandManager(imported.document);
-      const compiled = growingHolderCommand(manager.document, {
-        version: 1,
-        name: 'Bracket opening',
-        targetBodyId: imported.bodyId,
-        parameter: 'opening_width',
-        ...result.opening
-      });
+      const compiled = growingHolderCommand(
+        manager.document,
+        recipeFromRecognizedOpening(result.opening, {
+          name: 'Bracket opening',
+          targetBodyId: imported.bodyId,
+          parameter: 'opening_width'
+        })
+      );
       manager.execute(compiled.command);
       const axisIndex = { x: 0, y: 1, z: 2 }[placement.axis];
       for (const width of [44, 60]) {
@@ -167,6 +169,82 @@ describe('opening recognition', () => {
       }
     }, 120_000);
   }
+
+  it('measures the arm height on a bracket without bores and the recipe grows both ways', () => {
+    // A planar face carrying a circular bore loop cannot be split by a
+    // plane in the kernel, so the drilled bracket gets no height (its reason
+    // is reported); the same bracket without bores does.
+    const drilled = recognizeOpening(kernel, roundTripped(kernel, syntheticHolderSolid(kernel)));
+    expect(drilled.status).toBe('recognized');
+    if (drilled.status !== 'recognized') return;
+    expect(drilled.opening.height).toBeUndefined();
+    expect(drilled.evidence.heightReason).toMatch(/Carving the section/);
+
+    const solid = roundTripped(kernel, syntheticHolderSolid(kernel, { holes: false }));
+    const result = recognizeOpening(kernel, solid);
+    expect(result.status).toBe('recognized');
+    if (result.status !== 'recognized') return;
+    const height = result.opening.height;
+    expect(height).toMatchObject({
+      axis: 'y',
+      cuts: [20.1, 30.9],
+      sourceHeight: 32,
+      straightRuns: { negative: [20, 31], positive: [8, 31] }
+    });
+    expect(height!.minimumHeight).toBeCloseTo(32 - 10.8 + 0.1, 9);
+    expect(profileKeys(height!.sections.negative)).toEqual(rect(0, -20, 8, 0));
+    expect(profileKeys(height!.sections.positive)).toEqual(rect(52, -20, 60, 0));
+
+    const imported = importedDocument(kernel, solid);
+    const manager = new CommandManager(imported.document);
+    const compiled = growingHolderCommand(
+      manager.document,
+      recipeFromRecognizedOpening(result.opening, {
+        name: 'Bracket',
+        targetBodyId: imported.bodyId,
+        parameter: 'opening_width',
+        heightParameter: 'holder_height'
+      })
+    );
+    manager.execute(compiled.command);
+    expect(Object.keys(compiled.bodies).sort()).toEqual([
+      'bridge',
+      'negativeArm',
+      'negativeLower',
+      'negativeUpper',
+      'positiveArm',
+      'positiveLower',
+      'positiveUpper'
+    ]);
+    for (const [width, heightValue] of [
+      [44, 32],
+      [60, 40],
+      [30, 22],
+      [44, 48]
+    ] as const) {
+      const document = setParameter(
+        setParameter(manager.document, {
+          name: 'holder_height',
+          expression: String(heightValue)
+        }),
+        { name: 'opening_width', expression: String(width) }
+      );
+      const built = buildDocumentHistory(kernel, document);
+      expect(
+        built.warnings.map((w) => JSON.stringify(w)),
+        `width ${width} height ${heightValue}`
+      ).toEqual([]);
+      const holder = built.shapes.get(compiled.bodyId)!.solids[0]!;
+      expect(kernel.validateSolid(holder)).toBe(0);
+      const bounds = Array.from(kernel.boundingBox(holder));
+      expect(bounds[0]).toBeCloseTo(30 - (width + 16) / 2, 6);
+      expect(bounds[3]).toBeCloseTo(30 + (width + 16) / 2, 6);
+      expect(bounds[1]).toBeCloseTo(0, 6);
+      expect(bounds[4]).toBeCloseTo(heightValue, 6);
+      expect(bounds[2]).toBeCloseTo(0, 6);
+      expect(bounds[5]).toBeCloseTo(20, 6);
+    }
+  }, 120_000);
 
   it('refuses a solid with no facing pair across an empty gap', () => {
     const result = recognizeOpening(kernel, kernel.makeBox(10, 20, 30));
