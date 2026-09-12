@@ -1,6 +1,7 @@
 import {
   coerceParamValue,
   type DraftInput,
+  type FeatureUpdateInput,
   type HelicalSweepInput,
   type HoleInput,
   type LoftInput,
@@ -17,6 +18,10 @@ import {
   type BodyRepresentation,
   type BodyTopology,
   type FaceTopologyReferenceV5,
+  type FeatureId,
+  type FeatureKind,
+  type FeatureNode,
+  type ParamValue,
   type SketchPathReference,
   type SketchSectionReference
 } from '@openzcad/shared';
@@ -156,6 +161,73 @@ export type ModelingOperationSubmission =
   | { operation: 'helical-sweep'; input: HelicalSweepInput }
   | { operation: 'draft'; input: DraftInput }
   | { operation: 'thicken'; input: ThickenInput };
+
+/**
+ * Editing a modeling feature reuses its creation form. The stored data is
+ * lifted back into the form's string fields here; the reverse trip happens
+ * through the same submission the creation path builds, then
+ * {@link modelingFeatureUpdate} turns it into an `updateFeature` patch.
+ * Only kinds listed here have an editor; the rest still fall through to the
+ * read-only inspector until they are added.
+ */
+export function modelingFormStateFromFeature(
+  name: string,
+  data: Extract<FeatureNode['data'], { featureKind: 'hole' }>
+): ModelingOperationFormState {
+  const text = (value: ParamValue | undefined, fallback: string) =>
+    value === undefined ? fallback : String(value);
+  return {
+    operation: 'hole',
+    value: {
+      name,
+      targetBodyId: data.targetBodyId,
+      faceHash: data.faceHash,
+      style: data.style,
+      diameter: text(data.diameter, '6'),
+      depthMode: data.depthMode,
+      depth: text(data.depth, '10'),
+      counterboreDiameter: text(data.counterboreDiameter, '11'),
+      counterboreDepth: text(data.counterboreDepth, '3'),
+      countersinkDiameter: text(data.countersinkDiameter, '12'),
+      countersinkAngleDeg: text(data.countersinkAngleDeg, '90'),
+      position: {
+        u: text(data.position.u, '0'),
+        v: text(data.position.v, '0')
+      }
+    }
+  };
+}
+
+/** The kinds `modelingFormStateFromFeature` can lift. */
+export function modelingFeatureIsEditable(kind: FeatureKind): kind is 'hole' {
+  return kind === 'hole';
+}
+
+/**
+ * The `updateFeature` payload for a submission made while editing. The
+ * data keys are exactly what the creation command stores
+ * (`holeBody` spreads the input minus name and ids), so a round trip
+ * through the form leaves an untouched feature unchanged.
+ */
+export function modelingFeatureUpdate(
+  featureId: FeatureId,
+  submission: ModelingOperationSubmission
+): FeatureUpdateInput | null {
+  if (submission.operation !== 'hole') return null;
+  // `positionAnchor` is not a patchable key: the anchor a hole was created
+  // with is fixed for its life, since re-anchoring would move the hole.
+  const {
+    name,
+    ids: _ids,
+    positionAnchor: _anchor,
+    ...parameters
+  } = submission.input;
+  return {
+    featureId,
+    name,
+    data: { featureKind: 'hole', ...parameters }
+  };
+}
 
 export interface ModelingFaceOption {
   hash: number;
