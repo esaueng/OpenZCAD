@@ -1539,7 +1539,7 @@ test('preflights and drills a through hole into the top face', async ({
   await expect(
     page.getByRole('status').filter({ hasText: 'Exact preflight passed' })
   ).toBeVisible({ timeout: 20_000 });
-  await page.getByRole('button', { name: 'Create hole' }).click();
+  await page.getByRole('button', { name: 'Apply hole' }).click();
   await expect(page.getByRole('contentinfo')).toContainText('Edited Hole.');
   await expect(page.locator('.feature-row', { hasText: /^Hole/ })).toHaveCount(
     1
@@ -1606,7 +1606,7 @@ test('preflights and creates an exact open-top shell', async ({ page }) => {
   await expect(
     page.getByRole('status').filter({ hasText: 'Exact preflight passed' })
   ).toBeVisible({ timeout: 20_000 });
-  await page.getByRole('button', { name: 'Create shell' }).click();
+  await page.getByRole('button', { name: 'Apply shell' }).click();
   await expect(page.getByRole('contentinfo')).toContainText('Edited Shell.');
   await expect(page.locator('.feature-row', { hasText: /^Shell/ })).toHaveCount(
     1

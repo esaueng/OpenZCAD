@@ -16,15 +16,21 @@ export function edgeModifierCommand(
     {
       featureId: feature.featureId,
       name: value.name,
-      data:
-        kind === 'fillet'
+      // The edge set travels with the edit, so a fillet can take more edges
+      // after creation. Hash-only sets clear the stored references: those
+      // named the old set, and the kernel resolves the new one by fingerprint.
+      data: {
+        edgeHashes: value.edgeHashes,
+        edgeReferences: value.edgeReferences,
+        ...(kind === 'fillet'
           ? { radius: value.size }
           : {
               distance: value.size,
               ...(value.angleDeg !== undefined
                 ? { angleDeg: value.angleDeg }
                 : {})
-            }
+            })
+      }
     },
     `Edit ${value.name}`
   );

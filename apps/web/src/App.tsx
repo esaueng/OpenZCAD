@@ -9561,7 +9561,19 @@ export function App() {
       setSelectedTopology(
         nextEdges.at(-1) ?? { bodyId: selection.bodyId, kind: 'body' }
       );
-      inferFeatureNodeFor(selection.bodyId);
+      // A fillet or chamfer pinned from its history row is being retargeted:
+      // Shift-picking edges on its body feeds its edit form, so the pin has
+      // to survive the pick instead of falling back to the body's feature.
+      const pinnedEdgeFeature =
+        selectedFeatureNode?.source === 'pinned' &&
+        additive &&
+        sameBody &&
+        selectedFeature?.bodyId === selection.bodyId &&
+        (selectedFeature.data.featureKind === 'fillet' ||
+          selectedFeature.data.featureKind === 'chamfer');
+      if (!pinnedEdgeFeature) {
+        inferFeatureNodeFor(selection.bodyId);
+      }
       if (!additive && tool !== 'fillet' && tool !== 'chamfer') {
         setTool(null);
       }
@@ -15727,6 +15739,7 @@ export function App() {
                   <ModelingOperationsForm
                     key={`${modelingOperation}:${modelingEditFeature?.featureId ?? 'new'}`}
                     operation={modelingOperation}
+                    editing={modelingEditFeature !== null}
                     initial={
                       modelingEditFeature &&
                       modelingFeatureIsEditable(

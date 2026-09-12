@@ -1161,14 +1161,44 @@ export function Inspector(props: InspectorProps) {
       data.featureKind === 'fillet' ||
       data.featureKind === 'chamfer'
     ) {
+      // Edges picked in the viewport on the blended body join the stored
+      // set, so a fillet can grow after creation the way it is created. The
+      // pick lands on the result body while the feature resolves against its
+      // consumed source; unblended edges keep their fingerprint across the
+      // two, so the added hashes resolve by fingerprint while the stored
+      // references keep naming the original edges, and a hash the kernel
+      // cannot find is refused by the validated commit rather than guessed.
+      // Only a feature pinned from its history row takes picks: a blend
+      // clicked in the viewport to *find* its fillet is an inferred
+      // selection, and that picked blend edge must not join the set.
+      const pickedEdgeHashes =
+        featureSelectionSource === 'pinned'
+          ? selectedEdges.flatMap((edge) =>
+              edge.bodyId === selectedFeature.bodyId && edge.hash !== undefined
+                ? [edge.hash]
+                : []
+            )
+          : [];
+      const addedEdgeHashes = pickedEdgeHashes.filter(
+        (hash) => !data.edgeHashes.includes(hash)
+      );
+      const editEdgeHashes =
+        addedEdgeHashes.length > 0
+          ? [...data.edgeHashes, ...addedEdgeHashes]
+          : data.edgeHashes;
+      // Stored references only cover the stored hashes and a pick lands on
+      // the blended result body, whose lineage the consumed source does not
+      // carry, so a grown set goes hash-only and resolves by fingerprint.
+      const editEdgeReferences =
+        addedEdgeHashes.length > 0 ? undefined : data.edgeReferences;
       form = (
         <EdgeModifierForm
-          key={editKey}
+          key={`${editKey}:${editEdgeHashes.length}`}
           kind={data.featureKind}
           scope={scope}
           targetBodyId={data.targetBodyId}
-          edgeHashes={data.edgeHashes}
-          edgeReferences={data.edgeReferences}
+          edgeHashes={editEdgeHashes}
+          edgeReferences={editEdgeReferences}
           initial={{
             name: selectedFeature.name,
             size: data.featureKind === 'fillet' ? data.radius : data.distance,
