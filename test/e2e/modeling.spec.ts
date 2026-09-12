@@ -1587,6 +1587,34 @@ test('preflights and creates an exact open-top shell', async ({ page }) => {
   await expect(page.locator('.body-row.consumed')).toContainText('Box Body');
   await expectBodyCount(page, 1);
   await expect(page.getByRole('contentinfo')).toContainText('warnings0');
+
+  // The shell is editable afterwards through the same form, prefilled.
+  await page.locator('.feature-row-main', { hasText: 'Shell' }).click();
+  const inspector = page.getByRole('region', { name: 'Feature inspector' });
+  const volumeBefore = await inspector.getByText(/mm³/).first().textContent();
+  await inspector.getByRole('button', { name: 'Edit shell' }).click();
+  const thickness = page.getByRole('textbox', {
+    name: 'Wall thickness',
+    exact: true
+  });
+  await expect(thickness).toHaveValue('2');
+  await expect(
+    openings.getByRole('button', { name: /Top face/ })
+  ).toHaveAttribute('aria-pressed', 'true');
+  await thickness.fill('3');
+  await page.getByRole('button', { name: 'Check exact result' }).click();
+  await expect(
+    page.getByRole('status').filter({ hasText: 'Exact preflight passed' })
+  ).toBeVisible({ timeout: 20_000 });
+  await page.getByRole('button', { name: 'Create shell' }).click();
+  await expect(page.getByRole('contentinfo')).toContainText('Edited Shell.');
+  await expect(page.locator('.feature-row', { hasText: /^Shell/ })).toHaveCount(
+    1
+  );
+  await page.locator('.feature-row-main', { hasText: 'Shell' }).click();
+  const volumeAfter = await inspector.getByText(/mm³/).first().textContent();
+  expect(volumeAfter).not.toEqual(volumeBefore);
+  await expect(page.getByRole('contentinfo')).toContainText('warnings0');
   expect(consoleErrors).toEqual([]);
 });
 
