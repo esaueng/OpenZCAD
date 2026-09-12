@@ -312,12 +312,14 @@
 
 /* A narrow column (the resizer allows 180px) cannot fit icon, name and
    shortcut badge on one tile: the badge ate the name, so "Sketch" read
-   "Sk…". Below ~224px the badge goes (the tooltip and ⌘K still show it)
-   and the tile tightens so every name fits two across.
+   "Sk…". Below 232px the badge goes (the tooltip and ⌘K still show it)
+   and the tile tightens so every name fits two across. The wide layout
+   needs 230px for "Intersect" plus its badge on the beta's font
+   rendering; at 224 a 225–230px band still clipped it.
    This block must follow the base .tool-tile rules: it shares their
    specificity, so source order decides, and ahead of them only the badge
    and tracking parts applied and "Intersect" still clipped on the beta. */
-@container (max-width: 224px) {
+@container (max-width: 232px) {
   .tool-tile kbd {
     display: none;
   }
