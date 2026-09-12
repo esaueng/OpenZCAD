@@ -90,6 +90,17 @@ the same PR that lands Phase 2 so there is one plan of record.
   now digest only the parameters their expressions name, and recognition
   runs only on live imported bodies. Open: the first edit after a reload
   still measured 18–31 s twice; not yet characterised.
+- **Phase 7 (PR 8, 2026-09-12):** `test/e2e/growing-holder.spec.ts`
+  drives the fresh-import-to-export walkthrough through the real product on
+  the committed synthetic holder STEP fixtures (the kernel's own export of the
+  synthetic builder, guarded against drift by
+  `test/synthetic-holder-fixtures.test.ts`): import, both verified
+  suggestions, width 60 / bore 4 / width 30 / below-minimum 10 / 52, undo and
+  redo, reload, STEP export; and on the hole-free holder the height control
+  at 40, then width 60, then the near-minimum 22. Not covered here: rotated
+  or translated input, other units, ambiguous drawings, worker interruption,
+  project backup round trip, STL closure; those stay in the Vitest suites or
+  remain open.
 - **Phase 5, height (PR 6):** the recipe carries an optional arm-height
   control measured by the same straight-run rule along the arms; on the
   hammer the only straight run on the lettered arm is a gap between letters,
