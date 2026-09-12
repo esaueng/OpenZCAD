@@ -200,6 +200,14 @@
   grid-column: 1 / -1;
 }
 
+/* While a drag handle shows its value chip, the callout naming the picked
+   face would sit on top of it (both anchor near the top of the body); the
+   name is still in the selection chip and the inspector, so the callout
+   yields. */
+.viewer-shell:has(.handle-value-chip:not([hidden])) .selection-callout {
+  visibility: hidden;
+}
+
 .selection-callout {
   white-space: nowrap;
   padding: 3px 7px;
