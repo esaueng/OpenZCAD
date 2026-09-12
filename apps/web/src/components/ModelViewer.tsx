@@ -1,4 +1,5 @@
 import { useEffect, useRef, type MutableRefObject } from 'react';
+import { axisDimensionLabel } from '../lib/primitiveDimensionLabel';
 import * as THREE from 'three';
 import { mark, measure, timed } from '../lib/perf';
 import { buildSketchDimensions } from './viewer/sketchDimensions';
@@ -558,6 +559,12 @@ interface ModelViewerProps {
   openExactEntryRef: MutableRefObject<(() => boolean) | null>;
   /** Armed edge fillet/chamfer handle (selection-first direct manipulation). */
   edgeHandle: EdgeHandleTarget | null;
+  /**
+   * The radius/distance a form is currently proposing for the armed edges.
+   * The handle shows it so the two never disagree: the tile's form said
+   * "Radius 2" while the handle beside it read "R 0 mm".
+   */
+  edgeHandleValue?: number | null;
   /** Streamed while an edge-radius drag is in flight (throttled by App). */
   onEdgeRadiusPreview(size: number): void;
   /** Fired when the radius drag releases (or exact entry commits). */
@@ -1185,6 +1192,7 @@ export function ModelViewer({
   cancelDirectManipulationRef,
   openExactEntryRef,
   edgeHandle,
+  edgeHandleValue = null,
   onEdgeRadiusPreview,
   onEdgeCommit,
   onEdgeCancel,
@@ -4642,7 +4650,7 @@ export function ModelViewer({
       value: number,
       axis: DirectEditAxis
     ) {
-      const label = axis === 'x' ? 'Width' : axis === 'y' ? 'Height' : 'Depth';
+      const label = axisDimensionLabel(axis);
       dragHud.textContent = `${label} ${Math.round(value * 100) / 100} ${unitsRef.current}`;
       hud.showAtPointer(dragHud, event, 14, -36);
     }
@@ -7404,8 +7412,7 @@ export function ModelViewer({
             geometry.computeBoundingBox();
             const center = geometry.boundingBox?.getCenter(new THREE.Vector3());
             if (center) {
-              const dimension =
-                axis === 'x' ? 'Width' : axis === 'y' ? 'Height' : 'Depth';
+              const dimension = axisDimensionLabel(axis);
               const rounded = Math.round(value * 100) / 100;
               // Editable dimension pill: drag the face for a rough size, or
               // click the value and type an exact one.
@@ -8023,6 +8030,16 @@ export function ModelViewer({
       }
     };
   }, [edgeHandle, bodies]);
+
+  // A typed form value moves the handle; a drag in flight owns it instead.
+  useEffect(() => {
+    const rig = edgeRigRef.current;
+    if (!rig || edgeHandleValue === null || edgeDragActiveRef.current) {
+      return;
+    }
+    rig.setValue(edgeHandleValue);
+    contextRef.current?.requestRender();
+  }, [edgeHandleValue, edgeHandle]);
 
   // Region-detected sketch rendering: curves stay readable while bounded
   // cells get cached fill, boundary, marker, and plane-local pick targets.
