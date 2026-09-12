@@ -6,6 +6,7 @@ import type {
 import type { CadPatchProposal, CadSelectionContext } from './index';
 
 export const GROWING_HOLDER_PARAMETER = 'opening_width';
+export const GROWING_HOLDER_HEIGHT_PARAMETER = 'holder_height';
 
 export interface GrowingHolderProposalTarget {
   bodyId: BodyId;
@@ -66,6 +67,11 @@ export function createGrowingHolderProposal(
     proposalId: `verified_growing_holder_${target.bodyId}`,
     summary: `The ${millimetres(opening.sourceOpening, units)} opening of ${target.name} will become the editable parameter ${GROWING_HOLDER_PARAMETER}. Both ends keep their exact geometry and move apart symmetrically about ${opening.axis} = ${millimetres(opening.center, units)}; the ${millimetres(sectionLength, units)} straight section between them is rebuilt at the new length, so the overall size follows the opening.`,
     assumptions: [
+      ...(opening.height
+        ? [
+            `The arms are ${millimetres(opening.height.sourceHeight, units)} tall along ${opening.height.axis} and become the editable parameter ${GROWING_HOLDER_HEIGHT_PARAMETER}: each arm grows in its straight section between ${opening.height.axis} = ${millimetres(opening.height.cuts[0], units)} and ${millimetres(opening.height.cuts[1], units)}, which on a lettered arm is the widest gap between two letters, so that gap widens with the height. Everything above moves up rigidly; the smallest supported height is ${millimetres(opening.height.minimumHeight, units)}.`
+          ]
+        : []),
       `The opening was measured between the two inner faces along ${opening.axis} at ${millimetres(opening.sourceOpening, units)}.`,
       `The section between ${opening.axis} = ${millimetres(opening.cuts[0], units)} and ${millimetres(opening.cuts[1], units)} is straight; everything outside it, including holes and blends, moves rigidly with its end.`,
       `The smallest supported opening is ${millimetres(opening.minimumOpening, units)}, where the two ends would meet.`
@@ -77,6 +83,7 @@ export function createGrowingHolderProposal(
         localId: 'holder',
         targetBodyId: target.bodyId,
         parameter: GROWING_HOLDER_PARAMETER,
+        heightParameter: opening.height ? GROWING_HOLDER_HEIGHT_PARAMETER : null,
         opening
       }
     ]

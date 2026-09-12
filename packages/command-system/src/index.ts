@@ -1,5 +1,9 @@
 import { importedOpeningCommand } from './imported-opening';
-import { growingHolderCommand, growingHolderHistories } from './growing-holder';
+import {
+  growingHolderCommand,
+  growingHolderHistories,
+  recipeFromRecognizedOpening
+} from './growing-holder';
 import {
   growingHolderHoleCommand,
   matchGrowingHolderHoles
@@ -17,13 +21,18 @@ export {
 } from './growing-holder-holes';
 export { importedOpeningCommand } from './imported-opening';
 export {
+  GROWING_HOLDER_HEIGHT_PARAMETER,
   GROWING_HOLDER_RECIPE_METADATA_KEY,
   growingHolderCommand,
   growingHolderHistories,
   growingHolderPlan,
+  recipeFromRecognizedOpening,
   validateGrowingHolderRecipe,
+  type GrowingHolderBridge,
   type GrowingHolderCompilation,
+  type GrowingHolderHeight,
   type GrowingHolderHistory,
+  type GrowingHolderPiece,
   type GrowingHolderPlan,
   type GrowingHolderRecipe,
   type OpeningAxis
@@ -2281,13 +2290,15 @@ export function commandsForCadPatch(
       }
       case 'add_growing_holder_recipe': {
         const targetBodyId = resolveBody(operation.targetBodyId);
-        const compiled = growingHolderCommand(projectedDocument, {
-          version: 1,
-          name: operation.name,
-          targetBodyId,
-          parameter: operation.parameter,
-          ...operation.opening
-        });
+        const compiled = growingHolderCommand(
+          projectedDocument,
+          recipeFromRecognizedOpening(operation.opening, {
+            name: operation.name,
+            targetBodyId,
+            parameter: operation.parameter,
+            heightParameter: operation.heightParameter
+          })
+        );
         scope.declare(operation.localId, compiled.bodyId);
         scope.consume([targetBodyId], 'growing holder recipe');
         return compiled.command;
