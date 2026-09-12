@@ -1506,6 +1506,8 @@ export function ModelViewer({
       () =>
         new THREE.WebGLRenderer({
           antialias: true,
+          // Ground decorations use the opaque bodies' stencil coverage.
+          stencil: true,
           powerPreference: 'high-performance'
         })
     );
