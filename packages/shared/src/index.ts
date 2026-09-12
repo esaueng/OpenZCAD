@@ -1386,7 +1386,24 @@ export interface BodyTopology {
 
 export type OpeningAxis = 'x' | 'y' | 'z';
 
-/** Everything a growing-holder recipe needs except a name, body and parameter. */
+/**
+ * The measured arm-height control of an opening: along `axis` (never the
+ * opening axis) both ends have a straight section between `cuts`; material
+ * beyond the upper cut moves with the height.
+ */
+export interface RecognizedArmHeight {
+  axis: OpeningAxis;
+  cuts: [number, number];
+  /** Extent of the source along `axis`; the parameter's initial value. */
+  sourceHeight: number;
+  minimumHeight: number;
+  /** Closed numeric line/arc profile of each end's straight section. */
+  sections: { negative: SketchObjectData[]; positive: SketchObjectData[] };
+  /** Longest straight run found on each end before the margin was applied. */
+  straightRuns: { negative: [number, number]; positive: [number, number] };
+}
+
+/** Everything a growing-holder recipe needs except a name, body and parameters. */
 export interface RecognizedOpening {
   axis: OpeningAxis;
   envelope: { min: Vector3; max: Vector3 };
@@ -1398,6 +1415,8 @@ export interface RecognizedOpening {
   minimumOpening: number;
   /** Closed numeric line/arc profile of the straight section, in the sketch frame. */
   section: SketchObjectData[];
+  /** Present when both ends also have a provable straight run along the arms. */
+  height?: RecognizedArmHeight;
 }
 
 export interface OpeningCandidate {
@@ -1417,6 +1436,8 @@ export interface OpeningEvidence {
   /** Longest interval between the inner faces whose section never changes. */
   straightRun: [number, number];
   sectionEdges: number;
+  /** Why no arm-height control was measured, when the opening has none. */
+  heightReason?: string;
 }
 
 export type OpeningRecognition =
