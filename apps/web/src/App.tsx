@@ -4775,10 +4775,43 @@ export function App() {
     [selectedSketchProfileId, sketchOptions]
   );
 
+  // Tiles light up on what is committed, not on what is being previewed: a
+  // ghost body under an extrude drag and an open line chain both used to
+  // enable tools that then refused the click.
+  const committedBodyCount = useMemo(
+    () =>
+      liveBodyRepresentations
+        ? Object.values(liveBodyRepresentations).filter(
+            (body) => !body.consumed && !hiddenBodyIds.has(body.bodyId)
+          ).length
+        : 0,
+    [liveBodyRepresentations, hiddenBodyIds]
+  );
+  const closedProfileSketchCount = useMemo(() => {
+    if (!doc) return 0;
+    const scope = parameterScope.scope;
+    const resolve = (value: unknown): number =>
+      evalParamValue(value as ParamValue, scope) ?? 0;
+    return listNodesByKind(doc, 'sketch').filter((sketch) => {
+      const objects = sketch.objectIds.flatMap((objectId) => {
+        const node = doc.nodes[objectId];
+        return node?.kind === 'sketch-object'
+          ? [{ id: objectId, data: node.data }]
+          : [];
+      });
+      if (objects.length === 0) return false;
+      try {
+        return computeSketchRegions(objects, resolve).length > 0;
+      } catch {
+        return false;
+      }
+    }).length;
+  }, [doc, parameterScope]);
   const availability: ToolAvailability = {
     editDisabledReason,
     sketchCount: sketchOptions.length,
-    liveBodyCount: viewerBodies.length,
+    closedProfileSketchCount,
+    liveBodyCount: committedBodyCount,
     exactGeometryReady,
     hasEdgeSelected: selectedEdges.length > 0
   };
