@@ -101,6 +101,12 @@ the same PR that lands Phase 2 so there is one plan of record.
   or translated input, other units, ambiguous drawings, worker interruption,
   project backup round trip, STL closure; those stay in the Vitest suites or
   remain open.
+- **Phase 7 cases in Vitest (PR 9, 2026-09-12):** translated input is
+  measured about its own center and grows there; input rotated off the world
+  axes is refused with its reason (recognition is axis-aligned by design).
+  Project backup, STEP re-import and closed STL were already asserted in the
+  recipe suite. Still open: other units, ambiguous drawings, worker
+  interruption.
 - **Phase 5, height (PR 6):** the recipe carries an optional arm-height
   control measured by the same straight-run rule along the arms; on the
   hammer the only straight run on the lettered arm is a gap between letters,
