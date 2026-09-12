@@ -1,5 +1,20 @@
 import { importedOpeningCommand } from './imported-opening';
-import { growingHolderCommand } from './growing-holder';
+import { growingHolderCommand, growingHolderHistories } from './growing-holder';
+import {
+  growingHolderHoleCommand,
+  matchGrowingHolderHoles
+} from './growing-holder-holes';
+export {
+  createGrowingHolderHoleProposal,
+  GROWING_HOLDER_HOLE_PARAMETER,
+  growingHolderHoleCommand,
+  growingHolderHoleControls,
+  matchGrowingHolderHoles,
+  type GrowingHolderHole,
+  type GrowingHolderHoleCompilation,
+  type GrowingHolderHoleMatch,
+  type GrowingHolderHolePair
+} from './growing-holder-holes';
 export { importedOpeningCommand } from './imported-opening';
 export {
   GROWING_HOLDER_RECIPE_METADATA_KEY,
@@ -2236,6 +2251,33 @@ export function commandsForCadPatch(
           angleDeg: operation.angleDeg ?? undefined,
           ids
         });
+      }
+      case 'add_growing_holder_hole_control': {
+        const targetBodyId = resolveBody(operation.targetBodyId);
+        const history = growingHolderHistories(projectedDocument).find(
+          (candidate) => candidate.resultBodyId === targetBodyId
+        );
+        if (!history)
+          throw new Error(
+            `add_growing_holder_hole_control targets ${targetBodyId}, which is not a growing holder.`
+          );
+        const match = matchGrowingHolderHoles(projectedDocument, history);
+        if (match.status !== 'matched')
+          throw new Error(
+            `add_growing_holder_hole_control: ${match.reason}`
+          );
+        const canonical = (value: unknown) => JSON.stringify(value);
+        if (
+          canonical([match.pair.negative, match.pair.positive]) !==
+          canonical(operation.holes)
+        )
+          throw new Error(
+            'add_growing_holder_hole_control holes do not exactly match the bores measured on the holder. Refresh the proposal from the current document.'
+          );
+        return growingHolderHoleCommand(projectedDocument, match.pair, {
+          name: operation.name,
+          parameter: operation.parameter
+        }).command;
       }
       case 'add_growing_holder_recipe': {
         const targetBodyId = resolveBody(operation.targetBodyId);
