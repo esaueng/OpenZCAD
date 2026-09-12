@@ -1,6 +1,4 @@
-import type {
-  RemusKernel
-} from './remus-runtime';
+import type { RemusKernel } from './remus-runtime';
 import {
   findSketch,
   listFeaturesInOrder,
@@ -29,10 +27,7 @@ import {
   type SketchPathReference,
   type SketchSectionReference
 } from '@openzcad/shared';
-import type {
-  ExactBuildResult,
-  ExactShape
-} from './exact-types';
+import type { ExactBuildResult, ExactShape } from './exact-types';
 import {
   addFaceCarrierRole,
   buildExtrudeLineage,
@@ -57,10 +52,7 @@ import {
   shiftBasisAlongNormal,
   subtract
 } from './exact-math';
-import {
-  connectedRegionGroups,
-  resolveRegionProfiles
-} from './region-profile';
+import { connectedRegionGroups, resolveRegionProfiles } from './region-profile';
 import {
   basisMatchesLiftedFrame,
   bezierFallbackWarning,
@@ -76,9 +68,7 @@ import {
   type RemusLineageState,
   type RemusSemanticAssignment
 } from './remus-lineage';
-import {
-  resolveFaceAttachment
-} from './face-attachment';
+import { resolveFaceAttachment } from './face-attachment';
 
 const CURVE_SEGMENTS = 32;
 /** `liftCurve2dToPlane` curve types: 0 line, 1 circle, 2 ellipse, 3 NURBS. */
@@ -173,6 +163,31 @@ function resolveExtrudeSpan(
   };
 }
 
+/**
+ * The kernel sweeps a face along the direction it is given, and a sweep that
+ * runs against the face's own normal builds a shell whose faces are
+ * consistently inside-out: it passes standalone validation and only fails at
+ * the next boolean ("shared edges have inconsistent face orientations"), so
+ * Union refused a flange pulled into a plate while Add kept an un-unified
+ * 14-face fuse. Reversing the face or fixing orientations afterwards does not
+ * help — the wire winding decides. A negative span is therefore built the
+ * way the symmetric span always was: the profile face sits on the far plane
+ * and the sweep runs forward by the absolute distance. The swept volume is
+ * identical, so the lineage builders keep reading the signed span.
+ */
+function forwardSweep(
+  extrudeBasis: PlaneBasis,
+  totalDistance: number
+): { faceBasis: PlaneBasis; sweepDistance: number } {
+  if (totalDistance >= 0) {
+    return { faceBasis: extrudeBasis, sweepDistance: totalDistance };
+  }
+  return {
+    faceBasis: shiftBasisAlongNormal(extrudeBasis, totalDistance),
+    sweepDistance: -totalDistance
+  };
+}
+
 function revolveKeepsSemanticLineage(
   angleDeg: number,
   data: SketchObjectData
@@ -204,7 +219,6 @@ function planePoint3(basis: PlaneBasis, point: Vec2Like): Vec3 {
     z: basis.origin.z + basis.u.z * point.x + basis.v.z * point.y
   };
 }
-
 
 export function resolveSketchBasisAtHistory(
   kernel: RemusKernel,
@@ -576,7 +590,8 @@ function sourceSegmentIndex(
         return false;
       }
       const along =
-        ((point.x - start.x) * dx + (point.y - start.y) * dy) / (length * length);
+        ((point.x - start.x) * dx + (point.y - start.y) * dy) /
+        (length * length);
       const slack = tolerance / length;
       return along >= -slack && along <= 1 + slack;
     };
@@ -623,7 +638,11 @@ function addRegionSideRoles(input: {
       if (curve.kind === 'line') {
         const index = sourceSegmentIndex(curve, data, input.scope);
         const key =
-          index !== null ? `${index}` : data?.objectKind === 'line' ? 'line' : null;
+          index !== null
+            ? `${index}`
+            : data?.objectKind === 'line'
+              ? 'line'
+              : null;
         if (key === null) {
           input.diagnostics.push(
             remusHashOnlyLineage(
@@ -723,13 +742,14 @@ export function buildRegionExtrude(
   );
   const solids = groups.map((group) => {
     const merged = mergeAdjacentProfiles(group);
-    const face = makeRegionFace(kernel, merged, extrudeBasis, warn);
+    const sweep = forwardSweep(extrudeBasis, totalDistance);
+    const face = makeRegionFace(kernel, merged, sweep.faceBasis, warn);
     const solid = kernel.extrude(
       face,
       extrudeBasis.normal.x,
       extrudeBasis.normal.y,
       extrudeBasis.normal.z,
-      totalDistance
+      sweep.sweepDistance
     );
     const candidates = topologyCandidatesForSolid(kernel, solid);
     const assignments: RemusSemanticAssignment[] = [];
@@ -916,8 +936,7 @@ export function sweepPathEdges(
         Math.PI) /
       180;
     const end =
-      (resolveParamValue(data.endAngleDeg, scope, 'path end angle') *
-        Math.PI) /
+      (resolveParamValue(data.endAngleDeg, scope, 'path end angle') * Math.PI) /
       180;
     const wrap = Math.PI * 2;
     const sweep = (((end - start) % wrap) + wrap) % wrap;
@@ -1138,10 +1157,11 @@ export function buildSweep(
       distance,
       scope
     );
+    const sweep = forwardSweep(extrudeBasis, totalDistance);
     const face = makeProfileFace(
       kernel,
       object.data,
-      extrudeBasis,
+      sweep.faceBasis,
       0,
       scope
     );
@@ -1150,7 +1170,7 @@ export function buildSweep(
       extrudeBasis.normal.x,
       extrudeBasis.normal.y,
       extrudeBasis.normal.z,
-      totalDistance
+      sweep.sweepDistance
     );
     return {
       solids: [solid],

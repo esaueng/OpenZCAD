@@ -35,7 +35,10 @@ const profileKeys = (section: SketchObjectData[]): string[] =>
             [object.x1, object.y1],
             [object.x2, object.y2]
           ]
-            .sort((a, b) => Number(a[0]) - Number(b[0]) || Number(a[1]) - Number(b[1]))
+            .sort(
+              (a, b) =>
+                Number(a[0]) - Number(b[0]) || Number(a[1]) - Number(b[1])
+            )
             .map((p) => p.join(','))
             .join(' ')
         : JSON.stringify(object)
@@ -80,7 +83,9 @@ const placements: {
 function roundTripped(kernel: RemusKernel, solid: number): number {
   return kernel.deserializeSolids(
     remusTranslators().importStep(
-      remusTranslators().exportStep(kernel.serializeSolids(Uint32Array.of(solid)))
+      remusTranslators().exportStep(
+        kernel.serializeSolids(Uint32Array.of(solid))
+      )
     )
   )[0]!;
 }
@@ -110,7 +115,10 @@ describe('opening recognition', () => {
     it(`measures the bracket's opening along ${placement.axis} and the recipe builds`, () => {
       const solid = roundTripped(
         kernel,
-        kernel.copyAndTransformSolid(syntheticHolderSolid(kernel), placement.matrix)
+        kernel.copyAndTransformSolid(
+          syntheticHolderSolid(kernel),
+          placement.matrix
+        )
       );
       const result = recognizeOpening(kernel, solid);
       expect(result.status).toBe('recognized');
@@ -119,8 +127,16 @@ describe('opening recognition', () => {
       expect(result.opening).toMatchObject({
         axis: placement.axis,
         envelope: {
-          min: { [x]: placement.envelope.min[0], [y]: placement.envelope.min[1], [z]: placement.envelope.min[2] },
-          max: { [x]: placement.envelope.max[0], [y]: placement.envelope.max[1], [z]: placement.envelope.max[2] }
+          min: {
+            [x]: placement.envelope.min[0],
+            [y]: placement.envelope.min[1],
+            [z]: placement.envelope.min[2]
+          },
+          max: {
+            [x]: placement.envelope.max[0],
+            [y]: placement.envelope.max[1],
+            [z]: placement.envelope.max[2]
+          }
         },
         // The boss on the left arm's inner face ends at 8.4; the straight
         // floor runs from there to the right arm, and each cut keeps 0.5 mm
@@ -165,7 +181,10 @@ describe('opening recognition', () => {
         expect(kernel.validateSolid(holder)).toBe(0);
         const bounds = Array.from(kernel.boundingBox(holder));
         expect(bounds[axisIndex]).toBeCloseTo(30 - (width + 16) / 2 - 0.5, 6);
-        expect(bounds[axisIndex + 3]).toBeCloseTo(30 + (width + 16) / 2 + 0.5, 6);
+        expect(bounds[axisIndex + 3]).toBeCloseTo(
+          30 + (width + 16) / 2 + 0.5,
+          6
+        );
       }
     }, 120_000);
   }
@@ -174,13 +193,19 @@ describe('opening recognition', () => {
     // A planar face carrying a circular bore loop cannot be split by a
     // plane in the kernel, so the drilled bracket gets no height (its reason
     // is reported); the same bracket without bores does.
-    const drilled = recognizeOpening(kernel, roundTripped(kernel, syntheticHolderSolid(kernel)));
+    const drilled = recognizeOpening(
+      kernel,
+      roundTripped(kernel, syntheticHolderSolid(kernel))
+    );
     expect(drilled.status).toBe('recognized');
     if (drilled.status !== 'recognized') return;
     expect(drilled.opening.height).toBeUndefined();
     expect(drilled.evidence.heightReason).toMatch(/Carving the section/);
 
-    const solid = roundTripped(kernel, syntheticHolderSolid(kernel, { holes: false }));
+    const solid = roundTripped(
+      kernel,
+      syntheticHolderSolid(kernel, { holes: false })
+    );
     const result = recognizeOpening(kernel, solid);
     expect(result.status).toBe('recognized');
     if (result.status !== 'recognized') return;
@@ -193,7 +218,9 @@ describe('opening recognition', () => {
     });
     expect(height!.minimumHeight).toBeCloseTo(32 - 10.8 + 0.1, 9);
     expect(profileKeys(height!.sections.negative)).toEqual(rect(0, -20, 8, 0));
-    expect(profileKeys(height!.sections.positive)).toEqual(rect(52, -20, 60, 0));
+    expect(profileKeys(height!.sections.positive)).toEqual(
+      rect(52, -20, 60, 0)
+    );
 
     const imported = importedDocument(kernel, solid);
     const manager = new CommandManager(imported.document);
@@ -246,6 +273,69 @@ describe('opening recognition', () => {
     }
   }, 120_000);
 
+  it('measures a translated bracket about its own center and the recipe builds there', () => {
+    const solid = roundTripped(
+      kernel,
+      translated(kernel, syntheticHolderSolid(kernel), 100, -50, 25)
+    );
+    const result = recognizeOpening(kernel, solid);
+    expect(result.status).toBe('recognized');
+    if (result.status !== 'recognized') return;
+    expect(result.opening).toMatchObject({
+      axis: 'x',
+      cuts: [108.9, 151.5],
+      center: 130,
+      sourceOpening: 44,
+      envelope: {
+        min: { x: 99.5, y: -50, z: 25 },
+        max: { x: 160.5, y: -18, z: 45 }
+      }
+    });
+    expect(profileKeys(result.opening.section)).toEqual(rect(-50, 25, -42, 45));
+    const imported = importedDocument(kernel, solid);
+    const manager = new CommandManager(imported.document);
+    const compiled = growingHolderCommand(
+      manager.document,
+      recipeFromRecognizedOpening(result.opening, {
+        name: 'Bracket opening',
+        targetBodyId: imported.bodyId,
+        parameter: 'opening_width'
+      })
+    );
+    manager.execute(compiled.command);
+    const built = buildDocumentHistory(
+      kernel,
+      setParameter(manager.document, {
+        name: 'opening_width',
+        expression: '60'
+      })
+    );
+    expect(built.warnings.map((w) => JSON.stringify(w))).toEqual([]);
+    const holder = built.shapes.get(compiled.bodyId)!.solids[0]!;
+    expect(kernel.validateSolid(holder)).toBe(0);
+    const bounds = Array.from(kernel.boundingBox(holder));
+    expect(bounds[0]).toBeCloseTo(130 - 38 - 0.5, 6);
+    expect(bounds[3]).toBeCloseTo(130 + 38 + 0.5, 6);
+  }, 120_000);
+
+  it('refuses a bracket rotated off the world axes instead of guessing', () => {
+    // Recognition measures along a world axis by design; a 30° rotation about
+    // z leaves no inward-facing pair on any axis, and the refusal says so.
+    const c = Math.cos(Math.PI / 6);
+    const n = Math.sin(Math.PI / 6);
+    const solid = roundTripped(
+      kernel,
+      kernel.copyAndTransformSolid(
+        syntheticHolderSolid(kernel),
+        Float64Array.of(c, -n, 0, 0, n, c, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1)
+      )
+    );
+    const result = recognizeOpening(kernel, solid);
+    expect(result.status).toBe('unsupported');
+    if (result.status !== 'unsupported') return;
+    expect(result.reason).toMatch(/No pair of inward-facing/);
+  });
+
   it('refuses a solid with no facing pair across an empty gap', () => {
     const result = recognizeOpening(kernel, kernel.makeBox(10, 20, 30));
     expect(result.status).toBe('unsupported');
@@ -255,7 +345,10 @@ describe('opening recognition', () => {
 
   it('keeps the cuts out of a pocket that interrupts the straight section', () => {
     const pocket = translated(kernel, kernel.makeBox(4, 10, 10), 18, -1, 5);
-    const solid = roundTripped(kernel, kernel.cut(syntheticHolderSolid(kernel), pocket));
+    const solid = roundTripped(
+      kernel,
+      kernel.cut(syntheticHolderSolid(kernel), pocket)
+    );
     const result = recognizeOpening(kernel, solid);
     expect(result).toMatchObject({ status: 'recognized' });
     if (result.status !== 'recognized') return;
@@ -277,7 +370,9 @@ describe('opening recognition', () => {
     expect(result.status).toBe('ambiguous');
     if (result.status !== 'ambiguous') return;
     expect(result.candidates.length).toBeGreaterThanOrEqual(2);
-    expect(result.candidates.slice(0, 2).map((c) => c.opening)).toEqual([18, 18]);
+    expect(result.candidates.slice(0, 2).map((c) => c.opening)).toEqual([
+      18, 18
+    ]);
     const chosen = result.candidates.find((c) => c.innerFaces[0] === 8)!;
     const guided = recognizeOpening(kernel, solid, {
       faces: [chosen.faceB, chosen.faceA]
@@ -290,6 +385,8 @@ describe('opening recognition', () => {
       center: 17,
       cuts: [8.5, 25.5]
     });
-    expect(recognizeOpening(kernel, solid, { axis: 'y' }).status).toBe('unsupported');
+    expect(recognizeOpening(kernel, solid, { axis: 'y' }).status).toBe(
+      'unsupported'
+    );
   });
 });

@@ -42,38 +42,44 @@ and have not all been repeated on this pin.
 
 Run `pnpm exec vitest run test/hammer-holder-native.test.ts`.
 
-| Stage          | Faces | Strict errors | Relaxed errors | Detailed strict diagnostic                         |
-| -------------- | ----: | ------------: | -------------: | -------------------------------------------------- |
-| Plate          |     6 |             0 |              0 | None                                               |
-| Opening cut -8 |    10 |             1 |              0 | 8 shared edges have inconsistent face orientations |
-| First arm Add  |    21 |             1 |              0 | 6 shared edges have inconsistent face orientations |
-| Second arm Add |    34 |             1 |              0 | 4 shared edges have inconsistent face orientations |
+| Stage          | Faces | Strict errors | Relaxed errors | Detailed strict diagnostic |
+| -------------- | ----: | ------------: | -------------: | -------------------------- |
+| Plate          |     6 |             0 |              0 | None                       |
+| Opening cut -8 |    10 |             0 |              0 | None                       |
+| First arm Add  |    17 |             0 |              0 | None                       |
+| Second arm Add |    24 |             0 |              0 | None                       |
 
-All four stages have one shell and no build warnings. Independently tessellated
-at 0.08 mm, all have zero boundary, non-manifold or inconsistent-winding mesh
-edges. This does **not** establish valid exact B-Rep orientation. The diagnostic
-is not evidence of an open mesh, and whether the defect is in the representation
-or its strict validator remains unresolved.
+All four stages have one shell and no build warnings, and every stage now
+passes strict validation. Until the sweep-direction fix in
+`exact-profile-builders.ts` (`forwardSweep`), the opening cut swept its
+profile −8 against the plane normal and built an inside-out shell: the
+opening, first-arm and second-arm stages reported 8, 6 and 4 "shared edges
+have inconsistent face orientations" while every independently tessellated
+mesh had zero boundary, non-manifold or inconsistent-winding edges, and the
+arm stages carried 21 and 34 faces because face unification refused the
+mis-oriented candidates. The historical table is kept in git history; the
+diagnosis was that the wire winding relative to the sweep displacement
+decides orientation, not the sign of the distance — a negative span is now
+built on the far plane and swept forward.
 
 The plate and opening volumes have analytic rectangular oracles. Curved-stage
 volume values in the test are measured witnesses, not exact truth: the native
 UI and this reconstruction agree at 52318.9434704 mm³ for the two-arm blank.
 
 Both standalone opening tools (negative and positive sweeps) pass strict
-validation, so the earliest orientation failure is introduced by the Cut.
-A controlled equivalent opening swept +8 from Z = 0 has strict error count zero
-and the same bounds, face count and volume. That isolates a direction-dependent
-opening defect. On the current pin, adding the first arm on this positive-opening path also
-passes strict validation. The negative-opening path still fails as recorded
-in the table; this is not a complete native-holder support claim.
+validation, and the negative-opening path now matches the positive-opening
+path in bounds, volume, face count and strict validity.
 
 The tests also reproduce and guard recovery at these refusal boundaries:
 
-- Mirror rejects the first-arm **input** and leaves it available.
+- Mirror of the first arm succeeds now that the input is a valid closed solid.
 - The 35 mm outer arm edge refuses fillets at both 3 and 1 mm; input survives.
-- The 30 mm plate edge accepts a 3 mm fillet (34 → 36 faces).
-- Both 5 mm Simple and 5/9 mm, 90° countersunk through-hole cuts fail after that
-  fillet and retain their target body.
+- The 30 mm top plate edge under the arm foot (z = 8) refuses a 3 mm fillet on
+  the valid body (the inside-out body used to accept a fragment of it); the
+  30 mm bottom plate edge (z = 0) accepts it (24 → 25 faces).
+- Both 5 mm Simple and 5/9 mm, 90° countersunk through-hole cuts succeed on
+  the filleted body's unified 1760 mm² top face (25 → 27 and 28 faces); on the
+  inside-out body both used to fail and retain their target.
 
 These are explicit diagnostic characterization tests, with no `test.fails`.
 They do not mark M1 complete. A kernel repair should advance the assertions to
@@ -135,3 +141,13 @@ are not additional passing feature tests. Do not bypass strict validation or
 claim that a direction reversal fixes all failures. Native Rust comparison,
 actual browser-document export, original H3 inference state, exact hole
 positioning and final STEP round-trip remain gaps.
+
+## Synthetic holder STEP fixtures
+
+`synthetic-holder.step` (Ø5 countersunk bores) and `synthetic-holder-open.step`
+(no bores) are the kernel's own export of `test/support/synthetic-holder.ts`.
+`test/synthetic-holder-fixtures.test.ts` fails when they drift from the
+builder; regenerate with `OPENZCAD_WRITE_HOLDER_FIXTURES=1` on that test.
+`test/e2e/growing-holder.spec.ts` drives the fresh-import-to-export
+walkthrough of the growing-holder plan on them, so the private hammer never
+enters CI.
