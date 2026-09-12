@@ -6,6 +6,14 @@ kind. Drafted from a full review of the pinned Remus checkout (`remus-wasm`
 v2.130.0, `esaueng/remus` @ `7918b45`), the adapter in
 `packages/kernel-adapter`, the parity corpus, and both repos' planning docs.
 
+**Consumer status reconciliation (2026-09-12, OpenZCAD `28d1551f`).**
+The frozen lockfile pins both Remus packages to `f1968568` (2.130.14), adopted
+in PR #282. Current consumer evidence is recorded in S1, S2, C1, C5, C6 and W4.
+Unchanged kernel-side diagnoses, issue sequencing and release claims below
+are the original 2026-08-29 planning baseline, not a fresh audit of Remus
+`main`; verify them upstream before choosing kernel work. A pin update alone
+never completes an adapter-adoption row.
+
 **Relationship to other documents.** Remus has its own kernel-side program:
 [`docs/kernel-maturity/p-class-program.md`](https://github.com/esaueng/remus/blob/main/docs/kernel-maturity/p-class-program.md)
 (drafted 2026-08-28, "Parasolid-class", milestones M2–M8, ~45 issues, 2 landed).
@@ -20,7 +28,7 @@ feature companion to this document.
 
 ---
 
-## 1. Where things stand
+## 1. Original kernel baseline and current consumer boundary
 
 **The kernel's breadth phase is finished.** Every Parasolid operation family
 exists, WASM-bound, with a fail-closed contract culture (typed refusals, oracle
@@ -41,15 +49,17 @@ adapter runs a distrust harness on every boolean (`boolean-result-validation.ts`
 face-census facet-fallback detection, dropped-operand AABB checks), wraps every
 modeling op in input-mutation and output-validity assertions, re-runs failed
 fillets up to three times on a probe ladder just to phrase an error message,
-and regex-scrapes the kernel's English refusal prose. 11 of 18 lineage
-operation classes are hash-only (`topology-lineage.ts:82`), which is why a face
-pick downstream of a boolean, pattern, shell, chamfer, or direct edit breaks
-the moment an upstream edit perturbs its fingerprint.
+and parses kernel refusal prose. The current capability table in
+`packages/kernel-adapter/src/topology-lineage.ts` marks booleans and fillets
+as derived only within verified bounds. Pattern, chamfer, shell/solid-offset
+and direct-edit transitions still fall back to hashes; a changed fingerprint
+can invalidate a downstream pick. See C1 for the adopted subset and remainder.
 
 **The verification story is genuinely good and should be extended, not
-replaced.** The parity corpus (22 STEP files × 20 metrics × two kernels ×
-closed-form references, 40 pinned divergences with enforced pin hygiene), the
-kernel-seam pins, and the empty `EXPECTED_BUILD_FAILURES` / `EXPECTED_MESH_DEFECTS`
+replaced.** The parity corpus compares two kernels and closed-form references
+with enforced pin hygiene (`test/parity/corpus-pins.ts` records the current
+pins; the original count of 40 is not a current inventory). Kernel-seam
+pins and the empty `EXPECTED_BUILD_FAILURES` / `EXPECTED_MESH_DEFECTS`
 registries are the health signal to protect.
 
 ---
@@ -58,10 +68,9 @@ registries are the health signal to protect.
 
 ### S1. Kill the silent-wrongness class first — **highest priority overall**
 
-These are the defects where the kernel returns a confident, valid-looking,
-wrong result. Every one is measured and pinned app-side; none is fully owned by
-a P-Class issue yet. Each deserves an upstream reproduction bundle and a fix
-(or a typed refusal) before any capability work:
+The original audit identified these confident, valid-looking wrong results.
+Repaired consumer examples are marked below; unresolved examples still need
+current reproduction and upstream ownership before a fix or typed refusal.
 
 1. **`fuse` drops an operand at exact tangency** and facets a cylinder
    crossing a planar face into 70–115 planar faces. Detected today only by
@@ -71,11 +80,8 @@ a P-Class issue yet. Each deserves an upstream reproduction bundle and a fix
    defer if pressure demands" — **the operand-loss half should not be
    deferred**; the acceptance gate added in `boolean_scale_gap` work shows
    the shape of the fix.
-2. **`pattern` never fuses overlapping instances** — three overlapping
-   cylinders report 11.8× the true union volume with empty warnings
-   (`test/overlapping-pattern.test.ts:89`, held `it.fails`). Not in the
-   P-Class program at all. File and fix upstream: fuse instances or refuse
-   typed on measured overlap.
+2. **Overlapping patterns — repaired for the qualified cases.** The original
+   defect counted overlapping material more than once with no warning.
    — done (PR #228, 2026-09-05): the pinned kernel fuses overlapping
    instances; `test/overlapping-pattern.test.ts` now pins six faces and no
    warnings at four spacings (9, 6, 3, 0.5) as a positive test, and the
@@ -94,32 +100,31 @@ a P-Class issue yet. Each deserves an upstream reproduction bundle and a fix
    partial-revolve blender. The v2 transacted wrappers largely close this;
    finish the migration so _no_ public mutating path can return the input
    handle on failure.
-6. **Cross-drilled bodies render differently than they measure** — at equal
-   radii the viewport shows no hole while volume says there is one; at
-   smaller radii the tessellation leaks (1154–1542 boundary edges)
-   (`test/cross-drilled-render.test.ts`). Root cause lives with the torus
-   tube-band/seam work in P-Class 2.4.
+6. **Cross-drilled render/measurement mismatch — done for the pinned shaft
+   cases (reconciled 2026-09-12).** `test/cross-drilled-render.test.ts` now
+   positively checks bore radii 3, 2 and 1: independent reference volume,
+   mesh/measurement agreement, zero boundary edges and no warnings. This
+   closes the original consumer examples, not general quadric booleans.
 
-Exit signal: the corpus pin registries stay empty, the four `it.fails` pins
-flip to positive, and both `tryExact*` adapter workarounds are deleted with
-their tests surviving as kernel regressions.
+Remaining exit signal: preserve the positive pattern and cross-drill
+regressions, qualify the unresolved S1 families, and retire the cylinder-cap
+and coaxial-cut workarounds only with equivalent kernel regression evidence.
+Both remain called by production code (`exact-direct-edit-ops.ts` and
+`exact-feature-builders.ts`); do not treat unrelated positive pins as proof
+that they can be deleted.
 
-### S2. Exact measurement — a new kernel ask, not in the P-Class program
+### S2. Exact measurement — partial
 
-`volume()` integrates a tessellation clamped to `diag * 5e-5` of the _whole
-solid_, so an identical 2 mm fillet measures 0.2% over on a 20 mm block and
-3.5% over on a 2 m beam, silently (`test/filleted-body-volume.test.ts`, both
-`it.fails`). `faceArea` on a plane with a curved boundary is a fixed 256-point
-inscribed polygon at every deflection. Consequences ripple everywhere: the
-`remus-measurement` pin class caps every curved-body volume assertion at
-~1e-4, the app carries a `FaceAreaProvenance` field to avoid over-claiming,
-and mirror/shell/offset validation gates run against fuzzy numbers.
+— partial (PR #260; reconciled 2026-09-12): the original filleted-body volume
+and whole-part-size dependence defects are repaired on the consumer pin.
+`test/filleted-body-volume.test.ts` now uses positive closed-form assertions,
+including an unchanged 2 mm fillet while the far dimension grows from 20 to
+2000 mm; the former held failures must not be scheduled as unfinished work.
 
-Ask upstream: **an exact volume/area integrator for analytic and NURBS faces**
-(surface integrals per face type; the face integrator already exists for the
-torus volume-oracle path), with the tessellation integrator kept as the
-fallback for mesh bodies. This single item tightens every oracle in both
-repos' test suites and is the cheapest large stability multiplier after S1.
+The broader analytic/NURBS area and volume qualification remains open here.
+Those fillet cases do not establish exact integration for every face family.
+Retain measurement provenance and enforced corpus-pin hygiene; close further
+cells only with independent oracles and consumer evidence.
 
 ### S3. Cancellation and budgets (P-Class 2.8) — browser-critical
 
@@ -161,7 +166,9 @@ through the worker queue and surface a "stop" affordance during long rebuilds.
 
 ### S5. Documentation and pin hygiene (cheap, do immediately)
 
-— done (PR #141)
+— done for the original OpenZCAD hygiene slice (PRs #141/#143).
+The bullets below record the original corrections, not a new pending app queue.
+Upstream changelog/matrix claims are historical and need a fresh upstream audit.
 
 - `docs/capability-matrix.md` and `TODO.md` still say Remus mirror "refuses
   dense blended/boolean bodies" — measured false on the current pin
@@ -202,19 +209,27 @@ slot through a top) still need the history path below. Remaining:
   edits (today explicit barriers), and edge/vertex provenance beyond the
   boolean path (both are the kernel's own declared remainder). Pattern
   provenance through instance fusing (S1.2 is fixed; the provenance half
-  remains). Fillet provenance from construction history rather than
-  normal+centroid matching.
+  remains). Complete fillet provenance beyond the bounded generated-face subset
+  recorded below.
   — partial upstream (remus #338, merged 2026-09-09): persistent edit and
   healing history now journals moves, surface replacement, cylindrical
   blend radius edits, planar draft, defeature and healing, so the
-  "explicit barriers" for direct edits are gone kernel-side. Not yet in the
-  OpenZCAD pin (`a4582cf1`, package 2.130.11 predates it); the adapter
-  adoption lane below is unblocked at the next pin bump.
+  "explicit barriers" for direct edits were reported removed kernel-side.
+  The old consumer-pin blocker (`a4582cf1`) is superseded by PR #282's
+  `f1968568` pin. Adapter adoption remains open: the current capability table
+  still marks direct edits unsupported with a hash-only fallback.
 - **Adapter:** adopt `*WithEntityEvolution` / journaled variants under the
   ADR-013 verification gate, class by class, in the order boolean → pattern
   → chamfer → shell/solid-offset → direct edits. Each class that flips makes
   face-attached sketches, direct manipulation, and AI proposals survive
   upstream edits they currently break on.
+
+— partial (PR #211; reconciled 2026-09-12): bounded boolean carrier lineage
+and generated fillet-face identity have shipped. Evidence:
+`test/boolean-carrier-lineage.test.ts`, `test/fillet-result-lineage.test.ts`
+and `packages/kernel-adapter/src/topology-lineage.ts`. Shared/split boolean
+carriers and the unsupported operation classes still need a complete verified
+relation; this is not blanket adoption of kernel evolution APIs.
 
 ### C2. Topology query surface — small kernel APIs that retire app heuristics
 
@@ -254,7 +269,14 @@ precede it.
 
 ### C5. Imported-model editing completion
 
-The proof layer is live; the gaps are precise:
+— partial (2026-09-12): the bounded growing-holder workflow has shipped
+through PR #300: recognition, deterministic assistant proposals, ordinary
+editable history and supported width/height/bore controls. See
+[the holder plan](plans/step-parameter-hammer-holder-plan.md) for acceptance
+coverage and remaining live-site work. This does not complete general
+boss/pocket/taper editing or arbitrary STEP feature reconstruction.
+
+The proof layer is live; the general editing gaps remain:
 
 - Publish exact straight-edge polygon loops on planar faces (adapter work,
   via the ordered-wire APIs in C2) and lift the cylinder/cone-only seed gate
@@ -276,16 +298,23 @@ The proof layer is live; the gaps are precise:
 The kernel is ahead of the product in several places; these are comparatively
 cheap, high-visibility wins and they broaden what the test corpus exercises:
 
-- **Sketch constraints** on the bound GCS solver (`gcs*` APIs are already
-  called for solving; the UI exposes no constraints). This is the largest
-  parametric-CAD feature gap versus commercial tools.
-- **Section views** (`section` is unused) and **hidden-line drawing export**
-  (`projectEdges` is unused) — the seed of a drawings story.
-- **Mass properties in the Inspector** (volume/CoM/inertia are computed and
-  parsed already; the UI shows volume/bbox/face-count).
-- **Assemblies**: kernel hierarchy/transforms/BOM went Stable on 2026-08-21;
-  the document model has no assembly concept yet. Start with a design doc —
-  this is a schema decision, not a binding call.
+- **Sketch constraints — partial:** all schema-backed kinds have creation
+  tools (PRs #142/#144); persistent editable distance/angle/radius annotations
+  ship (PRs #231/#232). Saved placement, driven/reference dimensions and
+  constraint feedback remain (product S-2/S-3). Evidence:
+  `apps/web/src/lib/sketch/constraints.ts` and
+  `apps/web/src/lib/sketch/dimensionAnnotations.test.ts`.
+- **Section views — partial (PR #313):** canonical-plane clipping now has
+  hole-preserving display caps (`packages/viewport/src/scene/sectionCaps.ts`).
+  This is not exact `section` integration. Arbitrary/datum sections and
+  hidden-line drawing export remain (product A-3 and D-1–D-3).
+- **Mass properties — partial:** the Inspector shows center of mass and
+  principal moments at unit density. Full tensor/axes display and material
+  density remain (product A-1; `apps/web/src/components/Inspector.tsx`).
+- **Assemblies — open at product level:** `AssemblyNode`, `PartNode` and
+  `activePartId` already exist in `packages/shared/src/index.ts`. Usable
+  multi-part documents, instances, joints and BOM UI remain (product AS-1–AS-3);
+  existing schema types alone do not complete them.
 - **Interrogation** (P-Class 7.5: clash/clearance, silhouettes, curvature and
   draft-angle maps) as it lands — measurement tools are cheap UI over
   read-only kernel calls.
@@ -339,6 +368,10 @@ selection, rendering) so the kernel work has a consumer the day it lands
   eviction, retained heap, large-document cloning, STEP first-load — median
   and p95) and adopt performance budget gates (P-Class 8.2) kernel-side so
   regressions are caught at the PR.
+  — partial (PR #296): holder-specific preview and warm exact-rebuild timings
+  are recorded in the holder plan, including first-edit-after-reload latency
+  still needing investigation. These samples do not complete the general
+  ADR-015 median/p95, eviction, heap and large-document measurement program.
 - **W5. Make the checkpoint/restore contract explicit.** The worker's
   history cache depends on an undocumented kernel guarantee — handles
   allocated before a checkpoint stay valid after `restore`; handles after it
@@ -386,13 +419,13 @@ their P-Class issue where one exists.
 
 | Order | Item                                                                                                  | Track | Where            | Effort             | Depends on                   |
 | ----- | ----------------------------------------------------------------------------------------------------- | ----- | ---------------- | ------------------ | ---------------------------- |
-| 1     | Doc/pin hygiene (S5)                                                                                  | S     | both             | S                  | —                            |
-| 2     | Silent-wrongness defects: pattern overlap, pushPull cap, T-vertex cut, operand drop (S1; touches 2.7) | S     | kernel           | M–L                | —                            |
+| 1     | Original app doc/pin hygiene complete; upstream status needs refresh (S5)                                                                                  | S     | both             | S                  | —                            |
+| 2     | Remaining silent-wrongness families: pushPull cap, T-vertex cut, operand drop (S1; touches 2.7) | S     | kernel           | M–L                | —                            |
 | 3     | Cancellation + budgets (S3 / 2.8)                                                                     | S/W   | kernel + worker  | M                  | —                            |
 | 4     | `approx_census` in CI; fuzz gaps (S4)                                                                 | S     | kernel           | S–M                | —                            |
-| 5     | Exact measurement integrator (S2)                                                                     | S     | kernel           | M                  | —                            |
+| 5     | Remaining measurement qualification; fillet-volume regression fixed (S2)                                                                     | S     | kernel           | M                  | —                            |
 | 6     | M2 booleans: 2.1 → 2.2 → 2.3 → 2.4 → 2.5 → 2.6 (C3)                                                   | C     | kernel           | L (serial)         | 2                            |
-| 7     | Lineage bridge: unify-evolution + adapter adoption (C1)                                               | C     | kernel + adapter | L (parallel lanes) | — (pattern class waits on 2) |
+| 7     | Lineage bridge: unify-evolution + adapter adoption (C1)                                               | C     | kernel + adapter | L (parallel lanes) | — (pattern lineage still open) |
 | 8     | Topology query surface (C2)                                                                           | C     | kernel + adapter | M                  | —                            |
 | 9     | Differential harness + real-model corpus (S4 / 8.1, 8.5)                                              | S     | both             | M–L                | after 2.4 per kernel plan    |
 | 10    | Sketch constraints, sections, mass properties, HLR export (C6)                                        | C     | app              | M–L                | —                            |
