@@ -76,6 +76,17 @@ the same PR that lands Phase 2 so there is one plan of record.
   on the never-moving import references right before each side's carve; the
   retry applied at 55/64 and widening hole_diameter to 6 rebuilt with no
   warnings. Not yet exercised in the browser: export, undo/redo.
+- **Phase 7 (PR 8, 2026-09-12, in progress):** `test/e2e/growing-holder.spec.ts`
+  drives the fresh-import-to-export walkthrough through the real product on
+  the committed synthetic holder STEP fixtures (the kernel's own export of the
+  synthetic builder, guarded against drift by
+  `test/synthetic-holder-fixtures.test.ts`): import, both verified
+  suggestions, width 60 / bore 6 / width 30 / below-minimum 10 / 52, undo and
+  redo, reload, STEP export; and on the hole-free holder the height control
+  at 40, then width 60, then the near-minimum 22. Not covered here: rotated
+  or translated input, other units, ambiguous drawings, worker interruption,
+  project backup round trip, STL closure; those stay in the Vitest suites or
+  remain open.
 - **Phase 5, height (PR 6):** the recipe carries an optional arm-height
   control measured by the same straight-run rule along the arms; on the
   hammer the only straight run on the lettered arm is a gap between letters,
@@ -112,12 +123,12 @@ the same PR that lands Phase 2 so there is one plan of record.
 
 ## Parameter contract
 
-| Control | Initial value | Intended behavior |
-|---|---:|---|
-| opening_width | 46 mm | Move both arms and their mounting holes symmetrically; change the straight bridge length. |
-| overall_width | 74 mm | **Derived, read-only:** `opening_width + 28` while arm thickness stays fixed. Shown as a dimension, never offered as an input. |
-| holder_height | 58 mm | Change arm height while preserving the mounting base, hole geometry, lettering, and top blends wherever a safe construction can be proven. |
-| hole_diameter | 5 mm | Change both matched through bores together, preserving their alignment with the arms. |
+| Control       | Initial value | Intended behavior                                                                                                                          |
+| ------------- | ------------: | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| opening_width |         46 mm | Move both arms and their mounting holes symmetrically; change the straight bridge length.                                                  |
+| overall_width |         74 mm | **Derived, read-only:** `opening_width + 28` while arm thickness stays fixed. Shown as a dimension, never offered as an input.             |
+| holder_height |         58 mm | Change arm height while preserving the mounting base, hole geometry, lettering, and top blends wherever a safe construction can be proven. |
+| hole_diameter |          5 mm | Change both matched through bores together, preserving their alignment with the arms.                                                      |
 
 Opening and overall width are one degree of freedom under the agreed
 fixed-thickness behavior. Editing overall width to drive the opening would be
@@ -284,6 +295,7 @@ Owner: Remus edit capabilities and OpenZCAD feature compilation. Hole first,
 because most of it already exists.
 
 Hole diameter (done in PR 5):
+
 - The existing ADR-010 direct-edit through-hole resize is applied to each
   retained end piece, grouped as one `hole_diameter` control. The resize
   gained one fallback: when the short cutter is refused, the cutter runs
@@ -296,6 +308,7 @@ Hole diameter (done in PR 5):
   faces before the bores can touch, so no coupled limit exists to recompute.
 
 Height (done in PR 6):
+
 - The straight arm section is found by the same rule as the bridge, above the
   bridge section and shared by both ends; on the lettered arm that is the
   widest gap between two letters (option 1, chosen 2026-09-11). Glyphs,
@@ -306,6 +319,7 @@ Height (done in PR 6):
   published with the recognition.
 
 Composition:
+
 - Establish a deterministic construction order and semantic references so hole
   and height changes remain attached to the correct ends as width changes.
 - Test combinations, not merely each parameter alone.
@@ -343,6 +357,7 @@ Use the original private source locally and a redistributable synthetic corpus
 in CI. Never publish the private STEP without authorization.
 
 Required cases:
+
 - Fresh import and assistant proposal; duplicate names; rotated/translated
   input; equivalent units; unsupported models and ambiguous drawings.
 - Source dimensions, derived minimum, just-below-minimum, representative
@@ -390,8 +405,8 @@ productionization (Phase 2) then proceed independently. Recognition (3) depends
 on the descriptor interface from 2; the assistant flow (4) depends on 3; hole
 and height controls each need their own exact proof before combined acceptance.
 
-PR sequence:
-0. Remus re-pin to merged `main` plus doc correction.
+PR sequence: 0. Remus re-pin to merged `main` plus doc correction.
+
 1. Validated Remus performance integration (may be several narrow pins).
 2. Descriptor-to-history growing-holder compiler, end-piece persistence, and
    the descriptor-based preview.
