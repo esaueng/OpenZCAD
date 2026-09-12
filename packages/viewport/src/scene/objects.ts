@@ -7,7 +7,8 @@ import type {
   SketchOverlay
 } from '../types';
 import type { EdgeTopology } from '@openzcad/shared';
-import { isViewerMesh } from '../pick/meshes';
+import { isViewerMesh, type ViewerMesh } from '../pick/meshes';
+import { updateSectionCap } from './sectionCaps';
 import {
   EDGE_IDLE_COLOR,
   EDGE_IDLE_OPACITY,
@@ -63,9 +64,10 @@ export function makeLabel(className: string, text: string): CSS2DObject {
  */
 export function applyDisplayMode(bodyGroup: THREE.Group, mode: DisplayMode) {
   bodyGroup.traverse((child: THREE.Object3D) => {
-    if (isViewerMesh(child)) {
-      child.material.visible = mode !== 'wireframe';
-      child.material.wireframe = false;
+    if (isViewerMesh(child) || child.userData.sectionCap === true) {
+      const mesh = child as ViewerMesh;
+      mesh.material.visible = mode !== 'wireframe';
+      mesh.material.wireframe = false;
     } else if (child instanceof THREE.LineSegments || child instanceof Line2) {
       child.visible = mode !== 'shaded';
       child.userData.displayMode = mode;
@@ -102,17 +104,20 @@ export function sectionClippingPlane(
 /**
  * Applies (or clears, with `null`) a display-only section plane to every
  * material under `root` — body meshes, their edge overlays, and any
- * highlight geometry parented to them. Clipped solids render their interior
- * back faces instead of a see-through shell, so face culling is relaxed to
- * double-sided while a section is active; `applyDisplayMode`'s orientation
- * canary returns as soon as the section is cleared.
+ * highlight geometry parented to them. Closed mesh cross-sections receive
+ * disposable caps; holes stay open. Back faces remain visible while sectioning
+ * and normal face culling returns as soon as the section is cleared.
  */
 export function applySectionPlane(
   root: THREE.Object3D,
   plane: THREE.Plane | null
 ) {
   const planes = plane ? [plane] : null;
+  const meshes: ViewerMesh[] = [];
+  root.updateWorldMatrix(true, true);
   root.traverse((child: THREE.Object3D) => {
+    if (child.userData.sectionCap === true) return;
+    if (isViewerMesh(child)) meshes.push(child);
     const materials = (child as THREE.Mesh).material;
     for (const material of Array.isArray(materials)
       ? materials
@@ -129,6 +134,8 @@ export function applySectionPlane(
       material.needsUpdate = true;
     }
   });
+  // Adding/removing children during traverse would skip siblings.
+  for (const mesh of meshes) updateSectionCap(mesh, plane);
 }
 
 export function sketchCentroid(sketch: SketchOverlay): THREE.Vector3 {
