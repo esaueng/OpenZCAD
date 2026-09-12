@@ -13,7 +13,8 @@ import {
   classifyThroughHoleFace,
   measureFaceGeometry,
   requireBlendRegion,
-  requireThroughHole
+  requireThroughHole,
+  type ThroughHoleGeometry
 } from './exact-measure';
 import {
   coaxialCylinderRadii,
@@ -35,9 +36,11 @@ import { faceHandlesByFingerprint, faceWitnessOf } from './exact-witnesses';
 import {
   DIRECT_EDIT_TOLERANCE,
   GEOMETRY_EPSILON,
+  add,
   dot,
   length,
   normalized,
+  scale,
   subtract
 } from './exact-math';
 import {
@@ -158,6 +161,41 @@ export function resolveFaceByFingerprint(
  * both ends is OpenCascade's, so a hole through a slanted opening is trimmed
  * identically on either kernel.
  */
+/**
+ * Cut the wider bore. A cutter that barely clears the bore's own span stops
+ * inside a countersink, and the kernel refuses a cylinder whose end cap lies
+ * inside the cone. When that happens the cutter is run through the body's
+ * whole extent along the bore axis instead: a through-hole runs through, so
+ * along its own axis the only material beyond the bore is the mouth of the
+ * hole, and the countersink keeps its diameter while its depth shrinks.
+ */
+function enlargeThroughHole(
+  kernel: RemusKernel,
+  solid: number,
+  geometry: ThroughHoleGeometry,
+  radius: number,
+  newBore: number
+): number {
+  try {
+    return kernel.cut(solid, newBore);
+  } catch (shortCutError) {
+    const axis = normalized(subtract(geometry.axisEnd, geometry.axisStart));
+    if (!axis) throw shortCutError;
+    const bounds = Array.from(kernel.boundingBox(solid));
+    if (bounds.length !== 6 || !bounds.every(Number.isFinite)) throw shortCutError;
+    const corners: Vec3[] = [];
+    for (const x of [bounds[0]!, bounds[3]!])
+      for (const y of [bounds[1]!, bounds[4]!])
+        for (const z of [bounds[2]!, bounds[5]!]) corners.push({ x, y, z });
+    const along = (point: Vec3) => dot(subtract(point, geometry.axisStart), axis);
+    const reach = corners.map(along);
+    const margin = Math.max(1, radius);
+    const start = add(geometry.axisStart, scale(axis, Math.min(...reach) - margin));
+    const end = add(geometry.axisStart, scale(axis, Math.max(...reach) + margin));
+    return kernel.cut(solid, cylinderAlongAxis(kernel, start, end, radius));
+  }
+}
+
 export function resizeThroughHole(
   kernel: RemusKernel,
   solid: number,
@@ -210,7 +248,7 @@ export function resizeThroughHole(
   try {
     output =
       radius > geometry.radius
-        ? kernel.cut(solid, newBore)
+        ? enlargeThroughHole(kernel, solid, geometry, radius, newBore)
         : kernel.fuse(
             solid,
             kernel.cut(
