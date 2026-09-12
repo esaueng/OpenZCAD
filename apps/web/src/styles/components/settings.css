@@ -179,16 +179,17 @@
   text-align: left;
 }
 
-.settings-nav nav button:hover,
-.settings-nav nav button.active {
+.settings-nav nav button:hover {
   color: var(--color-text);
   background: var(--color-surface-2);
   border-color: var(--color-border);
 }
 
+/* Selected: a soft accent tint with no outline or rail. */
 .settings-nav nav button.active {
-  border-color: var(--color-accent-border);
-  box-shadow: inset 2px 0 0 var(--color-accent);
+  color: var(--color-text);
+  background: var(--color-accent-dim);
+  border-color: transparent;
 }
 
 .settings-nav nav button > svg {

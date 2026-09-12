@@ -52,6 +52,13 @@ export const SETTINGS_SECTIONS: readonly SettingsSectionMeta[] = [
     settings: ['Theme', 'Interface density', 'Reduce motion']
   },
   {
+    id: 'shortcuts',
+    label: 'Shortcuts',
+    detail: 'Keyboard, mouse, and viewport controls',
+    settings: [],
+    searchTerms: CONTROL_REFERENCE_SEARCH_TERMS
+  },
+  {
     id: 'viewport',
     label: 'Viewport',
     detail: 'Projection, navigation, grid, and display',
@@ -93,6 +100,12 @@ export const SETTINGS_SECTIONS: readonly SettingsSectionMeta[] = [
     ]
   },
   {
+    id: 'account',
+    label: 'Account',
+    detail: 'Identity and synchronization',
+    settings: ['Project sharing', 'Cloud profile', 'Preference synchronization']
+  },
+  {
     id: 'assistant',
     label: 'AI Assistant',
     detail: 'Provider, model, and credential',
@@ -107,19 +120,6 @@ export const SETTINGS_SECTIONS: readonly SettingsSectionMeta[] = [
       'Request timeout',
       'Personal API token'
     ]
-  },
-  {
-    id: 'account',
-    label: 'Account',
-    detail: 'Identity and synchronization',
-    settings: ['Project sharing', 'Cloud profile', 'Preference synchronization']
-  },
-  {
-    id: 'shortcuts',
-    label: 'Shortcuts',
-    detail: 'Keyboard, mouse, and viewport controls',
-    settings: [],
-    searchTerms: CONTROL_REFERENCE_SEARCH_TERMS
   },
   {
     id: 'privacy',

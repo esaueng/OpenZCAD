@@ -12,30 +12,32 @@ import {
   type UIEvent
 } from 'react';
 import {
-  Accessibility,
   Bot,
   Box,
   ChevronLeft,
   CircleUserRound,
   CloudOff,
+  Command,
+  Cpu,
   Database,
   Eye,
-  FileCog,
-  Grid3x3,
-  Info,
+  HardDrive,
   KeyRound,
   Keyboard,
+  LockKeyhole,
   LogIn,
   LogOut,
   Mail,
-  Monitor,
   MousePointer2,
+  Move3d,
+  Palette,
+  PencilRuler,
   RefreshCcw,
   Search,
+  Settings2,
   ShieldCheck,
-  SlidersHorizontal,
-  Sparkles,
-  Trash2
+  Trash2,
+  UserRound
 } from 'lucide-react';
 import {
   CLOUD_AUTOSAVE_DELAY_BOUNDS,
@@ -155,16 +157,16 @@ interface SettingsPageProps {
 export type AuthConfigStatus = 'loading' | 'ready' | 'unavailable';
 
 const SECTION_ICONS: Record<SectionId, ReactNode> = {
-  general: <SlidersHorizontal size={15} aria-hidden="true" />,
-  appearance: <Accessibility size={15} aria-hidden="true" />,
-  viewport: <Monitor size={15} aria-hidden="true" />,
-  sketching: <Grid3x3 size={15} aria-hidden="true" />,
-  files: <FileCog size={15} aria-hidden="true" />,
-  assistant: <Sparkles size={15} aria-hidden="true" />,
-  account: <CircleUserRound size={15} aria-hidden="true" />,
-  shortcuts: <Keyboard size={15} aria-hidden="true" />,
-  privacy: <ShieldCheck size={15} aria-hidden="true" />,
-  advanced: <Info size={15} aria-hidden="true" />
+  general: <Settings2 size={15} aria-hidden="true" />,
+  appearance: <Palette size={15} aria-hidden="true" />,
+  viewport: <Move3d size={15} aria-hidden="true" />,
+  sketching: <PencilRuler size={15} aria-hidden="true" />,
+  files: <HardDrive size={15} aria-hidden="true" />,
+  assistant: <Bot size={15} aria-hidden="true" />,
+  account: <UserRound size={15} aria-hidden="true" />,
+  shortcuts: <Command size={15} aria-hidden="true" />,
+  privacy: <LockKeyhole size={15} aria-hidden="true" />,
+  advanced: <Cpu size={15} aria-hidden="true" />
 };
 
 function Scope({ children }: { children: ReactNode }) {
