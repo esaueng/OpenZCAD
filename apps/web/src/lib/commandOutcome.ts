@@ -22,10 +22,14 @@ const PAST_TENSE: Record<string, string> = {
   offset: 'Offset',
   remove: 'Removed',
   rename: 'Renamed',
+  resume: 'Resumed',
   revolve: 'Revolved',
+  roll: 'Rolled',
   scale: 'Scaled',
+  set: 'Set',
   shell: 'Shelled',
   split: 'Split',
+  suppress: 'Suppressed',
   sweep: 'Swept',
   thicken: 'Thickened',
   transform: 'Moved',
@@ -37,6 +41,13 @@ export function commandOutcomeMessage(label: string): string {
   if (trimmed.length === 0) return trimmed;
   if (/[.!?]$/.test(trimmed)) return trimmed;
   const [verb, ...rest] = trimmed.split(/\s+/);
+  // "Boolean subtract": the operation is the second word.
+  if (verb!.toLowerCase() === 'boolean' && rest.length > 0) {
+    const operation = rest[0]!.toLowerCase();
+    if (operation === 'subtract') return 'Subtracted bodies.';
+    if (operation === 'intersect') return 'Intersected bodies.';
+    return 'United bodies.';
+  }
   const past = PAST_TENSE[verb!.toLowerCase()];
   if (past && rest.length > 0) {
     return `${past} ${rest.join(' ')}.`;

@@ -10,6 +10,20 @@ describe('command outcome messages', () => {
     expect(commandOutcomeMessage('Sweep profile')).toBe('Swept profile.');
   });
 
+  it('reports history and parameter commands as what happened, not as additions', () => {
+    expect(commandOutcomeMessage('Set parameter w')).toBe('Set parameter w.');
+    expect(commandOutcomeMessage('Roll back after Extrude')).toBe(
+      'Rolled back after Extrude.'
+    );
+    expect(commandOutcomeMessage('Resume full history')).toBe(
+      'Resumed full history.'
+    );
+    expect(commandOutcomeMessage('Suppress Hole')).toBe('Suppressed Hole.');
+    expect(commandOutcomeMessage('Boolean subtract')).toBe(
+      'Subtracted bodies.'
+    );
+  });
+
   it('describes a feature named by what it is as added', () => {
     expect(commandOutcomeMessage('Linear pattern')).toBe(
       'Linear pattern added.'

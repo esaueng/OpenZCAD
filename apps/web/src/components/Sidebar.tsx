@@ -1,3 +1,4 @@
+import type { DiagnosticRow } from '../lib/diagnosticsRows';
 import { useState, type ReactNode } from 'react';
 import {
   AlertTriangle,
@@ -137,7 +138,7 @@ interface SidebarProps {
   hiddenBodyIds: ReadonlySet<string>;
   /** Sketches currently hidden — consumed by default, or by the eye toggle. */
   hiddenSketchIds: ReadonlySet<string>;
-  warnings: string[];
+  warnings: DiagnosticRow[];
   historyDetails?: ReactNode;
   checkpoints: ProjectCheckpoint[];
   /** The open document's version, to mark the save point it sits on. */
@@ -723,10 +724,19 @@ export function Sidebar({
           className="diagnostics"
           onToggle={onToggleSection}
         >
-          {warnings.map((warning, index) => (
-            <p key={index} className="diagnostic-row">
+          {warnings.map((warning) => (
+            <p
+              key={warning.key}
+              className="diagnostic-row"
+              title={warning.detail}
+            >
               <AlertTriangle size={12} aria-hidden="true" />
-              <span>{warning}</span>
+              <span>
+                {warning.featureName ? (
+                  <strong>{warning.featureName}: </strong>
+                ) : null}
+                {warning.message}
+              </span>
             </p>
           ))}
         </SidebarSection>
