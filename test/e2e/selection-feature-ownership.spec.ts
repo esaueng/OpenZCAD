@@ -122,7 +122,7 @@ for (const filter of ['Face', 'Any'] as const) {
     await expect(page.locator('.feature-row').first()).toHaveClass(/selected/);
     await inspector.getByLabel('Radius', { exact: true }).fill('48');
     await inspector.getByRole('button', { name: /^Apply/ }).click();
-    await expect(page.getByRole('contentinfo')).toContainText('Edit Cylinder');
+    await expect(page.getByRole('contentinfo')).toContainText('Edited Cylinder.');
     await expect
       .poll(async () => (await blend(canvas, 3))?.producingFeatureId, {
         timeout: 30_000
