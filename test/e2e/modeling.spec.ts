@@ -1198,7 +1198,7 @@ test('keeps a two-rim fillet while editing a cylinder from 4.6 to 6.4 mm', async
   await cylinder.locator('.feature-row-main').click();
   await inspector.getByLabel('Radius', { exact: true }).fill('6.4');
   await inspector.getByRole('button', { name: /^Apply/ }).click();
-  await expect(page.getByRole('contentinfo')).toContainText('Edit Cylinder');
+  await expect(page.getByRole('contentinfo')).toContainText('Edited Cylinder.');
   await expect(fillet.getByTitle('Feature failed to build')).toHaveCount(0);
   await expectBodyCount(page, 1);
   await expect(page.getByText('Diagnostics', { exact: true })).toHaveCount(0);
