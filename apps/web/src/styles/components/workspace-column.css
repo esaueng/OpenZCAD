@@ -159,28 +159,6 @@
       no-repeat scroll;
 }
 
-/* A narrow column (the resizer allows 180px) cannot fit icon, name and
-   shortcut badge on one tile: the badge ate the name, so "Sketch" read
-   "Sk…". Below ~224px the badge goes (the tooltip and ⌘K still show it)
-   and the tile tightens so every name fits two across. */
-@container (max-width: 224px) {
-  .tool-tile kbd {
-    display: none;
-  }
-
-  .tool-tile {
-    gap: 4px;
-    padding: 0 3px 0 4px;
-    /* One size down: at the 180px minimum "Intersect" was a pixel short
-       on the beta's font rendering. */
-    font-size: var(--fs-xs);
-  }
-
-  .tool-tile-label {
-    letter-spacing: -0.02em;
-  }
-}
-
 .workspace-column-browser {
   flex: 1;
   min-height: 0;
@@ -330,6 +308,31 @@
   font-size: 10px;
   line-height: 14px;
   text-align: center;
+}
+
+/* A narrow column (the resizer allows 180px) cannot fit icon, name and
+   shortcut badge on one tile: the badge ate the name, so "Sketch" read
+   "Sk…". Below ~224px the badge goes (the tooltip and ⌘K still show it)
+   and the tile tightens so every name fits two across.
+   This block must follow the base .tool-tile rules: it shares their
+   specificity, so source order decides, and ahead of them only the badge
+   and tracking parts applied and "Intersect" still clipped on the beta. */
+@container (max-width: 224px) {
+  .tool-tile kbd {
+    display: none;
+  }
+
+  .tool-tile {
+    gap: 4px;
+    padding: 0 3px 0 4px;
+    /* One size down: at the 180px minimum "Intersect" was a pixel short
+       on the beta's font rendering. */
+    font-size: var(--fs-xs);
+  }
+
+  .tool-tile-label {
+    letter-spacing: -0.02em;
+  }
 }
 
 .tool-tile:hover:not(:disabled) {
