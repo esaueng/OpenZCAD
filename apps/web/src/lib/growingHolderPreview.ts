@@ -50,10 +50,28 @@ export function growingHolderPreview(
   const before = getParameterScope(base);
   const after = getParameterScope(next);
   if (before.errors.length || after.errors.length) return null;
+  // Only the recipe controls have a trustworthy approximation. A change to
+  // any other parameter (a bore diameter, a value some unrelated feature
+  // reads) stays on the exact-only path, even when a control moved with it.
+  const controlled = new Set(
+    histories.flatMap(({ recipe }) => [
+      recipe.parameter,
+      ...(recipe.height ? [recipe.height.parameter] : [])
+    ])
+  );
+  for (const name of new Set([
+    ...Object.keys(before.scope),
+    ...Object.keys(after.scope)
+  ])) {
+    if (!controlled.has(name) && before.scope[name] !== after.scope[name])
+      return null;
+  }
   const previews: BodyRepresentation[] = [];
   for (const history of histories) {
     const { recipe, plan } = history;
-    const controls: [string, number][] = [[recipe.parameter, recipe.minimumOpening]];
+    const controls: [string, number][] = [
+      [recipe.parameter, recipe.minimumOpening]
+    ];
     if (recipe.height)
       controls.push([recipe.height.parameter, recipe.height.minimumHeight]);
     let changed = false;
@@ -80,19 +98,29 @@ export function growingHolderPreview(
     if (
       !result ||
       result.consumed ||
-      parts.some((part) => !part.representation || !part.representation.consumed)
+      parts.some(
+        (part) => !part.representation || !part.representation.consumed
+      )
     )
       return null;
     let rules: {
       mesh: BodyRepresentation['mesh'];
       delta: [number, number, number];
-      stretch: { axis: 0 | 1 | 2; oldStart: number; newStart: number; ratio: number } | null;
+      stretch: {
+        axis: 0 | 1 | 2;
+        oldStart: number;
+        newStart: number;
+        ratio: number;
+      } | null;
     }[];
     try {
       rules = parts.map((part) => {
-        const spec = (part.piece ?? part.bridge) as GrowingHolderPiece | GrowingHolderBridge;
+        const spec = (part.piece ?? part.bridge) as
+          GrowingHolderPiece | GrowingHolderBridge;
         const delta = AXES.map(
-          (axis) => evaluate(spec.move[axis], after.scope) - evaluate(spec.move[axis], before.scope)
+          (axis) =>
+            evaluate(spec.move[axis], after.scope) -
+            evaluate(spec.move[axis], before.scope)
         ) as [number, number, number];
         let stretch = null;
         if (part.bridge) {

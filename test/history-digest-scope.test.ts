@@ -5,6 +5,7 @@ import {
   booleanBodies,
   createBodyFeatureIds,
   createProjectDocument,
+  directEditBody,
   importStepBody,
   listFeaturesInOrder,
   setParameter,
@@ -29,7 +30,10 @@ function fixture(planeOffset: number | string) {
   const split = addSplitFeature(imported.document, {
     name: 'Cut',
     targetBodyId: imported.bodyId,
-    plane: { origin: { x: planeOffset, y: 0, z: 0 }, normal: { x: 1, y: 0, z: 0 } }
+    plane: {
+      origin: { x: planeOffset, y: 0, z: 0 },
+      normal: { x: 1, y: 0, z: 0 }
+    }
   });
   const moved = transformBody(split.document, {
     name: 'Move',
@@ -103,6 +107,90 @@ describe('history feature digests and the parameter scope', () => {
     const changed = digests(after);
     expect(changed.slice(0, 4)).toEqual(stable.slice(0, 4));
     expect(changed[4]).not.toBe(stable[4]);
+  });
+
+  it('keeps a direct edit bound to one parameter across an edit of another', () => {
+    const imported = importStepBody(
+      setParameter(
+        setParameter(createProjectDocument('Digest', toUserId('user_digest')), {
+          name: 'opening_width',
+          expression: '46'
+        }),
+        { name: 'hole_diameter', expression: '5' }
+      ),
+      {
+        name: 'Source',
+        artifactId: 'source',
+        sourceName: 'source.step',
+        stepText: 'ISO-10303-21;'
+      }
+    );
+    const bound = directEditBody(imported.document, {
+      name: 'Bore',
+      targetBodyId: imported.bodyId,
+      operation: {
+        kind: 'resize-through-hole',
+        faceHash: 1,
+        sourceDiameter: 5,
+        sourceAxisStart: { x: 0, y: 0, z: 0 },
+        sourceAxisEnd: { x: 0, y: 0, z: 8 },
+        diameter: 'hole_diameter',
+        parameterBinding: true
+      }
+    }).document;
+    const [, boreBefore] = digests(bound);
+    const [, boreAfterWidth] = digests(
+      setParameter(bound, { name: 'opening_width', expression: '55' })
+    );
+    const [, boreAfterHole] = digests(
+      setParameter(bound, { name: 'hole_diameter', expression: '6' })
+    );
+    expect(boreAfterWidth).toBe(boreBefore);
+    expect(boreAfterHole).not.toBe(boreBefore);
+    // Every expression field counts, however the operation names it: the
+    // blend edit's `newRadius` once slipped past an explicit field list.
+    const blend = directEditBody(imported.document, {
+      name: 'Blend',
+      targetBodyId: imported.bodyId,
+      operation: {
+        kind: 'resize-blend',
+        faceHash: 2,
+        surfaceClass: 'torus',
+        recordedRadius: 3,
+        recordedCenter: { x: 0, y: 0, z: 0 },
+        recordedAxis: { x: 0, y: 0, z: 1 },
+        newRadius: 'hole_diameter / 2',
+        parameterBinding: true
+      }
+    }).document;
+    expect(digests(blend)[1]).not.toBe(
+      digests(
+        setParameter(blend, { name: 'hole_diameter', expression: '6' })
+      )[1]
+    );
+    expect(digests(blend)[1]).toBe(
+      digests(
+        setParameter(blend, { name: 'opening_width', expression: '55' })
+      )[1]
+    );
+    // A literal edit reads nothing from the scope at all.
+    const literal = directEditBody(imported.document, {
+      name: 'Bore',
+      targetBodyId: imported.bodyId,
+      operation: {
+        kind: 'resize-through-hole',
+        faceHash: 1,
+        sourceDiameter: 5,
+        sourceAxisStart: { x: 0, y: 0, z: 0 },
+        sourceAxisEnd: { x: 0, y: 0, z: 8 },
+        diameter: 6
+      }
+    }).document;
+    expect(digests(literal)[1]).toBe(
+      digests(
+        setParameter(literal, { name: 'hole_diameter', expression: '7' })
+      )[1]
+    );
   });
 
   it('still invalidates a split whose plane reads a parameter', () => {
