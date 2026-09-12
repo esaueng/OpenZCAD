@@ -10,6 +10,7 @@ import type {
   OpeningAxis,
   OpeningCandidate,
   OpeningRecognition,
+  RecognizedArmHeight,
   SketchObjectData,
   Vector3
 } from '@openzcad/shared';
@@ -27,6 +28,7 @@ export type {
   OpeningCandidate,
   OpeningEvidence,
   OpeningRecognition,
+  RecognizedArmHeight,
   RecognizedOpening
 } from '@openzcad/shared';
 
@@ -47,6 +49,11 @@ const CUT_MARGIN = 0.5;
 const MIN_STRAIGHT_RUN = 2;
 /** Bridge length kept at the minimum opening. */
 const MIN_BRIDGE = 0.1;
+/** Letter gaps on a lettered arm are around a millimetre; keep the margin small. */
+const HEIGHT_CUT_MARGIN = 0.1;
+const MIN_HEIGHT_RUN = 0.5;
+/** A rigid piece must remain above the upper height cut. */
+const MIN_UPPER_PIECE = 1;
 /** Two candidates this close in overlap area are indistinguishable. */
 const AMBIGUITY_RATIO = 0.9;
 const MAX_SECTION_EDGES = 64;
@@ -126,24 +133,24 @@ function faceExtents(
 }
 
 /**
- * The longest interval strictly between the inner faces over which every
- * face crossing it is invariant along the axis. Face extents come from
- * vertices; the cut margin and the section signature checks guard against
- * a curved face bulging past its own boundary.
+ * Every interval strictly inside `range` over which the set of faces crossing
+ * it is constant and each of them is invariant along the axis, longest
+ * first. Face extents come from sampled edges; the cut margin and the slab
+ * proof guard against a curved face bulging past its own boundary.
  */
-function straightRun(
-  inventory: AnalyticInventory,
+function straightRuns(
+  faces: readonly AnalyticFaceMeasurement[],
   extents: Map<number, Extents>,
   axis: OpeningAxis,
-  inner: [number, number],
+  range: [number, number],
   tolerance: number
-): [number, number] | null {
-  const [lo, hi] = inner;
+): [number, number][] {
+  const [lo, hi] = range;
   const breakpoints = new Set<number>([lo, hi]);
   const spans: { face: number; extent: [number, number]; invariant: boolean }[] = [];
-  for (const face of inventory.faces) {
+  for (const face of faces) {
     const extent = extents.get(face.face)?.[axis];
-    if (!extent || !Number.isFinite(extent[0]) || !Number.isFinite(extent[1])) return null;
+    if (!extent || !Number.isFinite(extent[0]) || !Number.isFinite(extent[1])) return [];
     if (extent[1] <= lo + tolerance || extent[0] >= hi - tolerance) continue;
     spans.push({ face: face.face, extent, invariant: invariantAlong(face, axis, tolerance) });
     for (const value of extent)
@@ -154,12 +161,11 @@ function straightRun(
   // A run may only join intervals whose crossing sets are identical and all
   // invariant: a face parallel to the axis that starts or ends at a station
   // changes the section there even though both sides are "clear".
-  let best: [number, number] | null = null;
+  const runs: [number, number][] = [];
   let start: number | null = null;
   let runKey: string | null = null;
   const flush = (end: number) => {
-    if (start !== null && (best === null || end - start > best[1] - best[0]))
-      best = [start, end];
+    if (start !== null && end > start) runs.push([start, end]);
     start = null;
     runKey = null;
   };
@@ -185,7 +191,7 @@ function straightRun(
     }
   }
   flush(stations[stations.length - 1]!);
-  return best;
+  return runs.sort((l, r) => r[1] - r[0] - (l[1] - l[0]));
 }
 
 interface SectionEdge {
@@ -303,12 +309,11 @@ function proveStraightSection(
   solid: number,
   axis: OpeningAxis,
   cuts: [number, number],
-  bounds: { min: Vector3; max: Vector3 },
+  box: { min: Vector3; max: Vector3 },
   tolerance: number
 ): { section: SectionEdge[] } | string {
-  const margin = 1 + 0.05 * Math.max(...AXES.map((a) => bounds.max[a] - bounds.min[a]));
-  const min: Vector3 = { x: bounds.min.x - margin, y: bounds.min.y - margin, z: bounds.min.z - margin };
-  const max: Vector3 = { x: bounds.max.x + margin, y: bounds.max.y + margin, z: bounds.max.z + margin };
+  const min = { ...box.min };
+  const max = { ...box.max };
   min[axis] = cuts[0];
   max[axis] = cuts[1];
   let slab: number;
@@ -360,6 +365,135 @@ const sectionSignature = (edges: SectionEdge[]): string =>
     .map((edge) => edge.key)
     .sort()
     .join('|');
+
+/** The envelope grown by the same margin the compiler's masks use. */
+function grown(bounds: { min: Vector3; max: Vector3 }): { min: Vector3; max: Vector3 } {
+  const margin = 1 + 0.05 * Math.max(...AXES.map((a) => bounds.max[a] - bounds.min[a]));
+  return {
+    min: { x: bounds.min.x - margin, y: bounds.min.y - margin, z: bounds.min.z - margin },
+    max: { x: bounds.max.x + margin, y: bounds.max.y + margin, z: bounds.max.z + margin }
+  };
+}
+
+/** Largest coordinate along `axis` reached by a section drawn in the frame of `sectionAxis`. */
+function sectionReach(
+  section: SectionEdge[],
+  sectionAxis: OpeningAxis,
+  axis: OpeningAxis
+): number {
+  const frame = SECTION_FRAME[sectionAxis];
+  const component = frame.u[axis] !== 0 ? 'u' : 'v';
+  const sign = component === 'u' ? frame.u[axis] : frame.v[axis];
+  let reach = -Infinity;
+  for (const edge of section) {
+    const data = edge.data;
+    const values =
+      data.objectKind === 'line'
+        ? [component === 'u' ? data.x1 : data.y1, component === 'u' ? data.x2 : data.y2]
+        : data.objectKind === 'arc'
+          ? [
+              Number(component === 'u' ? data.centerX : data.centerY) + Number(data.radius),
+              Number(component === 'u' ? data.centerX : data.centerY) - Number(data.radius)
+            ]
+          : [];
+    for (const value of values) reach = Math.max(reach, Number(value) * sign);
+  }
+  return reach;
+}
+
+/**
+ * Measure the arm-height control: the axis the arms extend along, the
+ * longest straight run shared by both ends above the base section, and each
+ * end's arm profile proved by a slab. On a lettered arm the run is the widest
+ * gap between two letters, so growing the height widens that gap; the caller
+ * reports it. Returns the reason when there is no such run.
+ */
+function recognizeArmHeight(
+  kernel: RemusKernel,
+  solid: number,
+  inventory: AnalyticInventory,
+  extents: Map<number, Extents>,
+  bounds: { min: Vector3; max: Vector3 },
+  grownBox: { min: Vector3; max: Vector3 },
+  opening: {
+    axis: OpeningAxis;
+    cuts: [number, number];
+    innerFaces: [number, number];
+    section: SectionEdge[];
+  },
+  tolerance: number
+): RecognizedArmHeight | string {
+  const others = AXES.filter((a) => a !== opening.axis) as [OpeningAxis, OpeningAxis];
+  // The arms extend along whichever remaining axis the inner faces span more.
+  const span = (axis: OpeningAxis) =>
+    Math.max(
+      ...opening.innerFaces.map((face) => {
+        const extent = extents.get(face)?.[axis];
+        return extent ? extent[1] - extent[0] : 0;
+      })
+    );
+  const axis = span(others[0]) >= span(others[1]) ? others[0] : others[1];
+  const baseTop = sectionReach(opening.section, opening.axis, axis);
+  if (!Number.isFinite(baseTop)) return 'The bridge section has no extent along the arm axis.';
+  const top = bounds.max[axis];
+  if (top - baseTop < MIN_STRAIGHT_RUN + MIN_UPPER_PIECE)
+    return 'The ends do not rise far enough above the bridge section to grow.';
+  const sideFaces = (side: 'negative' | 'positive') =>
+    inventory.faces.filter((face) => {
+      const extent = extents.get(face.face)?.[opening.axis];
+      return (
+        !!extent &&
+        (side === 'negative'
+          ? extent[1] <= opening.cuts[0] + tolerance
+          : extent[0] >= opening.cuts[1] - tolerance)
+      );
+    });
+  const range: [number, number] = [baseTop, top - MIN_UPPER_PIECE];
+  const runs = {
+    negative: straightRuns(sideFaces('negative'), extents, axis, range, tolerance),
+    positive: straightRuns(sideFaces('positive'), extents, axis, range, tolerance)
+  };
+  let best: { negative: [number, number]; positive: [number, number]; shared: [number, number] } | null = null;
+  for (const negative of runs.negative)
+    for (const positive of runs.positive) {
+      const shared: [number, number] = [
+        Math.max(negative[0], positive[0]),
+        Math.min(negative[1], positive[1])
+      ];
+      if (shared[1] - shared[0] > (best ? best.shared[1] - best.shared[0] : 0))
+        best = { negative, positive, shared };
+    }
+  if (!best || best.shared[1] - best.shared[0] < MIN_HEIGHT_RUN + 2 * HEIGHT_CUT_MARGIN)
+    return 'No straight run along the arms is shared by both ends above the bridge section.';
+  const cuts: [number, number] = [
+    round(best.shared[0] + HEIGHT_CUT_MARGIN),
+    round(best.shared[1] - HEIGHT_CUT_MARGIN)
+  ];
+  const sideBox = (side: 'negative' | 'positive') => {
+    const box = { min: { ...grownBox.min }, max: { ...grownBox.max } };
+    if (side === 'negative') box.max[opening.axis] = opening.cuts[0];
+    else box.min[opening.axis] = opening.cuts[1];
+    return box;
+  };
+  const sections: Partial<Record<'negative' | 'positive', SketchObjectData[]>> = {};
+  for (const side of ['negative', 'positive'] as const) {
+    const proof = proveStraightSection(kernel, solid, axis, cuts, sideBox(side), Math.max(tolerance, 1e-6));
+    if (typeof proof === 'string') return `${side} end: ${proof}`;
+    sections[side] = proof.section.map((edge) => edge.data);
+  }
+  const sourceHeight = round(top - bounds.min[axis]);
+  return {
+    axis,
+    cuts,
+    sourceHeight,
+    minimumHeight: round(sourceHeight - (cuts[1] - cuts[0]) + MIN_BRIDGE),
+    sections: { negative: sections.negative!, positive: sections.positive! },
+    straightRuns: {
+      negative: [round(best.negative[0]), round(best.negative[1])],
+      positive: [round(best.positive[0]), round(best.positive[1])]
+    }
+  };
+}
 
 /**
  * Recognize the opening of `solid`. The candidate opening is a pair of
@@ -470,12 +604,23 @@ export function recognizeOpening(
     return unsupported(
       `No reflection plane at ${axis} = ${round(center)} confirms that the two ends are mirror images; asymmetric ends are not supported.`
     );
-  const run = straightRun(inventory, extents, axis, candidate.innerFaces, tolerance);
+  const run = straightRuns(inventory.faces, extents, axis, candidate.innerFaces, tolerance)[0];
   if (!run || run[1] - run[0] < MIN_STRAIGHT_RUN + 2 * CUT_MARGIN)
     return unsupported('No straight section long enough to grow was found between the inner faces.');
   const cuts: [number, number] = [round(run[0] + CUT_MARGIN), round(run[1] - CUT_MARGIN)];
-  const proof = proveStraightSection(kernel, solid, axis, cuts, bounds, Math.max(tolerance, 1e-6));
+  const grownBox = grown(bounds);
+  const proof = proveStraightSection(kernel, solid, axis, cuts, grownBox, Math.max(tolerance, 1e-6));
   if (typeof proof === 'string') return unsupported(proof);
+  const height = recognizeArmHeight(
+    kernel,
+    solid,
+    inventory,
+    extents,
+    bounds,
+    grownBox,
+    { axis, cuts, innerFaces: [candidate.faceA, candidate.faceB], section: proof.section },
+    tolerance
+  );
   const sectionLength = cuts[1] - cuts[0];
   return {
     status: 'recognized',
@@ -489,7 +634,8 @@ export function recognizeOpening(
       center: round(center),
       sourceOpening: candidate.opening,
       minimumOpening: round(candidate.opening - sectionLength + MIN_BRIDGE),
-      section: proof.section.map((edge) => edge.data)
+      section: proof.section.map((edge) => edge.data),
+      ...(typeof height === 'string' ? {} : { height })
     },
     evidence: {
       candidate,
@@ -498,7 +644,8 @@ export function recognizeOpening(
         analyticCoverage: symmetry.analyticCoverage
       },
       straightRun: [round(run[0]), round(run[1])],
-      sectionEdges: proof.section.length
+      sectionEdges: proof.section.length,
+      ...(typeof height === 'string' ? { heightReason: height } : {})
     }
   };
 }

@@ -29,6 +29,8 @@ export function translated(
 export interface SyntheticHolderOptions {
   /** Countersink the mounting bores (default). Plain bores otherwise. */
   countersink?: boolean;
+  /** Drill the mounting bores at all (default). */
+  holes?: boolean;
 }
 
 export function syntheticHolderSolid(
@@ -36,6 +38,7 @@ export function syntheticHolderSolid(
   options: SyntheticHolderOptions = {}
 ): number {
   const countersink = options.countersink ?? true;
+  const holes = options.holes ?? true;
   const sideProfile = kernel.makePolygon(
     new Float64Array([
       0, 0, 0, 60, 0, 0, 60, 32, 0, 52, 32, 0, 52, 8, 0, 8, 8, 0, 8, 32, 0, 0,
@@ -43,7 +46,7 @@ export function syntheticHolderSolid(
     ])
   );
   let holder = kernel.extrude(sideProfile, 0, 0, 1, 20);
-  for (const x of [4, 56]) {
+  for (const x of holes ? [4, 56] : []) {
     holder = drillHole(kernel, holder, {
       surfacePoint: { x, y: 19, z: 20 },
       axis: { x: 0, y: 0, z: -1 },

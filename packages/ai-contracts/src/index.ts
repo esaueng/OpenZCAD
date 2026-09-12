@@ -236,6 +236,8 @@ export type CadPatchOperation =
       localId?: LocalBodyId;
       targetBodyId: BodyRef;
       parameter: string;
+      /** Parameter for the arm height when the opening carries one; null otherwise. */
+      heightParameter?: string | null;
       opening: RecognizedOpening;
     }
   | {
@@ -1391,9 +1393,45 @@ const recognizedOpeningSchema = {
     center: { type: 'number' },
     sourceOpening: { type: 'number' },
     minimumOpening: { type: 'number' },
-    section: { type: 'array', minItems: 2, items: sectionObjectSchema }
+    section: { type: 'array', minItems: 2, items: sectionObjectSchema },
+    height: {
+      anyOf: [
+        {
+          type: 'object',
+          additionalProperties: false,
+          properties: {
+            axis: { type: 'string', enum: ['x', 'y', 'z'] },
+            cuts: { type: 'array', minItems: 2, maxItems: 2, items: { type: 'number' } },
+            sourceHeight: { type: 'number' },
+            minimumHeight: { type: 'number' },
+            sections: {
+              type: 'object',
+              additionalProperties: false,
+              properties: {
+                negative: { type: 'array', minItems: 2, items: sectionObjectSchema },
+                positive: { type: 'array', minItems: 2, items: sectionObjectSchema }
+              },
+              required: ['negative', 'positive']
+            },
+            straightRuns: {
+              type: 'object',
+              additionalProperties: false,
+              properties: {
+                negative: { type: 'array', minItems: 2, maxItems: 2, items: { type: 'number' } },
+                positive: { type: 'array', minItems: 2, maxItems: 2, items: { type: 'number' } }
+              },
+              required: ['negative', 'positive']
+            }
+          },
+          required: ['axis', 'cuts', 'sourceHeight', 'minimumHeight', 'sections', 'straightRuns']
+        },
+        { type: 'null' }
+      ],
+      description:
+        'The measured arm-height control, copied verbatim when the digest has one; null otherwise.'
+    }
   },
-  required: ['axis', 'envelope', 'cuts', 'center', 'sourceOpening', 'minimumOpening', 'section']
+  required: ['axis', 'envelope', 'cuts', 'center', 'sourceOpening', 'minimumOpening', 'section', 'height']
 } as const;
 
 const faceReferenceSchema = {
@@ -2043,9 +2081,14 @@ export const CAD_PATCH_JSON_SCHEMA = {
                 type: 'string',
                 description: 'Parameter name that drives the opening, e.g. "opening_width".'
               },
+              heightParameter: {
+                anyOf: [{ type: 'string' }, { type: 'null' }],
+                description:
+                  'Parameter name for the arm height when the opening carries a measured height, e.g. "holder_height"; null otherwise.'
+              },
               opening: recognizedOpeningSchema
             },
-            required: ['kind', 'name', 'localId', 'targetBodyId', 'parameter', 'opening']
+            required: ['kind', 'name', 'localId', 'targetBodyId', 'parameter', 'heightParameter', 'opening']
           },
           {
             type: 'object',
@@ -2764,9 +2807,18 @@ function isRecognizedOpening(value: unknown): value is RecognizedOpening {
     isFiniteNumber(opening.center) &&
     isFiniteNumber(opening.sourceOpening) &&
     isFiniteNumber(opening.minimumOpening) &&
-    Array.isArray(opening.section) &&
-    opening.section.length >= 2 &&
-    opening.section.every((object) => {
+    isNumericSection(opening.section) &&
+    (opening.height === undefined ||
+      opening.height === null ||
+      isRecognizedArmHeight(opening.height))
+  );
+}
+
+function isNumericSection(value: unknown): value is SketchObjectData[] {
+  return (
+    Array.isArray(value) &&
+    value.length >= 2 &&
+    value.every((object) => {
       if (!object || typeof object !== 'object') return false;
       const data = object as Record<string, unknown>;
       const fields =
@@ -2781,6 +2833,28 @@ function isRecognizedOpening(value: unknown): value is RecognizedOpening {
         fields.every((field) => isFiniteNumber(data[field]))
       );
     })
+  );
+}
+
+const isPair = (value: unknown): value is [number, number] =>
+  Array.isArray(value) && value.length === 2 && value.every(isFiniteNumber);
+
+function isRecognizedArmHeight(value: unknown): boolean {
+  if (!value || typeof value !== 'object') return false;
+  const height = value as Record<string, unknown>;
+  const sections = height.sections as Record<string, unknown> | undefined;
+  const runs = height.straightRuns as Record<string, unknown> | undefined;
+  return (
+    ['x', 'y', 'z'].includes(String(height.axis)) &&
+    isPair(height.cuts) &&
+    isFiniteNumber(height.sourceHeight) &&
+    isFiniteNumber(height.minimumHeight) &&
+    !!sections &&
+    isNumericSection(sections.negative) &&
+    isNumericSection(sections.positive) &&
+    !!runs &&
+    isPair(runs.negative) &&
+    isPair(runs.positive)
   );
 }
 
@@ -3184,6 +3258,13 @@ export function parseCadPatchProposal(
           isLocalBodyRef(operation.targetBodyId) ||
           typeof operation.parameter !== 'string' ||
           !isValidParameterName(operation.parameter) ||
+          !(
+            operation.heightParameter === undefined ||
+            operation.heightParameter === null ||
+            (typeof operation.heightParameter === 'string' &&
+              isValidParameterName(operation.heightParameter) &&
+              operation.heightParameter !== operation.parameter)
+          ) ||
           !isRecognizedOpening(operation.opening)
         ) {
           throw new Error('Invalid add_growing_holder_recipe operation.');

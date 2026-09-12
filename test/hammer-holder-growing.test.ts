@@ -12,7 +12,8 @@ import {
   growingHolderCommand,
   growingHolderHistories,
   growingHolderHoleCommand,
-  matchGrowingHolderHoles
+  matchGrowingHolderHoles,
+  recipeFromRecognizedOpening
 } from '@openzcad/command-system';
 import { createExactKernelAdapter } from '@openzcad/kernel-adapter/exact';
 import { toUserId } from '@openzcad/shared';
@@ -96,10 +97,30 @@ it.skipIf(!sourcePath)(
       const recognized = recognizeOpening(kernel, source!);
       expect(recognized.status).toBe('recognized');
       if (recognized.status !== 'recognized') throw new Error('unreachable');
-      const { section: measuredSection, ...measured } = recognized.opening;
+      const {
+        section: measuredSection,
+        height: measuredHeight,
+        ...measured
+      } = recognized.opening;
       const { section: expectedSection, ...expected } = hammerRecipe(
         imported.bodyId
       );
+      // The arm height: the widest gap between two letters on the lettered
+      // arm, shared with the plain arm, with the eight-edge arm profile.
+      expect(measuredHeight).toMatchObject({ axis: 'z', sourceHeight: 58 });
+      const runs = measuredHeight!.straightRuns;
+      expect(runs.negative[0]).toBeCloseTo(24.7, 2);
+      expect(runs.negative[1]).toBeCloseTo(26.09, 2);
+      expect(runs.positive[0]).toBeCloseTo(20.5, 2);
+      expect(runs.positive[1]).toBeCloseTo(47.26, 2);
+      expect(measuredHeight!.cuts[0]).toBeCloseTo(runs.negative[0] + 0.1, 6);
+      expect(measuredHeight!.cuts[1]).toBeCloseTo(runs.negative[1] - 0.1, 6);
+      expect(measuredHeight!.minimumHeight).toBeCloseTo(
+        58 - (measuredHeight!.cuts[1] - measuredHeight!.cuts[0]) + 0.1,
+        6
+      );
+      expect(measuredHeight!.sections.negative).toHaveLength(8);
+      expect(measuredHeight!.sections.positive).toHaveLength(8);
       expect(measured).toEqual({
         axis: expected.axis,
         envelope: expected.envelope,
@@ -130,13 +151,11 @@ it.skipIf(!sourcePath)(
         sectionEdges: 6
       });
       const manager = new CommandManager(imported.document);
-      const recipe = {
-        version: 1 as const,
+      const recipe = recipeFromRecognizedOpening(recognized.opening, {
         name: 'Hammer opening',
         targetBodyId: imported.bodyId,
-        parameter: 'opening_width',
-        ...recognized.opening
-      };
+        parameter: 'opening_width'
+      });
       const compiled = growingHolderCommand(manager.document, recipe);
       manager.execute(compiled.command);
       expect(growingHolderHistories(manager.document)).toHaveLength(1);
@@ -177,11 +196,15 @@ it.skipIf(!sourcePath)(
         /kept its original diameter instead of resizing to Ø4/
       );
       const holeDiameter = 6;
+      const holderHeight = Number(process.env.OPENZCAD_HAMMER_HEIGHT ?? 64);
       const document = setParameter(
-        setParameter(manager.document, {
-          name: 'hole_diameter',
-          expression: String(holeDiameter)
-        }),
+        setParameter(
+          setParameter(manager.document, {
+            name: 'hole_diameter',
+            expression: String(holeDiameter)
+          }),
+          { name: 'holder_height', expression: String(holderHeight) }
+        ),
         { name: 'opening_width', expression: String(width) }
       );
       const joined = { bodyId: compiled.bodyId };
@@ -212,9 +235,14 @@ it.skipIf(!sourcePath)(
       }
       Array.from(kernel.boundingBox(solid)).forEach((v, i) =>
         expect(v).toBeCloseTo(
-          [11 - (width + 28) / 2, 6.5, 4.5, 11 + (width + 28) / 2, 59.5, 62.5][
-            i
-          ]!,
+          [
+            11 - (width + 28) / 2,
+            6.5,
+            4.5,
+            11 + (width + 28) / 2,
+            59.5,
+            62.5 + (holderHeight - 58)
+          ][i]!,
           6
         )
       );
