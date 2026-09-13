@@ -1,3 +1,4 @@
+import type { EditAnalysisRequest } from '@openzcad/shared';
 import { useEffect, useRef, useState } from 'react';
 import { documentForWorker } from '../lib/meshTransport';
 import { describeWorkerFailure } from '../lib/workerFailure';
@@ -113,7 +114,10 @@ export interface GeometryWorkerApi {
    * documents, whose finishing features need exact edge ordinals before the
    * document is ever opened.
    */
-  syncOnce(document: ProjectDocument): Promise<DerivedState>;
+  syncOnce(
+    document: ProjectDocument,
+    analysis?: EditAnalysisRequest
+  ): Promise<DerivedState>;
   /**
    * `onState` receives this request's own lifecycle states (kernel load,
    * rebuild) so a dialog can narrate progress. Aborting the `signal` rejects
@@ -287,9 +291,12 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
         worker = timed(
           'worker.create',
           () =>
-            new Worker(new URL('../worker/geometryWorker.ts', import.meta.url), {
-              type: 'module'
-            })
+            new Worker(
+              new URL('../worker/geometryWorker.ts', import.meta.url),
+              {
+                type: 'module'
+              }
+            )
         );
       } catch (error) {
         // A blocked or unsupported worker environment throws synchronously.
@@ -313,7 +320,10 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
         lastWorkerMessageAt = Date.now();
         if (event.data.type === 'projection') {
           const document = hostRef.current.manager()?.document;
-          if (document?.projectId === event.data.projectId && document.version === event.data.version) {
+          if (
+            document?.projectId === event.data.projectId &&
+            document.version === event.data.version
+          ) {
             hostRef.current.onProjection?.(event.data.derived);
           }
           return;
@@ -322,12 +332,15 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
           if (event.data.progress?.status === 'completed') {
             // Keep each timing even when React batches adjacent phase updates.
             // Session-local only: no document contents or telemetry upload.
-            console.debug('[geometry rebuild]', JSON.stringify({
-              projectId: event.data.projectId,
-              version: event.data.version,
-              requestId: event.data.requestId,
-              ...event.data.progress
-            }));
+            console.debug(
+              '[geometry rebuild]',
+              JSON.stringify({
+                projectId: event.data.projectId,
+                version: event.data.version,
+                requestId: event.data.requestId,
+                ...event.data.progress
+              })
+            );
           }
           if (!event.data.requestId) {
             livePhase = event.data.phase;
@@ -517,7 +530,7 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
       }
       postSync(worker, document, lastSyncedKey, armedRef);
     },
-    syncOnce(document) {
+    syncOnce(document, analysis) {
       const worker = workerRef.current;
       if (!worker) {
         return Promise.reject(new Error('Geometry worker unavailable.'));
@@ -529,7 +542,8 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
         worker.postMessage({
           type: 'sync',
           document: documentForWorker(document),
-          requestId
+          requestId,
+          ...(analysis ? { analysis } : {})
         });
       });
     },
