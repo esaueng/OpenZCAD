@@ -8495,7 +8495,7 @@ export function App() {
       );
       return;
     }
-    if (!/\.(?:stl|step|stp)$/i.test(file.name)) {
+    if (!/\.(?:stl|step|stp|3mf|obj|glb|ply)$/i.test(file.name)) {
       setStatus(`Unsupported import format: ${file.name}`);
       return;
     }
@@ -8512,62 +8512,48 @@ export function App() {
         setStatus(errorMessage(error, 'STL import failed.'));
         return;
       }
-      // STL carries no unit declaration; the interchange convention is
-      // millimetres, and exportStl multiplies by UNIT_TO_MM on the way out.
-      // Adopting the vertices at 1/UNIT_TO_MM keeps a non-mm document's
-      // round trip at the same physical size.
-      const meshScale = 1 / UNIT_TO_MM[doc.units];
-      const vertices =
-        meshScale === 1
-          ? parsed.vertices
-          : parsed.vertices.map((value) => value * meshScale);
+      await commitImportedMesh({
+        file,
+        contentType,
+        artifactKind: 'stl-import',
+        importManager,
+        mesh: {
+          name: parsed.name,
+          triangleCount: parsed.triangleCount,
+          vertices: parsed.vertices,
+          indices: parsed.indices
+        }
+      });
+      return;
+    }
 
-      // Best-effort archive of the original upload; the mesh itself lives in
-      // the document, so a storage failure must not block the import.
-      let artifactId = `artifact_local_${crypto.randomUUID()}`;
-      let archived = false;
+    if (!/\.(?:step|stp)$/i.test(file.name)) {
+      // 3MF, OBJ, glTF binary and PLY. The kernel's own translators read them
+      // into the same triangles an STL import produces, in a worker that is
+      // terminated with the import, and the result becomes the same
+      // `imported-mesh` feature — so a body from one of these files autosaves,
+      // reopens, rebuilds and exports exactly like an imported STL.
+      let mesh;
       try {
-        artifactId = await archiveArtifact({
-          fileName: file.name,
-          contentType,
-          kind: 'stl-import',
-          body: file,
-          metadata: { source: 'direct-upload' }
-        });
-        archived = true;
-      } catch {
-        // Continue with the local import.
-      }
-
-      // Between the entry check and here are two awaits, the second an
-      // upload of up to 128 MB. This path shows no busy state and no import
-      // card, so Home and the project shelf stay live throughout — and the
-      // vertices were already scaled by the units of the document that was
-      // open when the file was read, so landing them anywhere else is both
-      // the wrong project and the wrong size. The STEP path is guarded by
-      // `useValidatedFeatureCommit`; this one had nothing.
-      if (managerRef.current !== importManager) {
-        setStatus('The project changed while the import finished.');
+        const { importMeshFileInDisposableWorker, meshImportFormatForFileName } =
+          await import('./lib/meshImportWorkerClient');
+        const format = meshImportFormatForFileName(file.name);
+        if (!format) {
+          setStatus(`Unsupported import format: ${file.name}`);
+          return;
+        }
+        mesh = await importMeshFileInDisposableWorker(file, format);
+      } catch (error) {
+        setStatus(errorMessage(error, `${file.name} import failed.`));
         return;
       }
-      const created = executeCommand(
-        commandFactories.importMesh({
-          name: parsed.name,
-          artifactId,
-          sourceName: parsed.name,
-          triangleCount: parsed.triangleCount,
-          vertices,
-          indices: parsed.indices
-        })
-      );
-      if (created) {
-        setStatus(
-          `Imported ${parsed.triangleCount} triangles from ${file.name}` +
-            (archived
-              ? '.'
-              : ' (original file not archived: upload unavailable).')
-        );
-      }
+      await commitImportedMesh({
+        file,
+        contentType,
+        artifactKind: 'mesh-import',
+        importManager,
+        mesh: { name: file.name, ...mesh }
+      });
       return;
     }
 
@@ -8589,6 +8575,95 @@ export function App() {
       newId: () => crypto.randomUUID()
     });
     finishImportAbort(abort);
+  }
+
+  /**
+   * The half of a mesh import every format shares: scale the triangles into
+   * document units, archive the original upload, and commit one
+   * `imported-mesh` feature.
+   *
+   * STL and the kernel-read formats differ only in how the triangles were
+   * produced. Sharing the commit is what keeps them the same feature — a mesh
+   * body from a 3MF is indistinguishable downstream from one out of an STL,
+   * including in autosave, reopen and export.
+   */
+  async function commitImportedMesh(input: {
+    file: File;
+    contentType: string;
+    artifactKind: Extract<ArtifactKind, 'stl-import' | 'mesh-import'>;
+    /**
+     * The manager this import belongs to, captured before the file was read.
+     */
+    importManager: CommandManager;
+    mesh: {
+      name: string;
+      triangleCount: number;
+      vertices: number[];
+      indices: number[];
+    };
+  }): Promise<void> {
+    const { file, contentType, artifactKind, importManager, mesh } = input;
+    if (!doc) {
+      // Unreachable: every caller is past `handleImportFile`'s entry guard,
+      // and `doc` is the same render's value throughout.
+      return;
+    }
+    // A mesh file carries no unit declaration the importers honour; the
+    // interchange convention is millimetres, and the mesh exports multiply by
+    // UNIT_TO_MM on the way out. Adopting the vertices at 1/UNIT_TO_MM keeps a
+    // non-mm document's round trip at the same physical size.
+    const meshScale = 1 / UNIT_TO_MM[doc.units];
+    const vertices =
+      meshScale === 1
+        ? mesh.vertices
+        : mesh.vertices.map((value) => value * meshScale);
+
+    // Best-effort archive of the original upload; the mesh itself lives in
+    // the document, so a storage failure must not block the import.
+    let artifactId = `artifact_local_${crypto.randomUUID()}`;
+    let archived = false;
+    try {
+      artifactId = await archiveArtifact({
+        fileName: file.name,
+        contentType,
+        kind: artifactKind,
+        body: file,
+        metadata: { source: 'direct-upload' }
+      });
+      archived = true;
+    } catch {
+      // Continue with the local import.
+    }
+
+    // Between the entry check and here are two awaits, the second an
+    // upload of up to 128 MB. This path shows no busy state and no import
+    // card, so Home and the project shelf stay live throughout — and the
+    // vertices were already scaled by the units of the document that was
+    // open when the file was read, so landing them anywhere else is both
+    // the wrong project and the wrong size. The STEP path is guarded by
+    // `useValidatedFeatureCommit`; this one had nothing.
+    if (managerRef.current !== importManager) {
+      setStatus('The project changed while the import finished.');
+      return;
+    }
+    const created = executeCommand(
+      commandFactories.importMesh({
+        name: mesh.name,
+        artifactId,
+        sourceName: mesh.name,
+        triangleCount: mesh.triangleCount,
+        vertices,
+        indices: mesh.indices
+      })
+    );
+    if (created) {
+      setStatus(
+        `Imported ${mesh.triangleCount} triangles from ${file.name}` +
+          (archived
+            ? '.'
+            : ' (original file not archived: upload unavailable).')
+      );
+    }
   }
 
   /**
@@ -8671,7 +8746,7 @@ export function App() {
     const shaprFiles = files.filter((file) => /\.shapr$/i.test(file.name));
     if (shaprFiles.length === 0) {
       if (files.length !== 1) {
-        setStatus('Select one STEP or STL file, or one .shapr + STEP pair.');
+        setStatus('Select one STEP or mesh file, or one .shapr + STEP pair.');
         return;
       }
       await handleImportFile(files[0]!);
@@ -16718,7 +16793,7 @@ export function App() {
           <input
             ref={importInputRef}
             type="file"
-            accept=".shapr,.stl,.step,.stp"
+            accept=".shapr,.stl,.step,.stp,.3mf,.obj,.glb,.ply"
             multiple
             style={{ display: 'none' }}
             onChange={(event: ChangeEvent<HTMLInputElement>) => {
