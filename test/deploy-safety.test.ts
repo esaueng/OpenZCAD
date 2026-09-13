@@ -229,8 +229,8 @@ describe('CI gates cannot silently stop testing', () => {
  * The repo's own orientation documents, checked against the code they
  * describe.
  *
- * AGENTS.md points contributors and agents at `architecture.md` and `TODO.md`
- * first, so a wrong number there is read as fact and reasoned from. Both had
+ * The current orientation documents are `architecture.md` and `ROADMAP.md`;
+ * `TODO.md` is only a pointer. The architecture and former TODO inventory had
  * drifted badly: the schema version was recorded as v6 and v8 while the
  * constant said 13, and `architecture.md` said sharing and lease enforcement
  * were disabled in checked-in configuration while the deployed `wrangler.jsonc`
@@ -245,7 +245,7 @@ describe('documented facts match the code', () => {
     )?.[1];
     expect(declared).toBeDefined();
 
-    for (const path of ['architecture.md', 'TODO.md']) {
+    for (const path of ['architecture.md', 'ROADMAP.md']) {
       const claimed = Array.from(
         read(path).matchAll(/schema[- ]v(\d+)/gi),
         (match) => match[1]
