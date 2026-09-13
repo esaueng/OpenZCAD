@@ -1,4 +1,6 @@
+import type { EditAnalysisRequest } from '@openzcad/shared';
 import { projectShapeMesh } from './exact-display-projection';
+import { recognizePlanarEmboss } from './planar-emboss';
 import {
   rebuildReporter,
   type RebuildProgressListener
@@ -152,6 +154,8 @@ const STL_EXPORT_DEFLECTION = 0.08;
 // it bounded to small solids; complex imports retain measured geometry and
 // hole recognition, but do not advertise unproven planar-distance edits.
 const MAX_PLANAR_FACE_PAIR_QUERY_FACES = 64;
+const MAX_FOREGROUND_ANALYSIS_FACES = 2048;
+const MAX_FOREGROUND_PAIR_ATTEMPTS = 6;
 // Optional moments can take minutes on freeform imported faces. Absence is
 // already part of the mass-property contract; never substitute approximate data.
 const MAX_BACKGROUND_MASS_PROPERTY_FACES = 64;
@@ -352,20 +356,37 @@ function provenOpposingPlanarFacePairs(
   solid: number,
   faces: ReadonlyMap<number, FaceTopology>,
   bounds: Float64Array | number[],
-  claimedFaceHashes: ReadonlySet<number>
+  claimedFaceHashes: ReadonlySet<number>,
+  selectedHashes?: readonly number[]
 ): OpposingPlanarFacePair[] {
-  if (faces.size > MAX_PLANAR_FACE_PAIR_QUERY_FACES) {
+  if (
+    faces.size >
+    (selectedHashes
+      ? MAX_FOREGROUND_ANALYSIS_FACES
+      : MAX_PLANAR_FACE_PAIR_QUERY_FACES)
+  ) {
     return [];
   }
-  const ranked = queryOpposingPlanarFacePairs(kernel, solid).sort(
-    (left, right) =>
-      faceDistancePairScore(right) - faceDistancePairScore(left) ||
-      right.distance - left.distance ||
-      left.faceA - right.faceA ||
-      left.faceB - right.faceB
-  );
+  const ranked = queryOpposingPlanarFacePairs(kernel, solid)
+    .filter(
+      (pair) =>
+        !selectedHashes ||
+        selectedHashes.every(
+          (hash) =>
+            faces.get(pair.faceA)?.hash === hash ||
+            faces.get(pair.faceB)?.hash === hash
+        )
+    )
+    .sort(
+      (left, right) =>
+        faceDistancePairScore(right) - faceDistancePairScore(left) ||
+        right.distance - left.distance ||
+        left.faceA - right.faceA ||
+        left.faceB - right.faceB
+    );
   const seenPlanes = new Set<string>();
   const published: OpposingPlanarFacePair[] = [];
+  let attempted = 0;
   for (const pair of ranked) {
     const faceA = faces.get(pair.faceA);
     const faceB = faces.get(pair.faceB);
@@ -382,6 +403,7 @@ function provenOpposingPlanarFacePairs(
       continue;
     }
     seenPlanes.add(key);
+    if (selectedHashes && attempted++ >= MAX_FOREGROUND_PAIR_ATTEMPTS) break;
     const modes: FaceDistanceMoveMode[] = pairBisectsSolidSymmetry(
       faces,
       pair,
@@ -426,7 +448,8 @@ export interface ExactKernelAdapter {
   syncDocument(
     document: ProjectDocument,
     onProgress?: RebuildProgressListener,
-    onProjection?: (derived: DerivedState) => void
+    onProjection?: (derived: DerivedState) => void,
+    analysis?: EditAnalysisRequest
   ): Promise<DerivedState>;
   exportStep(document: ProjectDocument, bodyIds: BodyId[]): Promise<string>;
   /**
@@ -844,7 +867,6 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
       done();
     };
 
-
     const build = buildDocumentHistory(
       activeKernel,
       document,
@@ -974,7 +996,8 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     strictBooleanValidation = false,
     recognizeImportedFeatures = false,
     onStage?: (name: string) => () => void,
-    includeMassProperties = true
+    includeMassProperties = true,
+    analysisHashes?: readonly number[]
   ): MeasuredShape {
     if (shape.solids.length === 0) {
       throw new Error('Exact body contains no solids.');
@@ -1112,6 +1135,10 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
       const recognitionDone = onStage?.('Imported feature recognition');
       let claimedFaceHashes = new Set<number>();
       if (recognizeImportedFeatures) {
+        if (analysisHashes && shape.solids.length === 1) {
+          const emboss = recognizePlanarEmboss(kernel, solid);
+          if (emboss) topology.recognizedPlanarEmboss = emboss;
+        }
         const recognized = collectRecognizedImportedFeatures(
           kernel,
           solid,
@@ -1153,7 +1180,8 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
                 solid,
                 faceTopologyByHandle,
                 bounds,
-                claimedFaceHashes
+                claimedFaceHashes,
+                analysisHashes
               )
             : [];
         if (pairs.length > 0) {
@@ -1282,7 +1310,8 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     // is a state consumers already have to render.
     const massDone = onStage?.('Mass properties');
     const massProperties =
-      includeMassProperties && shape.solids.length === 1 &&
+      includeMassProperties &&
+      shape.solids.length === 1 &&
       topology.faces.length <= MAX_BACKGROUND_MASS_PROPERTY_FACES
         ? readBodyMassProperties(kernel, shape.solids[0]!)
         : null;
@@ -1304,8 +1333,20 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
   async syncDocument(
     document: ProjectDocument,
     onProgress?: RebuildProgressListener,
-    onProjection?: (derived: DerivedState) => void
+    onProjection?: (derived: DerivedState) => void,
+    analysis?: EditAnalysisRequest
   ): Promise<DerivedState> {
+    if (
+      analysis &&
+      (!document.bodyOrder.some((id) => id === analysis.bodyId) ||
+        analysis.faceHashes.length > 2 ||
+        analysis.faceHashes.some(
+          (hash) => !Number.isSafeInteger(hash) || hash <= 0
+        ))
+    )
+      throw new Error(
+        'Select one body and at most two valid faces to analyze.'
+      );
     const report = rebuildReporter(onProgress);
     const sourcesDone = report('sources', 'Loading imported sources');
     const { sources, pinned } = await this.prefetchImportSources(document);
@@ -1374,10 +1415,16 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
         // face-handle recount is a cheap probe that turns any violation of
         // that invariant into a re-measure instead of a stale mesh.
         const solidKey = shape.solids.join(',');
+        const analysisHashes =
+          analysis?.bodyId === bodyId ? analysis.faceHashes : undefined;
+        const analysisKey = analysisHashes
+          ? JSON.stringify(analysisHashes)
+          : undefined;
         const cached = this.measuredShapeCache.get(bodyId);
         let measured: MeasuredShape;
         if (
           cached &&
+          cached.analysisKey === analysisKey &&
           cached.solidKey === solidKey &&
           cached.strict === requiresStrictUnionValidation &&
           cached.includeMassProperties === !consumed &&
@@ -1399,10 +1446,12 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
                 document.bodyOrder.indexOf(bodyId) + 1,
                 document.bodyOrder.length
               ),
-            !consumed
+            !consumed,
+            analysisHashes
           );
           remeasured += 1;
           this.storeMeasuredShape(bodyId, {
+            ...(analysisKey ? { analysisKey } : {}),
             solidKey,
             strict: requiresStrictUnionValidation,
             includeMassProperties: !consumed,
@@ -1504,6 +1553,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
       const hiddenBodies = getParameterHiddenBodyIds(document);
       return {
         bodyRepresentations,
+        ...(analysis ? { editAnalysis: structuredClone(analysis) } : {}),
         exportableBodyIds: exportableBodyIds.filter(
           (id) => !hiddenBodies.has(id)
         ),

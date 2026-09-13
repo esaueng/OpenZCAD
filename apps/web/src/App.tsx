@@ -8371,7 +8371,7 @@ export function App() {
       const preflight = await preflightCadPatch(
         current,
         proposal,
-        (candidate) => geometry.syncOnce(candidate)
+        (candidate, analysis) => geometry.syncOnce(candidate, analysis)
       );
       const live = managerRef.current?.document;
       if (
@@ -8420,7 +8420,7 @@ export function App() {
       const preflight = await preflightCadPatch(
         current,
         proposal,
-        (candidate) => geometry.syncOnce(candidate)
+        (candidate, analysis) => geometry.syncOnce(candidate, analysis)
       );
       const live = managerRef.current?.document;
       if (
@@ -16621,6 +16621,7 @@ export function App() {
               selection={assistantSelection}
               onApply={handleApplyPatch}
               onPreview={handlePreviewPatch}
+              onAnalyze={async (document, analysis) => geometry.syncOnce(document, analysis)}
               collapsed={assistantCollapsed}
               onCollapsedChange={setAssistantCollapsed}
               confirmDestructive={appSettings.general.confirmDestructiveActions}

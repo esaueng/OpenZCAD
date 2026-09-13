@@ -1,3 +1,4 @@
+import type { EditAnalysisRequest } from '@openzcad/shared';
 import type {
   BodyId,
   ProjectDocument,
@@ -21,7 +22,6 @@ import { unpackWorkerRequest } from '../lib/meshTransport';
 import { resolveExactSourceBytes } from '../lib/exactSourceResolver';
 import { preloadDocumentFonts } from '../lib/textFonts';
 
-
 /**
  * `step`, `stl`, and `dxf` produce text (STEP data, ASCII STL, DXF R12);
  * `stl-binary`, `3mf`, `obj`, and `glb` produce bytes. Mesh formats accept
@@ -39,7 +39,12 @@ export type GeometryBinaryExportFormat = Extract<
 >;
 
 export type GeometryWorkerRequest =
-  | { type: 'sync'; document: ProjectDocument; requestId?: string }
+  | {
+      type: 'sync';
+      document: ProjectDocument;
+      requestId?: string;
+      analysis?: EditAnalysisRequest;
+    }
   | {
       type: 'export';
       requestId: string;
@@ -156,7 +161,12 @@ export type GeometrySolveSketchResult =
   | { type: 'solve-sketch'; ok: false; requestId: string; error: string };
 
 export type GeometryWorkerResult =
-  | { type: 'projection'; projectId: string; version: number; derived: ProjectDocument['derived'] }
+  | {
+      type: 'projection';
+      projectId: string;
+      version: number;
+      derived: ProjectDocument['derived'];
+    }
   | GeometryWorkerState
   | GeometrySyncResult
   | GeometryExportResult
@@ -408,7 +418,7 @@ async function execute(job: GeometryWorkerJob): Promise<void> {
     const derived = isGeometryEmpty(document)
       ? emptyDerived(document)
       : await rebuildCache.get(
-          canonicalProjectContentKey(document),
+          `${canonicalProjectContentKey(document)}${request.type === 'sync' && request.analysis ? `:analysis:${JSON.stringify(request.analysis)}` : ''}`,
           async () => {
             // 'failed' retries on the next load call, so it counts as a
             // loading state here too.
@@ -425,15 +435,27 @@ async function execute(job: GeometryWorkerJob): Promise<void> {
               throw new Error('Superseded geometry broadcast.');
             }
             post(stateFor('rebuilding', request, { stale: true }));
-            return exact.syncDocument(document, (progress) => {
-              if (!broadcastGate.isCurrent(job.broadcastToken)) return;
-              post({
-                ...stateFor('rebuilding', request, { stale: true }),
-                progress
-              });
-            }, request.requestId ? undefined : projection => {
-              post({ type: 'projection', projectId: document.projectId, version: document.version, derived: projection });
-            });
+            return exact.syncDocument(
+              document,
+              (progress) => {
+                if (!broadcastGate.isCurrent(job.broadcastToken)) return;
+                post({
+                  ...stateFor('rebuilding', request, { stale: true }),
+                  progress
+                });
+              },
+              request.requestId
+                ? undefined
+                : (projection) => {
+                    post({
+                      type: 'projection',
+                      projectId: document.projectId,
+                      version: document.version,
+                      derived: projection
+                    });
+                  },
+              request.type === 'sync' ? request.analysis : undefined
+            );
           }
         );
     if (!broadcastGate.isCurrent(job.broadcastToken)) {
