@@ -344,3 +344,83 @@ describe('ProjectSharingDialog', () => {
     expect(screen.getByRole('option', { name: 'Editor' })).toBeDisabled();
   });
 });
+
+it('offers account storage for a local import instead of an ownership error', async () => {
+  const api = client();
+  const save = vi.fn();
+  render(
+    <ProjectSharingDialog
+      projectId="local-import"
+      role={null}
+      collaborationStatus="offline"
+      lease={null}
+      localProject
+      client={api}
+      onSaveToAccount={save}
+      onClose={() => {}}
+    />
+  );
+  expect(
+    screen.queryByText(
+      'Only the project owner can manage members and invitations.'
+    )
+  ).not.toBeInTheDocument();
+  expect(api.getProjectSharing).not.toHaveBeenCalled();
+  await userEvent.click(
+    screen.getByRole('button', { name: 'Save to my account' })
+  );
+  expect(save).toHaveBeenCalledTimes(1);
+});
+
+it('distinguishes an unresolved account role from a non-owner role', () => {
+  render(
+    <ProjectSharingDialog
+      projectId="account-project"
+      role={null}
+      collaborationStatus="connecting"
+      lease={null}
+      onClose={() => {}}
+    />
+  );
+  expect(
+    screen.getByText(
+      'Connecting to project sharing. Your cloud access has not been confirmed yet.'
+    )
+  ).toBeInTheDocument();
+  expect(
+    screen.queryByText(
+      'Only the project owner can manage members and invitations.'
+    )
+  ).not.toBeInTheDocument();
+});
+
+it('shows an account save failure inside the local project dialog and allows retry', async () => {
+  const save = vi
+    .fn()
+    .mockRejectedValueOnce(new Error('Account storage is unavailable'))
+    .mockResolvedValue(undefined);
+  render(
+    <ProjectSharingDialog
+      projectId="local-import"
+      role={null}
+      collaborationStatus="offline"
+      lease={null}
+      localProject
+      onSaveToAccount={save}
+      onClose={() => {}}
+    />
+  );
+  await userEvent.click(
+    screen.getByRole('button', { name: 'Save to my account' })
+  );
+  expect(await screen.findByRole('alert')).toHaveTextContent(
+    'Account storage is unavailable'
+  );
+  await userEvent.click(
+    screen.getByRole('button', { name: 'Save to my account' })
+  );
+  await waitFor(() =>
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+  );
+  expect(save).toHaveBeenCalledTimes(2);
+});
