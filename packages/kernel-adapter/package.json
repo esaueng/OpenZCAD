@@ -16,7 +16,7 @@
     "@openzcad/io-step": "workspace:*",
     "@openzcad/io-stl": "workspace:*",
     "@openzcad/shared": "workspace:*",
-    "remus-wasm": "github:esaueng/remus#e3d6e38324c7d13d3076d847024e3e7583108315&path:/crates/wasm/pkg",
-    "remus-wasm-io": "github:esaueng/remus#e3d6e38324c7d13d3076d847024e3e7583108315&path:/crates/wasm-io/pkg"
+    "remus-wasm": "github:esaueng/remus#ee6e325090e8eac1f74c38687f566ad739e14682&path:/crates/wasm/pkg",
+    "remus-wasm-io": "github:esaueng/remus#ee6e325090e8eac1f74c38687f566ad739e14682&path:/crates/wasm-io/pkg"
   }
 }
