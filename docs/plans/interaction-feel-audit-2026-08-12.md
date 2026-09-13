@@ -1,5 +1,11 @@
 # Interaction-feel audit — 2026-08-12
 
+> **Supporting record — consolidated 2026-09-12.**
+> [The master roadmap](../../ROADMAP.md) owns priorities, dependencies and current
+> delivery status. Original phase/status/next-step instructions below are
+> historical; technical contracts and explicit exclusions remain reference material.
+> Dated measurements and findings; current residual work maps to U03/W05.
+
 Why the 3D modeling interaction still feels janky, decomposed into verified,
 file-anchored defects and ranked by feel-impact. Sources: full code audit of
 the interaction stack, fresh `OZ_PERF=1` interaction-probe runs, and a

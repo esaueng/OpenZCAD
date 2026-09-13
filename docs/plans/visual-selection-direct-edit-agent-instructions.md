@@ -1,7 +1,13 @@
 # Agent Instructions — Implement Visual Selection & Direct-Edit Interaction
 
+> **Supporting record — consolidated 2026-09-12.**
+> [The master roadmap](../../ROADMAP.md) owns priorities, dependencies and current
+> delivery status. Original phase/status/next-step instructions below are
+> historical; technical contracts and explicit exclusions remain reference material.
+> Historical handoff. Select U01/U03/M05/K05 scope and verify existing implementation before reusing a playbook.
+
 You are implementing the visual selection / direct-edit interaction upgrade. The
-authoritative plan is `docs/plans/visual-selection-direct-edit-plan.md` in this repo —
+supporting specification is `docs/plans/visual-selection-direct-edit-plan.md` in this repo —
 read it in full before writing any code. It contains the findings inventory (what already
 exists and must NOT be rebuilt), the architecture decisions D1–D6, and the phase
 definitions. This document tells you how to execute it: order, constraints, gates, and

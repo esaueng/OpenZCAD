@@ -1,5 +1,11 @@
 # Project Cloud Sync Plan — save projects to the account, sync between devices
 
+> **Supporting record — consolidated 2026-09-12.**
+> [The master roadmap](../../ROADMAP.md) owns priorities, dependencies and current
+> delivery status. Original phase/status/next-step instructions below are
+> historical; technical contracts and explicit exclusions remain reference material.
+> Implemented design record; remaining live acceptance maps to L01.
+
 Status: all phases implemented. Decisions are recorded in
 [ADR-016](../adrs/ADR-016-project-cloud-sync.md); the phase notes below are kept
 as the record of what each one covered and why.

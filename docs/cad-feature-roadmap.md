@@ -1,5 +1,11 @@
 # CAD feature roadmap (2026-08-29)
 
+> **Supporting record — consolidated 2026-09-12.**
+> [The master roadmap](../ROADMAP.md) owns priorities, dependencies and current
+> delivery status. Original phase/status/next-step instructions below are
+> historical; technical contracts and explicit exclusions remain reference material.
+> Feature rationale and scope; all status and sequencing now live in the master roadmap.
+
 **Scope.** The product-level companion to
 [kernel-roadmap-remus.md](kernel-roadmap-remus.md): what OpenZCAD needs as a
 *CAD application* — features and functions users of parametric MCAD expect —

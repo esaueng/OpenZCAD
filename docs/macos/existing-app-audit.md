@@ -1,5 +1,11 @@
 # Existing application audit
 
+> **Supporting record — consolidated 2026-09-12.**
+> [The master roadmap](../../ROADMAP.md) owns priorities, dependencies and current
+> delivery status. Original phase/status/next-step instructions below are
+> historical; technical contracts and explicit exclusions remain reference material.
+> Desktop architecture evidence; future distribution and acceptance work maps to L06.
+
 Audit baseline: 2026-08-04.
 
 ## Frontend and execution model

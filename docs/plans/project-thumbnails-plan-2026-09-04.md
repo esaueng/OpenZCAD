@@ -1,5 +1,11 @@
 # Project thumbnails: diagnosis and hardening plan (2026-09-04)
 
+> **Supporting record — consolidated 2026-09-12.**
+> [The master roadmap](../../ROADMAP.md) owns priorities, dependencies and current
+> delivery status. Original phase/status/next-step instructions below are
+> historical; technical contracts and explicit exclusions remain reference material.
+> Historical diagnosis: capture-on-leave and browser regression coverage have shipped. New reports require a current repro under L01.
+
 ## Symptom
 
 Most cards on the start screen show the wire-cube placeholder instead of a

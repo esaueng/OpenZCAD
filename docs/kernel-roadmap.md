@@ -1,5 +1,11 @@
 # Kernel roadmap: BrepKit as the sole, professional-grade kernel
 
+> **Supporting record — consolidated 2026-09-12.**
+> [The master roadmap](../ROADMAP.md) owns priorities, dependencies and current
+> delivery status. Original phase/status/next-step instructions below are
+> historical; technical contracts and explicit exclusions remain reference material.
+> Historical BrepKit roadmap; residual consumer work maps to K01/K05/K07/K08.
+
 > Historical roadmap snapshot. ADR-020 replaces the production kernel with
 > Remus; names, package paths, issue references, and measurements below record
 > the BrepKit-era work and must not be read as current configuration. The

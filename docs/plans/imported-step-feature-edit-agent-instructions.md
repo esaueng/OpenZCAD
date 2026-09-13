@@ -1,7 +1,13 @@
 # Agent Instructions — Implement Imported STEP Feature Editing
 
+> **Supporting record — consolidated 2026-09-12.**
+> [The master roadmap](../../ROADMAP.md) owns priorities, dependencies and current
+> delivery status. Original phase/status/next-step instructions below are
+> historical; technical contracts and explicit exclusions remain reference material.
+> Historical handoff. Select M05/K05/K08 scope and verify the current Remus pin before reusing a playbook.
+
 You are implementing select-to-edit for features on imported STEP bodies. The
-authoritative plan is `docs/plans/imported-step-feature-edit-plan.md` in this repo —
+supporting specification is `docs/plans/imported-step-feature-edit-plan.md` in this repo —
 read it in full before writing any code. It contains the findings inventory (what
 already exists and must NOT be rebuilt), the architecture decisions D1–D8, and the phase
 definitions. This document tells you how to execute it: repos, order, constraints,

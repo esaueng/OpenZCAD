@@ -1,5 +1,11 @@
 # Direct-edit reliability plan
 
+> **Supporting record — consolidated 2026-09-12.**
+> [The master roadmap](../../ROADMAP.md) owns priorities, dependencies and current
+> delivery status. Original phase/status/next-step instructions below are
+> historical; technical contracts and explicit exclusions remain reference material.
+> Instrumentation, measurements and direct-edit acceptance detail; remaining work maps to U01/U02/K01/K05/M07/W05.
+
 **Status: partial (reconciled 2026-09-12).** Phase A instrumentation landed
 in #170. Phase B routing, lineage pins, preview continuity and refusal wording
 have subsequent deliveries (#172, #177, #178, #181, #187 and #189), with
