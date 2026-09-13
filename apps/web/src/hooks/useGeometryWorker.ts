@@ -5,7 +5,9 @@ import type { BodyId, ProjectDocument, SketchId } from '@openzcad/shared';
 import type { CommandManager } from '@openzcad/command-system';
 import { mark, measure, timed } from '../lib/perf';
 import type {
+  ExactSectionPlane,
   MeshQualityReport,
+  SectionOutlineReport,
   SketchSolveOutcome,
   DxfFaceSelector
 } from '@openzcad/kernel-adapter/exact';
@@ -126,8 +128,10 @@ export interface GeometryWorkerApi {
     bodyIds: BodyId[],
     options?: {
       deflection?: number;
-      /** Required for 'dxf': the planar face whose outline to export. */
+      /** One 'dxf' source: the planar face whose outline to export. */
       face?: DxfFaceSelector;
+      /** The other 'dxf' source: the plane whose exact section to export. */
+      section?: ExactSectionPlane;
       signal?: AbortSignal;
       onState?(state: GeometryWorkerState): void;
     }
@@ -142,6 +146,14 @@ export interface GeometryWorkerApi {
     deflection: number,
     options?: { onState?(state: GeometryWorkerState): void }
   ): Promise<MeshQualityReport>;
+  /**
+   * The exact, kernel-computed section at one plane — section curves, not the
+   * viewport's clipped preview. Asked for when the plane comes to rest.
+   */
+  sectionOutline(
+    document: ProjectDocument,
+    plane: ExactSectionPlane
+  ): Promise<SectionOutlineReport>;
   /**
    * Solves one sketch's persisted constraints via the kernel's GCS and
    * returns solved geometry plus classification and DOF diagnostics.
@@ -173,6 +185,9 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
   );
   const solveSketchRequests = useRef(
     new Map<string, PendingRequest<SketchSolveOutcome>>()
+  );
+  const sectionRequests = useRef(
+    new Map<string, PendingRequest<SectionOutlineReport>>()
   );
   const syncRequests = useRef(new Map<string, PendingRequest<DerivedState>>());
   // Callers who asked to watch their own request's lifecycle states.
@@ -230,6 +245,10 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
         request.reject(error);
       }
       solveSketchRequests.current.clear();
+      for (const request of sectionRequests.current.values()) {
+        request.reject(error);
+      }
+      sectionRequests.current.clear();
       for (const request of syncRequests.current.values()) {
         request.reject(error);
       }
@@ -391,6 +410,19 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
           }
           meshQualityRequests.current.delete(event.data.requestId);
           stateSubscribers.current.delete(event.data.requestId);
+          if (event.data.ok) {
+            pending.resolve(event.data.report);
+          } else {
+            pending.reject(new Error(event.data.error));
+          }
+          return;
+        }
+        if (event.data.type === 'section') {
+          const pending = sectionRequests.current.get(event.data.requestId);
+          if (!pending) {
+            return;
+          }
+          sectionRequests.current.delete(event.data.requestId);
           if (event.data.ok) {
             pending.resolve(event.data.report);
           } else {
@@ -579,7 +611,10 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
           ...(options?.deflection !== undefined
             ? { deflection: options.deflection }
             : {}),
-          ...(options?.face !== undefined ? { face: options.face } : {})
+          ...(options?.face !== undefined ? { face: options.face } : {}),
+          ...(options?.section !== undefined
+            ? { section: options.section }
+            : {})
         });
       });
     },
@@ -601,6 +636,23 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
           document: documentForWorker(document),
           bodyIds,
           deflection
+        });
+      });
+    },
+    sectionOutline(document, plane) {
+      const worker = workerRef.current;
+      if (!worker) {
+        return Promise.reject(new Error('Geometry worker is unavailable.'));
+      }
+      const requestId = crypto.randomUUID();
+      return new Promise((resolve, reject) => {
+        sectionRequests.current.set(requestId, { resolve, reject });
+        armedRef.current = true;
+        worker.postMessage({
+          type: 'section',
+          requestId,
+          document: documentForWorker(document),
+          plane
         });
       });
     },

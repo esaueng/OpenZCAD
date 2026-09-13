@@ -165,6 +165,52 @@
   width: 140px;
 }
 
+/* The cut's own status line: which of the two section pipelines is on
+   screen, and either its measured area or why there is no exact one. */
+.rail-section-state {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  max-width: 190px;
+  margin: 0 8px;
+  font-size: var(--fs-xs);
+  line-height: 1.3;
+}
+
+.rail-section-state-kind {
+  color: var(--color-text-muted);
+}
+
+.rail-section-state.is-exact .rail-section-state-kind {
+  color: var(--color-accent);
+}
+
+.rail-section-state.is-refused .rail-section-state-kind {
+  color: var(--color-warning);
+}
+
+.rail-section-state-detail {
+  color: var(--color-text-muted);
+}
+
+.rail-section-export {
+  min-height: 22px;
+  padding: 0 8px;
+  color: var(--color-text-muted);
+  border: var(--border-thin);
+  border-radius: var(--radius-sm);
+  font-size: var(--fs-xs);
+}
+
+.rail-section-export:hover:not(:disabled) {
+  color: var(--color-text);
+  background: var(--color-surface-2);
+}
+
+.rail-section-export:disabled {
+  opacity: 0.45;
+}
+
 /* Opens to the left of the rail and grows upward, so it never covers the
    rail itself and stays clear of the status bar. */
 .rail-views-panel {
