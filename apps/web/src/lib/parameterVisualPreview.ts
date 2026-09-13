@@ -386,6 +386,7 @@ export function parameterVisualPreview(
           count > 100 ||
           count2 < (d.patternKind === 'grid' ? 2 : 1) ||
           count * count2 > 100 ||
+          preview.parts.length * count * count2 > recipe.parts.length * 100 ||
           !Number.isFinite(spacing) ||
           !Number.isFinite(spacing2) ||
           spacing === 0 ||
