@@ -280,6 +280,8 @@ export interface LoftInput {
   name: string;
   sections: SketchSectionReference[];
   mode: 'ruled' | 'smooth';
+  /** Apex point closing the loft after its last section; omitted by default. */
+  endPoint?: ParametricVector3;
   ids?: BodyFeatureIds;
 }
 
@@ -288,6 +290,8 @@ export interface SweepInput {
   profile: SketchSectionReference;
   path: SketchPathReference;
   mode: 'standard' | 'smooth';
+  /** Rail the profile's up-vector tracks along the path; omitted by default. */
+  guide?: SketchPathReference;
   ids?: BodyFeatureIds;
 }
 
@@ -504,6 +508,13 @@ export interface FeatureUpdateInput {
    * `dimensions` patches merge key-by-key, every other field replaces.
    */
   data?: Partial<FeatureData> & { dimensions?: Record<string, ParamValue> };
+  /**
+   * Optional data keys to remove. `data` can only set a key — an undefined
+   * patch value is skipped — so getting back to "no apex point" or "no guide
+   * rail" names the key here instead. Only the keys whose absence is defined
+   * behaviour are clearable; anything else is refused.
+   */
+  clearData?: readonly string[];
 }
 
 export interface FeatureDeleteInput {
@@ -1578,7 +1589,12 @@ export function loftSections(
     {
       featureKind: 'loft',
       sections: deepClone(input.sections),
-      mode: input.mode
+      mode: input.mode,
+      // Written only when asked for. An absent apex point is a flat cap, so a
+      // loft stays byte-identical to one authored before apex points existed.
+      ...(input.endPoint === undefined
+        ? {}
+        : { endPoint: deepClone(input.endPoint) })
     },
     input.ids
   );
@@ -1596,7 +1612,10 @@ export function sweepProfile(
       featureKind: 'sweep',
       profile: deepClone(input.profile),
       path: deepClone(input.path),
-      mode: input.mode
+      mode: input.mode,
+      // Written only when asked for; an absent rail is the rotation-minimizing
+      // frame every sweep authored before guide rails existed swept with.
+      ...(input.guide === undefined ? {} : { guide: deepClone(input.guide) })
     },
     input.ids
   );
@@ -2603,8 +2622,8 @@ const FEATURE_DATA_KEYS: Record<FeatureKind, readonly string[]> = {
     'profiles'
   ],
   revolve: ['sketchId', 'axis', 'angleDeg'],
-  loft: ['sections', 'mode'],
-  sweep: ['profile', 'path', 'mode'],
+  loft: ['sections', 'mode', 'endPoint'],
+  sweep: ['profile', 'path', 'mode', 'guide'],
   'helical-sweep': [
     'profile',
     'axisOrigin',
@@ -2686,6 +2705,39 @@ const FEATURE_DATA_KEYS: Record<FeatureKind, readonly string[]> = {
   ]
 };
 
+/**
+ * Optional feature-data keys an edit is allowed to remove outright. A patch
+ * skips undefined values, so it can only ever set a key; an absent optional
+ * field is a distinct, meaningful state — a loft with no apex point, a sweep
+ * with no guide rail — that an edit has to be able to get back to. Only keys
+ * whose absence is defined behaviour belong here: clearing a required one
+ * would leave a feature that cannot rebuild.
+ */
+const CLEARABLE_FEATURE_DATA_KEYS: Record<FeatureKind, readonly string[]> = {
+  primitive: [],
+  sketch: [],
+  extrude: [],
+  revolve: [],
+  loft: ['endPoint'],
+  sweep: ['guide'],
+  'helical-sweep': [],
+  boolean: [],
+  transform: [],
+  mirror: [],
+  split: [],
+  hole: [],
+  shell: [],
+  'solid-offset': [],
+  draft: [],
+  thicken: [],
+  fillet: [],
+  chamfer: [],
+  pattern: [],
+  'direct-edit': [],
+  'imported-step': [],
+  'imported-mesh': []
+};
+
 export function updateFeature(
   document: ProjectDocument,
   input: FeatureUpdateInput
@@ -2730,6 +2782,18 @@ export function updateFeature(
       } else {
         data[key] = value;
       }
+    }
+  }
+  if (input.clearData) {
+    const clearable = CLEARABLE_FEATURE_DATA_KEYS[feature.data.featureKind];
+    const data = feature.data as unknown as Record<string, unknown>;
+    for (const key of input.clearData) {
+      if (!clearable.includes(key)) {
+        throw new Error(
+          `Feature data key "${key}" cannot be cleared on a ${feature.data.featureKind} feature.`
+        );
+      }
+      delete data[key];
     }
   }
   // New Body has no dependency on the previous Add/Cut target. Undefined
