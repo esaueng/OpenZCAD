@@ -6,7 +6,8 @@ import {
 } from '@openzcad/document-core';
 import {
   isFeatureSuppressed,
-  isImportedSourceReference
+  isImportedSourceReference,
+  isReadOnlyRecognizedImportedFeature
 } from '@openzcad/shared';
 import type {
   SketchObjectData,
@@ -907,11 +908,17 @@ export function createCadDocumentDigest(
       edgeInventoryComplete: edges.length === body.topology.edges.length,
       ...(body.topology.recognizedImportedFeatures
         ? {
-            recognizedImportedFeatures:
-              body.topology.recognizedImportedFeatures.slice(
-                0,
-                MAX_DIGEST_TOPOLOGY_PER_BODY
+            // Editable proofs first: a read-only kernel-recognized feature is
+            // context, while an exactly proved one is what an operation binds
+            // to, and the cap must never spend the budget on the former.
+            recognizedImportedFeatures: [
+              ...body.topology.recognizedImportedFeatures.filter(
+                (feature) => !isReadOnlyRecognizedImportedFeature(feature)
+              ),
+              ...body.topology.recognizedImportedFeatures.filter(
+                isReadOnlyRecognizedImportedFeature
               )
+            ].slice(0, MAX_DIGEST_TOPOLOGY_PER_BODY)
           }
         : {}),
       ...(body.topology.opposingPlanarFacePairs
@@ -3985,16 +3992,24 @@ function exactDigestImportedFeature(
   const body = digest.bodies?.find(
     (candidate) => candidate.bodyId === bodyId && !candidate.consumed
   );
-  const feature = body?.topology?.recognizedImportedFeatures?.find(
+  const matches = (body?.topology?.recognizedImportedFeatures ?? []).filter(
     (candidate) =>
       candidate.kind === kind &&
       candidate.seedFaceHash === faceHash &&
       candidate.seedFaceReference !== undefined &&
       canonicalJson(candidate.seedFaceReference) === canonicalJson(reference)
   );
-  if (!feature) {
+  const feature = matches[0];
+  if (!feature || matches.length > 1) {
     throw new Error(
       `add_direct_edit contains a stale or unavailable ${kind} proof for body ${bodyId}. Refresh the proposal from the current document digest.`
+    );
+  }
+  // Read-only families are recognized by a second recognizer and carry no
+  // proof an edit can replay; an operation may never bind to one.
+  if (isReadOnlyRecognizedImportedFeature(feature)) {
+    throw new Error(
+      `add_direct_edit targets a read-only ${kind} on body ${bodyId}. Recognized ${kind} features are published for reading only.`
     );
   }
   return feature;
