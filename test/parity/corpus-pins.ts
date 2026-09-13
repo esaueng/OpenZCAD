@@ -833,25 +833,29 @@ export const KERNEL_DELTAS: KernelDeltaPin[] = [
   {
     subject: 'pattern-boolean-with-import',
     metric: 'witnessedFaces',
-    remus: 6,
+    remus: 9,
     occt: 0,
     owner: 'K0.6',
     note:
       BOOLEAN_CARRIER_NOTE +
-      ' The six imported plate faces name. The three bore walls come from ' +
-      'the pattern body, which publishes no references at all (pattern ' +
-      'lineage is hash-only), so there is nothing for them to inherit.'
+      ' All nine result faces name: the six imported plate faces, and now ' +
+      'the three bore walls as well. Was 6 while pattern lineage was ' +
+      'hash-only and the bore walls had nothing to inherit; the pattern ' +
+      "feature now drives the kernel's own pattern operations and names each " +
+      'instance, so each wall carries its own instance through the cut.'
   },
   {
     subject: 'pattern-boolean-with-import',
     metric: 'lineageNames',
     remus:
-      'boolean.face.operand.0.import.step.face.0c7f072b,boolean.face.operand.0.import.step.face.426c91a5,boolean.face.operand.0.import.step.face.58bf7705,boolean.face.operand.0.import.step.face.62e02c7d,boolean.face.operand.0.import.step.face.ac22b2bd,boolean.face.operand.0.import.step.face.d3a10e97',
+      'boolean.face.operand.0.import.step.face.0c7f072b,boolean.face.operand.0.import.step.face.426c91a5,boolean.face.operand.0.import.step.face.58bf7705,boolean.face.operand.0.import.step.face.62e02c7d,boolean.face.operand.0.import.step.face.ac22b2bd,boolean.face.operand.0.import.step.face.d3a10e97,boolean.face.operand.1.pattern.face.instance.0.primitive.cylinder.face.wall,boolean.face.operand.1.pattern.face.instance.1.primitive.cylinder.face.wall,boolean.face.operand.1.pattern.face.instance.2.primitive.cylinder.face.wall',
     occt: 'none',
     owner: 'K0.6',
     note:
       BOOLEAN_CARRIER_NOTE +
-      ' The name set behind the witnessedFaces pin above.'
+      ' The name set behind the witnessedFaces pin above. The instance ' +
+      'ordinal is what distinguishes the three bores, which are otherwise ' +
+      'the same wall on three carriers.'
   },
   {
     subject: 'boolean-on-nurbs-import',
