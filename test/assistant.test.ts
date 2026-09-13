@@ -372,6 +372,19 @@ describe('assistant integration', () => {
     ).rejects.toMatchObject({ code: 'AI_INVALID_REPLY' });
   });
 
+  it('accepts a 512000-byte digest and rejects one byte more', () => {
+    const digest = { ...input.digest, warnings: [''] };
+    const baseBytes = new TextEncoder().encode(JSON.stringify(digest)).byteLength;
+    digest.warnings = ['x'.repeat(512_000 - baseBytes)];
+    expect(() =>
+      parseAssistantProposalRequest({ prompt: 'Model this', digest })
+    ).not.toThrow();
+    digest.warnings[0] += 'x';
+    expect(() =>
+      parseAssistantProposalRequest({ prompt: 'Model this', digest })
+    ).toThrow('"digest" is too large.');
+  });
+
   it('bounds conversation history and rejects unusable attachments', () => {
     const base = { prompt: 'Model this', digest: input.digest };
     const png = (bytes: number) => 'A'.repeat(Math.ceil(bytes / 3) * 4);
