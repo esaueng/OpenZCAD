@@ -68,3 +68,19 @@ it('does not overwrite a newer draft when an older validation finishes', async (
   await waitFor(() => expect(input).toHaveValue('62'));
   expect(screen.queryByRole('alert')).toBeNull();
 });
+
+it('previews drafts before committing and cancels the display on Escape', async () => {
+  const user = userEvent.setup();
+  const onPreview = vi.fn();
+  const onSet = vi.fn();
+  render(<ParameterRow parameter={parameter()} value={58} onSet={onSet} onPreview={onPreview} />);
+  const input = screen.getByLabelText('Expression for holder_height');
+  await user.clear(input);
+  await user.type(input, '62');
+  expect(onPreview).toHaveBeenLastCalledWith('holder_height', '62');
+  expect(onSet).not.toHaveBeenCalled();
+  await user.keyboard('{Escape}');
+  expect(onPreview).toHaveBeenLastCalledWith('holder_height', null);
+  expect(input).toHaveValue('58');
+  expect(onSet).not.toHaveBeenCalled();
+});

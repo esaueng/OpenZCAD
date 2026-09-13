@@ -9,6 +9,7 @@ interface TweakPanelProps {
   modelError?: string | null;
   /** Name of the body the export will target, or null for "all bodies". */
   exportScope: string | null;
+  onPreviewParameter?(name: string, expression: string | null): void;
   onSetParameter(
     name: string,
     expression: string
@@ -39,6 +40,7 @@ export function TweakPanel({
   modelError,
   exportScope,
   onSetParameter,
+  onPreviewParameter,
   onExportStep,
   onOpenMeshExport,
   share
@@ -69,6 +71,7 @@ export function TweakPanel({
               value={parameterValues[parameter.name]}
               minimum={parameterMinimums?.[parameter.name]}
               onSet={onSetParameter}
+              onPreview={onPreviewParameter}
             />
             {parameter.description && (
               <p className="param-description-text">{parameter.description}</p>
