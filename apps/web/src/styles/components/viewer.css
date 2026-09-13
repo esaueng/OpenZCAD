@@ -146,15 +146,20 @@
   position: relative;
 }
 
-/* Slides out beside the section button while a cut is active. */
+/* Slides out beside the section button while a cut is active, growing
+   upward like the views flyout so the dock lane never clips its lower half. */
 .rail-section-panel {
   position: absolute;
   right: calc(100% + 7px);
-  top: 50%;
-  transform: translateY(-50%);
+  bottom: -4px;
   display: flex;
-  align-items: center;
-  padding: 6px 10px;
+  /* The cut's state line reads as a caption under the slider it belongs to;
+     side by side, the panel grows wider than the rail has room for. */
+  flex-direction: column;
+  align-items: stretch;
+  gap: 6px;
+  width: 232px;
+  padding: 8px 10px;
   background: var(--color-surface);
   border: var(--border-thin);
   border-radius: var(--radius-md);
@@ -162,7 +167,7 @@
 }
 
 .rail-section-slider {
-  width: 140px;
+  width: 100%;
 }
 
 /* The cut's own status line: which of the two section pipelines is on
@@ -171,8 +176,7 @@
   display: flex;
   flex-direction: column;
   gap: 1px;
-  max-width: 190px;
-  margin: 0 8px;
+  margin: 0;
   font-size: var(--fs-xs);
   line-height: 1.3;
 }
@@ -194,6 +198,7 @@
 }
 
 .rail-section-export {
+  align-self: flex-end;
   min-height: 22px;
   padding: 0 8px;
   color: var(--color-text-muted);

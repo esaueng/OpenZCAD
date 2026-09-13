@@ -313,6 +313,127 @@ describe('geometry worker rebuild coordination', () => {
     });
   });
 
+  it('answers a section request with the adapter\'s exact outline', async () => {
+    const report = {
+      plane: { origin: [0, 0, 3], normal: [0, 0, 1] },
+      regions: [
+        {
+          bodyId: 'body_1',
+          area: 200,
+          loops: [{ kind: 'outer', points: [[0, 0, 3]] }],
+          positions: new Float32Array([0, 0, 3]),
+          indices: new Uint32Array([0])
+        }
+      ],
+      refusals: []
+    };
+    const sectionOutline = vi.fn(async () => report);
+    const { scope } = await installWorker(async () => derived('unused'), {
+      sectionOutline
+    });
+    const document = addPrimitiveFeature(
+      createProjectDocument('Section', toUserId('user')),
+      {
+        name: 'Box',
+        primitiveKind: 'box',
+        dimensions: { width: 10, height: 20, depth: 30 }
+      }
+    );
+    const plane = { origin: [0, 0, 3], normal: [0, 0, 1] } as const;
+    post(scope, {
+      type: 'section',
+      requestId: 'section-1',
+      document,
+      plane
+    });
+
+    await vi.waitFor(() =>
+      expect(scope.postMessage).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: 'section',
+          ok: true,
+          requestId: 'section-1',
+          report
+        })
+      )
+    );
+    expect(sectionOutline).toHaveBeenCalledWith(document, plane);
+  });
+
+  it('reports a refused section as a failure the caller can show', async () => {
+    const sectionOutline = vi.fn(async () => {
+      throw new Error('The section plane does not cut any body.');
+    });
+    const { scope } = await installWorker(async () => derived('unused'), {
+      sectionOutline
+    });
+    const document = addPrimitiveFeature(
+      createProjectDocument('Section', toUserId('user')),
+      {
+        name: 'Box',
+        primitiveKind: 'box',
+        dimensions: { width: 10, height: 20, depth: 30 }
+      }
+    );
+    post(scope, {
+      type: 'section',
+      requestId: 'section-2',
+      document,
+      plane: { origin: [0, 0, 300], normal: [0, 0, 1] }
+    });
+
+    await vi.waitFor(() =>
+      expect(scope.postMessage).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: 'section',
+          ok: false,
+          requestId: 'section-2',
+          error: 'The section plane does not cut any body.'
+        })
+      )
+    );
+  });
+
+  it('routes a DXF export with a plane to the section exporter', async () => {
+    const exportSectionDxf = vi.fn(async () => '0\r\nSECTION\r\n');
+    const exportFaceDxf = vi.fn(async () => 'face');
+    const { scope } = await installWorker(async () => derived('unused'), {
+      exportSectionDxf,
+      exportFaceDxf
+    });
+    const document = addPrimitiveFeature(
+      createProjectDocument('Section DXF', toUserId('user')),
+      {
+        name: 'Box',
+        primitiveKind: 'box',
+        dimensions: { width: 10, height: 20, depth: 30 }
+      }
+    );
+    const plane = { origin: [0, 0, 3], normal: [0, 0, 1] } as const;
+    post(scope, {
+      type: 'export',
+      requestId: 'dxf-1',
+      document,
+      bodyIds: [],
+      format: 'dxf',
+      section: plane
+    });
+
+    await vi.waitFor(() =>
+      expect(scope.postMessage).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: 'export',
+          ok: true,
+          format: 'dxf',
+          requestId: 'dxf-1',
+          text: '0\r\nSECTION\r\n'
+        })
+      )
+    );
+    expect(exportSectionDxf).toHaveBeenCalledWith(document, plane);
+    expect(exportFaceDxf).not.toHaveBeenCalled();
+  });
+
   it('skips a queued export cancelled before it started', async () => {
     const gate = deferred<Uint8Array>();
     const exportMesh = vi
