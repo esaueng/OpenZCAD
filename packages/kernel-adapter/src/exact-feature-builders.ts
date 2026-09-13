@@ -27,6 +27,11 @@ import {
   edgeModifierFailureMessage
 } from './exact-edge-modifiers';
 import {
+  assertQualifiedVariableFillet,
+  variableBlendFailureMessage,
+  type VariableFilletSpec
+} from './exact-variable-blends';
+import {
   collapseShape,
   exactUnionOffsetSuggestion,
   fuseUniformSolid,
@@ -1405,6 +1410,38 @@ function buildEdgeModifierFeature(
     }
     chamferAngleRadians = (angleDeg * Math.PI) / 180;
   }
+  // The two blends behind Remus's experimental surface. Both are opt-in by a
+  // stored field being present, so a document that never carried one runs the
+  // constant/symmetric path it always ran.
+  let variableRadius: Omit<VariableFilletSpec, 'startRadius'> | undefined;
+  if (data.featureKind === 'fillet' && data.endRadius !== undefined) {
+    const endRadius = resolveParamValue(data.endRadius, scope, 'end radius');
+    // `radiusLaw` is a union in the schema, but a document is untrusted input
+    // — a hand-written or generated one can carry any string here, and the
+    // kernel would answer an unqualified law with a silent constant blend
+    // rather than a refusal. Gate before the call, not after.
+    const law: string = data.radiusLaw ?? 'linear';
+    assertQualifiedVariableFillet(law, size, endRadius);
+    variableRadius = { law, endRadius };
+  }
+  let chamferSecondDistance: number | undefined;
+  if (data.featureKind === 'chamfer' && data.distance2 !== undefined) {
+    if (data.angleDeg !== undefined) {
+      throw new Error(
+        'A chamfer sets either a second distance or an angle, not both.'
+      );
+    }
+    chamferSecondDistance = resolveParamValue(
+      data.distance2,
+      scope,
+      'second distance'
+    );
+    if (chamferSecondDistance <= GEOMETRY_EPSILON) {
+      throw new Error(
+        'Chamfer second distance must be greater than zero.'
+      );
+    }
+  }
   let reportedRefusal: string | null = null;
   let evolution: FaceEvolutionPayloadV1 | null = null;
   const sourceCandidates = topologyCandidatesForSolid(kernel, target);
@@ -1420,9 +1457,20 @@ function buildEdgeModifierFeature(
     (payload) => {
       evolution = payload;
     },
-    chamferAngleRadians
+    chamferAngleRadians,
+    variableRadius,
+    chamferSecondDistance
   );
   if (modified === null) {
+    if (variableRadius || chamferSecondDistance !== undefined) {
+      throw new Error(
+        variableBlendFailureMessage(
+          data.featureKind,
+          selected.length,
+          reportedRefusal
+        )
+      );
+    }
     throw new Error(
       edgeModifierFailureMessage(
         kernel,
