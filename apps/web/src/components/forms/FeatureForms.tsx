@@ -14,7 +14,8 @@ import {
   type RevolveAxis,
   type SketchId,
   type SketchObjectData,
-  type SketchObjectKind
+  type SketchObjectKind,
+  type VariableFilletLaw
 } from '@openzcad/shared';
 import { ExprInput } from '../ExprInput';
 import { edgeModifierSliderRange } from '../../lib/edgeModifierEdit';
@@ -1125,7 +1126,18 @@ export interface EdgeModifierFormValue {
   size: ParamValue;
   /** Chamfer only: bevel angle in degrees; absent means symmetric 45°. */
   angleDeg?: ParamValue;
+  /** Fillet only: far-end radius; absent means a constant-radius fillet. */
+  endRadius?: ParamValue;
+  /** Fillet only: read only with `endRadius`; absent means 'linear'. */
+  radiusLaw?: VariableFilletLaw;
+  /** Chamfer only: setback on the other face; absent means symmetric. */
+  distance2?: ParamValue;
 }
+
+const VARIABLE_FILLET_LAW_LABELS: Record<VariableFilletLaw, string> = {
+  linear: 'Linear',
+  scurve: 'S-curve'
+};
 
 interface EdgeModifierFormProps {
   kind: 'fillet' | 'chamfer';
@@ -1136,7 +1148,14 @@ interface EdgeModifierFormProps {
   availableEdgeCount?: number;
   onSelectAllEdges?: () => void;
   onClearEdges?: () => void;
-  initial?: { name: string; size: ParamValue; angleDeg?: ParamValue };
+  initial?: {
+    name: string;
+    size: ParamValue;
+    angleDeg?: ParamValue;
+    endRadius?: ParamValue;
+    radiusLaw?: VariableFilletLaw;
+    distance2?: ParamValue;
+  };
   submitLabel: string;
   onSubmit(value: EdgeModifierFormValue): void;
   onPreview?(value: EdgeModifierFormValue | null): void;
@@ -1172,6 +1191,15 @@ export function EdgeModifierForm({
   const [angle, setAngle] = useState(
     initial?.angleDeg !== undefined ? paramValueText(initial.angleDeg) : ''
   );
+  const [endRadius, setEndRadius] = useState(
+    initial?.endRadius !== undefined ? paramValueText(initial.endRadius) : ''
+  );
+  const [radiusLaw, setRadiusLaw] = useState<VariableFilletLaw>(
+    initial?.radiusLaw ?? 'linear'
+  );
+  const [distance2, setDistance2] = useState(
+    initial?.distance2 !== undefined ? paramValueText(initial.distance2) : ''
+  );
   const numericSize = evalParamValue(coerceParamValue(size), scope);
   const [sliderRange] = useState(() =>
     edgeModifierSliderRange(evalParamValue(initial?.size ?? 2, scope) ?? 2)
@@ -1193,6 +1221,14 @@ export function EdgeModifierForm({
     () => () => previewCallback.current?.(null),
     [targetBodyId, edgeSelectionKey]
   );
+  // The second value each blend can take: a fillet's far-end radius, a
+  // chamfer's setback on the other face. Blank is not "zero" but "this blend
+  // is the constant/symmetric one", so it is only checked when it is filled.
+  const secondField = kind === 'fillet' ? endRadius : distance2;
+  const secondFieldValid =
+    secondField.trim() === '' ||
+    (fieldsValid(scope, [secondField]) &&
+      (evalParamValue(coerceParamValue(secondField), scope) ?? 0) > 0);
   const canSubmit =
     name.trim().length > 0 &&
     Boolean(targetBodyId) &&
@@ -1200,38 +1236,85 @@ export function EdgeModifierForm({
     fieldsValid(scope, [size]) &&
     numericSize !== null &&
     numericSize > 0 &&
+    secondFieldValid &&
     (kind === 'fillet' || angle.trim() === '' || fieldsValid(scope, [angle]));
 
-  function formValue(
-    nextSize: string,
-    nextAngle: string
-  ): EdgeModifierFormValue {
+  interface EdgeModifierFields {
+    size: string;
+    angle: string;
+    endRadius: string;
+    distance2: string;
+    radiusLaw: VariableFilletLaw;
+  }
+
+  function fieldsWith(
+    overrides: Partial<EdgeModifierFields>
+  ): EdgeModifierFields {
+    return { size, angle, endRadius, distance2, radiusLaw, ...overrides };
+  }
+
+  function formValue(fields: EdgeModifierFields): EdgeModifierFormValue {
     return {
       name: name.trim(),
       targetBodyId: targetBodyId!,
       edgeHashes,
       ...(edgeReferences ? { edgeReferences } : {}),
-      size: coerceParamValue(nextSize),
+      size: coerceParamValue(fields.size),
       // `updateFeature` patches keys and cannot delete one, so blanking
       // the field on a chamfer that stored an angle submits the
       // geometrically identical explicit 45 instead of silently keeping
       // the old angle.
-      ...(kind === 'chamfer' && nextAngle.trim() !== ''
-        ? { angleDeg: coerceParamValue(nextAngle) }
+      ...(kind === 'chamfer' && fields.angle.trim() !== ''
+        ? { angleDeg: coerceParamValue(fields.angle) }
         : kind === 'chamfer' && initial?.angleDeg !== undefined
           ? { angleDeg: 45 }
-          : {})
+          : {}),
+      // These two are cleared rather than defaulted when blank: the edit
+      // command names them in `clearData`, because an end radius equal to the
+      // start radius is a variable blend through a different kernel engine,
+      // not the constant one it looks like.
+      ...(kind === 'fillet' && fields.endRadius.trim() !== ''
+        ? {
+            endRadius: coerceParamValue(fields.endRadius),
+            radiusLaw: fields.radiusLaw
+          }
+        : {}),
+      ...(kind === 'chamfer' && fields.distance2.trim() !== ''
+        ? { distance2: coerceParamValue(fields.distance2) }
+        : {})
     };
+  }
+
+  /**
+   * Preview whatever the form currently proposes. Every field routes through
+   * here so the viewport shows the same blend the Apply button would store —
+   * which is the only way a user can see which face a chamfer's second
+   * setback landed on.
+   */
+  function previewFields(fields: EdgeModifierFields) {
+    const numeric = evalParamValue(coerceParamValue(fields.size), scope);
+    const second = kind === 'fillet' ? fields.endRadius : fields.distance2;
+    const secondOk =
+      second.trim() === '' ||
+      (fieldsValid(scope, [second]) &&
+        (evalParamValue(coerceParamValue(second), scope) ?? 0) > 0);
+    onPreview?.(
+      targetBodyId &&
+        edgeHashes.length > 0 &&
+        numeric !== null &&
+        numeric > 0 &&
+        secondOk &&
+        (kind === 'fillet' ||
+          fields.angle.trim() === '' ||
+          fieldsValid(scope, [fields.angle]))
+        ? formValue(fields)
+        : null
+    );
   }
 
   function changeSize(next: string) {
     setSize(next);
-    const numeric = evalParamValue(coerceParamValue(next), scope);
-    onPreview?.(
-      targetBodyId && edgeHashes.length > 0 && numeric !== null && numeric > 0
-        ? formValue(next, angle)
-        : null
-    );
+    previewFields(fieldsWith({ size: next }));
   }
 
   return (
@@ -1240,7 +1323,7 @@ export function EdgeModifierForm({
       onName={setName}
       submitLabel={submitLabel}
       canSubmit={canSubmit}
-      onSubmit={() => onSubmit(formValue(size, angle))}
+      onSubmit={() => onSubmit(formValue(fieldsWith({})))}
       onCancel={onCancel}
     >
       <div className="selection-summary">
@@ -1297,26 +1380,113 @@ export function EdgeModifierForm({
       <p className="muted edge-selection-hint">
         Drag to preview. {submitLabel} saves the exact result.
       </p>
-      {kind === 'chamfer' ? (
-        <ExprInput
-          label="Angle° (blank = 45)"
-          value={angle}
-          scope={scope}
-          optional
-          onChange={(next) => {
-            setAngle(next);
-            onPreview?.(
-              targetBodyId &&
-                edgeHashes.length > 0 &&
-                numericSize !== null &&
-                numericSize > 0 &&
-                (next.trim() === '' || fieldsValid(scope, [next]))
-                ? formValue(size, next)
-                : null
-            );
-          }}
-        />
-      ) : null}
+      {kind === 'fillet' ? (
+        <>
+          <div className="field-pair">
+            <ExprInput
+              label="End radius (blank = constant)"
+              value={endRadius}
+              scope={scope}
+              optional
+              onChange={(next) => {
+                setEndRadius(next);
+                previewFields(fieldsWith({ endRadius: next }));
+              }}
+            />
+            <label className="field">
+              <span>Radius law</span>
+              <select
+                value={radiusLaw}
+                disabled={endRadius.trim() === ''}
+                onChange={(event) => {
+                  const next = event.target.value as VariableFilletLaw;
+                  setRadiusLaw(next);
+                  previewFields(fieldsWith({ radiusLaw: next }));
+                }}
+              >
+                {(
+                  Object.keys(
+                    VARIABLE_FILLET_LAW_LABELS
+                  ) as VariableFilletLaw[]
+                ).map((law) => (
+                  <option key={law} value={law}>
+                    {VARIABLE_FILLET_LAW_LABELS[law]}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
+          {endRadius.trim() !== '' ? (
+            // Said plainly rather than dressed up. Remus ships
+            // variable-radius blending as an experimental capability, and
+            // the two laws offered here are the ones whose largest and
+            // smallest ball are the two radii above — the bound it can
+            // prove. Failures on this path report the kernel's own reason.
+            <p className="muted edge-selection-hint">
+              Variable radius runs the kernel&rsquo;s experimental blend and
+              is offered only for these two laws. Radius runs from Radius at
+              each edge&rsquo;s start to End radius at its far end.
+            </p>
+          ) : null}
+        </>
+      ) : (
+        <>
+          {distance2.trim() === '' ? (
+            <ExprInput
+              label="Angle° (blank = 45)"
+              value={angle}
+              scope={scope}
+              optional
+              onChange={(next) => {
+                setAngle(next);
+                previewFields(fieldsWith({ angle: next }));
+              }}
+            />
+          ) : null}
+          {angle.trim() === '' ? (
+            <>
+              <ExprInput
+                label="Second distance (blank = symmetric)"
+                value={distance2}
+                scope={scope}
+                optional
+                onChange={(next) => {
+                  setDistance2(next);
+                  previewFields(fieldsWith({ distance2: next }));
+                }}
+              />
+              {distance2.trim() !== '' ? (
+                <>
+                  <button
+                    type="button"
+                    className="secondary edge-selection-action"
+                    onClick={() => {
+                      const swapped = fieldsWith({
+                        size: distance2,
+                        distance2: size
+                      });
+                      setSize(swapped.size);
+                      setDistance2(swapped.distance2);
+                      previewFields(swapped);
+                    }}
+                  >
+                    Swap the two faces
+                  </button>
+                  {/* Which face is "first" is the kernel's own edge-to-face
+                      order, which the published topology sorts away — so it
+                      cannot honestly be named here. The preview shows where
+                      each setback landed and this button exchanges them. */}
+                  <p className="muted edge-selection-hint">
+                    Distance and Second distance land on the two faces the
+                    edge separates. The preview shows which is which; swap
+                    them if it is the wrong way round.
+                  </p>
+                </>
+              ) : null}
+            </>
+          ) : null}
+        </>
+      )}
     </FormShell>
   );
 }
