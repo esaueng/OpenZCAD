@@ -1,4 +1,6 @@
 import type { ProjectDocument } from '@openzcad/shared';
+import { describeWorkerFailure } from './workerFailure';
+import { isChunkLoadError } from './staleChunk';
 
 import type {
   ImportRebuildWorkerRequest,
@@ -44,7 +46,11 @@ export function rebuildImportInDisposableWorker(
     const onAbort = () => finish(() => reject(abortError()));
     signal?.addEventListener('abort', onAbort, { once: true });
     worker.onerror = () => {
-      finish(() => reject(new Error('Exact import rebuild worker crashed.')));
+      finish(() => {
+        void describeWorkerFailure('Exact import rebuild worker crashed.').then(
+          ({ message }) => reject(new Error(message))
+        );
+      });
     };
     worker.onmessageerror = () => {
       finish(() =>
@@ -58,6 +64,12 @@ export function rebuildImportInDisposableWorker(
       }
       if (result.ok) {
         finish(() => resolve(result.derived));
+      } else if (isChunkLoadError(result.error)) {
+        finish(() => {
+          void describeWorkerFailure(result.error).then(({ message }) =>
+            reject(new Error(message))
+          );
+        });
       } else {
         finish(() => reject(new Error(result.error)));
       }
