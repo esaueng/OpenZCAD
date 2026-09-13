@@ -1840,6 +1840,23 @@ export interface FeatureWarning {
    * about the result, and it belongs where the kernel makes it.
    */
   kind: 'build-failed' | 'refusal' | 'advisory' | 'suppressed';
+  /**
+   * The exact kernel's own classification, present only when this warning
+   * came from a boolean the exact-only pipeline refused.
+   *
+   * Session-only like the rest of this record, and the field to branch on:
+   * `message` is product copy and may be reworded at any time, while
+   * `category` is the kernel's taxonomy — `quality_refused`, `unsupported`,
+   * `resource_limit`, `nonconvergence`, `invalid_input`, `invalid_topology`,
+   * `tolerance_violation`, `cancelled`, `internal`. It is typed as a string
+   * rather than a union so a new kernel category cannot break a build here
+   * before anyone has decided what it means.
+   */
+  exactBooleanRefusal?: {
+    operation: 'cut' | 'fuse' | 'intersect';
+    category: string;
+    code: string;
+  };
 }
 
 export interface DerivedState {
