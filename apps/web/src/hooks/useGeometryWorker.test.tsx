@@ -44,7 +44,9 @@ describe('useGeometryWorker', () => {
     const worker = FakeWorker.instances[0]!;
     const analysis = { bodyId: 'imported', faceHashes: [701, 702] };
     const pending = result.current.syncOnce(document, analysis);
-    const request = worker.postMessage.mock.calls.at(-1)![0];
+    const request = worker.postMessage.mock.calls.at(-1)![0] as {
+      requestId: string;
+    };
     expect(request).toMatchObject({ type: 'sync', document, analysis });
     act(() => {
       worker.emit({
