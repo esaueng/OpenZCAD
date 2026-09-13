@@ -520,3 +520,30 @@ export function sectionDxfEntities(
   }
   return entities;
 }
+
+/** One body's cross-section, as it crosses out of the kernel build. */
+export interface SectionOutlineRegion {
+  readonly bodyId: string;
+  readonly area: number;
+  readonly loops: readonly ExactSectionLoop[];
+  readonly positions: Float32Array;
+  readonly indices: Uint32Array;
+}
+
+/** A body the plane could not be sectioned through, and why. */
+export interface SectionOutlineRefusal {
+  readonly bodyId: string;
+  readonly reason: ExactSectionRefusalReason;
+  readonly message: string;
+}
+
+/**
+ * The exact section of a whole document at one plane. Face handles stay
+ * behind in the kernel arena: everything here is a copy the viewport and the
+ * exporter can keep.
+ */
+export interface SectionOutlineReport {
+  readonly plane: ExactSectionPlane;
+  readonly regions: readonly SectionOutlineRegion[];
+  readonly refusals: readonly SectionOutlineRefusal[];
+}
