@@ -442,3 +442,30 @@ it('refuses a downstream edit that changes a cached operand after the union', as
   }).document;
   expect(parameterVisualPreview(changed, changeWidth(changed, 50))).toBeNull();
 });
+
+it('bounds the total preview instances across chained patterns', () => {
+  const { doc, compiled } = fixture();
+  const first = patternBody(doc, {
+    name: 'First row',
+    targetBodyId: compiled.bodyId,
+    patternKind: 'linear',
+    count: 100,
+    axis: 'x',
+    spacing: 1
+  });
+  expect(
+    parameterVisualPreview(first.document, changeWidth(first.document, 50))?.[0]
+      ?.parts
+  ).toHaveLength(300);
+  const second = patternBody(first.document, {
+    name: 'Second row',
+    targetBodyId: first.bodyId,
+    patternKind: 'linear',
+    count: 100,
+    axis: 'y',
+    spacing: 1
+  });
+  expect(
+    parameterVisualPreview(second.document, changeWidth(second.document, 50))
+  ).toBeNull();
+});
