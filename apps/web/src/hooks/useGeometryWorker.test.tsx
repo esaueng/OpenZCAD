@@ -32,6 +32,7 @@ function installWorker() {
 
 afterEach(() => {
   vi.unstubAllGlobals();
+  vi.unstubAllEnvs();
 });
 
 describe('useGeometryWorker', () => {
@@ -136,14 +137,15 @@ describe('useGeometryWorker', () => {
     );
 
     const orphaned = result.current.syncOnce(document);
+    const rejected = expect(orphaned).rejects.toThrow('Geometry worker crashed');
     const first = FakeWorker.instances[0]!;
-    act(() => {
+    await act(async () => {
       first.onerror?.({} as ErrorEvent);
     });
 
     // The crash rejects what was in flight, announces the restart, and
     // installs a fresh worker.
-    await expect(orphaned).rejects.toThrow('Geometry worker crashed');
+    await rejected;
     expect(first.terminate).toHaveBeenCalled();
     expect(FakeWorker.instances).toHaveLength(2);
     expect(onError).toHaveBeenCalledWith(
@@ -171,7 +173,7 @@ describe('useGeometryWorker', () => {
     await expect(followUp).resolves.toEqual(document.derived);
   });
 
-  it('stops respawning after repeated boot failures and fails loudly', () => {
+  it('stops respawning after repeated boot failures and fails loudly', async () => {
     installWorker();
     const onError = vi.fn();
     const { result } = renderHook(() =>
@@ -186,7 +188,7 @@ describe('useGeometryWorker', () => {
     // budget without creating a fifth instance.
     for (let crash = 0; crash < 4; crash += 1) {
       const current = FakeWorker.instances.at(-1)!;
-      act(() => {
+      await act(async () => {
         current.onerror?.({} as ErrorEvent);
       });
     }
@@ -195,6 +197,44 @@ describe('useGeometryWorker', () => {
     expect(result.current.state.phase).toBe('failed');
     expect(onError).toHaveBeenCalledWith(
       expect.stringContaining('reload the page to recover')
+    );
+  });
+
+  it('stops retrying missing worker assets and offers reload after a deployment', async () => {
+    installWorker();
+    vi.stubEnv('OZ_BUILD_COMMIT', 'old-build');
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({
+        ok: true,
+        json: async () => ({ commit: 'new-build' })
+      }))
+    );
+    const document = createProjectDocument('Stale worker', toUserId('user'));
+    const onDerived = vi.fn();
+    const onError = vi.fn();
+    const { result } = renderHook(() =>
+      useGeometryWorker({
+        manager: () => ({ document }) as CommandManager,
+        onDerived,
+        onError
+      })
+    );
+    const pending = result.current.syncOnce(document);
+    const rejected = expect(pending).rejects.toThrow(
+      'Reload to load the new version'
+    );
+    await act(async () => {
+      FakeWorker.instances[0]!.onerror?.({} as ErrorEvent);
+    });
+    await rejected;
+    expect(FakeWorker.instances).toHaveLength(1);
+    expect(FakeWorker.instances[0]!.terminate).toHaveBeenCalled();
+    expect(result.current.state.phase).toBe('failed');
+    expect(result.current.isReadyFor(document)).toBe(false);
+    expect(onDerived).not.toHaveBeenCalled();
+    expect(onError).toHaveBeenCalledWith(
+      expect.stringContaining('Reload to load the new version')
     );
   });
 
