@@ -18,6 +18,11 @@ export interface PlainRefusal {
 
 const TRANSLATIONS: ReadonlyArray<{ pattern: RegExp; sentence: string }> = [
   {
+    pattern: /unsupported STEP entity:/i,
+    sentence:
+      'This STEP file uses a geometry type the importer does not support yet.'
+  },
+  {
     pattern: /through-hole diameter .* does not fit/i,
     sentence: 'The hole does not fit this body.'
   },
