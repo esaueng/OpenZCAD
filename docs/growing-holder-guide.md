@@ -8,7 +8,8 @@ supported, what the numbers mean, and where the app refuses.
 
 1. Import the STEP file (File menu, or drop it on the viewport).
 2. Open the assistant. When the app has measured an opening it offers
-   **Parameterize the opening** with a **Verified** badge. Send it, read the
+   **Parameterize the opening** with a **Verified** badge, or
+   **Parameterize holder and text** when raised lettering is verified. Send it, read the
    proposal, and apply it. No AI provider request is made for a verified
    suggestion: every value in it is the app's own measurement.
 3. Once applied, **Parameterize the mounting holes** appears when the part
@@ -18,7 +19,13 @@ supported, what the numbers mean, and where the app refuses.
    exact geometry pending" until the exact result lands.
 5. Save, reopen, undo, redo and export as usual. The result is ordinary
    history: rigid pieces carved from the import, straight sections rebuilt
-   at the parametric length, and one union.
+   at the parametric length, and one union. Verified lettering stays in a
+   separate Text body controlled by `show_text`.
+
+You can also ask the AI: **“Make the opening and height adjustable, add a
+show_text toggle, and keep the whole word together when the height changes.”**
+The AI uses the measured opening and lettering in the document digest. The
+same exact preflight runs before Apply; the AI cannot invent the geometry.
 
 ## The controls
 
@@ -27,6 +34,7 @@ supported, what the numbers mean, and where the app refuses.
 | `opening_width` | The distance between the two inner arm faces. Both ends move apart symmetrically about the measured center; the overall width follows the opening. | Where the two ends would meet, stated in the proposal.        |
 | `holder_height` | The height of the arms, when the app finds a straight run on both arms above the base. Everything above the run moves up rigidly.                  | The source height minus the run, stated in the proposal.      |
 | `hole_diameter` | The two mounting bores, resized together on each end before the ends move, so they stay aligned with their arms at every opening.                  | Set by the kernel: a bore it cannot resize reports a warning. |
+| `show_text` | Shows or hides the complete group of verified raised lettering, including in exports. The text follows its arm and moves by half the height change without stretching or separating characters. | On or off. |
 
 Values below a minimum are clamped by the expression (`require_min`), so
 the build stays valid; the parameter keeps the value you typed.
@@ -38,9 +46,13 @@ the build stays valid; the parameter keeps the value you typed.
 - The straight section is the longest run between the ends whose cross
   section does not change; every hole, blend, boss or letter stays on its
   end and moves rigidly. The proposal states the cut positions.
-- On an arm with embossed lettering the straight run for the height is the
-  widest gap between two letters, and that gap widens with the height. The
-  proposal says so.
+- A group of constant-depth raised profiles on one flat arm face can be
+  separated exactly. The support face closes their footprints, while the
+  original cap profiles (including letter holes) become a separate Text body.
+  Original STEP bytes are retained. Text exports as separate touching solids.
+- Lettering that cannot be verified stays fused to the arm. The proposal
+  explicitly says that intact spacing is unverified; the height cut can still
+  widen a gap between letters in that case.
 - Nothing is inferred from a drawing or a name. If a required measurement
   is missing the suggestion is not offered.
 
@@ -60,6 +72,11 @@ the build stays valid; the parameter keeps the value you typed.
   reports "The hole kept its original diameter" rather than pretending.
 - **Edited history.** If you change or suppress one of the recipe's own
   features, the preview stops and only exact rebuilds are shown.
+- **Unverified lettering.** Engraving, varying depths, curved support faces,
+  and multiple eligible support faces do not receive
+  a text toggle. The bounded recognizer groups geometry; it does not perform
+  OCR or reconstruct arbitrary logos. Each group must contain at least two
+  separate constant-depth profiles and belong entirely to one arm.
 
 ## Latency
 

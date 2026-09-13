@@ -4,6 +4,8 @@ import {
   addSketchFeature,
   createCheckpoint,
   createProjectDocument,
+  configureParameterToggle,
+  listParameters,
   importMeshBody,
   importStepBody,
   setParameter
@@ -109,7 +111,8 @@ describe('complete project backups', () => {
       backup.version = 99 as 1;
     },
     (backup: ProjectBackup) => {
-      backup.document.schemaVersion = 99 as 14;
+      backup.document.schemaVersion =
+        99 as typeof backup.document.schemaVersion;
     },
     (backup: ProjectBackup) => {
       delete backup.document.nodes[backup.document.rootNodeId];
@@ -213,4 +216,46 @@ it('marks foreign archived sources local throughout a copied project so account 
     artifactId: imported.data.artifactId
   });
   expect(source.data.artifactId).toBe('artifact_foreign');
+});
+
+describe('on/off parameter backups', () => {
+  it('preserves stable body bindings through a backup', async () => {
+    const backup = fixture();
+    backup.document = configureParameterToggle(backup.document, {
+      name: 'show_body',
+      bodyIds: [backup.document.bodyOrder[0]!]
+    });
+    backup.document = setParameter(backup.document, {
+      name: 'show_body',
+      expression: '0'
+    });
+    const parsed = await parseProjectBackup(JSON.stringify(backup));
+    expect(
+      listParameters(parsed.document).find((p) => p.name === 'show_body')
+    ).toMatchObject({
+      expression: '0',
+      toggle: { bodyIds: [backup.document.bodyOrder[0]] }
+    });
+  });
+  it('refuses malformed toggle bindings and values', async () => {
+    for (const toggle of [
+      null,
+      { bodyIds: 'not-an-array' },
+      { bodyIds: [3] }
+    ]) {
+      const backup = fixture();
+      Object.assign(listParameters(backup.document)[0]!, { toggle });
+      await expect(
+        parseProjectBackup(JSON.stringify(backup))
+      ).rejects.toThrow();
+    }
+    const backup = fixture();
+    Object.assign(listParameters(backup.document)[0]!, {
+      toggle: { bodyIds: [] },
+      expression: '2'
+    });
+    await expect(parseProjectBackup(JSON.stringify(backup))).rejects.toThrow(
+      /on\/off parameter/
+    );
+  });
 });

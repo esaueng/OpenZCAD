@@ -120,6 +120,7 @@ import {
   type ParameterExposeInput,
   type ParameterRenameInput,
   type ParameterSetInput,
+  type ParameterToggleInput,
   patternBody,
   type PatternInput,
   type PrimitiveInput,
@@ -131,6 +132,7 @@ import {
   revolveSketch,
   setNodeMetadata,
   setParameter,
+  configureParameterToggle,
   setParameterDescription,
   setParameterExposed,
   shellBody,
@@ -203,6 +205,7 @@ export type CommandKind =
   | 'feature.delete'
   | 'feature.reorder'
   | 'parameter.set'
+  | 'parameter.configure-toggle'
   | 'parameter.expose'
   | 'parameter.describe'
   | 'parameter.rename'
@@ -253,6 +256,7 @@ export type AnyCommand =
   | CommandDefinition<FeatureUpdateInput>
   | CommandDefinition<FeatureDeleteInput>
   | CommandDefinition<ParameterSetInput>
+  | CommandDefinition<ParameterToggleInput>
   | CommandDefinition<ParameterRenameInput>
   | CommandDefinition<ParameterDeleteInput>
   | CommandDefinition<ImportedMeshInput>
@@ -1408,6 +1412,17 @@ export const commandFactories = {
       (document) => setParameter(document, withIds)
     );
   },
+  configureParameterToggle(
+    payload: ParameterToggleInput
+  ): CommandDefinition<ParameterToggleInput> {
+    const withIds = { ...payload, ids: payload.ids ?? createParameterIds() };
+    return makeCommand(
+      'parameter.configure-toggle',
+      `Configure on/off parameter ${payload.name}`,
+      withIds,
+      (document) => configureParameterToggle(document, withIds)
+    );
+  },
   setParameterExposed(
     payload: ParameterExposeInput
   ): CommandDefinition<ParameterExposeInput> {
@@ -2272,9 +2287,7 @@ export function commandsForCadPatch(
           );
         const match = matchGrowingHolderHoles(projectedDocument, history);
         if (match.status !== 'matched')
-          throw new Error(
-            `add_growing_holder_hole_control: ${match.reason}`
-          );
+          throw new Error(`add_growing_holder_hole_control: ${match.reason}`);
         const canonical = (value: unknown) => JSON.stringify(value);
         if (
           canonical([match.pair.negative, match.pair.positive]) !==
@@ -2936,6 +2949,12 @@ export function replayCommands(
         break;
       case 'parameter.set':
         next = setParameter(next, command.payload as ParameterSetInput);
+        break;
+      case 'parameter.configure-toggle':
+        next = configureParameterToggle(
+          next,
+          command.payload as ParameterToggleInput
+        );
         break;
       case 'parameter.expose':
         next = setParameterExposed(

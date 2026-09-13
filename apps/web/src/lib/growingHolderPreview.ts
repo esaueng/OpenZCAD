@@ -187,6 +187,37 @@ export function growingHolderPreview(
       bbox,
       mesh: { kind: 'mesh', vertices, indices }
     });
+    if (history.text) {
+      const text = base.derived.bodyRepresentations[history.text.bodyId];
+      if (!text || text.consumed) return null;
+      const delta = AXES.map(
+        (axis) =>
+          evaluate(history.text!.move[axis], after.scope) -
+          evaluate(history.text!.move[axis], before.scope)
+      );
+      if (!delta.every(Number.isFinite)) return null;
+      const vertices = new Float32Array(text.mesh.vertices);
+      for (let i = 0; i < vertices.length; i++)
+        vertices[i] = vertices[i]! + delta[i % 3]!;
+      const translate = (point: typeof text.bbox.min) => ({
+        x: point.x + delta[0]!,
+        y: point.y + delta[1]!,
+        z: point.z + delta[2]!
+      });
+      previews.push({
+        bodyId: text.bodyId,
+        name: text.name,
+        source: text.source,
+        color: text.color,
+        opacity: text.opacity,
+        consumed: false,
+        exportableStep: false,
+        faceCount: 0,
+        volume: 0,
+        bbox: { min: translate(text.bbox.min), max: translate(text.bbox.max) },
+        mesh: { kind: 'mesh', vertices, indices: text.mesh.indices }
+      });
+    }
   }
   return previews;
 }

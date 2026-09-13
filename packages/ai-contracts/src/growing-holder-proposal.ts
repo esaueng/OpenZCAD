@@ -38,7 +38,9 @@ export function growingHolderProposalTarget(
     return [{ bodyId, name: body.name, opening: recognition.opening }];
   });
   if (selection.bodyIds.length === 1) {
-    return eligible.find((body) => body.bodyId === selection.bodyIds[0]) ?? null;
+    return (
+      eligible.find((body) => body.bodyId === selection.bodyIds[0]) ?? null
+    );
   }
   return selection.bodyIds.length === 0 && eligible.length === 1
     ? eligible[0]!
@@ -65,11 +67,16 @@ export function createGrowingHolderProposal(
   const units = document.units;
   return {
     proposalId: `verified_growing_holder_${target.bodyId}`,
-    summary: `The ${millimetres(opening.sourceOpening, units)} opening of ${target.name} will become the editable parameter ${GROWING_HOLDER_PARAMETER}. Both ends keep their exact geometry and move apart symmetrically about ${opening.axis} = ${millimetres(opening.center, units)}; the ${millimetres(sectionLength, units)} straight section between them is rebuilt at the new length, so the overall size follows the opening.`,
+    summary: `The ${millimetres(opening.sourceOpening, units)} opening of ${target.name} will become the editable parameter \`${GROWING_HOLDER_PARAMETER}\`. Both ends keep their exact geometry and move apart symmetrically about ${opening.axis} = ${millimetres(opening.center, units)}; the ${millimetres(sectionLength, units)} straight section between them is rebuilt at the new length, so the overall size follows the opening.${opening.lettering ? ' The complete raised lettering becomes one separate Text body, with a `show_text` on/off toggle. It follows the arm and stays together as height changes.' : ''}`,
     assumptions: [
+      ...(opening.lettering
+        ? [
+            `The ${opening.lettering.selection.capFaceHashes.length} constant-depth raised profiles on the ${opening.lettering.side} arm are treated as the lettering group. Review the preview before applying; this verifies their geometry, not the meaning of the characters.`
+          ]
+        : []),
       ...(opening.height
         ? [
-            `The arms are ${millimetres(opening.height.sourceHeight, units)} tall along ${opening.height.axis} and become the editable parameter ${GROWING_HOLDER_HEIGHT_PARAMETER}: each arm grows in its straight section between ${opening.height.axis} = ${millimetres(opening.height.cuts[0], units)} and ${millimetres(opening.height.cuts[1], units)}, which on a lettered arm is the widest gap between two letters, so that gap widens with the height. Everything above moves up rigidly; the smallest supported height is ${millimetres(opening.height.minimumHeight, units)}.`
+            `The arms are ${millimetres(opening.height.sourceHeight, units)} tall along ${opening.height.axis} and become the editable parameter \`${GROWING_HOLDER_HEIGHT_PARAMETER}\`: each arm grows in its straight section between ${opening.height.axis} = ${millimetres(opening.height.cuts[0], units)} and ${millimetres(opening.height.cuts[1], units)}. ${opening.lettering ? 'The lettering moves as one rigid group by half the height change, preserving all character spacing.' : 'Everything above moves up rigidly. Any lettering fused across this run will grow a gap; intact lettering is not verified on this source.'} The smallest supported height is ${millimetres(opening.height.minimumHeight, units)}.`
           ]
         : []),
       `The opening was measured between the two inner faces along ${opening.axis} at ${millimetres(opening.sourceOpening, units)}.`,
@@ -83,7 +90,9 @@ export function createGrowingHolderProposal(
         localId: 'holder',
         targetBodyId: target.bodyId,
         parameter: GROWING_HOLDER_PARAMETER,
-        heightParameter: opening.height ? GROWING_HOLDER_HEIGHT_PARAMETER : null,
+        heightParameter: opening.height
+          ? GROWING_HOLDER_HEIGHT_PARAMETER
+          : null,
         opening
       }
     ]

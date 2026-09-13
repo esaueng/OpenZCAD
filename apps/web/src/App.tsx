@@ -66,6 +66,7 @@ import {
   createProjectDocument,
   duplicateProjectDocument,
   findBodyNode,
+  getParameterHiddenBodyIds,
   findFeature,
   findSketch,
   getParameterScope,
@@ -1788,7 +1789,7 @@ export function App() {
     settings: viewerSettings,
     setSettings: setViewerSettings,
     initialView,
-    hiddenBodyIds,
+    hiddenBodyIds: localHiddenBodyIds,
     setHiddenBodyIds,
     restore: restoreProjectView,
     apply: applyProjectView,
@@ -1797,6 +1798,20 @@ export function App() {
     onCameraSettled: persistCameraPose,
     forget: forgetProjectView
   } = useProjectView(doc?.projectId ?? null);
+  // Key by membership so an unrelated dimension edit keeps the viewport's
+  // body array stable instead of disposing and uploading identical meshes.
+  const parameterHiddenBodyKey = useMemo(
+    () => JSON.stringify(doc ? [...getParameterHiddenBodyIds(doc)].sort() : []),
+    [doc]
+  );
+  const parameterHiddenBodyIds = useMemo(
+    () => new Set(JSON.parse(parameterHiddenBodyKey) as BodyId[]),
+    [parameterHiddenBodyKey]
+  );
+  const hiddenBodyIds = useMemo(
+    () => new Set<string>([...localHiddenBodyIds, ...parameterHiddenBodyIds]),
+    [localHiddenBodyIds, parameterHiddenBodyIds]
+  );
   const [previewDoc, setPreviewDoc] = useState<ProjectDocument | null>(null);
   const [saveState, setSaveState] = useState<WorkspaceSaveState>('saving');
   const saveStateRef = useRef(saveState);
@@ -4503,11 +4518,23 @@ export function App() {
     if (!doc) {
       return [];
     }
-    if (selectedBody && !selectedBody.consumed && selectedBody.exportableStep) {
+    if (
+      selectedBody &&
+      !selectedBody.consumed &&
+      selectedBody.exportableStep &&
+      !parameterHiddenBodyIds.has(selectedBody.bodyId)
+    ) {
       return [selectedBody.bodyId];
     }
-    return doc.derived.exportableBodyIds;
-  }, [doc, selectedBody]);
+    return Object.values(doc.derived.bodyRepresentations)
+      .filter(
+        (body) =>
+          body.exportableStep &&
+          !body.consumed &&
+          !parameterHiddenBodyIds.has(body.bodyId)
+      )
+      .map((body) => body.bodyId);
+  }, [doc, selectedBody, parameterHiddenBodyIds]);
 
   /**
    * What the current selection is, and the figure that goes with it.
@@ -5707,6 +5734,24 @@ export function App() {
   }
 
   function toggleBodyVisibility(bodyId: string) {
+    const parameter =
+      doc &&
+      listParameters(doc).find((p) =>
+        p.toggle?.bodyIds.includes(bodyId as BodyId)
+      );
+    if (parameter && resolvedWorkspaceMode !== 'view') {
+      void handleSetParameter(
+        parameter.name,
+        parameter.expression.trim() === '1' ? '0' : '1'
+      );
+      return;
+    }
+    if (parameterHiddenBodyIds.has(bodyId as BodyId)) {
+      setStatus(
+        `This body is off in ${parameter?.name ?? 'a parameter'}. Switch to Tweak to turn it on.`
+      );
+      return;
+    }
     setHiddenBodyIds((current) => {
       const next = new Set(current);
       if (next.has(bodyId)) {
@@ -10724,6 +10769,18 @@ export function App() {
         }) ?? false
     );
     if (constrainedSketches.length === 0) {
+      const toggle = listParameters(prospective).find(
+        (p) => p.name === name
+      )?.toggle;
+      if (toggle)
+        setHiddenBodyIds(
+          (current) =>
+            new Set(
+              [...current].filter(
+                (id) => !toggle.bodyIds.includes(id as BodyId)
+              )
+            )
+        );
       executeCommand(parameterCommand);
       return;
     }
@@ -14794,6 +14851,13 @@ export function App() {
       onFeatureContextMenu={handleFeatureContextMenu}
       onToggleFeatureSuppression={handleToggleFeatureSuppression}
       onRollbackAfterFeature={handleRollbackAfterFeature}
+      onConfigureToggle={(name, bodyIds) => {
+        if (ensureCanEdit('configure an on/off parameter')) {
+          executeCommand(
+            commandFactories.configureParameterToggle({ name, bodyIds })
+          );
+        }
+      }}
       onSetParameter={(name, expression) =>
         void handleSetParameter(name, expression)
       }

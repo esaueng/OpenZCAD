@@ -1371,7 +1371,14 @@ const sectionObjectSchema = {
         startAngleDeg: { type: 'number' },
         endAngleDeg: { type: 'number' }
       },
-      required: ['objectKind', 'centerX', 'centerY', 'radius', 'startAngleDeg', 'endAngleDeg']
+      required: [
+        'objectKind',
+        'centerX',
+        'centerY',
+        'radius',
+        'startAngleDeg',
+        'endAngleDeg'
+      ]
     }
   ]
 } as const;
@@ -1380,7 +1387,7 @@ const recognizedOpeningSchema = {
   type: 'object',
   additionalProperties: false,
   description:
-    'A measured opening copied verbatim from the digest body\'s recognizedOpening.opening. Never invent or edit any field.',
+    "A measured opening copied verbatim from the digest body's recognizedOpening.opening. Never invent or edit any field.",
   properties: {
     axis: { type: 'string', enum: ['x', 'y', 'z'] },
     envelope: {
@@ -1389,11 +1396,62 @@ const recognizedOpeningSchema = {
       properties: { min: numberVectorSchema, max: numberVectorSchema },
       required: ['min', 'max']
     },
-    cuts: { type: 'array', minItems: 2, maxItems: 2, items: { type: 'number' } },
+    cuts: {
+      type: 'array',
+      minItems: 2,
+      maxItems: 2,
+      items: { type: 'number' }
+    },
     center: { type: 'number' },
     sourceOpening: { type: 'number' },
     minimumOpening: { type: 'number' },
     section: { type: 'array', minItems: 2, items: sectionObjectSchema },
+    lettering: {
+      anyOf: [
+        {
+          type: 'object',
+          additionalProperties: false,
+          properties: {
+            side: { type: 'string', enum: ['negative', 'positive'] },
+            selection: {
+              type: 'object',
+              additionalProperties: false,
+              properties: {
+                supportFaceHash: { type: 'integer' },
+                capFaceHashes: {
+                  type: 'array',
+                  minItems: 2,
+                  maxItems: 64,
+                  items: { type: 'integer' }
+                },
+                normal: numberVectorSchema,
+                depth: { type: 'number' },
+                bounds: {
+                  type: 'object',
+                  additionalProperties: false,
+                  properties: {
+                    min: numberVectorSchema,
+                    max: numberVectorSchema
+                  },
+                  required: ['min', 'max']
+                }
+              },
+              required: [
+                'supportFaceHash',
+                'capFaceHashes',
+                'normal',
+                'depth',
+                'bounds'
+              ]
+            }
+          },
+          required: ['side', 'selection']
+        },
+        { type: 'null' }
+      ],
+      description:
+        'Copy measured lettering verbatim, or null when absent. The recipe separates it into one rigid Text body and creates show_text; never guess face hashes or depth.'
+    },
     height: {
       anyOf: [
         {
@@ -1401,15 +1459,28 @@ const recognizedOpeningSchema = {
           additionalProperties: false,
           properties: {
             axis: { type: 'string', enum: ['x', 'y', 'z'] },
-            cuts: { type: 'array', minItems: 2, maxItems: 2, items: { type: 'number' } },
+            cuts: {
+              type: 'array',
+              minItems: 2,
+              maxItems: 2,
+              items: { type: 'number' }
+            },
             sourceHeight: { type: 'number' },
             minimumHeight: { type: 'number' },
             sections: {
               type: 'object',
               additionalProperties: false,
               properties: {
-                negative: { type: 'array', minItems: 2, items: sectionObjectSchema },
-                positive: { type: 'array', minItems: 2, items: sectionObjectSchema }
+                negative: {
+                  type: 'array',
+                  minItems: 2,
+                  items: sectionObjectSchema
+                },
+                positive: {
+                  type: 'array',
+                  minItems: 2,
+                  items: sectionObjectSchema
+                }
               },
               required: ['negative', 'positive']
             },
@@ -1417,13 +1488,30 @@ const recognizedOpeningSchema = {
               type: 'object',
               additionalProperties: false,
               properties: {
-                negative: { type: 'array', minItems: 2, maxItems: 2, items: { type: 'number' } },
-                positive: { type: 'array', minItems: 2, maxItems: 2, items: { type: 'number' } }
+                negative: {
+                  type: 'array',
+                  minItems: 2,
+                  maxItems: 2,
+                  items: { type: 'number' }
+                },
+                positive: {
+                  type: 'array',
+                  minItems: 2,
+                  maxItems: 2,
+                  items: { type: 'number' }
+                }
               },
               required: ['negative', 'positive']
             }
           },
-          required: ['axis', 'cuts', 'sourceHeight', 'minimumHeight', 'sections', 'straightRuns']
+          required: [
+            'axis',
+            'cuts',
+            'sourceHeight',
+            'minimumHeight',
+            'sections',
+            'straightRuns'
+          ]
         },
         { type: 'null' }
       ],
@@ -1431,7 +1519,17 @@ const recognizedOpeningSchema = {
         'The measured arm-height control, copied verbatim when the digest has one; null otherwise.'
     }
   },
-  required: ['axis', 'envelope', 'cuts', 'center', 'sourceOpening', 'minimumOpening', 'section', 'height']
+  required: [
+    'axis',
+    'envelope',
+    'cuts',
+    'center',
+    'sourceOpening',
+    'minimumOpening',
+    'section',
+    'height',
+    'lettering'
+  ]
 } as const;
 
 const faceReferenceSchema = {
@@ -2079,7 +2177,8 @@ export const CAD_PATCH_JSON_SCHEMA = {
               targetBodyId: existingBodyRefSchema,
               parameter: {
                 type: 'string',
-                description: 'Parameter name that drives the opening, e.g. "opening_width".'
+                description:
+                  'Parameter name that drives the opening, e.g. "opening_width".'
               },
               heightParameter: {
                 anyOf: [{ type: 'string' }, { type: 'null' }],
@@ -2088,15 +2187,26 @@ export const CAD_PATCH_JSON_SCHEMA = {
               },
               opening: recognizedOpeningSchema
             },
-            required: ['kind', 'name', 'localId', 'targetBodyId', 'parameter', 'heightParameter', 'opening']
+            required: [
+              'kind',
+              'name',
+              'localId',
+              'targetBodyId',
+              'parameter',
+              'heightParameter',
+              'opening'
+            ]
           },
           {
             type: 'object',
             additionalProperties: false,
             description:
-              'Drive the two mirrored mounting bores of a growing holder by one parameter. `holes` must be the app\'s own measurements copied verbatim; never author them.',
+              "Drive the two mirrored mounting bores of a growing holder by one parameter. `holes` must be the app's own measurements copied verbatim; never author them.",
             properties: {
-              kind: { type: 'string', const: 'add_growing_holder_hole_control' },
+              kind: {
+                type: 'string',
+                const: 'add_growing_holder_hole_control'
+              },
               name: { type: 'string' },
               targetBodyId: existingBodyRefSchema,
               parameter: { type: 'string' },
@@ -2810,7 +2920,32 @@ function isRecognizedOpening(value: unknown): value is RecognizedOpening {
     isNumericSection(opening.section) &&
     (opening.height === undefined ||
       opening.height === null ||
-      isRecognizedArmHeight(opening.height))
+      isRecognizedArmHeight(opening.height)) &&
+    (opening.lettering === undefined ||
+      opening.lettering === null ||
+      isRecognizedLettering(opening.lettering))
+  );
+}
+
+function isRecognizedLettering(value: unknown): boolean {
+  if (!value || typeof value !== 'object') return false;
+  const lettering = value as Record<string, unknown>;
+  const s = lettering.selection as Record<string, unknown> | undefined;
+  const bounds = s?.bounds as Record<string, unknown> | undefined;
+  return (
+    ['negative', 'positive'].includes(String(lettering.side)) &&
+    !!s &&
+    Number.isSafeInteger(s.supportFaceHash) &&
+    Array.isArray(s.capFaceHashes) &&
+    s.capFaceHashes.length >= 2 &&
+    s.capFaceHashes.length <= 64 &&
+    s.capFaceHashes.every(Number.isSafeInteger) &&
+    isNumberVector(s.normal) &&
+    isFiniteNumber(s.depth) &&
+    s.depth > 0 &&
+    !!bounds &&
+    isNumberVector(bounds.min) &&
+    isNumberVector(bounds.max)
   );
 }
 
@@ -3295,12 +3430,20 @@ export function parseCadPatchProposal(
               typeof hole === 'object' &&
               typeof (hole as { bodyId?: unknown }).bodyId === 'string' &&
               Number.isSafeInteger((hole as { faceHash?: unknown }).faceHash) &&
-              isFaceReference((hole as { faceReference?: unknown }).faceReference) &&
+              isFaceReference(
+                (hole as { faceReference?: unknown }).faceReference
+              ) &&
               (hole as { faceReference: FaceTopologyReferenceV5 }).faceReference
                 .currentHash === (hole as { faceHash: number }).faceHash &&
-              isFiniteNumber((hole as { sourceDiameter?: unknown }).sourceDiameter) &&
-              isNumberVector((hole as { sourceAxisStart?: unknown }).sourceAxisStart) &&
-              isNumberVector((hole as { sourceAxisEnd?: unknown }).sourceAxisEnd)
+              isFiniteNumber(
+                (hole as { sourceDiameter?: unknown }).sourceDiameter
+              ) &&
+              isNumberVector(
+                (hole as { sourceAxisStart?: unknown }).sourceAxisStart
+              ) &&
+              isNumberVector(
+                (hole as { sourceAxisEnd?: unknown }).sourceAxisEnd
+              )
           )
         ) {
           throw new Error('Invalid add_growing_holder_hole_control operation.');
@@ -3964,7 +4107,15 @@ export function validateCadPatchProposalAgainstDigest(
           digest,
           operation.targetBodyId
         );
-        if (canonicalJson(measured) !== canonicalJson(operation.opening)) {
+        const normalizeOptional = (opening: RecognizedOpening) => ({
+          ...opening,
+          height: opening.height ?? null,
+          lettering: opening.lettering ?? null
+        });
+        if (
+          canonicalJson(normalizeOptional(measured)) !==
+          canonicalJson(normalizeOptional(operation.opening))
+        ) {
           throw new Error(
             'add_growing_holder_recipe opening does not exactly match the current measured opening. Refresh the proposal from the current document digest.'
           );
