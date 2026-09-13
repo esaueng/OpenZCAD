@@ -26,6 +26,9 @@ const defaultShareLinkClient = createProjectShareLinkClient();
 
 export interface ProjectSharingDialogProps {
   projectId: string;
+  localProject?: boolean;
+  savingToAccount?: boolean;
+  onSaveToAccount?(): void | Promise<void>;
   role: ProjectAccessRole | null;
   collaborationStatus: CollaborationStatus;
   lease: ProjectEditLease | null;
@@ -78,6 +81,9 @@ function activeLease(
  */
 export function ProjectSharingDialog({
   projectId,
+  localProject = false,
+  savingToAccount = false,
+  onSaveToAccount,
   role,
   collaborationStatus,
   lease,
@@ -107,7 +113,7 @@ export function ProjectSharingDialog({
   const refresh = useCallback(
     async (source: 'hydrate' | 'action' = 'action') => {
       const isHydration = source === 'hydrate';
-      if (role !== 'owner') {
+      if (localProject || role !== 'owner') {
         setSharing(null);
         setShareLinks([]);
         if (isHydration) {
@@ -134,7 +140,7 @@ export function ProjectSharingDialog({
         }
       }
     },
-    [client, shareLinkClient, projectId, role]
+    [client, shareLinkClient, projectId, role, localProject]
   );
 
   const copyShareLink = async (url: string) => {
@@ -201,7 +207,10 @@ export function ProjectSharingDialog({
             <h2 id="project-sharing-title">Project sharing</h2>
             <p className="sharing-meta">
               <span className="sharing-meta-item">
-                Your role: <strong>{role ?? 'Not connected'}</strong>
+                Your role:{' '}
+                <strong>
+                  {localProject ? 'Local project' : (role ?? 'Not connected')}
+                </strong>
               </span>
               <span className="sharing-meta-item">
                 <span
@@ -243,7 +252,7 @@ export function ProjectSharingDialog({
             {error ?? (busy ? 'Working…' : null)}
           </p>
 
-          {role === 'owner' ? (
+          {!localProject && role === 'owner' ? (
             <>
               <section
                 className="sharing-invite"
@@ -340,7 +349,29 @@ export function ProjectSharingDialog({
             </section>
           )}
 
-          {role === 'owner' ? (
+          {localProject ? (
+            <section className="sharing-section">
+              <h3>Save this project to your account</h3>
+              <p className="sharing-empty">
+                This imported copy is saved on this device. Save it to your
+                account, including its source files, to connect and share it.
+              </p>
+              <button
+                type="button"
+                className="primary"
+                disabled={savingToAccount || busy !== null || !onSaveToAccount}
+                onClick={() =>
+                  void mutate('save-account', async () => {
+                    await onSaveToAccount?.();
+                  })
+                }
+              >
+                {savingToAccount
+                  ? 'Saving project and sources…'
+                  : 'Save to my account'}
+              </button>
+            </section>
+          ) : role === 'owner' ? (
             <>
               <section
                 className="sharing-section"
@@ -569,7 +600,9 @@ export function ProjectSharingDialog({
             </>
           ) : (
             <p className="sharing-empty">
-              Only the project owner can manage members and invitations.
+              {role === null
+                ? 'Connecting to project sharing. Your cloud access has not been confirmed yet.'
+                : 'Only the project owner can manage members and invitations.'}
             </p>
           )}
         </div>
