@@ -1,5 +1,6 @@
 import type {
   BodyId,
+  FaceRecognitionSummary,
   ProjectDocument,
   ProjectId,
   SketchId
@@ -62,6 +63,24 @@ export type GeometryWorkerRequest =
       requestId: string;
       document: ProjectDocument;
       sketchId: SketchId;
+    }
+  | {
+      /**
+       * On-demand per-face recognition of one imported STEP face (Phase D of
+       * the imported STEP edit plan). Runs the existing
+       * `recognizeImportedFeature` module against the rebuilt document and
+       * answers with the recognized kind + dimensions, or the typed refusal
+       * reason. Display-only: no document state changes, and the result never
+       * enters the rebuild payload — the caller caches it additively.
+       */
+      type: 'recognize-imported-face';
+      requestId: string;
+      document: ProjectDocument;
+      bodyId: BodyId;
+      /** ADR-011 face hash of the selected face. */
+      faceHash: number;
+      /** Rebuild-local face identity the pick was made against. */
+      topologyId?: string;
     }
   | {
       /**
@@ -155,13 +174,36 @@ export type GeometrySolveSketchResult =
     }
   | { type: 'solve-sketch'; ok: false; requestId: string; error: string };
 
+/**
+ * Per-face recognition answer. The `summary` is the wire form of the shared
+ * `FaceRecognitionSummary`: recognized kind + dimensions, or the typed
+ * refusal reason with display copy. Callers key it by body + face identity;
+ * a missing entry means "never queried", never "refused".
+ */
+export type GeometryRecognizeImportedFaceResult =
+  | {
+      type: 'recognize-imported-face';
+      ok: true;
+      requestId: string;
+      bodyId: BodyId;
+      faceHash: number;
+      summary: FaceRecognitionSummary;
+    }
+  | {
+      type: 'recognize-imported-face';
+      ok: false;
+      requestId: string;
+      error: string;
+    };
+
 export type GeometryWorkerResult =
   | { type: 'projection'; projectId: string; version: number; derived: ProjectDocument['derived'] }
   | GeometryWorkerState
   | GeometrySyncResult
   | GeometryExportResult
   | GeometryMeshQualityResult
-  | GeometrySolveSketchResult;
+  | GeometrySolveSketchResult
+  | GeometryRecognizeImportedFaceResult;
 
 type ExactKernel = Awaited<ReturnType<typeof createExactKernelAdapter>>;
 let exactKernelStatus: 'idle' | 'loading' | 'ready' | 'failed' = 'idle';
@@ -309,7 +351,8 @@ async function execute(job: GeometryWorkerJob): Promise<void> {
     if (
       request.type === 'export' ||
       request.type === 'mesh-quality' ||
-      request.type === 'solve-sketch'
+      request.type === 'solve-sketch' ||
+      request.type === 'recognize-imported-face'
     ) {
       // 'failed' means the next load call retries, so it is a loading state
       // here too, not a terminal one.
@@ -323,6 +366,33 @@ async function execute(job: GeometryWorkerJob): Promise<void> {
           : new Error('The exact Remus kernel failed to load.');
       }
       post(stateFor('rebuilding', request, { stale: true }));
+      if (request.type === 'recognize-imported-face') {
+        // The face reference is resolved worker-side against the rebuilt
+        // document: the main thread's pick carries rebuild-local identity
+        // (hash + topology id) that only matches the live derived topology.
+        const faceReference =
+          request.topologyId !== undefined
+            ? document.derived.bodyRepresentations[request.bodyId]?.topology?.faces.find(
+                (face) => face.topologyId === request.topologyId
+              )?.reference
+            : undefined;
+        const summary = await exact.recognizeImportedFace({
+          document,
+          bodyId: request.bodyId,
+          faceHash: request.faceHash,
+          ...(faceReference?.kind === 'face' ? { faceReference } : {})
+        });
+        post({
+          type: 'recognize-imported-face',
+          ok: true,
+          requestId: request.requestId,
+          bodyId: request.bodyId,
+          faceHash: request.faceHash,
+          summary
+        });
+        post(stateFor('ready', request, { stale: false }));
+        return;
+      }
       if (request.type === 'solve-sketch') {
         const outcome = await exact.solveSketch(document, request.sketchId);
         post({
@@ -473,6 +543,13 @@ async function execute(job: GeometryWorkerJob): Promise<void> {
     } else if (request.type === 'solve-sketch') {
       post({
         type: 'solve-sketch',
+        ok: false,
+        requestId: request.requestId,
+        error: message
+      });
+    } else if (request.type === 'recognize-imported-face') {
+      post({
+        type: 'recognize-imported-face',
         ok: false,
         requestId: request.requestId,
         error: message

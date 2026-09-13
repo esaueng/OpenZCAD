@@ -33,7 +33,9 @@ import {
   type DerivedState,
   type FaceDistanceMoveMode,
   type FaceGeometry,
+  type FaceRecognitionSummary,
   type FaceTopology,
+  type FaceTopologyReferenceV5,
   type ImportedSourceReference,
   type OpposingPlanarFacePair,
   type ProjectDocument,
@@ -56,8 +58,11 @@ import {
 } from './exact-feature-warnings';
 import {
   collectRecognizedImportedFeatures,
+  importedProofDisplayDimensions,
+  recognizeImportedFeatureOnSolid,
   type ImportedRecognitionFaceIdentity
 } from './imported-feature-query';
+import { recognitionRefusalMessage } from './imported-feature-recognition';
 import { recognizeOpening } from './opening-recognition';
 import { collapseShape } from './exact-boolean-helpers';
 import {
@@ -481,6 +486,26 @@ export interface ExactKernelAdapter {
      */
     reason?: string;
   }>;
+  /**
+   * On-demand per-face recognition of one imported STEP face (Phase D of the
+   * imported STEP edit plan). Rebuilds the document's exact geometry on the
+   * long-lived history kernel — a prefix restore, not a throwaway rebuild —
+   * then runs the existing `recognizeImportedFeature` module against the
+   * resolved face and returns a typed result.
+   *
+   * Display-only: the sole edit committed through recognition remains the
+   * existing through-hole diameter resize. The returned dimensions are in
+   * document units; refusals carry the module's typed reason. Read-only over
+   * the kernel: resolved handles are never mutated, and a miss resolves as
+   * `seed-face-missing` rather than throwing.
+   */
+  recognizeImportedFace(input: {
+    document: ProjectDocument;
+    bodyId: BodyId;
+    /** ADR-011 face hash plus optional v5 lineage reference. */
+    faceHash: number;
+    faceReference?: FaceTopologyReferenceV5;
+  }): Promise<FaceRecognitionSummary>;
   dispose(): void;
 }
 
@@ -1912,6 +1937,115 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     // Export and solve methods own short-lived kernels, but the history
     // kernel and its checkpoints are adapter-scoped and must be released.
     this.invalidateHistoryCache();
+  }
+
+  /**
+   * On-demand per-face recognition over the long-lived history kernel.
+   *
+   * The document is rebuilt through the same history-cache path as a sync —
+   * a prefix restore after the first call, not a throwaway parse — so the
+   * query resolves against the exact geometry the Inspector is showing. The
+   * seed face resolves by hash plus optional v5 reference, exactly like a
+   * direct-edit commit; any resolution miss answers `seed-face-missing`
+   * rather than throwing, because a stale pick is a display state, not a
+   * build failure. Dimensions are scaled from kernel millimetres into
+   * document units before publishing; the refusal reason travels verbatim.
+   */
+  async recognizeImportedFace(input: {
+    document: ProjectDocument;
+    bodyId: BodyId;
+    faceHash: number;
+    faceReference?: FaceTopologyReferenceV5;
+  }): Promise<FaceRecognitionSummary> {
+    const missing = (
+      message: string
+    ): FaceRecognitionSummary => ({
+      kind: 'unsupported',
+      refusalReason: 'seed-face-missing',
+      message
+    });
+    const { sources, pinned } = await this.prefetchImportSources(input.document);
+    if (documentNeedsTranslators(input.document)) {
+      await loadRemusTranslators();
+    }
+    let kernel: RemusKernel;
+    let build: ExactBuildResult;
+    try {
+      ({ kernel, build } = this.buildWithHistoryCache(
+        input.document,
+        sources,
+        pinned
+      ));
+    } catch (error) {
+      return missing(
+        error instanceof Error
+          ? error.message
+          : 'The imported body could not be rebuilt for recognition.'
+      );
+    }
+    try {
+      const shape = build.shapes.get(input.bodyId);
+      if (!shape) {
+        return missing('The selected body has no exact geometry.');
+      }
+      const solid = collapseShape(kernel, shape);
+      let face: number;
+      try {
+        face = resolveDirectEditFace(kernel, shape, solid, {
+          faceHash: input.faceHash,
+          faceReference: input.faceReference
+        }).face;
+      } catch {
+        return missing('The selected face is no longer on the rebuilt body.');
+      }
+      const outcome = recognizeImportedFeatureOnSolid(kernel, solid, face);
+      if (outcome.status !== 'recognized') {
+        return {
+          kind: 'unsupported',
+          refusalReason: outcome.reason,
+          message: recognitionRefusalMessage(outcome.reason)
+        };
+      }
+      const scale = 1 / UNIT_TO_MM[input.document.units];
+      const dimensions = Object.fromEntries(
+        Object.entries(importedProofDisplayDimensions(outcome.proof)).map(
+          ([key, value]) => [
+            key,
+            key === 'angleRadians' ? value : value * scale
+          ]
+        )
+      );
+      const proofKind = outcome.proof.kind;
+      const kindLabel =
+        proofKind === 'blind-cylindrical-hole'
+          ? 'Blind hole'
+          : proofKind === 'counterbore'
+            ? 'Counterbore'
+            : proofKind === 'countersink'
+              ? 'Countersink'
+              : proofKind === 'cylindrical-boss'
+                ? 'Boss'
+                : proofKind === 'prismatic-pocket'
+                  ? 'Pocket'
+                  : 'Taper';
+      return {
+        kind: 'recognized',
+        featureKind: proofKind,
+        message: `${kindLabel} recognized from the imported STEP body.`,
+        dimensions
+      };
+    } finally {
+      const last = this.historyCheckpoints.length - 1;
+      if (last >= 0) {
+        try {
+          kernel!.restore(this.historyCheckpoints[last]!.checkpointId);
+        } catch {
+          this.invalidateHistoryCache();
+        }
+      } else {
+        this.invalidateHistoryCache();
+      }
+    }
   }
 }
 

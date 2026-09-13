@@ -3,7 +3,12 @@ import {
   addPrimitiveFeature,
   createProjectDocument
 } from '@openzcad/document-core';
-import { toSketchId, toUserId, type ProjectDocument } from '@openzcad/shared';
+import {
+  toSketchId,
+  toUserId,
+  type BodyId,
+  type ProjectDocument
+} from '@openzcad/shared';
 import type {
   GeometryWorkerRequest,
   GeometryWorkerResult
@@ -444,6 +449,105 @@ describe('geometry worker rebuild coordination', () => {
       document,
       document.bodyOrder,
       0.08
+    );
+  });
+
+  it('answers recognize-imported-face requests with the adapter summary', async () => {
+    const summary = {
+      kind: 'recognized',
+      featureKind: 'counterbore',
+      message: 'Counterbore recognized from the imported STEP body.',
+      dimensions: {
+        outerDiameter: 10,
+        innerDiameter: 5,
+        counterboreDepth: 2,
+        totalDepth: 6
+      }
+    };
+    const recognizeImportedFace = vi.fn(
+      async (input: {
+        document: ProjectDocument;
+        bodyId: BodyId;
+        faceHash: number;
+      }): Promise<typeof summary> => {
+        expect(input.faceHash).toBe(701);
+        return summary;
+      }
+    );
+    const { scope } = await installWorker(async () => derived('unused'), {
+      recognizeImportedFace
+    });
+    const document = addPrimitiveFeature(
+      createProjectDocument('Recognition Check', toUserId('user')),
+      {
+        name: 'Box',
+        primitiveKind: 'box',
+        dimensions: { width: 10, height: 20, depth: 30 }
+      }
+    );
+    const bodyId = document.bodyOrder[0]!;
+    post(scope, {
+      type: 'recognize-imported-face',
+      requestId: 'recognition-1',
+      document,
+      bodyId,
+      faceHash: 701,
+      topologyId: 'face:701'
+    });
+
+    await vi.waitFor(() =>
+      expect(scope.postMessage).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: 'recognize-imported-face',
+          ok: true,
+          requestId: 'recognition-1',
+          bodyId,
+          faceHash: 701,
+          summary
+        })
+      )
+    );
+    // The worker resolves the v5 face reference from the derived topology
+    // rather than trusting the caller's pick blindly.
+    expect(recognizeImportedFace).toHaveBeenCalledOnce();
+    expect(recognizeImportedFace.mock.calls[0]![0]).toMatchObject({
+      bodyId,
+      faceHash: 701
+    });
+  });
+
+  it('reports a recognize-imported-face adapter failure by request id', async () => {
+    const recognizeImportedFace = vi.fn(async () => {
+      throw new Error('kernel refused the query');
+    });
+    const { scope } = await installWorker(async () => derived('unused'), {
+      recognizeImportedFace
+    });
+    const document = addPrimitiveFeature(
+      createProjectDocument('Recognition Failure', toUserId('user')),
+      {
+        name: 'Box',
+        primitiveKind: 'box',
+        dimensions: { width: 10, height: 20, depth: 30 }
+      }
+    );
+    post(scope, {
+      type: 'recognize-imported-face',
+      requestId: 'recognition-2',
+      document,
+      bodyId: document.bodyOrder[0]!,
+      faceHash: 702
+    });
+
+    await vi.waitFor(() =>
+      expect(scope.postMessage).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: 'recognize-imported-face',
+          ok: false,
+          requestId: 'recognition-2',
+          error: 'kernel refused the query'
+        })
+      )
     );
   });
 });
