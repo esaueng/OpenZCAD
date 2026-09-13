@@ -44,7 +44,7 @@ export function TweakPanel({
     <aside className="sidebar tweak-panel" aria-label="Parameters">
       <div className="sidebar-label">Parameters</div>
       <p className="muted tweak-panel-intro">
-        Change a value and press Enter — the model rebuilds exactly. The design
+        Change a value and press Enter, or use an on/off toggle. The design
         itself stays locked.
       </p>
       <div className="param-list tweak-panel-params">

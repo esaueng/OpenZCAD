@@ -60,6 +60,7 @@ import {
 } from './exact-shape-utils';
 import { MEASUREMENT_DEFLECTION } from './exact-witnesses';
 import { isBlendFace } from './exact-brep';
+import { separatePlanarEmboss } from './planar-emboss';
 import {
   DIRECT_EDIT_TOLERANCE,
   GEOMETRY_EPSILON,
@@ -327,6 +328,18 @@ function buildImportedStepFeature(
     if (documentScale !== 1) {
       solids = solids.map((solid) =>
         kernel.copyAndTransformSolid(solid, uniformScaleMatrix(documentScale))
+      );
+    }
+    if (data.planarEmboss) {
+      if (solids.length !== 1)
+        throw new Error(
+          'Lettering separation requires one exact source solid.'
+        );
+      solids = separatePlanarEmboss(
+        kernel,
+        solids[0]!,
+        data.planarEmboss.selection,
+        data.planarEmboss.part
       );
     }
     result.importedStepDiagnostics.set(feature.bodyId, diagnostics);

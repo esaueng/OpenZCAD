@@ -1,6 +1,6 @@
 import { useRef, useState } from 'react';
 import { Eye, EyeOff, Plus, Trash2 } from 'lucide-react';
-import type { ParameterNode } from '@openzcad/shared';
+import type { BodyId, ParameterNode } from '@openzcad/shared';
 import { formatNumber } from '../lib/model';
 
 /**
@@ -9,7 +9,15 @@ import { formatNumber } from '../lib/model';
  * browser at all — does not have to import one to edit a dimension.
  */
 
-interface ParameterRowProps {
+interface ToggleBody {
+  bodyId: BodyId;
+  name: string;
+}
+interface ToggleBindingProps {
+  bodies?: ToggleBody[];
+  onConfigureToggle?: (name: string, bodyIds: BodyId[]) => void;
+}
+interface ParameterRowProps extends ToggleBindingProps {
   parameter: ParameterNode;
   value: number | undefined;
   onSet(name: string, expression: string): void;
@@ -43,7 +51,9 @@ export function ParameterRow({
   onDelete,
   onExpose,
   exposedInTweak,
-  onDescribe
+  onDescribe,
+  bodies = [],
+  onConfigureToggle
 }: ParameterRowProps) {
   const [expression, setExpression] = useState(parameter.expression);
   const [editing, setEditing] = useState(false);
@@ -88,34 +98,48 @@ export function ParameterRow({
         title={`${parameter.name} = ${parameter.expression}`}
       >
         <span className="param-name mono">{parameter.name}</span>
-        <input
-          className="mono"
-          value={expression}
-          spellCheck={false}
-          aria-label={`Expression for ${parameter.name}`}
-          onChange={(event) => {
-            changedByUser.current = true;
-            setExpression(event.target.value);
-          }}
-          onFocus={() => {
-            changedByUser.current = false;
-            setEditing(true);
-          }}
-          onBlur={() => {
-            setEditing(false);
-            commit();
-          }}
-          onKeyDown={(event) => {
-            if (event.key === 'Enter') {
-              event.currentTarget.blur();
-            }
-            if (event.key === 'Escape') {
+        {parameter.toggle ? (
+          <button
+            type="button"
+            role="switch"
+            className="param-toggle"
+            aria-label={`Toggle ${parameter.name}`}
+            aria-checked={value === 1}
+            onClick={() => onSet(parameter.name, value === 1 ? '0' : '1')}
+          >
+            <span aria-hidden="true" />
+            {value === 1 ? 'On' : 'Off'}
+          </button>
+        ) : (
+          <input
+            className="mono"
+            value={expression}
+            spellCheck={false}
+            aria-label={`Expression for ${parameter.name}`}
+            onChange={(event) => {
+              changedByUser.current = true;
+              setExpression(event.target.value);
+            }}
+            onFocus={() => {
               changedByUser.current = false;
-              setExpression(parameter.expression);
-            }
-          }}
-        />
-        {showValue && (
+              setEditing(true);
+            }}
+            onBlur={() => {
+              setEditing(false);
+              commit();
+            }}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter') {
+                event.currentTarget.blur();
+              }
+              if (event.key === 'Escape') {
+                changedByUser.current = false;
+                setExpression(parameter.expression);
+              }
+            }}
+          />
+        )}
+        {showValue && !parameter.toggle && (
           <span
             className={`param-value mono ${value === undefined ? 'error' : ''}`}
           >
@@ -154,6 +178,16 @@ export function ParameterRow({
           </button>
         )}
       </div>
+      {parameter.toggle && onConfigureToggle && (
+        <details className="param-bindings">
+          <summary>Bodies ({parameter.toggle.bodyIds.length})</summary>
+          <ToggleBodyChoices
+            bodies={bodies}
+            selected={parameter.toggle.bodyIds}
+            onChange={(bodyIds) => onConfigureToggle(parameter.name, bodyIds)}
+          />
+        </details>
+      )}
       {describable && (
         <ParameterDescriptionField
           parameter={parameter}
@@ -221,54 +255,121 @@ function ParameterDescriptionField({
   );
 }
 
-export function AddParameterRow({
-  onSet
+function ToggleBodyChoices({
+  bodies,
+  selected,
+  onChange
 }: {
+  bodies: ToggleBody[];
+  selected: BodyId[];
+  onChange(bodyIds: BodyId[]): void;
+}) {
+  return (
+    <fieldset className="param-body-choices">
+      <legend>Show these bodies when on</legend>
+      {bodies.map((body) => (
+        <label key={body.bodyId}>
+          <input
+            type="checkbox"
+            checked={selected.includes(body.bodyId)}
+            onChange={(event) =>
+              onChange(
+                event.target.checked
+                  ? [...selected, body.bodyId]
+                  : selected.filter((id) => id !== body.bodyId)
+              )
+            }
+          />
+          <span>{body.name}</span>
+        </label>
+      ))}
+      <p>
+        Off hides these bodies and leaves them out of exports. It does not undo
+        unions or cuts.
+      </p>
+    </fieldset>
+  );
+}
+
+export function AddParameterRow({
+  onSet,
+  onConfigureToggle,
+  bodies = []
+}: ToggleBindingProps & {
   onSet(name: string, expression: string): void;
 }) {
   const [name, setName] = useState('');
   const [expression, setExpression] = useState('');
+  const [type, setType] = useState('number');
+  const [bodyIds, setBodyIds] = useState<BodyId[]>([]);
 
   function submit() {
-    if (name.trim().length > 0 && expression.trim().length > 0) {
+    if (!name.trim()) return;
+    if (type === 'toggle' && onConfigureToggle) {
+      onConfigureToggle(name.trim(), bodyIds);
+    } else if (expression.trim()) {
       onSet(name.trim(), expression.trim());
-      setName('');
-      setExpression('');
-    }
+    } else return;
+    setName('');
+    setExpression('');
+    setBodyIds([]);
   }
 
   return (
     <form
-      className="param-add"
+      className="param-create"
       onSubmit={(event) => {
         event.preventDefault();
         submit();
       }}
     >
-      <input
-        className="mono"
-        placeholder="name"
-        value={name}
-        spellCheck={false}
-        aria-label="New parameter name"
-        onChange={(event) => setName(event.target.value)}
-      />
-      <input
-        className="mono"
-        placeholder="expression"
-        value={expression}
-        spellCheck={false}
-        aria-label="New parameter expression"
-        onChange={(event) => setExpression(event.target.value)}
-      />
-      <button
-        type="submit"
-        className="icon-button"
-        title="Add parameter"
-        aria-label="Add parameter"
-      >
-        <Plus size={13} aria-hidden="true" />
-      </button>
+      {onConfigureToggle && (
+        <select
+          aria-label="New parameter type"
+          value={type}
+          onChange={(event) => setType(event.target.value)}
+        >
+          <option value="number">Number / expression</option>
+          <option value="toggle">On/off toggle</option>
+        </select>
+      )}
+      <div className="param-add">
+        <input
+          className="mono"
+          placeholder={type === 'toggle' ? 'show_text' : 'name'}
+          value={name}
+          spellCheck={false}
+          aria-label="New parameter name"
+          onChange={(event) => setName(event.target.value)}
+        />
+        {type === 'toggle' ? (
+          <span className="param-value">On</span>
+        ) : (
+          <input
+            className="mono"
+            placeholder="expression"
+            value={expression}
+            spellCheck={false}
+            aria-label="New parameter expression"
+            onChange={(event) => setExpression(event.target.value)}
+          />
+        )}
+        <button
+          type="submit"
+          className="icon-button"
+          title="Add parameter"
+          aria-label="Add parameter"
+        >
+          <Plus size={13} aria-hidden="true" />
+        </button>
+      </div>
+      {type === 'toggle' && (
+        <ToggleBodyChoices
+          bodies={bodies}
+          selected={bodyIds}
+          onChange={setBodyIds}
+        />
+      )}
     </form>
   );
 }

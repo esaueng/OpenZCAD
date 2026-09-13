@@ -17,7 +17,7 @@ export type AssetId = Brand<string, 'AssetId'>;
 export type SketchConstraintId = Brand<string, 'SketchConstraintId'>;
 export type ShaprImportId = Brand<string, 'ShaprImportId'>;
 
-export const PROJECT_DOCUMENT_SCHEMA_VERSION = 14 as const;
+export const PROJECT_DOCUMENT_SCHEMA_VERSION = 15 as const;
 export type ProjectDocumentSchemaVersion =
   typeof PROJECT_DOCUMENT_SCHEMA_VERSION;
 
@@ -378,6 +378,10 @@ export interface PartNode extends BaseNode {
 export interface ParameterNode extends BaseNode {
   kind: 'parameter';
   parameterId: ParameterId;
+  /** A 0/1 on/off control. Bound bodies are omitted from display and exports
+   * while off; their geometry and downstream feature history remain intact.
+   * An empty list is a general boolean parameter usable in expressions. */
+  toggle?: { bodyIds: BodyId[] };
   expression: string;
   value: number;
   /**
@@ -939,6 +943,12 @@ export type FeatureData =
        * still dropped with the usual warning.
        */
       solidIndices?: number[];
+      /** Exact, measured separation of raised planar lettering. Source bytes
+       * remain immutable; every rebuild re-verifies the selected footprints. */
+      planarEmboss?: {
+        part: 'base' | 'text';
+        selection: PlanarEmbossSelection;
+      };
     };
 
 /**
@@ -1417,6 +1427,19 @@ export interface RecognizedOpening {
   section: SketchObjectData[];
   /** Present when both ends also have a provable straight run along the arms. */
   height?: RecognizedArmHeight;
+  /** Verified raised lettering on one rigid arm, kept together by the recipe. */
+  lettering?: {
+    selection: PlanarEmbossSelection;
+    side: 'negative' | 'positive';
+  };
+}
+
+export interface PlanarEmbossSelection {
+  supportFaceHash: number;
+  capFaceHashes: number[];
+  normal: Vector3;
+  depth: number;
+  bounds: { min: Vector3; max: Vector3 };
 }
 
 export interface OpeningCandidate {

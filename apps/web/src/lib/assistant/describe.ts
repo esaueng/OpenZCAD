@@ -91,7 +91,7 @@ export function describeOperation(operation: CadPatchOperation): string {
     case 'add_growing_holder_hole_control':
       return `${operation.name} — drive both ${value(operation.holes[0]?.sourceDiameter ?? 0)} mounting bores of ${describeBodyRef(operation.targetBodyId)} by ${operation.parameter}`;
     case 'add_growing_holder_recipe':
-      return `${operation.name} — grow the measured ${value(operation.opening.sourceOpening)} opening of ${describeBodyRef(operation.targetBodyId)} along ${operation.opening.axis}, driven by ${operation.parameter}`;
+      return `${operation.name} — grow the measured ${value(operation.opening.sourceOpening)} opening of ${describeBodyRef(operation.targetBodyId)} along ${operation.opening.axis}, driven by ${operation.parameter}${operation.opening.lettering ? '; keep the complete lettering together with a show_text toggle' : ''}`;
     case 'add_direct_edit':
       return `${operation.name} — ${operation.operation.kind.replaceAll('-', ' ')} on ${describeBodyRef(operation.targetBodyId)}`;
     case 'add_edge_modifier':

@@ -12,10 +12,7 @@ import {
   commandsForCadPatch,
   growingHolderHistories
 } from '@openzcad/command-system';
-import {
-  createProjectDocument,
-  setParameter
-} from '@openzcad/document-core';
+import { createProjectDocument, setParameter } from '@openzcad/document-core';
 import {
   createExactKernelAdapter,
   type ExactKernelAdapter
@@ -105,7 +102,9 @@ describe('growing-holder assistant proposal', { timeout: 300_000 }, () => {
       growingHolderProposal: proposal
     });
     expect(
-      suggestions.find((suggestion) => suggestion.id === 'verified-growing-holder')
+      suggestions.find(
+        (suggestion) => suggestion.id === 'verified-growing-holder'
+      )
     ).toMatchObject({ label: 'Parameterize the opening', proposal });
     expect(describeOperation(proposal!.operations[0]!)).toContain(
       'grow the measured 44 opening'
@@ -124,9 +123,10 @@ describe('growing-holder assistant proposal', { timeout: 300_000 }, () => {
     const histories = growingHolderHistories(preflight.candidate);
     expect(histories).toHaveLength(1);
     expect(histories[0]!.recipe.parameter).toBe('opening_width');
-    const holder = preflight.candidate.derived.bodyRepresentations[
-      preflight.candidate.derived.exportableBodyIds[0]!
-    ]!;
+    const holder =
+      preflight.candidate.derived.bodyRepresentations[
+        preflight.candidate.derived.exportableBodyIds[0]!
+      ]!;
     expect(holder.bbox.min.x).toBeCloseTo(-0.5, 6);
     expect(holder.bbox.max.x).toBeCloseTo(60.5, 6);
 
@@ -137,7 +137,8 @@ describe('growing-holder assistant proposal', { timeout: 300_000 }, () => {
     });
     const derived = await adapter.syncDocument(grown);
     expect(derived.warnings).toEqual([]);
-    const grownHolder = derived.bodyRepresentations[derived.exportableBodyIds[0]!]!;
+    const grownHolder =
+      derived.bodyRepresentations[derived.exportableBodyIds[0]!]!;
     expect(grownHolder.bbox.min.x).toBeCloseTo(-8.5, 6);
     expect(grownHolder.bbox.max.x).toBeCloseTo(68.5, 6);
   });
@@ -178,5 +179,28 @@ describe('growing-holder assistant proposal', { timeout: 300_000 }, () => {
         operations: [{ ...operation, parameter: 'opening width' }]
       })
     ).toThrow();
+  });
+
+  it('accepts explicit nulls for unmeasured optional fields from structured AI output', () => {
+    const digest = createCadDocumentDigest(imported, selectionOf());
+    const proposal = createGrowingHolderProposal(imported, selectionOf())!;
+    const operation = proposal.operations[0]!;
+    if (operation.kind !== 'add_growing_holder_recipe') throw new Error('kind');
+    expect(operation.opening.height).toBeUndefined();
+    const providerOutput = {
+      ...proposal,
+      operations: [
+        {
+          ...operation,
+          opening: { ...operation.opening, height: null, lettering: null }
+        }
+      ]
+    };
+    expect(() =>
+      validateCadPatchProposalAgainstDigest(
+        parseCadPatchProposal(providerOutput, digest),
+        digest
+      )
+    ).not.toThrow();
   });
 });
