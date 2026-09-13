@@ -105,6 +105,17 @@ function validateDocument(value: unknown): asserts value is ProjectDocument {
       )
         throw new Error('Invalid project children.');
     }
+    if (node.kind === 'parameter' && node.toggle !== undefined) {
+      const toggle = record(node.toggle);
+      if (
+        !Array.isArray(toggle.bodyIds) ||
+        !toggle.bodyIds.every((id) => typeof id === 'string') ||
+        typeof node.expression !== 'string' ||
+        !['0', '1'].includes(node.expression.trim())
+      ) {
+        throw new Error('Invalid on/off parameter.');
+      }
+    }
     if (node.kind === 'feature') record(node.data);
     if (node.kind === 'sketch') record(node.planeRef);
   }

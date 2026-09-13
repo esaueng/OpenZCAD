@@ -452,6 +452,10 @@ export interface ImportedStepInput {
   stepSourceRef?: ImportedSourceReference;
   /** Partial import: declared-order solid indices to keep; absent = all. */
   solidIndices?: number[];
+  planarEmboss?: Extract<
+    FeatureData,
+    { featureKind: 'imported-step' }
+  >['planarEmboss'];
   ids?: BodyFeatureIds;
 }
 
@@ -464,6 +468,12 @@ export interface ShaprGuidedImportInput {
 export interface ParameterSetInput {
   name: string;
   expression: string;
+  ids?: ParameterIds;
+}
+
+export interface ParameterToggleInput {
+  name: string;
+  bodyIds: BodyId[];
   ids?: ParameterIds;
 }
 
@@ -2136,6 +2146,9 @@ export function importStepBody(
         : { stepSourceRef: input.stepSourceRef }),
       ...(input.solidIndices !== undefined
         ? { solidIndices: [...input.solidIndices] }
+        : {}),
+      ...(input.planarEmboss
+        ? { planarEmboss: deepClone(input.planarEmboss) }
         : {})
     }
   };
@@ -2242,6 +2255,9 @@ export function setParameter(
     (parameter) => parameter.name === name
   );
   if (existing) {
+    if (existing.toggle && !['0', '1'].includes(input.expression.trim())) {
+      throw new Error('An on/off parameter must be 0 (off) or 1 (on).');
+    }
     existing.expression = input.expression;
   } else {
     const { parameterId, parameterNodeId } = input.ids ?? createParameterIds();
@@ -2260,6 +2276,56 @@ export function setParameter(
   refreshParameterValues(next);
   next.version += 1;
   return next;
+}
+
+/** Configure an on/off control separately from scalar edits: Tweak may turn
+ * an existing switch, but only Build may create it or change its body binding. */
+export function configureParameterToggle(
+  document: ProjectDocument,
+  input: ParameterToggleInput
+): ProjectDocument {
+  const name = input.name.trim();
+  const existing = listParameters(document).find((p) => p.name === name);
+  if (existing && !existing.toggle) {
+    throw new Error(`A numeric parameter named "${name}" already exists.`);
+  }
+  const bodyIds = [...new Set(input.bodyIds)];
+  for (const bodyId of bodyIds) {
+    if (!findBodyNode(document, bodyId)) {
+      throw new Error(`Body "${bodyId}" does not exist.`);
+    }
+    if (document.derived.bodyRepresentations[bodyId]?.consumed) {
+      throw new Error(
+        'Choose a separate result body, not a consumed source body.'
+      );
+    }
+    const owner = listParameters(document).find(
+      (p) => p.name !== name && p.toggle?.bodyIds.includes(bodyId)
+    );
+    if (owner)
+      throw new Error(`This body is already controlled by "${owner.name}".`);
+  }
+  const next = existing
+    ? cloneDocument(document)
+    : setParameter(document, { name, expression: '1', ids: input.ids });
+  listParameters(next).find((p) => p.name === name)!.toggle = { bodyIds };
+  if (existing) next.version += 1;
+  return next;
+}
+
+/** Canonical visibility, independent of the local eye/isolate view settings.
+ * Invalid imported toggle values fail closed rather than exporting a body
+ * whose switch does not have a defined state. */
+export function getParameterHiddenBodyIds(
+  document: ProjectDocument
+): Set<BodyId> {
+  const hidden = new Set<BodyId>();
+  for (const parameter of listParameters(document)) {
+    if (parameter.toggle && parameter.expression.trim() !== '1') {
+      for (const bodyId of parameter.toggle.bodyIds) hidden.add(bodyId);
+    }
+  }
+  return hidden;
 }
 
 export function deleteParameter(
@@ -2608,7 +2674,8 @@ const FEATURE_DATA_KEYS: Record<FeatureKind, readonly string[]> = {
     'sourceName',
     'stepText',
     'stepSourceRef',
-    'solidIndices'
+    'solidIndices',
+    'planarEmboss'
   ],
   'imported-mesh': [
     'artifactId',

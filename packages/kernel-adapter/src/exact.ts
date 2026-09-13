@@ -10,6 +10,7 @@ import { RemusKernel, loadRemusTranslators } from './remus-runtime';
 import {
   findSketch,
   getParameterScope,
+  getParameterHiddenBodyIds,
   listFeaturesInOrder,
   listNodesByKind,
   resolveParamValue
@@ -1440,9 +1441,12 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
         remeasured,
         reusedMeasurements
       });
+      const hiddenBodies = getParameterHiddenBodyIds(document);
       return {
         bodyRepresentations,
-        exportableBodyIds,
+        exportableBodyIds: exportableBodyIds.filter(
+          (id) => !hiddenBodies.has(id)
+        ),
         warnings: build.warnings,
         updatedAt: nowIso(),
         ...(build.referenceRepairs.length > 0
@@ -1501,13 +1505,16 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     document: ProjectDocument,
     bodyIds: BodyId[]
   ): number[] {
-    const solids = bodyIds.flatMap((bodyId) => {
-      const shape = build.shapes.get(bodyId);
-      if (!shape) {
-        throw new Error(`Body ${bodyId} has no exact geometry.`);
-      }
-      return shape.solids;
-    });
+    const hidden = getParameterHiddenBodyIds(document);
+    const solids = bodyIds
+      .filter((id) => !hidden.has(id))
+      .flatMap((bodyId) => {
+        const shape = build.shapes.get(bodyId);
+        if (!shape) {
+          throw new Error(`Body ${bodyId} has no exact geometry.`);
+        }
+        return shape.solids;
+      });
     if (solids.length === 0) {
       throw new Error('Select at least one body to export.');
     }

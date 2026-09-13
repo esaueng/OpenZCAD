@@ -460,3 +460,61 @@
   border-left: 2px solid var(--color-warning);
   padding-left: 8px;
 }
+
+.param-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 26px;
+  font-size: var(--fs-xs);
+}
+.param-toggle > span {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--color-text-muted);
+}
+.param-toggle[aria-checked='true'] > span {
+  background: var(--color-accent);
+}
+.param-toggle[aria-checked='true'] {
+  color: var(--color-accent);
+}
+.param-create > select {
+  width: 100%;
+  margin-top: 6px;
+  padding: 3px 6px;
+  font-size: var(--fs-xs);
+}
+.param-bindings {
+  padding: 3px 0 5px;
+  font-size: var(--fs-xs);
+  color: var(--color-text-muted);
+}
+.param-bindings > summary {
+  cursor: pointer;
+}
+.param-body-choices {
+  margin: 6px 0;
+  padding: 6px;
+  min-width: 0;
+  border: 1px solid var(--color-border);
+  font-size: var(--fs-xs);
+}
+.param-body-choices label {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  padding: 3px 0;
+}
+.param-body-choices label span {
+  overflow-wrap: anywhere;
+}
+.param-body-choices input {
+  flex: 0 0 auto;
+}
+.param-body-choices p {
+  color: var(--color-text-muted);
+  margin: 5px 0 0;
+}

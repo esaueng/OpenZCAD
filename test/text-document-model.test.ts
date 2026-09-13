@@ -626,8 +626,9 @@ describe('existing documents are unaffected', () => {
     // Bumping this pin means re-verifying the assertion below: v10 added the
     // additive `split` feature kind, v11 the additive `hole` kind, v12
     // the optional `solidIndices` partial-import field, and v13 the additive
-    // guided Shapr import collections; none needs a node migration.
-    expect(PROJECT_DOCUMENT_SCHEMA_VERSION).toBe(14);
+    // guided Shapr import collections; v14 adds history and v15 optional
+    // parameter toggles. None needs a legacy node migration.
+    expect(PROJECT_DOCUMENT_SCHEMA_VERSION).toBe(15);
     // Nothing but the version stamp moves.
     expect({ ...migrated, schemaVersion: 6 }).toEqual(legacy);
   });
