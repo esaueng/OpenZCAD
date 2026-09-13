@@ -59,7 +59,9 @@ export function recipeFromRecognizedOpening(
  * JSON. The preview and later tooling read the recipe back from here and then
  * verify the surrounding history against it; the metadata alone proves nothing.
  */
-export const GROWING_HOLDER_RECIPE_METADATA_KEY = 'openzcad.growingHolderRecipe';
+export const GROWING_HOLDER_RECIPE_METADATA_KEY =
+  'openzcad.growingHolderRecipe';
+const TEXT_BODY_METADATA_KEY = 'openzcad.growingHolderTextBody';
 
 export type OpeningAxis = 'x' | 'y' | 'z';
 
@@ -94,7 +96,7 @@ export interface GrowingHolderHeight {
 export interface GrowingHolderRecipe {
   version: 1;
   name: string;
-  /** The unmodified imported STEP body the recipe carves. */
+  /** Imported source the recipe carves; original STEP bytes are immutable. */
   targetBodyId: BodyId;
   /** World axis along which the opening is measured and the ends move. */
   axis: OpeningAxis;
@@ -121,6 +123,7 @@ export interface GrowingHolderRecipe {
   section: SketchObjectData[];
   /** Optional arm-height control; additive, absent on older recipes. */
   height?: GrowingHolderHeight;
+  lettering?: RecognizedOpening['lettering'];
 }
 
 /** A rigid piece of the source: the intersection with `mask`, then moved. */
@@ -179,7 +182,24 @@ const literal = (value: number): string =>
 const tidy = (value: number) => Math.round(value * 1e9) / 1e9;
 const zeroMove = (): Record<OpeningAxis, ParamValue> => ({ x: 0, y: 0, z: 0 });
 
-export function growingHolderPlan(recipe: GrowingHolderRecipe): GrowingHolderPlan {
+function textMove(
+  recipe: GrowingHolderRecipe
+): Record<OpeningAxis, ParamValue> {
+  if (!recipe.lettering || !recipe.height)
+    throw new Error('Text placement requires measured lettering and height.');
+  const plan = growingHolderPlan(recipe);
+  const move = zeroMove();
+  move[recipe.axis] =
+    recipe.lettering.side === 'negative'
+      ? plan.negativeShift
+      : plan.positiveShift;
+  move[recipe.height.axis] = `(${plan.height!.shift}) / 2`;
+  return move;
+}
+
+export function growingHolderPlan(
+  recipe: GrowingHolderRecipe
+): GrowingHolderPlan {
   const width = `require_min(${recipe.parameter}, ${literal(recipe.minimumOpening)})`;
   const source = literal(recipe.sourceOpening);
   const { min, max } = recipe.envelope;
@@ -262,10 +282,26 @@ export function growingHolderPlan(recipe: GrowingHolderRecipe): GrowingHolderPla
     ...base,
     height: { value: heightValue, shift: heightShift, bridgeLength: armLength },
     pieces: [
-      { key: 'negativeLower', mask: split(negative, 'lower'), move: sideMove('negative') },
-      { key: 'negativeUpper', mask: split(negative, 'upper'), move: upperMove('negative') },
-      { key: 'positiveLower', mask: split(positive, 'lower'), move: sideMove('positive') },
-      { key: 'positiveUpper', mask: split(positive, 'upper'), move: upperMove('positive') }
+      {
+        key: 'negativeLower',
+        mask: split(negative, 'lower'),
+        move: sideMove('negative')
+      },
+      {
+        key: 'negativeUpper',
+        mask: split(negative, 'upper'),
+        move: upperMove('negative')
+      },
+      {
+        key: 'positiveLower',
+        mask: split(positive, 'lower'),
+        move: sideMove('positive')
+      },
+      {
+        key: 'positiveUpper',
+        mask: split(positive, 'upper'),
+        move: upperMove('positive')
+      }
     ],
     bridges: [widthBridge, armBridge('negative'), armBridge('positive')],
     unionOrder: [
@@ -305,12 +341,12 @@ function isNumericSectionObject(object: unknown): object is SketchObjectData {
 }
 
 const isSection = (value: unknown): value is SketchObjectData[] =>
-  Array.isArray(value) && value.length >= 2 && value.every(isNumericSectionObject);
+  Array.isArray(value) &&
+  value.length >= 2 &&
+  value.every(isNumericSectionObject);
 
 /** Throws with the first structural or numeric defect of a recipe. */
-export function validateGrowingHolderRecipe(
-  recipe: GrowingHolderRecipe
-): void {
+export function validateGrowingHolderRecipe(recipe: GrowingHolderRecipe): void {
   if (recipe.version !== 1)
     throw new Error('Unsupported growing-holder recipe version.');
   if (typeof recipe.name !== 'string' || !recipe.name.trim())
@@ -391,12 +427,23 @@ export function validateGrowingHolderRecipe(
     throw new Error('The minimum height must be positive.');
   if (height.minimumHeight > height.sourceHeight)
     throw new Error('The minimum height cannot exceed the source height.');
-  if (height.cuts[1] - height.cuts[0] + height.minimumHeight - height.sourceHeight <= 0)
+  if (
+    height.cuts[1] -
+      height.cuts[0] +
+      height.minimumHeight -
+      height.sourceHeight <=
+    0
+  )
     throw new Error(
       'The arm bridge would vanish at the minimum height; raise the minimum or widen the cuts.'
     );
-  if (!isSection(height.sections?.negative) || !isSection(height.sections?.positive))
-    throw new Error('Each arm section needs at least two numeric lines or arcs.');
+  if (
+    !isSection(height.sections?.negative) ||
+    !isSection(height.sections?.positive)
+  )
+    throw new Error(
+      'Each arm section needs at least two numeric lines or arcs.'
+    );
 }
 
 function sourceFeature(
@@ -420,7 +467,9 @@ function sourceFeature(
             f.data.targetBodyIds.includes(targetBodyId))
       )
   )
-    throw new Error('Growing-holder recipes require an unmodified imported source.');
+    throw new Error(
+      'Growing-holder recipes require an unmodified imported source.'
+    );
   return source;
 }
 
@@ -456,7 +505,9 @@ const boxDimensions = (box: Box3) => ({
  * operands and the kernel's plane split cannot cross the curved faces of a
  * real section. Sketches and extrusions rebuild each straight section at its
  * parametric length, the pieces move, and one union joins the holder.
- * Nothing is inferred and the source is not edited.
+ * Nothing is inferred and the source bytes are not edited. A verified
+ * lettering selection can make the import produce only the plain support,
+ * while a second reference produces the original raised profiles.
  *
  * The carving reads no parameter, so its checkpoints survive every edit;
  * only the bridges, the moves and the union rebuild.
@@ -467,17 +518,44 @@ export function growingHolderCommand(
 ): GrowingHolderCompilation {
   validateGrowingHolderRecipe(recipe);
   const source = sourceFeature(document, recipe.targetBodyId);
-  const sourceData = source.data;
-  if (sourceData.featureKind !== 'imported-step') throw new Error('unreachable');
+  let sourceData = source.data;
+  if (sourceData.featureKind !== 'imported-step')
+    throw new Error('unreachable');
   const plan = growingHolderPlan(recipe);
   const commands: AnyCommand[] = [];
-  const parameters: [string, number][] = [[recipe.parameter, recipe.sourceOpening]];
+  const originalSourceData = sourceData;
+  if (recipe.lettering) {
+    if (!recipe.height)
+      throw new Error('Grouped lettering requires a measured height control.');
+    if (sourceData.planarEmboss)
+      throw new Error('The imported source already has separated lettering.');
+    if (hasParameter(document, 'show_text'))
+      throw new Error(
+        'A show_text parameter already exists. Rename it before creating the lettering control.'
+      );
+    sourceData = {
+      ...sourceData,
+      planarEmboss: { part: 'base', selection: recipe.lettering.selection }
+    };
+    commands.push(
+      commandFactories.updateFeature({
+        featureId: source.featureId,
+        data: sourceData
+      })
+    );
+  }
+  const parameters: [string, number][] = [
+    [recipe.parameter, recipe.sourceOpening]
+  ];
   if (recipe.height)
     parameters.push([recipe.height.parameter, recipe.height.sourceHeight]);
   for (const [parameter, value] of parameters)
     if (!hasParameter(document, parameter))
       commands.push(
-        commandFactories.setParameter({ name: parameter, expression: String(value) })
+        commandFactories.setParameter({
+          name: parameter,
+          expression: String(value)
+        })
       );
   const bodies: Record<string, BodyId> = {};
   plan.pieces.forEach((piece, index) => {
@@ -526,7 +604,11 @@ export function growingHolderCommand(
     commands.push(
       commandFactories.addSketch({
         name: `${recipe.name}: ${bridge.key} section`,
-        planeRef: { type: 'canonical', plane: bridge.plane, offset: bridge.offset },
+        planeRef: {
+          type: 'canonical',
+          plane: bridge.plane,
+          offset: bridge.offset
+        },
         objects: bridge.section,
         ids: section
       })
@@ -569,6 +651,45 @@ export function growingHolderCommand(
       metadata: { [GROWING_HOLDER_RECIPE_METADATA_KEY]: JSON.stringify(recipe) }
     })
   );
+  if (recipe.lettering) {
+    const text = createBodyFeatureIds();
+    commands.push(
+      commandFactories.importStep({
+        ...originalSourceData,
+        name: 'Text',
+        ids: text,
+        planarEmboss: { part: 'text', selection: recipe.lettering.selection }
+      })
+    );
+    commands.push(
+      commandFactories.transformBody({
+        name: 'Keep text together',
+        targetBodyId: text.bodyId,
+        translation: textMove(recipe),
+        ids: createFeatureOnlyIds()
+      })
+    );
+    commands.push(
+      commandFactories.configureParameterToggle({
+        name: 'show_text',
+        bodyIds: [text.bodyId]
+      })
+    );
+    commands.push(
+      commandFactories.setParameterDescription({
+        name: 'show_text',
+        description:
+          'Show or hide the complete lettering, including in exports.'
+      })
+    );
+    commands.push(
+      commandFactories.setNodeMetadata({
+        nodeId: result.featureNodeId,
+        metadata: { [TEXT_BODY_METADATA_KEY]: text.bodyId }
+      })
+    );
+    bodies.text = text.bodyId;
+  }
   return {
     command: composeCommands(recipe.name, commands),
     bodyId: result.bodyId,
@@ -603,6 +724,7 @@ export interface GrowingHolderHistory {
   pieceSources: Record<string, BodyId>;
   /** The intersect feature of each piece, by piece key. */
   pieceFeatures: Record<string, FeatureNode>;
+  text?: { bodyId: BodyId; move: Record<OpeningAxis, ParamValue> };
 }
 
 function parseRecipe(value: unknown): GrowingHolderRecipe | null {
@@ -636,7 +758,9 @@ function sameNumericObject(a: unknown, b: unknown): boolean {
 }
 
 const sameValue = (actual: ParamValue | undefined, expected: ParamValue) =>
-  typeof expected === 'string' ? actual === expected : sameNumbers(actual, expected);
+  typeof expected === 'string'
+    ? actual === expected
+    : sameNumbers(actual, expected);
 
 function translationMatches(
   data: FeatureNode['data'],
@@ -646,7 +770,9 @@ function translationMatches(
   return (
     data.featureKind === 'transform' &&
     data.targetBodyId === target &&
-    AXES.every((axis) => sameValue(data.transform.translation[axis], translation[axis])) &&
+    AXES.every((axis) =>
+      sameValue(data.transform.translation[axis], translation[axis])
+    ) &&
     Object.values(data.transform.rotationDeg).every((v) => sameNumbers(v, 0)) &&
     (data.transform.scale === undefined || sameNumbers(data.transform.scale, 1))
   );
@@ -682,7 +808,8 @@ export function growingHolderHistories(
     translation: Record<OpeningAxis, ParamValue>
   ): FeatureNode | null | false => {
     const targeting = moves.filter(
-      (f) => f.data.featureKind === 'transform' && f.data.targetBodyId === target
+      (f) =>
+        f.data.featureKind === 'transform' && f.data.targetBodyId === target
     );
     if (AXES.every((axis) => translation[axis] === 0))
       return targeting.length === 0 ? null : false;
@@ -767,7 +894,10 @@ export function growingHolderHistories(
       pieceFeatures[piece.key] = carved.feature;
     });
     if (!intact) continue;
-    const bridgeFeatures: Record<string, { sketch: FeatureNode; extrude: FeatureNode }> = {};
+    const bridgeFeatures: Record<
+      string,
+      { sketch: FeatureNode; extrude: FeatureNode }
+    > = {};
     for (const bridge of plan.bridges) {
       const extrude = byBody.get(bodies[bridge.key]!);
       if (!live(extrude)) {
@@ -826,6 +956,25 @@ export function growingHolderHistories(
       plan.pieces.find((p) => p.key === baseKeys[1])!.move
     );
     if (!negativeMove || !positiveMove) continue;
+    let text: GrowingHolderHistory['text'];
+    if (recipe.lettering) {
+      const textId = union.metadata?.[TEXT_BODY_METADATA_KEY] as
+        BodyId | undefined;
+      const textImport = textId && byBody.get(textId);
+      if (
+        !textId ||
+        !live(textImport) ||
+        textImport.data.featureKind !== 'imported-step' ||
+        textImport.data.planarEmboss?.part !== 'text' ||
+        JSON.stringify(textImport.data.planarEmboss.selection) !==
+          JSON.stringify(recipe.lettering.selection) ||
+        JSON.stringify({ ...textImport.data, planarEmboss: undefined }) !==
+          JSON.stringify({ ...source.data, planarEmboss: undefined }) ||
+        !movedExactly(textId, textMove(recipe))
+      )
+        continue;
+      text = { bodyId: textId, move: textMove(recipe) };
+    }
     histories.push({
       recipe,
       plan,
@@ -843,7 +992,8 @@ export function growingHolderHistories(
       resultBodyId: union.bodyId,
       bodies,
       pieceSources,
-      pieceFeatures
+      pieceFeatures,
+      ...(text ? { text } : {})
     });
   }
   return histories;

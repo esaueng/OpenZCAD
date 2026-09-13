@@ -15,6 +15,7 @@ import type {
   Vector3
 } from '@openzcad/shared';
 import type { RemusKernel } from './remus-runtime';
+import { recognizePlanarEmboss } from './planar-emboss';
 import {
   detectReflectionSymmetries,
   measureAnalyticInventory,
@@ -622,6 +623,11 @@ export function recognizeOpening(
     tolerance
   );
   const sectionLength = cuts[1] - cuts[0];
+  const emboss = typeof height === 'string' ? null : recognizePlanarEmboss(kernel, solid);
+  const side = emboss && (
+    emboss.bounds.max[axis] < cuts[0] ? 'negative' :
+    emboss.bounds.min[axis] > cuts[1] ? 'positive' : null
+  );
   return {
     status: 'recognized',
     opening: {
@@ -635,7 +641,8 @@ export function recognizeOpening(
       sourceOpening: candidate.opening,
       minimumOpening: round(candidate.opening - sectionLength + MIN_BRIDGE),
       section: proof.section.map((edge) => edge.data),
-      ...(typeof height === 'string' ? {} : { height })
+      ...(typeof height === 'string' ? {} : { height }),
+      ...(emboss && side ? { lettering: { selection: emboss, side } } : {})
     },
     evidence: {
       candidate,
