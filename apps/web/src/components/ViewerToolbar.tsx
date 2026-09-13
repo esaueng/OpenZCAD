@@ -31,6 +31,18 @@ function viewTitle(view: { id: StandardView; shortcut?: string }): string {
   return view.shortcut ? `${label} (${view.shortcut})` : label;
 }
 
+/**
+ * What the viewport is showing for the active cut, which is two different
+ * things: the clipped preview that keeps up with a drag, and the kernel's
+ * exact section, which is the geometry the DXF export writes. The user is
+ * told which one is on screen, because only one of them is a drawing.
+ */
+export interface SectionOutlineStatus {
+  kind: 'clipping' | 'computing' | 'exact' | 'refused';
+  /** One line of detail: the cut area, or why there is no exact section. */
+  detail: string;
+}
+
 interface ViewerToolbarProps {
   settings: ViewerSettings;
   projection: ProjectionMode;
@@ -48,7 +60,19 @@ interface ViewerToolbarProps {
   /** Advances the section view: off → XY → XZ → YZ → off. */
   onCycleSection(): void;
   onSectionOffset(offset: number): void;
+  /** The section plane came to rest; the exact section can be computed. */
+  onSectionCommit(): void;
+  /** Writes the exact section as a DXF drawing. */
+  onExportSectionDxf(): void;
+  sectionOutline: SectionOutlineStatus;
 }
+
+const SECTION_OUTLINE_LABELS: Record<SectionOutlineStatus['kind'], string> = {
+  clipping: 'Clipping preview',
+  computing: 'Computing section…',
+  exact: 'Exact section',
+  refused: 'No exact section'
+};
 
 const SECTION_PLANE_LABELS: Record<SectionPlaneId, string> = {
   XY: 'XY plane',
@@ -77,7 +101,10 @@ export function ViewerToolbar({
   onCycleDisplayMode,
   onToggleProjection,
   onCycleSection,
-  onSectionOffset
+  onSectionOffset,
+  onSectionCommit,
+  onExportSectionDxf,
+  sectionOutline
 }: ViewerToolbarProps) {
   const [viewsOpen, setViewsOpen] = useState(false);
   const anchorRef = useRef<HTMLDivElement | null>(null);
@@ -212,8 +239,37 @@ export function ViewerToolbar({
               step={(sectionRange.max - sectionRange.min) / 200 || 0.1}
               value={settings.sectionView.offset}
               onChange={(event) => onSectionOffset(Number(event.target.value))}
+              // The drag itself stays on the clipped preview; the exact
+              // section is computed once the plane comes to rest.
+              onPointerUp={onSectionCommit}
+              onKeyUp={onSectionCommit}
               aria-label="Section plane offset"
             />
+            <p
+              className={`rail-section-state is-${sectionOutline.kind}`}
+              role="status"
+            >
+              <span className="rail-section-state-kind">
+                {SECTION_OUTLINE_LABELS[sectionOutline.kind]}
+              </span>
+              <span className="rail-section-state-detail">
+                {sectionOutline.detail}
+              </span>
+            </p>
+            <Tooltip
+              label="Export section"
+              description="Writes the exact section curves as DXF"
+            >
+              <button
+                type="button"
+                className="rail-section-export"
+                onClick={onExportSectionDxf}
+                disabled={sectionOutline.kind !== 'exact'}
+                aria-label="Export the exact section as DXF"
+              >
+                DXF
+              </button>
+            </Tooltip>
           </div>
         )}
       </div>

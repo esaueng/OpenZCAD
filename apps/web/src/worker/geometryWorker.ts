@@ -7,8 +7,10 @@ import type {
 import type {
   createExactKernelAdapter,
   DxfFaceSelector,
+  ExactSectionPlane,
   MeshQualityReport,
   RebuildProgress,
+  SectionOutlineReport,
   SketchSolveOutcome
 } from '@openzcad/kernel-adapter/exact';
 import {
@@ -27,7 +29,8 @@ import { preloadDocumentFonts } from '../lib/textFonts';
  * `stl-binary`, `3mf`, `obj`, and `glb` produce bytes. Mesh formats accept
  * a deflection in millimetres — chordal tolerance after unit scaling —
  * defaulting to the adapter's standard export tessellation when omitted.
- * `dxf` exports ONE planar face's outline and requires the `face` field.
+ * `dxf` exports a 2D outline and requires either a `face` (one planar
+ * face's outline) or a `section` plane (the exact cross-section).
  */
 export type GeometryExportFormat =
   'step' | 'stl' | 'dxf' | 'stl-binary' | '3mf' | 'obj' | 'glb';
@@ -47,8 +50,21 @@ export type GeometryWorkerRequest =
       bodyIds: BodyId[];
       format: GeometryExportFormat;
       deflection?: number;
-      /** Required for 'dxf': the planar face whose outline to export. */
+      /** One 'dxf' source: the planar face whose outline to export. */
       face?: DxfFaceSelector;
+      /** The other 'dxf' source: the plane whose exact section to export. */
+      section?: ExactSectionPlane;
+    }
+  | {
+      /**
+       * The exact, kernel-computed section at one plane. Requested when the
+       * section plane comes to rest, never while it is being dragged: the
+       * viewport's clipped preview owns the drag.
+       */
+      type: 'section';
+      requestId: string;
+      document: ProjectDocument;
+      plane: ExactSectionPlane;
     }
   | {
       type: 'mesh-quality';
@@ -146,6 +162,15 @@ export type GeometryMeshQualityResult =
     }
   | { type: 'mesh-quality'; ok: false; requestId: string; error: string };
 
+export type GeometrySectionResult =
+  | {
+      type: 'section';
+      ok: true;
+      requestId: string;
+      report: SectionOutlineReport;
+    }
+  | { type: 'section'; ok: false; requestId: string; error: string };
+
 export type GeometrySolveSketchResult =
   | {
       type: 'solve-sketch';
@@ -161,6 +186,7 @@ export type GeometryWorkerResult =
   | GeometrySyncResult
   | GeometryExportResult
   | GeometryMeshQualityResult
+  | GeometrySectionResult
   | GeometrySolveSketchResult;
 
 type ExactKernel = Awaited<ReturnType<typeof createExactKernelAdapter>>;
@@ -309,6 +335,7 @@ async function execute(job: GeometryWorkerJob): Promise<void> {
     if (
       request.type === 'export' ||
       request.type === 'mesh-quality' ||
+      request.type === 'section' ||
       request.type === 'solve-sketch'
     ) {
       // 'failed' means the next load call retries, so it is a loading state
@@ -334,6 +361,17 @@ async function execute(job: GeometryWorkerJob): Promise<void> {
         post(stateFor('ready', request, { stale: false }));
         return;
       }
+      if (request.type === 'section') {
+        const report = await exact.sectionOutline(document, request.plane);
+        post({
+          type: 'section',
+          ok: true,
+          requestId: request.requestId,
+          report
+        });
+        post(stateFor('ready', request, { stale: false }));
+        return;
+      }
       if (request.type === 'mesh-quality') {
         const report = await exact.meshQuality(
           document,
@@ -350,10 +388,12 @@ async function execute(job: GeometryWorkerJob): Promise<void> {
         return;
       }
       if (request.format === 'dxf') {
-        if (!request.face) {
-          throw new Error('DXF export needs a face selection.');
+        if (!request.face && !request.section) {
+          throw new Error('DXF export needs a face selection or a section plane.');
         }
-        const text = await exact.exportFaceDxf(document, request.face);
+        const text = request.section
+          ? await exact.exportSectionDxf(document, request.section)
+          : await exact.exportFaceDxf(document, request.face!);
         post({
           type: 'export',
           ok: true,
@@ -466,6 +506,13 @@ async function execute(job: GeometryWorkerJob): Promise<void> {
     } else if (request.type === 'mesh-quality') {
       post({
         type: 'mesh-quality',
+        ok: false,
+        requestId: request.requestId,
+        error: message
+      });
+    } else if (request.type === 'section') {
+      post({
+        type: 'section',
         ok: false,
         requestId: request.requestId,
         error: message
