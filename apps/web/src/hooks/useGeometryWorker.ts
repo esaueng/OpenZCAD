@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { documentForWorker } from '../lib/meshTransport';
+import { describeWorkerFailure } from '../lib/workerFailure';
 import type { BodyId, ProjectDocument, SketchId } from '@openzcad/shared';
 import type { CommandManager } from '@openzcad/command-system';
 import { mark, measure, timed } from '../lib/perf';
@@ -236,7 +237,11 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
       stateSubscribers.current.clear();
     };
 
-    const failAndMaybeRespawn = (failed: Worker | null, message: string) => {
+    const failAndMaybeRespawn = (
+      failed: Worker | null,
+      message: string,
+      reloadRequired = false
+    ) => {
       if (failed && workerRef.current !== failed) {
         return; // A stale handler from an already-replaced worker.
       }
@@ -244,7 +249,7 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
       lastSyncedKey.current = null;
       failed?.terminate();
       workerRef.current = null;
-      if (!disposed && respawnsSinceReady < RESPAWN_LIMIT) {
+      if (!disposed && !reloadRequired && respawnsSinceReady < RESPAWN_LIMIT) {
         respawnsSinceReady += 1;
         hostRef.current.onError(
           `${message} Restarting the geometry worker (attempt ${respawnsSinceReady} of ${RESPAWN_LIMIT}).`
@@ -268,7 +273,9 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
           error: message
         });
         hostRef.current.onError(
-          `${message} The geometry worker could not be restarted; reload the page to recover.`
+          reloadRequired
+            ? message
+            : `${message} The geometry worker could not be restarted; reload the page to recover.`
         );
       }
     };
@@ -437,7 +444,11 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
       };
 
       worker.onerror = () => {
-        failAndMaybeRespawn(worker, 'Geometry worker crashed.');
+        void describeWorkerFailure('Geometry worker crashed.').then(
+          ({ message, reloadRequired }) => {
+            if (!disposed) failAndMaybeRespawn(worker, message, reloadRequired);
+          }
+        );
       };
       worker.onmessageerror = () => {
         failAndMaybeRespawn(
