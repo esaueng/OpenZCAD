@@ -1,11 +1,11 @@
 # Agent Instructions — Executing the Roadmaps
 
-You are working through the 2026-08-29 roadmaps. The authoritative plans are
-`docs/kernel-roadmap-remus.md` (kernel) and `docs/cad-feature-roadmap.md`
-(product) in this repo — read the one your item comes from in full before
-writing any code. This document tells you how to execute them: how to pick an
-item, where each kind of work goes, the acceptance bar, and how to report so
-the plans cannot rot.
+Start with [ROADMAP.md](../../ROADMAP.md), the single source of truth for
+priorities, dependencies and delivery status. Select one master ID and a bounded
+slice, then read its linked supporting specification before implementation.
+Older feature/kernel roadmaps and per-plan phase tables are technical and
+historical references, not separate queues. Root `AGENTS.md` owns repository
+verification and delivery constraints; this file describes roadmap bookkeeping.
 
 ## Repos, and where each kind of work goes
 
@@ -33,34 +33,20 @@ the plans cannot rot.
   product until a pin bump lands with the full CI matrix green, including
   `pnpm test:parity-corpus`.
 
-## Reconciled entry points (2026-09-12)
-
-The playbooks below were written for the original roadmap. K-S5's original
-app hygiene and P1-S1 Slices A/B have shipped. S-2 persistent driving
-annotations, including radius, have shipped; saved placement and
-driven/reference dimensions remain, and solve feedback is still open.
-Read each roadmap's dated disposition before reusing a playbook; do not
-reimplement a completed slice. The holder workflow has its own current
-[disposition table](step-parameter-hammer-holder-plan.md#current-disposition-2026-09-12-openzcad-28d1551f).
-
 ## Picking an item
 
-1. Check open PRs in the repo you'd touch (`list_pull_requests` / the PR
-   list) so you don't collide with in-flight work. An item with an open PR is
-   owned; pick another.
-2. Pick **one bounded item** per session, in this priority order unless your
-   operator says otherwise:
-   - Kernel Track S items (S5 hygiene → S1 defects → S3 cancellation → S4
-     infra → S2 measurement) before kernel capability items.
-   - Product Phase 1 items (all kernel-independent) any time, in parallel
-     with kernel work.
-   - Capability items (kernel C1–C7, product Phases 2+) only when their
-     stated dependency rows are green.
-3. Prefer the smallest item that closes a measured gap over a large item you
-   can only start. A finished S is worth more than a stranded L.
-4. If an item turns out bigger than its roadmap estimate, stop, record what
-   you learned as a disposition note (see Reporting), and either re-scope or
-   pick another item. Do not silently widen the diff.
+1. Refresh `origin/main`, the consumer kernel pin and live open PRs/files.
+   Respect current ownership; do not publish a competing overlap. A stacked
+   slice must name its dependency and use the appropriate base branch.
+2. Select one master ID following the master's next-pick order and dependencies
+   unless the operator selects another. Reproduce `Revalidate` findings before
+   a fix; retained historical acceptance text is not proof of a present defect.
+3. Write the slice's acceptance cases and exclusions before implementation.
+   If it needs splitting, add named child IDs under the master row rather than
+   a second backlog. Do not change a whole row to complete for a partial slice.
+4. If blocked, record the blocker and remaining evidence on that master row;
+   do not silently switch to another item. Preserve dirty user work in the
+   original checkout and use a new isolated branch.
 
 ## Ground rules (both repos)
 
@@ -93,11 +79,11 @@ reimplement a completed slice. The holder workflow has its own current
   divergence — when your change fixes a pinned defect, retire the pin in the
   same PR, with the fix as evidence.
 
-## Item playbooks
+## Historical item playbooks
 
-Concrete starter specs for the front of the queue. Each ends with its
-acceptance bar. Items not listed here: derive the same structure from the
-roadmap entry before coding, and put that derivation in your PR description.
+These original starter specs retain useful acceptance detail. They do not
+select work: K-S5 and the driving-constraint/annotation slices have shipped.
+Use the master row to identify the actual remainder before reusing a playbook.
 
 ### K-S5 — Doc and pin hygiene (OpenZCAD, S)
 
@@ -250,14 +236,12 @@ typed refusal, not a hang.
 1. The roadmap item's stated acceptance/exit signal is met, with tests.
 2. Full verification gate green locally; PR opened (never draft), checks
    read from the actual head SHA before any merge decision.
-3. Docs moved in the same PR: capability matrix / TODO.md rows the change
-   affects, ADR amendment if a contract changed.
-4. **Disposition line added to the roadmap doc itself** — the item's entry
-   in `docs/kernel-roadmap-remus.md` or `docs/cad-feature-roadmap.md` gains
-   a one-line `— done (PR #N)` / `— partial: <what remains>` /
-   `— re-scoped: <why>` marker, the same maintenance rule the remus
-   stabilization plan uses. A plan that cannot rot is the deliverable as
-   much as the code.
+3. Update a supporting specification or ADR in the same PR if its contract
+   changes. Do not maintain parallel status tables in TODO or the old plans.
+4. **Update the selected master ID in `ROADMAP.md`** with status, delivered
+   subset, PR/commit and test evidence, remaining acceptance, and changed
+   dependencies. Distinguish merged implementation from live acceptance;
+   preserve the stable ID when moving a completed row into the baseline.
 5. Final report separates: shipped and verified / stubbed or flagged /
    risks found / recommended next item.
 

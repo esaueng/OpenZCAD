@@ -1,5 +1,11 @@
 # Text Feature Plan — Text on 3D Models (Emboss / Engrave)
 
+> **Supporting record — consolidated 2026-09-12.**
+> [The master roadmap](../../ROADMAP.md) owns priorities, dependencies and current
+> delivery status. Original phase/status/next-step instructions below are
+> historical; technical contracts and explicit exclusions remain reference material.
+> Shipped feature design record; no active implementation queue.
+
 > **Historical design record.** The text feature shipped: schema-backed
 > sketch text, seven bundled font families, the `T` sketch-text tool, and
 > emboss/engrave through the ordinary extrude and boolean flows. The kernel

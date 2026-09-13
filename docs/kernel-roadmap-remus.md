@@ -1,5 +1,11 @@
 # Kernel roadmap: Remus in OpenZCAD (2026-08-29)
 
+> **Supporting record — consolidated 2026-09-12.**
+> [The master roadmap](../ROADMAP.md) owns priorities, dependencies and current
+> delivery status. Original phase/status/next-step instructions below are
+> historical; technical contracts and explicit exclusions remain reference material.
+> Consumer requirements and dated kernel diagnoses; verify upstream support before implementation.
+
 **Scope.** What to do next on the kernel — and on OpenZCAD's use of it — to make
 this the most stable, most capable open-source web-based CAD application of its
 kind. Drafted from a full review of the pinned Remus checkout (`remus-wasm`
@@ -22,9 +28,9 @@ which of those milestones OpenZCAD actually needs first, which defects and gaps
 the app has measured that the kernel program does not yet own, and the
 web-platform and open-source work that belongs to neither existing plan.
 `docs/kernel-roadmap.md` and `docs/kernel-execution-plan.md` are BrepKit-era
-historical records and stay that way; `TODO.md` remains the product roadmap,
-and [cad-feature-roadmap.md](cad-feature-roadmap.md) is the product-level
-feature companion to this document.
+historical records and stay that way. [ROADMAP.md](../ROADMAP.md) now owns all
+product and consumer delivery status; [cad-feature-roadmap.md](cad-feature-roadmap.md)
+retains the product feature specifications.
 
 ---
 

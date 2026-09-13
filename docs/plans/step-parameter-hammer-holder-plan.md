@@ -1,5 +1,11 @@
 # STEP-to-parameter hammer holder: implementation plan (revised 2026-09-11)
 
+> **Supporting record — consolidated 2026-09-12.**
+> [The master roadmap](../../ROADMAP.md) owns priorities, dependencies and current
+> delivery status. Original phase/status/next-step instructions below are
+> historical; technical contracts and explicit exclusions remain reference material.
+> Construction, parameter and acceptance specification for H01–H03; delivery notes below are dated evidence, not a separate queue.
+
 ## Goal and definition of done
 
 A user imports the original hammer-holder STEP file into OpenZCAD, attaches the

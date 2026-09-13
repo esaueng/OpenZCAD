@@ -1,5 +1,11 @@
 # UI refinement plan — plan of record (2026-09-02)
 
+> **Supporting record — consolidated 2026-09-12.**
+> [The master roadmap](../../ROADMAP.md) owns priorities, dependencies and current
+> delivery status. Original phase/status/next-step instructions below are
+> historical; technical contracts and explicit exclusions remain reference material.
+> Dated UI findings and deliveries; revalidate remaining U02/U03/S06 findings on the current column UI.
+
 Status: in progress (2026-09-10): branches 1–9 and 13 shipped, 10 is
 partial, 11, 12 and 14 are open — see the per-row markers in the branch
 table. Source: the 2026-09-02 UI refinement audit of the web app
