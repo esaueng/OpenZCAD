@@ -1,5 +1,11 @@
 # CAD UI quality audit — 2026-07-29
 
+> **Supporting record — consolidated 2026-09-12.**
+> [The master roadmap](../../../ROADMAP.md) owns priorities, dependencies and current
+> delivery status. Original phase/status/next-step instructions below are
+> historical; technical contracts and explicit exclusions remain reference material.
+> Historical QA evidence; revalidate any residual UI finding under U03.
+
 ## Scope
 
 Browser-driven audit of the OpenZCAD workspace using deterministic sketch,

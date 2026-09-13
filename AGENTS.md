@@ -51,6 +51,13 @@ history, exact solid modeling, local persistence, and optional cloud services.
 This pnpm monorepo contains the React/Three.js/Cloudflare web application, a
 Tauri macOS host, and shared TypeScript packages for its CAD model and runtime.
 
+## Planning
+
+[ROADMAP.md](ROADMAP.md) is the only priority and delivery-status ledger.
+Select a master ID, read its supporting specification, and update that row
+with evidence in the implementation PR. Older plans retain design/history,
+not independent work queues.
+
 ## Required verification
 
 Run commands from the repository root. A cold clone first needs:

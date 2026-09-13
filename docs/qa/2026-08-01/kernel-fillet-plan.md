@@ -1,5 +1,11 @@
 # Plan: lift BrepKit's fillet limitations on boolean-result bodies
 
+> **Supporting record — consolidated 2026-09-12.**
+> [The master roadmap](../../../ROADMAP.md) owns priorities, dependencies and current
+> delivery status. Original phase/status/next-step instructions below are
+> historical; technical contracts and explicit exclusions remain reference material.
+> Historical BrepKit investigation; current support-pair and refusal work maps to K01/K08.
+
 Companion to `plate-second-fillet-investigation.md`. The investigation showed
 that on any boolean-result solid (a plate with holes being the canonical
 case) the pinned kernel can only fillet one isolated straight edge per
