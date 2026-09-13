@@ -6,9 +6,14 @@ interface TweakPanelProps {
   parameters: ParameterNode[];
   parameterValues: Record<string, number>;
   canExport: boolean;
+  modelError?: string | null;
   /** Name of the body the export will target, or null for "all bodies". */
   exportScope: string | null;
-  onSetParameter(name: string, expression: string): void;
+  onSetParameter(
+    name: string,
+    expression: string
+  ): void | Promise<string | null>;
+  parameterMinimums?: Record<string, number>;
   onExportStep(): void;
   onOpenMeshExport(): void;
   /**
@@ -29,7 +34,9 @@ interface TweakPanelProps {
 export function TweakPanel({
   parameters,
   parameterValues,
+  parameterMinimums,
   canExport,
+  modelError,
   exportScope,
   onSetParameter,
   onExportStep,
@@ -39,7 +46,9 @@ export function TweakPanel({
   const exportTitle = (format: string) =>
     canExport
       ? `Export ${exportScope ?? 'all bodies'} as ${format}`
-      : 'The model has no body to export';
+      : modelError
+        ? 'Enter a valid parameter value before exporting'
+        : 'The model has no body to export';
   return (
     <aside className="sidebar tweak-panel" aria-label="Parameters">
       <div className="sidebar-label">Parameters</div>
@@ -47,12 +56,18 @@ export function TweakPanel({
         Change a value and press Enter, or use an on/off toggle. The design
         itself stays locked.
       </p>
+      {modelError && (
+        <p className="parameter-feedback error" role="alert">
+          {modelError} Enter a valid parameter value to rebuild the model.
+        </p>
+      )}
       <div className="param-list tweak-panel-params">
         {parameters.map((parameter) => (
           <div className="param-entry" key={parameter.parameterId}>
             <ParameterRow
               parameter={parameter}
               value={parameterValues[parameter.name]}
+              minimum={parameterMinimums?.[parameter.name]}
               onSet={onSetParameter}
             />
             {parameter.description && (

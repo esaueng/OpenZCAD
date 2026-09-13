@@ -157,7 +157,11 @@ interface SidebarProps {
   onToggleFeatureSuppression(feature: FeatureNode): void;
   onRollbackAfterFeature(featureId: FeatureId, name: string): void;
   onConfigureToggle?: (name: string, bodyIds: BodyId[]) => void;
-  onSetParameter(name: string, expression: string): void;
+  onSetParameter(
+    name: string,
+    expression: string
+  ): void | Promise<string | null>;
+  parameterMinimums?: Record<string, number>;
   onDeleteParameter(name: string): void;
   onExposeParameter(name: string, exposed: boolean): void;
   onDescribeParameter(name: string, description: string): void;
@@ -195,6 +199,7 @@ function bodyIcon(body: BodyRepresentation) {
 export function Sidebar({
   parameters,
   parameterValues,
+  parameterMinimums,
   features,
   representations,
   selectedFeatureNodeId,
@@ -359,6 +364,7 @@ export function Sidebar({
               key={parameter.parameterId}
               parameter={parameter}
               value={parameterValues[parameter.name]}
+              minimum={parameterMinimums?.[parameter.name]}
               onSet={onSetParameter}
               onDelete={onDeleteParameter}
               onExpose={onExposeParameter}
