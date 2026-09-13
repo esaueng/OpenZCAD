@@ -498,12 +498,22 @@ export type SketchConstraintData =
   /** Equal length (two lines) or equal radius (two circles/arcs). */
   | { constraintKind: 'equal'; a: EntityId; b: EntityId }
   /**
-   * One line tangent to one circle, in either order. Point-free: the kernel's
-   * `tangentLineCircle` constrains center-to-line distance to the radius, so
-   * no synthesized contact-point entity is needed. Arcs still require the
-   * contact-point form (TangentLineArc) and stay excluded.
+   * One line tangent to one circle or arc, in either order.
+   *
+   * The circle form is point-free: the kernel's `tangentLineCircle`
+   * constrains center-to-line distance to the radius, so no contact point is
+   * needed and `at` is absent. The arc form is the kernel's
+   * `tangentLineArc`, which asks which point of the arc the line touches, so
+   * `at` names that arc point; it is what a sketch fillet records about the
+   * arc it inserted. A constraint written before the arc form existed has no
+   * `at` and replays exactly as it did.
    */
-  | { constraintKind: 'tangent'; a: EntityId; b: EntityId }
+  | {
+      constraintKind: 'tangent';
+      a: EntityId;
+      b: EntityId;
+      at?: SketchPointRef;
+    }
   | { constraintKind: 'concentric'; a: EntityId; b: EntityId }
   | { constraintKind: 'midpoint'; point: SketchPointRef; line: EntityId }
   | {

@@ -9,6 +9,21 @@ export type {
 } from './rebuild-progress';
 import { RemusKernel, loadRemusTranslators } from './remus-runtime';
 import {
+  runSketchPlanarOperation,
+  type SketchPlanarOperation,
+  type SketchPlanarResult
+} from './sketch-2d-ops';
+export type {
+  Sketch2dPoint,
+  SketchChamferGeometry,
+  SketchCorner,
+  SketchFilletGeometry,
+  SketchOffsetCurve,
+  SketchOffsetJoin,
+  SketchPlanarOperation,
+  SketchPlanarResult
+} from './sketch-2d-ops';
+import {
   findSketch,
   getParameterScope,
   getParameterHiddenBodyIds,
@@ -470,6 +485,14 @@ export interface ExactKernelAdapter {
     document: ProjectDocument,
     sketchId: SketchId
   ): Promise<SketchSolveOutcome>;
+  /**
+   * One planar sketch edit on the kernel's 2D operations: a corner fillet, a
+   * corner chamfer, or a closed-loop offset. Purely geometric — the caller
+   * owns which entities the answer replaces and what constrains them.
+   */
+  sketchPlanarOperation(
+    operation: SketchPlanarOperation
+  ): Promise<SketchPlanarResult>;
   inspectStep(data: string | ArrayBuffer): Promise<{
     solid: boolean;
     valid: boolean;
@@ -843,7 +866,6 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
       });
       done();
     };
-
 
     const build = buildDocumentHistory(
       activeKernel,
@@ -1282,7 +1304,8 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     // is a state consumers already have to render.
     const massDone = onStage?.('Mass properties');
     const massProperties =
-      includeMassProperties && shape.solids.length === 1 &&
+      includeMassProperties &&
+      shape.solids.length === 1 &&
       topology.faces.length <= MAX_BACKGROUND_MASS_PROPERTY_FACES
         ? readBodyMassProperties(kernel, shape.solids[0]!)
         : null;
@@ -1830,6 +1853,21 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
         sketch.constraints ?? [],
         (value, label) => resolveParamValue(value, scope, label)
       );
+    } finally {
+      kernel.free();
+    }
+  }
+
+  /**
+   * One planar sketch edit. Synchronous under the hood like `solveSketch`,
+   * and async for the same reason: the worker boundary.
+   */
+  async sketchPlanarOperation(
+    operation: SketchPlanarOperation
+  ): Promise<SketchPlanarResult> {
+    const kernel = new RemusKernel();
+    try {
+      return runSketchPlanarOperation(kernel, operation);
     } finally {
       kernel.free();
     }

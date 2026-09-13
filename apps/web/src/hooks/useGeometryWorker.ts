@@ -6,6 +6,8 @@ import type { CommandManager } from '@openzcad/command-system';
 import { mark, measure, timed } from '../lib/perf';
 import type {
   MeshQualityReport,
+  SketchPlanarOperation,
+  SketchPlanarResult,
   SketchSolveOutcome,
   DxfFaceSelector
 } from '@openzcad/kernel-adapter/exact';
@@ -150,6 +152,15 @@ export interface GeometryWorkerApi {
     document: ProjectDocument,
     sketchId: SketchId
   ): Promise<SketchSolveOutcome>;
+  /**
+   * Runs one planar sketch edit — corner fillet, corner chamfer, or closed
+   * loop offset — on the kernel's 2D operations. Geometry only: the caller
+   * decides which entities the answer replaces.
+   */
+  sketchPlanarOperation(
+    document: ProjectDocument,
+    operation: SketchPlanarOperation
+  ): Promise<SketchPlanarResult>;
   /** Forces the next `sync` to post even if the version has not changed. */
   invalidate(): void;
 }
@@ -173,6 +184,9 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
   );
   const solveSketchRequests = useRef(
     new Map<string, PendingRequest<SketchSolveOutcome>>()
+  );
+  const sketchPlanarRequests = useRef(
+    new Map<string, PendingRequest<SketchPlanarResult>>()
   );
   const syncRequests = useRef(new Map<string, PendingRequest<DerivedState>>());
   // Callers who asked to watch their own request's lifecycle states.
@@ -230,6 +244,10 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
         request.reject(error);
       }
       solveSketchRequests.current.clear();
+      for (const request of sketchPlanarRequests.current.values()) {
+        request.reject(error);
+      }
+      sketchPlanarRequests.current.clear();
       for (const request of syncRequests.current.values()) {
         request.reject(error);
       }
@@ -287,9 +305,12 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
         worker = timed(
           'worker.create',
           () =>
-            new Worker(new URL('../worker/geometryWorker.ts', import.meta.url), {
-              type: 'module'
-            })
+            new Worker(
+              new URL('../worker/geometryWorker.ts', import.meta.url),
+              {
+                type: 'module'
+              }
+            )
         );
       } catch (error) {
         // A blocked or unsupported worker environment throws synchronously.
@@ -313,7 +334,10 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
         lastWorkerMessageAt = Date.now();
         if (event.data.type === 'projection') {
           const document = hostRef.current.manager()?.document;
-          if (document?.projectId === event.data.projectId && document.version === event.data.version) {
+          if (
+            document?.projectId === event.data.projectId &&
+            document.version === event.data.version
+          ) {
             hostRef.current.onProjection?.(event.data.derived);
           }
           return;
@@ -322,12 +346,15 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
           if (event.data.progress?.status === 'completed') {
             // Keep each timing even when React batches adjacent phase updates.
             // Session-local only: no document contents or telemetry upload.
-            console.debug('[geometry rebuild]', JSON.stringify({
-              projectId: event.data.projectId,
-              version: event.data.version,
-              requestId: event.data.requestId,
-              ...event.data.progress
-            }));
+            console.debug(
+              '[geometry rebuild]',
+              JSON.stringify({
+                projectId: event.data.projectId,
+                version: event.data.version,
+                requestId: event.data.requestId,
+                ...event.data.progress
+              })
+            );
           }
           if (!event.data.requestId) {
             livePhase = event.data.phase;
@@ -406,6 +433,21 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
           solveSketchRequests.current.delete(event.data.requestId);
           if (event.data.ok) {
             pending.resolve(event.data.outcome);
+          } else {
+            pending.reject(new Error(event.data.error));
+          }
+          return;
+        }
+        if (event.data.type === 'sketch-2d-op') {
+          const pending = sketchPlanarRequests.current.get(
+            event.data.requestId
+          );
+          if (!pending) {
+            return;
+          }
+          sketchPlanarRequests.current.delete(event.data.requestId);
+          if (event.data.ok) {
+            pending.resolve(event.data.result);
           } else {
             pending.reject(new Error(event.data.error));
           }
@@ -618,6 +660,23 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
           requestId,
           document: documentForWorker(document),
           sketchId
+        });
+      });
+    },
+    sketchPlanarOperation(document, operation) {
+      const worker = workerRef.current;
+      if (!worker) {
+        return Promise.reject(new Error('Geometry worker is unavailable.'));
+      }
+      const requestId = crypto.randomUUID();
+      return new Promise((resolve, reject) => {
+        sketchPlanarRequests.current.set(requestId, { resolve, reject });
+        armedRef.current = true;
+        worker.postMessage({
+          type: 'sketch-2d-op',
+          requestId,
+          document: documentForWorker(document),
+          operation
         });
       });
     },
