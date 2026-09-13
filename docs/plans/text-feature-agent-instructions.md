@@ -1,6 +1,12 @@
 # Agent Instructions — Implement the Text Feature
 
-You are implementing the text-on-3D-models feature. The authoritative plan is
+> **Supporting record — consolidated 2026-09-12.**
+> [The master roadmap](../../ROADMAP.md) owns priorities, dependencies and current
+> delivery status. Original phase/status/next-step instructions below are
+> historical; technical contracts and explicit exclusions remain reference material.
+> Historical handoff for a shipped feature. Do not execute it as a new work queue.
+
+You are implementing the text-on-3D-models feature. The supporting specification is
 `docs/plans/text-feature-plan.md` in this repo — read it in full before writing any code.
 This document tells you how to execute that plan: order, constraints, acceptance criteria,
 and verification.
