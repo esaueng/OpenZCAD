@@ -7,7 +7,7 @@ import type { FaceEvolutionPayloadV1, RemusKernel } from './remus-runtime';
 import { GEOMETRY_LINEAR_TOLERANCE } from '@openzcad/geometry';
 import { GEOMETRY_EPSILON, errorText } from './exact-math';
 import { MEASUREMENT_DEFLECTION, edgeSampleOf } from './exact-witnesses';
-import { selectionTouchesBlendFace } from './exact-brep';
+import { countBlendFaces, selectionTouchesBlendFace } from './exact-brep';
 
 /**
  * Fractions of a refused fillet/chamfer size retried to tell a size-bound
@@ -33,7 +33,10 @@ export function applyEdgeModifier(
   selected: number[],
   featureKind: 'fillet' | 'chamfer',
   size: number,
-  /** Receives the kernel's own refusal text, when it threw one. */
+  /**
+   * Receives the refusal text: the kernel's own when it threw one, and this
+   * adapter's when it declined a result the kernel was willing to return.
+   */
   reportRefusal?: (message: string) => void,
   /** Receives construction history only after the same result is accepted. */
   reportEvolution?: (payload: FaceEvolutionPayloadV1) => void,
@@ -162,6 +165,29 @@ export function applyEdgeModifier(
       Math.abs(modifiedVolume - targetVolume) >
       volumeEnvelope + volumeTolerance
     ) {
+      return null;
+    }
+
+    // A fillet that came back as a chamfer is not a fillet. Remus used to
+    // drop to a flat planar bevel when no blend engine could round the
+    // selection, and the result passed every check above it: a bevel is
+    // closed, valid, inside the target envelope and removes LESS than the
+    // neighbourhood volume a round would. Only the surfaces tell the two
+    // apart, so they are what is asked. A round leaves a band tangent to the
+    // faces it joins; a bevel leaves planes. Measured on the pin, every
+    // accepted fillet gains at least one band (a plain box 0 -> 12, a
+    // cylinder rim 0 -> 1, a filleted box re-filleted 1 -> 2) and every
+    // chamfer gains none (0 -> 0).
+    //
+    // B23 removed that fallback, so this guard is expected never to fire on
+    // the pinned kernel. It stays because the alternative to refusing is
+    // shipping a chamfer under a fillet feature's name, and the size probe
+    // runs through here too — a probe accepted on a bevel would turn "try a
+    // smaller radius" into advice that silently produces the wrong shape.
+    if (countBlendFaces(kernel, modified) <= countBlendFaces(kernel, target)) {
+      reportRefusal?.(
+        'fillet produced no blend band: the result is bevelled rather than rounded'
+      );
       return null;
     }
   }
