@@ -80,6 +80,19 @@ describe('plainRefusal', () => {
     }
   });
 
+  it('reports unsupported STEP types without mistaking their names for invalid geometry', () => {
+    for (const entity of ['DEGENERATE_TOROIDAL_SURFACE', 'OFFSET_SURFACE']) {
+      const raw = `Error: unsupported STEP entity: ${entity}`;
+      expect(
+        plainRefusal(`${raw}\nImport stopped before committing the body.`)
+      ).toEqual({
+        message:
+          'This STEP file uses a geometry type the importer does not support yet.',
+        detail: `${raw}\nImport stopped before committing the body.`
+      });
+    }
+  });
+
   it('falls back to a generic sentence for kernel text it has no table entry for', () => {
     expect(plainRefusal('wire 4: edge appears twice')).toEqual({
       message: 'The exact kernel could not build this result.',
