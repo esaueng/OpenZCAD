@@ -20,7 +20,8 @@ interface ToggleBindingProps {
 interface ParameterRowProps extends ToggleBindingProps {
   parameter: ParameterNode;
   value: number | undefined;
-  onSet(name: string, expression: string): void;
+  onSet(name: string, expression: string): void | Promise<string | null>;
+  minimum?: number;
   /** Absent hides the delete affordance: Tweak adjusts, it never removes. */
   onDelete?: (name: string) => void;
   /**
@@ -48,6 +49,7 @@ export function ParameterRow({
   parameter,
   value,
   onSet,
+  minimum,
   onDelete,
   onExpose,
   exposedInTweak,
@@ -61,6 +63,11 @@ export function ParameterRow({
     parameter.expression
   );
   const changedByUser = useRef(false);
+  const latestParameter = useRef(parameter);
+  latestParameter.current = parameter;
+  const submission = useRef(0);
+  const [error, setError] = useState<string | null>(null);
+  const [pending, setPending] = useState(false);
 
   // Undo/redo, document hydration and collaborator edits all replace the
   // canonical expression underneath us. Adopt it, but never yank the field out
@@ -73,17 +80,38 @@ export function ParameterRow({
     }
   }
 
-  function commit() {
+  async function commit() {
     if (!changedByUser.current) {
       setExpression(parameter.expression);
       return;
     }
-    changedByUser.current = false;
     const trimmed = expression.trim();
-    if (trimmed.length > 0 && trimmed !== parameter.expression) {
-      onSet(parameter.name, trimmed);
-    } else {
+    if (!trimmed || trimmed === parameter.expression) {
+      changedByUser.current = false;
       setExpression(parameter.expression);
+      return;
+    }
+    changedByUser.current = false;
+    const token = ++submission.current;
+    setError(null);
+    setPending(true);
+    try {
+      const refusal = await onSet(parameter.name, trimmed);
+      if (token !== submission.current) return;
+      if (refusal) {
+        setError(`${refusal} No change applied.`);
+        setExpression(latestParameter.current.expression);
+      }
+    } catch (cause) {
+      if (token !== submission.current) return;
+      setError(
+        cause instanceof Error
+          ? cause.message
+          : 'The parameter could not be updated.'
+      );
+      setExpression(latestParameter.current.expression);
+    } finally {
+      if (token === submission.current) setPending(false);
     }
   }
 
@@ -105,7 +133,9 @@ export function ParameterRow({
             className="param-toggle"
             aria-label={`Toggle ${parameter.name}`}
             aria-checked={value === 1}
-            onClick={() => onSet(parameter.name, value === 1 ? '0' : '1')}
+            onClick={() => {
+              void onSet(parameter.name, value === 1 ? '0' : '1');
+            }}
           >
             <span aria-hidden="true" />
             {value === 1 ? 'On' : 'Off'}
@@ -116,8 +146,17 @@ export function ParameterRow({
             value={expression}
             spellCheck={false}
             aria-label={`Expression for ${parameter.name}`}
+            aria-invalid={error ? true : undefined}
+            aria-describedby={
+              error || pending || minimum !== undefined
+                ? `parameter-feedback-${parameter.parameterId}`
+                : undefined
+            }
             onChange={(event) => {
               changedByUser.current = true;
+              ++submission.current;
+              setError(null);
+              setPending(false);
               setExpression(event.target.value);
             }}
             onFocus={() => {
@@ -126,7 +165,7 @@ export function ParameterRow({
             }}
             onBlur={() => {
               setEditing(false);
-              commit();
+              void commit();
             }}
             onKeyDown={(event) => {
               if (event.key === 'Enter') {
@@ -178,6 +217,15 @@ export function ParameterRow({
           </button>
         )}
       </div>
+      {(error || pending || minimum !== undefined) && (
+        <p
+          id={`parameter-feedback-${parameter.parameterId}`}
+          className={`parameter-feedback${error ? ' error' : ''}`}
+          role={error ? 'alert' : 'status'}
+        >
+          {error ?? (pending ? 'Checking geometry…' : `Minimum ${minimum}`)}
+        </p>
+      )}
       {parameter.toggle && onConfigureToggle && (
         <details className="param-bindings">
           <summary>Bodies ({parameter.toggle.bodyIds.length})</summary>
@@ -296,7 +344,7 @@ export function AddParameterRow({
   onConfigureToggle,
   bodies = []
 }: ToggleBindingProps & {
-  onSet(name: string, expression: string): void;
+  onSet(name: string, expression: string): void | Promise<string | null>;
 }) {
   const [name, setName] = useState('');
   const [expression, setExpression] = useState('');
@@ -308,7 +356,7 @@ export function AddParameterRow({
     if (type === 'toggle' && onConfigureToggle) {
       onConfigureToggle(name.trim(), bodyIds);
     } else if (expression.trim()) {
-      onSet(name.trim(), expression.trim());
+      void onSet(name.trim(), expression.trim());
     } else return;
     setName('');
     setExpression('');
