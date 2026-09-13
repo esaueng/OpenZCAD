@@ -1,7 +1,8 @@
 # OpenZCAD Roadmap
 
-Status snapshot: 2026-08-27, schema v14. “Working” below means implemented on
-the current branch; production enablement is a separate rollout decision.
+Status reconciliation: 2026-09-12, OpenZCAD `28d1551f`, schema v14.
+“Working” below means implemented on the reviewed branch; production
+enablement is a separate rollout decision.
 
 Forward-looking work is sequenced in [docs/cad-feature-roadmap.md](docs/cad-feature-roadmap.md)
 (product) and [docs/kernel-roadmap-remus.md](docs/kernel-roadmap-remus.md)
@@ -10,7 +11,7 @@ it. When the two disagree, the dated roadmaps win.
 
 ## Working now
 
-- Schema-v13 canonical documents with v1–v12 normalization, checkpoints, asset
+- Schema-v14 canonical documents with legacy normalization, checkpoints, asset
   references, command replay, transactions, undo/redo, and local-first autosave.
 - A browser-worker Remus exact adapter with primitives, multi-profile
   sweeps, transforms, booleans, finishing, patterns, mirror-copy, shell, solid
@@ -33,7 +34,10 @@ it. When the two disagree, the dated roadmaps win.
   — Z5.)
 - A bounded, kernel-neutral imported-feature recognizer for blind holes,
   counterbores, countersinks, bosses, prismatic pockets, and conical tapers.
-  This is a tested read-only proof module, not live product editing yet.
+  General boss/pocket/taper editing remains incomplete. Separately, the
+  bounded growing-holder workflow recognizes supported imports and creates
+  editable history with width, supported height and bore parameters; see
+  [its disposition and remaining acceptance](docs/plans/step-parameter-hammer-holder-plan.md).
 - Owner/editor/viewer sharing APIs and UI, one persisted project-wide edit
   lease, per-message authorization, and recovery-copy-first conflict actions.
   Unresolved local divergence survives dialog close/reload. The checked-in
@@ -74,6 +78,11 @@ it. When the two disagree, the dated roadmaps win.
   explicit command lifecycle states, edge measurements, and sketch snapping.
 - Drawing-assisted proposals from raster images and PDFs with projection,
   units, scale, and dimension-audit metadata.
+- Existing hole, mirror, split, shell, solid-offset, draft, thicken, loft,
+  sweep and helical-sweep features can be edited through their forms; fillets
+  support edge retargeting (PRs #307, #309, #311, #314).
+- Canonical section views include hole-preserving display caps (#313).
+  Arbitrary/datum sections and exact drawing output remain roadmap work.
 
 ## Release gates / next
 

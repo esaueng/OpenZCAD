@@ -8,7 +8,15 @@ what the geometry engine must do; this document says what the product must
 let people do with it, benchmarked against established parametric and
 open-source CAD workflows.
 
-**Method.** The current-state inventory below was verified against source at
+**Status reconciliation (2026-09-12, OpenZCAD `main` at `28d1551f`).**
+Phase 1 remains partial. S-1 is complete; S-2 driving annotations are complete
+but saved placement and driven/reference dimensions remain. S-3–S-5, R-1,
+F-1, A-1, AI-1 and I-1 remain foundation work. Recent feature-editor and
+section-cap deliveries are recorded below; they do not close the broader
+feature-depth or drawings milestones. Merged implementation is distinct from
+production acceptance.
+
+**Method.** The original inventory below was verified against source at
 schema v13 (`packages/shared/src/index.ts`, the forms and interaction machine
 in `apps/web`), not against the docs — several planning docs understate what
 ships (see §8). Items are judged by three questions: does the mainstream
@@ -157,15 +165,19 @@ datum systems, so this is part of the expected baseline.
   (positions or sketch-point-driven), standards library (clearance/tap
   drill tables for ISO/ANSI), cosmetic thread display, tapped-hole
   callout metadata for drawings later. Today one hole per feature, no
-  standards.
+  standards. Editing an existing hole through its form is shipped (PR #307);
+  this does not complete F-3.
 - **F-4. Pattern depth**: pattern-along-path, mirror-pattern, per-instance
-  suppression, pattern of features (not just bodies). Blocked in part by
-  the kernel pattern-overlap defect (kernel roadmap S1.2) — fix that
-  first.
+  suppression, pattern of features (not just bodies). The prerequisite
+  overlap fix is adopted (PR #228, kernel S1.2); the feature-depth work and
+  verified pattern lineage remain (kernel C1).
 - **F-5. Sweep/loft depth**: guide rails and twist for sweep, loft guide
   curves and end-tangency — kernel M7.1/7.2 items; expose in the same
   release the kernel lands them ("not done until JS can call it" cuts
-  both ways).
+  both ways). Editing existing loft, sweep and helical-sweep features with
+  validated sketch references is shipped (PR #314;
+  `test/e2e/profile-feature-edit.spec.ts`). Guide rails, twist and end-tangency
+  remain separate capability work.
 - **F-6. Rib/web feature**: thin-extrude from an open profile — mostly
   app-side over existing extrude+boolean.
 - **F-7. Move/delete face as first-class direct edits** on any body —
@@ -173,7 +185,12 @@ datum systems, so this is part of the expected baseline.
 - **F-8. Imported-feature editing completion**: boss, pocket-depth, and
   taper-angle coordinated commands over the already-proven recognizer
   families (kernel roadmap C5). The recognizer proves six families;
-  only the three hole families are editable today.
+  the general boss/pocket/taper command families remain open. The bounded
+  growing-holder workflow now compiles recognized imports into editable
+  history (PRs #283, #284, #286, #288, #293, #296 and #300). It does not
+  recover arbitrary imported feature trees; supported geometry, refusal
+  limits and remaining acceptance are recorded in
+  [the holder plan](plans/step-parameter-hammer-holder-plan.md).
 
 ## 4. Analysis and inspection
 
@@ -184,9 +201,11 @@ datum systems, so this is part of the expected baseline.
 - **A-2. Interference/clash detection** between bodies (kernel P-Class
   7.5 clash/clearance with witness points) — also the seed of assembly
   interference later.
-- **A-3. Section view depth**: arbitrary/datum-plane sections, capped
-  section fill, and a face-aligned option. Today: display-only XY/XZ/YZ
-  clipping with an offset slider.
+- **A-3. Section view depth — partial (PR #313, 2026-09-12):** XY/XZ/YZ
+  clipping with an offset slider now includes hole-preserving solid section
+  caps. These are display meshes, not exact section geometry or drawing
+  output. Arbitrary/datum-plane and face-aligned sections remain.
+  Evidence: `packages/viewport/src/scene/sectionCaps.test.ts`.
 - **A-4. Draft-angle and curvature analysis** overlays (kernel 7.5
   read-only maps) — manufacturability checks that are cheap UI over
   kernel queries; thickness analysis follows.
@@ -309,6 +328,13 @@ cross-reference [kernel-roadmap-remus.md](kernel-roadmap-remus.md).
 | **4. Assemblies MVP** | AS-1 multi-part; AS-2 joints; AS-3 BOM/exploded; V-2 | kernel assemblies ready; clash for AS-4 |
 | **5. Depth & reach** | F-5 sweep/loft depth; F-7 direct modeling; F-8 imported-feature completion; I-2 `.shapr` replay; I-3 STEP structure; AS-4/AS-5; P-1/P-2; V-1 | M6, M7, C5, e3b |
 | **Later** | Configurations/design tables (grows out of the parameter system + Tweak mode); surfacing workflows (kernel M4 sheet bodies); sheet metal; simulation hooks | M4 |
+
+**Recent modeling usability (2026-09-12):** hole editing (#307), mirror,
+split, shell, solid-offset, draft and thicken editing (#309), fillet edge
+retargeting (#311), and loft/sweep/helical-sweep editing (#314) have landed.
+These make existing history editable; they do not mark F-2–F-5 complete.
+The detailed interaction work and remaining phase items live in
+[the design review](reviews/design-review-2026-09-12.md#9-roadmap).
 
 Phase 1 is deliberately kernel-independent: it is the largest gap-per-effort
 in the product and can proceed in parallel with the kernel roadmap's
