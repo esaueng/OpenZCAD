@@ -9,6 +9,8 @@ import type {
   DxfFaceSelector,
   MeshQualityReport,
   RebuildProgress,
+  SketchPlanarOperation,
+  SketchPlanarResult,
   SketchSolveOutcome
 } from '@openzcad/kernel-adapter/exact';
 import {
@@ -20,7 +22,6 @@ import { GeometryWorkerQueue } from './geometryWorkerQueue';
 import { unpackWorkerRequest } from '../lib/meshTransport';
 import { resolveExactSourceBytes } from '../lib/exactSourceResolver';
 import { preloadDocumentFonts } from '../lib/textFonts';
-
 
 /**
  * `step`, `stl`, and `dxf` produce text (STEP data, ASCII STL, DXF R12);
@@ -62,6 +63,13 @@ export type GeometryWorkerRequest =
       requestId: string;
       document: ProjectDocument;
       sketchId: SketchId;
+    }
+  | {
+      /** One planar sketch edit: corner fillet, corner chamfer, or offset. */
+      type: 'sketch-2d-op';
+      requestId: string;
+      document: ProjectDocument;
+      operation: SketchPlanarOperation;
     }
   | {
       /**
@@ -155,13 +163,28 @@ export type GeometrySolveSketchResult =
     }
   | { type: 'solve-sketch'; ok: false; requestId: string; error: string };
 
+export type GeometrySketch2dOpResult =
+  | {
+      type: 'sketch-2d-op';
+      ok: true;
+      requestId: string;
+      result: SketchPlanarResult;
+    }
+  | { type: 'sketch-2d-op'; ok: false; requestId: string; error: string };
+
 export type GeometryWorkerResult =
-  | { type: 'projection'; projectId: string; version: number; derived: ProjectDocument['derived'] }
+  | {
+      type: 'projection';
+      projectId: string;
+      version: number;
+      derived: ProjectDocument['derived'];
+    }
   | GeometryWorkerState
   | GeometrySyncResult
   | GeometryExportResult
   | GeometryMeshQualityResult
-  | GeometrySolveSketchResult;
+  | GeometrySolveSketchResult
+  | GeometrySketch2dOpResult;
 
 type ExactKernel = Awaited<ReturnType<typeof createExactKernelAdapter>>;
 let exactKernelStatus: 'idle' | 'loading' | 'ready' | 'failed' = 'idle';
@@ -309,7 +332,8 @@ async function execute(job: GeometryWorkerJob): Promise<void> {
     if (
       request.type === 'export' ||
       request.type === 'mesh-quality' ||
-      request.type === 'solve-sketch'
+      request.type === 'solve-sketch' ||
+      request.type === 'sketch-2d-op'
     ) {
       // 'failed' means the next load call retries, so it is a loading state
       // here too, not a terminal one.
@@ -323,6 +347,17 @@ async function execute(job: GeometryWorkerJob): Promise<void> {
           : new Error('The exact Remus kernel failed to load.');
       }
       post(stateFor('rebuilding', request, { stale: true }));
+      if (request.type === 'sketch-2d-op') {
+        const result = await exact.sketchPlanarOperation(request.operation);
+        post({
+          type: 'sketch-2d-op',
+          ok: true,
+          requestId: request.requestId,
+          result
+        });
+        post(stateFor('ready', request, { stale: false }));
+        return;
+      }
       if (request.type === 'solve-sketch') {
         const outcome = await exact.solveSketch(document, request.sketchId);
         post({
@@ -425,15 +460,26 @@ async function execute(job: GeometryWorkerJob): Promise<void> {
               throw new Error('Superseded geometry broadcast.');
             }
             post(stateFor('rebuilding', request, { stale: true }));
-            return exact.syncDocument(document, (progress) => {
-              if (!broadcastGate.isCurrent(job.broadcastToken)) return;
-              post({
-                ...stateFor('rebuilding', request, { stale: true }),
-                progress
-              });
-            }, request.requestId ? undefined : projection => {
-              post({ type: 'projection', projectId: document.projectId, version: document.version, derived: projection });
-            });
+            return exact.syncDocument(
+              document,
+              (progress) => {
+                if (!broadcastGate.isCurrent(job.broadcastToken)) return;
+                post({
+                  ...stateFor('rebuilding', request, { stale: true }),
+                  progress
+                });
+              },
+              request.requestId
+                ? undefined
+                : (projection) => {
+                    post({
+                      type: 'projection',
+                      projectId: document.projectId,
+                      version: document.version,
+                      derived: projection
+                    });
+                  }
+            );
           }
         );
     if (!broadcastGate.isCurrent(job.broadcastToken)) {
@@ -473,6 +519,13 @@ async function execute(job: GeometryWorkerJob): Promise<void> {
     } else if (request.type === 'solve-sketch') {
       post({
         type: 'solve-sketch',
+        ok: false,
+        requestId: request.requestId,
+        error: message
+      });
+    } else if (request.type === 'sketch-2d-op') {
+      post({
+        type: 'sketch-2d-op',
         ok: false,
         requestId: request.requestId,
         error: message
