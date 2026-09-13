@@ -269,8 +269,10 @@ UI. The kernel's assembly hierarchy/transforms/BOM went Stable on
 
 **Interoperability:**
 
-- **I-1. Mesh import beyond STL**: 3MF/OBJ/glTF import are already in the
-  kernel; the UI accepts only `.shapr,.stl,.step,.stp`.
+- **I-1. Mesh import beyond STL**: done. `.3mf`, `.obj`, `.glb` and `.ply`
+  import through the kernel's translators into the same `imported-mesh`
+  feature STL produces. `.gltf` (JSON glTF) is deliberately not offered:
+  the kernel reads glTF only as a binary `.glb`.
 - **I-2. `.shapr` semantic replay**: `io-shapr` already parses sketches,
   constraints, and a graded operation history but applies only the exact
   STEP body plus a provenance record. Replaying the `proven` subset into
