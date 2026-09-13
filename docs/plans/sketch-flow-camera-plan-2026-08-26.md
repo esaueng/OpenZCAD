@@ -1,5 +1,11 @@
 # Sketch flow & camera choreography — plan of record (2026-08-26)
 
+> **Supporting record — consolidated 2026-09-12.**
+> [The master roadmap](../../ROADMAP.md) owns priorities, dependencies and current
+> delivery status. Original phase/status/next-step instructions below are
+> historical; technical contracts and explicit exclusions remain reference material.
+> Delivered choreography and remaining flow detail for S06/L07; original toolbar assumptions are historical.
+
 Target: close the gap between the current sketch/body creation flow and the
 reference interaction spec ("Sketch & Body Interaction Spec" artifact,
 2026-08-26 — Part I structure, Part II measured feel). Decisions already made:

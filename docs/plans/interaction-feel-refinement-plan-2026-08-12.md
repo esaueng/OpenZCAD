@@ -1,5 +1,11 @@
 # Interaction-feel refinement plan — 2026-08-12
 
+> **Supporting record — consolidated 2026-09-12.**
+> [The master roadmap](../../ROADMAP.md) owns priorities, dependencies and current
+> delivery status. Original phase/status/next-step instructions below are
+> historical; technical contracts and explicit exclusions remain reference material.
+> Measurement and implementation record; current residual work maps to U03/W05. Measured closures and dropped work stay closed.
+
 Companion to `interaction-feel-audit-2026-08-12.md` (defect numbers below
 reference its inventory). Goal: make modeling interaction feel like
 mainstream CAD — no hitches on gesture start, geometry that tracks the hand,

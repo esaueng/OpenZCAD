@@ -1,5 +1,11 @@
 # OpenZCAD design and interaction review — 12 September 2026
 
+> **Supporting record — consolidated 2026-09-12.**
+> [The master roadmap](../../ROADMAP.md) owns priorities, dependencies and current
+> delivery status. Original phase/status/next-step instructions below are
+> historical; technical contracts and explicit exclusions remain reference material.
+> Dated findings and design alternatives; remaining work is grouped under the master IDs.
+
 **Revision reviewed:** `origin/main` at `d389726a` (merge of PR #296), web app `@openzcad/web` 0.1.0, schema v13, Remus kernel as pinned in `pnpm-lock.yaml`. The review worktree branch was reset onto that commit before any testing; the local `main` line it started on was 769 commits behind.
 
 **How it was tested:** the Vite dev server (`pnpm --filter @openzcad/web exec vite --port 5199`) with the local D1 migrated, driven from the Claude Browser pane at a 1440×900 emulated viewport, plus checks at 1280×720 and 1024×768. Every observation below comes from one of four sources, named in each finding: **hands-on** (reproduced in the running app), **kernel probe** (a disposable Vitest file that drove `createExactKernelAdapter()` and the document API, deleted afterwards), **code** (a cited file and line), or **agent map** (three read-only code-mapping passes whose claims were spot-checked; those are marked as such). Nothing here has been validated with external users.

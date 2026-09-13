@@ -32,6 +32,11 @@ Use the hosted beta at [zcad.app](https://zcad.app/).
   <img src="docs/design/readme-heat-sink.png" width="49%" alt="Heat Sink demo — extruded base with a parametric fin field" />
 </p>
 
+## Roadmap
+
+See the [master roadmap](ROADMAP.md) for delivered capabilities, the ordered
+work queue, completion criteria and links to detailed specifications.
+
 ## Quick start
 
 See [Contributing](CONTRIBUTING.md) for development and pull request guidance, and [Security](SECURITY.md) for vulnerability reporting.

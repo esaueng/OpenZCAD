@@ -1,8 +1,13 @@
 # Capability and gap matrix
 
+> **Supporting record — consolidated 2026-09-12.**
+> [The master roadmap](../ROADMAP.md) owns priorities, dependencies and current
+> delivery status. Original phase/status/next-step instructions below are
+> historical; technical contracts and explicit exclusions remain reference material.
+> Historical capability snapshot; use current code/configuration for availability and the master roadmap for work status.
+
 > Historical capability snapshot, not a current completion ledger. Reconciled
-> roadmap status through 2026-09-12 lives in [the product roadmap](cad-feature-roadmap.md),
-> [the consumer kernel roadmap](kernel-roadmap-remus.md), and [TODO.md](../TODO.md).
+> delivery status now lives in [the master roadmap](../ROADMAP.md).
 > In particular, the schema, pin sizes, editing and rollout rows below retain
 > their original context; use current source/configuration for those facts.
 

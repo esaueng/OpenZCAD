@@ -1,5 +1,11 @@
 # Save-state versioning and branching plan
 
+> **Supporting record — consolidated 2026-09-12.**
+> [The master roadmap](../../ROADMAP.md) owns priorities, dependencies and current
+> delivery status. Original phase/status/next-step instructions below are
+> historical; technical contracts and explicit exclusions remain reference material.
+> Implemented design record, including later restore/branch browser tests; optional extensions map to L03.
+
 **Status: implemented.** M1–M3 and the interactive history rows of M4 shipped
 together; [ADR-022](../adrs/ADR-022-save-state-restore-and-branching.md)
 records the decisions as built. What this plan proposed and the implementation
@@ -282,8 +288,8 @@ Deliberately left for later, none of it blocking the feature:
   canonicalization of the document on the save path; `createCheckpoint` already
   collapses consecutive checkpoints at the same version, and each stored row is
   written once.
-- **A Playwright walkthrough of restore and branch.** The flows are covered by
-  unit, worker-route and happy-dom store tests; the browser suite has no
-  save-state spec yet.
+- **Restore/branch browser walkthrough — subsequently delivered:**
+  `test/e2e/save-state-history.spec.ts` covers restore, undo, branch and reload.
+  This is no longer an unbuilt item.
 - **Per-checkpoint thumbnails, and diffing two save states.** Nothing in the
   shipped design blocks either.
