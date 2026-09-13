@@ -1,6 +1,12 @@
 # Workspace UI coherence plan
 
-Status: plan of record for the 2026-08-23 design and UI review. Not started.
+> **Supporting record — consolidated 2026-09-12.**
+> [The master roadmap](../../ROADMAP.md) owns priorities, dependencies and current
+> delivery status. Original phase/status/next-step instructions below are
+> historical; technical contracts and explicit exclusions remain reference material.
+> Command and presentation contracts for U01–U03/S06/W05; original phase ordering is superseded.
+
+Historical status: plan of record for the 2026-08-23 design and UI review. Not started.
 Source: a 54.9-second screen recording of the modeling workspace, reviewed
 without code access, covering workspace overview, hole-diameter direct edit,
 face offset, edge fillet by drag, exact numeric entry, a geometry validation

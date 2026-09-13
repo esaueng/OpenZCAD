@@ -1,6 +1,12 @@
 # Guided Parametric Reconstruction Plan
 
-Status: approved plan of record (2026-08-25); Phase R0 implemented 2026-08-27.
+> **Supporting record — consolidated 2026-09-12.**
+> [The master roadmap](../../ROADMAP.md) owns priorities, dependencies and current
+> delivery status. Original phase/status/next-step instructions below are
+> historical; technical contracts and explicit exclusions remain reference material.
+> Reconstruction evidence and retained deferrals; hammer work maps to H01–H03, broader reconstruction to L04.
+
+Historical status: approved plan of record (2026-08-25); Phase R0 implemented 2026-08-27.
 R1–R4 are superseded for the hammer profile by
 [the STEP-to-parameter hammer holder plan](step-parameter-hammer-holder-plan.md)
 (2026-09-11); R0 stays in use and R5 stays deferred.

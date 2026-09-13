@@ -1,5 +1,11 @@
 # Imported STEP Feature Editing Plan
 
+> **Supporting record — consolidated 2026-09-12.**
+> [The master roadmap](../../ROADMAP.md) owns priorities, dependencies and current
+> delivery status. Original phase/status/next-step instructions below are
+> historical; technical contracts and explicit exclusions remain reference material.
+> Imported-edit acceptance detail for M05/K05/K08; old BrepKit phase status is historical.
+
 Status: in progress; Phase A and the initial read-only imported-blend UX are complete
 Repos involved: `esaueng/brepkit` (kernel operation) and `esaueng/OpenZCAD` (schema,
 adapter, UI). This is the first plan in this series that REQUIRES kernel PRs.
