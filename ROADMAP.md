@@ -2,7 +2,8 @@
 
 **Single source of truth for priorities, dependencies and delivery status.**
 Consolidated 2026-09-12 against OpenZCAD `main` at `28d1551f`, using the
-reconciliation in PR #315. The consumer pins Remus kernel and IO packages to
+reconciliation in PR #315. Canonical documents use schema v14.
+The consumer pins Remus kernel and IO packages to
 `f1968568` (2.130.14). This is an OpenZCAD roadmap, not a fresh qualification
 of upstream Remus `main` or a production-site acceptance report.
 
