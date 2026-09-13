@@ -4,7 +4,7 @@
 Consolidated 2026-09-12 against OpenZCAD `main` at `28d1551f`, using the
 reconciliation in PR #315. Canonical documents use schema v15 (on/off parameters with body visibility bindings).
 The consumer pins Remus kernel and IO packages to
-`f1968568` (2.130.14). This is an OpenZCAD roadmap, not a fresh qualification
+`4bbcd5c7` (2.131.0). This is an OpenZCAD roadmap, not a fresh qualification
 of upstream Remus `main` or a production-site acceptance report.
 
 Start here to choose work. The documents in [Supporting plans](#supporting-plans)
