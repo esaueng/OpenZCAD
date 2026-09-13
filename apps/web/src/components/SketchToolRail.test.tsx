@@ -17,6 +17,7 @@ function renderRail(
     paletteVisible: true,
     canConstrain: true,
     pendingConstraint: null,
+    pendingEdit: null,
     constraints: [],
     solveStatus: null,
     solving: false,
@@ -25,6 +26,7 @@ function renderRail(
     onConstruction: vi.fn(),
     onSettings: vi.fn(),
     onConstraintTool: vi.fn(),
+    onEditTool: vi.fn(),
     onEditConstraint: vi.fn(),
     onDeleteConstraint: vi.fn(),
     onSolve: vi.fn(),
@@ -228,5 +230,35 @@ describe('SketchToolRail', () => {
     // The settings start folded: they are a disclosure here, not a palette.
     expect(container.querySelector('.sketch-palette.collapsed')).not.toBeNull();
     expect(screen.queryByLabelText('Snap to grid')).not.toBeInTheDocument();
+  });
+
+  it('arms and disarms a modify tool, and disables the group until there is geometry', async () => {
+    const user = userEvent.setup();
+    const onEditTool = vi.fn();
+    const { props, rerender } = renderRail({ onEditTool, canConstrain: false });
+    const fillet = screen.getByRole('button', { name: /^Fillet$/ });
+    expect(fillet).toBeDisabled();
+
+    rerender(<SketchToolRail {...props} canConstrain />);
+    await user.click(screen.getByRole('button', { name: /^Fillet$/ }));
+    expect(onEditTool).toHaveBeenCalledWith('fillet');
+
+    rerender(
+      <SketchToolRail
+        {...props}
+        canConstrain
+        pendingEdit={{ kind: 'fillet', picks: [] }}
+      />
+    );
+    const armed = screen.getByRole('button', { name: /^Fillet$/ });
+    expect(armed).toHaveAttribute('aria-pressed', 'true');
+    await user.click(armed);
+    expect(onEditTool).toHaveBeenLastCalledWith(null);
+
+    for (const label of ['Chamfer', 'Offset']) {
+      expect(
+        screen.getByRole('button', { name: new RegExp(`^${label}$`) })
+      ).toBeEnabled();
+    }
   });
 });

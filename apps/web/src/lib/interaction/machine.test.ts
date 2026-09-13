@@ -262,6 +262,44 @@ describe('interactionReducer', () => {
     });
     expect(untouched).toBe(state);
   });
+
+  it('collects modify picks, and the two armed tools exclude each other', () => {
+    let state = interactionReducer(IDLE, { type: 'enter-sketch', plane });
+    state = interactionReducer(state, {
+      type: 'sketch-constraint-tool',
+      kind: 'parallel'
+    });
+    state = interactionReducer(state, {
+      type: 'sketch-edit-tool',
+      kind: 'fillet'
+    });
+    expect(state.mode === 'sketch' && state.session.tool).toBe('select');
+    expect(
+      state.mode === 'sketch' && state.session.pendingConstraint
+    ).toBeNull();
+    expect(state.mode === 'sketch' && state.session.pendingEdit).toEqual({
+      kind: 'fillet',
+      picks: []
+    });
+    state = interactionReducer(state, {
+      type: 'sketch-edit-pick',
+      objectId: 'ent_a'
+    });
+    expect(state.mode === 'sketch' && state.session.pendingEdit?.picks).toEqual(
+      ['ent_a']
+    );
+    // Arming a constraint tool abandons the modify sequence, and vice versa.
+    state = interactionReducer(state, {
+      type: 'sketch-constraint-tool',
+      kind: 'parallel'
+    });
+    expect(state.mode === 'sketch' && state.session.pendingEdit).toBeNull();
+    const untouched = interactionReducer(state, {
+      type: 'sketch-edit-pick',
+      objectId: 'ent_b'
+    });
+    expect(untouched).toBe(state);
+  });
 });
 
 describe('escape chain', () => {
@@ -307,6 +345,23 @@ describe('escape chain', () => {
     expect(escapeTarget(state)).toBe('exit-drawing-tool');
     state = interactionReducer(state, { type: 'escape' });
     expect(state.mode === 'sketch' && state.session.tool).toBe('select');
+    expect(escapeTarget(state)).toBe('exit-sketch');
+  });
+
+  it('cancels a modify pick sequence before anything exits the sketch', () => {
+    let state = interactionReducer(IDLE, { type: 'enter-sketch', plane });
+    state = interactionReducer(state, {
+      type: 'sketch-edit-tool',
+      kind: 'chamfer'
+    });
+    state = interactionReducer(state, {
+      type: 'sketch-edit-pick',
+      objectId: 'ent_a'
+    });
+
+    expect(escapeTarget(state)).toBe('cancel-edit');
+    state = interactionReducer(state, { type: 'escape' });
+    expect(state.mode === 'sketch' && state.session.pendingEdit).toBeNull();
     expect(escapeTarget(state)).toBe('exit-sketch');
   });
 

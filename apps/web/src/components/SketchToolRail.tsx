@@ -10,8 +10,11 @@ import {
   MousePointer2,
   Minus,
   Play,
+  Radius,
   ScanSearch,
+  Slice,
   Square,
+  SquareDashed,
   Trash2,
   Type,
   Waypoints
@@ -19,11 +22,14 @@ import {
 import type { AppSettings } from '@openzcad/shared';
 import type {
   PendingSketchConstraint,
+  PendingSketchEdit,
   SketchCircleMode,
   SketchConstraintToolKind,
+  SketchEditToolKind,
   SketchToolId
 } from '../lib/interaction/machine';
 import { CONSTRAINT_TOOL_SPECS } from '../lib/sketch/constraints';
+import { SKETCH_EDIT_TOOL_SPECS } from '../lib/sketch/edits';
 import { CONSTRAINT_ICONS } from './constraintIcons';
 import { StableLabel } from './StableLabel';
 import { Tooltip } from './Tooltip';
@@ -53,6 +59,8 @@ interface SketchToolRailProps {
   /** Null until the first entity commit creates the sketch node. */
   canConstrain: boolean;
   pendingConstraint: PendingSketchConstraint | null;
+  /** Armed modify tool, if any. */
+  pendingEdit: PendingSketchEdit | null;
   constraints: SketchConstraintListItem[];
   solveStatus: SketchSolveStatus | null;
   solving: boolean;
@@ -61,6 +69,7 @@ interface SketchToolRailProps {
   onConstruction(value: boolean): void;
   onSettings(settings: AppSettings['sketching']): void;
   onConstraintTool(kind: SketchConstraintToolKind | null): void;
+  onEditTool(kind: SketchEditToolKind | null): void;
   onEditConstraint(
     constraintId: string,
     anchor: { x: number; y: number }
@@ -106,6 +115,12 @@ const CIRCLE_MODES: {
   }
 ];
 
+const EDIT_TOOL_ICONS: Record<SketchEditToolKind, typeof Minus> = {
+  fillet: Radius,
+  chamfer: Slice,
+  offset: SquareDashed
+};
+
 const CIRCLE_LABELS: Record<SketchCircleMode, string> = {
   'center-radius': 'Center Circle',
   'two-point-diameter': 'Diameter Circle',
@@ -131,6 +146,7 @@ export function SketchToolRail({
   paletteVisible,
   canConstrain,
   pendingConstraint,
+  pendingEdit,
   constraints,
   solveStatus,
   solving,
@@ -139,6 +155,7 @@ export function SketchToolRail({
   onConstruction,
   onSettings,
   onConstraintTool,
+  onEditTool,
   onEditConstraint,
   onDeleteConstraint,
   onSolve,
@@ -259,6 +276,32 @@ export function SketchToolRail({
               onClick={() => onConstraintTool(active ? null : kind)}
             >
               <Icon size={14} aria-hidden="true" />
+            </button>
+          </Tooltip>
+        );
+      })}
+    </>
+  );
+  const modifyTools = (
+    <>
+      {SKETCH_EDIT_TOOL_SPECS.map(({ kind, label, hint }) => {
+        const Icon = EDIT_TOOL_ICONS[kind];
+        const active = pendingEdit?.kind === kind;
+        return (
+          <Tooltip
+            key={kind}
+            label={label}
+            description={canConstrain ? hint : 'Draw an entity first.'}
+          >
+            <button
+              type="button"
+              className={active ? 'active' : undefined}
+              aria-pressed={active}
+              disabled={!canConstrain}
+              onClick={() => onEditTool(active ? null : kind)}
+            >
+              <Icon size={14} aria-hidden="true" />
+              {label}
             </button>
           </Tooltip>
         );
@@ -505,6 +548,8 @@ export function SketchToolRail({
       {workflow}
       <div className="sketch-rail" role="toolbar" aria-label="Sketch tools">
         <div className="sketch-rail-group draw">{drawTools}</div>
+        <span className="sketch-rail-group-label">Modify</span>
+        <div className="sketch-rail-group modify">{modifyTools}</div>
         <span className="sketch-rail-group-label">Constrain</span>
         <div className="sketch-rail-group constrain">{constraintTools}</div>
         <div className="sketch-rail-group solve">
