@@ -31,7 +31,7 @@ let kernel: ExactSectionKernel & {
 };
 
 beforeAll(() => {
-  kernel = new RemusKernel() as unknown as typeof kernel;
+  kernel = new RemusKernel();
 });
 
 afterAll(() => {

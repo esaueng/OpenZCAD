@@ -15,6 +15,7 @@ import {
 } from './ModelViewer';
 import type {
   AxisProjection,
+  ExactSectionRegionDisplay,
   MovePreview,
   MoveSnap,
   PickDetail,
@@ -25,7 +26,7 @@ import type {
   ViewTarget,
   WheelDevice
 } from '@openzcad/viewport';
-import { ViewerToolbar } from './ViewerToolbar';
+import { ViewerToolbar, type SectionOutlineStatus } from './ViewerToolbar';
 import { OrientationWidget } from './OrientationWidget';
 import {
   ViewportScaleIndicator,
@@ -251,6 +252,11 @@ interface ViewerShellProps {
   sectionRange: { min: number; max: number } | null;
   onCycleSection(): void;
   onSectionOffset(offset: number): void;
+  onSectionCommit(): void;
+  onExportSectionDxf(): void;
+  sectionOutline: SectionOutlineStatus;
+  /** Kernel section geometry for the resting plane; null while dragging. */
+  exactSection: ExactSectionRegionDisplay[] | null;
 }
 
 export function ViewerShell({
@@ -351,7 +357,11 @@ export function ViewerShell({
   onToggleProjection,
   sectionRange,
   onCycleSection,
-  onSectionOffset
+  onSectionOffset,
+  onSectionCommit,
+  onExportSectionDxf,
+  sectionOutline,
+  exactSection
 }: ViewerShellProps) {
   const orientationDragRef = useRef<OrientationDragControls | null>(null);
   const scaleIndicatorRef = useRef<ViewportScaleSink | null>(null);
@@ -391,6 +401,9 @@ export function ViewerShell({
       sectionRange={sectionRange}
       onCycleSection={onCycleSection}
       onSectionOffset={onSectionOffset}
+      onSectionCommit={onSectionCommit}
+      onExportSectionDxf={onExportSectionDxf}
+      sectionOutline={sectionOutline}
     />
   );
   return (
@@ -435,6 +448,7 @@ export function ViewerShell({
         selectedEdges={selectedEdges}
         pickListEnabled={pickListEnabled}
         settings={settings}
+        exactSection={exactSection}
         fitSignal={fitSignal}
         viewRequest={viewRequest}
         normalToFaceRequest={normalToFaceRequest}

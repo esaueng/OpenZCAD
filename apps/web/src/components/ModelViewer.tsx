@@ -107,6 +107,7 @@ import {
   VIEWPORT_RENDER_ORDER,
   type AxisProjection,
   type CameraPose,
+  type ExactSectionRegionDisplay,
   type DirectEditAxis,
   type MoveAxis,
   type MoveGizmoFocus,
@@ -442,6 +443,13 @@ interface ModelViewerProps {
   /** Select-other popup follows the direct-manipulation experiment gate. */
   pickListEnabled: boolean;
   settings: ViewerSettings;
+  /**
+   * Kernel-computed section geometry for the plane at rest, drawn in place of
+   * the clipped preview's display caps. Null while the plane is moving or
+   * while the exact section is still being computed — the approximation owns
+   * the drag, so the slider never waits on the kernel.
+   */
+  exactSection: ExactSectionRegionDisplay[] | null;
   /** Increment to re-fit the camera to the current geometry. */
   fitSignal: number;
   /** Set to move the camera to a view target; nonce forces re-runs. */
@@ -1154,6 +1162,7 @@ export function ModelViewer({
   selectedEdges,
   pickListEnabled,
   settings,
+  exactSection,
   fitSignal,
   viewRequest,
   normalToFaceRequest,
@@ -1276,6 +1285,8 @@ export function ModelViewer({
   displayModeRef.current = settings.displayMode;
   const sectionViewRef = useRef(settings.sectionView ?? null);
   sectionViewRef.current = settings.sectionView ?? null;
+  const exactSectionRef = useRef(exactSection);
+  exactSectionRef.current = exactSection;
   const showGridRef = useRef(settings.showGrid);
   showGridRef.current = settings.showGrid;
   const reducedMotionRef = useRef(settings.reducedMotion);
@@ -7633,7 +7644,8 @@ export function ModelViewer({
       context.bodyGroup,
       sectionViewRef.current
         ? sectionClippingPlane(sectionViewRef.current)
-        : null
+        : null,
+      exactSectionRef.current
     );
 
     // Retune the key light's shadow frustum around the current model so the
@@ -8912,12 +8924,13 @@ export function ModelViewer({
     }
     applySectionPlane(
       context.bodyGroup,
-      settings.sectionView ? sectionClippingPlane(settings.sectionView) : null
+      settings.sectionView ? sectionClippingPlane(settings.sectionView) : null,
+      exactSection
     );
     // The frozen ground shadow must follow the cut, not the uncut silhouette.
     context.refreshShadowMap();
     context.requestRender();
-  }, [settings.sectionView]);
+  }, [settings.sectionView, exactSection]);
 
   useEffect(() => {
     const context = contextRef.current;
