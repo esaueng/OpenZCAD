@@ -71,7 +71,7 @@ const MAX_REASON_LENGTH = MAX_CHECKPOINT_REASON_LENGTH;
 /** Bound on one reorder: a shelf that large is not being dragged by hand. */
 const MAX_REORDERED_PROJECTS = 1_000;
 const MAX_AI_PROMPT_LENGTH = 4_000;
-const MAX_AI_DIGEST_BYTES = 128_000;
+const MAX_AI_DIGEST_BYTES = 512_000;
 const MAX_AI_DIGEST_ITEMS = 1_000;
 
 const MAX_AI_ATTACHMENT_LABEL_LENGTH = 200;
