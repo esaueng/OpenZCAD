@@ -7,6 +7,7 @@ import type {
   ImportRebuildWorkerRequest,
   ImportRebuildWorkerResult
 } from '../worker/importRebuildWorker';
+import { onStaleChunk, STALE_CHUNK_MESSAGE } from './staleChunk';
 
 class FakeWorker {
   static instances: FakeWorker[] = [];
@@ -42,10 +43,58 @@ function emptyDerived(document: ProjectDocument): ProjectDocument['derived'] {
 
 afterEach(() => {
   vi.unstubAllGlobals();
+  vi.unstubAllEnvs();
   FakeWorker.instances = [];
 });
 
 describe('disposable exact import rebuild worker client', () => {
+  it('terminates a missing worker and reports the deployment recovery action', async () => {
+    vi.stubGlobal('Worker', FakeWorker);
+    vi.stubEnv('OZ_BUILD_COMMIT', 'old-build');
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({
+        ok: true,
+        json: async () => ({ commit: 'new-build' })
+      }))
+    );
+    const notice = vi.fn();
+    const stop = onStaleChunk(notice);
+    const document = createProjectDocument('Import', toUserId('user'));
+    const original = structuredClone(document);
+    try {
+      const pending = rebuildImportInDisposableWorker(document);
+      const rejected = expect(pending).rejects.toThrow(STALE_CHUNK_MESSAGE);
+      const worker = FakeWorker.instances[0]!;
+      worker.onerror?.();
+      expect(worker.terminated).toBe(true);
+      await rejected;
+      expect(notice).toHaveBeenCalledOnce();
+      expect(document).toEqual(original);
+    } finally {
+      stop();
+    }
+  });
+
+  it('reports missing lazy kernel chunks as a reloadable failure', async () => {
+    vi.stubGlobal('Worker', FakeWorker);
+    const document = createProjectDocument('Import', toUserId('user'));
+    const pending = rebuildImportInDisposableWorker(document);
+    const rejected = expect(pending).rejects.toThrow(STALE_CHUNK_MESSAGE);
+    const worker = FakeWorker.instances[0]!;
+    worker.onmessage?.({
+      data: {
+        type: 'result',
+        requestId: worker.request!.requestId,
+        ok: false,
+        error:
+          'Failed to fetch dynamically imported module: /assets/exact-old.js'
+      }
+    } as MessageEvent<ImportRebuildWorkerResult>);
+    await rejected;
+    expect(worker.terminated).toBe(true);
+  });
+
   it('terminates a rebuild on cancel and creates a clean worker for retry', async () => {
     vi.stubGlobal('Worker', FakeWorker);
     const document = createProjectDocument(

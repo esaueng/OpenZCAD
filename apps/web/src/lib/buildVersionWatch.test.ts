@@ -19,6 +19,44 @@ async function settle() {
 }
 
 describe('build version watch', () => {
+  it('detects an already outdated tab on the first metadata read', async () => {
+    const onNewVersion = vi.fn();
+    const clock = manualSchedule();
+    const stop = watchBuildVersion({
+      runningCommit: 'loaded-bundle',
+      fetchMeta: async () => 'deployed-bundle',
+      onNewVersion,
+      schedule: clock.schedule
+    });
+    await settle();
+    expect(onNewVersion).toHaveBeenCalledWith('deployed-bundle');
+    clock.fire();
+    await settle();
+    expect(onNewVersion).toHaveBeenCalledTimes(1);
+    stop();
+  });
+
+  it('retains the running identity when the first metadata read is offline', async () => {
+    const clock = manualSchedule();
+    const onNewVersion = vi.fn();
+    const fetchMeta = vi
+      .fn()
+      .mockResolvedValueOnce(null)
+      .mockResolvedValue('new-build');
+    const stop = watchBuildVersion({
+      runningCommit: 'old-build',
+      fetchMeta,
+      onNewVersion,
+      schedule: clock.schedule
+    });
+    await settle();
+    expect(onNewVersion).not.toHaveBeenCalled();
+    clock.fire();
+    await settle();
+    expect(onNewVersion).toHaveBeenCalledWith('new-build');
+    stop();
+  });
+
   it('reads the commit from build-meta.json and treats a missing file as unknown', async () => {
     const ok = vi.fn(async () => ({
       ok: true,
