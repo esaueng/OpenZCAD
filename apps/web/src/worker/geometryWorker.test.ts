@@ -129,6 +129,48 @@ describe('geometry worker rebuild coordination', () => {
     );
   });
 
+  it('keeps selected analysis separate from ordinary rebuild cache entries', async () => {
+    const syncDocument = vi.fn(async () => derived('done'));
+    const { scope } = await installWorker(syncDocument);
+    const document = addPrimitiveFeature(
+      createProjectDocument('Analysis', toUserId('user')),
+      {
+        name: 'Box',
+        primitiveKind: 'box',
+        dimensions: { width: 10, height: 20, depth: 30 }
+      }
+    );
+    const analysis = {
+      bodyId: String(document.bodyOrder[0]),
+      faceHashes: [123, 456]
+    };
+    for (const [requestId, scopeAnalysis] of [
+      ['normal', undefined],
+      ['selected', analysis],
+      ['normal-again', undefined]
+    ] as const) {
+      post(scope, {
+        type: 'sync',
+        document,
+        requestId,
+        ...(scopeAnalysis ? { analysis: scopeAnalysis } : {})
+      });
+      await vi.waitFor(() =>
+        expect(scope.postMessage).toHaveBeenCalledWith(
+          expect.objectContaining({ type: 'sync', ok: true, requestId })
+        )
+      );
+    }
+    expect(syncDocument).toHaveBeenCalledTimes(2);
+    expect(syncDocument).toHaveBeenNthCalledWith(
+      2,
+      expect.anything(),
+      expect.any(Function),
+      undefined,
+      analysis
+    );
+  });
+
   it('executes identical explicit syncs once and clones cached results', async () => {
     const first = deferred<ProjectDocument['derived']>();
     const syncDocument = vi.fn(() => first.promise);
@@ -499,15 +541,11 @@ describe('resolveSourceBytes download safeguards', () => {
       }
     );
     post(scope, { type: 'sync', document });
-    await vi.waitFor(() =>
-      expect(createExactKernelAdapter).toHaveBeenCalled()
-    );
+    await vi.waitFor(() => expect(createExactKernelAdapter).toHaveBeenCalled());
     return { resolveSourceBytes, putSourceBlob };
   }
 
-  async function sha256Hex(
-    bytes: Uint8Array<ArrayBuffer>
-  ): Promise<string> {
+  async function sha256Hex(bytes: Uint8Array<ArrayBuffer>): Promise<string> {
     const digest = await crypto.subtle.digest('SHA-256', bytes);
     return Array.from(new Uint8Array(digest), (value) =>
       value.toString(16).padStart(2, '0')
@@ -580,7 +618,10 @@ describe('resolveSourceBytes download safeguards', () => {
         controllerInstance.enqueue(chunk);
       }
     });
-    vi.stubGlobal('fetch', vi.fn(async () => new Response(body)));
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => new Response(body))
+    );
 
     await expect(
       resolveSourceBytes({ checksumSha256 }, context)
