@@ -63,6 +63,21 @@ function addSection(
   };
 }
 
+/**
+ * The data keys a feature actually stores. An optional field that was not
+ * asked for has to be absent, not present-and-undefined: that absence is what
+ * keeps a document written before the field existed replaying unchanged.
+ */
+function featureDataKeys(document: ProjectDocument, name: string): string[] {
+  const node = Object.values(document.nodes).find(
+    (candidate) => candidate.kind === 'feature' && candidate.name === name
+  );
+  if (node?.kind !== 'feature') {
+    throw new Error(`Feature "${name}" not found.`);
+  }
+  return Object.keys(node.data);
+}
+
 describe('advanced exact modeling features', { timeout: 30_000 }, () => {
   let adapter: ExactKernelAdapter;
 
@@ -101,6 +116,240 @@ describe('advanced exact modeling features', { timeout: 30_000 }, () => {
     expect(body?.source).toBe('loft');
     expect(body?.volume).toBeCloseTo(373.3333333333333, 6);
     expect(body?.exportableStep).toBe(true);
+  });
+
+  it('closes a loft to an apex point, and leaves an unapexed loft alone', async () => {
+    // The same two sections as the loft above. Without apex points the feature
+    // data carries none of the new keys and the volume is the flat-capped
+    // 373.3333 that loft has always produced.
+    let document = createProjectDocument('Apex loft', toUserId('user_apex'));
+    const lower = addSection(document, 'Lower', 0, {
+      objectKind: 'rectangle',
+      width: 4,
+      height: 4,
+      centerX: 0,
+      centerY: 0
+    });
+    document = lower.document;
+    const upper = addSection(document, 'Upper', 10, {
+      objectKind: 'rectangle',
+      width: 8,
+      height: 8,
+      centerX: 0,
+      centerY: 0
+    });
+    const flat = loftSections(upper.document, {
+      name: 'Flat loft',
+      sections: [lower.section, upper.section],
+      mode: 'ruled'
+    });
+    expect(featureDataKeys(flat.document, 'Flat loft')).toEqual([
+      'featureKind',
+      'sections',
+      'mode'
+    ]);
+    const flatDerived = await adapter.syncDocument(flat.document);
+    expect(flatDerived.warnings).toEqual([]);
+    expect(flatDerived.bodyRepresentations[flat.bodyId]?.volume).toBeCloseTo(
+      373.3333333333333,
+      6
+    );
+
+    // An apex 5 above the upper section closes that end to a point: exactly
+    // one pyramid of base 8 x 8 and height 5 more material (64 * 5 / 3 =
+    // 106.6667), and the body now reaches up to z = 15.
+    const apexed = loftSections(upper.document, {
+      name: 'Apex loft',
+      sections: [lower.section, upper.section],
+      mode: 'ruled',
+      endPoint: { x: 0, y: 0, z: 15 }
+    });
+    const apexDerived = await adapter.syncDocument(apexed.document);
+    const apexBody = apexDerived.bodyRepresentations[apexed.bodyId];
+    expect(apexDerived.warnings).toEqual([]);
+    expect(apexBody?.source).toBe('loft');
+    expect(apexBody?.bbox.max.z).toBeCloseTo(15, 6);
+    expect(apexBody?.volume).toBeCloseTo(480, 3);
+  });
+
+  it('refuses a loft apex point that lies on its section plane', async () => {
+    let document = createProjectDocument('Flat apex', toUserId('user_flat'));
+    const lower = addSection(document, 'Lower', 0, {
+      objectKind: 'circle',
+      radius: 2,
+      centerX: 0,
+      centerY: 0
+    });
+    document = lower.document;
+    const upper = addSection(document, 'Upper', 10, {
+      objectKind: 'circle',
+      radius: 3,
+      centerX: 0,
+      centerY: 0
+    });
+    // The kernel takes an apex on the section plane without complaint and
+    // returns the un-apexed loft, so the degenerate case is refused by name.
+    const refused = loftSections(upper.document, {
+      name: 'Flat apex loft',
+      sections: [lower.section, upper.section],
+      mode: 'ruled',
+      endPoint: { x: 1, y: 1, z: 10 }
+    });
+    const derived = await adapter.syncDocument(refused.document);
+    expect(derived.warnings.join(' ')).toMatch(
+      /lies on the plane of the section it closes/
+    );
+    expect(derived.bodyRepresentations[refused.bodyId]).toBeUndefined();
+  });
+
+  it('refuses a loft apex point in smooth mode by name', async () => {
+    let document = createProjectDocument('Smooth apex', toUserId('user_smooth'));
+    const lower = addSection(document, 'Lower', 0, {
+      objectKind: 'circle',
+      radius: 2,
+      centerX: 0,
+      centerY: 0
+    });
+    document = lower.document;
+    const upper = addSection(document, 'Upper', 10, {
+      objectKind: 'circle',
+      radius: 3,
+      centerX: 0,
+      centerY: 0
+    });
+    const refused = loftSections(upper.document, {
+      name: 'Smooth apex loft',
+      sections: [lower.section, upper.section],
+      mode: 'smooth',
+      endPoint: { x: 0, y: 0, z: 15 }
+    });
+    const derived = await adapter.syncDocument(refused.document);
+    expect(derived.warnings.join(' ')).toMatch(
+      /A loft apex point is available in Ruled mode only/
+    );
+    expect(derived.bodyRepresentations[refused.bodyId]).toBeUndefined();
+  });
+
+  it('turns a swept profile onto a guide rail without changing its volume', async () => {
+    let document = createProjectDocument('Guided', toUserId('user_guided'));
+    const profile = addSection(document, 'Profile', 0, {
+      objectKind: 'rectangle',
+      width: 4,
+      height: 2,
+      centerX: 0,
+      centerY: 0
+    });
+    document = profile.document;
+    const path = addSketchFeature(document, {
+      name: 'Path',
+      plane: 'XZ',
+      offset: 0,
+      object: { objectKind: 'line', x1: 0, y1: 0, x2: 0, y2: 20 }
+    });
+    document = path.document;
+    const rail = addSketchFeature(document, {
+      name: 'Rail',
+      plane: 'XZ',
+      offset: 10,
+      object: { objectKind: 'line', x1: 0, y1: 0, x2: 0, y2: 20 }
+    });
+    const pathReference = {
+      sketchId: path.sketchId,
+      entityIds: findSketch(rail.document, path.sketchId)!.objectIds
+    };
+    const railReference = {
+      sketchId: rail.sketchId,
+      entityIds: findSketch(rail.document, rail.sketchId)!.objectIds
+    };
+
+    const plain = sweepProfile(rail.document, {
+      name: 'Plain sweep',
+      profile: profile.section,
+      path: pathReference,
+      mode: 'standard'
+    });
+    expect(featureDataKeys(plain.document, 'Plain sweep')).toEqual([
+      'featureKind',
+      'profile',
+      'path',
+      'mode'
+    ]);
+    const plainDerived = await adapter.syncDocument(plain.document);
+    const plainBody = plainDerived.bodyRepresentations[plain.bodyId];
+    expect(plainDerived.warnings).toEqual([]);
+    // The rotation-minimizing frame holds the profile's 4 mm width on x.
+    expect(plainBody?.volume).toBeCloseTo(160, 6);
+    expect(plainBody?.bbox.max.x).toBeCloseTo(2, 6);
+    expect(plainBody?.bbox.max.y).toBeCloseTo(1, 6);
+
+    const guided = sweepProfile(rail.document, {
+      name: 'Guided sweep',
+      profile: profile.section,
+      path: pathReference,
+      mode: 'standard',
+      guide: railReference
+    });
+    const guidedDerived = await adapter.syncDocument(guided.document);
+    const guidedBody = guidedDerived.bodyRepresentations[guided.bodyId];
+    expect(guidedDerived.warnings).toEqual([]);
+    expect(guidedBody?.source).toBe('sweep');
+    // Tracking a rail offset along y turns the profile a quarter turn: the
+    // same swept volume, with its width now on y.
+    expect(guidedBody?.volume).toBeCloseTo(160, 6);
+    expect(guidedBody?.bbox.max.x).toBeCloseTo(1, 6);
+    expect(guidedBody?.bbox.max.y).toBeCloseTo(2, 6);
+  });
+
+  it('refuses a guide rail the kernel cannot take as one curve', async () => {
+    let document = createProjectDocument('Wide rail', toUserId('user_rail'));
+    const profile = addSection(document, 'Profile', 0, {
+      objectKind: 'rectangle',
+      width: 4,
+      height: 2,
+      centerX: 0,
+      centerY: 0
+    });
+    document = profile.document;
+    const path = addSketchFeature(document, {
+      name: 'Path',
+      plane: 'XZ',
+      offset: 0,
+      object: { objectKind: 'line', x1: 0, y1: 0, x2: 0, y2: 20 }
+    });
+    document = path.document;
+    // A half-turn arc: the path builder splits it into two quarter-turn
+    // curves, and the kernel's guided sweep takes exactly one.
+    const rail = addSketchFeature(document, {
+      name: 'Rail',
+      plane: 'XZ',
+      offset: 10,
+      object: {
+        objectKind: 'arc',
+        centerX: 0,
+        centerY: 0,
+        radius: 10,
+        startAngleDeg: 0,
+        endAngleDeg: 180
+      }
+    });
+    const refused = sweepProfile(rail.document, {
+      name: 'Refused sweep',
+      profile: profile.section,
+      path: {
+        sketchId: path.sketchId,
+        entityIds: findSketch(rail.document, path.sketchId)!.objectIds
+      },
+      mode: 'standard',
+      guide: {
+        sketchId: rail.sketchId,
+        entityIds: findSketch(rail.document, rail.sketchId)!.objectIds
+      }
+    });
+    const derived = await adapter.syncDocument(refused.document);
+    expect(derived.warnings.join(' ')).toMatch(
+      /A sweep guide rail must be a single curve, but this rail resolves to 2 curves/
+    );
+    expect(derived.bodyRepresentations[refused.bodyId]).toBeUndefined();
   });
 
   it('serializes and replays an advanced feature with stable reserved ids', () => {
