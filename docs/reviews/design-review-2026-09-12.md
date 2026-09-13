@@ -406,6 +406,21 @@ Engineering trust is preserved because nothing changes in the document model: ev
 
 ## 9. Roadmap
 
+**Disposition (2026-09-12, reconciled through `28d1551f`): — partial.**
+The findings and estimates below describe the review baseline. These deliveries
+have since merged; a delivered subset does not close its whole phase:
+
+| Phase | Landed | Remaining |
+| --- | --- | --- |
+| 0 · Trust | #302 extrude orientation/text undo; #303 validated feature commits; #304 diagnostics/outcome copy; #305 committed-state availability | Other trust findings, including the parallel kernel lane, need their own evidence. |
+| 1 · Precision | #306 rounded fields, grid snap default, axis glyph, wider edge picks and face-filtered plane picks | Full dimension behavior, snapping/prompt feedback and remaining listed interactions. |
+| 2 · Edit everything | #307 hole; #309 mirror/split/shell/offset/draft/thicken; #311 Apply copy and fillet retargeting; #314 loft/sweep/helical-sweep | Row/parameter naming, undo selection, history sizing and plane-default findings are not closed by those editors. |
+| 3–6 | Existing preview infrastructure and the bounded holder workflow are available | Unified command surface, additional handles/feature patterns, sketch overlay and projected references remain separate work. |
+
+Evidence: `apps/web/src/lib/modelingOperationsEdit.test.ts`,
+`test/e2e/profile-feature-edit.spec.ts`, and the tests delivered in the named
+PRs. Section display caps also landed in #313 (product roadmap A-3, partial).
+
 Value order first; effort is a separate column so cheap fixes do not push out the valuable ones. Effort is engineering days for one person including tests and a browser check, not calendar time.
 
 | Phase                    | Scope (finding IDs)                                                                                                                                                                                                                         | Value                                        | Effort                        |
