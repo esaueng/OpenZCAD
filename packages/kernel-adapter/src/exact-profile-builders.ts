@@ -45,6 +45,8 @@ import {
 import {
   GEOMETRY_EPSILON,
   cross,
+  dot,
+  errorText,
   normalized,
   pointOnPlane,
   profilePoints,
@@ -842,6 +844,60 @@ export function sectionFace(
   return makeRegionFace(kernel, profiles[0]!, basis, warn);
 }
 
+/**
+ * The plane a loft section was drawn on, resolved at the feature's history
+ * position. {@link sectionFace} resolves the same basis to build the face;
+ * an apex point needs it again to prove it stands off that plane.
+ */
+function sectionPlane(
+  document: ProjectDocument,
+  section: SketchSectionReference,
+  sketchBases: ReadonlyMap<SketchId, PlaneBasis>,
+  label: string
+): PlaneBasis {
+  const sketch = findSketch(document, section.sketchId);
+  if (!sketch) {
+    throw new Error(`${label} sketch no longer exists.`);
+  }
+  const basis = sketchBases.get(sketch.sketchId);
+  if (!basis) {
+    throw new Error(
+      `${label} sketch plane did not resolve at its history position.`
+    );
+  }
+  return basis;
+}
+
+/**
+ * How far off its section's plane a loft apex point has to stand. The kernel
+ * takes an apex on the section plane without complaint and returns the
+ * un-apexed loft, so the degenerate case is refused here instead.
+ */
+const LOFT_APEX_MIN_STANDOFF = 1e-6;
+
+function loftApexPoint(
+  value: { x: ParamValue; y: ParamValue; z: ParamValue },
+  basis: PlaneBasis,
+  scope: Record<string, number>,
+  label: string
+): [number, number, number] {
+  const point = resolveParametricPoint(value, scope, label);
+  if (
+    !Number.isFinite(point.x) ||
+    !Number.isFinite(point.y) ||
+    !Number.isFinite(point.z)
+  ) {
+    throw new Error(`${label} must resolve to finite coordinates.`);
+  }
+  const standoff = Math.abs(dot(subtract(point, basis.origin), basis.normal));
+  if (standoff < LOFT_APEX_MIN_STANDOFF) {
+    throw new Error(
+      `${label} lies on the plane of the section it closes, which would cap the loft with a flat point instead of an apex. Move it off that plane or clear it.`
+    );
+  }
+  return [point.x, point.y, point.z];
+}
+
 export function buildLoft(
   kernel: RemusKernel,
   document: ProjectDocument,
@@ -856,7 +912,8 @@ export function buildLoft(
   if (feature.data.sections.length < 2) {
     throw new Error('Loft requires at least two profile sections.');
   }
-  const faces = feature.data.sections.map((section, index) =>
+  const sections = feature.data.sections;
+  const faces = sections.map((section, index) =>
     sectionFace(
       kernel,
       document,
@@ -867,12 +924,54 @@ export function buildLoft(
       `Loft section ${index + 1}`
     )
   );
-  const solid =
-    feature.data.mode === 'smooth'
-      ? kernel.loftSmooth(Uint32Array.from(faces))
-      : kernel.loft(Uint32Array.from(faces));
+  const handles = Uint32Array.from(faces);
+  const endPoint = feature.data.endPoint;
+  if (endPoint === undefined) {
+    // Unchanged: a loft authored without an apex point takes exactly the call
+    // it has always taken, so its geometry replays bit-identically.
+    const solid =
+      feature.data.mode === 'smooth'
+        ? kernel.loftSmooth(handles)
+        : kernel.loft(handles);
+    return {
+      solids: [validateGeneratedSolid(kernel, solid, 'Loft')],
+      lineage: remusHashOnlyLineage(
+        'sweep',
+        'Loft section topology has no verified output evolution relation.'
+      )
+    };
+  }
+  if (feature.data.mode === 'smooth') {
+    throw new Error(
+      'A loft apex point is available in Ruled mode only: the kernel\u2019s smooth section surfaces do not close against an apex and return an invalid solid. Switch the loft to Ruled, or clear its apex point.'
+    );
+  }
+  const options = {
+    ruled: true,
+    endPoint: loftApexPoint(
+      endPoint,
+      sectionPlane(
+        document,
+        sections[sections.length - 1]!,
+        sketchBases,
+        `Loft section ${sections.length}`
+      ),
+      scope,
+      'The loft apex point'
+    )
+  };
+  const solid = kernel.loftWithOptions(handles, JSON.stringify(options));
+  let validated: number;
+  try {
+    validated = validateGeneratedSolid(kernel, solid, 'Loft to an apex point');
+  } catch (error) {
+    throw new Error(
+      `${errorText(error)} The apex point has to stand clear of the section run it closes; one placed inside or beyond the sections folds the loft back on itself.`,
+      { cause: error }
+    );
+  }
   return {
-    solids: [validateGeneratedSolid(kernel, solid, 'Loft')],
+    solids: [validated],
     lineage: remusHashOnlyLineage(
       'sweep',
       'Loft section topology has no verified output evolution relation.'
@@ -974,6 +1073,132 @@ export function sweepPathEdges(
   });
 }
 
+/** The kernel's canonical NURBS form of an edge, unpacked for a guided sweep. */
+interface NurbsCurve {
+  degree: number;
+  knots: Float64Array;
+  controlPoints: Float64Array;
+  weights: Float64Array;
+}
+
+function finiteNumbers(value: unknown): number[] | null {
+  if (!Array.isArray(value)) return null;
+  const numbers: number[] = [];
+  for (const entry of value) {
+    if (typeof entry !== 'number' || !Number.isFinite(entry)) return null;
+    numbers.push(entry);
+  }
+  return numbers;
+}
+
+function flattenedControlPoints(value: unknown): number[] | null {
+  if (!Array.isArray(value)) return null;
+  const flat: number[] = [];
+  for (const point of value) {
+    const coordinates = finiteNumbers(point);
+    if (coordinates === null || coordinates.length !== 3) return null;
+    flat.push(...coordinates);
+  }
+  return flat;
+}
+
+/**
+ * The kernel reports an edge's underlying curve as canonical NURBS JSON —
+ * analytic lines and arcs converted to their exact rational form. `guidedSweep`
+ * takes raw NURBS rather than edge handles, so a guided sweep reads its spine
+ * and its rail back out through here.
+ */
+function nurbsCurveOfEdge(
+  kernel: RemusKernel,
+  edge: number,
+  label: string
+): NurbsCurve {
+  const parsed: unknown = JSON.parse(kernel.getNurbsCurveData(edge));
+  const data = (parsed ?? {}) as Record<string, unknown>;
+  const degree = data.degree;
+  const knots = finiteNumbers(data.knots);
+  const controlPoints = flattenedControlPoints(data.controlPoints);
+  const weights = finiteNumbers(data.weights);
+  if (
+    typeof degree !== 'number' ||
+    !Number.isInteger(degree) ||
+    degree < 1 ||
+    knots === null ||
+    controlPoints === null ||
+    weights === null ||
+    controlPoints.length !== weights.length * 3 ||
+    weights.length === 0
+  ) {
+    throw new Error(`${label} did not resolve to a usable NURBS curve.`);
+  }
+  return {
+    degree,
+    knots: Float64Array.from(knots),
+    controlPoints: Float64Array.from(controlPoints),
+    weights: Float64Array.from(weights)
+  };
+}
+
+function sameSketchPath(
+  left: SketchPathReference,
+  right: SketchPathReference
+): boolean {
+  if (left.sketchId !== right.sketchId) return false;
+  const entities = new Set(left.entityIds);
+  return (
+    entities.size === new Set(right.entityIds).size &&
+    right.entityIds.every((entityId) => entities.has(entityId))
+  );
+}
+
+/**
+ * A guided sweep replaces the rotation-minimizing frame with one that tracks a
+ * rail. The kernel takes exactly one spine curve and one rail curve, so both
+ * references have to come down to a single edge — a path of several entities,
+ * or an arc wider than a quarter turn (which the path builder splits), is
+ * refused by name rather than quietly swept unguided.
+ */
+function guidedSweepSolid(
+  kernel: RemusKernel,
+  document: ProjectDocument,
+  face: number,
+  path: SketchPathReference,
+  guide: SketchPathReference,
+  pathEdges: readonly number[],
+  scope: Record<string, number>,
+  sketchBases: ReadonlyMap<SketchId, PlaneBasis>
+): number {
+  if (sameSketchPath(path, guide)) {
+    throw new Error(
+      'A sweep guide rail must be a different path from the one being swept along; a rail lying on the path leaves the profile unrotated and the kernel reports no error.'
+    );
+  }
+  if (pathEdges.length !== 1) {
+    throw new Error(
+      `A sweep guide rail needs a single-curve path, but this path resolves to ${pathEdges.length} curves (an arc wider than a quarter turn is split). Sweep along one line or one quarter-turn arc, or clear the guide rail.`
+    );
+  }
+  const guideEdges = sweepPathEdges(kernel, document, guide, scope, sketchBases);
+  if (guideEdges.length !== 1) {
+    throw new Error(
+      `A sweep guide rail must be a single curve, but this rail resolves to ${guideEdges.length} curves (an arc wider than a quarter turn is split). Choose one line or one quarter-turn arc as the rail.`
+    );
+  }
+  const spine = nurbsCurveOfEdge(kernel, pathEdges[0]!, 'The sweep path');
+  const rail = nurbsCurveOfEdge(kernel, guideEdges[0]!, 'The sweep guide rail');
+  return kernel.guidedSweep(
+    face,
+    spine.degree,
+    spine.knots,
+    spine.controlPoints,
+    spine.weights,
+    rail.degree,
+    rail.knots,
+    rail.controlPoints,
+    rail.weights
+  );
+}
+
 export function buildProfileSweep(
   kernel: RemusKernel,
   document: ProjectDocument,
@@ -1001,8 +1226,22 @@ export function buildProfileSweep(
     scope,
     sketchBases
   );
-  const solid =
-    edges.length === 1
+  const guide = feature.data.guide;
+  const guided = guide !== undefined;
+  const solid = guided
+    ? guidedSweepSolid(
+        kernel,
+        document,
+        face,
+        feature.data.path,
+        guide,
+        edges,
+        scope,
+        sketchBases
+      )
+    : // Unchanged: a sweep authored without a guide rail takes exactly the
+      // call it has always taken, so its geometry replays bit-identically.
+      edges.length === 1
       ? kernel.sweepWithOptions(
           face,
           edges[0]!,
@@ -1013,7 +1252,13 @@ export function buildProfileSweep(
         )
       : kernel.sweepAlongEdges(face, Uint32Array.from(edges));
   return {
-    solids: [validateGeneratedSolid(kernel, solid, 'Sweep')],
+    solids: [
+      validateGeneratedSolid(
+        kernel,
+        solid,
+        guided ? 'Sweep along a guide rail' : 'Sweep'
+      )
+    ],
     lineage: remusHashOnlyLineage(
       'sweep',
       'Profile sweep topology has no verified output evolution relation.'

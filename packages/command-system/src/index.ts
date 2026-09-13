@@ -1166,6 +1166,21 @@ export const commandFactories = {
         if (payload.path.entityIds.some((id) => !available.has(id))) {
           throw new Error('Sweep path references a missing sketch entity.');
         }
+        if (payload.guide) {
+          const guideSketch = findSketch(document, payload.guide.sketchId);
+          if (!guideSketch) {
+            throw new Error('Sweep guide rail sketch not found.');
+          }
+          if (payload.guide.entityIds.length === 0) {
+            throw new Error('A sweep guide rail needs at least one entity.');
+          }
+          const guideAvailable = new Set(guideSketch.objectIds);
+          if (payload.guide.entityIds.some((id) => !guideAvailable.has(id))) {
+            throw new Error(
+              'Sweep guide rail references a missing sketch entity.'
+            );
+          }
+        }
       }
     );
   },
