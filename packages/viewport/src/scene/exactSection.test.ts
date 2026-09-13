@@ -6,7 +6,8 @@ import { applyDisplayMode, applySectionPlane, sectionClippingPlane } from './obj
 import { isViewerMesh } from '../pick/meshes';
 
 /** One square region in the z = 1 plane, as the adapter would hand it over. */
-const region = () => ({
+const region = (bodyId = 'body_1') => ({
+  bodyId,
   positions: Float32Array.of(-5, -5, 1, 5, -5, 1, 5, 5, 1, -5, 5, 1),
   indices: Uint32Array.of(0, 1, 2, 0, 2, 3),
   loops: [
@@ -21,13 +22,16 @@ const region = () => ({
   ]
 });
 
-function body() {
+function body(bodyId = 'body_1') {
   const group = new THREE.Group();
+  const object = new THREE.Group();
+  object.userData.bodyId = bodyId;
   const mesh = new THREE.Mesh(
     new THREE.BoxGeometry(10, 10, 10),
     new THREE.MeshPhongMaterial()
   );
-  group.add(mesh);
+  object.add(mesh);
+  group.add(object);
   return { group, mesh };
 }
 
@@ -76,6 +80,19 @@ describe('exact section geometry in the viewport', () => {
     expect(group.getObjectByName(EXACT_SECTION)).toBeUndefined();
   });
 
+  it('leaves the cap on a body the kernel could not section', () => {
+    const root = new THREE.Group();
+    const cut = body('body_cut');
+    const uncut = body('body_uncut');
+    root.add(cut.group, uncut.group);
+    const plane = sectionClippingPlane({ plane: 'XY', offset: 1 });
+    applySectionPlane(root, plane, [region('body_cut')]);
+    // One body has section curves; the other would render as an open shell
+    // if its approximate cap went away with them.
+    expect(cut.mesh.getObjectByName(SECTION_CAP)).toBeUndefined();
+    expect(uncut.mesh.getObjectByName(SECTION_CAP)).toBeDefined();
+  });
+
   it('is never clipped, never picked, and never a body mesh', () => {
     const { group } = body();
     const plane = sectionClippingPlane({ plane: 'XY', offset: 1 });
@@ -115,7 +132,7 @@ describe('exact section geometry in the viewport', () => {
     expect((fill.material as THREE.Material).visible).toBe(false);
     expect(curve.visible).toBe(true);
     expect((curve.material as THREE.LineBasicMaterial).color.getHex()).toBe(
-      0x2b1a08
+      0x14293c
     );
     applyDisplayMode(group, 'shaded');
     expect((fill.material as THREE.Material).visible).toBe(true);

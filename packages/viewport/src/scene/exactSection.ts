@@ -16,10 +16,13 @@ import * as THREE from 'three';
 /** Kernel-computed section geometry, never a document face or a pick target. */
 export const EXACT_SECTION = 'viewport-exact-section';
 
-/** Cut-surface fill: warm, and deliberately unlike any body colour. */
-const CUT_COLOR = 0xd08c3c;
+/**
+ * Cut-surface fill: a cool slate against the warm default body colour, so the
+ * exact cut never reads as more of the body's own surface.
+ */
+const CUT_COLOR = 0x86a9c6;
 /** The section curves themselves, drawn over the fill. */
-const CURVE_COLOR = 0x2b1a08;
+const CURVE_COLOR = 0x14293c;
 
 export interface ExactSectionLoopDisplay {
   /** Closed document-space polyline; the closing point is not repeated. */
@@ -27,6 +30,8 @@ export interface ExactSectionLoopDisplay {
 }
 
 export interface ExactSectionRegionDisplay {
+  /** The body this cross-section belongs to. */
+  readonly bodyId: string;
   /** Triangles of the cut surface, in document space. */
   readonly positions: Float32Array;
   readonly indices: Uint32Array;
