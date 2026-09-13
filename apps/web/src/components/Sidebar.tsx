@@ -29,6 +29,7 @@ import {
   isFeatureSuppressed
 } from '@openzcad/shared';
 import type {
+  BodyId,
   BodyRepresentation,
   FeatureId,
   FeatureNode,
@@ -155,6 +156,7 @@ interface SidebarProps {
   onFeatureContextMenu(event: React.MouseEvent, feature: FeatureNode): void;
   onToggleFeatureSuppression(feature: FeatureNode): void;
   onRollbackAfterFeature(featureId: FeatureId, name: string): void;
+  onConfigureToggle?: (name: string, bodyIds: BodyId[]) => void;
   onSetParameter(name: string, expression: string): void;
   onDeleteParameter(name: string): void;
   onExposeParameter(name: string, exposed: boolean): void;
@@ -211,6 +213,7 @@ export function Sidebar({
   onFeatureContextMenu,
   onToggleFeatureSuppression,
   onRollbackAfterFeature,
+  onConfigureToggle,
   onSetParameter,
   onDeleteParameter,
   onExposeParameter,
@@ -361,9 +364,15 @@ export function Sidebar({
               onExpose={onExposeParameter}
               exposedInTweak={exposedParameterNames.has(parameter.name)}
               onDescribe={onDescribeParameter}
+              bodies={liveBodies}
+              onConfigureToggle={onConfigureToggle}
             />
           ))}
-          <AddParameterRow onSet={onSetParameter} />
+          <AddParameterRow
+            onSet={onSetParameter}
+            onConfigureToggle={onConfigureToggle}
+            bodies={liveBodies}
+          />
         </div>
         {parameters.length === 0 && (
           <p className="muted sidebar-hint">

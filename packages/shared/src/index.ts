@@ -17,7 +17,7 @@ export type AssetId = Brand<string, 'AssetId'>;
 export type SketchConstraintId = Brand<string, 'SketchConstraintId'>;
 export type ShaprImportId = Brand<string, 'ShaprImportId'>;
 
-export const PROJECT_DOCUMENT_SCHEMA_VERSION = 14 as const;
+export const PROJECT_DOCUMENT_SCHEMA_VERSION = 15 as const;
 export type ProjectDocumentSchemaVersion =
   typeof PROJECT_DOCUMENT_SCHEMA_VERSION;
 
@@ -378,6 +378,10 @@ export interface PartNode extends BaseNode {
 export interface ParameterNode extends BaseNode {
   kind: 'parameter';
   parameterId: ParameterId;
+  /** A 0/1 on/off control. Bound bodies are omitted from display and exports
+   * while off; their geometry and downstream feature history remain intact.
+   * An empty list is a general boolean parameter usable in expressions. */
+  toggle?: { bodyIds: BodyId[] };
   expression: string;
   value: number;
   /**
