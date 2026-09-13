@@ -156,6 +156,7 @@ export type GeometrySolveSketchResult =
   | { type: 'solve-sketch'; ok: false; requestId: string; error: string };
 
 export type GeometryWorkerResult =
+  | { type: 'projection'; projectId: string; version: number; derived: ProjectDocument['derived'] }
   | GeometryWorkerState
   | GeometrySyncResult
   | GeometryExportResult
@@ -430,6 +431,8 @@ async function execute(job: GeometryWorkerJob): Promise<void> {
                 ...stateFor('rebuilding', request, { stale: true }),
                 progress
               });
+            }, request.requestId ? undefined : projection => {
+              post({ type: 'projection', projectId: document.projectId, version: document.version, derived: projection });
             });
           }
         );

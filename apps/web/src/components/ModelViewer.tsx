@@ -1,3 +1,5 @@
+import type { ParameterVisualPreview } from '../lib/parameterVisualPreview';
+import { ParameterPreviewController } from './viewer/parameterPreviewController';
 import { useEffect, useRef, type MutableRefObject } from 'react';
 import { axisDimensionLabel } from '../lib/primitiveDimensionLabel';
 import * as THREE from 'three';
@@ -425,6 +427,7 @@ export interface NormalToFaceRequest {
 }
 
 interface ModelViewerProps {
+  parameterVisualPreview?: ParameterVisualPreview | null;
   bodies: BodyRepresentation[];
   sketches: SketchOverlay[];
   /** Runtime-only View-mode measurements rendered above exact geometry. */
@@ -1142,6 +1145,7 @@ function startRequestedView(
 
 export function ModelViewer({
   bodies,
+  parameterVisualPreview = null,
   sketches,
   measurementAnnotations,
   selectedBodyIds,
@@ -7737,6 +7741,47 @@ export function ModelViewer({
     units
   ]);
 
+  const parameterPreviewFramed = useRef(false);
+  const parameterPreviewController = useRef<ParameterPreviewController | null>(
+    null
+  );
+  useEffect(() => {
+    const context = contextRef.current;
+    if (!context) return;
+    const controller = (parameterPreviewController.current ??=
+      new ParameterPreviewController());
+    context.scene.add(controller.group);
+    controller.update(parameterVisualPreview);
+    if (parameterVisualPreview) {
+      measure('parameter.preview.install', 'parameter.preview.input');
+      performance.clearMarks?.('oz:parameter.preview.input');
+    }
+    if (
+      controller.group.children.length &&
+      !bodies.length &&
+      !parameterPreviewFramed.current &&
+      !initialView
+    ) {
+      fitCameraToObjects(
+        context.camera,
+        context.controls.target,
+        controller.group.children
+      );
+      if (context.projection === 'orthographic') context.syncOrthographic(true);
+      context.controls.update();
+      context.hasFitCamera = true;
+      parameterPreviewFramed.current = true;
+    }
+    const hidden = new Set(
+      parameterVisualPreview?.flatMap((body) => body.replaces)
+    );
+    for (const [id, object] of context.objectsByBodyId) {
+      object.visible = !hidden.has(id as BodyRepresentation['bodyId']);
+    }
+    context.requestRender();
+  }, [parameterVisualPreview, bodies, initialView]);
+  useEffect(() => () => parameterPreviewController.current?.dispose(), []);
+
   // Move/Rotate gizmo: translation arrows, rotation rings, and a free-move
   // center handle at the target body's center. The active drag owns the
   // gizmo imperatively, so prop-driven rebuilds pause until release.
@@ -8851,6 +8896,7 @@ export function ModelViewer({
     }
     const fitTargets = [
       ...context.bodyGroup.children,
+      ...(parameterPreviewController.current?.group.children ?? []),
       ...(regionGroupRef.current?.children ?? [])
     ].filter((child) => child.visible);
     if (fitTargets.length === 0) {

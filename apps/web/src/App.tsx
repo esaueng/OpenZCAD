@@ -3,8 +3,8 @@ import {
   parameterInputError,
   parameterBuildError
 } from './lib/parameterEdit';
-import type { growingHolderPreview } from './lib/growingHolderPreview';
-import { mergePreviewBodies } from './lib/previewBodies';
+import type { parameterVisualPreview } from './lib/parameterVisualPreview';
+import { LatestTask } from './lib/latestTask';
 import { rebuildProgressLabel } from './lib/rebuildProgressLabel';
 import { featureHistory, featureResultBodyIds } from './lib/featureHistory';
 import { FeatureBuildError } from './lib/featureValidation';
@@ -2085,6 +2085,9 @@ export function App() {
   const contextMenuActionsRef = useRef<Record<string, () => void>>({});
   const managerRef = useRef<CommandManager | null>(null);
   const parameterEditRequest = useRef(0);
+  const parameterChecks = useRef(
+    new LatestTask<ProjectDocument['derived']>()
+  ).current;
   const [parameterModelFailure, setParameterModelFailure] = useState<{
     projectId: ProjectDocument['projectId'];
     version: number;
@@ -2133,18 +2136,22 @@ export function App() {
     })
   ).current;
   useEffect(() => () => exactEntryQueue.cancel(), [exactEntryQueue]);
+  useEffect(() => () => {
+    ++parameterEditRequest.current;
+    parameterChecks.cancelPending();
+  }, [parameterChecks]);
   const [parameterPreviewBase, setParameterPreviewBase] =
     useState<ProjectDocument | null>(null);
   const [makeParameterPreview, setMakeParameterPreview] = useState<
-    typeof growingHolderPreview | null
+    typeof parameterVisualPreview | null
   >(null);
   useEffect(() => {
     if (!parameterPreviewBase || makeParameterPreview) return;
     let disposed = false;
-    void import('./lib/growingHolderPreview')
+    void import('./lib/parameterVisualPreview')
       .then((module) => {
         if (!disposed)
-          setMakeParameterPreview(() => module.growingHolderPreview);
+          setMakeParameterPreview(() => module.parameterVisualPreview);
       })
       .catch(() => {
         // Exact rebuilding remains available without a preview.
@@ -2155,6 +2162,10 @@ export function App() {
   }, [parameterPreviewBase, makeParameterPreview]);
   const geometry = useGeometryWorker({
     manager: () => managerRef.current,
+    onProjection: derived => {
+      const document = managerRef.current?.document;
+      if (document) setParameterPreviewBase({ ...document, derived });
+    },
     onDerived: (derived) => {
       const manager = managerRef.current;
       if (manager) {
@@ -2172,7 +2183,7 @@ export function App() {
             : null
         );
         const validated = manager.commitDerivedState(derived);
-        setParameterPreviewBase(derived.warnings.length ? null : validated);
+        setParameterPreviewBase({ ...validated, derived });
         setDoc(validated);
         // Fresh meshes now reflect the document (worker results are dropped
         // unless their version matches), so any held Move pose must release
@@ -2187,9 +2198,12 @@ export function App() {
       setStatus(message);
     }
   });
-  const exactGeometryReady = geometry.isReadyFor(doc);
+  const parameterDraftActive = parameterCandidate !== null &&
+    parameterCandidate.base.projectId === doc?.projectId &&
+    parameterCandidate.base.version === doc?.version;
+  const exactGeometryReady = !parameterDraftActive && geometry.isReadyFor(doc);
   function requireExactGeometryReady(): boolean {
-    const ready = geometry.isReadyFor(managerRef.current?.document ?? null);
+    const ready = !parameterDraftActive && geometry.isReadyFor(managerRef.current?.document ?? null);
     if (!ready) {
       setStatus(
         'Exact geometry is still rebuilding. Topology actions are temporarily unavailable.'
@@ -4340,13 +4354,13 @@ export function App() {
       parameterCandidate.base.projectId === doc?.projectId &&
       parameterCandidate?.base.version === doc?.version
         ? (makeParameterPreview?.(
-            parameterCandidate.base,
+            parameterPreviewBase,
             parameterCandidate.document
           ) ?? null)
         : !previewDoc &&
             !exactGeometryReady &&
             geometry.state.phase !== 'failed'
-          ? (makeParameterPreview?.(parameterPreviewBase, doc) ?? null)
+          ? (makeParameterPreview?.(parameterPreviewBase, doc, true) ?? null)
           : null,
     [
       makeParameterPreview,
@@ -4377,15 +4391,9 @@ export function App() {
    * A parameter preview stands in for its own result body only; hidden
    * bodies stay hidden and every other part keeps its exact geometry.
    */
-  const previewedViewerBodies = useMemo<BodyRepresentation[]>(
-    () =>
-      parameterPreview
-        ? mergePreviewBodies(
-            viewerBodies,
-            parameterPreview.filter((body) => !hiddenBodyIds.has(body.bodyId))
-          )
-        : viewerBodies,
-    [parameterPreview, viewerBodies, hiddenBodyIds]
+  const visibleParameterPreview = useMemo(
+    () => parameterPreview?.filter(body => !hiddenBodyIds.has(body.bodyId)) ?? null,
+    [parameterPreview, hiddenBodyIds]
   );
 
   /**
@@ -10983,6 +10991,30 @@ export function App() {
    * mode is allowed to run exactly this derived parameter transaction. Any
    * conflicting sketch refuses the whole edit before the live document moves.
    */
+  function handlePreviewParameter(name: string, expression: string | null) {
+    mark('parameter.preview.input');
+    ++parameterEditRequest.current;
+    parameterChecks.cancelPending();
+    setParameterEditPending(false);
+    const base = managerRef.current?.document;
+    if (!base || expression === null) {
+      setParameterCandidate(null);
+      return;
+    }
+    try {
+      const command = commandFactories.setParameter({ name, expression });
+      command.validate(base);
+      const candidate = command.apply(base);
+      if (parameterInputError(base, candidate)) {
+        setParameterCandidate(null);
+        return;
+      }
+      setParameterCandidate({ base, document: candidate });
+    } catch {
+      setParameterCandidate(null);
+    }
+  }
+
   async function handleSetParameter(
     name: string,
     expression: string
@@ -11064,7 +11096,10 @@ export function App() {
       // Keep the live document, history and last valid geometry untouched while
       // the worker checks every dependent feature, including the final union.
       setParameterCandidate({ base, document: prospective });
-      const derived = await geometry.syncOnce(prospective);
+      const derived = await parameterChecks.request(() => {
+        if (!current()) return Promise.reject(new Error('The project or parameter changed during validation.'));
+        return geometry.syncOnce(prospective);
+      });
       if (!current())
         return refuse(
           'The project or parameter changed during validation. Try again.'
@@ -14338,8 +14373,8 @@ export function App() {
       ? 'showing the last valid projection as stale'
       : 'no exact projection is available yet';
   const visibleStatus =
-    parameterPreview && parameterEditPending
-      ? `Parameter preview · ${status}`
+    parameterPreview
+      ? `Parameter preview · ${parameterEditPending ? status : parameterDraftActive ? 'Press Enter to apply; Escape to cancel' : 'exact geometry rebuilding'}`
       : exactGeometryReady
         ? status
         : `${
@@ -15124,6 +15159,7 @@ export function App() {
           );
         }
       }}
+      onPreviewParameter={handlePreviewParameter}
       onSetParameter={(name, expression) =>
         handleSetParameter(name, expression)
       }
@@ -15272,7 +15308,7 @@ export function App() {
           }
           projectName={doc.name}
           units={doc.units}
-          canExport={exportBodyIds.length > 0 && !parameterEditPending}
+          canExport={exportBodyIds.length > 0 && !parameterEditPending && !parameterDraftActive}
           exportScope={
             selectedBody &&
             !selectedBody.consumed &&
@@ -15379,6 +15415,7 @@ export function App() {
             canExport={
               exportBodyIds.length > 0 &&
               !parameterEditPending &&
+              !parameterDraftActive &&
               !parameterModelError
             }
             exportScope={
@@ -15388,6 +15425,7 @@ export function App() {
                 ? selectedBody.name
                 : null
             }
+            onPreviewParameter={handlePreviewParameter}
             onSetParameter={(name, expression) =>
               handleSetParameter(name, expression)
             }
@@ -15412,7 +15450,8 @@ export function App() {
         >
           <ViewerShell
             projectId={doc.projectId}
-            bodies={previewedViewerBodies}
+            bodies={viewerBodies}
+            parameterVisualPreview={visibleParameterPreview}
             measurementAnnotations={measurementAnnotations}
             measurementCloudSync={[
               doc.projectId,

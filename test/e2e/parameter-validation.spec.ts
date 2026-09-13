@@ -254,8 +254,11 @@ for (const guarded of [true, false])
       await input.press('Enter');
       await expect(
         page.getByText('Checking geometry…', { exact: true })
-      ).toHaveCount(0);
-      const newest = await backup(page);
+      ).toHaveCount(1);
+      // The newest edit waits on the main thread while the old exact job is
+      // held. Neither candidate may commit until its validation has finished.
+      const queued = await backup(page);
+      expect(Object.values(queued.nodes).find(n => n.kind === 'parameter')?.expression).toBe('58');
       await page.evaluate(() =>
         (
           window as typeof window & { releaseHeightCheck?: () => void }
@@ -270,9 +273,10 @@ for (const guarded of [true, false])
           )
         )
         .toBe(true);
+      await expect(page.getByText('Checking geometry…', { exact: true })).toHaveCount(0);
       const afterLateResult = await backup(page);
-      expect(afterLateResult.version).toBe(newest.version);
-      expect(afterLateResult.commandLog).toEqual(newest.commandLog);
+      // The superseded 60 must never become a history entry; only 62 commits.
+      expect(afterLateResult.commandLog.length).toBe(queued.commandLog.length + 1);
       expect(
         Object.values(afterLateResult.nodes).find((n) => n.kind === 'parameter')
           ?.expression
