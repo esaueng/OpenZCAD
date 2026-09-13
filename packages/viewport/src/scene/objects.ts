@@ -7,7 +7,7 @@ import type {
   SketchOverlay
 } from '../types';
 import type { EdgeTopology } from '@openzcad/shared';
-import { isViewerMesh, type ViewerMesh } from '../pick/meshes';
+import { findBodyId, isViewerMesh, type ViewerMesh } from '../pick/meshes';
 import { updateSectionCap } from './sectionCaps';
 import {
   applyExactSection,
@@ -118,10 +118,13 @@ export function sectionClippingPlane(
  * and normal face culling returns as soon as the section is cleared.
  *
  * `exact` replaces those caps with the kernel's own section geometry once it
- * has been computed for this plane position. The two never appear together:
- * one is an approximation of the cut drawn from the display mesh, the other
- * is the cross-section the export writes, and a viewport showing both would
- * be showing the same cut twice at two different fidelities.
+ * has been computed for this plane position. The two never appear together on
+ * the same body: one is an approximation of the cut drawn from the display
+ * mesh, the other is the cross-section the export writes, and a viewport
+ * showing both would be showing the same cut twice at two different
+ * fidelities. It is per body, because the kernel can section one body of a
+ * model and refuse another — and a body with no exact section still needs its
+ * cap, or it renders as an open shell.
  */
 export function applySectionPlane(
   root: THREE.Object3D,
@@ -155,7 +158,13 @@ export function applySectionPlane(
   });
   // Adding/removing children during traverse would skip siblings.
   const showExact = plane !== null && exact !== null && exact.length > 0;
-  for (const mesh of meshes) updateSectionCap(mesh, showExact ? null : plane);
+  const exactBodyIds = new Set(
+    showExact ? exact.map((region) => region.bodyId) : []
+  );
+  for (const mesh of meshes) {
+    const replaced = exactBodyIds.has(findBodyId(mesh) ?? '');
+    updateSectionCap(mesh, replaced ? null : plane);
+  }
   applyExactSection(root, showExact ? exact : null);
 }
 

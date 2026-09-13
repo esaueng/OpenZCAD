@@ -553,7 +553,7 @@ function describeSectionOutline(
   if (outline.kind === 'exact') {
     const passed =
       outline.refused > 0
-        ? `, ${outline.refused} body${outline.refused === 1 ? '' : 'ies'} not cut`
+        ? `, ${outline.refused} ${outline.refused === 1 ? 'body has' : 'bodies have'} no exact section`
         : '';
     return {
       kind: 'exact',
@@ -5915,6 +5915,7 @@ export function App() {
       setSectionOutline({
         kind: 'exact',
         regions: report.regions.map((region) => ({
+          bodyId: region.bodyId,
           positions: region.positions,
           indices: region.indices,
           loops: region.loops
