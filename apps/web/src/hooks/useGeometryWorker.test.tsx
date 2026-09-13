@@ -35,6 +35,22 @@ afterEach(() => {
 });
 
 describe('useGeometryWorker', () => {
+  it('keeps upstream projections ephemeral and ignores other revisions', () => {
+    installWorker();
+    const document = createProjectDocument('Projection', toUserId('user'));
+    const host = { manager: () => ({ document }) as CommandManager, onDerived: vi.fn(), onProjection: vi.fn(), onError: vi.fn() };
+    const { result } = renderHook(() => useGeometryWorker(host));
+    const worker = FakeWorker.instances[0]!;
+    act(() => {
+      worker.emit({ type: 'projection', projectId: document.projectId, version: document.version, derived: document.derived });
+      worker.emit({ type: 'projection', projectId: document.projectId, version: document.version + 1, derived: document.derived });
+      worker.emit({ type: 'projection', projectId: 'another-project', version: document.version, derived: document.derived });
+    });
+    expect(host.onProjection).toHaveBeenCalledTimes(1);
+    expect(host.onDerived).not.toHaveBeenCalled();
+    expect(result.current.isReadyFor(document)).toBe(false);
+  });
+
   it('marks only a matching broadcast projection as exact-ready', () => {
     installWorker();
     const document = createProjectDocument('Worker state', toUserId('user'));

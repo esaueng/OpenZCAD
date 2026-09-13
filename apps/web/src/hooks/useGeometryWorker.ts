@@ -91,6 +91,8 @@ export interface GeometryWorkerHost {
   manager(): CommandManager | null;
   /** A rebuild arrived for the document currently on screen. */
   onDerived(derived: DerivedState): void;
+  /** Ephemeral upstream display only. Never commits derived state or marks ready. */
+  onProjection?(derived: DerivedState): void;
   /** A rebuild failed; the message is already human-readable. */
   onError(message: string): void;
 }
@@ -302,6 +304,13 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
 
       worker.onmessage = (event: MessageEvent<GeometryWorkerResult>) => {
         lastWorkerMessageAt = Date.now();
+        if (event.data.type === 'projection') {
+          const document = hostRef.current.manager()?.document;
+          if (document?.projectId === event.data.projectId && document.version === event.data.version) {
+            hostRef.current.onProjection?.(event.data.derived);
+          }
+          return;
+        }
         if (event.data.type === 'state') {
           if (event.data.progress?.status === 'completed') {
             // Keep each timing even when React batches adjacent phase updates.

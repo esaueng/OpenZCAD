@@ -212,18 +212,21 @@ export function unifyBooleanFaces(kernel: RemusKernel, solid: number): number {
  * it on validation alone sent a perfectly good raw union to the strict pass
  * as "open, non-manifold, or inconsistently oriented".
  */
-export function unifyUnionFaces(kernel: RemusKernel, solid: number): number {
+export function unifyUnionFaces(kernel: RemusKernel, solid: number, onAccepted?: (solid: number) => void): number {
   return selectSafelyUnifiedSolid(
     kernel,
     solid,
-    (candidate) =>
-      isStrictBooleanSolid(kernel, candidate) && solidMeshIsClosed(kernel, candidate)
+    (candidate) => {
+      const accepted = isStrictBooleanSolid(kernel, candidate) && solidMeshIsClosed(kernel, candidate);
+      if (accepted) onAccepted?.(candidate);
+      return accepted;
+    }
   );
 }
 
-export function fuseUniformSolid(kernel: RemusKernel, solids: number[]): number {
+export function fuseUniformSolid(kernel: RemusKernel, solids: number[], onAccepted?: (solid: number) => void): number {
   const fused = kernel.fuseAll(Uint32Array.from(solids));
-  return unifyUnionFaces(kernel, fused);
+  return unifyUnionFaces(kernel, fused, onAccepted);
 }
 
 /**

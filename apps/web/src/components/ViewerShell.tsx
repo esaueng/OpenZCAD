@@ -1,3 +1,4 @@
+import type { ParameterVisualPreview } from '../lib/parameterVisualPreview';
 import { useRef, type MutableRefObject, type ReactNode } from 'react';
 import {
   ModelViewer,
@@ -94,6 +95,7 @@ type ProjectThumbnailSyncState = readonly [
 interface ViewerShellProps {
   projectId: string;
   bodies: BodyRepresentation[];
+  parameterVisualPreview?: ParameterVisualPreview | null;
   sketches: SketchOverlay[];
   measurementAnnotations: MeasurementViewportAnnotation[];
   measurementCloudSync?: MeasurementCloudSyncState;
@@ -254,6 +256,7 @@ interface ViewerShellProps {
 export function ViewerShell({
   projectId,
   bodies,
+  parameterVisualPreview,
   sketches,
   measurementAnnotations,
   measurementCloudSync,
@@ -423,6 +426,7 @@ export function ViewerShell({
       <ModelViewer
         key={projectId}
         bodies={bodies}
+        parameterVisualPreview={parameterVisualPreview}
         sketches={sketches}
         measurementAnnotations={measurementAnnotations}
         selectedBodyIds={selectedBodyIds}
