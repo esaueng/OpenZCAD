@@ -25,24 +25,35 @@ before opening a new backup. No server database migration is needed.
 
 ## Lettering on a growing holder
 
-The existing recognized-height recipe can grow a gap between letters when text
-is fused into the imported STEP. A visibility switch cannot separate that
-geometry. A prepared model can instead retain the plain holder and import all
-lettering as one exact body with several solids. Translate that entire body
-with the arm's width shift and a height expression, such as half the height
-change to keep the word centered. This preserves every character and their
-spacing. Keep it separate from the holder to make `show_text` effective.
+Import a normal STEP, open the assistant, and choose **Parameterize holder and
+text** when offered. You can also ask the AI for editable opening/height,
+`show_text`, and intact lettering. The kernel verifies constant-depth raised
+profiles on one planar arm face, and the AI copies that measurement into its
+proposal. Exact preflight must pass before Apply.
 
-The supplied private holder was prepared and verified separately: a flat
-support face closes the original emboss footprints while the seven original
-cap profiles produce the exact lettering solids. Whole-word translation was
-checked at 58, 65, and 72 mm, with valid STEP round-trips for on (holder plus
-seven letters) and off (holder alone). Private geometry and generated backups
-are not repository fixtures. This preparation does not add automatic text
-recognition or separation to the app. STEP/mesh export retains the lettering
-as separate touching solids, suitable for a multi-body workflow.
+The resulting history retains the original STEP bytes. Each imported source
+records a measured `planarEmboss` selection that is re-verified during rebuild:
+the holder uses the plain support and a separate Text body contains every
+raised profile. It follows the arm's width shift and half the height change.
+The viewport preview translates the whole word by the same expression while
+the exact result rebuilds. Character spacing never changes.
+
+The native v3 arena proof checks connected face groups, straight side surfaces,
+uniform positive depth, unique cap fingerprints, manifold topology, and strict
+validity of the resulting solids. It preserves letter holes and refuses
+unverified/ambiguous groups. This is a bounded geometry recognizer, not OCR;
+engraving or lettering on curved faces remains unsupported. STEP/mesh export
+retains the lettering as separate touching solids.
+
+The original private STEP was tested directly at 58, 65, and 72 mm, including
+exact STEP round-trips with text on/off. Public regression fixtures use
+independently constructed CAD profiles; private source bytes stay out of Git.
 
 Regression coverage: `test/body-visibility-parameter.test.ts`,
 `test/body-visibility-export.test.ts`, `ParameterRows.test.tsx`, and
 `test/e2e/body-visibility-parameter.spec.ts` cover bindings, replay, undo/reopen,
 rigid placement, export enforcement, and Build/Tweak interactions.
+`planar-emboss.test.ts`, `growing-holder-lettering.test.ts`, and
+`test/e2e/ai-holder-lettering.spec.ts` cover the normal STEP-to-assistant path,
+source preservation, exact grouped movement, preview, refusal cases, and
+undo/reopen.

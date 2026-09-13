@@ -202,7 +202,12 @@ export function assistantSuggestions(
       ? [
           {
             id: 'verified-growing-holder',
-            label: GROWING_HOLDER_SUGGESTION_LABEL,
+            label: context.growingHolderProposal.operations.some(
+              (op) =>
+                op.kind === 'add_growing_holder_recipe' && op.opening.lettering
+            )
+              ? 'Parameterize holder and text'
+              : GROWING_HOLDER_SUGGESTION_LABEL,
             proposal: context.growingHolderProposal
           }
         ]
