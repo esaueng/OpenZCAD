@@ -20,6 +20,15 @@ export {
 } from './imported-mesh';
 
 export {
+  MESH_IMPORT_EXTENSIONS,
+  MESH_IMPORT_POLICIES,
+  meshImportFormatForFileName,
+  meshImportTooLargeMessage,
+  type MeshImportFormat,
+  type MeshImportPolicy
+} from './mesh-import-formats';
+
+export {
   DEFAULT_EXACT_BEZIER_EDGES,
   bezierProfileEdgesEnabled,
   setBezierProfileEdges

@@ -87,6 +87,10 @@ import {
   brepVertexIds
 } from './exact-brep';
 export { brepEdgeCurve, edgeCircleMisfit } from './exact-brep';
+export {
+  importMeshFile,
+  type ImportedMeshTriangles
+} from './mesh-file-import';
 import {
   readMeshQuality,
   type BodyMeshQuality,
