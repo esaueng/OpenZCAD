@@ -115,6 +115,24 @@ function chainDocument() {
 }
 
 describe('incremental prefix rebuild cache', { timeout: 120_000 }, () => {
+  it('publishes an upstream display before the pattern without exporting or changing exact output', async () => {
+    const adapter = await createExactKernelAdapter();
+    try {
+      const { document } = chainDocument();
+      const events: string[] = [];
+      const projections: DerivedState[] = [];
+      const derived = await adapter.syncDocument(document,
+        progress => { if (progress.stage === 'feature') events.push(progress.name); },
+        projection => { events.push('projection'); projections.push(projection); });
+      expect(projections).toHaveLength(1);
+      expect(projections[0]!.exportableBodyIds).toEqual([]);
+      expect(Object.values(projections[0]!.bodyRepresentations).every(b => !b.exportableStep && !b.topology)).toBe(true);
+      expect(Object.values(derived.bodyRepresentations).filter(b => b.consumed).every(b => !b.massProperties)).toBe(true);
+      expect(normalized(derived)).toEqual(normalized(await freshDerived(document)));
+      expect(events.indexOf('projection')).toBeLessThan(events.indexOf('Row'));
+    } finally { adapter.dispose(); }
+  });
+
   it('restores the unchanged prefix and matches a from-scratch rebuild', async () => {
     const events: RebuildCacheEvent[] = [];
     const adapter = await createExactKernelAdapter({
