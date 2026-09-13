@@ -1,5 +1,6 @@
 import { test, expect, type Page } from '@playwright/test';
 import {
+  adoptProjectDocument,
   createCheckpoint,
   createProjectDocument,
   normalizeDocument
@@ -192,12 +193,19 @@ export async function stubApi(
       const payload = route.request().postDataJSON() as {
         name: string;
         units?: string;
+        document?: ProjectDocument;
       };
-      const document = createProjectDocument(
-        payload.name,
-        toUserId('user_e2e'),
-        (payload.units as 'mm' | undefined) ?? 'mm'
-      );
+      const document = payload.document
+        ? adoptProjectDocument(
+            payload.document,
+            toUserId('user_e2e'),
+            payload.name
+          )
+        : createProjectDocument(
+            payload.name,
+            toUserId('user_e2e'),
+            (payload.units as 'mm' | undefined) ?? 'mm'
+          );
       return route.fulfill({
         status: 201,
         json: {
