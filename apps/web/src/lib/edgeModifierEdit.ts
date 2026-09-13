@@ -12,6 +12,19 @@ export function edgeModifierCommand(
       ? commandFactories.filletEdges(value)
       : commandFactories.chamferEdges(value);
   }
+  // A patch cannot delete a key, and a variable fillet turned back into a
+  // constant one — or an asymmetric chamfer back into a symmetric one — is
+  // exactly a deletion: the same radius twice is a different blend from no
+  // end radius at all, and it goes through a different kernel engine. Name
+  // the fields to drop instead of storing a lookalike.
+  const clearData =
+    kind === 'fillet'
+      ? value.endRadius === undefined
+        ? ['endRadius', 'radiusLaw']
+        : []
+      : value.distance2 === undefined
+        ? ['distance2']
+        : [];
   return commandFactories.updateFeature(
     {
       featureId: feature.featureId,
@@ -23,14 +36,26 @@ export function edgeModifierCommand(
         edgeHashes: value.edgeHashes,
         edgeReferences: value.edgeReferences,
         ...(kind === 'fillet'
-          ? { radius: value.size }
+          ? {
+              radius: value.size,
+              ...(value.endRadius !== undefined
+                ? {
+                    endRadius: value.endRadius,
+                    radiusLaw: value.radiusLaw ?? 'linear'
+                  }
+                : {})
+            }
           : {
               distance: value.size,
               ...(value.angleDeg !== undefined
                 ? { angleDeg: value.angleDeg }
+                : {}),
+              ...(value.distance2 !== undefined
+                ? { distance2: value.distance2 }
                 : {})
             })
-      }
+      },
+      ...(clearData.length > 0 ? { clearData } : {})
     },
     `Edit ${value.name}`
   );
