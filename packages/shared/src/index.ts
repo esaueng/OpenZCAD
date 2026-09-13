@@ -1378,6 +1378,8 @@ export interface EdgeCurve {
 }
 
 export interface BodyTopology {
+  /** Independent exact raised-profile group; it does not require an opening. */
+  recognizedPlanarEmboss?: PlanarEmbossSelection;
   faces: FaceTopology[];
   edges: EdgeTopology[];
   /** Non-overlapping exact proofs created while imported topology is live. */
@@ -1842,7 +1844,15 @@ export interface FeatureWarning {
   kind: 'build-failed' | 'refusal' | 'advisory' | 'suppressed';
 }
 
+/** Explicit, bounded foreground analysis; never part of canonical history. */
+export interface EditAnalysisRequest {
+  bodyId: string;
+  /** Zero finds a bounded set; one or two restrict the measured face pair. */
+  faceHashes: number[];
+}
+
 export interface DerivedState {
+  editAnalysis?: EditAnalysisRequest;
   bodyRepresentations: Record<BodyId, BodyRepresentation>;
   exportableBodyIds: BodyId[];
   warnings: string[];
