@@ -37,6 +37,14 @@ describe('selection semantics', () => {
     expect(hover.edgeWidth).toBeLessThan(selected.edgeWidth);
   });
 
+  it('outlines a selected body between its idle and picked-edge weights', () => {
+    // A whole-body outline must read as "this body is picked" without being
+    // mistaken for the edge the user is about to fillet.
+    const { idle, selected } = SELECTION_SEMANTICS;
+    expect(selected.bodyEdgeWidth).toBeGreaterThan(idle.edgeWidth);
+    expect(selected.bodyEdgeWidth).toBeLessThan(selected.edgeWidth);
+  });
+
   it('lets a selected face be seen through', () => {
     // The recorded review: a large selected fill hid the edges and holes it
     // covered. The rim carries selection instead, and is the wider mark.

@@ -9,8 +9,11 @@ import {
 import {
   EDGE_IDLE_COLOR,
   EDGE_IDLE_OPACITY,
+  EDGE_IDLE_WIDTH,
+  EDGE_SELECTED_COLOR,
   EDGE_WIREFRAME_COLOR
 } from '../pick/edges';
+import { SELECTION_SEMANTICS } from './semantics';
 import { createBodyEdgeOverlay } from './edgeOverlay';
 
 const BODY_ID = toBodyId('body-1');
@@ -366,6 +369,35 @@ describe('BodyEdgeOverlay', () => {
     expect(material.color.getHex()).toBe(EDGE_IDLE_COLOR);
     expect(material.opacity).toBe(EDGE_IDLE_OPACITY);
     expect(overlay.idleEdges.visible).toBe(true);
+  });
+
+  it('outlines a selected body by restyling its idle batch in place', () => {
+    const overlay = makeOverlay();
+    const idleMaterial = overlay.idleEdges.material;
+    const idleGeometry = overlay.idleEdges.geometry;
+
+    expect(overlay.setBodySelected(true)).toBe(true);
+    expect(overlay.setBodySelected(true)).toBe(false);
+    expect(idleMaterial.color.getHex()).toBe(EDGE_SELECTED_COLOR);
+    expect(idleMaterial.linewidth).toBe(
+      SELECTION_SEMANTICS.selected.bodyEdgeWidth
+    );
+    expect(idleMaterial.opacity).toBe(1);
+    // Same batch objects: the outline must not cost a rebuild.
+    expect(overlay.idleEdges.material).toBe(idleMaterial);
+    expect(overlay.idleEdges.geometry).toBe(idleGeometry);
+
+    // A display-mode change keeps the outline, and clearing the selection
+    // restores that mode's idle look rather than the shaded one.
+    overlay.setDisplayMode('wireframe');
+    expect(idleMaterial.color.getHex()).toBe(EDGE_SELECTED_COLOR);
+    expect(overlay.setBodySelected(false)).toBe(true);
+    expect(idleMaterial.color.getHex()).toBe(EDGE_WIREFRAME_COLOR);
+    expect(idleMaterial.linewidth).toBe(EDGE_IDLE_WIDTH);
+    expect(idleMaterial.opacity).toBe(1);
+    overlay.setDisplayMode('shaded-edges');
+    expect(idleMaterial.color.getHex()).toBe(EDGE_IDLE_COLOR);
+    expect(idleMaterial.opacity).toBe(EDGE_IDLE_OPACITY);
   });
 
   it('suppresses only hidden passes for receded sketch solids', () => {

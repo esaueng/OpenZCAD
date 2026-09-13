@@ -46,6 +46,13 @@ export const SELECTION_SEMANTICS = {
     hiddenFaceOpacity: 0.16,
     /** Whole-body tint. See `bodyEmissive` below before reaching for it. */
     bodyEmissive: 0x173a5e,
+    /**
+     * Every edge of a selected body, in the selection blue at a width between
+     * idle and a selected edge. The emissive tint alone was too quiet: two
+     * dark bodies picked for a union looked the same as two unpicked ones
+     * from most angles, so the outline carries the state instead.
+     */
+    bodyEdgeWidth: 2.6,
     edge: 0x7cc0ff,
     edgeWidth: 4.5,
     /** The rim of a selected face: brighter and wider than its own edges. */

@@ -109,6 +109,7 @@ function makeProps(
     },
     featureSelectionSource: 'inferred',
     onLaunchTool: vi.fn(),
+    onSelectBodies: vi.fn(),
     onCancel: vi.fn(),
     onCreatePrimitive: vi.fn(),
     onCreateRevolve: vi.fn(),
