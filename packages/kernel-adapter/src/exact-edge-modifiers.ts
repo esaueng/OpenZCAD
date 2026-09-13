@@ -14,8 +14,44 @@ import { countBlendFaces, selectionTouchesBlendFace } from './exact-brep';
  * failure from a structural one. A ladder rather than one probe because the
  * kernel has a small-feature floor as well as a large-feature limit, so a
  * single deep probe can fail on a selection that a halved size would carry.
+ *
+ * All three rungs still discriminate on the pinned kernel, measured on a
+ * 30x18x24 box with all twelve edges selected: the refusal is
+ * `unsupported-vertex-blend` at every size from r9 up, and the first rung
+ * that is accepted is 1/2 at size 16, 1/8 at size 20 and 1/64 at size 100.
+ * None of them can be dropped without turning a true "try a smaller radius"
+ * into a false structural claim. What the ladder no longer has to do blind is
+ * find the ceiling — see {@link blendCliffLimit}.
  */
 export const EDGE_MODIFIER_PROBE_RATIOS = [1 / 2, 1 / 8, 1 / 64] as const;
+
+/**
+ * The largest size the kernel's blend engine says this selection can carry,
+ * read out of its own refusal, or `null` when it named none.
+ *
+ * Remus B23 made fillet one cascade — the walking engine, then a guarded
+ * rolling-ball rebuild, each transactional — and a size-bound refusal now
+ * comes back typed and measured:
+ *
+ *   `cliff-encountered: blend: blend cliff on face Id(0) at edge Id(0):
+ *    requested radius 30, available radius 18`
+ *
+ * The kernel computed that ceiling from the support faces. It is not
+ * re-derived here, and it is not guessed from the edge length — the old
+ * comment on the bounds guard below says why that guess is wrong. It is used
+ * only to aim the probe ladder, which still has to prove a smaller size is
+ * actually ACCEPTED: the cliff is the first thing the cascade hit, not a
+ * promise that nothing else fails underneath it. Measured on the pin, the
+ * reported ceiling is exclusive (r18 refuses, r17.999 builds).
+ */
+export function blendCliffLimit(reported: string | null): number | null {
+  if (!reported?.startsWith('cliff-encountered')) {
+    return null;
+  }
+  const match = /available radius ([0-9.eE+-]+)/.exec(reported);
+  const limit = match ? Number(match[1]) : Number.NaN;
+  return Number.isFinite(limit) && limit > 0 ? limit : null;
+}
 
 /**
  * Run one edge modifier and apply every acceptance rule the adapter ships a
@@ -198,40 +234,79 @@ export function applyEdgeModifier(
 }
 
 /**
- * True when the same selection is ACCEPTED at some size below the one that
- * failed, which is the only sound evidence that a failure is size-bound
- * rather than structural. Runs on the failure path only.
+ * A probe size rounded DOWN to four significant digits, so that the size the
+ * ladder proved is also a size worth printing. Rounding down keeps the probe
+ * inside whatever bound produced it; rounding to nearest could step back over
+ * a ceiling the kernel just refused.
  */
-export function edgeModifierSucceedsSmaller(
+function probeSize(value: number): number {
+  if (!Number.isFinite(value) || value <= 0) {
+    return Number.NaN;
+  }
+  const scale = 10 ** (3 - Math.floor(Math.log10(value)));
+  return Math.floor(value * scale) / scale;
+}
+
+/**
+ * The largest size on the ladder at which this selection is ACCEPTED, or
+ * `null` when none is — the only sound evidence that a failure is size-bound
+ * rather than structural. Runs on the failure path only.
+ *
+ * `ceiling` is the size the kernel itself named as the most its blend can
+ * carry here, when its refusal named one. The ladder is then measured down
+ * from the ceiling rather than from the refused size, which is what turns the
+ * common oversized-radius failure from three kernel round-trips into one: a
+ * request far above the limit used to spend the whole ladder walking down to
+ * it, while half the kernel's own ceiling is accepted on the first rung.
+ *
+ * The probe is still run rather than replaced by the ceiling, and the SIZE it
+ * returns is the one the message quotes, because the kernel's ceiling is an
+ * upper bound and not a working value. Two things sit below it: the cascade
+ * reports where it stopped FIRST, and this adapter's own acceptance rules are
+ * stricter than the kernel's. Measured on the pin, a 30x18x24 box refuses a
+ * 30 fillet with "available radius 18", and the kernel will indeed build
+ * r17.999 — as a body 2x the height of its input, which the bounds guard
+ * above rejects. Quoting 18 as a radius to try would send the user back
+ * round the same refusal.
+ */
+export function acceptedEdgeModifierProbe(
   kernel: RemusKernel,
   target: number,
   selected: number[],
   featureKind: 'fillet' | 'chamfer',
-  size: number
-): boolean {
-  return EDGE_MODIFIER_PROBE_RATIOS.some((ratio) => {
-    const probe = size * ratio;
+  size: number,
+  ceiling: number | null = null
+): number | null {
+  const from = ceiling === null ? size : Math.min(size, ceiling);
+  for (const ratio of EDGE_MODIFIER_PROBE_RATIOS) {
+    const probe = probeSize(from * ratio);
     if (!Number.isFinite(probe) || probe <= GEOMETRY_EPSILON) {
-      return false;
+      continue;
     }
     try {
-      return (
+      if (
         applyEdgeModifier(kernel, target, selected, featureKind, probe) !== null
-      );
+      ) {
+        return probe;
+      }
     } catch {
-      return false;
+      // A throw is a refusal like any other; keep walking the ladder.
     }
-  });
+  }
+  return null;
 }
 
 /**
  * Cause-aware failure message for an edge modifier the kernel refused.
  *
- * The kernel reports why its blender stopped, but not whether the selection
- * could ever work, so that question is answered the only way that is sound:
- * by retrying the same selection at a ladder of smaller sizes. A probe that
- * is accepted means the failure is size-bound and the actionable advice is a
- * smaller size. A ladder that fails everywhere means the cause is structural,
+ * The kernel reports why its blender stopped, and since Remus B23 a
+ * size-bound fillet refusal also reports the ceiling it stopped at. What it
+ * still does not report is whether the selection could ever work, so that
+ * question is answered the only way that is sound: by retrying the same
+ * selection at a ladder of smaller sizes, aimed at the kernel's ceiling when
+ * it named one. A probe that is accepted means the failure is size-bound and
+ * the actionable advice is a smaller size — named exactly, when the kernel
+ * measured it. A ladder that fails everywhere means the cause is structural,
  * and it is named from the selection's topology — a closed rim, a corner
  * chain, or an edge ending on an existing blend.
  *
@@ -293,11 +368,24 @@ export function edgeModifierFailureMessage(
   const dimension = featureKind === 'fillet' ? 'radius' : 'distance';
   const verb = featureKind === 'fillet' ? 'rounded' : 'chamfered';
   const prefix = `${label} could not be created on ${selected.length} selected edge${selected.length === 1 ? '' : 's'} with ${dimension} ${size}.`;
+  const cliffLimit = blendCliffLimit(reported);
   try {
-    if (
-      edgeModifierSucceedsSmaller(kernel, target, selected, featureKind, size)
-    ) {
-      return `${prefix} Try a smaller ${dimension}.`;
+    const accepted = acceptedEdgeModifierProbe(
+      kernel,
+      target,
+      selected,
+      featureKind,
+      size,
+      cliffLimit
+    );
+    if (accepted !== null) {
+      // The kernel measured the ceiling off the support faces, so it is
+      // relayed rather than re-derived — an edge-length guess is wrong, as
+      // the bounds guard above explains. It is quoted as the bound it is,
+      // with a size this adapter actually built alongside it.
+      return cliffLimit === null
+        ? `${prefix} Try a smaller ${dimension}.`
+        : `${prefix} Try a smaller ${dimension}: the kernel's blend runs off its support face at ${dimension} ${cliffLimit}, and ${dimension} ${accepted} builds here.`;
     }
     // Named before the topology causes because it explains the whole body
     // rather than one selection: measured on an r=2..3, h=1 annulus, a 90
