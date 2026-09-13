@@ -194,13 +194,19 @@ import { DeferredExactEntry } from './lib/deferredExactEntry';
 import type { SketchSolveStatus } from './components/SketchToolRail';
 import { ApiError, api, isProjectDocumentUnavailableError } from './lib/api';
 import {
+  applyAccountSourceArchives,
+  archiveAccountImportSources,
+  sourceUploadMessage
+} from './lib/accountImportSources';
+import {
   archiveArtifact as archiveArtifactBody,
   type ArchiveArtifactInput
 } from './lib/archiveArtifact';
 import {
   archiveLocalOnlyImportSources,
   createInFlightImportChecksums,
-  listLocalOnlyImportSources
+  listLocalOnlyImportSources,
+  type ArchiveLocalSourcesResult
 } from './lib/importArchival';
 import {
   coalesceImportProgress,
@@ -1009,7 +1015,7 @@ const DISPLAY_MODE_ORDER: DisplayMode[] = [
 ];
 
 type AdoptLocalProjectResult =
-  | { state: 'adopted' | 'already-adopted' | 'missing' }
+  | { state: 'adopted' | 'already-adopted' | 'missing'; sourceWarning?: string }
   | { state: 'conflict'; conflict: ProjectConflict };
 
 interface OffsetEditPlan {
@@ -2908,6 +2914,12 @@ export function App() {
     (collaborationRollout.sharingEnabled ||
       collaborationRollout.personalSyncEnabled);
 
+  const activeProjectIsCloud = Boolean(
+    doc &&
+    (cloudProjectIds.has(doc.projectId) ||
+      remoteVersionsRef.current.has(doc.projectId))
+  );
+
   const collaboration = useCollaboration({
     enabled: cloudFunctionsEnabled,
     document: doc,
@@ -2915,7 +2927,10 @@ export function App() {
     // account credentials to a collaboration room after this exact project has
     // been resolved as a cloud-backed document. Desktop exchanges its native
     // bearer credential for a short-lived, one-use WebSocket ticket.
-    session: cloudAvailable && liveCollaborationEnabled ? session : null,
+    session:
+      activeProjectIsCloud && cloudAvailable && liveCollaborationEnabled
+        ? session
+        : null,
     onRemoteDocument(incomingDocument, context) {
       const current = managerRef.current?.document;
       // An unsolicited broadcast at or behind the local version is this
@@ -3048,7 +3063,10 @@ export function App() {
         null
       : sharedProjectDisabled
         ? 'Project sharing is disabled in Settings'
-        : !cloudAvailable || !session || !projectSharingEnabled
+        : !activeProjectIsCloud ||
+            !cloudAvailable ||
+            !session ||
+            !projectSharingEnabled
           ? null
           : collaboration.conflict
             ? 'Resolve the collaboration conflict before editing'
@@ -6590,7 +6608,19 @@ export function App() {
     // durable locally. Keep this order so a partial IndexedDB failure can only
     // lose the baseline (which forces conservative reconciliation), never put
     // the baseline ahead of the device copy.
-    await saveLocalProject(merged);
+    const currentManager = managerRef.current;
+    const current = currentManager?.document;
+    const editedDuringSave =
+      current?.projectId === merged.projectId &&
+      current.version !== local.version;
+    const durable = editedDuringSave
+      ? applyAccountSourceArchives(current, merged)
+      : merged;
+    if (editedDuringSave && currentManager && durable !== current) {
+      currentManager.document = durable;
+      setDoc(durable);
+    }
+    await saveLocalProject(durable);
     await saveLastSyncedVersion(merged.projectId, merged.version);
     if (accountDocumentUnavailableProjectIdRef.current === merged.projectId) {
       accountDocumentUnavailableProjectIdRef.current = null;
@@ -6623,6 +6653,64 @@ export function App() {
     return merged;
   }
 
+  async function finishAccountSourceSave(
+    document: ProjectDocument,
+    local: ProjectDocument,
+    summary: ProjectSummary = summarizeLocalDocument(document)
+  ): Promise<string | undefined> {
+    const projectId = document.projectId;
+    // Account creation establishes the upload destination. Source bytes must
+    // follow before the new account copy can be rebuilt on another device.
+    setStatus('Saving project source files to your account…');
+    const prepared = await archiveAccountImportSources(document, {
+      loadSourceBytes: loadSourceBlob,
+      archive: (input) =>
+        archiveArtifactBody(api, document.projectId, input, (artifact) => {
+          if (managerRef.current?.document.projectId === projectId)
+            setArtifacts((current) => [
+              artifact,
+              ...current.filter(
+                (item) => item.artifactId !== artifact.artifactId
+              )
+            ]);
+        })
+    });
+    let saved = document;
+    let localForAcceptance = local;
+    if (prepared.document !== document) {
+      // Keep completed upload metadata if the account write fails. Never
+      // replace edits made while the source transfers were in flight.
+      const current = managerRef.current;
+      if (
+        current?.document.projectId !== projectId ||
+        current.document.version === local.version
+      ) {
+        await saveLocalProject(prepared.document);
+        if (
+          managerRef.current === current &&
+          !cloudProjectIds.has(projectId) &&
+          current?.document.projectId === projectId &&
+          current.document.version === local.version
+        ) {
+          current.document = prepared.document;
+          localForAcceptance = prepared.document;
+          setDoc(prepared.document);
+        }
+      }
+      const stored = await api.saveProjectDocument({
+        projectId: prepared.document.projectId,
+        expectedVersion: document.version,
+        document: withoutDerivedProjection(prepared.document)
+      });
+      saved = { ...prepared.document, version: stored.version };
+    }
+    await acceptAccountDocument(saved, localForAcceptance, {
+      ...summary,
+      documentVersion: saved.version
+    });
+    return sourceUploadMessage(prepared.result) ?? undefined;
+  }
+
   /**
    * Gives one device-local project an account record, keeping its id so the
    * device's own copy and shelf state stay pointed at the same project.
@@ -6640,8 +6728,14 @@ export function App() {
     }
     try {
       const response = await api.adoptProject(local);
-      await acceptAccountDocument(response.document, local, response.project);
-      return { state: 'adopted' };
+      return {
+        state: 'adopted',
+        sourceWarning: await finishAccountSourceSave(
+          response.document,
+          local,
+          response.project
+        )
+      };
     } catch (error) {
       if (error instanceof ApiError && error.code === 'ALREADY_ADOPTED') {
         // A lost adoption response and a genuinely pre-existing account copy
@@ -6666,8 +6760,13 @@ export function App() {
           };
         }
         if (outcome.choice === 'remote') {
-          await acceptAccountDocument(outcome.document, local);
-          return { state: 'already-adopted' };
+          return {
+            state: 'already-adopted',
+            sourceWarning: await finishAccountSourceSave(
+              outcome.document,
+              local
+            )
+          };
         }
         if (outcome.choice === 'local') {
           // The baseline proves only this device moved. Complete the interrupted
@@ -6682,7 +6781,7 @@ export function App() {
             expectedVersion: remote.version,
             document: withoutDerivedProjection(candidate)
           });
-          await acceptAccountDocument(
+          const sourceWarning = await finishAccountSourceSave(
             {
               ...candidate,
               version: saved.version,
@@ -6693,7 +6792,7 @@ export function App() {
             },
             local
           );
-          return { state: 'already-adopted' };
+          return { state: 'already-adopted', sourceWarning };
         }
         return { state: 'missing' };
       }
@@ -6701,11 +6800,16 @@ export function App() {
     }
   }
 
-  async function handleSaveToAccount(project: ProjectSummary) {
+  async function handleSaveToAccount(
+    project: ProjectSummary,
+    reportToDialog = false
+  ) {
+    if (accountSavePendingRef.current) return;
     if (!session) {
       setStatus('Sign in to save this project to your account.');
       return;
     }
+    accountSavePendingRef.current = true;
     setBusy(true);
     try {
       await flushPendingLocalSave();
@@ -6722,17 +6826,20 @@ export function App() {
         return;
       }
       setStatus(
-        outcome.state === 'adopted'
-          ? `Saved ${project.name} to your account.`
-          : outcome.state === 'already-adopted'
-            ? `${project.name} was already in your account.`
-            : `${project.name} has no copy on this device to save.`
+        outcome.sourceWarning ??
+          (outcome.state === 'adopted'
+            ? `Saved ${project.name} to your account.`
+            : outcome.state === 'already-adopted'
+              ? `${project.name} was already in your account.`
+              : `${project.name} has no copy on this device to save.`)
       );
     } catch (error) {
       setStatus(
         errorMessage(error, `Could not save ${project.name} to your account.`)
       );
+      if (reportToDialog) throw error;
     } finally {
+      accountSavePendingRef.current = false;
       setBusy(false);
     }
   }
@@ -6776,6 +6883,13 @@ export function App() {
             'Changed on this device and in your account. Open it to choose which to keep.'
         });
         return { adopted: false, failed: true, halt: false };
+      }
+      if (outcome.sourceWarning) {
+        patchSyncEntry(candidate.projectId, {
+          state: 'failed',
+          detail: outcome.sourceWarning
+        });
+        return { adopted: true, failed: true, halt: false };
       }
       patchSyncEntry(candidate.projectId, {
         state: 'synced',
@@ -7988,7 +8102,10 @@ export function App() {
    * naming is worth a gesture of its own — see {@link SaveRevisionDialog}. The
    * default keeps Ctrl+S a reflex.
    */
+  const accountSavePendingRef = useRef(false);
+
   async function handleSave(reason: string = DEFAULT_SAVE_REASON) {
+    if (accountSavePendingRef.current) return;
     const savingManager = managerRef.current;
     if (!doc || !savingManager) {
       return;
@@ -8000,34 +8117,82 @@ export function App() {
       );
       return;
     }
+    accountSavePendingRef.current = true;
+    let sourceWarning: string | null = null;
+    let savingDocument = savingManager.document;
     try {
       setSaveState('saving');
-      await saveLocalProject(doc);
+      await saveLocalProject(savingDocument);
       if (!isCurrentProject()) {
         return;
       }
-      if (accountDocumentUnavailableProjectIdRef.current === doc.projectId) {
-        await retryUnavailableAccountProject(doc);
+      if (
+        accountDocumentUnavailableProjectIdRef.current ===
+        savingDocument.projectId
+      ) {
+        await retryUnavailableAccountProject(savingDocument);
         return;
       }
       if (!ensureCanEdit('save a shared revision')) {
         setSaveState('offline');
         return;
       }
-      const expectedVersion = remoteVersionsRef.current.get(doc.projectId);
+      if (
+        cloudFunctionsEnabled &&
+        session &&
+        !cloudProjectIds.has(savingDocument.projectId)
+      ) {
+        const marked = createCheckpoint(savingDocument, reason);
+        await saveLocalProject(marked);
+        if (!isCurrentProject()) return;
+        if (savingManager.document.version === savingDocument.version) {
+          savingManager.document = marked;
+          setDoc(marked);
+        }
+        const outcome = await adoptLocalProject(savingDocument.projectId);
+        if (!isCurrentProject()) return;
+        if (outcome.state === 'conflict') {
+          setAccountConflict(outcome.conflict);
+          setSaveState('conflict');
+        } else if (outcome.state === 'missing') {
+          setSaveState('local');
+          setStatus(
+            'No saved copy was found on this device. Retry saving the project.'
+          );
+        } else {
+          setStatus(
+            outcome.sourceWarning ??
+              'Saved project and source files to your account.'
+          );
+        }
+        return;
+      }
+      if (
+        cloudFunctionsEnabled &&
+        session &&
+        listLocalOnlyImportSources(savingDocument).length > 0
+      ) {
+        const result = await handleArchiveLocalSources(true);
+        if (!isCurrentProject()) return;
+        if (result) sourceWarning = sourceUploadMessage(result);
+        savingDocument = savingManager.document;
+      }
+      const expectedVersion = remoteVersionsRef.current.get(
+        savingDocument.projectId
+      );
       if (!session || expectedVersion === undefined) {
         // No account will checkpoint this one, so the save point is made here.
         // Without it a device-only project could never gain a save beyond the
         // one it was born with — which would leave restore and branch with
         // nothing to offer exactly where they are needed most, and would drop
         // a name the user had just typed.
-        const marked = createCheckpoint(doc, reason);
-        if (savingManager.document.version === doc.version) {
+        const marked = createCheckpoint(savingDocument, reason);
+        if (savingManager.document.version === savingDocument.version) {
           await saveLocalProject(marked);
           if (!isCurrentProject()) {
             return;
           }
-          if (savingManager.document.version === doc.version) {
+          if (savingManager.document.version === savingDocument.version) {
             savingManager.document = marked;
             setDoc(marked);
           }
@@ -8045,18 +8210,18 @@ export function App() {
         return;
       }
       const saved = await api.saveRevision({
-        projectId: doc.projectId,
+        projectId: savingDocument.projectId,
         reason,
         expectedVersion:
           cloudProjectAutosaveRef.current?.syncedVersion ?? expectedVersion,
-        document: withoutDerivedProjection(doc)
+        document: withoutDerivedProjection(savingDocument)
       });
       remoteVersionsRef.current.set(saved.projectId, saved.version);
       await saveLastSyncedVersion(saved.projectId, saved.version);
       if (!isCurrentProject()) {
         return;
       }
-      if (savingManager.document.version !== doc.version) {
+      if (savingManager.document.version !== savingDocument.version) {
         // Edits landed while the revision round-tripped. The account holds
         // the pre-edit snapshot this handler sent; adopting its echo would
         // erase those edits from the canonical document while their undo
@@ -8067,7 +8232,7 @@ export function App() {
           saved.projectId,
           saved.version
         );
-        setStatus('Saved revision.');
+        setStatus(sourceWarning ?? 'Saved revision.');
         return;
       }
       const restored = withLocalDerived(saved, savingManager.document);
@@ -8076,7 +8241,7 @@ export function App() {
       if (!isCurrentProject()) {
         return;
       }
-      if (savingManager.document.version === doc.version) {
+      if (savingManager.document.version === savingDocument.version) {
         showAccountEcho(restored);
         setSaveState('synced');
       }
@@ -8085,7 +8250,7 @@ export function App() {
         restored.projectId,
         restored.version
       );
-      setStatus('Saved revision.');
+      setStatus(sourceWarning ?? 'Saved revision.');
     } catch (error) {
       if (!isCurrentProject()) {
         return;
@@ -8098,11 +8263,16 @@ export function App() {
         // The account is plainly reachable — it is what refused the write — so
         // this is a divergence to resolve, not a connection to give up on.
         setSaveState('conflict');
-        raiseAccountConflict(doc.projectId, doc, currentVersionOf(error));
+        raiseAccountConflict(
+          savingDocument.projectId,
+          savingDocument,
+          currentVersionOf(error)
+        );
         return;
       }
       if (isProjectDocumentUnavailableError(error)) {
-        accountDocumentUnavailableProjectIdRef.current = doc.projectId;
+        accountDocumentUnavailableProjectIdRef.current =
+          savingDocument.projectId;
         setCloudAvailable(false);
         setSaveState('repair');
         setStatus(
@@ -8115,6 +8285,8 @@ export function App() {
       setStatus(
         `${errorMessage(error, 'Cloud save failed')} Saved on this device.`
       );
+    } finally {
+      accountSavePendingRef.current = false;
     }
   }
 
@@ -8590,7 +8762,9 @@ export function App() {
 
   // Republished every render so the progress card's stable callback reaches
   // the current closure rather than the one from the render that mounted it.
-  archiveLocalSourcesRef.current = handleArchiveLocalSources;
+  archiveLocalSourcesRef.current = async () => {
+    await handleArchiveLocalSources();
+  };
 
   /**
    * Uploads import sources that exist only in this browser (their archival
@@ -8598,7 +8772,27 @@ export function App() {
    * artifacts. Runs on the user's explicit request from the File menu; a
    * partial failure leaves the remaining features local-only and retryable.
    */
-  async function handleArchiveLocalSources() {
+  const sourceArchiveRunsRef = useRef(
+    new Map<string, Promise<ArchiveLocalSourcesResult | undefined>>()
+  );
+
+  function handleArchiveLocalSources(
+    fromSave = false
+  ): Promise<ArchiveLocalSourcesResult | undefined> {
+    if (accountSavePendingRef.current && !fromSave)
+      return Promise.resolve(undefined);
+    if (!doc) return Promise.resolve(undefined);
+    const projectId = doc.projectId;
+    const pending = sourceArchiveRunsRef.current.get(projectId);
+    if (pending) return pending;
+    const run = archiveLocalSourcesRun().finally(() =>
+      sourceArchiveRunsRef.current.delete(projectId)
+    );
+    sourceArchiveRunsRef.current.set(projectId, run);
+    return run;
+  }
+
+  async function archiveLocalSourcesRun() {
     if (
       !doc ||
       localOnlySources.length === 0 ||
@@ -8623,6 +8817,7 @@ export function App() {
         return true;
       }
     });
+    if (managerRef.current !== originatingManager) return result;
     const notes: string[] = [];
     if (result.archived.length > 0) {
       notes.push(`archived ${result.archived.join(', ')}`);
@@ -8640,6 +8835,7 @@ export function App() {
         ? `Archive local sources: ${notes.join('; ')}.`
         : 'No local import sources needed archiving.'
     );
+    return result;
   }
 
   /** Export one selected planar face's outline as a DXF for laser cutting. */
@@ -8773,6 +8969,9 @@ export function App() {
           setShareSession(null);
           shareSessionRef.current = null;
           clearProjectShareFragment();
+          setCloudAvailable(false);
+          setSaveState('local');
+          setSharingOpen(false);
           hydrateDocument(backup.document);
           handleWorkspaceMode('build');
         }
@@ -15015,6 +15214,9 @@ export function App() {
               : null
           }
           saveState={presentedSaveState}
+          saveToAccount={
+            cloudFunctionsEnabled && !!session && !activeProjectIsCloud
+          }
           localOnlySourceCount={localOnlySources.length}
           artifacts={artifacts}
           session={session}
@@ -16411,6 +16613,11 @@ export function App() {
             doc && (
               <ProjectSharingDialog
                 projectId={doc.projectId}
+                localProject={!activeProjectIsCloud}
+                savingToAccount={busy}
+                onSaveToAccount={() =>
+                  handleSaveToAccount(summarizeLocalDocument(doc), true)
+                }
                 role={collaboration.role}
                 collaborationStatus={collaboration.status}
                 lease={collaboration.lease}
