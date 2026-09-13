@@ -1,3 +1,4 @@
+import { projectShapeMesh } from './exact-display-projection';
 import {
   rebuildReporter,
   type RebuildProgressListener
@@ -424,7 +425,8 @@ export interface ExactKernelAdapter {
   readonly kind: 'remus';
   syncDocument(
     document: ProjectDocument,
-    onProgress?: RebuildProgressListener
+    onProgress?: RebuildProgressListener,
+    onProjection?: (derived: DerivedState) => void
   ): Promise<DerivedState>;
   exportStep(document: ProjectDocument, bodyIds: BodyId[]): Promise<string>;
   /**
@@ -695,7 +697,8 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     document: ProjectDocument,
     importSources: ReadonlyMap<string, Uint8Array>,
     pinnedImports: ReadonlySet<string>,
-    onProgress?: RebuildProgressListener
+    onProgress?: RebuildProgressListener,
+    onProjection?: (derived: DerivedState) => void
   ): {
     kernel: RemusKernel;
     build: ExactBuildResult;
@@ -775,6 +778,56 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     };
     const onFeature = (index: number, result: ExactBuildResult) => {
       featureDone?.();
+      // Publish only a disposable mesh projection before an expensive pattern.
+      // It is never cached as an exact result, nor used by export/validation.
+      const nextFeature = features[index + 1];
+      if (
+        onProjection &&
+        result.shapes.size <= 16 &&
+        nextFeature?.data.featureKind === 'pattern' &&
+        !isFeatureSuppressed(nextFeature)
+      ) {
+        const bodyRepresentations: DerivedState['bodyRepresentations'] = {};
+        let remainingBytes = 32 * 1024 * 1024;
+        for (const body of listNodesByKind(document, 'body')) {
+          const shape = result.shapes.get(body.bodyId);
+          if (!shape) continue;
+          try {
+            const projection = projectShapeMesh(
+              activeKernel,
+              shape,
+              remainingBytes
+            );
+            remainingBytes -=
+              projection.mesh.vertices.byteLength +
+              projection.mesh.indices.byteLength;
+            bodyRepresentations[body.bodyId] = {
+              bodyId: body.bodyId,
+              name: body.name,
+              source: 'boolean',
+              color: String(body.metadata?.color ?? DEFAULT_BODY_COLOR),
+              consumed: result.consumed.has(body.bodyId),
+              exportableStep: false,
+              faceCount: 0,
+              volume: 0,
+              ...projection
+            };
+          } catch {
+            /* Missing projection pieces make the preview fail closed. */
+          }
+        }
+        try {
+          onProjection({
+            bodyRepresentations,
+            exportableBodyIds: [],
+            warnings: [...result.warnings],
+            featureWarnings: [...result.featureWarnings],
+            updatedAt: nowIso()
+          });
+        } catch {
+          /* Display observers cannot change exact acceptance. */
+        }
+      }
       if (!cachingEnabled) return;
       const done = report(
         'checkpoint',
@@ -790,6 +843,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
       });
       done();
     };
+
 
     const build = buildDocumentHistory(
       activeKernel,
@@ -919,7 +973,8 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     shape: ExactShape,
     strictBooleanValidation = false,
     recognizeImportedFeatures = false,
-    onStage?: (name: string) => () => void
+    onStage?: (name: string) => () => void,
+    includeMassProperties = true
   ): MeasuredShape {
     if (shape.solids.length === 0) {
       throw new Error('Exact body contains no solids.');
@@ -1227,7 +1282,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     // is a state consumers already have to render.
     const massDone = onStage?.('Mass properties');
     const massProperties =
-      shape.solids.length === 1 &&
+      includeMassProperties && shape.solids.length === 1 &&
       topology.faces.length <= MAX_BACKGROUND_MASS_PROPERTY_FACES
         ? readBodyMassProperties(kernel, shape.solids[0]!)
         : null;
@@ -1248,7 +1303,8 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
 
   async syncDocument(
     document: ProjectDocument,
-    onProgress?: RebuildProgressListener
+    onProgress?: RebuildProgressListener,
+    onProjection?: (derived: DerivedState) => void
   ): Promise<DerivedState> {
     const report = rebuildReporter(onProgress);
     const sourcesDone = report('sources', 'Loading imported sources');
@@ -1268,7 +1324,8 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
         document,
         sources,
         pinned,
-        onProgress
+        onProgress,
+        onProjection
       );
       historyDone();
       const bodies = listNodesByKind(document, 'body');
@@ -1323,6 +1380,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
           cached &&
           cached.solidKey === solidKey &&
           cached.strict === requiresStrictUnionValidation &&
+          cached.includeMassProperties === !consumed &&
           cached.recognizedImportedFeatures === recognizeImportedFeatures &&
           countFaceHandles(kernel, shape.solids) === cached.faceHandleCount
         ) {
@@ -1340,12 +1398,14 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
                 `${body.name}: ${part}`,
                 document.bodyOrder.indexOf(bodyId) + 1,
                 document.bodyOrder.length
-              )
+              ),
+            !consumed
           );
           remeasured += 1;
           this.storeMeasuredShape(bodyId, {
             solidKey,
             strict: requiresStrictUnionValidation,
+            includeMassProperties: !consumed,
             recognizedImportedFeatures: recognizeImportedFeatures,
             faceHandleCount: countFaceHandles(kernel, shape.solids),
             bytes: measuredShapeBytes(measured),

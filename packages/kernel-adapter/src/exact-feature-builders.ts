@@ -1089,6 +1089,7 @@ function buildBooleanFeature(
     kernel,
     operands.flatMap((shape) => shape.solids)
   );
+  let acceptedUnionSolid: number | undefined;
   let solid: number;
   let unionFuseOperands: UnionFuseOperand[] | null = null;
   // A disconnected union is a different complaint with its own
@@ -1154,7 +1155,7 @@ function buildBooleanFeature(
         }
       }
     );
-    solid = fuseUniformSolid(kernel, unionSolids);
+    solid = fuseUniformSolid(kernel, unionSolids, accepted => { acceptedUnionSolid = accepted; });
     const resultBounds = kernel.boundingBox(solid);
     const droppedOperand = droppedUnionOperandWarning({
       operands: unionOperands.map((operand) => {
@@ -1301,6 +1302,7 @@ function buildBooleanFeature(
   const unionNotSolid =
     unionFuseOperands !== null &&
     !unionDisconnected &&
+    acceptedUnionSolid !== solid &&
     (kernel.validateSolid(solid) !== 0 || !solidMeshIsClosed(kernel, solid));
   // Which warning the proved move belongs to.
   //
