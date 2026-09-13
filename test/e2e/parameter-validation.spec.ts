@@ -154,6 +154,47 @@ for (const guarded of [true, false])
     await page.getByRole('button', { name: 'Build', exact: true }).click();
     await page.getByRole('button', { name: 'Undo', exact: true }).click();
     await expect(input).toHaveValue('58');
+    // Undo updates the field before the debounced device save completes.
+    // Verify the actual durable value before testing recovery after reload.
+    await expect
+      .poll(() =>
+        page.evaluate(async (projectId) => {
+          const db = await new Promise<IDBDatabase>((resolve, reject) => {
+            const request = indexedDB.open('openzcad-v2');
+            request.onsuccess = () => resolve(request.result);
+            request.onerror = () =>
+              reject(
+                request.error ?? new Error('Could not read saved project.')
+              );
+          });
+          try {
+            const stored = await new Promise<ProjectDocument | undefined>(
+              (resolve, reject) => {
+                const request = db
+                  .transaction('projects', 'readonly')
+                  .objectStore('projects')
+                  .get(projectId);
+                request.onsuccess = () =>
+                  resolve(request.result as ProjectDocument | undefined);
+                request.onerror = () =>
+                  reject(
+                    request.error ?? new Error('Could not read saved project.')
+                  );
+              }
+            );
+            const parameter = Object.values(stored?.nodes ?? {}).find(
+              (node) =>
+                node.kind === 'parameter' && node.name === 'holder_height'
+            );
+            return parameter?.kind === 'parameter'
+              ? parameter.expression
+              : undefined;
+          } finally {
+            db.close();
+          }
+        }, accepted.projectId)
+      )
+      .toBe('58');
     await page.reload();
     await expect(page.getByLabel('Expression for holder_height')).toHaveValue(
       '58'
