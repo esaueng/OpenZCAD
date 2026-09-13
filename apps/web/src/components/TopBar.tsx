@@ -63,6 +63,7 @@ interface TopBarProps {
    */
   tweakModeDisabledReason: string | null;
   onWorkspaceMode(mode: WorkspaceMode): void;
+  saveToAccount?: boolean;
   onSave(): void;
   onImportFiles(files: File[]): void;
   projectTransferBusy?: boolean;
@@ -163,6 +164,7 @@ export function TopBar({
   buildModeDisabledReason,
   tweakModeDisabledReason,
   onWorkspaceMode,
+  saveToAccount = false,
   onSave,
   onImportFiles,
   projectTransferBusy,
@@ -361,8 +363,12 @@ export function TopBar({
           type="button"
           disabled={!projectName}
           onClick={onSave}
-          aria-label={WORKSPACE_SAVE_STATE_PRESENTATION[saveState].topBarLabel}
-          title={`${WORKSPACE_SAVE_STATE_PRESENTATION[saveState].title} Click to save a revision (Ctrl+S), or Ctrl+Shift+S to name it.`}
+          aria-label={
+            saveToAccount
+              ? 'Save to my account'
+              : WORKSPACE_SAVE_STATE_PRESENTATION[saveState].topBarLabel
+          }
+          title={`${saveToAccount ? 'Save this local project and its source files to your account.' : WORKSPACE_SAVE_STATE_PRESENTATION[saveState].title} Click to save a revision (Ctrl+S), or Ctrl+Shift+S to name it.`}
         >
           {saveState === 'saving' || saveState === 'syncing' ? (
             <LoaderCircle className="spin" size={14} aria-hidden="true" />
@@ -378,13 +384,17 @@ export function TopBar({
           )}
           <StableLabel
             reserve={
-              accountState === 'signed-in'
-                ? CLOUD_SAVE_LABEL_RESERVE
-                : DEVICE_SAVE_LABEL_RESERVE
+              saveToAccount
+                ? ['Save to my account']
+                : accountState === 'signed-in'
+                  ? CLOUD_SAVE_LABEL_RESERVE
+                  : DEVICE_SAVE_LABEL_RESERVE
             }
             align="center"
           >
-            {WORKSPACE_SAVE_STATE_PRESENTATION[saveState].topBarLabel}
+            {saveToAccount
+              ? 'Save to my account'
+              : WORKSPACE_SAVE_STATE_PRESENTATION[saveState].topBarLabel}
           </StableLabel>
         </button>
         {projectSharingEnabled ? (

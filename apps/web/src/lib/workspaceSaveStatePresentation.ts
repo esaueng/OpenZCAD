@@ -48,7 +48,7 @@ export const WORKSPACE_SAVE_STATE_PRESENTATION: Record<
     topBarLabel: 'Local source',
     statusBarLabel: 'Local source only',
     title:
-      'Project synced, but an imported source file exists only on this device. Other devices cannot rebuild it. Use File → Archive local sources to upload it.'
+      'Project synced, but an imported source file exists only on this device. Other devices cannot rebuild it. Click Save to upload the remaining source files and save the project.'
   },
   offline: {
     topBarLabel: 'Offline',
