@@ -1,3 +1,8 @@
+import {
+  parameterMinimums,
+  parameterInputError,
+  parameterBuildError
+} from './lib/parameterEdit';
 import type { growingHolderPreview } from './lib/growingHolderPreview';
 import { mergePreviewBodies } from './lib/previewBodies';
 import { rebuildProgressLabel } from './lib/rebuildProgressLabel';
@@ -2079,6 +2084,17 @@ export function App() {
   const openExactEntryRef = useRef<(() => boolean) | null>(null);
   const contextMenuActionsRef = useRef<Record<string, () => void>>({});
   const managerRef = useRef<CommandManager | null>(null);
+  const parameterEditRequest = useRef(0);
+  const [parameterModelFailure, setParameterModelFailure] = useState<{
+    projectId: ProjectDocument['projectId'];
+    version: number;
+    message: string;
+  } | null>(null);
+  const [parameterEditPending, setParameterEditPending] = useState(false);
+  const [parameterCandidate, setParameterCandidate] = useState<{
+    base: ProjectDocument;
+    document: ProjectDocument;
+  } | null>(null);
   const workspaceModeRef = useRef<WorkspaceMode | null>(null);
   const exactEntryInputEnabledRef = useRef(false);
   const exactEntryQueue = useRef(
@@ -2142,6 +2158,19 @@ export function App() {
     onDerived: (derived) => {
       const manager = managerRef.current;
       if (manager) {
+        const failure = derived.featureWarnings?.find(
+          (warning) =>
+            warning.kind === 'build-failed' || warning.kind === 'refusal'
+        );
+        setParameterModelFailure(
+          failure
+            ? {
+                projectId: manager.document.projectId,
+                version: manager.document.version,
+                message: failure.message
+              }
+            : null
+        );
         const validated = manager.commitDerivedState(derived);
         setParameterPreviewBase(derived.warnings.length ? null : validated);
         setDoc(validated);
@@ -4305,11 +4334,23 @@ export function App() {
   const liveBodyRepresentations = doc?.derived.bodyRepresentations ?? null;
   const parameterPreview = useMemo(
     () =>
-      !previewDoc && !exactGeometryReady && geometry.state.phase !== 'failed'
-        ? (makeParameterPreview?.(parameterPreviewBase, doc) ?? null)
-        : null,
+      !previewDoc &&
+      geometry.state.phase !== 'failed' &&
+      parameterCandidate !== null &&
+      parameterCandidate.base.projectId === doc?.projectId &&
+      parameterCandidate?.base.version === doc?.version
+        ? (makeParameterPreview?.(
+            parameterCandidate.base,
+            parameterCandidate.document
+          ) ?? null)
+        : !previewDoc &&
+            !exactGeometryReady &&
+            geometry.state.phase !== 'failed'
+          ? (makeParameterPreview?.(parameterPreviewBase, doc) ?? null)
+          : null,
     [
       makeParameterPreview,
+      parameterCandidate,
       parameterPreviewBase,
       doc,
       previewDoc,
@@ -4532,8 +4573,14 @@ export function App() {
     hiddenBodyIds
   ]);
 
+  const parameterModelError =
+    parameterModelFailure &&
+    parameterModelFailure.projectId === doc?.projectId &&
+    parameterModelFailure.version === doc?.version
+      ? parameterModelFailure.message
+      : null;
   const exportBodyIds = useMemo<BodyId[]>(() => {
-    if (!doc) {
+    if (!doc || (tweakMode && parameterModelError)) {
       return [];
     }
     if (
@@ -4552,7 +4599,13 @@ export function App() {
           !parameterHiddenBodyIds.has(body.bodyId)
       )
       .map((body) => body.bodyId);
-  }, [doc, selectedBody, parameterHiddenBodyIds]);
+  }, [
+    doc,
+    selectedBody,
+    parameterHiddenBodyIds,
+    tweakMode,
+    parameterModelError
+  ]);
 
   /**
    * What the current selection is, and the figure that goes with it.
@@ -10930,115 +10983,125 @@ export function App() {
    * mode is allowed to run exactly this derived parameter transaction. Any
    * conflicting sketch refuses the whole edit before the live document moves.
    */
-  async function handleSetParameter(name: string, expression: string) {
+  async function handleSetParameter(
+    name: string,
+    expression: string
+  ): Promise<string | null> {
     const manager = managerRef.current;
     if (!manager || !ensureCanEditParameters('change this parameter')) {
-      return;
+      return 'Parameter editing is unavailable.';
     }
+    const request = ++parameterEditRequest.current;
     const base = manager.document;
-    const parameterCommand = commandFactories.setParameter({
-      name,
-      expression
-    });
-    let prospective: ProjectDocument;
+    const current = () =>
+      parameterEditRequest.current === request &&
+      managerRef.current === manager &&
+      manager.document.projectId === base.projectId &&
+      manager.document.version === base.version;
+    const refuse = (message: string) => {
+      if (
+        parameterEditRequest.current === request &&
+        managerRef.current === manager
+      )
+        setStatus(message);
+      return message;
+    };
+    setParameterEditPending(true);
+    setParameterCandidate(null);
     try {
+      const parameterCommand = commandFactories.setParameter({
+        name,
+        expression
+      });
       parameterCommand.validate(base);
-      prospective = parameterCommand.apply(base);
-    } catch (error) {
-      setStatus(errorMessage(error, 'Parameter is invalid.'));
-      return;
-    }
-    const beforeScope = getParameterScope(base).scope;
-    const afterScope = getParameterScope(prospective).scope;
-    const constrainedSketches = listNodesByKind(prospective, 'sketch').filter(
-      (sketch) =>
-        sketch.constraints?.some(({ data }) => {
-          const value =
-            data.constraintKind === 'distance' ||
-            data.constraintKind === 'radius'
-              ? data.value
-              : data.constraintKind === 'angle'
-                ? data.valueDeg
-                : undefined;
-          return (
-            typeof value === 'string' &&
-            evalParamValue(value, beforeScope) !==
-              evalParamValue(value, afterScope)
-          );
-        }) ?? false
-    );
-    if (constrainedSketches.length === 0) {
-      const toggle = listParameters(prospective).find(
-        (p) => p.name === name
-      )?.toggle;
-      if (toggle)
-        setHiddenBodyIds(
-          (current) =>
-            new Set(
-              [...current].filter(
-                (id) => !toggle.bodyIds.includes(id as BodyId)
-              )
-            )
-        );
-      executeCommand(parameterCommand);
-      return;
-    }
-
-    const commands: AnyCommand[] = [parameterCommand];
-    setStatus(`Updating ${name} and solving constrained sketches…`);
-    try {
+      let prospective = parameterCommand.apply(base);
+      const inputError = parameterInputError(base, prospective);
+      if (inputError) return refuse(inputError);
+      const beforeScope = getParameterScope(base).scope;
+      const afterScope = getParameterScope(prospective).scope;
+      const constrainedSketches = listNodesByKind(prospective, 'sketch').filter(
+        (sketch) =>
+          sketch.constraints?.some(({ data }) => {
+            const value =
+              data.constraintKind === 'distance' ||
+              data.constraintKind === 'radius'
+                ? data.value
+                : data.constraintKind === 'angle'
+                  ? data.valueDeg
+                  : undefined;
+            return (
+              typeof value === 'string' &&
+              evalParamValue(value, beforeScope) !==
+                evalParamValue(value, afterScope)
+            );
+          }) ?? false
+      );
+      const commands: AnyCommand[] = [parameterCommand];
+      setStatus(`Checking ${name}…`);
       for (const sketch of constrainedSketches) {
         const outcome = await geometry.solveSketch(
           prospective,
           sketch.sketchId
         );
-        if (!outcome.converged || outcome.rolledBack) {
-          setStatus(
-            `Parameter ${name} refused: ${sketch.name} is ${solveStatusLabel(outcome)}; no change was applied.`
+        if (!current())
+          return refuse(
+            'The project or parameter changed during validation. Try again.'
           );
-          return;
+        if (!outcome.converged || outcome.rolledBack) {
+          return refuse(`${sketch.name} is ${solveStatusLabel(outcome)}.`);
         }
-        const solvedCommands = solvedSketchCommands(
+        const solved = solvedSketchCommands(
           prospective,
           sketch.sketchId,
           outcome
         );
-        for (const command of solvedCommands) {
+        for (const command of solved) {
           command.validate(prospective);
           prospective = command.apply(prospective);
         }
-        commands.push(...solvedCommands);
+        commands.push(...solved);
       }
-      const live = managerRef.current?.document;
-      if (
-        !live ||
-        live.projectId !== base.projectId ||
-        live.version !== base.version
-      ) {
-        setStatus(
-          'The project changed while constrained sketches were solving. Try again.'
+      // Keep the live document, history and last valid geometry untouched while
+      // the worker checks every dependent feature, including the final union.
+      setParameterCandidate({ base, document: prospective });
+      const derived = await geometry.syncOnce(prospective);
+      if (!current())
+        return refuse(
+          'The project or parameter changed during validation. Try again.'
         );
-        return;
-      }
+      const buildError = parameterBuildError(base, derived);
+      if (buildError) return refuse(buildError);
       if (
-        executeTransaction(
+        !executeTransaction(
           `Set parameter ${name}`,
           commands,
-          undefined,
+          derived,
           'parameters'
         )
       ) {
-        setStatus(
-          `Parameter ${name} updated · ${constrainedSketches.length} constrained ${constrainedSketches.length === 1 ? 'sketch' : 'sketches'} solved.`
-        );
+        return refuse('The parameter could not be applied.');
       }
+      const toggle = listParameters(prospective).find(
+        (p) => p.name === name
+      )?.toggle;
+      if (toggle)
+        setHiddenBodyIds(
+          (hidden) =>
+            new Set(
+              [...hidden].filter((id) => !toggle.bodyIds.includes(id as BodyId))
+            )
+        );
+      setStatus(`Parameter ${name} updated.`);
+      return null;
     } catch (error) {
-      setStatus(
-        errorMessage(
-          error,
-          `Parameter ${name} could not solve its constrained sketches.`
-        )
+      return refuse(
+        errorMessage(error, `Parameter ${name} could not be updated.`)
       );
+    } finally {
+      if (parameterEditRequest.current === request) {
+        setParameterEditPending(false);
+        setParameterCandidate(null);
+      }
     }
   }
 
@@ -14274,15 +14337,18 @@ export function App() {
     : Object.keys(representations).length > 0
       ? 'showing the last valid projection as stale'
       : 'no exact projection is available yet';
-  const visibleStatus = exactGeometryReady
-    ? status
-    : `${
-        geometry.state.phase === 'ready'
-          ? 'Waiting for exact geometry for this revision'
-          : geometry.state.phase === 'failed' && geometry.state.error
-            ? `Exact geometry failed: ${geometry.state.error}`
-            : (progressLabel ?? geometryPhaseLabel[geometry.state.phase])
-      } · ${staleProjectionLabel}`;
+  const visibleStatus =
+    parameterPreview && parameterEditPending
+      ? `Parameter preview · ${status}`
+      : exactGeometryReady
+        ? status
+        : `${
+            geometry.state.phase === 'ready'
+              ? 'Waiting for exact geometry for this revision'
+              : geometry.state.phase === 'failed' && geometry.state.error
+                ? `Exact geometry failed: ${geometry.state.error}`
+                : (progressLabel ?? geometryPhaseLabel[geometry.state.phase])
+          } · ${staleProjectionLabel}`;
   const tone: 'ready' | 'warning' | 'running' =
     geometry.state.phase === 'failed'
       ? 'warning'
@@ -15018,6 +15084,7 @@ export function App() {
     <Sidebar
       parameters={parameters}
       parameterValues={parameterScope.scope}
+      parameterMinimums={doc ? parameterMinimums(doc) : {}}
       features={features}
       representations={representations}
       selectedFeatureNodeId={selectedFeatureNodeId}
@@ -15058,7 +15125,7 @@ export function App() {
         }
       }}
       onSetParameter={(name, expression) =>
-        void handleSetParameter(name, expression)
+        handleSetParameter(name, expression)
       }
       onDeleteParameter={(name) =>
         executeCommand(commandFactories.deleteParameter({ name }))
@@ -15205,7 +15272,7 @@ export function App() {
           }
           projectName={doc.name}
           units={doc.units}
-          canExport={exportBodyIds.length > 0}
+          canExport={exportBodyIds.length > 0 && !parameterEditPending}
           exportScope={
             selectedBody &&
             !selectedBody.consumed &&
@@ -15305,9 +15372,15 @@ export function App() {
       sidebar={
         viewMode ? null : tweakMode ? (
           <TweakPanel
+            modelError={parameterModelError}
             parameters={exposedParameters}
             parameterValues={parameterScope.scope}
-            canExport={exportBodyIds.length > 0}
+            parameterMinimums={doc ? parameterMinimums(doc) : {}}
+            canExport={
+              exportBodyIds.length > 0 &&
+              !parameterEditPending &&
+              !parameterModelError
+            }
             exportScope={
               selectedBody &&
               !selectedBody.consumed &&
@@ -15316,7 +15389,7 @@ export function App() {
                 : null
             }
             onSetParameter={(name, expression) =>
-              void handleSetParameter(name, expression)
+              handleSetParameter(name, expression)
             }
             onExportStep={() => void handleExportStep()}
             onOpenMeshExport={() => setMeshExportOpen(true)}

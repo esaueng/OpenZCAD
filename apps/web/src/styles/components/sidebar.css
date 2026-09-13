@@ -518,3 +518,15 @@
   color: var(--color-text-muted);
   margin: 5px 0 0;
 }
+
+.parameter-feedback {
+  margin: 6px 0 0;
+  font-size: 12px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+  color: var(--color-text-subtle);
+}
+
+.parameter-feedback.error {
+  color: var(--color-error);
+}

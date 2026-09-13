@@ -204,6 +204,18 @@ test('offers and grows the arm height on a holder whose arms are solid', async (
   await expect(height).toHaveValue('32');
   await expect(page.getByLabel('Expression for hole_diameter')).toHaveCount(0);
 
+  await page.getByRole('button', { name: 'Tweak', exact: true }).click();
+  await expect(
+    page.locator('.parameter-feedback').filter({ hasText: 'Minimum' }).last()
+  ).toBeVisible();
+  await height.fill('1');
+  await height.press('Enter');
+  await expect(page.getByRole('alert')).toContainText('must be at least');
+  await expect(height).toHaveValue('32');
+  await page.getByRole('button', { name: 'Build', exact: true }).click();
+  await expect(page.getByRole('contentinfo')).toContainText('warnings0');
+  await expectBodyCount(page, 1);
+
   await setParameter(page, 'holder_height', '40');
   await expectExactReady(page);
   await setParameter(page, 'opening_width', '60');
