@@ -302,7 +302,7 @@ function sectionLoops(
   kernel: ExactSectionKernel,
   face: number,
   deflection: number
-): readonly ExactSectionLoop[] | ExactSectionRefusal {
+): { loops: ExactSectionLoop[] } | ExactSectionRefusal {
   const loops: ExactSectionLoop[] = [];
   for (const [index, wire] of Array.from(kernel.getFaceWires(face)).entries()) {
     const points: SectionPoint3[] = [];
@@ -325,7 +325,7 @@ function sectionLoops(
   if (loops.length === 0) {
     return refuse('empty-section', 'A cross-section face has no boundary.');
   }
-  return loops;
+  return { loops };
 }
 
 /** Enclosed area of one loop in the plane frame, sign discarded. */
@@ -439,20 +439,20 @@ export function exactSolidSection(
     }
     area += kernel.faceArea(face, deflection);
     const faceLoops = sectionLoops(kernel, face, deflection);
-    if (!Array.isArray(faceLoops)) {
-      return faceLoops as ExactSectionRefusal;
+    if ('status' in faceLoops) {
+      return faceLoops;
     }
     // The kernel documents "outer wire first, then inner/hole wires". Verify
     // it rather than assume it: a hole taken for the outer boundary would
     // export a plausible, wrong outline.
-    const areas = faceLoops.map((loop) => loopArea(loop, plane, frame));
+    const areas = faceLoops.loops.map((loop) => loopArea(loop, plane, frame));
     if (areas.some((value, index) => index > 0 && value > areas[0]!)) {
       return refuse(
         'wire-order-unverified',
         'The kernel did not return the outer cross-section boundary first.'
       );
     }
-    loops.push(...faceLoops);
+    loops.push(...faceLoops.loops);
     const mesh = kernel.tessellateFace(face, deflection);
     try {
       const base = positions.length / 3;
