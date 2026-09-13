@@ -254,7 +254,8 @@ describe('modeling operation form contracts', () => {
           value: {
             name: ' Loft ',
             sectionIds: ['upper', 'lower'],
-            mode: 'smooth'
+            mode: 'smooth',
+            endPoint: null
           }
         },
         [],
@@ -326,7 +327,8 @@ describe('modeling operation form contracts', () => {
             name: 'Sweep',
             profileId: 'profile',
             pathId: 'path',
-            mode: 'standard'
+            mode: 'standard',
+            guideId: ''
           }
         },
         [],
