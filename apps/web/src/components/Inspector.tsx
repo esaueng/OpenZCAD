@@ -74,6 +74,8 @@ function isValidTextSketchObject(
 
 export interface InspectorCallbacks {
   onLaunchTool(tool: ToolId): void;
+  /** The boolean pick list edits the viewport's body selection in place. */
+  onSelectBodies(bodyIds: BodyId[]): void;
   onCancel(): void;
   /** Verbatim reason the last exact rebuild refused this form's operation. */
   commitError?: string | null;
@@ -877,7 +879,8 @@ export function Inspector(props: InspectorProps) {
           key={`create-${tool}`}
           bodies={bodies}
           presetOperation={tool}
-          initialSelection={selectedBodyIds}
+          selection={selectedBodyIds}
+          onSelectionChange={props.onSelectBodies}
           submitLabel="Create"
           onSubmit={props.onCreateBoolean}
           onCancel={props.onCancel}

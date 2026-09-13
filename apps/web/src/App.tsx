@@ -9893,13 +9893,25 @@ export function App() {
       return;
     }
     setSelectedEdges([]);
-    const nextIds = additive
+    // With a boolean tool open every body click is a pick-list toggle: the
+    // form is asking for bodies, so a plain click adds the next one (or drops
+    // it) and keeps the tool up, the way fillet keeps its edge picks. Closing
+    // the tool on the click it was waiting for was the old behaviour.
+    const booleanToolOpen =
+      tool === 'union' || tool === 'subtract' || tool === 'intersect';
+    const toggles = additive || booleanToolOpen;
+    const nextIds = toggles
       ? selectedBodyIds.includes(selection.bodyId)
         ? selectedBodyIds.filter((id) => id !== selection.bodyId)
         : [...selectedBodyIds, selection.bodyId]
       : [selection.bodyId];
     setSelectedBodyIds(nextIds);
-    if (!additive && tool !== 'fillet' && tool !== 'chamfer') {
+    if (
+      !additive &&
+      !booleanToolOpen &&
+      tool !== 'fillet' &&
+      tool !== 'chamfer'
+    ) {
       setTool(null);
     }
     // The edit panel and topology context follow a single-body selection;
@@ -9909,6 +9921,26 @@ export function App() {
         additive ? { bodyId: nextIds[0]!, kind: 'body' } : selection
       );
       inferFeatureNodeFor(nextIds[0]!);
+    } else {
+      setSelectedTopology(null);
+      setSelectedFeatureNode(null);
+    }
+  }
+
+  /**
+   * The boolean form's pick list, in pick order. It is the same selection the
+   * viewport shows, so a row toggled here lights (or clears) its body's
+   * outline and number out in the scene.
+   */
+  function handleSelectBodiesFromPickList(bodyIds: BodyId[]) {
+    if (interaction.mode !== 'idle' && interaction.mode !== 'sketch') {
+      dispatchInteraction({ type: 'clear' });
+    }
+    setSelectedEdges([]);
+    setSelectedBodyIds(bodyIds);
+    if (bodyIds.length === 1) {
+      setSelectedTopology({ bodyId: bodyIds[0]!, kind: 'body' });
+      inferFeatureNodeFor(bodyIds[0]!);
     } else {
       setSelectedTopology(null);
       setSelectedFeatureNode(null);
@@ -14690,9 +14722,13 @@ export function App() {
             ? selectedEdges.length > 0
               ? `${selectedEdges.length} edge${selectedEdges.length === 1 ? '' : 's'} selected · Shift+Click adjusts · Enter creates`
               : 'Click edges with Shift or choose Select all edges · Esc cancels'
-            : tool
-              ? 'Enter creates · Esc cancels'
-              : selectedBodyIds.length >= 2
+            : tool === 'union' || tool === 'subtract' || tool === 'intersect'
+              ? selectedBodyIds.length >= 2
+                ? `${selectedBodyIds.length} bodies picked, numbered in the viewport · Click toggles · Enter creates`
+                : 'Click bodies in the viewport or the list · pick order sets the base'
+              : tool
+                ? 'Enter creates · Esc cancels'
+                : selectedBodyIds.length >= 2
                 ? `${selectedBodyIds.length} bodies picked — U union · X subtract · I intersect`
                 : selectedTopology?.kind === 'face'
                   ? 'Face selected — Space faces it head-on'
@@ -16277,6 +16313,7 @@ export function App() {
                 commandSession={commandSession}
                 featureSelectionSource={featureSelectionSource}
                 onLaunchTool={launchTool}
+                onSelectBodies={handleSelectBodiesFromPickList}
                 onPreviewBodyAppearance={previewBodyAppearance}
                 onCommitBodyAppearance={commitBodyAppearance}
                 onCancel={cancelPanel}
