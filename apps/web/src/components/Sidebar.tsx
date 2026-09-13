@@ -157,6 +157,7 @@ interface SidebarProps {
   onToggleFeatureSuppression(feature: FeatureNode): void;
   onRollbackAfterFeature(featureId: FeatureId, name: string): void;
   onConfigureToggle?: (name: string, bodyIds: BodyId[]) => void;
+  onPreviewParameter?(name: string, expression: string | null): void;
   onSetParameter(
     name: string,
     expression: string
@@ -220,6 +221,7 @@ export function Sidebar({
   onRollbackAfterFeature,
   onConfigureToggle,
   onSetParameter,
+  onPreviewParameter,
   onDeleteParameter,
   onExposeParameter,
   onDescribeParameter,
@@ -366,6 +368,7 @@ export function Sidebar({
               value={parameterValues[parameter.name]}
               minimum={parameterMinimums?.[parameter.name]}
               onSet={onSetParameter}
+              onPreview={onPreviewParameter}
               onDelete={onDeleteParameter}
               onExpose={onExposeParameter}
               exposedInTweak={exposedParameterNames.has(parameter.name)}

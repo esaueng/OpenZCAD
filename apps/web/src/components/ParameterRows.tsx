@@ -22,6 +22,7 @@ interface ParameterRowProps extends ToggleBindingProps {
   value: number | undefined;
   onSet(name: string, expression: string): void | Promise<string | null>;
   minimum?: number;
+  onPreview?(name: string, expression: string | null): void;
   /** Absent hides the delete affordance: Tweak adjusts, it never removes. */
   onDelete?: (name: string) => void;
   /**
@@ -49,6 +50,7 @@ export function ParameterRow({
   parameter,
   value,
   onSet,
+  onPreview,
   minimum,
   onDelete,
   onExpose,
@@ -83,12 +85,14 @@ export function ParameterRow({
   async function commit() {
     if (!changedByUser.current) {
       setExpression(parameter.expression);
+      onPreview?.(parameter.name, null);
       return;
     }
     const trimmed = expression.trim();
     if (!trimmed || trimmed === parameter.expression) {
       changedByUser.current = false;
       setExpression(parameter.expression);
+      onPreview?.(parameter.name, null);
       return;
     }
     changedByUser.current = false;
@@ -158,6 +162,7 @@ export function ParameterRow({
               setError(null);
               setPending(false);
               setExpression(event.target.value);
+              onPreview?.(parameter.name, event.target.value);
             }}
             onFocus={() => {
               changedByUser.current = false;
@@ -172,6 +177,10 @@ export function ParameterRow({
                 event.currentTarget.blur();
               }
               if (event.key === 'Escape') {
+                ++submission.current;
+                setPending(false);
+                setError(null);
+                onPreview?.(parameter.name, null);
                 changedByUser.current = false;
                 setExpression(parameter.expression);
               }
