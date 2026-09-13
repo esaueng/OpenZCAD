@@ -1,5 +1,11 @@
 # OpenZCAD Implementation Plan
 
+> **Supporting record — consolidated 2026-09-12.**
+> [The master roadmap](ROADMAP.md) owns priorities, dependencies and current
+> delivery status. Original phase/status/next-step instructions below are
+> historical; technical contracts and explicit exclusions remain reference material.
+> Historical architecture and delivery record; the original execution phases are superseded.
+
 > **Historical document.** This plan describes the pre-Z5 program — including
 > the dual-kernel period and schema-v4 face attachments — and much of it has
 > since been executed and superseded. Current state lives in

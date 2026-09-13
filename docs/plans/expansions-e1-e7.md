@@ -1,6 +1,12 @@
 # OpenZCAD E1-E7 expansion plan
 
-Status: amended plan of record. The full E1-E7 program was authorized for
+> **Supporting record — consolidated 2026-09-12.**
+> [The master roadmap](../../ROADMAP.md) owns priorities, dependencies and current
+> delivery status. Original phase/status/next-step instructions below are
+> historical; technical contracts and explicit exclusions remain reference material.
+> Historical expansion contracts; remaining work maps to K05/L01/L07. Old dual-kernel execution order is superseded.
+
+Historical status: amended plan of record. The full E1-E7 program was authorized for
 execution on 2026-08-03; expansions still land as separately scoped branches.
 
 This document records the E1-E7 feature-development program supplied on
