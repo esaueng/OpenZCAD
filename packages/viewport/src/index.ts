@@ -60,6 +60,7 @@ export * from './input/RightClickGestureTracker';
 export * from './scene/HudLayer';
 export * from './scene/TopologyPickList';
 export * from './scene/objects';
+export * from './scene/exactSection';
 
 // Labels: screen-space dimension label layout.
 export * from './labels/dimensionLabel';

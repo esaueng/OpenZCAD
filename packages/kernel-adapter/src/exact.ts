@@ -20,6 +20,22 @@ import { writeDxf } from '@openzcad/io-dxf';
 import { writeAsciiStl } from '@openzcad/io-stl';
 import { faceDxfEntities } from './exact-dxf';
 import {
+  exactSolidSection,
+  sectionDxfEntities,
+  type ExactSectionPlane,
+  type SectionOutlineRefusal,
+  type SectionOutlineRegion,
+  type SectionOutlineReport
+} from './exact-section';
+export type {
+  ExactSectionLoop,
+  ExactSectionPlane,
+  ExactSectionRefusalReason,
+  SectionOutlineRefusal,
+  SectionOutlineRegion,
+  SectionOutlineReport
+} from './exact-section';
+import {
   BODY_OPACITY_METADATA_KEY,
   DEFAULT_BODY_COLOR,
   UNIT_TO_MM,
@@ -470,6 +486,27 @@ export interface ExactKernelAdapter {
     document: ProjectDocument,
     sketchId: SketchId
   ): Promise<SketchSolveOutcome>;
+  /**
+   * The exact, kernel-computed cross-section of the visible bodies at one
+   * plane — section CURVES, not the viewport's display caps. Refusals are
+   * reported per body rather than thrown: a plane that cuts one body and
+   * misses another is an ordinary section, not a failure.
+   */
+  sectionOutline(
+    document: ProjectDocument,
+    plane: ExactSectionPlane,
+    bodyIds?: BodyId[]
+  ): Promise<SectionOutlineReport>;
+  /**
+   * The same exact section written as a DXF R12 drawing in millimetres.
+   * Fails closed: a body the plane cuts but the kernel cannot section
+   * refuses the whole export rather than quietly dropping a region.
+   */
+  exportSectionDxf(
+    document: ProjectDocument,
+    plane: ExactSectionPlane,
+    bodyIds?: BodyId[]
+  ): Promise<string>;
   inspectStep(data: string | ArrayBuffer): Promise<{
     solid: boolean;
     valid: boolean;
@@ -1636,6 +1673,128 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
         UNIT_TO_MM[document.units]
       );
       return writeDxf(entities);
+    });
+  }
+
+  /**
+   * The bodies a section applies to when the caller names none: what the
+   * viewport is showing. A body consumed by a later boolean still has a
+   * shape in the build — sectioning those too would draw the pre-boolean
+   * blank straight through the part that replaced it.
+   */
+  private sectionableBodyIds(
+    build: ExactBuildResult,
+    hidden: ReadonlySet<BodyId>
+  ): BodyId[] {
+    return [...build.shapes.keys()].filter(
+      (bodyId) => !hidden.has(bodyId) && !build.consumed.has(bodyId)
+    );
+  }
+
+  /**
+   * Section every named body at one plane, per body, on the build's own
+   * solids. Bodies are sectioned separately rather than fused first: a union
+   * would change the geometry being measured, and the kernel refuses a
+   * cross-section that falls into disjoint regions anyway.
+   */
+  private sectionBuild(
+    kernel: RemusKernel,
+    build: ExactBuildResult,
+    document: ProjectDocument,
+    plane: ExactSectionPlane,
+    bodyIds: BodyId[] | undefined
+  ): { regions: SectionOutlineRegion[]; refusals: SectionOutlineRefusal[] } {
+    const hidden = getParameterHiddenBodyIds(document);
+    const regions: SectionOutlineRegion[] = [];
+    const refusals: SectionOutlineRefusal[] = [];
+    const requested = bodyIds ?? this.sectionableBodyIds(build, hidden);
+    for (const bodyId of requested) {
+      if (hidden.has(bodyId) || build.consumed.has(bodyId)) {
+        continue;
+      }
+      const shape = build.shapes.get(bodyId);
+      if (!shape) {
+        throw new Error(`Body ${bodyId} has no exact geometry.`);
+      }
+      for (const solid of shape.solids) {
+        const outcome = exactSolidSection(kernel, solid, plane);
+        if (outcome.status === 'refused') {
+          refusals.push({
+            bodyId,
+            reason: outcome.reason,
+            message: outcome.message
+          });
+          continue;
+        }
+        regions.push({
+          bodyId,
+          area: outcome.area,
+          loops: outcome.loops,
+          positions: outcome.positions,
+          indices: outcome.indices
+        });
+      }
+    }
+    return { regions, refusals };
+  }
+
+  async sectionOutline(
+    document: ProjectDocument,
+    plane: ExactSectionPlane,
+    bodyIds?: BodyId[]
+  ): Promise<SectionOutlineReport> {
+    return this.withExportBuild(document, (kernel, build) => {
+      const { regions, refusals } = this.sectionBuild(
+        kernel,
+        build,
+        document,
+        plane,
+        bodyIds
+      );
+      return { plane, regions, refusals };
+    });
+  }
+
+  async exportSectionDxf(
+    document: ProjectDocument,
+    plane: ExactSectionPlane,
+    bodyIds?: BodyId[]
+  ): Promise<string> {
+    return this.withExportBuild(document, (kernel, build) => {
+      const hidden = getParameterHiddenBodyIds(document);
+      const requested = bodyIds ?? this.sectionableBodyIds(build, hidden);
+      const faces: number[] = [];
+      let cut = 0;
+      for (const bodyId of requested) {
+        if (hidden.has(bodyId) || build.consumed.has(bodyId)) {
+          continue;
+        }
+        const shape = build.shapes.get(bodyId);
+        if (!shape) {
+          throw new Error(`Body ${bodyId} has no exact geometry.`);
+        }
+        for (const solid of shape.solids) {
+          const outcome = exactSolidSection(kernel, solid, plane);
+          if (outcome.status === 'ok') {
+            faces.push(...outcome.faces);
+            cut += 1;
+            continue;
+          }
+          // A plane that simply misses one body of several is not an error;
+          // any other refusal would silently drop material from the drawing.
+          if (outcome.reason !== 'plane-misses-body') {
+            throw new Error(outcome.message);
+          }
+        }
+      }
+      if (cut === 0) {
+        throw new Error('The section plane does not cut any body.');
+      }
+      // The section reads the UNSCALED build solids; uniform unit scaling
+      // commutes with plane projection, so the 2D output is scaled instead.
+      return writeDxf(
+        sectionDxfEntities(kernel, faces, plane, UNIT_TO_MM[document.units])
+      );
     });
   }
 
