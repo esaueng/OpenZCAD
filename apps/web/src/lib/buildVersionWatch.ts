@@ -10,6 +10,8 @@ export const BUILD_VERSION_POLL_MS = 5 * 60_000;
 
 export interface BuildVersionWatchOptions {
   onNewVersion(commit: string): void;
+  /** Identity embedded in the JavaScript this tab actually loaded. */
+  runningCommit?: string;
   fetchMeta?: () => Promise<string | null>;
   intervalMs?: number;
   /** Receives a tick callback and returns a stop; defaults to setInterval + visibilitychange. */
@@ -22,7 +24,7 @@ export async function fetchBuildCommit(
   try {
     const response = await fetcher(
       `${BUILD_META_PATH}?cb=${Date.now().toString(36)}`,
-      { cache: 'no-store' }
+      { cache: 'no-store', signal: AbortSignal.timeout(5_000) }
     );
     if (!response.ok) return null;
     const payload = (await response.json()) as { commit?: unknown };
@@ -47,17 +49,18 @@ function defaultSchedule(tick: () => void, intervalMs: number): () => void {
 }
 
 /**
- * The first successful read is the running build; `onNewVersion` fires once
- * when a later read names a different commit. A dev server has no metadata
- * file, so the watch stays silent there.
+ * Compare with the running bundle, including on the first read: a restored
+ * tab may already be older than the server when the watch starts. Without an
+ * embedded identity (development), fall back to the first successful read.
  */
 export function watchBuildVersion({
   onNewVersion,
+  runningCommit = import.meta.env.OZ_BUILD_COMMIT,
   fetchMeta = () => fetchBuildCommit(),
   intervalMs = BUILD_VERSION_POLL_MS,
   schedule = defaultSchedule
 }: BuildVersionWatchOptions): () => void {
-  let baseline: string | null = null;
+  let baseline: string | null = runningCommit?.trim() || null;
   let notified = false;
   let stopped = false;
   let inFlight = false;
