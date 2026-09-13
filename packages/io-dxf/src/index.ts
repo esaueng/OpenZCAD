@@ -115,10 +115,14 @@ function polylineEntity(entity: DxfPolyline): string[] {
 /**
  * Assemble a complete R12 document from 2D entities.
  *
- * The header carries only `$ACADVER` — R12 readers need nothing else, and
- * every additional header variable is another thing an importer can choke
- * on. Coordinates are emitted as given; callers are responsible for having
- * scaled them to millimetres.
+ * The header carries `$ACADVER` plus the two variables that state the unit:
+ * `$INSUNITS` 4 is millimetres and `$MEASUREMENT` 1 selects the metric
+ * drawing setup. A file whose coordinates are millimetres but whose header
+ * says nothing is imported at whatever the reader happens to default to,
+ * which is how a 50 mm slot arrives at a cutter 25.4 times too large.
+ * Everything else stays out: each additional header variable is another
+ * thing an importer can choke on. Coordinates are emitted as given; callers
+ * are responsible for having scaled them to millimetres.
  */
 export function writeDxf(entities: readonly DxfEntity[]): string {
   const lines: string[] = [
@@ -126,6 +130,10 @@ export function writeDxf(entities: readonly DxfEntity[]): string {
     ...group(2, 'HEADER'),
     ...group(9, '$ACADVER'),
     ...group(1, 'AC1009'),
+    ...group(9, '$INSUNITS'),
+    ...group(70, '4'),
+    ...group(9, '$MEASUREMENT'),
+    ...group(70, '1'),
     ...group(0, 'ENDSEC'),
     ...group(0, 'SECTION'),
     ...group(2, 'ENTITIES')
