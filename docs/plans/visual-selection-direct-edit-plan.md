@@ -1,6 +1,12 @@
 # Visual Selection & Direct-Edit Interaction Plan
 
-Status: planned, not started
+> **Supporting record — consolidated 2026-09-12.**
+> [The master roadmap](../../ROADMAP.md) owns priorities, dependencies and current
+> delivery status. Original phase/status/next-step instructions below are
+> historical; technical contracts and explicit exclusions remain reference material.
+> Selection/editing design and acceptance detail for U01/U03/M05/K05; the original not-started status is obsolete.
+
+Historical status: planned, not started
 Repos involved: `esaueng/OpenZCAD` only (all gaps close with data already in, or derivable from, the pinned brepkit-wasm; no kernel PRs required)
 Spec: viewport must communicate exactly which B-Rep entity is selected — including internal
 and occluded geometry — and support on-model direct editing with live dimension feedback.

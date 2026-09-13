@@ -1,5 +1,11 @@
 # Kernel execution plan (companion to kernel-roadmap.md)
 
+> **Supporting record — consolidated 2026-09-12.**
+> [The master roadmap](../ROADMAP.md) owns priorities, dependencies and current
+> delivery status. Original phase/status/next-step instructions below are
+> historical; technical contracts and explicit exclusions remain reference material.
+> Historical kernel migration/execution record; current residual consumer work maps to K01/K05/K07/K08.
+
 > Historical execution record. ADR-020 replaces the production kernel with
 > Remus; BrepKit names, package paths, issue references, pins, and measurements
 > below are retained as evidence of the work completed at that time.
