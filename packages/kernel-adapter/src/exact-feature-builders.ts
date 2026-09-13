@@ -74,11 +74,12 @@ import {
   transformMatrix,
   uniformScaleMatrix
 } from './exact-math';
+import { droppedUnionOperandWarning } from './boolean-result-validation';
 import {
-  booleanFacetFallbackWarning,
-  censusOfSolids,
-  droppedUnionOperandWarning
-} from './boolean-result-validation';
+  exactBooleanOutcome,
+  exactCut,
+  exactIntersect
+} from './exact-boolean-refusal';
 import { importedMeshStl, meshBooleanUnsupportedError } from './imported-mesh';
 import {
   extrudeVolumeTolerance,
@@ -436,13 +437,21 @@ function buildExtrudeFeature(
     ];
     const targetSolid = collapseShape(kernel, target);
     const extrusionSolid = collapseShape(kernel, extrusion);
+    const operandNames = [targetBody.name, extrusionBody.name];
     const solid =
       operation === 'add'
-        ? fuseUniformSolid(kernel, [...target.solids, ...extrusion.solids])
+        ? fuseUniformSolid(
+            kernel,
+            [...target.solids, ...extrusion.solids],
+            [
+              ...target.solids.map(() => targetBody.name),
+              ...extrusion.solids.map(() => extrusionBody.name)
+            ]
+          )
         : unifyBooleanFaces(
             kernel,
             tryExactCoaxialCylinderCut(kernel, targetSolid, extrusionSolid) ??
-              kernel.cut(targetSolid, extrusionSolid)
+              exactCut(kernel, targetSolid, extrusionSolid, operandNames)
           );
     // An add only needs the two to meet. Shared volume cannot answer that —
     // a boss grown off the face it was sketched on meets its target exactly
@@ -1082,13 +1091,6 @@ function buildBooleanFeature(
   const operandLineage = operands.map((shape) =>
     booleanOperandLineage(kernel, shape)
   );
-  // Census the operands before the boolean consumes them. A faceted
-  // fallback is only visible as a change in face count and surface
-  // type, so both sides have to be measured.
-  const operandCensus = censusOfSolids(
-    kernel,
-    operands.flatMap((shape) => shape.solids)
-  );
   let acceptedUnionSolid: number | undefined;
   let solid: number;
   let unionFuseOperands: UnionFuseOperand[] | null = null;
@@ -1125,17 +1127,18 @@ function buildBooleanFeature(
       (left, right) => kernel.solidToSolidDistance(left, right)[0] ?? NaN,
       (left, right) => {
         try {
+          // Face contact has no shared volume, and a refused intersect is
+          // not evidence of separation either, so a non-ok outcome falls
+          // through to the kernel's same-domain contact query.
+          const common = exactBooleanOutcome(kernel, 'intersect', left, right);
           if (
-            kernel.volume(
-              kernel.intersect(left, right),
-              MEASUREMENT_DEFLECTION
-            ) > 0
+            common.status === 'ok' &&
+            kernel.volume(common.solid, MEASUREMENT_DEFLECTION) > 0
           ) {
             return true;
           }
         } catch {
-          // Face contact has no shared volume, so fall through to
-          // the kernel's same-domain contact query.
+          // A kernel that throws rather than answering says nothing.
         }
         try {
           const contacts = JSON.parse(
@@ -1155,7 +1158,14 @@ function buildBooleanFeature(
         }
       }
     );
-    solid = fuseUniformSolid(kernel, unionSolids, accepted => { acceptedUnionSolid = accepted; });
+    solid = fuseUniformSolid(
+      kernel,
+      unionSolids,
+      unionOperands.map((operand) => operand.name),
+      (accepted) => {
+        acceptedUnionSolid = accepted;
+      }
+    );
     const resultBounds = kernel.boundingBox(solid);
     const droppedOperand = droppedUnionOperandWarning({
       operands: unionOperands.map((operand) => {
@@ -1232,23 +1242,38 @@ function buildBooleanFeature(
       ? kernel.volume(solid, MEASUREMENT_DEFLECTION)
       : 0;
     let sharedWithTools = 0;
-    for (const operand of operands.slice(1)) {
-      const tool = collapseShape(kernel, operand);
+    const targetName = bodyName(document, data.targetBodyIds[0]!);
+    for (let index = 1; index < operands.length; index += 1) {
+      const tool = collapseShape(kernel, operands[index]!);
+      const operandNames = [
+        targetName,
+        bodyName(document, data.targetBodyIds[index]!)
+      ];
       if (subtracting) {
         try {
-          sharedWithTools += kernel.volume(
-            kernel.intersect(kernel.copySolid(solid), kernel.copySolid(tool)),
-            MEASUREMENT_DEFLECTION
+          // An intersect that refuses says nothing either way, and a
+          // guard is not the place to turn that into a claim — so the
+          // typed outcome is read rather than thrown.
+          const common = exactBooleanOutcome(
+            kernel,
+            'intersect',
+            kernel.copySolid(solid),
+            kernel.copySolid(tool)
           );
+          if (common.status === 'ok') {
+            sharedWithTools += kernel.volume(
+              common.solid,
+              MEASUREMENT_DEFLECTION
+            );
+          }
         } catch {
-          // An intersect that refuses says nothing either way, and
-          // a guard is not the place to turn that into a claim.
+          // Neither does a kernel that throws instead of answering.
         }
       }
       solid = subtracting
         ? (tryExactCoaxialCylinderCut(kernel, solid, tool) ??
-          kernel.cut(solid, tool))
-        : kernel.intersect(solid, tool);
+          exactCut(kernel, solid, tool, operandNames))
+        : exactIntersect(kernel, solid, tool, operandNames);
     }
     solid = unifyBooleanFaces(kernel, solid);
     // A cut that removes too little of the material it demonstrably
@@ -1284,21 +1309,16 @@ function buildBooleanFeature(
       }
     }
   }
-  // The face-count census. Mesh closure, validation and volume all
-  // pass on a silently faceted boolean result; the faces do not.
-  const facetFallback = booleanFacetFallbackWarning(
-    {
-      operands: operandCensus,
-      result: censusOfSolids(kernel, [solid])
-    },
-    data.operation
-  );
-  // A tangency the fuse cannot resolve exactly does not always come
-  // back faceted. Kernels differ on which way they fail it: one
-  // drops to facets, another returns a body that is not a valid
-  // solid at all. Both are the same complaint to the user, and both
-  // are answered by the same move, so the refusal is classified on
-  // either symptom rather than on faceting alone.
+  // The face-count census that used to stand here is gone: it existed
+  // to catch a boolean that silently returned a tessellated fallback,
+  // and the exact-only kernel refuses that pair by name instead — the
+  // builder above never reaches this line for one.
+  //
+  // A tangency the fuse cannot resolve exactly still does not always
+  // announce itself. Where the kernel accepts the fuse it can hand
+  // back a body that is not a valid solid at all, which is the same
+  // complaint to the user and is answered by the same move, so it
+  // keeps its own classification here.
   const unionNotSolid =
     unionFuseOperands !== null &&
     !unionDisconnected &&
@@ -1314,14 +1334,7 @@ function buildBooleanFeature(
   // of those attaches a remedy to a complaint it does not answer.
   // Track the refusal actually pushed here instead.
   let refusalIndex: number | null = null;
-  if (facetFallback) {
-    refusalIndex = raiseFeatureWarning(
-      result,
-      feature,
-      facetFallback,
-      'refusal'
-    );
-  } else if (unionNotSolid) {
+  if (unionNotSolid) {
     // Deliberately the same sentence the strict validation pass
     // emits later. Saying it here instead means the proved move can
     // ride along with it — that pass runs far from the operands,
@@ -1627,7 +1640,20 @@ function buildPatternFeature(
         total + kernel.volume(instance, MEASUREMENT_DEFLECTION),
       0
     );
-    const fused = fuseUniformSolid(kernel, solids);
+    // Instance labels run parallel to `solids`: every instance contributed
+    // the target shape's own solid count, in order, starting with the
+    // original at index 0. A refused fuse then names the copy the exact
+    // engine declined rather than the whole row.
+    const solidsPerInstance = Math.max(1, target.solids.length);
+    const fused = fuseUniformSolid(
+      kernel,
+      solids,
+      solids.map((_solid, index) =>
+        index < solidsPerInstance
+          ? 'the original'
+          : `instance ${Math.floor(index / solidsPerInstance) + 1}`
+      )
+    );
     const removed = summed - kernel.volume(fused, MEASUREMENT_DEFLECTION);
     // The fuse is NOT guaranteed to merge. On shallow overlaps it
     // returns the operands essentially untouched — measured on three
