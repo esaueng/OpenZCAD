@@ -146,12 +146,22 @@ const OPERATION_CAPABILITIES: Readonly<
    * history, exact support witnesses, and one-to-one role all verify. The
    * other operations below retain their shipped hash-only behavior.
    */
-  pattern: {
-    status: 'unsupported',
-    fallback: 'hash-only',
-    reason:
-      'Pattern instances may be fused when they overlap, so the result faces have no complete output relation to the source body.'
-  },
+  /**
+   * Derived per instance. The pattern feature drives the kernel's own
+   * `linearPattern` / `circularPattern` / `gridPattern`, so every instance is
+   * a rigid copy of the source body under a transform the feature computed
+   * itself. An instance face inherits its source face's name carrying the
+   * instance ordinal, verified exactly as a rigid transform is: the source
+   * witness carried through that instance's transform must match the measured
+   * result witness, uniquely. Where the kernel journals the operation, its
+   * claimed face map has to pick the same result face as the witness match;
+   * a disagreement publishes nothing.
+   *
+   * Instances that INTERPENETRATE are fused into one solid, and that fuse has
+   * no complete output relation, so those results stay hash-only with a
+   * diagnostic — the same bar the bridge-gated rows above are held to.
+   */
+  pattern: { status: 'derived' },
   /**
    * Derived by unique analytic carrier (ADR-013, boolean row): a result face
    * inherits an operand face's identity only when both are the sole faces on
@@ -688,7 +698,12 @@ export type EvolutionRelation =
 
 export interface TopologyEvolutionInput {
   readonly operation:
-    'rigid-transform' | 'boolean' | 'fillet' | 'chamfer' | 'direct-edit';
+    | 'rigid-transform'
+    | 'pattern'
+    | 'boolean'
+    | 'fillet'
+    | 'chamfer'
+    | 'direct-edit';
   readonly kind: TopologyKind;
   readonly sourceWitness: TopologyWitnessV1;
   readonly resultWitness: TopologyWitnessV1;
@@ -697,7 +712,7 @@ export interface TopologyEvolutionInput {
 
 export interface VerifiedTopologyEvolution {
   readonly status: 'verified';
-  readonly operation: 'rigid-transform' | 'boolean' | 'fillet';
+  readonly operation: 'rigid-transform' | 'pattern' | 'boolean' | 'fillet';
   readonly kind: TopologyKind;
   readonly sourceWitness: TopologyWitnessV1;
   readonly resultWitness: TopologyWitnessV1;
@@ -796,10 +811,17 @@ export function verifyTopologyEvolution(
       );
       break;
     case 'known-transform': {
-      if (input.operation !== 'rigid-transform') {
+      // A pattern instance is a rigid copy under a transform the feature
+      // computed from the document, so the same evidence standard applies:
+      // the source witness carried through that transform, compared exactly.
+      if (
+        input.operation !== 'rigid-transform' &&
+        input.operation !== 'pattern'
+      ) {
         return {
           status: 'rejected',
-          reason: 'Known-transform evidence is valid only for rigid transforms.'
+          reason:
+            'Known-transform evidence is valid only for rigid transforms and pattern instances.'
         };
       }
       const expectedInspection = inspectWitnessByKind(
