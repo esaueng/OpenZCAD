@@ -52,6 +52,7 @@ export interface BatchedEdgeTarget {
 const EMPTY_SEGMENT = [0, 0, 0, 0, 0, 0] as const;
 const FACE_BOUNDARY_SELECTED_COLOR = SELECTION_SEMANTICS.selected.boundary;
 const FACE_BOUNDARY_SELECTED_WIDTH = SELECTION_SEMANTICS.selected.boundaryWidth;
+const BODY_SELECTED_EDGE_WIDTH = SELECTION_SEMANTICS.selected.bodyEdgeWidth;
 const HIDDEN_EDGE_OPACITY = 0.34;
 
 function edgeKey(owner: Pick<EdgeSegmentOwner, 'bodyId' | 'topologyId'>) {
@@ -249,6 +250,7 @@ export class BodyEdgeOverlay extends THREE.Group {
   private readonly faceBoundaryTier: PresenceTier;
   private displayMode: DisplayMode = 'shaded-edges';
   private xrayEnabled = true;
+  private bodySelected = false;
 
   constructor(
     body: Pick<BodyRepresentation, 'bodyId' | 'topology'>,
@@ -545,6 +547,21 @@ export class BodyEdgeOverlay extends THREE.Group {
     return true;
   }
 
+  /**
+   * Outlines the whole body when it is a selected body — the input to a
+   * union, subtract, intersect or move. The idle batch is restyled in place
+   * rather than copied into the selected batch, so a 20k-edge import costs
+   * nothing more than three material writes.
+   */
+  setBodySelected(selected: boolean) {
+    if (this.bodySelected === selected) {
+      return false;
+    }
+    this.bodySelected = selected;
+    this.applyIdleStyle();
+    return true;
+  }
+
   /** Avoid x-ray ambiguity while sketch mode intentionally recedes solids. */
   setXrayEnabled(enabled: boolean) {
     if (this.xrayEnabled === enabled) {
@@ -569,12 +586,23 @@ export class BodyEdgeOverlay extends THREE.Group {
     ]) {
       line.userData.displayMode = mode;
     }
-    this.idleEdges.material.color.setHex(
-      mode === 'wireframe' ? EDGE_WIREFRAME_COLOR : EDGE_IDLE_COLOR
-    );
-    this.idleEdges.material.opacity =
-      mode === 'wireframe' ? 1 : EDGE_IDLE_OPACITY;
+    this.applyIdleStyle();
     this.refreshVisibility();
+  }
+
+  private applyIdleStyle() {
+    const material = this.idleEdges.material;
+    if (this.bodySelected) {
+      material.color.setHex(EDGE_SELECTED_COLOR);
+      material.linewidth = BODY_SELECTED_EDGE_WIDTH;
+      material.opacity = 1;
+      return;
+    }
+    material.color.setHex(
+      this.displayMode === 'wireframe' ? EDGE_WIREFRAME_COLOR : EDGE_IDLE_COLOR
+    );
+    material.linewidth = EDGE_IDLE_WIDTH;
+    material.opacity = this.displayMode === 'wireframe' ? 1 : EDGE_IDLE_OPACITY;
   }
 
   /** Keeps all three stable fat-line materials correct after a resize. */

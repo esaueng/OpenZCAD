@@ -222,6 +222,28 @@
   pointer-events: none;
 }
 
+.selection-callout.body-order-callout {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding-left: 4px;
+  border-color: var(--color-accent);
+}
+
+/* The pick number, in the same accent the form's pick list uses for it. */
+.callout-order {
+  display: inline-grid;
+  place-items: center;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  color: var(--color-on-accent);
+  background: var(--color-accent);
+  border-radius: 8px;
+  font-weight: 700;
+  line-height: 1;
+}
+
 .selection-callout.sketch-callout {
   color: var(--color-accent);
   border-color: rgba(77, 163, 255, 0.3);

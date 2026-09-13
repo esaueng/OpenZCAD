@@ -810,8 +810,13 @@ interface BooleanFormProps {
     targetBodyIds: BodyId[];
   };
   presetOperation?: BooleanOperation;
-  /** Bodies already picked in the viewport, in click order. */
-  initialSelection?: BodyId[];
+  /**
+   * The viewport's body selection, in pick order. When given, the list is a
+   * view of that selection: a row toggled here reports through
+   * `onSelectionChange`, and a body clicked in the scene shows up here.
+   */
+  selection?: BodyId[];
+  onSelectionChange?(bodyIds: BodyId[]): void;
   submitLabel: string;
   onSubmit(value: {
     name: string;
@@ -825,7 +830,8 @@ export function BooleanForm({
   bodies,
   initial,
   presetOperation,
-  initialSelection,
+  selection,
+  onSelectionChange,
   submitLabel,
   onSubmit,
   onCancel
@@ -837,9 +843,12 @@ export function BooleanForm({
     initial?.name ?? OPERATION_LABELS[operation]
   );
   // Selection order matters: the first body is the base a subtract cuts from.
-  const [selected, setSelected] = useState<BodyId[]>(
-    initial?.targetBodyIds ?? initialSelection ?? []
+  // Editing an existing feature keeps its own list; creating one shares the
+  // viewport's, so the numbers here and the numbers on the bodies agree.
+  const [ownSelection, setOwnSelection] = useState<BodyId[]>(
+    initial?.targetBodyIds ?? selection ?? []
   );
+  const selected = !initial && selection ? selection : ownSelection;
 
   const selectable = useMemo(
     () =>
@@ -848,11 +857,13 @@ export function BooleanForm({
   );
 
   function toggle(bodyId: BodyId) {
-    setSelected((current) =>
-      current.includes(bodyId)
-        ? current.filter((id) => id !== bodyId)
-        : [...current, bodyId]
-    );
+    const next = selected.includes(bodyId)
+      ? selected.filter((id) => id !== bodyId)
+      : [...selected, bodyId];
+    setOwnSelection(next);
+    if (!initial) {
+      onSelectionChange?.(next);
+    }
   }
 
   const canSubmit = name.trim().length > 0 && selected.length >= 2;
@@ -905,7 +916,7 @@ export function BooleanForm({
         </select>
       </label>
       <div className="field">
-        <span>Bodies (pick order sets the base)</span>
+        <span>Bodies (numbered in the viewport · pick order sets the base)</span>
         <div className="pick-list">
           {selectable.length === 0 && (
             <p className="muted">No bodies available.</p>
