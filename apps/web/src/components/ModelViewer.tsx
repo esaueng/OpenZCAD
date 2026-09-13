@@ -1730,9 +1730,9 @@ export function ModelViewer({
     });
 
     /**
-     * Poses the named body's selection callout under the same rotate-then-
-     * translate the mesh just took. At most one callout carries a body id —
-     * the effect that builds them names only the primary selection.
+     * Poses the named body's selection callouts under the same rotate-then-
+     * translate the mesh just took. A single selection has one name callout;
+     * a multi-selection gives every body its own numbered one.
      */
     function poseSelectionCallout(
       bodyId: MovePreview['bodyId'],
@@ -7265,6 +7265,13 @@ export function ModelViewer({
       context.renderer.domElement.dataset.e2eRenderedBodies = String(
         bodies.length
       );
+      // Pick order, as the boolean form numbers it.
+      if (selectedBodyIds.length > 0) {
+        context.renderer.domElement.dataset.e2eSelectedBodies =
+          selectedBodyIds.join(',');
+      } else {
+        delete context.renderer.domElement.dataset.e2eSelectedBodies;
+      }
     }
     const edgeResolution = context.fatLineResolution();
 
@@ -7349,6 +7356,7 @@ export function ModelViewer({
         context.edgeOverlaysByBodyId.set(body.bodyId, edgeOverlay);
       }
       edgeOverlay?.setSelected(selectedEdges);
+      edgeOverlay?.setBodySelected(isSelected);
       edgeOverlay?.setXrayEnabled(xrayEnabled);
       if (bodiesChanged) {
         context.bodyGroup.add(object);
@@ -7656,8 +7664,38 @@ export function ModelViewer({
       context.renderedBodies = bodies;
     }
 
-    // Name callout on the primary (last picked) selected body.
-    const primaryId = selectedBodyIds.at(-1);
+    // One body: a name callout. Several: every body wears its pick number,
+    // the same number the boolean form's pick list shows, so "which of these
+    // is body 1, the base a subtract cuts from" is answered in the viewport.
+    // The name alone with a "+2" told the user how many were picked, but not
+    // which ones.
+    if (selectedBodyIds.length > 1) {
+      selectedBodyIds.forEach((bodyId, index) => {
+        const target = context.objectsByBodyId.get(bodyId);
+        const body = bodies.find((candidate) => candidate.bodyId === bodyId);
+        if (!target || !body) {
+          return;
+        }
+        const box = new THREE.Box3().setFromObject(target);
+        if (box.isEmpty()) {
+          return;
+        }
+        const top = box.getCenter(new THREE.Vector3());
+        top.z =
+          box.max.z + Math.max(box.getSize(new THREE.Vector3()).z * 0.12, 5);
+        const label = makeLabel('selection-callout body-order-callout', '');
+        const order = document.createElement('span');
+        order.className = 'callout-order';
+        order.textContent = String(index + 1);
+        label.element.append(order, document.createTextNode(body.name));
+        label.position.copy(top);
+        label.userData.calloutBodyId = bodyId;
+        label.userData.calloutRestingPosition = top.clone();
+        context.overlayGroup.add(label);
+      });
+    }
+    const primaryId =
+      selectedBodyIds.length === 1 ? selectedBodyIds[0] : undefined;
     if (primaryId) {
       const target = context.objectsByBodyId.get(primaryId);
       const body = bodies.find((candidate) => candidate.bodyId === primaryId);
@@ -7687,16 +7725,13 @@ export function ModelViewer({
                       ))
                 ]
               : [];
-          const count =
-            selectedBodyIds.length > 1 ? ` +${selectedBodyIds.length - 1}` : '';
           const label = makeLabel('selection-callout', '');
           // Segmented rather than one text run: a cylinder radius drag rewrites
           // the diameter node in place while the document still holds the old
           // value.
           renderLabelSegments(label.element, [
             { kind: 'text', text: body.name },
-            ...suffix,
-            ...(count ? [{ kind: 'text' as const, text: count }] : [])
+            ...suffix
           ]);
           label.position.copy(top);
           // The callout lives in the overlay group, not under the body, so a
