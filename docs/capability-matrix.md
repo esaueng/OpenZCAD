@@ -1,5 +1,11 @@
 # Capability and gap matrix
 
+> Historical capability snapshot, not a current completion ledger. Reconciled
+> roadmap status through 2026-09-12 lives in [the product roadmap](cad-feature-roadmap.md),
+> [the consumer kernel roadmap](kernel-roadmap-remus.md), and [TODO.md](../TODO.md).
+> In particular, the schema, pin sizes, editing and rollout rows below retain
+> their original context; use current source/configuration for those facts.
+
 Snapshot: 2026-09-01, schema v13
 ([schema constant](../packages/shared/src/index.ts)). “Exact” means the browser
 geometry worker evaluates the operation through a B-rep kernel. “Implemented
