@@ -42,29 +42,55 @@ const TRIANGLES: readonly (readonly [number, number, number])[] = [
 
 const encoder = new TextEncoder();
 
-function objBox(): Uint8Array {
-  const lines = [
-    ...VERTICES.map((vertex) => `v ${vertex.join(' ')}`),
-    ...TRIANGLES.map(
-      (triangle) => `f ${triangle.map((index) => index + 1).join(' ')}`
-    )
-  ];
+/**
+ * The box, `count` times over, each copy clear of the last.
+ *
+ * OBJ carries no object container the translator reports separately — several
+ * disjoint boxes come back as one solid holding several shells — which is why
+ * a guard that counts solids never sees them.
+ */
+export function objFixture(count = 1): Uint8Array {
+  const lines: string[] = [];
+  for (let copy = 0; copy < count; copy += 1) {
+    const offset = copy * FIXTURE_OBJECT_PITCH;
+    for (const [x, y, z] of VERTICES) {
+      lines.push(`v ${x + offset} ${y} ${z}`);
+    }
+  }
+  for (let copy = 0; copy < count; copy += 1) {
+    const base = copy * VERTICES.length + 1;
+    for (const triangle of TRIANGLES) {
+      lines.push(`f ${triangle.map((index) => index + base).join(' ')}`);
+    }
+  }
   return encoder.encode(`${lines.join('\n')}\n`);
 }
 
-function plyBox(): Uint8Array {
+export function plyFixture(count = 1): Uint8Array {
+  const vertices: string[] = [];
+  const faces: string[] = [];
+  for (let copy = 0; copy < count; copy += 1) {
+    const offset = copy * FIXTURE_OBJECT_PITCH;
+    const base = copy * VERTICES.length;
+    for (const [x, y, z] of VERTICES) {
+      vertices.push(`${x + offset} ${y} ${z}`);
+    }
+    for (const triangle of TRIANGLES) {
+      faces.push(`3 ${triangle.map((index) => index + base).join(' ')}`);
+    }
+  }
   const lines = [
     'ply',
     'format ascii 1.0',
-    `element vertex ${VERTICES.length}`,
+    `element vertex ${vertices.length}`,
     'property float x',
     'property float y',
     'property float z',
-    `element face ${TRIANGLES.length}`,
+    `element face ${faces.length}`,
     'property list uchar int vertex_index',
     'end_header',
-    ...VERTICES.map((vertex) => vertex.join(' ')),
-    ...TRIANGLES.map((triangle) => `3 ${triangle.join(' ')}`)
+    ...vertices,
+    ...faces
   ];
   return encoder.encode(`${lines.join('\n')}\n`);
 }
@@ -72,16 +98,38 @@ function plyBox(): Uint8Array {
 /**
  * How a 3MF package under test differs from the plain one-box default.
  *
- * A 3MF is the only mesh format here that declares its own length unit and the
- * only one that routinely holds several objects, so those two axes — plus the
- * Zip compression every real exporter uses and the fixture writer does not —
- * are what the 3MF cases need to vary.
+ * A 3MF is the only mesh format here that declares its own length unit, the
+ * only one that routinely holds several objects, and the only one whose
+ * `<build>` section says where each of them goes — so the unit, the resources,
+ * the build items and their matrices are the axes the 3MF cases vary, plus the
+ * Zip compression every real exporter uses and the fixture writer does not.
  */
 export interface ThreeMfOptions {
   /** The `unit` attribute to declare; omitted entirely when null. */
   readonly unit?: string | null;
-  /** How many boxes to place, each offset clear of the last. */
+  /** How many box object resources to write, each offset clear of the last. */
   readonly objects?: number;
+  /**
+   * The `<build>` items to write. Defaults to one identity item per object,
+   * which is what an ordinary single-plate export looks like.
+   */
+  readonly items?: readonly ThreeMfItem[];
+  /** Write no `<build>` element at all. */
+  readonly omitBuild?: boolean;
+  /**
+   * Append an object composed of `<components>` rather than its own mesh,
+   * referencing object 1.
+   */
+  readonly componentObject?: boolean;
+}
+
+/** One `<build><item>`: which object it places, and the matrix it places it with. */
+export interface ThreeMfItem {
+  readonly objectid: number | string;
+  /** The twelve numbers of a 3MF transform, verbatim. */
+  readonly transform?: string;
+  /** A `path` attribute, for the production-extension refusal. */
+  readonly path?: string;
 }
 
 /** The 3MF core format's own default when `<model>` omits `unit`. */
@@ -94,13 +142,16 @@ export const THREE_MF_UNIT_MILLIMETRES: Readonly<Record<string, number>> = {
   meter: 1000
 };
 
+/** The offset that keeps the nth fixture box clear of the one before it. */
+export const FIXTURE_OBJECT_PITCH = FIXTURE_BOX.x + 1;
+
 function threeMfModelXml(options: ThreeMfOptions = {}): string {
   const count = options.objects ?? 1;
   const unit = options.unit === undefined ? 'millimeter' : options.unit;
-  const resources = Array.from({ length: count }, (_unused, index) => {
+  const meshes = Array.from({ length: count }, (_unused, index) => {
     // Each object clear of the last, so several of them are genuinely
     // separate shells rather than one merged solid.
-    const offset = index * (FIXTURE_BOX.x + 1);
+    const offset = index * FIXTURE_OBJECT_PITCH;
     const vertices = VERTICES.map(
       ([x, y, z]) => `<vertex x="${x + offset}" y="${y}" z="${z}"/>`
     ).join('');
@@ -113,16 +164,31 @@ function threeMfModelXml(options: ThreeMfOptions = {}): string {
       '</mesh></object>'
     );
   }).join('');
-  const items = Array.from(
-    { length: count },
-    (_unused, index) => `<item objectid="${index + 1}"/>`
-  ).join('');
+  const composed = options.componentObject
+    ? `<object id="${count + 1}" type="model"><components>` +
+      '<component objectid="1"/></components></object>'
+    : '';
+  const items: readonly ThreeMfItem[] =
+    options.items ??
+    Array.from({ length: count }, (_unused, index) => ({
+      objectid: index + 1
+    }));
+  const placed = items
+    .map(
+      (item) =>
+        `<item objectid="${item.objectid}"` +
+        (item.transform === undefined ? '' : ` transform="${item.transform}"`) +
+        (item.path === undefined ? '' : ` path="${item.path}"`) +
+        '/>'
+    )
+    .join('');
   return (
     '<?xml version="1.0" encoding="UTF-8"?>' +
     `<model${unit === null ? '' : ` unit="${unit}"`} xml:lang="en-US" ` +
     'xmlns="http://schemas.microsoft.com/3dmanufacturing/core/2015/02">' +
-    `<resources>${resources}</resources>` +
-    `<build>${items}</build></model>`
+    `<resources>${meshes}${composed}</resources>` +
+    (options.omitBuild ? '' : `<build>${placed}</build>`) +
+    '</model>'
   );
 }
 
@@ -195,54 +261,88 @@ async function deflateRaw(data: Uint8Array): Promise<Uint8Array> {
   return concat(chunks);
 }
 
-function glbBox(): Uint8Array {
-  const positions = new Float32Array(VERTICES.flat());
-  const indices = new Uint16Array(TRIANGLES.flat());
-  const positionBytes = new Uint8Array(positions.buffer);
-  const indexBytes = new Uint8Array(indices.buffer);
-  const indexOffset = align4(positionBytes.length);
-  const binary = new Uint8Array(align4(indexOffset + indexBytes.length));
-  binary.set(positionBytes, 0);
-  binary.set(indexBytes, indexOffset);
+/** The box, `count` times over, each copy its own glTF mesh and node. */
+export function glbFixture(count = 1): Uint8Array {
+  const accessors: unknown[] = [];
+  const bufferViews: unknown[] = [];
+  const meshes: unknown[] = [];
+  const nodes: unknown[] = [];
+  const parts: Uint8Array[] = [];
+  let offset = 0;
+  const pad = (to: number): void => {
+    if (to > offset) {
+      parts.push(new Uint8Array(to - offset));
+      offset = to;
+    }
+  };
+  for (let copy = 0; copy < count; copy += 1) {
+    const shift = copy * FIXTURE_OBJECT_PITCH;
+    const positions = new Float32Array(
+      VERTICES.flatMap(([x, y, z]) => [x + shift, y, z])
+    );
+    const indices = new Uint16Array(TRIANGLES.flat());
+    const positionBytes = new Uint8Array(positions.buffer.slice(0));
+    const indexBytes = new Uint8Array(indices.buffer.slice(0));
+    pad(align4(offset));
+    const positionOffset = offset;
+    parts.push(positionBytes);
+    offset += positionBytes.length;
+    pad(align4(offset));
+    const indexOffset = offset;
+    parts.push(indexBytes);
+    offset += indexBytes.length;
+    bufferViews.push(
+      {
+        buffer: 0,
+        byteOffset: positionOffset,
+        byteLength: positionBytes.length,
+        target: 34962
+      },
+      {
+        buffer: 0,
+        byteOffset: indexOffset,
+        byteLength: indexBytes.length,
+        target: 34963
+      }
+    );
+    accessors.push(
+      {
+        bufferView: copy * 2,
+        componentType: 5126, // FLOAT
+        count: VERTICES.length,
+        type: 'VEC3',
+        min: [shift, 0, 0],
+        max: [FIXTURE_BOX.x + shift, FIXTURE_BOX.y, FIXTURE_BOX.z]
+      },
+      {
+        bufferView: copy * 2 + 1,
+        componentType: 5123, // UNSIGNED_SHORT
+        count: TRIANGLES.length * 3,
+        type: 'SCALAR'
+      }
+    );
+    meshes.push({
+      primitives: [
+        {
+          attributes: { POSITION: copy * 2 },
+          indices: copy * 2 + 1,
+          mode: 4
+        }
+      ]
+    });
+    nodes.push({ mesh: copy });
+  }
+  pad(align4(offset));
+  const binary = concat(parts);
   const json = encoder.encode(
     JSON.stringify({
       asset: { version: '2.0' },
       scene: 0,
-      scenes: [{ nodes: [0] }],
-      nodes: [{ mesh: 0 }],
-      meshes: [
-        { primitives: [{ attributes: { POSITION: 0 }, indices: 1, mode: 4 }] }
-      ],
-      accessors: [
-        {
-          bufferView: 0,
-          componentType: 5126, // FLOAT
-          count: VERTICES.length,
-          type: 'VEC3',
-          min: [0, 0, 0],
-          max: [FIXTURE_BOX.x, FIXTURE_BOX.y, FIXTURE_BOX.z]
-        },
-        {
-          bufferView: 1,
-          componentType: 5123, // UNSIGNED_SHORT
-          count: TRIANGLES.length * 3,
-          type: 'SCALAR'
-        }
-      ],
-      bufferViews: [
-        {
-          buffer: 0,
-          byteOffset: 0,
-          byteLength: positionBytes.length,
-          target: 34962
-        },
-        {
-          buffer: 0,
-          byteOffset: indexOffset,
-          byteLength: indexBytes.length,
-          target: 34963
-        }
-      ],
+      scenes: [{ nodes: nodes.map((_unused, index) => index) }],
+      nodes,
+      meshes,
+      accessors,
+      bufferViews,
       buffers: [{ byteLength: binary.length }]
     })
   );
@@ -348,14 +448,24 @@ function crc32(data: Uint8Array): number {
 }
 
 export const MESH_FIXTURE_BUILDERS: {
-  readonly [K in MeshImportFormat]: () => Uint8Array;
+  readonly [K in MeshImportFormat]: (count?: number) => Uint8Array;
 } = {
-  '3mf': threeMfBox,
-  obj: objBox,
-  glb: glbBox,
-  ply: plyBox
+  '3mf': (count = 1) => threeMfBox({ objects: count }),
+  obj: objFixture,
+  glb: glbFixture,
+  ply: plyFixture
 };
 
-export function meshFixture(format: MeshImportFormat): Uint8Array {
-  return MESH_FIXTURE_BUILDERS[format]();
+/**
+ * The fixture box in one format, `count` copies of it, each clear of the last.
+ *
+ * Several copies is the case the import has to get right rather than refuse:
+ * the copies are separate shells, and whether separate shells become one body
+ * is the kernel's answer, not a count's.
+ */
+export function meshFixture(
+  format: MeshImportFormat,
+  count = 1
+): Uint8Array {
+  return MESH_FIXTURE_BUILDERS[format](count);
 }
