@@ -18,9 +18,9 @@ Now:
 - A refusal reaches the user as a named product outcome: **"Union refused:
   "Ball" and "Ball 2" could not be combined exactly, and an approximate result
   was declined. Repositioning the overlap sometimes clears it; otherwise keep
-  the bodies separate, or subtract instead — the same operands still cut
-  exactly."** The kernel's own code and category sit behind the newline, where
-  the feature cards already hide detail.
+  the bodies separate."** The kernel's own code and category sit behind the
+  newline, where the feature cards already hide detail. The remedy claims
+  nothing beyond that — see "Advice the kernel will honour" below.
 - The kernel's category travels with it. `ExactBooleanRefusal.category` is the
   branchable field inside the adapter, and the build loop copies it onto the
   session-only `FeatureWarning.exactBooleanRefusal` (`{ operation, category,
@@ -29,6 +29,18 @@ Now:
   a union, `instance N` for a pattern.
 - The boolean arm of the face-count census is retired, because the thing it
   detected can no longer happen.
+
+**Advice the kernel will honour.** An earlier revision of this branch ended a
+refused union with "or subtract instead — the same operands still cut exactly",
+a sentence inherited verbatim from the retired facet census. The census could
+say it because it only fired on a result the engine had already built; a
+quality refusal is a far wider trigger and the promise does not survive it.
+Measured on the pin: a 20×20×10 plate unioned with an r3 h10 boss whose base
+sits ~1 µm inside its top face refuses with `exact_only_unattainable` /
+`quality_refused`, and `cutDetailed` on that same pair refuses identically, so
+a user who followed the advice got a second refusal. The remedy now offers only
+repositioning (and, for a union, keeping the bodies separate), and
+`exact-boolean-refusal.test.ts` pins the sliver pair refusing both ways.
 
 **Approximation is not offered as a rescue.** A refused pair is not rerouted to
 `booleanWithQuality` without `exactOnly`. Measured on the pin against the same
@@ -79,20 +91,29 @@ panics outright.
 Run from the worktree root, in order, on the final tree:
 
 ```
-pnpm lint              ✖ 19 problems (0 errors, 19 warnings)      [baseline: 0 errors / 19 warnings]
-pnpm typecheck         clean (tsc --noEmit, no output)
-pnpm test              root:  Test Files 242 passed | 2 skipped (244)
-                              Tests 2496 passed | 4 skipped (2500)
-                       web:   Test Files 156 passed (156)
-                              Tests 1182 passed (1182)
+pnpm lint               ✖ 19 problems (0 errors, 19 warnings)     [baseline: 0 errors / 19 warnings]
+pnpm typecheck          clean (tsc --noEmit, no output)
+pnpm test               root:  Test Files 242 passed | 2 skipped (244)
+                               Tests 2501 passed | 4 skipped (2505)
+                        web:   Test Files 156 passed (156)
+                               Tests 1182 passed (1182)
 pnpm test:parity-corpus Test Files 7 passed (7)
                         Tests 174 passed | 1 skipped (175)
+pnpm build              ✓ built; "warnings": [], "failures": []
 ```
 
-`pnpm build` was also run (not required, but it carries the bundle-size gate):
-`"warnings": []`, `"failures": []`. The new module is type-only against
-`remus-runtime`, so it adds no WASM to any chunk; the tightest entry budget
-still reports 57 459 bytes remaining.
+The recorded `origin/main` baseline is root 241 files / 2489 passed + 2
+skipped, web 156 files / 1182 passed, parity 174 passed / 1 skipped — every
+count here is at or above it. The web and parity counts are untouched by this
+branch; the root count grew by its two new test files, five of whose tests are
+the regressions for the verifier defects (the previous run of this branch read
+2496, this one reads 2501). No test was skipped, loosened or deleted; the two
+root skips and the one parity skip are the pre-existing ones.
+
+`pnpm build` carries the bundle-size gate and reports no warnings and no
+failures. The new module is type-only against `remus-runtime`, so it adds no
+WASM to any chunk; the tightest entry budget still reports 57 459 bytes
+remaining.
 
 ## Regression coverage added
 
@@ -103,6 +124,15 @@ still reports 57 459 bytes remaining.
   chain survives a caller's own heading; an invalid handle is `invalid_input`;
   the ordinary box-minus-cylinder cut still returns `ok` with the same volume
   and curved faces; a refused cluster fuse names `instance 2`.
+- `packages/kernel-adapter/src/exact-boolean-refusal.test.ts`, second round —
+  the three regressions for the verifier's defects. The ~1 µm sliver contact
+  refuses for `cut` exactly as it does for `fuse`, so the refused union's
+  sentence may not name subtract and a refused cut may not tell the user to
+  keep the bodies apart. And the diagnosis fold is traced through a kernel with
+  `fuseDetailed` and `deleteSolid` shadowed (`Object.create` keeps the one live
+  wasm instance on the prototype): every solid the fold allocates is released,
+  no caller input is, the inputs still measure afterwards, and the success path
+  allocates and releases nothing.
 - `test/boolean-refusal-reporting.test.ts` — the same union driven through a
   real document and `syncDocument`: the feature warning reads "Union refused:
   … could not be combined exactly", carries `{operation:'fuse',
@@ -136,7 +166,13 @@ still reports 57 459 bytes remaining.
   that already happened. The fold is diagnosis, **not** a rescue: if it finds
   no culprit the original error is rethrown unchanged. Accepting a left fold
   that succeeded where the balanced reduction refused would make a cluster's
-  fate depend on the order the diagnosis happened to take.
+  fate depend on the order the diagnosis happened to take. Every partial union
+  the fold builds is scratch and is retired with `deleteSolid` as soon as the
+  next step supersedes it (the last one on the way out), so it holds at most
+  one extra solid at a time. `deleteSolid` retires only the unshared topology
+  subtree, so the caller's operands survive — checked on the pin, where the
+  inputs still measure and the running union still validates after a mid-fold
+  release.
 - **No web UI work.** The refusal is surfaced through the existing feature
   warning channel, which the panel already renders with a first-line/detail
   split. No component was changed.
@@ -157,9 +193,14 @@ still reports 57 459 bytes remaining.
   yet; it exists so the next one does not have to parse English. `category` is
   typed as `string`, not a union, so a new kernel category cannot break the
   build before anyone has decided what it means.
-- **The pairwise diagnosis fold costs extra kernel work on the failure path**
-  — n−1 `fuseDetailed` calls for an n-instance pattern that already failed. It
-  never runs on success.
+- **The pairwise diagnosis fold costs a second pass on the failure path** —
+  up to n−1 `fuseDetailed` calls, plus one `deleteSolid` each, for an
+  n-member cluster that has already failed. It never runs on success. The cost
+  is bounded by the product: a feature may contribute at most 100 solids
+  (`exact-feature-builders.ts` enforces it for patterns), and 99 fuses plus
+  their releases measured **54 ms** on the pin for a 100-box row. I judged that
+  proportionate to naming the instance and did not add a cutoff; a cutoff would
+  drop the attribution exactly for the largest clusters, where it matters most.
 - **The union move probe's candidate filter narrowed.** It used to reject a
   candidate on faceting OR on losing all curvature; only the curvature half
   survives, because the other half is now the kernel's own refusal (and a
@@ -182,3 +223,36 @@ still reports 57 459 bytes remaining.
 - B23 (fillet is one walking-then-rolling-ball cascade, no flat planar bevel
   fallback) is the same class of change on a different operation and is not
   touched here.
+- `docs/adrs/ADR-020-remus-browser-kernel.md` records, as a live consequence,
+  that "a shallow circular union now returns a watertight faceted result
+  instead of refusing" and "remains visibly labeled as approximate". B21
+  reversed that: the plain booleans refuse instead. I left the ADR alone
+  because it is a decision record pinned to the kernel state of its day and
+  amending it is a separate, deliberate call; flagging it here so the next
+  reader does not take it as current.
+
+## Verifier defects addressed
+
+An independent verifier read this branch and reported three minor defects.
+All three are fixed, none disputed:
+
+1. **The remedy promised a subtract the kernel also refuses.** Reproduced on
+   the pin with the ~1 µm sliver contact, where `fuseDetailed` and
+   `cutDetailed` both return `exact_only_unattainable` / `quality_refused`.
+   The false clause is gone; the sliver pair is now a regression test.
+   (`fix(kernel-adapter): stop promising a subtract the kernel also refuses`)
+2. **The diagnosis fold leaked its intermediates.** Each partial union is now
+   released, traced by a regression test that shadows `fuseDetailed` and
+   `deleteSolid`.
+   (`fix(kernel-adapter): give back the scratch solids the diagnosis fold builds`)
+3. **`docs/kernel-roadmap-remus.md` still cited `booleanFacetFallbackWarning`
+   as a live guard.** Corrected in both places that named it — the S1 item and
+   the distrust-harness paragraph (the verifier found the first; the second is
+   the same staleness).
+   (`docs(kernel-roadmap): booleanFacetFallbackWarning is gone, say so`)
+
+The verifier also flagged the one-line `ROADMAP.md` pin correction
+(`f1968568`/2.130.14 → `4bbcd5c7`/2.131.0) as outside this task's scope. It was
+explicitly requested and is factually right against `pnpm-lock.yaml`, so it
+stays; it is a one-line change and a trivial conflict to resolve if another
+branch touches the same header.
