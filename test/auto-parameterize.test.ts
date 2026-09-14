@@ -659,7 +659,7 @@ describe('assistant auto-parameterization', () => {
     ).toBeNull();
   });
 
-  it('offers both counterbored and chamfered hammer-holder holes exactly once', () => {
+  it('keeps chamfered-entry holes measured without advertising uneditable controls', () => {
     const imported = importStepBody(
       createProjectDocument(
         'Hammer-holder acceptance shape',
@@ -757,38 +757,17 @@ describe('assistant auto-parameterization', () => {
       updatedAt: imported.document.derived.updatedAt
     };
 
-    const parsed = parseCadPatchProposal(
-      structuredClone(
-        createAutoParameterizeProposal(imported.document, noSelection)
-      ),
-      createCadDocumentDigest(imported.document)
-    );
-    const edits = parsed.operations.filter(
-      (operation) => operation.kind === 'add_direct_edit'
-    );
-    expect(edits).toHaveLength(2);
-    expect(edits.map((operation) => operation.operation)).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          kind: 'resize-imported-counterbore',
-          sourceBoreDiameter: 5,
-          sourceCounterboreDiameter: 10,
-          sourceEntryChamfered: true
-        })
-      ])
-    );
     expect(
-      parsed.operations.filter(
-        (operation) =>
-          operation.kind === 'set_parameter' && operation.expression === '5'
-      )
-    ).toHaveLength(2);
+      createAutoParameterizeProposal(imported.document, noSelection)
+    ).toBeNull();
+    const catalog = createCadDocumentDigest(imported.document).editCatalog!;
+    expect(catalog.candidates).toEqual([]);
+    expect(catalog.measuredOnly).toHaveLength(2);
     expect(
-      parsed.operations.filter(
-        (operation) =>
-          operation.kind === 'set_parameter' && operation.expression === '10'
+      catalog.measuredOnly.every((value) =>
+        value.reason.includes('resizing is not supported')
       )
-    ).toHaveLength(2);
+    ).toBe(true);
   });
 
   it('creates one identity-safe radius binding per imported blend region', () => {
@@ -1074,17 +1053,17 @@ describe(
         blind: {
           proof: 'blind-cylindrical-hole',
           edit: 'resize-imported-blind-hole',
-          parameters: 2
+          parameters: 1
         },
         counterbore: {
           proof: 'counterbore',
           edit: 'resize-imported-counterbore',
-          parameters: 3
+          parameters: 2
         },
         countersink: {
           proof: 'countersink',
           edit: 'resize-imported-countersink',
-          parameters: 3
+          parameters: 2
         }
       } as const;
 
@@ -1117,20 +1096,15 @@ describe(
         expect(parameterOperations.map((operation) => operation.name)).toEqual(
           expect.arrayContaining(
             style === 'blind'
-              ? [
-                  expect.stringMatching(/hole_1_diameter$/),
-                  expect.stringMatching(/hole_1_depth$/)
-                ]
+              ? [expect.stringMatching(/hole_1_diameter$/)]
               : style === 'counterbore'
                 ? [
                     expect.stringMatching(/hole_1_bore_diameter$/),
-                    expect.stringMatching(/hole_1_counterbore_diameter$/),
-                    expect.stringMatching(/hole_1_counterbore_depth$/)
+                    expect.stringMatching(/hole_1_counterbore_diameter$/)
                   ]
                 : [
                     expect.stringMatching(/hole_1_bore_diameter$/),
-                    expect.stringMatching(/hole_1_sink_diameter$/),
-                    expect.stringMatching(/hole_1_sink_angle_radians$/)
+                    expect.stringMatching(/hole_1_sink_diameter$/)
                   ]
           )
         );
@@ -1229,7 +1203,7 @@ describe(
       }
     );
 
-    it('reports an explicit not-yet-supported error for a changed compound depth', async () => {
+    it('keeps compound depth literal while exposing only editable diameters', async () => {
       const imported = importedByStyle.counterbore;
       const proposal = createAutoParameterizeProposal(imported, noSelection)!;
       const directEdit = proposal.operations.find(
@@ -1237,29 +1211,24 @@ describe(
           operation.kind === 'add_direct_edit' &&
           operation.operation.kind === 'resize-imported-counterbore'
       );
-      if (
-        !directEdit ||
-        directEdit.kind !== 'add_direct_edit' ||
-        directEdit.operation.kind !== 'resize-imported-counterbore'
-      ) {
-        throw new Error('Expected an imported counterbore binding.');
-      }
+      expect(directEdit).toMatchObject({ operation: { counterboreDepth: 3 } });
+      expect(
+        proposal.operations
+          .filter((operation) => operation.kind === 'set_parameter')
+          .map((operation) => operation.name)
+      ).not.toEqual(expect.arrayContaining([expect.stringMatching(/depth$/)]));
+      const catalog = createCadDocumentDigest(imported).editCatalog!;
+      expect(catalog.measuredOnly).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ label: 'Counterbore depth', value: 3 })
+        ])
+      );
       const preflight = await preflightCadPatch(
         imported,
         proposal,
         (candidate) => adapter.syncDocument(candidate)
       );
-      const manager = new CommandManager(preflight.candidate);
-      manager.execute(
-        commandFactories.setParameter({
-          name: String(directEdit.operation.counterboreDepth),
-          expression: '4'
-        })
-      );
-      manager.document.derived = await adapter.syncDocument(manager.document);
-      expect(manager.document.derived.warnings.join('\n')).toMatch(
-        /Changing an imported counterbore depth is not yet supported/
-      );
+      expect(preflight.candidate.derived.warnings).toEqual([]);
     });
   }
 );

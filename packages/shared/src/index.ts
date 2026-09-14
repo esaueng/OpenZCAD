@@ -61,6 +61,38 @@ export type PatternKind = 'linear' | 'circular' | 'grid';
 export type AxisId = 'x' | 'y' | 'z';
 
 /**
+ * How a variable-radius fillet runs between its two end radii.
+ *
+ * Deliberately only the two laws the kernel qualifies. Remus ships
+ * variable-radius blending as an experimental capability with declared
+ * bounds: a standard radius law whose extrema over the whole edge are its
+ * own endpoints can be proved safe, and anything else — an interior peak, a
+ * sampled law, a setback corner — is outside what it certifies. Both laws
+ * here are monotone between `radius` and `endRadius`, so the blend's largest
+ * and smallest ball are the two the user typed.
+ *
+ * Not a closed set at the kernel boundary: `filletVariable` silently treats
+ * an unrecognized law as a CONSTANT blend at the start radius rather than
+ * refusing, so a law outside this union has to be rejected before the call
+ * rather than after it. See `assertQualifiedVariableFillet` in the kernel
+ * adapter.
+ */
+export type VariableFilletLaw = 'linear' | 'scurve';
+
+/** The runtime form of {@link VariableFilletLaw}, for validating documents. */
+export const VARIABLE_FILLET_LAWS: readonly VariableFilletLaw[] = [
+  'linear',
+  'scurve'
+];
+
+export function isVariableFilletLaw(law: unknown): law is VariableFilletLaw {
+  return (
+    typeof law === 'string' &&
+    (VARIABLE_FILLET_LAWS as readonly string[]).includes(law)
+  );
+}
+
+/**
  * A parametric scalar: either a literal number or an expression string that is
  * evaluated against the document's parameter table when geometry is rebuilt
  * (e.g. `"width / 2 + 5"`). Storing the raw expression keeps features fully
@@ -498,12 +530,22 @@ export type SketchConstraintData =
   /** Equal length (two lines) or equal radius (two circles/arcs). */
   | { constraintKind: 'equal'; a: EntityId; b: EntityId }
   /**
-   * One line tangent to one circle, in either order. Point-free: the kernel's
-   * `tangentLineCircle` constrains center-to-line distance to the radius, so
-   * no synthesized contact-point entity is needed. Arcs still require the
-   * contact-point form (TangentLineArc) and stay excluded.
+   * One line tangent to one circle or arc, in either order.
+   *
+   * The circle form is point-free: the kernel's `tangentLineCircle`
+   * constrains center-to-line distance to the radius, so no contact point is
+   * needed and `at` is absent. The arc form is the kernel's
+   * `tangentLineArc`, which asks which point of the arc the line touches, so
+   * `at` names that arc point; it is what a sketch fillet records about the
+   * arc it inserted. A constraint written before the arc form existed has no
+   * `at` and replays exactly as it did.
    */
-  | { constraintKind: 'tangent'; a: EntityId; b: EntityId }
+  | {
+      constraintKind: 'tangent';
+      a: EntityId;
+      b: EntityId;
+      at?: SketchPointRef;
+    }
   | { constraintKind: 'concentric'; a: EntityId; b: EntityId }
   | { constraintKind: 'midpoint'; point: SketchPointRef; line: EntityId }
   | {
@@ -879,7 +921,23 @@ export type FeatureData =
       targetBodyId: BodyId;
       edgeHashes: number[];
       edgeReferences?: EdgeTopologyReferenceV5[];
+      /**
+       * The rolling-ball radius, and — when {@link endRadius} is present —
+       * the radius at the start of each selected edge.
+       */
       radius: ParamValue;
+      /**
+       * Variable-radius fillet: the radius at the far end of each selected
+       * edge, in that edge's own direction. Absent means the constant-radius
+       * fillet every earlier document stored, which still runs through the
+       * constant blend entry point and replays unchanged.
+       */
+      endRadius?: ParamValue;
+      /**
+       * How the radius runs between `radius` and `endRadius`. Only read when
+       * `endRadius` is present; absent reads as `'linear'`.
+       */
+      radiusLaw?: VariableFilletLaw;
     }
   | {
       featureKind: 'chamfer';
@@ -894,6 +952,19 @@ export type FeatureData =
        * both faces, which is what every earlier document stored.
        */
       angleDeg?: ParamValue;
+      /**
+       * Asymmetric chamfer: the setback measured on the SECOND of the two
+       * faces each selected edge borders, with `distance` on the first. The
+       * pair's order is the kernel's own edge-to-face order, which the
+       * published `EdgeTopology.adjacentFaceHashes` deliberately sorts away —
+       * the two setbacks are told apart in the viewport preview and swapped
+       * from the form, not named from stored data.
+       *
+       * Absent means the symmetric chamfer. Mutually exclusive with
+       * `angleDeg`: both express the same asymmetry and a document carrying
+       * the two is refused rather than silently resolved one way.
+       */
+      distance2?: ParamValue;
     }
   | {
       featureKind: 'pattern';
@@ -1073,12 +1144,28 @@ export interface FaceTopology {
   geometry?: FaceGeometry;
 }
 
+/**
+ * Which recognizer proved a feature.
+ *
+ * Absent means the exact kernel-neutral recognizer, which has always published
+ * holes, counterbores, countersinks, bosses and tapers, and whose proofs back
+ * the coordinated direct-edit operations.
+ *
+ * `kernel-recognized` marks a family that recognizer does not publish, where
+ * the geometry kernel's own recognizer supplied the candidate and the adapter
+ * verified it against exact surfaces before publishing. Those features are
+ * read-only: no coordinated edit operation may bind to one.
+ */
+export type RecognizedImportedFeatureProvenance = 'kernel-recognized';
+
 interface RecognizedImportedFeatureBase {
   /** Canonical face used to re-run the proof during exact rebuild. */
   seedFaceHash: number;
   seedFaceReference?: FaceTopologyReferenceV5;
   /** All faces consumed by the proof, used to suppress weaker overlapping hints. */
   participatingFaceHashes: number[];
+  /** Set only on read-only families; absent on every exactly proved feature. */
+  provenance?: RecognizedImportedFeatureProvenance;
 }
 
 interface RecognizedImportedHoleBase extends RecognizedImportedFeatureBase {
@@ -1125,7 +1212,27 @@ export type RecognizedImportedFeature =
       oppositeRadius: number;
       length: number;
       angleRadians: number;
+    })
+  | (RecognizedImportedFeatureBase & {
+      kind: 'fillet-band';
+      /** Exact blend radius of the rolling ball that made the band. */
+      radius: number;
+      /** Exact length of the band's straight tangent contact with its walls. */
+      length: number;
+      /** `concave` rounds an internal corner, `convex` an external edge. */
+      sense: 'concave' | 'convex';
     });
+
+/**
+ * Whether a recognized feature is read-only. A read-only feature is published
+ * for reading and reasoning only: it carries no exact proof of the kind the
+ * coordinated direct-edit operations replay, so nothing may bind an edit to it.
+ */
+export function isReadOnlyRecognizedImportedFeature(
+  feature: Pick<RecognizedImportedFeature, 'provenance'>
+): boolean {
+  return feature.provenance !== undefined;
+}
 
 /**
  * Whether {@link FaceGeometry.area} is the true area or an approximation.
@@ -1148,6 +1255,48 @@ export type FaceAreaProvenance =
   | 'exact'
   /** A curved boundary inscribed with a fixed point count. */
   | 'sampled';
+
+/**
+ * Per-face on-demand recognition of one imported STEP face.
+ *
+ * Phase D of the imported STEP edit plan wires the existing
+ * `recognizeImportedFeature` module through a lazy geometry-worker query into
+ * the Inspector. The result rides this additive payload on top of the bulk
+ * `recognizedImportedFeatures` list published at rebuild: `recognized` covers
+ * a face the proof consumed, while `refusal` carries the typed refusal reason
+ * for a face the proof declined. Presence is the contract — a face without
+ * this field was never queried, not refused.
+ */
+export interface FaceRecognitionSummary {
+  kind: 'recognized' | 'unsupported';
+  /** Recognized feature kind, present only when `kind` is `recognized`. */
+  featureKind?: RecognizedImportedFeature['kind'];
+  /**
+   * Stable refusal reason from the recognition module, present only when
+   * `kind` is `unsupported`. Never a free-text guess.
+   */
+  refusalReason?: RecognitionRefusalReason;
+  /** Human-readable recognition outcome, shown verbatim in the Inspector. */
+  message: string;
+  /**
+   * Display dimensions in document units (diameters, depths, lengths, angles
+   * in radians) keyed by the proof's own field names, minus identity fields.
+   * Recognition dimensions arrive pre-scaled by the worker that measured them.
+   */
+  dimensions?: Record<string, number>;
+}
+
+/** Typed refusal reasons from the imported-feature recognition module. */
+export type RecognitionRefusalReason =
+  | 'seed-face-missing'
+  | 'work-limit-exceeded'
+  | 'unsupported-surface'
+  | 'partial-revolution'
+  | 'blend-detected'
+  | 'rib-detected'
+  | 'intersection-detected'
+  | 'ambiguous-twins'
+  | 'incomplete-proof';
 
 export interface FaceGeometry {
   /** Underlying surface class (plane, cylinder, cone, B-spline, ...). */
@@ -1218,6 +1367,13 @@ export interface FaceGeometry {
   featureType?: 'through-hole' | 'blend';
   /** Rolling-ball radius for a recognized blend surface. */
   blendRadius?: number;
+  /**
+   * On-demand per-face recognition outcome for an imported STEP face (Phase D
+   * of the imported STEP edit plan). Additive only: queried lazily through
+   * the geometry worker and cached by callers, never part of the rebuild
+   * payload or any ADR-011 witness input.
+   */
+  recognition?: FaceRecognitionSummary;
   /**
    * Rebuild-local identity of the exact tangency-connected blend region.
    * Kernel handles are intentionally not persisted beyond derived state.
@@ -1405,6 +1561,8 @@ export interface EdgeCurve {
 }
 
 export interface BodyTopology {
+  /** Independent exact raised-profile group; it does not require an opening. */
+  recognizedPlanarEmboss?: PlanarEmbossSelection;
   faces: FaceTopology[];
   edges: EdgeTopology[];
   /** Non-overlapping exact proofs created while imported topology is live. */
@@ -1867,9 +2025,34 @@ export interface FeatureWarning {
    * about the result, and it belongs where the kernel makes it.
    */
   kind: 'build-failed' | 'refusal' | 'advisory' | 'suppressed';
+  /**
+   * The exact kernel's own classification, present only when this warning
+   * came from a boolean the exact-only pipeline refused.
+   *
+   * Session-only like the rest of this record, and the field to branch on:
+   * `message` is product copy and may be reworded at any time, while
+   * `category` is the kernel's taxonomy — `quality_refused`, `unsupported`,
+   * `resource_limit`, `nonconvergence`, `invalid_input`, `invalid_topology`,
+   * `tolerance_violation`, `cancelled`, `internal`. It is typed as a string
+   * rather than a union so a new kernel category cannot break a build here
+   * before anyone has decided what it means.
+   */
+  exactBooleanRefusal?: {
+    operation: 'cut' | 'fuse' | 'intersect';
+    category: string;
+    code: string;
+  };
+}
+
+/** Explicit, bounded foreground analysis; never part of canonical history. */
+export interface EditAnalysisRequest {
+  bodyId: string;
+  /** Zero finds a bounded set; one or two restrict the measured face pair. */
+  faceHashes: number[];
 }
 
 export interface DerivedState {
+  editAnalysis?: EditAnalysisRequest;
   bodyRepresentations: Record<BodyId, BodyRepresentation>;
   exportableBodyIds: BodyId[];
   warnings: string[];
