@@ -7657,6 +7657,11 @@ export function ModelViewer({
         ? sectionClippingPlane(sectionViewRef.current)
         : null,
       exactSectionRef.current
+        ? {
+            regions: exactSectionRef.current,
+            displayMode: displayModeRef.current
+          }
+        : null
     );
 
     // Retune the key light's shadow frustum around the current model so the
@@ -8936,7 +8941,12 @@ export function ModelViewer({
     applySectionPlane(
       context.bodyGroup,
       settings.sectionView ? sectionClippingPlane(settings.sectionView) : null,
+      // The mode is read from the ref, not the deps: the display-mode effect
+      // owns a mode CHANGE, and re-running this one for it would rebuild the
+      // section geometry to no purpose.
       exactSection
+        ? { regions: exactSection, displayMode: displayModeRef.current }
+        : null
     );
     // The frozen ground shadow must follow the cut, not the uncut silhouette.
     context.refreshShadowMap();

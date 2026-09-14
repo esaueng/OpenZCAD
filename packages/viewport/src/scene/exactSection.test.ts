@@ -3,7 +3,8 @@ import * as THREE from 'three';
 import {
   EXACT_SECTION,
   applyExactSection,
-  exactSectionSnapshot
+  exactSectionSnapshot,
+  type ExactSectionRegionDisplay
 } from './exactSection';
 import { SECTION_CAP } from './sectionCaps';
 import { applyDisplayMode, applySectionPlane, sectionClippingPlane } from './objects';
@@ -26,6 +27,12 @@ const region = (bodyId = 'body_1') => ({
   ]
 });
 
+/** The ordinary case: a section arriving while the viewport is shaded. */
+const shaded = (regions: readonly ExactSectionRegionDisplay[]) => ({
+  regions,
+  displayMode: 'shaded' as const
+});
+
 function body(bodyId = 'body_1') {
   const group = new THREE.Group();
   const object = new THREE.Group();
@@ -42,7 +49,7 @@ function body(bodyId = 'body_1') {
 describe('exact section geometry in the viewport', () => {
   it('draws the cut surface and its boundary curves', () => {
     const root = new THREE.Group();
-    applyExactSection(root, [region()]);
+    applyExactSection(root, shaded([region()]));
     const section = root.getObjectByName(EXACT_SECTION)!;
     expect(section).toBeDefined();
     const fills = section.children.filter((child) => child instanceof THREE.Mesh);
@@ -58,8 +65,8 @@ describe('exact section geometry in the viewport', () => {
 
   it('replaces the previous section rather than stacking one on it', () => {
     const root = new THREE.Group();
-    applyExactSection(root, [region()]);
-    applyExactSection(root, [region()]);
+    applyExactSection(root, shaded([region()]));
+    applyExactSection(root, shaded([region()]));
     expect(
       root.children.filter((child) => child.name === EXACT_SECTION)
     ).toHaveLength(1);
@@ -74,7 +81,7 @@ describe('exact section geometry in the viewport', () => {
     expect(mesh.getObjectByName(SECTION_CAP)).toBeDefined();
     expect(group.getObjectByName(EXACT_SECTION)).toBeUndefined();
 
-    applySectionPlane(group, plane, [region()]);
+    applySectionPlane(group, plane, shaded([region()]));
     expect(mesh.getObjectByName(SECTION_CAP)).toBeUndefined();
     expect(group.getObjectByName(EXACT_SECTION)).toBeDefined();
 
@@ -90,7 +97,7 @@ describe('exact section geometry in the viewport', () => {
     const uncut = body('body_uncut');
     root.add(cut.group, uncut.group);
     const plane = sectionClippingPlane({ plane: 'XY', offset: 1 });
-    applySectionPlane(root, plane, [region('body_cut')]);
+    applySectionPlane(root, plane, shaded([region('body_cut')]));
     // One body has section curves; the other would render as an open shell
     // if its approximate cap went away with them.
     expect(cut.mesh.getObjectByName(SECTION_CAP)).toBeUndefined();
@@ -100,7 +107,7 @@ describe('exact section geometry in the viewport', () => {
   it('is never clipped, never picked, and never a body mesh', () => {
     const { group } = body();
     const plane = sectionClippingPlane({ plane: 'XY', offset: 1 });
-    applySectionPlane(group, plane, [region()]);
+    applySectionPlane(group, plane, shaded([region()]));
     const section = group.getObjectByName(EXACT_SECTION)!;
     for (const child of section.children) {
       const material = (child as THREE.Mesh).material as THREE.Material;
@@ -123,7 +130,7 @@ describe('exact section geometry in the viewport', () => {
     applySectionPlane(
       group,
       sectionClippingPlane({ plane: 'XY', offset: 1 }),
-      [region()]
+      shaded([region()])
     );
     const section = group.getObjectByName(EXACT_SECTION)!;
     const curve = section.children.find(
@@ -146,6 +153,35 @@ describe('exact section geometry in the viewport', () => {
     expect((fill.material as THREE.Material).visible).toBe(true);
     expect((curve.material as THREE.Material).visible).toBe(true);
     expect(curve.visible).toBe(true);
+  });
+
+  it('arrives hidden when the viewport is ALREADY in wireframe', () => {
+    const { group } = body();
+    // The order that broke it: the mode is set first, then the kernel's
+    // answer lands. The display-mode pass depends on the mode, so it does
+    // not re-run for a section; the fill's material is built here and would
+    // default to visible, showing the slate cut surface in wireframe until
+    // the mode was cycled.
+    applyDisplayMode(group, 'wireframe');
+    applySectionPlane(
+      group,
+      sectionClippingPlane({ plane: 'XY', offset: 1 }),
+      { regions: [region()], displayMode: 'wireframe' }
+    );
+    const section = group.getObjectByName(EXACT_SECTION)!;
+    const fill = section.children.find(
+      (child) => child instanceof THREE.Mesh
+    ) as THREE.Mesh;
+    const curve = section.children.find(
+      (child) => child instanceof THREE.LineLoop
+    ) as THREE.LineLoop;
+    expect((fill.material as THREE.Material).visible).toBe(false);
+    // The outline is what wireframe is for; it stays.
+    expect((curve.material as THREE.Material).visible).toBe(true);
+
+    // And cycling back out of wireframe still shows it.
+    applyDisplayMode(group, 'shaded-edges');
+    expect((fill.material as THREE.Material).visible).toBe(true);
   });
 });
 
@@ -177,7 +213,7 @@ const boredRegion = (bodyId = 'body_2') => ({
 describe('the exact section render-policy snapshot', () => {
   it('reports each region against its OWN boundary curves', () => {
     const root = new THREE.Group();
-    applyExactSection(root, [region('body_1'), boredRegion('body_2')]);
+    applyExactSection(root, shaded([region('body_1'), boredRegion('body_2')]));
     const snapshot = exactSectionSnapshot(root);
     expect(snapshot).toHaveLength(2);
     // A one-loop body reports one curve even beside a bored one; counting
@@ -193,7 +229,7 @@ describe('the exact section render-policy snapshot', () => {
   it('reports nothing when no exact section is on screen', () => {
     const root = new THREE.Group();
     expect(exactSectionSnapshot(root)).toEqual([]);
-    applyExactSection(root, [region()]);
+    applyExactSection(root, shaded([region()]));
     applyExactSection(root, null);
     expect(exactSectionSnapshot(root)).toEqual([]);
   });
