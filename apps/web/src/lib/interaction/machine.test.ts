@@ -480,8 +480,7 @@ describe('toolCardFor', () => {
     expect(faceCard?.hint).toContain('Space faces it head-on');
     expect(faceCard?.actions?.map((action) => action.label)).toEqual([
       'Offset Face',
-      'Sketch',
-      'Export DXF'
+      'Sketch'
     ]);
     expect(faceCard?.actions?.every((action) => action.enabled)).toBe(true);
     const holeCard = toolCardFor(
