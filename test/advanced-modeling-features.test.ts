@@ -5,6 +5,7 @@ import {
   draftBody,
   findSketch,
   helicalSweepProfile,
+  listFeaturesInOrder,
   loftSections,
   resolveParamValue,
   sweepProfile,
@@ -19,6 +20,7 @@ import {
   toUserId,
   type ProjectDocument,
   type SketchObjectData,
+  type SketchPathReference,
   type SketchSectionReference
 } from '@openzcad/shared';
 import { createProjectDocument } from '@openzcad/document-core';
@@ -202,8 +204,81 @@ describe('advanced exact modeling features', { timeout: 30_000 }, () => {
     expect(derived.bodyRepresentations[refused.bodyId]).toBeUndefined();
   });
 
+  it('refuses a loft apex point that falls inside the section run', async () => {
+    // The kernel applies `endPoint` unconditionally. An apex between the two
+    // sections folds the last ruled band back through the body: on this
+    // fixture it reported volume 266.667 \u2014 *less* than the 373.333 the same
+    // loft has without an apex \u2014 with the apex buried out of sight, no
+    // validation error, and no warning. Only a signed side check catches it.
+    let document = createProjectDocument('Inside apex', toUserId('user_in'));
+    const lower = addSection(document, 'Lower', 0, {
+      objectKind: 'rectangle',
+      width: 4,
+      height: 4,
+      centerX: 0,
+      centerY: 0
+    });
+    document = lower.document;
+    const upper = addSection(document, 'Upper', 10, {
+      objectKind: 'rectangle',
+      width: 8,
+      height: 8,
+      centerX: 0,
+      centerY: 0
+    });
+    for (const z of [5, -5]) {
+      const refused = loftSections(upper.document, {
+        name: `Inside apex ${z}`,
+        sections: [lower.section, upper.section],
+        mode: 'ruled',
+        endPoint: { x: 0, y: 0, z }
+      });
+      const derived = await adapter.syncDocument(refused.document);
+      expect(derived.warnings.join(' ')).toMatch(
+        /is on the same side of the closing section as the rest of the loft/
+      );
+      expect(derived.bodyRepresentations[refused.bodyId]).toBeUndefined();
+    }
+  });
+
+  it('closes a descending section run to an apex below it', async () => {
+    // The guard is a side test, not a "higher z" test: reverse the section
+    // order and the apex that was refused above is the correct one.
+    let document = createProjectDocument('Down apex', toUserId('user_down'));
+    const lower = addSection(document, 'Lower', 0, {
+      objectKind: 'rectangle',
+      width: 4,
+      height: 4,
+      centerX: 0,
+      centerY: 0
+    });
+    document = lower.document;
+    const upper = addSection(document, 'Upper', 10, {
+      objectKind: 'rectangle',
+      width: 8,
+      height: 8,
+      centerX: 0,
+      centerY: 0
+    });
+    const apexed = loftSections(upper.document, {
+      name: 'Down apex loft',
+      sections: [upper.section, lower.section],
+      mode: 'ruled',
+      endPoint: { x: 0, y: 0, z: -5 }
+    });
+    const derived = await adapter.syncDocument(apexed.document);
+    const body = derived.bodyRepresentations[apexed.bodyId];
+    expect(derived.warnings).toEqual([]);
+    // The same 373.3333 frustum plus a 4 x 4 base, 5 tall pyramid (26.6667).
+    expect(body?.volume).toBeCloseTo(400, 3);
+    expect(body?.bbox.min.z).toBeCloseTo(-5, 6);
+  });
+
   it('refuses a loft apex point in smooth mode by name', async () => {
-    let document = createProjectDocument('Smooth apex', toUserId('user_smooth'));
+    let document = createProjectDocument(
+      'Smooth apex',
+      toUserId('user_smooth')
+    );
     const lower = addSection(document, 'Lower', 0, {
       objectKind: 'circle',
       radius: 2,
@@ -300,6 +375,52 @@ describe('advanced exact modeling features', { timeout: 30_000 }, () => {
     expect(guidedBody?.bbox.max.y).toBeCloseTo(2, 6);
   });
 
+  it('refuses a guide rail on a smooth sweep rather than resurfacing it', async () => {
+    // `guidedSweep` takes no segment count and no surfacing argument, so a
+    // saved Smooth sweep would come back at the kernel's default surfacing
+    // while the feature still reads Smooth.
+    let document = createProjectDocument('Smooth rail', toUserId('user_sm'));
+    const profile = addSection(document, 'Profile', 0, {
+      objectKind: 'rectangle',
+      width: 4,
+      height: 2,
+      centerX: 0,
+      centerY: 0
+    });
+    document = profile.document;
+    const path = addSketchFeature(document, {
+      name: 'Path',
+      plane: 'XZ',
+      offset: 0,
+      object: { objectKind: 'line', x1: 0, y1: 0, x2: 0, y2: 20 }
+    });
+    document = path.document;
+    const rail = addSketchFeature(document, {
+      name: 'Rail',
+      plane: 'XZ',
+      offset: 10,
+      object: { objectKind: 'line', x1: 0, y1: 0, x2: 0, y2: 20 }
+    });
+    const refused = sweepProfile(rail.document, {
+      name: 'Smooth guided sweep',
+      profile: profile.section,
+      path: {
+        sketchId: path.sketchId,
+        entityIds: findSketch(rail.document, path.sketchId)!.objectIds
+      },
+      mode: 'smooth',
+      guide: {
+        sketchId: rail.sketchId,
+        entityIds: findSketch(rail.document, rail.sketchId)!.objectIds
+      }
+    });
+    const derived = await adapter.syncDocument(refused.document);
+    expect(derived.warnings.join(' ')).toMatch(
+      /A sweep guide rail is available in Standard surface mode only/
+    );
+    expect(derived.bodyRepresentations[refused.bodyId]).toBeUndefined();
+  });
+
   it('refuses a guide rail the kernel cannot take as one curve', async () => {
     let document = createProjectDocument('Wide rail', toUserId('user_rail'));
     const profile = addSection(document, 'Profile', 0, {
@@ -350,6 +471,73 @@ describe('advanced exact modeling features', { timeout: 30_000 }, () => {
       /A sweep guide rail must be a single curve, but this rail resolves to 2 curves/
     );
     expect(derived.bodyRepresentations[refused.bodyId]).toBeUndefined();
+  });
+
+  it('holds a guide rail to the same edit checks the sweep path gets', () => {
+    let document = createProjectDocument('Rail edit', toUserId('user_edit'));
+    const profile = addSection(document, 'Profile', 0, {
+      objectKind: 'rectangle',
+      width: 4,
+      height: 2,
+      centerX: 0,
+      centerY: 0
+    });
+    document = profile.document;
+    const path = addSketchFeature(document, {
+      name: 'Path',
+      plane: 'XZ',
+      offset: 0,
+      object: { objectKind: 'line', x1: 0, y1: 0, x2: 0, y2: 20 }
+    });
+    document = path.document;
+    const rail = addSketchFeature(document, {
+      name: 'Rail',
+      plane: 'XZ',
+      offset: 10,
+      object: { objectKind: 'line', x1: 0, y1: 0, x2: 0, y2: 20 }
+    });
+    const pathReference = {
+      sketchId: path.sketchId,
+      entityIds: findSketch(rail.document, path.sketchId)!.objectIds
+    };
+    const swept = sweepProfile(rail.document, {
+      name: 'Guided sweep',
+      profile: profile.section,
+      path: pathReference,
+      mode: 'standard'
+    });
+    const featureId = listFeaturesInOrder(swept.document).find(
+      (feature) => feature.name === 'Guided sweep'
+    )!.featureId;
+    const edit = (guide: SketchPathReference) =>
+      commandFactories
+        .updateFeature({
+          featureId,
+          data: {
+            featureKind: 'sweep',
+            profile: profile.section,
+            path: pathReference,
+            mode: 'standard',
+            guide
+          }
+        })
+        .validate(swept.document);
+
+    expect(() =>
+      edit({
+        sketchId: rail.sketchId,
+        entityIds: findSketch(rail.document, rail.sketchId)!.objectIds
+      })
+    ).not.toThrow();
+    expect(() => edit({ sketchId: rail.sketchId, entityIds: [] })).toThrow(
+      /guide rail sketch is unavailable or empty/
+    );
+    expect(() =>
+      edit({
+        sketchId: rail.sketchId,
+        entityIds: findSketch(rail.document, path.sketchId)!.objectIds
+      })
+    ).toThrow(/guide rail references a missing sketch entity/);
   });
 
   it('serializes and replays an advanced feature with stable reserved ids', () => {
