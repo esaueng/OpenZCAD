@@ -35,12 +35,12 @@ line-to-circle form is unchanged, refuses `at`, and replays bit-identically, so
 
 ## Kernel calls adopted
 
-| call | used for | replaces |
-| --- | --- | --- |
-| `chamfer2d(coords, distance)` | the sketch chamfer's setback points | nothing — ZCAD had no sketch chamfer |
-| `offsetWire2DWithJoin(wire, distance, join)` | the sketch offset, read back through `getWireEdges` / `getEdgeCurveType` / `getEdgeVertices` / `getEdgeParamSpan` / `evaluateEdgeCurve` | nothing — ZCAD had no sketch offset |
-| `gcsAddConstraint` type `tangentLineArc` | the fillet's tangency, via `gcs-sketch.ts` | nothing — line-to-arc tangency was previously unexpressible |
-| `fillet2d(coords, radius)` | **deliberately not used** — see below | — |
+| call                                         | used for                                                                                                                                | replaces                                                    |
+| -------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------- |
+| `chamfer2d(coords, distance)`                | the sketch chamfer's setback points                                                                                                     | nothing — ZCAD had no sketch chamfer                        |
+| `offsetWire2DWithJoin(wire, distance, join)` | the sketch offset, read back through `getWireEdges` / `getEdgeCurveType` / `getEdgeVertices` / `getEdgeParamSpan` / `evaluateEdgeCurve` | nothing — ZCAD had no sketch offset                         |
+| `gcsAddConstraint` type `tangentLineArc`     | the fillet's tangency, via `gcs-sketch.ts`                                                                                              | nothing — line-to-arc tangency was previously unexpressible |
+| `fillet2d(coords, radius)`                   | **deliberately not used** — see below                                                                                                   | —                                                           |
 
 ## What the probes actually found (pinned kernel 2.131.0)
 
@@ -106,16 +106,44 @@ built a filleted right-angle corner with two coincidences, two
 12: converged every time, with the arc still radius 2, still tangent, still
 meeting both legs. That is the behaviour the UI is built on.
 
+## The entry-chunk budget, and the three dialogs that paid for it
+
+Wiring three tools into `App.tsx` costs about 1.7 KB of entry chunk, and the
+machine, the worker hook and the document validation cost another 1.2 KB.
+Measured on this branch:
+
+| build                         | `assets/index-*.js` | budget            |
+| ----------------------------- | ------------------- | ----------------- |
+| `origin/main`                 | 510,304             | 512,000           |
+| this branch, before the split | 513,265             | **over by 1,265** |
+| this branch                   | **510,066**         | 1,934 spare       |
+
+All the logic already loads lazily — `lib/sketch/edits.ts` is reached from
+`App.tsx` only through `await import(...)`, and statically only from the
+already-lazy `SketchToolRail` — so what is left is irreducible wiring: the
+reducer cases, the pick routing, the keypad, the worker request.
+
+`scripts/report-bundle-sizes.mjs` says of its own budget that "the next raise
+should come with an actual split of the entry chunk, not another bump", so
+this branch does the split rather than the bump: `ResumeSessionDialog`,
+`SaveRevisionDialog` and `ProjectConflictDialog` now load on the gesture that
+opens them, the same treatment the sharing and export dialogs already had.
+Three modal dialogs nobody sees in an ordinary session, ~3.2 KB, and the entry
+chunk ends up smaller than it started. It is a second concern in one branch,
+so it is a commit of its own.
+
 ## Check results
 
 Run from the worktree root.
 
 ```
-pnpm lint             ✖ 19 problems (0 errors, 19 warnings)     [baseline: 0 errors / 19 warnings]
-pnpm typecheck        clean, no output
-pnpm test             Test Files 159 passed (159) / Tests 1221 passed (1221)   [baseline: 156 / 1182]
-pnpm test:parity-corpus   Tests 174 passed | 1 skipped (175)    [baseline: 174 passed, 1 skipped]
-pnpm build            bundle-size check passed
+pnpm lint                 ✖ 19 problems (0 errors, 19 warnings)   [baseline: 0 errors / 19 warnings]
+pnpm typecheck            clean, no output
+pnpm test                 Test Files 160 passed (160) / Tests 1231 passed (1231)
+                          [baseline: 156 files / 1182 tests]
+pnpm test:parity-corpus   Test Files 7 passed (7) / Tests 174 passed | 1 skipped (175)
+                          [baseline: 174 passed, 1 skipped]
+pnpm build                "failures": []   entry chunk 510,066 bytes of 512,000
 ```
 
 `pnpm test:e2e` was not run (out of scope per the briefing), so the tools have
@@ -162,13 +190,19 @@ no Playwright coverage — see Follow-ups.
   fully-constrained sketch that is one more equation, so such a sketch will
   report redundant on the next solve. Real CAD does the same thing, but it is
   a judgement call worth confirming.
-- App.tsx reaches `lib/sketch/edits` only through `await import(...)`, to keep
-  it out of the entry chunk; `SketchToolRail` (already lazy) imports it
-  statically, so both share that chunk. `pnpm build`'s size check passes, but
-  this is the budget the memory notes keep flagging.
+- The three newly lazy dialogs are the one part of this branch that is not the
+  feature. Each renders behind `Suspense fallback={null}`, so the first time a
+  session hits a resume offer, a named checkpoint or a save conflict there is
+  now a chunk fetch before the dialog appears. That is the same trade the
+  sharing and export dialogs already make, but it is worth a look.
+- The entry chunk has 1,934 spare bytes after this branch, against 1,696
+  before it. The gate is still tight enough that the next App-level feature
+  will hit it.
 
 ## Follow-ups
 
+- **A real entry-chunk split.** Three dialogs bought this branch its room;
+  the chunk is still 99.6% of budget, so the next feature pays again.
 - **Playwright coverage for the three tools** — the pick → keypad → commit
   path is only covered by unit tests here.
 - **Line-to-arc and arc-to-arc fillets**, once someone decides how the branch
