@@ -106,11 +106,19 @@ function refusalReason(
 /**
  * What to say when the exact pipeline declined the pair.
  *
- * This is the copy the retired facet census carried, kept because it
- * describes the same situation: the contact is one the exact engine will not
- * resolve, and naming a single cause for it was already established here as
- * confidently wrong half the time. Pointing a union at subtract is only worth
- * saying when subtract is not the operation that just refused.
+ * Only what holds for every refusal in the category. The retired facet census
+ * also told a refused union to "subtract instead — the same operands still
+ * cut exactly", which it could say because it fired on a result the engine
+ * HAD built; a quality refusal is a far wider trigger and the promise does not
+ * survive it. Measured on the pin: a 20×20×10 box unioned with an r3 h10
+ * cylinder overlapping it by ~1 µm refuses with `exact_only_unattainable` /
+ * `quality_refused`, and `cutDetailed` on that same pair refuses identically
+ * — so a user who followed the advice got a second refusal. Advice that fails
+ * is worse than no advice.
+ *
+ * Repositioning is the one move worth suggesting: it is offered as something
+ * that sometimes works rather than promised, and it addresses the contact
+ * itself.
  */
 function refusalRemedy(
   operation: ExactBooleanOperation,
@@ -119,14 +127,10 @@ function refusalRemedy(
   if (category !== 'quality_refused' && category !== 'tolerance_violation') {
     return null;
   }
-  const alternative =
-    operation === 'fuse'
-      ? ', or subtract instead — the same operands still cut exactly.'
-      : '.';
-  return (
-    'Repositioning the overlap sometimes clears it; otherwise keep the ' +
-    `bodies separate${alternative}`
-  );
+  return operation === 'fuse'
+    ? 'Repositioning the overlap sometimes clears it; otherwise keep the ' +
+        'bodies separate.'
+    : 'Repositioning the overlap sometimes clears it.';
 }
 
 export interface ExactBooleanRefusalInit {
