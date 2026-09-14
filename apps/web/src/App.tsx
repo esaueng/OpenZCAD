@@ -515,62 +515,13 @@ import type {
   ViewTarget
 } from '@openzcad/viewport/types';
 import type {
-  ExactSectionRegionDisplay,
   MovePreview,
   MoveSnap,
   SectionPlaneId,
   SectionViewSettings,
   WheelDevice
 } from '@openzcad/viewport';
-import type { ExactSectionPlane } from '@openzcad/kernel-adapter/exact';
-import type { SectionOutlineStatus } from './components/ViewerToolbar';
-
-/**
- * The section view has two geometries behind it. While the plane moves, the
- * viewport clips the display mesh and caps it — an approximation, and the
- * only one fast enough to drag. At rest, the kernel's own section replaces
- * it: exact curves, a measured area, and the only form of it that may be
- * exported.
- */
-type SectionOutlineState =
-  | { kind: 'clipping' }
-  | { kind: 'computing' }
-  | {
-      kind: 'exact';
-      regions: ExactSectionRegionDisplay[];
-      /** Total cut area, in document units squared. */
-      area: number;
-      /** Bodies the plane passed by, or the kernel could not section. */
-      refused: number;
-    }
-  | { kind: 'refused'; detail: string };
-
-/** One line for the rail: which section is on screen, and what it measures. */
-function describeSectionOutline(
-  outline: SectionOutlineState,
-  units: string
-): SectionOutlineStatus {
-  if (outline.kind === 'exact') {
-    const passed =
-      outline.refused > 0
-        ? `, ${outline.refused} ${outline.refused === 1 ? 'body has' : 'bodies have'} no exact section`
-        : '';
-    return {
-      kind: 'exact',
-      detail: `${outline.area.toFixed(2)} ${units}² of material${passed}`
-    };
-  }
-  if (outline.kind === 'refused') {
-    return { kind: 'refused', detail: outline.detail };
-  }
-  if (outline.kind === 'computing') {
-    return { kind: 'computing', detail: 'Sectioning the exact geometry…' };
-  }
-  return {
-    kind: 'clipping',
-    detail: 'Approximate cut; release the slider for section curves'
-  };
-}
+import type { SectionOutlineState } from './lib/sectionOutline';
 
 /**
  * Space activates focused buttons and belongs in free-text fields. Numeric and
@@ -5850,28 +5801,6 @@ export function App() {
   }
 
   /**
-   * The cutting plane behind a section view, in document space. The viewport
-   * clips with the negated normal (it throws away the half above the offset);
-   * the kernel is asked about the plane itself, which has no near or far side.
-   */
-  function sectionPlaneSpec(section: SectionViewSettings): ExactSectionPlane {
-    const axis: ExactSectionPlane['normal'] =
-      section.plane === 'XY'
-        ? [0, 0, 1]
-        : section.plane === 'XZ'
-          ? [0, 1, 0]
-          : [1, 0, 0];
-    return {
-      origin: [
-        axis[0] * section.offset,
-        axis[1] * section.offset,
-        axis[2] * section.offset
-      ],
-      normal: axis
-    };
-  }
-
-  /**
    * Ask the kernel for the exact section at the plane's current rest
    * position. Never called during a drag: the clipped preview is what keeps
    * the slider at pointer rate, and an exact section belongs to exactly one
@@ -5881,53 +5810,17 @@ export function App() {
     if (!doc) {
       return;
     }
-    const requested = {
-      plane: section.plane,
-      offset: section.offset,
-      version: doc.version
-    };
     setSectionOutline({ kind: 'computing' });
-    try {
-      const report = await geometry.sectionOutline(
-        doc,
-        sectionPlaneSpec(section)
-      );
-      // The plane may have moved on while the kernel worked; that cut's
-      // answer is not this cut's geometry.
-      const live = viewerSettingsRef.current.sectionView;
-      if (
-        !live ||
-        live.plane !== requested.plane ||
-        live.offset !== requested.offset ||
-        modelVersionRef.current !== requested.version
-      ) {
-        return;
-      }
-      if (report.regions.length === 0) {
-        setSectionOutline({
-          kind: 'refused',
-          detail:
-            report.refusals[0]?.message ??
-            'The section plane does not cut any body.'
-        });
-        return;
-      }
-      setSectionOutline({
-        kind: 'exact',
-        regions: report.regions.map((region) => ({
-          bodyId: region.bodyId,
-          positions: region.positions,
-          indices: region.indices,
-          loops: region.loops
-        })),
-        area: report.regions.reduce((total, region) => total + region.area, 0),
-        refused: report.refusals.length
-      });
-    } catch (error) {
-      setSectionOutline({
-        kind: 'refused',
-        detail: errorMessage(error, 'The exact section failed.')
-      });
+    const { resolveSectionOutline } = await import('./lib/sectionOutline');
+    const next = await resolveSectionOutline(
+      geometry,
+      doc,
+      section,
+      () => viewerSettingsRef.current.sectionView,
+      () => modelVersionRef.current
+    );
+    if (next) {
+      setSectionOutline(next);
     }
   }
 
@@ -5935,9 +5828,7 @@ export function App() {
   // on screen stops describing the model. Back to the clipped preview until
   // the plane is committed again.
   useEffect(() => {
-    setSectionOutline((current) =>
-      current.kind === 'clipping' ? current : { kind: 'clipping' }
-    );
+    setSectionOutline({ kind: 'clipping' });
   }, [doc?.version]);
 
   /** Off → XY → XZ → YZ → off, each plane starting at the model's centre. */
@@ -5988,28 +5879,15 @@ export function App() {
     if (!doc || !section || sectionOutline.kind !== 'exact') {
       return;
     }
-    const stem = exportFileStem(doc.name);
-    try {
-      setStatus('Exporting the section as DXF…');
-      const result = await geometry.exportModel('dxf', doc, [], {
-        section: sectionPlaneSpec(section)
-      });
-      if (!('text' in result)) {
-        throw new Error('The DXF export returned no text.');
-      }
-      const saved = await saveCadTextFile(
-        `${stem}-section.dxf`,
-        'dxf',
-        result.text
-      );
-      setStatus(
-        saved
-          ? `Exported the ${section.plane} section to ${stem}-section.dxf.`
-          : 'DXF export cancelled.'
-      );
-    } catch (error) {
-      setStatus(errorMessage(error, 'Section DXF export failed.'));
-    }
+    const { writeSectionDxf } = await import('./lib/sectionOutline');
+    await writeSectionDxf(
+      geometry,
+      doc,
+      section,
+      saveCadTextFile,
+      exportFileStem(doc.name),
+      setStatus
+    );
   }
 
   function toggleBodyVisibility(bodyId: string) {
@@ -16359,7 +16237,7 @@ export function App() {
             onSectionOffset={setSectionOffset}
             onSectionCommit={commitSectionOffset}
             onExportSectionDxf={() => void handleExportSectionDxf()}
-            sectionOutline={describeSectionOutline(sectionOutline, doc.units)}
+            sectionOutline={sectionOutline}
             exactSection={
               sectionOutline.kind === 'exact' ? sectionOutline.regions : null
             }
