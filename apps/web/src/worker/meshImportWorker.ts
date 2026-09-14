@@ -1,10 +1,20 @@
 import type { MeshImportFormat } from '@openzcad/kernel-adapter/mesh-import-formats';
+import type { UnitSystem } from '@openzcad/shared';
 
 export interface MeshImportWorkerRequest {
   type: 'import';
   requestId: string;
   format: MeshImportFormat;
   file: File;
+  /**
+   * The units of the document the mesh is being imported into.
+   *
+   * Required rather than defaulted: the import's rebuild check has to be run
+   * at the scale the document will store, and a caller that forgets to say
+   * which that is reintroduces a file that reports success and then rebuilds
+   * to nothing.
+   */
+  units: UnitSystem;
 }
 
 export type MeshImportWorkerResult =
@@ -44,7 +54,8 @@ self.onmessage = async (event: MessageEvent<MeshImportWorkerRequest>) => {
     const { importMeshFile } = await import('@openzcad/kernel-adapter/exact');
     const mesh = await importMeshFile(
       request.format,
-      new Uint8Array(await request.file.arrayBuffer())
+      new Uint8Array(await request.file.arrayBuffer()),
+      request.units
     );
     const vertices = Float64Array.from(mesh.vertices);
     const indices = Uint32Array.from(mesh.indices);

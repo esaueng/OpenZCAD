@@ -8542,7 +8542,10 @@ export function App() {
           setStatus(`Unsupported import format: ${file.name}`);
           return;
         }
-        mesh = await importMeshFileInDisposableWorker(file, format);
+        // The open document's units, not millimetres: the import runs the
+        // rebuild this document will run, and it has to run it on the numbers
+        // this document will store.
+        mesh = await importMeshFileInDisposableWorker(file, format, doc.units);
       } catch (error) {
         setStatus(errorMessage(error, `${file.name} import failed.`));
         return;
