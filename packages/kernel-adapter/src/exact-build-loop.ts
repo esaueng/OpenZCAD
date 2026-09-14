@@ -1,24 +1,18 @@
-import type {
-  RemusKernel
-}  from './remus-runtime';
+import type { RemusKernel } from './remus-runtime';
 import {
   getParameterScope,
   listFeaturesInOrder
-}  from '@openzcad/document-core';
+} from '@openzcad/document-core';
 import {
   isFeatureSuppressed,
   type FeatureId,
   type FeatureNode,
   type FeatureWarning,
   type ProjectDocument
-}  from '@openzcad/shared';
-import type {
-  ExactBuildResult,
-  ImportedStepDiagnostics
-}  from './exact-types';
-import {
-  buildFeature
-}  from './exact-feature-builders';
+} from '@openzcad/shared';
+import type { ExactBuildResult, ImportedStepDiagnostics } from './exact-types';
+import { buildFeature } from './exact-feature-builders';
+import { kernelRefusalRecordOf } from './kernel-refusal';
 
 /**
  * A parsed STEP import held for reuse: the kernel's serialised solids plus the
@@ -134,7 +128,17 @@ export function buildDocumentHistory(
         error instanceof Error ? error.message : 'exact geometry failed';
       const message = `Feature "${feature.name}": ${reason}`;
       result.warnings.push(message);
-      attribute(result, feature, message, 'build-failed');
+      // A refused kernel operation carries its category with it, however
+      // deeply the builder wrapped the error. Recording it here is what lets
+      // downstream code tell "the engine will not do this pair" from "the
+      // body came back malformed" without matching on the sentence.
+      attribute(
+        result,
+        feature,
+        message,
+        'build-failed',
+        kernelRefusalRecordOf(error)
+      );
     }
     onFeature?.(index, result);
   }
@@ -152,12 +156,14 @@ function attribute(
   result: { warnings: string[]; featureWarnings: FeatureWarning[] },
   feature: { featureId: FeatureId; name: string },
   message: string,
-  kind: FeatureWarning['kind']
+  kind: FeatureWarning['kind'],
+  kernelRefusal?: FeatureWarning['kernelRefusal']
 ): void {
   result.featureWarnings.push({
     featureId: feature.featureId,
     featureName: feature.name,
     message,
-    kind
+    kind,
+    ...(kernelRefusal ? { kernelRefusal } : {})
   });
 }
