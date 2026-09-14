@@ -29,17 +29,49 @@ export type SectionOutlineState =
       regions: ExactSectionRegionDisplay[];
       /** Total cut area, in document units squared. */
       area: number;
-      /** Bodies on screen the plane passed by without cutting. */
+      /**
+       * Bodies on screen the plane passed by without cutting — counted as
+       * BODIES. The kernel reports per solid, and one body can hold several
+       * (a multi-solid STEP import does), so a plane that cuts one solid of
+       * a body and misses another must not read as a body that is not cut.
+       */
       missed: number;
       /**
        * Bodies on screen the plane DOES cut and the kernel could not
-       * section exactly. These are what stops the drawing: the export
-       * writes every cut body or none, so one of these makes the section
-       * unexportable however many other bodies came out exact.
+       * section exactly — again as BODIES, one entry however many of its
+       * solids refused. These are what stops the drawing: the export writes
+       * every cut body or none, so one of these makes the section
+       * unexportable however many other bodies came out exact. A body with
+       * both kinds of refusal counts here, never as `missed`.
        */
       unsectioned: number;
     }
   | { kind: 'refused'; detail: string };
+
+/**
+ * What an exact section is a section OF: one document, and the bodies of it
+ * that are on screen.
+ *
+ * The two travel as ONE value because they are one decision and have come
+ * apart once already. The viewport draws a preview document's bodies while
+ * `doc` stays the live one; a list taken from the viewport and a document
+ * taken from the workspace then describe different models, and the adapter
+ * has no geometry for half the names it is given. Anything that asks a
+ * question about what is on screen takes this, never a document and a list
+ * as two arguments.
+ *
+ * `document` is nullable because the workspace has none before the first
+ * project opens; there is nothing to section then and nothing is asked.
+ */
+export interface SectionSource {
+  readonly document: ProjectDocument | null;
+  /**
+   * The bodies of `document` the viewport is showing. Hiding and isolating
+   * are device-local view state the document never sees, so this cannot be
+   * derived from `document` — it has to be carried.
+   */
+  readonly bodyIds: readonly BodyId[];
+}
 
 /** One line for the rail: which section is on screen, and what it measures. */
 export interface SectionOutlineStatus {
@@ -86,9 +118,29 @@ export function sectionOutlineFromReport(
   // A plane that simply misses a body is an ordinary section; a body it cuts
   // and the kernel could not section is not. Only the second kind decides
   // whether there is a drawing to export.
-  const missed = report.refusals.filter(
-    (refusal) => refusal.reason === 'plane-misses-body'
-  ).length;
+  //
+  // Both are counted over BODIES, not over the kernel's per-solid outcomes.
+  // A body can hold several solids — a multi-solid STEP import is one body
+  // in the model tree — so a plane through one solid of such a body with the
+  // others clear of it produces a region AND a `plane-misses-body` refusal
+  // for the same body. Counting refusals would then tell the user a body is
+  // "not cut here" while pointing at its own cross-section.
+  const unsectionedBodies = new Set(
+    report.refusals
+      .filter((refusal) => refusal.reason !== 'plane-misses-body')
+      .map((refusal) => refusal.bodyId)
+  );
+  const cutBodies = new Set(report.regions.map((region) => region.bodyId));
+  const missedBodies = new Set(
+    report.refusals
+      .filter(
+        (refusal) =>
+          refusal.reason === 'plane-misses-body' &&
+          !cutBodies.has(refusal.bodyId) &&
+          !unsectionedBodies.has(refusal.bodyId)
+      )
+      .map((refusal) => refusal.bodyId)
+  );
   return {
     kind: 'exact',
     regions: report.regions.map((region) => ({
@@ -98,8 +150,8 @@ export function sectionOutlineFromReport(
       loops: region.loops
     })),
     area: report.regions.reduce((total, region) => total + region.area, 0),
-    missed,
-    unsectioned: report.refusals.length - missed
+    missed: missedBodies.size,
+    unsectioned: unsectionedBodies.size
   };
 }
 
@@ -158,13 +210,8 @@ export function describeSectionOutline(
 }
 
 /**
- * Ask for one exact section of exactly these bodies, and turn the answer
- * into viewport state.
- *
- * `bodyIds` is the viewport's own visible list. The document cannot supply
- * it: `Hide Body` and `Isolate` write device-local view state, so a section
- * taken from the document alone draws a cut surface floating where a hidden
- * body used to be and adds its area to the total.
+ * Ask for one exact section of exactly what is on screen, and turn the
+ * answer into viewport state.
  *
  * Staleness is the caller's: an exact section belongs to one plane
  * position, one model version and one set of visible bodies, and by the time
@@ -174,16 +221,18 @@ export function describeSectionOutline(
  */
 export async function resolveSectionOutline(
   geometry: Pick<GeometryWorkerApi, 'sectionOutline'>,
-  document: ProjectDocument,
-  section: SectionViewSettings,
-  bodyIds: BodyId[]
+  source: SectionSource,
+  section: SectionViewSettings
 ): Promise<SectionOutlineState> {
+  if (!source.document) {
+    return { kind: 'clipping' };
+  }
   try {
     return sectionOutlineFromReport(
       await geometry.sectionOutline(
-        document,
+        source.document,
         sectionPlaneSpec(section),
-        bodyIds
+        [...source.bodyIds]
       )
     );
   } catch (error) {
@@ -199,29 +248,37 @@ export async function resolveSectionOutline(
  * Write the exact section — never the display caps — as a DXF drawing,
  * narrating both ends of it through `announce` (the status line).
  *
- * Call it only for a section `sectionOutlineExportable` accepts: the
- * exporter refuses a body it cannot section exactly rather than dropping it
- * from the drawing, and that refusal reads as a kernel diagnostic, not as
- * something to put in front of a user.
+ * It applies `sectionOutlineExportable` itself rather than trusting a
+ * caller to: the exporter refuses a body it cannot section exactly rather
+ * than dropping it from the drawing, and that refusal reads as a kernel
+ * diagnostic, not as something to put in front of a user. The button is
+ * shut in that state; this is the same gate for a call that did not come
+ * from the button.
  */
 export async function writeSectionDxf(
   geometry: Pick<GeometryWorkerApi, 'exportModel'>,
-  document: ProjectDocument,
+  source: SectionSource,
   section: SectionViewSettings,
-  bodyIds: BodyId[],
+  outline: SectionOutlineState,
   save: (fileName: string, format: 'dxf', text: string) => Promise<boolean>,
   stem: string,
   announce: (message: string) => void
 ): Promise<void> {
+  if (!source.document || !sectionOutlineExportable(outline)) {
+    return;
+  }
   const fileName = `${stem}-section.dxf`;
   announce('Exporting the section as DXF…');
   try {
-    // The same bodies the exact section on screen was cut from. A drawing of
-    // a different set from the one the user is looking at is a drawing of
-    // something they never saw.
-    const result = await geometry.exportModel('dxf', document, bodyIds, {
-      section: sectionPlaneSpec(section)
-    });
+    // The same document and the same bodies the exact section on screen was
+    // cut from. A drawing of a different set from the one the user is
+    // looking at is a drawing of something they never saw.
+    const result = await geometry.exportModel(
+      'dxf',
+      source.document,
+      [...source.bodyIds],
+      { section: sectionPlaneSpec(section) }
+    );
     if (!('text' in result)) {
       throw new Error('The DXF export returned no text.');
     }
