@@ -56,7 +56,6 @@ import {
   shiftBasisAlongNormal,
   subtract
 } from './exact-math';
-import { planarFaceCentroid } from './exact-face-centroid';
 import { connectedRegionGroups, resolveRegionProfiles } from './region-profile';
 import {
   basisMatchesLiftedFrame,
@@ -879,49 +878,86 @@ function sectionPlane(
 const LOFT_APEX_MIN_STANDOFF = 1e-6;
 
 /**
- * How far a built section reaches on each side of the closing section's plane.
- * Measured from the section face's own vertices, so a section drawn on a plane
- * that is not parallel to the closing one is taken at its true extent and not
- * at a representative point that can sit on the wrong side of its own profile.
- * This is only ever read to recognise a run that lies *in* the closing plane
- * and so encloses nothing; which side of that plane the material is on is not
- * inferred from it. See {@link buildLoft}.
+ * The curved B-Rep faces of a solid, counted by surface type.
+ *
+ * `getSurfaceType` reports the analytic type a face's surface really carries —
+ * `plane`, `cylinder`, `cone`, `sphere`, `torus` or `bspline` — and reports
+ * the analytic type even for a NURBS patch that is exactly one. So anything
+ * that is not `plane` is an exact curved surface the body would lose if the
+ * kernel rebuilt it as facets, and a census of those is the whole measurement
+ * {@link refuseLostExactSurfaces} needs.
  */
-interface SectionOffsetRange {
-  readonly min: number;
-  readonly max: number;
+function curvedSurfaceCensus(
+  kernel: RemusKernel,
+  solid: number
+): Map<string, number> {
+  const census = new Map<string, number>();
+  for (const face of Array.from(kernel.getSolidFaces(solid))) {
+    const surfaceType = kernel.getSurfaceType(face);
+    if (surfaceType === 'plane') continue;
+    census.set(surfaceType, (census.get(surfaceType) ?? 0) + 1);
+  }
+  return census;
+}
+
+/** The total across a {@link curvedSurfaceCensus}. */
+function curvedFaceCount(census: ReadonlyMap<string, number>): number {
+  let total = 0;
+  for (const count of census.values()) total += count;
+  return total;
+}
+
+/** `2 cone and 1 cylinder faces` — a census, said out loud for a refusal. */
+function describeCurvedSurfaces(census: ReadonlyMap<string, number>): string {
+  const parts = [...census.entries()]
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([surfaceType, count]) => `${count} ${surfaceType}`);
+  if (parts.length === 0) return 'no curved';
+  if (parts.length === 1) return parts[0]!;
+  return `${parts.slice(0, -1).join(', ')} and ${parts[parts.length - 1]!}`;
 }
 
 /**
- * The signed distances of an already-built section face from the closing
- * section's plane. Face vertices are the measurement; the planar centroid and
- * then the sketch plane's origin are the fallbacks for a face that reports no
- * vertices, since a plane can be shared between sections or sit well away from
- * the profile drawn on it.
+ * Refuse an optional modelling control that costs the body its exact curved
+ * surfaces.
+ *
+ * Both of the kernel entry points behind these controls — `loftWithOptions`
+ * with an apex point, and `guidedSweep` with a rail — rebuild the body on a
+ * chordal approximation of whatever curved surfacing the plain call produced.
+ * Measured on the pinned kernel: two circles r = 2 and r = 3 ten apart loft to
+ * one exact cone plus two planes, and to 66 planes with an apex — 0.64% short
+ * of the analytic volume; a circular profile swept along a line is one exact
+ * cylinder plus two planes, and 74 planes once a rail is given — 2.02% short,
+ * with the rail parallel to the path so the true answer is unchanged. Neither
+ * raises anything: `validateSolid` passes, no warning is emitted, and the body
+ * is still offered for STEP export.
+ *
+ * That is a silent downgrade of an exact result to an approximate one, so it
+ * is refused by name instead — the same reasoning the smooth-mode guide rail
+ * is already refused on, applied to the case that measures it.
+ *
+ * The test is the measurement, not a list of profile kinds: build the body
+ * both ways and compare the two censuses. A plain build with no curved faces
+ * has nothing to lose, so every planar case goes through untouched — measured,
+ * a rectangular profile on a parallel rail still sweeps to exactly 160 mm³.
+ * And if a later kernel holds the exact surfaces, the census matches and the
+ * control is admitted with no change here.
  */
-function sectionOffsetRange(
+function refuseLostExactSurfaces(
   kernel: RemusKernel,
-  face: number,
-  basis: PlaneBasis,
-  closing: PlaneBasis
-): SectionOffsetRange {
-  const offsetOf = (point: Vec3): number =>
-    dot(subtract(point, closing.origin), closing.normal);
-  const offsets = Array.from(kernel.getFaceVertices(face), (vertex) => {
-    const position = kernel.getVertexPosition(vertex);
-    return offsetOf({
-      x: position[0] ?? 0,
-      y: position[1] ?? 0,
-      z: position[2] ?? 0
-    });
-  });
-  if (offsets.length === 0) {
-    const centroid =
-      planarFaceCentroid(kernel, face, basis.normal)?.centroid ?? basis.origin;
-    const offset = offsetOf(centroid);
-    return { min: offset, max: offset };
-  }
-  return { min: Math.min(...offsets), max: Math.max(...offsets) };
+  plain: number,
+  optioned: number,
+  control: string,
+  remedy: string
+): void {
+  const plainCensus = curvedSurfaceCensus(kernel, plain);
+  const plainCurved = curvedFaceCount(plainCensus);
+  if (plainCurved === 0) return;
+  const optionedCensus = curvedSurfaceCensus(kernel, optioned);
+  if (curvedFaceCount(optionedCensus) >= plainCurved) return;
+  throw new Error(
+    `${control} would drop this body's exact curved surfaces: the same build carries ${describeCurvedSurfaces(plainCensus)} ${plainCurved === 1 ? 'face' : 'faces'} without it and ${describeCurvedSurfaces(optionedCensus)} ${curvedFaceCount(optionedCensus) === 1 ? 'face' : 'faces'} with it, because the kernel rebuilds the whole body as flat facets for this option. A faceted body measures and exports as if it were exact, so it is refused rather than shipped. ${remedy}`
+  );
 }
 
 /**
@@ -956,42 +992,24 @@ function loftApexPoint(
 }
 
 /**
- * The volume of the same section run lofted *without* the apex point, or null
- * when that run does not loft into a valid solid at all.
+ * The same section run lofted *without* the apex point, or null when that run
+ * does not loft into a valid solid at all.
  *
- * It answers two questions with one build. Its number is the baseline the
- * apexed loft has to beat, and its absence says the section run itself is what
- * the kernel cannot take, so the refusal must not send the user after the
- * apex.
+ * It answers three questions with one build. Its volume is the baseline the
+ * apexed loft has to beat, its solid is the exact-surface census the apexed
+ * build has to match, and its absence says the section run itself is what the
+ * kernel cannot take, so the refusal must not send the user after the apex.
  */
-function unapexedLoftVolume(
+function unapexedLoft(
   kernel: RemusKernel,
   handles: Uint32Array
-): number | null {
+): { readonly solid: number; readonly volume: number } | null {
   try {
-    return kernel.volume(
-      validateGeneratedSolid(kernel, kernel.loft(handles), 'Loft'),
-      MEASUREMENT_DEFLECTION
-    );
+    const solid = validateGeneratedSolid(kernel, kernel.loft(handles), 'Loft');
+    return { solid, volume: kernel.volume(solid, MEASUREMENT_DEFLECTION) };
   } catch {
     return null;
   }
-}
-
-/**
- * Whether a section run lies *in* the closing section's plane, so that it
- * encloses no material at all and the apex has nothing to fold into. This is
- * a degeneracy test, not a side test: a section that crosses the closing plane
- * fails it, which is the point.
- */
-function runLiesInClosingPlane(
-  sectionOffsets: readonly SectionOffsetRange[]
-): boolean {
-  return sectionOffsets.every(
-    (range) =>
-      Math.abs(range.min) < LOFT_APEX_MIN_STANDOFF &&
-      Math.abs(range.max) < LOFT_APEX_MIN_STANDOFF
-  );
 }
 
 /**
@@ -1039,15 +1057,14 @@ function apexVolumeSlack(unapexed: number, apexed: number): number {
  * gain more than {@link apexVolumeSlack} is refused by name. That costs one
  * extra loft, and only on a loft that asks for an apex.
  *
- * One consequence is deliberate. Asking for an apex moves the run onto the
- * kernel's chordal apexed surfacing: two circles r = 2 and r = 3 ten apart
- * loft to the exact 198.9675 with no apex and to 0.642% less — the 32-segment
- * chord ratio — as soon as an apex is given. A curved-section apex therefore
- * has to add more than that surfacing costs before the body holds more
- * material than it did without the apex, and a smaller one is refused. It is
- * refused for the true reason: measured, it does leave the body with less
- * material than the plain loft, which is the silent loss this guard exists to
- * stop, whichever half of the build gave it away.
+ * Two refusals stand in front of that comparison, and both are measured from
+ * the same pair of builds. {@link refuseLostExactSurfaces} refuses an apex
+ * over curved sections, because the kernel's apexed surfacing is chordal and
+ * would turn one exact cone into 66 flat facets. And a run the kernel cannot
+ * loft without the apex is refused outright rather than given a substitute
+ * baseline, because the runs that reach that branch are degenerate: sections
+ * lying wholly in the closing plane build a pyramid off the last section and
+ * keep every earlier one as a zero-thickness web with no material in it.
  */
 export function buildLoft(
   kernel: RemusKernel,
@@ -1103,24 +1120,6 @@ export function buildLoft(
     sketchBases,
     `Loft section ${sections.length}`
   );
-  // Read only to recognise the run that encloses nothing (see
-  // `runLiesInClosingPlane`), which is the one run the volume comparison
-  // cannot measure a baseline for.
-  const sectionOffsets = faces
-    .slice(0, -1)
-    .map((face, index) =>
-      sectionOffsetRange(
-        kernel,
-        face,
-        sectionPlane(
-          document,
-          sections[index]!,
-          sketchBases,
-          `Loft section ${index + 1}`
-        ),
-        closingPlane
-      )
-    );
   const options = {
     ruled: true,
     endPoint: loftApexPoint(
@@ -1144,30 +1143,43 @@ export function buildLoft(
       : kernel.volume(validated, MEASUREMENT_DEFLECTION);
   // The one measurement that settles it, and the same build the refusal
   // message needs: the run lofted without the apex.
-  const unapexedVolume = unapexedLoftVolume(kernel, handles);
+  const plain = unapexedLoft(kernel, handles);
   if (validated === null || apexedVolume === null) {
     throw new Error(
-      unapexedVolume !== null
+      plain !== null
         ? `${errorText(invalid)} The same sections do loft into a valid solid without the apex point, so the apex is what this loft cannot take: move it, or clear it.`
         : `${errorText(invalid)} The same sections do not loft into a valid solid without the apex point either, so the section run itself is what the kernel cannot take; the apex is not what to change.`,
       { cause: invalid }
     );
   }
-  // A run that lies in the closing section's plane encloses nothing, so its
-  // baseline is zero material rather than a measurement. That is the only run
-  // the comparison cannot measure and still decide, and it is decided here
-  // rather than waved through: measured, 4x4 and 8x8 both on z = 0 close to
-  // the analytic 213.3333 pyramid with an apex at z = 10 and at z = -10 alike.
-  const baseline =
-    unapexedVolume ?? (runLiesInClosingPlane(sectionOffsets) ? 0 : undefined);
-  if (baseline === undefined) {
+  // There is exactly one honest baseline — the same run lofted without the
+  // apex — and no substitute for it. An earlier version treated a run lying
+  // wholly in the closing plane as a baseline of nought material, on the
+  // reasoning that such a run encloses nothing for the apex to fold into.
+  // That is true about folding and false about the result: measured, a
+  // 100 x 100 section followed by a closing 4 x 4 on the same plane builds at
+  // 53.3333 — exactly the 4 x 4 x 10 / 3 pyramid, with the 100 x 100 section
+  // kept in the B-Rep as a zero-thickness web that contributes no material at
+  // all, and with the apex sign making no difference either way. Disjoint
+  // coplanar sections are worse: the centre of mass lands on the surviving
+  // section and the other one is simply absent from the body's mass. So a run
+  // with no measurable baseline is refused.
+  if (plain === null) {
     throw new Error(
       'The loft apex point cannot be checked on this loft: the same sections do not loft into a valid solid without it, so there is no measurement of what the apex adds, and an apex that folds back through the body reports a smaller volume with no other sign. Clear the apex point, or change the section run so it lofts on its own.'
     );
   }
+  refuseLostExactSurfaces(
+    kernel,
+    plain.solid,
+    validated,
+    'The loft apex point',
+    'Clear the apex point and close the run with a small final section instead, or draw the sections as straight-edged profiles.'
+  );
+  const baseline = plain.volume;
   if (apexedVolume - baseline <= apexVolumeSlack(baseline, apexedVolume)) {
     throw new Error(
-      `The loft apex point does not add material to this loft: the same sections loft to ${formatMeasuredVolume(baseline)} mm³ without the apex and to ${formatMeasuredVolume(apexedVolume)} mm³ with it. An apex that measures no larger has folded the closing band back through the body, which is a self-intersecting solid the validator cannot see; on curved sections it can also mean the apex is too small to pay for what the kernel's apexed surfacing costs. Move the apex to the other side of the closing section or further out, or clear it.`
+      `The loft apex point does not add material to this loft: the same sections loft to ${formatMeasuredVolume(baseline)} mm³ without the apex and to ${formatMeasuredVolume(apexedVolume)} mm³ with it. An apex that measures no larger has folded the closing band back through the body, which is a self-intersecting solid the validator cannot see. Move the apex to the other side of the closing section or further out, or clear it.`
     );
   }
   return {
@@ -1351,12 +1363,63 @@ function sameSketchPath(
   );
 }
 
+/** How finely the plain sweep entry point surfaces each mode. */
+const SWEEP_SEGMENTS = { standard: 24, smooth: 64 } as const;
+
+/**
+ * The plain, unguided sweep of one profile along one path edge — the call an
+ * unguided sweep has always taken, in one place so that the guided builder's
+ * baseline is the same build the feature would otherwise have shipped.
+ */
+function plainSweepSolid(
+  kernel: RemusKernel,
+  face: number,
+  edge: number,
+  mode: 'standard' | 'smooth'
+): number {
+  return kernel.sweepWithOptions(
+    face,
+    edge,
+    'rmf',
+    new Float64Array(),
+    SWEEP_SEGMENTS[mode],
+    'smooth'
+  );
+}
+
+/**
+ * The same sweep with no rail, or null when it does not build. Its solid is
+ * the exact-surface census the guided build has to match; its absence says
+ * there is nothing to compare against, which is not a licence to skip the
+ * comparison. See {@link refuseLostExactSurfaces}.
+ */
+function unguidedSweep(
+  kernel: RemusKernel,
+  face: number,
+  edge: number
+): number | null {
+  try {
+    return validateGeneratedSolid(
+      kernel,
+      plainSweepSolid(kernel, face, edge, 'standard'),
+      'Sweep'
+    );
+  } catch {
+    return null;
+  }
+}
+
 /**
  * A guided sweep replaces the rotation-minimizing frame with one that tracks a
  * rail. The kernel takes exactly one spine curve and one rail curve, so both
  * references have to come down to a single edge — a path of several entities,
  * or an arc wider than a quarter turn (which the path builder splits), is
  * refused by name rather than quietly swept unguided.
+ *
+ * `guidedSweep` also has no exact curved surfacing: it rebuilds a curved
+ * profile's swept walls as flat facets, so a curved profile on a rail is
+ * refused by {@link refuseLostExactSurfaces} against the plain sweep's own
+ * census. A straight-edged profile loses nothing and is unaffected.
  */
 function guidedSweepSolid(
   kernel: RemusKernel,
@@ -1402,17 +1465,39 @@ function guidedSweepSolid(
   }
   const spine = nurbsCurveOfEdge(kernel, pathEdges[0]!, 'The sweep path');
   const rail = nurbsCurveOfEdge(kernel, guideEdges[0]!, 'The sweep guide rail');
-  return kernel.guidedSweep(
-    face,
-    spine.degree,
-    spine.knots,
-    spine.controlPoints,
-    spine.weights,
-    rail.degree,
-    rail.knots,
-    rail.controlPoints,
-    rail.weights
+  // The same sweep without the rail, taken through exactly the call the
+  // unguided path takes so the two builds are comparable. It is the only
+  // evidence that says whether the rail costs the body its exact surfaces,
+  // and a rail that cannot be checked is refused rather than trusted.
+  const plain = unguidedSweep(kernel, face, pathEdges[0]!);
+  if (plain === null) {
+    throw new Error(
+      'A sweep guide rail cannot be checked on this sweep: the same profile and path do not sweep into a valid solid without the rail, so there is no measurement of what the rail costs, and the kernel’s guided sweep rebuilds a curved body as flat facets without reporting it. Clear the guide rail, or change the profile and path so they sweep on their own.'
+    );
+  }
+  const guided = validateGeneratedSolid(
+    kernel,
+    kernel.guidedSweep(
+      face,
+      spine.degree,
+      spine.knots,
+      spine.controlPoints,
+      spine.weights,
+      rail.degree,
+      rail.knots,
+      rail.controlPoints,
+      rail.weights
+    ),
+    'Sweep along a guide rail'
   );
+  refuseLostExactSurfaces(
+    kernel,
+    plain,
+    guided,
+    'A sweep guide rail',
+    'Clear the guide rail, or draw the profile as a straight-edged one.'
+  );
+  return guided;
 }
 
 export function buildProfileSweep(
@@ -1459,14 +1544,7 @@ export function buildProfileSweep(
     : // Unchanged: a sweep authored without a guide rail takes exactly the
       // call it has always taken, so its geometry replays bit-identically.
       edges.length === 1
-      ? kernel.sweepWithOptions(
-          face,
-          edges[0]!,
-          'rmf',
-          new Float64Array(),
-          feature.data.mode === 'smooth' ? 64 : 24,
-          'smooth'
-        )
+      ? plainSweepSolid(kernel, face, edges[0]!, feature.data.mode)
       : kernel.sweepAlongEdges(face, Uint32Array.from(edges));
   return {
     solids: [
