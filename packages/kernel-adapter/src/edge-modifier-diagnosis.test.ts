@@ -12,7 +12,8 @@ import {
   acceptedEdgeModifierProbe,
   applyEdgeModifier,
   blendCliffLimit,
-  edgeModifierFailureMessage
+  edgeModifierFailureMessage,
+  EDGE_MODIFIER_PROBE_RATIOS
 } from './exact-edge-modifiers';
 
 /**
@@ -27,6 +28,24 @@ function bevellingKernel(kernel: RemusKernel): RemusKernel {
       if (property === 'fillet') {
         return (solid: number, edges: Uint32Array, size: number) =>
           target.chamfer(solid, edges, size);
+      }
+      const value: unknown = Reflect.get(target, property, target);
+      return typeof value === 'function'
+        ? (value as (...args: unknown[]) => unknown).bind(target)
+        : value;
+    }
+  });
+}
+
+/** Records every size `fillet` is called at, to count kernel round-trips. */
+function countingKernel(kernel: RemusKernel, sizes: number[]): RemusKernel {
+  return new Proxy(kernel, {
+    get(target, property) {
+      if (property === 'fillet') {
+        return (solid: number, edges: Uint32Array, size: number) => {
+          sizes.push(size);
+          return target.fillet(solid, edges, size);
+        };
       }
       const value: unknown = Reflect.get(target, property, target);
       return typeof value === 'function'
@@ -183,12 +202,130 @@ describe('edge modifier failure diagnosis', { timeout: 60_000 }, () => {
     expect(message).toContain(
       'Fillet could not be created on 1 selected edge with radius 30.'
     );
-    expect(message).toContain('Try a smaller radius');
-    expect(message).toContain(
-      "the kernel's blend runs off its support face at radius 18, and radius 9 builds here"
-    );
+    expect(message).toContain('Try a smaller radius: radius 9 builds here.');
+    // The ceiling aimed the ladder but must not be quoted: it is not a size
+    // that works, and on other bodies it is not even a bound — see the plate
+    // test below.
+    expect(message).not.toContain('18');
     // The structural claims must not be reached: this edge rounds fine.
     expect(message).not.toMatch(/Closed rim edges|partial revolve/);
+  });
+
+  /**
+   * The kernel's `available radius` is measured against whichever support
+   * face its cascade stopped on FIRST, so it moves with the requested size
+   * and is not an upper bound on what works. A 50x50x2 plate is the case
+   * that proves it: r60 is refused with `available radius 50` and r30 on the
+   * same edge with `available radius 2`, while r2 itself still refuses. So
+   * the message may quote only a size the ladder actually built.
+   */
+  it('never quotes a ceiling the kernel has not proved', () => {
+    const kernel = new RemusKernel();
+    const plate = kernel.makeBox(50, 50, 2);
+    const edge = Array.from(kernel.getSolidEdges(plate))[0]!;
+
+    const refusalAt = (radius: number): string | null => {
+      let reported: string | null = null;
+      applyEdgeModifier(kernel, plate, [edge], 'fillet', radius, (message) => {
+        reported = message;
+      });
+      return reported;
+    };
+
+    const atSixty = refusalAt(60);
+    expect(blendCliffLimit(atSixty)).toBe(50);
+    // Not monotone, and not a bound: the same edge reports a 25x smaller
+    // ceiling one size down, and even that ceiling refuses.
+    expect(blendCliffLimit(refusalAt(30))).toBe(2);
+    expect(applyEdgeModifier(kernel, plate, [edge], 'fillet', 40)).toBeNull();
+    expect(applyEdgeModifier(kernel, plate, [edge], 'fillet', 5)).toBeNull();
+    expect(applyEdgeModifier(kernel, plate, [edge], 'fillet', 2)).toBeNull();
+
+    const message = edgeModifierFailureMessage(
+      kernel,
+      plate,
+      [edge],
+      'fillet',
+      60,
+      false,
+      atSixty
+    );
+    expect(message).toContain(
+      'Fillet could not be created on 1 selected edge with radius 60.'
+    );
+    expect(message).not.toContain('50');
+    expect(message).not.toContain('support face');
+
+    // Whatever size the sentence does name, the same selection must build at
+    // it. This is the property the ceiling failed.
+    const quoted = /radius ([0-9.eE+-]+) builds here/.exec(message);
+    expect(quoted).not.toBeNull();
+    expect(
+      applyEdgeModifier(kernel, plate, [edge], 'fillet', Number(quoted![1]))
+    ).not.toBeNull();
+  });
+
+  /**
+   * What the ceiling is for: aiming the ladder. These counts are the saving
+   * the branch claims, pinned so the claim cannot drift — including the case
+   * where there is no saving at all, because an uncorroborated ceiling seeds
+   * a ladder that still has to walk all the way down.
+   */
+  it('spends fewer kernel round-trips only where the ceiling is close', () => {
+    const kernel = new RemusKernel();
+    const calls: number[] = [];
+    const counting = countingKernel(kernel, calls);
+
+    const ladderCalls = (
+      target: number,
+      edge: number,
+      size: number,
+      seeded: boolean
+    ): number[] => {
+      let reported: string | null = null;
+      applyEdgeModifier(kernel, target, [edge], 'fillet', size, (message) => {
+        reported = message;
+      });
+      calls.length = 0;
+      if (seeded) {
+        acceptedEdgeModifierProbe(
+          counting,
+          target,
+          [edge],
+          'fillet',
+          size,
+          blendCliffLimit(reported)
+        );
+      } else {
+        // The pre-branch ladder: fractions of the REFUSED size, stopping at
+        // the first one accepted.
+        EDGE_MODIFIER_PROBE_RATIOS.some(
+          (ratio) =>
+            applyEdgeModifier(
+              counting,
+              target,
+              [edge],
+              'fillet',
+              size * ratio
+            ) !== null
+        );
+      }
+      return [...calls];
+    };
+
+    const box = kernel.makeBox(30, 18, 24);
+    const boxEdge = Array.from(kernel.getSolidEdges(box))[0]!;
+    expect(ladderCalls(box, boxEdge, 30, false)).toEqual([15, 3.75]);
+    expect(ladderCalls(box, boxEdge, 30, true)).toEqual([9]);
+
+    const plate = kernel.makeBox(50, 50, 2);
+    const plateEdge = Array.from(kernel.getSolidEdges(plate))[0]!;
+    expect(ladderCalls(plate, plateEdge, 30, false)).toHaveLength(3);
+    expect(ladderCalls(plate, plateEdge, 30, true)).toEqual([1]);
+    // The ceiling reported at r60 is 50, far above what builds, so the
+    // seeded ladder spends the same three round-trips as the blind one.
+    expect(ladderCalls(plate, plateEdge, 60, false)).toHaveLength(3);
+    expect(ladderCalls(plate, plateEdge, 60, true)).toHaveLength(3);
   });
 
   /**
