@@ -9,10 +9,7 @@ import type {
 import type { EdgeTopology } from '@openzcad/shared';
 import { findBodyId, isViewerMesh, type ViewerMesh } from '../pick/meshes';
 import { updateSectionCap } from './sectionCaps';
-import {
-  applyExactSection,
-  type ExactSectionRegionDisplay
-} from './exactSection';
+import { applyExactSection, type ExactSectionDisplay } from './exactSection';
 import {
   EDGE_IDLE_COLOR,
   EDGE_IDLE_OPACITY,
@@ -126,7 +123,9 @@ export function sectionClippingPlane(
  * and normal face culling returns as soon as the section is cleared.
  *
  * `exact` replaces those caps with the kernel's own section geometry once it
- * has been computed for this plane position. The two never appear together on
+ * has been computed for this plane position. It carries the display mode the
+ * section must be built for, because the display-mode pass does not re-run
+ * when a section arrives. The two never appear together on
  * the same body: one is an approximation of the cut drawn from the display
  * mesh, the other is the cross-section the export writes, and a viewport
  * showing both would be showing the same cut twice at two different
@@ -137,7 +136,7 @@ export function sectionClippingPlane(
 export function applySectionPlane(
   root: THREE.Object3D,
   plane: THREE.Plane | null,
-  exact: readonly ExactSectionRegionDisplay[] | null = null
+  exact: ExactSectionDisplay = null
 ) {
   const planes = plane ? [plane] : null;
   const meshes: ViewerMesh[] = [];
@@ -165,9 +164,9 @@ export function applySectionPlane(
     }
   });
   // Adding/removing children during traverse would skip siblings.
-  const showExact = plane !== null && exact !== null && exact.length > 0;
+  const showExact = plane !== null && exact !== null && exact.regions.length > 0;
   const exactBodyIds = new Set(
-    showExact ? exact.map((region) => region.bodyId) : []
+    showExact ? exact.regions.map((region) => region.bodyId) : []
   );
   for (const mesh of meshes) {
     const replaced = exactBodyIds.has(findBodyId(mesh) ?? '');
