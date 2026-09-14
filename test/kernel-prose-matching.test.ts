@@ -66,6 +66,14 @@ const ALLOWANCES: readonly ProseAllowance[] = [
     reason:
       'blend family: the kernel names the shared-corner case only in its ' +
       'prose, and this cause is claimed only when it actually reported it.'
+  },
+  {
+    file: 'exact-edge-modifiers.ts',
+    fragment: 'available radius',
+    reason:
+      'blend family: fillet/chamfer have no typed twin on the pin, and the ' +
+      'kernel names its measured blend ceiling only in its refusal prose; ' +
+      'this aims the probe ladder and is never quoted.'
   }
 ];
 
