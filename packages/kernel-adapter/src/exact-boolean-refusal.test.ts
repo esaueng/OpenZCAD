@@ -29,6 +29,22 @@ function offsetSpheres(kernel: RemusKernel): [number, number] {
 }
 
 /**
+ * A ~1 µm sliver overlap: a 20×20×10 plate and an r3 h10 boss whose base
+ * sits 1 µm below the plate's top face. Measured on the pin, BOTH `fuse` and
+ * `cut` refuse this pair with `exact_only_unattainable` / `quality_refused` —
+ * which is why the refusal copy no longer sends a refused union to subtract.
+ */
+function sliverContact(kernel: RemusKernel): [number, number] {
+  return [
+    kernel.makeBox(20, 20, 10),
+    kernel.copyAndTransformSolid(
+      kernel.makeCylinder(3, 10),
+      translation(10, 10, 9.999999)
+    )
+  ];
+}
+
+/**
  * Remus B21 refuses severing booleans instead of silently approximating them.
  * The e2e STEP export test previously asserted the old faceted-cut warning
  * for an r=14 cylinder severing an 18-deep box; the kernel now declines that
@@ -244,5 +260,59 @@ describe('a refused cluster fuse names its member', () => {
     // The kernel's own `fuseAll` throw is kept as the cause: the fold below
     // it is diagnosis, and the original refusal is still the reason.
     expect(refusal.cause).toBeInstanceOf(Error);
+  });
+});
+
+/**
+ * The remedy sentence is product advice, so it may only claim what the kernel
+ * will actually honour. The inherited "subtract instead — the same operands
+ * still cut exactly" came from the facet census, which fired on a result the
+ * engine HAD built; a quality refusal is a wider trigger, and on a sliver
+ * contact the subtract it recommended refuses too.
+ */
+describe('the refusal remedy promises nothing the kernel will not honour', () => {
+  it('refuses the sliver contact for cut exactly as it does for fuse', () => {
+    const kernel = new RemusKernel();
+    const [plate, boss] = sliverContact(kernel);
+
+    const union = exactBooleanOutcome(kernel, 'fuse', plate, boss);
+    expect(union.status).toBe('refused');
+    if (union.status !== 'refused') return;
+    expect(union.refusal.category).toBe('quality_refused');
+    expect(union.refusal.kernelCode).toBe('exact_only_unattainable');
+
+    // The advice that used to be attached to that refusal, followed:
+    const subtract = exactBooleanOutcome(kernel, 'cut', plate, boss);
+    expect(subtract.status).toBe('refused');
+    if (subtract.status !== 'refused') return;
+    expect(subtract.refusal.kernelCode).toBe('exact_only_unattainable');
+  });
+
+  it('does not send a refused union to subtract', () => {
+    const kernel = new RemusKernel();
+    const [plate, boss] = sliverContact(kernel);
+    const union = exactBooleanOutcome(kernel, 'fuse', plate, boss, [
+      'Plate',
+      'Boss'
+    ]);
+    expect(union.status).toBe('refused');
+    if (union.status !== 'refused') return;
+    const sentence = union.refusal.message.split('\n')[0]!;
+    expect(sentence).toContain('Union refused');
+    expect(sentence).toContain('Repositioning the overlap sometimes clears it');
+    expect(sentence).not.toMatch(/subtract/i);
+    expect(sentence).not.toMatch(/cut exactly/i);
+  });
+
+  it('offers a refused cut no advice about keeping bodies apart', () => {
+    const kernel = new RemusKernel();
+    const [plate, boss] = sliverContact(kernel);
+    const subtract = exactBooleanOutcome(kernel, 'cut', plate, boss);
+    expect(subtract.status).toBe('refused');
+    if (subtract.status !== 'refused') return;
+    const sentence = subtract.refusal.message.split('\n')[0]!;
+    expect(sentence).toContain('Subtract refused');
+    expect(sentence).toContain('Repositioning the overlap sometimes clears it');
+    expect(sentence).not.toMatch(/keep the bodies separate/i);
   });
 });
