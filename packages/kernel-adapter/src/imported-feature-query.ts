@@ -691,7 +691,10 @@ export function collectRecognizedImportedFeatures(
     }
   }
   if (!claims) {
-    return recognized;
+    // The seed-ambiguity guard belongs to the published contract, not to the
+    // kernel-claim path: an unreadable or absent payload must not publish a
+    // pair that the claims path would have dropped.
+    return withoutAmbiguousSeeds(recognized);
   }
 
   const adjacency = new SolidFaceAdjacency(kernel, solid);

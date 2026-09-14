@@ -133,6 +133,21 @@ describe('kernel feature recognition', () => {
     });
   }
 
+  /** Two identical blind holes, 14 mm apart in the same plate face. */
+  function plateWithTwoHoles(): number {
+    const bore = (solid: number, x: number) =>
+      drillHole(kernel, solid, {
+        surfacePoint: { x, y: 10, z: 8 },
+        axis: { x: 0, y: 0, z: -1 },
+        radius: 2.5,
+        depth: 6,
+        style: 'simple',
+        entryExtension: 0.2,
+        exitExtension: 0
+      });
+    return bore(bore(kernel.makeBox(30, 20, 8), 8), 22);
+  }
+
   it('publishes a verified rectangular pocket as a read-only feature', () => {
     const solid = imported(pocketedPlate());
     const claimed = parseKernelFeatureClaims(
@@ -255,6 +270,35 @@ describe('kernel feature recognition', () => {
         )
       )
     ).toEqual(recognize(solid, withKernelClaims('[]')));
+  });
+
+  it('drops a seed-hash collision whether or not the kernel claims anything', () => {
+    const solid = plateWithTwoHoles();
+    // Distinct identities publish both bores; this is the control.
+    expect(recognize(solid)).toHaveLength(2);
+
+    // The ADR-011 fingerprint is 32-bit, so two same-kind proofs on one body
+    // can in principle land on one hash. A proposal binds by (kind, seed
+    // hash), so such a pair must be dropped — on BOTH paths, including the
+    // one taken when the kernel's payload cannot be read.
+    const collided = new Map(
+      Array.from(kernel.getSolidFaces(solid)).map((face, index) => [
+        face,
+        { hash: kernel.getSurfaceType(face) === 'cylinder' ? 777 : index + 1 }
+      ])
+    );
+    const withRecognizer = collectRecognizedImportedFeatures(
+      kernel,
+      solid,
+      collided
+    );
+    const withoutRecognizer = collectRecognizedImportedFeatures(
+      withKernelClaims(),
+      solid,
+      collided
+    );
+    expect(withRecognizer).toEqual([]);
+    expect(withoutRecognizer).toEqual(withRecognizer);
   });
 
   it.each([
