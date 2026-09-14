@@ -234,92 +234,99 @@ test('fits the face tool card and orientation cube beside the inspector', async 
   await expect(card).toBeVisible();
   await expect(inspector).toBeVisible();
 
-  const geometry = await page.locator('.viewer-area').evaluate((viewer) => {
-    const cardElement = viewer.querySelector<HTMLElement>('.tool-card');
-    const copy = viewer.querySelector<HTMLElement>('.tool-card-copy');
-    const submode = viewer.querySelector<HTMLElement>('.tool-card-submode');
-    const cube = viewer.querySelector<SVGElement>('.orientation-cube');
-    const inspectorElement = viewer.querySelector<HTMLElement>(
-      '.inspector-float > *'
-    );
-    if (!cardElement || !copy || !submode || !cube || !inspectorElement) {
-      throw new Error('Expected the face tool card, cube, and inspector.');
-    }
-
-    const cardBox = cardElement.getBoundingClientRect();
-    const copyBox = copy.getBoundingClientRect();
-    const submodeBox = submode.getBoundingClientRect();
-    const cubeBox = cube.getBoundingClientRect();
-    const inspectorBox = inspectorElement.getBoundingClientRect();
-    const cubeHit = document.elementFromPoint(
-      cubeBox.left + cubeBox.width / 2,
-      cubeBox.top + cubeBox.height / 2
-    );
-    const intersects = (a: DOMRect, b: DOMRect) =>
-      a.left < b.right &&
-      a.right > b.left &&
-      a.top < b.bottom &&
-      a.bottom > b.top;
-
-    return {
-      cardContainsItsContents:
-        cardElement.scrollWidth <= cardElement.clientWidth &&
-        cardElement.scrollHeight <= cardElement.clientHeight,
-      copyIntersectsSubmode: intersects(copyBox, submodeBox),
-      cubeIntersectsCard: intersects(cubeBox, cardBox),
-      cubeIntersectsInspector: intersects(cubeBox, inspectorBox),
-      cubeOwnsItsCentre: Boolean(cubeHit && cube.contains(cubeHit)),
-      cardBox: {
-        left: cardBox.left,
-        right: cardBox.right,
-        top: cardBox.top,
-        bottom: cardBox.bottom
-      },
-      copyBox: {
-        left: copyBox.left,
-        right: copyBox.right,
-        top: copyBox.top,
-        bottom: copyBox.bottom
-      },
-      submodeBox: {
-        left: submodeBox.left,
-        right: submodeBox.right,
-        top: submodeBox.top,
-        bottom: submodeBox.bottom
-      },
-      cubeBox: {
-        left: cubeBox.left,
-        right: cubeBox.right,
-        top: cubeBox.top,
-        bottom: cubeBox.bottom
-      },
-      inspectorBox: {
-        left: inspectorBox.left,
-        right: inspectorBox.right,
-        top: inspectorBox.top,
-        bottom: inspectorBox.bottom
+  const measure = () =>
+    page.locator('.viewer-area').evaluate((viewer) => {
+      const cardElement = viewer.querySelector<HTMLElement>('.tool-card');
+      const copy = viewer.querySelector<HTMLElement>('.tool-card-copy');
+      const submode = viewer.querySelector<HTMLElement>('.tool-card-submode');
+      const cube = viewer.querySelector<SVGElement>('.orientation-cube');
+      const inspectorElement = viewer.querySelector<HTMLElement>(
+        '.inspector-float > *'
+      );
+      if (!cardElement || !copy || !submode || !cube || !inspectorElement) {
+        throw new Error('Expected the face tool card, cube, and inspector.');
       }
-    };
-  });
 
-  expect(
-    geometry.cardContainsItsContents,
-    JSON.stringify(geometry, null, 2)
-  ).toBe(true);
-  expect(
-    geometry.copyIntersectsSubmode,
-    JSON.stringify(geometry, null, 2)
-  ).toBe(false);
-  expect(geometry.cubeIntersectsCard, JSON.stringify(geometry, null, 2)).toBe(
-    false
-  );
-  expect(
-    geometry.cubeIntersectsInspector,
-    JSON.stringify(geometry, null, 2)
-  ).toBe(false);
-  expect(geometry.cubeOwnsItsCentre, JSON.stringify(geometry, null, 2)).toBe(
-    true
-  );
+      const cardBox = cardElement.getBoundingClientRect();
+      const copyBox = copy.getBoundingClientRect();
+      const submodeBox = submode.getBoundingClientRect();
+      const cubeBox = cube.getBoundingClientRect();
+      const inspectorBox = inspectorElement.getBoundingClientRect();
+      const cubeHit = document.elementFromPoint(
+        cubeBox.left + cubeBox.width / 2,
+        cubeBox.top + cubeBox.height / 2
+      );
+      const intersects = (a: DOMRect, b: DOMRect) =>
+        a.left < b.right &&
+        a.right > b.left &&
+        a.top < b.bottom &&
+        a.bottom > b.top;
+
+      const title = copy.querySelector<HTMLElement>('.tool-card-title');
+
+      return {
+        cardContainsItsContents:
+          cardElement.scrollWidth <= cardElement.clientWidth &&
+          cardElement.scrollHeight <= cardElement.clientHeight,
+        copyIntersectsSubmode: intersects(copyBox, submodeBox),
+        // The operation's own name is the last thing that may be dropped.
+        titleReadsInFull: Boolean(
+          title && title.scrollWidth <= title.clientWidth + 1
+        ),
+        copyWidth: copyBox.width,
+        cubeIntersectsCard: intersects(cubeBox, cardBox),
+        cubeIntersectsInspector: intersects(cubeBox, inspectorBox),
+        cubeOwnsItsCentre: Boolean(cubeHit && cube.contains(cubeHit)),
+        cardBox: {
+          left: cardBox.left,
+          right: cardBox.right,
+          top: cardBox.top,
+          bottom: cardBox.bottom
+        },
+        copyBox: {
+          left: copyBox.left,
+          right: copyBox.right,
+          top: copyBox.top,
+          bottom: copyBox.bottom
+        },
+        submodeBox: {
+          left: submodeBox.left,
+          right: submodeBox.right,
+          top: submodeBox.top,
+          bottom: submodeBox.bottom
+        },
+        cubeBox: {
+          left: cubeBox.left,
+          right: cubeBox.right,
+          top: cubeBox.top,
+          bottom: cubeBox.bottom
+        },
+        inspectorBox: {
+          left: inspectorBox.left,
+          right: inspectorBox.right,
+          top: inspectorBox.top,
+          bottom: inspectorBox.bottom
+        }
+      };
+    });
+
+  // The card used to be a single flex row whose action tabs refused to
+  // shrink: below ~1000px the copy was squeezed to two characters and the
+  // tabs still crossed it. Every width the app is used at has to hold.
+  for (const width of [1440, 1100, 990, 900]) {
+    await page.setViewportSize({ width, height: 700 });
+    await page.waitForTimeout(150);
+    const geometry = await measure();
+    const where = `at ${width}px: ${JSON.stringify(geometry, null, 2)}`;
+
+    expect(geometry.cardContainsItsContents, where).toBe(true);
+    expect(geometry.copyIntersectsSubmode, where).toBe(false);
+    expect(geometry.cubeIntersectsCard, where).toBe(false);
+    expect(geometry.cubeIntersectsInspector, where).toBe(false);
+    expect(geometry.cubeOwnsItsCentre, where).toBe(true);
+    expect(geometry.titleReadsInFull, where).toBe(true);
+    expect(geometry.copyWidth, where).toBeGreaterThan(150);
+  }
 });
 
 test('keeps a chained line anchored across committed sketch entities', async ({
