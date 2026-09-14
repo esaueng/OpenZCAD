@@ -368,7 +368,7 @@ test('resizes an imported analytic blend twice without reselection', async ({
   await page.goto('/');
   await page.getByLabel('Project name').fill('Imported Blend Boundary');
   await page.getByRole('button', { name: 'Create project' }).click();
-  await page.getByLabel('Import STEP or STL…').setInputFiles({
+  await page.getByLabel(/^Import STEP or /).setInputFiles({
     name: 'remus-fillet.step',
     mimeType: 'model/step',
     buffer: Buffer.from(await editableImportedBlendStep())
