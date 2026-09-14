@@ -162,6 +162,114 @@ describe('variable blend edits', { timeout: 120_000 }, () => {
     }
   });
 
+  /**
+   * The path the Chamfer form actually walks when a user converts an
+   * angled bevel into an asymmetric one: the angle goes blank, a second
+   * distance is typed, and the angle field is no longer on screen.
+   *
+   * The two are mutually exclusive, so the stored angle has to be deleted,
+   * not patched over. If it survives, the edit validates as a chamfer that
+   * sets both — refused at the command, refused again at the rebuild — and
+   * the feature is a dead end with no visible field to clear.
+   */
+  it('converts an angled chamfer into an asymmetric one', async () => {
+    const { kernel, manager, body } = await plateWithVerticalEdges();
+    try {
+      const edgeHashes = [body.topology!.edges[0]!.hash];
+      manager.execute(
+        edgeModifierCommand(null, 'chamfer', {
+          name: 'Bevel',
+          targetBodyId: body.bodyId,
+          edgeHashes,
+          size: 2,
+          angleDeg: 30
+        })
+      );
+      const feature = listFeaturesInOrder(manager.document).at(-1)!;
+      expect(
+        (feature.data as Extract<FeatureData, { featureKind: 'chamfer' }>)
+          .angleDeg
+      ).toBe(30);
+
+      const command = edgeModifierCommand(feature, 'chamfer', {
+        name: 'Bevel',
+        targetBodyId: body.bodyId,
+        edgeHashes,
+        size: 1,
+        distance2: 3
+      });
+      expect(() => command.validate(manager.document)).not.toThrow();
+      manager.execute(command);
+
+      const converted = listFeaturesInOrder(manager.document).at(-1)!
+        .data as Extract<FeatureData, { featureKind: 'chamfer' }>;
+      expect('angleDeg' in converted).toBe(false);
+      expect(converted.distance2).toBe(3);
+      const geometry = await kernel.syncDocument(manager.document);
+      expect(geometry.warnings).toEqual([]);
+      expect(
+        geometry.bodyRepresentations[feature.bodyId!]!.volume
+      ).toBeGreaterThan(0);
+    } finally {
+      kernel.dispose();
+    }
+  });
+
+  /**
+   * The same deletion in the other direction: blanking the angle asks for
+   * the symmetric 45° bevel, which is the absent key — not an explicit 45
+   * written in its place.
+   */
+  it('drops a stored angle when the form blanks it', async () => {
+    const { kernel, manager, body } = await plateWithVerticalEdges();
+    try {
+      const edgeHashes = [body.topology!.edges[0]!.hash];
+      manager.execute(
+        edgeModifierCommand(null, 'chamfer', {
+          name: 'Bevel',
+          targetBodyId: body.bodyId,
+          edgeHashes,
+          size: 2
+        })
+      );
+      const symmetric = listFeaturesInOrder(manager.document).at(-1)!;
+      const symmetricVolume = (await kernel.syncDocument(manager.document))
+        .bodyRepresentations[symmetric.bodyId!]!.volume;
+
+      manager.execute(
+        edgeModifierCommand(symmetric, 'chamfer', {
+          name: 'Bevel',
+          targetBodyId: body.bodyId,
+          edgeHashes,
+          size: 2,
+          angleDeg: 30
+        })
+      );
+      manager.execute(
+        edgeModifierCommand(
+          listFeaturesInOrder(manager.document).at(-1)!,
+          'chamfer',
+          {
+            name: 'Bevel',
+            targetBodyId: body.bodyId,
+            edgeHashes,
+            size: 2
+          }
+        )
+      );
+      const restored = listFeaturesInOrder(manager.document).at(-1)!
+        .data as Extract<FeatureData, { featureKind: 'chamfer' }>;
+      expect('angleDeg' in restored).toBe(false);
+      const geometry = await kernel.syncDocument(manager.document);
+      expect(geometry.warnings).toEqual([]);
+      expect(
+        geometry.bodyRepresentations[symmetric.bodyId!]!.volume
+      ).toBeCloseTo(symmetricVolume, 9);
+    } finally {
+      kernel.dispose();
+    }
+  });
+
   it('refuses to clear a field a fillet cannot be built without', async () => {
     const { kernel, manager, body } = await plateWithVerticalEdges();
     try {
