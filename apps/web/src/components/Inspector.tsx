@@ -1383,6 +1383,15 @@ export function Inspector(props: InspectorProps) {
             size: data.featureKind === 'fillet' ? data.radius : data.distance,
             ...(data.featureKind === 'chamfer' && data.angleDeg !== undefined
               ? { angleDeg: data.angleDeg }
+              : {}),
+            ...(data.featureKind === 'fillet' && data.endRadius !== undefined
+              ? {
+                  endRadius: data.endRadius,
+                  radiusLaw: data.radiusLaw ?? 'linear'
+                }
+              : {}),
+            ...(data.featureKind === 'chamfer' && data.distance2 !== undefined
+              ? { distance2: data.distance2 }
               : {})
           }}
           submitLabel="Apply"
