@@ -3,7 +3,10 @@ import {
   parameterInputError,
   parameterBuildError
 } from './lib/parameterEdit';
-import type { parameterVisualPreview } from './lib/parameterVisualPreview';
+import type {
+  ParameterPreviewBody,
+  parameterVisualPreview
+} from './lib/parameterVisualPreview';
 import { LatestTask } from './lib/latestTask';
 import { rebuildProgressLabel } from './lib/rebuildProgressLabel';
 import { featureHistory, featureResultBodyIds } from './lib/featureHistory';
@@ -521,7 +524,10 @@ import type {
   SectionViewSettings,
   WheelDevice
 } from '@openzcad/viewport';
-import type { SectionOutlineState, SectionSource } from './lib/sectionOutline';
+import type {
+  SectionOutlineState,
+  ViewportGeometry
+} from './lib/sectionOutline';
 
 /**
  * Space activates focused buttons and belongs in free-text fields. Numeric and
@@ -4390,63 +4396,56 @@ export function App() {
       geometry.state.phase
     ]
   );
-  const viewerBodies = useMemo<BodyRepresentation[]>(
-    () =>
-      (previewDoc
-        ? Object.values(renderedRepresentations)
-        : liveBodyRepresentations
-          ? Object.values(liveBodyRepresentations)
-          : []
-      ).filter((body) => !body.consumed && !hiddenBodyIds.has(body.bodyId)),
-    [
-      liveBodyRepresentations,
-      previewDoc,
-      renderedRepresentations,
-      hiddenBodyIds
-    ]
-  );
   /**
-   * What an exact section is a section OF — the document AND the bodies, as
-   * one value, because they are one decision.
-   *
-   * The bodies are the viewport's: hiding and isolating are device-local
-   * view state the document never sees, so the kernel has to be told, or it
-   * sections a hidden body and draws its cut floating in empty space. The
-   * document is `viewerBodies`' own — `previewDoc` replaces the live one
-   * wholesale and `viewerBodies` is then ITS bodies, so asking the live
-   * document about them names bodies its build never made.
-   */
-  const sectionSource = useMemo<SectionSource>(
-    () => ({
-      document: previewDoc ?? doc ?? null,
-      bodyIds: viewerBodies.map((body) => body.bodyId)
-    }),
-    [doc, previewDoc, viewerBodies]
-  );
-  /**
-   * A parameter preview stands in for its own result body only; hidden
-   * bodies stay hidden and every other part keeps its exact geometry.
-   */
-  const visibleParameterPreview = useMemo(
-    () => parameterPreview?.filter(body => !hiddenBodyIds.has(body.bodyId)) ?? null,
-    [parameterPreview, hiddenBodyIds]
-  );
-
-  /**
-   * Every body the model ends up with, hidden ones included — `viewerBodies`
-   * drops those, and a parts list that loses a row when you hide it is a list
-   * you cannot unhide from. Consumed bodies stay out: they are boolean
+   * Every body the document the viewport draws ended up with, hidden ones
+   * included — a parts list that loses a row when you hide it is a list you
+   * cannot unhide from. Consumed bodies stay out: they are boolean
    * scaffolding, not parts.
+   *
+   * Which document that is gets decided HERE and nowhere else: `previewDoc`
+   * replaces the live one wholesale, so these are then ITS bodies.
    */
   const partBodies = useMemo<BodyRepresentation[]>(
     () =>
-      (previewDoc
-        ? Object.values(renderedRepresentations)
-        : liveBodyRepresentations
-          ? Object.values(liveBodyRepresentations)
-          : []
+      Object.values(
+        previewDoc ? renderedRepresentations : (liveBodyRepresentations ?? {})
       ).filter((body) => !body.consumed),
     [liveBodyRepresentations, previewDoc, renderedRepresentations]
+  );
+  /**
+   * What the viewport is drawing, as one value — the document, its bodies
+   * that are on screen, and anything drawn over them that the document did
+   * not build.
+   *
+   * Everything that puts geometry in the viewport is folded in here and the
+   * viewer's own props are read back out of it, so this is not a summary of
+   * what is on screen: it IS what is on screen. The exact section takes its
+   * source from it (`sectionSourceOf`) rather than working out the answer a
+   * second time, because the second answer has been wrong twice — once for
+   * a published preview document, once for a parameter edit nobody applied.
+   *
+   * Hiding and isolating are device-local view state the document never
+   * sees, so the bodies have to be carried with it: ask the kernel about a
+   * hidden body and it sections it and draws the cut floating in empty
+   * space.
+   */
+  // Its own memo, so the array the viewer uploads meshes from keeps its
+  // identity while a preview comes and goes over the top of it.
+  const viewerBodies = useMemo<BodyRepresentation[]>(
+    () => partBodies.filter((body) => !hiddenBodyIds.has(body.bodyId)),
+    [partBodies, hiddenBodyIds]
+  );
+  const viewportGeometry = useMemo<ViewportGeometry<ParameterPreviewBody>>(
+    () => ({
+      document: previewDoc ?? doc ?? null,
+      bodies: viewerBodies,
+      // A parameter preview stands in for its own result body only; hidden
+      // bodies stay hidden and every other part keeps its exact geometry.
+      standIns:
+        parameterPreview?.filter((body) => !hiddenBodyIds.has(body.bodyId)) ??
+        null
+    }),
+    [doc, previewDoc, viewerBodies, hiddenBodyIds, parameterPreview]
   );
 
   const directEditableBodyIds = useMemo<string[]>(
@@ -5826,13 +5825,24 @@ export function App() {
    * plane position anyway.
    */
   async function requestExactSection(section: SectionViewSettings | undefined) {
-    if (!section || !sectionSource.document) {
+    const view = viewportGeometry;
+    if (!section || !view.document) {
       return;
     }
+    // Taken before the await: whatever this call decides, an answer already
+    // in flight is about a cut that has moved on.
     const token = ++sectionTokenRef.current;
+    const { resolveSectionOutline, sectionSourceOf } = await import(
+      './lib/sectionOutline'
+    );
+    if (!sectionSourceOf(view).document) {
+      // Nothing on screen has an exact section to ask for — a stand-in is
+      // drawn over the model. The clipped preview stays and says so, rather
+      // than announcing a section that is not being computed.
+      return;
+    }
     setSectionOutline({ kind: 'computing' });
-    const { resolveSectionOutline } = await import('./lib/sectionOutline');
-    const next = await resolveSectionOutline(geometry, sectionSource, section);
+    const next = await resolveSectionOutline(geometry, view, section);
     if (token === sectionTokenRef.current) {
       setSectionOutline(next);
     }
@@ -5860,8 +5870,29 @@ export function App() {
   // commits derived state onto a fresh document object at the same version,
   // and invalidating for that would drop the answer to a section requested
   // moments earlier and leave the rail on "Clipping preview" for good.
-  const sectionBodyKey = sectionSource.bodyIds.join('|');
-  useEffect(clearSectionOutline, [previewDoc, doc?.version, sectionBodyKey]);
+  //
+  // Read off `viewportGeometry`, which is what is on screen, so a new source
+  // of drawn geometry cannot appear without appearing here: a document drawn
+  // in the live one's place arrives as `drawnInstead`, a stand-in drawn over
+  // it as `standIns`.
+  const sectionBodyKey = viewportGeometry.bodies
+    .map((body) => body.bodyId)
+    .join('|');
+  /**
+   * The live document is keyed by VERSION and everything drawn in its place
+   * by IDENTITY, because that is how truthful each one is. `doc` is re-minted
+   * at the same version and the same geometry every time a sync commits
+   * derived state; a preview or a candidate is minted exactly when the
+   * geometry it stands for changes, so its identity IS its content.
+   */
+  const drawnInstead =
+    viewportGeometry.document === doc ? null : viewportGeometry.document;
+  useEffect(clearSectionOutline, [
+    doc?.version,
+    drawnInstead,
+    viewportGeometry.standIns,
+    sectionBodyKey
+  ]);
 
   /** Off → XY → XZ → YZ → off, each plane starting at the model's centre. */
   function cycleSectionView() {
@@ -5900,20 +5931,22 @@ export function App() {
   /** Write the exact section — never the display caps — as a DXF drawing. */
   async function handleExportSectionDxf() {
     const section = viewerSettings.sectionView;
-    const { document } = sectionSource;
-    if (!document || !section) {
+    const view = viewportGeometry;
+    if (!section || !view.document) {
       return;
     }
-    // The export applies its own gate: it writes every body the plane cuts
-    // or nothing, which is the state the DXF button is enabled for.
+    // Two gates, both the exporter's own: it writes every body the plane
+    // cuts or nothing, which is the state the DXF button is enabled for,
+    // and it takes the viewport's geometry, so a drawing of a model the
+    // user is not looking at is not a thing this call site can ask for.
     const outline = await import('./lib/sectionOutline');
     await outline.writeSectionDxf(
       geometry,
-      sectionSource,
+      view,
       section,
       sectionOutline,
       saveCadTextFile,
-      exportFileStem(document.name),
+      exportFileStem(view.document.name),
       setStatus
     );
   }
@@ -15592,8 +15625,7 @@ export function App() {
         >
           <ViewerShell
             projectId={doc.projectId}
-            bodies={viewerBodies}
-            parameterVisualPreview={visibleParameterPreview}
+            view={viewportGeometry}
             measurementAnnotations={measurementAnnotations}
             measurementCloudSync={[
               doc.projectId,
