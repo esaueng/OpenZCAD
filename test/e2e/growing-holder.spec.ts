@@ -94,7 +94,7 @@ async function expectExactReady(page: Page) {
   await expect(page.getByRole('contentinfo')).toContainText('warnings0');
 }
 
-test('parameterizes a fresh holder import: opening, mounting holes, edits, reload and export', async ({
+test('parameterizes a moved holder import: opening, mounting holes, edits, reload and export', async ({
   page
 }) => {
   test.setTimeout(420_000);
@@ -103,6 +103,18 @@ test('parameterizes a fresh holder import: opening, mounting holes, edits, reloa
     if (message.type() === 'error') consoleErrors.push(message.text());
   });
   await importHolder(page, 'synthetic-holder.step', 'Holder acceptance');
+
+  // Reproduce positioning an imported holder before requesting the verified
+  // recipe. Every source copy must receive the same ordered rigid placement.
+  for (const x of ['20', '-5']) {
+    await page.getByRole('button', { name: /^Move \(M\)/ }).click();
+    const move = page.getByRole('form', { name: 'Move controls' });
+    await move.getByLabel('Move X in mm').fill(x);
+    await move.getByLabel('Move Z in mm').fill('3');
+    await move.getByRole('button', { name: /Apply move/ }).click();
+    await expect(move).toBeHidden();
+    await expectExactReady(page);
+  }
 
   await openAssistant(page);
   await applyVerified(page, 'Parameterize the opening');

@@ -1,4 +1,8 @@
 export {
+  constantRigidTransform,
+  rigidImportedSource
+} from './imported-source-placement';
+export {
   archiveHistorySources,
   applyDocumentChanges,
   recordDocumentEdit,

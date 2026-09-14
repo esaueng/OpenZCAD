@@ -8,9 +8,10 @@
  * (the holes in letters). Closing the footprints gives the plain support;
  * extruding the original caps back gives the original raised material.
  */
-import type { PlanarEmbossSelection } from '@openzcad/shared';
+import type { PlanarEmbossSelection, Transform3D } from '@openzcad/shared';
 import { RemusKernel } from './remus-runtime';
 import { faceFingerprint } from './exact-witnesses';
+import { transformMatrix } from './exact-math';
 
 type Point = [number, number, number];
 interface Surface {
@@ -298,9 +299,32 @@ export function separatePlanarEmboss(
   kernel: RemusKernel,
   solid: number,
   selection: PlanarEmbossSelection,
-  part: 'base' | 'text'
+  part: 'base' | 'text',
+  sourcePlacement: readonly Transform3D[] = []
 ): number[] {
   const match = analyze(kernel, solid);
+  // Recognition requires exactly one group. Prove that group against the
+  // positioned source, then return its original exact geometry so the normal
+  // Move history places it once, without an inverse-transform round trip.
+  let positioned = solid;
+  for (const transform of sourcePlacement) {
+    if (
+      ![
+        transform.translation.x,
+        transform.translation.y,
+        transform.translation.z,
+        transform.rotationDeg.x,
+        transform.rotationDeg.y,
+        transform.rotationDeg.z
+      ].every((value) => typeof value === 'number' && Number.isFinite(value))
+    )
+      throw new Error('Lettering source placement must be fixed and rigid.');
+    positioned = kernel.copyAndTransformSolid(
+      positioned,
+      transformMatrix(transform.translation, transform.rotationDeg)
+    );
+  }
+  const measured = sourcePlacement.length ? analyze(kernel, positioned) : match;
   const key = (s: PlanarEmbossSelection) =>
     JSON.stringify([
       s.supportFaceHash,
@@ -316,7 +340,7 @@ export function separatePlanarEmboss(
       s.bounds.max.y,
       s.bounds.max.z
     ]);
-  if (!match || key(match.selection) !== key(selection))
+  if (!match || !measured || key(measured.selection) !== key(selection))
     throw new Error(
       'The raised lettering no longer matches its measured source. Re-import and request a fresh proposal.'
     );
