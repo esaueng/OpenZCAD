@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { MESH_IMPORT_POLICIES } from '@openzcad/kernel-adapter';
+import { MESH_IMPORT_POLICIES } from '@openzcad/kernel-adapter/mesh-import-formats';
 
 import { importMeshFileInDisposableWorker } from './meshImportWorkerClient';
 import type {
