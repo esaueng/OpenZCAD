@@ -622,6 +622,49 @@ describe('mesh file imports', { timeout: 30_000 }, () => {
     });
   });
 
+  /**
+   * A 3MF whose model part never closes a tag is refused, not accumulated.
+   *
+   * The scan carries whatever trails a chunk's last `>` into the next chunk,
+   * and rescans it there. Uncapped, a model part that withholds a `>` makes
+   * that carry the whole part and the rescan quadratic: measured before the
+   * cap, 4 MB of tag took 221 ms, 8 MB 878 ms and 16 MB 3,442 ms,
+   * from Zip packages under 17 KB — and the scan's own 256 MB ceiling was
+   * reachable from a file of a few hundred KB, roughly seventeen minutes of a
+   * worker that nothing can cancel.
+   */
+  describe('a 3MF model part that will not close a tag', () => {
+    it('reads a long but closed tag, which is a file it must not refuse', async () => {
+      const mesh = await importMeshFile(
+        '3mf',
+        threeMfFixture({ namePadding: 64 * 1024 }),
+        'mm'
+      );
+
+      expect(mesh.triangleCount).toBe(FIXTURE_BOX_TRIANGLES);
+      expect(meshVolume(mesh)).toBeCloseTo(FIXTURE_BOX_VOLUME, 9);
+    });
+
+    it('refuses one that runs past the cap, in bounded time', async () => {
+      // 32 MB of attribute out of a 33 KB package. Deflated, because a stored
+      // one would be refused by the input ceiling rather than by the scan.
+      const hostile = await deflatedThreeMfFixture({
+        namePadding: 32 * 1024 * 1024
+      });
+      expect(hostile.byteLength).toBeLessThan(
+        MESH_IMPORT_POLICIES['3mf'].maxInputBytes
+      );
+
+      const started = performance.now();
+      await expect(importMeshFile('3mf', hostile, 'mm')).rejects.toThrow(
+        /runs more than \d+ characters without closing an XML tag/
+      );
+      // The quadratic rescan put this at roughly fourteen seconds before the
+      // cap; it is now the cost of the first 256 KB.
+      expect(performance.now() - started).toBeLessThan(3_000);
+    });
+  });
+
   it('refuses a file that is not the format it claims, by name', async () => {
     await expect(
       importMeshFile('ply', new TextEncoder().encode('not a ply file'), 'mm')
