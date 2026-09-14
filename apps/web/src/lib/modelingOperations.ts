@@ -81,10 +81,19 @@ export interface SolidOffsetFormState {
   distance: string;
 }
 
+/** A vector the user types as three expressions. */
+export interface VectorFormState {
+  x: string;
+  y: string;
+  z: string;
+}
+
 export interface LoftFormState {
   name: string;
   sectionIds: string[];
   mode: 'ruled' | 'smooth';
+  /** Null is the flat cap the loft has without an apex point. */
+  endPoint: VectorFormState | null;
 }
 
 export interface SweepFormState {
@@ -92,6 +101,8 @@ export interface SweepFormState {
   profileId: string;
   pathId: string;
   mode: 'standard' | 'smooth';
+  /** Empty is the rotation-minimizing frame, with no rail to track. */
+  guideId: string;
 }
 
 export interface HelicalSweepFormState {
@@ -202,6 +213,16 @@ const vectorText = (value: {
   z: String(value.z)
 });
 
+const vectorParam = (value: {
+  x: string;
+  y: string;
+  z: string;
+}): { x: ParamValue; y: ParamValue; z: ParamValue } => ({
+  x: coerceParamValue(value.x),
+  y: coerceParamValue(value.y),
+  z: coerceParamValue(value.z)
+});
+
 function sameEntitySet(a: readonly string[], b: readonly string[]): boolean {
   const sortedA = [...a].sort();
   const sortedB = [...b].sort();
@@ -303,18 +324,28 @@ export function modelingFeatureEditReferences(
       );
     savedSections.set(option.id, section);
   }
-  const path =
-    data.featureKind === 'sweep' ? resolvePathOption(data.path, paths) : null;
+  const savedPaths = new Map<string, SketchPathReference>();
+  if (data.featureKind === 'sweep') {
+    savedPaths.set(resolvePathOption(data.path, paths).id, data.path);
+    if (data.guide) {
+      const guide = resolvePathOption(data.guide, paths);
+      if (savedPaths.has(guide.id)) {
+        throw new Error(
+          'The saved guide rail resolves to the same path as the sweep. Repair the feature before editing.'
+        );
+      }
+      savedPaths.set(guide.id, data.guide);
+    }
+  }
   return {
     profiles: profiles.map((option) => ({
       ...option,
       section: savedSections.get(option.id) ?? option.section
     })),
-    paths: paths.map((option) =>
-      data.featureKind === 'sweep' && option.id === path?.id
-        ? { ...option, path: data.path }
-        : option
-    )
+    paths: paths.map((option) => {
+      const saved = savedPaths.get(option.id);
+      return saved ? { ...option, path: saved } : option;
+    })
   };
 }
 
@@ -341,7 +372,9 @@ export function modelingFormStateFromFeature(
           sectionIds: data.sections.map(
             (section) => resolveProfileOption(section, profiles).id
           ),
-          mode: data.mode
+          mode: data.mode,
+          endPoint:
+            data.endPoint === undefined ? null : vectorText(data.endPoint)
         }
       };
     case 'sweep':
@@ -351,7 +384,11 @@ export function modelingFormStateFromFeature(
           name,
           profileId: resolveProfileOption(data.profile, profiles).id,
           pathId: resolvePathOption(data.path, paths).id,
-          mode: data.mode
+          mode: data.mode,
+          guideId:
+            data.guide === undefined
+              ? ''
+              : resolvePathOption(data.guide, paths).id
         }
       };
     case 'helical-sweep':
@@ -456,15 +493,34 @@ export function modelingFeatureUpdate(
 ): FeatureUpdateInput | null {
   switch (submission.operation) {
     case 'loft': {
-      const { name, sections, mode } = submission.input;
-      return { featureId, name, data: { featureKind: 'loft', sections, mode } };
-    }
-    case 'sweep': {
-      const { name, profile, path, mode } = submission.input;
+      const { name, sections, mode, endPoint } = submission.input;
+      // An apex the user removed has to leave the feature, not linger: a
+      // patch skips undefined values, so absence is named in `clearData`.
       return {
         featureId,
         name,
-        data: { featureKind: 'sweep', profile, path, mode }
+        data: {
+          featureKind: 'loft',
+          sections,
+          mode,
+          ...(endPoint === undefined ? {} : { endPoint })
+        },
+        ...(endPoint === undefined ? { clearData: ['endPoint'] } : {})
+      };
+    }
+    case 'sweep': {
+      const { name, profile, path, mode, guide } = submission.input;
+      return {
+        featureId,
+        name,
+        data: {
+          featureKind: 'sweep',
+          profile,
+          path,
+          mode,
+          ...(guide === undefined ? {} : { guide })
+        },
+        ...(guide === undefined ? { clearData: ['guide'] } : {})
       };
     }
     case 'helical-sweep': {
@@ -730,15 +786,34 @@ export function modelingFormValidationReason(
 ): string | null {
   if (state.value.name.trim().length === 0) return 'Name is required.';
   switch (state.operation) {
-    case 'loft':
-      return state.value.sectionIds.length >= 2 &&
-        new Set(state.value.sectionIds).size === state.value.sectionIds.length
-        ? null
-        : 'Choose at least two unique profile sections.';
-    case 'sweep':
-      return state.value.profileId && state.value.pathId
-        ? null
-        : 'Choose a profile and a path.';
+    case 'loft': {
+      if (
+        state.value.sectionIds.length < 2 ||
+        new Set(state.value.sectionIds).size !== state.value.sectionIds.length
+      ) {
+        return 'Choose at least two unique profile sections.';
+      }
+      const apex = state.value.endPoint;
+      if (apex === null) return null;
+      if (!allExpressionsValid(scope, [apex.x, apex.y, apex.z])) {
+        return 'The loft apex point must be a valid expression.';
+      }
+      return state.value.mode === 'smooth'
+        ? 'A loft apex point needs Ruled mode: smooth section surfaces do not close against an apex.'
+        : null;
+    }
+    case 'sweep': {
+      if (!state.value.profileId || !state.value.pathId) {
+        return 'Choose a profile and a path.';
+      }
+      if (state.value.guideId === '') return null;
+      if (state.value.guideId === state.value.pathId) {
+        return 'The guide rail must be a different path from the sweep path.';
+      }
+      return state.value.mode === 'smooth'
+        ? 'A guide rail needs Standard surface mode: the guided sweep takes no surface-mode control.'
+        : null;
+    }
     case 'helical-sweep': {
       const expressions = [
         ...Object.values(state.value.axisOrigin),
@@ -932,7 +1007,10 @@ export function buildModelingOperationSubmission(
         sections: state.value.sectionIds.map((id) =>
           requireProfile(id, profileOptions)
         ),
-        mode: state.value.mode
+        mode: state.value.mode,
+        ...(state.value.endPoint === null
+          ? {}
+          : { endPoint: vectorParam(state.value.endPoint) })
       }
     };
   }
@@ -943,7 +1021,10 @@ export function buildModelingOperationSubmission(
         name,
         profile: requireProfile(state.value.profileId, profileOptions),
         path: requirePath(state.value.pathId, pathOptions),
-        mode: state.value.mode
+        mode: state.value.mode,
+        ...(state.value.guideId === ''
+          ? {}
+          : { guide: requirePath(state.value.guideId, pathOptions) })
       }
     };
   }

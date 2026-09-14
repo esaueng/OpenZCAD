@@ -14,9 +14,10 @@ import { plainRefusal } from './refusalLanguage';
  * plain words on the same pass, and kept as detail (`refusalLanguage.ts`).
  */
 export function splitRefusal(
-  text: string
-): Pick<CommandDiagnostic, 'message' | 'detail'> {
-  return plainRefusal(text);
+  text: string,
+  category?: string
+): Pick<CommandDiagnostic, 'message' | 'detail' | 'category'> {
+  return plainRefusal(text, category);
 }
 
 /** Returns a kernel warning attributed to one named feature, without its prefix. */
@@ -75,8 +76,30 @@ export function refusingWarning(
   featureWarnings?: readonly FeatureWarning[],
   featureId?: FeatureId
 ): string | null {
+  return (
+    refusingWarningDetail(featureName, warnings, featureWarnings, featureId)
+      ?.reason ?? null
+  );
+}
+
+/**
+ * The refusing warning with the kernel's classification beside it.
+ *
+ * The record already holds the category the adapter read off the kernel's
+ * typed result, so the card can be specific about the cause without the
+ * presenter matching the sentence. A rebuild that predates the channel — or
+ * a refusal the kernel did not categorise — carries no category, and the copy
+ * falls back exactly as it did.
+ */
+export function refusingWarningDetail(
+  featureName: string,
+  warnings: readonly string[],
+  featureWarnings?: readonly FeatureWarning[],
+  featureId?: FeatureId
+): { reason: string; category?: string } | null {
   if (!featureWarnings) {
-    return warningForFeature(featureName, warnings);
+    const reason = warningForFeature(featureName, warnings);
+    return reason === null ? null : { reason };
   }
   const failure = featureWarnings.find(
     (entry) =>
@@ -86,10 +109,14 @@ export function refusingWarning(
         : entry.featureName === featureName)
   );
   if (failure) {
-    return (
-      failure.message.replace(/^Feature "[^"]+":\s*/, '').trim() ||
-      'This operation does not produce valid geometry.'
-    );
+    return {
+      reason:
+        failure.message.replace(/^Feature "[^"]+":\s*/, '').trim() ||
+        'This operation does not produce valid geometry.',
+      ...(failure.kernelRefusal
+        ? { category: failure.kernelRefusal.category }
+        : {})
+    };
   }
   return null;
 }
@@ -105,7 +132,7 @@ export function refusingWarning(
 export function validatedFeatureRejection(
   input: ValidatedFeatureVerdictInput
 ): CommandDiagnostic | null {
-  const warning = refusingWarning(
+  const warning = refusingWarningDetail(
     input.featureName,
     input.warnings,
     input.featureWarnings,
@@ -113,7 +140,7 @@ export function validatedFeatureRejection(
   );
   if (warning) {
     return {
-      ...splitRefusal(warning),
+      ...splitRefusal(warning.reason, warning.category),
       ...(input.featureId
         ? {
             culprit: {
