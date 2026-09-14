@@ -1,4 +1,8 @@
 export {
+  constantRigidTransform,
+  rigidImportedSource
+} from './imported-source-placement';
+export {
   archiveHistorySources,
   applyDocumentChanges,
   recordDocumentEdit,
@@ -281,6 +285,8 @@ export interface LoftInput {
   name: string;
   sections: SketchSectionReference[];
   mode: 'ruled' | 'smooth';
+  /** Apex point closing the loft after its last section; omitted by default. */
+  endPoint?: ParametricVector3;
   ids?: BodyFeatureIds;
 }
 
@@ -289,6 +295,8 @@ export interface SweepInput {
   profile: SketchSectionReference;
   path: SketchPathReference;
   mode: 'standard' | 'smooth';
+  /** Rail the profile's up-vector tracks along the path; omitted by default. */
+  guide?: SketchPathReference;
   ids?: BodyFeatureIds;
 }
 
@@ -1632,7 +1640,12 @@ export function loftSections(
     {
       featureKind: 'loft',
       sections: deepClone(input.sections),
-      mode: input.mode
+      mode: input.mode,
+      // Written only when asked for. An absent apex point is a flat cap, so a
+      // loft stays byte-identical to one authored before apex points existed.
+      ...(input.endPoint === undefined
+        ? {}
+        : { endPoint: deepClone(input.endPoint) })
     },
     input.ids
   );
@@ -1650,7 +1663,10 @@ export function sweepProfile(
       featureKind: 'sweep',
       profile: deepClone(input.profile),
       path: deepClone(input.path),
-      mode: input.mode
+      mode: input.mode,
+      // Written only when asked for; an absent rail is the rotation-minimizing
+      // frame every sweep authored before guide rails existed swept with.
+      ...(input.guide === undefined ? {} : { guide: deepClone(input.guide) })
     },
     input.ids
   );
@@ -2668,8 +2684,8 @@ const FEATURE_DATA_KEYS: Record<FeatureKind, readonly string[]> = {
     'profiles'
   ],
   revolve: ['sketchId', 'axis', 'angleDeg'],
-  loft: ['sections', 'mode'],
-  sweep: ['profile', 'path', 'mode'],
+  loft: ['sections', 'mode', 'endPoint'],
+  sweep: ['profile', 'path', 'mode', 'guide'],
   'helical-sweep': [
     'profile',
     'axisOrigin',
@@ -2763,13 +2779,16 @@ const FEATURE_DATA_KEYS: Record<FeatureKind, readonly string[]> = {
  * Keys `FeatureUpdateInput.clearData` may remove, per feature kind.
  *
  * Every entry is an optional field whose absence is a distinct, buildable
- * state — never one a builder reads unconditionally. Kinds with no clearable
- * field are simply absent, so naming a key on one of those is rejected the
- * same way an unknown key is.
+ * state — a loft with no apex point, a sweep with no guide rail, a fillet
+ * with no end radius — never one a builder reads unconditionally. Kinds with
+ * no clearable field are simply absent, so naming a key on one of those is
+ * rejected the same way an unknown key is.
  */
 const FEATURE_DATA_CLEARABLE_KEYS: Partial<
   Record<FeatureKind, readonly string[]>
 > = {
+  loft: ['endPoint'],
+  sweep: ['guide'],
   fillet: ['endRadius', 'radiusLaw'],
   chamfer: ['angleDeg', 'distance2']
 };
