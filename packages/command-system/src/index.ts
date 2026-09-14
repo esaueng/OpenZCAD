@@ -819,6 +819,21 @@ function validateModelingFeatureUpdate(
       if (!pathSketch || feature.data.path.entityIds.length === 0) {
         throw new Error('Sweep path sketch is unavailable or empty.');
       }
+      // A guide rail is one more sketch the sweep depends on, so an edit has
+      // to be held to the same checks the path is.
+      const guide = feature.data.guide;
+      if (guide) {
+        const guideSketch = findSketch(preview, guide.sketchId);
+        if (!guideSketch || guide.entityIds.length === 0) {
+          throw new Error('Sweep guide rail sketch is unavailable or empty.');
+        }
+        const guideObjects = new Set(guideSketch.objectIds);
+        if (guide.entityIds.some((id) => !guideObjects.has(id))) {
+          throw new Error(
+            'Sweep guide rail references a missing sketch entity.'
+          );
+        }
+      }
       break;
     }
     case 'helical-sweep':

@@ -467,6 +467,79 @@ describe('assistant auto-parameterization', () => {
     );
   });
 
+  it('reaches a guided sweep\u2019s rail sketch when scoping to its body', () => {
+    // A guide rail is one of the sketches the sweep is built from, so the
+    // backwards history walk has to reach it; leaving it out silently drops
+    // the rail's dimensions from the proposal. The rail here is a circle
+    // because line and arc coordinates are deliberately never proposed, so a
+    // circle is the only rail shape whose dimension is observable at all.
+    const manager = new CommandManager(
+      createProjectDocument('Guided scope', toUserId('user_auto_guided'))
+    );
+    manager.execute(
+      commandFactories.addSketch({
+        name: 'Profile',
+        plane: 'XY',
+        offset: 0,
+        object: { objectKind: 'circle', radius: 2, centerX: 0, centerY: 0 }
+      })
+    );
+    manager.execute(
+      commandFactories.addSketch({
+        name: 'Path',
+        plane: 'XZ',
+        offset: 0,
+        object: { objectKind: 'line', x1: 0, y1: 0, x2: 0, y2: 20 }
+      })
+    );
+    manager.execute(
+      commandFactories.addSketch({
+        name: 'Rail',
+        plane: 'XZ',
+        offset: 10,
+        object: { objectKind: 'circle', radius: 7, centerX: 0, centerY: 0 }
+      })
+    );
+    const [profileSketchId, pathSketchId, railSketchId] =
+      manager.document.sketchOrder;
+    const entityIds = (sketchId: typeof pathSketchId) =>
+      findSketch(manager.document, sketchId!)!.objectIds;
+    manager.execute(
+      commandFactories.sweepProfile({
+        name: 'Guided sweep',
+        profile: {
+          sketchId: profileSketchId!,
+          profile: {
+            profileId: 'profile_1',
+            regionFingerprint: 1,
+            samplePoint: { x: 0, y: 0 },
+            sourceArea: 12.57,
+            sourceEntityIds: entityIds(profileSketchId)
+          }
+        },
+        path: { sketchId: pathSketchId!, entityIds: entityIds(pathSketchId) },
+        mode: 'standard',
+        guide: { sketchId: railSketchId!, entityIds: entityIds(railSketchId) }
+      })
+    );
+
+    const proposal = createAutoParameterizeProposal(manager.document, {
+      featureIds: [],
+      bodyIds: [manager.document.bodyOrder[0]!],
+      topologies: []
+    });
+    expect(proposal?.operations).toContainEqual({
+      kind: 'set_parameter',
+      name: 'rail_circle_1_radius',
+      expression: '7'
+    });
+    expect(proposal?.operations).toContainEqual({
+      kind: 'set_parameter',
+      name: 'profile_circle_1_radius',
+      expression: '2'
+    });
+  });
+
   it('creates an identity-safe exact parameter binding for an imported through-hole', () => {
     const imported = importStepBody(
       createProjectDocument('Imported tube', toUserId('user_auto_step')),
