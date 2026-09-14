@@ -487,10 +487,15 @@ export interface ExactKernelAdapter {
     sketchId: SketchId
   ): Promise<SketchSolveOutcome>;
   /**
-   * The exact, kernel-computed cross-section of the visible bodies at one
-   * plane — section CURVES, not the viewport's display caps. Refusals are
-   * reported per body rather than thrown: a plane that cuts one body and
-   * misses another is an ordinary section, not a failure.
+   * The exact, kernel-computed cross-section at one plane — section CURVES,
+   * not the viewport's display caps. Refusals are reported per body rather
+   * than thrown: a plane that cuts one body and misses another is an
+   * ordinary section, not a failure.
+   *
+   * `bodyIds` names exactly what to section. Omitting it falls back to the
+   * document's own visibility, which is NOT what a viewport is showing —
+   * hiding or isolating a body is device-local view state the adapter
+   * cannot see. A caller that has that state must pass its own list.
    */
   sectionOutline(
     document: ProjectDocument,
@@ -501,6 +506,11 @@ export interface ExactKernelAdapter {
    * The same exact section written as a DXF R12 drawing in millimetres.
    * Fails closed: a body the plane cuts but the kernel cannot section
    * refuses the whole export rather than quietly dropping a region.
+   *
+   * `bodyIds` carries the same meaning as on `sectionOutline`, and callers
+   * that draw a section on screen should pass the same list to both — a
+   * drawing of a different set of bodies from the one on screen is a
+   * drawing of something the user never saw.
    */
   exportSectionDxf(
     document: ProjectDocument,
@@ -1677,10 +1687,15 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
   }
 
   /**
-   * The bodies a section applies to when the caller names none: what the
-   * viewport is showing. A body consumed by a later boolean still has a
+   * The bodies a section applies to when the caller names none: every body
+   * the build produced, minus the ones a parameter hides and the ones a
+   * later boolean consumed. A body consumed by a later boolean still has a
    * shape in the build — sectioning those too would draw the pre-boolean
    * blank straight through the part that replaced it.
+   *
+   * This is the DOCUMENT's visibility, not a viewport's. `Hide Body` and
+   * `Isolate` write device-local view state that never reaches the
+   * document, so a caller with a viewport must name its own bodies.
    */
   private sectionableBodyIds(
     build: ExactBuildResult,

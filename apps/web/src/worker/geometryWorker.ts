@@ -65,6 +65,13 @@ export type GeometryWorkerRequest =
       requestId: string;
       document: ProjectDocument;
       plane: ExactSectionPlane;
+      /**
+       * The bodies to section. The caller names them because hiding and
+       * isolating are device-local view state the document does not carry;
+       * omitted, the adapter falls back to the document's own visibility
+       * and would section a body the viewport is not showing.
+       */
+      bodyIds?: BodyId[];
     }
   | {
       type: 'mesh-quality';
@@ -362,7 +369,11 @@ async function execute(job: GeometryWorkerJob): Promise<void> {
         return;
       }
       if (request.type === 'section') {
-        const report = await exact.sectionOutline(document, request.plane);
+        const report = await exact.sectionOutline(
+          document,
+          request.plane,
+          request.bodyIds
+        );
         post({
           type: 'section',
           ok: true,
@@ -392,7 +403,14 @@ async function execute(job: GeometryWorkerJob): Promise<void> {
           throw new Error('DXF export needs a face selection or a section plane.');
         }
         const text = request.section
-          ? await exact.exportSectionDxf(document, request.section)
+          ? await exact.exportSectionDxf(
+              document,
+              request.section,
+              // Same bodies as the section on screen. An empty selection
+              // means the caller has nothing to narrow it by, so the
+              // adapter's own document visibility stands.
+              request.bodyIds.length > 0 ? request.bodyIds : undefined
+            )
           : await exact.exportFaceDxf(document, request.face!);
         post({
           type: 'export',

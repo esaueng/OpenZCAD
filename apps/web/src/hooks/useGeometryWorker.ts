@@ -149,10 +149,15 @@ export interface GeometryWorkerApi {
   /**
    * The exact, kernel-computed section at one plane — section curves, not the
    * viewport's clipped preview. Asked for when the plane comes to rest.
+   *
+   * `bodyIds` is the viewport's own list of visible bodies. It is not
+   * optional in practice: the document does not carry hide/isolate, so
+   * leaving it out sections bodies that are not on screen.
    */
   sectionOutline(
     document: ProjectDocument,
-    plane: ExactSectionPlane
+    plane: ExactSectionPlane,
+    bodyIds: BodyId[]
   ): Promise<SectionOutlineReport>;
   /**
    * Solves one sketch's persisted constraints via the kernel's GCS and
@@ -639,7 +644,7 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
         });
       });
     },
-    sectionOutline(document, plane) {
+    sectionOutline(document, plane, bodyIds) {
       const worker = workerRef.current;
       if (!worker) {
         return Promise.reject(new Error('Geometry worker is unavailable.'));
@@ -652,7 +657,8 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
           type: 'section',
           requestId,
           document: documentForWorker(document),
-          plane
+          plane,
+          bodyIds
         });
       });
     },
