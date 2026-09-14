@@ -16,6 +16,13 @@ wired up, both additive to the document schema:
    path with the profile's up-vector instead of holding the kernel's
    rotation-minimizing frame. Absent means exactly today's geometry.
 
+A second round on this branch fixed three defects an independent verifier
+found by reading the diff and running the kernel: the apex guard was
+fail-open on which side of the section plane the apex sat (below), the guide
+rail was missing from every place that enumerates a sweep's sketch
+dependencies (below), and a Smooth sweep with a rail was resurfaced silently
+rather than refused (below). Each has regression coverage.
+
 Both are exposed in the existing Loft and Sweep editors from PR #314 (a
 checkbox plus the shared `VectorFields` for the apex; a "Guide rail" select
 that defaults to "None — follow the path" for the rail), and both round trip
@@ -61,10 +68,31 @@ closed or per-section option; `{"startTangent":…}`, `{"twist":…}` and
 byte-for-byte equal in volume to `loft()`, and `{"ruled":false}` to
 `loftSmooth()`.
 
-Because the kernel is permissive, all validation is on our side: the builder
+Because the kernel is permissive, all validation is on our side. The builder
 resolves the apex through `resolveParametricPoint`, checks the coordinates are
-finite, and refuses an apex within 1e-6 mm of its section's plane (the kernel
-takes that apex and quietly returns the unapexed loft).
+finite, and then proves the apex actually *closes* the section run with a
+**signed** side test: the apex has to lie on the far side of the closing
+section's plane from the section before it. The "side the rest of the loft is
+on" is measured, not assumed — it is the kernel-measured centroid of the
+already-built face of the second-to-last section (`planarFaceCentroid`), with
+that section's sketch-plane origin as the fallback.
+
+Two failures fall out of that one test:
+
+- an apex *on* the closing plane (standoff below 1e-6 mm) — the kernel takes
+  it and quietly returns the unapexed loft;
+- an apex on the **same side** as the rest of the loft — anywhere between the
+  sections, or beyond the far end. This one is the dangerous case and it was a
+  fail-open in the first round of this branch: measured on 4×4 at z=0 and
+  8×8 at z=10 with `endPoint` z=5, `syncDocument` returned `warnings: []` and
+  a body of volume **266.667**, i.e. *less* than the 373.333 the same loft has
+  with no apex at all. The last ruled band had folded back through the body,
+  the apex was buried out of sight so the viewport looked unchanged, and
+  `validateSolid` reported nothing. A bare `Math.abs` standoff cannot see it.
+
+The test is a side test, not a "higher z" test: reverse the section order and
+an apex *below* both sections is the correct one, and builds (volume 400,
+`bbox.min.z` −5). Both directions are covered.
 
 ## Deliberate limits
 
@@ -84,9 +112,14 @@ takes that apex and quietly returns the unapexed loft).
   splits an arc into quarter-turn pieces, so a path or rail wider than a
   quarter turn, or made of several entities, is refused by name rather than
   swept unguided. Covered by a test.
-- **Surface mode is inert under a guide rail.** `sweepWithOptions` takes a
-  segment count (24 standard / 64 smooth); `guidedSweep` takes no such
-  argument. The form says so in a note when a rail is selected.
+- **Surface mode and a guide rail are refused together, not silently
+  reconciled.** `sweepWithOptions` takes a segment count (24 standard / 64
+  smooth); `guidedSweep` takes no segment count and no surfacing argument at
+  all. Rather than rebuild a saved Smooth sweep at the kernel's default
+  surfacing while the feature still reads "Smooth", the adapter refuses the
+  combination by name — the same shape as the loft apex + Smooth refusal —
+  and `modelingFormValidationReason` says so before the edit can be saved. The
+  stored mode is untouched, so clearing the rail restores it.
 - **`pipe` and `multiSectionSweep` are not adopted.** `pipe` was probed and
   works (a circle profile along a straight NURBS path measured the exact
   analytic volume), but it is a strictly weaker `sweepWithOptions` for what
@@ -144,25 +177,59 @@ compare `tessellateSolid` triangle count and summed signed volume against
 - `faceArea(face)` needs a deflection argument (`faceArea(face, 0.001)`); the
   one-argument form throws "deflection must be finite, got NaN".
 
+## A guide rail is a sketch dependency everywhere, not only in the builder
+
+The first round added `sweep.guide` to the schema and the builder but did not
+register it in the places that enumerate which sketches a sweep depends on.
+The consequence was a real fail-open: `affectedFeatureTargets` tested only
+`data.profile.sketchId` and `data.path.sketchId`, so editing a rail sketch
+produced no targets, `checkSketchEdit` returned at `if (!targets.length)`
+without deriving, and the edit was saved unguarded — the sweep's body then
+vanished on the next rebuild with "A sweep guide rail must be a single curve,
+but this rail resolves to 2 curves". The identical edit to the *path* sketch
+was refused up front. Five sites now read the rail:
+
+| Site | What it was missing |
+| --- | --- |
+| `apps/web/src/lib/affectedFeatureTargets.ts` | the pre-save downstream guard for a rail-sketch edit |
+| `apps/web/src/lib/featureHistory.ts` | the rail as a parent — delete toast under-counted dependents, history panel showed no link |
+| `packages/ai-contracts/src/auto-parameterize.ts` | the rail sketch in a guided sweep's feature scope |
+| `packages/command-system/src/index.ts` (`validateModelingFeatureUpdate`) | an *edit* could set a rail pointing at a missing sketch or entity; only creation was checked |
+| `apps/web/src/App.tsx` (`consumedSketchIds`) | a rail sketch stayed visible as if nothing consumed it |
+
 ## Check results
 
-Run from the worktree root, in order:
+Run from the worktree root, in order. These are the actual final lines:
 
 ```
-pnpm lint              ✖ 19 problems (0 errors, 19 warnings)   [exit 0]
-pnpm typecheck         clean, no output                        [exit 0]
-pnpm test              Test Files 156 passed (156)
-                       Tests 1185 passed (1185)
-pnpm test:parity-corpus Test Files 7 passed (7)
-                       Tests 174 passed | 1 skipped (175)
+pnpm lint               ✖ 19 problems (0 errors, 19 warnings)      [exit 0]
+pnpm typecheck          clean, no output                           [exit 0]
+pnpm test               (root vitest)
+                        Test Files  241 passed | 2 skipped (243)
+                        Tests  2500 passed | 4 skipped (2504)
+                        (web vitest)
+                        Test Files  156 passed (156)
+                        Tests  1188 passed (1188)
+pnpm test:parity-corpus Test Files  7 passed (7)
+                        Tests  174 passed | 1 skipped (175)
+pnpm build              ✓ built; report-bundle-sizes --check:
+                        "warnings": [], "failures": []
 ```
 
-Baseline on `origin/main` was 156 files / 1182 tests and parity 174 / 1
-skipped, so this adds tests and loses none. `node scripts/check-css-classes.mjs`
-also passes (275 files against 811 classes); no new CSS class names were
-introduced — the apex checkbox and the rail select reuse `.field` and
-`.muted`. `pnpm test:e2e` and the desktop workflow were not run, per the
-briefing.
+`pnpm test` runs **both** vitest projects; the earlier revision of this file
+quoted only the web block, which understated the work since every new kernel
+test lives in the root project. Baseline on `origin/main` is lint 0 errors /
+19 warnings, root 241 files / 2489 tests, web 156 files / 1182 tests, parity
+174 / 1 skipped. The 4 root skips are all environment-gated and unrelated to
+this branch: `test/hammer-holder-growing`, `-imported`, `-measurement` and
+`test/reconstruction-measurement` are `it.skipIf(!process.env.OPENZCAD_HAMMER_STEP)`,
+and that STEP fixture is not present here. The 2495 root tests the verifier
+measured on the first round plus the 5 added in this one give the 2500 above.
+
+`node scripts/check-css-classes.mjs` also passes (275 files against 811
+classes); no new CSS class names were introduced — the apex checkbox and the
+rail select reuse `.field` and `.muted`. `pnpm test:e2e` and the desktop
+workflow were not run, per the briefing.
 
 ## Regression coverage added
 
@@ -173,12 +240,31 @@ briefing.
   - loft with `endPoint` at z=15 over an 8×8 section: volume 480 (the analytic
     frustum plus one 64×5/3 pyramid) and `bbox.max.z` = 15;
   - apex on the section plane refused by name;
+  - **apex on the same side as the rest of the loft** (z=5, between the
+    sections, and z=−5, beyond the far end) refused by name — the fail-open
+    that produced a silent 266.667 body;
+  - **a descending section run closed to an apex below it** builds: volume
+    400, `bbox.min.z` −5, proving the guard tests a side and not a direction;
   - apex in smooth mode refused by name;
   - sweep with no guide: data keys exactly `featureKind, profile, path, mode`,
     volume 160, bbox 4 mm on x and 2 mm on y;
   - same sweep with a rail offset along y: volume still 160, bbox now 2 mm on
     x and 4 mm on y — the quarter turn the rail is for;
-  - a half-turn arc rail refused by name ("resolves to 2 curves").
+  - a half-turn arc rail refused by name ("resolves to 2 curves");
+  - **a rail on a Smooth sweep refused by name** instead of being resurfaced;
+  - **an edit that sets a rail** with an empty entity list, or with entity ids
+    belonging to another sketch, refused by `validateModelingFeatureUpdate`;
+    the well-formed rail edit is asserted not to throw.
+- `apps/web/src/lib/affectedFeatureTargets.test.ts` — a guided sweep is a
+  target of an edit to its rail sketch. Verified to fail against the
+  unregistered version of the walk before the fix was kept.
+- `apps/web/src/lib/featureHistory.test.ts` — the rail sketch feature is one
+  of the guided sweep's parents, and the sweep is downstream of it.
+- `test/auto-parameterize.test.ts` — scoping a proposal to a guided sweep's
+  body reaches the rail sketch, so its dimension is offered as a parameter.
+- `apps/web/src/lib/modelingOperations.test.ts` — every combination the form
+  has to name: rail + Smooth, rail == path, apex + Smooth, and the two legal
+  combinations that must stay `null`.
 - `test/document-core.test.ts` — `clearData` removes `endPoint` and refuses
   `sections`.
 - `apps/web/src/lib/modelingOperationsEdit.test.ts` — an apexed loft and a
@@ -201,6 +287,17 @@ briefing.
   is the first place in the adapter that reads `getNurbsCurveData`.
 - The guided sweep keeps ADR-011 hash-only lineage, so a rail change
   re-fingerprints downstream references exactly as a path change already does.
+- **The apex side test uses the second-to-last section only.** A run of three
+  or more sections whose middle section sits *past* the closing one is not
+  something the test can see; that loft is already self-intersecting before
+  any apex is added, and `validateGeneratedSolid` is what refuses it. The
+  fallback when the second-to-last section is coplanar with the closing one is
+  to skip the side test rather than guess a side — that loft is degenerate for
+  reasons of its own and the kernel and the solid validator own the refusal.
+- **`planarFaceCentroid` can return `null`** (it swallows kernel raises by
+  contract, for imported faces). The apex guard then falls back to the sketch
+  plane's origin, which is the weaker proxy the first round used. For every
+  loft authored in the app the centroid path is the one taken.
 
 ## Follow-ups
 
