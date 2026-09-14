@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createProjectDocument, importMeshBody } from '@openzcad/document-core';
 import { solidFromTriangles, solidVolume } from '@openzcad/geometry';
+import { parseStl, writeAsciiStl } from '@openzcad/io-stl';
 import {
   MESH_IMPORT_POLICIES,
   meshImportFormatForFileName,
@@ -20,6 +21,7 @@ import { InMemoryPersistenceService } from '@openzcad/persistence';
 import { toUserId, type ProjectDocument } from '@openzcad/shared';
 
 import {
+  coincidentBoxSoup,
   deflatedThreeMfFixture,
   FIXTURE_BOX,
   FIXTURE_BOX_TRIANGLES,
@@ -619,6 +621,73 @@ describe('mesh file imports', { timeout: 30_000 }, () => {
         plateVolume(THICK_PLATE_MM) * METRE_SCALE ** 3,
         15
       );
+    });
+  });
+
+  /**
+   * STL keeps its own parser, and the README says so.
+   *
+   * Every kernel-read format puts its triangles through the rebuild before
+   * returning them; the STL path parses in JS on the main thread and does
+   * not. That is a real carve-out, and the only honest options were to close
+   * it or to state it — routing STL through this path is a behaviour change
+   * on the one mesh path with e2e coverage, so it is stated. These cases hold
+   * the public claim and the behaviour to each other: extend the check to STL
+   * and the second one fails, asking for the README sentence back.
+   */
+  describe('the STL carve-out', () => {
+    const readmeMeshBullet = (): string => {
+      const readme = readFileSync(
+        fileURLToPath(new URL('../README.md', import.meta.url)),
+        'utf8'
+      );
+      const bullet = readme
+        .split('\n')
+        .find((line) => line.startsWith('- Imported meshes —'));
+      expect(bullet, 'README has a mesh import bullet').toBeDefined();
+      return bullet!;
+    };
+
+    it('imports a soup the sew refuses, and reports it only at rebuild', async () => {
+      const soup = coincidentBoxSoup();
+      const parsed = parseStl(
+        new TextEncoder().encode(
+          writeAsciiStl('coincident', [{ name: 'coincident', ...soup }])
+        ).buffer,
+        'coincident.stl'
+      );
+      // The parse succeeds and reports every triangle: this is the success
+      // message the user sees.
+      expect(parsed.triangleCount).toBe(FIXTURE_BOX_TRIANGLES * 2);
+
+      const body = await rebuiltBody(adapter, 'coincident stl', parsed);
+      expect(body.volume).toBeUndefined();
+      expect(body.warnings).toEqual([
+        expect.stringContaining('non-manifold mesh edge')
+      ]);
+    });
+
+    it('refuses the same triangles at import in a checked format', async () => {
+      // Byte-identical geometry, delivered as a 3MF: one object placed twice
+      // in the same spot. The check is what makes the difference.
+      await expect(
+        importMeshFile(
+          '3mf',
+          threeMfFixture({ items: [{ objectid: 1 }, { objectid: 1 }] }),
+          'mm'
+        )
+      ).rejects.toThrow(/could not be imported as a body: .*non-manifold/s);
+    });
+
+    it('is disclosed by the README rather than claimed away', () => {
+      const bullet = readmeMeshBullet();
+      // The claim has to be scoped to the formats that carry it...
+      expect(bullet).toContain('for every format but STL');
+      // ...and the exception has to say what actually happens instead.
+      expect(bullet).toContain('reports the kernel');
+      expect(bullet).toContain('when the body is rebuilt');
+      // The check's scale is part of the public claim too.
+      expect(bullet).toContain("at the open document's units");
     });
   });
 
