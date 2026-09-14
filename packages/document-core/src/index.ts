@@ -1376,19 +1376,47 @@ function validateSketchConstraint(
       break;
     }
     case 'tangent': {
-      // The kernel's tangency is the point-free line↔circle form; arcs would
-      // need a synthesized contact point and stay excluded.
+      // Two forms. Point-free line↔circle, which the kernel states as a
+      // center-to-line distance; and line↔arc, which the kernel states at a
+      // named contact point, so that form carries `at`.
       const a = requireConstrainableObject(document, sketch, data.a, [
         'line',
+        'arc',
         'circle'
       ]);
       const b = requireConstrainableObject(document, sketch, data.b, [
         'line',
+        'arc',
         'circle'
       ]);
       if ((a === 'line') === (b === 'line')) {
-        throw new Error('A tangent constraint pairs one line with one circle.');
+        throw new Error(
+          'A tangent constraint pairs one line with one circle or arc.'
+        );
       }
+      const arcSide = a === 'arc' ? data.a : b === 'arc' ? data.b : null;
+      if (arcSide === null) {
+        if (data.at) {
+          throw new Error(
+            'A line-to-circle tangent constraint has no contact point.'
+          );
+        }
+        break;
+      }
+      if (!data.at) {
+        throw new Error(
+          'A tangent constraint against an arc must name the arc point it touches.'
+        );
+      }
+      if (data.at.objectId !== arcSide) {
+        throw new Error(
+          'A tangent contact point must belong to the arc it constrains.'
+        );
+      }
+      if (data.at.point !== 'start' && data.at.point !== 'end') {
+        throw new Error('A tangent contact point is an arc start or end.');
+      }
+      requireConstraintPoint(document, sketch, data.at);
       break;
     }
     case 'concentric':
