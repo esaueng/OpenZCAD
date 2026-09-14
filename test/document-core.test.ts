@@ -2,13 +2,15 @@ import { describe, expect, it } from 'vitest';
 import {
   MAX_CHECKPOINT_REASON_LENGTH,
   isRevisionRecord,
-  type BodyId
+  type BodyId,
+  type SketchId
 } from '@openzcad/shared';
 import {
   addPrimitiveFeature,
   addSketchConstraint,
   cloneDocument,
   addSketchFeature,
+  loftSections,
   addSketchObjects,
   appendRevision,
   attachDerivedState,
@@ -470,6 +472,62 @@ describe('feature editing', () => {
         data: { targetBodyIds: [] }
       })
     ).toThrow(/not valid for a primitive feature/);
+  });
+
+  it('clears an optional data key a patch cannot reach, and only those', () => {
+    // `data` skips undefined values, so it can only ever set a key. Getting a
+    // loft back to its flat cap names the key in `clearData` instead.
+    let document = createProjectDocument('Edit', user());
+    const first = addSketchFeature(document, {
+      name: 'Lower',
+      plane: 'XY',
+      offset: 0,
+      object: { objectKind: 'circle', radius: 2, centerX: 0, centerY: 0 }
+    });
+    const second = addSketchFeature(first.document, {
+      name: 'Upper',
+      plane: 'XY',
+      offset: 10,
+      object: { objectKind: 'circle', radius: 3, centerX: 0, centerY: 0 }
+    });
+    const section = (sketchId: SketchId) => ({
+      sketchId,
+      profile: {
+        profileId: `profile_${sketchId}`,
+        regionFingerprint: 1,
+        samplePoint: { x: 0, y: 0 },
+        sourceArea: 4
+      }
+    });
+    document = loftSections(second.document, {
+      name: 'Loft',
+      sections: [section(first.sketchId), section(second.sketchId)],
+      mode: 'ruled',
+      endPoint: { x: 0, y: 0, z: 15 }
+    }).document;
+    const feature = listFeaturesInOrder(document).at(-1)!;
+    expect('endPoint' in feature.data).toBe(true);
+
+    const cleared = updateFeature(document, {
+      featureId: feature.featureId,
+      clearData: ['endPoint']
+    });
+    const after = listFeaturesInOrder(cleared).at(-1)!;
+    expect('endPoint' in after.data).toBe(false);
+    expect(after.data).toEqual({
+      featureKind: 'loft',
+      sections: feature.data.featureKind === 'loft' ? feature.data.sections : [],
+      mode: 'ruled'
+    });
+
+    // A required key is not clearable: removing it would leave a feature that
+    // cannot rebuild.
+    expect(() =>
+      updateFeature(document, {
+        featureId: feature.featureId,
+        clearData: ['sections']
+      })
+    ).toThrow(/cannot be cleared on a loft feature/);
   });
 
   it('updates sketch plane, offset, and profile', () => {

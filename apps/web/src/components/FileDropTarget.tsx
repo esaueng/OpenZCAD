@@ -97,7 +97,7 @@ export function FileDropTarget({ onDrop }: FileDropTargetProps) {
     >
       <div>
         <strong>Drop to import</strong>
-        <span>STEP, STL, or an .openzcad backup</span>
+        <span>STEP, a mesh file, or an .openzcad backup</span>
       </div>
     </div>
   );
