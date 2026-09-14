@@ -235,7 +235,7 @@ describe('advanced exact modeling features', { timeout: 30_000 }, () => {
       ],
       [
         -5,
-        /did not produce a valid closed solid\. The same sections do loft into a valid solid without the apex point/
+        /Loft to an apex point did not produce a valid closed solid\.[\s\S]*The same sections do loft into a valid solid without the apex point/
       ]
     ];
     for (const [z, message] of cases) {

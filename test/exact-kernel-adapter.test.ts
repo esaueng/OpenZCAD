@@ -1224,10 +1224,30 @@ describe('exact kernel adapter', { timeout: 30_000 }, () => {
     expect(front?.reference?.lineageName).toBe(
       'boolean.face.operand.0.primitive.box.face.y-min'
     );
-    // Edges are not carried through a boolean.
-    expect(
-      (body?.topology?.edges ?? []).every((edge) => edge.reference === undefined)
-    ).toBe(true);
+    // Edges the kernel's boolean evolution calls `preserved`, and whose exact
+    // witness is unchanged, now keep their operand's name (K05). Both plates
+    // stand clear of the fuse at one end, so the base's four bottom edges and
+    // the wall's four top edges survive; everything the fuse touched, and
+    // everything it declined to trace, stays hash-only.
+    const namedEdges = (body?.topology?.edges ?? [])
+      .map((edge) => edge.reference?.lineageName)
+      .filter((name): name is string => name !== undefined)
+      .sort();
+    expect(namedEdges).toEqual([
+      'boolean.edge.operand.0.primitive.box.edge.x.y-max.z-min',
+      'boolean.edge.operand.0.primitive.box.edge.x.y-min.z-min',
+      'boolean.edge.operand.0.primitive.box.edge.y.x-max.z-min',
+      'boolean.edge.operand.0.primitive.box.edge.y.x-min.z-min',
+      'boolean.edge.operand.1.primitive.box.edge.x.y-max.z-max',
+      'boolean.edge.operand.1.primitive.box.edge.x.y-min.z-max',
+      'boolean.edge.operand.1.primitive.box.edge.y.x-max.z-max',
+      'boolean.edge.operand.1.primitive.box.edge.y.x-min.z-max'
+    ]);
+    for (const edge of body?.topology?.edges ?? []) {
+      if (edge.reference) {
+        expect(edge.reference.currentHash).toBe(edge.hash);
+      }
+    }
 
     const step = await adapter.exportStep(document, [resultId]);
     await expect(adapter.inspectStep(step)).resolves.toMatchObject({
