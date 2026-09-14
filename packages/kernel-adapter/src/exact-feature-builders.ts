@@ -1497,7 +1497,8 @@ function buildEdgeModifierFeature(
         data.featureKind,
         size,
         result.partialRevolveBodies.has(data.targetBodyId),
-        reportedRefusal
+        reportedRefusal,
+        chamferAngleRadians
       )
     );
   }
