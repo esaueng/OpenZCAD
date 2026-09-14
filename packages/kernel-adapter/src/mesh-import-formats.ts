@@ -107,13 +107,28 @@ export function meshImportFormatForFileName(
   return null;
 }
 
-function megabytes(bytes: number): number {
-  return Math.round(bytes / MIB);
+/**
+ * Megabytes, with enough precision that a file just over a whole-megabyte
+ * ceiling does not print as the ceiling itself. Rounding both sides to whole
+ * megabytes made a 32.04 MB file read "limited to 32 MB; this file is 32 MB",
+ * which tells the user nothing and reads as a contradiction.
+ */
+function megabytes(bytes: number): string {
+  const value = bytes / MIB;
+  return Number.isInteger(value) ? String(value) : value.toFixed(2);
+}
+
+function grouped(bytes: number): string {
+  return String(bytes).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
 }
 
 /**
  * The refusal a file too large for its format gets, naming the ceiling and
  * what was offered. Raised from the file's declared size, so nothing is read.
+ *
+ * The exact byte count is spelled out as well, because two decimal places
+ * still collide for a file a few bytes over the line, and "how far over am I"
+ * is the only question this message has to answer.
  */
 export function meshImportTooLargeMessage(
   format: MeshImportFormat,
@@ -121,7 +136,8 @@ export function meshImportTooLargeMessage(
 ): string {
   const policy = MESH_IMPORT_POLICIES[format];
   return (
-    `${policy.label} import is limited to ${megabytes(policy.maxInputBytes)} MB; ` +
-    `this file is ${megabytes(bytes)} MB.`
+    `${policy.label} import is limited to ${megabytes(policy.maxInputBytes)} MB ` +
+    `(${grouped(policy.maxInputBytes)} bytes); this file is ` +
+    `${megabytes(bytes)} MB (${grouped(bytes)} bytes).`
   );
 }
