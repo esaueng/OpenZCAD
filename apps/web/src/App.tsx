@@ -4414,6 +4414,15 @@ export function App() {
     [liveBodyRepresentations, previewDoc, renderedRepresentations]
   );
   /**
+   * Bodies the viewer reported it drew away from their document pose, from
+   * the frame itself rather than from the mechanism that posed them. A Move
+   * gizmo translation, a face-resize drag and a stand-in's hiding all land
+   * here, and so does whatever is written next.
+   */
+  const [bodiesDrawnElsewhere, setBodiesDrawnElsewhere] = useState<
+    readonly string[]
+  >([]);
+  /**
    * What the viewport is drawing, as one value — the document, its bodies
    * that are on screen, and anything drawn over them that the document did
    * not build.
@@ -4422,8 +4431,11 @@ export function App() {
    * viewer's own props are read back out of it, so this is not a summary of
    * what is on screen: it IS what is on screen. The exact section takes its
    * source from it (`sectionSourceOf`) rather than working out the answer a
-   * second time, because the second answer has been wrong twice — once for
-   * a published preview document, once for a parameter edit nobody applied.
+   * second time, because the second answer has been wrong three times — for
+   * a published preview document, for a parameter edit nobody applied, and
+   * for a body the Move gizmo posed straight into the scene. The first two
+   * are declared here; the third could not be, which is why the viewer also
+   * reports what it actually drew.
    *
    * Hiding and isolating are device-local view state the document never
    * sees, so the bodies have to be carried with it: ask the kernel about a
@@ -4444,9 +4456,21 @@ export function App() {
       // bodies stay hidden and every other part keeps its exact geometry.
       standIns:
         parameterPreview?.filter((body) => !hiddenBodyIds.has(body.bodyId)) ??
-        null
+        null,
+      // Not declared by whatever posed them — observed by the viewer in the
+      // frame it drew. The Move gizmo poses a body's mesh with no state the
+      // workspace can see, and the next mechanism to do that need not
+      // announce itself either.
+      drawnElsewhere: bodiesDrawnElsewhere
     }),
-    [doc, previewDoc, viewerBodies, hiddenBodyIds, parameterPreview]
+    [
+      doc,
+      previewDoc,
+      viewerBodies,
+      hiddenBodyIds,
+      parameterPreview,
+      bodiesDrawnElsewhere
+    ]
   );
 
   const directEditableBodyIds = useMemo<string[]>(
@@ -5900,7 +5924,9 @@ export function App() {
   // Read off `viewportGeometry`, which is what is on screen, so a new source
   // of drawn geometry cannot appear without appearing here: a document drawn
   // in the live one's place arrives as `drawnInstead`, a stand-in drawn over
-  // it as `standIns`.
+  // it as `standIns`, and a body drawn anywhere but where the document built
+  // it as `drawnElsewhere` — that last one reported by the viewer from the
+  // frame, so it covers mechanisms that declare nothing at all.
   const sectionBodyKey = viewportGeometry.bodies
     .map((body) => body.bodyId)
     .join('|');
@@ -5917,6 +5943,7 @@ export function App() {
     doc?.version,
     drawnInstead,
     viewportGeometry.standIns,
+    viewportGeometry.drawnElsewhere,
     sectionBodyKey
   ]);
 
@@ -15744,6 +15771,7 @@ export function App() {
             onGeometryPresented={(ms) => {
               previewPresentationMs.current = ms;
             }}
+            onBodiesDrawnElsewhere={setBodiesDrawnElsewhere}
             onWheelDeviceLearned={handleWheelDeviceLearned}
             onMovePreviewChange={handleMovePreviewChange}
             moveValuesSetterRef={moveValuesSetterRef}

@@ -38,12 +38,14 @@ const document = { version: 7 } as unknown as ProjectDocument;
 function onScreen<S extends ViewportStandIn>(
   drawn: ProjectDocument | null,
   bodyIds: readonly BodyId[],
-  standIns: S[] | null = null
+  standIns: S[] | null = null,
+  drawnElsewhere: readonly string[] = []
 ): ViewportGeometry<S> {
   return {
     document: drawn,
     bodies: bodyIds.map((bodyId) => ({ bodyId }) as BodyRepresentation),
-    standIns
+    standIns,
+    drawnElsewhere
   };
 }
 
@@ -324,6 +326,100 @@ describe('a section is of the drawing, not of the document behind it', () => {
     expect(sectionOutlineFor(onScreen(document, bodies), exportable)).toBe(
       exportable
     );
+  });
+
+  it('has nothing to section while the viewer has a body posed elsewhere', async () => {
+    // The Move tool. Press it, type 10 into the Z field, and the box is
+    // drawn at z=10..16 while the document still builds it at z=0..6 — no
+    // drag, no Apply, and nothing in the workspace's own state says so. The
+    // viewer reports what it drew, which is the only place the divergence
+    // exists, and a plane at z=3 that now passes under the body cannot be
+    // called an exact section of it.
+    const sectionOutline = vi.fn(async () => report([region('body_a', 200)]));
+    const view = onScreen(document, [toBodyId('body_a')], null, ['body_a']);
+
+    expect(sectionSourceOf(view)).toEqual({
+      document: null,
+      bodyIds: [toBodyId('body_a')]
+    });
+    expect(
+      await resolveSectionOutline({ sectionOutline }, view, plane)
+    ).toEqual({ kind: 'clipping' });
+    expect(sectionOutline).not.toHaveBeenCalled();
+  });
+
+  it('takes a drawn section down when a body is posed out from under it', () => {
+    // The other half, the same as for a stand-in: a section computed a
+    // moment ago and still in state would keep drawing its 200 mm² of curves
+    // at z=3 in the empty space the body has left, with the rail calling
+    // that area exact.
+    expect(
+      sectionOutlineFor(
+        onScreen(document, [toBodyId('body_a')], null, ['body_a']),
+        exportable
+      )
+    ).toEqual({ kind: 'clipping' });
+  });
+
+  it('will not write a DXF of a body the viewer has posed elsewhere', async () => {
+    // The export gate is the same one reading of the same one value, so the
+    // button being shut and the drawing being refused cannot come apart —
+    // and a caller that skips the button is refused here too.
+    const exportModel = vi.fn(async () => ({ text: 'DXF' }));
+    const save = vi.fn(async () => true);
+    const announced: string[] = [];
+
+    await writeSectionDxf(
+      { exportModel } as never,
+      onScreen(document, [toBodyId('body_a')], null, ['body_a']),
+      plane,
+      exportable,
+      save,
+      'part',
+      (message: string) => announced.push(message)
+    );
+
+    expect(exportModel).not.toHaveBeenCalled();
+    expect(save).not.toHaveBeenCalled();
+    expect(announced).toEqual([]);
+  });
+
+  it('refuses a posed body whatever posed it', async () => {
+    // The report names bodies, never mechanisms, and nothing here asks how
+    // one came to be posed. A body drawn elsewhere by something written next
+    // year arrives as the same one string this rule already reads.
+    const sectionOutline = vi.fn(async () => report([region('body_a', 200)]));
+    const view = onScreen(
+      document,
+      [toBodyId('body_a'), toBodyId('body_b')],
+      null,
+      ['body_b']
+    );
+
+    expect(sectionSourceOf(view).document).toBeNull();
+    expect(
+      await resolveSectionOutline({ sectionOutline }, view, plane)
+    ).toEqual({ kind: 'clipping' });
+    expect(sectionOutline).not.toHaveBeenCalled();
+  });
+
+  it('sections the drawing again the moment the body is put back', async () => {
+    // Cancelling a Move restores the resting pose, the viewer reports an
+    // empty set, and the same rule that refused finds nothing posed.
+    const sectionOutline = vi.fn(async () => report([region('body_a', 200)]));
+    const bodies = [toBodyId('body_a')];
+
+    const state = await resolveSectionOutline(
+      { sectionOutline },
+      onScreen(document, bodies, null, []),
+      plane
+    );
+    expect(sectionOutline).toHaveBeenCalledWith(
+      document,
+      { origin: [0, 0, 3], normal: [0, 0, 1] },
+      bodies
+    );
+    expect(state.kind).toBe('exact');
   });
 
   it('sections the drawing again the moment the stand-in comes down', async () => {
