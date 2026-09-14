@@ -8,6 +8,10 @@ import type {
   ViewerSettings
 } from '@openzcad/viewport';
 import { AxisTriadIcon, DisplayModeIcon } from './ViewerRailIcons';
+import {
+  describeSectionOutline,
+  type SectionOutlineState
+} from '../lib/sectionOutline';
 import { DISPLAY_MODE_LABELS } from '../lib/displayMode';
 import { Tooltip } from './Tooltip';
 
@@ -31,18 +35,6 @@ function viewTitle(view: { id: StandardView; shortcut?: string }): string {
   return view.shortcut ? `${label} (${view.shortcut})` : label;
 }
 
-/**
- * What the viewport is showing for the active cut, which is two different
- * things: the clipped preview that keeps up with a drag, and the kernel's
- * exact section, which is the geometry the DXF export writes. The user is
- * told which one is on screen, because only one of them is a drawing.
- */
-export interface SectionOutlineStatus {
-  kind: 'clipping' | 'computing' | 'exact' | 'refused';
-  /** One line of detail: the cut area, or why there is no exact section. */
-  detail: string;
-}
-
 interface ViewerToolbarProps {
   settings: ViewerSettings;
   projection: ProjectionMode;
@@ -64,10 +56,18 @@ interface ViewerToolbarProps {
   onSectionCommit(): void;
   /** Writes the exact section as a DXF drawing. */
   onExportSectionDxf(): void;
-  sectionOutline: SectionOutlineStatus;
+  /**
+   * What the viewport is showing for the active cut, which is two different
+   * things: the clipped preview that keeps up with a drag, and the kernel's
+   * exact section, which is the geometry the DXF export writes. The user is
+   * told which one is on screen, because only one of them is a drawing.
+   */
+  sectionOutline: SectionOutlineState;
+  /** Document units, for the cut area this reports. */
+  units: string;
 }
 
-const SECTION_OUTLINE_LABELS: Record<SectionOutlineStatus['kind'], string> = {
+const SECTION_OUTLINE_LABELS: Record<SectionOutlineState['kind'], string> = {
   clipping: 'Clipping preview',
   computing: 'Computing section…',
   exact: 'Exact section',
@@ -104,7 +104,8 @@ export function ViewerToolbar({
   onSectionOffset,
   onSectionCommit,
   onExportSectionDxf,
-  sectionOutline
+  sectionOutline,
+  units
 }: ViewerToolbarProps) {
   const [viewsOpen, setViewsOpen] = useState(false);
   const anchorRef = useRef<HTMLDivElement | null>(null);
@@ -114,6 +115,7 @@ export function ViewerToolbar({
   const sectionLabel = settings.sectionView
     ? SECTION_PLANE_LABELS[settings.sectionView.plane]
     : 'off';
+  const sectionStatus = describeSectionOutline(sectionOutline, units);
 
   // Close on an outside pointer or Escape; Escape hands focus back to the
   // control that opened the flyout, so the rail stays keyboard-navigable.
@@ -246,14 +248,14 @@ export function ViewerToolbar({
               aria-label="Section plane offset"
             />
             <p
-              className={`rail-section-state is-${sectionOutline.kind}`}
+              className={`rail-section-state is-${sectionStatus.kind}`}
               role="status"
             >
               <span className="rail-section-state-kind">
-                {SECTION_OUTLINE_LABELS[sectionOutline.kind]}
+                {SECTION_OUTLINE_LABELS[sectionStatus.kind]}
               </span>
               <span className="rail-section-state-detail">
-                {sectionOutline.detail}
+                {sectionStatus.detail}
               </span>
             </p>
             <Tooltip
