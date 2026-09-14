@@ -52,7 +52,10 @@ import {
   exactCut,
   exactFuse
 } from './exact-boolean-refusal';
-import { requireValidSolid } from './kernel-validation';
+import {
+  requireValidSolid,
+  unifyAndRequireValidSolid
+} from './kernel-validation';
 import {
   ambiguousReferenceError,
   unresolvedReferenceError
@@ -290,12 +293,11 @@ export function resizeThroughHole(
       { cause: error }
     );
   }
-  kernel.unifyFaces(output);
-  if (kernel.validateSolid(output) !== 0) {
-    throw new Error(
-      `Resizing the through-hole to diameter ${diameter} does not produce a valid solid.`
-    );
-  }
+  unifyAndRequireValidSolid(
+    kernel,
+    output,
+    `Resizing the through-hole to diameter ${diameter} does not produce a valid solid.`
+  );
   // The kernel can clear its own gates and still hand back a degraded
   // result: a boolean that meets a coaxial cylindrical face may return the
   // untouched original, and the mesh fallback encloses the right space with
@@ -611,12 +613,11 @@ function fillImportedHole(
       { cause: error }
     );
   }
-  kernel.unifyFaces(filled);
-  if (kernel.validateSolid(filled) !== 0) {
-    throw new Error(
-      'Filling the imported hole before resizing did not produce a valid solid.'
-    );
-  }
+  unifyAndRequireValidSolid(
+    kernel,
+    filled,
+    'Filling the imported hole before resizing did not produce a valid solid.'
+  );
   if (kernel.getSolidFaces(filled).length >= facesBefore) {
     throw new Error(
       'This imported hole cannot be resized exactly: filling it would need an approximate operation.'
@@ -945,12 +946,11 @@ export function removeFaceFeature(
       { cause: error }
     );
   }
-  kernel.unifyFaces(output);
-  if (kernel.validateSolid(output) !== 0) {
-    throw new Error(
-      'Removing the selected face did not produce a valid solid.'
-    );
-  }
+  unifyAndRequireValidSolid(
+    kernel,
+    output,
+    'Removing the selected face did not produce a valid solid.'
+  );
   return output;
 }
 

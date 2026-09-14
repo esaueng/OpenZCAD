@@ -27,6 +27,7 @@ import { measureFaceGeometry } from './exact-measure';
 import { MEASUREMENT_DEFLECTION, faceWitnessOf } from './exact-witnesses';
 import { GEOMETRY_EPSILON } from './exact-math';
 import { requireValidSolid } from './kernel-validation';
+import { readKernelPayload } from './kernel-refusal';
 
 export /** Sewing gap for imported meshes, relative to the mesh's largest extent. */
 const MESH_SEW_TOLERANCE_RATIO = 1e-6;
@@ -283,12 +284,15 @@ export function importMeshSolid(kernel: RemusKernel, stlText: string): number {
 function unifySewnMesh(kernel: RemusKernel, sewn: number): number {
   const openShell = kernel.validateSolid(sewn) !== 0;
   try {
-    const healed = kernel.runHealPipeline(sewn, ['unify_same_domain']) as
-      string | { solid?: number };
-    const parsed = (
-      typeof healed === 'string' ? JSON.parse(healed) : healed
-    ) as { solid?: number };
-    return typeof parsed.solid === 'number' ? parsed.solid : sewn;
+    // `runHealPipeline` is declared `any` and hands back JSON text, like
+    // every other detailed reader on the pin. It goes through the same
+    // checked decoder, so a payload this adapter cannot read raises instead
+    // of quietly reading as "no solid" and returning the unmerged shell.
+    const healed = readKernelPayload(
+      kernel.runHealPipeline(sewn, ['unify_same_domain']),
+      'heal pipeline'
+    );
+    return typeof healed['solid'] === 'number' ? healed['solid'] : sewn;
   } catch (error) {
     if (openShell) {
       return sewn;
