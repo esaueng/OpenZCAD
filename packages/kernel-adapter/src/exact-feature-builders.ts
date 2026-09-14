@@ -68,6 +68,7 @@ import {
   axisDirection,
   cross,
   dot,
+  errorText,
   length,
   normalized,
   resolvePatternDirection,
@@ -98,6 +99,7 @@ import {
   deriveRemusBooleanCarrierLineage,
   deriveRemusPatternInstanceLineage,
   mergeRemusLineageStates,
+  type RemusLineageDiagnostic,
   type RemusLineageState
 } from './remus-lineage';
 
@@ -1499,14 +1501,6 @@ function buildEdgeModifierFeature(
  * has always published. `claims` is the kernel journal's face map for the
  * same slot, where the entry point journals its work.
  */
-/**
- * One patterned copy: what it contributed and the transform that made it.
- *
- * `solids` holds one entry per source solid in the source body's own order,
- * so the instances can be re-interleaved into the solid order this feature
- * has always published. `claims` is the kernel journal's face map for the
- * same slot, where the entry point journals its work.
- */
 interface PatternInstanceBuild {
   readonly instance: string;
   readonly matrix: Float64Array;
@@ -1869,6 +1863,17 @@ function circularPatternArm(
   };
 }
 
+/** Records a kernel refusal alongside whatever lineage the build published. */
+function withPatternDiagnostic(
+  state: RemusLineageState,
+  diagnostic: RemusLineageDiagnostic | null
+): RemusLineageState {
+  if (diagnostic) {
+    state.diagnostics.push(diagnostic);
+  }
+  return state;
+}
+
 function buildPatternFeature(
   ctx: FeatureBuildContext,
   feature: FeatureNode,
@@ -1953,16 +1958,44 @@ function buildPatternFeature(
   // interpenetrate, which this feature supports by fusing the copies itself,
   // so an overlapping pattern keeps the copy-and-fuse build. See
   // `patternInstancesMayOverlap`.
-  const perSource =
+  //
+  // The kernel arm can still refuse — the entry points reject arrangements
+  // they cannot fuse, and the compound layout `kernelPatternInstanceSolids`
+  // insists on is read-back behaviour of one pinned build. The build loop is
+  // not transactional, so an uncaught throw here would delete the patterned
+  // body from the viewport, the parts list and the STEP scope, where the copy
+  // path always produced one. So a refusal degrades to that copy build: the
+  // geometry is the same, the instance names are still derived from the
+  // transformed witnesses, and only the journal cross-check is lost. That loss
+  // is recorded as a diagnostic rather than absorbed silently.
+  const copyInstances = (): KernelPatternCopies[] =>
+    target.solids.map((solid) => ({
+      solids: matrices.map((matrix, instance) =>
+        instance === 0 ? solid : kernel.copyAndTransformSolid(solid, matrix)
+      ),
+      claims: null
+    }));
+  const kernelCopies =
     arm.kernelCopies &&
     !patternInstancesMayOverlap(kernel, target.solids, matrices)
-      ? target.solids.map(arm.kernelCopies)
-      : target.solids.map((solid) => ({
-          solids: matrices.map((matrix, instance) =>
-            instance === 0 ? solid : kernel.copyAndTransformSolid(solid, matrix)
-          ),
-          claims: null
-        }));
+      ? arm.kernelCopies
+      : null;
+  let declined: RemusLineageDiagnostic | null = null;
+  let perSource: KernelPatternCopies[];
+  if (kernelCopies) {
+    try {
+      perSource = target.solids.map(kernelCopies);
+    } catch (error) {
+      declined = {
+        code: 'pattern-kernel-declined',
+        operation: 'pattern',
+        message: `The kernel pattern entry point did not produce the instances, so the copy-and-transform build made them and the kernel journal was not consulted: ${errorText(error)}`
+      };
+      perSource = copyInstances();
+    }
+  } else {
+    perSource = copyInstances();
+  }
   const instances = patternInstances(arm, perSource);
   const solids = instances.flatMap((instance) => instance.solids);
   // Instances that interpenetrate have to become ONE solid before
@@ -2024,15 +2057,21 @@ function buildPatternFeature(
       solids: [fused],
       // The fuse rewrites the instance topology and reports no output
       // relation across itself, so the instance names cannot survive it.
-      lineage: remusHashOnlyLineage(
-        'pattern',
-        'Overlapping instances were fused into one solid, which publishes no face output relation.'
+      lineage: withPatternDiagnostic(
+        remusHashOnlyLineage(
+          'pattern',
+          'Overlapping instances were fused into one solid, which publishes no face output relation.'
+        ),
+        declined
       )
     });
   } else {
     result.shapes.set(feature.bodyId, {
       solids,
-      lineage: patternInstanceLineage(kernel, feature, target, instances)
+      lineage: withPatternDiagnostic(
+        patternInstanceLineage(kernel, feature, target, instances),
+        declined
+      )
     });
   }
   // Consumed only once a shape exists, which is what the other eight consume

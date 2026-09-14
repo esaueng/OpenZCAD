@@ -36,7 +36,8 @@ export type RemusLineageDiagnosticCode =
   | 'boolean-shared-carrier'
   | 'boolean-split-carrier'
   | 'pattern-instance-unverified'
-  | 'invalid-pattern-journal';
+  | 'invalid-pattern-journal'
+  | 'pattern-kernel-declined';
 
 export interface RemusLineageDiagnostic {
   readonly code: RemusLineageDiagnosticCode;
