@@ -882,3 +882,118 @@ export function planSketchEdit(
     }
   };
 }
+
+/**
+ * What the app hands the modify tools so they can drive one operation.
+ *
+ * The driver below lives here rather than in `App` for a budget reason as
+ * much as a design one: `App.tsx` is the entry chunk and has a few hundred
+ * spare bytes, while everything in this module is reached only through the
+ * lazily loaded sketch rail.
+ */
+export interface SketchEditHost {
+  setStatus(message: string): void;
+  setError(message: string | null): void;
+  setBusy(busy: boolean): void;
+  /** Resolve a stored dimension against the document's parameter scope. */
+  resolve: ResolveParam;
+  /** Take one more pick for the armed tool. */
+  addPick(objectId: string): void;
+  /** The picks are in: ask for the value and remember the sequence. */
+  askValue(
+    kind: SketchEditToolKind,
+    picks: string[],
+    label: string,
+    initial: string
+  ): void;
+  runOperation(operation: SketchPlanarOperation): Promise<SketchPlanarResult>;
+  /** Apply the commands as one undoable transaction; false if it was dropped. */
+  commit(
+    sketchId: SketchId,
+    commands: AnyCommand[],
+    label: string
+  ): Promise<boolean>;
+  describeFailure(error: unknown, fallback: string): string;
+}
+
+/** Route one viewport pick into the armed modify tool. */
+export function advanceSketchEdit(
+  host: SketchEditHost,
+  document: ProjectDocument,
+  sketch: SketchNode,
+  pending: { kind: SketchEditToolKind; picks: string[] },
+  objectId: string | null
+): void {
+  const outcome = advanceSketchEditPick(
+    document,
+    sketch,
+    pending.kind,
+    pending.picks,
+    objectId,
+    host.resolve
+  );
+  if (outcome.status === 'refuse') {
+    host.setStatus(outcome.reason);
+    return;
+  }
+  if (outcome.status === 'hint') {
+    host.setStatus(outcome.message);
+    return;
+  }
+  if (outcome.status === 'pick') {
+    host.addPick(objectId!);
+    host.setStatus(outcome.message);
+    return;
+  }
+  host.askValue(
+    pending.kind,
+    [...pending.picks, objectId!],
+    outcome.label,
+    String(outcome.initial)
+  );
+  host.setStatus(outcome.message);
+}
+
+/** Run one finished modify tool: ask the kernel, commit its answer. */
+export async function runSketchEdit(
+  host: SketchEditHost,
+  document: ProjectDocument,
+  sketch: SketchNode,
+  kind: SketchEditToolKind,
+  picks: readonly string[],
+  value: number,
+  raw: string
+): Promise<void> {
+  const plan = planSketchEdit(
+    document,
+    sketch,
+    sketch.sketchId,
+    kind,
+    picks,
+    value,
+    raw,
+    host.resolve
+  );
+  if (plan.status === 'refuse') {
+    host.setStatus(plan.reason);
+    return;
+  }
+  host.setBusy(true);
+  host.setError(null);
+  host.setStatus(`Building the ${plan.label.toLowerCase()}\u2026`);
+  try {
+    const result = await host.runOperation(plan.operation);
+    if (await host.commit(sketch.sketchId, plan.commit(result), plan.label)) {
+      host.setStatus(`${plan.label} applied.`);
+    }
+  } catch (error) {
+    const message = host.describeFailure(
+      error,
+      `The ${plan.label.toLowerCase()} could not be built.`
+    );
+    host.setError(message);
+    host.setStatus(message);
+  } finally {
+    host.setBusy(false);
+  }
+}
