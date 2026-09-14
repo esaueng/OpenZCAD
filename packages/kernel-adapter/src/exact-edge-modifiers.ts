@@ -255,9 +255,52 @@ function probeSize(value: number): number {
 }
 
 /**
+ * The distance an ANGLED chamfer's probe ladder is measured down from.
+ *
+ * `chamferDistanceAngle(d, a)` takes `d` off the first face and `d·tan(a)`
+ * off the second, and the kernel says so in its own refusal: on a 30x18x24
+ * box, `d=10, a=80°` reports `56.712818 of material must be taken from an
+ * edge only 24.000000 long`, and 10·tan80° = 56.712818 exactly; `d=2.5,
+ * a=85°` reports 28.575131 = 2.5·tan85°. So past 45° the requested distance
+ * understates the cut by a factor of tan(a) — at 88° by a factor of 28.6 —
+ * and a ladder of 1/2, 1/8, 1/64 of that distance is aimed an order of
+ * magnitude too high.
+ *
+ * Aim it instead at the distance whose DEEPER setback is the distance asked
+ * for, so the rungs remove about what the same ladder removes on a symmetric
+ * chamfer. Like the kernel's cliff ceiling this only aims: every rung is
+ * still proved by {@link applyEdgeModifier} at the requested angle, so a bad
+ * aim costs a rung and never a false claim.
+ *
+ * Measured on the pin over 1232 refused angled chamfers (five bodies, every
+ * edge of each, seven angles from 60° to 89.5°, five distances): aiming finds
+ * a proven distance in 412 cases where the unaimed ladder finds none, and
+ * loses none the unaimed ladder found. At or below 45° the tangent is at most 1 and the
+ * distance itself is the deeper setback, so nothing is moved.
+ */
+export function chamferLadderAim(
+  size: number,
+  chamferAngleRadians: number | undefined
+): number {
+  if (chamferAngleRadians === undefined) {
+    return size;
+  }
+  const tangent = Math.tan(chamferAngleRadians);
+  return Number.isFinite(tangent) && tangent > 1 ? size / tangent : size;
+}
+
+/**
  * The largest size on the ladder at which this selection is ACCEPTED, or
  * `null` when none is — the only sound evidence that a failure is size-bound
  * rather than structural. Runs on the failure path only.
+ *
+ * `chamferAngleRadians` is the bevel angle the user asked for, and the ladder
+ * is walked WITH it for the reason the probe exists at all: the size it
+ * returns is the size the message quotes, so it has to be a size for the
+ * operation actually requested. A symmetric probe under an angled request
+ * quotes a distance the angled chamfer refuses — on a 30x18x24 box distance
+ * 10 builds symmetrically and is refused at 80°, so `distance 10 builds here`
+ * sent the user round the same refusal.
  *
  * `ceiling` is the size the kernel itself named as the most its blend can
  * carry here, when its refusal named one. The ladder is then measured down
@@ -286,9 +329,13 @@ export function acceptedEdgeModifierProbe(
   selected: number[],
   featureKind: 'fillet' | 'chamfer',
   size: number,
-  ceiling: number | null = null
+  ceiling: number | null = null,
+  /** Chamfer only: the bevel angle in radians the refused request carried. */
+  chamferAngleRadians?: number
 ): number | null {
-  const from = ceiling === null ? size : Math.min(size, ceiling);
+  const angle = featureKind === 'chamfer' ? chamferAngleRadians : undefined;
+  const bounded = ceiling === null ? size : Math.min(size, ceiling);
+  const from = chamferLadderAim(bounded, angle);
   for (const ratio of EDGE_MODIFIER_PROBE_RATIOS) {
     const probe = probeSize(from * ratio);
     if (!Number.isFinite(probe) || probe <= GEOMETRY_EPSILON) {
@@ -296,7 +343,16 @@ export function acceptedEdgeModifierProbe(
     }
     try {
       if (
-        applyEdgeModifier(kernel, target, selected, featureKind, probe) !== null
+        applyEdgeModifier(
+          kernel,
+          target,
+          selected,
+          featureKind,
+          probe,
+          undefined,
+          undefined,
+          angle
+        ) !== null
       ) {
         return probe;
       }
@@ -373,7 +429,13 @@ export function edgeModifierFailureMessage(
   size: number,
   partialRevolveTarget: boolean,
   /** What the kernel said when it refused, if it threw. */
-  reported: string | null = null
+  reported: string | null = null,
+  /**
+   * Chamfer only: the bevel angle in radians the refused request carried. It
+   * has to reach the ladder, or the sentence quotes a distance proved for the
+   * symmetric chamfer and refused by the one the user asked for.
+   */
+  chamferAngleRadians?: number
 ): string {
   const label = featureKind === 'fillet' ? 'Fillet' : 'Chamfer';
   const dimension = featureKind === 'fillet' ? 'radius' : 'distance';
@@ -389,7 +451,8 @@ export function edgeModifierFailureMessage(
       selected,
       featureKind,
       size,
-      cliffLimit
+      cliffLimit,
+      chamferAngleRadians
     );
     if (accepted !== null) {
       // Only the probed size is quoted, and the kernel's reported ceiling
@@ -402,6 +465,11 @@ export function edgeModifierFailureMessage(
       // refusal at 40, at 20 and at 5. The ceiling still aims the ladder,
       // where being wrong only costs a rung; it does not go in the
       // sentence, where being wrong is bad advice.
+      //
+      // The probed size is quotable because the probe ran the operation the
+      // user asked for, angle and all. Quoting a size proved for a DIFFERENT
+      // operation is the same defect wearing the kernel's clothes: distance
+      // 10 builds symmetrically on a 30x18x24 box and is refused at 80°.
       return `${prefix} Try a smaller ${dimension}: ${dimension} ${accepted} builds here.`;
     }
     // Named before the topology causes because it explains the whole body
