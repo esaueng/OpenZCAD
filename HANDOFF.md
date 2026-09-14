@@ -1,8 +1,9 @@
 # Exact section curves behind the section view
 
-Branch `claude/remus-exact-sections`. Nine commits on top of `origin/main`,
-no push, no PR. The last three answer an independent verifier's report on
-the first six; what they changed is recorded under "Verifier round" below.
+Branch `claude/remus-exact-sections`. Thirteen commits on top of `origin/main`,
+no push, no PR. Commits 7–9 answer an independent verifier's first report on
+the first six; commits 10–13 answer its second, including a defect the first
+round introduced. Both rounds are recorded under "Verifier rounds" below.
 
 ## What shipped
 
@@ -14,8 +15,10 @@ and the user is told which one is on screen.
   the slider at pointer rate, and no kernel work is started during a drag.
 - **When the plane comes to rest** — the slider is released, a key repeat
   ends, or the section view is switched on or cycled — the app asks the kernel
-  for the real cross-section of **the bodies the viewport is showing** and
-  draws that instead: the cut surface in a cool slate against the warm body
+  for the real cross-section of **the document the viewport is drawing, and
+  the bodies of it that are on screen** (a form preview or an assistant
+  proposal replaces the live document in the viewport, and the section
+  follows it) and draws that instead: the cut surface in a cool slate against the warm body
   colour, with its boundary curves showing. The rail reads "Exact section" and
   the cut's measured area.
 - **Only that geometry can be exported.** A DXF button sits next to the
@@ -59,7 +62,10 @@ name and never drawn or exported.
 
 Refusal reasons are typed: `plane-misses-body`, `kernel-refused`,
 `empty-section`, `non-planar-section`, `area-mismatch`,
-`wire-order-unverified`.
+`wire-order-unverified`, `unknown-body`. The last is the only one that is
+not the kernel's: it is the document-level section declining a body id the
+build has no geometry for, and it exists so that one stale id cannot take
+the whole section down with it.
 
 ## Kernel calls adopted
 
@@ -75,6 +81,11 @@ Refusal reasons are typed: `plane-misses-body`, `kernel-refused`,
 The display-cap path (`packages/viewport/src/scene/sectionCaps.ts`) is
 untouched and still owns every drag.
 
+No new kernel call was adopted in either verifier round. The second round
+used the kernel only to reproduce and to pin: `exportStep` + `importStepBody`
+to author a genuine two-solid body, and `section` through the adapter to
+confirm it answers per solid.
+
 ## Verified kernel behaviour (probe notes)
 
 Probed directly against `remus_wasm_node.cjs` at the pin; throwaway scripts
@@ -89,12 +100,19 @@ deleted.
 - `makeCylinder`'s wall comes through a `cut` as 64 straight segments, so a
   bore sections to a 64-gon (12.546 mm² at r=2) rather than a circle. The DXF
   is written from those LINE edges, exactly as the kernel has them.
+- A body can hold several solids, and `section` answers per solid. Two boxes
+  exported to STEP through the adapter and re-imported as one body give one
+  body with two disjoint solids; a plane through one of them returns that
+  solid's region **and** a `plane-misses-body` refusal carrying the same body
+  id. Anything that counts refusals as bodies is wrong about such a model.
 - An L-shaped fuse of two boxes sections correctly (3200 mm² low, 640 mm²
   high). The demo Mounting Bracket, which adds a boss, a bore and fillets,
   returns **720.8013 mm² at every offset tried** while the witness moves with
   the plane — the defect the area check exists for, seen live in the app.
 
-## Verifier round
+## Verifier rounds
+
+### Round one
 
 An independent verifier read the diff and ran the kernel against it. Four
 defects; all four fixed, none disputed.
@@ -137,6 +155,74 @@ defects; all four fixed, none disputed.
 
 The verifier's own summary of the rest — the tessellated witness, the typed
 refusals, the DXF unit header — is unchanged by this round.
+
+### Round two
+
+The verifier confirmed all four round-one fixes independently and found that
+**fix 1 above introduced a major defect of its own**, plus two minors. All
+three are fixed; none disputed. The round-one write-up of fix 1 was accurate
+about what it did and wrong about it being contained — that is corrected here
+rather than defended.
+
+1. **[major] The body list and the document came from different models.**
+   Passing the viewport's visible list was right; taking the document from
+   the workspace beside it was not. `previewDoc` replaces the live document
+   in the viewport wholesale — `viewerBodies` is then ITS bodies — so with
+   section view on, opening the Extrude form (`edgeFormPreview.publish`) or
+   previewing an assistant proposal named bodies the live build never made.
+   The adapter threw `Body <id> has no exact geometry.`, the catch turned it
+   into a refusal, and the rail showed that internal string with **no section
+   drawn at all**, not even for the bodies that sectioned perfectly.
+   Reproduced against the real kernel before the fix
+   (`sectionOutline(live, XY_AT_3, [realBar, 'body_preview_only'])` threw);
+   the same call now returns the bar's region plus one `unknown-body`
+   refusal, pinned by `test/exact-section-document.test.ts`.
+
+   Fixed at the root, in two places that each remove a way to get it wrong:
+
+   - **One source.** `SectionSource` carries the document *and* the bodies of
+     it that are on screen. `App` builds it in a single memo whose document
+     is `previewDoc ?? doc` — the same branch `viewerBodies` takes — and both
+     `resolveSectionOutline` and `writeSectionDxf` take that one value
+     instead of a document and a list as two arguments. There is no call site
+     left that can pair them wrongly. An exact section of a preview is
+     therefore a section of the preview, which is what the viewport shows.
+   - **A typed refusal, not a throw.** `sectionOutline` refuses an unknown
+     body by name and sections the rest, so no future mismatch can destroy a
+     whole section again. It is deliberately NOT a `try/catch` around the
+     call: the refusal is per body, carries a reason, counts as unsectioned,
+     and therefore shuts the export. `exportSectionDxf` still throws for the
+     same body, because a drawing may not quietly lose one.
+
+2. **[minor] A section arriving while Wireframe was on drew its shaded fill.**
+   `applyExactSection` built the cut surface's material on arrival with
+   `visible` defaulting to true, and the display-mode effect depends on the
+   mode alone, so it never re-ran for the new geometry. The regions now
+   travel with the mode they are to be drawn for (`ExactSectionDisplay`),
+   which makes the mode unskippable in the type exactly when there is a fill
+   to build. The new test fails against the old code.
+
+3. **[minor] `missed` and `unsectioned` counted solids and said "bodies".**
+   The kernel answers per solid and one body can hold several. Reproduced
+   with a real two-solid body (two boxes exported to STEP through the
+   adapter and re-imported as one body): a plane through one solid returns a
+   region **and** a `plane-misses-body` refusal carrying the same body id, so
+   the rail read "…, 1 body is not cut here" while drawing that very body's
+   cross-section. Both counts are now over distinct bodies, a body with a
+   region is never "missed", and a body with both kinds of refusal counts
+   once, as unsectioned — which keeps the export gate exactly equal to
+   `exportSectionDxf`'s own fail-closed condition.
+
+One thing moved while fixing these: `writeSectionDxf` now applies
+`sectionOutlineExportable` itself instead of trusting the caller, so the gate
+lives with the export rather than only on the button.
+
+The invalidation effect also changed. It was keyed on `sectionSource`'s
+identity for one iteration, which was wrong: committing derived state after a
+geometry sync hands the workspace a **new document object at the same
+version**, and an exact section requested moments earlier would have had its
+answer dropped and never re-requested. It is keyed on what the source says —
+the live version, the preview's identity, and body membership.
 
 ## Check results
 
@@ -201,6 +287,12 @@ to fail against the old code first.
 - **Bodies are sectioned separately, never fused first.** A union would change
   the geometry being measured, and the kernel refuses a disjoint cross-section
   anyway.
+- **An exact section of a preview is a section of the preview.** With a form
+  preview or an assistant proposal on screen the kernel rebuilds that
+  document to section it, which is a full exact rebuild at the moment the
+  plane comes to rest. It is not cached across previews, and each preview
+  publish drops the section back to the clipped one. Cheaper would be to
+  section only the changed body; correct came first.
 - **Areas are the kernel's `faceArea` at the display deflection.** Good enough
   to grade a section and to show; not published as a measurement.
 
@@ -218,11 +310,17 @@ to fail against the old code first.
 - **The entry chunk finishes at 511,960 bytes against a 512,000 budget:
   forty bytes.** The feature lives in `apps/web/src/lib/sectionOutline.ts`
   (lazy) and the launcher keeps only the state, the effect and two thin
-  handlers. The verifier round had to fit the visible-body plumbing into ten
-  bytes of headroom and paid for it by deriving the viewport's section
-  geometry inside `ViewerShell` (already lazy) instead of passing it from
-  `App`, and by replacing the plane/version comparison with one request
-  token. It is still the case that the next line of eager code in `App.tsx`
+  handlers. The first verifier round had to fit the visible-body plumbing
+  into ten bytes of headroom and paid for it by deriving the viewport's
+  section geometry inside `ViewerShell` (already lazy) instead of passing it
+  from `App`, and by replacing the plane/version comparison with one request
+  token. The second paid for the document half by folding one handler into
+  the JSX callback that was its only caller and by moving the export gate
+  into `writeSectionDxf`. Two forms that look equivalent are not: writing
+  `await (await import('./lib/sectionOutline')).writeSectionDxf(…)` instead
+  of binding the namespace to a const cost **62 bytes** here and pushed the
+  chunk over the budget. Measure this file; do not reason about it. It is
+  still the case that the next line of eager code in `App.tsx`
   — from this branch or any other — trips the gate. The budget's own comment
   asks for a real split rather than another raise; that split is now overdue,
   and this branch is not the place for it.
@@ -250,6 +348,18 @@ to fail against the old code first.
   deliberately). Both variables are post-R12 additions that R12 readers
   ignore; the alternative was shipping millimetre files that say nothing
   about their unit.
+- **The `App` pairing itself has no unit test.** `SectionSource` is the type
+  that holds the document and the bodies together, and the lazy module's
+  tests hold the contract (including "asks about the document those bodies
+  came from, never another one"), but nothing executes `App`'s own
+  `previewDoc ?? doc` line — there is no App test harness in this repo. What
+  IS pinned is that a mismatch can no longer be catastrophic: the adapter
+  refuses the unknown body by name and sections the rest, proved against the
+  real kernel. A reviewer who wants the pairing itself held should ask for
+  the section controller to be extracted into a hook, which the entry-chunk
+  budget currently makes expensive.
+- **The verifier-round-two fixes were not driven in a browser either.** Each
+  is held by a test that was shown to fail against the code before it.
 - The exact section is attached to the viewport's body group in document
   coordinates. Bodies are drawn at identity there today; a future per-body
   transform in the viewport would need the same matrix applied here.
@@ -278,5 +388,9 @@ to fail against the old code first.
 - The exact section is computed for every body the viewport is showing, at
   once. A large assembly would benefit from sectioning only what the plane's
   bounding box can reach.
+- **A preview could be re-sectioned as it settles** rather than only on the
+  next slider release. The rule "anything that changes the model drops back
+  to the clipped preview" is the fail-safe one and the e2e spec is written to
+  it, so changing it is its own piece of work.
 - Splitting the launcher chunk properly, so the next feature has room. The
   section work is already lazy; the remaining weight is not.
