@@ -431,6 +431,8 @@ function rolloutCapabilityInstructions(env: CloudflareEnv): string {
   ).map(([operation, property]) => `${operation}.${property}`);
   return `# Rollout-controlled modeling operations
 
+For requests to parameterize existing geometry, first read digest.editCatalog. A listed candidate can be selected with \`use_edit_candidate\`: this invokes the same app-measured command as the UI button and does not ask you to author low-level geometry. Its availability is independent of the rollout flags for AI-authored low-level operations below. Copy candidateId, bodyId, and analysis exactly; parameterNames may rename only that candidate's listed parameter keys. The browser revalidates every candidate and exact-preflights the result. Never invent candidates, measurements, geometry or supported ranges. Measured-only values are not editable. If multiple candidates fit, ask which target or moving side the user wants. A partial catalog or topology inventory does not prove the part has no supported edits; ask the user to select the relevant faces and Analyze selected geometry. Do not mix candidate bindings with other operation kinds. Bind first at current values, then change named parameters in a subsequent proposal.
+
 The base operations described above remain available. The following newer operations are enabled for this deployment: ${enabled.length > 0 ? enabled.map((operation) => `\`${operation}\``).join(', ') : 'none'}.
 
 Never emit a rollout-controlled operation unless it appears in that enabled list. Currently disabled: ${disabled.map((operation) => `\`${operation}\``).join(', ')}.
