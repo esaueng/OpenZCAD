@@ -27,25 +27,23 @@ describe('selectionCapabilities', () => {
     });
     expect(capabilities.map((capability) => capability.action)).toEqual([
       'offset-face',
-      'sketch-on-face',
-      'export-face-dxf'
+      'sketch-on-face'
     ]);
     expect(preferredCapability(capabilities)?.action).toBe('offset-face');
   });
 
-  it('offers the DXF outline export only for planar faces', () => {
-    const planar = selectionCapabilities({
-      kind: 'face',
-      target: { surfaceType: 'planar', hash: 12 }
-    });
-    expect(
-      planar.some((c) => c.action === 'export-face-dxf' && c.enabled)
-    ).toBe(true);
-    const cylindrical = selectionCapabilities({
-      kind: 'face',
-      target: { surfaceType: 'cylindrical', hash: 12, radius: 3 }
-    });
-    expect(cylindrical.some((c) => c.action === 'export-face-dxf')).toBe(false);
+  // The outline export is a File command now, not a face edit mode: the card
+  // offers what changes the face, and nothing else.
+  it('offers no file export among the edit modes of a face', () => {
+    for (const target of [
+      { surfaceType: 'planar' as const, hash: 12 },
+      { surfaceType: 'cylindrical' as const, hash: 12, radius: 3 }
+    ]) {
+      const capabilities = selectionCapabilities({ kind: 'face', target });
+      expect(
+        capabilities.some((capability) => /dxf|export/i.test(capability.action))
+      ).toBe(false);
+    }
   });
 
   it('keeps sketch available on a hash-only planar face, with the fixed-plane note', () => {
