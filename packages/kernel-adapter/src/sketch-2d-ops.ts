@@ -21,6 +21,18 @@
  *   offered here, the wire is normalised counter-clockwise so a positive
  *   distance always means outward, and the result's signed area is witnessed
  *   against the source before it is accepted.
+ * - The `arc` and `chamfer` joins are applied at **every** vertex, including
+ *   reflex ones, where a corner treatment has no meaning: the outward offset
+ *   of a concave corner is a plain miter. At a reflex vertex the kernel
+ *   inserts the join backwards. For the six-line L profile
+ *   `(0,0) (10,0) (10,4) (4,4) (4,10) (0,10)` offset outward by 1 it returns a
+ *   `CIRCLE` from `(4,5)` to `(5,4)` at the reflex corner `(4,4)`, cutting
+ *   across the notch instead of going round it, with both ends sitting **on**
+ *   the source loop. Left alone that fails the distance witness below, so
+ *   every concave profile was refused at every distance.
+ *   {@link miterInvertedJoins} repairs those elements by intersecting the
+ *   kernel's own neighbouring offset lines, which is what the join at a reflex
+ *   corner should have been in the first place.
  * - `fillet2d(coords, radius)` is **not** a fillet and is deliberately not
  *   used. Its `radius` argument is a corner setback, and the curve it inserts
  *   is a sampled approximation that is tangent to the adjacent edges only at a
@@ -377,6 +389,154 @@ function curveEnds(curve: SketchOffsetCurve): Sketch2dPoint[] {
       ];
 }
 
+/** Points spread evenly along a curve, both ends included. */
+function sampleCurve(
+  curve: SketchOffsetCurve,
+  samples: number
+): Sketch2dPoint[] {
+  return Array.from({ length: samples }, (_unused, index) => {
+    const t = index / (samples - 1);
+    if (curve.kind === 'line') {
+      return {
+        x: curve.a.x + (curve.b.x - curve.a.x) * t,
+        y: curve.a.y + (curve.b.y - curve.a.y) * t
+      };
+    }
+    return arcPoint(
+      curve.center,
+      curve.radius,
+      curve.startAngleDeg + (curve.endAngleDeg - curve.startAngleDeg) * t
+    );
+  });
+}
+
+/**
+ * Where the infinite lines carrying two segments meet, or `null` when they are
+ * parallel. The tolerance is relative to both segment lengths, so a
+ * near-parallel pair is reported as parallel rather than as a point at
+ * infinity.
+ */
+function lineIntersection(
+  first: Extract<SketchOffsetCurve, { kind: 'line' }>,
+  second: Extract<SketchOffsetCurve, { kind: 'line' }>
+): Sketch2dPoint | null {
+  const firstSpan = subtract(first.b, first.a);
+  const secondSpan = subtract(second.b, second.a);
+  const determinant = firstSpan.x * secondSpan.y - firstSpan.y * secondSpan.x;
+  const scale = magnitude(firstSpan) * magnitude(secondSpan);
+  if (scale <= 0 || Math.abs(determinant) <= scale * 1e-12) {
+    return null;
+  }
+  const offset = subtract(second.a, first.a);
+  const t = (offset.x * secondSpan.y - offset.y * secondSpan.x) / determinant;
+  const point = {
+    x: first.a.x + firstSpan.x * t,
+    y: first.a.y + firstSpan.y * t
+  };
+  return Number.isFinite(point.x) && Number.isFinite(point.y) ? point : null;
+}
+
+/** Which end of `line` sits against `neighbourEnds`. */
+function adjacentEnd(
+  line: Extract<SketchOffsetCurve, { kind: 'line' }>,
+  neighbourEnds: readonly Sketch2dPoint[]
+): 'a' | 'b' {
+  const nearest = (point: Sketch2dPoint): number =>
+    Math.min(...neighbourEnds.map((end) => magnitude(subtract(point, end))));
+  return nearest(line.a) <= nearest(line.b) ? 'a' : 'b';
+}
+
+const OFFSET_JOIN_REFUSAL =
+  'That offset is too large for one of the loop’s inside corners. Use a smaller distance.';
+
+/**
+ * Replace the join elements the kernel inserted backwards at reflex corners
+ * with the miter of the offset lines on either side of them.
+ *
+ * The kernel emits one join element per source vertex whatever the vertex
+ * does, and at a reflex vertex it emits it inverted: the element lies wholly
+ * *inside* the offset distance, cutting across the notch. That is the only way
+ * a curve of a correct offset can be inside the distance at every one of its
+ * points, so "every sample nearer the source than the distance" identifies
+ * exactly those elements and never a legitimate one — a valid `chamfer` join
+ * at a convex corner has a midpoint inside the distance but both ends on it,
+ * and a valid offset line lies at or beyond the distance everywhere.
+ *
+ * The replacement is not invented geometry: it is the intersection of the two
+ * offset lines the kernel itself returned, which is the `intersection` join
+ * the kernel produces for the same corner when asked for it. Anything the
+ * repair cannot express — two inverted elements in a row, a non-line
+ * neighbour, parallel neighbours, or a miter that swallows a whole offset
+ * line — refuses rather than guesses.
+ */
+function miterInvertedJoins(
+  curves: readonly SketchOffsetCurve[],
+  source: readonly Sketch2dPoint[],
+  distance: number
+): SketchOffsetCurve[] {
+  const wanted = Math.abs(distance);
+  const tolerance = Math.max(wanted, 1) * OFFSET_DISTANCE_TOLERANCE;
+  const inverted = curves.map((curve) =>
+    sampleCurve(curve, 5).every(
+      (point) => distanceToLoop(point, source) < wanted - tolerance
+    )
+  );
+  if (!inverted.some(Boolean)) {
+    return [...curves];
+  }
+  const count = curves.length;
+  const working = curves.map((curve) =>
+    curve.kind === 'line'
+      ? { ...curve, a: { ...curve.a }, b: { ...curve.b } }
+      : { ...curve }
+  );
+  for (let index = 0; index < count; index += 1) {
+    if (!inverted[index]) {
+      continue;
+    }
+    const previous = (index - 1 + count) % count;
+    const next = (index + 1) % count;
+    if (previous === next || inverted[previous] || inverted[next]) {
+      throw new Error(OFFSET_JOIN_REFUSAL);
+    }
+    // The miter is taken from the kernel's original lines. Moving an endpoint
+    // onto the miter point leaves the carrying line unchanged, so a line
+    // mitered at both ends gives the same answer in either order.
+    const before = curves[previous]!;
+    const after = curves[next]!;
+    if (before.kind !== 'line' || after.kind !== 'line') {
+      throw new Error(OFFSET_JOIN_REFUSAL);
+    }
+    const miter = lineIntersection(before, after);
+    if (!miter) {
+      throw new Error(OFFSET_JOIN_REFUSAL);
+    }
+    const ends = curveEnds(curves[index]!);
+    const beforeWorking = working[previous]!;
+    const afterWorking = working[next]!;
+    if (beforeWorking.kind !== 'line' || afterWorking.kind !== 'line') {
+      throw new Error(OFFSET_JOIN_REFUSAL);
+    }
+    beforeWorking[adjacentEnd(before, ends)] = miter;
+    afterWorking[adjacentEnd(after, ends)] = miter;
+  }
+  const kept = working.filter((_unused, index) => !inverted[index]);
+  for (const curve of kept) {
+    if (
+      curve.kind === 'line' &&
+      magnitude(subtract(curve.b, curve.a)) <= tolerance
+    ) {
+      // A miter that consumed a whole offset line means the corner closed up:
+      // the offset is past what this profile's inside corner can carry.
+      throw new Error(OFFSET_JOIN_REFUSAL);
+    }
+  }
+  if (kept.length < 3) {
+    throw new Error(OFFSET_JOIN_REFUSAL);
+  }
+  return kept;
+}
+
 /**
  * The arc through three points the kernel evaluated on its own circular edge.
  * Three points fix the circle exactly, so this reads the kernel's answer back
@@ -478,6 +638,11 @@ function readOffsetWire(
  * inside-out wire rather than refusing when an inward offset passes the
  * collapse point, so the result is witnessed against the source's signed area
  * before it is handed back.
+ *
+ * Concave loops are in scope. The kernel inverts the `arc` and `chamfer` join
+ * it inserts at a reflex vertex, so those elements are mitered away first —
+ * see {@link miterInvertedJoins} — and the witnesses then run on the repaired
+ * loop exactly as before.
  */
 export function offsetSketchLoop(
   kernel: Sketch2dKernelSurface,
@@ -510,10 +675,17 @@ export function offsetSketchLoop(
   // inward offset the kernel inserts them anyway, and the loops they add cross
   // the offset itself; the straight corner is the only one that is right.
   const effectiveJoin: SketchOffsetJoin = distance > 0 ? join : 'intersection';
-  const curves = readOffsetWire(
+  const offset = readOffsetWire(
     kernel,
     kernel.offsetWire2DWithJoin(wire, distance, effectiveJoin)
   );
+  // The kernel inserts a join element at every vertex, and inverts the ones at
+  // reflex vertices. Repair those before the witnesses run, or every concave
+  // loop is refused. An `intersection` offset has no join elements to repair.
+  const curves =
+    effectiveJoin === 'intersection'
+      ? offset
+      : miterInvertedJoins(offset, oriented, distance);
   const ends = curves.flatMap(curveEnds);
   const resultArea = signedLoopArea(
     curves.map((curve) => curveEnds(curve)[0]!)

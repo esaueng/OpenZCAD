@@ -67,7 +67,15 @@ function fixture() {
         { objectKind: 'line', x1: 100, y1: 0, x2: 110, y2: 0 },
         { objectKind: 'line', x1: 110, y1: 0, x2: 110, y2: 10 },
         { objectKind: 'line', x1: 110, y1: 10, x2: 100, y2: 10 },
-        { objectKind: 'line', x1: 100, y1: 10, x2: 100, y2: 0 }
+        { objectKind: 'line', x1: 100, y1: 10, x2: 100, y2: 0 },
+        // A concave L profile: five convex corners and the reflex one at
+        // (204, 4), which is what the kernel's arc join gets backwards.
+        { objectKind: 'line', x1: 200, y1: 0, x2: 210, y2: 0 },
+        { objectKind: 'line', x1: 210, y1: 0, x2: 210, y2: 4 },
+        { objectKind: 'line', x1: 210, y1: 4, x2: 204, y2: 4 },
+        { objectKind: 'line', x1: 204, y1: 4, x2: 204, y2: 10 },
+        { objectKind: 'line', x1: 204, y1: 10, x2: 200, y2: 10 },
+        { objectKind: 'line', x1: 200, y1: 10, x2: 200, y2: 0 }
       ]
     }
   );
@@ -81,7 +89,8 @@ function fixture() {
     legB: String(ids[1]!),
     rectangle: String(ids[2]!),
     circle: String(ids[3]!),
-    loopSeed: String(ids[4]!)
+    loopSeed: String(ids[4]!),
+    concaveSeed: String(ids[8]!)
   };
 }
 
@@ -553,6 +562,46 @@ describe('sketch offset', () => {
     if (result.kind !== 'offset') throw new Error('Expected an offset result.');
     expect(result.curves).toHaveLength(4);
     expect(result.curves.every((curve) => curve.kind === 'line')).toBe(true);
+  });
+
+  it('offsets a concave L profile outward, through the tool the UI arms', async () => {
+    // The whole path the Offset tool takes: resolve the loop from one picked
+    // line, plan the edit (which is where the join is chosen), run it on the
+    // kernel and commit. Before the reflex-join repair this refused at every
+    // distance, so a concave profile could not be offset outward at all.
+    const { document, sketch, sketchId, concaveSeed } = fixture();
+    for (const distance of [0.5, 1, 2]) {
+      const plan = planSketchEdit(
+        document,
+        sketch,
+        sketchId,
+        'offset',
+        [concaveSeed],
+        distance,
+        String(distance),
+        resolve
+      );
+      if (plan.status !== 'operation') throw new Error(plan.reason);
+      const result = await withAdapter((adapter) =>
+        adapter.sketchPlanarOperation(plan.operation)
+      );
+      if (result.kind !== 'offset') {
+        throw new Error('Expected an offset result.');
+      }
+      // Five convex corners keep an arc; the reflex corner is mitered away.
+      expect(
+        result.curves.filter((curve) => curve.kind === 'arc')
+      ).toHaveLength(5);
+      expect(
+        result.curves.filter((curve) => curve.kind === 'line')
+      ).toHaveLength(6);
+      const manager = new CommandManager(document);
+      manager.runTransaction('Offset', plan.commit(result));
+      const next = findSketch(manager.document, sketchId)!;
+      expect(next.objectIds).toHaveLength(sketch.objectIds.length + 11);
+      expect(next.constraints ?? []).toHaveLength(11);
+      expect(manager.undoLabel).toBe('Offset');
+    }
   });
 });
 
