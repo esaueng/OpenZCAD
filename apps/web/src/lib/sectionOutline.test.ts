@@ -1,11 +1,20 @@
 import { describe, expect, it, vi } from 'vitest';
-import { toBodyId, type BodyId, type ProjectDocument } from '@openzcad/shared';
+import {
+  toBodyId,
+  type BodyId,
+  type BodyRepresentation,
+  type ProjectDocument
+} from '@openzcad/shared';
 import {
   describeSectionOutline,
   resolveSectionOutline,
   sectionOutlineExportable,
+  sectionOutlineFor,
   sectionOutlineFromReport,
-  writeSectionDxf
+  sectionSourceOf,
+  writeSectionDxf,
+  type ViewportGeometry,
+  type ViewportStandIn
 } from './sectionOutline';
 
 /**
@@ -18,6 +27,25 @@ import {
 
 const plane = { plane: 'XY' as const, offset: 3 };
 const document = { version: 7 } as unknown as ProjectDocument;
+
+/**
+ * What the viewport is drawing, the way the workspace builds it. Every
+ * question about a section is asked of this and only this — there is no
+ * overload that takes a document and a body list a caller paired up itself,
+ * because pairing them up itself is how the section came to describe a
+ * model nobody was looking at.
+ */
+function onScreen<S extends ViewportStandIn>(
+  drawn: ProjectDocument | null,
+  bodyIds: readonly BodyId[],
+  standIns: S[] | null = null
+): ViewportGeometry<S> {
+  return {
+    document: drawn,
+    bodies: bodyIds.map((bodyId) => ({ bodyId }) as BodyRepresentation),
+    standIns
+  };
+}
 
 function region(bodyId: string, area: number) {
   return {
@@ -53,7 +81,7 @@ describe('the exact section asks about the bodies on screen', () => {
 
     const state = await resolveSectionOutline(
       { sectionOutline },
-      { document, bodyIds: visible },
+      onScreen(document, visible),
       plane
     );
 
@@ -82,7 +110,7 @@ describe('the exact section asks about the bodies on screen', () => {
 
     await resolveSectionOutline(
       { sectionOutline },
-      { document: previewDocument, bodyIds: previewBodies },
+      onScreen(previewDocument, previewBodies),
       plane
     );
 
@@ -102,7 +130,7 @@ describe('the exact section asks about the bodies on screen', () => {
     const sectionOutline = vi.fn(async () => report([]));
     const state = await resolveSectionOutline(
       { sectionOutline },
-      { document: null, bodyIds: [] },
+      onScreen(null, []),
       plane
     );
     expect(sectionOutline).not.toHaveBeenCalled();
@@ -117,7 +145,7 @@ describe('the exact section asks about the bodies on screen', () => {
 
     await writeSectionDxf(
       { exportModel } as never,
-      { document, bodyIds: visible },
+      onScreen(document, visible),
       plane,
       exportable,
       save,
@@ -142,7 +170,7 @@ describe('the exact section asks about the bodies on screen', () => {
 
     await writeSectionDxf(
       { exportModel } as never,
-      { document, bodyIds: [toBodyId('body_a')] },
+      onScreen(document, [toBodyId('body_a')]),
       plane,
       sectionOutlineFromReport(
         report(
@@ -173,13 +201,151 @@ describe('the exact section asks about the bodies on screen', () => {
     });
     const state = await resolveSectionOutline(
       { sectionOutline },
-      { document, bodyIds: [] },
+      onScreen(document, []),
       plane
     );
     expect(state).toEqual({
       kind: 'refused',
       detail: 'Geometry worker is unavailable.'
     });
+  });
+});
+
+/**
+ * The viewport draws a document's exact bodies until something is being
+ * tried out, and then it draws an approximation over them and hides the
+ * bodies underneath. A section of the document while that is up describes
+ * geometry that is no longer on screen — the cut curves float beside a part
+ * of a different size, the rail calls the old area exact, and the DXF button
+ * writes a drawing of a model the user is not looking at.
+ *
+ * That happened twice for two different reasons, which is why the rule here
+ * is about stand-ins in general and never about any one of them.
+ */
+describe('a section is of the drawing, not of the document behind it', () => {
+  /** What a parameter edit nobody has applied puts on screen. */
+  const parameterPreview = [
+    {
+      bodyId: toBodyId('body_a_preview'),
+      replaces: [toBodyId('body_a')],
+      color: '#8ab4f8',
+      parts: []
+    }
+  ];
+
+  it('has nothing to section while a parameter edit nobody applied is drawn', () => {
+    const view = onScreen(document, [toBodyId('body_a')], parameterPreview);
+
+    // The body is still listed — it is what the preview stands in FOR — but
+    // there is no document to section it out of, because the shape on screen
+    // is not the shape this document builds.
+    expect(sectionSourceOf(view)).toEqual({
+      document: null,
+      bodyIds: [toBodyId('body_a')]
+    });
+  });
+
+  it('asks the kernel nothing while that preview is up', async () => {
+    const sectionOutline = vi.fn(async () => report([region('body_a', 200)]));
+
+    const state = await resolveSectionOutline(
+      { sectionOutline },
+      onScreen(document, [toBodyId('body_a')], parameterPreview),
+      plane
+    );
+
+    expect(sectionOutline).not.toHaveBeenCalled();
+    // Back to the honest half of the section view: the clipped preview.
+    expect(state).toEqual({ kind: 'clipping' });
+    expect(sectionOutlineExportable(state)).toBe(false);
+  });
+
+  it('writes no DXF of the document a preview is standing in front of', async () => {
+    // The reported defect end to end: an exact section is on screen and
+    // exportable, and the user types a new parameter value without applying
+    // it. The drawing that button would write is of the old geometry.
+    const exportModel = vi.fn(async () => ({ text: '0\r\nEOF\r\n' }));
+    const save = vi.fn(async () => true);
+    const announced: string[] = [];
+
+    await writeSectionDxf(
+      { exportModel } as never,
+      onScreen(document, [toBodyId('body_a')], parameterPreview),
+      plane,
+      exportable,
+      save,
+      'part',
+      (message: string) => announced.push(message)
+    );
+
+    expect(exportModel).not.toHaveBeenCalled();
+    expect(save).not.toHaveBeenCalled();
+    expect(announced).toEqual([]);
+  });
+
+  it('refuses a stand-in it has never heard of', async () => {
+    // The next one. It is not the parameter preview, it does not replace a
+    // body — it adds geometry the document never built — and this file
+    // learns nothing about it. Being drawn is the whole test: reaching the
+    // viewport means reaching it through ViewportGeometry, and a section is
+    // derived from that same value, so the refusal is structural.
+    const somethingNew = [
+      { kind: 'simulation-ghost', replaces: [] as BodyId[], frames: 12 }
+    ];
+    const sectionOutline = vi.fn(async () => report([region('body_a', 200)]));
+    const view = onScreen(document, [toBodyId('body_a')], somethingNew);
+
+    expect(sectionSourceOf(view).document).toBeNull();
+    expect(
+      await resolveSectionOutline({ sectionOutline }, view, plane)
+    ).toEqual({ kind: 'clipping' });
+    expect(sectionOutline).not.toHaveBeenCalled();
+  });
+
+  it('takes the drawn section down with the geometry it described', () => {
+    // The half of this the request path cannot fix: a section computed and
+    // drawn a moment ago, still in state, while a parameter edit arrives and
+    // hides the body it was cut from. Its curves would keep rendering beside
+    // a preview of a different size, and the rail would keep calling the old
+    // area exact. Not shown at all — back to the clipped preview.
+    const bodies = [toBodyId('body_a')];
+    expect(
+      sectionOutlineFor(onScreen(document, bodies, parameterPreview), exportable)
+    ).toEqual({ kind: 'clipping' });
+    expect(
+      sectionOutlineFor(
+        onScreen(document, bodies, [
+          { kind: 'simulation-ghost', replaces: [] as BodyId[] }
+        ]),
+        exportable
+      )
+    ).toEqual({ kind: 'clipping' });
+    // And with nothing standing in, it is shown exactly as computed.
+    expect(sectionOutlineFor(onScreen(document, bodies), exportable)).toBe(
+      exportable
+    );
+  });
+
+  it('sections the drawing again the moment the stand-in comes down', async () => {
+    // Cancelling the edit is not a special case either: the same rule that
+    // refused reads the same value and finds nothing standing in.
+    const sectionOutline = vi.fn(async () => report([region('body_a', 200)]));
+    const bodies = [toBodyId('body_a')];
+
+    for (const standIns of [null, []]) {
+      sectionOutline.mockClear();
+      const state = await resolveSectionOutline(
+        { sectionOutline },
+        onScreen(document, bodies, standIns),
+        plane
+      );
+      expect(sectionOutline).toHaveBeenCalledWith(
+        document,
+        { origin: [0, 0, 3], normal: [0, 0, 1] },
+        bodies
+      );
+      expect(state.kind).toBe('exact');
+    }
   });
 });
 
