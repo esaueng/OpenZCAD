@@ -373,11 +373,11 @@ test('switches a planar-face selection into an editable arc sketch', async ({
   await page.mouse.click(facePoint!.x, facePoint!.y);
 
   const offsetCard = page.getByRole('region', {
-    name: 'Offset Face operation'
+    name: 'Resize Body operation'
   });
   await expect(offsetCard).toBeVisible();
   await expect(
-    offsetCard.getByRole('tab', { name: 'Offset Face' })
+    offsetCard.getByRole('tab', { name: 'Resize body' })
   ).toHaveAttribute('aria-selected', 'true');
   await offsetCard.getByRole('tab', { name: 'Sketch' }).click();
 
@@ -469,7 +469,7 @@ test('shows and recovers a stale face-attached sketch when its source is suppres
   expect(facePoint).not.toBeNull();
   await page.mouse.click(facePoint!.x, facePoint!.y);
   await page
-    .getByRole('region', { name: 'Offset Face operation' })
+    .getByRole('region', { name: 'Resize Body operation' })
     .getByRole('tab', { name: 'Sketch' })
     .click();
 
@@ -536,9 +536,7 @@ test('keeps face sketching available after a primitive direct edit', async ({
     .click();
 
   const canvas = page.locator('.viewer-host canvas');
-  // A min side exercises a true face offset. Picking whichever face happens
-  // to be under a screen coordinate can hit a max side and edit a primitive
-  // dimension instead, which opens the Total keypad and skips this regression.
+  // Explicitly choose local face extrusion; every box side now defaults to resize.
   const selectOffsetFace = async () => {
     await expect
       .poll(() =>
@@ -560,6 +558,10 @@ test('keeps face sketching available after a primitive direct edit', async ({
       .toBe(true);
   };
   await selectOffsetFace();
+  await page
+    .getByRole('region', { name: 'Resize Body operation' })
+    .getByRole('tab', { name: 'Offset Face', exact: true })
+    .click();
   await page.getByTestId('direct-manipulation-value').click();
   const offsetKeypad = page.getByRole('dialog', { name: 'Offset value' });
   await offsetKeypad.getByRole('textbox').fill('2');
@@ -569,6 +571,10 @@ test('keeps face sketching available after a primitive direct edit', async ({
   ).toBeVisible();
 
   await selectOffsetFace();
+  await page
+    .getByRole('region', { name: 'Resize Body operation' })
+    .getByRole('tab', { name: 'Offset Face', exact: true })
+    .click();
   const offsetCard = page.getByRole('region', {
     name: 'Offset Face operation'
   });
