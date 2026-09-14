@@ -8,6 +8,7 @@ import { solidFromTriangles, solidVolume } from '@openzcad/geometry';
 import {
   MESH_IMPORT_POLICIES,
   meshImportFormatForFileName,
+  meshImportTooLargeMessage,
   type MeshImportFormat
 } from '@openzcad/kernel-adapter/mesh-import-formats';
 import {
@@ -231,6 +232,21 @@ describe('mesh file imports', { timeout: 30_000 }, () => {
     }
   );
 
+  it('tells a barely oversized file apart from the limit it broke', () => {
+    // Rounding both figures to whole megabytes made a 33,600,000-byte file
+    // read "limited to 32 MB; this file is 32 MB", which is unreadable as a
+    // refusal and gives no sense of how far over the line the file is.
+    const justOver = meshImportTooLargeMessage('3mf', 33_600_000);
+    expect(justOver).toContain('32.04 MB');
+    expect(justOver).toContain('33,600,000 bytes');
+
+    const oneByteOver = meshImportTooLargeMessage(
+      '3mf',
+      MESH_IMPORT_POLICIES['3mf'].maxInputBytes + 1
+    );
+    expect(oneByteOver).toContain('33,554,433 bytes');
+    expect(oneByteOver).not.toContain('(33,554,432 bytes); this file is 32 MB');
+  });
 
   it('refuses a file that is not the format it claims, by name', async () => {
     await expect(
