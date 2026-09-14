@@ -34,8 +34,9 @@ import { MEASUREMENT_DEFLECTION } from './exact-witnesses';
  * | sphere r10 intersect 10mm box at the origin | 523.545492 mm^3 | 523.528813 mm^3 |
  *
  * So the shipped solid is never taken from these entry points. Geometry keeps
- * coming from the plain calls, which carry the kernel's exact-only policy
- * (Remus B21) and its named refusals. The evolution call runs separately, on
+ * coming from the typed detailed calls behind `exactCut` / `exactFuse` /
+ * `exactIntersect`, which carry the kernel's exact-only policy (Remus B21)
+ * and turn its refusals into named product outcomes. The evolution call runs separately, on
  * COPIES of the same operands, purely to read the payload — and its own result
  * is checked against the shipped body before a single name is believed.
  */
@@ -147,7 +148,7 @@ function operandAsCopied(
 
 /**
  * Read the kernel's entity-evolution payload for a boolean that has ALREADY
- * been performed and shipped by the plain entry points.
+ * been performed and shipped by the typed detailed entry points.
  *
  * `shipped` is the body the feature publishes; nothing here may replace it.
  * The probe repeats the boolean on copies of the same operands, applies the
@@ -158,7 +159,7 @@ function operandAsCopied(
  *
  * COST: this performs the boolean a SECOND time, on every two-operand boolean
  * feature. That is deliberate and it is the price of the guarantee — the
- * geometry the user gets is the plain pipeline's, and the provenance is
+ * geometry the user gets is the exact pipeline's, and the provenance is
  * believed only where a second, independent body says the payload describes
  * the same operation. It is not skipped silently anywhere: a boolean that does
  * not probe records why.
