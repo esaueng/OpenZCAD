@@ -111,6 +111,105 @@ export function topologyCandidatesForSolid(
   ];
 }
 
+/**
+ * Face candidates only. A pattern carries face identity and nothing else, and
+ * a hundred-instance pattern would otherwise measure every edge witness in the
+ * body to throw them all away.
+ */
+export function faceCandidatesForSolid(
+  kernel: RemusKernel,
+  solid: number
+): RemusTopologyCandidate[] {
+  return Array.from(kernel.getSolidFaces(solid), (handle) => ({
+    handle,
+    kind: 'face' as const,
+    witness: faceWitnessOf(kernel, handle)
+  }));
+}
+
+/** One `resolveOperationOutput` reply, reduced to the face it binds. */
+function boundFaceOutput(kernel: RemusKernel, op: number, index: number) {
+  const decoded: unknown = JSON.parse(
+    kernel.resolveOperationOutput(op, 'face', index)
+  );
+  if (!decoded || typeof decoded !== 'object') {
+    return null;
+  }
+  const record = decoded as Record<string, unknown>;
+  if (record.status !== 'bound' || !Array.isArray(record.entities)) {
+    return null;
+  }
+  const entities = record.entities as Record<string, unknown>[];
+  const handle = entities[0]?.handle;
+  return entities.length === 1 &&
+    entities[0]?.kind === 'face' &&
+    Number.isSafeInteger(handle) &&
+    (handle as number) >= 0
+    ? (handle as number)
+    : null;
+}
+
+/**
+ * A journaled pattern's face outputs, read back as one source-to-result map
+ * per instance.
+ *
+ * The kernel publishes the outputs as one flat list: instance-major, and
+ * within an instance in the source solid's own face order. That layout is
+ * CHECKED rather than assumed — the list has to be exactly one block per
+ * instance, block zero has to be the source solid's faces in order (the
+ * kernel leaves the seed in place, so it is literally the same handles), and
+ * every other block has to be exactly the instance solid's own face set.
+ * Anything else returns null, and the caller falls back to verifying the
+ * instances by witness alone rather than trusting a layout it could not
+ * confirm. The claim is candidate evidence either way: `remus-lineage`
+ * publishes a name only where the witness agrees with it.
+ */
+export function patternJournalFaceClaims(
+  kernel: RemusKernel,
+  op: number,
+  sourceFaces: readonly number[],
+  instanceSolids: readonly number[]
+): (ReadonlyMap<number, number> | undefined)[] | null {
+  const stride = sourceFaces.length;
+  if (stride === 0 || instanceSolids.length === 0) {
+    return null;
+  }
+  try {
+    const total = stride * instanceSolids.length;
+    const outputs: number[] = [];
+    for (let index = 0; index < total; index += 1) {
+      const handle = boundFaceOutput(kernel, op, index);
+      if (handle === null) {
+        return null;
+      }
+      outputs.push(handle);
+    }
+    // The op must have produced exactly these and no more, or the blocking
+    // below is reading a layout that is not the one the kernel wrote.
+    if (boundFaceOutput(kernel, op, total) !== null) {
+      return null;
+    }
+    return instanceSolids.map((solid, instance) => {
+      const block = outputs.slice(instance * stride, (instance + 1) * stride);
+      const faces = new Set(kernel.getSolidFaces(solid));
+      if (
+        faces.size !== stride ||
+        new Set(block).size !== stride ||
+        block.some((handle) => !faces.has(handle)) ||
+        (instance === 0 &&
+          block.some((handle, index) => handle !== sourceFaces[index]))
+      ) {
+        throw new Error('pattern journal block does not match its instance');
+      }
+      return new Map(
+        sourceFaces.map((source, index) => [source, block[index]!] as const)
+      );
+    });
+  } catch {
+    return null;
+  }
+}
+
 export function samePoint(
   left: QuantizedTopologyPoint,
   right: QuantizedTopologyPoint
