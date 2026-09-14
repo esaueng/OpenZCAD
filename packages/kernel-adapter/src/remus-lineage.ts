@@ -42,7 +42,7 @@ export type RemusLineageDiagnosticCode =
   | 'boolean-evolution-unverified'
   | 'boolean-evolution-disagreement'
   | 'boolean-edge-unresolved'
-  | 'boolean-unification-merge';
+  | 'boolean-evidence-carry';
 
 export interface RemusLineageDiagnostic {
   readonly code: RemusLineageDiagnosticCode;
@@ -547,12 +547,18 @@ export function propagateRemusUnchangedDirectEditLineage(
 
 /**
  * The same unchanged-witness carry, labelled with the operation that asks for
- * it. A boolean's own post-processing face unification is a second mutation on
- * top of the boolean itself: it merges adjacent coplanar result faces, which
- * both renames handles and destroys the identity of every face it merged. So
- * lineage derived against the raw boolean result is carried across that step
- * by exact witness, and a merged face — whose witness necessarily differs —
- * drops back to hash-only rather than inheriting one of its two parents.
+ * it.
+ *
+ * The boolean path uses it twice, and for the same reason both times: the body
+ * a name is PROVED on is not the body the name has to land on. Provenance is
+ * read from a probe of the kernel's entity-evolution entry point, run on
+ * copies, so its handles are the copies' and its faces are the raw
+ * pre-unification ones; the shipped body comes from the plain entry point and
+ * has been through face unification, which merges adjacent coplanar faces and
+ * renames handles wherever it does. Carrying by exact witness is what moves a
+ * name across both steps without ever matching by handle or by position — and
+ * a merged face, whose witness necessarily differs from either parent's, drops
+ * back to hash-only rather than inheriting one of the two names.
  */
 export function carryRemusUnchangedLineage(
   source: RemusLineageState | undefined,
