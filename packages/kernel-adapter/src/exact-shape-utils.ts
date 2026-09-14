@@ -26,8 +26,7 @@ import { topologyCandidatesForSolid } from './exact-lineage-builders';
 import { measureFaceGeometry } from './exact-measure';
 import { MEASUREMENT_DEFLECTION, faceWitnessOf } from './exact-witnesses';
 import { GEOMETRY_EPSILON } from './exact-math';
-import { requireValidSolid } from './kernel-validation';
-import { readKernelPayload } from './kernel-refusal';
+import { healPipelineSolid, requireValidSolid } from './kernel-validation';
 
 export /** Sewing gap for imported meshes, relative to the mesh's largest extent. */
 const MESH_SEW_TOLERANCE_RATIO = 1e-6;
@@ -277,24 +276,19 @@ export function importMeshSolid(kernel: RemusKernel, stlText: string): number {
  * volume, and its unify is refused — so the good body was thrown away, the
  * import reported success and the rebuild produced nothing. An *open* shell,
  * which the same check calls invalid, was kept. The refusal is about the
- * merge, not about the shell.
+ * merge, not about the shell. The sewn shell's own validity therefore decides
+ * nothing here and is no longer read.
  *
- * `runHealPipeline` is declared `any` and hands back JSON text, like every
- * other detailed reader on the pin. It goes through the same checked decoder
- * as the rest of this branch's seam (`readKernelPayload`), so a payload this
- * adapter cannot read raises instead of quietly reading as "no solid" and
- * returning the unmerged shell.
+ * A refusal and an unreadable answer are still two different failures, and
+ * {@link healPipelineSolid} is where they part: the kernel refusing throws and
+ * reads back as `null`, which keeps the sewn shell; a payload the adapter
+ * cannot find a solid handle in raises out of here, through the caller's
+ * `sewFaces` guard, and fails the import by name. Degrading that second case
+ * into the first would publish the pre-merge handle as if the kernel had
+ * chosen it.
  */
 function unifySewnMesh(kernel: RemusKernel, sewn: number): number {
-  try {
-    const healed = readKernelPayload(
-      kernel.runHealPipeline(sewn, ['unify_same_domain']),
-      'heal pipeline'
-    );
-    return typeof healed['solid'] === 'number' ? healed['solid'] : sewn;
-  } catch {
-    return sewn;
-  }
+  return healPipelineSolid(kernel, sewn, ['unify_same_domain']) ?? sewn;
 }
 
 export function bodyName(document: ProjectDocument, bodyId: BodyId): string {
