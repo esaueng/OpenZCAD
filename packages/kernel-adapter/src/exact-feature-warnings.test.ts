@@ -32,7 +32,7 @@ describe('feature warning amendments', () => {
       featureId: toFeatureId('feat_second'),
       name: 'Union'
     };
-    const reason = 'Union returned a faceted approximation.';
+    const reason = 'Union refused: these bodies could not be combined exactly.';
     raiseFeatureWarning(result, first, reason, 'refusal');
     const secondWarning = raiseFeatureWarning(
       result,
@@ -49,8 +49,8 @@ describe('feature warning amendments', () => {
     );
 
     expect(result.warnings).toEqual([
-      'Feature "Union": Union returned a faceted approximation.',
-      'Feature "Union": Union returned a faceted approximation. Move the second operand.'
+      'Feature "Union": Union refused: these bodies could not be combined exactly.',
+      'Feature "Union": Union refused: these bodies could not be combined exactly. Move the second operand.'
     ]);
     expect(result.featureWarnings?.map((entry) => entry.message)).toEqual(
       result.warnings
@@ -66,8 +66,8 @@ describe('feature warning amendments', () => {
     const index = raiseFeatureWarning(
       result,
       feature,
-      'This union could only be built as an approximation.\n' +
-        '6 operand faces (2 curved) became 193 result faces (0 curved)',
+      'Union refused: these bodies could not be combined exactly.\n' +
+        'Kernel refusal exact_only_unattainable (quality_refused)',
       'refusal'
     );
 
@@ -79,9 +79,9 @@ describe('feature warning amendments', () => {
     );
 
     expect(result.warnings).toEqual([
-      'Feature "Union": This union could only be built as an approximation. ' +
-        'Moving Cylinder +1 mm in Z clears it.\n' +
-        '6 operand faces (2 curved) became 193 result faces (0 curved)'
+      'Feature "Union": Union refused: these bodies could not be combined ' +
+        'exactly. Moving Cylinder +1 mm in Z clears it.\n' +
+        'Kernel refusal exact_only_unattainable (quality_refused)'
     ]);
     expect(result.featureWarnings?.map((entry) => entry.message)).toEqual(
       result.warnings

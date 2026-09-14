@@ -20,7 +20,7 @@ import {
 
 export interface KeypadRequest {
   /** Which commit path the value feeds (routing is the opener's concern). */
-  kind: 'offset' | 'edge' | 'radius' | 'sketch-dimension';
+  kind: 'offset' | 'edge' | 'radius' | 'sketch-dimension' | 'sketch-edit';
   /** Short label over the value field ('Offset', 'Radius', 'Height'). */
   label: string;
   /** Prefill; may be a typed digit captured mid-gesture. */
