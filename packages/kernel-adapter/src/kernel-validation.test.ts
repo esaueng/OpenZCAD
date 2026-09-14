@@ -4,6 +4,8 @@ import { kernelRefusalCategoryOf } from './kernel-refusal';
 import {
   SolidValidationRefusal,
   requireValidSolid,
+  unifyAndRequireValidSolid,
+  unifyFacesReport,
   validationDetail,
   validationErrorDescriptions,
   validationReport
@@ -128,5 +130,91 @@ describe('validateSolidDetailed against the pinned kernel', () => {
         JSON.stringify({ errorCount: 0, warningCount: 0 })
     };
     expect(() => validationReport(stub, 1)).toThrow(/missing its issue list/);
+  });
+});
+
+describe('unifyFacesChecked against the pinned kernel', () => {
+  /**
+   * The healing half of the equivalence: one call must report exactly what
+   * `unifyFaces` returned and what `validateSolid` would have said on either
+   * side of it, or the swap would move a gate.
+   */
+  it('reports the merge and both validator verdicts in one call', () => {
+    const build = (kernel: RemusKernel) => {
+      const box = kernel.makeBox(20, 20, 10);
+      const tool = kernel.copyAndTransformSolid(
+        kernel.makeCylinder(3, 30),
+        translation(10, 10, -5)
+      );
+      return kernel.cut(box, tool);
+    };
+
+    const separate = new RemusKernel();
+    const separateSolid = build(separate);
+    const before = separate.validateSolid(separateSolid);
+    const merged = separate.unifyFaces(separateSolid);
+    const after = separate.validateSolid(separateSolid);
+
+    const checked = new RemusKernel();
+    const checkedSolid = build(checked);
+    const report = unifyFacesReport(checked, checkedSolid);
+
+    expect(report.facesMerged).toBe(merged);
+    expect(report.inputErrors).toBe(before);
+    expect(report.resultErrors).toBe(after);
+    expect(report.reverted).toBe(false);
+    expect(checked.getSolidFaces(checkedSolid).length).toBe(
+      separate.getSolidFaces(separateSolid).length
+    );
+    expect(checked.volume(checkedSolid, 0.01)).toBeCloseTo(
+      separate.volume(separateSolid, 0.01),
+      9
+    );
+  });
+
+  it('passes a unified valid solid through the gate', () => {
+    const kernel = new RemusKernel();
+    const box = kernel.makeBox(6, 6, 6);
+    expect(
+      unifyAndRequireValidSolid(kernel, box, 'The box is not valid.')
+        .resultErrors
+    ).toBe(0);
+  });
+
+  it('refuses with the validator reasons when the result is invalid', () => {
+    const stub = {
+      unifyFacesChecked: () =>
+        JSON.stringify({
+          facesMerged: 0,
+          inputErrors: 2,
+          resultErrors: 2,
+          reverted: true
+        }),
+      validateSolidDetailed: () =>
+        JSON.stringify({
+          errorCount: 2,
+          warningCount: 0,
+          issues: [
+            { severity: 'error', description: 'shell is not closed' },
+            { severity: 'error', description: 'Euler characteristic is 1' }
+          ]
+        })
+    };
+    expect(() =>
+      unifyAndRequireValidSolid(stub, 1, 'The hole cut is not valid.')
+    ).toThrow(SolidValidationRefusal);
+    try {
+      unifyAndRequireValidSolid(stub, 1, 'The hole cut is not valid.');
+    } catch (error) {
+      expect(kernelRefusalCategoryOf(error)).toBe('invalid_topology');
+      expect((error as Error).message).toContain('shell is not closed');
+    }
+  });
+
+  it('raises on an unreadable unification payload rather than passing', () => {
+    const stub = { unifyFacesChecked: () => 'not json' };
+    expect(() => unifyFacesReport(stub, 1)).toThrow(
+      /unreadable face unification result/
+    );
   });
 });
