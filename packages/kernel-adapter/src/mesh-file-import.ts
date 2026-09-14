@@ -1,13 +1,21 @@
-import { MAX_IMPORT_TRIANGLES } from '@openzcad/io-stl';
+import { MAX_IMPORT_TRIANGLES, writeAsciiStl } from '@openzcad/io-stl';
 
 import {
   MESH_IMPORT_POLICIES,
   meshImportTooLargeMessage,
-  type MeshImportFormat
+  type MeshImportFormat,
+  type MeshImportPolicy
 } from './mesh-import-formats';
 import { RemusKernel, loadRemusTranslators } from './remus-runtime';
 import { MEASUREMENT_DEFLECTION } from './exact-witnesses';
-import { readThreeMfUnit } from './three-mf-unit';
+import { importMeshSolid } from './exact-shape-utils';
+import {
+  applyThreeMfTransform,
+  readThreeMfPackage,
+  transformDeterminant,
+  type ThreeMfPackage,
+  type ThreeMfPlacement
+} from './three-mf-package';
 
 /** What an `imported-mesh` feature needs, in millimetres. */
 export interface ImportedMeshTriangles {
@@ -22,6 +30,12 @@ export interface ImportedMeshTriangles {
    * converted from, so the import can say so.
    */
   sourceUnit?: string;
+}
+
+/** One placement to tessellate: a solid, and the matrix that positions it. */
+interface MeshPlacement {
+  readonly solid: number;
+  readonly transform: readonly number[] | null;
 }
 
 /**
@@ -43,17 +57,20 @@ export interface ImportedMeshTriangles {
  *
  * Coordinates come out in millimetres. OBJ, PLY and glTF binary declare no
  * length unit, so their numbers are adopted as written — the STL convention. A
- * 3MF does declare one, and the pinned translator ignores it (a box marked
- * `meter` imports with the same numbers as one marked `millimeter`), so the
- * declaration is read from the package here and applied. A 3MF whose
- * declaration cannot be read is refused rather than imported at a guessed
- * scale. The caller still applies the document's own unit scale, exactly as it
- * does for STL.
+ * 3MF declares one, and also declares in its `<build>` section which of its
+ * objects are placed, how often, and with what matrix; the pinned translator
+ * reads neither, so both are read from the package here and applied. Anything
+ * the package states that this import cannot carry out faithfully is refused
+ * by name rather than dropped.
  *
- * One file becomes one mesh body, so a file holding several objects is refused
- * by name: merging their triangles into one soup produces separate shells that
- * the rebuild's sew cannot close, which would import with a success message
- * and then leave a feature with no body at all.
+ * One file becomes one mesh body, and whether a file can is decided by trying,
+ * not by counting: the triangles are put through the very rebuild the document
+ * will run — serialize to one ASCII STL solid, import, sew — before they are
+ * returned. Several shells sew into one body more often than not, so counting
+ * objects would refuse files that import perfectly well; but a file whose
+ * triangles the rebuild cannot turn into a body is refused here, with the
+ * kernel's own reason, instead of importing behind a success message and
+ * leaving a feature with no body at all.
  */
 export async function importMeshFile(
   format: MeshImportFormat,
@@ -63,9 +80,9 @@ export async function importMeshFile(
   if (data.byteLength > policy.maxInputBytes) {
     throw new Error(meshImportTooLargeMessage(format, data.byteLength));
   }
-  // Read before parsing: an unreadable declaration refuses the import without
-  // spending the parse, and only the package header is decompressed.
-  const unit = format === '3mf' ? await readThreeMfUnit(data) : null;
+  // Read before parsing: a package that cannot be read, or that asks for
+  // something this import will not do, refuses without spending the parse.
+  const pkg = format === '3mf' ? await readThreeMfPackage(data) : null;
   const io = await loadRemusTranslators();
   let document: Uint8Array;
   try {
@@ -96,61 +113,232 @@ export async function importMeshFile(
   let vertices: number[];
   let indices: number[];
   try {
-    const solids = kernel.deserializeSolids(document);
-    // A file may hold several objects — a 3MF build with two items imports as
-    // two solids. One import is one `imported-mesh` feature, and that feature
-    // rebuilds by sewing its triangles into a single shell, which separate
-    // shells cannot form. Measured on the pin: two disjoint boxes merged into
-    // one soup rebuild to no body at all, behind a success message. Refuse the
-    // file instead of importing something that cannot come back.
-    if (solids.length > 1) {
+    const solids = Array.from(kernel.deserializeSolids(document));
+    ({ vertices, indices } = tessellatePlacements(
+      kernel,
+      pkg ? threeMfPlacements(pkg, solids) : solids.map(identityPlacement)
+    ));
+
+    const triangleCount = indices.length / 3;
+    if (triangleCount === 0) {
+      throw new Error(`This ${policy.label} file contains no triangles.`);
+    }
+    if (triangleCount > MAX_IMPORT_TRIANGLES) {
       throw new Error(
-        `This ${policy.label} file holds ${solids.length} separate objects, ` +
-          'and a mesh import becomes one body. Export it as a single object, ' +
-          'or import each object from its own file.'
+        `${policy.label} has ${triangleCount} triangles; the browser import limit is ${MAX_IMPORT_TRIANGLES}.`
       );
     }
-    vertices = [];
-    indices = [];
-    for (const solid of solids) {
-      const mesh = kernel.tessellateSolid(solid, MEASUREMENT_DEFLECTION);
-      try {
-        // WASM accessors materialize arrays. Read each once before iterating.
-        const positions = mesh.positions;
-        const triangles = mesh.indices;
-        const base = vertices.length / 3;
-        for (const value of positions) {
-          vertices.push(value);
-        }
-        for (const index of triangles) {
-          indices.push(index + base);
-        }
-      } finally {
-        mesh.free();
+    if (pkg && pkg.unit.millimetres !== 1) {
+      for (let index = 0; index < vertices.length; index += 1) {
+        vertices[index]! *= pkg.unit.millimetres;
       }
     }
+    verifyMeshRebuilds(kernel, policy, vertices, indices);
   } finally {
     kernel.free();
   }
 
-  const triangleCount = indices.length / 3;
-  if (triangleCount === 0) {
-    throw new Error(`This ${policy.label} file contains no triangles.`);
-  }
-  if (triangleCount > MAX_IMPORT_TRIANGLES) {
-    throw new Error(
-      `${policy.label} has ${triangleCount} triangles; the browser import limit is ${MAX_IMPORT_TRIANGLES}.`
-    );
-  }
-  if (unit && unit.millimetres !== 1) {
-    for (let index = 0; index < vertices.length; index += 1) {
-      vertices[index]! *= unit.millimetres;
-    }
-  }
   return {
     vertices,
     indices,
-    triangleCount,
-    ...(unit ? { sourceUnit: unit.name } : {})
+    triangleCount: indices.length / 3,
+    ...(pkg ? { sourceUnit: pkg.unit.name } : {})
   };
+}
+
+function identityPlacement(solid: number): MeshPlacement {
+  return { solid, transform: null };
+}
+
+/**
+ * What a 3MF's `<build>` section asks the import to place.
+ *
+ * The translator returns one solid per `<object>` resource, in document order
+ * — verified on the pin — and ignores `<build>` completely. So the mapping
+ * from a build item to a solid is positional, and it is checked: if the
+ * package's mesh objects and the translator's solids do not correspond one for
+ * one, the correspondence is not established and the import refuses rather
+ * than placing whichever solid happens to sit at that index.
+ */
+function threeMfPlacements(
+  pkg: ThreeMfPackage,
+  solids: readonly number[]
+): MeshPlacement[] {
+  if (solids.length !== pkg.meshObjectCount) {
+    throw new Error(
+      `This 3MF declares ${pkg.meshObjectCount} mesh object(s) but read as ` +
+        `${solids.length}, so the import cannot tell which object its build ` +
+        'places. Re-export the file, or import each object from its own file.'
+    );
+  }
+  return pkg.placements.map((placement: ThreeMfPlacement) => ({
+    solid: solids[placement.objectIndex]!,
+    transform: placement.transform
+  }));
+}
+
+/**
+ * Every placement's triangles, in one list.
+ *
+ * A solid placed more than once is tessellated once and emitted once per
+ * placement, so a build plate that repeats one object imports as many copies
+ * as it asks for rather than the one the translator hands back.
+ */
+function tessellatePlacements(
+  kernel: RemusKernel,
+  placements: readonly MeshPlacement[]
+): { vertices: number[]; indices: number[] } {
+  const vertices: number[] = [];
+  const indices: number[] = [];
+  const tessellated = new Map<
+    number,
+    { positions: number[]; triangles: number[] }
+  >();
+  for (const placement of placements) {
+    let facets = tessellated.get(placement.solid);
+    if (!facets) {
+      const mesh = kernel.tessellateSolid(placement.solid, MEASUREMENT_DEFLECTION);
+      try {
+        // WASM accessors materialize arrays. Read each once before iterating.
+        facets = {
+          positions: Array.from(mesh.positions),
+          triangles: Array.from(mesh.indices)
+        };
+      } finally {
+        mesh.free();
+      }
+      tessellated.set(placement.solid, facets);
+    }
+    const base = vertices.length / 3;
+    const matrix = placement.transform;
+    if (matrix) {
+      for (let index = 0; index < facets.positions.length; index += 3) {
+        const point = applyThreeMfTransform(
+          matrix,
+          facets.positions[index]!,
+          facets.positions[index + 1]!,
+          facets.positions[index + 2]!
+        );
+        vertices.push(point[0], point[1], point[2]);
+      }
+    } else {
+      for (const value of facets.positions) {
+        vertices.push(value);
+      }
+    }
+    // A mirroring placement turns every triangle inside out; swapping two
+    // corners back is what keeps the shell facing outwards.
+    const mirrored = matrix !== null && transformDeterminant(matrix) < 0;
+    for (let index = 0; index < facets.triangles.length; index += 3) {
+      const a = facets.triangles[index]! + base;
+      const b = facets.triangles[index + 1]! + base;
+      const c = facets.triangles[index + 2]! + base;
+      if (mirrored) {
+        indices.push(a, c, b);
+      } else {
+        indices.push(a, b, c);
+      }
+    }
+  }
+  return { vertices, indices };
+}
+
+/**
+ * Refuse now what the rebuild would refuse later.
+ *
+ * An `imported-mesh` feature has one body, and it builds it by serializing its
+ * triangles to a single ASCII STL solid and sewing them — so the only honest
+ * answer to "can this file be one body?" is to run that. It is run here, on
+ * the triangles about to be returned, so a file that cannot come back is
+ * refused while it is still a file, instead of importing behind "Imported
+ * 24 triangles" and leaving a feature with no body.
+ *
+ * The kernel's own reason is carried through, and the count of vertex-disjoint
+ * groups in the soup is added when there is more than one, because that is
+ * what the user can act on.
+ */
+function verifyMeshRebuilds(
+  kernel: RemusKernel,
+  policy: MeshImportPolicy,
+  vertices: readonly number[],
+  indices: readonly number[]
+): void {
+  try {
+    importMeshSolid(
+      kernel,
+      writeAsciiStl('import-check', [
+        {
+          name: 'import-check',
+          vertices: vertices as number[],
+          indices: indices as number[]
+        }
+      ])
+    );
+  } catch (error) {
+    const detail =
+      error instanceof Error ? error.message : 'unknown kernel error';
+    const shells = disjointGroupCount(indices, vertices.length / 3);
+    const sentence = detail.endsWith('.') ? detail : `${detail}.`;
+    throw new Error(
+      `This ${policy.label} file could not be imported as a body: ${sentence}` +
+        (shells > 1
+          ? ` Its triangles form ${shells} groups that share no vertex, and a ` +
+            'mesh import becomes one body — export it as a single closed ' +
+            'mesh, or import each part from its own file.'
+          : ''),
+      { cause: error }
+    );
+  }
+}
+
+/** How many vertex-disjoint groups a triangle soup falls into. */
+function disjointGroupCount(
+  indices: readonly number[],
+  vertexCount: number
+): number {
+  if (vertexCount === 0) {
+    return 0;
+  }
+  const parent = new Int32Array(vertexCount);
+  for (let index = 0; index < vertexCount; index += 1) {
+    parent[index] = index;
+  }
+  const find = (value: number): number => {
+    let root = value;
+    while (parent[root] !== root) {
+      root = parent[root]!;
+    }
+    let cursor = value;
+    while (parent[cursor] !== root) {
+      const next = parent[cursor]!;
+      parent[cursor] = root;
+      cursor = next;
+    }
+    return root;
+  };
+  const union = (a: number, b: number): void => {
+    const rootA = find(a);
+    const rootB = find(b);
+    if (rootA !== rootB) {
+      parent[rootB] = rootA;
+    }
+  };
+  const used = new Uint8Array(vertexCount);
+  for (let index = 0; index < indices.length; index += 3) {
+    const a = indices[index]!;
+    const b = indices[index + 1]!;
+    const c = indices[index + 2]!;
+    used[a] = 1;
+    used[b] = 1;
+    used[c] = 1;
+    union(a, b);
+    union(a, c);
+  }
+  const roots = new Set<number>();
+  for (let index = 0; index < vertexCount; index += 1) {
+    if (used[index] === 1) {
+      roots.add(find(index));
+    }
+  }
+  return roots.size;
 }
