@@ -61,6 +61,38 @@ export type PatternKind = 'linear' | 'circular' | 'grid';
 export type AxisId = 'x' | 'y' | 'z';
 
 /**
+ * How a variable-radius fillet runs between its two end radii.
+ *
+ * Deliberately only the two laws the kernel qualifies. Remus ships
+ * variable-radius blending as an experimental capability with declared
+ * bounds: a standard radius law whose extrema over the whole edge are its
+ * own endpoints can be proved safe, and anything else — an interior peak, a
+ * sampled law, a setback corner — is outside what it certifies. Both laws
+ * here are monotone between `radius` and `endRadius`, so the blend's largest
+ * and smallest ball are the two the user typed.
+ *
+ * Not a closed set at the kernel boundary: `filletVariable` silently treats
+ * an unrecognized law as a CONSTANT blend at the start radius rather than
+ * refusing, so a law outside this union has to be rejected before the call
+ * rather than after it. See `assertQualifiedVariableFillet` in the kernel
+ * adapter.
+ */
+export type VariableFilletLaw = 'linear' | 'scurve';
+
+/** The runtime form of {@link VariableFilletLaw}, for validating documents. */
+export const VARIABLE_FILLET_LAWS: readonly VariableFilletLaw[] = [
+  'linear',
+  'scurve'
+];
+
+export function isVariableFilletLaw(law: unknown): law is VariableFilletLaw {
+  return (
+    typeof law === 'string' &&
+    (VARIABLE_FILLET_LAWS as readonly string[]).includes(law)
+  );
+}
+
+/**
  * A parametric scalar: either a literal number or an expression string that is
  * evaluated against the document's parameter table when geometry is rebuilt
  * (e.g. `"width / 2 + 5"`). Storing the raw expression keeps features fully
@@ -498,12 +530,22 @@ export type SketchConstraintData =
   /** Equal length (two lines) or equal radius (two circles/arcs). */
   | { constraintKind: 'equal'; a: EntityId; b: EntityId }
   /**
-   * One line tangent to one circle, in either order. Point-free: the kernel's
-   * `tangentLineCircle` constrains center-to-line distance to the radius, so
-   * no synthesized contact-point entity is needed. Arcs still require the
-   * contact-point form (TangentLineArc) and stay excluded.
+   * One line tangent to one circle or arc, in either order.
+   *
+   * The circle form is point-free: the kernel's `tangentLineCircle`
+   * constrains center-to-line distance to the radius, so no contact point is
+   * needed and `at` is absent. The arc form is the kernel's
+   * `tangentLineArc`, which asks which point of the arc the line touches, so
+   * `at` names that arc point; it is what a sketch fillet records about the
+   * arc it inserted. A constraint written before the arc form existed has no
+   * `at` and replays exactly as it did.
    */
-  | { constraintKind: 'tangent'; a: EntityId; b: EntityId }
+  | {
+      constraintKind: 'tangent';
+      a: EntityId;
+      b: EntityId;
+      at?: SketchPointRef;
+    }
   | { constraintKind: 'concentric'; a: EntityId; b: EntityId }
   | { constraintKind: 'midpoint'; point: SketchPointRef; line: EntityId }
   | {
@@ -725,12 +767,39 @@ export type FeatureData =
       /** User-authored section order; at least two are required. */
       sections: SketchSectionReference[];
       mode: 'ruled' | 'smooth';
+      /**
+       * Apex point closing the loft after its last section, so that end comes
+       * to a point instead of a flat cap. Absent means the flat cap every
+       * document written before this field existed had, and the builder then
+       * takes the unchanged `loft`/`loftSmooth` call.
+       *
+       * Ruled mode only: the pinned kernel's smooth section surfaces do not
+       * close against an apex, and the adapter refuses the combination by
+       * name rather than emitting the invalid solid it produces.
+       *
+       * There is deliberately no matching apex before the first section: the
+       * kernel's `startPoint` leaves one apex facet out of the tessellation on
+       * a rectangular profile, so that end is pointed by reversing the section
+       * order instead. See `HANDOFF.md` for the measurement.
+       */
+      endPoint?: ParametricVector3;
     }
   | {
       featureKind: 'sweep';
       profile: SketchSectionReference;
       path: SketchPathReference;
       mode: 'standard' | 'smooth';
+      /**
+       * Guide rail whose direction the profile's up-vector tracks along the
+       * path, replacing the rotation-minimizing frame. Absent means the
+       * unchanged `sweepWithOptions`/`sweepAlongEdges` call, so a sweep
+       * authored before this field existed replays identically.
+       *
+       * The kernel's guided sweep takes one spine curve and one rail curve,
+       * so both the path and the rail must resolve to a single edge; the
+       * adapter refuses anything wider by name.
+       */
+      guide?: SketchPathReference;
     }
   | {
       featureKind: 'helical-sweep';
@@ -852,7 +921,23 @@ export type FeatureData =
       targetBodyId: BodyId;
       edgeHashes: number[];
       edgeReferences?: EdgeTopologyReferenceV5[];
+      /**
+       * The rolling-ball radius, and — when {@link endRadius} is present —
+       * the radius at the start of each selected edge.
+       */
       radius: ParamValue;
+      /**
+       * Variable-radius fillet: the radius at the far end of each selected
+       * edge, in that edge's own direction. Absent means the constant-radius
+       * fillet every earlier document stored, which still runs through the
+       * constant blend entry point and replays unchanged.
+       */
+      endRadius?: ParamValue;
+      /**
+       * How the radius runs between `radius` and `endRadius`. Only read when
+       * `endRadius` is present; absent reads as `'linear'`.
+       */
+      radiusLaw?: VariableFilletLaw;
     }
   | {
       featureKind: 'chamfer';
@@ -867,6 +952,19 @@ export type FeatureData =
        * both faces, which is what every earlier document stored.
        */
       angleDeg?: ParamValue;
+      /**
+       * Asymmetric chamfer: the setback measured on the SECOND of the two
+       * faces each selected edge borders, with `distance` on the first. The
+       * pair's order is the kernel's own edge-to-face order, which the
+       * published `EdgeTopology.adjacentFaceHashes` deliberately sorts away —
+       * the two setbacks are told apart in the viewport preview and swapped
+       * from the form, not named from stored data.
+       *
+       * Absent means the symmetric chamfer. Mutually exclusive with
+       * `angleDeg`: both express the same asymmetry and a document carrying
+       * the two is refused rather than silently resolved one way.
+       */
+      distance2?: ParamValue;
     }
   | {
       featureKind: 'pattern';
@@ -948,6 +1046,10 @@ export type FeatureData =
       planarEmboss?: {
         part: 'base' | 'text';
         selection: PlanarEmbossSelection;
+        /** Fixed rigid moves in which the selection was measured. Rebuild
+         * verifies the positioned source but returns the separated raw source;
+         * ordinary transform features still perform the actual placement. */
+        sourcePlacement?: Transform3D[];
       };
     };
 
@@ -1929,7 +2031,7 @@ export interface FeatureWarning {
   kind: 'build-failed' | 'refusal' | 'advisory' | 'suppressed';
   /**
    * The exact kernel's own classification, present only when this warning
-   * came from a boolean the exact-only pipeline refused.
+   * came from an operation the kernel refused with a category.
    *
    * Session-only like the rest of this record, and the field to branch on:
    * `message` is product copy and may be reworded at any time, while
@@ -1938,9 +2040,20 @@ export interface FeatureWarning {
    * `tolerance_violation`, `cancelled`, `internal`. It is typed as a string
    * rather than a union so a new kernel category cannot break a build here
    * before anyone has decided what it means.
+   *
+   * `family` says which kernel API refused, because the category alone does
+   * not: `invalid_topology` from a boolean is a pair the engine would not
+   * combine, and from a validation it is a body that came back malformed.
+   * `operation` is present only for a family that names one — the booleans
+   * do, a validation has no operand pair to name.
+   *
+   * This carried only booleans when it was introduced. Every family with a
+   * typed twin on the pin now travels on the same field rather than growing
+   * a second one beside it.
    */
-  exactBooleanRefusal?: {
-    operation: 'cut' | 'fuse' | 'intersect';
+  kernelRefusal?: {
+    family: 'boolean' | 'validation' | 'healing' | 'import';
+    operation?: string;
     category: string;
     code: string;
   };
@@ -2028,6 +2141,8 @@ export interface ArtifactRecord {
   kind:
     | 'step-import'
     | 'stl-import'
+    /** Any other mesh interchange import: 3MF, OBJ, glTF binary, PLY. */
+    | 'mesh-import'
     | 'step-export'
     | 'stl-export'
     | '3mf-export'

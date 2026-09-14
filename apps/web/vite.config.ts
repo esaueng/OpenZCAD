@@ -324,6 +324,19 @@ export default defineConfig(async ({ command, isPreview, mode }) => {
         '@openzcad/kernel-adapter/exact': fileURLToPath(
           new URL('../../packages/kernel-adapter/src/exact.ts', import.meta.url)
         ),
+        // The mesh import format table is reached only from the lazy mesh
+        // import client and its worker. Importing it through the adapter's
+        // index barrel would put it in the eager graph — and would make the
+        // whole eager kernel-adapter slice shared between first paint and a
+        // lazy chunk, which rolldown answers by hoisting it into an anonymous
+        // `src-*` chunk the launcher preloads. Same reason as the text loader
+        // above: reach the leaf module directly.
+        '@openzcad/kernel-adapter/mesh-import-formats': fileURLToPath(
+          new URL(
+            '../../packages/kernel-adapter/src/mesh-import-formats.ts',
+            import.meta.url
+          )
+        ),
         '@openzcad/kernel-adapter/face-attachment': fileURLToPath(
           new URL(
             '../../packages/kernel-adapter/src/face-attachment.ts',

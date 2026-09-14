@@ -291,15 +291,30 @@ export function solveSketchWithGcs(
         break;
       }
       case 'tangent': {
-        // Document validation guarantees one line and one circle, in either
-        // order; the kernel constraint names its sides.
+        // Document validation guarantees one line and one circle or arc, in
+        // either order; the kernel constraint names its sides. The arc form
+        // is stated at a contact point, which the document carries as `at`.
         const a = objectHandles(data.a);
         const b = objectHandles(data.b);
-        const [line, circle] = a.kind === 'line' ? [a, b] : [b, a];
+        const [line, curve] = a.kind === 'line' ? [a, b] : [b, a];
+        if (curve.kind === 'arc') {
+          if (!data.at) {
+            throw new Error(
+              'A tangent constraint against an arc must name the arc point it touches.'
+            );
+          }
+          add(id, {
+            type: 'tangentLineArc',
+            line: line.entity,
+            arc: curve.entity,
+            point: pointHandle(data.at)
+          });
+          break;
+        }
         add(id, {
           type: 'tangentLineCircle',
           line: line.entity,
-          circle: circle.entity
+          circle: curve.entity
         });
         break;
       }

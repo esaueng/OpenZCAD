@@ -11,6 +11,21 @@ export type {
 } from './rebuild-progress';
 import { RemusKernel, loadRemusTranslators } from './remus-runtime';
 import {
+  runSketchPlanarOperation,
+  type SketchPlanarOperation,
+  type SketchPlanarResult
+} from './sketch-2d-ops';
+export type {
+  Sketch2dPoint,
+  SketchChamferGeometry,
+  SketchCorner,
+  SketchFilletGeometry,
+  SketchOffsetCurve,
+  SketchOffsetJoin,
+  SketchPlanarOperation,
+  SketchPlanarResult
+} from './sketch-2d-ops';
+import {
   findSketch,
   getParameterScope,
   getParameterHiddenBodyIds,
@@ -21,6 +36,22 @@ import {
 import { writeDxf } from '@openzcad/io-dxf';
 import { writeAsciiStl } from '@openzcad/io-stl';
 import { faceDxfEntities } from './exact-dxf';
+import {
+  exactSolidSection,
+  sectionDxfEntities,
+  type ExactSectionPlane,
+  type SectionOutlineRefusal,
+  type SectionOutlineRegion,
+  type SectionOutlineReport
+} from './exact-section';
+export type {
+  ExactSectionLoop,
+  ExactSectionPlane,
+  ExactSectionRefusalReason,
+  SectionOutlineRefusal,
+  SectionOutlineRegion,
+  SectionOutlineReport
+} from './exact-section';
 import {
   BODY_OPACITY_METADATA_KEY,
   DEFAULT_BODY_COLOR,
@@ -71,9 +102,13 @@ import { collapseShape } from './exact-boolean-helpers';
 import {
   bodyOpacityFromMetadata,
   decodeText,
-  importStepWithOwnBudget,
   projectRemusLineageDiagnostic
 } from './exact-shape-utils';
+import {
+  importStepWithOwnBudget,
+  stepImportEmptyReason,
+  type StepImportReport
+} from './kernel-step-import';
 import {
   buildDocumentHistory,
   type CachedImportedStep,
@@ -95,6 +130,10 @@ import {
   brepVertexIds
 } from './exact-brep';
 export { brepEdgeCurve, edgeCircleMisfit } from './exact-brep';
+export {
+  importMeshFile,
+  type ImportedMeshTriangles
+} from './mesh-file-import';
 import {
   readMeshQuality,
   type BodyMeshQuality,
@@ -499,6 +538,45 @@ export interface ExactKernelAdapter {
     document: ProjectDocument,
     sketchId: SketchId
   ): Promise<SketchSolveOutcome>;
+  /**
+   * The exact, kernel-computed cross-section at one plane — section CURVES,
+   * not the viewport's display caps. Refusals are reported per body rather
+   * than thrown: a plane that cuts one body and misses another is an
+   * ordinary section, not a failure.
+   *
+   * `bodyIds` names exactly what to section. Omitting it falls back to the
+   * document's own visibility, which is NOT what a viewport is showing —
+   * hiding or isolating a body is device-local view state the adapter
+   * cannot see. A caller that has that state must pass its own list.
+   */
+  sectionOutline(
+    document: ProjectDocument,
+    plane: ExactSectionPlane,
+    bodyIds?: BodyId[]
+  ): Promise<SectionOutlineReport>;
+  /**
+   * The same exact section written as a DXF R12 drawing in millimetres.
+   * Fails closed: a body the plane cuts but the kernel cannot section
+   * refuses the whole export rather than quietly dropping a region.
+   *
+   * `bodyIds` carries the same meaning as on `sectionOutline`, and callers
+   * that draw a section on screen should pass the same list to both — a
+   * drawing of a different set of bodies from the one on screen is a
+   * drawing of something the user never saw.
+   */
+  exportSectionDxf(
+    document: ProjectDocument,
+    plane: ExactSectionPlane,
+    bodyIds?: BodyId[]
+  ): Promise<string>;
+  /**
+   * One planar sketch edit on the kernel's 2D operations: a corner fillet, a
+   * corner chamfer, or a closed-loop offset. Purely geometric — the caller
+   * owns which entities the answer replaces and what constrains them.
+   */
+  sketchPlanarOperation(
+    operation: SketchPlanarOperation
+  ): Promise<SketchPlanarResult>;
   inspectStep(data: string | ArrayBuffer): Promise<{
     solid: boolean;
     valid: boolean;
@@ -1722,6 +1800,148 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     });
   }
 
+  /**
+   * The bodies a section applies to when the caller names none: every body
+   * the build produced, minus the ones a parameter hides and the ones a
+   * later boolean consumed. A body consumed by a later boolean still has a
+   * shape in the build — sectioning those too would draw the pre-boolean
+   * blank straight through the part that replaced it.
+   *
+   * This is the DOCUMENT's visibility, not a viewport's. `Hide Body` and
+   * `Isolate` write device-local view state that never reaches the
+   * document, so a caller with a viewport must name its own bodies.
+   */
+  private sectionableBodyIds(
+    build: ExactBuildResult,
+    hidden: ReadonlySet<BodyId>
+  ): BodyId[] {
+    return [...build.shapes.keys()].filter(
+      (bodyId) => !hidden.has(bodyId) && !build.consumed.has(bodyId)
+    );
+  }
+
+  /**
+   * Section every named body at one plane, per body, on the build's own
+   * solids. Bodies are sectioned separately rather than fused first: a union
+   * would change the geometry being measured, and the kernel refuses a
+   * cross-section that falls into disjoint regions anyway.
+   */
+  private sectionBuild(
+    kernel: RemusKernel,
+    build: ExactBuildResult,
+    document: ProjectDocument,
+    plane: ExactSectionPlane,
+    bodyIds: BodyId[] | undefined
+  ): { regions: SectionOutlineRegion[]; refusals: SectionOutlineRefusal[] } {
+    const hidden = getParameterHiddenBodyIds(document);
+    const regions: SectionOutlineRegion[] = [];
+    const refusals: SectionOutlineRefusal[] = [];
+    const requested = bodyIds ?? this.sectionableBodyIds(build, hidden);
+    for (const bodyId of requested) {
+      if (hidden.has(bodyId) || build.consumed.has(bodyId)) {
+        continue;
+      }
+      const shape = build.shapes.get(bodyId);
+      if (!shape) {
+        // A body the caller named that this document never built. Refused by
+        // name rather than thrown: a section that loses every body it COULD
+        // cut because one id was stale reports an internal diagnostic where
+        // a drawing should be. It is not `plane-misses-body`, so it still
+        // shuts the export.
+        refusals.push({
+          bodyId,
+          reason: 'unknown-body',
+          message: `Body ${bodyId} has no exact geometry in this model.`
+        });
+        continue;
+      }
+      for (const solid of shape.solids) {
+        const outcome = exactSolidSection(kernel, solid, plane);
+        if (outcome.status === 'refused') {
+          refusals.push({
+            bodyId,
+            reason: outcome.reason,
+            message: outcome.message
+          });
+          continue;
+        }
+        regions.push({
+          bodyId,
+          area: outcome.area,
+          loops: outcome.loops,
+          positions: outcome.positions,
+          indices: outcome.indices
+        });
+      }
+    }
+    return { regions, refusals };
+  }
+
+  async sectionOutline(
+    document: ProjectDocument,
+    plane: ExactSectionPlane,
+    bodyIds?: BodyId[]
+  ): Promise<SectionOutlineReport> {
+    return this.withExportBuild(document, (kernel, build) => {
+      const { regions, refusals } = this.sectionBuild(
+        kernel,
+        build,
+        document,
+        plane,
+        bodyIds
+      );
+      return { plane, regions, refusals };
+    });
+  }
+
+  async exportSectionDxf(
+    document: ProjectDocument,
+    plane: ExactSectionPlane,
+    bodyIds?: BodyId[]
+  ): Promise<string> {
+    return this.withExportBuild(document, (kernel, build) => {
+      const hidden = getParameterHiddenBodyIds(document);
+      const requested = bodyIds ?? this.sectionableBodyIds(build, hidden);
+      const faces: number[] = [];
+      let cut = 0;
+      for (const bodyId of requested) {
+        if (hidden.has(bodyId) || build.consumed.has(bodyId)) {
+          continue;
+        }
+        const shape = build.shapes.get(bodyId);
+        if (!shape) {
+          // `sectionOutline` reports this as an `unknown-body` refusal and
+          // draws the rest; a DRAWING may not quietly lose a named body, so
+          // the export fails closed exactly as it does for any other refusal
+          // that is not the plane simply missing. The rail's export gate is
+          // shut in this state, so reaching here means a caller bypassed it.
+          throw new Error(`Body ${bodyId} has no exact geometry in this model.`);
+        }
+        for (const solid of shape.solids) {
+          const outcome = exactSolidSection(kernel, solid, plane);
+          if (outcome.status === 'ok') {
+            faces.push(...outcome.faces);
+            cut += 1;
+            continue;
+          }
+          // A plane that simply misses one body of several is not an error;
+          // any other refusal would silently drop material from the drawing.
+          if (outcome.reason !== 'plane-misses-body') {
+            throw new Error(outcome.message);
+          }
+        }
+      }
+      if (cut === 0) {
+        throw new Error('The section plane does not cut any body.');
+      }
+      // The section reads the UNSCALED build solids; uniform unit scaling
+      // commutes with plane projection, so the 2D output is scaled instead.
+      return writeDxf(
+        sectionDxfEntities(kernel, faces, plane, UNIT_TO_MM[document.units])
+      );
+    });
+  }
+
   async exportStl(
     document: ProjectDocument,
     bodyIds: BodyId[],
@@ -1919,6 +2139,21 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
   }
 
   /**
+   * One planar sketch edit. Synchronous under the hood like `solveSketch`,
+   * and async for the same reason: the worker boundary.
+   */
+  async sketchPlanarOperation(
+    operation: SketchPlanarOperation
+  ): Promise<SketchPlanarResult> {
+    const kernel = new RemusKernel();
+    try {
+      return runSketchPlanarOperation(kernel, operation);
+    } finally {
+      kernel.free();
+    }
+  }
+
+  /**
    * The pre-import probe the app shows before a user commits to an import.
    *
    * K0.6 makes it answer in every case rather than raising in some of them:
@@ -1944,8 +2179,11 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
           ? new TextEncoder().encode(data)
           : new Uint8Array(data);
       let declared: number[];
+      let report: StepImportReport;
       try {
-        declared = Array.from(importStepWithOwnBudget(kernel, bytes));
+        const imported = importStepWithOwnBudget(kernel, bytes);
+        declared = Array.from(imported.solids);
+        report = imported.report;
       } catch (error) {
         return {
           solid: false,
@@ -1974,7 +2212,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
           0
         ),
         ...(declared.length === 0
-          ? { reason: 'STEP file contains no solids.' }
+          ? { reason: stepImportEmptyReason(report) }
           : accepted.length === 0
             ? { reason: importedStepNoSolidError(rejections) }
             : rejections.length > 0

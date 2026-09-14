@@ -3,7 +3,10 @@ import {
   parameterInputError,
   parameterBuildError
 } from './lib/parameterEdit';
-import type { parameterVisualPreview } from './lib/parameterVisualPreview';
+import type {
+  ParameterPreviewBody,
+  parameterVisualPreview
+} from './lib/parameterVisualPreview';
 import { LatestTask } from './lib/latestTask';
 import { rebuildProgressLabel } from './lib/rebuildProgressLabel';
 import { featureHistory, featureResultBodyIds } from './lib/featureHistory';
@@ -12,7 +15,6 @@ import { edgeModifierCommand } from './lib/edgeModifierEdit';
 import type { EdgeModifierFormValue } from './components/forms/FeatureForms';
 import { documentNodesWithHistory } from '@openzcad/shared';
 import { useWorkspaceResume } from './hooks/useWorkspaceResume';
-import { ResumeSessionDialog } from './components/ResumeSessionDialog';
 import { buildMeasurementRecord } from './lib/measurementRecord';
 import {
   loadProjectBackupFiles,
@@ -224,11 +226,6 @@ import {
   reparkFailedAutosave
 } from './lib/localAutosaveFailure';
 import {
-  MAX_SOURCE_IMPORT_BYTES,
-  MAX_SOURCE_IMPORT_MB,
-  runStepImport
-} from './lib/stepImportRun';
-import {
   inspectShaprPair,
   type ShaprPairInspection
 } from './lib/shaprImportWorkerClient';
@@ -325,8 +322,6 @@ import {
   clearProjectShareFragment
 } from './lib/projectShareLink';
 import { fetchSharedProject } from './lib/projectShareClient';
-import { ProjectConflictDialog } from './components/ProjectConflictDialog';
-import { SaveRevisionDialog } from './components/SaveRevisionDialog';
 import type {
   ExportProgress,
   MeshExportDialogFormat
@@ -450,8 +445,10 @@ import {
   toolCardFor,
   type FaceTarget,
   type RegionTarget,
-  type SketchConstraintToolKind
+  type SketchConstraintToolKind,
+  type SketchEditToolKind
 } from './lib/interaction/machine';
+import type { SketchEditHost } from './lib/sketch/edits';
 import {
   faceOffsetBaseline,
   planFaceOffset
@@ -519,8 +516,13 @@ import type {
   MovePreview,
   MoveSnap,
   SectionPlaneId,
+  SectionViewSettings,
   WheelDevice
 } from '@openzcad/viewport';
+import type {
+  SectionOutlineState,
+  ViewportGeometry
+} from './lib/sectionOutline';
 
 /**
  * Space activates focused buttons and belongs in free-text fields. Numeric and
@@ -564,6 +566,18 @@ function focusedControlOwnsSpace(target: HTMLElement | null): boolean {
   }
   return false;
 }
+
+/**
+ * The STEP/STL import run, loaded on the gesture that imports a file.
+ *
+ * It is several kilobytes of orchestration — checksum marks, artifact
+ * archival, abort plumbing, the guided Shapr3D path — and a session that
+ * never imports a file should not carry it at launch. Both call sites are
+ * already inside an async handler that is about to read a file off disk, so
+ * the fetch costs nothing measurable next to that. The refusals that come
+ * BEFORE it (unsupported extension, a lone `.shapr`) stay synchronous.
+ */
+const stepImportRun = () => import('./lib/stepImportRun');
 
 const LazyViewerShell = lazyWithStaleChunkNotice(() =>
   import('./components/ViewerShell').then((module) => ({
@@ -636,6 +650,24 @@ const LazyWorkspaceTour = lazyWithStaleChunkNotice(() =>
 const LazySketchToolRail = lazyWithStaleChunkNotice(() =>
   import('./components/SketchToolRail').then((module) => ({
     default: module.SketchToolRail
+  }))
+);
+// Three modal dialogs nobody sees in an ordinary session: a resume offer, a
+// named checkpoint, and a save conflict. They loaded with the app and sat in
+// the entry chunk; the gesture that opens one can afford to fetch it.
+const LazyResumeSessionDialog = lazyWithStaleChunkNotice(() =>
+  import('./components/ResumeSessionDialog').then((module) => ({
+    default: module.ResumeSessionDialog
+  }))
+);
+const LazySaveRevisionDialog = lazyWithStaleChunkNotice(() =>
+  import('./components/SaveRevisionDialog').then((module) => ({
+    default: module.SaveRevisionDialog
+  }))
+);
+const LazyProjectConflictDialog = lazyWithStaleChunkNotice(() =>
+  import('./components/ProjectConflictDialog').then((module) => ({
+    default: module.ProjectConflictDialog
   }))
 );
 const LazySketchEntityEditor = lazyWithStaleChunkNotice(() =>
@@ -767,6 +799,36 @@ function SketchToolRail(props: ComponentProps<typeof LazySketchToolRail>) {
   return (
     <Suspense fallback={null}>
       <LazySketchToolRail {...props} />
+    </Suspense>
+  );
+}
+
+function ResumeSessionDialog(
+  props: ComponentProps<typeof LazyResumeSessionDialog>
+) {
+  return (
+    <Suspense fallback={null}>
+      <LazyResumeSessionDialog {...props} />
+    </Suspense>
+  );
+}
+
+function SaveRevisionDialog(
+  props: ComponentProps<typeof LazySaveRevisionDialog>
+) {
+  return (
+    <Suspense fallback={null}>
+      <LazySaveRevisionDialog {...props} />
+    </Suspense>
+  );
+}
+
+function ProjectConflictDialog(
+  props: ComponentProps<typeof LazyProjectConflictDialog>
+) {
+  return (
+    <Suspense fallback={null}>
+      <LazyProjectConflictDialog {...props} />
     </Suspense>
   );
 }
@@ -1810,6 +1872,14 @@ export function App() {
     onCameraSettled: persistCameraPose,
     forget: forgetProjectView
   } = useProjectView(doc?.projectId ?? null);
+  // Read at callback time: the section slider's release handler runs after
+  // the change that moved it.
+  const viewerSettingsRef = useRef(viewerSettings);
+  viewerSettingsRef.current = viewerSettings;
+  // An exact section belongs to one plane position, one model version and
+  // one set of visible bodies. Everything that invalidates it bumps this
+  // token, and an answer that arrives under an old token is dropped.
+  const sectionTokenRef = useRef(0);
   // Key by membership so an unrelated dimension edit keeps the viewport's
   // body array stable instead of disposing and uploading identical meshes.
   const parameterHiddenBodyKey = useMemo(
@@ -1925,6 +1995,14 @@ export function App() {
     []
   );
   const [fitSignal, setFitSignal] = useState(0);
+  /**
+   * What the section view is currently showing. The clipped preview owns the
+   * drag; the kernel's exact section is asked for once the plane rests, and
+   * only that one can be exported.
+   */
+  const [sectionOutline, setSectionOutline] = useState<SectionOutlineState>({
+    kind: 'clipping'
+  });
   const [viewRequest, setViewRequest] = useState<{
     view: ViewTarget;
     nonce: number;
@@ -2137,10 +2215,13 @@ export function App() {
     })
   ).current;
   useEffect(() => () => exactEntryQueue.cancel(), [exactEntryQueue]);
-  useEffect(() => () => {
-    ++parameterEditRequest.current;
-    parameterChecks.cancelPending();
-  }, [parameterChecks]);
+  useEffect(
+    () => () => {
+      ++parameterEditRequest.current;
+      parameterChecks.cancelPending();
+    },
+    [parameterChecks]
+  );
   const [parameterPreviewBase, setParameterPreviewBase] =
     useState<ProjectDocument | null>(null);
   const [makeParameterPreview, setMakeParameterPreview] = useState<
@@ -2163,7 +2244,7 @@ export function App() {
   }, [parameterPreviewBase, makeParameterPreview]);
   const geometry = useGeometryWorker({
     manager: () => managerRef.current,
-    onProjection: derived => {
+    onProjection: (derived) => {
       const document = managerRef.current?.document;
       if (document) setParameterPreviewBase({ ...document, derived });
     },
@@ -2199,12 +2280,15 @@ export function App() {
       setStatus(message);
     }
   });
-  const parameterDraftActive = parameterCandidate !== null &&
+  const parameterDraftActive =
+    parameterCandidate !== null &&
     parameterCandidate.base.projectId === doc?.projectId &&
     parameterCandidate.base.version === doc?.version;
   const exactGeometryReady = !parameterDraftActive && geometry.isReadyFor(doc);
   function requireExactGeometryReady(): boolean {
-    const ready = !parameterDraftActive && geometry.isReadyFor(managerRef.current?.document ?? null);
+    const ready =
+      !parameterDraftActive &&
+      geometry.isReadyFor(managerRef.current?.document ?? null);
     if (!ready) {
       setStatus(
         'Exact geometry is still rebuilding. Topology actions are temporarily unavailable.'
@@ -4373,45 +4457,80 @@ export function App() {
       geometry.state.phase
     ]
   );
-  const viewerBodies = useMemo<BodyRepresentation[]>(
-    () =>
-      (previewDoc
-        ? Object.values(renderedRepresentations)
-        : liveBodyRepresentations
-          ? Object.values(liveBodyRepresentations)
-          : []
-      ).filter((body) => !body.consumed && !hiddenBodyIds.has(body.bodyId)),
-    [
-      liveBodyRepresentations,
-      previewDoc,
-      renderedRepresentations,
-      hiddenBodyIds
-    ]
-  );
   /**
-   * A parameter preview stands in for its own result body only; hidden
-   * bodies stay hidden and every other part keeps its exact geometry.
-   */
-  const visibleParameterPreview = useMemo(
-    () => parameterPreview?.filter(body => !hiddenBodyIds.has(body.bodyId)) ?? null,
-    [parameterPreview, hiddenBodyIds]
-  );
-
-  /**
-   * Every body the model ends up with, hidden ones included — `viewerBodies`
-   * drops those, and a parts list that loses a row when you hide it is a list
-   * you cannot unhide from. Consumed bodies stay out: they are boolean
+   * Every body the document the viewport draws ended up with, hidden ones
+   * included — a parts list that loses a row when you hide it is a list you
+   * cannot unhide from. Consumed bodies stay out: they are boolean
    * scaffolding, not parts.
+   *
+   * Which document that is gets decided HERE and nowhere else: `previewDoc`
+   * replaces the live one wholesale, so these are then ITS bodies.
    */
   const partBodies = useMemo<BodyRepresentation[]>(
     () =>
-      (previewDoc
-        ? Object.values(renderedRepresentations)
-        : liveBodyRepresentations
-          ? Object.values(liveBodyRepresentations)
-          : []
+      Object.values(
+        previewDoc ? renderedRepresentations : (liveBodyRepresentations ?? {})
       ).filter((body) => !body.consumed),
     [liveBodyRepresentations, previewDoc, renderedRepresentations]
+  );
+  /**
+   * Bodies the viewer reported it drew away from their document pose, from
+   * the frame itself rather than from the mechanism that posed them. A Move
+   * gizmo translation, a face-resize drag and a stand-in's hiding all land
+   * here, and so does whatever is written next.
+   */
+  const [bodiesDrawnElsewhere, setBodiesDrawnElsewhere] = useState<
+    readonly string[]
+  >([]);
+  /**
+   * What the viewport is drawing, as one value — the document, its bodies
+   * that are on screen, and anything drawn over them that the document did
+   * not build.
+   *
+   * Everything that puts geometry in the viewport is folded in here and the
+   * viewer's own props are read back out of it, so this is not a summary of
+   * what is on screen: it IS what is on screen. The exact section takes its
+   * source from it (`sectionSourceOf`) rather than working out the answer a
+   * second time, because the second answer has been wrong three times — for
+   * a published preview document, for a parameter edit nobody applied, and
+   * for a body the Move gizmo posed straight into the scene. The first two
+   * are declared here; the third could not be, which is why the viewer also
+   * reports what it actually drew.
+   *
+   * Hiding and isolating are device-local view state the document never
+   * sees, so the bodies have to be carried with it: ask the kernel about a
+   * hidden body and it sections it and draws the cut floating in empty
+   * space.
+   */
+  // Its own memo, so the array the viewer uploads meshes from keeps its
+  // identity while a preview comes and goes over the top of it.
+  const viewerBodies = useMemo<BodyRepresentation[]>(
+    () => partBodies.filter((body) => !hiddenBodyIds.has(body.bodyId)),
+    [partBodies, hiddenBodyIds]
+  );
+  const viewportGeometry = useMemo<ViewportGeometry<ParameterPreviewBody>>(
+    () => ({
+      document: previewDoc ?? doc ?? null,
+      bodies: viewerBodies,
+      // A parameter preview stands in for its own result body only; hidden
+      // bodies stay hidden and every other part keeps its exact geometry.
+      standIns:
+        parameterPreview?.filter((body) => !hiddenBodyIds.has(body.bodyId)) ??
+        null,
+      // Not declared by whatever posed them — observed by the viewer in the
+      // frame it drew. The Move gizmo poses a body's mesh with no state the
+      // workspace can see, and the next mechanism to do that need not
+      // announce itself either.
+      drawnElsewhere: bodiesDrawnElsewhere
+    }),
+    [
+      doc,
+      previewDoc,
+      viewerBodies,
+      hiddenBodyIds,
+      parameterPreview,
+      bodiesDrawnElsewhere
+    ]
   );
 
   const directEditableBodyIds = useMemo<string[]>(
@@ -5809,6 +5928,85 @@ export function App() {
     return min < max ? { min, max } : null;
   }
 
+  /**
+   * Ask the kernel for the exact section at the plane's current rest
+   * position. Never called during a drag: the clipped preview is what keeps
+   * the slider at pointer rate, and an exact section belongs to exactly one
+   * plane position anyway.
+   */
+  async function requestExactSection(section: SectionViewSettings | undefined) {
+    const view = viewportGeometry;
+    if (!section || !view.document) {
+      return;
+    }
+    // Taken before the await: whatever this call decides, an answer already
+    // in flight is about a cut that has moved on.
+    const token = ++sectionTokenRef.current;
+    const { resolveSectionOutline, sectionSourceOf } = await import(
+      './lib/sectionOutline'
+    );
+    if (!sectionSourceOf(view).document) {
+      // Nothing on screen has an exact section to ask for — a stand-in is
+      // drawn over the model. The clipped preview stays and says so, rather
+      // than announcing a section that is not being computed.
+      return;
+    }
+    setSectionOutline({ kind: 'computing' });
+    const next = await resolveSectionOutline(geometry, view, section);
+    if (token === sectionTokenRef.current) {
+      setSectionOutline(next);
+    }
+  }
+
+  /**
+   * Drop the exact section and refuse the answer to any request still in
+   * flight. Everything that moves the cut or the model it cuts goes through
+   * here, so an exact section never outlives what it is a section of.
+   */
+  function clearSectionOutline() {
+    sectionTokenRef.current += 1;
+    setSectionOutline((current) =>
+      current.kind === 'clipping' ? current : { kind: 'clipping' }
+    );
+  }
+
+  // A rebuild moves the geometry the exact section was cut from, a preview
+  // replaces it outright, and hiding or isolating a body changes which
+  // geometry it is a section of — either way the cut on screen stops
+  // describing the model. Back to the clipped preview until the plane is
+  // committed again.
+  //
+  // Keyed on what the source SAYS, never on its identity: a finished sync
+  // commits derived state onto a fresh document object at the same version,
+  // and invalidating for that would drop the answer to a section requested
+  // moments earlier and leave the rail on "Clipping preview" for good.
+  //
+  // Read off `viewportGeometry`, which is what is on screen, so a new source
+  // of drawn geometry cannot appear without appearing here: a document drawn
+  // in the live one's place arrives as `drawnInstead`, a stand-in drawn over
+  // it as `standIns`, and a body drawn anywhere but where the document built
+  // it as `drawnElsewhere` — that last one reported by the viewer from the
+  // frame, so it covers mechanisms that declare nothing at all.
+  const sectionBodyKey = viewportGeometry.bodies
+    .map((body) => body.bodyId)
+    .join('|');
+  /**
+   * The live document is keyed by VERSION and everything drawn in its place
+   * by IDENTITY, because that is how truthful each one is. `doc` is re-minted
+   * at the same version and the same geometry every time a sync commits
+   * derived state; a preview or a candidate is minted exactly when the
+   * geometry it stands for changes, so its identity IS its content.
+   */
+  const drawnInstead =
+    viewportGeometry.document === doc ? null : viewportGeometry.document;
+  useEffect(clearSectionOutline, [
+    doc?.version,
+    drawnInstead,
+    viewportGeometry.standIns,
+    viewportGeometry.drawnElsewhere,
+    sectionBodyKey
+  ]);
+
   /** Off → XY → XZ → YZ → off, each plane starting at the model's centre. */
   function cycleSectionView() {
     const order: (SectionPlaneId | null)[] = [null, 'XY', 'XZ', 'YZ'];
@@ -5816,6 +6014,7 @@ export function App() {
     const next = order[(order.indexOf(currentPlane) + 1) % order.length]!;
     if (!next) {
       setViewerSettings(({ sectionView: _cleared, ...rest }) => rest);
+      clearSectionOutline();
       setStatus('Section view off.');
       return;
     }
@@ -5828,13 +6027,40 @@ export function App() {
     setStatus(
       `Section view: ${next} plane. Drag the slider to move the cut; the model itself is untouched.`
     );
+    void requestExactSection({ plane: next, offset });
   }
 
   function setSectionOffset(offset: number) {
+    // The cut has moved, so the exact section that was on screen belongs to
+    // a plane that is no longer there. Back to the clipped preview.
+    clearSectionOutline();
     setViewerSettings((current) =>
       current.sectionView
         ? { ...current, sectionView: { ...current.sectionView, offset } }
         : current
+    );
+  }
+
+  /** Write the exact section — never the display caps — as a DXF drawing. */
+  async function handleExportSectionDxf() {
+    const section = viewerSettings.sectionView;
+    const view = viewportGeometry;
+    if (!section || !view.document) {
+      return;
+    }
+    // Two gates, both the exporter's own: it writes every body the plane
+    // cuts or nothing, which is the state the DXF button is enabled for,
+    // and it takes the viewport's geometry, so a drawing of a model the
+    // user is not looking at is not a thing this call site can ask for.
+    const outline = await import('./lib/sectionOutline');
+    await outline.writeSectionDxf(
+      geometry,
+      view,
+      section,
+      sectionOutline,
+      saveCadTextFile,
+      exportFileStem(view.document.name),
+      setStatus
     );
   }
 
@@ -5890,6 +6116,7 @@ export function App() {
         sections?: { sketchId: string }[];
         profile?: { sketchId?: string };
         path?: { sketchId?: string };
+        guide?: { sketchId?: string };
       };
       // A sketch feature's own row references its sketch without consuming it.
       if (data.featureKind === 'sketch') {
@@ -5906,6 +6133,10 @@ export function App() {
       }
       if (typeof data.path?.sketchId === 'string') {
         consumed.add(data.path.sketchId);
+      }
+      // A sweep's guide rail is consumed by the sweep exactly as its path is.
+      if (typeof data.guide?.sketchId === 'string') {
+        consumed.add(data.guide.sketchId);
       }
     }
     return consumed;
@@ -8521,10 +8752,13 @@ export function App() {
       );
       return;
     }
-    if (!/\.(?:stl|step|stp)$/i.test(file.name)) {
+    if (!/\.(?:stl|step|stp|3mf|obj|glb|ply)$/i.test(file.name)) {
       setStatus(`Unsupported import format: ${file.name}`);
       return;
     }
+
+    const { MAX_SOURCE_IMPORT_BYTES, MAX_SOURCE_IMPORT_MB, runStepImport } =
+      await stepImportRun();
 
     if (lowerName.endsWith('.stl')) {
       if (file.size > MAX_SOURCE_IMPORT_BYTES) {
@@ -8538,62 +8772,51 @@ export function App() {
         setStatus(errorMessage(error, 'STL import failed.'));
         return;
       }
-      // STL carries no unit declaration; the interchange convention is
-      // millimetres, and exportStl multiplies by UNIT_TO_MM on the way out.
-      // Adopting the vertices at 1/UNIT_TO_MM keeps a non-mm document's
-      // round trip at the same physical size.
-      const meshScale = 1 / UNIT_TO_MM[doc.units];
-      const vertices =
-        meshScale === 1
-          ? parsed.vertices
-          : parsed.vertices.map((value) => value * meshScale);
+      await commitImportedMesh({
+        file,
+        contentType,
+        artifactKind: 'stl-import',
+        importManager,
+        mesh: {
+          name: parsed.name,
+          triangleCount: parsed.triangleCount,
+          vertices: parsed.vertices,
+          indices: parsed.indices
+        }
+      });
+      return;
+    }
 
-      // Best-effort archive of the original upload; the mesh itself lives in
-      // the document, so a storage failure must not block the import.
-      let artifactId = `artifact_local_${crypto.randomUUID()}`;
-      let archived = false;
+    if (!/\.(?:step|stp)$/i.test(file.name)) {
+      // 3MF, OBJ, glTF binary and PLY. The kernel's own translators read them
+      // into the same triangles an STL import produces, in a worker that is
+      // terminated with the import, and the result becomes the same
+      // `imported-mesh` feature — so a body from one of these files autosaves,
+      // reopens, rebuilds and exports exactly like an imported STL.
+      let mesh;
       try {
-        artifactId = await archiveArtifact({
-          fileName: file.name,
-          contentType,
-          kind: 'stl-import',
-          body: file,
-          metadata: { source: 'direct-upload' }
-        });
-        archived = true;
-      } catch {
-        // Continue with the local import.
-      }
-
-      // Between the entry check and here are two awaits, the second an
-      // upload of up to 128 MB. This path shows no busy state and no import
-      // card, so Home and the project shelf stay live throughout — and the
-      // vertices were already scaled by the units of the document that was
-      // open when the file was read, so landing them anywhere else is both
-      // the wrong project and the wrong size. The STEP path is guarded by
-      // `useValidatedFeatureCommit`; this one had nothing.
-      if (managerRef.current !== importManager) {
-        setStatus('The project changed while the import finished.');
+        const { importMeshFileInDisposableWorker, meshImportFormatForFileName } =
+          await import('./lib/meshImportWorkerClient');
+        const format = meshImportFormatForFileName(file.name);
+        if (!format) {
+          setStatus(`Unsupported import format: ${file.name}`);
+          return;
+        }
+        // The open document's units, not millimetres: the import runs the
+        // rebuild this document will run, and it has to run it on the numbers
+        // this document will store.
+        mesh = await importMeshFileInDisposableWorker(file, format, doc.units);
+      } catch (error) {
+        setStatus(errorMessage(error, `${file.name} import failed.`));
         return;
       }
-      const created = executeCommand(
-        commandFactories.importMesh({
-          name: parsed.name,
-          artifactId,
-          sourceName: parsed.name,
-          triangleCount: parsed.triangleCount,
-          vertices,
-          indices: parsed.indices
-        })
-      );
-      if (created) {
-        setStatus(
-          `Imported ${parsed.triangleCount} triangles from ${file.name}` +
-            (archived
-              ? '.'
-              : ' (original file not archived: upload unavailable).')
-        );
-      }
+      await commitImportedMesh({
+        file,
+        contentType,
+        artifactKind: 'mesh-import',
+        importManager,
+        mesh: { name: file.name, ...mesh }
+      });
       return;
     }
 
@@ -8615,6 +8838,105 @@ export function App() {
       newId: () => crypto.randomUUID()
     });
     finishImportAbort(abort);
+  }
+
+  /**
+   * The half of a mesh import every format shares: scale the triangles into
+   * document units, archive the original upload, and commit one
+   * `imported-mesh` feature.
+   *
+   * STL and the kernel-read formats differ only in how the triangles were
+   * produced. Sharing the commit is what keeps them the same feature — a mesh
+   * body from a 3MF is indistinguishable downstream from one out of an STL,
+   * including in autosave, reopen and export.
+   */
+  async function commitImportedMesh(input: {
+    file: File;
+    contentType: string;
+    artifactKind: Extract<ArtifactKind, 'stl-import' | 'mesh-import'>;
+    /**
+     * The manager this import belongs to, captured before the file was read.
+     */
+    importManager: CommandManager;
+    mesh: {
+      name: string;
+      triangleCount: number;
+      /** Millimetres, whatever the file declared. */
+      vertices: number[];
+      indices: number[];
+      /** Set when the file declared a unit that was converted to millimetres. */
+      sourceUnit?: string;
+    };
+  }): Promise<void> {
+    const { file, contentType, artifactKind, importManager, mesh } = input;
+    if (!doc) {
+      // Unreachable: every caller is past `handleImportFile`'s entry guard,
+      // and `doc` is the same render's value throughout.
+      return;
+    }
+    // The triangles arrive in millimetres — a 3MF's declared unit is applied
+    // by the importer, and the formats that declare none follow the STL
+    // interchange convention. The mesh exports multiply by UNIT_TO_MM on the
+    // way out, so adopting the vertices at 1/UNIT_TO_MM keeps a non-mm
+    // document's round trip at the same physical size.
+    const meshScale = 1 / UNIT_TO_MM[doc.units];
+    const vertices =
+      meshScale === 1
+        ? mesh.vertices
+        : mesh.vertices.map((value) => value * meshScale);
+
+    // Best-effort archive of the original upload; the mesh itself lives in
+    // the document, so a storage failure must not block the import.
+    let artifactId = `artifact_local_${crypto.randomUUID()}`;
+    let archived = false;
+    try {
+      artifactId = await archiveArtifact({
+        fileName: file.name,
+        contentType,
+        kind: artifactKind,
+        body: file,
+        metadata: { source: 'direct-upload' }
+      });
+      archived = true;
+    } catch {
+      // Continue with the local import.
+    }
+
+    // Between the entry check and here are two awaits, the second an
+    // upload of up to 128 MB. This path shows no busy state and no import
+    // card, so Home and the project shelf stay live throughout — and the
+    // vertices were already scaled by the units of the document that was
+    // open when the file was read, so landing them anywhere else is both
+    // the wrong project and the wrong size. The STEP path is guarded by
+    // `useValidatedFeatureCommit`; this one had nothing.
+    if (managerRef.current !== importManager) {
+      setStatus('The project changed while the import finished.');
+      return;
+    }
+    const created = executeCommand(
+      commandFactories.importMesh({
+        name: mesh.name,
+        artifactId,
+        sourceName: mesh.name,
+        triangleCount: mesh.triangleCount,
+        vertices,
+        indices: mesh.indices
+      })
+    );
+    if (created) {
+      // A converted file says so: the numbers in the document are not the
+      // numbers in the file, and nothing else on screen would reveal it.
+      const converted =
+        mesh.sourceUnit && mesh.sourceUnit !== 'millimeter'
+          ? `, converted from ${mesh.sourceUnit}`
+          : '';
+      setStatus(
+        `Imported ${mesh.triangleCount} triangles from ${file.name}${converted}` +
+          (archived
+            ? '.'
+            : ' (original file not archived: upload unavailable).')
+      );
+    }
   }
 
   /**
@@ -8697,7 +9019,7 @@ export function App() {
     const shaprFiles = files.filter((file) => /\.shapr$/i.test(file.name));
     if (shaprFiles.length === 0) {
       if (files.length !== 1) {
-        setStatus('Select one STEP or STL file, or one .shapr + STEP pair.');
+        setStatus('Select one STEP or mesh file, or one .shapr + STEP pair.');
         return;
       }
       await handleImportFile(files[0]!);
@@ -8803,6 +9125,7 @@ export function App() {
         : null
     );
     const shaprAbort = startImportAbort();
+    const { runStepImport } = await stepImportRun();
     const result = await runStepImport({
       file: pending.inspection.sanitizedStepFile,
       contentType:
@@ -10094,7 +10417,8 @@ export function App() {
   useEffect(() => {
     const open =
       (interaction.mode === 'sketch' &&
-        keypadRef.current?.kind === 'sketch-dimension') ||
+        (keypadRef.current?.kind === 'sketch-dimension' ||
+          keypadRef.current?.kind === 'sketch-edit')) ||
       (interaction.mode !== 'idle' &&
         interaction.mode !== 'sketch' &&
         (interaction.phase === 'exact-entry' ||
@@ -10574,6 +10898,12 @@ export function App() {
     documentVersion: number;
     constraintId?: string;
   } | null>(null);
+  // A modify tool whose picks are in, waiting on its radius or distance.
+  const [sketchEditDraft, setSketchEditDraft] = useState<{
+    kind: SketchEditToolKind;
+    picks: string[];
+    documentVersion: number;
+  } | null>(null);
   // The pill describes a solve of THIS session's sketch; leaving sketch mode
   // orphans it.
   useEffect(() => {
@@ -10581,7 +10911,11 @@ export function App() {
       setSketchSolveStatus(null);
       setSketchSolving(false);
       setSketchDimensionDraft(null);
-      if (keypadRef.current?.kind === 'sketch-dimension') {
+      setSketchEditDraft(null);
+      if (
+        keypadRef.current?.kind === 'sketch-dimension' ||
+        keypadRef.current?.kind === 'sketch-edit'
+      ) {
         setKeypad(null);
       }
     }
@@ -10833,6 +11167,106 @@ export function App() {
     }
     dispatchInteraction({ type: 'sketch-constraint-tool', kind: null });
     return true;
+  }
+
+  /**
+   * What the lazily loaded modify tools drive the app through. Built per
+   * call so it closes over the document the operation was planned against.
+   */
+  function sketchEditHost(
+    base: ProjectDocument,
+    anchor?: { x: number; y: number }
+  ): SketchEditHost {
+    return {
+      setStatus,
+      setError: setSketchEditError,
+      setBusy: setSketchSolving,
+      resolve: (value) =>
+        evalParamValue(value, parameterScope.scope) ?? undefined,
+      addPick: (objectId) =>
+        dispatchInteraction({ type: 'sketch-edit-pick', objectId }),
+      askValue: (kind, picks, label, initial) => {
+        setSketchEditDraft({ kind, picks, documentVersion: base.version });
+        setKeypad({
+          kind: 'sketch-edit',
+          label,
+          initial,
+          unitKind: 'length',
+          ...(anchor ? { fixedClientAnchor: anchor } : {})
+        });
+        dispatchInteraction({ type: 'sketch-edit-tool', kind: null });
+      },
+      runOperation: (operation) =>
+        geometry.sketchPlanarOperation(base, operation),
+      commit: async (sketchId, commands, label) => {
+        const applied = await commitSketchEdit(base, sketchId, commands, label);
+        if (applied) setSketchSolveStatus(null);
+        return applied;
+      },
+      describeFailure: (error, fallback) => {
+        if (error instanceof FeatureBuildError) {
+          recordHistoryFailure(error, base);
+        }
+        return errorMessage(error, fallback);
+      }
+    };
+  }
+
+  /**
+   * Routes a sketch click while a modify tool is armed. Returns true when the
+   * click was consumed, exactly like the constraint picking above: an armed
+   * tool never falls through to selection, so a stray click cannot silently
+   * deselect mid-sequence.
+   */
+  function handleSketchEditPick(
+    objectId: string | null,
+    clickPoint: { x: number; y: number }
+  ): boolean {
+    const pending =
+      interaction.mode === 'sketch' ? interaction.session.pendingEdit : null;
+    if (!pending) {
+      return false;
+    }
+    if (doc && editingSketchNode) {
+      const host = sketchEditHost(doc, clickPoint);
+      const sketch = editingSketchNode;
+      void import('./lib/sketch/edits').then(({ advanceSketchEdit }) =>
+        advanceSketchEdit(host, doc, sketch, pending, objectId)
+      );
+    }
+    return true;
+  }
+
+  /** A finished modify pick plus its value, as one undoable transaction. */
+  async function handleCommitSketchEdit(
+    draft: NonNullable<typeof sketchEditDraft>,
+    value: number,
+    raw: string
+  ) {
+    const base = managerRef.current?.document;
+    const session = interactionRef.current;
+    const sketch =
+      base?.version === draft.documentVersion &&
+      session.mode === 'sketch' &&
+      session.session.sketchId
+        ? findSketch(base, session.session.sketchId as SketchId)
+        : null;
+    if (!base || !sketch) {
+      setStatus(
+        'The sketch changed while the value editor was open. Try again.'
+      );
+      return;
+    }
+    const { runSketchEdit } = await import('./lib/sketch/edits');
+    await runSketchEdit(
+      sketchEditHost(base),
+      base,
+      sketch,
+      draft.kind,
+      draft.picks,
+      value,
+      raw
+    );
   }
 
   function handleEditSketchDimension(
@@ -11155,7 +11589,10 @@ export function App() {
       // the worker checks every dependent feature, including the final union.
       setParameterCandidate({ base, document: prospective });
       const derived = await parameterChecks.request(() => {
-        if (!current()) return Promise.reject(new Error('The project or parameter changed during validation.'));
+        if (!current())
+          return Promise.reject(
+            new Error('The project or parameter changed during validation.')
+          );
         return geometry.syncOnce(prospective);
       });
       if (!current())
@@ -14430,18 +14867,17 @@ export function App() {
     : Object.keys(representations).length > 0
       ? 'showing the last valid projection as stale'
       : 'no exact projection is available yet';
-  const visibleStatus =
-    parameterPreview
-      ? `Parameter preview · ${parameterEditPending ? status : parameterDraftActive ? 'Press Enter to apply; Escape to cancel' : 'exact geometry rebuilding'}`
-      : exactGeometryReady
-        ? status
-        : `${
-            geometry.state.phase === 'ready'
-              ? 'Waiting for exact geometry for this revision'
-              : geometry.state.phase === 'failed' && geometry.state.error
-                ? `Exact geometry failed: ${geometry.state.error}`
-                : (progressLabel ?? geometryPhaseLabel[geometry.state.phase])
-          } · ${staleProjectionLabel}`;
+  const visibleStatus = parameterPreview
+    ? `Parameter preview · ${parameterEditPending ? status : parameterDraftActive ? 'Press Enter to apply; Escape to cancel' : 'exact geometry rebuilding'}`
+    : exactGeometryReady
+      ? status
+      : `${
+          geometry.state.phase === 'ready'
+            ? 'Waiting for exact geometry for this revision'
+            : geometry.state.phase === 'failed' && geometry.state.error
+              ? `Exact geometry failed: ${geometry.state.error}`
+              : (progressLabel ?? geometryPhaseLabel[geometry.state.phase])
+        } · ${staleProjectionLabel}`;
   const tone: 'ready' | 'warning' | 'running' =
     geometry.state.phase === 'failed'
       ? 'warning'
@@ -14755,18 +15191,18 @@ export function App() {
               : tool
                 ? 'Enter creates · Esc cancels'
                 : selectedBodyIds.length >= 2
-                ? `${selectedBodyIds.length} bodies picked — U union · X subtract · I intersect`
-                : selectedTopology?.kind === 'face'
-                  ? 'Face selected — Space faces it head-on'
-                  : selectedTopology?.kind === 'edge'
-                    ? // Neither tool has a shortcut, so the rail is the only
-                      // route: name it the way the rail names itself.
-                      'Edge selected — Fillet or Chamfer in Feature tools'
-                    : selectedFeature
-                      ? 'Edit in the panel · Del deletes · Esc closes'
-                      : viewerBodies.length > 0
-                        ? 'Click a body, face, or edge · Shift+Click adds to selection'
-                        : 'Ctrl+K commands · ? shortcuts'));
+                  ? `${selectedBodyIds.length} bodies picked — U union · X subtract · I intersect`
+                  : selectedTopology?.kind === 'face'
+                    ? 'Face selected — Space faces it head-on'
+                    : selectedTopology?.kind === 'edge'
+                      ? // Neither tool has a shortcut, so the rail is the only
+                        // route: name it the way the rail names itself.
+                        'Edge selected — Fillet or Chamfer in Feature tools'
+                      : selectedFeature
+                        ? 'Edit in the panel · Del deletes · Esc closes'
+                        : viewerBodies.length > 0
+                          ? 'Click a body, face, or edge · Shift+Click adds to selection'
+                          : 'Ctrl+K commands · ? shortcuts'));
   const inspectorActive =
     !modelingLocked &&
     !directMode &&
@@ -15133,6 +15569,7 @@ export function App() {
         paletteVisible
         canConstrain={Boolean(interaction.session.sketchId)}
         pendingConstraint={interaction.session.pendingConstraint}
+        pendingEdit={interaction.session.pendingEdit}
         constraints={sketchConstraintItems}
         solveStatus={sketchSolveStatus}
         solving={sketchSolving}
@@ -15143,6 +15580,12 @@ export function App() {
           });
           if (kind) {
             setStatus(constraintToolSpec(kind).hint);
+          }
+        }}
+        onEditTool={(kind, hint) => {
+          dispatchInteraction({ type: 'sketch-edit-tool', kind });
+          if (hint) {
+            setStatus(hint);
           }
         }}
         onDeleteConstraint={handleDeleteSketchConstraint}
@@ -15370,7 +15813,11 @@ export function App() {
           }
           projectName={doc.name}
           units={doc.units}
-          canExport={exportBodyIds.length > 0 && !parameterEditPending && !parameterDraftActive}
+          canExport={
+            exportBodyIds.length > 0 &&
+            !parameterEditPending &&
+            !parameterDraftActive
+          }
           exportScope={
             selectedBody &&
             !selectedBody.consumed &&
@@ -15512,8 +15959,7 @@ export function App() {
         >
           <ViewerShell
             projectId={doc.projectId}
-            bodies={viewerBodies}
-            parameterVisualPreview={visibleParameterPreview}
+            view={viewportGeometry}
             measurementAnnotations={measurementAnnotations}
             measurementCloudSync={[
               doc.projectId,
@@ -15606,6 +16052,7 @@ export function App() {
             onGeometryPresented={(ms) => {
               previewPresentationMs.current = ms;
             }}
+            onBodiesDrawnElsewhere={setBodiesDrawnElsewhere}
             onWheelDeviceLearned={handleWheelDeviceLearned}
             onMovePreviewChange={handleMovePreviewChange}
             moveValuesSetterRef={moveValuesSetterRef}
@@ -15666,6 +16113,9 @@ export function App() {
                   clickPoint
                 )
               ) {
+                return;
+              }
+              if (handleSketchEditPick(objectId, clickPoint)) {
                 return;
               }
               dispatchInteraction({ type: 'sketch-select-object', objectId });
@@ -15917,7 +16367,10 @@ export function App() {
                       anchorRef={keypadAnchorRef}
                       onDimensionModeChange={setCylinderDimensionMode}
                       onPreview={(value) => {
-                        if (keypad.kind === 'sketch-dimension') {
+                        if (
+                          keypad.kind === 'sketch-dimension' ||
+                          keypad.kind === 'sketch-edit'
+                        ) {
                           return;
                         }
                         offsetSetterRef.current?.(value);
@@ -15945,9 +16398,11 @@ export function App() {
                       }
                       onCommit={(value, raw) => {
                         const dimensionDraft = sketchDimensionDraft;
+                        const editDraft = sketchEditDraft;
                         setKeypad(null);
                         dispatchInteraction({ type: 'keypad-close' });
                         setSketchDimensionDraft(null);
+                        setSketchEditDraft(null);
                         if (
                           keypad.kind === 'sketch-dimension' &&
                           dimensionDraft
@@ -15957,6 +16412,10 @@ export function App() {
                             value,
                             raw
                           );
+                          return;
+                        }
+                        if (keypad.kind === 'sketch-edit' && editDraft) {
+                          void handleCommitSketchEdit(editDraft, value, raw);
                           return;
                         }
                         // Expressions stay parametric in the stored feature.
@@ -15984,6 +16443,13 @@ export function App() {
                           dispatchInteraction({ type: 'keypad-close' });
                           setKeypad(null);
                           setStatus('Dimension entry canceled.');
+                          return;
+                        }
+                        if (keypad.kind === 'sketch-edit') {
+                          setSketchEditDraft(null);
+                          dispatchInteraction({ type: 'keypad-close' });
+                          setKeypad(null);
+                          setStatus('Modify tool canceled.');
                           return;
                         }
                         offsetSetterRef.current?.(keypad.baseline ?? 0);
@@ -16183,6 +16649,12 @@ export function App() {
             }
             onCycleSection={cycleSectionView}
             onSectionOffset={setSectionOffset}
+            // The slider was released, or a key repeat ended: cut it exactly.
+            onSectionCommit={() =>
+              void requestExactSection(viewerSettingsRef.current.sectionView)
+            }
+            onExportSectionDxf={() => void handleExportSectionDxf()}
+            sectionOutline={sectionOutline}
           />
           {!modelingLocked &&
             !panelState.workspaceTourDismissed &&
@@ -16749,7 +17221,7 @@ export function App() {
           <input
             ref={importInputRef}
             type="file"
-            accept=".shapr,.stl,.step,.stp"
+            accept=".shapr,.stl,.step,.stp,.3mf,.obj,.glb,.ply"
             multiple
             style={{ display: 'none' }}
             onChange={(event: ChangeEvent<HTMLInputElement>) => {
