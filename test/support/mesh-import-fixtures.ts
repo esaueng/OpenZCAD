@@ -302,6 +302,34 @@ export function thinPlateObj(thicknessMm: number): Uint8Array {
   return encoder.encode(`${lines.join('\n')}\n`);
 }
 
+/**
+ * Two copies of the fixture box in the same place: 24 triangles that weld into
+ * a non-manifold soup the sew refuses.
+ *
+ * The kernel-read formats put this through the import-time rebuild check and
+ * refuse it by name. STL keeps its own parser and does not, which is the one
+ * carve-out the README documents — this soup is how both halves are measured
+ * against the same triangles.
+ */
+export function coincidentBoxSoup(): {
+  vertices: number[];
+  indices: number[];
+  triangleCount: number;
+} {
+  const vertices: number[] = [];
+  const indices: number[] = [];
+  for (let copy = 0; copy < 2; copy += 1) {
+    const base = vertices.length / 3;
+    for (const [x, y, z] of VERTICES) {
+      vertices.push(x, y, z);
+    }
+    for (const triangle of TRIANGLES) {
+      indices.push(triangle[0] + base, triangle[1] + base, triangle[2] + base);
+    }
+  }
+  return { vertices, indices, triangleCount: indices.length / 3 };
+}
+
 /** The box, `count` times over, each copy its own glTF mesh and node. */
 export function glbFixture(count = 1): Uint8Array {
   const accessors: unknown[] = [];
