@@ -21,6 +21,32 @@ export const KERNEL_WASM_ASSET_PATTERN =
 export const TRANSLATOR_WASM_ASSET_PATTERN =
   /^assets\/remus_wasm_io_bg-.*\.wasm$/;
 
+/**
+ * Assets that must never be referenced by the launcher HTML.
+ *
+ * These are the workspace chunks and runtime assets that exist only behind a
+ * gesture — a workspace, a thumbnail, an import, a PDF. A `<script>` or
+ * `<link rel="modulepreload">` for any of them in `index.html` means first
+ * paint now pays for them, whether through a new static import or through a
+ * shared chunk rolldown hoisted out of the entry. `src-*` is the anonymous
+ * chunk name: an unnamed shared chunk in first paint cannot be told apart
+ * from app code leaking into it, so a deliberate shared dependency gets a
+ * name in the Vite config's `manualChunks` instead.
+ *
+ * Every disposable worker belongs here: a worker is reached through
+ * `new Worker(new URL(...))`, so nothing but this list notices the day one of
+ * them also becomes statically reachable.
+ */
+export const LAZY_ENTRY_PATTERNS = [
+  /^assets\/(?:three|three-addons)-.*\.js$/,
+  /^assets\/(?:ViewerShell|partThumbnail|pdf|exact|src)-.*\.js$/,
+  KERNEL_WASM_ASSET_PATTERN,
+  TRANSLATOR_WASM_ASSET_PATTERN,
+  /^assets\/sqlite3-.*\.wasm$/,
+  /^assets\/shaprImportWorker-.*\.js$/,
+  /^assets\/meshImportWorker-.*\.js$/
+];
+
 export const KERNEL_WASM_POLICY = Object.freeze({
   rawReviewBytes: 9 * MIB,
   rawHardBytes: 10 * MIB,
