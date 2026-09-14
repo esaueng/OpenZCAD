@@ -85,6 +85,8 @@ export type AssistantPreviewOutcome =
 
 interface AssistantPanelProps {
   document: ProjectDocument;
+  /** Server-confirmed settings, refreshed after account saves and credential changes. */
+  effectiveAssistant?: AssistantStatus;
   selection: CadSelectionContext;
   onAnalyze?(
     document: ProjectDocument,
@@ -222,6 +224,7 @@ function Turn({
  */
 export function AssistantPanel({
   document: sourceDoc,
+  effectiveAssistant,
   selection,
   onApply,
   onPreview,
@@ -270,7 +273,8 @@ export function AssistantPanel({
     []
   );
   const [notice, setNotice] = useState<string | null>(null);
-  const [status, setStatus] = useState<AssistantStatus | null>(null);
+  const [loadedStatus, setStatus] = useState<AssistantStatus | null>(null);
+  const status = effectiveAssistant ?? loadedStatus;
   const [statusError, setStatusError] = useState<string | null>(null);
   const [dragging, setDragging] = useState(false);
   const [applyingEntryId, setApplyingEntryId] = useState<string | null>(null);
@@ -434,8 +438,13 @@ export function AssistantPanel({
 
   useEffect(() => {
     const controller = new AbortController();
-    void loadAssistantStatus(controller.signal)
+    setStatus(null);
+    setStatusError(null);
+    void (effectiveAssistant
+      ? Promise.resolve(effectiveAssistant)
+      : loadAssistantStatus(controller.signal))
       .then((next) => {
+        if (controller.signal.aborted) return;
         setStatus(next);
         setStatusError(
           next.configured
@@ -455,7 +464,7 @@ export function AssistantPanel({
         }
       });
     return () => controller.abort();
-  }, []);
+  }, [effectiveAssistant]);
 
   // Opening a project brings its conversation with it. A turn in flight belongs
   // to the document that asked for it, so switching projects cancels it rather
