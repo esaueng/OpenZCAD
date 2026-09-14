@@ -28,6 +28,13 @@ import {
   subtract
 } from './exact-math';
 import { measureFaceGeometry } from './exact-measure';
+import {
+  SolidFaceAdjacency,
+  crossCheckHoleClaims,
+  readKernelFeatureClaims,
+  verifyKernelFilletBandClaim,
+  verifyKernelPocketClaim
+} from './remus-feature-recognition';
 import type { RemusKernel } from './remus-runtime';
 
 export interface ImportedRecognitionFaceIdentity {
@@ -495,6 +502,47 @@ function canonicalSeedFaceId(proof: ImportedFeatureProof): string {
   }
 }
 
+/**
+ * Display dimensions carried by one {@link ImportedFeatureProof}, keyed by
+ * the proof's own field names minus identity fields. Lengths are in kernel
+ * millimetres; the worker scales them into document units before publishing,
+ * and angles stay in radians.
+ */
+export function importedProofDisplayDimensions(
+  proof: ImportedFeatureProof
+): Record<string, number> {
+  switch (proof.kind) {
+    case 'blind-cylindrical-hole':
+      return { diameter: proof.diameter, depth: proof.depth };
+    case 'counterbore':
+      return {
+        outerDiameter: proof.outerDiameter,
+        innerDiameter: proof.innerDiameter,
+        counterboreDepth: proof.counterboreDepth,
+        totalDepth: proof.totalDepth
+      };
+    case 'countersink':
+      return {
+        openingDiameter: proof.openingDiameter,
+        holeDiameter: proof.holeDiameter,
+        angleRadians: proof.angleRadians,
+        countersinkDepth: proof.countersinkDepth,
+        totalDepth: proof.totalDepth
+      };
+    case 'cylindrical-boss':
+      return { diameter: proof.diameter, height: proof.height };
+    case 'prismatic-pocket':
+      return { depth: proof.depth };
+    case 'conical-taper':
+      return {
+        referenceRadius: proof.referenceRadius,
+        oppositeRadius: proof.oppositeRadius,
+        length: proof.length,
+        angleRadians: proof.angleRadians
+      };
+  }
+}
+
 function vec(point: ExactPoint3): Vec3 {
   return { x: point[0], y: point[1], z: point[2] };
 }
@@ -576,10 +624,62 @@ function publishedProof(
   }
 }
 
+function publishedFaceHashes(
+  faceIds: readonly number[],
+  identities: ReadonlyMap<number, ImportedRecognitionFaceIdentity>
+): number[] | null {
+  const hashes = faceIds.flatMap((faceId) => {
+    const identity = identities.get(faceId);
+    return identity ? [identity.hash] : [];
+  });
+  return hashes.length === faceIds.length ? hashes : null;
+}
+
+function publishedKernelFeature(
+  seedFaceId: number,
+  participatingFaceIds: readonly number[],
+  identities: ReadonlyMap<number, ImportedRecognitionFaceIdentity>,
+  measurements:
+    | { kind: 'prismatic-pocket'; depth: number }
+    | {
+        kind: 'fillet-band';
+        radius: number;
+        length: number;
+        sense: 'concave' | 'convex';
+      }
+): RecognizedImportedFeature | null {
+  const seed = identities.get(seedFaceId);
+  const participatingFaceHashes = publishedFaceHashes(
+    participatingFaceIds,
+    identities
+  );
+  if (!seed || !participatingFaceHashes) {
+    return null;
+  }
+  return {
+    seedFaceHash: seed.hash,
+    ...(seed.reference ? { seedFaceReference: seed.reference } : {}),
+    participatingFaceHashes,
+    provenance: 'kernel-recognized',
+    ...measurements
+  };
+}
+
 /**
- * Recognize every full cylindrical/conical seed once. Shared support planes do
- * not count as overlap: two holes in one plate legitimately share an opening
- * face, while their owned walls/floors remain disjoint.
+ * Recognize every full cylindrical/conical seed once, then read the kernel's
+ * own recognizer for the two families this one does not publish.
+ *
+ * Shared support planes do not count as overlap: two holes in one plate
+ * legitimately share an opening face, while their owned walls/floors remain
+ * disjoint.
+ *
+ * Authority is fixed per family. An exactly proved hole, counterbore or
+ * countersink is published unchanged when the kernel agrees with it or says
+ * nothing about it, and withdrawn — together with every kernel claim over the
+ * same faces — when the kernel contradicts it. A pocket or fillet band is
+ * published from a verified kernel claim, marked `kernel-recognized` and
+ * read-only, and only on faces no exact proof touched, so no consumer can be
+ * shown two answers for one feature.
  */
 export function collectRecognizedImportedFeatures(
   kernel: RemusKernel,
@@ -588,7 +688,7 @@ export function collectRecognizedImportedFeatures(
 ): RecognizedImportedFeature[] {
   const query = new RemusImportedFeatureQuery(kernel, solid);
   const claimedOwnedFaces = new Set<string>();
-  const recognized: RecognizedImportedFeature[] = [];
+  const exactProofs: ImportedFeatureProof[] = [];
   for (const face of kernel.getSolidFaces(solid)) {
     const candidate = query.getFace(String(face));
     if (
@@ -608,12 +708,122 @@ export function collectRecognizedImportedFeatures(
     if (owned.some((faceId) => claimedOwnedFaces.has(faceId))) {
       continue;
     }
-    const published = publishedProof(result.proof, identities);
-    if (!published) {
+    if (!publishedProof(result.proof, identities)) {
       continue;
     }
     owned.forEach((faceId) => claimedOwnedFaces.add(faceId));
+    exactProofs.push(result.proof);
+  }
+
+  const claims = readKernelFeatureClaims(kernel, solid);
+  const recognized: RecognizedImportedFeature[] = [];
+  // Faces an exact proof touched are off limits to the kernel's families even
+  // when the proof itself was withdrawn: a contradiction must cost both
+  // answers, not promote the kernel's.
+  const exactFaces = new Set<string>();
+  for (const proof of exactProofs) {
+    proof.participatingFaceIds.forEach((faceId) => exactFaces.add(faceId));
+    if (claims && crossCheckHoleClaims(proof, claims) === 'contradicted') {
+      continue;
+    }
+    const published = publishedProof(proof, identities);
+    if (published) {
+      recognized.push(published);
+    }
+  }
+  if (!claims) {
+    // The seed-ambiguity guard belongs to the published contract, not to the
+    // kernel-claim path: an unreadable or absent payload must not publish a
+    // pair that the claims path would have dropped.
+    return withoutAmbiguousSeeds(recognized);
+  }
+
+  const adjacency = new SolidFaceAdjacency(kernel, solid);
+  const kernelFaces = new Set<number>();
+  const isFree = (faceIds: readonly number[]) =>
+    faceIds.every(
+      (faceId) => !exactFaces.has(String(faceId)) && !kernelFaces.has(faceId)
+    );
+  for (const claim of claims) {
+    if (claim.kind !== 'pocket') {
+      continue;
+    }
+    const pocket = verifyKernelPocketClaim(kernel, solid, claim, adjacency);
+    // The opening plane bounds the pocket but belongs to the surrounding
+    // material, exactly as a hole's opening face does; it is not owned here.
+    const owned = pocket
+      ? [pocket.floorFaceId, ...pocket.wallFaceIds]
+      : undefined;
+    if (!pocket || !owned || !isFree(owned)) {
+      continue;
+    }
+    const published = publishedKernelFeature(
+      pocket.floorFaceId,
+      [...owned, pocket.openingFaceId],
+      identities,
+      { kind: 'prismatic-pocket', depth: pocket.depth }
+    );
+    if (!published) {
+      continue;
+    }
+    owned.forEach((faceId) => kernelFaces.add(faceId));
     recognized.push(published);
   }
-  return recognized;
+  for (const claim of claims) {
+    if (claim.kind !== 'fillet-band') {
+      continue;
+    }
+    const band = verifyKernelFilletBandClaim(
+      kernel,
+      solid,
+      claim,
+      query,
+      adjacency
+    );
+    if (!band || !isFree([band.faceId])) {
+      continue;
+    }
+    const published = publishedKernelFeature(
+      band.faceId,
+      [band.faceId],
+      identities,
+      {
+        kind: 'fillet-band',
+        radius: band.radius,
+        length: band.length,
+        sense: band.sense
+      }
+    );
+    if (!published) {
+      continue;
+    }
+    kernelFaces.add(band.faceId);
+    recognized.push(published);
+  }
+  return withoutAmbiguousSeeds(recognized);
+}
+
+/**
+ * Drops every feature that does not own its (kind, seed face hash) pair.
+ *
+ * Proposals bind to an imported feature by that pair, so two features sharing
+ * one would let a proposal see two different answers for the same feature. The
+ * face-disjointness above makes that unreachable through geometry; this is the
+ * enforcement that does not depend on it.
+ */
+function withoutAmbiguousSeeds(
+  recognized: readonly RecognizedImportedFeature[]
+): RecognizedImportedFeature[] {
+  const seedKey = (feature: RecognizedImportedFeature) =>
+    `${feature.kind}:${feature.seedFaceHash}`;
+  const occurrences = new Map<string, number>();
+  for (const feature of recognized) {
+    occurrences.set(
+      seedKey(feature),
+      (occurrences.get(seedKey(feature)) ?? 0) + 1
+    );
+  }
+  return recognized.filter(
+    (feature) => occurrences.get(seedKey(feature)) === 1
+  );
 }
