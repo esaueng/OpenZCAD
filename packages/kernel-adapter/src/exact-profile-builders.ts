@@ -39,9 +39,11 @@ import {
 } from './exact-lineage-builders';
 import {
   faceAttachmentCandidatesForShape,
+  formatMeasuredVolume,
   resolveParametricPoint,
   validateGeneratedSolid
 } from './exact-shape-utils';
+import { MEASUREMENT_DEFLECTION } from './exact-witnesses';
 import {
   GEOMETRY_EPSILON,
   cross,
@@ -881,6 +883,9 @@ const LOFT_APEX_MIN_STANDOFF = 1e-6;
  * Measured from the section face's own vertices, so a section drawn on a plane
  * that is not parallel to the closing one is taken at its true extent and not
  * at a representative point that can sit on the wrong side of its own profile.
+ * This is only ever read to recognise a run that lies *in* the closing plane
+ * and so encloses nothing; which side of that plane the material is on is not
+ * inferred from it. See {@link buildLoft}.
  */
 interface SectionOffsetRange {
   readonly min: number;
@@ -920,41 +925,16 @@ function sectionOffsetRange(
 }
 
 /**
- * Resolve a loft apex point and prove it actually closes the section run.
+ * Resolve a loft apex point and prove it stands off the section it closes.
  *
- * The kernel applies `endPoint` unconditionally. An apex that does not stand
- * clear of the run folds the final ruled band back through the body: the
- * result is self-intersecting, its reported volume is *lower* than the
- * unapexed loft's, the apex is buried out of sight so the viewport looks
- * unchanged, and `validateSolid` reports nothing. Measured on the pinned
- * kernel, against 373.3333 for the plain two-section frustum and 373.3333 /
- * 253.3333 for the three-section runs below:
- *
- * | sections (z) | apex z | volume |
- * | --- | --- | --- |
- * | 0, 10 | 5 | 266.6667 |
- * | 0, 10, 10 | 5 | 313.3333 |
- * | 0, 20, 10 | 5 | 193.3333 |
- *
- * Every one of those is *less* material than the same loft with no apex, and
- * none of them warns. So two things have to hold, and neither may be skipped
- * because some section happens to be coplanar with the closing one:
- *
- * 1. The loft must reach the closing section from the far side, so the apex
- *    extends the run instead of folding into it.
- * 2. The apex must stand beyond every section, so the closing band cannot
- *    re-enter an earlier one.
- *
- * The one run with no side to be on is the one whose sections are *all*
- * coplanar with the closing section. That run has no interior to fold into,
- * and measured it closes correctly either way: 4x4 and 8x8 both on z = 0 with
- * an apex at z = 10 and at z = -10 both give 213.3333, the analytic
- * 8 x 8 x 10 / 3 pyramid. So rule 1 is answered for that run, not skipped.
+ * The kernel takes an apex on the closing section's own plane without
+ * complaint and hands back the unapexed loft, so that degenerate request is
+ * refused here by name. Whether the apex *adds* material is not decided from
+ * the geometry — it is measured. See {@link buildLoft}.
  */
 function loftApexPoint(
   value: { x: ParamValue; y: ParamValue; z: ParamValue },
   basis: PlaneBasis,
-  sectionOffsets: readonly SectionOffsetRange[],
   scope: Record<string, number>,
   label: string
 ): [number, number, number] {
@@ -972,57 +952,103 @@ function loftApexPoint(
       `${label} lies on the plane of the section it closes, which would cap the loft with a flat point instead of an apex. Move it off that plane or clear it.`
     );
   }
-  // Measure every other section along the direction the apex stands off in,
-  // so the two tests read the same way whichever side of the closing section
-  // the apex is on.
-  const towardApex = Math.sign(standoff);
-  const reach = sectionOffsets.map((range) => ({
-    toward: Math.max(towardApex * range.min, towardApex * range.max),
-    away: Math.min(towardApex * range.min, towardApex * range.max)
-  }));
-  const flatRun = reach.every(
-    (range) =>
-      Math.max(Math.abs(range.toward), Math.abs(range.away)) <
-      LOFT_APEX_MIN_STANDOFF
-  );
-  if (
-    !flatRun &&
-    !reach.some((range) => range.away < -LOFT_APEX_MIN_STANDOFF)
-  ) {
-    throw new Error(
-      `${label} is on the same side of the closing section as the rest of the loft, so the apex falls inside the body and folds the last section band back through it. Move it beyond the closing section, or clear it.`
-    );
-  }
-  const blocking = reach.findIndex(
-    (range) => towardApex * standoff - range.toward <= LOFT_APEX_MIN_STANDOFF
-  );
-  if (blocking >= 0) {
-    throw new Error(
-      `${label} does not stand clear of loft section ${blocking + 1}, which reaches at least as far past the closing section as the apex does, so the closing band folds back through the body. Move the apex beyond every section, or clear it.`
-    );
-  }
   return [point.x, point.y, point.z];
 }
 
 /**
- * Whether the apex point is what this loft cannot take. The same section run
- * is lofted again without it: if that builds a valid solid the apex is the
- * only difference and saying so points at the input the user can change, and
- * if it does not, the run itself is what fails and blaming the apex sends the
- * user after the wrong input.
+ * The volume of the same section run lofted *without* the apex point, or null
+ * when that run does not loft into a valid solid at all.
+ *
+ * It answers two questions with one build. Its number is the baseline the
+ * apexed loft has to beat, and its absence says the section run itself is what
+ * the kernel cannot take, so the refusal must not send the user after the
+ * apex.
  */
-function unapexedLoftBuilds(
+function unapexedLoftVolume(
   kernel: RemusKernel,
   handles: Uint32Array
-): boolean {
+): number | null {
   try {
-    validateGeneratedSolid(kernel, kernel.loft(handles), 'Loft');
-    return true;
+    return kernel.volume(
+      validateGeneratedSolid(kernel, kernel.loft(handles), 'Loft'),
+      MEASUREMENT_DEFLECTION
+    );
   } catch {
-    return false;
+    return null;
   }
 }
 
+/**
+ * Whether a section run lies *in* the closing section's plane, so that it
+ * encloses no material at all and the apex has nothing to fold into. This is
+ * a degeneracy test, not a side test: a section that crosses the closing plane
+ * fails it, which is the point.
+ */
+function runLiesInClosingPlane(
+  sectionOffsets: readonly SectionOffsetRange[]
+): boolean {
+  return sectionOffsets.every(
+    (range) =>
+      Math.abs(range.min) < LOFT_APEX_MIN_STANDOFF &&
+      Math.abs(range.max) < LOFT_APEX_MIN_STANDOFF
+  );
+}
+
+/**
+ * How much more material the apex has to add before it counts as added. Both
+ * volumes are measurements of the same body under the same tessellation, so
+ * the only slack a sound apex needs is the rounding of that measurement: the
+ * model's own tolerance, read as a volume, is ~1e-6 mm³ — five orders above
+ * double-precision rounding on a millimetre-scale body, and (on planar
+ * sections, where the two builds surface the run the same way) an order below
+ * the smallest apex {@link LOFT_APEX_MIN_STANDOFF} admits: a 2e-6 mm standoff
+ * over a 64 mm² section adds 4.3e-5 mm³ and is accepted, measured. Its
+ * relative term keeps both of those true for a large model.
+ */
+function apexVolumeSlack(unapexed: number, apexed: number): number {
+  return geometryTolerance(Math.max(unapexed, apexed));
+}
+
+/**
+ * Loft the feature's sections, optionally closing the run to an apex point.
+ *
+ * The kernel applies `endPoint` unconditionally. An apex on the wrong side of
+ * the closing section folds the final ruled band back through the body: the
+ * result intersects itself, the apex is buried out of sight so the viewport
+ * looks unchanged, `validateSolid` reports nothing, and the volume that feeds
+ * mass properties, downstream booleans and STEP export is silently *smaller*
+ * than the same loft with no apex at all. Measured on the pinned kernel:
+ *
+ * | sections | apex | no apex | with apex |
+ * | --- | --- | --- | --- |
+ * | z = 0, 10 | z = 5 | 373.3333 | 266.6667 |
+ * | z = 0, 10, 10 | z = 5 | 373.3333 | 313.3334 |
+ * | z = 0, 20, 10 | z = 5 | 253.3333 | 193.3334 |
+ * | XZ at y = -20, XY at z = 10 | (0, 25, 0) | 2000.0000 | 1666.6667 |
+ *
+ * Which side "the wrong side" is cannot be read off the sketch planes. Two
+ * earlier guards tried, from the closing plane's normal and where the other
+ * sections sit along it, and both were fail-open: that reasoning says nothing
+ * at all about a section that is not parallel to the closing plane, and a
+ * section that *straddles* it (the last row) satisfies any such test on both
+ * sides at once.
+ *
+ * So the invariant is measured instead, and it is the one that actually
+ * matters: **a closing apex may only add material.** The run is lofted again
+ * without the apex and the two volumes are compared; anything that does not
+ * gain more than {@link apexVolumeSlack} is refused by name. That costs one
+ * extra loft, and only on a loft that asks for an apex.
+ *
+ * One consequence is deliberate. Asking for an apex moves the run onto the
+ * kernel's chordal apexed surfacing: two circles r = 2 and r = 3 ten apart
+ * loft to the exact 198.9675 with no apex and to 0.642% less — the 32-segment
+ * chord ratio — as soon as an apex is given. A curved-section apex therefore
+ * has to add more than that surfacing costs before the body holds more
+ * material than it did without the apex, and a smaller one is refused. It is
+ * refused for the true reason: measured, it does leave the body with less
+ * material than the plain loft, which is the silent loss this guard exists to
+ * stop, whichever half of the build gave it away.
+ */
 export function buildLoft(
   kernel: RemusKernel,
   document: ProjectDocument,
@@ -1077,10 +1103,9 @@ export function buildLoft(
     sketchBases,
     `Loft section ${sections.length}`
   );
-  // Every section the apex has to clear, not just the one before the closing
-  // one: a run whose second-to-last section is coplanar with the closing one
-  // still has a direction, and one whose middle section reaches past the
-  // closing one still has a section in the apex's way.
+  // Read only to recognise the run that encloses nothing (see
+  // `runLiesInClosingPlane`), which is the one run the volume comparison
+  // cannot measure a baseline for.
   const sectionOffsets = faces
     .slice(0, -1)
     .map((face, index) =>
@@ -1101,21 +1126,48 @@ export function buildLoft(
     endPoint: loftApexPoint(
       endPoint,
       closingPlane,
-      sectionOffsets,
       scope,
       'The loft apex point'
     )
   };
   const solid = kernel.loftWithOptions(handles, JSON.stringify(options));
-  let validated: number;
+  let validated: number | null = null;
+  let invalid: unknown = null;
   try {
     validated = validateGeneratedSolid(kernel, solid, 'Loft to an apex point');
   } catch (error) {
+    invalid = error;
+  }
+  const apexedVolume =
+    validated === null
+      ? null
+      : kernel.volume(validated, MEASUREMENT_DEFLECTION);
+  // The one measurement that settles it, and the same build the refusal
+  // message needs: the run lofted without the apex.
+  const unapexedVolume = unapexedLoftVolume(kernel, handles);
+  if (validated === null || apexedVolume === null) {
     throw new Error(
-      unapexedLoftBuilds(kernel, handles)
-        ? `${errorText(error)} The same sections do loft into a valid solid without the apex point, so the apex is what this loft cannot take: move it, or clear it.`
-        : `${errorText(error)} The same sections do not loft into a valid solid without the apex point either, so the section run itself is what the kernel cannot take; the apex is not what to change.`,
-      { cause: error }
+      unapexedVolume !== null
+        ? `${errorText(invalid)} The same sections do loft into a valid solid without the apex point, so the apex is what this loft cannot take: move it, or clear it.`
+        : `${errorText(invalid)} The same sections do not loft into a valid solid without the apex point either, so the section run itself is what the kernel cannot take; the apex is not what to change.`,
+      { cause: invalid }
+    );
+  }
+  // A run that lies in the closing section's plane encloses nothing, so its
+  // baseline is zero material rather than a measurement. That is the only run
+  // the comparison cannot measure and still decide, and it is decided here
+  // rather than waved through: measured, 4x4 and 8x8 both on z = 0 close to
+  // the analytic 213.3333 pyramid with an apex at z = 10 and at z = -10 alike.
+  const baseline =
+    unapexedVolume ?? (runLiesInClosingPlane(sectionOffsets) ? 0 : undefined);
+  if (baseline === undefined) {
+    throw new Error(
+      'The loft apex point cannot be checked on this loft: the same sections do not loft into a valid solid without it, so there is no measurement of what the apex adds, and an apex that folds back through the body reports a smaller volume with no other sign. Clear the apex point, or change the section run so it lofts on its own.'
+    );
+  }
+  if (apexedVolume - baseline <= apexVolumeSlack(baseline, apexedVolume)) {
+    throw new Error(
+      `The loft apex point does not add material to this loft: the same sections loft to ${formatMeasuredVolume(baseline)} mm³ without the apex and to ${formatMeasuredVolume(apexedVolume)} mm³ with it. An apex that measures no larger has folded the closing band back through the body, which is a self-intersecting solid the validator cannot see; on curved sections it can also mean the apex is too small to pay for what the kernel's apexed surfacing costs. Move the apex to the other side of the closing section or further out, or clear it.`
     );
   }
   return {
