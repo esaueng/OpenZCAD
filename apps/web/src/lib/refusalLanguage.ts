@@ -14,7 +14,45 @@
 export interface PlainRefusal {
   message: string;
   detail?: string;
+  /**
+   * The kernel's own classification of the refusal, when the rebuild recorded
+   * one. Copy may be reworded; this is the field a caller branches on.
+   */
+  category?: string;
 }
+
+/**
+ * One sentence per kernel failure category.
+ *
+ * The category comes from `FeatureWarning.kernelRefusal`, which the adapter
+ * fills from the kernel's typed results. Before it existed, every refusal
+ * whose sentence the kernel wrote collapsed into one GENERIC line: a domain
+ * the engine does not support, a budget that was exceeded and geometry
+ * refused on quality were three different stories told identically. They are
+ * three sentences now.
+ *
+ * Keyed by string rather than by a union imported from the adapter, on
+ * purpose: the category crosses the boundary as a string precisely so a new
+ * kernel category cannot break a build here, and an unrecognised one falls
+ * back to GENERIC exactly as an uncategorised refusal does.
+ */
+const CATEGORY_SENTENCES: Readonly<Record<string, string>> = {
+  unsupported:
+    'The exact kernel does not support this combination of shapes yet.',
+  resource_limit:
+    "This operation went past the exact kernel's budget for this kind of work.",
+  quality_refused:
+    'The exact kernel could not build this exactly, and an approximate ' +
+    'result was declined.',
+  nonconvergence:
+    'The exact kernel could not settle where these surfaces meet.',
+  tolerance_violation:
+    'This could not be built within the exact kernel’s tolerance.',
+  invalid_input: 'The exact kernel rejected the input for this operation.',
+  invalid_topology: 'The resulting body came back invalid.',
+  cancelled: 'The operation was cancelled before it finished.',
+  internal: 'The exact kernel failed internally on this operation.'
+};
 
 const TRANSLATIONS: ReadonlyArray<{ pattern: RegExp; sentence: string }> = [
   {
@@ -97,26 +135,41 @@ function looksLikeKernelText(sentence: string): boolean {
  * Splits `<sentence>\n<detail>` and translates the sentence when the kernel
  * wrote it.
  */
-export function plainRefusal(text: string): PlainRefusal {
+export function plainRefusal(text: string, category?: string): PlainRefusal {
   const separator = text.indexOf('\n');
   const sentence = (separator < 0 ? text : text.slice(0, separator)).trim();
   const tail = separator < 0 ? '' : text.slice(separator + 1).trim();
+  const classified = category ? { category } : {};
   // A lost selection is read by the card to know that no value can help; a
   // parse error names the entity of the file that is broken. Both stay.
   if (/no longer exists|^parse error:/.test(sentence)) {
-    return tail ? { message: sentence, detail: tail } : { message: sentence };
+    return tail
+      ? { message: sentence, detail: tail, ...classified }
+      : { message: sentence, ...classified };
   }
   const translation = TRANSLATIONS.find(({ pattern }) =>
     pattern.test(sentence)
   );
-  const plain = translation
-    ? translation.sentence
-    : looksLikeKernelText(sentence)
-      ? GENERIC
-      : null;
+  const byCategory = category ? CATEGORY_SENTENCES[category] : undefined;
+  // A table entry names a SYMPTOM and is more specific than any category, so
+  // it wins — except where its sentence IS the generic fallback, which says
+  // no more than "it did not work". The category says more than that and
+  // takes its place. Everything else the kernel wrote used to collapse into
+  // that one line; a category now replaces the fallback there too.
+  const tabled =
+    translation && translation.sentence !== GENERIC
+      ? translation.sentence
+      : undefined;
+  const plain =
+    tabled ??
+    (translation || looksLikeKernelText(sentence)
+      ? (byCategory ?? GENERIC)
+      : null);
   if (plain === null) {
-    return tail ? { message: sentence, detail: tail } : { message: sentence };
+    return tail
+      ? { message: sentence, detail: tail, ...classified }
+      : { message: sentence, ...classified };
   }
   const detail = [sentence, tail].filter(Boolean).join('\n');
-  return { message: plain, detail };
+  return { message: plain, detail, ...classified };
 }

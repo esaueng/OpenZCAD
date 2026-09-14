@@ -163,11 +163,33 @@ const OPERATION_CAPABILITIES: Readonly<
    */
   pattern: { status: 'derived' },
   /**
-   * Derived by unique analytic carrier (ADR-013, boolean row): a result face
-   * inherits an operand face's identity only when both are the sole faces on
-   * one quantized plane or cylinder, measured after production unification.
-   * No kernel history payload is consumed; shared or split carriers stay
-   * hash-only with a diagnostic.
+   * Derived twice and reconciled (ADR-013 boolean row, roadmap K05).
+   *
+   * The analytic-carrier derivation is unchanged: a result face inherits an
+   * operand face's identity when both are the sole faces on one quantized
+   * plane or cylinder, measured after production unification.
+   *
+   * On top of it, a two-operand boolean now runs through the kernel's
+   * `cutWithEntityEvolution` / `fuseWithEntityEvolution` /
+   * `intersectWithEntityEvolution` entry points, which name the operand face
+   * every result face came from. That reaches the two cases the carrier rule
+   * has to decline because the geometry alone cannot separate them — a
+   * carrier two named operand faces share, and a carrier holding several
+   * result faces — so a shared or split CARRIER is no longer hash-only where
+   * the kernel resolves it. Its claims are candidate evidence: each one must
+   * still satisfy the analytic-carrier witness relation below, the payload
+   * must partition the measured result, and a handle the two derivations name
+   * differently publishes neither name.
+   *
+   * What stays hash-only: a source the kernel maps to several result faces
+   * (a genuine split has no single heir), a face with no exact analytic
+   * carrier, a face the production unification step merged, and every edge
+   * the payload marks `unresolved` — the kernel declining, which must never
+   * be guessed past.
+   *
+   * Edges are carried for the `preserved` event only, and only when the
+   * result edge's exact witness is the operand edge's. `modified` and
+   * `generated` edges have no witness relation to verify a claim against.
    */
   boolean: { status: 'derived' },
   fillet: { status: 'derived' },

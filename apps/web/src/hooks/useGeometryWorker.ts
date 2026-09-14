@@ -11,7 +11,11 @@ import type {
 import type { CommandManager } from '@openzcad/command-system';
 import { mark, measure, timed } from '../lib/perf';
 import type {
+  ExactSectionPlane,
   MeshQualityReport,
+  SectionOutlineReport,
+  SketchPlanarOperation,
+  SketchPlanarResult,
   SketchSolveOutcome,
   DxfFaceSelector
 } from '@openzcad/kernel-adapter/exact';
@@ -135,8 +139,10 @@ export interface GeometryWorkerApi {
     bodyIds: BodyId[],
     options?: {
       deflection?: number;
-      /** Required for 'dxf': the planar face whose outline to export. */
+      /** One 'dxf' source: the planar face whose outline to export. */
       face?: DxfFaceSelector;
+      /** The other 'dxf' source: the plane whose exact section to export. */
+      section?: ExactSectionPlane;
       signal?: AbortSignal;
       onState?(state: GeometryWorkerState): void;
     }
@@ -152,6 +158,19 @@ export interface GeometryWorkerApi {
     options?: { onState?(state: GeometryWorkerState): void }
   ): Promise<MeshQualityReport>;
   /**
+   * The exact, kernel-computed section at one plane — section curves, not the
+   * viewport's clipped preview. Asked for when the plane comes to rest.
+   *
+   * `bodyIds` is the viewport's own list of visible bodies. It is not
+   * optional in practice: the document does not carry hide/isolate, so
+   * leaving it out sections bodies that are not on screen.
+   */
+  sectionOutline(
+    document: ProjectDocument,
+    plane: ExactSectionPlane,
+    bodyIds: BodyId[]
+  ): Promise<SectionOutlineReport>;
+  /**
    * Solves one sketch's persisted constraints via the kernel's GCS and
    * returns solved geometry plus classification and DOF diagnostics.
    */
@@ -159,6 +178,15 @@ export interface GeometryWorkerApi {
     document: ProjectDocument,
     sketchId: SketchId
   ): Promise<SketchSolveOutcome>;
+  /**
+   * Runs one planar sketch edit — corner fillet, corner chamfer, or closed
+   * loop offset — on the kernel's 2D operations. Geometry only: the caller
+   * decides which entities the answer replaces.
+   */
+  sketchPlanarOperation(
+    document: ProjectDocument,
+    operation: SketchPlanarOperation
+  ): Promise<SketchPlanarResult>;
   /**
    * On-demand per-face recognition of one imported STEP face (Phase D of the
    * imported STEP edit plan). Resolves with the recognized kind + dimensions,
@@ -193,6 +221,12 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
   );
   const solveSketchRequests = useRef(
     new Map<string, PendingRequest<SketchSolveOutcome>>()
+  );
+  const sectionRequests = useRef(
+    new Map<string, PendingRequest<SectionOutlineReport>>()
+  );
+  const sketchPlanarRequests = useRef(
+    new Map<string, PendingRequest<SketchPlanarResult>>()
   );
   const recognizeImportedFaceRequests = useRef(
     new Map<string, PendingRequest<FaceRecognitionSummary>>()
@@ -253,6 +287,14 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
         request.reject(error);
       }
       solveSketchRequests.current.clear();
+      for (const request of sectionRequests.current.values()) {
+        request.reject(error);
+      }
+      sectionRequests.current.clear();
+      for (const request of sketchPlanarRequests.current.values()) {
+        request.reject(error);
+      }
+      sketchPlanarRequests.current.clear();
       for (const request of recognizeImportedFaceRequests.current.values()) {
         request.reject(error);
       }
@@ -434,6 +476,19 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
           }
           return;
         }
+        if (event.data.type === 'section') {
+          const pending = sectionRequests.current.get(event.data.requestId);
+          if (!pending) {
+            return;
+          }
+          sectionRequests.current.delete(event.data.requestId);
+          if (event.data.ok) {
+            pending.resolve(event.data.report);
+          } else {
+            pending.reject(new Error(event.data.error));
+          }
+          return;
+        }
         if (event.data.type === 'solve-sketch') {
           const pending = solveSketchRequests.current.get(event.data.requestId);
           if (!pending) {
@@ -442,6 +497,21 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
           solveSketchRequests.current.delete(event.data.requestId);
           if (event.data.ok) {
             pending.resolve(event.data.outcome);
+          } else {
+            pending.reject(new Error(event.data.error));
+          }
+          return;
+        }
+        if (event.data.type === 'sketch-2d-op') {
+          const pending = sketchPlanarRequests.current.get(
+            event.data.requestId
+          );
+          if (!pending) {
+            return;
+          }
+          sketchPlanarRequests.current.delete(event.data.requestId);
+          if (event.data.ok) {
+            pending.resolve(event.data.result);
           } else {
             pending.reject(new Error(event.data.error));
           }
@@ -650,7 +720,10 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
           ...(options?.deflection !== undefined
             ? { deflection: options.deflection }
             : {}),
-          ...(options?.face !== undefined ? { face: options.face } : {})
+          ...(options?.face !== undefined ? { face: options.face } : {}),
+          ...(options?.section !== undefined
+            ? { section: options.section }
+            : {})
         });
       });
     },
@@ -668,6 +741,24 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
         stateSubscribers.current.set(posted.requestId, options.onState);
       }
       return posted.promise;
+    },
+    sectionOutline(document, plane, bodyIds) {
+      const worker = workerRef.current;
+      if (!worker) {
+        return Promise.reject(new Error('Geometry worker is unavailable.'));
+      }
+      const requestId = crypto.randomUUID();
+      return new Promise((resolve, reject) => {
+        sectionRequests.current.set(requestId, { resolve, reject });
+        armedRef.current = true;
+        worker.postMessage({
+          type: 'section',
+          requestId,
+          document: documentForWorker(document),
+          plane,
+          bodyIds
+        });
+      });
     },
     solveSketch(document, sketchId) {
       const posted = postRequest(solveSketchRequests.current, {
@@ -692,6 +783,23 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
       return posted.ok
         ? posted.promise
         : Promise.reject(new Error('Geometry worker is unavailable.'));
+    },
+    sketchPlanarOperation(document, operation) {
+      const worker = workerRef.current;
+      if (!worker) {
+        return Promise.reject(new Error('Geometry worker is unavailable.'));
+      }
+      const requestId = crypto.randomUUID();
+      return new Promise((resolve, reject) => {
+        sketchPlanarRequests.current.set(requestId, { resolve, reject });
+        armedRef.current = true;
+        worker.postMessage({
+          type: 'sketch-2d-op',
+          requestId,
+          document: documentForWorker(document),
+          operation
+        });
+      });
     },
     invalidate() {
       lastSyncedKey.current = null;

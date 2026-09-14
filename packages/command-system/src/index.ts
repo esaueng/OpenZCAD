@@ -40,6 +40,8 @@ export {
 import {
   createId,
   assertDocumentHistory,
+  isVariableFilletLaw,
+  VARIABLE_FILLET_LAWS,
   type UserId,
   deepClone,
   nowIso,
@@ -599,6 +601,58 @@ function validateEdgeReferences(input: EdgeModifierInput): void {
   }
 }
 
+/**
+ * The two experimental blends, checked where a command is authored rather
+ * than only where it rebuilds.
+ *
+ * The rebuild refuses an unqualified configuration too — that is the gate
+ * that matters, because it also covers a document nobody in this app
+ * authored. This runs first so a form or an assistant call is told no before
+ * the edit lands in history, and so the two never disagree about what the
+ * kernel qualifies.
+ */
+function validateEdgeModifierBlend(
+  document: ProjectDocument,
+  kind: 'fillet' | 'chamfer',
+  input: EdgeModifierInput
+): void {
+  if (kind === 'fillet') {
+    if (input.endRadius === undefined) {
+      return;
+    }
+    if (input.radiusLaw !== undefined && !isVariableFilletLaw(input.radiusLaw)) {
+      throw new Error(
+        `Variable-radius fillet law "${String(input.radiusLaw)}" is not one of the radius laws this kernel qualifies (${VARIABLE_FILLET_LAWS.join(', ')}).`
+      );
+    }
+    const endRadius = resolvedModelingValue(
+      document,
+      `${input.name} end radius`,
+      input.endRadius
+    );
+    if (!(endRadius > 0)) {
+      throw new Error('Variable fillet end radius must be greater than zero.');
+    }
+    return;
+  }
+  if (input.distance2 === undefined) {
+    return;
+  }
+  if (input.angleDeg !== undefined) {
+    throw new Error(
+      'A chamfer sets either a second distance or an angle, not both.'
+    );
+  }
+  const distance2 = resolvedModelingValue(
+    document,
+    `${input.name} second distance`,
+    input.distance2
+  );
+  if (!(distance2 > 0)) {
+    throw new Error('Chamfer second distance must be greater than zero.');
+  }
+}
+
 function resolvedModelingValue(
   document: ProjectDocument,
   label: string,
@@ -821,6 +875,21 @@ function validateModelingFeatureUpdate(
       if (!pathSketch || feature.data.path.entityIds.length === 0) {
         throw new Error('Sweep path sketch is unavailable or empty.');
       }
+      // A guide rail is one more sketch the sweep depends on, so an edit has
+      // to be held to the same checks the path is.
+      const guide = feature.data.guide;
+      if (guide) {
+        const guideSketch = findSketch(preview, guide.sketchId);
+        if (!guideSketch || guide.entityIds.length === 0) {
+          throw new Error('Sweep guide rail sketch is unavailable or empty.');
+        }
+        const guideObjects = new Set(guideSketch.objectIds);
+        if (guide.entityIds.some((id) => !guideObjects.has(id))) {
+          throw new Error(
+            'Sweep guide rail references a missing sketch entity.'
+          );
+        }
+      }
       break;
     }
     case 'helical-sweep':
@@ -867,26 +936,44 @@ function validateModelingFeatureUpdate(
         operation: feature.data.operation
       });
       break;
-    case 'fillet':
+    case 'fillet': {
       validateBodyTarget(preview, feature.data.targetBodyId);
-      validateEdgeReferences({
+      const filletInput: EdgeModifierInput = {
         name: feature.name,
         targetBodyId: feature.data.targetBodyId,
         edgeHashes: feature.data.edgeHashes,
         edgeReferences: feature.data.edgeReferences,
-        size: feature.data.radius
-      });
+        size: feature.data.radius,
+        ...(feature.data.endRadius !== undefined
+          ? { endRadius: feature.data.endRadius }
+          : {}),
+        ...(feature.data.radiusLaw !== undefined
+          ? { radiusLaw: feature.data.radiusLaw }
+          : {})
+      };
+      validateEdgeReferences(filletInput);
+      validateEdgeModifierBlend(preview, 'fillet', filletInput);
       break;
-    case 'chamfer':
+    }
+    case 'chamfer': {
       validateBodyTarget(preview, feature.data.targetBodyId);
-      validateEdgeReferences({
+      const chamferInput: EdgeModifierInput = {
         name: feature.name,
         targetBodyId: feature.data.targetBodyId,
         edgeHashes: feature.data.edgeHashes,
         edgeReferences: feature.data.edgeReferences,
-        size: feature.data.distance
-      });
+        size: feature.data.distance,
+        ...(feature.data.angleDeg !== undefined
+          ? { angleDeg: feature.data.angleDeg }
+          : {}),
+        ...(feature.data.distance2 !== undefined
+          ? { distance2: feature.data.distance2 }
+          : {})
+      };
+      validateEdgeReferences(chamferInput);
+      validateEdgeModifierBlend(preview, 'chamfer', chamferInput);
       break;
+    }
     case 'pattern':
       validateBodyTarget(preview, feature.data.targetBodyId);
       break;
@@ -1168,6 +1255,21 @@ export const commandFactories = {
         if (payload.path.entityIds.some((id) => !available.has(id))) {
           throw new Error('Sweep path references a missing sketch entity.');
         }
+        if (payload.guide) {
+          const guideSketch = findSketch(document, payload.guide.sketchId);
+          if (!guideSketch) {
+            throw new Error('Sweep guide rail sketch not found.');
+          }
+          if (payload.guide.entityIds.length === 0) {
+            throw new Error('A sweep guide rail needs at least one entity.');
+          }
+          const guideAvailable = new Set(guideSketch.objectIds);
+          if (payload.guide.entityIds.some((id) => !guideAvailable.has(id))) {
+            throw new Error(
+              'Sweep guide rail references a missing sketch entity.'
+            );
+          }
+        }
       }
     );
   },
@@ -1329,6 +1431,7 @@ export const commandFactories = {
       (document) => {
         validateBodyTarget(document, payload.targetBodyId);
         validateEdgeReferences(payload);
+        validateEdgeModifierBlend(document, 'fillet', payload);
       }
     );
   },
@@ -1344,6 +1447,7 @@ export const commandFactories = {
       (document) => {
         validateBodyTarget(document, payload.targetBodyId);
         validateEdgeReferences(payload);
+        validateEdgeModifierBlend(document, 'chamfer', payload);
       }
     );
   },
