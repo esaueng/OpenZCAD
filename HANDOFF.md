@@ -11,9 +11,27 @@ handle, the same editors — and both are off unless the new field is filled in.
 
 The form gates the feature to what the kernel qualifies. Only the two laws are
 offered, the law selector is disabled until an end radius is entered, and a
-chamfer shows either an angle or a second distance, never both. A configuration
-outside the qualified set cannot be reached through the UI at all, and one that
-arrives in a stored document is refused by name.
+chamfer shows either an angle or a second distance, never both — the two inputs
+hide each other, so only one of them is ever on screen. A configuration outside
+the qualified set that arrives in a stored document is refused by name, at the
+command and again at the rebuild.
+
+What the form *shows* and what it *emits* are two different things, and the
+first draft of this branch got the second one wrong: blanking the angle on a
+chamfer that had stored one emitted a stand-in `angleDeg: 45`, so typing a
+second distance afterwards submitted both fields at once. Both validators
+refuse that pair, and the angle field was already off screen, so the error
+named a value no visible control could clear — a dead end escapable only by
+Cancel or by deleting the feature. It failed closed (no wrong geometry was
+ever stored) but it was reachable in the UI in four clicks. Fixed below: a
+blank angle now emits no key, and the edit command deletes the stored one
+through `clearData`. Do not read "the form only shows one" as "the form only
+ever sends one" without the tests that now pin it.
+
+The message on commit `3f9bfd59` carries the same overstatement ("an
+unqualified configuration is unreachable from the UI", "never both"); it is
+superseded by the fix commit and by this file. History was left unrewritten
+rather than quietly tidied.
 
 ## Kernel calls adopted
 
@@ -86,22 +104,22 @@ unchanged.
 ## Check results (actual output lines)
 
 ```
-pnpm lint              ✖ 19 problems (0 errors, 19 warnings)
-pnpm typecheck         (clean, no output)
-pnpm test              Test Files  243 passed | 2 skipped (245)
-                             Tests  2505 passed | 4 skipped (2509)
-                       Test Files  156 passed (156)
-                             Tests  1184 passed (1184)
+pnpm lint               ✖ 19 problems (0 errors, 19 warnings)
+pnpm typecheck          (clean, no output)
+pnpm test               Test Files  243 passed | 2 skipped (245)
+                              Tests  2507 passed | 4 skipped (2511)
+                        Test Files  157 passed (157)
+                              Tests  1191 passed (1191)
 pnpm test:parity-corpus Test Files  7 passed (7)
-                             Tests  174 passed | 1 skipped (175)
+                              Tests  174 passed | 1 skipped (175)
+pnpm build              exit 0; bundle report "warnings": [], "failures": []
 ```
 
-`pnpm build` was also run: bundle report `"warnings": [], "failures": []`.
-
-The briefing's baseline named 1182 web tests; this branch adds 2 there
-(`edgeModifierEdit.test.ts`) and 16 to the root project across two new files.
-Parity is exactly the baseline 174/1 skipped. `pnpm test:e2e` was not run, per
-the briefing.
+Against the verified `origin/main` baseline (lint 0/19, typecheck clean, root
+241 files / 2489 passed + 2 skipped, web 156 files / 1182 passed, parity 174/1
+skipped, build clean): the root project gains 2 files and 18 tests, the web
+project gains 1 file and 9 tests, parity is unchanged, and the bundle report
+is unchanged. `pnpm test:e2e` was not run, per the briefing.
 
 ## Schema changes (all additive)
 
@@ -139,9 +157,13 @@ radius equal to start radius" is a different solid from "no end radius".
   gives live preview plus a **Swap the two faces** button, which is how a user
   actually resolves it in one click. Naming them would need an ordered
   adjacency field on the published topology — see follow-ups.
-- **The `angleDeg` 45° workaround was left alone.** `clearData` could now clear
-  it properly, but changing existing chamfer edit behaviour is not this PR's
-  job.
+- **The `angleDeg` 45° workaround is gone, not scoped out.** An earlier draft
+  of this branch left it alone on the grounds that changing existing chamfer
+  edit behaviour was not this PR's job. That was wrong: this PR is what put a
+  second, mutually exclusive field next to the angle, and the workaround
+  collided with it. Blanking the angle now clears the key. A blank angle still
+  means the symmetric 45° bevel; it is the absent key rather than a written
+  45, which is what the constant/symmetric case always meant elsewhere.
 - **No variable-blend evolution lineage.** The kernel has no
   `filletVariableWithEvolution`, so a variable fillet derives lineage the same
   way an engine that reports no construction history already does (primitive
@@ -164,8 +186,15 @@ radius equal to start radius" is a different solid from "no end radius".
    it. The direction and bracket assertions in the same test are the tight ones.
 3. **`clearData` is a new general capability on `updateFeature`.** It is
    constrained by an allow-list, but it is a contract addition, not just a
-   fillet detail.
-4. **The failure path for these two blends deliberately does not use
+   fillet detail. Three of the four allow-listed keys are now cleared by the
+   edit form on every chamfer or fillet edit that leaves the field blank, so
+   the path is well exercised rather than theoretical.
+4. **Mutually exclusive optional fields are the shape that bit this branch
+   once.** `angleDeg`/`distance2` on a chamfer, and any future pair like it,
+   are only safe while every edit path can *delete* one of them. A new editor
+   that patches chamfer data without naming `clearData` can recreate exactly
+   the dead end fixed here, and the type system will not notice.
+5. **The failure path for these two blends deliberately does not use
    `edgeModifierFailureMessage`.** That function's "try a smaller size" answer
    comes from a probe ladder that runs the CONSTANT engine, so on a variable
    request it would report success for a blend the user did not ask for.
