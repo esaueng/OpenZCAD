@@ -252,6 +252,7 @@ function featureScopeForBodies(
       case 'sweep':
         neededSketches.add(data.profile.sketchId);
         neededSketches.add(data.path.sketchId);
+        if (data.guide) neededSketches.add(data.guide.sketchId);
         break;
       case 'helical-sweep':
         neededSketches.add(data.profile.sketchId);
