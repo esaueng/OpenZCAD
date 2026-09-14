@@ -39,10 +39,17 @@ export const EDGE_MODIFIER_PROBE_RATIOS = [1 / 2, 1 / 8, 1 / 64] as const;
  * The kernel computed that ceiling from the support faces. It is not
  * re-derived here, and it is not guessed from the edge length — the old
  * comment on the bounds guard below says why that guess is wrong. It is used
- * only to aim the probe ladder, which still has to prove a smaller size is
+ * ONLY to aim the probe ladder, which still has to prove a smaller size is
  * actually ACCEPTED: the cliff is the first thing the cascade hit, not a
  * promise that nothing else fails underneath it. Measured on the pin, the
  * reported ceiling is exclusive (r18 refuses, r17.999 builds).
+ *
+ * It is also per-face, and not monotone in the requested size: a 50x50x2
+ * plate refuses r60 on one edge with `available radius 50` and r30 on the
+ * SAME edge with `available radius 2`, while r2 still refuses. So a reported
+ * ceiling is evidence about where the cascade stopped this time, not a limit
+ * to hand back to a user — `edgeModifierFailureMessage` never quotes it, and
+ * quotes the probed size instead.
  */
 export function blendCliffLimit(reported: string | null): number | null {
   if (!reported?.startsWith('cliff-encountered')) {
@@ -260,14 +267,18 @@ function probeSize(value: number): number {
  * it, while half the kernel's own ceiling is accepted on the first rung.
  *
  * The probe is still run rather than replaced by the ceiling, and the SIZE it
- * returns is the one the message quotes, because the kernel's ceiling is an
- * upper bound and not a working value. Two things sit below it: the cascade
- * reports where it stopped FIRST, and this adapter's own acceptance rules are
+ * returns is the only one the message quotes, because the kernel's ceiling is
+ * neither a working value nor reliably a bound. Three things sit below it:
+ * the cascade reports where it stopped FIRST, the face it stopped on changes
+ * with the requested size, and this adapter's own acceptance rules are
  * stricter than the kernel's. Measured on the pin, a 30x18x24 box refuses a
  * 30 fillet with "available radius 18", and the kernel will indeed build
  * r17.999 — as a body 2x the height of its input, which the bounds guard
- * above rejects. Quoting 18 as a radius to try would send the user back
- * round the same refusal.
+ * above rejects. On a 50x50x2 plate the reported ceiling falls from 50 to 2
+ * between r60 and r30 on one edge, and 2 still refuses.
+ *
+ * Being wrong about the ceiling therefore costs at most a wasted rung here,
+ * which is why it is used at this end and not in the sentence.
  */
 export function acceptedEdgeModifierProbe(
   kernel: RemusKernel,
@@ -305,8 +316,8 @@ export function acceptedEdgeModifierProbe(
  * question is answered the only way that is sound: by retrying the same
  * selection at a ladder of smaller sizes, aimed at the kernel's ceiling when
  * it named one. A probe that is accepted means the failure is size-bound and
- * the actionable advice is a smaller size — named exactly, when the kernel
- * measured it. A ladder that fails everywhere means the cause is structural,
+ * the actionable advice is a smaller size — named exactly, because the ladder
+ * built it. A ladder that fails everywhere means the cause is structural,
  * and it is named from the selection's topology — a closed rim, a corner
  * chain, or an edge ending on an existing blend.
  *
@@ -368,6 +379,8 @@ export function edgeModifierFailureMessage(
   const dimension = featureKind === 'fillet' ? 'radius' : 'distance';
   const verb = featureKind === 'fillet' ? 'rounded' : 'chamfered';
   const prefix = `${label} could not be created on ${selected.length} selected edge${selected.length === 1 ? '' : 's'} with ${dimension} ${size}.`;
+  // Used to aim the ladder only — see the size-bound branch below for why it
+  // is never quoted.
   const cliffLimit = blendCliffLimit(reported);
   try {
     const accepted = acceptedEdgeModifierProbe(
@@ -379,13 +392,17 @@ export function edgeModifierFailureMessage(
       cliffLimit
     );
     if (accepted !== null) {
-      // The kernel measured the ceiling off the support faces, so it is
-      // relayed rather than re-derived — an edge-length guess is wrong, as
-      // the bounds guard above explains. It is quoted as the bound it is,
-      // with a size this adapter actually built alongside it.
-      return cliffLimit === null
-        ? `${prefix} Try a smaller ${dimension}.`
-        : `${prefix} Try a smaller ${dimension}: the kernel's blend runs off its support face at ${dimension} ${cliffLimit}, and ${dimension} ${accepted} builds here.`;
+      // Only the probed size is quoted, and the kernel's reported ceiling
+      // never is. The ceiling is per-face and is NOT monotone in the
+      // requested size, so it is not a bound on what works: on a 50x50x2
+      // plate, one edge, the refusal at r60 names `available radius 50`
+      // (the long face) while r30 on the same edge names `available radius
+      // 2` (the thickness), and r2 still refuses — the real limit there is
+      // between 1 and 2. Quoting 50 would send a user round the same
+      // refusal at 40, at 20 and at 5. The ceiling still aims the ladder,
+      // where being wrong only costs a rung; it does not go in the
+      // sentence, where being wrong is bad advice.
+      return `${prefix} Try a smaller ${dimension}: ${dimension} ${accepted} builds here.`;
     }
     // Named before the topology causes because it explains the whole body
     // rather than one selection: measured on an r=2..3, h=1 annulus, a 90
