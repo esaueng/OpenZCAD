@@ -7,7 +7,8 @@ import {
   offsetSketchLoop,
   signedLoopArea,
   type Sketch2dPoint,
-  type SketchCorner
+  type SketchCorner,
+  type SketchOffsetCurve
 } from './sketch-2d-ops';
 
 function withKernel<T>(run: (kernel: RemusKernel) => T): T {
@@ -293,5 +294,206 @@ describe('kernel-backed sketch loop offset', () => {
         offsetSketchLoop(kernel, square.slice(0, 2), 1, 'arc')
       )
     ).toThrow(/at least three lines/);
+  });
+});
+
+describe('outward offset of a concave loop', () => {
+  /** A six-line L profile, counter-clockwise, with one reflex corner (4, 4). */
+  const ell: Sketch2dPoint[] = [
+    { x: 0, y: 0 },
+    { x: 10, y: 0 },
+    { x: 10, y: 4 },
+    { x: 4, y: 4 },
+    { x: 4, y: 10 },
+    { x: 0, y: 10 }
+  ];
+
+  /** A U profile, counter-clockwise, with two reflex corners in its slot. */
+  const yoke: Sketch2dPoint[] = [
+    { x: 0, y: 0 },
+    { x: 12, y: 0 },
+    { x: 12, y: 10 },
+    { x: 9, y: 10 },
+    { x: 9, y: 3 },
+    { x: 3, y: 3 },
+    { x: 3, y: 10 },
+    { x: 0, y: 10 }
+  ];
+
+  /** Every point a curve passes through that the offset witness cares about. */
+  function curvePoints(curve: SketchOffsetCurve, samples = 9): Sketch2dPoint[] {
+    return Array.from({ length: samples }, (_unused, index) => {
+      const t = index / (samples - 1);
+      if (curve.kind === 'line') {
+        return {
+          x: curve.a.x + (curve.b.x - curve.a.x) * t,
+          y: curve.a.y + (curve.b.y - curve.a.y) * t
+        };
+      }
+      const angle =
+        ((curve.startAngleDeg + (curve.endAngleDeg - curve.startAngleDeg) * t) *
+          Math.PI) /
+        180;
+      return {
+        x: curve.center.x + Math.cos(angle) * curve.radius,
+        y: curve.center.y + Math.sin(angle) * curve.radius
+      };
+    });
+  }
+
+  function distanceToLoop(
+    point: Sketch2dPoint,
+    loop: readonly Sketch2dPoint[]
+  ): number {
+    let closest = Number.POSITIVE_INFINITY;
+    for (let index = 0; index < loop.length; index += 1) {
+      const a = loop[index]!;
+      const b = loop[(index + 1) % loop.length]!;
+      const spanX = b.x - a.x;
+      const spanY = b.y - a.y;
+      const lengthSquared = spanX * spanX + spanY * spanY;
+      const offsetX = point.x - a.x;
+      const offsetY = point.y - a.y;
+      const t =
+        lengthSquared <= 0
+          ? 0
+          : Math.max(
+              0,
+              Math.min(1, (offsetX * spanX + offsetY * spanY) / lengthSquared)
+            );
+      closest = Math.min(
+        closest,
+        Math.hypot(offsetX - spanX * t, offsetY - spanY * t)
+      );
+    }
+    return closest;
+  }
+
+  /** The loop the curves describe, walked end to end. */
+  function chain(curves: readonly SketchOffsetCurve[]): Sketch2dPoint[] {
+    return curves.flatMap((curve) => {
+      const points = curvePoints(curve, 2);
+      return [points[0]!, points[1]!];
+    });
+  }
+
+  it('offsets an L profile outward at every distance the notch allows', () => {
+    // Before the reflex-join repair this threw at every distance: the kernel's
+    // arc join inserts a CIRCLE from (4, 5) to (5, 4) across the notch, whose
+    // ends sit on the source loop.
+    for (const wanted of [0.1, 0.5, 1, 2]) {
+      const curves = withKernel((kernel) =>
+        offsetSketchLoop(kernel, ell, wanted, 'arc')
+      );
+      // Six source vertices: the five convex ones keep their arc and the one
+      // reflex vertex is mitered away, so six lines and five arcs.
+      expect(curves.filter((curve) => curve.kind === 'arc')).toHaveLength(5);
+      expect(curves.filter((curve) => curve.kind === 'line')).toHaveLength(6);
+      for (const curve of curves) {
+        for (const point of curvePoints(curve)) {
+          expect(distanceToLoop(point, ell)).toBeGreaterThanOrEqual(
+            wanted - 1e-9
+          );
+        }
+      }
+      expect(signedLoopArea(chain(curves))).toBeGreaterThan(64);
+    }
+  });
+
+  it('miters the reflex corner where the two offset lines meet', () => {
+    const curves = withKernel((kernel) =>
+      offsetSketchLoop(kernel, ell, 1, 'arc')
+    );
+    // The outward offset of the notch corner (4, 4) by 1 is exactly (5, 5).
+    const corners = curves.flatMap((curve) => curvePoints(curve, 2));
+    expect(
+      corners.some(
+        (point) => Math.abs(point.x - 5) < 1e-9 && Math.abs(point.y - 5) < 1e-9
+      )
+    ).toBe(true);
+    // and nothing sits at the inverted arc's ends any more.
+    for (const point of corners) {
+      expect(Math.abs(point.x - 4) + Math.abs(point.y - 5)).toBeGreaterThan(
+        1e-6
+      );
+      expect(Math.abs(point.x - 5) + Math.abs(point.y - 4)).toBeGreaterThan(
+        1e-6
+      );
+    }
+  });
+
+  it('repairs the chamfer join at a reflex corner too', () => {
+    const curves = withKernel((kernel) =>
+      offsetSketchLoop(kernel, ell, 1, 'chamfer')
+    );
+    expect(curves.every((curve) => curve.kind === 'line')).toBe(true);
+    // A chamfer join is a chord across the convex corner, so its middle is
+    // legitimately inside the distance; every endpoint still sits on it.
+    for (const curve of curves) {
+      for (const point of curvePoints(curve, 2)) {
+        expect(distanceToLoop(point, ell)).toBeGreaterThanOrEqual(1 - 1e-9);
+      }
+    }
+    expect(
+      curves
+        .flatMap((curve) => curvePoints(curve, 2))
+        .some(
+          (point) =>
+            Math.abs(point.x - 5) < 1e-9 && Math.abs(point.y - 5) < 1e-9
+        )
+    ).toBe(true);
+  });
+
+  it('offsets a profile with two reflex corners outward', () => {
+    for (const wanted of [0.5, 1, 2]) {
+      const curves = withKernel((kernel) =>
+        offsetSketchLoop(kernel, yoke, wanted, 'arc')
+      );
+      // Eight vertices, six of them convex: the slot's two bottom corners are
+      // the reflex pair and they are the two that get mitered.
+      expect(curves.filter((curve) => curve.kind === 'arc')).toHaveLength(6);
+      for (const curve of curves) {
+        for (const point of curvePoints(curve)) {
+          expect(distanceToLoop(point, yoke)).toBeGreaterThanOrEqual(
+            wanted - 1e-9
+          );
+        }
+      }
+    }
+  });
+
+  it('offsets a concave loop wound clockwise the same way', () => {
+    const clockwise = [...ell].reverse();
+    const curves = withKernel((kernel) =>
+      offsetSketchLoop(kernel, clockwise, 1, 'arc')
+    );
+    for (const curve of curves) {
+      for (const point of curvePoints(curve)) {
+        expect(distanceToLoop(point, ell)).toBeGreaterThanOrEqual(1 - 1e-9);
+      }
+    }
+    expect(signedLoopArea(chain(curves))).toBeGreaterThan(64);
+  });
+
+  it('refuses by name when the offset closes an inside corner up', () => {
+    // The U's 6-wide slot closes at 3; the miter then consumes a whole offset
+    // line, which is a refusal rather than a degenerate loop in the sketch.
+    expect(() =>
+      withKernel((kernel) => offsetSketchLoop(kernel, yoke, 3.5, 'arc'))
+    ).toThrow(/inside corners|collapses the loop|did not move the loop/);
+  });
+
+  it('leaves a convex loop untouched by the repair', () => {
+    const square: Sketch2dPoint[] = [
+      { x: 0, y: 0 },
+      { x: 10, y: 0 },
+      { x: 10, y: 10 },
+      { x: 0, y: 10 }
+    ];
+    const curves = withKernel((kernel) =>
+      offsetSketchLoop(kernel, square, 2, 'arc')
+    );
+    expect(curves.filter((curve) => curve.kind === 'arc')).toHaveLength(4);
+    expect(curves.filter((curve) => curve.kind === 'line')).toHaveLength(4);
   });
 });
