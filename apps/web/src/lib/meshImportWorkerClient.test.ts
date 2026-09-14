@@ -116,6 +116,33 @@ describe('mesh import worker client', () => {
     expect(worker.terminated).toBe(true);
   });
 
+  it('carries a declared source unit back to the caller', async () => {
+    vi.stubGlobal('Worker', FakeWorker);
+    const pending = importMeshFileInDisposableWorker(
+      new File([new Uint8Array(4)], 'box.3mf'),
+      '3mf'
+    );
+    const worker = FakeWorker.latest!;
+
+    reply(worker, {
+      ok: true,
+      vertices: Float64Array.of(0, 0, 0, 1, 0, 0, 0, 1, 0),
+      indices: Uint32Array.of(0, 1, 2),
+      triangleCount: 1,
+      sourceUnit: 'inch'
+    });
+
+    // The vertices are already millimetres; the unit is what the import says
+    // it converted from, and the status line is the only place a user can
+    // learn that the file's own numbers were not adopted as written.
+    await expect(pending).resolves.toEqual({
+      vertices: [0, 0, 0, 1, 0, 0, 0, 1, 0],
+      indices: [0, 1, 2],
+      triangleCount: 1,
+      sourceUnit: 'inch'
+    });
+  });
+
   it('terminates the worker when the import is cancelled', async () => {
     vi.stubGlobal('Worker', FakeWorker);
     const controller = new AbortController();

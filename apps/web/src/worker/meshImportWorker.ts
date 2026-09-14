@@ -16,6 +16,8 @@ export type MeshImportWorkerResult =
       vertices: Float64Array;
       indices: Uint32Array;
       triangleCount: number;
+      /** The length unit the file declared, when it declares one. */
+      sourceUnit?: string;
     }
   | {
       type: 'result';
@@ -52,7 +54,8 @@ self.onmessage = async (event: MessageEvent<MeshImportWorkerRequest>) => {
       ok: true,
       vertices,
       indices,
-      triangleCount: mesh.triangleCount
+      triangleCount: mesh.triangleCount,
+      ...(mesh.sourceUnit === undefined ? {} : { sourceUnit: mesh.sourceUnit })
     };
     self.postMessage(result, { transfer: [vertices.buffer, indices.buffer] });
   } catch (error) {
