@@ -45,6 +45,7 @@ import {
   solidMeshIsClosed,
   tessellatedFaceBounds,
   unifyBooleanFaces,
+  unifyUnionFaces,
   type UnionFuseOperand
 } from './exact-boolean-helpers';
 import {
@@ -60,10 +61,13 @@ import {
   copyShapeWithVerifiedLineage,
   formatMeasuredVolume,
   importMeshSolid,
-  importStepWithOwnBudget,
   inheritMeshOrigin,
   resolveParametricPoint
 } from './exact-shape-utils';
+import {
+  importStepWithOwnBudget,
+  stepImportEmptyReason
+} from './kernel-step-import';
 import { MEASUREMENT_DEFLECTION } from './exact-witnesses';
 import { isBlendFace } from './exact-brep';
 import { separatePlanarEmboss } from './planar-emboss';
@@ -98,11 +102,16 @@ import {
   disconnectedUnionWarning
 } from './union-connectivity';
 import {
+  declinedBooleanEvidence,
+  deriveBooleanLineage,
+  probeBooleanEntityEvolution,
+  type BooleanEvolutionOperation
+} from './exact-boolean-evolution';
+import {
   remusHashOnlyLineage,
   createRemusImportedStepLineage,
   createRemusModifierEvolutionLineage,
   decodeRemusPatternJournal,
-  deriveRemusBooleanCarrierLineage,
   deriveRemusPatternInstanceLineage,
   mergeRemusLineageStates,
   type RemusLineageDiagnostic,
@@ -269,9 +278,12 @@ function buildImportedStepFeature(
         }
         sourceBytes = resolved;
       }
-      const declared = Array.from(importStepWithOwnBudget(kernel, sourceBytes));
+      const imported = importStepWithOwnBudget(kernel, sourceBytes);
+      const declared = Array.from(imported.solids);
       if (declared.length === 0) {
-        throw new Error('STEP file contains no solids.');
+        // The reader's report, not a guess from the byte count: a file whose
+        // only roots are sheets says so instead of reading as empty.
+        throw new Error(stepImportEmptyReason(imported.report));
       }
       // K0.6. A shell that is not closed is not a solid, whatever
       // volume a divergence integral over its faces happens to
@@ -350,7 +362,8 @@ function buildImportedStepFeature(
         kernel,
         solids[0]!,
         data.planarEmboss.selection,
-        data.planarEmboss.part
+        data.planarEmboss.part,
+        data.planarEmboss.sourcePlacement
       );
     }
     result.importedStepDiagnostics.set(feature.bodyId, diagnostics);
@@ -447,7 +460,16 @@ function buildExtrudeFeature(
     ];
     const targetSolid = collapseShape(kernel, target);
     const extrusionSolid = collapseShape(kernel, extrusion);
+    // GEOMETRY COMES FROM THE TYPED DETAILED ENTRY POINTS, unchanged. They are
+    // the ones that carry the kernel's exact-only policy: a boolean the exact
+    // pipeline cannot do refuses here by its named reason instead of shipping
+    // an approximate body. Provenance is read afterwards, from a separate probe
+    // that cannot touch this result — see `exact-boolean-evolution.ts`.
     const operandNames = [targetBody.name, extrusionBody.name];
+    const coaxial =
+      operation === 'cut'
+        ? tryExactCoaxialCylinderCut(kernel, targetSolid, extrusionSolid)
+        : null;
     const solid =
       operation === 'add'
         ? fuseUniformSolid(
@@ -460,7 +482,7 @@ function buildExtrudeFeature(
           )
         : unifyBooleanFaces(
             kernel,
-            tryExactCoaxialCylinderCut(kernel, targetSolid, extrusionSolid) ??
+            coaxial ??
               exactCut(kernel, targetSolid, extrusionSolid, operandNames)
           );
     // An add only needs the two to meet. Shared volume cannot answer that —
@@ -502,12 +524,41 @@ function buildExtrudeFeature(
       );
     }
     result.consumed.add(targetBodyId);
+    // One target solid and one tool solid is what the kernel's pairwise
+    // entity-evolution entry points take, and only then do the operand
+    // handles the payload names match the lineage measured above. A
+    // multi-solid operand, or a cut the exact coaxial path took, keeps carrier
+    // lineage and records the reason.
+    const pairwise =
+      target.solids.length === 1 && extrusion.solids.length === 1;
+    const evidence =
+      coaxial !== null
+        ? declinedBooleanEvidence(
+            'The cut was taken by the exact coaxial cylinder path, which publishes no evolution record.'
+          )
+        : pairwise
+          ? probeBooleanEntityEvolution({
+              kernel,
+              operation: operation === 'add' ? 'fuse' : 'cut',
+              a: targetSolid,
+              b: extrusionSolid,
+              shipped: solid,
+              unify: (candidate) =>
+                operation === 'add'
+                  ? unifyUnionFaces(kernel, candidate)
+                  : unifyBooleanFaces(kernel, candidate),
+              operands: operandLineage
+            })
+          : declinedBooleanEvidence(
+              `The ${operation} extrude reduced more than one solid per operand.`
+            );
     result.shapes.set(feature.bodyId, {
       solids: [solid],
       // The target's faces and the tool's own caps and walls keep their
-      // identity wherever the carrier rule can prove it, so a sketch on the
+      // identity wherever either derivation can prove it, so a sketch on the
       // boss, or on the plate beside it, still has a face to attach to.
-      lineage: deriveRemusBooleanCarrierLineage({
+      lineage: deriveBooleanLineage({
+        evidence,
         producingFeatureId: feature.featureId,
         operands: operandLineage,
         resultCandidates: topologyCandidatesForSolid(kernel, solid)
@@ -1103,6 +1154,29 @@ function buildBooleanFeature(
   );
   let acceptedUnionSolid: number | undefined;
   let solid: number;
+  /**
+   * What the provenance probe should repeat, once the boolean itself has been
+   * performed and its body accepted. Geometry never comes from the probe — the
+   * arms below build the shipped solid with the plain entry points exactly as
+   * they did before this row — so this is only recorded, never consumed, until
+   * the lineage is derived at the end.
+   *
+   * The kernel's entity-evolution entry points are pairwise, so they cover a
+   * boolean of exactly two single-solid operands. A union of three bodies, a
+   * chain of subtract tools, or an operand that had to be collapsed keeps
+   * carrier lineage and says so: a chained evolution would need its own
+   * measured intermediate at every step and nothing has proved that chain.
+   */
+  let evolutionProbe: {
+    readonly operation: BooleanEvolutionOperation;
+    readonly a: number;
+    readonly b: number;
+  } | null = null;
+  let probeDeclined =
+    'The boolean did not reach a pairwise entity-evolution entry point.';
+  const pairwiseOperands =
+    operands.length === 2 &&
+    operands.every((shape) => shape.solids.length === 1);
   let unionFuseOperands: UnionFuseOperand[] | null = null;
   // A disconnected union is a different complaint with its own
   // remedy and its own warning; it must not also be reported as
@@ -1176,6 +1250,15 @@ function buildBooleanFeature(
         acceptedUnionSolid = accepted;
       }
     );
+    if (pairwiseOperands && unionSolids.length === 2) {
+      evolutionProbe = {
+        operation: 'fuse',
+        a: unionSolids[0]!,
+        b: unionSolids[1]!
+      };
+    } else {
+      probeDeclined = `The union fused ${unionSolids.length} solids; the entity-evolution entry points are pairwise.`;
+    }
     const resultBounds = kernel.boundingBox(solid);
     const droppedOperand = droppedUnionOperandWarning({
       operands: unionOperands.map((operand) => {
@@ -1280,10 +1363,31 @@ function buildBooleanFeature(
           // Neither does a kernel that throws instead of answering.
         }
       }
-      solid = subtracting
-        ? (tryExactCoaxialCylinderCut(kernel, solid, tool) ??
-          exactCut(kernel, solid, tool, operandNames))
-        : exactIntersect(kernel, solid, tool, operandNames);
+      // The typed detailed entry points, unchanged: they are the ones that
+      // apply the kernel's exact-only policy and refuse by its named reason.
+      // `target` holds the accumulator this step consumed, so the probe can
+      // rerun the very same pair on copies afterwards.
+      const target = solid;
+      const coaxial = subtracting
+        ? tryExactCoaxialCylinderCut(kernel, target, tool)
+        : null;
+      solid =
+        coaxial ??
+        (subtracting
+          ? exactCut(kernel, target, tool, operandNames)
+          : exactIntersect(kernel, target, tool, operandNames));
+      if (!pairwiseOperands) {
+        probeDeclined = `The ${data.operation} reduced ${operands.length} operands in sequence; the entity-evolution entry points are pairwise.`;
+      } else if (coaxial !== null) {
+        probeDeclined =
+          'The cut was taken by the exact coaxial cylinder path, which publishes no evolution record.';
+      } else {
+        evolutionProbe = {
+          operation: subtracting ? 'cut' : 'intersect',
+          a: target,
+          b: tool
+        };
+      }
     }
     solid = unifyBooleanFaces(kernel, solid);
     // A cut that removes too little of the material it demonstrably
@@ -1379,7 +1483,21 @@ function buildBooleanFeature(
   data.targetBodyIds.forEach((bodyId) => result.consumed.add(bodyId));
   result.shapes.set(feature.bodyId, {
     solids: [solid],
-    lineage: deriveRemusBooleanCarrierLineage({
+    lineage: deriveBooleanLineage({
+      evidence: evolutionProbe
+        ? probeBooleanEntityEvolution({
+            kernel,
+            operation: evolutionProbe.operation,
+            a: evolutionProbe.a,
+            b: evolutionProbe.b,
+            shipped: solid,
+            unify: (candidate) =>
+              evolutionProbe.operation === 'fuse'
+                ? unifyUnionFaces(kernel, candidate)
+                : unifyBooleanFaces(kernel, candidate),
+            operands: operandLineage
+          })
+        : declinedBooleanEvidence(probeDeclined),
       producingFeatureId: feature.featureId,
       operands: operandLineage,
       resultCandidates: topologyCandidatesForSolid(kernel, solid)

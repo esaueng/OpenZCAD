@@ -43,7 +43,7 @@ test('imports a normal STEP and uses the assistant to keep text together with an
   ).toContainText('Lettered holder');
   await expect(page.locator('.save-state')).toHaveClass(/is-synced/);
   await page
-    .getByLabel('Import STEP or STL…')
+    .getByLabel(/^Import STEP or /)
     .setInputFiles({
       name: 'lettered-holder.step',
       mimeType: 'application/step',
