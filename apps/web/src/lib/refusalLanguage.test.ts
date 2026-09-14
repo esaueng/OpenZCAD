@@ -123,3 +123,87 @@ describe('plainRefusal', () => {
     });
   });
 });
+
+/**
+ * Before the typed seam, every kernel-written sentence with no table entry
+ * collapsed into one line whatever the engine's reason was: a domain it does
+ * not support, a budget it exceeded and geometry it refused on quality all
+ * read identically. The category the rebuild now records tells them apart.
+ */
+describe('plainRefusal with the kernel category', () => {
+  const raw = 'wire 4: edge appears twice';
+
+  it('tells three refusals apart that used to read the same', () => {
+    expect(plainRefusal(raw).message).toBe(
+      'The exact kernel could not build this result.'
+    );
+    expect(plainRefusal(raw, 'unsupported').message).toBe(
+      'The exact kernel does not support this combination of shapes yet.'
+    );
+    expect(plainRefusal(raw, 'resource_limit').message).toBe(
+      "This operation went past the exact kernel's budget for this kind of work."
+    );
+    expect(plainRefusal(raw, 'quality_refused').message).toBe(
+      'The exact kernel could not build this exactly, and an approximate ' +
+        'result was declined.'
+    );
+  });
+
+  it('answers for every category the kernel can report', () => {
+    for (const category of [
+      'invalid_input',
+      'invalid_topology',
+      'unsupported',
+      'nonconvergence',
+      'resource_limit',
+      'tolerance_violation',
+      'quality_refused',
+      'cancelled',
+      'internal'
+    ]) {
+      const { message } = plainRefusal(raw, category);
+      expect(message, category).not.toBe(
+        'The exact kernel could not build this result.'
+      );
+      expect(message.endsWith('.'), category).toBe(true);
+    }
+  });
+
+  it('falls back exactly as before for a category it does not know', () => {
+    expect(plainRefusal(raw, 'a_future_kernel_category')).toEqual({
+      message: 'The exact kernel could not build this result.',
+      detail: raw,
+      category: 'a_future_kernel_category'
+    });
+  });
+
+  /**
+   * A symptom the table names is more specific than any category, so the
+   * hand-written sentence still wins. The category rides along regardless, so
+   * a caller can branch on it whichever sentence was chosen.
+   */
+  it('keeps the hand-written sentence for a symptom it recognises', () => {
+    expect(plainRefusal('radius must be positive', 'invalid_input')).toEqual({
+      message: 'The radius must be greater than zero.',
+      detail: 'radius must be positive',
+      category: 'invalid_input'
+    });
+  });
+
+  /** An adapter-written sentence is already plain and stays untouched. */
+  it('leaves a product sentence alone and still carries the category', () => {
+    const sentence =
+      'Union refused: "Plate" could not be combined exactly, and an ' +
+      'approximate result was declined.';
+    expect(
+      plainRefusal(
+        `${sentence}\nKernel refusal exact_only_unattainable (quality_refused): …`,
+        'quality_refused'
+      )
+    ).toEqual({
+      message: sentence,
+      detail: 'Kernel refusal exact_only_unattainable (quality_refused): …',
+      category: 'quality_refused'
+    });
+  });
+});
