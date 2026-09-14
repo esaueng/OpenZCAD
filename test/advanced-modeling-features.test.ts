@@ -464,6 +464,54 @@ describe('advanced exact modeling features', { timeout: 30_000 }, () => {
     }
   });
 
+  it('does not blame the apex for a loft the sections cannot make', async () => {
+    // Sections on planes at right angles: the kernel refuses this run whether
+    // or not an apex is asked for. The apex here is correctly placed — clear
+    // of the closing section, on the far side from the other one — so advice
+    // to move or clear it sends the user after the wrong input.
+    let document = createProjectDocument('Crossed', toUserId('user_cross'));
+    const flat = addSection(
+      document,
+      'Flat',
+      0,
+      { objectKind: 'rectangle', width: 4, height: 4, centerX: 0, centerY: 20 },
+      'XY'
+    );
+    document = flat.document;
+    const upright = addSection(
+      document,
+      'Upright',
+      0,
+      { objectKind: 'rectangle', width: 4, height: 4, centerX: 0, centerY: 0 },
+      'XZ'
+    );
+    const sections = [flat.section, upright.section];
+    const plain = loftSections(upright.document, {
+      name: 'Crossed plain',
+      sections,
+      mode: 'ruled'
+    });
+    const plainDerived = await adapter.syncDocument(plain.document);
+    expect(plainDerived.warnings.join(' ')).toMatch(
+      /Loft did not produce a valid closed solid/
+    );
+
+    const apexed = loftSections(upright.document, {
+      name: 'Crossed apex',
+      sections,
+      mode: 'ruled',
+      endPoint: { x: 0, y: -8, z: 0 }
+    });
+    const apexedDerived = await adapter.syncDocument(apexed.document);
+    const message = apexedDerived.warnings.join(' ');
+    expect(message).toMatch(/did not produce a valid closed solid/);
+    expect(message).toMatch(
+      /the section run itself is what the kernel cannot take/
+    );
+    expect(message).not.toMatch(/move the apex over the closing section/);
+    expect(apexedDerived.bodyRepresentations[apexed.bodyId]).toBeUndefined();
+  });
+
   it('refuses a loft apex point in smooth mode by name', async () => {
     let document = createProjectDocument(
       'Smooth apex',
