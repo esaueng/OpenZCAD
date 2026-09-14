@@ -1056,12 +1056,28 @@ export interface FaceTopology {
   geometry?: FaceGeometry;
 }
 
+/**
+ * Which recognizer proved a feature.
+ *
+ * Absent means the exact kernel-neutral recognizer, which has always published
+ * holes, counterbores, countersinks, bosses and tapers, and whose proofs back
+ * the coordinated direct-edit operations.
+ *
+ * `kernel-recognized` marks a family that recognizer does not publish, where
+ * the geometry kernel's own recognizer supplied the candidate and the adapter
+ * verified it against exact surfaces before publishing. Those features are
+ * read-only: no coordinated edit operation may bind to one.
+ */
+export type RecognizedImportedFeatureProvenance = 'kernel-recognized';
+
 interface RecognizedImportedFeatureBase {
   /** Canonical face used to re-run the proof during exact rebuild. */
   seedFaceHash: number;
   seedFaceReference?: FaceTopologyReferenceV5;
   /** All faces consumed by the proof, used to suppress weaker overlapping hints. */
   participatingFaceHashes: number[];
+  /** Set only on read-only families; absent on every exactly proved feature. */
+  provenance?: RecognizedImportedFeatureProvenance;
 }
 
 interface RecognizedImportedHoleBase extends RecognizedImportedFeatureBase {
@@ -1108,7 +1124,27 @@ export type RecognizedImportedFeature =
       oppositeRadius: number;
       length: number;
       angleRadians: number;
+    })
+  | (RecognizedImportedFeatureBase & {
+      kind: 'fillet-band';
+      /** Exact blend radius of the rolling ball that made the band. */
+      radius: number;
+      /** Exact length of the band's straight tangent contact with its walls. */
+      length: number;
+      /** `concave` rounds an internal corner, `convex` an external edge. */
+      sense: 'concave' | 'convex';
     });
+
+/**
+ * Whether a recognized feature is read-only. A read-only feature is published
+ * for reading and reasoning only: it carries no exact proof of the kind the
+ * coordinated direct-edit operations replay, so nothing may bind an edit to it.
+ */
+export function isReadOnlyRecognizedImportedFeature(
+  feature: Pick<RecognizedImportedFeature, 'provenance'>
+): boolean {
+  return feature.provenance !== undefined;
+}
 
 /**
  * Whether {@link FaceGeometry.area} is the true area or an approximation.
