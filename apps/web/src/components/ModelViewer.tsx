@@ -34,7 +34,6 @@ import {
   buildCylinderRadiusHandle,
   buildEdgeRadiusHandle,
   buildOffsetFaceHandle,
-  faceSweepProfile,
   bodiesInBox,
   boxSelectMode,
   cycleDepthPick,
@@ -65,8 +64,10 @@ import {
   computeNormalToFacePose,
   cylinderRadiusPreviewMatrix,
   createCylinderProfilePreview,
+  createOffsetBodyPreview,
   type CylinderPreviewProfile,
   type CylinderProfilePreview,
+  type OffsetBodyPreview,
   faceTrianglesCentroid,
   createBodyEdgeOverlay,
   createAnalyticCylinderGhost,
@@ -271,7 +272,7 @@ export interface CylinderRadiusHandleTarget {
   smoothPreview: boolean;
 }
 
-interface CylinderRadiusProxyController {
+interface VisualProxyController {
   /** Restore the authoritative projection after cancellation or validation failure. */
   restore(): void;
   /** Forget a proxy whose object is about to be replaced by exact geometry. */
@@ -1507,9 +1508,10 @@ export function ModelViewer({
   /** Cylindrical radius has its own non-translating affordance and lifecycle. */
   const cylinderRadiusRigRef = useRef<DragRig | null>(null);
   const cylinderRadiusDragActiveRef = useRef(false);
-  const cylinderRadiusProxyControllerRef =
-    useRef<CylinderRadiusProxyController | null>(null);
-  const heightProxyControllerRef = useRef<CylinderRadiusProxyController | null>(
+  const cylinderRadiusProxyControllerRef = useRef<VisualProxyController | null>(
+    null
+  );
+  const offsetBodyProxyControllerRef = useRef<VisualProxyController | null>(
     null
   );
   const offsetChipRef = useRef<HTMLDivElement | null>(null);
@@ -2193,70 +2195,94 @@ export function ModelViewer({
     profilePreviewBadge.style.left = '50%';
     profilePreviewBadge.style.top = '100px';
     profilePreviewBadge.style.transform = 'translateX(-50%)';
-    let heightProxy: {
-      preview: CylinderProfilePreview;
+    let offsetBodyProxy: {
+      preview: CylinderProfilePreview | OffsetBodyPreview;
+      baseline: number;
+      /** Profile-aware previews are exact enough to defer the worker until release. */
+      exactOnRelease: boolean;
       pending: number | null;
       requestedAt: number;
     } | null = null;
-    function discardHeightProxy() {
-      heightProxy?.preview.restore();
-      heightProxy = null;
+    function discardOffsetBodyProxy() {
+      offsetBodyProxy?.preview.restore();
+      offsetBodyProxy = null;
       profilePreviewBadge.hidden = true;
       delete renderer.domElement.dataset.e2eHeightProxyOffset;
     }
-    function restoreHeightProxy() {
-      discardHeightProxy();
+    function restoreOffsetBodyProxy() {
+      discardOffsetBodyProxy();
+      refreshShadowMap();
       requestRender();
     }
-    function beginHeightProxy() {
-      restoreHeightProxy();
+    function beginOffsetBodyProxy() {
+      if (offsetBodyProxy) return true;
       const target = offsetHandleRef.current;
       const profile = target?.profilePreview;
       const object = target && context.objectsByBodyId.get(target.bodyId);
-      if (!profile || !object) return;
-      const axis = new THREE.Vector3()
-        .copy(profile.axisEnd)
-        .sub(profile.axisStart);
-      const oriented =
-        axis.dot(target.normal) >= 0
-          ? profile
-          : {
-              ...profile,
-              axisStart: profile.axisEnd,
-              axisEnd: profile.axisStart
-            };
-      const preview = createCylinderProfilePreview(object, oriented, 'height');
-      if (preview)
-        heightProxy = {
+      const body = target
+        ? bodiesRef.current.find(
+            (candidate) => candidate.bodyId === target.bodyId
+          )
+        : null;
+      if (!target || !object || !body) return false;
+      const preview = profile
+        ? (() => {
+            const axis = new THREE.Vector3()
+              .copy(profile.axisEnd)
+              .sub(profile.axisStart);
+            const oriented =
+              axis.dot(target.normal) >= 0
+                ? profile
+                : {
+                    ...profile,
+                    axisStart: profile.axisEnd,
+                    axisEnd: profile.axisStart
+                  };
+            return createCylinderProfilePreview(object, oriented, 'height');
+          })()
+        : createOffsetBodyPreview(object, body.mesh.vertices, target.normal);
+      if (preview) {
+        offsetBodyProxy = {
           preview,
+          baseline: profile ? 0 : (target.initialValue ?? 0),
+          exactOnRelease: Boolean(profile),
           pending: null,
           requestedAt: performance.now()
         };
+        return true;
+      }
+      return false;
     }
-    function queueHeightProxy(offset: number, requestedAt = performance.now()) {
-      if (!heightProxy) return false;
-      heightProxy.pending = offset;
-      heightProxy.requestedAt = requestedAt;
+    function queueOffsetBodyProxy(
+      offset: number,
+      requestedAt = performance.now()
+    ) {
+      if (!offsetBodyProxy && !beginOffsetBodyProxy()) return false;
+      offsetBodyProxy!.pending = offset;
+      offsetBodyProxy!.requestedAt = requestedAt;
       requestRender();
-      return true;
+      // Generic affine previews keep the exact worker streaming behind them.
+      // Only the profile-aware path is intentionally exact-on-release.
+      return offsetBodyProxy!.exactOnRelease;
     }
-    function flushHeightProxy() {
-      const proxy = heightProxy;
+    function flushOffsetBodyProxy() {
+      const proxy = offsetBodyProxy;
       if (!proxy || proxy.pending === null) return;
       const offset = proxy.pending;
       proxy.pending = null;
-      if (!proxy.preview.apply(offset)) {
-        restoreHeightProxy();
+      if (!proxy.preview.apply(offset - proxy.baseline)) {
+        restoreOffsetBodyProxy();
         onOffsetPreviewRef.current(offset, true);
         return;
       }
       profilePreviewBadge.hidden = false;
       renderer.domElement.dataset.e2eHeightProxyOffset = String(offset);
+      refreshShadowMap();
       return { offset, requestedAt: proxy.requestedAt };
     }
-    heightProxyControllerRef.current = {
-      restore: restoreHeightProxy,
-      discard: discardHeightProxy
+    offsetBodyProxyControllerRef.current = {
+      restore: restoreOffsetBodyProxy,
+      discard: discardOffsetBodyProxy
     };
 
     const topologyPickList = new TopologyPickList({
@@ -2319,7 +2345,7 @@ export function ModelViewer({
         offsetDrag = null;
         offsetDragActiveRef.current = false;
         offsetRigRef.current?.setValue(initialOffset);
-        restoreHeightProxy();
+        restoreOffsetBodyProxy();
         onOffsetCancelRef.current();
         cancelled = true;
       }
@@ -2649,6 +2675,7 @@ export function ModelViewer({
         cylinderRadiusRigRef.current.setValue(value);
       } else if (offsetRigRef.current) {
         offsetRigRef.current.setValue(value);
+        queueOffsetBodyProxy(value);
       } else {
         edgeRigRef.current?.setValue(value);
       }
@@ -3653,6 +3680,7 @@ export function ModelViewer({
               polygonOffsetUnits: number;
               renderOrder: number;
               bounds?: { min: number[]; max: number[] };
+              worldBounds?: { min: number[]; max: number[] };
             }[];
             bodyEdges: {
               depthTest: boolean;
@@ -3676,6 +3704,7 @@ export function ModelViewer({
       }
       const bodyFaces: {
         bounds?: { min: number[]; max: number[] };
+        worldBounds?: { min: number[]; max: number[] };
         depthTest: boolean;
         depthWrite: boolean;
         polygonOffset: boolean;
@@ -3684,6 +3713,10 @@ export function ModelViewer({
         renderOrder: number;
       }[] = [];
       forEachMesh(bodyGroup, (mesh) => {
+        mesh.updateWorldMatrix(true, false);
+        const worldBounds = mesh.geometry.boundingBox
+          ?.clone()
+          .applyMatrix4(mesh.matrixWorld);
         bodyFaces.push({
           depthTest: mesh.material.depthTest,
           depthWrite: mesh.material.depthWrite,
@@ -3695,6 +3728,14 @@ export function ModelViewer({
                 bounds: {
                   min: mesh.geometry.boundingBox.min.toArray(),
                   max: mesh.geometry.boundingBox.max.toArray()
+                }
+              }
+            : {}),
+          ...(worldBounds
+            ? {
+                worldBounds: {
+                  min: worldBounds.min.toArray(),
+                  max: worldBounds.max.toArray()
                 }
               }
             : {}),
@@ -5569,8 +5610,8 @@ export function ModelViewer({
             : Math.round(raw / snap) * snap;
           if (Math.abs(value - rig.value()) > 1e-9) {
             rig.setValue(value);
-            const usedProxy = queueHeightProxy(value, event.timeStamp);
-            onOffsetPreviewRef.current(value, !usedProxy);
+            const exactOnRelease = queueOffsetBodyProxy(value, event.timeStamp);
+            onOffsetPreviewRef.current(value, !exactOnRelease);
           }
           renderer.domElement.style.cursor = 'grabbing';
           requestRender();
@@ -5906,7 +5947,7 @@ export function ModelViewer({
             pixelsPerUnit: screen.pixelsPerUnit,
             initialOffset: armedRig.value()
           };
-          beginHeightProxy();
+          beginOffsetBodyProxy();
           offsetDragActiveRef.current = true;
           onDirectManipulationChangeRef.current(true);
           gestures.capture(event);
@@ -6402,7 +6443,7 @@ export function ModelViewer({
         );
         if (moved < 4) {
           rig?.setValue(completed.initialOffset);
-          restoreHeightProxy();
+          restoreOffsetBodyProxy();
           onOffsetCancelRef.current();
           selectAtPointer(event);
           return;
@@ -6413,10 +6454,10 @@ export function ModelViewer({
           Math.abs(finalOffset - completed.initialOffset) > 1e-9 &&
           Math.abs(finalOffset) > 1e-9
         ) {
-          queueHeightProxy(finalOffset);
-          if (!onOffsetCommitRef.current(finalOffset)) restoreHeightProxy();
+          queueOffsetBodyProxy(finalOffset);
+          if (!onOffsetCommitRef.current(finalOffset)) restoreOffsetBodyProxy();
         } else {
-          restoreHeightProxy();
+          restoreOffsetBodyProxy();
           onOffsetCancelRef.current();
         }
         return;
@@ -6519,7 +6560,7 @@ export function ModelViewer({
         onDirectManipulationChangeRef.current(false);
         gestures.release(event);
         offsetRigRef.current?.setValue(initialOffset);
-        restoreHeightProxy();
+        restoreOffsetBodyProxy();
         onOffsetCancelRef.current();
         requestRender();
       }
@@ -6821,7 +6862,7 @@ export function ModelViewer({
         edgeRig.group.userData.gizmoScale = rigScale;
       }
       const cylinderRadiusProxyFrame = flushCylinderRadiusProxy();
-      const heightProxyFrame = flushHeightProxy();
+      const offsetBodyProxyFrame = flushOffsetBodyProxy();
       updateOffsetChip();
       scaleIndicatorRef.current?.(
         chooseViewportScale(worldPerPixelAt(cameraRig.controls.target))
@@ -6913,10 +6954,10 @@ export function ModelViewer({
           radius: cylinderRadiusProxyFrame.radius
         });
       }
-      if (heightProxyFrame && import.meta.env.OZ_PERF === '1') {
-        mark('cylinder-height.proxy-frame', {
-          latencyMs: performance.now() - heightProxyFrame.requestedAt,
-          offset: heightProxyFrame.offset
+      if (offsetBodyProxyFrame && import.meta.env.OZ_PERF === '1') {
+        mark('offset-face.proxy-frame', {
+          latencyMs: performance.now() - offsetBodyProxyFrame.requestedAt,
+          offset: offsetBodyProxyFrame.offset
         });
       }
       clampNameCallouts(labelRenderer.domElement);
@@ -7120,7 +7161,7 @@ export function ModelViewer({
       cancelDirectManipulationRef.current = null;
       openExactEntryRef.current = null;
       cylinderRadiusProxyControllerRef.current = null;
-      heightProxyControllerRef.current = null;
+      offsetBodyProxyControllerRef.current = null;
       moveGizmoHudRef.current = null;
       if (orientationDragRef.current === orientationDragControls) {
         orientationDragRef.current = null;
@@ -7287,7 +7328,7 @@ export function ModelViewer({
       // The exact worker result is authoritative. Forget the visual proxy
       // before its old Three object is disposed and replaced.
       cylinderRadiusProxyControllerRef.current?.discard();
-      heightProxyControllerRef.current?.discard();
+      offsetBodyProxyControllerRef.current?.discard();
       mark('viewer.bodies:begin');
       // The manager owns hover-slot geometry even while the slots are
       // parented under bodies, so it must detach them before body disposal.
@@ -8087,47 +8128,14 @@ export function ModelViewer({
       context.requestRender();
       return;
     }
-    heightProxyControllerRef.current?.restore();
-    // The ghost is the volume the face sweeps, not a flat copy left behind:
-    // it tracks the hand every frame, and the exact solid replaces the scene
-    // underneath it at whatever rate the kernel rebuilds. A face whose
-    // triangles do not close into an outline keeps the flat ghost.
-    const body = bodies.find(
-      (candidate) => candidate.bodyId === offsetHandle.bodyId
-    );
-    const face = body?.topology?.faces.find(
-      (candidate) => candidate.topologyId === offsetHandle.topologyId
-    );
-    const sweep =
-      body && face && !offsetHandle.profilePreview
-        ? faceSweepProfile(
-            body.mesh.vertices,
-            body.mesh.indices,
-            face.triangleStart,
-            face.triangleCount
-          )
-        : null;
-    let ghostGeometry: THREE.BufferGeometry | null = null;
-    if (body && face && !sweep && !offsetHandle.profilePreview) {
-      ghostGeometry = new THREE.BufferGeometry();
-      ghostGeometry.setAttribute(
-        'position',
-        new THREE.BufferAttribute(body.mesh.vertices, 3)
-      );
-      ghostGeometry.setIndex(
-        new THREE.BufferAttribute(
-          body.mesh.indices.slice(
-            face.triangleStart * 3,
-            (face.triangleStart + face.triangleCount) * 3
-          ),
-          1
-        )
-      );
-    }
+    offsetBodyProxyControllerRef.current?.restore();
+    // The selected body itself is the preview. A disposable viewport proxy
+    // stretches it while the hand moves, so the user never sees a detached
+    // face or slab sitting on top of the unchanged solid. Exact geometry still
+    // replaces this approximation on release.
     const rig = buildOffsetFaceHandle({
       ...offsetHandlePlacement(offsetHandle.point, offsetHandle.normal),
-      ghostGeometry,
-      ...(sweep ? { sweep } : {})
+      ghostGeometry: null
     });
     rig.setValue(offsetHandle.initialValue ?? 0);
     rig.setWarning?.(offsetPreviewInvalidRef.current);
