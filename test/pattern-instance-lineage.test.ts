@@ -354,6 +354,102 @@ describe('pattern instance lineage', { timeout: 120_000 }, () => {
   });
 
   /**
+   * A kernel refusal must not cost the user the body. The kernel arm can
+   * throw — the entry points refuse arrangements they cannot fuse, and the
+   * compound layout the journal cross-check relies on is read-back behaviour
+   * of one pinned build — and the build loop catches per feature, so an
+   * uncaught throw here would delete the patterned body from the viewport,
+   * the parts list and the STEP scope where the copy path always produced
+   * one. It degrades to that copy build instead: same geometry, same
+   * witness-derived instance names, and a diagnostic saying the kernel
+   * evidence was not available.
+   */
+  it('keeps the body when the kernel pattern entry point refuses', async () => {
+    const journaled = vi
+      .spyOn(RemusKernel.prototype, 'linearPatternJournaled')
+      .mockImplementation(() => {
+        throw new Error(
+          'exact instance fusing with face evolution is not yet supported'
+        );
+      });
+    try {
+      const { document, patternId } = row(3);
+      const derived = await adapter.syncDocument(document);
+      expect(journaled).toHaveBeenCalled();
+      expect(derived.warnings).toEqual([]);
+      const body = derived.bodyRepresentations[patternId];
+      expect(body, 'the patterned body survives the refusal').toBeDefined();
+      expect(body!.volume).toBeCloseTo(3 * CUBE ** 3, 6);
+      const faces = facesOf(derived, patternId);
+      expect(faces).toHaveLength(18);
+      // The copy path derives every instance name by witness on its own, so
+      // the refusal costs the journal cross-check and nothing else.
+      expect(faces.filter((face) => face.reference === undefined)).toEqual([]);
+      expect(
+        faces.some(
+          (face) =>
+            face.reference?.lineageName ===
+            'pattern.face.instance.2.primitive.box.face.z-max'
+        )
+      ).toBe(true);
+      // And the lost evidence is stated rather than silently absorbed: the
+      // diagnostic names the kernel's own refusal, so a reviewer reading a
+      // pattern with no journal evidence can tell why.
+      expect(
+        body!.topology?.lineageDiagnostics?.filter((diagnostic) =>
+          diagnostic.message.includes(
+            'The kernel pattern entry point did not produce the instances'
+          )
+        )
+      ).toEqual([
+        {
+          kind: 'body',
+          status: 'unsupported',
+          topologyId: undefined,
+          message:
+            'The kernel pattern entry point did not produce the instances, so the copy-and-transform build made them and the kernel journal was not consulted: exact instance fusing with face evolution is not yet supported'
+        }
+      ]);
+    } finally {
+      journaled.mockRestore();
+    }
+  });
+
+  /**
+   * The other way the kernel arm can fail, and the likelier one under a kernel
+   * bump: the compound comes back in a layout the journal cross-check cannot
+   * rely on. `kernelPatternInstanceSolids` refuses it rather than reading a
+   * different body's faces, and the same fallback keeps the body.
+   */
+  it('keeps the body when the kernel compound layout is unexpected', async () => {
+    const compound = vi
+      .spyOn(RemusKernel.prototype, 'getCompoundSolids')
+      .mockImplementation(() => new Uint32Array([9999, 9998]));
+    try {
+      const { document, patternId } = row(3);
+      const derived = await adapter.syncDocument(document);
+      expect(compound).toHaveBeenCalled();
+      expect(derived.warnings).toEqual([]);
+      const body = derived.bodyRepresentations[patternId];
+      expect(
+        body,
+        'the patterned body survives the layout refusal'
+      ).toBeDefined();
+      expect(body!.volume).toBeCloseTo(3 * CUBE ** 3, 6);
+      expect(facesOf(derived, patternId)).toHaveLength(18);
+      expect(
+        body!.topology?.lineageDiagnostics?.some((diagnostic) =>
+          diagnostic.message.includes(
+            'The kernel pattern did not return one copy per instance.'
+          )
+        )
+      ).toBe(true);
+    } finally {
+      compound.mockRestore();
+    }
+  });
+
+  /**
    * A partial sweep has no kernel entry point — `circularPattern` always
    * closes the ring — so it keeps the copy-and-transform build. The instances
    * are still rigid copies under a known transform, so the lineage is derived
