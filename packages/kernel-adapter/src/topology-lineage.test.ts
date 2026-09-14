@@ -281,7 +281,7 @@ describe('ADR-013 evolution verification', () => {
    * boring: the point is that a future entry cannot move here without someone
    * changing a test, which is the check the old arrangement lacked.
    */
-  it.each(['chamfer', 'pattern'] as const)(
+  it.each(['chamfer'] as const)(
     'reports %s as hash-only, matching what the adapter actually produces',
     (operation) => {
       expect(topologyLineageCapability(operation)).toMatchObject({
@@ -309,6 +309,13 @@ describe('ADR-013 evolution verification', () => {
     // Carrier-derived since the boolean bridge's analytic subset landed;
     // pinned by `test/boolean-carrier-lineage.test.ts`.
     expect(topologyLineageCapability('boolean')).toEqual({ status: 'derived' });
+    // Moved out of the hash-only list above when the pattern feature started
+    // driving the kernel's own pattern operations: an instance is a rigid
+    // copy under a transform the feature computed, so its faces carry their
+    // source's name plus the instance. The adapter side is pinned by
+    // `test/pattern-instance-lineage.test.ts` — this entry and that test move
+    // together or not at all.
+    expect(topologyLineageCapability('pattern')).toEqual({ status: 'derived' });
   });
 });
 

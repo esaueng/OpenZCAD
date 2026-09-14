@@ -16,7 +16,12 @@ import {
   createProjectDocument,
   importStepBody
 } from '@openzcad/document-core';
-import { toBodyId, toFeatureId, toUserId } from '@openzcad/shared';
+import {
+  toBodyId,
+  toFeatureId,
+  toUserId,
+  type RecognizedImportedFeature
+} from '@openzcad/shared';
 
 describe('AI patch contracts', () => {
   it('declares a type for every strict-schema constant', () => {
@@ -1303,5 +1308,126 @@ describe('assistant reply contract', () => {
       'Unsupported assistant replyKind: undefined'
     );
     expect(() => parseAssistantReply(null)).toThrow('must be an object');
+  });
+});
+
+describe('imported-feature proof binding', () => {
+  const faceReference = {
+    kind: 'face' as const,
+    producingFeatureId: toFeatureId('feat_import'),
+    lineageName: 'import.face.7',
+    currentHash: 7,
+    witnessVersion: 1 as const,
+    witness: {
+      surfaceType: 'cylinder',
+      perimeter: 31,
+      centroid: null,
+      analytic: { kind: 'none' as const },
+      closure: { u: 'closed' as const, v: 'open' as const }
+    }
+  };
+  const holeProof = {
+    kind: 'blind-cylindrical-hole' as const,
+    seedFaceHash: 7,
+    seedFaceReference: faceReference,
+    participatingFaceHashes: [7, 8],
+    openingPoint: { x: 10, y: 10, z: 8 },
+    axisDirection: { x: 0, y: 0, z: -1 },
+    diameter: 5,
+    depth: 6
+  };
+  const digestWith = (
+    recognizedImportedFeatures: RecognizedImportedFeature[]
+  ): Parameters<typeof validateCadPatchProposalAgainstDigest>[1] => ({
+    schemaVersion: 15,
+    projectId: 'proj_digest',
+    name: 'Imported plate',
+    units: 'mm',
+    version: 1,
+    parameters: [],
+    features: [],
+    bodies: [
+      {
+        bodyId: 'body_imported',
+        name: 'Imported plate',
+        consumed: false,
+        volume: 4700,
+        bbox: { min: { x: 0, y: 0, z: 0 }, max: { x: 30, y: 20, z: 8 } },
+        topology: {
+          faceCount: 8,
+          edgeCount: 18,
+          modifierEdgeCount: 6,
+          faceInventoryComplete: true,
+          edgeInventoryComplete: true,
+          faces: [],
+          edges: [],
+          recognizedImportedFeatures
+        }
+      }
+    ],
+    warnings: []
+  });
+  const resizeProposal = () =>
+    parseCadPatchProposal({
+      proposalId: 'proposal_resize_bore',
+      summary: 'Drive the bore diameter.',
+      assumptions: [],
+      operations: [
+        {
+          kind: 'add_direct_edit',
+          name: 'Bore',
+          targetBodyId: 'body_imported',
+          operation: {
+            kind: 'resize-imported-blind-hole',
+            faceHash: 7,
+            faceReference,
+            sourceOpeningPoint: holeProof.openingPoint,
+            sourceAxisDirection: holeProof.axisDirection,
+            sourceDiameter: 5,
+            sourceDepth: 6,
+            diameter: 6,
+            depth: 6
+          }
+        }
+      ]
+    });
+
+  it('binds an edit to the exactly proved hole it names', () => {
+    expect(
+      validateCadPatchProposalAgainstDigest(
+        resizeProposal(),
+        digestWith([holeProof])
+      ).operations
+    ).toHaveLength(1);
+  });
+
+  it('still refuses an edit whose proof no longer matches the digest', () => {
+    expect(() =>
+      validateCadPatchProposalAgainstDigest(
+        resizeProposal(),
+        digestWith([{ ...holeProof, depth: 7 }])
+      )
+    ).toThrow(/does not exactly match the current imported-feature proof/);
+    expect(() =>
+      validateCadPatchProposalAgainstDigest(resizeProposal(), digestWith([]))
+    ).toThrow(/stale or unavailable blind-cylindrical-hole proof/);
+  });
+
+  it('refuses an edit bound to a read-only recognized feature', () => {
+    expect(() =>
+      validateCadPatchProposalAgainstDigest(
+        resizeProposal(),
+        digestWith([{ ...holeProof, provenance: 'kernel-recognized' }])
+      )
+    ).toThrow(/read-only blind-cylindrical-hole/);
+  });
+
+  it('refuses an edit when one seed carries two answers', () => {
+    expect(() =>
+      validateCadPatchProposalAgainstDigest(
+        resizeProposal(),
+        digestWith([holeProof, { ...holeProof, diameter: 9 }])
+      )
+    ).toThrow(/stale or unavailable blind-cylindrical-hole proof/);
   });
 });
