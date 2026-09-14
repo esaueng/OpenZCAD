@@ -17119,6 +17119,7 @@ export function App() {
         assistantAvailable ? (
           <ErrorBoundary label="Assistant">
             <AssistantPanel
+              effectiveAssistant={accountSettings?.effectiveAssistant}
               document={doc}
               selection={assistantSelection}
               onApply={handleApplyPatch}
