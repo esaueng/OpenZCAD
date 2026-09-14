@@ -362,7 +362,8 @@ function buildImportedStepFeature(
         kernel,
         solids[0]!,
         data.planarEmboss.selection,
-        data.planarEmboss.part
+        data.planarEmboss.part,
+        data.planarEmboss.sourcePlacement
       );
     }
     result.importedStepDiagnostics.set(feature.bodyId, diagnostics);
@@ -687,8 +688,10 @@ function buildTransformFeature(
         },
         scaleFactor
       ),
-      // Only cylinder dimension planning converts world distances through scale.
-      modifierChainRootPrimitive(document, data.targetBodyId) === 'cylinder'
+      // Both primitive planners convert world-space drags through uniform scale.
+      ['cylinder', 'box'].includes(
+        modifierChainRootPrimitive(document, data.targetBodyId) ?? ''
+      )
     )
   );
 }

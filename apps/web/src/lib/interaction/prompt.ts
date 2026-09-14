@@ -60,6 +60,9 @@ function armedStep(state: InteractionState): string {
       case 'remove-face-feature':
         return 'Remove this proven imported blend, or pick another face';
       case 'offset-face':
+        if (state.target.resizeBodyFeatureId && !state.target.localFaceOffset) {
+          return 'Drag the arrow to resize the body, or type an exact distance · The opposite side stays fixed';
+        }
         return 'Drag the arrow to push or pull the face, or type an exact distance · Space faces it head-on';
     }
   }
