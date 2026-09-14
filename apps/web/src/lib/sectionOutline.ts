@@ -1,5 +1,9 @@
 import type { ExactSectionPlane } from '@openzcad/kernel-adapter/exact';
-import type { BodyId, ProjectDocument } from '@openzcad/shared';
+import type {
+  BodyId,
+  BodyRepresentation,
+  ProjectDocument
+} from '@openzcad/shared';
 import type { GeometryWorkerApi } from '../hooks/useGeometryWorker';
 import type {
   ExactSectionRegionDisplay,
@@ -71,6 +75,84 @@ export interface SectionSource {
    * derived from `document` — it has to be carried.
    */
   readonly bodyIds: readonly BodyId[];
+}
+
+/**
+ * Geometry the viewport draws that no document built: an approximate
+ * stand-in, put up while something is being tried out and drawn in front of
+ * the bodies it `replaces` — which are hidden for as long as it is up.
+ *
+ * The parameter preview is one today. Whatever is added next is one too: to
+ * be drawn at all it has to reach the viewport through `ViewportGeometry`,
+ * and reaching it through here is what keeps the section honest about it
+ * without the section ever learning its name.
+ */
+export interface ViewportStandIn {
+  /** Bodies of the document this is drawn instead of. */
+  readonly replaces: readonly BodyId[];
+}
+
+/**
+ * THE answer to "what is the viewport drawing?" — one value, built once,
+ * read by the viewer's own props and by everything that asks a question
+ * about what is on screen.
+ *
+ * It exists because that question was answered twice, independently, and
+ * the two answers came apart twice: first when a published preview document
+ * replaced the live one, then when a parameter edit nobody had applied hid
+ * the live bodies and drew a candidate in their place while the section
+ * still described the document underneath. Both were the same defect. A
+ * re-derivation of "which document is on screen" is the defect; there is
+ * one derivation, and this is it.
+ */
+export interface ViewportGeometry<S extends ViewportStandIn = ViewportStandIn> {
+  /**
+   * The document whose exact build the viewport draws. Null before the
+   * first project opens.
+   */
+  readonly document: ProjectDocument | null;
+  /** The bodies of `document` on screen: consumed and hidden ones dropped. */
+  readonly bodies: BodyRepresentation[];
+  /** Every stand-in currently drawn over that build; null or empty when none. */
+  readonly standIns: S[] | null;
+}
+
+/**
+ * What an exact section of this viewport would be a section OF.
+ *
+ * One rule, deliberately not a list of cases: a section describes the
+ * document the viewport is drawing, and while any stand-in is up the
+ * viewport is not drawing that document's geometry. So there is nothing to
+ * section exactly, and nothing to export — `document` comes back null and
+ * both the section and `writeSectionDxf` fail closed on it.
+ *
+ * Refusing on `standIns` rather than on the parameter preview by name is
+ * the whole point: a third source of drawn geometry is covered by having
+ * been folded into `ViewportGeometry`, which is what it takes to be drawn.
+ */
+export function sectionSourceOf(view: ViewportGeometry): SectionSource {
+  return {
+    document: view.standIns?.length ? null : view.document,
+    bodyIds: view.bodies.map((body) => body.bodyId)
+  };
+}
+
+/**
+ * The section state this drawing may show.
+ *
+ * An exact section is a section of a document's own geometry. While any
+ * stand-in is drawn the viewport is not showing that geometry, so the cut
+ * curves would float beside a shape of a different size, the rail would
+ * report the old area as exact, and the DXF button would stay lit over a
+ * drawing of a model nobody is looking at. All three come down together
+ * here, from the same one reading of the same one value that decides what
+ * may be sectioned at all.
+ */
+export function sectionOutlineFor(
+  view: ViewportGeometry,
+  outline: SectionOutlineState
+): SectionOutlineState {
+  return sectionSourceOf(view).document ? outline : { kind: 'clipping' };
 }
 
 /** One line for the rail: which section is on screen, and what it measures. */
@@ -213,6 +295,11 @@ export function describeSectionOutline(
  * Ask for one exact section of exactly what is on screen, and turn the
  * answer into viewport state.
  *
+ * It takes the viewport's geometry, never a `SectionSource` a caller built:
+ * a section of anything but what is on screen is the defect this whole file
+ * keeps being fixed for, and the way to stop writing it is to leave no call
+ * site able to say what is being sectioned.
+ *
  * Staleness is the caller's: an exact section belongs to one plane
  * position, one model version and one set of visible bodies, and by the time
  * a large part has been sectioned the user may have moved on from any of
@@ -221,9 +308,10 @@ export function describeSectionOutline(
  */
 export async function resolveSectionOutline(
   geometry: Pick<GeometryWorkerApi, 'sectionOutline'>,
-  source: SectionSource,
+  view: ViewportGeometry,
   section: SectionViewSettings
 ): Promise<SectionOutlineState> {
+  const source = sectionSourceOf(view);
   if (!source.document) {
     return { kind: 'clipping' };
   }
@@ -254,16 +342,21 @@ export async function resolveSectionOutline(
  * diagnostic, not as something to put in front of a user. The button is
  * shut in that state; this is the same gate for a call that did not come
  * from the button.
+ *
+ * Like the section itself it takes the viewport's geometry and derives its
+ * source from that, so the drawing is of the model on screen by
+ * construction rather than by a caller getting it right.
  */
 export async function writeSectionDxf(
   geometry: Pick<GeometryWorkerApi, 'exportModel'>,
-  source: SectionSource,
+  view: ViewportGeometry,
   section: SectionViewSettings,
   outline: SectionOutlineState,
   save: (fileName: string, format: 'dxf', text: string) => Promise<boolean>,
   stem: string,
   announce: (message: string) => void
 ): Promise<void> {
+  const source = sectionSourceOf(view);
   if (!source.document || !sectionOutlineExportable(outline)) {
     return;
   }
