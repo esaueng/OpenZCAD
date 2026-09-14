@@ -137,14 +137,14 @@ describe('exact section geometry in the viewport', () => {
     // The curve's MATERIAL is what the display pass writes; asserting the
     // object's own `visible` flag would pass whatever the pass did, because
     // nothing ever writes it.
-    expect(curve.material.visible).toBe(true);
+    expect((curve.material as THREE.Material).visible).toBe(true);
     expect(curve.visible).toBe(true);
     expect((curve.material as THREE.LineBasicMaterial).color.getHex()).toBe(
       0x14293c
     );
     applyDisplayMode(group, 'shaded');
     expect((fill.material as THREE.Material).visible).toBe(true);
-    expect(curve.material.visible).toBe(true);
+    expect((curve.material as THREE.Material).visible).toBe(true);
     expect(curve.visible).toBe(true);
   });
 });

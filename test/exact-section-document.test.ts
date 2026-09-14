@@ -6,7 +6,7 @@ import {
   transformBody
 } from '@openzcad/document-core';
 import { toUserId } from '@openzcad/shared';
-import type { ProjectDocument, UnitSystem } from '@openzcad/shared';
+import type { BodyId, ProjectDocument, UnitSystem } from '@openzcad/shared';
 import {
   createExactKernelAdapter,
   type ExactKernelAdapter
@@ -59,6 +59,37 @@ function boredBar(units: UnitSystem = 'mm'): ProjectDocument {
   }).document;
 }
 
+/**
+ * Two separate bars, 20 x 10 x 6 and 8 x 4 x 6, both standing on z = 0 so a
+ * plane at z = 3 cuts each of them. Bodies are corner-origin, so the second
+ * clears the first by translating in x alone.
+ */
+function twoBars(): {
+  document: ProjectDocument;
+  first: BodyId;
+  second: BodyId;
+} {
+  let doc = createProjectDocument('Two bars', toUserId('user_section'));
+  doc = addPrimitiveFeature(doc, {
+    name: 'left',
+    primitiveKind: 'box',
+    dimensions: { width: 20, height: 10, depth: 6 }
+  });
+  const first = doc.bodyOrder.at(-1)!;
+  doc = addPrimitiveFeature(doc, {
+    name: 'right',
+    primitiveKind: 'box',
+    dimensions: { width: 8, height: 4, depth: 6 }
+  });
+  const second = doc.bodyOrder.at(-1)!;
+  doc = transformBody(doc, {
+    name: 'Place right',
+    targetBodyId: second,
+    translation: { x: 40, y: 0, z: 0 }
+  }).document;
+  return { document: doc, first, second };
+}
+
 const XY_AT_3 = { origin: [0, 0, 3], normal: [0, 0, 1] } as const;
 
 /** DXF is a flat stream of [group code, value] line pairs. */
@@ -101,6 +132,26 @@ describe('sectionOutline', () => {
     expect(region.indices.length).toBeGreaterThanOrEqual(3);
   }, 120_000);
 
+  it('sections only the bodies it is given', async () => {
+    const exact = await kernel();
+    const { document, first, second } = twoBars();
+
+    const both = await exact.sectionOutline(document, XY_AT_3);
+    expect(both.regions.map((region) => region.bodyId).sort()).toEqual(
+      [first, second].sort()
+    );
+
+    // Hiding or isolating a body is device-local view state the document
+    // never carries. Asked without a list, the adapter sections both bars —
+    // so the app has to name the ones its viewport is showing, or a hidden
+    // body's cut is drawn floating in empty space and its area counted in.
+    const named = await exact.sectionOutline(document, XY_AT_3, [first]);
+    expect(named.regions).toHaveLength(1);
+    expect(named.regions[0]!.bodyId).toBe(first);
+    expect(named.regions[0]!.area).toBeCloseTo(200, 3);
+    expect(named.refusals).toEqual([]);
+  }, 120_000);
+
   it('reports a plane that misses the body as a refusal, not a failure', async () => {
     const exact = await kernel();
     const report = await exact.sectionOutline(boredBar(), {
@@ -138,6 +189,15 @@ describe('exportSectionDxf', () => {
     // The document is 20 inches across; the drawing is 508 mm across.
     expect(extent(text, 10)).toBeCloseTo(20 * 25.4, 4);
     expect(extent(text, 20)).toBeCloseTo(10 * 25.4, 4);
+  }, 120_000);
+
+  it('draws only the bodies it is given', async () => {
+    const exact = await kernel();
+    const { document, second } = twoBars();
+    const text = await exact.exportSectionDxf(document, XY_AT_3, [second]);
+    // The small bar alone: 8 mm by 4 mm, with nothing of the 20 mm one.
+    expect(extent(text, 10)).toBeCloseTo(8, 6);
+    expect(extent(text, 20)).toBeCloseTo(4, 6);
   }, 120_000);
 
   it('refuses to write a drawing for a plane that cuts nothing', async () => {

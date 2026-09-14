@@ -255,9 +255,12 @@ interface ViewerShellProps {
   onSectionOffset(offset: number): void;
   onSectionCommit(): void;
   onExportSectionDxf(): void;
+  /**
+   * What the section view is showing. The viewport's kernel geometry is
+   * derived from it here rather than passed in beside it, so the drawn cut
+   * and the rail's description of it can never disagree.
+   */
   sectionOutline: SectionOutlineState;
-  /** Kernel section geometry for the resting plane; null while dragging. */
-  exactSection: ExactSectionRegionDisplay[] | null;
 }
 
 export function ViewerShell({
@@ -361,9 +364,11 @@ export function ViewerShell({
   onSectionOffset,
   onSectionCommit,
   onExportSectionDxf,
-  sectionOutline,
-  exactSection
+  sectionOutline
 }: ViewerShellProps) {
+  /** Kernel section geometry for the resting plane; null while dragging. */
+  const exactSection: ExactSectionRegionDisplay[] | null =
+    sectionOutline.kind === 'exact' ? sectionOutline.regions : null;
   const orientationDragRef = useRef<OrientationDragControls | null>(null);
   const scaleIndicatorRef = useRef<ViewportScaleSink | null>(null);
   const selectionChipLabelRef = useRef<HTMLSpanElement | null>(null);

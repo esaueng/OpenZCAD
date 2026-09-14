@@ -1811,13 +1811,14 @@ export function App() {
     onCameraSettled: persistCameraPose,
     forget: forgetProjectView
   } = useProjectView(doc?.projectId ?? null);
-  // Read at callback time: an exact section resolves long after the drag that
-  // asked for it, and has to be checked against where the plane is — and
-  // which model version is on screen — by then.
+  // Read at callback time: the section slider's release handler runs after
+  // the change that moved it.
   const viewerSettingsRef = useRef(viewerSettings);
   viewerSettingsRef.current = viewerSettings;
-  const modelVersionRef = useRef(doc?.version ?? null);
-  modelVersionRef.current = doc?.version ?? null;
+  // An exact section belongs to one plane position, one model version and
+  // one set of visible bodies. Everything that invalidates it bumps this
+  // token, and an answer that arrives under an old token is dropped.
+  const sectionTokenRef = useRef(0);
   // Key by membership so an unrelated dimension edit keeps the viewport's
   // body array stable instead of disposing and uploading identical meshes.
   const parameterHiddenBodyKey = useMemo(
@@ -4405,6 +4406,17 @@ export function App() {
     ]
   );
   /**
+   * What an exact section is a section OF: the bodies the viewport is
+   * actually showing. Hiding and isolating are device-local view state the
+   * document never sees, so the kernel has to be told — asked without this,
+   * it sections a hidden body and draws its cut floating in empty space.
+   */
+  const sectionBodyIds = useMemo(
+    () => viewerBodies.map((body) => body.bodyId),
+    [viewerBodies]
+  );
+  const sectionBodyKey = sectionBodyIds.join('|');
+  /**
    * A parameter preview stands in for its own result body only; hidden
    * bodies stay hidden and every other part keeps its exact geometry.
    */
@@ -5810,26 +5822,28 @@ export function App() {
     if (!doc) {
       return;
     }
+    const token = ++sectionTokenRef.current;
     setSectionOutline({ kind: 'computing' });
     const { resolveSectionOutline } = await import('./lib/sectionOutline');
     const next = await resolveSectionOutline(
       geometry,
       doc,
       section,
-      () => viewerSettingsRef.current.sectionView,
-      () => modelVersionRef.current
+      sectionBodyIds
     );
-    if (next) {
+    if (token === sectionTokenRef.current) {
       setSectionOutline(next);
     }
   }
 
-  // A rebuild moves the geometry the exact section was cut from, so the cut
-  // on screen stops describing the model. Back to the clipped preview until
-  // the plane is committed again.
+  // A rebuild moves the geometry the exact section was cut from, and hiding
+  // or isolating a body changes which geometry it is a section of — either
+  // way the cut on screen stops describing the model. Back to the clipped
+  // preview until the plane is committed again.
   useEffect(() => {
+    sectionTokenRef.current += 1;
     setSectionOutline({ kind: 'clipping' });
-  }, [doc?.version]);
+  }, [doc?.version, sectionBodyKey]);
 
   /** Off → XY → XZ → YZ → off, each plane starting at the model's centre. */
   function cycleSectionView() {
@@ -5838,6 +5852,7 @@ export function App() {
     const next = order[(order.indexOf(currentPlane) + 1) % order.length]!;
     if (!next) {
       setViewerSettings(({ sectionView: _cleared, ...rest }) => rest);
+      sectionTokenRef.current += 1;
       setSectionOutline({ kind: 'clipping' });
       setStatus('Section view off.');
       return;
@@ -5857,6 +5872,7 @@ export function App() {
   function setSectionOffset(offset: number) {
     // The cut has moved, so the exact section that was on screen belongs to
     // a plane that is no longer there. Back to the clipped preview.
+    sectionTokenRef.current += 1;
     setSectionOutline({ kind: 'clipping' });
     setViewerSettings((current) =>
       current.sectionView
@@ -5876,14 +5892,20 @@ export function App() {
   /** Write the exact section — never the display caps — as a DXF drawing. */
   async function handleExportSectionDxf() {
     const section = viewerSettings.sectionView;
-    if (!doc || !section || sectionOutline.kind !== 'exact') {
+    if (!doc || !section) {
       return;
     }
-    const { writeSectionDxf } = await import('./lib/sectionOutline');
-    await writeSectionDxf(
+    const outline = await import('./lib/sectionOutline');
+    // The button is shut unless the export can write every body the plane
+    // cuts; this is the same gate, for a call that did not come from it.
+    if (!outline.sectionOutlineExportable(sectionOutline)) {
+      return;
+    }
+    await outline.writeSectionDxf(
       geometry,
       doc,
       section,
+      sectionBodyIds,
       saveCadTextFile,
       exportFileStem(doc.name),
       setStatus
@@ -16238,9 +16260,6 @@ export function App() {
             onSectionCommit={commitSectionOffset}
             onExportSectionDxf={() => void handleExportSectionDxf()}
             sectionOutline={sectionOutline}
-            exactSection={
-              sectionOutline.kind === 'exact' ? sectionOutline.regions : null
-            }
           />
           {!modelingLocked &&
             !panelState.workspaceTourDismissed &&
