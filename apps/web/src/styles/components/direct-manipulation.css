@@ -6,18 +6,33 @@
    Direct manipulation: tool card + handle value chip
    --------------------------------------------------------------------------- */
 
+/* The card is one shape at every width: a header row that always holds the
+   icon, the title, the state pill and the close button, and — when the
+   selection offers more than one operation — a full-width action row under
+   it. Rows cannot collide. The single flex row this replaces could not
+   survive a narrow viewport: the action tabs do not shrink, so the copy was
+   squeezed to two characters ("R…", "Dr…") and the tabs still overflowed
+   across the pill. */
 .tool-card {
   position: absolute;
   top: 14px;
   left: 50%;
   z-index: calc(var(--z-inspector-float) + 1);
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 10px;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: start;
+  column-gap: 10px;
+  row-gap: 8px;
   box-sizing: border-box;
+  /* Centred on the viewport, so the width may not follow the content: the
+     hint and the phase pill change on every phase and both edges would move
+     with them. The copy truncates inside a stable box instead. The room the
+     layout leaves is set where the shell knows it (workspace-column.css and
+     the docked-panel rule below). */
+  --tool-card-room: calc(100% - 20px);
+  width: clamp(280px, var(--tool-card-room), 460px);
   max-width: calc(100% - 20px);
-  padding: 7px 8px 7px 12px;
+  padding: 8px 8px 8px 10px;
   color: var(--color-text);
   background: var(--color-surface-2);
   border: 1px solid var(--color-border-strong);
@@ -27,40 +42,36 @@
   animation: tool-card-in 140ms ease-out;
 }
 
+/* Whatever else the card is handed — the region Extrude form, a keypad —
+   takes a row of its own; the four fixed parts claim their cells. */
+.tool-card > * {
+  grid-column: 1 / -1;
+}
+
+.tool-card-icon {
+  grid-column: 1;
+  grid-row: 1;
+}
+
+.tool-card-copy {
+  grid-column: 2;
+  grid-row: 1;
+  min-width: 0;
+}
+
+.tool-card-close {
+  grid-column: 3;
+  grid-row: 1;
+}
+
 /* A face pick opens the inspector at the same moment it raises this card, so
    centring on the whole shell put the card's close button over the panel
    title at every width under ~1600px. With a panel docked, the card centres
-   on the room between the tool palette and the panel. Its width is fixed,
-   not content-sized: the hint and phase pill change on every phase, and a
-   centred card that grew with them moved both edges each time. The hint copy
-   truncates instead. 170px is the palette's footprint incl. its gap. */
+   on the room between the tool palette and the panel. 170px is the palette's
+   footprint incl. its gap. */
 .viewer-area.has-inspector .tool-card {
   --tool-card-room: calc(100% - 170px - var(--context-w) - 30px);
   left: max(170px, calc(170px + var(--tool-card-room) / 2));
-  width: max(280px, min(680px, var(--tool-card-room)));
-}
-
-.viewer-area.has-inspector .tool-card-copy {
-  flex: 1 1 0;
-  min-width: 0;
-}
-
-.viewer-area.has-inspector .tool-card-copy > span,
-.viewer-area.has-inspector .tool-card-copy > small {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-/* `--tool-card-room` falls below 400px when this container is below 930px.
-   Give the action tabs their own row there so they cannot push through the
-   fixed-width card or cover its copy. */
-@container viewer-area (max-width: 929px) {
-  .viewer-area.has-inspector .tool-card-submode {
-    order: 1;
-    flex: 0 0 100%;
-    justify-content: center;
-  }
 }
 
 @keyframes tool-card-in {
@@ -99,16 +110,27 @@
   white-space: nowrap;
 }
 
+/* Every line of copy stays on its line and ends in an ellipsis; nothing in
+   the card is allowed to push the card wider than the room it was given. */
+.tool-card-copy > span:not(.tool-card-diagnostic),
+.tool-card-copy > small {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .tool-card-copy strong {
   display: flex;
-  flex-wrap: wrap;
   align-items: center;
   gap: 8px;
   font-size: var(--fs-sm);
   font-weight: 600;
 }
 
+/* The title yields before the pill and the badge, which are short and are
+   the parts that carry state. */
 .tool-card-title {
+  flex: 0 1 auto;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -117,6 +139,7 @@
 /* Explicit command-state pill so armed/dragging/validating/failed read at a
    glance instead of only through hint copy. */
 .tool-card-phase {
+  flex: 0 0 auto;
   padding: 1px 7px;
   font-size: var(--fs-xs);
   font-weight: 500;
@@ -174,7 +197,6 @@
   display: flex;
   flex-direction: column;
   gap: 4px;
-  max-width: 360px;
   margin-top: 2px;
   padding: 6px 8px;
   border: 1px solid var(--color-error);
@@ -183,7 +205,6 @@
 }
 
 .tool-card-copy .tool-card-error {
-  max-width: 360px;
   color: var(--color-error-text);
   white-space: normal;
 }
@@ -222,8 +243,11 @@
   }
 }
 
+/* The actions read as one segmented control across the foot of the card
+   rather than as a cluster crowding the copy on the same line. */
 .tool-card-submode {
   display: flex;
+  flex-wrap: wrap;
   gap: 2px;
   padding: 2px;
   background: rgba(0, 0, 0, 0.28);
@@ -231,7 +255,10 @@
 }
 
 .tool-card-submode button {
-  padding: 3px 9px;
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 4px 10px;
+  text-align: center;
   color: var(--color-text-dim);
   font-size: var(--fs-xs);
   background: transparent;
@@ -240,9 +267,16 @@
   cursor: pointer;
 }
 
-.tool-card-submode button.active {
+.tool-card-submode button:hover:not(:disabled) {
+  color: var(--color-text);
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.tool-card-submode button.active,
+.tool-card-submode button.active:hover:not(:disabled) {
   color: var(--color-text);
   background: var(--color-accent-dim);
+  box-shadow: inset 0 0 0 1px var(--color-accent-border);
 }
 
 .tool-card-submode button:disabled {
