@@ -208,9 +208,10 @@ describe('advanced exact modeling features', { timeout: 30_000 }, () => {
   it('refuses a loft apex point that falls inside the section run', async () => {
     // The kernel applies `endPoint` unconditionally. An apex between the two
     // sections folds the last ruled band back through the body: on this
-    // fixture it reported volume 266.667 \u2014 *less* than the 373.333 the same
+    // fixture it reports volume 266.6667 \u2014 *less* than the 373.3333 the same
     // loft has without an apex \u2014 with the apex buried out of sight, no
-    // validation error, and no warning. Only a signed side check catches it.
+    // validation error, and no warning. Measuring both builds is what catches
+    // it; an apex further in (z = -5) fails validation outright.
     let document = createProjectDocument('Inside apex', toUserId('user_in'));
     const lower = addSection(document, 'Lower', 0, {
       objectKind: 'rectangle',
@@ -227,7 +228,17 @@ describe('advanced exact modeling features', { timeout: 30_000 }, () => {
       centerX: 0,
       centerY: 0
     });
-    for (const z of [5, -5]) {
+    const cases: ReadonlyArray<readonly [number, RegExp]> = [
+      [
+        5,
+        /does not add material to this loft: the same sections loft to 373\.3333 mm\u00b3 without the apex and to 266\.6667 mm\u00b3 with it/
+      ],
+      [
+        -5,
+        /did not produce a valid closed solid\. The same sections do loft into a valid solid without the apex point/
+      ]
+    ];
+    for (const [z, message] of cases) {
       const refused = loftSections(upper.document, {
         name: `Inside apex ${z}`,
         sections: [lower.section, upper.section],
@@ -235,16 +246,134 @@ describe('advanced exact modeling features', { timeout: 30_000 }, () => {
         endPoint: { x: 0, y: 0, z }
       });
       const derived = await adapter.syncDocument(refused.document);
-      expect(derived.warnings.join(' ')).toMatch(
-        /is on the same side of the closing section as the rest of the loft/
+      expect(derived.warnings.join(' ')).toMatch(message);
+      expect(derived.bodyRepresentations[refused.bodyId]).toBeUndefined();
+    }
+  });
+
+  it('refuses an apex whose section straddles the closing plane', async () => {
+    // The case two positional guards could not see. The first section is drawn
+    // on XZ at y = -20 and spans z = 5..15, so it crosses the closing
+    // section's own plane at z = 10: every rule of the form "some section has
+    // to be on the far side" is satisfied on *both* sides at once, and the
+    // wrong-side apex passed silently. Measured on the pinned kernel, the run
+    // lofts to 2000.0000 with no apex; an apex at z = 20 adds the analytic
+    // 100 x 10 / 3 cone for 2333.3333, while apexes at z = 0, z = -10 and
+    // z = 4 report 1666.6667, 1333.3335 and 1800.0000 \u2014 333.33, 666.67 and 200
+    // mm\u00b3 *less* material than no apex at all, each of them a self-intersecting
+    // body that validates clean.
+    let document = createProjectDocument('Straddle', toUserId('user_strad'));
+    const straddling = addSection(
+      document,
+      'Straddling',
+      -20,
+      {
+        objectKind: 'rectangle',
+        width: 10,
+        height: 10,
+        centerX: 0,
+        centerY: -10
+      },
+      'XZ'
+    );
+    document = straddling.document;
+    const closing = addSection(
+      document,
+      'Closing',
+      10,
+      {
+        objectKind: 'rectangle',
+        width: 10,
+        height: 10,
+        centerX: 0,
+        centerY: 20
+      },
+      'XY'
+    );
+    const sections = [straddling.section, closing.section];
+
+    const plain = loftSections(closing.document, {
+      name: 'Straddle plain',
+      sections,
+      mode: 'ruled'
+    });
+    const plainDerived = await adapter.syncDocument(plain.document);
+    expect(plainDerived.warnings).toEqual([]);
+    expect(plainDerived.bodyRepresentations[plain.bodyId]?.volume).toBeCloseTo(
+      2000,
+      3
+    );
+
+    const accepted = loftSections(closing.document, {
+      name: 'Straddle clear apex',
+      sections,
+      mode: 'ruled',
+      endPoint: { x: 0, y: 25, z: 20 }
+    });
+    const acceptedDerived = await adapter.syncDocument(accepted.document);
+    expect(acceptedDerived.warnings).toEqual([]);
+    expect(
+      acceptedDerived.bodyRepresentations[accepted.bodyId]?.volume
+    ).toBeCloseTo(2333.3333, 3);
+
+    const folded: ReadonlyArray<readonly [number, string]> = [
+      [0, '1666.667'],
+      [-10, '1333.333'],
+      [4, '1800']
+    ];
+    for (const [z, volume] of folded) {
+      const refused = loftSections(closing.document, {
+        name: `Straddle folded apex ${z}`,
+        sections,
+        mode: 'ruled',
+        endPoint: { x: 0, y: 25, z }
+      });
+      const derived = await adapter.syncDocument(refused.document);
+      expect(derived.warnings.join(' ')).toContain(
+        `does not add material to this loft: the same sections loft to 2000 mm\u00b3 without the apex and to ${volume} mm\u00b3 with it`
       );
       expect(derived.bodyRepresentations[refused.bodyId]).toBeUndefined();
     }
   });
 
+  it('keeps an apex the model can barely measure', async () => {
+    // The other edge of the same comparison: the slack has to be small enough
+    // that a legitimately tiny apex is not thrown away as measurement noise.
+    // Two microns above the 8 x 8 closing section adds 64 * 2e-6 / 3 = 4.3e-5
+    // mm\u00b3, forty times the ~1e-6 mm\u00b3 the model's own tolerance allows, and it
+    // builds.
+    let document = createProjectDocument('Tiny apex', toUserId('user_tiny'));
+    const lower = addSection(document, 'Lower', 0, {
+      objectKind: 'rectangle',
+      width: 4,
+      height: 4,
+      centerX: 0,
+      centerY: 0
+    });
+    document = lower.document;
+    const upper = addSection(document, 'Upper', 10, {
+      objectKind: 'rectangle',
+      width: 8,
+      height: 8,
+      centerX: 0,
+      centerY: 0
+    });
+    const lofted = loftSections(upper.document, {
+      name: 'Tiny apex loft',
+      sections: [lower.section, upper.section],
+      mode: 'ruled',
+      endPoint: { x: 0, y: 0, z: 10.000002 }
+    });
+    const derived = await adapter.syncDocument(lofted.document);
+    const body = derived.bodyRepresentations[lofted.bodyId];
+    expect(derived.warnings).toEqual([]);
+    expect(body?.volume).toBeGreaterThan(373.3333333333333);
+    expect(body?.volume).toBeCloseTo(373.3333760000001, 6);
+  });
+
   it('closes a descending section run to an apex below it', async () => {
-    // The guard is a side test, not a "higher z" test: reverse the section
-    // order and the apex that was refused above is the correct one.
+    // The guard is not a "higher z" test: reverse the section order and the
+    // apex that was refused above is the one that adds material.
     let document = createProjectDocument('Down apex', toUserId('user_down'));
     const lower = addSection(document, 'Lower', 0, {
       objectKind: 'rectangle',
@@ -276,10 +405,10 @@ describe('advanced exact modeling features', { timeout: 30_000 }, () => {
   });
 
   it('closes a loft to an apex far off the section axis', async () => {
-    // The guard measures along the closing section's normal, so how far to one
-    // side the apex sits is the user's business: 200 mm off axis and 1 mm
-    // beyond still builds, at the analytic 373.3333 frustum plus a 8 x 8 base,
-    // 1 tall pyramid (21.3333).
+    // The guard asks only whether the apex adds material, so how far to one
+    // side it sits is the user's business: 200 mm off axis and 1 mm beyond
+    // still builds, at the analytic 373.3333 frustum plus a 8 x 8 base, 1 tall
+    // pyramid (21.3333).
     let document = createProjectDocument('Oblique', toUserId('user_obl'));
     const lower = addSection(document, 'Lower', 0, {
       objectKind: 'rectangle',
@@ -313,7 +442,7 @@ describe('advanced exact modeling features', { timeout: 30_000 }, () => {
   it('refuses an apex a coplanar closing section hid from the side test', async () => {
     // Three sections, the last two on the same plane. Measured on the pinned
     // kernel this run lofts to 373.3333 with no apex, to 433.3333 with an apex
-    // at z = 15 — and to 313.3333 with an apex at z = 5, which is *less*
+    // at z = 15 — and to 313.3334 with an apex at z = 5, which is *less*
     // material than no apex at all, buried out of sight, with no warning. A
     // guard that skips itself when the section before the closing one is
     // coplanar with it leaves exactly that fail-open reachable.
@@ -350,7 +479,7 @@ describe('advanced exact modeling features', { timeout: 30_000 }, () => {
     });
     const refusedDerived = await adapter.syncDocument(refused.document);
     expect(refusedDerived.warnings.join(' ')).toMatch(
-      /is on the same side of the closing section as the rest of the loft/
+      /does not add material to this loft: the same sections loft to 373\.3333 mm³ without the apex and to 313\.3334 mm³ with it/
     );
     expect(refusedDerived.bodyRepresentations[refused.bodyId]).toBeUndefined();
 
@@ -373,8 +502,8 @@ describe('advanced exact modeling features', { timeout: 30_000 }, () => {
     // A run that overshoots: the middle section sits 10 beyond the closing
     // one. An apex at z = 5 is on the far side of the closing section from
     // that middle section, so a side test alone accepts it — and measured,
-    // it returns 193.3333 against the 253.3333 of the same run with no apex.
-    // The apex has to stand clear of *every* section, not just one of them.
+    // it returns 193.3334 against the 253.3333 of the same run with no apex.
+    // Comparing the two builds is what refuses it.
     let document = createProjectDocument('Overshoot', toUserId('user_over'));
     const lower = addSection(document, 'Lower', 0, {
       objectKind: 'rectangle',
@@ -408,7 +537,7 @@ describe('advanced exact modeling features', { timeout: 30_000 }, () => {
     });
     const refusedDerived = await adapter.syncDocument(refused.document);
     expect(refusedDerived.warnings.join(' ')).toMatch(
-      /does not stand clear of loft section 1/
+      /does not add material to this loft: the same sections loft to 253\.3333 mm³ without the apex and to 193\.3334 mm³ with it/
     );
     expect(refusedDerived.bodyRepresentations[refused.bodyId]).toBeUndefined();
 
@@ -429,10 +558,14 @@ describe('advanced exact modeling features', { timeout: 30_000 }, () => {
   });
 
   it('closes a run whose sections are all coplanar from either side', async () => {
-    // The one run with no side to be on. It has no interior for an apex to
-    // fold into, and measured it closes correctly either way: both apexes
-    // give the analytic 8 x 8 x 10 / 3 pyramid. So this is decided, not
-    // skipped — refusing it would take away a loft the kernel builds.
+    // The one run the comparison has no baseline for: lofted without an apex
+    // it is refused outright ("did not produce a finite positive volume"),
+    // because sections that all lie in the closing plane enclose nothing. That
+    // is also why it has no interior for an apex to fold into, so its baseline
+    // is nought material rather than a measurement, and measured it closes
+    // correctly either way: both apexes give the analytic 8 x 8 x 10 / 3
+    // pyramid. So this is decided, not skipped — refusing it would take away a
+    // loft the kernel builds.
     let document = createProjectDocument('Flat run', toUserId('user_flat2'));
     const inner = addSection(document, 'Inner', 0, {
       objectKind: 'rectangle',
