@@ -98,12 +98,19 @@ export interface ViewportStandIn {
  * about what is on screen.
  *
  * It exists because that question was answered twice, independently, and
- * the two answers came apart twice: first when a published preview document
- * replaced the live one, then when a parameter edit nobody had applied hid
- * the live bodies and drew a candidate in their place while the section
- * still described the document underneath. Both were the same defect. A
- * re-derivation of "which document is on screen" is the defect; there is
- * one derivation, and this is it.
+ * the two answers came apart three times: first when a published preview
+ * document replaced the live one, then when a parameter edit nobody had
+ * applied hid the live bodies and drew a candidate in their place, then when
+ * the Move gizmo posed a body's mesh straight into the scene — each time
+ * with the section still describing the document underneath. All three were
+ * the same defect. A re-derivation of "what is on screen" is the defect;
+ * there is one derivation, and this is it.
+ *
+ * The first two fields are DECLARED by the workspace: it knows it swapped
+ * the document, it knows it put a stand-in up. The third is OBSERVED, by the
+ * viewport, from the objects it is about to draw — because the third
+ * instance declared nothing, and a fourth mechanism is under no obligation
+ * to either.
  */
 export interface ViewportGeometry<S extends ViewportStandIn = ViewportStandIn> {
   /**
@@ -115,38 +122,89 @@ export interface ViewportGeometry<S extends ViewportStandIn = ViewportStandIn> {
   readonly bodies: BodyRepresentation[];
   /** Every stand-in currently drawn over that build; null or empty when none. */
   readonly standIns: S[] | null;
+  /**
+   * Bodies the viewport reported it is NOT drawing where the document built
+   * them: moved or turned by the Move gizmo, resized by a face drag, hidden
+   * under something else — whatever did it.
+   *
+   * This one is not declared by the mechanism that caused it. The viewer
+   * reads it off the body objects it is about to draw (`DrawnBodyReport` in
+   * `@openzcad/viewport`) and reports it back, which is why a mechanism that
+   * poses a mesh without telling anyone still lands here. Everything above
+   * is what the workspace SAYS it is drawing; this is what the frame DID.
+   */
+  readonly drawnElsewhere: readonly string[];
 }
+
+/**
+ * Every field of {@link ViewportGeometry} that {@link sectionSourceOf} reads.
+ *
+ * Adding a field to `ViewportGeometry` without adding it here stops this
+ * file compiling, so a new way of putting geometry on screen cannot arrive
+ * through this value while the section quietly keeps describing the old one —
+ * which is exactly how the first two instances of this defect shipped. The
+ * compiler cannot tell whether a new field CHANGES what is drawn, so it
+ * insists on being told: read it in `sectionSourceOf`, or name it here with
+ * the reason it makes no difference to what a section is a section of.
+ */
+type SectionReadViewportField =
+  'document' | 'bodies' | 'standIns' | 'drawnElsewhere';
+
+/** True only while `sectionSourceOf` reads every field of the value. */
+export type SectionReadsEveryViewportField =
+  Exclude<keyof ViewportGeometry, SectionReadViewportField> extends never
+    ? true
+    : false;
+
+/**
+ * Fails to typecheck — `Type 'true' is not assignable to type 'false'` — the
+ * moment a `ViewportGeometry` field goes unclassified above.
+ */
+export const sectionReadsEveryViewportField: SectionReadsEveryViewportField = true;
 
 /**
  * What an exact section of this viewport would be a section OF.
  *
  * One rule, deliberately not a list of cases: a section describes the
- * document the viewport is drawing, and while any stand-in is up the
- * viewport is not drawing that document's geometry. So there is nothing to
- * section exactly, and nothing to export — `document` comes back null and
- * both the section and `writeSectionDxf` fail closed on it.
+ * document the viewport is drawing, and while any stand-in is up, or any
+ * body of it is drawn somewhere else, the viewport is not drawing that
+ * document's geometry. So there is nothing to section exactly, and nothing
+ * to export — `document` comes back null and both the section and
+ * `writeSectionDxf` fail closed on it.
  *
  * Refusing on `standIns` rather than on the parameter preview by name is
- * the whole point: a third source of drawn geometry is covered by having
- * been folded into `ViewportGeometry`, which is what it takes to be drawn.
+ * half the point; refusing on `drawnElsewhere` — what the viewport reports
+ * it actually drew — is the other half, and the half that does not depend on
+ * a future mechanism remembering to declare itself.
  */
 export function sectionSourceOf(view: ViewportGeometry): SectionSource {
+  // Destructured, not read field by field, so this reads as what it is: the
+  // whole of what the viewport is drawing, every field of it accounted for
+  // (see `SectionReadsEveryViewportField`).
+  const { document, bodies, standIns, drawnElsewhere } = view;
+  // One rule for both channels, because they are one question. A stand-in is
+  // the workspace declaring that something else is on screen; `drawnElsewhere`
+  // is the viewport reporting that something else is on screen. Either way the
+  // document's own geometry is not what the user is looking at, so there is
+  // nothing to section exactly and nothing to export.
+  const drawingTheDocument = !standIns?.length && drawnElsewhere.length === 0;
   return {
-    document: view.standIns?.length ? null : view.document,
-    bodyIds: view.bodies.map((body) => body.bodyId)
+    document: drawingTheDocument ? document : null,
+    bodyIds: bodies.map((body) => body.bodyId)
   };
 }
 
 /**
  * The section state this drawing may show.
  *
- * An exact section is a section of a document's own geometry. While any
- * stand-in is drawn the viewport is not showing that geometry, so the cut
- * curves would float beside a shape of a different size, the rail would
- * report the old area as exact, and the DXF button would stay lit over a
- * drawing of a model nobody is looking at. All three come down together
- * here, from the same one reading of the same one value that decides what
- * may be sectioned at all.
+ * An exact section is a section of a document's own geometry. While a
+ * stand-in is drawn over that geometry, or a body of it is drawn somewhere
+ * else, the viewport is not showing it — so the cut curves would float
+ * beside a shape of a different size or in the empty space a moved body has
+ * left, the rail would report the old area as exact, and the DXF button
+ * would stay lit over a drawing of a model nobody is looking at. All three
+ * come down together here, from the same one reading of the same one value
+ * that decides what may be sectioned at all.
  */
 export function sectionOutlineFor(
   view: ViewportGeometry,
