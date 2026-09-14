@@ -1,6 +1,7 @@
 # Kernel patterns with face provenance
 
-Branch `claude/remus-kernel-patterns`, two commits plus this file.
+Branch `claude/remus-kernel-patterns`: two commits for the adoption, two
+addressing the verifier's minors, plus this file.
 
 ## What shipped
 
@@ -121,6 +122,30 @@ unnecessary and nothing else.
 Both overlapping regressions pass with identical volumes and identical
 triangle counts, and the cross-drill render regression passes unchanged.
 
+## A kernel refusal costs evidence, never the body
+
+The kernel arm can throw in two places: an entry point refusing outright, and
+`kernelPatternInstanceSolids` rejecting a compound that is not one copy per
+instance with the source first. The build loop is not transactional — it
+catches per feature, warns, and carries on — so either throw used to delete the
+patterned body from the viewport, the parts list and the STEP scope, where the
+copy-and-transform path it replaced always produced one.
+
+A refusal now falls back to that copy build:
+
+- the geometry is identical (it is the path that shipped before this branch);
+- the instance names are still derived, because the witness check does not
+  need the journal — only the journal cross-check is lost;
+- the loss is stated as a `pattern-kernel-declined` lineage diagnostic that
+  quotes the kernel's own message, so a pattern with no journal evidence
+  explains itself instead of going quiet.
+
+Neither throw is reachable on the pinned build from any input I could
+construct — the box gate makes an overlap refusal impossible on the kernel
+path, and the compound layout is what this kernel returns. It is a latent
+robustness gap closed ahead of a kernel bump, and it is covered by two
+regressions that spy the kernel into refusing.
+
 ## Check results
 
 Run from the worktree root, in order, all green:
@@ -129,15 +154,37 @@ Run from the worktree root, in order, all green:
 pnpm lint              ✖ 19 problems (0 errors, 19 warnings)   [baseline: 19 warnings]
 pnpm typecheck         (no output; exit 0)
 pnpm test              root:  Test Files  242 passed | 2 skipped (244)
-                              Tests  2496 passed | 4 skipped (2500)
+                              Tests  2498 passed | 4 skipped (2502)
                        web:   Test Files  156 passed (156)
                               Tests  1182 passed (1182)
 pnpm test:parity-corpus       Test Files  7 passed (7)
                               Tests  174 passed | 1 skipped (175)
+pnpm build             "warnings": [], "failures": []   (exit 0)
 ```
 
-The web half matches the briefing's baseline exactly (156 files / 1182 tests);
-the root half is 8 tests above baseline, which is the new regression file.
+The web half matches the briefing's baseline exactly (156 files / 1182 tests).
+
+The root half is **+9 tests over the 2489-test baseline**, and the arithmetic
+is worth spelling out because it is not simply "the new file":
+
+- `test/pattern-instance-lineage.test.ts` adds **10** `it`s (8 for the
+  adoption, 2 for the refusal fallback below).
+- `packages/kernel-adapter/src/topology-lineage.test.ts` changed
+  `it.each(['chamfer', 'pattern'])` to `it.each(['chamfer'])`, which removes
+  **1** parametrized case. That case asserted `pattern` was hash-only, which
+  is no longer true; the sibling test in the same file now asserts
+  `topologyLineageCapability('pattern')` equals `{status: 'derived'}`
+  explicitly. So one assertion did disappear, and it was replaced by a
+  stronger one rather than dropped.
+
+Net **+9**. An earlier draft of this file said "+8 tests, which is the new
+regression file" — that was wrong on both halves and is corrected here.
+
+The **4 skipped** root tests against the briefing's stated baseline of 2 are
+not this branch: they are `it.skipIf(!sourcePath)` guards in the four
+hammer-holder / reconstruction suites that need a local STEP fixture this
+machine does not have. This branch adds no skip and removes none.
+
 `pnpm test:e2e`, `pnpm build:desktop` and the `apple-silicon` workflow were not
 run, per the briefing.
 
@@ -201,7 +248,11 @@ buried.**
    producing a wrong name. But it is read-back behaviour of one pinned kernel
    build and could change under a kernel bump; the check would catch it as a
    silent loss of journal evidence, not as a failure. A kernel bump should
-   re-run `test/pattern-instance-lineage.test.ts`.
+   re-run `test/pattern-instance-lineage.test.ts`. The compound layout is the
+   harder half of the same assumption, and under a bump it is the likelier one
+   to move — that is now a fallback to the copy build rather than a lost body,
+   but it is still a silent loss of evidence, so the diagnostic is the thing to
+   grep for after a bump.
 3. **Instance numbering semantics.** For a linear or grid pattern an instance
    ordinal is stable under a count change, which is what makes the reference
    survive. For a CIRCULAR pattern the instances move when the count changes
@@ -212,6 +263,24 @@ buried.**
    lineage, which the pattern feature never did. Faces only, and the suites did
    not slow measurably, but a 100-instance pattern of a complex body does more
    work than before.
+
+## Verifier round: what changed after review
+
+An independent verifier read the diff and ran the kernel; the verdict was
+ready-for-pr with four minors. All four are addressed, none disputed:
+
+1. **Duplicated `PatternInstanceBuild` doc comment.** The same 8-line block
+   appeared twice back to back. One copy removed.
+2. **`copyShape` was dead.** The pattern builder was its last caller. Removed
+   from `exact-shape-utils.ts`; nothing in `packages`, `apps` or `test`
+   referenced it.
+3. **This file's test arithmetic was wrong.** It claimed +8 and implied nothing
+   was removed. The true delta then was +7 (8 added, 1 parametrized case
+   removed and replaced by a stronger explicit assertion); with the two new
+   fallback regressions it is now +9. Corrected in **Check results** above,
+   with the removed case named.
+4. **No fallback from a kernel refusal.** Fixed, with two regressions — see
+   **A kernel refusal costs evidence, never the body** above.
 
 ## Follow-ups
 
