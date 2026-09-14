@@ -3,6 +3,7 @@ import {
   meshImportTooLargeMessage,
   type MeshImportFormat
 } from '@openzcad/kernel-adapter/mesh-import-formats';
+import type { UnitSystem } from '@openzcad/shared';
 
 export {
   meshImportFormatForFileName,
@@ -40,10 +41,17 @@ function abortError(): Error {
  * worker and a kernel exist to read it. Everything past that point is the
  * worker's, and termination is how it is cancelled: the translator and kernel
  * are synchronous WASM that no message can interrupt.
+ *
+ * `units` is the open document's, and it is required: the import runs the
+ * document's own rebuild over the triangles before returning them, and that
+ * rebuild sews at a tolerance derived from the numbers it is handed. Checking
+ * millimetres on the way into a metre document passes files that then rebuild
+ * to nothing.
  */
 export function importMeshFileInDisposableWorker(
   file: File,
   format: MeshImportFormat,
+  units: UnitSystem,
   signal?: AbortSignal
 ): Promise<ImportedMeshFile> {
   if (file.size > MESH_IMPORT_POLICIES[format].maxInputBytes) {
@@ -114,7 +122,8 @@ export function importMeshFileInDisposableWorker(
       type: 'import',
       requestId,
       format,
-      file
+      file,
+      units
     };
     worker.postMessage(request);
   });

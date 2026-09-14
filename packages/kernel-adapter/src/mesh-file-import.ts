@@ -1,4 +1,5 @@
 import { MAX_IMPORT_TRIANGLES, writeAsciiStl } from '@openzcad/io-stl';
+import { UNIT_TO_MM, type UnitSystem } from '@openzcad/shared';
 
 import {
   MESH_IMPORT_POLICIES,
@@ -71,10 +72,20 @@ interface MeshPlacement {
  * triangles the rebuild cannot turn into a body is refused here, with the
  * kernel's own reason, instead of importing behind a success message and
  * leaving a feature with no body at all.
+ *
+ * That rebuild is run at the scale the document will store, which is why
+ * `documentUnits` is required rather than assumed. The sew tolerance the
+ * rebuild uses is derived from the numbers it is handed, so the same triangles
+ * checked in millimetres and stored in metres are two different questions: a
+ * 0.0002 mm plate sews cleanly as millimetres and collapses as metres —
+ * measured on the pin — which is exactly the success-then-no-body this check
+ * exists to close. The returned vertices are still millimetres; only the check
+ * is scaled, as the commit will scale them.
  */
 export async function importMeshFile(
   format: MeshImportFormat,
-  data: Uint8Array
+  data: Uint8Array,
+  documentUnits: UnitSystem
 ): Promise<ImportedMeshTriangles> {
   const policy = MESH_IMPORT_POLICIES[format];
   if (data.byteLength > policy.maxInputBytes) {
@@ -133,7 +144,7 @@ export async function importMeshFile(
         vertices[index]! *= pkg.unit.millimetres;
       }
     }
-    verifyMeshRebuilds(kernel, policy, vertices, indices);
+    verifyMeshRebuilds(kernel, policy, vertices, indices, documentUnits);
   } finally {
     kernel.free();
   }
@@ -256,20 +267,27 @@ function tessellatePlacements(
  * The kernel's own reason is carried through, and the count of vertex-disjoint
  * groups in the soup is added when there is more than one, because that is
  * what the user can act on.
+ *
+ * The triangles are scaled into the document's units first, by the very
+ * factor the commit applies, because the rebuild's sew tolerance is derived
+ * from the numbers it is given. A check run in millimetres against a document
+ * stored in metres answers a question nobody asked.
  */
 function verifyMeshRebuilds(
   kernel: RemusKernel,
   policy: MeshImportPolicy,
   vertices: readonly number[],
-  indices: readonly number[]
+  indices: readonly number[],
+  documentUnits: UnitSystem
 ): void {
+  const stored = storedVertices(vertices, documentUnits);
   try {
     importMeshSolid(
       kernel,
       writeAsciiStl('import-check', [
         {
           name: 'import-check',
-          vertices: vertices as number[],
+          vertices: stored,
           indices: indices as number[]
         }
       ])
@@ -289,6 +307,24 @@ function verifyMeshRebuilds(
       { cause: error }
     );
   }
+}
+
+/**
+ * The millimetre triangles as the document will hold them.
+ *
+ * `commitImportedMesh` adopts an imported mesh at `1 / UNIT_TO_MM[units]`, so
+ * this is the same multiplication on the same values — identical bits, not an
+ * approximation of them — and the check therefore sees exactly the vertices
+ * the feature will store and the rebuild will sew.
+ */
+function storedVertices(
+  vertices: readonly number[],
+  documentUnits: UnitSystem
+): number[] {
+  const scale = 1 / UNIT_TO_MM[documentUnits];
+  return scale === 1
+    ? (vertices as number[])
+    : vertices.map((value) => value * scale);
 }
 
 /** How many vertex-disjoint groups a triangle soup falls into. */
