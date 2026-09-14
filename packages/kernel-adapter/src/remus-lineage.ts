@@ -34,7 +34,10 @@ export type RemusLineageDiagnosticCode =
   | 'invalid-transform'
   | 'invalid-evolution-payload'
   | 'boolean-shared-carrier'
-  | 'boolean-split-carrier';
+  | 'boolean-split-carrier'
+  | 'pattern-instance-unverified'
+  | 'invalid-pattern-journal'
+  | 'pattern-kernel-declined';
 
 export interface RemusLineageDiagnostic {
   readonly code: RemusLineageDiagnosticCode;
@@ -106,6 +109,7 @@ export function createRemusSemanticLineage(
     | 'primitive'
     | 'sweep'
     | 'imported-step'
+    | 'pattern'
     | 'boolean'
     | 'fillet'
     | 'chamfer'
@@ -300,6 +304,196 @@ export function deriveRemusBooleanCarrierLineage(input: {
   const state = createRemusSemanticLineage(
     input.producingFeatureId,
     'boolean',
+    assignments
+  );
+  state.diagnostics.push(...diagnostics);
+  return state;
+}
+
+/** The `{compound, op}` record a journaled kernel pattern returns. */
+export interface RemusPatternJournal {
+  readonly compound: number;
+  readonly op: number;
+}
+
+/**
+ * Strict decoder for a journaled pattern's JSON. A malformed record is a
+ * refusal, never an empty journal: the caller must fall back to the
+ * unjournaled entry point deliberately rather than inherit a silent blank.
+ */
+export function decodeRemusPatternJournal(value: unknown): RemusPatternJournal {
+  try {
+    if (typeof value !== 'string') {
+      throw new Error('Pattern journal must be JSON text.');
+    }
+    const decoded: unknown = JSON.parse(value);
+    if (!decoded || typeof decoded !== 'object' || Array.isArray(decoded)) {
+      throw new Error('Pattern journal root must be an object.');
+    }
+    const root = decoded as Record<string, unknown>;
+    const { compound, op } = root;
+    if (
+      !Number.isSafeInteger(compound) ||
+      (compound as number) < 0 ||
+      !Number.isSafeInteger(op) ||
+      (op as number) < 0
+    ) {
+      throw new Error('Pattern journal must name a compound and a journal op.');
+    }
+    return { compound: compound as number, op: op as number };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'invalid payload';
+    throw new Error(`Remus pattern journal rejected: ${message}`, {
+      cause: error
+    });
+  }
+}
+
+export interface RemusPatternInstance {
+  /**
+   * This instance's identity within the pattern, and the segment the lineage
+   * name carries: `0` is the seed the kernel leaves in place, `1..` the
+   * copies, and a grid's instances are `<column>-<row>` so a name does not
+   * move when the other axis's count changes.
+   */
+  readonly instance: string;
+  /** Row-major rigid transform carrying the source body to this instance. */
+  readonly matrix: readonly number[];
+  readonly candidates: readonly RemusTopologyCandidate[];
+  /**
+   * The kernel journal's claim for this instance: source face handle to
+   * instance face handle. Absent where the entry point publishes no journal
+   * (`circularPattern` and `gridPattern` are unjournaled on the pin).
+   */
+  readonly claimedFaces?: ReadonlyMap<number, number>;
+}
+
+/**
+ * Pattern lineage, one instance at a time.
+ *
+ * A patterned instance is a rigid copy, so the evidence is the same pair the
+ * transform row uses: the source face's own witness, re-verified against the
+ * source solid so a stale reference cannot travel, and that witness carried
+ * through the instance transform, which must match exactly one measured face
+ * on the instance. Where the kernel journals the operation its claimed face
+ * map is read as candidate evidence and has to pick the SAME face; a
+ * disagreement publishes nothing and says so. Nothing is placed by proximity
+ * or by traversal order.
+ *
+ * Names carry the instance ordinal — `pattern.face.instance.2.<source name>` —
+ * so a sketch pinned to the third instance's top face is distinguishable from
+ * the first's, and survives a count change that leaves that instance where it
+ * was. Edges are not carried: the pin's pattern journal publishes face
+ * outputs only, and nothing downstream attaches to a pattern's edges by name.
+ */
+export function deriveRemusPatternInstanceLineage(input: {
+  readonly producingFeatureId: FeatureId;
+  readonly sourceLineage: RemusLineageState | undefined;
+  readonly sourceCandidates: readonly RemusTopologyCandidate[];
+  readonly instances: readonly RemusPatternInstance[];
+}): RemusLineageState {
+  const diagnostics: RemusLineageDiagnostic[] = [];
+  const assignments: RemusSemanticAssignment[] = [];
+  const sourceByHandle = new Map(
+    input.sourceCandidates
+      .filter((candidate) => candidate.kind === 'face')
+      .map((candidate) => [candidate.handle, candidate] as const)
+  );
+  const sources = [...(input.sourceLineage?.faceReferences ?? [])].filter(
+    ([handle, reference]) =>
+      referenceMatchesCandidate(reference, sourceByHandle.get(handle))
+  );
+
+  for (const instance of input.instances) {
+    if (!matrixIsRigid(instance.matrix)) {
+      diagnostics.push({
+        code: 'invalid-transform',
+        operation: 'pattern',
+        message: `Pattern instance ${instance.instance} is not a finite, right-handed rigid transform.`
+      });
+      continue;
+    }
+    const results = instance.candidates.filter(
+      (candidate) => candidate.kind === 'face'
+    );
+    for (const [handle, reference] of sources) {
+      const expected = transformRemusWitness(
+        'face',
+        reference.witness,
+        instance.matrix
+      );
+      if (!expected) {
+        diagnostics.push({
+          code: 'pattern-instance-unverified',
+          operation: 'pattern',
+          topologyKind: 'face',
+          lineageName: reference.lineageName,
+          sourceHandle: handle,
+          message: `Pattern instance ${instance.instance} could not carry ${reference.lineageName} through its transform.`
+        });
+        continue;
+      }
+      const matches = results.filter((candidate) =>
+        // Near-equality, not exact: a rotated instance's expected witness
+        // carries quantization noise a measured one does not. Uniqueness
+        // below is what keeps the band fail-closed.
+        topologyWitnessesNearlyEqual('face', expected, candidate.witness)
+      );
+      if (matches.length !== 1) {
+        diagnostics.push({
+          code: 'pattern-instance-unverified',
+          operation: 'pattern',
+          topologyKind: 'face',
+          lineageName: reference.lineageName,
+          sourceHandle: handle,
+          resultHandles: matches.map((candidate) => candidate.handle),
+          message: `Pattern instance ${instance.instance} matched ${matches.length} faces for ${reference.lineageName}.`
+        });
+        continue;
+      }
+      const match = matches[0]!;
+      const claimed = instance.claimedFaces?.get(handle);
+      if (claimed !== undefined && claimed !== match.handle) {
+        diagnostics.push({
+          code: 'invalid-pattern-journal',
+          operation: 'pattern',
+          topologyKind: 'face',
+          lineageName: reference.lineageName,
+          sourceHandle: handle,
+          resultHandles: [claimed, match.handle],
+          message: `Pattern journal claimed face ${claimed} for ${reference.lineageName} where the witness matched ${match.handle}.`
+        });
+        continue;
+      }
+      const verification = verifyTopologyEvolution({
+        operation: 'pattern',
+        kind: 'face',
+        sourceWitness: reference.witness,
+        resultWitness: match.witness,
+        relation: { kind: 'known-transform', expectedResultWitness: expected }
+      });
+      if (verification.status !== 'verified') {
+        diagnostics.push({
+          code: 'pattern-instance-unverified',
+          operation: 'pattern',
+          topologyKind: 'face',
+          lineageName: reference.lineageName,
+          sourceHandle: handle,
+          resultHandles: [match.handle],
+          message: `Pattern instance ${instance.instance} failed exact witness verification for ${reference.lineageName}.`
+        });
+        continue;
+      }
+      assignments.push({
+        ...match,
+        lineageName: `pattern.face.instance.${instance.instance}.${reference.lineageName}`
+      });
+    }
+  }
+
+  const state = createRemusSemanticLineage(
+    input.producingFeatureId,
+    'pattern',
     assignments
   );
   state.diagnostics.push(...diagnostics);
