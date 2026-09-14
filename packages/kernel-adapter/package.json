@@ -7,7 +7,8 @@
   "exports": {
     ".": "./src/index.ts",
     "./exact": "./src/exact.ts",
-    "./face-attachment": "./src/face-attachment.ts"
+    "./face-attachment": "./src/face-attachment.ts",
+    "./mesh-import-formats": "./src/mesh-import-formats.ts"
   },
   "dependencies": {
     "@openzcad/document-core": "workspace:*",

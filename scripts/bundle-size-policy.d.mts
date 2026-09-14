@@ -27,6 +27,8 @@ export const KERNEL_WASM_ASSET_PATTERN: RegExp;
 
 export const TRANSLATOR_WASM_ASSET_PATTERN: RegExp;
 
+export const LAZY_ENTRY_PATTERNS: RegExp[];
+
 export const KERNEL_WASM_POLICY: Readonly<{
   rawReviewBytes: number;
   rawHardBytes: number;
