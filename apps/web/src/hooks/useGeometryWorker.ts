@@ -14,6 +14,8 @@ import type {
   ExactSectionPlane,
   MeshQualityReport,
   SectionOutlineReport,
+  SketchPlanarOperation,
+  SketchPlanarResult,
   SketchSolveOutcome,
   DxfFaceSelector
 } from '@openzcad/kernel-adapter/exact';
@@ -177,6 +179,15 @@ export interface GeometryWorkerApi {
     sketchId: SketchId
   ): Promise<SketchSolveOutcome>;
   /**
+   * Runs one planar sketch edit — corner fillet, corner chamfer, or closed
+   * loop offset — on the kernel's 2D operations. Geometry only: the caller
+   * decides which entities the answer replaces.
+   */
+  sketchPlanarOperation(
+    document: ProjectDocument,
+    operation: SketchPlanarOperation
+  ): Promise<SketchPlanarResult>;
+  /**
    * On-demand per-face recognition of one imported STEP face (Phase D of the
    * imported STEP edit plan). Resolves with the recognized kind + dimensions,
    * or the typed refusal reason — display-only, never a document edit.
@@ -213,6 +224,9 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
   );
   const sectionRequests = useRef(
     new Map<string, PendingRequest<SectionOutlineReport>>()
+  );
+  const sketchPlanarRequests = useRef(
+    new Map<string, PendingRequest<SketchPlanarResult>>()
   );
   const recognizeImportedFaceRequests = useRef(
     new Map<string, PendingRequest<FaceRecognitionSummary>>()
@@ -277,6 +291,10 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
         request.reject(error);
       }
       sectionRequests.current.clear();
+      for (const request of sketchPlanarRequests.current.values()) {
+        request.reject(error);
+      }
+      sketchPlanarRequests.current.clear();
       for (const request of recognizeImportedFaceRequests.current.values()) {
         request.reject(error);
       }
@@ -479,6 +497,21 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
           solveSketchRequests.current.delete(event.data.requestId);
           if (event.data.ok) {
             pending.resolve(event.data.outcome);
+          } else {
+            pending.reject(new Error(event.data.error));
+          }
+          return;
+        }
+        if (event.data.type === 'sketch-2d-op') {
+          const pending = sketchPlanarRequests.current.get(
+            event.data.requestId
+          );
+          if (!pending) {
+            return;
+          }
+          sketchPlanarRequests.current.delete(event.data.requestId);
+          if (event.data.ok) {
+            pending.resolve(event.data.result);
           } else {
             pending.reject(new Error(event.data.error));
           }
@@ -750,6 +783,23 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
       return posted.ok
         ? posted.promise
         : Promise.reject(new Error('Geometry worker is unavailable.'));
+    },
+    sketchPlanarOperation(document, operation) {
+      const worker = workerRef.current;
+      if (!worker) {
+        return Promise.reject(new Error('Geometry worker is unavailable.'));
+      }
+      const requestId = crypto.randomUUID();
+      return new Promise((resolve, reject) => {
+        sketchPlanarRequests.current.set(requestId, { resolve, reject });
+        armedRef.current = true;
+        worker.postMessage({
+          type: 'sketch-2d-op',
+          requestId,
+          document: documentForWorker(document),
+          operation
+        });
+      });
     },
     invalidate() {
       lastSyncedKey.current = null;

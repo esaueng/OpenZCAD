@@ -13,6 +13,8 @@ import type {
   MeshQualityReport,
   RebuildProgress,
   SectionOutlineReport,
+  SketchPlanarOperation,
+  SketchPlanarResult,
   SketchSolveOutcome
 } from '@openzcad/kernel-adapter/exact';
 import {
@@ -91,6 +93,13 @@ export type GeometryWorkerRequest =
       requestId: string;
       document: ProjectDocument;
       sketchId: SketchId;
+    }
+  | {
+      /** One planar sketch edit: corner fillet, corner chamfer, or offset. */
+      type: 'sketch-2d-op';
+      requestId: string;
+      document: ProjectDocument;
+      operation: SketchPlanarOperation;
     }
   | {
       /**
@@ -211,6 +220,15 @@ export type GeometrySolveSketchResult =
     }
   | { type: 'solve-sketch'; ok: false; requestId: string; error: string };
 
+export type GeometrySketch2dOpResult =
+  | {
+      type: 'sketch-2d-op';
+      ok: true;
+      requestId: string;
+      result: SketchPlanarResult;
+    }
+  | { type: 'sketch-2d-op'; ok: false; requestId: string; error: string };
+
 /**
  * Per-face recognition answer. The `summary` is the wire form of the shared
  * `FaceRecognitionSummary`: recognized kind + dimensions, or the typed
@@ -246,6 +264,7 @@ export type GeometryWorkerResult =
   | GeometryMeshQualityResult
   | GeometrySectionResult
   | GeometrySolveSketchResult
+  | GeometrySketch2dOpResult
   | GeometryRecognizeImportedFaceResult;
 
 type ExactKernel = Awaited<ReturnType<typeof createExactKernelAdapter>>;
@@ -396,6 +415,7 @@ async function execute(job: GeometryWorkerJob): Promise<void> {
       request.type === 'mesh-quality' ||
       request.type === 'section' ||
       request.type === 'solve-sketch' ||
+      request.type === 'sketch-2d-op' ||
       request.type === 'recognize-imported-face'
     ) {
       // 'failed' means the next load call retries, so it is a loading state
@@ -410,6 +430,17 @@ async function execute(job: GeometryWorkerJob): Promise<void> {
           : new Error('The exact Remus kernel failed to load.');
       }
       post(stateFor('rebuilding', request, { stale: true }));
+      if (request.type === 'sketch-2d-op') {
+        const result = await exact.sketchPlanarOperation(request.operation);
+        post({
+          type: 'sketch-2d-op',
+          ok: true,
+          requestId: request.requestId,
+          result
+        });
+        post(stateFor('ready', request, { stale: false }));
+        return;
+      }
       if (request.type === 'recognize-imported-face') {
         // The face reference is resolved worker-side against the rebuilt
         // document: the main thread's pick carries rebuild-local identity
@@ -630,6 +661,13 @@ async function execute(job: GeometryWorkerJob): Promise<void> {
     } else if (request.type === 'solve-sketch') {
       post({
         type: 'solve-sketch',
+        ok: false,
+        requestId: request.requestId,
+        error: message
+      });
+    } else if (request.type === 'sketch-2d-op') {
+      post({
+        type: 'sketch-2d-op',
         ok: false,
         requestId: request.requestId,
         error: message
