@@ -257,7 +257,7 @@
         "plane": 6,
         "cylinder": 3
       },
-      "witnessedFaces": 6,
+      "witnessedFaces": 9,
       "witnessedEdges": 0,
       "lineageNames": [
         "boolean.face.operand.0.import.step.face.0c7f072b",
@@ -265,7 +265,10 @@
         "boolean.face.operand.0.import.step.face.58bf7705",
         "boolean.face.operand.0.import.step.face.62e02c7d",
         "boolean.face.operand.0.import.step.face.ac22b2bd",
-        "boolean.face.operand.0.import.step.face.d3a10e97"
+        "boolean.face.operand.0.import.step.face.d3a10e97",
+        "boolean.face.operand.1.pattern.face.instance.0.primitive.cylinder.face.wall",
+        "boolean.face.operand.1.pattern.face.instance.1.primitive.cylinder.face.wall",
+        "boolean.face.operand.1.pattern.face.instance.2.primitive.cylinder.face.wall"
       ],
       "faceHashDigest": "4aaa8306",
       "edgeHashDigest": "e46dc99a",
