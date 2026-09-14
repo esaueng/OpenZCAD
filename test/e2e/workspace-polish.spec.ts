@@ -200,7 +200,7 @@ test('names picked faces and edges without raw fingerprints', async ({
   const facePoint = await findFacePoint(page);
   await page.mouse.click(facePoint.x, facePoint.y);
   await expect(
-    page.getByRole('region', { name: 'Offset Face operation' })
+    page.getByRole('region', { name: 'Resize Body operation' })
   ).toBeVisible();
 
   const chip = page.locator('.selection-chip');
@@ -209,7 +209,7 @@ test('names picked faces and edges without raw fingerprints', async ({
   await expect(chip).toContainText(/face/i);
 
   // The operation card announces its lifecycle state explicitly.
-  const card = page.getByRole('region', { name: 'Offset Face operation' });
+  const card = page.getByRole('region', { name: 'Resize Body operation' });
   await expect(card.locator('.tool-card-phase')).toHaveText('Ready');
 
   // Dragging switches the phase pill.
@@ -229,7 +229,7 @@ test('fits the face tool card and orientation cube beside the inspector', async 
   const facePoint = await findFacePoint(page);
   await page.mouse.click(facePoint.x, facePoint.y);
 
-  const card = page.getByRole('region', { name: 'Offset Face operation' });
+  const card = page.getByRole('region', { name: 'Resize Body operation' });
   const inspector = page.getByRole('region', { name: 'Feature inspector' });
   await expect(card).toBeVisible();
   await expect(inspector).toBeVisible();
@@ -639,7 +639,7 @@ test('snaps sketch drawing to existing endpoints', async ({ page }) => {
 
   const facePoint = await findFacePoint(page);
   await page.mouse.click(facePoint.x, facePoint.y);
-  const card = page.getByRole('region', { name: 'Offset Face operation' });
+  const card = page.getByRole('region', { name: 'Resize Body operation' });
   await card.getByRole('tab', { name: 'Sketch' }).click();
   await expect(
     page.getByRole('toolbar', { name: 'Sketch tools' })

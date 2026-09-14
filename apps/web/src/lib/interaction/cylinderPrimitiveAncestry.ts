@@ -28,7 +28,7 @@ interface PrimitiveChain {
 }
 
 /**
- * Finds the literal cylinder primitive that owns one selected face, along
+ * Finds the source primitive that owns one selected face, along
  * with the features allowed to have named that face.
  *
  * Fillets and chamfers create new BodyIds, so a face on their result no
@@ -72,7 +72,9 @@ function primitiveChain(
     if (
       producer.data.featureKind === 'primitive' &&
       producer.data.primitiveKind === primitiveKind &&
-      typeof producer.data.dimensions[dimension] === 'number'
+      (typeof producer.data.dimensions[dimension] === 'number' ||
+        (primitiveKind === 'box' &&
+          typeof producer.data.dimensions[dimension] === 'string'))
     ) {
       primitive = producer;
       break;
@@ -133,6 +135,18 @@ function primitiveChain(
     )
       continue;
     try {
+      // Modifier box roles are recovered in the modifier's axis-aligned frame.
+      // A rotation before that modifier cannot prove the primitive's local axis.
+      if (
+        primitiveKind === 'box' &&
+        consumerIndex < features.length &&
+        [
+          feature.data.transform.rotationDeg.x,
+          feature.data.transform.rotationDeg.y,
+          feature.data.transform.rotationDeg.z
+        ].some((value) => resolveParamValue(value, scope, 'rotation') !== 0)
+      )
+        return null;
       scale *= resolveParamValue(
         feature.data.transform.scale ?? 1,
         scope,
@@ -230,6 +244,7 @@ export interface BoxFaceAncestor {
   dimension: BoxDimension;
   axis: BoxAxis;
   side: 'min' | 'max';
+  scale: number;
 }
 
 /**
@@ -237,9 +252,8 @@ export interface BoxFaceAncestor {
  *
  * Same contract as {@link primitiveCylinderHeightAncestor}: identity is
  * proven by a v5 role published by a feature in the walked chain, never by
- * geometry. The box is anchored at its minimum corner, so only a `max` side
- * moves under a pure dimension edit; the caller decides what a `min` side
- * falls back to.
+ * geometry. A minimum-side edit additionally shifts the primitive base so
+ * the opposite side stays fixed.
  */
 export function primitiveBoxFaceAncestor(
   document: ProjectDocument,
@@ -259,6 +273,6 @@ export function primitiveBoxFaceAncestor(
   const dimension = BOX_DIMENSION_BY_AXIS[axis];
   const chain = primitiveChain(document, selectedBodyId, 'box', dimension);
   return chain?.publishers.has(faceReference.producingFeatureId)
-    ? { primitive: chain.primitive, dimension, axis, side }
+    ? { primitive: chain.primitive, dimension, axis, side, scale: chain.scale }
     : null;
 }

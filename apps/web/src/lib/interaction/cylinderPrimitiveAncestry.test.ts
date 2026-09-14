@@ -17,6 +17,7 @@ import {
   type FeatureId
 } from '@openzcad/shared';
 import {
+  primitiveBoxFaceAncestor,
   primitiveCylinderHeightAncestor,
   primitiveCylinderRadiusAncestor
 } from './cylinderPrimitiveAncestry';
@@ -278,9 +279,9 @@ describe('cylinder height ancestry', () => {
       edgeHashes: [999],
       size: 0.5
     });
-    const outsiderFeatureId = listFeaturesInOrder(outsider.document)
-      .at(-1)!
-      .featureId;
+    const outsiderFeatureId = listFeaturesInOrder(outsider.document).at(
+      -1
+    )!.featureId;
 
     expect(
       primitiveCylinderHeightAncestor(
@@ -318,9 +319,9 @@ describe('cylinder height ancestry', () => {
       targetBodyId: sourceBodyId,
       distance: 0.25
     });
-    const offsetFeatureId = listFeaturesInOrder(offset.document)
-      .at(-1)!
-      .featureId;
+    const offsetFeatureId = listFeaturesInOrder(offset.document).at(
+      -1
+    )!.featureId;
     expect(
       primitiveCylinderHeightAncestor(
         offset.document,
@@ -371,9 +372,9 @@ describe('cylinder height ancestry', () => {
       edgeHashes: [101],
       size: 1
     });
-    const filletFeatureId = listFeaturesInOrder(withReference.document)
-      .at(-1)!
-      .featureId;
+    const filletFeatureId = listFeaturesInOrder(withReference.document).at(
+      -1
+    )!.featureId;
     expect(
       primitiveCylinderHeightAncestor(
         withReference.document,
@@ -389,9 +390,9 @@ describe('cylinder height ancestry', () => {
       edgeHashes: [101],
       size: 1
     });
-    const bareFilletFeatureId = listFeaturesInOrder(bare.document)
-      .at(-1)!
-      .featureId;
+    const bareFilletFeatureId = listFeaturesInOrder(bare.document).at(
+      -1
+    )!.featureId;
     expect(
       primitiveCylinderHeightAncestor(
         bare.document,
@@ -406,3 +407,41 @@ describe('cylinder height ancestry', () => {
 function sourceFeatureId(document: ReturnType<typeof cylinderDocument>) {
   return listFeaturesInOrder(document)[0]!.featureId;
 }
+
+describe('box side ancestry', () => {
+  it('does not mistake rotated modifier axes for source-box axes', () => {
+    const box = addPrimitiveFeature(
+      createProjectDocument('Box', toUserId('user_ancestry')),
+      {
+        name: 'Box',
+        primitiveKind: 'box',
+        dimensions: { width: '40', height: 24, depth: 10 }
+      }
+    );
+    const bodyId = box.bodyOrder[0]!;
+    const placed = transformBody(box, {
+      name: 'Rotate',
+      targetBodyId: bodyId,
+      translation: { x: 0, y: 0, z: 0 },
+      rotationDeg: { x: 90, y: 0, z: 0 }
+    }).document;
+    const fillet = filletEdges(placed, {
+      name: 'Fillet',
+      targetBodyId: bodyId,
+      edgeHashes: [101],
+      size: 1.5
+    });
+    const reference: FaceTopologyReferenceV5 = {
+      kind: 'face',
+      producingFeatureId: listFeaturesInOrder(fillet.document).at(-1)!
+        .featureId,
+      lineageName: 'modifier.box.face.y-min',
+      currentHash: 123,
+      witnessVersion: 1,
+      witness: {} as FaceWitnessV1
+    };
+    expect(
+      primitiveBoxFaceAncestor(fillet.document, fillet.bodyId, reference, 123)
+    ).toBeNull();
+  });
+});
