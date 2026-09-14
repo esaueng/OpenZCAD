@@ -9,8 +9,12 @@ import type {
 import type {
   createExactKernelAdapter,
   DxfFaceSelector,
+  ExactSectionPlane,
   MeshQualityReport,
   RebuildProgress,
+  SectionOutlineReport,
+  SketchPlanarOperation,
+  SketchPlanarResult,
   SketchSolveOutcome
 } from '@openzcad/kernel-adapter/exact';
 import {
@@ -28,7 +32,8 @@ import { preloadDocumentFonts } from '../lib/textFonts';
  * `stl-binary`, `3mf`, `obj`, and `glb` produce bytes. Mesh formats accept
  * a deflection in millimetres — chordal tolerance after unit scaling —
  * defaulting to the adapter's standard export tessellation when omitted.
- * `dxf` exports ONE planar face's outline and requires the `face` field.
+ * `dxf` exports a 2D outline and requires either a `face` (one planar
+ * face's outline) or a `section` plane (the exact cross-section).
  */
 export type GeometryExportFormat =
   'step' | 'stl' | 'dxf' | 'stl-binary' | '3mf' | 'obj' | 'glb';
@@ -53,8 +58,28 @@ export type GeometryWorkerRequest =
       bodyIds: BodyId[];
       format: GeometryExportFormat;
       deflection?: number;
-      /** Required for 'dxf': the planar face whose outline to export. */
+      /** One 'dxf' source: the planar face whose outline to export. */
       face?: DxfFaceSelector;
+      /** The other 'dxf' source: the plane whose exact section to export. */
+      section?: ExactSectionPlane;
+    }
+  | {
+      /**
+       * The exact, kernel-computed section at one plane. Requested when the
+       * section plane comes to rest, never while it is being dragged: the
+       * viewport's clipped preview owns the drag.
+       */
+      type: 'section';
+      requestId: string;
+      document: ProjectDocument;
+      plane: ExactSectionPlane;
+      /**
+       * The bodies to section. The caller names them because hiding and
+       * isolating are device-local view state the document does not carry;
+       * omitted, the adapter falls back to the document's own visibility
+       * and would section a body the viewport is not showing.
+       */
+      bodyIds?: BodyId[];
     }
   | {
       type: 'mesh-quality';
@@ -68,6 +93,13 @@ export type GeometryWorkerRequest =
       requestId: string;
       document: ProjectDocument;
       sketchId: SketchId;
+    }
+  | {
+      /** One planar sketch edit: corner fillet, corner chamfer, or offset. */
+      type: 'sketch-2d-op';
+      requestId: string;
+      document: ProjectDocument;
+      operation: SketchPlanarOperation;
     }
   | {
       /**
@@ -170,6 +202,15 @@ export type GeometryMeshQualityResult =
     }
   | { type: 'mesh-quality'; ok: false; requestId: string; error: string };
 
+export type GeometrySectionResult =
+  | {
+      type: 'section';
+      ok: true;
+      requestId: string;
+      report: SectionOutlineReport;
+    }
+  | { type: 'section'; ok: false; requestId: string; error: string };
+
 export type GeometrySolveSketchResult =
   | {
       type: 'solve-sketch';
@@ -178,6 +219,15 @@ export type GeometrySolveSketchResult =
       outcome: SketchSolveOutcome;
     }
   | { type: 'solve-sketch'; ok: false; requestId: string; error: string };
+
+export type GeometrySketch2dOpResult =
+  | {
+      type: 'sketch-2d-op';
+      ok: true;
+      requestId: string;
+      result: SketchPlanarResult;
+    }
+  | { type: 'sketch-2d-op'; ok: false; requestId: string; error: string };
 
 /**
  * Per-face recognition answer. The `summary` is the wire form of the shared
@@ -212,7 +262,9 @@ export type GeometryWorkerResult =
   | GeometrySyncResult
   | GeometryExportResult
   | GeometryMeshQualityResult
+  | GeometrySectionResult
   | GeometrySolveSketchResult
+  | GeometrySketch2dOpResult
   | GeometryRecognizeImportedFaceResult;
 
 type ExactKernel = Awaited<ReturnType<typeof createExactKernelAdapter>>;
@@ -361,7 +413,9 @@ async function execute(job: GeometryWorkerJob): Promise<void> {
     if (
       request.type === 'export' ||
       request.type === 'mesh-quality' ||
+      request.type === 'section' ||
       request.type === 'solve-sketch' ||
+      request.type === 'sketch-2d-op' ||
       request.type === 'recognize-imported-face'
     ) {
       // 'failed' means the next load call retries, so it is a loading state
@@ -376,6 +430,17 @@ async function execute(job: GeometryWorkerJob): Promise<void> {
           : new Error('The exact Remus kernel failed to load.');
       }
       post(stateFor('rebuilding', request, { stale: true }));
+      if (request.type === 'sketch-2d-op') {
+        const result = await exact.sketchPlanarOperation(request.operation);
+        post({
+          type: 'sketch-2d-op',
+          ok: true,
+          requestId: request.requestId,
+          result
+        });
+        post(stateFor('ready', request, { stale: false }));
+        return;
+      }
       if (request.type === 'recognize-imported-face') {
         // The face reference is resolved worker-side against the rebuilt
         // document: the main thread's pick carries rebuild-local identity
@@ -414,6 +479,21 @@ async function execute(job: GeometryWorkerJob): Promise<void> {
         post(stateFor('ready', request, { stale: false }));
         return;
       }
+      if (request.type === 'section') {
+        const report = await exact.sectionOutline(
+          document,
+          request.plane,
+          request.bodyIds
+        );
+        post({
+          type: 'section',
+          ok: true,
+          requestId: request.requestId,
+          report
+        });
+        post(stateFor('ready', request, { stale: false }));
+        return;
+      }
       if (request.type === 'mesh-quality') {
         const report = await exact.meshQuality(
           document,
@@ -430,10 +510,19 @@ async function execute(job: GeometryWorkerJob): Promise<void> {
         return;
       }
       if (request.format === 'dxf') {
-        if (!request.face) {
-          throw new Error('DXF export needs a face selection.');
+        if (!request.face && !request.section) {
+          throw new Error('DXF export needs a face selection or a section plane.');
         }
-        const text = await exact.exportFaceDxf(document, request.face);
+        const text = request.section
+          ? await exact.exportSectionDxf(
+              document,
+              request.section,
+              // Same bodies as the section on screen. An empty selection
+              // means the caller has nothing to narrow it by, so the
+              // adapter's own document visibility stands.
+              request.bodyIds.length > 0 ? request.bodyIds : undefined
+            )
+          : await exact.exportFaceDxf(document, request.face!);
         post({
           type: 'export',
           ok: true,
@@ -562,9 +651,23 @@ async function execute(job: GeometryWorkerJob): Promise<void> {
         requestId: request.requestId,
         error: message
       });
+    } else if (request.type === 'section') {
+      post({
+        type: 'section',
+        ok: false,
+        requestId: request.requestId,
+        error: message
+      });
     } else if (request.type === 'solve-sketch') {
       post({
         type: 'solve-sketch',
+        ok: false,
+        requestId: request.requestId,
+        error: message
+      });
+    } else if (request.type === 'sketch-2d-op') {
+      post({
+        type: 'sketch-2d-op',
         ok: false,
         requestId: request.requestId,
         error: message

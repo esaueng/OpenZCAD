@@ -24,19 +24,25 @@
  * body that would export as flats is exactly what this product refuses to
  * commit.
  */
-import type {
-  RemusKernel,
-  SolidOperationDetailedResult
-} from './remus-runtime';
+import type { RemusKernel } from './remus-runtime';
+import {
+  KernelRefusal,
+  kernelDetailString,
+  kernelRefusalIn,
+  type KernelRefusalCategory
+} from './kernel-refusal';
 
 /** The three exact booleans with a typed twin in the pinned kernel. */
 export type ExactBooleanOperation = 'cut' | 'fuse' | 'intersect';
 
-/** The kernel's own refusal taxonomy, kept in step with the pin. */
-export type BooleanRefusalCategory = Extract<
-  SolidOperationDetailedResult,
-  { status: 'error' }
->['category'];
+/**
+ * The kernel's own refusal taxonomy, kept in step with the pin.
+ *
+ * An alias of the shared {@link KernelRefusalCategory} rather than a second
+ * extraction: the kernel classifies a refused boolean out of the same set it
+ * uses for every other family, and the seam has exactly one copy of it.
+ */
+export type BooleanRefusalCategory = KernelRefusalCategory;
 
 const OPERATION_NOUN: Record<ExactBooleanOperation, string> = {
   cut: 'Subtract',
@@ -150,32 +156,29 @@ export interface ExactBooleanRefusalInit {
  * behind the detail disclosure — the same split the feature warnings already
  * use. `category` is the branchable field; nothing should parse `message`.
  */
-export class ExactBooleanRefusal extends Error {
+export class ExactBooleanRefusal extends KernelRefusal {
   readonly operation: ExactBooleanOperation;
-  readonly category: BooleanRefusalCategory;
-  readonly kernelCode: string;
-  readonly kernelMessage: string;
   readonly operands: readonly string[];
-  /** The refusal without its operation heading, for callers that add one. */
-  readonly reason: string;
 
   constructor(init: ExactBooleanRefusalInit) {
     const subject = operandPhrase(init.operands);
     const reason = refusalReason(init.operation, init.category, subject);
     const remedy = refusalRemedy(init.operation, init.category);
-    super(
-      `${OPERATION_NOUN[init.operation]} refused: ${reason}.` +
+    super({
+      family: 'boolean',
+      category: init.category,
+      kernelCode: init.kernelCode,
+      kernelMessage: init.kernelMessage,
+      reason,
+      message:
+        `${OPERATION_NOUN[init.operation]} refused: ${reason}.` +
         (remedy ? ` ${remedy}` : '') +
         `\nKernel refusal ${init.kernelCode} (${init.category}): ${init.kernelMessage}`,
-      init.cause === undefined ? undefined : { cause: init.cause }
-    );
+      ...(init.cause === undefined ? {} : { cause: init.cause })
+    });
     this.name = 'ExactBooleanRefusal';
     this.operation = init.operation;
-    this.category = init.category;
-    this.kernelCode = init.kernelCode;
-    this.kernelMessage = init.kernelMessage;
     this.operands = init.operands ?? [];
-    this.reason = reason;
   }
 }
 
@@ -189,27 +192,16 @@ export class ExactBooleanRefusal extends Error {
 export function exactBooleanRefusalOf(
   error: unknown
 ): ExactBooleanRefusal | null {
-  let current = error;
-  for (let depth = 0; depth < 8 && current instanceof Error; depth += 1) {
-    if (current instanceof ExactBooleanRefusal) {
-      return current;
-    }
-    current = (current as { cause?: unknown }).cause;
-  }
-  return null;
+  return kernelRefusalIn(
+    error,
+    (refusal): refusal is ExactBooleanRefusal =>
+      refusal instanceof ExactBooleanRefusal
+  );
 }
 
 /** The refusal clause behind an error, for callers with their own heading. */
 export function exactBooleanRefusalReason(error: unknown): string | null {
   return exactBooleanRefusalOf(error)?.reason ?? null;
-}
-
-function stringField(
-  details: Record<string, unknown>,
-  key: string
-): string | null {
-  const value = details[key];
-  return typeof value === 'string' && value.length > 0 ? value : null;
 }
 
 export type ExactBooleanOutcome =
@@ -246,9 +238,9 @@ export function exactBooleanOutcome(
     refusal: new ExactBooleanRefusal({
       operation,
       category: detailed.category,
-      kernelCode: stringField(details, 'kernelCode') ?? detailed.code,
+      kernelCode: kernelDetailString(details, 'kernelCode') ?? detailed.code,
       kernelMessage:
-        stringField(details, 'message') ??
+        kernelDetailString(details, 'message') ??
         'the exact modeling engine gave no further detail',
       operands
     })

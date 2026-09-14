@@ -1,9 +1,11 @@
 import {
+  constantRigidTransform,
   createBodyFeatureIds,
   createFeatureOnlyIds,
   createSketchFeatureIds,
   findSketch,
-  listFeaturesInOrder
+  listFeaturesInOrder,
+  rigidImportedSource
 } from '@openzcad/document-core';
 import type {
   BodyId,
@@ -12,6 +14,7 @@ import type {
   PlaneId,
   ProjectDocument,
   SketchObjectData,
+  Transform3D,
   Vector3
 } from '@openzcad/shared';
 import type { RecognizedOpening } from '@openzcad/shared';
@@ -62,6 +65,7 @@ export function recipeFromRecognizedOpening(
 export const GROWING_HOLDER_RECIPE_METADATA_KEY =
   'openzcad.growingHolderRecipe';
 const TEXT_BODY_METADATA_KEY = 'openzcad.growingHolderTextBody';
+const SOURCE_PLACEMENT_METADATA_KEY = 'openzcad.growingHolderSourcePlacement';
 
 export type OpeningAxis = 'x' | 'y' | 'z';
 
@@ -89,8 +93,8 @@ export interface GrowingHolderHeight {
 /**
  * A measured description of one opening in an imported solid whose two ends
  * are rigid and whose connecting section is straight. Every value is in
- * document units and in the source's own coordinate frame; nothing here is
- * inferred by the compiler. Version 1; later versions add fields, never
+ * document units and in the source's measured world coordinate frame; nothing
+ * here is inferred by the compiler. Version 1; later versions add fields, never
  * reinterpret these.
  */
 export interface GrowingHolderRecipe {
@@ -446,33 +450,6 @@ export function validateGrowingHolderRecipe(recipe: GrowingHolderRecipe): void {
     );
 }
 
-function sourceFeature(
-  document: ProjectDocument,
-  targetBodyId: BodyId
-): FeatureNode {
-  const features = listFeaturesInOrder(document);
-  const index = features.findIndex(
-    (f) => f.bodyId === targetBodyId && f.data.featureKind === 'imported-step'
-  );
-  const source = features[index];
-  if (!source || source.data.featureKind !== 'imported-step')
-    throw new Error('Growing-holder recipes require an imported STEP source.');
-  if (
-    features
-      .slice(index + 1)
-      .some(
-        (f) =>
-          ('targetBodyId' in f.data && f.data.targetBodyId === targetBodyId) ||
-          ('targetBodyIds' in f.data &&
-            f.data.targetBodyIds.includes(targetBodyId))
-      )
-  )
-    throw new Error(
-      'Growing-holder recipes require an unmodified imported source.'
-    );
-  return source;
-}
-
 function hasParameter(document: ProjectDocument, name: string): boolean {
   return Object.values(document.nodes).some(
     (node) => node.kind === 'parameter' && node.name === name
@@ -517,25 +494,48 @@ export function growingHolderCommand(
   recipe: GrowingHolderRecipe
 ): GrowingHolderCompilation {
   validateGrowingHolderRecipe(recipe);
-  const source = sourceFeature(document, recipe.targetBodyId);
+  const imported = rigidImportedSource(document, recipe.targetBodyId);
+  if (!imported)
+    throw new Error(
+      'Growing-holder recipes require an imported STEP source with only fixed moves or rotations. Scaling, parameter-driven placement and shape edits are not supported.'
+    );
+  const { source, placement } = imported;
   let sourceData = source.data;
   if (sourceData.featureKind !== 'imported-step')
     throw new Error('unreachable');
+  if (sourceData.planarEmboss)
+    throw new Error('The imported source already has separated lettering.');
   const plan = growingHolderPlan(recipe);
   const commands: AnyCommand[] = [];
   const originalSourceData = sourceData;
+  const placeSource = (bodyId: BodyId) => {
+    for (const [index, transform] of placement.entries())
+      commands.push(
+        commandFactories.transformBody({
+          name: `${recipe.name}: source placement ${index + 1}`,
+          targetBodyId: bodyId,
+          ...transform,
+          ids: createFeatureOnlyIds()
+        })
+      );
+  };
+  const sourcePlacement = placement.length
+    ? { sourcePlacement: placement }
+    : {};
   if (recipe.lettering) {
     if (!recipe.height)
       throw new Error('Grouped lettering requires a measured height control.');
-    if (sourceData.planarEmboss)
-      throw new Error('The imported source already has separated lettering.');
     if (hasParameter(document, 'show_text'))
       throw new Error(
         'A show_text parameter already exists. Rename it before creating the lettering control.'
       );
     sourceData = {
       ...sourceData,
-      planarEmboss: { part: 'base', selection: recipe.lettering.selection }
+      planarEmboss: {
+        part: 'base',
+        selection: recipe.lettering.selection,
+        ...sourcePlacement
+      }
     };
     commands.push(
       commandFactories.updateFeature({
@@ -570,6 +570,7 @@ export function growingHolderCommand(
         })
       );
       sourceBodyId = copy.bodyId;
+      placeSource(sourceBodyId);
     }
     const mask = createBodyFeatureIds();
     commands.push(
@@ -648,7 +649,12 @@ export function growingHolderCommand(
   commands.push(
     commandFactories.setNodeMetadata({
       nodeId: result.featureNodeId,
-      metadata: { [GROWING_HOLDER_RECIPE_METADATA_KEY]: JSON.stringify(recipe) }
+      metadata: {
+        [GROWING_HOLDER_RECIPE_METADATA_KEY]: JSON.stringify(recipe),
+        ...(placement.length
+          ? { [SOURCE_PLACEMENT_METADATA_KEY]: JSON.stringify(placement) }
+          : {})
+      }
     })
   );
   if (recipe.lettering) {
@@ -658,9 +664,14 @@ export function growingHolderCommand(
         ...originalSourceData,
         name: 'Text',
         ids: text,
-        planarEmboss: { part: 'text', selection: recipe.lettering.selection }
+        planarEmboss: {
+          part: 'text',
+          selection: recipe.lettering.selection,
+          ...sourcePlacement
+        }
       })
     );
+    placeSource(text.bodyId);
     commands.push(
       commandFactories.transformBody({
         name: 'Keep text together',
@@ -805,21 +816,39 @@ export function growingHolderHistories(
    */
   const movedExactly = (
     target: BodyId,
-    translation: Record<OpeningAxis, ParamValue>
+    translation: Record<OpeningAxis, ParamValue>,
+    placement: Transform3D[] = []
   ): FeatureNode | null | false => {
     const targeting = moves.filter(
       (f) =>
         f.data.featureKind === 'transform' && f.data.targetBodyId === target
     );
+    if (!placementMatches(targeting.slice(0, placement.length), placement))
+      return false;
+    const remaining = targeting.slice(placement.length);
     if (AXES.every((axis) => translation[axis] === 0))
-      return targeting.length === 0 ? null : false;
-    const match = targeting[0];
-    return targeting.length === 1 &&
+      return remaining.length === 0 ? null : false;
+    const match = remaining[0];
+    return remaining.length === 1 &&
       live(match) &&
       translationMatches(match.data, target, translation)
       ? match
       : false;
   };
+  const placementMatches = (actual: FeatureNode[], expected: Transform3D[]) =>
+    actual.length === expected.length &&
+    actual.every(
+      (feature, index) =>
+        live(feature) &&
+        feature.data.featureKind === 'transform' &&
+        JSON.stringify(constantRigidTransform(feature.data.transform)) ===
+          JSON.stringify(expected[index])
+    );
+  const sourceMoves = (bodyId: BodyId) =>
+    moves.filter(
+      (f) =>
+        f.data.featureKind === 'transform' && f.data.targetBodyId === bodyId
+    );
   /** The live intersect of a source reference with a placed box mask of `box`. */
   const carvedPiece = (
     pieceBody: BodyId,
@@ -867,6 +896,18 @@ export function growingHolderHistories(
     });
     const source = byBody.get(recipe.targetBodyId);
     if (!live(source) || source.data.featureKind !== 'imported-step') continue;
+    const originalMoves = sourceMoves(recipe.targetBodyId);
+    const placement = originalMoves.flatMap((feature) => {
+      if (!live(feature) || feature.data.featureKind !== 'transform') return [];
+      const transform = constantRigidTransform(feature.data.transform);
+      return transform ? [transform] : [];
+    });
+    if (placement.length !== originalMoves.length) continue;
+    if (
+      (union.metadata?.[SOURCE_PLACEMENT_METADATA_KEY] ?? '[]') !==
+      JSON.stringify(placement)
+    )
+      continue;
     let intact = true;
     const pieceFeatures: Record<string, FeatureNode> = {};
     const pieceSources: Record<string, BodyId> = {};
@@ -878,6 +919,19 @@ export function growingHolderHistories(
         return;
       }
       pieceSources[piece.key] = carved.sourceBody;
+      const placed = sourceMoves(carved.sourceBody);
+      if (
+        !placementMatches(placed, placement) ||
+        placed.some(
+          (move) =>
+            features.indexOf(move) <=
+              features.indexOf(byBody.get(carved.sourceBody)!) ||
+            features.indexOf(move) >= features.indexOf(carved.feature)
+        )
+      ) {
+        intact = false;
+        return;
+      }
       if (index === 0) {
         if (carved.sourceBody !== recipe.targetBodyId) intact = false;
       } else {
@@ -968,9 +1022,13 @@ export function growingHolderHistories(
         textImport.data.planarEmboss?.part !== 'text' ||
         JSON.stringify(textImport.data.planarEmboss.selection) !==
           JSON.stringify(recipe.lettering.selection) ||
+        JSON.stringify(textImport.data.planarEmboss.sourcePlacement ?? []) !==
+          JSON.stringify(placement) ||
+        JSON.stringify(source.data.planarEmboss?.sourcePlacement ?? []) !==
+          JSON.stringify(placement) ||
         JSON.stringify({ ...textImport.data, planarEmboss: undefined }) !==
           JSON.stringify({ ...source.data, planarEmboss: undefined }) ||
-        !movedExactly(textId, textMove(recipe))
+        !movedExactly(textId, textMove(recipe), placement)
       )
         continue;
       text = { bodyId: textId, move: textMove(recipe) };
