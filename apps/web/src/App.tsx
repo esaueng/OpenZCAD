@@ -4,7 +4,6 @@ import {
   parameterBuildError
 } from './lib/parameterEdit';
 import type { parameterVisualPreview } from './lib/parameterVisualPreview';
-import { ResumeSessionDialog } from './components/ResumeSessionDialog';
 import { LatestTask } from './lib/latestTask';
 import { rebuildProgressLabel } from './lib/rebuildProgressLabel';
 import { featureHistory, featureResultBodyIds } from './lib/featureHistory';
@@ -314,8 +313,6 @@ import {
   VISUAL_SELECTION_ACCEPTANCE_DEMO
 } from './lib/demoDefinitions';
 import type { DemoDefinition } from './lib/demoDefinitions';
-import { ProjectConflictDialog } from './components/ProjectConflictDialog';
-import { SaveRevisionDialog } from './components/SaveRevisionDialog';
 import { createProjectSharingClient } from './lib/projectSharing';
 import {
   captureProjectInvitationLink,
@@ -639,6 +636,24 @@ const LazySketchToolRail = lazyWithStaleChunkNotice(() =>
     default: module.SketchToolRail
   }))
 );
+// Three modal dialogs nobody sees in an ordinary session: a resume offer, a
+// named checkpoint, and a save conflict. They loaded with the app and sat in
+// the entry chunk; the gesture that opens one can afford to fetch it.
+const LazyResumeSessionDialog = lazyWithStaleChunkNotice(() =>
+  import('./components/ResumeSessionDialog').then((module) => ({
+    default: module.ResumeSessionDialog
+  }))
+);
+const LazySaveRevisionDialog = lazyWithStaleChunkNotice(() =>
+  import('./components/SaveRevisionDialog').then((module) => ({
+    default: module.SaveRevisionDialog
+  }))
+);
+const LazyProjectConflictDialog = lazyWithStaleChunkNotice(() =>
+  import('./components/ProjectConflictDialog').then((module) => ({
+    default: module.ProjectConflictDialog
+  }))
+);
 const LazySketchEntityEditor = lazyWithStaleChunkNotice(() =>
   import('./components/SketchEntityEditor').then((module) => ({
     default: module.SketchEntityEditor
@@ -768,6 +783,36 @@ function SketchToolRail(props: ComponentProps<typeof LazySketchToolRail>) {
   return (
     <Suspense fallback={null}>
       <LazySketchToolRail {...props} />
+    </Suspense>
+  );
+}
+
+function ResumeSessionDialog(
+  props: ComponentProps<typeof LazyResumeSessionDialog>
+) {
+  return (
+    <Suspense fallback={null}>
+      <LazyResumeSessionDialog {...props} />
+    </Suspense>
+  );
+}
+
+function SaveRevisionDialog(
+  props: ComponentProps<typeof LazySaveRevisionDialog>
+) {
+  return (
+    <Suspense fallback={null}>
+      <LazySaveRevisionDialog {...props} />
+    </Suspense>
+  );
+}
+
+function ProjectConflictDialog(
+  props: ComponentProps<typeof LazyProjectConflictDialog>
+) {
+  return (
+    <Suspense fallback={null}>
+      <LazyProjectConflictDialog {...props} />
     </Suspense>
   );
 }
