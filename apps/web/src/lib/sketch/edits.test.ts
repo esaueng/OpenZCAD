@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { CommandManager, commandFactories } from '@openzcad/command-system';
+import {
+  CommandManager,
+  commandFactories,
+  type AnyCommand
+} from '@openzcad/command-system';
 import {
   addSketchFeature,
   createProjectDocument,
@@ -22,9 +26,12 @@ import {
 } from '@openzcad/shared';
 import {
   SKETCH_EDIT_TOOL_SPECS,
+  advanceSketchEdit,
   advanceSketchEditPick,
   planSketchEdit,
   refuseEditPick,
+  runSketchEdit,
+  type SketchEditHost,
   resolveSketchCorner,
   resolveSketchLoop,
   sketchChamferCommands,
@@ -770,5 +777,106 @@ describe('the pick sequence and plan the rail drives', () => {
         resolve
       )
     ).toEqual({ status: 'refuse', reason: 'Fillet needs 2 pick(s).' });
+  });
+});
+
+describe('driving a modify tool end to end through its host', () => {
+  function recordingHost(
+    base: ProjectDocument,
+    applied: { commands: AnyCommand[]; label: string }[]
+  ) {
+    const log: string[] = [];
+    const picks: string[] = [];
+    const values: string[] = [];
+    const host: SketchEditHost = {
+      setStatus: (message) => log.push(message),
+      setError: (message) => {
+        if (message) log.push(`error: ${message}`);
+      },
+      setBusy: (busy) => log.push(busy ? 'busy' : 'idle'),
+      resolve,
+      addPick: (objectId) => picks.push(objectId),
+      askValue: (kind, sequence, label, initial) =>
+        values.push(`${kind} ${sequence.join(',')} ${label} ${initial}`),
+      runOperation: async (operation) =>
+        withAdapter((adapter) => adapter.sketchPlanarOperation(operation)),
+      commit: async (sketchId, commands, label) => {
+        applied.push({ commands, label });
+        return true;
+      },
+      describeFailure: (error, fallback) =>
+        error instanceof Error ? error.message : fallback
+    };
+    return { host, log, picks, values, base };
+  }
+
+  it('walks pick, pick, value for a fillet and commits one transaction', async () => {
+    const { document, sketch, legA, legB } = fixture();
+    const applied: { commands: AnyCommand[]; label: string }[] = [];
+    const { host, log, picks, values } = recordingHost(document, applied);
+
+    advanceSketchEdit(
+      host,
+      document,
+      sketch,
+      { kind: 'fillet', picks: [] },
+      legA
+    );
+    expect(picks).toEqual([legA]);
+    advanceSketchEdit(
+      host,
+      document,
+      sketch,
+      { kind: 'fillet', picks: [legA] },
+      legB
+    );
+    expect(values).toEqual([`fillet ${legA},${legB} Fillet radius 2.5`]);
+
+    await runSketchEdit(host, document, sketch, 'fillet', [legA, legB], 2, '2');
+    expect(applied).toHaveLength(1);
+    expect(applied[0]!.label).toBe('Fillet');
+    // Two trims, the arc, four joint constraints and the radius.
+    expect(applied[0]!.commands).toHaveLength(8);
+    expect(log).toContain('Fillet applied.');
+    expect(log.at(-1)).toBe('idle');
+  });
+
+  it('reports a kernel refusal without committing anything', async () => {
+    const { document, sketch, legA, legB } = fixture();
+    const applied: { commands: AnyCommand[]; label: string }[] = [];
+    const { host, log } = recordingHost(document, applied);
+    await runSketchEdit(
+      host,
+      document,
+      sketch,
+      'chamfer',
+      [legA, legB],
+      12,
+      '12'
+    );
+    expect(applied).toHaveLength(0);
+    // The busy flag is always released, refusal or not, and the refusal is
+    // both the status line and the sketch error.
+    expect(log.at(-1)).toBe('idle');
+    expect(log.filter((entry) => /only 10\.000 long/.test(entry))).toHaveLength(
+      2
+    );
+  });
+
+  it('refuses a pick without asking for a value', () => {
+    const { document, sketch, rectangle } = fixture();
+    const { host, log, picks, values } = recordingHost(document, []);
+    advanceSketchEdit(
+      host,
+      document,
+      sketch,
+      { kind: 'fillet', picks: [] },
+      rectangle
+    );
+    expect(picks).toEqual([]);
+    expect(values).toEqual([]);
+    expect(log).toEqual([
+      'A rectangle is one object, and its corners carry no constraints. Draw the profile as lines to modify a corner.'
+    ]);
   });
 });

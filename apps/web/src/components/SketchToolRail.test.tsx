@@ -241,7 +241,11 @@ describe('SketchToolRail', () => {
 
     rerender(<SketchToolRail {...props} canConstrain />);
     await user.click(screen.getByRole('button', { name: /^Fillet$/ }));
-    expect(onEditTool).toHaveBeenCalledWith('fillet');
+    // The hint travels with the tool so App does not have to look it up.
+    expect(onEditTool).toHaveBeenCalledWith(
+      'fillet',
+      'Click two lines that meet, then enter the radius.'
+    );
 
     rerender(
       <SketchToolRail
