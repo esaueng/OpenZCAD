@@ -28,7 +28,7 @@ import {
   viewDirectionFor,
   applyDisplayMode,
   applySectionPlane,
-  EXACT_SECTION,
+  exactSectionSnapshot,
   sectionClippingPlane,
   CameraController,
   buildCylinderRadiusHandle,
@@ -3717,27 +3717,9 @@ export function ModelViewer({
         });
       });
       // Kernel section geometry, which replaces the cap on a body it covers.
-      const exactSections: {
-        triangles: number;
-        curves: number;
-        bounds: { min: number[]; max: number[] };
-      }[] = [];
-      const exactGroup = bodyGroup.getObjectByName(EXACT_SECTION);
-      for (const child of exactGroup?.children ?? []) {
-        if (!(child instanceof THREE.Mesh)) {
-          continue;
-        }
-        const geometry = child.geometry as THREE.BufferGeometry;
-        geometry.computeBoundingBox();
-        const bounds = geometry.boundingBox!;
-        exactSections.push({
-          triangles: (geometry.index?.count ?? 0) / 3,
-          curves: (exactGroup?.children ?? []).filter(
-            (node) => node instanceof THREE.LineLoop
-          ).length,
-          bounds: { min: bounds.min.toArray(), max: bounds.max.toArray() }
-        });
-      }
+      // Counted per region by the viewport itself, so each entry reports its
+      // own boundary curves rather than the group's total.
+      const exactSections = exactSectionSnapshot(bodyGroup);
       detail.resolve({
         sectionCaps,
         exactSections,
