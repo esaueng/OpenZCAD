@@ -296,6 +296,7 @@ export interface HistoryCheckpointEntry {
  * part.
  */
 export interface MeasuredBodyCacheEntry {
+  analysisKey?: string;
   includeMassProperties: boolean;
   /** `shape.solids.join(',')` — the handle-identity key. */
   solidKey: string;
