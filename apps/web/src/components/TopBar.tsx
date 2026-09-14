@@ -262,6 +262,7 @@ export function TopBar({
       <div className="topbar-divider" />
       <div
         className="mode-switch"
+        data-active={workspaceMode}
         role="group"
         aria-label="Workspace mode"
         title="Switch between viewing, tweaking parameters and modeling (Ctrl+Shift+M)"
