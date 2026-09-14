@@ -1,4 +1,4 @@
-import type { ParameterVisualPreview } from '../lib/parameterVisualPreview';
+import type { ParameterPreviewBody } from '../lib/parameterVisualPreview';
 import { useRef, type MutableRefObject, type ReactNode } from 'react';
 import {
   ModelViewer,
@@ -15,6 +15,7 @@ import {
 } from './ModelViewer';
 import type {
   AxisProjection,
+  ExactSectionRegionDisplay,
   MovePreview,
   MoveSnap,
   PickDetail,
@@ -26,6 +27,11 @@ import type {
   WheelDevice
 } from '@openzcad/viewport';
 import { ViewerToolbar } from './ViewerToolbar';
+import {
+  sectionOutlineFor,
+  type SectionOutlineState,
+  type ViewportGeometry
+} from '../lib/sectionOutline';
 import { OrientationWidget } from './OrientationWidget';
 import {
   ViewportScaleIndicator,
@@ -94,8 +100,15 @@ type ProjectThumbnailSyncState = readonly [
 
 interface ViewerShellProps {
   projectId: string;
-  bodies: BodyRepresentation[];
-  parameterVisualPreview?: ParameterVisualPreview | null;
+  /**
+   * What the viewport is drawing, as the one value the workspace built it
+   * as: the document, its bodies on screen, and anything standing in front
+   * of them. The bodies and the stand-ins arrive together, and the section
+   * below is filtered through the same value, so what is drawn, what the
+   * rail says about it and what the DXF button offers cannot describe
+   * different models.
+   */
+  view: ViewportGeometry<ParameterPreviewBody>;
   sketches: SketchOverlay[];
   measurementAnnotations: MeasurementViewportAnnotation[];
   measurementCloudSync?: MeasurementCloudSyncState;
@@ -147,6 +160,13 @@ interface ViewerShellProps {
   onViewChange(view: ViewportCameraState): void;
   onViewSettled(view: ViewportCameraState): void;
   onGeometryPresented?(durationMs: number): void;
+  /**
+   * The viewer's own report of which bodies it drew away from their document
+   * pose. It goes back to the workspace and returns as
+   * `view.drawnElsewhere`, which is what stops a section describing a body
+   * the viewport has moved out from under it.
+   */
+  onBodiesDrawnElsewhere?(bodyIds: string[]): void;
   onWheelDeviceLearned?(device: WheelDevice): void;
   orientationRef: MutableRefObject<((axes: AxisProjection) => void) | null>;
   selectionFilter: SelectionFilter;
@@ -251,12 +271,19 @@ interface ViewerShellProps {
   sectionRange: { min: number; max: number } | null;
   onCycleSection(): void;
   onSectionOffset(offset: number): void;
+  onSectionCommit(): void;
+  onExportSectionDxf(): void;
+  /**
+   * What the section view is showing. The viewport's kernel geometry is
+   * derived from it here rather than passed in beside it, so the drawn cut
+   * and the rail's description of it can never disagree.
+   */
+  sectionOutline: SectionOutlineState;
 }
 
 export function ViewerShell({
   projectId,
-  bodies,
-  parameterVisualPreview,
+  view,
   sketches,
   measurementAnnotations,
   measurementCloudSync,
@@ -292,6 +319,7 @@ export function ViewerShell({
   onViewChange,
   onViewSettled,
   onGeometryPresented,
+  onBodiesDrawnElsewhere,
   onWheelDeviceLearned,
   orientationRef,
   onSelectTopology,
@@ -351,8 +379,22 @@ export function ViewerShell({
   onToggleProjection,
   sectionRange,
   onCycleSection,
-  onSectionOffset
+  onSectionOffset,
+  onSectionCommit,
+  onExportSectionDxf,
+  sectionOutline
 }: ViewerShellProps) {
+  const { bodies, standIns: parameterVisualPreview } = view;
+  /**
+   * The section as this drawing may show it. An exact section describes the
+   * document's own geometry, and while a stand-in is up the viewport is not
+   * drawing that geometry — so the curves, the measured area on the rail and
+   * the DXF button all come down together, from one reading of one value.
+   */
+  const drawnSection = sectionOutlineFor(view, sectionOutline);
+  /** Kernel section geometry for the resting plane; null while dragging. */
+  const exactSection: ExactSectionRegionDisplay[] | null =
+    drawnSection.kind === 'exact' ? drawnSection.regions : null;
   const orientationDragRef = useRef<OrientationDragControls | null>(null);
   const scaleIndicatorRef = useRef<ViewportScaleSink | null>(null);
   const selectionChipLabelRef = useRef<HTMLSpanElement | null>(null);
@@ -391,6 +433,10 @@ export function ViewerShell({
       sectionRange={sectionRange}
       onCycleSection={onCycleSection}
       onSectionOffset={onSectionOffset}
+      onSectionCommit={onSectionCommit}
+      onExportSectionDxf={onExportSectionDxf}
+      sectionOutline={drawnSection}
+      units={units}
     />
   );
   return (
@@ -435,6 +481,7 @@ export function ViewerShell({
         selectedEdges={selectedEdges}
         pickListEnabled={pickListEnabled}
         settings={settings}
+        exactSection={exactSection}
         fitSignal={fitSignal}
         viewRequest={viewRequest}
         normalToFaceRequest={normalToFaceRequest}
@@ -449,6 +496,7 @@ export function ViewerShell({
         onViewChange={onViewChange}
         onViewSettled={onViewSettled}
         onGeometryPresented={onGeometryPresented}
+        onBodiesDrawnElsewhere={onBodiesDrawnElsewhere}
         onWheelDeviceLearned={onWheelDeviceLearned}
         orientationRef={orientationRef}
         orientationDragRef={orientationDragRef}

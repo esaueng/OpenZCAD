@@ -4,7 +4,8 @@ import {
   importStepBody,
   listParameters,
   normalizeDocument,
-  setParameter
+  setParameter,
+  transformBody
 } from '@openzcad/document-core';
 import {
   createCadDocumentDigest,
@@ -28,7 +29,7 @@ import { preflightCadPatch } from '../apps/web/src/lib/aiPatchPreflight';
 import { growingHolderPreview } from '../apps/web/src/lib/growingHolderPreview';
 import { assistantSuggestions } from '../apps/web/src/lib/assistant/suggestions';
 
-it('takes a fresh STEP through an AI proposal, rigid preview, undo, reopen and toggle exports', async () => {
+async function checkLetteredHolder(moved: boolean) {
   const kernel = new RemusKernel();
   const io = await loadRemusTranslators();
   const adapter = await createExactKernelAdapter();
@@ -45,6 +46,19 @@ it('takes a fresh STEP through an AI proposal, rigid preview, undo, reopen and t
         stepText: new TextDecoder().decode(step)
       }
     ).document;
+    if (moved) {
+      const bodyId = imported.bodyOrder[0]!;
+      imported = transformBody(imported, {
+        name: 'Move',
+        targetBodyId: bodyId,
+        translation: { x: 35, y: -17, z: 9 }
+      }).document;
+      imported = transformBody(imported, {
+        name: 'Move again',
+        targetBodyId: bodyId,
+        translation: { x: -5, y: 2, z: 1 }
+      }).document;
+    }
     imported = { ...imported, derived: await adapter.syncDocument(imported) };
     const selection = { bodyIds: [], featureIds: [], topologies: [] };
     const proposal = createGrowingHolderProposal(imported, selection)!;
@@ -71,8 +85,15 @@ it('takes a fresh STEP through an AI proposal, rigid preview, undo, reopen and t
       (p) => p.name === 'show_text'
     )!.toggle!.bodyIds[0]!;
     const history = growingHolderHistories(candidate)[0]!;
+    expect(history).toBeDefined();
     expect(history.text?.bodyId).toBe(textId);
     const first = candidate.derived.bodyRepresentations[textId]!;
+    if (moved) {
+      expect(history.source.data.featureKind).toBe('imported-step');
+      if (history.source.data.featureKind !== 'imported-step')
+        throw new Error('source');
+      expect(history.source.data.planarEmboss?.sourcePlacement).toHaveLength(2);
+    }
     const grown = setParameter(
       setParameter(candidate, { name: 'opening_width', expression: '60' }),
       { name: 'holder_height', expression: '46' }
@@ -142,4 +163,10 @@ it('takes a fresh STEP through an AI proposal, rigid preview, undo, reopen and t
     adapter.dispose();
     kernel.free();
   }
-}, 120_000);
+}
+
+it.each([false, true])(
+  'takes a STEP (moved: %s) through an AI proposal, rigid preview, undo, reopen and toggle exports',
+  checkLetteredHolder,
+  120_000
+);

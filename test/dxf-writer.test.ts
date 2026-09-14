@@ -32,7 +32,7 @@ describe('formatDxfNumber', () => {
 });
 
 describe('writeDxf', () => {
-  it('wraps entities in an R12 skeleton', () => {
+  it('wraps entities in an R12 skeleton that declares millimetres', () => {
     const text = writeDxf([]);
     const p = pairs(text);
     expect(p).toEqual([
@@ -40,6 +40,11 @@ describe('writeDxf', () => {
       [2, 'HEADER'],
       [9, '$ACADVER'],
       [1, 'AC1009'],
+      // $INSUNITS 4 is millimetres; $MEASUREMENT 1 is the metric setup.
+      [9, '$INSUNITS'],
+      [70, '4'],
+      [9, '$MEASUREMENT'],
+      [70, '1'],
       [0, 'ENDSEC'],
       [0, 'SECTION'],
       [2, 'ENTITIES'],

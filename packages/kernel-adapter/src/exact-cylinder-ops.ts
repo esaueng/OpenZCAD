@@ -13,6 +13,7 @@ import {
   exactFuse,
   exactBooleanRefusalReason
 } from './exact-boolean-refusal';
+import { unifyAndRequireValidSolid } from './kernel-validation';
 import {
   ANALYTIC_MATCH_EPSILON,
   GEOMETRY_EPSILON,
@@ -273,15 +274,18 @@ export function fillThroughHole(
     throw new Error(
       `Filling the through-hole failed: ${
         exactBooleanRefusalReason(error) ??
-        (error instanceof Error ? error.message : 'the kernel rejected the fuse')
+        (error instanceof Error
+          ? error.message
+          : 'the kernel rejected the fuse')
       }.`,
       { cause: error }
     );
   }
-  kernel.unifyFaces(filled);
-  if (kernel.validateSolid(filled) !== 0) {
-    throw new Error('Filling the through-hole did not produce a valid solid.');
-  }
+  unifyAndRequireValidSolid(
+    kernel,
+    filled,
+    'Filling the through-hole did not produce a valid solid.'
+  );
   if (kernel.getSolidFaces(filled).length >= facesBefore) {
     throw new Error(
       "This through-hole could only be filled by replacing the body's exact surfaces with flat triangles, so it was refused."
@@ -411,10 +415,11 @@ export function drillHole(
   for (const tool of tools) {
     cut = exactCut(kernel, cut, tool);
   }
-  kernel.unifyFaces(cut);
-  if (kernel.validateSolid(cut) !== 0) {
-    throw new Error('The hole cut did not produce a valid solid.');
-  }
+  unifyAndRequireValidSolid(
+    kernel,
+    cut,
+    'The hole cut did not produce a valid solid.'
+  );
   const volumeAfter = kernel.volume(cut, HOLE_PROOF_DEFLECTION);
   if (!(volumeAfter < volumeBefore - GEOMETRY_EPSILON)) {
     throw new Error('The hole removed no material — it misses the body.');

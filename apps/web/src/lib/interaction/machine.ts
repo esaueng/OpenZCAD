@@ -143,6 +143,13 @@ export interface CommandDiagnostic {
    * one, and that feature is where the user has to go.
    */
   culprit?: { featureId: string; featureName: string };
+  /**
+   * The exact kernel's own classification of the refusal, when the rebuild
+   * recorded one. `message` is copy and may be reworded; this is the field a
+   * card branches on to tell "the engine will not do this" from "the body
+   * came back malformed".
+   */
+  category?: string;
 }
 
 interface OperationLifecycle {
