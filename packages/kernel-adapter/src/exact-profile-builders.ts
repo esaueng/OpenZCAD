@@ -1215,10 +1215,20 @@ function guidedSweepSolid(
   face: number,
   path: SketchPathReference,
   guide: SketchPathReference,
+  mode: 'standard' | 'smooth',
   pathEdges: readonly number[],
   scope: Record<string, number>,
   sketchBases: ReadonlyMap<SketchId, PlaneBasis>
 ): number {
+  if (mode === 'smooth') {
+    // `guidedSweep` takes no segment count and no surfacing argument, so a
+    // saved Smooth sweep would come back at the kernel's default surfacing
+    // while the feature still says Smooth. Refuse the combination by name
+    // rather than rebuild the body at a surfacing nobody asked for.
+    throw new Error(
+      'A sweep guide rail is available in Standard surface mode only: the kernel\u2019s guided sweep takes no surface-mode control, so a Smooth sweep would be rebuilt at a different surfacing than the one saved. Set Surface mode to Standard, or clear the guide rail.'
+    );
+  }
   if (sameSketchPath(path, guide)) {
     throw new Error(
       'A sweep guide rail must be a different path from the one being swept along; a rail lying on the path leaves the profile unrotated and the kernel reports no error.'
@@ -1292,6 +1302,7 @@ export function buildProfileSweep(
         face,
         feature.data.path,
         guide,
+        feature.data.mode,
         edges,
         scope,
         sketchBases
