@@ -67,6 +67,12 @@ export default defineConfig({
       '@openzcad/kernel-adapter/exact': fileURLToPath(
         new URL('./packages/kernel-adapter/src/exact.ts', import.meta.url)
       ),
+      '@openzcad/kernel-adapter/mesh-import-formats': fileURLToPath(
+        new URL(
+          './packages/kernel-adapter/src/mesh-import-formats.ts',
+          import.meta.url
+        )
+      ),
       '@openzcad/ai-contracts/auto-parameterize': fileURLToPath(
         new URL(
           './packages/ai-contracts/src/auto-parameterize.ts',

@@ -449,15 +449,15 @@ export function TopBar({
             <strong className="topbar-menu-label">Import</strong>
             <label
               className="topbar-menu-item"
-              title="Import STEP, STL, or a paired Shapr3D project and STEP"
+              title="Import STEP, a mesh file (STL, 3MF, OBJ, GLB, PLY), or a paired Shapr3D project and STEP"
             >
               <Upload size={13} aria-hidden="true" />
               <span>Import CAD files…</span>
-              <small>STEP · STL</small>
+              <small>STEP · STL · 3MF · OBJ · GLB · PLY</small>
               <input
                 type="file"
-                aria-label="Import STEP or STL…"
-                accept=".shapr,.stl,.step,.stp"
+                aria-label="Import STEP or a mesh file…"
+                accept=".shapr,.stl,.step,.stp,.3mf,.obj,.glb,.ply"
                 multiple
                 style={{ display: 'none' }}
                 onChange={(event: ChangeEvent<HTMLInputElement>) => {
