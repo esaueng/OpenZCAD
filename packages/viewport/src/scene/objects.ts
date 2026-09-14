@@ -76,7 +76,7 @@ export function applyDisplayMode(bodyGroup: THREE.Group, mode: DisplayMode) {
       // stayed on screen. A THREE.Line is not a THREE.Mesh, which is what
       // tells the fill and the curves apart here.
       if (child instanceof THREE.Mesh) {
-        const material = child.material;
+        const material = (child as THREE.Mesh).material;
         if (material instanceof THREE.Material) {
           material.visible = mode !== 'wireframe';
         }

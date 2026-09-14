@@ -65,7 +65,7 @@ describe('the section panel', () => {
   it('names the exact section, shows its area, and exports it', () => {
     const onExportSectionDxf = vi.fn();
     renderToolbar(
-      { kind: 'exact', regions: [], area: 187.4538, refused: 0 },
+      { kind: 'exact', regions: [], area: 187.4538, missed: 0, unsectioned: 0 },
       { onExportSectionDxf }
     );
     expect(screen.getByText('Exact section')).toBeTruthy();
@@ -74,6 +74,44 @@ describe('the section panel', () => {
     expect(button).toHaveProperty('disabled', false);
     fireEvent.click(button);
     expect(onExportSectionDxf).toHaveBeenCalledOnce();
+  });
+
+  it('still exports when the plane merely misses a body', () => {
+    renderToolbar({
+      kind: 'exact',
+      regions: [],
+      area: 540,
+      missed: 1,
+      unsectioned: 0
+    });
+    expect(screen.getByText('540.00 mm² of material, 1 body is not cut here'))
+      .toBeTruthy();
+    // The exporter treats a plane that misses a body as an ordinary section,
+    // so the drawing is complete and the button stays live.
+    expect(
+      screen.getByLabelText('Export the exact section as DXF')
+    ).toHaveProperty('disabled', false);
+  });
+
+  it('shuts the export when a body the plane cuts has no exact section', () => {
+    const onExportSectionDxf = vi.fn();
+    renderToolbar(
+      { kind: 'exact', regions: [], area: 540, missed: 0, unsectioned: 1 },
+      { onExportSectionDxf }
+    );
+    // The kernel section IS on screen for the body that came out exact, so
+    // the rail still names it; the drawing would be missing the other body's
+    // material, and `exportSectionDxf` refuses rather than dropping it.
+    expect(screen.getByText('Exact section')).toBeTruthy();
+    expect(
+      screen.getByText(
+        '540.00 mm² of material, 1 body has no exact section, so there is no drawing to export'
+      )
+    ).toBeTruthy();
+    const button = screen.getByLabelText('Export the exact section as DXF');
+    expect(button).toHaveProperty('disabled', true);
+    fireEvent.click(button);
+    expect(onExportSectionDxf).not.toHaveBeenCalled();
   });
 
   it('shows a refusal in full and keeps the export shut', () => {

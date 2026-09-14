@@ -157,8 +157,8 @@ export function exactSectionSnapshot(
     if (!(child instanceof THREE.Mesh)) {
       continue;
     }
-    const region = child.userData.exactSectionRegion;
-    const geometry = child.geometry;
+    const region: unknown = child.userData.exactSectionRegion;
+    const geometry = (child as THREE.Mesh).geometry;
     geometry.computeBoundingBox();
     const bounds = geometry.boundingBox!;
     entries.push({
