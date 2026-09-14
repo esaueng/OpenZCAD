@@ -54,6 +54,7 @@ import {
   shiftBasisAlongNormal,
   subtract
 } from './exact-math';
+import { planarFaceCentroid } from './exact-face-centroid';
 import { connectedRegionGroups, resolveRegionProfiles } from './region-profile';
 import {
   basisMatchesLiftedFrame,
@@ -875,9 +876,39 @@ function sectionPlane(
  */
 const LOFT_APEX_MIN_STANDOFF = 1e-6;
 
+/**
+ * A point standing for where the rest of the loft sits, used to decide which
+ * side of the closing section's plane an apex is on. The already-built face of
+ * the section before the closing one is the honest answer, measured on the
+ * kernel; its sketch plane's origin is the fallback, since a plane can be
+ * shared between sections or sit well away from the profile drawn on it.
+ */
+function sectionInteriorPoint(
+  kernel: RemusKernel,
+  face: number,
+  basis: PlaneBasis
+): Vec3 {
+  return (
+    planarFaceCentroid(kernel, face, basis.normal)?.centroid ?? basis.origin
+  );
+}
+
+/**
+ * Resolve a loft apex point and prove it actually closes the section run.
+ *
+ * The kernel applies `endPoint` unconditionally. An apex placed *between* the
+ * sections folds the final ruled band back through the body: the result is
+ * self-intersecting, its reported volume is *lower* than the unapexed loft's,
+ * the apex is buried out of sight so the viewport looks unchanged, and
+ * `validateSolid` reports nothing. So the guard has to be a signed one — the
+ * apex must lie on the far side of the closing section's plane from the
+ * section before it — and not a bare standoff, which only catches the
+ * exactly-on-plane case.
+ */
 function loftApexPoint(
   value: { x: ParamValue; y: ParamValue; z: ParamValue },
   basis: PlaneBasis,
+  interiorPoint: Vec3,
   scope: Record<string, number>,
   label: string
 ): [number, number, number] {
@@ -889,10 +920,22 @@ function loftApexPoint(
   ) {
     throw new Error(`${label} must resolve to finite coordinates.`);
   }
-  const standoff = Math.abs(dot(subtract(point, basis.origin), basis.normal));
-  if (standoff < LOFT_APEX_MIN_STANDOFF) {
+  const standoff = dot(subtract(point, basis.origin), basis.normal);
+  if (Math.abs(standoff) < LOFT_APEX_MIN_STANDOFF) {
     throw new Error(
       `${label} lies on the plane of the section it closes, which would cap the loft with a flat point instead of an apex. Move it off that plane or clear it.`
+    );
+  }
+  const interior = dot(subtract(interiorPoint, basis.origin), basis.normal);
+  if (Math.abs(interior) < LOFT_APEX_MIN_STANDOFF) {
+    // The section before the closing one is coplanar with it, so there is no
+    // side to be on. That loft is degenerate for reasons of its own; leave the
+    // refusal to the kernel and the solid validator rather than guess a side.
+    return [point.x, point.y, point.z];
+  }
+  if (Math.sign(standoff) === Math.sign(interior)) {
+    throw new Error(
+      `${label} is on the same side of the closing section as the rest of the loft, so the apex falls inside the body and folds the last section band back through it. Move it beyond the closing section, or clear it.`
     );
   }
   return [point.x, point.y, point.z];
@@ -946,16 +989,24 @@ export function buildLoft(
       'A loft apex point is available in Ruled mode only: the kernel\u2019s smooth section surfaces do not close against an apex and return an invalid solid. Switch the loft to Ruled, or clear its apex point.'
     );
   }
+  const closingPlane = sectionPlane(
+    document,
+    sections[sections.length - 1]!,
+    sketchBases,
+    `Loft section ${sections.length}`
+  );
+  const previousPlane = sectionPlane(
+    document,
+    sections[sections.length - 2]!,
+    sketchBases,
+    `Loft section ${sections.length - 1}`
+  );
   const options = {
     ruled: true,
     endPoint: loftApexPoint(
       endPoint,
-      sectionPlane(
-        document,
-        sections[sections.length - 1]!,
-        sketchBases,
-        `Loft section ${sections.length}`
-      ),
+      closingPlane,
+      sectionInteriorPoint(kernel, faces[faces.length - 2]!, previousPlane),
       scope,
       'The loft apex point'
     )
@@ -966,7 +1017,7 @@ export function buildLoft(
     validated = validateGeneratedSolid(kernel, solid, 'Loft to an apex point');
   } catch (error) {
     throw new Error(
-      `${errorText(error)} The apex point has to stand clear of the section run it closes; one placed inside or beyond the sections folds the loft back on itself.`,
+      `${errorText(error)} An apex that is off to one side of the closing section, far enough for the last band to cross an earlier one, folds the loft back on itself; move the apex over the closing section, or clear it.`,
       { cause: error }
     );
   }
@@ -1178,7 +1229,13 @@ function guidedSweepSolid(
       `A sweep guide rail needs a single-curve path, but this path resolves to ${pathEdges.length} curves (an arc wider than a quarter turn is split). Sweep along one line or one quarter-turn arc, or clear the guide rail.`
     );
   }
-  const guideEdges = sweepPathEdges(kernel, document, guide, scope, sketchBases);
+  const guideEdges = sweepPathEdges(
+    kernel,
+    document,
+    guide,
+    scope,
+    sketchBases
+  );
   if (guideEdges.length !== 1) {
     throw new Error(
       `A sweep guide rail must be a single curve, but this rail resolves to ${guideEdges.length} curves (an arc wider than a quarter turn is split). Choose one line or one quarter-turn arc as the rail.`
