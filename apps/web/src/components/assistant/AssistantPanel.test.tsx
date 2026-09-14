@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react';
+import { act, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import type { ComponentProps } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -102,9 +102,7 @@ describe('clearing the assistant conversation', () => {
     await waitFor(() =>
       expect(loadAssistantThread(doc.projectId)).toHaveLength(0)
     );
-    expect(
-      screen.queryByText('Put a 6 mm hole through the boss')
-    ).toBeNull();
+    expect(screen.queryByText('Put a 6 mm hole through the boss')).toBeNull();
   });
 
   it('does not ask when the user has turned confirmations off', async () => {
@@ -118,5 +116,63 @@ describe('clearing the assistant conversation', () => {
     await waitFor(() =>
       expect(loadAssistantThread(doc.projectId)).toHaveLength(0)
     );
+  });
+});
+
+describe('selected geometry analysis', () => {
+  it('requires one selected part before starting geometry work', async () => {
+    const onAnalyze = vi.fn();
+    const { user } = await renderPanel({ onAnalyze });
+    await user.click(
+      screen.getByRole('button', { name: 'Analyze selected geometry' })
+    );
+    expect(onAnalyze).not.toHaveBeenCalled();
+    expect(
+      screen.getByText(
+        'Select one part and optionally one or two faces to analyze.'
+      )
+    ).toBeInTheDocument();
+  });
+
+  it('ignores analysis completing after the document changes', async () => {
+    let finish!: (derived: typeof doc.derived) => void;
+    const onAnalyze = vi.fn(
+      () =>
+        new Promise<typeof doc.derived>((resolve) => {
+          finish = resolve;
+        })
+    );
+    const props: ComponentProps<typeof AssistantPanel> = {
+      document: doc,
+      selection: { bodyIds: ['selected-part'], featureIds: [], topologies: [] },
+      onApply: vi.fn().mockResolvedValue(true),
+      onPreview: vi.fn().mockResolvedValue({ ok: true }),
+      onAnalyze,
+      collapsed: false,
+      onCollapsedChange: vi.fn(),
+      confirmDestructive: false
+    };
+    const user = userEvent.setup();
+    const { rerender } = render(<AssistantPanel {...props} />);
+    await user.click(
+      await screen.findByRole('button', { name: 'Analyze selected geometry' })
+    );
+    expect(onAnalyze).toHaveBeenCalledWith(doc, {
+      bodyId: 'selected-part',
+      faceHashes: []
+    });
+    rerender(
+      <AssistantPanel
+        {...props}
+        document={{ ...doc, version: doc.version + 1 }}
+      />
+    );
+    await act(async () => {
+      finish(doc.derived);
+    });
+    expect(screen.queryByText(/Analysis complete/)).toBeNull();
+    expect(
+      screen.getByRole('button', { name: 'Analyze selected geometry' })
+    ).toBeEnabled();
   });
 });

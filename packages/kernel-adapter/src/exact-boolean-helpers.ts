@@ -14,13 +14,17 @@ import {
 import { MEASUREMENT_DEFLECTION } from './exact-witnesses';
 import { displayTessellationForExtents } from './display-tessellation';
 import {
-  booleanFacetFallbackWarning,
   censusOfSolids,
   countFaceConnectedComponents,
   inspectTriangleMeshClosure,
   isClosedConsistentlyOrientedMesh,
-  selectSafelyUnifiedSolid
+  selectSafelyUnifiedSolid,
+  unionSwallowedCurvature
 } from './boolean-result-validation';
+import {
+  exactBooleanOutcome,
+  exactFuseAll
+} from './exact-boolean-refusal';
 import type { UnionBounds } from './union-connectivity';
 import type { ExactShape } from './exact-types';
 import {
@@ -148,21 +152,23 @@ export function exactUnionOffsetSuggestion(
     } catch {
       continue;
     }
-    // A candidate that swallows the mover inside the anchor also loses every
-    // curved face, so it fails this same check rather than being offered as a
-    // move that makes the user's new body disappear.
+    // A candidate that swallows the mover inside the anchor loses every
+    // curved face, so it is rejected rather than offered as a move that makes
+    // the user's new body disappear. The kernel's own exact-only refusal
+    // covers the case this check used to share with it — a silently faceted
+    // fuse — which is why only the swallowing half remains.
     if (
-      booleanFacetFallbackWarning({
+      unionSwallowedCurvature({
         operands: operandCensus,
         result: censusOfSolids(kernel, [candidate])
-      }) !== null
+      })
     ) {
       continue;
     }
-    // And it has to be a solid. Faceting is not the only way a tangency
-    // fails, so clearing the facet check alone would let this offer a move
-    // that trades one refusal for the other — worse than the general advice
-    // it replaces, which is the one thing this must never be.
+    // And it has to be a solid. Losing the mover is not the only way a
+    // tangency fails, so clearing the curvature check alone would let this
+    // offer a move that trades one refusal for the other — worse than the
+    // general advice it replaces, which is the one thing this must never be.
     try {
       if (
         kernel.validateSolid(candidate) !== 0 ||
@@ -212,7 +218,11 @@ export function unifyBooleanFaces(kernel: RemusKernel, solid: number): number {
  * it on validation alone sent a perfectly good raw union to the strict pass
  * as "open, non-manifold, or inconsistently oriented".
  */
-export function unifyUnionFaces(kernel: RemusKernel, solid: number, onAccepted?: (solid: number) => void): number {
+export function unifyUnionFaces(
+  kernel: RemusKernel,
+  solid: number,
+  onAccepted?: (solid: number) => void
+): number {
   return selectSafelyUnifiedSolid(
     kernel,
     solid,
@@ -224,8 +234,20 @@ export function unifyUnionFaces(kernel: RemusKernel, solid: number, onAccepted?:
   );
 }
 
-export function fuseUniformSolid(kernel: RemusKernel, solids: number[], onAccepted?: (solid: number) => void): number {
-  const fused = kernel.fuseAll(Uint32Array.from(solids));
+/**
+ * Fuse a cluster into one solid, naming the member that refused.
+ *
+ * `labels` runs parallel to `solids`: a union passes the body names, a
+ * pattern passes its instance numbers, and a caller with nothing meaningful
+ * to say passes nothing rather than inventing a name.
+ */
+export function fuseUniformSolid(
+  kernel: RemusKernel,
+  solids: number[],
+  labels?: readonly string[],
+  onAccepted?: (solid: number) => void
+): number {
+  const fused = exactFuseAll(kernel, solids, labels);
   return unifyUnionFaces(kernel, fused, onAccepted);
 }
 
@@ -430,15 +452,19 @@ export function solidsShareMaterialOrTouch(
   right: number
 ): boolean {
   try {
+    // A refused intersection is not evidence of separation, which is why the
+    // typed outcome is read rather than thrown: the distance query below
+    // answers contact directly. It is also the path for kernels that report
+    // penetration depth instead of zero for intersecting solids.
+    const common = exactBooleanOutcome(kernel, 'intersect', left, right);
     if (
-      kernel.volume(kernel.intersect(left, right), MEASUREMENT_DEFLECTION) > 0
+      common.status === 'ok' &&
+      kernel.volume(common.solid, MEASUREMENT_DEFLECTION) > 0
     ) {
       return true;
     }
   } catch {
-    // A refused intersection is not evidence of separation; the distance
-    // query below answers contact directly. It is also the path for kernels
-    // that report penetration depth instead of zero for intersecting solids.
+    // A kernel that throws instead of answering says nothing either way.
   }
   try {
     const distance = kernel.solidToSolidDistance(left, right)[0];

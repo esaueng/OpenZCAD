@@ -1158,6 +1158,48 @@ export type FaceAreaProvenance =
   /** A curved boundary inscribed with a fixed point count. */
   | 'sampled';
 
+/**
+ * Per-face on-demand recognition of one imported STEP face.
+ *
+ * Phase D of the imported STEP edit plan wires the existing
+ * `recognizeImportedFeature` module through a lazy geometry-worker query into
+ * the Inspector. The result rides this additive payload on top of the bulk
+ * `recognizedImportedFeatures` list published at rebuild: `recognized` covers
+ * a face the proof consumed, while `refusal` carries the typed refusal reason
+ * for a face the proof declined. Presence is the contract — a face without
+ * this field was never queried, not refused.
+ */
+export interface FaceRecognitionSummary {
+  kind: 'recognized' | 'unsupported';
+  /** Recognized feature kind, present only when `kind` is `recognized`. */
+  featureKind?: RecognizedImportedFeature['kind'];
+  /**
+   * Stable refusal reason from the recognition module, present only when
+   * `kind` is `unsupported`. Never a free-text guess.
+   */
+  refusalReason?: RecognitionRefusalReason;
+  /** Human-readable recognition outcome, shown verbatim in the Inspector. */
+  message: string;
+  /**
+   * Display dimensions in document units (diameters, depths, lengths, angles
+   * in radians) keyed by the proof's own field names, minus identity fields.
+   * Recognition dimensions arrive pre-scaled by the worker that measured them.
+   */
+  dimensions?: Record<string, number>;
+}
+
+/** Typed refusal reasons from the imported-feature recognition module. */
+export type RecognitionRefusalReason =
+  | 'seed-face-missing'
+  | 'work-limit-exceeded'
+  | 'unsupported-surface'
+  | 'partial-revolution'
+  | 'blend-detected'
+  | 'rib-detected'
+  | 'intersection-detected'
+  | 'ambiguous-twins'
+  | 'incomplete-proof';
+
 export interface FaceGeometry {
   /** Underlying surface class (plane, cylinder, cone, B-spline, ...). */
   surfaceType: string;
@@ -1227,6 +1269,13 @@ export interface FaceGeometry {
   featureType?: 'through-hole' | 'blend';
   /** Rolling-ball radius for a recognized blend surface. */
   blendRadius?: number;
+  /**
+   * On-demand per-face recognition outcome for an imported STEP face (Phase D
+   * of the imported STEP edit plan). Additive only: queried lazily through
+   * the geometry worker and cached by callers, never part of the rebuild
+   * payload or any ADR-011 witness input.
+   */
+  recognition?: FaceRecognitionSummary;
   /**
    * Rebuild-local identity of the exact tangency-connected blend region.
    * Kernel handles are intentionally not persisted beyond derived state.
@@ -1414,6 +1463,8 @@ export interface EdgeCurve {
 }
 
 export interface BodyTopology {
+  /** Independent exact raised-profile group; it does not require an opening. */
+  recognizedPlanarEmboss?: PlanarEmbossSelection;
   faces: FaceTopology[];
   edges: EdgeTopology[];
   /** Non-overlapping exact proofs created while imported topology is live. */
@@ -1876,9 +1927,34 @@ export interface FeatureWarning {
    * about the result, and it belongs where the kernel makes it.
    */
   kind: 'build-failed' | 'refusal' | 'advisory' | 'suppressed';
+  /**
+   * The exact kernel's own classification, present only when this warning
+   * came from a boolean the exact-only pipeline refused.
+   *
+   * Session-only like the rest of this record, and the field to branch on:
+   * `message` is product copy and may be reworded at any time, while
+   * `category` is the kernel's taxonomy — `quality_refused`, `unsupported`,
+   * `resource_limit`, `nonconvergence`, `invalid_input`, `invalid_topology`,
+   * `tolerance_violation`, `cancelled`, `internal`. It is typed as a string
+   * rather than a union so a new kernel category cannot break a build here
+   * before anyone has decided what it means.
+   */
+  exactBooleanRefusal?: {
+    operation: 'cut' | 'fuse' | 'intersect';
+    category: string;
+    code: string;
+  };
+}
+
+/** Explicit, bounded foreground analysis; never part of canonical history. */
+export interface EditAnalysisRequest {
+  bodyId: string;
+  /** Zero finds a bounded set; one or two restrict the measured face pair. */
+  faceHashes: number[];
 }
 
 export interface DerivedState {
+  editAnalysis?: EditAnalysisRequest;
   bodyRepresentations: Record<BodyId, BodyRepresentation>;
   exportableBodyIds: BodyId[];
   warnings: string[];
