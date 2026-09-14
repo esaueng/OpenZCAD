@@ -1,4 +1,8 @@
-import { listFeaturesInOrder } from '@openzcad/document-core';
+import {
+  getParameterScope,
+  listFeaturesInOrder,
+  resolveParamValue
+} from '@openzcad/document-core';
 import {
   commandFactories,
   composeCommands,
@@ -66,11 +70,14 @@ export interface FaceOffsetPlanInput {
   offset: number;
   /** A typed expression to keep live in the document instead of the number. */
   exact?: ParamValue;
+  /** Explicitly chosen local face extrusion. */
+  localOnly?: boolean;
 }
 
 const DIRECT_EDIT_NAME = 'Offset face';
 
 function dimensionEdit(
+  document: ProjectDocument,
   primitive: FeatureNode,
   dimension: string,
   offset: number,
@@ -84,16 +91,23 @@ function dimensionEdit(
   }
   const dimensions = primitive.data.dimensions;
   const current = dimensions[dimension];
-  // The ancestry only resolves against a numeric dimension; narrowing here
-  // keeps that guarantee visible instead of casting it away.
-  if (typeof current !== 'number') {
+  if (current === undefined) return null;
+  let evaluated: number;
+  try {
+    evaluated = resolveParamValue(
+      current,
+      getParameterScope(document).scope,
+      dimension
+    );
+  } catch {
     return null;
   }
+  if (!Number.isFinite(evaluated)) return null;
   // The drag was measured along the side's outward normal, which is the
   // dimension's own axis whatever rigid placement it sits under, so the
   // gesture is a signed delta on the stored value. Composing a typed
   // expression keeps it live in the document.
-  const value = current + offset;
+  const value = evaluated + offset;
   return {
     kind: 'primitive-dimension',
     command: commandFactories.updateFeature(
@@ -103,11 +117,13 @@ function dimensionEdit(
           dimensions: {
             ...dimensions,
             [dimension]:
-              typeof exact === 'string'
-                ? `${current} + (${exact})`
-                : roundDimension
-                  ? Math.round(value * 1000) / 1000
-                  : value
+              typeof current === 'string'
+                ? `(${current}) + (${exact ?? offset})`
+                : typeof exact === 'string'
+                  ? `${current} + (${exact})`
+                  : roundDimension
+                    ? Math.round(value * 1000) / 1000
+                    : value
           }
         }
       },
@@ -120,6 +136,74 @@ function dimensionEdit(
   };
 }
 
+function shiftPrimitiveBase(
+  document: ProjectDocument,
+  primitive: FeatureNode,
+  command: AnyCommand,
+  axis: 'x' | 'y' | 'z',
+  delta: ParamValue,
+  label: string,
+  placementName: string
+): AnyCommand | null {
+  if (!primitive.bodyId) return null;
+  const features = listFeaturesInOrder(document);
+  const index = features.findIndex(
+    (feature) => feature.featureId === primitive.featureId
+  );
+  const placement = features[index + 1];
+  const shift: ParamValue = typeof delta === 'string' ? `-(${delta})` : -delta;
+  const commands = [command];
+  // A local shift before every modifier and placement keeps the far cap
+  // fixed even when the body has subsequently been rotated or scaled.
+  if (
+    placement &&
+    !isFeatureSuppressed(placement) &&
+    placement.data.featureKind === 'transform' &&
+    placement.data.targetBodyId === primitive.bodyId &&
+    (placement.data.transform.scale ?? 1) === 1 &&
+    Object.values(placement.data.transform.rotationDeg).every(
+      (value) => value === 0
+    )
+  ) {
+    const transform = placement.data.transform;
+    const previous = transform.translation[axis];
+    commands.push(
+      commandFactories.updateFeature(
+        {
+          featureId: placement.featureId,
+          data: {
+            transform: {
+              ...transform,
+              translation: {
+                ...transform.translation,
+                [axis]:
+                  typeof previous === 'number' && typeof shift === 'number'
+                    ? previous + shift
+                    : `(${previous}) + (${shift})`
+              }
+            }
+          }
+        },
+        placementName
+      )
+    );
+  } else {
+    const move = commandFactories.transformBody({
+      name: placementName,
+      targetBodyId: primitive.bodyId,
+      translation: { x: 0, y: 0, z: 0, [axis]: shift }
+    });
+    commands.push(
+      move,
+      commandFactories.moveFeature({
+        featureId: move.payload.ids!.featureId,
+        toIndex: index + 1
+      })
+    );
+  }
+  return composeCommands(label, commands);
+}
+
 /** Pure. Null when the face is not an exact plane or the offset is a no-op. */
 export function planFaceOffset(
   input: FaceOffsetPlanInput
@@ -129,17 +213,15 @@ export function planFaceOffset(
   if (
     geometry?.surfaceType !== 'plane' ||
     !geometry.normal ||
+    !Number.isFinite(offset) ||
     Math.abs(offset) <= 1e-9
   ) {
     return null;
   }
 
-  const extrude = extrudeCapAncestor(
-    document,
-    bodyId,
-    face.reference,
-    faceHash
-  );
+  const extrude =
+    !input.localOnly &&
+    extrudeCapAncestor(document, bodyId, face.reference, faceHash);
   if (extrude) {
     const { feature, distance, sense } = extrude;
     const value = distance + sense * offset;
@@ -170,12 +252,9 @@ export function planFaceOffset(
     };
   }
 
-  const cylinder = primitiveCylinderCapAncestor(
-    document,
-    bodyId,
-    face.reference,
-    faceHash
-  );
+  const cylinder =
+    !input.localOnly &&
+    primitiveCylinderCapAncestor(document, bodyId, face.reference, faceHash);
   if (cylinder) {
     const localOffset = Math.round(offset * 1000) / 1000 / cylinder.scale;
     const localExact =
@@ -183,6 +262,7 @@ export function planFaceOffset(
         ? `(${exact}) / ${cylinder.scale}`
         : exact;
     const plan = dimensionEdit(
+      document,
       cylinder.primitive,
       'height',
       localOffset,
@@ -193,91 +273,60 @@ export function planFaceOffset(
     );
     if (plan?.kind === 'primitive-dimension') {
       if (cylinder.side === 'start' && !plan.preflightRejection) {
-        const primitive = cylinder.primitive;
-        if (!primitive.bodyId) return null;
-        const features = listFeaturesInOrder(document);
-        const index = features.findIndex(
-          (feature) => feature.featureId === primitive.featureId
+        const command = shiftPrimitiveBase(
+          document,
+          cylinder.primitive,
+          plan.command,
+          'z',
+          typeof localExact === 'string' ? localExact : localOffset,
+          'Resize Cylinder Height',
+          'Move Cylinder Base'
         );
-        const placement = features[index + 1];
-        const shift: ParamValue =
-          typeof localExact === 'string' ? `-(${localExact})` : -localOffset;
-        const commands = [plan.command];
-        // A local shift before every modifier and placement keeps the far cap
-        // fixed even when the body has subsequently been rotated or scaled.
-        if (
-          placement &&
-          !isFeatureSuppressed(placement) &&
-          placement.data.featureKind === 'transform' &&
-          placement.data.targetBodyId === primitive.bodyId &&
-          (placement.data.transform.scale ?? 1) === 1 &&
-          Object.values(placement.data.transform.rotationDeg).every(
-            (value) => value === 0
-          )
-        ) {
-          const transform = placement.data.transform;
-          const z = transform.translation.z;
-          commands.push(
-            commandFactories.updateFeature(
-              {
-                featureId: placement.featureId,
-                data: {
-                  transform: {
-                    ...transform,
-                    translation: {
-                      ...transform.translation,
-                      z:
-                        typeof z === 'number' && typeof shift === 'number'
-                          ? z + shift
-                          : `(${z}) + (${shift})`
-                    }
-                  }
-                }
-              },
-              'Move Cylinder Base'
-            )
-          );
-        } else {
-          const move = commandFactories.transformBody({
-            name: 'Move Cylinder Base',
-            targetBodyId: primitive.bodyId,
-            translation: { x: 0, y: 0, z: shift }
-          });
-          commands.push(
-            move,
-            commandFactories.moveFeature({
-              featureId: move.payload.ids!.featureId,
-              toIndex: index + 1
-            })
-          );
-        }
-        plan.command = composeCommands('Resize Cylinder Height', commands);
+        if (!command) return null;
+        plan.command = command;
       }
       return { ...plan, value: plan.value * cylinder.scale };
     }
   }
 
-  const box = primitiveBoxFaceAncestor(
-    document,
-    bodyId,
-    face.reference,
-    faceHash
-  );
-  // Only a max side moves under a dimension edit: the box grows from its
-  // minimum corner, so a min-side drag would have to move the body as well
-  // and keeps the local push/pull.
-  if (box && box.side === 'max') {
+  const box =
+    !input.localOnly &&
+    primitiveBoxFaceAncestor(document, bodyId, face.reference, faceHash);
+  if (box) {
+    const localOffset = Math.round(offset * 1000) / 1000 / box.scale;
+    const localExact =
+      typeof exact === 'string' && box.scale !== 1
+        ? `(${exact}) / ${box.scale}`
+        : exact;
+    const label = `Resize ${box.primitive.name} ${box.dimension}`;
     const plan = dimensionEdit(
+      document,
       box.primitive,
       box.dimension,
-      offset,
-      exact,
-      `Resize ${box.primitive.name} ${box.dimension}`,
-      `That distance would leave the box with no ${box.dimension}.`
+      localOffset,
+      localExact,
+      label,
+      `That distance would leave the box with no ${box.dimension}.`,
+      false
     );
-    if (plan) {
-      return plan;
+    if (plan?.kind === 'primitive-dimension') {
+      if (box.side === 'min' && !plan.preflightRejection) {
+        const command = shiftPrimitiveBase(
+          document,
+          box.primitive,
+          plan.command,
+          box.axis,
+          typeof localExact === 'string' ? localExact : localOffset,
+          label,
+          'Move Box Base'
+        );
+        if (!command) return null;
+        plan.command = command;
+      }
+      return { ...plan, value: plan.value * box.scale };
     }
+    // A proven resize must never turn into a different operation on failure.
+    return null;
   }
 
   return {
@@ -326,7 +375,7 @@ export function faceOffsetBaseline(
   );
   const primitive =
     cylinder?.primitive.data.featureKind === 'primitive'
-      ? { node: cylinder.primitive, dimension: 'height' }
+      ? { node: cylinder.primitive, dimension: 'height', scale: cylinder.scale }
       : (() => {
           const box = primitiveBoxFaceAncestor(
             document,
@@ -334,15 +383,28 @@ export function faceOffsetBaseline(
             face.reference,
             faceHash
           );
-          return box && box.side === 'max'
-            ? { node: box.primitive, dimension: box.dimension }
+          return box
+            ? {
+                node: box.primitive,
+                dimension: box.dimension,
+                scale: box.scale
+              }
             : null;
         })();
   if (!primitive || primitive.node.data.featureKind !== 'primitive') {
     return undefined;
   }
   const value = primitive.node.data.dimensions[primitive.dimension];
-  return typeof value === 'number'
-    ? { total: value * (cylinder?.scale ?? 1), sense: 1 }
-    : undefined;
+  if (value === undefined) return undefined;
+  try {
+    const total =
+      resolveParamValue(
+        value,
+        getParameterScope(document).scope,
+        primitive.dimension
+      ) * primitive.scale;
+    return Number.isFinite(total) ? { total, sense: 1 } : undefined;
+  } catch {
+    return undefined;
+  }
 }

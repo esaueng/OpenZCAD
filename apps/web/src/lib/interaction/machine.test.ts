@@ -64,6 +64,39 @@ const region: RegionTarget = {
 const plane: SketchPlaneRef = { type: 'canonical', plane: 'XY', offset: 0 };
 
 describe('interactionReducer', () => {
+  it('distinguishes body resize from an explicitly chosen face extrusion', () => {
+    const resize = interactionReducer(IDLE, {
+      type: 'select-face',
+      target: face({ resizeBodyFeatureId: 'feature_box' })
+    });
+    expect(toolCardFor(resize)?.title).toBe('Resize Body');
+    expect(toolCardFor(resize)?.actions).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: 'resize-body', active: true }),
+        expect.objectContaining({ id: 'offset-face', active: false })
+      ])
+    );
+    const local = interactionReducer(resize, {
+      type: 'set-face-offset-mode',
+      local: true
+    });
+    expect(toolCardFor(local)?.title).toBe('Offset Face');
+    expect(toolCardFor(local)?.actions).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: 'resize-body', active: false }),
+        expect.objectContaining({ id: 'offset-face', active: true })
+      ])
+    );
+    expect(
+      interactionReducer(local, { type: 'set-face-offset-mode', local: false })
+    ).toMatchObject({
+      mode: 'face',
+      phase: 'armed',
+      lastValue: null,
+      target: { resizeBodyFeatureId: 'feature_box', localFaceOffset: false }
+    });
+  });
+
   it('arms offset-face for planar faces and radius resize for measured cylinders', () => {
     const planar = interactionReducer(IDLE, {
       type: 'select-face',
