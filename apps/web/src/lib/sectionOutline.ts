@@ -1,5 +1,5 @@
 import type { ExactSectionPlane } from '@openzcad/kernel-adapter/exact';
-import type { ProjectDocument } from '@openzcad/shared';
+import type { BodyId, ProjectDocument } from '@openzcad/shared';
 import type { GeometryWorkerApi } from '../hooks/useGeometryWorker';
 import type {
   ExactSectionRegionDisplay,
@@ -29,8 +29,15 @@ export type SectionOutlineState =
       regions: ExactSectionRegionDisplay[];
       /** Total cut area, in document units squared. */
       area: number;
-      /** Bodies the plane passed by, or the kernel could not section. */
-      refused: number;
+      /** Bodies on screen the plane passed by without cutting. */
+      missed: number;
+      /**
+       * Bodies on screen the plane DOES cut and the kernel could not
+       * section exactly. These are what stops the drawing: the export
+       * writes every cut body or none, so one of these makes the section
+       * unexportable however many other bodies came out exact.
+       */
+      unsectioned: number;
     }
   | { kind: 'refused'; detail: string };
 
@@ -76,6 +83,12 @@ export function sectionOutlineFromReport(
         'The section plane does not cut any body.'
     };
   }
+  // A plane that simply misses a body is an ordinary section; a body it cuts
+  // and the kernel could not section is not. Only the second kind decides
+  // whether there is a drawing to export.
+  const missed = report.refusals.filter(
+    (refusal) => refusal.reason === 'plane-misses-body'
+  ).length;
   return {
     kind: 'exact',
     regions: report.regions.map((region) => ({
@@ -85,8 +98,25 @@ export function sectionOutlineFromReport(
       loops: region.loops
     })),
     area: report.regions.reduce((total, region) => total + region.area, 0),
-    refused: report.refusals.length
+    missed,
+    unsectioned: report.refusals.length - missed
   };
+}
+
+/**
+ * Whether the DXF export can write this section.
+ *
+ * `exportSectionDxf` fails closed: any refusal other than the plane missing
+ * a body aborts the whole drawing rather than quietly leaving that body's
+ * material out of it. So the button that calls it has to be shut in exactly
+ * that case — an export button that is live and always fails is worse than
+ * no button, and the message it fails with is about a tessellated witness
+ * the user has never heard of.
+ */
+export function sectionOutlineExportable(
+  outline: SectionOutlineState
+): boolean {
+  return outline.kind === 'exact' && outline.unsectioned === 0;
 }
 
 export function describeSectionOutline(
@@ -94,13 +124,25 @@ export function describeSectionOutline(
   units: string
 ): SectionOutlineStatus {
   if (outline.kind === 'exact') {
-    const passed =
-      outline.refused > 0
-        ? `, ${outline.refused} ${outline.refused === 1 ? 'body has' : 'bodies have'} no exact section`
-        : '';
+    const notes: string[] = [];
+    if (outline.unsectioned > 0) {
+      // Say why the export is shut in the same breath as the count, so the
+      // disabled button is never unexplained.
+      notes.push(
+        `${outline.unsectioned} ${outline.unsectioned === 1 ? 'body has' : 'bodies have'} no exact section, so there is no drawing to export`
+      );
+    }
+    if (outline.missed > 0) {
+      notes.push(
+        `${outline.missed} ${outline.missed === 1 ? 'body is' : 'bodies are'} not cut here`
+      );
+    }
     return {
       kind: 'exact',
-      detail: `${outline.area.toFixed(2)} ${units}² of material${passed}`
+      detail: [
+        `${outline.area.toFixed(2)} ${units}² of material`,
+        ...notes
+      ].join(', ')
     };
   }
   if (outline.kind === 'refused') {
@@ -116,55 +158,57 @@ export function describeSectionOutline(
 }
 
 /**
- * Ask for one exact section and turn the answer into viewport state.
+ * Ask for one exact section of exactly these bodies, and turn the answer
+ * into viewport state.
  *
- * The live plane and model version are read back after the kernel answers,
- * not before: an exact section belongs to one plane position and one model
- * version, and by the time a large part has been sectioned the user may have
- * moved on from both. `null` means the answer is no longer about what is on
- * screen and must be dropped.
+ * `bodyIds` is the viewport's own visible list. The document cannot supply
+ * it: `Hide Body` and `Isolate` write device-local view state, so a section
+ * taken from the document alone draws a cut surface floating where a hidden
+ * body used to be and adds its area to the total.
+ *
+ * Staleness is the caller's: an exact section belongs to one plane
+ * position, one model version and one set of visible bodies, and by the time
+ * a large part has been sectioned the user may have moved on from any of
+ * them. The caller holds a token across the await and drops an answer that
+ * is no longer about what is on screen.
  */
 export async function resolveSectionOutline(
   geometry: Pick<GeometryWorkerApi, 'sectionOutline'>,
   document: ProjectDocument,
   section: SectionViewSettings,
-  liveSection: () => SectionViewSettings | undefined,
-  liveVersion: () => number | null
-): Promise<SectionOutlineState | null> {
-  const version = document.version;
-  const current = () => {
-    const live = liveSection();
-    return (
-      live?.plane === section.plane &&
-      live.offset === section.offset &&
-      liveVersion() === version
-    );
-  };
+  bodyIds: BodyId[]
+): Promise<SectionOutlineState> {
   try {
-    const report = await geometry.sectionOutline(
-      document,
-      sectionPlaneSpec(section)
+    return sectionOutlineFromReport(
+      await geometry.sectionOutline(
+        document,
+        sectionPlaneSpec(section),
+        bodyIds
+      )
     );
-    return current() ? sectionOutlineFromReport(report) : null;
   } catch (error) {
-    return current()
-      ? {
-          kind: 'refused',
-          detail:
-            error instanceof Error ? error.message : 'The exact section failed.'
-        }
-      : null;
+    return {
+      kind: 'refused',
+      detail:
+        error instanceof Error ? error.message : 'The exact section failed.'
+    };
   }
 }
 
 /**
  * Write the exact section — never the display caps — as a DXF drawing,
  * narrating both ends of it through `announce` (the status line).
+ *
+ * Call it only for a section `sectionOutlineExportable` accepts: the
+ * exporter refuses a body it cannot section exactly rather than dropping it
+ * from the drawing, and that refusal reads as a kernel diagnostic, not as
+ * something to put in front of a user.
  */
 export async function writeSectionDxf(
   geometry: Pick<GeometryWorkerApi, 'exportModel'>,
   document: ProjectDocument,
   section: SectionViewSettings,
+  bodyIds: BodyId[],
   save: (fileName: string, format: 'dxf', text: string) => Promise<boolean>,
   stem: string,
   announce: (message: string) => void
@@ -172,7 +216,10 @@ export async function writeSectionDxf(
   const fileName = `${stem}-section.dxf`;
   announce('Exporting the section as DXF…');
   try {
-    const result = await geometry.exportModel('dxf', document, [], {
+    // The same bodies the exact section on screen was cut from. A drawing of
+    // a different set from the one the user is looking at is a drawing of
+    // something they never saw.
+    const result = await geometry.exportModel('dxf', document, bodyIds, {
       section: sectionPlaneSpec(section)
     });
     if (!('text' in result)) {

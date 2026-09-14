@@ -344,7 +344,8 @@ describe('geometry worker rebuild coordination', () => {
       type: 'section',
       requestId: 'section-1',
       document,
-      plane
+      plane,
+      bodyIds: document.bodyOrder
     });
 
     await vi.waitFor(() =>
@@ -357,7 +358,14 @@ describe('geometry worker rebuild coordination', () => {
         })
       )
     );
-    expect(sectionOutline).toHaveBeenCalledWith(document, plane);
+    // The caller's body list reaches the adapter: hiding and isolating are
+    // device-local view state the document does not carry, so a section
+    // taken without it draws bodies the viewport is not showing.
+    expect(sectionOutline).toHaveBeenCalledWith(
+      document,
+      plane,
+      document.bodyOrder
+    );
   });
 
   it('reports a refused section as a failure the caller can show', async () => {
@@ -414,7 +422,7 @@ describe('geometry worker rebuild coordination', () => {
       type: 'export',
       requestId: 'dxf-1',
       document,
-      bodyIds: [],
+      bodyIds: document.bodyOrder,
       format: 'dxf',
       section: plane
     });
@@ -430,8 +438,41 @@ describe('geometry worker rebuild coordination', () => {
         })
       )
     );
-    expect(exportSectionDxf).toHaveBeenCalledWith(document, plane);
+    // The drawing is of the same bodies the section on screen was cut from.
+    expect(exportSectionDxf).toHaveBeenCalledWith(
+      document,
+      plane,
+      document.bodyOrder
+    );
     expect(exportFaceDxf).not.toHaveBeenCalled();
+  });
+
+  it('leaves the body selection to the adapter when the caller names none', async () => {
+    const exportSectionDxf = vi.fn(async () => '0\r\nSECTION\r\n');
+    const { scope } = await installWorker(async () => derived('unused'), {
+      exportSectionDxf
+    });
+    const document = addPrimitiveFeature(
+      createProjectDocument('Section DXF', toUserId('user')),
+      {
+        name: 'Box',
+        primitiveKind: 'box',
+        dimensions: { width: 10, height: 20, depth: 30 }
+      }
+    );
+    const plane = { origin: [0, 0, 3], normal: [0, 0, 1] } as const;
+    post(scope, {
+      type: 'export',
+      requestId: 'dxf-2',
+      document,
+      bodyIds: [],
+      format: 'dxf',
+      section: plane
+    });
+
+    await vi.waitFor(() =>
+      expect(exportSectionDxf).toHaveBeenCalledWith(document, plane, undefined)
+    );
   });
 
   it('skips a queued export cancelled before it started', async () => {

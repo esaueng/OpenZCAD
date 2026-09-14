@@ -10,6 +10,7 @@ import type {
 import { AxisTriadIcon, DisplayModeIcon } from './ViewerRailIcons';
 import {
   describeSectionOutline,
+  sectionOutlineExportable,
   type SectionOutlineState
 } from '../lib/sectionOutline';
 import { DISPLAY_MODE_LABELS } from '../lib/displayMode';
@@ -116,6 +117,10 @@ export function ViewerToolbar({
     ? SECTION_PLANE_LABELS[settings.sectionView.plane]
     : 'off';
   const sectionStatus = describeSectionOutline(sectionOutline, units);
+  // Live only when the export can actually write every body the plane cuts.
+  // An exact section beside a body the kernel refused is still on screen and
+  // still worth showing — it just is not a drawing.
+  const canExportSection = sectionOutlineExportable(sectionOutline);
 
   // Close on an outside pointer or Escape; Escape hands focus back to the
   // control that opened the flyout, so the rail stays keyboard-navigable.
@@ -260,13 +265,17 @@ export function ViewerToolbar({
             </p>
             <Tooltip
               label="Export section"
-              description="Writes the exact section curves as DXF"
+              description={
+                canExportSection
+                  ? 'Writes the exact section curves as DXF'
+                  : 'Needs an exact section of every body the plane cuts'
+              }
             >
               <button
                 type="button"
                 className="rail-section-export"
                 onClick={onExportSectionDxf}
-                disabled={sectionOutline.kind !== 'exact'}
+                disabled={!canExportSection}
                 aria-label="Export the exact section as DXF"
               >
                 DXF
