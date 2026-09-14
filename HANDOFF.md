@@ -1,3 +1,266 @@
+# Boolean entity evolution: real provenance for boolean faces and edges
+
+Branch `claude/remus-boolean-evolution`, roadmap row **K05**. Stacked on
+`claude/remus-kernel-patterns` (PR #331) — diff against that branch to see
+only this work. The parent's own handoff is preserved verbatim at the bottom
+of this file.
+
+## What shipped
+
+A boolean used to derive face identity from geometry alone. The
+analytic-carrier rule (`deriveRemusBooleanCarrierLineage`) can name a result
+face only when its quantized plane or cylinder holds exactly one named operand
+face **and** exactly one result face. Two things break that constantly:
+
+- a carrier two operand faces **share** — two bodies flush on one plane;
+- a carrier holding several **result** faces — two bosses of the same height,
+  whose caps land on one plane.
+
+Both published nothing, so every face on those carriers fell back to the
+ADR-011 hash, and an upstream dimension change moved the hash. That is the
+failure this row exists for: a sketch pinned to one of two identical bosses
+came back after a plate resize as
+
+```
+Sketch "On the left boss": legacy face attachment has no schema-v5 lineage
+reference; using its stored migration frame.
+```
+
+A two-operand boolean now runs through the kernel's own entity-evolution
+entry points, which name the operand face **every** result face came from.
+Both boss caps keep their identity, the sketch resolves by name, and the
+warning is gone.
+
+Edges came with it, and were worth taking. The payload marks every result edge
+`preserved` / `modified` / `generated` / `unresolved`. A `preserved` edge whose
+exact witness is unchanged now keeps its operand's name:
+
+```
+boolean.face.target.primitive.box.face.z-max          (unchanged form)
+boolean.edge.operand.0.primitive.box.edge.x.y-min.z-min   (new)
+```
+
+Measured on the parity corpus, an imported plate bored by a cylinder went from
+**0 to 12** named edges, and the NURBS-cornered plate from 0 to 16 — with its
+face names unchanged, because the carrier rule had already named all of those.
+
+### What stays hash-only, deliberately
+
+- **`unresolved` edges.** The kernel declining. Never guessed past.
+- **`modified` and `generated` edges.** There is no witness relation to check
+  such a claim against, and an unverifiable claim is not evidence.
+- **A source the kernel maps to several result faces.** A slot cut across a
+  plate's top leaves two faces both honestly descended from the top; neither
+  is the heir, so neither is named. Diagnostic `boolean-split-source`.
+- **Faces with no exact analytic carrier** (free-form surfaces) — the
+  ADR-013 boolean relation has nothing to verify.
+- **Faces the production face-unification step merged.** Two named parents
+  into one face is a merge, and a merge has no single name.
+- **Booleans of more than two solids** — see Deliberate limits.
+
+## Kernel calls adopted
+
+| call | replaces | where |
+| --- | --- | --- |
+| `cutWithEntityEvolution(a,b)` | `kernel.cut(a,b)` | cut extrude; 2-operand subtract |
+| `intersectWithEntityEvolution(a,b)` | `kernel.intersect(a,b)` | 2-operand intersect |
+| `fuseWithEntityEvolution(a,b)` | `fuseAll([a,b])` inside `fuseUniformSolid` | add extrude; 2-solid union |
+
+These are the **production** calls, not a second boolean taken for evidence: a
+boolean is the expensive operation in a rebuild, and paying for two on every
+feature to learn where the faces came from is not a trade worth making.
+
+Decoding goes through the repo's own lineage machinery, as
+`KERNEL-FINDINGS.md` requires — there is no `decodeEvolutionPayload` on the
+pin. New in `remus-lineage.ts`:
+
+- `decodeRemusBooleanEntityEvolution` — strict decoder. Every malformed
+  payload throws, including an edge event the pin does not publish: a kernel
+  that grows a fifth event must make the caller decline the whole record, not
+  quietly drop what it does not understand.
+- `deriveRemusBooleanEvolutionLineage` — the derivation and its three gates.
+- `reconcileRemusBooleanLineage` — see below.
+- `carryRemusUnchangedLineage` — extracted from
+  `propagateRemusUnchangedDirectEditLineage` (which now delegates to it,
+  unchanged) so the boolean can carry lineage across its unification step by
+  exact witness.
+
+New file `exact-boolean-evolution.ts` holds the kernel-call side.
+
+## The architectural rule, as implemented
+
+**Kernel history is candidate evidence; witnesses verify.** Nothing here takes
+the kernel's word.
+
+1. **The payload must partition the measured result.** The reported result
+   faces must be exactly the measured result faces, and every source must be a
+   measured operand face. A payload that is not is refused *whole* — never
+   consumed in part.
+2. **The operand reference re-verifies** against the operand's own measured
+   witness, so a reference the operand's own build had already invalidated
+   cannot travel through the boolean.
+3. **The transition satisfies the ADR-013 witness relation.** Every face claim
+   goes through `verifyTopologyEvolution` with the `analytic-carrier` relation
+   — the result face must lie on the same exact quantized carrier as its
+   claimed source. Every edge claim goes through the `unchanged` relation.
+
+**And the existing derivation was not deleted.** Both run on every boolean.
+`reconcileRemusBooleanLineage` keeps each derivation's answers where only one
+has one, and where the two name the same handle **differently it publishes
+neither**, with a `boolean-evolution-disagreement` diagnostic. A disagreement
+is a refusal, not a silent overwrite.
+
+No disagreement was observed anywhere: not on the new fixtures, not across the
+full root and web suites, not across the 175-case parity corpus. Since
+reconciliation only ever drops on disagreement, "no disagreement diagnostics"
+is also the proof that every name the carrier rule published before this
+branch is still published.
+
+## The finding: the fuse entry point is not the fuse
+
+`fuseWithEntityEvolution` publishes the **raw fragment layout**, because that
+is what its evolution map addresses. Plain `fuse` post-processes its result.
+Measured on the pin, two stacked 20×20×10 boxes:
+
+| call | faces | edges |
+| --- | --- | --- |
+| `fuse(a,b)` | 6 | 12 |
+| `fuseWithOptions(a,b,false)` | 6 | 12 |
+| `fuseWithEntityEvolution(a,b)` | 10 | 20 |
+| ...then `unifyFaces` | 6 | **16** |
+
+Four redundant seam edges the plain path never had — four false edges in the
+shaded-with-edges viewport, which is exactly the defect `unifyBooleanFaces`
+exists to prevent. `cutWithEntityEvolution` and `intersectWithEntityEvolution`
+showed **no** such divergence on any fixture tried (through hole, blind pocket,
+slot across, flush half, stepped notch, coincident boxes, cylinder through a
+plate, identical boxes).
+
+So the fuse arm is guarded. Where unification had to merge anything, the plain
+`fuseAll` is run on the operands (which survive the first call — measured) and
+the two bodies are compared by face types, edge count and volume; the
+evolution body ships only when it is the same body, and otherwise the plain
+body ships and the boolean falls back to carrier lineage. Where unification
+merged nothing — a boss grown onto a plate, the case this row exists for — no
+second fuse runs at all.
+
+`test/boolean-evolution-lineage.test.ts` pins this: with the guard removed the
+stacked union ships 16 edges instead of 12.
+
+**This is a finding for the kernel owner**, not something papered over: the
+entity-evolution fuse and the plain fuse do not agree on the same input. It
+would be better fixed in Remus by giving the evolution entry point the same
+post-processing, with the evolution map rewritten across it.
+
+## Check results
+
+Run from the worktree root on the final tree.
+
+| check | result |
+| --- | --- |
+| `pnpm lint` | `✖ 19 problems (0 errors, 19 warnings)` — the 19 pre-existing warnings |
+| `pnpm typecheck` | clean, no output |
+| `pnpm test` (root) | `Test Files 244 passed \| 2 skipped (246)` / `Tests 2508 passed \| 4 skipped (2512)` |
+| `pnpm test` (web) | `Test Files 156 passed (156)` / `Tests 1182 passed (1182)` |
+| `pnpm test:parity-corpus` | `Test Files 7 passed (7)` / `Tests 174 passed \| 1 skipped (175)` |
+| `pnpm build` | `"warnings": []`, `"failures": []` |
+
+Against the stated `origin/main` baseline (root 241 files / 2489 passing + 2
+skipped; web 156 / 1182; parity 174 + 1 skipped), root is +3 files and +19
+passing tests. This branch's two new suites account for 2 files and 10 tests,
+measured on their own; the remaining 1 file, 9 tests and 2 extra skips come
+from the parent branch already in review. Web and parity are unchanged. No
+test was weakened, skipped or deleted.
+
+### Tests changed deliberately
+
+`test/exact-kernel-adapter.test.ts`, "removes boolean seams from a unioned
+physical part", asserted `Edges are not carried through a boolean`. They are
+now, so the assertion was replaced by the exact set of eight edge names the
+union keeps (the base plate's four bottom edges and the wall's four top
+edges), plus a check that each carries the hash it is published against. The
+face assertions in that test are untouched and still pass unchanged.
+
+Parity baselines were re-recorded (`OPENZCAD_WRITE_PARITY_BASELINES=1`, then
+prettier); the diff is edge names appearing where there were none. Two
+`lineageNames` kernel-delta pins moved to their digest form and two new
+`witnessedEdges` pins were added with a note saying what they mean and when
+they retire (when `occt-lineage.ts` derives the same subset).
+
+## Deliberate limits
+
+- **Two operands only.** The kernel's entity-evolution entry points are
+  pairwise. A union of three bodies keeps the existing `fuseAll` reduction and
+  a subtract with several tools keeps the sequential loop; both keep carrier
+  lineage exactly as before. Chaining the evolution across a multi-tool
+  subtract is possible — each step would need its own measured intermediate —
+  but nothing has proved that chain, and an unproved chain is how silent
+  wrongness gets in.
+- **The coaxial cylinder cut is untouched.** `tryExactCoaxialCylinderCut`
+  takes some cuts through an exact analytic path that publishes no evolution
+  record; those keep carrier lineage, and the reason is recorded as a
+  diagnostic rather than assumed.
+- **Edges are `preserved`-only.** `generated` edges could be named by their
+  two generating faces, the way fillet blend faces already are. That is a
+  coherent next increment and it is **available and untaken** — it is left out
+  because a generated edge has no witness relation to verify the claim
+  against, and this branch did not want to introduce a naming rule whose only
+  evidence is the payload itself.
+- **Vertices are decoded away.** The payload carries them; nothing in the
+  document addresses a vertex by name.
+- **Journaling was not adopted.** `BRIEFING-WAVE2.md` is right that every
+  plain call drops a global `unjournaled_mutations` barrier, and this branch
+  does not change that: the entity-evolution entry points are not the
+  journaled ones. This row buys durable *names*, which is a different
+  mechanism from durable *references*; the journal work is its own row and
+  should stay one, because it is all-or-nothing per rebuild chain.
+
+## Risks for the reviewer
+
+- **The fuse guard's trigger.** It fires when unification changed the face
+  count, which is the condition under which the divergence above was observed.
+  A fuse where plain `fuse` simplifies *edges only* — no face merge — would
+  slip past it and ship the evolution body with extra edges. I could not
+  construct such a case, but I cannot prove it does not exist. The airtight
+  alternative is running both fuses on every union, which doubles the cost of
+  the most expensive operation in a rebuild; that trade seemed wrong.
+- **One extra topology measurement per boolean, in the union case.** Lineage
+  is derived against the raw pre-unification result, because that is what the
+  payload addresses. Where unification leaves every handle in place — the cut
+  case, usually — those same candidates are reused as the result's and the
+  cost is nil. Where it does not — `unifyUnionFaces` hands back a copy when it
+  accepts — the post-unification body is measured as well. Full-suite wall
+  time did not move noticeably, but this is worth a look if rebuild timings
+  regress.
+- **Name growth is a compatibility surface.** Faces and edges that published
+  nothing now publish names. Nothing that had a name lost or changed it — the
+  name format is unchanged and reconciliation is what guarantees it — but the
+  parity corpus's name sets are larger, which is why the baselines moved.
+- **`decodeRemusBooleanEntityEvolution` throws on an unknown edge event.**
+  That is intentional fail-closed behaviour, but it means a future kernel that
+  adds a fifth event silently drops every boolean back to carrier lineage
+  until the decoder learns it. The `declined` reason is recorded as a
+  diagnostic so it is visible rather than mysterious.
+
+## Follow-ups
+
+1. **Report the fuse post-processing divergence upstream** so the evolution
+   entry point can share plain `fuse`'s post-processing; that retires the
+   guard and the second fuse with it.
+2. **Generated-edge naming** by the two generating faces, once there is a way
+   to verify such a claim.
+3. **Chain the evolution across multi-tool subtracts and multi-body unions**,
+   with a measured intermediate per step.
+4. **`occt-lineage.ts`** can now retire four parity pins at once by deriving
+   the same face and edge subsets.
+5. **Fillet and chamfer downstream of a boolean** now have named edges to
+   attach to for the first time; an edge modifier pinned by name across an
+   upstream boolean edit is newly worth testing.
+
+---
+
+# Parent branch handoff (`claude/remus-kernel-patterns`), unchanged
+
 # Kernel patterns with face provenance
 
 Branch `claude/remus-kernel-patterns`: two commits for the adoption, two
