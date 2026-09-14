@@ -17,14 +17,20 @@ export function edgeModifierCommand(
   // exactly a deletion: the same radius twice is a different blend from no
   // end radius at all, and it goes through a different kernel engine. Name
   // the fields to drop instead of storing a lookalike.
+  //
+  // A chamfer's angle is named the same way, and for a sharper reason: an
+  // angle and a second distance are mutually exclusive, so a stored angle
+  // left behind by a patch makes the feature unbuildable the moment a
+  // second distance is added. Blanking the angle has to delete it.
   const clearData =
     kind === 'fillet'
       ? value.endRadius === undefined
         ? ['endRadius', 'radiusLaw']
         : []
-      : value.distance2 === undefined
-        ? ['distance2']
-        : [];
+      : [
+          ...(value.angleDeg === undefined ? ['angleDeg'] : []),
+          ...(value.distance2 === undefined ? ['distance2'] : [])
+        ];
   return commandFactories.updateFeature(
     {
       featureId: feature.featureId,

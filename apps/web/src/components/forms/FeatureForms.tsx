@@ -1260,15 +1260,16 @@ export function EdgeModifierForm({
       edgeHashes,
       ...(edgeReferences ? { edgeReferences } : {}),
       size: coerceParamValue(fields.size),
-      // `updateFeature` patches keys and cannot delete one, so blanking
-      // the field on a chamfer that stored an angle submits the
-      // geometrically identical explicit 45 instead of silently keeping
-      // the old angle.
+      // A blank angle emits no key at all. It used to submit an explicit 45
+      // — the geometrically identical symmetric bevel — because a patch
+      // cannot delete a key. That collided with the second distance: the
+      // two fields hide each other, so a chamfer that had stored an angle
+      // could reach `{angleDeg: 45, distance2: n}`, which both validators
+      // refuse and which no visible field can clear. The edit command names
+      // `angleDeg` in `clearData` instead, which deletes it properly.
       ...(kind === 'chamfer' && fields.angle.trim() !== ''
         ? { angleDeg: coerceParamValue(fields.angle) }
-        : kind === 'chamfer' && initial?.angleDeg !== undefined
-          ? { angleDeg: 45 }
-          : {}),
+        : {}),
       // These two are cleared rather than defaulted when blank: the edit
       // command names them in `clearData`, because an end radius equal to the
       // start radius is a variable blend through a different kernel engine,
