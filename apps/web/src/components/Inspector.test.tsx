@@ -309,3 +309,119 @@ describe('fillet radius slider', () => {
     expect(screen.getByRole('button', { name: /Apply/ })).toBeDisabled();
   });
 });
+
+describe('imported face recognition display', () => {
+  const importedBody: BodyRepresentation = {
+    ...body,
+    source: 'imported-step',
+    topology: {
+      faces: [
+        {
+          topologyId: 'face:counterbore',
+          hash: 701,
+          triangleStart: 0,
+          triangleCount: 12,
+          geometry: {
+            surfaceType: 'cylinder',
+            area: 120,
+            center: { x: 0, y: 0, z: 4 },
+            radius: 5,
+            diameter: 10,
+            axisStart: { x: 0, y: 0, z: 0 },
+            axisEnd: { x: 0, y: 0, z: 8 },
+            axialLength: 8
+          }
+        }
+      ],
+      edges: []
+    }
+  };
+  const importedFace: TopologySelection = {
+    bodyId,
+    kind: 'face',
+    topologyId: 'face:counterbore',
+    hash: 701
+  };
+
+  function importedProps(
+    overrides: Partial<ComponentProps<typeof Inspector>> = {}
+  ): ComponentProps<typeof Inspector> {
+    return makeProps({
+      selectedFeature: null,
+      commandSession: null,
+      selectedBody: importedBody,
+      selectedTopology: importedFace,
+      ...overrides
+    });
+  }
+
+  it('shows a recognized kind with its dimensions and keeps the through-hole edit path', () => {
+    const onResizeThroughHole = vi.fn();
+    render(
+      <Inspector
+        {...importedProps({
+          onResizeThroughHole,
+          recognition: {
+            kind: 'recognized',
+            featureKind: 'counterbore',
+            message: 'Counterbore recognized from the imported STEP body.',
+            dimensions: {
+              outerDiameter: 10,
+              innerDiameter: 5,
+              counterboreDepth: 2,
+              totalDepth: 8
+            }
+          }
+        })}
+      />
+    );
+    const inspector = screen.getByRole('region', { name: 'Feature inspector' });
+    expect(within(inspector).getByText('recognized')).toBeVisible();
+    expect(within(inspector).getByText('Counterbore')).toBeVisible();
+    expect(within(inspector).getByText('outer diameter')).toBeVisible();
+    // Display-only: recognition adds rows, never a commit of its own.
+    expect(
+      within(inspector).queryByRole('button', { name: /Apply diameter/ })
+    ).not.toBeInTheDocument();
+    expect(onResizeThroughHole).not.toHaveBeenCalled();
+  });
+
+  it('shows the typed refusal reason when recognition declines', () => {
+    render(
+      <Inspector
+        {...importedProps({
+          recognition: {
+            kind: 'unsupported',
+            refusalReason: 'incomplete-proof',
+            message:
+              'The neighbouring faces do not complete any recognized feature proof.'
+          }
+        })}
+      />
+    );
+    const inspector = screen.getByRole('region', { name: 'Feature inspector' });
+    expect(inspector).toHaveTextContent('incomplete-proof');
+    expect(inspector).toHaveTextContent(
+      'The neighbouring faces do not complete any recognized feature proof.'
+    );
+  });
+
+  it('narrates a pending query and a transport failure', () => {
+    const { rerender } = render(
+      <Inspector
+        {...importedProps({ recognition: null, recognitionPending: true })}
+      />
+    );
+    expect(screen.getByText(/Recognizing feature/)).toBeVisible();
+    rerender(
+      <Inspector
+        {...importedProps({
+          recognition: null,
+          recognitionPending: false,
+          recognitionError: 'worker gone'
+        })}
+      />
+    );
+    expect(screen.getByText(/worker gone/)).toBeVisible();
+  });
+});
