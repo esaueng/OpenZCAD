@@ -51,11 +51,15 @@ spheres still cannot be fused; the refusal is pinned), per-entity tolerant
 modeling (M3), and sheet/wire/cellular body taxonomy (M4).
 
 **The app trusts the kernel less than the labels suggest.** The production
-adapter runs a distrust harness on every boolean (`boolean-result-validation.ts`
-face-census facet-fallback detection, dropped-operand AABB checks), wraps every
-modeling op in input-mutation and output-validity assertions, re-runs failed
-fillets up to three times on a probe ladder just to phrase an error message,
-and parses kernel refusal prose. The current capability table in
+adapter runs a distrust harness on every boolean
+(`boolean-result-validation.ts` dropped-operand AABB checks, swallowed-curvature
+and mesh-closure gates; the boolean facet-fallback census was retired once
+B21 made the plain booleans exact-only, and the direct-edit facet census
+remains because `pushPullFace` has no such policy), wraps every modeling op in
+input-mutation and output-validity assertions, re-runs failed fillets up to
+three times on a probe ladder just to phrase an error message, and decodes
+boolean refusals through the kernel's typed twins
+(`exact-boolean-refusal.ts`). The current capability table in
 `packages/kernel-adapter/src/topology-lineage.ts` marks booleans and fillets
 as derived only within verified bounds. Pattern, chamfer, shell/solid-offset
 and direct-edit transitions still fall back to hashes; a changed fingerprint
@@ -78,13 +82,17 @@ The original audit identified these confident, valid-looking wrong results.
 Repaired consumer examples are marked below; unresolved examples still need
 current reproduction and upstream ownership before a fix or typed refusal.
 
-1. **`fuse` drops an operand at exact tangency** and facets a cylinder
-   crossing a planar face into 70–115 planar faces. Detected today only by
-   the app's AABB-containment and face-census heuristics
-   (`droppedUnionOperandWarning`, `booleanFacetFallbackWarning`). Partially
-   owned by P-Class 2.7 (tangency & sliver), which is marked "stretch,
-   defer if pressure demands" — **the operand-loss half should not be
-   deferred**; the acceptance gate added in `boolean_scale_gap` work shows
+1. **`fuse` drops an operand at exact tangency.** The faceting half of this
+   entry is closed by the pin: B21 made the plain booleans exact-only, so a
+   contact the exact pipeline cannot resolve is refused by name instead of
+   coming back as 70–115 planar faces. The app decodes that refusal through
+   `exact-boolean-refusal.ts`, and the boolean arm of the face census
+   (`booleanFacetFallbackWarning`) was deleted with it — do not plan against
+   that export. **Operand loss is still open**, and is still detected only by
+   the app's AABB-containment heuristic (`droppedUnionOperandWarning`).
+   Partially owned by P-Class 2.7 (tangency & sliver), which is marked
+   "stretch, defer if pressure demands" — **the operand-loss half should not
+   be deferred**; the acceptance gate added in `boolean_scale_gap` work shows
    the shape of the fix.
 2. **Overlapping patterns — repaired for the qualified cases.** The original
    defect counted overlapping material more than once with no warning.
