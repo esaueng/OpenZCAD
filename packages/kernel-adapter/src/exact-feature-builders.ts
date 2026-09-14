@@ -54,10 +54,13 @@ import {
   copyShapeWithVerifiedLineage,
   formatMeasuredVolume,
   importMeshSolid,
-  importStepWithOwnBudget,
   inheritMeshOrigin,
   resolveParametricPoint
 } from './exact-shape-utils';
+import {
+  importStepWithOwnBudget,
+  stepImportEmptyReason
+} from './kernel-step-import';
 import { MEASUREMENT_DEFLECTION } from './exact-witnesses';
 import { isBlendFace } from './exact-brep';
 import { separatePlanarEmboss } from './planar-emboss';
@@ -259,9 +262,12 @@ function buildImportedStepFeature(
         }
         sourceBytes = resolved;
       }
-      const declared = Array.from(importStepWithOwnBudget(kernel, sourceBytes));
+      const imported = importStepWithOwnBudget(kernel, sourceBytes);
+      const declared = Array.from(imported.solids);
       if (declared.length === 0) {
-        throw new Error('STEP file contains no solids.');
+        // The reader's report, not a guess from the byte count: a file whose
+        // only roots are sheets says so instead of reading as empty.
+        throw new Error(stepImportEmptyReason(imported.report));
       }
       // K0.6. A shell that is not closed is not a solid, whatever
       // volume a divergence integral over its faces happens to
