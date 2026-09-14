@@ -52,6 +52,7 @@ import {
   exactCut,
   exactFuse
 } from './exact-boolean-refusal';
+import { requireValidSolid } from './kernel-validation';
 import {
   ambiguousReferenceError,
   unresolvedReferenceError
@@ -187,16 +188,24 @@ function enlargeThroughHole(
     const axis = normalized(subtract(geometry.axisEnd, geometry.axisStart));
     if (!axis) throw shortCutError;
     const bounds = Array.from(kernel.boundingBox(solid));
-    if (bounds.length !== 6 || !bounds.every(Number.isFinite)) throw shortCutError;
+    if (bounds.length !== 6 || !bounds.every(Number.isFinite))
+      throw shortCutError;
     const corners: Vec3[] = [];
     for (const x of [bounds[0]!, bounds[3]!])
       for (const y of [bounds[1]!, bounds[4]!])
         for (const z of [bounds[2]!, bounds[5]!]) corners.push({ x, y, z });
-    const along = (point: Vec3) => dot(subtract(point, geometry.axisStart), axis);
+    const along = (point: Vec3) =>
+      dot(subtract(point, geometry.axisStart), axis);
     const reach = corners.map(along);
     const margin = Math.max(1, radius);
-    const start = add(geometry.axisStart, scale(axis, Math.min(...reach) - margin));
-    const end = add(geometry.axisStart, scale(axis, Math.max(...reach) + margin));
+    const start = add(
+      geometry.axisStart,
+      scale(axis, Math.min(...reach) - margin)
+    );
+    const end = add(
+      geometry.axisStart,
+      scale(axis, Math.max(...reach) + margin)
+    );
     return exactCut(
       kernel,
       solid,
@@ -595,7 +604,9 @@ function fillImportedHole(
     throw new Error(
       `Filling the imported hole before resizing failed: ${
         exactBooleanRefusalReason(error) ??
-        (error instanceof Error ? error.message : 'the kernel rejected the fuse')
+        (error instanceof Error
+          ? error.message
+          : 'the kernel rejected the fuse')
       }.`,
       { cause: error }
     );
@@ -1235,11 +1246,11 @@ export function applyDirectEdit(
       throw new Error('Blend radius must differ from its current radius.');
     }
     const output = kernel.resizeBlend(solid, face, snapshot.radius, newRadius);
-    if (kernel.validateSolid(output) !== 0) {
-      throw new Error(
-        `Resizing the blend to radius ${newRadius} does not produce a valid solid.`
-      );
-    }
+    requireValidSolid(
+      kernel,
+      output,
+      `Resizing the blend to radius ${newRadius} does not produce a valid solid.`
+    );
     let lineage: RemusLineageState | undefined;
     if (newRadius > GEOMETRY_EPSILON) {
       const candidates = topologyCandidatesForSolid(kernel, output);
