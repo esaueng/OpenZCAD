@@ -2,7 +2,12 @@ import type { EditAnalysisRequest } from '@openzcad/shared';
 import { useEffect, useRef, useState } from 'react';
 import { documentForWorker } from '../lib/meshTransport';
 import { describeWorkerFailure } from '../lib/workerFailure';
-import type { BodyId, ProjectDocument, SketchId } from '@openzcad/shared';
+import type {
+  BodyId,
+  FaceRecognitionSummary,
+  ProjectDocument,
+  SketchId
+} from '@openzcad/shared';
 import type { CommandManager } from '@openzcad/command-system';
 import { mark, measure, timed } from '../lib/perf';
 import type {
@@ -154,6 +159,17 @@ export interface GeometryWorkerApi {
     document: ProjectDocument,
     sketchId: SketchId
   ): Promise<SketchSolveOutcome>;
+  /**
+   * On-demand per-face recognition of one imported STEP face (Phase D of the
+   * imported STEP edit plan). Resolves with the recognized kind + dimensions,
+   * or the typed refusal reason — display-only, never a document edit.
+   */
+  recognizeImportedFace(input: {
+    document: ProjectDocument;
+    bodyId: BodyId;
+    faceHash: number;
+    topologyId?: string;
+  }): Promise<FaceRecognitionSummary>;
   /** Forces the next `sync` to post even if the version has not changed. */
   invalidate(): void;
 }
@@ -177,6 +193,9 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
   );
   const solveSketchRequests = useRef(
     new Map<string, PendingRequest<SketchSolveOutcome>>()
+  );
+  const recognizeImportedFaceRequests = useRef(
+    new Map<string, PendingRequest<FaceRecognitionSummary>>()
   );
   const syncRequests = useRef(new Map<string, PendingRequest<DerivedState>>());
   // Callers who asked to watch their own request's lifecycle states.
@@ -234,6 +253,10 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
         request.reject(error);
       }
       solveSketchRequests.current.clear();
+      for (const request of recognizeImportedFaceRequests.current.values()) {
+        request.reject(error);
+      }
+      recognizeImportedFaceRequests.current.clear();
       for (const request of syncRequests.current.values()) {
         request.reject(error);
       }
@@ -424,6 +447,21 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
           }
           return;
         }
+        if (event.data.type === 'recognize-imported-face') {
+          const pending = recognizeImportedFaceRequests.current.get(
+            event.data.requestId
+          );
+          if (!pending) {
+            return;
+          }
+          recognizeImportedFaceRequests.current.delete(event.data.requestId);
+          if (event.data.ok) {
+            pending.resolve(event.data.summary);
+          } else {
+            pending.reject(new Error(event.data.error));
+          }
+          return;
+        }
         if (event.data.requestId) {
           const pending = syncRequests.current.get(event.data.requestId);
           if (pending) {
@@ -512,6 +550,32 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
     };
   }, []);
 
+  /**
+   * One-off request boilerplate shared by syncOnce, mesh-quality,
+   * solve-sketch and recognize-imported-face: mint an id, register the
+   * pending promise, arm the watchdog, and post. Returns the id alongside
+   * the promise so callers with extra wiring (state subscribers) can name
+   * their own request.
+   */
+  const postRequest = <T>(
+    pending: Map<string, PendingRequest<T>>,
+    message: Record<string, unknown>
+  ):
+    | { ok: true; requestId: string; promise: Promise<T> }
+    | { ok: false } => {
+    const worker = workerRef.current;
+    if (!worker) {
+      return { ok: false };
+    }
+    const requestId = crypto.randomUUID();
+    const promise = new Promise<T>((resolve, reject) => {
+      pending.set(requestId, { resolve, reject });
+    });
+    armedRef.current = true;
+    worker.postMessage({ ...message, requestId });
+    return { ok: true, requestId, promise };
+  };
+
   return {
     state,
     isReadyFor(document) {
@@ -531,21 +595,14 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
       postSync(worker, document, lastSyncedKey, armedRef);
     },
     syncOnce(document, analysis) {
-      const worker = workerRef.current;
-      if (!worker) {
-        return Promise.reject(new Error('Geometry worker unavailable.'));
-      }
-      return new Promise((resolve, reject) => {
-        const requestId = crypto.randomUUID();
-        syncRequests.current.set(requestId, { resolve, reject });
-        armedRef.current = true;
-        worker.postMessage({
-          type: 'sync',
-          document: documentForWorker(document),
-          requestId,
-          ...(analysis ? { analysis } : {})
-        });
+      const posted = postRequest(syncRequests.current, {
+        type: 'sync',
+        document: documentForWorker(document),
+        ...(analysis ? { analysis } : {})
       });
+      return posted.ok
+        ? posted.promise
+        : Promise.reject(new Error('Geometry worker unavailable.'));
     },
     exportModel(format, document, bodyIds, options) {
       const worker = workerRef.current;
@@ -598,42 +655,43 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
       });
     },
     meshQuality(document, bodyIds, deflection, options) {
-      const worker = workerRef.current;
-      if (!worker) {
+      const posted = postRequest(meshQualityRequests.current, {
+        type: 'mesh-quality',
+        document: documentForWorker(document),
+        bodyIds,
+        deflection
+      });
+      if (!posted.ok) {
         return Promise.reject(new Error('Geometry worker is unavailable.'));
       }
-      const requestId = crypto.randomUUID();
-      return new Promise((resolve, reject) => {
-        meshQualityRequests.current.set(requestId, { resolve, reject });
-        if (options?.onState) {
-          stateSubscribers.current.set(requestId, options.onState);
-        }
-        armedRef.current = true;
-        worker.postMessage({
-          type: 'mesh-quality',
-          requestId,
-          document: documentForWorker(document),
-          bodyIds,
-          deflection
-        });
-      });
+      if (options?.onState) {
+        stateSubscribers.current.set(posted.requestId, options.onState);
+      }
+      return posted.promise;
     },
     solveSketch(document, sketchId) {
-      const worker = workerRef.current;
-      if (!worker) {
-        return Promise.reject(new Error('Geometry worker is unavailable.'));
-      }
-      const requestId = crypto.randomUUID();
-      return new Promise((resolve, reject) => {
-        solveSketchRequests.current.set(requestId, { resolve, reject });
-        armedRef.current = true;
-        worker.postMessage({
-          type: 'solve-sketch',
-          requestId,
-          document: documentForWorker(document),
-          sketchId
-        });
+      const posted = postRequest(solveSketchRequests.current, {
+        type: 'solve-sketch',
+        document: documentForWorker(document),
+        sketchId
       });
+      return posted.ok
+        ? posted.promise
+        : Promise.reject(new Error('Geometry worker is unavailable.'));
+    },
+    recognizeImportedFace(input) {
+      const posted = postRequest(recognizeImportedFaceRequests.current, {
+        type: 'recognize-imported-face',
+        document: documentForWorker(input.document),
+        bodyId: input.bodyId,
+        faceHash: input.faceHash,
+        ...(input.topologyId !== undefined
+          ? { topologyId: input.topologyId }
+          : {})
+      });
+      return posted.ok
+        ? posted.promise
+        : Promise.reject(new Error('Geometry worker is unavailable.'));
     },
     invalidate() {
       lastSyncedKey.current = null;
