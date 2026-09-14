@@ -26,6 +26,7 @@ import {
   FIXTURE_BOX_VOLUME,
   FIXTURE_OBJECT_PITCH,
   meshFixture,
+  thinPlateObj,
   THREE_MF_UNIT_MILLIMETRES,
   threeMfFixture
 } from './support/mesh-import-fixtures';
@@ -106,7 +107,7 @@ describe('mesh file imports', { timeout: 30_000 }, () => {
   it.each(FORMATS)(
     'reads a %s box into the triangles an imported mesh stores',
     async (format) => {
-      const mesh = await importMeshFile(format, meshFixture(format));
+      const mesh = await importMeshFile(format, meshFixture(format), 'mm');
 
       expect(mesh.triangleCount).toBe(FIXTURE_BOX_TRIANGLES);
       expect(mesh.indices.length).toBe(mesh.triangleCount * 3);
@@ -126,7 +127,7 @@ describe('mesh file imports', { timeout: 30_000 }, () => {
   it.each(FORMATS)(
     'rebuilds a %s import as a body that survives a save and a reload',
     async (format) => {
-      const mesh = await importMeshFile(format, meshFixture(format));
+      const mesh = await importMeshFile(format, meshFixture(format), 'mm');
       const imported = importMeshBody(
         createProjectDocument(`${format} part`, user),
         {
@@ -186,19 +187,30 @@ describe('mesh file imports', { timeout: 30_000 }, () => {
       'converts a box declared in %s to millimetres',
       async (unit) => {
         const factor = THREE_MF_UNIT_MILLIMETRES[unit]!;
-        const mesh = await importMeshFile('3mf', threeMfFixture({ unit }));
+        const mesh = await importMeshFile(
+          '3mf',
+          threeMfFixture({ unit }),
+          'mm'
+        );
 
         expect(mesh.sourceUnit).toBe(unit);
         expect(mesh.triangleCount).toBe(FIXTURE_BOX_TRIANGLES);
         const xs = mesh.vertices.filter((_value, index) => index % 3 === 0);
         expect(Math.max(...xs)).toBeCloseTo(FIXTURE_BOX.x * factor, 9);
         expect(Math.min(...xs)).toBeCloseTo(0, 9);
-        expect(meshVolume(mesh)).toBeCloseTo(FIXTURE_BOX_VOLUME * factor ** 3, 6);
+        expect(meshVolume(mesh)).toBeCloseTo(
+          FIXTURE_BOX_VOLUME * factor ** 3,
+          6
+        );
       }
     );
 
     it('treats an absent unit as the format default of millimetres', async () => {
-      const mesh = await importMeshFile('3mf', threeMfFixture({ unit: null }));
+      const mesh = await importMeshFile(
+        '3mf',
+        threeMfFixture({ unit: null }),
+        'mm'
+      );
 
       expect(mesh.sourceUnit).toBe('millimeter');
       expect(meshVolume(mesh)).toBeCloseTo(FIXTURE_BOX_VOLUME, 9);
@@ -208,7 +220,8 @@ describe('mesh file imports', { timeout: 30_000 }, () => {
       // Every real exporter deflates its parts; the other fixtures store them.
       const mesh = await importMeshFile(
         '3mf',
-        await deflatedThreeMfFixture({ unit: 'inch' })
+        await deflatedThreeMfFixture({ unit: 'inch' }),
+        'mm'
       );
 
       expect(mesh.sourceUnit).toBe('inch');
@@ -217,18 +230,26 @@ describe('mesh file imports', { timeout: 30_000 }, () => {
 
     it('refuses a unit the format does not define rather than guessing', async () => {
       await expect(
-        importMeshFile('3mf', threeMfFixture({ unit: 'furlong' }))
+        importMeshFile('3mf', threeMfFixture({ unit: 'furlong' }), 'mm')
       ).rejects.toThrow(/declares unit "furlong"/);
     });
 
     it('refuses a package it cannot open, by what stopped it', async () => {
       await expect(
-        importMeshFile('3mf', new TextEncoder().encode('not a zip at all'))
+        importMeshFile(
+          '3mf',
+          new TextEncoder().encode('not a zip at all'),
+          'mm'
+        )
       ).rejects.toThrow('This 3MF package could not be read: it is not a Zip');
     });
 
     it('rebuilds an inch-authored box at its real size', async () => {
-      const mesh = await importMeshFile('3mf', threeMfFixture({ unit: 'inch' }));
+      const mesh = await importMeshFile(
+        '3mf',
+        threeMfFixture({ unit: 'inch' }),
+        'mm'
+      );
       const imported = importMeshBody(
         createProjectDocument('inch part', user),
         {
@@ -264,7 +285,7 @@ describe('mesh file imports', { timeout: 30_000 }, () => {
   it.each(FORMATS)(
     'imports a %s file of two objects as one body of both',
     async (format) => {
-      const mesh = await importMeshFile(format, meshFixture(format, 2));
+      const mesh = await importMeshFile(format, meshFixture(format, 2), 'mm');
       expect(mesh.triangleCount).toBe(FIXTURE_BOX_TRIANGLES * 2);
 
       const body = await rebuiltBody(adapter, `two ${format}`, mesh);
@@ -288,7 +309,8 @@ describe('mesh file imports', { timeout: 30_000 }, () => {
     await expect(
       importMeshFile(
         '3mf',
-        threeMfFixture({ items: [{ objectid: 1 }, { objectid: 1 }] })
+        threeMfFixture({ items: [{ objectid: 1 }, { objectid: 1 }] }),
+        'mm'
       )
     ).rejects.toThrow(
       /^This 3MF file could not be imported as a body: .*non-manifold.*Its triangles form 2 groups that share no vertex/s
@@ -299,7 +321,7 @@ describe('mesh file imports', { timeout: 30_000 }, () => {
     const oneTriangle = new TextEncoder().encode(
       'v 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\n'
     );
-    await expect(importMeshFile('obj', oneTriangle)).rejects.toThrow(
+    await expect(importMeshFile('obj', oneTriangle, 'mm')).rejects.toThrow(
       'This OBJ file could not be imported as a body: An imported mesh needs at least two triangles'
     );
   });
@@ -319,7 +341,8 @@ describe('mesh file imports', { timeout: 30_000 }, () => {
         '3mf',
         threeMfFixture({
           items: [{ objectid: 1, transform: '2 0 0 0 2 0 0 0 2 0 0 0' }]
-        })
+        }),
+        'mm'
       );
 
       expect(mesh.triangleCount).toBe(FIXTURE_BOX_TRIANGLES);
@@ -338,7 +361,8 @@ describe('mesh file imports', { timeout: 30_000 }, () => {
         '3mf',
         threeMfFixture({
           items: [{ objectid: 1, transform: '1 0 0 0 1 0 0 0 1 100 0 0' }]
-        })
+        }),
+        'mm'
       );
 
       const body = await rebuiltBody(adapter, 'moved', mesh);
@@ -356,7 +380,8 @@ describe('mesh file imports', { timeout: 30_000 }, () => {
         '3mf',
         threeMfFixture({
           items: [{ objectid: 1, transform: '-1 0 0 0 1 0 0 0 1 0 0 0' }]
-        })
+        }),
+        'mm'
       );
 
       const body = await rebuiltBody(adapter, 'mirrored', mesh);
@@ -376,7 +401,8 @@ describe('mesh file imports', { timeout: 30_000 }, () => {
             { objectid: 1 },
             { objectid: 1, transform: '1 0 0 0 1 0 0 0 1 20 0 0' }
           ]
-        })
+        }),
+        'mm'
       );
 
       expect(mesh.triangleCount).toBe(FIXTURE_BOX_TRIANGLES * 2);
@@ -392,7 +418,8 @@ describe('mesh file imports', { timeout: 30_000 }, () => {
       // advice it had already followed.
       const mesh = await importMeshFile(
         '3mf',
-        threeMfFixture({ objects: 2, items: [{ objectid: 1 }] })
+        threeMfFixture({ objects: 2, items: [{ objectid: 1 }] }),
+        'mm'
       );
 
       expect(mesh.triangleCount).toBe(FIXTURE_BOX_TRIANGLES);
@@ -410,7 +437,8 @@ describe('mesh file imports', { timeout: 30_000 }, () => {
         '3mf',
         await deflatedThreeMfFixture({
           items: [{ objectid: 1, transform: '1 0 0 0 1 0 0 0 1 7 0 0' }]
-        })
+        }),
+        'mm'
       );
 
       const body = await rebuiltBody(adapter, 'deflated build', mesh);
@@ -422,22 +450,30 @@ describe('mesh file imports', { timeout: 30_000 }, () => {
       // The translator refuses this package too, but as "mesh has no
       // triangles", which names the wrong cause.
       await expect(
-        importMeshFile('3mf', threeMfFixture({ componentObject: true }))
-      ).rejects.toThrow(/builds object "2" out of other objects \(<components>\)/);
+        importMeshFile('3mf', threeMfFixture({ componentObject: true }), 'mm')
+      ).rejects.toThrow(
+        /builds object "2" out of other objects \(<components>\)/
+      );
     });
 
     it('refuses a build that places an object the resources do not define', async () => {
       await expect(
-        importMeshFile('3mf', threeMfFixture({ items: [{ objectid: 9 }] }))
-      ).rejects.toThrow(/build places object "9", which its resources do not define/);
+        importMeshFile(
+          '3mf',
+          threeMfFixture({ items: [{ objectid: 9 }] }),
+          'mm'
+        )
+      ).rejects.toThrow(
+        /build places object "9", which its resources do not define/
+      );
     });
 
     it('refuses a package that places nothing at all', async () => {
       await expect(
-        importMeshFile('3mf', threeMfFixture({ items: [] }))
+        importMeshFile('3mf', threeMfFixture({ items: [] }), 'mm')
       ).rejects.toThrow(/<build> section places no objects/);
       await expect(
-        importMeshFile('3mf', threeMfFixture({ omitBuild: true }))
+        importMeshFile('3mf', threeMfFixture({ omitBuild: true }), 'mm')
       ).rejects.toThrow(/has no <build> section/);
     });
 
@@ -445,7 +481,8 @@ describe('mesh file imports', { timeout: 30_000 }, () => {
       await expect(
         importMeshFile(
           '3mf',
-          threeMfFixture({ items: [{ objectid: 1, transform: '1 2 3' }] })
+          threeMfFixture({ items: [{ objectid: 1, transform: '1 2 3' }] }),
+          'mm'
         )
       ).rejects.toThrow(/not the twelve numbers the format defines/);
       await expect(
@@ -453,7 +490,8 @@ describe('mesh file imports', { timeout: 30_000 }, () => {
           '3mf',
           threeMfFixture({
             items: [{ objectid: 1, transform: '1 0 0 0 1 0 0 0 0 0 0 0' }]
-          })
+          }),
+          'mm'
         )
       ).rejects.toThrow(/collapses it to no volume/);
     });
@@ -464,7 +502,8 @@ describe('mesh file imports', { timeout: 30_000 }, () => {
           '3mf',
           threeMfFixture({
             items: [{ objectid: 1, path: '/3D/other.model' }]
-          })
+          }),
+          'mm'
         )
       ).rejects.toThrow(/from another model part \("\/3D\/other.model"\)/);
     });
@@ -478,7 +517,7 @@ describe('mesh file imports', { timeout: 30_000 }, () => {
       // The fixture's own header, so the refusal cannot be the parser's.
       oversized.set(meshFixture(format), 0);
 
-      await expect(importMeshFile(format, oversized)).rejects.toThrow(
+      await expect(importMeshFile(format, oversized, 'mm')).rejects.toThrow(
         `${policy.label} import is limited to ${Math.round(policy.maxInputBytes / (1024 * 1024))} MB`
       );
     }
@@ -500,13 +539,96 @@ describe('mesh file imports', { timeout: 30_000 }, () => {
     expect(oneByteOver).not.toContain('(33,554,432 bytes); this file is 32 MB');
   });
 
+  /**
+   * The rebuild check runs at the units the document stores, not millimetres.
+   *
+   * `importMeshSolid` sews at a tolerance derived from the numbers it is
+   * handed, and `commitImportedMesh` adopts an imported mesh at
+   * `1 / UNIT_TO_MM[units]` — so a check run in millimetres answers a
+   * different question from the rebuild whenever the document is not in
+   * millimetres. Measured on the pin before the fix: a 0.0002 mm plate passed
+   * the millimetre check, was stored at 1/1000, and then collapsed on the
+   * rebuild's sew — "Imported 12 triangles" in front of no body, which is the
+   * exact failure this check exists to close.
+   */
+  describe('the import-time rebuild check', () => {
+    const THIN_PLATE_MM = 0.0002;
+    const THICK_PLATE_MM = 0.0005;
+    const METRE_SCALE = 1 / 1000;
+    const plateVolume = (thickness: number): number =>
+      FIXTURE_BOX.x * FIXTURE_BOX.y * thickness;
+
+    it('passes a plate a millimetre document can hold, and rebuilds it', async () => {
+      const mesh = await importMeshFile(
+        'obj',
+        thinPlateObj(THIN_PLATE_MM),
+        'mm'
+      );
+      expect(mesh.triangleCount).toBe(FIXTURE_BOX_TRIANGLES);
+
+      const body = await rebuiltBody(adapter, 'thin plate mm', mesh);
+      expect(body.warnings).toEqual([]);
+      expect(body.volume).toBeCloseTo(plateVolume(THIN_PLATE_MM), 9);
+    });
+
+    it('refuses the same plate for a metre document, because the rebuild would', async () => {
+      // First the measurement the refusal has to match: the very triangles a
+      // metre document would store do not come back as a body.
+      const millimetres = await importMeshFile(
+        'obj',
+        thinPlateObj(THIN_PLATE_MM),
+        'mm'
+      );
+      const asStored = await rebuiltBody(adapter, 'thin plate m', {
+        ...millimetres,
+        vertices: millimetres.vertices.map((value) => value * METRE_SCALE)
+      });
+      expect(asStored.volume).toBeUndefined();
+      expect(asStored.warnings).toEqual([
+        expect.stringContaining('Sewing this mesh changed its size')
+      ]);
+
+      // So the import must say so while it is still a file, rather than
+      // reporting twelve triangles and leaving a feature with no body.
+      await expect(
+        importMeshFile('obj', thinPlateObj(THIN_PLATE_MM), 'm')
+      ).rejects.toThrow(
+        /^This OBJ file could not be imported as a body: Sewing this mesh changed its size/
+      );
+    });
+
+    it('still imports a plate a metre document can hold', async () => {
+      // The check must not widen into a refusal of thin plates: the same file
+      // 0.0003 mm thicker sews at both scales, and has to import at both.
+      const mesh = await importMeshFile(
+        'obj',
+        thinPlateObj(THICK_PLATE_MM),
+        'm'
+      );
+
+      // The returned vertices are millimetres whatever the document units
+      // are — only the check is scaled — so the commit's own conversion
+      // stays the one place the document's units are applied.
+      expect(Math.max(...mesh.vertices)).toBeCloseTo(FIXTURE_BOX.y, 12);
+      const body = await rebuiltBody(adapter, 'thick plate m', {
+        ...mesh,
+        vertices: mesh.vertices.map((value) => value * METRE_SCALE)
+      });
+      expect(body.warnings).toEqual([]);
+      expect(body.volume).toBeCloseTo(
+        plateVolume(THICK_PLATE_MM) * METRE_SCALE ** 3,
+        15
+      );
+    });
+  });
+
   it('refuses a file that is not the format it claims, by name', async () => {
     await expect(
-      importMeshFile('ply', new TextEncoder().encode('not a ply file'))
+      importMeshFile('ply', new TextEncoder().encode('not a ply file'), 'mm')
     ).rejects.toThrow(/^PLY import failed: /);
     // A JSON glTF is not a GLB, which is why `.gltf` is not offered at all.
     await expect(
-      importMeshFile('glb', new TextEncoder().encode('{"asset":{}}'))
+      importMeshFile('glb', new TextEncoder().encode('{"asset":{}}'), 'mm')
     ).rejects.toThrow(/glTF binary import failed: .*GLB/);
   });
 
