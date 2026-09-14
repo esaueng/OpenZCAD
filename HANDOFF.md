@@ -258,8 +258,8 @@ Run from the worktree root on this branch, at the final commit:
 - `pnpm test:parity-corpus` → `Test Files 7 passed (7)`,
   `Tests 174 passed | 1 skipped (175)`, exit 0 — the baseline exactly.
 - `pnpm build` → exit 0, `"warnings": []`, `"failures": []`. Entry chunk
-  `assets/index-CddRH-j7.js` 508,054 bytes against the 512,000-byte budget, and
-  no `assets/src-*.js` among `initialAssets`.
+  `assets/index-*.js` 508,054 bytes against the 512,000-byte budget, and no
+  `assets/src-*.js` among `initialAssets`.
 
 `pnpm test:e2e` was not run (per the briefing).
 
