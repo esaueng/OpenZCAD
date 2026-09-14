@@ -334,11 +334,12 @@ describe('growing holder recipe compiler', () => {
       commandFactories.transformBody({
         name: 'Move',
         targetBodyId: recipe.targetBodyId,
-        translation: { x: 1, y: 0, z: 0 }
+        translation: { x: 1, y: 0, z: 0 },
+        scale: 2
       })
     );
     expect(() => growingHolderCommand(manager.document, recipe)).toThrow(
-      /unmodified/
+      /only fixed moves or rotations/
     );
   });
 });

@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
   createCadDocumentDigest,
+  createEditCandidateCatalog,
   createGrowingHolderProposal,
   growingHolderProposalTarget,
   parseCadPatchProposal,
@@ -12,7 +13,12 @@ import {
   commandsForCadPatch,
   growingHolderHistories
 } from '@openzcad/command-system';
-import { createProjectDocument, setParameter } from '@openzcad/document-core';
+import {
+  createProjectDocument,
+  listFeaturesInOrder,
+  normalizeDocument,
+  setParameter
+} from '@openzcad/document-core';
 import {
   createExactKernelAdapter,
   type ExactKernelAdapter
@@ -179,6 +185,205 @@ describe('growing-holder assistant proposal', { timeout: 300_000 }, () => {
         operations: [{ ...operation, parameter: 'opening width' }]
       })
     ).toThrow();
+  });
+
+  it('parameterizes a moved and rotated holder in place and preserves it through edits, undo, reload and export', async () => {
+    const bodyId = imported.bodyOrder[0]!;
+    const manager = new CommandManager(imported);
+    manager.execute(
+      commandFactories.addPrimitive({
+        name: 'Other assembly body',
+        primitiveKind: 'box',
+        dimensions: { width: 10, height: 20, depth: 30 }
+      })
+    );
+    const otherId = manager.document.bodyOrder.at(-1)!;
+    manager.execute(
+      commandFactories.transformBody({
+        name: 'Move other body',
+        targetBodyId: otherId,
+        translation: { x: 100, y: 200, z: 300 }
+      })
+    );
+    manager.execute(
+      commandFactories.transformBody({
+        name: 'Move',
+        targetBodyId: bodyId,
+        translation: { x: '10 + 10', y: -12, z: 7 }
+      })
+    );
+    manager.execute(
+      commandFactories.transformBody({
+        name: 'Rotate and move',
+        targetBodyId: bodyId,
+        translation: { x: 3, y: 15, z: -2 },
+        rotationDeg: { x: 0, y: 0, z: 90 }
+      })
+    );
+    const moved = {
+      ...manager.document,
+      derived: await adapter.syncDocument(manager.document)
+    };
+    expect(moved.derived.warnings).toEqual([]);
+    const selection = selectionOf([bodyId]);
+    const proposal = createGrowingHolderProposal(moved, selection)!;
+    expect(proposal).not.toBeNull();
+    expect(
+      createEditCandidateCatalog(moved, selection).candidates.some(
+        (candidate) =>
+          candidate.parameters.some((p) => p.key === 'opening_width')
+      )
+    ).toBe(true);
+    const digest = createCadDocumentDigest(moved, selection);
+    const parsed = validateCadPatchProposalAgainstDigest(
+      parseCadPatchProposal(proposal, digest),
+      digest
+    );
+    const { candidate } = await preflightCadPatch(moved, parsed, (doc) =>
+      adapter.syncDocument(doc)
+    );
+    expect(candidate.derived.warnings).toEqual([]);
+    expect(candidate.derived.exportableBodyIds).toHaveLength(2);
+    expect(candidate.derived.bodyRepresentations[otherId]!.bbox).toEqual(
+      moved.derived.bodyRepresentations[otherId]!.bbox
+    );
+    const history = growingHolderHistories(candidate)[0]!;
+    expect(history).toBeDefined();
+    expect(history.recipe.axis).toBe('y');
+    const initial =
+      candidate.derived.bodyRepresentations[history.resultBodyId]!;
+    for (const axis of ['x', 'y', 'z'] as const) {
+      expect(initial.bbox.min[axis]).toBeCloseTo(
+        moved.derived.bodyRepresentations[bodyId]!.bbox.min[axis],
+        6
+      );
+      expect(initial.bbox.max[axis]).toBeCloseTo(
+        moved.derived.bodyRepresentations[bodyId]!.bbox.max[axis],
+        6
+      );
+    }
+    for (const width of [60, 30]) {
+      const grown = setParameter(candidate, {
+        name: 'opening_width',
+        expression: String(width)
+      });
+      const derived = await adapter.syncDocument(grown);
+      expect(derived.warnings).toEqual([]);
+      const result = derived.bodyRepresentations[history.resultBodyId]!;
+      expect(result.bbox.min.y).toBeCloseTo(34.5 - (width - 44) / 2, 6);
+      expect(result.bbox.max.y).toBeCloseTo(95.5 + (width - 44) / 2, 6);
+      for (const axis of ['x', 'z'] as const) {
+        expect(result.bbox.min[axis]).toBeCloseTo(initial.bbox.min[axis], 6);
+        expect(result.bbox.max[axis]).toBeCloseTo(initial.bbox.max[axis], 6);
+      }
+    }
+    const applied = new CommandManager(moved);
+    for (const command of commandsForCadPatch(moved, proposal))
+      applied.execute(command);
+    applied.undo();
+    expect(applied.document.featureOrder).toEqual(moved.featureOrder);
+    applied.redo();
+    const reopened = normalizeDocument(
+      JSON.parse(JSON.stringify(applied.document)) as ProjectDocument
+    );
+    expect(growingHolderHistories(reopened)).toHaveLength(1);
+    expect((await adapter.syncDocument(reopened)).warnings).toEqual([]);
+    const step = await adapter.exportStep(reopened, [
+      growingHolderHistories(reopened)[0]!.resultBodyId
+    ]);
+    const kernel = new RemusKernel();
+    try {
+      const solids = kernel.deserializeSolids(
+        remusTranslators().importStep(new TextEncoder().encode(step))
+      );
+      expect(solids).toHaveLength(1);
+      expect(kernel.validateSolid(solids[0]!)).toBe(0);
+      const bbox = kernel.boundingBox(solids[0]!);
+      expect(bbox[0]).toBeCloseTo(-17, 6);
+      expect(bbox[1]).toBeCloseTo(34.5, 6);
+      expect(bbox[2]).toBeCloseTo(5, 6);
+    } finally {
+      kernel.free();
+    }
+    // Altering even the original placement invalidates the compiled history.
+    const edited = new CommandManager(candidate);
+    const move = listFeaturesInOrder(candidate).find((f) => f.name === 'Move')!;
+    if (move.data.featureKind !== 'transform') throw new Error('move');
+    edited.execute(
+      commandFactories.updateFeature({
+        featureId: move.featureId,
+        data: {
+          ...move.data,
+          transform: {
+            ...move.data.transform,
+            translation: { x: 99, y: -12, z: 7 }
+          }
+        }
+      })
+    );
+    expect(growingHolderHistories(edited.document)).toEqual([]);
+  });
+
+  it('does not offer a verified opening for unsupported history even when recognition is cached', () => {
+    const bodyId = imported.bodyOrder[0]!;
+    const proposal = createGrowingHolderProposal(
+      imported,
+      selectionOf([bodyId])
+    )!;
+    for (const kind of [
+      'scale',
+      'parameter',
+      'suppressed',
+      'shape-edit'
+    ] as const) {
+      const manager = new CommandManager(imported);
+      manager.execute(
+        commandFactories.setParameter({ name: 'offset', expression: '2' })
+      );
+      manager.execute(
+        commandFactories.transformBody({
+          name: 'Move',
+          targetBodyId: bodyId,
+          translation: { x: kind === 'parameter' ? 'offset' : 2, y: 0, z: 0 },
+          ...(kind === 'scale' ? { scale: 2 } : {})
+        })
+      );
+      if (kind === 'suppressed') {
+        const move = listFeaturesInOrder(manager.document).at(-1)!;
+        manager.execute(
+          commandFactories.setNodeMetadata({
+            nodeId: move.id,
+            metadata: { suppressed: true }
+          })
+        );
+      }
+      if (kind === 'shape-edit') {
+        manager.execute(
+          commandFactories.addPrimitive({
+            name: 'Cutter',
+            primitiveKind: 'box',
+            dimensions: { width: 1, height: 1, depth: 1 }
+          })
+        );
+        manager.execute(
+          commandFactories.booleanBodies({
+            name: 'Cut',
+            operation: 'subtract',
+            targetBodyIds: [bodyId, manager.document.bodyOrder.at(-1)!]
+          })
+        );
+      }
+      const stale = { ...manager.document, derived: imported.derived };
+      expect(
+        createGrowingHolderProposal(stale, selectionOf([bodyId])),
+        kind
+      ).toBeNull();
+      expect(() => commandsForCadPatch(stale, proposal), kind).toThrow(
+        kind === 'shape-edit'
+          ? /already consumed/
+          : /only fixed moves or rotations/
+      );
+    }
   });
 
   it('accepts explicit nulls for unmeasured optional fields from structured AI output', () => {

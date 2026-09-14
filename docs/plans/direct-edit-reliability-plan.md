@@ -190,13 +190,16 @@ Ordered by expected leverage; each item retires pins and states which.
     `App.tsx` and the corpus replay, so a fixture measures the gesture the
     product performs rather than a corpus-local guess.
 
-  Covers: the max sides of a box primitive, through fillet and chamfer
-  chains, plus the cylinder top cap that already routed this way. Does not
-  cover: min sides (the box grows from its minimum corner, so moving one
-  would have to move the body too), and faces on boolean, imported, or
-  otherwise unresolvable bodies. Those keep the local push/pull, with the
-  prism semantics intact, and closing *that* class is the kernel M6
-  tangent-propagation ask, not an app-side fallback. Kernel dependencies:
+  Covers: both sides of a box primitive through verified fillet/chamfer
+  chains, including expression dimensions and uniform scale. Minimum-side
+  edits compose a source-dimension change with a local base shift, keeping
+  the opposite side fixed. The same approach already covers cylinder caps.
+  Box faces default to Resize Body, with Offset Face available explicitly.
+  Rotations before an edge modifier remain outside the proven box-axis
+  mapping; rotations after the modifier preserve verified face roles.
+  Boolean, imported, and otherwise unresolvable bodies retain local push/pull
+  semantics. General tangent-propagating move-face support remains the kernel
+  M6 work, distinct from this history-based route. Kernel dependencies:
   none. Retired all three class-S shape pins
   (`box-all-edges-filleted-top-offset`,
   `box-all-edges-chamfered-top-offset`,
