@@ -18,9 +18,12 @@ import type {
 } from '../worker/meshImportWorker';
 
 export interface ImportedMeshFile {
+  /** Millimetres: a declared unit, when the format carries one, is applied. */
   vertices: number[];
   indices: number[];
   triangleCount: number;
+  /** The unit the file declared, so the import can say what it converted. */
+  sourceUnit?: string;
 }
 
 function abortError(): Error {
@@ -91,7 +94,10 @@ export function importMeshFileInDisposableWorker(
             // only how it crossed `postMessage`.
             vertices: Array.from(result.vertices),
             indices: Array.from(result.indices),
-            triangleCount: result.triangleCount
+            triangleCount: result.triangleCount,
+            ...(result.sourceUnit === undefined
+              ? {}
+              : { sourceUnit: result.sourceUnit })
           })
         );
       } else if (isChunkLoadError(result.error)) {

@@ -8598,8 +8598,11 @@ export function App() {
     mesh: {
       name: string;
       triangleCount: number;
+      /** Millimetres, whatever the file declared. */
       vertices: number[];
       indices: number[];
+      /** Set when the file declared a unit that was converted to millimetres. */
+      sourceUnit?: string;
     };
   }): Promise<void> {
     const { file, contentType, artifactKind, importManager, mesh } = input;
@@ -8608,10 +8611,11 @@ export function App() {
       // and `doc` is the same render's value throughout.
       return;
     }
-    // A mesh file carries no unit declaration the importers honour; the
-    // interchange convention is millimetres, and the mesh exports multiply by
-    // UNIT_TO_MM on the way out. Adopting the vertices at 1/UNIT_TO_MM keeps a
-    // non-mm document's round trip at the same physical size.
+    // The triangles arrive in millimetres — a 3MF's declared unit is applied
+    // by the importer, and the formats that declare none follow the STL
+    // interchange convention. The mesh exports multiply by UNIT_TO_MM on the
+    // way out, so adopting the vertices at 1/UNIT_TO_MM keeps a non-mm
+    // document's round trip at the same physical size.
     const meshScale = 1 / UNIT_TO_MM[doc.units];
     const vertices =
       meshScale === 1
@@ -8657,8 +8661,14 @@ export function App() {
       })
     );
     if (created) {
+      // A converted file says so: the numbers in the document are not the
+      // numbers in the file, and nothing else on screen would reveal it.
+      const converted =
+        mesh.sourceUnit && mesh.sourceUnit !== 'millimeter'
+          ? `, converted from ${mesh.sourceUnit}`
+          : '';
       setStatus(
-        `Imported ${mesh.triangleCount} triangles from ${file.name}` +
+        `Imported ${mesh.triangleCount} triangles from ${file.name}${converted}` +
           (archived
             ? '.'
             : ' (original file not archived: upload unavailable).')
