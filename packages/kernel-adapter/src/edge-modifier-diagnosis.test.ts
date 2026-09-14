@@ -2,11 +2,60 @@ import { describe, expect, it } from 'vitest';
 import {
   addPrimitiveFeature,
   booleanBodies,
+  chamferEdges,
   createProjectDocument,
   filletEdges
 } from '@openzcad/document-core';
 import { toUserId, type BodyId } from '@openzcad/shared';
 import { createExactKernelAdapter } from './exact';
+import { RemusKernel } from './remus-runtime';
+import {
+  acceptedEdgeModifierProbe,
+  applyEdgeModifier,
+  blendCliffLimit,
+  chamferLadderAim,
+  edgeModifierFailureMessage,
+  EDGE_MODIFIER_PROBE_RATIOS
+} from './exact-edge-modifiers';
+
+/**
+ * A kernel whose `fillet` returns what its `chamfer` returns: a real, valid,
+ * in-envelope solid that is bevelled rather than rounded. This is what Remus
+ * used to do when no blend engine could round a selection, and it is the one
+ * failure the acceptance rules above the surfaces cannot see.
+ */
+function bevellingKernel(kernel: RemusKernel): RemusKernel {
+  return new Proxy(kernel, {
+    get(target, property) {
+      if (property === 'fillet') {
+        return (solid: number, edges: Uint32Array, size: number) =>
+          target.chamfer(solid, edges, size);
+      }
+      const value: unknown = Reflect.get(target, property, target);
+      return typeof value === 'function'
+        ? (value as (...args: unknown[]) => unknown).bind(target)
+        : value;
+    }
+  });
+}
+
+/** Records every size `fillet` is called at, to count kernel round-trips. */
+function countingKernel(kernel: RemusKernel, sizes: number[]): RemusKernel {
+  return new Proxy(kernel, {
+    get(target, property) {
+      if (property === 'fillet') {
+        return (solid: number, edges: Uint32Array, size: number) => {
+          sizes.push(size);
+          return target.fillet(solid, edges, size);
+        };
+      }
+      const value: unknown = Reflect.get(target, property, target);
+      return typeof value === 'function'
+        ? (value as (...args: unknown[]) => unknown).bind(target)
+        : value;
+    }
+  });
+}
 
 const user = toUserId('user_blend');
 
@@ -87,8 +136,444 @@ describe('edge modifier failure diagnosis', { timeout: 60_000 }, () => {
       expect(failure).toMatch(/deselect those \d+/);
 
       // The claim a plain box disproves must not come back.
-      expect(failure).not.toMatch(/Edges that meet at a shared corner cannot be/);
+      expect(failure).not.toMatch(
+        /Edges that meet at a shared corner cannot be/
+      );
       expect(failure).not.toMatch(/at any radius/);
+    } finally {
+      adapter.dispose();
+    }
+  });
+
+  /**
+   * Remus B23 made fillet one cascade — the walking engine, then a guarded
+   * rolling-ball rebuild — and a radius the rolling ball cannot fit now comes
+   * back as a typed `cliff-encountered` refusal carrying the ceiling the
+   * kernel measured from the support faces. Before B23 the same request could
+   * come back as a flat planar bevel, which passes closure, validity, bounds
+   * and volume alike.
+   */
+  it('refuses an unfittable radius with the ceiling the kernel measured', () => {
+    const kernel = new RemusKernel();
+    const box = kernel.makeBox(30, 18, 24);
+    const edge = Array.from(kernel.getSolidEdges(box))[0]!;
+
+    let reported: string | null = null;
+    const refused = applyEdgeModifier(
+      kernel,
+      box,
+      [edge],
+      'fillet',
+      30,
+      (message) => {
+        reported = message;
+      }
+    );
+    expect(refused).toBeNull();
+    expect(reported).toMatch(/^cliff-encountered:/);
+
+    // The limit is read out of the kernel's own sentence, never re-derived:
+    // this edge is 30 long, and half of that is not the answer.
+    const limit = blendCliffLimit(reported);
+    expect(limit).toBe(18);
+    expect(kernel.edgeLength(edge)).toBe(30);
+
+    // The ceiling is a bound, not a radius to repeat back: the kernel refuses
+    // 18 itself, and the r17.999 it does build is a body 2x the height of its
+    // input, which the bounds guard rejects. So the message may quote it as a
+    // limit but must quote a probed size as the thing that works.
+    expect(() =>
+      kernel.fillet(box, Uint32Array.from([edge]), limit!)
+    ).toThrow();
+    expect(
+      applyEdgeModifier(kernel, box, [edge], 'fillet', limit! - 1e-3)
+    ).toBeNull();
+    expect(
+      acceptedEdgeModifierProbe(kernel, box, [edge], 'fillet', 30, limit)
+    ).toBe(9);
+
+    const message = edgeModifierFailureMessage(
+      kernel,
+      box,
+      [edge],
+      'fillet',
+      30,
+      false,
+      reported
+    );
+    expect(message).toContain(
+      'Fillet could not be created on 1 selected edge with radius 30.'
+    );
+    expect(message).toContain('Try a smaller radius: radius 9 builds here.');
+    // The ceiling aimed the ladder but must not be quoted: it is not a size
+    // that works, and on other bodies it is not even a bound — see the plate
+    // test below.
+    expect(message).not.toContain('18');
+    // The structural claims must not be reached: this edge rounds fine.
+    expect(message).not.toMatch(/Closed rim edges|partial revolve/);
+  });
+
+  /**
+   * The kernel's `available radius` is measured against whichever support
+   * face its cascade stopped on FIRST, so it moves with the requested size
+   * and is not an upper bound on what works. A 50x50x2 plate is the case
+   * that proves it: r60 is refused with `available radius 50` and r30 on the
+   * same edge with `available radius 2`, while r2 itself still refuses. So
+   * the message may quote only a size the ladder actually built.
+   */
+  it('never quotes a ceiling the kernel has not proved', () => {
+    const kernel = new RemusKernel();
+    const plate = kernel.makeBox(50, 50, 2);
+    const edge = Array.from(kernel.getSolidEdges(plate))[0]!;
+
+    const refusalAt = (radius: number): string | null => {
+      let reported: string | null = null;
+      applyEdgeModifier(kernel, plate, [edge], 'fillet', radius, (message) => {
+        reported = message;
+      });
+      return reported;
+    };
+
+    const atSixty = refusalAt(60);
+    expect(blendCliffLimit(atSixty)).toBe(50);
+    // Not monotone, and not a bound: the same edge reports a 25x smaller
+    // ceiling one size down, and even that ceiling refuses.
+    expect(blendCliffLimit(refusalAt(30))).toBe(2);
+    expect(applyEdgeModifier(kernel, plate, [edge], 'fillet', 40)).toBeNull();
+    expect(applyEdgeModifier(kernel, plate, [edge], 'fillet', 5)).toBeNull();
+    expect(applyEdgeModifier(kernel, plate, [edge], 'fillet', 2)).toBeNull();
+
+    const message = edgeModifierFailureMessage(
+      kernel,
+      plate,
+      [edge],
+      'fillet',
+      60,
+      false,
+      atSixty
+    );
+    expect(message).toContain(
+      'Fillet could not be created on 1 selected edge with radius 60.'
+    );
+    expect(message).not.toContain('50');
+    expect(message).not.toContain('support face');
+
+    // Whatever size the sentence does name, the same selection must build at
+    // it. This is the property the ceiling failed.
+    const quoted = /radius ([0-9.eE+-]+) builds here/.exec(message);
+    expect(quoted).not.toBeNull();
+    expect(
+      applyEdgeModifier(kernel, plate, [edge], 'fillet', Number(quoted![1]))
+    ).not.toBeNull();
+  });
+
+  /**
+   * What the ceiling is for: aiming the ladder. These counts are the saving
+   * the branch claims, pinned so the claim cannot drift — including the case
+   * where there is no saving at all, because an uncorroborated ceiling seeds
+   * a ladder that still has to walk all the way down.
+   */
+  it('spends fewer kernel round-trips only where the ceiling is close', () => {
+    const kernel = new RemusKernel();
+    const calls: number[] = [];
+    const counting = countingKernel(kernel, calls);
+
+    const ladderCalls = (
+      target: number,
+      edge: number,
+      size: number,
+      seeded: boolean
+    ): number[] => {
+      let reported: string | null = null;
+      applyEdgeModifier(kernel, target, [edge], 'fillet', size, (message) => {
+        reported = message;
+      });
+      calls.length = 0;
+      if (seeded) {
+        acceptedEdgeModifierProbe(
+          counting,
+          target,
+          [edge],
+          'fillet',
+          size,
+          blendCliffLimit(reported)
+        );
+      } else {
+        // The pre-branch ladder: fractions of the REFUSED size, stopping at
+        // the first one accepted.
+        EDGE_MODIFIER_PROBE_RATIOS.some(
+          (ratio) =>
+            applyEdgeModifier(
+              counting,
+              target,
+              [edge],
+              'fillet',
+              size * ratio
+            ) !== null
+        );
+      }
+      return [...calls];
+    };
+
+    const box = kernel.makeBox(30, 18, 24);
+    const boxEdge = Array.from(kernel.getSolidEdges(box))[0]!;
+    expect(ladderCalls(box, boxEdge, 30, false)).toEqual([15, 3.75]);
+    expect(ladderCalls(box, boxEdge, 30, true)).toEqual([9]);
+
+    const plate = kernel.makeBox(50, 50, 2);
+    const plateEdge = Array.from(kernel.getSolidEdges(plate))[0]!;
+    expect(ladderCalls(plate, plateEdge, 30, false)).toHaveLength(3);
+    expect(ladderCalls(plate, plateEdge, 30, true)).toEqual([1]);
+    // The ceiling reported at r60 is 50, far above what builds, so the
+    // seeded ladder spends the same three round-trips as the blind one.
+    expect(ladderCalls(plate, plateEdge, 60, false)).toHaveLength(3);
+    expect(ladderCalls(plate, plateEdge, 60, true)).toHaveLength(3);
+  });
+
+  /**
+   * The acceptance rules are the single definition of "the edit worked", and
+   * the size probe runs through them too, so a bevel accepted here would both
+   * ship a chamfer under a fillet's name and certify "try a smaller radius" as
+   * advice that silently produces the wrong shape.
+   */
+  it('refuses a bevel offered as a fillet, and will not probe one', () => {
+    const kernel = new RemusKernel();
+    const bevelling = bevellingKernel(kernel);
+    const box = kernel.makeBox(30, 18, 24);
+    const edge = Array.from(kernel.getSolidEdges(box))[0]!;
+
+    // The same solid is a perfectly good chamfer, so nothing above the
+    // surfaces can tell it apart.
+    expect(applyEdgeModifier(kernel, box, [edge], 'chamfer', 2)).not.toBeNull();
+    expect(applyEdgeModifier(kernel, box, [edge], 'fillet', 2)).not.toBeNull();
+
+    let reported: string | null = null;
+    expect(
+      applyEdgeModifier(bevelling, box, [edge], 'fillet', 2, (message) => {
+        reported = message;
+      })
+    ).toBeNull();
+    expect(reported).toContain('bevelled rather than rounded');
+
+    // Every rung of the ladder is bevelled too, so none of them may be read
+    // as evidence that a smaller radius works.
+    expect(
+      acceptedEdgeModifierProbe(bevelling, box, [edge], 'fillet', 30)
+    ).toBeNull();
+    expect(
+      acceptedEdgeModifierProbe(kernel, box, [edge], 'fillet', 30)
+    ).not.toBeNull();
+  });
+
+  /**
+   * A chamfer carries an angle, and the ladder has to carry it too. Without
+   * it the probe proves the SYMMETRIC chamfer and the sentence reports the
+   * proof as if it were the angled one: on this box distance 10 builds at
+   * 45° and is refused at 80°, so `distance 10 builds here` was advice that
+   * refused again, and again at 5, and again at 2.5.
+   */
+  it('quotes a chamfer distance proved at the angle that was asked for', () => {
+    const kernel = new RemusKernel();
+    const box = kernel.makeBox(30, 18, 24);
+    const edge = Array.from(kernel.getSolidEdges(box))[0]!;
+    const angle = (80 * Math.PI) / 180;
+
+    let reported: string | null = null;
+    expect(
+      applyEdgeModifier(
+        kernel,
+        box,
+        [edge],
+        'chamfer',
+        20,
+        (message) => {
+          reported = message;
+        },
+        undefined,
+        angle
+      )
+    ).toBeNull();
+
+    // The size a symmetric probe would have returned, and the reason it may
+    // not be quoted under an angled request.
+    expect(
+      applyEdgeModifier(kernel, box, [edge], 'chamfer', 10)
+    ).not.toBeNull();
+    expect(
+      applyEdgeModifier(
+        kernel,
+        box,
+        [edge],
+        'chamfer',
+        10,
+        undefined,
+        undefined,
+        angle
+      )
+    ).toBeNull();
+
+    const message = edgeModifierFailureMessage(
+      kernel,
+      box,
+      [edge],
+      'chamfer',
+      20,
+      false,
+      reported,
+      angle
+    );
+    expect(message).toContain(
+      'Chamfer could not be created on 1 selected edge with distance 20.'
+    );
+    expect(message).not.toContain('distance 10 builds here');
+
+    // Whatever distance the sentence names must build AT THIS ANGLE.
+    const quoted = /distance ([0-9.eE+-]+) builds here/.exec(message);
+    expect(quoted).not.toBeNull();
+    expect(
+      applyEdgeModifier(
+        kernel,
+        box,
+        [edge],
+        'chamfer',
+        Number(quoted![1]),
+        undefined,
+        undefined,
+        angle
+      )
+    ).not.toBeNull();
+  });
+
+  /**
+   * Threading the angle alone would trade a false size for a false cause: an
+   * angled chamfer cuts `distance × tan(angle)` off the second face, so at
+   * 88° every rung of a ladder measured from the distance is still 28x too
+   * deep, the ladder comes back empty and the message reaches for a
+   * structural cause that is not there. {@link chamferLadderAim} measures the
+   * ladder from the setback instead; the rungs are still proved by the
+   * kernel, so aiming can cost a rung and never a claim.
+   */
+  it('aims an angled chamfer ladder at the setback, not the distance', () => {
+    const kernel = new RemusKernel();
+    const cylinder = kernel.makeCylinder(10, 20);
+    const rim = Array.from(kernel.getSolidEdges(cylinder)).sort(
+      (a, b) => kernel.edgeLength(b) - kernel.edgeLength(a)
+    )[0]!;
+    const angle = (88 * Math.PI) / 180;
+
+    let reported: string | null = null;
+    expect(
+      applyEdgeModifier(
+        kernel,
+        cylinder,
+        [rim],
+        'chamfer',
+        40,
+        (message) => {
+          reported = message;
+        },
+        undefined,
+        angle
+      )
+    ).toBeNull();
+
+    // Every rung of a ladder measured from the refused distance fails here.
+    for (const ratio of EDGE_MODIFIER_PROBE_RATIOS) {
+      expect(
+        applyEdgeModifier(
+          kernel,
+          cylinder,
+          [rim],
+          'chamfer',
+          40 * ratio,
+          undefined,
+          undefined,
+          angle
+        )
+      ).toBeNull();
+    }
+    // The aim is what the kernel's own setback arithmetic says it should be.
+    expect(chamferLadderAim(40, angle)).toBeCloseTo(40 / Math.tan(angle), 12);
+    expect(chamferLadderAim(40, Math.PI / 4)).toBe(40);
+    expect(chamferLadderAim(40, undefined)).toBe(40);
+
+    const message = edgeModifierFailureMessage(
+      kernel,
+      cylinder,
+      [rim],
+      'chamfer',
+      40,
+      false,
+      reported,
+      angle
+    );
+    // A rim that chamfers at a smaller distance is not a rim that cannot be
+    // chamfered.
+    expect(message).not.toContain('Closed rim edges');
+    const quoted = /distance ([0-9.eE+-]+) builds here/.exec(message);
+    expect(quoted).not.toBeNull();
+    expect(
+      applyEdgeModifier(
+        kernel,
+        cylinder,
+        [rim],
+        'chamfer',
+        Number(quoted![1]),
+        undefined,
+        undefined,
+        angle
+      )
+    ).not.toBeNull();
+  });
+
+  /**
+   * The same property end to end, because the angle has to survive the
+   * builder as well as the probe: the distance the warning names, set back
+   * into the same feature at the same angle, has to build.
+   */
+  it('names an angled chamfer distance that then builds in the document', async () => {
+    const adapter = await createExactKernelAdapter();
+    try {
+      const base = addPrimitiveFeature(
+        createProjectDocument('Angled chamfer', user),
+        {
+          name: 'Box',
+          primitiveKind: 'box',
+          dimensions: { width: 30, height: 18, depth: 24 }
+        }
+      );
+      const bodyId = base.bodyOrder[0] as BodyId;
+      const built = await adapter.syncDocument(base);
+      const edgeHash =
+        built.bodyRepresentations[bodyId]?.topology?.edges[0]?.hash;
+      expect(edgeHash).toBeTypeOf('number');
+
+      const refused = chamferEdges(base, {
+        name: 'Steep chamfer',
+        targetBodyId: bodyId,
+        edgeHashes: [edgeHash!],
+        size: 20,
+        angleDeg: 80
+      }).document;
+      const refusedDerived = await adapter.syncDocument(refused);
+      expect(refusedDerived.warnings).toHaveLength(1);
+      expect(refusedDerived.warnings[0]).toContain(
+        'Chamfer could not be created on 1 selected edge with distance 20.'
+      );
+      const quoted = /distance ([0-9.eE+-]+) builds here/.exec(
+        refusedDerived.warnings[0]!
+      );
+      expect(quoted).not.toBeNull();
+
+      const retried = chamferEdges(base, {
+        name: 'Steep chamfer',
+        targetBodyId: bodyId,
+        edgeHashes: [edgeHash!],
+        size: Number(quoted![1]),
+        angleDeg: 80
+      }).document;
+      const retriedDerived = await adapter.syncDocument(retried);
+      expect(retriedDerived.warnings).toEqual([]);
     } finally {
       adapter.dispose();
     }
