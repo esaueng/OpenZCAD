@@ -2027,7 +2027,7 @@ export interface FeatureWarning {
   kind: 'build-failed' | 'refusal' | 'advisory' | 'suppressed';
   /**
    * The exact kernel's own classification, present only when this warning
-   * came from a boolean the exact-only pipeline refused.
+   * came from an operation the kernel refused with a category.
    *
    * Session-only like the rest of this record, and the field to branch on:
    * `message` is product copy and may be reworded at any time, while
@@ -2036,9 +2036,20 @@ export interface FeatureWarning {
    * `tolerance_violation`, `cancelled`, `internal`. It is typed as a string
    * rather than a union so a new kernel category cannot break a build here
    * before anyone has decided what it means.
+   *
+   * `family` says which kernel API refused, because the category alone does
+   * not: `invalid_topology` from a boolean is a pair the engine would not
+   * combine, and from a validation it is a body that came back malformed.
+   * `operation` is present only for a family that names one — the booleans
+   * do, a validation has no operand pair to name.
+   *
+   * This carried only booleans when it was introduced. Every family with a
+   * typed twin on the pin now travels on the same field rather than growing
+   * a second one beside it.
    */
-  exactBooleanRefusal?: {
-    operation: 'cut' | 'fuse' | 'intersect';
+  kernelRefusal?: {
+    family: 'boolean' | 'validation' | 'healing' | 'import';
+    operation?: string;
     category: string;
     code: string;
   };
