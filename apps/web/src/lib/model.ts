@@ -128,6 +128,17 @@ export function inferContentType(fileName: string): string {
   if (lower.endsWith('.step') || lower.endsWith('.stp')) {
     return 'model/step';
   }
+  // The mesh interchange formats the kernel's translators read. Registered
+  // media types where one exists; PLY has none, so it keeps the generic one.
+  if (lower.endsWith('.3mf')) {
+    return 'model/3mf';
+  }
+  if (lower.endsWith('.obj')) {
+    return 'model/obj';
+  }
+  if (lower.endsWith('.glb')) {
+    return 'model/gltf-binary';
+  }
   return 'application/octet-stream';
 }
 
