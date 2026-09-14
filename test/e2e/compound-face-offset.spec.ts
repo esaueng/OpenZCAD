@@ -27,7 +27,7 @@ test('previews and commits a compound STEP cap offset, then undoes, redoes and r
   await page.goto('/');
   await page.getByLabel('Project name').fill('Compound face offset');
   await page.getByRole('button', { name: 'Create project' }).click();
-  await page.getByLabel('Import STEP or STL…').setInputFiles({
+  await page.getByLabel(/^Import STEP or \/ /).setInputFiles({
     name: 'components.step',
     mimeType: 'application/step',
     buffer: Buffer.from(bytes)
