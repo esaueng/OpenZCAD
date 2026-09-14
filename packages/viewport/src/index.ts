@@ -61,6 +61,7 @@ export * from './scene/HudLayer';
 export * from './scene/TopologyPickList';
 export * from './scene/objects';
 export * from './scene/exactSection';
+export * from './scene/drawnBodies';
 
 // Labels: screen-space dimension label layout.
 export * from './labels/dimensionLabel';

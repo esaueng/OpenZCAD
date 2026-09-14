@@ -160,6 +160,13 @@ interface ViewerShellProps {
   onViewChange(view: ViewportCameraState): void;
   onViewSettled(view: ViewportCameraState): void;
   onGeometryPresented?(durationMs: number): void;
+  /**
+   * The viewer's own report of which bodies it drew away from their document
+   * pose. It goes back to the workspace and returns as
+   * `view.drawnElsewhere`, which is what stops a section describing a body
+   * the viewport has moved out from under it.
+   */
+  onBodiesDrawnElsewhere?(bodyIds: string[]): void;
   onWheelDeviceLearned?(device: WheelDevice): void;
   orientationRef: MutableRefObject<((axes: AxisProjection) => void) | null>;
   selectionFilter: SelectionFilter;
@@ -312,6 +319,7 @@ export function ViewerShell({
   onViewChange,
   onViewSettled,
   onGeometryPresented,
+  onBodiesDrawnElsewhere,
   onWheelDeviceLearned,
   orientationRef,
   onSelectTopology,
@@ -488,6 +496,7 @@ export function ViewerShell({
         onViewChange={onViewChange}
         onViewSettled={onViewSettled}
         onGeometryPresented={onGeometryPresented}
+        onBodiesDrawnElsewhere={onBodiesDrawnElsewhere}
         onWheelDeviceLearned={onWheelDeviceLearned}
         orientationRef={orientationRef}
         orientationDragRef={orientationDragRef}
