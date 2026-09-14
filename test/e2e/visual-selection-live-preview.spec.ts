@@ -10,6 +10,24 @@ import {
 // SwiftShader than on a workstation. Budgets are upper bounds, not waits.
 const PREVIEW_BUDGET_MS = process.env.CI ? 60_000 : 30_000;
 
+const renderedWorldBounds = (page: Page) =>
+  page.locator('.viewer-host canvas').evaluate(
+    (element) =>
+      new Promise<{ min: number[]; max: number[] }>((resolve) => {
+        element.dispatchEvent(
+          new CustomEvent('openzcad:e2e-render-policy', {
+            detail: {
+              resolve: (state: {
+                bodyFaces: {
+                  worldBounds?: { min: number[]; max: number[] };
+                }[];
+              }) => resolve(state.bodyFaces[0]!.worldBounds!)
+            }
+          })
+        );
+      })
+  );
+
 /**
  * Chamfers keep this fixture on the exact-preview path. Plain and rounded
  * cylinders use a viewport preview and rebuild only on release; their drag
@@ -110,6 +128,59 @@ async function armChamferedTopCapOffset(page: Page) {
   const start = { x: bounds!.x + handle.x, y: bounds!.y + handle.y };
   return { canvas, chip, readAxisLength, handle, start, consoleErrors };
 }
+
+test('replaces the whole body immediately while the exact offset rebuild is pending', async ({
+  page
+}) => {
+  test.setTimeout(120_000);
+  await page.addInitScript(() => {
+    const scope = window as typeof window & { holdOffsetPreview?: boolean };
+    const send = Worker.prototype.postMessage;
+    Worker.prototype.postMessage = function (message, transfer) {
+      if (
+        scope.holdOffsetPreview &&
+        (message as { type?: string } | null)?.type === 'sync'
+      ) {
+        window.setTimeout(
+          () =>
+            send.call(this, message, transfer as StructuredSerializeOptions),
+          750
+        );
+        return;
+      }
+      return send.call(this, message, transfer as StructuredSerializeOptions);
+    };
+  });
+  const { canvas, handle, start, consoleErrors } =
+    await armChamferedTopCapOffset(page);
+  const before = await renderedWorldBounds(page);
+  await page.evaluate(() => {
+    (
+      window as typeof window & { holdOffsetPreview?: boolean }
+    ).holdOffsetPreview = true;
+  });
+
+  await page.mouse.move(start.x, start.y);
+  await page.mouse.down();
+  await page.mouse.move(
+    start.x + handle.dx * handle.pixelsPerUnit * 4,
+    start.y + handle.dy * handle.pixelsPerUnit * 4,
+    { steps: 1 }
+  );
+  await expect(canvas).toHaveAttribute('data-e2e-height-proxy-offset', '4');
+  const preview = await renderedWorldBounds(page);
+  expect(preview.min[2]).toBeCloseTo(before.min[2]!, 4);
+  expect(preview.max[2]).toBeCloseTo(before.max[2]! + 4, 4);
+  await expect(
+    page.getByText('Preview · exact on release', { exact: true })
+  ).toBeVisible();
+
+  await page.keyboard.press('Escape');
+  await page.mouse.up();
+  await expect(canvas).not.toHaveAttribute('data-e2e-height-proxy-offset');
+  expect(await renderedWorldBounds(page)).toEqual(before);
+  expect(consoleErrors).toEqual([]);
+});
 
 test('streams exact planar previews and restores invalid or canceled offsets', async ({
   page
