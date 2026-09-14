@@ -76,7 +76,8 @@ describe('a union the exact pipeline cannot build', () => {
     // The kernel's taxonomy rides along, so a caller that wants to treat
     // "the engine declined this pair" differently from "the input was
     // invalid" never has to read the English.
-    expect(refusal!.exactBooleanRefusal).toEqual({
+    expect(refusal!.kernelRefusal).toEqual({
+      family: 'boolean',
       operation: 'fuse',
       category: 'quality_refused',
       code: 'exact_only_unattainable'
