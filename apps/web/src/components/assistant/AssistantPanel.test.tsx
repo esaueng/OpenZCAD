@@ -176,3 +176,93 @@ describe('selected geometry analysis', () => {
     ).toBeEnabled();
   });
 });
+
+describe('assistant model settings', () => {
+  it('updates the model and reasoning after a save without clearing the conversation', async () => {
+    const props: ComponentProps<typeof AssistantPanel> = {
+      document: doc,
+      selection: { bodyIds: [], featureIds: [], topologies: [] },
+      onApply: vi.fn().mockResolvedValue(true),
+      onPreview: vi.fn().mockResolvedValue({ ok: true }),
+      collapsed: false,
+      onCollapsedChange: vi.fn(),
+      confirmDestructive: true,
+      effectiveAssistant: {
+        configured: true,
+        provider: 'openai',
+        model: 'gpt-5.6-sol',
+        reasoningEffort: 'medium'
+      }
+    };
+    const { rerender } = render(<AssistantPanel {...props} />);
+    expect(screen.getByText('gpt-5.6-sol · medium')).toBeInTheDocument();
+
+    rerender(
+      <AssistantPanel
+        {...props}
+        effectiveAssistant={{
+          ...props.effectiveAssistant!,
+          model: 'openai/gpt-5.6-terra',
+          reasoningEffort: 'high'
+        }}
+      />
+    );
+
+    expect(screen.getByText('gpt-5.6-terra · high')).toBeInTheDocument();
+    expect(screen.queryByText('gpt-5.6-sol · medium')).toBeNull();
+    expect(
+      screen.getByText('Put a 6 mm hole through the boss')
+    ).toBeInTheDocument();
+    expect(loadAssistantThread(doc.projectId)).toHaveLength(2);
+    await act(async () => {});
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it('ignores a stale initial status request after account settings arrive', async () => {
+    let resolveStatus!: (response: Response) => void;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(
+        () =>
+          new Promise<Response>((resolve) => {
+            resolveStatus = resolve;
+          })
+      )
+    );
+    const props: ComponentProps<typeof AssistantPanel> = {
+      document: doc,
+      selection: { bodyIds: [], featureIds: [], topologies: [] },
+      onApply: vi.fn().mockResolvedValue(true),
+      onPreview: vi.fn().mockResolvedValue({ ok: true }),
+      collapsed: false,
+      onCollapsedChange: vi.fn(),
+      confirmDestructive: true
+    };
+    const { rerender } = render(<AssistantPanel {...props} />);
+    rerender(
+      <AssistantPanel
+        {...props}
+        effectiveAssistant={{
+          configured: true,
+          provider: 'openai',
+          model: 'gpt-5.6-terra',
+          reasoningEffort: 'high'
+        }}
+      />
+    );
+    await act(async () => {
+      resolveStatus(
+        new Response(
+          JSON.stringify({
+            configured: true,
+            provider: 'openai',
+            model: 'gpt-5.6-sol',
+            reasoningEffort: 'medium'
+          })
+        )
+      );
+    });
+    expect(screen.getByText('gpt-5.6-terra · high')).toBeInTheDocument();
+    expect(screen.queryByText('gpt-5.6-sol · medium')).toBeNull();
+  });
+});
