@@ -30,11 +30,12 @@ function addSection(
   document: ProjectDocument,
   name: string,
   offset: number,
-  object: SketchObjectData
+  object: SketchObjectData,
+  plane: 'XY' | 'XZ' | 'YZ' = 'XY'
 ): { document: ProjectDocument; section: SketchSectionReference } {
   const result = addSketchFeature(document, {
     name,
-    plane: 'XY',
+    plane,
     offset,
     object
   });
@@ -272,6 +273,195 @@ describe('advanced exact modeling features', { timeout: 30_000 }, () => {
     // The same 373.3333 frustum plus a 4 x 4 base, 5 tall pyramid (26.6667).
     expect(body?.volume).toBeCloseTo(400, 3);
     expect(body?.bbox.min.z).toBeCloseTo(-5, 6);
+  });
+
+  it('closes a loft to an apex far off the section axis', async () => {
+    // The guard measures along the closing section's normal, so how far to one
+    // side the apex sits is the user's business: 200 mm off axis and 1 mm
+    // beyond still builds, at the analytic 373.3333 frustum plus a 8 x 8 base,
+    // 1 tall pyramid (21.3333).
+    let document = createProjectDocument('Oblique', toUserId('user_obl'));
+    const lower = addSection(document, 'Lower', 0, {
+      objectKind: 'rectangle',
+      width: 4,
+      height: 4,
+      centerX: 0,
+      centerY: 0
+    });
+    document = lower.document;
+    const upper = addSection(document, 'Upper', 10, {
+      objectKind: 'rectangle',
+      width: 8,
+      height: 8,
+      centerX: 0,
+      centerY: 0
+    });
+    const lofted = loftSections(upper.document, {
+      name: 'Oblique apex loft',
+      sections: [lower.section, upper.section],
+      mode: 'ruled',
+      endPoint: { x: 200, y: 0, z: 11 }
+    });
+    const derived = await adapter.syncDocument(lofted.document);
+    expect(derived.warnings).toEqual([]);
+    expect(derived.bodyRepresentations[lofted.bodyId]?.volume).toBeCloseTo(
+      394.6666613,
+      3
+    );
+  });
+
+  it('refuses an apex a coplanar closing section hid from the side test', async () => {
+    // Three sections, the last two on the same plane. Measured on the pinned
+    // kernel this run lofts to 373.3333 with no apex, to 433.3333 with an apex
+    // at z = 15 — and to 313.3333 with an apex at z = 5, which is *less*
+    // material than no apex at all, buried out of sight, with no warning. A
+    // guard that skips itself when the section before the closing one is
+    // coplanar with it leaves exactly that fail-open reachable.
+    let document = createProjectDocument('Coplanar apex', toUserId('user_cop'));
+    const lower = addSection(document, 'Lower', 0, {
+      objectKind: 'rectangle',
+      width: 4,
+      height: 4,
+      centerX: 0,
+      centerY: 0
+    });
+    document = lower.document;
+    const wide = addSection(document, 'Wide', 10, {
+      objectKind: 'rectangle',
+      width: 8,
+      height: 8,
+      centerX: 0,
+      centerY: 0
+    });
+    document = wide.document;
+    const closing = addSection(document, 'Closing', 10, {
+      objectKind: 'rectangle',
+      width: 6,
+      height: 6,
+      centerX: 0,
+      centerY: 0
+    });
+    const sections = [lower.section, wide.section, closing.section];
+    const refused = loftSections(closing.document, {
+      name: 'Coplanar inside apex',
+      sections,
+      mode: 'ruled',
+      endPoint: { x: 0, y: 0, z: 5 }
+    });
+    const refusedDerived = await adapter.syncDocument(refused.document);
+    expect(refusedDerived.warnings.join(' ')).toMatch(
+      /is on the same side of the closing section as the rest of the loft/
+    );
+    expect(refusedDerived.bodyRepresentations[refused.bodyId]).toBeUndefined();
+
+    // The same run with the apex on the far side still builds: closing the
+    // hole must not cost the valid case.
+    const accepted = loftSections(closing.document, {
+      name: 'Coplanar outside apex',
+      sections,
+      mode: 'ruled',
+      endPoint: { x: 0, y: 0, z: 15 }
+    });
+    const acceptedDerived = await adapter.syncDocument(accepted.document);
+    expect(acceptedDerived.warnings).toEqual([]);
+    expect(
+      acceptedDerived.bodyRepresentations[accepted.bodyId]?.volume
+    ).toBeCloseTo(433.3333133, 3);
+  });
+
+  it('refuses an apex an earlier section already reaches past', async () => {
+    // A run that overshoots: the middle section sits 10 beyond the closing
+    // one. An apex at z = 5 is on the far side of the closing section from
+    // that middle section, so a side test alone accepts it — and measured,
+    // it returns 193.3333 against the 253.3333 of the same run with no apex.
+    // The apex has to stand clear of *every* section, not just one of them.
+    let document = createProjectDocument('Overshoot', toUserId('user_over'));
+    const lower = addSection(document, 'Lower', 0, {
+      objectKind: 'rectangle',
+      width: 4,
+      height: 4,
+      centerX: 0,
+      centerY: 0
+    });
+    document = lower.document;
+    const beyond = addSection(document, 'Beyond', 20, {
+      objectKind: 'rectangle',
+      width: 8,
+      height: 8,
+      centerX: 0,
+      centerY: 0
+    });
+    document = beyond.document;
+    const closing = addSection(document, 'Closing', 10, {
+      objectKind: 'rectangle',
+      width: 6,
+      height: 6,
+      centerX: 0,
+      centerY: 0
+    });
+    const sections = [lower.section, beyond.section, closing.section];
+    const refused = loftSections(closing.document, {
+      name: 'Overshoot inside apex',
+      sections,
+      mode: 'ruled',
+      endPoint: { x: 0, y: 0, z: 5 }
+    });
+    const refusedDerived = await adapter.syncDocument(refused.document);
+    expect(refusedDerived.warnings.join(' ')).toMatch(
+      /does not stand clear of loft section 1/
+    );
+    expect(refusedDerived.bodyRepresentations[refused.bodyId]).toBeUndefined();
+
+    // An apex clear of every section still builds, so the guard refuses the
+    // fold rather than the overshooting run: 253.3333 plus the 6 x 6 base,
+    // 15 tall cone (180).
+    const accepted = loftSections(closing.document, {
+      name: 'Overshoot clear apex',
+      sections,
+      mode: 'ruled',
+      endPoint: { x: 0, y: 0, z: 25 }
+    });
+    const acceptedDerived = await adapter.syncDocument(accepted.document);
+    expect(acceptedDerived.warnings).toEqual([]);
+    expect(
+      acceptedDerived.bodyRepresentations[accepted.bodyId]?.volume
+    ).toBeCloseTo(433.3332733, 3);
+  });
+
+  it('closes a run whose sections are all coplanar from either side', async () => {
+    // The one run with no side to be on. It has no interior for an apex to
+    // fold into, and measured it closes correctly either way: both apexes
+    // give the analytic 8 x 8 x 10 / 3 pyramid. So this is decided, not
+    // skipped — refusing it would take away a loft the kernel builds.
+    let document = createProjectDocument('Flat run', toUserId('user_flat2'));
+    const inner = addSection(document, 'Inner', 0, {
+      objectKind: 'rectangle',
+      width: 4,
+      height: 4,
+      centerX: 0,
+      centerY: 0
+    });
+    document = inner.document;
+    const outer = addSection(document, 'Outer', 0, {
+      objectKind: 'rectangle',
+      width: 8,
+      height: 8,
+      centerX: 0,
+      centerY: 0
+    });
+    for (const z of [10, -10]) {
+      const lofted = loftSections(outer.document, {
+        name: `Flat run apex ${z}`,
+        sections: [inner.section, outer.section],
+        mode: 'ruled',
+        endPoint: { x: 0, y: 0, z }
+      });
+      const derived = await adapter.syncDocument(lofted.document);
+      const body = derived.bodyRepresentations[lofted.bodyId];
+      expect(derived.warnings).toEqual([]);
+      expect(body?.volume).toBeCloseTo(213.3333, 3);
+      expect(body?.bbox[z > 0 ? 'max' : 'min'].z).toBeCloseTo(z, 6);
+    }
   });
 
   it('refuses a loft apex point in smooth mode by name', async () => {
