@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import type { DisplayMode } from '../types';
 
 /**
  * Kernel-computed section geometry, drawn instead of the display caps.
@@ -38,6 +39,19 @@ export interface ExactSectionRegionDisplay {
   readonly loops: readonly ExactSectionLoopDisplay[];
 }
 
+/**
+ * An exact section to draw, together with the display mode it must be drawn
+ * for. The two travel together because the fill's materials are built here,
+ * on arrival, while the display-mode pass runs on its own schedule and does
+ * NOT re-run when a section lands: a section built without knowing the mode
+ * shows its shaded cut surface in wireframe until the mode is cycled. The
+ * type makes the mode unskippable exactly when there is a fill to build.
+ */
+export type ExactSectionDisplay = {
+  readonly regions: readonly ExactSectionRegionDisplay[];
+  readonly displayMode: DisplayMode;
+} | null;
+
 function disposeSection(group: THREE.Object3D) {
   group.traverse((child: THREE.Object3D) => {
     const disposable = child as unknown as {
@@ -57,18 +71,16 @@ function disposeSection(group: THREE.Object3D) {
  * position, and showing it beside a clipped preview of a different one would
  * be a drawing of a cut that is not on screen.
  */
-export function applyExactSection(
-  root: THREE.Object3D,
-  regions: readonly ExactSectionRegionDisplay[] | null
-) {
+export function applyExactSection(root: THREE.Object3D, display: ExactSectionDisplay) {
   const previous = root.getObjectByName(EXACT_SECTION);
   if (previous) {
     previous.removeFromParent();
     disposeSection(previous);
   }
-  if (!regions || regions.length === 0) {
+  if (!display || display.regions.length === 0) {
     return;
   }
+  const { regions, displayMode } = display;
   const group = new THREE.Group();
   group.name = EXACT_SECTION;
   group.userData.exactSection = true;
@@ -86,6 +98,11 @@ export function applyExactSection(
         new THREE.MeshPhongMaterial({
           color: CUT_COLOR,
           side: THREE.DoubleSide,
+          // Wireframe shows outlines, and the cut surface is not one. The
+          // display-mode pass writes this same flag, but it only runs when
+          // the MODE changes — a section arriving into wireframe has to be
+          // built hidden or it appears shaded until the next cycle.
+          visible: displayMode !== 'wireframe',
           // The cut surface lies in the clipping plane itself; without the
           // offset it fights the clipped body's own edge for the same depth.
           polygonOffset: true,
