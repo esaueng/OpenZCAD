@@ -33,6 +33,7 @@ const ESCAPE_LABELS: Record<ReturnType<typeof escapeTarget>, string | null> = {
   'recover-failure': 'dismisses the error',
   'end-drawing': 'ends the chain',
   'cancel-constraint': 'cancels the constraint',
+  'cancel-edit': 'cancels the modify tool',
   'exit-drawing-tool': 'returns to selection',
   'clear-sketch-selection': 'deselects',
   'clear-selection': 'clears the selection',
