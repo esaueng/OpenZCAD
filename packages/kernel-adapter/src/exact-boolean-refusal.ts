@@ -311,6 +311,24 @@ function memberNames(
   return label === undefined ? undefined : [label];
 }
 
+/**
+ * Retire a solid the diagnosis fold created, and only one it created.
+ *
+ * `deleteSolid` retires the handle and its unshared topology subtree; shared
+ * topology and every caller-owned input survive it, which is what makes it
+ * safe to drop a superseded accumulator while the fold keeps going. It
+ * throws for a handle that is already gone or still referenced, and a failed
+ * release must never replace the refusal the fold exists to report.
+ */
+function releaseIntermediate(kernel: RemusKernel, solid: number): void {
+  try {
+    kernel.deleteSolid(solid);
+  } catch {
+    // Nothing to do: the fold is diagnosis, and an arena handle it could not
+    // retire is not a reason to lose the attribution.
+  }
+}
+
 function firstRefusedMember(
   kernel: RemusKernel,
   solids: readonly number[],
@@ -321,34 +339,47 @@ function firstRefusedMember(
   if (accumulated === undefined) {
     return null;
   }
-  for (let index = 1; index < solids.length; index += 1) {
-    let outcome: ExactBooleanOutcome;
-    try {
-      outcome = exactBooleanOutcome(
-        kernel,
-        'fuse',
-        accumulated,
-        solids[index]!,
-        memberNames(labels, index)
-      );
-    } catch {
-      // The fold exists only to attribute a refusal that already happened.
-      // If it cannot run at all, the original error is still the answer.
-      return null;
+  // Every partial union the fold builds is scratch. `owned` is the one the
+  // fold allocated and still holds; the caller's inputs are never in it.
+  let owned: number | null = null;
+  try {
+    for (let index = 1; index < solids.length; index += 1) {
+      let outcome: ExactBooleanOutcome;
+      try {
+        outcome = exactBooleanOutcome(
+          kernel,
+          'fuse',
+          accumulated,
+          solids[index]!,
+          memberNames(labels, index)
+        );
+      } catch {
+        // The fold exists only to attribute a refusal that already happened.
+        // If it cannot run at all, the original error is still the answer.
+        return null;
+      }
+      if (outcome.status === 'refused') {
+        return new ExactBooleanRefusal({
+          operation: 'fuse',
+          category: outcome.refusal.category,
+          kernelCode: outcome.refusal.kernelCode,
+          kernelMessage: outcome.refusal.kernelMessage,
+          operands: memberNames(labels, index),
+          cause
+        });
+      }
+      if (owned !== null) {
+        releaseIntermediate(kernel, owned);
+      }
+      accumulated = outcome.solid;
+      owned = outcome.solid;
     }
-    if (outcome.status === 'refused') {
-      return new ExactBooleanRefusal({
-        operation: 'fuse',
-        category: outcome.refusal.category,
-        kernelCode: outcome.refusal.kernelCode,
-        kernelMessage: outcome.refusal.kernelMessage,
-        operands: memberNames(labels, index),
-        cause
-      });
+    return null;
+  } finally {
+    if (owned !== null) {
+      releaseIntermediate(kernel, owned);
     }
-    accumulated = outcome.solid;
   }
-  return null;
 }
 
 /**
@@ -363,7 +394,14 @@ function firstRefusedMember(
  * The fold is diagnosis, not a rescue. A left fold can succeed where the
  * balanced reduction refused; accepting that result would make a cluster's
  * fate depend on the order the diagnosis happened to take, so when the fold
- * finds no culprit the original refusal stands unchanged.
+ * finds no culprit the original refusal stands unchanged. Because the partial
+ * unions it builds are scratch, each is retired as soon as the next step
+ * supersedes it and the last is retired on the way out — the fold leaves the
+ * arena as it found it, holding at most one extra solid at a time.
+ *
+ * It costs a second pass, bounded by the cluster: a feature may contribute at
+ * most 100 solids, and 99 fuses plus their releases measured 54 ms on the pin
+ * for a 100-box row. That is spent only after `fuseAll` has already thrown.
  */
 export function exactFuseAll(
   kernel: RemusKernel,
