@@ -41,6 +41,10 @@ export interface FaceTarget extends FaceCapabilityTarget {
    * this is how an extrude stays open after it lands.
    */
   extrudeFeatureId?: string;
+  /** The source box whose dimension this gesture must continue to edit. */
+  resizeBodyFeatureId?: string;
+  /** Explicit local extrusion instead of the default source-body resize. */
+  localFaceOffset?: boolean;
   blendSurfaceClass?: 'torus' | 'cylinder';
   blendCenter?: [number, number, number];
   blendAxis?: [number, number, number];
@@ -190,6 +194,7 @@ export type InteractionEvent =
   | { type: 'set-extrude-choice'; choice: ExtrudeChoice }
   | { type: 'drag-engage' }
   | { type: 'drag-release' }
+  | { type: 'set-face-offset-mode'; local: boolean }
   | { type: 'set-edge-op'; op: 'fillet' | 'chamfer' }
   | { type: 'toggle-edge-op' }
   | { type: 'keypad-open' }
@@ -382,6 +387,17 @@ export function interactionReducer(
     case 'drag-release':
       return isOperationState(state) && state.phase === 'dragging'
         ? { ...state, phase: 'armed' }
+        : state;
+    case 'set-face-offset-mode':
+      return state.mode === 'face' &&
+        state.op === 'offset-face' &&
+        state.target.resizeBodyFeatureId &&
+        state.phase !== 'validating'
+        ? {
+            ...state,
+            ...ARMED,
+            target: { ...state.target, localFaceOffset: event.local }
+          }
         : state;
     case 'set-edge-op':
       return state.mode === 'edges'
@@ -715,7 +731,11 @@ function commandIdentityFor(state: InteractionState): CommandIdentity | null {
             : {
                 id: 'offset-face',
                 icon: 'offset-face',
-                title: 'Offset Face'
+                title:
+                  state.target.resizeBodyFeatureId &&
+                  !state.target.localFaceOffset
+                    ? 'Resize Body'
+                    : 'Offset Face'
               };
       }
       break;
@@ -834,13 +854,24 @@ export function toolCardFor(state: InteractionState): ToolCardModel | null {
           : {}),
         ...(capability.note ? { note: capability.note } : {}),
         active:
-          (state.op === 'offset-face' && capability.action === 'offset-face') ||
+          (state.op === 'offset-face' &&
+            capability.action === 'offset-face' &&
+            (!state.target.resizeBodyFeatureId ||
+              state.target.localFaceOffset === true)) ||
           (state.op === 'resize-cylinder-radius' &&
             capability.action === 'resize-radial-face') ||
           (state.op === 'edit-fillet' && capability.action === 'edit-fillet') ||
           (state.op === 'remove-face-feature' &&
             capability.action === 'remove-face-feature')
       }));
+      if (state.target.resizeBodyFeatureId) {
+        actions.unshift({
+          id: 'resize-body',
+          label: 'Resize body',
+          enabled: true,
+          active: state.op === 'offset-face' && !state.target.localFaceOffset
+        });
+      }
       // A hash-only face carries the anchoring note on its offset action. Keep
       // the live hint short and put that durable caveat behind a named chip.
       const offsetNote = capabilities.find(
@@ -855,11 +886,16 @@ export function toolCardFor(state: InteractionState): ToolCardModel | null {
               ? 'Drag the radial handle or tap the value to set the radius.'
               : state.target.extrudeFeatureId
                 ? 'Drag the arrow to change the depth, or tap the value to type · click empty space to finish.'
-                : 'Drag the arrow to offset the face, or tap the value to type · Space faces it head-on.';
+                : state.target.resizeBodyFeatureId &&
+                    !state.target.localFaceOffset
+                  ? 'Drag to resize · Tap the value to type.'
+                  : 'Drag the arrow to offset the face, or tap the value to type · Space faces it head-on.';
       // Single-capability faces suppress the action row: one button that only
       // restates the title is noise on a card meant to stay out of the way.
       const alwaysShowActions =
-        state.op === 'edit-fillet' || state.op === 'remove-face-feature';
+        Boolean(state.target.resizeBodyFeatureId) ||
+        state.op === 'edit-fillet' ||
+        state.op === 'remove-face-feature';
       return {
         icon,
         title,
