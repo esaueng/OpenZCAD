@@ -9,6 +9,12 @@ export interface DiagnosticRow {
   message: string;
   /** The kernel text the sentence stands for, when it was translated. */
   detail?: string;
+  /**
+   * The kernel's own classification, when the rebuild recorded one. A row
+   * that carries it is one a reader can group or filter by cause without
+   * matching the sentence.
+   */
+  category?: string;
 }
 
 const FEATURE_PREFIX = /^Feature "([^"]+)":\s*/;
@@ -45,23 +51,36 @@ export function presentedDiagnostics(
       .filter((entry) => entry.kind === 'suppressed')
       .map((entry) => entry.message)
   );
+  // The rebuild's attribution carries the kernel's category alongside the
+  // string it pushed, so the row this loop builds can be classified without
+  // reading its words. Keyed by the message because that is what `warnings`
+  // holds; a message that repeats across features shares one category, which
+  // is true by construction — the same sentence came from the same refusal.
+  const categories = new Map(
+    (featureWarnings ?? []).flatMap((entry) =>
+      entry.kernelRefusal ? [[entry.message, entry.kernelRefusal.category]] : []
+    )
+  );
   const rows: DiagnosticRow[] = [];
   for (const warning of warnings) {
     if (suppressed.has(warning)) continue;
     const match = FEATURE_PREFIX.exec(warning);
     const featureName = match?.[1] ?? null;
     const body = (match ? warning.slice(match[0].length) : warning).trim();
+    const category = categories.get(warning);
+    const classified = category ? { category } : {};
     const rewrite = REWRITES.find(({ pattern }) => pattern.test(body));
     if (rewrite) {
       rows.push({
         key: warning,
         featureName,
         message: rewrite.sentence,
-        detail: body
+        detail: body,
+        ...classified
       });
       continue;
     }
-    const plain = plainRefusal(body);
+    const plain = plainRefusal(body, category);
     const message = plain.message
       .replace(INTERNAL_ID, '')
       .replace(/\s{2,}/g, ' ')
@@ -72,7 +91,8 @@ export function presentedDiagnostics(
       message,
       ...(plain.detail || message !== body
         ? { detail: plain.detail ?? body }
-        : {})
+        : {}),
+      ...classified
     });
   }
   return rows;

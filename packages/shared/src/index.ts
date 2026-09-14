@@ -767,12 +767,39 @@ export type FeatureData =
       /** User-authored section order; at least two are required. */
       sections: SketchSectionReference[];
       mode: 'ruled' | 'smooth';
+      /**
+       * Apex point closing the loft after its last section, so that end comes
+       * to a point instead of a flat cap. Absent means the flat cap every
+       * document written before this field existed had, and the builder then
+       * takes the unchanged `loft`/`loftSmooth` call.
+       *
+       * Ruled mode only: the pinned kernel's smooth section surfaces do not
+       * close against an apex, and the adapter refuses the combination by
+       * name rather than emitting the invalid solid it produces.
+       *
+       * There is deliberately no matching apex before the first section: the
+       * kernel's `startPoint` leaves one apex facet out of the tessellation on
+       * a rectangular profile, so that end is pointed by reversing the section
+       * order instead. See `HANDOFF.md` for the measurement.
+       */
+      endPoint?: ParametricVector3;
     }
   | {
       featureKind: 'sweep';
       profile: SketchSectionReference;
       path: SketchPathReference;
       mode: 'standard' | 'smooth';
+      /**
+       * Guide rail whose direction the profile's up-vector tracks along the
+       * path, replacing the rotation-minimizing frame. Absent means the
+       * unchanged `sweepWithOptions`/`sweepAlongEdges` call, so a sweep
+       * authored before this field existed replays identically.
+       *
+       * The kernel's guided sweep takes one spine curve and one rail curve,
+       * so both the path and the rail must resolve to a single edge; the
+       * adapter refuses anything wider by name.
+       */
+      guide?: SketchPathReference;
     }
   | {
       featureKind: 'helical-sweep';
@@ -1019,6 +1046,10 @@ export type FeatureData =
       planarEmboss?: {
         part: 'base' | 'text';
         selection: PlanarEmbossSelection;
+        /** Fixed rigid moves in which the selection was measured. Rebuild
+         * verifies the positioned source but returns the separated raw source;
+         * ordinary transform features still perform the actual placement. */
+        sourcePlacement?: Transform3D[];
       };
     };
 
@@ -2000,7 +2031,7 @@ export interface FeatureWarning {
   kind: 'build-failed' | 'refusal' | 'advisory' | 'suppressed';
   /**
    * The exact kernel's own classification, present only when this warning
-   * came from a boolean the exact-only pipeline refused.
+   * came from an operation the kernel refused with a category.
    *
    * Session-only like the rest of this record, and the field to branch on:
    * `message` is product copy and may be reworded at any time, while
@@ -2009,9 +2040,20 @@ export interface FeatureWarning {
    * `tolerance_violation`, `cancelled`, `internal`. It is typed as a string
    * rather than a union so a new kernel category cannot break a build here
    * before anyone has decided what it means.
+   *
+   * `family` says which kernel API refused, because the category alone does
+   * not: `invalid_topology` from a boolean is a pair the engine would not
+   * combine, and from a validation it is a body that came back malformed.
+   * `operation` is present only for a family that names one — the booleans
+   * do, a validation has no operand pair to name.
+   *
+   * This carried only booleans when it was introduced. Every family with a
+   * typed twin on the pin now travels on the same field rather than growing
+   * a second one beside it.
    */
-  exactBooleanRefusal?: {
-    operation: 'cut' | 'fuse' | 'intersect';
+  kernelRefusal?: {
+    family: 'boolean' | 'validation' | 'healing' | 'import';
+    operation?: string;
     category: string;
     code: string;
   };
@@ -2099,6 +2141,8 @@ export interface ArtifactRecord {
   kind:
     | 'step-import'
     | 'stl-import'
+    /** Any other mesh interchange import: 3MF, OBJ, glTF binary, PLY. */
+    | 'mesh-import'
     | 'step-export'
     | 'stl-export'
     | '3mf-export'

@@ -27,6 +27,11 @@ show_text toggle, and keep the whole word together when the height changes.”**
 The AI uses the measured opening and lettering in the document digest. The
 same exact preflight runs before Apply; the AI cannot invent the geometry.
 
+You can position the import with fixed Move and Rotate values before
+parameterizing it. The recipe keeps that placement on every source piece and
+on any separated lettering. The opening still needs to align with a world
+axis so it can be measured.
+
 ## The controls
 
 | Parameter       | What it is                                                                                                                                         | Minimum                                                       |
@@ -57,6 +62,11 @@ the build stays valid; the parameter keeps the value you typed.
   is missing the suggestion is not offered.
 
 ## Where the app refuses
+
+- **Modified imports.** Fixed rigid moves are supported. Scaling,
+  parameter-driven placement, suppressed moves and shape-changing features
+  after import are not; the assistant does not offer the opening recipe for
+  those histories. Parameterize before making those edits.
 
 - **No facing pair.** A part without two inward-facing planar faces across
   an empty gap is not offered. Text on a drawing does not change this.

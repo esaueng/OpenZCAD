@@ -148,12 +148,26 @@ const paths: ModelingPathOption[] = [
       sketchId: toSketchId('path_sketch'),
       entityIds: ['first', 'second', 'unused'].map(toEntityId)
     }
+  },
+  {
+    id: 'rail',
+    label: 'Rail',
+    path: {
+      sketchId: toSketchId('rail_sketch'),
+      entityIds: ['rail_first'].map(toEntityId)
+    }
   }
 ];
 const loft = {
   featureKind: 'loft',
   sections: [profiles[1]!.section, profiles[0]!.section],
   mode: 'smooth'
+} satisfies EditableModelingFeatureData;
+const apexLoft = {
+  featureKind: 'loft',
+  sections: [profiles[1]!.section, profiles[0]!.section],
+  mode: 'ruled',
+  endPoint: { x: 1, y: 2, z: 'top + 3' }
 } satisfies EditableModelingFeatureData;
 const sweep = {
   featureKind: 'sweep',
@@ -163,6 +177,16 @@ const sweep = {
     entityIds: ['second', 'first'].map(toEntityId)
   },
   mode: 'smooth'
+} satisfies EditableModelingFeatureData;
+const guidedSweep = {
+  featureKind: 'sweep',
+  profile: profiles[1]!.section,
+  path: {
+    sketchId: paths[0]!.path.sketchId,
+    entityIds: ['second', 'first'].map(toEntityId)
+  },
+  mode: 'standard',
+  guide: paths[1]!.path
 } satisfies EditableModelingFeatureData;
 const helix = {
   featureKind: 'helical-sweep',
@@ -188,15 +212,30 @@ function roundTrip(data: EditableModelingFeatureData, live = profiles) {
   );
 }
 
+/**
+ * Absent optional data an edit has to be able to get back to. A patch skips
+ * undefined values, so a round trip of a feature without an apex point or a
+ * guide rail names those keys in `clearData` rather than leaving a stale one
+ * behind.
+ */
+const CLEARED_ON_ROUND_TRIP: Partial<Record<string, readonly string[]>> = {
+  loft: ['endPoint'],
+  sweep: ['guide']
+};
+
 describe('profile feature editing', () => {
-  it.each([loft, sweep, helix])(
+  it.each([loft, apexLoft, sweep, guidedSweep, helix])(
     'round trips $featureKind without losing authored fields or references',
     (data) => {
       expect(modelingFeatureIsEditable(data.featureKind)).toBe(true);
+      const cleared = (CLEARED_ON_ROUND_TRIP[data.featureKind] ?? []).filter(
+        (key) => !(key in data)
+      );
       expect(roundTrip(data)).toEqual({
         featureId: 'feature_authored',
         name: 'Authored',
-        data
+        data,
+        ...(cleared.length === 0 ? {} : { clearData: cleared })
       });
     }
   );
@@ -209,7 +248,8 @@ describe('profile feature editing', () => {
       value: {
         name: 'Loft',
         sectionIds: ['option_upper', 'option_lower'],
-        mode: 'smooth'
+        mode: 'smooth',
+        endPoint: null
       }
     });
     expect(
@@ -220,7 +260,34 @@ describe('profile feature editing', () => {
         name: 'Sweep',
         profileId: 'option_upper',
         pathId: 'path',
-        mode: 'smooth'
+        mode: 'smooth',
+        guideId: ''
+      }
+    });
+  });
+
+  it('lifts an apex point and a guide rail back into the form as written', () => {
+    expect(
+      modelingFormStateFromFeature('Loft', apexLoft, profiles, paths)
+    ).toEqual({
+      operation: 'loft',
+      value: {
+        name: 'Loft',
+        sectionIds: ['option_upper', 'option_lower'],
+        mode: 'ruled',
+        endPoint: { x: '1', y: '2', z: 'top + 3' }
+      }
+    });
+    expect(
+      modelingFormStateFromFeature('Sweep', guidedSweep, profiles, paths)
+    ).toEqual({
+      operation: 'sweep',
+      value: {
+        name: 'Sweep',
+        profileId: 'option_upper',
+        pathId: 'path',
+        mode: 'standard',
+        guideId: 'rail'
       }
     });
   });

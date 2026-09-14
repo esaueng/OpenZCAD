@@ -1,14 +1,21 @@
 import { describe, expect, it } from 'vitest';
 import {
   addPrimitiveFeature,
+  addSketchFeature,
   chamferEdges,
   createProjectDocument,
   directEditBody,
   filletEdges,
+  findSketch,
   listFeaturesInOrder,
+  sweepProfile,
   transformBody
 } from '@openzcad/document-core';
-import { toUserId } from '@openzcad/shared';
+import {
+  toUserId,
+  type ProjectDocument,
+  type SketchId
+} from '@openzcad/shared';
 import { affectedFeatureTargets } from './affectedFeatureTargets';
 
 describe('affected feature targets', () => {
@@ -106,6 +113,68 @@ describe('affected feature targets', () => {
     ).toMatchObject([
       { featureName: 'Raise top', resultBodyId: bodyId },
       { featureName: 'Soften', resultBodyId: downstream.bodyId }
+    ]);
+  });
+
+  it('counts a sweep as affected by an edit to its guide rail sketch', () => {
+    // A guide rail is a sketch the sweep's geometry depends on exactly as its
+    // path is. Leaving it out of this walk means the pre-save downstream
+    // guard never derives the sweep, and a rail edit that the adapter will
+    // later refuse is saved unguarded.
+    const start = createProjectDocument('Guided', toUserId('user_guided'));
+    const document: ProjectDocument = addSketchFeature(start, {
+      name: 'Profile',
+      plane: 'XY',
+      offset: 0,
+      object: {
+        objectKind: 'rectangle',
+        width: 4,
+        height: 2,
+        centerX: 0,
+        centerY: 0
+      }
+    }).document;
+    const profileSketchId = document.sketchOrder[0]!;
+    const path = addSketchFeature(document, {
+      name: 'Path',
+      plane: 'XZ',
+      offset: 0,
+      object: { objectKind: 'line', x1: 0, y1: 0, x2: 0, y2: 20 }
+    });
+    const rail = addSketchFeature(path.document, {
+      name: 'Rail',
+      plane: 'XZ',
+      offset: 10,
+      object: { objectKind: 'line', x1: 0, y1: 0, x2: 0, y2: 20 }
+    });
+    const pathReference = (sketchId: SketchId) => ({
+      sketchId,
+      entityIds: findSketch(rail.document, sketchId)!.objectIds
+    });
+    const swept = sweepProfile(rail.document, {
+      name: 'Guided sweep',
+      profile: {
+        sketchId: profileSketchId,
+        profile: {
+          profileId: 'profile_1',
+          regionFingerprint: 1,
+          samplePoint: { x: 0, y: 0 },
+          sourceArea: 8,
+          sourceEntityIds: findSketch(rail.document, profileSketchId)!.objectIds
+        }
+      },
+      path: pathReference(path.sketchId),
+      mode: 'standard',
+      guide: pathReference(rail.sketchId)
+    });
+    const railFeature = listFeaturesInOrder(swept.document).find(
+      (feature) => feature.name === 'Rail'
+    )!;
+
+    expect(
+      affectedFeatureTargets(swept.document, railFeature.featureId)
+    ).toMatchObject([
+      { featureName: 'Guided sweep', resultBodyId: swept.bodyId }
     ]);
   });
 });
