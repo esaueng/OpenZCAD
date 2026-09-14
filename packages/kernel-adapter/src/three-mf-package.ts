@@ -14,9 +14,11 @@
  *
  * Reading them means opening the Zip package, which is why there is a small
  * Zip reader here. The relationship part is read in its first 64 KB; the 3D
- * model part is streamed and scanned for its structural tags without ever
- * holding more than one chunk, under a hard ceiling, so a hostile package
- * cannot expand into memory through this path.
+ * model part is streamed and scanned for its structural tags, holding one
+ * chunk plus whatever trails the last `>` — a fragment of a tag in any real
+ * file, and capped, so a part written as one endless tag is refused instead
+ * of being accumulated. With the part itself under a hard ceiling as well, a
+ * hostile package cannot expand into memory through this path.
  */
 
 /** The 3MF core specification's length units, in millimetres. */
@@ -79,6 +81,22 @@ const RELATIONSHIP_BYTES = 64 * 1024;
  * read.
  */
 const MODEL_SCAN_BYTES = 256 * 1024 * 1024;
+/**
+ * The most text the scan will carry while waiting for a tag to close.
+ *
+ * Every chunk is scanned only as far as its last `>`; the rest leads the next
+ * chunk, because a tag can straddle a chunk boundary. In a real 3MF that
+ * remainder is part of one element — tens of characters — but a file can
+ * withhold a `>` for as long as it likes, and an uncapped remainder both grows
+ * without bound and is rescanned by every following chunk. Measured before this
+ * cap: 4 MB of tag took 221 ms, 8 MB took 878 ms and 16 MB took 3,442 ms —
+ * quadratic — from Zip packages of under 17 KB, and the ceiling above was
+ * reachable from a file of a few hundred KB. No element of a 3MF comes near
+ * this bound, so meeting it means the part is not one, and it is refused.
+ *
+ * Decoded characters rather than bytes, because that is what the scan holds.
+ */
+const MODEL_TAG_CHARS = 256 * 1024;
 const MODEL_RELATIONSHIP_TYPE =
   'http://schemas.microsoft.com/3dmanufacturing/2013/01/3dmodel';
 const DEFAULT_MODEL_PART = '3D/3dmodel.model';
@@ -315,7 +333,11 @@ const STRUCTURAL_TAG =
  * of every object, so reading it means reading the whole part — and the mesh
  * is nearly all of it. The part is therefore streamed: each chunk is scanned
  * for the handful of elements that matter and then dropped, so the scan holds
- * one chunk plus the few hundred bytes of structure it found.
+ * one chunk, the few hundred bytes of structure it found, and the unfinished
+ * tag the chunk ended in. That last part is bounded by `MODEL_TAG_CHARS`, and
+ * a part that runs past it without closing a tag is refused rather than
+ * carried — which is what keeps the scan linear in the part as well as flat
+ * in memory.
  */
 async function scanModelPart(
   data: Uint8Array,
@@ -341,10 +363,14 @@ async function scanModelPart(
     const end = final ? combined.length : combined.lastIndexOf('>') + 1;
     if (end <= 0) {
       carry = combined;
+      refuseUnclosedTag(carry);
       return;
     }
     const scannable = combined.slice(0, end);
     carry = combined.slice(end);
+    if (!final) {
+      refuseUnclosedTag(carry);
+    }
     for (const match of scannable.matchAll(STRUCTURAL_TAG)) {
       const closing = match[1] === '/';
       const name = match[2]!;
@@ -420,6 +446,22 @@ async function scanModelPart(
     throw refuse('its 3D model part holds no <model> element');
   }
   return model;
+}
+
+/**
+ * Refuse a model part that will not close the tag the scan is inside.
+ *
+ * The carry is the only unbounded thing in the scan, and it is also what the
+ * next chunk rescans, so a cap here is both the memory bound and what keeps
+ * the total work linear.
+ */
+function refuseUnclosedTag(carry: string): void {
+  if (carry.length > MODEL_TAG_CHARS) {
+    throw refuse(
+      `its 3D model part runs more than ${MODEL_TAG_CHARS} characters ` +
+        'without closing an XML tag, so it is not a model this import can read'
+    );
+  }
 }
 
 function readZipDirectory(data: Uint8Array): readonly ZipEntry[] {
