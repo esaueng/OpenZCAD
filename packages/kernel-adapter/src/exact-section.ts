@@ -97,7 +97,19 @@ export type ExactSectionRefusalReason =
   /** The kernel's area disagrees with the tessellated witness. */
   | 'area-mismatch'
   /** The kernel's wire order does not put the outer boundary first. */
-  | 'wire-order-unverified';
+  | 'wire-order-unverified'
+  /**
+   * The named body has no geometry in the document being sectioned.
+   *
+   * This one is not the kernel's: it is raised by the document-level section
+   * when a caller's body list and the document it is sectioning have come
+   * apart — the viewport showing a preview document's bodies while the live
+   * document is the one being cut, say. It is a refusal rather than a throw
+   * so that one stale id cannot take the whole section down with it: every
+   * body that does section is still drawn and measured, and because this is
+   * not `plane-misses-body` it still shuts the export.
+   */
+  | 'unknown-body';
 
 export interface ExactSectionRefusal {
   readonly status: 'refused';
