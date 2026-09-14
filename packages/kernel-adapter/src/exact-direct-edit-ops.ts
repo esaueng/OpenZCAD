@@ -48,6 +48,11 @@ import {
   directEditFacetFallbackWarning
 } from './boolean-result-validation';
 import {
+  exactBooleanRefusalReason,
+  exactCut,
+  exactFuse
+} from './exact-boolean-refusal';
+import {
   ambiguousReferenceError,
   unresolvedReferenceError
 } from './topology-fingerprint';
@@ -177,7 +182,7 @@ function enlargeThroughHole(
   newBore: number
 ): number {
   try {
-    return kernel.cut(solid, newBore);
+    return exactCut(kernel, solid, newBore);
   } catch (shortCutError) {
     const axis = normalized(subtract(geometry.axisEnd, geometry.axisStart));
     if (!axis) throw shortCutError;
@@ -192,7 +197,11 @@ function enlargeThroughHole(
     const margin = Math.max(1, radius);
     const start = add(geometry.axisStart, scale(axis, Math.min(...reach) - margin));
     const end = add(geometry.axisStart, scale(axis, Math.max(...reach) + margin));
-    return kernel.cut(solid, cylinderAlongAxis(kernel, start, end, radius));
+    return exactCut(
+      kernel,
+      solid,
+      cylinderAlongAxis(kernel, start, end, radius)
+    );
   }
 }
 
@@ -249,9 +258,11 @@ export function resizeThroughHole(
     output =
       radius > geometry.radius
         ? enlargeThroughHole(kernel, solid, geometry, radius, newBore)
-        : kernel.fuse(
+        : exactFuse(
+            kernel,
             solid,
-            kernel.cut(
+            exactCut(
+              kernel,
               cylinderAlongAxis(
                 kernel,
                 geometry.axisStart,
@@ -264,7 +275,8 @@ export function resizeThroughHole(
   } catch (error) {
     throw new Error(
       `Through-hole diameter ${diameter} does not fit this body: ${
-        error instanceof Error ? error.message : 'the kernel rejected the cut'
+        exactBooleanRefusalReason(error) ??
+        (error instanceof Error ? error.message : 'the kernel rejected the cut')
       }.`,
       { cause: error }
     );
@@ -574,14 +586,16 @@ function fillImportedHole(
   const facesBefore = kernel.getSolidFaces(solid).length;
   let filled: number;
   try {
-    filled = kernel.fuse(
+    filled = exactFuse(
+      kernel,
       solid,
       cylinderAlongAxis(kernel, openingPoint, end, maximumRadius)
     );
   } catch (error) {
     throw new Error(
       `Filling the imported hole before resizing failed: ${
-        error instanceof Error ? error.message : 'the kernel rejected the fuse'
+        exactBooleanRefusalReason(error) ??
+        (error instanceof Error ? error.message : 'the kernel rejected the fuse')
       }.`,
       { cause: error }
     );
