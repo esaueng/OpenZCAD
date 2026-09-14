@@ -10,6 +10,7 @@ import { fileURLToPath } from 'node:url';
 import {
   evaluateKernelWasm,
   KERNEL_WASM_ASSET_PATTERN,
+  LAZY_ENTRY_PATTERNS,
   TRANSLATOR_WASM_ASSET_PATTERN,
   KERNEL_WASM_POLICY,
   kernelPolicyToolchain,
@@ -61,14 +62,6 @@ const APPROVED_LAZY_ASSETS = [
     maxBytes: 1024 * 1024,
     reason: 'SQLite parser, loaded only in a one-shot Shapr3D import worker'
   }
-];
-const LAZY_ENTRY_PATTERNS = [
-  /^assets\/(?:three|three-addons)-.*\.js$/,
-  /^assets\/(?:ViewerShell|partThumbnail|pdf|exact|src)-.*\.js$/,
-  KERNEL_WASM_ASSET_PATTERN,
-  TRANSLATOR_WASM_ASSET_PATTERN,
-  /^assets\/sqlite3-.*\.wasm$/,
-  /^assets\/shaprImportWorker-.*\.js$/
 ];
 
 function collect(directory) {
