@@ -118,6 +118,7 @@ import type {
   FeatureId,
   FeatureNode,
   FaceGeometry,
+  FaceRecognitionSummary,
   ParamValue,
   FaceTopology,
   ProjectCheckpoint,
@@ -4574,6 +4575,31 @@ export function App() {
     ? (renderedRepresentations[selectedFeatureBodyId] ?? null)
     : null;
 
+  /**
+   * On-demand recognition of the selected imported STEP face (Phase D of the
+   * imported STEP edit plan). App owns only the cache plus the query inputs;
+   * the Inspector (already a lazy chunk) owns the worker query effect, so
+   * nothing about recognition joins the entry chunk. Each (body, face)
+   * answers at most once per document version, and the summary renders in
+   * the Inspector without ever entering the document or the rebuild payload.
+   */
+  const importedFaceRecognitionCache = useRef(
+    new Map<string, FaceRecognitionSummary>()
+  ).current;
+  const importedFaceRecognitionQuery =
+    renderedSelectedTopology?.kind === 'face' &&
+    renderedSelectedTopology.hash !== undefined &&
+    selectedBody?.source === 'imported-step' &&
+    !previewDoc
+      ? {
+          bodyId: renderedSelectedTopology.bodyId,
+          faceHash: renderedSelectedTopology.hash,
+          ...(renderedSelectedTopology.topologyId !== undefined
+            ? { topologyId: renderedSelectedTopology.topologyId }
+            : {})
+        }
+      : null;
+
   const assistantSelection = useMemo<CadSelectionContext>(
     () => ({
       featureIds: selectedFeature ? [selectedFeature.featureId] : [],
@@ -8510,7 +8536,7 @@ export function App() {
       const preflight = await preflightCadPatch(
         current,
         proposal,
-        (candidate) => geometry.syncOnce(candidate)
+        (candidate, analysis) => geometry.syncOnce(candidate, analysis)
       );
       const live = managerRef.current?.document;
       if (
@@ -8559,7 +8585,7 @@ export function App() {
       const preflight = await preflightCadPatch(
         current,
         proposal,
-        (candidate) => geometry.syncOnce(candidate)
+        (candidate, analysis) => geometry.syncOnce(candidate, analysis)
       );
       const live = managerRef.current?.document;
       if (
@@ -16456,6 +16482,10 @@ export function App() {
                 preferredSketchId={selectedSketch?.sketchId ?? null}
                 commandSession={commandSession}
                 featureSelectionSource={featureSelectionSource}
+                recognitionDocument={previewDoc ?? doc}
+                recognitionQuery={importedFaceRecognitionQuery}
+                recognitionCache={importedFaceRecognitionCache}
+                recognitionWorker={geometry}
                 onLaunchTool={launchTool}
                 onSelectBodies={handleSelectBodiesFromPickList}
                 onPreviewBodyAppearance={previewBodyAppearance}
@@ -16765,6 +16795,7 @@ export function App() {
               selection={assistantSelection}
               onApply={handleApplyPatch}
               onPreview={handlePreviewPatch}
+              onAnalyze={async (document, analysis) => geometry.syncOnce(document, analysis)}
               collapsed={assistantCollapsed}
               onCollapsedChange={setAssistantCollapsed}
               confirmDestructive={appSettings.general.confirmDestructiveActions}
