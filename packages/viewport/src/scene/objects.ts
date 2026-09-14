@@ -69,9 +69,17 @@ export function makeLabel(className: string, text: string): CSS2DObject {
 export function applyDisplayMode(bodyGroup: THREE.Group, mode: DisplayMode) {
   bodyGroup.traverse((child: THREE.Object3D) => {
     if (child.userData.exactSection === true) {
-      const material = (child as THREE.Mesh).material;
-      if (material instanceof THREE.Material) {
-        material.visible = mode !== 'wireframe';
+      // Only the cut SURFACE follows the display mode. The section curves
+      // are an outline — the same kind of thing wireframe keeps the body's
+      // own edges for, and what the DXF export writes — so hiding them would
+      // leave wireframe showing no cut at all while the body edges around it
+      // stayed on screen. A THREE.Line is not a THREE.Mesh, which is what
+      // tells the fill and the curves apart here.
+      if (child instanceof THREE.Mesh) {
+        const material = child.material;
+        if (material instanceof THREE.Material) {
+          material.visible = mode !== 'wireframe';
+        }
       }
     } else if (isViewerMesh(child) || child.userData.sectionCap === true) {
       const mesh = child as ViewerMesh;
