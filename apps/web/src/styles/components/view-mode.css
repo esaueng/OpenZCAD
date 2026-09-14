@@ -8,8 +8,9 @@
 /* Docked at the left of the bar, between the brand and the project name:
    the workspace you are in reads before the document you are in it with.
 
-   A segmented control: three equal segments in a recessed track, and one
-   raised thumb that slides to the segment you chose. The thumb is a neutral
+   Three equal segments and one raised thumb that slides to the segment you
+   chose. There is no track: the bar itself is the surface the thumb sits on,
+   so the control is one box, not a box inside a box. The thumb is a neutral
    surface rather than an accent tint — the Beta tag beside it already wears
    the accent fill, and two tinted chips in a row read as one cluster. Accent
    is kept for the active icon alone, so the mode still catches the eye
@@ -21,11 +22,6 @@
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   isolation: isolate;
-  padding: 2px;
-  background: var(--color-surface-2);
-  border: var(--border-thin);
-  border-radius: var(--radius-md);
-  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.18);
 }
 
 .mode-switch[data-active='tweak'] {
@@ -36,22 +32,19 @@
   --mode-switch-index: 2;
 }
 
-/* The thumb. Sized to one segment of the padded track and moved by whole
-   segments, so it never has to know how wide a label is; the move is a
-   transform, so it costs no layout, and it collapses to a jump under
-   prefers-reduced-motion with every other transition (tokens.css). */
+/* The thumb. Sized to one segment and moved by whole segments, so it never
+   has to know how wide a label is; the move is a transform, so it costs no
+   layout, and it collapses to a jump under prefers-reduced-motion with every
+   other transition (tokens.css). */
 .mode-switch::before {
   content: '';
   position: absolute;
   z-index: -1;
-  top: 2px;
-  bottom: 2px;
-  left: 2px;
-  width: calc((100% - 4px) / 3);
-  background: var(--color-surface-hover);
-  border: 1px solid var(--color-border-strong);
-  border-radius: var(--radius-sm);
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
+  inset: 0 auto 0 0;
+  width: calc(100% / 3);
+  background: var(--color-surface-2);
+  border: var(--border-thin);
+  border-radius: var(--radius-md);
   transform: translateX(calc(var(--mode-switch-index) * 100%));
   transition: transform var(--dur-base) var(--ease-out);
 }
@@ -61,12 +54,12 @@
   align-items: center;
   justify-content: center;
   gap: 6px;
-  min-height: 24px;
+  min-height: 26px;
   padding: 0 11px;
   color: var(--color-text-muted);
   background: none;
   border: 0;
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-md);
   font: inherit;
   font-size: var(--fs-sm);
   line-height: 1;
