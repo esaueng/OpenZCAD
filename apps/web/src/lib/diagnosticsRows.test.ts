@@ -56,3 +56,64 @@ describe('presented diagnostics', () => {
     });
   });
 });
+
+describe('presented diagnostics carry the kernel category', () => {
+  const message =
+    'Feature "Weld": exact-only policy: the exact boolean pipeline could ' +
+    'not produce this result';
+
+  it('classifies a row from the rebuild record, not from its words', () => {
+    const [row] = presentedDiagnostics(
+      [message],
+      [
+        {
+          featureId,
+          featureName: 'Weld',
+          message,
+          kind: 'build-failed',
+          kernelRefusal: {
+            family: 'boolean',
+            operation: 'fuse',
+            category: 'quality_refused',
+            code: 'exact_only_unattainable'
+          }
+        }
+      ]
+    );
+    expect(row).toMatchObject({
+      featureName: 'Weld',
+      category: 'quality_refused'
+    });
+  });
+
+  it('leaves an uncategorised row uncategorised', () => {
+    const [row] = presentedDiagnostics(
+      [message],
+      [{ featureId, featureName: 'Weld', message, kind: 'build-failed' }]
+    );
+    expect(row?.category).toBeUndefined();
+  });
+
+  /**
+   * A resource limit and an unsupported domain are different stories, and the
+   * row now tells them apart from the same kernel sentence.
+   */
+  it('gives two categories two sentences for one kernel sentence', () => {
+    const rowFor = (category: string) =>
+      presentedDiagnostics(
+        [message],
+        [
+          {
+            featureId,
+            featureName: 'Weld',
+            message,
+            kind: 'build-failed',
+            kernelRefusal: { family: 'boolean', category, code: 'c' }
+          }
+        ]
+      )[0]!;
+    expect(rowFor('resource_limit').message).not.toBe(
+      rowFor('unsupported').message
+    );
+  });
+});

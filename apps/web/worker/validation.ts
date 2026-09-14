@@ -56,6 +56,7 @@ const UNIT_SYSTEMS: readonly UnitSystem[] = ['mm', 'cm', 'm', 'inch'];
 const ARTIFACT_KINDS: readonly ArtifactKind[] = [
   'step-import',
   'stl-import',
+  'mesh-import',
   'step-export',
   'stl-export',
   '3mf-export',

@@ -1,3 +1,4 @@
+import { rigidImportedSource } from '@openzcad/document-core';
 import type {
   BodyId,
   ProjectDocument,
@@ -33,6 +34,13 @@ export function growingHolderProposalTarget(
       body.source !== 'imported-step' ||
       !recognition ||
       recognition.status !== 'recognized'
+    )
+      return [];
+    const imported = rigidImportedSource(document, bodyId);
+    if (
+      !imported ||
+      imported.source.data.featureKind !== 'imported-step' ||
+      imported.source.data.planarEmboss
     )
       return [];
     return [{ bodyId, name: body.name, opening: recognition.opening }];
