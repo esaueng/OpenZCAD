@@ -121,18 +121,6 @@ export function faceAttachmentCandidatesForShape(
   );
 }
 
-export function copyShape(
-  kernel: RemusKernel,
-  shape: ExactShape,
-  matrix: Float64Array
-): ExactShape {
-  return {
-    solids: shape.solids.map((solid) =>
-      kernel.copyAndTransformSolid(solid, matrix)
-    )
-  };
-}
-
 export function copyShapeWithVerifiedLineage(
   kernel: RemusKernel,
   shape: ExactShape,
