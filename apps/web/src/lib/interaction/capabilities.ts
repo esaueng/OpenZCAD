@@ -11,7 +11,6 @@ import { UNSTABLE_FACE_OFFSET_REASON } from '../directEdit';
 import { UNSTABLE_FACE_SKETCH_REASON } from '../faceSketchAttachment';
 
 export type SelectionActionId =
-  | 'export-face-dxf'
   | 'resize-body'
   | 'offset-face'
   | 'resize-radial-face'
@@ -148,13 +147,10 @@ export function selectionCapabilities(
               ),
               note: UNSTABLE_FACE_OFFSET_REASON
             };
-        return [
-          offsetCapability,
-          sketchCapability,
-          // A planar outline is exactly what a laser cutter consumes; the
-          // export never mutates the body, so no geometry gate applies.
-          enabled('export-face-dxf', 'Export DXF', undefined, 'exact-worker')
-        ];
+        // The DXF outline export lives in the command palette under File,
+        // beside the other exports: it produces a file rather than editing
+        // the face, so it does not belong among the face's edit modes.
+        return [offsetCapability, sketchCapability];
       }
       if (
         target.surfaceType === 'cylindrical' &&
