@@ -557,43 +557,168 @@ describe('advanced exact modeling features', { timeout: 30_000 }, () => {
     ).toBeCloseTo(433.3332733, 3);
   });
 
-  it('closes a run whose sections are all coplanar from either side', async () => {
-    // The one run the comparison has no baseline for: lofted without an apex
-    // it is refused outright ("did not produce a finite positive volume"),
-    // because sections that all lie in the closing plane enclose nothing. That
-    // is also why it has no interior for an apex to fold into, so its baseline
-    // is nought material rather than a measurement, and measured it closes
-    // correctly either way: both apexes give the analytic 8 x 8 x 10 / 3
-    // pyramid. So this is decided, not skipped — refusing it would take away a
-    // loft the kernel builds.
-    let document = createProjectDocument('Flat run', toUserId('user_flat2'));
-    const inner = addSection(document, 'Inner', 0, {
-      objectKind: 'rectangle',
-      width: 4,
-      height: 4,
+  it('refuses a coplanar run there is no baseline to check the apex against', async () => {
+    // STRENGTHENED, same fixtures. This run used to *build*: sections that all
+    // lie in the closing plane enclose nothing, so the guard substituted a
+    // baseline of nought material and waved the apex through on the reasoning
+    // that there is no interior for it to fold into. True about folding, false
+    // about the result — and fail-open, because the substitute admits a body
+    // nobody measured.
+    //
+    // What the kernel actually builds is a pyramid off the *last* section with
+    // every earlier section kept in the B-Rep as a zero-thickness web holding
+    // no material at all. Measured on the pinned kernel, with the apex sign
+    // making no difference in any case, which is the invariant failing to
+    // decide rather than deciding:
+    //
+    //   4x4 then closing 8x8, apex z = +/-10   -> 213.3333, faces 10
+    //         = the 8 x 8 x 10 / 3 pyramid alone; the 4 x 4 is a sheet
+    //   100x100 then closing 4x4, apex z = +/-10 -> 53.3333, bbox x[-50, 50]
+    //         = the 4 x 4 x 10 / 3 pyramid alone, inside a 100 mm bounding box
+    //   4x4 at x = -20 then closing 4x4 at x = +20, apex (20, 0, +/-10)
+    //         -> 53.3333, centre of mass x = 20.0, i.e. the section at
+    //            x = -20 is entirely absent from the body's mass
+    //
+    // all three with exportableStep true and no warning. So the substitute
+    // baseline is gone and a run with no measured baseline is refused.
+    const runs: ReadonlyArray<
+      readonly [string, SketchObjectData, SketchObjectData, number]
+    > = [
+      [
+        'Flat run',
+        {
+          objectKind: 'rectangle',
+          width: 4,
+          height: 4,
+          centerX: 0,
+          centerY: 0
+        },
+        {
+          objectKind: 'rectangle',
+          width: 8,
+          height: 8,
+          centerX: 0,
+          centerY: 0
+        },
+        0
+      ],
+      [
+        'Wide run',
+        {
+          objectKind: 'rectangle',
+          width: 100,
+          height: 100,
+          centerX: 0,
+          centerY: 0
+        },
+        {
+          objectKind: 'rectangle',
+          width: 4,
+          height: 4,
+          centerX: 0,
+          centerY: 0
+        },
+        0
+      ],
+      [
+        'Disjoint run',
+        {
+          objectKind: 'rectangle',
+          width: 4,
+          height: 4,
+          centerX: -20,
+          centerY: 0
+        },
+        {
+          objectKind: 'rectangle',
+          width: 4,
+          height: 4,
+          centerX: 20,
+          centerY: 0
+        },
+        20
+      ]
+    ];
+    for (const [label, firstObject, closingObject, apexX] of runs) {
+      let document = createProjectDocument(label, toUserId('user_flat2'));
+      const first = addSection(document, 'First', 0, firstObject);
+      document = first.document;
+      const closing = addSection(document, 'Closing', 0, closingObject);
+      for (const z of [10, -10]) {
+        const refused = loftSections(closing.document, {
+          name: `${label} apex ${z}`,
+          sections: [first.section, closing.section],
+          mode: 'ruled',
+          endPoint: { x: apexX, y: 0, z }
+        });
+        const derived = await adapter.syncDocument(refused.document);
+        expect(derived.warnings.join(' ')).toMatch(
+          /The loft apex point cannot be checked on this loft: the same sections do not loft into a valid solid without it/
+        );
+        expect(derived.bodyRepresentations[refused.bodyId]).toBeUndefined();
+      }
+    }
+  });
+
+  it('refuses a loft apex that would trade exact curved surfaces for facets', async () => {
+    // `loftWithOptions` has no exact apexed surfacing: it rebuilds the whole
+    // body chordally. Measured on the pinned kernel for circles r = 2 on XY at
+    // z = 0 and r = 3 on XY at z = 10:
+    //
+    //   no apex       198.967535 = the analytic frustum exactly, 3 B-Rep faces
+    //                              (1 cone + 2 planes), exportableStep true
+    //   apex z = 11   207.055862 against the analytic 208.392313, -0.6413%,
+    //                              66 faces, every one of them a plane
+    //   apex z = 20   291.334884 against the analytic 293.215314, -0.6413%,
+    //                              66 faces, every one of them a plane
+    //
+    // Both apexed builds validated clean, warned nothing and were offered for
+    // STEP export — a 32-segment prism shipped as if it were an exact cone.
+    // The refusal is measured from those two censuses, so the unapexed loft
+    // has to keep building exactly.
+    let document = createProjectDocument('Curved apex', toUserId('user_curv'));
+    const lower = addSection(document, 'Lower', 0, {
+      objectKind: 'circle',
+      radius: 2,
       centerX: 0,
       centerY: 0
     });
-    document = inner.document;
-    const outer = addSection(document, 'Outer', 0, {
-      objectKind: 'rectangle',
-      width: 8,
-      height: 8,
+    document = lower.document;
+    const upper = addSection(document, 'Upper', 10, {
+      objectKind: 'circle',
+      radius: 3,
       centerX: 0,
       centerY: 0
     });
-    for (const z of [10, -10]) {
-      const lofted = loftSections(outer.document, {
-        name: `Flat run apex ${z}`,
-        sections: [inner.section, outer.section],
+    const sections = [lower.section, upper.section];
+
+    const plain = loftSections(upper.document, {
+      name: 'Curved plain loft',
+      sections,
+      mode: 'ruled'
+    });
+    const plainDerived = await adapter.syncDocument(plain.document);
+    const plainBody = plainDerived.bodyRepresentations[plain.bodyId];
+    expect(plainDerived.warnings).toEqual([]);
+    expect(plainBody?.volume).toBeCloseTo(198.9675347, 6);
+    expect(plainBody?.faceCount).toBe(3);
+    expect(plainBody?.exportableStep).toBe(true);
+
+    // Refused whether the apex is small enough to lose to the chord ratio or
+    // far enough out to beat it: the loss is the same either way, so the
+    // volume comparison must not be what decides this.
+    for (const z of [11, 20]) {
+      const refused = loftSections(upper.document, {
+        name: `Curved apex ${z}`,
+        sections,
         mode: 'ruled',
         endPoint: { x: 0, y: 0, z }
       });
-      const derived = await adapter.syncDocument(lofted.document);
-      const body = derived.bodyRepresentations[lofted.bodyId];
-      expect(derived.warnings).toEqual([]);
-      expect(body?.volume).toBeCloseTo(213.3333, 3);
-      expect(body?.bbox[z > 0 ? 'max' : 'min'].z).toBeCloseTo(z, 6);
+      const derived = await adapter.syncDocument(refused.document);
+      expect(derived.warnings.join(' ')).toMatch(
+        /The loft apex point would drop this body's exact curved surfaces: the same build carries 1 cone face without it and no curved faces with it/
+      );
+      expect(derived.bodyRepresentations[refused.bodyId]).toBeUndefined();
     }
   });
 
@@ -744,6 +869,74 @@ describe('advanced exact modeling features', { timeout: 30_000 }, () => {
     expect(guidedBody?.volume).toBeCloseTo(160, 6);
     expect(guidedBody?.bbox.max.x).toBeCloseTo(1, 6);
     expect(guidedBody?.bbox.max.y).toBeCloseTo(2, 6);
+  });
+
+  it('refuses a guide rail that would trade exact curved surfaces for facets', async () => {
+    // The sharpest form of the same downgrade: the rail is *parallel* to the
+    // path, so the correct answer is the plain sweep unchanged. Measured on
+    // the pinned kernel for a circle r = 2 swept along (0,0) -> (0,20):
+    //
+    //   no rail   251.327412 = pi * 4 * 20 exactly, 3 B-Rep faces
+    //                          (1 cylinder + 2 planes), exportableStep true
+    //   with rail 246.254503 against the same analytic 251.327412, -2.0184%,
+    //                          74 faces, every one of them a plane
+    //
+    // An 18-sided prism two percent undersized, validating clean, warning
+    // nothing, and offered for STEP export.
+    let document = createProjectDocument('Curved rail', toUserId('user_crail'));
+    const profile = addSection(document, 'Profile', 0, {
+      objectKind: 'circle',
+      radius: 2,
+      centerX: 0,
+      centerY: 0
+    });
+    document = profile.document;
+    const path = addSketchFeature(document, {
+      name: 'Path',
+      plane: 'XZ',
+      offset: 0,
+      object: { objectKind: 'line', x1: 0, y1: 0, x2: 0, y2: 20 }
+    });
+    document = path.document;
+    const rail = addSketchFeature(document, {
+      name: 'Rail',
+      plane: 'XZ',
+      offset: 10,
+      object: { objectKind: 'line', x1: 0, y1: 0, x2: 0, y2: 20 }
+    });
+    const pathReference = {
+      sketchId: path.sketchId,
+      entityIds: findSketch(rail.document, path.sketchId)!.objectIds
+    };
+
+    const plain = sweepProfile(rail.document, {
+      name: 'Curved plain sweep',
+      profile: profile.section,
+      path: pathReference,
+      mode: 'standard'
+    });
+    const plainDerived = await adapter.syncDocument(plain.document);
+    const plainBody = plainDerived.bodyRepresentations[plain.bodyId];
+    expect(plainDerived.warnings).toEqual([]);
+    expect(plainBody?.volume).toBeCloseTo(251.3274123, 6);
+    expect(plainBody?.faceCount).toBe(3);
+    expect(plainBody?.exportableStep).toBe(true);
+
+    const refused = sweepProfile(rail.document, {
+      name: 'Curved guided sweep',
+      profile: profile.section,
+      path: pathReference,
+      mode: 'standard',
+      guide: {
+        sketchId: rail.sketchId,
+        entityIds: findSketch(rail.document, rail.sketchId)!.objectIds
+      }
+    });
+    const derived = await adapter.syncDocument(refused.document);
+    expect(derived.warnings.join(' ')).toMatch(
+      /A sweep guide rail would drop this body's exact curved surfaces: the same build carries 1 cylinder face without it and no curved faces with it/
+    );
+    expect(derived.bodyRepresentations[refused.bodyId]).toBeUndefined();
   });
 
   it('refuses a guide rail on a smooth sweep rather than resurfacing it', async () => {
