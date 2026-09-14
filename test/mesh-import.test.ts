@@ -19,10 +19,13 @@ import { InMemoryPersistenceService } from '@openzcad/persistence';
 import { toUserId, type ProjectDocument } from '@openzcad/shared';
 
 import {
+  deflatedThreeMfFixture,
   FIXTURE_BOX,
   FIXTURE_BOX_TRIANGLES,
   FIXTURE_BOX_VOLUME,
-  meshFixture
+  meshFixture,
+  THREE_MF_UNIT_MILLIMETRES,
+  threeMfFixture
 } from './support/mesh-import-fixtures';
 
 /**
@@ -131,6 +134,89 @@ describe('mesh file imports', { timeout: 30_000 }, () => {
     }
   );
 
+  // A 3MF is the only one of these formats that states what its numbers mean,
+  // and the pinned translator ignores the statement. Reading a file authored
+  // in inches at millimetre scale is silent, 25.4x wrong geometry, so these
+  // cases pin the conversion and the refusal that guards it.
+  describe('a 3MF declared length unit', () => {
+    it.each(Object.keys(THREE_MF_UNIT_MILLIMETRES))(
+      'converts a box declared in %s to millimetres',
+      async (unit) => {
+        const factor = THREE_MF_UNIT_MILLIMETRES[unit]!;
+        const mesh = await importMeshFile('3mf', threeMfFixture({ unit }));
+
+        expect(mesh.sourceUnit).toBe(unit);
+        expect(mesh.triangleCount).toBe(FIXTURE_BOX_TRIANGLES);
+        const xs = mesh.vertices.filter((_value, index) => index % 3 === 0);
+        expect(Math.max(...xs)).toBeCloseTo(FIXTURE_BOX.x * factor, 9);
+        expect(Math.min(...xs)).toBeCloseTo(0, 9);
+        expect(meshVolume(mesh)).toBeCloseTo(FIXTURE_BOX_VOLUME * factor ** 3, 6);
+      }
+    );
+
+    it('treats an absent unit as the format default of millimetres', async () => {
+      const mesh = await importMeshFile('3mf', threeMfFixture({ unit: null }));
+
+      expect(mesh.sourceUnit).toBe('millimeter');
+      expect(meshVolume(mesh)).toBeCloseTo(FIXTURE_BOX_VOLUME, 9);
+    });
+
+    it('reads the declaration out of a deflated package too', async () => {
+      // Every real exporter deflates its parts; the other fixtures store them.
+      const mesh = await importMeshFile(
+        '3mf',
+        await deflatedThreeMfFixture({ unit: 'inch' })
+      );
+
+      expect(mesh.sourceUnit).toBe('inch');
+      expect(meshVolume(mesh)).toBeCloseTo(FIXTURE_BOX_VOLUME * 25.4 ** 3, 3);
+    });
+
+    it('refuses a unit the format does not define rather than guessing', async () => {
+      await expect(
+        importMeshFile('3mf', threeMfFixture({ unit: 'furlong' }))
+      ).rejects.toThrow(/declares unit "furlong"/);
+    });
+
+    it('refuses a package it cannot open, by what stopped it', async () => {
+      await expect(
+        importMeshFile('3mf', new TextEncoder().encode('not a zip at all'))
+      ).rejects.toThrow('This 3MF package could not be read: it is not a Zip');
+    });
+
+    it('rebuilds an inch-authored box at its real size', async () => {
+      const mesh = await importMeshFile('3mf', threeMfFixture({ unit: 'inch' }));
+      const imported = importMeshBody(
+        createProjectDocument('inch part', user),
+        {
+          name: 'Imported inches',
+          artifactId: 'artifact_inch',
+          sourceName: 'box.3mf',
+          vertices: mesh.vertices,
+          indices: mesh.indices,
+          triangleCount: mesh.triangleCount
+        }
+      );
+
+      const derived = await adapter.syncDocument(imported.document);
+      expect(derived.warnings).toEqual([]);
+      const body = derived.bodyRepresentations[imported.bodyId]!;
+      expect(body.volume).toBeCloseTo(FIXTURE_BOX_VOLUME * 25.4 ** 3, 3);
+      expect(body.bbox.max.x).toBeCloseTo(FIXTURE_BOX.x * 25.4, 6);
+    });
+  });
+
+  it('refuses a multi-object file instead of importing a body that cannot rebuild', async () => {
+    // Measured on the pin: two disjoint boxes merged into one triangle soup
+    // import "successfully" and then rebuild to no body at all, because their
+    // separate shells cannot be sewn into one. Refuse the file instead.
+    await expect(
+      importMeshFile('3mf', threeMfFixture({ objects: 2 }))
+    ).rejects.toThrow(
+      'This 3MF file holds 2 separate objects, and a mesh import becomes one body.'
+    );
+  });
+
   it.each(FORMATS)(
     'refuses a %s file over its byte limit before reading it',
     async (format) => {
@@ -144,6 +230,7 @@ describe('mesh file imports', { timeout: 30_000 }, () => {
       );
     }
   );
+
 
   it('refuses a file that is not the format it claims, by name', async () => {
     await expect(

@@ -69,21 +69,67 @@ function plyBox(): Uint8Array {
   return encoder.encode(`${lines.join('\n')}\n`);
 }
 
-function threeMfBox(): Uint8Array {
-  const vertices = VERTICES.map(
-    ([x, y, z]) => `<vertex x="${x}" y="${y}" z="${z}"/>`
+/**
+ * How a 3MF package under test differs from the plain one-box default.
+ *
+ * A 3MF is the only mesh format here that declares its own length unit and the
+ * only one that routinely holds several objects, so those two axes — plus the
+ * Zip compression every real exporter uses and the fixture writer does not —
+ * are what the 3MF cases need to vary.
+ */
+export interface ThreeMfOptions {
+  /** The `unit` attribute to declare; omitted entirely when null. */
+  readonly unit?: string | null;
+  /** How many boxes to place, each offset clear of the last. */
+  readonly objects?: number;
+}
+
+/** The 3MF core format's own default when `<model>` omits `unit`. */
+export const THREE_MF_UNIT_MILLIMETRES: Readonly<Record<string, number>> = {
+  micron: 0.001,
+  millimeter: 1,
+  centimeter: 10,
+  inch: 25.4,
+  foot: 304.8,
+  meter: 1000
+};
+
+function threeMfModelXml(options: ThreeMfOptions = {}): string {
+  const count = options.objects ?? 1;
+  const unit = options.unit === undefined ? 'millimeter' : options.unit;
+  const resources = Array.from({ length: count }, (_unused, index) => {
+    // Each object clear of the last, so several of them are genuinely
+    // separate shells rather than one merged solid.
+    const offset = index * (FIXTURE_BOX.x + 1);
+    const vertices = VERTICES.map(
+      ([x, y, z]) => `<vertex x="${x + offset}" y="${y}" z="${z}"/>`
+    ).join('');
+    const triangles = TRIANGLES.map(
+      ([a, b, c]) => `<triangle v1="${a}" v2="${b}" v3="${c}"/>`
+    ).join('');
+    return (
+      `<object id="${index + 1}" type="model"><mesh>` +
+      `<vertices>${vertices}</vertices><triangles>${triangles}</triangles>` +
+      '</mesh></object>'
+    );
+  }).join('');
+  const items = Array.from(
+    { length: count },
+    (_unused, index) => `<item objectid="${index + 1}"/>`
   ).join('');
-  const triangles = TRIANGLES.map(
-    ([a, b, c]) => `<triangle v1="${a}" v2="${b}" v3="${c}"/>`
-  ).join('');
-  const model =
+  return (
     '<?xml version="1.0" encoding="UTF-8"?>' +
-    '<model unit="millimeter" xml:lang="en-US" ' +
+    `<model${unit === null ? '' : ` unit="${unit}"`} xml:lang="en-US" ` +
     'xmlns="http://schemas.microsoft.com/3dmanufacturing/core/2015/02">' +
-    '<resources><object id="1" type="model"><mesh>' +
-    `<vertices>${vertices}</vertices><triangles>${triangles}</triangles>` +
-    '</mesh></object></resources>' +
-    '<build><item objectid="1"/></build></model>';
+    `<resources>${resources}</resources>` +
+    `<build>${items}</build></model>`
+  );
+}
+
+function threeMfParts(
+  options: ThreeMfOptions
+): { name: string; data: Uint8Array }[] {
+  const model = threeMfModelXml(options);
   const contentTypes =
     '<?xml version="1.0" encoding="UTF-8"?>' +
     '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">' +
@@ -96,11 +142,57 @@ function threeMfBox(): Uint8Array {
     '<Relationship Target="/3D/3dmodel.model" Id="rel0" ' +
     'Type="http://schemas.microsoft.com/3dmanufacturing/2013/01/3dmodel"/>' +
     '</Relationships>';
-  return storedZip([
+  return [
     { name: '[Content_Types].xml', data: encoder.encode(contentTypes) },
     { name: '_rels/.rels', data: encoder.encode(relationships) },
     { name: '3D/3dmodel.model', data: encoder.encode(model) }
-  ]);
+  ];
+}
+
+function threeMfBox(options: ThreeMfOptions = {}): Uint8Array {
+  return storedZip(threeMfParts(options));
+}
+
+/** A 3MF package built to order: a declared unit, or several objects. */
+export function threeMfFixture(options: ThreeMfOptions): Uint8Array {
+  return threeMfBox(options);
+}
+
+/**
+ * The same package with every part deflated, which is what a real exporter
+ * writes. The stored-entry fixtures above exercise the reader's easy path;
+ * this one is the path production files actually take.
+ */
+export async function deflatedThreeMfFixture(
+  options: ThreeMfOptions = {}
+): Promise<Uint8Array> {
+  const parts = threeMfParts(options);
+  const bodies = await Promise.all(
+    parts.map((part) => deflateRaw(part.data))
+  );
+  return storedZip(parts, bodies);
+}
+
+async function deflateRaw(data: Uint8Array): Promise<Uint8Array> {
+  // `BufferSource`, because that is what the compression streams accept.
+  const source = new ReadableStream<BufferSource>({
+    start(controller) {
+      controller.enqueue(new Uint8Array(data));
+      controller.close();
+    }
+  });
+  const reader = source
+    .pipeThrough(new CompressionStream('deflate-raw'))
+    .getReader();
+  const chunks: Uint8Array[] = [];
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) {
+      break;
+    }
+    chunks.push(value);
+  }
+  return concat(chunks);
 }
 
 function glbBox(): Uint8Array {
@@ -183,40 +275,43 @@ function align4(length: number): number {
  * deflate, so a valid package is a header, a body and a directory per file.
  */
 function storedZip(
-  entries: readonly { name: string; data: Uint8Array }[]
+  entries: readonly { name: string; data: Uint8Array }[],
+  deflated: readonly Uint8Array[] | null = null
 ): Uint8Array {
   const local: Uint8Array[] = [];
   const central: Uint8Array[] = [];
   let offset = 0;
-  for (const entry of entries) {
+  for (const [index, entry] of entries.entries()) {
     const name = encoder.encode(entry.name);
     const crc = crc32(entry.data);
+    const body = deflated?.[index] ?? entry.data;
+    const method = deflated ? 8 : 0;
     const header = new Uint8Array(30 + name.length);
     const headerView = new DataView(header.buffer);
     headerView.setUint32(0, 0x04034b50, true);
     headerView.setUint16(4, 20, true); // version needed
-    headerView.setUint16(8, 0, true); // stored
+    headerView.setUint16(8, method, true);
     headerView.setUint32(14, crc, true);
-    headerView.setUint32(18, entry.data.length, true);
+    headerView.setUint32(18, body.length, true);
     headerView.setUint32(22, entry.data.length, true);
     headerView.setUint16(26, name.length, true);
     header.set(name, 30);
-    local.push(header, entry.data);
+    local.push(header, body);
 
     const directory = new Uint8Array(46 + name.length);
     const directoryView = new DataView(directory.buffer);
     directoryView.setUint32(0, 0x02014b50, true);
     directoryView.setUint16(4, 20, true); // version made by
     directoryView.setUint16(6, 20, true); // version needed
-    directoryView.setUint16(10, 0, true); // stored
+    directoryView.setUint16(10, method, true);
     directoryView.setUint32(16, crc, true);
-    directoryView.setUint32(20, entry.data.length, true);
+    directoryView.setUint32(20, body.length, true);
     directoryView.setUint32(24, entry.data.length, true);
     directoryView.setUint16(28, name.length, true);
     directoryView.setUint32(42, offset, true);
     directory.set(name, 46);
     central.push(directory);
-    offset += header.length + entry.data.length;
+    offset += header.length + body.length;
   }
   const centralSize = central.reduce((total, part) => total + part.length, 0);
   const end = new Uint8Array(22);
