@@ -69,7 +69,8 @@ import {
   type SketchSectionReference,
   type SketchPathReference,
   type UnitSystem,
-  type UserId
+  type UserId,
+  type VariableFilletLaw
 } from '@openzcad/shared';
 
 // Documents are treated as immutable values: every mutating operation in this
@@ -407,6 +408,18 @@ export interface EdgeModifierInput {
   size: ParamValue;
   /** Chamfer only: bevel angle in degrees; absent means symmetric 45°. */
   angleDeg?: ParamValue;
+  /**
+   * Fillet only: the radius at the far end of each selected edge. Absent
+   * means the constant-radius fillet.
+   */
+  endRadius?: ParamValue;
+  /** Fillet only: read only with `endRadius`; absent reads as 'linear'. */
+  radiusLaw?: VariableFilletLaw;
+  /**
+   * Chamfer only: the setback on the second face each selected edge borders,
+   * `size` landing on the first. Absent means the symmetric chamfer.
+   */
+  distance2?: ParamValue;
   ids?: BodyFeatureIds;
 }
 
@@ -504,6 +517,19 @@ export interface FeatureUpdateInput {
    * `dimensions` patches merge key-by-key, every other field replaces.
    */
   data?: Partial<FeatureData> & { dimensions?: Record<string, ParamValue> };
+  /**
+   * Optional data keys to REMOVE, applied after `data`.
+   *
+   * A patch cannot express a removal: an `undefined` value is skipped, which
+   * is what keeps a partial patch from wiping fields it does not mention. An
+   * optional field whose absence is its own meaning — a fillet with no end
+   * radius is the constant blend, not a variable one with the same radius
+   * twice — therefore cannot be switched off through `data` at all.
+   *
+   * Only the keys in {@link FEATURE_DATA_CLEARABLE_KEYS} may be named, so a
+   * removal can never leave a feature without a field its builder requires.
+   */
+  clearData?: readonly string[];
 }
 
 export interface FeatureDeleteInput {
@@ -1365,19 +1391,47 @@ function validateSketchConstraint(
       break;
     }
     case 'tangent': {
-      // The kernel's tangency is the point-free line↔circle form; arcs would
-      // need a synthesized contact point and stay excluded.
+      // Two forms. Point-free line↔circle, which the kernel states as a
+      // center-to-line distance; and line↔arc, which the kernel states at a
+      // named contact point, so that form carries `at`.
       const a = requireConstrainableObject(document, sketch, data.a, [
         'line',
+        'arc',
         'circle'
       ]);
       const b = requireConstrainableObject(document, sketch, data.b, [
         'line',
+        'arc',
         'circle'
       ]);
       if ((a === 'line') === (b === 'line')) {
-        throw new Error('A tangent constraint pairs one line with one circle.');
+        throw new Error(
+          'A tangent constraint pairs one line with one circle or arc.'
+        );
       }
+      const arcSide = a === 'arc' ? data.a : b === 'arc' ? data.b : null;
+      if (arcSide === null) {
+        if (data.at) {
+          throw new Error(
+            'A line-to-circle tangent constraint has no contact point.'
+          );
+        }
+        break;
+      }
+      if (!data.at) {
+        throw new Error(
+          'A tangent constraint against an arc must name the arc point it touches.'
+        );
+      }
+      if (data.at.objectId !== arcSide) {
+        throw new Error(
+          'A tangent contact point must belong to the arc it constrains.'
+        );
+      }
+      if (data.at.point !== 'start' && data.at.point !== 'end') {
+        throw new Error('A tangent contact point is an arc start or end.');
+      }
+      requireConstraintPoint(document, sketch, data.at);
       break;
     }
     case 'concentric':
@@ -2014,7 +2068,15 @@ export function filletEdges(
       ...(input.edgeReferences
         ? { edgeReferences: deepClone(input.edgeReferences) }
         : {}),
-      radius: input.size
+      radius: input.size,
+      ...(input.endRadius !== undefined
+        ? {
+            endRadius: input.endRadius,
+            ...(input.radiusLaw !== undefined
+              ? { radiusLaw: input.radiusLaw }
+              : {})
+          }
+        : {})
     },
     input.ids
   );
@@ -2036,7 +2098,10 @@ export function chamferEdges(
         ? { edgeReferences: deepClone(input.edgeReferences) }
         : {}),
       distance: input.size,
-      ...(input.angleDeg !== undefined ? { angleDeg: input.angleDeg } : {})
+      ...(input.angleDeg !== undefined ? { angleDeg: input.angleDeg } : {}),
+      ...(input.distance2 !== undefined
+        ? { distance2: input.distance2 }
+        : {})
     },
     input.ids
   );
@@ -2648,13 +2713,21 @@ const FEATURE_DATA_KEYS: Record<FeatureKind, readonly string[]> = {
     'angleDeg'
   ],
   thicken: ['targetBodyId', 'faceHash', 'faceReference', 'thickness'],
-  fillet: ['targetBodyId', 'edgeHashes', 'edgeReferences', 'radius'],
+  fillet: [
+    'targetBodyId',
+    'edgeHashes',
+    'edgeReferences',
+    'radius',
+    'endRadius',
+    'radiusLaw'
+  ],
   chamfer: [
     'targetBodyId',
     'edgeHashes',
     'edgeReferences',
     'distance',
-    'angleDeg'
+    'angleDeg',
+    'distance2'
   ],
   pattern: [
     'targetBodyId',
@@ -2684,6 +2757,21 @@ const FEATURE_DATA_KEYS: Record<FeatureKind, readonly string[]> = {
     'vertices',
     'indices'
   ]
+};
+
+/**
+ * Keys `FeatureUpdateInput.clearData` may remove, per feature kind.
+ *
+ * Every entry is an optional field whose absence is a distinct, buildable
+ * state — never one a builder reads unconditionally. Kinds with no clearable
+ * field are simply absent, so naming a key on one of those is rejected the
+ * same way an unknown key is.
+ */
+const FEATURE_DATA_CLEARABLE_KEYS: Partial<
+  Record<FeatureKind, readonly string[]>
+> = {
+  fillet: ['endRadius', 'radiusLaw'],
+  chamfer: ['angleDeg', 'distance2']
 };
 
 export function updateFeature(
@@ -2730,6 +2818,19 @@ export function updateFeature(
       } else {
         data[key] = value;
       }
+    }
+  }
+  if (input.clearData?.length) {
+    const clearableKeys =
+      FEATURE_DATA_CLEARABLE_KEYS[feature.data.featureKind] ?? [];
+    const data = feature.data as unknown as Record<string, unknown>;
+    for (const key of input.clearData) {
+      if (!clearableKeys.includes(key)) {
+        throw new Error(
+          `Feature data key "${key}" cannot be cleared on a ${feature.data.featureKind} feature.`
+        );
+      }
+      delete data[key];
     }
   }
   // New Body has no dependency on the previous Add/Cut target. Undefined

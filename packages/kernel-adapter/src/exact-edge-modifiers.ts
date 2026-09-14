@@ -8,6 +8,10 @@ import { GEOMETRY_LINEAR_TOLERANCE } from '@openzcad/geometry';
 import { GEOMETRY_EPSILON, errorText } from './exact-math';
 import { MEASUREMENT_DEFLECTION, edgeSampleOf } from './exact-witnesses';
 import { countBlendFaces, selectionTouchesBlendFace } from './exact-brep';
+import {
+  applyVariableRadiusFillet,
+  type VariableFilletSpec
+} from './exact-variable-blends';
 
 /**
  * Fractions of a refused fillet/chamfer size retried to tell a size-bound
@@ -84,7 +88,20 @@ export function applyEdgeModifier(
   /** Receives construction history only after the same result is accepted. */
   reportEvolution?: (payload: FaceEvolutionPayloadV1) => void,
   /** Chamfer only: bevel angle in radians, strictly inside (0, π/2). */
-  chamferAngleRadians?: number
+  chamferAngleRadians?: number,
+  /**
+   * Fillet only: the variable-radius law and its far-end radius, with `size`
+   * as the start radius. Absent runs the constant blend. Gated and built by
+   * `exact-variable-blends`; every acceptance rule below still applies to the
+   * result.
+   */
+  variableRadius?: Omit<VariableFilletSpec, 'startRadius'>,
+  /**
+   * Chamfer only: the setback on the second of the two faces each selected
+   * edge borders, with `size` on the first. Absent runs the symmetric (or
+   * distance-angle) chamfer.
+   */
+  chamferSecondDistance?: number
 ): number | null {
   const targetBounds = kernel.boundingBox(target);
   const handles = Uint32Array.from(selected);
@@ -92,7 +109,15 @@ export function applyEdgeModifier(
   let evolution: FaceEvolutionPayloadV1 | undefined;
   if (featureKind === 'fillet') {
     try {
-      if (reportEvolution) {
+      if (variableRadius) {
+        // No evolution entry point exists for the variable blend, so a
+        // variable fillet derives its lineage the same way an engine that
+        // reports no history does.
+        modified = applyVariableRadiusFillet(kernel, target, selected, {
+          ...variableRadius,
+          startRadius: size
+        });
+      } else if (reportEvolution) {
         try {
           evolution = kernel.filletWithEvolution(target, handles, size);
           modified = evolution.result.solid;
@@ -112,7 +137,14 @@ export function applyEdgeModifier(
     }
   } else {
     try {
-      if (chamferAngleRadians !== undefined) {
+      if (chamferSecondDistance !== undefined) {
+        modified = kernel.chamferV2(
+          target,
+          handles,
+          size,
+          chamferSecondDistance
+        );
+      } else if (chamferAngleRadians !== undefined) {
         if (reportEvolution) {
           try {
             evolution = kernel.chamferDistanceAngleWithEvolution(
@@ -193,7 +225,8 @@ export function applyEdgeModifier(
     // generous radius-2r tube plus one radius-2r ball per selected edge. This
     // scales as volume, allows concave as well as convex blends, and rejects
     // topology duplication that bounds and relaxed validation cannot see.
-    const neighbourhoodRadius = size * 2;
+    const neighbourhoodRadius =
+      Math.max(size, variableRadius?.endRadius ?? 0) * 2;
     const selectedLength = selected.reduce(
       (total, edge) => total + kernel.edgeLength(edge),
       0
