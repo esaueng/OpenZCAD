@@ -1,3 +1,4 @@
+import type { EditAnalysisRequest } from '@openzcad/shared';
 import {
   CommandManager,
   commandFactories,
@@ -35,6 +36,7 @@ export function exactPatchTargets(
   commands: readonly AnyCommand[]
 ): ExactPatchTarget[] {
   return commands.flatMap((command) => {
+    if (command.commands) return exactPatchTargets(command.commands);
     const payload = commandRecord(command);
     if (!payload) {
       return [];
@@ -362,8 +364,26 @@ async function materializePatchCommands(
 export async function preflightCadPatch(
   base: ProjectDocument,
   proposal: CadPatchProposal,
-  derive: (candidate: ProjectDocument) => Promise<ProjectDocument['derived']>
+  derive: (
+    candidate: ProjectDocument,
+    analysis?: EditAnalysisRequest
+  ) => Promise<ProjectDocument['derived']>
 ): Promise<ExactPatchPreflight> {
+  const analyses = proposal.operations.flatMap((op) =>
+    op.kind === 'use_edit_candidate' && op.analysis ? [op.analysis] : []
+  );
+  const uniqueAnalyses = [
+    ...new Map(
+      analyses.map((analysis) => [JSON.stringify(analysis), analysis])
+    ).values()
+  ];
+  if (uniqueAnalyses.length > 1)
+    throw new Error('Analyze and bind one selected region at a time.');
+  if (uniqueAnalyses[0])
+    base = { ...base, derived: await derive(base, uniqueAnalyses[0]) };
+  const { expandEditCandidateProposal } =
+    await import('@openzcad/ai-contracts');
+  proposal = expandEditCandidateProposal(base, proposal);
   const commands = await materializePatchCommands(base, proposal, derive);
   const candidate = new CommandManager(base).runTransaction(
     'Preflight AI patch',

@@ -19,6 +19,7 @@ import type {
 import {
   buildFeature
 }  from './exact-feature-builders';
+import { exactBooleanRefusalOf } from './exact-boolean-refusal';
 
 /**
  * A parsed STEP import held for reuse: the kernel's serialised solids plus the
@@ -134,7 +135,24 @@ export function buildDocumentHistory(
         error instanceof Error ? error.message : 'exact geometry failed';
       const message = `Feature "${feature.name}": ${reason}`;
       result.warnings.push(message);
-      attribute(result, feature, message, 'build-failed');
+      // A refused exact boolean carries its kernel category with it, however
+      // deeply the builder wrapped the error. Recording it here is what lets
+      // downstream code tell "the engine will not do this pair" from "the
+      // handle was invalid" without matching on the sentence.
+      const refusal = exactBooleanRefusalOf(error);
+      attribute(
+        result,
+        feature,
+        message,
+        'build-failed',
+        refusal
+          ? {
+              operation: refusal.operation,
+              category: refusal.category,
+              code: refusal.kernelCode
+            }
+          : undefined
+      );
     }
     onFeature?.(index, result);
   }
@@ -152,12 +170,14 @@ function attribute(
   result: { warnings: string[]; featureWarnings: FeatureWarning[] },
   feature: { featureId: FeatureId; name: string },
   message: string,
-  kind: FeatureWarning['kind']
+  kind: FeatureWarning['kind'],
+  exactBooleanRefusal?: FeatureWarning['exactBooleanRefusal']
 ): void {
   result.featureWarnings.push({
     featureId: feature.featureId,
     featureName: feature.name,
     message,
-    kind
+    kind,
+    ...(exactBooleanRefusal ? { exactBooleanRefusal } : {})
   });
 }
