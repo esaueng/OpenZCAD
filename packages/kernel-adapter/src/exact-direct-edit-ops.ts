@@ -62,6 +62,7 @@ import {
 } from './topology-fingerprint';
 import {
   createRemusSemanticLineage,
+  mergeRemusLineageStates,
   propagateRemusUnchangedDirectEditLineage,
   type RemusLineageState
 } from './remus-lineage';
@@ -76,7 +77,6 @@ import {
   rebuildFaceDistance
 } from './exact-face-distance';
 
-/** Resolves a fingerprint to exactly one face handle, failing closed. */
 /**
  * Reference-first per ADR-013, exactly like fillet/chamfer edges: a stored
  * face hash embeds radius-dependent measurements (a cap's perimeter, a
@@ -92,17 +92,43 @@ export function resolveDirectEditFace(
   solid: number,
   operation: Pick<DxfFaceSelector, 'faceHash' | 'faceReference'>
 ): { face: number; viaLineage: boolean } {
+  return resolveDirectEditFaceInSolids(
+    kernel,
+    [solid],
+    operation,
+    target.solids.length === 1 ? target.lineage : undefined
+  );
+}
+
+function resolveDirectEditFaceInSolids(
+  kernel: RemusKernel,
+  solids: readonly number[],
+  operation: Pick<DxfFaceSelector, 'faceHash' | 'faceReference'>,
+  lineage: RemusLineageState | undefined
+): { face: number; viaLineage: boolean } {
   const reference = operation.faceReference;
-  const lineage = target.solids.length === 1 ? target.lineage : undefined;
   if (!reference || !lineage) {
-    return {
-      face: resolveFaceByFingerprint(kernel, solid, operation.faceHash),
-      viaLineage: false
-    };
+    // Include the legacy fingerprint aliases, and require uniqueness across
+    // the entire body rather than taking the first solid with a match.
+    const matches = solids.flatMap(
+      (solid) =>
+        faceHandlesByFingerprint(kernel, solid).get(operation.faceHash) ?? []
+    );
+    if (matches.length === 0) {
+      throw unresolvedReferenceError(
+        'face',
+        operation.faceHash,
+        solids.reduce(
+          (count, solid) => count + kernel.getSolidFaces(solid).length,
+          0
+        )
+      );
+    }
+    if (matches.length !== 1) throw ambiguousReferenceError('face');
+    return { face: matches[0]!, viaLineage: false };
   }
-  const candidates: TopologyResolutionCandidate[] = Array.from(
-    kernel.getSolidFaces(solid),
-    (handle) => {
+  const candidates: TopologyResolutionCandidate[] = solids.flatMap((solid) =>
+    Array.from(kernel.getSolidFaces(solid), (handle) => {
       const witness = faceWitnessOf(kernel, handle);
       const lineageReference = lineage.faceReferences.get(handle);
       return {
@@ -123,7 +149,7 @@ export function resolveDirectEditFace(
           : {}),
         value: handle
       };
-    }
+    })
   );
   const resolution = resolveTopologyReference(reference, candidates);
   if (resolution.status === 'failed') {
@@ -135,6 +161,86 @@ export function resolveDirectEditFace(
     );
   }
   return { face: resolution.candidate.value, viaLineage: true };
+}
+
+/** Slice handle-bound references without re-matching untouched geometry. */
+function lineageForSolids(
+  kernel: RemusKernel,
+  source: RemusLineageState,
+  solids: readonly number[],
+  includeDiagnostics: boolean
+): RemusLineageState {
+  const faces = new Set(
+    solids.flatMap((solid) => [...kernel.getSolidFaces(solid)])
+  );
+  const edges = new Set(
+    solids.flatMap((solid) => [...kernel.getSolidEdges(solid)])
+  );
+  return {
+    faceReferences: new Map(
+      [...source.faceReferences].filter(([handle]) => faces.has(handle))
+    ),
+    edgeReferences: new Map(
+      [...source.edgeReferences].filter(([handle]) => edges.has(handle))
+    ),
+    diagnostics: includeDiagnostics ? [...source.diagnostics] : []
+  };
+}
+
+/** A compound import is one document body, not an instruction to fuse it. */
+function offsetCompoundFace(
+  kernel: RemusKernel,
+  target: ExactShape,
+  operation: Extract<DirectEditOperation, { kind: 'offset-face' }>,
+  scope: Record<string, number>
+): ExactShape {
+  if (operation.faceReference && !target.lineage) {
+    throw new Error(
+      'Direct-edit face is stale: the body has no verified face references.'
+    );
+  }
+  const { face } = resolveDirectEditFaceInSolids(
+    kernel,
+    target.solids,
+    operation,
+    target.lineage
+  );
+  const ownerIndex = target.solids.findIndex((solid) =>
+    kernel.getSolidFaces(solid).includes(face)
+  );
+  const owner = target.solids[ownerIndex]!;
+  const ownerLineage = target.lineage
+    ? lineageForSolids(kernel, target.lineage, [owner], true)
+    : undefined;
+  // Reuse the single-solid path and all of its measurement, validity and
+  // exact-surface guards. Nothing is published until those checks succeed.
+  const edited = applyDirectEdit(
+    kernel,
+    {
+      solids: [owner],
+      ...(ownerLineage ? { lineage: ownerLineage } : {})
+    },
+    operation,
+    scope
+  );
+  const solids = target.solids.flatMap((solid, index) =>
+    index === ownerIndex ? edited.solids : [solid]
+  );
+  if (!target.lineage) return { solids };
+  const preserved = lineageForSolids(
+    kernel,
+    target.lineage,
+    target.solids.filter((_, index) => index !== ownerIndex),
+    false
+  );
+  const changed = propagateRemusUnchangedDirectEditLineage(
+    ownerLineage,
+    edited.solids.flatMap((solid) => topologyCandidatesForSolid(kernel, solid))
+  );
+  return {
+    solids,
+    lineage: mergeRemusLineageStates([preserved, ...(changed ? [changed] : [])])
+  };
 }
 
 export function resolveFaceByFingerprint(
@@ -1083,6 +1189,9 @@ export function applyDirectEdit(
   producingFeatureId?: FeatureId
 ): ExactShape {
   assertDirectEditOperation(operation);
+  if (operation.kind === 'offset-face' && target.solids.length > 1) {
+    return offsetCompoundFace(kernel, target, operation, scope);
+  }
   const solid = collapseShape(kernel, target);
   const resolved =
     operation.kind === 'set-face-distance'
