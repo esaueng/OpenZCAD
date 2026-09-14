@@ -6,49 +6,97 @@
 /* ── Top bar: the mode switch ────────────────────────────── */
 
 /* Docked at the left of the bar, between the brand and the project name:
-   the workspace you are in reads before the document you are in it with. */
+   the workspace you are in reads before the document you are in it with.
+
+   Three equal segments and one raised thumb that slides to the segment you
+   chose. There is no track: the bar itself is the surface the thumb sits on,
+   so the control is one box, not a box inside a box. The thumb is a neutral
+   surface rather than an accent tint — the Beta tag beside it already wears
+   the accent fill, and two tinted chips in a row read as one cluster. Accent
+   is kept for the active icon alone, so the mode still catches the eye
+   without competing with the brand. */
 .mode-switch {
+  --mode-switch-index: 0;
+  position: relative;
   flex: 0 0 auto;
-  display: inline-flex;
-  padding: 2px;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  isolation: isolate;
+}
+
+.mode-switch[data-active='tweak'] {
+  --mode-switch-index: 1;
+}
+
+.mode-switch[data-active='build'] {
+  --mode-switch-index: 2;
+}
+
+/* The thumb. Sized to one segment and moved by whole segments, so it never
+   has to know how wide a label is; the move is a transform, so it costs no
+   layout, and it collapses to a jump under prefers-reduced-motion with every
+   other transition (tokens.css). */
+.mode-switch::before {
+  content: '';
+  position: absolute;
+  z-index: -1;
+  inset: 0 auto 0 0;
+  width: calc(100% / 3);
   background: var(--color-surface-2);
   border: var(--border-thin);
   border-radius: var(--radius-md);
+  transform: translateX(calc(var(--mode-switch-index) * 100%));
+  transition: transform var(--dur-base) var(--ease-out);
 }
 
 .mode-switch-option {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
-  min-height: 24px;
-  padding: 0 10px;
+  justify-content: center;
+  gap: 6px;
+  min-height: 26px;
+  padding: 0 11px;
   color: var(--color-text-muted);
   background: none;
   border: 0;
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-md);
   font: inherit;
   font-size: var(--fs-sm);
+  line-height: 1;
+  white-space: nowrap;
   cursor: pointer;
-  transition:
-    color var(--dur-fast) var(--ease-out),
-    background var(--dur-fast) var(--ease-out);
+  transition: color var(--dur-fast) var(--ease-out);
 }
 
+.mode-switch-option svg {
+  flex: 0 0 auto;
+  transition: color var(--dur-fast) var(--ease-out);
+}
+
+/* Hover answers in colour only: the thumb is the single fill on the track,
+   and a second fill under the pointer would look like a second selection. */
 .mode-switch-option:hover:not(:disabled):not(.active) {
   color: var(--color-text);
-  background: var(--color-surface-hover);
+}
+
+.mode-switch-option:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: -2px;
 }
 
 .mode-switch-option.active {
-  color: var(--color-accent-hi);
-  background: var(--color-accent-dim);
-  box-shadow: inset 0 0 0 1px var(--color-accent-border);
+  color: var(--color-text);
   font-weight: var(--fw-medium);
+  cursor: default;
+}
+
+.mode-switch-option.active svg {
+  color: var(--color-accent);
 }
 
 .mode-switch-option:disabled {
   color: var(--color-text-subtle);
-  opacity: 0.5;
+  opacity: 0.45;
   cursor: not-allowed;
 }
 
