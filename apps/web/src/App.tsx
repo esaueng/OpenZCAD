@@ -5864,6 +5864,7 @@ export function App() {
         sections?: { sketchId: string }[];
         profile?: { sketchId?: string };
         path?: { sketchId?: string };
+        guide?: { sketchId?: string };
       };
       // A sketch feature's own row references its sketch without consuming it.
       if (data.featureKind === 'sketch') {
@@ -5880,6 +5881,10 @@ export function App() {
       }
       if (typeof data.path?.sketchId === 'string') {
         consumed.add(data.path.sketchId);
+      }
+      // A sweep's guide rail is consumed by the sweep exactly as its path is.
+      if (typeof data.guide?.sketchId === 'string') {
+        consumed.add(data.guide.sketchId);
       }
     }
     return consumed;
