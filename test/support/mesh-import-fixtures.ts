@@ -121,6 +121,15 @@ export interface ThreeMfOptions {
    * referencing object 1.
    */
   readonly componentObject?: boolean;
+  /**
+   * Pad the `<model>` element's `name` attribute out to this many characters.
+   *
+   * Legal XML that withholds a `>` for as long as it likes, which is what the
+   * model-part scan's carry buffer has to survive: a modest padding is a file
+   * the scan must still read, and a huge one is a file it must refuse rather
+   * than accumulate and rescan.
+   */
+  readonly namePadding?: number;
 }
 
 /** One `<build><item>`: which object it places, and the matrix it places it with. */
@@ -182,9 +191,13 @@ function threeMfModelXml(options: ThreeMfOptions = {}): string {
         '/>'
     )
     .join('');
+  const name =
+    options.namePadding === undefined
+      ? ''
+      : ` name="${'A'.repeat(options.namePadding)}"`;
   return (
     '<?xml version="1.0" encoding="UTF-8"?>' +
-    `<model${unit === null ? '' : ` unit="${unit}"`} xml:lang="en-US" ` +
+    `<model${unit === null ? '' : ` unit="${unit}"`}${name} xml:lang="en-US" ` +
     'xmlns="http://schemas.microsoft.com/3dmanufacturing/core/2015/02">' +
     `<resources>${meshes}${composed}</resources>` +
     (options.omitBuild ? '' : `<build>${placed}</build>`) +
