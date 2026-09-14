@@ -37,7 +37,12 @@ export type RemusLineageDiagnosticCode =
   | 'boolean-split-carrier'
   | 'pattern-instance-unverified'
   | 'invalid-pattern-journal'
-  | 'pattern-kernel-declined';
+  | 'pattern-kernel-declined'
+  | 'boolean-split-source'
+  | 'boolean-evolution-unverified'
+  | 'boolean-evolution-disagreement'
+  | 'boolean-edge-unresolved'
+  | 'boolean-unification-merge';
 
 export interface RemusLineageDiagnostic {
   readonly code: RemusLineageDiagnosticCode;
@@ -537,6 +542,24 @@ export function propagateRemusUnchangedDirectEditLineage(
   source: RemusLineageState | undefined,
   results: readonly RemusTopologyCandidate[]
 ): RemusLineageState | undefined {
+  return carryRemusUnchangedLineage(source, results, 'direct-edit');
+}
+
+/**
+ * The same unchanged-witness carry, labelled with the operation that asks for
+ * it. A boolean's own post-processing face unification is a second mutation on
+ * top of the boolean itself: it merges adjacent coplanar result faces, which
+ * both renames handles and destroys the identity of every face it merged. So
+ * lineage derived against the raw boolean result is carried across that step
+ * by exact witness, and a merged face — whose witness necessarily differs —
+ * drops back to hash-only rather than inheriting one of its two parents.
+ */
+export function carryRemusUnchangedLineage(
+  source: RemusLineageState | undefined,
+  results: readonly RemusTopologyCandidate[],
+  operation: TopologyLineageOperation,
+  omittedCode: RemusLineageDiagnosticCode = 'hash-only'
+): RemusLineageState | undefined {
   if (!source) {
     return undefined;
   }
@@ -578,9 +601,9 @@ export function propagateRemusUnchangedDirectEditLineage(
   }
   if (omitted > 0) {
     output.diagnostics.push({
-      code: 'hash-only',
-      operation: 'direct-edit',
-      message: `direct-edit retained ${references.length - omitted} unchanged semantic references; ${omitted} changed or ambiguous references remain hash-only.`
+      code: omittedCode,
+      operation,
+      message: `${operation} retained ${references.length - omitted} unchanged semantic references; ${omitted} changed or ambiguous references remain hash-only.`
     });
   }
   return output;
@@ -637,6 +660,26 @@ function referenceMatchesCandidate(
   return (
     reference.currentHash === topologyHashOfWitness('face', witness) &&
     topologyWitnessesEqual('face', reference.witness, witness)
+  );
+}
+
+/**
+ * The same re-verification for an edge: a stored edge reference is trusted
+ * only when the operand's own measured edge still carries that exact witness
+ * and hash, so a reference its own build had already invalidated cannot
+ * travel through a boolean.
+ */
+function edgeReferenceMatchesCandidate(
+  reference: EdgeTopologyReferenceV5 | undefined,
+  candidate: RemusTopologyCandidate | undefined
+): reference is EdgeTopologyReferenceV5 {
+  if (!reference || !candidate || candidate.kind !== 'edge') {
+    return false;
+  }
+  const witness = candidate.witness as EdgeWitnessV1;
+  return (
+    reference.currentHash === topologyHashOfWitness('edge', witness) &&
+    topologyWitnessesEqual('edge', reference.witness, witness)
   );
 }
 
@@ -1340,4 +1383,462 @@ export function decodeVerifiedRemusEvolution(
     const message = error instanceof Error ? error.message : 'invalid payload';
     throw new Error(`Remus evolution rejected: ${message}`, { cause: error });
   }
+}
+
+// ---------------------------------------------------------------------------
+// Boolean entity evolution (K05)
+// ---------------------------------------------------------------------------
+
+/**
+ * The kernel's boolean entity-evolution record, decoded.
+ *
+ * `cutWithEntityEvolution` / `fuseWithEntityEvolution` /
+ * `intersectWithEntityEvolution` return
+ * `{"solid", "evolution": {"faces", "edges", "vertices"}}`, where a face entry
+ * is `{face, source}` and an edge entry carries one of four events:
+ * `preserved` / `modified` (with the operand edge in `from`), `generated`
+ * (with the two generating operand faces) and `unresolved`.
+ *
+ * `unresolved` is the kernel honestly declining, and is kept as its own set so
+ * it can never be mistaken for evidence. Vertices are decoded away: nothing in
+ * the document addresses a vertex by name.
+ */
+export interface RemusBooleanEdgeEvolution {
+  /** Result edge handle to the operand edge it is unchanged from. */
+  readonly preserved: ReadonlyMap<number, number>;
+  /** Result edge handle to the operand edge it was cut down from. */
+  readonly modified: ReadonlyMap<number, number>;
+  /** Result edge handle to the two operand faces whose intersection made it. */
+  readonly generated: ReadonlyMap<number, readonly [number, number]>;
+  /** Result edges the kernel declined to trace. These stay hash-only. */
+  readonly unresolved: ReadonlySet<number>;
+}
+
+export interface RemusBooleanEntityEvolution {
+  readonly solid: number;
+  /** Result face handle to the operand face it came from. */
+  readonly faces: ReadonlyMap<number, number>;
+  readonly edges: RemusBooleanEdgeEvolution;
+}
+
+function decodeHandleField(
+  record: Record<string, unknown>,
+  field: string,
+  label: string
+): number {
+  const value = record[field];
+  if (!Number.isSafeInteger(value) || (value as number) < 0) {
+    throw new Error(`${label} must name a non-negative ${field} handle.`);
+  }
+  return value as number;
+}
+
+/**
+ * Strict decoder for the boolean entity-evolution payload.
+ *
+ * Every violation throws. An unrecognised edge event throws too: a kernel that
+ * grows a fifth event must make the caller decline the whole payload and fall
+ * back, not silently drop the entries it does not understand.
+ */
+export function decodeRemusBooleanEntityEvolution(
+  value: unknown
+): RemusBooleanEntityEvolution {
+  try {
+    if (typeof value !== 'string') {
+      throw new Error('Boolean evolution payload must be JSON text.');
+    }
+    const decoded: unknown = JSON.parse(value);
+    if (!decoded || typeof decoded !== 'object' || Array.isArray(decoded)) {
+      throw new Error('Boolean evolution root must be an object.');
+    }
+    const root = decoded as Record<string, unknown>;
+    const solid = decodeHandleField(root, 'solid', 'Boolean evolution');
+    if (
+      !root.evolution ||
+      typeof root.evolution !== 'object' ||
+      Array.isArray(root.evolution)
+    ) {
+      throw new Error('Boolean evolution has no evolution record.');
+    }
+    const evolution = root.evolution as Record<string, unknown>;
+    if (!Array.isArray(evolution.faces) || !Array.isArray(evolution.edges)) {
+      throw new Error('Boolean evolution must carry face and edge arrays.');
+    }
+    const faces = new Map<number, number>();
+    for (const entry of evolution.faces) {
+      if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
+        throw new Error('Boolean evolution face entry must be an object.');
+      }
+      const record = entry as Record<string, unknown>;
+      const face = decodeHandleField(record, 'face', 'Face evolution entry');
+      const source = decodeHandleField(
+        record,
+        'source',
+        'Face evolution entry'
+      );
+      if (faces.has(face)) {
+        throw new Error(`Face evolution names result face ${face} twice.`);
+      }
+      faces.set(face, source);
+    }
+    const preserved = new Map<number, number>();
+    const modified = new Map<number, number>();
+    const generated = new Map<number, readonly [number, number]>();
+    const unresolved = new Set<number>();
+    const seenEdges = new Set<number>();
+    for (const entry of evolution.edges) {
+      if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
+        throw new Error('Boolean evolution edge entry must be an object.');
+      }
+      const record = entry as Record<string, unknown>;
+      const edge = decodeHandleField(record, 'edge', 'Edge evolution entry');
+      if (seenEdges.has(edge)) {
+        throw new Error(`Edge evolution names result edge ${edge} twice.`);
+      }
+      seenEdges.add(edge);
+      switch (record.event) {
+        case 'preserved':
+          preserved.set(
+            edge,
+            decodeHandleField(record, 'from', 'Preserved edge')
+          );
+          break;
+        case 'modified':
+          modified.set(
+            edge,
+            decodeHandleField(record, 'from', 'Modified edge')
+          );
+          break;
+        case 'generated':
+          generated.set(edge, [
+            decodeHandleField(record, 'faceA', 'Generated edge'),
+            decodeHandleField(record, 'faceB', 'Generated edge')
+          ]);
+          break;
+        case 'unresolved':
+          unresolved.add(edge);
+          break;
+        default:
+          throw new Error(
+            `Edge evolution carries an unknown event ${JSON.stringify(record.event)}.`
+          );
+      }
+    }
+    return {
+      solid,
+      faces,
+      edges: { preserved, modified, generated, unresolved }
+    };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'invalid payload';
+    throw new Error(`Remus boolean evolution rejected: ${message}`, {
+      cause: error
+    });
+  }
+}
+
+/** Which operand slot an operand-side handle belongs to, and its evidence. */
+interface OperandEntity {
+  readonly slot: string;
+  readonly candidate: RemusTopologyCandidate;
+  readonly reference: TopologyReferenceV5 | undefined;
+}
+
+export interface RemusBooleanOperand {
+  readonly lineage: RemusLineageState | undefined;
+  readonly candidates: readonly RemusTopologyCandidate[];
+  readonly role?: 'target' | 'tool';
+}
+
+function operandSlot(operand: RemusBooleanOperand, index: number): string {
+  return operand.role ?? `operand.${index}`;
+}
+
+/**
+ * Boolean lineage from the kernel's own entity evolution (roadmap K05).
+ *
+ * The kernel names, for every face of the result, the operand face it came
+ * from — including the two cases the analytic-carrier rule
+ * ({@link deriveRemusBooleanCarrierLineage}) has to decline because the
+ * geometry alone cannot separate them: two named operand faces lying on one
+ * quantized carrier (two bodies flush on the same plane), and one carrier
+ * holding several result faces (two equal-height bosses whose caps share a
+ * plane). That is the whole reason a face pick downstream of a boolean broke
+ * on an upstream edit.
+ *
+ * The kernel's claim is candidate evidence, not the answer. Every published
+ * name has to clear three independent checks:
+ *
+ * 1. The payload must name the actual production result and partition it: the
+ *    reported result faces must be exactly the measured result faces. A
+ *    payload that does not is refused whole, never used in part.
+ * 2. The operand reference it carries has to re-verify against the operand's
+ *    own measured witness, so a reference the operand's build had already
+ *    invalidated cannot travel.
+ * 3. The transition itself has to satisfy the ADR-013 boolean witness
+ *    relation: the result face must lie on the same exact analytic carrier as
+ *    its claimed source. A claim that fails publishes nothing and says so.
+ *
+ * A source the kernel maps to more than one result face is a genuine split —
+ * a slot cut across a plate's top leaves two faces both honestly descended
+ * from the top — and neither piece is "the" original, so nothing is published.
+ * Faces with no analytic carrier (free-form surfaces) cannot be verified under
+ * ADR-013 and stay hash-only, exactly as the carrier rule leaves them.
+ *
+ * Edges are carried for the `preserved` event only, and only when the result
+ * edge's witness is exactly the operand edge's: that is the kernel and the
+ * measurement independently agreeing the boolean did not touch it. `modified`
+ * and `generated` edges have no witness relation to verify against and
+ * `unresolved` is the kernel declining, so all three stay hash-only.
+ */
+export function deriveRemusBooleanEvolutionLineage(input: {
+  readonly producingFeatureId: FeatureId;
+  readonly evolution: RemusBooleanEntityEvolution;
+  /** The solid the production path actually built, pre-unification. */
+  readonly resultSolid: number;
+  readonly operands: readonly RemusBooleanOperand[];
+  readonly resultCandidates: readonly RemusTopologyCandidate[];
+}): RemusLineageState {
+  const { evolution } = input;
+  if (evolution.solid !== input.resultSolid) {
+    return remusHashOnlyLineage(
+      'boolean',
+      'The boolean evolution payload does not name the production result.'
+    );
+  }
+  const operandFaces = new Map<number, OperandEntity>();
+  const operandEdges = new Map<number, OperandEntity>();
+  input.operands.forEach((operand, index) => {
+    const slot = operandSlot(operand, index);
+    for (const candidate of operand.candidates) {
+      const target = candidate.kind === 'edge' ? operandEdges : operandFaces;
+      if (target.has(candidate.handle)) {
+        // Two operands claiming one handle would make the slot a guess.
+        target.set(candidate.handle, {
+          slot,
+          candidate,
+          reference: undefined
+        });
+        continue;
+      }
+      target.set(candidate.handle, {
+        slot,
+        candidate,
+        reference:
+          candidate.kind === 'edge'
+            ? operand.lineage?.edgeReferences.get(candidate.handle)
+            : operand.lineage?.faceReferences.get(candidate.handle)
+      });
+    }
+  });
+
+  const resultFaces = new Map<number, RemusTopologyCandidate>();
+  const resultEdges = new Map<number, RemusTopologyCandidate>();
+  for (const candidate of input.resultCandidates) {
+    (candidate.kind === 'edge' ? resultEdges : resultFaces).set(
+      candidate.handle,
+      candidate
+    );
+  }
+
+  const domainsAgree =
+    evolution.faces.size === resultFaces.size &&
+    [...evolution.faces.keys()].every((handle) => resultFaces.has(handle)) &&
+    [...evolution.faces.values()].every((handle) => operandFaces.has(handle));
+  if (!domainsAgree) {
+    return remusHashOnlyLineage(
+      'boolean',
+      'The boolean evolution payload did not partition the measured result faces over the measured operand faces.'
+    );
+  }
+
+  const diagnostics: RemusLineageDiagnostic[] = [];
+  const assignments: RemusSemanticAssignment[] = [];
+  const sourceUse = new Map<number, number>();
+  for (const source of evolution.faces.values()) {
+    sourceUse.set(source, (sourceUse.get(source) ?? 0) + 1);
+  }
+  for (const [resultHandle, sourceHandle] of evolution.faces) {
+    const result = resultFaces.get(resultHandle)!;
+    const origin = operandFaces.get(sourceHandle)!;
+    const reference = origin.reference;
+    if (
+      reference?.kind !== 'face' ||
+      !referenceMatchesCandidate(reference, origin.candidate)
+    ) {
+      continue;
+    }
+    if (sourceUse.get(sourceHandle) !== 1) {
+      diagnostics.push({
+        code: 'boolean-split-source',
+        operation: 'boolean',
+        topologyKind: 'face',
+        lineageName: reference.lineageName,
+        sourceHandle,
+        resultHandles: [...evolution.faces]
+          .filter(([, source]) => source === sourceHandle)
+          .map(([handle]) => handle),
+        message: `Boolean split lineage ${reference.lineageName} into ${sourceUse.get(sourceHandle)} result faces.`
+      });
+      continue;
+    }
+    const verification = verifyTopologyEvolution({
+      operation: 'boolean',
+      kind: 'face',
+      sourceWitness: reference.witness,
+      resultWitness: result.witness,
+      relation: { kind: 'analytic-carrier' }
+    });
+    if (verification.status !== 'verified') {
+      diagnostics.push({
+        code: 'boolean-evolution-unverified',
+        operation: 'boolean',
+        topologyKind: 'face',
+        lineageName: reference.lineageName,
+        sourceHandle,
+        resultHandles: [resultHandle],
+        message: `Boolean evolution claimed ${reference.lineageName} for result face ${resultHandle}, which does not share its exact analytic carrier.`
+      });
+      continue;
+    }
+    assignments.push({
+      ...result,
+      lineageName: `boolean.face.${origin.slot}.${reference.lineageName}`
+    });
+  }
+
+  const reportedEdges = new Set([
+    ...evolution.edges.preserved.keys(),
+    ...evolution.edges.modified.keys(),
+    ...evolution.edges.generated.keys(),
+    ...evolution.edges.unresolved
+  ]);
+  const edgeDomainAgrees =
+    reportedEdges.size === resultEdges.size &&
+    [...reportedEdges].every((handle) => resultEdges.has(handle));
+  if (!edgeDomainAgrees) {
+    diagnostics.push({
+      code: 'invalid-evolution-payload',
+      operation: 'boolean',
+      topologyKind: 'edge',
+      message:
+        'The boolean evolution payload did not cover the measured result edges; edge provenance stays hash-only.'
+    });
+  } else {
+    const preservedUse = new Map<number, number>();
+    for (const source of evolution.edges.preserved.values()) {
+      preservedUse.set(source, (preservedUse.get(source) ?? 0) + 1);
+    }
+    for (const [resultHandle, sourceHandle] of evolution.edges.preserved) {
+      const result = resultEdges.get(resultHandle)!;
+      const origin = operandEdges.get(sourceHandle);
+      const reference = origin?.reference;
+      if (
+        reference?.kind !== 'edge' ||
+        !edgeReferenceMatchesCandidate(reference, origin?.candidate) ||
+        preservedUse.get(sourceHandle) !== 1
+      ) {
+        continue;
+      }
+      const verification = verifyTopologyEvolution({
+        operation: 'boolean',
+        kind: 'edge',
+        sourceWitness: reference.witness,
+        resultWitness: result.witness,
+        relation: { kind: 'unchanged' }
+      });
+      if (verification.status !== 'verified') {
+        diagnostics.push({
+          code: 'boolean-evolution-unverified',
+          operation: 'boolean',
+          topologyKind: 'edge',
+          lineageName: reference.lineageName,
+          sourceHandle,
+          resultHandles: [resultHandle],
+          message: `Boolean evolution called edge ${resultHandle} preserved from ${reference.lineageName}, but its exact witness changed.`
+        });
+        continue;
+      }
+      assignments.push({
+        ...result,
+        lineageName: `boolean.edge.${origin!.slot}.${reference.lineageName}`
+      });
+    }
+    if (evolution.edges.unresolved.size > 0) {
+      diagnostics.push({
+        code: 'boolean-edge-unresolved',
+        operation: 'boolean',
+        topologyKind: 'edge',
+        resultHandles: [...evolution.edges.unresolved],
+        message: `The kernel declined to resolve ${evolution.edges.unresolved.size} result edges; they stay hash-only.`
+      });
+    }
+  }
+
+  const state = createRemusSemanticLineage(
+    input.producingFeatureId,
+    'boolean',
+    assignments
+  );
+  state.diagnostics.push(...diagnostics);
+  return state;
+}
+
+/**
+ * Reconcile the two independent boolean derivations.
+ *
+ * The analytic-carrier rule is the witness the kernel's evolution payload is
+ * checked against, and it is not retired by it: both run, and a handle the two
+ * name DIFFERENTLY publishes neither name. That is the architectural rule the
+ * hard way — kernel history is candidate evidence, the derivation that does
+ * not consult it is the witness, and a disagreement is a refusal rather than a
+ * silent overwrite. Where only one of them has an answer, that answer stands:
+ * the evolution reaches the shared and split carriers the geometry cannot
+ * separate, and the carrier rule keeps everything it named before.
+ */
+export function reconcileRemusBooleanLineage(
+  carrier: RemusLineageState,
+  evolution: RemusLineageState
+): RemusLineageState {
+  const output = emptyLineageState();
+  output.diagnostics.push(...carrier.diagnostics, ...evolution.diagnostics);
+  for (const [handle, reference] of carrier.faceReferences) {
+    output.faceReferences.set(handle, reference);
+  }
+  for (const [handle, reference] of carrier.edgeReferences) {
+    output.edgeReferences.set(handle, reference);
+  }
+  for (const [handle, reference] of evolution.faceReferences) {
+    const witnessed = carrier.faceReferences.get(handle);
+    if (witnessed && witnessed.lineageName !== reference.lineageName) {
+      output.faceReferences.delete(handle);
+      output.diagnostics.push({
+        code: 'boolean-evolution-disagreement',
+        operation: 'boolean',
+        topologyKind: 'face',
+        lineageName: reference.lineageName,
+        resultHandles: [handle],
+        message: `Boolean evolution named result face ${handle} ${reference.lineageName} where the analytic carrier rule named it ${witnessed.lineageName}; neither is published.`
+      });
+      continue;
+    }
+    output.faceReferences.set(handle, reference);
+  }
+  for (const [handle, reference] of evolution.edgeReferences) {
+    const witnessed = carrier.edgeReferences.get(handle);
+    if (witnessed && witnessed.lineageName !== reference.lineageName) {
+      output.edgeReferences.delete(handle);
+      output.diagnostics.push({
+        code: 'boolean-evolution-disagreement',
+        operation: 'boolean',
+        topologyKind: 'edge',
+        lineageName: reference.lineageName,
+        resultHandles: [handle],
+        message: `Boolean evolution named result edge ${handle} ${reference.lineageName} where the analytic carrier rule named it ${witnessed.lineageName}; neither is published.`
+      });
+      continue;
+    }
+    output.edgeReferences.set(handle, reference);
+  }
+  return output;
 }
