@@ -47,3 +47,15 @@ export {
   recognizeImportedFeatureOnSolid,
   type ImportedRecognitionFaceIdentity
 } from './imported-feature-query';
+
+export {
+  crossCheckHoleClaims,
+  parseKernelFeatureClaims,
+  readKernelFeatureClaims,
+  verifyKernelFilletBandClaim,
+  verifyKernelPocketClaim,
+  type KernelFeatureClaim,
+  type KernelHoleCrossCheck,
+  type VerifiedKernelFilletBand,
+  type VerifiedKernelPocket
+} from './remus-feature-recognition';

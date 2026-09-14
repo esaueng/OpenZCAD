@@ -236,6 +236,15 @@ const BOOLEAN_CARRIER_NOTE =
   'boss-crossing-a-wall carries the same divergence, subsumed by its status ' +
   'pin.';
 
+const BOOLEAN_EDGE_NOTE =
+  'Remus now carries EDGE identity through a boolean as well (K05). The ' +
+  "kernel's boolean entity evolution marks each result edge " +
+  '`preserved` / `modified` / `generated` / `unresolved`, and a `preserved` ' +
+  'edge whose exact witness is unchanged keeps its operand name; the other ' +
+  'three events publish nothing. The OpenCascade reference adapter ' +
+  'publishes no boolean edge lineage at all, so Remus is the better side of ' +
+  'this pin. It retires when `occt-lineage.ts` derives the same subset.';
+
 export const KERNEL_DELTAS: KernelDeltaPin[] = [
   {
     subject: 'boss-crossing-a-wall',
@@ -821,37 +830,55 @@ export const KERNEL_DELTAS: KernelDeltaPin[] = [
   },
   {
     subject: 'boolean-with-import',
+    metric: 'witnessedEdges',
+    remus: 12,
+    occt: 0,
+    owner: 'K0.6',
+    note:
+      BOOLEAN_EDGE_NOTE +
+      ' The plate has 24 edges; the twelve nowhere near the bore are ' +
+      'preserved with an unchanged witness and keep their imported names. ' +
+      'The rest bound the bore or were cut by it.'
+  },
+  {
+    subject: 'boolean-with-import',
     metric: 'lineageNames',
-    remus:
-      'boolean.face.operand.0.import.step.face.0c7f072b,boolean.face.operand.0.import.step.face.426c91a5,boolean.face.operand.0.import.step.face.58bf7705,boolean.face.operand.0.import.step.face.62e02c7d,boolean.face.operand.0.import.step.face.ac22b2bd,boolean.face.operand.0.import.step.face.d3a10e97,boolean.face.operand.1.primitive.cylinder.face.wall',
+    remus: '19 names · 624d2a9a',
     occt: 'none',
     owner: 'K0.6',
     note:
       BOOLEAN_CARRIER_NOTE +
-      ' The name set behind the witnessedFaces pin above.'
+      ' The name set behind the witnessedFaces and witnessedEdges pins ' +
+      'above: seven face names and twelve edge names. Digested rather than ' +
+      'spelled out because the set is past the readable limit; the full ' +
+      'list is in baselines/import-modeling.json.'
   },
   {
     subject: 'pattern-boolean-with-import',
     metric: 'witnessedFaces',
-    remus: 6,
+    remus: 9,
     occt: 0,
     owner: 'K0.6',
     note:
       BOOLEAN_CARRIER_NOTE +
-      ' The six imported plate faces name. The three bore walls come from ' +
-      'the pattern body, which publishes no references at all (pattern ' +
-      'lineage is hash-only), so there is nothing for them to inherit.'
+      ' All nine result faces name: the six imported plate faces, and now ' +
+      'the three bore walls as well. Was 6 while pattern lineage was ' +
+      'hash-only and the bore walls had nothing to inherit; the pattern ' +
+      "feature now drives the kernel's own pattern operations and names each " +
+      'instance, so each wall carries its own instance through the cut.'
   },
   {
     subject: 'pattern-boolean-with-import',
     metric: 'lineageNames',
     remus:
-      'boolean.face.operand.0.import.step.face.0c7f072b,boolean.face.operand.0.import.step.face.426c91a5,boolean.face.operand.0.import.step.face.58bf7705,boolean.face.operand.0.import.step.face.62e02c7d,boolean.face.operand.0.import.step.face.ac22b2bd,boolean.face.operand.0.import.step.face.d3a10e97',
+      'boolean.face.operand.0.import.step.face.0c7f072b,boolean.face.operand.0.import.step.face.426c91a5,boolean.face.operand.0.import.step.face.58bf7705,boolean.face.operand.0.import.step.face.62e02c7d,boolean.face.operand.0.import.step.face.ac22b2bd,boolean.face.operand.0.import.step.face.d3a10e97,boolean.face.operand.1.pattern.face.instance.0.primitive.cylinder.face.wall,boolean.face.operand.1.pattern.face.instance.1.primitive.cylinder.face.wall,boolean.face.operand.1.pattern.face.instance.2.primitive.cylinder.face.wall',
     occt: 'none',
     owner: 'K0.6',
     note:
       BOOLEAN_CARRIER_NOTE +
-      ' The name set behind the witnessedFaces pin above.'
+      ' The name set behind the witnessedFaces pin above. The instance ' +
+      'ordinal is what distinguishes the three bores, which are otherwise ' +
+      'the same wall on three carriers.'
   },
   {
     subject: 'boolean-on-nurbs-import',
@@ -867,14 +894,29 @@ export const KERNEL_DELTAS: KernelDeltaPin[] = [
   },
   {
     subject: 'boolean-on-nurbs-import',
+    metric: 'witnessedEdges',
+    remus: 16,
+    occt: 0,
+    owner: 'K0.6',
+    note:
+      BOOLEAN_EDGE_NOTE +
+      ' Sixteen edges of the imported body stand clear of the bore and are ' +
+      'preserved unchanged, including the ones bounding its B-spline ' +
+      'corners: an edge needs no analytic carrier to be recognised as ' +
+      'untouched.'
+  },
+  {
+    subject: 'boolean-on-nurbs-import',
     metric: 'lineageNames',
-    remus:
-      'boolean.face.operand.0.import.step.face.0d79d62e,boolean.face.operand.0.import.step.face.22899036,boolean.face.operand.0.import.step.face.32f720ef,boolean.face.operand.0.import.step.face.6c9068cb,boolean.face.operand.0.import.step.face.c4a2df82,boolean.face.operand.0.import.step.face.e37774ee,boolean.face.operand.1.primitive.cylinder.face.wall',
+    remus: '23 names · 3b748afa',
     occt: 'none',
     owner: 'K0.6',
     note:
       BOOLEAN_CARRIER_NOTE +
-      ' The name set behind the witnessedFaces pin above.'
+      ' The name set behind the witnessedFaces and witnessedEdges pins ' +
+      'above: seven face names and sixteen edge names. Digested rather than ' +
+      'spelled out because the set is past the readable limit; the full ' +
+      'list is in baselines/import-modeling.json.'
   }
 ];
 

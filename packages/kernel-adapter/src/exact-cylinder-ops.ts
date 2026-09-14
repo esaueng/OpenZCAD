@@ -9,6 +9,12 @@ import type { Vec2, Vec3 } from '@openzcad/geometry';
 import { measureFaceGeometry, type ThroughHoleGeometry } from './exact-measure';
 import { readAnalyticCylinder, type AnalyticCylinder } from './exact-brep';
 import {
+  exactCut,
+  exactFuse,
+  exactBooleanRefusalReason
+} from './exact-boolean-refusal';
+import { unifyAndRequireValidSolid } from './kernel-validation';
+import {
   ANALYTIC_MATCH_EPSILON,
   GEOMETRY_EPSILON,
   coordinateFrameMatrix,
@@ -242,13 +248,12 @@ export function cylinderAlongAxis(
  * Close exactly the selected through-hole span by fusing a plug of the bore's
  * own radius and merging the seams the fuse leaves behind.
  *
- * Remus's boolean drops to a co-refined mesh when its general face assembly
- * will not accept the result, and closing a hole — collapsing a handle in the
- * body — is a configuration it declines often enough to matter. A mesh result
- * still encloses roughly the right space, so it is caught by counting faces
- * instead of measuring volume: a real fill deletes the bore and merges its two
- * openings back into their host faces, while the mesh fallback replaces every
- * analytic surface with a fan of triangles and multiplies the face count.
+ * Closing a hole — collapsing a handle in the body — is a configuration the
+ * exact pipeline declines often enough to matter, and it now says so by name
+ * rather than co-refining a mesh. The face count is still checked afterwards:
+ * a real fill deletes the bore and merges its two openings back into their
+ * host faces, so a fill that did not reduce the count did not take, whatever
+ * the kernel reported.
  */
 export function fillThroughHole(
   kernel: RemusKernel,
@@ -264,19 +269,23 @@ export function fillThroughHole(
   );
   let filled: number;
   try {
-    filled = kernel.fuse(solid, filler);
+    filled = exactFuse(kernel, solid, filler);
   } catch (error) {
     throw new Error(
       `Filling the through-hole failed: ${
-        error instanceof Error ? error.message : 'the kernel rejected the fuse'
+        exactBooleanRefusalReason(error) ??
+        (error instanceof Error
+          ? error.message
+          : 'the kernel rejected the fuse')
       }.`,
       { cause: error }
     );
   }
-  kernel.unifyFaces(filled);
-  if (kernel.validateSolid(filled) !== 0) {
-    throw new Error('Filling the through-hole did not produce a valid solid.');
-  }
+  unifyAndRequireValidSolid(
+    kernel,
+    filled,
+    'Filling the through-hole did not produce a valid solid.'
+  );
   if (kernel.getSolidFaces(filled).length >= facesBefore) {
     throw new Error(
       "This through-hole could only be filled by replacing the body's exact surfaces with flat triangles, so it was refused."
@@ -398,18 +407,19 @@ export function drillHole(
     }
   }
 
-  // Cut one tool at a time. The kernel's compound pass falls back to a mesh
-  // boolean when a tool pair trips its exact assembly, while each tool still
-  // cuts exactly on its own. The face-count proof below still catches any
-  // per-step fallback.
+  // Cut one tool at a time. The kernel's compound pass trips its exact
+  // assembly on tool pairs that each cut exactly on their own, and now
+  // refuses the pair outright rather than meshing it; per-tool cuts keep the
+  // hole buildable, and a refusal names the step that could not be cut.
   let cut = solid;
   for (const tool of tools) {
-    cut = kernel.cut(cut, tool);
+    cut = exactCut(kernel, cut, tool);
   }
-  kernel.unifyFaces(cut);
-  if (kernel.validateSolid(cut) !== 0) {
-    throw new Error('The hole cut did not produce a valid solid.');
-  }
+  unifyAndRequireValidSolid(
+    kernel,
+    cut,
+    'The hole cut did not produce a valid solid.'
+  );
   const volumeAfter = kernel.volume(cut, HOLE_PROOF_DEFLECTION);
   if (!(volumeAfter < volumeBefore - GEOMETRY_EPSILON)) {
     throw new Error('The hole removed no material — it misses the body.');

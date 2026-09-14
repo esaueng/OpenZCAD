@@ -3,6 +3,7 @@ import {
   evaluateKernelPinGrowth,
   evaluateKernelWasm,
   KERNEL_WASM_POLICY,
+  LAZY_ENTRY_PATTERNS,
   measureKernelWasm
 } from '../scripts/bundle-size-policy.mjs';
 
@@ -120,5 +121,49 @@ describe('kernel pin growth policy', () => {
     });
 
     expect(evaluateKernelPinGrowth(before, after).requiresReview).toBe(false);
+  });
+});
+
+/**
+ * The launcher HTML must never reference these.
+ *
+ * `report-bundle-sizes.mjs --check` fails the build when `index.html` carries
+ * a `<script>` or `modulepreload` for one of them, which is the only thing
+ * standing between a gesture-loaded asset and first paint. A disposable worker
+ * is reached through `new Worker(new URL(...))`, so nothing else would notice
+ * the day one became statically reachable — the entry has to be listed.
+ */
+describe('lazy entry patterns', () => {
+  it.each([
+    'assets/meshImportWorker-nqCWfpSW.js',
+    'assets/shaprImportWorker-CCF_vbm3.js'
+  ])('covers the disposable import worker %s', (file) => {
+    expect(LAZY_ENTRY_PATTERNS.some((pattern) => pattern.test(file))).toBe(
+      true
+    );
+  });
+
+  it('covers an anonymous shared workspace chunk', () => {
+    // `src-*` is what rolldown names a shared chunk nobody routed in
+    // `manualChunks`. One of those in first paint cannot be told apart from
+    // app code leaking into it, so it is refused and given a name instead.
+    expect(
+      LAZY_ENTRY_PATTERNS.some((pattern) =>
+        pattern.test('assets/src-Ct489S1b.js')
+      )
+    ).toBe(true);
+  });
+
+  it('leaves the launcher entry and its named shared chunks alone', () => {
+    for (const file of [
+      'assets/index-CIzyUy_T.js',
+      'assets/model-hjLE45zS.js',
+      'assets/geometry-JS2c2obt.js',
+      'assets/react-Cki3SpjL.js'
+    ]) {
+      expect(LAZY_ENTRY_PATTERNS.some((pattern) => pattern.test(file))).toBe(
+        false
+      );
+    }
   });
 });
