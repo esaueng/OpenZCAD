@@ -316,3 +316,102 @@ describe('the refusal remedy promises nothing the kernel will not honour', () =>
     expect(sentence).not.toMatch(/keep the bodies separate/i);
   });
 });
+
+interface ArenaTrace {
+  /** Solids the fold allocated by fusing. */
+  created: number[];
+  /** Solids it handed back to the arena. */
+  released: number[];
+}
+
+/**
+ * The kernel with `fuseDetailed` and `deleteSolid` under observation.
+ *
+ * `Object.create` puts the real kernel on the prototype chain, so every other
+ * method — and the wasm pointer they read off `this` — resolves to the one
+ * live instance; only the two methods below are shadowed.
+ */
+function tracingKernel(kernel: RemusKernel, trace: ArenaTrace): RemusKernel {
+  const traced = Object.create(kernel) as RemusKernel;
+  traced.fuseDetailed = (a: number, b: number) => {
+    const result = kernel.fuseDetailed(a, b);
+    if (result.status === 'ok') {
+      trace.created.push(result.value);
+    }
+    return result;
+  };
+  traced.deleteSolid = (solid: number) => {
+    trace.released.push(solid);
+    kernel.deleteSolid(solid);
+  };
+  return traced;
+}
+
+/**
+ * Three overlapping blocks and a sphere the exact engine will not take: the
+ * fold gets two successful fuses in before it finds the culprit, so it
+ * exercises both releases — the superseded accumulator mid-fold and the last
+ * one on the way out.
+ */
+function clusterWithARefusedTail(kernel: RemusKernel): number[] {
+  return [
+    kernel.makeBox(10, 10, 10),
+    kernel.copyAndTransformSolid(
+      kernel.makeBox(10, 10, 10),
+      translation(5, 0, 0)
+    ),
+    kernel.copyAndTransformSolid(
+      kernel.makeBox(10, 10, 10),
+      translation(10, 0, 0)
+    ),
+    kernel.copyAndTransformSolid(kernel.makeSphere(6, 24), translation(20, 5, 5))
+  ];
+}
+
+describe('the diagnosis fold leaves the arena as it found it', () => {
+  it('retires every partial union it builds, and none of the inputs', () => {
+    const kernel = new RemusKernel();
+    const solids = clusterWithARefusedTail(kernel);
+    const trace: ArenaTrace = { created: [], released: [] };
+    const traced = tracingKernel(kernel, trace);
+
+    expect(() =>
+      exactFuseAll(traced, solids, [
+        'Base',
+        'instance 2',
+        'instance 3',
+        'instance 4'
+      ])
+    ).toThrowError(ExactBooleanRefusal);
+
+    // The fold really did build scratch solids — otherwise this test would
+    // pass for the wrong reason.
+    expect(trace.created.length).toBeGreaterThan(1);
+    const ascending = (a: number, b: number) => a - b;
+    expect([...trace.released].sort(ascending)).toEqual(
+      [...trace.created].sort(ascending)
+    );
+
+    // The caller still owns its operands, and they are still usable.
+    for (const input of solids) {
+      expect(trace.released).not.toContain(input);
+      expect(kernel.volume(input, 0.1)).toBeGreaterThan(0);
+    }
+  });
+
+  it('retires nothing on the success path', () => {
+    const kernel = new RemusKernel();
+    const left = kernel.makeBox(10, 10, 10);
+    const right = kernel.copyAndTransformSolid(
+      kernel.makeBox(10, 10, 10),
+      translation(5, 0, 0)
+    );
+    const trace: ArenaTrace = { created: [], released: [] };
+    const fused = exactFuseAll(tracingKernel(kernel, trace), [left, right]);
+
+    expect(kernel.volume(fused, 0.01)).toBeCloseTo(1500, 3);
+    // `fuseAll` answered, so the fold never ran: no extra fuses, no releases.
+    expect(trace.created).toEqual([]);
+    expect(trace.released).toEqual([]);
+  });
+});
