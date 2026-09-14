@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   addPrimitiveFeature,
   booleanBodies,
+  chamferEdges,
   createProjectDocument,
   filletEdges
 } from '@openzcad/document-core';
@@ -12,6 +13,7 @@ import {
   acceptedEdgeModifierProbe,
   applyEdgeModifier,
   blendCliffLimit,
+  chamferLadderAim,
   edgeModifierFailureMessage,
   EDGE_MODIFIER_PROBE_RATIOS
 } from './exact-edge-modifiers';
@@ -361,5 +363,219 @@ describe('edge modifier failure diagnosis', { timeout: 60_000 }, () => {
     expect(
       acceptedEdgeModifierProbe(kernel, box, [edge], 'fillet', 30)
     ).not.toBeNull();
+  });
+
+  /**
+   * A chamfer carries an angle, and the ladder has to carry it too. Without
+   * it the probe proves the SYMMETRIC chamfer and the sentence reports the
+   * proof as if it were the angled one: on this box distance 10 builds at
+   * 45° and is refused at 80°, so `distance 10 builds here` was advice that
+   * refused again, and again at 5, and again at 2.5.
+   */
+  it('quotes a chamfer distance proved at the angle that was asked for', () => {
+    const kernel = new RemusKernel();
+    const box = kernel.makeBox(30, 18, 24);
+    const edge = Array.from(kernel.getSolidEdges(box))[0]!;
+    const angle = (80 * Math.PI) / 180;
+
+    let reported: string | null = null;
+    expect(
+      applyEdgeModifier(
+        kernel,
+        box,
+        [edge],
+        'chamfer',
+        20,
+        (message) => {
+          reported = message;
+        },
+        undefined,
+        angle
+      )
+    ).toBeNull();
+
+    // The size a symmetric probe would have returned, and the reason it may
+    // not be quoted under an angled request.
+    expect(
+      applyEdgeModifier(kernel, box, [edge], 'chamfer', 10)
+    ).not.toBeNull();
+    expect(
+      applyEdgeModifier(
+        kernel,
+        box,
+        [edge],
+        'chamfer',
+        10,
+        undefined,
+        undefined,
+        angle
+      )
+    ).toBeNull();
+
+    const message = edgeModifierFailureMessage(
+      kernel,
+      box,
+      [edge],
+      'chamfer',
+      20,
+      false,
+      reported,
+      angle
+    );
+    expect(message).toContain(
+      'Chamfer could not be created on 1 selected edge with distance 20.'
+    );
+    expect(message).not.toContain('distance 10 builds here');
+
+    // Whatever distance the sentence names must build AT THIS ANGLE.
+    const quoted = /distance ([0-9.eE+-]+) builds here/.exec(message);
+    expect(quoted).not.toBeNull();
+    expect(
+      applyEdgeModifier(
+        kernel,
+        box,
+        [edge],
+        'chamfer',
+        Number(quoted![1]),
+        undefined,
+        undefined,
+        angle
+      )
+    ).not.toBeNull();
+  });
+
+  /**
+   * Threading the angle alone would trade a false size for a false cause: an
+   * angled chamfer cuts `distance × tan(angle)` off the second face, so at
+   * 88° every rung of a ladder measured from the distance is still 28x too
+   * deep, the ladder comes back empty and the message reaches for a
+   * structural cause that is not there. {@link chamferLadderAim} measures the
+   * ladder from the setback instead; the rungs are still proved by the
+   * kernel, so aiming can cost a rung and never a claim.
+   */
+  it('aims an angled chamfer ladder at the setback, not the distance', () => {
+    const kernel = new RemusKernel();
+    const cylinder = kernel.makeCylinder(10, 20);
+    const rim = Array.from(kernel.getSolidEdges(cylinder)).sort(
+      (a, b) => kernel.edgeLength(b) - kernel.edgeLength(a)
+    )[0]!;
+    const angle = (88 * Math.PI) / 180;
+
+    let reported: string | null = null;
+    expect(
+      applyEdgeModifier(
+        kernel,
+        cylinder,
+        [rim],
+        'chamfer',
+        40,
+        (message) => {
+          reported = message;
+        },
+        undefined,
+        angle
+      )
+    ).toBeNull();
+
+    // Every rung of a ladder measured from the refused distance fails here.
+    for (const ratio of EDGE_MODIFIER_PROBE_RATIOS) {
+      expect(
+        applyEdgeModifier(
+          kernel,
+          cylinder,
+          [rim],
+          'chamfer',
+          40 * ratio,
+          undefined,
+          undefined,
+          angle
+        )
+      ).toBeNull();
+    }
+    // The aim is what the kernel's own setback arithmetic says it should be.
+    expect(chamferLadderAim(40, angle)).toBeCloseTo(40 / Math.tan(angle), 12);
+    expect(chamferLadderAim(40, Math.PI / 4)).toBe(40);
+    expect(chamferLadderAim(40, undefined)).toBe(40);
+
+    const message = edgeModifierFailureMessage(
+      kernel,
+      cylinder,
+      [rim],
+      'chamfer',
+      40,
+      false,
+      reported,
+      angle
+    );
+    // A rim that chamfers at a smaller distance is not a rim that cannot be
+    // chamfered.
+    expect(message).not.toContain('Closed rim edges');
+    const quoted = /distance ([0-9.eE+-]+) builds here/.exec(message);
+    expect(quoted).not.toBeNull();
+    expect(
+      applyEdgeModifier(
+        kernel,
+        cylinder,
+        [rim],
+        'chamfer',
+        Number(quoted![1]),
+        undefined,
+        undefined,
+        angle
+      )
+    ).not.toBeNull();
+  });
+
+  /**
+   * The same property end to end, because the angle has to survive the
+   * builder as well as the probe: the distance the warning names, set back
+   * into the same feature at the same angle, has to build.
+   */
+  it('names an angled chamfer distance that then builds in the document', async () => {
+    const adapter = await createExactKernelAdapter();
+    try {
+      const base = addPrimitiveFeature(
+        createProjectDocument('Angled chamfer', user),
+        {
+          name: 'Box',
+          primitiveKind: 'box',
+          dimensions: { width: 30, height: 18, depth: 24 }
+        }
+      );
+      const bodyId = base.bodyOrder[0] as BodyId;
+      const built = await adapter.syncDocument(base);
+      const edgeHash =
+        built.bodyRepresentations[bodyId]?.topology?.edges[0]?.hash;
+      expect(edgeHash).toBeTypeOf('number');
+
+      const refused = chamferEdges(base, {
+        name: 'Steep chamfer',
+        targetBodyId: bodyId,
+        edgeHashes: [edgeHash!],
+        size: 20,
+        angleDeg: 80
+      }).document;
+      const refusedDerived = await adapter.syncDocument(refused);
+      expect(refusedDerived.warnings).toHaveLength(1);
+      expect(refusedDerived.warnings[0]).toContain(
+        'Chamfer could not be created on 1 selected edge with distance 20.'
+      );
+      const quoted = /distance ([0-9.eE+-]+) builds here/.exec(
+        refusedDerived.warnings[0]!
+      );
+      expect(quoted).not.toBeNull();
+
+      const retried = chamferEdges(base, {
+        name: 'Steep chamfer',
+        targetBodyId: bodyId,
+        edgeHashes: [edgeHash!],
+        size: Number(quoted![1]),
+        angleDeg: 80
+      }).document;
+      const retriedDerived = await adapter.syncDocument(retried);
+      expect(retriedDerived.warnings).toEqual([]);
+    } finally {
+      adapter.dispose();
+    }
   });
 });
