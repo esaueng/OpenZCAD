@@ -101,7 +101,9 @@ export function affectedFeatureTargets(
       case 'sweep':
         affected =
           affectedSketches.has(data.profile.sketchId) ||
-          affectedSketches.has(data.path.sketchId);
+          affectedSketches.has(data.path.sketchId) ||
+          (data.guide !== undefined &&
+            affectedSketches.has(data.guide.sketchId));
         break;
       case 'helical-sweep':
         affected = affectedSketches.has(data.profile.sketchId);

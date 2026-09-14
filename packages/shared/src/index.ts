@@ -767,12 +767,39 @@ export type FeatureData =
       /** User-authored section order; at least two are required. */
       sections: SketchSectionReference[];
       mode: 'ruled' | 'smooth';
+      /**
+       * Apex point closing the loft after its last section, so that end comes
+       * to a point instead of a flat cap. Absent means the flat cap every
+       * document written before this field existed had, and the builder then
+       * takes the unchanged `loft`/`loftSmooth` call.
+       *
+       * Ruled mode only: the pinned kernel's smooth section surfaces do not
+       * close against an apex, and the adapter refuses the combination by
+       * name rather than emitting the invalid solid it produces.
+       *
+       * There is deliberately no matching apex before the first section: the
+       * kernel's `startPoint` leaves one apex facet out of the tessellation on
+       * a rectangular profile, so that end is pointed by reversing the section
+       * order instead. See `HANDOFF.md` for the measurement.
+       */
+      endPoint?: ParametricVector3;
     }
   | {
       featureKind: 'sweep';
       profile: SketchSectionReference;
       path: SketchPathReference;
       mode: 'standard' | 'smooth';
+      /**
+       * Guide rail whose direction the profile's up-vector tracks along the
+       * path, replacing the rotation-minimizing frame. Absent means the
+       * unchanged `sweepWithOptions`/`sweepAlongEdges` call, so a sweep
+       * authored before this field existed replays identically.
+       *
+       * The kernel's guided sweep takes one spine curve and one rail curve,
+       * so both the path and the rail must resolve to a single edge; the
+       * adapter refuses anything wider by name.
+       */
+      guide?: SketchPathReference;
     }
   | {
       featureKind: 'helical-sweep';
@@ -2099,6 +2126,8 @@ export interface ArtifactRecord {
   kind:
     | 'step-import'
     | 'stl-import'
+    /** Any other mesh interchange import: 3MF, OBJ, glTF binary, PLY. */
+    | 'mesh-import'
     | 'step-export'
     | 'stl-export'
     | '3mf-export'
