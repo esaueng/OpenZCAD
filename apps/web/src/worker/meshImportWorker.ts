@@ -1,4 +1,4 @@
-import type { MeshImportFormat } from '@openzcad/kernel-adapter';
+import type { MeshImportFormat } from '@openzcad/kernel-adapter/mesh-import-formats';
 
 export interface MeshImportWorkerRequest {
   type: 'import';

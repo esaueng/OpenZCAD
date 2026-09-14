@@ -2,12 +2,12 @@ import {
   MESH_IMPORT_POLICIES,
   meshImportTooLargeMessage,
   type MeshImportFormat
-} from '@openzcad/kernel-adapter';
+} from '@openzcad/kernel-adapter/mesh-import-formats';
 
 export {
   meshImportFormatForFileName,
   type MeshImportFormat
-} from '@openzcad/kernel-adapter';
+} from '@openzcad/kernel-adapter/mesh-import-formats';
 
 import { describeWorkerFailure } from './workerFailure';
 import { isChunkLoadError } from './staleChunk';

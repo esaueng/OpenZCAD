@@ -1,4 +1,4 @@
-import type { MeshImportFormat } from '@openzcad/kernel-adapter';
+import type { MeshImportFormat } from '@openzcad/kernel-adapter/mesh-import-formats';
 
 /**
  * The same box in every mesh interchange format the importers read.
