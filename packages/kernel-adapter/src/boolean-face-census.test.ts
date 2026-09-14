@@ -1,18 +1,29 @@
 /**
- * The post-boolean face-count census.
+ * What is left of the post-boolean face-count census.
  *
- * Remus's booleans can abandon exact surface intersection on sliver and
- * near-tangent contacts — thin glyph stems and touching letters produce
- * exactly that — and return a triangulated, all-planar approximation instead.
- * The result is watertight, passes validation, and has a plausible volume and
- * triangle count, so none of the existing distrust checks notice. The faces
- * are the signal: every curved surface becomes planar and the count explodes.
+ * The census was built to catch a boolean that silently abandoned exact
+ * surface intersection and returned a triangulated, all-planar approximation:
+ * the result was watertight, passed validation, and had a plausible volume
+ * and triangle count, so only the faces gave it away. The pinned kernel's
+ * `cut` / `fuse` / `intersect` are exact-only — they refuse that pair by name
+ * instead of returning it — so the boolean arm of the census now guards
+ * nothing and is gone; `exact-boolean-refusal.test.ts` pins the contract that
+ * replaced it.
+ *
+ * Two users survive, and both are deliberate:
+ *
+ * - `directEditFacetFallbackWarning` guards `pushPullFace`, which is not a
+ *   boolean and has no exact-only policy behind it. It still facets.
+ * - `unionSwallowedCurvature` answers a different question for the union
+ *   move probe: whether a candidate offset merely buries the moving body
+ *   inside the anchor. That fuses perfectly exactly — and makes the user's
+ *   new body disappear.
  */
 import { describe, expect, it } from 'vitest';
 import {
-  booleanFacetFallbackWarning,
   censusOfSolids,
   directEditFacetFallbackWarning,
+  unionSwallowedCurvature,
   type FaceCensusSubject
 } from './boolean-result-validation';
 
@@ -57,73 +68,46 @@ describe('censusOfSolids', () => {
   });
 });
 
-describe('booleanFacetFallbackWarning', () => {
-  it('says nothing about an ordinary boolean of planar solids', () => {
-    // Two boxes cut: six planar faces in, ten or so out. Nothing curved was
-    // ever there to lose, and the growth is modest.
+describe('unionSwallowedCurvature', () => {
+  it('flags a candidate whose result kept no curved surface at all', () => {
+    // A sphere slid to the centre of the box it was meant to sit on: the
+    // fuse is exact, and the sphere is gone.
     expect(
-      booleanFacetFallbackWarning({
-        operands: { faces: 12, curvedFaces: 0 },
-        result: { faces: 16, curvedFaces: 0 }
+      unionSwallowedCurvature({
+        operands: { faces: 8, curvedFaces: 2 },
+        result: { faces: 6, curvedFaces: 0 }
       })
-    ).toBeNull();
+    ).toBe(true);
   });
 
-  it('says nothing when a boolean splits curved faces normally', () => {
+  it('accepts a union that keeps curvature', () => {
     expect(
-      booleanFacetFallbackWarning({
+      unionSwallowedCurvature({
         operands: { faces: 8, curvedFaces: 3 },
         result: { faces: 14, curvedFaces: 4 }
       })
-    ).toBeNull();
+    ).toBe(false);
   });
 
-  it('flags the real case: curvature lost and face count exploded', () => {
-    // These are the numbers a shallow cylinder union actually produces
-    // against the pinned kernel.
-    const warning = booleanFacetFallbackWarning({
-      operands: { faces: 6, curvedFaces: 2 },
-      result: { faces: 193, curvedFaces: 0 }
-    });
-    expect(warning).toContain('could only be built as an approximation');
-    expect(warning).toContain('6 operand faces (2 curved)');
-    expect(warning).toContain('193 result faces (0 curved)');
-  });
-
-  it('flags losing every curved face even without an explosion', () => {
-    const warning = booleanFacetFallbackWarning({
-      operands: { faces: 8, curvedFaces: 2 },
-      result: { faces: 10, curvedFaces: 0 }
-    });
-    expect(warning).toContain('replaced every curved surface with flat faces');
-  });
-
-  it('flags an explosion even when nothing curved was involved', () => {
-    // All-planar text fused into an all-planar slab still facets; there is
-    // just no curvature left to lose, so face count is the only tell.
-    const warning = booleanFacetFallbackWarning({
-      operands: { faces: 30, curvedFaces: 0 },
-      result: { faces: 400, curvedFaces: 0 }
-    });
-    expect(warning).toContain('far more faces than its operands');
-  });
-
-  it('leaves headroom for small operands that legitimately split', () => {
-    // A six-face box cut by a six-face box can reach the high twenties
-    // without anything being wrong. The additive slack covers that; the
-    // multiplicative bound alone would not.
+  it('says nothing about all-planar operands, which never had curvature', () => {
     expect(
-      booleanFacetFallbackWarning({
+      unionSwallowedCurvature({
         operands: { faces: 12, curvedFaces: 0 },
-        result: { faces: 44, curvedFaces: 0 }
+        result: { faces: 16, curvedFaces: 0 }
       })
-    ).toBeNull();
+    ).toBe(false);
+  });
+
+  it('does not judge face-count growth: a big result is not a refusal', () => {
+    // The exploded-face-count half of the old census belonged to the boolean
+    // fallback, which cannot happen any more. Keeping it here would refuse
+    // union moves that are merely complicated.
     expect(
-      booleanFacetFallbackWarning({
-        operands: { faces: 12, curvedFaces: 0 },
-        result: { faces: 81, curvedFaces: 0 }
+      unionSwallowedCurvature({
+        operands: { faces: 30, curvedFaces: 0 },
+        result: { faces: 400, curvedFaces: 0 }
       })
-    ).not.toBeNull();
+    ).toBe(false);
   });
 });
 
@@ -156,6 +140,24 @@ describe('directEditFacetFallbackWarning', () => {
       })
     ).toContain('could only be built by replacing');
   });
+
+  it('leaves headroom for a small body that legitimately splits', () => {
+    // A six-face box can reach the high twenties under a push/pull without
+    // anything being wrong. The additive slack covers that; the
+    // multiplicative bound alone would not.
+    expect(
+      directEditFacetFallbackWarning({
+        operands: { faces: 12, curvedFaces: 0 },
+        result: { faces: 44, curvedFaces: 0 }
+      })
+    ).toBeNull();
+    expect(
+      directEditFacetFallbackWarning({
+        operands: { faces: 12, curvedFaces: 0 },
+        result: { faces: 81, curvedFaces: 0 }
+      })
+    ).not.toBeNull();
+  });
 });
 
 /**
@@ -164,78 +166,18 @@ describe('directEditFacetFallbackWarning', () => {
  * kernel bookkeeping instead of as something to act on.
  */
 describe('facet refusal detail split', () => {
-  const bothSignals = {
-    operands: { faces: 6, curvedFaces: 2 },
-    result: { faces: 193, curvedFaces: 0 }
-  };
-  const curvatureOnly = {
-    operands: { faces: 8, curvedFaces: 2 },
-    result: { faces: 10, curvedFaces: 0 }
-  };
-  const explodedOnly = {
-    operands: { faces: 30, curvedFaces: 0 },
-    result: { faces: 400, curvedFaces: 0 }
-  };
-
-  function split(warning: string | null): {
-    sentence: string;
-    detail: string;
-  } {
-    expect(warning).not.toBeNull();
-    const boundary = warning!.indexOf('\n');
-    expect(boundary).toBeGreaterThan(0);
-    return {
-      sentence: warning!.slice(0, boundary),
-      detail: warning!.slice(boundary + 1)
-    };
-  }
-
-  it.each([
-    ['both signals', bothSignals],
-    ['lost curvature only', curvatureOnly],
-    ['exploded only', explodedOnly]
-  ])('keeps the census out of the %s boolean sentence', (_name, census) => {
-    const { sentence, detail } = split(
-      booleanFacetFallbackWarning(census, 'union')
-    );
-    expect(sentence).not.toMatch(/\d/);
-    expect(sentence).toContain('This union');
-    expect(detail).toBe(
-      `${census.operands.faces} operand faces (${census.operands.curvedFaces} curved) became ` +
-        `${census.result.faces} result faces (${census.result.curvedFaces} curved)`
-    );
-  });
-
   it('keeps the census out of the offset refusal sentence', () => {
     const census = {
       operands: { faces: 5, curvedFaces: 2 },
       result: { faces: 96, curvedFaces: 0 }
     };
-    const { sentence, detail } = split(directEditFacetFallbackWarning(census));
-    expect(sentence).not.toMatch(/\d/);
-    expect(detail).toBe(
+    const warning = directEditFacetFallbackWarning(census);
+    expect(warning).not.toBeNull();
+    const boundary = warning!.indexOf('\n');
+    expect(boundary).toBeGreaterThan(0);
+    expect(warning!.slice(0, boundary)).not.toMatch(/\d/);
+    expect(warning!.slice(boundary + 1)).toBe(
       '5 source faces (2 curved) became 96 result faces (0 curved)'
-    );
-  });
-
-  it('names the operation it was given, and stays neutral without one', () => {
-    expect(booleanFacetFallbackWarning(bothSignals, 'subtract')).toContain(
-      'This subtract'
-    );
-    expect(booleanFacetFallbackWarning(bothSignals, 'intersect')).toContain(
-      'This intersection'
-    );
-    expect(booleanFacetFallbackWarning(bothSignals)).toContain(
-      'This boolean operation'
-    );
-  });
-
-  it('does not tell a subtract to subtract instead', () => {
-    expect(booleanFacetFallbackWarning(bothSignals, 'union')).toContain(
-      'or subtract instead'
-    );
-    expect(booleanFacetFallbackWarning(bothSignals, 'subtract')).not.toContain(
-      'subtract instead'
     );
   });
 });

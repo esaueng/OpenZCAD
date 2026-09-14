@@ -1,3 +1,4 @@
+import type { EditAnalysisRequest } from '@openzcad/shared';
 import {
   useCallback,
   useEffect,
@@ -24,6 +25,8 @@ import {
 } from 'lucide-react';
 import {
   createGrowingHolderProposal,
+  createEditCandidateCatalog,
+  proposalForEditCandidate,
   createCadDocumentDigest,
   MAX_ASSISTANT_ATTACHMENTS,
   parseCadPatchProposal,
@@ -83,6 +86,10 @@ export type AssistantPreviewOutcome =
 interface AssistantPanelProps {
   document: ProjectDocument;
   selection: CadSelectionContext;
+  onAnalyze?(
+    document: ProjectDocument,
+    analysis: EditAnalysisRequest
+  ): Promise<ProjectDocument['derived']>;
   /** Returns false when the patch could not be applied, so the panel can say so. */
   onApply(proposal: CadPatchProposal): Promise<boolean>;
   /** Returns the exact rejection reason when the patch could not be previewed. */
@@ -214,21 +221,38 @@ function Turn({
  * flight keep running behind the launcher.
  */
 export function AssistantPanel({
-  document: doc,
+  document: sourceDoc,
   selection,
   onApply,
   onPreview,
+  onAnalyze,
   collapsed,
   onCollapsedChange,
   confirmDestructive,
   hidden = false
 }: AssistantPanelProps) {
+  const [analyzedDocument, setAnalyzedDocument] =
+    useState<ProjectDocument | null>(null);
+  const [analysisBusy, setAnalysisBusy] = useState(false);
+  const analysisEpoch = useRef(0);
+  const doc =
+    analyzedDocument?.projectId === sourceDoc.projectId &&
+    analyzedDocument.version === sourceDoc.version
+      ? analyzedDocument
+      : sourceDoc;
+  useEffect(() => {
+    analysisEpoch.current += 1;
+    setAnalysisBusy(false);
+  }, [sourceDoc.projectId, sourceDoc.version]);
   const projectId = doc.projectId;
   const [conversation, dispatch] = useReducer(
     assistantReducer,
     EMPTY_CONVERSATION
   );
   const [prompt, setPrompt] = useState('');
+  const [chosenSuggestionId, setChosenSuggestionId] = useState<string | null>(
+    null
+  );
   const [pending, setPending] = useState<AssistantAttachmentPreview[]>([]);
   // Attachments arrive from async conversions that can overlap — a paste while
   // a dropped PDF is still rasterizing. The ref is what those readers count
@@ -298,6 +322,10 @@ export function AssistantPanel({
     () => createGrowingHolderProposal(doc, selection),
     [doc, selection]
   );
+  const editCatalog = useMemo(
+    () => createEditCandidateCatalog(doc, selection),
+    [doc, selection]
+  );
   const growingHolderHoleProposal = useMemo(
     () => createGrowingHolderHoleProposal(doc, selection),
     [doc, selection]
@@ -320,21 +348,36 @@ export function AssistantPanel({
       selection
     ]
   );
+  const requestSuggestions = useMemo(
+    () => [
+      ...suggestions,
+      ...editCatalog.candidates.map((candidate) => ({
+        id: candidate.id,
+        label: candidate.label,
+        proposal: proposalForEditCandidate(candidate)
+      }))
+    ],
+    [suggestions, editCatalog]
+  );
   /** Every app-measured recipe stays one click away once a thread exists. */
   const verifiedSuggestions = useMemo(
     () => suggestions.filter((suggestion) => suggestion.proposal),
     [suggestions]
   );
-  const verifiedPrompt = useMemo(
-    () =>
-      pending.length === 0
-        ? suggestions.find(
-            (suggestion) =>
-              suggestion.proposal && suggestion.label === prompt.trim()
-          )
-        : undefined,
-    [pending.length, prompt, suggestions]
+  const findDirectSuggestion = useCallback(
+    (text: string) => {
+      const matching = requestSuggestions.filter(
+        (suggestion) => suggestion.proposal && suggestion.label === text
+      );
+      return (
+        matching.find((suggestion) => suggestion.id === chosenSuggestionId) ??
+        (matching.length === 1 ? matching[0] : undefined)
+      );
+    },
+    [requestSuggestions, chosenSuggestionId]
   );
+  const verifiedPrompt =
+    pending.length === 0 ? findDirectSuggestion(prompt.trim()) : undefined;
   /** The last thing the user asked, which is what "try again" repeats. */
   const lastAsk = useMemo(() => {
     for (let index = entries.length - 1; index >= 0; index -= 1) {
@@ -531,11 +574,7 @@ export function AssistantPanel({
 
       try {
         const verifiedSuggestion =
-          attachments.length === 0
-            ? suggestions.find(
-                (suggestion) => suggestion.proposal && suggestion.label === text
-              )
-            : undefined;
+          attachments.length === 0 ? findDirectSuggestion(text) : undefined;
         if (verifiedSuggestion?.proposal) {
           const proposal = parseCadPatchProposal(
             structuredClone(verifiedSuggestion.proposal)
@@ -616,16 +655,13 @@ export function AssistantPanel({
         });
       }
     },
-    [conversation, doc, onPreview, selection, suggestions]
+    [conversation, doc, onPreview, selection, findDirectSuggestion]
   );
 
   function submitPrompt() {
     const text = prompt.trim();
     const verified = Boolean(
-      pending.length === 0 &&
-      suggestions.some(
-        (suggestion) => suggestion.proposal && suggestion.label === text
-      )
+      pending.length === 0 && findDirectSuggestion(text)
     );
     if (
       (!text && pending.length === 0) ||
@@ -658,8 +694,47 @@ export function AssistantPanel({
   function applySuggestion(suggestion: AssistantSuggestion) {
     // Offered, not sent: the opener is a starting point to edit, and a click
     // that fires a request the user has not read yet is a trap.
+    setChosenSuggestionId(suggestion.id);
     setPrompt(suggestion.label);
     promptRef.current?.focus();
+  }
+
+  async function analyzeSelection() {
+    if (!onAnalyze || analysisBusy) return;
+    const bodyIds = [
+      ...new Set([
+        ...selection.bodyIds,
+        ...selection.topologies.map((item) => item.bodyId)
+      ])
+    ];
+    const faceHashes = selection.topologies
+      .filter((item) => item.kind === 'face')
+      .flatMap((item) => (typeof item.hash === 'number' ? [item.hash] : []));
+    if (bodyIds.length !== 1 || faceHashes.length > 2) {
+      setNotice('Select one part and optionally one or two faces to analyze.');
+      return;
+    }
+    const epoch = ++analysisEpoch.current;
+    setAnalysisBusy(true);
+    setNotice(null);
+    try {
+      const derived = await onAnalyze(sourceDoc, {
+        bodyId: bodyIds[0]!,
+        faceHashes
+      });
+      if (epoch !== analysisEpoch.current) return;
+      setAnalyzedDocument({ ...sourceDoc, derived });
+      setNotice(
+        'Analysis complete. Review the measured edits below; unavailable dimensions remain unchanged.'
+      );
+    } catch (error) {
+      if (epoch === analysisEpoch.current)
+        setNotice(
+          error instanceof Error ? error.message : 'Part analysis failed.'
+        );
+    } finally {
+      if (epoch === analysisEpoch.current) setAnalysisBusy(false);
+    }
   }
 
   function stopThinking() {
@@ -1113,6 +1188,57 @@ export function AssistantPanel({
               </span>
             ))}
           </div>
+        )}
+        {onAnalyze && (
+          <button
+            type="button"
+            className="assistant-verified-action"
+            disabled={thinking || analysisBusy || applyingEntryId !== null}
+            onClick={() => {
+              void analyzeSelection();
+            }}
+          >
+            {analysisBusy
+              ? 'Analyzing selected geometry…'
+              : 'Analyze selected geometry'}
+          </button>
+        )}
+        {(editCatalog.candidates.length > 0 ||
+          editCatalog.measuredOnly.length > 0) && (
+          <details className="assistant-edit-catalog">
+            <summary>Measured edits ({editCatalog.candidates.length})</summary>
+            {editCatalog.candidates.map((candidate) => (
+              <button
+                key={candidate.id}
+                type="button"
+                className="assistant-verified-action"
+                title={candidate.description}
+                disabled={thinking || applyingEntryId !== null}
+                onClick={() =>
+                  applySuggestion({
+                    id: candidate.id,
+                    label: candidate.label,
+                    proposal: proposalForEditCandidate(candidate)
+                  })
+                }
+              >
+                <span>{candidate.label}</span>
+                <span className="assistant-suggestion-badge">Preview</span>
+              </button>
+            ))}
+            {editCatalog.measuredOnly.map((measurement, index) => (
+              <p key={`${measurement.bodyId}:${index}`}>
+                {measurement.label}: {measurement.value} {measurement.unit} —
+                measured only. {measurement.reason}
+              </p>
+            ))}
+            {!editCatalog.complete && (
+              <p>
+                This list may not include every editable feature. Select
+                specific faces to refine the analysis.
+              </p>
+            )}
+          </details>
         )}
         {entries.length > 0 &&
           verifiedSuggestions.map((suggestion) => (
