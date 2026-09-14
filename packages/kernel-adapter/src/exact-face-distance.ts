@@ -4,6 +4,7 @@ import type { RemusKernel } from './remus-runtime';
 import { measureFaceGeometry } from './exact-measure';
 import { DIRECT_EDIT_TOLERANCE, dot, normalized } from './exact-math';
 import { readMeshQuality } from './exact-shape-utils';
+import { requireValidSolid } from './kernel-validation';
 import {
   MEASUREMENT_DEFLECTION,
   faceHandlesByFingerprint,
@@ -285,11 +286,11 @@ export function rebuildFaceDistance(
     mode,
     desiredDistance - source.distance
   );
-  if (kernel.validateSolid(output) !== 0) {
-    throw new Error(
-      `Setting the face distance to ${desiredDistance} does not produce a valid solid.`
-    );
-  }
+  requireValidSolid(
+    kernel,
+    output,
+    `Setting the face distance to ${desiredDistance} does not produce a valid solid.`
+  );
   const meshQuality = readMeshQuality(
     kernel.meshQuality(output, MEASUREMENT_DEFLECTION)
   );
