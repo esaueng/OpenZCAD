@@ -386,7 +386,9 @@ export function modelingFormStateFromFeature(
           pathId: resolvePathOption(data.path, paths).id,
           mode: data.mode,
           guideId:
-            data.guide === undefined ? '' : resolvePathOption(data.guide, paths).id
+            data.guide === undefined
+              ? ''
+              : resolvePathOption(data.guide, paths).id
         }
       };
     case 'helical-sweep':
@@ -800,14 +802,18 @@ export function modelingFormValidationReason(
         ? 'A loft apex point needs Ruled mode: smooth section surfaces do not close against an apex.'
         : null;
     }
-    case 'sweep':
+    case 'sweep': {
       if (!state.value.profileId || !state.value.pathId) {
         return 'Choose a profile and a path.';
       }
-      return state.value.guideId !== '' &&
-        state.value.guideId === state.value.pathId
-        ? 'The guide rail must be a different path from the sweep path.'
+      if (state.value.guideId === '') return null;
+      if (state.value.guideId === state.value.pathId) {
+        return 'The guide rail must be a different path from the sweep path.';
+      }
+      return state.value.mode === 'smooth'
+        ? 'A guide rail needs Standard surface mode: the guided sweep takes no surface-mode control.'
         : null;
+    }
     case 'helical-sweep': {
       const expressions = [
         ...Object.values(state.value.axisOrigin),

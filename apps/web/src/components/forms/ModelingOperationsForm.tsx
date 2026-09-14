@@ -760,7 +760,10 @@ export function ModelingOperationsForm({
                 value={state.value.endPoint}
                 scope={scope}
                 onChange={(endPoint) =>
-                  replaceState({ ...state, value: { ...state.value, endPoint } })
+                  replaceState({
+                    ...state,
+                    value: { ...state.value, endPoint }
+                  })
                 }
               />
               <p className="muted">
@@ -852,10 +855,9 @@ export function ModelingOperationsForm({
           </label>
           {state.value.guideId === '' ? null : (
             <p className="muted">
-              The profile turns to keep facing the rail instead of holding a
-              rotation-minimizing frame. Both the path and the rail must be one
-              curve — a line, or an arc of at most a quarter turn — and surface
-              mode does not apply.
+              {state.value.mode === 'smooth'
+                ? 'A guide rail needs Standard surface mode: the guided sweep takes no surface-mode control, so a Smooth sweep would be rebuilt at a surfacing nobody asked for.'
+                : 'The profile turns to keep facing the rail instead of holding a rotation-minimizing frame. Both the path and the rail must be one curve — a line, or an arc of at most a quarter turn.'}
             </p>
           )}
         </>
