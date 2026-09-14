@@ -19,18 +19,25 @@
 
 import type { DxfEntity } from '@openzcad/io-dxf';
 
-/** The query surface this extraction needs from the kernel. */
-export interface DxfFaceKernel {
-  getSurfaceType(face: number): string;
-  getFaceNormal(face: number): Float64Array | number[];
-  getFaceWires(face: number): Uint32Array | number[];
-  getWireEdges(wire: number): Uint32Array | number[];
+/**
+ * The per-edge query surface. Shared with the exact section export, which
+ * draws the same curve kinds from a frame of its own.
+ */
+export interface DxfEdgeKernel {
   getEdgeCurveType(edge: number): string;
   getEdgeVertices(edge: number): Float64Array | number[];
   getEdgeParamSpan(edge: number): Float64Array | number[];
   evaluateEdgeCurve(edge: number, t: number): Float64Array | number[];
   measureCurvatureAtEdge(edge: number, t: number): Float64Array | number[];
   sampleEdge(edge: number, deflection: number): Float64Array | number[];
+}
+
+/** The query surface this extraction needs from the kernel. */
+export interface DxfFaceKernel extends DxfEdgeKernel {
+  getSurfaceType(face: number): string;
+  getFaceNormal(face: number): Float64Array | number[];
+  getFaceWires(face: number): Uint32Array | number[];
+  getWireEdges(wire: number): Uint32Array | number[];
 }
 
 type Vec3 = readonly [number, number, number];
@@ -66,14 +73,31 @@ const POLYLINE_DEFLECTION_MM = 0.02;
 /** Below this, an edge's endpoints coincide and its curve is a closed loop. */
 const CLOSED_EDGE_TOLERANCE = 1e-9;
 
-interface PlaneFrame {
+/** A 2D frame on a plane: an origin, two in-plane axes, and a unit scale. */
+export interface DxfPlaneFrame {
   readonly origin: Vec3;
   readonly u: Vec3;
   readonly v: Vec3;
   readonly scale: number;
 }
 
-function project(frame: PlaneFrame, p: Vec3): readonly [number, number] {
+/**
+ * Deterministic in-plane axes: pick the world axis least aligned with the
+ * normal, so the frame never degenerates and never depends on wire order.
+ * Repeat exports of unchanged geometry are then byte-identical.
+ */
+export function dxfPlaneFrame(
+  normal: Vec3,
+  origin: Vec3,
+  scale: number
+): DxfPlaneFrame {
+  const n = unit(normal, 'plane normal');
+  const pick: Vec3 = Math.abs(n[2]) < 0.9 ? [0, 0, 1] : [1, 0, 0];
+  const u = unit(cross(pick, n), 'plane axis');
+  return { origin, u, v: cross(n, u), scale };
+}
+
+function project(frame: DxfPlaneFrame, p: Vec3): readonly [number, number] {
   const d = sub(p, frame.origin);
   return [dot(d, frame.u) * frame.scale, dot(d, frame.v) * frame.scale];
 }
@@ -108,24 +132,17 @@ export function faceDxfEntities(
   }
 
   const normalRaw = kernel.getFaceNormal(face);
-  const n = unit([normalRaw[0]!, normalRaw[1]!, normalRaw[2]!], 'face normal');
-  // Deterministic in-plane axes: pick the world axis least aligned with the
-  // normal, so the frame never degenerates and never depends on wire order.
-  const pick: Vec3 = Math.abs(n[2]) < 0.9 ? [0, 0, 1] : [1, 0, 0];
-  const u = unit(cross(pick, n), 'plane axis');
-  const v = cross(n, u);
   const originFlat = kernel.getEdgeVertices(firstEdges[0]!);
-  const frame: PlaneFrame = {
-    origin: vec3At(originFlat, 0),
-    u,
-    v,
-    scale: millimeterScale
-  };
+  const frame = dxfPlaneFrame(
+    [normalRaw[0]!, normalRaw[1]!, normalRaw[2]!],
+    vec3At(originFlat, 0),
+    millimeterScale
+  );
 
   const entities: DxfEntity[] = [];
   for (const wire of wires) {
     for (const edge of Array.from(kernel.getWireEdges(wire))) {
-      entities.push(...edgeEntities(kernel, edge, frame));
+      entities.push(...edgeDxfEntities(kernel, edge, frame));
     }
   }
   if (entities.length === 0) {
@@ -134,10 +151,11 @@ export function faceDxfEntities(
   return entities;
 }
 
-function edgeEntities(
-  kernel: DxfFaceKernel,
+/** One boundary edge as DXF entities, projected into `frame`. */
+export function edgeDxfEntities(
+  kernel: DxfEdgeKernel,
   edge: number,
-  frame: PlaneFrame
+  frame: DxfPlaneFrame
 ): DxfEntity[] {
   const kind = kernel.getEdgeCurveType(edge);
   const verts = kernel.getEdgeVertices(edge);
@@ -171,9 +189,9 @@ function edgeEntities(
 }
 
 function circleEntities(
-  kernel: DxfFaceKernel,
+  kernel: DxfEdgeKernel,
   edge: number,
-  frame: PlaneFrame,
+  frame: DxfPlaneFrame,
   start: Vec3,
   end: Vec3
 ): DxfEntity[] {

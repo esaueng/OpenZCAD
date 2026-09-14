@@ -531,6 +531,24 @@ export function tangentPlanarNeighbours(
 }
 
 /**
+ * How many faces of `solid` are rolling-ball blend bands.
+ *
+ * Counted rather than merely detected because the question a fillet has to
+ * answer is whether the operation ADDED a band: a body can already carry
+ * blends from an earlier feature, so "the result has a blend face" proves
+ * nothing on its own.
+ */
+export function countBlendFaces(kernel: RemusKernel, solid: number): number {
+  let count = 0;
+  for (const face of kernel.getSolidFaces(solid)) {
+    if (isBlendFace(kernel, solid, face)) {
+      count += 1;
+    }
+  }
+  return count;
+}
+
+/**
  * True when a selected edge touches a blend face of the target — either
  * bordering it directly or ending on one of its boundary vertices.
  */
