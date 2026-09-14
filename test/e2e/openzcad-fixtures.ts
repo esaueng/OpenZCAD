@@ -167,7 +167,8 @@ export async function stubApi(
         synced: assistantEnabled,
         credential: { stored: false, storageAvailable: false },
         effectiveAssistant: {
-          configured: false,
+          // Match the opted-in assistant fixture used by proposal tests.
+          configured: assistantEnabled,
           source: 'deployment',
           provider: 'openrouter',
           model: 'openai/gpt-5.6-sol',
