@@ -63,9 +63,13 @@ import { collapseShape } from './exact-boolean-helpers';
 import {
   bodyOpacityFromMetadata,
   decodeText,
-  importStepWithOwnBudget,
   projectRemusLineageDiagnostic
 } from './exact-shape-utils';
+import {
+  importStepWithOwnBudget,
+  stepImportEmptyReason,
+  type StepImportReport
+} from './kernel-step-import';
 import {
   buildDocumentHistory,
   type CachedImportedStep,
@@ -844,7 +848,6 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
       done();
     };
 
-
     const build = buildDocumentHistory(
       activeKernel,
       document,
@@ -1282,7 +1285,8 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     // is a state consumers already have to render.
     const massDone = onStage?.('Mass properties');
     const massProperties =
-      includeMassProperties && shape.solids.length === 1 &&
+      includeMassProperties &&
+      shape.solids.length === 1 &&
       topology.faces.length <= MAX_BACKGROUND_MASS_PROPERTY_FACES
         ? readBodyMassProperties(kernel, shape.solids[0]!)
         : null;
@@ -1861,8 +1865,11 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
           ? new TextEncoder().encode(data)
           : new Uint8Array(data);
       let declared: number[];
+      let report: StepImportReport;
       try {
-        declared = Array.from(importStepWithOwnBudget(kernel, bytes));
+        const imported = importStepWithOwnBudget(kernel, bytes);
+        declared = Array.from(imported.solids);
+        report = imported.report;
       } catch (error) {
         return {
           solid: false,
@@ -1891,7 +1898,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
           0
         ),
         ...(declared.length === 0
-          ? { reason: 'STEP file contains no solids.' }
+          ? { reason: stepImportEmptyReason(report) }
           : accepted.length === 0
             ? { reason: importedStepNoSolidError(rejections) }
             : rejections.length > 0

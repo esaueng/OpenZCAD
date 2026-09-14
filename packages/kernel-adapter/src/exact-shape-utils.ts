@@ -334,28 +334,6 @@ export function decodeText(bytes: Uint8Array): string {
 }
 
 /**
- * Keep Remus's hostile-input budgets for every source. A locally selected
- * file can later be shared or restored, so its origin does not make it trusted.
- *
- * The translator parses in its own scratch topology and hands back an arena
- * document; a file with no solids hands back no bytes, which is the empty
- * handle list rather than a document to restore.
- */
-export function importStepWithOwnBudget(
-  kernel: RemusKernel,
-  bytes: Uint8Array
-): Uint32Array {
-  const solids = remusTranslators().importStep(
-    bytes,
-    128 * 1024 * 1024,
-    2_000_000
-  );
-  return solids.length === 0
-    ? new Uint32Array()
-    : kernel.deserializeSolids(solids);
-}
-
-/**
  * Mesh export formats the adapter can produce. `stl` is ASCII for
  * compatibility with consumers that diff or parse the text; `stl-binary` is
  * the same facets at 5–10× smaller; `3mf` is the zipped package modern
