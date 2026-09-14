@@ -1,6 +1,6 @@
 # Exact section curves behind the section view
 
-Branch `claude/remus-exact-sections`. Four commits, no push, no PR.
+Branch `claude/remus-exact-sections`. Five commits, no push, no PR.
 
 ## What shipped
 
@@ -97,13 +97,35 @@ pnpm test (web)         Test Files 157 passed (157)
                         Tests 1189 passed (1189)
 pnpm test:parity-corpus Test Files 7 passed (7)
                         Tests 174 passed | 1 skipped (175)
+pnpm build              passes; entry chunk 511,990 B against the 512,000 B budget
 ```
 
-`node scripts/check-css-classes.mjs` also passes (276 files, 816 classes).
-E2E and the desktop workflow were not run, per the briefing.
+`node scripts/check-css-classes.mjs` passes (277 files, 816 classes), and
+`pnpm build` (which CI's `validate` also runs) passes its bundle budget.
+E2E and the desktop workflow were not run, per the briefing — see the risks
+below, because one e2e spec was rewritten and could not be executed here.
+
+## Driven in the real app
+
+Run from this worktree (`vite` on 5210 — note that `preview_start` opens the
+session's launch directory, which is a different worktree, and served stale
+code until the server was started here):
+
+- Demo Mounting Bracket, section on: "No exact section", the kernel's area
+  disagreeing with the witness, DXF button disabled, the body keeping its
+  approximate cap.
+- A box added to the same document: "Exact section — 540.00 mm² of material,
+  1 body has no exact section", the box's cut drawn in slate with its outline
+  while the bracket kept its orange cap, DXF button live.
+- Adding a feature (a rebuild) dropped straight back to "Clipping preview".
+
+The DXF button was deliberately not clicked in the browser: it opens a file
+save. The export path is covered by adapter and worker tests instead.
 
 ## Deliberate limits
 
+- **The panel opens above its button** rather than beside it: at 800 px the
+  status line reached across the viewport and under the model tree.
 - **Canonical planes only.** The adapter takes an arbitrary origin and normal
   and is tested on an oblique one; the UI still offers only the XY/XZ/YZ
   section planes it offered before. Nothing here adds a section-plane picker.
@@ -122,6 +144,20 @@ E2E and the desktop workflow were not run, per the briefing.
 
 ## Risks for the reviewer
 
+- **`test/e2e/viewport.spec.ts`'s section spec was rewritten and NOT run.**
+  It could not be: the old one asserted a display cap follows the slider, and
+  that is no longer what a resting plane shows. It now asserts the new
+  contract — cap while the plane moves, kernel curves once it rests, never
+  both — reading a new `exactSections` field on the viewport's e2e
+  render-policy snapshot. Reasoned through carefully, typechecked, but the
+  first real run of it will be in CI.
+- **The entry chunk finishes at 511,990 bytes against a 512,000 budget: ten
+  bytes.** The feature was moved into `apps/web/src/lib/sectionOutline.ts`
+  (lazy) to get there, and the launcher keeps only the state, the effect and
+  two thin handlers. The next line of eager code in `App.tsx` — from this
+  branch or any other — trips the gate. The budget's own comment asks for a
+  real split rather than another raise; that split is now overdue, and this
+  branch is not the place for it.
 - **How often the kernel refuses.** On the demo Mounting Bracket every offset
   tried was refused as `area-mismatch` — correctly, but it means a user of a
   blended, unioned part may see "No exact section" more often than not. That
@@ -164,3 +200,5 @@ E2E and the desktop workflow were not run, per the briefing.
 - The exact section is computed for every visible body at once. A large
   assembly would benefit from sectioning only what the plane's bounding box
   can reach.
+- Splitting the launcher chunk properly, so the next feature has room. The
+  section work is already lazy; the remaining weight is not.
