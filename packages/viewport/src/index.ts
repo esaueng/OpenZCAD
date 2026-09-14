@@ -50,6 +50,7 @@ export * from './gizmo/move';
 export * from './gizmo/centerAlign';
 export * from './gizmo/moveTransform';
 export * from './gizmo/cylinderRadiusPreview';
+export * from './gizmo/offsetBodyPreview';
 
 // Input: pointer gesture classification and drag-session bookkeeping.
 export * from './input/bindings';
