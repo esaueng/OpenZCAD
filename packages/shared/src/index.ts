@@ -1122,6 +1122,48 @@ export type FaceAreaProvenance =
   /** A curved boundary inscribed with a fixed point count. */
   | 'sampled';
 
+/**
+ * Per-face on-demand recognition of one imported STEP face.
+ *
+ * Phase D of the imported STEP edit plan wires the existing
+ * `recognizeImportedFeature` module through a lazy geometry-worker query into
+ * the Inspector. The result rides this additive payload on top of the bulk
+ * `recognizedImportedFeatures` list published at rebuild: `recognized` covers
+ * a face the proof consumed, while `refusal` carries the typed refusal reason
+ * for a face the proof declined. Presence is the contract — a face without
+ * this field was never queried, not refused.
+ */
+export interface FaceRecognitionSummary {
+  kind: 'recognized' | 'unsupported';
+  /** Recognized feature kind, present only when `kind` is `recognized`. */
+  featureKind?: RecognizedImportedFeature['kind'];
+  /**
+   * Stable refusal reason from the recognition module, present only when
+   * `kind` is `unsupported`. Never a free-text guess.
+   */
+  refusalReason?: RecognitionRefusalReason;
+  /** Human-readable recognition outcome, shown verbatim in the Inspector. */
+  message: string;
+  /**
+   * Display dimensions in document units (diameters, depths, lengths, angles
+   * in radians) keyed by the proof's own field names, minus identity fields.
+   * Recognition dimensions arrive pre-scaled by the worker that measured them.
+   */
+  dimensions?: Record<string, number>;
+}
+
+/** Typed refusal reasons from the imported-feature recognition module. */
+export type RecognitionRefusalReason =
+  | 'seed-face-missing'
+  | 'work-limit-exceeded'
+  | 'unsupported-surface'
+  | 'partial-revolution'
+  | 'blend-detected'
+  | 'rib-detected'
+  | 'intersection-detected'
+  | 'ambiguous-twins'
+  | 'incomplete-proof';
+
 export interface FaceGeometry {
   /** Underlying surface class (plane, cylinder, cone, B-spline, ...). */
   surfaceType: string;
@@ -1191,6 +1233,13 @@ export interface FaceGeometry {
   featureType?: 'through-hole' | 'blend';
   /** Rolling-ball radius for a recognized blend surface. */
   blendRadius?: number;
+  /**
+   * On-demand per-face recognition outcome for an imported STEP face (Phase D
+   * of the imported STEP edit plan). Additive only: queried lazily through
+   * the geometry worker and cached by callers, never part of the rebuild
+   * payload or any ADR-011 witness input.
+   */
+  recognition?: FaceRecognitionSummary;
   /**
    * Rebuild-local identity of the exact tangency-connected blend region.
    * Kernel handles are intentionally not persisted beyond derived state.
