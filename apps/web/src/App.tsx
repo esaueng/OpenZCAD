@@ -3,7 +3,10 @@ import {
   parameterInputError,
   parameterBuildError
 } from './lib/parameterEdit';
-import type { parameterVisualPreview } from './lib/parameterVisualPreview';
+import type {
+  ParameterPreviewBody,
+  parameterVisualPreview
+} from './lib/parameterVisualPreview';
 import { LatestTask } from './lib/latestTask';
 import { rebuildProgressLabel } from './lib/rebuildProgressLabel';
 import { featureHistory, featureResultBodyIds } from './lib/featureHistory';
@@ -222,11 +225,6 @@ import {
   localAutosaveFailedStatus,
   reparkFailedAutosave
 } from './lib/localAutosaveFailure';
-import {
-  MAX_SOURCE_IMPORT_BYTES,
-  MAX_SOURCE_IMPORT_MB,
-  runStepImport
-} from './lib/stepImportRun';
 import {
   inspectShaprPair,
   type ShaprPairInspection
@@ -518,8 +516,13 @@ import type {
   MovePreview,
   MoveSnap,
   SectionPlaneId,
+  SectionViewSettings,
   WheelDevice
 } from '@openzcad/viewport';
+import type {
+  SectionOutlineState,
+  ViewportGeometry
+} from './lib/sectionOutline';
 
 /**
  * Space activates focused buttons and belongs in free-text fields. Numeric and
@@ -563,6 +566,18 @@ function focusedControlOwnsSpace(target: HTMLElement | null): boolean {
   }
   return false;
 }
+
+/**
+ * The STEP/STL import run, loaded on the gesture that imports a file.
+ *
+ * It is several kilobytes of orchestration — checksum marks, artifact
+ * archival, abort plumbing, the guided Shapr3D path — and a session that
+ * never imports a file should not carry it at launch. Both call sites are
+ * already inside an async handler that is about to read a file off disk, so
+ * the fetch costs nothing measurable next to that. The refusals that come
+ * BEFORE it (unsupported extension, a lone `.shapr`) stay synchronous.
+ */
+const stepImportRun = () => import('./lib/stepImportRun');
 
 const LazyViewerShell = lazyWithStaleChunkNotice(() =>
   import('./components/ViewerShell').then((module) => ({
@@ -1857,6 +1872,14 @@ export function App() {
     onCameraSettled: persistCameraPose,
     forget: forgetProjectView
   } = useProjectView(doc?.projectId ?? null);
+  // Read at callback time: the section slider's release handler runs after
+  // the change that moved it.
+  const viewerSettingsRef = useRef(viewerSettings);
+  viewerSettingsRef.current = viewerSettings;
+  // An exact section belongs to one plane position, one model version and
+  // one set of visible bodies. Everything that invalidates it bumps this
+  // token, and an answer that arrives under an old token is dropped.
+  const sectionTokenRef = useRef(0);
   // Key by membership so an unrelated dimension edit keeps the viewport's
   // body array stable instead of disposing and uploading identical meshes.
   const parameterHiddenBodyKey = useMemo(
@@ -1972,6 +1995,14 @@ export function App() {
     []
   );
   const [fitSignal, setFitSignal] = useState(0);
+  /**
+   * What the section view is currently showing. The clipped preview owns the
+   * drag; the kernel's exact section is asked for once the plane rests, and
+   * only that one can be exported.
+   */
+  const [sectionOutline, setSectionOutline] = useState<SectionOutlineState>({
+    kind: 'clipping'
+  });
   const [viewRequest, setViewRequest] = useState<{
     view: ViewTarget;
     nonce: number;
@@ -4426,47 +4457,80 @@ export function App() {
       geometry.state.phase
     ]
   );
-  const viewerBodies = useMemo<BodyRepresentation[]>(
-    () =>
-      (previewDoc
-        ? Object.values(renderedRepresentations)
-        : liveBodyRepresentations
-          ? Object.values(liveBodyRepresentations)
-          : []
-      ).filter((body) => !body.consumed && !hiddenBodyIds.has(body.bodyId)),
-    [
-      liveBodyRepresentations,
-      previewDoc,
-      renderedRepresentations,
-      hiddenBodyIds
-    ]
-  );
   /**
-   * A parameter preview stands in for its own result body only; hidden
-   * bodies stay hidden and every other part keeps its exact geometry.
-   */
-  const visibleParameterPreview = useMemo(
-    () =>
-      parameterPreview?.filter((body) => !hiddenBodyIds.has(body.bodyId)) ??
-      null,
-    [parameterPreview, hiddenBodyIds]
-  );
-
-  /**
-   * Every body the model ends up with, hidden ones included — `viewerBodies`
-   * drops those, and a parts list that loses a row when you hide it is a list
-   * you cannot unhide from. Consumed bodies stay out: they are boolean
+   * Every body the document the viewport draws ended up with, hidden ones
+   * included — a parts list that loses a row when you hide it is a list you
+   * cannot unhide from. Consumed bodies stay out: they are boolean
    * scaffolding, not parts.
+   *
+   * Which document that is gets decided HERE and nowhere else: `previewDoc`
+   * replaces the live one wholesale, so these are then ITS bodies.
    */
   const partBodies = useMemo<BodyRepresentation[]>(
     () =>
-      (previewDoc
-        ? Object.values(renderedRepresentations)
-        : liveBodyRepresentations
-          ? Object.values(liveBodyRepresentations)
-          : []
+      Object.values(
+        previewDoc ? renderedRepresentations : (liveBodyRepresentations ?? {})
       ).filter((body) => !body.consumed),
     [liveBodyRepresentations, previewDoc, renderedRepresentations]
+  );
+  /**
+   * Bodies the viewer reported it drew away from their document pose, from
+   * the frame itself rather than from the mechanism that posed them. A Move
+   * gizmo translation, a face-resize drag and a stand-in's hiding all land
+   * here, and so does whatever is written next.
+   */
+  const [bodiesDrawnElsewhere, setBodiesDrawnElsewhere] = useState<
+    readonly string[]
+  >([]);
+  /**
+   * What the viewport is drawing, as one value — the document, its bodies
+   * that are on screen, and anything drawn over them that the document did
+   * not build.
+   *
+   * Everything that puts geometry in the viewport is folded in here and the
+   * viewer's own props are read back out of it, so this is not a summary of
+   * what is on screen: it IS what is on screen. The exact section takes its
+   * source from it (`sectionSourceOf`) rather than working out the answer a
+   * second time, because the second answer has been wrong three times — for
+   * a published preview document, for a parameter edit nobody applied, and
+   * for a body the Move gizmo posed straight into the scene. The first two
+   * are declared here; the third could not be, which is why the viewer also
+   * reports what it actually drew.
+   *
+   * Hiding and isolating are device-local view state the document never
+   * sees, so the bodies have to be carried with it: ask the kernel about a
+   * hidden body and it sections it and draws the cut floating in empty
+   * space.
+   */
+  // Its own memo, so the array the viewer uploads meshes from keeps its
+  // identity while a preview comes and goes over the top of it.
+  const viewerBodies = useMemo<BodyRepresentation[]>(
+    () => partBodies.filter((body) => !hiddenBodyIds.has(body.bodyId)),
+    [partBodies, hiddenBodyIds]
+  );
+  const viewportGeometry = useMemo<ViewportGeometry<ParameterPreviewBody>>(
+    () => ({
+      document: previewDoc ?? doc ?? null,
+      bodies: viewerBodies,
+      // A parameter preview stands in for its own result body only; hidden
+      // bodies stay hidden and every other part keeps its exact geometry.
+      standIns:
+        parameterPreview?.filter((body) => !hiddenBodyIds.has(body.bodyId)) ??
+        null,
+      // Not declared by whatever posed them — observed by the viewer in the
+      // frame it drew. The Move gizmo poses a body's mesh with no state the
+      // workspace can see, and the next mechanism to do that need not
+      // announce itself either.
+      drawnElsewhere: bodiesDrawnElsewhere
+    }),
+    [
+      doc,
+      previewDoc,
+      viewerBodies,
+      hiddenBodyIds,
+      parameterPreview,
+      bodiesDrawnElsewhere
+    ]
   );
 
   const directEditableBodyIds = useMemo<string[]>(
@@ -5864,6 +5928,85 @@ export function App() {
     return min < max ? { min, max } : null;
   }
 
+  /**
+   * Ask the kernel for the exact section at the plane's current rest
+   * position. Never called during a drag: the clipped preview is what keeps
+   * the slider at pointer rate, and an exact section belongs to exactly one
+   * plane position anyway.
+   */
+  async function requestExactSection(section: SectionViewSettings | undefined) {
+    const view = viewportGeometry;
+    if (!section || !view.document) {
+      return;
+    }
+    // Taken before the await: whatever this call decides, an answer already
+    // in flight is about a cut that has moved on.
+    const token = ++sectionTokenRef.current;
+    const { resolveSectionOutline, sectionSourceOf } = await import(
+      './lib/sectionOutline'
+    );
+    if (!sectionSourceOf(view).document) {
+      // Nothing on screen has an exact section to ask for — a stand-in is
+      // drawn over the model. The clipped preview stays and says so, rather
+      // than announcing a section that is not being computed.
+      return;
+    }
+    setSectionOutline({ kind: 'computing' });
+    const next = await resolveSectionOutline(geometry, view, section);
+    if (token === sectionTokenRef.current) {
+      setSectionOutline(next);
+    }
+  }
+
+  /**
+   * Drop the exact section and refuse the answer to any request still in
+   * flight. Everything that moves the cut or the model it cuts goes through
+   * here, so an exact section never outlives what it is a section of.
+   */
+  function clearSectionOutline() {
+    sectionTokenRef.current += 1;
+    setSectionOutline((current) =>
+      current.kind === 'clipping' ? current : { kind: 'clipping' }
+    );
+  }
+
+  // A rebuild moves the geometry the exact section was cut from, a preview
+  // replaces it outright, and hiding or isolating a body changes which
+  // geometry it is a section of — either way the cut on screen stops
+  // describing the model. Back to the clipped preview until the plane is
+  // committed again.
+  //
+  // Keyed on what the source SAYS, never on its identity: a finished sync
+  // commits derived state onto a fresh document object at the same version,
+  // and invalidating for that would drop the answer to a section requested
+  // moments earlier and leave the rail on "Clipping preview" for good.
+  //
+  // Read off `viewportGeometry`, which is what is on screen, so a new source
+  // of drawn geometry cannot appear without appearing here: a document drawn
+  // in the live one's place arrives as `drawnInstead`, a stand-in drawn over
+  // it as `standIns`, and a body drawn anywhere but where the document built
+  // it as `drawnElsewhere` — that last one reported by the viewer from the
+  // frame, so it covers mechanisms that declare nothing at all.
+  const sectionBodyKey = viewportGeometry.bodies
+    .map((body) => body.bodyId)
+    .join('|');
+  /**
+   * The live document is keyed by VERSION and everything drawn in its place
+   * by IDENTITY, because that is how truthful each one is. `doc` is re-minted
+   * at the same version and the same geometry every time a sync commits
+   * derived state; a preview or a candidate is minted exactly when the
+   * geometry it stands for changes, so its identity IS its content.
+   */
+  const drawnInstead =
+    viewportGeometry.document === doc ? null : viewportGeometry.document;
+  useEffect(clearSectionOutline, [
+    doc?.version,
+    drawnInstead,
+    viewportGeometry.standIns,
+    viewportGeometry.drawnElsewhere,
+    sectionBodyKey
+  ]);
+
   /** Off → XY → XZ → YZ → off, each plane starting at the model's centre. */
   function cycleSectionView() {
     const order: (SectionPlaneId | null)[] = [null, 'XY', 'XZ', 'YZ'];
@@ -5871,6 +6014,7 @@ export function App() {
     const next = order[(order.indexOf(currentPlane) + 1) % order.length]!;
     if (!next) {
       setViewerSettings(({ sectionView: _cleared, ...rest }) => rest);
+      clearSectionOutline();
       setStatus('Section view off.');
       return;
     }
@@ -5883,13 +6027,40 @@ export function App() {
     setStatus(
       `Section view: ${next} plane. Drag the slider to move the cut; the model itself is untouched.`
     );
+    void requestExactSection({ plane: next, offset });
   }
 
   function setSectionOffset(offset: number) {
+    // The cut has moved, so the exact section that was on screen belongs to
+    // a plane that is no longer there. Back to the clipped preview.
+    clearSectionOutline();
     setViewerSettings((current) =>
       current.sectionView
         ? { ...current, sectionView: { ...current.sectionView, offset } }
         : current
+    );
+  }
+
+  /** Write the exact section — never the display caps — as a DXF drawing. */
+  async function handleExportSectionDxf() {
+    const section = viewerSettings.sectionView;
+    const view = viewportGeometry;
+    if (!section || !view.document) {
+      return;
+    }
+    // Two gates, both the exporter's own: it writes every body the plane
+    // cuts or nothing, which is the state the DXF button is enabled for,
+    // and it takes the viewport's geometry, so a drawing of a model the
+    // user is not looking at is not a thing this call site can ask for.
+    const outline = await import('./lib/sectionOutline');
+    await outline.writeSectionDxf(
+      geometry,
+      view,
+      section,
+      sectionOutline,
+      saveCadTextFile,
+      exportFileStem(view.document.name),
+      setStatus
     );
   }
 
@@ -8581,6 +8752,9 @@ export function App() {
       return;
     }
 
+    const { MAX_SOURCE_IMPORT_BYTES, MAX_SOURCE_IMPORT_MB, runStepImport } =
+      await stepImportRun();
+
     if (lowerName.endsWith('.stl')) {
       if (file.size > MAX_SOURCE_IMPORT_BYTES) {
         setStatus(`STL import is limited to ${MAX_SOURCE_IMPORT_MB} MB.`);
@@ -8858,6 +9032,7 @@ export function App() {
         : null
     );
     const shaprAbort = startImportAbort();
+    const { runStepImport } = await stepImportRun();
     const result = await runStepImport({
       file: pending.inspection.sanitizedStepFile,
       contentType:
@@ -15691,8 +15866,7 @@ export function App() {
         >
           <ViewerShell
             projectId={doc.projectId}
-            bodies={viewerBodies}
-            parameterVisualPreview={visibleParameterPreview}
+            view={viewportGeometry}
             measurementAnnotations={measurementAnnotations}
             measurementCloudSync={[
               doc.projectId,
@@ -15785,6 +15959,7 @@ export function App() {
             onGeometryPresented={(ms) => {
               previewPresentationMs.current = ms;
             }}
+            onBodiesDrawnElsewhere={setBodiesDrawnElsewhere}
             onWheelDeviceLearned={handleWheelDeviceLearned}
             onMovePreviewChange={handleMovePreviewChange}
             moveValuesSetterRef={moveValuesSetterRef}
@@ -16381,6 +16556,12 @@ export function App() {
             }
             onCycleSection={cycleSectionView}
             onSectionOffset={setSectionOffset}
+            // The slider was released, or a key repeat ended: cut it exactly.
+            onSectionCommit={() =>
+              void requestExactSection(viewerSettingsRef.current.sectionView)
+            }
+            onExportSectionDxf={() => void handleExportSectionDxf()}
+            sectionOutline={sectionOutline}
           />
           {!modelingLocked &&
             !panelState.workspaceTourDismissed &&
