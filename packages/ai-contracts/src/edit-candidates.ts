@@ -138,7 +138,7 @@ function recipesForBody(
     });
   const opening = createGrowingHolderProposal(document, selection);
   const source = unmodifiedImportedSource(document, bodyId);
-  if (opening && source) proposals.unshift(opening);
+  if (opening) proposals.unshift(opening);
   const emboss =
     document.derived.bodyRepresentations[
       bodyId as keyof typeof document.derived.bodyRepresentations

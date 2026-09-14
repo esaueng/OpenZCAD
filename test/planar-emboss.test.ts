@@ -9,8 +9,60 @@ import {
 } from '../packages/kernel-adapter/src/planar-emboss';
 import { letteredHolder } from './support/lettered-holder';
 import { faceFingerprint } from '../packages/kernel-adapter/src/exact-witnesses';
+import { transformMatrix } from '../packages/kernel-adapter/src/exact-math';
 
 beforeAll(loadRemusTranslators);
+
+it('verifies lettering in a rigidly placed frame while retaining the exact original profiles', () => {
+  const kernel = new RemusKernel();
+  try {
+    const source = letteredHolder(kernel);
+    const original = recognizePlanarEmboss(kernel, source)!;
+    const placement = [
+      {
+        translation: { x: 20, y: -13, z: 4 },
+        rotationDeg: { x: 0, y: 0, z: 0 }
+      },
+      { translation: { x: 3, y: 7, z: -2 }, rotationDeg: { x: 0, y: 0, z: 90 } }
+    ];
+    let placed = source;
+    for (const transform of placement)
+      placed = kernel.copyAndTransformSolid(
+        placed,
+        transformMatrix(transform.translation, transform.rotationDeg)
+      );
+    const measured = recognizePlanarEmboss(kernel, placed)!;
+    expect(measured).not.toBeNull();
+    expect(measured.capFaceHashes).not.toEqual(original.capFaceHashes);
+    for (const part of ['base', 'text'] as const) {
+      const expected = separatePlanarEmboss(kernel, source, original, part);
+      const actual = separatePlanarEmboss(
+        kernel,
+        source,
+        measured,
+        part,
+        placement
+      );
+      expect(kernel.serializeSolids(Uint32Array.from(actual))).toEqual(
+        kernel.serializeSolids(Uint32Array.from(expected))
+      );
+      expect(() =>
+        separatePlanarEmboss(
+          kernel,
+          source,
+          measured,
+          part,
+          [...placement].reverse()
+        )
+      ).toThrow(/no longer matches/);
+      expect(() =>
+        separatePlanarEmboss(kernel, source, original, part, placement)
+      ).toThrow(/no longer matches/);
+    }
+  } finally {
+    kernel.free();
+  }
+});
 it('separates exact concave raised profiles and retains source identity', () => {
   const kernel = new RemusKernel();
   try {

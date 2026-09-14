@@ -1527,7 +1527,7 @@ test('box selection releases the previous direct-edit target', async ({
   expect(facePoint).not.toBeNull();
   await page.mouse.click(facePoint!.x, facePoint!.y);
   await expect(page.locator('.selection-chip')).toBeVisible();
-  await expect(status).toContainText('push or pull');
+  await expect(status).toContainText('resize the body');
   await expect(
     page.getByRole('region', { name: 'Feature inspector' })
   ).toBeVisible();
@@ -1590,7 +1590,7 @@ test('box selection releases the previous direct-edit target', async ({
   // The empty sweep is silent; the released handle's hint going with the
   // chip is what proves the direct-edit target let go.
   await expect(page.locator('.selection-chip')).toHaveCount(0);
-  await expect(status).not.toContainText('push or pull');
+  await expect(status).not.toContainText('resize the body');
 });
 
 test('the status bar names the rung of the Esc ladder you are on', async ({
@@ -1642,7 +1642,7 @@ test('the status bar names the rung of the Esc ladder you are on', async ({
   expect(facePoint).not.toBeNull();
   await page.mouse.click(facePoint!.x, facePoint!.y);
   await expect(page.locator('.selection-chip')).toBeVisible();
-  await expect(status).toContainText('push or pull');
+  await expect(status).toContainText('resize the body');
   // Selecting the face also opened the edit panel, which takes Escape itself.
   // The prompt has to name that rung, not the one behind it.
   await expect(status).toContainText('Esc closes the panel');

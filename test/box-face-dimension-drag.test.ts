@@ -35,8 +35,8 @@ import { planFaceOffset } from '../apps/web/src/lib/interaction/faceOffsetPlan';
  *
  * The kernel lays `makeBox(width, height, depth)` along x, y, z, so the face
  * a user drags upward is governed by DEPTH — not by the dimension spelled
- * "height". The box is anchored at its minimum corner, so only a max side
- * moves under a pure dimension edit.
+ * "height". Minimum-side resizing also shifts the source base; the complete
+ * six-side contract is exercised in rounded-box-resize.test.ts.
  */
 
 const user = toUserId('user_box_face_dimension_drag');
@@ -241,18 +241,18 @@ describe('box face dimension drag', { timeout: 120_000 }, () => {
     expect(result.volume).toBeCloseTo(oracle.body.volume, 6);
   });
 
-  it('keeps a min side on the local push/pull', async () => {
+  it('keeps an explicitly requested min-side extrusion local', async () => {
     const model = await blendedBox('fillet');
     const face = capFace(model.body, -1);
     expect(face.reference?.lineageName).toBe('modifier.box.face.z-min');
 
-    // The box grows from its minimum corner: moving the min side would have
-    // to move the body too, so the drag stays a face offset.
+    // Local extrusion is still available explicitly, alongside body resize.
     const plan = planFaceOffset({
       document: model.document,
       bodyId: model.bodyId,
       face,
       faceHash: face.hash,
+      localOnly: true,
       offset: 5
     });
     expect(plan?.kind).toBe('direct-edit');
