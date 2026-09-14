@@ -3,9 +3,11 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { drillHole } from './exact-cylinder-ops';
 import {
   collectRecognizedImportedFeatures,
+  importedProofDisplayDimensions,
   RemusImportedFeatureQuery,
   recognizeImportedFeatureOnSolid
 } from './imported-feature-query';
+import { recognitionRefusalMessage } from './imported-feature-recognition';
 import { RemusKernel } from './remus-runtime';
 
 describe('live imported-feature recognition query', () => {
@@ -186,5 +188,55 @@ describe('live imported-feature recognition query', () => {
     expect(
       proof?.kind === 'counterbore' ? proof.counterboreDepth : null
     ).toBeCloseTo(2, 8);
+  });
+
+  it('publishes stable display dimensions keyed by proof field names', () => {
+    const solid = plateWithHole('counterbore');
+    const faces = Array.from(kernel.getSolidFaces(solid));
+    const query = new RemusImportedFeatureQuery(kernel, solid);
+    const seed = faces.find((face) => {
+      const candidate = query.getFace(String(face));
+      return (
+        candidate?.surface.kind === 'cylinder' &&
+        candidate.surface.radialSense === 'toward-axis'
+      );
+    });
+    expect(seed).toBeDefined();
+    const outcome = recognizeImportedFeatureOnSolid(kernel, solid, seed!);
+    expect(outcome.status).toBe('recognized');
+    if (outcome.status !== 'recognized') {
+      throw new Error('Expected the counterbore seed to be recognized.');
+    }
+    // The Inspector renders these keys verbatim; renaming one is a UI break.
+    expect(importedProofDisplayDimensions(outcome.proof)).toEqual({
+      outerDiameter: 10,
+      innerDiameter: 5,
+      counterboreDepth: 2,
+      totalDepth: 6
+    });
+  });
+
+  it('names every typed refusal reason without guessing', () => {
+    expect(recognitionRefusalMessage('unsupported-surface')).toMatch(
+      /surface class/i
+    );
+    expect(recognitionRefusalMessage('ambiguous-twins')).toMatch(
+      /two or more faces/i
+    );
+    expect(recognitionRefusalMessage('seed-face-missing')).toMatch(
+      /no longer on/i
+    );
+    // A box top face proves nothing and must refuse with its typed reason,
+    // not with a guessed feature kind.
+    const box = kernel.makeBox(10, 10, 10);
+    const top = Array.from(kernel.getSolidFaces(box))[0]!;
+    const refusal = recognizeImportedFeatureOnSolid(kernel, box, top);
+    expect(refusal.status).toBe('unsupported');
+    if (refusal.status !== 'unsupported') {
+      throw new Error('Expected the box face to be refused.');
+    }
+    expect(recognitionRefusalMessage(refusal.reason).length).toBeGreaterThan(
+      0
+    );
   });
 });

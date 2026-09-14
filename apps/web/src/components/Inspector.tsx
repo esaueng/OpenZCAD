@@ -6,6 +6,8 @@ import { coerceParamValue } from '@openzcad/document-core';
 import { findFontFace } from '@openzcad/geometry';
 import { FEATURE_COLORS, featureColor } from '@openzcad/shared';
 import type {
+  FaceRecognitionSummary,
+  ProjectDocument,
   UnitSystem,
   BodyId,
   BodyRepresentation,
@@ -61,6 +63,11 @@ import {
   canRemoveImportedBlendFace,
   importedBlendEditNotice
 } from '../lib/interaction/filletFaceEdit';
+import {
+  useImportedFaceRecognition,
+  type ImportedFaceRecognitionQuery,
+  type RecognizeImportedFaceInput
+} from '../hooks/useImportedFaceRecognition';
 
 function isValidTextSketchObject(
   value: Extract<SketchObjectData, { objectKind: 'text' }>
@@ -161,6 +168,34 @@ export interface InspectorCallbacks {
   /** Pins an inferred feature so its editable form becomes the panel subject. */
   onPinFeature(feature: FeatureNode): void;
   onDeleteFeature(feature: FeatureNode): void;
+  /**
+   * On-demand recognition of the selected imported STEP face (Phase D of the
+   * imported STEP edit plan). The Inspector (already a lazy chunk) owns the
+   * worker query effect, so nothing about recognition joins the entry chunk:
+   * the host passes the document, the face query, the caller-owned cache,
+   * and a bound worker call, and the panel queries lazily while it shows a
+   * selected imported face. Absent in tests, where the panel falls back to
+   * today's geometry-only display or to the explicit `recognition` override
+   * below.
+   */
+  recognitionDocument?: ProjectDocument | null;
+  recognitionQuery?: ImportedFaceRecognitionQuery | null;
+  recognitionCache?: Map<string, FaceRecognitionSummary>;
+  recognitionWorker?: {
+    recognizeImportedFace: (
+      input: RecognizeImportedFaceInput
+    ) => Promise<FaceRecognitionSummary>;
+  };
+  /**
+   * Explicit recognition outcome, for tests only. When present (even null)
+   * the panel renders it directly and never queries; when absent the panel
+   * queries through the props above.
+   */
+  recognition?: FaceRecognitionSummary | null;
+  /** True while the recognition query is in flight. */
+  recognitionPending?: boolean;
+  /** Transport failure of the recognition query, if it errored. */
+  recognitionError?: string | null;
   /** Include/exclude one declared solid of an imported-step feature. */
   onToggleImportedSolid(featureId: FeatureId, solidIndex: number): void;
   /** Drag-phase body appearance patch; null restores the committed look. */
@@ -638,13 +673,117 @@ const SURFACE_LABELS: Record<string, string> = {
   bezier: 'Bezier face'
 };
 
+const RECOGNIZED_FEATURE_LABELS: Record<string, string> = {
+  'blind-cylindrical-hole': 'Blind hole',
+  counterbore: 'Counterbore',
+  countersink: 'Countersink',
+  'cylindrical-boss': 'Boss',
+  'prismatic-pocket': 'Pocket',
+  'conical-taper': 'Taper'
+};
+
+const RECOGNIZED_DIMENSION_LABELS: Record<string, string> = {
+  diameter: 'diameter',
+  depth: 'depth',
+  outerDiameter: 'outer diameter',
+  innerDiameter: 'inner diameter',
+  counterboreDepth: 'counterbore depth',
+  totalDepth: 'total depth',
+  openingDiameter: 'opening diameter',
+  holeDiameter: 'hole diameter',
+  angleRadians: 'included angle',
+  countersinkDepth: 'countersink depth',
+  height: 'height',
+  referenceRadius: 'reference radius',
+  oppositeRadius: 'end radius',
+  length: 'length'
+};
+
+function formatRecognitionDimension(
+  key: string,
+  value: number,
+  units: UnitSystem
+): string {
+  if (key === 'angleRadians') {
+    return `${formatNumber((value * 180) / Math.PI)}°`;
+  }
+  return `${formatNumber(value)} ${units}`;
+}
+
+/**
+ * On-demand recognition of the selected imported STEP face (Phase D of the
+ * imported STEP edit plan). Display-only: recognized kind + dimensions, or
+ * the typed refusal reason when the proof declines. The through-hole
+ * diameter form above stays the sole edit committed through recognition;
+ * every other recognized kind renders its dimensions read-only with no
+ * commit path.
+ */
+function ImportedFaceRecognition({
+  recognition,
+  pending,
+  error,
+  units
+}: {
+  recognition?: FaceRecognitionSummary | null;
+  pending?: boolean;
+  error?: string | null;
+  units: UnitSystem;
+}) {
+  if (pending) {
+    return <p className="muted direct-edit-note">Recognizing feature…</p>;
+  }
+  if (error) {
+    return (
+      <p className="muted direct-edit-note">
+        Feature recognition is unavailable: {error}
+      </p>
+    );
+  }
+  if (!recognition) {
+    return null;
+  }
+  if (recognition.kind === 'recognized') {
+    const label =
+      (recognition.featureKind !== undefined
+        ? RECOGNIZED_FEATURE_LABELS[recognition.featureKind]
+        : undefined) ?? 'Recognized feature';
+    const dimensions = Object.entries(recognition.dimensions ?? {});
+    return (
+      <div className="kv-grid">
+        <b>recognized</b>
+        <span>{label}</span>
+        {dimensions.map(([key, value]) => (
+          <Fragment key={key}>
+            <b>{RECOGNIZED_DIMENSION_LABELS[key] ?? key}</b>
+            <span>{formatRecognitionDimension(key, value, units)}</span>
+          </Fragment>
+        ))}
+      </div>
+    );
+  }
+  return (
+    <p className="muted direct-edit-note">
+      {recognition.refusalReason !== undefined
+        ? `Not a recognized feature (${recognition.refusalReason}): ${recognition.message}`
+        : recognition.message}
+    </p>
+  );
+}
+
 function FaceDirectEdit({
   body,
   selection,
   scope,
   units,
   onResizeThroughHole,
-  onRemoveFaceFeature
+  onRemoveFaceFeature,
+  recognition,
+  recognitionPending,
+  recognitionError,
+  recognitionDocument,
+  recognitionQuery,
+  recognitionCache,
+  recognitionWorker
 }: {
   body: BodyRepresentation;
   selection: TopologySelection;
@@ -652,7 +791,38 @@ function FaceDirectEdit({
   units: UnitSystem;
   onResizeThroughHole: InspectorCallbacks['onResizeThroughHole'];
   onRemoveFaceFeature: InspectorCallbacks['onRemoveFaceFeature'];
+  recognition?: FaceRecognitionSummary | null;
+  recognitionPending?: boolean;
+  recognitionError?: string | null;
+  recognitionDocument?: ProjectDocument | null;
+  recognitionQuery?: ImportedFaceRecognitionQuery | null;
+  recognitionCache?: Map<string, FaceRecognitionSummary>;
+  recognitionWorker?: {
+    recognizeImportedFace: (
+      input: RecognizeImportedFaceInput
+    ) => Promise<FaceRecognitionSummary>;
+  };
 }) {
+  // On-demand per-face recognition (Phase D): the query effect lives here in
+  // the lazy Inspector chunk, firing only while this panel shows a selected
+  // imported face. An explicit `recognition` prop (tests) renders directly
+  // and never queries.
+  const hasRecognitionOverride = recognition !== undefined;
+  const liveRecognition = useImportedFaceRecognition(
+    hasRecognitionOverride ? null : (recognitionWorker ?? null),
+    hasRecognitionOverride ? null : (recognitionDocument ?? null),
+    hasRecognitionOverride ? null : (recognitionQuery ?? null),
+    hasRecognitionOverride ? null : recognitionCache
+  );
+  const shownRecognition = hasRecognitionOverride
+    ? recognition
+    : liveRecognition.summary;
+  const shownPending = hasRecognitionOverride
+    ? (recognitionPending ?? false)
+    : liveRecognition.pending;
+  const shownError = hasRecognitionOverride
+    ? (recognitionError ?? null)
+    : liveRecognition.error;
   const face = body.topology?.faces.find(
     (candidate) => candidate.hash === selection.hash
   );
@@ -764,6 +934,12 @@ function FaceDirectEdit({
           Remove selected feature
         </button>
       )}
+      <ImportedFaceRecognition
+        recognition={shownRecognition}
+        pending={shownPending}
+        error={shownError}
+        units={units}
+      />
       <p className="muted direct-edit-note">
         {editNotice ??
           'STEP stores faces, not the original feature history. OpenZCAD only applies edits the exact kernel can validate; unsupported face combinations remain unchanged.'}
@@ -1207,6 +1383,15 @@ export function Inspector(props: InspectorProps) {
             size: data.featureKind === 'fillet' ? data.radius : data.distance,
             ...(data.featureKind === 'chamfer' && data.angleDeg !== undefined
               ? { angleDeg: data.angleDeg }
+              : {}),
+            ...(data.featureKind === 'fillet' && data.endRadius !== undefined
+              ? {
+                  endRadius: data.endRadius,
+                  radiusLaw: data.radiusLaw ?? 'linear'
+                }
+              : {}),
+            ...(data.featureKind === 'chamfer' && data.distance2 !== undefined
+              ? { distance2: data.distance2 }
               : {})
           }}
           submitLabel="Apply"
@@ -1450,6 +1635,13 @@ export function Inspector(props: InspectorProps) {
               units={units}
               onResizeThroughHole={props.onResizeThroughHole}
               onRemoveFaceFeature={props.onRemoveFaceFeature}
+              recognition={props.recognition}
+              recognitionPending={props.recognitionPending}
+              recognitionError={props.recognitionError}
+              recognitionDocument={props.recognitionDocument}
+              recognitionQuery={props.recognitionQuery}
+              recognitionCache={props.recognitionCache}
+              recognitionWorker={props.recognitionWorker}
             />
           )}
         {selectedBody && !selectedBody.consumed && (
@@ -1560,6 +1752,13 @@ export function Inspector(props: InspectorProps) {
               units={units}
               onResizeThroughHole={props.onResizeThroughHole}
               onRemoveFaceFeature={props.onRemoveFaceFeature}
+              recognition={props.recognition}
+              recognitionPending={props.recognitionPending}
+              recognitionError={props.recognitionError}
+              recognitionDocument={props.recognitionDocument}
+              recognitionQuery={props.recognitionQuery}
+              recognitionCache={props.recognitionCache}
+              recognitionWorker={props.recognitionWorker}
             />
           )}
         <BodyStats body={selectedBody} units={units} />

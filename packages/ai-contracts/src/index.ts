@@ -6,7 +6,8 @@ import {
 } from '@openzcad/document-core';
 import {
   isFeatureSuppressed,
-  isImportedSourceReference
+  isImportedSourceReference,
+  isReadOnlyRecognizedImportedFeature
 } from '@openzcad/shared';
 import type {
   SketchObjectData,
@@ -15,12 +16,14 @@ import type {
   BodyTopology,
   BooleanOperation,
   DirectEditOperation,
+  EditAnalysisRequest,
   FaceGeometry,
   FaceTopologyReferenceV5,
   FeatureId,
   PatternKind,
   ParametricPlane,
   ParamValue,
+  PlanarEmbossSelection,
   OpposingPlanarFacePair,
   PrimitiveKind,
   ProjectDocument,
@@ -38,6 +41,18 @@ import type {
   Vector3
 } from '@openzcad/shared';
 import { isSketchDimensionField } from './sketch-dimensions';
+import {
+  createEditCandidateCatalog,
+  type EditCandidateCatalog
+} from './edit-candidates';
+export {
+  unmodifiedImportedSource,
+  createEditCandidateCatalog,
+  proposalForEditCandidate,
+  expandEditCandidateProposal,
+  type EditCandidate,
+  type EditCandidateCatalog
+} from './edit-candidates';
 export {
   createGrowingHolderProposal,
   growingHolderProposalTarget,
@@ -131,6 +146,20 @@ export type CadFaceSketchPlaneRef = Omit<
 };
 
 export type CadPatchOperation =
+  | {
+      /** App-compiled only; the AI selects its measured candidate. */
+      kind: 'add_raised_feature_control';
+      targetBodyId: string;
+      parameter: string;
+      selection: PlanarEmbossSelection;
+    }
+  | {
+      kind: 'use_edit_candidate';
+      candidateId: string;
+      targetBodyId: string;
+      parameterNames: Array<{ key: string; name: string }>;
+      analysis: EditAnalysisRequest | null;
+    }
   | {
       kind: 'set_parameter';
       name: string;
@@ -415,6 +444,7 @@ export interface CadDigestFaceSnapshot {
 }
 
 export interface CadDigestBodyTopology {
+  recognizedPlanarEmboss?: PlanarEmbossSelection;
   faceCount: number;
   edgeCount: number;
   /**
@@ -478,6 +508,7 @@ export interface CadDigestBodyTopology {
 }
 
 export interface CadDocumentDigest {
+  editCatalog?: EditCandidateCatalog;
   schemaVersion: number;
   projectId: string;
   name: string;
@@ -893,13 +924,42 @@ export function createCadDocumentDigest(
       ])
     );
     const prioritizedFaces = [
-      ...body.topology.faces.filter((face) => provenPairHashes.has(face.hash)),
-      ...body.topology.faces.filter((face) => !provenPairHashes.has(face.hash))
+      ...body.topology.faces.filter((face) =>
+        context.topologies.some(
+          (selected) =>
+            selected.bodyId === bodyId &&
+            selected.kind === 'face' &&
+            selected.hash === face.hash
+        )
+      ),
+      ...body.topology.faces.filter(
+        (face) =>
+          provenPairHashes.has(face.hash) &&
+          !context.topologies.some(
+            (selected) =>
+              selected.bodyId === bodyId &&
+              selected.kind === 'face' &&
+              selected.hash === face.hash
+          )
+      ),
+      ...body.topology.faces.filter(
+        (face) =>
+          !provenPairHashes.has(face.hash) &&
+          !context.topologies.some(
+            (selected) =>
+              selected.bodyId === bodyId &&
+              selected.kind === 'face' &&
+              selected.hash === face.hash
+          )
+      )
     ];
     const faces = prioritizedFaces.slice(0, faceLimit).map(compactFace);
     remainingEdges -= edges.length;
     remainingFaces -= faces.length;
     topologyByBodyId.set(bodyId, {
+      ...(body.topology.recognizedPlanarEmboss
+        ? { recognizedPlanarEmboss: body.topology.recognizedPlanarEmboss }
+        : {}),
       faceCount: body.topology.faces.length,
       edgeCount: body.topology.edges.length,
       modifierEdgeCount: edges.filter((edge) => edge.modifierCandidate).length,
@@ -907,11 +967,17 @@ export function createCadDocumentDigest(
       edgeInventoryComplete: edges.length === body.topology.edges.length,
       ...(body.topology.recognizedImportedFeatures
         ? {
-            recognizedImportedFeatures:
-              body.topology.recognizedImportedFeatures.slice(
-                0,
-                MAX_DIGEST_TOPOLOGY_PER_BODY
+            // Editable proofs first: a read-only kernel-recognized feature is
+            // context, while an exactly proved one is what an operation binds
+            // to, and the cap must never spend the budget on the former.
+            recognizedImportedFeatures: [
+              ...body.topology.recognizedImportedFeatures.filter(
+                (feature) => !isReadOnlyRecognizedImportedFeature(feature)
+              ),
+              ...body.topology.recognizedImportedFeatures.filter(
+                isReadOnlyRecognizedImportedFeature
               )
+            ].slice(0, MAX_DIGEST_TOPOLOGY_PER_BODY)
           }
         : {}),
       ...(body.topology.opposingPlanarFacePairs
@@ -933,6 +999,7 @@ export function createCadDocumentDigest(
 
   return {
     schemaVersion: document.schemaVersion,
+    editCatalog: createEditCandidateCatalog(document, context),
     projectId: document.projectId,
     name: document.name,
     units: document.units,
@@ -1983,6 +2050,55 @@ export const CAD_PATCH_JSON_SCHEMA = {
         'Enabled deterministic operations only. Recognized imported-feature editing is intentionally omitted until recognition diagnostics expose an exact stable command contract.',
       items: {
         anyOf: [
+          {
+            type: 'object',
+            additionalProperties: false,
+            description:
+              'Select an app-measured editCatalog candidate. The browser builds its exact commands, just like the direct UI action. Use only a candidate listed in the current digest. This creates parameter bindings at their current values; request value changes in a later proposal. Do not mix with other operation kinds.',
+            properties: {
+              kind: { type: 'string', const: 'use_edit_candidate' },
+              candidateId: { type: 'string' },
+              targetBodyId: { type: 'string' },
+              parameterNames: {
+                type: 'array',
+                maxItems: 30,
+                items: {
+                  type: 'object',
+                  additionalProperties: false,
+                  properties: {
+                    key: { type: 'string' },
+                    name: { type: 'string' }
+                  },
+                  required: ['key', 'name']
+                }
+              },
+              analysis: {
+                anyOf: [
+                  {
+                    type: 'object',
+                    additionalProperties: false,
+                    properties: {
+                      bodyId: { type: 'string' },
+                      faceHashes: {
+                        type: 'array',
+                        maxItems: 2,
+                        items: { type: 'integer', minimum: 1 }
+                      }
+                    },
+                    required: ['bodyId', 'faceHashes']
+                  },
+                  { type: 'null' }
+                ]
+              }
+            },
+            required: [
+              'kind',
+              'candidateId',
+              'targetBodyId',
+              'parameterNames',
+              'analysis'
+            ]
+          },
           {
             type: 'object',
             additionalProperties: false,
@@ -3257,6 +3373,48 @@ export function parseCadPatchProposal(
   for (const rawOperation of candidate.operations) {
     const operation = record(rawOperation);
     switch (operation.kind) {
+      case 'add_raised_feature_control':
+        if (
+          typeof operation.targetBodyId !== 'string' ||
+          typeof operation.parameter !== 'string' ||
+          !isValidParameterName(operation.parameter) ||
+          !isRecognizedLettering({
+            side: 'negative',
+            selection: operation.selection
+          })
+        )
+          throw new Error('Invalid raised-feature control.');
+        break;
+      case 'use_edit_candidate':
+        if (operation.analysis !== null) {
+          const analysis = record(operation.analysis);
+          if (
+            analysis.bodyId !== operation.targetBodyId ||
+            !Array.isArray(analysis.faceHashes) ||
+            analysis.faceHashes.length > 2 ||
+            analysis.faceHashes.some(
+              (hash) => !Number.isSafeInteger(hash) || Number(hash) <= 0
+            )
+          )
+            throw new Error('Invalid candidate analysis scope.');
+        }
+        if (
+          typeof operation.candidateId !== 'string' ||
+          operation.candidateId.length > 512 ||
+          typeof operation.targetBodyId !== 'string' ||
+          !Array.isArray(operation.parameterNames) ||
+          operation.parameterNames.length > 30 ||
+          operation.parameterNames.some((value) => {
+            const rename = record(value);
+            return (
+              typeof rename.key !== 'string' ||
+              typeof rename.name !== 'string' ||
+              !isValidParameterName(rename.name)
+            );
+          })
+        )
+          throw new Error('Invalid use_edit_candidate operation.');
+        break;
       case 'set_parameter':
         if (
           typeof operation.name !== 'string' ||
@@ -3985,16 +4143,24 @@ function exactDigestImportedFeature(
   const body = digest.bodies?.find(
     (candidate) => candidate.bodyId === bodyId && !candidate.consumed
   );
-  const feature = body?.topology?.recognizedImportedFeatures?.find(
+  const matches = (body?.topology?.recognizedImportedFeatures ?? []).filter(
     (candidate) =>
       candidate.kind === kind &&
       candidate.seedFaceHash === faceHash &&
       candidate.seedFaceReference !== undefined &&
       canonicalJson(candidate.seedFaceReference) === canonicalJson(reference)
   );
-  if (!feature) {
+  const feature = matches[0];
+  if (!feature || matches.length > 1) {
     throw new Error(
       `add_direct_edit contains a stale or unavailable ${kind} proof for body ${bodyId}. Refresh the proposal from the current document digest.`
+    );
+  }
+  // Read-only families are recognized by a second recognizer and carry no
+  // proof an edit can replay; an operation may never bind to one.
+  if (isReadOnlyRecognizedImportedFeature(feature)) {
+    throw new Error(
+      `add_direct_edit targets a read-only ${kind} on body ${bodyId}. Recognized ${kind} features are published for reading only.`
     );
   }
   return feature;
@@ -4038,6 +4204,40 @@ export function validateCadPatchProposalAgainstDigest(
   );
   for (const operation of proposal.operations) {
     switch (operation.kind) {
+      case 'add_raised_feature_control': {
+        const measured = digest.bodies?.find(
+          (body) => body.bodyId === operation.targetBodyId && !body.consumed
+        )?.topology?.recognizedPlanarEmboss;
+        if (
+          !measured ||
+          canonicalJson(measured) !== canonicalJson(operation.selection)
+        )
+          throw new Error('Raised features do not match the measured group.');
+        break;
+      }
+      case 'use_edit_candidate': {
+        const candidate = digest.editCatalog?.candidates.find(
+          (candidate) =>
+            candidate.id === operation.candidateId &&
+            candidate.bodyId === operation.targetBodyId
+        );
+        if (
+          !candidate ||
+          canonicalJson(candidate.analysis) !==
+            canonicalJson(operation.analysis) ||
+          operation.parameterNames.some(
+            (rename) =>
+              !candidate.parameters.some(
+                (parameter) => parameter.key === rename.key
+              )
+          )
+        ) {
+          throw new Error(
+            'The selected edit candidate is not in the current document analysis.'
+          );
+        }
+        break;
+      }
       case 'set_parameter':
         parameterNames.add(operation.name);
         break;
@@ -4440,6 +4640,10 @@ export function describeCadPatchOperation(
   operation: CadPatchOperation
 ): string {
   switch (operation.kind) {
+    case 'add_raised_feature_control':
+      return `Create ${operation.parameter} visibility control for the measured raised features`;
+    case 'use_edit_candidate':
+      return `Create measured parameter controls on ${operation.targetBodyId}`;
     case 'set_parameter':
       return `Set parameter ${operation.name} to ${operation.expression}`;
     case 'rename_parameter':
