@@ -82,6 +82,9 @@ export type SketchConstraintToolKind =
   | 'distance'
   | 'angle';
 
+/** Modify tools exposed by the sketch rail: fillet, chamfer, offset. */
+export type SketchEditToolKind = 'fillet' | 'chamfer' | 'offset';
+
 export type SketchConstraintPick =
   | { kind: 'object'; objectId: string }
   | { kind: 'point'; objectId: string; point: 'start' | 'end' | 'center' };
@@ -90,6 +93,16 @@ export type SketchConstraintPick =
 export interface PendingSketchConstraint {
   kind: SketchConstraintToolKind;
   picks: SketchConstraintPick[];
+}
+
+/**
+ * An armed modify tool collecting entity picks. The modify tools take whole
+ * entities rather than snap points: a fillet replaces the corner between two
+ * lines, so what it needs is the lines, not one of their ends.
+ */
+export interface PendingSketchEdit {
+  kind: SketchEditToolKind;
+  picks: string[];
 }
 
 export interface SketchSessionState {
@@ -104,6 +117,8 @@ export interface SketchSessionState {
   selectedObjectId: string | null;
   /** Armed constraint tool, if any; picking routes here instead of select. */
   pendingConstraint: PendingSketchConstraint | null;
+  /** Armed modify tool, if any; picking routes here instead of select. */
+  pendingEdit: PendingSketchEdit | null;
 }
 
 export type OperationPhase =
@@ -197,6 +212,8 @@ export type InteractionEvent =
       kind: SketchConstraintToolKind | null;
     }
   | { type: 'sketch-constraint-pick'; pick: SketchConstraintPick }
+  | { type: 'sketch-edit-tool'; kind: SketchEditToolKind | null }
+  | { type: 'sketch-edit-pick'; objectId: string }
   | { type: 'exit-sketch' }
   | { type: 'escape' }
   | { type: 'clear' }
@@ -231,6 +248,7 @@ export function escapeTarget(
   | 'end-drawing'
   | 'exit-drawing-tool'
   | 'cancel-constraint'
+  | 'cancel-edit'
   | 'clear-sketch-selection'
   | 'clear-selection'
   | 'exit-sketch'
@@ -246,6 +264,9 @@ export function escapeTarget(
     // abandon it, never fall through and exit the sketch mid-pick.
     if (state.session.pendingConstraint) {
       return 'cancel-constraint';
+    }
+    if (state.session.pendingEdit) {
+      return 'cancel-edit';
     }
     if (state.session.tool !== 'select') {
       return 'exit-drawing-tool';
@@ -414,7 +435,8 @@ export function interactionReducer(
           circleMode: 'center-radius',
           drawing: false,
           selectedObjectId: null,
-          pendingConstraint: null
+          pendingConstraint: null,
+          pendingEdit: null
         }
       };
     case 'sketch-circle-mode':
@@ -429,7 +451,8 @@ export function interactionReducer(
           circleMode: event.mode,
           drawing: false,
           selectedObjectId: null,
-          pendingConstraint: null
+          pendingConstraint: null,
+          pendingEdit: null
         }
       };
     case 'sketch-tool':
@@ -444,7 +467,8 @@ export function interactionReducer(
           drawing: false,
           selectedObjectId:
             event.tool === 'select' ? state.session.selectedObjectId : null,
-          pendingConstraint: null
+          pendingConstraint: null,
+          pendingEdit: null
         }
       };
     case 'sketch-constraint-tool':
@@ -460,7 +484,10 @@ export function interactionReducer(
           // its pick sequence.
           tool: 'select',
           drawing: false,
-          pendingConstraint: event.kind ? { kind: event.kind, picks: [] } : null
+          pendingConstraint: event.kind
+            ? { kind: event.kind, picks: [] }
+            : null,
+          pendingEdit: null
         }
       };
     case 'sketch-constraint-pick':
@@ -474,6 +501,36 @@ export function interactionReducer(
           pendingConstraint: {
             ...state.session.pendingConstraint,
             picks: [...state.session.pendingConstraint.picks, event.pick]
+          }
+        }
+      };
+    case 'sketch-edit-tool':
+      if (state.mode !== 'sketch') {
+        return state;
+      }
+      return {
+        ...state,
+        session: {
+          ...state.session,
+          // Picking rides the select tool's hit-testing, exactly like the
+          // constraint tools; arming a modify tool always lands there.
+          tool: 'select',
+          drawing: false,
+          pendingConstraint: null,
+          pendingEdit: event.kind ? { kind: event.kind, picks: [] } : null
+        }
+      };
+    case 'sketch-edit-pick':
+      if (state.mode !== 'sketch' || !state.session.pendingEdit) {
+        return state;
+      }
+      return {
+        ...state,
+        session: {
+          ...state.session,
+          pendingEdit: {
+            ...state.session.pendingEdit,
+            picks: [...state.session.pendingEdit.picks, event.objectId]
           }
         }
       };
@@ -521,6 +578,11 @@ export function interactionReducer(
         case 'cancel-constraint':
           return interactionReducer(state, {
             type: 'sketch-constraint-tool',
+            kind: null
+          });
+        case 'cancel-edit':
+          return interactionReducer(state, {
+            type: 'sketch-edit-tool',
             kind: null
           });
         case 'exit-drawing-tool':
@@ -854,15 +916,17 @@ export function toolCardFor(state: InteractionState): ToolCardModel | null {
         title,
         hint: state.session.pendingConstraint
           ? 'Pick geometry for the constraint · Esc cancels.'
-          : state.session.tool === 'select'
-            ? 'Select an entity to edit its exact values.'
-            : state.session.tool === 'circle'
-              ? state.session.circleMode === 'center-radius'
-                ? 'Place a center, then set the radius. Hold Shift for free placement.'
-                : state.session.circleMode === 'two-point-diameter'
-                  ? 'Place opposite diameter endpoints. Tab cycles overlapping snaps.'
-                  : 'Place three circumference points. Collinear input is rejected.'
-              : 'Draw with exact geometry snaps. Esc ends a chain.'
+          : state.session.pendingEdit
+            ? 'Pick the geometry to modify · Esc cancels.'
+            : state.session.tool === 'select'
+              ? 'Select an entity to edit its exact values.'
+              : state.session.tool === 'circle'
+                ? state.session.circleMode === 'center-radius'
+                  ? 'Place a center, then set the radius. Hold Shift for free placement.'
+                  : state.session.circleMode === 'two-point-diameter'
+                    ? 'Place opposite diameter endpoints. Tab cycles overlapping snaps.'
+                    : 'Place three circumference points. Collinear input is rejected.'
+                : 'Draw with exact geometry snaps. Esc ends a chain.'
       };
     case 'idle':
       return null;
