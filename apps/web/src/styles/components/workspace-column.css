@@ -806,7 +806,6 @@
 .workspace.column-layout .viewer-area.has-inspector .tool-card {
   --tool-card-room: calc(100% - var(--column-w) - var(--context-w) - 50px);
   left: calc(var(--column-w) + 20px + var(--tool-card-room) / 2);
-  width: max(280px, min(680px, var(--tool-card-room)));
 }
 
 /* The Extrude editor occupies the right edge; the compact card's centering
