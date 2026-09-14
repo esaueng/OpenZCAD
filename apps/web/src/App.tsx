@@ -102,7 +102,6 @@ import {
   resolveFaceAttachment,
   type FaceAttachmentCandidate
 } from '@openzcad/kernel-adapter/face-attachment';
-import { parseStl } from '@openzcad/io-stl';
 import type {
   ArtifactKind,
   AccountDeletionScope,
@@ -413,6 +412,7 @@ import {
   cylinderPreviewProfile
 } from './lib/interaction/cylinderRadius';
 import {
+  primitiveBoxFaceAncestor,
   primitiveCylinderRadiusAncestor,
   primitiveCylinderScale,
   primitiveCylinderHeightAncestor
@@ -527,17 +527,21 @@ import type {
  * can leave one focused after the user clicks a face in the viewport; let the
  * face shortcut through in that specific case without touching its value.
  */
-/** The FaceTarget fields that make a far-cap pick an edit of its extrude. */
-function extrudeCapTargetFields(
+/** Freeze the history-edit intent at selection, for both copy and planning. */
+function faceOffsetTargetFields(
   document: ProjectDocument | null,
   bodyId: string,
   reference: FaceTopology['reference'],
   faceHash: number
-): Pick<FaceTarget, 'extrudeFeatureId'> {
+): Pick<FaceTarget, 'extrudeFeatureId' | 'resizeBodyFeatureId'> {
   const extrude = document
     ? extrudeCapAncestor(document, bodyId as BodyId, reference, faceHash)
     : null;
-  return extrude ? { extrudeFeatureId: extrude.feature.featureId } : {};
+  if (extrude) return { extrudeFeatureId: extrude.feature.featureId };
+  const box = document
+    ? primitiveBoxFaceAncestor(document, bodyId as BodyId, reference, faceHash)
+    : null;
+  return box ? { resizeBodyFeatureId: box.primitive.featureId } : {};
 }
 
 function focusedControlOwnsSpace(target: HTMLElement | null): boolean {
@@ -2405,7 +2409,7 @@ export function App() {
       previewBaseIsCurrent(candidate) &&
       current.mode === 'face' &&
       candidate.selectionKey ===
-        `${current.op}:${current.target.bodyId}:${current.target.topologyId}`
+        `${current.op}:${current.target.bodyId}:${current.target.topologyId}:${Boolean(current.target.localFaceOffset)}`
     );
   }
   const cylinderRadiusPreview = useRef(
@@ -2416,7 +2420,7 @@ export function App() {
         const current = interactionRef.current;
         if (!plan || !base || current.mode !== 'face') return null;
         return {
-          selectionKey: `${current.op}:${current.target.bodyId}:${current.target.topologyId}`,
+          selectionKey: `${current.op}:${current.target.bodyId}:${current.target.topologyId}:${Boolean(current.target.localFaceOffset)}`,
           document: plan.command.apply(base),
           command: plan.command,
           radius,
@@ -2481,7 +2485,7 @@ export function App() {
         const current = interactionRef.current;
         return base && plan && current.mode === 'face'
           ? {
-              selectionKey: `${current.op}:${current.target.bodyId}:${current.target.topologyId}`,
+              selectionKey: `${current.op}:${current.target.bodyId}:${current.target.topologyId}:${Boolean(current.target.localFaceOffset)}`,
               document: plan.command.apply(base),
               offset,
               bodyId: plan.bodyId,
@@ -8588,7 +8592,11 @@ export function App() {
       }
       let parsed;
       try {
-        parsed = parseStl(await file.arrayBuffer(), file.name);
+        const [{ parseStl }, contents] = await Promise.all([
+          import('@openzcad/io-stl'),
+          file.arrayBuffer()
+        ]);
+        parsed = parseStl(contents, file.name);
       } catch (error) {
         setStatus(errorMessage(error, 'STL import failed.'));
         return;
@@ -9866,7 +9874,7 @@ export function App() {
           : {}),
         ...(removableImportedBlend ? { canRemoveFaceFeature: true } : {}),
         ...(faceTopology && selection.hash !== undefined
-          ? extrudeCapTargetFields(
+          ? faceOffsetTargetFields(
               doc,
               selection.bodyId,
               faceTopology.reference,
@@ -10182,7 +10190,7 @@ export function App() {
 
   const offsetInteractionKey =
     interaction.mode === 'face' && interaction.op === 'offset-face'
-      ? `${interaction.target.bodyId}:${interaction.target.topologyId}`
+      ? `${interaction.target.bodyId}:${interaction.target.topologyId}:${Boolean(interaction.target.localFaceOffset)}`
       : null;
   useEffect(() => {
     offsetPreview.clear();
@@ -11914,7 +11922,7 @@ export function App() {
       ) {
         continue;
       }
-      const extrudeFields = extrudeCapTargetFields(
+      const extrudeFields = faceOffsetTargetFields(
         document,
         bodyId,
         face.reference,
@@ -12007,7 +12015,7 @@ export function App() {
       return null;
     }
     const total =
-      doc && target.hash !== undefined
+      doc && target.hash !== undefined && !target.localFaceOffset
         ? faceOffsetBaseline(
             doc,
             target.bodyId as BodyId,
@@ -12129,7 +12137,7 @@ export function App() {
   }, [doc, interaction, representations]);
   const cylinderSelectionKey =
     interaction.mode === 'face' && interaction.op === 'resize-cylinder-radius'
-      ? `${interaction.target.bodyId}:${interaction.target.topologyId}`
+      ? `${interaction.target.bodyId}:${interaction.target.topologyId}:${Boolean(interaction.target.localFaceOffset)}`
       : null;
   useEffect(() => {
     setCylinderDimensionMode('diameter');
@@ -13000,6 +13008,19 @@ export function App() {
 
   function handleSelectionAction(action: SelectionActionId) {
     if (
+      (action === 'resize-body' || action === 'offset-face') &&
+      interaction.mode === 'face' &&
+      interaction.target.resizeBodyFeatureId
+    ) {
+      if (interaction.phase === 'validating') return;
+      handleOffsetCancel();
+      dispatchInteraction({
+        type: 'set-face-offset-mode',
+        local: action === 'offset-face'
+      });
+      return;
+    }
+    if (
       (action === 'sketch-on-face' ||
         action === 'fillet' ||
         action === 'chamfer' ||
@@ -13093,9 +13114,16 @@ export function App() {
       face,
       faceHash: target.hash,
       offset,
+      localOnly: target.localFaceOffset,
       ...(exact === undefined ? {} : { exact })
     });
-    if (!plan) {
+    if (
+      !plan ||
+      (target.resizeBodyFeatureId &&
+        !target.localFaceOffset &&
+        (plan.kind !== 'primitive-dimension' ||
+          plan.primitive.featureId !== target.resizeBodyFeatureId))
+    ) {
       return null;
     }
     if (plan.kind === 'primitive-dimension') {
