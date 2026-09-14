@@ -27,6 +27,7 @@ import {
   UNIT_TO_MM,
   featureColor,
   isFeatureSuppressed,
+  isReadOnlyRecognizedImportedFeature,
   nowIso,
   type ArtifactId,
   type BodyId,
@@ -1172,8 +1173,15 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
         if (recognized.length > 0) {
           topology.recognizedImportedFeatures ??= [];
           topology.recognizedImportedFeatures.push(...recognized);
+          // Only an exactly proved feature claims its faces. A read-only
+          // kernel-recognized one is published for reading, and must not cost
+          // those faces the planar-distance proof they would otherwise carry.
           claimedFaceHashes = new Set(
-            recognized.flatMap((feature) => feature.participatingFaceHashes)
+            recognized
+              .filter(
+                (feature) => !isReadOnlyRecognizedImportedFeature(feature)
+              )
+              .flatMap((feature) => feature.participatingFaceHashes)
           );
         }
         recognitionDone?.();
