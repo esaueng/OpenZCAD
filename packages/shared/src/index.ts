@@ -1046,6 +1046,10 @@ export type FeatureData =
       planarEmboss?: {
         part: 'base' | 'text';
         selection: PlanarEmbossSelection;
+        /** Fixed rigid moves in which the selection was measured. Rebuild
+         * verifies the positioned source but returns the separated raw source;
+         * ordinary transform features still perform the actual placement. */
+        sourcePlacement?: Transform3D[];
       };
     };
 
