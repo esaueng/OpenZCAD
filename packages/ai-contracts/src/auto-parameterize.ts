@@ -1,5 +1,6 @@
 import {
   isFeatureSuppressed,
+  isReadOnlyRecognizedImportedFeature,
   type BodyId,
   type FaceGeometry,
   type FeatureId,
@@ -252,6 +253,7 @@ function featureScopeForBodies(
       case 'sweep':
         neededSketches.add(data.profile.sketchId);
         neededSketches.add(data.path.sketchId);
+        if (data.guide) neededSketches.add(data.guide.sketchId);
         break;
       case 'helical-sweep':
         neededSketches.add(data.profile.sketchId);
@@ -1029,10 +1031,13 @@ function importedFaceDistanceCandidates(
           : [];
       })
     );
+    // Read-only kernel-recognized features do not claim their faces: a pocket
+    // published for reading must not withdraw the planar-distance proof that
+    // measures its depth.
     const claimedFaceHashes = new Set(
-      (topology.recognizedImportedFeatures ?? []).flatMap(
-        (feature) => feature.participatingFaceHashes
-      )
+      (topology.recognizedImportedFeatures ?? [])
+        .filter((feature) => !isReadOnlyRecognizedImportedFeature(feature))
+        .flatMap((feature) => feature.participatingFaceHashes)
     );
     const ranked = [...(topology.opposingPlanarFacePairs ?? [])]
       .filter((pair) => {

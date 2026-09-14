@@ -179,6 +179,46 @@ describe('modeling operation form contracts', () => {
     ).toBe('Solid offset distance must resolve to a positive value.');
   });
 
+  it('names every combination a guide rail or an apex point cannot take', () => {
+    const sweep = (guideId: string, mode: 'standard' | 'smooth') =>
+      modelingFormValidationReason(
+        {
+          operation: 'sweep',
+          value: {
+            name: 'Sweep',
+            profileId: 'profile',
+            pathId: 'path',
+            mode,
+            guideId
+          }
+        },
+        {}
+      );
+    expect(sweep('', 'smooth')).toBeNull();
+    expect(sweep('rail', 'standard')).toBeNull();
+    expect(sweep('path', 'standard')).toMatch(
+      /must be a different path from the sweep path/
+    );
+    // `guidedSweep` takes no surface-mode control, so the adapter refuses this
+    // rather than rebuilding the body at a surfacing nobody asked for. The
+    // form has to say so before the edit is saved.
+    expect(sweep('rail', 'smooth')).toMatch(/needs Standard surface mode/);
+    expect(
+      modelingFormValidationReason(
+        {
+          operation: 'loft',
+          value: {
+            name: 'Loft',
+            sectionIds: ['lower', 'upper'],
+            mode: 'smooth',
+            endPoint: { x: '0', y: '0', z: '15' }
+          }
+        },
+        {}
+      )
+    ).toMatch(/needs Ruled mode/);
+  });
+
   it('rejects helical sweeps above the bounded turn count', () => {
     expect(
       modelingFormValidationReason(
@@ -254,7 +294,8 @@ describe('modeling operation form contracts', () => {
           value: {
             name: ' Loft ',
             sectionIds: ['upper', 'lower'],
-            mode: 'smooth'
+            mode: 'smooth',
+            endPoint: null
           }
         },
         [],
@@ -326,7 +367,8 @@ describe('modeling operation form contracts', () => {
             name: 'Sweep',
             profileId: 'profile',
             pathId: 'path',
-            mode: 'standard'
+            mode: 'standard',
+            guideId: ''
           }
         },
         [],

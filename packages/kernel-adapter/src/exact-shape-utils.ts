@@ -26,6 +26,8 @@ import { topologyCandidatesForSolid } from './exact-lineage-builders';
 import { measureFaceGeometry } from './exact-measure';
 import { MEASUREMENT_DEFLECTION, faceWitnessOf } from './exact-witnesses';
 import { GEOMETRY_EPSILON } from './exact-math';
+import { requireValidSolid } from './kernel-validation';
+import { readKernelPayload } from './kernel-refusal';
 
 export /** Sewing gap for imported meshes, relative to the mesh's largest extent. */
 const MESH_SEW_TOLERANCE_RATIO = 1e-6;
@@ -71,9 +73,11 @@ export function validateGeneratedSolid(
   if (!Number.isSafeInteger(solid) || solid < 0) {
     throw new Error(`${label} produced no solid.`);
   }
-  if (kernel.validateSolid(solid) !== 0) {
-    throw new Error(`${label} did not produce a valid closed solid.`);
-  }
+  requireValidSolid(
+    kernel,
+    solid,
+    `${label} did not produce a valid closed solid.`
+  );
   const volume = kernel.volume(solid, MEASUREMENT_DEFLECTION);
   if (!Number.isFinite(volume) || volume <= 0) {
     throw new Error(`${label} did not produce a finite positive volume.`);
@@ -119,18 +123,6 @@ export function faceAttachmentCandidatesForShape(
       };
     })
   );
-}
-
-export function copyShape(
-  kernel: RemusKernel,
-  shape: ExactShape,
-  matrix: Float64Array
-): ExactShape {
-  return {
-    solids: shape.solids.map((solid) =>
-      kernel.copyAndTransformSolid(solid, matrix)
-    )
-  };
 }
 
 export function copyShapeWithVerifiedLineage(
@@ -269,28 +261,39 @@ export function importMeshSolid(kernel: RemusKernel, stlText: string): number {
 }
 
 /**
- * Merge the same-domain faces of a sewn mesh.
+ * Merge the same-domain faces of a sewn mesh, or keep the sewn faces.
  *
- * The kernel's heal pipeline refuses to return any result its validators
- * reject, and an open mesh — a sheet of triangles with boundary edges — can
- * never validate as a closed solid. For one, the merge is a refused nicety
- * and the sewn faces stand; the size guard in the caller still applies. A
- * closed mesh whose unify is refused is a real repair failure and stays one.
+ * The merge is a nicety: it recovers the six planar faces of a cube from the
+ * twelve triangles a mesh file spells it with. The kernel's heal pipeline is
+ * transactional — it either returns a result its validators accept or refuses
+ * and leaves the input untouched — so a refused merge says nothing about the
+ * shell `sewFaces` produced, and that shell stands either way. The caller's
+ * volume and bounds oracle is what decides whether it may be published.
+ *
+ * This used to rethrow whenever the sewn shell validated clean, on the theory
+ * that a closed mesh whose unify is refused is a real repair failure. Measured
+ * on the pin, that was backwards: a mesh of two disjoint boxes sews into one
+ * solid that `validateSolidDetailed` reports with zero errors and the right
+ * volume, and its unify is refused — so the good body was thrown away, the
+ * import reported success and the rebuild produced nothing. An *open* shell,
+ * which the same check calls invalid, was kept. The refusal is about the
+ * merge, not about the shell.
+ *
+ * `runHealPipeline` is declared `any` and hands back JSON text, like every
+ * other detailed reader on the pin. It goes through the same checked decoder
+ * as the rest of this branch's seam (`readKernelPayload`), so a payload this
+ * adapter cannot read raises instead of quietly reading as "no solid" and
+ * returning the unmerged shell.
  */
 function unifySewnMesh(kernel: RemusKernel, sewn: number): number {
-  const openShell = kernel.validateSolid(sewn) !== 0;
   try {
-    const healed = kernel.runHealPipeline(sewn, ['unify_same_domain']) as
-      string | { solid?: number };
-    const parsed = (
-      typeof healed === 'string' ? JSON.parse(healed) : healed
-    ) as { solid?: number };
-    return typeof parsed.solid === 'number' ? parsed.solid : sewn;
-  } catch (error) {
-    if (openShell) {
-      return sewn;
-    }
-    throw error;
+    const healed = readKernelPayload(
+      kernel.runHealPipeline(sewn, ['unify_same_domain']),
+      'heal pipeline'
+    );
+    return typeof healed['solid'] === 'number' ? healed['solid'] : sewn;
+  } catch {
+    return sewn;
   }
 }
 
@@ -324,28 +327,6 @@ export function inheritMeshOrigin(
 
 export function decodeText(bytes: Uint8Array): string {
   return new TextDecoder().decode(bytes);
-}
-
-/**
- * Keep Remus's hostile-input budgets for every source. A locally selected
- * file can later be shared or restored, so its origin does not make it trusted.
- *
- * The translator parses in its own scratch topology and hands back an arena
- * document; a file with no solids hands back no bytes, which is the empty
- * handle list rather than a document to restore.
- */
-export function importStepWithOwnBudget(
-  kernel: RemusKernel,
-  bytes: Uint8Array
-): Uint32Array {
-  const solids = remusTranslators().importStep(
-    bytes,
-    128 * 1024 * 1024,
-    2_000_000
-  );
-  return solids.length === 0
-    ? new Uint32Array()
-    : kernel.deserializeSolids(solids);
 }
 
 /**
