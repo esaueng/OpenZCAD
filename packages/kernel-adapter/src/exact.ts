@@ -1729,7 +1729,17 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
       }
       const shape = build.shapes.get(bodyId);
       if (!shape) {
-        throw new Error(`Body ${bodyId} has no exact geometry.`);
+        // A body the caller named that this document never built. Refused by
+        // name rather than thrown: a section that loses every body it COULD
+        // cut because one id was stale reports an internal diagnostic where
+        // a drawing should be. It is not `plane-misses-body`, so it still
+        // shuts the export.
+        refusals.push({
+          bodyId,
+          reason: 'unknown-body',
+          message: `Body ${bodyId} has no exact geometry in this model.`
+        });
+        continue;
       }
       for (const solid of shape.solids) {
         const outcome = exactSolidSection(kernel, solid, plane);
@@ -1786,7 +1796,12 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
         }
         const shape = build.shapes.get(bodyId);
         if (!shape) {
-          throw new Error(`Body ${bodyId} has no exact geometry.`);
+          // `sectionOutline` reports this as an `unknown-body` refusal and
+          // draws the rest; a DRAWING may not quietly lose a named body, so
+          // the export fails closed exactly as it does for any other refusal
+          // that is not the plane simply missing. The rail's export gate is
+          // shut in this state, so reaching here means a caller bypassed it.
+          throw new Error(`Body ${bodyId} has no exact geometry in this model.`);
         }
         for (const solid of shape.solids) {
           const outcome = exactSolidSection(kernel, solid, plane);
