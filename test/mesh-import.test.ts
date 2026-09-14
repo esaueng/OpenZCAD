@@ -24,6 +24,7 @@ import {
   FIXTURE_BOX,
   FIXTURE_BOX_TRIANGLES,
   FIXTURE_BOX_VOLUME,
+  FIXTURE_OBJECT_PITCH,
   meshFixture,
   THREE_MF_UNIT_MILLIMETRES,
   threeMfFixture
@@ -46,6 +47,47 @@ const FORMATS: MeshImportFormat[] = ['3mf', 'obj', 'glb', 'ply'];
 
 function meshVolume(mesh: { vertices: number[]; indices: number[] }): number {
   return Math.abs(solidVolume(solidFromTriangles(mesh.vertices, mesh.indices)));
+}
+
+interface RebuiltBody {
+  readonly warnings: readonly string[];
+  readonly volume: number | undefined;
+  readonly bbox:
+    | {
+        min: { x: number; y: number; z: number };
+        max: { x: number; y: number; z: number };
+      }
+    | undefined;
+}
+
+/**
+ * The triangles through the rebuild the document runs, as a body.
+ *
+ * The question every import case has to answer is not "did `importMeshFile`
+ * return triangles" but "does a feature holding them come back as a body" —
+ * the round-1 defect was exactly a success message in front of no body — so
+ * the assertions go through `syncDocument`.
+ */
+async function rebuiltBody(
+  adapter: ExactKernelAdapter,
+  name: string,
+  mesh: { vertices: number[]; indices: number[]; triangleCount: number }
+): Promise<RebuiltBody> {
+  const imported = importMeshBody(createProjectDocument(name, user), {
+    name,
+    artifactId: `artifact_${name.replace(/\W+/g, '_')}`,
+    sourceName: `${name}.mesh`,
+    vertices: mesh.vertices,
+    indices: mesh.indices,
+    triangleCount: mesh.triangleCount
+  });
+  const derived = await adapter.syncDocument(imported.document);
+  const body = derived.bodyRepresentations[imported.bodyId];
+  return {
+    warnings: derived.warnings,
+    volume: body?.volume,
+    bbox: body?.bbox
+  };
 }
 
 // Real-kernel suite: WASM startup plus the translator module runs well past
@@ -207,15 +249,225 @@ describe('mesh file imports', { timeout: 30_000 }, () => {
     });
   });
 
-  it('refuses a multi-object file instead of importing a body that cannot rebuild', async () => {
-    // Measured on the pin: two disjoint boxes merged into one triangle soup
-    // import "successfully" and then rebuild to no body at all, because their
-    // separate shells cannot be sewn into one. Refuse the file instead.
+  /**
+   * Several objects in one file, in every format that can hold them.
+   *
+   * This is the case round 1 got wrong twice. A file of two disjoint boxes
+   * used to import behind "Imported 24 triangles" and then rebuild to no body;
+   * the first fix answered that by counting the translator's solids and
+   * refusing, which never fired for OBJ, GLB or PLY — they return one solid
+   * holding several shells — and which refused 3MF files that rebuild
+   * perfectly well. Measured on the pin: the two-box soup sews into one valid
+   * solid of the summed volume in all four formats. So the contract is that
+   * the file imports, and these cases hold it to the body, not to a count.
+   */
+  it.each(FORMATS)(
+    'imports a %s file of two objects as one body of both',
+    async (format) => {
+      const mesh = await importMeshFile(format, meshFixture(format, 2));
+      expect(mesh.triangleCount).toBe(FIXTURE_BOX_TRIANGLES * 2);
+
+      const body = await rebuiltBody(adapter, `two ${format}`, mesh);
+      expect(body.warnings).toEqual([]);
+      expect(body.volume).toBeCloseTo(FIXTURE_BOX_VOLUME * 2, 6);
+      expect(body.bbox!.min).toEqual({ x: 0, y: 0, z: 0 });
+      expect(body.bbox!.max).toEqual({
+        x: FIXTURE_OBJECT_PITCH + FIXTURE_BOX.x,
+        y: FIXTURE_BOX.y,
+        z: FIXTURE_BOX.z
+      });
+    }
+  );
+
+  it('refuses a file whose triangles cannot become a body, naming what stopped it', async () => {
+    // A build that places the same object twice at the same spot: the
+    // translator reads it, the triangles come out, and the rebuild's sew
+    // refuses them as non-manifold. The import has to be the one that says so
+    // — the alternative is the original defect, a success line in front of a
+    // feature with no body.
     await expect(
-      importMeshFile('3mf', threeMfFixture({ objects: 2 }))
+      importMeshFile(
+        '3mf',
+        threeMfFixture({ items: [{ objectid: 1 }, { objectid: 1 }] })
+      )
     ).rejects.toThrow(
-      'This 3MF file holds 2 separate objects, and a mesh import becomes one body.'
+      /^This 3MF file could not be imported as a body: .*non-manifold.*Its triangles form 2 groups that share no vertex/s
     );
+  });
+
+  it('refuses a mesh with too few triangles to be a body', async () => {
+    const oneTriangle = new TextEncoder().encode(
+      'v 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\n'
+    );
+    await expect(importMeshFile('obj', oneTriangle)).rejects.toThrow(
+      'This OBJ file could not be imported as a body: An imported mesh needs at least two triangles'
+    );
+  });
+
+  /**
+   * What a 3MF's `<build>` section asks for, honoured.
+   *
+   * The pinned translator reads `<resources>` and ignores `<build>` entirely,
+   * so before this every per-item transform was dropped, every repeat of an
+   * object imported once, and every object the build never placed imported
+   * anyway — all three silently, behind a success message. These cases are the
+   * measurements that said so, turned into assertions.
+   */
+  describe('a 3MF build section', () => {
+    it('applies an item transform that scales the object', async () => {
+      const mesh = await importMeshFile(
+        '3mf',
+        threeMfFixture({
+          items: [{ objectid: 1, transform: '2 0 0 0 2 0 0 0 2 0 0 0' }]
+        })
+      );
+
+      expect(mesh.triangleCount).toBe(FIXTURE_BOX_TRIANGLES);
+      const body = await rebuiltBody(adapter, 'doubled', mesh);
+      expect(body.warnings).toEqual([]);
+      expect(body.volume).toBeCloseTo(FIXTURE_BOX_VOLUME * 8, 6);
+      expect(body.bbox!.max).toEqual({
+        x: FIXTURE_BOX.x * 2,
+        y: FIXTURE_BOX.y * 2,
+        z: FIXTURE_BOX.z * 2
+      });
+    });
+
+    it('applies an item transform that moves the object', async () => {
+      const mesh = await importMeshFile(
+        '3mf',
+        threeMfFixture({
+          items: [{ objectid: 1, transform: '1 0 0 0 1 0 0 0 1 100 0 0' }]
+        })
+      );
+
+      const body = await rebuiltBody(adapter, 'moved', mesh);
+      expect(body.warnings).toEqual([]);
+      expect(body.volume).toBeCloseTo(FIXTURE_BOX_VOLUME, 6);
+      expect(body.bbox!.min.x).toBeCloseTo(100, 6);
+      expect(body.bbox!.max.x).toBeCloseTo(100 + FIXTURE_BOX.x, 6);
+    });
+
+    it('keeps a mirrored placement facing outwards', async () => {
+      // A negative determinant turns every triangle inside out. Without the
+      // winding swap the shell encloses a negative volume, which is not the
+      // part the file asks for.
+      const mesh = await importMeshFile(
+        '3mf',
+        threeMfFixture({
+          items: [{ objectid: 1, transform: '-1 0 0 0 1 0 0 0 1 0 0 0' }]
+        })
+      );
+
+      const body = await rebuiltBody(adapter, 'mirrored', mesh);
+      expect(body.warnings).toEqual([]);
+      expect(body.volume).toBeCloseTo(FIXTURE_BOX_VOLUME, 6);
+      expect(body.bbox!.min.x).toBeCloseTo(-FIXTURE_BOX.x, 6);
+      expect(body.bbox!.max.x).toBeCloseTo(0, 6);
+    });
+
+    it('places an object as many times as the build asks', async () => {
+      // The ordinary shape of a two-up print plate: one object resource, two
+      // items. The translator returns one solid; the file asks for two copies.
+      const mesh = await importMeshFile(
+        '3mf',
+        threeMfFixture({
+          items: [
+            { objectid: 1 },
+            { objectid: 1, transform: '1 0 0 0 1 0 0 0 1 20 0 0' }
+          ]
+        })
+      );
+
+      expect(mesh.triangleCount).toBe(FIXTURE_BOX_TRIANGLES * 2);
+      const body = await rebuiltBody(adapter, 'two up', mesh);
+      expect(body.warnings).toEqual([]);
+      expect(body.volume).toBeCloseTo(FIXTURE_BOX_VOLUME * 2, 6);
+      expect(body.bbox!.max.x).toBeCloseTo(20 + FIXTURE_BOX.x, 6);
+    });
+
+    it('imports only what the build places, leaving a spare resource out', async () => {
+      // Two object resources, one build item. The file is a single built
+      // object; the round-1 guard counted resources and turned it away with
+      // advice it had already followed.
+      const mesh = await importMeshFile(
+        '3mf',
+        threeMfFixture({ objects: 2, items: [{ objectid: 1 }] })
+      );
+
+      expect(mesh.triangleCount).toBe(FIXTURE_BOX_TRIANGLES);
+      const body = await rebuiltBody(adapter, 'spare', mesh);
+      expect(body.warnings).toEqual([]);
+      expect(body.volume).toBeCloseTo(FIXTURE_BOX_VOLUME, 6);
+      expect(body.bbox!.max.x).toBeCloseTo(FIXTURE_BOX.x, 6);
+    });
+
+    it('reads the build out of a deflated package too', async () => {
+      // `<build>` is the last element of the model part, after every vertex
+      // and triangle, so reading it means streaming the whole deflated part —
+      // a longer path than the 64 KB header the unit alone needed.
+      const mesh = await importMeshFile(
+        '3mf',
+        await deflatedThreeMfFixture({
+          items: [{ objectid: 1, transform: '1 0 0 0 1 0 0 0 1 7 0 0' }]
+        })
+      );
+
+      const body = await rebuiltBody(adapter, 'deflated build', mesh);
+      expect(body.warnings).toEqual([]);
+      expect(body.bbox!.min.x).toBeCloseTo(7, 6);
+    });
+
+    it('refuses an object composed of other objects, by what is there', async () => {
+      // The translator refuses this package too, but as "mesh has no
+      // triangles", which names the wrong cause.
+      await expect(
+        importMeshFile('3mf', threeMfFixture({ componentObject: true }))
+      ).rejects.toThrow(/builds object "2" out of other objects \(<components>\)/);
+    });
+
+    it('refuses a build that places an object the resources do not define', async () => {
+      await expect(
+        importMeshFile('3mf', threeMfFixture({ items: [{ objectid: 9 }] }))
+      ).rejects.toThrow(/build places object "9", which its resources do not define/);
+    });
+
+    it('refuses a package that places nothing at all', async () => {
+      await expect(
+        importMeshFile('3mf', threeMfFixture({ items: [] }))
+      ).rejects.toThrow(/<build> section places no objects/);
+      await expect(
+        importMeshFile('3mf', threeMfFixture({ omitBuild: true }))
+      ).rejects.toThrow(/has no <build> section/);
+    });
+
+    it('refuses a transform it cannot read rather than dropping it', async () => {
+      await expect(
+        importMeshFile(
+          '3mf',
+          threeMfFixture({ items: [{ objectid: 1, transform: '1 2 3' }] })
+        )
+      ).rejects.toThrow(/not the twelve numbers the format defines/);
+      await expect(
+        importMeshFile(
+          '3mf',
+          threeMfFixture({
+            items: [{ objectid: 1, transform: '1 0 0 0 1 0 0 0 0 0 0 0' }]
+          })
+        )
+      ).rejects.toThrow(/collapses it to no volume/);
+    });
+
+    it('refuses an item that places an object from another model part', async () => {
+      await expect(
+        importMeshFile(
+          '3mf',
+          threeMfFixture({
+            items: [{ objectid: 1, path: '/3D/other.model' }]
+          })
+        )
+      ).rejects.toThrow(/from another model part \("\/3D\/other.model"\)/);
+    });
   });
 
   it.each(FORMATS)(
