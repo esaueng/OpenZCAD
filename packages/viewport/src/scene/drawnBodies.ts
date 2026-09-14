@@ -14,7 +14,7 @@ import type * as THREE from 'three';
  * applied, and the Move gizmo posing a body's mesh imperatively. The first
  * two were declared to the section as `ViewportGeometry` and fixed there; the
  * third was declared nowhere, because posing a mesh needs no declaration — it
- * is three lines against an `Object3D` inside a pointer handler.
+ * is two lines against an `Object3D` inside a pointer handler.
  *
  * So the question is not asked of the mechanisms. It is asked of the objects:
  * a body drawn anywhere but its document pose, or not drawn at all, is

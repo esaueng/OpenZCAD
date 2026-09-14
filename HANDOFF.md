@@ -1,11 +1,14 @@
 # Exact section curves behind the section view
 
-Branch `claude/remus-exact-sections`. Fifteen commits on top of `origin/main`,
-no push, no PR. Commits 7–9 answer an independent verifier's first report on
-the first six; commits 10–13 answer its second, including a defect the first
-round introduced; commits 14–15 answer its third, which found that the second
-round's central claim was still false for a third document. All three rounds
-are recorded under "Verifier rounds" below.
+Branch `claude/remus-exact-sections`. Eighteen commits on top of
+`origin/main` — fifteen, a merge of `origin/main`, and two answering a fourth
+verifier round — no push, no PR. Commits 7–9 answer an independent verifier's
+first report on the first six; commits 10–13 answer its second, including a
+defect the first round introduced; commits 14–15 answer its third, which found
+that the second round's central claim was still false for a third document;
+commits 17–18 answer its fourth, which found the same claim false for a
+mechanism that declares nothing at all. All four rounds are recorded under
+"Verifier rounds" below.
 
 ## What shipped
 
@@ -21,8 +24,10 @@ and the user is told which one is on screen.
   the bodies of it that are on screen** (a form preview or an assistant
   proposal replaces the live document in the viewport, and the section
   follows it; an approximate stand-in drawn over the model — a parameter
-  edit nobody has applied — means there is no exact section at all, and the
-  rail and the export say so) and draws that instead: the cut surface in a cool slate against the warm body
+  edit nobody has applied — means there is no exact section at all, and
+  neither does a body the viewport is drawing somewhere else, such as one
+  posed by the Move gizmo; the rail and the export say so) and draws that
+  instead: the cut surface in a cool slate against the warm body
   colour, with its boundary curves showing. The rail reads "Exact section" and
   the cut's measured area.
 - **Only that geometry can be exported.** A DXF button sits next to the
@@ -296,21 +301,117 @@ to put a number on the defect (the 200/400 mm² probe above, through
 `makeBox` + `section` + `faceArea` on `remus_wasm_node.cjs`); the probe
 script is deleted.
 
+### Round four
+
+All five gates passed and the round-three fix was confirmed at the cause. One
+major defect was left, and it is the same failure class a third time over —
+which is why the fix is not aimed at the mechanism that caused it.
+
+1. **[major] The Move tool poses body meshes imperatively, and the exact
+   section survived a body being moved out from under it.** A 20×10×6 box
+   sectioned at z=3 reads "Exact section · 200.00 mm² of material" (the
+   kernel's own number at the pin). Press Move and type 10 into the panel's Z
+   field — no drag, no Apply: `setMovePreview` reaches `applyMovePreview` in
+   `ModelViewer`, which writes `object.position` and `object.rotation`, and
+   the box is drawn at z=10..16 with the plane passing entirely below it.
+   `viewportGeometry` does not change, because the move preview is not a
+   document, not a stand-in, and not a body list — it is two lines against an
+   `Object3D`. So the rail kept claiming 200 mm² as exact, the curves floated
+   at z=3 in the space the body had left, and the DXF button stayed live over
+   them. A rotation typed into the same panel is worse: it changes the shape
+   of the true cross-section, not only where it is.
+
+   **Not fixed by teaching the section about `movePreview`.** That is a
+   fourth conditional for a third mechanism, and there is a fifth already in
+   the tree: the primitive face drag writes `faceDrag.object.scale[axis]` and
+   `.position[axis]` inside a pointer handler and reaches no state outside
+   `ModelViewer` at all. Declaring is the wrong shape of answer — what puts a
+   body somewhere else needs no declaration to do it.
+
+   **Fixed by deriving the refusal from what the viewport actually drew.**
+   `DrawnBodyReport` (`packages/viewport/src/scene/drawnBodies.ts`) samples
+   the body objects once per frame, immediately before `renderer.render`, and
+   reports every one that is not at its document pose — translated, turned,
+   scaled or invisible — however it got that way. `ModelViewer` hands that to
+   the workspace through `onBodiesDrawnElsewhere`, `App` holds it as state and
+   folds it into `ViewportGeometry.drawnElsewhere`, and `sectionSourceOf`
+   refuses on it under the same rule it already applied to `standIns`: what is
+   on screen is not this document's geometry, so there is no exact section and
+   no drawing. The rail, the curves and the DXF button come down together, as
+   before, from one reading of one value.
+
+   **Why a fourth instance cannot arrive silently.** The guarantee no longer
+   depends on a mechanism declaring itself. To be seen at all, anything that
+   draws a body somewhere other than where the document built it must have
+   posed, scaled or hidden that object before the frame is painted — otherwise
+   the frame would not show it — and the sample runs inside that frame. The
+   report names bodies, never mechanisms, and nothing in the section path asks
+   how a body came to be posed.
+
+   Two guards hold the parts a runtime check cannot:
+
+   - `SectionReadsEveryViewportField` in `sectionOutline.ts` fails to compile
+     — `Type 'true' is not assignable to type 'false'` — when a field is added
+     to `ViewportGeometry` that `sectionSourceOf` does not read. Verified by
+     adding a `ghostOverlay` field and watching `tsc` reject it.
+   - `test/section-sees-what-was-drawn.test.ts` asserts the chain itself: that
+     the sample happens before the draw in the same function, that the teardown
+     resets it, that the viewer→shell→workspace→`drawnElsewhere` wiring is
+     present, and that the compile-time check has not been deleted. That chain
+     is behaviour no unit test can execute without a GPU and one edit away from
+     being dropped, so it is guarded the way `test/css-class-coverage.test.ts`
+     guards the styling contract.
+
+   Covered by `packages/viewport/src/scene/drawnBodies.test.ts` (12 tests,
+   including the Move transform composed exactly as `applyMovePreview`
+   composes it, a face-drag scale, and one object posed the way no mechanism
+   in the app poses anything) and five new tests in
+   `apps/web/src/lib/sectionOutline.test.ts`. Shown to fail against the old
+   rule first: dropping the `drawnElsewhere` term from `sectionSourceOf`
+   fails four of the five (the fifth asserts the undiverged path still
+   sections, and passes either way).
+
+   **Not driven in a browser.** Like the second and third rounds, this one is
+   held by tests. The two halves a test cannot execute — the frame sampling a
+   real `Object3D` map and the report reaching `App` through React — are held
+   by the source assertions above and by the compile-time check, and that is
+   stated as a risk rather than as coverage.
+
+2. **`origin/main` was merged** (25 commits: typed detailed booleans with the
+   exact-only refusal, and the kernel pattern operations). Two conflicts, both
+   in files this branch had added a `section` request type to and `main` had
+   added a `recognize-imported-face` request type to — `geometryWorker.ts`'s
+   result union and its kernel-loading branch, and `useGeometryWorker.ts`'s
+   pending-request maps and their rejection sweep. Both resolved by keeping
+   both. No boolean call site was touched by either conflict, and nothing on
+   this branch calls a plain `kernel.cut`/`fuse`/`intersect`: `main`'s typed
+   `exactCut` and siblings, with their exact-only refusal policy, are the only
+   boolean entry points in the merged tree.
+
+3. **The merge put the launcher chunk over budget before this round added
+   anything** — 513,287 bytes against 512,000. Rather than raise a ceiling
+   whose own comment asks for a split instead, `stepImportRun` now loads on
+   the gesture that imports a file: both call sites are already inside an
+   async handler about to read a file off disk, and the refusals that come
+   first stay synchronous. Entry chunk 503,577 bytes, 8,423 under budget.
+
 ## Check results
 
-Re-run from the worktree root after the third verifier round:
+Re-run from the worktree root after the fourth verifier round, on the merge
+with `origin/main` (the counts are higher than the third round's because
+`main` has grown, not because tests were added here alone):
 
 ```
 pnpm lint               ✖ 19 problems (0 errors, 19 warnings)   [the pre-existing 19]
 pnpm typecheck          clean, no output
-pnpm test (root)        Test Files 245 passed | 2 skipped (247)
-                        Tests 2529 passed | 4 skipped (2533)
-pnpm test (web)         Test Files 158 passed (158)
-                        Tests 1212 passed (1212)
+pnpm test (root)        Test Files 250 passed | 2 skipped (252)
+                        Tests 2574 passed | 4 skipped (2578)
+pnpm test (web)         Test Files 159 passed (159)
+                        Tests 1233 passed (1233)
 pnpm test:parity-corpus Test Files 7 passed (7)
                         Tests 174 passed | 1 skipped (175)
 pnpm build              "warnings": [], "failures": []; entry chunk
-                        511,965 B against the 512,000 B budget
+                        503,577 B against the 512,000 B budget
 ```
 
 `node scripts/check-css-classes.mjs` passes (277 files, 816 classes), and
@@ -384,6 +485,31 @@ to fail against the old code first.
 - **The parameter-draft behaviour was not driven in a browser.** It is held by
   tests that were shown to fail against the previous rule, and by the kernel
   probe that puts the 200 mm²/400 mm² numbers on the defect.
+- **A posed body is refused, not sectioned where it is drawn.** A Move
+  preview is a rigid transform of exact geometry, so sectioning the body in
+  its posed frame is possible in principle — transform the plane into the
+  body's frame, section, transform the curves back. It is deliberately not
+  done: the adapter's `sectionOutline` takes one plane for the whole document,
+  the pose exists only in the viewport, and a Move that is applied bumps the
+  document version and gets an ordinary exact section on the next release.
+  Refusing is the fail-closed answer and the same one a stand-in already got.
+- **What the frame check sees is the body object's own transform and
+  visibility.** Not its children, and not its geometry: a mechanism that posed
+  a child mesh while leaving the body object at rest, or that rewrote an
+  uploaded `BufferGeometry`'s attributes in place, would not be reported. The
+  viewer has no such mechanism today — every preview either swaps the meshes
+  through `bodies`, draws its own group, or poses the body object — and
+  covering geometry rewrites would mean holding a per-object baseline of the
+  attribute version, which is bookkeeping that can fail closed forever if it
+  drifts. It is named here rather than implied away.
+- **Geometry the viewport ADDS without touching the document's bodies is
+  still only covered by `standIns`.** A future overlay that draws extra
+  meshes and hides nothing leaves the document's own bodies exactly where
+  they are, so the frame check has nothing to report and the section remains
+  a truthful section of those bodies — but the user would be looking at
+  material the drawing does not contain. Such an overlay has to reach the
+  viewer through `ViewerShell`, which is where `view` is, so the declaration
+  is available; nothing forces it.
 
 ## Risks for the reviewer
 
@@ -396,8 +522,10 @@ to fail against the old code first.
   first real run of it will be in CI. That snapshot's shape is unchanged by
   the verifier round; its `curves` field is simply correct now (per region
   rather than the group's total) and nothing in the spec asserts on it yet.
-- **The entry chunk finishes at 511,965 bytes against a 512,000 budget:
-  thirty-five bytes.** The feature lives in `apps/web/src/lib/sectionOutline.ts`
+- **The entry chunk finishes at 503,577 bytes against a 512,000 budget:
+  8,423 bytes, after the fourth round's split.** (What follows was written
+  when the margin was thirty-five bytes, and the reasoning still holds — the
+  margin is one deferred module wide, not a structural fix.) The feature lives in `apps/web/src/lib/sectionOutline.ts`
   (lazy) and the launcher keeps only the state, the effect and two thin
   handlers. The first verifier round had to fit the visible-body plumbing
   into ten bytes of headroom and paid for it by deriving the viewport's
@@ -412,11 +540,13 @@ to fail against the old code first.
   round paid for itself: the single `ViewportGeometry` value replaced two
   duplicated body expressions and one memo, and `ViewerShell` now takes one
   prop where it took two, which is why an extra function in the lazy section
-  module cost the launcher nine bytes. It is
-  still the case that the next line of eager code in `App.tsx`
-  — from this branch or any other — trips the gate. The budget's own comment
-  asks for a real split rather than another raise; that split is now overdue,
-  and this branch is not the place for it.
+  module cost the launcher nine bytes. The fourth round's own code costs 102
+  bytes (state, one memo field, one prop — the viewport module and its report
+  ride in the already-lazy viewer chunk), and the merge with `main` cost
+  1,287, which is what made the deferral of `stepImportRun` necessary rather
+  than optional. The budget's own comment asks for a real split rather than
+  another raise; one module is not that split, and it is still true that the
+  next feature's worth of eager code in `App.tsx` trips the gate.
 - **How often the kernel refuses.** On the demo Mounting Bracket every offset
   tried was refused as `area-mismatch` — correctly, but it means a user of a
   blended, unioned part may see "No exact section" more often than not. That
@@ -448,11 +578,13 @@ to fail against the old code first.
   did not come through it — but nothing executes `App`'s own
   `previewDoc ?? doc ?? null` line or its `useEffect` dependency list, because
   there is no App test harness in this repo (no test renders `App`; it is a
-  16,000-line component). Two consequences a reviewer should weigh. First, if
-  a future source of drawn geometry is wired straight to `ModelViewer`
-  instead of into `viewportGeometry`, nothing here fails — the structural
-  guard is that `ViewerShell` exposes no other way in, not a test. Second,
-  the invalidation deps are belt-and-braces now rather than load-bearing:
+  16,000-line component). Two consequences a reviewer should weigh. First, a
+  future source of drawn geometry wired straight to `ModelViewer` no longer
+  passes unnoticed — the frame check reports the bodies it moves or hides
+  whatever route it took — but the WIRING that carries that report is held by
+  source assertions (`test/section-sees-what-was-drawn.test.ts`), not by an
+  executed render. Second, the invalidation deps are belt-and-braces now
+  rather than load-bearing:
   `sectionOutlineFor` takes a stale section down on the display side even if
   the effect never fires. Extracting the section controller into a hook would
   make both testable with `renderHook`; the entry-chunk budget (see above)
@@ -468,7 +600,21 @@ to fail against the old code first.
   is held by a test that was shown to fail against the code before it.
 - The exact section is attached to the viewport's body group in document
   coordinates. Bodies are drawn at identity there today; a future per-body
-  transform in the viewport would need the same matrix applied here.
+  transform in the viewport would need the same matrix applied here — and
+  would now also be reported as `drawnElsewhere`, which refuses the section
+  rather than drawing it in the wrong place.
+- **The per-frame sample calls a React setState from inside the render
+  loop.** Only on a change of the set, so a drag costs two — one when the
+  first body leaves its document pose, one when it returns — and a scene
+  drawing the document reports nothing at all. It cannot loop: the state
+  reaches the viewer only as props it does not read back, and the next
+  sample finds the same set.
+- **A viewer teardown reports an empty set.** Without it a disposed scene's
+  last pose would outlive it and refuse every later section until a reload;
+  with it, a torn-down viewer briefly clears a divergence that a replacement
+  viewer will re-report on its first frame. The window is one frame and it
+  fails open in it — a section requested inside that window would have to be
+  requested by a user acting on a viewer that no longer exists.
 
 ## Follow-ups
 
@@ -498,6 +644,20 @@ to fail against the old code first.
   next slider release. The rule "anything that changes the model drops back
   to the clipped preview" is the fail-safe one and the e2e spec is written to
   it, so changing it is its own piece of work.
+- **82 KB of Remus wasm-bindgen glue is in the launcher chunk for nothing,
+  and the fix is one import path.** `apps/web/src/lib/extrudeInference.ts`
+  imports two pure helpers through the `@openzcad/kernel-adapter` index; the
+  index re-exports the live-kernel modules, `remus-wasm` declares side
+  effects, and rolldown therefore keeps a bare `import 'remus-wasm'` — whose
+  exports the launcher never touches — in `index-*.js`. Measured on this
+  branch: adding a `@openzcad/kernel-adapter/extrude-inference` deep export
+  and importing through it takes the launcher's total payload from 1,513,702
+  bytes across 35 files to 1,426,539 across 12, with no remus asset
+  referenced by `index.html` at all. It was NOT taken here, because with that
+  edge gone rolldown folds ~99 KB of formerly shared chunks into the entry
+  file, which grows to 530,507 bytes — better for the user, worse for a gate
+  that measures one file — so it belongs with the entry-chunk split below
+  rather than smuggled into a section fix.
 - Splitting the launcher chunk properly, so the next feature has room. The
   section work is already lazy; the remaining weight is not. It also blocks
   the section controller becoming a testable hook — see the risks.
