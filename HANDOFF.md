@@ -7,19 +7,40 @@ then a guarded rolling-ball rebuild — and dropped the v1 flat planar bevel as 
 fillet fallback. Two things follow for the adapter, and both are in this branch.
 
 1. **A size-bound fillet refusal now carries the kernel's own measured
-   ceiling**, and the adapter uses it instead of walking down to it blind. The
-   ceiling aims the probe ladder rather than replacing it, so the failure
-   message quotes both the limit the kernel measured and a size this adapter
-   actually built. On the common oversized-radius path that is **three kernel
-   round-trips reduced to one**: the first rung is half the kernel's ceiling,
-   which is accepted.
+   ceiling**, and the adapter uses it to aim the probe ladder instead of
+   walking down blind. The ceiling is used _only_ to aim: it is never quoted,
+   because it is not a bound on what works (see the correction below). What
+   the message gained is the size the ladder actually built.
 
-   Before: `Fillet could not be created on 1 selected edge with radius 30. Try
-   a smaller radius.` — after three fillet calls at 15, 3.75 and 0.469.
+   Before, on a 30x18x24 box with one edge selected at radius 30:
 
-   After: `Fillet could not be created on 1 selected edge with radius 30. Try a
-   smaller radius: the kernel's blend runs off its support face at radius 18,
-   and radius 9 builds here.` — after one fillet call at 9.
+   ```
+   Fillet could not be created on 1 selected edge with radius 30.
+   Try a smaller radius.
+   ```
+
+   After:
+
+   ```
+   Fillet could not be created on 1 selected edge with radius 30.
+   Try a smaller radius: radius 9 builds here.
+   ```
+
+   The saving is **real but smaller than this document first claimed**, and it
+   is not uniform. Measured by instrumenting `kernel.fillet` and counting
+   calls (pinned now in `edge-modifier-diagnosis.test.ts`):
+
+   | case                         | old ladder                    | ceiling-seeded ladder |
+   | ---------------------------- | ----------------------------- | --------------------- |
+   | 30x18x24 box, one edge, r30  | 2 (15 refused, 3.75 accepted) | 1 (9)                 |
+   | 50x50x2 plate, one edge, r30 | 3 (15, 3.75, 0.469)           | 1 (1)                 |
+   | 50x50x2 plate, one edge, r60 | 3 (30, 7.5, 0.9375)           | 3 (25, 6.25, 0.7812)  |
+
+   An earlier draft of this file claimed three old calls on the box example
+   and "three round-trips reduced to one on every cliff case measured". Both
+   were wrong: the old ladder short-circuits at the first accepted rung, so
+   the box case was always two calls, and the plate at r60 saves nothing at
+   all. The corrected numbers are above.
 
 2. **A fillet result that is actually a chamfer is now refused.** The adapter's
    acceptance rules (handle identity, relaxed validation, the target bounds
@@ -32,13 +53,13 @@ The fillet edge retargeting from PR #311 (`resolveEdgeModifierEdges` and the
 
 ## Kernel calls adopted
 
-No new kernel entry points. What changed is that the adapter now *reads* the
+No new kernel entry points. What changed is that the adapter now _reads_ the
 kernel's typed blend refusal instead of re-deriving its content:
 
-| Adopted | Replacing |
-| --- | --- |
-| the `available radius` field of a `cliff-encountered` refusal from `kernel.fillet` / `kernel.filletWithEvolution`, parsed by `blendCliffLimit` | a blind ladder of 1/2, 1/8, 1/64 of the *refused* size, walking down until something was accepted |
-| `countBlendFaces` (existing `isBlendFace` surface test) over the fillet result | nothing — there was no check that a fillet was rounded rather than bevelled |
+| Adopted                                                                                                                                        | Replacing                                                                                                                                                                                                  |
+| ---------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| the `available radius` field of a `cliff-encountered` refusal from `kernel.fillet` / `kernel.filletWithEvolution`, parsed by `blendCliffLimit` | nothing — it re-aims the existing 1/2, 1/8, 1/64 ladder at the kernel's ceiling instead of at the _refused_ size. The ladder itself, and its role as the only evidence a smaller size works, are unchanged |
+| `countBlendFaces` (existing `isBlendFace` surface test) over the fillet result                                                                 | nothing — there was no check that a fillet was rounded rather than bevelled                                                                                                                                |
 
 `edgeModifierSucceedsSmaller` is renamed to `acceptedEdgeModifierProbe` and
 returns the accepted size (`number | null`) instead of a boolean, because the
@@ -51,12 +72,13 @@ Run from the worktree root on the final tree.
 ```
 pnpm lint                 ✖ 19 problems (0 errors, 19 warnings)
 pnpm typecheck            clean (no output)
-pnpm test                 Test Files  241 passed | 2 skipped (243)
-                          Tests  2491 passed | 4 skipped (2495)
-                          Test Files  156 passed (156)          [web project]
-                          Tests  1182 passed (1182)             [web project]
+pnpm test                 Test Files  241 passed | 2 skipped (243)   [root project]
+                          Tests  2493 passed | 4 skipped (2497)      [root project]
+                          Test Files  156 passed (156)               [web project]
+                          Tests  1182 passed (1182)                  [web project]
 pnpm test:parity-corpus   Test Files  7 passed (7)
                           Tests  174 passed | 1 skipped (175)
+pnpm build                "warnings": [], "failures": []  (bundle-size gate)
 ```
 
 The 19 lint warnings and the parity 174/1-skipped are the `origin/main`
@@ -79,30 +101,47 @@ fillet(r18)  -> the same refusal (the ceiling is EXCLUSIVE)
 fillet(r17.999) -> builds
 ```
 
-**But the ceiling is not a radius to hand back.** `r17.999` builds a body whose
-bounding box is `0,0,0 .. 30,35.998,35.998` against an input of
-`0,0,0 .. 30,18,24` — the distorted oversized-radius result the adapter's bounds
-guard already rejects. Everything from r10 up on that edge is rejected the same
-way. So the kernel's ceiling is an upper bound on what *could* work, not a value
-that does, and the message quotes a probed size alongside it. This is the one
-place the task's "prefer the kernel's own reason" had to be qualified: the
-kernel's number is relayed verbatim as a limit, never as advice.
+**But the ceiling is not a radius to hand back, and it is not even a bound.**
+`r17.999` builds a body whose bounding box is `0,0,0 .. 30,35.998,35.998`
+against an input of `0,0,0 .. 30,18,24` — the distorted oversized-radius result
+the adapter's bounds guard already rejects. Everything from r10 up on that edge
+is rejected the same way.
+
+Worse, the reported ceiling is measured against whichever support face the
+cascade stopped on first, so it moves with the requested size. On a 50x50x2
+plate, one edge:
+
+```
+fillet(r60) -> cliff-encountered: ... requested radius 60, available radius 50
+fillet(r30) -> cliff-encountered: ... requested radius 30, available radius 2
+fillet(r2)  -> refused as well; r1 is the first size that builds
+```
+
+A user told "the limit is 50" would be refused again at 40, at 20 and at 5.
+So the message quotes **only the size the ladder built**, never the kernel's
+number. This is where the task's "prefer the kernel's own reason" had to be
+qualified: the ceiling is good enough to aim a probe, where a wrong guess
+costs one rung, and not good enough to print, where a wrong guess is bad
+advice.
 
 **Every ladder rung still discriminates, so none was removed.** Same box, all
 twelve edges selected — `unsupported-vertex-blend` at every size from r9 up,
 with no ceiling reported, so the ladder is the only evidence available:
 
-| refused size | 1/2 | 1/8 | 1/64 |
-| --- | --- | --- | --- |
-| 16 | accepted | — | — |
-| 20 | refused | accepted | — |
-| 100 | refused | refused | accepted |
-| 600 | refused | refused | refused (structural message) |
+| refused size | 1/2      | 1/8      | 1/64                         |
+| ------------ | -------- | -------- | ---------------------------- |
+| 16           | accepted | —        | —                            |
+| 20           | refused  | accepted | —                            |
+| 100          | refused  | refused  | accepted                     |
+| 600          | refused  | refused  | refused (structural message) |
 
 A rung dropped here would turn a true "try a smaller radius" into a false
-structural claim. What the ladder no longer has to do is *find* the ceiling:
-seeded with the kernel's own, rung 1 is accepted on every cliff case measured
-(box edge 18→9, plate edge 6→3, cylinder rim 9.9999999→4.999).
+structural claim. What the ladder no longer has to do is _find_ the ceiling
+from the refused size: seeded with the kernel's own, rung 1 is accepted
+wherever the reported ceiling is close to the real one (box edge 18→9,
+cylinder rim 9.9999999→4.999). Where it is not — the 50x50x2 plate at r60,
+ceiling 50 against a real limit between 1 and 2 — the seeded ladder walks the
+same three rungs the blind one did.
 
 **Structural failures still fail everywhere.** The notched body from the
 existing diagnosis test (box 30x18x24 minus an r14 cylinder, all 15 edges) gives
@@ -120,15 +159,13 @@ Chamfer results are all-planar on this kernel.
 
 - **The chamfer path is left alone.** `chamfer` reports its own typed size
   limit (`invalid input: chamfer setback does not fit: 20.000000 of material
-  must be taken from an edge only 18.000000 long. Reduce the chamfer distance
-  below 18.000000.`), which is the same opportunity, but it is a different
+must be taken from an edge only 18.000000 long. Reduce the chamfer distance
+below 18.000000.`), which is the same opportunity, but it is a different
   refusal shape from a different builder and the task is the fillet ladder.
   A chamfer refusal still spends the full blind ladder.
-- **The non-cliff message is unchanged.** A size-bound refusal with no reported
-  ceiling — `unsupported-vertex-blend`, say — still says only "Try a smaller
-  radius", even though the ladder now knows which size was accepted. Naming it
-  there would be a strictly better message and is a small follow-up; it is out
-  of this change so the message diff stays to the case the kernel measures.
+- **Every size-bound message now names the size that built**, cliff-reported
+  or not. Once the ceiling was out of the sentence there was no reason left to
+  word the two cases differently: the probed size is proven in both.
 - **No ladder rung was removed.** The evidence above says all three still
   discriminate on the pin. Removing one on the theory that it existed for the
   old bevel fallback would have made a message false, and correctness comes
@@ -154,11 +191,17 @@ Chamfer results are all-planar on this kernel.
   hits it, and the kernel refuses the cases I could construct (`re-fillet` on a
   filleted box gives `trimming-failure` on most edges). If it ever fires on the
   pinned kernel, the warning text is `fillet produced no blend band: the result
-  is bevelled rather than rounded`, which is greppable.
+is bevelled rather than rounded`, which is greppable.
+- **The reported ceiling is per-face and not monotone in the requested
+  size.** Proven on the plate above: 50 at r60, 2 at r30, on the same edge.
+  Nothing in the adapter treats it as a bound any more — it seeds the ladder
+  and nothing else — but anyone reaching for it for a slider limit or a
+  clamped input should read that measurement first. It is pinned by the
+  `never quotes a ceiling the kernel has not proved` test.
 - **`blendCliffLimit` parses a kernel sentence.** A kernel that renames its
-  refusal prefix or its `available radius` field silently reverts the message to
-  the old blind-ladder wording; nothing breaks, but the new sentence quietly
-  stops appearing. The diagnosis test pins both the prefix and the field against
+  refusal prefix or its `available radius` field silently reverts the ladder to
+  its blind aim; nothing breaks and the message is unaffected, but the
+  round-trip saving quietly stops happening. The diagnosis test pins both the prefix and the field against
   the pin, so a kernel bump that changes either turns it red rather than
   degrading in silence.
 - **Probe sizes are now rounded down to four significant digits** so that the
@@ -170,7 +213,6 @@ Chamfer results are all-planar on this kernel.
 
 - Relay the chamfer builder's own `setback does not fit` limit the same way and
   skip the blind ladder for chamfers.
-- Name the accepted probe size in the non-cliff size-bound message too.
 - `unsupported-vertex-blend` is the remaining size-bound refusal with no
   reported ceiling. If Remus grows one for it, the plumbing here takes it with
   a one-line change to `blendCliffLimit`.
