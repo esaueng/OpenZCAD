@@ -56,35 +56,25 @@ import {
 
 const NORMAL_PROJECTED_RADIUS_PX = 240;
 
-/** The two message shapes `booleanFacetFallbackWarning` can produce. */
-const FACET_CENSUS_MESSAGE =
-  /could only be built as an approximation|replaced every curved surface with flat faces|produced far more faces than its operands/;
-
 /**
- * The boolean face census either fires or it does not, and today's answer is
- * not the one to pin: the kernel facets these contacts now and may well stop,
- * and asserting the warning is present would turn that improvement into an
- * unrelated test failure here. Two things must hold either way — no warning
- * other than the census's appears, and the census agrees with the faces
- * actually on the resulting body.
+ * A union that was accepted was built exactly.
+ *
+ * This used to tolerate either answer, because the kernel could silently
+ * return a faceted approximation of a face contact and the face census would
+ * report it. The pinned kernel's booleans are exact-only: they refuse a pair
+ * they cannot build exactly, so a union that produced a body at all produced
+ * an exact one. There is nothing left to be ambivalent about — the body keeps
+ * its curved surfaces, and the rebuild says nothing.
  */
-function expectCensusConsistentWithFaces(
+function expectExactlyBuiltUnion(
   derived: DerivedState,
   body: BodyRepresentation
 ): void {
-  const censusWarnings = derived.warnings.filter((warning) =>
-    FACET_CENSUS_MESSAGE.test(warning)
-  );
-  expect(derived.warnings).toEqual(censusWarnings);
+  expect(derived.warnings).toEqual([]);
   const curvedFaces = (body.topology?.faces ?? []).filter(
     (face) => face.geometry && face.geometry.surfaceType !== 'plane'
   ).length;
-  if (censusWarnings.length > 0) {
-    // Every census message this path can produce is the lost-curvature one.
-    expect(curvedFaces).toBe(0);
-  } else {
-    expect(curvedFaces).toBeGreaterThan(0);
-  }
+  expect(curvedFaces).toBeGreaterThan(0);
 }
 const CLOSE_PROJECTED_RADIUS_PX = 1200;
 const MAX_PROJECTED_CHORD_ERROR_PX = 0.5;
@@ -1376,8 +1366,9 @@ describe('exact kernel adapter', { timeout: 30_000 }, () => {
       body.mesh.indices
     );
 
-    // Exact face contact degrades the same way the 1 µm sliver above does.
-    expectCensusConsistentWithFaces(derived, body);
+    // Exact face contact is one the exact pipeline does resolve; if it ever
+    // stops, this refuses loudly rather than quietly shipping flats.
+    expectExactlyBuiltUnion(derived, body);
     expect(isClosedConsistentlyOrientedMesh(closure)).toBe(true);
     expect(body.volume).toBeGreaterThan(0);
   });
