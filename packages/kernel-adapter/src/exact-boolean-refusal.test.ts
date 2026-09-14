@@ -24,7 +24,10 @@ function translation(x: number, y: number, z: number): Float64Array {
 function offsetSpheres(kernel: RemusKernel): [number, number] {
   return [
     kernel.makeSphere(1.0, 24),
-    kernel.copyAndTransformSolid(kernel.makeSphere(1.0, 24), translation(0.5, 0, 0))
+    kernel.copyAndTransformSolid(
+      kernel.makeSphere(1.0, 24),
+      translation(0.5, 0, 0)
+    )
   ];
 }
 
@@ -364,7 +367,10 @@ function clusterWithARefusedTail(kernel: RemusKernel): number[] {
       kernel.makeBox(10, 10, 10),
       translation(10, 0, 0)
     ),
-    kernel.copyAndTransformSolid(kernel.makeSphere(6, 24), translation(20, 5, 5))
+    kernel.copyAndTransformSolid(
+      kernel.makeSphere(6, 24),
+      translation(20, 5, 5)
+    )
   ];
 }
 
