@@ -877,38 +877,84 @@ function sectionPlane(
 const LOFT_APEX_MIN_STANDOFF = 1e-6;
 
 /**
- * A point standing for where the rest of the loft sits, used to decide which
- * side of the closing section's plane an apex is on. The already-built face of
- * the section before the closing one is the honest answer, measured on the
- * kernel; its sketch plane's origin is the fallback, since a plane can be
- * shared between sections or sit well away from the profile drawn on it.
+ * How far a built section reaches on each side of the closing section's plane.
+ * Measured from the section face's own vertices, so a section drawn on a plane
+ * that is not parallel to the closing one is taken at its true extent and not
+ * at a representative point that can sit on the wrong side of its own profile.
  */
-function sectionInteriorPoint(
+interface SectionOffsetRange {
+  readonly min: number;
+  readonly max: number;
+}
+
+/**
+ * The signed distances of an already-built section face from the closing
+ * section's plane. Face vertices are the measurement; the planar centroid and
+ * then the sketch plane's origin are the fallbacks for a face that reports no
+ * vertices, since a plane can be shared between sections or sit well away from
+ * the profile drawn on it.
+ */
+function sectionOffsetRange(
   kernel: RemusKernel,
   face: number,
-  basis: PlaneBasis
-): Vec3 {
-  return (
-    planarFaceCentroid(kernel, face, basis.normal)?.centroid ?? basis.origin
-  );
+  basis: PlaneBasis,
+  closing: PlaneBasis
+): SectionOffsetRange {
+  const offsetOf = (point: Vec3): number =>
+    dot(subtract(point, closing.origin), closing.normal);
+  const offsets = Array.from(kernel.getFaceVertices(face), (vertex) => {
+    const position = kernel.getVertexPosition(vertex);
+    return offsetOf({
+      x: position[0] ?? 0,
+      y: position[1] ?? 0,
+      z: position[2] ?? 0
+    });
+  });
+  if (offsets.length === 0) {
+    const centroid =
+      planarFaceCentroid(kernel, face, basis.normal)?.centroid ?? basis.origin;
+    const offset = offsetOf(centroid);
+    return { min: offset, max: offset };
+  }
+  return { min: Math.min(...offsets), max: Math.max(...offsets) };
 }
 
 /**
  * Resolve a loft apex point and prove it actually closes the section run.
  *
- * The kernel applies `endPoint` unconditionally. An apex placed *between* the
- * sections folds the final ruled band back through the body: the result is
- * self-intersecting, its reported volume is *lower* than the unapexed loft's,
- * the apex is buried out of sight so the viewport looks unchanged, and
- * `validateSolid` reports nothing. So the guard has to be a signed one — the
- * apex must lie on the far side of the closing section's plane from the
- * section before it — and not a bare standoff, which only catches the
- * exactly-on-plane case.
+ * The kernel applies `endPoint` unconditionally. An apex that does not stand
+ * clear of the run folds the final ruled band back through the body: the
+ * result is self-intersecting, its reported volume is *lower* than the
+ * unapexed loft's, the apex is buried out of sight so the viewport looks
+ * unchanged, and `validateSolid` reports nothing. Measured on the pinned
+ * kernel, against 373.3333 for the plain two-section frustum and 373.3333 /
+ * 253.3333 for the three-section runs below:
+ *
+ * | sections (z) | apex z | volume |
+ * | --- | --- | --- |
+ * | 0, 10 | 5 | 266.6667 |
+ * | 0, 10, 10 | 5 | 313.3333 |
+ * | 0, 20, 10 | 5 | 193.3333 |
+ *
+ * Every one of those is *less* material than the same loft with no apex, and
+ * none of them warns. So two things have to hold, and neither may be skipped
+ * because some section happens to be coplanar with the closing one:
+ *
+ * 1. The loft must reach the closing section from the far side, so the apex
+ *    extends the run instead of folding into it.
+ * 2. The apex must stand beyond every section, so the closing band cannot
+ *    re-enter an earlier one.
+ *
+ * The one run with no side to be on is the one whose sections are *all*
+ * coplanar with the closing section. That run has no interior to fold into,
+ * and measured it closes correctly either way: 4x4 and 8x8 both on z = 0 with
+ * an apex at z = 10 and at z = -10 both give 213.3333, the analytic
+ * 8 x 8 x 10 / 3 pyramid. So rule 1 is answered for that run, not skipped.
  */
 function loftApexPoint(
   value: { x: ParamValue; y: ParamValue; z: ParamValue },
   basis: PlaneBasis,
-  interiorPoint: Vec3,
+  sectionOffsets: readonly SectionOffsetRange[],
   scope: Record<string, number>,
   label: string
 ): [number, number, number] {
@@ -926,16 +972,33 @@ function loftApexPoint(
       `${label} lies on the plane of the section it closes, which would cap the loft with a flat point instead of an apex. Move it off that plane or clear it.`
     );
   }
-  const interior = dot(subtract(interiorPoint, basis.origin), basis.normal);
-  if (Math.abs(interior) < LOFT_APEX_MIN_STANDOFF) {
-    // The section before the closing one is coplanar with it, so there is no
-    // side to be on. That loft is degenerate for reasons of its own; leave the
-    // refusal to the kernel and the solid validator rather than guess a side.
-    return [point.x, point.y, point.z];
-  }
-  if (Math.sign(standoff) === Math.sign(interior)) {
+  // Measure every other section along the direction the apex stands off in,
+  // so the two tests read the same way whichever side of the closing section
+  // the apex is on.
+  const towardApex = Math.sign(standoff);
+  const reach = sectionOffsets.map((range) => ({
+    toward: Math.max(towardApex * range.min, towardApex * range.max),
+    away: Math.min(towardApex * range.min, towardApex * range.max)
+  }));
+  const flatRun = reach.every(
+    (range) =>
+      Math.max(Math.abs(range.toward), Math.abs(range.away)) <
+      LOFT_APEX_MIN_STANDOFF
+  );
+  if (
+    !flatRun &&
+    !reach.some((range) => range.away < -LOFT_APEX_MIN_STANDOFF)
+  ) {
     throw new Error(
       `${label} is on the same side of the closing section as the rest of the loft, so the apex falls inside the body and folds the last section band back through it. Move it beyond the closing section, or clear it.`
+    );
+  }
+  const blocking = reach.findIndex(
+    (range) => towardApex * standoff - range.toward <= LOFT_APEX_MIN_STANDOFF
+  );
+  if (blocking >= 0) {
+    throw new Error(
+      `${label} does not stand clear of loft section ${blocking + 1}, which reaches at least as far past the closing section as the apex does, so the closing band folds back through the body. Move the apex beyond every section, or clear it.`
     );
   }
   return [point.x, point.y, point.z];
@@ -995,18 +1058,31 @@ export function buildLoft(
     sketchBases,
     `Loft section ${sections.length}`
   );
-  const previousPlane = sectionPlane(
-    document,
-    sections[sections.length - 2]!,
-    sketchBases,
-    `Loft section ${sections.length - 1}`
-  );
+  // Every section the apex has to clear, not just the one before the closing
+  // one: a run whose second-to-last section is coplanar with the closing one
+  // still has a direction, and one whose middle section reaches past the
+  // closing one still has a section in the apex's way.
+  const sectionOffsets = faces
+    .slice(0, -1)
+    .map((face, index) =>
+      sectionOffsetRange(
+        kernel,
+        face,
+        sectionPlane(
+          document,
+          sections[index]!,
+          sketchBases,
+          `Loft section ${index + 1}`
+        ),
+        closingPlane
+      )
+    );
   const options = {
     ruled: true,
     endPoint: loftApexPoint(
       endPoint,
       closingPlane,
-      sectionInteriorPoint(kernel, faces[faces.length - 2]!, previousPlane),
+      sectionOffsets,
       scope,
       'The loft apex point'
     )
