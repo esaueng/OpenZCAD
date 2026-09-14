@@ -141,11 +141,10 @@ test('replaces the whole body immediately while the exact offset rebuild is pend
         scope.holdOffsetPreview &&
         (message as { type?: string } | null)?.type === 'sync'
       ) {
-        window.setTimeout(
-          () =>
-            send.call(this, message, transfer as StructuredSerializeOptions),
-          750
-        );
+        // Keep the exact worker genuinely pending for this cancel-path test.
+        // A short timer races on slower CI runners: the exact result can land
+        // between the proxy-bounds and HUD assertions and correctly remove
+        // the temporary preview before the assertion observes it.
         return;
       }
       return send.call(this, message, transfer as StructuredSerializeOptions);
