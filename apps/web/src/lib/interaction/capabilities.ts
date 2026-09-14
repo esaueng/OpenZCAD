@@ -12,6 +12,7 @@ import { UNSTABLE_FACE_SKETCH_REASON } from '../faceSketchAttachment';
 
 export type SelectionActionId =
   | 'export-face-dxf'
+  | 'resize-body'
   | 'offset-face'
   | 'resize-radial-face'
   | 'edit-fillet'
