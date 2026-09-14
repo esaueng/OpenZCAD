@@ -28,6 +28,7 @@ export {
 export {
   DEFAULT_RECOGNITION_LIMITS,
   recognizeImportedFeature,
+  recognitionRefusalMessage,
   type ExactFaceAdjacency,
   type ExactFaceAdjacencyQuery,
   type ExactRecognitionFace,
@@ -37,10 +38,12 @@ export {
   type RecognitionLimits,
   type RecognitionRefusalReason
 } from './imported-feature-recognition';
+export type { FaceRecognitionSummary } from '@openzcad/shared';
 
 export {
   RemusImportedFeatureQuery,
   collectRecognizedImportedFeatures,
+  importedProofDisplayDimensions,
   recognizeImportedFeatureOnSolid,
   type ImportedRecognitionFaceIdentity
 } from './imported-feature-query';

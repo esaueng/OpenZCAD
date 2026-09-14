@@ -495,6 +495,47 @@ function canonicalSeedFaceId(proof: ImportedFeatureProof): string {
   }
 }
 
+/**
+ * Display dimensions carried by one {@link ImportedFeatureProof}, keyed by
+ * the proof's own field names minus identity fields. Lengths are in kernel
+ * millimetres; the worker scales them into document units before publishing,
+ * and angles stay in radians.
+ */
+export function importedProofDisplayDimensions(
+  proof: ImportedFeatureProof
+): Record<string, number> {
+  switch (proof.kind) {
+    case 'blind-cylindrical-hole':
+      return { diameter: proof.diameter, depth: proof.depth };
+    case 'counterbore':
+      return {
+        outerDiameter: proof.outerDiameter,
+        innerDiameter: proof.innerDiameter,
+        counterboreDepth: proof.counterboreDepth,
+        totalDepth: proof.totalDepth
+      };
+    case 'countersink':
+      return {
+        openingDiameter: proof.openingDiameter,
+        holeDiameter: proof.holeDiameter,
+        angleRadians: proof.angleRadians,
+        countersinkDepth: proof.countersinkDepth,
+        totalDepth: proof.totalDepth
+      };
+    case 'cylindrical-boss':
+      return { diameter: proof.diameter, height: proof.height };
+    case 'prismatic-pocket':
+      return { depth: proof.depth };
+    case 'conical-taper':
+      return {
+        referenceRadius: proof.referenceRadius,
+        oppositeRadius: proof.oppositeRadius,
+        length: proof.length,
+        angleRadians: proof.angleRadians
+      };
+  }
+}
+
 function vec(point: ExactPoint3): Vec3 {
   return { x: point[0], y: point[1], z: point[2] };
 }
