@@ -26,7 +26,8 @@ import type {
   ViewTarget,
   WheelDevice
 } from '@openzcad/viewport';
-import { ViewerToolbar, type SectionOutlineStatus } from './ViewerToolbar';
+import { ViewerToolbar } from './ViewerToolbar';
+import type { SectionOutlineState } from '../lib/sectionOutline';
 import { OrientationWidget } from './OrientationWidget';
 import {
   ViewportScaleIndicator,
@@ -254,7 +255,7 @@ interface ViewerShellProps {
   onSectionOffset(offset: number): void;
   onSectionCommit(): void;
   onExportSectionDxf(): void;
-  sectionOutline: SectionOutlineStatus;
+  sectionOutline: SectionOutlineState;
   /** Kernel section geometry for the resting plane; null while dragging. */
   exactSection: ExactSectionRegionDisplay[] | null;
 }
@@ -404,6 +405,7 @@ export function ViewerShell({
       onSectionCommit={onSectionCommit}
       onExportSectionDxf={onExportSectionDxf}
       sectionOutline={sectionOutline}
+      units={units}
     />
   );
   return (

@@ -28,6 +28,7 @@ import {
   viewDirectionFor,
   applyDisplayMode,
   applySectionPlane,
+  EXACT_SECTION,
   sectionClippingPlane,
   CameraController,
   buildCylinderRadiusHandle,
@@ -3615,6 +3616,11 @@ export function ModelViewer({
               triangles: number;
               bounds: { min: number[]; max: number[] };
             }[];
+            exactSections: {
+              triangles: number;
+              curves: number;
+              bounds: { min: number[]; max: number[] };
+            }[];
             bodyFaces: {
               depthTest: boolean;
               depthWrite: boolean;
@@ -3710,8 +3716,31 @@ export function ModelViewer({
           bounds: { min: bounds.min.toArray(), max: bounds.max.toArray() }
         });
       });
+      // Kernel section geometry, which replaces the cap on a body it covers.
+      const exactSections: {
+        triangles: number;
+        curves: number;
+        bounds: { min: number[]; max: number[] };
+      }[] = [];
+      const exactGroup = bodyGroup.getObjectByName(EXACT_SECTION);
+      for (const child of exactGroup?.children ?? []) {
+        if (!(child instanceof THREE.Mesh)) {
+          continue;
+        }
+        const geometry = child.geometry as THREE.BufferGeometry;
+        geometry.computeBoundingBox();
+        const bounds = geometry.boundingBox!;
+        exactSections.push({
+          triangles: (geometry.index?.count ?? 0) / 3,
+          curves: (exactGroup?.children ?? []).filter(
+            (node) => node instanceof THREE.LineLoop
+          ).length,
+          bounds: { min: bounds.min.toArray(), max: bounds.max.toArray() }
+        });
+      }
       detail.resolve({
         sectionCaps,
+        exactSections,
         bodyFaces,
         bodyEdges: lineStates(bodyGroup),
         sketchLines: lineStates(regionGroup)

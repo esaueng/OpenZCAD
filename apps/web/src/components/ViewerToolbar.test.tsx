@@ -1,6 +1,7 @@
 import { fireEvent, render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
-import { ViewerToolbar, type SectionOutlineStatus } from './ViewerToolbar';
+import { ViewerToolbar } from './ViewerToolbar';
+import type { SectionOutlineState } from '../lib/sectionOutline';
 import type { ViewerSettings } from '@openzcad/viewport';
 
 /**
@@ -17,7 +18,7 @@ const settings: ViewerSettings = {
 };
 
 function renderToolbar(
-  sectionOutline: SectionOutlineStatus,
+  sectionOutline: SectionOutlineState,
   handlers: {
     onSectionCommit?: () => void;
     onExportSectionDxf?: () => void;
@@ -44,14 +45,18 @@ function renderToolbar(
       onSectionCommit={handlers.onSectionCommit ?? noop}
       onExportSectionDxf={handlers.onExportSectionDxf ?? noop}
       sectionOutline={sectionOutline}
+      units="mm"
     />
   );
 }
 
 describe('the section panel', () => {
   it('names the clipped preview and refuses to export it', () => {
-    renderToolbar({ kind: 'clipping', detail: 'Approximate cut' });
+    renderToolbar({ kind: 'clipping' });
     expect(screen.getByText('Clipping preview')).toBeTruthy();
+    expect(
+      screen.getByText(/release the slider for section curves/)
+    ).toBeTruthy();
     expect(
       screen.getByLabelText('Export the exact section as DXF')
     ).toHaveProperty('disabled', true);
@@ -60,7 +65,7 @@ describe('the section panel', () => {
   it('names the exact section, shows its area, and exports it', () => {
     const onExportSectionDxf = vi.fn();
     renderToolbar(
-      { kind: 'exact', detail: '187.45 mm² of material' },
+      { kind: 'exact', regions: [], area: 187.4538, refused: 0 },
       { onExportSectionDxf }
     );
     expect(screen.getByText('Exact section')).toBeTruthy();
@@ -88,10 +93,7 @@ describe('the section panel', () => {
   it('asks for the exact cut when the slider is released, not while dragging', () => {
     const onSectionCommit = vi.fn();
     const onSectionOffset = vi.fn();
-    renderToolbar(
-      { kind: 'clipping', detail: 'Approximate cut' },
-      { onSectionCommit, onSectionOffset }
-    );
+    renderToolbar({ kind: 'clipping' }, { onSectionCommit, onSectionOffset });
     const slider = screen.getByRole('slider');
     fireEvent.change(slider, { target: { value: '4' } });
     expect(onSectionOffset).toHaveBeenCalledWith(4);
