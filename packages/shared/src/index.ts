@@ -2110,6 +2110,8 @@ export interface ArtifactRecord {
   kind:
     | 'step-import'
     | 'stl-import'
+    /** Any other mesh interchange import: 3MF, OBJ, glTF binary, PLY. */
+    | 'mesh-import'
     | 'step-export'
     | 'stl-export'
     | '3mf-export'

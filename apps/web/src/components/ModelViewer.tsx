@@ -28,6 +28,7 @@ import {
   viewDirectionFor,
   applyDisplayMode,
   applySectionPlane,
+  exactSectionSnapshot,
   sectionClippingPlane,
   CameraController,
   buildCylinderRadiusHandle,
@@ -105,8 +106,10 @@ import {
   updateStudioGrid,
   tuneShadowFrustum,
   VIEWPORT_RENDER_ORDER,
+  DrawnBodyReport,
   type AxisProjection,
   type CameraPose,
+  type ExactSectionRegionDisplay,
   type DirectEditAxis,
   type MoveAxis,
   type MoveGizmoFocus,
@@ -442,6 +445,13 @@ interface ModelViewerProps {
   /** Select-other popup follows the direct-manipulation experiment gate. */
   pickListEnabled: boolean;
   settings: ViewerSettings;
+  /**
+   * Kernel-computed section geometry for the plane at rest, drawn in place of
+   * the clipped preview's display caps. Null while the plane is moving or
+   * while the exact section is still being computed — the approximation owns
+   * the drag, so the slider never waits on the kernel.
+   */
+  exactSection: ExactSectionRegionDisplay[] | null;
   /** Increment to re-fit the camera to the current geometry. */
   fitSignal: number;
   /** Set to move the camera to a view target; nonce forces re-runs. */
@@ -477,6 +487,19 @@ interface ModelViewerProps {
   /** Final camera pose emitted after navigation or a camera glide settles. */
   onViewSettled(view: ViewportCameraState): void;
   onGeometryPresented?(durationMs: number): void;
+  /**
+   * Which bodies this viewer is drawing somewhere other than where the
+   * document built them — moved, resized or hidden, by any mechanism.
+   *
+   * Reported from the frame itself rather than from whatever posed them (see
+   * `DrawnBodyReport`), because posing a mesh needs no declaration and the
+   * Move gizmo makes none — it writes `object.position` in a pointer handler
+   * and no state outside this component knows. The workspace folds this into
+   * `ViewportGeometry`, and the exact section refuses on it: a section of a
+   * body that is no longer where the plane cuts is a drawing of nothing
+   * anybody is looking at.
+   */
+  onBodiesDrawnElsewhere?(bodyIds: string[]): void;
   /** Scroll-wheel auto-detection just proved a different pointing device. */
   onWheelDeviceLearned?(device: WheelDevice): void;
   /** Imperative sink for per-frame axis projections (no React re-render). */
@@ -1154,6 +1177,7 @@ export function ModelViewer({
   selectedEdges,
   pickListEnabled,
   settings,
+  exactSection,
   fitSignal,
   viewRequest,
   normalToFaceRequest,
@@ -1168,6 +1192,7 @@ export function ModelViewer({
   onViewChange,
   onViewSettled,
   onGeometryPresented,
+  onBodiesDrawnElsewhere,
   onWheelDeviceLearned,
   orientationRef,
   orientationDragRef,
@@ -1276,6 +1301,8 @@ export function ModelViewer({
   displayModeRef.current = settings.displayMode;
   const sectionViewRef = useRef(settings.sectionView ?? null);
   sectionViewRef.current = settings.sectionView ?? null;
+  const exactSectionRef = useRef(exactSection);
+  exactSectionRef.current = exactSection;
   const showGridRef = useRef(settings.showGrid);
   showGridRef.current = settings.showGrid;
   const reducedMotionRef = useRef(settings.reducedMotion);
@@ -1297,6 +1324,8 @@ export function ModelViewer({
   onViewChangeRef.current = onViewChange;
   const onGeometryPresentedRef = useRef(onGeometryPresented);
   onGeometryPresentedRef.current = onGeometryPresented;
+  const onBodiesDrawnElsewhereRef = useRef(onBodiesDrawnElsewhere);
+  onBodiesDrawnElsewhereRef.current = onBodiesDrawnElsewhere;
   const onViewSettledRef = useRef(onViewSettled);
   onViewSettledRef.current = onViewSettled;
   const onWheelDeviceLearnedRef = useRef(onWheelDeviceLearned);
@@ -1497,6 +1526,13 @@ export function ModelViewer({
 
     mark('viewer.init:begin');
     let firstFrame = true;
+    /**
+     * Per-frame record of which bodies this viewer is drawing away from
+     * their document pose. Owned by the scene's own lifetime: a viewer that
+     * has been torn down draws nothing, and a remembered pose would outlive
+     * both it and the section it silenced.
+     */
+    const drawnBodyReport = new DrawnBodyReport();
     let lastPerfFrameAt: number | null = null;
     const scene = new THREE.Scene();
     // Solid clear colour stays behind the clip-space gradient as a safe first
@@ -3604,6 +3640,11 @@ export function ModelViewer({
               triangles: number;
               bounds: { min: number[]; max: number[] };
             }[];
+            exactSections: {
+              triangles: number;
+              curves: number;
+              bounds: { min: number[]; max: number[] };
+            }[];
             bodyFaces: {
               depthTest: boolean;
               depthWrite: boolean;
@@ -3699,8 +3740,13 @@ export function ModelViewer({
           bounds: { min: bounds.min.toArray(), max: bounds.max.toArray() }
         });
       });
+      // Kernel section geometry, which replaces the cap on a body it covers.
+      // Counted per region by the viewport itself, so each entry reports its
+      // own boundary curves rather than the group's total.
+      const exactSections = exactSectionSnapshot(bodyGroup);
       detail.resolve({
         sectionCaps,
+        exactSections,
         bodyFaces,
         bodyEdges: lineStates(bodyGroup),
         sketchLines: lineStates(regionGroup)
@@ -6786,6 +6832,23 @@ export function ModelViewer({
         context.activeCamera,
         showGridRef.current
       );
+      // WHAT IS ON SCREEN IS DECIDED HERE, not by whoever put it there.
+      //
+      // Anything that draws a body somewhere other than where the document
+      // built it — the Move gizmo, a face drag, a stand-in hiding it, or
+      // something nobody has written yet — has to have posed the object
+      // before this line, because otherwise the frame about to be rendered
+      // would not show it. So the frame is asked, and the answer goes to the
+      // workspace, which feeds it back in as `ViewportGeometry.drawnElsewhere`
+      // and refuses to call any section of those bodies exact.
+      //
+      // Sampling is a handful of float compares per body and speaks only when
+      // the set changes, so a drag reports twice — once when it starts, once
+      // when it ends — not sixty times a second.
+      const drawnElsewhere = drawnBodyReport.sample(context.objectsByBodyId);
+      if (drawnElsewhere) {
+        onBodiesDrawnElsewhereRef.current?.(drawnElsewhere);
+      }
       // The first draw compiles every material's shaders and uploads the
       // environment map, so it costs far more than steady-state frames.
       if (firstFrame) {
@@ -6915,6 +6978,8 @@ export function ModelViewer({
       if (animationFrame !== null) {
         window.cancelAnimationFrame(animationFrame);
       }
+      // This scene stops drawing here, so nothing of it is posed any more.
+      onBodiesDrawnElsewhereRef.current?.(drawnBodyReport.reset());
       pixelRatioQuery?.removeEventListener('change', onPixelRatioChange);
       observer.disconnect();
       renderer.domElement.removeEventListener(
@@ -7633,6 +7698,12 @@ export function ModelViewer({
       context.bodyGroup,
       sectionViewRef.current
         ? sectionClippingPlane(sectionViewRef.current)
+        : null,
+      exactSectionRef.current
+        ? {
+            regions: exactSectionRef.current,
+            displayMode: displayModeRef.current
+          }
         : null
     );
 
@@ -8912,12 +8983,18 @@ export function ModelViewer({
     }
     applySectionPlane(
       context.bodyGroup,
-      settings.sectionView ? sectionClippingPlane(settings.sectionView) : null
+      settings.sectionView ? sectionClippingPlane(settings.sectionView) : null,
+      // The mode is read from the ref, not the deps: the display-mode effect
+      // owns a mode CHANGE, and re-running this one for it would rebuild the
+      // section geometry to no purpose.
+      exactSection
+        ? { regions: exactSection, displayMode: displayModeRef.current }
+        : null
     );
     // The frozen ground shadow must follow the cut, not the uncut silhouette.
     context.refreshShadowMap();
     context.requestRender();
-  }, [settings.sectionView]);
+  }, [settings.sectionView, exactSection]);
 
   useEffect(() => {
     const context = contextRef.current;
