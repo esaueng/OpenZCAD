@@ -1,6 +1,6 @@
 # Handoff — kernel feature recognition for pockets and fillet bands
 
-Branch `claude/remus-feature-recognition`, five commits on top of `6ada3b3c`
+Branch `claude/remus-feature-recognition`, seven commits on top of `6ada3b3c`
 (`origin/main` at the time it was branched). Roadmap row M05; it stays **Partial** — this is read-only
 recognition of two families, not the complete imported-feature edit set, and the
 ROADMAP row was left unchanged.
@@ -106,20 +106,30 @@ consumed anywhere in the new code.
 Run from the worktree root, in order:
 
 ```
-pnpm lint              ✖ 19 problems (0 errors, 19 warnings)   [pre-existing warnings]
-pnpm typecheck         clean (no output)
-pnpm test              root: Test Files 243 passed | 2 skipped (245)
-                             Tests 2520 passed | 4 skipped (2524)
-                       web:  Test Files 156 passed (156)
-                             Tests 1182 passed (1182)
+pnpm lint               ✖ 19 problems (0 errors, 19 warnings)  [pre-existing warnings]
+pnpm typecheck          clean (no output)
+pnpm test               root: Test Files 243 passed | 2 skipped (245)
+                              Tests 2521 passed | 4 skipped (2525)
+                        web:  Test Files 156 passed (156)
+                              Tests 1182 passed (1182)
 pnpm test:parity-corpus Test Files 7 passed (7)
                         Tests 174 passed | 1 skipped (175)
+pnpm build              ✓ built; report-bundle-sizes --check
+                        "warnings": [], "failures": []
 ```
 
-Baseline was root 242 files / 2516 tests and web 156 / 1182; the added file is
-`packages/kernel-adapter/src/remus-feature-recognition.test.ts` plus
-`test/imported-kernel-recognized-features.test.ts` and four new cases in
-`test/ai-contracts.test.ts`. `pnpm test:e2e` and the desktop/apple-silicon
+The verified `origin/main` baseline is root **241 files passed | 2 skipped,
+2489 tests passed | 4 skipped** and web **156 files / 1182 tests**. An earlier
+revision of this handoff quoted the root baseline as "242 files / 2516 tests";
+that figure was wrong and understated the added coverage. The branch adds
+**2 test files and 32 tests**:
+`packages/kernel-adapter/src/remus-feature-recognition.test.ts` (25),
+`test/imported-kernel-recognized-features.test.ts` (3), and four new cases in
+`test/ai-contracts.test.ts`. Web is unchanged, and parity is unchanged.
+
+`pnpm build` now runs here too: it includes `scripts/report-bundle-sizes.mjs
+--check`, and the entry chunk is unaffected because nothing new is reachable
+from `apps/web/src/App.tsx`. `pnpm test:e2e` and the desktop/apple-silicon
 workflows were not run, per the briefing.
 
 Prettier: the two new/edited adapter files were formatted. `exact.ts`,
@@ -143,6 +153,11 @@ reformatted and no unrelated lines moved.
     over the proved 5 mm bore publishes neither answer;
   - all three committed STEP fixtures publish exactly what they published
     before, although each carries kernel claims;
+  - **a seed-hash collision is dropped on both code paths**: two identical
+    blind bores given one shared face hash publish nothing, whether the kernel
+    recognizer answers or is unavailable. This is the regression test for the
+    guard fix below; with the fix reverted, the claims-unavailable path
+    publishes both features and the two paths diverge;
   - payload decoding and the cross-check are unit-tested directly.
 - `test/imported-kernel-recognized-features.test.ts` — a milled pocket survives
   the real document pipeline (primitive → sketch → cut extrude → STEP export →
@@ -151,6 +166,28 @@ reformatted and no unrelated lines moved.
 - `test/ai-contracts.test.ts` — an edit binds to an exact proof, is refused on a
   read-only one, refused when one seed carries two answers, and still refused
   when the proof is stale or missing.
+
+## Fixes from the verifier round
+
+Two defects were reported against this branch and both are fixed here.
+
+1. **Wrong baseline in this file.** The root-suite `origin/main` baseline was
+   quoted as "242 files / 2516 tests". The measured baseline is 241 files
+   passed / 2489 tests passed (2 skipped files, 4 skipped tests), so the branch
+   adds 2 files and 32 tests, not 1 and 4. The Check results section above now
+   carries the measured numbers and says so plainly.
+
+2. **`collectRecognizedImportedFeatures` skipped the seed-ambiguity guard on
+   one path.** When the kernel recognizer was unavailable or its payload could
+   not be decoded, the function returned early at the `if (!claims)` branch
+   *before* `withoutAmbiguousSeeds`, while the normal path applied it. Both
+   outcomes fail closed (the guard's purpose is to drop an ambiguous pair, and
+   downstream binding throws on the pair that leaks), so no wrong geometry was
+   reachable — but the two paths disagreed, and the fixture test
+   `expect(recognize(solid)).toEqual(recognize(solid, withKernelClaims()))` is
+   exactly the equality that would have stopped holding. The early return now
+   applies the same guard, and the new collision test pins both paths to the
+   same answer.
 
 ## Deliberate limits
 
@@ -200,12 +237,14 @@ reformatted and no unrelated lines moved.
 
 ## Concurrent main (read before merging)
 
-`origin/main` advanced to `aafdf35b` (#328, shared measured editing workflow for
-imported parts) while this branch was in flight. This branch is based on
-`6ada3b3c` and `git merge-tree HEAD origin/main` merges **cleanly** (no
-conflicted paths), although both changes touch `packages/shared/src/index.ts`,
-`packages/ai-contracts/src/index.ts`, `auto-parameterize.ts` and
-`packages/kernel-adapter/src/exact.ts`. Re-run the four checks after the merge.
+`origin/main` advanced while this branch was in flight — first to `aafdf35b`
+(#328, shared measured editing workflow for imported parts) and, as of this
+round, to `d12b0281` (#327). This branch is based on `6ada3b3c`, and
+`git merge-tree --write-tree HEAD origin/main` merges **cleanly** against both
+(no conflicted paths), although #328 and this change both touch
+`packages/shared/src/index.ts`, `packages/ai-contracts/src/index.ts`,
+`auto-parameterize.ts` and `packages/kernel-adapter/src/exact.ts`. Re-run all
+five checks after the merge.
 
 Semantic interaction checked: #328's `edit-candidates.ts` reads
 `recognizedImportedFeatures` for its `measuredOnly` list and switches
