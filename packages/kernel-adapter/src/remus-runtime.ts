@@ -1,6 +1,9 @@
 export {
   BrepKernel as RemusKernel,
-  type FaceEvolutionPayloadV1
+  type FaceEvolutionPayloadV1,
+  // The typed boolean verdict. Re-exported so the adapter's refusal taxonomy
+  // is derived from the pinned kernel's own union rather than restated.
+  type SolidOperationDetailedResult
 } from 'remus-wasm';
 export type { RemusIo, StepImportResult } from 'remus-wasm-io';
 
