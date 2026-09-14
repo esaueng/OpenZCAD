@@ -3,9 +3,10 @@ import {
   addPrimitiveFeature,
   booleanBodies,
   createProjectDocument,
+  importStepBody,
   transformBody
 } from '@openzcad/document-core';
-import { toUserId } from '@openzcad/shared';
+import { toBodyId, toUserId } from '@openzcad/shared';
 import type { BodyId, ProjectDocument, UnitSystem } from '@openzcad/shared';
 import {
   createExactKernelAdapter,
@@ -90,6 +91,47 @@ function twoBars(): {
   return { document: doc, first, second };
 }
 
+/**
+ * ONE body holding TWO disjoint solids, written and re-imported through the
+ * adapter's own STEP path because that is the only way a model gets one: a
+ * 10-cube on the origin and a 6-cube lifted clear of it. A plane at z = 5
+ * cuts the first solid and misses the second, so the kernel — which answers
+ * per solid — reports a region and a refusal for the same body.
+ */
+async function twoSolidBody(exact: ExactKernelAdapter): Promise<{
+  document: ProjectDocument;
+  bodyId: BodyId;
+}> {
+  let source = createProjectDocument('Two solids', toUserId('user_section'));
+  source = addPrimitiveFeature(source, {
+    name: 'Low',
+    primitiveKind: 'box',
+    dimensions: { width: 10, height: 10, depth: 10 }
+  });
+  source = addPrimitiveFeature(source, {
+    name: 'High',
+    primitiveKind: 'box',
+    dimensions: { width: 6, height: 6, depth: 6 }
+  });
+  const high = source.bodyOrder.at(-1)!;
+  source = transformBody(source, {
+    name: 'Lift',
+    targetBodyId: high,
+    translation: { x: 40, y: 0, z: 40 }
+  }).document;
+  const stepText = await exact.exportStep(source, source.bodyOrder);
+  const imported = importStepBody(
+    createProjectDocument('Imported', toUserId('user_section')),
+    {
+      name: 'Imported',
+      artifactId: 'artifact_two_solids',
+      sourceName: 'two-solids.step',
+      stepText
+    }
+  );
+  return { document: imported.document, bodyId: imported.bodyId };
+}
+
 const XY_AT_3 = { origin: [0, 0, 3], normal: [0, 0, 1] } as const;
 
 /** DXF is a flat stream of [group code, value] line pairs. */
@@ -152,6 +194,89 @@ describe('sectionOutline', () => {
     expect(named.refusals).toEqual([]);
   }, 120_000);
 
+  it('refuses a body this document has no geometry for, keeping the rest', async () => {
+    const exact = await kernel();
+    const { document, first } = twoBars();
+
+    // The mismatch this guards: the viewport is showing a PREVIEW
+    // document's bodies while the live document is the one being sectioned,
+    // so the list names a body the live build never made. Thrown, it took
+    // the whole section with it and put a raw internal message on the rail;
+    // refused by name, every body that does cut is still drawn and measured.
+    const report = await exact.sectionOutline(document, XY_AT_3, [
+      first,
+      toBodyId('body_preview_only')
+    ]);
+    expect(report.regions).toHaveLength(1);
+    expect(report.regions[0]!.bodyId).toBe(first);
+    expect(report.regions[0]!.area).toBeCloseTo(200, 3);
+    expect(report.refusals).toEqual([
+      {
+        bodyId: 'body_preview_only',
+        reason: 'unknown-body',
+        message: 'Body body_preview_only has no exact geometry in this model.'
+      }
+    ]);
+  }, 120_000);
+
+  it('sections a preview document by ITS bodies, which the live one lacks', async () => {
+    const exact = await kernel();
+    const { document: live, first } = twoBars();
+    // What a form preview publishes: the live document plus the command's
+    // result, never written back. The viewport draws THIS document's bodies
+    // while `doc` is still the one above.
+    const preview = addPrimitiveFeature(live, {
+      name: 'preview',
+      primitiveKind: 'box',
+      dimensions: { width: 4, height: 4, depth: 6 }
+    });
+    const previewOnly = preview.bodyOrder.at(-1)!;
+    expect(live.bodyOrder).not.toContain(previewOnly);
+    const visible = [first, previewOnly];
+
+    // Asked of the document the bodies came from, both cut.
+    const shown = await exact.sectionOutline(preview, XY_AT_3, visible);
+    expect(shown.refusals).toEqual([]);
+    expect(shown.regions.map((region) => region.bodyId).sort()).toEqual(
+      [...visible].sort()
+    );
+    expect(
+      shown.regions.reduce((total, region) => total + region.area, 0)
+    ).toBeCloseTo(200 + 16, 3);
+
+    // Asked of the LIVE one, the preview body is refused by name — and the
+    // bar is still sectioned, drawn and measured. Thrown, this took the
+    // whole section down and put the throw's text on the rail instead.
+    const stale = await exact.sectionOutline(live, XY_AT_3, visible);
+    expect(stale.regions).toHaveLength(1);
+    expect(stale.regions[0]!.bodyId).toBe(first);
+    expect(stale.refusals.map((refusal) => refusal.reason)).toEqual([
+      'unknown-body'
+    ]);
+  }, 180_000);
+
+  it('answers per solid for a body that holds several', async () => {
+    const exact = await kernel();
+    const { document, bodyId } = await twoSolidBody(exact);
+    const report = await exact.sectionOutline(document, {
+      origin: [0, 0, 5],
+      normal: [0, 0, 1]
+    });
+    // One body, two solids, one of them cut: a region and a refusal both
+    // carrying the SAME body id. Anything counting refusals as bodies then
+    // tells the user this body is not cut while drawing its cross-section.
+    expect(report.regions).toHaveLength(1);
+    expect(report.regions[0]!.bodyId).toBe(bodyId);
+    expect(report.regions[0]!.area).toBeCloseTo(100, 3);
+    expect(report.refusals).toEqual([
+      {
+        bodyId,
+        reason: 'plane-misses-body',
+        message: 'The section plane does not pass through this body.'
+      }
+    ]);
+  }, 180_000);
+
   it('reports a plane that misses the body as a refusal, not a failure', async () => {
     const exact = await kernel();
     const report = await exact.sectionOutline(boredBar(), {
@@ -198,6 +323,21 @@ describe('exportSectionDxf', () => {
     // The small bar alone: 8 mm by 4 mm, with nothing of the 20 mm one.
     expect(extent(text, 10)).toBeCloseTo(8, 6);
     expect(extent(text, 20)).toBeCloseTo(4, 6);
+  }, 120_000);
+
+  it('refuses a drawing that would silently lose a named body', async () => {
+    const exact = await kernel();
+    const { document, first } = twoBars();
+    // `sectionOutline` refuses this body by name and draws the rest; a
+    // DRAWING may not quietly lose it, so the export fails closed. The rail's
+    // export gate is shut in that state, which is what keeps a user from
+    // ever seeing this message.
+    await expect(
+      exact.exportSectionDxf(document, XY_AT_3, [
+        first,
+        toBodyId('body_preview_only')
+      ])
+    ).rejects.toThrow(/body_preview_only has no exact geometry in this model/);
   }, 120_000);
 
   it('refuses to write a drawing for a plane that cuts nothing', async () => {
