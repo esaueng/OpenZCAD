@@ -12,7 +12,6 @@ import { edgeModifierCommand } from './lib/edgeModifierEdit';
 import type { EdgeModifierFormValue } from './components/forms/FeatureForms';
 import { documentNodesWithHistory } from '@openzcad/shared';
 import { useWorkspaceResume } from './hooks/useWorkspaceResume';
-import { ResumeSessionDialog } from './components/ResumeSessionDialog';
 import { buildMeasurementRecord } from './lib/measurementRecord';
 import {
   loadProjectBackupFiles,
@@ -325,8 +324,6 @@ import {
   clearProjectShareFragment
 } from './lib/projectShareLink';
 import { fetchSharedProject } from './lib/projectShareClient';
-import { ProjectConflictDialog } from './components/ProjectConflictDialog';
-import { SaveRevisionDialog } from './components/SaveRevisionDialog';
 import type {
   ExportProgress,
   MeshExportDialogFormat
@@ -450,8 +447,10 @@ import {
   toolCardFor,
   type FaceTarget,
   type RegionTarget,
-  type SketchConstraintToolKind
+  type SketchConstraintToolKind,
+  type SketchEditToolKind
 } from './lib/interaction/machine';
+import type { SketchEditHost } from './lib/sketch/edits';
 import {
   faceOffsetBaseline,
   planFaceOffset
@@ -638,6 +637,24 @@ const LazySketchToolRail = lazyWithStaleChunkNotice(() =>
     default: module.SketchToolRail
   }))
 );
+// Three modal dialogs nobody sees in an ordinary session: a resume offer, a
+// named checkpoint, and a save conflict. They loaded with the app and sat in
+// the entry chunk; the gesture that opens one can afford to fetch it.
+const LazyResumeSessionDialog = lazyWithStaleChunkNotice(() =>
+  import('./components/ResumeSessionDialog').then((module) => ({
+    default: module.ResumeSessionDialog
+  }))
+);
+const LazySaveRevisionDialog = lazyWithStaleChunkNotice(() =>
+  import('./components/SaveRevisionDialog').then((module) => ({
+    default: module.SaveRevisionDialog
+  }))
+);
+const LazyProjectConflictDialog = lazyWithStaleChunkNotice(() =>
+  import('./components/ProjectConflictDialog').then((module) => ({
+    default: module.ProjectConflictDialog
+  }))
+);
 const LazySketchEntityEditor = lazyWithStaleChunkNotice(() =>
   import('./components/SketchEntityEditor').then((module) => ({
     default: module.SketchEntityEditor
@@ -767,6 +784,36 @@ function SketchToolRail(props: ComponentProps<typeof LazySketchToolRail>) {
   return (
     <Suspense fallback={null}>
       <LazySketchToolRail {...props} />
+    </Suspense>
+  );
+}
+
+function ResumeSessionDialog(
+  props: ComponentProps<typeof LazyResumeSessionDialog>
+) {
+  return (
+    <Suspense fallback={null}>
+      <LazyResumeSessionDialog {...props} />
+    </Suspense>
+  );
+}
+
+function SaveRevisionDialog(
+  props: ComponentProps<typeof LazySaveRevisionDialog>
+) {
+  return (
+    <Suspense fallback={null}>
+      <LazySaveRevisionDialog {...props} />
+    </Suspense>
+  );
+}
+
+function ProjectConflictDialog(
+  props: ComponentProps<typeof LazyProjectConflictDialog>
+) {
+  return (
+    <Suspense fallback={null}>
+      <LazyProjectConflictDialog {...props} />
     </Suspense>
   );
 }
@@ -2137,10 +2184,13 @@ export function App() {
     })
   ).current;
   useEffect(() => () => exactEntryQueue.cancel(), [exactEntryQueue]);
-  useEffect(() => () => {
-    ++parameterEditRequest.current;
-    parameterChecks.cancelPending();
-  }, [parameterChecks]);
+  useEffect(
+    () => () => {
+      ++parameterEditRequest.current;
+      parameterChecks.cancelPending();
+    },
+    [parameterChecks]
+  );
   const [parameterPreviewBase, setParameterPreviewBase] =
     useState<ProjectDocument | null>(null);
   const [makeParameterPreview, setMakeParameterPreview] = useState<
@@ -2163,7 +2213,7 @@ export function App() {
   }, [parameterPreviewBase, makeParameterPreview]);
   const geometry = useGeometryWorker({
     manager: () => managerRef.current,
-    onProjection: derived => {
+    onProjection: (derived) => {
       const document = managerRef.current?.document;
       if (document) setParameterPreviewBase({ ...document, derived });
     },
@@ -2199,12 +2249,15 @@ export function App() {
       setStatus(message);
     }
   });
-  const parameterDraftActive = parameterCandidate !== null &&
+  const parameterDraftActive =
+    parameterCandidate !== null &&
     parameterCandidate.base.projectId === doc?.projectId &&
     parameterCandidate.base.version === doc?.version;
   const exactGeometryReady = !parameterDraftActive && geometry.isReadyFor(doc);
   function requireExactGeometryReady(): boolean {
-    const ready = !parameterDraftActive && geometry.isReadyFor(managerRef.current?.document ?? null);
+    const ready =
+      !parameterDraftActive &&
+      geometry.isReadyFor(managerRef.current?.document ?? null);
     if (!ready) {
       setStatus(
         'Exact geometry is still rebuilding. Topology actions are temporarily unavailable.'
@@ -4393,7 +4446,9 @@ export function App() {
    * bodies stay hidden and every other part keeps its exact geometry.
    */
   const visibleParameterPreview = useMemo(
-    () => parameterPreview?.filter(body => !hiddenBodyIds.has(body.bodyId)) ?? null,
+    () =>
+      parameterPreview?.filter((body) => !hiddenBodyIds.has(body.bodyId)) ??
+      null,
     [parameterPreview, hiddenBodyIds]
   );
 
@@ -10182,7 +10237,8 @@ export function App() {
   useEffect(() => {
     const open =
       (interaction.mode === 'sketch' &&
-        keypadRef.current?.kind === 'sketch-dimension') ||
+        (keypadRef.current?.kind === 'sketch-dimension' ||
+          keypadRef.current?.kind === 'sketch-edit')) ||
       (interaction.mode !== 'idle' &&
         interaction.mode !== 'sketch' &&
         (interaction.phase === 'exact-entry' ||
@@ -10662,6 +10718,12 @@ export function App() {
     documentVersion: number;
     constraintId?: string;
   } | null>(null);
+  // A modify tool whose picks are in, waiting on its radius or distance.
+  const [sketchEditDraft, setSketchEditDraft] = useState<{
+    kind: SketchEditToolKind;
+    picks: string[];
+    documentVersion: number;
+  } | null>(null);
   // The pill describes a solve of THIS session's sketch; leaving sketch mode
   // orphans it.
   useEffect(() => {
@@ -10669,7 +10731,11 @@ export function App() {
       setSketchSolveStatus(null);
       setSketchSolving(false);
       setSketchDimensionDraft(null);
-      if (keypadRef.current?.kind === 'sketch-dimension') {
+      setSketchEditDraft(null);
+      if (
+        keypadRef.current?.kind === 'sketch-dimension' ||
+        keypadRef.current?.kind === 'sketch-edit'
+      ) {
         setKeypad(null);
       }
     }
@@ -10921,6 +10987,106 @@ export function App() {
     }
     dispatchInteraction({ type: 'sketch-constraint-tool', kind: null });
     return true;
+  }
+
+  /**
+   * What the lazily loaded modify tools drive the app through. Built per
+   * call so it closes over the document the operation was planned against.
+   */
+  function sketchEditHost(
+    base: ProjectDocument,
+    anchor?: { x: number; y: number }
+  ): SketchEditHost {
+    return {
+      setStatus,
+      setError: setSketchEditError,
+      setBusy: setSketchSolving,
+      resolve: (value) =>
+        evalParamValue(value, parameterScope.scope) ?? undefined,
+      addPick: (objectId) =>
+        dispatchInteraction({ type: 'sketch-edit-pick', objectId }),
+      askValue: (kind, picks, label, initial) => {
+        setSketchEditDraft({ kind, picks, documentVersion: base.version });
+        setKeypad({
+          kind: 'sketch-edit',
+          label,
+          initial,
+          unitKind: 'length',
+          ...(anchor ? { fixedClientAnchor: anchor } : {})
+        });
+        dispatchInteraction({ type: 'sketch-edit-tool', kind: null });
+      },
+      runOperation: (operation) =>
+        geometry.sketchPlanarOperation(base, operation),
+      commit: async (sketchId, commands, label) => {
+        const applied = await commitSketchEdit(base, sketchId, commands, label);
+        if (applied) setSketchSolveStatus(null);
+        return applied;
+      },
+      describeFailure: (error, fallback) => {
+        if (error instanceof FeatureBuildError) {
+          recordHistoryFailure(error, base);
+        }
+        return errorMessage(error, fallback);
+      }
+    };
+  }
+
+  /**
+   * Routes a sketch click while a modify tool is armed. Returns true when the
+   * click was consumed, exactly like the constraint picking above: an armed
+   * tool never falls through to selection, so a stray click cannot silently
+   * deselect mid-sequence.
+   */
+  function handleSketchEditPick(
+    objectId: string | null,
+    clickPoint: { x: number; y: number }
+  ): boolean {
+    const pending =
+      interaction.mode === 'sketch' ? interaction.session.pendingEdit : null;
+    if (!pending) {
+      return false;
+    }
+    if (doc && editingSketchNode) {
+      const host = sketchEditHost(doc, clickPoint);
+      const sketch = editingSketchNode;
+      void import('./lib/sketch/edits').then(({ advanceSketchEdit }) =>
+        advanceSketchEdit(host, doc, sketch, pending, objectId)
+      );
+    }
+    return true;
+  }
+
+  /** A finished modify pick plus its value, as one undoable transaction. */
+  async function handleCommitSketchEdit(
+    draft: NonNullable<typeof sketchEditDraft>,
+    value: number,
+    raw: string
+  ) {
+    const base = managerRef.current?.document;
+    const session = interactionRef.current;
+    const sketch =
+      base?.version === draft.documentVersion &&
+      session.mode === 'sketch' &&
+      session.session.sketchId
+        ? findSketch(base, session.session.sketchId as SketchId)
+        : null;
+    if (!base || !sketch) {
+      setStatus(
+        'The sketch changed while the value editor was open. Try again.'
+      );
+      return;
+    }
+    const { runSketchEdit } = await import('./lib/sketch/edits');
+    await runSketchEdit(
+      sketchEditHost(base),
+      base,
+      sketch,
+      draft.kind,
+      draft.picks,
+      value,
+      raw
+    );
   }
 
   function handleEditSketchDimension(
@@ -11243,7 +11409,10 @@ export function App() {
       // the worker checks every dependent feature, including the final union.
       setParameterCandidate({ base, document: prospective });
       const derived = await parameterChecks.request(() => {
-        if (!current()) return Promise.reject(new Error('The project or parameter changed during validation.'));
+        if (!current())
+          return Promise.reject(
+            new Error('The project or parameter changed during validation.')
+          );
         return geometry.syncOnce(prospective);
       });
       if (!current())
@@ -14518,18 +14687,17 @@ export function App() {
     : Object.keys(representations).length > 0
       ? 'showing the last valid projection as stale'
       : 'no exact projection is available yet';
-  const visibleStatus =
-    parameterPreview
-      ? `Parameter preview · ${parameterEditPending ? status : parameterDraftActive ? 'Press Enter to apply; Escape to cancel' : 'exact geometry rebuilding'}`
-      : exactGeometryReady
-        ? status
-        : `${
-            geometry.state.phase === 'ready'
-              ? 'Waiting for exact geometry for this revision'
-              : geometry.state.phase === 'failed' && geometry.state.error
-                ? `Exact geometry failed: ${geometry.state.error}`
-                : (progressLabel ?? geometryPhaseLabel[geometry.state.phase])
-          } · ${staleProjectionLabel}`;
+  const visibleStatus = parameterPreview
+    ? `Parameter preview · ${parameterEditPending ? status : parameterDraftActive ? 'Press Enter to apply; Escape to cancel' : 'exact geometry rebuilding'}`
+    : exactGeometryReady
+      ? status
+      : `${
+          geometry.state.phase === 'ready'
+            ? 'Waiting for exact geometry for this revision'
+            : geometry.state.phase === 'failed' && geometry.state.error
+              ? `Exact geometry failed: ${geometry.state.error}`
+              : (progressLabel ?? geometryPhaseLabel[geometry.state.phase])
+        } · ${staleProjectionLabel}`;
   const tone: 'ready' | 'warning' | 'running' =
     geometry.state.phase === 'failed'
       ? 'warning'
@@ -14843,18 +15011,18 @@ export function App() {
               : tool
                 ? 'Enter creates · Esc cancels'
                 : selectedBodyIds.length >= 2
-                ? `${selectedBodyIds.length} bodies picked — U union · X subtract · I intersect`
-                : selectedTopology?.kind === 'face'
-                  ? 'Face selected — Space faces it head-on'
-                  : selectedTopology?.kind === 'edge'
-                    ? // Neither tool has a shortcut, so the rail is the only
-                      // route: name it the way the rail names itself.
-                      'Edge selected — Fillet or Chamfer in Feature tools'
-                    : selectedFeature
-                      ? 'Edit in the panel · Del deletes · Esc closes'
-                      : viewerBodies.length > 0
-                        ? 'Click a body, face, or edge · Shift+Click adds to selection'
-                        : 'Ctrl+K commands · ? shortcuts'));
+                  ? `${selectedBodyIds.length} bodies picked — U union · X subtract · I intersect`
+                  : selectedTopology?.kind === 'face'
+                    ? 'Face selected — Space faces it head-on'
+                    : selectedTopology?.kind === 'edge'
+                      ? // Neither tool has a shortcut, so the rail is the only
+                        // route: name it the way the rail names itself.
+                        'Edge selected — Fillet or Chamfer in Feature tools'
+                      : selectedFeature
+                        ? 'Edit in the panel · Del deletes · Esc closes'
+                        : viewerBodies.length > 0
+                          ? 'Click a body, face, or edge · Shift+Click adds to selection'
+                          : 'Ctrl+K commands · ? shortcuts'));
   const inspectorActive =
     !modelingLocked &&
     !directMode &&
@@ -15221,6 +15389,7 @@ export function App() {
         paletteVisible
         canConstrain={Boolean(interaction.session.sketchId)}
         pendingConstraint={interaction.session.pendingConstraint}
+        pendingEdit={interaction.session.pendingEdit}
         constraints={sketchConstraintItems}
         solveStatus={sketchSolveStatus}
         solving={sketchSolving}
@@ -15231,6 +15400,12 @@ export function App() {
           });
           if (kind) {
             setStatus(constraintToolSpec(kind).hint);
+          }
+        }}
+        onEditTool={(kind, hint) => {
+          dispatchInteraction({ type: 'sketch-edit-tool', kind });
+          if (hint) {
+            setStatus(hint);
           }
         }}
         onDeleteConstraint={handleDeleteSketchConstraint}
@@ -15458,7 +15633,11 @@ export function App() {
           }
           projectName={doc.name}
           units={doc.units}
-          canExport={exportBodyIds.length > 0 && !parameterEditPending && !parameterDraftActive}
+          canExport={
+            exportBodyIds.length > 0 &&
+            !parameterEditPending &&
+            !parameterDraftActive
+          }
           exportScope={
             selectedBody &&
             !selectedBody.consumed &&
@@ -15756,6 +15935,9 @@ export function App() {
               ) {
                 return;
               }
+              if (handleSketchEditPick(objectId, clickPoint)) {
+                return;
+              }
               dispatchInteraction({ type: 'sketch-select-object', objectId });
             }}
             sketchViews={sketchViews}
@@ -16005,7 +16187,10 @@ export function App() {
                       anchorRef={keypadAnchorRef}
                       onDimensionModeChange={setCylinderDimensionMode}
                       onPreview={(value) => {
-                        if (keypad.kind === 'sketch-dimension') {
+                        if (
+                          keypad.kind === 'sketch-dimension' ||
+                          keypad.kind === 'sketch-edit'
+                        ) {
                           return;
                         }
                         offsetSetterRef.current?.(value);
@@ -16033,9 +16218,11 @@ export function App() {
                       }
                       onCommit={(value, raw) => {
                         const dimensionDraft = sketchDimensionDraft;
+                        const editDraft = sketchEditDraft;
                         setKeypad(null);
                         dispatchInteraction({ type: 'keypad-close' });
                         setSketchDimensionDraft(null);
+                        setSketchEditDraft(null);
                         if (
                           keypad.kind === 'sketch-dimension' &&
                           dimensionDraft
@@ -16045,6 +16232,10 @@ export function App() {
                             value,
                             raw
                           );
+                          return;
+                        }
+                        if (keypad.kind === 'sketch-edit' && editDraft) {
+                          void handleCommitSketchEdit(editDraft, value, raw);
                           return;
                         }
                         // Expressions stay parametric in the stored feature.
@@ -16072,6 +16263,13 @@ export function App() {
                           dispatchInteraction({ type: 'keypad-close' });
                           setKeypad(null);
                           setStatus('Dimension entry canceled.');
+                          return;
+                        }
+                        if (keypad.kind === 'sketch-edit') {
+                          setSketchEditDraft(null);
+                          dispatchInteraction({ type: 'keypad-close' });
+                          setKeypad(null);
+                          setStatus('Modify tool canceled.');
                           return;
                         }
                         offsetSetterRef.current?.(keypad.baseline ?? 0);
