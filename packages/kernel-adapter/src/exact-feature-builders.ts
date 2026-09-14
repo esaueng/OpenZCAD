@@ -339,7 +339,8 @@ function buildImportedStepFeature(
         kernel,
         solids[0]!,
         data.planarEmboss.selection,
-        data.planarEmboss.part
+        data.planarEmboss.part,
+        data.planarEmboss.sourcePlacement
       );
     }
     result.importedStepDiagnostics.set(feature.bodyId, diagnostics);
