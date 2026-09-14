@@ -92,11 +92,17 @@ import {
   disconnectedUnionWarning
 } from './union-connectivity';
 import {
+  deriveBooleanLineageForRun,
+  plainBooleanRun,
+  runBooleanWithEntityEvolution,
+  runFuseWithEntityEvolution,
+  type BooleanEvolutionRun
+} from './exact-boolean-evolution';
+import {
   remusHashOnlyLineage,
   createRemusImportedStepLineage,
   createRemusModifierEvolutionLineage,
   decodeRemusPatternJournal,
-  deriveRemusBooleanCarrierLineage,
   deriveRemusPatternInstanceLineage,
   mergeRemusLineageStates,
   type RemusLineageDiagnostic,
@@ -441,14 +447,48 @@ function buildExtrudeFeature(
     ];
     const targetSolid = collapseShape(kernel, target);
     const extrusionSolid = collapseShape(kernel, extrusion);
-    const solid =
-      operation === 'add'
-        ? fuseUniformSolid(kernel, [...target.solids, ...extrusion.solids])
-        : unifyBooleanFaces(
+    // One target solid and one tool solid is what the kernel's pairwise
+    // entity-evolution entry points take. A multi-solid operand still goes
+    // through the existing `fuseAll` reduction and keeps carrier lineage.
+    const pairwise =
+      target.solids.length === 1 && extrusion.solids.length === 1;
+    const run = ((): BooleanEvolutionRun => {
+      if (operation === 'add') {
+        return pairwise
+          ? runFuseWithEntityEvolution(kernel, targetSolid, extrusionSolid)
+          : plainBooleanRun(
+              fuseUniformSolid(kernel, [
+                ...target.solids,
+                ...extrusion.solids
+              ]),
+              'The add extrude fused more than one solid per operand.'
+            );
+      }
+      const coaxial = tryExactCoaxialCylinderCut(
+        kernel,
+        targetSolid,
+        extrusionSolid
+      );
+      if (coaxial !== null) {
+        return plainBooleanRun(
+          unifyBooleanFaces(kernel, coaxial),
+          'The cut was taken by the exact coaxial cylinder path, which publishes no evolution record.'
+        );
+      }
+      return pairwise
+        ? runBooleanWithEntityEvolution(
             kernel,
-            tryExactCoaxialCylinderCut(kernel, targetSolid, extrusionSolid) ??
-              kernel.cut(targetSolid, extrusionSolid)
+            'cut',
+            targetSolid,
+            extrusionSolid,
+            (result) => unifyBooleanFaces(kernel, result)
+          )
+        : plainBooleanRun(
+            unifyBooleanFaces(kernel, kernel.cut(targetSolid, extrusionSolid)),
+            'The cut extrude collapsed more than one solid per operand.'
           );
+    })();
+    const solid = run.solid;
     // An add only needs the two to meet. Shared volume cannot answer that —
     // a boss grown off the face it was sketched on meets its target exactly
     // there and shares none — so contact is measured by exact distance.
@@ -491,13 +531,14 @@ function buildExtrudeFeature(
     result.shapes.set(feature.bodyId, {
       solids: [solid],
       // The target's faces and the tool's own caps and walls keep their
-      // identity wherever the carrier rule can prove it, so a sketch on the
+      // identity wherever either derivation can prove it, so a sketch on the
       // boss, or on the plate beside it, still has a face to attach to.
-      lineage: deriveRemusBooleanCarrierLineage({
-        producingFeatureId: feature.featureId,
-        operands: operandLineage,
-        resultCandidates: topologyCandidatesForSolid(kernel, solid)
-      })
+      lineage: deriveBooleanLineageForRun(
+        kernel,
+        run,
+        feature.featureId,
+        operandLineage
+      )
     });
   }
 }
@@ -1096,6 +1137,15 @@ function buildBooleanFeature(
   );
   let acceptedUnionSolid: number | undefined;
   let solid: number;
+  /**
+   * The kernel's entity-evolution entry points are pairwise, so they cover a
+   * boolean of exactly two solids. A union of three bodies still goes through
+   * the existing `fuseAll` reduction and a chain of subtract tools still goes
+   * through the sequential loop; both keep carrier lineage, because a chained
+   * evolution would need its own measured intermediate at every step and
+   * nothing has proved that chain yet.
+   */
+  let booleanRun: BooleanEvolutionRun | null = null;
   let unionFuseOperands: UnionFuseOperand[] | null = null;
   // A disconnected union is a different complaint with its own
   // remedy and its own warning; it must not also be reported as
@@ -1160,7 +1210,20 @@ function buildBooleanFeature(
         }
       }
     );
-    solid = fuseUniformSolid(kernel, unionSolids, accepted => { acceptedUnionSolid = accepted; });
+    const acceptUnion = (accepted: number) => {
+      acceptedUnionSolid = accepted;
+    };
+    if (unionSolids.length === 2) {
+      booleanRun = runFuseWithEntityEvolution(
+        kernel,
+        unionSolids[0]!,
+        unionSolids[1]!,
+        acceptUnion
+      );
+      solid = booleanRun.solid;
+    } else {
+      solid = fuseUniformSolid(kernel, unionSolids, acceptUnion);
+    }
     const resultBounds = kernel.boundingBox(solid);
     const droppedOperand = droppedUnionOperandWarning({
       operands: unionOperands.map((operand) => {
@@ -1237,6 +1300,7 @@ function buildBooleanFeature(
       ? kernel.volume(solid, MEASUREMENT_DEFLECTION)
       : 0;
     let sharedWithTools = 0;
+    const pairwise = operands.length === 2;
     for (const operand of operands.slice(1)) {
       const tool = collapseShape(kernel, operand);
       if (subtracting) {
@@ -1250,12 +1314,31 @@ function buildBooleanFeature(
           // a guard is not the place to turn that into a claim.
         }
       }
+      const coaxial = subtracting
+        ? tryExactCoaxialCylinderCut(kernel, solid, tool)
+        : null;
+      if (coaxial !== null) {
+        solid = coaxial;
+        continue;
+      }
+      if (pairwise) {
+        booleanRun = runBooleanWithEntityEvolution(
+          kernel,
+          subtracting ? 'cut' : 'intersect',
+          solid,
+          tool,
+          (raw) => unifyBooleanFaces(kernel, raw)
+        );
+        solid = booleanRun.solid;
+        continue;
+      }
       solid = subtracting
-        ? (tryExactCoaxialCylinderCut(kernel, solid, tool) ??
-          kernel.cut(solid, tool))
+        ? kernel.cut(solid, tool)
         : kernel.intersect(solid, tool);
     }
-    solid = unifyBooleanFaces(kernel, solid);
+    if (booleanRun === null) {
+      solid = unifyBooleanFaces(kernel, solid);
+    }
     // A cut that removes too little of the material it demonstrably
     // overlaps. A cross-drilled shaft can come back closed, valid,
     // and nearly unchanged even though its bore has positive-volume
@@ -1361,11 +1444,16 @@ function buildBooleanFeature(
   data.targetBodyIds.forEach((bodyId) => result.consumed.add(bodyId));
   result.shapes.set(feature.bodyId, {
     solids: [solid],
-    lineage: deriveRemusBooleanCarrierLineage({
-      producingFeatureId: feature.featureId,
-      operands: operandLineage,
-      resultCandidates: topologyCandidatesForSolid(kernel, solid)
-    })
+    lineage: deriveBooleanLineageForRun(
+      kernel,
+      booleanRun ??
+        plainBooleanRun(
+          solid,
+          'The boolean did not reach a pairwise entity-evolution entry point.'
+        ),
+      feature.featureId,
+      operandLineage
+    )
   });
 }
 
