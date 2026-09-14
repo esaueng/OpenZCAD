@@ -28,6 +28,7 @@ import type { RemusKernel } from './remus-runtime';
 import {
   KernelRefusal,
   kernelPayloadCount,
+  kernelPayloadHandle,
   readKernelPayload
 } from './kernel-refusal';
 
@@ -52,6 +53,11 @@ export interface ValidatingKernel {
 /** The subset of the kernel the unify-and-check helper needs. */
 export interface UnifyingKernel {
   unifyFacesChecked(solid: number): unknown;
+}
+
+/** The subset of the kernel the heal-pipeline reader needs. */
+export interface HealingKernel {
+  runHealPipeline(solid: number, steps: string[]): unknown;
 }
 
 function readIssues(payload: Record<string, unknown>): KernelValidationIssue[] {
@@ -268,4 +274,55 @@ export function importedSolidValidation(
     strict: validationReport(kernel, solid),
     relaxedErrorCount: kernel.validateSolidRelaxed(solid)
   };
+}
+
+/**
+ * Run a heal pipeline and read back the solid it committed, or `null` when
+ * the kernel declined to run it.
+ *
+ * `runHealPipeline` reports its two failures down two different channels, and
+ * telling them apart is the whole reason this is a function rather than a
+ * `try` around a `JSON.parse`. Measured on the pin (`4bbcd5c7`), driving a
+ * real sewn mesh shell through `['unify_same_domain']`:
+ *
+ * | input | what the call does |
+ * | --- | --- |
+ * | a sewn 12-triangle box | returns `{"solid":1,"steps":[{"step":"unify_same_domain","actionsTaken":6,"done":true,"failed":false,"repairs":[…]}],"verified":true}` |
+ * | a sewn mesh of two disjoint boxes | **throws** `configured healing result refused: operations validator found 0 error(s), check validator found 1 error(s)` |
+ * | a sewn open shell (a box short one face) | **throws** `configured healing result refused: operations validator found 2 error(s), check validator found 1 error(s)` |
+ * | an out-of-range handle | **throws** `invalid solid handle: index 999999 is out of bounds` |
+ * | an unknown step name | **throws** `invalid input: heal pipeline: unknown operator: not_a_step` |
+ *
+ * So a refusal never arrives as data and a success never arrives as a throw.
+ * Only the kernel call is guarded: a throw is the kernel saying it will not
+ * heal this, which is a verdict about the merge and returns `null` for the
+ * caller to answer. Everything that comes BACK has committed, and is decoded
+ * strictly — a payload this adapter cannot read out of is the adapter and the
+ * kernel disagreeing about the contract, not a geometry outcome, so it raises
+ * rather than degrading into a verdict the kernel never gave.
+ *
+ * The one line the channel does not draw is between a refusal and a misuse:
+ * both of the `invalid …` rows above throw the same bare `Error`, and the heal
+ * pipeline has no detailed twin on the pin to categorise it, so separating
+ * them would mean matching the kernel's prose — the practice this seam exists
+ * to end. Callers close that gap by construction instead: pass a handle the
+ * kernel just returned and a step list that is a literal, and neither misuse
+ * is reachable.
+ */
+export function healPipelineSolid(
+  kernel: HealingKernel,
+  solid: number,
+  steps: readonly string[]
+): number | null {
+  let raw: unknown;
+  try {
+    raw = kernel.runHealPipeline(solid, [...steps]);
+  } catch {
+    return null;
+  }
+  return kernelPayloadHandle(
+    readKernelPayload(raw, 'heal pipeline'),
+    'solid',
+    'heal pipeline'
+  );
 }

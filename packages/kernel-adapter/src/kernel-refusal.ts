@@ -247,6 +247,30 @@ export function readKernelPayload(
   return payload as Record<string, unknown>;
 }
 
+/**
+ * An arena handle field of a kernel payload, or a raise.
+ *
+ * Separate from {@link kernelPayloadCount} because the two mean different
+ * things on the failing path. A count the adapter cannot read is a report it
+ * cannot summarise; a handle it cannot read is a body it cannot find. The
+ * second is the worse one — the operation that returned the payload has
+ * already committed, so the caller's pre-operation handle is no longer an
+ * answer, only a stale one.
+ */
+export function kernelPayloadHandle(
+  payload: Record<string, unknown>,
+  key: string,
+  what: string
+): number {
+  const value = payload[key];
+  if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 0) {
+    throw new Error(
+      `The kernel's ${what} result is missing its "${key}" handle.`
+    );
+  }
+  return value;
+}
+
 /** A non-negative integer field of a kernel payload, or a raise. */
 export function kernelPayloadCount(
   payload: Record<string, unknown>,

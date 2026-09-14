@@ -3,6 +3,7 @@ import { RemusKernel } from './remus-runtime';
 import { kernelRefusalCategoryOf } from './kernel-refusal';
 import {
   SolidValidationRefusal,
+  healPipelineSolid,
   requireValidSolid,
   unifyAndRequireValidSolid,
   unifyFacesReport,
@@ -216,5 +217,133 @@ describe('unifyFacesChecked against the pinned kernel', () => {
     expect(() => unifyFacesReport(stub, 1)).toThrow(
       /unreadable face unification result/
     );
+  });
+});
+
+/**
+ * The heal pipeline's two failure channels, which the mesh-import path leans
+ * on. A refusal must keep the caller's body; an answer the adapter cannot read
+ * must never be mistaken for one.
+ */
+describe('runHealPipeline against the pinned kernel', () => {
+  /** The disjoint pair that `sewFaces` turns into one clean-validating solid. */
+  function sewnDisjointPair(kernel: RemusKernel): number {
+    const near = kernel.makeBox(2, 3, 4);
+    const far = kernel.copyAndTransformSolid(
+      kernel.makeBox(2, 3, 4),
+      translation(10, 0, 0)
+    );
+    return kernel.sewFaces(
+      Uint32Array.from([
+        ...kernel.getSolidFaces(near),
+        ...kernel.getSolidFaces(far)
+      ]),
+      1e-5
+    );
+  }
+
+  it('reads back the committed solid when the pipeline runs', () => {
+    const kernel = new RemusKernel();
+    const box = kernel.makeBox(10, 10, 10);
+    const sewn = kernel.sewFaces(kernel.getSolidFaces(box), 1e-5);
+    const healed = healPipelineSolid(kernel, sewn, ['unify_same_domain']);
+    expect(healed).not.toBeNull();
+    expect(kernel.validateSolid(healed!)).toBe(0);
+    expect(kernel.volume(healed!, 0.01)).toBeCloseTo(1000, 6);
+  });
+
+  /**
+   * The case PR #336 restored. Two disjoint boxes sew into one solid the
+   * strict validator passes with the summed volume, and the kernel then
+   * refuses to unify its faces. The refusal is about the merge, so the body
+   * survives it — rethrowing here threw a good import away.
+   */
+  it('reports a refused merge as null and leaves the input standing', () => {
+    const kernel = new RemusKernel();
+    const sewn = sewnDisjointPair(kernel);
+    expect(kernel.validateSolid(sewn)).toBe(0);
+    expect(kernel.volume(sewn, 0.01)).toBeCloseTo(2 * 3 * 4 * 2, 6);
+    expect(() => {
+      // The pin declares this `any`; the block body keeps the discarded
+      // result from becoming an unsafe return out of the arrow.
+      kernel.runHealPipeline(sewn, ['unify_same_domain']);
+    }).toThrow(/healing result refused/);
+    expect(healPipelineSolid(kernel, sewn, ['unify_same_domain'])).toBeNull();
+    // Transactional: the handle the caller still holds is untouched.
+    expect(kernel.validateSolid(sewn)).toBe(0);
+    expect(kernel.volume(sewn, 0.01)).toBeCloseTo(2 * 3 * 4 * 2, 6);
+  });
+
+  /**
+   * An open shell refuses the same way a clean one does, which is why the
+   * import path no longer branches on the sewn shell's own validity.
+   */
+  it('reports a refusal for an open shell too, not only a closed one', () => {
+    const kernel = new RemusKernel();
+    const faces = kernel.getSolidFaces(kernel.makeBox(10, 10, 10));
+    const sewn = kernel.sewFaces(
+      Uint32Array.from([...faces].slice(0, faces.length - 1)),
+      1e-5
+    );
+    expect(kernel.validateSolid(sewn)).not.toBe(0);
+    expect(healPipelineSolid(kernel, sewn, ['unify_same_domain'])).toBeNull();
+  });
+
+  /**
+   * The limit of the channel, recorded rather than papered over: the pin has
+   * no detailed twin for the heal pipeline, so a misused call throws the same
+   * bare `Error` a refusal does and reads back the same way. Callers keep it
+   * unreachable by passing a handle the kernel just gave them and a literal
+   * step list, which is what the mesh-import path does.
+   */
+  it('cannot tell a misused call from a refusal, and says so here', () => {
+    const kernel = new RemusKernel();
+    expect(() => {
+      kernel.runHealPipeline(9999, ['unify_same_domain']);
+    }).toThrow(/invalid solid handle/);
+    expect(healPipelineSolid(kernel, 9999, ['unify_same_domain'])).toBeNull();
+    const box = kernel.makeBox(1, 1, 1);
+    expect(() => {
+      kernel.runHealPipeline(box, ['not_a_step']);
+    }).toThrow(/unknown operator/);
+    expect(healPipelineSolid(kernel, box, ['not_a_step'])).toBeNull();
+  });
+
+  /**
+   * The other invariant. A pipeline that RETURNED has committed, so a payload
+   * with no readable handle in it is the adapter and the kernel disagreeing,
+   * not the kernel declining — it must raise, never read as `null` and hand
+   * the caller back its pre-merge handle.
+   */
+  it('raises on an unreadable payload rather than reading it as a refusal', () => {
+    expect(() =>
+      healPipelineSolid({ runHealPipeline: () => 'not json' }, 1, ['fix_shape'])
+    ).toThrow(/unreadable heal pipeline result/);
+    expect(() =>
+      healPipelineSolid({ runHealPipeline: () => '[]' }, 1, ['fix_shape'])
+    ).toThrow(/unreadable heal pipeline result/);
+  });
+
+  it('raises when the committed payload carries no solid handle', () => {
+    for (const payload of [
+      JSON.stringify({ steps: [], verified: true }),
+      JSON.stringify({ solid: '4', steps: [], verified: true }),
+      JSON.stringify({ solid: -1, steps: [], verified: true }),
+      JSON.stringify({ solid: 1.5, steps: [], verified: true })
+    ]) {
+      expect(() =>
+        healPipelineSolid({ runHealPipeline: () => payload }, 1, ['fix_shape'])
+      ).toThrow(/missing its "solid" handle/);
+    }
+  });
+
+  it('accepts an already-parsed payload, as the declared `any` allows', () => {
+    expect(
+      healPipelineSolid(
+        { runHealPipeline: () => ({ solid: 7, steps: [], verified: true }) },
+        1,
+        ['fix_shape']
+      )
+    ).toBe(7);
   });
 });
