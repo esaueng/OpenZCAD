@@ -3,7 +3,9 @@ import { test, expect, stubApi } from './openzcad-fixtures';
 test('resizes a rounded box from its minimum side with exact entry, drag, cancel and undo', async ({
   page
 }, testInfo) => {
-  test.setTimeout(120000);
+  // This multi-edit flow rebuilds exact fillets for entry, drag, undo and redo.
+  // Hosted CI reached the final UI checks but exhausted the 120 s total budget.
+  test.setTimeout(process.env.CI ? 180000 : 120000);
   await stubApi(page);
   await page.setViewportSize({ width: 1440, height: 1000 });
   const errors: string[] = [];
