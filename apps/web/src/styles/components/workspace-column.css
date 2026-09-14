@@ -432,6 +432,19 @@
   min-width: 0;
 }
 
+.sketch-rail-group.modify {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.sketch-rail-group.modify > button {
+  flex-direction: column;
+  justify-content: center;
+  gap: 3px;
+  min-height: 40px;
+  padding: 5px 2px;
+  font-size: 10px;
+}
+
 .sketch-rail-group.constrain {
   grid-template-columns: repeat(6, minmax(0, 1fr));
 }

@@ -1,5 +1,5 @@
 import { geometryTolerance } from '@openzcad/geometry';
-import type { BooleanOperation, UnitSystem } from '@openzcad/shared';
+import type { UnitSystem } from '@openzcad/shared';
 import type { UnionBounds } from './union-connectivity';
 
 export interface TriangleMeshClosure {
@@ -196,66 +196,15 @@ export interface BooleanFaceCensus {
 }
 
 /**
- * Growth allowed before a boolean result is treated as a faceting fallback.
+ * Growth allowed before a result is treated as a faceting fallback.
  *
- * A legitimate boolean splits faces where the operands intersect, which can
- * multiply the face count by a few. A meshed fallback replaces every surface
- * with triangles and lands in the hundreds or thousands. The additive slack
- * keeps small operands (a six-face box cut by a six-face box) clear of the
- * multiplicative bound.
+ * A legitimate operation splits faces where surfaces meet, which can multiply
+ * the face count by a few. A meshed fallback replaces every surface with
+ * triangles and lands in the hundreds or thousands. The additive slack keeps
+ * small inputs (a six-face box) clear of the multiplicative bound.
  */
 const FACET_FALLBACK_FACTOR = 4;
 const FACET_FALLBACK_SLACK = 32;
-
-/**
- * How to name the operation to the person who asked for it.
- *
- * The census runs on every boolean, so the subject cannot be hardcoded to a
- * union; a caller that knows which operation it ran passes it, and one that
- * does not (the offset probe, which only tests the return for null) gets the
- * neutral phrasing.
- */
-function facetFallbackSubject(operation: BooleanOperation | undefined): string {
-  switch (operation) {
-    case 'union':
-      return 'This union';
-    case 'subtract':
-      return 'This subtract';
-    case 'intersect':
-      return 'This intersection';
-    default:
-      return 'This boolean operation';
-  }
-}
-
-/**
- * What to say when no specific remedy has been proved.
- *
- * Naming a single cause here was a mistake worth not repeating: measured on a
- * box and a cylinder, repositioning clears the fallback for a small round
- * operand and clears nothing at all for one wider than the box it meets, so
- * "this is a tangency, move it" is confidently wrong half the time. The caller
- * appends a concrete move only when it has fused that exact move and measured
- * the result exact; this text covers the rest without pretending to a
- * diagnosis, and points at the operation that is known to stay exact on the
- * same operands — which is only advice worth giving when the failing operation
- * is not already that one.
- */
-function facetFallbackRemedy(operation: BooleanOperation | undefined): string {
-  const alternative =
-    operation === 'subtract' || operation === 'intersect'
-      ? '.'
-      : ', or subtract instead — the same operands still cut exactly.';
-  return (
-    'Repositioning the overlap sometimes clears it; otherwise keep the bodies ' +
-    `separate${alternative}`
-  );
-}
-
-interface FacetFallbackSignal {
-  lostCurvature: boolean;
-  exploded: boolean;
-}
 
 export interface FaceCensusSubject {
   getSolidFaces(solid: number): ArrayLike<number>;
@@ -279,91 +228,60 @@ export function censusOfSolids(
   return { faces, curvedFaces };
 }
 
-function facetFallbackSignal(
-  census: BooleanFaceCensus
-): FacetFallbackSignal | null {
-  const lostCurvature =
-    census.operands.curvedFaces > 0 && census.result.curvedFaces === 0;
-  const exploded =
-    census.result.faces >
-    census.operands.faces * FACET_FALLBACK_FACTOR + FACET_FALLBACK_SLACK;
-  return lostCurvature || exploded ? { lostCurvature, exploded } : null;
+/**
+ * A union whose result kept no curved surface although its operands had one.
+ *
+ * This is what is LEFT of the boolean face census. The census existed to
+ * catch Remus silently returning a tessellated approximation from a boolean;
+ * the pinned kernel's booleans are exact-only and refuse instead, typed, so
+ * there is nothing left there for a face count to detect. The curvature half
+ * still answers a different question the union move probe needs: whether a
+ * candidate offset merely swallows the moving body inside the anchor, which
+ * fuses exactly and makes the user's new body disappear.
+ */
+export function unionSwallowedCurvature(census: BooleanFaceCensus): boolean {
+  return census.operands.curvedFaces > 0 && census.result.curvedFaces === 0;
 }
 
-function faceCensusDetail(
-  census: BooleanFaceCensus,
-  inputLabel: 'operand' | 'source'
-): string {
+function isFacetFallback(census: BooleanFaceCensus): boolean {
+  return (
+    unionSwallowedCurvature(census) ||
+    census.result.faces >
+      census.operands.faces * FACET_FALLBACK_FACTOR + FACET_FALLBACK_SLACK
+  );
+}
+
+function faceCensusDetail(census: BooleanFaceCensus): string {
   return [
-    `${census.operands.faces} ${inputLabel} faces (${census.operands.curvedFaces} curved)`,
+    `${census.operands.faces} source faces (${census.operands.curvedFaces} curved)`,
     `${census.result.faces} result faces (${census.result.curvedFaces} curved)`
   ].join(' became ');
 }
 
 /**
- * The signal that a boolean silently fell back to a faceted result.
- *
- * Remus's booleans can abandon exact surface intersection on sliver and
- * near-tangent contacts and return a triangulated, all-planar approximation
- * instead — which is exactly what thin glyph stems and touching letters
- * produce. That result is watertight, valid, has a plausible volume, and its
- * triangle count is unremarkable, so none of the existing checks see it. What
- * changes is the faces: every curved surface becomes planar, and the count
- * explodes.
- *
- * Both conditions are reported because either alone has a false positive.
- * Losing every curved face is normal when the operands had none; a large face
- * count is normal for a genuinely complicated result. Together they are not.
- */
-export function booleanFacetFallbackWarning(
-  census: BooleanFaceCensus,
-  operation?: BooleanOperation
-): string | null {
-  const signal = facetFallbackSignal(census);
-  if (!signal) {
-    return null;
-  }
-  // Everything before the first newline is the sentence shown on the tool
-  // card; the face counts belong behind its detail disclosure.
-  const detail = faceCensusDetail(census, 'operand');
-  const subject = facetFallbackSubject(operation);
-  const remedy = facetFallbackRemedy(operation);
-  if (signal.lostCurvature && signal.exploded) {
-    return (
-      `${subject} could only be built as an approximation: its curved ` +
-      `surfaces are now flat and would export that way. ${remedy}\n${detail}`
-    );
-  }
-  if (signal.lostCurvature) {
-    // Same fallback, caught by the curvature test alone because a smaller
-    // round operand facets into too few faces to trip the count test. It
-    // earns the same remedy: without one this reads as a property of the
-    // result rather than as something the user can act on.
-    return `${subject} replaced every curved surface with flat faces. ${remedy}\n${detail}`;
-  }
-  return (
-    `${subject} produced far more faces than its operands — usually a ` +
-    `sliver or near-tangent contact being approximated.\n${detail}`
-  );
-}
-
-/**
  * Reject a direct edit that silently replaced analytic faces with facets.
+ *
+ * This guards `pushPullFace`, which is NOT a boolean and has no exact-only
+ * policy behind it: it can still abandon exact surfaces and hand back a
+ * triangulated, all-planar body. That result is watertight, passes
+ * validation, and has a plausible volume and triangle count, so none of the
+ * other distrust checks see it. The faces are the signal — every curved
+ * surface becomes planar, or the count explodes.
  *
  * Unlike a boolean feature, a direct edit cannot offer an alternate modeling
  * operation without changing the user's intent. Its safe recovery is to keep
- * the last exact body and surface the kernel refusal to the editor.
+ * the last exact body and surface the refusal to the editor.
  */
 export function directEditFacetFallbackWarning(
   census: BooleanFaceCensus
 ): string | null {
-  if (!facetFallbackSignal(census)) {
+  if (!isFacetFallback(census)) {
     return null;
   }
   return (
     "This offset could only be built by replacing the body's exact surfaces " +
     'with flat triangles, so it was refused and the body left unchanged.\n' +
-    faceCensusDetail(census, 'source')
+    faceCensusDetail(census)
   );
 }
 
