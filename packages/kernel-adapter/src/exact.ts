@@ -1,4 +1,6 @@
+import type { EditAnalysisRequest } from '@openzcad/shared';
 import { projectShapeMesh } from './exact-display-projection';
+import { recognizePlanarEmboss } from './planar-emboss';
 import {
   rebuildReporter,
   type RebuildProgressListener
@@ -8,6 +10,21 @@ export type {
   RebuildProgressListener
 } from './rebuild-progress';
 import { RemusKernel, loadRemusTranslators } from './remus-runtime';
+import {
+  runSketchPlanarOperation,
+  type SketchPlanarOperation,
+  type SketchPlanarResult
+} from './sketch-2d-ops';
+export type {
+  Sketch2dPoint,
+  SketchChamferGeometry,
+  SketchCorner,
+  SketchFilletGeometry,
+  SketchOffsetCurve,
+  SketchOffsetJoin,
+  SketchPlanarOperation,
+  SketchPlanarResult
+} from './sketch-2d-ops';
 import {
   findSketch,
   getParameterScope,
@@ -25,6 +42,7 @@ import {
   UNIT_TO_MM,
   featureColor,
   isFeatureSuppressed,
+  isReadOnlyRecognizedImportedFeature,
   nowIso,
   type ArtifactId,
   type BodyId,
@@ -33,7 +51,9 @@ import {
   type DerivedState,
   type FaceDistanceMoveMode,
   type FaceGeometry,
+  type FaceRecognitionSummary,
   type FaceTopology,
+  type FaceTopologyReferenceV5,
   type ImportedSourceReference,
   type OpposingPlanarFacePair,
   type ProjectDocument,
@@ -56,8 +76,11 @@ import {
 } from './exact-feature-warnings';
 import {
   collectRecognizedImportedFeatures,
+  importedProofDisplayDimensions,
+  recognizeImportedFeatureOnSolid,
   type ImportedRecognitionFaceIdentity
 } from './imported-feature-query';
+import { recognitionRefusalMessage } from './imported-feature-recognition';
 import { recognizeOpening } from './opening-recognition';
 import { collapseShape } from './exact-boolean-helpers';
 import {
@@ -152,6 +175,8 @@ const STL_EXPORT_DEFLECTION = 0.08;
 // it bounded to small solids; complex imports retain measured geometry and
 // hole recognition, but do not advertise unproven planar-distance edits.
 const MAX_PLANAR_FACE_PAIR_QUERY_FACES = 64;
+const MAX_FOREGROUND_ANALYSIS_FACES = 2048;
+const MAX_FOREGROUND_PAIR_ATTEMPTS = 6;
 // Optional moments can take minutes on freeform imported faces. Absence is
 // already part of the mass-property contract; never substitute approximate data.
 const MAX_BACKGROUND_MASS_PROPERTY_FACES = 64;
@@ -352,20 +377,37 @@ function provenOpposingPlanarFacePairs(
   solid: number,
   faces: ReadonlyMap<number, FaceTopology>,
   bounds: Float64Array | number[],
-  claimedFaceHashes: ReadonlySet<number>
+  claimedFaceHashes: ReadonlySet<number>,
+  selectedHashes?: readonly number[]
 ): OpposingPlanarFacePair[] {
-  if (faces.size > MAX_PLANAR_FACE_PAIR_QUERY_FACES) {
+  if (
+    faces.size >
+    (selectedHashes
+      ? MAX_FOREGROUND_ANALYSIS_FACES
+      : MAX_PLANAR_FACE_PAIR_QUERY_FACES)
+  ) {
     return [];
   }
-  const ranked = queryOpposingPlanarFacePairs(kernel, solid).sort(
-    (left, right) =>
-      faceDistancePairScore(right) - faceDistancePairScore(left) ||
-      right.distance - left.distance ||
-      left.faceA - right.faceA ||
-      left.faceB - right.faceB
-  );
+  const ranked = queryOpposingPlanarFacePairs(kernel, solid)
+    .filter(
+      (pair) =>
+        !selectedHashes ||
+        selectedHashes.every(
+          (hash) =>
+            faces.get(pair.faceA)?.hash === hash ||
+            faces.get(pair.faceB)?.hash === hash
+        )
+    )
+    .sort(
+      (left, right) =>
+        faceDistancePairScore(right) - faceDistancePairScore(left) ||
+        right.distance - left.distance ||
+        left.faceA - right.faceA ||
+        left.faceB - right.faceB
+    );
   const seenPlanes = new Set<string>();
   const published: OpposingPlanarFacePair[] = [];
+  let attempted = 0;
   for (const pair of ranked) {
     const faceA = faces.get(pair.faceA);
     const faceB = faces.get(pair.faceB);
@@ -382,6 +424,7 @@ function provenOpposingPlanarFacePairs(
       continue;
     }
     seenPlanes.add(key);
+    if (selectedHashes && attempted++ >= MAX_FOREGROUND_PAIR_ATTEMPTS) break;
     const modes: FaceDistanceMoveMode[] = pairBisectsSolidSymmetry(
       faces,
       pair,
@@ -426,7 +469,8 @@ export interface ExactKernelAdapter {
   syncDocument(
     document: ProjectDocument,
     onProgress?: RebuildProgressListener,
-    onProjection?: (derived: DerivedState) => void
+    onProjection?: (derived: DerivedState) => void,
+    analysis?: EditAnalysisRequest
   ): Promise<DerivedState>;
   exportStep(document: ProjectDocument, bodyIds: BodyId[]): Promise<string>;
   /**
@@ -470,6 +514,14 @@ export interface ExactKernelAdapter {
     document: ProjectDocument,
     sketchId: SketchId
   ): Promise<SketchSolveOutcome>;
+  /**
+   * One planar sketch edit on the kernel's 2D operations: a corner fillet, a
+   * corner chamfer, or a closed-loop offset. Purely geometric — the caller
+   * owns which entities the answer replaces and what constrains them.
+   */
+  sketchPlanarOperation(
+    operation: SketchPlanarOperation
+  ): Promise<SketchPlanarResult>;
   inspectStep(data: string | ArrayBuffer): Promise<{
     solid: boolean;
     valid: boolean;
@@ -481,6 +533,26 @@ export interface ExactKernelAdapter {
      */
     reason?: string;
   }>;
+  /**
+   * On-demand per-face recognition of one imported STEP face (Phase D of the
+   * imported STEP edit plan). Rebuilds the document's exact geometry on the
+   * long-lived history kernel — a prefix restore, not a throwaway rebuild —
+   * then runs the existing `recognizeImportedFeature` module against the
+   * resolved face and returns a typed result.
+   *
+   * Display-only: the sole edit committed through recognition remains the
+   * existing through-hole diameter resize. The returned dimensions are in
+   * document units; refusals carry the module's typed reason. Read-only over
+   * the kernel: resolved handles are never mutated, and a miss resolves as
+   * `seed-face-missing` rather than throwing.
+   */
+  recognizeImportedFace(input: {
+    document: ProjectDocument;
+    bodyId: BodyId;
+    /** ADR-011 face hash plus optional v5 lineage reference. */
+    faceHash: number;
+    faceReference?: FaceTopologyReferenceV5;
+  }): Promise<FaceRecognitionSummary>;
   dispose(): void;
 }
 
@@ -844,7 +916,6 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
       done();
     };
 
-
     const build = buildDocumentHistory(
       activeKernel,
       document,
@@ -974,7 +1045,8 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     strictBooleanValidation = false,
     recognizeImportedFeatures = false,
     onStage?: (name: string) => () => void,
-    includeMassProperties = true
+    includeMassProperties = true,
+    analysisHashes?: readonly number[]
   ): MeasuredShape {
     if (shape.solids.length === 0) {
       throw new Error('Exact body contains no solids.');
@@ -1112,6 +1184,10 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
       const recognitionDone = onStage?.('Imported feature recognition');
       let claimedFaceHashes = new Set<number>();
       if (recognizeImportedFeatures) {
+        if (analysisHashes && shape.solids.length === 1) {
+          const emboss = recognizePlanarEmboss(kernel, solid);
+          if (emboss) topology.recognizedPlanarEmboss = emboss;
+        }
         const recognized = collectRecognizedImportedFeatures(
           kernel,
           solid,
@@ -1120,8 +1196,15 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
         if (recognized.length > 0) {
           topology.recognizedImportedFeatures ??= [];
           topology.recognizedImportedFeatures.push(...recognized);
+          // Only an exactly proved feature claims its faces. A read-only
+          // kernel-recognized one is published for reading, and must not cost
+          // those faces the planar-distance proof they would otherwise carry.
           claimedFaceHashes = new Set(
-            recognized.flatMap((feature) => feature.participatingFaceHashes)
+            recognized
+              .filter(
+                (feature) => !isReadOnlyRecognizedImportedFeature(feature)
+              )
+              .flatMap((feature) => feature.participatingFaceHashes)
           );
         }
         recognitionDone?.();
@@ -1153,7 +1236,8 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
                 solid,
                 faceTopologyByHandle,
                 bounds,
-                claimedFaceHashes
+                claimedFaceHashes,
+                analysisHashes
               )
             : [];
         if (pairs.length > 0) {
@@ -1282,7 +1366,8 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     // is a state consumers already have to render.
     const massDone = onStage?.('Mass properties');
     const massProperties =
-      includeMassProperties && shape.solids.length === 1 &&
+      includeMassProperties &&
+      shape.solids.length === 1 &&
       topology.faces.length <= MAX_BACKGROUND_MASS_PROPERTY_FACES
         ? readBodyMassProperties(kernel, shape.solids[0]!)
         : null;
@@ -1304,8 +1389,20 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
   async syncDocument(
     document: ProjectDocument,
     onProgress?: RebuildProgressListener,
-    onProjection?: (derived: DerivedState) => void
+    onProjection?: (derived: DerivedState) => void,
+    analysis?: EditAnalysisRequest
   ): Promise<DerivedState> {
+    if (
+      analysis &&
+      (!document.bodyOrder.some((id) => id === analysis.bodyId) ||
+        analysis.faceHashes.length > 2 ||
+        analysis.faceHashes.some(
+          (hash) => !Number.isSafeInteger(hash) || hash <= 0
+        ))
+    )
+      throw new Error(
+        'Select one body and at most two valid faces to analyze.'
+      );
     const report = rebuildReporter(onProgress);
     const sourcesDone = report('sources', 'Loading imported sources');
     const { sources, pinned } = await this.prefetchImportSources(document);
@@ -1374,10 +1471,16 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
         // face-handle recount is a cheap probe that turns any violation of
         // that invariant into a re-measure instead of a stale mesh.
         const solidKey = shape.solids.join(',');
+        const analysisHashes =
+          analysis?.bodyId === bodyId ? analysis.faceHashes : undefined;
+        const analysisKey = analysisHashes
+          ? JSON.stringify(analysisHashes)
+          : undefined;
         const cached = this.measuredShapeCache.get(bodyId);
         let measured: MeasuredShape;
         if (
           cached &&
+          cached.analysisKey === analysisKey &&
           cached.solidKey === solidKey &&
           cached.strict === requiresStrictUnionValidation &&
           cached.includeMassProperties === !consumed &&
@@ -1399,10 +1502,12 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
                 document.bodyOrder.indexOf(bodyId) + 1,
                 document.bodyOrder.length
               ),
-            !consumed
+            !consumed,
+            analysisHashes
           );
           remeasured += 1;
           this.storeMeasuredShape(bodyId, {
+            ...(analysisKey ? { analysisKey } : {}),
             solidKey,
             strict: requiresStrictUnionValidation,
             includeMassProperties: !consumed,
@@ -1504,6 +1609,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
       const hiddenBodies = getParameterHiddenBodyIds(document);
       return {
         bodyRepresentations,
+        ...(analysis ? { editAnalysis: structuredClone(analysis) } : {}),
         exportableBodyIds: exportableBodyIds.filter(
           (id) => !hiddenBodies.has(id)
         ),
@@ -1836,6 +1942,21 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
   }
 
   /**
+   * One planar sketch edit. Synchronous under the hood like `solveSketch`,
+   * and async for the same reason: the worker boundary.
+   */
+  async sketchPlanarOperation(
+    operation: SketchPlanarOperation
+  ): Promise<SketchPlanarResult> {
+    const kernel = new RemusKernel();
+    try {
+      return runSketchPlanarOperation(kernel, operation);
+    } finally {
+      kernel.free();
+    }
+  }
+
+  /**
    * The pre-import probe the app shows before a user commits to an import.
    *
    * K0.6 makes it answer in every case rather than raising in some of them:
@@ -1912,6 +2033,115 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     // Export and solve methods own short-lived kernels, but the history
     // kernel and its checkpoints are adapter-scoped and must be released.
     this.invalidateHistoryCache();
+  }
+
+  /**
+   * On-demand per-face recognition over the long-lived history kernel.
+   *
+   * The document is rebuilt through the same history-cache path as a sync —
+   * a prefix restore after the first call, not a throwaway parse — so the
+   * query resolves against the exact geometry the Inspector is showing. The
+   * seed face resolves by hash plus optional v5 reference, exactly like a
+   * direct-edit commit; any resolution miss answers `seed-face-missing`
+   * rather than throwing, because a stale pick is a display state, not a
+   * build failure. Dimensions are scaled from kernel millimetres into
+   * document units before publishing; the refusal reason travels verbatim.
+   */
+  async recognizeImportedFace(input: {
+    document: ProjectDocument;
+    bodyId: BodyId;
+    faceHash: number;
+    faceReference?: FaceTopologyReferenceV5;
+  }): Promise<FaceRecognitionSummary> {
+    const missing = (
+      message: string
+    ): FaceRecognitionSummary => ({
+      kind: 'unsupported',
+      refusalReason: 'seed-face-missing',
+      message
+    });
+    const { sources, pinned } = await this.prefetchImportSources(input.document);
+    if (documentNeedsTranslators(input.document)) {
+      await loadRemusTranslators();
+    }
+    let kernel: RemusKernel;
+    let build: ExactBuildResult;
+    try {
+      ({ kernel, build } = this.buildWithHistoryCache(
+        input.document,
+        sources,
+        pinned
+      ));
+    } catch (error) {
+      return missing(
+        error instanceof Error
+          ? error.message
+          : 'The imported body could not be rebuilt for recognition.'
+      );
+    }
+    try {
+      const shape = build.shapes.get(input.bodyId);
+      if (!shape) {
+        return missing('The selected body has no exact geometry.');
+      }
+      const solid = collapseShape(kernel, shape);
+      let face: number;
+      try {
+        face = resolveDirectEditFace(kernel, shape, solid, {
+          faceHash: input.faceHash,
+          faceReference: input.faceReference
+        }).face;
+      } catch {
+        return missing('The selected face is no longer on the rebuilt body.');
+      }
+      const outcome = recognizeImportedFeatureOnSolid(kernel, solid, face);
+      if (outcome.status !== 'recognized') {
+        return {
+          kind: 'unsupported',
+          refusalReason: outcome.reason,
+          message: recognitionRefusalMessage(outcome.reason)
+        };
+      }
+      const scale = 1 / UNIT_TO_MM[input.document.units];
+      const dimensions = Object.fromEntries(
+        Object.entries(importedProofDisplayDimensions(outcome.proof)).map(
+          ([key, value]) => [
+            key,
+            key === 'angleRadians' ? value : value * scale
+          ]
+        )
+      );
+      const proofKind = outcome.proof.kind;
+      const kindLabel =
+        proofKind === 'blind-cylindrical-hole'
+          ? 'Blind hole'
+          : proofKind === 'counterbore'
+            ? 'Counterbore'
+            : proofKind === 'countersink'
+              ? 'Countersink'
+              : proofKind === 'cylindrical-boss'
+                ? 'Boss'
+                : proofKind === 'prismatic-pocket'
+                  ? 'Pocket'
+                  : 'Taper';
+      return {
+        kind: 'recognized',
+        featureKind: proofKind,
+        message: `${kindLabel} recognized from the imported STEP body.`,
+        dimensions
+      };
+    } finally {
+      const last = this.historyCheckpoints.length - 1;
+      if (last >= 0) {
+        try {
+          kernel!.restore(this.historyCheckpoints[last]!.checkpointId);
+        } catch {
+          this.invalidateHistoryCache();
+        }
+      } else {
+        this.invalidateHistoryCache();
+      }
+    }
   }
 }
 
