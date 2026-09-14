@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import * as THREE from 'three';
-import { EXACT_SECTION, applyExactSection } from './exactSection';
+import {
+  EXACT_SECTION,
+  applyExactSection,
+  exactSectionSnapshot
+} from './exactSection';
 import { SECTION_CAP } from './sectionCaps';
 import { applyDisplayMode, applySectionPlane, sectionClippingPlane } from './objects';
 import { isViewerMesh } from '../pick/meshes';
@@ -130,12 +134,67 @@ describe('exact section geometry in the viewport', () => {
     ) as THREE.Mesh;
     applyDisplayMode(group, 'wireframe');
     expect((fill.material as THREE.Material).visible).toBe(false);
+    // The curve's MATERIAL is what the display pass writes; asserting the
+    // object's own `visible` flag would pass whatever the pass did, because
+    // nothing ever writes it.
+    expect(curve.material.visible).toBe(true);
     expect(curve.visible).toBe(true);
     expect((curve.material as THREE.LineBasicMaterial).color.getHex()).toBe(
       0x14293c
     );
     applyDisplayMode(group, 'shaded');
     expect((fill.material as THREE.Material).visible).toBe(true);
+    expect(curve.material.visible).toBe(true);
     expect(curve.visible).toBe(true);
+  });
+});
+
+/** A square region with a square hole, i.e. an outer loop and one inner. */
+const boredRegion = (bodyId = 'body_2') => ({
+  bodyId,
+  positions: Float32Array.of(-5, -5, 1, 5, -5, 1, 5, 5, 1, -5, 5, 1),
+  indices: Uint32Array.of(0, 1, 2, 0, 2, 3),
+  loops: [
+    {
+      points: [
+        [-5, -5, 1],
+        [5, -5, 1],
+        [5, 5, 1],
+        [-5, 5, 1]
+      ] as const
+    },
+    {
+      points: [
+        [-1, -1, 1],
+        [1, -1, 1],
+        [1, 1, 1],
+        [-1, 1, 1]
+      ] as const
+    }
+  ]
+});
+
+describe('the exact section render-policy snapshot', () => {
+  it('reports each region against its OWN boundary curves', () => {
+    const root = new THREE.Group();
+    applyExactSection(root, [region('body_1'), boredRegion('body_2')]);
+    const snapshot = exactSectionSnapshot(root);
+    expect(snapshot).toHaveLength(2);
+    // A one-loop body reports one curve even beside a bored one; counting
+    // the whole group would report 3 against both.
+    expect(snapshot.map((entry) => entry.curves)).toEqual([1, 2]);
+    expect(snapshot.map((entry) => entry.triangles)).toEqual([2, 2]);
+    for (const entry of snapshot) {
+      expect(entry.bounds.min[2]).toBeCloseTo(1);
+      expect(entry.bounds.max[2]).toBeCloseTo(1);
+    }
+  });
+
+  it('reports nothing when no exact section is on screen', () => {
+    const root = new THREE.Group();
+    expect(exactSectionSnapshot(root)).toEqual([]);
+    applyExactSection(root, [region()]);
+    applyExactSection(root, null);
+    expect(exactSectionSnapshot(root)).toEqual([]);
   });
 });
