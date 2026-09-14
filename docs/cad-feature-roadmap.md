@@ -271,8 +271,11 @@ UI. The kernel's assembly hierarchy/transforms/BOM went Stable on
 
 - **I-1. Mesh import beyond STL**: done. `.3mf`, `.obj`, `.glb` and `.ply`
   import through the kernel's translators into the same `imported-mesh`
-  feature STL produces. `.gltf` (JSON glTF) is deliberately not offered:
-  the kernel reads glTF only as a binary `.glb`.
+  feature STL produces, with a 3MF's declared length unit honoured.
+  `.gltf` (JSON glTF) is deliberately not offered: the kernel reads glTF
+  only as a binary `.glb`. Still open, and now part of I-3: a file holding
+  several objects is refused, because one mesh import is one body and
+  separate shells do not sew into one.
 - **I-2. `.shapr` semantic replay**: `io-shapr` already parses sketches,
   constraints, and a graded operation history but applies only the exact
   STEP body plus a provenance record. Replaying the `proven` subset into
