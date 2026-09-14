@@ -269,16 +269,25 @@ export function importMeshSolid(kernel: RemusKernel, stlText: string): number {
 }
 
 /**
- * Merge the same-domain faces of a sewn mesh.
+ * Merge the same-domain faces of a sewn mesh, or keep the sewn faces.
  *
- * The kernel's heal pipeline refuses to return any result its validators
- * reject, and an open mesh — a sheet of triangles with boundary edges — can
- * never validate as a closed solid. For one, the merge is a refused nicety
- * and the sewn faces stand; the size guard in the caller still applies. A
- * closed mesh whose unify is refused is a real repair failure and stays one.
+ * The merge is a nicety: it recovers the six planar faces of a cube from the
+ * twelve triangles a mesh file spells it with. The kernel's heal pipeline is
+ * transactional — it either returns a result its validators accept or refuses
+ * and leaves the input untouched — so a refused merge says nothing about the
+ * shell `sewFaces` produced, and that shell stands either way. The caller's
+ * volume and bounds oracle is what decides whether it may be published.
+ *
+ * This used to rethrow whenever the sewn shell validated clean, on the theory
+ * that a closed mesh whose unify is refused is a real repair failure. Measured
+ * on the pin, that was backwards: a mesh of two disjoint boxes sews into one
+ * solid that `validateSolidDetailed` reports with zero errors and the right
+ * volume, and its unify is refused — so the good body was thrown away, the
+ * import reported success and the rebuild produced nothing. An *open* shell,
+ * which the same check calls invalid, was kept. The refusal is about the
+ * merge, not about the shell.
  */
 function unifySewnMesh(kernel: RemusKernel, sewn: number): number {
-  const openShell = kernel.validateSolid(sewn) !== 0;
   try {
     const healed = kernel.runHealPipeline(sewn, ['unify_same_domain']) as
       string | { solid?: number };
@@ -286,11 +295,8 @@ function unifySewnMesh(kernel: RemusKernel, sewn: number): number {
       typeof healed === 'string' ? JSON.parse(healed) : healed
     ) as { solid?: number };
     return typeof parsed.solid === 'number' ? parsed.solid : sewn;
-  } catch (error) {
-    if (openShell) {
-      return sewn;
-    }
-    throw error;
+  } catch {
+    return sewn;
   }
 }
 
