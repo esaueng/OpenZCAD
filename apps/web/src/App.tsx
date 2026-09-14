@@ -5946,9 +5946,8 @@ export function App() {
     // Taken before the await: whatever this call decides, an answer already
     // in flight is about a cut that has moved on.
     const token = ++sectionTokenRef.current;
-    const { resolveSectionOutline, sectionSourceOf } = await import(
-      './lib/sectionOutline'
-    );
+    const { resolveSectionOutline, sectionSourceOf } =
+      await import('./lib/sectionOutline');
     if (!sectionSourceOf(view).document) {
       // Nothing on screen has an exact section to ask for — a stand-in is
       // drawn over the model. The clipped preview stays and says so, rather
@@ -8803,8 +8802,10 @@ export function App() {
       // reopens, rebuilds and exports exactly like an imported STL.
       let mesh;
       try {
-        const { importMeshFileInDisposableWorker, meshImportFormatForFileName } =
-          await import('./lib/meshImportWorkerClient');
+        const {
+          importMeshFileInDisposableWorker,
+          meshImportFormatForFileName
+        } = await import('./lib/meshImportWorkerClient');
         const format = meshImportFormatForFileName(file.name);
         if (!format) {
           setStatus(`Unsupported import format: ${file.name}`);
@@ -13302,10 +13303,6 @@ export function App() {
       startSketchOnFace(interaction.target);
       return;
     }
-    if (action === 'export-face-dxf' && interaction.mode === 'face') {
-      void handleExportFaceDxf(interaction.target);
-      return;
-    }
     if (
       action === 'remove-fillet' &&
       interaction.mode === 'face' &&
@@ -15066,6 +15063,21 @@ export function App() {
         ? 'Project transfer in progress'
         : null,
       run: () => projectImportInputRef.current?.click()
+    },
+    {
+      // The face outline export used to be a tab on the tool card, where it
+      // sat among edit modes and cost that card a quarter of its width.
+      id: 'file-export-face-dxf',
+      label: 'Export face outline as DXF',
+      group: 'File',
+      keywords: ['laser', 'outline', 'flat', 'cut'],
+      icon: <Download size={16} aria-hidden="true" />,
+      disabledReason: normalToFaceTarget ? null : 'Select a planar face first',
+      run: () => {
+        if (normalToFaceTarget) {
+          void handleExportFaceDxf(normalToFaceTarget);
+        }
+      }
     },
     {
       id: 'file-export-step',
@@ -17152,7 +17164,9 @@ export function App() {
               selection={assistantSelection}
               onApply={handleApplyPatch}
               onPreview={handlePreviewPatch}
-              onAnalyze={async (document, analysis) => geometry.syncOnce(document, analysis)}
+              onAnalyze={async (document, analysis) =>
+                geometry.syncOnce(document, analysis)
+              }
               collapsed={assistantCollapsed}
               onCollapsedChange={setAssistantCollapsed}
               confirmDestructive={appSettings.general.confirmDestructiveActions}
