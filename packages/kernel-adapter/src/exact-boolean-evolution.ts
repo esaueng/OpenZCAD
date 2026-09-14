@@ -12,41 +12,53 @@ import {
   type RemusTopologyCandidate
 } from './remus-lineage';
 import { topologyCandidatesForSolid } from './exact-lineage-builders';
-import { unifyUnionFaces } from './exact-boolean-helpers';
 import { MEASUREMENT_DEFLECTION } from './exact-witnesses';
 
 /**
- * A boolean run through the kernel's entity-evolution entry point.
+ * Provenance evidence for a boolean, read WITHOUT sourcing the geometry from
+ * it.
  *
- * `solid` is the production body after the caller's own unification step, and
- * is what the feature ships. `evolution` is present only when the payload
- * decoded and the raw pre-unification domain is still addressable; `declined`
- * says why when it is not, so the caller falls back to the analytic-carrier
- * derivation deliberately rather than inheriting a silent blank.
+ * The kernel's `cutWithEntityEvolution` / `fuseWithEntityEvolution` /
+ * `intersectWithEntityEvolution` entry points are a DIFFERENT boolean
+ * implementation from the plain ones on this pin, not the same boolean with a
+ * provenance payload attached. Measured on `4bbcd5c7`:
+ *
+ * | case | plain entry point | entity-evolution entry point |
+ * | --- | --- | --- |
+ * | cylinder r10 h20 minus sphere r8 at z=10 | 5 faces, 4137.839039 mm^3 | throws `assembly failed: closed hole shell is not contained by any growth region` |
+ * | sphere r10 intersect 10mm box at z=5 | 4 faces, 163.596637 mm^3 | throws `assembly failed: no outer shell found` |
+ * | two offset unit spheres, fuse | throws the exact-only refusal | returns a 4-face body of 5.726777 mm^3 |
+ * | cylinder r10 h20 union sphere r8 at z=20 | throws the exact-only refusal | returns the sphere alone, 4188.790205 mm^3 |
+ * | box 20mm minus sphere r8 at (10,10,20) | throws the exact-only refusal | throws `copied face Id(49) does not contain exactly one reverse use of edge Id(276)` |
+ * | cylinder r20 h5 union cylinder r5 h20 at z=5 | 6 faces | 5 faces |
+ * | sphere r10 intersect 10mm box at the origin | 523.545492 mm^3 | 523.528813 mm^3 |
+ *
+ * So the shipped solid is never taken from these entry points. Geometry keeps
+ * coming from the plain calls, which carry the kernel's exact-only policy
+ * (Remus B21) and its named refusals. The evolution call runs separately, on
+ * COPIES of the same operands, purely to read the payload — and its own result
+ * is checked against the shipped body before a single name is believed.
  */
-export interface BooleanEvolutionRun {
-  readonly solid: number;
-  /**
-   * Measured candidates for the RAW result, before unification. Lineage is
-   * derived against these because the evolution payload addresses them.
-   */
-  readonly rawCandidates: readonly RemusTopologyCandidate[];
-  readonly rawSolid: number;
+export interface BooleanEvolutionEvidence {
+  /** The decoded payload, or null when there is nothing trustworthy to use. */
   readonly evolution: RemusBooleanEntityEvolution | null;
   /**
-   * True when unification left every face and edge handle in place, so the
-   * raw candidates are also the production result's candidates and no second
-   * measurement is needed.
+   * The operands as the evolution call saw them: the copies' own measured
+   * candidates, carrying the originals' references across by exact witness.
+   * The payload's source handles address these, not the originals'.
    */
-  readonly handlesStable: boolean;
+  readonly operands: readonly RemusBooleanOperand[];
+  /** Measured candidates of the evolution call's own result. */
+  readonly candidates: readonly RemusTopologyCandidate[];
+  /** Why no payload is being used. Null when one is. */
   readonly declined: string | null;
 }
 
-type EvolutionOperation = 'cut' | 'fuse' | 'intersect';
+export type BooleanEvolutionOperation = 'cut' | 'fuse' | 'intersect';
 
 function callEntityEvolution(
   kernel: RemusKernel,
-  operation: EvolutionOperation,
+  operation: BooleanEvolutionOperation,
   a: number,
   b: number
 ): string {
@@ -61,241 +73,217 @@ function callEntityEvolution(
 }
 
 /**
- * The result handle alone, for the case where the evolution record is
- * unusable but the geometry is not. A payload that does not even name a solid
- * is a hard failure: there is no body to ship.
+ * No payload, and the reason why. Every boolean that does not reach a probe —
+ * a multi-operand reduction, the exact coaxial cylinder path, an operand the
+ * pairwise entry points do not cover — says so rather than inheriting a
+ * silent blank.
  */
-function decodeResultSolid(payload: string): number {
-  const decoded: unknown = JSON.parse(payload);
-  const solid =
-    decoded && typeof decoded === 'object' && !Array.isArray(decoded)
-      ? (decoded as Record<string, unknown>).solid
-      : undefined;
-  if (!Number.isSafeInteger(solid) || (solid as number) < 0) {
-    throw new Error(
-      'The exact kernel returned a boolean evolution payload with no result solid.'
-    );
-  }
-  return solid as number;
+export function declinedBooleanEvidence(
+  declined: string
+): BooleanEvolutionEvidence {
+  return { evolution: null, operands: [], candidates: [], declined };
 }
 
-function handleSetsMatch(
-  before: readonly RemusTopologyCandidate[],
-  faces: Uint32Array,
-  edges: Uint32Array
-): boolean {
-  const measured = new Set(
-    before.map((candidate) => `${candidate.kind}:${candidate.handle}`)
-  );
-  const after = [
-    ...Array.from(faces, (handle) => `face:${handle}`),
-    ...Array.from(edges, (handle) => `edge:${handle}`)
-  ];
-  return (
-    after.length === measured.size && after.every((key) => measured.has(key))
-  );
+function errorText(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
-/**
- * Run a two-operand boolean through the entity-evolution entry point.
- *
- * The call is the production call, not a second one taken for evidence: a
- * boolean is the expensive operation in a rebuild and running it twice to
- * learn where its faces came from would be paid on every feature. Measured on
- * the pin, `cutWithEntityEvolution` and `intersectWithEntityEvolution` return
- * the same raw body as `cut` and `intersect` on every fixture tried (through
- * hole, blind pocket, slot across, flush half, stepped notch, coincident
- * boxes, cylinder through a plate), so routing them changes provenance and
- * nothing else.
- *
- * `unify` is the caller's own post-processing step, applied here so the raw
- * result can be measured first — unification renames handles wherever it
- * merges, and the evolution payload addresses the raw ones.
- */
-export function runBooleanWithEntityEvolution(
-  kernel: RemusKernel,
-  operation: EvolutionOperation,
-  a: number,
-  b: number,
-  unify: (solid: number) => number
-): BooleanEvolutionRun {
-  const payload = callEntityEvolution(kernel, operation, a, b);
-  const rawSolid = decodeResultSolid(payload);
-  let evolution: RemusBooleanEntityEvolution | null = null;
-  let declined: string | null = null;
-  try {
-    evolution = decodeRemusBooleanEntityEvolution(payload);
-  } catch (error) {
-    declined = error instanceof Error ? error.message : 'invalid payload';
-  }
-  const rawCandidates = evolution
-    ? topologyCandidatesForSolid(kernel, rawSolid)
-    : [];
-  const solid = unify(rawSolid);
-  const handlesStable =
-    evolution !== null &&
-    solid === rawSolid &&
-    handleSetsMatch(
-      rawCandidates,
-      kernel.getSolidFaces(solid),
-      kernel.getSolidEdges(solid)
-    );
-  return { solid, rawSolid, rawCandidates, evolution, handlesStable, declined };
-}
-
-/** Face types, edge count and volume — enough to tell two bodies apart. */
-function solidCensus(kernel: RemusKernel, solid: number): string {
+/** Face types and edge count — the cheap half of the same-body question. */
+function solidShape(kernel: RemusKernel, solid: number): string {
   const types = Array.from(kernel.getSolidFaces(solid), (face) =>
     kernel.getSurfaceType(face)
   ).sort();
-  return [
-    types.join(','),
-    kernel.getSolidEdges(solid).length,
-    kernel.volume(solid, MEASUREMENT_DEFLECTION).toFixed(9)
-  ].join('|');
+  return `${types.join(',')}|${kernel.getSolidEdges(solid).length}`;
 }
 
 /**
- * The union arm, with the geometry guard the measured kernel behaviour needs.
+ * Whether two solids are the same body.
  *
- * `fuseWithEntityEvolution` publishes the RAW fragment layout, because that is
- * what its evolution map addresses; plain `fuse` post-processes its result.
- * Measured on the pin, two stacked 20x20x10 boxes come back from `fuse` as 6
- * faces / 12 edges and from `fuseWithEntityEvolution` as 10 / 20, which
- * `unifyFaces` only brings to 6 / 16 — four redundant seams the plain path
- * never had, and four false edges in the viewport. So where unification had to
- * merge anything, the plain fuse is run on the operands (which survive the
- * first call) and the two results are compared; the evolution body ships only
- * when it is the same body, and the plain body ships otherwise with the
- * boolean falling back to carrier lineage.
- *
- * Where unification merged nothing — a boss grown onto a plate, the case this
- * whole row exists for — no second fuse is run at all.
+ * Face count, face types, edge count and volume. The volume comparison is
+ * relative rather than exact: two bodies built by two code paths can differ in
+ * the last bits of a measured volume without being different bodies, while
+ * every divergence measured on this pin is orders of magnitude larger than
+ * that — the closest is the intersect that moved 523.545492 to 523.528813,
+ * which is 3e-5 relative, and the rest differ in face or edge count as well.
  */
-export function runFuseWithEntityEvolution(
+function solidsAreTheSameBody(
   kernel: RemusKernel,
-  a: number,
-  b: number,
-  onAccepted?: (solid: number) => void
-): BooleanEvolutionRun {
-  // Whichever body ships is the one whose unification acceptance the caller
-  // hears about: reporting the discarded attempt's would leave a handle that
-  // names no shipped body behind in the union's own validation.
-  let evolutionAccepted: number | undefined;
-  const run = runBooleanWithEntityEvolution(kernel, 'fuse', a, b, (solid) =>
-    unifyUnionFaces(kernel, solid, (accepted) => {
-      evolutionAccepted = accepted;
-    })
-  );
-  const merged =
-    run.evolution === null ||
-    kernel.getSolidFaces(run.solid).length !==
-      run.rawCandidates.filter((candidate) => candidate.kind === 'face').length;
-  const accept = (solid: number | undefined) => {
-    if (solid !== undefined) {
-      onAccepted?.(solid);
-    }
-  };
-  if (!merged) {
-    accept(evolutionAccepted);
-    return run;
+  left: number,
+  right: number
+): boolean {
+  if (solidShape(kernel, left) !== solidShape(kernel, right)) {
+    return false;
   }
-  let plainAccepted: number | undefined;
-  const plain = unifyUnionFaces(
-    kernel,
-    kernel.fuseAll(Uint32Array.from([a, b])),
-    (accepted) => {
-      plainAccepted = accepted;
-    }
-  );
-  if (solidCensus(kernel, plain) === solidCensus(kernel, run.solid)) {
-    accept(evolutionAccepted);
-    return run;
+  const leftVolume = kernel.volume(left, MEASUREMENT_DEFLECTION);
+  const rightVolume = kernel.volume(right, MEASUREMENT_DEFLECTION);
+  if (!Number.isFinite(leftVolume) || !Number.isFinite(rightVolume)) {
+    return false;
   }
-  accept(plainAccepted);
-  return {
-    solid: plain,
-    rawSolid: plain,
-    rawCandidates: [],
-    evolution: null,
-    handlesStable: false,
-    declined:
-      'The entity-evolution fuse needed face unification and did not land on the same body as the plain fuse; the plain result shipped.'
-  };
+  const scale = Math.max(1, Math.abs(leftVolume), Math.abs(rightVolume));
+  return Math.abs(leftVolume - rightVolume) <= scale * 1e-9;
 }
 
 /**
- * The same shape for a boolean that never reached the evolution entry point —
- * a coaxial cylinder cut taken by the exact analytic path, an operand set the
- * pairwise entry points do not cover. The reason travels with it so the
- * fallback to carrier lineage is recorded rather than assumed.
+ * The operand as the evolution call saw it.
+ *
+ * The call runs on a copy, so the payload's source handles are the copy's. The
+ * original's references are carried onto the copy's handles by exact witness —
+ * the same one-to-one, uniqueness-checked carry a direct edit uses — so a face
+ * whose witness is ambiguous on its own body carries nothing rather than being
+ * matched by handle order or by position in the list.
  */
-export function plainBooleanRun(
-  solid: number,
-  declined: string
-): BooleanEvolutionRun {
+function operandAsCopied(
+  kernel: RemusKernel,
+  operand: RemusBooleanOperand,
+  copy: number
+): RemusBooleanOperand {
+  const candidates = topologyCandidatesForSolid(kernel, copy);
   return {
-    solid,
-    rawSolid: solid,
-    rawCandidates: [],
-    evolution: null,
-    handlesStable: false,
-    declined
+    ...(operand.role ? { role: operand.role } : {}),
+    candidates,
+    lineage: carryRemusUnchangedLineage(operand.lineage, candidates, 'boolean')
   };
 }
 
 /**
- * Both boolean derivations, reconciled.
+ * Read the kernel's entity-evolution payload for a boolean that has ALREADY
+ * been performed and shipped by the plain entry points.
+ *
+ * `shipped` is the body the feature publishes; nothing here may replace it.
+ * The probe repeats the boolean on copies of the same operands, applies the
+ * caller's own post-processing to its own result, and compares that against
+ * `shipped`. A probe that throws, that decodes badly, or that lands on a
+ * different body hands back `declined`, and the caller keeps the
+ * analytic-carrier lineage it had before this row.
+ *
+ * COST: this performs the boolean a SECOND time, on every two-operand boolean
+ * feature. That is deliberate and it is the price of the guarantee — the
+ * geometry the user gets is the plain pipeline's, and the provenance is
+ * believed only where a second, independent body says the payload describes
+ * the same operation. It is not skipped silently anywhere: a boolean that does
+ * not probe records why.
+ */
+export function probeBooleanEntityEvolution(input: {
+  readonly kernel: RemusKernel;
+  readonly operation: BooleanEvolutionOperation;
+  /** The operand solids the shipped boolean was given, in the same order. */
+  readonly a: number;
+  readonly b: number;
+  /** The body the feature ships. Read only. */
+  readonly shipped: number;
+  /** The caller's own post-processing, applied to the probe's own result. */
+  readonly unify: (solid: number) => number;
+  /** Operand lineage, one entry per operand solid, in the same order. */
+  readonly operands: readonly RemusBooleanOperand[];
+}): BooleanEvolutionEvidence {
+  const { kernel, operation, operands } = input;
+  if (operands.length !== 2) {
+    return declinedBooleanEvidence(
+      'The boolean evolution probe needs one lineage operand per solid.'
+    );
+  }
+  let copies: readonly [number, number];
+  try {
+    copies = [kernel.copySolid(input.a), kernel.copySolid(input.b)];
+  } catch (error) {
+    return declinedBooleanEvidence(
+      `The operands could not be copied for the evolution probe: ${errorText(error)}`
+    );
+  }
+  let evolution: RemusBooleanEntityEvolution;
+  try {
+    evolution = decodeRemusBooleanEntityEvolution(
+      callEntityEvolution(kernel, operation, copies[0], copies[1])
+    );
+  } catch (error) {
+    return declinedBooleanEvidence(
+      `The kernel's entity-evolution ${operation} did not produce a usable payload: ${errorText(error)}`
+    );
+  }
+  // Measured BEFORE the caller's post-processing, because the payload
+  // addresses the raw result: unification renames handles wherever it merges.
+  let candidates: readonly RemusTopologyCandidate[];
+  let sameBody: boolean;
+  try {
+    candidates = topologyCandidatesForSolid(kernel, evolution.solid);
+    sameBody = solidsAreTheSameBody(
+      kernel,
+      input.unify(evolution.solid),
+      input.shipped
+    );
+  } catch (error) {
+    return declinedBooleanEvidence(
+      `The evolution probe's own result could not be compared with the shipped body: ${errorText(error)}`
+    );
+  }
+  if (!sameBody) {
+    return declinedBooleanEvidence(
+      `The kernel's entity-evolution ${operation} did not reproduce the body the plain ${operation} shipped, so its provenance describes a different solid.`
+    );
+  }
+  return {
+    evolution,
+    operands: [
+      operandAsCopied(kernel, operands[0]!, copies[0]),
+      operandAsCopied(kernel, operands[1]!, copies[1])
+    ],
+    candidates,
+    declined: null
+  };
+}
+
+/**
+ * Both boolean derivations, reconciled onto the SHIPPED body.
  *
  * The analytic-carrier rule runs on every boolean exactly as it did before
- * this row, against the production result. Where the kernel also handed back
- * an entity-evolution record, that record is derived against the RAW result it
- * addresses, carried across unification by exact witness, and reconciled with
- * the carrier rule — which keeps the carrier rule as the independent witness
- * rather than retiring it.
+ * this row, against the shipped result's own measured candidates. Where the
+ * probe also handed back a verified payload, that payload is derived against
+ * the probe's own body — the domain it addresses — and then carried onto the
+ * shipped body by exact witness, so a name only ever lands on a shipped face
+ * whose exact witness is identical to the probe face the name was proved on. A
+ * handle the two derivations name differently publishes neither name.
  */
-export function deriveBooleanLineageForRun(
-  kernel: RemusKernel,
-  run: BooleanEvolutionRun,
-  producingFeatureId: FeatureId,
-  operands: readonly RemusBooleanOperand[]
-): RemusLineageState {
-  const resultCandidates = run.handlesStable
-    ? run.rawCandidates
-    : topologyCandidatesForSolid(kernel, run.solid);
+export function deriveBooleanLineage(input: {
+  readonly evidence: BooleanEvolutionEvidence;
+  readonly producingFeatureId: FeatureId;
+  /** Operand lineage for the ORIGINAL operands, for the carrier rule. */
+  readonly operands: readonly RemusBooleanOperand[];
+  /** The shipped body's measured candidates. */
+  readonly resultCandidates: readonly RemusTopologyCandidate[];
+}): RemusLineageState {
+  const { evidence, resultCandidates } = input;
   const carrier = deriveRemusBooleanCarrierLineage({
-    producingFeatureId,
-    operands,
+    producingFeatureId: input.producingFeatureId,
+    operands: input.operands,
     resultCandidates
   });
-  if (!run.evolution) {
-    if (run.declined) {
+  if (!evidence.evolution) {
+    if (evidence.declined) {
       carrier.diagnostics.push({
         code: 'hash-only',
         operation: 'boolean',
-        message: `Boolean kernel evolution was not consumed: ${run.declined}`
+        message: `Boolean kernel evolution was not consumed: ${evidence.declined}`
       });
     }
     return carrier;
   }
-  const raw = deriveRemusBooleanEvolutionLineage({
-    producingFeatureId,
-    evolution: run.evolution,
-    resultSolid: run.rawSolid,
-    operands,
-    resultCandidates: run.rawCandidates
+  const probed = deriveRemusBooleanEvolutionLineage({
+    producingFeatureId: input.producingFeatureId,
+    evolution: evidence.evolution,
+    resultSolid: evidence.evolution.solid,
+    operands: evidence.operands,
+    resultCandidates: evidence.candidates
   });
-  const evolution = run.handlesStable
-    ? raw
-    : (carryRemusUnchangedLineage(
-        raw,
-        resultCandidates,
-        'boolean',
-        // Not a blanket `hash-only`: the boolean itself did publish lineage,
-        // and unification then merged or renamed part of it. Saying
-        // "hash-only" at body level would read as the whole feature
-        // declining, which is a different and much worse condition.
-        'boolean-unification-merge'
-      ) ?? raw);
-  return reconcileRemusBooleanLineage(carrier, evolution);
+  const carried =
+    carryRemusUnchangedLineage(
+      probed,
+      resultCandidates,
+      'boolean',
+      // Not a blanket `hash-only`: the boolean itself did publish lineage, and
+      // the shipped body's own unification then merged or renamed part of it.
+      // Saying "hash-only" at body level would read as the whole feature
+      // declining, which is a different and much worse condition.
+      'boolean-evidence-carry'
+    ) ?? probed;
+  return reconcileRemusBooleanLineage(carrier, carried);
 }
