@@ -456,11 +456,29 @@ export function isBlendFace(
   if (surfaceType !== 'cylinder') {
     return false;
   }
+  return tangentPlanarNeighbours(kernel, solid, face).length > 0;
+}
+
+/**
+ * The planar faces a cylindrical `face` runs tangent into, in kernel handle
+ * order. This is the witness {@link isBlendFace} answers with for a cylinder:
+ * a plane parallel to the band's axis, standing exactly one radius off it,
+ * sharing an edge with the band. A rolling-ball band between two walls proves
+ * two of them; a bore wall meeting its caps at a right angle proves none.
+ */
+export function tangentPlanarNeighbours(
+  kernel: RemusKernel,
+  solid: number,
+  face: number
+): number[] {
+  if (kernel.getSurfaceType(face) !== 'cylinder') {
+    return [];
+  }
   let parameters: unknown;
   try {
     parameters = JSON.parse(kernel.getAnalyticSurfaceParams(face));
   } catch {
-    return false;
+    return [];
   }
   const record = (parameters ?? {}) as Record<string, unknown>;
   const origin = finiteVec3(record.origin);
@@ -468,13 +486,14 @@ export function isBlendFace(
   const axis = rawAxis ? normalized(rawAxis) : null;
   const radius = positiveFinite(record.radius);
   if (!origin || !axis || radius === null) {
-    return false;
+    return [];
   }
   const bandEdges = new Set(kernel.getFaceEdges(face));
   const tolerance = Math.max(
     BLEND_TANGENCY_TOLERANCE * radius,
     GEOMETRY_EPSILON
   );
+  const tangent: number[] = [];
   for (const neighbour of kernel.getSolidFaces(solid)) {
     if (
       neighbour === face ||
@@ -505,10 +524,10 @@ export function isBlendFace(
       Math.abs(Math.abs(dot(subtract(origin, onPlane), normal)) - radius) <=
       tolerance
     ) {
-      return true;
+      tangent.push(neighbour);
     }
   }
-  return false;
+  return tangent;
 }
 
 /**

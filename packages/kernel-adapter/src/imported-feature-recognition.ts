@@ -204,6 +204,38 @@ export type RecognitionRefusalReason =
   | 'ambiguous-twins'
   | 'incomplete-proof';
 
+/**
+ * Human-readable refusal copy for one typed recognition reason.
+ *
+ * Display copy only: the reason code itself stays the contract between the
+ * worker and the Inspector, and every message names the limit rather than
+ * guessing what the face might be.
+ */
+export function recognitionRefusalMessage(
+  reason: RecognitionRefusalReason
+): string {
+  switch (reason) {
+    case 'seed-face-missing':
+      return 'The selected face is no longer on the rebuilt body.';
+    case 'work-limit-exceeded':
+      return 'Recognition stopped at its face/adjacency work bound.';
+    case 'unsupported-surface':
+      return 'This surface class is outside the recognized feature families.';
+    case 'partial-revolution':
+      return 'Only a proved full revolution can be recognized.';
+    case 'blend-detected':
+      return 'A blend surface touches this face, so no hole/boss/pocket proof applies.';
+    case 'rib-detected':
+      return 'A rib intersects this face, so no feature proof applies.';
+    case 'intersection-detected':
+      return 'A non-simple intersection touches this face, so no feature proof applies.';
+    case 'ambiguous-twins':
+      return 'Two or more faces match this proof equally, so nothing is claimed.';
+    case 'incomplete-proof':
+      return 'The neighbouring faces do not complete any recognized feature proof.';
+  }
+}
+
 export type ImportedFeatureRecognition =
   | {
       status: 'recognized';
