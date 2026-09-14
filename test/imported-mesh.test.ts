@@ -187,6 +187,44 @@ describe('imported meshes on the exact kernel', { timeout: 30_000 }, () => {
     expect(body.topology!.faces).toHaveLength(2);
   });
 
+  it('sews a two-shell mesh into one body of both shells', async () => {
+    // Two disjoint boxes in one triangle soup — the shape a multi-object 3MF,
+    // OBJ, GLB, PLY or STL arrives in. Measured on the pin: `sewFaces` returns
+    // one solid that `validateSolidDetailed` reports with zero errors and the
+    // summed volume, and the kernel then refuses to *unify* its faces. The
+    // refusal used to be rethrown, so this document imported behind a success
+    // message and rebuilt to no body at all; the sewn shell stands instead,
+    // and the caller's volume and bounds oracle is what decides.
+    const near = boxMesh(2, 3, 4);
+    const far = boxMesh(2, 3, 4);
+    const vertices = [
+      ...near.vertices,
+      ...far.vertices.map((value, index) => (index % 3 === 0 ? value + 10 : value))
+    ];
+    const indices = [
+      ...near.indices,
+      ...far.indices.map((index) => index + near.vertices.length / 3)
+    ];
+    const { document, bodyId } = importMeshBody(
+      createProjectDocument('Two shells', user),
+      {
+        name: 'Imported pair',
+        artifactId: 'artifact_pair',
+        sourceName: 'pair.stl',
+        vertices,
+        indices,
+        triangleCount: indices.length / 3
+      }
+    );
+
+    const state = await adapter.syncDocument(document);
+    expect(state.warnings).toEqual([]);
+    const body = state.bodyRepresentations[bodyId]!;
+    expect(body.volume).toBeCloseTo(2 * 3 * 4 * 2, 6);
+    expect(body.bbox.min).toEqual({ x: 0, y: 0, z: 0 });
+    expect(body.bbox.max).toEqual({ x: 12, y: 3, z: 4 });
+  });
+
   it('keeps mesh-reference body semantics and hash-only lineage', async () => {
     const { document, bodyId } = meshDocument();
     const body = Object.values(document.nodes).find(

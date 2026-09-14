@@ -53,7 +53,7 @@ export interface UnionFuseOperand {
  * candidate is TRIED, on copies, and only offered once the fuse it produces
  * is measured exact: a suggestion that does not work is worse than the
  * general advice it replaces, and this is the same reason
- * `edgeModifierSucceedsSmaller` probes instead of inferring.
+ * `acceptedEdgeModifierProbe` probes instead of inferring.
  */
 /**
  * Whether one solid tessellates to a closed, consistently oriented mesh —
