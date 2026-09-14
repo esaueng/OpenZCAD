@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   addPrimitiveFeature,
   addSketchFeature,
+  booleanBodies,
   createProjectDocument,
   extrudeSketch,
   findSketch,
@@ -430,6 +431,108 @@ describe('incremental prefix rebuild cache', { timeout: 120_000 }, () => {
       expect(normalized(third)).toEqual(
         normalized(await freshDerived(suppressed))
       );
+    } finally {
+      adapter.dispose();
+    }
+  });
+
+  it('restores current mass properties to a boolean operand revealed by suppression', async () => {
+    const events: RebuildCacheEvent[] = [];
+    const adapter = await createExactKernelAdapter({
+      onRebuildCacheEvent: (event) => events.push(event)
+    });
+    try {
+      // Union consume → suppress → visible. While consumed, an operand's
+      // cached measurement carries no mass properties (consumed bodies
+      // publish no moments). Suppressing the union must re-measure the
+      // revealed operand instead of serving that mass-less entry back: the
+      // per-body cache keys on `includeMassProperties`, so the
+      // consumed↔visible flip is a miss by construction.
+      let document = addPrimitiveFeature(
+        createProjectDocument('Union suppress', toUserId('user_cache')),
+        {
+          name: 'Box A',
+          primitiveKind: 'box',
+          dimensions: { width: 10, height: 10, depth: 10 }
+        }
+      );
+      document = addPrimitiveFeature(document, {
+        name: 'Box B',
+        primitiveKind: 'box',
+        dimensions: { width: 10, height: 10, depth: 10 }
+      });
+      const [bodyA, bodyB] = document.bodyOrder;
+      document = transformBody(document, {
+        name: 'Move B',
+        targetBodyId: bodyB!,
+        translation: { x: 5, y: 0, z: 0 }
+      }).document;
+      const union = booleanBodies(document, {
+        name: 'Union AB',
+        operation: 'union',
+        targetBodyIds: [bodyA!, bodyB!]
+      });
+      document = union.document;
+
+      const united = await adapter.syncDocument(document);
+      expect(united.bodyRepresentations[bodyA!]!.consumed).toBe(true);
+      expect(united.bodyRepresentations[bodyB!]!.consumed).toBe(true);
+      expect(
+        united.bodyRepresentations[bodyA!]!.massProperties
+      ).toBeUndefined();
+      expect(
+        united.bodyRepresentations[union.bodyId]!.massProperties
+      ).toBeDefined();
+
+      const booleanFeature = listFeaturesInOrder(document).find(
+        (feature) => feature.data.featureKind === 'boolean'
+      )!;
+      const suppressed = setNodeMetadata(document, {
+        nodeId: booleanFeature.id,
+        metadata: { [FEATURE_SUPPRESSED_METADATA_KEY]: true }
+      });
+      const revealed = await adapter.syncDocument(suppressed);
+      const fresh = await freshDerived(suppressed);
+
+      // The revealed operand is live with CURRENT mass properties — equal to
+      // a cold rebuild's, never the retained undefined from its consumed
+      // pass. The union result has no shape while suppressed.
+      for (const bodyId of [bodyA!, bodyB!]) {
+        const body = revealed.bodyRepresentations[bodyId]!;
+        expect(body.consumed).toBe(false);
+        expect(body.massProperties).toBeDefined();
+        expect(body.massProperties).toEqual(
+          fresh.bodyRepresentations[bodyId]!.massProperties
+        );
+      }
+      expect(revealed.bodyRepresentations[union.bodyId]).toBeUndefined();
+
+      // The visibility flip re-measured exactly the two operands; nothing
+      // was served stale from the consumed pass.
+      expect(events.at(-1)).toMatchObject({
+        kind: 'prefix-restore',
+        restored: 3,
+        replayed: 1,
+        remeasured: 2,
+        reusedMeasurements: 0
+      });
+
+      // An identical resync reuses every measurement AND keeps the mass, so
+      // the transition preserves the cache for unaffected bodies.
+      const again = await adapter.syncDocument(suppressed);
+      expect(events.at(-1)).toMatchObject({
+        kind: 'prefix-restore',
+        restored: 4,
+        replayed: 0,
+        remeasured: 0,
+        reusedMeasurements: 2
+      });
+      for (const bodyId of [bodyA!, bodyB!]) {
+        expect(again.bodyRepresentations[bodyId]!.massProperties).toEqual(
+          fresh.bodyRepresentations[bodyId]!.massProperties
+        );
+      }
+      expect(normalized(again)).toEqual(normalized(fresh));
     } finally {
       adapter.dispose();
     }
