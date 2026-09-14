@@ -113,7 +113,8 @@ function initialState(
         value: {
           name: 'Loft',
           sectionIds: profiles.slice(0, 2).map((profile) => profile.id),
-          mode: 'ruled'
+          mode: 'ruled',
+          endPoint: null
         }
       };
     case 'sweep':
@@ -123,7 +124,8 @@ function initialState(
           name: 'Sweep',
           profileId: profiles[0]?.id ?? '',
           pathId: paths[0]?.id ?? '',
-          mode: 'standard'
+          mode: 'standard',
+          guideId: ''
         }
       };
     case 'helical-sweep':
@@ -733,6 +735,44 @@ export function ModelingOperationsForm({
               Add section
             </button>
           </fieldset>
+          <label className="field">
+            <input
+              type="checkbox"
+              checked={state.value.endPoint !== null}
+              onChange={(event) =>
+                replaceState({
+                  ...state,
+                  value: {
+                    ...state.value,
+                    endPoint: event.target.checked
+                      ? { x: '0', y: '0', z: '0' }
+                      : null
+                  }
+                })
+              }
+            />
+            <span>Close the last section to an apex point</span>
+          </label>
+          {state.value.endPoint === null ? null : (
+            <>
+              <VectorFields
+                legend="Apex point"
+                value={state.value.endPoint}
+                scope={scope}
+                onChange={(endPoint) =>
+                  replaceState({
+                    ...state,
+                    value: { ...state.value, endPoint }
+                  })
+                }
+              />
+              <p className="muted">
+                {state.value.mode === 'smooth'
+                  ? 'An apex point needs Ruled mode: smooth section surfaces do not close against an apex.'
+                  : 'The apex closes the end of the run, and has to stand off the last section\u2019s plane. To point the other end instead, reverse the section order.'}
+              </p>
+            </>
+          )}
         </>
       ) : null}
 
@@ -775,6 +815,27 @@ export function ModelingOperationsForm({
             </select>
           </label>
           <label className="field">
+            <span>Guide rail</span>
+            <select
+              value={state.value.guideId}
+              onChange={(event) =>
+                replaceState({
+                  ...state,
+                  value: { ...state.value, guideId: event.target.value }
+                })
+              }
+            >
+              <option value="">None — follow the path</option>
+              {pathOptions
+                .filter((path) => path.id !== state.value.pathId)
+                .map((path) => (
+                  <option key={path.id} value={path.id}>
+                    {path.label}
+                  </option>
+                ))}
+            </select>
+          </label>
+          <label className="field">
             <span>Surface mode</span>
             <select
               value={state.value.mode}
@@ -792,6 +853,13 @@ export function ModelingOperationsForm({
               <option value="smooth">Smooth</option>
             </select>
           </label>
+          {state.value.guideId === '' ? null : (
+            <p className="muted">
+              {state.value.mode === 'smooth'
+                ? 'A guide rail needs Standard surface mode: the guided sweep takes no surface-mode control, so a Smooth sweep would be rebuilt at a surfacing nobody asked for.'
+                : 'The profile turns to keep facing the rail instead of holding a rotation-minimizing frame. Both the path and the rail must be one curve — a line, or an arc of at most a quarter turn.'}
+            </p>
+          )}
         </>
       ) : null}
 
