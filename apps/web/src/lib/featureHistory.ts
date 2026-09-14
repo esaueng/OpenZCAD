@@ -64,6 +64,7 @@ export function featureHistory(document: ProjectDocument) {
       case 'sweep':
         sketch(data.profile.sketchId);
         sketch(data.path.sketchId);
+        if (data.guide) sketch(data.guide.sketchId);
         break;
       case 'helical-sweep':
         sketch(data.profile.sketchId);

@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { CommandManager, commandFactories } from '@openzcad/command-system';
 import {
   createProjectDocument,
+  findSketch,
   listFeaturesInOrder
 } from '@openzcad/document-core';
 import { toUserId, FEATURE_SUPPRESSED_METADATA_KEY } from '@openzcad/shared';
@@ -128,4 +129,75 @@ it('tracks the second result of a split as a dependency', () => {
   expect(featureResultBodyIds(graph.features.at(-1)!)).toEqual([
     split.data.secondBodyId
   ]);
+});
+
+it('makes a guide rail sketch a parent of the sweep it steers', () => {
+  // The rail is a sketch input to the sweep. Without it in the graph the
+  // delete toast under-counts the sweep's dependents and the history panel
+  // does not mark the rail sketch as one of its parents.
+  const manager = new CommandManager(
+    createProjectDocument('Guided', toUserId('user_guided'))
+  );
+  manager.execute(
+    commandFactories.addSketch({
+      name: 'Profile',
+      plane: 'XY',
+      offset: 0,
+      object: {
+        objectKind: 'rectangle',
+        width: 4,
+        height: 2,
+        centerX: 0,
+        centerY: 0
+      }
+    })
+  );
+  manager.execute(
+    commandFactories.addSketch({
+      name: 'Path',
+      plane: 'XZ',
+      offset: 0,
+      object: { objectKind: 'line', x1: 0, y1: 0, x2: 0, y2: 20 }
+    })
+  );
+  manager.execute(
+    commandFactories.addSketch({
+      name: 'Rail',
+      plane: 'XZ',
+      offset: 10,
+      object: { objectKind: 'line', x1: 0, y1: 0, x2: 0, y2: 20 }
+    })
+  );
+  const [profileSketchId, pathSketchId, railSketchId] =
+    manager.document.sketchOrder;
+  const entityIds = (sketchId: typeof profileSketchId) =>
+    findSketch(manager.document, sketchId!)!.objectIds;
+  manager.execute(
+    commandFactories.sweepProfile({
+      name: 'Guided sweep',
+      profile: {
+        sketchId: profileSketchId!,
+        profile: {
+          profileId: 'profile_1',
+          regionFingerprint: 1,
+          samplePoint: { x: 0, y: 0 },
+          sourceArea: 8,
+          sourceEntityIds: entityIds(profileSketchId)
+        }
+      },
+      path: { sketchId: pathSketchId!, entityIds: entityIds(pathSketchId) },
+      mode: 'standard',
+      guide: { sketchId: railSketchId!, entityIds: entityIds(railSketchId) }
+    })
+  );
+
+  const graph = featureHistory(manager.document);
+  const named = (name: string) =>
+    graph.features.find((feature) => feature.name === name)!.featureId;
+  expect([...graph.parents.get(named('Guided sweep'))!].sort()).toEqual(
+    [named('Profile'), named('Path'), named('Rail')].sort()
+  );
+  expect(
+    graph.downstream(named('Rail')).map((feature) => feature.name)
+  ).toEqual(['Guided sweep']);
 });
