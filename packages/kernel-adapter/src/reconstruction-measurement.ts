@@ -5,7 +5,7 @@
  */
 import { queryOpposingPlanarFacePairs } from './exact-face-distance';
 import { measureFaceGeometry } from './exact-measure';
-import { importStepWithOwnBudget } from './exact-shape-utils';
+import { importStepWithOwnBudget } from './kernel-step-import';
 import type { RemusKernel } from './remus-runtime';
 
 const ANALYTIC_SURFACE_TYPES = new Set([
@@ -1237,7 +1237,7 @@ export function measureImportedStep(
   options: ReconstructionMeasurementOptions = {}
 ): ImportedStepMeasurement {
   const resolvedOptions = resolveMeasurementOptions(options);
-  const solids = Array.from(importStepWithOwnBudget(kernel, step));
+  const solids = Array.from(importStepWithOwnBudget(kernel, step).solids);
   if (solids.length !== 1) {
     throw new Error(
       `Reconstruction measurement requires exactly one STEP solid; found ${solids.length}.`
