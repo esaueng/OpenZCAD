@@ -4,6 +4,7 @@ import {
   parameterBuildError
 } from './lib/parameterEdit';
 import type { parameterVisualPreview } from './lib/parameterVisualPreview';
+import { ResumeSessionDialog } from './components/ResumeSessionDialog';
 import { LatestTask } from './lib/latestTask';
 import { rebuildProgressLabel } from './lib/rebuildProgressLabel';
 import { featureHistory, featureResultBodyIds } from './lib/featureHistory';
@@ -12,7 +13,6 @@ import { edgeModifierCommand } from './lib/edgeModifierEdit';
 import type { EdgeModifierFormValue } from './components/forms/FeatureForms';
 import { documentNodesWithHistory } from '@openzcad/shared';
 import { useWorkspaceResume } from './hooks/useWorkspaceResume';
-import { ResumeSessionDialog } from './components/ResumeSessionDialog';
 import { buildMeasurementRecord } from './lib/measurementRecord';
 import {
   loadProjectBackupFiles,
@@ -314,6 +314,8 @@ import {
   VISUAL_SELECTION_ACCEPTANCE_DEMO
 } from './lib/demoDefinitions';
 import type { DemoDefinition } from './lib/demoDefinitions';
+import { ProjectConflictDialog } from './components/ProjectConflictDialog';
+import { SaveRevisionDialog } from './components/SaveRevisionDialog';
 import { createProjectSharingClient } from './lib/projectSharing';
 import {
   captureProjectInvitationLink,
@@ -324,8 +326,6 @@ import {
   clearProjectShareFragment
 } from './lib/projectShareLink';
 import { fetchSharedProject } from './lib/projectShareClient';
-import { ProjectConflictDialog } from './components/ProjectConflictDialog';
-import { SaveRevisionDialog } from './components/SaveRevisionDialog';
 import type {
   ExportProgress,
   MeshExportDialogFormat
@@ -452,6 +452,7 @@ import {
   type SketchConstraintToolKind,
   type SketchEditToolKind
 } from './lib/interaction/machine';
+import type { SketchEditHost } from './lib/sketch/edits';
 import {
   faceOffsetBaseline,
   planFaceOffset
@@ -10830,141 +10831,103 @@ export function App() {
   }
 
   /**
+   * What the lazily loaded modify tools drive the app through. Built per
+   * call so it closes over the document the operation was planned against.
+   */
+  function sketchEditHost(
+    base: ProjectDocument,
+    anchor?: { x: number; y: number }
+  ): SketchEditHost {
+    return {
+      setStatus,
+      setError: setSketchEditError,
+      setBusy: setSketchSolving,
+      resolve: (value) =>
+        evalParamValue(value, parameterScope.scope) ?? undefined,
+      addPick: (objectId) =>
+        dispatchInteraction({ type: 'sketch-edit-pick', objectId }),
+      askValue: (kind, picks, label, initial) => {
+        setSketchEditDraft({ kind, picks, documentVersion: base.version });
+        setKeypad({
+          kind: 'sketch-edit',
+          label,
+          initial,
+          unitKind: 'length',
+          ...(anchor ? { fixedClientAnchor: anchor } : {})
+        });
+        dispatchInteraction({ type: 'sketch-edit-tool', kind: null });
+      },
+      runOperation: (operation) =>
+        geometry.sketchPlanarOperation(base, operation),
+      commit: async (sketchId, commands, label) => {
+        const applied = await commitSketchEdit(base, sketchId, commands, label);
+        if (applied) setSketchSolveStatus(null);
+        return applied;
+      },
+      describeFailure: (error, fallback) => {
+        if (error instanceof FeatureBuildError) {
+          recordHistoryFailure(error, base);
+        }
+        return errorMessage(error, fallback);
+      }
+    };
+  }
+
+  /**
    * Routes a sketch click while a modify tool is armed. Returns true when the
    * click was consumed, exactly like the constraint picking above: an armed
    * tool never falls through to selection, so a stray click cannot silently
-   * deselect mid-sequence. The work itself is async because the modify tools
-   * live in their own chunk, and the entry chunk has no room for them.
+   * deselect mid-sequence.
    */
   function handleSketchEditPick(
     objectId: string | null,
     clickPoint: { x: number; y: number }
   ): boolean {
-    if (interaction.mode !== 'sketch' || !interaction.session.pendingEdit) {
+    const pending =
+      interaction.mode === 'sketch' ? interaction.session.pendingEdit : null;
+    if (!pending) {
       return false;
     }
-    void completeSketchEditPick(
-      interaction.session.pendingEdit,
-      objectId,
-      clickPoint
-    );
+    if (doc && editingSketchNode) {
+      const host = sketchEditHost(doc, clickPoint);
+      const sketch = editingSketchNode;
+      void import('./lib/sketch/edits').then(({ advanceSketchEdit }) =>
+        advanceSketchEdit(host, doc, sketch, pending, objectId)
+      );
+    }
     return true;
   }
 
-  async function completeSketchEditPick(
-    pending: { kind: SketchEditToolKind; picks: string[] },
-    objectId: string | null,
-    clickPoint: { x: number; y: number }
-  ) {
-    if (!doc || !editingSketchNode) {
-      return;
-    }
-    const { advanceSketchEditPick } = await import('./lib/sketch/edits');
-    const outcome = advanceSketchEditPick(
-      doc,
-      editingSketchNode,
-      pending.kind,
-      pending.picks,
-      objectId,
-      (value) => evalParamValue(value, parameterScope.scope) ?? undefined
-    );
-    if (outcome.status === 'refuse') {
-      setStatus(outcome.reason);
-      return;
-    }
-    if (outcome.status === 'hint') {
-      setStatus(outcome.message);
-      return;
-    }
-    if (outcome.status === 'pick') {
-      dispatchInteraction({ type: 'sketch-edit-pick', objectId: objectId! });
-      setStatus(outcome.message);
-      return;
-    }
-    setSketchEditDraft({
-      kind: pending.kind,
-      picks: [...pending.picks, objectId!],
-      documentVersion: doc.version
-    });
-    setKeypad({
-      kind: 'sketch-edit',
-      label: outcome.label,
-      initial: String(outcome.initial),
-      unitKind: 'length',
-      fixedClientAnchor: clickPoint
-    });
-    dispatchInteraction({ type: 'sketch-edit-tool', kind: null });
-    setStatus(outcome.message);
-  }
-
-  /**
-   * Turns a finished modify pick plus its value into one undoable
-   * transaction: the kernel answers the geometry, the plan decides which
-   * entities it replaces and what the solver is told about the result.
-   */
+  /** A finished modify pick plus its value, as one undoable transaction. */
   async function handleCommitSketchEdit(
     draft: NonNullable<typeof sketchEditDraft>,
-    evaluatedValue: number,
+    value: number,
     raw: string
   ) {
     const base = managerRef.current?.document;
     const session = interactionRef.current;
     const sketch =
-      base && session.mode === 'sketch' && session.session.sketchId
+      base?.version === draft.documentVersion &&
+      session.mode === 'sketch' &&
+      session.session.sketchId
         ? findSketch(base, session.session.sketchId as SketchId)
         : null;
     if (!base || !sketch) {
-      setStatus('The sketch is no longer available.');
-      return;
-    }
-    if (base.version !== draft.documentVersion) {
       setStatus(
         'The sketch changed while the value editor was open. Try again.'
       );
       return;
     }
-    const { planSketchEdit } = await import('./lib/sketch/edits');
-    const plan = planSketchEdit(
+    const { runSketchEdit } = await import('./lib/sketch/edits');
+    await runSketchEdit(
+      sketchEditHost(base),
       base,
       sketch,
-      sketch.sketchId,
       draft.kind,
       draft.picks,
-      evaluatedValue,
-      raw,
-      (value) => evalParamValue(value, parameterScope.scope) ?? undefined
+      value,
+      raw
     );
-    if (plan.status === 'refuse') {
-      setStatus(plan.reason);
-      return;
-    }
-    setSketchSolving(true);
-    setSketchEditError(null);
-    setStatus(`Building the ${plan.label.toLowerCase()}\u2026`);
-    try {
-      const result = await geometry.sketchPlanarOperation(base, plan.operation);
-      if (
-        await commitSketchEdit(
-          base,
-          sketch.sketchId,
-          plan.commit(result),
-          plan.label
-        )
-      ) {
-        setSketchSolveStatus(null);
-        setStatus(`${plan.label} applied.`);
-      }
-    } catch (error) {
-      if (error instanceof FeatureBuildError) recordHistoryFailure(error, base);
-      const message = errorMessage(
-        error,
-        `The ${plan.label.toLowerCase()} could not be built.`
-      );
-      setSketchEditError(message);
-      setStatus(message);
-    } finally {
-      setSketchSolving(false);
-    }
   }
 
   function handleEditSketchDimension(
@@ -15280,12 +15243,10 @@ export function App() {
             setStatus(constraintToolSpec(kind).hint);
           }
         }}
-        onEditTool={(kind) => {
+        onEditTool={(kind, hint) => {
           dispatchInteraction({ type: 'sketch-edit-tool', kind });
-          if (kind) {
-            void import('./lib/sketch/edits').then(({ sketchEditToolSpec }) =>
-              setStatus(sketchEditToolSpec(kind).hint)
-            );
+          if (hint) {
+            setStatus(hint);
           }
         }}
         onDeleteConstraint={handleDeleteSketchConstraint}

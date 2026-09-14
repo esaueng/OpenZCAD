@@ -69,7 +69,8 @@ interface SketchToolRailProps {
   onConstruction(value: boolean): void;
   onSettings(settings: AppSettings['sketching']): void;
   onConstraintTool(kind: SketchConstraintToolKind | null): void;
-  onEditTool(kind: SketchEditToolKind | null): void;
+  /** The hint travels with the tool: the rail already holds the specs. */
+  onEditTool(kind: SketchEditToolKind | null, hint?: string): void;
   onEditConstraint(
     constraintId: string,
     anchor: { x: number; y: number }
@@ -298,7 +299,9 @@ export function SketchToolRail({
               className={active ? 'active' : undefined}
               aria-pressed={active}
               disabled={!canConstrain}
-              onClick={() => onEditTool(active ? null : kind)}
+              onClick={() =>
+                active ? onEditTool(null) : onEditTool(kind, hint)
+              }
             >
               <Icon size={14} aria-hidden="true" />
               {label}
