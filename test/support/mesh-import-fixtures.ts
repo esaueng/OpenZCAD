@@ -261,6 +261,34 @@ async function deflateRaw(data: Uint8Array): Promise<Uint8Array> {
   return concat(chunks);
 }
 
+/**
+ * A plate 2 mm x 3 mm across and `thicknessMm` thick, as an OBJ.
+ *
+ * The thickness is the point: `importMeshSolid` sews at a tolerance derived
+ * from the numbers it is handed, so a plate thin enough sews cleanly in
+ * millimetres and collapses in metres. That is what makes it the fixture for
+ * a rebuild check that runs at the wrong scale.
+ */
+export function thinPlateObj(thicknessMm: number): Uint8Array {
+  const plate: readonly (readonly [number, number, number])[] = [
+    [0, 0, 0],
+    [FIXTURE_BOX.x, 0, 0],
+    [FIXTURE_BOX.x, FIXTURE_BOX.y, 0],
+    [0, FIXTURE_BOX.y, 0],
+    [0, 0, thicknessMm],
+    [FIXTURE_BOX.x, 0, thicknessMm],
+    [FIXTURE_BOX.x, FIXTURE_BOX.y, thicknessMm],
+    [0, FIXTURE_BOX.y, thicknessMm]
+  ];
+  const lines = [
+    ...plate.map(([x, y, z]) => `v ${x} ${y} ${z}`),
+    ...TRIANGLES.map(
+      (triangle) => `f ${triangle.map((index) => index + 1).join(' ')}`
+    )
+  ];
+  return encoder.encode(`${lines.join('\n')}\n`);
+}
+
 /** The box, `count` times over, each copy its own glTF mesh and node. */
 export function glbFixture(count = 1): Uint8Array {
   const accessors: unknown[] = [];

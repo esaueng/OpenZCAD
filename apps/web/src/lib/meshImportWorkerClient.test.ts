@@ -68,7 +68,8 @@ describe('mesh import worker client', () => {
     await expect(
       importMeshFileInDisposableWorker(
         fileOfSize('huge.3mf', policy.maxInputBytes + 1),
-        '3mf'
+        '3mf',
+        'mm'
       )
     ).rejects.toThrow('3MF import is limited to 32 MB');
     // The point of checking the declared size: nothing is read, and no worker
@@ -80,7 +81,8 @@ describe('mesh import worker client', () => {
     vi.stubGlobal('Worker', FakeWorker);
     const pending = importMeshFileInDisposableWorker(
       new File([new Uint8Array(4)], 'box.obj'),
-      'obj'
+      'obj',
+      'mm'
     );
     const worker = FakeWorker.latest!;
     expect(worker.request?.format).toBe('obj');
@@ -120,7 +122,8 @@ describe('mesh import worker client', () => {
     vi.stubGlobal('Worker', FakeWorker);
     const pending = importMeshFileInDisposableWorker(
       new File([new Uint8Array(4)], 'box.3mf'),
-      '3mf'
+      '3mf',
+      'mm'
     );
     const worker = FakeWorker.latest!;
 
@@ -149,6 +152,7 @@ describe('mesh import worker client', () => {
     const pending = importMeshFileInDisposableWorker(
       new File([new Uint8Array(4)], 'box.ply'),
       'ply',
+      'mm',
       controller.signal
     );
 
@@ -158,11 +162,42 @@ describe('mesh import worker client', () => {
     expect(FakeWorker.latest?.terminated).toBe(true);
   });
 
+  /**
+   * The document's units reach the worker, because the import's rebuild check
+   * runs at the scale the document stores.
+   *
+   * Before this the check always ran in millimetres. A 0.0002 mm plate then
+   * passed it, was adopted at 1/1000 into a metre document, and collapsed on
+   * the rebuild's sew — "Imported 12 triangles" in front of no body, which is
+   * the exact failure the check exists to prevent.
+   */
+  it('sends the document units the import must check at', async () => {
+    vi.stubGlobal('Worker', FakeWorker);
+    const pending = importMeshFileInDisposableWorker(
+      new File([new Uint8Array(4)], 'plate.obj'),
+      'obj',
+      'm'
+    );
+    const worker = FakeWorker.latest!;
+
+    expect(worker.request?.units).toBe('m');
+
+    reply(worker, {
+      ok: false,
+      error:
+        'This OBJ file could not be imported as a body: Sewing this mesh ' +
+        'changed its size, so the import was refused rather than publishing ' +
+        'altered geometry.'
+    });
+    await expect(pending).rejects.toThrow('Sewing this mesh changed its size');
+  });
+
   it('reports the refusal the worker sent, and terminates it', async () => {
     vi.stubGlobal('Worker', FakeWorker);
     const pending = importMeshFileInDisposableWorker(
       new File([new Uint8Array(4)], 'box.glb'),
-      'glb'
+      'glb',
+      'mm'
     );
     const worker = FakeWorker.latest!;
 
