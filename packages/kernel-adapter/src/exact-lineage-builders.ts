@@ -7,9 +7,16 @@
  * `remus-lineage`.
  */
 import type { RemusKernel } from './remus-runtime';
-import { listFeaturesInOrder, resolveParamValue } from '@openzcad/document-core';
+import {
+  listFeaturesInOrder,
+  resolveParamValue
+} from '@openzcad/document-core';
 import type { ExactShape } from './exact-types';
 import type { ImportedSolidDiagnosis } from './imported-step-validation';
+import {
+  importedSolidValidation,
+  validationErrorDescriptions
+} from './kernel-validation';
 import type { PlaneBasis, Vec3 } from '@openzcad/geometry';
 import type {
   BodyId,
@@ -69,6 +76,12 @@ export function diagnoseImportedSolid(
     string,
     number[]
   >;
+  // `validateSolidDetailed` reports the same error count as `validateSolid`
+  // — checked against every solid in the parity corpus on this pin — plus the
+  // validator's reasons, so the import taxonomy can name the defect instead
+  // of publishing a bare count.
+  const { strict, relaxedErrorCount } = importedSolidValidation(kernel, solid);
+  const strictDescriptions = validationErrorDescriptions(strict);
   let openEdgeCount = 0;
   let nonManifoldEdgeCount = 0;
   let edgeCount = 0;
@@ -88,8 +101,11 @@ export function diagnoseImportedSolid(
     openEdgeCount,
     nonManifoldEdgeCount,
     shellCount: Array.from(kernel.getSolidShells(solid)).length,
-    strictErrorCount: kernel.validateSolid(solid),
-    relaxedErrorCount: kernel.validateSolidRelaxed(solid)
+    strictErrorCount: strict.errorCount,
+    relaxedErrorCount,
+    ...(strictDescriptions.length > 0
+      ? { strictIssues: strictDescriptions }
+      : {})
   };
 }
 
@@ -526,7 +542,8 @@ export function rederiveBoxModifierLineage(
     candidate.witness as FaceWitnessV1;
   if (
     faces.some(
-      (candidate) => !BOX_MODIFIER_SURFACES.has(witnessOf(candidate).surfaceType)
+      (candidate) =>
+        !BOX_MODIFIER_SURFACES.has(witnessOf(candidate).surfaceType)
     )
   ) {
     return null;

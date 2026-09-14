@@ -26,6 +26,7 @@ import { topologyCandidatesForSolid } from './exact-lineage-builders';
 import { measureFaceGeometry } from './exact-measure';
 import { MEASUREMENT_DEFLECTION, faceWitnessOf } from './exact-witnesses';
 import { GEOMETRY_EPSILON } from './exact-math';
+import { requireValidSolid } from './kernel-validation';
 
 export /** Sewing gap for imported meshes, relative to the mesh's largest extent. */
 const MESH_SEW_TOLERANCE_RATIO = 1e-6;
@@ -71,9 +72,11 @@ export function validateGeneratedSolid(
   if (!Number.isSafeInteger(solid) || solid < 0) {
     throw new Error(`${label} produced no solid.`);
   }
-  if (kernel.validateSolid(solid) !== 0) {
-    throw new Error(`${label} did not produce a valid closed solid.`);
-  }
+  requireValidSolid(
+    kernel,
+    solid,
+    `${label} did not produce a valid closed solid.`
+  );
   const volume = kernel.volume(solid, MEASUREMENT_DEFLECTION);
   if (!Number.isFinite(volume) || volume <= 0) {
     throw new Error(`${label} did not produce a finite positive volume.`);

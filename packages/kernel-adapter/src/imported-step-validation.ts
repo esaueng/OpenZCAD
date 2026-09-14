@@ -97,6 +97,16 @@ export interface ImportedSolidDiagnosis {
   readonly strictErrorCount: number;
   /** `validateSolidRelaxed`: the bar a voided solid is held to. */
   readonly relaxedErrorCount: number;
+  /**
+   * What the strict validator objected to, in its own words.
+   *
+   * `validateSolidDetailed` reports the issues behind `strictErrorCount`;
+   * `validateSolidRelaxed` has no detailed twin on the pin, so a multi-shell
+   * solid held to the relaxed bar still has only a count. Optional so a
+   * diagnosis assembled without the detailed reader — an older adapter, a
+   * unit test constructing a case — classifies exactly as it did before.
+   */
+  readonly strictIssues?: readonly string[];
 }
 
 /**
@@ -159,11 +169,17 @@ export function classifyImportedSolid(
   }
   const errorCount = applicableErrorCount(diagnosis);
   if (errorCount > 0) {
+    // The validator's own descriptions when the strict bar is the one that
+    // objected. A count says a body is suspect; the descriptions say what to
+    // fix upstream, which is the whole point of naming the defect here.
+    const named =
+      diagnosis.shellCount === 1 ? (diagnosis.strictIssues ?? []) : [];
     return {
       kind: 'flagged',
       reason:
         `solid ${diagnosis.index}: ${errorCount} B-rep validity ` +
-        plural(errorCount, 'error')
+        plural(errorCount, 'error') +
+        (named.length > 0 ? ` (${named.join('; ')})` : '')
     };
   }
   return { kind: 'solid' };
