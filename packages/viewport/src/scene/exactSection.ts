@@ -72,7 +72,7 @@ export function applyExactSection(
   const group = new THREE.Group();
   group.name = EXACT_SECTION;
   group.userData.exactSection = true;
-  for (const region of regions) {
+  for (const [index, region] of regions.entries()) {
     if (region.indices.length >= 3) {
       const geometry = new THREE.BufferGeometry();
       geometry.setAttribute(
@@ -95,6 +95,7 @@ export function applyExactSection(
       );
       mesh.name = `${EXACT_SECTION}-fill`;
       mesh.userData.exactSection = true;
+      mesh.userData.exactSectionRegion = index;
       mesh.raycast = () => undefined;
       group.add(mesh);
     }
@@ -116,10 +117,59 @@ export function applyExactSection(
       );
       curve.name = `${EXACT_SECTION}-curve`;
       curve.userData.exactSection = true;
+      curve.userData.exactSectionRegion = index;
       curve.renderOrder = 1;
       curve.raycast = () => undefined;
       group.add(curve);
     }
   }
   root.add(group);
+}
+
+/** One region of the exact section, as the e2e render-policy probe sees it. */
+export interface ExactSectionSnapshotEntry {
+  /** Triangles in this region's cut surface. */
+  readonly triangles: number;
+  /**
+   * This region's OWN boundary curves — its outer loop plus one per hole.
+   * Every child carries the index of the region it was built for, because
+   * the group is one flat list and counting the whole list would report the
+   * model's total against every region in it.
+   */
+  readonly curves: number;
+  readonly bounds: { min: number[]; max: number[] };
+}
+
+/**
+ * What exact section geometry is on screen under `root`, per region.
+ *
+ * This is read by the viewport's e2e render-policy probe, which is the only
+ * way a browser test can tell the kernel's section from the display cap that
+ * stands in for it during a drag.
+ */
+export function exactSectionSnapshot(
+  root: THREE.Object3D
+): ExactSectionSnapshotEntry[] {
+  const group = root.getObjectByName(EXACT_SECTION);
+  const children = group?.children ?? [];
+  const entries: ExactSectionSnapshotEntry[] = [];
+  for (const child of children) {
+    if (!(child instanceof THREE.Mesh)) {
+      continue;
+    }
+    const region = child.userData.exactSectionRegion;
+    const geometry = child.geometry;
+    geometry.computeBoundingBox();
+    const bounds = geometry.boundingBox!;
+    entries.push({
+      triangles: (geometry.index?.count ?? 0) / 3,
+      curves: children.filter(
+        (node) =>
+          node instanceof THREE.LineLoop &&
+          node.userData.exactSectionRegion === region
+      ).length,
+      bounds: { min: bounds.min.toArray(), max: bounds.max.toArray() }
+    });
+  }
+  return entries;
 }
