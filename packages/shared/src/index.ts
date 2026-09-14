@@ -61,6 +61,38 @@ export type PatternKind = 'linear' | 'circular' | 'grid';
 export type AxisId = 'x' | 'y' | 'z';
 
 /**
+ * How a variable-radius fillet runs between its two end radii.
+ *
+ * Deliberately only the two laws the kernel qualifies. Remus ships
+ * variable-radius blending as an experimental capability with declared
+ * bounds: a standard radius law whose extrema over the whole edge are its
+ * own endpoints can be proved safe, and anything else — an interior peak, a
+ * sampled law, a setback corner — is outside what it certifies. Both laws
+ * here are monotone between `radius` and `endRadius`, so the blend's largest
+ * and smallest ball are the two the user typed.
+ *
+ * Not a closed set at the kernel boundary: `filletVariable` silently treats
+ * an unrecognized law as a CONSTANT blend at the start radius rather than
+ * refusing, so a law outside this union has to be rejected before the call
+ * rather than after it. See `assertQualifiedVariableFillet` in the kernel
+ * adapter.
+ */
+export type VariableFilletLaw = 'linear' | 'scurve';
+
+/** The runtime form of {@link VariableFilletLaw}, for validating documents. */
+export const VARIABLE_FILLET_LAWS: readonly VariableFilletLaw[] = [
+  'linear',
+  'scurve'
+];
+
+export function isVariableFilletLaw(law: unknown): law is VariableFilletLaw {
+  return (
+    typeof law === 'string' &&
+    (VARIABLE_FILLET_LAWS as readonly string[]).includes(law)
+  );
+}
+
+/**
  * A parametric scalar: either a literal number or an expression string that is
  * evaluated against the document's parameter table when geometry is rebuilt
  * (e.g. `"width / 2 + 5"`). Storing the raw expression keeps features fully
@@ -862,7 +894,23 @@ export type FeatureData =
       targetBodyId: BodyId;
       edgeHashes: number[];
       edgeReferences?: EdgeTopologyReferenceV5[];
+      /**
+       * The rolling-ball radius, and — when {@link endRadius} is present —
+       * the radius at the start of each selected edge.
+       */
       radius: ParamValue;
+      /**
+       * Variable-radius fillet: the radius at the far end of each selected
+       * edge, in that edge's own direction. Absent means the constant-radius
+       * fillet every earlier document stored, which still runs through the
+       * constant blend entry point and replays unchanged.
+       */
+      endRadius?: ParamValue;
+      /**
+       * How the radius runs between `radius` and `endRadius`. Only read when
+       * `endRadius` is present; absent reads as `'linear'`.
+       */
+      radiusLaw?: VariableFilletLaw;
     }
   | {
       featureKind: 'chamfer';
@@ -877,6 +925,19 @@ export type FeatureData =
        * both faces, which is what every earlier document stored.
        */
       angleDeg?: ParamValue;
+      /**
+       * Asymmetric chamfer: the setback measured on the SECOND of the two
+       * faces each selected edge borders, with `distance` on the first. The
+       * pair's order is the kernel's own edge-to-face order, which the
+       * published `EdgeTopology.adjacentFaceHashes` deliberately sorts away —
+       * the two setbacks are told apart in the viewport preview and swapped
+       * from the form, not named from stored data.
+       *
+       * Absent means the symmetric chamfer. Mutually exclusive with
+       * `angleDeg`: both express the same asymmetry and a document carrying
+       * the two is refused rather than silently resolved one way.
+       */
+      distance2?: ParamValue;
     }
   | {
       featureKind: 'pattern';
