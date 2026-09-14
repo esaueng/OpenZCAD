@@ -1,3 +1,7 @@
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createProjectDocument, importMeshBody } from '@openzcad/document-core';
 import { solidFromTriangles, solidVolume } from '@openzcad/geometry';
@@ -5,7 +9,7 @@ import {
   MESH_IMPORT_POLICIES,
   meshImportFormatForFileName,
   type MeshImportFormat
-} from '@openzcad/kernel-adapter';
+} from '@openzcad/kernel-adapter/mesh-import-formats';
 import {
   createExactKernelAdapter,
   importMeshFile,
@@ -160,5 +164,60 @@ describe('mesh file imports', { timeout: 30_000 }, () => {
     expect(meshImportFormatForFileName('part.stl')).toBeNull();
     expect(meshImportFormatForFileName('part.step')).toBeNull();
     expect(meshImportFormatForFileName('part.gltf')).toBeNull();
+  });
+});
+
+/**
+ * The mesh import path must stay behind the gesture that needs it.
+ *
+ * `pnpm build`'s size check refuses any anonymous `src-*` chunk the launcher
+ * HTML references, and that is what re-exporting the format table from the
+ * adapter's index barrel produced: the barrel is in the eager graph, the lazy
+ * mesh import client imported the same barrel, and rolldown answered the
+ * overlap by hoisting 96 kB of first-paint kernel-adapter source into a shared
+ * chunk `index.html` then preloaded. The table has its own package entry point
+ * for that reason, and these cases keep it that way — a source shape, because
+ * the failure is a source shape.
+ */
+describe('the mesh import lazy boundary', () => {
+  const root = fileURLToPath(new URL('..', import.meta.url));
+  const read = (path: string): string =>
+    readFileSync(join(root, path), 'utf8');
+
+  it('keeps the format table out of the adapter index barrel', () => {
+    expect(read('packages/kernel-adapter/src/index.ts')).not.toContain(
+      'mesh-import-formats'
+    );
+  });
+
+  it.each([
+    'apps/web/src/lib/meshImportWorkerClient.ts',
+    'apps/web/src/worker/meshImportWorker.ts'
+  ])('reaches the table through its own entry point in %s', (path) => {
+    const source = read(path);
+    expect(source).toContain("'@openzcad/kernel-adapter/mesh-import-formats'");
+    expect(source).not.toMatch(/from '@openzcad\/kernel-adapter'/);
+  });
+
+  it('declares that entry point everywhere resolution happens', () => {
+    const manifest = JSON.parse(
+      read('packages/kernel-adapter/package.json')
+    ) as { exports: Record<string, string> };
+    expect(manifest.exports['./mesh-import-formats']).toBe(
+      './src/mesh-import-formats.ts'
+    );
+    // The bundler and the type checker resolve it through their own maps; a
+    // subpath that exists in only one of them breaks the other.
+    expect(read('apps/web/vite.config.ts')).toContain(
+      "'@openzcad/kernel-adapter/mesh-import-formats'"
+    );
+    const tsconfig = JSON.parse(read('tsconfig.base.json')) as {
+      compilerOptions: { paths: Record<string, string[]> };
+    };
+    expect(
+      tsconfig.compilerOptions.paths[
+        '@openzcad/kernel-adapter/mesh-import-formats'
+      ]
+    ).toEqual(['./packages/kernel-adapter/src/mesh-import-formats.ts']);
   });
 });
